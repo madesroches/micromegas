@@ -1,0 +1,60 @@
+[package]
+name = "lgn-tracing"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+# Dependencies to other legion crates must stay limited limited
+lgn-tracing-transit = { path = "../lgn-tracing-transit", version = "0.1.0" }
+lgn-tracing-proc-macros = { path = "./proc-macros", version = "0.1.0" }
+################################################################################
+thiserror = "1.0"
+cfg-if = "1.0"
+raw-cpuid = "10.2.0"
+whoami = "1.2"
+uuid = { version = "1.0", features = ["v4"] }
+chrono = "0.4"
+memoffset = "0.6"
+thread-id = "4.0"
+lazy_static = "1.4"
+
+[dev-dependencies]
+criterion = "0.3"
+# to tests interop
+log = "0.4"
+
+[features]
+max_level_off = []
+max_level_error = []
+max_level_warn = []
+max_level_info = []
+max_level_debug = []
+max_level_trace = []
+
+release_max_level_off = []
+release_max_level_error = []
+release_max_level_warn = []
+release_max_level_info = []
+release_max_level_debug = []
+release_max_level_trace = []
+
+max_lod_off = []
+max_lod_min = []
+max_lod_med = []
+max_lod_max = []
+
+release_max_lod_off = []
+release_max_lod_min = []
+release_max_lod_med = []
+release_max_lod_max = []
+
+[[bench]]
+name = "with_no_dispatch"
+harness = false
+
+[[bench]]
+name = "with_dispatch"
+harness = false
