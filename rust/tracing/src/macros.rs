@@ -3,7 +3,7 @@
 /// # Examples
 ///
 /// ```
-/// use lgn_tracing::span_scope;
+/// use tracing::span_scope;
 ///
 /// # fn main() {
 /// span_scope!("scope");
@@ -34,7 +34,7 @@ macro_rules! span_scope {
 /// # Examples
 ///
 /// ```
-/// use lgn_tracing::span_scope;
+/// use tracing::span_scope_named;
 ///
 /// # fn get_name() -> &'static str {
 /// #   return "name";
@@ -103,7 +103,7 @@ macro_rules! async_span_scope_named {
 /// # Examples
 ///
 /// ```
-/// use lgn_tracing::imetric;
+/// use tracing::imetric;
 ///
 /// # fn main() {
 /// #
@@ -131,7 +131,7 @@ macro_rules! imetric {
 /// # Examples
 ///
 /// ```
-/// use lgn_tracing::fmetric;
+/// use tracing::fmetric;
 ///
 /// # fn main() {
 /// #
@@ -162,7 +162,7 @@ macro_rules! fmetric {
 /// # Examples
 ///
 /// ```
-/// use lgn_tracing::{log, Level};
+/// use tracing::{log, Level};
 ///
 /// # fn main() {
 /// let data = (42, "Forty-two");
@@ -196,7 +196,7 @@ macro_rules! log {
 /// # Examples
 ///
 /// ```
-/// use lgn_tracing::error;
+/// use tracing::error;
 ///
 /// # fn main() {
 /// let (err_info, port) = ("No connection", 22);
@@ -220,7 +220,7 @@ macro_rules! error {
 /// # Examples
 ///
 /// ```
-/// use lgn_tracing::warn;
+/// use tracing::warn;
 ///
 /// # fn main() {
 /// let warn_description = "Invalid Input";
@@ -244,7 +244,7 @@ macro_rules! warn {
 /// # Examples
 ///
 /// ```
-/// use lgn_tracing::info;
+/// use tracing::info;
 ///
 /// # fn main() {
 /// # struct Connection { port: u32, speed: f32 }
@@ -270,7 +270,7 @@ macro_rules! info {
 /// # Examples
 ///
 /// ```
-/// use lgn_tracing::debug;
+/// use tracing::debug;
 ///
 /// # fn main() {
 /// # struct Position { x: f32, y: f32 }
@@ -295,7 +295,7 @@ macro_rules! debug {
 /// # Examples
 ///
 /// ```
-/// use lgn_tracing::trace;
+/// use tracing::trace;
 ///
 /// # fn main() {
 /// # struct Position { x: f32, y: f32 }
@@ -326,8 +326,8 @@ macro_rules! trace {
 /// # Examples
 ///
 /// ```
-/// use lgn_tracing::Level::Debug;
-/// use lgn_tracing::{debug, log_enabled};
+/// use tracing::Level::Debug;
+/// use tracing::{debug, log_enabled};
 ///
 /// # fn foo() {
 /// if log_enabled!(Debug) {

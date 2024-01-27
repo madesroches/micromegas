@@ -1,9 +1,9 @@
 [package]
-name = "lgn-tracing-proc-macros"
+name = "tracing-proc-macros"
 version = "0.1.0"
 description = "Legion Telemetry Proc Macros"
 edition = "2021"
-license = "MIT OR Apache-2.0"
+license = "Apache-2.0"
 
 [lib]
 proc-macro = true

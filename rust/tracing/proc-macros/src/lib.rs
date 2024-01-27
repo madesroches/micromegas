@@ -58,7 +58,7 @@ pub fn span_fn(
     function.block.stmts.insert(
         0,
         parse_quote! {
-            lgn_tracing::span_scope!(_METADATA_FUNC, concat!(module_path!(), "::", #function_name));
+            tracing::span_scope!(_METADATA_FUNC, concat!(module_path!(), "::", #function_name));
         },
     );
 
@@ -93,7 +93,7 @@ pub fn log_fn(
     function.block.stmts.insert(
         0,
         parse_quote! {
-            lgn_tracing::trace!(#function_name);
+            tracing::trace!(#function_name);
         },
     );
     proc_macro::TokenStream::from(quote! {

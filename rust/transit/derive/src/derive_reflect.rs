@@ -88,7 +88,7 @@ pub fn derive_reflect_impl(input: TokenStream) -> TokenStream {
     });
 
     TokenStream::from(quote! {
-        impl lgn_tracing_transit::Reflect for #udt_identifier{
+        impl transit::Reflect for #udt_identifier{
             fn reflect() -> UserDefinedType{
                 UserDefinedType{
                     name: String::from(#udt_name),

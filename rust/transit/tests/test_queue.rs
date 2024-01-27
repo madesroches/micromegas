@@ -1,4 +1,4 @@
-use lgn_tracing_transit::prelude::*;
+use transit::prelude::*;
 
 #[derive(Debug, TransitReflect)]
 pub struct MyTestEvent {

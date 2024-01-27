@@ -1,5 +1,5 @@
-use lgn_tracing_transit::prelude::*;
-use lgn_tracing_transit::{InProcSerialize, Reflect, StaticString, UserDefinedType};
+use transit::prelude::*;
+use transit::{InProcSerialize, Reflect, StaticString, UserDefinedType};
 
 // StringId serializes the value of the pointer and the size
 // Also provides a facility to extract a StaticString from it

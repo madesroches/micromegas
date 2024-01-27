@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use lgn_tracing_transit::prelude::*;
+use transit::prelude::*;
 
 use super::{
     BeginAsyncNamedSpanEvent, BeginAsyncSpanEvent, BeginThreadNamedSpanEvent, BeginThreadSpanEvent,

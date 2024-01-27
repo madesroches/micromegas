@@ -15,16 +15,16 @@ fn gen_read_method(
                 unsafe {
                     let mut begin_obj = self.buffer.as_ptr().add( offset+1 );
                     let next_object_offset;
-                    let value_size = if let InProcSize::Const(size) = <#value_type_id as lgn_tracing_transit::InProcSerialize>::IN_PROC_SIZE {
+                    let value_size = if let InProcSize::Const(size) = <#value_type_id as transit::InProcSerialize>::IN_PROC_SIZE {
                         next_object_offset = offset + 1 + size;
                         None
                     } else {
-                        let size_instance = lgn_tracing_transit::read_any::<u32>(begin_obj);
+                        let size_instance = transit::read_any::<u32>(begin_obj);
                         begin_obj = begin_obj.add( std::mem::size_of::<u32>() );
                         next_object_offset = offset + 1 + std::mem::size_of::<u32>() + size_instance as usize;
                         Some(size_instance)
                     };
-                    let obj = #any_ident::#value_type_id( <#value_type_id as lgn_tracing_transit::InProcSerialize>::read_value(begin_obj, value_size) );
+                    let obj = #any_ident::#value_type_id( <#value_type_id as transit::InProcSerialize>::read_value(begin_obj, value_size) );
                     (obj,next_object_offset)
                 }
             },
@@ -71,7 +71,7 @@ fn gen_hetero_queue_impl(
 ) -> quote::__private::TokenStream {
     let read_method = gen_read_method(type_args, any_ident);
     quote! {
-        impl lgn_tracing_transit::HeterogeneousQueue for #struct_identifier {
+        impl transit::HeterogeneousQueue for #struct_identifier {
             type Item = #any_ident;
 
             fn new(buffer_size: usize) -> Self {
@@ -164,7 +164,7 @@ pub fn declare_queue_impl(input: TokenStream) -> TokenStream {
             #[inline]
             pub fn push<T>(&mut self, value: T)
             where
-                T: lgn_tracing_transit::InProcSerialize + #type_index_ident,
+                T: transit::InProcSerialize + #type_index_ident,
             {
                 self.obj_counter += 1;
 
@@ -179,7 +179,7 @@ pub fn declare_queue_impl(input: TokenStream) -> TokenStream {
                     // we force the dynamically sized object to first serialize their size as unsigned 32 bits
                     // this will allow unparsable objects to be skipped by the reader
                     let value_size = T::get_value_size(&value).unwrap();
-                    lgn_tracing_transit::write_any(&mut self.buffer, &value_size);
+                    transit::write_any(&mut self.buffer, &value_size);
                     value.write_value(&mut self.buffer);
                     assert!(
                         self.buffer.len()

@@ -3,7 +3,7 @@ use std::{
     sync::{atomic::AtomicU32, Arc, Mutex},
 };
 
-use lgn_tracing::{
+use tracing::{
     dispatch::{flush_log_buffer, log_enabled, log_interop},
     event::EventSink,
     logs::{LogBlock, LogMetadata, LogMsgQueueAny, LogStream},
@@ -11,7 +11,7 @@ use lgn_tracing::{
     spans::{ThreadBlock, ThreadEventQueueAny, ThreadStream},
     Level, ProcessInfo,
 };
-use lgn_tracing_transit::HeterogeneousQueue;
+use transit::HeterogeneousQueue;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum State {

@@ -3,7 +3,7 @@
 //! Provides logging, metrics, memory and performance profiling
 //!
 //! Have the lowest impact on the critical path of execution while providing great
-//! visibility, `lgn_tracing` focusses on providing predictable performance for high
+//! visibility, `tracing` focusses on providing predictable performance for high
 //! performance applications. It's primary client is Legion Engine, which runs a
 //! distributed, highly compute demanding workloads.
 //!
@@ -14,7 +14,7 @@
 //!
 //! # Examples
 //! ```
-//! use lgn_tracing::{
+//! use tracing::{
 //!    span_scope, info, warn, error, debug, imetric, fmetric, guards, event,
 //! };
 //!
@@ -87,7 +87,7 @@ pub mod prelude {
         async_span_scope, debug, error, fmetric, imetric, info, log, log_enabled, span_scope,
         trace, warn,
     };
-    pub use lgn_tracing_proc_macros::*;
+    pub use tracing_proc_macros::*;
 }
 
 pub use prelude::*;
