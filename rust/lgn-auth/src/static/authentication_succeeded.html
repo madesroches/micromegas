@@ -1,0 +1,70 @@
+<html>
+  <head>
+    <title>Authentication succeeded</title>
+    <style>
+      body {
+        font-family: Arial, Helvetica, sans-serif;
+        height: 100vh;
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        justify-content: flex-start;
+        text-align: center;
+        padding: 0;
+        margin: 0;
+        font-size: larger;
+      }
+
+      h1 {
+        display: block;
+        font-weight: normal;
+        margin: 0 0 1em 0;
+        color: white;
+        background: black;
+        background: linear-gradient(
+          180deg,
+          rgba(48, 48, 48, 1) 0%,
+          rgba(0, 0, 0, 1) 100%
+        );
+        padding-top: 25%;
+        padding-bottom: 1em;
+      }
+
+      p {
+        margin: 0 0 1em 0;
+      }
+
+      .info {
+        color: gray;
+        font-style: italic;
+        font-size: small;
+      }
+    </style>
+  </head>
+
+  <body>
+    <h1>Authentication succeeded</h1>
+    <p>You have successfully authenticated.</p>
+
+    <p class="info">
+      You may close this page at anytime, otherwise it will automatically close
+      itself in <span id="timer"></span> second(s)
+    </p>
+    <script>
+      let intialTimerValue = 5;
+
+      const timer = document.getElementById("timer");
+
+      timer.innerText = intialTimerValue;
+
+      const intervalId = setInterval(() => {
+        timer.innerText = --intialTimerValue;
+      }, 1_000);
+
+      setTimeout(() => {
+        clearInterval(intervalId);
+        window.close();
+      }, intialTimerValue * 1_000);
+    </script>
+  </body>
+</html>

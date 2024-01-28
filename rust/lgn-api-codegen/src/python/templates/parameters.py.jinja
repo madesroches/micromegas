@@ -1,0 +1,18 @@
+# Not used
+
+{%- for (path, routes) in api.paths %}
+{%- for route in routes %}    
+{%- if !route.parameters.query.is_empty() %}
+class {{ route.name|pascal_case }}Query:
+    def __init__(
+        self,
+        {%- for parameter in route.parameters.query %}
+        {{ parameter.name|snake_case }} : {{ parameter.type_|fmt_type }},
+        {%- endfor %}
+    ):
+    {%- for parameter in route.parameters.query %}
+        self.{{ parameter.name|snake_case }} = {{ parameter.name|snake_case }}
+    {%- endfor %}
+{% endif %}
+{% endfor %}
+{% endfor %}

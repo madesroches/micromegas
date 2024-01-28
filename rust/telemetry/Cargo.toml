@@ -1,0 +1,21 @@
+[package]
+name = "lgn-telemetry"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+lgn-online = { path = "../lgn-online", version = "0.1.0" }
+tracing = { path = "../tracing" }
+async-trait = "0.1"
+axum = "0.5"
+http = "0.2"
+chrono = "0.4"
+hyper = { version = "0.14", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_qs = { version = "0.9", features = ["axum"] }
+
+[build-dependencies]
+lgn-api-codegen = { path = "../lgn-api-codegen", version = "0.1.0" }

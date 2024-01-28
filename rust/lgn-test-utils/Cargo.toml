@@ -1,0 +1,10 @@
+[package]
+name = "lgn-test-utils"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+tracing = { path = "../tracing" }
+parking_lot = "0.12.0"
+tempfile = "3.2"

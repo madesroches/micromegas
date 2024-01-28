@@ -1,0 +1,145 @@
+syntax = "proto3";
+import public "process.proto";
+import public "stream.proto";
+import public "block.proto";
+import public "calltree.proto";
+import public "callgraph.proto";
+import public "metric.proto";
+import public "span.proto";
+import public "log.proto";
+
+package analytics;
+
+service PerformanceAnalytics {
+  rpc block_spans(BlockSpansRequest) returns (BlockSpansReply);
+  rpc fetch_cumulative_call_graph_manifest(CumulativeCallGraphManifestRequest)
+      returns (CumulativeCallGraphManifest);
+  rpc fetch_cumulative_call_graph_computed_block(CumulativeCallGraphBlockRequest)
+      returns (CumulativeCallGraphComputedBlock);
+  rpc find_process(FindProcessRequest) returns (FindProcessReply);
+  rpc list_process_blocks(ListProcessBlocksRequest) returns (ProcessBlocksReply);
+  rpc list_process_log_entries(ProcessLogRequest) returns (ProcessLogReply);
+  rpc list_process_streams(ListProcessStreamsRequest) returns (ListStreamsReply);
+  rpc list_stream_blocks(ListStreamBlocksRequest) returns (ListStreamBlocksReply);
+  rpc nb_process_log_entries(ProcessNbLogEntriesRequest) returns (ProcessNbLogEntriesReply);
+  rpc fetch_block_metric_manifest(MetricBlockManifestRequest) returns (MetricBlockManifest);
+  rpc fetch_block_metric(MetricBlockRequest) returns (MetricBlockData);
+  rpc list_recent_processes(RecentProcessesRequest) returns (ProcessListReply);
+  rpc search_processes(SearchProcessRequest) returns (ProcessListReply);
+  rpc list_process_children(ListProcessChildrenRequest) returns (ProcessChildrenReply);
+  rpc build_timeline_tables(BuildTimelineTablesRequest) returns (BuildTimelineTablesReply);
+}
+
+// find_process
+message FindProcessRequest {
+  string process_id = 1;
+}
+
+message FindProcessReply {
+  telemetry.Process process = 1;
+}
+
+// list_recent_processes
+message RecentProcessesRequest {
+  string parent_process_id = 1;
+}
+
+message ProcessInstance {
+  telemetry.Process process_info = 1;
+  uint32 child_count = 2;
+  uint32 nb_cpu_blocks = 3;
+  uint32 nb_log_blocks = 4;
+  uint32 nb_metric_blocks = 5;
+}
+
+message ProcessListReply {
+  repeated ProcessInstance processes = 1;
+}
+
+message ListProcessBlocksRequest {
+  string process_id = 1;
+  string tag = 2;
+}
+
+message ProcessBlocksReply {
+  repeated telemetry.BlockMetadata blocks = 1;
+}
+
+// search_processes
+message SearchProcessRequest {
+  string search = 1;
+}
+
+// list_process_streams
+message ListProcessStreamsRequest {
+  string process_id = 1;
+}
+
+message ListStreamsReply {
+  repeated telemetry.Stream streams = 1;
+}
+
+// list_stream_blocks
+message ListStreamBlocksRequest {
+  string stream_id = 1;
+}
+
+message ListStreamBlocksReply {
+  repeated telemetry.BlockMetadata blocks = 1;
+}
+
+message BlockSpansRequest {
+  telemetry.Process process = 1;
+  telemetry.Stream stream = 2;
+  string block_id = 3;
+  uint32 lod_id = 4;
+}
+
+message BlockSpansReply {
+  map<uint32, ScopeDesc> scopes = 1;
+  SpanBlockLOD lod = 2;
+  string block_id = 3;
+  double begin_ms = 4;
+  double end_ms = 5;
+}
+
+// list_process_log_entries
+message ProcessLogRequest {
+  telemetry.Process process = 1;
+  uint64 begin = 2;  // included
+  uint64 end = 3;    // excluded
+  optional string search = 4;
+  optional Level levelThreshold = 5;
+}
+
+message ProcessLogReply {
+  repeated LogEntry entries = 1;
+  uint64 begin = 2;  // included
+  uint64 end = 3;    // excluded
+}
+
+// nb_process_log_entries(ProcessNbLogEntriesRequest) returns
+// (ProcessNbLogEntriesReply);
+message ProcessNbLogEntriesRequest {
+  string process_id = 1;
+}
+
+message ProcessNbLogEntriesReply {
+  uint64 count = 1;
+}
+
+// list_process_children
+message ListProcessChildrenRequest {
+  string process_id = 1;
+}
+
+message ProcessChildrenReply {
+  repeated telemetry.Process processes = 1;
+}
+
+// build_timeline_tables
+message BuildTimelineTablesRequest {
+  string process_id = 1;
+}
+
+message BuildTimelineTablesReply {}

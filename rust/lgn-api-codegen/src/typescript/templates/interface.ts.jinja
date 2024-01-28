@@ -1,0 +1,8 @@
+export interface Api {
+{% for (path, routes) in api.paths %}
+    {% for route in routes %}
+        {% if let Some(summary) = route.summary %}/** {{ summary }} */{% endif %}
+        {% include "signature.ts.jinja" %};
+    {% endfor %}
+{% endfor %}
+}

@@ -1,0 +1,92 @@
+import requests
+import urllib
+
+class Client(Api):
+    def __init__(self, uri):
+        self.uri = uri
+
+    {% for (path, routes) in api.paths %}
+    {% for route in routes %}
+    {%- let response_name = "{}Response"|format(route.name|pascal_case) -%}
+    {% include "signature.py.jinja" %}
+        uri = "{}{{ path|fmt_py_path }}".format(
+            self.uri,
+            {%- for parameter in route.parameters.path %}
+            request.{{ parameter.name|snake_case }},
+            {%- endfor %}
+        )
+
+        headers = {}
+
+        {%- if let Some(request_body) = route.request_body %}
+        headers = {
+            "Content-type": "{{ request_body.content.media_type }}",
+        }
+        {%- if request_body.content.media_type == MediaType::Json %}
+        data = request.body.to_json()
+        {%- else %}
+        data = request.body
+        {%- endif %}
+        {%- endif %}
+        
+        {%- if !route.parameters.query.is_empty() %}
+        params = {}
+        uri+= "?"
+
+        {%- for parameter in route.parameters.query %}
+        {%- if parameter.required %}
+        required = True
+        {%- else %}
+        required = False
+        {%- endif %}
+        if required or (hasattr(request, "{{ parameter.name|snake_case }}") and request.{{ parameter.name|snake_case }}):
+            if isinstance(request.{{ parameter.name|snake_case }}, list):
+                for num, item in enumerate(request.{{ parameter.name|snake_case }}):
+                    if num > 0:
+                        uri += '&'
+                    uri += "{{ parameter.name|snake_case }}[{}]={}".format(num, item)
+            else:
+                params["{{ parameter.name|snake_case }}"] = request.{{ parameter.name|snake_case }}
+        {%- endfor %}
+        more_params = urllib.parse.urlencode(params, doseq=True)
+        if uri[-1] != '?' and more_params:
+            uri += "&{}".format(more_params)
+        {%- endif -%}
+
+        {%- if !route.parameters.header.is_empty() %}
+        {%- for parameter in route.parameters.header %}
+        {%- let param_name = "{}"|format(parameter.name|snake_case) %}
+        {%- if parameter.required %}
+        headers["{{ parameter.name }}"] = request.{{ param_name }}
+        {% else %}
+        if request.{{ param_name }} != None:
+            headers["{{ parameter.name }}"] = request.{{ param_name }}
+        {%- endif %}                
+        {%- endfor %}
+        {%- endif %}
+
+        print("uri: {}".format(uri))
+        {%- if !route.parameters.query.is_empty() %}
+        print("params: {}".format(params))
+        {%- endif %}
+        {%- if let Some(request_body) = route.request_body %}
+        print("headers: {}".format(headers))
+        print("data: {}".format(data))
+        {%- endif %}
+
+        resp = requests.{{ route.method|lowercase }}(
+            uri,
+            {%- if !route.parameters.query.is_empty() %}
+            #params = params,
+            {%- endif %}
+            headers = headers,
+            {%- if let Some(request_body) = route.request_body %}
+            data = data,
+            {%- endif %}
+        )
+
+
+        return {{ response_name }}(resp)
+    {% endfor %}
+    {% endfor %}
+    

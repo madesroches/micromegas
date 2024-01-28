@@ -1,0 +1,3796 @@
+---
+source: crates/lgn-api-codegen/src/rust/mod.rs
+expression: content
+---
+// Auto-generated file.
+
+// Models and API from: cars
+
+pub mod cars {
+
+    use lgn_online::codegen::Error;
+
+    #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+    pub struct TestAdditionalPropertiesCompositeAny200Response {
+        #[serde(flatten)]
+        pub __additional_properties: std::collections::BTreeMap<String, serde_json::Value>,
+
+        #[serde(rename = "name")]
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub name: Option<String>,
+
+        #[serde(rename = "time")]
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub time: Option<u32>,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+    pub struct TestAdditionalPropertiesCompositeSchema200Response {
+        #[serde(flatten)]
+        pub __additional_properties: std::collections::BTreeMap<String, super::components::Pet>,
+
+        #[serde(rename = "name")]
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub name: Option<String>,
+
+        #[serde(rename = "time")]
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub time: Option<u32>,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+    pub enum TestOneOf200Response {
+        #[serde(rename = "option1")]
+        Option1(super::components::Pet),
+        #[serde(rename = "option2")]
+        Option2(super::components::Car),
+        #[serde(rename = "option3")]
+        Option3(super::components::Alpha),
+    }
+
+    // API Test API v1.0.0
+    //
+    // This is a sample OpenAPI 3.0 specification.
+    //
+
+    // ---------- Api ----------
+    use lgn_online::server::Result;
+
+    #[async_trait::async_trait]
+    pub trait Api {
+        async fn test_additional_properties_any(
+            &self,
+            request: server::TestAdditionalPropertiesAnyRequest,
+        ) -> Result<server::TestAdditionalPropertiesAnyResponse>;
+
+        async fn test_additional_properties_composite_any(
+            &self,
+            request: server::TestAdditionalPropertiesCompositeAnyRequest,
+        ) -> Result<server::TestAdditionalPropertiesCompositeAnyResponse>;
+
+        async fn test_additional_properties_composite_schema(
+            &self,
+            request: server::TestAdditionalPropertiesCompositeSchemaRequest,
+        ) -> Result<server::TestAdditionalPropertiesCompositeSchemaResponse>;
+
+        async fn test_additional_properties_schema(
+            &self,
+            request: server::TestAdditionalPropertiesSchemaRequest,
+        ) -> Result<server::TestAdditionalPropertiesSchemaResponse>;
+
+        async fn test_additional_properties_string(
+            &self,
+            request: server::TestAdditionalPropertiesStringRequest,
+        ) -> Result<server::TestAdditionalPropertiesStringResponse>;
+
+        async fn test_headers(
+            &self,
+            request: server::TestHeadersRequest,
+        ) -> Result<server::TestHeadersResponse>;
+
+        async fn test_one_of(
+            &self,
+            request: server::TestOneOfRequest,
+        ) -> Result<server::TestOneOfResponse>;
+
+        async fn get_cars(
+            &self,
+            request: server::GetCarsRequest,
+        ) -> Result<server::GetCarsResponse>;
+
+        async fn create_car(
+            &self,
+            request: server::CreateCarRequest,
+        ) -> Result<server::CreateCarResponse>;
+
+        async fn get_car(&self, request: server::GetCarRequest) -> Result<server::GetCarResponse>;
+
+        async fn delete_car(
+            &self,
+            request: server::DeleteCarRequest,
+        ) -> Result<server::DeleteCarResponse>;
+
+        async fn test_binary(
+            &self,
+            request: server::TestBinaryRequest,
+        ) -> Result<server::TestBinaryResponse>;
+    }
+
+    // Blanket implementation of the Api trait for common wrapper types.
+
+    #[async_trait::async_trait]
+    impl<T: Api + Send + Sync> Api for std::sync::Arc<T> {
+        async fn test_additional_properties_any(
+            &self,
+            request: server::TestAdditionalPropertiesAnyRequest,
+        ) -> Result<server::TestAdditionalPropertiesAnyResponse> {
+            self.as_ref().test_additional_properties_any(request).await
+        }
+
+        async fn test_additional_properties_composite_any(
+            &self,
+            request: server::TestAdditionalPropertiesCompositeAnyRequest,
+        ) -> Result<server::TestAdditionalPropertiesCompositeAnyResponse> {
+            self.as_ref()
+                .test_additional_properties_composite_any(request)
+                .await
+        }
+
+        async fn test_additional_properties_composite_schema(
+            &self,
+            request: server::TestAdditionalPropertiesCompositeSchemaRequest,
+        ) -> Result<server::TestAdditionalPropertiesCompositeSchemaResponse> {
+            self.as_ref()
+                .test_additional_properties_composite_schema(request)
+                .await
+        }
+
+        async fn test_additional_properties_schema(
+            &self,
+            request: server::TestAdditionalPropertiesSchemaRequest,
+        ) -> Result<server::TestAdditionalPropertiesSchemaResponse> {
+            self.as_ref()
+                .test_additional_properties_schema(request)
+                .await
+        }
+
+        async fn test_additional_properties_string(
+            &self,
+            request: server::TestAdditionalPropertiesStringRequest,
+        ) -> Result<server::TestAdditionalPropertiesStringResponse> {
+            self.as_ref()
+                .test_additional_properties_string(request)
+                .await
+        }
+
+        async fn test_headers(
+            &self,
+            request: server::TestHeadersRequest,
+        ) -> Result<server::TestHeadersResponse> {
+            self.as_ref().test_headers(request).await
+        }
+
+        async fn test_one_of(
+            &self,
+            request: server::TestOneOfRequest,
+        ) -> Result<server::TestOneOfResponse> {
+            self.as_ref().test_one_of(request).await
+        }
+
+        async fn get_cars(
+            &self,
+            request: server::GetCarsRequest,
+        ) -> Result<server::GetCarsResponse> {
+            self.as_ref().get_cars(request).await
+        }
+
+        async fn create_car(
+            &self,
+            request: server::CreateCarRequest,
+        ) -> Result<server::CreateCarResponse> {
+            self.as_ref().create_car(request).await
+        }
+
+        async fn get_car(&self, request: server::GetCarRequest) -> Result<server::GetCarResponse> {
+            self.as_ref().get_car(request).await
+        }
+
+        async fn delete_car(
+            &self,
+            request: server::DeleteCarRequest,
+        ) -> Result<server::DeleteCarResponse> {
+            self.as_ref().delete_car(request).await
+        }
+
+        async fn test_binary(
+            &self,
+            request: server::TestBinaryRequest,
+        ) -> Result<server::TestBinaryResponse> {
+            self.as_ref().test_binary(request).await
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl<T: Api + Send + Sync + ?Sized> Api for Box<T> {
+        async fn test_additional_properties_any(
+            &self,
+            request: server::TestAdditionalPropertiesAnyRequest,
+        ) -> Result<server::TestAdditionalPropertiesAnyResponse> {
+            self.as_ref().test_additional_properties_any(request).await
+        }
+
+        async fn test_additional_properties_composite_any(
+            &self,
+            request: server::TestAdditionalPropertiesCompositeAnyRequest,
+        ) -> Result<server::TestAdditionalPropertiesCompositeAnyResponse> {
+            self.as_ref()
+                .test_additional_properties_composite_any(request)
+                .await
+        }
+
+        async fn test_additional_properties_composite_schema(
+            &self,
+            request: server::TestAdditionalPropertiesCompositeSchemaRequest,
+        ) -> Result<server::TestAdditionalPropertiesCompositeSchemaResponse> {
+            self.as_ref()
+                .test_additional_properties_composite_schema(request)
+                .await
+        }
+
+        async fn test_additional_properties_schema(
+            &self,
+            request: server::TestAdditionalPropertiesSchemaRequest,
+        ) -> Result<server::TestAdditionalPropertiesSchemaResponse> {
+            self.as_ref()
+                .test_additional_properties_schema(request)
+                .await
+        }
+
+        async fn test_additional_properties_string(
+            &self,
+            request: server::TestAdditionalPropertiesStringRequest,
+        ) -> Result<server::TestAdditionalPropertiesStringResponse> {
+            self.as_ref()
+                .test_additional_properties_string(request)
+                .await
+        }
+
+        async fn test_headers(
+            &self,
+            request: server::TestHeadersRequest,
+        ) -> Result<server::TestHeadersResponse> {
+            self.as_ref().test_headers(request).await
+        }
+
+        async fn test_one_of(
+            &self,
+            request: server::TestOneOfRequest,
+        ) -> Result<server::TestOneOfResponse> {
+            self.as_ref().test_one_of(request).await
+        }
+
+        async fn get_cars(
+            &self,
+            request: server::GetCarsRequest,
+        ) -> Result<server::GetCarsResponse> {
+            self.as_ref().get_cars(request).await
+        }
+
+        async fn create_car(
+            &self,
+            request: server::CreateCarRequest,
+        ) -> Result<server::CreateCarResponse> {
+            self.as_ref().create_car(request).await
+        }
+
+        async fn get_car(&self, request: server::GetCarRequest) -> Result<server::GetCarResponse> {
+            self.as_ref().get_car(request).await
+        }
+
+        async fn delete_car(
+            &self,
+            request: server::DeleteCarRequest,
+        ) -> Result<server::DeleteCarResponse> {
+            self.as_ref().delete_car(request).await
+        }
+
+        async fn test_binary(
+            &self,
+            request: server::TestBinaryRequest,
+        ) -> Result<server::TestBinaryResponse> {
+            self.as_ref().test_binary(request).await
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl<T: Api + Send + Sync + ?Sized> Api for &T {
+        async fn test_additional_properties_any(
+            &self,
+            request: server::TestAdditionalPropertiesAnyRequest,
+        ) -> Result<server::TestAdditionalPropertiesAnyResponse> {
+            (**self).test_additional_properties_any(request).await
+        }
+
+        async fn test_additional_properties_composite_any(
+            &self,
+            request: server::TestAdditionalPropertiesCompositeAnyRequest,
+        ) -> Result<server::TestAdditionalPropertiesCompositeAnyResponse> {
+            (**self)
+                .test_additional_properties_composite_any(request)
+                .await
+        }
+
+        async fn test_additional_properties_composite_schema(
+            &self,
+            request: server::TestAdditionalPropertiesCompositeSchemaRequest,
+        ) -> Result<server::TestAdditionalPropertiesCompositeSchemaResponse> {
+            (**self)
+                .test_additional_properties_composite_schema(request)
+                .await
+        }
+
+        async fn test_additional_properties_schema(
+            &self,
+            request: server::TestAdditionalPropertiesSchemaRequest,
+        ) -> Result<server::TestAdditionalPropertiesSchemaResponse> {
+            (**self).test_additional_properties_schema(request).await
+        }
+
+        async fn test_additional_properties_string(
+            &self,
+            request: server::TestAdditionalPropertiesStringRequest,
+        ) -> Result<server::TestAdditionalPropertiesStringResponse> {
+            (**self).test_additional_properties_string(request).await
+        }
+
+        async fn test_headers(
+            &self,
+            request: server::TestHeadersRequest,
+        ) -> Result<server::TestHeadersResponse> {
+            (**self).test_headers(request).await
+        }
+
+        async fn test_one_of(
+            &self,
+            request: server::TestOneOfRequest,
+        ) -> Result<server::TestOneOfResponse> {
+            (**self).test_one_of(request).await
+        }
+
+        async fn get_cars(
+            &self,
+            request: server::GetCarsRequest,
+        ) -> Result<server::GetCarsResponse> {
+            (**self).get_cars(request).await
+        }
+
+        async fn create_car(
+            &self,
+            request: server::CreateCarRequest,
+        ) -> Result<server::CreateCarResponse> {
+            (**self).create_car(request).await
+        }
+
+        async fn get_car(&self, request: server::GetCarRequest) -> Result<server::GetCarResponse> {
+            (**self).get_car(request).await
+        }
+
+        async fn delete_car(
+            &self,
+            request: server::DeleteCarRequest,
+        ) -> Result<server::DeleteCarResponse> {
+            (**self).delete_car(request).await
+        }
+
+        async fn test_binary(
+            &self,
+            request: server::TestBinaryRequest,
+        ) -> Result<server::TestBinaryResponse> {
+            (**self).test_binary(request).await
+        }
+    }
+
+    // ---------- Client ----------
+    pub mod client {
+
+        use http::{header::CONTENT_TYPE, Extensions, HeaderMap, HeaderValue, Request, Response};
+        use hyper::service::Service;
+        use lgn_online::client::{Error, Result};
+        use lgn_tracing::debug;
+
+        // Response type.
+
+        #[derive(Debug)]
+        pub enum TestAdditionalPropertiesAnyResponse {
+            /// Ok.
+            Status200 {
+                body: std::collections::BTreeMap<String, serde_json::Value>,
+                extra_headers: HeaderMap,
+                extensions: Extensions,
+            },
+        }
+
+        impl TestAdditionalPropertiesAnyResponse {
+            pub(crate) async fn from_response<ResBody>(
+                resp: http::Response<ResBody>,
+            ) -> Result<Self>
+            where
+                ResBody: hyper::body::HttpBody,
+                ResBody::Error: std::error::Error,
+            {
+                let (mut parts, body) = resp.into_parts();
+
+                match parts.status.as_u16() {
+                    200 => {
+                        let bytes = hyper::body::to_bytes(body).await.map_err(|err| {
+                            Error::InvalidReply(format!("failed to read response body: {}", err))
+                        })?;
+                        let body = serde_json::from_slice(&bytes).map_err(|err| {
+                            Error::InvalidReply(format!(
+                                "failed to JSON-decode response body: {}",
+                                err
+                            ))
+                        })?;
+                        Ok(Self::Status200 {
+                            body,
+                            extra_headers: parts.headers,
+                            extensions: parts.extensions,
+                        })
+                    }
+                    status => Err(Error::InvalidReply(format!(
+                        "unexpected status code: {}",
+                        status
+                    ))),
+                }
+            }
+        }
+
+        // Response type.
+
+        #[derive(Debug)]
+        pub enum TestAdditionalPropertiesCompositeAnyResponse {
+            /// Ok.
+            Status200 {
+                body: super::TestAdditionalPropertiesCompositeAny200Response,
+                extra_headers: HeaderMap,
+                extensions: Extensions,
+            },
+        }
+
+        impl TestAdditionalPropertiesCompositeAnyResponse {
+            pub(crate) async fn from_response<ResBody>(
+                resp: http::Response<ResBody>,
+            ) -> Result<Self>
+            where
+                ResBody: hyper::body::HttpBody,
+                ResBody::Error: std::error::Error,
+            {
+                let (mut parts, body) = resp.into_parts();
+
+                match parts.status.as_u16() {
+                    200 => {
+                        let bytes = hyper::body::to_bytes(body).await.map_err(|err| {
+                            Error::InvalidReply(format!("failed to read response body: {}", err))
+                        })?;
+                        let body = serde_json::from_slice(&bytes).map_err(|err| {
+                            Error::InvalidReply(format!(
+                                "failed to JSON-decode response body: {}",
+                                err
+                            ))
+                        })?;
+                        Ok(Self::Status200 {
+                            body,
+                            extra_headers: parts.headers,
+                            extensions: parts.extensions,
+                        })
+                    }
+                    status => Err(Error::InvalidReply(format!(
+                        "unexpected status code: {}",
+                        status
+                    ))),
+                }
+            }
+        }
+
+        // Response type.
+
+        #[derive(Debug)]
+        pub enum TestAdditionalPropertiesCompositeSchemaResponse {
+            /// Ok.
+            Status200 {
+                body: super::TestAdditionalPropertiesCompositeSchema200Response,
+                extra_headers: HeaderMap,
+                extensions: Extensions,
+            },
+        }
+
+        impl TestAdditionalPropertiesCompositeSchemaResponse {
+            pub(crate) async fn from_response<ResBody>(
+                resp: http::Response<ResBody>,
+            ) -> Result<Self>
+            where
+                ResBody: hyper::body::HttpBody,
+                ResBody::Error: std::error::Error,
+            {
+                let (mut parts, body) = resp.into_parts();
+
+                match parts.status.as_u16() {
+                    200 => {
+                        let bytes = hyper::body::to_bytes(body).await.map_err(|err| {
+                            Error::InvalidReply(format!("failed to read response body: {}", err))
+                        })?;
+                        let body = serde_json::from_slice(&bytes).map_err(|err| {
+                            Error::InvalidReply(format!(
+                                "failed to JSON-decode response body: {}",
+                                err
+                            ))
+                        })?;
+                        Ok(Self::Status200 {
+                            body,
+                            extra_headers: parts.headers,
+                            extensions: parts.extensions,
+                        })
+                    }
+                    status => Err(Error::InvalidReply(format!(
+                        "unexpected status code: {}",
+                        status
+                    ))),
+                }
+            }
+        }
+
+        // Response type.
+
+        #[derive(Debug)]
+        pub enum TestAdditionalPropertiesSchemaResponse {
+            /// Ok.
+            Status200 {
+                body: std::collections::BTreeMap<String, super::super::components::Pet>,
+                extra_headers: HeaderMap,
+                extensions: Extensions,
+            },
+        }
+
+        impl TestAdditionalPropertiesSchemaResponse {
+            pub(crate) async fn from_response<ResBody>(
+                resp: http::Response<ResBody>,
+            ) -> Result<Self>
+            where
+                ResBody: hyper::body::HttpBody,
+                ResBody::Error: std::error::Error,
+            {
+                let (mut parts, body) = resp.into_parts();
+
+                match parts.status.as_u16() {
+                    200 => {
+                        let bytes = hyper::body::to_bytes(body).await.map_err(|err| {
+                            Error::InvalidReply(format!("failed to read response body: {}", err))
+                        })?;
+                        let body = serde_json::from_slice(&bytes).map_err(|err| {
+                            Error::InvalidReply(format!(
+                                "failed to JSON-decode response body: {}",
+                                err
+                            ))
+                        })?;
+                        Ok(Self::Status200 {
+                            body,
+                            extra_headers: parts.headers,
+                            extensions: parts.extensions,
+                        })
+                    }
+                    status => Err(Error::InvalidReply(format!(
+                        "unexpected status code: {}",
+                        status
+                    ))),
+                }
+            }
+        }
+
+        // Response type.
+
+        #[derive(Debug)]
+        pub enum TestAdditionalPropertiesStringResponse {
+            /// Ok.
+            Status200 {
+                body: std::collections::BTreeMap<String, String>,
+                extra_headers: HeaderMap,
+                extensions: Extensions,
+            },
+        }
+
+        impl TestAdditionalPropertiesStringResponse {
+            pub(crate) async fn from_response<ResBody>(
+                resp: http::Response<ResBody>,
+            ) -> Result<Self>
+            where
+                ResBody: hyper::body::HttpBody,
+                ResBody::Error: std::error::Error,
+            {
+                let (mut parts, body) = resp.into_parts();
+
+                match parts.status.as_u16() {
+                    200 => {
+                        let bytes = hyper::body::to_bytes(body).await.map_err(|err| {
+                            Error::InvalidReply(format!("failed to read response body: {}", err))
+                        })?;
+                        let body = serde_json::from_slice(&bytes).map_err(|err| {
+                            Error::InvalidReply(format!(
+                                "failed to JSON-decode response body: {}",
+                                err
+                            ))
+                        })?;
+                        Ok(Self::Status200 {
+                            body,
+                            extra_headers: parts.headers,
+                            extensions: parts.extensions,
+                        })
+                    }
+                    status => Err(Error::InvalidReply(format!(
+                        "unexpected status code: {}",
+                        status
+                    ))),
+                }
+            }
+        }
+
+        // Request type.
+
+        #[derive(Debug, Clone, PartialEq, Eq)]
+        pub struct TestHeadersRequest {
+            pub x_string_header: Option<String>,
+            pub x_bytes_header: Option<lgn_online::codegen::Bytes>,
+            pub x_int_header: Option<i32>,
+        }
+
+        // Response type.
+
+        #[derive(Debug)]
+        pub enum TestHeadersResponse {
+            /// Ok.
+            Status200 {
+                x_bytes_header: lgn_online::codegen::Bytes,
+                x_int_header: i32,
+                x_string_header: String,
+                body: super::super::components::Pet,
+                extra_headers: HeaderMap,
+                extensions: Extensions,
+            },
+        }
+
+        impl TestHeadersResponse {
+            pub(crate) async fn from_response<ResBody>(
+                resp: http::Response<ResBody>,
+            ) -> Result<Self>
+            where
+                ResBody: hyper::body::HttpBody,
+                ResBody::Error: std::error::Error,
+            {
+                let (mut parts, body) = resp.into_parts();
+
+                match parts.status.as_u16() {
+                    200 => {
+                        let x_bytes_header =
+                            lgn_online::codegen::encoding::from_percent_encoded_string(
+                                parts
+                                    .headers
+                                    .remove("x-bytes-header")
+                                    .ok_or_else(|| {
+                                        Error::InvalidReply(
+                                            "missing header: x-bytes-header".to_owned(),
+                                        )
+                                    })?
+                                    .to_str()
+                                    .map_err(|err| {
+                                        Error::InvalidReply(format!(
+                                            "invalid header: x-bytes-header: {}",
+                                            err
+                                        ))
+                                    })?,
+                            )
+                            .map_err(|err| {
+                                Error::InvalidReply(format!(
+                                    "failed to decode header `x-bytes-header`: {}",
+                                    err
+                                ))
+                            })?;
+                        let x_int_header =
+                            lgn_online::codegen::encoding::from_percent_encoded_string(
+                                parts
+                                    .headers
+                                    .remove("x-int-header")
+                                    .ok_or_else(|| {
+                                        Error::InvalidReply(
+                                            "missing header: x-int-header".to_owned(),
+                                        )
+                                    })?
+                                    .to_str()
+                                    .map_err(|err| {
+                                        Error::InvalidReply(format!(
+                                            "invalid header: x-int-header: {}",
+                                            err
+                                        ))
+                                    })?,
+                            )
+                            .map_err(|err| {
+                                Error::InvalidReply(format!(
+                                    "failed to decode header `x-int-header`: {}",
+                                    err
+                                ))
+                            })?;
+                        let x_string_header =
+                            lgn_online::codegen::encoding::from_percent_encoded_string(
+                                parts
+                                    .headers
+                                    .remove("x-string-header")
+                                    .ok_or_else(|| {
+                                        Error::InvalidReply(
+                                            "missing header: x-string-header".to_owned(),
+                                        )
+                                    })?
+                                    .to_str()
+                                    .map_err(|err| {
+                                        Error::InvalidReply(format!(
+                                            "invalid header: x-string-header: {}",
+                                            err
+                                        ))
+                                    })?,
+                            )
+                            .map_err(|err| {
+                                Error::InvalidReply(format!(
+                                    "failed to decode header `x-string-header`: {}",
+                                    err
+                                ))
+                            })?;
+                        let bytes = hyper::body::to_bytes(body).await.map_err(|err| {
+                            Error::InvalidReply(format!("failed to read response body: {}", err))
+                        })?;
+                        let body = serde_json::from_slice(&bytes).map_err(|err| {
+                            Error::InvalidReply(format!(
+                                "failed to JSON-decode response body: {}",
+                                err
+                            ))
+                        })?;
+                        Ok(Self::Status200 {
+                            x_bytes_header,
+                            x_int_header,
+                            x_string_header,
+                            body,
+                            extra_headers: parts.headers,
+                            extensions: parts.extensions,
+                        })
+                    }
+                    status => Err(Error::InvalidReply(format!(
+                        "unexpected status code: {}",
+                        status
+                    ))),
+                }
+            }
+        }
+
+        // Response type.
+
+        #[derive(Debug)]
+        pub enum TestOneOfResponse {
+            /// Ok.
+            Status200 {
+                body: super::TestOneOf200Response,
+                extra_headers: HeaderMap,
+                extensions: Extensions,
+            },
+        }
+
+        impl TestOneOfResponse {
+            pub(crate) async fn from_response<ResBody>(
+                resp: http::Response<ResBody>,
+            ) -> Result<Self>
+            where
+                ResBody: hyper::body::HttpBody,
+                ResBody::Error: std::error::Error,
+            {
+                let (mut parts, body) = resp.into_parts();
+
+                match parts.status.as_u16() {
+                    200 => {
+                        let bytes = hyper::body::to_bytes(body).await.map_err(|err| {
+                            Error::InvalidReply(format!("failed to read response body: {}", err))
+                        })?;
+                        let body = serde_json::from_slice(&bytes).map_err(|err| {
+                            Error::InvalidReply(format!(
+                                "failed to JSON-decode response body: {}",
+                                err
+                            ))
+                        })?;
+                        Ok(Self::Status200 {
+                            body,
+                            extra_headers: parts.headers,
+                            extensions: parts.extensions,
+                        })
+                    }
+                    status => Err(Error::InvalidReply(format!(
+                        "unexpected status code: {}",
+                        status
+                    ))),
+                }
+            }
+        }
+
+        #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+        struct GetCarsQuery {
+            #[serde(rename = "other_query")]
+            other_query: String,
+            #[serde(rename = "names")]
+            #[serde(skip_serializing_if = "Option::is_none")]
+            names: Option<Vec<String>>,
+            #[serde(rename = "q")]
+            #[serde(skip_serializing_if = "Option::is_none")]
+            q: Option<String>,
+        }
+
+        // Request type.
+
+        #[derive(Debug, Clone, PartialEq, Eq)]
+        pub struct GetCarsRequest {
+            pub space_id: String,
+            pub other_query: String,
+            pub names: Option<Vec<String>>,
+            pub q: Option<String>,
+        }
+
+        // Response type.
+
+        #[derive(Debug)]
+        pub enum GetCarsResponse {
+            /// List of cars.
+            Status200 {
+                body: super::super::components::Cars,
+                extra_headers: HeaderMap,
+                extensions: Extensions,
+            },
+        }
+
+        impl GetCarsResponse {
+            pub(crate) async fn from_response<ResBody>(
+                resp: http::Response<ResBody>,
+            ) -> Result<Self>
+            where
+                ResBody: hyper::body::HttpBody,
+                ResBody::Error: std::error::Error,
+            {
+                let (mut parts, body) = resp.into_parts();
+
+                match parts.status.as_u16() {
+                    200 => {
+                        let bytes = hyper::body::to_bytes(body).await.map_err(|err| {
+                            Error::InvalidReply(format!("failed to read response body: {}", err))
+                        })?;
+                        let body = serde_json::from_slice(&bytes).map_err(|err| {
+                            Error::InvalidReply(format!(
+                                "failed to JSON-decode response body: {}",
+                                err
+                            ))
+                        })?;
+                        Ok(Self::Status200 {
+                            body,
+                            extra_headers: parts.headers,
+                            extensions: parts.extensions,
+                        })
+                    }
+                    status => Err(Error::InvalidReply(format!(
+                        "unexpected status code: {}",
+                        status
+                    ))),
+                }
+            }
+        }
+
+        // Request type.
+
+        #[derive(Debug, Clone, PartialEq, Eq)]
+        pub struct CreateCarRequest {
+            pub space_id: String,
+            pub span_id: Option<String>,
+            pub body: super::super::components::Car,
+        }
+
+        // Response type.
+
+        #[derive(Debug)]
+        pub enum CreateCarResponse {
+            /// Created.
+            Status201 {
+                extra_headers: HeaderMap,
+                extensions: Extensions,
+            },
+        }
+
+        impl CreateCarResponse {
+            pub(crate) async fn from_response<ResBody>(
+                resp: http::Response<ResBody>,
+            ) -> Result<Self>
+            where
+                ResBody: hyper::body::HttpBody,
+                ResBody::Error: std::error::Error,
+            {
+                let (mut parts, _body) = resp.into_parts();
+
+                match parts.status.as_u16() {
+                    201 => Ok(Self::Status201 {
+                        extra_headers: parts.headers,
+                        extensions: parts.extensions,
+                    }),
+                    status => Err(Error::InvalidReply(format!(
+                        "unexpected status code: {}",
+                        status
+                    ))),
+                }
+            }
+        }
+
+        // Request type.
+
+        #[derive(Debug, Clone, PartialEq, Eq)]
+        pub struct GetCarRequest {
+            pub space_id: String,
+            pub car_id: i64,
+        }
+
+        // Response type.
+
+        #[derive(Debug)]
+        pub enum GetCarResponse {
+            /// A car.
+            Status200 {
+                body: super::super::components::Car,
+                extra_headers: HeaderMap,
+                extensions: Extensions,
+            },
+            /// Car not found.
+            Status404 {
+                extra_headers: HeaderMap,
+                extensions: Extensions,
+            },
+        }
+
+        impl GetCarResponse {
+            pub(crate) async fn from_response<ResBody>(
+                resp: http::Response<ResBody>,
+            ) -> Result<Self>
+            where
+                ResBody: hyper::body::HttpBody,
+                ResBody::Error: std::error::Error,
+            {
+                let (mut parts, body) = resp.into_parts();
+
+                match parts.status.as_u16() {
+                    200 => {
+                        let bytes = hyper::body::to_bytes(body).await.map_err(|err| {
+                            Error::InvalidReply(format!("failed to read response body: {}", err))
+                        })?;
+                        let body = serde_json::from_slice(&bytes).map_err(|err| {
+                            Error::InvalidReply(format!(
+                                "failed to JSON-decode response body: {}",
+                                err
+                            ))
+                        })?;
+                        Ok(Self::Status200 {
+                            body,
+                            extra_headers: parts.headers,
+                            extensions: parts.extensions,
+                        })
+                    }
+
+                    404 => Ok(Self::Status404 {
+                        extra_headers: parts.headers,
+                        extensions: parts.extensions,
+                    }),
+                    status => Err(Error::InvalidReply(format!(
+                        "unexpected status code: {}",
+                        status
+                    ))),
+                }
+            }
+        }
+
+        // Request type.
+
+        #[derive(Debug, Clone, PartialEq, Eq)]
+        pub struct DeleteCarRequest {
+            pub space_id: String,
+            pub car_id: i64,
+        }
+
+        // Response type.
+
+        #[derive(Debug)]
+        pub enum DeleteCarResponse {
+            /// Car deleted.
+            Status200 {
+                extra_headers: HeaderMap,
+                extensions: Extensions,
+            },
+            /// Car not found.
+            Status404 {
+                extra_headers: HeaderMap,
+                extensions: Extensions,
+            },
+        }
+
+        impl DeleteCarResponse {
+            pub(crate) async fn from_response<ResBody>(
+                resp: http::Response<ResBody>,
+            ) -> Result<Self>
+            where
+                ResBody: hyper::body::HttpBody,
+                ResBody::Error: std::error::Error,
+            {
+                let (mut parts, _body) = resp.into_parts();
+
+                match parts.status.as_u16() {
+                    200 => Ok(Self::Status200 {
+                        extra_headers: parts.headers,
+                        extensions: parts.extensions,
+                    }),
+
+                    404 => Ok(Self::Status404 {
+                        extra_headers: parts.headers,
+                        extensions: parts.extensions,
+                    }),
+                    status => Err(Error::InvalidReply(format!(
+                        "unexpected status code: {}",
+                        status
+                    ))),
+                }
+            }
+        }
+
+        // Request type.
+
+        #[derive(Debug, Clone, PartialEq, Eq)]
+        pub struct TestBinaryRequest {
+            pub space_id: String,
+            pub body: lgn_online::codegen::Bytes,
+        }
+
+        // Response type.
+
+        #[derive(Debug)]
+        pub enum TestBinaryResponse {
+            /// Ok.
+            Status200 {
+                body: lgn_online::codegen::Bytes,
+                extra_headers: HeaderMap,
+                extensions: Extensions,
+            },
+        }
+
+        impl TestBinaryResponse {
+            pub(crate) async fn from_response<ResBody>(
+                resp: http::Response<ResBody>,
+            ) -> Result<Self>
+            where
+                ResBody: hyper::body::HttpBody,
+                ResBody::Error: std::error::Error,
+            {
+                let (mut parts, body) = resp.into_parts();
+
+                match parts.status.as_u16() {
+                    200 => {
+                        let bytes = hyper::body::to_bytes(body).await.map_err(|err| {
+                            Error::InvalidReply(format!("failed to read response body: {}", err))
+                        })?;
+                        let body = bytes.into();
+                        Ok(Self::Status200 {
+                            body,
+                            extra_headers: parts.headers,
+                            extensions: parts.extensions,
+                        })
+                    }
+                    status => Err(Error::InvalidReply(format!(
+                        "unexpected status code: {}",
+                        status
+                    ))),
+                }
+            }
+        }
+
+        #[derive(Debug)]
+        pub struct Client<C> {
+            inner: C,
+            base_uri: http::Uri,
+        }
+
+        impl<C> Client<C> {
+            pub fn new(inner: C, base_uri: http::Uri) -> Self {
+                Self { inner, base_uri }
+            }
+        }
+
+        impl<C, ResBody> Client<C>
+        where
+            C: Service<Request<hyper::Body>, Response = Response<ResBody>> + Clone + Send + Sync,
+            C::Error: Into<Error>,
+            C::Future: Send,
+            ResBody: hyper::body::HttpBody + Send,
+            ResBody::Data: Send,
+            ResBody::Error: std::error::Error,
+        {
+            /// Call to `test_additional_properties_any`.
+            ///
+            /// # Errors
+            ///
+            /// Returns an error in case of failure.
+            pub async fn test_additional_properties_any(
+                &self,
+            ) -> Result<TestAdditionalPropertiesAnyResponse> {
+                let mut uri = format!(
+                    "{}://{}/test-additional-properties-any",
+                    self.base_uri.scheme_str().unwrap(),
+                    self.base_uri.authority().unwrap()
+                );
+
+                debug!("test_additional_properties_any: {}", uri);
+
+                let body = hyper::Body::empty();
+                let mut req = Request::builder()
+                    .method(hyper::Method::GET)
+                    .uri(uri)
+                    .body(body)?;
+
+                let mut client = self.inner.clone();
+                let resp = client.call(req).await.map_err(Into::into)?;
+
+                TestAdditionalPropertiesAnyResponse::from_response(resp).await
+            }
+
+            /// Call to `test_additional_properties_composite_any`.
+            ///
+            /// # Errors
+            ///
+            /// Returns an error in case of failure.
+            pub async fn test_additional_properties_composite_any(
+                &self,
+            ) -> Result<TestAdditionalPropertiesCompositeAnyResponse> {
+                let mut uri = format!(
+                    "{}://{}/test-additional-properties-composite-any",
+                    self.base_uri.scheme_str().unwrap(),
+                    self.base_uri.authority().unwrap()
+                );
+
+                debug!("test_additional_properties_composite_any: {}", uri);
+
+                let body = hyper::Body::empty();
+                let mut req = Request::builder()
+                    .method(hyper::Method::GET)
+                    .uri(uri)
+                    .body(body)?;
+
+                let mut client = self.inner.clone();
+                let resp = client.call(req).await.map_err(Into::into)?;
+
+                TestAdditionalPropertiesCompositeAnyResponse::from_response(resp).await
+            }
+
+            /// Call to `test_additional_properties_composite_schema`.
+            ///
+            /// # Errors
+            ///
+            /// Returns an error in case of failure.
+            pub async fn test_additional_properties_composite_schema(
+                &self,
+            ) -> Result<TestAdditionalPropertiesCompositeSchemaResponse> {
+                let mut uri = format!(
+                    "{}://{}/test-additional-properties-composite-schema",
+                    self.base_uri.scheme_str().unwrap(),
+                    self.base_uri.authority().unwrap()
+                );
+
+                debug!("test_additional_properties_composite_schema: {}", uri);
+
+                let body = hyper::Body::empty();
+                let mut req = Request::builder()
+                    .method(hyper::Method::GET)
+                    .uri(uri)
+                    .body(body)?;
+
+                let mut client = self.inner.clone();
+                let resp = client.call(req).await.map_err(Into::into)?;
+
+                TestAdditionalPropertiesCompositeSchemaResponse::from_response(resp).await
+            }
+
+            /// Call to `test_additional_properties_schema`.
+            ///
+            /// # Errors
+            ///
+            /// Returns an error in case of failure.
+            pub async fn test_additional_properties_schema(
+                &self,
+            ) -> Result<TestAdditionalPropertiesSchemaResponse> {
+                let mut uri = format!(
+                    "{}://{}/test-additional-properties-schema",
+                    self.base_uri.scheme_str().unwrap(),
+                    self.base_uri.authority().unwrap()
+                );
+
+                debug!("test_additional_properties_schema: {}", uri);
+
+                let body = hyper::Body::empty();
+                let mut req = Request::builder()
+                    .method(hyper::Method::GET)
+                    .uri(uri)
+                    .body(body)?;
+
+                let mut client = self.inner.clone();
+                let resp = client.call(req).await.map_err(Into::into)?;
+
+                TestAdditionalPropertiesSchemaResponse::from_response(resp).await
+            }
+
+            /// Call to `test_additional_properties_string`.
+            ///
+            /// # Errors
+            ///
+            /// Returns an error in case of failure.
+            pub async fn test_additional_properties_string(
+                &self,
+            ) -> Result<TestAdditionalPropertiesStringResponse> {
+                let mut uri = format!(
+                    "{}://{}/test-additional-properties-string",
+                    self.base_uri.scheme_str().unwrap(),
+                    self.base_uri.authority().unwrap()
+                );
+
+                debug!("test_additional_properties_string: {}", uri);
+
+                let body = hyper::Body::empty();
+                let mut req = Request::builder()
+                    .method(hyper::Method::GET)
+                    .uri(uri)
+                    .body(body)?;
+
+                let mut client = self.inner.clone();
+                let resp = client.call(req).await.map_err(Into::into)?;
+
+                TestAdditionalPropertiesStringResponse::from_response(resp).await
+            }
+
+            /// Call to `test_headers`.
+            ///
+            /// # Errors
+            ///
+            /// Returns an error in case of failure.
+            pub async fn test_headers(
+                &self,
+                request: TestHeadersRequest,
+            ) -> Result<TestHeadersResponse> {
+                let mut uri = format!(
+                    "{}://{}/test-headers",
+                    self.base_uri.scheme_str().unwrap(),
+                    self.base_uri.authority().unwrap()
+                );
+
+                debug!("test_headers: {}", uri);
+
+                let body = hyper::Body::empty();
+                let mut req = Request::builder()
+                    .method(hyper::Method::GET)
+                    .uri(uri)
+                    .body(body)?;
+
+                let x_string_header = request.x_string_header;
+                if let Some(x_string_header) = x_string_header {
+                    let x_string_header =
+                        lgn_online::codegen::encoding::to_percent_encoded_string(&x_string_header)
+                            .map_err(|err| {
+                                Error::InvalidRequest(format!(
+                                    "failed to encode header parameter `x_string_header`: {}",
+                                    err
+                                ))
+                            })?;
+
+                    req.headers_mut().insert(
+                        "x-string-header",
+                        HeaderValue::from_str(&x_string_header).map_err(|err| {
+                            Error::InvalidRequest(format!(
+                                "invalid header: x-string-header: {}",
+                                err
+                            ))
+                        })?,
+                    );
+                }
+
+                let x_bytes_header = request.x_bytes_header;
+                if let Some(x_bytes_header) = x_bytes_header {
+                    let x_bytes_header =
+                        lgn_online::codegen::encoding::to_percent_encoded_string(&x_bytes_header)
+                            .map_err(|err| {
+                            Error::InvalidRequest(format!(
+                                "failed to encode header parameter `x_bytes_header`: {}",
+                                err
+                            ))
+                        })?;
+
+                    req.headers_mut().insert(
+                        "x-bytes-header",
+                        HeaderValue::from_str(&x_bytes_header).map_err(|err| {
+                            Error::InvalidRequest(format!(
+                                "invalid header: x-bytes-header: {}",
+                                err
+                            ))
+                        })?,
+                    );
+                }
+
+                let x_int_header = request.x_int_header;
+                if let Some(x_int_header) = x_int_header {
+                    let x_int_header =
+                        lgn_online::codegen::encoding::to_percent_encoded_string(&x_int_header)
+                            .map_err(|err| {
+                                Error::InvalidRequest(format!(
+                                    "failed to encode header parameter `x_int_header`: {}",
+                                    err
+                                ))
+                            })?;
+
+                    req.headers_mut().insert(
+                        "x-int-header",
+                        HeaderValue::from_str(&x_int_header).map_err(|err| {
+                            Error::InvalidRequest(format!("invalid header: x-int-header: {}", err))
+                        })?,
+                    );
+                }
+                let mut client = self.inner.clone();
+                let resp = client.call(req).await.map_err(Into::into)?;
+
+                TestHeadersResponse::from_response(resp).await
+            }
+
+            /// Call to `test_one_of`.
+            ///
+            /// # Errors
+            ///
+            /// Returns an error in case of failure.
+            pub async fn test_one_of(&self) -> Result<TestOneOfResponse> {
+                let mut uri = format!(
+                    "{}://{}/test-one-of",
+                    self.base_uri.scheme_str().unwrap(),
+                    self.base_uri.authority().unwrap()
+                );
+
+                debug!("test_one_of: {}", uri);
+
+                let body = hyper::Body::empty();
+                let mut req = Request::builder()
+                    .method(hyper::Method::GET)
+                    .uri(uri)
+                    .body(body)?;
+
+                let mut client = self.inner.clone();
+                let resp = client.call(req).await.map_err(Into::into)?;
+
+                TestOneOfResponse::from_response(resp).await
+            }
+
+            /// Call to `get_cars`.
+            ///
+            /// # Errors
+            ///
+            /// Returns an error in case of failure.
+            pub async fn get_cars(&self, request: GetCarsRequest) -> Result<GetCarsResponse> {
+                let mut uri = format!(
+                    "{}://{}/v1/spaces/{}/car-service/cars",
+                    self.base_uri.scheme_str().unwrap(),
+                    self.base_uri.authority().unwrap(),
+                    lgn_online::codegen::encoding::to_percent_encoded_string(&request.space_id)
+                        .map_err(|err| Error::InvalidRequest(format!(
+                            "failed to encode path parameter `space-id`: {}",
+                            err
+                        )))?
+                );
+
+                let query = GetCarsQuery {
+                    other_query: request.other_query,
+                    names: request.names,
+                    q: request.q,
+                };
+                let query_string = serde_qs::to_string(&query).map_err(|err| {
+                    Error::InvalidRequest(format!("failed to encode query string: {}", err))
+                })?;
+                if !query_string.is_empty() {
+                    uri += &format!("?{}", query_string);
+                }
+                debug!("get_cars: {}", uri);
+
+                let body = hyper::Body::empty();
+                let mut req = Request::builder()
+                    .method(hyper::Method::GET)
+                    .uri(uri)
+                    .body(body)?;
+
+                let mut client = self.inner.clone();
+                let resp = client.call(req).await.map_err(Into::into)?;
+
+                GetCarsResponse::from_response(resp).await
+            }
+
+            /// Call to `create_car`.
+            ///
+            /// # Errors
+            ///
+            /// Returns an error in case of failure.
+            pub async fn create_car(&self, request: CreateCarRequest) -> Result<CreateCarResponse> {
+                let mut uri = format!(
+                    "{}://{}/v1/spaces/{}/car-service/cars",
+                    self.base_uri.scheme_str().unwrap(),
+                    self.base_uri.authority().unwrap(),
+                    lgn_online::codegen::encoding::to_percent_encoded_string(&request.space_id)
+                        .map_err(|err| Error::InvalidRequest(format!(
+                            "failed to encode path parameter `space-id`: {}",
+                            err
+                        )))?
+                );
+
+                debug!("create_car: {}", uri);
+
+                let body =
+                    hyper::Body::from(serde_json::to_string(&request.body).map_err(|err| {
+                        Error::InvalidRequest(format!(
+                            "failed to JSON-encode request body: {}",
+                            err
+                        ))
+                    })?);
+
+                let mut req = Request::builder()
+                    .method(hyper::Method::POST)
+                    .uri(uri)
+                    .body(body)?;
+
+                req.headers_mut()
+                    .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+
+                let span_id = request.span_id;
+                if let Some(span_id) = span_id {
+                    let span_id =
+                        lgn_online::codegen::encoding::to_percent_encoded_string(&span_id)
+                            .map_err(|err| {
+                                Error::InvalidRequest(format!(
+                                    "failed to encode header parameter `span_id`: {}",
+                                    err
+                                ))
+                            })?;
+
+                    req.headers_mut().insert(
+                        "span-id",
+                        HeaderValue::from_str(&span_id).map_err(|err| {
+                            Error::InvalidRequest(format!("invalid header: span-id: {}", err))
+                        })?,
+                    );
+                }
+                let mut client = self.inner.clone();
+                let resp = client.call(req).await.map_err(Into::into)?;
+
+                CreateCarResponse::from_response(resp).await
+            }
+
+            /// Call to `get_car`.
+            ///
+            /// # Errors
+            ///
+            /// Returns an error in case of failure.
+            pub async fn get_car(&self, request: GetCarRequest) -> Result<GetCarResponse> {
+                let mut uri = format!(
+                    "{}://{}/v1/spaces/{}/car-service/cars/{}",
+                    self.base_uri.scheme_str().unwrap(),
+                    self.base_uri.authority().unwrap(),
+                    lgn_online::codegen::encoding::to_percent_encoded_string(&request.space_id)
+                        .map_err(|err| Error::InvalidRequest(format!(
+                            "failed to encode path parameter `space-id`: {}",
+                            err
+                        )))?,
+                    lgn_online::codegen::encoding::to_percent_encoded_string(&request.car_id)
+                        .map_err(|err| Error::InvalidRequest(format!(
+                            "failed to encode path parameter `car-id`: {}",
+                            err
+                        )))?
+                );
+
+                debug!("get_car: {}", uri);
+
+                let body = hyper::Body::empty();
+                let mut req = Request::builder()
+                    .method(hyper::Method::GET)
+                    .uri(uri)
+                    .body(body)?;
+
+                let mut client = self.inner.clone();
+                let resp = client.call(req).await.map_err(Into::into)?;
+
+                GetCarResponse::from_response(resp).await
+            }
+
+            /// Call to `delete_car`.
+            ///
+            /// # Errors
+            ///
+            /// Returns an error in case of failure.
+            pub async fn delete_car(&self, request: DeleteCarRequest) -> Result<DeleteCarResponse> {
+                let mut uri = format!(
+                    "{}://{}/v1/spaces/{}/car-service/cars/{}",
+                    self.base_uri.scheme_str().unwrap(),
+                    self.base_uri.authority().unwrap(),
+                    lgn_online::codegen::encoding::to_percent_encoded_string(&request.space_id)
+                        .map_err(|err| Error::InvalidRequest(format!(
+                            "failed to encode path parameter `space-id`: {}",
+                            err
+                        )))?,
+                    lgn_online::codegen::encoding::to_percent_encoded_string(&request.car_id)
+                        .map_err(|err| Error::InvalidRequest(format!(
+                            "failed to encode path parameter `car-id`: {}",
+                            err
+                        )))?
+                );
+
+                debug!("delete_car: {}", uri);
+
+                let body = hyper::Body::empty();
+                let mut req = Request::builder()
+                    .method(hyper::Method::DELETE)
+                    .uri(uri)
+                    .body(body)?;
+
+                let mut client = self.inner.clone();
+                let resp = client.call(req).await.map_err(Into::into)?;
+
+                DeleteCarResponse::from_response(resp).await
+            }
+
+            /// Call to `test_binary`.
+            ///
+            /// # Errors
+            ///
+            /// Returns an error in case of failure.
+            pub async fn test_binary(
+                &self,
+                request: TestBinaryRequest,
+            ) -> Result<TestBinaryResponse> {
+                let mut uri = format!(
+                    "{}://{}/v1/spaces/{}/car-service/test-binary",
+                    self.base_uri.scheme_str().unwrap(),
+                    self.base_uri.authority().unwrap(),
+                    lgn_online::codegen::encoding::to_percent_encoded_string(&request.space_id)
+                        .map_err(|err| Error::InvalidRequest(format!(
+                            "failed to encode path parameter `space-id`: {}",
+                            err
+                        )))?
+                );
+
+                debug!("test_binary: {}", uri);
+
+                let body = hyper::Body::from(request.body);
+
+                let mut req = Request::builder()
+                    .method(hyper::Method::POST)
+                    .uri(uri)
+                    .body(body)?;
+
+                req.headers_mut().insert(
+                    CONTENT_TYPE,
+                    HeaderValue::from_static("application/octet-stream"),
+                );
+                let mut client = self.inner.clone();
+                let resp = client.call(req).await.map_err(Into::into)?;
+
+                TestBinaryResponse::from_response(resp).await
+            }
+        }
+    }
+
+    // ---------- Server ----------
+    pub mod server {
+
+        use axum::{
+            extract::ConnectInfo,
+            extract::Json,
+            extract::Path,
+            http::Request,
+            response::{IntoResponse, Response},
+            routing, Extension, Router,
+        };
+        use http::{header::HeaderName, request::Parts, Extensions, HeaderMap, HeaderValue};
+
+        use lgn_online::server::{Error, Result};
+        use lgn_tracing::error;
+        use serde_qs::axum::QsQuery;
+        use std::net::SocketAddr;
+
+        // Request type.
+
+        #[derive(Debug)]
+        pub struct TestAdditionalPropertiesAnyRequest {
+            pub parts: http::request::Parts,
+        }
+
+        // Response type.
+
+        #[derive(Debug)]
+        pub enum TestAdditionalPropertiesAnyResponse {
+            /// Ok.
+            Status200(std::collections::BTreeMap<String, serde_json::Value>),
+            WithHeaders(HeaderMap, Box<TestAdditionalPropertiesAnyResponse>),
+            WithExtensions(Extensions, Box<TestAdditionalPropertiesAnyResponse>),
+        }
+
+        impl TestAdditionalPropertiesAnyResponse {
+            #[must_use]
+            pub fn with_headers(self, headers: http::HeaderMap) -> Self {
+                #[allow(clippy::match_wildcard_for_single_variants)]
+                match self {
+                    Self::WithHeaders(mut inner_headers, inner) => {
+                        inner_headers.extend(headers);
+                        Self::WithHeaders(inner_headers, inner)
+                    }
+                    Self::WithExtensions(extensions, inner) => {
+                        Self::WithExtensions(extensions, Box::new(inner.with_headers(headers)))
+                    }
+                    s => Self::WithHeaders(headers, Box::new(s)),
+                }
+            }
+
+            #[must_use]
+            pub fn with_extensions(self, extensions: Extensions) -> Self {
+                #[allow(clippy::match_wildcard_for_single_variants)]
+                match self {
+                    Self::WithExtensions(mut inner_extensions, inner) => {
+                        inner_extensions.extend(extensions);
+                        Self::WithExtensions(inner_extensions, inner)
+                    }
+                    Self::WithHeaders(headers, inner) => {
+                        Self::WithHeaders(headers, Box::new(inner.with_extensions(extensions)))
+                    }
+                    s => Self::WithExtensions(extensions, Box::new(s)),
+                }
+            }
+
+            /// Extend this response with the specified header.
+            ///
+            /// If the header already existed, it will be overwritten
+            /// silently.
+            #[must_use]
+            pub fn with_header(
+                self,
+                key: impl http::header::IntoHeaderName,
+                val: http::header::HeaderValue,
+            ) -> Self {
+                // Optimization: if the response chain already contains a
+                // `WithHeaders`, we just add the header to the headers
+                // map instead of re-boxing the whole thing.
+                #[allow(clippy::match_wildcard_for_single_variants)]
+                match self {
+                    Self::WithHeaders(mut headers, inner) => {
+                        headers.insert(key, val);
+                        Self::WithHeaders(headers, inner)
+                    }
+                    Self::WithExtensions(extensions, inner) => {
+                        Self::WithExtensions(extensions, Box::new(inner.with_header(key, val)))
+                    }
+                    s => {
+                        // If we get here, we traversed the entire response
+                        // chain without finding a `WithHeaders`, so we wrap
+                        // the response in a `WithHeaders` and add the
+                        // header that way.
+                        let mut headers = HeaderMap::new();
+                        headers.insert(key, val);
+                        s.with_headers(headers)
+                    }
+                }
+            }
+
+            /// Extend this response with the specified extension.
+            ///
+            /// If the extension already existed, it will be overwritten
+            /// silently.
+            #[must_use]
+            pub fn with_extension<T: Send + Sync + 'static>(self, extension: T) -> Self {
+                // Optimization: if the response chain already contains a
+                // `WithExtensions`, we just add the extension to the extensions
+                // map instead of re-boxing the whole thing.
+                #[allow(clippy::match_wildcard_for_single_variants)]
+                match self {
+                    Self::WithExtensions(mut extensions, inner) => {
+                        extensions.insert(extension);
+                        Self::WithExtensions(extensions, inner)
+                    }
+                    Self::WithHeaders(headers, inner) => {
+                        Self::WithHeaders(headers, Box::new(inner.with_extension(extension)))
+                    }
+                    s => {
+                        // If we get here, we traversed the entire response
+                        // chain without finding a `WithExtensions`, so we wrap
+                        // the response in a `WithExtensions` and add the
+                        // extension that way.
+                        let mut extensions = Extensions::new();
+                        extensions.insert(extension);
+                        s.with_extensions(extensions)
+                    }
+                }
+            }
+
+            pub(crate) fn into_response(self) -> Response {
+                match self {
+                    Self::Status200(body) => {
+                        let body = Json(body);
+                        (axum::http::StatusCode::from_u16(200).unwrap(), body).into_response()
+                    }
+                    Self::WithHeaders(headers, inner) => {
+                        let (mut parts, body) = inner.into_response().into_parts();
+                        parts.headers.extend(headers);
+                        (parts, body).into_response()
+                    }
+                    Self::WithExtensions(extensions, inner) => {
+                        let (mut parts, body) = inner.into_response().into_parts();
+                        parts.extensions.extend(extensions);
+                        (parts, body).into_response()
+                    }
+                }
+            }
+        }
+
+        async fn test_additional_properties_any<T>(
+            Extension(api): Extension<T>,
+            parts: Parts,
+        ) -> Response
+        where
+            T: super::Api + Send + Sync + 'static,
+        {
+            let request = TestAdditionalPropertiesAnyRequest { parts };
+
+            match api.test_additional_properties_any(request).await {
+                Ok(resp) => resp.into_response(),
+                Err(err) => err.into_response(),
+            }
+        }
+
+        // Request type.
+
+        #[derive(Debug)]
+        pub struct TestAdditionalPropertiesCompositeAnyRequest {
+            pub parts: http::request::Parts,
+        }
+
+        // Response type.
+
+        #[derive(Debug)]
+        pub enum TestAdditionalPropertiesCompositeAnyResponse {
+            /// Ok.
+            Status200(super::TestAdditionalPropertiesCompositeAny200Response),
+            WithHeaders(HeaderMap, Box<TestAdditionalPropertiesCompositeAnyResponse>),
+            WithExtensions(
+                Extensions,
+                Box<TestAdditionalPropertiesCompositeAnyResponse>,
+            ),
+        }
+
+        impl TestAdditionalPropertiesCompositeAnyResponse {
+            #[must_use]
+            pub fn with_headers(self, headers: http::HeaderMap) -> Self {
+                #[allow(clippy::match_wildcard_for_single_variants)]
+                match self {
+                    Self::WithHeaders(mut inner_headers, inner) => {
+                        inner_headers.extend(headers);
+                        Self::WithHeaders(inner_headers, inner)
+                    }
+                    Self::WithExtensions(extensions, inner) => {
+                        Self::WithExtensions(extensions, Box::new(inner.with_headers(headers)))
+                    }
+                    s => Self::WithHeaders(headers, Box::new(s)),
+                }
+            }
+
+            #[must_use]
+            pub fn with_extensions(self, extensions: Extensions) -> Self {
+                #[allow(clippy::match_wildcard_for_single_variants)]
+                match self {
+                    Self::WithExtensions(mut inner_extensions, inner) => {
+                        inner_extensions.extend(extensions);
+                        Self::WithExtensions(inner_extensions, inner)
+                    }
+                    Self::WithHeaders(headers, inner) => {
+                        Self::WithHeaders(headers, Box::new(inner.with_extensions(extensions)))
+                    }
+                    s => Self::WithExtensions(extensions, Box::new(s)),
+                }
+            }
+
+            /// Extend this response with the specified header.
+            ///
+            /// If the header already existed, it will be overwritten
+            /// silently.
+            #[must_use]
+            pub fn with_header(
+                self,
+                key: impl http::header::IntoHeaderName,
+                val: http::header::HeaderValue,
+            ) -> Self {
+                // Optimization: if the response chain already contains a
+                // `WithHeaders`, we just add the header to the headers
+                // map instead of re-boxing the whole thing.
+                #[allow(clippy::match_wildcard_for_single_variants)]
+                match self {
+                    Self::WithHeaders(mut headers, inner) => {
+                        headers.insert(key, val);
+                        Self::WithHeaders(headers, inner)
+                    }
+                    Self::WithExtensions(extensions, inner) => {
+                        Self::WithExtensions(extensions, Box::new(inner.with_header(key, val)))
+                    }
+                    s => {
+                        // If we get here, we traversed the entire response
+                        // chain without finding a `WithHeaders`, so we wrap
+                        // the response in a `WithHeaders` and add the
+                        // header that way.
+                        let mut headers = HeaderMap::new();
+                        headers.insert(key, val);
+                        s.with_headers(headers)
+                    }
+                }
+            }
+
+            /// Extend this response with the specified extension.
+            ///
+            /// If the extension already existed, it will be overwritten
+            /// silently.
+            #[must_use]
+            pub fn with_extension<T: Send + Sync + 'static>(self, extension: T) -> Self {
+                // Optimization: if the response chain already contains a
+                // `WithExtensions`, we just add the extension to the extensions
+                // map instead of re-boxing the whole thing.
+                #[allow(clippy::match_wildcard_for_single_variants)]
+                match self {
+                    Self::WithExtensions(mut extensions, inner) => {
+                        extensions.insert(extension);
+                        Self::WithExtensions(extensions, inner)
+                    }
+                    Self::WithHeaders(headers, inner) => {
+                        Self::WithHeaders(headers, Box::new(inner.with_extension(extension)))
+                    }
+                    s => {
+                        // If we get here, we traversed the entire response
+                        // chain without finding a `WithExtensions`, so we wrap
+                        // the response in a `WithExtensions` and add the
+                        // extension that way.
+                        let mut extensions = Extensions::new();
+                        extensions.insert(extension);
+                        s.with_extensions(extensions)
+                    }
+                }
+            }
+
+            pub(crate) fn into_response(self) -> Response {
+                match self {
+                    Self::Status200(body) => {
+                        let body = Json(body);
+                        (axum::http::StatusCode::from_u16(200).unwrap(), body).into_response()
+                    }
+                    Self::WithHeaders(headers, inner) => {
+                        let (mut parts, body) = inner.into_response().into_parts();
+                        parts.headers.extend(headers);
+                        (parts, body).into_response()
+                    }
+                    Self::WithExtensions(extensions, inner) => {
+                        let (mut parts, body) = inner.into_response().into_parts();
+                        parts.extensions.extend(extensions);
+                        (parts, body).into_response()
+                    }
+                }
+            }
+        }
+
+        async fn test_additional_properties_composite_any<T>(
+            Extension(api): Extension<T>,
+            parts: Parts,
+        ) -> Response
+        where
+            T: super::Api + Send + Sync + 'static,
+        {
+            let request = TestAdditionalPropertiesCompositeAnyRequest { parts };
+
+            match api.test_additional_properties_composite_any(request).await {
+                Ok(resp) => resp.into_response(),
+                Err(err) => err.into_response(),
+            }
+        }
+
+        // Request type.
+
+        #[derive(Debug)]
+        pub struct TestAdditionalPropertiesCompositeSchemaRequest {
+            pub parts: http::request::Parts,
+        }
+
+        // Response type.
+
+        #[derive(Debug)]
+        pub enum TestAdditionalPropertiesCompositeSchemaResponse {
+            /// Ok.
+            Status200(super::TestAdditionalPropertiesCompositeSchema200Response),
+            WithHeaders(
+                HeaderMap,
+                Box<TestAdditionalPropertiesCompositeSchemaResponse>,
+            ),
+            WithExtensions(
+                Extensions,
+                Box<TestAdditionalPropertiesCompositeSchemaResponse>,
+            ),
+        }
+
+        impl TestAdditionalPropertiesCompositeSchemaResponse {
+            #[must_use]
+            pub fn with_headers(self, headers: http::HeaderMap) -> Self {
+                #[allow(clippy::match_wildcard_for_single_variants)]
+                match self {
+                    Self::WithHeaders(mut inner_headers, inner) => {
+                        inner_headers.extend(headers);
+                        Self::WithHeaders(inner_headers, inner)
+                    }
+                    Self::WithExtensions(extensions, inner) => {
+                        Self::WithExtensions(extensions, Box::new(inner.with_headers(headers)))
+                    }
+                    s => Self::WithHeaders(headers, Box::new(s)),
+                }
+            }
+
+            #[must_use]
+            pub fn with_extensions(self, extensions: Extensions) -> Self {
+                #[allow(clippy::match_wildcard_for_single_variants)]
+                match self {
+                    Self::WithExtensions(mut inner_extensions, inner) => {
+                        inner_extensions.extend(extensions);
+                        Self::WithExtensions(inner_extensions, inner)
+                    }
+                    Self::WithHeaders(headers, inner) => {
+                        Self::WithHeaders(headers, Box::new(inner.with_extensions(extensions)))
+                    }
+                    s => Self::WithExtensions(extensions, Box::new(s)),
+                }
+            }
+
+            /// Extend this response with the specified header.
+            ///
+            /// If the header already existed, it will be overwritten
+            /// silently.
+            #[must_use]
+            pub fn with_header(
+                self,
+                key: impl http::header::IntoHeaderName,
+                val: http::header::HeaderValue,
+            ) -> Self {
+                // Optimization: if the response chain already contains a
+                // `WithHeaders`, we just add the header to the headers
+                // map instead of re-boxing the whole thing.
+                #[allow(clippy::match_wildcard_for_single_variants)]
+                match self {
+                    Self::WithHeaders(mut headers, inner) => {
+                        headers.insert(key, val);
+                        Self::WithHeaders(headers, inner)
+                    }
+                    Self::WithExtensions(extensions, inner) => {
+                        Self::WithExtensions(extensions, Box::new(inner.with_header(key, val)))
+                    }
+                    s => {
+                        // If we get here, we traversed the entire response
+                        // chain without finding a `WithHeaders`, so we wrap
+                        // the response in a `WithHeaders` and add the
+                        // header that way.
+                        let mut headers = HeaderMap::new();
+                        headers.insert(key, val);
+                        s.with_headers(headers)
+                    }
+                }
+            }
+
+            /// Extend this response with the specified extension.
+            ///
+            /// If the extension already existed, it will be overwritten
+            /// silently.
+            #[must_use]
+            pub fn with_extension<T: Send + Sync + 'static>(self, extension: T) -> Self {
+                // Optimization: if the response chain already contains a
+                // `WithExtensions`, we just add the extension to the extensions
+                // map instead of re-boxing the whole thing.
+                #[allow(clippy::match_wildcard_for_single_variants)]
+                match self {
+                    Self::WithExtensions(mut extensions, inner) => {
+                        extensions.insert(extension);
+                        Self::WithExtensions(extensions, inner)
+                    }
+                    Self::WithHeaders(headers, inner) => {
+                        Self::WithHeaders(headers, Box::new(inner.with_extension(extension)))
+                    }
+                    s => {
+                        // If we get here, we traversed the entire response
+                        // chain without finding a `WithExtensions`, so we wrap
+                        // the response in a `WithExtensions` and add the
+                        // extension that way.
+                        let mut extensions = Extensions::new();
+                        extensions.insert(extension);
+                        s.with_extensions(extensions)
+                    }
+                }
+            }
+
+            pub(crate) fn into_response(self) -> Response {
+                match self {
+                    Self::Status200(body) => {
+                        let body = Json(body);
+                        (axum::http::StatusCode::from_u16(200).unwrap(), body).into_response()
+                    }
+                    Self::WithHeaders(headers, inner) => {
+                        let (mut parts, body) = inner.into_response().into_parts();
+                        parts.headers.extend(headers);
+                        (parts, body).into_response()
+                    }
+                    Self::WithExtensions(extensions, inner) => {
+                        let (mut parts, body) = inner.into_response().into_parts();
+                        parts.extensions.extend(extensions);
+                        (parts, body).into_response()
+                    }
+                }
+            }
+        }
+
+        async fn test_additional_properties_composite_schema<T>(
+            Extension(api): Extension<T>,
+            parts: Parts,
+        ) -> Response
+        where
+            T: super::Api + Send + Sync + 'static,
+        {
+            let request = TestAdditionalPropertiesCompositeSchemaRequest { parts };
+
+            match api
+                .test_additional_properties_composite_schema(request)
+                .await
+            {
+                Ok(resp) => resp.into_response(),
+                Err(err) => err.into_response(),
+            }
+        }
+
+        // Request type.
+
+        #[derive(Debug)]
+        pub struct TestAdditionalPropertiesSchemaRequest {
+            pub parts: http::request::Parts,
+        }
+
+        // Response type.
+
+        #[derive(Debug)]
+        pub enum TestAdditionalPropertiesSchemaResponse {
+            /// Ok.
+            Status200(std::collections::BTreeMap<String, super::super::components::Pet>),
+            WithHeaders(HeaderMap, Box<TestAdditionalPropertiesSchemaResponse>),
+            WithExtensions(Extensions, Box<TestAdditionalPropertiesSchemaResponse>),
+        }
+
+        impl TestAdditionalPropertiesSchemaResponse {
+            #[must_use]
+            pub fn with_headers(self, headers: http::HeaderMap) -> Self {
+                #[allow(clippy::match_wildcard_for_single_variants)]
+                match self {
+                    Self::WithHeaders(mut inner_headers, inner) => {
+                        inner_headers.extend(headers);
+                        Self::WithHeaders(inner_headers, inner)
+                    }
+                    Self::WithExtensions(extensions, inner) => {
+                        Self::WithExtensions(extensions, Box::new(inner.with_headers(headers)))
+                    }
+                    s => Self::WithHeaders(headers, Box::new(s)),
+                }
+            }
+
+            #[must_use]
+            pub fn with_extensions(self, extensions: Extensions) -> Self {
+                #[allow(clippy::match_wildcard_for_single_variants)]
+                match self {
+                    Self::WithExtensions(mut inner_extensions, inner) => {
+                        inner_extensions.extend(extensions);
+                        Self::WithExtensions(inner_extensions, inner)
+                    }
+                    Self::WithHeaders(headers, inner) => {
+                        Self::WithHeaders(headers, Box::new(inner.with_extensions(extensions)))
+                    }
+                    s => Self::WithExtensions(extensions, Box::new(s)),
+                }
+            }
+
+            /// Extend this response with the specified header.
+            ///
+            /// If the header already existed, it will be overwritten
+            /// silently.
+            #[must_use]
+            pub fn with_header(
+                self,
+                key: impl http::header::IntoHeaderName,
+                val: http::header::HeaderValue,
+            ) -> Self {
+                // Optimization: if the response chain already contains a
+                // `WithHeaders`, we just add the header to the headers
+                // map instead of re-boxing the whole thing.
+                #[allow(clippy::match_wildcard_for_single_variants)]
+                match self {
+                    Self::WithHeaders(mut headers, inner) => {
+                        headers.insert(key, val);
+                        Self::WithHeaders(headers, inner)
+                    }
+                    Self::WithExtensions(extensions, inner) => {
+                        Self::WithExtensions(extensions, Box::new(inner.with_header(key, val)))
+                    }
+                    s => {
+                        // If we get here, we traversed the entire response
+                        // chain without finding a `WithHeaders`, so we wrap
+                        // the response in a `WithHeaders` and add the
+                        // header that way.
+                        let mut headers = HeaderMap::new();
+                        headers.insert(key, val);
+                        s.with_headers(headers)
+                    }
+                }
+            }
+
+            /// Extend this response with the specified extension.
+            ///
+            /// If the extension already existed, it will be overwritten
+            /// silently.
+            #[must_use]
+            pub fn with_extension<T: Send + Sync + 'static>(self, extension: T) -> Self {
+                // Optimization: if the response chain already contains a
+                // `WithExtensions`, we just add the extension to the extensions
+                // map instead of re-boxing the whole thing.
+                #[allow(clippy::match_wildcard_for_single_variants)]
+                match self {
+                    Self::WithExtensions(mut extensions, inner) => {
+                        extensions.insert(extension);
+                        Self::WithExtensions(extensions, inner)
+                    }
+                    Self::WithHeaders(headers, inner) => {
+                        Self::WithHeaders(headers, Box::new(inner.with_extension(extension)))
+                    }
+                    s => {
+                        // If we get here, we traversed the entire response
+                        // chain without finding a `WithExtensions`, so we wrap
+                        // the response in a `WithExtensions` and add the
+                        // extension that way.
+                        let mut extensions = Extensions::new();
+                        extensions.insert(extension);
+                        s.with_extensions(extensions)
+                    }
+                }
+            }
+
+            pub(crate) fn into_response(self) -> Response {
+                match self {
+                    Self::Status200(body) => {
+                        let body = Json(body);
+                        (axum::http::StatusCode::from_u16(200).unwrap(), body).into_response()
+                    }
+                    Self::WithHeaders(headers, inner) => {
+                        let (mut parts, body) = inner.into_response().into_parts();
+                        parts.headers.extend(headers);
+                        (parts, body).into_response()
+                    }
+                    Self::WithExtensions(extensions, inner) => {
+                        let (mut parts, body) = inner.into_response().into_parts();
+                        parts.extensions.extend(extensions);
+                        (parts, body).into_response()
+                    }
+                }
+            }
+        }
+
+        async fn test_additional_properties_schema<T>(
+            Extension(api): Extension<T>,
+            parts: Parts,
+        ) -> Response
+        where
+            T: super::Api + Send + Sync + 'static,
+        {
+            let request = TestAdditionalPropertiesSchemaRequest { parts };
+
+            match api.test_additional_properties_schema(request).await {
+                Ok(resp) => resp.into_response(),
+                Err(err) => err.into_response(),
+            }
+        }
+
+        // Request type.
+
+        #[derive(Debug)]
+        pub struct TestAdditionalPropertiesStringRequest {
+            pub parts: http::request::Parts,
+        }
+
+        // Response type.
+
+        #[derive(Debug)]
+        pub enum TestAdditionalPropertiesStringResponse {
+            /// Ok.
+            Status200(std::collections::BTreeMap<String, String>),
+            WithHeaders(HeaderMap, Box<TestAdditionalPropertiesStringResponse>),
+            WithExtensions(Extensions, Box<TestAdditionalPropertiesStringResponse>),
+        }
+
+        impl TestAdditionalPropertiesStringResponse {
+            #[must_use]
+            pub fn with_headers(self, headers: http::HeaderMap) -> Self {
+                #[allow(clippy::match_wildcard_for_single_variants)]
+                match self {
+                    Self::WithHeaders(mut inner_headers, inner) => {
+                        inner_headers.extend(headers);
+                        Self::WithHeaders(inner_headers, inner)
+                    }
+                    Self::WithExtensions(extensions, inner) => {
+                        Self::WithExtensions(extensions, Box::new(inner.with_headers(headers)))
+                    }
+                    s => Self::WithHeaders(headers, Box::new(s)),
+                }
+            }
+
+            #[must_use]
+            pub fn with_extensions(self, extensions: Extensions) -> Self {
+                #[allow(clippy::match_wildcard_for_single_variants)]
+                match self {
+                    Self::WithExtensions(mut inner_extensions, inner) => {
+                        inner_extensions.extend(extensions);
+                        Self::WithExtensions(inner_extensions, inner)
+                    }
+                    Self::WithHeaders(headers, inner) => {
+                        Self::WithHeaders(headers, Box::new(inner.with_extensions(extensions)))
+                    }
+                    s => Self::WithExtensions(extensions, Box::new(s)),
+                }
+            }
+
+            /// Extend this response with the specified header.
+            ///
+            /// If the header already existed, it will be overwritten
+            /// silently.
+            #[must_use]
+            pub fn with_header(
+                self,
+                key: impl http::header::IntoHeaderName,
+                val: http::header::HeaderValue,
+            ) -> Self {
+                // Optimization: if the response chain already contains a
+                // `WithHeaders`, we just add the header to the headers
+                // map instead of re-boxing the whole thing.
+                #[allow(clippy::match_wildcard_for_single_variants)]
+                match self {
+                    Self::WithHeaders(mut headers, inner) => {
+                        headers.insert(key, val);
+                        Self::WithHeaders(headers, inner)
+                    }
+                    Self::WithExtensions(extensions, inner) => {
+                        Self::WithExtensions(extensions, Box::new(inner.with_header(key, val)))
+                    }
+                    s => {
+                        // If we get here, we traversed the entire response
+                        // chain without finding a `WithHeaders`, so we wrap
+                        // the response in a `WithHeaders` and add the
+                        // header that way.
+                        let mut headers = HeaderMap::new();
+                        headers.insert(key, val);
+                        s.with_headers(headers)
+                    }
+                }
+            }
+
+            /// Extend this response with the specified extension.
+            ///
+            /// If the extension already existed, it will be overwritten
+            /// silently.
+            #[must_use]
+            pub fn with_extension<T: Send + Sync + 'static>(self, extension: T) -> Self {
+                // Optimization: if the response chain already contains a
+                // `WithExtensions`, we just add the extension to the extensions
+                // map instead of re-boxing the whole thing.
+                #[allow(clippy::match_wildcard_for_single_variants)]
+                match self {
+                    Self::WithExtensions(mut extensions, inner) => {
+                        extensions.insert(extension);
+                        Self::WithExtensions(extensions, inner)
+                    }
+                    Self::WithHeaders(headers, inner) => {
+                        Self::WithHeaders(headers, Box::new(inner.with_extension(extension)))
+                    }
+                    s => {
+                        // If we get here, we traversed the entire response
+                        // chain without finding a `WithExtensions`, so we wrap
+                        // the response in a `WithExtensions` and add the
+                        // extension that way.
+                        let mut extensions = Extensions::new();
+                        extensions.insert(extension);
+                        s.with_extensions(extensions)
+                    }
+                }
+            }
+
+            pub(crate) fn into_response(self) -> Response {
+                match self {
+                    Self::Status200(body) => {
+                        let body = Json(body);
+                        (axum::http::StatusCode::from_u16(200).unwrap(), body).into_response()
+                    }
+                    Self::WithHeaders(headers, inner) => {
+                        let (mut parts, body) = inner.into_response().into_parts();
+                        parts.headers.extend(headers);
+                        (parts, body).into_response()
+                    }
+                    Self::WithExtensions(extensions, inner) => {
+                        let (mut parts, body) = inner.into_response().into_parts();
+                        parts.extensions.extend(extensions);
+                        (parts, body).into_response()
+                    }
+                }
+            }
+        }
+
+        async fn test_additional_properties_string<T>(
+            Extension(api): Extension<T>,
+            parts: Parts,
+        ) -> Response
+        where
+            T: super::Api + Send + Sync + 'static,
+        {
+            let request = TestAdditionalPropertiesStringRequest { parts };
+
+            match api.test_additional_properties_string(request).await {
+                Ok(resp) => resp.into_response(),
+                Err(err) => err.into_response(),
+            }
+        }
+
+        // Request type.
+
+        #[derive(Debug)]
+        pub struct TestHeadersRequest {
+            pub x_string_header: Option<String>,
+            pub x_bytes_header: Option<lgn_online::codegen::Bytes>,
+            pub x_int_header: Option<i32>,
+            pub parts: http::request::Parts,
+        }
+
+        // Response type.
+
+        #[derive(Debug)]
+        pub enum TestHeadersResponse {
+            /// Ok.
+            Status200 {
+                x_bytes_header: lgn_online::codegen::Bytes,
+                x_int_header: i32,
+                x_string_header: String,
+                body: super::super::components::Pet,
+            },
+            WithHeaders(HeaderMap, Box<TestHeadersResponse>),
+            WithExtensions(Extensions, Box<TestHeadersResponse>),
+        }
+
+        impl TestHeadersResponse {
+            #[must_use]
+            pub fn with_headers(self, headers: http::HeaderMap) -> Self {
+                #[allow(clippy::match_wildcard_for_single_variants)]
+                match self {
+                    Self::WithHeaders(mut inner_headers, inner) => {
+                        inner_headers.extend(headers);
+                        Self::WithHeaders(inner_headers, inner)
+                    }
+                    Self::WithExtensions(extensions, inner) => {
+                        Self::WithExtensions(extensions, Box::new(inner.with_headers(headers)))
+                    }
+                    s => Self::WithHeaders(headers, Box::new(s)),
+                }
+            }
+
+            #[must_use]
+            pub fn with_extensions(self, extensions: Extensions) -> Self {
+                #[allow(clippy::match_wildcard_for_single_variants)]
+                match self {
+                    Self::WithExtensions(mut inner_extensions, inner) => {
+                        inner_extensions.extend(extensions);
+                        Self::WithExtensions(inner_extensions, inner)
+                    }
+                    Self::WithHeaders(headers, inner) => {
+                        Self::WithHeaders(headers, Box::new(inner.with_extensions(extensions)))
+                    }
+                    s => Self::WithExtensions(extensions, Box::new(s)),
+                }
+            }
+
+            /// Extend this response with the specified header.
+            ///
+            /// If the header already existed, it will be overwritten
+            /// silently.
+            #[must_use]
+            pub fn with_header(
+                self,
+                key: impl http::header::IntoHeaderName,
+                val: http::header::HeaderValue,
+            ) -> Self {
+                // Optimization: if the response chain already contains a
+                // `WithHeaders`, we just add the header to the headers
+                // map instead of re-boxing the whole thing.
+                #[allow(clippy::match_wildcard_for_single_variants)]
+                match self {
+                    Self::WithHeaders(mut headers, inner) => {
+                        headers.insert(key, val);
+                        Self::WithHeaders(headers, inner)
+                    }
+                    Self::WithExtensions(extensions, inner) => {
+                        Self::WithExtensions(extensions, Box::new(inner.with_header(key, val)))
+                    }
+                    s => {
+                        // If we get here, we traversed the entire response
+                        // chain without finding a `WithHeaders`, so we wrap
+                        // the response in a `WithHeaders` and add the
+                        // header that way.
+                        let mut headers = HeaderMap::new();
+                        headers.insert(key, val);
+                        s.with_headers(headers)
+                    }
+                }
+            }
+
+            /// Extend this response with the specified extension.
+            ///
+            /// If the extension already existed, it will be overwritten
+            /// silently.
+            #[must_use]
+            pub fn with_extension<T: Send + Sync + 'static>(self, extension: T) -> Self {
+                // Optimization: if the response chain already contains a
+                // `WithExtensions`, we just add the extension to the extensions
+                // map instead of re-boxing the whole thing.
+                #[allow(clippy::match_wildcard_for_single_variants)]
+                match self {
+                    Self::WithExtensions(mut extensions, inner) => {
+                        extensions.insert(extension);
+                        Self::WithExtensions(extensions, inner)
+                    }
+                    Self::WithHeaders(headers, inner) => {
+                        Self::WithHeaders(headers, Box::new(inner.with_extension(extension)))
+                    }
+                    s => {
+                        // If we get here, we traversed the entire response
+                        // chain without finding a `WithExtensions`, so we wrap
+                        // the response in a `WithExtensions` and add the
+                        // extension that way.
+                        let mut extensions = Extensions::new();
+                        extensions.insert(extension);
+                        s.with_extensions(extensions)
+                    }
+                }
+            }
+
+            pub(crate) fn into_response(self) -> Response {
+                match self {
+                    Self::Status200 {
+                        x_bytes_header,
+                        x_int_header,
+                        x_string_header,
+                        body,
+                    } => {
+                        let body = Json(body);
+                        let mut resp =
+                            (axum::http::StatusCode::from_u16(200).unwrap(), body).into_response();
+                        let x_bytes_header_value =
+                            match lgn_online::codegen::encoding::to_percent_encoded_string(
+                                &x_bytes_header,
+                            ) {
+                                Ok(value) => value,
+                                Err(err) => {
+                                    return Error::internal(format!(
+                                        "failed to serialize header: x-bytes-header: {}",
+                                        err
+                                    ))
+                                    .into_response();
+                                }
+                            };
+                        match HeaderValue::from_str(&x_bytes_header_value) {
+                            Ok(value) => resp.headers_mut().insert("x-bytes-header", value),
+                            Err(err) => {
+                                return Error::internal(format!(
+                                    "failed to serialize header: x-bytes-header: {}",
+                                    err
+                                ))
+                                .into_response();
+                            }
+                        };
+                        let x_int_header_value =
+                            match lgn_online::codegen::encoding::to_percent_encoded_string(
+                                &x_int_header,
+                            ) {
+                                Ok(value) => value,
+                                Err(err) => {
+                                    return Error::internal(format!(
+                                        "failed to serialize header: x-int-header: {}",
+                                        err
+                                    ))
+                                    .into_response();
+                                }
+                            };
+                        match HeaderValue::from_str(&x_int_header_value) {
+                            Ok(value) => resp.headers_mut().insert("x-int-header", value),
+                            Err(err) => {
+                                return Error::internal(format!(
+                                    "failed to serialize header: x-int-header: {}",
+                                    err
+                                ))
+                                .into_response();
+                            }
+                        };
+                        let x_string_header_value =
+                            match lgn_online::codegen::encoding::to_percent_encoded_string(
+                                &x_string_header,
+                            ) {
+                                Ok(value) => value,
+                                Err(err) => {
+                                    return Error::internal(format!(
+                                        "failed to serialize header: x-string-header: {}",
+                                        err
+                                    ))
+                                    .into_response();
+                                }
+                            };
+                        match HeaderValue::from_str(&x_string_header_value) {
+                            Ok(value) => resp.headers_mut().insert("x-string-header", value),
+                            Err(err) => {
+                                return Error::internal(format!(
+                                    "failed to serialize header: x-string-header: {}",
+                                    err
+                                ))
+                                .into_response();
+                            }
+                        };
+                        resp
+                    }
+
+                    Self::WithHeaders(headers, inner) => {
+                        let (mut parts, body) = inner.into_response().into_parts();
+                        parts.headers.extend(headers);
+                        (parts, body).into_response()
+                    }
+                    Self::WithExtensions(extensions, inner) => {
+                        let (mut parts, body) = inner.into_response().into_parts();
+                        parts.extensions.extend(extensions);
+                        (parts, body).into_response()
+                    }
+                }
+            }
+        }
+
+        async fn test_headers<T>(Extension(api): Extension<T>, parts: Parts) -> Response
+        where
+            T: super::Api + Send + Sync + 'static,
+        {
+            let x_string_header = parts
+                .headers
+                .get(HeaderName::from_static("x-string-header"))
+                .map(|h| {
+                    let s = h
+                        .to_str()
+                        .map_err(|err| {
+                            Error::bad_request(format!("invalid header: x-string-header: {}", err))
+                                .into_response()
+                        })
+                        .unwrap();
+
+                    lgn_online::codegen::encoding::from_percent_encoded_string(s)
+                        .map_err(|err| {
+                            Error::bad_request(format!("invalid header: x-string-header: {}", err))
+                                .into_response()
+                        })
+                        .unwrap()
+                });
+
+            let x_bytes_header = parts
+                .headers
+                .get(HeaderName::from_static("x-bytes-header"))
+                .map(|h| {
+                    let s = h
+                        .to_str()
+                        .map_err(|err| {
+                            Error::bad_request(format!("invalid header: x-bytes-header: {}", err))
+                                .into_response()
+                        })
+                        .unwrap();
+
+                    lgn_online::codegen::encoding::from_percent_encoded_string(s)
+                        .map_err(|err| {
+                            Error::bad_request(format!("invalid header: x-bytes-header: {}", err))
+                                .into_response()
+                        })
+                        .unwrap()
+                });
+
+            let x_int_header = parts
+                .headers
+                .get(HeaderName::from_static("x-int-header"))
+                .map(|h| {
+                    let s = h
+                        .to_str()
+                        .map_err(|err| {
+                            Error::bad_request(format!("invalid header: x-int-header: {}", err))
+                                .into_response()
+                        })
+                        .unwrap();
+
+                    lgn_online::codegen::encoding::from_percent_encoded_string(s)
+                        .map_err(|err| {
+                            Error::bad_request(format!("invalid header: x-int-header: {}", err))
+                                .into_response()
+                        })
+                        .unwrap()
+                });
+
+            let request = TestHeadersRequest {
+                x_string_header,
+                x_bytes_header,
+                x_int_header,
+                parts,
+            };
+
+            match api.test_headers(request).await {
+                Ok(resp) => resp.into_response(),
+                Err(err) => err.into_response(),
+            }
+        }
+
+        // Request type.
+
+        #[derive(Debug)]
+        pub struct TestOneOfRequest {
+            pub parts: http::request::Parts,
+        }
+
+        // Response type.
+
+        #[derive(Debug)]
+        pub enum TestOneOfResponse {
+            /// Ok.
+            Status200(super::TestOneOf200Response),
+            WithHeaders(HeaderMap, Box<TestOneOfResponse>),
+            WithExtensions(Extensions, Box<TestOneOfResponse>),
+        }
+
+        impl TestOneOfResponse {
+            #[must_use]
+            pub fn with_headers(self, headers: http::HeaderMap) -> Self {
+                #[allow(clippy::match_wildcard_for_single_variants)]
+                match self {
+                    Self::WithHeaders(mut inner_headers, inner) => {
+                        inner_headers.extend(headers);
+                        Self::WithHeaders(inner_headers, inner)
+                    }
+                    Self::WithExtensions(extensions, inner) => {
+                        Self::WithExtensions(extensions, Box::new(inner.with_headers(headers)))
+                    }
+                    s => Self::WithHeaders(headers, Box::new(s)),
+                }
+            }
+
+            #[must_use]
+            pub fn with_extensions(self, extensions: Extensions) -> Self {
+                #[allow(clippy::match_wildcard_for_single_variants)]
+                match self {
+                    Self::WithExtensions(mut inner_extensions, inner) => {
+                        inner_extensions.extend(extensions);
+                        Self::WithExtensions(inner_extensions, inner)
+                    }
+                    Self::WithHeaders(headers, inner) => {
+                        Self::WithHeaders(headers, Box::new(inner.with_extensions(extensions)))
+                    }
+                    s => Self::WithExtensions(extensions, Box::new(s)),
+                }
+            }
+
+            /// Extend this response with the specified header.
+            ///
+            /// If the header already existed, it will be overwritten
+            /// silently.
+            #[must_use]
+            pub fn with_header(
+                self,
+                key: impl http::header::IntoHeaderName,
+                val: http::header::HeaderValue,
+            ) -> Self {
+                // Optimization: if the response chain already contains a
+                // `WithHeaders`, we just add the header to the headers
+                // map instead of re-boxing the whole thing.
+                #[allow(clippy::match_wildcard_for_single_variants)]
+                match self {
+                    Self::WithHeaders(mut headers, inner) => {
+                        headers.insert(key, val);
+                        Self::WithHeaders(headers, inner)
+                    }
+                    Self::WithExtensions(extensions, inner) => {
+                        Self::WithExtensions(extensions, Box::new(inner.with_header(key, val)))
+                    }
+                    s => {
+                        // If we get here, we traversed the entire response
+                        // chain without finding a `WithHeaders`, so we wrap
+                        // the response in a `WithHeaders` and add the
+                        // header that way.
+                        let mut headers = HeaderMap::new();
+                        headers.insert(key, val);
+                        s.with_headers(headers)
+                    }
+                }
+            }
+
+            /// Extend this response with the specified extension.
+            ///
+            /// If the extension already existed, it will be overwritten
+            /// silently.
+            #[must_use]
+            pub fn with_extension<T: Send + Sync + 'static>(self, extension: T) -> Self {
+                // Optimization: if the response chain already contains a
+                // `WithExtensions`, we just add the extension to the extensions
+                // map instead of re-boxing the whole thing.
+                #[allow(clippy::match_wildcard_for_single_variants)]
+                match self {
+                    Self::WithExtensions(mut extensions, inner) => {
+                        extensions.insert(extension);
+                        Self::WithExtensions(extensions, inner)
+                    }
+                    Self::WithHeaders(headers, inner) => {
+                        Self::WithHeaders(headers, Box::new(inner.with_extension(extension)))
+                    }
+                    s => {
+                        // If we get here, we traversed the entire response
+                        // chain without finding a `WithExtensions`, so we wrap
+                        // the response in a `WithExtensions` and add the
+                        // extension that way.
+                        let mut extensions = Extensions::new();
+                        extensions.insert(extension);
+                        s.with_extensions(extensions)
+                    }
+                }
+            }
+
+            pub(crate) fn into_response(self) -> Response {
+                match self {
+                    Self::Status200(body) => {
+                        let body = Json(body);
+                        (axum::http::StatusCode::from_u16(200).unwrap(), body).into_response()
+                    }
+                    Self::WithHeaders(headers, inner) => {
+                        let (mut parts, body) = inner.into_response().into_parts();
+                        parts.headers.extend(headers);
+                        (parts, body).into_response()
+                    }
+                    Self::WithExtensions(extensions, inner) => {
+                        let (mut parts, body) = inner.into_response().into_parts();
+                        parts.extensions.extend(extensions);
+                        (parts, body).into_response()
+                    }
+                }
+            }
+        }
+
+        async fn test_one_of<T>(Extension(api): Extension<T>, parts: Parts) -> Response
+        where
+            T: super::Api + Send + Sync + 'static,
+        {
+            let request = TestOneOfRequest { parts };
+
+            match api.test_one_of(request).await {
+                Ok(resp) => resp.into_response(),
+                Err(err) => err.into_response(),
+            }
+        }
+
+        #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+        struct GetCarsQuery {
+            #[serde(rename = "other_query")]
+            other_query: String,
+            #[serde(rename = "names")]
+            #[serde(skip_serializing_if = "Option::is_none")]
+            names: Option<Vec<String>>,
+            #[serde(rename = "q")]
+            #[serde(skip_serializing_if = "Option::is_none")]
+            q: Option<String>,
+        }
+
+        // Request type.
+
+        #[derive(Debug)]
+        pub struct GetCarsRequest {
+            pub space_id: String,
+            pub other_query: String,
+            pub names: Option<Vec<String>>,
+            pub q: Option<String>,
+            pub parts: http::request::Parts,
+        }
+
+        // Response type.
+
+        #[derive(Debug)]
+        pub enum GetCarsResponse {
+            /// List of cars.
+            Status200(super::super::components::Cars),
+            WithHeaders(HeaderMap, Box<GetCarsResponse>),
+            WithExtensions(Extensions, Box<GetCarsResponse>),
+        }
+
+        impl GetCarsResponse {
+            #[must_use]
+            pub fn with_headers(self, headers: http::HeaderMap) -> Self {
+                #[allow(clippy::match_wildcard_for_single_variants)]
+                match self {
+                    Self::WithHeaders(mut inner_headers, inner) => {
+                        inner_headers.extend(headers);
+                        Self::WithHeaders(inner_headers, inner)
+                    }
+                    Self::WithExtensions(extensions, inner) => {
+                        Self::WithExtensions(extensions, Box::new(inner.with_headers(headers)))
+                    }
+                    s => Self::WithHeaders(headers, Box::new(s)),
+                }
+            }
+
+            #[must_use]
+            pub fn with_extensions(self, extensions: Extensions) -> Self {
+                #[allow(clippy::match_wildcard_for_single_variants)]
+                match self {
+                    Self::WithExtensions(mut inner_extensions, inner) => {
+                        inner_extensions.extend(extensions);
+                        Self::WithExtensions(inner_extensions, inner)
+                    }
+                    Self::WithHeaders(headers, inner) => {
+                        Self::WithHeaders(headers, Box::new(inner.with_extensions(extensions)))
+                    }
+                    s => Self::WithExtensions(extensions, Box::new(s)),
+                }
+            }
+
+            /// Extend this response with the specified header.
+            ///
+            /// If the header already existed, it will be overwritten
+            /// silently.
+            #[must_use]
+            pub fn with_header(
+                self,
+                key: impl http::header::IntoHeaderName,
+                val: http::header::HeaderValue,
+            ) -> Self {
+                // Optimization: if the response chain already contains a
+                // `WithHeaders`, we just add the header to the headers
+                // map instead of re-boxing the whole thing.
+                #[allow(clippy::match_wildcard_for_single_variants)]
+                match self {
+                    Self::WithHeaders(mut headers, inner) => {
+                        headers.insert(key, val);
+                        Self::WithHeaders(headers, inner)
+                    }
+                    Self::WithExtensions(extensions, inner) => {
+                        Self::WithExtensions(extensions, Box::new(inner.with_header(key, val)))
+                    }
+                    s => {
+                        // If we get here, we traversed the entire response
+                        // chain without finding a `WithHeaders`, so we wrap
+                        // the response in a `WithHeaders` and add the
+                        // header that way.
+                        let mut headers = HeaderMap::new();
+                        headers.insert(key, val);
+                        s.with_headers(headers)
+                    }
+                }
+            }
+
+            /// Extend this response with the specified extension.
+            ///
+            /// If the extension already existed, it will be overwritten
+            /// silently.
+            #[must_use]
+            pub fn with_extension<T: Send + Sync + 'static>(self, extension: T) -> Self {
+                // Optimization: if the response chain already contains a
+                // `WithExtensions`, we just add the extension to the extensions
+                // map instead of re-boxing the whole thing.
+                #[allow(clippy::match_wildcard_for_single_variants)]
+                match self {
+                    Self::WithExtensions(mut extensions, inner) => {
+                        extensions.insert(extension);
+                        Self::WithExtensions(extensions, inner)
+                    }
+                    Self::WithHeaders(headers, inner) => {
+                        Self::WithHeaders(headers, Box::new(inner.with_extension(extension)))
+                    }
+                    s => {
+                        // If we get here, we traversed the entire response
+                        // chain without finding a `WithExtensions`, so we wrap
+                        // the response in a `WithExtensions` and add the
+                        // extension that way.
+                        let mut extensions = Extensions::new();
+                        extensions.insert(extension);
+                        s.with_extensions(extensions)
+                    }
+                }
+            }
+
+            pub(crate) fn into_response(self) -> Response {
+                match self {
+                    Self::Status200(body) => {
+                        let body = Json(body);
+                        (axum::http::StatusCode::from_u16(200).unwrap(), body).into_response()
+                    }
+                    Self::WithHeaders(headers, inner) => {
+                        let (mut parts, body) = inner.into_response().into_parts();
+                        parts.headers.extend(headers);
+                        (parts, body).into_response()
+                    }
+                    Self::WithExtensions(extensions, inner) => {
+                        let (mut parts, body) = inner.into_response().into_parts();
+                        parts.extensions.extend(extensions);
+                        (parts, body).into_response()
+                    }
+                }
+            }
+        }
+
+        async fn get_cars<T>(
+            Extension(api): Extension<T>,
+            Path(space_id): Path<String>,
+            QsQuery(query): QsQuery<GetCarsQuery>,
+            parts: Parts,
+        ) -> Response
+        where
+            T: super::Api + Send + Sync + 'static,
+        {
+            let request = GetCarsRequest {
+                space_id,
+                other_query: query.other_query,
+                names: query.names,
+                q: query.q,
+                parts,
+            };
+
+            match api.get_cars(request).await {
+                Ok(resp) => resp.into_response(),
+                Err(err) => err.into_response(),
+            }
+        }
+
+        // Request type.
+
+        #[derive(Debug)]
+        pub struct CreateCarRequest {
+            pub space_id: String,
+            pub span_id: Option<String>,
+            pub body: super::super::components::Car,
+            pub parts: http::request::Parts,
+        }
+
+        // Response type.
+
+        #[derive(Debug)]
+        pub enum CreateCarResponse {
+            /// Created.
+            Status201,
+            WithHeaders(HeaderMap, Box<CreateCarResponse>),
+            WithExtensions(Extensions, Box<CreateCarResponse>),
+        }
+
+        impl CreateCarResponse {
+            #[must_use]
+            pub fn with_headers(self, headers: http::HeaderMap) -> Self {
+                #[allow(clippy::match_wildcard_for_single_variants)]
+                match self {
+                    Self::WithHeaders(mut inner_headers, inner) => {
+                        inner_headers.extend(headers);
+                        Self::WithHeaders(inner_headers, inner)
+                    }
+                    Self::WithExtensions(extensions, inner) => {
+                        Self::WithExtensions(extensions, Box::new(inner.with_headers(headers)))
+                    }
+                    s => Self::WithHeaders(headers, Box::new(s)),
+                }
+            }
+
+            #[must_use]
+            pub fn with_extensions(self, extensions: Extensions) -> Self {
+                #[allow(clippy::match_wildcard_for_single_variants)]
+                match self {
+                    Self::WithExtensions(mut inner_extensions, inner) => {
+                        inner_extensions.extend(extensions);
+                        Self::WithExtensions(inner_extensions, inner)
+                    }
+                    Self::WithHeaders(headers, inner) => {
+                        Self::WithHeaders(headers, Box::new(inner.with_extensions(extensions)))
+                    }
+                    s => Self::WithExtensions(extensions, Box::new(s)),
+                }
+            }
+
+            /// Extend this response with the specified header.
+            ///
+            /// If the header already existed, it will be overwritten
+            /// silently.
+            #[must_use]
+            pub fn with_header(
+                self,
+                key: impl http::header::IntoHeaderName,
+                val: http::header::HeaderValue,
+            ) -> Self {
+                // Optimization: if the response chain already contains a
+                // `WithHeaders`, we just add the header to the headers
+                // map instead of re-boxing the whole thing.
+                #[allow(clippy::match_wildcard_for_single_variants)]
+                match self {
+                    Self::WithHeaders(mut headers, inner) => {
+                        headers.insert(key, val);
+                        Self::WithHeaders(headers, inner)
+                    }
+                    Self::WithExtensions(extensions, inner) => {
+                        Self::WithExtensions(extensions, Box::new(inner.with_header(key, val)))
+                    }
+                    s => {
+                        // If we get here, we traversed the entire response
+                        // chain without finding a `WithHeaders`, so we wrap
+                        // the response in a `WithHeaders` and add the
+                        // header that way.
+                        let mut headers = HeaderMap::new();
+                        headers.insert(key, val);
+                        s.with_headers(headers)
+                    }
+                }
+            }
+
+            /// Extend this response with the specified extension.
+            ///
+            /// If the extension already existed, it will be overwritten
+            /// silently.
+            #[must_use]
+            pub fn with_extension<T: Send + Sync + 'static>(self, extension: T) -> Self {
+                // Optimization: if the response chain already contains a
+                // `WithExtensions`, we just add the extension to the extensions
+                // map instead of re-boxing the whole thing.
+                #[allow(clippy::match_wildcard_for_single_variants)]
+                match self {
+                    Self::WithExtensions(mut extensions, inner) => {
+                        extensions.insert(extension);
+                        Self::WithExtensions(extensions, inner)
+                    }
+                    Self::WithHeaders(headers, inner) => {
+                        Self::WithHeaders(headers, Box::new(inner.with_extension(extension)))
+                    }
+                    s => {
+                        // If we get here, we traversed the entire response
+                        // chain without finding a `WithExtensions`, so we wrap
+                        // the response in a `WithExtensions` and add the
+                        // extension that way.
+                        let mut extensions = Extensions::new();
+                        extensions.insert(extension);
+                        s.with_extensions(extensions)
+                    }
+                }
+            }
+
+            pub(crate) fn into_response(self) -> Response {
+                match self {
+                    Self::Status201 => axum::http::StatusCode::from_u16(201)
+                        .unwrap()
+                        .into_response(),
+                    Self::WithHeaders(headers, inner) => {
+                        let (mut parts, body) = inner.into_response().into_parts();
+                        parts.headers.extend(headers);
+                        (parts, body).into_response()
+                    }
+                    Self::WithExtensions(extensions, inner) => {
+                        let (mut parts, body) = inner.into_response().into_parts();
+                        parts.extensions.extend(extensions);
+                        (parts, body).into_response()
+                    }
+                }
+            }
+        }
+
+        async fn create_car<T>(
+            Extension(api): Extension<T>,
+            Path(space_id): Path<String>,
+            Json(body): Json<super::super::components::Car>,
+            parts: Parts,
+        ) -> Response
+        where
+            T: super::Api + Send + Sync + 'static,
+        {
+            let span_id = parts
+                .headers
+                .get(HeaderName::from_static("span-id"))
+                .map(|h| {
+                    let s = h
+                        .to_str()
+                        .map_err(|err| {
+                            Error::bad_request(format!("invalid header: span-id: {}", err))
+                                .into_response()
+                        })
+                        .unwrap();
+
+                    lgn_online::codegen::encoding::from_percent_encoded_string(s)
+                        .map_err(|err| {
+                            Error::bad_request(format!("invalid header: span-id: {}", err))
+                                .into_response()
+                        })
+                        .unwrap()
+                });
+
+            let request = CreateCarRequest {
+                space_id,
+                span_id,
+                body,
+                parts,
+            };
+
+            match api.create_car(request).await {
+                Ok(resp) => resp.into_response(),
+                Err(err) => err.into_response(),
+            }
+        }
+
+        // Request type.
+
+        #[derive(Debug)]
+        pub struct GetCarRequest {
+            pub space_id: String,
+            pub car_id: i64,
+            pub parts: http::request::Parts,
+        }
+
+        // Response type.
+
+        #[derive(Debug)]
+        pub enum GetCarResponse {
+            /// A car.
+            Status200(super::super::components::Car),
+            /// Car not found.
+            Status404,
+            WithHeaders(HeaderMap, Box<GetCarResponse>),
+            WithExtensions(Extensions, Box<GetCarResponse>),
+        }
+
+        impl GetCarResponse {
+            #[must_use]
+            pub fn with_headers(self, headers: http::HeaderMap) -> Self {
+                #[allow(clippy::match_wildcard_for_single_variants)]
+                match self {
+                    Self::WithHeaders(mut inner_headers, inner) => {
+                        inner_headers.extend(headers);
+                        Self::WithHeaders(inner_headers, inner)
+                    }
+                    Self::WithExtensions(extensions, inner) => {
+                        Self::WithExtensions(extensions, Box::new(inner.with_headers(headers)))
+                    }
+                    s => Self::WithHeaders(headers, Box::new(s)),
+                }
+            }
+
+            #[must_use]
+            pub fn with_extensions(self, extensions: Extensions) -> Self {
+                #[allow(clippy::match_wildcard_for_single_variants)]
+                match self {
+                    Self::WithExtensions(mut inner_extensions, inner) => {
+                        inner_extensions.extend(extensions);
+                        Self::WithExtensions(inner_extensions, inner)
+                    }
+                    Self::WithHeaders(headers, inner) => {
+                        Self::WithHeaders(headers, Box::new(inner.with_extensions(extensions)))
+                    }
+                    s => Self::WithExtensions(extensions, Box::new(s)),
+                }
+            }
+
+            /// Extend this response with the specified header.
+            ///
+            /// If the header already existed, it will be overwritten
+            /// silently.
+            #[must_use]
+            pub fn with_header(
+                self,
+                key: impl http::header::IntoHeaderName,
+                val: http::header::HeaderValue,
+            ) -> Self {
+                // Optimization: if the response chain already contains a
+                // `WithHeaders`, we just add the header to the headers
+                // map instead of re-boxing the whole thing.
+                #[allow(clippy::match_wildcard_for_single_variants)]
+                match self {
+                    Self::WithHeaders(mut headers, inner) => {
+                        headers.insert(key, val);
+                        Self::WithHeaders(headers, inner)
+                    }
+                    Self::WithExtensions(extensions, inner) => {
+                        Self::WithExtensions(extensions, Box::new(inner.with_header(key, val)))
+                    }
+                    s => {
+                        // If we get here, we traversed the entire response
+                        // chain without finding a `WithHeaders`, so we wrap
+                        // the response in a `WithHeaders` and add the
+                        // header that way.
+                        let mut headers = HeaderMap::new();
+                        headers.insert(key, val);
+                        s.with_headers(headers)
+                    }
+                }
+            }
+
+            /// Extend this response with the specified extension.
+            ///
+            /// If the extension already existed, it will be overwritten
+            /// silently.
+            #[must_use]
+            pub fn with_extension<T: Send + Sync + 'static>(self, extension: T) -> Self {
+                // Optimization: if the response chain already contains a
+                // `WithExtensions`, we just add the extension to the extensions
+                // map instead of re-boxing the whole thing.
+                #[allow(clippy::match_wildcard_for_single_variants)]
+                match self {
+                    Self::WithExtensions(mut extensions, inner) => {
+                        extensions.insert(extension);
+                        Self::WithExtensions(extensions, inner)
+                    }
+                    Self::WithHeaders(headers, inner) => {
+                        Self::WithHeaders(headers, Box::new(inner.with_extension(extension)))
+                    }
+                    s => {
+                        // If we get here, we traversed the entire response
+                        // chain without finding a `WithExtensions`, so we wrap
+                        // the response in a `WithExtensions` and add the
+                        // extension that way.
+                        let mut extensions = Extensions::new();
+                        extensions.insert(extension);
+                        s.with_extensions(extensions)
+                    }
+                }
+            }
+
+            pub(crate) fn into_response(self) -> Response {
+                match self {
+                    Self::Status200(body) => {
+                        let body = Json(body);
+                        (axum::http::StatusCode::from_u16(200).unwrap(), body).into_response()
+                    }
+                    Self::Status404 => axum::http::StatusCode::from_u16(404)
+                        .unwrap()
+                        .into_response(),
+                    Self::WithHeaders(headers, inner) => {
+                        let (mut parts, body) = inner.into_response().into_parts();
+                        parts.headers.extend(headers);
+                        (parts, body).into_response()
+                    }
+                    Self::WithExtensions(extensions, inner) => {
+                        let (mut parts, body) = inner.into_response().into_parts();
+                        parts.extensions.extend(extensions);
+                        (parts, body).into_response()
+                    }
+                }
+            }
+        }
+
+        async fn get_car<T>(
+            Extension(api): Extension<T>,
+            Path((space_id, car_id)): Path<(String, i64)>,
+            parts: Parts,
+        ) -> Response
+        where
+            T: super::Api + Send + Sync + 'static,
+        {
+            let request = GetCarRequest {
+                space_id,
+                car_id,
+                parts,
+            };
+
+            match api.get_car(request).await {
+                Ok(resp) => resp.into_response(),
+                Err(err) => err.into_response(),
+            }
+        }
+
+        // Request type.
+
+        #[derive(Debug)]
+        pub struct DeleteCarRequest {
+            pub space_id: String,
+            pub car_id: i64,
+            pub parts: http::request::Parts,
+        }
+
+        // Response type.
+
+        #[derive(Debug)]
+        pub enum DeleteCarResponse {
+            /// Car deleted.
+            Status200,
+            /// Car not found.
+            Status404,
+            WithHeaders(HeaderMap, Box<DeleteCarResponse>),
+            WithExtensions(Extensions, Box<DeleteCarResponse>),
+        }
+
+        impl DeleteCarResponse {
+            #[must_use]
+            pub fn with_headers(self, headers: http::HeaderMap) -> Self {
+                #[allow(clippy::match_wildcard_for_single_variants)]
+                match self {
+                    Self::WithHeaders(mut inner_headers, inner) => {
+                        inner_headers.extend(headers);
+                        Self::WithHeaders(inner_headers, inner)
+                    }
+                    Self::WithExtensions(extensions, inner) => {
+                        Self::WithExtensions(extensions, Box::new(inner.with_headers(headers)))
+                    }
+                    s => Self::WithHeaders(headers, Box::new(s)),
+                }
+            }
+
+            #[must_use]
+            pub fn with_extensions(self, extensions: Extensions) -> Self {
+                #[allow(clippy::match_wildcard_for_single_variants)]
+                match self {
+                    Self::WithExtensions(mut inner_extensions, inner) => {
+                        inner_extensions.extend(extensions);
+                        Self::WithExtensions(inner_extensions, inner)
+                    }
+                    Self::WithHeaders(headers, inner) => {
+                        Self::WithHeaders(headers, Box::new(inner.with_extensions(extensions)))
+                    }
+                    s => Self::WithExtensions(extensions, Box::new(s)),
+                }
+            }
+
+            /// Extend this response with the specified header.
+            ///
+            /// If the header already existed, it will be overwritten
+            /// silently.
+            #[must_use]
+            pub fn with_header(
+                self,
+                key: impl http::header::IntoHeaderName,
+                val: http::header::HeaderValue,
+            ) -> Self {
+                // Optimization: if the response chain already contains a
+                // `WithHeaders`, we just add the header to the headers
+                // map instead of re-boxing the whole thing.
+                #[allow(clippy::match_wildcard_for_single_variants)]
+                match self {
+                    Self::WithHeaders(mut headers, inner) => {
+                        headers.insert(key, val);
+                        Self::WithHeaders(headers, inner)
+                    }
+                    Self::WithExtensions(extensions, inner) => {
+                        Self::WithExtensions(extensions, Box::new(inner.with_header(key, val)))
+                    }
+                    s => {
+                        // If we get here, we traversed the entire response
+                        // chain without finding a `WithHeaders`, so we wrap
+                        // the response in a `WithHeaders` and add the
+                        // header that way.
+                        let mut headers = HeaderMap::new();
+                        headers.insert(key, val);
+                        s.with_headers(headers)
+                    }
+                }
+            }
+
+            /// Extend this response with the specified extension.
+            ///
+            /// If the extension already existed, it will be overwritten
+            /// silently.
+            #[must_use]
+            pub fn with_extension<T: Send + Sync + 'static>(self, extension: T) -> Self {
+                // Optimization: if the response chain already contains a
+                // `WithExtensions`, we just add the extension to the extensions
+                // map instead of re-boxing the whole thing.
+                #[allow(clippy::match_wildcard_for_single_variants)]
+                match self {
+                    Self::WithExtensions(mut extensions, inner) => {
+                        extensions.insert(extension);
+                        Self::WithExtensions(extensions, inner)
+                    }
+                    Self::WithHeaders(headers, inner) => {
+                        Self::WithHeaders(headers, Box::new(inner.with_extension(extension)))
+                    }
+                    s => {
+                        // If we get here, we traversed the entire response
+                        // chain without finding a `WithExtensions`, so we wrap
+                        // the response in a `WithExtensions` and add the
+                        // extension that way.
+                        let mut extensions = Extensions::new();
+                        extensions.insert(extension);
+                        s.with_extensions(extensions)
+                    }
+                }
+            }
+
+            pub(crate) fn into_response(self) -> Response {
+                match self {
+                    Self::Status200 => axum::http::StatusCode::from_u16(200)
+                        .unwrap()
+                        .into_response(),
+                    Self::Status404 => axum::http::StatusCode::from_u16(404)
+                        .unwrap()
+                        .into_response(),
+                    Self::WithHeaders(headers, inner) => {
+                        let (mut parts, body) = inner.into_response().into_parts();
+                        parts.headers.extend(headers);
+                        (parts, body).into_response()
+                    }
+                    Self::WithExtensions(extensions, inner) => {
+                        let (mut parts, body) = inner.into_response().into_parts();
+                        parts.extensions.extend(extensions);
+                        (parts, body).into_response()
+                    }
+                }
+            }
+        }
+
+        async fn delete_car<T>(
+            Extension(api): Extension<T>,
+            Path((space_id, car_id)): Path<(String, i64)>,
+            parts: Parts,
+        ) -> Response
+        where
+            T: super::Api + Send + Sync + 'static,
+        {
+            let request = DeleteCarRequest {
+                space_id,
+                car_id,
+                parts,
+            };
+
+            match api.delete_car(request).await {
+                Ok(resp) => resp.into_response(),
+                Err(err) => err.into_response(),
+            }
+        }
+
+        // Request type.
+
+        #[derive(Debug)]
+        pub struct TestBinaryRequest {
+            pub space_id: String,
+            pub body: lgn_online::codegen::Bytes,
+            pub parts: http::request::Parts,
+        }
+
+        // Response type.
+
+        #[derive(Debug)]
+        pub enum TestBinaryResponse {
+            /// Ok.
+            Status200(lgn_online::codegen::Bytes),
+            WithHeaders(HeaderMap, Box<TestBinaryResponse>),
+            WithExtensions(Extensions, Box<TestBinaryResponse>),
+        }
+
+        impl TestBinaryResponse {
+            #[must_use]
+            pub fn with_headers(self, headers: http::HeaderMap) -> Self {
+                #[allow(clippy::match_wildcard_for_single_variants)]
+                match self {
+                    Self::WithHeaders(mut inner_headers, inner) => {
+                        inner_headers.extend(headers);
+                        Self::WithHeaders(inner_headers, inner)
+                    }
+                    Self::WithExtensions(extensions, inner) => {
+                        Self::WithExtensions(extensions, Box::new(inner.with_headers(headers)))
+                    }
+                    s => Self::WithHeaders(headers, Box::new(s)),
+                }
+            }
+
+            #[must_use]
+            pub fn with_extensions(self, extensions: Extensions) -> Self {
+                #[allow(clippy::match_wildcard_for_single_variants)]
+                match self {
+                    Self::WithExtensions(mut inner_extensions, inner) => {
+                        inner_extensions.extend(extensions);
+                        Self::WithExtensions(inner_extensions, inner)
+                    }
+                    Self::WithHeaders(headers, inner) => {
+                        Self::WithHeaders(headers, Box::new(inner.with_extensions(extensions)))
+                    }
+                    s => Self::WithExtensions(extensions, Box::new(s)),
+                }
+            }
+
+            /// Extend this response with the specified header.
+            ///
+            /// If the header already existed, it will be overwritten
+            /// silently.
+            #[must_use]
+            pub fn with_header(
+                self,
+                key: impl http::header::IntoHeaderName,
+                val: http::header::HeaderValue,
+            ) -> Self {
+                // Optimization: if the response chain already contains a
+                // `WithHeaders`, we just add the header to the headers
+                // map instead of re-boxing the whole thing.
+                #[allow(clippy::match_wildcard_for_single_variants)]
+                match self {
+                    Self::WithHeaders(mut headers, inner) => {
+                        headers.insert(key, val);
+                        Self::WithHeaders(headers, inner)
+                    }
+                    Self::WithExtensions(extensions, inner) => {
+                        Self::WithExtensions(extensions, Box::new(inner.with_header(key, val)))
+                    }
+                    s => {
+                        // If we get here, we traversed the entire response
+                        // chain without finding a `WithHeaders`, so we wrap
+                        // the response in a `WithHeaders` and add the
+                        // header that way.
+                        let mut headers = HeaderMap::new();
+                        headers.insert(key, val);
+                        s.with_headers(headers)
+                    }
+                }
+            }
+
+            /// Extend this response with the specified extension.
+            ///
+            /// If the extension already existed, it will be overwritten
+            /// silently.
+            #[must_use]
+            pub fn with_extension<T: Send + Sync + 'static>(self, extension: T) -> Self {
+                // Optimization: if the response chain already contains a
+                // `WithExtensions`, we just add the extension to the extensions
+                // map instead of re-boxing the whole thing.
+                #[allow(clippy::match_wildcard_for_single_variants)]
+                match self {
+                    Self::WithExtensions(mut extensions, inner) => {
+                        extensions.insert(extension);
+                        Self::WithExtensions(extensions, inner)
+                    }
+                    Self::WithHeaders(headers, inner) => {
+                        Self::WithHeaders(headers, Box::new(inner.with_extension(extension)))
+                    }
+                    s => {
+                        // If we get here, we traversed the entire response
+                        // chain without finding a `WithExtensions`, so we wrap
+                        // the response in a `WithExtensions` and add the
+                        // extension that way.
+                        let mut extensions = Extensions::new();
+                        extensions.insert(extension);
+                        s.with_extensions(extensions)
+                    }
+                }
+            }
+
+            pub(crate) fn into_response(self) -> Response {
+                match self {
+                    Self::Status200(body) => {
+                        let body: Vec<u8> = body.into();
+                        (axum::http::StatusCode::from_u16(200).unwrap(), body).into_response()
+                    }
+                    Self::WithHeaders(headers, inner) => {
+                        let (mut parts, body) = inner.into_response().into_parts();
+                        parts.headers.extend(headers);
+                        (parts, body).into_response()
+                    }
+                    Self::WithExtensions(extensions, inner) => {
+                        let (mut parts, body) = inner.into_response().into_parts();
+                        parts.extensions.extend(extensions);
+                        (parts, body).into_response()
+                    }
+                }
+            }
+        }
+
+        async fn test_binary<T>(
+            Extension(api): Extension<T>,
+            Path(space_id): Path<String>,
+            body: axum::body::Bytes,
+            parts: Parts,
+        ) -> Response
+        where
+            T: super::Api + Send + Sync + 'static,
+        {
+            let request = TestBinaryRequest {
+                space_id,
+                body: body.into(),
+                parts,
+            };
+
+            match api.test_binary(request).await {
+                Ok(resp) => resp.into_response(),
+                Err(err) => err.into_response(),
+            }
+        }
+
+        /// Register all the routes for that API to the specified Router.
+        #[must_use]
+        pub fn register_routes<T>(router: Router, api: T) -> Router
+        where
+            T: super::Api + Clone + Send + Sync + 'static,
+        {
+            router
+                .route(
+                    "/test-additional-properties-any",
+                    routing::get(test_additional_properties_any::<T>),
+                )
+                .route(
+                    "/test-additional-properties-composite-any",
+                    routing::get(test_additional_properties_composite_any::<T>),
+                )
+                .route(
+                    "/test-additional-properties-composite-schema",
+                    routing::get(test_additional_properties_composite_schema::<T>),
+                )
+                .route(
+                    "/test-additional-properties-schema",
+                    routing::get(test_additional_properties_schema::<T>),
+                )
+                .route(
+                    "/test-additional-properties-string",
+                    routing::get(test_additional_properties_string::<T>),
+                )
+                .route("/test-headers", routing::get(test_headers::<T>))
+                .route("/test-one-of", routing::get(test_one_of::<T>))
+                .route(
+                    "/v1/spaces/:space-id/car-service/cars",
+                    routing::get(get_cars::<T>).post(create_car::<T>),
+                )
+                .route(
+                    "/v1/spaces/:space-id/car-service/cars/:car-id",
+                    routing::get(get_car::<T>).delete(delete_car::<T>),
+                )
+                .route(
+                    "/v1/spaces/:space-id/car-service/test-binary",
+                    routing::post(test_binary::<T>),
+                )
+                .layer(Extension(api))
+        }
+    }
+}
+
+// Models and API from: components
+
+pub mod components {
+
+    use lgn_online::codegen::Error;
+
+    #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+    pub struct Alpha {
+        #[serde(rename = "beta")]
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub beta: Option<Beta>,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+    pub struct Beta(pub Vec<Gamma>);
+
+    impl From<Vec<Gamma>> for Beta {
+        fn from(t: Vec<Gamma>) -> Self {
+            Self(t)
+        }
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+    pub struct Car {
+        #[serde(rename = "code")]
+        pub code: u32,
+
+        #[serde(rename = "color")]
+        pub color: CarColor,
+
+        #[serde(rename = "extra")]
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub extra: Option<lgn_online::codegen::Bytes>,
+
+        #[serde(rename = "id")]
+        pub id: i64,
+
+        #[serde(rename = "is_new")]
+        pub is_new: bool,
+
+        #[serde(rename = "name")]
+        pub name: String,
+    }
+
+    /// The car color.
+    #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+    pub enum CarColor {
+        #[serde(rename = "red")]
+        Red,
+        #[serde(rename = "blue")]
+        Blue,
+        #[serde(rename = "yellow")]
+        Yellow,
+    }
+
+    impl std::str::FromStr for CarColor {
+        type Err = Error;
+
+        fn from_str(s: &str) -> Result<Self, <CarColor as std::str::FromStr>::Err> {
+            match s {
+                "Red" => Ok(Self::Red),
+                "Blue" => Ok(Self::Blue),
+                "Yellow" => Ok(Self::Yellow),
+                _ => Err(Error::Invalid(format!("unknown enum value {}", s))),
+            }
+        }
+    }
+
+    impl TryFrom<u32> for CarColor {
+        type Error = Error;
+
+        fn try_from(n: u32) -> Result<Self, <CarColor as TryFrom<u32>>::Error> {
+            match n {
+                0 => Ok(Self::Red),
+                1 => Ok(Self::Blue),
+                2 => Ok(Self::Yellow),
+                _ => Err(Error::Invalid(format!(
+                    "index out of bound {}, accepted index between 0 and 2",
+                    n
+                ))),
+            }
+        }
+    }
+
+    impl TryFrom<i32> for CarColor {
+        type Error = Error;
+
+        fn try_from(n: i32) -> Result<Self, <CarColor as TryFrom<i32>>::Error> {
+            match n {
+                0 => Ok(Self::Red),
+                1 => Ok(Self::Blue),
+                2 => Ok(Self::Yellow),
+                _ => Err(Error::Invalid(format!(
+                    "index out of bound {}, accepted index between 0 and 2",
+                    n
+                ))),
+            }
+        }
+    }
+
+    impl ToString for CarColor {
+        fn to_string(&self) -> String {
+            match self {
+                Self::Red => "Red",
+                Self::Blue => "Blue",
+                Self::Yellow => "Yellow",
+            }
+            .into()
+        }
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+    pub struct Cars(pub Vec<Car>);
+
+    impl From<Vec<Car>> for Cars {
+        fn from(t: Vec<Car>) -> Self {
+            Self(t)
+        }
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+    pub enum Gamma {
+        #[serde(rename = "option1")]
+        Option1(Box<Alpha>),
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+    pub struct Pet {
+        #[serde(rename = "name")]
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub name: Option<String>,
+    }
+}
+
+pub fn register_routes<S: cars::Api + Clone + Send + Sync + 'static>(
+    router: axum::Router,
+    server: S,
+) -> axum::Router {
+    cars::server::register_routes(router, server)
+}
+

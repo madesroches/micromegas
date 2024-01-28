@@ -1,0 +1,46 @@
+use lgn_online::server::Result;
+
+#[async_trait::async_trait]
+pub trait Api {
+{% for (path, routes) in api.paths %}
+    {% for route in routes %}
+        {% if let Some(summary) = route.summary %}/// {{ summary }}{% endif %}
+        {% include "signature.rs.jinja" %};
+    {% endfor %}
+{% endfor %}
+}
+
+// Blanket implementation of the Api trait for common wrapper types.
+
+#[async_trait::async_trait]
+impl<T: Api + Send + Sync> Api for std::sync::Arc<T> {
+{% for (path, routes) in api.paths %}
+    {% for route in routes %}
+        {% include "signature.rs.jinja" %} {
+            self.as_ref().{{ route.name|snake_case }}(request).await
+        }
+    {% endfor %}
+{% endfor %}
+}
+
+#[async_trait::async_trait]
+impl<T: Api + Send + Sync + ?Sized> Api for Box<T> {
+{% for (path, routes) in api.paths %}
+    {% for route in routes %}
+        {% include "signature.rs.jinja" %} {
+            self.as_ref().{{ route.name|snake_case }}(request).await
+        }
+    {% endfor %}
+{% endfor %}
+}
+
+#[async_trait::async_trait]
+impl<T: Api + Send + Sync + ?Sized> Api for &T {
+{% for (path, routes) in api.paths %}
+    {% for route in routes %}
+        {% include "signature.rs.jinja" %} {
+            (**self).{{ route.name|snake_case }}(request).await
+        }
+    {% endfor %}
+{% endfor %}
+}

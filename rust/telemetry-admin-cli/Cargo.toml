@@ -1,0 +1,29 @@
+[package]
+name = "telemetry-admin"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+lgn-blob-storage = { path = "../lgn-blob-storage" }
+tracing = { path = "../tracing" }
+lgn-telemetry-proto = { path = "../lgn-telemetry-proto" }
+telemetry-sink = { path = "../telemetry-sink" }
+analytics = { path = "../analytics" }
+transit = { path = "../transit" }
+clap = { version = "3.0", features = ["derive"] }
+tokio = { version = "1.13", features = ["full", "tracing"] }
+sqlx = { version = "0.5", features = [
+    "sqlite",
+    "any",
+    "mysql",
+    "runtime-tokio-native-tls",
+] }
+anyhow = "1.0"
+prost = "0.9"
+lz4 = "1.23"
+json = "0.12"
+
+[dev-dependencies]
+lgn-test-utils = { path = "../lgn-test-utils" }
+fs_extra = "1.2"

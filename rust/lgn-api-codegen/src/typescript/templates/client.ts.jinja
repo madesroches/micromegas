@@ -1,0 +1,104 @@
+export class Client extends ApiClient implements Api {
+    #baseUri: string | URL;
+
+    constructor({
+        baseUri,
+        fetch = defaultFetch,
+    }: {
+        baseUri: string | URL,
+        fetch?: Fetch,
+    }) {
+        super({ fetch });
+        this.#baseUri = baseUri;
+    }
+
+    {% for (path, routes) in api.paths %}
+        {% for route in routes %}
+            {% let enum_name = "{}Response"|format(route.name|pascal_case) %}
+
+            async {% include "signature.ts.jinja" %} {
+                const url = new URL(`${this.#baseUri}{{ path|fmt_path(route.parameters.path) }}`);
+
+                {% if !route.parameters.query.is_empty() -%}
+                    const query: {{ route.name|pascal_case }}Query = { 
+                        {% for parameter in route.parameters.query -%}
+                            "{{ parameter.name }}": params["{{ parameter.name|camel_case }}"],
+                        {% endfor -%}
+                    };
+
+                    {# TODO: Supports only the default serialization style: form, explode: true for now #}
+                    url.search = stringifyQueryObject(query);
+                {% endif %}
+
+                const headers = new Headers();
+
+                {% if let Some(request_body) = route.request_body %}
+                    headers.set(
+                        "Content-Type",
+                        "{{ request_body.content.media_type }}",
+                    );
+                {% endif %}
+
+
+                {% if !route.parameters.header.is_empty() -%}
+                    {%- for parameter in route.parameters.header -%}
+                        {% if parameter.required -%}
+                            headers.set(
+                                "{{ parameter.name }}",
+                                {% if parameter.type_ == Type::String %}
+                                        params["{{ parameter.name|camel_case }}"],
+                                {% else if parameter.type_ == Type::Int32 ||
+                                    parameter.type_ == Type::Int64 ||
+                                    parameter.type_ == Type::Boolean ||
+                                    parameter.type_ == Type::Float32 ||
+                                    parameter.type_ == Type::Float64 %}
+                                        params["{{ parameter.name|camel_case }}"].toString(),
+                                {% else if parameter.type_ == Type::Bytes %}
+                                    await params["{{ parameter.name|camel_case }}"].text(),
+                                {% else %}
+                                    "unknown",
+                                {% endif %}
+                            ); 
+                        {% else %}
+                            if (params["{{ parameter.name|camel_case }}"]) {
+                                headers.set(
+                                    "{{ parameter.name }}",
+                                    {% if parameter.type_ == Type::String %}
+                                            params["{{ parameter.name|camel_case }}"],
+                                    {% else if parameter.type_ == Type::Int32 ||
+                                        parameter.type_ == Type::Int64 ||
+                                        parameter.type_ == Type::Boolean ||
+                                        parameter.type_ == Type::Float32 ||
+                                        parameter.type_ == Type::Float64 %}
+                                            params["{{ parameter.name|camel_case }}"].toString(),
+                                    {% else if parameter.type_ == Type::Bytes %}
+                                        await params["{{ parameter.name|camel_case }}"].text(),
+                                    {% else %}
+                                        "unknown",
+                                    {% endif %}
+                                );
+                            }
+                        {% endif -%}                
+                    {% endfor %}
+                {% endif -%}
+
+                const response = await this.performRequest(url.toString(), {
+                    method: "{{ route.method|uppercase }}",
+                    headers,
+                    {% if let Some(request_body) = route.request_body %}
+                        {% match request_body.content.media_type %}
+                            {% when MediaType::Json %}
+                                body: JSON.stringify(body),
+                            {% when MediaType::Bytes %}
+                                body: body,
+                        {% endmatch %}
+                    {% endif -%}
+                    {% if let Some(request_body) = route.request_body %}
+                    {% endif %}
+                });
+
+                return {{ enum_name }}.fromResponse(response);
+            }
+        {% endfor %}
+    {% endfor %}
+}

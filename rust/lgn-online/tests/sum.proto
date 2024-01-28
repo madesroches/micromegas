@@ -1,0 +1,15 @@
+syntax = "proto3";
+package sum;
+
+service Summer {
+  rpc Sum(SumRequest) returns (SumResponse);
+}
+
+message SumRequest {
+  uint32 a = 1;
+  uint32 b = 2;
+}
+
+message SumResponse {
+  uint32 result = 1;
+}

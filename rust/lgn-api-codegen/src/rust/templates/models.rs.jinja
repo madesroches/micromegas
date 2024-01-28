@@ -1,0 +1,104 @@
+use lgn_online::codegen::Error;
+
+{% for model in location_ctx.models.values() %}
+    {% if let Some(description) = model.description %}/// {{ description }}{% endif -%}
+    {% match model.type_ %}
+        {% when Type::Enum with { variants } %}
+            #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+            pub enum {{ model|fmt_model_name(ctx) }}
+            {
+                {%- for variant in variants -%}
+                    #[serde(rename = "{{ variant }}")]
+                    {{ variant|pascal_case }},
+                {%- endfor -%}
+            }
+
+            impl std::str::FromStr for {{ model|fmt_model_name(ctx) }} {
+                type Err = Error;
+
+                fn from_str(s: &str) -> Result<Self, <{{ model|fmt_model_name(ctx) }} as std::str::FromStr>::Err> {
+                    match s {
+                        {%- for variant in variants -%}
+                            "{{ variant|pascal_case }}" => Ok(Self::{{ variant|pascal_case }}),
+                        {%- endfor -%}
+                        _ => Err(Error::Invalid(format!("unknown enum value {}", s))),
+                    }
+                }
+            }
+
+            impl TryFrom<u32> for {{ model|fmt_model_name(ctx) }} {
+                type Error = Error;
+
+                fn try_from(n: u32) -> Result<Self, <{{ model|fmt_model_name(ctx) }} as TryFrom<u32>>::Error> {
+                    match n {
+                        {%- for variant in variants -%}
+                            {{ loop.index0 }} => Ok(Self::{{ variant|pascal_case }}),
+                        {%- endfor -%}
+                        _ => Err(Error::Invalid(format!("index out of bound {}, accepted index between 0 and {{ variants.len() - 1 }}", n))),
+                    }
+                }
+            }
+
+            impl TryFrom<i32> for {{ model|fmt_model_name(ctx) }} {
+                type Error = Error;
+
+                fn try_from(n: i32) -> Result<Self, <{{ model|fmt_model_name(ctx) }} as TryFrom<i32>>::Error> {
+                    match n {
+                        {%- for variant in variants -%}
+                            {{ loop.index0 }} => Ok(Self::{{ variant|pascal_case }}),
+                        {%- endfor -%}
+                        _ => Err(Error::Invalid(format!("index out of bound {}, accepted index between 0 and {{ variants.len() - 1 }}", n))),
+                    }
+                }
+            }
+
+            impl ToString for {{ model|fmt_model_name(ctx) }} {
+                fn to_string(&self) -> String {
+                    match self {
+                        {%- for variant in variants -%}
+                            Self::{{ variant|pascal_case }} => "{{ variant|pascal_case }}",
+                        {%- endfor -%}
+                    }
+                    .into()
+                }
+            }
+        {% when Type::OneOf with { types } %}
+            #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+            pub enum {{ model|fmt_model_name(ctx) }}
+            {
+                {%- for type_ in types -%}
+                    #[serde(rename = "option{{loop.index}}")]
+                    Option{{loop.index}}({{ type_|fmt_type(ctx, module_path) }}),
+                {%- endfor -%}
+            }
+        {% when Type::Struct with { fields, map } %}
+            {{ map|fmt_struct_derive }}
+            pub struct {{ model|fmt_model_name(ctx) }} {
+                {% match map %}
+                {% when Some with (map) %}
+                #[serde(flatten)]
+                pub __additional_properties: std::collections::BTreeMap<String, {{ map|fmt_type(ctx, module_path) }}>,
+                {% when None %}
+                {% endmatch %}
+                {% for field in fields.values() %}
+                    {% if let Some(description) = field.description -%}/// {{ description }}{%- endif %}
+                    #[serde(rename = "{{ field.name }}")]
+                    {%- if field.required -%}
+                    pub {{ field.name|fmt_field }}: {{ field.type_|fmt_type(ctx, module_path) }},
+                    {%- else -%}
+                    #[serde(skip_serializing_if = "Option::is_none")]
+                    pub {{ field.name|fmt_field }}: Option<{{ field.type_|fmt_type(ctx, module_path) }}>,
+                    {%- endif -%}
+                {% endfor %}
+            }
+        {% when t %}
+            #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+            pub struct {{ model|fmt_model_name(ctx) }}(pub {{ t|fmt_type(ctx, module_path) }});
+
+            impl From<{{ t|fmt_type(ctx, module_path) }}> for {{ model|fmt_model_name(ctx) }} {
+                fn from(t: {{ t|fmt_type(ctx, module_path) }}) -> Self {
+                    Self(t)
+                }
+            }
+    {% endmatch %}
+{% endfor %}

@@ -1,0 +1,670 @@
+---
+source: crates/lgn-api-codegen/src/typescript/mod.rs
+expression: content
+---
+// Auto-generated file
+
+import {
+  // @ts-ignore
+  ApiClient,
+  // @ts-ignore
+  InternalError,
+  // @ts-ignore
+  defaultFetch,
+  // @ts-ignore
+  stringifyQueryObject,
+} from "./index";
+// @ts-ignore
+import type { Fetch } from "./index";
+
+// Models and API from: cars
+
+export namespace Cars {
+  export type TestAdditionalPropertiesCompositeAny200Response = {
+    [key: string]: any;
+  } & {
+    name?: string;
+    time?: number;
+  };
+
+  export type TestAdditionalPropertiesCompositeSchema200Response = {
+    [key: string]: Components.Pet;
+  } & {
+    name?: string;
+    time?: number;
+  };
+
+  export type TestOneOf200Response =
+    | { type: "option1"; value: Components.Pet }
+    | { type: "option2"; value: Components.Car }
+    | { type: "option3"; value: Components.Alpha };
+
+  // ---------- Api ----------
+
+  export interface Api {
+    testAdditionalPropertiesAny(): Promise<TestAdditionalPropertiesAnyResponse>;
+
+    testAdditionalPropertiesCompositeAny(): Promise<TestAdditionalPropertiesCompositeAnyResponse>;
+
+    testAdditionalPropertiesCompositeSchema(): Promise<TestAdditionalPropertiesCompositeSchemaResponse>;
+
+    testAdditionalPropertiesSchema(): Promise<TestAdditionalPropertiesSchemaResponse>;
+
+    testAdditionalPropertiesString(): Promise<TestAdditionalPropertiesStringResponse>;
+
+    testHeaders(params: {
+      xStringHeader?: string;
+      xBytesHeader?: Blob;
+      xIntHeader?: number;
+    }): Promise<TestHeadersResponse>;
+
+    testOneOf(): Promise<TestOneOfResponse>;
+
+    getCars(params: {
+      spaceId: string;
+      otherQuery: string;
+      names?: string[];
+      q?: string;
+    }): Promise<GetCarsResponse>;
+
+    createCar(
+      params: {
+        spaceId: string;
+        spanId?: string;
+      },
+
+      body: Components.Car
+    ): Promise<CreateCarResponse>;
+
+    getCar(params: { spaceId: string; carId: bigint }): Promise<GetCarResponse>;
+
+    deleteCar(params: {
+      spaceId: string;
+      carId: bigint;
+    }): Promise<DeleteCarResponse>;
+
+    testBinary(
+      params: {
+        spaceId: string;
+      },
+
+      body: Blob
+    ): Promise<TestBinaryResponse>;
+  }
+
+  // ---------- Client ----------
+
+  export class Client extends ApiClient implements Api {
+    #baseUri: string | URL;
+
+    constructor({
+      baseUri,
+      fetch = defaultFetch,
+    }: {
+      baseUri: string | URL;
+      fetch?: Fetch;
+    }) {
+      super({ fetch });
+      this.#baseUri = baseUri;
+    }
+
+    async testAdditionalPropertiesAny(): Promise<TestAdditionalPropertiesAnyResponse> {
+      const url = new URL(`${this.#baseUri}/test-additional-properties-any`);
+
+      const headers = new Headers();
+
+      const response = await this.performRequest(url.toString(), {
+        method: "GET",
+        headers,
+      });
+
+      return TestAdditionalPropertiesAnyResponse.fromResponse(response);
+    }
+
+    async testAdditionalPropertiesCompositeAny(): Promise<TestAdditionalPropertiesCompositeAnyResponse> {
+      const url = new URL(
+        `${this.#baseUri}/test-additional-properties-composite-any`
+      );
+
+      const headers = new Headers();
+
+      const response = await this.performRequest(url.toString(), {
+        method: "GET",
+        headers,
+      });
+
+      return TestAdditionalPropertiesCompositeAnyResponse.fromResponse(
+        response
+      );
+    }
+
+    async testAdditionalPropertiesCompositeSchema(): Promise<TestAdditionalPropertiesCompositeSchemaResponse> {
+      const url = new URL(
+        `${this.#baseUri}/test-additional-properties-composite-schema`
+      );
+
+      const headers = new Headers();
+
+      const response = await this.performRequest(url.toString(), {
+        method: "GET",
+        headers,
+      });
+
+      return TestAdditionalPropertiesCompositeSchemaResponse.fromResponse(
+        response
+      );
+    }
+
+    async testAdditionalPropertiesSchema(): Promise<TestAdditionalPropertiesSchemaResponse> {
+      const url = new URL(`${this.#baseUri}/test-additional-properties-schema`);
+
+      const headers = new Headers();
+
+      const response = await this.performRequest(url.toString(), {
+        method: "GET",
+        headers,
+      });
+
+      return TestAdditionalPropertiesSchemaResponse.fromResponse(response);
+    }
+
+    async testAdditionalPropertiesString(): Promise<TestAdditionalPropertiesStringResponse> {
+      const url = new URL(`${this.#baseUri}/test-additional-properties-string`);
+
+      const headers = new Headers();
+
+      const response = await this.performRequest(url.toString(), {
+        method: "GET",
+        headers,
+      });
+
+      return TestAdditionalPropertiesStringResponse.fromResponse(response);
+    }
+
+    async testHeaders(params: {
+      xStringHeader?: string;
+      xBytesHeader?: Blob;
+      xIntHeader?: number;
+    }): Promise<TestHeadersResponse> {
+      const url = new URL(`${this.#baseUri}/test-headers`);
+
+      const headers = new Headers();
+
+      if (params["xStringHeader"]) {
+        headers.set(
+          "x-string-header",
+
+          params["xStringHeader"]
+        );
+      }
+
+      if (params["xBytesHeader"]) {
+        headers.set(
+          "x-bytes-header",
+
+          await params["xBytesHeader"].text()
+        );
+      }
+
+      if (params["xIntHeader"]) {
+        headers.set(
+          "x-int-header",
+
+          params["xIntHeader"].toString()
+        );
+      }
+
+      const response = await this.performRequest(url.toString(), {
+        method: "GET",
+        headers,
+      });
+
+      return TestHeadersResponse.fromResponse(response);
+    }
+
+    async testOneOf(): Promise<TestOneOfResponse> {
+      const url = new URL(`${this.#baseUri}/test-one-of`);
+
+      const headers = new Headers();
+
+      const response = await this.performRequest(url.toString(), {
+        method: "GET",
+        headers,
+      });
+
+      return TestOneOfResponse.fromResponse(response);
+    }
+
+    async getCars(params: {
+      spaceId: string;
+      otherQuery: string;
+      names?: string[];
+      q?: string;
+    }): Promise<GetCarsResponse> {
+      const url = new URL(
+        `${this.#baseUri}/v1/spaces/${params["spaceId"]}/car-service/cars`
+      );
+
+      const query: GetCarsQuery = {
+        other_query: params["otherQuery"],
+        names: params["names"],
+        q: params["q"],
+      };
+
+      url.search = stringifyQueryObject(query);
+
+      const headers = new Headers();
+
+      const response = await this.performRequest(url.toString(), {
+        method: "GET",
+        headers,
+      });
+
+      return GetCarsResponse.fromResponse(response);
+    }
+
+    async createCar(
+      params: {
+        spaceId: string;
+        spanId?: string;
+      },
+
+      body: Components.Car
+    ): Promise<CreateCarResponse> {
+      const url = new URL(
+        `${this.#baseUri}/v1/spaces/${params["spaceId"]}/car-service/cars`
+      );
+
+      const headers = new Headers();
+
+      headers.set("Content-Type", "application/json");
+
+      if (params["spanId"]) {
+        headers.set(
+          "span-id",
+
+          params["spanId"]
+        );
+      }
+
+      const response = await this.performRequest(url.toString(), {
+        method: "POST",
+        headers,
+
+        body: JSON.stringify(body),
+      });
+
+      return CreateCarResponse.fromResponse(response);
+    }
+
+    async getCar(params: {
+      spaceId: string;
+      carId: bigint;
+    }): Promise<GetCarResponse> {
+      const url = new URL(
+        `${this.#baseUri}/v1/spaces/${params["spaceId"]}/car-service/cars/${
+          params["carId"]
+        }`
+      );
+
+      const headers = new Headers();
+
+      const response = await this.performRequest(url.toString(), {
+        method: "GET",
+        headers,
+      });
+
+      return GetCarResponse.fromResponse(response);
+    }
+
+    async deleteCar(params: {
+      spaceId: string;
+      carId: bigint;
+    }): Promise<DeleteCarResponse> {
+      const url = new URL(
+        `${this.#baseUri}/v1/spaces/${params["spaceId"]}/car-service/cars/${
+          params["carId"]
+        }`
+      );
+
+      const headers = new Headers();
+
+      const response = await this.performRequest(url.toString(), {
+        method: "DELETE",
+        headers,
+      });
+
+      return DeleteCarResponse.fromResponse(response);
+    }
+
+    async testBinary(
+      params: {
+        spaceId: string;
+      },
+
+      body: Blob
+    ): Promise<TestBinaryResponse> {
+      const url = new URL(
+        `${this.#baseUri}/v1/spaces/${
+          params["spaceId"]
+        }/car-service/test-binary`
+      );
+
+      const headers = new Headers();
+
+      headers.set("Content-Type", "application/octet-stream");
+
+      const response = await this.performRequest(url.toString(), {
+        method: "POST",
+        headers,
+
+        body: body,
+      });
+
+      return TestBinaryResponse.fromResponse(response);
+    }
+  }
+
+  // ---------- Parameters ----------
+
+  export type GetCarsQuery = {
+    other_query: string;
+    names?: string[];
+    q?: string;
+  };
+
+  // ---------- Responses ----------
+
+  export type TestAdditionalPropertiesAnyResponse = {
+    /** Ok. */ type: "200";
+    value: Record<string, any>;
+  };
+
+  export const TestAdditionalPropertiesAnyResponse = {
+    async fromResponse(
+      response: Response
+    ): Promise<TestAdditionalPropertiesAnyResponse> {
+      switch (response.status) {
+        case 200: {
+          return {
+            type: "200",
+            value: await response.json(),
+          };
+        }
+        default: {
+          throw new InternalError(`unexpected status code: ${response.status}`);
+        }
+      }
+    },
+  };
+
+  export type TestAdditionalPropertiesCompositeAnyResponse = {
+    /** Ok. */ type: "200";
+    value: TestAdditionalPropertiesCompositeAny200Response;
+  };
+
+  export const TestAdditionalPropertiesCompositeAnyResponse = {
+    async fromResponse(
+      response: Response
+    ): Promise<TestAdditionalPropertiesCompositeAnyResponse> {
+      switch (response.status) {
+        case 200: {
+          return {
+            type: "200",
+            value: await response.json(),
+          };
+        }
+        default: {
+          throw new InternalError(`unexpected status code: ${response.status}`);
+        }
+      }
+    },
+  };
+
+  export type TestAdditionalPropertiesCompositeSchemaResponse = {
+    /** Ok. */ type: "200";
+    value: TestAdditionalPropertiesCompositeSchema200Response;
+  };
+
+  export const TestAdditionalPropertiesCompositeSchemaResponse = {
+    async fromResponse(
+      response: Response
+    ): Promise<TestAdditionalPropertiesCompositeSchemaResponse> {
+      switch (response.status) {
+        case 200: {
+          return {
+            type: "200",
+            value: await response.json(),
+          };
+        }
+        default: {
+          throw new InternalError(`unexpected status code: ${response.status}`);
+        }
+      }
+    },
+  };
+
+  export type TestAdditionalPropertiesSchemaResponse = {
+    /** Ok. */ type: "200";
+    value: Record<string, Components.Pet>;
+  };
+
+  export const TestAdditionalPropertiesSchemaResponse = {
+    async fromResponse(
+      response: Response
+    ): Promise<TestAdditionalPropertiesSchemaResponse> {
+      switch (response.status) {
+        case 200: {
+          return {
+            type: "200",
+            value: await response.json(),
+          };
+        }
+        default: {
+          throw new InternalError(`unexpected status code: ${response.status}`);
+        }
+      }
+    },
+  };
+
+  export type TestAdditionalPropertiesStringResponse = {
+    /** Ok. */ type: "200";
+    value: Record<string, string>;
+  };
+
+  export const TestAdditionalPropertiesStringResponse = {
+    async fromResponse(
+      response: Response
+    ): Promise<TestAdditionalPropertiesStringResponse> {
+      switch (response.status) {
+        case 200: {
+          return {
+            type: "200",
+            value: await response.json(),
+          };
+        }
+        default: {
+          throw new InternalError(`unexpected status code: ${response.status}`);
+        }
+      }
+    },
+  };
+
+  export type TestHeadersResponse = {
+    /** Ok. */ type: "200";
+    value: Components.Pet;
+  };
+
+  export const TestHeadersResponse = {
+    async fromResponse(response: Response): Promise<TestHeadersResponse> {
+      switch (response.status) {
+        case 200: {
+          return {
+            type: "200",
+            value: await response.json(),
+          };
+        }
+        default: {
+          throw new InternalError(`unexpected status code: ${response.status}`);
+        }
+      }
+    },
+  };
+
+  export type TestOneOfResponse = {
+    /** Ok. */ type: "200";
+    value: TestOneOf200Response;
+  };
+
+  export const TestOneOfResponse = {
+    async fromResponse(response: Response): Promise<TestOneOfResponse> {
+      switch (response.status) {
+        case 200: {
+          return {
+            type: "200",
+            value: await response.json(),
+          };
+        }
+        default: {
+          throw new InternalError(`unexpected status code: ${response.status}`);
+        }
+      }
+    },
+  };
+
+  export type GetCarsResponse = {
+    /** List of cars. */ type: "200";
+    value: Components.Cars;
+  };
+
+  export const GetCarsResponse = {
+    async fromResponse(response: Response): Promise<GetCarsResponse> {
+      switch (response.status) {
+        case 200: {
+          return {
+            type: "200",
+            value: await response.json(),
+          };
+        }
+        default: {
+          throw new InternalError(`unexpected status code: ${response.status}`);
+        }
+      }
+    },
+  };
+
+  export type CreateCarResponse = { /** Created. */ type: "201" };
+
+  export const CreateCarResponse = {
+    async fromResponse(response: Response): Promise<CreateCarResponse> {
+      switch (response.status) {
+        case 201: {
+          return {
+            type: "201",
+          };
+        }
+        default: {
+          throw new InternalError(`unexpected status code: ${response.status}`);
+        }
+      }
+    },
+  };
+
+  export type GetCarResponse =
+    | { /** A car. */ type: "200"; value: Components.Car }
+    | { /** Car not found. */ type: "404" };
+
+  export const GetCarResponse = {
+    async fromResponse(response: Response): Promise<GetCarResponse> {
+      switch (response.status) {
+        case 200: {
+          return {
+            type: "200",
+            value: await response.json(),
+          };
+        }
+        case 404: {
+          return {
+            type: "404",
+          };
+        }
+        default: {
+          throw new InternalError(`unexpected status code: ${response.status}`);
+        }
+      }
+    },
+  };
+
+  export type DeleteCarResponse =
+    | { /** Car deleted. */ type: "200" }
+    | { /** Car not found. */ type: "404" };
+
+  export const DeleteCarResponse = {
+    async fromResponse(response: Response): Promise<DeleteCarResponse> {
+      switch (response.status) {
+        case 200: {
+          return {
+            type: "200",
+          };
+        }
+        case 404: {
+          return {
+            type: "404",
+          };
+        }
+        default: {
+          throw new InternalError(`unexpected status code: ${response.status}`);
+        }
+      }
+    },
+  };
+
+  export type TestBinaryResponse = { /** Ok. */ type: "200"; value: Blob };
+
+  export const TestBinaryResponse = {
+    async fromResponse(response: Response): Promise<TestBinaryResponse> {
+      switch (response.status) {
+        case 200: {
+          return {
+            type: "200",
+            value: await response.blob(),
+          };
+        }
+        default: {
+          throw new InternalError(`unexpected status code: ${response.status}`);
+        }
+      }
+    },
+  };
+}
+
+// Models and API from: components
+
+export namespace Components {
+  export type Alpha = {
+    beta?: Beta;
+  };
+
+  export type Beta = Gamma[];
+
+  export type Car = {
+    code: number;
+    color: CarColor;
+    extra?: Blob;
+    id: bigint;
+    is_new: boolean;
+    name: string;
+  };
+
+  /** The car color. */
+  export type CarColor = "red" | "blue" | "yellow";
+
+  export type Cars = Car[];
+
+  export type Gamma = { type: "option1"; value: Alpha };
+
+  export type Pet = {
+    name?: string;
+  };
+}
+

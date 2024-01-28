@@ -1,0 +1,9 @@
+[lgn-config.tests]
+environment = "dev"
+avatar = "images/avatar.png"
+
+[lgn-config.tests.my_config]
+my_bool = true
+my_int = 42
+my_float = 1.23
+my_list = ["a", "b", "c"]

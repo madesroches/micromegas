@@ -1,0 +1,15 @@
+// Models and API from: {{ module_path }}
+
+{% for module in module_path.parts().iter() %}
+pub mod {{ module }} {
+{% endfor %}
+
+{% include "models.rs.jinja" %}
+
+{% if let Some(api) = location_ctx.api %}
+{% include "api.rs.jinja" %}
+{% endif %}
+
+{% for module in module_path.parts().iter() %}
+}
+{% endfor %}

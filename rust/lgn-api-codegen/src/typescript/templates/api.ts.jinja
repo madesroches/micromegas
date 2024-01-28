@@ -1,0 +1,18 @@
+// Auto-generated file
+
+import {
+  // @ts-ignore
+  ApiClient,
+  // @ts-ignore
+  InternalError,
+  // @ts-ignore
+  defaultFetch,
+  // @ts-ignore
+  stringifyQueryObject,
+} from "./index";
+// @ts-ignore
+import type { Fetch } from "./index";
+
+{% for (module_path, location_ctx) in ctx.as_typescript_modules()? %}
+{% include "location_context.ts.jinja" %}
+{% endfor %}

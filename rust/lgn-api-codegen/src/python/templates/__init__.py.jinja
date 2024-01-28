@@ -1,0 +1,5 @@
+# Generated python API
+
+{% for (module_path, location_ctx) in ctx.as_modules()? %}
+{% include "location_context.py.jinja" %}
+{% endfor %}

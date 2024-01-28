@@ -1,0 +1,15 @@
+// Models and API from: {{ module_path }}
+
+{% for module in module_path.parts().iter() %}
+export namespace {{ module|pascal_case }} {
+{% endfor %}
+
+{% include "models.ts.jinja" %}
+
+{% if let Some(api) = location_ctx.api %}
+{% include "api_content.ts.jinja" %}
+{% endif %}
+
+{% for module in module_path.parts().iter() %}
+}
+{% endfor %}

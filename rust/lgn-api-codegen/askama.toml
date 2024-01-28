@@ -1,0 +1,8 @@
+[general]
+# Directories to search for templates, relative to the crate root.
+dirs = [
+    "src/rust/templates",
+    "src/typescript/templates",
+    "src/python/templates",
+]
+whitespace = "suppress"
