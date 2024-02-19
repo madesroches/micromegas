@@ -1,0 +1,1 @@
+set LGN_TELEMETRY_GRPC_API_KEY=invalid_key
