@@ -11,15 +11,16 @@ license = "Apache-2.0"
 transit = { path = "../transit", version = "0.1.0" }
 tracing-proc-macros = { path = "./proc-macros", version = "0.1.0" }
 ################################################################################
-thiserror = "1.0"
 cfg-if = "1.0"
-raw-cpuid = "10.2.0"
-whoami = "1.2"
-uuid = { version = "1.0", features = ["v4"] }
 chrono = "0.4"
-memoffset = "0.6"
-thread-id = "4.0"
 lazy_static = "1.4"
+memoffset = "0.6"
+raw-cpuid = "10.2.0"
+serde = "1.0"
+thiserror = "1.0"
+thread-id = "4.0"
+uuid = { version = "1.0", features = ["v4"] }
+whoami = "1.2"
 
 [dev-dependencies]
 criterion = "0.3"

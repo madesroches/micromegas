@@ -10,9 +10,15 @@ use tracing::{
 
 pub trait StreamBlock {
     fn encode(&self) -> Result<EncodedBlock>;
+    fn encode_bin(&self) -> Result<Vec<u8>>;
 }
 
 impl StreamBlock for LogBlock {
+    fn encode_bin(&self) -> Result<Vec<u8>> {
+        //todo: implement
+        Ok(vec![])
+    }
+
     #[allow(clippy::cast_possible_wrap)]
     fn encode(&self) -> Result<EncodedBlock> {
         let block_id = uuid::Uuid::new_v4().to_string();
@@ -42,6 +48,11 @@ impl StreamBlock for LogBlock {
 }
 
 impl StreamBlock for MetricsBlock {
+    fn encode_bin(&self) -> Result<Vec<u8>> {
+        //todo: implement
+        Ok(vec![])
+    }
+
     #[allow(clippy::cast_possible_wrap)]
     fn encode(&self) -> Result<EncodedBlock> {
         let block_id = uuid::Uuid::new_v4().to_string();
@@ -71,6 +82,11 @@ impl StreamBlock for MetricsBlock {
 }
 
 impl StreamBlock for ThreadBlock {
+    fn encode_bin(&self) -> Result<Vec<u8>> {
+        //todo: implement
+        Ok(vec![])
+    }
+
     #[allow(clippy::cast_possible_wrap)]
     fn encode(&self) -> Result<EncodedBlock> {
         let block_id = uuid::Uuid::new_v4().to_string();

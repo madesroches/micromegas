@@ -48,7 +48,8 @@
 // crate-specific lint exceptions:
 #![allow(unsafe_code, clippy::missing_errors_doc, clippy::inline_always)]
 
-#[derive(Debug, Clone)]
+use serde::{Deserialize, Serialize};
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProcessInfo {
     pub process_id: String,
     pub exe: String,

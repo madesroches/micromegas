@@ -1,17 +1,35 @@
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use crate::event::TracingBlock;
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct StreamDesc {
+    pub stream_id: String,
+    pub process_id: String,
+    pub tags: Vec<String>,
+    pub properties: HashMap<String, String>,
+}
+
+impl StreamDesc {
+    pub fn new(process_id: String, tags: &[String], properties: HashMap<String, String>) -> Self {
+        let stream_id = uuid::Uuid::new_v4().to_string();
+        Self {
+            stream_id,
+            process_id,
+            tags: tags.to_vec(),
+            properties,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct EventStream<Block> {
-    stream_id: String,
-    process_id: String,
+    stream_desc: Arc<StreamDesc>,
     current_block: Arc<Block>,
     full_threshold: AtomicUsize,
-    tags: Vec<String>,
-    properties: HashMap<String, String>,
 }
 
 impl<Block> EventStream<Block>
@@ -24,21 +42,18 @@ where
         tags: &[String],
         properties: HashMap<String, String>,
     ) -> Self {
-        let stream_id = uuid::Uuid::new_v4().to_string();
-        let block = Arc::new(Block::new(buffer_size, stream_id.clone()));
+        let stream_desc = Arc::new(StreamDesc::new(process_id, tags, properties));
+        let block = Arc::new(Block::new(buffer_size, (*stream_desc).stream_id.clone()));
         let max_obj_size = block.hint_max_obj_size();
         Self {
+            stream_desc,
             current_block: block,
             full_threshold: AtomicUsize::new(buffer_size - max_obj_size),
-            stream_id,
-            process_id,
-            tags: tags.to_vec(),
-            properties,
         }
     }
 
     pub fn stream_id(&self) -> &str {
-        self.stream_id.as_str()
+        self.stream_desc.stream_id.as_str()
     }
 
     pub fn set_full(&mut self) {
@@ -69,14 +84,14 @@ where
     }
 
     pub fn process_id(&self) -> &str {
-        &self.process_id
+        &self.stream_desc.process_id
     }
 
     pub fn tags(&self) -> &[String] {
-        &self.tags
+        &self.stream_desc.tags
     }
 
     pub fn properties(&self) -> &HashMap<String, String> {
-        &self.properties
+        &self.stream_desc.properties
     }
 }

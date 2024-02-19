@@ -1,26 +1,57 @@
-use std::collections::HashMap;
-
 use lgn_telemetry_proto::telemetry::{
     ContainerMetadata, Stream as StreamProto, UdtMember as UdtMemberProto,
     UserDefinedType as UserDefinedTypeProto,
 };
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use tracing::event::{EventStream, ExtractDeps, TracingBlock};
+use transit::HeterogeneousQueue;
 use transit::UserDefinedType;
 
-pub fn get_stream_info<Block>(stream: &EventStream<Block>) -> StreamProto
+pub fn get_stream_info_proto<Block>(stream: &EventStream<Block>) -> StreamProto
 where
     Block: TracingBlock,
     <Block as TracingBlock>::Queue: transit::HeterogeneousQueue,
     <<Block as TracingBlock>::Queue as ExtractDeps>::DepsQueue: transit::HeterogeneousQueue,
 {
     let dependencies_meta =
-        make_queue_metadata::<<<Block as TracingBlock>::Queue as ExtractDeps>::DepsQueue>();
-    let obj_meta = make_queue_metadata::<Block::Queue>();
+        make_queue_metadata_proto::<<<Block as TracingBlock>::Queue as ExtractDeps>::DepsQueue>();
+    let obj_meta = make_queue_metadata_proto::<Block::Queue>();
     StreamProto {
         process_id: stream.process_id().to_owned(),
         stream_id: stream.stream_id().to_owned(),
         dependencies_metadata: Some(dependencies_meta),
         objects_metadata: Some(obj_meta),
+        tags: stream.tags().to_owned(),
+        properties: stream.properties().clone(),
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct StreamInfo {
+    pub process_id: String,
+    pub stream_id: String,
+    pub dependencies_metadata: Vec<UserDefinedType>,
+    pub objects_metadata: Vec<UserDefinedType>,
+    pub tags: Vec<String>,
+    pub properties: HashMap<String, String>,
+}
+
+pub fn get_stream_info<Block>(stream: &EventStream<Block>) -> StreamInfo
+where
+    Block: TracingBlock,
+    <Block as TracingBlock>::Queue: transit::HeterogeneousQueue,
+    <<Block as TracingBlock>::Queue as ExtractDeps>::DepsQueue: transit::HeterogeneousQueue,
+{
+    //todo: we should extract secondary udts
+    let dependencies_meta =
+        <<Block as TracingBlock>::Queue as ExtractDeps>::DepsQueue::reflect_contained();
+    let obj_meta = <Block as TracingBlock>::Queue::reflect_contained();
+    StreamInfo {
+        process_id: stream.process_id().to_owned(),
+        stream_id: stream.stream_id().to_owned(),
+        dependencies_metadata: dependencies_meta,
+        objects_metadata: obj_meta,
         tags: stream.tags().to_owned(),
         properties: stream.properties().clone(),
     }
@@ -52,7 +83,7 @@ fn proto_from_udt(
     }
 }
 
-fn make_queue_metadata<Queue: transit::HeterogeneousQueue>() -> ContainerMetadata {
+fn make_queue_metadata_proto<Queue: transit::HeterogeneousQueue>() -> ContainerMetadata {
     let udts = Queue::reflect_contained();
     let mut secondary_types = HashMap::new();
     let mut types: Vec<UserDefinedTypeProto> = udts

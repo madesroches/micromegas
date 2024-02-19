@@ -25,13 +25,13 @@ use clap::{Parser, Subcommand};
 use data_lake_connection::DataLakeConnection;
 use grpc_ingestion_service::GRPCIngestionService;
 use lgn_telemetry_proto::ingestion::telemetry_ingestion_server::TelemetryIngestionServer;
-use telemetry_sink::TelemetryGuardBuilder;
-use tracing::prelude::*;
 use local_data_lake::connect_to_local_data_lake;
 use remote_data_lake::connect_to_remote_data_lake;
 use std::net::SocketAddr;
+use telemetry_sink::TelemetryGuardBuilder;
 use tonic::transport::Server;
 use tower_http::auth::AsyncRequireAuthorizationLayer;
+use tracing::prelude::*;
 use warp::Filter;
 use web_ingestion_service::WebIngestionService;
 
@@ -192,6 +192,7 @@ async fn serve_http(
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _telemetry_guard = TelemetryGuardBuilder::default()
         .with_ctrlc_handling()
+        .with_local_sink_max_level(LevelFilter::Debug)
         .build();
     let args = Cli::parse();
     let data_lake = match &args.spec {

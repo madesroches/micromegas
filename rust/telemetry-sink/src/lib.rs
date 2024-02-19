@@ -10,9 +10,10 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex, Weak};
 
-mod composite_event_sink;
+pub mod composite_event_sink;
 mod grpc_event_sink;
-mod local_event_sink;
+pub mod http_event_sink;
+pub mod local_event_sink;
 pub mod stream_block;
 pub mod stream_info;
 
