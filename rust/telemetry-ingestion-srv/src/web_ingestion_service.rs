@@ -218,6 +218,7 @@ impl WebIngestionService {
     pub async fn insert_process(&self, body: serde_json::value::Value) -> Result<()> {
         let mut connection = self.lake.db_pool.acquire().await?;
         let current_date: chrono::DateTime<chrono::Utc> = chrono::Utc::now();
+        info!("insert_process: {body:?}");
         let tsc_frequency = body["tsc_frequency"]
             .as_str()
             .with_context(|| "reading field tsc_frequency")?

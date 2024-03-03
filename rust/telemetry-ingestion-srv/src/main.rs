@@ -11,28 +11,25 @@
 //#![allow()]
 
 mod data_lake_connection;
-mod grpc_ingestion_service;
 mod local_data_lake;
 mod remote_data_lake;
 mod sql_migration;
 mod sql_telemetry_db;
 mod web_ingestion_service;
 
-use std::{path::PathBuf, sync::Arc};
-
 use anyhow::Result;
+use axum::routing::post;
+use axum::Extension;
+use axum::Json;
+use axum::Router;
 use clap::{Parser, Subcommand};
 use data_lake_connection::DataLakeConnection;
-use grpc_ingestion_service::GRPCIngestionService;
-use lgn_telemetry_proto::ingestion::telemetry_ingestion_server::TelemetryIngestionServer;
 use local_data_lake::connect_to_local_data_lake;
 use remote_data_lake::connect_to_remote_data_lake;
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use telemetry_sink::TelemetryGuardBuilder;
-use tonic::transport::Server;
-use tower_http::auth::AsyncRequireAuthorizationLayer;
 use tracing::prelude::*;
-use warp::Filter;
 use web_ingestion_service::WebIngestionService;
 
 #[derive(Parser, Debug)]
@@ -53,99 +50,66 @@ enum DataLakeSpec {
     Remote { db_uri: String, s3_url: String },
 }
 
-fn with_service(
-    service: WebIngestionService,
-) -> impl Filter<Extract = (WebIngestionService,), Error = std::convert::Infallible> + Clone {
-    warp::any().map(move || service.clone())
-}
-
 async fn insert_process_request(
-    service: WebIngestionService,
-    body: serde_json::value::Value,
-) -> Result<warp::reply::Response, warp::Rejection> {
+    Extension(service): Extension<WebIngestionService>,
+    Json(body): Json<serde_json::Value>,
+) {
+    info!("insert_process_request");
     if let Err(e) = service.insert_process(body).await {
         error!("Error in insert_process_request: {:?}", e);
-        Ok(http::response::Response::builder()
-            .status(500)
-            .body(hyper::body::Body::from("Error in insert_process_request"))
-            .unwrap())
-    } else {
-        Ok(http::response::Response::builder()
-            .status(200)
-            .body(hyper::body::Body::from("OK"))
-            .unwrap())
     }
 }
 
-async fn insert_stream_request(
-    service: WebIngestionService,
-    body: serde_json::value::Value,
-) -> Result<warp::reply::Response, warp::Rejection> {
-    if let Err(e) = service.insert_stream(body).await {
-        error!("Error in insert_stream_request: {:?}", e);
-        Ok(http::response::Response::builder()
-            .status(500)
-            .body(hyper::body::Body::from("Error in insert_process_request"))
-            .unwrap())
-    } else {
-        Ok(http::response::Response::builder()
-            .status(200)
-            .body(hyper::body::Body::from("OK"))
-            .unwrap())
-    }
-}
+// async fn insert_stream_request(
+//     service: WebIngestionService,
+//     body: serde_json::value::Value,
+// ) -> Result<warp::reply::Response, warp::Rejection> {
+//     if let Err(e) = service.insert_stream(body).await {
+//         error!("Error in insert_stream_request: {:?}", e);
+//         Ok(http::response::Response::builder()
+//             .status(500)
+//             .body(hyper::body::Body::from("Error in insert_process_request"))
+//             .unwrap())
+//     } else {
+//         Ok(http::response::Response::builder()
+//             .status(200)
+//             .body(hyper::body::Body::from("OK"))
+//             .unwrap())
+//     }
+// }
 
-async fn insert_block_request(
-    service: WebIngestionService,
-    body: bytes::Bytes,
-) -> Result<warp::reply::Response, warp::Rejection> {
-    if let Err(e) = service.insert_block(body).await {
-        error!("Error in insert_block_request: {:?}", e);
-        Ok(http::response::Response::builder()
-            .status(500)
-            .body(hyper::body::Body::from("Error in insert_block_request"))
-            .unwrap())
-    } else {
-        Ok(http::response::Response::builder()
-            .status(200)
-            .body(hyper::body::Body::from("OK"))
-            .unwrap())
-    }
-}
+// async fn insert_block_request(
+//     service: WebIngestionService,
+//     body: bytes::Bytes,
+// ) -> Result<warp::reply::Response, warp::Rejection> {
+//     if let Err(e) = service.insert_block(body).await {
+//         error!("Error in insert_block_request: {:?}", e);
+//         Ok(http::response::Response::builder()
+//             .status(500)
+//             .body(hyper::body::Body::from("Error in insert_block_request"))
+//             .unwrap())
+//     } else {
+//         Ok(http::response::Response::builder()
+//             .status(200)
+//             .body(hyper::body::Body::from("OK"))
+//             .unwrap())
+//     }
+// }
 
 async fn serve_http(
     args: &Cli,
     lake: DataLakeConnection,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let service = WebIngestionService::new(lake);
-    let web_ingestion_filter =
-        warp::path!("v1" / "spaces" / "default" / "telemetry" / "ingestion" / ..)
-            .and(with_service(service));
 
-    let insert_process_filter = web_ingestion_filter
-        .clone()
-        .and(warp::path("process"))
-        .and(warp::body::json())
-        .and_then(insert_process_request);
+    let app = Router::new()
+        .route("/ingestion/insert_process", post(insert_process_request))
+        .layer(Extension(service));
+    let listener = tokio::net::TcpListener::bind(args.listen_endpoint_http)
+        .await
+        .unwrap();
+    axum::serve(listener, app).await.unwrap();
 
-    let insert_stream_filter = web_ingestion_filter
-        .clone()
-        .and(warp::path("stream"))
-        .and(warp::body::json())
-        .and_then(insert_stream_request);
-
-    let insert_block_filter = web_ingestion_filter
-        .and(warp::path("block"))
-        .and(warp::body::bytes())
-        .and_then(insert_block_request);
-
-    let routes = warp::put().and(
-        insert_process_filter
-            .or(insert_stream_filter)
-            .or(insert_block_filter),
-    );
-
-    warp::serve(routes).run(args.listen_endpoint_http).await;
     Ok(())
 }
 
