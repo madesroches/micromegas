@@ -1,6 +1,6 @@
-use anyhow::{Context, Ok, Result};
 use analytics::find_stream;
 use analytics::prelude::*;
+use anyhow::{Context, Ok, Result};
 use lgn_blob_storage::BlobStorage;
 use lgn_telemetry_proto::analytics::MetricBlockData;
 use lgn_telemetry_proto::analytics::MetricBlockDesc;
@@ -8,10 +8,10 @@ use lgn_telemetry_proto::analytics::MetricBlockManifest;
 use lgn_telemetry_proto::analytics::MetricBlockRequest;
 use lgn_telemetry_proto::analytics::MetricDataPoint;
 use lgn_telemetry_proto::analytics::MetricDesc;
-use tracing::prelude::*;
-use transit::prelude::*;
 use std::collections::HashMap;
 use std::sync::Arc;
+use tracing::prelude::*;
+use transit::prelude::*;
 use xxhash_rust::const_xxh32::xxh32 as const_xxh32;
 
 use crate::cache::DiskCache;

@@ -1,6 +1,6 @@
+use analytics::prelude::*;
 use anyhow::Context;
 use anyhow::Result;
-use analytics::prelude::*;
 use lgn_blob_storage::BlobStorage;
 use lgn_telemetry_proto::analytics::performance_analytics_server::PerformanceAnalytics;
 use lgn_telemetry_proto::analytics::BlockSpansReply;
@@ -34,12 +34,12 @@ use lgn_telemetry_proto::analytics::{
     CumulativeCallGraphBlockRequest, CumulativeCallGraphManifest,
     CumulativeCallGraphManifestRequest,
 };
-use tracing::dispatch::init_thread_stream;
-use tracing::flush_monitor::FlushMonitor;
-use tracing::prelude::*;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
+use tracing::dispatch::init_thread_stream;
+use tracing::flush_monitor::FlushMonitor;
+use tracing::prelude::*;
 
 use crate::cache::DiskCache;
 use crate::call_tree::reduce_lod;

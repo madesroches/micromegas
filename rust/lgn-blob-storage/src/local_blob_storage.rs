@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use tracing::prelude::*;
 use std::path::PathBuf;
 use tokio::fs;
+use tracing::prelude::*;
 
 use super::{BlobStats, BoxedAsyncRead, BoxedAsyncWrite, StreamingBlobStorage};
 

@@ -59,7 +59,7 @@ where
     }
 }
 
-impl<'a, SV> Validation<SV>
+impl<SV> Validation<SV>
 where
     SV: SignatureValidation,
 {

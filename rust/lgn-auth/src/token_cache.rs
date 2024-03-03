@@ -6,9 +6,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use directories::ProjectDirs;
-use tracing::{debug, warn};
 use openidconnect::AccessToken;
 use tokio::sync::{Mutex, MutexGuard};
+use tracing::{debug, warn};
 
 use crate::authenticator::{Authenticator, AuthenticatorWithClaims};
 use crate::UserInfo;
@@ -54,10 +54,8 @@ where
     /// Read the token set from the cache.
     pub fn read_token_set_from_cache(&self) -> Result<ClientTokenSet> {
         let path = self.get_tokens_file_path();
-
-        let file = File::open(&path)?;
+        let file = File::open(path)?;
         let reader = BufReader::new(file);
-
         serde_json::from_reader(reader).map_err(|e| {
             Error::Internal(format!("failed to parse JSON token set from cache: {}", e))
         })

@@ -15,11 +15,11 @@ use lgn_telemetry_proto::decompress;
 use lgn_telemetry_proto::telemetry::{
     BlockMetadata, ContainerMetadata, Process as ProcessInfo, Stream as StreamInfo,
 };
-use tracing::prelude::*;
-use transit::{parse_object_buffer, read_dependencies, Member, UserDefinedType, Value};
 use prost::Message;
 use sqlx::any::AnyRow;
 use sqlx::Row;
+use tracing::prelude::*;
+use transit::{parse_object_buffer, read_dependencies, Member, UserDefinedType, Value};
 
 use crate::time::get_tsc_frequency_inverse_ms;
 

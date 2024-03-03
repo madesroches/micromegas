@@ -78,7 +78,7 @@ impl CompositeSink {
         target: &str,
         level_filters: &[(String, LevelFilter)],
     ) -> Option<LevelFilter> {
-        for &(ref t, ref l) in level_filters.iter() {
+        for (t, l) in level_filters.iter() {
             if target.starts_with(t) {
                 return Some(*l);
             }
@@ -88,7 +88,7 @@ impl CompositeSink {
 }
 
 impl EventSink for CompositeSink {
-    fn on_startup(&self, process_info: ProcessInfo) {
+    fn on_startup(&self, process_info: Arc<ProcessInfo>) {
         if self.sinks.len() == 1 {
             self.sinks[0].1.on_startup(process_info);
         } else {

@@ -1,8 +1,8 @@
 use std::{marker::PhantomData, sync::Arc};
 
 use hyper::{Request, Response, StatusCode};
-use tracing::debug;
 use tower_http::auth::AuthorizeRequest;
+use tracing::debug;
 
 use super::{
     signature_validation::{NoSignatureValidation, SignatureValidation},

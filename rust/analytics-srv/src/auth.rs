@@ -1,9 +1,9 @@
-use tracing::prelude::*;
 use std::task::Poll;
 use thiserror::Error;
 use tonic::codegen::BoxFuture;
 use tonic::codegen::StdError;
 use tower::{Layer, Service};
+use tracing::prelude::*;
 
 #[derive(Error, Debug)]
 pub enum AuthError {

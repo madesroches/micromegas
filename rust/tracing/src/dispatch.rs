@@ -353,7 +353,7 @@ impl Dispatch {
         let cpu_brand = cpuid
             .get_processor_brand_string()
             .map_or_else(|| "unknown".to_owned(), |b| b.as_str().to_owned());
-        let process_info = ProcessInfo {
+        let process_info = Arc::new(ProcessInfo {
             process_id: self.process_id.clone(),
             username: whoami::username(),
             realname: whoami::realname(),
@@ -368,7 +368,7 @@ impl Dispatch {
             start_time,
             start_ticks,
             parent_process_id: parent_process,
-        };
+        });
         self.sink.on_startup(process_info);
     }
 

@@ -1,7 +1,7 @@
 use futures_util::future::BoxFuture;
 use hyper::{Request, Response, StatusCode};
-use tracing::{debug, warn};
 use tower_http::auth::AsyncAuthorizeRequest;
+use tracing::{debug, warn};
 
 use super::{ApiKey, ApiKeyValidator};
 
@@ -28,7 +28,7 @@ where
     pub fn new(validator: Validator) -> Self {
         Self {
             validator,
-            _phantom: std::marker::PhantomData::default(),
+            _phantom: std::marker::PhantomData {},
         }
     }
 

@@ -5,12 +5,12 @@ use std::{
 
 use dyn_clone::DynClone;
 use http::{Request, Response, StatusCode};
-use tracing::{debug, info};
 use tonic::{
     body::BoxBody,
     codegen::{BoxFuture, StdError},
     transport::NamedService,
 };
+use tracing::{debug, info};
 
 use super::{Error, Result};
 

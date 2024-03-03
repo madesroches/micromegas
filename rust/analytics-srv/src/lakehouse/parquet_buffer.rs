@@ -1,6 +1,5 @@
 use super::column::TableColumn;
 use anyhow::{Context, Result};
-use tracing::prelude::*;
 use parquet::file::properties::WriterProperties;
 use parquet::file::writer::FileWriter;
 use parquet::file::writer::SerializedFileWriter;
@@ -10,6 +9,7 @@ use std::io::Cursor;
 use std::path::Path;
 use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
+use tracing::prelude::*;
 
 #[derive(Clone)]
 pub struct InMemStream {

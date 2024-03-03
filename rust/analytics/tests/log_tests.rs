@@ -1,6 +1,8 @@
 use analytics::log_entry_from_value;
 use analytics::parse_block;
 use lgn_telemetry_proto::telemetry::Process as ProcessInfo;
+use std::collections::HashMap;
+use std::sync::Arc;
 use telemetry_sink::stream_block::StreamBlock;
 use telemetry_sink::stream_info::get_stream_info;
 use telemetry_sink::TelemetryGuard;
@@ -10,8 +12,6 @@ use tracing::logs::LogStaticStrInteropEvent;
 use tracing::logs::LogStream;
 use tracing::logs::LogStringInteropEvent;
 use transit::Value;
-use std::collections::HashMap;
-use std::sync::Arc;
 
 #[test]
 fn test_log_interop_metadata() {

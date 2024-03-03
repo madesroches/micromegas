@@ -2,7 +2,7 @@
 //! & unit tests
 
 // crate-specific lint exceptions:
-//#![allow()]
+//#![]
 
 use std::process::Command;
 use std::{
@@ -17,6 +17,7 @@ pub mod jail;
 
 //std::fs::remove_dir_all leaves read-only files and reports an error
 #[span_fn]
+#[allow(clippy::permissions_set_readonly_false)]
 fn force_delete_all(dir: &Path) {
     fn visit_dirs(dir: &Path, cb: &dyn Fn(&DirEntry)) -> io::Result<()> {
         if dir.is_dir() {

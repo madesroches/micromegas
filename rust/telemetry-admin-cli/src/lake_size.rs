@@ -1,9 +1,9 @@
 use anyhow::Result;
 use lgn_blob_storage::BlobStorage;
-use tracing::prelude::*;
 use sqlx::Executor;
 use sqlx::Row;
 use std::sync::Arc;
+use tracing::prelude::*;
 
 #[allow(clippy::cast_possible_wrap)]
 pub async fn fill_block_sizes(
