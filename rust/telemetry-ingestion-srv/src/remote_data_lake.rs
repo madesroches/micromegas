@@ -4,11 +4,11 @@ use crate::sql_migration::read_schema_version;
 use crate::sql_migration::LATEST_SCHEMA_VERSION;
 use anyhow::{bail, Context, Result};
 use lgn_blob_storage::{AwsS3BlobStorage, AwsS3Url};
-use tracing::prelude::*;
 use sqlx::migrate::MigrateDatabase;
 use sqlx::Row;
 use std::str::FromStr;
 use std::sync::Arc;
+use tracing::prelude::*;
 
 async fn acquire_lock(connection: &mut sqlx::AnyConnection, name: &str) -> Result<()> {
     let row = sqlx::query("SELECT GET_LOCK(?, -1) as result;")

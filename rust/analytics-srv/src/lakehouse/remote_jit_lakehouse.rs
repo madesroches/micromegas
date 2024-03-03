@@ -6,15 +6,15 @@ use crate::{
     },
     scope::ScopeHashMap,
 };
+use analytics::time::ConvertTicks;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use analytics::time::ConvertTicks;
 use lgn_blob_storage::{AwsS3Url, BlobStorage};
 use lgn_telemetry_proto::analytics::{BlockSpansReply, ScopeDesc, SpanBlockLod};
-use tracing::prelude::*;
 use parquet::file::serialized_reader::SerializedFileReader;
 use parquet::{file::reader::FileReader, record::RowAccessor};
 use std::sync::Arc;
+use tracing::prelude::*;
 
 use super::{
     scope_table::{make_scopes_table_writer, ScopeRowGroup},

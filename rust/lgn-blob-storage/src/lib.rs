@@ -12,9 +12,9 @@ mod lz4_blob_storage_adapter;
 
 pub use aws_s3_blob_storage::{AwsS3BlobStorage, AwsS3Url};
 pub use error::{Error, Result};
-use tracing::prelude::*;
 pub use local_blob_storage::LocalBlobStorage;
 pub use lz4_blob_storage_adapter::Lz4BlobStorageAdapter;
+use tracing::prelude::*;
 
 use async_trait::async_trait;
 use std::{path::Path, pin::Pin};

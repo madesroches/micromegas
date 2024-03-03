@@ -96,7 +96,7 @@ impl ThreadSpanGuard {
     pub fn new(thread_span_desc: &'static SpanMetadata) -> Self {
         let guard = Self {
             thread_span_desc,
-            _dummy_ptr: std::marker::PhantomData{},
+            _dummy_ptr: std::marker::PhantomData {},
         };
         on_begin_scope(thread_span_desc);
         guard
@@ -120,7 +120,7 @@ impl ThreadNamedSpanGuard {
         let guard = Self {
             thread_span_location,
             name,
-            _dummy_ptr: std::marker::PhantomData{},
+            _dummy_ptr: std::marker::PhantomData {},
         };
         on_begin_named_scope(guard.thread_span_location, guard.name);
         guard

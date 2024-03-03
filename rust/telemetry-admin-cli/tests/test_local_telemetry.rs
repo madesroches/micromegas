@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
 use analytics::{alloc_sql_pool, find_process};
+use anyhow::{Context, Result};
 use lgn_test_utils::{create_test_dir, syscall};
 use sqlx::Row;
 

@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use anyhow::Result;
 use analytics::prelude::*;
 use analytics::time::ConvertTicks;
+use anyhow::Result;
 use lgn_blob_storage::BlobStorage;
 use lgn_telemetry_proto::analytics::AsyncSpanEvent;
 use lgn_telemetry_proto::analytics::CallTreeNode;

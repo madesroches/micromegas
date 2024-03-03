@@ -11,16 +11,16 @@ use super::span_table::{
 use crate::lakehouse::bytes_chunk_reader::BytesChunkReader;
 use crate::scope::ScopeHashMap;
 use crate::{call_tree::process_thread_block, lakehouse::jit_lakehouse::JitLakehouse};
+use analytics::time::ConvertTicks;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use analytics::time::ConvertTicks;
 use lgn_blob_storage::BlobStorage;
 use lgn_telemetry_proto::analytics::{BlockSpansReply, ScopeDesc, SpanBlockLod};
-use tracing::prelude::*;
 use parquet::file::reader::FileReader;
 use parquet::file::serialized_reader::SerializedFileReader;
 use parquet::record::RowAccessor;
 use tokio::io::AsyncReadExt;
+use tracing::prelude::*;
 
 use super::scope_table::write_scopes_parquet;
 

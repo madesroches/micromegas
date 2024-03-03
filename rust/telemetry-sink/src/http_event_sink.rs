@@ -22,8 +22,8 @@ use crate::stream_info::{get_stream_info, StreamInfo};
 
 #[derive(Debug)]
 enum SinkEvent {
-    Startup(ProcessInfo),
-    InitStream(StreamInfo),
+    Startup(Arc<ProcessInfo>),
+    InitStream(Arc<StreamInfo>),
     ProcessLogBlock(Arc<LogBlock>),
     ProcessMetricsBlock(Arc<MetricsBlock>),
     ProcessThreadBlock(Arc<ThreadBlock>),
@@ -105,9 +105,9 @@ impl HttpEventSink {
     async fn push_process(
         client: &mut reqwest::Client,
         root_path: &str,
-        process_info: ProcessInfo,
+        process_info: Arc<ProcessInfo>,
     ) {
-        let body_res = serde_json::to_string(&process_info);
+        let body_res = serde_json::to_string(&*process_info);
         if let Err(e) = body_res {
             eprintln!("error serializing process info: {e:?}");
             return;
@@ -125,8 +125,12 @@ impl HttpEventSink {
         }
     }
 
-    async fn push_stream(client: &mut reqwest::Client, root_path: &str, stream_info: StreamInfo) {
-        let body_res = serde_json::to_string(&stream_info);
+    async fn push_stream(
+        client: &mut reqwest::Client,
+        root_path: &str,
+        stream_info: Arc<StreamInfo>,
+    ) {
+        let body_res = serde_json::to_string(&*stream_info);
         if let Err(e) = body_res {
             eprintln!("error serializing stream_desc: {e:?}");
             return;
@@ -208,34 +212,16 @@ impl HttpEventSink {
                         Self::push_stream(&mut client, &addr, stream_info).await;
                     }
                     SinkEvent::ProcessLogBlock(buffer) => {
-                        Self::push_block(
-                            &mut client,
-                            &addr,
-                            &*buffer,
-                            &*queue_size,
-                            max_queue_size,
-                        )
-                        .await;
+                        Self::push_block(&mut client, &addr, &*buffer, &queue_size, max_queue_size)
+                            .await;
                     }
                     SinkEvent::ProcessMetricsBlock(buffer) => {
-                        Self::push_block(
-                            &mut client,
-                            &addr,
-                            &*buffer,
-                            &*queue_size,
-                            max_queue_size,
-                        )
-                        .await;
+                        Self::push_block(&mut client, &addr, &*buffer, &queue_size, max_queue_size)
+                            .await;
                     }
                     SinkEvent::ProcessThreadBlock(buffer) => {
-                        Self::push_block(
-                            &mut client,
-                            &addr,
-                            &*buffer,
-                            &*queue_size,
-                            max_queue_size,
-                        )
-                        .await;
+                        Self::push_block(&mut client, &addr, &*buffer, &queue_size, max_queue_size)
+                            .await;
                     }
                 },
                 Err(_e) => {
@@ -267,20 +253,8 @@ impl HttpEventSink {
 }
 
 impl EventSink for HttpEventSink {
-    fn on_startup(&self, process_info: tracing::ProcessInfo) {
-        self.send(SinkEvent::Startup(ProcessInfo {
-            process_id: process_info.process_id,
-            exe: process_info.exe,
-            username: process_info.username,
-            realname: process_info.realname,
-            computer: process_info.computer,
-            distro: process_info.distro,
-            cpu_brand: process_info.cpu_brand,
-            tsc_frequency: process_info.tsc_frequency,
-            start_time: process_info.start_time,
-            start_ticks: process_info.start_ticks,
-            parent_process_id: process_info.parent_process_id,
-        }));
+    fn on_startup(&self, process_info: Arc<tracing::ProcessInfo>) {
+        self.send(SinkEvent::Startup(process_info));
     }
 
     fn on_shutdown(&self) {
@@ -295,7 +269,7 @@ impl EventSink for HttpEventSink {
     fn on_log(&self, _metadata: &LogMetadata, _time: i64, _args: fmt::Arguments<'_>) {}
 
     fn on_init_log_stream(&self, log_stream: &LogStream) {
-        self.send(SinkEvent::InitStream(get_stream_info(log_stream)));
+        self.send(SinkEvent::InitStream(Arc::new(get_stream_info(log_stream))));
     }
 
     fn on_process_log_block(&self, log_block: Arc<LogBlock>) {
@@ -303,7 +277,9 @@ impl EventSink for HttpEventSink {
     }
 
     fn on_init_metrics_stream(&self, metrics_stream: &MetricsStream) {
-        self.send(SinkEvent::InitStream(get_stream_info(metrics_stream)));
+        self.send(SinkEvent::InitStream(Arc::new(get_stream_info(
+            metrics_stream,
+        ))));
     }
 
     fn on_process_metrics_block(&self, metrics_block: Arc<MetricsBlock>) {
@@ -311,7 +287,9 @@ impl EventSink for HttpEventSink {
     }
 
     fn on_init_thread_stream(&self, thread_stream: &ThreadStream) {
-        self.send(SinkEvent::InitStream(get_stream_info(thread_stream)));
+        self.send(SinkEvent::InitStream(Arc::new(get_stream_info(
+            thread_stream,
+        ))));
     }
 
     fn on_process_thread_block(&self, thread_block: Arc<ThreadBlock>) {

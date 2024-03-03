@@ -41,10 +41,10 @@ use lgn_blob_storage::{
 };
 use lgn_telemetry_proto::analytics::performance_analytics_server::PerformanceAnalyticsServer;
 use lgn_telemetry_proto::health::health_server::HealthServer;
-use telemetry_sink::TelemetryGuardBuilder;
-use tracing::prelude::*;
 use std::net::SocketAddr;
+use telemetry_sink::TelemetryGuardBuilder;
 use tonic::transport::Server;
+use tracing::prelude::*;
 
 #[derive(Parser, Debug)]
 #[clap(name = "Legion Performance Analytics Server")]

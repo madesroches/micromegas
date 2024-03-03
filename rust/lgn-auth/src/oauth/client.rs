@@ -7,7 +7,6 @@ use hyper::{
     service::{make_service_fn, service_fn},
     Body, Server,
 };
-use tracing::{debug, info, warn};
 use openidconnect::{
     core::{CoreAuthenticationFlow, CoreClient, CoreProviderMetadata},
     reqwest::async_http_client,
@@ -16,6 +15,7 @@ use openidconnect::{
     TokenResponse,
 };
 use tokio::sync::{oneshot, Mutex};
+use tracing::{debug, info, warn};
 
 use crate::{
     authenticator::{Authenticator, AuthenticatorWithClaims},
@@ -396,7 +396,7 @@ impl Authenticator for OAuthClient {
 
                 if let Some(extra_params) = extra_params {
                     for (name, value) in extra_params {
-                        authorization_url = authorization_url.add_extra_param(&*name, &*value);
+                        authorization_url = authorization_url.add_extra_param(name, value);
                     }
                 }
 

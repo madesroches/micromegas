@@ -3,7 +3,7 @@
 //! Provides logging, metrics, memory and performance profiling
 
 // crate-specific lint exceptions:
-#![allow(unsafe_code, clippy::missing_errors_doc)]
+#![allow(unsafe_code, clippy::missing_errors_doc, clippy::new_without_default)]
 
 use std::any::TypeId;
 use std::collections::HashMap;
@@ -11,7 +11,6 @@ use std::str::FromStr;
 use std::sync::{Arc, Mutex, Weak};
 
 pub mod composite_event_sink;
-mod grpc_event_sink;
 pub mod http_event_sink;
 pub mod local_event_sink;
 pub mod stream_block;
@@ -31,8 +30,9 @@ pub type EncodedBlock = lgn_telemetry_proto::telemetry::Block;
 pub use lgn_telemetry_proto::telemetry::ContainerMetadata;
 
 use composite_event_sink::CompositeSink;
-use grpc_event_sink::GRPCEventSink;
 use local_event_sink::LocalEventSink;
+
+use crate::http_event_sink::HttpEventSink;
 
 pub struct TelemetryGuardBuilder {
     logs_buffer_size: usize,
@@ -44,7 +44,7 @@ pub struct TelemetryGuardBuilder {
     interop_max_level_override: Option<LevelFilter>,
     local_sink_enabled: bool,
     local_sink_max_level: LevelFilter,
-    grpc_sink_max_level: LevelFilter,
+    telemetry_sink_max_level: LevelFilter,
     extra_sinks: HashMap<TypeId, (LevelFilter, BoxedEventSink)>,
 }
 
@@ -69,8 +69,8 @@ impl Default for TelemetryGuardBuilder {
                 .unwrap()),
             )
             .unwrap_or(LevelFilter::Off),
-            grpc_sink_max_level: LevelFilter::from_str(
-                &(lgn_config::get_or_else("logging.grpc_sink_max_level", || {
+            telemetry_sink_max_level: LevelFilter::from_str(
+                &(lgn_config::get_or_else("logging.telemetry_sink_max_level", || {
                     if cfg!(debug_assertions) {
                         "DEBUG".to_owned()
                     } else {
@@ -167,18 +167,14 @@ impl TelemetryGuardBuilder {
                 let mut sinks: Vec<(LevelFilter, BoxedEventSink)> = vec![];
                 if let Ok(url) = std::env::var("LGN_TELEMETRY_URL") {
                     sinks.push((
-                        self.grpc_sink_max_level,
-                        Box::new(GRPCEventSink::new(&url, self.max_queue_size)),
+                        self.telemetry_sink_max_level,
+                        Box::new(HttpEventSink::new(&url, self.max_queue_size)),
                     ));
                 }
                 if self.local_sink_enabled {
                     sinks.push((self.local_sink_max_level, Box::new(LocalEventSink::new())));
                 }
-                let mut extra_sinks = self
-                    .extra_sinks
-                    .into_iter()
-                    .map(|(_type_id, sink)| sink)
-                    .collect();
+                let mut extra_sinks = self.extra_sinks.into_values().collect();
                 sinks.append(&mut extra_sinks);
 
                 let sink: BoxedEventSink = Box::new(CompositeSink::new(
@@ -213,7 +209,7 @@ pub struct TelemetryGuard {
 }
 
 impl TelemetryGuard {
-    pub fn default() -> anyhow::Result<Self> {
+    pub fn new() -> anyhow::Result<Self> {
         TelemetryGuardBuilder::default().build()
     }
 }

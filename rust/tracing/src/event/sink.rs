@@ -10,7 +10,7 @@ use crate::{
 pub type BoxedEventSink = Box<dyn EventSink>;
 
 pub trait EventSink {
-    fn on_startup(&self, process_info: ProcessInfo);
+    fn on_startup(&self, process_info: Arc<ProcessInfo>);
     fn on_shutdown(&self);
 
     fn on_log_enabled(&self, metadata: &LogMetadata) -> bool;
@@ -30,7 +30,7 @@ pub trait EventSink {
 pub struct NullEventSink {}
 
 impl EventSink for NullEventSink {
-    fn on_startup(&self, _: ProcessInfo) {}
+    fn on_startup(&self, _: Arc<ProcessInfo>) {}
     fn on_shutdown(&self) {}
 
     fn on_log_enabled(&self, _: &LogMetadata) -> bool {

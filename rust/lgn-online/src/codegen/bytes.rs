@@ -18,7 +18,7 @@ impl<'de> Deserialize<'de> for Bytes {
         D: Deserializer<'de>,
     {
         let s = String::deserialize(deserializer)?;
-        base64::decode_config(&s, base64::URL_SAFE_NO_PAD)
+        base64::decode_config(s, base64::URL_SAFE_NO_PAD)
             .map(Bytes)
             .map_err(D::Error::custom)
     }

@@ -1,9 +1,9 @@
 use lgn_telemetry_proto::ingestion::telemetry_ingestion_server::TelemetryIngestion;
 use lgn_telemetry_proto::ingestion::InsertReply;
 use lgn_telemetry_proto::telemetry::{Block, Process, Stream};
-use tracing::{async_span_scope, error, info};
 use prost::Message;
 use tonic::{Request, Response, Status};
+use tracing::{async_span_scope, error, info};
 
 use crate::data_lake_connection::DataLakeConnection;
 
@@ -44,7 +44,7 @@ impl TelemetryIngestion for GRPCIngestionService {
                         .bind(process_info.cpu_brand)
                         .bind(process_info.tsc_frequency as i64)
                         .bind(process_info.start_time)
-                        .bind(process_info.start_ticks as i64)
+                        .bind(process_info.start_ticks)
                         .bind(current_date.format("%Y-%m-%d").to_string())
                         .bind(process_info.parent_process_id.clone())
                         .execute(&mut connection)
@@ -167,9 +167,9 @@ impl TelemetryIngestion for GRPCIngestionService {
             .bind(block.block_id.clone())
             .bind(block.stream_id)
             .bind(block.begin_time)
-            .bind(block.begin_ticks as i64)
+            .bind(block.begin_ticks)
             .bind(block.end_time)
-            .bind(block.end_ticks as i64)
+            .bind(block.end_ticks)
             .bind(block.nb_objects)
             .bind(payload_size as i64)
             .execute(&mut connection)

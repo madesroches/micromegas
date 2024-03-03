@@ -40,7 +40,6 @@ use lgn_online::{
     client::AuthenticatedClient,
     grpc::{GrpcClient, GrpcWebClient},
 };
-use tracing::{error, info};
 use serde::Deserialize;
 use sum::{
     summer_client::SummerClient,
@@ -49,6 +48,7 @@ use sum::{
 };
 use tonic::{Request, Response, Status};
 use tower_http::auth::RequireAuthorizationLayer;
+use tracing::{error, info};
 
 #[derive(Clone, Default, Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
 struct Claims {

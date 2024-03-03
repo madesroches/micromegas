@@ -13,21 +13,21 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 
+use analytics::alloc_sql_pool;
 use anyhow::bail;
 use anyhow::Context;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use lake_size::{delete_old_blocks, fill_block_sizes};
-use analytics::alloc_sql_pool;
 use lgn_blob_storage::AwsS3BlobStorage;
 use lgn_blob_storage::AwsS3Url;
 use lgn_blob_storage::BlobStorage;
 use lgn_blob_storage::LocalBlobStorage;
-use telemetry_sink::TelemetryGuard;
 use process_log::{print_logs_by_process, print_process_log};
 use process_search::print_process_search;
 use process_search::print_process_tree;
 use process_search::print_recent_processes;
+use telemetry_sink::TelemetryGuard;
 
 use crate::{
     process_metrics::print_process_metrics,
@@ -106,7 +106,7 @@ enum Commands {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let _telemetry_guard = TelemetryGuard::default().unwrap();
+    let _telemetry_guard = TelemetryGuard::new().unwrap();
 
     let args = Cli::parse();
 

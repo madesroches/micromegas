@@ -2,10 +2,10 @@ use crate::data_lake_connection::DataLakeConnection;
 use anyhow::Context;
 use anyhow::Result;
 use lgn_telemetry_proto::telemetry::{BlockPayload, ContainerMetadata, UdtMember, UserDefinedType};
+use prost::Message;
 use tracing::prelude::*;
 use transit::parse_string::parse_string;
 use transit::read_any;
-use prost::Message;
 
 fn parse_json_udt_member(json_udt_member: &serde_json::value::Value) -> Result<UdtMember> {
     let name = json_udt_member["name"]

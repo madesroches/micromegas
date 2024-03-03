@@ -49,7 +49,7 @@ impl LocalEventSink {
 }
 
 impl EventSink for LocalEventSink {
-    fn on_startup(&self, _proc_info: ProcessInfo) {}
+    fn on_startup(&self, _proc_info: Arc<ProcessInfo>) {}
     fn on_shutdown(&self) {}
 
     fn on_log_enabled(&self, _metadata: &LogMetadata) -> bool {
