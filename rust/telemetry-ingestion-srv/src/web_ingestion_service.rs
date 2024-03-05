@@ -15,15 +15,11 @@ fn parse_json_udt_member(json_udt_member: &serde_json::value::Value) -> Result<U
         .as_str()
         .with_context(|| "reading member type_name")?;
     let offset = json_udt_member["offset"]
-        .as_str()
-        .with_context(|| "reading member offset")?
-        .parse::<u32>()
-        .with_context(|| "parsing member offset")?;
+        .as_u64()
+        .with_context(|| "reading member offset")? as u32;
     let size = json_udt_member["size"]
-        .as_str()
-        .with_context(|| "reading member size")?
-        .parse::<u32>()
-        .with_context(|| "parsing member size")?;
+        .as_u64()
+        .with_context(|| "reading member size")? as u32;
     let is_reference = json_udt_member["is_reference"]
         .as_bool()
         .with_context(|| "reading member is_reference")?;
@@ -41,10 +37,8 @@ fn parse_json_udt(json_udt: &serde_json::value::Value) -> Result<UserDefinedType
         .as_str()
         .with_context(|| "reading udt name")?;
     let size = json_udt["size"]
-        .as_str()
-        .with_context(|| "reading udt size")?
-        .parse::<u32>()
-        .with_context(|| "parsing udt size")?;
+        .as_u64()
+        .with_context(|| "reading udt size")? as u32;
     let is_reference = json_udt["is_reference"]
         .as_bool()
         .with_context(|| "reading udt is_reference")?;

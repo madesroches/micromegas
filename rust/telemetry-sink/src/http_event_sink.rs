@@ -114,10 +114,10 @@ impl HttpEventSink {
         info!("request: {request:?}");
         match request.send().await {
             Ok(response) => {
-                info!("http response: {response:?}");
+                info!("insert_process response: {response:?}");
             }
             Err(e) => {
-                eprintln!("insert_process failed: {e:?}");
+                error!("insert_process failed: {e:?}");
             }
         }
     }
@@ -127,20 +127,17 @@ impl HttpEventSink {
         root_path: &str,
         stream_info: Arc<StreamInfo>,
     ) {
-        let body_res = serde_json::to_string(&*stream_info);
-        if let Err(e) = body_res {
-            eprintln!("error serializing stream_desc: {e:?}");
-            return;
-        }
         match client
             .post(format!("{root_path}/ingestion/insert_stream"))
-            .body(body_res.unwrap())
+            .json(&*stream_info)
             .send()
             .await
         {
-            Ok(_response) => {}
+            Ok(response) => {
+                info!("insert_stream response: {response:?}");
+            }
             Err(e) => {
-                eprintln!("insert_stream failed: {e:?}");
+                error!("insert_stream failed: {e:?}");
             }
         }
     }
