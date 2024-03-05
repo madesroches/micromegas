@@ -60,23 +60,16 @@ async fn insert_process_request(
     }
 }
 
-// async fn insert_stream_request(
-//     service: WebIngestionService,
-//     body: serde_json::value::Value,
-// ) -> Result<warp::reply::Response, warp::Rejection> {
-//     if let Err(e) = service.insert_stream(body).await {
-//         error!("Error in insert_stream_request: {:?}", e);
-//         Ok(http::response::Response::builder()
-//             .status(500)
-//             .body(hyper::body::Body::from("Error in insert_process_request"))
-//             .unwrap())
-//     } else {
-//         Ok(http::response::Response::builder()
-//             .status(200)
-//             .body(hyper::body::Body::from("OK"))
-//             .unwrap())
-//     }
-// }
+async fn insert_stream_request(
+    Extension(service): Extension<WebIngestionService>,
+    Json(body): Json<serde_json::Value>,
+) {
+    info!("insert_stream_request");
+    if let Err(e) = service.insert_stream(body).await {
+        error!("Error in insert_stream_request: {:?}", e);
+    }
+}
+
 
 // async fn insert_block_request(
 //     service: WebIngestionService,
@@ -104,6 +97,7 @@ async fn serve_http(
 
     let app = Router::new()
         .route("/ingestion/insert_process", post(insert_process_request))
+        .route("/ingestion/insert_stream", post(insert_stream_request))
         .layer(Extension(service));
     let listener = tokio::net::TcpListener::bind(args.listen_endpoint_http)
         .await
