@@ -18,6 +18,7 @@ mod sql_telemetry_db;
 mod web_ingestion_service;
 
 use anyhow::Result;
+use axum::extract::DefaultBodyLimit;
 use axum::routing::post;
 use axum::Extension;
 use axum::Json;
@@ -29,6 +30,7 @@ use remote_data_lake::connect_to_remote_data_lake;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use telemetry_sink::TelemetryGuardBuilder;
+use tower_http::limit::RequestBodyLimitLayer;
 use tracing::prelude::*;
 use web_ingestion_service::WebIngestionService;
 
@@ -70,24 +72,18 @@ async fn insert_stream_request(
     }
 }
 
-
-// async fn insert_block_request(
-//     service: WebIngestionService,
-//     body: bytes::Bytes,
-// ) -> Result<warp::reply::Response, warp::Rejection> {
-//     if let Err(e) = service.insert_block(body).await {
-//         error!("Error in insert_block_request: {:?}", e);
-//         Ok(http::response::Response::builder()
-//             .status(500)
-//             .body(hyper::body::Body::from("Error in insert_block_request"))
-//             .unwrap())
-//     } else {
-//         Ok(http::response::Response::builder()
-//             .status(200)
-//             .body(hyper::body::Body::from("OK"))
-//             .unwrap())
-//     }
-// }
+async fn insert_block_request(
+    Extension(service): Extension<WebIngestionService>,
+    body: bytes::Bytes,
+) {
+    if body.is_empty() {
+        error!("insert_block_request: empty body");
+        return;
+    }
+    if let Err(e) = service.insert_block(body).await {
+        error!("Error in insert_block_request: {:?}", e);
+    }
+}
 
 async fn serve_http(
     args: &Cli,
@@ -98,6 +94,9 @@ async fn serve_http(
     let app = Router::new()
         .route("/ingestion/insert_process", post(insert_process_request))
         .route("/ingestion/insert_stream", post(insert_stream_request))
+        .route("/ingestion/insert_block", post(insert_block_request))
+        .layer(DefaultBodyLimit::disable())
+        .layer(RequestBodyLimitLayer::new(100 * 1024 * 1024))
         .layer(Extension(service));
     let listener = tokio::net::TcpListener::bind(args.listen_endpoint_http)
         .await
