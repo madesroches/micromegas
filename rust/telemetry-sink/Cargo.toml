@@ -17,6 +17,7 @@ lgn-config = { path = "../lgn-config" }
 anyhow = "1.0"
 async-trait = "0.1"
 chrono = "0.4"
+ciborium = "0.2.2"
 colored = { version = "2", optional = true }
 ctrlc = "3.2.0"
 lazy_static = "1.4"

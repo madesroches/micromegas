@@ -1,11 +1,11 @@
 use crate::data_lake_connection::DataLakeConnection;
 use anyhow::Context;
 use anyhow::Result;
-use lgn_telemetry_proto::telemetry::{BlockPayload, ContainerMetadata, UdtMember, UserDefinedType};
+use bytes::Buf;
+use lgn_telemetry_proto::telemetry::{ContainerMetadata, UdtMember, UserDefinedType};
 use prost::Message;
+use telemetry_sink::block_wire_format::{self, encode_cbor};
 use tracing::prelude::*;
-use transit::parse_string::parse_string;
-use transit::read_any;
 
 fn parse_json_udt_member(json_udt_member: &serde_json::value::Value) -> Result<UdtMember> {
     let name = json_udt_member["name"]
@@ -69,21 +69,6 @@ fn parse_json_container_metadata(
     Ok(ContainerMetadata { types: udts })
 }
 
-#[allow(unsafe_code)]
-fn read_binary_chunk(buffer: &[u8], cursor: &mut usize) -> Result<Vec<u8>> {
-    unsafe {
-        let chunk_size_bytes = read_any::<u32>(buffer.as_ptr().add(*cursor)) as usize;
-        *cursor += std::mem::size_of::<u32>();
-        let end = *cursor + chunk_size_bytes;
-        if end > buffer.len() {
-            anyhow::bail!("binary chunk larger than buffer");
-        }
-        let chunk_buffer = &buffer[(*cursor)..end];
-        *cursor += chunk_size_bytes;
-        Ok(chunk_buffer.to_vec())
-    }
-}
-
 #[derive(Clone)]
 pub struct WebIngestionService {
     lake: DataLakeConnection,
@@ -96,73 +81,24 @@ impl WebIngestionService {
 
     #[span_fn]
     pub async fn insert_block(&self, body: bytes::Bytes) -> Result<()> {
-        let mut offset = 0;
-        let block_info_text = parse_string(&body, &mut offset)?;
-        let block_info: serde_json::value::Value =
-            serde_json::from_str(&block_info_text).with_context(|| "parsing block info")?;
-        let block_id = block_info["block_id"]
-            .as_str()
-            .with_context(|| "reading block_id")?;
-        info!("insert_block {}", block_id);
-        let stream_id = block_info["stream_id"]
-            .as_str()
-            .with_context(|| "reading stream_id")?;
-        let begin_time = block_info["begin_time"]
-            .as_str()
-            .with_context(|| "reading begin_time")?;
-        let begin_ticks = block_info["begin_ticks"]
-            .as_str()
-            .with_context(|| "reading field begin_ticks")?
-            .parse::<i64>()
-            .with_context(|| "parsing begin_ticks")?;
-        let end_time = block_info["end_time"]
-            .as_str()
-            .with_context(|| "reading end_time")?;
-        let end_ticks = block_info["end_ticks"]
-            .as_str()
-            .with_context(|| "reading field end_ticks")?
-            .parse::<i64>()
-            .with_context(|| "parsing end_ticks")?;
-        let nb_objects = block_info["nb_objects"]
-            .as_str()
-            .with_context(|| "reading field nb_objects")?
-            .parse::<i32>()
-            .with_context(|| "parsing nb_objects")?;
-
-        let dependencies = read_binary_chunk(&body, &mut offset)?;
-        let objects = read_binary_chunk(&body, &mut offset)?;
-        if offset != body.len() {
-            warn!("insert_block body was not parsed completely");
-        }
+        let block: block_wire_format::Block = ciborium::from_reader(body.reader())?;
         let mut connection = self.lake.db_pool.acquire().await?;
-        let payload = BlockPayload {
-            dependencies,
-            objects,
-        };
-        let encoded_payload = payload.encode_to_vec();
+        let encoded_payload = encode_cbor(&block.payload)?;
         let payload_size = encoded_payload.len();
-        if payload_size >= 128 * 1024 {
-            self.lake
-                .blob_storage
-                .write_blob(block_id, &encoded_payload)
-                .await
-                .with_context(|| "Error writing block to blob storage")?;
-        } else {
-            sqlx::query("INSERT INTO payloads values(?,?);")
-                .bind(block_id)
-                .bind(encoded_payload)
-                .execute(&mut connection)
-                .await
-                .with_context(|| "Error inserting into payloads")?;
-        }
+        self.lake
+            .blob_storage
+            .write_blob(&block.block_id, &encoded_payload)
+            .await
+            .with_context(|| "Error writing block to blob storage")?;
+
         sqlx::query("INSERT INTO blocks VALUES(?,?,?,?,?,?,?,?);")
-            .bind(block_id)
-            .bind(stream_id)
-            .bind(begin_time)
-            .bind(begin_ticks)
-            .bind(end_time)
-            .bind(end_ticks)
-            .bind(nb_objects)
+            .bind(block.block_id)
+            .bind(block.stream_id)
+            .bind(block.begin_time)
+            .bind(block.begin_ticks)
+            .bind(block.end_time)
+            .bind(block.end_ticks)
+            .bind(block.nb_objects)
             .bind(payload_size as i64)
             .execute(&mut connection)
             .await
