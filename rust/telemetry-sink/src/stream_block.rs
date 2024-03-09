@@ -15,7 +15,7 @@ pub trait StreamBlock {
 
 impl StreamBlock for LogBlock {
     fn encode_bin(&self) -> Result<Vec<u8>> {
-        //todo: implement
+        todo!();
         Ok(vec![])
     }
 
@@ -49,7 +49,7 @@ impl StreamBlock for LogBlock {
 
 impl StreamBlock for MetricsBlock {
     fn encode_bin(&self) -> Result<Vec<u8>> {
-        //todo: implement
+        todo!();
         Ok(vec![])
     }
 
@@ -83,7 +83,7 @@ impl StreamBlock for MetricsBlock {
 
 impl StreamBlock for ThreadBlock {
     fn encode_bin(&self) -> Result<Vec<u8>> {
-        //todo: implement
+        todo!();
         Ok(vec![])
     }
 
