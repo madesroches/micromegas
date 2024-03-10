@@ -12,14 +12,12 @@ use anyhow::{Context, Result};
 use lgn_blob_storage::BlobStorage;
 use lgn_telemetry_proto::analytics::LogEntry;
 use lgn_telemetry_proto::decompress;
-use lgn_telemetry_proto::telemetry::{
-    BlockMetadata, ContainerMetadata, Process as ProcessInfo, Stream as StreamInfo,
-};
-use prost::Message;
+use lgn_telemetry_proto::telemetry::{BlockMetadata, Process as ProcessInfo};
 use sqlx::any::AnyRow;
 use sqlx::Row;
+use telemetry_sink::stream_info::StreamInfo;
 use tracing::prelude::*;
-use transit::{parse_object_buffer, read_dependencies, Member, UserDefinedType, Value};
+use transit::{parse_object_buffer, read_dependencies, UserDefinedType, Value};
 
 use crate::time::get_tsc_frequency_inverse_ms;
 
@@ -294,13 +292,12 @@ pub async fn find_process_streams_tagged(
     for r in rows {
         let stream_id: String = r.get("stream_id");
         let dependencies_metadata_buffer: Vec<u8> = r.get("dependencies_metadata");
-        let dependencies_metadata = lgn_telemetry_proto::telemetry::ContainerMetadata::decode(
-            &*dependencies_metadata_buffer,
-        )
-        .with_context(|| "decoding dependencies metadata")?;
+        let dependencies_metadata: Vec<UserDefinedType> =
+            ciborium::from_reader(&dependencies_metadata_buffer[..])
+                .with_context(|| "decoding dependencies metadata")?;
         let objects_metadata_buffer: Vec<u8> = r.get("objects_metadata");
-        let objects_metadata =
-            lgn_telemetry_proto::telemetry::ContainerMetadata::decode(&*objects_metadata_buffer)
+        let objects_metadata: Vec<UserDefinedType> =
+            ciborium::from_reader(&objects_metadata_buffer[..])
                 .with_context(|| "decoding objects metadata")?;
         let tags_str: String = r.get("tags");
         let properties_str: String = r.get("properties");
@@ -309,8 +306,8 @@ pub async fn find_process_streams_tagged(
         res.push(StreamInfo {
             stream_id,
             process_id: r.get("process_id"),
-            dependencies_metadata: Some(dependencies_metadata),
-            objects_metadata: Some(objects_metadata),
+            dependencies_metadata,
+            objects_metadata,
             tags: parse_tags(&tags_str),
             properties,
         });
@@ -337,13 +334,12 @@ pub async fn find_process_streams(
     for r in rows {
         let stream_id: String = r.get("stream_id");
         let dependencies_metadata_buffer: Vec<u8> = r.get("dependencies_metadata");
-        let dependencies_metadata = lgn_telemetry_proto::telemetry::ContainerMetadata::decode(
-            &*dependencies_metadata_buffer,
-        )
-        .with_context(|| "decoding dependencies metadata")?;
+        let dependencies_metadata: Vec<UserDefinedType> =
+            ciborium::from_reader(&dependencies_metadata_buffer[..])
+                .with_context(|| "decoding dependencies metadata")?;
         let objects_metadata_buffer: Vec<u8> = r.get("objects_metadata");
-        let objects_metadata =
-            lgn_telemetry_proto::telemetry::ContainerMetadata::decode(&*objects_metadata_buffer)
+        let objects_metadata: Vec<UserDefinedType> =
+            ciborium::from_reader(&objects_metadata_buffer[..])
                 .with_context(|| "decoding objects metadata")?;
         let tags_str: String = r.get("tags");
         let properties_str: String = r.get("properties");
@@ -352,8 +348,8 @@ pub async fn find_process_streams(
         res.push(StreamInfo {
             stream_id,
             process_id: r.get("process_id"),
-            dependencies_metadata: Some(dependencies_metadata),
-            objects_metadata: Some(objects_metadata),
+            dependencies_metadata,
+            objects_metadata,
             tags: parse_tags(&tags_str),
             properties,
         });
@@ -428,12 +424,12 @@ pub async fn find_stream(
     .await
     .with_context(|| "find_stream")?;
     let dependencies_metadata_buffer: Vec<u8> = row.get("dependencies_metadata");
-    let dependencies_metadata =
-        lgn_telemetry_proto::telemetry::ContainerMetadata::decode(&*dependencies_metadata_buffer)
+    let dependencies_metadata: Vec<UserDefinedType> =
+        ciborium::from_reader(&dependencies_metadata_buffer[..])
             .with_context(|| "decoding dependencies metadata")?;
     let objects_metadata_buffer: Vec<u8> = row.get("objects_metadata");
-    let objects_metadata =
-        lgn_telemetry_proto::telemetry::ContainerMetadata::decode(&*objects_metadata_buffer)
+    let objects_metadata: Vec<UserDefinedType> =
+        ciborium::from_reader(&objects_metadata_buffer[..])
             .with_context(|| "decoding objects metadata")?;
     let tags_str: String = row.get("tags");
     let properties_str: String = row.get("properties");
@@ -442,8 +438,8 @@ pub async fn find_stream(
     Ok(StreamInfo {
         stream_id: String::from(stream_id),
         process_id: row.get("process_id"),
-        dependencies_metadata: Some(dependencies_metadata),
-        objects_metadata: Some(objects_metadata),
+        dependencies_metadata,
+        objects_metadata,
         tags: parse_tags(&tags_str),
         properties,
     })
@@ -466,12 +462,12 @@ pub async fn find_block_stream(
     .await
     .with_context(|| "find_block_stream")?;
     let dependencies_metadata_buffer: Vec<u8> = row.get("dependencies_metadata");
-    let dependencies_metadata =
-        lgn_telemetry_proto::telemetry::ContainerMetadata::decode(&*dependencies_metadata_buffer)
+    let dependencies_metadata: Vec<UserDefinedType> =
+        ciborium::from_reader(&dependencies_metadata_buffer[..])
             .with_context(|| "decoding dependencies metadata")?;
     let objects_metadata_buffer: Vec<u8> = row.get("objects_metadata");
-    let objects_metadata =
-        lgn_telemetry_proto::telemetry::ContainerMetadata::decode(&*objects_metadata_buffer)
+    let objects_metadata: Vec<UserDefinedType> =
+        ciborium::from_reader(&objects_metadata_buffer[..])
             .with_context(|| "decoding objects metadata")?;
     let tags_str: String = row.get("tags");
     let properties_str: String = row.get("properties");
@@ -480,8 +476,8 @@ pub async fn find_block_stream(
     Ok(StreamInfo {
         stream_id: row.get("stream_id"),
         process_id: row.get("process_id"),
-        dependencies_metadata: Some(dependencies_metadata),
-        objects_metadata: Some(objects_metadata),
+        dependencies_metadata,
+        objects_metadata,
         tags: parse_tags(&tags_str),
         properties,
     })
@@ -572,78 +568,39 @@ pub async fn find_stream_blocks_in_range(
 
 #[span_fn]
 pub async fn fetch_block_payload(
-    connection: &mut sqlx::AnyConnection,
     blob_storage: Arc<dyn BlobStorage>,
     block_id: String,
-) -> Result<lgn_telemetry_proto::telemetry::BlockPayload> {
-    let opt_row = sqlx::query("SELECT payload FROM payloads where block_id = ?;")
-        .bind(&block_id)
-        .fetch_optional(connection)
+) -> Result<telemetry_sink::block_wire_format::BlockPayload> {
+    let buffer: Vec<u8> = blob_storage
+        .read_blob(&block_id)
         .await
-        .with_context(|| format!("Fetching payload of block {}", &block_id))?;
-
-    let buffer: Vec<u8> = if let Some(row) = opt_row {
-        row.get("payload")
-    } else {
-        blob_storage
-            .read_blob(&block_id)
-            .await
-            .with_context(|| "reading block payload from blob storage")?
-    };
-
+        .with_context(|| "reading block payload from blob storage")?;
     {
         span_scope!("decode");
-        let payload = lgn_telemetry_proto::telemetry::BlockPayload::decode(&*buffer)
-            .with_context(|| format!("reading payload {}", &block_id))?;
+        let payload: telemetry_sink::block_wire_format::BlockPayload =
+            ciborium::from_reader(&buffer[..])
+                .with_context(|| format!("reading payload {}", &block_id))?;
         Ok(payload)
     }
-}
-
-#[span_fn]
-fn container_metadata_as_transit_udt_vec(
-    value: &ContainerMetadata,
-) -> Vec<transit::UserDefinedType> {
-    value
-        .types
-        .iter()
-        .map(|t| UserDefinedType {
-            name: t.name.clone(),
-            size: t.size as usize,
-            members: t
-                .members
-                .iter()
-                .map(|m| Member {
-                    name: m.name.clone(),
-                    type_name: m.type_name.clone(),
-                    offset: m.offset as usize,
-                    size: m.size as usize,
-                    is_reference: m.is_reference,
-                })
-                .collect(),
-            is_reference: t.is_reference,
-            secondary_udts: vec![],
-        })
-        .collect()
 }
 
 // parse_block calls fun for each object in the block until fun returns `false`
 #[span_fn]
 pub fn parse_block<F>(
     stream: &StreamInfo,
-    payload: &lgn_telemetry_proto::telemetry::BlockPayload,
+    payload: &telemetry_sink::block_wire_format::BlockPayload,
     fun: F,
 ) -> Result<()>
 where
     F: FnMut(Value) -> Result<bool>,
 {
-    let dep_udts =
-        container_metadata_as_transit_udt_vec(stream.dependencies_metadata.as_ref().unwrap());
+    let dep_udts = &stream.dependencies_metadata;
     let dependencies = read_dependencies(
         &dep_udts,
         &decompress(&payload.dependencies).with_context(|| "decompressing dependencies payload")?,
     )
     .with_context(|| "reading dependencies")?;
-    let obj_udts = container_metadata_as_transit_udt_vec(stream.objects_metadata.as_ref().unwrap());
+    let obj_udts = &stream.objects_metadata;
     parse_object_buffer(
         &dependencies,
         &obj_udts,
@@ -762,8 +719,7 @@ pub async fn find_process_log_entry<Res, Predicate: FnMut(LogEntry) -> Option<Re
 
     for stream in find_process_log_streams(connection, &process.process_id).await? {
         for b in find_stream_blocks(connection, &stream.stream_id).await? {
-            let payload =
-                fetch_block_payload(connection, blob_storage.clone(), b.block_id.clone()).await?;
+            let payload = fetch_block_payload(blob_storage.clone(), b.block_id.clone()).await?;
             parse_block(&stream, &payload, |val| {
                 if let Some(log_entry) =
                     log_entry_from_value(process, &val).with_context(|| "log_entry_from_value")?
@@ -787,14 +743,13 @@ pub async fn find_process_log_entry<Res, Predicate: FnMut(LogEntry) -> Option<Re
 // entry until fun returns false mad
 #[span_fn]
 pub async fn for_each_log_entry_in_block<Predicate: FnMut(LogEntry) -> bool>(
-    connection: &mut sqlx::AnyConnection,
     blob_storage: Arc<dyn BlobStorage>,
     process: &ProcessInfo,
     stream: &StreamInfo,
     block: &BlockMetadata,
     mut fun: Predicate,
 ) -> Result<()> {
-    let payload = fetch_block_payload(connection, blob_storage, block.block_id.clone()).await?;
+    let payload = fetch_block_payload(blob_storage, block.block_id.clone()).await?;
     parse_block(stream, &payload, |val| {
         if let Some(log_entry) =
             log_entry_from_value(process, &val).with_context(|| "log_entry_from_value")?
@@ -834,9 +789,7 @@ pub async fn for_each_process_metric<ProcessMetric: FnMut(Arc<transit::Object>)>
 ) -> Result<()> {
     for stream in find_process_metrics_streams(connection, process_id).await? {
         for block in find_stream_blocks(connection, &stream.stream_id).await? {
-            let payload =
-                fetch_block_payload(connection, blob_storage.clone(), block.block_id.clone())
-                    .await?;
+            let payload = fetch_block_payload(blob_storage.clone(), block.block_id.clone()).await?;
             parse_block(&stream, &payload, |val| {
                 if let Value::Object(obj) = val {
                     process_metric(obj);

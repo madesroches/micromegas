@@ -176,7 +176,7 @@ impl RemoteJitLakehouse {
     async fn write_call_tree(
         &self,
         process: &telemetry_sink::ProcessInfo,
-        stream: &telemetry_sink::StreamInfo,
+        stream: &telemetry_sink::stream_info::StreamInfo,
         block_id: &str,
         spans_key: String,
         scopes_key: String,
@@ -267,7 +267,7 @@ impl JitLakehouse for RemoteJitLakehouse {
     async fn get_thread_block(
         &self,
         process: &telemetry_sink::ProcessInfo,
-        stream: &telemetry_sink::StreamInfo,
+        stream: &telemetry_sink::stream_info::StreamInfo,
         block_id: &str,
     ) -> Result<BlockSpansReply> {
         let (spans_key, scopes_key) = self.get_table_keys(process, block_id);
@@ -305,7 +305,7 @@ impl JitLakehouse for RemoteJitLakehouse {
     async fn get_call_tree(
         &self,
         process: &telemetry_sink::ProcessInfo,
-        stream: &telemetry_sink::StreamInfo,
+        stream: &telemetry_sink::stream_info::StreamInfo,
         block_id: &str,
     ) -> Result<(ScopeHashMap, TabularSpanTree)> {
         let (spans_key, scopes_key) = self.get_table_keys(process, block_id);

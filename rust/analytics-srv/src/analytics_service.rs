@@ -135,7 +135,7 @@ impl AnalyticsService {
     async fn list_process_streams_impl(
         &self,
         process_id: &str,
-    ) -> Result<Vec<telemetry_sink::StreamInfo>> {
+    ) -> Result<Vec<telemetry_sink::stream_info::StreamInfo>> {
         let mut connection = self.pool.acquire().await?;
         find_process_streams(&mut connection, process_id).await
     }
@@ -153,7 +153,7 @@ impl AnalyticsService {
     async fn compute_spans_lod(
         &self,
         process: &telemetry_sink::ProcessInfo,
-        stream: &telemetry_sink::StreamInfo,
+        stream: &telemetry_sink::stream_info::StreamInfo,
         block_id: &str,
         lod_id: u32,
     ) -> Result<BlockSpansReply> {
@@ -179,7 +179,7 @@ impl AnalyticsService {
     async fn block_spans_impl(
         &self,
         process: &telemetry_sink::ProcessInfo,
-        stream: &telemetry_sink::StreamInfo,
+        stream: &telemetry_sink::stream_info::StreamInfo,
         block_id: &str,
         lod_id: u32,
     ) -> Result<BlockSpansReply> {
@@ -241,7 +241,6 @@ impl AnalyticsService {
                     entry_index += block.nb_objects as u64;
                 } else {
                     for_each_log_entry_in_block(
-                        &mut connection,
                         self.data_lake_blobs.clone(),
                         process,
                         &stream,

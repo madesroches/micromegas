@@ -8,7 +8,9 @@ license = "MIT OR Apache-2.0"
 lgn-blob-storage = { path = "../lgn-blob-storage"  }
 tracing = { path = "../tracing"  }
 transit = { path = "../transit"  }
+telemetry-sink = { path = "../telemetry-sink"  }
 lgn-telemetry-proto = { path = "../lgn-telemetry-proto"  }
+ciborium = "0.2.2"
 sqlx = { version = "0.5", features = [
     "sqlite",
     "any",

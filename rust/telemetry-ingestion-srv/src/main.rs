@@ -29,6 +29,7 @@ use local_data_lake::connect_to_local_data_lake;
 use remote_data_lake::connect_to_remote_data_lake;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use telemetry_sink::stream_info::StreamInfo;
 use telemetry_sink::TelemetryGuardBuilder;
 use tower_http::limit::RequestBodyLimitLayer;
 use tracing::prelude::*;
@@ -64,10 +65,10 @@ async fn insert_process_request(
 
 async fn insert_stream_request(
     Extension(service): Extension<WebIngestionService>,
-    Json(body): Json<serde_json::Value>,
+    Json(stream_info): Json<StreamInfo>,
 ) {
     info!("insert_stream_request");
-    if let Err(e) = service.insert_stream(body).await {
+    if let Err(e) = service.insert_stream(stream_info).await {
         error!("Error in insert_stream_request: {:?}", e);
     }
 }

@@ -152,12 +152,7 @@ impl MetricHandler {
             end_time_ms: end_tick_offset as f64 * inv_tsc_frequency,
             stream_id: stream_id.to_string(),
         };
-        let payload = fetch_block_payload(
-            &mut connection,
-            self.blob_storage.clone(),
-            block_id.to_string(),
-        )
-        .await?;
+        let payload = fetch_block_payload(self.blob_storage.clone(), block_id.to_string()).await?;
         let stream = find_stream(&mut connection, stream_id).await?;
         let mut metrics = HashMap::<String, MetricDesc>::new();
         parse_block(&stream, &payload, |val| {
@@ -200,12 +195,7 @@ impl MetricHandler {
     ) -> Result<MetricBlockData> {
         let mut connection = self.pool.acquire().await?;
         let process = find_process(&mut connection, process_id).await?;
-        let payload = fetch_block_payload(
-            &mut connection,
-            self.blob_storage.clone(),
-            block_id.to_string(),
-        )
-        .await?;
+        let payload = fetch_block_payload(self.blob_storage.clone(), block_id.to_string()).await?;
         let inv_tsc_frequency = get_process_tick_length_ms(&process);
         let stream = find_stream(&mut connection, stream_id).await?;
         let mut points = vec![];

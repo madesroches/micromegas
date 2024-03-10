@@ -1,4 +1,4 @@
-use crate::block_wire_format::{encode_cbor, self};
+use crate::{block_wire_format, wire_format::encode_cbor};
 use anyhow::Result;
 use lgn_telemetry_proto::compress;
 use lgn_telemetry_proto::telemetry::Block as EncodedBlock;
@@ -73,7 +73,7 @@ impl StreamBlock for LogBlock {
 impl StreamBlock for MetricsBlock {
     fn encode_bin(&self) -> Result<Vec<u8>> {
         todo!();
-        Ok(vec![])
+        //Ok(vec![])
     }
 
     #[allow(clippy::cast_possible_wrap)]
@@ -107,7 +107,7 @@ impl StreamBlock for MetricsBlock {
 impl StreamBlock for ThreadBlock {
     fn encode_bin(&self) -> Result<Vec<u8>> {
         todo!();
-        Ok(vec![])
+        //Ok(vec![])
     }
 
     #[allow(clippy::cast_possible_wrap)]

@@ -37,7 +37,7 @@ impl DebugEventSink {
 }
 
 impl EventSink for DebugEventSink {
-    fn on_startup(&self, process_info: ProcessInfo) {
+    fn on_startup(&self, process_info: Arc<ProcessInfo>) {
         *self.0.lock().unwrap() = Some(State::Startup(!process_info.process_id.is_empty()));
     }
 

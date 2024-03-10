@@ -13,14 +13,14 @@ pub trait JitLakehouse: Send + Sync {
     async fn get_thread_block(
         &self,
         process: &telemetry_sink::ProcessInfo,
-        stream: &telemetry_sink::StreamInfo,
+        stream: &telemetry_sink::stream_info::StreamInfo,
         block_id: &str,
     ) -> Result<BlockSpansReply>;
 
     async fn get_call_tree(
         &self,
         process: &telemetry_sink::ProcessInfo,
-        stream: &telemetry_sink::StreamInfo,
+        stream: &telemetry_sink::stream_info::StreamInfo,
         block_id: &str,
     ) -> Result<(ScopeHashMap, TabularSpanTree)>;
 }

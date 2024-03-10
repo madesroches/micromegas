@@ -1,5 +1,4 @@
 // block wire format
-use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -19,10 +18,4 @@ pub struct Block {
     pub end_ticks: i64,
     pub payload: BlockPayload,
     pub nb_objects: i32,
-}
-
-pub fn encode_cbor<T: serde::Serialize>(obj: &T) -> Result<Vec<u8>> {
-    let mut bytes = Vec::new();
-    ciborium::ser::into_writer(obj, &mut bytes)?;
-    Ok(bytes)
 }

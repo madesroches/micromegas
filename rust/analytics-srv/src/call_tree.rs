@@ -186,7 +186,7 @@ pub(crate) async fn process_thread_block(
     pool: sqlx::any::AnyPool,
     blob_storage: Arc<dyn BlobStorage>,
     convert_ticks: ConvertTicks,
-    stream: &telemetry_sink::StreamInfo,
+    stream: &telemetry_sink::stream_info::StreamInfo,
     block_id: &str,
 ) -> Result<ProcessedThreadBlock> {
     let block = {
@@ -194,14 +194,7 @@ pub(crate) async fn process_thread_block(
         find_block(&mut connection, block_id).await?
     };
     let mut builder = CallTreeBuilder::new(block.begin_ticks, block.end_ticks, convert_ticks);
-    parse_thread_block(
-        pool,
-        blob_storage,
-        stream,
-        block_id.to_owned(),
-        &mut builder,
-    )
-    .await?;
+    parse_thread_block(blob_storage, stream, block_id.to_owned(), &mut builder).await?;
     Ok(builder.finish())
 }
 

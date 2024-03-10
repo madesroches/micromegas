@@ -46,7 +46,7 @@ impl LocalJitLakehouse {
     async fn write_call_tree(
         &self,
         process: &telemetry_sink::ProcessInfo,
-        stream: &telemetry_sink::StreamInfo,
+        stream: &telemetry_sink::stream_info::StreamInfo,
         block_id: &str,
         spans_file_path: PathBuf,
         scopes_file_path: PathBuf,
@@ -223,7 +223,7 @@ impl JitLakehouse for LocalJitLakehouse {
     async fn get_thread_block(
         &self,
         process: &telemetry_sink::ProcessInfo,
-        stream: &telemetry_sink::StreamInfo,
+        stream: &telemetry_sink::stream_info::StreamInfo,
         block_id: &str,
     ) -> Result<BlockSpansReply> {
         let (spans_file_path, scopes_file_path) = self.get_table_files(process, block_id);
@@ -261,7 +261,7 @@ impl JitLakehouse for LocalJitLakehouse {
     async fn get_call_tree(
         &self,
         process: &telemetry_sink::ProcessInfo,
-        stream: &telemetry_sink::StreamInfo,
+        stream: &telemetry_sink::stream_info::StreamInfo,
         block_id: &str,
     ) -> Result<(ScopeHashMap, TabularSpanTree)> {
         let (spans_file_path, scopes_file_path) = self.get_table_files(process, block_id);
