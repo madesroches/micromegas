@@ -15,6 +15,8 @@ pub mod http_event_sink;
 pub mod local_event_sink;
 pub mod stream_block;
 pub mod stream_info;
+pub mod block_wire_format;
+pub mod wire_format;
 
 use tracing::event::BoxedEventSink;
 use tracing::info;
@@ -25,7 +27,6 @@ use tracing::{
 };
 
 pub type ProcessInfo = lgn_telemetry_proto::telemetry::Process;
-pub type StreamInfo = lgn_telemetry_proto::telemetry::Stream;
 pub type EncodedBlock = lgn_telemetry_proto::telemetry::Block;
 pub use lgn_telemetry_proto::telemetry::ContainerMetadata;
 

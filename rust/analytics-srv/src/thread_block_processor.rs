@@ -74,8 +74,8 @@ where
 
 #[span_fn]
 pub fn parse_thread_block_payload<Proc: ThreadBlockProcessor>(
-    payload: &lgn_telemetry_proto::telemetry::BlockPayload,
-    stream: &telemetry_sink::StreamInfo,
+    payload: &telemetry_sink::block_wire_format::BlockPayload,
+    stream: &telemetry_sink::stream_info::StreamInfo,
     processor: &mut Proc,
 ) -> Result<()> {
     parse_block(stream, payload, |val| {
@@ -153,15 +153,11 @@ pub fn parse_thread_block_payload<Proc: ThreadBlockProcessor>(
 
 #[span_fn]
 pub async fn parse_thread_block<Proc: ThreadBlockProcessor>(
-    pool: sqlx::any::AnyPool,
     blob_storage: Arc<dyn BlobStorage>,
-    stream: &telemetry_sink::StreamInfo,
+    stream: &telemetry_sink::stream_info::StreamInfo,
     block_id: String,
     processor: &mut Proc,
 ) -> Result<()> {
-    let payload = {
-        let mut connection = pool.acquire().await?;
-        fetch_block_payload(&mut connection, blob_storage, block_id).await?
-    };
+    let payload = fetch_block_payload(blob_storage, block_id).await?;
     parse_thread_block_payload(&payload, stream, processor)
 }

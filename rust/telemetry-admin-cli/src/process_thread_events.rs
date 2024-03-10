@@ -14,9 +14,7 @@ pub async fn print_process_thread_events(
         println!("stream {}", stream.stream_id);
         for block in find_stream_blocks(connection, &stream.stream_id).await? {
             println!("block {}", block.block_id);
-            let payload =
-                fetch_block_payload(connection, blob_storage.clone(), block.block_id.clone())
-                    .await?;
+            let payload = fetch_block_payload(blob_storage.clone(), block.block_id.clone()).await?;
             parse_block(&stream, &payload, |val| {
                 if let Value::Object(obj) = val {
                     let time = obj.get::<u64>("time")?;
@@ -48,9 +46,7 @@ async fn extract_process_thread_events(
     for stream in find_process_thread_streams(connection, process_id).await? {
         let system_thread_id = &stream.properties["thread-id"];
         for block in find_stream_blocks(connection, &stream.stream_id).await? {
-            let payload =
-                fetch_block_payload(connection, blob_storage.clone(), block.block_id.clone())
-                    .await?;
+            let payload = fetch_block_payload(blob_storage.clone(), block.block_id.clone()).await?;
             parse_block(&stream, &payload, |val| {
                 if let Value::Object(obj) = val {
                     let phase = match obj.type_name.as_str() {
