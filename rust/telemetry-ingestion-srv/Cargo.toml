@@ -21,12 +21,14 @@ ciborium.workspace = true
 clap.workspace = true
 http.workspace = true
 hyper.workspace = true
+object_store.workspace = true
 prost.workspace = true
 serde_json.workspace = true
 sqlx.workspace = true
 tokio.workspace = true
 tonic.workspace = true
 tower-http.workspace = true
+url.workspace = true
 whoami.workspace = true
 
 [[bin]]

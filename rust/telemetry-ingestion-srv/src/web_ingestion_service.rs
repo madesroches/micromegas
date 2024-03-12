@@ -23,9 +23,18 @@ impl WebIngestionService {
         let mut connection = self.lake.db_pool.acquire().await?;
         let encoded_payload = encode_cbor(&block.payload)?;
         let payload_size = encoded_payload.len();
+
+        let process_id = "process_id"; //todo
+        let stream_id = "stream_id"; //todo
+        let block_id = &block.block_id;
+        let obj_path = object_store::path::Path::from(format!(
+            "{}/{process_id}/{stream_id}/{block_id}",
+            self.lake.blob_store_root
+        ));
+
         self.lake
-            .blob_storage
-            .write_blob(&block.block_id, &encoded_payload)
+            .blob_store
+            .put(&obj_path, encoded_payload.into())
             .await
             .with_context(|| "Error writing block to blob storage")?;
 

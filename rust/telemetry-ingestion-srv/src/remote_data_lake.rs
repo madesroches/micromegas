@@ -3,10 +3,8 @@ use crate::sql_migration::execute_migration;
 use crate::sql_migration::read_schema_version;
 use crate::sql_migration::LATEST_SCHEMA_VERSION;
 use anyhow::{bail, Context, Result};
-use lgn_blob_storage::{AwsS3BlobStorage, AwsS3Url};
 use sqlx::migrate::MigrateDatabase;
 use sqlx::Row;
-use std::str::FromStr;
 use std::sync::Arc;
 use tracing::prelude::*;
 
@@ -56,9 +54,13 @@ async fn migrate_db(connection: &mut sqlx::AnyConnection) -> Result<()> {
     Ok(())
 }
 
-pub async fn connect_to_remote_data_lake(db_uri: &str, s3_url: &str) -> Result<DataLakeConnection> {
+pub async fn connect_to_remote_data_lake(
+    db_uri: &str,
+    object_store_url: &str,
+) -> Result<DataLakeConnection> {
     info!("connecting to blob storage");
-    let blob_storage = AwsS3BlobStorage::new(AwsS3Url::from_str(s3_url)?).await;
+    let (blob_storage, blob_store_root) =
+        object_store::parse_url(&url::Url::parse(object_store_url)?)?;
     if !sqlx::Any::database_exists(db_uri)
         .await
         .with_context(|| String::from("Searching for telemetry database"))?
@@ -73,5 +75,9 @@ pub async fn connect_to_remote_data_lake(db_uri: &str, s3_url: &str) -> Result<D
         .with_context(|| String::from("Connecting to telemetry database"))?;
     let mut connection = pool.acquire().await?;
     migrate_db(&mut connection).await?;
-    Ok(DataLakeConnection::new(pool, Arc::new(blob_storage)))
+    Ok(DataLakeConnection::new(
+        pool,
+        Arc::new(blob_storage),
+        object_store::path::Path::from(format!("{blob_store_root}/blobs")),
+    ))
 }
