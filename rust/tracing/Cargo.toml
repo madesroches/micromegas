@@ -4,28 +4,25 @@ version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
-# Dependencies to other legion crates must stay limited limited
-transit = { path = "../transit", version = "0.1.0" }
+transit.workspace = true
 tracing-proc-macros = { path = "./proc-macros", version = "0.1.0" }
-################################################################################
-cfg-if = "1.0"
-chrono = "0.4"
-lazy_static = "1.4"
-memoffset = "0.6"
-raw-cpuid = "10.2.0"
-serde = "1.0"
-thiserror = "1.0"
-thread-id = "4.0"
-uuid = { version = "1.0", features = ["v4"] }
-whoami = "1.2"
+
+cfg-if.workspace = true
+chrono.workspace = true
+lazy_static.workspace = true
+memoffset.workspace = true
+raw-cpuid.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+thread-id.workspace = true
+uuid.workspace = true
+whoami.workspace = true
 
 [dev-dependencies]
-criterion = "0.3"
+criterion.workspace = true
 # to tests interop
-log = "0.4"
+log.workspace = true
 
 [features]
 max_level_off = []
