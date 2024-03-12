@@ -1,13 +1,9 @@
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicIsize, Ordering};
 use std::{
     fmt,
     sync::{Arc, Mutex},
 };
 use tracing::ProcessInfo;
-
-use async_trait::async_trait;
-use lgn_auth::{Authenticator, ClientTokenSet};
 
 use tracing::{
     event::EventSink,
@@ -31,33 +27,6 @@ enum SinkEvent {
 
 #[derive(Clone, Debug)]
 struct StaticApiKey {}
-
-#[async_trait]
-impl Authenticator for StaticApiKey {
-    async fn login(
-        &self,
-        _scopes: &[String],
-        _extra_params: &Option<HashMap<String, String>>,
-    ) -> lgn_auth::Result<ClientTokenSet> {
-        Ok(ClientTokenSet {
-            access_token: env!("LGN_TELEMETRY_GRPC_API_KEY").to_owned(), //todo: remove this variable
-            refresh_token: None,
-            id_token: None,
-            token_type: String::from("Legion API Key"),
-            expires_in: None,
-            scopes: None,
-        })
-    }
-    async fn refresh_login(
-        &self,
-        _client_token_set: ClientTokenSet,
-    ) -> lgn_auth::Result<ClientTokenSet> {
-        self.login(&[], &None).await
-    }
-    async fn logout(&self) -> lgn_auth::Result<()> {
-        Ok(())
-    }
-}
 
 pub struct HttpEventSink {
     thread: Option<std::thread::JoinHandle<()>>,
