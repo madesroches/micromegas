@@ -6,36 +6,27 @@ license = "Apache-2.0"
 default-run = "telemetry-ingestion-srv"
 
 [dependencies]
-axum = "0.7.4"
-bytes = "1.1"
-ciborium = "0.2.2"
-clap = { version = "3.0", features = ["derive"] }
-http = "0.2"
-hyper = "0.14"
-tonic = "0.6"
-tokio = { version = "1.13", features = [
-    "macros",
-    "rt-multi-thread",
-    "tracing",
-] }
-lgn-blob-storage = { path = "../lgn-blob-storage", version = "0.1.0" }
-tracing = { path = "../tracing" }
-transit = { path = "../transit" }
-lgn-telemetry-proto = { path = "../lgn-telemetry-proto" }
-telemetry-sink = { path = "../telemetry-sink" }
-lgn-auth = { path = "../lgn-auth" }
-whoami = "1.2"
-anyhow = "1.0"
-sqlx = { version = "0.5", features = [
-    "sqlite",
-    "any",
-    "mysql",
-    "runtime-tokio-native-tls",
-] }
-tower-http = { version = "0.5.2", features = ["limit"] }
-chrono = "0.4"
-prost = "0.9"
-serde_json = "1.0"
+axum.workspace = true
+bytes.workspace = true
+ciborium.workspace = true
+clap.workspace = true
+http.workspace = true
+hyper.workspace = true
+tonic.workspace = true
+tokio.workspace = true
+lgn-blob-storage.workspace = true
+tracing.workspace = true
+transit.workspace = true
+lgn-telemetry-proto.workspace = true
+telemetry-sink.workspace = true
+lgn-auth.workspace = true
+whoami.workspace = true
+anyhow.workspace = true
+sqlx.workspace = true
+tower-http.workspace = true
+chrono.workspace = true
+prost.workspace = true
+serde_json.workspace = true
 
 [[bin]]
 name = "telemetry-ingestion-srv"
