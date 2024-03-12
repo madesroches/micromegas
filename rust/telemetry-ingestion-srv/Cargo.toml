@@ -6,27 +6,28 @@ license = "Apache-2.0"
 default-run = "telemetry-ingestion-srv"
 
 [dependencies]
+
+lgn-blob-storage.workspace = true
+lgn-telemetry-proto.workspace = true
+telemetry-sink.workspace = true
+tracing.workspace = true
+transit.workspace = true
+
+anyhow.workspace = true
 axum.workspace = true
 bytes.workspace = true
+chrono.workspace = true
 ciborium.workspace = true
 clap.workspace = true
 http.workspace = true
 hyper.workspace = true
-tonic.workspace = true
-tokio.workspace = true
-lgn-blob-storage.workspace = true
-tracing.workspace = true
-transit.workspace = true
-lgn-telemetry-proto.workspace = true
-telemetry-sink.workspace = true
-lgn-auth.workspace = true
-whoami.workspace = true
-anyhow.workspace = true
-sqlx.workspace = true
-tower-http.workspace = true
-chrono.workspace = true
 prost.workspace = true
 serde_json.workspace = true
+sqlx.workspace = true
+tokio.workspace = true
+tonic.workspace = true
+tower-http.workspace = true
+whoami.workspace = true
 
 [[bin]]
 name = "telemetry-ingestion-srv"
@@ -35,18 +36,3 @@ path = "src/main.rs"
 [[bin]]
 name = "telemetry-generator"
 path = "test/generator.rs"
-
-
-[[package.metadata.monorepo.publish]]
-name = "telemetry-ingestion-srv"
-type = "docker"
-template = """
-FROM ubuntu:20.04
-
-RUN apt-get update && apt-get install -y --no-install-recommends libssl-dev ca-certificates
-
-{ copy_all }
-
-ENTRYPOINT ["{ binaries.telemetry-ingestion-srv }"]
-"""
-allow-aws-ecr-creation = true
