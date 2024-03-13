@@ -11,6 +11,7 @@ lgn-online = { path = "lgn-online" }
 lgn-telemetry-proto = { path = "lgn-telemetry-proto" }
 
 analytics = { path = "analytics" }
+ingestion = { path = "ingestion" }
 telemetry-sink = { path = "telemetry-sink" }
 tracing = { path = "tracing" }
 transit = { path = "transit" }
