@@ -6,18 +6,20 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 lgn-blob-storage.workspace = true
-tracing.workspace = true
 lgn-telemetry-proto.workspace = true
-telemetry-sink.workspace = true
-analytics.workspace = true
-transit.workspace = true
-clap.workspace = true
-tokio.workspace = true
-sqlx.workspace = true
+
+micromegas-analytics.workspace = true
+micromegas-telemetry-sink.workspace = true
+micromegas-tracing.workspace = true
+micromegas-transit.workspace = true
+
 anyhow.workspace = true
-prost.workspace = true
-lz4.workspace = true
+clap.workspace = true
 json.workspace = true
+lz4.workspace = true
+prost.workspace = true
+sqlx.workspace = true
+tokio.workspace = true
 
 [dev-dependencies]
 lgn-test-utils = { path = "../lgn-test-utils" }

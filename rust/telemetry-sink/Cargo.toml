@@ -1,16 +1,21 @@
 [package]
-name = "telemetry-sink"
-version = "0.1.0"
-edition = "2021"
-license = "Apache-2.0"
+name = "micromegas-telemetry-sink"
+keywords.workspace = true
+version.workspace = true
+edition.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+authors.workspace = true
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 lgn-telemetry-proto.workspace = true
-tracing.workspace = true
-transit.workspace = true
 lgn-config.workspace = true
+
+micromegas-tracing.workspace = true
+micromegas-transit.workspace = true
 
 anyhow.workspace = true
 async-trait.workspace = true
@@ -41,44 +46,44 @@ colors = ["colored"]
 timestamps = ["time"]
 stderr = []
 
-max_level_off = ["log/max_level_off", "tracing/max_level_off"]
-max_level_error = ["log/max_level_error", "tracing/max_level_error"]
-max_level_warn = ["log/max_level_warn", "tracing/max_level_warn"]
-max_level_info = ["log/max_level_info", "tracing/max_level_info"]
-max_level_debug = ["log/max_level_debug", "tracing/max_level_debug"]
-max_level_trace = ["log/max_level_trace", "tracing/max_level_trace"]
+max_level_off = ["log/max_level_off", "micromegas-tracing/max_level_off"]
+max_level_error = ["log/max_level_error", "micromegas-tracing/max_level_error"]
+max_level_warn = ["log/max_level_warn", "micromegas-tracing/max_level_warn"]
+max_level_info = ["log/max_level_info", "micromegas-tracing/max_level_info"]
+max_level_debug = ["log/max_level_debug", "micromegas-tracing/max_level_debug"]
+max_level_trace = ["log/max_level_trace", "micromegas-tracing/max_level_trace"]
 
 release_max_level_off = [
     "log/release_max_level_off",
-    "tracing/release_max_level_off",
+    "micromegas-tracing/release_max_level_off",
 ]
 release_max_level_error = [
     "log/release_max_level_error",
-    "tracing/release_max_level_error",
+    "micromegas-tracing/release_max_level_error",
 ]
 release_max_level_warn = [
     "log/release_max_level_warn",
-    "tracing/release_max_level_warn",
+    "micromegas-tracing/release_max_level_warn",
 ]
 release_max_level_info = [
     "log/release_max_level_info",
-    "tracing/release_max_level_info",
+    "micromegas-tracing/release_max_level_info",
 ]
 release_max_level_debug = [
     "log/release_max_level_debug",
-    "tracing/release_max_level_debug",
+    "micromegas-tracing/release_max_level_debug",
 ]
 release_max_level_trace = [
     "log/release_max_level_trace",
-    "tracing/release_max_level_trace",
+    "micromegas-tracing/release_max_level_trace",
 ]
 
-max_lod_off = ["tracing/max_lod_off"]
-max_lod_min = ["tracing/max_lod_min"]
-max_lod_med = ["tracing/max_lod_med"]
-max_lod_max = ["tracing/max_lod_max"]
+max_lod_off = ["micromegas-tracing/max_lod_off"]
+max_lod_min = ["micromegas-tracing/max_lod_min"]
+max_lod_med = ["micromegas-tracing/max_lod_med"]
+max_lod_max = ["micromegas-tracing/max_lod_max"]
 
-release_max_lod_off = ["tracing/release_max_lod_off"]
-release_max_lod_min = ["tracing/release_max_lod_min"]
-release_max_lod_med = ["tracing/release_max_lod_med"]
-release_max_lod_max = ["tracing/release_max_lod_max"]
+release_max_lod_off = ["micromegas-tracing/release_max_lod_off"]
+release_max_lod_min = ["micromegas-tracing/release_max_lod_min"]
+release_max_lod_med = ["micromegas-tracing/release_max_lod_med"]
+release_max_lod_max = ["micromegas-tracing/release_max_lod_max"]

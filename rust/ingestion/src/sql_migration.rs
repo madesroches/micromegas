@@ -1,8 +1,8 @@
 use crate::sql_telemetry_db::create_tables;
 use anyhow::{Context, Result};
+use micromegas_tracing::prelude::*;
 use sqlx::Executor;
 use sqlx::Row;
-use tracing::prelude::*;
 
 pub const LATEST_SCHEMA_VERSION: i32 = 2;
 

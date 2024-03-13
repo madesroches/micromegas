@@ -1,12 +1,11 @@
-use std::sync::Arc;
-
-use analytics::prelude::*;
 use anyhow::{Context, Result};
 use lgn_blob_storage::BlobStorage;
-use transit::prelude::*;
+use micromegas_analytics::prelude::*;
+use micromegas_transit::prelude::*;
+use std::sync::Arc;
 
 pub async fn print_process_thread_events(
-    connection: &mut sqlx::AnyConnection,
+    connection: &mut sqlx::PgConnection,
     blob_storage: Arc<dyn BlobStorage>,
     process_id: &str,
 ) -> Result<()> {
@@ -35,9 +34,9 @@ pub async fn print_process_thread_events(
 
 #[allow(clippy::cast_precision_loss)]
 async fn extract_process_thread_events(
-    connection: &mut sqlx::AnyConnection,
+    connection: &mut sqlx::PgConnection,
     blob_storage: Arc<dyn BlobStorage>,
-    process_info: &telemetry_sink::ProcessInfo,
+    process_info: &micromegas_telemetry_sink::ProcessInfo,
     ts_offset: i64,
     inv_tsc_frequency: f64,
 ) -> Result<json::Array> {
@@ -78,7 +77,7 @@ async fn extract_process_thread_events(
 
 #[allow(clippy::cast_precision_loss)]
 pub async fn print_chrome_trace(
-    pool: &sqlx::AnyPool,
+    pool: &sqlx::PgPool,
     blob_storage: Arc<dyn BlobStorage>,
     process_id: &str,
 ) -> Result<()> {

@@ -1,12 +1,11 @@
-use std::sync::Arc;
-
-use analytics::prelude::*;
 use anyhow::Result;
 use lgn_blob_storage::BlobStorage;
-use transit::prelude::*;
+use micromegas_analytics::prelude::*;
+use micromegas_transit::prelude::*;
+use std::sync::Arc;
 
 pub async fn print_process_metrics(
-    connection: &mut sqlx::AnyConnection,
+    connection: &mut sqlx::PgConnection,
     blob_storage: Arc<dyn BlobStorage>,
     process_id: &str,
 ) -> Result<()> {

@@ -1,11 +1,9 @@
-use std::collections::HashSet;
-
-use transit::prelude::*;
-
 use crate::{
     event::{EventBlock, EventStream, ExtractDeps},
     metrics::{FloatMetricEvent, IntegerMetricEvent, MetricMetadata, MetricMetadataRecord},
 };
+use micromegas_transit::prelude::*;
+use std::collections::HashSet;
 
 declare_queue_struct!(
     struct MetricsMsgQueue<IntegerMetricEvent, FloatMetricEvent> {}

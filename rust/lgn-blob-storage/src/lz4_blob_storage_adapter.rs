@@ -1,10 +1,9 @@
+use async_trait::async_trait;
+use micromegas_tracing::prelude::*;
 use std::{
     io::{BufReader, BufWriter, Write},
     path::Path,
 };
-
-use async_trait::async_trait;
-use tracing::prelude::*;
 
 use super::{BlobStats, BlobStorage, Result};
 

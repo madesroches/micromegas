@@ -1,8 +1,6 @@
-use std::sync::atomic::{AtomicU32, Ordering};
-
-use transit::prelude::*;
-
 use crate::{string_id::StringId, Level, LevelFilter};
+use micromegas_transit::prelude::*;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 #[derive(Debug)]
 pub struct LogMetadata {

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use analytics::prelude::*;
-use analytics::time::ConvertTicks;
+use micromegas_analytics::prelude::*;
+use micromegas_analytics::time::ConvertTicks;
 use anyhow::Result;
 use lgn_blob_storage::BlobStorage;
 use lgn_telemetry_proto::analytics::AsyncSpanEvent;
@@ -11,7 +11,7 @@ use lgn_telemetry_proto::analytics::SpanBlockLod;
 use lgn_telemetry_proto::analytics::SpanEventType;
 use lgn_telemetry_proto::analytics::SpanTrack;
 use sqlx::PgPool;
-use tracing::prelude::*;
+use micromegas_tracing::prelude::*;
 
 #[derive(Debug)]
 pub struct ProcessedThreadBlock {
@@ -187,7 +187,7 @@ pub(crate) async fn process_thread_block(
     pool: PgPool,
     blob_storage: Arc<dyn BlobStorage>,
     convert_ticks: ConvertTicks,
-    stream: &telemetry_sink::stream_info::StreamInfo,
+    stream: &micromegas_telemetry_sink::stream_info::StreamInfo,
     block_id: &str,
 ) -> Result<ProcessedThreadBlock> {
     let block = {
@@ -199,7 +199,7 @@ pub(crate) async fn process_thread_block(
     Ok(builder.finish())
 }
 
-use transit::Object;
+use micromegas_transit::Object;
 
 use crate::scope::compute_scope_hash;
 use crate::scope::ScopeHashMap;

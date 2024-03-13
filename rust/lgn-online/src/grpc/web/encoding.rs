@@ -3,7 +3,7 @@ use std::task::Poll;
 
 use bytes::{Buf, BufMut, BytesMut};
 use http::{header::HeaderName, HeaderMap, HeaderValue};
-use tracing::debug;
+use micromegas_tracing::debug;
 
 use super::super::buf::BoxBuf;
 use super::{Error, Result};

@@ -396,7 +396,7 @@ pub mod cars {
         use http::{header::CONTENT_TYPE, Extensions, HeaderMap, HeaderValue, Request, Response};
         use hyper::service::Service;
         use lgn_online::client::{Error, Result};
-        use lgn_tracing::debug;
+        use micromegas_tracing::debug;
 
         // Response type.
 
@@ -1599,7 +1599,7 @@ pub mod cars {
         use http::{header::HeaderName, request::Parts, Extensions, HeaderMap, HeaderValue};
 
         use lgn_online::server::{Error, Result};
-        use lgn_tracing::error;
+        use micromegas_tracing::error;
         use serde_qs::axum::QsQuery;
         use std::net::SocketAddr;
 

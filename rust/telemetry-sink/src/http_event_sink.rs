@@ -1,16 +1,15 @@
-use std::sync::atomic::{AtomicIsize, Ordering};
-use std::{
-    fmt,
-    sync::{Arc, Mutex},
-};
-use tracing::ProcessInfo;
-
-use tracing::{
+use micromegas_tracing::ProcessInfo;
+use micromegas_tracing::{
     event::EventSink,
     logs::{LogBlock, LogMetadata, LogStream},
     metrics::{MetricsBlock, MetricsStream},
     prelude::*,
     spans::{ThreadBlock, ThreadStream},
+};
+use std::sync::atomic::{AtomicIsize, Ordering};
+use std::{
+    fmt,
+    sync::{Arc, Mutex},
 };
 
 use crate::stream_block::StreamBlock;
@@ -155,7 +154,7 @@ impl HttpEventSink {
         }
         let mut client = client_res.unwrap();
         // eagerly connect, a new process message is sure to follow if it's not already in queue
-        if let Some(process_id) = tracing::dispatch::process_id() {
+        if let Some(process_id) = micromegas_tracing::dispatch::process_id() {
             info!("log: https://analytics.legionengine.com/log/{}", process_id);
             info!(
                 "metrics: https://analytics.legionengine.com/metrics/{}",
@@ -217,7 +216,7 @@ impl HttpEventSink {
 }
 
 impl EventSink for HttpEventSink {
-    fn on_startup(&self, process_info: Arc<tracing::ProcessInfo>) {
+    fn on_startup(&self, process_info: Arc<micromegas_tracing::ProcessInfo>) {
         self.send(SinkEvent::Startup(process_info));
     }
 

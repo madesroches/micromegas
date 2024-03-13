@@ -10,17 +10,17 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex, Weak};
 
+pub mod block_wire_format;
 pub mod composite_event_sink;
 pub mod http_event_sink;
 pub mod local_event_sink;
 pub mod stream_block;
 pub mod stream_info;
-pub mod block_wire_format;
 pub mod wire_format;
 
-use tracing::event::BoxedEventSink;
-use tracing::info;
-use tracing::{
+use micromegas_tracing::event::BoxedEventSink;
+use micromegas_tracing::info;
+use micromegas_tracing::{
     event::EventSink,
     guards::{TracingSystemGuard, TracingThreadGuard},
     LevelFilter,
@@ -135,7 +135,7 @@ impl TelemetryGuardBuilder {
     pub fn with_ctrlc_handling(self) -> Self {
         ctrlc::set_handler(move || {
             info!("Ctrl+C was hit!");
-            tracing::guards::shutdown_telemetry();
+            micromegas_tracing::guards::shutdown_telemetry();
             std::process::exit(1);
         })
         .expect("Error setting Ctrl+C handler");

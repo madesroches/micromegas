@@ -2,17 +2,17 @@ use lgn_telemetry_proto::telemetry::{
     ContainerMetadata, Stream as StreamProto, UdtMember as UdtMemberProto,
     UserDefinedType as UserDefinedTypeProto,
 };
+use micromegas_tracing::event::{EventStream, ExtractDeps, TracingBlock};
+use micromegas_transit::HeterogeneousQueue;
+use micromegas_transit::UserDefinedType;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use tracing::event::{EventStream, ExtractDeps, TracingBlock};
-use transit::HeterogeneousQueue;
-use transit::UserDefinedType;
 
 pub fn get_stream_info_proto<Block>(stream: &EventStream<Block>) -> StreamProto
 where
     Block: TracingBlock,
-    <Block as TracingBlock>::Queue: transit::HeterogeneousQueue,
-    <<Block as TracingBlock>::Queue as ExtractDeps>::DepsQueue: transit::HeterogeneousQueue,
+    <Block as TracingBlock>::Queue: micromegas_transit::HeterogeneousQueue,
+    <<Block as TracingBlock>::Queue as ExtractDeps>::DepsQueue: micromegas_transit::HeterogeneousQueue,
 {
     let dependencies_meta =
         make_queue_metadata_proto::<<<Block as TracingBlock>::Queue as ExtractDeps>::DepsQueue>();
@@ -40,8 +40,8 @@ pub struct StreamInfo {
 pub fn get_stream_info<Block>(stream: &EventStream<Block>) -> StreamInfo
 where
     Block: TracingBlock,
-    <Block as TracingBlock>::Queue: transit::HeterogeneousQueue,
-    <<Block as TracingBlock>::Queue as ExtractDeps>::DepsQueue: transit::HeterogeneousQueue,
+    <Block as TracingBlock>::Queue: micromegas_transit::HeterogeneousQueue,
+    <<Block as TracingBlock>::Queue as ExtractDeps>::DepsQueue: micromegas_transit::HeterogeneousQueue,
 {
     //todo: we should extract secondary udts
     let dependencies_meta =
@@ -83,7 +83,7 @@ fn proto_from_udt(
     }
 }
 
-fn make_queue_metadata_proto<Queue: transit::HeterogeneousQueue>() -> ContainerMetadata {
+fn make_queue_metadata_proto<Queue: micromegas_transit::HeterogeneousQueue>() -> ContainerMetadata {
     let udts = Queue::reflect_contained();
     let mut secondary_types = HashMap::new();
     let mut types: Vec<UserDefinedTypeProto> = udts

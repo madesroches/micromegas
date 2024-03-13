@@ -1,5 +1,5 @@
-use analytics::find_stream;
-use analytics::prelude::*;
+use micromegas_analytics::find_stream;
+use micromegas_analytics::prelude::*;
 use anyhow::{Context, Ok, Result};
 use lgn_blob_storage::BlobStorage;
 use lgn_telemetry_proto::analytics::MetricBlockData;
@@ -11,8 +11,8 @@ use lgn_telemetry_proto::analytics::MetricDesc;
 use sqlx::PgPool;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tracing::prelude::*;
-use transit::prelude::*;
+use micromegas_tracing::prelude::*;
+use micromegas_transit::prelude::*;
 use xxhash_rust::const_xxh32::xxh32 as const_xxh32;
 
 use crate::cache::DiskCache;

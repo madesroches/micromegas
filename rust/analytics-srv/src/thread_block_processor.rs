@@ -1,11 +1,10 @@
-use std::sync::Arc;
-
-use analytics::{fetch_block_payload, parse_block};
 use anyhow::Result;
 use lgn_blob_storage::BlobStorage;
-use tracing::prelude::*;
-use tracing::warn;
-use transit::{Object, Value};
+use micromegas_analytics::{fetch_block_payload, parse_block};
+use micromegas_tracing::prelude::*;
+use micromegas_tracing::warn;
+use micromegas_transit::{Object, Value};
+use std::sync::Arc;
 
 pub trait ThreadBlockProcessor {
     fn on_begin_thread_scope(
@@ -32,7 +31,7 @@ pub trait ThreadBlockProcessor {
     ) -> Result<()>;
 }
 
-fn on_thread_event<F>(obj: &transit::Object, mut fun: F) -> Result<()>
+fn on_thread_event<F>(obj: &micromegas_transit::Object, mut fun: F) -> Result<()>
 where
     F: FnMut(Arc<Object>, i64) -> Result<()>,
 {
@@ -41,7 +40,7 @@ where
     fun(scope, tick)
 }
 
-fn on_thread_named_event<F>(obj: &transit::Object, mut fun: F) -> Result<()>
+fn on_thread_named_event<F>(obj: &micromegas_transit::Object, mut fun: F) -> Result<()>
 where
     F: FnMut(Arc<Object>, Arc<String>, i64) -> Result<()>,
 {
@@ -51,7 +50,7 @@ where
     fun(scope, name, tick)
 }
 
-fn on_async_thread_event<F>(obj: &transit::Object, mut fun: F) -> Result<()>
+fn on_async_thread_event<F>(obj: &micromegas_transit::Object, mut fun: F) -> Result<()>
 where
     F: FnMut(u64, Arc<Object>, i64) -> Result<()>,
 {
@@ -61,7 +60,7 @@ where
     fun(span_id, scope, tick)
 }
 
-fn on_async_thread_named_event<F>(obj: &transit::Object, mut fun: F) -> Result<()>
+fn on_async_thread_named_event<F>(obj: &micromegas_transit::Object, mut fun: F) -> Result<()>
 where
     F: FnMut(u64, Arc<Object>, Arc<String>, i64) -> Result<()>,
 {
@@ -74,8 +73,8 @@ where
 
 #[span_fn]
 pub fn parse_thread_block_payload<Proc: ThreadBlockProcessor>(
-    payload: &telemetry_sink::block_wire_format::BlockPayload,
-    stream: &telemetry_sink::stream_info::StreamInfo,
+    payload: &micromegas_telemetry_sink::block_wire_format::BlockPayload,
+    stream: &micromegas_telemetry_sink::stream_info::StreamInfo,
     processor: &mut Proc,
 ) -> Result<()> {
     parse_block(stream, payload, |val| {
@@ -154,7 +153,7 @@ pub fn parse_thread_block_payload<Proc: ThreadBlockProcessor>(
 #[span_fn]
 pub async fn parse_thread_block<Proc: ThreadBlockProcessor>(
     blob_storage: Arc<dyn BlobStorage>,
-    stream: &telemetry_sink::stream_info::StreamInfo,
+    stream: &micromegas_telemetry_sink::stream_info::StreamInfo,
     block_id: String,
     processor: &mut Proc,
 ) -> Result<()> {

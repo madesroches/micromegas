@@ -1,12 +1,10 @@
-use std::collections::HashSet;
-
-use transit::prelude::*;
-
 use super::{
     LogMetadata, LogMetadataRecord, LogStaticStrEvent, LogStaticStrInteropEvent, LogStringEvent,
     LogStringInteropEvent,
 };
 use crate::event::{EventBlock, EventStream, ExtractDeps};
+use micromegas_transit::prelude::*;
+use std::collections::HashSet;
 
 declare_queue_struct!(
     struct LogMsgQueue<

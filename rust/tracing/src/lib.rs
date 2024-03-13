@@ -88,7 +88,7 @@ pub mod prelude {
         async_span_scope, debug, error, fmetric, imetric, info, log, log_enabled, span_scope,
         trace, warn,
     };
-    pub use tracing_proc_macros::*;
+    pub use micromegas_tracing_proc_macros::*;
 }
 
 pub use prelude::*;

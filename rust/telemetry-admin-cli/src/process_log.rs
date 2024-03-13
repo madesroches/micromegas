@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
-use analytics::prelude::*;
+use micromegas_analytics::prelude::*;
 use anyhow::Result;
 use lgn_blob_storage::BlobStorage;
 use lgn_telemetry_proto::telemetry::Process as ProcessInfo;
 
 pub async fn print_process_log(
-    connection: &mut sqlx::AnyConnection,
+    connection: &mut sqlx::PgConnection,
     blob_storage: Arc<dyn BlobStorage>,
     process_id: impl Into<String>,
 ) -> Result<()> {
@@ -26,7 +26,7 @@ pub async fn print_process_log(
 }
 
 pub async fn print_logs_by_process(
-    connection: &mut sqlx::AnyConnection,
+    connection: &mut sqlx::PgConnection,
     blob_storage: Arc<dyn BlobStorage>,
 ) -> Result<()> {
     for p in list_recent_processes(connection, None).await.unwrap() {

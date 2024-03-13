@@ -4,7 +4,7 @@ use http::{HeaderMap, HeaderValue, Method, Request, Response, Version};
 use http_body::{combinators::UnsyncBoxBody, Body};
 use tonic::codegen::{BoxFuture, StdError};
 use tower::Service;
-use tracing::{debug, warn};
+use micromegas_tracing::{debug, warn};
 
 use super::super::consts::{GRPC, GRPC_WEB, PROTOBUF};
 use super::Error;

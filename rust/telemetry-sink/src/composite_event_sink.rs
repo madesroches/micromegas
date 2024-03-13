@@ -1,15 +1,14 @@
-use std::{
-    fmt,
-    sync::{atomic::AtomicU32, Arc},
-};
-
-use tracing::{
+use micromegas_tracing::{
     dispatch::{flush_log_buffer, log_enabled, log_interop},
     event::{BoxedEventSink, EventSink},
     logs::{LogBlock, LogMetadata, LogStream, FILTER_LEVEL_UNSET_VALUE},
     metrics::{MetricsBlock, MetricsStream},
     spans::{ThreadBlock, ThreadStream},
     Level, LevelFilter, ProcessInfo,
+};
+use std::{
+    fmt,
+    sync::{atomic::AtomicU32, Arc},
 };
 
 pub struct CompositeSink {
@@ -25,7 +24,7 @@ impl CompositeSink {
         interop_max_level_override: Option<LevelFilter>,
     ) -> Self {
         if let Some(max_level) = max_level_override {
-            tracing::set_max_level(max_level);
+            micromegas_tracing::set_max_level(max_level);
         } else {
             let mut max_level = LevelFilter::Off;
             for (_, level_filter) in &target_max_level {
@@ -34,12 +33,12 @@ impl CompositeSink {
             for (level_filter, _) in &sinks {
                 max_level = max_level.max(*level_filter);
             }
-            tracing::set_max_level(max_level);
+            micromegas_tracing::set_max_level(max_level);
         }
         let interop_max_level = if let Some(max_level) = interop_max_level_override {
             tracing_level_filter_to_log_level_filter(max_level)
         } else {
-            tracing_level_filter_to_log_level_filter(tracing::max_level())
+            tracing_level_filter_to_log_level_filter(micromegas_tracing::max_level())
         };
         log::set_max_level(interop_max_level);
 
@@ -62,14 +61,14 @@ impl CompositeSink {
         const GENERATION: u16 = 1;
         // At this point we would have already tested the max level on the macro
         match metadata.level_filter(GENERATION) {
-            tracing::logs::FilterState::Outdated => {
+            micromegas_tracing::logs::FilterState::Outdated => {
                 let level_filter =
                     Self::find_max_match(metadata.target, &self.target_level_filters);
                 metadata.set_level_filter(GENERATION, level_filter);
                 level_filter
             }
-            tracing::logs::FilterState::NotSet => None,
-            tracing::logs::FilterState::Set(level_filter) => Some(level_filter),
+            micromegas_tracing::logs::FilterState::NotSet => None,
+            micromegas_tracing::logs::FilterState::Set(level_filter) => Some(level_filter),
         }
     }
 

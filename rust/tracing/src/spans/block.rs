@@ -1,7 +1,3 @@
-use std::collections::HashSet;
-
-use transit::prelude::*;
-
 use super::{
     BeginAsyncNamedSpanEvent, BeginAsyncSpanEvent, BeginThreadNamedSpanEvent, BeginThreadSpanEvent,
     EndAsyncNamedSpanEvent, EndAsyncSpanEvent, EndThreadNamedSpanEvent, EndThreadSpanEvent,
@@ -11,6 +7,8 @@ use crate::{
     event::{EventBlock, EventStream, ExtractDeps},
     string_id::StringId,
 };
+use micromegas_transit::prelude::*;
+use std::collections::HashSet;
 
 declare_queue_struct!(
     struct ThreadEventQueue<

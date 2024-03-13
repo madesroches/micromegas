@@ -1,9 +1,4 @@
-use std::{
-    fmt,
-    sync::{atomic::AtomicU32, Arc, Mutex},
-};
-
-use tracing::{
+use micromegas_tracing::{
     dispatch::{flush_log_buffer, log_enabled, log_interop},
     event::EventSink,
     logs::{LogBlock, LogMetadata, LogMsgQueueAny, LogStream},
@@ -11,7 +6,11 @@ use tracing::{
     spans::{ThreadBlock, ThreadEventQueueAny, ThreadStream},
     Level, ProcessInfo,
 };
-use transit::HeterogeneousQueue;
+use micromegas_transit::HeterogeneousQueue;
+use std::{
+    fmt,
+    sync::{atomic::AtomicU32, Arc, Mutex},
+};
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum State {

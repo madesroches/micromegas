@@ -1,6 +1,5 @@
-use transit::prelude::*;
-
 use crate::{string_id::StringId, Verbosity};
+use micromegas_transit::prelude::*;
 
 #[derive(Debug)]
 pub struct SpanLocation {

@@ -13,7 +13,6 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use analytics::alloc_sql_pool;
 use anyhow::bail;
 use anyhow::Context;
 use anyhow::Result;
@@ -23,11 +22,11 @@ use lgn_blob_storage::AwsS3BlobStorage;
 use lgn_blob_storage::AwsS3Url;
 use lgn_blob_storage::BlobStorage;
 use lgn_blob_storage::LocalBlobStorage;
+use micromegas_telemetry_sink::TelemetryGuard;
 use process_log::{print_logs_by_process, print_process_log};
 use process_search::print_process_search;
 use process_search::print_process_tree;
 use process_search::print_recent_processes;
-use telemetry_sink::TelemetryGuard;
 
 use crate::{
     process_metrics::print_process_metrics,
@@ -113,13 +112,8 @@ async fn main() -> Result<()> {
     let pool;
     let blob_storage: Arc<dyn BlobStorage>;
 
-    if let Some(local_path) = args.local {
-        if args.remote_db_url.is_some() {
-            bail!("remote-db-url and local path can't be both specified");
-        }
-        let blocks_folder = local_path.join("blobs");
-        blob_storage = Arc::new(LocalBlobStorage::new(blocks_folder).await?);
-        pool = alloc_sql_pool(&local_path).await.unwrap();
+    if let Some(_) = args.local {
+        bail!("local db not supported anymore");
     } else {
         if args.remote_db_url.is_none() {
             bail!("remote-db-url or local path has to be specified");
@@ -132,7 +126,7 @@ async fn main() -> Result<()> {
         blob_storage =
             Arc::new(AwsS3BlobStorage::new(AwsS3Url::from_str(&args.s3_lake_url.unwrap())?).await);
 
-        pool = sqlx::any::AnyPoolOptions::new()
+        pool = sqlx::postgres::PgPoolOptions::new()
             .connect(&args.remote_db_url.unwrap())
             .await
             .with_context(|| String::from("Connecting to telemetry database"))?;

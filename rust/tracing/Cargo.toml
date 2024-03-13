@@ -1,12 +1,16 @@
 [package]
-name = "tracing"
-version = "0.1.0"
-edition = "2021"
-license = "Apache-2.0"
+name = "micromegas-tracing"
+keywords.workspace = true
+version.workspace = true
+edition.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+authors.workspace = true
 
 [dependencies]
-transit.workspace = true
-tracing-proc-macros = { path = "./proc-macros", version = "0.1.0" }
+micromegas-transit.workspace = true
+micromegas-tracing-proc-macros = { path = "./proc-macros", version = "0.1.0" }
 
 cfg-if.workspace = true
 chrono.workspace = true

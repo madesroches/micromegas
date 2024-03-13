@@ -21,10 +21,10 @@ pub use static_string::*;
 
 #[allow(unused_imports)]
 #[macro_use]
-extern crate derive_transit;
+extern crate micromegas_derive_transit;
 
 pub mod prelude {
-    pub use derive_transit::*;
+    pub use micromegas_derive_transit::*;
 
     pub use crate::{
         read_any, write_any, DynString, HeterogeneousQueue, InProcSerialize, InProcSize, Member,

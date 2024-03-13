@@ -4,7 +4,7 @@ use crate::{
 };
 use anyhow::Result;
 use lgn_telemetry_proto::analytics::{CumulativeComputedCallGraphNode, CumulativeStats};
-use tracing::span_fn;
+use micromegas_tracing::span_fn;
 
 pub type CallNodeHashMap = std::collections::HashMap<u32, CallGraphNode>;
 
