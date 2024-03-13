@@ -19,12 +19,12 @@ use axum::Router;
 use clap::Parser;
 use ingestion::data_lake_connection::DataLakeConnection;
 use ingestion::remote_data_lake::connect_to_remote_data_lake;
+use ingestion::web_ingestion_service::WebIngestionService;
 use std::net::SocketAddr;
 use telemetry_sink::stream_info::StreamInfo;
 use telemetry_sink::TelemetryGuardBuilder;
 use tower_http::limit::RequestBodyLimitLayer;
 use tracing::prelude::*;
-use ingestion::web_ingestion_service::WebIngestionService;
 
 #[derive(Parser, Debug)]
 #[clap(name = "Telemetry Ingestion Server")]
