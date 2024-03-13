@@ -21,7 +21,7 @@ lgn-online = { path = "lgn-online" }
 lgn-telemetry-proto = { path = "lgn-telemetry-proto" }
 
 analytics = { path = "analytics" }
-mm-ingestion = { path = "ingestion" }
+mm-ingestion = { path = "ingestion", version = "0.1.0" }
 public = { path = "public" }
 telemetry-sink = { path = "telemetry-sink" }
 tracing = { path = "tracing" }
