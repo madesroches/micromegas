@@ -13,7 +13,6 @@ use lgn_blob_storage::BlobStorage;
 use lgn_telemetry_proto::analytics::LogEntry;
 use lgn_telemetry_proto::decompress;
 use lgn_telemetry_proto::telemetry::{BlockMetadata, Process as ProcessInfo};
-use sqlx::any::AnyRow;
 use sqlx::Row;
 use telemetry_sink::stream_info::StreamInfo;
 use tracing::prelude::*;
@@ -32,7 +31,7 @@ pub async fn alloc_sql_pool(data_folder: &Path) -> Result<sqlx::AnyPool> {
 }
 
 #[span_fn]
-fn process_from_row(row: &sqlx::any::AnyRow) -> ProcessInfo {
+fn process_from_row(row: &sqlx::postgres::PgRow) -> ProcessInfo {
     let tsc_frequency: i64 = row.get("tsc_frequency");
     ProcessInfo {
         process_id: row.get("process_id"),
@@ -51,7 +50,7 @@ fn process_from_row(row: &sqlx::any::AnyRow) -> ProcessInfo {
 
 #[span_fn]
 pub async fn processes_by_name_substring(
-    connection: &mut sqlx::AnyConnection,
+    connection: &mut sqlx::PgConnection,
     filter: &str,
 ) -> Result<Vec<ProcessInfo>> {
     let mut processes = Vec::new();
@@ -73,7 +72,7 @@ pub async fn processes_by_name_substring(
 
 #[span_fn]
 pub async fn find_process(
-    connection: &mut sqlx::AnyConnection,
+    connection: &mut sqlx::PgConnection,
     process_id: &str,
 ) -> Result<ProcessInfo> {
     let row = sqlx::query(
@@ -89,7 +88,7 @@ pub async fn find_process(
 
 #[span_fn]
 pub async fn find_block_process(
-    connection: &mut sqlx::AnyConnection,
+    connection: &mut sqlx::PgConnection,
     block_id: &str,
 ) -> Result<ProcessInfo> {
     let row = sqlx::query(
@@ -107,7 +106,7 @@ pub async fn find_block_process(
 
 #[span_fn]
 pub async fn list_recent_processes(
-    connection: &mut sqlx::AnyConnection,
+    connection: &mut sqlx::PgConnection,
     parent_process_id: Option<&str>,
 ) -> Result<Vec<lgn_telemetry_proto::analytics::ProcessInstance>> {
     let mut processes = Vec::new();
@@ -172,7 +171,7 @@ pub async fn list_recent_processes(
 
 #[span_fn]
 pub async fn search_processes(
-    connection: &mut sqlx::AnyConnection,
+    connection: &mut sqlx::PgConnection,
     keyword: &str,
 ) -> Result<Vec<lgn_telemetry_proto::analytics::ProcessInstance>> {
     let mut processes = Vec::new();
@@ -238,7 +237,7 @@ pub async fn search_processes(
 
 #[span_fn]
 pub async fn fetch_child_processes(
-    connection: &mut sqlx::AnyConnection,
+    connection: &mut sqlx::PgConnection,
     parent_process_id: &str,
 ) -> Result<Vec<ProcessInfo>> {
     let mut processes = Vec::new();
@@ -272,7 +271,7 @@ fn parse_tags(tags_str: &str) -> Vec<String> {
 
 #[span_fn]
 pub async fn find_process_streams_tagged(
-    connection: &mut sqlx::AnyConnection,
+    connection: &mut sqlx::PgConnection,
     process_id: &str,
     tag: &str,
 ) -> Result<Vec<StreamInfo>> {
@@ -317,7 +316,7 @@ pub async fn find_process_streams_tagged(
 
 #[span_fn]
 pub async fn find_process_streams(
-    connection: &mut sqlx::AnyConnection,
+    connection: &mut sqlx::PgConnection,
     process_id: &str,
 ) -> Result<Vec<StreamInfo>> {
     let rows = sqlx::query(
@@ -359,7 +358,7 @@ pub async fn find_process_streams(
 
 #[span_fn]
 pub async fn find_process_blocks(
-    connection: &mut sqlx::AnyConnection,
+    connection: &mut sqlx::PgConnection,
     process_id: &str,
     tag: &str,
 ) -> Result<Vec<BlockMetadata>> {
@@ -386,7 +385,7 @@ pub async fn find_process_blocks(
 
 #[span_fn]
 pub async fn find_process_log_streams(
-    connection: &mut sqlx::AnyConnection,
+    connection: &mut sqlx::PgConnection,
     process_id: &str,
 ) -> Result<Vec<StreamInfo>> {
     find_process_streams_tagged(connection, process_id, "log").await
@@ -394,7 +393,7 @@ pub async fn find_process_log_streams(
 
 #[span_fn]
 pub async fn find_process_thread_streams(
-    connection: &mut sqlx::AnyConnection,
+    connection: &mut sqlx::PgConnection,
     process_id: &str,
 ) -> Result<Vec<StreamInfo>> {
     find_process_streams_tagged(connection, process_id, "cpu").await
@@ -402,7 +401,7 @@ pub async fn find_process_thread_streams(
 
 #[span_fn]
 pub async fn find_process_metrics_streams(
-    connection: &mut sqlx::AnyConnection,
+    connection: &mut sqlx::PgConnection,
     process_id: &str,
 ) -> Result<Vec<StreamInfo>> {
     find_process_streams_tagged(connection, process_id, "metrics").await
@@ -410,7 +409,7 @@ pub async fn find_process_metrics_streams(
 
 #[span_fn]
 pub async fn find_stream(
-    connection: &mut sqlx::AnyConnection,
+    connection: &mut sqlx::PgConnection,
     stream_id: &str,
 ) -> Result<StreamInfo> {
     let row = sqlx::query(
@@ -447,7 +446,7 @@ pub async fn find_stream(
 
 #[span_fn]
 pub async fn find_block_stream(
-    connection: &mut sqlx::AnyConnection,
+    connection: &mut sqlx::PgConnection,
     block_id: &str,
 ) -> Result<StreamInfo> {
     let row = sqlx::query(
@@ -484,7 +483,7 @@ pub async fn find_block_stream(
 }
 
 #[span_fn]
-pub fn map_row_block(row: &AnyRow) -> Result<BlockMetadata> {
+pub fn map_row_block(row: &sqlx::postgres::PgRow) -> Result<BlockMetadata> {
     let opt_size: Option<i64> = row.try_get("payload_size")?;
     Ok(BlockMetadata {
         block_id: row.try_get("block_id")?,
@@ -500,7 +499,7 @@ pub fn map_row_block(row: &AnyRow) -> Result<BlockMetadata> {
 
 #[span_fn]
 pub async fn find_block(
-    connection: &mut sqlx::AnyConnection,
+    connection: &mut sqlx::PgConnection,
     block_id: &str,
 ) -> Result<BlockMetadata> {
     let row = sqlx::query(
@@ -518,7 +517,7 @@ pub async fn find_block(
 
 #[span_fn]
 pub async fn find_stream_blocks(
-    connection: &mut sqlx::AnyConnection,
+    connection: &mut sqlx::PgConnection,
     stream_id: &str,
 ) -> Result<Vec<BlockMetadata>> {
     let rows = sqlx::query(
@@ -540,7 +539,7 @@ pub async fn find_stream_blocks(
 
 #[span_fn]
 pub async fn find_stream_blocks_in_range(
-    connection: &mut sqlx::AnyConnection,
+    connection: &mut sqlx::PgConnection,
     stream_id: &str,
     begin_time: &str,
     end_time: &str,
@@ -596,14 +595,14 @@ where
 {
     let dep_udts = &stream.dependencies_metadata;
     let dependencies = read_dependencies(
-        &dep_udts,
+        dep_udts,
         &decompress(&payload.dependencies).with_context(|| "decompressing dependencies payload")?,
     )
     .with_context(|| "reading dependencies")?;
     let obj_udts = &stream.objects_metadata;
     parse_object_buffer(
         &dependencies,
-        &obj_udts,
+        obj_udts,
         &decompress(&payload.objects).with_context(|| "decompressing objects payload")?,
         fun,
     )
@@ -710,7 +709,7 @@ pub fn log_entry_from_value(process: &ProcessInfo, val: &Value) -> Result<Option
 // find_process_log_entry calls pred(time_ticks,entry_str) with each log entry
 // until pred returns Some(x)
 pub async fn find_process_log_entry<Res, Predicate: FnMut(LogEntry) -> Option<Res>>(
-    connection: &mut sqlx::AnyConnection,
+    connection: &mut sqlx::PgConnection,
     blob_storage: Arc<dyn BlobStorage>,
     process: &ProcessInfo,
     mut pred: Predicate,
@@ -766,7 +765,7 @@ pub async fn for_each_log_entry_in_block<Predicate: FnMut(LogEntry) -> bool>(
 
 #[span_fn]
 pub async fn for_each_process_log_entry<ProcessLogEntry: FnMut(LogEntry)>(
-    connection: &mut sqlx::AnyConnection,
+    connection: &mut sqlx::PgConnection,
     blob_storage: Arc<dyn BlobStorage>,
     process: &ProcessInfo,
     mut process_log_entry: ProcessLogEntry,
@@ -782,7 +781,7 @@ pub async fn for_each_process_log_entry<ProcessLogEntry: FnMut(LogEntry)>(
 
 #[span_fn]
 pub async fn for_each_process_metric<ProcessMetric: FnMut(Arc<transit::Object>)>(
-    connection: &mut sqlx::AnyConnection,
+    connection: &mut sqlx::PgConnection,
     blob_storage: Arc<dyn BlobStorage>,
     process_id: &str,
     mut process_metric: ProcessMetric,
@@ -804,7 +803,7 @@ pub async fn for_each_process_metric<ProcessMetric: FnMut(Arc<transit::Object>)>
 #[async_recursion::async_recursion]
 #[span_fn]
 pub async fn for_each_process_in_tree<F>(
-    pool: &sqlx::AnyPool,
+    pool: &sqlx::PgPool,
     root: &ProcessInfo,
     rec_level: u16,
     fun: F,

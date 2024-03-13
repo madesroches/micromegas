@@ -13,6 +13,7 @@ use lgn_blob_storage::{AwsS3Url, BlobStorage};
 use lgn_telemetry_proto::analytics::{BlockSpansReply, ScopeDesc, SpanBlockLod};
 use parquet::file::serialized_reader::SerializedFileReader;
 use parquet::{file::reader::FileReader, record::RowAccessor};
+use sqlx::PgPool;
 use std::sync::Arc;
 use tracing::prelude::*;
 
@@ -25,7 +26,7 @@ use super::{
 };
 
 pub struct RemoteJitLakehouse {
-    pool: sqlx::any::AnyPool,
+    pool: PgPool,
     blob_storage: Arc<dyn BlobStorage>,
     tables_uri: AwsS3Url,
     s3client: aws_sdk_s3::Client,
@@ -33,7 +34,7 @@ pub struct RemoteJitLakehouse {
 
 impl RemoteJitLakehouse {
     pub async fn new(
-        pool: sqlx::any::AnyPool,
+        pool: PgPool,
         blob_storage: Arc<dyn BlobStorage>,
         tables_uri: AwsS3Url,
     ) -> Self {

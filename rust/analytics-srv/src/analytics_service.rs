@@ -34,6 +34,7 @@ use lgn_telemetry_proto::analytics::{
     CumulativeCallGraphBlockRequest, CumulativeCallGraphManifest,
     CumulativeCallGraphManifestRequest,
 };
+use sqlx::PgPool;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
@@ -74,7 +75,7 @@ impl Drop for RequestGuard {
 }
 
 pub struct AnalyticsService {
-    pool: sqlx::any::AnyPool,
+    pool: PgPool,
     data_lake_blobs: Arc<dyn BlobStorage>,
     cache: Arc<DiskCache>,
     jit_lakehouse: Arc<dyn JitLakehouse>,
@@ -84,7 +85,7 @@ pub struct AnalyticsService {
 impl AnalyticsService {
     #[span_fn]
     pub fn new(
-        pool: sqlx::AnyPool,
+        pool: PgPool,
         data_lake_blobs: Arc<dyn BlobStorage>,
         cache_blobs: Arc<dyn BlobStorage>,
         jit_lakehouse: Arc<dyn JitLakehouse>,

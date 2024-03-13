@@ -41,6 +41,7 @@ use lgn_blob_storage::{
 };
 use lgn_telemetry_proto::analytics::performance_analytics_server::PerformanceAnalyticsServer;
 use lgn_telemetry_proto::health::health_server::HealthServer;
+use sqlx::PgPool;
 use std::net::SocketAddr;
 use telemetry_sink::TelemetryGuardBuilder;
 use tonic::transport::Server;
@@ -76,7 +77,7 @@ enum DataLakeSpec {
 
 async fn new_jit_lakehouse(
     uri: String,
-    pool: sqlx::AnyPool,
+    pool: PgPool,
     data_lake_blobs: Arc<dyn BlobStorage>,
 ) -> Result<Arc<dyn JitLakehouse>> {
     if uri.starts_with("s3://") {
@@ -109,7 +110,7 @@ pub async fn connect_to_local_data_lake(
     ));
     let db_path = data_lake_path.join("telemetry.db3");
     let db_uri = format!("sqlite://{}", db_path.to_str().unwrap().replace('\\', "/"));
-    let pool = sqlx::any::AnyPoolOptions::new()
+    let pool = sqlx::postgres::PgPoolOptions::new()
         .connect(&db_uri)
         .await
         .with_context(|| String::from("Connecting to telemetry database"))?;
@@ -144,7 +145,7 @@ pub async fn connect_to_remote_data_lake(
     let cache_blobs = Arc::new(Lz4BlobStorageAdapter::new(
         AwsS3BlobStorage::new(AwsS3Url::from_str(&s3_url_cache)?).await,
     ));
-    let pool = sqlx::any::AnyPoolOptions::new()
+    let pool = sqlx::postgres::PgPoolOptions::new()
         .max_connections(10)
         .connect(db_uri)
         .await
