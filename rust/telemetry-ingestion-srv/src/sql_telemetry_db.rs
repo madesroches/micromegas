@@ -45,8 +45,8 @@ async fn create_streams_table(connection: &mut sqlx::AnyConnection) -> Result<()
          CREATE TABLE streams(
                   stream_id VARCHAR(36), 
                   process_id VARCHAR(36), 
-                  dependencies_metadata BLOB,
-                  objects_metadata BLOB,
+                  dependencies_metadata BYTEA,
+                  objects_metadata BYTEA,
                   tags TEXT,
                   properties TEXT
                   );
@@ -79,25 +79,10 @@ async fn create_blocks_table(connection: &mut sqlx::AnyConnection) -> Result<()>
     Ok(())
 }
 
-async fn create_payloads_table(connection: &mut sqlx::AnyConnection) -> Result<()> {
-    let sql = "
-         CREATE TABLE payloads(
-                  block_id VARCHAR(36), 
-                  payload LONGBLOB
-                  );
-         CREATE INDEX payload_block_id on payloads(block_id);";
-    connection
-        .execute(sql)
-        .await
-        .with_context(|| "Creating table payloads and its index")?;
-    Ok(())
-}
-
 pub async fn create_tables(connection: &mut sqlx::AnyConnection) -> Result<()> {
     create_processes_table(connection).await?;
     create_streams_table(connection).await?;
     create_blocks_table(connection).await?;
-    create_payloads_table(connection).await?;
     create_migration_table(connection).await?;
     Ok(())
 }
