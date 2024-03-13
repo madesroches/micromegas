@@ -9,8 +9,8 @@ use clap::{ArgEnum, Parser};
 use lgn_api_codegen::{
     generate, Language as InternalLanguage, RustOptions, TypeScriptAliasMappings, TypeScriptOptions,
 };
-use telemetry_sink::TelemetryGuardBuilder;
-use tracing::LevelFilter;
+use micromegas_telemetry_sink::TelemetryGuardBuilder;
+use micromegas_tracing::LevelFilter;
 
 #[derive(Debug, Copy, Clone, ArgEnum)]
 pub enum Language {

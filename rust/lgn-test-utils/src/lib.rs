@@ -4,14 +4,13 @@
 // crate-specific lint exceptions:
 //#![]
 
+use micromegas_tracing::prelude::*;
 use std::process::Command;
 use std::{
     fs::{self, DirEntry},
     io,
     path::{Path, PathBuf},
 };
-
-use tracing::prelude::*;
 
 pub mod jail;
 

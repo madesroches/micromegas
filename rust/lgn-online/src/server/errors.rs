@@ -4,7 +4,7 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use tracing::error;
+use micromegas_tracing::error;
 
 use crate::StdError;
 

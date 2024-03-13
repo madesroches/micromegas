@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use bytes::Bytes;
+use micromegas_tracing::prelude::*;
 use pin_project::pin_project;
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
@@ -11,7 +12,6 @@ use std::{fmt::Display, pin::Pin};
 use tokio::io::AsyncWrite;
 use tokio_stream::Stream;
 use tokio_util::io::StreamReader;
-use tracing::prelude::*;
 
 use super::{BlobStats, BoxedAsyncRead, BoxedAsyncWrite, Error, Result, StreamingBlobStorage};
 

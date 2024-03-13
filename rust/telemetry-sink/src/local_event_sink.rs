@@ -1,12 +1,11 @@
-use std::{fmt, sync::Arc};
-
-use tracing::{
+use micromegas_tracing::{
     event::EventSink,
     logs::{LogBlock, LogMetadata, LogStream},
     metrics::{MetricsBlock, MetricsStream},
     spans::{ThreadBlock, ThreadStream},
     Level, ProcessInfo,
 };
+use std::{fmt, sync::Arc};
 
 // Based on simple logger
 #[cfg(feature = "colored")]

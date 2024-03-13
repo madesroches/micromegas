@@ -3,14 +3,14 @@ use chrono::{DateTime, FixedOffset};
 use sqlx::PgPool;
 use std::sync::Arc;
 
-use analytics::prelude::*;
+use micromegas_analytics::prelude::*;
 use lgn_telemetry_proto::{
     analytics::{
         CumulativeCallGraphBlockDesc, CumulativeCallGraphComputedBlock, CumulativeCallGraphManifest,
     },
     telemetry::Process,
 };
-use tracing::span_fn;
+use micromegas_tracing::span_fn;
 
 use crate::{
     cumulative_call_graph::span_overlaps,

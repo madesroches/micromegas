@@ -13,7 +13,7 @@ use http::{HeaderMap, HeaderValue, Extensions, request::Parts, header::HeaderNam
 use std::net::SocketAddr;
 use serde_qs::axum::QsQuery;
 use lgn_online::server::{Error, Result};
-use tracing::error;
+use micromegas_tracing::error;
 
 {% for (path, routes) in api.paths %}
     {% for route in routes %}

@@ -6,7 +6,7 @@ use crate::{
     },
     scope::ScopeHashMap,
 };
-use analytics::time::ConvertTicks;
+use micromegas_analytics::time::ConvertTicks;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use lgn_blob_storage::{AwsS3Url, BlobStorage};
@@ -15,7 +15,7 @@ use parquet::file::serialized_reader::SerializedFileReader;
 use parquet::{file::reader::FileReader, record::RowAccessor};
 use sqlx::PgPool;
 use std::sync::Arc;
-use tracing::prelude::*;
+use micromegas_tracing::prelude::*;
 
 use super::{
     scope_table::{make_scopes_table_writer, ScopeRowGroup},
@@ -176,8 +176,8 @@ impl RemoteJitLakehouse {
 
     async fn write_call_tree(
         &self,
-        process: &telemetry_sink::ProcessInfo,
-        stream: &telemetry_sink::stream_info::StreamInfo,
+        process: &micromegas_telemetry_sink::ProcessInfo,
+        stream: &micromegas_telemetry_sink::stream_info::StreamInfo,
         block_id: &str,
         spans_key: String,
         scopes_key: String,
@@ -242,7 +242,7 @@ impl RemoteJitLakehouse {
 
     fn get_table_keys(
         &self,
-        process: &telemetry_sink::ProcessInfo,
+        process: &micromegas_telemetry_sink::ProcessInfo,
         block_id: &str,
     ) -> (String, String) {
         let spans_key = format!(
@@ -267,8 +267,8 @@ impl JitLakehouse for RemoteJitLakehouse {
 
     async fn get_thread_block(
         &self,
-        process: &telemetry_sink::ProcessInfo,
-        stream: &telemetry_sink::stream_info::StreamInfo,
+        process: &micromegas_telemetry_sink::ProcessInfo,
+        stream: &micromegas_telemetry_sink::stream_info::StreamInfo,
         block_id: &str,
     ) -> Result<BlockSpansReply> {
         let (spans_key, scopes_key) = self.get_table_keys(process, block_id);
@@ -305,8 +305,8 @@ impl JitLakehouse for RemoteJitLakehouse {
 
     async fn get_call_tree(
         &self,
-        process: &telemetry_sink::ProcessInfo,
-        stream: &telemetry_sink::stream_info::StreamInfo,
+        process: &micromegas_telemetry_sink::ProcessInfo,
+        stream: &micromegas_telemetry_sink::stream_info::StreamInfo,
         block_id: &str,
     ) -> Result<(ScopeHashMap, TabularSpanTree)> {
         let (spans_key, scopes_key) = self.get_table_keys(process, block_id);

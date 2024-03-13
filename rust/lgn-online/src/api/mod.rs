@@ -4,7 +4,7 @@ use std::{
 };
 
 use axum::Router;
-use tracing::info;
+use micromegas_tracing::info;
 
 use crate::server::RouterExt;
 

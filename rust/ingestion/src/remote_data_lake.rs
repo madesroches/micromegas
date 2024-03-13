@@ -3,8 +3,8 @@ use crate::sql_migration::execute_migration;
 use crate::sql_migration::read_schema_version;
 use crate::sql_migration::LATEST_SCHEMA_VERSION;
 use anyhow::{Context, Result};
+use micromegas_tracing::prelude::*;
 use std::sync::Arc;
-use tracing::prelude::*;
 
 async fn acquire_lock(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>, key: i64) -> Result<()> {
     sqlx::query("SELECT pg_advisory_xact_lock($1)")

@@ -3,11 +3,11 @@ use lgn_blob_storage::BlobStorage;
 use sqlx::Executor;
 use sqlx::Row;
 use std::sync::Arc;
-use tracing::prelude::*;
+use micromegas_tracing::prelude::*;
 
 #[allow(clippy::cast_possible_wrap)]
 pub async fn fill_block_sizes(
-    connection: &mut sqlx::AnyConnection,
+    connection: &mut sqlx::PgConnection,
     blob_storage: Arc<dyn BlobStorage>,
 ) -> Result<()> {
     let rows = connection
@@ -46,7 +46,7 @@ pub async fn fill_block_sizes(
 }
 
 pub async fn delete_old_blocks(
-    connection: &mut sqlx::AnyConnection,
+    connection: &mut sqlx::PgConnection,
     blob_storage: Arc<dyn BlobStorage>,
     min_days_old: i32,
 ) -> Result<()> {

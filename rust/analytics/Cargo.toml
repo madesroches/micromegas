@@ -1,21 +1,24 @@
 [package]
-name = "analytics"
-version = "0.1.0"
-edition = "2021"
-license = "MIT OR Apache-2.0"
+name = "micromegas-analytics"
+keywords.workspace = true
+version.workspace = true
+edition.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+authors.workspace = true
 
 [dependencies]
+micromegas-telemetry-sink.workspace = true
+micromegas-tracing.workspace = true
+micromegas-transit.workspace = true
+
 lgn-blob-storage.workspace = true
-tracing.workspace = true
-transit.workspace = true
-telemetry-sink.workspace = true
 lgn-telemetry-proto.workspace = true
-ciborium.workspace = true
-sqlx.workspace = true
+
 anyhow.workspace = true
+async-recursion.workspace = true
+ciborium.workspace = true
 prost.workspace = true
 serde_json.workspace = true
-async-recursion.workspace = true
-
-[dev-dependencies]
-telemetry-sink.workspace = true
+sqlx.workspace = true

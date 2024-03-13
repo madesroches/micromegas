@@ -7,9 +7,9 @@ default-run = "telemetry-ingestion-srv"
 
 [dependencies]
 
-mm-ingestion.workspace = true
-telemetry-sink.workspace = true
-tracing.workspace = true
+micromegas-ingestion.workspace = true
+micromegas-telemetry-sink.workspace = true
+micromegas-tracing.workspace = true
 
 anyhow.workspace = true
 axum.workspace = true

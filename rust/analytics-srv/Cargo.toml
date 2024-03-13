@@ -1,20 +1,22 @@
 [package]
 name = "analytics-srv"
-version = "0.1.1"
-edition = "2021"
-license = "MIT OR Apache-2.0"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
 
 [features]
 deltalake-proto = ["dep:deltalake"]
 
 
 [dependencies]
-analytics.workspace = true
 lgn-blob-storage.workspace = true
-tracing.workspace = true
 lgn-telemetry-proto.workspace = true
-telemetry-sink.workspace = true
-transit.workspace = true
+
+micromegas-analytics.workspace = true
+micromegas-tracing.workspace = true
+micromegas-telemetry-sink.workspace = true
+micromegas-transit.workspace = true
+
 anyhow.workspace = true
 async-trait.workspace = true
 async-recursion.workspace = true

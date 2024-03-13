@@ -10,7 +10,7 @@ use tonic::{
     codegen::{BoxFuture, StdError},
     transport::NamedService,
 };
-use tracing::{debug, info};
+use micromegas_tracing::{debug, info};
 
 use super::{Error, Result};
 

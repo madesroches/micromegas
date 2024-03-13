@@ -1,4 +1,4 @@
-use analytics::prelude::*;
+use micromegas_analytics::prelude::*;
 use anyhow::Context;
 use anyhow::Result;
 use lgn_blob_storage::BlobStorage;
@@ -38,9 +38,9 @@ use sqlx::PgPool;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
-use tracing::dispatch::init_thread_stream;
-use tracing::flush_monitor::FlushMonitor;
-use tracing::prelude::*;
+use micromegas_tracing::dispatch::init_thread_stream;
+use micromegas_tracing::flush_monitor::FlushMonitor;
+use micromegas_tracing::prelude::*;
 
 use crate::cache::DiskCache;
 use crate::call_tree::reduce_lod;
@@ -61,14 +61,14 @@ impl RequestGuard {
         let previous_count = REQUEST_COUNT.fetch_add(1, Ordering::SeqCst);
         imetric!("Request Count", "count", previous_count);
 
-        let begin_ticks = tracing::now();
+        let begin_ticks = micromegas_tracing::now();
         Self { begin_ticks }
     }
 }
 
 impl Drop for RequestGuard {
     fn drop(&mut self) {
-        let end_ticks = tracing::now();
+        let end_ticks = micromegas_tracing::now();
         let duration = end_ticks - self.begin_ticks;
         imetric!("Request Duration", "ticks", duration as u64);
     }
@@ -109,7 +109,7 @@ impl AnalyticsService {
     }
 
     #[span_fn]
-    async fn find_process_impl(&self, process_id: &str) -> Result<telemetry_sink::ProcessInfo> {
+    async fn find_process_impl(&self, process_id: &str) -> Result<micromegas_telemetry_sink::ProcessInfo> {
         let mut connection = self.pool.acquire().await?;
         find_process(&mut connection, process_id).await
     }
@@ -136,7 +136,7 @@ impl AnalyticsService {
     async fn list_process_streams_impl(
         &self,
         process_id: &str,
-    ) -> Result<Vec<telemetry_sink::stream_info::StreamInfo>> {
+    ) -> Result<Vec<micromegas_telemetry_sink::stream_info::StreamInfo>> {
         let mut connection = self.pool.acquire().await?;
         find_process_streams(&mut connection, process_id).await
     }
@@ -153,8 +153,8 @@ impl AnalyticsService {
     #[span_fn]
     async fn compute_spans_lod(
         &self,
-        process: &telemetry_sink::ProcessInfo,
-        stream: &telemetry_sink::stream_info::StreamInfo,
+        process: &micromegas_telemetry_sink::ProcessInfo,
+        stream: &micromegas_telemetry_sink::stream_info::StreamInfo,
         block_id: &str,
         lod_id: u32,
     ) -> Result<BlockSpansReply> {
@@ -179,8 +179,8 @@ impl AnalyticsService {
     #[span_fn]
     async fn block_spans_impl(
         &self,
-        process: &telemetry_sink::ProcessInfo,
-        stream: &telemetry_sink::stream_info::StreamInfo,
+        process: &micromegas_telemetry_sink::ProcessInfo,
+        stream: &micromegas_telemetry_sink::stream_info::StreamInfo,
         block_id: &str,
         lod_id: u32,
     ) -> Result<BlockSpansReply> {
@@ -204,7 +204,7 @@ impl AnalyticsService {
     #[span_fn]
     async fn process_log_impl(
         &self,
-        process: &telemetry_sink::ProcessInfo,
+        process: &micromegas_telemetry_sink::ProcessInfo,
         begin: u64,
         end: u64,
         search: &Option<String>,

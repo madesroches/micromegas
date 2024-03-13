@@ -1,11 +1,15 @@
 [package]
-name = "transit"
-version = "0.1.0"
-edition = "2021"
-license = "Apache-2.0"
+name = "micromegas-transit"
+keywords.workspace = true
+version.workspace = true
+edition.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+authors.workspace = true
 
 [dependencies]
-derive-transit = { path = "derive", version = "0.1.0" }
+micromegas-derive-transit = { path = "derive", version = "0.1.0" }
 
 serde.workspace = true
 anyhow.workspace = true

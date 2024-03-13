@@ -2,7 +2,7 @@ use crate::{block_wire_format, wire_format::encode_cbor};
 use anyhow::Result;
 use lgn_telemetry_proto::compress;
 use lgn_telemetry_proto::telemetry::Block as EncodedBlock;
-use tracing::{
+use micromegas_tracing::{
     event::{ExtractDeps, TracingBlock},
     logs::LogBlock,
     metrics::MetricsBlock,

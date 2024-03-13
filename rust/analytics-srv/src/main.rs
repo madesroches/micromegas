@@ -43,9 +43,9 @@ use lgn_telemetry_proto::analytics::performance_analytics_server::PerformanceAna
 use lgn_telemetry_proto::health::health_server::HealthServer;
 use sqlx::PgPool;
 use std::net::SocketAddr;
-use telemetry_sink::TelemetryGuardBuilder;
+use micromegas_telemetry_sink::TelemetryGuardBuilder;
 use tonic::transport::Server;
-use tracing::prelude::*;
+use micromegas_tracing::prelude::*;
 
 #[derive(Parser, Debug)]
 #[clap(name = "Legion Performance Analytics Server")]

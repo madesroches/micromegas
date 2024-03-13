@@ -15,7 +15,7 @@ use openidconnect::{
     TokenResponse,
 };
 use tokio::sync::{oneshot, Mutex};
-use tracing::{debug, info, warn};
+use micromegas_tracing::{debug, info, warn};
 
 use crate::{
     authenticator::{Authenticator, AuthenticatorWithClaims},

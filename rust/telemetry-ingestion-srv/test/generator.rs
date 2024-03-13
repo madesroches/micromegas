@@ -1,7 +1,7 @@
 //! Generator test
 
-use telemetry_sink::TelemetryGuard;
-use tracing::prelude::*;
+use micromegas_telemetry_sink::TelemetryGuard;
+use micromegas_tracing::prelude::*;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

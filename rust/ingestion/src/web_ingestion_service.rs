@@ -2,10 +2,10 @@ use crate::data_lake_connection::DataLakeConnection;
 use anyhow::Context;
 use anyhow::Result;
 use bytes::Buf;
-use telemetry_sink::block_wire_format;
-use telemetry_sink::stream_info::StreamInfo;
-use telemetry_sink::wire_format::encode_cbor;
-use tracing::prelude::*;
+use micromegas_telemetry_sink::block_wire_format;
+use micromegas_telemetry_sink::stream_info::StreamInfo;
+use micromegas_telemetry_sink::wire_format::encode_cbor;
+use micromegas_tracing::prelude::*;
 
 #[derive(Clone)]
 pub struct WebIngestionService {

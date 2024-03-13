@@ -13,10 +13,10 @@ use lgn_blob_storage::BlobStorage;
 use lgn_telemetry_proto::analytics::LogEntry;
 use lgn_telemetry_proto::decompress;
 use lgn_telemetry_proto::telemetry::{BlockMetadata, Process as ProcessInfo};
+use micromegas_telemetry_sink::stream_info::StreamInfo;
+use micromegas_tracing::prelude::*;
+use micromegas_transit::{parse_object_buffer, read_dependencies, UserDefinedType, Value};
 use sqlx::Row;
-use telemetry_sink::stream_info::StreamInfo;
-use tracing::prelude::*;
-use transit::{parse_object_buffer, read_dependencies, UserDefinedType, Value};
 
 use crate::time::get_tsc_frequency_inverse_ms;
 
@@ -569,14 +569,14 @@ pub async fn find_stream_blocks_in_range(
 pub async fn fetch_block_payload(
     blob_storage: Arc<dyn BlobStorage>,
     block_id: String,
-) -> Result<telemetry_sink::block_wire_format::BlockPayload> {
+) -> Result<micromegas_telemetry_sink::block_wire_format::BlockPayload> {
     let buffer: Vec<u8> = blob_storage
         .read_blob(&block_id)
         .await
         .with_context(|| "reading block payload from blob storage")?;
     {
         span_scope!("decode");
-        let payload: telemetry_sink::block_wire_format::BlockPayload =
+        let payload: micromegas_telemetry_sink::block_wire_format::BlockPayload =
             ciborium::from_reader(&buffer[..])
                 .with_context(|| format!("reading payload {}", &block_id))?;
         Ok(payload)
@@ -587,7 +587,7 @@ pub async fn fetch_block_payload(
 #[span_fn]
 pub fn parse_block<F>(
     stream: &StreamInfo,
-    payload: &telemetry_sink::block_wire_format::BlockPayload,
+    payload: &micromegas_telemetry_sink::block_wire_format::BlockPayload,
     fun: F,
 ) -> Result<()>
 where
@@ -629,7 +629,7 @@ pub fn log_entry_from_value(process: &ProcessInfo, val: &Value) -> Result<Option
                     .get::<i64>("time")
                     .with_context(|| "reading time from LogStaticStrEvent")?;
                 let desc = obj
-                    .get::<Arc<transit::Object>>("desc")
+                    .get::<Arc<micromegas_transit::Object>>("desc")
                     .with_context(|| "reading desc from LogStaticStrEvent")?;
                 let level = Level::from_value(
                     desc.get::<u32>("level")
@@ -654,7 +654,7 @@ pub fn log_entry_from_value(process: &ProcessInfo, val: &Value) -> Result<Option
                     .get::<i64>("time")
                     .with_context(|| "reading time from LogStringEvent")?;
                 let desc = obj
-                    .get::<Arc<transit::Object>>("desc")
+                    .get::<Arc<micromegas_transit::Object>>("desc")
                     .with_context(|| "reading desc from LogStringEvent")?;
                 let level = Level::from_value(
                     desc.get::<u32>("level")
@@ -780,7 +780,7 @@ pub async fn for_each_process_log_entry<ProcessLogEntry: FnMut(LogEntry)>(
 }
 
 #[span_fn]
-pub async fn for_each_process_metric<ProcessMetric: FnMut(Arc<transit::Object>)>(
+pub async fn for_each_process_metric<ProcessMetric: FnMut(Arc<micromegas_transit::Object>)>(
     connection: &mut sqlx::PgConnection,
     blob_storage: Arc<dyn BlobStorage>,
     process_id: &str,

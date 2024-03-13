@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use aws_sdk_dynamodb::model::AttributeValue;
 use aws_sdk_dynamodb::Region;
-use tracing::span_fn;
+use micromegas_tracing::span_fn;
 
 use super::{Error, Result};
 

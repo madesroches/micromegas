@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use lgn_blob_storage::BlobStorage;
-use tracing::prelude::*;
+use micromegas_tracing::prelude::*;
 
 pub struct DiskCache {
     storage: Arc<dyn BlobStorage>,

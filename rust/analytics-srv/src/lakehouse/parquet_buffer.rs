@@ -9,7 +9,7 @@ use std::io::Cursor;
 use std::path::Path;
 use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
-use tracing::prelude::*;
+use micromegas_tracing::prelude::*;
 
 #[derive(Clone)]
 pub struct InMemStream {

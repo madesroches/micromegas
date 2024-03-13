@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use directories::ProjectDirs;
 use openidconnect::AccessToken;
 use tokio::sync::{Mutex, MutexGuard};
-use tracing::{debug, warn};
+use micromegas_tracing::{debug, warn};
 
 use crate::authenticator::{Authenticator, AuthenticatorWithClaims};
 use crate::UserInfo;

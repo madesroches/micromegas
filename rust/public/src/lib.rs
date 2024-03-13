@@ -1,6 +1,5 @@
-//! micromegas : provides write access to the telemetry data lake
+//! micromegas : scalable telemetry
 
-
-pub mod ingestion{
-    pub use mm_ingestion::*;
+pub mod ingestion {
+    pub use micromegas_ingestion::*;
 }

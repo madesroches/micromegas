@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
-use tracing::debug;
+use micromegas_tracing::debug;
 
 use super::{
     BoxedSignatureValidation, SignatureValidation,

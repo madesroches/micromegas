@@ -1,12 +1,3 @@
-use std::collections::HashMap;
-use std::fmt;
-use std::{
-    cell::Cell,
-    sync::{Arc, Mutex},
-};
-
-use chrono::Utc;
-
 pub use crate::errors::{Error, Result};
 use crate::{
     event::{EventSink, NullEventSink, TracingBlock},
@@ -24,6 +15,13 @@ use crate::{
         ThreadStream,
     },
     warn, ProcessInfo,
+};
+use chrono::Utc;
+use std::collections::HashMap;
+use std::fmt;
+use std::{
+    cell::Cell,
+    sync::{Arc, Mutex},
 };
 
 pub fn init_event_dispatch(
@@ -267,7 +265,7 @@ thread_local! {
 #[inline(always)]
 fn on_thread_event<T>(event: T)
 where
-    T: transit::InProcSerialize + ThreadEventQueueTypeIndex,
+    T: micromegas_transit::InProcSerialize + ThreadEventQueueTypeIndex,
 {
     LOCAL_THREAD_STREAM.with(|cell| unsafe {
         let opt_stream = &mut *cell.as_ptr();
@@ -475,7 +473,7 @@ impl Dispatch {
             log_stream.get_events_mut().push(LogStringEvent {
                 desc: metadata,
                 time,
-                dyn_str: transit::DynString(args.to_string()),
+                dyn_str: micromegas_transit::DynString(args.to_string()),
             });
         }
         if log_stream.is_full() {
@@ -502,7 +500,7 @@ impl Dispatch {
                 time,
                 level: desc.level as u32,
                 target: desc.target.into(),
-                msg: transit::DynString(args.to_string()),
+                msg: micromegas_transit::DynString(args.to_string()),
             });
         }
         if log_stream.is_full() {

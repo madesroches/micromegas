@@ -3,7 +3,7 @@ use thiserror::Error;
 use tonic::codegen::BoxFuture;
 use tonic::codegen::StdError;
 use tower::{Layer, Service};
-use tracing::prelude::*;
+use micromegas_tracing::prelude::*;
 
 #[derive(Error, Debug)]
 pub enum AuthError {

@@ -2,7 +2,7 @@ use std::{marker::PhantomData, sync::Arc};
 
 use hyper::{Request, Response, StatusCode};
 use tower_http::auth::AuthorizeRequest;
-use tracing::debug;
+use micromegas_tracing::debug;
 
 use super::{
     signature_validation::{NoSignatureValidation, SignatureValidation},

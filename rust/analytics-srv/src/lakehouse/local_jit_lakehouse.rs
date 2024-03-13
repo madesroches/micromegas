@@ -11,7 +11,7 @@ use super::span_table::{
 use crate::lakehouse::bytes_chunk_reader::BytesChunkReader;
 use crate::scope::ScopeHashMap;
 use crate::{call_tree::process_thread_block, lakehouse::jit_lakehouse::JitLakehouse};
-use analytics::time::ConvertTicks;
+use micromegas_analytics::time::ConvertTicks;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use lgn_blob_storage::BlobStorage;
@@ -21,7 +21,7 @@ use parquet::file::serialized_reader::SerializedFileReader;
 use parquet::record::RowAccessor;
 use sqlx::PgPool;
 use tokio::io::AsyncReadExt;
-use tracing::prelude::*;
+use micromegas_tracing::prelude::*;
 
 use super::scope_table::write_scopes_parquet;
 
@@ -42,8 +42,8 @@ impl LocalJitLakehouse {
 
     async fn write_call_tree(
         &self,
-        process: &telemetry_sink::ProcessInfo,
-        stream: &telemetry_sink::stream_info::StreamInfo,
+        process: &micromegas_telemetry_sink::ProcessInfo,
+        stream: &micromegas_telemetry_sink::stream_info::StreamInfo,
         block_id: &str,
         spans_file_path: PathBuf,
         scopes_file_path: PathBuf,
@@ -170,7 +170,7 @@ impl LocalJitLakehouse {
 
     fn get_table_files(
         &self,
-        process: &telemetry_sink::ProcessInfo,
+        process: &micromegas_telemetry_sink::ProcessInfo,
         block_id: &str,
     ) -> (PathBuf, PathBuf) {
         let spans_file_path = self
@@ -219,8 +219,8 @@ impl JitLakehouse for LocalJitLakehouse {
 
     async fn get_thread_block(
         &self,
-        process: &telemetry_sink::ProcessInfo,
-        stream: &telemetry_sink::stream_info::StreamInfo,
+        process: &micromegas_telemetry_sink::ProcessInfo,
+        stream: &micromegas_telemetry_sink::stream_info::StreamInfo,
         block_id: &str,
     ) -> Result<BlockSpansReply> {
         let (spans_file_path, scopes_file_path) = self.get_table_files(process, block_id);
@@ -257,8 +257,8 @@ impl JitLakehouse for LocalJitLakehouse {
 
     async fn get_call_tree(
         &self,
-        process: &telemetry_sink::ProcessInfo,
-        stream: &telemetry_sink::stream_info::StreamInfo,
+        process: &micromegas_telemetry_sink::ProcessInfo,
+        stream: &micromegas_telemetry_sink::stream_info::StreamInfo,
         block_id: &str,
     ) -> Result<(ScopeHashMap, TabularSpanTree)> {
         let (spans_file_path, scopes_file_path) = self.get_table_files(process, block_id);
