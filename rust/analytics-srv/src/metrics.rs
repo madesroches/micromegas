@@ -8,6 +8,7 @@ use lgn_telemetry_proto::analytics::MetricBlockManifest;
 use lgn_telemetry_proto::analytics::MetricBlockRequest;
 use lgn_telemetry_proto::analytics::MetricDataPoint;
 use lgn_telemetry_proto::analytics::MetricDesc;
+use sqlx::PgPool;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::prelude::*;
@@ -19,7 +20,7 @@ use crate::cache::DiskCache;
 #[allow(clippy::cast_precision_loss)]
 #[allow(dead_code)]
 pub async fn get_process_metrics_time_range(
-    sql: &mut sqlx::AnyConnection,
+    sql: &mut sqlx::PgConnection,
     process_id: &str,
 ) -> Result<(f64, f64)> {
     let mut min_ticks = i64::MAX;
@@ -82,7 +83,7 @@ fn get_lod_block_request_key(request: &MetricBlockRequest) -> String {
 
 pub struct MetricHandler {
     blob_storage: Arc<dyn BlobStorage>,
-    pool: sqlx::any::AnyPool,
+    pool: PgPool,
     cache: Arc<DiskCache>,
 }
 
@@ -90,7 +91,7 @@ impl MetricHandler {
     pub fn new(
         blob_storage: Arc<dyn BlobStorage>,
         cache: Arc<DiskCache>,
-        pool: sqlx::any::AnyPool,
+        pool: PgPool,
     ) -> Self {
         Self {
             blob_storage,

@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, FixedOffset};
+use sqlx::PgPool;
 use std::sync::Arc;
 
 use analytics::prelude::*;
@@ -19,12 +20,12 @@ use crate::{
 };
 
 pub struct CumulativeCallGraphHandler {
-    pool: sqlx::any::AnyPool,
+    pool: PgPool,
     jit_lakehouse: Arc<dyn JitLakehouse>,
 }
 
 impl CumulativeCallGraphHandler {
-    pub fn new(pool: sqlx::any::AnyPool, jit_lakehouse: Arc<dyn JitLakehouse>) -> Self {
+    pub fn new(pool: PgPool, jit_lakehouse: Arc<dyn JitLakehouse>) -> Self {
         Self {
             pool,
             jit_lakehouse,

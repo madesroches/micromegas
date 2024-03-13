@@ -36,7 +36,7 @@ use web_ingestion_service::WebIngestionService;
 #[clap(name = "Telemetry Ingestion Server")]
 #[clap(about = "Telemetry Ingestion Server", version, author)]
 struct Cli {
-    #[clap(long, default_value = "0.0.0.0:8081")]
+    #[clap(long, default_value = "127.0.0.1:8081")]
     listen_endpoint_http: SocketAddr,
 }
 
@@ -89,6 +89,7 @@ async fn serve_http(
     let listener = tokio::net::TcpListener::bind(args.listen_endpoint_http)
         .await
         .unwrap();
+    info!("serving");
     axum::serve(listener, app).await.unwrap();
 
     Ok(())
@@ -101,12 +102,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_local_sink_max_level(LevelFilter::Debug)
         .build();
     let args = Cli::parse();
-	dbg!(&args);
     let connection_string = std::env::var("MICROMEGAS_SQL_CONNECTION_STRING")
         .with_context(|| "reading MICROMEGAS_SQL_CONNECTION_STRING")?;
     let object_store_uri = std::env::var("MICROMEGAS_OBJECT_STORE_URI")
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
-
     let data_lake = connect_to_remote_data_lake(&connection_string, &object_store_uri).await?;
     serve_http(&args, data_lake).await?;
     Ok(())

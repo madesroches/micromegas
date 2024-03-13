@@ -19,23 +19,20 @@ use lgn_telemetry_proto::analytics::{BlockSpansReply, ScopeDesc, SpanBlockLod};
 use parquet::file::reader::FileReader;
 use parquet::file::serialized_reader::SerializedFileReader;
 use parquet::record::RowAccessor;
+use sqlx::PgPool;
 use tokio::io::AsyncReadExt;
 use tracing::prelude::*;
 
 use super::scope_table::write_scopes_parquet;
 
 pub struct LocalJitLakehouse {
-    pool: sqlx::any::AnyPool,
+    pool: PgPool,
     blob_storage: Arc<dyn BlobStorage>,
     tables_path: PathBuf,
 }
 
 impl LocalJitLakehouse {
-    pub fn new(
-        pool: sqlx::any::AnyPool,
-        blob_storage: Arc<dyn BlobStorage>,
-        tables_path: PathBuf,
-    ) -> Self {
+    pub fn new(pool: PgPool, blob_storage: Arc<dyn BlobStorage>, tables_path: PathBuf) -> Self {
         Self {
             pool,
             blob_storage,

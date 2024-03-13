@@ -37,7 +37,7 @@ impl WebIngestionService {
             .await
             .with_context(|| "Error writing block to blob storage")?;
 
-        sqlx::query("INSERT INTO blocks VALUES(?,?,?,?,?,?,?,?);")
+        sqlx::query("INSERT INTO blocks VALUES($1,$2,$3,$4,$5,$6,$7,$8);")
             .bind(block.block_id)
             .bind(block.stream_id)
             .bind(block.begin_time)
@@ -59,7 +59,7 @@ impl WebIngestionService {
             "new stream {:?} {}",
             &stream_info.tags, stream_info.stream_id
         );
-        sqlx::query("INSERT INTO streams VALUES(?,?,?,?,?,?);")
+        sqlx::query("INSERT INTO streams VALUES($1,$2,$3,$4,$5);")
             .bind(stream_info.stream_id)
             .bind(stream_info.process_id)
             .bind(encode_cbor(&stream_info.dependencies_metadata)?)
@@ -74,7 +74,7 @@ impl WebIngestionService {
 
     #[span_fn]
     pub async fn insert_process(&self, body: serde_json::value::Value) -> Result<()> {
-        let current_date: chrono::DateTime<chrono::Utc> = chrono::Utc::now();
+        let insert_time: chrono::DateTime<chrono::Utc> = chrono::Utc::now();
         info!("insert_process: {body:?}");
         let tsc_frequency = body["tsc_frequency"]
             .as_str()
@@ -127,7 +127,7 @@ impl WebIngestionService {
                     .with_context(|| "reading field start_time")?,
             )
             .bind(start_ticks)
-            .bind(current_date.format("%Y-%m-%d").to_string())
+            .bind(insert_time.to_rfc3339())
             .bind(
                 body["parent_process_id"]
                     .as_str()

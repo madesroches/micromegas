@@ -10,6 +10,7 @@ use lgn_telemetry_proto::analytics::ScopeDesc;
 use lgn_telemetry_proto::analytics::SpanBlockLod;
 use lgn_telemetry_proto::analytics::SpanEventType;
 use lgn_telemetry_proto::analytics::SpanTrack;
+use sqlx::PgPool;
 use tracing::prelude::*;
 
 #[derive(Debug)]
@@ -183,7 +184,7 @@ impl ThreadBlockProcessor for CallTreeBuilder {
 #[allow(clippy::cast_precision_loss)]
 #[span_fn]
 pub(crate) async fn process_thread_block(
-    pool: sqlx::any::AnyPool,
+    pool: PgPool,
     blob_storage: Arc<dyn BlobStorage>,
     convert_ticks: ConvertTicks,
     stream: &telemetry_sink::stream_info::StreamInfo,
