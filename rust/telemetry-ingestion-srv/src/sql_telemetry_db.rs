@@ -26,11 +26,11 @@ async fn create_processes_table(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) 
                   tsc_frequency BIGINT,
                   start_time VARCHAR(255),
                   start_ticks BIGINT,
-                  insert_date DATE,
+                  insert_time VARCHAR(255),
                   parent_process_id VARCHAR(36));
          CREATE INDEX process_id on processes(process_id);
          CREATE INDEX parent_process_id on processes(parent_process_id);
-         CREATE INDEX process_insert_date on processes(insert_date);";
+         CREATE INDEX process_insert_time on processes(insert_time);";
     tr.execute(sql)
         .await
         .with_context(|| String::from("Creating table processes and its indices"))?;
