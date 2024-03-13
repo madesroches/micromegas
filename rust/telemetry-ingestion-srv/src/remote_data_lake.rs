@@ -6,15 +6,15 @@ use anyhow::{Context, Result};
 use std::sync::Arc;
 use tracing::prelude::*;
 
-async fn acquire_lock(tr: &mut sqlx::Transaction<'_, sqlx::Any>, key: i64) -> Result<()> {
+async fn acquire_lock(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>, key: i64) -> Result<()> {
     sqlx::query("SELECT pg_advisory_xact_lock($1)")
         .bind(key)
-        .execute(tr)
+        .execute(&mut **tr)
         .await?;
     Ok(())
 }
 
-async fn migrate_db(pool: sqlx::Pool<sqlx::Any>) -> Result<()> {
+async fn migrate_db(pool: sqlx::Pool<sqlx::Postgres>) -> Result<()> {
     let mut tr = pool.begin().await?;
     let mut current_version = read_schema_version(&mut tr).await;
     drop(tr);
@@ -43,7 +43,7 @@ pub async fn connect_to_remote_data_lake(
     info!("connecting to blob storage");
     let (blob_storage, blob_store_root) =
         object_store::parse_url(&url::Url::parse(object_store_url)?)?;
-    let pool = sqlx::any::AnyPoolOptions::new()
+    let pool = sqlx::postgres::PgPoolOptions::new()
         .connect(db_uri)
         .await
         .with_context(|| String::from("Connecting to telemetry database"))?;
