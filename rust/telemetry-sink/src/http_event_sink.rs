@@ -76,18 +76,19 @@ impl HttpEventSink {
         root_path: &str,
         process_info: Arc<ProcessInfo>,
     ) {
-        info!("sending process {process_info:?}");
+        debug!("sending process {process_info:?}");
         let url = format!("{root_path}/ingestion/insert_process");
-        info!("http post: {url}");
-        let request = client.post(url).json(&*process_info);
-        info!("request: {request:?}");
-        match request.send().await {
-            Ok(response) => {
-                info!("insert_process response: {response:?}");
+        let retry_strategy = tokio_retry::strategy::ExponentialBackoff::from_millis(10).take(3); // limit the number of retries
+        if let Err(e) = tokio_retry::Retry::spawn(retry_strategy, || async {
+            let result = client.post(&url).json(&*process_info).send().await;
+            if let Err(e) = &result {
+                debug!("insert_process error: {e}");
             }
-            Err(e) => {
-                error!("insert_process failed: {e:?}");
-            }
+            result
+        })
+        .await
+        {
+            error!("insert_process failed: {e:?}");
         }
     }
 
@@ -96,18 +97,18 @@ impl HttpEventSink {
         root_path: &str,
         stream_info: Arc<StreamInfo>,
     ) {
-        match client
-            .post(format!("{root_path}/ingestion/insert_stream"))
-            .json(&*stream_info)
-            .send()
-            .await
+        let url = format!("{root_path}/ingestion/insert_stream");
+        let retry_strategy = tokio_retry::strategy::ExponentialBackoff::from_millis(10).take(3); // limit the number of retries
+        if let Err(e) = tokio_retry::Retry::spawn(retry_strategy, || async {
+            let result = client.post(&url).json(&*stream_info).send().await;
+            if let Err(e) = &result {
+                debug!("insert_stream error: {e}");
+            }
+            result
+        })
+        .await
         {
-            Ok(response) => {
-                info!("insert_stream response: {response:?}");
-            }
-            Err(e) => {
-                error!("insert_stream failed: {e:?}");
-            }
+            error!("insert_stream failed: {e:?}");
         }
     }
 
