@@ -7,29 +7,17 @@ default-run = "telemetry-ingestion-srv"
 
 [dependencies]
 
-lgn-blob-storage.workspace = true
-lgn-telemetry-proto.workspace = true
+ingestion.workspace = true
 telemetry-sink.workspace = true
 tracing.workspace = true
-transit.workspace = true
 
 anyhow.workspace = true
 axum.workspace = true
 bytes.workspace = true
-chrono.workspace = true
-ciborium.workspace = true
 clap.workspace = true
-http.workspace = true
-hyper.workspace = true
-object_store.workspace = true
-prost.workspace = true
 serde_json.workspace = true
-sqlx.workspace = true
 tokio.workspace = true
-tonic.workspace = true
 tower-http.workspace = true
-url.workspace = true
-whoami.workspace = true
 
 [[bin]]
 name = "telemetry-ingestion-srv"
