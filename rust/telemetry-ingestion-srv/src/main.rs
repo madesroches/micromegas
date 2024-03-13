@@ -1,34 +1,31 @@
 //! Telemetry Ingestion Server
 //!
-//! Accepts telemetry data through grpc, stores the metadata in sqlite and the
-//! raw event payload in local binary files.
+//! Accepts telemetry data through http, stores the metadata in postgresql and the
+//! raw event payload in the object store.
 //!
 //! Env variables:
-//!  - `LEGION_TELEMETRY_INGESTION_SRC_DATA_DIRECTORY` : local directory where
-//!    data will be dumped
+//!  - `MICROMEGAS_SQL_CONNECTION_STRING` : to connect to postgresql
+//!  - `MICROMEGAS_OBJECT_STORE_URI` : to write the payloads
 
 // crate-specific lint exceptions:
 //#![allow()]
 
 mod data_lake_connection;
-mod local_data_lake;
 mod remote_data_lake;
 mod sql_migration;
 mod sql_telemetry_db;
 mod web_ingestion_service;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use axum::extract::DefaultBodyLimit;
 use axum::routing::post;
 use axum::Extension;
 use axum::Json;
 use axum::Router;
-use clap::{Parser, Subcommand};
+use clap::Parser;
 use data_lake_connection::DataLakeConnection;
-use local_data_lake::connect_to_local_data_lake;
 use remote_data_lake::connect_to_remote_data_lake;
 use std::net::SocketAddr;
-use std::path::PathBuf;
 use telemetry_sink::stream_info::StreamInfo;
 use telemetry_sink::TelemetryGuardBuilder;
 use tower_http::limit::RequestBodyLimitLayer;
@@ -36,21 +33,11 @@ use tracing::prelude::*;
 use web_ingestion_service::WebIngestionService;
 
 #[derive(Parser, Debug)]
-#[clap(name = "Legion Telemetry Ingestion Server")]
-#[clap(about = "Legion Telemetry Ingestion Server", version, author)]
-#[clap(arg_required_else_help(true))]
+#[clap(name = "Telemetry Ingestion Server")]
+#[clap(about = "Telemetry Ingestion Server", version, author)]
 struct Cli {
     #[clap(long, default_value = "0.0.0.0:8081")]
     listen_endpoint_http: SocketAddr,
-
-    #[clap(subcommand)]
-    spec: DataLakeSpec,
-}
-
-#[derive(Subcommand, Debug)]
-enum DataLakeSpec {
-    Local { path: PathBuf },
-    Remote { db_uri: String, s3_url: String },
 }
 
 async fn insert_process_request(
@@ -114,12 +101,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_local_sink_max_level(LevelFilter::Debug)
         .build();
     let args = Cli::parse();
-    let data_lake = match &args.spec {
-        DataLakeSpec::Local { path } => connect_to_local_data_lake(path.clone()).await?,
-        DataLakeSpec::Remote { db_uri, s3_url } => {
-            connect_to_remote_data_lake(db_uri, s3_url).await?
-        }
-    };
+	dbg!(&args);
+    let connection_string = std::env::var("MICROMEGAS_SQL_CONNECTION_STRING")
+        .with_context(|| "reading MICROMEGAS_SQL_CONNECTION_STRING")?;
+    let object_store_uri = std::env::var("MICROMEGAS_OBJECT_STORE_URI")
+        .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
+
+    let data_lake = connect_to_remote_data_lake(&connection_string, &object_store_uri).await?;
     serve_http(&args, data_lake).await?;
     Ok(())
 }

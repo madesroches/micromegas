@@ -10,40 +10,51 @@ lgn-config = { path = "lgn-config" }
 lgn-online = { path = "lgn-online" }
 lgn-telemetry-proto = { path = "lgn-telemetry-proto" }
 
+analytics = { path = "analytics" }
 telemetry-sink = { path = "telemetry-sink" }
 tracing = { path = "tracing" }
 transit = { path = "transit" }
 
 anyhow = "1.0"
+async-recursion = "1"
 async-trait = "0.1"
 atty = "0.2.13"
+aws-config = "0.12"
+aws-sdk-s3 = "0.12"
 axum = "0.7.4"
+blake3 = { version = "1.3", features = ["prefer_intrinsics"] }
 bytes = "1.1"
 cfg-if = "1.0"
 chrono = "0.4"
 ciborium = "0.2.2"
-clap = { version = "3.0", features = ["derive"] }
+clap = { version = "4", features = ["derive"] }
 colored = { version = "2" }
 criterion = "0.3"
 ctrlc = "3.2.0"
+futures = "0.3"
 http = "0.2"
 hyper = "0.14"
+json = "0.12"
 lazy_static = "1.4"
 log = { version = "0.4", features = ["std"] }
+lz4 = "1.23"
 memoffset = "0.6"
+object_store = { version = "0.9.0", features = ["aws"] }
 once_cell = "1.7.2"
 prost = "0.9"
 raw-cpuid = "10.2.0"
 reqwest = {version = "0.11.24", features = ["json"]}
 serde = "1.0"
 serde_json = "1.0"
-sqlx = { version = "0.5", features = ["sqlite","any","mysql","runtime-tokio-native-tls"] }
+sqlx = { version = "0.7.3", features = ["runtime-tokio", "postgres"] }
 thiserror = "1.0"
 thread-id = "4.0"
 time = { version = "0.3.5", features = ["formatting","local-offset","macros"]}
-tokio = { version = "1.13", features = ["macros","rt-multi-thread","tracing"]}
+tokio = { version = "1.33", features = ["macros","rt-multi-thread","tracing"]}
 tonic = "0.6"
+tower = "0.4"
 tower-http = { version = "0.5.2", features = ["limit"] }
+url = "2.5.0"
 uuid = { version = "1.0", features = ["v4"] }
 whoami = "1.2"
 winapi = { version = "0.3", features = ["handleapi", "winbase"] }
