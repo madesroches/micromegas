@@ -3,6 +3,16 @@ members = ["*"]
 exclude = ["target"]
 resolver = "2"
 
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+homepage = "https://github.com/madesroches/micromegas/"
+authors = ["Marc-Antoine Desroches <madesroches@gmail.com>"]
+repository = "https://github.com/madesroches/micromegas/"
+
+
 [workspace.dependencies]
 lgn-auth = { path = "lgn-auth" }
 lgn-blob-storage = { path = "lgn-blob-storage", version = "0.1.0" }
@@ -11,7 +21,8 @@ lgn-online = { path = "lgn-online" }
 lgn-telemetry-proto = { path = "lgn-telemetry-proto" }
 
 analytics = { path = "analytics" }
-ingestion = { path = "ingestion" }
+mm-ingestion = { path = "ingestion" }
+public = { path = "public" }
 telemetry-sink = { path = "telemetry-sink" }
 tracing = { path = "tracing" }
 transit = { path = "transit" }
