@@ -14,7 +14,6 @@ micromegas-tracing.workspace = true
 micromegas-transit.workspace = true
 
 lgn-blob-storage.workspace = true
-lgn-telemetry-proto.workspace = true
 
 anyhow.workspace = true
 async-recursion.workspace = true

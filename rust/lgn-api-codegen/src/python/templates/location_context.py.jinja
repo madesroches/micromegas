@@ -1,7 +1,0 @@
-# Models and API from: {{ module_path }}
-
-{% include "models.py.jinja" %}
-
-{% if let Some(api) = location_ctx.api %}
-{% include "api.py.jinja" %}
-{% endif %}

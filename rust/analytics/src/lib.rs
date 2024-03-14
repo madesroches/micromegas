@@ -10,9 +10,6 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use lgn_blob_storage::BlobStorage;
-use lgn_telemetry_proto::analytics::LogEntry;
-use lgn_telemetry_proto::decompress;
-use lgn_telemetry_proto::telemetry::{BlockMetadata, Process as ProcessInfo};
 use micromegas_telemetry_sink::stream_info::StreamInfo;
 use micromegas_tracing::prelude::*;
 use micromegas_transit::{parse_object_buffer, read_dependencies, UserDefinedType, Value};
