@@ -3,6 +3,9 @@
 // crate-specific lint exceptions:
 #![allow(clippy::missing_errors_doc)]
 
+pub mod block;
+pub mod log_entry;
+pub mod process;
 pub mod time;
 
 use std::path::Path;
@@ -10,12 +13,13 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use lgn_blob_storage::BlobStorage;
-use micromegas_telemetry_sink::stream_info::StreamInfo;
+use micromegas_telemetry_sink::{compression::decompress, stream_info::StreamInfo};
 use micromegas_tracing::prelude::*;
 use micromegas_transit::{parse_object_buffer, read_dependencies, UserDefinedType, Value};
+use process::ProcessEntry;
 use sqlx::Row;
 
-use crate::time::get_tsc_frequency_inverse_ms;
+use crate::{block::BlockMetadata, log_entry::LogEntry, time::get_tsc_frequency_inverse_ms};
 
 #[span_fn]
 pub async fn alloc_sql_pool(data_folder: &Path) -> Result<sqlx::AnyPool> {
@@ -28,9 +32,8 @@ pub async fn alloc_sql_pool(data_folder: &Path) -> Result<sqlx::AnyPool> {
 }
 
 #[span_fn]
-fn process_from_row(row: &sqlx::postgres::PgRow) -> ProcessInfo {
-    let tsc_frequency: i64 = row.get("tsc_frequency");
-    ProcessInfo {
+fn process_from_row(row: &sqlx::postgres::PgRow) -> ProcessEntry {
+    ProcessEntry {
         process_id: row.get("process_id"),
         exe: row.get("exe"),
         username: row.get("username"),
@@ -38,7 +41,7 @@ fn process_from_row(row: &sqlx::postgres::PgRow) -> ProcessInfo {
         computer: row.get("computer"),
         distro: row.get("distro"),
         cpu_brand: row.get("cpu_brand"),
-        tsc_frequency: tsc_frequency as u64,
+        tsc_frequency: row.get("tsc_frequency"),
         start_time: row.get("start_time"),
         start_ticks: row.get("start_ticks"),
         parent_process_id: row.get("parent_process_id"),
@@ -49,7 +52,7 @@ fn process_from_row(row: &sqlx::postgres::PgRow) -> ProcessInfo {
 pub async fn processes_by_name_substring(
     connection: &mut sqlx::PgConnection,
     filter: &str,
-) -> Result<Vec<ProcessInfo>> {
+) -> Result<Vec<ProcessEntry>> {
     let mut processes = Vec::new();
     let rows = sqlx::query(
         "SELECT process_id, exe, username, realname, computer, distro, cpu_brand, tsc_frequency, start_time, start_ticks, parent_process_id
@@ -71,7 +74,7 @@ pub async fn processes_by_name_substring(
 pub async fn find_process(
     connection: &mut sqlx::PgConnection,
     process_id: &str,
-) -> Result<ProcessInfo> {
+) -> Result<ProcessEntry> {
     let row = sqlx::query(
         "SELECT process_id, exe, username, realname, computer, distro, cpu_brand, tsc_frequency, start_time, start_ticks, parent_process_id
          FROM processes
@@ -87,7 +90,7 @@ pub async fn find_process(
 pub async fn find_block_process(
     connection: &mut sqlx::PgConnection,
     block_id: &str,
-) -> Result<ProcessInfo> {
+) -> Result<ProcessEntry> {
     let row = sqlx::query(
         "SELECT processes.process_id AS process_id, exe, username, realname, computer, distro, cpu_brand, tsc_frequency, start_time, start_ticks, parent_process_id
          FROM processes, streams, blocks
@@ -105,8 +108,9 @@ pub async fn find_block_process(
 pub async fn list_recent_processes(
     connection: &mut sqlx::PgConnection,
     parent_process_id: Option<&str>,
-) -> Result<Vec<lgn_telemetry_proto::analytics::ProcessInstance>> {
+) -> Result<Vec<ProcessEntry>> {
     let mut processes = Vec::new();
+    // like ?!
     let rows = sqlx::query(
         "SELECT process_id, 
                 exe, 
@@ -118,26 +122,7 @@ pub async fn list_recent_processes(
                 tsc_frequency, 
                 start_time, 
                 start_ticks, 
-                parent_process_id,
-                (SELECT count(*) FROM processes as p WHERE p.parent_process_id = processes.process_id) as child_count,
-                (
-                  SELECT count(*)
-                  FROM blocks, streams
-                  WHERE blocks.stream_id = streams.stream_id
-                  AND streams.process_id = processes.process_id
-                  AND streams.tags LIKE '%cpu%' ) as nb_cpu_blocks,
-                (
-                  SELECT count(*)
-                  FROM blocks, streams
-                  WHERE blocks.stream_id = streams.stream_id
-                  AND streams.process_id = processes.process_id
-                  AND streams.tags LIKE '%log%' ) as nb_log_blocks,
-                (
-                  SELECT count(*)
-                  FROM blocks, streams
-                  WHERE blocks.stream_id = streams.stream_id
-                  AND streams.process_id = processes.process_id
-                  AND streams.tags LIKE '%metric%' ) as nb_metric_blocks
+                parent_process_id
          FROM processes
          WHERE parent_process_id like ?
          ORDER BY start_time DESC
@@ -145,23 +130,12 @@ pub async fn list_recent_processes(
     )
     .bind(match parent_process_id {
         Some(str) => str.to_string(),
-        None => "''".to_string()
+        None => "''".to_string(),
     })
     .fetch_all(connection)
     .await?;
     for r in rows {
-        let nb_cpu_blocks: i32 = r.get("nb_cpu_blocks");
-        let nb_log_blocks: i32 = r.get("nb_log_blocks");
-        let nb_metric_blocks: i32 = r.get("nb_metric_blocks");
-        let child_count: i32 = r.get("child_count");
-        let instance = lgn_telemetry_proto::analytics::ProcessInstance {
-            process_info: Some(process_from_row(&r)),
-            nb_cpu_blocks: nb_cpu_blocks as u32,
-            nb_log_blocks: nb_log_blocks as u32,
-            nb_metric_blocks: nb_metric_blocks as u32,
-            child_count: child_count as u32,
-        };
-        processes.push(instance);
+        processes.push(process_from_row(&r));
     }
     Ok(processes)
 }
@@ -170,7 +144,7 @@ pub async fn list_recent_processes(
 pub async fn search_processes(
     connection: &mut sqlx::PgConnection,
     keyword: &str,
-) -> Result<Vec<lgn_telemetry_proto::analytics::ProcessInstance>> {
+) -> Result<Vec<ProcessEntry>> {
     let mut processes = Vec::new();
     let rows = sqlx::query(
         "SELECT process_id, 
@@ -183,26 +157,7 @@ pub async fn search_processes(
                 tsc_frequency, 
                 start_time, 
                 start_ticks, 
-                parent_process_id,
-                (SELECT count(*) FROM processes as p WHERE p.parent_process_id = processes.process_id) as child_count,
-                (
-                  SELECT count(*)
-                  FROM blocks, streams
-                  WHERE blocks.stream_id = streams.stream_id
-                  AND streams.process_id = processes.process_id
-                  AND streams.tags LIKE '%cpu%' ) as nb_cpu_blocks,
-                (
-                  SELECT count(*)
-                  FROM blocks, streams
-                  WHERE blocks.stream_id = streams.stream_id
-                  AND streams.process_id = processes.process_id
-                  AND streams.tags LIKE '%log%' ) as nb_log_blocks,
-                (
-                  SELECT count(*)
-                  FROM blocks, streams
-                  WHERE blocks.stream_id = streams.stream_id
-                  AND streams.process_id = processes.process_id
-                  AND streams.tags LIKE '%metric%' ) as nb_metric_blocks
+                parent_process_id
          FROM processes
          WHERE exe LIKE ?
          OR username LIKE ?
@@ -216,18 +171,7 @@ pub async fn search_processes(
     .fetch_all(connection)
     .await?;
     for r in rows {
-        let nb_cpu_blocks: i32 = r.get("nb_cpu_blocks");
-        let nb_log_blocks: i32 = r.get("nb_log_blocks");
-        let nb_metric_blocks: i32 = r.get("nb_metric_blocks");
-        let child_count: i32 = r.get("child_count");
-        let instance = lgn_telemetry_proto::analytics::ProcessInstance {
-            process_info: Some(process_from_row(&r)),
-            nb_cpu_blocks: nb_cpu_blocks as u32,
-            nb_log_blocks: nb_log_blocks as u32,
-            nb_metric_blocks: nb_metric_blocks as u32,
-            child_count: child_count as u32,
-        };
-        processes.push(instance);
+        processes.push(process_from_row(&r));
     }
     Ok(processes)
 }
@@ -236,7 +180,7 @@ pub async fn search_processes(
 pub async fn fetch_child_processes(
     connection: &mut sqlx::PgConnection,
     parent_process_id: &str,
-) -> Result<Vec<ProcessInfo>> {
+) -> Result<Vec<ProcessEntry>> {
     let mut processes = Vec::new();
     let rows = sqlx::query(
         "SELECT process_id, exe, username, realname, computer, distro, cpu_brand, tsc_frequency, start_time, start_ticks, parent_process_id
@@ -609,7 +553,7 @@ where
 
 #[span_fn]
 #[allow(clippy::cast_precision_loss)]
-fn tsc_to_ms(process: &ProcessInfo, tsc_time: i64) -> f64 {
+fn tsc_to_ms(process: &ProcessEntry, tsc_time: i64) -> f64 {
     let inv_tsc_frequency = get_tsc_frequency_inverse_ms(process.tsc_frequency);
 
     let ts_offset = process.start_ticks;
@@ -618,7 +562,7 @@ fn tsc_to_ms(process: &ProcessInfo, tsc_time: i64) -> f64 {
 }
 
 #[span_fn]
-pub fn log_entry_from_value(process: &ProcessInfo, val: &Value) -> Result<Option<LogEntry>> {
+pub fn log_entry_from_value(process: &ProcessEntry, val: &Value) -> Result<Option<LogEntry>> {
     if let Value::Object(obj) = val {
         match obj.type_name.as_str() {
             "LogStaticStrEvent" => {
@@ -708,7 +652,7 @@ pub fn log_entry_from_value(process: &ProcessInfo, val: &Value) -> Result<Option
 pub async fn find_process_log_entry<Res, Predicate: FnMut(LogEntry) -> Option<Res>>(
     connection: &mut sqlx::PgConnection,
     blob_storage: Arc<dyn BlobStorage>,
-    process: &ProcessInfo,
+    process: &ProcessEntry,
     mut pred: Predicate,
 ) -> Result<Option<Res>> {
     let mut found_entry = None;
@@ -740,7 +684,7 @@ pub async fn find_process_log_entry<Res, Predicate: FnMut(LogEntry) -> Option<Re
 #[span_fn]
 pub async fn for_each_log_entry_in_block<Predicate: FnMut(LogEntry) -> bool>(
     blob_storage: Arc<dyn BlobStorage>,
-    process: &ProcessInfo,
+    process: &ProcessEntry,
     stream: &StreamInfo,
     block: &BlockMetadata,
     mut fun: Predicate,
@@ -764,7 +708,7 @@ pub async fn for_each_log_entry_in_block<Predicate: FnMut(LogEntry) -> bool>(
 pub async fn for_each_process_log_entry<ProcessLogEntry: FnMut(LogEntry)>(
     connection: &mut sqlx::PgConnection,
     blob_storage: Arc<dyn BlobStorage>,
-    process: &ProcessInfo,
+    process: &ProcessEntry,
     mut process_log_entry: ProcessLogEntry,
 ) -> Result<()> {
     find_process_log_entry(connection, blob_storage, process, |log_entry| {
@@ -801,12 +745,12 @@ pub async fn for_each_process_metric<ProcessMetric: FnMut(Arc<micromegas_transit
 #[span_fn]
 pub async fn for_each_process_in_tree<F>(
     pool: &sqlx::PgPool,
-    root: &ProcessInfo,
+    root: &ProcessEntry,
     rec_level: u16,
     fun: F,
 ) -> Result<()>
 where
-    F: Fn(&ProcessInfo, u16) + std::marker::Send + Clone,
+    F: Fn(&ProcessEntry, u16) + std::marker::Send + Clone,
 {
     fun(root, rec_level);
     let mut connection = pool.acquire().await?;

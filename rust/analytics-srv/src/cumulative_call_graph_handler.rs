@@ -4,12 +4,6 @@ use sqlx::PgPool;
 use std::sync::Arc;
 
 use micromegas_analytics::prelude::*;
-use lgn_telemetry_proto::{
-    analytics::{
-        CumulativeCallGraphBlockDesc, CumulativeCallGraphComputedBlock, CumulativeCallGraphManifest,
-    },
-    telemetry::Process,
-};
 use micromegas_tracing::span_fn;
 
 use crate::{

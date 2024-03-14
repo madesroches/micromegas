@@ -1,17 +1,11 @@
 use std::sync::Arc;
 
-use micromegas_analytics::prelude::*;
-use micromegas_analytics::time::ConvertTicks;
 use anyhow::Result;
 use lgn_blob_storage::BlobStorage;
-use lgn_telemetry_proto::analytics::AsyncSpanEvent;
-use lgn_telemetry_proto::analytics::CallTreeNode;
-use lgn_telemetry_proto::analytics::ScopeDesc;
-use lgn_telemetry_proto::analytics::SpanBlockLod;
-use lgn_telemetry_proto::analytics::SpanEventType;
-use lgn_telemetry_proto::analytics::SpanTrack;
-use sqlx::PgPool;
+use micromegas_analytics::prelude::*;
+use micromegas_analytics::time::ConvertTicks;
 use micromegas_tracing::prelude::*;
+use sqlx::PgPool;
 
 #[derive(Debug)]
 pub struct ProcessedThreadBlock {

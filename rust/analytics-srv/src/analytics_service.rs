@@ -1,44 +1,16 @@
-use micromegas_analytics::prelude::*;
 use anyhow::Context;
 use anyhow::Result;
 use lgn_blob_storage::BlobStorage;
-use lgn_telemetry_proto::analytics::performance_analytics_server::PerformanceAnalytics;
-use lgn_telemetry_proto::analytics::BlockSpansReply;
-use lgn_telemetry_proto::analytics::BuildTimelineTablesReply;
-use lgn_telemetry_proto::analytics::BuildTimelineTablesRequest;
-use lgn_telemetry_proto::analytics::CumulativeCallGraphComputedBlock;
-use lgn_telemetry_proto::analytics::FindProcessReply;
-use lgn_telemetry_proto::analytics::FindProcessRequest;
-use lgn_telemetry_proto::analytics::Level;
-use lgn_telemetry_proto::analytics::ListProcessChildrenRequest;
-use lgn_telemetry_proto::analytics::ListStreamBlocksReply;
-use lgn_telemetry_proto::analytics::ListStreamBlocksRequest;
-use lgn_telemetry_proto::analytics::MetricBlockData;
-use lgn_telemetry_proto::analytics::MetricBlockManifest;
-use lgn_telemetry_proto::analytics::MetricBlockManifestRequest;
-use lgn_telemetry_proto::analytics::MetricBlockRequest;
-use lgn_telemetry_proto::analytics::ProcessChildrenReply;
-use lgn_telemetry_proto::analytics::ProcessListReply;
-use lgn_telemetry_proto::analytics::ProcessLogReply;
-use lgn_telemetry_proto::analytics::ProcessLogRequest;
-use lgn_telemetry_proto::analytics::ProcessNbLogEntriesReply;
-use lgn_telemetry_proto::analytics::ProcessNbLogEntriesRequest;
-use lgn_telemetry_proto::analytics::RecentProcessesRequest;
-use lgn_telemetry_proto::analytics::SearchProcessRequest;
-use lgn_telemetry_proto::analytics::{
-    BlockSpansRequest, ListProcessBlocksRequest, ProcessBlocksReply,
-};
-use lgn_telemetry_proto::analytics::{
-    CumulativeCallGraphBlockRequest, CumulativeCallGraphManifest,
-    CumulativeCallGraphManifestRequest,
-};
+use micromegas_analytics::block::BlockMetadata;
+use micromegas_analytics::prelude::*;
+use micromegas_analytics::process::ProcessEntry;
+use micromegas_tracing::dispatch::init_thread_stream;
+use micromegas_tracing::flush_monitor::FlushMonitor;
+use micromegas_tracing::prelude::*;
 use sqlx::PgPool;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
-use micromegas_tracing::dispatch::init_thread_stream;
-use micromegas_tracing::flush_monitor::FlushMonitor;
-use micromegas_tracing::prelude::*;
 
 use crate::cache::DiskCache;
 use crate::call_tree::reduce_lod;
@@ -107,7 +79,7 @@ impl AnalyticsService {
     }
 
     #[span_fn]
-    async fn find_process_impl(&self, process_id: &str) -> Result<micromegas_telemetry_sink::ProcessInfo> {
+    async fn find_process_impl(&self, process_id: &str) -> Result<ProcessEntry> {
         let mut connection = self.pool.acquire().await?;
         find_process(&mut connection, process_id).await
     }
@@ -116,16 +88,13 @@ impl AnalyticsService {
     async fn list_recent_processes_impl(
         &self,
         parent_process_id: &str,
-    ) -> Result<Vec<lgn_telemetry_proto::analytics::ProcessInstance>> {
+    ) -> Result<Vec<ProcessEntry>> {
         let mut connection = self.pool.acquire().await?;
         list_recent_processes(&mut connection, Some(parent_process_id)).await
     }
 
     #[span_fn]
-    async fn search_processes_impl(
-        &self,
-        search: &str,
-    ) -> Result<Vec<lgn_telemetry_proto::analytics::ProcessInstance>> {
+    async fn search_processes_impl(&self, search: &str) -> Result<Vec<ProcessEntry>> {
         let mut connection = self.pool.acquire().await?;
         search_processes(&mut connection, search).await
     }
@@ -140,10 +109,7 @@ impl AnalyticsService {
     }
 
     #[span_fn]
-    async fn list_stream_blocks_impl(
-        &self,
-        stream_id: &str,
-    ) -> Result<Vec<lgn_telemetry_proto::telemetry::BlockMetadata>> {
+    async fn list_stream_blocks_impl(&self, stream_id: &str) -> Result<Vec<BlockMetadata>> {
         let mut connection = self.pool.acquire().await?;
         find_stream_blocks(&mut connection, stream_id).await
     }
@@ -151,7 +117,7 @@ impl AnalyticsService {
     #[span_fn]
     async fn compute_spans_lod(
         &self,
-        process: &micromegas_telemetry_sink::ProcessInfo,
+        process: &ProcessEntry,
         stream: &micromegas_telemetry_sink::stream_info::StreamInfo,
         block_id: &str,
         lod_id: u32,
