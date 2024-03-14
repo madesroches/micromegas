@@ -1,8 +1,8 @@
 use std::{collections::HashMap, sync::Arc};
 
-use analytics::parse_block;
-use telemetry_sink::{stream_block::StreamBlock, stream_info::get_stream_info, TelemetryGuard};
-use tracing::{
+use micromegas_analytics::parse_block;
+use micromegas_telemetry_sink::{stream_block::StreamBlock, stream_info::get_stream_info, TelemetryGuard};
+use micromegas_tracing::{
     event::TracingBlock,
     prelude::Verbosity,
     spans::{BeginThreadNamedSpanEvent, SpanLocation, ThreadBlock, ThreadStream},
@@ -43,7 +43,7 @@ fn test_parse_span_interops() {
     let mut block = stream.replace_block(Arc::new(ThreadBlock::new(1024, stream_id)));
     Arc::get_mut(&mut block).unwrap().close();
     let encoded = block.encode_bin().unwrap();
-    let payload: telemetry_sink::block_wire_format::BlockPayload =
+    let payload: micromegas_telemetry_sink::block_wire_format::BlockPayload =
         ciborium::from_reader(&encoded[..]).unwrap();
 
     let stream_info = get_stream_info(&stream);

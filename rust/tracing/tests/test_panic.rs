@@ -5,6 +5,6 @@ fn test_panic() {
         #[allow(clippy::exit)]
         std::process::exit(0);
     }));
-    tracing::panic_hook::init_panic_hook();
+    micromegas_tracing::panic_hook::init_panic_hook();
     panic!("PANIC!!");
 }
