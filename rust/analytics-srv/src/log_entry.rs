@@ -1,4 +1,5 @@
-use lgn_telemetry_proto::analytics::{Level, LogEntry};
+use micromegas_analytics::log_entry::LogEntry;
+use micromegas_tracing::Level;
 
 pub(crate) trait Searchable<Needle> {
     fn matches(&self, needle: Needle) -> bool;

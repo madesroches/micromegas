@@ -4,60 +4,16 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
-[features]
-deltalake-proto = ["dep:deltalake"]
-
-
 [dependencies]
-lgn-blob-storage.workspace = true
-
 micromegas-analytics.workspace = true
 micromegas-tracing.workspace = true
 micromegas-telemetry-sink.workspace = true
 micromegas-transit.workspace = true
 
 anyhow.workspace = true
-async-trait.workspace = true
-async-recursion.workspace = true
-aws-config.workspace = true
-aws-sdk-s3.workspace = true
-bytes.workspace = true
-chrono.workspace = true
+axum.workspace = true
 clap.workspace = true
-blake3.workspace = true
-deltalake = { git = "https://github.com/delta-io/delta-rs.git", rev = "9216a8e2f068cba7c7a965f51ab608ee1f55d773", version = "0.4.1", features = [
-  "datafusion-ext",
-], optional = true }
-datafusion = { git = "https://github.com/apache/arrow-datafusion.git", rev = "f943b6a65291c3de6403dde827cb411a050f4fa0", version = "7.0.0", optional = true }
-futures.workspace = true
-http.workspace = true
-parquet = { version = "13" }
-tonic = "0.6"
-tonic-web = "0.2"
 tokio.workspace = true
-sqlx.workspace = true
-thiserror.workspace = true
-tower.workspace = true
-tower-http.workspace = true
-prost.workspace = true
-xxhash-rust = { version = "0.8.2", features = ["xxh32", "const_xxh32"] }
-reqwest.workspace = true
-serde_json.workspace = true
 
-[build-dependencies]
-tonic-build = "0.6"
+#datafusion = { git = "https://github.com/apache/arrow-datafusion.git", rev = "f943b6a65291c3de6403dde827cb411a050f4fa0", version = "7.0.0", optional = true }
 
-
-[[package.metadata.monorepo.publish]]
-name = "analytics-srv"
-type = "docker"
-template = """
-FROM ubuntu:20.04
-
-RUN apt-get update && apt-get install -y --no-install-recommends libssl-dev ca-certificates
-
-{ copy_all }
-
-ENTRYPOINT ["{ binaries.analytics-srv }"]
-"""
-allow-aws-ecr-creation = true

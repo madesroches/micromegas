@@ -6,7 +6,6 @@ use super::{
 };
 use crate::scope::ScopeHashMap;
 use anyhow::Result;
-use lgn_telemetry_proto::analytics::ScopeDesc;
 use parquet::data_type::ByteArray;
 
 #[derive(Debug)]

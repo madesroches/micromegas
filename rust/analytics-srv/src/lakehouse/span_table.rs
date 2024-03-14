@@ -1,8 +1,4 @@
 use anyhow::{Context, Result};
-use lgn_telemetry_proto::analytics::CallTreeNode;
-use lgn_telemetry_proto::analytics::Span;
-use lgn_telemetry_proto::analytics::SpanBlockLod;
-use lgn_telemetry_proto::analytics::SpanTrack;
 use parquet::file::reader::ChunkReader;
 use parquet::file::reader::FileReader;
 use parquet::file::serialized_reader::SerializedFileReader;

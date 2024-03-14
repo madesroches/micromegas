@@ -10,7 +10,6 @@ use micromegas_analytics::time::ConvertTicks;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use lgn_blob_storage::{AwsS3Url, BlobStorage};
-use lgn_telemetry_proto::analytics::{BlockSpansReply, ScopeDesc, SpanBlockLod};
 use parquet::file::serialized_reader::SerializedFileReader;
 use parquet::{file::reader::FileReader, record::RowAccessor};
 use sqlx::PgPool;

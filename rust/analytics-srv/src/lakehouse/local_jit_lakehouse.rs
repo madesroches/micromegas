@@ -15,7 +15,6 @@ use micromegas_analytics::time::ConvertTicks;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use lgn_blob_storage::BlobStorage;
-use lgn_telemetry_proto::analytics::{BlockSpansReply, ScopeDesc, SpanBlockLod};
 use parquet::file::reader::FileReader;
 use parquet::file::serialized_reader::SerializedFileReader;
 use parquet::record::RowAccessor;
