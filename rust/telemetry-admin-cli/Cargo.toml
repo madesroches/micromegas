@@ -6,7 +6,6 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 lgn-blob-storage.workspace = true
-lgn-telemetry-proto.workspace = true
 
 micromegas-analytics.workspace = true
 micromegas-telemetry-sink.workspace = true

@@ -1,4 +1,4 @@
-use lgn_telemetry_proto::telemetry::Process as ProcessInfo;
+use micromegas_tracing::ProcessInfo;
 
 #[derive(Debug, Clone)]
 pub struct ConvertTicks {
@@ -28,7 +28,7 @@ impl ConvertTicks {
     }
 }
 
-pub fn get_process_tick_length_ms(process_info: &lgn_telemetry_proto::telemetry::Process) -> f64 {
+pub fn get_process_tick_length_ms(process_info: &ProcessInfo) -> f64 {
     get_tsc_frequency_inverse_ms(process_info.tsc_frequency)
 }
 

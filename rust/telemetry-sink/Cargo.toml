@@ -11,7 +11,6 @@ authors.workspace = true
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-lgn-telemetry-proto.workspace = true
 lgn-config.workspace = true
 
 micromegas-tracing.workspace = true
@@ -25,6 +24,7 @@ colored = {workspace = true, optional = true}
 ctrlc.workspace = true
 lazy_static.workspace = true
 log.workspace = true
+lz4.workspace = true
 once_cell.workspace = true
 prost.workspace = true
 reqwest.workspace = true

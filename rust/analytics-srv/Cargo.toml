@@ -10,7 +10,6 @@ deltalake-proto = ["dep:deltalake"]
 
 [dependencies]
 lgn-blob-storage.workspace = true
-lgn-telemetry-proto.workspace = true
 
 micromegas-analytics.workspace = true
 micromegas-tracing.workspace = true

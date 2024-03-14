@@ -19,7 +19,6 @@ lgn-auth = { path = "lgn-auth" }
 lgn-blob-storage = { path = "lgn-blob-storage", version = "0.1.0" }
 lgn-config = { path = "lgn-config" }
 lgn-online = { path = "lgn-online" }
-lgn-telemetry-proto = { path = "lgn-telemetry-proto" }
 
 micromegas-analytics = { path = "analytics" }
 micromegas-ingestion = { path = "ingestion", version = "0.1.0" }

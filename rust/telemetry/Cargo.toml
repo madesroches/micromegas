@@ -17,6 +17,3 @@ chrono = "0.4"
 hyper = { version = "0.14", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_qs = { version = "0.9", features = ["axum"] }
-
-[build-dependencies]
-lgn-api-codegen = { path = "../lgn-api-codegen", version = "0.1.0" }

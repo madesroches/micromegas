@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex, Weak};
 
 pub mod block_wire_format;
 pub mod composite_event_sink;
+pub mod compression;
 pub mod http_event_sink;
 pub mod local_event_sink;
 pub mod stream_block;
@@ -25,10 +26,6 @@ use micromegas_tracing::{
     guards::{TracingSystemGuard, TracingThreadGuard},
     LevelFilter,
 };
-
-pub type ProcessInfo = lgn_telemetry_proto::telemetry::Process;
-pub type EncodedBlock = lgn_telemetry_proto::telemetry::Block;
-pub use lgn_telemetry_proto::telemetry::ContainerMetadata;
 
 use composite_event_sink::CompositeSink;
 use local_event_sink::LocalEventSink;
