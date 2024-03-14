@@ -1,4 +1,4 @@
-use crate::process::ProcessEntry;
+use micromegas_telemetry::types::process::Process;
 
 #[derive(Debug, Clone)]
 pub struct ConvertTicks {
@@ -7,7 +7,7 @@ pub struct ConvertTicks {
 }
 
 impl ConvertTicks {
-    pub fn new(process: &ProcessEntry) -> Self {
+    pub fn new(process: &Process) -> Self {
         let inv_tsc_frequency = get_process_tick_length_ms(process);
         Self {
             ts_offset: process.start_ticks,
@@ -28,7 +28,7 @@ impl ConvertTicks {
     }
 }
 
-pub fn get_process_tick_length_ms(process_info: &ProcessEntry) -> f64 {
+pub fn get_process_tick_length_ms(process_info: &Process) -> f64 {
     get_tsc_frequency_inverse_ms(process_info.tsc_frequency)
 }
 

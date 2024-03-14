@@ -22,10 +22,11 @@ lgn-online = { path = "lgn-online" }
 
 micromegas-analytics = { path = "analytics" }
 micromegas-ingestion = { path = "ingestion", version = "0.1.0" }
-public = { path = "public" }
+micromegas-telemetry = { path = "telemetry" }
 micromegas-telemetry-sink = { path = "telemetry-sink" }
 micromegas-tracing = { path = "tracing" }
 micromegas-transit = { path = "transit" }
+public = { path = "public" }
 
 anyhow = "1.0"
 async-recursion = "1"
@@ -58,7 +59,7 @@ prost = "0.9"
 quote = "1.0"
 raw-cpuid = "10.2.0"
 reqwest = {version = "0.11.24", features = ["json"]}
-serde = "1.0"
+serde = { version = "1.0", features = ["derive"]}
 serde_json = "1.0"
 sqlx = { version = "0.7.3", features = ["runtime-tokio", "postgres"] }
 syn = { version = "1.0", features = ["extra-traits", "full"] }

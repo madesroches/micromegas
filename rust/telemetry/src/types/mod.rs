@@ -1,3 +1,3 @@
-mod block;
-mod process;
-mod stream;
+pub mod block;
+pub mod process;
+pub mod stream;

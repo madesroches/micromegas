@@ -1,19 +1,19 @@
 [package]
-name = "lgn-telemetry"
-version = "0.1.0"
-edition = "2021"
-license = "MIT OR Apache-2.0"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+name = "micromegas-telemetry"
+keywords.workspace = true
+version.workspace = true
+edition.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+authors.workspace = true
 
 [dependencies]
 micromegas-tracing.workspace = true
 
-lgn-online = { path = "../lgn-online", version = "0.1.0" }
-async-trait = "0.1"
-axum = "0.5"
-http = "0.2"
-chrono = "0.4"
-hyper = { version = "0.14", features = ["full"] }
-serde = { version = "1.0", features = ["derive"] }
-serde_qs = { version = "0.9", features = ["axum"] }
+async-trait.workspace = true
+axum.workspace = true
+chrono.workspace = true
+http.workspace = true
+hyper.workspace = true
+serde.workspace = true
