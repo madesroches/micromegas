@@ -44,6 +44,7 @@ impl Level {
     }
 }
 
+//todo: add fatal
 /// An enum representing the available verbosity level filters of the logger.
 #[repr(u32)]
 #[derive(Clone, Copy, Debug, Hash, Eq, PartialEq)]

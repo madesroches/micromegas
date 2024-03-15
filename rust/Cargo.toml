@@ -15,10 +15,6 @@ keywords = ["observability", "telemetry", "analytics"]
 
 
 [workspace.dependencies]
-lgn-auth = { path = "lgn-auth" }
-lgn-config = { path = "lgn-config" }
-lgn-online = { path = "lgn-online" }
-
 micromegas-analytics = { path = "analytics" }
 micromegas-ingestion = { path = "ingestion", version = "0.1.0" }
 micromegas-telemetry = { path = "telemetry" }
