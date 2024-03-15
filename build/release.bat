@@ -1,5 +1,5 @@
 pushd ..\rust
-set PUBLISH_GRACE_SLEEP=2
+set PUBLISH_GRACE_SLEEP=60
 
 cargo release -p micromegas-derive-transit
 @if %ERRORLEVEL% NEQ 0 exit /b %ERRORLEVEL%
@@ -19,10 +19,10 @@ cargo release -p micromegas-telemetry
 cargo release -p micromegas-ingestion
 @if %ERRORLEVEL% NEQ 0 exit /b %ERRORLEVEL%
 
-cargo release -p micromegas-analytics
+cargo release -p micromegas-telemetry-sink
 @if %ERRORLEVEL% NEQ 0 exit /b %ERRORLEVEL%
 
-cargo release -p micromegas-telemetry-sink
+cargo release -p micromegas-analytics
 @if %ERRORLEVEL% NEQ 0 exit /b %ERRORLEVEL%
 
 cargo release -p micromegas
