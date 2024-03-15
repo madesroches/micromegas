@@ -1,5 +1,6 @@
 [package]
 name = "micromegas-ingestion"
+description = "telemetry ingestion module of micromegas"
 keywords.workspace = true
 version.workspace = true
 edition.workspace = true

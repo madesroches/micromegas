@@ -1,5 +1,6 @@
 [package]
 name = "micromegas-tracing"
+description = "instrumentation module, part of micromegas"
 keywords.workspace = true
 version.workspace = true
 edition.workspace = true
