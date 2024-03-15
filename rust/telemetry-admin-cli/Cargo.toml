@@ -22,7 +22,3 @@ lz4.workspace = true
 prost.workspace = true
 sqlx.workspace = true
 tokio.workspace = true
-
-[dev-dependencies]
-lgn-test-utils = { path = "../lgn-test-utils" }
-fs_extra = "1.2"
