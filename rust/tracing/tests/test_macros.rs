@@ -6,7 +6,9 @@ use micromegas_tracing::dispatch::{
     flush_log_buffer, flush_metrics_buffer, flush_thread_buffer, init_event_dispatch,
     init_thread_stream, process_id,
 };
-use micromegas_tracing::{fmetric, frequency, imetric, info, set_max_level, span_scope, LevelFilter};
+use micromegas_tracing::{
+    fmetric, frequency, imetric, info, set_max_level, span_scope, LevelFilter,
+};
 use micromegas_tracing_proc_macros::{log_fn, span_fn};
 use utils::{DebugEventSink, LogDispatch, SharedState, State};
 

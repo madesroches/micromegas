@@ -7,6 +7,7 @@ use hyper::{
     service::{make_service_fn, service_fn},
     Body, Server,
 };
+use micromegas_tracing::{debug, info, warn};
 use openidconnect::{
     core::{CoreAuthenticationFlow, CoreClient, CoreProviderMetadata},
     reqwest::async_http_client,
@@ -15,7 +16,6 @@ use openidconnect::{
     TokenResponse,
 };
 use tokio::sync::{oneshot, Mutex};
-use micromegas_tracing::{debug, info, warn};
 
 use crate::{
     authenticator::{Authenticator, AuthenticatorWithClaims},
