@@ -26,7 +26,7 @@ impl WebIngestionService {
         let process_id = "process_id"; //todo
         let stream_id = "stream_id"; //todo
         let block_id = &block.block_id;
-		let obj_path = format!("blobs/{process_id}/{stream_id}/{block_id}");
+        let obj_path = format!("blobs/{process_id}/{stream_id}/{block_id}");
 
         self.lake
             .blob_storage
