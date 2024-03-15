@@ -1,5 +1,6 @@
 [package]
 name = "micromegas-analytics"
+description = "analytics module of micromegas"
 keywords.workspace = true
 version.workspace = true
 edition.workspace = true

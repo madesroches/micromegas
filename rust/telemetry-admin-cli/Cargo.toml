@@ -1,5 +1,6 @@
 [package]
 name = "telemetry-admin"
+description = "command-line interface for the management of the data lake, part of micromegas"
 keywords.workspace = true
 version.workspace = true
 edition.workspace = true

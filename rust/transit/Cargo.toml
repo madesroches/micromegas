@@ -1,5 +1,6 @@
 [package]
 name = "micromegas-transit"
+description = "low overhead serialization, part of micromegas"
 keywords.workspace = true
 version.workspace = true
 edition.workspace = true
