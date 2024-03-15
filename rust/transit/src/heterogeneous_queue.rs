@@ -11,6 +11,7 @@ pub trait HeterogeneousQueue {
     fn read_value_at_offset(&self, offset: usize) -> (Self::Item, usize);
     fn new(buffer_size: usize) -> Self;
     fn reflect_contained() -> Vec<UserDefinedType>;
+	fn as_bytes(&self) -> &[u8];
 }
 
 pub struct QueueIterator<'a, QueueT, ValueT> {

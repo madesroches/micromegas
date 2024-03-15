@@ -64,5 +64,5 @@ where
 
     fn events_mut(&mut self) -> &mut Self::Queue {
         &mut self.events
-    }
+    }	
 }
