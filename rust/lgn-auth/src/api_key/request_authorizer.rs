@@ -1,7 +1,7 @@
 use futures_util::future::BoxFuture;
 use hyper::{Request, Response, StatusCode};
-use tower_http::auth::AsyncAuthorizeRequest;
 use micromegas_tracing::{debug, warn};
+use tower_http::auth::AsyncAuthorizeRequest;
 
 use super::{ApiKey, ApiKeyValidator};
 

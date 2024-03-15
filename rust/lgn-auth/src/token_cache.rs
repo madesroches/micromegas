@@ -6,9 +6,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use directories::ProjectDirs;
+use micromegas_tracing::{debug, warn};
 use openidconnect::AccessToken;
 use tokio::sync::{Mutex, MutexGuard};
-use micromegas_tracing::{debug, warn};
 
 use crate::authenticator::{Authenticator, AuthenticatorWithClaims};
 use crate::UserInfo;
