@@ -1,3 +1,4 @@
+use micromegas_telemetry::stream_info::StreamInfo;
 use micromegas_tracing::ProcessInfo;
 use micromegas_tracing::{
     event::EventSink,
@@ -13,7 +14,7 @@ use std::{
 };
 
 use crate::stream_block::StreamBlock;
-use crate::stream_info::{get_stream_info, StreamInfo};
+use crate::stream_info::make_stream_info;
 
 #[derive(Debug)]
 enum SinkEvent {
@@ -232,7 +233,9 @@ impl EventSink for HttpEventSink {
     fn on_log(&self, _metadata: &LogMetadata, _time: i64, _args: fmt::Arguments<'_>) {}
 
     fn on_init_log_stream(&self, log_stream: &LogStream) {
-        self.send(SinkEvent::InitStream(Arc::new(get_stream_info(log_stream))));
+        self.send(SinkEvent::InitStream(Arc::new(make_stream_info(
+            log_stream,
+        ))));
     }
 
     fn on_process_log_block(&self, log_block: Arc<LogBlock>) {
@@ -240,7 +243,7 @@ impl EventSink for HttpEventSink {
     }
 
     fn on_init_metrics_stream(&self, metrics_stream: &MetricsStream) {
-        self.send(SinkEvent::InitStream(Arc::new(get_stream_info(
+        self.send(SinkEvent::InitStream(Arc::new(make_stream_info(
             metrics_stream,
         ))));
     }
@@ -250,7 +253,7 @@ impl EventSink for HttpEventSink {
     }
 
     fn on_init_thread_stream(&self, thread_stream: &ThreadStream) {
-        self.send(SinkEvent::InitStream(Arc::new(get_stream_info(
+        self.send(SinkEvent::InitStream(Arc::new(make_stream_info(
             thread_stream,
         ))));
     }
