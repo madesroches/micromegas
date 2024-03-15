@@ -2,7 +2,7 @@ use micromegas_analytics::log_entry_from_value;
 use micromegas_analytics::parse_block;
 use micromegas_analytics::time::ConvertTicks;
 use micromegas_telemetry_sink::stream_block::StreamBlock;
-use micromegas_telemetry_sink::stream_info::get_stream_info;
+use micromegas_telemetry_sink::stream_info::make_stream_info;
 use micromegas_telemetry_sink::TelemetryGuard;
 use micromegas_tracing::event::TracingBlock;
 use micromegas_tracing::logs::LogBlock;
@@ -16,7 +16,7 @@ use std::sync::Arc;
 #[test]
 fn test_log_interop_metadata() {
     let stream = LogStream::new(1024, String::from("bogus_process_id"), &[], HashMap::new());
-    let stream_proto = get_stream_info(&stream);
+    let stream_proto = make_stream_info(&stream);
     let obj_meta = &stream_proto.objects_metadata;
     obj_meta
         .iter()
@@ -46,8 +46,8 @@ fn test_log_encode_static() {
     let mut block = stream.replace_block(Arc::new(LogBlock::new(1024, stream_id)));
     Arc::get_mut(&mut block).unwrap().close();
     let encoded = block.encode_bin().unwrap();
-    let stream_info = get_stream_info(&stream);
-    let received_block: micromegas_telemetry_sink::block_wire_format::Block =
+    let stream_info = make_stream_info(&stream);
+    let received_block: micromegas_telemetry::block_wire_format::Block =
         ciborium::from_reader(&encoded[..]).unwrap();
     parse_block(&stream_info, &received_block.payload, |val| {
         if let Value::Object(obj) = val {
@@ -78,8 +78,8 @@ fn test_log_encode_dynamic() {
     let mut block = stream.replace_block(Arc::new(LogBlock::new(1024, stream_id)));
     Arc::get_mut(&mut block).unwrap().close();
     let encoded = block.encode_bin().unwrap();
-    let stream_info = get_stream_info(&stream);
-    let received_block: micromegas_telemetry_sink::block_wire_format::Block =
+    let stream_info = make_stream_info(&stream);
+    let received_block: micromegas_telemetry::block_wire_format::Block =
         ciborium::from_reader(&encoded[..]).unwrap();
     parse_block(&stream_info, &received_block.payload, |val| {
         if let Value::Object(obj) = val {
@@ -116,9 +116,9 @@ fn test_parse_log_interops() {
     let mut block = stream.replace_block(Arc::new(LogBlock::new(1024, stream_id)));
     Arc::get_mut(&mut block).unwrap().close();
     let encoded = block.encode_bin().unwrap();
-    let received_block: micromegas_telemetry_sink::block_wire_format::Block =
+    let received_block: micromegas_telemetry::block_wire_format::Block =
         ciborium::from_reader(&encoded[..]).unwrap();
-    let stream_info = get_stream_info(&stream);
+    let stream_info = make_stream_info(&stream);
     let mut nb_log_entries = 0;
     let convert_ticks = ConvertTicks::from_ticks(0, 1);
     parse_block(&stream_info, &received_block.payload, |val| {

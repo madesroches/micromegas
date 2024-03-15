@@ -10,7 +10,6 @@ authors.workspace = true
 
 [dependencies]
 micromegas-telemetry.workspace = true
-micromegas-telemetry-sink.workspace = true
 micromegas-tracing.workspace = true
 micromegas-transit.workspace = true
 
@@ -21,3 +20,6 @@ ciborium.workspace = true
 prost.workspace = true
 serde_json.workspace = true
 sqlx.workspace = true
+
+[dev-dependencies]
+micromegas-telemetry-sink.workspace = true

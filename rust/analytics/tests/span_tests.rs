@@ -2,7 +2,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use micromegas_analytics::parse_block;
 use micromegas_telemetry_sink::{
-    stream_block::StreamBlock, stream_info::get_stream_info, TelemetryGuard,
+    stream_block::StreamBlock, stream_info::make_stream_info, TelemetryGuard,
 };
 use micromegas_tracing::{
     event::TracingBlock,
@@ -45,10 +45,10 @@ fn test_parse_span_interops() {
     let mut block = stream.replace_block(Arc::new(ThreadBlock::new(1024, stream_id)));
     Arc::get_mut(&mut block).unwrap().close();
     let encoded = block.encode_bin().unwrap();
-    let received_block: micromegas_telemetry_sink::block_wire_format::Block =
+    let received_block: micromegas_telemetry::block_wire_format::Block =
         ciborium::from_reader(&encoded[..]).unwrap();
 
-    let stream_info = get_stream_info(&stream);
+    let stream_info = make_stream_info(&stream);
     let mut nb_span_entries = 0;
     parse_block(&stream_info, &received_block.payload, |_val| {
         nb_span_entries += 1;

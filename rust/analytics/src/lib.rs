@@ -9,9 +9,10 @@ pub mod time;
 use crate::log_entry::LogEntry;
 use anyhow::{Context, Result};
 use micromegas_telemetry::blob_storage::BlobStorage;
+use micromegas_telemetry::compression::decompress;
+use micromegas_telemetry::stream_info::StreamInfo;
 use micromegas_telemetry::types::block::BlockMetadata;
 use micromegas_telemetry::types::process::Process;
-use micromegas_telemetry_sink::{compression::decompress, stream_info::StreamInfo};
 use micromegas_tracing::prelude::*;
 use micromegas_transit::{parse_object_buffer, read_dependencies, UserDefinedType, Value};
 use sqlx::Row;
@@ -518,7 +519,7 @@ pub async fn fetch_block_payload(
     process_id: &str,
     stream_id: &str,
     block_id: &str,
-) -> Result<micromegas_telemetry_sink::block_wire_format::BlockPayload> {
+) -> Result<micromegas_telemetry::block_wire_format::BlockPayload> {
     let obj_path = format!("blobs/{process_id}/{stream_id}/{block_id}");
     let buffer: Vec<u8> = blob_storage
         .read_blob(&obj_path)
@@ -527,7 +528,7 @@ pub async fn fetch_block_payload(
         .into();
     {
         span_scope!("decode");
-        let payload: micromegas_telemetry_sink::block_wire_format::BlockPayload =
+        let payload: micromegas_telemetry::block_wire_format::BlockPayload =
             ciborium::from_reader(&buffer[..])
                 .with_context(|| format!("reading payload {}", &block_id))?;
         Ok(payload)
@@ -538,7 +539,7 @@ pub async fn fetch_block_payload(
 #[span_fn]
 pub fn parse_block<F>(
     stream: &StreamInfo,
-    payload: &micromegas_telemetry_sink::block_wire_format::BlockPayload,
+    payload: &micromegas_telemetry::block_wire_format::BlockPayload,
     fun: F,
 ) -> Result<()>
 where

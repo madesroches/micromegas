@@ -10,14 +10,11 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex, Weak};
 
-pub mod block_wire_format;
 pub mod composite_event_sink;
-pub mod compression;
 pub mod http_event_sink;
 pub mod local_event_sink;
 pub mod stream_block;
 pub mod stream_info;
-pub mod wire_format;
 
 use micromegas_tracing::event::BoxedEventSink;
 use micromegas_tracing::info;

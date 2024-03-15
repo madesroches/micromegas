@@ -1,5 +1,5 @@
-use crate::{block_wire_format, compression::compress, wire_format::encode_cbor};
 use anyhow::Result;
+use micromegas_telemetry::{block_wire_format, compression::compress, wire_format::encode_cbor};
 use micromegas_tracing::{
     event::{EventBlock, ExtractDeps, TracingBlock},
     logs::LogBlock,

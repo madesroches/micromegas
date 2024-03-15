@@ -10,14 +10,17 @@ authors.workspace = true
 
 [dependencies]
 micromegas-tracing.workspace = true
+micromegas-transit.workspace = true
 
 anyhow.workspace = true
 async-trait.workspace = true
 axum.workspace = true
 bytes.workspace = true
 chrono.workspace = true
+ciborium.workspace = true
 http.workspace = true
 hyper.workspace = true
+lz4.workspace = true
 object_store.workspace = true
 serde.workspace = true
 url.workspace = true
