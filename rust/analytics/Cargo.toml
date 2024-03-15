@@ -9,6 +9,7 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+micromegas-telemetry.workspace = true
 micromegas-telemetry-sink.workspace = true
 micromegas-tracing.workspace = true
 micromegas-transit.workspace = true
@@ -17,6 +18,7 @@ lgn-blob-storage.workspace = true
 
 anyhow.workspace = true
 async-recursion.workspace = true
+chrono.workspace = true
 ciborium.workspace = true
 prost.workspace = true
 serde_json.workspace = true

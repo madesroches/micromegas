@@ -48,7 +48,7 @@ use sum::{
 };
 use tonic::{Request, Response, Status};
 use tower_http::auth::RequireAuthorizationLayer;
-use tracing::{error, info};
+use micromegas_tracing::{error, info};
 
 #[derive(Clone, Default, Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
 struct Claims {

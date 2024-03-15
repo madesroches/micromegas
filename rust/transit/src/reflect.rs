@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Member {
     pub name: String,
     pub type_name: String,
@@ -9,7 +9,7 @@ pub struct Member {
     pub is_reference: bool,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct UserDefinedType {
     pub name: String,
     pub size: usize,

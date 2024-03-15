@@ -3,23 +3,21 @@
 // crate-specific lint exceptions:
 #![allow(clippy::missing_errors_doc)]
 
-pub mod block;
 pub mod log_entry;
-pub mod process;
 pub mod time;
 
-use std::path::Path;
-use std::sync::Arc;
-
+use crate::log_entry::LogEntry;
 use anyhow::{Context, Result};
 use lgn_blob_storage::BlobStorage;
+use micromegas_telemetry::types::block::BlockMetadata;
+use micromegas_telemetry::types::process::Process;
 use micromegas_telemetry_sink::{compression::decompress, stream_info::StreamInfo};
 use micromegas_tracing::prelude::*;
 use micromegas_transit::{parse_object_buffer, read_dependencies, UserDefinedType, Value};
-use process::ProcessEntry;
 use sqlx::Row;
-
-use crate::{block::BlockMetadata, log_entry::LogEntry, time::get_tsc_frequency_inverse_ms};
+use std::path::Path;
+use std::sync::Arc;
+use time::ConvertTicks;
 
 #[span_fn]
 pub async fn alloc_sql_pool(data_folder: &Path) -> Result<sqlx::AnyPool> {
@@ -31,28 +29,36 @@ pub async fn alloc_sql_pool(data_folder: &Path) -> Result<sqlx::AnyPool> {
     Ok(pool)
 }
 
+fn parse_rfc3339(s: &str) -> Result<chrono::DateTime<chrono::Utc>> {
+    Ok(
+        chrono::DateTime::<chrono::FixedOffset>::parse_from_rfc3339(s)
+            .with_context(|| "parsing rfc3339")?
+            .into(),
+    )
+}
+
 #[span_fn]
-fn process_from_row(row: &sqlx::postgres::PgRow) -> ProcessEntry {
-    ProcessEntry {
-        process_id: row.get("process_id"),
-        exe: row.get("exe"),
-        username: row.get("username"),
-        realname: row.get("realname"),
-        computer: row.get("computer"),
-        distro: row.get("distro"),
-        cpu_brand: row.get("cpu_brand"),
-        tsc_frequency: row.get("tsc_frequency"),
-        start_time: row.get("start_time"),
-        start_ticks: row.get("start_ticks"),
-        parent_process_id: row.get("parent_process_id"),
-    }
+fn process_from_row(row: &sqlx::postgres::PgRow) -> Result<Process> {
+    Ok(Process {
+        process_id: row.try_get("process_id")?,
+        exe: row.try_get("exe")?,
+        username: row.try_get("username")?,
+        realname: row.try_get("realname")?,
+        computer: row.try_get("computer")?,
+        distro: row.try_get("distro")?,
+        cpu_brand: row.try_get("cpu_brand")?,
+        tsc_frequency: row.try_get("tsc_frequency")?,
+        start_time: parse_rfc3339(row.get("start_time"))?,
+        start_ticks: row.try_get("start_ticks")?,
+        parent_process_id: row.try_get("parent_process_id")?,
+    })
 }
 
 #[span_fn]
 pub async fn processes_by_name_substring(
     connection: &mut sqlx::PgConnection,
     filter: &str,
-) -> Result<Vec<ProcessEntry>> {
+) -> Result<Vec<Process>> {
     let mut processes = Vec::new();
     let rows = sqlx::query(
         "SELECT process_id, exe, username, realname, computer, distro, cpu_brand, tsc_frequency, start_time, start_ticks, parent_process_id
@@ -65,7 +71,7 @@ pub async fn processes_by_name_substring(
     .fetch_all(connection)
     .await?;
     for r in rows {
-        processes.push(process_from_row(&r));
+        processes.push(process_from_row(&r)?);
     }
     Ok(processes)
 }
@@ -74,7 +80,7 @@ pub async fn processes_by_name_substring(
 pub async fn find_process(
     connection: &mut sqlx::PgConnection,
     process_id: &str,
-) -> Result<ProcessEntry> {
+) -> Result<Process> {
     let row = sqlx::query(
         "SELECT process_id, exe, username, realname, computer, distro, cpu_brand, tsc_frequency, start_time, start_ticks, parent_process_id
          FROM processes
@@ -83,14 +89,14 @@ pub async fn find_process(
     .bind(process_id)
     .fetch_one(connection)
     .await?;
-    Ok(process_from_row(&row))
+    process_from_row(&row)
 }
 
 #[span_fn]
 pub async fn find_block_process(
     connection: &mut sqlx::PgConnection,
     block_id: &str,
-) -> Result<ProcessEntry> {
+) -> Result<Process> {
     let row = sqlx::query(
         "SELECT processes.process_id AS process_id, exe, username, realname, computer, distro, cpu_brand, tsc_frequency, start_time, start_ticks, parent_process_id
          FROM processes, streams, blocks
@@ -101,14 +107,14 @@ pub async fn find_block_process(
     .bind(block_id)
     .fetch_one(connection)
     .await?;
-    Ok(process_from_row(&row))
+    process_from_row(&row)
 }
 
 #[span_fn]
 pub async fn list_recent_processes(
     connection: &mut sqlx::PgConnection,
     parent_process_id: Option<&str>,
-) -> Result<Vec<ProcessEntry>> {
+) -> Result<Vec<Process>> {
     let mut processes = Vec::new();
     // like ?!
     let rows = sqlx::query(
@@ -135,7 +141,7 @@ pub async fn list_recent_processes(
     .fetch_all(connection)
     .await?;
     for r in rows {
-        processes.push(process_from_row(&r));
+        processes.push(process_from_row(&r)?);
     }
     Ok(processes)
 }
@@ -144,7 +150,7 @@ pub async fn list_recent_processes(
 pub async fn search_processes(
     connection: &mut sqlx::PgConnection,
     keyword: &str,
-) -> Result<Vec<ProcessEntry>> {
+) -> Result<Vec<Process>> {
     let mut processes = Vec::new();
     let rows = sqlx::query(
         "SELECT process_id, 
@@ -171,7 +177,7 @@ pub async fn search_processes(
     .fetch_all(connection)
     .await?;
     for r in rows {
-        processes.push(process_from_row(&r));
+        processes.push(process_from_row(&r)?);
     }
     Ok(processes)
 }
@@ -180,7 +186,7 @@ pub async fn search_processes(
 pub async fn fetch_child_processes(
     connection: &mut sqlx::PgConnection,
     parent_process_id: &str,
-) -> Result<Vec<ProcessEntry>> {
+) -> Result<Vec<Process>> {
     let mut processes = Vec::new();
     let rows = sqlx::query(
         "SELECT process_id, exe, username, realname, computer, distro, cpu_brand, tsc_frequency, start_time, start_ticks, parent_process_id
@@ -193,7 +199,7 @@ pub async fn fetch_child_processes(
     .fetch_all(connection)
     .await?;
     for r in rows {
-        processes.push(process_from_row(&r));
+        processes.push(process_from_row(&r)?);
     }
     Ok(processes)
 }
@@ -429,8 +435,8 @@ pub fn map_row_block(row: &sqlx::postgres::PgRow) -> Result<BlockMetadata> {
     Ok(BlockMetadata {
         block_id: row.try_get("block_id")?,
         stream_id: row.try_get("stream_id")?,
-        begin_time: row.try_get("begin_time")?,
-        end_time: row.try_get("end_time")?,
+        begin_time: parse_rfc3339(row.try_get("begin_time")?)?,
+        end_time: parse_rfc3339(row.try_get("end_time")?)?,
         begin_ticks: row.try_get("begin_ticks")?,
         end_ticks: row.try_get("end_ticks")?,
         nb_objects: row.try_get("nb_objects")?,
@@ -552,21 +558,11 @@ where
 }
 
 #[span_fn]
-#[allow(clippy::cast_precision_loss)]
-fn tsc_to_ms(process: &ProcessEntry, tsc_time: i64) -> f64 {
-    let inv_tsc_frequency = get_tsc_frequency_inverse_ms(process.tsc_frequency);
-
-    let ts_offset = process.start_ticks;
-
-    (tsc_time - ts_offset) as f64 * inv_tsc_frequency
-}
-
-#[span_fn]
-pub fn log_entry_from_value(process: &ProcessEntry, val: &Value) -> Result<Option<LogEntry>> {
+pub fn log_entry_from_value(convert_ticks: &ConvertTicks, val: &Value) -> Result<Option<LogEntry>> {
     if let Value::Object(obj) = val {
         match obj.type_name.as_str() {
             "LogStaticStrEvent" => {
-                let time = obj
+                let ticks = obj
                     .get::<i64>("time")
                     .with_context(|| "reading time from LogStaticStrEvent")?;
                 let desc = obj
@@ -584,14 +580,14 @@ pub fn log_entry_from_value(process: &ProcessEntry, val: &Value) -> Result<Optio
                     .get::<Arc<String>>("fmt_str")
                     .with_context(|| "reading fmt_str from LogStaticStrEvent")?;
                 Ok(Some(LogEntry {
-                    time_ms: tsc_to_ms(process, time),
+                    time_ms: convert_ticks.get_time(ticks),
                     level: (level as i32) - 1,
                     target: target.as_str().to_string(),
                     msg: msg.as_str().to_string(),
                 }))
             }
             "LogStringEvent" => {
-                let time = obj
+                let ticks = obj
                     .get::<i64>("time")
                     .with_context(|| "reading time from LogStringEvent")?;
                 let desc = obj
@@ -609,14 +605,14 @@ pub fn log_entry_from_value(process: &ProcessEntry, val: &Value) -> Result<Optio
                     .get::<Arc<String>>("msg")
                     .with_context(|| "reading msg from LogStringEvent")?;
                 Ok(Some(LogEntry {
-                    time_ms: tsc_to_ms(process, time),
+                    time_ms: convert_ticks.get_time(ticks),
                     level: (level as i32) - 1,
                     target: target.as_str().to_string(),
                     msg: msg.as_str().to_string(),
                 }))
             }
             "LogStaticStrInteropEvent" | "LogStringInteropEventV2" | "LogStringInteropEventV3" => {
-                let time = obj
+                let ticks = obj
                     .get::<i64>("time")
                     .with_context(|| format!("reading time from {}", obj.type_name.as_str()))?;
                 let level =
@@ -631,7 +627,7 @@ pub fn log_entry_from_value(process: &ProcessEntry, val: &Value) -> Result<Optio
                     .get::<Arc<String>>("msg")
                     .with_context(|| format!("reading msg from {}", obj.type_name.as_str()))?;
                 Ok(Some(LogEntry {
-                    time_ms: tsc_to_ms(process, time),
+                    time_ms: convert_ticks.get_time(ticks),
                     level: (level as i32) - 1,
                     target: target.as_str().to_string(),
                     msg: msg.as_str().to_string(),
@@ -652,17 +648,17 @@ pub fn log_entry_from_value(process: &ProcessEntry, val: &Value) -> Result<Optio
 pub async fn find_process_log_entry<Res, Predicate: FnMut(LogEntry) -> Option<Res>>(
     connection: &mut sqlx::PgConnection,
     blob_storage: Arc<dyn BlobStorage>,
-    process: &ProcessEntry,
+    process: &Process,
     mut pred: Predicate,
 ) -> Result<Option<Res>> {
     let mut found_entry = None;
-
+    let convert_ticks = ConvertTicks::new(process);
     for stream in find_process_log_streams(connection, &process.process_id).await? {
         for b in find_stream_blocks(connection, &stream.stream_id).await? {
             let payload = fetch_block_payload(blob_storage.clone(), b.block_id.clone()).await?;
             parse_block(&stream, &payload, |val| {
-                if let Some(log_entry) =
-                    log_entry_from_value(process, &val).with_context(|| "log_entry_from_value")?
+                if let Some(log_entry) = log_entry_from_value(&convert_ticks, &val)
+                    .with_context(|| "log_entry_from_value")?
                 {
                     if let Some(x) = pred(log_entry) {
                         found_entry = Some(x);
@@ -684,7 +680,7 @@ pub async fn find_process_log_entry<Res, Predicate: FnMut(LogEntry) -> Option<Re
 #[span_fn]
 pub async fn for_each_log_entry_in_block<Predicate: FnMut(LogEntry) -> bool>(
     blob_storage: Arc<dyn BlobStorage>,
-    process: &ProcessEntry,
+    convert_ticks: &ConvertTicks,
     stream: &StreamInfo,
     block: &BlockMetadata,
     mut fun: Predicate,
@@ -692,7 +688,7 @@ pub async fn for_each_log_entry_in_block<Predicate: FnMut(LogEntry) -> bool>(
     let payload = fetch_block_payload(blob_storage, block.block_id.clone()).await?;
     parse_block(stream, &payload, |val| {
         if let Some(log_entry) =
-            log_entry_from_value(process, &val).with_context(|| "log_entry_from_value")?
+            log_entry_from_value(convert_ticks, &val).with_context(|| "log_entry_from_value")?
         {
             if !fun(log_entry) {
                 return Ok(false); //do not continue
@@ -708,7 +704,7 @@ pub async fn for_each_log_entry_in_block<Predicate: FnMut(LogEntry) -> bool>(
 pub async fn for_each_process_log_entry<ProcessLogEntry: FnMut(LogEntry)>(
     connection: &mut sqlx::PgConnection,
     blob_storage: Arc<dyn BlobStorage>,
-    process: &ProcessEntry,
+    process: &Process,
     mut process_log_entry: ProcessLogEntry,
 ) -> Result<()> {
     find_process_log_entry(connection, blob_storage, process, |log_entry| {
@@ -745,12 +741,12 @@ pub async fn for_each_process_metric<ProcessMetric: FnMut(Arc<micromegas_transit
 #[span_fn]
 pub async fn for_each_process_in_tree<F>(
     pool: &sqlx::PgPool,
-    root: &ProcessEntry,
+    root: &Process,
     rec_level: u16,
     fun: F,
 ) -> Result<()>
 where
-    F: Fn(&ProcessEntry, u16) + std::marker::Send + Clone,
+    F: Fn(&Process, u16) + std::marker::Send + Clone,
 {
     fun(root, rec_level);
     let mut connection = pool.acquire().await?;
