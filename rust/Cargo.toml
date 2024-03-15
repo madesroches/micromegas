@@ -16,7 +16,6 @@ keywords = ["observability", "telemetry", "analytics"]
 
 [workspace.dependencies]
 lgn-auth = { path = "lgn-auth" }
-lgn-blob-storage = { path = "lgn-blob-storage", version = "0.1.0" }
 lgn-config = { path = "lgn-config" }
 lgn-online = { path = "lgn-online" }
 

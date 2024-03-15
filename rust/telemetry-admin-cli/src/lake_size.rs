@@ -1,11 +1,11 @@
 use anyhow::Result;
-use lgn_blob_storage::BlobStorage;
+use micromegas_telemetry::blob_storage::BlobStorage;
 use sqlx::Row;
 use std::sync::Arc;
 
 pub async fn delete_old_blocks(
     connection: &mut sqlx::PgConnection,
-    blob_storage: Arc<dyn BlobStorage>,
+    blob_storage: Arc<BlobStorage>,
     min_days_old: i32,
 ) -> Result<()> {
     let rows = sqlx::query(
@@ -20,17 +20,12 @@ pub async fn delete_old_blocks(
     .fetch_all(&mut *connection)
     .await?;
     for r in rows {
+        let process_id: String = r.try_get("process_id")?;
+        let stream_id: String = r.try_get("stream_id")?;
         let block_id: String = r.try_get("block_id")?;
-        let payload_block_id: Option<String> = r.try_get("payload_block_id")?;
         println!("Deleting block {}", block_id);
-        if let Some(_id) = payload_block_id {
-            sqlx::query("DELETE FROM payloads WHERE block_id = ?;")
-                .bind(&block_id)
-                .execute(&mut *connection)
-                .await?;
-        } else {
-            blob_storage.delete_blob(&block_id).await?;
-        }
+        let path = format!("blobs/{process_id}/{stream_id}/{block_id}");
+        blob_storage.delete(&path).await?;
         sqlx::query("DELETE FROM blocks WHERE block_id = ?;")
             .bind(block_id)
             .execute(&mut *connection)

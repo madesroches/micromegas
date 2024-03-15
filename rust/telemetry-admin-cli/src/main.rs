@@ -5,17 +5,14 @@
 
 mod lake_size;
 
-use std::str::FromStr;
-use std::sync::Arc;
-
 use anyhow::bail;
 use anyhow::Context;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use lake_size::delete_old_blocks;
-use lgn_blob_storage::AwsS3BlobStorage;
-use lgn_blob_storage::AwsS3Url;
+use micromegas_telemetry::blob_storage::BlobStorage;
 use micromegas_telemetry_sink::TelemetryGuard;
+use std::sync::Arc;
 
 #[derive(Parser, Debug)]
 #[clap(name = "Legion Telemetry Admin")]
@@ -53,14 +50,11 @@ async fn main() -> Result<()> {
         bail!("s3-lake-url is required when connecting to a remote data lake");
     }
 
-    let blob_storage =
-        Arc::new(AwsS3BlobStorage::new(AwsS3Url::from_str(&args.s3_lake_url.unwrap())?).await);
-
+    let blob_storage = Arc::new(BlobStorage::connect(&args.s3_lake_url.unwrap())?);
     let pool = sqlx::postgres::PgPoolOptions::new()
         .connect(&args.remote_db_url.unwrap())
         .await
         .with_context(|| String::from("Connecting to telemetry database"))?;
-
     let mut connection = pool.acquire().await.unwrap();
     match args.command {
         Commands::DeleteoldBlocks { min_days_old } => {

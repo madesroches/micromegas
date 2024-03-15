@@ -1,14 +1,17 @@
 [package]
 name = "telemetry-admin"
-version = "0.1.0"
-edition = "2021"
-license = "MIT OR Apache-2.0"
+keywords.workspace = true
+version.workspace = true
+edition.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+authors.workspace = true
 
 [dependencies]
-lgn-blob-storage.workspace = true
-
 micromegas-analytics.workspace = true
 micromegas-telemetry-sink.workspace = true
+micromegas-telemetry.workspace = true
 micromegas-tracing.workspace = true
 micromegas-transit.workspace = true
 
