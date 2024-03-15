@@ -15,12 +15,12 @@ keywords = ["observability", "telemetry", "analytics"]
 
 
 [workspace.dependencies]
-micromegas-analytics = { path = "analytics" }
+micromegas-analytics = { path = "analytics", version = "0.1.0" }
 micromegas-ingestion = { path = "ingestion", version = "0.1.0" }
-micromegas-telemetry = { path = "telemetry" }
-micromegas-telemetry-sink = { path = "telemetry-sink" }
-micromegas-tracing = { path = "tracing" }
-micromegas-transit = { path = "transit" }
+micromegas-telemetry = { path = "telemetry", version = "0.1.0" }
+micromegas-telemetry-sink = { path = "telemetry-sink", version = "0.1.0" }
+micromegas-tracing = { path = "tracing", version = "0.1.0" }
+micromegas-transit = { path = "transit", version = "0.1.0" }
 public = { path = "public" }
 
 anyhow = "1.0"
