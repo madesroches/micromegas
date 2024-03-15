@@ -1,24 +1,18 @@
-use object_store::{path::Path, ObjectStore};
+use micromegas_telemetry::blob_storage::BlobStorage;
 use sqlx::PgPool;
 use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct DataLakeConnection {
     pub db_pool: PgPool,
-    pub blob_store: Arc<Box<dyn ObjectStore>>,
-    pub blob_store_root: Path,
+    pub blob_storage: Arc<BlobStorage>,
 }
 
 impl DataLakeConnection {
-    pub fn new(
-        db_pool: PgPool,
-        blob_store: Arc<Box<dyn ObjectStore>>,
-        blob_store_root: Path,
-    ) -> Self {
+    pub fn new(db_pool: PgPool, blob_storage: Arc<BlobStorage>) -> Self {
         Self {
             db_pool,
-            blob_store,
-            blob_store_root,
+            blob_storage,
         }
     }
 }

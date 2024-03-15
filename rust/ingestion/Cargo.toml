@@ -10,6 +10,7 @@ authors.workspace = true
 
 [dependencies]
 micromegas-telemetry-sink.workspace = true
+micromegas-telemetry.workspace = true
 micromegas-tracing.workspace = true
 micromegas-transit.workspace = true
 

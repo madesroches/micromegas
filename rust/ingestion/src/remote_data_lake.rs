@@ -3,6 +3,7 @@ use crate::sql_migration::execute_migration;
 use crate::sql_migration::read_schema_version;
 use crate::sql_migration::LATEST_SCHEMA_VERSION;
 use anyhow::{Context, Result};
+use micromegas_telemetry::blob_storage::BlobStorage;
 use micromegas_tracing::prelude::*;
 use std::sync::Arc;
 
@@ -41,16 +42,13 @@ pub async fn connect_to_remote_data_lake(
     object_store_url: &str,
 ) -> Result<DataLakeConnection> {
     info!("connecting to blob storage");
-    let (blob_storage, blob_store_root) =
-        object_store::parse_url(&url::Url::parse(object_store_url)?)?;
+    let blob_storage = Arc::new(
+        BlobStorage::connect(object_store_url).with_context(|| "connecting to blob storage")?,
+    );
     let pool = sqlx::postgres::PgPoolOptions::new()
         .connect(db_uri)
         .await
         .with_context(|| String::from("Connecting to telemetry database"))?;
     migrate_db(pool.clone()).await?;
-    Ok(DataLakeConnection::new(
-        pool,
-        Arc::new(blob_storage),
-        object_store::path::Path::from(format!("{blob_store_root}/blobs")),
-    ))
+    Ok(DataLakeConnection::new(pool, blob_storage))
 }

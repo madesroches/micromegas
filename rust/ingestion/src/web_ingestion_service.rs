@@ -26,13 +26,10 @@ impl WebIngestionService {
         let process_id = "process_id"; //todo
         let stream_id = "stream_id"; //todo
         let block_id = &block.block_id;
-        let obj_path = object_store::path::Path::from(format!(
-            "{}/{process_id}/{stream_id}/{block_id}",
-            self.lake.blob_store_root
-        ));
+        let obj_path = format!("blobs/{process_id}/{stream_id}/{block_id}");
 
         self.lake
-            .blob_store
+            .blob_storage
             .put(&obj_path, encoded_payload.into())
             .await
             .with_context(|| "Error writing block to blob storage")?;

@@ -8,7 +8,7 @@ pub mod time;
 
 use crate::log_entry::LogEntry;
 use anyhow::{Context, Result};
-use lgn_blob_storage::BlobStorage;
+use micromegas_telemetry::blob_storage::BlobStorage;
 use micromegas_telemetry::types::block::BlockMetadata;
 use micromegas_telemetry::types::process::Process;
 use micromegas_telemetry_sink::{compression::decompress, stream_info::StreamInfo};
@@ -514,13 +514,17 @@ pub async fn find_stream_blocks_in_range(
 
 #[span_fn]
 pub async fn fetch_block_payload(
-    blob_storage: Arc<dyn BlobStorage>,
-    block_id: String,
+    blob_storage: Arc<BlobStorage>,
+    process_id: &str,
+    stream_id: &str,
+    block_id: &str,
 ) -> Result<micromegas_telemetry_sink::block_wire_format::BlockPayload> {
+    let obj_path = format!("blobs/{process_id}/{stream_id}/{block_id}");
     let buffer: Vec<u8> = blob_storage
-        .read_blob(&block_id)
+        .read_blob(&obj_path)
         .await
-        .with_context(|| "reading block payload from blob storage")?;
+        .with_context(|| "reading block payload from blob storage")?
+        .into();
     {
         span_scope!("decode");
         let payload: micromegas_telemetry_sink::block_wire_format::BlockPayload =
@@ -647,7 +651,7 @@ pub fn log_entry_from_value(convert_ticks: &ConvertTicks, val: &Value) -> Result
 // until pred returns Some(x)
 pub async fn find_process_log_entry<Res, Predicate: FnMut(LogEntry) -> Option<Res>>(
     connection: &mut sqlx::PgConnection,
-    blob_storage: Arc<dyn BlobStorage>,
+    blob_storage: Arc<BlobStorage>,
     process: &Process,
     mut pred: Predicate,
 ) -> Result<Option<Res>> {
@@ -655,7 +659,13 @@ pub async fn find_process_log_entry<Res, Predicate: FnMut(LogEntry) -> Option<Re
     let convert_ticks = ConvertTicks::new(process);
     for stream in find_process_log_streams(connection, &process.process_id).await? {
         for b in find_stream_blocks(connection, &stream.stream_id).await? {
-            let payload = fetch_block_payload(blob_storage.clone(), b.block_id.clone()).await?;
+            let payload = fetch_block_payload(
+                blob_storage.clone(),
+                &stream.process_id,
+                &stream.stream_id,
+                &b.block_id,
+            )
+            .await?;
             parse_block(&stream, &payload, |val| {
                 if let Some(log_entry) = log_entry_from_value(&convert_ticks, &val)
                     .with_context(|| "log_entry_from_value")?
@@ -679,13 +689,19 @@ pub async fn find_process_log_entry<Res, Predicate: FnMut(LogEntry) -> Option<Re
 // entry until fun returns false mad
 #[span_fn]
 pub async fn for_each_log_entry_in_block<Predicate: FnMut(LogEntry) -> bool>(
-    blob_storage: Arc<dyn BlobStorage>,
+    blob_storage: Arc<BlobStorage>,
     convert_ticks: &ConvertTicks,
     stream: &StreamInfo,
     block: &BlockMetadata,
     mut fun: Predicate,
 ) -> Result<()> {
-    let payload = fetch_block_payload(blob_storage, block.block_id.clone()).await?;
+    let payload = fetch_block_payload(
+        blob_storage,
+        &stream.process_id,
+        &stream.stream_id,
+        &block.block_id,
+    )
+    .await?;
     parse_block(stream, &payload, |val| {
         if let Some(log_entry) =
             log_entry_from_value(convert_ticks, &val).with_context(|| "log_entry_from_value")?
@@ -703,7 +719,7 @@ pub async fn for_each_log_entry_in_block<Predicate: FnMut(LogEntry) -> bool>(
 #[span_fn]
 pub async fn for_each_process_log_entry<ProcessLogEntry: FnMut(LogEntry)>(
     connection: &mut sqlx::PgConnection,
-    blob_storage: Arc<dyn BlobStorage>,
+    blob_storage: Arc<BlobStorage>,
     process: &Process,
     mut process_log_entry: ProcessLogEntry,
 ) -> Result<()> {
@@ -719,13 +735,19 @@ pub async fn for_each_process_log_entry<ProcessLogEntry: FnMut(LogEntry)>(
 #[span_fn]
 pub async fn for_each_process_metric<ProcessMetric: FnMut(Arc<micromegas_transit::Object>)>(
     connection: &mut sqlx::PgConnection,
-    blob_storage: Arc<dyn BlobStorage>,
+    blob_storage: Arc<BlobStorage>,
     process_id: &str,
     mut process_metric: ProcessMetric,
 ) -> Result<()> {
     for stream in find_process_metrics_streams(connection, process_id).await? {
         for block in find_stream_blocks(connection, &stream.stream_id).await? {
-            let payload = fetch_block_payload(blob_storage.clone(), block.block_id.clone()).await?;
+            let payload = fetch_block_payload(
+                blob_storage.clone(),
+                &stream.process_id,
+                &stream.stream_id,
+                &block.block_id,
+            )
+            .await?;
             parse_block(&stream, &payload, |val| {
                 if let Value::Object(obj) = val {
                     process_metric(obj);
