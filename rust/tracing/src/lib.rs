@@ -14,7 +14,7 @@
 //!
 //! # Examples
 //! ```
-//! use tracing::{
+//! use micromegas_tracing::{
 //!    span_scope, info, warn, error, debug, imetric, fmetric, guards, event,
 //! };
 //!

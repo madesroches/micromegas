@@ -210,7 +210,7 @@ impl Level {
     /// # Examples
     ///
     /// ```
-    /// use tracing::Level;
+    /// use micromegas_tracing::Level;
     ///
     /// let mut levels = Level::iter();
     ///
@@ -362,7 +362,7 @@ impl LevelFilter {
     /// # Examples
     ///
     /// ```
-    /// use tracing::LevelFilter;
+    /// use micromegas_tracing::LevelFilter;
     ///
     /// let mut levels = LevelFilter::iter();
     ///
@@ -541,7 +541,7 @@ impl Verbosity {
     /// # Examples
     ///
     /// ```
-    /// use tracing::Verbosity;
+    /// use micromegas_tracing::Verbosity;
     ///
     /// let mut lods = Verbosity::iter();
     ///
@@ -689,7 +689,7 @@ impl LodFilter {
     /// # Examples
     ///
     /// ```
-    /// use tracing::LodFilter;
+    /// use micromegas_tracing::LodFilter;
     ///
     /// let mut lod_filters = LodFilter::iter();
     ///
