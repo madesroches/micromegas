@@ -5,7 +5,7 @@
 [![Apache licensed][license-badge]][license-url]
 [![Build Status][actions-badge]][actions-url]
 
-![rust api documentation](https://docs.rs/micromegas/latest/micromegas/)
+[rust api documentation](https://docs.rs/micromegas/latest/micromegas/) 
 
 
 [crates-badge]: https://img.shields.io/crates/v/micromegas.svg
