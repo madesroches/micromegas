@@ -1,3 +1,5 @@
+https://github.com/madesroches/micromegas/actions/workflows/rust.yml/badge.sv
+
 # micromegas
 Scalable Observability
 
