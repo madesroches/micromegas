@@ -1,10 +1,19 @@
 
-# micromegas
-Scalable Observability
+# Micromegas - Scalable Observability
 
-![rust build](https://github.com/madesroches/micromegas/actions/workflows/rust.yml/badge.svg)
+[![Crates.io][crates-badge]][crates-url]
+[![Apache licensed][license-badge]][license-url]
+[![Build Status][actions-badge]][actions-url]
 
 ![rust api documentation](https://docs.rs/micromegas/latest/micromegas/)
+
+[crates-badge]: https://img.shields.io/crates/v/micromegas.svg
+[crates-url]: https://crates.io/crates/micromegas
+[license-badge]: https://img.shields.io/badge/license-Apache%20v2-blue.svg
+[license-url]: https://github.com/madesroches/micromegas/blob/main/LICENSE
+[actions-badge]: https://github.com/madesroches/micromegas/actions/workflows/rust.yml/badge.svg
+[actions-url]: https://github.com/madesroches/micromegas/actions?query=branch%3Amain
+
 
 ## Objectives
 
