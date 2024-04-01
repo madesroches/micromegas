@@ -1,7 +1,10 @@
-![rust build](https://github.com/madesroches/micromegas/actions/workflows/rust.yml/badge.svg)
 
 # micromegas
 Scalable Observability
+
+![rust build](https://github.com/madesroches/micromegas/actions/workflows/rust.yml/badge.svg)
+
+![rust api documentation](https://docs.rs/micromegas/latest/micromegas/)
 
 ## Objectives
 
