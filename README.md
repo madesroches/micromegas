@@ -2,10 +2,10 @@
 # Micromegas - Scalable Observability
 
 [![Crates.io][crates-badge]][crates-url]
+![docs.rs](https://img.shields.io/docsrs/:crate?link=https%3A%2F%2Fdocs.rs%2Fmicromegas%2Flatest%2Fmicromegas%2F)
 [![Apache licensed][license-badge]][license-url]
 [![Build Status][actions-badge]][actions-url]
 
-![rust api documentation](https://docs.rs/micromegas/latest/micromegas/)
 
 [crates-badge]: https://img.shields.io/crates/v/micromegas.svg
 [crates-url]: https://crates.io/crates/micromegas
