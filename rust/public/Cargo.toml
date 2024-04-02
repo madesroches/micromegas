@@ -12,3 +12,4 @@ authors.workspace = true
 
 [dependencies]
 micromegas-ingestion.workspace = true
+micromegas-telemetry.workspace = true
