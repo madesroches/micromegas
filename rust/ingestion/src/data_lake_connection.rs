@@ -2,7 +2,7 @@ use micromegas_telemetry::blob_storage::BlobStorage;
 use sqlx::PgPool;
 use std::sync::Arc;
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct DataLakeConnection {
     pub db_pool: PgPool,
     pub blob_storage: Arc<BlobStorage>,
