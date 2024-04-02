@@ -1,5 +1,7 @@
 //! micromegas : scalable telemetry
 
+pub use object_store;
+
 pub mod telemetry {
     pub use micromegas_telemetry::*;
 }
