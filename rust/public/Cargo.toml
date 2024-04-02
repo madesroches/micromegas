@@ -13,3 +13,5 @@ authors.workspace = true
 [dependencies]
 micromegas-ingestion.workspace = true
 micromegas-telemetry.workspace = true
+
+object_store.workspace = true
