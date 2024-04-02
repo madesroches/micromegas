@@ -2,6 +2,7 @@ use anyhow::Result;
 use object_store::{path::Path, ObjectStore};
 use std::sync::Arc;
 
+#[derive(Debug)]
 pub struct BlobStorage {
     blob_store: Arc<dyn ObjectStore>,
     blob_store_root: Path,
