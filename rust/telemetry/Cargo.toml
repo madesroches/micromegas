@@ -10,12 +10,10 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
-micromegas-tracing.workspace = true
 micromegas-transit.workspace = true
 
 anyhow.workspace = true
 async-trait.workspace = true
-axum.workspace = true
 bytes.workspace = true
 chrono.workspace = true
 ciborium.workspace = true
