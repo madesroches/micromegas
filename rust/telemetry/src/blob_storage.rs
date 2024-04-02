@@ -8,6 +8,13 @@ pub struct BlobStorage {
 }
 
 impl BlobStorage {
+    pub fn new(blob_store: Arc<dyn ObjectStore>, blob_store_root: Path) -> Self {
+        Self {
+            blob_store,
+            blob_store_root,
+        }
+    }
+
     pub fn connect(object_store_url: &str) -> Result<Self> {
         let (blob_store, blob_store_root) =
             object_store::parse_url(&url::Url::parse(object_store_url)?)?;
