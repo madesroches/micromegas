@@ -18,7 +18,6 @@ anyhow.workspace = true
 async-recursion.workspace = true
 chrono.workspace = true
 ciborium.workspace = true
-prost.workspace = true
 serde_json.workspace = true
 sqlx.workspace = true
 
