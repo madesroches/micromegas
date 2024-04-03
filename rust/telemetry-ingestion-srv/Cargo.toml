@@ -11,11 +11,7 @@ authors.workspace = true
 default-run = "telemetry-ingestion-srv"
 
 [dependencies]
-
-micromegas-ingestion.workspace = true
-micromegas-telemetry-sink.workspace = true
-micromegas-telemetry.workspace = true
-micromegas-tracing.workspace = true
+micromegas.workspace = true
 
 anyhow.workspace = true
 axum.workspace = true

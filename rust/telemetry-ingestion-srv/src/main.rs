@@ -17,12 +17,12 @@ use axum::Extension;
 use axum::Json;
 use axum::Router;
 use clap::Parser;
-use micromegas_ingestion::data_lake_connection::DataLakeConnection;
-use micromegas_ingestion::remote_data_lake::connect_to_remote_data_lake;
-use micromegas_ingestion::web_ingestion_service::WebIngestionService;
-use micromegas_telemetry::stream_info::StreamInfo;
-use micromegas_telemetry_sink::TelemetryGuardBuilder;
-use micromegas_tracing::prelude::*;
+use micromegas::ingestion::data_lake_connection::DataLakeConnection;
+use micromegas::ingestion::remote_data_lake::connect_to_remote_data_lake;
+use micromegas::ingestion::web_ingestion_service::WebIngestionService;
+use micromegas::telemetry::stream_info::StreamInfo;
+use micromegas::telemetry_sink::TelemetryGuardBuilder;
+use micromegas::tracing::prelude::*;
 use std::net::SocketAddr;
 use tower_http::limit::RequestBodyLimitLayer;
 
