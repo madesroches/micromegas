@@ -15,7 +15,7 @@ async fn acquire_lock(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>, key: i64) 
     Ok(())
 }
 
-async fn migrate_db(pool: sqlx::Pool<sqlx::Postgres>) -> Result<()> {
+pub async fn migrate_db(pool: sqlx::Pool<sqlx::Postgres>) -> Result<()> {
     let mut tr = pool.begin().await?;
     let mut current_version = read_schema_version(&mut tr).await;
     drop(tr);
