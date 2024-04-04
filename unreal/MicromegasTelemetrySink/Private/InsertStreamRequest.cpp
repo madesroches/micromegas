@@ -56,16 +56,16 @@ FString FormatInsertStreamRequest(const StreamT& stream)
 	FormatContainerMetadata(depUdts, MakeQueueMetadata<DepQueue>()());
 	streamObj->SetArrayField(TEXT("dependencies_metadata"), depUdts);
 
-	TArray<TSharedPtr<FJsonValue>>		 objUdts;
+	TArray<TSharedPtr<FJsonValue>> objUdts;
 	typedef typename StreamT::EventBlock EventBlock;
-	typedef typename EventBlock::Queue	 EventQueue;
+	typedef typename EventBlock::Queue EventQueue;
 	FormatContainerMetadata(objUdts, MakeQueueMetadata<EventQueue>()());
 	streamObj->SetArrayField(TEXT("objects_metadata"), objUdts);
 
 	SetStringArrayField(*streamObj, TEXT("tags"), stream.GetTags());
 	SetStringMapField(*streamObj, TEXT("properties"), stream.GetProperties());
 
-	FString					  jsonText;
+	FString jsonText;
 	TSharedRef<TJsonWriter<>> jsonWriter = TJsonWriterFactory<>::Create(&jsonText);
 	if (!FJsonSerializer::Serialize(streamObj, jsonWriter))
 	{

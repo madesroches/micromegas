@@ -8,68 +8,66 @@
 
 namespace MicromegasTracing
 {
-    template< typename QueueT >
-    class EventBlock
-    {
-    public:
-        typedef QueueT Queue;
-        
-        EventBlock( const std::wstring& streamId, const DualTime& begin, size_t bufferSize )
-            : StreamId( streamId )
-            , Begin( begin )
-            , Events( bufferSize )
-            , Capacity( bufferSize )
-        {
-        }
+	template <typename QueueT>
+	class EventBlock
+	{
+	public:
+		typedef QueueT Queue;
 
-        void Close( const DualTime& end )
-        {
-            End = end;
-        }
+		EventBlock(const std::wstring& streamId, const DualTime& begin, size_t bufferSize)
+			: StreamId(streamId)
+			, Begin(begin)
+			, Events(bufferSize)
+			, Capacity(bufferSize)
+		{
+		}
 
-        const std::wstring& GetStreamId()const
-        {
-            return StreamId;
-        }
+		void Close(const DualTime& end)
+		{
+			End = end;
+		}
 
-        QueueT& GetEvents()
-        {
-            return Events;
-        }
+		const std::wstring& GetStreamId() const
+		{
+			return StreamId;
+		}
 
-        const QueueT& GetEvents()const
-        {
-            return Events;
-        }
-    
-        size_t GetCapacity()const
-        {
-            return Capacity;
-        }
+		QueueT& GetEvents()
+		{
+			return Events;
+		}
 
-        size_t GetSizeBytes()const
-        {
-            return Events.GetSizeBytes();
-        }
+		const QueueT& GetEvents() const
+		{
+			return Events;
+		}
 
-        const DualTime& GetBeginTime()const
-        {
-            return Begin;
-        }
+		size_t GetCapacity() const
+		{
+			return Capacity;
+		}
 
-        const DualTime& GetEndTime()const
-        {
-            assert( End.Timestamp != 0 );
-            return End;
-        }
-    
-    
-    private:
-        std::wstring StreamId;
-        DualTime Begin;
-        DualTime End;
-        QueueT Events;
-        size_t Capacity;
-    };
-}
+		size_t GetSizeBytes() const
+		{
+			return Events.GetSizeBytes();
+		}
 
+		const DualTime& GetBeginTime() const
+		{
+			return Begin;
+		}
+
+		const DualTime& GetEndTime() const
+		{
+			assert(End.Timestamp != 0);
+			return End;
+		}
+
+	private:
+		std::wstring StreamId;
+		DualTime Begin;
+		DualTime End;
+		QueueT Events;
+		size_t Capacity;
+	};
+} // namespace MicromegasTracing

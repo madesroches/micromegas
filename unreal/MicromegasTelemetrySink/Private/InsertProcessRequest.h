@@ -5,7 +5,7 @@
 
 namespace LgnTracing
 {
-    struct ProcessInfo;
+	struct ProcessInfo;
 }
 
 FString FormatInsertProcessRequest(const LgnTracing::ProcessInfo& processInfo);

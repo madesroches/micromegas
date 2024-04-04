@@ -16,7 +16,7 @@
 
 TArray<uint8> CompressBuffer(const void* src, size_t size);
 
-TUniquePtr<ExtractLogDependencies>	  ExtractBlockDependencies(const MicromegasTracing::LogBlock& block);
+TUniquePtr<ExtractLogDependencies> ExtractBlockDependencies(const MicromegasTracing::LogBlock& block);
 TUniquePtr<ExtractMetricDependencies> ExtractBlockDependencies(const MicromegasTracing::MetricBlock& block);
 TUniquePtr<ExtractThreadDependencies> ExtractBlockDependencies(const MicromegasTracing::ThreadBlock& block);
 
@@ -29,7 +29,7 @@ inline TArray<uint8> FormatBlockRequest(const BlockT& block)
 
 	auto depExtrator = ExtractBlockDependencies(block);
 
-	FString					blockId = FGuid::NewGuid().ToString(EGuidFormats::DigitsWithHyphens);
+	FString blockId = FGuid::NewGuid().ToString(EGuidFormats::DigitsWithHyphens);
 	TSharedRef<FJsonObject> blockInfo = MakeShareable(new FJsonObject);
 	blockInfo->SetStringField(TEXT("block_id"), *blockId);
 	blockInfo->SetStringField(TEXT("stream_id"), block.GetStreamId().c_str());
@@ -39,7 +39,7 @@ inline TArray<uint8> FormatBlockRequest(const BlockT& block)
 	blockInfo->SetStringField(TEXT("end_ticks"), std::to_string(block.GetEndTime().Timestamp).c_str());
 	blockInfo->SetStringField(TEXT("nb_objects"), std::to_string(block.GetEvents().GetNbEvents()).c_str());
 
-	FString					  jsonText;
+	FString jsonText;
 	TSharedRef<TJsonWriter<>> jsonWriter = TJsonWriterFactory<>::Create(&jsonText);
 	if (!FJsonSerializer::Serialize(blockInfo, jsonWriter))
 	{
@@ -49,7 +49,7 @@ inline TArray<uint8> FormatBlockRequest(const BlockT& block)
 	jsonWriter->Close();
 
 	std::vector<uint8> buffer;
-	DynamicString	   blockInfoDynStr(*jsonText);
+	DynamicString blockInfoDynStr(*jsonText);
 	buffer.reserve(Serializer<DynamicString>::GetSize(blockInfoDynStr));
 	Serializer<DynamicString>::Write(blockInfoDynStr, buffer);
 

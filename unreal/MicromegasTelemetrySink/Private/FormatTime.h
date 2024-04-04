@@ -6,7 +6,7 @@
 
 namespace LgnTracing
 {
-    struct DualTime;
+	struct DualTime;
 }
 
-std::string FormatTimeIso8601( const LgnTracing::DualTime& time );
+std::string FormatTimeIso8601(const LgnTracing::DualTime& time);

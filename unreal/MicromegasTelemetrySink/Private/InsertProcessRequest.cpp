@@ -31,9 +31,9 @@ TSharedPtr<FJsonObject> FormatProcessInfo(const MicromegasTracing::ProcessInfo& 
 
 FString FormatInsertProcessRequest(const MicromegasTracing::ProcessInfo& processInfo)
 {
-	FString					  jsonText;
+	FString jsonText;
 	TSharedRef<TJsonWriter<>> jsonWriter = TJsonWriterFactory<>::Create(&jsonText);
-	TSharedPtr<FJsonObject>	  obj = FormatProcessInfo(processInfo);
+	TSharedPtr<FJsonObject> obj = FormatProcessInfo(processInfo);
 	if (!FJsonSerializer::Serialize(obj.ToSharedRef(), jsonWriter))
 	{
 		UE_LOG(LogMicromegasTelemetrySink, Error, TEXT("Error formatting processInfo as json"));

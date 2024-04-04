@@ -118,7 +118,7 @@ public:
 
 	virtual void OnInitThreadStream(MicromegasTracing::ThreadStream* stream)
 	{
-		const uint32   threadId = FPlatformTLS::GetCurrentThreadId();
+		const uint32 threadId = FPlatformTLS::GetCurrentThreadId();
 		const FString& threadName = FThreadManager::GetThreadName(threadId);
 
 		stream->SetProperty(TEXT("thread-name"), *threadName);
@@ -230,15 +230,15 @@ private:
 		}
 	}
 
-	typedef std::function<void()>			   Callback;
+	typedef std::function<void()> Callback;
 	typedef TQueue<Callback, EQueueMode::Mpsc> WorkQueue;
-	FString									   BaseUrl;
-	WorkQueue								   Queue;
-	volatile int32							   QueueSize;
-	volatile bool							   RequestShutdown;
-	FEventRef								   WakeupThread;
-	TUniquePtr<FRunnableThread>				   Thread;
-	TUniquePtr<FlushMonitor>				   Flusher;
+	FString BaseUrl;
+	WorkQueue Queue;
+	volatile int32 QueueSize;
+	volatile bool RequestShutdown;
+	FEventRef WakeupThread;
+	TUniquePtr<FRunnableThread> Thread;
+	TUniquePtr<FlushMonitor> Flusher;
 };
 
 std::wstring CreateGuid()
@@ -261,11 +261,11 @@ void InitRemoteSink()
 	UE_LOG(LogMicromegasTelemetrySink, Log, TEXT("Initializing Remote Telemetry Sink"));
 
 	// const char* url = "https://web-api.live.playground.legionlabs.com/v1/spaces/default/telemetry/ingestion/";
-	const char*				   url = "http://localhost:8081/v1/spaces/default/telemetry/ingestion/";
+	const char* url = "http://localhost:8081/v1/spaces/default/telemetry/ingestion/";
 	std::shared_ptr<EventSink> sink = std::make_shared<RemoteSink>(url);
-	const size_t			   LOG_BUFFER_SIZE = 10 * 1024 * 1024;
-	const size_t			   METRICS_BUFFER_SIZE = 10 * 1024 * 1024;
-	const size_t			   THREAD_BUFFER_SIZE = 10 * 1024 * 1024;
+	const size_t LOG_BUFFER_SIZE = 10 * 1024 * 1024;
+	const size_t METRICS_BUFFER_SIZE = 10 * 1024 * 1024;
+	const size_t THREAD_BUFFER_SIZE = 10 * 1024 * 1024;
 
 	std::wstring processId = CreateGuid();
 	std::wstring parentProcessId = *FPlatformMisc::GetEnvironmentVariable(TEXT("MICROMEGAS_TELEMETRY_PARENT_PROCESS"));

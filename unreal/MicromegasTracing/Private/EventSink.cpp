@@ -5,6 +5,7 @@
 
 namespace MicromegasTracing
 {
-    EventSink::~EventSink(){
-    }
-}
+	EventSink::~EventSink()
+	{
+	}
+} // namespace MicromegasTracing
