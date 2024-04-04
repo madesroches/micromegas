@@ -15,7 +15,6 @@ namespace MicromegasTracing
     typedef std::wstring (*NewGuid)();
     typedef void (*ThreadStreamCallback)( ThreadStream* );
 
-    
     class CORE_API Dispatch
     {
     public:
@@ -84,4 +83,10 @@ namespace MicromegasTracing
     };
 
     extern CORE_API Dispatch* GDispatch;
+
+	CORE_API void FlushLogStream();
+	CORE_API void FlushMetricStream();
+	CORE_API void LogInterop( const LogStringInteropEvent& event );
+	CORE_API void ForEachThreadStream( ThreadStreamCallback callback );
+	
 } // namespace

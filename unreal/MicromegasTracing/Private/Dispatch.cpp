@@ -72,7 +72,7 @@ namespace MicromegasTracing
 
     void Dispatch::FlushLogStreamImpl(GuardPtr& guard)
     {
-        LGN_SPAN_SCOPE(TEXT("MicromegasTracing"), TEXT("Dispatch::FlushLogStreamImpl"));
+        MICROMEGAS_SPAN_SCOPE(TEXT("MicromegasTracing"), TEXT("Dispatch::FlushLogStreamImpl"));
         DualTime now = DualTime::Now();
         LogBlockPtr newBlock = std::make_shared<LogBlock>(LogEntries->GetStreamId(),
                                                           now,
@@ -85,7 +85,7 @@ namespace MicromegasTracing
 
     void Dispatch::FlushMetricStreamImpl(GuardPtr& guard)
     {
-        LGN_SPAN_SCOPE(TEXT("MicromegasTracing"), TEXT("Dispatch::FlushMetricStreamImpl"));
+        MICROMEGAS_SPAN_SCOPE(TEXT("MicromegasTracing"), TEXT("Dispatch::FlushMetricStreamImpl"));
         DualTime now = DualTime::Now();
         MetricsBlockPtr newBlock = std::make_shared<MetricBlock>(Metrics->GetStreamId(),
                                                                  now,

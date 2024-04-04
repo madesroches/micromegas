@@ -98,7 +98,7 @@ namespace MicromegasTracing
         template< typename Visitor >
         void ForEach( Visitor& v )const
         {
-            LGN_SPAN_SCOPE(TEXT("MicromegasTracing"), TEXT("HeterogeneousQueue::ForEach"));
+            MICROMEGAS_SPAN_SCOPE(TEXT("MicromegasTracing"), TEXT("HeterogeneousQueue::ForEach"));
             size_t cursor = 0;
             while ( cursor < GetSizeBytes() )
             {

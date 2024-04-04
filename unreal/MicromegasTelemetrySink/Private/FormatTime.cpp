@@ -2,11 +2,11 @@
 //  FormatTime.cpp
 //
 #include "FormatTime.h"
-#include "LgnTracing/DualTime.h"
+#include "MicromegasTracing/DualTime.h"
 #include <sstream>
 #include <iomanip>
 
-std::string FormatTimeIso8601( const LgnTracing::DualTime& dualTime )
+std::string FormatTimeIso8601( const MicromegasTracing::DualTime& dualTime )
 {
     std::time_t time = std::chrono::system_clock::to_time_t(dualTime.SystemTime);
     tm utcTime;
