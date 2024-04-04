@@ -35,9 +35,6 @@ pub struct LocalEventSink {
 
 impl LocalEventSink {
     pub fn new() -> Self {
-        #[cfg(all(windows, feature = "colored"))]
-        set_up_color_terminal();
-
         Self {
             #[cfg(feature = "timestamps")]
             timestamps: true,
@@ -123,32 +120,5 @@ impl EventSink for LocalEventSink {
 
     fn is_busy(&self) -> bool {
         false
-    }
-}
-
-#[cfg(all(windows, feature = "colored"))]
-fn set_up_color_terminal() {
-    use atty::Stream;
-
-    if atty::is(Stream::Stdout) {
-        unsafe {
-            let stdout =
-                winapi::um::processenv::GetStdHandle(winapi::um::winbase::STD_OUTPUT_HANDLE);
-
-            if stdout == winapi::um::handleapi::INVALID_HANDLE_VALUE {
-                return;
-            }
-
-            let mut mode: winapi::shared::minwindef::DWORD = 0;
-
-            if winapi::um::consoleapi::GetConsoleMode(stdout, &mut mode) == 0 {
-                return;
-            }
-
-            winapi::um::consoleapi::SetConsoleMode(
-                stdout,
-                mode | winapi::um::wincon::ENABLE_VIRTUAL_TERMINAL_PROCESSING,
-            );
-        }
     }
 }
