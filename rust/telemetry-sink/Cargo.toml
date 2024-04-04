@@ -32,10 +32,6 @@ tokio.workspace = true
 tokio-retry.workspace = true
 uuid.workspace = true
 
-[target.'cfg(windows)'.dependencies]
-atty.workspace = true
-winapi.workspace = true
-
 [features]
 default = ["colors", "timestamps"]
 colors = ["colored"]

@@ -26,7 +26,6 @@ micromegas = { path = "public" }
 anyhow = "1.0"
 async-recursion = "1"
 async-trait = "0.1"
-atty = "0.2.14"
 aws-config = "0.12"
 aws-sdk-s3 = "0.12"
 axum = "0.7.4"
@@ -67,4 +66,3 @@ tower-http = { version = "0.5.2", features = ["limit"] }
 url = "2.5.0"
 uuid = { version = "1.0", features = ["v4"] }
 whoami = "1.2"
-winapi = { version = "0.3", features = ["handleapi", "winbase"] }
