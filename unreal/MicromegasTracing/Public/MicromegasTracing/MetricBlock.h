@@ -1,11 +1,11 @@
 #pragma once
 //
-//  LgnTracing/MetricBlock.h
+//  MicromegasTracing/MetricBlock.h
 //
-#include "LgnTracing/EventBlock.h"
-#include "LgnTracing/MetricEvents.h"
+#include "MicromegasTracing/EventBlock.h"
+#include "MicromegasTracing/MetricEvents.h"
 
-namespace LgnTracing
+namespace MicromegasTracing
 {
     typedef HeterogeneousQueue<
         IntegerMetricEvent,

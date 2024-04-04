@@ -1,13 +1,13 @@
 #pragma once
 //
-//  LgnTracing/EventSink.h
+//  MicromegasTracing/EventSink.h
 //
 #include "HAL/Platform.h"
-#include "LgnTracing/Fwd.h"
+#include "MicromegasTracing/Fwd.h"
 
-namespace LgnTracing
+namespace MicromegasTracing
 {
-    class LGNTRACING_API EventSink
+    class CORE_API EventSink
     {
     public:
         virtual ~EventSink() = 0;

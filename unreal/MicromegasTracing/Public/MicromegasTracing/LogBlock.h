@@ -1,13 +1,13 @@
 #pragma once
 //
-//  LgnTracing/LogBlock.h
+//  MicromegasTracing/LogBlock.h
 //
-#include "LgnTracing/DualTime.h"
-#include "LgnTracing/LogEvents.h"
-#include "LgnTracing/HeterogeneousQueue.h"
-#include "LgnTracing/EventBlock.h"
+#include "MicromegasTracing/DualTime.h"
+#include "MicromegasTracing/LogEvents.h"
+#include "MicromegasTracing/HeterogeneousQueue.h"
+#include "MicromegasTracing/EventBlock.h"
 
-namespace LgnTracing
+namespace MicromegasTracing
 {
     typedef HeterogeneousQueue<
         LogStaticStrEvent,     // cheapest log event, use when possible

@@ -1,11 +1,11 @@
 #pragma once
 //
-//  LgnTracing/ThreadBlock.h
+//  MicromegasTracing/ThreadBlock.h
 //
-#include "LgnTracing/EventBlock.h"
-#include "LgnTracing/SpanEvents.h"
+#include "MicromegasTracing/EventBlock.h"
+#include "MicromegasTracing/SpanEvents.h"
 
-namespace LgnTracing
+namespace MicromegasTracing
 {
     typedef HeterogeneousQueue<
         BeginThreadSpanEvent,

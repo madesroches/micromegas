@@ -1,19 +1,19 @@
 //
-//  LgnTracing/Dispatch.cpp
+//  MicromegasTracing/Dispatch.cpp
 //
-#include "LgnTracing/Dispatch.h"
-#include "LgnTracing/Macros.h"
+#include "MicromegasTracing/Dispatch.h"
+#include "MicromegasTracing/Macros.h"
 #include "Misc/Guid.h"
 #include "Misc/ScopeLock.h"
 #include "HAL/PlatformProcess.h"
-#include "LgnTracing/ProcessInfo.h"
-#include "LgnTracing/EventSink.h"
-#include "LgnTracing/LogStream.h"
-#include "LgnTracing/LogBlock.h"
-#include "LgnTracing/MetricEvents.h"
-#include "LgnTracing/SpanEvents.h"
+#include "MicromegasTracing/ProcessInfo.h"
+#include "MicromegasTracing/EventSink.h"
+#include "MicromegasTracing/LogStream.h"
+#include "MicromegasTracing/LogBlock.h"
+#include "MicromegasTracing/MetricEvents.h"
+#include "MicromegasTracing/SpanEvents.h"
 
-namespace LgnTracing
+namespace MicromegasTracing
 {
     Dispatch* GDispatch = nullptr;
 
@@ -72,7 +72,7 @@ namespace LgnTracing
 
     void Dispatch::FlushLogStreamImpl(GuardPtr& guard)
     {
-        LGN_SPAN_SCOPE(TEXT("LgnTracing"), TEXT("Dispatch::FlushLogStreamImpl"));
+        LGN_SPAN_SCOPE(TEXT("MicromegasTracing"), TEXT("Dispatch::FlushLogStreamImpl"));
         DualTime now = DualTime::Now();
         LogBlockPtr newBlock = std::make_shared<LogBlock>(LogEntries->GetStreamId(),
                                                           now,
@@ -85,7 +85,7 @@ namespace LgnTracing
 
     void Dispatch::FlushMetricStreamImpl(GuardPtr& guard)
     {
-        LGN_SPAN_SCOPE(TEXT("LgnTracing"), TEXT("Dispatch::FlushMetricStreamImpl"));
+        LGN_SPAN_SCOPE(TEXT("MicromegasTracing"), TEXT("Dispatch::FlushMetricStreamImpl"));
         DualTime now = DualTime::Now();
         MetricsBlockPtr newBlock = std::make_shared<MetricBlock>(Metrics->GetStreamId(),
                                                                  now,

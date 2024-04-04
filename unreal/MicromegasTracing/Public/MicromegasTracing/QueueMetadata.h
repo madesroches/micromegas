@@ -1,11 +1,11 @@
 #pragma once
 //
-//  LgnTracing/QueueMetadata.h
+//  MicromegasTracing/QueueMetadata.h
 //
 #include "Containers/Array.h"
-#include "LgnTracing/HeterogeneousQueue.h"
+#include "MicromegasTracing/HeterogeneousQueue.h"
 
-namespace LgnTracing
+namespace MicromegasTracing
 {
     struct UDTMember
     {

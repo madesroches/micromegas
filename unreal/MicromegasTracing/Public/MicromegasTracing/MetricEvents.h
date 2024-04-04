@@ -1,10 +1,10 @@
 #pragma once
 //
-//  LgnTracing/MetricEvents.h
+//  MicromegasTracing/MetricEvents.h
 //
-#include "LgnTracing/Verbosity.h"
+#include "MicromegasTracing/Verbosity.h"
 
-namespace LgnTracing
+namespace MicromegasTracing
 {
     struct MetricMetadata
     {

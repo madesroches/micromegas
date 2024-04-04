@@ -1,11 +1,11 @@
 #pragma once
 //
-//  LgnTracing/ProcessInfo.h
+//  MicromegasTracing/ProcessInfo.h
 //
 #include <string>
-#include "LgnTracing/DualTime.h"
+#include "MicromegasTracing/DualTime.h"
 
-namespace LgnTracing
+namespace MicromegasTracing
 {
     struct ProcessInfo
     {

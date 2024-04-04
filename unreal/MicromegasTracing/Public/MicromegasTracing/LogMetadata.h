@@ -1,8 +1,8 @@
 #pragma once
 //
-//  LgnTracing/LogMetadata.h
+//  MicromegasTracing/LogMetadata.h
 //
-namespace LgnTracing
+namespace MicromegasTracing
 {
     template< typename T >
     struct GetEventMetadata;

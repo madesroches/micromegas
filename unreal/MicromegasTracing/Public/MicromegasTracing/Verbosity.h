@@ -1,8 +1,8 @@
 #pragma once
 //
-//  LgnTracing/Verbosity.h
+//  MicromegasTracing/Verbosity.h
 //
-namespace LgnTracing
+namespace MicromegasTracing
 {
     namespace Verbosity
     {

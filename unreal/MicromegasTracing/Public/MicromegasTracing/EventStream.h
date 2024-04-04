@@ -1,12 +1,12 @@
 #pragma once
 //
-//  LgnTracing/EventStream.h
+//  MicromegasTracing/EventStream.h
 //
 #include <string>
 #include <vector>
 #include <map>
 
-namespace LgnTracing
+namespace MicromegasTracing
 {
     template< typename EventBlockT, size_t BUFFER_PADDING >
     class EventStreamImpl

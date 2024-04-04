@@ -1,13 +1,13 @@
 #pragma once
 //
-//  LgnTracing/strings.h
+//  MicromegasTracing/strings.h
 //
 #include <cassert>
 #include <vector>
 
 struct FNameEntry;
 
-namespace LgnTracing
+namespace MicromegasTracing
 {
     template< typename T >
     struct GetEventMetadata;

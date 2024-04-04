@@ -1,12 +1,12 @@
 #pragma once
 //
-//  LgnTracing/HeterogeneousQueue.h
+//  MicromegasTracing/HeterogeneousQueue.h
 //
 #include <vector>
 #include <cassert>
-#include "LgnTracing/Macros.h"
+#include "MicromegasTracing/Macros.h"
 
-namespace LgnTracing
+namespace MicromegasTracing
 {
     namespace details
     {
@@ -98,7 +98,7 @@ namespace LgnTracing
         template< typename Visitor >
         void ForEach( Visitor& v )const
         {
-            LGN_SPAN_SCOPE(TEXT("LgnTracing"), TEXT("HeterogeneousQueue::ForEach"));
+            LGN_SPAN_SCOPE(TEXT("MicromegasTracing"), TEXT("HeterogeneousQueue::ForEach"));
             size_t cursor = 0;
             while ( cursor < GetSizeBytes() )
             {

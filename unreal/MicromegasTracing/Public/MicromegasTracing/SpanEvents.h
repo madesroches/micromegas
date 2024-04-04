@@ -1,8 +1,8 @@
 #pragma once
 //
-//  LgnTracing/SpanEvents.h
+//  MicromegasTracing/SpanEvents.h
 //
-namespace LgnTracing
+namespace MicromegasTracing
 {
     struct SpanMetadata
     {

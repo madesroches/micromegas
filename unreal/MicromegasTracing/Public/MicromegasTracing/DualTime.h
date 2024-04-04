@@ -1,12 +1,12 @@
 #pragma once
 //
-//  LgnTracing/DualTime.h
+//  MicromegasTracing/DualTime.h
 //
 #include <string>
 #include <chrono>
 #include "HAL/PlatformTime.h"
 
-namespace LgnTracing
+namespace MicromegasTracing
 {
     struct DualTime
     {

@@ -1,10 +1,10 @@
 #pragma once
 //
-//  LgnTracing/ThreadMetadata.h
+//  MicromegasTracing/ThreadMetadata.h
 //
-#include "LgnTracing/QueueMetadata.h"
+#include "MicromegasTracing/QueueMetadata.h"
 
-namespace LgnTracing
+namespace MicromegasTracing
 {
     template<>
     struct GetEventMetadata< BeginThreadSpanEvent >

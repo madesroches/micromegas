@@ -1,22 +1,22 @@
 #pragma once
 //
-//  LgnTracing/Dispatch.h
+//  MicromegasTracing/Dispatch.h
 //
 #include <string>
 #include <memory>
 #include <mutex>
 #include <vector>
 #include "HAL/Platform.h"
-#include "LgnTracing/Fwd.h"
+#include "MicromegasTracing/Fwd.h"
 class FScopeLock;
 
-namespace LgnTracing
+namespace MicromegasTracing
 {
     typedef std::wstring (*NewGuid)();
     typedef void (*ThreadStreamCallback)( ThreadStream* );
 
     
-    class LGNTRACING_API Dispatch
+    class CORE_API Dispatch
     {
     public:
         static void Init(NewGuid allocNewGuid,
@@ -27,17 +27,17 @@ namespace LgnTracing
                          size_t threadBufferSize);
         ~Dispatch();
 
-        friend LGNTRACING_API void Shutdown();
-        friend LGNTRACING_API void FlushLogStream();
-        friend LGNTRACING_API void FlushMetricStream();
-        friend LGNTRACING_API void LogInterop( const LogStringInteropEvent& event );
-        friend LGNTRACING_API void LogStaticStr( const LogStaticStrEvent& event );
-        friend LGNTRACING_API void IntMetric( const IntegerMetricEvent& event );
-        friend LGNTRACING_API void FloatMetric( const FloatMetricEvent& event );
-        friend LGNTRACING_API void BeginScope( const BeginThreadSpanEvent& event );
-        friend LGNTRACING_API void EndScope( const EndThreadSpanEvent& event );
+        friend CORE_API void Shutdown();
+        friend CORE_API void FlushLogStream();
+        friend CORE_API void FlushMetricStream();
+        friend CORE_API void LogInterop( const LogStringInteropEvent& event );
+        friend CORE_API void LogStaticStr( const LogStaticStrEvent& event );
+        friend CORE_API void IntMetric( const IntegerMetricEvent& event );
+        friend CORE_API void FloatMetric( const FloatMetricEvent& event );
+        friend CORE_API void BeginScope( const BeginThreadSpanEvent& event );
+        friend CORE_API void EndScope( const EndThreadSpanEvent& event );
 
-        friend LGNTRACING_API void ForEachThreadStream( ThreadStreamCallback callback );
+        friend CORE_API void ForEachThreadStream( ThreadStreamCallback callback );
         
         template< typename T >
         friend void QueueLogEntry( const T& event );
@@ -83,5 +83,5 @@ namespace LgnTracing
         size_t ThreadBufferSize;
     };
 
-    extern LGNTRACING_API Dispatch* GDispatch;
+    extern CORE_API Dispatch* GDispatch;
 } // namespace

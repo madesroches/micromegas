@@ -1,11 +1,11 @@
 #pragma once
 //
-//  LgnTracing/MetricStream.h
+//  MicromegasTracing/MetricStream.h
 //
-#include "LgnTracing/MetricBlock.h"
-#include "LgnTracing/EventStream.h"
+#include "MicromegasTracing/MetricBlock.h"
+#include "MicromegasTracing/EventStream.h"
 
-namespace LgnTracing
+namespace MicromegasTracing
 {
     typedef std::shared_ptr<MetricBlock> MetricsBlockPtr;
     typedef EventStreamImpl<MetricBlock, 32> MetricStream;

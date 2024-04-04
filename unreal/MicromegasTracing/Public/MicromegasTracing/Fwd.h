@@ -1,10 +1,10 @@
 #pragma once
 //
-//  LgnTracing/Fwd.h
+//  MicromegasTracing/Fwd.h
 //
 #include <memory>
 
-namespace LgnTracing
+namespace MicromegasTracing
 {
     class EventSink;
     struct LogStringInteropEvent;

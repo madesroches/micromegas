@@ -1,10 +1,10 @@
 #pragma once
 //
-//  LgnTracing/StringsMetadata.h
+//  MicromegasTracing/StringsMetadata.h
 //
-#include "LgnTracing/strings.h"
+#include "MicromegasTracing/strings.h"
 
-namespace LgnTracing
+namespace MicromegasTracing
 {
     template< typename T >
     struct GetEventMetadata;

@@ -1,9 +1,9 @@
 //
-//  LgnTracing/EventSink.cpp
+//  MicromegasTracing/EventSink.cpp
 //
-#include "LgnTracing/EventSink.h"
+#include "MicromegasTracing/EventSink.h"
 
-namespace LgnTracing
+namespace MicromegasTracing
 {
     EventSink::~EventSink(){
     }

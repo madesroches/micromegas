@@ -1,11 +1,11 @@
 #pragma once
 //
-//  LgnTracing/LogStream.h
+//  MicromegasTracing/LogStream.h
 //
-#include "LgnTracing/LogBlock.h"
-#include "LgnTracing/EventStream.h"
+#include "MicromegasTracing/LogBlock.h"
+#include "MicromegasTracing/EventStream.h"
 
-namespace LgnTracing
+namespace MicromegasTracing
 {
     typedef std::shared_ptr<LogBlock> LogBlockPtr;
     typedef EventStreamImpl<LogBlock, 128> LogStream;

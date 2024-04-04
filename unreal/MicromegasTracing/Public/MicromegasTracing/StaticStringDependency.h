@@ -1,10 +1,10 @@
 #pragma once
 //
-//  LgnTracing/StaticStringDependency.h
+//  MicromegasTracing/StaticStringDependency.h
 //
-#include "LgnTracing/QueueMetadata.h"
+#include "MicromegasTracing/QueueMetadata.h"
 
-namespace LgnTracing
+namespace MicromegasTracing
 {
     struct StaticStringDependency
     {

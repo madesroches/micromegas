@@ -1,12 +1,12 @@
 #pragma once
 //
-//  LgnTracing/EventBlock.h
+//  MicromegasTracing/EventBlock.h
 //
 #include <string>
-#include "LgnTracing/HeterogeneousQueue.h"
-#include "LgnTracing/DualTime.h"
+#include "MicromegasTracing/HeterogeneousQueue.h"
+#include "MicromegasTracing/DualTime.h"
 
-namespace LgnTracing
+namespace MicromegasTracing
 {
     template< typename QueueT >
     class EventBlock

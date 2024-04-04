@@ -1,10 +1,10 @@
 #pragma once
 //
-//  LgnTracing/LogEvents.h
+//  MicromegasTracing/LogEvents.h
 //
-#include "LgnTracing/strings.h"
+#include "MicromegasTracing/strings.h"
 
-namespace LgnTracing
+namespace MicromegasTracing
 {
     namespace LogLevel
     {
