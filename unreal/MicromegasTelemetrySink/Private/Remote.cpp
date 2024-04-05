@@ -32,12 +32,7 @@ namespace
 		int32 code = HttpResponse ? HttpResponse->GetResponseCode() : 0;
 		if (!bSucceeded || code != 200)
 		{
-			const TCHAR* status = TEXT("unknown");
-			if (HttpRequest)
-			{
-				status = ToString(HttpRequest->GetStatus());
-			}
-			UE_LOG(LogMicromegasTelemetrySink, Error, TEXT("Request completed with status=%s code=%d"), status, code);
+			UE_LOG(LogMicromegasTelemetrySink, Error, TEXT("Request completed with code=%d"), code);
 		}
 	}
 
@@ -73,7 +68,7 @@ void RemoteSink::OnStartup(const MicromegasTracing::ProcessInfoPtr& processInfo)
 	FPlatformAtomics::InterlockedIncrement(&QueueSize);
 	Queue.Enqueue([this, processInfo]() {
 		FString content = FormatInsertProcessRequest(*processInfo);
-		SendJsonRequest(TEXT("process"), content);
+		SendJsonRequest(TEXT("insert_process"), content);
 	});
 	WakeupThread->Trigger();
 }
@@ -94,7 +89,7 @@ void RemoteSink::OnInitLogStream(const MicromegasTracing::LogStreamPtr& stream)
 	IncrementQueueSize();
 	Queue.Enqueue([this, stream]() {
 		FString content = FormatInsertLogStreamRequest(*stream);
-		SendJsonRequest(TEXT("stream"), content);
+		SendJsonRequest(TEXT("insert_stream"), content);
 	});
 	WakeupThread->Trigger();
 }
@@ -104,7 +99,7 @@ void RemoteSink::OnInitMetricStream(const MicromegasTracing::MetricStreamPtr& st
 	IncrementQueueSize();
 	Queue.Enqueue([this, stream]() {
 		FString content = FormatInsertMetricStreamRequest(*stream);
-		SendJsonRequest(TEXT("stream"), content);
+		SendJsonRequest(TEXT("insert_stream"), content);
 	});
 	WakeupThread->Trigger();
 }
@@ -120,7 +115,7 @@ void RemoteSink::OnInitThreadStream(MicromegasTracing::ThreadStream* stream)
 	IncrementQueueSize();
 	Queue.Enqueue([this, stream]() {
 		FString content = FormatInsertThreadStreamRequest(*stream);
-		SendJsonRequest(TEXT("stream"), content);
+		SendJsonRequest(TEXT("insert_stream"), content);
 	});
 	WakeupThread->Trigger();
 }
@@ -130,7 +125,7 @@ void RemoteSink::OnProcessLogBlock(const MicromegasTracing::LogBlockPtr& block)
 	IncrementQueueSize();
 	Queue.Enqueue([this, block]() {
 		TArray<uint8> content = FormatBlockRequest(*block);
-		SendBinaryRequest(TEXT("block"), content);
+		SendBinaryRequest(TEXT("insert_block"), content);
 	});
 	WakeupThread->Trigger();
 }
@@ -140,7 +135,7 @@ void RemoteSink::OnProcessMetricBlock(const MicromegasTracing::MetricsBlockPtr& 
 	IncrementQueueSize();
 	Queue.Enqueue([this, block]() {
 		TArray<uint8> content = FormatBlockRequest(*block);
-		SendBinaryRequest(TEXT("block"), content);
+		SendBinaryRequest(TEXT("insert_block"), content);
 	});
 	WakeupThread->Trigger();
 }
@@ -151,7 +146,7 @@ void RemoteSink::OnProcessThreadBlock(const MicromegasTracing::ThreadBlockPtr& b
 	IncrementQueueSize();
 	Queue.Enqueue([this, block]() {
 		TArray<uint8> content = FormatBlockRequest(*block);
-		SendBinaryRequest(TEXT("block"), content);
+		SendBinaryRequest(TEXT("insert_block"), content);
 	});
 	WakeupThread->Trigger();
 }
@@ -194,11 +189,11 @@ void RemoteSink::SendJsonRequest(const TCHAR* command, const FString& content)
 	MICROMEGAS_SPAN_SCOPE(TEXT("MicromegasTelemetrySink"), TEXT("SendJsonRequest"));
 	TSharedRef<IHttpRequest, ESPMode::ThreadSafe> HttpRequest = FHttpModule::Get().CreateRequest();
 	HttpRequest->SetURL(BaseUrl + command);
-	HttpRequest->SetVerb(TEXT("PUT"));
+	HttpRequest->SetVerb(TEXT("POST"));
 	HttpRequest->SetContentAsString(content);
 	HttpRequest->SetHeader(TEXT("Content-Type"), TEXT("application/json"));
 	HttpRequest->OnProcessRequestComplete().BindStatic(&OnProcessRequestComplete);
-	if ( !Auth->Sign(*HttpRequest) )
+	if (!Auth->Sign(*HttpRequest))
 	{
 		UE_LOG(LogMicromegasTelemetrySink, Warning, TEXT("Failed to sign telemetry http request"));
 		return;
@@ -214,16 +209,16 @@ void RemoteSink::SendBinaryRequest(const TCHAR* command, const TArray<uint8>& co
 	MICROMEGAS_SPAN_SCOPE(TEXT("MicromegasTelemetrySink"), TEXT("SendBinaryRequest"));
 	TSharedRef<IHttpRequest, ESPMode::ThreadSafe> HttpRequest = FHttpModule::Get().CreateRequest();
 	HttpRequest->SetURL(BaseUrl + command);
-	HttpRequest->SetVerb(TEXT("PUT"));
+	HttpRequest->SetVerb(TEXT("POST"));
 	HttpRequest->SetContent(content);
 	HttpRequest->SetHeader(TEXT("Content-Type"), TEXT("application/octet-stream"));
 	HttpRequest->OnProcessRequestComplete().BindStatic(&OnProcessRequestComplete);
-	if ( !Auth->Sign(*HttpRequest) )
+	if (!Auth->Sign(*HttpRequest))
 	{
 		UE_LOG(LogMicromegasTelemetrySink, Warning, TEXT("Failed to sign telemetry http request"));
 		return;
 	}
-	
+
 	if (!HttpRequest->ProcessRequest())
 	{
 		UE_LOG(LogMicromegasTelemetrySink, Error, TEXT("Failed to initialize telemetry http request"));
