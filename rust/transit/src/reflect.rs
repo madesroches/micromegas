@@ -15,7 +15,7 @@ pub struct UserDefinedType {
     pub size: usize,
     pub members: Vec<Member>,
     pub is_reference: bool,
-	#[serde(default)]
+    #[serde(default)]
     pub secondary_udts: Vec<UserDefinedType>, // udts of members
 }
 
