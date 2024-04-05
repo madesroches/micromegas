@@ -1,7 +1,6 @@
 #include "MicromegasTelemetrySink/Remote.h"
 #include "MicromegasTelemetrySink/Log.h"
 #include "MicromegasTelemetrySink/FlushMonitor.h"
-#include "MicromegasTracing/EventSink.h"
 #include "MicromegasTracing/ProcessInfo.h"
 #include "MicromegasTracing/LogBlock.h"
 #include "MicromegasTracing/Macros.h"
@@ -14,7 +13,6 @@
 #include "LogDependencies.h"
 #include <string>
 #include <sstream>
-#include <functional>
 #include "Serialization/JsonWriter.h"
 #include "Serialization/JsonSerializer.h"
 #include "HAL/Runnable.h"
@@ -56,190 +54,181 @@ namespace
 
 } // namespace
 
-class RemoteSink : public MicromegasTracing::EventSink, public FRunnable
+RemoteSink::RemoteSink(const FString& baseUrl, const SharedTelemetryAuthenticator& Auth)
+	: BaseUrl(baseUrl)
+	, Auth(Auth)
+	, QueueSize(0)
+	, RequestShutdown(false)
 {
-public:
-	explicit RemoteSink(const FString& baseUrl)
-		: BaseUrl(baseUrl)
-		, QueueSize(0)
-		, RequestShutdown(false)
+	Thread.Reset(FRunnableThread::Create(this, TEXT("MicromegasRemoteTelemetrySink")));
+	Flusher.Reset(new FlushMonitor(this));
+}
+
+RemoteSink::~RemoteSink()
+{
+}
+
+void RemoteSink::OnStartup(const MicromegasTracing::ProcessInfoPtr& processInfo)
+{
+	FPlatformAtomics::InterlockedIncrement(&QueueSize);
+	Queue.Enqueue([this, processInfo]() {
+		FString content = FormatInsertProcessRequest(*processInfo);
+		SendJsonRequest(TEXT("process"), content);
+	});
+	WakeupThread->Trigger();
+}
+
+void RemoteSink::OnShutdown()
+{
+	MICROMEGAS_LOG_STATIC(TEXT("MicromegasTelemetrySink"), MicromegasTracing::LogLevel::Info, TEXT("Shutting down"));
+	Flusher.Reset();
+	MicromegasTracing::FlushLogStream();
+	MicromegasTracing::FlushMetricStream();
+	RequestShutdown = true;
+	WakeupThread->Trigger();
+	Thread->WaitForCompletion();
+}
+
+void RemoteSink::OnInitLogStream(const MicromegasTracing::LogStreamPtr& stream)
+{
+	IncrementQueueSize();
+	Queue.Enqueue([this, stream]() {
+		FString content = FormatInsertLogStreamRequest(*stream);
+		SendJsonRequest(TEXT("stream"), content);
+	});
+	WakeupThread->Trigger();
+}
+
+void RemoteSink::OnInitMetricStream(const MicromegasTracing::MetricStreamPtr& stream)
+{
+	IncrementQueueSize();
+	Queue.Enqueue([this, stream]() {
+		FString content = FormatInsertMetricStreamRequest(*stream);
+		SendJsonRequest(TEXT("stream"), content);
+	});
+	WakeupThread->Trigger();
+}
+
+void RemoteSink::OnInitThreadStream(MicromegasTracing::ThreadStream* stream)
+{
+	const uint32 threadId = FPlatformTLS::GetCurrentThreadId();
+	const FString& threadName = FThreadManager::GetThreadName(threadId);
+
+	stream->SetProperty(TEXT("thread-name"), *threadName);
+	stream->SetProperty(TEXT("thread-id"), *FString::Format(TEXT("{0}"), { threadId }));
+
+	IncrementQueueSize();
+	Queue.Enqueue([this, stream]() {
+		FString content = FormatInsertThreadStreamRequest(*stream);
+		SendJsonRequest(TEXT("stream"), content);
+	});
+	WakeupThread->Trigger();
+}
+
+void RemoteSink::OnProcessLogBlock(const MicromegasTracing::LogBlockPtr& block)
+{
+	IncrementQueueSize();
+	Queue.Enqueue([this, block]() {
+		TArray<uint8> content = FormatBlockRequest(*block);
+		SendBinaryRequest(TEXT("block"), content);
+	});
+	WakeupThread->Trigger();
+}
+
+void RemoteSink::OnProcessMetricBlock(const MicromegasTracing::MetricsBlockPtr& block)
+{
+	IncrementQueueSize();
+	Queue.Enqueue([this, block]() {
+		TArray<uint8> content = FormatBlockRequest(*block);
+		SendBinaryRequest(TEXT("block"), content);
+	});
+	WakeupThread->Trigger();
+}
+
+void RemoteSink::OnProcessThreadBlock(const MicromegasTracing::ThreadBlockPtr& block)
+{
+	MICROMEGAS_SPAN_SCOPE(TEXT("MicromegasTelemetrySink"), TEXT("OnProcessThreadBlock"));
+	IncrementQueueSize();
+	Queue.Enqueue([this, block]() {
+		TArray<uint8> content = FormatBlockRequest(*block);
+		SendBinaryRequest(TEXT("block"), content);
+	});
+	WakeupThread->Trigger();
+}
+
+bool RemoteSink::IsBusy()
+{
+	return QueueSize > 0;
+}
+
+uint32 RemoteSink::Run()
+{
+	while (true)
 	{
-		Thread.Reset(FRunnableThread::Create(this, TEXT("MicromegasRemoteTelemetrySink")));
-		Flusher.Reset(new FlushMonitor(this));
-	}
-
-	virtual ~RemoteSink()
-	{
-	}
-
-	//
-	//  MicromegasTracing::EventSink
-	//
-	virtual void OnStartup(const MicromegasTracing::ProcessInfoPtr& processInfo)
-	{
-		FPlatformAtomics::InterlockedIncrement(&QueueSize);
-		Queue.Enqueue([this, processInfo]() {
-			FString content = FormatInsertProcessRequest(*processInfo);
-			SendJsonRequest(TEXT("process"), content);
-		});
-		WakeupThread->Trigger();
-	}
-
-	virtual void OnShutdown()
-	{
-		MICROMEGAS_LOG_STATIC(TEXT("MicromegasTelemetrySink"), MicromegasTracing::LogLevel::Info, TEXT("Shutting down"));
-		Flusher.Reset();
-		MicromegasTracing::FlushLogStream();
-		MicromegasTracing::FlushMetricStream();
-		RequestShutdown = true;
-		WakeupThread->Trigger();
-		Thread->WaitForCompletion();
-	}
-
-	virtual void OnInitLogStream(const MicromegasTracing::LogStreamPtr& stream)
-	{
-		IncrementQueueSize();
-		Queue.Enqueue([this, stream]() {
-			FString content = FormatInsertLogStreamRequest(*stream);
-			SendJsonRequest(TEXT("stream"), content);
-		});
-		WakeupThread->Trigger();
-	}
-
-	virtual void OnInitMetricStream(const MicromegasTracing::MetricStreamPtr& stream)
-	{
-		IncrementQueueSize();
-		Queue.Enqueue([this, stream]() {
-			FString content = FormatInsertMetricStreamRequest(*stream);
-			SendJsonRequest(TEXT("stream"), content);
-		});
-		WakeupThread->Trigger();
-	}
-
-	virtual void OnInitThreadStream(MicromegasTracing::ThreadStream* stream)
-	{
-		const uint32 threadId = FPlatformTLS::GetCurrentThreadId();
-		const FString& threadName = FThreadManager::GetThreadName(threadId);
-
-		stream->SetProperty(TEXT("thread-name"), *threadName);
-		stream->SetProperty(TEXT("thread-id"), *FString::Format(TEXT("{0}"), { threadId }));
-
-		IncrementQueueSize();
-		Queue.Enqueue([this, stream]() {
-			FString content = FormatInsertThreadStreamRequest(*stream);
-			SendJsonRequest(TEXT("stream"), content);
-		});
-		WakeupThread->Trigger();
-	}
-
-	virtual void OnProcessLogBlock(const MicromegasTracing::LogBlockPtr& block)
-	{
-		IncrementQueueSize();
-		Queue.Enqueue([this, block]() {
-			TArray<uint8> content = FormatBlockRequest(*block);
-			SendBinaryRequest(TEXT("block"), content);
-		});
-		WakeupThread->Trigger();
-	}
-
-	virtual void OnProcessMetricBlock(const MicromegasTracing::MetricsBlockPtr& block)
-	{
-		IncrementQueueSize();
-		Queue.Enqueue([this, block]() {
-			TArray<uint8> content = FormatBlockRequest(*block);
-			SendBinaryRequest(TEXT("block"), content);
-		});
-		WakeupThread->Trigger();
-	}
-
-	virtual void OnProcessThreadBlock(const MicromegasTracing::ThreadBlockPtr& block)
-	{
-		MICROMEGAS_SPAN_SCOPE(TEXT("MicromegasTelemetrySink"), TEXT("OnProcessThreadBlock"));
-		IncrementQueueSize();
-		Queue.Enqueue([this, block]() {
-			TArray<uint8> content = FormatBlockRequest(*block);
-			SendBinaryRequest(TEXT("block"), content);
-		});
-		WakeupThread->Trigger();
-	}
-
-	virtual bool IsBusy()
-	{
-		return QueueSize > 0;
-	}
-
-	//
-	//  FRunnable
-	//
-	virtual uint32 Run()
-	{
-		while (true)
+		Callback c;
+		while (Queue.Dequeue(c))
 		{
-			Callback c;
-			while (Queue.Dequeue(c))
-			{
-				int32 newQueueSize = FPlatformAtomics::InterlockedDecrement(&QueueSize);
-				MICROMEGAS_IMETRIC(TEXT("MicromegasTelemetrySink"), MicromegasTracing::Verbosity::Min, TEXT("QueueSize"), TEXT("count"), newQueueSize);
-				c();
-			}
-
-			if (RequestShutdown)
-			{
-				break;
-			}
-			WakeupThread->Wait();
+			int32 newQueueSize = FPlatformAtomics::InterlockedDecrement(&QueueSize);
+			MICROMEGAS_IMETRIC(TEXT("MicromegasTelemetrySink"), MicromegasTracing::Verbosity::Min, TEXT("QueueSize"), TEXT("count"), newQueueSize);
+			c();
 		}
-		return 0;
-	}
 
-private:
-	void IncrementQueueSize()
-	{
-		MICROMEGAS_SPAN_SCOPE(TEXT("MicromegasTelemetrySink"), TEXT("IncrementQueueSize"));
-		int32 incrementedQueueSize = FPlatformAtomics::InterlockedIncrement(&QueueSize);
-		MICROMEGAS_IMETRIC(TEXT("MicromegasTelemetrySink"), MicromegasTracing::Verbosity::Min, TEXT("QueueSize"), TEXT("count"), incrementedQueueSize);
-	}
-
-	void SendJsonRequest(const TCHAR* command, const FString& content)
-	{
-		MICROMEGAS_SPAN_SCOPE(TEXT("MicromegasTelemetrySink"), TEXT("SendJsonRequest"));
-		TSharedRef<IHttpRequest, ESPMode::ThreadSafe> HttpRequest = FHttpModule::Get().CreateRequest();
-		HttpRequest->SetURL(BaseUrl + command);
-		HttpRequest->SetVerb(TEXT("PUT"));
-		HttpRequest->SetContentAsString(content);
-		HttpRequest->SetHeader(TEXT("Content-Type"), TEXT("application/json"));
-		HttpRequest->OnProcessRequestComplete().BindStatic(&OnProcessRequestComplete);
-		if (!HttpRequest->ProcessRequest())
+		if (RequestShutdown)
 		{
-			UE_LOG(LogMicromegasTelemetrySink, Error, TEXT("Failed to initialize telemetry http request"));
+			break;
 		}
+		WakeupThread->Wait();
 	}
+	return 0;
+}
 
-	void SendBinaryRequest(const TCHAR* command, const TArray<uint8>& content)
+void RemoteSink::IncrementQueueSize()
+{
+	MICROMEGAS_SPAN_SCOPE(TEXT("MicromegasTelemetrySink"), TEXT("IncrementQueueSize"));
+	int32 incrementedQueueSize = FPlatformAtomics::InterlockedIncrement(&QueueSize);
+	MICROMEGAS_IMETRIC(TEXT("MicromegasTelemetrySink"), MicromegasTracing::Verbosity::Min, TEXT("QueueSize"), TEXT("count"), incrementedQueueSize);
+}
+
+void RemoteSink::SendJsonRequest(const TCHAR* command, const FString& content)
+{
+	MICROMEGAS_SPAN_SCOPE(TEXT("MicromegasTelemetrySink"), TEXT("SendJsonRequest"));
+	TSharedRef<IHttpRequest, ESPMode::ThreadSafe> HttpRequest = FHttpModule::Get().CreateRequest();
+	HttpRequest->SetURL(BaseUrl + command);
+	HttpRequest->SetVerb(TEXT("PUT"));
+	HttpRequest->SetContentAsString(content);
+	HttpRequest->SetHeader(TEXT("Content-Type"), TEXT("application/json"));
+	HttpRequest->OnProcessRequestComplete().BindStatic(&OnProcessRequestComplete);
+	if ( !Auth->Sign(*HttpRequest) )
 	{
-		MICROMEGAS_SPAN_SCOPE(TEXT("MicromegasTelemetrySink"), TEXT("SendBinaryRequest"));
-		TSharedRef<IHttpRequest, ESPMode::ThreadSafe> HttpRequest = FHttpModule::Get().CreateRequest();
-		HttpRequest->SetURL(BaseUrl + command);
-		HttpRequest->SetVerb(TEXT("PUT"));
-		HttpRequest->SetContent(content);
-		HttpRequest->SetHeader(TEXT("Content-Type"), TEXT("application/octet-stream"));
-		HttpRequest->OnProcessRequestComplete().BindStatic(&OnProcessRequestComplete);
-		if (!HttpRequest->ProcessRequest())
-		{
-			UE_LOG(LogMicromegasTelemetrySink, Error, TEXT("Failed to initialize telemetry http request"));
-		}
+		UE_LOG(LogMicromegasTelemetrySink, Warning, TEXT("Failed to sign telemetry http request"));
+		return;
 	}
+	if (!HttpRequest->ProcessRequest())
+	{
+		UE_LOG(LogMicromegasTelemetrySink, Error, TEXT("Failed to initialize telemetry http request"));
+	}
+}
 
-	typedef std::function<void()> Callback;
-	typedef TQueue<Callback, EQueueMode::Mpsc> WorkQueue;
-	FString BaseUrl;
-	WorkQueue Queue;
-	volatile int32 QueueSize;
-	volatile bool RequestShutdown;
-	FEventRef WakeupThread;
-	TUniquePtr<FRunnableThread> Thread;
-	TUniquePtr<FlushMonitor> Flusher;
-};
+void RemoteSink::SendBinaryRequest(const TCHAR* command, const TArray<uint8>& content)
+{
+	MICROMEGAS_SPAN_SCOPE(TEXT("MicromegasTelemetrySink"), TEXT("SendBinaryRequest"));
+	TSharedRef<IHttpRequest, ESPMode::ThreadSafe> HttpRequest = FHttpModule::Get().CreateRequest();
+	HttpRequest->SetURL(BaseUrl + command);
+	HttpRequest->SetVerb(TEXT("PUT"));
+	HttpRequest->SetContent(content);
+	HttpRequest->SetHeader(TEXT("Content-Type"), TEXT("application/octet-stream"));
+	HttpRequest->OnProcessRequestComplete().BindStatic(&OnProcessRequestComplete);
+	if ( !Auth->Sign(*HttpRequest) )
+	{
+		UE_LOG(LogMicromegasTelemetrySink, Warning, TEXT("Failed to sign telemetry http request"));
+		return;
+	}
+	
+	if (!HttpRequest->ProcessRequest())
+	{
+		UE_LOG(LogMicromegasTelemetrySink, Error, TEXT("Failed to initialize telemetry http request"));
+	}
+}
 
 std::wstring CreateGuid()
 {
@@ -255,14 +244,13 @@ std::wstring GetDistro()
 	return str.str();
 }
 
-void InitRemoteSink()
+void InitRemoteSink(const SharedTelemetryAuthenticator& Auth)
 {
 	using namespace MicromegasTracing;
 	UE_LOG(LogMicromegasTelemetrySink, Log, TEXT("Initializing Remote Telemetry Sink"));
 
-	// const char* url = "https://web-api.live.playground.legionlabs.com/v1/spaces/default/telemetry/ingestion/";
-	const char* url = "http://localhost:8081/v1/spaces/default/telemetry/ingestion/";
-	std::shared_ptr<EventSink> sink = std::make_shared<RemoteSink>(url);
+	const char* url = "http://localhost:9000/ingestion/";
+	std::shared_ptr<EventSink> sink = std::make_shared<RemoteSink>(url, Auth);
 	const size_t LOG_BUFFER_SIZE = 10 * 1024 * 1024;
 	const size_t METRICS_BUFFER_SIZE = 10 * 1024 * 1024;
 	const size_t THREAD_BUFFER_SIZE = 10 * 1024 * 1024;
