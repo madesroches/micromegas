@@ -24,5 +24,5 @@ public:
 		return FModuleManager::GetModulePtr<IMicromegasTelemetrySinkModule>(ModuleName);
 	}
 
-	virtual void InitTelemetry( const SharedTelemetryAuthenticator& auth ) = 0;
+	virtual void InitTelemetry( const FString& BaseUrl, const SharedTelemetryAuthenticator& Auth ) = 0;
 };

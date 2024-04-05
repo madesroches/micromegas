@@ -11,7 +11,7 @@ class FlushMonitor;
 class RemoteSink : public MicromegasTracing::EventSink, public FRunnable
 {
 public:
-	RemoteSink(const FString& baseUrl, const SharedTelemetryAuthenticator& Auth);
+	RemoteSink(const FString& BaseUrl, const SharedTelemetryAuthenticator& Auth);
 	virtual ~RemoteSink();
 
 	//
@@ -49,4 +49,4 @@ private:
 	TUniquePtr<FlushMonitor> Flusher;
 };
 
-MICROMEGASTELEMETRYSINK_API void InitRemoteSink(const SharedTelemetryAuthenticator& Auth);
+MICROMEGASTELEMETRYSINK_API void InitRemoteSink(const FString& BaseUrl, const SharedTelemetryAuthenticator& Auth);

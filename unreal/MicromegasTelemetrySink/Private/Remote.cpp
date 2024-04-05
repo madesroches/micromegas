@@ -244,13 +244,12 @@ std::wstring GetDistro()
 	return str.str();
 }
 
-void InitRemoteSink(const SharedTelemetryAuthenticator& Auth)
+void InitRemoteSink(const FString& BaseUrl, const SharedTelemetryAuthenticator& Auth)
 {
 	using namespace MicromegasTracing;
 	UE_LOG(LogMicromegasTelemetrySink, Log, TEXT("Initializing Remote Telemetry Sink"));
 
-	const char* url = "http://localhost:9000/ingestion/";
-	std::shared_ptr<EventSink> sink = std::make_shared<RemoteSink>(url, Auth);
+	std::shared_ptr<EventSink> sink = std::make_shared<RemoteSink>(BaseUrl, Auth);
 	const size_t LOG_BUFFER_SIZE = 10 * 1024 * 1024;
 	const size_t METRICS_BUFFER_SIZE = 10 * 1024 * 1024;
 	const size_t THREAD_BUFFER_SIZE = 10 * 1024 * 1024;
