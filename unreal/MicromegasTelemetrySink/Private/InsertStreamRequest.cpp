@@ -25,7 +25,7 @@ void FormatContainerMetadata(TArray<TSharedPtr<FJsonValue>>& outUdts, const TArr
 	{
 		TSharedRef<FJsonObject> obj = MakeShareable(new FJsonObject);
 		obj->SetStringField(TEXT("name"), udt.Name);
-		obj->SetStringField(TEXT("size"), std::to_string(udt.Size).c_str());
+		obj->SetNumberField(TEXT("size"), udt.Size);
 		obj->SetBoolField(TEXT("is_reference"), udt.IsReference);
 
 		TArray<TSharedPtr<FJsonValue>> members;
@@ -34,8 +34,8 @@ void FormatContainerMetadata(TArray<TSharedPtr<FJsonValue>>& outUdts, const TArr
 			TSharedPtr<FJsonObject> memberObj = MakeShareable(new FJsonObject);
 			memberObj->SetStringField(TEXT("name"), member.Name);
 			memberObj->SetStringField(TEXT("type_name"), member.TypeName);
-			memberObj->SetStringField(TEXT("offset"), std::to_string(member.Offset).c_str());
-			memberObj->SetStringField(TEXT("size"), std::to_string(member.Size).c_str());
+			memberObj->SetNumberField(TEXT("offset"), member.Offset);
+			memberObj->SetNumberField(TEXT("size"), member.Size);
 			memberObj->SetBoolField(TEXT("is_reference"), member.IsReference);
 			members.Push(MakeShareable(new FJsonValueObject(memberObj)));
 		}

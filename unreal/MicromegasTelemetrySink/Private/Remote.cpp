@@ -32,7 +32,7 @@ namespace
 		int32 code = HttpResponse ? HttpResponse->GetResponseCode() : 0;
 		if (!bSucceeded || code != 200)
 		{
-			UE_LOG(LogMicromegasTelemetrySink, Error, TEXT("Request completed with code=%d"), code);
+			UE_LOG(LogMicromegasTelemetrySink, Error, TEXT("Request completed with code=%d response=%s"), code, HttpResponse ? *(HttpResponse->GetContentAsString()) : TEXT(""));
 		}
 	}
 
