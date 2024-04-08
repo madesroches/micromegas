@@ -27,6 +27,10 @@ use micromegas_tracing::{
 use composite_event_sink::CompositeSink;
 use local_event_sink::LocalEventSink;
 
+pub mod tokio_retry {
+    pub use tokio_retry::*;
+}
+
 use crate::http_event_sink::HttpEventSink;
 
 pub struct TelemetryGuardBuilder {
