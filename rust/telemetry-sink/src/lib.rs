@@ -115,6 +115,15 @@ impl TelemetryGuardBuilder {
         self
     }
 
+    #[must_use]
+    pub fn with_telemetry_metadata_retry(
+        mut self,
+        retry_strategy: core::iter::Take<tokio_retry::strategy::ExponentialBackoff>,
+    ) -> Self {
+        self.telemetry_metadata_retry = Some(retry_strategy);
+        self
+    }
+
     pub fn build(self) -> anyhow::Result<TelemetryGuard> {
         let target_max_level: Vec<_> = self
             .target_max_levels
