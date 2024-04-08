@@ -25,7 +25,7 @@ TUniquePtr<ExtractThreadDependencies> ExtractBlockDependencies(const MicromegasT
 void encode_utf8_string(jsoncons::cbor::cbor_bytes_encoder& encoder, const TCHAR* str);
 
 template <typename BlockT>
-inline TArray<uint8> FormatBlockRequest(const BlockT& block)
+inline TArray<uint8> FormatBlockRequest(const TCHAR* ProcessId, const BlockT& block)
 {
 	MICROMEGAS_SPAN_SCOPE(TEXT("MicromegasTelemetrySink"), TEXT("FormatBlockRequest"));
 	using namespace MicromegasTracing;
@@ -48,6 +48,8 @@ inline TArray<uint8> FormatBlockRequest(const BlockT& block)
 		encode_utf8_string(encoder, *blockId);
 		encoder.key("stream_id");
 		encode_utf8_string(encoder, block.GetStreamId().c_str());
+		encoder.key("process_id");
+		encode_utf8_string(encoder, ProcessId);
 		encoder.key("begin_time");
 		encoder.string_value(FormatTimeIso8601(block.GetBeginTime()).c_str());
 		encoder.key("begin_ticks");

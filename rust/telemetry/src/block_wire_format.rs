@@ -11,6 +11,7 @@ pub struct BlockPayload {
 pub struct Block {
     pub block_id: String,
     pub stream_id: String,
+    pub process_id: String,
     /// we send both RFC3339 times and ticks to be able to calibrate the tick
     pub begin_time: String,
     pub begin_ticks: i64,

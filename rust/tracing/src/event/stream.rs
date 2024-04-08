@@ -42,8 +42,12 @@ where
         tags: &[String],
         properties: HashMap<String, String>,
     ) -> Self {
-        let stream_desc = Arc::new(StreamDesc::new(process_id, tags, properties));
-        let block = Arc::new(Block::new(buffer_size, stream_desc.stream_id.clone()));
+        let stream_desc = Arc::new(StreamDesc::new(process_id.clone(), tags, properties));
+        let block = Arc::new(Block::new(
+            buffer_size,
+            process_id,
+            stream_desc.stream_id.clone(),
+        ));
         let max_obj_size = block.hint_max_obj_size();
         Self {
             stream_desc,

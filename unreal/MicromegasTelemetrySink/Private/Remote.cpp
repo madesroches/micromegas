@@ -49,8 +49,9 @@ namespace
 
 } // namespace
 
-RemoteSink::RemoteSink(const FString& baseUrl, const SharedTelemetryAuthenticator& Auth)
+RemoteSink::RemoteSink(const FString& baseUrl, const ProcessInfoPtr& ThisProcess, const SharedTelemetryAuthenticator& Auth)
 	: BaseUrl(baseUrl)
+	, Process(ThisProcess)
 	, Auth(Auth)
 	, QueueSize(0)
 	, RequestShutdown(false)
@@ -124,7 +125,7 @@ void RemoteSink::OnProcessLogBlock(const MicromegasTracing::LogBlockPtr& block)
 {
 	IncrementQueueSize();
 	Queue.Enqueue([this, block]() {
-		TArray<uint8> content = FormatBlockRequest(*block);
+		TArray<uint8> content = FormatBlockRequest(Process->ProcessId.c_str(), *block);
 		SendBinaryRequest(TEXT("insert_block"), content);
 	});
 	WakeupThread->Trigger();
@@ -134,7 +135,7 @@ void RemoteSink::OnProcessMetricBlock(const MicromegasTracing::MetricsBlockPtr& 
 {
 	IncrementQueueSize();
 	Queue.Enqueue([this, block]() {
-		TArray<uint8> content = FormatBlockRequest(*block);
+		TArray<uint8> content = FormatBlockRequest(Process->ProcessId.c_str(), *block);
 		SendBinaryRequest(TEXT("insert_block"), content);
 	});
 	WakeupThread->Trigger();
@@ -145,7 +146,7 @@ void RemoteSink::OnProcessThreadBlock(const MicromegasTracing::ThreadBlockPtr& b
 	MICROMEGAS_SPAN_SCOPE(TEXT("MicromegasTelemetrySink"), TEXT("OnProcessThreadBlock"));
 	IncrementQueueSize();
 	Queue.Enqueue([this, block]() {
-		TArray<uint8> content = FormatBlockRequest(*block);
+		TArray<uint8> content = FormatBlockRequest(Process->ProcessId.c_str(), *block);
 		SendBinaryRequest(TEXT("insert_block"), content);
 	});
 	WakeupThread->Trigger();
@@ -244,16 +245,10 @@ void InitRemoteSink(const FString& BaseUrl, const SharedTelemetryAuthenticator& 
 	using namespace MicromegasTracing;
 	UE_LOG(LogMicromegasTelemetrySink, Log, TEXT("Initializing Remote Telemetry Sink"));
 
-	std::shared_ptr<EventSink> sink = std::make_shared<RemoteSink>(BaseUrl, Auth);
-	const size_t LOG_BUFFER_SIZE = 10 * 1024 * 1024;
-	const size_t METRICS_BUFFER_SIZE = 10 * 1024 * 1024;
-	const size_t THREAD_BUFFER_SIZE = 10 * 1024 * 1024;
-
+	DualTime startTime = DualTime::Now();
 	std::wstring processId = CreateGuid();
 	std::wstring parentProcessId = *FPlatformMisc::GetEnvironmentVariable(TEXT("MICROMEGAS_TELEMETRY_PARENT_PROCESS"));
 	FPlatformMisc::SetEnvironmentVar(TEXT("MICROMEGAS_TELEMETRY_PARENT_PROCESS"), processId.c_str());
-
-	DualTime startTime = DualTime::Now();
 
 	ProcessInfoPtr process(new ProcessInfo());
 	process->ProcessId = processId;
@@ -265,6 +260,11 @@ void InitRemoteSink(const FString& BaseUrl, const SharedTelemetryAuthenticator& 
 	process->CpuBrand = *FPlatformMisc::GetCPUBrand();
 	process->TscFrequency = GetTscFrequency();
 	process->StartTime = startTime;
+
+	std::shared_ptr<EventSink> sink = std::make_shared<RemoteSink>(BaseUrl, process, Auth);
+	const size_t LOG_BUFFER_SIZE = 10 * 1024 * 1024;
+	const size_t METRICS_BUFFER_SIZE = 10 * 1024 * 1024;
+	const size_t THREAD_BUFFER_SIZE = 10 * 1024 * 1024;
 
 	Dispatch::Init(&CreateGuid, process, sink, LOG_BUFFER_SIZE, METRICS_BUFFER_SIZE, THREAD_BUFFER_SIZE);
 	UE_LOG(LogMicromegasTelemetrySink, Log, TEXT("Initializing Legion Telemetry for process %s"), process->ProcessId.c_str());

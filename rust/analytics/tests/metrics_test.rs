@@ -14,8 +14,8 @@ use micromegas_tracing::{
 fn test_parse_metric_interops() {
     let _telemetry_guard = TelemetryGuard::new();
 
-    let mut stream =
-        MetricsStream::new(1024, String::from("bogus_process_id"), &[], HashMap::new());
+    let process_id = String::from("bogus_process_id");
+    let mut stream = MetricsStream::new(1024, process_id.clone(), &[], HashMap::new());
     let stream_id = stream.stream_id().to_string();
 
     static METRIC_DESC: MetricMetadata = MetricMetadata {
@@ -38,7 +38,7 @@ fn test_parse_metric_interops() {
         time: 2,
     });
 
-    let mut block = stream.replace_block(Arc::new(MetricsBlock::new(1024, stream_id)));
+    let mut block = stream.replace_block(Arc::new(MetricsBlock::new(1024, process_id, stream_id)));
     Arc::get_mut(&mut block).unwrap().close();
     let encoded = block.encode_bin().unwrap();
     let received_block: micromegas_telemetry::block_wire_format::Block =
