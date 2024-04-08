@@ -7,7 +7,7 @@
 
 namespace MicromegasTracing
 {
-    typedef std::shared_ptr<LogBlock> LogBlockPtr;
-    typedef EventStreamImpl<LogBlock, 128> LogStream;
+	typedef std::shared_ptr<LogBlock> LogBlockPtr;
+	typedef EventStreamImpl<LogBlock, 128> LogStream;
 
-} // namespace
+} // namespace MicromegasTracing

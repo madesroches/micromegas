@@ -7,11 +7,10 @@
 
 namespace MicromegasTracing
 {
-    typedef HeterogeneousQueue<
-        IntegerMetricEvent,
-        FloatMetricEvent
-        > MetricEventQueue;
+	typedef HeterogeneousQueue<
+		IntegerMetricEvent,
+		FloatMetricEvent>
+		MetricEventQueue;
 
-    typedef EventBlock<MetricEventQueue> MetricBlock;
-}
-
+	typedef EventBlock<MetricEventQueue> MetricBlock;
+} // namespace MicromegasTracing

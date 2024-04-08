@@ -7,7 +7,6 @@
 
 namespace MicromegasTracing
 {
-    typedef std::shared_ptr<ThreadBlock> ThreadsBlockPtr;
-    typedef EventStreamImpl<ThreadBlock, 32> ThreadStream;
-}
-
+	typedef std::shared_ptr<ThreadBlock> ThreadsBlockPtr;
+	typedef EventStreamImpl<ThreadBlock, 32> ThreadStream;
+} // namespace MicromegasTracing

@@ -7,7 +7,6 @@
 
 namespace MicromegasTracing
 {
-    typedef std::shared_ptr<MetricBlock> MetricsBlockPtr;
-    typedef EventStreamImpl<MetricBlock, 32> MetricStream;
-}
-
+	typedef std::shared_ptr<MetricBlock> MetricsBlockPtr;
+	typedef EventStreamImpl<MetricBlock, 32> MetricStream;
+} // namespace MicromegasTracing

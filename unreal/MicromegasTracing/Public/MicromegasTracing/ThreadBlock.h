@@ -7,11 +7,10 @@
 
 namespace MicromegasTracing
 {
-    typedef HeterogeneousQueue<
-        BeginThreadSpanEvent,
-        EndThreadSpanEvent
-        > ThreadEventQueue;
+	typedef HeterogeneousQueue<
+		BeginThreadSpanEvent,
+		EndThreadSpanEvent>
+		ThreadEventQueue;
 
-    typedef EventBlock<ThreadEventQueue> ThreadBlock;
-}
-
+	typedef EventBlock<ThreadEventQueue> ThreadBlock;
+} // namespace MicromegasTracing
