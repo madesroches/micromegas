@@ -19,7 +19,8 @@ impl WebIngestionService {
 
     #[span_fn]
     pub async fn insert_block(&self, body: bytes::Bytes) -> Result<()> {
-        let block: block_wire_format::Block = ciborium::from_reader(body.reader())?;
+        let block: block_wire_format::Block = ciborium::from_reader(body.reader())
+            .with_context(|| "parsing block_wire_format::Block")?;
         let encoded_payload = encode_cbor(&block.payload)?;
         let payload_size = encoded_payload.len();
 

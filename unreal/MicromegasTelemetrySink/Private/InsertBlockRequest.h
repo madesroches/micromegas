@@ -13,12 +13,16 @@
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
 #include "ThreadDependencies.h"
+#include "jsoncons/json.hpp"
+#include "jsoncons_ext/cbor/cbor.hpp"
 
-TArray<uint8> CompressBuffer(const void* src, size_t size);
+std::vector<uint8> CompressBuffer(const void* src, size_t size);
 
 TUniquePtr<ExtractLogDependencies> ExtractBlockDependencies(const MicromegasTracing::LogBlock& block);
 TUniquePtr<ExtractMetricDependencies> ExtractBlockDependencies(const MicromegasTracing::MetricBlock& block);
 TUniquePtr<ExtractThreadDependencies> ExtractBlockDependencies(const MicromegasTracing::ThreadBlock& block);
+
+void encode_utf8_string(jsoncons::cbor::cbor_bytes_encoder& encoder, const TCHAR* str);
 
 template <typename BlockT>
 inline TArray<uint8> FormatBlockRequest(const BlockT& block)
@@ -30,43 +34,42 @@ inline TArray<uint8> FormatBlockRequest(const BlockT& block)
 	auto depExtrator = ExtractBlockDependencies(block);
 
 	FString blockId = FGuid::NewGuid().ToString(EGuidFormats::DigitsWithHyphens);
-	TSharedRef<FJsonObject> blockInfo = MakeShareable(new FJsonObject);
-	blockInfo->SetStringField(TEXT("block_id"), *blockId);
-	blockInfo->SetStringField(TEXT("stream_id"), block.GetStreamId().c_str());
-	blockInfo->SetStringField(TEXT("begin_time"), FormatTimeIso8601(block.GetBeginTime()).c_str());
-	blockInfo->SetStringField(TEXT("begin_ticks"), std::to_string(block.GetBeginTime().Timestamp).c_str());
-	blockInfo->SetStringField(TEXT("end_time"), FormatTimeIso8601(block.GetEndTime()).c_str());
-	blockInfo->SetStringField(TEXT("end_ticks"), std::to_string(block.GetEndTime().Timestamp).c_str());
-	blockInfo->SetStringField(TEXT("nb_objects"), std::to_string(block.GetEvents().GetNbEvents()).c_str());
 
-	FString jsonText;
-	TSharedRef<TJsonWriter<>> jsonWriter = TJsonWriterFactory<>::Create(&jsonText);
-	if (!FJsonSerializer::Serialize(blockInfo, jsonWriter))
-	{
-		UE_LOG(LogMicromegasTelemetrySink, Error, TEXT("Error formatting block info as json"));
-		return TArray<uint8>();
-	}
-	jsonWriter->Close();
-
-	std::vector<uint8> buffer;
-	DynamicString blockInfoDynStr(*jsonText);
-	buffer.reserve(Serializer<DynamicString>::GetSize(blockInfoDynStr));
-	Serializer<DynamicString>::Write(blockInfoDynStr, buffer);
-
-	TArray<uint8> compressedDep = CompressBuffer(
+	std::vector<uint8> compressedDep = CompressBuffer(
 		depExtrator->Dependencies.GetPtr(),
 		depExtrator->Dependencies.GetSizeBytes());
-	details::WritePOD(static_cast<uint32>(compressedDep.Num()), buffer);
-	if (compressedDep.Num() > 0)
-	{
-		buffer.insert(buffer.end(), compressedDep.GetData(), compressedDep.GetData() + compressedDep.Num());
-	}
+	std::vector<uint8> compressedObj = CompressBuffer(queue.GetPtr(), queue.GetSizeBytes());
 
-	TArray<uint8> compressedObj = CompressBuffer(queue.GetPtr(), queue.GetSizeBytes());
-	details::WritePOD(static_cast<uint32>(compressedObj.Num()), buffer);
-	if (compressedObj.Num() > 0)
+	std::vector<uint8> buffer;
+	jsoncons::cbor::cbor_bytes_encoder encoder(buffer);
 	{
-		buffer.insert(buffer.end(), compressedObj.GetData(), compressedObj.GetData() + compressedObj.Num());
+		encoder.begin_object();
+		encoder.key("block_id");
+		encode_utf8_string(encoder, *blockId);
+		encoder.key("stream_id");
+		encode_utf8_string(encoder, block.GetStreamId().c_str());
+		encoder.key("begin_time");
+		encoder.string_value(FormatTimeIso8601(block.GetBeginTime()).c_str());
+		encoder.key("begin_ticks");
+		encoder.int64_value(block.GetBeginTime().Timestamp);
+		encoder.key("end_time");
+		encoder.string_value(FormatTimeIso8601(block.GetEndTime()).c_str());
+		encoder.key("end_ticks");
+		encoder.int64_value(block.GetEndTime().Timestamp);
+		encoder.key("payload");
+		{
+			encoder.begin_object();
+			encoder.key("dependencies");
+			encoder.byte_string_value(compressedDep);
+			encoder.key("objects");
+			encoder.byte_string_value(compressedObj);
+			encoder.end_object();
+		}
+		encoder.key("nb_objects");
+		encoder.int64_value(block.GetEvents().GetNbEvents());
+		encoder.end_object();
 	}
+	encoder.flush();
+
 	return TArray<uint8>(&buffer[0], buffer.size());
 }

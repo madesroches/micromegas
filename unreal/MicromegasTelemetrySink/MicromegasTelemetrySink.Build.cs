@@ -13,5 +13,7 @@ public class MicromegasTelemetrySink : ModuleRules
 			"HTTP",
 			"Json", //todo: remove
 		});
+
+		PrivateIncludePaths.Add( "MicromegasTelemetrySink/Private/jsoncons-0.173.4" );
 	}
 }

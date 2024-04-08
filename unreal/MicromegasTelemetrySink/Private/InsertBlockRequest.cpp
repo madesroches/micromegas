@@ -4,19 +4,19 @@
 #include "InsertBlockRequest.h"
 #include "MicromegasLz4/lz4frame.h"
 
-TArray<uint8> CompressBuffer(const void* src, size_t size)
+std::vector<uint8> CompressBuffer(const void* src, size_t size)
 {
 	MICROMEGAS_SPAN_SCOPE(TEXT("MicromegasTelemetrySink"), TEXT("CompressBuffer"));
-	TArray<uint8> buffer;
+	std::vector<uint8> buffer;
 	const int32 compressedBound = LZ4F_compressFrameBound(size, nullptr);
-	buffer.AddUninitialized(compressedBound);
+	buffer.resize(compressedBound);
 	uint32 compressedSize = LZ4F_compressFrame(
-		buffer.GetData(),
+		&buffer[0],
 		compressedBound,
 		const_cast<void*>(src),
 		size,
 		nullptr);
-	buffer.SetNum(compressedSize);
+	buffer.resize(compressedSize);
 	return buffer;
 }
 
@@ -42,4 +42,11 @@ TUniquePtr<ExtractThreadDependencies> ExtractBlockDependencies(const MicromegasT
 	TUniquePtr<ExtractThreadDependencies> extractDependencies(new ExtractThreadDependencies());
 	block.GetEvents().ForEach(*extractDependencies);
 	return extractDependencies;
+}
+
+void encode_utf8_string(jsoncons::cbor::cbor_bytes_encoder& encoder, const TCHAR* str)
+{
+	using string_view_type = jsoncons::cbor::cbor_bytes_encoder::string_view_type;
+	FTCHARToUTF8 UTF8String(str);
+	encoder.string_value(string_view_type(UTF8String.Get(), UTF8String.Length()));
 }
