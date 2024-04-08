@@ -54,7 +54,7 @@ impl HttpEventSink {
         addr_server: &str,
         max_queue_size: isize,
         metadata_retry: core::iter::Take<tokio_retry::strategy::ExponentialBackoff>,
-        make_decorator: Box<dyn FnOnce() -> Box<dyn RequestDecorator> + Send>,
+        mut decorator: Box<dyn RequestDecorator + Send>,
     ) -> Self {
         let addr = addr_server.to_owned();
         let (sender, receiver) = std::sync::mpsc::channel::<SinkEvent>();
@@ -62,14 +62,13 @@ impl HttpEventSink {
         let thread_queue_size = queue_size.clone();
         Self {
             thread: Some(std::thread::spawn(move || {
-                let decorator = make_decorator();
                 Self::thread_proc(
                     addr,
                     receiver,
                     thread_queue_size,
                     max_queue_size,
                     metadata_retry,
-                    decorator,
+                    decorator.as_mut(),
                 );
             })),
             sender: Mutex::new(Some(sender)),
@@ -254,7 +253,7 @@ impl HttpEventSink {
         queue_size: Arc<AtomicIsize>,
         max_queue_size: isize,
         retry_strategy: core::iter::Take<tokio_retry::strategy::ExponentialBackoff>,
-        mut decorate_request: Box<dyn RequestDecorator + 'static>,
+        decorator: &mut dyn RequestDecorator,
     ) {
         // TODO: add runtime as configuration option (or create one only if global don't exist)
         let tokio_runtime = tokio::runtime::Runtime::new().unwrap();
@@ -264,7 +263,7 @@ impl HttpEventSink {
             queue_size,
             max_queue_size,
             retry_strategy,
-            &mut *decorate_request,
+            decorator,
         ));
     }
 }
