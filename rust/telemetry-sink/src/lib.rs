@@ -40,6 +40,7 @@ pub struct TelemetryGuardBuilder {
     local_sink_enabled: bool,
     local_sink_max_level: LevelFilter,
     telemetry_sink_max_level: LevelFilter,
+    telemetry_metadata_retry: Option<core::iter::Take<tokio_retry::strategy::ExponentialBackoff>>,
     extra_sinks: HashMap<TypeId, (LevelFilter, BoxedEventSink)>,
 }
 
@@ -52,6 +53,7 @@ impl Default for TelemetryGuardBuilder {
             local_sink_enabled: true,
             local_sink_max_level: LevelFilter::Info,
             telemetry_sink_max_level: LevelFilter::Debug,
+            telemetry_metadata_retry: None,
             target_max_levels: HashMap::default(),
             max_queue_size: 16, //todo: change to nb_threads * 2
             max_level_override: None,
@@ -138,9 +140,16 @@ impl TelemetryGuardBuilder {
             } else {
                 let mut sinks: Vec<(LevelFilter, BoxedEventSink)> = vec![];
                 if let Ok(url) = std::env::var("LGN_TELEMETRY_URL") {
+                    let retry_strategy = self.telemetry_metadata_retry.unwrap_or_else(|| {
+                        tokio_retry::strategy::ExponentialBackoff::from_millis(10).take(3)
+                    });
                     sinks.push((
                         self.telemetry_sink_max_level,
-                        Box::new(HttpEventSink::new(&url, self.max_queue_size)),
+                        Box::new(HttpEventSink::new(
+                            &url,
+                            self.max_queue_size,
+                            retry_strategy,
+                        )),
                     ));
                 }
                 if self.local_sink_enabled {
