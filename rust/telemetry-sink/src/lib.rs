@@ -16,6 +16,7 @@ pub mod local_event_sink;
 pub mod stream_block;
 pub mod stream_info;
 
+use http_event_sink::RequestDecorator;
 use micromegas_tracing::event::BoxedEventSink;
 use micromegas_tracing::info;
 use micromegas_tracing::{
@@ -45,7 +46,18 @@ pub struct TelemetryGuardBuilder {
     local_sink_max_level: LevelFilter,
     telemetry_sink_max_level: LevelFilter,
     telemetry_metadata_retry: Option<core::iter::Take<tokio_retry::strategy::ExponentialBackoff>>,
+    telemetry_make_request_decorator: Box<dyn FnOnce() -> Box<dyn RequestDecorator> + Send>,
     extra_sinks: HashMap<TypeId, (LevelFilter, BoxedEventSink)>,
+}
+
+pub struct TrivialRequestDecorator {}
+
+impl RequestDecorator for TrivialRequestDecorator {
+    fn decorate(&mut self, _builder: &mut reqwest::RequestBuilder) {}
+}
+
+fn make_trivial_decorator() -> Box<dyn RequestDecorator> {
+    Box::new(TrivialRequestDecorator {})
 }
 
 impl Default for TelemetryGuardBuilder {
@@ -58,6 +70,7 @@ impl Default for TelemetryGuardBuilder {
             local_sink_max_level: LevelFilter::Info,
             telemetry_sink_max_level: LevelFilter::Debug,
             telemetry_metadata_retry: None,
+            telemetry_make_request_decorator: Box::new(&make_trivial_decorator),
             target_max_levels: HashMap::default(),
             max_queue_size: 16, //todo: change to nb_threads * 2
             max_level_override: None,
@@ -128,6 +141,15 @@ impl TelemetryGuardBuilder {
         self
     }
 
+    #[must_use]
+    pub fn with_request_decorator(
+        mut self,
+        make_request_decorator: Box<dyn FnOnce() -> Box<dyn RequestDecorator> + Send>,
+    ) -> Self {
+        self.telemetry_make_request_decorator = make_request_decorator;
+        self
+    }
+
     pub fn build(self) -> anyhow::Result<TelemetryGuard> {
         let target_max_level: Vec<_> = self
             .target_max_levels
@@ -162,6 +184,7 @@ impl TelemetryGuardBuilder {
                             &url,
                             self.max_queue_size,
                             retry_strategy,
+                            self.telemetry_make_request_decorator,
                         )),
                     ));
                 }
