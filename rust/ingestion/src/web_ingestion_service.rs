@@ -24,8 +24,8 @@ impl WebIngestionService {
         let encoded_payload = encode_cbor(&block.payload)?;
         let payload_size = encoded_payload.len();
 
-        let process_id = "process_id"; //todo
-        let stream_id = "stream_id"; //todo
+        let process_id = &block.process_id;
+        let stream_id = &block.stream_id;
         let block_id = &block.block_id;
         let obj_path = format!("blobs/{process_id}/{stream_id}/{block_id}");
 
@@ -38,6 +38,7 @@ impl WebIngestionService {
         sqlx::query("INSERT INTO blocks VALUES($1,$2,$3,$4,$5,$6,$7,$8);")
             .bind(block.block_id)
             .bind(block.stream_id)
+            .bind(block.process_id)
             .bind(block.begin_time)
             .bind(block.begin_ticks)
             .bind(block.end_time)

@@ -445,6 +445,7 @@ impl Dispatch {
         let stream_id = metrics_stream.stream_id().to_string();
         let mut old_event_block = metrics_stream.replace_block(Arc::new(MetricsBlock::new(
             self.metrics_buffer_size,
+            self.process_id.clone(),
             stream_id,
         )));
         assert!(!metrics_stream.is_full());
@@ -517,8 +518,11 @@ impl Dispatch {
             return;
         }
         let stream_id = log_stream.stream_id().to_string();
-        let mut old_event_block =
-            log_stream.replace_block(Arc::new(LogBlock::new(self.logs_buffer_size, stream_id)));
+        let mut old_event_block = log_stream.replace_block(Arc::new(LogBlock::new(
+            self.logs_buffer_size,
+            self.process_id.clone(),
+            stream_id,
+        )));
         assert!(!log_stream.is_full());
         Arc::get_mut(&mut old_event_block).unwrap().close();
         self.sink.on_process_log_block(old_event_block);
@@ -531,6 +535,7 @@ impl Dispatch {
         }
         let mut old_block = stream.replace_block(Arc::new(ThreadBlock::new(
             self.threads_buffer_size,
+            self.process_id.clone(),
             stream.stream_id().to_string(),
         )));
         assert!(!stream.is_full());

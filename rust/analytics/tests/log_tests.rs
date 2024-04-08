@@ -35,7 +35,8 @@ fn test_log_interop_metadata() {
 #[test]
 fn test_log_encode_static() {
     let _telemetry_guard = TelemetryGuard::new();
-    let mut stream = LogStream::new(1024, String::from("bogus_process_id"), &[], HashMap::new());
+    let process_id = String::from("bogus_process_id");
+    let mut stream = LogStream::new(1024, process_id.clone(), &[], HashMap::new());
     let stream_id = stream.stream_id().to_string();
     stream.get_events_mut().push(LogStaticStrInteropEvent {
         time: 1,
@@ -43,7 +44,7 @@ fn test_log_encode_static() {
         target: "target_name".into(),
         msg: "my message".into(),
     });
-    let mut block = stream.replace_block(Arc::new(LogBlock::new(1024, stream_id)));
+    let mut block = stream.replace_block(Arc::new(LogBlock::new(1024, process_id, stream_id)));
     Arc::get_mut(&mut block).unwrap().close();
     let encoded = block.encode_bin().unwrap();
     let stream_info = make_stream_info(&stream);
@@ -67,7 +68,8 @@ fn test_log_encode_static() {
 #[test]
 fn test_log_encode_dynamic() {
     let _telemetry_guard = TelemetryGuard::new();
-    let mut stream = LogStream::new(1024, String::from("bogus_process_id"), &[], HashMap::new());
+    let process_id = String::from("bogus_process_id");
+    let mut stream = LogStream::new(1024, process_id.clone(), &[], HashMap::new());
     let stream_id = stream.stream_id().to_string();
     stream.get_events_mut().push(LogStringInteropEvent {
         time: 1,
@@ -75,7 +77,7 @@ fn test_log_encode_dynamic() {
         target: "target_name".into(),
         msg: micromegas_transit::DynString(String::from("my message")),
     });
-    let mut block = stream.replace_block(Arc::new(LogBlock::new(1024, stream_id)));
+    let mut block = stream.replace_block(Arc::new(LogBlock::new(1024, process_id, stream_id)));
     Arc::get_mut(&mut block).unwrap().close();
     let encoded = block.encode_bin().unwrap();
     let stream_info = make_stream_info(&stream);
@@ -99,7 +101,8 @@ fn test_log_encode_dynamic() {
 #[test]
 fn test_parse_log_interops() {
     let _telemetry_guard = TelemetryGuard::new();
-    let mut stream = LogStream::new(1024, String::from("bogus_process_id"), &[], HashMap::new());
+    let process_id = String::from("bogus_process_id");
+    let mut stream = LogStream::new(1024, process_id.clone(), &[], HashMap::new());
     let stream_id = stream.stream_id().to_string();
     stream.get_events_mut().push(LogStaticStrInteropEvent {
         time: 1,
@@ -113,7 +116,7 @@ fn test_parse_log_interops() {
         target: "target_name".into(),
         msg: micromegas_transit::DynString(String::from("my message")),
     });
-    let mut block = stream.replace_block(Arc::new(LogBlock::new(1024, stream_id)));
+    let mut block = stream.replace_block(Arc::new(LogBlock::new(1024, process_id, stream_id)));
     Arc::get_mut(&mut block).unwrap().close();
     let encoded = block.encode_bin().unwrap();
     let received_block: micromegas_telemetry::block_wire_format::Block =

@@ -11,7 +11,7 @@ class FlushMonitor;
 class RemoteSink : public MicromegasTracing::EventSink, public FRunnable
 {
 public:
-	RemoteSink(const FString& BaseUrl, const SharedTelemetryAuthenticator& Auth);
+	RemoteSink(const FString& BaseUrl, const ProcessInfoPtr& ThisProcess, const SharedTelemetryAuthenticator& Auth);
 	virtual ~RemoteSink();
 
 	//
@@ -40,6 +40,7 @@ private:
 	typedef std::function<void()> Callback;
 	typedef TQueue<Callback, EQueueMode::Mpsc> WorkQueue;
 	FString BaseUrl;
+	ProcessInfoPtr Process;
 	SharedTelemetryAuthenticator Auth;
 	WorkQueue Queue;
 	volatile int32 QueueSize;

@@ -26,8 +26,9 @@ where
     };
 
     let block = block_wire_format::Block {
-        stream_id: block.stream_id.clone(),
         block_id,
+        stream_id: block.stream_id.clone(),
+        process_id: block.process_id.clone(),
         begin_time: block
             .begin
             .time

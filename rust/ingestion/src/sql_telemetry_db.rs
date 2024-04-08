@@ -62,6 +62,7 @@ async fn create_blocks_table(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> 
          CREATE TABLE blocks(
                   block_id VARCHAR(36), 
                   stream_id VARCHAR(36), 
+                  process_id VARCHAR(36), 
                   begin_time VARCHAR(255),
                   begin_ticks BIGINT,
                   end_time VARCHAR(255),
