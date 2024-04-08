@@ -46,14 +46,24 @@ impl Drop for HttpEventSink {
 }
 
 impl HttpEventSink {
-    pub fn new(addr_server: &str, max_queue_size: isize) -> Self {
+    pub fn new(
+        addr_server: &str,
+        max_queue_size: isize,
+        metadata_retry: core::iter::Take<tokio_retry::strategy::ExponentialBackoff>,
+    ) -> Self {
         let addr = addr_server.to_owned();
         let (sender, receiver) = std::sync::mpsc::channel::<SinkEvent>();
         let queue_size = Arc::new(AtomicIsize::new(0));
         let thread_queue_size = queue_size.clone();
         Self {
             thread: Some(std::thread::spawn(move || {
-                Self::thread_proc(addr, receiver, thread_queue_size, max_queue_size);
+                Self::thread_proc(
+                    addr,
+                    receiver,
+                    thread_queue_size,
+                    max_queue_size,
+                    metadata_retry,
+                );
             })),
             sender: Mutex::new(Some(sender)),
             queue_size,
@@ -75,10 +85,10 @@ impl HttpEventSink {
         client: &mut reqwest::Client,
         root_path: &str,
         process_info: Arc<ProcessInfo>,
+        retry_strategy: core::iter::Take<tokio_retry::strategy::ExponentialBackoff>,
     ) {
         debug!("sending process {process_info:?}");
         let url = format!("{root_path}/ingestion/insert_process");
-        let retry_strategy = tokio_retry::strategy::ExponentialBackoff::from_millis(10).take(3); // limit the number of retries
         if let Err(e) = tokio_retry::Retry::spawn(retry_strategy, || async {
             let result = client.post(&url).json(&*process_info).send().await;
             if let Err(e) = &result {
@@ -96,9 +106,9 @@ impl HttpEventSink {
         client: &mut reqwest::Client,
         root_path: &str,
         stream_info: Arc<StreamInfo>,
+        retry_strategy: core::iter::Take<tokio_retry::strategy::ExponentialBackoff>,
     ) {
         let url = format!("{root_path}/ingestion/insert_stream");
-        let retry_strategy = tokio_retry::strategy::ExponentialBackoff::from_millis(10).take(3); // limit the number of retries
         if let Err(e) = tokio_retry::Retry::spawn(retry_strategy, || async {
             let result = client.post(&url).json(&*stream_info).send().await;
             if let Err(e) = &result {
@@ -147,6 +157,7 @@ impl HttpEventSink {
         receiver: std::sync::mpsc::Receiver<SinkEvent>,
         queue_size: Arc<AtomicIsize>,
         max_queue_size: isize,
+        retry_strategy: core::iter::Take<tokio_retry::strategy::ExponentialBackoff>,
     ) {
         let client_res = reqwest::Client::builder().build();
         if let Err(e) = client_res {
@@ -170,10 +181,17 @@ impl HttpEventSink {
             match receiver.recv() {
                 Ok(message) => match message {
                     SinkEvent::Startup(process_info) => {
-                        Self::push_process(&mut client, &addr, process_info).await;
+                        Self::push_process(
+                            &mut client,
+                            &addr,
+                            process_info,
+                            retry_strategy.clone(),
+                        )
+                        .await;
                     }
                     SinkEvent::InitStream(stream_info) => {
-                        Self::push_stream(&mut client, &addr, stream_info).await;
+                        Self::push_stream(&mut client, &addr, stream_info, retry_strategy.clone())
+                            .await;
                     }
                     SinkEvent::ProcessLogBlock(buffer) => {
                         Self::push_block(&mut client, &addr, &*buffer, &queue_size, max_queue_size)
@@ -204,6 +222,7 @@ impl HttpEventSink {
         receiver: std::sync::mpsc::Receiver<SinkEvent>,
         queue_size: Arc<AtomicIsize>,
         max_queue_size: isize,
+        retry_strategy: core::iter::Take<tokio_retry::strategy::ExponentialBackoff>,
     ) {
         // TODO: add runtime as configuration option (or create one only if global don't exist)
         let tokio_runtime = tokio::runtime::Runtime::new().unwrap();
@@ -212,6 +231,7 @@ impl HttpEventSink {
             receiver,
             queue_size,
             max_queue_size,
+            retry_strategy,
         ));
     }
 }
