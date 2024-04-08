@@ -60,7 +60,6 @@ impl HttpEventSink {
         let thread_queue_size = queue_size.clone();
         Self {
             thread: Some(std::thread::spawn(move || {
-                let decorator = make_decorator();
                 Self::thread_proc(
                     addr,
                     receiver,
