@@ -45,11 +45,16 @@ impl Drop for HttpEventSink {
     }
 }
 
+pub trait RequestDecorator {
+    fn decorate(&mut self, builder: &mut reqwest::RequestBuilder);
+}
+
 impl HttpEventSink {
     pub fn new(
         addr_server: &str,
         max_queue_size: isize,
         metadata_retry: core::iter::Take<tokio_retry::strategy::ExponentialBackoff>,
+        mut decorator: Box<dyn RequestDecorator + Send>,
     ) -> Self {
         let addr = addr_server.to_owned();
         let (sender, receiver) = std::sync::mpsc::channel::<SinkEvent>();
@@ -63,6 +68,7 @@ impl HttpEventSink {
                     thread_queue_size,
                     max_queue_size,
                     metadata_retry,
+                    decorator.as_mut(),
                 );
             })),
             sender: Mutex::new(Some(sender)),
@@ -128,6 +134,7 @@ impl HttpEventSink {
         buffer: &dyn StreamBlock,
         current_queue_size: &AtomicIsize,
         max_queue_size: isize,
+        decorator: &mut dyn RequestDecorator,
     ) {
         if current_queue_size.load(Ordering::Relaxed) >= max_queue_size {
             // could be better to have a budget for each block type
@@ -135,17 +142,18 @@ impl HttpEventSink {
             return;
         }
         match buffer.encode_bin() {
-            Ok(encoded_block) => match client
-                .post(format!("{root_path}/ingestion/insert_block"))
-                .body(encoded_block)
-                .send()
-                .await
-            {
-                Ok(_response) => {}
-                Err(e) => {
-                    eprintln!("insert_block failed: {}", e);
+            Ok(encoded_block) => {
+                let mut request_builder = client
+                    .post(format!("{root_path}/ingestion/insert_block"))
+                    .body(encoded_block);
+                decorator.decorate(&mut request_builder);
+                match request_builder.send().await {
+                    Ok(_response) => {}
+                    Err(e) => {
+                        eprintln!("insert_block failed: {}", e);
+                    }
                 }
-            },
+            }
             Err(e) => {
                 eprintln!("block encoding failed: {}", e);
             }
@@ -158,6 +166,7 @@ impl HttpEventSink {
         queue_size: Arc<AtomicIsize>,
         max_queue_size: isize,
         retry_strategy: core::iter::Take<tokio_retry::strategy::ExponentialBackoff>,
+        decorator: &mut dyn RequestDecorator,
     ) {
         let client_res = reqwest::Client::builder().build();
         if let Err(e) = client_res {
@@ -194,16 +203,37 @@ impl HttpEventSink {
                             .await;
                     }
                     SinkEvent::ProcessLogBlock(buffer) => {
-                        Self::push_block(&mut client, &addr, &*buffer, &queue_size, max_queue_size)
-                            .await;
+                        Self::push_block(
+                            &mut client,
+                            &addr,
+                            &*buffer,
+                            &queue_size,
+                            max_queue_size,
+                            decorator,
+                        )
+                        .await;
                     }
                     SinkEvent::ProcessMetricsBlock(buffer) => {
-                        Self::push_block(&mut client, &addr, &*buffer, &queue_size, max_queue_size)
-                            .await;
+                        Self::push_block(
+                            &mut client,
+                            &addr,
+                            &*buffer,
+                            &queue_size,
+                            max_queue_size,
+                            decorator,
+                        )
+                        .await;
                     }
                     SinkEvent::ProcessThreadBlock(buffer) => {
-                        Self::push_block(&mut client, &addr, &*buffer, &queue_size, max_queue_size)
-                            .await;
+                        Self::push_block(
+                            &mut client,
+                            &addr,
+                            &*buffer,
+                            &queue_size,
+                            max_queue_size,
+                            decorator,
+                        )
+                        .await;
                     }
                 },
                 Err(_e) => {
@@ -223,6 +253,7 @@ impl HttpEventSink {
         queue_size: Arc<AtomicIsize>,
         max_queue_size: isize,
         retry_strategy: core::iter::Take<tokio_retry::strategy::ExponentialBackoff>,
+        decorator: &mut dyn RequestDecorator,
     ) {
         // TODO: add runtime as configuration option (or create one only if global don't exist)
         let tokio_runtime = tokio::runtime::Runtime::new().unwrap();
@@ -232,6 +263,7 @@ impl HttpEventSink {
             queue_size,
             max_queue_size,
             retry_strategy,
+            decorator,
         ));
     }
 }
