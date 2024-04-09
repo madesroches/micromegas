@@ -13,10 +13,11 @@ use std::sync::{Arc, Mutex, Weak};
 pub mod composite_event_sink;
 pub mod http_event_sink;
 pub mod local_event_sink;
+pub mod request_decorator;
 pub mod stream_block;
 pub mod stream_info;
 
-use http_event_sink::RequestDecorator;
+use crate::request_decorator::RequestDecorator;
 use micromegas_tracing::event::BoxedEventSink;
 use micromegas_tracing::info;
 use micromegas_tracing::{
@@ -30,6 +31,10 @@ use local_event_sink::LocalEventSink;
 
 pub mod tokio_retry {
     pub use tokio_retry::*;
+}
+
+pub mod reqwest {
+    pub use reqwest::*;
 }
 
 use crate::http_event_sink::HttpEventSink;
@@ -50,12 +55,6 @@ pub struct TelemetryGuardBuilder {
     extra_sinks: HashMap<TypeId, (LevelFilter, BoxedEventSink)>,
 }
 
-pub struct TrivialRequestDecorator {}
-
-impl RequestDecorator for TrivialRequestDecorator {
-    fn decorate(&mut self, _builder: &mut reqwest::RequestBuilder) {}
-}
-
 impl Default for TelemetryGuardBuilder {
     fn default() -> Self {
         Self {
@@ -66,7 +65,7 @@ impl Default for TelemetryGuardBuilder {
             local_sink_max_level: LevelFilter::Info,
             telemetry_sink_max_level: LevelFilter::Debug,
             telemetry_metadata_retry: None,
-            telemetry_request_decorator: Box::new(TrivialRequestDecorator {}),
+            telemetry_request_decorator: Box::new(request_decorator::TrivialRequestDecorator {}),
             target_max_levels: HashMap::default(),
             max_queue_size: 16, //todo: change to nb_threads * 2
             max_level_override: None,
