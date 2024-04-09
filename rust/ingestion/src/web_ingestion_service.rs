@@ -6,6 +6,7 @@ use micromegas_telemetry::block_wire_format;
 use micromegas_telemetry::stream_info::StreamInfo;
 use micromegas_telemetry::wire_format::encode_cbor;
 use micromegas_tracing::prelude::*;
+use micromegas_tracing::ProcessInfo;
 
 #[derive(Clone)]
 pub struct WebIngestionService {
@@ -53,7 +54,9 @@ impl WebIngestionService {
     }
 
     #[span_fn]
-    pub async fn insert_stream(&self, stream_info: StreamInfo) -> Result<()> {
+    pub async fn insert_stream(&self, body: bytes::Bytes) -> Result<()> {
+        let stream_info: StreamInfo =
+            ciborium::from_reader(body.reader()).with_context(|| "parsing StreamInfo")?;
         info!(
             "new stream {:?} {}",
             &stream_info.tags, stream_info.stream_id
@@ -72,66 +75,26 @@ impl WebIngestionService {
     }
 
     #[span_fn]
-    pub async fn insert_process(&self, body: serde_json::value::Value) -> Result<()> {
-        let insert_time: chrono::DateTime<chrono::Utc> = chrono::Utc::now();
-        info!("insert_process: {body:?}");
-        let tsc_frequency = body["tsc_frequency"]
-            .as_str()
-            .with_context(|| "reading field tsc_frequency")?
-            .parse::<i64>()
-            .with_context(|| "parsing tsc_frequency")?;
+    pub async fn insert_process(&self, body: bytes::Bytes) -> Result<()> {
+        let process_info: ProcessInfo =
+            ciborium::from_reader(body.reader()).with_context(|| "parsing ProcessInfo")?;
 
-        let start_ticks = body["start_ticks"]
-            .as_str()
-            .with_context(|| "reading field start_ticks")?
-            .parse::<i64>()
-            .with_context(|| "parsing start_ticks")?;
+        let insert_time: chrono::DateTime<chrono::Utc> = chrono::Utc::now();
+        info!("insert_process: {process_info:?}");
 
         sqlx::query("INSERT INTO processes VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12);")
-            .bind(
-                body["process_id"]
-                    .as_str()
-                    .with_context(|| "reading field process_id")?,
-            )
-            .bind(body["exe"].as_str().with_context(|| "reading field exe")?)
-            .bind(
-                body["username"]
-                    .as_str()
-                    .with_context(|| "reading field username")?,
-            )
-            .bind(
-                body["realname"]
-                    .as_str()
-                    .with_context(|| "reading field realname")?,
-            )
-            .bind(
-                body["computer"]
-                    .as_str()
-                    .with_context(|| "reading field computer")?,
-            )
-            .bind(
-                body["distro"]
-                    .as_str()
-                    .with_context(|| "reading field distro")?,
-            )
-            .bind(
-                body["cpu_brand"]
-                    .as_str()
-                    .with_context(|| "reading field cpu_brand")?,
-            )
-            .bind(tsc_frequency)
-            .bind(
-                body["start_time"]
-                    .as_str()
-                    .with_context(|| "reading field start_time")?,
-            )
-            .bind(start_ticks)
+            .bind(process_info.process_id)
+            .bind(process_info.exe)
+            .bind(process_info.username)
+            .bind(process_info.realname)
+            .bind(process_info.computer)
+            .bind(process_info.distro)
+            .bind(process_info.cpu_brand)
+            .bind(process_info.tsc_frequency)
+            .bind(process_info.start_time)
+            .bind(process_info.start_ticks)
             .bind(insert_time.to_rfc3339())
-            .bind(
-                body["parent_process_id"]
-                    .as_str()
-                    .with_context(|| "reading field parent_process_id")?,
-            )
+            .bind(process_info.parent_process_id)
             .execute(&self.lake.db_pool)
             .await
             .with_context(|| "executing sql insert into processes")?;
