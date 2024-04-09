@@ -1,3 +1,4 @@
+use anyhow::Result;
 use micromegas_telemetry::stream_info::StreamInfo;
 use micromegas_tracing::ProcessInfo;
 use micromegas_tracing::{
@@ -13,6 +14,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use crate::request_decorator::RequestDecorator;
 use crate::stream_block::StreamBlock;
 use crate::stream_info::make_stream_info;
 
@@ -43,10 +45,6 @@ impl Drop for HttpEventSink {
             handle.join().expect("Error joining telemetry thread");
         }
     }
-}
-
-pub trait RequestDecorator {
-    fn decorate(&mut self, builder: &mut reqwest::RequestBuilder);
 }
 
 impl HttpEventSink {
@@ -135,29 +133,21 @@ impl HttpEventSink {
         current_queue_size: &AtomicIsize,
         max_queue_size: isize,
         decorator: &mut dyn RequestDecorator,
-    ) {
+    ) -> Result<()> {
         if current_queue_size.load(Ordering::Relaxed) >= max_queue_size {
             // could be better to have a budget for each block type
             // this way thread data would not starve the other streams
-            return;
+            debug!("dropping data, queue over max_queue_size");
+            return Ok(());
         }
-        match buffer.encode_bin() {
-            Ok(encoded_block) => {
-                let mut request_builder = client
-                    .post(format!("{root_path}/ingestion/insert_block"))
-                    .body(encoded_block);
-                decorator.decorate(&mut request_builder);
-                match request_builder.send().await {
-                    Ok(_response) => {}
-                    Err(e) => {
-                        eprintln!("insert_block failed: {}", e);
-                    }
-                }
-            }
-            Err(e) => {
-                eprintln!("block encoding failed: {}", e);
-            }
-        }
+        let encoded_block = buffer.encode_bin()?;
+        let mut request = client
+            .post(format!("{root_path}/ingestion/insert_block"))
+            .body(encoded_block)
+            .build()?;
+        decorator.decorate(&mut request);
+        client.execute(request).await?;
+        Ok(())
     }
 
     async fn thread_proc_impl(
@@ -203,7 +193,7 @@ impl HttpEventSink {
                             .await;
                     }
                     SinkEvent::ProcessLogBlock(buffer) => {
-                        Self::push_block(
+                        if let Err(e) = Self::push_block(
                             &mut client,
                             &addr,
                             &*buffer,
@@ -211,10 +201,13 @@ impl HttpEventSink {
                             max_queue_size,
                             decorator,
                         )
-                        .await;
+                        .await
+                        {
+                            eprintln!("error sending log block: {e:?}");
+                        }
                     }
                     SinkEvent::ProcessMetricsBlock(buffer) => {
-                        Self::push_block(
+                        if let Err(e) = Self::push_block(
                             &mut client,
                             &addr,
                             &*buffer,
@@ -222,10 +215,13 @@ impl HttpEventSink {
                             max_queue_size,
                             decorator,
                         )
-                        .await;
+                        .await
+                        {
+                            eprintln!("error sending metrics block: {e:?}");
+                        }
                     }
                     SinkEvent::ProcessThreadBlock(buffer) => {
-                        Self::push_block(
+                        if let Err(e) = Self::push_block(
                             &mut client,
                             &addr,
                             &*buffer,
@@ -233,7 +229,10 @@ impl HttpEventSink {
                             max_queue_size,
                             decorator,
                         )
-                        .await;
+                        .await
+                        {
+                            eprintln!("error sending thread block: {e:?}");
+                        }
                     }
                 },
                 Err(_e) => {
