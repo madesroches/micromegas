@@ -52,7 +52,7 @@ impl HttpEventSink {
         addr_server: &str,
         max_queue_size: isize,
         metadata_retry: core::iter::Take<tokio_retry::strategy::ExponentialBackoff>,
-        mut decorator: Box<dyn RequestDecorator + Send>,
+        decorator: Box<dyn RequestDecorator + Send>,
     ) -> Self {
         let addr = addr_server.to_owned();
         let (sender, receiver) = std::sync::mpsc::channel::<SinkEvent>();
@@ -66,7 +66,7 @@ impl HttpEventSink {
                     thread_queue_size,
                     max_queue_size,
                     metadata_retry,
-                    decorator.as_mut(),
+                    decorator.as_ref(),
                 );
             })),
             sender: Mutex::new(Some(sender)),
@@ -90,11 +90,14 @@ impl HttpEventSink {
         root_path: &str,
         process_info: Arc<ProcessInfo>,
         retry_strategy: core::iter::Take<tokio_retry::strategy::ExponentialBackoff>,
+        decorator: &dyn RequestDecorator,
     ) {
         debug!("sending process {process_info:?}");
         let url = format!("{root_path}/ingestion/insert_process");
         if let Err(e) = tokio_retry::Retry::spawn(retry_strategy, || async {
-            let result = client.post(&url).json(&*process_info).send().await;
+            let mut request = client.post(&url).json(&*process_info).build()?;
+            decorator.decorate(&mut request);
+            let result = client.execute(request).await;
             if let Err(e) = &result {
                 debug!("insert_process error: {e}");
             }
@@ -111,10 +114,13 @@ impl HttpEventSink {
         root_path: &str,
         stream_info: Arc<StreamInfo>,
         retry_strategy: core::iter::Take<tokio_retry::strategy::ExponentialBackoff>,
+        decorator: &dyn RequestDecorator,
     ) {
         let url = format!("{root_path}/ingestion/insert_stream");
         if let Err(e) = tokio_retry::Retry::spawn(retry_strategy, || async {
-            let result = client.post(&url).json(&*stream_info).send().await;
+            let mut request = client.post(&url).json(&*stream_info).build()?;
+            decorator.decorate(&mut request);
+            let result = client.execute(request).await;
             if let Err(e) = &result {
                 debug!("insert_stream error: {e}");
             }
@@ -132,7 +138,7 @@ impl HttpEventSink {
         buffer: &dyn StreamBlock,
         current_queue_size: &AtomicIsize,
         max_queue_size: isize,
-        decorator: &mut dyn RequestDecorator,
+        decorator: &dyn RequestDecorator,
     ) -> Result<()> {
         if current_queue_size.load(Ordering::Relaxed) >= max_queue_size {
             // could be better to have a budget for each block type
@@ -156,7 +162,7 @@ impl HttpEventSink {
         queue_size: Arc<AtomicIsize>,
         max_queue_size: isize,
         retry_strategy: core::iter::Take<tokio_retry::strategy::ExponentialBackoff>,
-        decorator: &mut dyn RequestDecorator,
+        decorator: &dyn RequestDecorator,
     ) {
         let client_res = reqwest::Client::builder().build();
         if let Err(e) = client_res {
@@ -185,12 +191,19 @@ impl HttpEventSink {
                             &addr,
                             process_info,
                             retry_strategy.clone(),
+                            decorator,
                         )
                         .await;
                     }
                     SinkEvent::InitStream(stream_info) => {
-                        Self::push_stream(&mut client, &addr, stream_info, retry_strategy.clone())
-                            .await;
+                        Self::push_stream(
+                            &mut client,
+                            &addr,
+                            stream_info,
+                            retry_strategy.clone(),
+                            decorator,
+                        )
+                        .await;
                     }
                     SinkEvent::ProcessLogBlock(buffer) => {
                         if let Err(e) = Self::push_block(
@@ -252,7 +265,7 @@ impl HttpEventSink {
         queue_size: Arc<AtomicIsize>,
         max_queue_size: isize,
         retry_strategy: core::iter::Take<tokio_retry::strategy::ExponentialBackoff>,
-        decorator: &mut dyn RequestDecorator,
+        decorator: &dyn RequestDecorator,
     ) {
         // TODO: add runtime as configuration option (or create one only if global don't exist)
         let tokio_runtime = tokio::runtime::Runtime::new().unwrap();
