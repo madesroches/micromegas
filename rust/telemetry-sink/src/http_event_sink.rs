@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use micromegas_telemetry::stream_info::StreamInfo;
 use micromegas_tracing::ProcessInfo;
 use micromegas_tracing::{
@@ -52,7 +52,7 @@ impl HttpEventSink {
         addr_server: &str,
         max_queue_size: isize,
         metadata_retry: core::iter::Take<tokio_retry::strategy::ExponentialBackoff>,
-        decorator: Box<dyn RequestDecorator + Send>,
+        make_decorator: Box<dyn FnOnce() -> Arc< dyn RequestDecorator > + Send>,
     ) -> Self {
         let addr = addr_server.to_owned();
         let (sender, receiver) = std::sync::mpsc::channel::<SinkEvent>();
@@ -66,7 +66,7 @@ impl HttpEventSink {
                     thread_queue_size,
                     max_queue_size,
                     metadata_retry,
-                    decorator.as_ref(),
+                    make_decorator,
                 );
             })),
             sender: Mutex::new(Some(sender)),
@@ -96,8 +96,14 @@ impl HttpEventSink {
         let url = format!("{root_path}/ingestion/insert_process");
         if let Err(e) = tokio_retry::Retry::spawn(retry_strategy, || async {
             let mut request = client.post(&url).json(&*process_info).build()?;
-            decorator.decorate(&mut request);
-            let result = client.execute(request).await;
+            decorator
+                .decorate(&mut request)
+                .await
+                .with_context(|| "decorating request")?;
+            let result = client
+                .execute(request)
+                .await
+                .with_context(|| "executing request");
             if let Err(e) = &result {
                 debug!("insert_process error: {e}");
             }
@@ -119,8 +125,11 @@ impl HttpEventSink {
         let url = format!("{root_path}/ingestion/insert_stream");
         if let Err(e) = tokio_retry::Retry::spawn(retry_strategy, || async {
             let mut request = client.post(&url).json(&*stream_info).build()?;
-            decorator.decorate(&mut request);
-            let result = client.execute(request).await;
+            decorator.decorate(&mut request).await?;
+            let result = client
+                .execute(request)
+                .await
+                .with_context(|| "executing request");
             if let Err(e) = &result {
                 debug!("insert_stream error: {e}");
             }
@@ -151,7 +160,7 @@ impl HttpEventSink {
             .post(format!("{root_path}/ingestion/insert_block"))
             .body(encoded_block)
             .build()?;
-        decorator.decorate(&mut request);
+        decorator.decorate(&mut request).await?;
         client.execute(request).await?;
         Ok(())
     }
@@ -265,17 +274,18 @@ impl HttpEventSink {
         queue_size: Arc<AtomicIsize>,
         max_queue_size: isize,
         retry_strategy: core::iter::Take<tokio_retry::strategy::ExponentialBackoff>,
-        decorator: &dyn RequestDecorator,
+        make_decorator: Box<dyn FnOnce() -> Arc< dyn RequestDecorator > + Send>,
     ) {
         // TODO: add runtime as configuration option (or create one only if global don't exist)
         let tokio_runtime = tokio::runtime::Runtime::new().unwrap();
+		let decorator = make_decorator();
         tokio_runtime.block_on(Self::thread_proc_impl(
             addr,
             receiver,
             queue_size,
             max_queue_size,
             retry_strategy,
-            decorator,
+            decorator.as_ref(),
         ));
     }
 }

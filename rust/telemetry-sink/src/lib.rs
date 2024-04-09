@@ -51,7 +51,7 @@ pub struct TelemetryGuardBuilder {
     local_sink_max_level: LevelFilter,
     telemetry_sink_max_level: LevelFilter,
     telemetry_metadata_retry: Option<core::iter::Take<tokio_retry::strategy::ExponentialBackoff>>,
-    telemetry_request_decorator: Box<dyn RequestDecorator + Send>,
+    telemetry_make_request_decorator: Box<dyn FnOnce() -> Arc<dyn RequestDecorator> + Send>,
     extra_sinks: HashMap<TypeId, (LevelFilter, BoxedEventSink)>,
 }
 
@@ -65,7 +65,9 @@ impl Default for TelemetryGuardBuilder {
             local_sink_max_level: LevelFilter::Info,
             telemetry_sink_max_level: LevelFilter::Debug,
             telemetry_metadata_retry: None,
-            telemetry_request_decorator: Box::new(request_decorator::TrivialRequestDecorator {}),
+            telemetry_make_request_decorator: Box::new(|| {
+                Arc::new(request_decorator::TrivialRequestDecorator {})
+            }),
             target_max_levels: HashMap::default(),
             max_queue_size: 16, //todo: change to nb_threads * 2
             max_level_override: None,
@@ -137,8 +139,11 @@ impl TelemetryGuardBuilder {
     }
 
     #[must_use]
-    pub fn with_request_decorator(mut self, decorator: Box<dyn RequestDecorator + Send>) -> Self {
-        self.telemetry_request_decorator = decorator;
+    pub fn with_request_decorator(
+        mut self,
+        make_decorator: Box<dyn FnOnce() -> Arc<dyn RequestDecorator> + Send>,
+    ) -> Self {
+        self.telemetry_make_request_decorator = make_decorator;
         self
     }
 
@@ -176,7 +181,7 @@ impl TelemetryGuardBuilder {
                             &url,
                             self.max_queue_size,
                             retry_strategy,
-                            self.telemetry_request_decorator,
+                            self.telemetry_make_request_decorator,
                         )),
                     ));
                 }
