@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use micromegas_telemetry::stream_info::StreamInfo;
+use micromegas_telemetry::wire_format::encode_cbor;
 use micromegas_tracing::ProcessInfo;
 use micromegas_tracing::{
     event::EventSink,
@@ -91,11 +92,12 @@ impl HttpEventSink {
         process_info: Arc<ProcessInfo>,
         retry_strategy: core::iter::Take<tokio_retry::strategy::ExponentialBackoff>,
         decorator: &dyn RequestDecorator,
-    ) {
+    ) -> Result<()> {
         debug!("sending process {process_info:?}");
         let url = format!("{root_path}/ingestion/insert_process");
-        if let Err(e) = tokio_retry::Retry::spawn(retry_strategy, || async {
-            let mut request = client.post(&url).json(&*process_info).build()?;
+        tokio_retry::Retry::spawn(retry_strategy, || async {
+            let body = encode_cbor(&process_info)?;
+            let mut request = client.post(&url).body(body).build()?;
             decorator
                 .decorate(&mut request)
                 .await
@@ -105,14 +107,12 @@ impl HttpEventSink {
                 .await
                 .with_context(|| "executing request");
             if let Err(e) = &result {
-                debug!("insert_process error: {e}");
+                debug!("insert_process error: {e:?}");
             }
             result
         })
-        .await
-        {
-            error!("insert_process failed: {e:?}");
-        }
+        .await?;
+        Ok(())
     }
 
     async fn push_stream(
@@ -121,10 +121,11 @@ impl HttpEventSink {
         stream_info: Arc<StreamInfo>,
         retry_strategy: core::iter::Take<tokio_retry::strategy::ExponentialBackoff>,
         decorator: &dyn RequestDecorator,
-    ) {
+    ) -> Result<()> {
         let url = format!("{root_path}/ingestion/insert_stream");
-        if let Err(e) = tokio_retry::Retry::spawn(retry_strategy, || async {
-            let mut request = client.post(&url).json(&*stream_info).build()?;
+        tokio_retry::Retry::spawn(retry_strategy, || async {
+            let body = encode_cbor(&stream_info)?;
+            let mut request = client.post(&url).body(body).build()?;
             decorator.decorate(&mut request).await?;
             let result = client
                 .execute(request)
@@ -135,10 +136,8 @@ impl HttpEventSink {
             }
             result
         })
-        .await
-        {
-            error!("insert_stream failed: {e:?}");
-        }
+        .await?;
+        Ok(())
     }
 
     async fn push_block(
@@ -195,24 +194,30 @@ impl HttpEventSink {
             match receiver.recv() {
                 Ok(message) => match message {
                     SinkEvent::Startup(process_info) => {
-                        Self::push_process(
+                        if let Err(e) = Self::push_process(
                             &mut client,
                             &addr,
                             process_info,
                             retry_strategy.clone(),
                             decorator,
                         )
-                        .await;
+                        .await
+                        {
+                            eprintln!("error sending process: {e:?}");
+                        }
                     }
                     SinkEvent::InitStream(stream_info) => {
-                        Self::push_stream(
+                        if let Err(e) = Self::push_stream(
                             &mut client,
                             &addr,
                             stream_info,
                             retry_strategy.clone(),
                             decorator,
                         )
-                        .await;
+                        .await
+                        {
+                            eprintln!("error sending stream: {e:?}");
+                        }
                     }
                     SinkEvent::ProcessLogBlock(buffer) => {
                         if let Err(e) = Self::push_block(

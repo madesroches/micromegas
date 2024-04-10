@@ -14,13 +14,11 @@ use anyhow::{Context, Result};
 use axum::extract::DefaultBodyLimit;
 use axum::routing::post;
 use axum::Extension;
-use axum::Json;
 use axum::Router;
 use clap::Parser;
 use micromegas::ingestion::data_lake_connection::DataLakeConnection;
 use micromegas::ingestion::remote_data_lake::connect_to_remote_data_lake;
 use micromegas::ingestion::web_ingestion_service::WebIngestionService;
-use micromegas::telemetry::stream_info::StreamInfo;
 use micromegas::telemetry_sink::TelemetryGuardBuilder;
 use micromegas::tracing::prelude::*;
 use std::net::SocketAddr;
@@ -36,7 +34,7 @@ struct Cli {
 
 async fn insert_process_request(
     Extension(service): Extension<WebIngestionService>,
-    Json(body): Json<serde_json::Value>,
+    body: bytes::Bytes,
 ) {
     info!("insert_process_request");
     if let Err(e) = service.insert_process(body).await {
@@ -46,10 +44,10 @@ async fn insert_process_request(
 
 async fn insert_stream_request(
     Extension(service): Extension<WebIngestionService>,
-    Json(stream_info): Json<StreamInfo>,
+    body: bytes::Bytes,
 ) {
     info!("insert_stream_request");
-    if let Err(e) = service.insert_stream(stream_info).await {
+    if let Err(e) = service.insert_stream(body).await {
         error!("Error in insert_stream_request: {:?}", e);
     }
 }

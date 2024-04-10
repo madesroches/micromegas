@@ -34,7 +34,6 @@ public:
 
 private:
 	void IncrementQueueSize();
-	void SendJsonRequest(const TCHAR* command, const FString& content);
 	void SendBinaryRequest(const TCHAR* command, const TArray<uint8>& content);
 
 	typedef std::function<void()> Callback;

@@ -362,9 +362,9 @@ impl Dispatch {
             computer: whoami::devicename(),
             distro: whoami::distro(),
             cpu_brand,
-            tsc_frequency: frequency().to_string(),
+            tsc_frequency: frequency() as i64,
             start_time,
-            start_ticks: start_ticks.to_string(),
+            start_ticks,
             parent_process_id: parent_process,
         });
         self.sink.on_startup(process_info);
