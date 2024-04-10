@@ -1,6 +1,6 @@
 #pragma once
 //
-//  LgnTelemetrySink/JsonUtils.h
+//  MicromegasTelemetrySink/JsonUtils.h
 //
 #include <string>
 #include <vector>

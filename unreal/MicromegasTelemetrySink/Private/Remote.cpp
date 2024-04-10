@@ -68,8 +68,8 @@ void RemoteSink::OnStartup(const MicromegasTracing::ProcessInfoPtr& processInfo)
 {
 	FPlatformAtomics::InterlockedIncrement(&QueueSize);
 	Queue.Enqueue([this, processInfo]() {
-		FString content = FormatInsertProcessRequest(*processInfo);
-		SendJsonRequest(TEXT("insert_process"), content);
+		TArray<uint8> body = FormatInsertProcessRequest(*processInfo);
+		SendBinaryRequest(TEXT("insert_process"), body);
 	});
 	WakeupThread->Trigger();
 }
@@ -89,8 +89,8 @@ void RemoteSink::OnInitLogStream(const MicromegasTracing::LogStreamPtr& stream)
 {
 	IncrementQueueSize();
 	Queue.Enqueue([this, stream]() {
-		FString content = FormatInsertLogStreamRequest(*stream);
-		SendJsonRequest(TEXT("insert_stream"), content);
+		TArray<uint8> body = FormatInsertLogStreamRequest(*stream);
+		SendBinaryRequest(TEXT("insert_stream"), body);
 	});
 	WakeupThread->Trigger();
 }
@@ -99,8 +99,8 @@ void RemoteSink::OnInitMetricStream(const MicromegasTracing::MetricStreamPtr& st
 {
 	IncrementQueueSize();
 	Queue.Enqueue([this, stream]() {
-		FString content = FormatInsertMetricStreamRequest(*stream);
-		SendJsonRequest(TEXT("insert_stream"), content);
+		TArray<uint8> body = FormatInsertMetricStreamRequest(*stream);
+		SendBinaryRequest(TEXT("insert_stream"), body);
 	});
 	WakeupThread->Trigger();
 }
@@ -115,8 +115,8 @@ void RemoteSink::OnInitThreadStream(MicromegasTracing::ThreadStream* stream)
 
 	IncrementQueueSize();
 	Queue.Enqueue([this, stream]() {
-		FString content = FormatInsertThreadStreamRequest(*stream);
-		SendJsonRequest(TEXT("insert_stream"), content);
+		TArray<uint8> body = FormatInsertThreadStreamRequest(*stream);
+		SendBinaryRequest(TEXT("insert_stream"), body);
 	});
 	WakeupThread->Trigger();
 }
@@ -183,26 +183,6 @@ void RemoteSink::IncrementQueueSize()
 	MICROMEGAS_SPAN_SCOPE(TEXT("MicromegasTelemetrySink"), TEXT("IncrementQueueSize"));
 	int32 incrementedQueueSize = FPlatformAtomics::InterlockedIncrement(&QueueSize);
 	MICROMEGAS_IMETRIC(TEXT("MicromegasTelemetrySink"), MicromegasTracing::Verbosity::Min, TEXT("QueueSize"), TEXT("count"), incrementedQueueSize);
-}
-
-void RemoteSink::SendJsonRequest(const TCHAR* command, const FString& content)
-{
-	MICROMEGAS_SPAN_SCOPE(TEXT("MicromegasTelemetrySink"), TEXT("SendJsonRequest"));
-	TSharedRef<IHttpRequest, ESPMode::ThreadSafe> HttpRequest = FHttpModule::Get().CreateRequest();
-	HttpRequest->SetURL(BaseUrl + command);
-	HttpRequest->SetVerb(TEXT("POST"));
-	HttpRequest->SetContentAsString(content);
-	HttpRequest->SetHeader(TEXT("Content-Type"), TEXT("application/json"));
-	HttpRequest->OnProcessRequestComplete().BindStatic(&OnProcessRequestComplete);
-	if (!Auth->Sign(*HttpRequest))
-	{
-		UE_LOG(LogMicromegasTelemetrySink, Warning, TEXT("Failed to sign telemetry http request"));
-		return;
-	}
-	if (!HttpRequest->ProcessRequest())
-	{
-		UE_LOG(LogMicromegasTelemetrySink, Error, TEXT("Failed to initialize telemetry http request"));
-	}
 }
 
 void RemoteSink::SendBinaryRequest(const TCHAR* command, const TArray<uint8>& content)

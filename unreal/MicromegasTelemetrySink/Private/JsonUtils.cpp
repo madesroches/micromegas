@@ -1,6 +1,5 @@
-#pragma once
 //
-//  LgnTelemetrySink/JsonUtils.cpp
+//  MicromegasTelemetrySink/JsonUtils.cpp
 //
 #include "JsonUtils.h"
 #include "Dom/JsonValue.h"

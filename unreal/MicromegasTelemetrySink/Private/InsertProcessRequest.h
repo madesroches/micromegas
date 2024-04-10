@@ -1,11 +1,11 @@
 #pragma once
 //
-//  LgnTelemetrySink/InsertProcessRequest.h
+//  MicromegasTelemetrySink/InsertProcessRequest.h
 //
 
-namespace LgnTracing
+namespace MicromegasTracing
 {
 	struct ProcessInfo;
 }
 
-FString FormatInsertProcessRequest(const LgnTracing::ProcessInfo& processInfo);
+TArray<uint8> FormatInsertProcessRequest(const MicromegasTracing::ProcessInfo& processInfo);

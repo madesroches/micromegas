@@ -58,8 +58,8 @@ impl WebIngestionService {
         let stream_info: StreamInfo =
             ciborium::from_reader(body.reader()).with_context(|| "parsing StreamInfo")?;
         info!(
-            "new stream {:?} {}",
-            &stream_info.tags, stream_info.stream_id
+            "new stream {} {:?} {:?}",
+            stream_info.stream_id, &stream_info.tags, &stream_info.properties
         );
         sqlx::query("INSERT INTO streams VALUES($1,$2,$3,$4,$5);")
             .bind(stream_info.stream_id)

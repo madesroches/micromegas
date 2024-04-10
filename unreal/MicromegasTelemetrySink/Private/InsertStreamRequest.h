@@ -4,6 +4,6 @@
 //
 #include "MicromegasTracing/Fwd.h"
 
-FString FormatInsertLogStreamRequest(const MicromegasTracing::LogStream& stream);
-FString FormatInsertMetricStreamRequest(const MicromegasTracing::MetricStream& stream);
-FString FormatInsertThreadStreamRequest(const MicromegasTracing::ThreadStream& stream);
+TArray<uint8> FormatInsertLogStreamRequest(const MicromegasTracing::LogStream& stream);
+TArray<uint8> FormatInsertMetricStreamRequest(const MicromegasTracing::MetricStream& stream);
+TArray<uint8> FormatInsertThreadStreamRequest(const MicromegasTracing::ThreadStream& stream);

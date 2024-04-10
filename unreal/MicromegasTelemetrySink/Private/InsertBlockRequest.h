@@ -2,6 +2,7 @@
 //
 //  MicromegasTelemetrySink/InsertBlockRequest.h
 //
+#include "CborUtils.h"
 #include "Dom/JsonObject.h"
 #include "Dom/JsonValue.h"
 #include "FormatTime.h"
@@ -13,16 +14,12 @@
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
 #include "ThreadDependencies.h"
-#include "jsoncons/json.hpp"
-#include "jsoncons_ext/cbor/cbor.hpp"
 
 std::vector<uint8> CompressBuffer(const void* src, size_t size);
 
 TUniquePtr<ExtractLogDependencies> ExtractBlockDependencies(const MicromegasTracing::LogBlock& block);
 TUniquePtr<ExtractMetricDependencies> ExtractBlockDependencies(const MicromegasTracing::MetricBlock& block);
 TUniquePtr<ExtractThreadDependencies> ExtractBlockDependencies(const MicromegasTracing::ThreadBlock& block);
-
-void encode_utf8_string(jsoncons::cbor::cbor_bytes_encoder& encoder, const TCHAR* str);
 
 template <typename BlockT>
 inline TArray<uint8> FormatBlockRequest(const TCHAR* ProcessId, const BlockT& block)
@@ -55,7 +52,7 @@ inline TArray<uint8> FormatBlockRequest(const TCHAR* ProcessId, const BlockT& bl
 		encoder.key("begin_ticks");
 		encoder.int64_value(block.GetBeginTime().Timestamp);
 		encoder.key("end_time");
-		encoder.string_value(FormatTimeIso8601(block.GetEndTime()).c_str());
+		encoder.string_value(FormatTimeIso8601(block.GetEndTime()));
 		encoder.key("end_ticks");
 		encoder.int64_value(block.GetEndTime().Timestamp);
 		encoder.key("payload");
