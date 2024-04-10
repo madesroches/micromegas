@@ -3,16 +3,12 @@
 //  MicromegasTelemetrySink/InsertBlockRequest.h
 //
 #include "CborUtils.h"
-#include "Dom/JsonObject.h"
-#include "Dom/JsonValue.h"
 #include "FormatTime.h"
 #include "LogDependencies.h"
 #include "MetricDependencies.h"
 #include "MicromegasTelemetrySink/Log.h"
 #include "MicromegasTracing/LogBlock.h"
 #include "MicromegasTracing/MetricBlock.h"
-#include "Serialization/JsonSerializer.h"
-#include "Serialization/JsonWriter.h"
 #include "ThreadDependencies.h"
 
 std::vector<uint8> CompressBuffer(const void* src, size_t size);

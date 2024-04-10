@@ -13,8 +13,6 @@
 #include "LogDependencies.h"
 #include <string>
 #include <sstream>
-#include "Serialization/JsonWriter.h"
-#include "Serialization/JsonSerializer.h"
 #include "HAL/Runnable.h"
 #include "HAL/RunnableThread.h"
 #include "HAL/ThreadManager.h"

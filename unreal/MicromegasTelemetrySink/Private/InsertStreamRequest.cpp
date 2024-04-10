@@ -5,17 +5,12 @@
 #include "InsertStreamRequest.h"
 #include "MicromegasTelemetrySink/Log.h"
 #include "LogDependencies.h"
-#include "JsonUtils.h"
 #include <string>
 #include "MicromegasTracing/QueueMetadata.h"
 #include "MicromegasTracing/LogStream.h"
 #include "MicromegasTracing/MetricMetadata.h"
 #include "MicromegasTracing/StringsMetadata.h"
 #include "MicromegasTracing/LogMetadata.h"
-#include "Dom/JsonValue.h"
-#include "Dom/JsonObject.h"
-#include "Serialization/JsonWriter.h"
-#include "Serialization/JsonSerializer.h"
 #include "MetricDependencies.h"
 #include "ThreadDependencies.h"
 

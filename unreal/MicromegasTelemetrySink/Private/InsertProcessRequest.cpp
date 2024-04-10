@@ -2,15 +2,11 @@
 //
 //  MicromegasTelemetrySink/InsertProcessRequest.cpp
 //
-#include "CborUtils.h"
-#include "Dom/JsonObject.h"
-#include "Dom/JsonValue.h"
-#include "FormatTime.h"
 #include "InsertProcessRequest.h"
+#include "CborUtils.h"
+#include "FormatTime.h"
 #include "MicromegasTelemetrySink/Log.h"
 #include "MicromegasTracing/ProcessInfo.h"
-#include "Serialization/JsonSerializer.h"
-#include "Serialization/JsonWriter.h"
 
 TArray<uint8> FormatInsertProcessRequest(const MicromegasTracing::ProcessInfo& processInfo)
 {

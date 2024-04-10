@@ -11,7 +11,6 @@ public class MicromegasTelemetrySink : ModuleRules
 		{
 			"Core",
 			"HTTP",
-			"Json", //todo: remove
 		});
 
 		PrivateIncludePaths.Add( "MicromegasTelemetrySink/Private/jsoncons-0.173.4" );
