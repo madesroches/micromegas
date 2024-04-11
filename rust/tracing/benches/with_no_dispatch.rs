@@ -1,5 +1,5 @@
 use criterion::{criterion_group, criterion_main, Criterion};
-use lgn_tracing::{error, imetric, span_scope};
+use micromegas_tracing::{error, imetric, span_scope};
 
 pub fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("no_dispatch/log", |b| {

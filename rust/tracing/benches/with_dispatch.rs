@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use criterion::{criterion_group, criterion_main, Criterion};
-use lgn_tracing::{
+use micromegas_tracing::{
     error,
     event::NullEventSink,
     guards::{TracingSystemGuard, TracingThreadGuard},
