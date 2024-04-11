@@ -171,7 +171,7 @@ impl TelemetryGuardBuilder {
                 arc
             } else {
                 let mut sinks: Vec<(LevelFilter, BoxedEventSink)> = vec![];
-                if let Ok(url) = std::env::var("LGN_TELEMETRY_URL") {
+                if let Ok(url) = std::env::var("MICROMEGAS_TELEMETRY_URL") {
                     let retry_strategy = self.telemetry_metadata_retry.unwrap_or_else(|| {
                         tokio_retry::strategy::ExponentialBackoff::from_millis(10).take(3)
                     });
