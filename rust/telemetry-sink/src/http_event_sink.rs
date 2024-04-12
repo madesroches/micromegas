@@ -96,7 +96,7 @@ impl HttpEventSink {
         debug!("sending process {process_info:?}");
         let url = format!("{root_path}/ingestion/insert_process");
         tokio_retry::Retry::spawn(retry_strategy, || async {
-            let body = encode_cbor(&process_info)?;
+            let body = encode_cbor(&*process_info)?;
             let mut request = client.post(&url).body(body).build()?;
             decorator
                 .decorate(&mut request)
@@ -124,7 +124,7 @@ impl HttpEventSink {
     ) -> Result<()> {
         let url = format!("{root_path}/ingestion/insert_stream");
         tokio_retry::Retry::spawn(retry_strategy, || async {
-            let body = encode_cbor(&stream_info)?;
+            let body = encode_cbor(&*stream_info)?;
             let mut request = client.post(&url).body(body).build()?;
             decorator.decorate(&mut request).await?;
             let result = client
