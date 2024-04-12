@@ -40,4 +40,11 @@ In order to keep costs down, most payloads will remain unprocessed until they ex
  * Metadata stored in https://www.postgresql.org/
 
 ## Status
+
+### April 2024
+Telemetry ingestion from rust & unreal are working :) 
+Released [version 0.1.1](https://crates.io/crates/micromegas)
+Not actually useful yet, I need to bring back the analytics service to a working state.
+
+### January 2024
 Starting anew. I'm extracting the tracing/telemetry/analytics code from https://github.com/legion-labs/legion to jumpstart the new project. If you are interested in collaborating, please reach out.
