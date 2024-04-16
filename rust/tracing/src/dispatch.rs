@@ -345,7 +345,7 @@ impl Dispatch {
 
         let start_ticks = now();
         let start_time = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, false);
-		let cpu_brand = get_cpu_brand();
+        let cpu_brand = get_cpu_brand();
         let process_info = Arc::new(ProcessInfo {
             process_id: self.process_id.clone(),
             username: whoami::username(),
