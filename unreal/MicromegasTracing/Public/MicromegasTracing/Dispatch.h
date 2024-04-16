@@ -12,7 +12,7 @@ class FScopeLock;
 
 namespace MicromegasTracing
 {
-	typedef std::wstring (*NewGuid)();
+	typedef FString (*NewGuid)();
 	typedef void (*ThreadStreamCallback)(ThreadStream*);
 
 	class CORE_API Dispatch

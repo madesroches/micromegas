@@ -40,15 +40,15 @@ inline TArray<uint8> FormatBlockRequest(const TCHAR* ProcessId, const BlockT& bl
 		encoder.key("block_id");
 		encode_utf8_string(encoder, *blockId);
 		encoder.key("stream_id");
-		encode_utf8_string(encoder, block.GetStreamId().c_str());
+		encode_utf8_string(encoder, *block.GetStreamId());
 		encoder.key("process_id");
 		encode_utf8_string(encoder, ProcessId);
 		encoder.key("begin_time");
-		encoder.string_value(FormatTimeIso8601(block.GetBeginTime()).c_str());
+		encode_utf8_string(encoder, *FormatTimeIso8601(block.GetBeginTime()));
 		encoder.key("begin_ticks");
 		encoder.int64_value(block.GetBeginTime().Timestamp);
 		encoder.key("end_time");
-		encoder.string_value(FormatTimeIso8601(block.GetEndTime()));
+		encode_utf8_string(encoder, *FormatTimeIso8601(block.GetEndTime()));
 		encoder.key("end_ticks");
 		encoder.int64_value(block.GetEndTime().Timestamp);
 		encoder.key("payload");

@@ -30,23 +30,23 @@ namespace MicromegasTracing
 		, MetricBufferSize(metricBufferSize)
 		, ThreadBufferSize(threadBufferSize)
 	{
-		std::wstring logStreamId = AllocNewGuid();
+		FString logStreamId = AllocNewGuid();
 		LogBlockPtr logBlock = std::make_shared<LogBlock>(logStreamId,
 			processInfo->StartTime,
 			LogBufferSize);
 		LogEntries = std::make_shared<LogStream>(CurrentProcessInfo->ProcessId,
 			logStreamId,
 			logBlock,
-			std::vector<std::wstring>({ TEXT("log") }));
+			std::vector<FString>({ TEXT("log") }));
 
-		std::wstring metricStreamId = allocNewGuid();
+		FString metricStreamId = allocNewGuid();
 		MetricsBlockPtr metricBlock = std::make_shared<MetricBlock>(metricStreamId,
 			processInfo->StartTime,
 			metricBufferSize);
 		Metrics = std::make_shared<MetricStream>(CurrentProcessInfo->ProcessId,
 			metricStreamId,
 			metricBlock,
-			std::vector<std::wstring>({ TEXT("metrics") }));
+			std::vector<FString>({ TEXT("metrics") }));
 	}
 
 	Dispatch::~Dispatch()
@@ -109,7 +109,7 @@ namespace MicromegasTracing
 
 	ThreadStream* Dispatch::AllocThreadStream()
 	{
-		std::wstring streamId = AllocNewGuid();
+		FString streamId = AllocNewGuid();
 		DualTime now = DualTime::Now();
 		ThreadBlockPtr block = std::make_shared<ThreadBlock>(streamId,
 			now,
@@ -117,7 +117,7 @@ namespace MicromegasTracing
 		return new ThreadStream(CurrentProcessInfo->ProcessId,
 			streamId,
 			block,
-			std::vector<std::wstring>({ TEXT("cpu") }));
+			std::vector<FString>({ TEXT("cpu") }));
 	}
 
 	void Dispatch::PublishThreadStream(ThreadStream* stream)

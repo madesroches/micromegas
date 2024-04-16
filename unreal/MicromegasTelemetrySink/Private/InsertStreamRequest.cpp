@@ -68,9 +68,9 @@ TArray<uint8> FormatInsertStreamRequest(const StreamT& stream)
 	{
 		encoder.begin_object();
 		encoder.key("stream_id");
-		encode_utf8_string(encoder, stream.GetStreamId().c_str());
+		encode_utf8_string(encoder, *stream.GetStreamId());
 		encoder.key("process_id");
-		encode_utf8_string(encoder, stream.GetProcessId().c_str());
+		encode_utf8_string(encoder, *stream.GetProcessId());
 		encoder.key("dependencies_metadata");
 		FormatContainerMetadata(encoder, MakeQueueMetadata<DepQueue>()());
 		encoder.key("objects_metadata");
@@ -80,9 +80,9 @@ TArray<uint8> FormatInsertStreamRequest(const StreamT& stream)
 
 		encoder.key("tags");
 		encoder.begin_array();
-		for (const std::wstring& tag : stream.GetTags())
+		for (const FString& tag : stream.GetTags())
 		{
-			encode_utf8_string(encoder, tag.c_str());
+			encode_utf8_string(encoder, *tag);
 		}
 		encoder.end_array();
 
@@ -90,10 +90,10 @@ TArray<uint8> FormatInsertStreamRequest(const StreamT& stream)
 		encoder.begin_object();
 		for (const auto& kv : stream.GetProperties())
 		{
-			FTCHARToUTF8 UTF8Key(kv.first.c_str());
+			FTCHARToUTF8 UTF8Key(*kv.first);
 			using string_view_type = jsoncons::cbor::cbor_bytes_encoder::string_view_type;
 			encoder.key(string_view_type(UTF8Key.Get(), UTF8Key.Length()));
-			encode_utf8_string(encoder, kv.second.c_str());
+			encode_utf8_string(encoder, *kv.second);
 		}
 		encoder.end_object();
 
