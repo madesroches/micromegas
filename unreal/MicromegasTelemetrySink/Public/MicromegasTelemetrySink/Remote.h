@@ -2,16 +2,22 @@
 //
 //  MicromegasTelemetrySink/Remote.h
 //
-#include <functional>
-#include "MicromegasTracing/EventSink.h"
+#include "Containers/Queue.h"
+#include "Containers/UnrealString.h"
+#include "HAL/Event.h"
+#include "HAL/Runnable.h"
 #include "MicromegasTelemetrySink/TelemetryAuthenticator.h"
+#include "MicromegasTracing/EventSink.h"
+#include "MicromegasTracing/Fwd.h"
+#include "Templates/SharedPointer.h"
+#include <functional>
 
 class FlushMonitor;
 
 class RemoteSink : public MicromegasTracing::EventSink, public FRunnable
 {
 public:
-	RemoteSink(const FString& BaseUrl, const ProcessInfoPtr& ThisProcess, const SharedTelemetryAuthenticator& Auth);
+	RemoteSink(const FString& BaseUrl, const MicromegasTracing::ProcessInfoPtr& ThisProcess, const SharedTelemetryAuthenticator& Auth);
 	virtual ~RemoteSink();
 
 	//
@@ -39,7 +45,7 @@ private:
 	typedef std::function<void()> Callback;
 	typedef TQueue<Callback, EQueueMode::Mpsc> WorkQueue;
 	FString BaseUrl;
-	ProcessInfoPtr Process;
+	MicromegasTracing::ProcessInfoPtr Process;
 	SharedTelemetryAuthenticator Auth;
 	WorkQueue Queue;
 	volatile int32 QueueSize;

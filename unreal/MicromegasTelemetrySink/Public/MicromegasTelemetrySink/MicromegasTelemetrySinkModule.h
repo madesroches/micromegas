@@ -12,16 +12,21 @@
 class MICROMEGASTELEMETRYSINK_API IMicromegasTelemetrySinkModule : public IModuleInterface
 {
 public:
-	static const FName ModuleName;
-
-	FORCEINLINE static IMicromegasTelemetrySinkModule& LoadModuleChecked()
+	static FName GetModuleName()
 	{
-		return FModuleManager::LoadModuleChecked<IMicromegasTelemetrySinkModule>(ModuleName);
+		// will be ok even if the dll is not loaded yet
+		// should not be used frequently
+		return FName("MicromegasTelemetrySink");
 	}
 
-	FORCEINLINE static IMicromegasTelemetrySinkModule* GetModulePtr()
+	static IMicromegasTelemetrySinkModule& LoadModuleChecked()
 	{
-		return FModuleManager::GetModulePtr<IMicromegasTelemetrySinkModule>(ModuleName);
+		return FModuleManager::LoadModuleChecked<IMicromegasTelemetrySinkModule>(GetModuleName());
+	}
+
+	static IMicromegasTelemetrySinkModule* GetModulePtr()
+	{
+		return FModuleManager::GetModulePtr<IMicromegasTelemetrySinkModule>(GetModuleName());
 	}
 
 	virtual void InitTelemetry( const FString& BaseUrl, const SharedTelemetryAuthenticator& Auth ) = 0;

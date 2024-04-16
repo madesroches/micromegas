@@ -3,6 +3,8 @@
 // MicromegasTelemetrySink/TelemetryAuthenticator.h
 //
 
+#include "Templates/SharedPointerFwd.h"
+
 class IHttpRequest;
 
 class MICROMEGASTELEMETRYSINK_API ITelemetryAuthenticator
