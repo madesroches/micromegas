@@ -1,21 +1,23 @@
 #include "MicromegasTelemetrySink/Remote.h"
-#include "MicromegasTelemetrySink/Log.h"
-#include "MicromegasTelemetrySink/FlushMonitor.h"
-#include "MicromegasTracing/ProcessInfo.h"
-#include "MicromegasTracing/LogBlock.h"
-#include "MicromegasTracing/Macros.h"
-#include "MicromegasTracing/EventStream.h"
-#include "HttpModule.h"
-#include "Interfaces/IHttpResponse.h"
-#include "InsertStreamRequest.h"
-#include "InsertProcessRequest.h"
-#include "InsertBlockRequest.h"
-#include "LogDependencies.h"
-#include <string>
-#include <sstream>
+#include "HAL/PlatformProcess.h"
 #include "HAL/Runnable.h"
 #include "HAL/RunnableThread.h"
 #include "HAL/ThreadManager.h"
+#include "HttpModule.h"
+#include "InsertBlockRequest.h"
+#include "InsertProcessRequest.h"
+#include "InsertStreamRequest.h"
+#include "Interfaces/IHttpResponse.h"
+#include "LogDependencies.h"
+#include "MicromegasTelemetrySink/FlushMonitor.h"
+#include "MicromegasTelemetrySink/Log.h"
+#include "MicromegasTracing/Dispatch.h"
+#include "MicromegasTracing/EventStream.h"
+#include "MicromegasTracing/LogBlock.h"
+#include "MicromegasTracing/Macros.h"
+#include "MicromegasTracing/ProcessInfo.h"
+#include <sstream>
+#include <string>
 #if PLATFORM_WINDOWS
 	#include "Windows/WindowsSystemIncludes.h"
 	#include "Windows/WindowsHWrapper.h"
@@ -47,7 +49,7 @@ namespace
 
 } // namespace
 
-RemoteSink::RemoteSink(const FString& baseUrl, const ProcessInfoPtr& ThisProcess, const SharedTelemetryAuthenticator& Auth)
+RemoteSink::RemoteSink(const FString& baseUrl, const MicromegasTracing::ProcessInfoPtr& ThisProcess, const SharedTelemetryAuthenticator& Auth)
 	: BaseUrl(baseUrl)
 	, Process(ThisProcess)
 	, Auth(Auth)

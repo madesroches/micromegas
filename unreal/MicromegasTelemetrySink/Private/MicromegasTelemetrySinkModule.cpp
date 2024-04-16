@@ -25,8 +25,6 @@ void FMicromegasTelemetrySinkModule::InitTelemetry(const FString& BaseUrl, const
 	InitRemoteSink(BaseUrl, Auth);
 }
 
-const FName IMicromegasTelemetrySinkModule::ModuleName("MicromegasTelemetrySink");
-
 IMPLEMENT_MODULE(FMicromegasTelemetrySinkModule, MicromegasTelemetrySink)
 
 ITelemetryAuthenticator::~ITelemetryAuthenticator()
