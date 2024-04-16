@@ -2,20 +2,19 @@
 //
 //  MicromegasTracing/ProcessInfo.h
 //
-#include <string>
 #include "MicromegasTracing/DualTime.h"
 
 namespace MicromegasTracing
 {
 	struct ProcessInfo
 	{
-		std::wstring ProcessId;
-		std::wstring ParentProcessId;
-		std::wstring Exe;
-		std::wstring Username;
-		std::wstring Computer;
-		std::wstring Distro;
-		std::wstring CpuBrand;
+		FString ProcessId;
+		FString ParentProcessId;
+		FString Exe;
+		FString Username;
+		FString Computer;
+		FString Distro;
+		FString CpuBrand;
 		uint64 TscFrequency;
 		DualTime StartTime;
 	};

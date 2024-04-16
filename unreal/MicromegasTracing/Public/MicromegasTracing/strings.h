@@ -60,8 +60,8 @@ namespace MicromegasTracing
 		{
 		}
 
-		explicit DynamicString(const wchar_t* ptr)
-			: StringReference(ptr, TCString<wchar_t>::Strlen(ptr) * sizeof(wchar_t), StringCodec::Wide)
+		explicit DynamicString(const WIDECHAR* ptr)
+			: StringReference(ptr, TCString<WIDECHAR>::Strlen(ptr) * sizeof(WIDECHAR), StringCodec::Wide)
 		{
 		}
 
@@ -128,13 +128,13 @@ namespace MicromegasTracing
 
 	struct StaticStringRef : public StringReference
 	{
-		explicit StaticStringRef(const char* ptr)
-			: StringReference(ptr, TCString<char>::Strlen(ptr), StringCodec::Ansi)
+		explicit StaticStringRef(const ANSICHAR* ptr)
+			: StringReference(ptr, TCString<ANSICHAR>::Strlen(ptr), StringCodec::Ansi)
 		{
 		}
 
-		explicit StaticStringRef(const wchar_t* ptr)
-			: StringReference(ptr, TCString<wchar_t>::Strlen(ptr) * sizeof(wchar_t), StringCodec::Wide)
+		explicit StaticStringRef(const WIDECHAR* ptr)
+			: StringReference(ptr, TCString<WIDECHAR>::Strlen(ptr) * sizeof(WIDECHAR), StringCodec::Wide)
 		{
 		}
 

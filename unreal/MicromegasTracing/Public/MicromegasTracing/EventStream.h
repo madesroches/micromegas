@@ -2,7 +2,6 @@
 //
 //  MicromegasTracing/EventStream.h
 //
-#include <string>
 #include <vector>
 #include <map>
 
@@ -15,10 +14,10 @@ namespace MicromegasTracing
 		typedef EventBlockT EventBlock;
 		typedef std::shared_ptr<EventBlockT> BlockPtr;
 
-		EventStreamImpl(const std::wstring& processId,
-			const std::wstring& streamId,
+		EventStreamImpl(const FString& processId,
+			const FString& streamId,
 			const BlockPtr& block,
-			const std::vector<std::wstring>& tags)
+			const std::vector<FString>& tags)
 			: ProcessId(processId)
 			, StreamId(streamId)
 			, Tags(tags)
@@ -28,27 +27,27 @@ namespace MicromegasTracing
 			CurrentBlock = block;
 		}
 
-		const std::wstring& GetProcessId() const
+		const FString& GetProcessId() const
 		{
 			return ProcessId;
 		}
 
-		const std::wstring& GetStreamId() const
+		const FString& GetStreamId() const
 		{
 			return StreamId;
 		}
 
-		const std::vector<std::wstring>& GetTags() const
+		const std::vector<FString>& GetTags() const
 		{
 			return Tags;
 		}
 
-		const std::map<std::wstring, std::wstring>& GetProperties() const
+		const std::map<FString, FString>& GetProperties() const
 		{
 			return Properties;
 		}
 
-		void SetProperty(const std::wstring& name, const std::wstring& value)
+		void SetProperty(const FString& name, const FString& value)
 		{
 			Properties[name] = value;
 		}
@@ -83,12 +82,12 @@ namespace MicromegasTracing
 		}
 
 	private:
-		std::wstring ProcessId;
-		std::wstring StreamId;
+		FString ProcessId;
+		FString StreamId;
 		BlockPtr CurrentBlock;
 		size_t FullThreshold;
-		std::vector<std::wstring> Tags;
-		std::map<std::wstring, std::wstring> Properties;
+		std::vector<FString> Tags;
+		std::map<FString, FString> Properties;
 	};
 
 } // namespace MicromegasTracing

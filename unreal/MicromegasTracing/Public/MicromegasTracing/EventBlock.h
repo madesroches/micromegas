@@ -2,7 +2,6 @@
 //
 //  MicromegasTracing/EventBlock.h
 //
-#include <string>
 #include "MicromegasTracing/HeterogeneousQueue.h"
 #include "MicromegasTracing/DualTime.h"
 
@@ -14,7 +13,7 @@ namespace MicromegasTracing
 	public:
 		typedef QueueT Queue;
 
-		EventBlock(const std::wstring& streamId, const DualTime& begin, size_t bufferSize)
+		EventBlock(const FString& streamId, const DualTime& begin, size_t bufferSize)
 			: StreamId(streamId)
 			, Begin(begin)
 			, Events(bufferSize)
@@ -27,7 +26,7 @@ namespace MicromegasTracing
 			End = end;
 		}
 
-		const std::wstring& GetStreamId() const
+		const FString& GetStreamId() const
 		{
 			return StreamId;
 		}
@@ -64,7 +63,7 @@ namespace MicromegasTracing
 		}
 
 	private:
-		std::wstring StreamId;
+		FString StreamId;
 		DualTime Begin;
 		DualTime End;
 		QueueT Events;
