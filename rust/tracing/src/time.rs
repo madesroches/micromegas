@@ -1,7 +1,4 @@
-use core::arch::x86_64::_rdtsc;
-
 use chrono::{DateTime, Utc};
-use raw_cpuid::CpuId;
 
 #[derive(Debug)]
 pub struct DualTime {
@@ -19,27 +16,49 @@ impl DualTime {
 }
 
 #[allow(clippy::cast_possible_wrap)]
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 pub fn now() -> i64 {
     //_rdtsc does not wait for previous instructions to be retired
     // we could use __rdtscp if we needed more precision at the cost of slightly
     // higher overhead
+    use core::arch::x86_64::_rdtsc;
     unsafe { _rdtsc() as i64 }
 }
 
-pub fn frequency() -> u64 {
-    let cpuid = CpuId::new();
-    if let Some(Some(frequency)) = cpuid
-        .get_tsc_info()
-        .map(|tsc_info| tsc_info.tsc_frequency())
-    {
-        frequency
-    } else {
-        // For the fallbacks here, performed some tests on multiple configuration
-        // and found that the following values are the most accurate when we fail
-        // to get the frequency from the CPUID.
-        // Linux is more accurate with the information from the cpuinfo file
-        frequency_fallback()
+#[allow(clippy::cast_possible_wrap)]
+#[cfg(target_arch = "aarch64")]
+pub fn now() -> i64 {
+    //essentially from https://github.com/sheroz/tick_counter/blob/main/src/lib.rs
+    //(MIT license)
+    let tick_counter: i64;
+    unsafe {
+        core::arch::asm!(
+            "mrs x0, cntvct_el0",
+            out("x0") tick_counter
+        );
     }
+    tick_counter
+}
+
+pub fn frequency() -> u64 {
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    {
+        let cpuid = raw_cpuid::CpuId::new();
+        if let Some(Some(frequency)) = cpuid
+            .get_tsc_info()
+            .map(|tsc_info| tsc_info.tsc_frequency())
+        {
+            frequency
+        } else {
+            // For the fallbacks here, performed some tests on multiple configuration
+            // and found that the following values are the most accurate when we fail
+            // to get the frequency from the CPUID.
+            // Linux is more accurate with the information from the cpuinfo file
+            frequency_fallback()
+        }
+    }
+    #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+    frequency_fallback()
 }
 
 #[cfg(windows)]
