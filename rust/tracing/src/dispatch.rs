@@ -337,8 +337,6 @@ impl Dispatch {
     }
 
     fn startup(&mut self) {
-        use raw_cpuid::CpuId;
-
         let mut parent_process = String::new();
         if let Ok(parent_process_guid) = std::env::var("LGN_TELEMETRY_PARENT_PROCESS") {
             parent_process = parent_process_guid;
@@ -347,10 +345,7 @@ impl Dispatch {
 
         let start_ticks = now();
         let start_time = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, false);
-        let cpuid = CpuId::new();
-        let cpu_brand = cpuid
-            .get_processor_brand_string()
-            .map_or_else(|| "unknown".to_owned(), |b| b.as_str().to_owned());
+		let cpu_brand = get_cpu_brand();
         let process_info = Arc::new(ProcessInfo {
             process_id: self.process_id.clone(),
             username: whoami::username(),
@@ -542,4 +537,13 @@ impl Dispatch {
         Arc::get_mut(&mut old_block).unwrap().close();
         self.sink.on_process_thread_block(old_block);
     }
+}
+
+fn get_cpu_brand() -> String {
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    return raw_cpuid::CpuId::new()
+        .get_processor_brand_string()
+        .map_or_else(|| "unknown".to_owned(), |b| b.as_str().to_owned());
+    #[cfg(target_arch = "aarch64")]
+    return String::from("aarch64");
 }
