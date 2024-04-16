@@ -2,7 +2,6 @@
 //
 //  MicromegasTracing/Dispatch.h
 //
-#include <string>
 #include <memory>
 #include <mutex>
 #include <vector>
