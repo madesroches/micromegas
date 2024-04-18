@@ -3,6 +3,7 @@
 //  MicromegasTracing/DualTime.h
 //
 #include "HAL/PlatformTime.h"
+#include "Misc/DateTime.h"
 
 namespace MicromegasTracing
 {
