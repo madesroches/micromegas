@@ -2,7 +2,7 @@
 //  MicromegasTelemetrySink/InsertBlockRequest.cpp
 //
 #include "InsertBlockRequest.h"
-#include "MicromegasLz4/lz4frame.h"
+#include "lz4/lz4frame.h"
 
 std::vector<uint8> CompressBuffer(const void* src, size_t size)
 {

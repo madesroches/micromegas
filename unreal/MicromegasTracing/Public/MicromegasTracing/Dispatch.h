@@ -5,6 +5,7 @@
 #include <memory>
 #include <mutex>
 #include <vector>
+#include "Containers/UnrealString.h"
 #include "HAL/Platform.h"
 #include "MicromegasTracing/Fwd.h"
 class FScopeLock;

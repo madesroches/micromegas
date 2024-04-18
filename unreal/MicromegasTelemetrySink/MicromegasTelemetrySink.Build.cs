@@ -13,6 +13,7 @@ public class MicromegasTelemetrySink : ModuleRules
 			"HTTP",
 		});
 
-		PrivateIncludePaths.Add( "MicromegasTelemetrySink/Private/jsoncons-0.173.4" );
+		PrivateIncludePaths.Add( Path.Combine(ModuleDirectory, "ThirdParty/jsoncons-0.173.4") );
+		PrivateIncludePaths.Add( Path.Combine(ModuleDirectory, "ThirdParty") );
 	}
 }
