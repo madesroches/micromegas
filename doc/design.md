@@ -22,7 +22,23 @@ Marc-Antoine Desroches <madesroches@gmail.com>
  * Low overhead instrumentation (unreal)
  * Scalable ingestion service
  * JIT analytics service
+
 ---
+# The Big Picture
+## Performance objectives
+
+ * Tracking millions of concurrent instrumented processes
+ * Up to 100 000 events / second / process
+ * 20 ns overhead in calling thread when recording high-frequency events
+ * Most of the storage is cheap object storage
+   * Metadata in relational database
+   * Actual data in S3
+ * Tail sampling
+   * Most recorded events are left unprocessed until requested
+ * Compute capacity is scalable and adaptable
+
+---
+
 # The Big Picture
 ## Data flow
 <div class="mermaid">
@@ -132,7 +148,8 @@ namespace MicromegasTracing
 } // namespace MicromegasTracing
 ```
 ---
-## Memory layout of events using reflection
+## Event buffers are sent as a simple memory copy
+The memory layout of the events is determined using reflection and is necessary to read the data.
 
 ```c++
 
