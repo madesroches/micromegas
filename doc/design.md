@@ -255,7 +255,75 @@ graph LR;
 
 ---
 
-## analytics service
+# Scalable ingestion service
+Event block as seen from ingestion-srv
+```rust
+// block wire format
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlockPayload {
+    pub dependencies: Vec<u8>,
+    pub objects: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Block {
+    pub block_id: String,
+    pub stream_id: String,
+    pub process_id: String,
+    /// we send both RFC3339 times and ticks to be able to calibrate the tick
+    pub begin_time: String,
+    pub begin_ticks: i64,
+    pub end_time: String,
+    pub end_ticks: i64,
+    pub payload: BlockPayload,
+    pub nb_objects: i32,
+}
+```
+
+---
+# Scalable ingestion service
+Recording an event block
+```rust
+    pub async fn insert_block(&self, body: bytes::Bytes) -> Result<()> {
+        let block: block_wire_format::Block = ciborium::from_reader(body.reader())
+            .with_context(|| "parsing block_wire_format::Block")?;
+        let encoded_payload = encode_cbor(&block.payload)?;
+        let payload_size = encoded_payload.len();
+
+        let process_id = &block.process_id;
+        let stream_id = &block.stream_id;
+        let block_id = &block.block_id;
+        let obj_path = format!("blobs/{process_id}/{stream_id}/{block_id}");
+
+        self.lake
+            .blob_storage
+            .put(&obj_path, encoded_payload.into())
+            .await
+            .with_context(|| "Error writing block to blob storage")?;
+
+        sqlx::query("INSERT INTO blocks VALUES($1,$2,$3,$4,$5,$6,$7,$8);")
+            .bind(block.block_id)
+            .bind(block.stream_id)
+            .bind(block.process_id)
+            .bind(block.begin_time)
+            .bind(block.begin_ticks)
+            .bind(block.end_time)
+            .bind(block.end_ticks)
+            .bind(block.nb_objects)
+            .bind(payload_size as i64)
+            .execute(&self.lake.db_pool)
+            .await
+            .with_context(|| "inserting into blocks")?;
+
+        Ok(())
+    }
+```
+
+---
+
+## Analytics service
 
  * Transformation of opaque binary data into tables
  * Can be batched or just-in-time
@@ -276,14 +344,15 @@ graph RL;
 
 ---
 
-## Datalake vs Lakehouse
+## Datalake vs Lakehouse vs Data Warehouse
 
-|              | Datalake                               | Lakehouse |
-|--------------|:--------------------------------------:|-----------:|
-| File format  | custom binary files (memcopied events) | Apache Parquet (columnar typed table) |
-|              | opaque                                 | industry standard |
-| Writing      | easy & cheap                           | complex |
-| Reading      | complex                                | fast & cheap |
+|              | Datalake                               | Lakehouse | Data Warehouse |
+|--------------|:--------------------------------------:|-----------:|--------------:|
+| File format  | custom (memcopied events)              | Apache Parquet (columnar typed table) | hidden (columnar) |
+|              | opaque                                 | industry standard                     |        |
+| Writing      | easy & cheap                           | complex                               | slow  |
+|              |                                        |                                       | requires a running cluster |
+| Reading      | complex                                | fast & cheap                          | fast, but not cheap
 |              | monolitic blob                         | segmented & indexed |
 
 ---
@@ -291,6 +360,7 @@ graph RL;
 ## Materialized views
 To be implemented
  * thread spans (jit per thread)
+   * begin/end events -> call tree -> span table
  * log entries (jit per process)
  * metrics (jit per process)
  * metric stats (jit per process)
