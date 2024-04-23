@@ -20,10 +20,12 @@
 // mod thread_block_processor;
 
 use anyhow::{Context, Result};
+use axum::response::Response;
 use axum::routing::post;
 use axum::{Extension, Router};
 use clap::Parser;
 use micromegas::analytics::analytics_service::AnalyticsService;
+use micromegas::datafusion::parquet::arrow::arrow_writer::ArrowWriter;
 use micromegas::ingestion::data_lake_connection::DataLakeConnection;
 use micromegas::telemetry::blob_storage::BlobStorage;
 use micromegas::telemetry_sink::TelemetryGuardBuilder;
@@ -42,15 +44,25 @@ struct Cli {
 async fn query_processes_request(
     Extension(service): Extension<AnalyticsService>,
     _body: bytes::Bytes,
-) {
+) -> Response {
     info!("query_processes_request");
     match service.query_processes(1024).await {
         Err(e) => {
-            error!("Error in query_processes: {:?}", e);
+            error!("Error in query_processes: {e:?}");
+            Response::builder()
+                .status(500)
+                .body(format!("{e:?}").into())
+                .unwrap()
         }
 
-        Ok(_record_batch) => {
+        Ok(record_batch) => {
             info!("ok");
+            let mut buffer = Vec::new();
+            let mut writer =
+                ArrowWriter::try_new(&mut buffer, record_batch.schema(), None).unwrap();
+            writer.write(&record_batch).unwrap();
+            writer.close().unwrap();
+            Response::builder().status(200).body(buffer.into()).unwrap()
         }
     }
 }

@@ -18,3 +18,4 @@ micromegas-telemetry.workspace = true
 micromegas-tracing.workspace = true
 
 object_store.workspace = true
+datafusion.workspace = true

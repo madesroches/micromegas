@@ -1,5 +1,6 @@
 //! micromegas : scalable telemetry
 
+pub use datafusion;
 pub use object_store;
 
 pub mod telemetry {
