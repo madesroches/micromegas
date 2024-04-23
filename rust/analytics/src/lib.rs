@@ -3,9 +3,9 @@
 // crate-specific lint exceptions:
 #![allow(clippy::missing_errors_doc)]
 
+pub mod analytics_service;
 pub mod log_entry;
 pub mod time;
-pub mod analytics_service;
 
 use crate::log_entry::LogEntry;
 use anyhow::{Context, Result};
