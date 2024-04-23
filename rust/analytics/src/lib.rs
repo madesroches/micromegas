@@ -5,6 +5,7 @@
 
 pub mod log_entry;
 pub mod time;
+pub mod analytics_service;
 
 use crate::log_entry::LogEntry;
 use anyhow::{Context, Result};

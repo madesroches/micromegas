@@ -17,3 +17,7 @@ pub mod tracing {
 pub mod ingestion {
     pub use micromegas_ingestion::*;
 }
+
+pub mod analytics {
+    pub use micromegas_analytics::*;
+}

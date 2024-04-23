@@ -10,12 +10,11 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
-#micromegas-analytics.workspace = true
-micromegas-tracing.workspace = true
-micromegas-telemetry-sink.workspace = true
-micromegas-transit.workspace = true
+micromegas.workspace = true
 
 anyhow.workspace = true
 axum.workspace = true
+bytes.workspace = true
 clap.workspace = true
 tokio.workspace = true
+sqlx.workspace = true
