@@ -62,6 +62,7 @@ pub fn get_sink() -> Option<Arc<dyn EventSink>> {
 
 pub fn shutdown_dispatch() {
     unsafe {
+        #[allow(static_mut_refs)]
         if let Some(d) = &mut G_DISPATCH {
             d.shutdown();
         }
@@ -71,6 +72,7 @@ pub fn shutdown_dispatch() {
 #[inline(always)]
 pub fn int_metric(metric_desc: &'static MetricMetadata, value: u64) {
     unsafe {
+        #[allow(static_mut_refs)]
         if let Some(d) = &mut G_DISPATCH {
             d.int_metric(metric_desc, value);
         }
@@ -80,6 +82,7 @@ pub fn int_metric(metric_desc: &'static MetricMetadata, value: u64) {
 #[inline(always)]
 pub fn float_metric(metric_desc: &'static MetricMetadata, value: f64) {
     unsafe {
+        #[allow(static_mut_refs)]
         if let Some(d) = &mut G_DISPATCH {
             d.float_metric(metric_desc, value);
         }
@@ -89,6 +92,7 @@ pub fn float_metric(metric_desc: &'static MetricMetadata, value: f64) {
 #[inline(always)]
 pub fn log(desc: &'static LogMetadata, args: fmt::Arguments<'_>) {
     unsafe {
+        #[allow(static_mut_refs)]
         if let Some(d) = &mut G_DISPATCH {
             d.log(desc, args);
         }
@@ -98,6 +102,7 @@ pub fn log(desc: &'static LogMetadata, args: fmt::Arguments<'_>) {
 #[inline(always)]
 pub fn log_interop(metadata: &LogMetadata, args: fmt::Arguments<'_>) {
     unsafe {
+        #[allow(static_mut_refs)]
         if let Some(d) = &mut G_DISPATCH {
             d.log_interop(metadata, args);
         }
@@ -107,6 +112,7 @@ pub fn log_interop(metadata: &LogMetadata, args: fmt::Arguments<'_>) {
 #[inline(always)]
 pub fn log_enabled(metadata: &LogMetadata) -> bool {
     unsafe {
+        #[allow(static_mut_refs)]
         if let Some(d) = &G_DISPATCH {
             d.log_enabled(metadata)
         } else {
@@ -118,6 +124,7 @@ pub fn log_enabled(metadata: &LogMetadata) -> bool {
 #[inline(always)]
 pub fn flush_log_buffer() {
     unsafe {
+        #[allow(static_mut_refs)]
         if let Some(d) = &mut G_DISPATCH {
             d.flush_log_buffer();
         }
@@ -127,6 +134,7 @@ pub fn flush_log_buffer() {
 #[inline(always)]
 pub fn flush_metrics_buffer() {
     unsafe {
+        #[allow(static_mut_refs)]
         if let Some(d) = &mut G_DISPATCH {
             d.flush_metrics_buffer();
         }
@@ -141,6 +149,7 @@ pub fn init_thread_stream() {
         if (*cell.as_ptr()).is_some() {
             return;
         }
+        #[allow(static_mut_refs)]
         if let Some(d) = &mut G_DISPATCH {
             d.init_thread_stream(cell);
         } else {
@@ -151,6 +160,7 @@ pub fn init_thread_stream() {
 
 pub fn for_each_thread_stream(fun: &mut dyn FnMut(*mut ThreadStream)) {
     unsafe {
+        #[allow(static_mut_refs)]
         if let Some(d) = &mut G_DISPATCH {
             d.for_each_thread_stream(fun);
         }
@@ -162,6 +172,7 @@ pub fn flush_thread_buffer() {
     LOCAL_THREAD_STREAM.with(|cell| unsafe {
         let opt_stream = &mut *cell.as_ptr();
         if let Some(stream) = opt_stream {
+            #[allow(static_mut_refs)]
             match &mut G_DISPATCH {
                 Some(d) => {
                     d.flush_thread_buffer(stream);
@@ -259,7 +270,7 @@ static mut G_ASYNC_SPAN_COUNTER: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
 
 thread_local! {
-    static LOCAL_THREAD_STREAM: Cell<Option<ThreadStream>> = Cell::new(None);
+    static LOCAL_THREAD_STREAM: Cell<Option<ThreadStream>> = const { Cell::new(None) };
 }
 
 #[inline(always)]
