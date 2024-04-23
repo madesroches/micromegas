@@ -1,15 +1,10 @@
-//! Legion Analytics Server
+//! Analytics Server
 //!
 //! Feeds data to the analytics-web interface.
 //!
 //! Env variables:
-//!  - `LEGION_TELEMETRY_INGESTION_SRC_DATA_DIRECTORY` : local telemetry
-//!    directory
-//!  - `LEGION_TELEMETRY_CACHE_DIRECTORY` : local directory where reusable
-//!    computations will be stored
-
-// crate-specific lint exceptions:
-//#![allow()]
+//!  - `MICROMEGAS_SQL_CONNECTION_STRING` : postgresql server
+//!  - `MICROMEGAS_OBJECT_STORE_URI` : payloads, partitions
 
 // mod analytics_service;
 // mod auth;
@@ -32,8 +27,8 @@ use micromegas_tracing::prelude::*;
 use std::net::SocketAddr;
 
 #[derive(Parser, Debug)]
-#[clap(name = "Legion Performance Analytics Server")]
-#[clap(about = "Legion Performance Analytics Server", version, author)]
+#[clap(name = "Analytics Server")]
+#[clap(about = "Analytics Server", version, author)]
 struct Cli {
     #[clap(long, default_value = "127.0.0.1:8082")]
     listen_endpoint: SocketAddr,
