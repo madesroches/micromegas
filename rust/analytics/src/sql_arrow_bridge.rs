@@ -6,6 +6,8 @@ use datafusion::arrow::array::StructBuilder;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::arrow::datatypes::Field;
 use datafusion::arrow::datatypes::Int64Type;
+use datafusion::arrow::datatypes::TimeUnit;
+use datafusion::arrow::datatypes::TimestampNanosecondType;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::cast::as_struct_array;
 use sqlx::postgres::{PgColumn, PgRow};
@@ -75,10 +77,45 @@ impl ColumnReader for Int64ColumnReader {
     }
 }
 
+pub struct TimestampColumnReader {
+    pub field: Field,
+    pub column_ordinal: usize,
+}
+
+impl ColumnReader for TimestampColumnReader {
+    fn extract_column_from_row(
+        &self,
+        row: &PgRow,
+        struct_builder: &mut StructBuilder,
+    ) -> Result<()> {
+        use sqlx::types::chrono::{DateTime, Utc};
+        let value: DateTime<Utc> = row
+            .try_get(self.column_ordinal)
+            .with_context(|| "try_get failed on row")?;
+        let field_builder = struct_builder
+            .field_builder::<PrimitiveBuilder<TimestampNanosecondType>>(self.column_ordinal)
+            .with_context(|| "getting field builder")?;
+        field_builder.append_value(value.timestamp_nanos_opt().unwrap_or(0));
+        Ok(())
+    }
+
+    fn field(&self) -> Field {
+        self.field.clone()
+    }
+}
+
 pub fn make_column_reader(column: &PgColumn) -> Result<Arc<dyn ColumnReader>> {
     match column.type_info().name() {
         "VARCHAR" => Ok(Arc::new(StringColumnReader {
             field: Field::new(column.name(), DataType::Utf8, true),
+            column_ordinal: column.ordinal(),
+        })),
+        "TIMESTAMPTZ" => Ok(Arc::new(TimestampColumnReader {
+            field: Field::new(
+                column.name(),
+                DataType::Timestamp(TimeUnit::Nanosecond, Some("UCT".into())), //postgres only stores microseconds, but every event is in nanoseconds
+                true,
+            ),
             column_ordinal: column.ordinal(),
         })),
         "INT8" => Ok(Arc::new(Int64ColumnReader {

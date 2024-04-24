@@ -17,6 +17,8 @@ pub struct AnalyticsService {
 #[derive(Debug, Deserialize)]
 pub struct QueryProcessesRequest {
     pub limit: i64,
+    pub begin: String,
+    pub end: String,
 }
 
 impl AnalyticsService {
@@ -27,12 +29,35 @@ impl AnalyticsService {
     pub async fn query_processes(&self, body: bytes::Bytes) -> Result<bytes::Bytes> {
         let request: QueryProcessesRequest = ciborium::from_reader(body.reader())
             .with_context(|| "parsing QueryProcessesRequest")?;
+
+        use sqlx::types::chrono::{DateTime, FixedOffset};
+        let begin = DateTime::<FixedOffset>::parse_from_rfc3339(&request.begin)
+            .with_context(|| "parsing begin time range")?;
+        let end = DateTime::<FixedOffset>::parse_from_rfc3339(&request.end)
+            .with_context(|| "parsing end time range")?;
+
         let mut connection = self.data_lake.db_pool.acquire().await?;
         let rows = sqlx::query(
-            "SELECT process_id, tsc_frequency
+            "SELECT process_id,
+                    exe,
+                    username,
+                    realname,
+                    computer,
+                    distro,
+                    cpu_brand,
+                    tsc_frequency,
+                    start_time,
+                    start_ticks,
+                    insert_time,
+                    parent_process_id
              FROM processes
-             LIMIT $1",
+             WHERE start_time >= $1
+             AND start_time < $2
+             ORDER BY start_time
+             LIMIT $3",
         )
+        .bind(begin)
+        .bind(end)
         .bind(request.limit)
         .fetch_all(&mut *connection)
         .await?;
