@@ -2,6 +2,7 @@
 
 pub use datafusion;
 pub use object_store;
+pub use sqlx;
 
 pub mod telemetry {
     pub use micromegas_telemetry::*;
