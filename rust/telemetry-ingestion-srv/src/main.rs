@@ -7,9 +7,6 @@
 //!  - `MICROMEGAS_SQL_CONNECTION_STRING` : to connect to postgresql
 //!  - `MICROMEGAS_OBJECT_STORE_URI` : to write the payloads
 
-// crate-specific lint exceptions:
-//#![allow()]
-
 use anyhow::{Context, Result};
 use axum::extract::DefaultBodyLimit;
 use axum::routing::post;

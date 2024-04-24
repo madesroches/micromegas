@@ -1,5 +1,6 @@
 //! micromegas : scalable telemetry
 
+pub use datafusion;
 pub use object_store;
 
 pub mod telemetry {
@@ -16,4 +17,8 @@ pub mod tracing {
 
 pub mod ingestion {
     pub use micromegas_ingestion::*;
+}
+
+pub mod analytics {
+    pub use micromegas_analytics::*;
 }

@@ -1,15 +1,10 @@
-//! Legion Analytics Server
+//! Analytics Server
 //!
 //! Feeds data to the analytics-web interface.
 //!
 //! Env variables:
-//!  - `LEGION_TELEMETRY_INGESTION_SRC_DATA_DIRECTORY` : local telemetry
-//!    directory
-//!  - `LEGION_TELEMETRY_CACHE_DIRECTORY` : local directory where reusable
-//!    computations will be stored
-
-// crate-specific lint exceptions:
-//#![allow()]
+//!  - `MICROMEGAS_SQL_CONNECTION_STRING` : postgresql server
+//!  - `MICROMEGAS_OBJECT_STORE_URI` : payloads, partitions
 
 // mod analytics_service;
 // mod auth;
@@ -24,23 +19,63 @@
 // mod scope;
 // mod thread_block_processor;
 
-use anyhow::Result;
-use axum::Router;
+use anyhow::{Context, Result};
+use axum::response::Response;
+use axum::routing::post;
+use axum::{Extension, Router};
 use clap::Parser;
-use micromegas_telemetry_sink::TelemetryGuardBuilder;
-use micromegas_tracing::prelude::*;
+use micromegas::analytics::analytics_service::AnalyticsService;
+use micromegas::datafusion::parquet::arrow::arrow_writer::ArrowWriter;
+use micromegas::ingestion::data_lake_connection::DataLakeConnection;
+use micromegas::telemetry::blob_storage::BlobStorage;
+use micromegas::telemetry_sink::TelemetryGuardBuilder;
+use micromegas::tracing::prelude::*;
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 #[derive(Parser, Debug)]
-#[clap(name = "Legion Performance Analytics Server")]
-#[clap(about = "Legion Performance Analytics Server", version, author)]
+#[clap(name = "Analytics Server")]
+#[clap(about = "Analytics Server", version, author)]
 struct Cli {
     #[clap(long, default_value = "127.0.0.1:8082")]
     listen_endpoint: SocketAddr,
 }
 
-async fn serve_http(args: &Cli) -> Result<(), Box<dyn std::error::Error>> {
-    let app = Router::new();
+async fn query_processes_request(
+    Extension(service): Extension<AnalyticsService>,
+    _body: bytes::Bytes,
+) -> Response {
+    info!("query_processes_request");
+    match service.query_processes(1024).await {
+        Err(e) => {
+            error!("Error in query_processes: {e:?}");
+            Response::builder()
+                .status(500)
+                .body(format!("{e:?}").into())
+                .unwrap()
+        }
+
+        Ok(record_batch) => {
+            info!("ok");
+            //todo: remove all the unwraps
+            let mut buffer = Vec::new();
+            let mut writer =
+                ArrowWriter::try_new(&mut buffer, record_batch.schema(), None).unwrap(); //todo: enable lz4
+            writer.write(&record_batch).unwrap();
+            writer.close().unwrap();
+            Response::builder().status(200).body(buffer.into()).unwrap()
+        }
+    }
+}
+
+async fn serve_http(
+    args: &Cli,
+    lake: DataLakeConnection,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let service = AnalyticsService::new(lake);
+    let app = Router::new()
+        .route("/analytics/query_processes", post(query_processes_request))
+        .layer(Extension(service));
     let listener = tokio::net::TcpListener::bind(args.listen_endpoint)
         .await
         .unwrap();
@@ -50,6 +85,21 @@ async fn serve_http(args: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+pub async fn connect_to_data_lake(
+    db_uri: &str,
+    object_store_url: &str,
+) -> Result<DataLakeConnection> {
+    info!("connecting to blob storage");
+    let blob_storage = Arc::new(
+        BlobStorage::connect(object_store_url).with_context(|| "connecting to blob storage")?,
+    );
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .connect(db_uri)
+        .await
+        .with_context(|| String::from("Connecting to telemetry database"))?;
+    Ok(DataLakeConnection::new(pool, blob_storage))
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _telemetry_guard = TelemetryGuardBuilder::default()
@@ -57,6 +107,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_local_sink_max_level(LevelFilter::Debug)
         .build();
     let args = Cli::parse();
-    serve_http(&args).await?;
+    let connection_string = std::env::var("MICROMEGAS_SQL_CONNECTION_STRING")
+        .with_context(|| "reading MICROMEGAS_SQL_CONNECTION_STRING")?;
+    let object_store_uri = std::env::var("MICROMEGAS_OBJECT_STORE_URI")
+        .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
+    let data_lake = connect_to_data_lake(&connection_string, &object_store_uri).await?;
+    serve_http(&args, data_lake).await?;
     Ok(())
 }

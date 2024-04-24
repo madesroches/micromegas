@@ -11,9 +11,11 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+micromegas-analytics.workspace = true
 micromegas-ingestion.workspace = true
-micromegas-telemetry.workspace = true
 micromegas-telemetry-sink.workspace = true
+micromegas-telemetry.workspace = true
 micromegas-tracing.workspace = true
 
 object_store.workspace = true
+datafusion.workspace = true
