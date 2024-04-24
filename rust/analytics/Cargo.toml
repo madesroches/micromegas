@@ -17,9 +17,11 @@ micromegas-ingestion.workspace = true
 
 anyhow.workspace = true
 async-recursion.workspace = true
+bytes.workspace = true
 chrono.workspace = true
 ciborium.workspace = true
 datafusion.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 sqlx.workspace = true
 

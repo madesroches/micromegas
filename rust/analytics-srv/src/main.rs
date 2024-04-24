@@ -43,10 +43,10 @@ struct Cli {
 
 async fn query_processes_request(
     Extension(service): Extension<AnalyticsService>,
-    _body: bytes::Bytes,
+    body: bytes::Bytes,
 ) -> Response {
     info!("query_processes_request");
-    match service.query_processes(1024).await {
+    match service.query_processes(body).await {
         Err(e) => {
             error!("Error in query_processes: {e:?}");
             Response::builder()
@@ -56,7 +56,6 @@ async fn query_processes_request(
         }
 
         Ok(record_batch) => {
-            info!("ok");
             //todo: remove all the unwraps
             let mut buffer = Vec::new();
             let mut writer =
