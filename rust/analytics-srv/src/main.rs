@@ -57,9 +57,10 @@ async fn query_processes_request(
 
         Ok(record_batch) => {
             info!("ok");
+            //todo: remove all the unwraps
             let mut buffer = Vec::new();
             let mut writer =
-                ArrowWriter::try_new(&mut buffer, record_batch.schema(), None).unwrap();
+                ArrowWriter::try_new(&mut buffer, record_batch.schema(), None).unwrap(); //todo: enable lz4
             writer.write(&record_batch).unwrap();
             writer.close().unwrap();
             Response::builder().status(200).body(buffer.into()).unwrap()

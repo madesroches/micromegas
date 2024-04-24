@@ -5,6 +5,7 @@
 
 pub mod analytics_service;
 pub mod log_entry;
+pub mod sql_arrow_bridge;
 pub mod time;
 
 use crate::log_entry::LogEntry;
