@@ -24,9 +24,9 @@ async fn create_processes_table(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) 
                   distro VARCHAR(255), 
                   cpu_brand VARCHAR(255), 
                   tsc_frequency BIGINT,
-                  start_time VARCHAR(255),
+                  start_time TIMESTAMPTZ,
                   start_ticks BIGINT,
-                  insert_time VARCHAR(255),
+                  insert_time TIMESTAMPTZ,
                   parent_process_id VARCHAR(36));
          CREATE INDEX process_id on processes(process_id);
          CREATE INDEX parent_process_id on processes(parent_process_id);
@@ -63,9 +63,9 @@ async fn create_blocks_table(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> 
                   block_id VARCHAR(36), 
                   stream_id VARCHAR(36), 
                   process_id VARCHAR(36), 
-                  begin_time VARCHAR(255),
+                  begin_time TIMESTAMPTZ,
                   begin_ticks BIGINT,
-                  end_time VARCHAR(255),
+                  end_time TIMESTAMPTZ,
                   end_ticks BIGINT,
                   nb_objects INT
                   );

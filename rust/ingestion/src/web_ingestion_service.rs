@@ -30,6 +30,12 @@ impl WebIngestionService {
         let block_id = &block.block_id;
         let obj_path = format!("blobs/{process_id}/{stream_id}/{block_id}");
 
+        use sqlx::types::chrono::{DateTime, FixedOffset};
+        let begin_time = DateTime::<FixedOffset>::parse_from_rfc3339(&block.begin_time)
+            .with_context(|| "parsing begin_time")?;
+        let end_time = DateTime::<FixedOffset>::parse_from_rfc3339(&block.end_time)
+            .with_context(|| "parsing end_time")?;
+
         self.lake
             .blob_storage
             .put(&obj_path, encoded_payload.into())
@@ -40,9 +46,9 @@ impl WebIngestionService {
             .bind(block.block_id)
             .bind(block.stream_id)
             .bind(block.process_id)
-            .bind(block.begin_time)
+            .bind(begin_time)
             .bind(block.begin_ticks)
-            .bind(block.end_time)
+            .bind(end_time)
             .bind(block.end_ticks)
             .bind(block.nb_objects)
             .bind(payload_size as i64)
@@ -79,9 +85,10 @@ impl WebIngestionService {
         let process_info: ProcessInfo =
             ciborium::from_reader(body.reader()).with_context(|| "parsing ProcessInfo")?;
 
-        let insert_time: chrono::DateTime<chrono::Utc> = chrono::Utc::now();
-        info!("insert_process: {process_info:?}");
-
+        use sqlx::types::chrono::{DateTime, FixedOffset};
+        let start_time = DateTime::<FixedOffset>::parse_from_rfc3339(&process_info.start_time)
+            .with_context(|| "parsing start_time")?;
+        let insert_time = sqlx::types::chrono::Utc::now();
         sqlx::query("INSERT INTO processes VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12);")
             .bind(process_info.process_id)
             .bind(process_info.exe)
@@ -91,9 +98,9 @@ impl WebIngestionService {
             .bind(process_info.distro)
             .bind(process_info.cpu_brand)
             .bind(process_info.tsc_frequency)
-            .bind(process_info.start_time)
+            .bind(start_time)
             .bind(process_info.start_ticks)
-            .bind(insert_time.to_rfc3339())
+            .bind(insert_time)
             .bind(process_info.parent_process_id)
             .execute(&self.lake.db_pool)
             .await
