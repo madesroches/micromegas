@@ -26,6 +26,7 @@ pub struct QueryStreamsRequest {
     pub limit: i64,
     pub begin: String,
     pub end: String,
+    pub tag_filter: Option<String>,
 }
 
 impl AnalyticsService {
@@ -81,9 +82,12 @@ impl AnalyticsService {
             .with_context(|| "parsing begin time range")?;
         let end = DateTime::<FixedOffset>::parse_from_rfc3339(&request.end)
             .with_context(|| "parsing end time range")?;
-
         let mut connection = self.data_lake.db_pool.acquire().await?;
-        let rows = sqlx::query(
+        let mut tag_condition = "";
+        if request.tag_filter.is_some() {
+            tag_condition = "AND array_position(tags, $4) is not NULL";
+        }
+        let sql = format!(
             "SELECT stream_id,
                     process_id,
                     tags,
@@ -91,14 +95,15 @@ impl AnalyticsService {
              FROM streams
              WHERE insert_time >= $1
              AND insert_time < $2
+             {tag_condition}
              ORDER BY insert_time
-             LIMIT $3",
-        )
-        .bind(begin)
-        .bind(end)
-        .bind(request.limit)
-        .fetch_all(&mut *connection)
-        .await?;
+             LIMIT $3"
+        );
+        let mut query = sqlx::query(&sql).bind(begin).bind(end).bind(request.limit);
+        if let Some(tag) = &request.tag_filter {
+            query = query.bind(tag);
+        }
+        let rows = query.fetch_all(&mut *connection).await?;
         serialize_record_batch(
             &rows_to_record_batch(&rows).with_context(|| "converting rows to record batch")?,
         )

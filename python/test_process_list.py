@@ -15,7 +15,11 @@ def request(url_tail, args):
         data=cbor2.dumps(args),
     )
     if response.status_code != 200:
-        raise Exception("http request failed code={0} text={1}".format( response.status_code, response.text))
+        raise Exception(
+            "http request failed code={0} text={1}".format(
+                response.status_code, response.text
+            )
+        )
     table = pq.read_table(io.BytesIO(response.content))
     return table.to_pandas()
 
@@ -40,6 +44,11 @@ def test_process_list():
     print(tabulate.tabulate(df, headers="keys"))
 
 
-def test_find_cpu_stream():
+def test_list_streams():
     df = req("query_streams")
+    print(df)
+
+
+def test_find_cpu_stream():
+    df = req("query_streams", args={"tag_filter": "cpu"})
     print(df)
