@@ -21,6 +21,13 @@ pub struct QueryProcessesRequest {
     pub end: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct QueryStreamsRequest {
+    pub limit: i64,
+    pub begin: String,
+    pub end: String,
+}
+
 impl AnalyticsService {
     pub fn new(data_lake: DataLakeConnection) -> Self {
         Self { data_lake }
@@ -54,6 +61,37 @@ impl AnalyticsService {
              WHERE start_time >= $1
              AND start_time < $2
              ORDER BY start_time
+             LIMIT $3",
+        )
+        .bind(begin)
+        .bind(end)
+        .bind(request.limit)
+        .fetch_all(&mut *connection)
+        .await?;
+        serialize_record_batch(
+            &rows_to_record_batch(&rows).with_context(|| "converting rows to record batch")?,
+        )
+    }
+
+    pub async fn query_streams(&self, body: bytes::Bytes) -> Result<bytes::Bytes> {
+        let request: QueryStreamsRequest =
+            ciborium::from_reader(body.reader()).with_context(|| "parsing QueryStreamsRequest")?;
+        use sqlx::types::chrono::{DateTime, FixedOffset};
+        let begin = DateTime::<FixedOffset>::parse_from_rfc3339(&request.begin)
+            .with_context(|| "parsing begin time range")?;
+        let end = DateTime::<FixedOffset>::parse_from_rfc3339(&request.end)
+            .with_context(|| "parsing end time range")?;
+
+        let mut connection = self.data_lake.db_pool.acquire().await?;
+        let rows = sqlx::query(
+            "SELECT stream_id,
+                    process_id,
+                    tags,
+                    properties
+             FROM streams
+             WHERE insert_time >= $1
+             AND insert_time < $2
+             ORDER BY insert_time
              LIMIT $3",
         )
         .bind(begin)

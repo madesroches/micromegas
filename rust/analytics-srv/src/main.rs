@@ -40,22 +40,43 @@ struct Cli {
     listen_endpoint: SocketAddr,
 }
 
-async fn query_processes_request(
-    Extension(service): Extension<AnalyticsService>,
-    body: bytes::Bytes,
-) -> Response {
-    info!("query_processes_request");
-    match service.query_processes(body).await {
+fn bytes_response(result: Result<bytes::Bytes>) -> Response {
+    match result {
         Err(e) => {
-            error!("Error in query_processes: {e:?}");
+            error!("Error in request: {e:?}");
             Response::builder()
                 .status(500)
                 .body(format!("{e:?}").into())
                 .unwrap()
         }
-
         Ok(bytes) => Response::builder().status(200).body(bytes.into()).unwrap(),
     }
+}
+
+async fn query_processes_request(
+    Extension(service): Extension<AnalyticsService>,
+    body: bytes::Bytes,
+) -> Response {
+    info!("query_processes_request");
+    bytes_response(
+        service
+            .query_processes(body)
+            .await
+            .with_context(|| "query_processes"),
+    )
+}
+
+async fn query_streams_request(
+    Extension(service): Extension<AnalyticsService>,
+    body: bytes::Bytes,
+) -> Response {
+    info!("query_streams_request");
+    bytes_response(
+        service
+            .query_streams(body)
+            .await
+            .with_context(|| "query_streams"),
+    )
 }
 
 async fn serve_http(
@@ -65,6 +86,7 @@ async fn serve_http(
     let service = AnalyticsService::new(lake);
     let app = Router::new()
         .route("/analytics/query_processes", post(query_processes_request))
+        .route("/analytics/query_streams", post(query_streams_request))
         .layer(Extension(service));
     let listener = tokio::net::TcpListener::bind(args.listen_endpoint)
         .await
