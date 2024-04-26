@@ -13,6 +13,14 @@ async fn create_migration_table(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) 
     Ok(())
 }
 
+async fn create_property_type(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Result<()> {
+    let sql = "CREATE TYPE micromegas_property as (key TEXT, value TEXT);";
+    tr.execute(sql)
+        .await
+        .with_context(|| String::from("Creating property type"))?;
+    Ok(())
+}
+
 async fn create_processes_table(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Result<()> {
     let sql = "
          CREATE TABLE processes(
@@ -30,7 +38,7 @@ async fn create_processes_table(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) 
                   parent_process_id VARCHAR(36));
          CREATE INDEX process_id on processes(process_id);
          CREATE INDEX parent_process_id on processes(parent_process_id);
-         CREATE INDEX process_insert_time on processes(insert_time);";
+         CREATE INDEX process_start_time on processes(start_time);";
     tr.execute(sql)
         .await
         .with_context(|| String::from("Creating table processes and its indices"))?;
@@ -38,19 +46,19 @@ async fn create_processes_table(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) 
 }
 
 async fn create_streams_table(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Result<()> {
-    // storing tags as text is simplistic - we should move to a tags table if we
-    // keep the telemetry metadata in a SQL db
     let sql = "
          CREATE TABLE streams(
                   stream_id VARCHAR(36), 
                   process_id VARCHAR(36), 
                   dependencies_metadata BYTEA,
                   objects_metadata BYTEA,
-                  tags TEXT,
-                  properties TEXT
+                  tags TEXT[],
+                  properties micromegas_property[],
+                  insert_time TIMESTAMPTZ
                   );
          CREATE INDEX stream_id on streams(stream_id);
-         CREATE INDEX stream_process_id on streams(process_id);";
+         CREATE INDEX stream_process_id on streams(process_id);
+         CREATE INDEX stream_insert_time on streams(insert_time);";
     tr.execute(sql)
         .await
         .with_context(|| String::from("Creating table streams and its indices"))?;
@@ -67,7 +75,8 @@ async fn create_blocks_table(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> 
                   begin_ticks BIGINT,
                   end_time TIMESTAMPTZ,
                   end_ticks BIGINT,
-                  nb_objects INT
+                  nb_objects INT,
+                  payload_size BIGINT
                   );
          CREATE INDEX block_id on blocks(block_id);
          CREATE INDEX block_stream_id on blocks(stream_id);";
@@ -78,6 +87,7 @@ async fn create_blocks_table(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> 
 }
 
 pub async fn create_tables(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Result<()> {
+    create_property_type(tr).await?;
     create_processes_table(tr).await?;
     create_streams_table(tr).await?;
     create_blocks_table(tr).await?;

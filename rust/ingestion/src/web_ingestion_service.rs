@@ -1,4 +1,5 @@
 use crate::data_lake_connection::DataLakeConnection;
+use crate::sql_property::make_properties;
 use anyhow::Context;
 use anyhow::Result;
 use bytes::Buf;
@@ -42,7 +43,7 @@ impl WebIngestionService {
             .await
             .with_context(|| "Error writing block to blob storage")?;
 
-        sqlx::query("INSERT INTO blocks VALUES($1,$2,$3,$4,$5,$6,$7,$8);")
+        sqlx::query("INSERT INTO blocks VALUES($1,$2,$3,$4,$5,$6,$7,$8, $9);")
             .bind(block.block_id)
             .bind(block.stream_id)
             .bind(block.process_id)
@@ -67,13 +68,14 @@ impl WebIngestionService {
             "new stream {} {:?} {:?}",
             stream_info.stream_id, &stream_info.tags, &stream_info.properties
         );
-        sqlx::query("INSERT INTO streams VALUES($1,$2,$3,$4,$5);")
+        sqlx::query("INSERT INTO streams VALUES($1,$2,$3,$4,$5,$6,$7);")
             .bind(stream_info.stream_id)
             .bind(stream_info.process_id)
             .bind(encode_cbor(&stream_info.dependencies_metadata)?)
             .bind(encode_cbor(&stream_info.objects_metadata)?)
-            .bind(serde_json::to_string(&stream_info.tags)?)
-            .bind(serde_json::to_string(&stream_info.properties)?)
+            .bind(&stream_info.tags)
+            .bind(make_properties(&stream_info.properties))
+            .bind(sqlx::types::chrono::Utc::now())
             .execute(&self.lake.db_pool)
             .await
             .with_context(|| "inserting into streams")?;

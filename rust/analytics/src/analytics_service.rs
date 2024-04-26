@@ -21,6 +21,19 @@ pub struct QueryProcessesRequest {
     pub end: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct QueryStreamsRequest {
+    pub limit: i64,
+    pub begin: String,
+    pub end: String,
+    pub tag_filter: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct QueryBlocksRequest {
+    pub stream_id: String,
+}
+
 impl AnalyticsService {
     pub fn new(data_lake: DataLakeConnection) -> Self {
         Self { data_lake }
@@ -61,6 +74,66 @@ impl AnalyticsService {
         .bind(request.limit)
         .fetch_all(&mut *connection)
         .await?;
+        serialize_record_batch(
+            &rows_to_record_batch(&rows).with_context(|| "converting rows to record batch")?,
+        )
+    }
+
+    pub async fn query_streams(&self, body: bytes::Bytes) -> Result<bytes::Bytes> {
+        let request: QueryStreamsRequest =
+            ciborium::from_reader(body.reader()).with_context(|| "parsing QueryStreamsRequest")?;
+        use sqlx::types::chrono::{DateTime, FixedOffset};
+        let begin = DateTime::<FixedOffset>::parse_from_rfc3339(&request.begin)
+            .with_context(|| "parsing begin time range")?;
+        let end = DateTime::<FixedOffset>::parse_from_rfc3339(&request.end)
+            .with_context(|| "parsing end time range")?;
+        let mut connection = self.data_lake.db_pool.acquire().await?;
+        let mut tag_condition = "";
+        if request.tag_filter.is_some() {
+            tag_condition = "AND array_position(tags, $4) is not NULL";
+        }
+        let sql = format!(
+            "SELECT stream_id,
+                    process_id,
+                    tags,
+                    properties
+             FROM streams
+             WHERE insert_time >= $1
+             AND insert_time < $2
+             {tag_condition}
+             ORDER BY insert_time
+             LIMIT $3"
+        );
+        let mut query = sqlx::query(&sql).bind(begin).bind(end).bind(request.limit);
+        if let Some(tag) = &request.tag_filter {
+            query = query.bind(tag);
+        }
+        let rows = query.fetch_all(&mut *connection).await?;
+        serialize_record_batch(
+            &rows_to_record_batch(&rows).with_context(|| "converting rows to record batch")?,
+        )
+    }
+
+    pub async fn query_blocks(&self, body: bytes::Bytes) -> Result<bytes::Bytes> {
+        let request: QueryBlocksRequest =
+            ciborium::from_reader(body.reader()).with_context(|| "parsing QueryBlocksRequest")?;
+        let mut connection = self.data_lake.db_pool.acquire().await?;
+        let sql = "SELECT block_id,
+                    stream_id,
+                    process_id,
+                    begin_time,
+                    begin_ticks,
+                    end_time,
+                    end_ticks,
+                    nb_objects,
+                    payload_size
+             FROM blocks
+             WHERE stream_id = $1
+             ORDER BY begin_time;";
+        let rows = sqlx::query(sql)
+            .bind(request.stream_id)
+            .fetch_all(&mut *connection)
+            .await?;
         serialize_record_batch(
             &rows_to_record_batch(&rows).with_context(|| "converting rows to record batch")?,
         )
