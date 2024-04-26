@@ -7,6 +7,7 @@ use datafusion::arrow::array::StructBuilder;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::arrow::datatypes::Field;
 use datafusion::arrow::datatypes::Fields;
+use datafusion::arrow::datatypes::Int32Type;
 use datafusion::arrow::datatypes::Int64Type;
 use datafusion::arrow::datatypes::TimeUnit;
 use datafusion::arrow::datatypes::TimestampNanosecondType;
@@ -74,7 +75,31 @@ impl ColumnReader for Int64ColumnReader {
         field_builder.append_value(value);
         Ok(())
     }
+    fn field(&self) -> Field {
+        self.field.clone()
+    }
+}
 
+pub struct Int32ColumnReader {
+    pub field: Field,
+    pub column_ordinal: usize,
+}
+
+impl ColumnReader for Int32ColumnReader {
+    fn extract_column_from_row(
+        &self,
+        row: &PgRow,
+        struct_builder: &mut StructBuilder,
+    ) -> Result<()> {
+        let value: i32 = row
+            .try_get(self.column_ordinal)
+            .with_context(|| "try_get failed on row")?;
+        let field_builder = struct_builder
+            .field_builder::<PrimitiveBuilder<Int32Type>>(self.column_ordinal)
+            .with_context(|| "getting field builder for int32 column")?;
+        field_builder.append_value(value);
+        Ok(())
+    }
     fn field(&self) -> Field {
         self.field.clone()
     }
@@ -196,6 +221,10 @@ pub fn make_column_reader(column: &PgColumn) -> Result<Arc<dyn ColumnReader>> {
         })),
         "INT8" => Ok(Arc::new(Int64ColumnReader {
             field: Field::new(column.name(), DataType::Int64, true),
+            column_ordinal: column.ordinal(),
+        })),
+        "INT4" => Ok(Arc::new(Int32ColumnReader {
+            field: Field::new(column.name(), DataType::Int32, true),
             column_ordinal: column.ordinal(),
         })),
         "TEXT[]" => Ok(Arc::new(StringArrayColumnReader {

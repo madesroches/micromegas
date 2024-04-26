@@ -29,6 +29,11 @@ pub struct QueryStreamsRequest {
     pub tag_filter: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct QueryBlocksRequest {
+    pub stream_id: String,
+}
+
 impl AnalyticsService {
     pub fn new(data_lake: DataLakeConnection) -> Self {
         Self { data_lake }
@@ -104,6 +109,31 @@ impl AnalyticsService {
             query = query.bind(tag);
         }
         let rows = query.fetch_all(&mut *connection).await?;
+        serialize_record_batch(
+            &rows_to_record_batch(&rows).with_context(|| "converting rows to record batch")?,
+        )
+    }
+
+    pub async fn query_blocks(&self, body: bytes::Bytes) -> Result<bytes::Bytes> {
+        let request: QueryBlocksRequest =
+            ciborium::from_reader(body.reader()).with_context(|| "parsing QueryBlocksRequest")?;
+        let mut connection = self.data_lake.db_pool.acquire().await?;
+        let sql = "SELECT block_id,
+                    stream_id,
+                    process_id,
+                    begin_time,
+                    begin_ticks,
+                    end_time,
+                    end_ticks,
+                    nb_objects,
+                    payload_size
+             FROM blocks
+             WHERE stream_id = $1
+             ORDER BY begin_time;";
+        let rows = sqlx::query(sql)
+            .bind(request.stream_id)
+            .fetch_all(&mut *connection)
+            .await?;
         serialize_record_batch(
             &rows_to_record_batch(&rows).with_context(|| "converting rows to record batch")?,
         )

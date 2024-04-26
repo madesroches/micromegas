@@ -79,6 +79,19 @@ async fn query_streams_request(
     )
 }
 
+async fn query_blocks_request(
+    Extension(service): Extension<AnalyticsService>,
+    body: bytes::Bytes,
+) -> Response {
+    info!("query_blocks_request");
+    bytes_response(
+        service
+            .query_blocks(body)
+            .await
+            .with_context(|| "query_blocks"),
+    )
+}
+
 async fn serve_http(
     args: &Cli,
     lake: DataLakeConnection,
@@ -87,6 +100,7 @@ async fn serve_http(
     let app = Router::new()
         .route("/analytics/query_processes", post(query_processes_request))
         .route("/analytics/query_streams", post(query_streams_request))
+        .route("/analytics/query_blocks", post(query_blocks_request))
         .layer(Extension(service));
     let listener = tokio::net::TcpListener::bind(args.listen_endpoint)
         .await
