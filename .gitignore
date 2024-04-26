@@ -18,3 +18,8 @@ Cargo.lock
 
 # python
 __pycache__/
+
+# gtags
+unreal/GPATH
+unreal/GRTAGS
+unreal/GTAGS
