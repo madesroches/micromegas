@@ -39,7 +39,7 @@ def test_find_cpu_stream():
     df = req("query_streams", args={"tag_filter": "cpu"})
     print(df)
 
-def get_cpu_strams_with_data():
+def get_cpu_streams_with_data():
     streams_df = req("query_streams", args={"tag_filter": "cpu"})
     streams_stats = {}
     for index, row in streams_df.iterrows():
@@ -57,5 +57,5 @@ def get_cpu_strams_with_data():
     return streams_stats
 
 def test_find_cpu_blocks():
-    streams_stats = get_cpu_strams_with_data()
+    streams_stats = get_cpu_streams_with_data()
     print(streams_stats.sort_values("nb_events", ascending=False))
