@@ -176,7 +176,7 @@ impl HttpEventSink {
         let mut opt_process_info = None;
         let client_res = reqwest::Client::builder().build();
         if let Err(e) = client_res {
-            eprintln!("Error creating http client: {e:?}");
+            error!("Error creating http client: {e:?}");
             return;
         }
         let mut client = client_res.unwrap();
@@ -273,7 +273,7 @@ impl HttpEventSink {
                             )
                             .await
                             {
-                                eprintln!("error sending thread block: {e:?}");
+                                error!("error sending thread block: {e:?}");
                             }
                         } else {
                             error!("trying to send blocks before Startup message");
