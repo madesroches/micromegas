@@ -5,14 +5,15 @@ use micromegas_tracing::{
     logs::LogBlock,
     metrics::MetricsBlock,
     spans::ThreadBlock,
+    ProcessInfo,
 };
 use micromegas_transit::HeterogeneousQueue;
 
 pub trait StreamBlock {
-    fn encode_bin(&self) -> Result<Vec<u8>>;
+    fn encode_bin(&self, process_info: &ProcessInfo) -> Result<Vec<u8>>;
 }
 
-fn encode_block<Q>(block: &EventBlock<Q>) -> Result<Vec<u8>>
+fn encode_block<Q>(block: &EventBlock<Q>, process_info: &ProcessInfo) -> Result<Vec<u8>>
 where
     Q: HeterogeneousQueue + ExtractDeps,
     <Q as ExtractDeps>::DepsQueue: HeterogeneousQueue,
@@ -33,11 +34,11 @@ where
             .begin
             .time
             .to_rfc3339_opts(chrono::SecondsFormat::Nanos, false),
-        begin_ticks: block.begin.ticks,
+        begin_ticks: block.begin.ticks - process_info.start_ticks,
         end_time: end
             .time
             .to_rfc3339_opts(chrono::SecondsFormat::Nanos, false),
-        end_ticks: end.ticks,
+        end_ticks: end.ticks - process_info.start_ticks,
         payload,
         nb_objects: block.nb_objects() as i32,
     };
@@ -45,19 +46,19 @@ where
 }
 
 impl StreamBlock for LogBlock {
-    fn encode_bin(&self) -> Result<Vec<u8>> {
-        encode_block(self)
+    fn encode_bin(&self, process_info: &ProcessInfo) -> Result<Vec<u8>> {
+        encode_block(self, process_info)
     }
 }
 
 impl StreamBlock for MetricsBlock {
-    fn encode_bin(&self) -> Result<Vec<u8>> {
-        encode_block(self)
+    fn encode_bin(&self, process_info: &ProcessInfo) -> Result<Vec<u8>> {
+        encode_block(self, process_info)
     }
 }
 
 impl StreamBlock for ThreadBlock {
-    fn encode_bin(&self) -> Result<Vec<u8>> {
-        encode_block(self)
+    fn encode_bin(&self, process_info: &ProcessInfo) -> Result<Vec<u8>> {
+        encode_block(self, process_info)
     }
 }

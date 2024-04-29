@@ -147,6 +147,7 @@ impl HttpEventSink {
         current_queue_size: &AtomicIsize,
         max_queue_size: isize,
         decorator: &dyn RequestDecorator,
+        process_info: &ProcessInfo,
     ) -> Result<()> {
         if current_queue_size.load(Ordering::Relaxed) >= max_queue_size {
             // could be better to have a budget for each block type
@@ -154,7 +155,7 @@ impl HttpEventSink {
             debug!("dropping data, queue over max_queue_size");
             return Ok(());
         }
-        let encoded_block = buffer.encode_bin()?;
+        let encoded_block = buffer.encode_bin(process_info)?;
         let mut request = client
             .post(format!("{root_path}/ingestion/insert_block"))
             .body(encoded_block)
@@ -172,6 +173,7 @@ impl HttpEventSink {
         retry_strategy: core::iter::Take<tokio_retry::strategy::ExponentialBackoff>,
         decorator: &dyn RequestDecorator,
     ) {
+        let mut opt_process_info = None;
         let client_res = reqwest::Client::builder().build();
         if let Err(e) = client_res {
             eprintln!("Error creating http client: {e:?}");
@@ -194,6 +196,7 @@ impl HttpEventSink {
             match receiver.recv() {
                 Ok(message) => match message {
                     SinkEvent::Startup(process_info) => {
+                        opt_process_info = Some(process_info.clone());
                         if let Err(e) = Self::push_process(
                             &mut client,
                             &addr,
@@ -203,7 +206,7 @@ impl HttpEventSink {
                         )
                         .await
                         {
-                            eprintln!("error sending process: {e:?}");
+                            error!("error sending process: {e:?}");
                         }
                     }
                     SinkEvent::InitStream(stream_info) => {
@@ -216,49 +219,64 @@ impl HttpEventSink {
                         )
                         .await
                         {
-                            eprintln!("error sending stream: {e:?}");
+                            error!("error sending stream: {e:?}");
                         }
                     }
                     SinkEvent::ProcessLogBlock(buffer) => {
-                        if let Err(e) = Self::push_block(
-                            &mut client,
-                            &addr,
-                            &*buffer,
-                            &queue_size,
-                            max_queue_size,
-                            decorator,
-                        )
-                        .await
-                        {
-                            eprintln!("error sending log block: {e:?}");
+                        if let Some(process_info) = &opt_process_info {
+                            if let Err(e) = Self::push_block(
+                                &mut client,
+                                &addr,
+                                &*buffer,
+                                &queue_size,
+                                max_queue_size,
+                                decorator,
+                                process_info,
+                            )
+                            .await
+                            {
+                                error!("error sending log block: {e:?}");
+                            }
+                        } else {
+                            error!("trying to send blocks before Startup message");
                         }
                     }
                     SinkEvent::ProcessMetricsBlock(buffer) => {
-                        if let Err(e) = Self::push_block(
-                            &mut client,
-                            &addr,
-                            &*buffer,
-                            &queue_size,
-                            max_queue_size,
-                            decorator,
-                        )
-                        .await
-                        {
-                            eprintln!("error sending metrics block: {e:?}");
+                        if let Some(process_info) = &opt_process_info {
+                            if let Err(e) = Self::push_block(
+                                &mut client,
+                                &addr,
+                                &*buffer,
+                                &queue_size,
+                                max_queue_size,
+                                decorator,
+                                process_info,
+                            )
+                            .await
+                            {
+                                error!("error sending metrics block: {e:?}");
+                            }
+                        } else {
+                            error!("trying to send blocks before Startup message");
                         }
                     }
                     SinkEvent::ProcessThreadBlock(buffer) => {
-                        if let Err(e) = Self::push_block(
-                            &mut client,
-                            &addr,
-                            &*buffer,
-                            &queue_size,
-                            max_queue_size,
-                            decorator,
-                        )
-                        .await
-                        {
-                            eprintln!("error sending thread block: {e:?}");
+                        if let Some(process_info) = &opt_process_info {
+                            if let Err(e) = Self::push_block(
+                                &mut client,
+                                &addr,
+                                &*buffer,
+                                &queue_size,
+                                max_queue_size,
+                                decorator,
+                                process_info,
+                            )
+                            .await
+                            {
+                                eprintln!("error sending thread block: {e:?}");
+                            }
+                        } else {
+                            error!("trying to send blocks before Startup message");
                         }
                     }
                 },

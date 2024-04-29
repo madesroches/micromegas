@@ -5,6 +5,7 @@ use micromegas_telemetry_sink::{
     stream_block::StreamBlock, stream_info::make_stream_info, TelemetryGuard,
 };
 use micromegas_tracing::{
+    dispatch::make_process_info,
     event::TracingBlock,
     metrics::{FloatMetricEvent, IntegerMetricEvent, MetricMetadata, MetricsBlock, MetricsStream},
     prelude::Verbosity,
@@ -15,6 +16,7 @@ fn test_parse_metric_interops() {
     let _telemetry_guard = TelemetryGuard::new();
 
     let process_id = String::from("bogus_process_id");
+    let process_info = make_process_info(&process_id, "bogus_parent_process");
     let mut stream = MetricsStream::new(1024, process_id.clone(), &[], HashMap::new());
     let stream_id = stream.stream_id().to_string();
 
@@ -40,7 +42,7 @@ fn test_parse_metric_interops() {
 
     let mut block = stream.replace_block(Arc::new(MetricsBlock::new(1024, process_id, stream_id)));
     Arc::get_mut(&mut block).unwrap().close();
-    let encoded = block.encode_bin().unwrap();
+    let encoded = block.encode_bin(&process_info).unwrap();
     let received_block: micromegas_telemetry::block_wire_format::Block =
         ciborium::from_reader(&encoded[..]).unwrap();
 

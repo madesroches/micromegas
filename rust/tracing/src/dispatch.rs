@@ -353,26 +353,7 @@ impl Dispatch {
             parent_process = parent_process_guid;
         }
         std::env::set_var("LGN_TELEMETRY_PARENT_PROCESS", &self.process_id);
-
-        let start_ticks = now();
-        let start_time = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, false);
-        let cpu_brand = get_cpu_brand();
-        let process_info = Arc::new(ProcessInfo {
-            process_id: self.process_id.clone(),
-            username: whoami::username(),
-            realname: whoami::realname(),
-            exe: std::env::current_exe()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .into_owned(),
-            computer: whoami::devicename(),
-            distro: whoami::distro(),
-            cpu_brand,
-            tsc_frequency: frequency() as i64,
-            start_time,
-            start_ticks,
-            parent_process_id: parent_process,
-        });
+        let process_info = Arc::new(make_process_info(&self.process_id, &parent_process));
         self.sink.on_startup(process_info);
     }
 
@@ -557,4 +538,26 @@ fn get_cpu_brand() -> String {
         .map_or_else(|| "unknown".to_owned(), |b| b.as_str().to_owned());
     #[cfg(target_arch = "aarch64")]
     return String::from("aarch64");
+}
+
+pub fn make_process_info(process_id: &str, parent_process_id: &str) -> ProcessInfo {
+    let start_ticks = now();
+    let start_time = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, false);
+    let cpu_brand = get_cpu_brand();
+    ProcessInfo {
+        process_id: process_id.to_owned(),
+        username: whoami::username(),
+        realname: whoami::realname(),
+        exe: std::env::current_exe()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned(),
+        computer: whoami::devicename(),
+        distro: whoami::distro(),
+        cpu_brand,
+        tsc_frequency: frequency() as i64,
+        start_time,
+        start_ticks,
+        parent_process_id: parent_process_id.to_owned(),
+    }
 }
