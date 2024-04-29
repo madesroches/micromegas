@@ -1,5 +1,5 @@
 #include "MicromegasTelemetrySink/MicromegasTelemetrySinkModule.h"
-#include "MicromegasTelemetrySink/Remote.h"
+#include "MicromegasTelemetrySink/HttpEventSink.h"
 #include "MicromegasTelemetrySink/TelemetryAuthenticator.h"
 
 //================================================================================

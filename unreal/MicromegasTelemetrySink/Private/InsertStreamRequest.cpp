@@ -13,6 +13,9 @@
 #include "MicromegasTracing/LogMetadata.h"
 #include "MetricDependencies.h"
 #include "ThreadDependencies.h"
+#include "jsoncons/json.hpp"
+#include "jsoncons_ext/cbor/cbor.hpp"
+#include "CborUtils.h"
 
 void FormatContainerMetadata(jsoncons::cbor::cbor_bytes_encoder& encoder, const TArray<MicromegasTracing::UserDefinedType>& udts)
 {

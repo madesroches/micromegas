@@ -6,6 +6,7 @@
 #include "MicromegasTracing/strings.h"
 #include "MicromegasTracing/LogEvents.h"
 #include "MicromegasTracing/StaticStringDependency.h"
+#include "Containers/Set.h"
 
 typedef MicromegasTracing::HeterogeneousQueue<MicromegasTracing::StaticStringDependency, MicromegasTracing::LogMetadataDependency> LogDependenciesQueue;
 

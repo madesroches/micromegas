@@ -5,6 +5,7 @@
 #include "MicromegasTracing/Dispatch.h"
 #include "MicromegasTracing/EventSink.h"
 #include "MicromegasTracing/ThreadStream.h"
+#include "Misc/CoreDelegates.h"
 
 namespace
 {

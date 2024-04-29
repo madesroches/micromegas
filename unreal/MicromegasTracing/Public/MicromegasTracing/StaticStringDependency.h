@@ -3,6 +3,7 @@
 //  MicromegasTracing/StaticStringDependency.h
 //
 #include "MicromegasTracing/QueueMetadata.h"
+#include "UObject/NameTypes.h"
 
 namespace MicromegasTracing
 {
