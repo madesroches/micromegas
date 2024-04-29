@@ -2,6 +2,7 @@
 //
 //  FormatTime.h
 //
+#include "Containers/UnrealString.h"
 namespace MicromegasTracing
 {
 	struct DualTime;

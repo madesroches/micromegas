@@ -2,6 +2,7 @@
 //
 //  MicromegasTelemetrySink/FlushMonitor.h
 //
+#include "HAL/Platform.h"
 
 namespace MicromegasTracing
 {

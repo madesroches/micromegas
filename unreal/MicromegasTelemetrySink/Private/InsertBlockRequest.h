@@ -10,6 +10,7 @@
 #include "MicromegasTracing/LogBlock.h"
 #include "MicromegasTracing/MetricBlock.h"
 #include "ThreadDependencies.h"
+#include "Misc/Guid.h"
 
 std::vector<uint8> CompressBuffer(const void* src, size_t size);
 

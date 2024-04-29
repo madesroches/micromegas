@@ -2,6 +2,8 @@
 //
 //  MicromegasTelemetrySink/InsertProcessRequest.h
 //
+#include "HAL/Platform.h"
+#include "Containers/Array.h"
 
 namespace MicromegasTracing
 {

@@ -4,6 +4,7 @@
 //
 #include <cassert>
 #include <vector>
+#include "Misc/CString.h"
 
 struct FNameEntry;
 

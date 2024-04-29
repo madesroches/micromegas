@@ -2,6 +2,7 @@
 //  MicromegasTelemetrySink/CborUtils.cpp
 //
 #include "CborUtils.h"
+#include "Containers/StringConv.h"
 
 void encode_utf8_string(jsoncons::cbor::cbor_bytes_encoder& encoder, const TCHAR* str)
 {
