@@ -25,3 +25,11 @@ pub fn make_properties(map: &HashMap<String, String>) -> Vec<Property> {
         .map(|(k, v)| Property::new(k.to_owned(), v.to_owned()))
         .collect()
 }
+
+pub fn into_hashmap(properties: Vec<Property>) -> HashMap<String, String> {
+    let mut hashmap = HashMap::new();
+    for property in properties {
+        hashmap.insert(property.key, property.value);
+    }
+    hashmap
+}

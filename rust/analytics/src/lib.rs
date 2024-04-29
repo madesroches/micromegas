@@ -4,7 +4,10 @@
 #![allow(clippy::missing_errors_doc)]
 
 pub mod analytics_service;
+pub mod arrow_utils;
 pub mod log_entry;
+pub mod metadata;
+mod query_spans;
 pub mod sql_arrow_bridge;
 pub mod time;
 
@@ -207,18 +210,6 @@ pub async fn fetch_child_processes(
     Ok(processes)
 }
 
-// parse_tags returns a list of tags
-// the new ingestion protocol saves the tags as json, but we still have space-separated tags in the database
-fn parse_tags(tags_str: &str) -> Vec<String> {
-    if let Ok(serde_json::Value::Array(items)) = serde_json::from_str(tags_str) {
-        return items
-            .iter()
-            .map(|v| v.as_str().unwrap_or_default().to_owned())
-            .collect();
-    }
-    tags_str.split(' ').map(ToOwned::to_owned).collect()
-}
-
 #[span_fn]
 pub async fn find_process_streams_tagged(
     connection: &mut sqlx::PgConnection,
@@ -248,7 +239,7 @@ pub async fn find_process_streams_tagged(
         let objects_metadata: Vec<UserDefinedType> =
             ciborium::from_reader(&objects_metadata_buffer[..])
                 .with_context(|| "decoding objects metadata")?;
-        let tags_str: String = r.get("tags");
+        let tags: Vec<String> = r.get("tags");
         let properties_str: String = r.get("properties");
         let properties: std::collections::HashMap<String, String> =
             serde_json::from_str(&properties_str).unwrap();
@@ -257,7 +248,7 @@ pub async fn find_process_streams_tagged(
             process_id: r.get("process_id"),
             dependencies_metadata,
             objects_metadata,
-            tags: parse_tags(&tags_str),
+            tags,
             properties,
         });
     }
@@ -290,7 +281,7 @@ pub async fn find_process_streams(
         let objects_metadata: Vec<UserDefinedType> =
             ciborium::from_reader(&objects_metadata_buffer[..])
                 .with_context(|| "decoding objects metadata")?;
-        let tags_str: String = r.get("tags");
+        let tags: Vec<String> = r.get("tags");
         let properties_str: String = r.get("properties");
         let properties: std::collections::HashMap<String, String> =
             serde_json::from_str(&properties_str).unwrap();
@@ -299,7 +290,7 @@ pub async fn find_process_streams(
             process_id: r.get("process_id"),
             dependencies_metadata,
             objects_metadata,
-            tags: parse_tags(&tags_str),
+            tags,
             properties,
         });
     }
@@ -358,43 +349,6 @@ pub async fn find_process_metrics_streams(
 }
 
 #[span_fn]
-pub async fn find_stream(
-    connection: &mut sqlx::PgConnection,
-    stream_id: &str,
-) -> Result<StreamInfo> {
-    let row = sqlx::query(
-        "SELECT process_id, dependencies_metadata, objects_metadata, tags, properties
-         FROM streams
-         WHERE stream_id = ?
-         ;",
-    )
-    .bind(stream_id)
-    .fetch_one(connection)
-    .await
-    .with_context(|| "find_stream")?;
-    let dependencies_metadata_buffer: Vec<u8> = row.get("dependencies_metadata");
-    let dependencies_metadata: Vec<UserDefinedType> =
-        ciborium::from_reader(&dependencies_metadata_buffer[..])
-            .with_context(|| "decoding dependencies metadata")?;
-    let objects_metadata_buffer: Vec<u8> = row.get("objects_metadata");
-    let objects_metadata: Vec<UserDefinedType> =
-        ciborium::from_reader(&objects_metadata_buffer[..])
-            .with_context(|| "decoding objects metadata")?;
-    let tags_str: String = row.get("tags");
-    let properties_str: String = row.get("properties");
-    let properties: std::collections::HashMap<String, String> =
-        serde_json::from_str(&properties_str).unwrap();
-    Ok(StreamInfo {
-        stream_id: String::from(stream_id),
-        process_id: row.get("process_id"),
-        dependencies_metadata,
-        objects_metadata,
-        tags: parse_tags(&tags_str),
-        properties,
-    })
-}
-
-#[span_fn]
 pub async fn find_block_stream(
     connection: &mut sqlx::PgConnection,
     block_id: &str,
@@ -418,7 +372,7 @@ pub async fn find_block_stream(
     let objects_metadata: Vec<UserDefinedType> =
         ciborium::from_reader(&objects_metadata_buffer[..])
             .with_context(|| "decoding objects metadata")?;
-    let tags_str: String = row.get("tags");
+    let tags: Vec<String> = row.get("tags");
     let properties_str: String = row.get("properties");
     let properties: std::collections::HashMap<String, String> =
         serde_json::from_str(&properties_str).unwrap();
@@ -427,7 +381,7 @@ pub async fn find_block_stream(
         process_id: row.get("process_id"),
         dependencies_metadata,
         objects_metadata,
-        tags: parse_tags(&tags_str),
+        tags,
         properties,
     })
 }
