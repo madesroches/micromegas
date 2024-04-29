@@ -1,6 +1,9 @@
 use anyhow::{Context, Result};
 use micromegas_ingestion::sql_property;
-use micromegas_telemetry::{stream_info::StreamInfo, types::process::Process};
+use micromegas_telemetry::{
+    stream_info::StreamInfo,
+    types::{block::BlockMetadata, process::Process},
+};
 use micromegas_tracing::prelude::*;
 use micromegas_transit::UserDefinedType;
 use sqlx::Row;
@@ -82,4 +85,47 @@ pub async fn find_process(
     .await
     .with_context(|| "select from processes")?;
     process_from_row(&row)
+}
+
+#[span_fn]
+pub fn map_row_block(row: &sqlx::postgres::PgRow) -> Result<BlockMetadata> {
+    Ok(BlockMetadata {
+        block_id: row.try_get("block_id")?,
+        stream_id: row.try_get("stream_id")?,
+        process_id: row.try_get("process_id")?,
+        begin_time: row.try_get("begin_time")?,
+        end_time: row.try_get("end_time")?,
+        begin_ticks: row.try_get("begin_ticks")?,
+        end_ticks: row.try_get("end_ticks")?,
+        nb_objects: row.try_get("nb_objects")?,
+        payload_size: row.try_get("payload_size")?,
+    })
+}
+
+#[span_fn]
+pub async fn find_stream_blocks_in_range(
+    connection: &mut sqlx::PgConnection,
+    stream_id: &str,
+    begin_ticks: i64,
+    end_ticks: i64,
+) -> Result<Vec<BlockMetadata>> {
+    let rows = sqlx::query(
+        "SELECT block_id, stream_id, process_id, begin_time, begin_ticks, end_time, end_ticks, nb_objects, payload_size
+         FROM blocks
+         WHERE stream_id = $1
+         AND begin_ticks <= $2
+         AND end_ticks >= $3
+         ORDER BY begin_ticks;",
+    )
+    .bind(stream_id)
+    .bind(end_ticks)
+    .bind(begin_ticks)
+    .fetch_all(connection)
+    .await
+    .with_context(|| "find_stream_blocks")?;
+    let mut blocks = Vec::new();
+    for r in rows {
+        blocks.push(map_row_block(&r)?);
+    }
+    Ok(blocks)
 }

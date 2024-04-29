@@ -16,10 +16,11 @@ pub struct BlockPayload {
     pub objects: Vec<u8>,
 }
 
-#[derive(Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct BlockMetadata {
     pub block_id: String,
     pub stream_id: String,
+    pub process_id: String,
     pub begin_time: chrono::DateTime<chrono::Utc>,
     pub end_time: chrono::DateTime<chrono::Utc>,
     pub begin_ticks: i64,

@@ -13,7 +13,7 @@ pub mod time;
 
 use crate::log_entry::LogEntry;
 use anyhow::{Context, Result};
-use metadata::process_from_row;
+use metadata::{map_row_block, process_from_row};
 use micromegas_telemetry::blob_storage::BlobStorage;
 use micromegas_telemetry::compression::decompress;
 use micromegas_telemetry::stream_info::StreamInfo;
@@ -22,27 +22,8 @@ use micromegas_telemetry::types::process::Process;
 use micromegas_tracing::prelude::*;
 use micromegas_transit::{parse_object_buffer, read_dependencies, UserDefinedType, Value};
 use sqlx::Row;
-use std::path::Path;
 use std::sync::Arc;
 use time::ConvertTicks;
-
-#[span_fn]
-pub async fn alloc_sql_pool(data_folder: &Path) -> Result<sqlx::AnyPool> {
-    let db_uri = format!("sqlite://{}/telemetry.db3", data_folder.display());
-    let pool = sqlx::any::AnyPoolOptions::new()
-        .connect(&db_uri)
-        .await
-        .with_context(|| String::from("Connecting to telemetry database"))?;
-    Ok(pool)
-}
-
-fn parse_rfc3339(s: &str) -> Result<chrono::DateTime<chrono::Utc>> {
-    Ok(
-        chrono::DateTime::<chrono::FixedOffset>::parse_from_rfc3339(s)
-            .with_context(|| "parsing rfc3339")?
-            .into(),
-    )
-}
 
 #[span_fn]
 pub async fn processes_by_name_substring(
@@ -355,21 +336,6 @@ pub async fn find_block_stream(
 }
 
 #[span_fn]
-pub fn map_row_block(row: &sqlx::postgres::PgRow) -> Result<BlockMetadata> {
-    let opt_size: Option<i64> = row.try_get("payload_size")?;
-    Ok(BlockMetadata {
-        block_id: row.try_get("block_id")?,
-        stream_id: row.try_get("stream_id")?,
-        begin_time: parse_rfc3339(row.try_get("begin_time")?)?,
-        end_time: parse_rfc3339(row.try_get("end_time")?)?,
-        begin_ticks: row.try_get("begin_ticks")?,
-        end_ticks: row.try_get("end_ticks")?,
-        nb_objects: row.try_get("nb_objects")?,
-        payload_size: opt_size.unwrap_or(0),
-    })
-}
-
-#[span_fn]
 pub async fn find_block(
     connection: &mut sqlx::PgConnection,
     block_id: &str,
@@ -402,34 +368,6 @@ pub async fn find_stream_blocks(
     .fetch_all(connection)
     .await
         .with_context(|| "find_stream_blocks")?;
-    let mut blocks = Vec::new();
-    for r in rows {
-        blocks.push(map_row_block(&r)?);
-    }
-    Ok(blocks)
-}
-
-#[span_fn]
-pub async fn find_stream_blocks_in_range(
-    connection: &mut sqlx::PgConnection,
-    stream_id: &str,
-    begin_time: &str,
-    end_time: &str,
-) -> Result<Vec<BlockMetadata>> {
-    let rows = sqlx::query(
-        "SELECT block_id, stream_id, begin_time, begin_ticks, end_time, end_ticks, nb_objects, payload_size
-         FROM blocks
-         WHERE stream_id = ?
-         AND begin_time <= ?
-         AND end_time >= ?
-         ORDER BY begin_time;",
-    )
-    .bind(stream_id)
-    .bind(end_time)
-    .bind(begin_time)
-    .fetch_all(connection)
-    .await
-    .with_context(|| "find_stream_blocks")?;
     let mut blocks = Vec::new();
     for r in rows {
         blocks.push(map_row_block(&r)?);
@@ -708,7 +646,6 @@ where
 }
 
 pub mod prelude {
-    pub use crate::alloc_sql_pool;
     pub use crate::fetch_block_payload;
     pub use crate::fetch_child_processes;
     pub use crate::find_block;
@@ -721,7 +658,6 @@ pub mod prelude {
     pub use crate::find_process_streams;
     pub use crate::find_process_thread_streams;
     pub use crate::find_stream_blocks;
-    pub use crate::find_stream_blocks_in_range;
     pub use crate::for_each_log_entry_in_block;
     pub use crate::for_each_process_in_tree;
     pub use crate::for_each_process_log_entry;

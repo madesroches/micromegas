@@ -1,6 +1,10 @@
+use std::cmp::max;
+
 use crate::{
     arrow_utils::make_empty_record_batch,
-    metadata::{find_process, find_stream},
+    fetch_block_payload,
+    metadata::{find_process, find_stream, find_stream_blocks_in_range},
+    time::ConvertTicks,
 };
 use anyhow::{Context, Result};
 use datafusion::arrow::record_batch::RecordBatch;
@@ -10,7 +14,7 @@ use sqlx::types::chrono::{DateTime, Utc};
 pub async fn query_spans(
     data_lake: &DataLakeConnection,
     stream_id: &str,
-    begin: DateTime<Utc>,
+    mut begin: DateTime<Utc>,
     end: DateTime<Utc>,
 ) -> Result<RecordBatch> {
     let mut connection = data_lake.db_pool.acquire().await?;
@@ -20,6 +24,25 @@ pub async fn query_spans(
     let process_info = find_process(&mut connection, &stream_info.process_id)
         .await
         .with_context(|| "find_process")?;
-    dbg!(process_info);
+    let convert_ticks = ConvertTicks::new(&process_info);
+    begin = max(begin, process_info.start_time);
+    let begin_ticks = convert_ticks.to_ticks(begin - process_info.start_time);
+    let end_ticks = convert_ticks.to_ticks(end - process_info.start_time);
+    let blocks = find_stream_blocks_in_range(&mut connection, stream_id, begin_ticks, end_ticks)
+        .await
+        .with_context(|| "find_stream_blocks_in_range")?;
+    drop(connection);
+
+    for block in blocks {
+		dbg!(&block);
+        let payload = fetch_block_payload(
+            data_lake.blob_storage.clone(),
+            &block.process_id,
+            &block.stream_id,
+            &block.block_id,
+        )
+        .await?;
+    }
+
     Ok(make_empty_record_batch())
 }
