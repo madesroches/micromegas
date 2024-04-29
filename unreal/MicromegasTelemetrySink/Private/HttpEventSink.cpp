@@ -125,7 +125,7 @@ void RemoteSink::OnProcessLogBlock(const MicromegasTracing::LogBlockPtr& block)
 {
 	IncrementQueueSize();
 	Queue.Enqueue([this, block]() {
-		TArray<uint8> content = FormatBlockRequest(*Process->ProcessId, *block);
+		TArray<uint8> content = FormatBlockRequest(*Process, *block);
 		SendBinaryRequest(TEXT("insert_block"), content);
 	});
 	WakeupThread->Trigger();
@@ -135,7 +135,7 @@ void RemoteSink::OnProcessMetricBlock(const MicromegasTracing::MetricsBlockPtr& 
 {
 	IncrementQueueSize();
 	Queue.Enqueue([this, block]() {
-		TArray<uint8> content = FormatBlockRequest(*Process->ProcessId, *block);
+		TArray<uint8> content = FormatBlockRequest(*Process, *block);
 		SendBinaryRequest(TEXT("insert_block"), content);
 	});
 	WakeupThread->Trigger();
@@ -146,7 +146,7 @@ void RemoteSink::OnProcessThreadBlock(const MicromegasTracing::ThreadBlockPtr& b
 	MICROMEGAS_SPAN_SCOPE(TEXT("MicromegasTelemetrySink"), TEXT("OnProcessThreadBlock"));
 	IncrementQueueSize();
 	Queue.Enqueue([this, block]() {
-		TArray<uint8> content = FormatBlockRequest(*Process->ProcessId, *block);
+		TArray<uint8> content = FormatBlockRequest(*Process, *block);
 		SendBinaryRequest(TEXT("insert_block"), content);
 	});
 	WakeupThread->Trigger();

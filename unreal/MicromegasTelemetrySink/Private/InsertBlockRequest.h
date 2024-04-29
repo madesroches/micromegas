@@ -9,8 +9,9 @@
 #include "MicromegasTelemetrySink/Log.h"
 #include "MicromegasTracing/LogBlock.h"
 #include "MicromegasTracing/MetricBlock.h"
-#include "ThreadDependencies.h"
+#include "MicromegasTracing/ProcessInfo.h"
 #include "Misc/Guid.h"
+#include "ThreadDependencies.h"
 
 std::vector<uint8> CompressBuffer(const void* src, size_t size);
 
@@ -19,7 +20,7 @@ TUniquePtr<ExtractMetricDependencies> ExtractBlockDependencies(const MicromegasT
 TUniquePtr<ExtractThreadDependencies> ExtractBlockDependencies(const MicromegasTracing::ThreadBlock& block);
 
 template <typename BlockT>
-inline TArray<uint8> FormatBlockRequest(const TCHAR* ProcessId, const BlockT& block)
+inline TArray<uint8> FormatBlockRequest(const MicromegasTracing::ProcessInfo& processInfo, const BlockT& block)
 {
 	MICROMEGAS_SPAN_SCOPE(TEXT("MicromegasTelemetrySink"), TEXT("FormatBlockRequest"));
 	using namespace MicromegasTracing;
@@ -43,15 +44,15 @@ inline TArray<uint8> FormatBlockRequest(const TCHAR* ProcessId, const BlockT& bl
 		encoder.key("stream_id");
 		encode_utf8_string(encoder, *block.GetStreamId());
 		encoder.key("process_id");
-		encode_utf8_string(encoder, ProcessId);
+		encode_utf8_string(encoder, *processInfo.ProcessId);
 		encoder.key("begin_time");
 		encode_utf8_string(encoder, *FormatTimeIso8601(block.GetBeginTime()));
 		encoder.key("begin_ticks");
-		encoder.int64_value(block.GetBeginTime().Timestamp);
+		encoder.int64_value(block.GetBeginTime().Timestamp - processInfo.StartTime.Timestamp);
 		encoder.key("end_time");
 		encode_utf8_string(encoder, *FormatTimeIso8601(block.GetEndTime()));
 		encoder.key("end_ticks");
-		encoder.int64_value(block.GetEndTime().Timestamp);
+		encoder.int64_value(block.GetEndTime().Timestamp - processInfo.StartTime.Timestamp);
 		encoder.key("payload");
 		{
 			encoder.begin_object();
