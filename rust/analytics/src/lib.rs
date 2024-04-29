@@ -13,6 +13,7 @@ pub mod time;
 
 use crate::log_entry::LogEntry;
 use anyhow::{Context, Result};
+use metadata::process_from_row;
 use micromegas_telemetry::blob_storage::BlobStorage;
 use micromegas_telemetry::compression::decompress;
 use micromegas_telemetry::stream_info::StreamInfo;
@@ -44,23 +45,6 @@ fn parse_rfc3339(s: &str) -> Result<chrono::DateTime<chrono::Utc>> {
 }
 
 #[span_fn]
-fn process_from_row(row: &sqlx::postgres::PgRow) -> Result<Process> {
-    Ok(Process {
-        process_id: row.try_get("process_id")?,
-        exe: row.try_get("exe")?,
-        username: row.try_get("username")?,
-        realname: row.try_get("realname")?,
-        computer: row.try_get("computer")?,
-        distro: row.try_get("distro")?,
-        cpu_brand: row.try_get("cpu_brand")?,
-        tsc_frequency: row.try_get("tsc_frequency")?,
-        start_time: parse_rfc3339(row.get("start_time"))?,
-        start_ticks: row.try_get("start_ticks")?,
-        parent_process_id: row.try_get("parent_process_id")?,
-    })
-}
-
-#[span_fn]
 pub async fn processes_by_name_substring(
     connection: &mut sqlx::PgConnection,
     filter: &str,
@@ -80,22 +64,6 @@ pub async fn processes_by_name_substring(
         processes.push(process_from_row(&r)?);
     }
     Ok(processes)
-}
-
-#[span_fn]
-pub async fn find_process(
-    connection: &mut sqlx::PgConnection,
-    process_id: &str,
-) -> Result<Process> {
-    let row = sqlx::query(
-        "SELECT process_id, exe, username, realname, computer, distro, cpu_brand, tsc_frequency, start_time, start_ticks, parent_process_id
-         FROM processes
-         WHERE process_id = ?;",
-    )
-    .bind(process_id)
-    .fetch_one(connection)
-    .await?;
-    process_from_row(&row)
 }
 
 #[span_fn]
@@ -746,7 +714,6 @@ pub mod prelude {
     pub use crate::find_block;
     pub use crate::find_block_process;
     pub use crate::find_block_stream;
-    pub use crate::find_process;
     pub use crate::find_process_blocks;
     pub use crate::find_process_log_entry;
     pub use crate::find_process_log_streams;

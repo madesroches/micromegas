@@ -1,4 +1,7 @@
-use crate::{arrow_utils::make_empty_record_batch, metadata::find_stream};
+use crate::{
+    arrow_utils::make_empty_record_batch,
+    metadata::{find_process, find_stream},
+};
 use anyhow::{Context, Result};
 use datafusion::arrow::record_batch::RecordBatch;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
@@ -14,6 +17,9 @@ pub async fn query_spans(
     let stream_info = find_stream(&mut connection, stream_id)
         .await
         .with_context(|| "find_stream")?;
-    dbg!(stream_info);
+    let process_info = find_process(&mut connection, &stream_info.process_id)
+        .await
+        .with_context(|| "find_process")?;
+    dbg!(process_info);
     Ok(make_empty_record_batch())
 }
