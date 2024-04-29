@@ -4,6 +4,7 @@ use micromegas_analytics::time::ConvertTicks;
 use micromegas_telemetry_sink::stream_block::StreamBlock;
 use micromegas_telemetry_sink::stream_info::make_stream_info;
 use micromegas_telemetry_sink::TelemetryGuard;
+use micromegas_tracing::dispatch::make_process_info;
 use micromegas_tracing::event::TracingBlock;
 use micromegas_tracing::logs::LogBlock;
 use micromegas_tracing::logs::LogStaticStrInteropEvent;
@@ -36,6 +37,7 @@ fn test_log_interop_metadata() {
 fn test_log_encode_static() {
     let _telemetry_guard = TelemetryGuard::new();
     let process_id = String::from("bogus_process_id");
+    let process_info = make_process_info(&process_id, "bogus_parent_process");
     let mut stream = LogStream::new(1024, process_id.clone(), &[], HashMap::new());
     let stream_id = stream.stream_id().to_string();
     stream.get_events_mut().push(LogStaticStrInteropEvent {
@@ -46,7 +48,7 @@ fn test_log_encode_static() {
     });
     let mut block = stream.replace_block(Arc::new(LogBlock::new(1024, process_id, stream_id)));
     Arc::get_mut(&mut block).unwrap().close();
-    let encoded = block.encode_bin().unwrap();
+    let encoded = block.encode_bin(&process_info).unwrap();
     let stream_info = make_stream_info(&stream);
     let received_block: micromegas_telemetry::block_wire_format::Block =
         ciborium::from_reader(&encoded[..]).unwrap();
@@ -69,6 +71,7 @@ fn test_log_encode_static() {
 fn test_log_encode_dynamic() {
     let _telemetry_guard = TelemetryGuard::new();
     let process_id = String::from("bogus_process_id");
+    let process_info = make_process_info(&process_id, "bogus_parent_process");
     let mut stream = LogStream::new(1024, process_id.clone(), &[], HashMap::new());
     let stream_id = stream.stream_id().to_string();
     stream.get_events_mut().push(LogStringInteropEvent {
@@ -79,7 +82,7 @@ fn test_log_encode_dynamic() {
     });
     let mut block = stream.replace_block(Arc::new(LogBlock::new(1024, process_id, stream_id)));
     Arc::get_mut(&mut block).unwrap().close();
-    let encoded = block.encode_bin().unwrap();
+    let encoded = block.encode_bin(&process_info).unwrap();
     let stream_info = make_stream_info(&stream);
     let received_block: micromegas_telemetry::block_wire_format::Block =
         ciborium::from_reader(&encoded[..]).unwrap();
@@ -102,6 +105,7 @@ fn test_log_encode_dynamic() {
 fn test_parse_log_interops() {
     let _telemetry_guard = TelemetryGuard::new();
     let process_id = String::from("bogus_process_id");
+    let process_info = make_process_info(&process_id, "bogus_parent_process");
     let mut stream = LogStream::new(1024, process_id.clone(), &[], HashMap::new());
     let stream_id = stream.stream_id().to_string();
     stream.get_events_mut().push(LogStaticStrInteropEvent {
@@ -118,7 +122,7 @@ fn test_parse_log_interops() {
     });
     let mut block = stream.replace_block(Arc::new(LogBlock::new(1024, process_id, stream_id)));
     Arc::get_mut(&mut block).unwrap().close();
-    let encoded = block.encode_bin().unwrap();
+    let encoded = block.encode_bin(&process_info).unwrap();
     let received_block: micromegas_telemetry::block_wire_format::Block =
         ciborium::from_reader(&encoded[..]).unwrap();
     let stream_info = make_stream_info(&stream);
