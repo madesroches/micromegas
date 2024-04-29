@@ -1,6 +1,7 @@
+use crate::{fetch_block_payload, parse_block};
 use anyhow::Result;
-use lgn_blob_storage::BlobStorage;
-use micromegas_analytics::{fetch_block_payload, parse_block};
+use micromegas_telemetry::blob_storage::BlobStorage;
+use micromegas_telemetry::stream_info::StreamInfo;
 use micromegas_tracing::prelude::*;
 use micromegas_tracing::warn;
 use micromegas_transit::{Object, Value};
@@ -73,8 +74,8 @@ where
 
 #[span_fn]
 pub fn parse_thread_block_payload<Proc: ThreadBlockProcessor>(
-    payload: &micromegas_telemetry_sink::block_wire_format::BlockPayload,
-    stream: &micromegas_telemetry_sink::stream_info::StreamInfo,
+    payload: &micromegas_telemetry::block_wire_format::BlockPayload,
+    stream: &micromegas_telemetry::stream_info::StreamInfo,
     processor: &mut Proc,
 ) -> Result<()> {
     parse_block(stream, payload, |val| {
@@ -152,11 +153,17 @@ pub fn parse_thread_block_payload<Proc: ThreadBlockProcessor>(
 
 #[span_fn]
 pub async fn parse_thread_block<Proc: ThreadBlockProcessor>(
-    blob_storage: Arc<dyn BlobStorage>,
-    stream: &micromegas_telemetry_sink::stream_info::StreamInfo,
-    block_id: String,
+    blob_storage: Arc<BlobStorage>,
+    stream: &StreamInfo,
+    block_id: &str,
     processor: &mut Proc,
 ) -> Result<()> {
-    let payload = fetch_block_payload(blob_storage, block_id).await?;
+    let payload = fetch_block_payload(
+        blob_storage,
+        &stream.process_id,
+        &stream.stream_id,
+        block_id,
+    )
+    .await?;
     parse_thread_block_payload(&payload, stream, processor)
 }

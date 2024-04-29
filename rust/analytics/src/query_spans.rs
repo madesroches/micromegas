@@ -2,7 +2,6 @@ use std::cmp::max;
 
 use crate::{
     arrow_utils::make_empty_record_batch,
-    fetch_block_payload,
     metadata::{find_process, find_stream, find_stream_blocks_in_range},
     time::ConvertTicks,
 };
@@ -34,14 +33,7 @@ pub async fn query_spans(
     drop(connection);
 
     for block in blocks {
-		dbg!(&block);
-        let payload = fetch_block_payload(
-            data_lake.blob_storage.clone(),
-            &block.process_id,
-            &block.stream_id,
-            &block.block_id,
-        )
-        .await?;
+        dbg!(&block);
     }
 
     Ok(make_empty_record_batch())

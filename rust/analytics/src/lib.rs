@@ -10,6 +10,7 @@ pub mod metadata;
 mod query_spans;
 pub mod sql_arrow_bridge;
 pub mod time;
+pub mod thread_block_processor;
 
 use crate::log_entry::LogEntry;
 use anyhow::{Context, Result};
