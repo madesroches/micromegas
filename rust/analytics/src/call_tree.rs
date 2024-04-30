@@ -13,7 +13,7 @@ use std::sync::Arc;
 pub struct CallTreeNode {
     pub hash: u32,
     pub begin: i64, //absolute nanoseconds
-    pub end: Option<i64>,
+    pub end: i64,
     pub children: Vec<CallTreeNode>,
 }
 
@@ -25,8 +25,8 @@ pub struct CallTree {
 }
 
 pub struct CallTreeBuilder {
-    ts_begin_range: i64,
-    ts_end_range: i64,
+    begin_range_ns: i64,
+    end_range_ns: i64,
     stack: Vec<CallTreeNode>,
     scopes: ScopeHashMap,
     convert_ticks: ConvertTicks,
@@ -35,8 +35,8 @@ pub struct CallTreeBuilder {
 impl CallTreeBuilder {
     pub fn new(ts_begin_range: i64, ts_end_range: i64, convert_ticks: ConvertTicks) -> Self {
         Self {
-            ts_begin_range,
-            ts_end_range,
+            begin_range_ns: convert_ticks.ticks_to_nanoseconds(ts_begin_range),
+            end_range_ns: convert_ticks.ticks_to_nanoseconds(ts_end_range),
             stack: Vec::new(),
             scopes: ScopeHashMap::new(),
             convert_ticks,
@@ -71,8 +71,8 @@ impl CallTreeBuilder {
         } else {
             let new_root = CallTreeNode {
                 hash: 0,
-                begin: self.convert_ticks.ticks_to_nanoseconds(self.ts_begin_range),
-                end: Some(self.convert_ticks.ticks_to_nanoseconds(self.ts_end_range)),
+                begin: self.begin_range_ns,
+                end: self.end_range_ns,
                 children: vec![scope],
             };
             self.stack.push(new_root);
@@ -94,7 +94,7 @@ impl ThreadBlockProcessor for CallTreeBuilder {
         let node = CallTreeNode {
             hash,
             begin: time,
-            end: None,
+            end: self.end_range_ns,
             children: Vec::new(),
         };
         self.stack.push(node);
@@ -107,11 +107,11 @@ impl ThreadBlockProcessor for CallTreeBuilder {
         self.record_scope_desc(scope);
         if let Some(mut old_top) = self.stack.pop() {
             if old_top.hash == hash {
-                old_top.end = Some(time);
+                old_top.end = time;
                 self.add_child_to_top(old_top);
             } else if old_top.hash == 0 {
                 old_top.hash = hash;
-                old_top.end = Some(time);
+                old_top.end = time;
                 self.add_child_to_top(old_top);
             } else {
                 anyhow::bail!("top scope mismatch parsing thread block");
@@ -119,8 +119,8 @@ impl ThreadBlockProcessor for CallTreeBuilder {
         } else {
             let scope = CallTreeNode {
                 hash,
-                begin: self.convert_ticks.ticks_to_nanoseconds(self.ts_begin_range),
-                end: Some(time),
+                begin: self.begin_range_ns,
+                end: time,
                 children: Vec::new(),
             };
             self.add_child_to_top(scope);

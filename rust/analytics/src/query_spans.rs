@@ -26,25 +26,28 @@ pub async fn query_spans(
         .with_context(|| "find_process")?;
     let convert_ticks = ConvertTicks::new(&process_info);
     begin = max(begin, process_info.start_time);
-    let begin_ticks = convert_ticks.to_ticks(begin - process_info.start_time);
-    let end_ticks = convert_ticks.to_ticks(end - process_info.start_time);
-    let blocks = find_stream_blocks_in_range(&mut connection, stream_id, begin_ticks, end_ticks)
-        .await
-        .with_context(|| "find_stream_blocks_in_range")?;
+    let relative_begin_ticks = convert_ticks.to_ticks(begin - process_info.start_time);
+    let relative_end_ticks = convert_ticks.to_ticks(end - process_info.start_time);
+    let blocks = find_stream_blocks_in_range(
+        &mut connection,
+        stream_id,
+        relative_begin_ticks,
+        relative_end_ticks,
+    )
+    .await
+    .with_context(|| "find_stream_blocks_in_range")?;
     drop(connection);
 
-    let call_tree = make_call_tree(
+    let _call_tree = make_call_tree(
         &blocks,
-        begin_ticks,
-        end_ticks,
+        relative_begin_ticks + process_info.start_ticks,
+        relative_end_ticks + process_info.start_ticks,
         data_lake.blob_storage.clone(),
         convert_ticks,
         &stream_info,
     )
     .await
     .with_context(|| "make_call_tree")?;
-
-    dbg!(call_tree);
 
     Ok(make_empty_record_batch())
 }
