@@ -4,8 +4,11 @@ use crate::call_tree::CallTree;
 use crate::call_tree::CallTreeNode;
 use anyhow::{Context, Result};
 use datafusion::arrow::array::PrimitiveBuilder;
+use datafusion::arrow::array::StringDictionaryBuilder;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::arrow::datatypes::Field;
+use datafusion::arrow::datatypes::Int16Type;
+use datafusion::arrow::datatypes::Int64Type;
 use datafusion::arrow::datatypes::Schema;
 use datafusion::arrow::datatypes::TimeUnit;
 use datafusion::arrow::datatypes::TimestampNanosecondType;
@@ -21,6 +24,9 @@ pub struct SpanRow {
     pub begin: i64,
     pub end: i64,
     pub hash: u32,
+    pub name: Arc<String>,
+    pub filename: Arc<String>,
+    pub line: u32,
 }
 
 pub struct SpanRecordBuilder {
@@ -30,6 +36,10 @@ pub struct SpanRecordBuilder {
     pub hashes: PrimitiveBuilder<UInt32Type>,
     pub begins: PrimitiveBuilder<TimestampNanosecondType>,
     pub ends: PrimitiveBuilder<TimestampNanosecondType>,
+    pub durations: PrimitiveBuilder<Int64Type>,
+    pub names: StringDictionaryBuilder<Int16Type>,
+    pub filenames: StringDictionaryBuilder<Int16Type>,
+    pub lines: PrimitiveBuilder<UInt32Type>,
 }
 
 impl SpanRecordBuilder {
@@ -41,6 +51,10 @@ impl SpanRecordBuilder {
             hashes: PrimitiveBuilder::with_capacity(capacity),
             begins: PrimitiveBuilder::with_capacity(capacity),
             ends: PrimitiveBuilder::with_capacity(capacity),
+            durations: PrimitiveBuilder::with_capacity(capacity),
+            names: StringDictionaryBuilder::new(), //we could estimate the number of different names and their size
+            filenames: StringDictionaryBuilder::new(),
+            lines: PrimitiveBuilder::with_capacity(capacity),
         }
     }
 
@@ -51,6 +65,10 @@ impl SpanRecordBuilder {
         self.hashes.append_value(row.hash);
         self.begins.append_value(row.begin);
         self.ends.append_value(row.end);
+        self.durations.append_value(row.end - row.begin);
+        self.names.append_value(&*row.name);
+        self.filenames.append_value(&*row.filename);
+        self.lines.append_value(row.line);
         Ok(())
     }
 
@@ -70,6 +88,18 @@ impl SpanRecordBuilder {
                 DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into())),
                 false,
             ),
+            Field::new("duration", DataType::Int64, false), //DataType::Duration not supported by parquet
+            Field::new(
+                "name",
+                DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
+                false,
+            ),
+            Field::new(
+                "filename",
+                DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
+                false,
+            ),
+            Field::new("line", DataType::UInt32, false),
         ]);
         RecordBatch::try_new(
             Arc::new(schema),
@@ -80,6 +110,10 @@ impl SpanRecordBuilder {
                 Arc::new(self.hashes.finish()),
                 Arc::new(self.begins.finish().with_timezone_utc()),
                 Arc::new(self.ends.finish().with_timezone_utc()),
+                Arc::new(self.durations.finish()),
+                Arc::new(self.names.finish()),
+                Arc::new(self.filenames.finish()),
+                Arc::new(self.lines.finish()),
             ],
         )
         .with_context(|| "building record batch")
@@ -115,6 +149,10 @@ pub fn call_tree_to_record_batch(tree: &CallTree) -> Result<RecordBatch> {
             0,
             &mut next_id,
             &mut |node, id, parent, depth| {
+                let scope_desc = tree
+                    .scopes
+                    .get(&node.hash)
+                    .with_context(|| "fetching scope_desc from hash")?;
                 record_builder.append(SpanRow {
                     id,
                     parent,
@@ -122,6 +160,9 @@ pub fn call_tree_to_record_batch(tree: &CallTree) -> Result<RecordBatch> {
                     begin: node.begin,
                     end: node.end,
                     hash: node.hash,
+                    name: scope_desc.name.clone(),
+                    filename: scope_desc.filename.clone(),
+                    line: scope_desc.line,
                 })
             },
         )?;

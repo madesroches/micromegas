@@ -3,6 +3,7 @@ use bytes::Buf;
 use bytes::BufMut;
 use datafusion::parquet::basic::Compression;
 use datafusion::parquet::file::properties::WriterProperties;
+use datafusion::parquet::file::properties::WriterVersion;
 use datafusion::{arrow::record_batch::RecordBatch, parquet::arrow::ArrowWriter};
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use serde::Deserialize;
@@ -169,6 +170,7 @@ impl AnalyticsService {
 fn serialize_record_batch(record_batch: &RecordBatch) -> Result<bytes::Bytes> {
     let mut buffer_writer = bytes::BytesMut::with_capacity(1024).writer();
     let props = WriterProperties::builder()
+        .set_writer_version(WriterVersion::PARQUET_2_0)
         .set_compression(Compression::LZ4_RAW)
         .build();
     let mut arrow_writer =
