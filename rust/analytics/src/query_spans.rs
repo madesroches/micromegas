@@ -2,6 +2,7 @@ use std::cmp::max;
 
 use crate::{
     arrow_utils::make_empty_record_batch,
+    call_tree::make_call_tree,
     metadata::{find_process, find_stream, find_stream_blocks_in_range},
     time::ConvertTicks,
 };
@@ -32,9 +33,18 @@ pub async fn query_spans(
         .with_context(|| "find_stream_blocks_in_range")?;
     drop(connection);
 
-    for block in blocks {
-        dbg!(&block);
-    }
+    let call_tree = make_call_tree(
+        &blocks,
+        begin_ticks,
+        end_ticks,
+        data_lake.blob_storage.clone(),
+        convert_ticks,
+        &stream_info,
+    )
+    .await
+    .with_context(|| "make_call_tree")?;
+
+    dbg!(call_tree);
 
     Ok(make_empty_record_batch())
 }

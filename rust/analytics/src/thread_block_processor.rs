@@ -1,3 +1,4 @@
+use crate::scope::ScopeDesc;
 use crate::{fetch_block_payload, parse_block};
 use anyhow::Result;
 use micromegas_telemetry::blob_storage::BlobStorage;
@@ -8,14 +9,8 @@ use micromegas_transit::{Object, Value};
 use std::sync::Arc;
 
 pub trait ThreadBlockProcessor {
-    fn on_begin_thread_scope(
-        &mut self,
-        scope: Arc<Object>,
-        name: Arc<String>,
-        ts: i64,
-    ) -> Result<()>;
-    fn on_end_thread_scope(&mut self, scope: Arc<Object>, name: Arc<String>, ts: i64)
-        -> Result<()>;
+    fn on_begin_thread_scope(&mut self, scope: ScopeDesc, ts: i64) -> Result<()>;
+    fn on_end_thread_scope(&mut self, scope: ScopeDesc, ts: i64) -> Result<()>;
 }
 
 fn on_thread_event<F>(obj: &micromegas_transit::Object, mut fun: F) -> Result<()>
@@ -49,7 +44,10 @@ pub fn parse_thread_block_payload<Proc: ThreadBlockProcessor>(
                 "BeginThreadSpanEvent" => {
                     if let Err(e) = on_thread_event(&obj, |scope, ts| {
                         let name = scope.get::<Arc<String>>("name")?;
-                        processor.on_begin_thread_scope(scope, name, ts)
+                        let filename = scope.get::<Arc<String>>("file")?;
+                        let line = scope.get::<u32>("line")?;
+                        let scope_desc = ScopeDesc::new(name, filename, line);
+                        processor.on_begin_thread_scope(scope_desc, ts)
                     }) {
                         warn!("Error reading BeginThreadSpanEvent: {:?}", e);
                     }
@@ -57,21 +55,30 @@ pub fn parse_thread_block_payload<Proc: ThreadBlockProcessor>(
                 "EndThreadSpanEvent" => {
                     if let Err(e) = on_thread_event(&obj, |scope, ts| {
                         let name = scope.get::<Arc<String>>("name")?;
-                        processor.on_end_thread_scope(scope, name, ts)
+                        let filename = scope.get::<Arc<String>>("file")?;
+                        let line = scope.get::<u32>("line")?;
+                        let scope_desc = ScopeDesc::new(name, filename, line);
+                        processor.on_end_thread_scope(scope_desc, ts)
                     }) {
                         warn!("Error reading EndThreadSpanEvent: {:?}", e);
                     }
                 }
                 "BeginThreadNamedSpanEvent" => {
                     if let Err(e) = on_thread_named_event(&obj, |scope, name, ts| {
-                        processor.on_begin_thread_scope(scope, name, ts)
+                        let filename = scope.get::<Arc<String>>("file")?;
+                        let line = scope.get::<u32>("line")?;
+                        let scope_desc = ScopeDesc::new(name, filename, line);
+                        processor.on_begin_thread_scope(scope_desc, ts)
                     }) {
                         warn!("Error reading BeginThreadNamedSpanEvent: {:?}", e);
                     }
                 }
                 "EndThreadNamedSpanEvent" => {
                     if let Err(e) = on_thread_named_event(&obj, |scope, name, ts| {
-                        processor.on_end_thread_scope(scope, name, ts)
+                        let filename = scope.get::<Arc<String>>("file")?;
+                        let line = scope.get::<u32>("line")?;
+                        let scope_desc = ScopeDesc::new(name, filename, line);
+                        processor.on_end_thread_scope(scope_desc, ts)
                     }) {
                         warn!("Error reading EndThreadNamedSpanEvent: {:?}", e);
                     }

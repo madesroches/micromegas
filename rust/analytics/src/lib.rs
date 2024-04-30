@@ -5,12 +5,14 @@
 
 pub mod analytics_service;
 pub mod arrow_utils;
+pub mod call_tree;
 pub mod log_entry;
 pub mod metadata;
-mod query_spans;
+pub mod query_spans;
 pub mod sql_arrow_bridge;
-pub mod time;
 pub mod thread_block_processor;
+pub mod time;
+pub mod scope;
 
 use crate::log_entry::LogEntry;
 use anyhow::{Context, Result};
