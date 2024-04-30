@@ -1,9 +1,9 @@
 use std::cmp::max;
 
 use crate::{
-    arrow_utils::make_empty_record_batch,
     call_tree::make_call_tree,
     metadata::{find_process, find_stream, find_stream_blocks_in_range},
+    span_table::call_tree_to_record_batch,
     time::ConvertTicks,
 };
 use anyhow::{Context, Result};
@@ -27,7 +27,7 @@ pub async fn query_spans(
     let convert_ticks = ConvertTicks::new(&process_info);
     begin = max(begin, process_info.start_time);
     let relative_begin_ticks = convert_ticks.to_ticks(begin - process_info.start_time);
-    let relative_end_ticks = convert_ticks.to_ticks(end - process_info.start_time);
+    let mut relative_end_ticks = convert_ticks.to_ticks(end - process_info.start_time);
     let blocks = find_stream_blocks_in_range(
         &mut connection,
         stream_id,
@@ -38,7 +38,11 @@ pub async fn query_spans(
     .with_context(|| "find_stream_blocks_in_range")?;
     drop(connection);
 
-    let _call_tree = make_call_tree(
+    if let Some(b) = blocks.last().as_ref() {
+        relative_end_ticks = relative_end_ticks.min(b.end_ticks);
+    }
+
+    let call_tree = make_call_tree(
         &blocks,
         relative_begin_ticks + process_info.start_ticks,
         relative_end_ticks + process_info.start_ticks,
@@ -48,6 +52,5 @@ pub async fn query_spans(
     )
     .await
     .with_context(|| "make_call_tree")?;
-
-    Ok(make_empty_record_batch())
+    call_tree_to_record_batch(&call_tree).with_context(|| "call_tree_to_record_batch")
 }

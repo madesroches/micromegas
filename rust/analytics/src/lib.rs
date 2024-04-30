@@ -10,6 +10,7 @@ pub mod log_entry;
 pub mod metadata;
 pub mod query_spans;
 pub mod scope;
+pub mod span_table;
 pub mod sql_arrow_bridge;
 pub mod thread_block_processor;
 pub mod time;

@@ -6,19 +6,6 @@
 //!  - `MICROMEGAS_SQL_CONNECTION_STRING` : postgresql server
 //!  - `MICROMEGAS_OBJECT_STORE_URI` : payloads, partitions
 
-// mod analytics_service;
-// mod auth;
-// mod cache;
-// mod call_tree;
-// mod cumulative_call_graph;
-// mod cumulative_call_graph_handler;
-// mod cumulative_call_graph_node;
-// mod lakehouse;
-// mod log_entry;
-// mod metrics;
-// mod scope;
-// mod thread_block_processor;
-
 use anyhow::{Context, Result};
 use axum::response::Response;
 use axum::routing::post;
