@@ -3,9 +3,11 @@ use bytes::Buf;
 use bytes::BufMut;
 use datafusion::parquet::basic::Compression;
 use datafusion::parquet::file::properties::WriterProperties;
+use datafusion::parquet::file::properties::WriterVersion;
 use datafusion::{arrow::record_batch::RecordBatch, parquet::arrow::ArrowWriter};
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use serde::Deserialize;
+use sqlx::types::chrono::{DateTime, FixedOffset};
 
 use crate::sql_arrow_bridge::rows_to_record_batch;
 
@@ -34,6 +36,14 @@ pub struct QueryBlocksRequest {
     pub stream_id: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct QuerySpansRequest {
+    pub limit: i64,
+    pub begin: String,
+    pub end: String,
+    pub stream_id: String,
+}
+
 impl AnalyticsService {
     pub fn new(data_lake: DataLakeConnection) -> Self {
         Self { data_lake }
@@ -43,7 +53,6 @@ impl AnalyticsService {
         let request: QueryProcessesRequest = ciborium::from_reader(body.reader())
             .with_context(|| "parsing QueryProcessesRequest")?;
 
-        use sqlx::types::chrono::{DateTime, FixedOffset};
         let begin = DateTime::<FixedOffset>::parse_from_rfc3339(&request.begin)
             .with_context(|| "parsing begin time range")?;
         let end = DateTime::<FixedOffset>::parse_from_rfc3339(&request.end)
@@ -82,7 +91,6 @@ impl AnalyticsService {
     pub async fn query_streams(&self, body: bytes::Bytes) -> Result<bytes::Bytes> {
         let request: QueryStreamsRequest =
             ciborium::from_reader(body.reader()).with_context(|| "parsing QueryStreamsRequest")?;
-        use sqlx::types::chrono::{DateTime, FixedOffset};
         let begin = DateTime::<FixedOffset>::parse_from_rfc3339(&request.begin)
             .with_context(|| "parsing begin time range")?;
         let end = DateTime::<FixedOffset>::parse_from_rfc3339(&request.end)
@@ -138,11 +146,31 @@ impl AnalyticsService {
             &rows_to_record_batch(&rows).with_context(|| "converting rows to record batch")?,
         )
     }
+
+    pub async fn query_spans(&self, body: bytes::Bytes) -> Result<bytes::Bytes> {
+        let request: QuerySpansRequest =
+            ciborium::from_reader(body.reader()).with_context(|| "parsing QuerySpansRequest")?;
+        let begin = DateTime::<FixedOffset>::parse_from_rfc3339(&request.begin)
+            .with_context(|| "parsing begin time range")?;
+        let end = DateTime::<FixedOffset>::parse_from_rfc3339(&request.end)
+            .with_context(|| "parsing end time range")?;
+        serialize_record_batch(
+            &crate::query_spans::query_spans(
+                &self.data_lake,
+                &request.stream_id,
+                begin.into(),
+                end.into(),
+            )
+            .await
+            .with_context(|| "query_spans")?,
+        )
+    }
 }
 
 fn serialize_record_batch(record_batch: &RecordBatch) -> Result<bytes::Bytes> {
     let mut buffer_writer = bytes::BytesMut::with_capacity(1024).writer();
     let props = WriterProperties::builder()
+        .set_writer_version(WriterVersion::PARQUET_2_0)
         .set_compression(Compression::LZ4_RAW)
         .build();
     let mut arrow_writer =

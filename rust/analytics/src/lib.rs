@@ -4,12 +4,20 @@
 #![allow(clippy::missing_errors_doc)]
 
 pub mod analytics_service;
+pub mod arrow_utils;
+pub mod call_tree;
 pub mod log_entry;
+pub mod metadata;
+pub mod query_spans;
+pub mod scope;
+pub mod span_table;
 pub mod sql_arrow_bridge;
+pub mod thread_block_processor;
 pub mod time;
 
 use crate::log_entry::LogEntry;
 use anyhow::{Context, Result};
+use metadata::{map_row_block, process_from_row};
 use micromegas_telemetry::blob_storage::BlobStorage;
 use micromegas_telemetry::compression::decompress;
 use micromegas_telemetry::stream_info::StreamInfo;
@@ -18,44 +26,8 @@ use micromegas_telemetry::types::process::Process;
 use micromegas_tracing::prelude::*;
 use micromegas_transit::{parse_object_buffer, read_dependencies, UserDefinedType, Value};
 use sqlx::Row;
-use std::path::Path;
 use std::sync::Arc;
 use time::ConvertTicks;
-
-#[span_fn]
-pub async fn alloc_sql_pool(data_folder: &Path) -> Result<sqlx::AnyPool> {
-    let db_uri = format!("sqlite://{}/telemetry.db3", data_folder.display());
-    let pool = sqlx::any::AnyPoolOptions::new()
-        .connect(&db_uri)
-        .await
-        .with_context(|| String::from("Connecting to telemetry database"))?;
-    Ok(pool)
-}
-
-fn parse_rfc3339(s: &str) -> Result<chrono::DateTime<chrono::Utc>> {
-    Ok(
-        chrono::DateTime::<chrono::FixedOffset>::parse_from_rfc3339(s)
-            .with_context(|| "parsing rfc3339")?
-            .into(),
-    )
-}
-
-#[span_fn]
-fn process_from_row(row: &sqlx::postgres::PgRow) -> Result<Process> {
-    Ok(Process {
-        process_id: row.try_get("process_id")?,
-        exe: row.try_get("exe")?,
-        username: row.try_get("username")?,
-        realname: row.try_get("realname")?,
-        computer: row.try_get("computer")?,
-        distro: row.try_get("distro")?,
-        cpu_brand: row.try_get("cpu_brand")?,
-        tsc_frequency: row.try_get("tsc_frequency")?,
-        start_time: parse_rfc3339(row.get("start_time"))?,
-        start_ticks: row.try_get("start_ticks")?,
-        parent_process_id: row.try_get("parent_process_id")?,
-    })
-}
 
 #[span_fn]
 pub async fn processes_by_name_substring(
@@ -77,22 +49,6 @@ pub async fn processes_by_name_substring(
         processes.push(process_from_row(&r)?);
     }
     Ok(processes)
-}
-
-#[span_fn]
-pub async fn find_process(
-    connection: &mut sqlx::PgConnection,
-    process_id: &str,
-) -> Result<Process> {
-    let row = sqlx::query(
-        "SELECT process_id, exe, username, realname, computer, distro, cpu_brand, tsc_frequency, start_time, start_ticks, parent_process_id
-         FROM processes
-         WHERE process_id = ?;",
-    )
-    .bind(process_id)
-    .fetch_one(connection)
-    .await?;
-    process_from_row(&row)
 }
 
 #[span_fn]
@@ -207,18 +163,6 @@ pub async fn fetch_child_processes(
     Ok(processes)
 }
 
-// parse_tags returns a list of tags
-// the new ingestion protocol saves the tags as json, but we still have space-separated tags in the database
-fn parse_tags(tags_str: &str) -> Vec<String> {
-    if let Ok(serde_json::Value::Array(items)) = serde_json::from_str(tags_str) {
-        return items
-            .iter()
-            .map(|v| v.as_str().unwrap_or_default().to_owned())
-            .collect();
-    }
-    tags_str.split(' ').map(ToOwned::to_owned).collect()
-}
-
 #[span_fn]
 pub async fn find_process_streams_tagged(
     connection: &mut sqlx::PgConnection,
@@ -248,7 +192,7 @@ pub async fn find_process_streams_tagged(
         let objects_metadata: Vec<UserDefinedType> =
             ciborium::from_reader(&objects_metadata_buffer[..])
                 .with_context(|| "decoding objects metadata")?;
-        let tags_str: String = r.get("tags");
+        let tags: Vec<String> = r.get("tags");
         let properties_str: String = r.get("properties");
         let properties: std::collections::HashMap<String, String> =
             serde_json::from_str(&properties_str).unwrap();
@@ -257,7 +201,7 @@ pub async fn find_process_streams_tagged(
             process_id: r.get("process_id"),
             dependencies_metadata,
             objects_metadata,
-            tags: parse_tags(&tags_str),
+            tags,
             properties,
         });
     }
@@ -290,7 +234,7 @@ pub async fn find_process_streams(
         let objects_metadata: Vec<UserDefinedType> =
             ciborium::from_reader(&objects_metadata_buffer[..])
                 .with_context(|| "decoding objects metadata")?;
-        let tags_str: String = r.get("tags");
+        let tags: Vec<String> = r.get("tags");
         let properties_str: String = r.get("properties");
         let properties: std::collections::HashMap<String, String> =
             serde_json::from_str(&properties_str).unwrap();
@@ -299,7 +243,7 @@ pub async fn find_process_streams(
             process_id: r.get("process_id"),
             dependencies_metadata,
             objects_metadata,
-            tags: parse_tags(&tags_str),
+            tags,
             properties,
         });
     }
@@ -358,43 +302,6 @@ pub async fn find_process_metrics_streams(
 }
 
 #[span_fn]
-pub async fn find_stream(
-    connection: &mut sqlx::PgConnection,
-    stream_id: &str,
-) -> Result<StreamInfo> {
-    let row = sqlx::query(
-        "SELECT process_id, dependencies_metadata, objects_metadata, tags, properties
-         FROM streams
-         WHERE stream_id = ?
-         ;",
-    )
-    .bind(stream_id)
-    .fetch_one(connection)
-    .await
-    .with_context(|| "find_stream")?;
-    let dependencies_metadata_buffer: Vec<u8> = row.get("dependencies_metadata");
-    let dependencies_metadata: Vec<UserDefinedType> =
-        ciborium::from_reader(&dependencies_metadata_buffer[..])
-            .with_context(|| "decoding dependencies metadata")?;
-    let objects_metadata_buffer: Vec<u8> = row.get("objects_metadata");
-    let objects_metadata: Vec<UserDefinedType> =
-        ciborium::from_reader(&objects_metadata_buffer[..])
-            .with_context(|| "decoding objects metadata")?;
-    let tags_str: String = row.get("tags");
-    let properties_str: String = row.get("properties");
-    let properties: std::collections::HashMap<String, String> =
-        serde_json::from_str(&properties_str).unwrap();
-    Ok(StreamInfo {
-        stream_id: String::from(stream_id),
-        process_id: row.get("process_id"),
-        dependencies_metadata,
-        objects_metadata,
-        tags: parse_tags(&tags_str),
-        properties,
-    })
-}
-
-#[span_fn]
 pub async fn find_block_stream(
     connection: &mut sqlx::PgConnection,
     block_id: &str,
@@ -418,7 +325,7 @@ pub async fn find_block_stream(
     let objects_metadata: Vec<UserDefinedType> =
         ciborium::from_reader(&objects_metadata_buffer[..])
             .with_context(|| "decoding objects metadata")?;
-    let tags_str: String = row.get("tags");
+    let tags: Vec<String> = row.get("tags");
     let properties_str: String = row.get("properties");
     let properties: std::collections::HashMap<String, String> =
         serde_json::from_str(&properties_str).unwrap();
@@ -427,23 +334,8 @@ pub async fn find_block_stream(
         process_id: row.get("process_id"),
         dependencies_metadata,
         objects_metadata,
-        tags: parse_tags(&tags_str),
+        tags,
         properties,
-    })
-}
-
-#[span_fn]
-pub fn map_row_block(row: &sqlx::postgres::PgRow) -> Result<BlockMetadata> {
-    let opt_size: Option<i64> = row.try_get("payload_size")?;
-    Ok(BlockMetadata {
-        block_id: row.try_get("block_id")?,
-        stream_id: row.try_get("stream_id")?,
-        begin_time: parse_rfc3339(row.try_get("begin_time")?)?,
-        end_time: parse_rfc3339(row.try_get("end_time")?)?,
-        begin_ticks: row.try_get("begin_ticks")?,
-        end_ticks: row.try_get("end_ticks")?,
-        nb_objects: row.try_get("nb_objects")?,
-        payload_size: opt_size.unwrap_or(0),
     })
 }
 
@@ -480,34 +372,6 @@ pub async fn find_stream_blocks(
     .fetch_all(connection)
     .await
         .with_context(|| "find_stream_blocks")?;
-    let mut blocks = Vec::new();
-    for r in rows {
-        blocks.push(map_row_block(&r)?);
-    }
-    Ok(blocks)
-}
-
-#[span_fn]
-pub async fn find_stream_blocks_in_range(
-    connection: &mut sqlx::PgConnection,
-    stream_id: &str,
-    begin_time: &str,
-    end_time: &str,
-) -> Result<Vec<BlockMetadata>> {
-    let rows = sqlx::query(
-        "SELECT block_id, stream_id, begin_time, begin_ticks, end_time, end_ticks, nb_objects, payload_size
-         FROM blocks
-         WHERE stream_id = ?
-         AND begin_time <= ?
-         AND end_time >= ?
-         ORDER BY begin_time;",
-    )
-    .bind(stream_id)
-    .bind(end_time)
-    .bind(begin_time)
-    .fetch_all(connection)
-    .await
-    .with_context(|| "find_stream_blocks")?;
     let mut blocks = Vec::new();
     for r in rows {
         blocks.push(map_row_block(&r)?);
@@ -786,13 +650,11 @@ where
 }
 
 pub mod prelude {
-    pub use crate::alloc_sql_pool;
     pub use crate::fetch_block_payload;
     pub use crate::fetch_child_processes;
     pub use crate::find_block;
     pub use crate::find_block_process;
     pub use crate::find_block_stream;
-    pub use crate::find_process;
     pub use crate::find_process_blocks;
     pub use crate::find_process_log_entry;
     pub use crate::find_process_log_streams;
@@ -800,7 +662,6 @@ pub mod prelude {
     pub use crate::find_process_streams;
     pub use crate::find_process_thread_streams;
     pub use crate::find_stream_blocks;
-    pub use crate::find_stream_blocks_in_range;
     pub use crate::for_each_log_entry_in_block;
     pub use crate::for_each_process_in_tree;
     pub use crate::for_each_process_log_entry;

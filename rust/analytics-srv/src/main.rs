@@ -6,19 +6,6 @@
 //!  - `MICROMEGAS_SQL_CONNECTION_STRING` : postgresql server
 //!  - `MICROMEGAS_OBJECT_STORE_URI` : payloads, partitions
 
-// mod analytics_service;
-// mod auth;
-// mod cache;
-// mod call_tree;
-// mod cumulative_call_graph;
-// mod cumulative_call_graph_handler;
-// mod cumulative_call_graph_node;
-// mod lakehouse;
-// mod log_entry;
-// mod metrics;
-// mod scope;
-// mod thread_block_processor;
-
 use anyhow::{Context, Result};
 use axum::response::Response;
 use axum::routing::post;
@@ -92,6 +79,19 @@ async fn query_blocks_request(
     )
 }
 
+async fn query_spans_request(
+    Extension(service): Extension<AnalyticsService>,
+    body: bytes::Bytes,
+) -> Response {
+    info!("query_spans_request");
+    bytes_response(
+        service
+            .query_spans(body)
+            .await
+            .with_context(|| "query_spans"),
+    )
+}
+
 async fn serve_http(
     args: &Cli,
     lake: DataLakeConnection,
@@ -101,6 +101,7 @@ async fn serve_http(
         .route("/analytics/query_processes", post(query_processes_request))
         .route("/analytics/query_streams", post(query_streams_request))
         .route("/analytics/query_blocks", post(query_blocks_request))
+        .route("/analytics/query_spans", post(query_spans_request))
         .layer(Extension(service));
     let listener = tokio::net::TcpListener::bind(args.listen_endpoint)
         .await

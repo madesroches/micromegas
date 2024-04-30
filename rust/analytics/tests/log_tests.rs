@@ -127,7 +127,7 @@ fn test_parse_log_interops() {
         ciborium::from_reader(&encoded[..]).unwrap();
     let stream_info = make_stream_info(&stream);
     let mut nb_log_entries = 0;
-    let convert_ticks = ConvertTicks::from_ticks(0, 1);
+    let convert_ticks = ConvertTicks::from_meta_data(0, 0, 1);
     parse_block(&stream_info, &received_block.payload, |val| {
         if log_entry_from_value(&convert_ticks, &val)
             .unwrap()

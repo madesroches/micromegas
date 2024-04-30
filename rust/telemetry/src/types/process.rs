@@ -1,4 +1,4 @@
-#[derive(Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Process {
     pub process_id: String,
     pub exe: String,

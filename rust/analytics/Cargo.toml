@@ -24,6 +24,7 @@ datafusion.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sqlx.workspace = true
+xxhash-rust.workspace = true
 
 [dev-dependencies]
 micromegas-telemetry-sink.workspace = true

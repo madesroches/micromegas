@@ -20,6 +20,8 @@ use sqlx::Row;
 use sqlx::TypeInfo;
 use std::sync::Arc;
 
+use crate::arrow_utils::make_empty_record_batch;
+
 pub trait ColumnReader {
     fn extract_column_from_row(
         &self,
@@ -254,17 +256,9 @@ pub fn make_column_reader(column: &PgColumn) -> Result<Arc<dyn ColumnReader>> {
     }
 }
 
-fn make_empty_record_batch() -> Result<RecordBatch> {
-    let mut list_builder = ListBuilder::new(StructBuilder::from_fields([], 0));
-    let array = list_builder.finish();
-    Ok(as_struct_array(array.values())
-        .with_context(|| "casting list values to struct srray")?
-        .into())
-}
-
 pub fn rows_to_record_batch(rows: &[PgRow]) -> Result<RecordBatch> {
     if rows.is_empty() {
-        return make_empty_record_batch();
+        return Ok(make_empty_record_batch());
     }
 
     let mut field_readers = vec![];
