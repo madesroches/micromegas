@@ -30,16 +30,27 @@ pub struct CallTreeBuilder {
     stack: Vec<CallTreeNode>,
     scopes: ScopeHashMap,
     convert_ticks: ConvertTicks,
+    root_hash: u32,
 }
 
 impl CallTreeBuilder {
-    pub fn new(ts_begin_range: i64, ts_end_range: i64, convert_ticks: ConvertTicks) -> Self {
+    pub fn new(
+        ts_begin_range: i64,
+        ts_end_range: i64,
+        convert_ticks: ConvertTicks,
+        thread_name: String,
+    ) -> Self {
+        let thread_scope_desc = ScopeDesc::new(Arc::new(thread_name), Arc::new("".to_owned()), 0);
+        let mut scopes = ScopeHashMap::new();
+        let root_hash = thread_scope_desc.hash;
+        scopes.insert(root_hash, thread_scope_desc);
         Self {
             begin_range_ns: convert_ticks.ticks_to_nanoseconds(ts_begin_range),
             end_range_ns: convert_ticks.ticks_to_nanoseconds(ts_end_range),
             stack: Vec::new(),
-            scopes: ScopeHashMap::new(),
+            scopes,
             convert_ticks,
+            root_hash,
         }
     }
 
@@ -70,7 +81,7 @@ impl CallTreeBuilder {
             self.stack.push(top);
         } else {
             let new_root = CallTreeNode {
-                hash: 0,
+                hash: self.root_hash,
                 begin: self.begin_range_ns,
                 end: self.end_range_ns,
                 children: vec![scope],
@@ -109,7 +120,7 @@ impl ThreadBlockProcessor for CallTreeBuilder {
             if old_top.hash == hash {
                 old_top.end = time;
                 self.add_child_to_top(old_top);
-            } else if old_top.hash == 0 {
+            } else if old_top.hash == self.root_hash {
                 old_top.hash = hash;
                 old_top.end = time;
                 self.add_child_to_top(old_top);
@@ -139,7 +150,12 @@ pub async fn make_call_tree(
     convert_ticks: ConvertTicks,
     stream: &micromegas_telemetry::stream_info::StreamInfo,
 ) -> Result<CallTree> {
-    let mut builder = CallTreeBuilder::new(begin_ticks_query, end_ticks_query, convert_ticks);
+    let mut builder = CallTreeBuilder::new(
+        begin_ticks_query,
+        end_ticks_query,
+        convert_ticks,
+        stream.get_thread_name(),
+    );
     for block in blocks {
         parse_thread_block(blob_storage.clone(), stream, &block.block_id, &mut builder).await?;
     }
