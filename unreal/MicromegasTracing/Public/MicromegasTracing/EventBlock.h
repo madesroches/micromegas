@@ -68,6 +68,11 @@ namespace MicromegasTracing
 			return ObjectOffset;
 		}
 
+		bool IsEmpty()const
+		{
+			return Events.GetNbEvents() == 0;
+		}
+
 	private:
 		FString StreamId;
 		DualTime Begin;

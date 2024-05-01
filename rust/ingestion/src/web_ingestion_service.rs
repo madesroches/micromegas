@@ -43,7 +43,7 @@ impl WebIngestionService {
             .await
             .with_context(|| "Error writing block to blob storage")?;
 
-        sqlx::query("INSERT INTO blocks VALUES($1,$2,$3,$4,$5,$6,$7,$8, $9);")
+        sqlx::query("INSERT INTO blocks VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10);")
             .bind(block.block_id)
             .bind(block.stream_id)
             .bind(block.process_id)

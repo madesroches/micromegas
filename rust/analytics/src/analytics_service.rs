@@ -135,6 +135,7 @@ impl AnalyticsService {
                     end_time,
                     end_ticks,
                     nb_objects,
+                    object_offset,
                     payload_size
              FROM blocks
              WHERE stream_id = $1
