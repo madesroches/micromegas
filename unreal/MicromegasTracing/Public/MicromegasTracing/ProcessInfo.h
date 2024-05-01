@@ -3,6 +3,7 @@
 //  MicromegasTracing/ProcessInfo.h
 //
 #include "MicromegasTracing/DualTime.h"
+#include "Containers/Map.h"
 
 namespace MicromegasTracing
 {
@@ -17,5 +18,6 @@ namespace MicromegasTracing
 		FString CpuBrand;
 		uint64 TscFrequency;
 		DualTime StartTime;
+		TMap<FString,FString> Properties;
 	};
 } // namespace MicromegasTracing
