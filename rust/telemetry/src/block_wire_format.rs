@@ -18,6 +18,6 @@ pub struct Block {
     pub end_time: String,
     pub end_ticks: i64,
     pub payload: BlockPayload,
-	pub object_offset: i64,
+    pub object_offset: i64,
     pub nb_objects: i32,
 }

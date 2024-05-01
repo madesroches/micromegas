@@ -45,7 +45,8 @@ fn test_parse_span_interops() {
         time: 2,
     });
 
-    let mut block = stream.replace_block(Arc::new(ThreadBlock::new(1024, process_id, stream_id)));
+    let mut block =
+        stream.replace_block(Arc::new(ThreadBlock::new(1024, process_id, stream_id, 0)));
     Arc::get_mut(&mut block).unwrap().close();
     let encoded = block.encode_bin(&process_info).unwrap();
     let received_block: micromegas_telemetry::block_wire_format::Block =
