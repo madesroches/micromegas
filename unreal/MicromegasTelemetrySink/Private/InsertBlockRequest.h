@@ -64,6 +64,8 @@ inline TArray<uint8> FormatBlockRequest(const MicromegasTracing::ProcessInfo& pr
 		}
 		encoder.key("nb_objects");
 		encoder.int64_value(block.GetEvents().GetNbEvents());
+		encoder.key("object_offset");
+		encoder.int64_value(block.GetOffset());
 		encoder.end_object();
 	}
 	encoder.flush();

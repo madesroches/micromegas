@@ -78,6 +78,7 @@ async fn create_blocks_table(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> 
                   end_time TIMESTAMPTZ,
                   end_ticks BIGINT,
                   nb_objects INT,
+                  object_offset BIGINT,
                   payload_size BIGINT
                   );
          CREATE INDEX block_id on blocks(block_id);

@@ -52,6 +52,7 @@ impl WebIngestionService {
             .bind(end_time)
             .bind(block.end_ticks)
             .bind(block.nb_objects)
+            .bind(block.object_offset)
             .bind(payload_size as i64)
             .execute(&self.lake.db_pool)
             .await

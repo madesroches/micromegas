@@ -47,6 +47,7 @@ where
             buffer_size,
             process_id,
             stream_desc.stream_id.clone(),
+            0,
         ));
         let max_obj_size = block.hint_max_obj_size();
         Self {
@@ -80,6 +81,10 @@ where
 
     pub fn is_empty(&self) -> bool {
         self.current_block.len_bytes() == 0
+    }
+
+    pub fn get_block_ref(&self) -> &Block {
+        &self.current_block
     }
 
     pub fn get_events_mut(&mut self) -> &mut Block::Queue {

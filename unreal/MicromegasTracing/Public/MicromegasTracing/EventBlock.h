@@ -13,11 +13,12 @@ namespace MicromegasTracing
 	public:
 		typedef QueueT Queue;
 
-		EventBlock(const FString& streamId, const DualTime& begin, size_t bufferSize)
+		EventBlock(const FString& streamId, const DualTime& begin, size_t bufferSize, size_t offset)
 			: StreamId(streamId)
 			, Begin(begin)
 			, Events(bufferSize)
 			, Capacity(bufferSize)
+			, ObjectOffset(offset)
 		{
 		}
 
@@ -62,11 +63,17 @@ namespace MicromegasTracing
 			return End;
 		}
 
+		size_t GetOffset()const
+		{
+			return ObjectOffset;
+		}
+
 	private:
 		FString StreamId;
 		DualTime Begin;
 		DualTime End;
 		QueueT Events;
 		size_t Capacity;
+		size_t ObjectOffset;
 	};
 } // namespace MicromegasTracing

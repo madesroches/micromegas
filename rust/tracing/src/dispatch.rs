@@ -430,10 +430,13 @@ impl Dispatch {
             return;
         }
         let stream_id = metrics_stream.stream_id().to_string();
+        let next_offset = metrics_stream.get_block_ref().object_offset()
+            + metrics_stream.get_block_ref().nb_objects();
         let mut old_event_block = metrics_stream.replace_block(Arc::new(MetricsBlock::new(
             self.metrics_buffer_size,
             self.process_id.clone(),
             stream_id,
+            next_offset,
         )));
         assert!(!metrics_stream.is_full());
         Arc::get_mut(&mut old_event_block).unwrap().close();
@@ -505,10 +508,13 @@ impl Dispatch {
             return;
         }
         let stream_id = log_stream.stream_id().to_string();
+        let next_offset =
+            log_stream.get_block_ref().object_offset() + log_stream.get_block_ref().nb_objects();
         let mut old_event_block = log_stream.replace_block(Arc::new(LogBlock::new(
             self.logs_buffer_size,
             self.process_id.clone(),
             stream_id,
+            next_offset,
         )));
         assert!(!log_stream.is_full());
         Arc::get_mut(&mut old_event_block).unwrap().close();
@@ -520,10 +526,13 @@ impl Dispatch {
         if stream.is_empty() {
             return;
         }
+        let next_offset =
+            stream.get_block_ref().object_offset() + stream.get_block_ref().nb_objects();
         let mut old_block = stream.replace_block(Arc::new(ThreadBlock::new(
             self.threads_buffer_size,
             self.process_id.clone(),
             stream.stream_id().to_string(),
+            next_offset,
         )));
         assert!(!stream.is_full());
         Arc::get_mut(&mut old_block).unwrap().close();

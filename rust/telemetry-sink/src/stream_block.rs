@@ -41,6 +41,7 @@ where
         end_ticks: end.ticks - process_info.start_ticks,
         payload,
         nb_objects: block.nb_objects() as i32,
+        object_offset: block.object_offset() as i64,
     };
     encode_cbor(&block)
 }
