@@ -39,6 +39,7 @@ def test_find_cpu_stream():
     df = req("query_streams", args={"tag_filter": "cpu"})
     print(df)
 
+
 def get_cpu_streams_with_data():
     streams_df = req("query_streams", args={"tag_filter": "cpu"})
     streams_stats = {}
@@ -56,17 +57,19 @@ def get_cpu_streams_with_data():
     streams_stats = streams_stats[streams_stats["nb_events"] > 0]
     return streams_stats
 
+
 def test_find_cpu_blocks():
     streams_stats = get_cpu_streams_with_data()
     print(streams_stats.sort_values("nb_events", ascending=False))
+
 
 def get_cpu_stream_with_most_events():
     streams_stats = get_cpu_streams_with_data()
     streams_stats = streams_stats.sort_values("nb_events", ascending=False)
     return streams_stats.iloc[0].name
 
+
 def test_spans():
     stream_id = get_cpu_stream_with_most_events()
     df = req("query_spans", args={"stream_id": stream_id})
     print(df)
-    
