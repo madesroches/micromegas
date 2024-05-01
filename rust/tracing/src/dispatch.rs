@@ -559,5 +559,6 @@ pub fn make_process_info(process_id: &str, parent_process_id: &str) -> ProcessIn
         start_time,
         start_ticks,
         parent_process_id: parent_process_id.to_owned(),
+        properties: HashMap::new(),
     }
 }

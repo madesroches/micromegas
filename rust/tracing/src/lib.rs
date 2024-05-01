@@ -48,6 +48,8 @@
 // crate-specific lint exceptions:
 #![allow(unsafe_code, clippy::missing_errors_doc, clippy::inline_always)]
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProcessInfo {
@@ -63,6 +65,7 @@ pub struct ProcessInfo {
     pub start_time: String,
     pub start_ticks: i64,
     pub parent_process_id: String,
+    pub properties: HashMap<String, String>,
 }
 
 pub mod dispatch;

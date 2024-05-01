@@ -91,7 +91,7 @@ impl WebIngestionService {
         let start_time = DateTime::<FixedOffset>::parse_from_rfc3339(&process_info.start_time)
             .with_context(|| "parsing start_time")?;
         let insert_time = sqlx::types::chrono::Utc::now();
-        sqlx::query("INSERT INTO processes VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12);")
+        sqlx::query("INSERT INTO processes VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13);")
             .bind(process_info.process_id)
             .bind(process_info.exe)
             .bind(process_info.username)
@@ -104,6 +104,7 @@ impl WebIngestionService {
             .bind(process_info.start_ticks)
             .bind(insert_time)
             .bind(process_info.parent_process_id)
+            .bind(make_properties(&process_info.properties))
             .execute(&self.lake.db_pool)
             .await
             .with_context(|| "executing sql insert into processes")?;

@@ -71,7 +71,8 @@ impl AnalyticsService {
                     start_time,
                     start_ticks,
                     insert_time,
-                    parent_process_id
+                    parent_process_id,
+                    properties
              FROM processes
              WHERE start_time >= $1
              AND start_time < $2

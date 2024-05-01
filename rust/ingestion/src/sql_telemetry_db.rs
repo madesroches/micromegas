@@ -35,7 +35,9 @@ async fn create_processes_table(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) 
                   start_time TIMESTAMPTZ,
                   start_ticks BIGINT,
                   insert_time TIMESTAMPTZ,
-                  parent_process_id VARCHAR(36));
+                  parent_process_id VARCHAR(36),
+                  properties micromegas_property[]
+                  );
          CREATE INDEX process_id on processes(process_id);
          CREATE INDEX parent_process_id on processes(parent_process_id);
          CREATE INDEX process_start_time on processes(start_time);";
