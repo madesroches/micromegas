@@ -27,7 +27,7 @@ def req(url_tail, args={}):
 def test_process_list():
     df = req("query_processes")
     df = df[["process_id", "exe", "start_time", "properties"]]
-    print(tabulate.tabulate(df, headers="keys"))
+    print(df)
 
 
 def test_list_streams():
