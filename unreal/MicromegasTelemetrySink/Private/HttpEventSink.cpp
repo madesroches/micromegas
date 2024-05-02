@@ -64,6 +64,11 @@ HttpEventSink::~HttpEventSink()
 {
 }
 
+void HttpEventSink::OnAuthUpdated()
+{
+	WakeupThread->Trigger();
+}
+
 void HttpEventSink::OnStartup(const MicromegasTracing::ProcessInfoPtr& processInfo)
 {
 	FPlatformAtomics::InterlockedIncrement(&QueueSize);
@@ -161,19 +166,23 @@ uint32 HttpEventSink::Run()
 {
 	while (true)
 	{
-		Callback c;
-		while (Queue.Dequeue(c))
+		if (Auth->IsReady())
 		{
-			int32 newQueueSize = FPlatformAtomics::InterlockedDecrement(&QueueSize);
-			MICROMEGAS_IMETRIC(TEXT("MicromegasTelemetrySink"), MicromegasTracing::Verbosity::Min, TEXT("QueueSize"), TEXT("count"), newQueueSize);
-			c();
+			Callback c;
+			while (Queue.Dequeue(c))
+			{
+				int32 newQueueSize = FPlatformAtomics::InterlockedDecrement(&QueueSize);
+				MICROMEGAS_IMETRIC(TEXT("MicromegasTelemetrySink"), MicromegasTracing::Verbosity::Min, TEXT("QueueSize"), TEXT("count"), newQueueSize);
+				c();
+			}
 		}
 
 		if (RequestShutdown)
 		{
 			break;
 		}
-		WakeupThread->Wait();
+		const uint32 timeout_ms = 60 * 1000;
+		WakeupThread->Wait(timeout_ms);
 	}
 	return 0;
 }
@@ -216,7 +225,7 @@ FString GetDistro()
 	return FString::Printf(TEXT("%s %s"), ANSI_TO_TCHAR(FPlatformProperties::PlatformName()), *FPlatformMisc::GetOSVersion());
 }
 
-void InitHttpEventSink(const FString& BaseUrl, const SharedTelemetryAuthenticator& Auth)
+std::shared_ptr<MicromegasTracing::EventSink> InitHttpEventSink(const FString& BaseUrl, const SharedTelemetryAuthenticator& Auth)
 {
 	using namespace MicromegasTracing;
 	UE_LOG(LogMicromegasTelemetrySink, Log, TEXT("Initializing Remote Telemetry Sink"));
@@ -246,4 +255,5 @@ void InitHttpEventSink(const FString& BaseUrl, const SharedTelemetryAuthenticato
 	Dispatch::Init(&CreateGuid, process, sink, LOG_BUFFER_SIZE, METRICS_BUFFER_SIZE, THREAD_BUFFER_SIZE);
 	UE_LOG(LogMicromegasTelemetrySink, Log, TEXT("Initializing Legion Telemetry for process %s"), *process->ProcessId);
 	MICROMEGAS_LOG_STATIC(TEXT("MicromegasTelemetrySink"), LogLevel::Info, TEXT("Telemetry enabled"));
+	return sink;
 }

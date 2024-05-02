@@ -3,10 +3,10 @@
 //
 //  MicromegasTelemetrySink/MicromegasTelemetrySinkModule.h
 //
-
+#include "MicromegasTelemetrySink/TelemetryAuthenticator.h"
+#include "MicromegasTracing/Fwd.h"
 #include "Modules/ModuleInterface.h"
 #include "Modules/ModuleManager.h"
-#include "MicromegasTelemetrySink/TelemetryAuthenticator.h"
 
 
 class MICROMEGASTELEMETRYSINK_API IMicromegasTelemetrySinkModule : public IModuleInterface
@@ -29,5 +29,5 @@ public:
 		return FModuleManager::GetModulePtr<IMicromegasTelemetrySinkModule>(GetModuleName());
 	}
 
-	virtual void InitTelemetry( const FString& BaseUrl, const SharedTelemetryAuthenticator& Auth ) = 0;
+	virtual std::shared_ptr<MicromegasTracing::EventSink> InitTelemetry( const FString& BaseUrl, const SharedTelemetryAuthenticator& Auth ) = 0;
 };
