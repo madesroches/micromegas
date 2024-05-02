@@ -1,6 +1,6 @@
 #pragma once
 //
-//  MicromegasTelemetrySink/Remote.h
+//  MicromegasTelemetrySink/HttpEventSink.h
 //
 #include "Containers/Queue.h"
 #include "Containers/UnrealString.h"
@@ -23,15 +23,16 @@ public:
 	//
 	//  MicromegasTracing::EventSink
 	//
-	virtual void OnStartup(const MicromegasTracing::ProcessInfoPtr& processInfo);
-	virtual void OnShutdown();
-	virtual void OnInitLogStream(const MicromegasTracing::LogStreamPtr& stream);
-	virtual void OnInitMetricStream(const MicromegasTracing::MetricStreamPtr& stream);
-	virtual void OnInitThreadStream(MicromegasTracing::ThreadStream* stream);
-	virtual void OnProcessLogBlock(const MicromegasTracing::LogBlockPtr& block);
-	virtual void OnProcessMetricBlock(const MicromegasTracing::MetricsBlockPtr& block);
-	virtual void OnProcessThreadBlock(const MicromegasTracing::ThreadBlockPtr& block);
-	virtual bool IsBusy();
+	virtual void OnStartup(const MicromegasTracing::ProcessInfoPtr& processInfo) override;
+	virtual void OnShutdown() override;
+	virtual void OnInitLogStream(const MicromegasTracing::LogStreamPtr& stream) override;
+	virtual void OnInitMetricStream(const MicromegasTracing::MetricStreamPtr& stream) override;
+	virtual void OnInitThreadStream(MicromegasTracing::ThreadStream* stream) override;
+	virtual void OnProcessLogBlock(const MicromegasTracing::LogBlockPtr& block) override;
+	virtual void OnProcessMetricBlock(const MicromegasTracing::MetricsBlockPtr& block) override;
+	virtual void OnProcessThreadBlock(const MicromegasTracing::ThreadBlockPtr& block) override;
+	virtual bool IsBusy() override;
+	virtual void OnAuthUpdated() override;
 
 	//
 	//  FRunnable
@@ -55,4 +56,4 @@ private:
 	TUniquePtr<FlushMonitor> Flusher;
 };
 
-MICROMEGASTELEMETRYSINK_API void InitHttpEventSink(const FString& BaseUrl, const SharedTelemetryAuthenticator& Auth);
+MICROMEGASTELEMETRYSINK_API std::shared_ptr<MicromegasTracing::EventSink> InitHttpEventSink(const FString& BaseUrl, const SharedTelemetryAuthenticator& Auth);

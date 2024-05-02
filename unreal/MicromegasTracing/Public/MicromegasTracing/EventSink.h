@@ -23,5 +23,6 @@ namespace MicromegasTracing
 		virtual void OnProcessThreadBlock(const ThreadBlockPtr& block) = 0;
 
 		virtual bool IsBusy() = 0;
+		virtual void OnAuthUpdated() = 0;
 	};
 } // namespace MicromegasTracing
