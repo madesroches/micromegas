@@ -7,15 +7,19 @@ use crate::event::TracingBlock;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct StreamDesc {
-    pub stream_id: String,
-    pub process_id: String,
+    pub stream_id: uuid::Uuid,
+    pub process_id: uuid::Uuid,
     pub tags: Vec<String>,
     pub properties: HashMap<String, String>,
 }
 
 impl StreamDesc {
-    pub fn new(process_id: String, tags: &[String], properties: HashMap<String, String>) -> Self {
-        let stream_id = uuid::Uuid::new_v4().to_string();
+    pub fn new(
+        process_id: uuid::Uuid,
+        tags: &[String],
+        properties: HashMap<String, String>,
+    ) -> Self {
+        let stream_id = uuid::Uuid::new_v4();
         Self {
             stream_id,
             process_id,
@@ -38,15 +42,15 @@ where
 {
     pub fn new(
         buffer_size: usize,
-        process_id: String,
+        process_id: uuid::Uuid,
         tags: &[String],
         properties: HashMap<String, String>,
     ) -> Self {
-        let stream_desc = Arc::new(StreamDesc::new(process_id.clone(), tags, properties));
+        let stream_desc = Arc::new(StreamDesc::new(process_id, tags, properties));
         let block = Arc::new(Block::new(
             buffer_size,
             process_id,
-            stream_desc.stream_id.clone(),
+            stream_desc.stream_id,
             0,
         ));
         let max_obj_size = block.hint_max_obj_size();
@@ -57,8 +61,8 @@ where
         }
     }
 
-    pub fn stream_id(&self) -> &str {
-        self.stream_desc.stream_id.as_str()
+    pub fn stream_id(&self) -> uuid::Uuid {
+        self.stream_desc.stream_id
     }
 
     pub fn set_full(&mut self) {
@@ -92,8 +96,8 @@ where
         Arc::get_mut(&mut self.current_block).unwrap().events_mut()
     }
 
-    pub fn process_id(&self) -> &str {
-        &self.stream_desc.process_id
+    pub fn process_id(&self) -> uuid::Uuid {
+        self.stream_desc.process_id
     }
 
     pub fn tags(&self) -> &[String] {

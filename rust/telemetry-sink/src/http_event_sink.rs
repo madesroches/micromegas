@@ -1,7 +1,6 @@
 use anyhow::{Context, Result};
 use micromegas_telemetry::stream_info::StreamInfo;
 use micromegas_telemetry::wire_format::encode_cbor;
-use micromegas_tracing::ProcessInfo;
 use micromegas_tracing::{
     event::EventSink,
     logs::{LogBlock, LogMetadata, LogStream},
@@ -314,7 +313,7 @@ impl HttpEventSink {
 }
 
 impl EventSink for HttpEventSink {
-    fn on_startup(&self, process_info: Arc<micromegas_tracing::ProcessInfo>) {
+    fn on_startup(&self, process_info: Arc<ProcessInfo>) {
         self.send(SinkEvent::Startup(process_info));
     }
 

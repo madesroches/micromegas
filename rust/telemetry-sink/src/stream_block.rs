@@ -4,8 +4,8 @@ use micromegas_tracing::{
     event::{EventBlock, ExtractDeps, TracingBlock},
     logs::LogBlock,
     metrics::MetricsBlock,
+    prelude::*,
     spans::ThreadBlock,
-    ProcessInfo,
 };
 use micromegas_transit::HeterogeneousQueue;
 
@@ -18,7 +18,7 @@ where
     Q: HeterogeneousQueue + ExtractDeps,
     <Q as ExtractDeps>::DepsQueue: HeterogeneousQueue,
 {
-    let block_id = uuid::Uuid::new_v4().to_string();
+    let block_id = uuid::Uuid::new_v4();
     let end = block.end.as_ref().unwrap();
 
     let payload = block_wire_format::BlockPayload {
@@ -28,8 +28,8 @@ where
 
     let block = block_wire_format::Block {
         block_id,
-        stream_id: block.stream_id.clone(),
-        process_id: block.process_id.clone(),
+        stream_id: block.stream_id,
+        process_id: block.process_id,
         begin_time: block
             .begin
             .time

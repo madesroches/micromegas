@@ -1,9 +1,9 @@
-use crate::DualTime;
+use crate::prelude::*;
 
 #[derive(Debug)]
 pub struct EventBlock<Q> {
-    pub process_id: String,
-    pub stream_id: String,
+    pub process_id: uuid::Uuid,
+    pub stream_id: uuid::Uuid,
     pub begin: DualTime,
     pub events: Q,
     pub end: Option<DualTime>,
@@ -27,8 +27,12 @@ pub trait ExtractDeps {
 pub trait TracingBlock {
     type Queue: ExtractDeps;
 
-    fn new(buffer_size: usize, process_id: String, stream_id: String, object_offset: usize)
-        -> Self;
+    fn new(
+        buffer_size: usize,
+        process_id: uuid::Uuid,
+        stream_id: uuid::Uuid,
+        object_offset: usize,
+    ) -> Self;
     fn len_bytes(&self) -> usize;
     fn capacity_bytes(&self) -> usize;
     fn nb_objects(&self) -> usize;
@@ -45,7 +49,12 @@ where
     Q: micromegas_transit::HeterogeneousQueue + ExtractDeps,
 {
     type Queue = Q;
-    fn new(buffer_size: usize, process_id: String, stream_id: String, event_offset: usize) -> Self {
+    fn new(
+        buffer_size: usize,
+        process_id: uuid::Uuid,
+        stream_id: uuid::Uuid,
+        event_offset: usize,
+    ) -> Self {
         Self {
             process_id,
             stream_id,

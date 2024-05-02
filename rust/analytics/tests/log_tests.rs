@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 #[test]
 fn test_log_interop_metadata() {
-    let stream = LogStream::new(1024, String::from("bogus_process_id"), &[], HashMap::new());
+    let stream = LogStream::new(1024, uuid::Uuid::new_v4(), &[], HashMap::new());
     let stream_proto = make_stream_info(&stream);
     let obj_meta = &stream_proto.objects_metadata;
     obj_meta
@@ -36,10 +36,10 @@ fn test_log_interop_metadata() {
 #[test]
 fn test_log_encode_static() {
     let _telemetry_guard = TelemetryGuard::new();
-    let process_id = String::from("bogus_process_id");
-    let process_info = make_process_info(&process_id, "bogus_parent_process");
+    let process_id = uuid::Uuid::new_v4();
+    let process_info = make_process_info(process_id, Some(uuid::Uuid::new_v4()));
     let mut stream = LogStream::new(1024, process_id.clone(), &[], HashMap::new());
-    let stream_id = stream.stream_id().to_string();
+    let stream_id = stream.stream_id();
     stream.get_events_mut().push(LogStaticStrInteropEvent {
         time: 1,
         level: 2,
@@ -70,10 +70,10 @@ fn test_log_encode_static() {
 #[test]
 fn test_log_encode_dynamic() {
     let _telemetry_guard = TelemetryGuard::new();
-    let process_id = String::from("bogus_process_id");
-    let process_info = make_process_info(&process_id, "bogus_parent_process");
+    let process_id = uuid::Uuid::new_v4();
+    let process_info = make_process_info(process_id, Some(uuid::Uuid::new_v4()));
     let mut stream = LogStream::new(1024, process_id.clone(), &[], HashMap::new());
-    let stream_id = stream.stream_id().to_string();
+    let stream_id = stream.stream_id();
     stream.get_events_mut().push(LogStringInteropEvent {
         time: 1,
         level: 2,
@@ -104,10 +104,10 @@ fn test_log_encode_dynamic() {
 #[test]
 fn test_parse_log_interops() {
     let _telemetry_guard = TelemetryGuard::new();
-    let process_id = String::from("bogus_process_id");
-    let process_info = make_process_info(&process_id, "bogus_parent_process");
-    let mut stream = LogStream::new(1024, process_id.clone(), &[], HashMap::new());
-    let stream_id = stream.stream_id().to_string();
+    let process_id = uuid::Uuid::new_v4();
+    let process_info = make_process_info(process_id, Some(uuid::Uuid::new_v4()));
+    let mut stream = LogStream::new(1024, process_id, &[], HashMap::new());
+    let stream_id = stream.stream_id();
     stream.get_events_mut().push(LogStaticStrInteropEvent {
         time: 1,
         level: 2,

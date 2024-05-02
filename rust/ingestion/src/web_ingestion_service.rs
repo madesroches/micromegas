@@ -7,7 +7,6 @@ use micromegas_telemetry::block_wire_format;
 use micromegas_telemetry::stream_info::StreamInfo;
 use micromegas_telemetry::wire_format::encode_cbor;
 use micromegas_tracing::prelude::*;
-use micromegas_tracing::ProcessInfo;
 
 #[derive(Clone)]
 pub struct WebIngestionService {
@@ -44,9 +43,9 @@ impl WebIngestionService {
             .with_context(|| "Error writing block to blob storage")?;
 
         sqlx::query("INSERT INTO blocks VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10);")
-            .bind(block.block_id)
-            .bind(block.stream_id)
-            .bind(block.process_id)
+            .bind(block_id)
+            .bind(stream_id)
+            .bind(process_id)
             .bind(begin_time)
             .bind(block.begin_ticks)
             .bind(end_time)
@@ -88,9 +87,6 @@ impl WebIngestionService {
         let process_info: ProcessInfo =
             ciborium::from_reader(body.reader()).with_context(|| "parsing ProcessInfo")?;
 
-        use sqlx::types::chrono::{DateTime, FixedOffset};
-        let start_time = DateTime::<FixedOffset>::parse_from_rfc3339(&process_info.start_time)
-            .with_context(|| "parsing start_time")?;
         let insert_time = sqlx::types::chrono::Utc::now();
         sqlx::query("INSERT INTO processes VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13);")
             .bind(process_info.process_id)
@@ -101,7 +97,7 @@ impl WebIngestionService {
             .bind(process_info.distro)
             .bind(process_info.cpu_brand)
             .bind(process_info.tsc_frequency)
-            .bind(start_time)
+            .bind(process_info.start_time)
             .bind(process_info.start_ticks)
             .bind(insert_time)
             .bind(process_info.parent_process_id)

@@ -55,7 +55,7 @@ raw-cpuid = "10.2.0"
 reqwest = {version = "0.11.24", features = ["json"]}
 serde = { version = "1.0", features = ["derive"]}
 serde_json = "1.0"
-sqlx = { version = "0.7.4", features = ["runtime-tokio", "postgres", "chrono"] }
+sqlx = { version = "0.7.4", features = ["runtime-tokio", "postgres", "chrono", "uuid"] }
 syn = { version = "1.0", features = ["extra-traits", "full"] }
 thiserror = "1.0"
 thread-id = "4.0"
@@ -65,6 +65,6 @@ tokio-retry = "0.3"
 tower = "0.4"
 tower-http = { version = "0.5.2", features = ["limit"] }
 url = "2.5.0"
-uuid = { version = "1.0", features = ["v4"] }
+uuid = { version = "1.8", features = ["v4", "serde"] }
 whoami = "1.2"
 xxhash-rust = { version = "0.8.10", features = ["xxh32"] }

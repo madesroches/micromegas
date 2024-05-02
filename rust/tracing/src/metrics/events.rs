@@ -1,4 +1,4 @@
-use crate::Verbosity;
+use crate::prelude::*;
 use micromegas_transit::prelude::*;
 
 #[derive(Debug)]

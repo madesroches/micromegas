@@ -22,7 +22,6 @@ use micromegas_telemetry::blob_storage::BlobStorage;
 use micromegas_telemetry::compression::decompress;
 use micromegas_telemetry::stream_info::StreamInfo;
 use micromegas_telemetry::types::block::BlockMetadata;
-use micromegas_telemetry::types::process::Process;
 use micromegas_tracing::prelude::*;
 use micromegas_transit::{parse_object_buffer, read_dependencies, UserDefinedType, Value};
 use sqlx::Row;
@@ -33,7 +32,7 @@ use time::ConvertTicks;
 pub async fn processes_by_name_substring(
     connection: &mut sqlx::PgConnection,
     filter: &str,
-) -> Result<Vec<Process>> {
+) -> Result<Vec<ProcessInfo>> {
     let mut processes = Vec::new();
     let rows = sqlx::query(
         "SELECT process_id, exe, username, realname, computer, distro, cpu_brand, tsc_frequency, start_time, start_ticks, parent_process_id
@@ -55,7 +54,7 @@ pub async fn processes_by_name_substring(
 pub async fn find_block_process(
     connection: &mut sqlx::PgConnection,
     block_id: &str,
-) -> Result<Process> {
+) -> Result<ProcessInfo> {
     let row = sqlx::query(
         "SELECT processes.process_id AS process_id, exe, username, realname, computer, distro, cpu_brand, tsc_frequency, start_time, start_ticks, parent_process_id
          FROM processes, streams, blocks
@@ -73,7 +72,7 @@ pub async fn find_block_process(
 pub async fn list_recent_processes(
     connection: &mut sqlx::PgConnection,
     parent_process_id: Option<&str>,
-) -> Result<Vec<Process>> {
+) -> Result<Vec<ProcessInfo>> {
     let mut processes = Vec::new();
     // like ?!
     let rows = sqlx::query(
@@ -109,7 +108,7 @@ pub async fn list_recent_processes(
 pub async fn search_processes(
     connection: &mut sqlx::PgConnection,
     keyword: &str,
-) -> Result<Vec<Process>> {
+) -> Result<Vec<ProcessInfo>> {
     let mut processes = Vec::new();
     let rows = sqlx::query(
         "SELECT process_id, 
@@ -144,8 +143,8 @@ pub async fn search_processes(
 #[span_fn]
 pub async fn fetch_child_processes(
     connection: &mut sqlx::PgConnection,
-    parent_process_id: &str,
-) -> Result<Vec<Process>> {
+    parent_process_id: &sqlx::types::Uuid,
+) -> Result<Vec<ProcessInfo>> {
     let mut processes = Vec::new();
     let rows = sqlx::query(
         "SELECT process_id, exe, username, realname, computer, distro, cpu_brand, tsc_frequency, start_time, start_ticks, parent_process_id
@@ -166,7 +165,7 @@ pub async fn fetch_child_processes(
 #[span_fn]
 pub async fn find_process_streams_tagged(
     connection: &mut sqlx::PgConnection,
-    process_id: &str,
+    process_id: &sqlx::types::Uuid,
     tag: &str,
 ) -> Result<Vec<StreamInfo>> {
     let rows = sqlx::query(
@@ -183,7 +182,7 @@ pub async fn find_process_streams_tagged(
     .with_context(|| "fetch_all in find_process_streams_tagged")?;
     let mut res = Vec::new();
     for r in rows {
-        let stream_id: String = r.get("stream_id");
+        let stream_id: sqlx::types::Uuid = r.get("stream_id");
         let dependencies_metadata_buffer: Vec<u8> = r.get("dependencies_metadata");
         let dependencies_metadata: Vec<UserDefinedType> =
             ciborium::from_reader(&dependencies_metadata_buffer[..])
@@ -225,7 +224,7 @@ pub async fn find_process_streams(
     .with_context(|| "fetch_all in find_process_streams")?;
     let mut res = Vec::new();
     for r in rows {
-        let stream_id: String = r.get("stream_id");
+        let stream_id: sqlx::types::Uuid = r.get("stream_id");
         let dependencies_metadata_buffer: Vec<u8> = r.get("dependencies_metadata");
         let dependencies_metadata: Vec<UserDefinedType> =
             ciborium::from_reader(&dependencies_metadata_buffer[..])
@@ -280,7 +279,7 @@ pub async fn find_process_blocks(
 #[span_fn]
 pub async fn find_process_log_streams(
     connection: &mut sqlx::PgConnection,
-    process_id: &str,
+    process_id: &sqlx::types::Uuid,
 ) -> Result<Vec<StreamInfo>> {
     find_process_streams_tagged(connection, process_id, "log").await
 }
@@ -288,7 +287,7 @@ pub async fn find_process_log_streams(
 #[span_fn]
 pub async fn find_process_thread_streams(
     connection: &mut sqlx::PgConnection,
-    process_id: &str,
+    process_id: &sqlx::types::Uuid,
 ) -> Result<Vec<StreamInfo>> {
     find_process_streams_tagged(connection, process_id, "cpu").await
 }
@@ -296,7 +295,7 @@ pub async fn find_process_thread_streams(
 #[span_fn]
 pub async fn find_process_metrics_streams(
     connection: &mut sqlx::PgConnection,
-    process_id: &str,
+    process_id: &sqlx::types::Uuid,
 ) -> Result<Vec<StreamInfo>> {
     find_process_streams_tagged(connection, process_id, "metrics").await
 }
@@ -360,7 +359,7 @@ pub async fn find_block(
 #[span_fn]
 pub async fn find_stream_blocks(
     connection: &mut sqlx::PgConnection,
-    stream_id: &str,
+    stream_id: &sqlx::types::Uuid,
 ) -> Result<Vec<BlockMetadata>> {
     let rows = sqlx::query(
         "SELECT block_id, stream_id, begin_time, begin_ticks, end_time, end_ticks, nb_objects, payload_size
@@ -382,9 +381,9 @@ pub async fn find_stream_blocks(
 #[span_fn]
 pub async fn fetch_block_payload(
     blob_storage: Arc<BlobStorage>,
-    process_id: &str,
-    stream_id: &str,
-    block_id: &str,
+    process_id: sqlx::types::Uuid,
+    stream_id: sqlx::types::Uuid,
+    block_id: sqlx::types::Uuid,
 ) -> Result<micromegas_telemetry::block_wire_format::BlockPayload> {
     let obj_path = format!("blobs/{process_id}/{stream_id}/{block_id}");
     let buffer: Vec<u8> = blob_storage
@@ -519,7 +518,7 @@ pub fn log_entry_from_value(convert_ticks: &ConvertTicks, val: &Value) -> Result
 pub async fn find_process_log_entry<Res, Predicate: FnMut(LogEntry) -> Option<Res>>(
     connection: &mut sqlx::PgConnection,
     blob_storage: Arc<BlobStorage>,
-    process: &Process,
+    process: &ProcessInfo,
     mut pred: Predicate,
 ) -> Result<Option<Res>> {
     let mut found_entry = None;
@@ -528,9 +527,9 @@ pub async fn find_process_log_entry<Res, Predicate: FnMut(LogEntry) -> Option<Re
         for b in find_stream_blocks(connection, &stream.stream_id).await? {
             let payload = fetch_block_payload(
                 blob_storage.clone(),
-                &stream.process_id,
-                &stream.stream_id,
-                &b.block_id,
+                stream.process_id,
+                stream.stream_id,
+                b.block_id,
             )
             .await?;
             parse_block(&stream, &payload, |val| {
@@ -564,9 +563,9 @@ pub async fn for_each_log_entry_in_block<Predicate: FnMut(LogEntry) -> bool>(
 ) -> Result<()> {
     let payload = fetch_block_payload(
         blob_storage,
-        &stream.process_id,
-        &stream.stream_id,
-        &block.block_id,
+        stream.process_id,
+        stream.stream_id,
+        block.block_id,
     )
     .await?;
     parse_block(stream, &payload, |val| {
@@ -587,7 +586,7 @@ pub async fn for_each_log_entry_in_block<Predicate: FnMut(LogEntry) -> bool>(
 pub async fn for_each_process_log_entry<ProcessLogEntry: FnMut(LogEntry)>(
     connection: &mut sqlx::PgConnection,
     blob_storage: Arc<BlobStorage>,
-    process: &Process,
+    process: &ProcessInfo,
     mut process_log_entry: ProcessLogEntry,
 ) -> Result<()> {
     find_process_log_entry(connection, blob_storage, process, |log_entry| {
@@ -603,16 +602,16 @@ pub async fn for_each_process_log_entry<ProcessLogEntry: FnMut(LogEntry)>(
 pub async fn for_each_process_metric<ProcessMetric: FnMut(Arc<micromegas_transit::Object>)>(
     connection: &mut sqlx::PgConnection,
     blob_storage: Arc<BlobStorage>,
-    process_id: &str,
+    process_id: &sqlx::types::Uuid,
     mut process_metric: ProcessMetric,
 ) -> Result<()> {
     for stream in find_process_metrics_streams(connection, process_id).await? {
         for block in find_stream_blocks(connection, &stream.stream_id).await? {
             let payload = fetch_block_payload(
                 blob_storage.clone(),
-                &stream.process_id,
-                &stream.stream_id,
-                &block.block_id,
+                stream.process_id,
+                stream.stream_id,
+                block.block_id,
             )
             .await?;
             parse_block(&stream, &payload, |val| {
@@ -630,12 +629,12 @@ pub async fn for_each_process_metric<ProcessMetric: FnMut(Arc<micromegas_transit
 #[span_fn]
 pub async fn for_each_process_in_tree<F>(
     pool: &sqlx::PgPool,
-    root: &Process,
+    root: &ProcessInfo,
     rec_level: u16,
     fun: F,
 ) -> Result<()>
 where
-    F: Fn(&Process, u16) + std::marker::Send + Clone,
+    F: Fn(&ProcessInfo, u16) + std::marker::Send + Clone,
 {
     fun(root, rec_level);
     let mut connection = pool.acquire().await?;

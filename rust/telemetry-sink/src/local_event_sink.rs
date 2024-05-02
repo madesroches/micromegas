@@ -2,8 +2,8 @@ use micromegas_tracing::{
     event::EventSink,
     logs::{LogBlock, LogMetadata, LogStream},
     metrics::{MetricsBlock, MetricsStream},
+    prelude::*,
     spans::{ThreadBlock, ThreadStream},
-    Level, ProcessInfo,
 };
 use std::{fmt, sync::Arc};
 

@@ -3,8 +3,8 @@ use micromegas_tracing::{
     event::{BoxedEventSink, EventSink},
     logs::{LogBlock, LogMetadata, LogStream, FILTER_LEVEL_UNSET_VALUE},
     metrics::{MetricsBlock, MetricsStream},
+    prelude::*,
     spans::{ThreadBlock, ThreadStream},
-    Level, LevelFilter, ProcessInfo,
 };
 use std::{
     fmt,
@@ -24,7 +24,7 @@ impl CompositeSink {
         interop_max_level_override: Option<LevelFilter>,
     ) -> Self {
         if let Some(max_level) = max_level_override {
-            micromegas_tracing::set_max_level(max_level);
+            micromegas_tracing::levels::set_max_level(max_level);
         } else {
             let mut max_level = LevelFilter::Off;
             for (_, level_filter) in &target_max_level {
@@ -33,12 +33,12 @@ impl CompositeSink {
             for (level_filter, _) in &sinks {
                 max_level = max_level.max(*level_filter);
             }
-            micromegas_tracing::set_max_level(max_level);
+            micromegas_tracing::levels::set_max_level(max_level);
         }
         let interop_max_level = if let Some(max_level) = interop_max_level_override {
             tracing_level_filter_to_log_level_filter(max_level)
         } else {
-            tracing_level_filter_to_log_level_filter(micromegas_tracing::max_level())
+            tracing_level_filter_to_log_level_filter(micromegas_tracing::levels::max_level())
         };
         log::set_max_level(interop_max_level);
 

@@ -9,9 +9,21 @@ pub struct BlockPayload {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Block {
-    pub block_id: String,
-    pub stream_id: String,
-    pub process_id: String,
+    #[serde(
+        deserialize_with = "micromegas_transit::uuid_utils::uuid_from_string",
+        serialize_with = "micromegas_transit::uuid_utils::uuid_to_string"
+    )]
+    pub block_id: uuid::Uuid,
+    #[serde(
+        deserialize_with = "micromegas_transit::uuid_utils::uuid_from_string",
+        serialize_with = "micromegas_transit::uuid_utils::uuid_to_string"
+    )]
+    pub stream_id: uuid::Uuid,
+    #[serde(
+        deserialize_with = "micromegas_transit::uuid_utils::uuid_from_string",
+        serialize_with = "micromegas_transit::uuid_utils::uuid_to_string"
+    )]
+    pub process_id: uuid::Uuid,
     /// we send both RFC3339 times and ticks to be able to calibrate the tick
     pub begin_time: String,
     pub begin_ticks: i64,

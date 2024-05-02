@@ -1,9 +1,6 @@
 use anyhow::{Context, Result};
 use micromegas_ingestion::sql_property;
-use micromegas_telemetry::{
-    stream_info::StreamInfo,
-    types::{block::BlockMetadata, process::Process},
-};
+use micromegas_telemetry::{stream_info::StreamInfo, types::block::BlockMetadata};
 use micromegas_tracing::prelude::*;
 use micromegas_transit::UserDefinedType;
 use sqlx::Row;
@@ -11,7 +8,7 @@ use sqlx::Row;
 #[span_fn]
 pub async fn find_stream(
     connection: &mut sqlx::PgConnection,
-    stream_id: &str,
+    stream_id: sqlx::types::Uuid,
 ) -> Result<StreamInfo> {
     let row = sqlx::query(
         "SELECT process_id, dependencies_metadata, objects_metadata, tags, properties
@@ -34,7 +31,7 @@ pub async fn find_stream(
     let tags: Vec<String> = row.try_get("tags")?;
     let properties: Vec<sql_property::Property> = row.try_get("properties")?;
     Ok(StreamInfo {
-        stream_id: String::from(stream_id),
+        stream_id,
         process_id: row.try_get("process_id")?,
         dependencies_metadata,
         objects_metadata,
@@ -44,8 +41,9 @@ pub async fn find_stream(
 }
 
 #[span_fn]
-pub fn process_from_row(row: &sqlx::postgres::PgRow) -> Result<Process> {
-    Ok(Process {
+pub fn process_from_row(row: &sqlx::postgres::PgRow) -> Result<ProcessInfo> {
+    let properties: Vec<sql_property::Property> = row.try_get("properties")?;
+    Ok(ProcessInfo {
         process_id: row.try_get("process_id")?,
         exe: row.try_get("exe")?,
         username: row.try_get("username")?,
@@ -57,14 +55,15 @@ pub fn process_from_row(row: &sqlx::postgres::PgRow) -> Result<Process> {
         start_time: row.try_get("start_time")?,
         start_ticks: row.try_get("start_ticks")?,
         parent_process_id: row.try_get("parent_process_id")?,
+        properties: sql_property::into_hashmap(properties),
     })
 }
 
 #[span_fn]
 pub async fn find_process(
     connection: &mut sqlx::PgConnection,
-    process_id: &str,
-) -> Result<Process> {
+    process_id: &sqlx::types::Uuid,
+) -> Result<ProcessInfo> {
     let row = sqlx::query(
         "SELECT process_id,
                 exe,
@@ -76,7 +75,8 @@ pub async fn find_process(
                 tsc_frequency,
                 start_time,
                 start_ticks,
-                parent_process_id
+                parent_process_id,
+                properties
          FROM processes
          WHERE process_id = $1;",
     )
@@ -105,7 +105,7 @@ pub fn map_row_block(row: &sqlx::postgres::PgRow) -> Result<BlockMetadata> {
 #[span_fn]
 pub async fn find_stream_blocks_in_range(
     connection: &mut sqlx::PgConnection,
-    stream_id: &str,
+    stream_id: sqlx::types::Uuid,
     begin_ticks: i64,
     end_ticks: i64,
 ) -> Result<Vec<BlockMetadata>> {

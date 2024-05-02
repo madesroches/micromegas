@@ -12,8 +12,9 @@ authors.workspace = true
 [dependencies]
 micromegas-derive-transit = { path = "derive", version = "0.1.0" }
 
-serde.workspace = true
 anyhow.workspace = true
+serde.workspace = true
+uuid.workspace = true
 
 # can't use micromegas-tracing, would cause a circular dependency
 log.workspace = true

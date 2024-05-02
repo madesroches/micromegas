@@ -157,7 +157,7 @@ pub async fn make_call_tree(
         stream.get_thread_name(),
     );
     for block in blocks {
-        parse_thread_block(blob_storage.clone(), stream, &block.block_id, &mut builder).await?;
+        parse_thread_block(blob_storage.clone(), stream, block.block_id, &mut builder).await?;
     }
     Ok(builder.finish())
 }

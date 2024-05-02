@@ -15,10 +15,10 @@ use micromegas_tracing::{
 fn test_parse_span_interops() {
     let _telemetry_guard = TelemetryGuard::new();
 
-    let process_id = String::from("bogus_process_id");
-    let process_info = make_process_info(&process_id, "bogus_parent_process");
-    let mut stream = ThreadStream::new(1024, process_id.clone(), &[], HashMap::new());
-    let stream_id = stream.stream_id().to_string();
+    let process_id = uuid::Uuid::new_v4();
+    let process_info = make_process_info(process_id, Some(uuid::Uuid::new_v4()));
+    let mut stream = ThreadStream::new(1024, process_id, &[], HashMap::new());
+    let stream_id = stream.stream_id();
 
     static SPAN_LOCATION_BEGIN: SpanLocation = SpanLocation {
         lod: Verbosity::Med,
