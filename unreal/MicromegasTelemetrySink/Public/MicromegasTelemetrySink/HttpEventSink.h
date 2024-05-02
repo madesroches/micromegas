@@ -41,7 +41,7 @@ public:
 
 private:
 	void IncrementQueueSize();
-	void SendBinaryRequest(const TCHAR* command, const TArray<uint8>& content);
+	void SendBinaryRequest(const TCHAR* command, const TArray<uint8>& content, float TimeoutSeconds);
 
 	typedef std::function<void()> Callback;
 	typedef TQueue<Callback, EQueueMode::Mpsc> WorkQueue;
