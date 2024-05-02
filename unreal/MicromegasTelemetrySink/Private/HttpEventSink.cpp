@@ -16,6 +16,7 @@
 #include "MicromegasTracing/LogBlock.h"
 #include "MicromegasTracing/Macros.h"
 #include "MicromegasTracing/ProcessInfo.h"
+#include "Misc/App.h"
 #include <sstream>
 #include <string>
 #if PLATFORM_WINDOWS
@@ -57,7 +58,7 @@ HttpEventSink::HttpEventSink(const FString& baseUrl, const MicromegasTracing::Pr
 	, RequestShutdown(false)
 {
 	Thread.Reset(FRunnableThread::Create(this, TEXT("MicromegasHttpTelemetrySink")));
-	Flusher.Reset(new FlushMonitor(this));
+	Flusher.Reset(new FlushMonitor());
 }
 
 HttpEventSink::~HttpEventSink()
@@ -190,6 +191,7 @@ uint32 HttpEventSink::Run()
 		}
 		const uint32 timeout_ms = 60 * 1000;
 		WakeupThread->Wait(timeout_ms);
+		Flusher->Tick(this);
 	}
 	return 0;
 }
@@ -210,6 +212,7 @@ void HttpEventSink::SendBinaryRequest(const TCHAR* command, const TArray<uint8>&
 	HttpRequest->SetContent(content);
 	HttpRequest->SetHeader(TEXT("Content-Type"), TEXT("application/octet-stream"));
 	HttpRequest->SetTimeout(TimeoutSeconds);
+	HttpRequest->SetDelegateThreadPolicy(EHttpRequestDelegateThreadPolicy::CompleteOnHttpThread);
 	HttpRequest->OnProcessRequestComplete().BindStatic(&OnProcessRequestComplete);
 	if (!Auth->Sign(*HttpRequest))
 	{
@@ -233,7 +236,7 @@ FString GetDistro()
 	return FString::Printf(TEXT("%s %s"), ANSI_TO_TCHAR(FPlatformProperties::PlatformName()), *FPlatformMisc::GetOSVersion());
 }
 
-std::shared_ptr<MicromegasTracing::EventSink> InitHttpEventSink(const FString& BaseUrl, const SharedTelemetryAuthenticator& Auth)
+TSharedPtr<MicromegasTracing::EventSink, ESPMode::ThreadSafe> InitHttpEventSink(const FString& BaseUrl, const SharedTelemetryAuthenticator& Auth)
 {
 	using namespace MicromegasTracing;
 	UE_LOG(LogMicromegasTelemetrySink, Log, TEXT("Initializing Remote Telemetry Sink"));
@@ -255,7 +258,7 @@ std::shared_ptr<MicromegasTracing::EventSink> InitHttpEventSink(const FString& B
 	process->StartTime = startTime;
 	process->Properties.Add(TEXT("build-version"), FApp::GetBuildVersion());
 
-	std::shared_ptr<EventSink> sink = std::make_shared<HttpEventSink>(BaseUrl, process, Auth);
+	TSharedPtr<MicromegasTracing::EventSink, ESPMode::ThreadSafe> sink = MakeShared<HttpEventSink>(BaseUrl, process, Auth);
 	const size_t LOG_BUFFER_SIZE = 10 * 1024 * 1024;
 	const size_t METRICS_BUFFER_SIZE = 10 * 1024 * 1024;
 	const size_t THREAD_BUFFER_SIZE = 10 * 1024 * 1024;

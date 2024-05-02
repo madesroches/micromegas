@@ -2,6 +2,7 @@
 //  MicromegasTracing/Dispatch.cpp
 //
 #include "MicromegasTracing/Dispatch.h"
+#include "Async/UniqueLock.h"
 #include "MicromegasTracing/Macros.h"
 #include "Misc/Guid.h"
 #include "Misc/ScopeLock.h"
@@ -18,8 +19,8 @@ namespace MicromegasTracing
 	Dispatch* GDispatch = nullptr;
 
 	Dispatch::Dispatch(NewGuid allocNewGuid,
-		const std::shared_ptr<EventSink>& sink,
 		const ProcessInfoPtr& processInfo,
+		const TSharedPtr<EventSink, ESPMode::ThreadSafe>& sink,
 		size_t logBufferSize,
 		size_t metricBufferSize,
 		size_t threadBufferSize)
@@ -31,21 +32,21 @@ namespace MicromegasTracing
 		, ThreadBufferSize(threadBufferSize)
 	{
 		FString logStreamId = AllocNewGuid();
-		LogBlockPtr logBlock = std::make_shared<LogBlock>(logStreamId,
+		LogBlockPtr logBlock = MakeShared<LogBlock>(logStreamId,
 			processInfo->StartTime,
 			LogBufferSize,
 			0);
-		LogEntries = std::make_shared<LogStream>(CurrentProcessInfo->ProcessId,
+		LogEntries = MakeShared<LogStream>(CurrentProcessInfo->ProcessId,
 			logStreamId,
 			logBlock,
 			TArray<FString>({ TEXT("log") }));
 
 		FString metricStreamId = allocNewGuid();
-		MetricsBlockPtr metricBlock = std::make_shared<MetricBlock>(metricStreamId,
+		MetricsBlockPtr metricBlock = MakeShared<MetricBlock>(metricStreamId,
 			processInfo->StartTime,
 			metricBufferSize,
 			0);
-		Metrics = std::make_shared<MetricStream>(CurrentProcessInfo->ProcessId,
+		Metrics = MakeShared<MetricStream>(CurrentProcessInfo->ProcessId,
 			metricStreamId,
 			metricBlock,
 			TArray<FString>({ TEXT("metrics") }));
@@ -57,7 +58,7 @@ namespace MicromegasTracing
 
 	void Dispatch::Init(NewGuid allocNewGuid,
 		const ProcessInfoPtr& processInfo,
-		const std::shared_ptr<EventSink>& sink,
+		const TSharedPtr<EventSink, ESPMode::ThreadSafe>& sink,
 		size_t logBufferSize,
 		size_t metricBufferSize,
 		size_t threadBufferSize)
@@ -66,47 +67,49 @@ namespace MicromegasTracing
 		{
 			return;
 		}
-		GDispatch = new Dispatch(allocNewGuid, sink, processInfo, logBufferSize, metricBufferSize, threadBufferSize);
+		GDispatch = new Dispatch(allocNewGuid, processInfo, sink, logBufferSize, metricBufferSize, threadBufferSize);
 		sink->OnStartup(processInfo);
 		sink->OnInitLogStream(GDispatch->LogEntries);
 		sink->OnInitMetricStream(GDispatch->Metrics);
 	}
 
-	void Dispatch::FlushLogStreamImpl(GuardPtr& guard)
+	void Dispatch::FlushLogStreamImpl(UE::FMutex& mutex)
 	{
 		MICROMEGAS_SPAN_SCOPE(TEXT("MicromegasTracing"), TEXT("Dispatch::FlushLogStreamImpl"));
 		if (LogEntries->GetCurrentBlock().IsEmpty())
 		{
+			mutex.Unlock();
 			return;
 		}
 		DualTime now = DualTime::Now();
 		size_t new_offset = LogEntries->GetCurrentBlock().GetOffset() + LogEntries->GetCurrentBlock().GetEvents().GetNbEvents();
-		LogBlockPtr newBlock = std::make_shared<LogBlock>(LogEntries->GetStreamId(),
+		LogBlockPtr newBlock = MakeShared<LogBlock>(LogEntries->GetStreamId(),
 			now,
 			LogBufferSize,
 			new_offset);
 		LogBlockPtr fullBlock = LogEntries->SwapBlocks(newBlock);
 		fullBlock->Close(now);
-		guard.reset();
+		mutex.Unlock();
 		Sink->OnProcessLogBlock(fullBlock);
 	}
 
-	void Dispatch::FlushMetricStreamImpl(GuardPtr& guard)
+	void Dispatch::FlushMetricStreamImpl(UE::FMutex& mutex)
 	{
 		MICROMEGAS_SPAN_SCOPE(TEXT("MicromegasTracing"), TEXT("Dispatch::FlushMetricStreamImpl"));
 		if (Metrics->GetCurrentBlock().IsEmpty())
 		{
+			mutex.Unlock();
 			return;
 		}
 		DualTime now = DualTime::Now();
 		size_t new_offset = Metrics->GetCurrentBlock().GetOffset() + Metrics->GetCurrentBlock().GetEvents().GetNbEvents();
-		MetricsBlockPtr newBlock = std::make_shared<MetricBlock>(Metrics->GetStreamId(),
+		MetricsBlockPtr newBlock = MakeShared<MetricBlock>(Metrics->GetStreamId(),
 			now,
 			MetricBufferSize,
 			new_offset);
 		MetricsBlockPtr fullBlock = Metrics->SwapBlocks(newBlock);
 		fullBlock->Close(now);
-		guard.reset();
+		mutex.Unlock();
 		Sink->OnProcessMetricBlock(fullBlock);
 	}
 
@@ -118,7 +121,7 @@ namespace MicromegasTracing
 		}
 		DualTime now = DualTime::Now();
 		size_t new_offset = stream->GetCurrentBlock().GetOffset() + stream->GetCurrentBlock().GetEvents().GetNbEvents();
-		ThreadBlockPtr newBlock = std::make_shared<ThreadBlock>(stream->GetStreamId(),
+		ThreadBlockPtr newBlock = MakeShared<ThreadBlock>(stream->GetStreamId(),
 			now,
 			ThreadBufferSize,
 			new_offset);
@@ -131,7 +134,7 @@ namespace MicromegasTracing
 	{
 		FString streamId = AllocNewGuid();
 		DualTime now = DualTime::Now();
-		ThreadBlockPtr block = std::make_shared<ThreadBlock>(streamId,
+		ThreadBlockPtr block = MakeShared<ThreadBlock>(streamId,
 			now,
 			ThreadBufferSize,
 			0);
@@ -144,8 +147,8 @@ namespace MicromegasTracing
 	void Dispatch::PublishThreadStream(ThreadStream* stream)
 	{
 		{
-			std::lock_guard<std::recursive_mutex> guard(ThreadStreamsMutex);
-			ThreadStreams.push_back(stream);
+			UE::TUniqueLock<UE::FMutex> lock(ThreadStreamsMutex);
+			ThreadStreams.Add(stream);
 		}
 		Sink->OnInitThreadStream(stream);
 	}
@@ -158,11 +161,15 @@ namespace MicromegasTracing
 		{
 			return;
 		}
-		auto guard = std::make_unique<std::lock_guard<std::recursive_mutex>>(dispatch->LogMutex);
+		dispatch->LogMutex.Lock();
 		dispatch->LogEntries->GetCurrentBlock().GetEvents().Push(event);
 		if (dispatch->LogEntries->IsFull())
 		{
-			dispatch->FlushLogStreamImpl(guard); // unlocks the mutex
+			dispatch->FlushLogStreamImpl(dispatch->LogMutex); // unlocks the mutex
+		}
+		else
+		{
+			dispatch->LogMutex.Unlock();
 		}
 	}
 
@@ -173,8 +180,8 @@ namespace MicromegasTracing
 		{
 			return;
 		}
-		auto guard = std::make_unique<std::lock_guard<std::recursive_mutex>>(dispatch->LogMutex);
-		dispatch->FlushLogStreamImpl(guard); // unlocks the mutex
+		dispatch->LogMutex.Lock();
+		dispatch->FlushLogStreamImpl(dispatch->LogMutex); // unlocks the mutex
 	}
 
 	void FlushMetricStream()
@@ -184,8 +191,8 @@ namespace MicromegasTracing
 		{
 			return;
 		}
-		auto guard = std::make_unique<std::lock_guard<std::recursive_mutex>>(dispatch->MetricMutex);
-		dispatch->FlushMetricStreamImpl(guard); // unlocks the mutex
+		dispatch->MetricMutex.Lock();
+		dispatch->FlushMetricStreamImpl(dispatch->MetricMutex); // unlocks the mutex
 	}
 
 	void Shutdown()
@@ -217,11 +224,15 @@ namespace MicromegasTracing
 		{
 			return;
 		}
-		auto guard = std::make_unique<std::lock_guard<std::recursive_mutex>>(dispatch->MetricMutex);
+		dispatch->MetricMutex.Lock();
 		dispatch->Metrics->GetCurrentBlock().GetEvents().Push(event);
 		if (dispatch->Metrics->IsFull())
 		{
-			dispatch->FlushMetricStreamImpl(guard); // unlocks the mutex
+			dispatch->FlushMetricStreamImpl(dispatch->MetricMutex); // unlocks the mutex
+		}
+		else
+		{
+			dispatch->MetricMutex.Unlock();
 		}
 	}
 
@@ -287,7 +298,7 @@ namespace MicromegasTracing
 		{
 			return;
 		}
-		std::lock_guard<std::recursive_mutex> guard(dispatch->ThreadStreamsMutex);
+		UE::TUniqueLock<UE::FMutex> lock(dispatch->ThreadStreamsMutex);
 		for (ThreadStream* stream : dispatch->ThreadStreams)
 		{
 			callback(stream);

@@ -2,7 +2,7 @@
 //
 //  MicromegasTracing/Fwd.h
 //
-#include <memory>
+#include "Templates/SharedPointer.h"
 
 namespace MicromegasTracing
 {
@@ -23,18 +23,18 @@ namespace MicromegasTracing
 	struct StaticStringRef;
 	typedef HeterogeneousQueue<LogStaticStrEvent, LogStringInteropEvent, StaticStringRef> LogEventQueue;
 	typedef EventBlock<LogEventQueue> LogBlock;
-	typedef std::shared_ptr<LogBlock> LogBlockPtr;
+	typedef TSharedPtr<LogBlock, ESPMode::ThreadSafe> LogBlockPtr;
 	typedef EventStreamImpl<LogBlock, 128> LogStream;
-	typedef std::shared_ptr<LogStream> LogStreamPtr;
+	typedef TSharedPtr<LogStream, ESPMode::ThreadSafe> LogStreamPtr;
 	typedef HeterogeneousQueue<IntegerMetricEvent, FloatMetricEvent> MetricEventQueue;
 	typedef EventBlock<MetricEventQueue> MetricBlock;
-	typedef std::shared_ptr<MetricBlock> MetricsBlockPtr;
+	typedef TSharedPtr<MetricBlock, ESPMode::ThreadSafe> MetricsBlockPtr;
 	typedef EventStreamImpl<MetricBlock, 32> MetricStream;
-	typedef std::shared_ptr<MetricStream> MetricStreamPtr;
+	typedef TSharedPtr<MetricStream, ESPMode::ThreadSafe> MetricStreamPtr;
 	struct ProcessInfo;
-	typedef std::shared_ptr<ProcessInfo> ProcessInfoPtr;
+	typedef TSharedPtr<ProcessInfo, ESPMode::ThreadSafe> ProcessInfoPtr;
 	typedef HeterogeneousQueue<BeginThreadSpanEvent, EndThreadSpanEvent> ThreadEventQueue;
 	typedef EventBlock<ThreadEventQueue> ThreadBlock;
-	typedef std::shared_ptr<ThreadBlock> ThreadBlockPtr;
+	typedef TSharedPtr<ThreadBlock, ESPMode::ThreadSafe> ThreadBlockPtr;
 	typedef EventStreamImpl<ThreadBlock, 32> ThreadStream;
 } // namespace MicromegasTracing
