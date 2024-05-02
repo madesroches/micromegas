@@ -74,7 +74,8 @@ void HttpEventSink::OnStartup(const MicromegasTracing::ProcessInfoPtr& processIn
 	FPlatformAtomics::InterlockedIncrement(&QueueSize);
 	Queue.Enqueue([this, processInfo]() {
 		TArray<uint8> body = FormatInsertProcessRequest(*processInfo);
-		SendBinaryRequest(TEXT("insert_process"), body);
+		const float TimeoutSeconds = 30.0f;
+		SendBinaryRequest(TEXT("insert_process"), body, TimeoutSeconds);
 	});
 	WakeupThread->Trigger();
 }
@@ -95,7 +96,8 @@ void HttpEventSink::OnInitLogStream(const MicromegasTracing::LogStreamPtr& strea
 	IncrementQueueSize();
 	Queue.Enqueue([this, stream]() {
 		TArray<uint8> body = FormatInsertLogStreamRequest(*stream);
-		SendBinaryRequest(TEXT("insert_stream"), body);
+		const float TimeoutSeconds = 30.0f;
+		SendBinaryRequest(TEXT("insert_stream"), body, TimeoutSeconds);
 	});
 	WakeupThread->Trigger();
 }
@@ -105,7 +107,8 @@ void HttpEventSink::OnInitMetricStream(const MicromegasTracing::MetricStreamPtr&
 	IncrementQueueSize();
 	Queue.Enqueue([this, stream]() {
 		TArray<uint8> body = FormatInsertMetricStreamRequest(*stream);
-		SendBinaryRequest(TEXT("insert_stream"), body);
+		const float TimeoutSeconds = 30.0f;
+		SendBinaryRequest(TEXT("insert_stream"), body, TimeoutSeconds);
 	});
 	WakeupThread->Trigger();
 }
@@ -121,7 +124,8 @@ void HttpEventSink::OnInitThreadStream(MicromegasTracing::ThreadStream* stream)
 	IncrementQueueSize();
 	Queue.Enqueue([this, stream]() {
 		TArray<uint8> body = FormatInsertThreadStreamRequest(*stream);
-		SendBinaryRequest(TEXT("insert_stream"), body);
+		const float TimeoutSeconds = 30.0f;
+		SendBinaryRequest(TEXT("insert_stream"), body, TimeoutSeconds);
 	});
 	WakeupThread->Trigger();
 }
@@ -131,7 +135,8 @@ void HttpEventSink::OnProcessLogBlock(const MicromegasTracing::LogBlockPtr& bloc
 	IncrementQueueSize();
 	Queue.Enqueue([this, block]() {
 		TArray<uint8> content = FormatBlockRequest(*Process, *block);
-		SendBinaryRequest(TEXT("insert_block"), content);
+		const float TimeoutSeconds = 10.0f;
+		SendBinaryRequest(TEXT("insert_block"), content, TimeoutSeconds);
 	});
 	WakeupThread->Trigger();
 }
@@ -141,7 +146,8 @@ void HttpEventSink::OnProcessMetricBlock(const MicromegasTracing::MetricsBlockPt
 	IncrementQueueSize();
 	Queue.Enqueue([this, block]() {
 		TArray<uint8> content = FormatBlockRequest(*Process, *block);
-		SendBinaryRequest(TEXT("insert_block"), content);
+		const float TimeoutSeconds = 10.0f;
+		SendBinaryRequest(TEXT("insert_block"), content, TimeoutSeconds);
 	});
 	WakeupThread->Trigger();
 }
@@ -152,7 +158,8 @@ void HttpEventSink::OnProcessThreadBlock(const MicromegasTracing::ThreadBlockPtr
 	IncrementQueueSize();
 	Queue.Enqueue([this, block]() {
 		TArray<uint8> content = FormatBlockRequest(*Process, *block);
-		SendBinaryRequest(TEXT("insert_block"), content);
+		const float TimeoutSeconds = 2.0f;
+		SendBinaryRequest(TEXT("insert_block"), content, TimeoutSeconds);
 	});
 	WakeupThread->Trigger();
 }
@@ -194,7 +201,7 @@ void HttpEventSink::IncrementQueueSize()
 	MICROMEGAS_IMETRIC(TEXT("MicromegasTelemetrySink"), MicromegasTracing::Verbosity::Min, TEXT("QueueSize"), TEXT("count"), incrementedQueueSize);
 }
 
-void HttpEventSink::SendBinaryRequest(const TCHAR* command, const TArray<uint8>& content)
+void HttpEventSink::SendBinaryRequest(const TCHAR* command, const TArray<uint8>& content, float TimeoutSeconds)
 {
 	MICROMEGAS_SPAN_SCOPE(TEXT("MicromegasTelemetrySink"), TEXT("SendBinaryRequest"));
 	TSharedRef<IHttpRequest, ESPMode::ThreadSafe> HttpRequest = FHttpModule::Get().CreateRequest();
@@ -202,6 +209,7 @@ void HttpEventSink::SendBinaryRequest(const TCHAR* command, const TArray<uint8>&
 	HttpRequest->SetVerb(TEXT("POST"));
 	HttpRequest->SetContent(content);
 	HttpRequest->SetHeader(TEXT("Content-Type"), TEXT("application/octet-stream"));
+	HttpRequest->SetTimeout(TimeoutSeconds);
 	HttpRequest->OnProcessRequestComplete().BindStatic(&OnProcessRequestComplete);
 	if (!Auth->Sign(*HttpRequest))
 	{
