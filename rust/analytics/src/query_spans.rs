@@ -13,7 +13,7 @@ use sqlx::types::chrono::{DateTime, Utc};
 
 pub async fn query_spans(
     data_lake: &DataLakeConnection,
-    stream_id: &str,
+    stream_id: sqlx::types::Uuid,
     mut begin: DateTime<Utc>,
     end: DateTime<Utc>,
 ) -> Result<RecordBatch> {

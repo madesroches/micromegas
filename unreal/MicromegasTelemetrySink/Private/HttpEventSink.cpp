@@ -49,22 +49,22 @@ namespace
 
 } // namespace
 
-RemoteSink::RemoteSink(const FString& baseUrl, const MicromegasTracing::ProcessInfoPtr& ThisProcess, const SharedTelemetryAuthenticator& Auth)
+HttpEventSink::HttpEventSink(const FString& baseUrl, const MicromegasTracing::ProcessInfoPtr& ThisProcess, const SharedTelemetryAuthenticator& Auth)
 	: BaseUrl(baseUrl)
 	, Process(ThisProcess)
 	, Auth(Auth)
 	, QueueSize(0)
 	, RequestShutdown(false)
 {
-	Thread.Reset(FRunnableThread::Create(this, TEXT("MicromegasRemoteTelemetrySink")));
+	Thread.Reset(FRunnableThread::Create(this, TEXT("MicromegasHttpTelemetrySink")));
 	Flusher.Reset(new FlushMonitor(this));
 }
 
-RemoteSink::~RemoteSink()
+HttpEventSink::~HttpEventSink()
 {
 }
 
-void RemoteSink::OnStartup(const MicromegasTracing::ProcessInfoPtr& processInfo)
+void HttpEventSink::OnStartup(const MicromegasTracing::ProcessInfoPtr& processInfo)
 {
 	FPlatformAtomics::InterlockedIncrement(&QueueSize);
 	Queue.Enqueue([this, processInfo]() {
@@ -74,7 +74,7 @@ void RemoteSink::OnStartup(const MicromegasTracing::ProcessInfoPtr& processInfo)
 	WakeupThread->Trigger();
 }
 
-void RemoteSink::OnShutdown()
+void HttpEventSink::OnShutdown()
 {
 	MICROMEGAS_LOG_STATIC(TEXT("MicromegasTelemetrySink"), MicromegasTracing::LogLevel::Info, TEXT("Shutting down"));
 	Flusher.Reset();
@@ -85,7 +85,7 @@ void RemoteSink::OnShutdown()
 	Thread->WaitForCompletion();
 }
 
-void RemoteSink::OnInitLogStream(const MicromegasTracing::LogStreamPtr& stream)
+void HttpEventSink::OnInitLogStream(const MicromegasTracing::LogStreamPtr& stream)
 {
 	IncrementQueueSize();
 	Queue.Enqueue([this, stream]() {
@@ -95,7 +95,7 @@ void RemoteSink::OnInitLogStream(const MicromegasTracing::LogStreamPtr& stream)
 	WakeupThread->Trigger();
 }
 
-void RemoteSink::OnInitMetricStream(const MicromegasTracing::MetricStreamPtr& stream)
+void HttpEventSink::OnInitMetricStream(const MicromegasTracing::MetricStreamPtr& stream)
 {
 	IncrementQueueSize();
 	Queue.Enqueue([this, stream]() {
@@ -105,7 +105,7 @@ void RemoteSink::OnInitMetricStream(const MicromegasTracing::MetricStreamPtr& st
 	WakeupThread->Trigger();
 }
 
-void RemoteSink::OnInitThreadStream(MicromegasTracing::ThreadStream* stream)
+void HttpEventSink::OnInitThreadStream(MicromegasTracing::ThreadStream* stream)
 {
 	const uint32 threadId = FPlatformTLS::GetCurrentThreadId();
 	const FString& threadName = FThreadManager::GetThreadName(threadId);
@@ -121,7 +121,7 @@ void RemoteSink::OnInitThreadStream(MicromegasTracing::ThreadStream* stream)
 	WakeupThread->Trigger();
 }
 
-void RemoteSink::OnProcessLogBlock(const MicromegasTracing::LogBlockPtr& block)
+void HttpEventSink::OnProcessLogBlock(const MicromegasTracing::LogBlockPtr& block)
 {
 	IncrementQueueSize();
 	Queue.Enqueue([this, block]() {
@@ -131,7 +131,7 @@ void RemoteSink::OnProcessLogBlock(const MicromegasTracing::LogBlockPtr& block)
 	WakeupThread->Trigger();
 }
 
-void RemoteSink::OnProcessMetricBlock(const MicromegasTracing::MetricsBlockPtr& block)
+void HttpEventSink::OnProcessMetricBlock(const MicromegasTracing::MetricsBlockPtr& block)
 {
 	IncrementQueueSize();
 	Queue.Enqueue([this, block]() {
@@ -141,7 +141,7 @@ void RemoteSink::OnProcessMetricBlock(const MicromegasTracing::MetricsBlockPtr& 
 	WakeupThread->Trigger();
 }
 
-void RemoteSink::OnProcessThreadBlock(const MicromegasTracing::ThreadBlockPtr& block)
+void HttpEventSink::OnProcessThreadBlock(const MicromegasTracing::ThreadBlockPtr& block)
 {
 	MICROMEGAS_SPAN_SCOPE(TEXT("MicromegasTelemetrySink"), TEXT("OnProcessThreadBlock"));
 	IncrementQueueSize();
@@ -152,12 +152,12 @@ void RemoteSink::OnProcessThreadBlock(const MicromegasTracing::ThreadBlockPtr& b
 	WakeupThread->Trigger();
 }
 
-bool RemoteSink::IsBusy()
+bool HttpEventSink::IsBusy()
 {
 	return QueueSize > 0;
 }
 
-uint32 RemoteSink::Run()
+uint32 HttpEventSink::Run()
 {
 	while (true)
 	{
@@ -178,14 +178,14 @@ uint32 RemoteSink::Run()
 	return 0;
 }
 
-void RemoteSink::IncrementQueueSize()
+void HttpEventSink::IncrementQueueSize()
 {
 	MICROMEGAS_SPAN_SCOPE(TEXT("MicromegasTelemetrySink"), TEXT("IncrementQueueSize"));
 	int32 incrementedQueueSize = FPlatformAtomics::InterlockedIncrement(&QueueSize);
 	MICROMEGAS_IMETRIC(TEXT("MicromegasTelemetrySink"), MicromegasTracing::Verbosity::Min, TEXT("QueueSize"), TEXT("count"), incrementedQueueSize);
 }
 
-void RemoteSink::SendBinaryRequest(const TCHAR* command, const TArray<uint8>& content)
+void HttpEventSink::SendBinaryRequest(const TCHAR* command, const TArray<uint8>& content)
 {
 	MICROMEGAS_SPAN_SCOPE(TEXT("MicromegasTelemetrySink"), TEXT("SendBinaryRequest"));
 	TSharedRef<IHttpRequest, ESPMode::ThreadSafe> HttpRequest = FHttpModule::Get().CreateRequest();
@@ -216,7 +216,7 @@ FString GetDistro()
 	return FString::Printf(TEXT("%s %s"), ANSI_TO_TCHAR(FPlatformProperties::PlatformName()), *FPlatformMisc::GetOSVersion());
 }
 
-void InitRemoteSink(const FString& BaseUrl, const SharedTelemetryAuthenticator& Auth)
+void InitHttpEventSink(const FString& BaseUrl, const SharedTelemetryAuthenticator& Auth)
 {
 	using namespace MicromegasTracing;
 	UE_LOG(LogMicromegasTelemetrySink, Log, TEXT("Initializing Remote Telemetry Sink"));
@@ -236,8 +236,9 @@ void InitRemoteSink(const FString& BaseUrl, const SharedTelemetryAuthenticator& 
 	process->CpuBrand = *FPlatformMisc::GetCPUBrand();
 	process->TscFrequency = GetTscFrequency();
 	process->StartTime = startTime;
+	process->Properties.Add(TEXT("build-version"), FApp::GetBuildVersion());
 
-	std::shared_ptr<EventSink> sink = std::make_shared<RemoteSink>(BaseUrl, process, Auth);
+	std::shared_ptr<EventSink> sink = std::make_shared<HttpEventSink>(BaseUrl, process, Auth);
 	const size_t LOG_BUFFER_SIZE = 10 * 1024 * 1024;
 	const size_t METRICS_BUFFER_SIZE = 10 * 1024 * 1024;
 	const size_t THREAD_BUFFER_SIZE = 10 * 1024 * 1024;

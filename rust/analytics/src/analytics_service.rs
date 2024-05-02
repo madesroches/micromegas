@@ -8,6 +8,7 @@ use datafusion::{arrow::record_batch::RecordBatch, parquet::arrow::ArrowWriter};
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use serde::Deserialize;
 use sqlx::types::chrono::{DateTime, FixedOffset};
+use uuid::Uuid;
 
 use crate::sql_arrow_bridge::rows_to_record_batch;
 
@@ -33,7 +34,8 @@ pub struct QueryStreamsRequest {
 
 #[derive(Debug, Deserialize)]
 pub struct QueryBlocksRequest {
-    pub stream_id: String,
+    #[serde(deserialize_with = "micromegas_transit::uuid_utils::uuid_from_string")]
+    pub stream_id: Uuid,
 }
 
 #[derive(Debug, Deserialize)]
@@ -41,7 +43,8 @@ pub struct QuerySpansRequest {
     pub limit: i64,
     pub begin: String,
     pub end: String,
-    pub stream_id: String,
+    #[serde(deserialize_with = "micromegas_transit::uuid_utils::uuid_from_string")]
+    pub stream_id: Uuid,
 }
 
 impl AnalyticsService {
@@ -71,7 +74,8 @@ impl AnalyticsService {
                     start_time,
                     start_ticks,
                     insert_time,
-                    parent_process_id
+                    parent_process_id,
+                    properties
              FROM processes
              WHERE start_time >= $1
              AND start_time < $2
@@ -134,6 +138,7 @@ impl AnalyticsService {
                     end_time,
                     end_ticks,
                     nb_objects,
+                    object_offset,
                     payload_size
              FROM blocks
              WHERE stream_id = $1
@@ -157,7 +162,7 @@ impl AnalyticsService {
         serialize_record_batch(
             &crate::query_spans::query_spans(
                 &self.data_lake,
-                &request.stream_id,
+                request.stream_id,
                 begin.into(),
                 end.into(),
             )

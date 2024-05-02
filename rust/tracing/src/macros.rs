@@ -15,7 +15,7 @@ macro_rules! span_scope {
         static $scope_name: $crate::spans::SpanMetadata = $crate::spans::SpanMetadata {
             name: $name,
             location: $crate::spans::SpanLocation {
-                lod: $crate::Verbosity::Max,
+                lod: $crate::levels::Verbosity::Max,
                 target: module_path!(),
                 module_path: module_path!(),
                 file: file!(),
@@ -48,7 +48,7 @@ macro_rules! span_scope {
 macro_rules! span_scope_named {
     ($scope_name:ident, $name:expr) => {
         static $scope_name: $crate::spans::SpanLocation = $crate::spans::SpanLocation {
-            lod: $crate::Verbosity::Max,
+            lod: $crate::levels::Verbosity::Max,
             target: module_path!(),
             module_path: module_path!(),
             file: file!(),
@@ -67,7 +67,7 @@ macro_rules! async_span_scope {
         static $scope_name: $crate::spans::SpanMetadata = $crate::spans::SpanMetadata {
             name: $name,
             location: $crate::spans::SpanLocation {
-                lod: $crate::Verbosity::Max,
+                lod: $crate::levels::Verbosity::Max,
                 target: module_path!(),
                 module_path: module_path!(),
                 file: file!(),
@@ -85,7 +85,7 @@ macro_rules! async_span_scope {
 macro_rules! async_span_scope_named {
     ($scope_name:ident, $name:expr) => {
         static $scope_name: $crate::spans::SpanLocation = $crate::spans::SpanLocation {
-            lod: $crate::Verbosity::Max,
+            lod: $crate::levels::Verbosity::Max,
             target: module_path!(),
             module_path: module_path!(),
             file: file!(),
@@ -114,7 +114,7 @@ macro_rules! async_span_scope_named {
 macro_rules! imetric {
     ($name:literal, $unit:literal, $value:expr) => {{
         static METRIC_METADATA: $crate::metrics::MetricMetadata = $crate::metrics::MetricMetadata {
-            lod: $crate::Verbosity::Max,
+            lod: $crate::levels::Verbosity::Max,
             name: $name,
             unit: $unit,
             target: "",
@@ -142,7 +142,7 @@ macro_rules! imetric {
 macro_rules! fmetric {
     ($name:literal, $unit:literal, $value:expr) => {{
         static METRIC_METADATA: $crate::metrics::MetricMetadata = $crate::metrics::MetricMetadata {
-            lod: $crate::Verbosity::Max,
+            lod: $crate::levels::Verbosity::Max,
             name: $name,
             unit: $unit,
             target: "",
@@ -162,7 +162,7 @@ macro_rules! fmetric {
 /// # Examples
 ///
 /// ```
-/// use micromegas_tracing::{log, Level};
+/// use micromegas_tracing::prelude::*;
 ///
 /// # fn main() {
 /// let data = (42, "Forty-two");
@@ -185,7 +185,7 @@ macro_rules! log {
             file: file!(),
             line: line!(),
         };
-        if $lvl <= $crate::STATIC_MAX_LEVEL && $lvl <= $crate::max_level() {
+        if $lvl <= $crate::levels::STATIC_MAX_LEVEL && $lvl <= $crate::levels::max_level() {
             $crate::dispatch::log(&LOG_DESC, format_args!($($arg)+));
         }
     });
@@ -196,7 +196,7 @@ macro_rules! log {
 /// # Examples
 ///
 /// ```
-/// use micromegas_tracing::error;
+/// use micromegas_tracing::prelude::*;
 ///
 /// # fn main() {
 /// let (err_info, port) = ("No connection", 22);
@@ -208,10 +208,10 @@ macro_rules! log {
 #[macro_export]
 macro_rules! error {
     (target: $target:expr, $($arg:tt)+) => (
-        $crate::log!(target: $target, $crate::Level::Error, $($arg)+)
+        $crate::log!(target: $target, $crate::levels::Level::Error, $($arg)+)
     );
     ($($arg:tt)+) => (
-        $crate::log!($crate::Level::Error, $($arg)+)
+        $crate::log!($crate::levels::Level::Error, $($arg)+)
     )
 }
 
@@ -220,7 +220,7 @@ macro_rules! error {
 /// # Examples
 ///
 /// ```
-/// use micromegas_tracing::warn;
+/// use micromegas_tracing::prelude::*;
 ///
 /// # fn main() {
 /// let warn_description = "Invalid Input";
@@ -232,10 +232,10 @@ macro_rules! error {
 #[macro_export]
 macro_rules! warn {
     (target: $target:expr, $($arg:tt)+) => (
-        $crate::log!(target: $target, $crate::Level::Warn, $($arg)+)
+        $crate::log!(target: $target, $crate::levels::Level::Warn, $($arg)+)
     );
     ($($arg:tt)+) => (
-        $crate::log!($crate::Level::Warn, $($arg)+)
+        $crate::log!($crate::levels::Level::Warn, $($arg)+)
     )
 }
 
@@ -244,7 +244,7 @@ macro_rules! warn {
 /// # Examples
 ///
 /// ```
-/// use micromegas_tracing::info;
+/// use micromegas_tracing::prelude::*;
 ///
 /// # fn main() {
 /// # struct Connection { port: u32, speed: f32 }
@@ -258,10 +258,10 @@ macro_rules! warn {
 #[macro_export]
 macro_rules! info {
     (target: $target:expr, $($arg:tt)+) => (
-        $crate::log!(target: $target, $crate::Level::Info, $($arg)+)
+        $crate::log!(target: $target, $crate::levels::Level::Info, $($arg)+)
     );
     ($($arg:tt)+) => (
-        $crate::log!($crate::Level::Info, $($arg)+)
+        $crate::log!($crate::levels::Level::Info, $($arg)+)
     )
 }
 
@@ -283,10 +283,10 @@ macro_rules! info {
 #[macro_export]
 macro_rules! debug {
     (target: $target:expr, $($arg:tt)+) => (
-        $crate::log!(target: $target, $crate::Level::Debug, $($arg)+)
+        $crate::log!(target: $target, $crate::levels::Level::Debug, $($arg)+)
     );
     ($($arg:tt)+) => (
-        $crate::log!($crate::Level::Debug, $($arg)+)
+        $crate::log!($crate::levels::Level::Debug, $($arg)+)
     )
 }
 
@@ -310,10 +310,10 @@ macro_rules! debug {
 #[macro_export]
 macro_rules! trace {
     (target: $target:expr, $($arg:tt)+) => (
-        $crate::log!(target: $target, $crate::Level::Trace, $($arg)+)
+        $crate::log!(target: $target, $crate::levels::Level::Trace, $($arg)+)
     );
     ($($arg:tt)+) => (
-        $crate::log!($crate::Level::Trace, $($arg)+)
+        $crate::log!($crate::levels::Level::Trace, $($arg)+)
     )
 }
 
@@ -326,15 +326,14 @@ macro_rules! trace {
 /// # Examples
 ///
 /// ```
-/// use micromegas_tracing::Level::Debug;
-/// use micromegas_tracing::{debug, log_enabled};
+/// use micromegas_tracing::prelude::*;
 ///
 /// # fn foo() {
-/// if log_enabled!(Debug) {
+/// if log_enabled!(Level::Debug) {
 ///     let data = expensive_call();
 ///     debug!("expensive debug data: {} {}", data.x, data.y);
 /// }
-/// if log_enabled!(target: "Global", Debug) {
+/// if log_enabled!(target: "Global", Level::Debug) {
 ///    let data = expensive_call();
 ///    debug!(target: "Global", "expensive debug data: {} {}", data.x, data.y);
 /// }
@@ -356,8 +355,8 @@ macro_rules! log_enabled {
             file: $crate::__log_file!(),
             line: $crate::__log_line!(),
         };
-        lvl <= $crate::STATIC_MAX_LEVEL
-            && lvl <= $crate::max_level()
+        lvl <= $crate::levels::STATIC_MAX_LEVEL
+            && lvl <= $crate::levels::max_level()
             && $crate::dispatch::log_enabled(&LOG_ENABLED_METADATA)
     }};
     ($lvl:expr) => {

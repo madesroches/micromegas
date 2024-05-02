@@ -23,7 +23,7 @@ use micromegas_tracing::info;
 use micromegas_tracing::{
     event::EventSink,
     guards::{TracingSystemGuard, TracingThreadGuard},
-    LevelFilter,
+    prelude::*,
 };
 
 use composite_event_sink::CompositeSink;

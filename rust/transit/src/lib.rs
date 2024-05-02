@@ -11,6 +11,7 @@ mod parser;
 mod reflect;
 mod serialize;
 mod static_string;
+pub mod uuid_utils;
 
 pub use dyn_string::*;
 pub use heterogeneous_queue::*;

@@ -57,6 +57,39 @@ impl ColumnReader for StringColumnReader {
     }
 }
 
+pub struct UuidColumnReader {
+    pub field: Field,
+    pub column_ordinal: usize,
+}
+
+impl ColumnReader for UuidColumnReader {
+    fn extract_column_from_row(
+        &self,
+        row: &PgRow,
+        struct_builder: &mut StructBuilder,
+    ) -> Result<()> {
+        let value: Option<sqlx::types::uuid::Uuid> = row
+            .try_get(self.column_ordinal)
+            .with_context(|| "try_get failed on row")?;
+        let field_builder = struct_builder
+            .field_builder::<StringBuilder>(self.column_ordinal)
+            .with_context(|| "getting field builder for string column")?;
+        if let Some(uuid) = value {
+            field_builder.append_value(
+                uuid.hyphenated()
+                    .encode_lower(&mut sqlx::types::uuid::Uuid::encode_buffer()),
+            );
+        } else {
+            field_builder.append_null();
+        }
+        Ok(())
+    }
+
+    fn field(&self) -> Field {
+        self.field.clone()
+    }
+}
+
 pub struct Int64ColumnReader {
     pub field: Field,
     pub column_ordinal: usize,
@@ -210,6 +243,10 @@ impl ColumnReader for PropertiesColumnReader {
 pub fn make_column_reader(column: &PgColumn) -> Result<Arc<dyn ColumnReader>> {
     match column.type_info().name() {
         "VARCHAR" => Ok(Arc::new(StringColumnReader {
+            field: Field::new(column.name(), DataType::Utf8, true),
+            column_ordinal: column.ordinal(),
+        })),
+        "UUID" => Ok(Arc::new(UuidColumnReader {
             field: Field::new(column.name(), DataType::Utf8, true),
             column_ordinal: column.ordinal(),
         })),

@@ -3,8 +3,8 @@ use std::{fmt, sync::Arc};
 use crate::{
     logs::{LogBlock, LogMetadata, LogStream},
     metrics::{MetricsBlock, MetricsStream},
+    prelude::*,
     spans::{ThreadBlock, ThreadStream},
-    ProcessInfo,
 };
 
 pub type BoxedEventSink = Box<dyn EventSink>;

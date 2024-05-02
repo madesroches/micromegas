@@ -48,41 +48,26 @@
 // crate-specific lint exceptions:
 #![allow(unsafe_code, clippy::missing_errors_doc, clippy::inline_always)]
 
-use serde::{Deserialize, Serialize};
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProcessInfo {
-    pub process_id: String,
-    pub exe: String,
-    pub username: String,
-    pub realname: String,
-    pub computer: String,
-    pub distro: String,
-    pub cpu_brand: String,
-    pub tsc_frequency: i64,
-    /// RFC 3339
-    pub start_time: String,
-    pub start_ticks: i64,
-    pub parent_process_id: String,
-}
-
 pub mod dispatch;
 pub mod errors;
 pub mod event;
+pub mod flush_monitor;
 pub mod guards;
+pub mod levels;
 pub mod logs;
 pub mod metrics;
 pub mod panic_hook;
+pub mod process_info;
 pub mod spans;
 pub mod string_id;
+pub mod time;
 
 #[macro_use]
 mod macros;
-pub mod flush_monitor;
-mod levels;
-mod time;
 
 pub mod prelude {
     pub use crate::levels::*;
+    pub use crate::process_info::*;
     pub use crate::time::*;
     pub use crate::{
         async_span_scope, debug, error, fmetric, imetric, info, log, log_enabled, span_scope,
@@ -90,5 +75,3 @@ pub mod prelude {
     };
     pub use micromegas_tracing_proc_macros::*;
 }
-
-pub use prelude::*;

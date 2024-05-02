@@ -22,7 +22,7 @@ void FMicromegasTelemetrySinkModule::ShutdownModule()
 
 void FMicromegasTelemetrySinkModule::InitTelemetry(const FString& BaseUrl, const SharedTelemetryAuthenticator& Auth)
 {
-	InitRemoteSink(BaseUrl, Auth);
+	InitHttpEventSink(BaseUrl, Auth);
 }
 
 IMPLEMENT_MODULE(FMicromegasTelemetrySinkModule, MicromegasTelemetrySink)

@@ -1,20 +1,20 @@
 pub use crate::errors::{Error, Result};
+use crate::prelude::*;
 use crate::{
     event::{EventSink, NullEventSink, TracingBlock},
-    frequency, info,
+    info,
     logs::{
         LogBlock, LogMetadata, LogStaticStrEvent, LogStaticStrInteropEvent, LogStream,
         LogStringEvent, LogStringInteropEvent,
     },
     metrics::{FloatMetricEvent, IntegerMetricEvent, MetricMetadata, MetricsBlock, MetricsStream},
-    now,
     spans::{
         BeginAsyncNamedSpanEvent, BeginAsyncSpanEvent, BeginThreadNamedSpanEvent,
         BeginThreadSpanEvent, EndAsyncNamedSpanEvent, EndAsyncSpanEvent, EndThreadNamedSpanEvent,
         EndThreadSpanEvent, SpanLocation, SpanMetadata, ThreadBlock, ThreadEventQueueTypeIndex,
         ThreadStream,
     },
-    warn, ProcessInfo,
+    warn,
 };
 use chrono::Utc;
 use std::collections::HashMap;
@@ -52,7 +52,7 @@ pub fn init_event_dispatch(
 }
 
 #[inline]
-pub fn process_id() -> Option<String> {
+pub fn process_id() -> Option<uuid::Uuid> {
     unsafe { G_DISPATCH.as_ref().map(Dispatch::get_process_id) }
 }
 
@@ -290,7 +290,7 @@ where
 }
 
 struct Dispatch {
-    process_id: String,
+    process_id: uuid::Uuid,
     logs_buffer_size: usize,
     metrics_buffer_size: usize,
     threads_buffer_size: usize,
@@ -307,15 +307,15 @@ impl Dispatch {
         threads_buffer_size: usize,
         sink: Arc<dyn EventSink>,
     ) -> Self {
-        let process_id = uuid::Uuid::new_v4().to_string();
+        let process_id = uuid::Uuid::new_v4();
         let mut obj = Self {
-            process_id: process_id.clone(),
+            process_id,
             logs_buffer_size,
             metrics_buffer_size,
             threads_buffer_size,
             log_stream: Mutex::new(LogStream::new(
                 logs_buffer_size,
-                process_id.clone(),
+                process_id,
                 &[String::from("log")],
                 HashMap::new(),
             )),
@@ -334,8 +334,8 @@ impl Dispatch {
         obj
     }
 
-    pub fn get_process_id(&self) -> String {
-        self.process_id.clone()
+    pub fn get_process_id(&self) -> uuid::Uuid {
+        self.process_id
     }
 
     pub fn get_sink(&self) -> Arc<dyn EventSink> {
@@ -348,12 +348,17 @@ impl Dispatch {
     }
 
     fn startup(&mut self) {
-        let mut parent_process = String::new();
-        if let Ok(parent_process_guid) = std::env::var("LGN_TELEMETRY_PARENT_PROCESS") {
-            parent_process = parent_process_guid;
+        let mut parent_process = None;
+        if let Ok(parent_process_guid) = std::env::var("MICROMEGAS_TELEMETRY_PARENT_PROCESS") {
+            if let Ok(parent_process_id) = uuid::Uuid::try_parse(&parent_process_guid) {
+                parent_process = Some(parent_process_id);
+            }
         }
-        std::env::set_var("LGN_TELEMETRY_PARENT_PROCESS", &self.process_id);
-        let process_info = Arc::new(make_process_info(&self.process_id, &parent_process));
+        std::env::set_var(
+            "MICROMEGAS_TELEMETRY_PARENT_PROCESS",
+            self.process_id.to_string(),
+        );
+        let process_info = Arc::new(make_process_info(self.process_id, parent_process));
         self.sink.on_startup(process_info);
     }
 
@@ -375,7 +380,7 @@ impl Dispatch {
         }
         let thread_stream = ThreadStream::new(
             self.threads_buffer_size,
-            self.process_id.clone(),
+            self.process_id,
             &["cpu".to_owned()],
             properties,
         );
@@ -429,11 +434,14 @@ impl Dispatch {
         if metrics_stream.is_empty() {
             return;
         }
-        let stream_id = metrics_stream.stream_id().to_string();
+        let stream_id = metrics_stream.stream_id();
+        let next_offset = metrics_stream.get_block_ref().object_offset()
+            + metrics_stream.get_block_ref().nb_objects();
         let mut old_event_block = metrics_stream.replace_block(Arc::new(MetricsBlock::new(
             self.metrics_buffer_size,
-            self.process_id.clone(),
+            self.process_id,
             stream_id,
+            next_offset,
         )));
         assert!(!metrics_stream.is_full());
         Arc::get_mut(&mut old_event_block).unwrap().close();
@@ -504,11 +512,14 @@ impl Dispatch {
         if log_stream.is_empty() {
             return;
         }
-        let stream_id = log_stream.stream_id().to_string();
+        let stream_id = log_stream.stream_id();
+        let next_offset =
+            log_stream.get_block_ref().object_offset() + log_stream.get_block_ref().nb_objects();
         let mut old_event_block = log_stream.replace_block(Arc::new(LogBlock::new(
             self.logs_buffer_size,
-            self.process_id.clone(),
+            self.process_id,
             stream_id,
+            next_offset,
         )));
         assert!(!log_stream.is_full());
         Arc::get_mut(&mut old_event_block).unwrap().close();
@@ -520,10 +531,13 @@ impl Dispatch {
         if stream.is_empty() {
             return;
         }
+        let next_offset =
+            stream.get_block_ref().object_offset() + stream.get_block_ref().nb_objects();
         let mut old_block = stream.replace_block(Arc::new(ThreadBlock::new(
             self.threads_buffer_size,
-            self.process_id.clone(),
-            stream.stream_id().to_string(),
+            self.process_id,
+            stream.stream_id(),
+            next_offset,
         )));
         assert!(!stream.is_full());
         Arc::get_mut(&mut old_block).unwrap().close();
@@ -540,12 +554,15 @@ fn get_cpu_brand() -> String {
     return String::from("aarch64");
 }
 
-pub fn make_process_info(process_id: &str, parent_process_id: &str) -> ProcessInfo {
+pub fn make_process_info(
+    process_id: uuid::Uuid,
+    parent_process_id: Option<uuid::Uuid>,
+) -> ProcessInfo {
     let start_ticks = now();
-    let start_time = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, false);
+    let start_time = Utc::now();
     let cpu_brand = get_cpu_brand();
     ProcessInfo {
-        process_id: process_id.to_owned(),
+        process_id,
         username: whoami::username(),
         realname: whoami::realname(),
         exe: std::env::current_exe()
@@ -558,6 +575,7 @@ pub fn make_process_info(process_id: &str, parent_process_id: &str) -> ProcessIn
         tsc_frequency: frequency() as i64,
         start_time,
         start_ticks,
-        parent_process_id: parent_process_id.to_owned(),
+        parent_process_id,
+        properties: HashMap::new(),
     }
 }

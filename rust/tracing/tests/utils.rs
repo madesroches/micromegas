@@ -1,10 +1,11 @@
 use micromegas_tracing::{
     dispatch::{flush_log_buffer, log_enabled, log_interop},
     event::EventSink,
+    levels::Level,
     logs::{LogBlock, LogMetadata, LogMsgQueueAny, LogStream},
     metrics::{MetricsBlock, MetricsMsgQueueAny, MetricsStream},
+    process_info::ProcessInfo,
     spans::{ThreadBlock, ThreadEventQueueAny, ThreadStream},
-    Level, ProcessInfo,
 };
 use micromegas_transit::HeterogeneousQueue;
 use std::{
@@ -14,7 +15,7 @@ use std::{
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum State {
-    Startup(bool),
+    Startup,
     Shutdown,
     LogEnabled(Level),
     Log(String),
@@ -36,8 +37,8 @@ impl DebugEventSink {
 }
 
 impl EventSink for DebugEventSink {
-    fn on_startup(&self, process_info: Arc<ProcessInfo>) {
-        *self.0.lock().unwrap() = Some(State::Startup(!process_info.process_id.is_empty()));
+    fn on_startup(&self, _process_info: Arc<ProcessInfo>) {
+        *self.0.lock().unwrap() = Some(State::Startup);
     }
 
     fn on_shutdown(&self) {

@@ -33,20 +33,22 @@ namespace MicromegasTracing
 		FString logStreamId = AllocNewGuid();
 		LogBlockPtr logBlock = std::make_shared<LogBlock>(logStreamId,
 			processInfo->StartTime,
-			LogBufferSize);
+			LogBufferSize,
+			0);
 		LogEntries = std::make_shared<LogStream>(CurrentProcessInfo->ProcessId,
 			logStreamId,
 			logBlock,
-			std::vector<FString>({ TEXT("log") }));
+			TArray<FString>({ TEXT("log") }));
 
 		FString metricStreamId = allocNewGuid();
 		MetricsBlockPtr metricBlock = std::make_shared<MetricBlock>(metricStreamId,
 			processInfo->StartTime,
-			metricBufferSize);
+			metricBufferSize,
+			0);
 		Metrics = std::make_shared<MetricStream>(CurrentProcessInfo->ProcessId,
 			metricStreamId,
 			metricBlock,
-			std::vector<FString>({ TEXT("metrics") }));
+			TArray<FString>({ TEXT("metrics") }));
 	}
 
 	Dispatch::~Dispatch()
@@ -73,10 +75,16 @@ namespace MicromegasTracing
 	void Dispatch::FlushLogStreamImpl(GuardPtr& guard)
 	{
 		MICROMEGAS_SPAN_SCOPE(TEXT("MicromegasTracing"), TEXT("Dispatch::FlushLogStreamImpl"));
+		if (LogEntries->GetCurrentBlock().IsEmpty())
+		{
+			return;
+		}
 		DualTime now = DualTime::Now();
+		size_t new_offset = LogEntries->GetCurrentBlock().GetOffset() + LogEntries->GetCurrentBlock().GetEvents().GetNbEvents();
 		LogBlockPtr newBlock = std::make_shared<LogBlock>(LogEntries->GetStreamId(),
 			now,
-			LogBufferSize);
+			LogBufferSize,
+			new_offset);
 		LogBlockPtr fullBlock = LogEntries->SwapBlocks(newBlock);
 		fullBlock->Close(now);
 		guard.reset();
@@ -86,10 +94,16 @@ namespace MicromegasTracing
 	void Dispatch::FlushMetricStreamImpl(GuardPtr& guard)
 	{
 		MICROMEGAS_SPAN_SCOPE(TEXT("MicromegasTracing"), TEXT("Dispatch::FlushMetricStreamImpl"));
+		if (Metrics->GetCurrentBlock().IsEmpty())
+		{
+			return;
+		}
 		DualTime now = DualTime::Now();
+		size_t new_offset = Metrics->GetCurrentBlock().GetOffset() + Metrics->GetCurrentBlock().GetEvents().GetNbEvents();
 		MetricsBlockPtr newBlock = std::make_shared<MetricBlock>(Metrics->GetStreamId(),
 			now,
-			MetricBufferSize);
+			MetricBufferSize,
+			new_offset);
 		MetricsBlockPtr fullBlock = Metrics->SwapBlocks(newBlock);
 		fullBlock->Close(now);
 		guard.reset();
@@ -98,10 +112,16 @@ namespace MicromegasTracing
 
 	void Dispatch::FlushThreadStream(ThreadStream* stream)
 	{
+		if (stream->GetCurrentBlock().IsEmpty())
+		{
+			return;
+		}
 		DualTime now = DualTime::Now();
+		size_t new_offset = stream->GetCurrentBlock().GetOffset() + stream->GetCurrentBlock().GetEvents().GetNbEvents();
 		ThreadBlockPtr newBlock = std::make_shared<ThreadBlock>(stream->GetStreamId(),
 			now,
-			ThreadBufferSize);
+			ThreadBufferSize,
+			new_offset);
 		ThreadBlockPtr fullBlock = stream->SwapBlocks(newBlock);
 		fullBlock->Close(now);
 		Sink->OnProcessThreadBlock(fullBlock);
@@ -113,11 +133,12 @@ namespace MicromegasTracing
 		DualTime now = DualTime::Now();
 		ThreadBlockPtr block = std::make_shared<ThreadBlock>(streamId,
 			now,
-			ThreadBufferSize);
+			ThreadBufferSize,
+			0);
 		return new ThreadStream(CurrentProcessInfo->ProcessId,
 			streamId,
 			block,
-			std::vector<FString>({ TEXT("cpu") }));
+			TArray<FString>({ TEXT("cpu") }));
 	}
 
 	void Dispatch::PublishThreadStream(ThreadStream* stream)

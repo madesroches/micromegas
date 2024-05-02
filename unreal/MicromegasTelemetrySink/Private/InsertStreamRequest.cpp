@@ -93,10 +93,10 @@ TArray<uint8> FormatInsertStreamRequest(const StreamT& stream)
 		encoder.begin_object();
 		for (const auto& kv : stream.GetProperties())
 		{
-			FTCHARToUTF8 UTF8Key(*kv.first);
+			FTCHARToUTF8 UTF8Key(*kv.Key);
 			using string_view_type = jsoncons::cbor::cbor_bytes_encoder::string_view_type;
 			encoder.key(string_view_type(UTF8Key.Get(), UTF8Key.Length()));
-			encode_utf8_string(encoder, *kv.second);
+			encode_utf8_string(encoder, *kv.Value);
 		}
 		encoder.end_object();
 

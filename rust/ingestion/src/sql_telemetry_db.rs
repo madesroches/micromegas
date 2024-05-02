@@ -24,7 +24,7 @@ async fn create_property_type(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) ->
 async fn create_processes_table(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Result<()> {
     let sql = "
          CREATE TABLE processes(
-                  process_id VARCHAR(36), 
+                  process_id UUID, 
                   exe VARCHAR(255), 
                   username VARCHAR(255), 
                   realname VARCHAR(255), 
@@ -35,7 +35,9 @@ async fn create_processes_table(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) 
                   start_time TIMESTAMPTZ,
                   start_ticks BIGINT,
                   insert_time TIMESTAMPTZ,
-                  parent_process_id VARCHAR(36));
+                  parent_process_id UUID,
+                  properties micromegas_property[]
+                  );
          CREATE INDEX process_id on processes(process_id);
          CREATE INDEX parent_process_id on processes(parent_process_id);
          CREATE INDEX process_start_time on processes(start_time);";
@@ -48,8 +50,8 @@ async fn create_processes_table(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) 
 async fn create_streams_table(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Result<()> {
     let sql = "
          CREATE TABLE streams(
-                  stream_id VARCHAR(36), 
-                  process_id VARCHAR(36), 
+                  stream_id UUID, 
+                  process_id UUID, 
                   dependencies_metadata BYTEA,
                   objects_metadata BYTEA,
                   tags TEXT[],
@@ -68,14 +70,15 @@ async fn create_streams_table(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) ->
 async fn create_blocks_table(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Result<()> {
     let sql = "
          CREATE TABLE blocks(
-                  block_id VARCHAR(36), 
-                  stream_id VARCHAR(36), 
-                  process_id VARCHAR(36), 
+                  block_id UUID, 
+                  stream_id UUID, 
+                  process_id UUID, 
                   begin_time TIMESTAMPTZ,
                   begin_ticks BIGINT,
                   end_time TIMESTAMPTZ,
                   end_ticks BIGINT,
                   nb_objects INT,
+                  object_offset BIGINT,
                   payload_size BIGINT
                   );
          CREATE INDEX block_id on blocks(block_id);

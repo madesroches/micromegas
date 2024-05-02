@@ -7,7 +7,6 @@ use micromegas_telemetry::block_wire_format;
 use micromegas_telemetry::stream_info::StreamInfo;
 use micromegas_telemetry::wire_format::encode_cbor;
 use micromegas_tracing::prelude::*;
-use micromegas_tracing::ProcessInfo;
 
 #[derive(Clone)]
 pub struct WebIngestionService {
@@ -43,15 +42,16 @@ impl WebIngestionService {
             .await
             .with_context(|| "Error writing block to blob storage")?;
 
-        sqlx::query("INSERT INTO blocks VALUES($1,$2,$3,$4,$5,$6,$7,$8, $9);")
-            .bind(block.block_id)
-            .bind(block.stream_id)
-            .bind(block.process_id)
+        sqlx::query("INSERT INTO blocks VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10);")
+            .bind(block_id)
+            .bind(stream_id)
+            .bind(process_id)
             .bind(begin_time)
             .bind(block.begin_ticks)
             .bind(end_time)
             .bind(block.end_ticks)
             .bind(block.nb_objects)
+            .bind(block.object_offset)
             .bind(payload_size as i64)
             .execute(&self.lake.db_pool)
             .await
@@ -87,11 +87,8 @@ impl WebIngestionService {
         let process_info: ProcessInfo =
             ciborium::from_reader(body.reader()).with_context(|| "parsing ProcessInfo")?;
 
-        use sqlx::types::chrono::{DateTime, FixedOffset};
-        let start_time = DateTime::<FixedOffset>::parse_from_rfc3339(&process_info.start_time)
-            .with_context(|| "parsing start_time")?;
         let insert_time = sqlx::types::chrono::Utc::now();
-        sqlx::query("INSERT INTO processes VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12);")
+        sqlx::query("INSERT INTO processes VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13);")
             .bind(process_info.process_id)
             .bind(process_info.exe)
             .bind(process_info.username)
@@ -100,10 +97,11 @@ impl WebIngestionService {
             .bind(process_info.distro)
             .bind(process_info.cpu_brand)
             .bind(process_info.tsc_frequency)
-            .bind(start_time)
+            .bind(process_info.start_time)
             .bind(process_info.start_ticks)
             .bind(insert_time)
             .bind(process_info.parent_process_id)
+            .bind(make_properties(&process_info.properties))
             .execute(&self.lake.db_pool)
             .await
             .with_context(|| "executing sql insert into processes")?;

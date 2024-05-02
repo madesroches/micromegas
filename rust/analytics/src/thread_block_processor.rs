@@ -97,15 +97,10 @@ pub fn parse_thread_block_payload<Proc: ThreadBlockProcessor>(
 pub async fn parse_thread_block<Proc: ThreadBlockProcessor>(
     blob_storage: Arc<BlobStorage>,
     stream: &StreamInfo,
-    block_id: &str,
+    block_id: sqlx::types::Uuid,
     processor: &mut Proc,
 ) -> Result<()> {
-    let payload = fetch_block_payload(
-        blob_storage,
-        &stream.process_id,
-        &stream.stream_id,
-        block_id,
-    )
-    .await?;
+    let payload =
+        fetch_block_payload(blob_storage, stream.process_id, stream.stream_id, block_id).await?;
     parse_thread_block_payload(&payload, stream, processor)
 }

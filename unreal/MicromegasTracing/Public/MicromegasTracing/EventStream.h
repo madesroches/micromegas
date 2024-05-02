@@ -2,8 +2,8 @@
 //
 //  MicromegasTracing/EventStream.h
 //
-#include <vector>
-#include <map>
+#include "Containers/Array.h"
+#include "Containers/Map.h"
 
 namespace MicromegasTracing
 {
@@ -17,7 +17,7 @@ namespace MicromegasTracing
 		EventStreamImpl(const FString& processId,
 			const FString& streamId,
 			const BlockPtr& block,
-			const std::vector<FString>& tags)
+			const TArray<FString>& tags)
 			: ProcessId(processId)
 			, StreamId(streamId)
 			, Tags(tags)
@@ -37,19 +37,19 @@ namespace MicromegasTracing
 			return StreamId;
 		}
 
-		const std::vector<FString>& GetTags() const
+		const TArray<FString>& GetTags() const
 		{
 			return Tags;
 		}
 
-		const std::map<FString, FString>& GetProperties() const
+		const TMap<FString, FString>& GetProperties() const
 		{
 			return Properties;
 		}
 
 		void SetProperty(const FString& name, const FString& value)
 		{
-			Properties[name] = value;
+			Properties.Add(name, value);
 		}
 
 		void MarkFull()
@@ -86,8 +86,8 @@ namespace MicromegasTracing
 		FString StreamId;
 		BlockPtr CurrentBlock;
 		size_t FullThreshold;
-		std::vector<FString> Tags;
-		std::map<FString, FString> Properties;
+		TArray<FString> Tags;
+		TMap<FString, FString> Properties;
 	};
 
 } // namespace MicromegasTracing

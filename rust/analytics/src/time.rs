@@ -1,5 +1,5 @@
 use chrono::TimeDelta;
-use micromegas_telemetry::types::process::Process;
+use micromegas_tracing::process_info::ProcessInfo;
 
 const NANOS_PER_SEC: f64 = 1000.0 * 1000.0 * 1000.0;
 
@@ -13,7 +13,7 @@ pub struct ConvertTicks {
 }
 
 impl ConvertTicks {
-    pub fn new(process: &Process) -> Self {
+    pub fn new(process: &ProcessInfo) -> Self {
         Self::from_meta_data(
             process.start_ticks,
             process.start_time.timestamp_nanos_opt().unwrap_or_default(),
@@ -50,7 +50,7 @@ impl ConvertTicks {
     }
 }
 
-pub fn get_process_tick_length_ms(process_info: &Process) -> f64 {
+pub fn get_process_tick_length_ms(process_info: &ProcessInfo) -> f64 {
     get_tsc_frequency_inverse_ms(process_info.tsc_frequency)
 }
 

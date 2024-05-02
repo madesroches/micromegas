@@ -1,4 +1,4 @@
-use crate::{string_id::StringId, Level, LevelFilter};
+use crate::{prelude::*, string_id::StringId};
 use micromegas_transit::prelude::*;
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -243,9 +243,9 @@ impl InProcSerialize for LogMetadataRecord {}
 mod test {
     use std::thread;
 
-    use crate::{
-        logs::{FilterState, LogMetadata, FILTER_LEVEL_UNSET_VALUE},
-        Level, LevelFilter,
+    use crate::logs::{
+        events::{Level, LevelFilter},
+        FilterState, LogMetadata, FILTER_LEVEL_UNSET_VALUE,
     };
 
     #[test]
