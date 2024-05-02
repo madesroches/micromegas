@@ -8,7 +8,7 @@ class FMicromegasTelemetrySinkModule : public IMicromegasTelemetrySinkModule
 public:
 	virtual void StartupModule() override;
 	virtual void ShutdownModule() override;
-	virtual std::shared_ptr<MicromegasTracing::EventSink> InitTelemetry(const FString& BaseUrl, const SharedTelemetryAuthenticator& auth) override;
+	virtual TSharedPtr<MicromegasTracing::EventSink, ESPMode::ThreadSafe> InitTelemetry(const FString& BaseUrl, const SharedTelemetryAuthenticator& auth) override;
 };
 
 //================================================================================
@@ -20,7 +20,7 @@ void FMicromegasTelemetrySinkModule::ShutdownModule()
 {
 }
 
-std::shared_ptr<MicromegasTracing::EventSink> FMicromegasTelemetrySinkModule::InitTelemetry(const FString& BaseUrl, const SharedTelemetryAuthenticator& Auth)
+TSharedPtr<MicromegasTracing::EventSink, ESPMode::ThreadSafe> FMicromegasTelemetrySinkModule::InitTelemetry(const FString& BaseUrl, const SharedTelemetryAuthenticator& Auth)
 {
 	return InitHttpEventSink(BaseUrl, Auth);
 }

@@ -2,12 +2,11 @@
 //
 //  MicromegasTracing/Dispatch.h
 //
-#include <memory>
-#include <mutex>
-#include <vector>
+#include "Async/Mutex.h"
 #include "Containers/UnrealString.h"
 #include "HAL/Platform.h"
 #include "MicromegasTracing/Fwd.h"
+#include "Templates/SharedPointer.h"
 class FScopeLock;
 
 namespace MicromegasTracing
@@ -20,7 +19,7 @@ namespace MicromegasTracing
 	public:
 		static void Init(NewGuid allocNewGuid,
 			const ProcessInfoPtr& processInfo,
-			const std::shared_ptr<EventSink>& sink,
+			const TSharedPtr<EventSink, ESPMode::ThreadSafe>& sink,
 			size_t logBufferSize,
 			size_t metricBufferSize,
 			size_t threadBufferSize);
@@ -51,34 +50,33 @@ namespace MicromegasTracing
 
 	private:
 		Dispatch(NewGuid allocNewGuid,
-			const std::shared_ptr<EventSink>& sink,
 			const ProcessInfoPtr& processInfo,
+			const TSharedPtr<EventSink, ESPMode::ThreadSafe>& sink,
 			size_t logBufferSize,
 			size_t metricBufferSize,
 			size_t threadBufferSize);
 
-		typedef std::unique_ptr<std::lock_guard<std::recursive_mutex>> GuardPtr;
-		void FlushLogStreamImpl(GuardPtr& guard);
-		void FlushMetricStreamImpl(GuardPtr& guard);
+		void FlushLogStreamImpl(UE::FMutex& mutex);
+		void FlushMetricStreamImpl(UE::FMutex& mutex);
 		void FlushThreadStream(ThreadStream* stream);
 		ThreadStream* AllocThreadStream();
 		void PublishThreadStream(ThreadStream* stream);
 
 		NewGuid AllocNewGuid;
 
-		std::shared_ptr<EventSink> Sink;
+		TSharedPtr<MicromegasTracing::EventSink, ESPMode::ThreadSafe> Sink;
 		ProcessInfoPtr CurrentProcessInfo;
 
-		std::recursive_mutex LogMutex;
-		std::shared_ptr<LogStream> LogEntries;
+		UE::FMutex LogMutex;
+		LogStreamPtr LogEntries;
 		size_t LogBufferSize;
 
-		std::recursive_mutex MetricMutex;
-		std::shared_ptr<MetricStream> Metrics;
+		UE::FMutex MetricMutex;
+		MetricStreamPtr Metrics;
 		size_t MetricBufferSize;
 
-		std::recursive_mutex ThreadStreamsMutex;
-		std::vector<ThreadStream*> ThreadStreams;
+		UE::FMutex ThreadStreamsMutex;
+		TArray<ThreadStream*> ThreadStreams;
 		size_t ThreadBufferSize;
 	};
 

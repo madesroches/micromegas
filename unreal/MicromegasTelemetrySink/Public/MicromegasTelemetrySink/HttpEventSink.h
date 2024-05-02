@@ -56,4 +56,4 @@ private:
 	TUniquePtr<FlushMonitor> Flusher;
 };
 
-MICROMEGASTELEMETRYSINK_API std::shared_ptr<MicromegasTracing::EventSink> InitHttpEventSink(const FString& BaseUrl, const SharedTelemetryAuthenticator& Auth);
+MICROMEGASTELEMETRYSINK_API TSharedPtr<MicromegasTracing::EventSink, ESPMode::ThreadSafe> InitHttpEventSink(const FString& BaseUrl, const SharedTelemetryAuthenticator& Auth);

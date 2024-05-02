@@ -12,14 +12,12 @@ namespace MicromegasTracing
 class MICROMEGASTELEMETRYSINK_API FlushMonitor
 {
 public:
-	explicit FlushMonitor(MicromegasTracing::EventSink* sink);
-	~FlushMonitor();
+	FlushMonitor();
+	void Tick(MicromegasTracing::EventSink* sink);
 
 private:
-	void Tick();
 	void Flush();
 
 	uint64 LastFlush;
 	uint64 FlushDelay;
-	MicromegasTracing::EventSink* Sink;
 };

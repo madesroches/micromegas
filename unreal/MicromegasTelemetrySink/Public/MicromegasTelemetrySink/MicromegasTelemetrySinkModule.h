@@ -8,7 +8,6 @@
 #include "Modules/ModuleInterface.h"
 #include "Modules/ModuleManager.h"
 
-
 class MICROMEGASTELEMETRYSINK_API IMicromegasTelemetrySinkModule : public IModuleInterface
 {
 public:
@@ -29,5 +28,5 @@ public:
 		return FModuleManager::GetModulePtr<IMicromegasTelemetrySinkModule>(GetModuleName());
 	}
 
-	virtual std::shared_ptr<MicromegasTracing::EventSink> InitTelemetry( const FString& BaseUrl, const SharedTelemetryAuthenticator& Auth ) = 0;
+	virtual TSharedPtr<MicromegasTracing::EventSink, ESPMode::ThreadSafe> InitTelemetry(const FString& BaseUrl, const SharedTelemetryAuthenticator& Auth) = 0;
 };

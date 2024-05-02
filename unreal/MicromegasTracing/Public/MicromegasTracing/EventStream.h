@@ -4,6 +4,7 @@
 //
 #include "Containers/Array.h"
 #include "Containers/Map.h"
+#include "Templates/SharedPointer.h"
 
 namespace MicromegasTracing
 {
@@ -12,7 +13,7 @@ namespace MicromegasTracing
 	{
 	public:
 		typedef EventBlockT EventBlock;
-		typedef std::shared_ptr<EventBlockT> BlockPtr;
+		typedef TSharedPtr<EventBlockT, ESPMode::ThreadSafe> BlockPtr;
 
 		EventStreamImpl(const FString& processId,
 			const FString& streamId,

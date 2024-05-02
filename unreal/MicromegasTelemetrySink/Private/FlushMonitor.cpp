@@ -15,23 +15,16 @@ namespace
 	}
 } // namespace
 
-FlushMonitor::FlushMonitor(MicromegasTracing::EventSink* sink)
+FlushMonitor::FlushMonitor()
 {
 	LastFlush = FPlatformTime::Cycles64();
-	Sink = sink;
 	double freq = 1.0 / FPlatformTime::GetSecondsPerCycle64();
 	FlushDelay = static_cast<uint64>(freq * 60);
-	FCoreDelegates::OnBeginFrame.AddRaw(this, &FlushMonitor::Tick);
 }
 
-FlushMonitor::~FlushMonitor()
+void FlushMonitor::Tick(MicromegasTracing::EventSink* sink)
 {
-	FCoreDelegates::OnBeginFrame.RemoveAll(this);
-}
-
-void FlushMonitor::Tick()
-{
-	if (Sink->IsBusy())
+	if (sink->IsBusy())
 	{
 		return;
 	}
