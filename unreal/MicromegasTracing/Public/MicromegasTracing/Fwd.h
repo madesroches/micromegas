@@ -7,6 +7,7 @@
 namespace MicromegasTracing
 {
 	class EventSink;
+	typedef TSharedPtr<EventSink, ESPMode::ThreadSafe> EventSinkPtr;
 	struct LogStringInteropEvent;
 	struct LogStaticStrEvent;
 	struct IntegerMetricEvent;
