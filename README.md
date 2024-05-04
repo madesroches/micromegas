@@ -43,7 +43,7 @@ In order to keep costs down, most payloads will remain unprocessed until they ex
 ## Status
 
 ### May 2024
-Released [version 0.1.2](https://crates.io/crates/micromegas)
+Released [version 0.1.3](https://crates.io/crates/micromegas)
 
 Better unreal engine instrumentation
   * new protocol
