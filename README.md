@@ -6,6 +6,7 @@
 [![Build Status][actions-badge]][actions-url]
 
 [rust api documentation](https://docs.rs/micromegas/latest/micromegas/) 
+
 [design presentation](https://madesroches.github.io/micromegas/doc/design.html) 
 
 
