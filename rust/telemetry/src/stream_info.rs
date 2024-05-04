@@ -28,8 +28,8 @@ impl StreamInfo {
         const THREAD_ID_KEY: &str = "thread-id";
         let opt_name = self
             .properties
-            .get(&THREAD_NAME_KEY.to_owned())
-            .or_else(|| self.properties.get(&THREAD_ID_KEY.to_owned()));
+            .get(THREAD_NAME_KEY)
+            .or_else(|| self.properties.get(THREAD_ID_KEY));
         if let Some(name) = opt_name {
             name.to_owned()
         } else {

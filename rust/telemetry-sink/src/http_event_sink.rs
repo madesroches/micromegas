@@ -27,9 +27,6 @@ enum SinkEvent {
     ProcessThreadBlock(Arc<ThreadBlock>),
 }
 
-#[derive(Clone, Debug)]
-struct StaticApiKey {}
-
 pub struct HttpEventSink {
     thread: Option<std::thread::JoinHandle<()>>,
     // TODO: simplify this?
