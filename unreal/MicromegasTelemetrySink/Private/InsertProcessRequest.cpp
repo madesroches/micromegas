@@ -1,4 +1,3 @@
-#pragma once
 //
 //  MicromegasTelemetrySink/InsertProcessRequest.cpp
 //
