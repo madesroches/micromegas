@@ -2,10 +2,10 @@
 //  MicromegasTelemetrySink/FlushMonitor.cpp
 //
 #include "MicromegasTelemetrySink/FlushMonitor.h"
+#include "HAL/PlatformTime.h"
 #include "MicromegasTracing/Dispatch.h"
 #include "MicromegasTracing/EventSink.h"
-#include "MicromegasTracing/ThreadStream.h"
-#include "Misc/CoreDelegates.h"
+#include "MicromegasTracing/EventStream.h"
 
 namespace
 {
