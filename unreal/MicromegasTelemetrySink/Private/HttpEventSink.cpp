@@ -30,10 +30,10 @@ namespace
 {
 	void OnProcessRequestComplete(FHttpRequestPtr HttpRequest, FHttpResponsePtr HttpResponse, bool bSucceeded)
 	{
-		int32 code = HttpResponse ? HttpResponse->GetResponseCode() : 0;
-		if (!bSucceeded || code != 200)
+		int32 Code = HttpResponse ? HttpResponse->GetResponseCode() : 0;
+		if (!bSucceeded || Code != 200)
 		{
-			UE_LOG(LogMicromegasTelemetrySink, Error, TEXT("Request completed with code=%d response=%s"), code, HttpResponse ? *(HttpResponse->GetContentAsString()) : TEXT(""));
+			UE_LOG(LogMicromegasTelemetrySink, Error, TEXT("Request completed with code=%d response=%s"), Code, HttpResponse ? *(HttpResponse->GetContentAsString()) : TEXT(""));
 		}
 	}
 
@@ -241,30 +241,30 @@ TSharedPtr<MicromegasTracing::EventSink, ESPMode::ThreadSafe> InitHttpEventSink(
 	using namespace MicromegasTracing;
 	UE_LOG(LogMicromegasTelemetrySink, Log, TEXT("Initializing Remote Telemetry Sink"));
 
-	DualTime startTime = DualTime::Now();
-	FString processId = CreateGuid();
-	FString parentProcessId = FPlatformMisc::GetEnvironmentVariable(TEXT("MICROMEGAS_TELEMETRY_PARENT_PROCESS"));
-	FPlatformMisc::SetEnvironmentVar(TEXT("MICROMEGAS_TELEMETRY_PARENT_PROCESS"), *processId);
+	DualTime StartTime = DualTime::Now();
+	FString ProcessId = CreateGuid();
+	FString ParentProcessId = FPlatformMisc::GetEnvironmentVariable(TEXT("MICROMEGAS_TELEMETRY_PARENT_PROCESS"));
+	FPlatformMisc::SetEnvironmentVar(TEXT("MICROMEGAS_TELEMETRY_PARENT_PROCESS"), *ProcessId);
 
-	ProcessInfoPtr process(new ProcessInfo());
-	process->ProcessId = processId;
-	process->ParentProcessId = parentProcessId;
-	process->Exe = FPlatformProcess::ExecutablePath();
-	process->Username = FPlatformProcess::UserName(false);
-	process->Computer = FPlatformProcess::ComputerName();
-	process->Distro = GetDistro();
-	process->CpuBrand = *FPlatformMisc::GetCPUBrand();
-	process->TscFrequency = GetTscFrequency();
-	process->StartTime = startTime;
-	process->Properties.Add(TEXT("build-version"), FApp::GetBuildVersion());
+	ProcessInfoPtr Process(new ProcessInfo());
+	Process->ProcessId = ProcessId;
+	Process->ParentProcessId = ParentProcessId;
+	Process->Exe = FPlatformProcess::ExecutablePath();
+	Process->Username = FPlatformProcess::UserName(false);
+	Process->Computer = FPlatformProcess::ComputerName();
+	Process->Distro = GetDistro();
+	Process->CpuBrand = *FPlatformMisc::GetCPUBrand();
+	Process->TscFrequency = GetTscFrequency();
+	Process->StartTime = StartTime;
+	Process->Properties.Add(TEXT("build-version"), FApp::GetBuildVersion());
 
-	TSharedPtr<MicromegasTracing::EventSink, ESPMode::ThreadSafe> sink = MakeShared<HttpEventSink>(BaseUrl, process, Auth);
+	TSharedPtr<MicromegasTracing::EventSink, ESPMode::ThreadSafe> Sink = MakeShared<HttpEventSink>(BaseUrl, Process, Auth);
 	const size_t LOG_BUFFER_SIZE = 10 * 1024 * 1024;
 	const size_t METRICS_BUFFER_SIZE = 10 * 1024 * 1024;
 	const size_t THREAD_BUFFER_SIZE = 10 * 1024 * 1024;
 
-	Dispatch::Init(&CreateGuid, process, sink, LOG_BUFFER_SIZE, METRICS_BUFFER_SIZE, THREAD_BUFFER_SIZE);
-	UE_LOG(LogMicromegasTelemetrySink, Log, TEXT("Initializing Legion Telemetry for process %s"), *process->ProcessId);
+	Dispatch::Init(&CreateGuid, Process, Sink, LOG_BUFFER_SIZE, METRICS_BUFFER_SIZE, THREAD_BUFFER_SIZE);
+	UE_LOG(LogMicromegasTelemetrySink, Log, TEXT("Initializing Legion Telemetry for process %s"), *Process->ProcessId);
 	MICROMEGAS_LOG_STATIC(TEXT("MicromegasTelemetrySink"), LogLevel::Info, TEXT("Telemetry enabled"));
-	return sink;
+	return Sink;
 }
