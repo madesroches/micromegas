@@ -28,5 +28,5 @@ public:
 		return FModuleManager::GetModulePtr<IMicromegasTelemetrySinkModule>(GetModuleName());
 	}
 
-	virtual TSharedPtr<MicromegasTracing::EventSink, ESPMode::ThreadSafe> InitTelemetry(const FString& BaseUrl, const SharedTelemetryAuthenticator& Auth) = 0;
+	virtual void InitTelemetry(const FString& BaseUrl, const SharedTelemetryAuthenticator& Auth) = 0;
 };
