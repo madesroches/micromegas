@@ -19,6 +19,8 @@ Cargo.lock
 # python
 __pycache__/
 
+python/micromegas/dist
+
 # gtags
 unreal/GPATH
 unreal/GRTAGS
