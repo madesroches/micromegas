@@ -47,3 +47,5 @@ namespace MicromegasTracing
 #define MICROMEGAS_SPAN_SCOPE(target, name)                                                                                     \
 	static const MicromegasTracing::SpanMetadata PREPROCESSOR_JOIN(spanMeta, __LINE__)(name, target, TEXT(__FILE__), __LINE__); \
 	MicromegasTracing::SpanGuard PREPROCESSOR_JOIN(spanguard, __LINE__)(&PREPROCESSOR_JOIN(spanMeta, __LINE__))
+
+#define MICROMEGAS_SPAN_FUNCTION(target) MICROMEGAS_SPAN_SCOPE(target, TEXT(__FUNCTION__))
