@@ -3,9 +3,11 @@ import io
 import pyarrow.parquet as pq
 import requests
 
-def request(url, args):
+
+def request(url, args, headers={}):
     response = requests.post(
         url,
+        headers=headers,
         data=cbor2.dumps(args),
     )
     if response.status_code != 200:
