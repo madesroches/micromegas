@@ -80,16 +80,16 @@ namespace MicromegasTracing
 
 	struct LogMetadata
 	{
-		const TCHAR* Target;
+		const char* Target;
 		const TCHAR* Msg;
-		const TCHAR* File;
+		const char* File;
 		uint32 Line;
 		LogLevel::Type Level;
 
 		LogMetadata(LogLevel::Type level,
-			const TCHAR* target,
+			const char* target,
 			const TCHAR* msg,
-			const TCHAR* file,
+			const char* file,
 			uint32 line)
 			: Target(target)
 			, Msg(msg)
@@ -104,9 +104,9 @@ namespace MicromegasTracing
 	struct LogMetadataDependency
 	{
 		uint64 Id;
-		const TCHAR* Target;
+		const char* Target;
 		const TCHAR* Msg;
-		const TCHAR* File;
+		const char* File;
 		uint32 Line;
 		LogLevel::Type Level;
 

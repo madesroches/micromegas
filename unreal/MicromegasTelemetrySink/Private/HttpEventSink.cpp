@@ -83,7 +83,7 @@ void HttpEventSink::OnStartup(const MicromegasTracing::ProcessInfoPtr& processIn
 
 void HttpEventSink::OnShutdown()
 {
-	MICROMEGAS_LOG_STATIC(TEXT("MicromegasTelemetrySink"), MicromegasTracing::LogLevel::Info, TEXT("Shutting down"));
+	MICROMEGAS_LOG_STATIC("MicromegasTelemetrySink", MicromegasTracing::LogLevel::Info, TEXT("Shutting down"));
 	Flusher.Reset();
 	MicromegasTracing::FlushLogStream();
 	MicromegasTracing::FlushMetricStream();
@@ -155,7 +155,7 @@ void HttpEventSink::OnProcessMetricBlock(const MicromegasTracing::MetricsBlockPt
 
 void HttpEventSink::OnProcessThreadBlock(const MicromegasTracing::ThreadBlockPtr& block)
 {
-	MICROMEGAS_SPAN_SCOPE(TEXT("MicromegasTelemetrySink"), TEXT("OnProcessThreadBlock"));
+	MICROMEGAS_SPAN_FUNCTION("MicromegasTelemetrySink");
 	IncrementQueueSize();
 	Queue.Enqueue([this, block]() {
 		TArray<uint8> content = FormatBlockRequest(*Process, *block);
@@ -180,7 +180,7 @@ uint32 HttpEventSink::Run()
 			while (Queue.Dequeue(c))
 			{
 				int32 newQueueSize = FPlatformAtomics::InterlockedDecrement(&QueueSize);
-				MICROMEGAS_IMETRIC(TEXT("MicromegasTelemetrySink"), MicromegasTracing::Verbosity::Min, TEXT("QueueSize"), TEXT("count"), newQueueSize);
+				MICROMEGAS_IMETRIC("MicromegasTelemetrySink", MicromegasTracing::Verbosity::Min, TEXT("QueueSize"), TEXT("count"), newQueueSize);
 				c();
 			}
 		}
@@ -198,14 +198,14 @@ uint32 HttpEventSink::Run()
 
 void HttpEventSink::IncrementQueueSize()
 {
-	MICROMEGAS_SPAN_SCOPE(TEXT("MicromegasTelemetrySink"), TEXT("IncrementQueueSize"));
+	MICROMEGAS_SPAN_FUNCTION("MicromegasTelemetrySink");
 	int32 incrementedQueueSize = FPlatformAtomics::InterlockedIncrement(&QueueSize);
-	MICROMEGAS_IMETRIC(TEXT("MicromegasTelemetrySink"), MicromegasTracing::Verbosity::Min, TEXT("QueueSize"), TEXT("count"), incrementedQueueSize);
+	MICROMEGAS_IMETRIC("MicromegasTelemetrySink", MicromegasTracing::Verbosity::Min, TEXT("QueueSize"), TEXT("count"), incrementedQueueSize);
 }
 
 void HttpEventSink::SendBinaryRequest(const TCHAR* command, const TArray<uint8>& content, float TimeoutSeconds)
 {
-	MICROMEGAS_SPAN_SCOPE(TEXT("MicromegasTelemetrySink"), TEXT("SendBinaryRequest"));
+	MICROMEGAS_SPAN_FUNCTION("MicromegasTelemetrySink");
 	TSharedRef<IHttpRequest, ESPMode::ThreadSafe> HttpRequest = FHttpModule::Get().CreateRequest();
 	HttpRequest->SetURL(BaseUrl + command);
 	HttpRequest->SetVerb(TEXT("POST"));
@@ -249,7 +249,11 @@ TSharedPtr<MicromegasTracing::EventSink, ESPMode::ThreadSafe> InitHttpEventSink(
 	ProcessInfoPtr Process(new ProcessInfo());
 	Process->ProcessId = ProcessId;
 	Process->ParentProcessId = ParentProcessId;
+#if PLATFORM_ANDROID
+	Process->Exe = FPlatformProcess::ExecutableName(false);
+#else
 	Process->Exe = FPlatformProcess::ExecutablePath();
+#endif
 	Process->Username = FPlatformProcess::UserName(false);
 	Process->Computer = FPlatformProcess::ComputerName();
 	Process->Distro = GetDistro();
@@ -265,6 +269,6 @@ TSharedPtr<MicromegasTracing::EventSink, ESPMode::ThreadSafe> InitHttpEventSink(
 
 	Dispatch::Init(&CreateGuid, Process, Sink, LOG_BUFFER_SIZE, METRICS_BUFFER_SIZE, THREAD_BUFFER_SIZE);
 	UE_LOG(LogMicromegasTelemetrySink, Log, TEXT("Initializing Legion Telemetry for process %s"), *Process->ProcessId);
-	MICROMEGAS_LOG_STATIC(TEXT("MicromegasTelemetrySink"), LogLevel::Info, TEXT("Telemetry enabled"));
+	MICROMEGAS_LOG_STATIC("MicromegasTelemetrySink", LogLevel::Info, TEXT("Telemetry enabled"));
 	return Sink;
 }

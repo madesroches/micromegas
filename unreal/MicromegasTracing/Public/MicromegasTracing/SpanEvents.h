@@ -6,14 +6,14 @@ namespace MicromegasTracing
 {
 	struct SpanMetadata
 	{
-		const TCHAR* Name;
-		const TCHAR* Target;
-		const TCHAR* File;
+		const char* Name;
+		const char* Target;
+		const char* File;
 		uint32 Line;
 
-		SpanMetadata(const TCHAR* name,
-			const TCHAR* target,
-			const TCHAR* file,
+		SpanMetadata(const char* name,
+			const char* target,
+			const char* file,
 			uint32 line)
 			: Name(name)
 			, Target(target)

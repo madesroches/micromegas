@@ -75,7 +75,7 @@ namespace MicromegasTracing
 
 	void Dispatch::FlushLogStreamImpl(UE::FMutex& mutex)
 	{
-		MICROMEGAS_SPAN_SCOPE(TEXT("MicromegasTracing"), TEXT("Dispatch::FlushLogStreamImpl"));
+		MICROMEGAS_SPAN_FUNCTION("MicromegasTracing");
 		if (LogEntries->GetCurrentBlock().IsEmpty())
 		{
 			mutex.Unlock();
@@ -95,7 +95,7 @@ namespace MicromegasTracing
 
 	void Dispatch::FlushMetricStreamImpl(UE::FMutex& mutex)
 	{
-		MICROMEGAS_SPAN_SCOPE(TEXT("MicromegasTracing"), TEXT("Dispatch::FlushMetricStreamImpl"));
+		MICROMEGAS_SPAN_FUNCTION("MicromegasTracing");
 		if (Metrics->GetCurrentBlock().IsEmpty())
 		{
 			mutex.Unlock();

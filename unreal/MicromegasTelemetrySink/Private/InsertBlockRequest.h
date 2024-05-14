@@ -22,7 +22,7 @@ TUniquePtr<ExtractThreadDependencies> ExtractBlockDependencies(const MicromegasT
 template <typename BlockT>
 inline TArray<uint8> FormatBlockRequest(const MicromegasTracing::ProcessInfo& processInfo, const BlockT& block)
 {
-	MICROMEGAS_SPAN_SCOPE(TEXT("MicromegasTelemetrySink"), TEXT("FormatBlockRequest"));
+	MICROMEGAS_SPAN_FUNCTION("MicromegasTelemetrySink");
 	using namespace MicromegasTracing;
 	auto& queue = block.GetEvents();
 
