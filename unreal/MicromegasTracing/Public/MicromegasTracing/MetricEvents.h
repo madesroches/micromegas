@@ -11,15 +11,15 @@ namespace MicromegasTracing
 		Verbosity::Type Lod;
 		const TCHAR* Name;
 		const TCHAR* Unit;
-		const TCHAR* Target;
-		const TCHAR* File;
+		const char* Target;
+		const char* File;
 		uint32 Line;
 
 		MetricMetadata(Verbosity::Type lod,
 			const TCHAR* name,
 			const TCHAR* unit,
-			const TCHAR* target,
-			const TCHAR* file,
+			const char* target,
+			const char* file,
 			uint32 line)
 			: Lod(lod)
 			, Name(name)
@@ -65,8 +65,8 @@ namespace MicromegasTracing
 		Verbosity::Type Lod;
 		const TCHAR* Name;
 		const TCHAR* Unit;
-		const TCHAR* Target;
-		const TCHAR* File;
+		const char* Target;
+		const char* File;
 		uint32 Line;
 
 		explicit MetricMetadataDependency(const MetricMetadata* mm)

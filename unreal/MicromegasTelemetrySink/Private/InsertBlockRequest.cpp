@@ -6,7 +6,7 @@
 
 std::vector<uint8> CompressBuffer(const void* src, size_t size)
 {
-	MICROMEGAS_SPAN_SCOPE(TEXT("MicromegasTelemetrySink"), TEXT("CompressBuffer"));
+	MICROMEGAS_SPAN_FUNCTION("MicromegasTelemetrySink");
 	std::vector<uint8> buffer;
 	const int32 compressedBound = LZ4F_compressFrameBound(size, nullptr);
 	buffer.resize(compressedBound);
@@ -22,7 +22,7 @@ std::vector<uint8> CompressBuffer(const void* src, size_t size)
 
 TUniquePtr<ExtractLogDependencies> ExtractBlockDependencies(const MicromegasTracing::LogBlock& block)
 {
-	MICROMEGAS_SPAN_SCOPE(TEXT("MicromegasTelemetrySink"), TEXT("ExtractBlockDependencies"));
+	MICROMEGAS_SPAN_FUNCTION("MicromegasTelemetrySink");
 	TUniquePtr<ExtractLogDependencies> extractDependencies(new ExtractLogDependencies());
 	block.GetEvents().ForEach(*extractDependencies);
 	return extractDependencies;
@@ -30,7 +30,7 @@ TUniquePtr<ExtractLogDependencies> ExtractBlockDependencies(const MicromegasTrac
 
 TUniquePtr<ExtractMetricDependencies> ExtractBlockDependencies(const MicromegasTracing::MetricBlock& block)
 {
-	MICROMEGAS_SPAN_SCOPE(TEXT("MicromegasTelemetrySink"), TEXT("ExtractBlockDependencies"));
+	MICROMEGAS_SPAN_FUNCTION("MicromegasTelemetrySink");
 	TUniquePtr<ExtractMetricDependencies> extractDependencies(new ExtractMetricDependencies());
 	block.GetEvents().ForEach(*extractDependencies);
 	return extractDependencies;
@@ -38,7 +38,7 @@ TUniquePtr<ExtractMetricDependencies> ExtractBlockDependencies(const MicromegasT
 
 TUniquePtr<ExtractThreadDependencies> ExtractBlockDependencies(const MicromegasTracing::ThreadBlock& block)
 {
-	MICROMEGAS_SPAN_SCOPE(TEXT("MicromegasTelemetrySink"), TEXT("ExtractBlockDependencies"));
+	MICROMEGAS_SPAN_FUNCTION("MicromegasTelemetrySink");
 	TUniquePtr<ExtractThreadDependencies> extractDependencies(new ExtractThreadDependencies());
 	block.GetEvents().ForEach(*extractDependencies);
 	return extractDependencies;

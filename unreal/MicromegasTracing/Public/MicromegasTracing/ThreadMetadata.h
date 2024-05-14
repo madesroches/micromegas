@@ -37,9 +37,9 @@ namespace MicromegasTracing
 	struct SpanMetadataDependency
 	{
 		uint64 Id;
-		const TCHAR* Name;
-		const TCHAR* Target;
-		const TCHAR* File;
+		const char* Name;
+		const char* Target;
+		const char* File;
 		uint32 Line;
 
 		explicit SpanMetadataDependency(const SpanMetadata* desc)
