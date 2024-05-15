@@ -6,45 +6,36 @@ import pandas as pd
 import tabulate
 
 
-ANALYTICS_BASE_URL = "http://localhost:8082/analytics/"
+BASE_URL = "http://localhost:8082/"
+client = micromegas.client.Client(BASE_URL)
 
-
-def req(url_tail, args={}):
-    url = ANALYTICS_BASE_URL + url_tail
-    # add default args that make sense for tests but would not in general
-    if "begin" not in args:
-        # set a very large time span if there is not already one specified
-        end = datetime.datetime.now(datetime.timezone.utc)
-        begin = end - datetime.timedelta(days=10000)
-        end = end + datetime.timedelta(hours=1)
-        args["begin"] = begin.isoformat()
-        args["end"] = end.isoformat()
-    if "limit" not in args:
-        args["limit"] = 1024
-    return micromegas.request.request(url, args)
+now = datetime.datetime.now(datetime.timezone.utc)
+begin = now - datetime.timedelta(days=10000)
+end = now + datetime.timedelta(hours=1)
+limit = 1024
 
 
 def test_process_list():
-    df = req("query_processes")
+    df = client.query_processes(begin, end, limit)
     df = df[["process_id", "exe", "start_time", "properties"]]
     print(df)
 
 
 def test_list_streams():
-    df = req("query_streams")
+    df = client.query_streams(begin, end, limit)
     print(df)
 
 
 def test_find_cpu_stream():
-    df = req("query_streams", args={"tag_filter": "cpu"})
+    df = client.query_streams(begin, end, limit, tag_filter="cpu")
     print(df)
 
 
 def get_cpu_streams_with_data():
-    streams_df = req("query_streams", args={"tag_filter": "cpu"})
+    streams_df = client.query_streams(begin, end, limit, tag_filter="cpu")
     streams_stats = {}
     for index, row in streams_df.iterrows():
-        blocks_df = req("query_blocks", args={"stream_id": row["stream_id"]})
+        blocks_df = client.query_blocks(begin, end, limit, row["stream_id"])
         if len(blocks_df) == 0:
             stats = {"sum_payload": 0, "nb_events": 0}
         else:
@@ -68,8 +59,7 @@ def get_cpu_stream_with_most_events():
     streams_stats = streams_stats.sort_values("nb_events", ascending=False)
     return streams_stats.iloc[0].name
 
-
 def test_spans():
     stream_id = get_cpu_stream_with_most_events()
-    df = req("query_spans", args={"stream_id": stream_id})
+    df = client.query_spans(begin, end, limit, stream_id)
     print(df)
