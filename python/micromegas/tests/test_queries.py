@@ -15,15 +15,17 @@ end = now + datetime.timedelta(hours=1)
 limit = 1024
 
 
-def test_process_list():
-    df = client.query_processes(begin, end, limit)
-    df = df[["process_id", "exe", "start_time", "properties"]]
-    print(df)
-
-
 def test_list_streams():
     df = client.query_streams(begin, end, limit)
     print(df)
+
+def test_process_streams():
+    process_df = client.query_processes(begin, end, limit)
+    process_df = process_df[["process_id", "exe", "start_time", "properties"]]
+    for index, row in process_df.iterrows():
+        streams = client.query_streams(begin, end, limit, process_id=row["process_id"])
+        print(streams)
+        
 
 
 def test_find_cpu_stream():
