@@ -1,8 +1,11 @@
 #include "MicromegasTelemetrySink/MicromegasTelemetrySinkModule.h"
 #include "HAL/IConsoleManager.h"
 #include "MicromegasTelemetrySink/HttpEventSink.h"
+#include "MicromegasTelemetrySink/LogInterop.h"
 #include "MicromegasTelemetrySink/TelemetryAuthenticator.h"
 #include "Templates/UniquePtr.h"
+
+#define MICROMEGAS_ENABLE_TELEMETRY_ON_START 0
 
 //================================================================================
 class FMicromegasTelemetrySinkModule : public IMicromegasTelemetrySinkModule
@@ -23,9 +26,11 @@ private:
 //================================================================================
 void FMicromegasTelemetrySinkModule::StartupModule()
 {
+#if MICROMEGAS_ENABLE_TELEMETRY_ON_START == 0
 	CmdEnableTelemetry.Reset(new FAutoConsoleCommand(TEXT("telemetry.enable"),
 		TEXT("Initialized the telemetry system"),
 		FConsoleCommandDelegate::CreateRaw(this, &FMicromegasTelemetrySinkModule::OnEnableTelemetryCommand)));
+#endif // MICROMEGAS_ENABLE_TELEMETRY_ON_START
 }
 
 void FMicromegasTelemetrySinkModule::OnEnableTelemetryCommand()
@@ -34,6 +39,7 @@ void FMicromegasTelemetrySinkModule::OnEnableTelemetryCommand()
 	TSharedPtr<MicromegasTracing::EventSink, ESPMode::ThreadSafe> Sink = InitHttpEventSink(UploadBaseUrl, Authenticator);
 	Authenticator->Init(Sink);
 	CmdEnableTelemetry.Reset();
+	InitLogInterop();
 }
 
 void FMicromegasTelemetrySinkModule::ShutdownModule()
@@ -45,6 +51,10 @@ void FMicromegasTelemetrySinkModule::InitTelemetry(const FString& BaseUrl, const
 {
 	UploadBaseUrl = BaseUrl;
 	Authenticator = Auth;
+
+#if MICROMEGAS_ENABLE_TELEMETRY_ON_START
+	OnEnableTelemetryCommand();
+#endif // MICROMEGAS_ENABLE_TELEMETRY_ON_START
 }
 
 IMPLEMENT_MODULE(FMicromegasTelemetrySinkModule, MicromegasTelemetrySink)

@@ -56,6 +56,7 @@ def test_find_cpu_blocks():
 def get_tagged_stream_with_most_events(tag_filter):
     streams_stats = get_tagged_streams_with_data(tag_filter)
     streams_stats = streams_stats.sort_values("nb_events", ascending=False)
+    #print(streams_stats)
     return streams_stats.iloc[0].name
 
 def test_spans():

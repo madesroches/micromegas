@@ -268,7 +268,6 @@ TSharedPtr<MicromegasTracing::EventSink, ESPMode::ThreadSafe> InitHttpEventSink(
 	const size_t THREAD_BUFFER_SIZE = 10 * 1024 * 1024;
 
 	Dispatch::Init(&CreateGuid, Process, Sink, LOG_BUFFER_SIZE, METRICS_BUFFER_SIZE, THREAD_BUFFER_SIZE);
-	UE_LOG(LogMicromegasTelemetrySink, Log, TEXT("Initializing Legion Telemetry for process %s"), *Process->ProcessId);
-	MICROMEGAS_LOG_STATIC("MicromegasTelemetrySink", LogLevel::Info, TEXT("Telemetry enabled"));
+	UE_LOG(LogMicromegasTelemetrySink, Log, TEXT("Initializing Micromegas Telemetry for process %s"), *Process->ProcessId);
 	return Sink;
 }
