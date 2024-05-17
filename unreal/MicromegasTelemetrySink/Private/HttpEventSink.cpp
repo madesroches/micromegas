@@ -50,10 +50,11 @@ namespace
 
 } // namespace
 
-HttpEventSink::HttpEventSink(const FString& baseUrl, const MicromegasTracing::ProcessInfoPtr& ThisProcess, const SharedTelemetryAuthenticator& Auth)
-	: BaseUrl(baseUrl)
+HttpEventSink::HttpEventSink(const FString& InBaseUrl, const MicromegasTracing::ProcessInfoPtr& ThisProcess, const SharedTelemetryAuthenticator& InAuth, const SharedSampingController& InSampling)
+	: BaseUrl(InBaseUrl)
 	, Process(ThisProcess)
-	, Auth(Auth)
+	, Auth(InAuth)
+	, Sampling(InSampling)
 	, QueueSize(0)
 	, RequestShutdown(false)
 {
@@ -70,13 +71,13 @@ void HttpEventSink::OnAuthUpdated()
 	WakeupThread->Trigger();
 }
 
-void HttpEventSink::OnStartup(const MicromegasTracing::ProcessInfoPtr& processInfo)
+void HttpEventSink::OnStartup(const MicromegasTracing::ProcessInfoPtr& ProcessInfo)
 {
 	FPlatformAtomics::InterlockedIncrement(&QueueSize);
-	Queue.Enqueue([this, processInfo]() {
-		TArray<uint8> body = FormatInsertProcessRequest(*processInfo);
+	Queue.Enqueue([this, ProcessInfo]() {
+		TArray<uint8> Body = FormatInsertProcessRequest(*ProcessInfo);
 		const float TimeoutSeconds = 30.0f;
-		SendBinaryRequest(TEXT("insert_process"), body, TimeoutSeconds);
+		SendBinaryRequest(TEXT("insert_process"), Body, TimeoutSeconds);
 	});
 	WakeupThread->Trigger();
 }
@@ -92,75 +93,89 @@ void HttpEventSink::OnShutdown()
 	Thread->WaitForCompletion();
 }
 
-void HttpEventSink::OnInitLogStream(const MicromegasTracing::LogStreamPtr& stream)
+void HttpEventSink::OnInitLogStream(const MicromegasTracing::LogStreamPtr& Stream)
 {
 	IncrementQueueSize();
-	Queue.Enqueue([this, stream]() {
-		TArray<uint8> body = FormatInsertLogStreamRequest(*stream);
+	Queue.Enqueue([this, Stream]() {
+		TArray<uint8> Body = FormatInsertLogStreamRequest(*Stream);
 		const float TimeoutSeconds = 30.0f;
-		SendBinaryRequest(TEXT("insert_stream"), body, TimeoutSeconds);
+		SendBinaryRequest(TEXT("insert_stream"), Body, TimeoutSeconds);
 	});
 	WakeupThread->Trigger();
 }
 
-void HttpEventSink::OnInitMetricStream(const MicromegasTracing::MetricStreamPtr& stream)
+void HttpEventSink::OnInitMetricStream(const MicromegasTracing::MetricStreamPtr& Stream)
 {
 	IncrementQueueSize();
-	Queue.Enqueue([this, stream]() {
-		TArray<uint8> body = FormatInsertMetricStreamRequest(*stream);
+	Queue.Enqueue([this, Stream]() {
+		TArray<uint8> Body = FormatInsertMetricStreamRequest(*Stream);
 		const float TimeoutSeconds = 30.0f;
-		SendBinaryRequest(TEXT("insert_stream"), body, TimeoutSeconds);
+		SendBinaryRequest(TEXT("insert_stream"), Body, TimeoutSeconds);
 	});
 	WakeupThread->Trigger();
 }
 
-void HttpEventSink::OnInitThreadStream(MicromegasTracing::ThreadStream* stream)
+void HttpEventSink::OnInitThreadStream(MicromegasTracing::ThreadStream* Stream)
 {
-	const uint32 threadId = FPlatformTLS::GetCurrentThreadId();
-	const FString& threadName = FThreadManager::GetThreadName(threadId);
+	const uint32 ThreadId = FPlatformTLS::GetCurrentThreadId();
+	const FString& ThreadName = FThreadManager::GetThreadName(ThreadId);
 
-	stream->SetProperty(TEXT("thread-name"), *threadName);
-	stream->SetProperty(TEXT("thread-id"), *FString::Format(TEXT("{0}"), { threadId }));
+	Stream->SetProperty(TEXT("thread-name"), *ThreadName);
+	Stream->SetProperty(TEXT("thread-id"), *FString::Format(TEXT("{0}"), { ThreadId }));
 
 	IncrementQueueSize();
-	Queue.Enqueue([this, stream]() {
-		TArray<uint8> body = FormatInsertThreadStreamRequest(*stream);
+	Queue.Enqueue([this, Stream]() {
+		TArray<uint8> Body = FormatInsertThreadStreamRequest(*Stream);
 		const float TimeoutSeconds = 30.0f;
-		SendBinaryRequest(TEXT("insert_stream"), body, TimeoutSeconds);
+		SendBinaryRequest(TEXT("insert_stream"), Body, TimeoutSeconds);
 	});
 	WakeupThread->Trigger();
 }
 
-void HttpEventSink::OnProcessLogBlock(const MicromegasTracing::LogBlockPtr& block)
-{
-	IncrementQueueSize();
-	Queue.Enqueue([this, block]() {
-		TArray<uint8> content = FormatBlockRequest(*Process, *block);
-		const float TimeoutSeconds = 10.0f;
-		SendBinaryRequest(TEXT("insert_block"), content, TimeoutSeconds);
-	});
-	WakeupThread->Trigger();
-}
-
-void HttpEventSink::OnProcessMetricBlock(const MicromegasTracing::MetricsBlockPtr& block)
-{
-	IncrementQueueSize();
-	Queue.Enqueue([this, block]() {
-		TArray<uint8> content = FormatBlockRequest(*Process, *block);
-		const float TimeoutSeconds = 10.0f;
-		SendBinaryRequest(TEXT("insert_block"), content, TimeoutSeconds);
-	});
-	WakeupThread->Trigger();
-}
-
-void HttpEventSink::OnProcessThreadBlock(const MicromegasTracing::ThreadBlockPtr& block)
+void HttpEventSink::OnProcessLogBlock(const MicromegasTracing::LogBlockPtr& Block)
 {
 	MICROMEGAS_SPAN_FUNCTION("MicromegasTelemetrySink");
+	if (!Sampling->ShouldSampleBlock(Block))
+	{
+		return;
+	}
 	IncrementQueueSize();
-	Queue.Enqueue([this, block]() {
-		TArray<uint8> content = FormatBlockRequest(*Process, *block);
+	Queue.Enqueue([this, Block]() {
+		TArray<uint8> Content = FormatBlockRequest(*Process, *Block);
+		const float TimeoutSeconds = 10.0f;
+		SendBinaryRequest(TEXT("insert_block"), Content, TimeoutSeconds);
+	});
+	WakeupThread->Trigger();
+}
+
+void HttpEventSink::OnProcessMetricBlock(const MicromegasTracing::MetricsBlockPtr& Block)
+{
+	MICROMEGAS_SPAN_FUNCTION("MicromegasTelemetrySink");
+	if (!Sampling->ShouldSampleBlock(Block))
+	{
+		return;
+	}
+	IncrementQueueSize();
+	Queue.Enqueue([this, Block]() {
+		TArray<uint8> Content = FormatBlockRequest(*Process, *Block);
+		const float TimeoutSeconds = 10.0f;
+		SendBinaryRequest(TEXT("insert_block"), Content, TimeoutSeconds);
+	});
+	WakeupThread->Trigger();
+}
+
+void HttpEventSink::OnProcessThreadBlock(const MicromegasTracing::ThreadBlockPtr& Block)
+{
+	MICROMEGAS_SPAN_FUNCTION("MicromegasTelemetrySink");
+	if (!Sampling->ShouldSampleBlock(Block))
+	{
+		return;
+	}
+	IncrementQueueSize();
+	Queue.Enqueue([this, Block]() {
+		TArray<uint8> Content = FormatBlockRequest(*Process, *Block);
 		const float TimeoutSeconds = 2.0f;
-		SendBinaryRequest(TEXT("insert_block"), content, TimeoutSeconds);
+		SendBinaryRequest(TEXT("insert_block"), Content, TimeoutSeconds);
 	});
 	WakeupThread->Trigger();
 }
@@ -236,7 +251,10 @@ FString GetDistro()
 	return FString::Printf(TEXT("%s %s"), ANSI_TO_TCHAR(FPlatformProperties::PlatformName()), *FPlatformMisc::GetOSVersion());
 }
 
-TSharedPtr<MicromegasTracing::EventSink, ESPMode::ThreadSafe> InitHttpEventSink(const FString& BaseUrl, const SharedTelemetryAuthenticator& Auth)
+TSharedPtr<MicromegasTracing::EventSink, ESPMode::ThreadSafe> InitHttpEventSink(
+	const FString& BaseUrl,
+	const SharedTelemetryAuthenticator& Auth,
+	const SharedSampingController& Sampling)
 {
 	using namespace MicromegasTracing;
 	UE_LOG(LogMicromegasTelemetrySink, Log, TEXT("Initializing Remote Telemetry Sink"));
@@ -262,7 +280,7 @@ TSharedPtr<MicromegasTracing::EventSink, ESPMode::ThreadSafe> InitHttpEventSink(
 	Process->StartTime = StartTime;
 	Process->Properties.Add(TEXT("build-version"), FApp::GetBuildVersion());
 
-	TSharedPtr<MicromegasTracing::EventSink, ESPMode::ThreadSafe> Sink = MakeShared<HttpEventSink>(BaseUrl, Process, Auth);
+	TSharedPtr<MicromegasTracing::EventSink, ESPMode::ThreadSafe> Sink = MakeShared<HttpEventSink>(BaseUrl, Process, Auth, Sampling);
 	const size_t LOG_BUFFER_SIZE = 10 * 1024 * 1024;
 	const size_t METRICS_BUFFER_SIZE = 10 * 1024 * 1024;
 	const size_t THREAD_BUFFER_SIZE = 10 * 1024 * 1024;
