@@ -2,8 +2,10 @@
 //  MicromegasTelemetrySink/LogInterop.cpp
 //
 #include "MicromegasTelemetrySink/LogInterop.h"
-#include "MicromegasTracing/LogEvents.h"
 #include "MicromegasTracing/Dispatch.h"
+#include "MicromegasTracing/LogEvents.h"
+#include "MicromegasTracing/Macros.h"
+#include "Misc/OutputDeviceRedirector.h"
 
 using namespace MicromegasTracing;
 
@@ -11,6 +13,7 @@ struct LogBridge : public FOutputDevice
 {
 	virtual void Serialize(const TCHAR* V, ELogVerbosity::Type Verbosity, const FName& Category)
 	{
+		MICROMEGAS_SPAN_FUNCTION("MicromegasTelemetrySink");
 		LogLevel::Type level = LogLevel::Invalid;
 		switch (Verbosity)
 		{
