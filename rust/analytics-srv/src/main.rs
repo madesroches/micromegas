@@ -92,6 +92,19 @@ async fn query_spans_request(
     )
 }
 
+async fn query_log_entries_request(
+    Extension(service): Extension<AnalyticsService>,
+    body: bytes::Bytes,
+) -> Response {
+    info!("query_log_entries_request");
+    bytes_response(
+        service
+            .query_log_entries(body)
+            .await
+            .with_context(|| "query_log_entries"),
+    )
+}
+
 async fn serve_http(
     args: &Cli,
     lake: DataLakeConnection,
@@ -102,6 +115,10 @@ async fn serve_http(
         .route("/analytics/query_streams", post(query_streams_request))
         .route("/analytics/query_blocks", post(query_blocks_request))
         .route("/analytics/query_spans", post(query_spans_request))
+        .route(
+            "/analytics/query_log_entries",
+            post(query_log_entries_request),
+        )
         .layer(Extension(service));
     let listener = tokio::net::TcpListener::bind(args.listen_endpoint)
         .await

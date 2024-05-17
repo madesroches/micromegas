@@ -14,11 +14,15 @@ pub fn opt_uuid_from_string<'de, D>(deserializer: D) -> Result<Option<Uuid>, D::
 where
     D: serde::Deserializer<'de>,
 {
-    let s: String = Deserialize::deserialize(deserializer)?;
-    if s.is_empty() {
-        Ok(None)
+    let opt_s: Option<String> = Deserialize::deserialize(deserializer)?;
+    if let Some(s) = opt_s {
+        if s.is_empty() {
+            Ok(None)
+        } else {
+            Uuid::parse_str(&s).map(Some).map_err(D::Error::custom)
+        }
     } else {
-        Uuid::parse_str(&s).map(Some).map_err(D::Error::custom)
+        Ok(None)
     }
 }
 

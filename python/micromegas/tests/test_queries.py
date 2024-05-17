@@ -15,24 +15,23 @@ end = now + datetime.timedelta(hours=1)
 limit = 1024
 
 
-def test_process_list():
-    df = client.query_processes(begin, end, limit)
-    df = df[["process_id", "exe", "start_time", "properties"]]
-    print(df)
-
-
 def test_list_streams():
     df = client.query_streams(begin, end, limit)
     print(df)
 
-
+def test_process_streams():
+    process_df = client.query_processes(begin, end, limit)
+    process_df = process_df[["process_id", "exe", "start_time", "properties"]]
+    for index, row in process_df.iterrows():
+        streams = client.query_streams(begin, end, limit, process_id=row["process_id"])
+        print(streams)
+        
 def test_find_cpu_stream():
     df = client.query_streams(begin, end, limit, tag_filter="cpu")
     print(df)
 
-
-def get_cpu_streams_with_data():
-    streams_df = client.query_streams(begin, end, limit, tag_filter="cpu")
+def get_tagged_streams_with_data(tag_filter):
+    streams_df = client.query_streams(begin, end, limit, tag_filter=tag_filter)
     streams_stats = {}
     for index, row in streams_df.iterrows():
         blocks_df = client.query_blocks(begin, end, limit, row["stream_id"])
@@ -50,16 +49,22 @@ def get_cpu_streams_with_data():
 
 
 def test_find_cpu_blocks():
-    streams_stats = get_cpu_streams_with_data()
+    streams_stats = get_tagged_streams_with_data("cpu")
     print(streams_stats.sort_values("nb_events", ascending=False))
 
 
-def get_cpu_stream_with_most_events():
-    streams_stats = get_cpu_streams_with_data()
+def get_tagged_stream_with_most_events(tag_filter):
+    streams_stats = get_tagged_streams_with_data(tag_filter)
     streams_stats = streams_stats.sort_values("nb_events", ascending=False)
     return streams_stats.iloc[0].name
 
 def test_spans():
-    stream_id = get_cpu_stream_with_most_events()
+    stream_id = get_tagged_stream_with_most_events("cpu")
     df = client.query_spans(begin, end, limit, stream_id)
     print(df)
+
+def test_log():
+    stream_id = get_tagged_stream_with_most_events("log")
+    print("log stream", stream_id)
+    log_entries = client.query_log_entries(begin, end, limit, stream_id)
+    print(log_entries)

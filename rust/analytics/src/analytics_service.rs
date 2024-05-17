@@ -30,6 +30,8 @@ pub struct QueryStreamsRequest {
     pub begin: String,
     pub end: String,
     pub tag_filter: Option<String>,
+    #[serde(deserialize_with = "micromegas_transit::uuid_utils::opt_uuid_from_string")]
+    pub process_id: Option<Uuid>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -40,6 +42,15 @@ pub struct QueryBlocksRequest {
 
 #[derive(Debug, Deserialize)]
 pub struct QuerySpansRequest {
+    pub limit: i64,
+    pub begin: String,
+    pub end: String,
+    #[serde(deserialize_with = "micromegas_transit::uuid_utils::uuid_from_string")]
+    pub stream_id: Uuid,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct QueryLogEntriesRequest {
     pub limit: i64,
     pub begin: String,
     pub end: String,
@@ -100,10 +111,16 @@ impl AnalyticsService {
         let end = DateTime::<FixedOffset>::parse_from_rfc3339(&request.end)
             .with_context(|| "parsing end time range")?;
         let mut connection = self.data_lake.db_pool.acquire().await?;
-        let mut tag_condition = "";
-        if request.tag_filter.is_some() {
-            tag_condition = "AND array_position(tags, $4) is not NULL";
-        }
+        let process_id_condition = request
+            .process_id
+            .as_ref()
+            .map(|_tag| "AND process_id = $4")
+            .unwrap_or("");
+        let tag_condition = request
+            .tag_filter
+            .as_ref()
+            .map(|_tag| "AND array_position(tags, $5) is not NULL")
+            .unwrap_or("");
         let sql = format!(
             "SELECT stream_id,
                     process_id,
@@ -112,14 +129,17 @@ impl AnalyticsService {
              FROM streams
              WHERE insert_time >= $1
              AND insert_time < $2
+             {process_id_condition}
              {tag_condition}
              ORDER BY insert_time
              LIMIT $3"
         );
-        let mut query = sqlx::query(&sql).bind(begin).bind(end).bind(request.limit);
-        if let Some(tag) = &request.tag_filter {
-            query = query.bind(tag);
-        }
+        let query = sqlx::query(&sql)
+            .bind(begin)
+            .bind(end)
+            .bind(request.limit)
+            .bind(request.process_id)
+            .bind(request.tag_filter);
         let rows = query.fetch_all(&mut *connection).await?;
         serialize_record_batch(
             &rows_to_record_batch(&rows).with_context(|| "converting rows to record batch")?,
@@ -168,6 +188,25 @@ impl AnalyticsService {
             )
             .await
             .with_context(|| "query_spans")?,
+        )
+    }
+
+    pub async fn query_log_entries(&self, body: bytes::Bytes) -> Result<bytes::Bytes> {
+        let request: QueryLogEntriesRequest = ciborium::from_reader(body.reader())
+            .with_context(|| "parsing QueryLogEntriesRequest")?;
+        let begin = DateTime::<FixedOffset>::parse_from_rfc3339(&request.begin)
+            .with_context(|| "parsing begin time range")?;
+        let end = DateTime::<FixedOffset>::parse_from_rfc3339(&request.end)
+            .with_context(|| "parsing end time range")?;
+        serialize_record_batch(
+            &crate::query_log_entries::query_log_entries(
+                &self.data_lake,
+                request.stream_id,
+                begin.into(),
+                end.into(),
+            )
+            .await
+            .with_context(|| "query_log_entries")?,
         )
     }
 }
