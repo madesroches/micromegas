@@ -11,8 +11,6 @@ pub struct LogEntry {
     pub time: i64,
     pub level: i32,
     pub target: Arc<String>,
-    pub filename: Arc<String>,
-    pub line: i32,
     pub msg: Arc<String>,
 }
 
@@ -33,12 +31,6 @@ pub fn log_entry_from_value(convert_ticks: &ConvertTicks, val: &Value) -> Result
                 let target = desc
                     .get::<Arc<String>>("target")
                     .with_context(|| "reading target from LogStaticStrEvent")?;
-                let filename = desc
-                    .get::<Arc<String>>("file")
-                    .with_context(|| "reading file from LogStaticStrEvent")?;
-                let line = desc
-                    .get::<u32>("line")
-                    .with_context(|| "reading line from LogStaticStrEvent")?;
                 let msg = desc
                     .get::<Arc<String>>("fmt_str")
                     .with_context(|| "reading fmt_str from LogStaticStrEvent")?;
@@ -46,8 +38,6 @@ pub fn log_entry_from_value(convert_ticks: &ConvertTicks, val: &Value) -> Result
                     time: convert_ticks.ticks_to_nanoseconds(ticks),
                     level: level as i32,
                     target,
-                    filename,
-                    line: line as i32,
                     msg,
                 }))
             }
@@ -64,12 +54,6 @@ pub fn log_entry_from_value(convert_ticks: &ConvertTicks, val: &Value) -> Result
                 let target = desc
                     .get::<Arc<String>>("target")
                     .with_context(|| "reading target from LogStringEvent")?;
-                let filename = desc
-                    .get::<Arc<String>>("file")
-                    .with_context(|| "reading file from LogStringEvent")?;
-                let line = desc
-                    .get::<u32>("line")
-                    .with_context(|| "reading line from LogStaticStrEvent")?;
                 let msg = obj
                     .get::<Arc<String>>("msg")
                     .with_context(|| "reading msg from LogStringEvent")?;
@@ -77,8 +61,6 @@ pub fn log_entry_from_value(convert_ticks: &ConvertTicks, val: &Value) -> Result
                     time: convert_ticks.ticks_to_nanoseconds(ticks),
                     level: level as i32,
                     target,
-                    filename,
-                    line: line as i32,
                     msg,
                 }))
             }
@@ -92,12 +74,6 @@ pub fn log_entry_from_value(convert_ticks: &ConvertTicks, val: &Value) -> Result
                 let target = obj
                     .get::<Arc<String>>("target")
                     .with_context(|| format!("reading target from {}", obj.type_name.as_str()))?;
-                let filename = obj
-                    .get::<Arc<String>>("file")
-                    .with_context(|| format!("reading file from {}", obj.type_name.as_str()))?;
-                let line = obj
-                    .get::<u32>("line")
-                    .with_context(|| "reading line from LogStaticStrEvent")?;
                 let msg = obj
                     .get::<Arc<String>>("msg")
                     .with_context(|| format!("reading msg from {}", obj.type_name.as_str()))?;
@@ -105,8 +81,6 @@ pub fn log_entry_from_value(convert_ticks: &ConvertTicks, val: &Value) -> Result
                     time: convert_ticks.ticks_to_nanoseconds(ticks),
                     level: level as i32,
                     target,
-                    filename,
-                    line: line as i32,
                     msg,
                 }))
             }

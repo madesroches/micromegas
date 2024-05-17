@@ -6,16 +6,16 @@
 pub mod analytics_service;
 pub mod arrow_utils;
 pub mod call_tree;
+pub mod log_entries_table;
 pub mod log_entry;
 pub mod metadata;
+pub mod query_log_entries;
 pub mod query_spans;
 pub mod scope;
 pub mod span_table;
 pub mod sql_arrow_bridge;
 pub mod thread_block_processor;
 pub mod time;
-pub mod query_log_entries;
-pub mod log_entries_table;
 
 use anyhow::{Context, Result};
 use metadata::{map_row_block, process_from_row};

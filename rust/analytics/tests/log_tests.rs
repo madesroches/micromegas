@@ -1,4 +1,4 @@
-use micromegas_analytics::log_entry_from_value;
+use micromegas_analytics::log_entry::log_entry_from_value;
 use micromegas_analytics::parse_block;
 use micromegas_analytics::time::ConvertTicks;
 use micromegas_telemetry_sink::stream_block::StreamBlock;

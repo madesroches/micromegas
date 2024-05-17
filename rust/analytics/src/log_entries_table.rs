@@ -18,8 +18,6 @@ use crate::log_entry::LogEntry;
 pub struct LogEntriesRecordBuilder {
     pub times: PrimitiveBuilder<TimestampNanosecondType>,
     pub targets: StringDictionaryBuilder<Int16Type>,
-    pub filenames: StringDictionaryBuilder<Int16Type>,
-    pub lines: PrimitiveBuilder<Int32Type>,
     pub levels: PrimitiveBuilder<Int32Type>,
     pub msgs: StringBuilder,
 }
@@ -29,8 +27,6 @@ impl LogEntriesRecordBuilder {
         Self {
             times: PrimitiveBuilder::with_capacity(capacity),
             targets: StringDictionaryBuilder::new(),
-            filenames: StringDictionaryBuilder::new(),
-            lines: PrimitiveBuilder::with_capacity(capacity),
             levels: PrimitiveBuilder::with_capacity(capacity),
             msgs: StringBuilder::new(),
         }
@@ -39,8 +35,6 @@ impl LogEntriesRecordBuilder {
     pub fn append(&mut self, row: &LogEntry) -> Result<()> {
         self.times.append_value(row.time);
         self.targets.append_value(&*row.target);
-        self.filenames.append_value(&*row.filename);
-        self.lines.append_value(row.line);
         self.levels.append_value(row.level);
         self.msgs.append_value(&*row.msg);
         Ok(())
@@ -58,12 +52,6 @@ impl LogEntriesRecordBuilder {
                 DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
                 false,
             ),
-            Field::new(
-                "filename",
-                DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
-                false,
-            ),
-            Field::new("line", DataType::Int32, false),
             Field::new("level", DataType::Int32, false),
             Field::new("msg", DataType::Utf8, false),
         ]);
@@ -72,8 +60,6 @@ impl LogEntriesRecordBuilder {
             vec![
                 Arc::new(self.times.finish().with_timezone_utc()),
                 Arc::new(self.targets.finish()),
-                Arc::new(self.filenames.finish()),
-                Arc::new(self.lines.finish()),
                 Arc::new(self.levels.finish()),
                 Arc::new(self.msgs.finish()),
             ],

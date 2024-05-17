@@ -192,8 +192,8 @@ impl AnalyticsService {
     }
 
     pub async fn query_log_entries(&self, body: bytes::Bytes) -> Result<bytes::Bytes> {
-        let request: QueryLogEntriesRequest =
-            ciborium::from_reader(body.reader()).with_context(|| "parsing QueryLogEntriesRequest")?;
+        let request: QueryLogEntriesRequest = ciborium::from_reader(body.reader())
+            .with_context(|| "parsing QueryLogEntriesRequest")?;
         let begin = DateTime::<FixedOffset>::parse_from_rfc3339(&request.begin)
             .with_context(|| "parsing begin time range")?;
         let end = DateTime::<FixedOffset>::parse_from_rfc3339(&request.end)
@@ -209,7 +209,6 @@ impl AnalyticsService {
             .with_context(|| "query_log_entries")?,
         )
     }
-	
 }
 
 fn serialize_record_batch(record_batch: &RecordBatch) -> Result<bytes::Bytes> {
