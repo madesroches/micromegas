@@ -14,8 +14,9 @@ pub mod span_table;
 pub mod sql_arrow_bridge;
 pub mod thread_block_processor;
 pub mod time;
+pub mod query_log_entries;
+pub mod log_entries_table;
 
-use crate::log_entry::LogEntry;
 use anyhow::{Context, Result};
 use metadata::{map_row_block, process_from_row};
 use micromegas_telemetry::blob_storage::BlobStorage;
@@ -26,7 +27,6 @@ use micromegas_tracing::prelude::*;
 use micromegas_transit::{parse_object_buffer, read_dependencies, UserDefinedType, Value};
 use sqlx::Row;
 use std::sync::Arc;
-use time::ConvertTicks;
 
 #[span_fn]
 pub async fn processes_by_name_substring(
@@ -428,177 +428,6 @@ where
 }
 
 #[span_fn]
-pub fn log_entry_from_value(convert_ticks: &ConvertTicks, val: &Value) -> Result<Option<LogEntry>> {
-    if let Value::Object(obj) = val {
-        match obj.type_name.as_str() {
-            "LogStaticStrEvent" => {
-                let ticks = obj
-                    .get::<i64>("time")
-                    .with_context(|| "reading time from LogStaticStrEvent")?;
-                let desc = obj
-                    .get::<Arc<micromegas_transit::Object>>("desc")
-                    .with_context(|| "reading desc from LogStaticStrEvent")?;
-                let level = Level::from_value(
-                    desc.get::<u32>("level")
-                        .with_context(|| "reading level from LogStaticStrEvent")?,
-                )
-                .with_context(|| "converting level to Level enum")?;
-                let target = desc
-                    .get::<Arc<String>>("target")
-                    .with_context(|| "reading target from LogStaticStrEvent")?;
-                let msg = desc
-                    .get::<Arc<String>>("fmt_str")
-                    .with_context(|| "reading fmt_str from LogStaticStrEvent")?;
-                Ok(Some(LogEntry {
-                    time_ms: convert_ticks.get_time(ticks),
-                    level: (level as i32) - 1,
-                    target: target.as_str().to_string(),
-                    msg: msg.as_str().to_string(),
-                }))
-            }
-            "LogStringEvent" => {
-                let ticks = obj
-                    .get::<i64>("time")
-                    .with_context(|| "reading time from LogStringEvent")?;
-                let desc = obj
-                    .get::<Arc<micromegas_transit::Object>>("desc")
-                    .with_context(|| "reading desc from LogStringEvent")?;
-                let level = Level::from_value(
-                    desc.get::<u32>("level")
-                        .with_context(|| "reading level from LogStringEvent")?,
-                )
-                .with_context(|| "converting level to Level enum")?;
-                let target = desc
-                    .get::<Arc<String>>("target")
-                    .with_context(|| "reading target from LogStringEvent")?;
-                let msg = obj
-                    .get::<Arc<String>>("msg")
-                    .with_context(|| "reading msg from LogStringEvent")?;
-                Ok(Some(LogEntry {
-                    time_ms: convert_ticks.get_time(ticks),
-                    level: (level as i32) - 1,
-                    target: target.as_str().to_string(),
-                    msg: msg.as_str().to_string(),
-                }))
-            }
-            "LogStaticStrInteropEvent" | "LogStringInteropEventV2" | "LogStringInteropEventV3" => {
-                let ticks = obj
-                    .get::<i64>("time")
-                    .with_context(|| format!("reading time from {}", obj.type_name.as_str()))?;
-                let level =
-                    Level::from_value(obj.get::<u32>("level").with_context(|| {
-                        format!("reading level from {}", obj.type_name.as_str())
-                    })?)
-                    .with_context(|| "converting level to Level enum")?;
-                let target = obj
-                    .get::<Arc<String>>("target")
-                    .with_context(|| format!("reading target from {}", obj.type_name.as_str()))?;
-                let msg = obj
-                    .get::<Arc<String>>("msg")
-                    .with_context(|| format!("reading msg from {}", obj.type_name.as_str()))?;
-                Ok(Some(LogEntry {
-                    time_ms: convert_ticks.get_time(ticks),
-                    level: (level as i32) - 1,
-                    target: target.as_str().to_string(),
-                    msg: msg.as_str().to_string(),
-                }))
-            }
-            _ => {
-                warn!("unknown log event {:?}", obj);
-                Ok(None)
-            }
-        }
-    } else {
-        Ok(None)
-    }
-}
-
-// find_process_log_entry calls pred(time_ticks,entry_str) with each log entry
-// until pred returns Some(x)
-pub async fn find_process_log_entry<Res, Predicate: FnMut(LogEntry) -> Option<Res>>(
-    connection: &mut sqlx::PgConnection,
-    blob_storage: Arc<BlobStorage>,
-    process: &ProcessInfo,
-    mut pred: Predicate,
-) -> Result<Option<Res>> {
-    let mut found_entry = None;
-    let convert_ticks = ConvertTicks::new(process);
-    for stream in find_process_log_streams(connection, &process.process_id).await? {
-        for b in find_stream_blocks(connection, &stream.stream_id).await? {
-            let payload = fetch_block_payload(
-                blob_storage.clone(),
-                stream.process_id,
-                stream.stream_id,
-                b.block_id,
-            )
-            .await?;
-            parse_block(&stream, &payload, |val| {
-                if let Some(log_entry) = log_entry_from_value(&convert_ticks, &val)
-                    .with_context(|| "log_entry_from_value")?
-                {
-                    if let Some(x) = pred(log_entry) {
-                        found_entry = Some(x);
-                        return Ok(false); //do not continue
-                    }
-                }
-                Ok(true) //continue
-            })?;
-            if found_entry.is_some() {
-                return Ok(found_entry);
-            }
-        }
-    }
-    Ok(found_entry)
-}
-
-// for_each_log_entry_in_block calls fun(time_ticks,entry_str) with each log
-// entry until fun returns false mad
-#[span_fn]
-pub async fn for_each_log_entry_in_block<Predicate: FnMut(LogEntry) -> bool>(
-    blob_storage: Arc<BlobStorage>,
-    convert_ticks: &ConvertTicks,
-    stream: &StreamInfo,
-    block: &BlockMetadata,
-    mut fun: Predicate,
-) -> Result<()> {
-    let payload = fetch_block_payload(
-        blob_storage,
-        stream.process_id,
-        stream.stream_id,
-        block.block_id,
-    )
-    .await?;
-    parse_block(stream, &payload, |val| {
-        if let Some(log_entry) =
-            log_entry_from_value(convert_ticks, &val).with_context(|| "log_entry_from_value")?
-        {
-            if !fun(log_entry) {
-                return Ok(false); //do not continue
-            }
-        }
-        Ok(true) //continue
-    })
-    .with_context(|| "error in parse_block")?;
-    Ok(())
-}
-
-#[span_fn]
-pub async fn for_each_process_log_entry<ProcessLogEntry: FnMut(LogEntry)>(
-    connection: &mut sqlx::PgConnection,
-    blob_storage: Arc<BlobStorage>,
-    process: &ProcessInfo,
-    mut process_log_entry: ProcessLogEntry,
-) -> Result<()> {
-    find_process_log_entry(connection, blob_storage, process, |log_entry| {
-        process_log_entry(log_entry);
-        let nothing: Option<()> = None;
-        nothing //continue searching
-    })
-    .await?;
-    Ok(())
-}
-
-#[span_fn]
 pub async fn for_each_process_metric<ProcessMetric: FnMut(Arc<micromegas_transit::Object>)>(
     connection: &mut sqlx::PgConnection,
     blob_storage: Arc<BlobStorage>,
@@ -655,15 +484,12 @@ pub mod prelude {
     pub use crate::find_block_process;
     pub use crate::find_block_stream;
     pub use crate::find_process_blocks;
-    pub use crate::find_process_log_entry;
     pub use crate::find_process_log_streams;
     pub use crate::find_process_metrics_streams;
     pub use crate::find_process_streams;
     pub use crate::find_process_thread_streams;
     pub use crate::find_stream_blocks;
-    pub use crate::for_each_log_entry_in_block;
     pub use crate::for_each_process_in_tree;
-    pub use crate::for_each_process_log_entry;
     pub use crate::for_each_process_metric;
     pub use crate::list_recent_processes;
     pub use crate::parse_block;
