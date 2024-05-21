@@ -59,6 +59,7 @@ impl EventSink for LocalEventSink {
             {
                 if self.colors {
                     match metadata.level {
+                        Level::Fatal => metadata.level.to_string().red().to_string(),
                         Level::Error => metadata.level.to_string().red().to_string(),
                         Level::Warn => metadata.level.to_string().yellow().to_string(),
                         Level::Info => metadata.level.to_string().cyan().to_string(),

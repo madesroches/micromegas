@@ -9,10 +9,14 @@ use std::{
 #[repr(u32)]
 #[derive(Clone, Copy, Debug, Hash, Eq, PartialEq)]
 pub enum Level {
+    /// The "fatal" level.
+    ///
+    /// Crashes, panics.
+    Fatal = 1,
     /// The "error" level.
     ///
     /// Designates very serious errors.
-    Error = 1,
+    Error,
     /// The "warn" level.
     ///
     /// Designates hazardous situations.
@@ -34,23 +38,25 @@ pub enum Level {
 impl Level {
     pub fn from_value(value: u32) -> Option<Self> {
         match value {
-            1 => Some(Self::Error),
-            2 => Some(Self::Warn),
-            3 => Some(Self::Info),
-            4 => Some(Self::Debug),
-            5 => Some(Self::Trace),
+            1 => Some(Self::Fatal),
+            2 => Some(Self::Error),
+            3 => Some(Self::Warn),
+            4 => Some(Self::Info),
+            5 => Some(Self::Debug),
+            6 => Some(Self::Trace),
             _ => None,
         }
     }
 }
 
-//todo: add fatal
 /// An enum representing the available verbosity level filters of the logger.
 #[repr(u32)]
 #[derive(Clone, Copy, Debug, Hash, Eq, PartialEq)]
 pub enum LevelFilter {
     /// A level lower than all log levels.
     Off,
+    /// Corresponds to the `Fatal` log level.
+    Fatal,
     /// Corresponds to the `Error` log level.
     Error,
     /// Corresponds to the `Warn` log level.
@@ -149,7 +155,7 @@ impl FromStr for Level {
                 .position(|&name| str::eq_ignore_ascii_case(name, level))
                 .into_iter()
                 .filter(|&idx| idx != 0)
-                .map(|idx| Self::from_usize(idx).unwrap())
+                .map(|idx| Self::from_u32(idx as u32).unwrap())
                 .next(),
             ParseLevelError(()),
         )
@@ -163,24 +169,14 @@ impl fmt::Display for Level {
 }
 
 impl Level {
-    pub(crate) fn from_usize(u: usize) -> Option<Self> {
-        match u {
-            1 => Some(Self::Error),
-            2 => Some(Self::Warn),
-            3 => Some(Self::Info),
-            4 => Some(Self::Debug),
-            5 => Some(Self::Trace),
-            _ => None,
-        }
-    }
-
     pub(crate) fn from_u32(u: u32) -> Option<Self> {
         match u {
-            1 => Some(Self::Error),
-            2 => Some(Self::Warn),
-            3 => Some(Self::Info),
-            4 => Some(Self::Debug),
-            5 => Some(Self::Trace),
+            1 => Some(Self::Fatal),
+            2 => Some(Self::Error),
+            3 => Some(Self::Warn),
+            4 => Some(Self::Info),
+            5 => Some(Self::Debug),
+            6 => Some(Self::Trace),
             _ => None,
         }
     }
@@ -214,11 +210,11 @@ impl Level {
     ///
     /// let mut levels = Level::iter();
     ///
-    /// assert_eq!(Some(Level::Error), levels.next());
+    /// assert_eq!(Some(Level::Fatal), levels.next());
     /// assert_eq!(Some(Level::Trace), levels.last());
     /// ```
     pub fn iter() -> impl Iterator<Item = Self> {
-        (1..6).map(|i| Self::from_usize(i).unwrap())
+        (1..7).map(|i| Self::from_u32(i).unwrap())
     }
 }
 
@@ -297,7 +293,7 @@ impl FromStr for LevelFilter {
             LEVEL_NAMES
                 .iter()
                 .position(|&name| str::eq_ignore_ascii_case(name, level))
-                .map(|p| Self::from_usize(p).unwrap()),
+                .map(|p| Self::from_u32(p as u32).unwrap()),
             ParseLevelError(()),
         )
     }
@@ -310,26 +306,15 @@ impl fmt::Display for LevelFilter {
 }
 
 impl LevelFilter {
-    pub(crate) fn from_usize(u: usize) -> Option<Self> {
-        match u {
-            0 => Some(Self::Off),
-            1 => Some(Self::Error),
-            2 => Some(Self::Warn),
-            3 => Some(Self::Info),
-            4 => Some(Self::Debug),
-            5 => Some(Self::Trace),
-            _ => None,
-        }
-    }
-
     pub(crate) fn from_u32(u: u32) -> Option<Self> {
         match u {
             0 => Some(Self::Off),
-            1 => Some(Self::Error),
-            2 => Some(Self::Warn),
-            3 => Some(Self::Info),
-            4 => Some(Self::Debug),
-            5 => Some(Self::Trace),
+            1 => Some(Self::Fatal),
+            2 => Some(Self::Error),
+            3 => Some(Self::Warn),
+            4 => Some(Self::Info),
+            5 => Some(Self::Debug),
+            6 => Some(Self::Trace),
             _ => None,
         }
     }
@@ -370,7 +355,7 @@ impl LevelFilter {
     /// assert_eq!(Some(LevelFilter::Trace), levels.last());
     /// ```
     pub fn iter() -> impl Iterator<Item = Self> {
-        (0..6).map(|i| Self::from_usize(i).unwrap())
+        (0..7).map(|i| Self::from_u32(i).unwrap())
     }
 }
 
@@ -704,7 +689,7 @@ impl LodFilter {
 static MAX_LEVEL_FILTER: AtomicU32 = AtomicU32::new(0);
 static MAX_LOD_FILTER: AtomicU32 = AtomicU32::new(0);
 
-static LEVEL_NAMES: [&str; 6] = ["OFF", "ERROR", "WARN", "INFO", "DEBUG", "TRACE"];
+static LEVEL_NAMES: [&str; 7] = ["OFF", "FATAL", "ERROR", "WARN", "INFO", "DEBUG", "TRACE"];
 static LOD_NAMES: [&str; 4] = ["OFF", "LOW", "MED", "HIGH"];
 
 /// Sets the global maximum log level.
