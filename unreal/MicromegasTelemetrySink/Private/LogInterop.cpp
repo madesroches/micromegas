@@ -19,6 +19,7 @@ struct LogBridge : public FOutputDevice
 		{
 			case ELogVerbosity::Fatal:
 				level = LogLevel::Fatal;
+				break;
 			case ELogVerbosity::Error:
 				level = LogLevel::Error;
 				break;
