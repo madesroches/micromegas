@@ -6,6 +6,7 @@
 #include "Containers/UnrealString.h"
 #include "HAL/Event.h"
 #include "HAL/Runnable.h"
+#include "MicromegasTelemetrySink/FlushMonitor.h"
 #include "MicromegasTelemetrySink/TelemetryAuthenticator.h"
 #include "MicromegasTracing/EventSink.h"
 #include "MicromegasTracing/Fwd.h"
@@ -18,7 +19,11 @@ class FlushMonitor;
 class HttpEventSink : public MicromegasTracing::EventSink, public FRunnable
 {
 public:
-	HttpEventSink(const FString& BaseUrl, const MicromegasTracing::ProcessInfoPtr& ThisProcess, const SharedTelemetryAuthenticator& InAuth, const SharedSampingController& InSampling);
+	HttpEventSink(const FString& BaseUrl,
+		const MicromegasTracing::ProcessInfoPtr& ThisProcess,
+		const SharedTelemetryAuthenticator& InAuth,
+		const SharedSampingController& InSampling,
+		const FlushMonitorPtr& InFlusher);
 	virtual ~HttpEventSink();
 
 	//
@@ -55,7 +60,11 @@ private:
 	volatile bool RequestShutdown;
 	FEventRef WakeupThread;
 	TUniquePtr<FRunnableThread> Thread;
-	TUniquePtr<FlushMonitor> Flusher;
+	FlushMonitorPtr Flusher;
 };
 
-MICROMEGASTELEMETRYSINK_API TSharedPtr<MicromegasTracing::EventSink, ESPMode::ThreadSafe> InitHttpEventSink(const FString& BaseUrl, const SharedTelemetryAuthenticator& Auth, const SharedSampingController& Sampling);
+MICROMEGASTELEMETRYSINK_API TSharedPtr<MicromegasTracing::EventSink, ESPMode::ThreadSafe> InitHttpEventSink(
+	const FString& BaseUrl,
+	const SharedTelemetryAuthenticator& Auth,
+	const SharedSampingController& Sampling,
+	const FlushMonitorPtr& Flusher);

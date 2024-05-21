@@ -82,6 +82,7 @@ namespace MicromegasTracing
 
 	extern CORE_API Dispatch* GDispatch;
 
+	CORE_API void Shutdown();
 	CORE_API void FlushLogStream();
 	CORE_API void FlushMetricStream();
 	CORE_API void LogInterop(const LogStringInteropEvent& event);

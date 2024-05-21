@@ -9,7 +9,6 @@
 #include "InsertStreamRequest.h"
 #include "Interfaces/IHttpResponse.h"
 #include "LogDependencies.h"
-#include "MicromegasTelemetrySink/FlushMonitor.h"
 #include "MicromegasTelemetrySink/Log.h"
 #include "MicromegasTracing/Dispatch.h"
 #include "MicromegasTracing/EventStream.h"
@@ -50,16 +49,20 @@ namespace
 
 } // namespace
 
-HttpEventSink::HttpEventSink(const FString& InBaseUrl, const MicromegasTracing::ProcessInfoPtr& ThisProcess, const SharedTelemetryAuthenticator& InAuth, const SharedSampingController& InSampling)
+HttpEventSink::HttpEventSink(const FString& InBaseUrl,
+	const MicromegasTracing::ProcessInfoPtr& ThisProcess,
+	const SharedTelemetryAuthenticator& InAuth,
+	const SharedSampingController& InSampling,
+	const FlushMonitorPtr& InFlusher)
 	: BaseUrl(InBaseUrl)
 	, Process(ThisProcess)
 	, Auth(InAuth)
 	, Sampling(InSampling)
 	, QueueSize(0)
 	, RequestShutdown(false)
+	, Flusher(InFlusher)
 {
 	Thread.Reset(FRunnableThread::Create(this, TEXT("MicromegasHttpTelemetrySink")));
-	Flusher.Reset(new FlushMonitor());
 }
 
 HttpEventSink::~HttpEventSink()
@@ -85,9 +88,6 @@ void HttpEventSink::OnStartup(const MicromegasTracing::ProcessInfoPtr& ProcessIn
 void HttpEventSink::OnShutdown()
 {
 	MICROMEGAS_LOG_STATIC("MicromegasTelemetrySink", MicromegasTracing::LogLevel::Info, TEXT("Shutting down"));
-	Flusher.Reset();
-	MicromegasTracing::FlushLogStream();
-	MicromegasTracing::FlushMetricStream();
 	RequestShutdown = true;
 	WakeupThread->Trigger();
 	Thread->WaitForCompletion();
@@ -254,7 +254,8 @@ FString GetDistro()
 TSharedPtr<MicromegasTracing::EventSink, ESPMode::ThreadSafe> InitHttpEventSink(
 	const FString& BaseUrl,
 	const SharedTelemetryAuthenticator& Auth,
-	const SharedSampingController& Sampling)
+	const SharedSampingController& Sampling,
+	const FlushMonitorPtr& Flusher)
 {
 	using namespace MicromegasTracing;
 	UE_LOG(LogMicromegasTelemetrySink, Log, TEXT("Initializing Remote Telemetry Sink"));
@@ -280,7 +281,7 @@ TSharedPtr<MicromegasTracing::EventSink, ESPMode::ThreadSafe> InitHttpEventSink(
 	Process->StartTime = StartTime;
 	Process->Properties.Add(TEXT("build-version"), FApp::GetBuildVersion());
 
-	TSharedPtr<MicromegasTracing::EventSink, ESPMode::ThreadSafe> Sink = MakeShared<HttpEventSink>(BaseUrl, Process, Auth, Sampling);
+	TSharedPtr<MicromegasTracing::EventSink, ESPMode::ThreadSafe> Sink = MakeShared<HttpEventSink>(BaseUrl, Process, Auth, Sampling, Flusher);
 	const size_t LOG_BUFFER_SIZE = 10 * 1024 * 1024;
 	const size_t METRICS_BUFFER_SIZE = 10 * 1024 * 1024;
 	const size_t THREAD_BUFFER_SIZE = 10 * 1024 * 1024;
