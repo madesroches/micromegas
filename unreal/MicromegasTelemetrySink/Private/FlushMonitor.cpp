@@ -33,7 +33,6 @@ void FlushMonitor::Tick(MicromegasTracing::EventSink* sink)
 	if (diff > FlushDelay)
 	{
 		Flush();
-		LastFlush = FPlatformTime::Cycles64();
 	}
 }
 
@@ -42,4 +41,5 @@ void FlushMonitor::Flush()
 	MicromegasTracing::FlushLogStream();
 	MicromegasTracing::FlushMetricStream();
 	MicromegasTracing::ForEachThreadStream(&MarkStreamFull);
+	LastFlush = FPlatformTime::Cycles64();
 }
