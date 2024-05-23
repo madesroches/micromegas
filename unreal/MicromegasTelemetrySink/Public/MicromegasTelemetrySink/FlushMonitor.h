@@ -22,4 +22,4 @@ private:
 	uint64 FlushDelay;
 };
 
-typedef TSharedPtr<FlushMonitor, ESPMode::ThreadSafe> FlushMonitorPtr;
+typedef TSharedPtr<FlushMonitor, ESPMode::ThreadSafe> SharedFlushMonitor;

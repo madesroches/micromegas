@@ -28,7 +28,7 @@ private:
 	FString UploadBaseUrl;
 	SharedTelemetryAuthenticator Authenticator;
 	SharedSamplingController SamplingController;
-	FlushMonitorPtr Flusher;
+	SharedFlushMonitor Flusher;
 };
 
 //================================================================================

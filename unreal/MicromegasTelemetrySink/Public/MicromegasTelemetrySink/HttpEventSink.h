@@ -23,7 +23,7 @@ public:
 		const MicromegasTracing::ProcessInfoPtr& ThisProcess,
 		const SharedTelemetryAuthenticator& InAuth,
 		const SharedSamplingController& InSampling,
-		const FlushMonitorPtr& InFlusher);
+		const SharedFlushMonitor& InFlusher);
 	virtual ~HttpEventSink();
 
 	//
@@ -60,11 +60,11 @@ private:
 	volatile bool RequestShutdown;
 	FEventRef WakeupThread;
 	TUniquePtr<FRunnableThread> Thread;
-	FlushMonitorPtr Flusher;
+	SharedFlushMonitor Flusher;
 };
 
 MICROMEGASTELEMETRYSINK_API TSharedPtr<MicromegasTracing::EventSink, ESPMode::ThreadSafe> InitHttpEventSink(
 	const FString& BaseUrl,
 	const SharedTelemetryAuthenticator& Auth,
 	const SharedSamplingController& Sampling,
-	const FlushMonitorPtr& Flusher);
+	const SharedFlushMonitor& Flusher);
