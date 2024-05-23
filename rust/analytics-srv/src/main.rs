@@ -123,7 +123,7 @@ async fn serve_http(
     let listener = tokio::net::TcpListener::bind(args.listen_endpoint)
         .await
         .unwrap();
-    info!("serving");
+    info!("serving on {}", &args.listen_endpoint);
     axum::serve(listener, app).await.unwrap();
 
     Ok(())

@@ -3,15 +3,20 @@ use micromegas_telemetry::stream_info::StreamInfo;
 use micromegas_telemetry::wire_format::encode_cbor;
 use micromegas_tracing::{
     event::EventSink,
+    flush_monitor::FlushMonitor,
     logs::{LogBlock, LogMetadata, LogStream},
     metrics::{MetricsBlock, MetricsStream},
     prelude::*,
     spans::{ThreadBlock, ThreadStream},
 };
-use std::sync::atomic::{AtomicIsize, Ordering};
 use std::{
+    cmp::min,
     fmt,
     sync::{Arc, Mutex},
+};
+use std::{
+    sync::atomic::{AtomicIsize, Ordering},
+    time::Duration,
 };
 
 use crate::request_decorator::RequestDecorator;
@@ -188,8 +193,10 @@ impl HttpEventSink {
                 process_id
             );
         }
+        let flusher = FlushMonitor::default();
         loop {
-            match receiver.recv() {
+            let timeout = min(0, flusher.time_to_flush_seconds());
+            match receiver.recv_timeout(Duration::from_secs(timeout as u64)) {
                 Ok(message) => match message {
                     SinkEvent::Startup(process_info) => {
                         opt_process_info = Some(process_info.clone());
@@ -276,6 +283,9 @@ impl HttpEventSink {
                         }
                     }
                 },
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    flusher.tick();
+                }
                 Err(_e) => {
                     // can only fail when the sending half is disconnected
                     // println!("Error in telemetry thread: {}", e);
