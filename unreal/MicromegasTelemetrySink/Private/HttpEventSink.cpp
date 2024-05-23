@@ -53,7 +53,7 @@ HttpEventSink::HttpEventSink(const FString& InBaseUrl,
 	const MicromegasTracing::ProcessInfoPtr& ThisProcess,
 	const SharedTelemetryAuthenticator& InAuth,
 	const SharedSamplingController& InSampling,
-	const FlushMonitorPtr& InFlusher)
+	const SharedFlushMonitor& InFlusher)
 	: BaseUrl(InBaseUrl)
 	, Process(ThisProcess)
 	, Auth(InAuth)
@@ -255,7 +255,7 @@ TSharedPtr<MicromegasTracing::EventSink, ESPMode::ThreadSafe> InitHttpEventSink(
 	const FString& BaseUrl,
 	const SharedTelemetryAuthenticator& Auth,
 	const SharedSamplingController& Sampling,
-	const FlushMonitorPtr& Flusher)
+	const SharedFlushMonitor& Flusher)
 {
 	using namespace MicromegasTracing;
 	UE_LOG(LogMicromegasTelemetrySink, Log, TEXT("Initializing Remote Telemetry Sink"));
