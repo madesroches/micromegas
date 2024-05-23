@@ -52,7 +52,7 @@ namespace
 HttpEventSink::HttpEventSink(const FString& InBaseUrl,
 	const MicromegasTracing::ProcessInfoPtr& ThisProcess,
 	const SharedTelemetryAuthenticator& InAuth,
-	const SharedSampingController& InSampling,
+	const SharedSamplingController& InSampling,
 	const FlushMonitorPtr& InFlusher)
 	: BaseUrl(InBaseUrl)
 	, Process(ThisProcess)
@@ -254,7 +254,7 @@ FString GetDistro()
 TSharedPtr<MicromegasTracing::EventSink, ESPMode::ThreadSafe> InitHttpEventSink(
 	const FString& BaseUrl,
 	const SharedTelemetryAuthenticator& Auth,
-	const SharedSampingController& Sampling,
+	const SharedSamplingController& Sampling,
 	const FlushMonitorPtr& Flusher)
 {
 	using namespace MicromegasTracing;

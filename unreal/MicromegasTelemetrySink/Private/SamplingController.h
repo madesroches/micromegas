@@ -19,4 +19,4 @@ private:
 	TUniquePtr<TAutoConsoleVariable<bool>> CVarSpansEnable;
 };
 
-typedef TSharedPtr<FSamplingController, ESPMode::ThreadSafe> SharedSampingController;
+typedef TSharedPtr<FSamplingController, ESPMode::ThreadSafe> SharedSamplingController;
