@@ -32,7 +32,7 @@ namespace
 		int32 Code = HttpResponse ? HttpResponse->GetResponseCode() : 0;
 		if (!bSucceeded || Code != 200)
 		{
-			UE_LOG(LogMicromegasTelemetrySink, Error, TEXT("Request completed with code=%d response=%s"), Code, HttpResponse ? *(HttpResponse->GetContentAsString()) : TEXT(""));
+			UE_LOG(LogMicromegasTelemetrySink, Warning, TEXT("Request completed with code=%d response=%s"), Code, HttpResponse ? *(HttpResponse->GetContentAsString()) : TEXT(""));
 		}
 	}
 
@@ -237,7 +237,7 @@ void HttpEventSink::SendBinaryRequest(const TCHAR* command, const TArray<uint8>&
 
 	if (!HttpRequest->ProcessRequest())
 	{
-		UE_LOG(LogMicromegasTelemetrySink, Error, TEXT("Failed to initialize telemetry http request"));
+		UE_LOG(LogMicromegasTelemetrySink, Warning, TEXT("Failed to initialize telemetry http request"));
 	}
 }
 
