@@ -27,7 +27,7 @@ private:
 	TUniquePtr<FAutoConsoleCommand> CmdFlush;
 	FString UploadBaseUrl;
 	SharedTelemetryAuthenticator Authenticator;
-	SharedSampingController SamplingController;
+	SharedSamplingController SamplingController;
 	FlushMonitorPtr Flusher;
 };
 

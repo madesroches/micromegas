@@ -22,7 +22,7 @@ public:
 	HttpEventSink(const FString& BaseUrl,
 		const MicromegasTracing::ProcessInfoPtr& ThisProcess,
 		const SharedTelemetryAuthenticator& InAuth,
-		const SharedSampingController& InSampling,
+		const SharedSamplingController& InSampling,
 		const FlushMonitorPtr& InFlusher);
 	virtual ~HttpEventSink();
 
@@ -54,7 +54,7 @@ private:
 	FString BaseUrl;
 	MicromegasTracing::ProcessInfoPtr Process;
 	SharedTelemetryAuthenticator Auth;
-	SharedSampingController Sampling;
+	SharedSamplingController Sampling;
 	WorkQueue Queue;
 	volatile int32 QueueSize;
 	volatile bool RequestShutdown;
@@ -66,5 +66,5 @@ private:
 MICROMEGASTELEMETRYSINK_API TSharedPtr<MicromegasTracing::EventSink, ESPMode::ThreadSafe> InitHttpEventSink(
 	const FString& BaseUrl,
 	const SharedTelemetryAuthenticator& Auth,
-	const SharedSampingController& Sampling,
+	const SharedSamplingController& Sampling,
 	const FlushMonitorPtr& Flusher);

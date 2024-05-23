@@ -32,7 +32,7 @@ namespace
 		int32 Code = HttpResponse ? HttpResponse->GetResponseCode() : 0;
 		if (!bSucceeded || Code != 200)
 		{
-			UE_LOG(LogMicromegasTelemetrySink, Error, TEXT("Request completed with code=%d response=%s"), Code, HttpResponse ? *(HttpResponse->GetContentAsString()) : TEXT(""));
+			UE_LOG(LogMicromegasTelemetrySink, Warning, TEXT("Request completed with code=%d response=%s"), Code, HttpResponse ? *(HttpResponse->GetContentAsString()) : TEXT(""));
 		}
 	}
 
@@ -52,7 +52,7 @@ namespace
 HttpEventSink::HttpEventSink(const FString& InBaseUrl,
 	const MicromegasTracing::ProcessInfoPtr& ThisProcess,
 	const SharedTelemetryAuthenticator& InAuth,
-	const SharedSampingController& InSampling,
+	const SharedSamplingController& InSampling,
 	const FlushMonitorPtr& InFlusher)
 	: BaseUrl(InBaseUrl)
 	, Process(ThisProcess)
@@ -237,7 +237,7 @@ void HttpEventSink::SendBinaryRequest(const TCHAR* command, const TArray<uint8>&
 
 	if (!HttpRequest->ProcessRequest())
 	{
-		UE_LOG(LogMicromegasTelemetrySink, Error, TEXT("Failed to initialize telemetry http request"));
+		UE_LOG(LogMicromegasTelemetrySink, Warning, TEXT("Failed to initialize telemetry http request"));
 	}
 }
 
@@ -254,7 +254,7 @@ FString GetDistro()
 TSharedPtr<MicromegasTracing::EventSink, ESPMode::ThreadSafe> InitHttpEventSink(
 	const FString& BaseUrl,
 	const SharedTelemetryAuthenticator& Auth,
-	const SharedSampingController& Sampling,
+	const SharedSamplingController& Sampling,
 	const FlushMonitorPtr& Flusher)
 {
 	using namespace MicromegasTracing;
