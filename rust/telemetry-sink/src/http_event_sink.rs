@@ -10,7 +10,7 @@ use micromegas_tracing::{
     spans::{ThreadBlock, ThreadStream},
 };
 use std::{
-    cmp::min,
+    cmp::max,
     fmt,
     sync::{Arc, Mutex},
 };
@@ -195,7 +195,7 @@ impl HttpEventSink {
         }
         let flusher = FlushMonitor::default();
         loop {
-            let timeout = min(0, flusher.time_to_flush_seconds());
+            let timeout = max(0, flusher.time_to_flush_seconds());
             match receiver.recv_timeout(Duration::from_secs(timeout as u64)) {
                 Ok(message) => match message {
                     SinkEvent::Startup(process_info) => {
