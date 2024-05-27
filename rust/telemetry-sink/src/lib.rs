@@ -13,10 +13,12 @@ use std::sync::{Arc, Mutex, Weak};
 pub mod composite_event_sink;
 pub mod http_event_sink;
 pub mod local_event_sink;
+pub mod log_interop;
 pub mod request_decorator;
 pub mod stream_block;
 pub mod stream_info;
 
+use crate::log_interop::install_log_interop;
 use crate::request_decorator::RequestDecorator;
 use micromegas_tracing::event::BoxedEventSink;
 use micromegas_tracing::info;
@@ -38,6 +40,9 @@ pub mod reqwest {
 }
 
 use crate::http_event_sink::HttpEventSink;
+
+#[macro_use]
+extern crate lazy_static;
 
 pub struct TelemetryGuardBuilder {
     logs_buffer_size: usize,
@@ -195,8 +200,10 @@ impl TelemetryGuardBuilder {
                     sinks,
                     target_max_level,
                     self.max_level_override,
-                    self.interop_max_level_override,
                 ));
+
+                // the composite sink inits micromegas_tracing::levels::set_max_level, which install_log_interop needs
+                install_log_interop(self.interop_max_level_override);
 
                 let arc = Arc::<TracingSystemGuard>::new(TracingSystemGuard::new(
                     self.logs_buffer_size,

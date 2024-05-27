@@ -56,6 +56,7 @@ reqwest = {version = "0.11.24", features = ["json"]}
 serde = { version = "1.0", features = ["derive"]}
 serde_json = "1.0"
 sqlx = { version = "0.7.4", features = ["runtime-tokio", "postgres", "chrono", "uuid"] }
+string-interner = "0.17"
 syn = { version = "1.0", features = ["extra-traits", "full"] }
 thiserror = "1.0"
 thread-id = "4.0"
