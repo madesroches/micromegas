@@ -150,6 +150,7 @@ impl HttpEventSink {
         decorator: &dyn RequestDecorator,
         process_info: &ProcessInfo,
     ) -> Result<()> {
+        debug!("push_block");
         if current_queue_size.load(Ordering::Relaxed) >= max_queue_size {
             // could be better to have a budget for each block type
             // this way thread data would not starve the other streams
@@ -160,9 +161,17 @@ impl HttpEventSink {
         let mut request = client
             .post(format!("{root_path}/ingestion/insert_block"))
             .body(encoded_block)
-            .build()?;
-        decorator.decorate(&mut request).await?;
-        client.execute(request).await?;
+            .build()
+            .with_context(|| "building request")?;
+        decorator
+            .decorate(&mut request)
+            .await
+            .with_context(|| "decorating request")?;
+        debug!("push_block: executing request");
+        client
+            .execute(request)
+            .await
+            .with_context(|| "executing request")?;
         Ok(())
     }
 
