@@ -17,9 +17,11 @@ pub mod log_interop;
 pub mod request_decorator;
 pub mod stream_block;
 pub mod stream_info;
+pub mod tracing_interop;
 
 use crate::log_interop::install_log_interop;
 use crate::request_decorator::RequestDecorator;
+use crate::tracing_interop::install_tracing_interop;
 use micromegas_tracing::event::BoxedEventSink;
 use micromegas_tracing::info;
 use micromegas_tracing::{
@@ -41,9 +43,6 @@ pub mod reqwest {
 
 use crate::http_event_sink::HttpEventSink;
 
-#[macro_use]
-extern crate lazy_static;
-
 pub struct TelemetryGuardBuilder {
     logs_buffer_size: usize,
     metrics_buffer_size: usize,
@@ -52,6 +51,8 @@ pub struct TelemetryGuardBuilder {
     max_queue_size: isize,
     max_level_override: Option<LevelFilter>,
     interop_max_level_override: Option<LevelFilter>,
+    install_log_capture: bool,
+    install_tracing_capture: bool,
     local_sink_enabled: bool,
     local_sink_max_level: LevelFilter,
     telemetry_sink_max_level: LevelFilter,
@@ -77,6 +78,8 @@ impl Default for TelemetryGuardBuilder {
             max_queue_size: 16, //todo: change to nb_threads * 2
             max_level_override: None,
             interop_max_level_override: None,
+            install_log_capture: false,
+            install_tracing_capture: true,
             extra_sinks: HashMap::default(),
         }
     }
@@ -114,6 +117,18 @@ impl TelemetryGuardBuilder {
     #[must_use]
     pub fn with_interop_max_level_override(mut self, level_filter: LevelFilter) -> Self {
         self.interop_max_level_override = Some(level_filter);
+        self
+    }
+
+    #[must_use]
+    pub fn with_install_log_capture(mut self, enabled: bool) -> Self {
+        self.install_log_capture = enabled;
+        self
+    }
+
+    #[must_use]
+    pub fn with_install_tracing_capture(mut self, enabled: bool) -> Self {
+        self.install_tracing_capture = enabled;
         self
     }
 
@@ -203,7 +218,12 @@ impl TelemetryGuardBuilder {
                 ));
 
                 // the composite sink inits micromegas_tracing::levels::set_max_level, which install_log_interop needs
-                install_log_interop(self.interop_max_level_override);
+                if self.install_log_capture {
+                    install_log_interop(self.interop_max_level_override);
+                }
+                if self.install_tracing_capture {
+                    install_tracing_interop(self.interop_max_level_override);
+                }
 
                 let arc = Arc::<TracingSystemGuard>::new(TracingSystemGuard::new(
                     self.logs_buffer_size,

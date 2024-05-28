@@ -4,27 +4,9 @@ use micromegas_tracing::{
     levels::{Level, LevelFilter},
     logs::{LogMetadata, FILTER_LEVEL_UNSET_VALUE},
 };
-use std::{
-    collections::HashSet,
-    sync::{atomic::AtomicU32, Mutex},
-};
+use std::sync::atomic::AtomicU32;
 
 struct LogDispatch;
-
-lazy_static! {
-    static ref LOCKED_HASH: Mutex<HashSet<String>> = Mutex::new(HashSet::new());
-}
-
-fn intern_string(input: &str) -> &'static str {
-    let mut lock = LOCKED_HASH.lock().unwrap();
-    if let Some(val) = lock.get(input) {
-        unsafe { std::mem::transmute::<&str, &'static str>(val) }
-    } else {
-        lock.insert(input.to_string());
-        let interned = lock.get(input).unwrap();
-        unsafe { std::mem::transmute::<&str, &'static str>(interned) }
-    }
-}
 
 impl log::Log for LogDispatch {
     fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
@@ -47,7 +29,7 @@ impl log::Log for LogDispatch {
             level,
             level_filter: AtomicU32::new(FILTER_LEVEL_UNSET_VALUE),
             fmt_str: record.args().as_str().unwrap_or(""),
-            target: intern_string(record.metadata().target()),
+            target: record.target(),
             module_path: record.module_path_static().unwrap_or("unknown"),
             file: record.file_static().unwrap_or("unknown"),
             line: record.line().unwrap_or(0),
