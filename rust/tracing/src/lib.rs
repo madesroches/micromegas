@@ -63,7 +63,11 @@ pub mod string_id;
 pub mod time;
 
 #[macro_use]
+extern crate lazy_static;
+
+#[macro_use]
 mod macros;
+pub mod intern_string;
 
 pub mod prelude {
     pub use crate::levels::*;

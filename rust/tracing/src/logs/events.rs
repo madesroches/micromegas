@@ -3,13 +3,13 @@ use micromegas_transit::prelude::*;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 #[derive(Debug)]
-pub struct LogMetadata {
+pub struct LogMetadata<'a> {
     pub level: Level,
     pub level_filter: AtomicU32,
-    pub fmt_str: &'static str,
-    pub target: &'static str,
-    pub module_path: &'static str,
-    pub file: &'static str,
+    pub fmt_str: &'a str,
+    pub target: &'a str,
+    pub module_path: &'a str,
+    pub file: &'a str,
     pub line: u32,
 }
 
@@ -25,7 +25,7 @@ pub enum FilterState {
     Set(LevelFilter),
 }
 
-impl LogMetadata {
+impl LogMetadata<'_> {
     /// This is a way to efficiency implement finer grade filtering by amortizing its
     /// cost. An atomic is used to store a level filter and a 16 bit generation.
     /// Allowing a config update to be applied to the level filter multiple times during
@@ -88,7 +88,7 @@ impl LogMetadata {
 
 #[derive(Debug, TransitReflect)]
 pub struct LogStaticStrEvent {
-    pub desc: &'static LogMetadata,
+    pub desc: &'static LogMetadata<'static>,
     pub time: i64,
 }
 
@@ -96,7 +96,7 @@ impl InProcSerialize for LogStaticStrEvent {}
 
 #[derive(Debug)]
 pub struct LogStringEvent {
-    pub desc: &'static LogMetadata,
+    pub desc: &'static LogMetadata<'static>,
     pub time: i64,
     pub dyn_str: DynString,
 }

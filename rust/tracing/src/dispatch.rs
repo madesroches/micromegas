@@ -1,4 +1,5 @@
 pub use crate::errors::{Error, Result};
+use crate::intern_string::intern_string;
 use crate::prelude::*;
 use crate::{
     event::{EventSink, NullEventSink, TracingBlock},
@@ -488,14 +489,14 @@ impl Dispatch {
             log_stream.get_events_mut().push(LogStaticStrInteropEvent {
                 time,
                 level: desc.level as u32,
-                target: desc.target.into(),
+                target: intern_string(desc.target).into(),
                 msg: msg.into(),
             });
         } else {
             log_stream.get_events_mut().push(LogStringInteropEvent {
                 time,
                 level: desc.level as u32,
-                target: desc.target.into(),
+                target: intern_string(desc.target).into(),
                 msg: micromegas_transit::DynString(args.to_string()),
             });
         }
