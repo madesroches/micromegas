@@ -29,6 +29,7 @@ impl WebIngestionService {
         let stream_id = &block.stream_id;
         let block_id = &block.block_id;
         let obj_path = format!("blobs/{process_id}/{stream_id}/{block_id}");
+        debug!("writing {obj_path}");
 
         use sqlx::types::chrono::{DateTime, FixedOffset};
         let begin_time = DateTime::<FixedOffset>::parse_from_rfc3339(&block.begin_time)
@@ -42,6 +43,7 @@ impl WebIngestionService {
             .await
             .with_context(|| "Error writing block to blob storage")?;
 
+        debug!("recording block_id={block_id} stream_id={stream_id} process_id={process_id}");
         sqlx::query("INSERT INTO blocks VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10);")
             .bind(block_id)
             .bind(stream_id)
@@ -56,6 +58,7 @@ impl WebIngestionService {
             .execute(&self.lake.db_pool)
             .await
             .with_context(|| "inserting into blocks")?;
+        debug!("recorded block_id={block_id} stream_id={stream_id} process_id={process_id}");
 
         Ok(())
     }
