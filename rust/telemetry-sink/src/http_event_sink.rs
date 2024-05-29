@@ -184,7 +184,9 @@ impl HttpEventSink {
         decorator: &dyn RequestDecorator,
     ) {
         let mut opt_process_info = None;
-        let client_res = reqwest::Client::builder().build();
+        let client_res = reqwest::Client::builder()
+            .pool_idle_timeout(Some(core::time::Duration::from_secs(2)))
+            .build();
         if let Err(e) = client_res {
             error!("Error creating http client: {e:?}");
             return;
