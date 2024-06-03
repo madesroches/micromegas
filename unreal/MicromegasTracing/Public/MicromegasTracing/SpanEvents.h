@@ -11,14 +11,14 @@ namespace MicromegasTracing
 		const char* File;
 		uint32 Line;
 
-		SpanMetadata(const char* name,
-			const char* target,
-			const char* file,
-			uint32 line)
-			: Name(name)
-			, Target(target)
-			, File(file)
-			, Line(line)
+		SpanMetadata(const char* InName,
+			const char* InTarget,
+			const char* InFile,
+			uint32 InLine)
+			: Name(InName)
+			, Target(InTarget)
+			, File(InFile)
+			, Line(InLine)
 		{
 		}
 	};
@@ -28,9 +28,9 @@ namespace MicromegasTracing
 		const SpanMetadata* Desc;
 		uint64 Timestamp;
 
-		BeginThreadSpanEvent(const SpanMetadata* desc, uint64 timestamp)
-			: Desc(desc)
-			, Timestamp(timestamp)
+		BeginThreadSpanEvent(const SpanMetadata* InDesc, uint64 InTimestamp)
+			: Desc(InDesc)
+			, Timestamp(InTimestamp)
 		{
 		}
 	};
@@ -40,9 +40,9 @@ namespace MicromegasTracing
 		const SpanMetadata* Desc;
 		uint64 Timestamp;
 
-		EndThreadSpanEvent(const SpanMetadata* desc, uint64 timestamp)
-			: Desc(desc)
-			, Timestamp(timestamp)
+		EndThreadSpanEvent(const SpanMetadata* InDesc, uint64 InTimestamp)
+			: Desc(InDesc)
+			, Timestamp(InTimestamp)
 		{
 		}
 	};
@@ -53,12 +53,12 @@ namespace MicromegasTracing
 		const char* File;
 		uint32 Line;
 
-		SpanLocation(const char* target,
-			const char* file,
-			uint32 line)
-			: Target(target)
-			, File(file)
-			, Line(line)
+		SpanLocation(const char* InTarget,
+			const char* InFile,
+			uint32 InLine)
+			: Target(InTarget)
+			, File(InFile)
+			, Line(InLine)
 		{
 		}
 	};
