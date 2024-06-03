@@ -362,9 +362,9 @@ where
             let name = member_meta.name.clone();
             let type_name = member_meta.type_name.clone();
             let value = if member_meta.is_reference {
-                if member_meta.size != std::mem::size_of::<u64>() {
+                if member_meta.size < std::mem::size_of::<u64>() {
                     log::error!(
-                        "member references have to be exactly 8 bytes {:?}",
+                        "member references have to be at least 8 bytes {:?}",
                         member_meta
                     );
                     return (name, Value::None);
