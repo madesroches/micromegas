@@ -41,5 +41,6 @@ void FlushMonitor::Flush()
 	MicromegasTracing::FlushLogStream();
 	MicromegasTracing::FlushMetricStream();
 	MicromegasTracing::ForEachThreadStream(&MarkStreamFull);
+	MicromegasTracing::FlushCurrentThreadStream();
 	LastFlush = FPlatformTime::Cycles64();
 }

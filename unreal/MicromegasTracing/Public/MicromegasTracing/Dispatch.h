@@ -28,12 +28,15 @@ namespace MicromegasTracing
 		friend CORE_API void Shutdown();
 		friend CORE_API void FlushLogStream();
 		friend CORE_API void FlushMetricStream();
+		friend CORE_API void FlushCurrentThreadStream();
 		friend CORE_API void LogInterop(const LogStringInteropEvent& event);
 		friend CORE_API void LogStaticStr(const LogStaticStrEvent& event);
 		friend CORE_API void IntMetric(const IntegerMetricEvent& event);
 		friend CORE_API void FloatMetric(const FloatMetricEvent& event);
 		friend CORE_API void BeginScope(const BeginThreadSpanEvent& event);
 		friend CORE_API void EndScope(const EndThreadSpanEvent& event);
+		friend CORE_API void BeginNamedSpan(const BeginThreadNamedSpanEvent& event);
+		friend CORE_API void EndNamedSpan(const EndThreadSpanEvent& event);
 
 		friend CORE_API void ForEachThreadStream(ThreadStreamCallback callback);
 
@@ -85,7 +88,10 @@ namespace MicromegasTracing
 	CORE_API void Shutdown();
 	CORE_API void FlushLogStream();
 	CORE_API void FlushMetricStream();
+	CORE_API void FlushCurrentThreadStream();
 	CORE_API void LogInterop(const LogStringInteropEvent& event);
 	CORE_API void ForEachThreadStream(ThreadStreamCallback callback);
+	CORE_API void BeginNamedSpan(const BeginThreadNamedSpanEvent& event);
+	CORE_API void EndNamedSpan(const EndThreadNamedSpanEvent& event);
 
 } // namespace MicromegasTracing

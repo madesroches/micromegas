@@ -3,6 +3,7 @@
 //  MicromegasTracing/Macros.h
 //
 #include "HAL/PlatformTime.h"
+#include "MicromegasTracing/Dispatch.h"
 #include "MicromegasTracing/Fwd.h"
 #include "MicromegasTracing/LogEvents.h"
 #include "MicromegasTracing/MetricEvents.h"
@@ -42,11 +43,35 @@ namespace MicromegasTracing
 			EndScope(EndThreadSpanEvent(Desc, FPlatformTime::Cycles64()));
 		}
 	};
+
+	struct NamedSpanGuard
+	{
+		const SpanLocation* Desc;
+		const StaticStringRef Name;
+		NamedSpanGuard(const SpanLocation* InDesc, const StaticStringRef& InName)
+			: Desc(InDesc)
+			, Name(InName)
+		{
+			BeginNamedSpan(BeginThreadNamedSpanEvent(Desc, FPlatformTime::Cycles64(), Name));
+		}
+
+		~NamedSpanGuard()
+		{
+			EndNamedSpan(EndThreadNamedSpanEvent(Desc, FPlatformTime::Cycles64(), Name));
+		}
+	};
+
 } // namespace MicromegasTracing
 
+// MICROMEGAS_SPAN_SCOPE: the specified name is part of the scope metadata - it can't be changed from one call to the next
 #define MICROMEGAS_SPAN_SCOPE(target, name)                                                                               \
 	static const MicromegasTracing::SpanMetadata PREPROCESSOR_JOIN(spanMeta, __LINE__)(name, target, __FILE__, __LINE__); \
 	MicromegasTracing::SpanGuard PREPROCESSOR_JOIN(spanguard, __LINE__)(&PREPROCESSOR_JOIN(spanMeta, __LINE__))
+
+// MICROMEGAS_SPAN_NAME: the specified name can be variable, but any specified variable must have a static lifetime
+#define MICROMEGAS_SPAN_NAME(target, name)                                                                          \
+	static const MicromegasTracing::SpanLocation PREPROCESSOR_JOIN(spanMeta, __LINE__)(target, __FILE__, __LINE__); \
+	MicromegasTracing::NamedSpanGuard PREPROCESSOR_JOIN(spanguard, __LINE__)(&PREPROCESSOR_JOIN(spanMeta, __LINE__), (name))
 
 #if !defined(__clang__)
 	#define MICROMEGAS_FUNCTION_NAME __FUNCTION__
