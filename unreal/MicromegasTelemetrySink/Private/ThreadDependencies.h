@@ -6,7 +6,8 @@
 
 typedef MicromegasTracing::HeterogeneousQueue<
 	MicromegasTracing::StaticStringDependency,
-	MicromegasTracing::SpanMetadataDependency>
+	MicromegasTracing::SpanMetadataDependency,
+	MicromegasTracing::SpanLocationDependency>
 	ThreadDependenciesQueue;
 
 struct ExtractThreadDependencies
@@ -29,16 +30,28 @@ struct ExtractThreadDependencies
 		}
 	}
 
-	void operator()(const MicromegasTracing::SpanMetadata* desc)
+	void operator()(const MicromegasTracing::SpanMetadata* Desc)
 	{
 		bool alreadyInSet = false;
-		Ids.Add(desc, &alreadyInSet);
+		Ids.Add(Desc, &alreadyInSet);
 		if (!alreadyInSet)
 		{
-			(*this)(MicromegasTracing::StaticStringRef(desc->Name));
-			(*this)(MicromegasTracing::StaticStringRef(desc->Target));
-			(*this)(MicromegasTracing::StaticStringRef(desc->File));
-			Dependencies.Push(MicromegasTracing::SpanMetadataDependency(desc));
+			(*this)(MicromegasTracing::StaticStringRef(Desc->Name));
+			(*this)(MicromegasTracing::StaticStringRef(Desc->Target));
+			(*this)(MicromegasTracing::StaticStringRef(Desc->File));
+			Dependencies.Push(MicromegasTracing::SpanMetadataDependency(Desc));
+		}
+	}
+
+	void operator()(const MicromegasTracing::SpanLocation* Loc)
+	{
+		bool alreadyInSet = false;
+		Ids.Add(Loc, &alreadyInSet);
+		if (!alreadyInSet)
+		{
+			(*this)(MicromegasTracing::StaticStringRef(Loc->Target));
+			(*this)(MicromegasTracing::StaticStringRef(Loc->File));
+			Dependencies.Push(MicromegasTracing::SpanLocationDependency(Loc));
 		}
 	}
 
@@ -50,6 +63,18 @@ struct ExtractThreadDependencies
 	void operator()(const MicromegasTracing::EndThreadSpanEvent& event)
 	{
 		(*this)(event.Desc);
+	}
+
+	void operator()(const MicromegasTracing::BeginThreadNamedSpanEvent& event)
+	{
+		(*this)(event.Desc);
+		(*this)(event.Name);
+	}
+
+	void operator()(const MicromegasTracing::EndThreadNamedSpanEvent& event)
+	{
+		(*this)(event.Desc);
+		(*this)(event.Name);
 	}
 
 	ExtractThreadDependencies(const ExtractThreadDependencies&) = delete;

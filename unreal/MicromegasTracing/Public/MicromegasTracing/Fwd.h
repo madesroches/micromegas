@@ -14,6 +14,8 @@ namespace MicromegasTracing
 	struct FloatMetricEvent;
 	struct BeginThreadSpanEvent;
 	struct EndThreadSpanEvent;
+	struct BeginThreadNamedSpanEvent;
+	struct EndThreadNamedSpanEvent;
 	struct DualTime;
 	template <typename EventBlockT, size_t BUFFER_PADDING>
 	class EventStreamImpl;
@@ -34,7 +36,7 @@ namespace MicromegasTracing
 	typedef TSharedPtr<MetricStream, ESPMode::ThreadSafe> MetricStreamPtr;
 	struct ProcessInfo;
 	typedef TSharedPtr<ProcessInfo, ESPMode::ThreadSafe> ProcessInfoPtr;
-	typedef HeterogeneousQueue<BeginThreadSpanEvent, EndThreadSpanEvent> ThreadEventQueue;
+	typedef HeterogeneousQueue<BeginThreadSpanEvent, EndThreadSpanEvent, BeginThreadNamedSpanEvent, EndThreadNamedSpanEvent> ThreadEventQueue;
 	typedef EventBlock<ThreadEventQueue> ThreadBlock;
 	typedef TSharedPtr<ThreadBlock, ESPMode::ThreadSafe> ThreadBlockPtr;
 	typedef EventStreamImpl<ThreadBlock, 32> ThreadStream;

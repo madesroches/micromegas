@@ -291,6 +291,16 @@ namespace MicromegasTracing
 		QueueThreadEvent(event);
 	}
 
+	void BeginNamedSpan(const BeginThreadNamedSpanEvent& event)
+	{
+		QueueThreadEvent(event);
+	}
+
+	void EndNamedSpan(const EndThreadNamedSpanEvent& event)
+	{
+		QueueThreadEvent(event);
+	}
+
 	void ForEachThreadStream(ThreadStreamCallback callback)
 	{
 		Dispatch* dispatch = GDispatch;
@@ -303,6 +313,21 @@ namespace MicromegasTracing
 		{
 			callback(stream);
 		}
+	}
+
+	void FlushCurrentThreadStream()
+	{
+		Dispatch* dispatch = GDispatch;
+		if (!dispatch)
+		{
+			return;
+		}
+		ThreadStream* stream = GetCurrentThreadStream();
+		if (!stream)
+		{
+			return;
+		}
+		dispatch->FlushThreadStream(stream);
 	}
 
 } // namespace MicromegasTracing

@@ -47,4 +47,48 @@ namespace MicromegasTracing
 		}
 	};
 
+	struct SpanLocation
+	{
+		const char* Target;
+		const char* File;
+		uint32 Line;
+
+		SpanLocation(const char* target,
+			const char* file,
+			uint32 line)
+			: Target(target)
+			, File(file)
+			, Line(line)
+		{
+		}
+	};
+
+	struct BeginThreadNamedSpanEvent
+	{
+		const SpanLocation* Desc;
+		uint64 Timestamp;
+		StaticStringRef Name;
+
+		BeginThreadNamedSpanEvent(const SpanLocation* InDesc, uint64 InTimestamp, const StaticStringRef& InName)
+			: Desc(InDesc)
+			, Timestamp(InTimestamp)
+			, Name(InName)
+		{
+		}
+	};
+
+	struct EndThreadNamedSpanEvent
+	{
+		const SpanLocation* Desc;
+		uint64 Timestamp;
+		StaticStringRef Name;
+
+		EndThreadNamedSpanEvent(const SpanLocation* InDesc, uint64 InTimestamp, const StaticStringRef& InName)
+			: Desc(InDesc)
+			, Timestamp(InTimestamp)
+			, Name(InName)
+		{
+		}
+	};
+
 } // namespace MicromegasTracing

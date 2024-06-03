@@ -144,6 +144,11 @@ namespace MicromegasTracing
 		{
 		}
 
+		StaticStringRef(FName Name)
+			: StaticStringRef(Name.GetDisplayNameEntry())
+		{
+		}
+
 		uint64 GetID() const
 		{
 			return reinterpret_cast<uint64>(Ptr);
