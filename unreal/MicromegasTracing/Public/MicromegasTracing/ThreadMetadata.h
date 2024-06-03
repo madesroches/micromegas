@@ -42,12 +42,12 @@ namespace MicromegasTracing
 		const char* File;
 		uint32 Line;
 
-		explicit SpanMetadataDependency(const SpanMetadata* desc)
-			: Id(reinterpret_cast<uint64>(desc))
-			, Name(desc->Name)
-			, Target(desc->Target)
-			, File(desc->File)
-			, Line(desc->Line)
+		explicit SpanMetadataDependency(const SpanMetadata* Desc)
+			: Id(reinterpret_cast<uint64>(Desc))
+			, Name(Desc->Name)
+			, Target(Desc->Target)
+			, File(Desc->File)
+			, Line(Desc->Line)
 		{
 		}
 	};
@@ -108,11 +108,11 @@ namespace MicromegasTracing
 		const char* File;
 		uint32 Line;
 
-		explicit SpanLocationDependency(const SpanLocation* desc)
-			: Id(reinterpret_cast<uint64>(desc))
-			, Target(desc->Target)
-			, File(desc->File)
-			, Line(desc->Line)
+		explicit SpanLocationDependency(const SpanLocation* Desc)
+			: Id(reinterpret_cast<uint64>(Desc))
+			, Target(Desc->Target)
+			, File(Desc->File)
+			, Line(Desc->Line)
 		{
 		}
 	};
