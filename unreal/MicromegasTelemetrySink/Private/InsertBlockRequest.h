@@ -29,6 +29,7 @@ inline TArray<uint8> FormatBlockRequest(const MicromegasTracing::ProcessInfo& pr
 	auto depExtrator = ExtractBlockDependencies(block);
 
 	FString blockId = FGuid::NewGuid().ToString(EGuidFormats::DigitsWithHyphens);
+	MICROMEGAS_LOG_DYNAMIC("LogMicromegasTelemetrySink", MicromegasTracing::LogLevel::Debug, FString::Printf(TEXT("Sending block %s"), *blockId));
 
 	std::vector<uint8> compressedDep = CompressBuffer(
 		depExtrator->Dependencies.GetPtr(),
