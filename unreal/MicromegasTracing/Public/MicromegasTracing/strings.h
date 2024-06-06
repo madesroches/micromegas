@@ -72,6 +72,11 @@ namespace MicromegasTracing
 			assert(ref.GetCodec() == StringCodec::Ansi || ref.GetCodec() == StringCodec::Wide);
 		}
 
+		explicit DynamicString(const FString& str)
+			: DynamicString(*str)
+		{
+		}
+
 		const void* GetPtr() const
 		{
 			return Ptr;

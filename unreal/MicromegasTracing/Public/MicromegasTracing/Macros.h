@@ -13,6 +13,10 @@
 	static const MicromegasTracing::LogMetadata PREPROCESSOR_JOIN(logMeta, __LINE__)(level, target, msg, __FILE__, __LINE__); \
 	MicromegasTracing::LogStaticStr(MicromegasTracing::LogStaticStrEvent(&PREPROCESSOR_JOIN(logMeta, __LINE__), FPlatformTime::Cycles64()))
 
+// we could do like the rust instrumentation and log additional metadata instead of relying on the LogStringInteropEvent
+#define MICROMEGAS_LOG_DYNAMIC(target, level, msg) \
+	MicromegasTracing::LogInterop(MicromegasTracing::LogStringInteropEvent(FPlatformTime::Cycles64(), level, MicromegasTracing::StaticStringRef(target), MicromegasTracing::DynamicString(msg)))
+
 #define MICROMEGAS_IMETRIC(target, level, name, unit, expr)                                                                                \
 	static const MicromegasTracing::MetricMetadata PREPROCESSOR_JOIN(metricMeta, __LINE__)(level, name, unit, target, __FILE__, __LINE__); \
 	MicromegasTracing::IntMetric(MicromegasTracing::IntegerMetricEvent(&PREPROCESSOR_JOIN(metricMeta, __LINE__), (expr), FPlatformTime::Cycles64()))
