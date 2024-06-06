@@ -2,6 +2,7 @@
 #include "HAL/IConsoleManager.h"
 #include "MicromegasTelemetrySink/HttpEventSink.h"
 #include "MicromegasTelemetrySink/LogInterop.h"
+#include "MicromegasTelemetrySink/MetricPublisher.h"
 #include "MicromegasTelemetrySink/TelemetryAuthenticator.h"
 #include "MicromegasTracing/Dispatch.h"
 #include "SamplingController.h"
@@ -29,6 +30,7 @@ private:
 	SharedTelemetryAuthenticator Authenticator;
 	SharedSamplingController SamplingController;
 	SharedFlushMonitor Flusher;
+	SharedMetricPublisher MetricPub;
 };
 
 //================================================================================
@@ -46,6 +48,7 @@ void FMicromegasTelemetrySinkModule::OnEnable()
 	check(Authenticator.IsValid());
 	SamplingController = MakeShared<FSamplingController>();
 	Flusher = MakeShared<FlushMonitor>();
+	MetricPub = MakeShared<MetricPublisher>();
 	TSharedPtr<MicromegasTracing::EventSink, ESPMode::ThreadSafe> Sink = InitHttpEventSink(UploadBaseUrl, Authenticator, SamplingController, Flusher);
 	Authenticator->Init(Sink);
 	CmdEnable.Reset();
@@ -70,6 +73,7 @@ void FMicromegasTelemetrySinkModule::PreUnloadCallback()
 	CmdEnable.Reset();
 	CmdFlush.Reset();
 	Flusher.Reset();
+	MetricPub.Reset();
 	Authenticator.Reset();
 	SamplingController.Reset();
 }
