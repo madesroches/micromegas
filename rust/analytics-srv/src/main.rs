@@ -105,6 +105,19 @@ async fn query_log_entries_request(
     )
 }
 
+async fn query_metrics_request(
+    Extension(service): Extension<AnalyticsService>,
+    body: bytes::Bytes,
+) -> Response {
+    info!("query_metrics_request");
+    bytes_response(
+        service
+            .query_metrics(body)
+            .await
+            .with_context(|| "query_metrics"),
+    )
+}
+
 async fn serve_http(
     args: &Cli,
     lake: DataLakeConnection,
@@ -119,6 +132,7 @@ async fn serve_http(
             "/analytics/query_log_entries",
             post(query_log_entries_request),
         )
+        .route("/analytics/query_metrics", post(query_metrics_request))
         .layer(Extension(service));
     let listener = tokio::net::TcpListener::bind(args.listen_endpoint)
         .await

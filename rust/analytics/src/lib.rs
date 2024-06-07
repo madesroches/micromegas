@@ -8,8 +8,11 @@ pub mod arrow_utils;
 pub mod call_tree;
 pub mod log_entries_table;
 pub mod log_entry;
+pub mod measure;
 pub mod metadata;
+pub mod metrics_table;
 pub mod query_log_entries;
+pub mod query_metrics;
 pub mod query_spans;
 pub mod scope;
 pub mod span_table;
@@ -406,7 +409,7 @@ pub fn parse_block<F>(
     stream: &StreamInfo,
     payload: &micromegas_telemetry::block_wire_format::BlockPayload,
     fun: F,
-) -> Result<()>
+) -> Result<bool>
 where
     F: FnMut(Value) -> Result<bool>,
 {
@@ -417,64 +420,14 @@ where
     )
     .with_context(|| "reading dependencies")?;
     let obj_udts = &stream.objects_metadata;
-    parse_object_buffer(
+    let continue_iterating = parse_object_buffer(
         &dependencies,
         obj_udts,
         &decompress(&payload.objects).with_context(|| "decompressing objects payload")?,
         fun,
     )
     .with_context(|| "parsing object buffer")?;
-    Ok(())
-}
-
-#[span_fn]
-pub async fn for_each_process_metric<ProcessMetric: FnMut(Arc<micromegas_transit::Object>)>(
-    connection: &mut sqlx::PgConnection,
-    blob_storage: Arc<BlobStorage>,
-    process_id: &sqlx::types::Uuid,
-    mut process_metric: ProcessMetric,
-) -> Result<()> {
-    for stream in find_process_metrics_streams(connection, process_id).await? {
-        for block in find_stream_blocks(connection, &stream.stream_id).await? {
-            let payload = fetch_block_payload(
-                blob_storage.clone(),
-                stream.process_id,
-                stream.stream_id,
-                block.block_id,
-            )
-            .await?;
-            parse_block(&stream, &payload, |val| {
-                if let Value::Object(obj) = val {
-                    process_metric(obj);
-                }
-                Ok(true) //continue
-            })?;
-        }
-    }
-    Ok(())
-}
-
-#[async_recursion::async_recursion]
-#[span_fn]
-pub async fn for_each_process_in_tree<F>(
-    pool: &sqlx::PgPool,
-    root: &ProcessInfo,
-    rec_level: u16,
-    fun: F,
-) -> Result<()>
-where
-    F: Fn(&ProcessInfo, u16) + std::marker::Send + Clone,
-{
-    fun(root, rec_level);
-    let mut connection = pool.acquire().await?;
-    for child_info in fetch_child_processes(&mut connection, &root.process_id)
-        .await
-        .unwrap()
-    {
-        let fun_clone = fun.clone();
-        for_each_process_in_tree(pool, &child_info, rec_level + 1, fun_clone).await?;
-    }
-    Ok(())
+    Ok(continue_iterating)
 }
 
 pub mod prelude {
@@ -489,8 +442,6 @@ pub mod prelude {
     pub use crate::find_process_streams;
     pub use crate::find_process_thread_streams;
     pub use crate::find_stream_blocks;
-    pub use crate::for_each_process_in_tree;
-    pub use crate::for_each_process_metric;
     pub use crate::list_recent_processes;
     pub use crate::parse_block;
     pub use crate::processes_by_name_substring;

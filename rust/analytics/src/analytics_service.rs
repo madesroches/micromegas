@@ -58,6 +58,15 @@ pub struct QueryLogEntriesRequest {
     pub stream_id: Uuid,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct QueryMetricsRequest {
+    pub limit: i64,
+    pub begin: String,
+    pub end: String,
+    #[serde(deserialize_with = "micromegas_transit::uuid_utils::uuid_from_string")]
+    pub stream_id: Uuid,
+}
+
 impl AnalyticsService {
     pub fn new(data_lake: DataLakeConnection) -> Self {
         Self { data_lake }
@@ -201,6 +210,26 @@ impl AnalyticsService {
         serialize_record_batch(
             &crate::query_log_entries::query_log_entries(
                 &self.data_lake,
+                request.stream_id,
+                begin.into(),
+                end.into(),
+            )
+            .await
+            .with_context(|| "query_log_entries")?,
+        )
+    }
+
+    pub async fn query_metrics(&self, body: bytes::Bytes) -> Result<bytes::Bytes> {
+        let request: QueryMetricsRequest =
+            ciborium::from_reader(body.reader()).with_context(|| "parsing QueryMetricsRequest")?;
+        let begin = DateTime::<FixedOffset>::parse_from_rfc3339(&request.begin)
+            .with_context(|| "parsing begin time range")?;
+        let end = DateTime::<FixedOffset>::parse_from_rfc3339(&request.end)
+            .with_context(|| "parsing end time range")?;
+        serialize_record_batch(
+            &crate::query_metrics::query_metrics(
+                &self.data_lake,
+                request.limit,
                 request.stream_id,
                 begin.into(),
                 end.into(),
