@@ -464,7 +464,7 @@ pub fn parse_object_buffer<F, S>(
     udts: &[UserDefinedType],
     buffer: &[u8],
     mut fun: F,
-) -> Result<()>
+) -> Result<bool>
 where
     F: FnMut(Value) -> Result<bool>,
     S: BuildHasher,
@@ -495,9 +495,9 @@ where
             parse_pod_instance(udt, udts, dependencies, offset, buffer)
         };
         if !fun(instance)? {
-            return Ok(());
+            return Ok(false);
         }
         offset += object_size;
     }
-    Ok(())
+    Ok(true)
 }
