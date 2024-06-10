@@ -19,6 +19,7 @@ MetricPublisher::~MetricPublisher()
 
 void MetricPublisher::Tick()
 {
+	MICROMEGAS_SPAN_FUNCTION("MicromegasTelemetrySink");
 	MICROMEGAS_FMETRIC("Frame", MicromegasTracing::Verbosity::Med, TEXT("DeltaTime"), TEXT("seconds"), FApp::GetDeltaTime());
 
 	FPlatformMemoryStats MemStats = FPlatformMemory::GetStats();
