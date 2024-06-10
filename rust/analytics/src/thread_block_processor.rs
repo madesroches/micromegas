@@ -45,30 +45,34 @@ pub fn parse_thread_block_payload<Proc: ThreadBlockProcessor>(
                 "BeginThreadSpanEvent" => on_thread_event(&obj, |scope, ts| {
                     let name = scope.get::<Arc<String>>("name")?;
                     let filename = scope.get::<Arc<String>>("file")?;
+                    let target = scope.get::<Arc<String>>("target")?;
                     let line = scope.get::<u32>("line")?;
-                    let scope_desc = ScopeDesc::new(name, filename, line);
+                    let scope_desc = ScopeDesc::new(name, filename, target, line);
                     processor.on_begin_thread_scope(scope_desc, ts)
                 })
                 .with_context(|| "reading BeginThreadSpanEvent"),
                 "EndThreadSpanEvent" => on_thread_event(&obj, |scope, ts| {
                     let name = scope.get::<Arc<String>>("name")?;
                     let filename = scope.get::<Arc<String>>("file")?;
+                    let target = scope.get::<Arc<String>>("target")?;
                     let line = scope.get::<u32>("line")?;
-                    let scope_desc = ScopeDesc::new(name, filename, line);
+                    let scope_desc = ScopeDesc::new(name, filename, target, line);
                     processor.on_end_thread_scope(scope_desc, ts)
                 })
                 .with_context(|| "reading EndThreadSpanEvent"),
                 "BeginThreadNamedSpanEvent" => on_thread_named_event(&obj, |scope, name, ts| {
                     let filename = scope.get::<Arc<String>>("file")?;
+                    let target = scope.get::<Arc<String>>("target")?;
                     let line = scope.get::<u32>("line")?;
-                    let scope_desc = ScopeDesc::new(name, filename, line);
+                    let scope_desc = ScopeDesc::new(name, filename, target, line);
                     processor.on_begin_thread_scope(scope_desc, ts)
                 })
                 .with_context(|| "reading BeginThreadNamedSpanEvent"),
                 "EndThreadNamedSpanEvent" => on_thread_named_event(&obj, |scope, name, ts| {
                     let filename = scope.get::<Arc<String>>("file")?;
+                    let target = scope.get::<Arc<String>>("target")?;
                     let line = scope.get::<u32>("line")?;
-                    let scope_desc = ScopeDesc::new(name, filename, line);
+                    let scope_desc = ScopeDesc::new(name, filename, target, line);
                     processor.on_end_thread_scope(scope_desc, ts)
                 })
                 .with_context(|| "reading EndThreadNamedSpanEvent"),

@@ -25,6 +25,7 @@ pub struct SpanRow {
     pub end: i64,
     pub hash: u32,
     pub name: Arc<String>,
+    pub target: Arc<String>,
     pub filename: Arc<String>,
     pub line: u32,
 }
@@ -38,6 +39,7 @@ pub struct SpanRecordBuilder {
     pub ends: PrimitiveBuilder<TimestampNanosecondType>,
     pub durations: PrimitiveBuilder<Int64Type>,
     pub names: StringDictionaryBuilder<Int16Type>,
+    pub targets: StringDictionaryBuilder<Int16Type>,
     pub filenames: StringDictionaryBuilder<Int16Type>,
     pub lines: PrimitiveBuilder<UInt32Type>,
 }
@@ -53,6 +55,7 @@ impl SpanRecordBuilder {
             ends: PrimitiveBuilder::with_capacity(capacity),
             durations: PrimitiveBuilder::with_capacity(capacity),
             names: StringDictionaryBuilder::new(), //we could estimate the number of different names and their size
+            targets: StringDictionaryBuilder::new(),
             filenames: StringDictionaryBuilder::new(),
             lines: PrimitiveBuilder::with_capacity(capacity),
         }
@@ -67,6 +70,7 @@ impl SpanRecordBuilder {
         self.ends.append_value(row.end);
         self.durations.append_value(row.end - row.begin);
         self.names.append_value(&*row.name);
+        self.targets.append_value(&*row.target);
         self.filenames.append_value(&*row.filename);
         self.lines.append_value(row.line);
         Ok(())
@@ -95,6 +99,11 @@ impl SpanRecordBuilder {
                 false,
             ),
             Field::new(
+                "target",
+                DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
+                false,
+            ),
+            Field::new(
                 "filename",
                 DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
                 false,
@@ -112,6 +121,7 @@ impl SpanRecordBuilder {
                 Arc::new(self.ends.finish().with_timezone_utc()),
                 Arc::new(self.durations.finish()),
                 Arc::new(self.names.finish()),
+                Arc::new(self.targets.finish()),
                 Arc::new(self.filenames.finish()),
                 Arc::new(self.lines.finish()),
             ],
@@ -161,6 +171,7 @@ pub fn call_tree_to_record_batch(tree: &CallTree) -> Result<RecordBatch> {
                     end: node.end,
                     hash: node.hash,
                     name: scope_desc.name.clone(),
+                    target: scope_desc.target.clone(),
                     filename: scope_desc.filename.clone(),
                     line: scope_desc.line,
                 })

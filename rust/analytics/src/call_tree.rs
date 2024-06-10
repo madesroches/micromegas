@@ -43,7 +43,12 @@ impl CallTreeBuilder {
         convert_ticks: ConvertTicks,
         thread_name: String,
     ) -> Self {
-        let thread_scope_desc = ScopeDesc::new(Arc::new(thread_name), Arc::new("".to_owned()), 0);
+        let thread_scope_desc = ScopeDesc::new(
+            Arc::new(thread_name),
+            Arc::new("".to_owned()),
+            Arc::new("".to_owned()),
+            0,
+        );
         let mut scopes = ScopeHashMap::new();
         let root_hash = thread_scope_desc.hash;
         scopes.insert(root_hash, thread_scope_desc);
