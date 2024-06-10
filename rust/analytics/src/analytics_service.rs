@@ -191,6 +191,7 @@ impl AnalyticsService {
         serialize_record_batch(
             &crate::query_spans::query_spans(
                 &self.data_lake,
+                request.limit,
                 request.stream_id,
                 begin.into(),
                 end.into(),

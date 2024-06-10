@@ -13,6 +13,7 @@ use sqlx::types::chrono::{DateTime, Utc};
 
 pub async fn query_spans(
     data_lake: &DataLakeConnection,
+    limit: i64,
     stream_id: sqlx::types::Uuid,
     mut begin: DateTime<Utc>,
     end: DateTime<Utc>,
@@ -46,6 +47,7 @@ pub async fn query_spans(
         &blocks,
         relative_begin_ticks + process_info.start_ticks,
         relative_end_ticks + process_info.start_ticks,
+        limit,
         data_lake.blob_storage.clone(),
         convert_ticks,
         &stream_info,

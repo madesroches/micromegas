@@ -27,6 +27,8 @@ pub struct CallTree {
 pub struct CallTreeBuilder {
     begin_range_ns: i64,
     end_range_ns: i64,
+    limit: i64,
+    nb_spans: i64,
     stack: Vec<CallTreeNode>,
     scopes: ScopeHashMap,
     convert_ticks: ConvertTicks,
@@ -37,6 +39,7 @@ impl CallTreeBuilder {
     pub fn new(
         ts_begin_range: i64,
         ts_end_range: i64,
+        limit: i64,
         convert_ticks: ConvertTicks,
         thread_name: String,
     ) -> Self {
@@ -47,6 +50,8 @@ impl CallTreeBuilder {
         Self {
             begin_range_ns: convert_ticks.ticks_to_nanoseconds(ts_begin_range),
             end_range_ns: convert_ticks.ticks_to_nanoseconds(ts_end_range),
+            limit,
+            nb_spans: 0,
             stack: Vec::new(),
             scopes,
             convert_ticks,
@@ -98,7 +103,10 @@ impl CallTreeBuilder {
 }
 
 impl ThreadBlockProcessor for CallTreeBuilder {
-    fn on_begin_thread_scope(&mut self, scope: ScopeDesc, ts: i64) -> Result<()> {
+    fn on_begin_thread_scope(&mut self, scope: ScopeDesc, ts: i64) -> Result<bool> {
+        if self.nb_spans >= self.limit {
+            return Ok(false);
+        }
         let time = self.convert_ticks.ticks_to_nanoseconds(ts);
         let hash = scope.hash;
         self.record_scope_desc(scope);
@@ -109,10 +117,11 @@ impl ThreadBlockProcessor for CallTreeBuilder {
             children: Vec::new(),
         };
         self.stack.push(node);
-        Ok(())
+        self.nb_spans += 1;
+        Ok(true) // continue even if we reached the limit to allow the opportunity to close than span
     }
 
-    fn on_end_thread_scope(&mut self, scope: ScopeDesc, ts: i64) -> Result<()> {
+    fn on_end_thread_scope(&mut self, scope: ScopeDesc, ts: i64) -> Result<bool> {
         let time = self.convert_ticks.ticks_to_nanoseconds(ts);
         let hash = scope.hash;
         self.record_scope_desc(scope);
@@ -128,15 +137,19 @@ impl ThreadBlockProcessor for CallTreeBuilder {
                 anyhow::bail!("top scope mismatch parsing thread block");
             }
         } else {
-            let scope = CallTreeNode {
+            if self.nb_spans >= self.limit {
+                return Ok(false);
+            }
+            let node = CallTreeNode {
                 hash,
                 begin: self.begin_range_ns,
                 end: time,
                 children: Vec::new(),
             };
-            self.add_child_to_top(scope);
+            self.add_child_to_top(node);
+            self.nb_spans += 1;
         }
-        Ok(())
+        Ok(true)
     }
 }
 
@@ -146,6 +159,7 @@ pub async fn make_call_tree(
     blocks: &[BlockMetadata],
     begin_ticks_query: i64,
     end_ticks_query: i64,
+    limit: i64,
     blob_storage: Arc<BlobStorage>,
     convert_ticks: ConvertTicks,
     stream: &micromegas_telemetry::stream_info::StreamInfo,
@@ -153,6 +167,7 @@ pub async fn make_call_tree(
     let mut builder = CallTreeBuilder::new(
         begin_ticks_query,
         end_ticks_query,
+        limit - 1, // the thread node eats one span
         convert_ticks,
         stream.get_thread_name(),
     );
