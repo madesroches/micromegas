@@ -14,10 +14,12 @@ pub mod metrics_table;
 pub mod query_log_entries;
 pub mod query_metrics;
 pub mod query_spans;
+pub mod query_thread_events;
 pub mod scope;
 pub mod span_table;
 pub mod sql_arrow_bridge;
 pub mod thread_block_processor;
+pub mod thread_events_table;
 pub mod time;
 
 use anyhow::{Context, Result};
@@ -347,7 +349,7 @@ pub async fn find_block(
     block_id: &str,
 ) -> Result<BlockMetadata> {
     let row = sqlx::query(
-        "SELECT block_id, stream_id, begin_time, begin_ticks, end_time, end_ticks, nb_objects, payload_size
+        "SELECT block_id, stream_id, begin_time, begin_ticks, end_time, end_ticks, nb_objects, object_offset, payload_size
          FROM blocks
          WHERE block_id = ?
          ;",
@@ -365,7 +367,7 @@ pub async fn find_stream_blocks(
     stream_id: &sqlx::types::Uuid,
 ) -> Result<Vec<BlockMetadata>> {
     let rows = sqlx::query(
-        "SELECT block_id, stream_id, begin_time, begin_ticks, end_time, end_ticks, nb_objects, payload_size
+        "SELECT block_id, stream_id, begin_time, begin_ticks, end_time, end_ticks, nb_objects, object_offset, payload_size
          FROM blocks
          WHERE stream_id = ?
          ORDER BY begin_time;",

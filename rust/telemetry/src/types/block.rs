@@ -9,4 +9,5 @@ pub struct BlockMetadata {
     pub end_ticks: i64,
     pub nb_objects: i32,
     pub payload_size: i64,
+    pub object_offset: i64,
 }

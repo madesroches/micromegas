@@ -92,6 +92,19 @@ async fn query_spans_request(
     )
 }
 
+async fn query_thread_events_request(
+    Extension(service): Extension<AnalyticsService>,
+    body: bytes::Bytes,
+) -> Response {
+    info!("query_thread_events_request");
+    bytes_response(
+        service
+            .query_thread_events(body)
+            .await
+            .with_context(|| "query_thread_events"),
+    )
+}
+
 async fn query_log_entries_request(
     Extension(service): Extension<AnalyticsService>,
     body: bytes::Bytes,
@@ -133,6 +146,10 @@ async fn serve_http(
             post(query_log_entries_request),
         )
         .route("/analytics/query_metrics", post(query_metrics_request))
+        .route(
+            "/analytics/query_thread_events",
+            post(query_thread_events_request),
+        )
         .layer(Extension(service));
     let listener = tokio::net::TcpListener::bind(args.listen_endpoint)
         .await
