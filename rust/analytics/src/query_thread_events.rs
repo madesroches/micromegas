@@ -70,7 +70,7 @@ pub async fn make_thread_events_record_batch(
     let mut record_builder = ThreadEventsRecordBuilder::new(
         begin_query_ns,
         end_query_ns,
-        limit, //todo: handle limit
+        limit,
         convert_ticks,
         1024 * 1024,
     ); // should we use limit as capacity, we would then always allocate the worst case

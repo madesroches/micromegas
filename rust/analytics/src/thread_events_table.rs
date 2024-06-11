@@ -119,7 +119,7 @@ impl ThreadEventsRecordBuilder {
         scope: crate::scope::ScopeDesc,
         ts: i64,
     ) -> Result<bool> {
-        if self.nb_rows > self.limit {
+        if self.nb_rows >= self.limit {
             return Ok(false);
         }
         let time = self.convert_ticks.ticks_to_nanoseconds(ts);
@@ -130,6 +130,7 @@ impl ThreadEventsRecordBuilder {
             return Ok(false);
         }
 
+        self.nb_rows += 1;
         self.ids.append_value(event_id);
         self.event_types.append_value(event_type);
         self.timestamps.append_value(time);
@@ -138,7 +139,7 @@ impl ThreadEventsRecordBuilder {
         self.targets.append_value(&*scope.target);
         self.filenames.append_value(&*scope.filename);
         self.lines.append_value(scope.line);
-        Ok(true)
+        Ok(self.nb_rows < self.limit)
     }
 }
 
