@@ -54,6 +54,18 @@ class Client:
             headers=self.headers,
         )
 
+    def query_thread_events(self, begin, end, limit, stream_id):
+        return request.request(
+            self.analytics_base_url + "query_thread_events",
+            {
+                "begin": begin.isoformat(),
+                "end": end.isoformat(),
+                "limit": limit,
+                "stream_id": stream_id,
+            },
+            headers=self.headers,
+        )
+    
     def query_log_entries(self, begin, end, limit, stream_id):
         return request.request(
             self.analytics_base_url + "query_log_entries",

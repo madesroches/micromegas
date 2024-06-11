@@ -13,13 +13,12 @@ use datafusion::arrow::datatypes::Schema;
 use datafusion::arrow::datatypes::TimeUnit;
 use datafusion::arrow::datatypes::TimestampNanosecondType;
 use datafusion::arrow::datatypes::UInt32Type;
-use datafusion::arrow::datatypes::UInt64Type;
 use datafusion::arrow::record_batch::RecordBatch;
 
 #[derive(Debug)]
 pub struct SpanRow {
-    pub id: u64,
-    pub parent: u64,
+    pub id: i64,
+    pub parent: i64,
     pub depth: u32,
     pub begin: i64,
     pub end: i64,
@@ -31,8 +30,8 @@ pub struct SpanRow {
 }
 
 pub struct SpanRecordBuilder {
-    pub ids: PrimitiveBuilder<UInt64Type>,
-    pub parents: PrimitiveBuilder<UInt64Type>,
+    pub ids: PrimitiveBuilder<Int64Type>,
+    pub parents: PrimitiveBuilder<Int64Type>,
     pub depths: PrimitiveBuilder<UInt32Type>,
     pub hashes: PrimitiveBuilder<UInt32Type>,
     pub begins: PrimitiveBuilder<TimestampNanosecondType>,
@@ -78,8 +77,8 @@ impl SpanRecordBuilder {
 
     pub fn finish(mut self) -> Result<RecordBatch> {
         let schema = Schema::new(vec![
-            Field::new("id", DataType::UInt64, false),
-            Field::new("parent", DataType::UInt64, false),
+            Field::new("id", DataType::Int64, false),
+            Field::new("parent", DataType::Int64, false),
             Field::new("depth", DataType::UInt32, false),
             Field::new("hash", DataType::UInt32, false),
             Field::new(
@@ -132,19 +131,17 @@ impl SpanRecordBuilder {
 
 fn for_each_node_in_tree<NodeFun>(
     node: &CallTreeNode,
-    parent: u64,
+    parent: i64,
     depth: u32,
-    next_id: &mut u64,
     process_node: &mut NodeFun,
 ) -> Result<()>
 where
-    NodeFun: FnMut(&CallTreeNode, u64, u64, u32) -> Result<()>,
+    NodeFun: FnMut(&CallTreeNode, i64, u32) -> Result<()>,
 {
-    let span_id = *next_id; //todo: use event sequence as span id
-    *next_id += 1;
-    process_node(node, span_id, parent, depth)?;
+    process_node(node, parent, depth)?;
+    let span_id = node.id.unwrap_or(-1);
     for child in &node.children {
-        for_each_node_in_tree(child, span_id, depth + 1, next_id, process_node)?;
+        for_each_node_in_tree(child, span_id, depth + 1, process_node)?;
     }
     Ok(())
 }
@@ -152,19 +149,17 @@ where
 pub fn call_tree_to_record_batch(tree: &CallTree) -> Result<RecordBatch> {
     let mut record_builder = SpanRecordBuilder::with_capacity(1024); //todo: replace with number of nodes
     if tree.call_tree_root.is_some() {
-        let mut next_id = 1;
         for_each_node_in_tree(
             tree.call_tree_root.as_ref().unwrap(),
             0,
             0,
-            &mut next_id,
-            &mut |node, id, parent, depth| {
+            &mut |node, parent, depth| {
                 let scope_desc = tree
                     .scopes
                     .get(&node.hash)
                     .with_context(|| "fetching scope_desc from hash")?;
                 record_builder.append(SpanRow {
-                    id,
+                    id: node.id.unwrap_or(-1),
                     parent,
                     depth,
                     begin: node.begin,

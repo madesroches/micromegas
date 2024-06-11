@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 #[derive(Debug)]
 pub struct CallTreeNode {
+    pub id: Option<i64>,
     pub hash: u32,
     pub begin: i64, //absolute nanoseconds
     pub end: i64,
@@ -85,16 +86,17 @@ impl CallTreeBuilder {
         }
     }
 
-    fn add_child_to_top(&mut self, scope: CallTreeNode) {
+    fn add_child_to_top(&mut self, node: CallTreeNode) {
         if let Some(mut top) = self.stack.pop() {
-            top.children.push(scope);
+            top.children.push(node);
             self.stack.push(top);
         } else {
             let new_root = CallTreeNode {
+                id: None,
                 hash: self.root_hash,
                 begin: self.begin_range_ns,
                 end: self.end_range_ns,
-                children: vec![scope],
+                children: vec![node],
             };
             self.stack.push(new_root);
         }
@@ -108,7 +110,7 @@ impl CallTreeBuilder {
 }
 
 impl ThreadBlockProcessor for CallTreeBuilder {
-    fn on_begin_thread_scope(&mut self, scope: ScopeDesc, ts: i64) -> Result<bool> {
+    fn on_begin_thread_scope(&mut self, event_id: i64, scope: ScopeDesc, ts: i64) -> Result<bool> {
         if self.nb_spans >= self.limit {
             return Ok(false);
         }
@@ -116,6 +118,7 @@ impl ThreadBlockProcessor for CallTreeBuilder {
         let hash = scope.hash;
         self.record_scope_desc(scope);
         let node = CallTreeNode {
+            id: Some(event_id),
             hash,
             begin: time,
             end: self.end_range_ns,
@@ -126,7 +129,7 @@ impl ThreadBlockProcessor for CallTreeBuilder {
         Ok(true) // continue even if we reached the limit to allow the opportunity to close than span
     }
 
-    fn on_end_thread_scope(&mut self, scope: ScopeDesc, ts: i64) -> Result<bool> {
+    fn on_end_thread_scope(&mut self, event_id: i64, scope: ScopeDesc, ts: i64) -> Result<bool> {
         let time = self.convert_ticks.ticks_to_nanoseconds(ts);
         let hash = scope.hash;
         self.record_scope_desc(scope);
@@ -135,6 +138,7 @@ impl ThreadBlockProcessor for CallTreeBuilder {
                 old_top.end = time;
                 self.add_child_to_top(old_top);
             } else if old_top.hash == self.root_hash {
+                old_top.id = Some(event_id);
                 old_top.hash = hash;
                 old_top.end = time;
                 self.add_child_to_top(old_top);
@@ -146,6 +150,7 @@ impl ThreadBlockProcessor for CallTreeBuilder {
                 return Ok(false);
             }
             let node = CallTreeNode {
+                id: Some(event_id),
                 hash,
                 begin: self.begin_range_ns,
                 end: time,
@@ -162,7 +167,7 @@ impl ThreadBlockProcessor for CallTreeBuilder {
 #[span_fn]
 pub async fn make_call_tree(
     blocks: &[BlockMetadata],
-    begin_ticks_query: i64,
+    begin_ticks_query: i64, //todo: change to nanoseconds
     end_ticks_query: i64,
     limit: i64,
     blob_storage: Arc<BlobStorage>,
@@ -177,7 +182,14 @@ pub async fn make_call_tree(
         stream.get_thread_name(),
     );
     for block in blocks {
-        parse_thread_block(blob_storage.clone(), stream, block.block_id, &mut builder).await?;
+        parse_thread_block(
+            blob_storage.clone(),
+            stream,
+            block.block_id,
+            block.object_offset,
+            &mut builder,
+        )
+        .await?;
     }
     Ok(builder.finish())
 }

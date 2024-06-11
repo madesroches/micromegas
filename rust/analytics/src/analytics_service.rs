@@ -50,6 +50,15 @@ pub struct QuerySpansRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct QueryThreadEventsRequest {
+    pub limit: i64,
+    pub begin: String,
+    pub end: String,
+    #[serde(deserialize_with = "micromegas_transit::uuid_utils::uuid_from_string")]
+    pub stream_id: Uuid,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct QueryLogEntriesRequest {
     pub limit: i64,
     pub begin: String,
@@ -198,6 +207,26 @@ impl AnalyticsService {
             )
             .await
             .with_context(|| "query_spans")?,
+        )
+    }
+
+    pub async fn query_thread_events(&self, body: bytes::Bytes) -> Result<bytes::Bytes> {
+        let request: QueryThreadEventsRequest = ciborium::from_reader(body.reader())
+            .with_context(|| "parsing QueryThreadEventsRequest")?;
+        let begin = DateTime::<FixedOffset>::parse_from_rfc3339(&request.begin)
+            .with_context(|| "parsing begin time range")?;
+        let end = DateTime::<FixedOffset>::parse_from_rfc3339(&request.end)
+            .with_context(|| "parsing end time range")?;
+        serialize_record_batch(
+            &crate::query_thread_events::query_thread_events(
+                &self.data_lake,
+                request.limit,
+                request.stream_id,
+                begin.into(),
+                end.into(),
+            )
+            .await
+            .with_context(|| "query_thread_events")?,
         )
     }
 
