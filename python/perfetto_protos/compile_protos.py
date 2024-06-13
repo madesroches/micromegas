@@ -4,11 +4,11 @@ import pathlib
 import os
 
 perfetto_folder = (
-    pathlib.Path(__file__).parent.parent.parent.absolute() / "external/perfetto"
+    pathlib.Path(__file__).parent.parent.parent.parent.absolute() / "external/perfetto"
 )
 python_output_folder = (
     pathlib.Path(__file__).parent.parent.absolute()
-    / "python/micromegas/micromegas/thirdparty/perfetto/"
+    / "micromegas/micromegas/thirdparty/perfetto/"
 )
 
 
