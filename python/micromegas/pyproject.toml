@@ -7,6 +7,7 @@ readme = "README.md"
 
 [tool.poetry.dependencies]
 cbor2 = "^5.6.3"
+crc = "^7.0.0"
 pandas = "^2.2.2"
 protobuf = "^5.27.1"
 pyarrow = "^16.0.0"

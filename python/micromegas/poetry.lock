@@ -173,6 +173,17 @@ files = [
 ]
 
 [[package]]
+name = "crc"
+version = "7.0.0"
+description = "Library and CLI to calculate and verify all kinds of CRC checksums"
+optional = false
+python-versions = "<4.0,>=3.8"
+files = [
+    {file = "crc-7.0.0-py3-none-any.whl", hash = "sha256:8b22f5534e9360bf61e169ce581d61143d3d0248a1fdc2c4b4f2175af3b2c2aa"},
+    {file = "crc-7.0.0.tar.gz", hash = "sha256:b9fc521042167f2b59d9183ce27acc0897e4a17748421e8b304ccdf7ebf4280a"},
+]
+
+[[package]]
 name = "exceptiongroup"
 version = "1.2.1"
 description = "Backport of PEP 654 (exception groups)"
@@ -555,4 +566,4 @@ zstd = ["zstandard (>=0.18.0)"]
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.10"
-content-hash = "ab10fc92d21d6ca7a06b3053a40b67cbd0bc36c3f2b4ba2cee4815d946f0c0e2"
+content-hash = "d7503d826a16c9a99e81b95c2b4c5c6eab895a0919f099fc9383561d1d0fbf81"
