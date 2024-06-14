@@ -43,6 +43,19 @@ In order to keep costs down, most payloads will remain unprocessed until they ex
 
 ## Status
 
+### June 2024
+Released [version 0.1.4](https://crates.io/crates/micromegas)
+
+Good enough for dogfooding :)
+
+Unreal
+ * Metrics publisher
+ * FName scopes
+
+Analytics
+ * Metric queries
+ * Convert cpu traces in perfetto format
+
 ### May 2024
 Released [version 0.1.3](https://crates.io/crates/micromegas)
 
