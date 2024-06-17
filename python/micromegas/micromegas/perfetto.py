@@ -52,6 +52,9 @@ class Writer:
                 raise Exception("unknown event type")
             packet.track_event.track_uuid = thread_uuid
             packet.track_event.name = event["name"]
+            packet.track_event.categories.append(event["target"])
+            packet.track_event.source_location.file_name = event["filename"]
+            packet.track_event.source_location.line_number = event["line"]
             packet.trusted_packet_sequence_id = trusted_packet_sequence_id
             self.packets.append(packet)
 
