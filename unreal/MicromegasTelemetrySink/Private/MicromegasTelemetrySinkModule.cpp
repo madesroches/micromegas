@@ -5,6 +5,7 @@
 #include "MicromegasTelemetrySink/MetricPublisher.h"
 #include "MicromegasTelemetrySink/TelemetryAuthenticator.h"
 #include "MicromegasTracing/Dispatch.h"
+#include "Misc/CoreDelegates.h"
 #include "SamplingController.h"
 #include "Templates/UniquePtr.h"
 
@@ -45,6 +46,8 @@ void FMicromegasTelemetrySinkModule::StartupModule()
 
 void FMicromegasTelemetrySinkModule::OnEnable()
 {
+	const FName HttpModuleName = TEXT("HTTP");
+	FModuleManager::Get().LoadModuleChecked(HttpModuleName);
 	check(Authenticator.IsValid());
 	SamplingController = MakeShared<FSamplingController>();
 	Flusher = MakeShared<FlushMonitor>();
@@ -56,6 +59,8 @@ void FMicromegasTelemetrySinkModule::OnEnable()
 	CmdFlush.Reset(new FAutoConsoleCommand(TEXT("telemetry.flush"),
 		TEXT("Marks telemetry buffers as full"),
 		FConsoleCommandDelegate::CreateRaw(this, &FMicromegasTelemetrySinkModule::OnFlush)));
+
+	FCoreDelegates::OnCommandletPostMain.AddRaw(this, &FMicromegasTelemetrySinkModule::OnFlush);
 }
 
 void FMicromegasTelemetrySinkModule::OnFlush()
@@ -80,6 +85,7 @@ void FMicromegasTelemetrySinkModule::PreUnloadCallback()
 
 void FMicromegasTelemetrySinkModule::ShutdownModule()
 {
+	FCoreDelegates::OnCommandletPostMain.RemoveAll(this);
 	MicromegasTracing::Shutdown();
 }
 
