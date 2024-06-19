@@ -75,6 +75,35 @@ impl SpanRecordBuilder {
         Ok(())
     }
 
+    pub fn append_call_tree(&mut self, tree: &CallTree) -> Result<()> {
+        if tree.call_tree_root.is_some() {
+            for_each_node_in_tree(
+                tree.call_tree_root.as_ref().unwrap(),
+                0,
+                0,
+                &mut |node, parent, depth| {
+                    let scope_desc = tree
+                        .scopes
+                        .get(&node.hash)
+                        .with_context(|| "fetching scope_desc from hash")?;
+                    self.append(SpanRow {
+                        id: node.id.unwrap_or(-1),
+                        parent,
+                        depth,
+                        begin: node.begin,
+                        end: node.end,
+                        hash: node.hash,
+                        name: scope_desc.name.clone(),
+                        target: scope_desc.target.clone(),
+                        filename: scope_desc.filename.clone(),
+                        line: scope_desc.line,
+                    })
+                },
+            )?;
+        }
+        Ok(())
+    }
+
     pub fn finish(mut self) -> Result<RecordBatch> {
         let schema = Schema::new(vec![
             Field::new("id", DataType::Int64, false),
@@ -144,34 +173,4 @@ where
         for_each_node_in_tree(child, span_id, depth + 1, process_node)?;
     }
     Ok(())
-}
-
-pub fn call_tree_to_record_batch(tree: &CallTree) -> Result<RecordBatch> {
-    let mut record_builder = SpanRecordBuilder::with_capacity(1024); //todo: replace with number of nodes
-    if tree.call_tree_root.is_some() {
-        for_each_node_in_tree(
-            tree.call_tree_root.as_ref().unwrap(),
-            0,
-            0,
-            &mut |node, parent, depth| {
-                let scope_desc = tree
-                    .scopes
-                    .get(&node.hash)
-                    .with_context(|| "fetching scope_desc from hash")?;
-                record_builder.append(SpanRow {
-                    id: node.id.unwrap_or(-1),
-                    parent,
-                    depth,
-                    begin: node.begin,
-                    end: node.end,
-                    hash: node.hash,
-                    name: scope_desc.name.clone(),
-                    target: scope_desc.target.clone(),
-                    filename: scope_desc.filename.clone(),
-                    line: scope_desc.line,
-                })
-            },
-        )?;
-    }
-    record_builder.finish()
 }
