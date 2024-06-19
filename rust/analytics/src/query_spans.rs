@@ -107,7 +107,7 @@ async fn append_call_tree(
         blocks,
         begin_call_tree + process_info.start_ticks,
         end_call_tree + process_info.start_ticks,
-        limit, //todo
+        limit - record_builder.len(),
         blob_storage,
         convert_ticks,
         stream,

@@ -99,6 +99,7 @@ impl CallTreeBuilder {
                 children: vec![node],
             };
             self.stack.push(new_root);
+            self.nb_spans += 1;
         }
     }
 
@@ -157,7 +158,6 @@ impl ThreadBlockProcessor for CallTreeBuilder {
                 children: Vec::new(),
             };
             self.add_child_to_top(node);
-            self.nb_spans += 1;
         }
         Ok(true)
     }
@@ -174,10 +174,11 @@ pub async fn make_call_tree(
     convert_ticks: ConvertTicks,
     stream: &micromegas_telemetry::stream_info::StreamInfo,
 ) -> Result<CallTree> {
+    // dbg!(limit);
     let mut builder = CallTreeBuilder::new(
         begin_ticks_query,
         end_ticks_query,
-        limit - 1, // the thread node eats one span
+        limit,
         convert_ticks,
         stream.get_thread_name(),
     );

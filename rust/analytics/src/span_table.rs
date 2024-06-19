@@ -3,6 +3,7 @@ use std::sync::Arc;
 use crate::call_tree::CallTree;
 use crate::call_tree::CallTreeNode;
 use anyhow::{Context, Result};
+use datafusion::arrow::array::ArrayBuilder;
 use datafusion::arrow::array::PrimitiveBuilder;
 use datafusion::arrow::array::StringDictionaryBuilder;
 use datafusion::arrow::datatypes::DataType;
@@ -58,6 +59,14 @@ impl SpanRecordBuilder {
             filenames: StringDictionaryBuilder::new(),
             lines: PrimitiveBuilder::with_capacity(capacity),
         }
+    }
+
+    pub fn len(&self) -> i64 {
+        self.ids.len() as i64
+    }
+	
+    pub fn is_empty(&self) -> bool {
+        self.ids.len() == 0
     }
 
     pub fn append(&mut self, row: SpanRow) -> Result<()> {
