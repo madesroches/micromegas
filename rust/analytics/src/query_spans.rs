@@ -53,7 +53,7 @@ pub async fn query_spans(
             last_end = Some(block.end_ticks);
             blocks_to_process.push(block);
         } else {
-            append_call_tree(
+            let cont = append_call_tree(
                 &mut record_builder,
                 &process_info,
                 &blocks_to_process,
@@ -66,6 +66,12 @@ pub async fn query_spans(
             .await?;
             blocks_to_process = vec![];
             last_end = None;
+
+            if !cont {
+                return record_builder
+                    .finish()
+                    .with_context(|| "finalizing span record builder");
+            }
         }
     }
 
@@ -99,7 +105,7 @@ async fn append_call_tree(
     limit: i64,
     blob_storage: Arc<BlobStorage>,
     stream: &micromegas_telemetry::stream_info::StreamInfo,
-) -> Result<()> {
+) -> Result<bool> {
     let begin_call_tree = max(relative_begin_ticks, blocks[0].begin_ticks);
     let end_call_tree = min(relative_end_ticks, blocks[blocks.len() - 1].end_ticks);
     let convert_ticks = ConvertTicks::new(process_info);
@@ -117,5 +123,5 @@ async fn append_call_tree(
     record_builder
         .append_call_tree(&call_tree)
         .with_context(|| "adding call tree to span record builder")?;
-    Ok(())
+    Ok(record_builder.len() < limit) // continue if there is space left
 }

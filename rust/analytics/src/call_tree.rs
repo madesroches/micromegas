@@ -174,7 +174,6 @@ pub async fn make_call_tree(
     convert_ticks: ConvertTicks,
     stream: &micromegas_telemetry::stream_info::StreamInfo,
 ) -> Result<CallTree> {
-    // dbg!(limit);
     let mut builder = CallTreeBuilder::new(
         begin_ticks_query,
         end_ticks_query,
