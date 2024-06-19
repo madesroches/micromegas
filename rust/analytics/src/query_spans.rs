@@ -1,4 +1,7 @@
-use std::cmp::{max, min};
+use std::{
+    cmp::{max, min},
+    sync::Arc,
+};
 
 use crate::{
     call_tree::make_call_tree,
@@ -9,6 +12,8 @@ use crate::{
 use anyhow::{Context, Result};
 use datafusion::arrow::record_batch::RecordBatch;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
+use micromegas_telemetry::{blob_storage::BlobStorage, types::block::BlockMetadata};
+use micromegas_tracing::process_info::ProcessInfo;
 use sqlx::types::chrono::{DateTime, Utc};
 
 pub async fn query_spans(
@@ -48,55 +53,69 @@ pub async fn query_spans(
             last_end = Some(block.end_ticks);
             blocks_to_process.push(block);
         } else {
-            let begin_call_tree = blocks_to_process[0].begin_ticks;
-            let end_call_tree = min(
-                relative_end_ticks,
-                blocks_to_process[blocks_to_process.len() - 1].end_ticks,
-            );
-            let call_tree = make_call_tree(
+            append_call_tree(
+                &mut record_builder,
+                &process_info,
                 &blocks_to_process,
-                begin_call_tree + process_info.start_ticks,
-                end_call_tree + process_info.start_ticks,
-                limit, //todo
+                relative_begin_ticks,
+                relative_end_ticks,
+                limit,
                 data_lake.blob_storage.clone(),
-                convert_ticks.clone(),
                 &stream_info,
             )
-            .await
-            .with_context(|| "make_call_tree")?;
+            .await?;
             blocks_to_process = vec![];
-			last_end = None;
-            record_builder
-                .append_call_tree(&call_tree)
-                .with_context(|| "adding call tree to span record builder")?;
+            last_end = None;
         }
     }
 
     if !blocks_to_process.is_empty() {
-        //todo factorize
-        let begin_call_tree = blocks_to_process[0].begin_ticks;
-        let end_call_tree = min(
-            relative_end_ticks,
-            blocks_to_process[blocks_to_process.len() - 1].end_ticks,
-        );
-        let call_tree = make_call_tree(
+        append_call_tree(
+            &mut record_builder,
+            &process_info,
             &blocks_to_process,
-            begin_call_tree + process_info.start_ticks,
-            end_call_tree + process_info.start_ticks,
-            limit, //todo
+            relative_begin_ticks,
+            relative_end_ticks,
+            limit,
             data_lake.blob_storage.clone(),
-            convert_ticks.clone(),
             &stream_info,
         )
-        .await
-        .with_context(|| "make_call_tree")?;
+        .await?;
         drop(blocks_to_process);
-        record_builder
-            .append_call_tree(&call_tree)
-            .with_context(|| "adding call tree to span record builder")?;
     }
 
     record_builder
         .finish()
         .with_context(|| "finalizing span record builder")
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn append_call_tree(
+    record_builder: &mut SpanRecordBuilder,
+    process_info: &ProcessInfo,
+    blocks: &[BlockMetadata],
+    relative_begin_ticks: i64,
+    relative_end_ticks: i64,
+    limit: i64,
+    blob_storage: Arc<BlobStorage>,
+    stream: &micromegas_telemetry::stream_info::StreamInfo,
+) -> Result<()> {
+    let begin_call_tree = max(relative_begin_ticks, blocks[0].begin_ticks);
+    let end_call_tree = min(relative_end_ticks, blocks[blocks.len() - 1].end_ticks);
+    let convert_ticks = ConvertTicks::new(process_info);
+    let call_tree = make_call_tree(
+        blocks,
+        begin_call_tree + process_info.start_ticks,
+        end_call_tree + process_info.start_ticks,
+        limit, //todo
+        blob_storage,
+        convert_ticks,
+        stream,
+    )
+    .await
+    .with_context(|| "make_call_tree")?;
+    record_builder
+        .append_call_tree(&call_tree)
+        .with_context(|| "adding call tree to span record builder")?;
+    Ok(())
 }
