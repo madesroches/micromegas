@@ -76,7 +76,8 @@ void HttpEventSink::OnAuthUpdated()
 
 void HttpEventSink::OnStartup(const MicromegasTracing::ProcessInfoPtr& ProcessInfo)
 {
-	FPlatformAtomics::InterlockedIncrement(&QueueSize);
+	MicromegasTracing::InitCurrentThreadStream();
+	IncrementQueueSize();
 	Queue.Enqueue([this, ProcessInfo]() {
 		TArray<uint8> Body = FormatInsertProcessRequest(*ProcessInfo);
 		const float TimeoutSeconds = 30.0f;
@@ -213,7 +214,6 @@ uint32 HttpEventSink::Run()
 
 void HttpEventSink::IncrementQueueSize()
 {
-	MICROMEGAS_SPAN_FUNCTION("MicromegasTelemetrySink");
 	int32 incrementedQueueSize = FPlatformAtomics::InterlockedIncrement(&QueueSize);
 	MICROMEGAS_IMETRIC("MicromegasTelemetrySink", MicromegasTracing::Verbosity::Min, TEXT("QueueSize"), TEXT("count"), incrementedQueueSize);
 }

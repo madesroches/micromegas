@@ -2,19 +2,19 @@
 //  MicromegasTelemetrySink/InsertStreamRequest.cpp
 //
 #include "InsertStreamRequest.h"
-#include "MicromegasTelemetrySink/Log.h"
+#include "CborUtils.h"
 #include "LogDependencies.h"
-#include <string>
-#include "MicromegasTracing/QueueMetadata.h"
-#include "MicromegasTracing/LogStream.h"
-#include "MicromegasTracing/MetricMetadata.h"
-#include "MicromegasTracing/StringsMetadata.h"
-#include "MicromegasTracing/LogMetadata.h"
 #include "MetricDependencies.h"
+#include "MicromegasTelemetrySink/Log.h"
+#include "MicromegasTracing/EventBlock.h"
+#include "MicromegasTracing/EventStream.h"
+#include "MicromegasTracing/LogMetadata.h"
+#include "MicromegasTracing/MetricMetadata.h"
+#include "MicromegasTracing/QueueMetadata.h"
+#include "MicromegasTracing/StringsMetadata.h"
 #include "ThreadDependencies.h"
 #include "jsoncons/json.hpp"
 #include "jsoncons_ext/cbor/cbor.hpp"
-#include "CborUtils.h"
 
 void FormatContainerMetadata(jsoncons::cbor::cbor_bytes_encoder& encoder, const TArray<MicromegasTracing::UserDefinedType>& udts)
 {

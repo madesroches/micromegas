@@ -106,13 +106,13 @@ async fn append_call_tree(
     blob_storage: Arc<BlobStorage>,
     stream: &micromegas_telemetry::stream_info::StreamInfo,
 ) -> Result<bool> {
-    let begin_call_tree = max(relative_begin_ticks, blocks[0].begin_ticks);
-    let end_call_tree = min(relative_end_ticks, blocks[blocks.len() - 1].end_ticks);
+    let begin_call_tree_rel_ticks = max(relative_begin_ticks, blocks[0].begin_ticks);
+    let end_call_tree_rel_ticks = min(relative_end_ticks, blocks[blocks.len() - 1].end_ticks);
     let convert_ticks = ConvertTicks::new(process_info);
     let call_tree = make_call_tree(
         blocks,
-        begin_call_tree + process_info.start_ticks,
-        end_call_tree + process_info.start_ticks,
+        convert_ticks.ticks_to_nanoseconds(begin_call_tree_rel_ticks + process_info.start_ticks),
+        convert_ticks.ticks_to_nanoseconds(end_call_tree_rel_ticks + process_info.start_ticks),
         limit - record_builder.len(),
         blob_storage,
         convert_ticks,

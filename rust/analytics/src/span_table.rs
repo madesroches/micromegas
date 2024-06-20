@@ -64,7 +64,7 @@ impl SpanRecordBuilder {
     pub fn len(&self) -> i64 {
         self.ids.len() as i64
     }
-	
+
     pub fn is_empty(&self) -> bool {
         self.ids.len() == 0
     }

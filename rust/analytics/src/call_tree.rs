@@ -38,8 +38,8 @@ pub struct CallTreeBuilder {
 
 impl CallTreeBuilder {
     pub fn new(
-        ts_begin_range: i64,
-        ts_end_range: i64,
+        begin_range_ns: i64,
+        end_range_ns: i64,
         limit: i64,
         convert_ticks: ConvertTicks,
         thread_name: String,
@@ -54,8 +54,8 @@ impl CallTreeBuilder {
         let root_hash = thread_scope_desc.hash;
         scopes.insert(root_hash, thread_scope_desc);
         Self {
-            begin_range_ns: convert_ticks.ticks_to_nanoseconds(ts_begin_range),
-            end_range_ns: convert_ticks.ticks_to_nanoseconds(ts_end_range),
+            begin_range_ns,
+            end_range_ns,
             limit,
             nb_spans: 0,
             stack: Vec::new(),
@@ -167,16 +167,16 @@ impl ThreadBlockProcessor for CallTreeBuilder {
 #[span_fn]
 pub async fn make_call_tree(
     blocks: &[BlockMetadata],
-    begin_ticks_query: i64, //todo: change to nanoseconds
-    end_ticks_query: i64,
+    begin_range_ns: i64,
+    end_range_ns: i64,
     limit: i64,
     blob_storage: Arc<BlobStorage>,
     convert_ticks: ConvertTicks,
     stream: &micromegas_telemetry::stream_info::StreamInfo,
 ) -> Result<CallTree> {
     let mut builder = CallTreeBuilder::new(
-        begin_ticks_query,
-        end_ticks_query,
+        begin_range_ns,
+        end_range_ns,
         limit,
         convert_ticks,
         stream.get_thread_name(),
