@@ -6,15 +6,15 @@ use crate::{
     },
     scope::ScopeHashMap,
 };
-use micromegas_analytics::time::ConvertTicks;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use lgn_blob_storage::{AwsS3Url, BlobStorage};
+use micromegas_analytics::time::ConvertTicks;
+use micromegas_tracing::prelude::*;
 use parquet::file::serialized_reader::SerializedFileReader;
 use parquet::{file::reader::FileReader, record::RowAccessor};
 use sqlx::PgPool;
 use std::sync::Arc;
-use micromegas_tracing::prelude::*;
 
 use super::{
     scope_table::{make_scopes_table_writer, ScopeRowGroup},
@@ -214,10 +214,7 @@ impl RemoteJitLakehouse {
             .key(key);
 
         match req.send().await {
-            Ok(_output) => {
-                //dbg!(output);
-                Ok(true)
-            }
+            Ok(_output) => Ok(true),
             Err(aws_sdk_s3::types::SdkError::ServiceError { err, raw: _ }) => {
                 if let aws_sdk_s3::error::HeadObjectErrorKind::NotFound(_) = err.kind {
                     Ok(false)

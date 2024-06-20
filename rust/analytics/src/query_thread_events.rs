@@ -75,7 +75,7 @@ pub async fn make_thread_events_record_batch(
         1024 * 1024,
     ); // should we use limit as capacity, we would then always allocate the worst case
     for block in blocks {
-        parse_thread_block(
+        let cont = parse_thread_block(
             blob_storage.clone(),
             stream,
             block.block_id,
@@ -83,6 +83,9 @@ pub async fn make_thread_events_record_batch(
             &mut record_builder,
         )
         .await?;
+        if !cont {
+            break;
+        }
     }
 
     record_builder.finish()

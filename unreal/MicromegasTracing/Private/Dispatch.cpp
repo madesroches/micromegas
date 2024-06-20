@@ -3,16 +3,16 @@
 //
 #include "MicromegasTracing/Dispatch.h"
 #include "Async/UniqueLock.h"
+#include "HAL/PlatformProcess.h"
+#include "MicromegasTracing/EventSink.h"
+#include "MicromegasTracing/EventStream.h"
+#include "MicromegasTracing/LogBlock.h"
 #include "MicromegasTracing/Macros.h"
+#include "MicromegasTracing/MetricEvents.h"
+#include "MicromegasTracing/ProcessInfo.h"
+#include "MicromegasTracing/SpanEvents.h"
 #include "Misc/Guid.h"
 #include "Misc/ScopeLock.h"
-#include "HAL/PlatformProcess.h"
-#include "MicromegasTracing/ProcessInfo.h"
-#include "MicromegasTracing/EventSink.h"
-#include "MicromegasTracing/LogStream.h"
-#include "MicromegasTracing/LogBlock.h"
-#include "MicromegasTracing/MetricEvents.h"
-#include "MicromegasTracing/SpanEvents.h"
 
 namespace MicromegasTracing
 {
@@ -258,8 +258,15 @@ namespace MicromegasTracing
 		{
 			return nullptr;
 		}
-		ptr = dispatch->AllocThreadStream();
-		dispatch->PublishThreadStream(ptr);
+		thread_local bool this_stream_being_init = false;
+		if ( this_stream_being_init )
+		{
+			return nullptr;
+		}
+		this_stream_being_init = true;
+		ThreadStream* new_stream = dispatch->AllocThreadStream();
+		dispatch->PublishThreadStream(new_stream);
+		ptr = new_stream; // starting from now events can be queued
 		return ptr;
 	}
 
@@ -313,6 +320,16 @@ namespace MicromegasTracing
 		{
 			callback(stream);
 		}
+	}
+
+	void InitCurrentThreadStream()
+	{
+		// Thread streams will be implicitly initialized as soon as they emit events,
+		// but the first event's timestamp will be before the beginning of the block
+		// (since it will be allocated after that event).
+		// This could confuse some tooling. Calling InitCurrentThreadStream() explicitly before
+		// events are emitted prevents this problem.
+		GetCurrentThreadStream();
 	}
 
 	void FlushCurrentThreadStream()

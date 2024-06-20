@@ -3,6 +3,7 @@ use std::sync::Arc;
 use crate::call_tree::CallTree;
 use crate::call_tree::CallTreeNode;
 use anyhow::{Context, Result};
+use datafusion::arrow::array::ArrayBuilder;
 use datafusion::arrow::array::PrimitiveBuilder;
 use datafusion::arrow::array::StringDictionaryBuilder;
 use datafusion::arrow::datatypes::DataType;
@@ -60,6 +61,14 @@ impl SpanRecordBuilder {
         }
     }
 
+    pub fn len(&self) -> i64 {
+        self.ids.len() as i64
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.ids.len() == 0
+    }
+
     pub fn append(&mut self, row: SpanRow) -> Result<()> {
         self.ids.append_value(row.id);
         self.parents.append_value(row.parent);
@@ -72,6 +81,35 @@ impl SpanRecordBuilder {
         self.targets.append_value(&*row.target);
         self.filenames.append_value(&*row.filename);
         self.lines.append_value(row.line);
+        Ok(())
+    }
+
+    pub fn append_call_tree(&mut self, tree: &CallTree) -> Result<()> {
+        if tree.call_tree_root.is_some() {
+            for_each_node_in_tree(
+                tree.call_tree_root.as_ref().unwrap(),
+                0,
+                0,
+                &mut |node, parent, depth| {
+                    let scope_desc = tree
+                        .scopes
+                        .get(&node.hash)
+                        .with_context(|| "fetching scope_desc from hash")?;
+                    self.append(SpanRow {
+                        id: node.id.unwrap_or(-1),
+                        parent,
+                        depth,
+                        begin: node.begin,
+                        end: node.end,
+                        hash: node.hash,
+                        name: scope_desc.name.clone(),
+                        target: scope_desc.target.clone(),
+                        filename: scope_desc.filename.clone(),
+                        line: scope_desc.line,
+                    })
+                },
+            )?;
+        }
         Ok(())
     }
 
@@ -144,34 +182,4 @@ where
         for_each_node_in_tree(child, span_id, depth + 1, process_node)?;
     }
     Ok(())
-}
-
-pub fn call_tree_to_record_batch(tree: &CallTree) -> Result<RecordBatch> {
-    let mut record_builder = SpanRecordBuilder::with_capacity(1024); //todo: replace with number of nodes
-    if tree.call_tree_root.is_some() {
-        for_each_node_in_tree(
-            tree.call_tree_root.as_ref().unwrap(),
-            0,
-            0,
-            &mut |node, parent, depth| {
-                let scope_desc = tree
-                    .scopes
-                    .get(&node.hash)
-                    .with_context(|| "fetching scope_desc from hash")?;
-                record_builder.append(SpanRow {
-                    id: node.id.unwrap_or(-1),
-                    parent,
-                    depth,
-                    begin: node.begin,
-                    end: node.end,
-                    hash: node.hash,
-                    name: scope_desc.name.clone(),
-                    target: scope_desc.target.clone(),
-                    filename: scope_desc.filename.clone(),
-                    line: scope_desc.line,
-                })
-            },
-        )?;
-    }
-    record_builder.finish()
 }

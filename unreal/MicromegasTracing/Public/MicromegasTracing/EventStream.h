@@ -23,7 +23,7 @@ namespace MicromegasTracing
 			, StreamId(streamId)
 			, Tags(tags)
 		{
-			assert(block->GetCapacity() > BUFFER_PADDING);
+			check(block->GetCapacity() > BUFFER_PADDING);
 			FullThreshold = block->GetCapacity() - BUFFER_PADDING;
 			CurrentBlock = block;
 		}
@@ -62,7 +62,7 @@ namespace MicromegasTracing
 		{
 			BlockPtr old = CurrentBlock;
 			CurrentBlock = newBlock;
-			assert(CurrentBlock->GetCapacity() > BUFFER_PADDING);
+			check(CurrentBlock->GetCapacity() > BUFFER_PADDING);
 			FullThreshold = CurrentBlock->GetCapacity() - BUFFER_PADDING;
 			return old;
 		}

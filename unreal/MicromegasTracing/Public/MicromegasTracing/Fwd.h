@@ -27,17 +27,17 @@ namespace MicromegasTracing
 	typedef HeterogeneousQueue<LogStaticStrEvent, LogStringInteropEvent, StaticStringRef> LogEventQueue;
 	typedef EventBlock<LogEventQueue> LogBlock;
 	typedef TSharedPtr<LogBlock, ESPMode::ThreadSafe> LogBlockPtr;
-	typedef EventStreamImpl<LogBlock, 128> LogStream;
+	typedef EventStreamImpl<LogBlock, 1024> LogStream;
 	typedef TSharedPtr<LogStream, ESPMode::ThreadSafe> LogStreamPtr;
 	typedef HeterogeneousQueue<IntegerMetricEvent, FloatMetricEvent> MetricEventQueue;
 	typedef EventBlock<MetricEventQueue> MetricBlock;
 	typedef TSharedPtr<MetricBlock, ESPMode::ThreadSafe> MetricsBlockPtr;
-	typedef EventStreamImpl<MetricBlock, 32> MetricStream;
+	typedef EventStreamImpl<MetricBlock, 128> MetricStream;
 	typedef TSharedPtr<MetricStream, ESPMode::ThreadSafe> MetricStreamPtr;
 	struct ProcessInfo;
 	typedef TSharedPtr<ProcessInfo, ESPMode::ThreadSafe> ProcessInfoPtr;
 	typedef HeterogeneousQueue<BeginThreadSpanEvent, EndThreadSpanEvent, BeginThreadNamedSpanEvent, EndThreadNamedSpanEvent> ThreadEventQueue;
 	typedef EventBlock<ThreadEventQueue> ThreadBlock;
 	typedef TSharedPtr<ThreadBlock, ESPMode::ThreadSafe> ThreadBlockPtr;
-	typedef EventStreamImpl<ThreadBlock, 32> ThreadStream;
+	typedef EventStreamImpl<ThreadBlock, 128> ThreadStream;
 } // namespace MicromegasTracing

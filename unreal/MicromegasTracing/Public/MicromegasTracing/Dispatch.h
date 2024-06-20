@@ -88,6 +88,7 @@ namespace MicromegasTracing
 	CORE_API void Shutdown();
 	CORE_API void FlushLogStream();
 	CORE_API void FlushMetricStream();
+	CORE_API void InitCurrentThreadStream();
 	CORE_API void FlushCurrentThreadStream();
 	CORE_API void LogInterop(const LogStringInteropEvent& event);
 	CORE_API void ForEachThreadStream(ThreadStreamCallback callback);
