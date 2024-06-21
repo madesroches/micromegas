@@ -10,8 +10,20 @@ use std::sync::Arc;
 
 pub trait ThreadBlockProcessor {
     // return true to continue
-    fn on_begin_thread_scope(&mut self, event_id: i64, scope: ScopeDesc, ts: i64) -> Result<bool>;
-    fn on_end_thread_scope(&mut self, event_id: i64, scope: ScopeDesc, ts: i64) -> Result<bool>;
+    fn on_begin_thread_scope(
+        &mut self,
+        block_id: &str,
+        event_id: i64,
+        scope: ScopeDesc,
+        ts: i64,
+    ) -> Result<bool>;
+    fn on_end_thread_scope(
+        &mut self,
+        block_id: &str,
+        event_id: i64,
+        scope: ScopeDesc,
+        ts: i64,
+    ) -> Result<bool>;
 }
 
 fn on_thread_event<F>(obj: &micromegas_transit::Object, mut fun: F) -> Result<bool>
@@ -35,6 +47,7 @@ where
 
 #[span_fn]
 pub fn parse_thread_block_payload<Proc: ThreadBlockProcessor>(
+    block_id: &str,
     object_offset: i64,
     payload: &micromegas_telemetry::block_wire_format::BlockPayload,
     stream: &micromegas_telemetry::stream_info::StreamInfo,
@@ -50,7 +63,7 @@ pub fn parse_thread_block_payload<Proc: ThreadBlockProcessor>(
                     let target = scope.get::<Arc<String>>("target")?;
                     let line = scope.get::<u32>("line")?;
                     let scope_desc = ScopeDesc::new(name, filename, target, line);
-                    processor.on_begin_thread_scope(event_id, scope_desc, ts)
+                    processor.on_begin_thread_scope(block_id, event_id, scope_desc, ts)
                 })
                 .with_context(|| "reading BeginThreadSpanEvent"),
                 "EndThreadSpanEvent" => on_thread_event(&obj, |scope, ts| {
@@ -59,7 +72,7 @@ pub fn parse_thread_block_payload<Proc: ThreadBlockProcessor>(
                     let target = scope.get::<Arc<String>>("target")?;
                     let line = scope.get::<u32>("line")?;
                     let scope_desc = ScopeDesc::new(name, filename, target, line);
-                    processor.on_end_thread_scope(event_id, scope_desc, ts)
+                    processor.on_end_thread_scope(block_id, event_id, scope_desc, ts)
                 })
                 .with_context(|| "reading EndThreadSpanEvent"),
                 "BeginThreadNamedSpanEvent" => on_thread_named_event(&obj, |scope, name, ts| {
@@ -67,7 +80,7 @@ pub fn parse_thread_block_payload<Proc: ThreadBlockProcessor>(
                     let target = scope.get::<Arc<String>>("target")?;
                     let line = scope.get::<u32>("line")?;
                     let scope_desc = ScopeDesc::new(name, filename, target, line);
-                    processor.on_begin_thread_scope(event_id, scope_desc, ts)
+                    processor.on_begin_thread_scope(block_id, event_id, scope_desc, ts)
                 })
                 .with_context(|| "reading BeginThreadNamedSpanEvent"),
                 "EndThreadNamedSpanEvent" => on_thread_named_event(&obj, |scope, name, ts| {
@@ -75,7 +88,7 @@ pub fn parse_thread_block_payload<Proc: ThreadBlockProcessor>(
                     let target = scope.get::<Arc<String>>("target")?;
                     let line = scope.get::<u32>("line")?;
                     let scope_desc = ScopeDesc::new(name, filename, target, line);
-                    processor.on_end_thread_scope(event_id, scope_desc, ts)
+                    processor.on_end_thread_scope(block_id, event_id, scope_desc, ts)
                 })
                 .with_context(|| "reading EndThreadNamedSpanEvent"),
                 event_type => {
@@ -101,5 +114,9 @@ pub async fn parse_thread_block<Proc: ThreadBlockProcessor>(
 ) -> Result<bool> {
     let payload =
         fetch_block_payload(blob_storage, stream.process_id, stream.stream_id, block_id).await?;
-    parse_thread_block_payload(object_offset, &payload, stream, processor)
+    let block_id_str = block_id
+        .hyphenated()
+        .encode_lower(&mut sqlx::types::uuid::Uuid::encode_buffer())
+        .to_owned();
+    parse_thread_block_payload(&block_id_str, object_offset, &payload, stream, processor)
 }

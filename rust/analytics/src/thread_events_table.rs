@@ -11,18 +11,6 @@ use std::sync::Arc;
 use crate::thread_block_processor::ThreadBlockProcessor;
 use crate::time::ConvertTicks;
 
-#[derive(Debug)]
-pub struct ThreadEvent {
-    pub id: i64,
-    pub event_type: &'static str, // "begin" or "end"
-    pub timestamp: i64,           // nanoseconds since jan 1st 1970 utc
-    pub hash: u32,
-    pub name: Arc<String>,
-    pub target: Arc<String>,
-    pub filename: Arc<String>,
-    pub line: u32,
-}
-
 pub struct ThreadEventsRecordBuilder {
     begin_query_ns: i64,
     end_query_ns: i64,
@@ -38,6 +26,7 @@ pub struct ThreadEventsRecordBuilder {
     targets: StringDictionaryBuilder<Int16Type>,
     filenames: StringDictionaryBuilder<Int16Type>,
     lines: PrimitiveBuilder<UInt32Type>,
+    block_ids: StringDictionaryBuilder<Int16Type>,
 }
 
 impl ThreadEventsRecordBuilder {
@@ -62,6 +51,7 @@ impl ThreadEventsRecordBuilder {
             targets: StringDictionaryBuilder::new(),
             filenames: StringDictionaryBuilder::new(),
             lines: PrimitiveBuilder::with_capacity(capacity),
+            block_ids: StringDictionaryBuilder::new(),
         }
     }
 
@@ -95,6 +85,11 @@ impl ThreadEventsRecordBuilder {
                 false,
             ),
             Field::new("line", DataType::UInt32, false),
+            Field::new(
+                "block_id",
+                DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
+                false,
+            ),
         ]);
         RecordBatch::try_new(
             Arc::new(schema),
@@ -107,6 +102,7 @@ impl ThreadEventsRecordBuilder {
                 Arc::new(self.targets.finish()),
                 Arc::new(self.filenames.finish()),
                 Arc::new(self.lines.finish()),
+                Arc::new(self.block_ids.finish()),
             ],
         )
         .with_context(|| "building record batch")
@@ -114,6 +110,7 @@ impl ThreadEventsRecordBuilder {
 
     fn process_event(
         &mut self,
+        block_id: &str,
         event_id: i64,
         event_type: &'static str,
         scope: crate::scope::ScopeDesc,
@@ -139,6 +136,7 @@ impl ThreadEventsRecordBuilder {
         self.targets.append_value(&*scope.target);
         self.filenames.append_value(&*scope.filename);
         self.lines.append_value(scope.line);
+        self.block_ids.append_value(block_id);
         Ok(self.nb_rows < self.limit)
     }
 }
@@ -146,19 +144,21 @@ impl ThreadEventsRecordBuilder {
 impl ThreadBlockProcessor for ThreadEventsRecordBuilder {
     fn on_begin_thread_scope(
         &mut self,
+        block_id: &str,
         event_id: i64,
         scope: crate::scope::ScopeDesc,
         ts: i64,
     ) -> Result<bool> {
-        self.process_event(event_id, "begin", scope, ts)
+        self.process_event(block_id, event_id, "begin", scope, ts)
     }
 
     fn on_end_thread_scope(
         &mut self,
+        block_id: &str,
         event_id: i64,
         scope: crate::scope::ScopeDesc,
         ts: i64,
     ) -> Result<bool> {
-        self.process_event(event_id, "end", scope, ts)
+        self.process_event(block_id, event_id, "end", scope, ts)
     }
 }
