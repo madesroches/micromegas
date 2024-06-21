@@ -6,6 +6,13 @@ class Client:
         self.analytics_base_url = base_url + "analytics/"
         self.headers = headers
 
+    def find_process(self, process_id):
+        return request.request(
+            self.analytics_base_url + "find_process",
+            {"process_id": process_id},
+            headers=self.headers,
+        )
+
     def query_processes(self, begin, end, limit):
         return request.request(
             self.analytics_base_url + "query_processes",
@@ -65,7 +72,7 @@ class Client:
             },
             headers=self.headers,
         )
-    
+
     def query_log_entries(self, begin, end, limit, stream_id):
         return request.request(
             self.analytics_base_url + "query_log_entries",
@@ -89,4 +96,3 @@ class Client:
             },
             headers=self.headers,
         )
-    

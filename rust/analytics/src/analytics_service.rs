@@ -18,6 +18,12 @@ pub struct AnalyticsService {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct FindProcessRequest {
+    #[serde(deserialize_with = "micromegas_transit::uuid_utils::uuid_from_string")]
+    pub process_id: Uuid,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct QueryProcessesRequest {
     pub limit: i64,
     pub begin: String,
@@ -81,6 +87,37 @@ impl AnalyticsService {
         Self { data_lake }
     }
 
+    pub async fn find_process(&self, body: bytes::Bytes) -> Result<bytes::Bytes> {
+        let request: FindProcessRequest =
+            ciborium::from_reader(body.reader()).with_context(|| "parsing FindProcessRequest")?;
+
+        let mut connection = self.data_lake.db_pool.acquire().await?;
+        let rows = sqlx::query(
+            "SELECT process_id,
+                    exe,
+                    username,
+                    realname,
+                    computer,
+                    distro,
+                    cpu_brand,
+                    tsc_frequency,
+                    start_time,
+                    start_ticks,
+                    insert_time,
+                    parent_process_id,
+                    properties
+             FROM processes
+             WHERE process_id = $1",
+        )
+        .bind(request.process_id)
+        .fetch_all(&mut *connection)
+        .await?;
+        drop(connection);
+        serialize_record_batch(
+            &rows_to_record_batch(&rows).with_context(|| "converting rows to record batch")?,
+        )
+    }
+
     pub async fn query_processes(&self, body: bytes::Bytes) -> Result<bytes::Bytes> {
         let request: QueryProcessesRequest = ciborium::from_reader(body.reader())
             .with_context(|| "parsing QueryProcessesRequest")?;
@@ -116,6 +153,7 @@ impl AnalyticsService {
         .bind(request.limit)
         .fetch_all(&mut *connection)
         .await?;
+        drop(connection);
         serialize_record_batch(
             &rows_to_record_batch(&rows).with_context(|| "converting rows to record batch")?,
         )
@@ -159,6 +197,7 @@ impl AnalyticsService {
             .bind(request.process_id)
             .bind(request.tag_filter);
         let rows = query.fetch_all(&mut *connection).await?;
+        drop(connection);
         serialize_record_batch(
             &rows_to_record_batch(&rows).with_context(|| "converting rows to record batch")?,
         )
@@ -185,6 +224,7 @@ impl AnalyticsService {
             .bind(request.stream_id)
             .fetch_all(&mut *connection)
             .await?;
+        drop(connection);
         serialize_record_batch(
             &rows_to_record_batch(&rows).with_context(|| "converting rows to record batch")?,
         )

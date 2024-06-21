@@ -40,6 +40,19 @@ fn bytes_response(result: Result<bytes::Bytes>) -> Response {
     }
 }
 
+async fn find_process_request(
+    Extension(service): Extension<AnalyticsService>,
+    body: bytes::Bytes,
+) -> Response {
+    info!("find_process_request");
+    bytes_response(
+        service
+            .find_process(body)
+            .await
+            .with_context(|| "find_process"),
+    )
+}
+
 async fn query_processes_request(
     Extension(service): Extension<AnalyticsService>,
     body: bytes::Bytes,
@@ -137,6 +150,7 @@ async fn serve_http(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let service = AnalyticsService::new(lake);
     let app = Router::new()
+        .route("/analytics/find_process", post(find_process_request))
         .route("/analytics/query_processes", post(query_processes_request))
         .route("/analytics/query_streams", post(query_streams_request))
         .route("/analytics/query_blocks", post(query_blocks_request))
