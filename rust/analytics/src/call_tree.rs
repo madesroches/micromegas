@@ -116,6 +116,12 @@ impl ThreadBlockProcessor for CallTreeBuilder {
             return Ok(false);
         }
         let time = self.convert_ticks.ticks_to_nanoseconds(ts);
+        if time < self.begin_range_ns {
+            return Ok(true);
+        }
+        if time > self.end_range_ns {
+            return Ok(false);
+        }
         let hash = scope.hash;
         self.record_scope_desc(scope);
         let node = CallTreeNode {
@@ -132,6 +138,12 @@ impl ThreadBlockProcessor for CallTreeBuilder {
 
     fn on_end_thread_scope(&mut self, event_id: i64, scope: ScopeDesc, ts: i64) -> Result<bool> {
         let time = self.convert_ticks.ticks_to_nanoseconds(ts);
+        if time < self.begin_range_ns {
+            return Ok(true);
+        }
+        if time > self.end_range_ns {
+            return Ok(false);
+        }
         let hash = scope.hash;
         self.record_scope_desc(scope);
         if let Some(mut old_top) = self.stack.pop() {
