@@ -111,7 +111,13 @@ impl CallTreeBuilder {
 }
 
 impl ThreadBlockProcessor for CallTreeBuilder {
-    fn on_begin_thread_scope(&mut self, event_id: i64, scope: ScopeDesc, ts: i64) -> Result<bool> {
+    fn on_begin_thread_scope(
+        &mut self,
+        _block_id: &str,
+        event_id: i64,
+        scope: ScopeDesc,
+        ts: i64,
+    ) -> Result<bool> {
         if self.nb_spans >= self.limit {
             return Ok(false);
         }
@@ -136,7 +142,13 @@ impl ThreadBlockProcessor for CallTreeBuilder {
         Ok(true) // continue even if we reached the limit to allow the opportunity to close than span
     }
 
-    fn on_end_thread_scope(&mut self, event_id: i64, scope: ScopeDesc, ts: i64) -> Result<bool> {
+    fn on_end_thread_scope(
+        &mut self,
+        _block_id: &str,
+        event_id: i64,
+        scope: ScopeDesc,
+        ts: i64,
+    ) -> Result<bool> {
         let time = self.convert_ticks.ticks_to_nanoseconds(ts);
         if time < self.begin_range_ns {
             return Ok(true);
