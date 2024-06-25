@@ -1,5 +1,18 @@
 from . import request
+import datetime
+import pandas
 
+def format_datetime(value):
+    nonetype = type(None)
+    match type(value):
+        case datetime.datetime:
+            return value.isoformat()
+        case pandas.Timestamp:
+            return value.isoformat()
+        case nonetype:
+            return None
+    raise RuntimeError("value of unknown type in format_datetime")
+            
 
 class Client:
     def __init__(self, base_url, headers={}):
@@ -16,14 +29,14 @@ class Client:
     def query_processes(self, begin, end, limit):
         return request.request(
             self.analytics_base_url + "query_processes",
-            {"begin": begin.isoformat(), "end": end.isoformat(), "limit": limit},
+            {"begin": format_datetime(begin), "end": format_datetime(end), "limit": limit},
             headers=self.headers,
         )
 
     def query_streams(self, begin, end, limit, process_id=None, tag_filter=None):
         args = {
-            "begin": begin.isoformat(),
-            "end": end.isoformat(),
+            "begin": format_datetime(begin),
+            "end": format_datetime(end),
             "limit": limit,
             "process_id": process_id,
             "tag_filter": tag_filter,
@@ -37,8 +50,8 @@ class Client:
 
     def query_blocks(self, begin, end, limit, stream_id):
         args = {
-            "begin": begin.isoformat(),
-            "end": end.isoformat(),
+            "begin": format_datetime(begin),
+            "end": format_datetime(end),
             "limit": limit,
             "stream_id": stream_id,
         }
@@ -53,8 +66,8 @@ class Client:
         return request.request(
             self.analytics_base_url + "query_spans",
             {
-                "begin": begin.isoformat(),
-                "end": end.isoformat(),
+                "begin": format_datetime(begin),
+                "end": format_datetime(end),
                 "limit": limit,
                 "stream_id": stream_id,
             },
@@ -65,8 +78,8 @@ class Client:
         return request.request(
             self.analytics_base_url + "query_thread_events",
             {
-                "begin": begin.isoformat(),
-                "end": end.isoformat(),
+                "begin": format_datetime(begin),
+                "end": format_datetime(end),
                 "limit": limit,
                 "stream_id": stream_id,
             },
@@ -77,8 +90,8 @@ class Client:
         return request.request(
             self.analytics_base_url + "query_log_entries",
             {
-                "begin": begin.isoformat(),
-                "end": end.isoformat(),
+                "begin": format_datetime(begin),
+                "end": format_datetime(end),
                 "limit": limit,
                 "stream_id": stream_id,
             },
@@ -89,8 +102,8 @@ class Client:
         return request.request(
             self.analytics_base_url + "query_metrics",
             {
-                "begin": begin.isoformat(),
-                "end": end.isoformat(),
+                "begin": format_datetime(begin),
+                "end": format_datetime(end),
                 "limit": limit,
                 "stream_id": stream_id,
             },
