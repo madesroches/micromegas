@@ -18,6 +18,12 @@ pub struct AnalyticsService {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct FindProcessRequest {
+    #[serde(deserialize_with = "micromegas_transit::uuid_utils::uuid_from_string")]
+    pub process_id: Uuid,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct QueryProcessesRequest {
     pub limit: i64,
     pub begin: String,
@@ -27,8 +33,8 @@ pub struct QueryProcessesRequest {
 #[derive(Debug, Deserialize)]
 pub struct QueryStreamsRequest {
     pub limit: i64,
-    pub begin: String,
-    pub end: String,
+    pub begin: Option<String>,
+    pub end: Option<String>,
     pub tag_filter: Option<String>,
     #[serde(deserialize_with = "micromegas_transit::uuid_utils::opt_uuid_from_string")]
     pub process_id: Option<Uuid>,
@@ -81,6 +87,37 @@ impl AnalyticsService {
         Self { data_lake }
     }
 
+    pub async fn find_process(&self, body: bytes::Bytes) -> Result<bytes::Bytes> {
+        let request: FindProcessRequest =
+            ciborium::from_reader(body.reader()).with_context(|| "parsing FindProcessRequest")?;
+
+        let mut connection = self.data_lake.db_pool.acquire().await?;
+        let rows = sqlx::query(
+            "SELECT process_id,
+                    exe,
+                    username,
+                    realname,
+                    computer,
+                    distro,
+                    cpu_brand,
+                    tsc_frequency,
+                    start_time,
+                    start_ticks,
+                    insert_time,
+                    parent_process_id,
+                    properties
+             FROM processes
+             WHERE process_id = $1",
+        )
+        .bind(request.process_id)
+        .fetch_all(&mut *connection)
+        .await?;
+        drop(connection);
+        serialize_record_batch(
+            &rows_to_record_batch(&rows).with_context(|| "converting rows to record batch")?,
+        )
+    }
+
     pub async fn query_processes(&self, body: bytes::Bytes) -> Result<bytes::Bytes> {
         let request: QueryProcessesRequest = ciborium::from_reader(body.reader())
             .with_context(|| "parsing QueryProcessesRequest")?;
@@ -116,6 +153,7 @@ impl AnalyticsService {
         .bind(request.limit)
         .fetch_all(&mut *connection)
         .await?;
+        drop(connection);
         serialize_record_batch(
             &rows_to_record_batch(&rows).with_context(|| "converting rows to record batch")?,
         )
@@ -124,41 +162,74 @@ impl AnalyticsService {
     pub async fn query_streams(&self, body: bytes::Bytes) -> Result<bytes::Bytes> {
         let request: QueryStreamsRequest =
             ciborium::from_reader(body.reader()).with_context(|| "parsing QueryStreamsRequest")?;
-        let begin = DateTime::<FixedOffset>::parse_from_rfc3339(&request.begin)
-            .with_context(|| "parsing begin time range")?;
-        let end = DateTime::<FixedOffset>::parse_from_rfc3339(&request.end)
-            .with_context(|| "parsing end time range")?;
-        let mut connection = self.data_lake.db_pool.acquire().await?;
-        let process_id_condition = request
-            .process_id
-            .as_ref()
-            .map(|_tag| "AND process_id = $4")
-            .unwrap_or("");
-        let tag_condition = request
-            .tag_filter
-            .as_ref()
-            .map(|_tag| "AND array_position(tags, $5) is not NULL")
-            .unwrap_or("");
+        if (request.begin.is_none() || request.end.is_none()) && request.process_id.is_none() {
+            anyhow::bail!("Time range or process_id have to be provided");
+        }
+        let mut conditions = vec![];
+        let mut begin_time = None;
+        if let Some(time_str) = &request.begin {
+            begin_time = Some(
+                DateTime::<FixedOffset>::parse_from_rfc3339(time_str)
+                    .with_context(|| "parsing begin time range")?,
+            );
+            conditions.push(format!(
+                "(insert_time >= {})",
+                format_postgres_placeholder(conditions.len())
+            ));
+        }
+        let mut end_time = None;
+        if let Some(time_str) = &request.end {
+            end_time = Some(
+                DateTime::<FixedOffset>::parse_from_rfc3339(time_str)
+                    .with_context(|| "parsing end time range")?,
+            );
+            conditions.push(format!(
+                "(insert_time < {})",
+                format_postgres_placeholder(conditions.len())
+            ));
+        }
+        if request.process_id.is_some() {
+            conditions.push(format!(
+                "(process_id = {})",
+                format_postgres_placeholder(conditions.len())
+            ));
+        }
+        if request.tag_filter.is_some() {
+            conditions.push(format!(
+                "(array_position(tags, {}) is not NULL)",
+                format_postgres_placeholder(conditions.len())
+            ));
+        }
+        let limit_placeholder = format_postgres_placeholder(conditions.len());
+        let joined_conditions = conditions.join(" AND ");
         let sql = format!(
             "SELECT stream_id,
                     process_id,
                     tags,
                     properties
              FROM streams
-             WHERE insert_time >= $1
-             AND insert_time < $2
-             {process_id_condition}
-             {tag_condition}
+             WHERE {joined_conditions}
              ORDER BY insert_time
-             LIMIT $3"
+             LIMIT {limit_placeholder}"
         );
-        let query = sqlx::query(&sql)
-            .bind(begin)
-            .bind(end)
-            .bind(request.limit)
-            .bind(request.process_id)
-            .bind(request.tag_filter);
+
+        let mut query = sqlx::query(&sql);
+        if let Some(begin) = begin_time {
+            query = query.bind(begin);
+        }
+        if let Some(end) = end_time {
+            query = query.bind(end);
+        }
+        if request.process_id.is_some() {
+            query = query.bind(request.process_id);
+        }
+        if request.tag_filter.is_some() {
+            query = query.bind(request.tag_filter);
+        }
+        query = query.bind(request.limit);
+        let mut connection = self.data_lake.db_pool.acquire().await?;
         let rows = query.fetch_all(&mut *connection).await?;
+        drop(connection);
         serialize_record_batch(
             &rows_to_record_batch(&rows).with_context(|| "converting rows to record batch")?,
         )
@@ -185,6 +256,7 @@ impl AnalyticsService {
             .bind(request.stream_id)
             .fetch_all(&mut *connection)
             .await?;
+        drop(connection);
         serialize_record_batch(
             &rows_to_record_batch(&rows).with_context(|| "converting rows to record batch")?,
         )
@@ -268,6 +340,10 @@ impl AnalyticsService {
             .with_context(|| "query_log_entries")?,
         )
     }
+}
+
+fn format_postgres_placeholder(index: usize) -> String {
+    format!("${}", index + 1)
 }
 
 fn serialize_record_batch(record_batch: &RecordBatch) -> Result<bytes::Bytes> {

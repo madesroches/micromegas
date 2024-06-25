@@ -1,4 +1,5 @@
 import crc
+from tqdm import tqdm
 
 
 # hack to allow perfetto proto imports
@@ -37,8 +38,16 @@ class Writer:
         packet.track_descriptor.process.process_name = exe
         self.packets.append(packet)
 
-    def append_thread(self, begin, end, stream_id, thread_name, thread_id):
+    def append_thread(self, stream_id, thread_name, thread_id):
         from protos.perfetto.trace import trace_pb2, trace_packet_pb2, track_event
+
+        df_blocks = self.client.query_blocks(
+            begin=None, end=None, limit=100_000, stream_id=stream_id
+        )
+        if df_blocks.empty:
+            return
+        begin = df_blocks["begin_time"].min()
+        end = df_blocks["end_time"].max()
 
         packet = trace_packet_pb2.TracePacket()
         thread_uuid = crc64_str(stream_id)
@@ -90,3 +99,37 @@ class Writer:
     def write_file(self, filename):
         with open(filename, "wb") as f:
             f.write(self.trace.SerializeToString())
+
+
+def get_process_cpu_streams(client, process_id):
+    def prop_to_dict(props):
+        prop_dict = {}
+        for p in props:
+            prop_dict[p["key"]] = p["value"]
+        return prop_dict
+
+    def get_thread_name(prop_dict):
+        return prop_dict["thread-name"]
+
+    def get_thread_id(prop_dict):
+        return int(prop_dict["thread-id"])
+
+    df_streams = client.query_streams(
+        begin=None, end=None, limit=1024, tag_filter="cpu", process_id=process_id
+    )
+    df_streams["properties"] = df_streams["properties"].apply(prop_to_dict)
+    df_streams["thread_name"] = df_streams["properties"].apply(get_thread_name)
+    df_streams["thread_id"] = df_streams["properties"].apply(get_thread_id)
+    return df_streams
+
+
+def write_process_trace(client, process_id, trace_filepath):
+    process_df = client.find_process(process_id)
+    assert process_df.shape[0] == 1
+    process = process_df.iloc[0]
+    streams = get_process_cpu_streams(client, process_id)
+    writer = Writer(client, process_id, process["exe"])
+    for index, stream in tqdm(list(streams.iterrows())):
+        stream_id = stream["thread_id"]
+        writer.append_thread(stream["stream_id"], stream["thread_name"], stream_id)
+    writer.write_file(trace_filepath)

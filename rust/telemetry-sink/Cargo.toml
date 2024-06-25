@@ -27,7 +27,6 @@ once_cell.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-time = {workspace = true, optional = true}
 tokio-retry.workspace = true
 tokio.workspace = true
 tracing-subscriber.workspace = true
@@ -38,7 +37,7 @@ uuid.workspace = true
 [features]
 default = ["colors", "timestamps"]
 colors = ["colored"]
-timestamps = ["time"]
+timestamps = []
 stderr = []
 
 max_level_off = ["log/max_level_off", "micromegas-tracing/max_level_off"]

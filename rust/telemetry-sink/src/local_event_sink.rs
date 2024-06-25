@@ -11,14 +11,6 @@ use std::{fmt, sync::Arc};
 #[cfg(feature = "colored")]
 use colored::Colorize;
 
-#[cfg(feature = "timestamps")]
-use time::{format_description::FormatItem, OffsetDateTime};
-
-#[cfg(feature = "timestamps")]
-const TIMESTAMP_FORMAT_UTC: &[FormatItem<'_>] = time::macros::format_description!(
-    "[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z"
-);
-
 pub struct LocalEventSink {
     /// Control how timestamps are displayed.
     ///
@@ -85,12 +77,7 @@ impl EventSink for LocalEventSink {
         let timestamp = {
             #[cfg(feature = "timestamps")]
             if self.timestamps {
-                format!(
-                    "{} ",
-                    OffsetDateTime::now_utc()
-                        .format(&TIMESTAMP_FORMAT_UTC)
-                        .unwrap()
-                )
+                format!("{} ", chrono::Utc::now().to_rfc3339())
             } else {
                 "".to_string()
             }

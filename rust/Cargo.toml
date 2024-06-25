@@ -59,7 +59,6 @@ sqlx = { version = "0.7.4", features = ["runtime-tokio", "postgres", "chrono", "
 syn = { version = "1.0", features = ["extra-traits", "full"] }
 thiserror = "1.0"
 thread-id = "4.0"
-time = { version = "0.3.5", features = ["formatting","local-offset","macros"]}
 tokio = { version = "1.33", features = ["macros","rt-multi-thread","tracing"]}
 tokio-retry = "0.3"
 tower = "0.4"
