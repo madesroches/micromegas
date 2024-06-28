@@ -75,13 +75,15 @@ pub async fn make_metrics_record_batch(
             stream,
             block,
             |measure| {
-                if measure.time >= begin_ns && measure.time <= end_ns && nb < limit {
-                    record_builder.append(&measure)?;
-                    nb += 1;
-                    Ok(true) // continue
-                } else {
-                    Ok(false) // stop
+                if measure.time < begin_ns {
+                    return Ok(true);
                 }
+                if measure.time > end_ns || nb >= limit {
+                    return Ok(false);
+                }
+                record_builder.append(&measure)?;
+                nb += 1;
+                Ok(nb < limit)
             },
         )
         .await
