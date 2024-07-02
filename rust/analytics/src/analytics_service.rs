@@ -315,6 +315,7 @@ impl AnalyticsService {
                 request.stream_id,
                 begin.into(),
                 end.into(),
+                request.limit,
             )
             .await
             .with_context(|| "query_log_entries")?,

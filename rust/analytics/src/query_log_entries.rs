@@ -18,6 +18,7 @@ pub async fn query_log_entries(
     stream_id: sqlx::types::Uuid,
     begin: DateTime<Utc>,
     end: DateTime<Utc>,
+    limit: i64,
 ) -> Result<RecordBatch> {
     let mut connection = data_lake.db_pool.acquire().await?;
     let stream_info = find_stream(&mut connection, stream_id)
@@ -43,6 +44,7 @@ pub async fn query_log_entries(
         &blocks,
         begin,
         end,
+        limit,
         data_lake.blob_storage.clone(),
         convert_ticks,
         &stream_info,
@@ -57,6 +59,7 @@ pub async fn make_log_entries_record_batch(
     blocks: &[BlockMetadata],
     begin: DateTime<Utc>,
     end: DateTime<Utc>,
+    limit: i64,
     blob_storage: Arc<BlobStorage>,
     convert_ticks: ConvertTicks,
     stream: &micromegas_telemetry::stream_info::StreamInfo,
@@ -71,10 +74,13 @@ pub async fn make_log_entries_record_batch(
             stream,
             block,
             |log_entry| {
-                if log_entry.time >= begin_ns && log_entry.time <= end_ns {
+                if log_entry.time >= begin_ns
+                    && log_entry.time <= end_ns
+                    && record_builder.len() < limit
+                {
                     record_builder.append(&log_entry)?;
                 }
-                Ok(log_entry.time <= end_ns)
+                Ok(log_entry.time <= end_ns && record_builder.len() < limit)
             },
         )
         .await
