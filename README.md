@@ -7,7 +7,7 @@
 
 [rust api documentation](https://docs.rs/micromegas/latest/micromegas/) 
 
-[design presentation](https://madesroches.github.io/micromegas/doc/design.html) 
+[design presentation](https://madesroches.github.io/micromegas/doc/design-presentation/design.html) 
 
 
 [crates-badge]: https://img.shields.io/crates/v/micromegas.svg
