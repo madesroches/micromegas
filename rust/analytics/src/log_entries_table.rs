@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use datafusion::arrow::array::ArrayBuilder;
 use datafusion::arrow::array::PrimitiveBuilder;
 use datafusion::arrow::array::StringBuilder;
 use datafusion::arrow::array::StringDictionaryBuilder;
@@ -30,6 +31,14 @@ impl LogEntriesRecordBuilder {
             levels: PrimitiveBuilder::with_capacity(capacity),
             msgs: StringBuilder::new(),
         }
+    }
+
+    pub fn len(&self) -> i64 {
+        self.times.len() as i64
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.times.len() == 0
     }
 
     pub fn append(&mut self, row: &LogEntry) -> Result<()> {
