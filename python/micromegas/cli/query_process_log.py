@@ -15,6 +15,7 @@ def main():
     parser.add_argument("--first")
     parser.add_argument("--last")
     parser.add_argument("--target")
+    parser.add_argument("--msg")
     parser.add_argument("--maxlevel", default=6)
     parser.add_argument("process_id")
     args = parser.parse_args()
@@ -60,6 +61,9 @@ def main():
     if args.target is not None:
         df_log = df_log[df_log["target"].str.contains(args.target, case=False)]
 
+    if args.msg is not None:
+        df_log = df_log[df_log["msg"].str.contains(args.msg, case=False)]
+        
     if args.last is not None:
         assert args.first is None
         df_log = df_log.tail(int(args.last))
