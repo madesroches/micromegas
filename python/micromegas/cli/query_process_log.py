@@ -6,24 +6,6 @@ import os
 import sys
 from tabulate import tabulate
 
-def fetch_last_n(limit, client, df_blocks, stream_id):
-    nb_blocks = df_blocks.shape[0]
-    last_block = df_blocks.iloc[nb_blocks-1]
-    begin = last_block["begin_time"]
-    end = last_block["end_time"]
-    nb_objects = last_block["nb_objects"]
-    for index in range(nb_blocks-2, -1, -1):
-        if nb_objects >= limit:
-            break
-        block = df_blocks.iloc[index]
-        nb_objects += block["nb_objects"]
-        begin = block["begin_time"]
-    df_log = client.query_log_entries(begin, end, int(nb_objects), stream_id=stream_id)
-    return df_log.tail(limit).copy().reset_index()
-
-def fetch_first_n(limit, client, process, df_blocks, stream_id):
-    last_end = df_blocks["end_time"].max()
-    return client.query_log_entries(process["start_time"], last_end, limit=limit, stream_id=stream_id)
 
 def main():
     parser = argparse.ArgumentParser(
@@ -32,6 +14,7 @@ def main():
     )
     parser.add_argument("--first")
     parser.add_argument("--last")
+    parser.add_argument("--maxlevel", default=6)
     parser.add_argument("process_id")
     args = parser.parse_args()
 
@@ -64,12 +47,24 @@ def main():
         print("no log entries")
         sys.exit(0)
 
+    last_end = df_blocks["end_time"].max()
+    df_log = client.query_log_entries(
+        process["start_time"],
+        last_end,
+        limit=10 * 1024 * 1024,  # request lots of data
+        stream_id=stream_id,
+    )
+    df_log = df_log[df_log["level"] <= int(args.maxlevel)]
+
     if args.last is not None:
         assert args.first is None
-        df_log = fetch_last_n(int(args.last), client, df_blocks, stream_id)
+        df_log = df_log.tail(int(args.last))
     else:
-        limit = args.first or 1024 * 1024
-        df_log = fetch_first_n(int(limit), client, process, df_blocks, stream_id)
+        limit = (
+            args.first
+            or 1024 * 1024  # it would be too slow to print it all if it's a large log
+        )
+        df_log = df_log.head(int(limit))
 
     print(tabulate(df_log, headers="keys"))
 
