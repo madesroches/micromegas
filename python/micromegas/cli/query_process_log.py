@@ -14,6 +14,7 @@ def main():
     )
     parser.add_argument("--first")
     parser.add_argument("--last")
+    parser.add_argument("--target")
     parser.add_argument("--maxlevel", default=6)
     parser.add_argument("process_id")
     args = parser.parse_args()
@@ -55,6 +56,9 @@ def main():
         stream_id=stream_id,
     )
     df_log = df_log[df_log["level"] <= int(args.maxlevel)]
+
+    if args.target is not None:
+        df_log = df_log[df_log["target"].str.contains(args.target, case=False)]
 
     if args.last is not None:
         assert args.first is None
