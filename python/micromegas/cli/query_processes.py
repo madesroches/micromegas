@@ -56,6 +56,7 @@ def main():
             "cpu_brand",
         ]
     ]
+    df_processes["exe"] = df_processes["exe"].str[-64:] #keep the 64 rightmost chars
     print(tabulate(df_processes, headers="keys"))
 
 
