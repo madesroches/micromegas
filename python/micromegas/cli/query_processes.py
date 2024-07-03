@@ -1,24 +1,9 @@
 import argparse
 import datetime
 import importlib
+import micromegas
 import os
-import re
 from tabulate import tabulate
-
-
-def parse_time_delta(user_string):
-    parser = re.compile("(\\d+)([mhd])")
-    m = parser.match(user_string)
-    nbr = int(m.group(1))
-    unit = m.group(2)
-    if unit == "m":
-        return datetime.timedelta(minutes=nbr)
-    elif unit == "h":
-        return datetime.timedelta(hours=nbr)
-    elif unit == "d":
-        return datetime.timedelta(days=nbr)
-    else:
-        raise RuntimeError("invalid time delta: " + user_string)
 
 
 def main():
@@ -30,7 +15,7 @@ def main():
     parser.add_argument("--since", default="1h", help="[number][m|h|d]")
     parser.add_argument("--limit", default="1024")
     args = parser.parse_args()
-    delta = parse_time_delta(args.since)
+    delta = micromegas.time.parse_time_delta(args.since)
     limit = int(args.limit)
 
     micromegas_module_name = os.environ.get(
@@ -56,6 +41,7 @@ def main():
             "cpu_brand",
         ]
     ]
+    df_processes["exe"] = df_processes["exe"].str[-64:] #keep the 64 rightmost chars
     print(tabulate(df_processes, headers="keys"))
 
 

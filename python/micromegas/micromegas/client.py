@@ -1,17 +1,5 @@
 from . import request
-import datetime
-import pandas
-
-def format_datetime(value):
-    nonetype = type(None)
-    match type(value):
-        case datetime.datetime:
-            return value.isoformat()
-        case pandas.Timestamp:
-            return value.isoformat()
-        case nonetype:
-            return None
-    raise RuntimeError("value of unknown type in format_datetime")
+from . import time
             
 
 class Client:
@@ -29,14 +17,14 @@ class Client:
     def query_processes(self, begin, end, limit):
         return request.request(
             self.analytics_base_url + "query_processes",
-            {"begin": format_datetime(begin), "end": format_datetime(end), "limit": limit},
+            {"begin": time.format_datetime(begin), "end": time.format_datetime(end), "limit": limit},
             headers=self.headers,
         )
 
     def query_streams(self, begin, end, limit, process_id=None, tag_filter=None):
         args = {
-            "begin": format_datetime(begin),
-            "end": format_datetime(end),
+            "begin": time.format_datetime(begin),
+            "end": time.format_datetime(end),
             "limit": limit,
             "process_id": process_id,
             "tag_filter": tag_filter,
@@ -50,8 +38,8 @@ class Client:
 
     def query_blocks(self, begin, end, limit, stream_id):
         args = {
-            "begin": format_datetime(begin),
-            "end": format_datetime(end),
+            "begin": time.format_datetime(begin),
+            "end": time.format_datetime(end),
             "limit": limit,
             "stream_id": stream_id,
         }
@@ -66,8 +54,8 @@ class Client:
         return request.request(
             self.analytics_base_url + "query_spans",
             {
-                "begin": format_datetime(begin),
-                "end": format_datetime(end),
+                "begin": time.format_datetime(begin),
+                "end": time.format_datetime(end),
                 "limit": limit,
                 "stream_id": stream_id,
             },
@@ -78,8 +66,8 @@ class Client:
         return request.request(
             self.analytics_base_url + "query_thread_events",
             {
-                "begin": format_datetime(begin),
-                "end": format_datetime(end),
+                "begin": time.format_datetime(begin),
+                "end": time.format_datetime(end),
                 "limit": limit,
                 "stream_id": stream_id,
             },
@@ -90,8 +78,8 @@ class Client:
         return request.request(
             self.analytics_base_url + "query_log_entries",
             {
-                "begin": format_datetime(begin),
-                "end": format_datetime(end),
+                "begin": time.format_datetime(begin),
+                "end": time.format_datetime(end),
                 "limit": limit,
                 "stream_id": stream_id,
             },
@@ -102,8 +90,8 @@ class Client:
         return request.request(
             self.analytics_base_url + "query_metrics",
             {
-                "begin": format_datetime(begin),
-                "end": format_datetime(end),
+                "begin": time.format_datetime(begin),
+                "end": time.format_datetime(end),
                 "limit": limit,
                 "stream_id": stream_id,
             },
