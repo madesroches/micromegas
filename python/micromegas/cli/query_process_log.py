@@ -1,8 +1,7 @@
 import argparse
+import connection
 import datetime
-import importlib
 import micromegas
-import os
 import sys
 from tabulate import tabulate
 
@@ -20,11 +19,7 @@ def main():
     parser.add_argument("process_id")
     args = parser.parse_args()
 
-    micromegas_module_name = os.environ.get(
-        "MICROMEGAS_PYTHON_MODULE_WRAPPER", "micromegas"
-    )
-    micromegas_module = importlib.import_module(micromegas_module_name)
-    client = micromegas_module.connect()
+    client = connection.connect()
     df_process = client.find_process(args.process_id)
     if df_process.empty:
         print("process not found")

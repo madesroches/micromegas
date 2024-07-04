@@ -1,8 +1,7 @@
 import argparse
+import connection
 import datetime
-import importlib
 import micromegas
-import os
 from tabulate import tabulate
 
 
@@ -18,11 +17,7 @@ def main():
     delta = micromegas.time.parse_time_delta(args.since)
     limit = int(args.limit)
 
-    micromegas_module_name = os.environ.get(
-        "MICROMEGAS_PYTHON_MODULE_WRAPPER", "micromegas"
-    )
-    micromegas_module = importlib.import_module(micromegas_module_name)
-    client = micromegas_module.connect()
+    client = connection.connect()
     now = datetime.datetime.now(datetime.timezone.utc)
     begin = now - delta
     end = now
