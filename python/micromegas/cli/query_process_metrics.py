@@ -8,17 +8,14 @@ from tabulate import tabulate
 
 def main():
     parser = argparse.ArgumentParser(
-        prog="query_process_log",
-        description="List log entries associated with a specific process",
+        prog="query_process_metrics",
+        description="List measures associated with a specific process",
     )
-    parser.add_argument("--first")
-    parser.add_argument("--last")
     parser.add_argument("--target")
-    parser.add_argument("--msg")
-    parser.add_argument("--maxlevel", default=6)
+    parser.add_argument("--name")
+    parser.add_argument("--stats", action="store_true")
     parser.add_argument("process_id")
     args = parser.parse_args()
-
     client = connection.connect()
     df_process = client.find_process(args.process_id)
     if df_process.empty:
@@ -28,10 +25,10 @@ def main():
     process = df_process.iloc[0]
     process_id = process["process_id"]
     df_streams = client.query_streams(
-        begin=None, end=None, limit=1024, tag_filter="log", process_id=process_id
+        begin=None, end=None, limit=1024, tag_filter="metrics", process_id=process_id
     )
     if df_streams.empty:
-        print("log stream not found")
+        print("metrics stream not found")
         sys.exit(1)
     assert df_streams.shape[0] == 1
     stream = df_streams.iloc[0]
@@ -41,35 +38,28 @@ def main():
         begin=None, end=None, limit=1024, stream_id=stream_id
     )
     if df_blocks.empty:
-        print("no log entries")
+        print("no metrics entries")
         sys.exit(0)
 
     last_end = df_blocks["end_time"].max()
-    df_log = client.query_log_entries(
+    df_metrics = client.query_metrics(
         process["start_time"],
         last_end,
         limit=10 * 1024 * 1024,  # request lots of data
         stream_id=stream_id,
     )
-    df_log = df_log[df_log["level"] <= int(args.maxlevel)]
 
     if args.target is not None:
-        df_log = df_log[df_log["target"].str.contains(args.target, case=False)]
+        df_metrics = df_metrics[
+            df_metrics["target"].str.contains(args.target, case=False)
+        ]
 
-    if args.msg is not None:
-        df_log = df_log[df_log["msg"].str.contains(args.msg, case=False)]
-        
-    if args.last is not None:
-        assert args.first is None
-        df_log = df_log.tail(int(args.last))
-    else:
-        limit = (
-            args.first
-            or 1024 * 1024  # it would be too slow to print it all if it's a large log
-        )
-        df_log = df_log.head(int(limit))
+    if args.name is not None:
+        df_metrics = df_metrics[df_metrics["name"].str.contains(args.name, case=False)]
 
-    print(tabulate(df_log, headers="keys"))
+    if args.stats:
+        df_metrics = df_metrics.groupby( "name", observed=True )["value"].agg(["count", "min", "mean", "median", "max", "sum"])
+    print(df_metrics)
 
 
 if __name__ == "__main__":
