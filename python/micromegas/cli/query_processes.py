@@ -12,7 +12,7 @@ def main():
         epilog="If you are in a corporate environment, you may need to set the MICROMEGAS_PYTHON_MODULE_WRAPPER environment variable to specify the python module responsible to authenticate your requests.",
     )
     parser.add_argument("--since", default="1h", help="[number][m|h|d]")
-    parser.add_argument("--limit", default="1024")
+    parser.add_argument("--limit", default="1000000")
     parser.add_argument("--username")
     args = parser.parse_args()
     delta = micromegas.time.parse_time_delta(args.since)
