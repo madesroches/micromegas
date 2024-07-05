@@ -17,6 +17,22 @@ def crc64_str(s):
     return calculator.checksum(str.encode(s))
 
 
+def generate_batches(df_blocks):
+    nb_events_threshold = 1024 * 1024
+    begin = df_blocks.iloc[0]["begin_time"]
+    end = df_blocks.iloc[0]["end_time"]
+    nb_events = 0
+    for index, block in df_blocks.iterrows():
+        nb_events += block["nb_objects"]
+        end = block["end_time"]
+        if nb_events > nb_events_threshold:
+            yield (begin, end, nb_events)
+            begin = block["end_time"]
+            nb_events = 0
+    if nb_events > 0:
+        yield (begin, end, nb_events)
+
+
 class Writer:
     """
     Fetches thread events from the analytics server and formats them in the perfetto format.
@@ -27,6 +43,10 @@ class Writer:
         load_perfetto_protos()
         from protos.perfetto.trace import trace_pb2, trace_packet_pb2
 
+        self.names = {}
+        self.categories = {}
+        self.source_locations = {}
+        self.first = True
         self.client = client
         self.trace = trace_pb2.Trace()
         self.packets = self.trace.packet
@@ -38,6 +58,33 @@ class Writer:
         packet.track_descriptor.process.process_name = exe
         self.packets.append(packet)
 
+    def get_name_iid(self, name):
+        iid = self.names.get(name)
+        is_new = False
+        if iid is None:
+            is_new = True
+            iid = len(self.names) + 1
+            self.names[name] = iid
+        return iid, is_new
+
+    def get_category_iid(self, cat):
+        iid = self.categories.get(cat)
+        is_new = False
+        if iid is None:
+            is_new = True
+            iid = len(self.categories) + 1
+            self.categories[cat] = iid
+        return iid, is_new
+
+    def get_location_iid(self, loc):
+        iid = self.source_locations.get(loc)
+        is_new = False
+        if iid is None:
+            is_new = True
+            iid = len(self.source_locations) + 1
+            self.source_locations[loc] = iid
+        return iid, is_new
+    
     def append_thread(self, stream_id, thread_name, thread_id):
         from protos.perfetto.trace import trace_pb2, trace_packet_pb2, track_event
 
@@ -46,8 +93,6 @@ class Writer:
         )
         if df_blocks.empty:
             return
-        begin = df_blocks["begin_time"].min()
-        end = df_blocks["end_time"].max()
 
         packet = trace_packet_pb2.TracePacket()
         thread_uuid = crc64_str(stream_id)
@@ -59,42 +104,67 @@ class Writer:
         self.packets.append(packet)
         trusted_packet_sequence_id = 1
 
-        max_rows = 1024 * 1024
-        df_spans = self.client.query_spans(
-            begin, end, limit=max_rows, stream_id=stream_id
-        )
-        nb_rows = df_spans.shape[0]
-        if nb_rows == max_rows:
-            print("Warning: partial data returned, needs multiple requests")
-
-        begin_ns = df_spans["begin"].astype("int64")
-        end_ns = df_spans["end"].astype("int64")
-        for index, span in df_spans.iterrows():
-            packet = trace_packet_pb2.TracePacket()
-            packet.timestamp = begin_ns[index]
-            packet.track_event.type = (
-                track_event.track_event_pb2.TrackEvent.Type.TYPE_SLICE_BEGIN
+        batches = list(generate_batches(df_blocks))
+        for begin, end, limit in tqdm(batches, unit="event batches"):
+            df_spans = self.client.query_spans(
+                begin, end, limit=limit, stream_id=stream_id
             )
-            packet.track_event.track_uuid = thread_uuid
-            packet.track_event.name = span["name"]
-            packet.track_event.categories.append(span["target"])
-            packet.track_event.source_location.file_name = span["filename"]
-            packet.track_event.source_location.line_number = span["line"]
-            packet.trusted_packet_sequence_id = trusted_packet_sequence_id
-            self.packets.append(packet)
+            begin_ns = df_spans["begin"].astype("int64")
+            end_ns = df_spans["end"].astype("int64")
+            for index, span in df_spans.iterrows():
+                packet = trace_packet_pb2.TracePacket()
+                packet.timestamp = begin_ns[index]
+                packet.track_event.type = (
+                    track_event.track_event_pb2.TrackEvent.Type.TYPE_SLICE_BEGIN
+                )
+                packet.track_event.track_uuid = thread_uuid
+                span_name = span["name"]
+                name_iid, new_name = self.get_name_iid(span_name)
+                packet.track_event.name_iid = name_iid
+                category_iid, new_category = self.get_category_iid(span["target"])
+                packet.track_event.category_iids.append(category_iid)
 
-            packet = trace_packet_pb2.TracePacket()
-            packet.timestamp = end_ns[index]
-            packet.track_event.type = (
-                track_event.track_event_pb2.TrackEvent.Type.TYPE_SLICE_END
-            )
-            packet.track_event.track_uuid = thread_uuid
-            packet.track_event.name = span["name"]
-            packet.track_event.categories.append(span["target"])
-            packet.track_event.source_location.file_name = span["filename"]
-            packet.track_event.source_location.line_number = span["line"]
-            packet.trusted_packet_sequence_id = trusted_packet_sequence_id
-            self.packets.append(packet)
+                source_location = (span["filename"], span["line"])
+                source_location_iid, new_source_location = self.get_location_iid(source_location)
+                packet.track_event.source_location_iid = source_location_iid
+                if self.first:
+                    # this is necessary for interning to work
+                    self.first = False
+                    packet.first_packet_on_sequence = True
+                    packet.sequence_flags = 3
+                else:
+                    packet.sequence_flags = 2
+
+                if new_name:
+                    event_name = packet.interned_data.event_names.add()
+                    event_name.iid = name_iid
+                    event_name.name = span_name
+                if new_category:
+                    cat_name = packet.interned_data.event_categories.add()
+                    cat_name.iid = category_iid
+                    cat_name.name = span["target"]
+                if new_source_location:
+                    loc = packet.interned_data.source_locations.add()
+                    loc.iid = source_location_iid
+                    loc.file_name = source_location[0]
+                    loc.line_number = source_location[1]
+
+                packet.trusted_packet_sequence_id = trusted_packet_sequence_id
+                self.packets.append(packet)
+
+                packet = trace_packet_pb2.TracePacket()
+                packet.timestamp = end_ns[index]
+                packet.track_event.type = (
+                    track_event.track_event_pb2.TrackEvent.Type.TYPE_SLICE_END
+                )
+                packet.track_event.track_uuid = thread_uuid
+                packet.track_event.name_iid = name_iid
+                packet.track_event.category_iids.append(category_iid)
+                packet.track_event.source_location_iid = source_location_iid
+                packet.sequence_flags = 2
+                packet.trusted_packet_sequence_id = trusted_packet_sequence_id
+
+                self.packets.append(packet)
 
     def write_file(self, filename):
         with open(filename, "wb") as f:
@@ -129,7 +199,7 @@ def write_process_trace(client, process_id, trace_filepath):
     process = process_df.iloc[0]
     streams = get_process_cpu_streams(client, process_id)
     writer = Writer(client, process_id, process["exe"])
-    for index, stream in tqdm(list(streams.iterrows())):
+    for index, stream in tqdm(list(streams.iterrows()), unit="threads"):
         stream_id = stream["thread_id"]
         writer.append_thread(stream["stream_id"], stream["thread_name"], stream_id)
     writer.write_file(trace_filepath)
