@@ -27,12 +27,55 @@ DEFINE_LOG_CATEGORY(LogMicromegasTelemetrySink);
 
 namespace
 {
-	void OnProcessRequestComplete(FHttpRequestPtr HttpRequest, FHttpResponsePtr HttpResponse, bool bSucceeded)
+	void RetryRequest(FHttpRequestPtr OldRequest, int RemainingRetries);
+
+	void OnProcessRequestComplete(FHttpRequestPtr HttpRequest, FHttpResponsePtr HttpResponse, bool bSucceeded, int RemainingRetries)
 	{
+		if (!HttpResponse.IsValid() && RemainingRetries > 0)
+		{
+			// the most common error we see is not from the server reporting an error, it's an internal client error failing to rewind a request
+			// in this case, we get a null HttpResponse
+			RetryRequest(HttpRequest, RemainingRetries - 1);
+			return;
+		}
 		int32 Code = HttpResponse ? HttpResponse->GetResponseCode() : 0;
 		if (!bSucceeded || Code != 200)
 		{
 			UE_LOG(LogMicromegasTelemetrySink, Warning, TEXT("Request completed with code=%d response=%s"), Code, HttpResponse ? *(HttpResponse->GetContentAsString()) : TEXT(""));
+		}
+	}
+
+	void RetryRequest(FHttpRequestPtr OldRequest, int RemainingRetries)
+	{
+		UE_LOG(LogMicromegasTelemetrySink, Verbose, TEXT("Retrying telemetry http request, RemainingRetries=%d"), RemainingRetries);
+		// can't reuse the old request, need to clone it
+		TSharedRef<IHttpRequest, ESPMode::ThreadSafe> NewRequest = FHttpModule::Get().CreateRequest();
+		NewRequest->SetURL(OldRequest->GetURL());
+		NewRequest->SetVerb(OldRequest->GetVerb());
+		NewRequest->SetContent(OldRequest->GetContent());
+		for (FString HeaderPair : OldRequest->GetAllHeaders())
+		{
+			FString Name;
+			FString Value;
+			if (!HeaderPair.Split(TEXT(":"), &Name, &Value))
+			{
+				UE_LOG(LogMicromegasTelemetrySink, Warning, TEXT("Malformed header pair %s"), *HeaderPair);
+				return;
+			}
+			NewRequest->SetHeader(Name, Value);
+		}
+		TOptional<float> Timeout = OldRequest->GetTimeout();
+		if (Timeout.IsSet())
+		{
+			NewRequest->SetTimeout(Timeout.GetValue());
+		}
+		NewRequest->SetDelegateThreadPolicy(OldRequest->GetDelegateThreadPolicy());
+		NewRequest->OnProcessRequestComplete().BindLambda([RemainingRetries](FHttpRequestPtr HttpRequest, FHttpResponsePtr HttpResponse, bool bSucceeded) {
+			OnProcessRequestComplete(HttpRequest, HttpResponse, bSucceeded, RemainingRetries);
+		});
+		if (!NewRequest->ProcessRequest())
+		{
+			UE_LOG(LogMicromegasTelemetrySink, Warning, TEXT("Failed to retry telemetry http request"));
 		}
 	}
 
@@ -205,9 +248,8 @@ uint32 HttpEventSink::Run()
 		{
 			break;
 		}
-		const uint32 timeout_ms = 60 * 1000;
-		WakeupThread->Wait(timeout_ms);
-		Flusher->Tick(this);
+		const uint32 TimeoutMs = static_cast<uint32>(Flusher->Tick(this) * 1000.0);
+		WakeupThread->Wait(TimeoutMs);
 	}
 	return 0;
 }
@@ -228,7 +270,10 @@ void HttpEventSink::SendBinaryRequest(const TCHAR* command, const TArray<uint8>&
 	HttpRequest->SetHeader(TEXT("Content-Type"), TEXT("application/octet-stream"));
 	HttpRequest->SetTimeout(TimeoutSeconds);
 	HttpRequest->SetDelegateThreadPolicy(EHttpRequestDelegateThreadPolicy::CompleteOnHttpThread);
-	HttpRequest->OnProcessRequestComplete().BindStatic(&OnProcessRequestComplete);
+	HttpRequest->OnProcessRequestComplete().BindLambda([](FHttpRequestPtr HttpRequest, FHttpResponsePtr HttpResponse, bool bSucceeded) {
+		const int RetryCount = 1;
+		OnProcessRequestComplete(HttpRequest, HttpResponse, bSucceeded, RetryCount);
+	});
 	if (!Auth->Sign(*HttpRequest))
 	{
 		UE_LOG(LogMicromegasTelemetrySink, Warning, TEXT("Failed to sign telemetry http request"));

@@ -2,8 +2,10 @@
 //
 //  MicromegasTelemetrySink/FlushMonitor.h
 //
+#include "HAL/IConsoleManager.h"
 #include "HAL/Platform.h"
 #include "Templates/SharedPointer.h"
+#include "Templates/UniquePtr.h"
 
 namespace MicromegasTracing
 {
@@ -14,12 +16,13 @@ class MICROMEGASTELEMETRYSINK_API FlushMonitor
 {
 public:
 	FlushMonitor();
-	void Tick(MicromegasTracing::EventSink* sink);
+	double Tick(MicromegasTracing::EventSink* sink); // returns the time until the next flush will be expected in seconds
 	void Flush();
+	double GetFlushPeriodSeconds() const;
 
 private:
-	uint64 LastFlush;
-	uint64 FlushDelay;
+	TUniquePtr<TAutoConsoleVariable<float>> CVarFlushPeriodSeconds;
+	double LastFlush;
 };
 
 typedef TSharedPtr<FlushMonitor, ESPMode::ThreadSafe> SharedFlushMonitor;
