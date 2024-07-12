@@ -49,8 +49,8 @@ void FMicromegasTelemetrySinkModule::OnEnable()
 	const FName HttpModuleName = TEXT("HTTP");
 	FModuleManager::Get().LoadModuleChecked(HttpModuleName);
 	check(Authenticator.IsValid());
-	SamplingController = MakeShared<FSamplingController>();
 	Flusher = MakeShared<FlushMonitor>();
+	SamplingController = MakeShared<FSamplingController>(Flusher);
 	MetricPub = MakeShared<MetricPublisher>();
 	TSharedPtr<MicromegasTracing::EventSink, ESPMode::ThreadSafe> Sink = InitHttpEventSink(UploadBaseUrl, Authenticator, SamplingController, Flusher);
 	Authenticator->Init(Sink);
@@ -77,10 +77,10 @@ void FMicromegasTelemetrySinkModule::PreUnloadCallback()
 
 	CmdEnable.Reset();
 	CmdFlush.Reset();
-	Flusher.Reset();
 	MetricPub.Reset();
 	Authenticator.Reset();
 	SamplingController.Reset();
+	Flusher.Reset();
 }
 
 void FMicromegasTelemetrySinkModule::ShutdownModule()

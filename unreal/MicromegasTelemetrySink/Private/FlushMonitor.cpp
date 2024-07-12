@@ -16,24 +16,30 @@ namespace
 } // namespace
 
 FlushMonitor::FlushMonitor()
+	: CVarFlushPeriodSeconds(new TAutoConsoleVariable<float>( // console variables are not available in double
+		TEXT("telemetry.auto_flush_period"),
+		60,
+		TEXT("Telemetry flush period in seconds")))
 {
-	LastFlush = FPlatformTime::Cycles64();
-	double freq = 1.0 / FPlatformTime::GetSecondsPerCycle64();
-	FlushDelay = static_cast<uint64>(freq * 60);
+	LastFlush = FPlatformTime::Seconds();
 }
 
-void FlushMonitor::Tick(MicromegasTracing::EventSink* sink)
+double FlushMonitor::GetFlushPeriodSeconds() const
 {
-	if (sink->IsBusy())
-	{
-		return;
-	}
-	uint64 now = FPlatformTime::Cycles64();
-	uint64 diff = now - LastFlush;
-	if (diff > FlushDelay)
+	return CVarFlushPeriodSeconds->GetValueOnAnyThread();
+}
+
+double FlushMonitor::Tick(MicromegasTracing::EventSink* sink)
+{
+	double Now = FPlatformTime::Seconds();
+	double Period = GetFlushPeriodSeconds();
+	double Next = LastFlush + Period;
+	if (Now >= Next)
 	{
 		Flush();
+		return Period;
 	}
+	return Next - Now;
 }
 
 void FlushMonitor::Flush()
@@ -42,5 +48,5 @@ void FlushMonitor::Flush()
 	MicromegasTracing::FlushMetricStream();
 	MicromegasTracing::ForEachThreadStream(&MarkStreamFull);
 	MicromegasTracing::FlushCurrentThreadStream();
-	LastFlush = FPlatformTime::Cycles64();
+	LastFlush = FPlatformTime::Seconds();
 }
