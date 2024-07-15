@@ -18,37 +18,37 @@ namespace MicromegasTracing
 {
 	Dispatch* GDispatch = nullptr;
 
-	Dispatch::Dispatch(NewGuid allocNewGuid,
-		const ProcessInfoPtr& processInfo,
-		const TSharedPtr<EventSink, ESPMode::ThreadSafe>& sink,
-		size_t logBufferSize,
-		size_t metricBufferSize,
-		size_t threadBufferSize)
-		: AllocNewGuid(allocNewGuid)
-		, Sink(sink)
-		, CurrentProcessInfo(processInfo)
-		, LogBufferSize(logBufferSize)
-		, MetricBufferSize(metricBufferSize)
-		, ThreadBufferSize(threadBufferSize)
+	Dispatch::Dispatch(NewGuid InAllocNewGuid,
+		const ProcessInfoPtr& ProcessInfo,
+		const TSharedPtr<EventSink, ESPMode::ThreadSafe>& InSink,
+		size_t InLogBufferSize,
+		size_t InMetricBufferSize,
+		size_t InThreadBufferSize)
+		: AllocNewGuid(InAllocNewGuid)
+		, Sink(InSink)
+		, CurrentProcessInfo(ProcessInfo)
+		, LogBufferSize(InLogBufferSize)
+		, MetricBufferSize(InMetricBufferSize)
+		, ThreadBufferSize(InThreadBufferSize)
 	{
-		FString logStreamId = AllocNewGuid();
-		LogBlockPtr logBlock = MakeShared<LogBlock>(logStreamId,
-			processInfo->StartTime,
+		FString LogStreamId = AllocNewGuid();
+		LogBlockPtr NewLogBlock = MakeShared<LogBlock>(LogStreamId,
+			ProcessInfo->StartTime,
 			LogBufferSize,
 			0);
 		LogEntries = MakeShared<LogStream>(CurrentProcessInfo->ProcessId,
-			logStreamId,
-			logBlock,
+			LogStreamId,
+			NewLogBlock,
 			TArray<FString>({ TEXT("log") }));
 
-		FString metricStreamId = allocNewGuid();
-		MetricsBlockPtr metricBlock = MakeShared<MetricBlock>(metricStreamId,
-			processInfo->StartTime,
-			metricBufferSize,
+		FString MetricStreamId = AllocNewGuid();
+		MetricsBlockPtr NewMetricBlock = MakeShared<MetricBlock>(MetricStreamId,
+			ProcessInfo->StartTime,
+			MetricBufferSize,
 			0);
 		Metrics = MakeShared<MetricStream>(CurrentProcessInfo->ProcessId,
-			metricStreamId,
-			metricBlock,
+			MetricStreamId,
+			NewMetricBlock,
 			TArray<FString>({ TEXT("metrics") }));
 	}
 
@@ -56,269 +56,269 @@ namespace MicromegasTracing
 	{
 	}
 
-	void Dispatch::Init(NewGuid allocNewGuid,
-		const ProcessInfoPtr& processInfo,
-		const TSharedPtr<EventSink, ESPMode::ThreadSafe>& sink,
-		size_t logBufferSize,
-		size_t metricBufferSize,
-		size_t threadBufferSize)
+	void Dispatch::Init(NewGuid AllocNewGuid,
+		const ProcessInfoPtr& ProcessInfo,
+		const TSharedPtr<EventSink, ESPMode::ThreadSafe>& Sink,
+		size_t LogBufferSize,
+		size_t MetricBufferSize,
+		size_t ThreadBufferSize)
 	{
 		if (GDispatch)
 		{
 			return;
 		}
-		GDispatch = new Dispatch(allocNewGuid, processInfo, sink, logBufferSize, metricBufferSize, threadBufferSize);
-		sink->OnStartup(processInfo);
-		sink->OnInitLogStream(GDispatch->LogEntries);
-		sink->OnInitMetricStream(GDispatch->Metrics);
+		GDispatch = new Dispatch(AllocNewGuid, ProcessInfo, Sink, LogBufferSize, MetricBufferSize, ThreadBufferSize);
+		Sink->OnStartup(ProcessInfo);
+		Sink->OnInitLogStream(GDispatch->LogEntries);
+		Sink->OnInitMetricStream(GDispatch->Metrics);
 	}
 
-	void Dispatch::FlushLogStreamImpl(UE::FMutex& mutex)
+	void Dispatch::FlushLogStreamImpl(UE::FMutex& Mutex)
 	{
 		MICROMEGAS_SPAN_FUNCTION("MicromegasTracing");
 		if (LogEntries->GetCurrentBlock().IsEmpty())
 		{
-			mutex.Unlock();
+			Mutex.Unlock();
 			return;
 		}
-		DualTime now = DualTime::Now();
-		size_t new_offset = LogEntries->GetCurrentBlock().GetOffset() + LogEntries->GetCurrentBlock().GetEvents().GetNbEvents();
-		LogBlockPtr newBlock = MakeShared<LogBlock>(LogEntries->GetStreamId(),
-			now,
+		DualTime Now = DualTime::Now();
+		size_t NewOffset = LogEntries->GetCurrentBlock().GetOffset() + LogEntries->GetCurrentBlock().GetEvents().GetNbEvents();
+		LogBlockPtr NewBlock = MakeShared<LogBlock>(LogEntries->GetStreamId(),
+			Now,
 			LogBufferSize,
-			new_offset);
-		LogBlockPtr fullBlock = LogEntries->SwapBlocks(newBlock);
-		fullBlock->Close(now);
-		mutex.Unlock();
-		Sink->OnProcessLogBlock(fullBlock);
+			NewOffset);
+		LogBlockPtr FullBlock = LogEntries->SwapBlocks(NewBlock);
+		FullBlock->Close(Now);
+		Mutex.Unlock();
+		Sink->OnProcessLogBlock(FullBlock);
 	}
 
-	void Dispatch::FlushMetricStreamImpl(UE::FMutex& mutex)
+	void Dispatch::FlushMetricStreamImpl(UE::FMutex& Mutex)
 	{
 		MICROMEGAS_SPAN_FUNCTION("MicromegasTracing");
 		if (Metrics->GetCurrentBlock().IsEmpty())
 		{
-			mutex.Unlock();
+			Mutex.Unlock();
 			return;
 		}
-		DualTime now = DualTime::Now();
-		size_t new_offset = Metrics->GetCurrentBlock().GetOffset() + Metrics->GetCurrentBlock().GetEvents().GetNbEvents();
-		MetricsBlockPtr newBlock = MakeShared<MetricBlock>(Metrics->GetStreamId(),
-			now,
+		DualTime Now = DualTime::Now();
+		size_t NewOffset = Metrics->GetCurrentBlock().GetOffset() + Metrics->GetCurrentBlock().GetEvents().GetNbEvents();
+		MetricsBlockPtr NewBlock = MakeShared<MetricBlock>(Metrics->GetStreamId(),
+			Now,
 			MetricBufferSize,
-			new_offset);
-		MetricsBlockPtr fullBlock = Metrics->SwapBlocks(newBlock);
-		fullBlock->Close(now);
-		mutex.Unlock();
-		Sink->OnProcessMetricBlock(fullBlock);
+			NewOffset);
+		MetricsBlockPtr FullBlock = Metrics->SwapBlocks(NewBlock);
+		FullBlock->Close(Now);
+		Mutex.Unlock();
+		Sink->OnProcessMetricBlock(FullBlock);
 	}
 
-	void Dispatch::FlushThreadStream(ThreadStream* stream)
+	void Dispatch::FlushThreadStream(ThreadStream* Stream)
 	{
-		if (stream->GetCurrentBlock().IsEmpty())
+		if (Stream->GetCurrentBlock().IsEmpty())
 		{
 			return;
 		}
-		DualTime now = DualTime::Now();
-		size_t new_offset = stream->GetCurrentBlock().GetOffset() + stream->GetCurrentBlock().GetEvents().GetNbEvents();
-		ThreadBlockPtr newBlock = MakeShared<ThreadBlock>(stream->GetStreamId(),
-			now,
+		DualTime Now = DualTime::Now();
+		size_t NewOffset = Stream->GetCurrentBlock().GetOffset() + Stream->GetCurrentBlock().GetEvents().GetNbEvents();
+		ThreadBlockPtr NewBlock = MakeShared<ThreadBlock>(Stream->GetStreamId(),
+			Now,
 			ThreadBufferSize,
-			new_offset);
-		ThreadBlockPtr fullBlock = stream->SwapBlocks(newBlock);
-		fullBlock->Close(now);
-		Sink->OnProcessThreadBlock(fullBlock);
+			NewOffset);
+		ThreadBlockPtr FullBlock = Stream->SwapBlocks(NewBlock);
+		FullBlock->Close(Now);
+		Sink->OnProcessThreadBlock(FullBlock);
 	}
 
 	ThreadStream* Dispatch::AllocThreadStream()
 	{
-		FString streamId = AllocNewGuid();
-		DualTime now = DualTime::Now();
-		ThreadBlockPtr block = MakeShared<ThreadBlock>(streamId,
-			now,
+		FString StreamId = AllocNewGuid();
+		DualTime Now = DualTime::Now();
+		ThreadBlockPtr Block = MakeShared<ThreadBlock>(StreamId,
+			Now,
 			ThreadBufferSize,
 			0);
 		return new ThreadStream(CurrentProcessInfo->ProcessId,
-			streamId,
-			block,
+			StreamId,
+			Block,
 			TArray<FString>({ TEXT("cpu") }));
 	}
 
-	void Dispatch::PublishThreadStream(ThreadStream* stream)
+	void Dispatch::PublishThreadStream(ThreadStream* Stream)
 	{
 		{
-			UE::TUniqueLock<UE::FMutex> lock(ThreadStreamsMutex);
-			ThreadStreams.Add(stream);
+			UE::TUniqueLock<UE::FMutex> Llock(ThreadStreamsMutex);
+			ThreadStreams.Add(Stream);
 		}
-		Sink->OnInitThreadStream(stream);
+		Sink->OnInitThreadStream(Stream);
 	}
 
 	template <typename T>
-	void QueueLogEntry(const T& event)
+	void QueueLogEntry(const T& Event)
 	{
-		Dispatch* dispatch = GDispatch;
-		if (!dispatch)
+		Dispatch* Dispatch = GDispatch;
+		if (!Dispatch)
 		{
 			return;
 		}
-		dispatch->LogMutex.Lock();
-		dispatch->LogEntries->GetCurrentBlock().GetEvents().Push(event);
-		if (dispatch->LogEntries->IsFull())
+		Dispatch->LogMutex.Lock();
+		Dispatch->LogEntries->GetCurrentBlock().GetEvents().Push(Event);
+		if (Dispatch->LogEntries->IsFull())
 		{
-			dispatch->FlushLogStreamImpl(dispatch->LogMutex); // unlocks the mutex
+			Dispatch->FlushLogStreamImpl(Dispatch->LogMutex); // unlocks the mutex
 		}
 		else
 		{
-			dispatch->LogMutex.Unlock();
+			Dispatch->LogMutex.Unlock();
 		}
 	}
 
 	void FlushLogStream()
 	{
-		Dispatch* dispatch = GDispatch;
-		if (!dispatch)
+		Dispatch* Dispatch = GDispatch;
+		if (!Dispatch)
 		{
 			return;
 		}
-		dispatch->LogMutex.Lock();
-		dispatch->FlushLogStreamImpl(dispatch->LogMutex); // unlocks the mutex
+		Dispatch->LogMutex.Lock();
+		Dispatch->FlushLogStreamImpl(Dispatch->LogMutex); // unlocks the mutex
 	}
 
 	void FlushMetricStream()
 	{
-		Dispatch* dispatch = GDispatch;
-		if (!dispatch)
+		Dispatch* Dispatch = GDispatch;
+		if (!Dispatch)
 		{
 			return;
 		}
-		dispatch->MetricMutex.Lock();
-		dispatch->FlushMetricStreamImpl(dispatch->MetricMutex); // unlocks the mutex
+		Dispatch->MetricMutex.Lock();
+		Dispatch->FlushMetricStreamImpl(Dispatch->MetricMutex); // unlocks the mutex
 	}
 
 	void Shutdown()
 	{
-		Dispatch* dispatch = GDispatch;
-		if (!dispatch)
+		Dispatch* Dispatch = GDispatch;
+		if (!Dispatch)
 		{
 			return;
 		}
-		dispatch->Sink->OnShutdown();
+		Dispatch->Sink->OnShutdown();
 		GDispatch = nullptr;
 	}
 
-	void LogInterop(const LogStringInteropEvent& event)
+	void LogInterop(const LogStringInteropEvent& Event)
 	{
-		QueueLogEntry(event);
+		QueueLogEntry(Event);
 	}
 
-	void LogStaticStr(const LogStaticStrEvent& event)
+	void LogStaticStr(const LogStaticStrEvent& Event)
 	{
-		QueueLogEntry(event);
+		QueueLogEntry(Event);
 	}
 
 	template <typename T>
-	void QueueMetric(const T& event)
+	void QueueMetric(const T& Event)
 	{
-		Dispatch* dispatch = GDispatch;
-		if (!dispatch)
+		Dispatch* Dispatch = GDispatch;
+		if (!Dispatch)
 		{
 			return;
 		}
-		dispatch->MetricMutex.Lock();
-		dispatch->Metrics->GetCurrentBlock().GetEvents().Push(event);
-		if (dispatch->Metrics->IsFull())
+		Dispatch->MetricMutex.Lock();
+		Dispatch->Metrics->GetCurrentBlock().GetEvents().Push(Event);
+		if (Dispatch->Metrics->IsFull())
 		{
-			dispatch->FlushMetricStreamImpl(dispatch->MetricMutex); // unlocks the mutex
+			Dispatch->FlushMetricStreamImpl(Dispatch->MetricMutex); // unlocks the mutex
 		}
 		else
 		{
-			dispatch->MetricMutex.Unlock();
+			Dispatch->MetricMutex.Unlock();
 		}
 	}
 
-	void IntMetric(const IntegerMetricEvent& event)
+	void IntMetric(const IntegerMetricEvent& Event)
 	{
-		QueueMetric(event);
+		QueueMetric(Event);
 	}
 
-	void FloatMetric(const FloatMetricEvent& event)
+	void FloatMetric(const FloatMetricEvent& Event)
 	{
-		QueueMetric(event);
+		QueueMetric(Event);
 	}
 
 	ThreadStream* GetCurrentThreadStream()
 	{
-		thread_local ThreadStream* ptr = nullptr;
-		if (ptr)
+		thread_local ThreadStream* Ptr = nullptr;
+		if (Ptr)
 		{
-			return ptr;
+			return Ptr;
 		}
-		Dispatch* dispatch = GDispatch;
-		if (!dispatch)
-		{
-			return nullptr;
-		}
-		thread_local bool this_stream_being_init = false;
-		if ( this_stream_being_init )
+		Dispatch* Dispatch = GDispatch;
+		if (!Dispatch)
 		{
 			return nullptr;
 		}
-		this_stream_being_init = true;
-		ThreadStream* new_stream = dispatch->AllocThreadStream();
-		dispatch->PublishThreadStream(new_stream);
-		ptr = new_stream; // starting from now events can be queued
-		return ptr;
+		thread_local bool ThisStreamBeingInit = false;
+		if (ThisStreamBeingInit)
+		{
+			return nullptr;
+		}
+		ThisStreamBeingInit = true;
+		ThreadStream* NewStream = Dispatch->AllocThreadStream();
+		Dispatch->PublishThreadStream(NewStream);
+		Ptr = NewStream; // starting from now events can be queued
+		return Ptr;
 	}
 
 	template <typename T>
-	void QueueThreadEvent(const T& event)
+	void QueueThreadEvent(const T& Event)
 	{
-		if (ThreadStream* stream = GetCurrentThreadStream())
+		if (ThreadStream* Stream = GetCurrentThreadStream())
 		{
-			stream->GetCurrentBlock().GetEvents().Push(event);
-			if (stream->IsFull())
+			Stream->GetCurrentBlock().GetEvents().Push(Event);
+			if (Stream->IsFull())
 			{
-				Dispatch* dispatch = GDispatch;
-				if (!dispatch)
+				Dispatch* Dispatch = GDispatch;
+				if (!Dispatch)
 				{
 					return;
 				}
-				dispatch->FlushThreadStream(stream);
+				Dispatch->FlushThreadStream(Stream);
 			}
 		}
 	}
 
-	void BeginScope(const BeginThreadSpanEvent& event)
+	void BeginScope(const BeginThreadSpanEvent& Event)
 	{
-		QueueThreadEvent(event);
+		QueueThreadEvent(Event);
 	}
 
-	void EndScope(const EndThreadSpanEvent& event)
+	void EndScope(const EndThreadSpanEvent& Event)
 	{
-		QueueThreadEvent(event);
+		QueueThreadEvent(Event);
 	}
 
-	void BeginNamedSpan(const BeginThreadNamedSpanEvent& event)
+	void BeginNamedSpan(const BeginThreadNamedSpanEvent& Event)
 	{
-		QueueThreadEvent(event);
+		QueueThreadEvent(Event);
 	}
 
-	void EndNamedSpan(const EndThreadNamedSpanEvent& event)
+	void EndNamedSpan(const EndThreadNamedSpanEvent& Event)
 	{
-		QueueThreadEvent(event);
+		QueueThreadEvent(Event);
 	}
 
-	void ForEachThreadStream(ThreadStreamCallback callback)
+	void ForEachThreadStream(ThreadStreamCallback Callback)
 	{
-		Dispatch* dispatch = GDispatch;
-		if (!dispatch)
+		Dispatch* Dispatch = GDispatch;
+		if (!Dispatch)
 		{
 			return;
 		}
-		UE::TUniqueLock<UE::FMutex> lock(dispatch->ThreadStreamsMutex);
-		for (ThreadStream* stream : dispatch->ThreadStreams)
+		UE::TUniqueLock<UE::FMutex> Lock(Dispatch->ThreadStreamsMutex);
+		for (ThreadStream* Stream : Dispatch->ThreadStreams)
 		{
-			callback(stream);
+			Callback(Stream);
 		}
 	}
 
@@ -334,17 +334,17 @@ namespace MicromegasTracing
 
 	void FlushCurrentThreadStream()
 	{
-		Dispatch* dispatch = GDispatch;
-		if (!dispatch)
+		Dispatch* Dispatch = GDispatch;
+		if (!Dispatch)
 		{
 			return;
 		}
-		ThreadStream* stream = GetCurrentThreadStream();
-		if (!stream)
+		ThreadStream* Stream = GetCurrentThreadStream();
+		if (!Stream)
 		{
 			return;
 		}
-		dispatch->FlushThreadStream(stream);
+		Dispatch->FlushThreadStream(Stream);
 	}
 
 } // namespace MicromegasTracing

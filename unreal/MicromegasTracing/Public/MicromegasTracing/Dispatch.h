@@ -17,53 +17,53 @@ namespace MicromegasTracing
 	class CORE_API Dispatch
 	{
 	public:
-		static void Init(NewGuid allocNewGuid,
-			const ProcessInfoPtr& processInfo,
-			const TSharedPtr<EventSink, ESPMode::ThreadSafe>& sink,
-			size_t logBufferSize,
-			size_t metricBufferSize,
-			size_t threadBufferSize);
+		static void Init(NewGuid AllocNewGuid,
+			const ProcessInfoPtr& ProcessInfo,
+			const TSharedPtr<EventSink, ESPMode::ThreadSafe>& Sink,
+			size_t LogBufferSize,
+			size_t MetricBufferSize,
+			size_t ThreadBufferSize);
 		~Dispatch();
 
 		friend CORE_API void Shutdown();
 		friend CORE_API void FlushLogStream();
 		friend CORE_API void FlushMetricStream();
 		friend CORE_API void FlushCurrentThreadStream();
-		friend CORE_API void LogInterop(const LogStringInteropEvent& event);
-		friend CORE_API void LogStaticStr(const LogStaticStrEvent& event);
-		friend CORE_API void IntMetric(const IntegerMetricEvent& event);
-		friend CORE_API void FloatMetric(const FloatMetricEvent& event);
-		friend CORE_API void BeginScope(const BeginThreadSpanEvent& event);
-		friend CORE_API void EndScope(const EndThreadSpanEvent& event);
-		friend CORE_API void BeginNamedSpan(const BeginThreadNamedSpanEvent& event);
-		friend CORE_API void EndNamedSpan(const EndThreadSpanEvent& event);
+		friend CORE_API void LogInterop(const LogStringInteropEvent& Event);
+		friend CORE_API void LogStaticStr(const LogStaticStrEvent& Event);
+		friend CORE_API void IntMetric(const IntegerMetricEvent& Event);
+		friend CORE_API void FloatMetric(const FloatMetricEvent& Event);
+		friend CORE_API void BeginScope(const BeginThreadSpanEvent& Event);
+		friend CORE_API void EndScope(const EndThreadSpanEvent& Event);
+		friend CORE_API void BeginNamedSpan(const BeginThreadNamedSpanEvent& Event);
+		friend CORE_API void EndNamedSpan(const EndThreadSpanEvent& Event);
 
-		friend CORE_API void ForEachThreadStream(ThreadStreamCallback callback);
-
-		template <typename T>
-		friend void QueueLogEntry(const T& event);
+		friend CORE_API void ForEachThreadStream(ThreadStreamCallback Callback);
 
 		template <typename T>
-		friend void QueueMetric(const T& event);
+		friend void QueueLogEntry(const T& Event);
 
 		template <typename T>
-		friend void QueueThreadEvent(const T& event);
+		friend void QueueMetric(const T& Event);
+
+		template <typename T>
+		friend void QueueThreadEvent(const T& Event);
 
 		friend ThreadStream* GetCurrentThreadStream();
 
 	private:
-		Dispatch(NewGuid allocNewGuid,
-			const ProcessInfoPtr& processInfo,
-			const TSharedPtr<EventSink, ESPMode::ThreadSafe>& sink,
-			size_t logBufferSize,
-			size_t metricBufferSize,
-			size_t threadBufferSize);
+		Dispatch(NewGuid AllocNewGuid,
+			const ProcessInfoPtr& ProcessInfo,
+			const TSharedPtr<EventSink, ESPMode::ThreadSafe>& Sink,
+			size_t LogBufferSize,
+			size_t MetricBufferSize,
+			size_t ThreadBufferSize);
 
-		void FlushLogStreamImpl(UE::FMutex& mutex);
-		void FlushMetricStreamImpl(UE::FMutex& mutex);
-		void FlushThreadStream(ThreadStream* stream);
+		void FlushLogStreamImpl(UE::FMutex& Mutex);
+		void FlushMetricStreamImpl(UE::FMutex& Mutex);
+		void FlushThreadStream(ThreadStream* Stream);
 		ThreadStream* AllocThreadStream();
-		void PublishThreadStream(ThreadStream* stream);
+		void PublishThreadStream(ThreadStream* Stream);
 
 		NewGuid AllocNewGuid;
 
@@ -90,9 +90,9 @@ namespace MicromegasTracing
 	CORE_API void FlushMetricStream();
 	CORE_API void InitCurrentThreadStream();
 	CORE_API void FlushCurrentThreadStream();
-	CORE_API void LogInterop(const LogStringInteropEvent& event);
-	CORE_API void ForEachThreadStream(ThreadStreamCallback callback);
-	CORE_API void BeginNamedSpan(const BeginThreadNamedSpanEvent& event);
-	CORE_API void EndNamedSpan(const EndThreadNamedSpanEvent& event);
+	CORE_API void LogInterop(const LogStringInteropEvent& Event);
+	CORE_API void ForEachThreadStream(ThreadStreamCallback Callback);
+	CORE_API void BeginNamedSpan(const BeginThreadNamedSpanEvent& Event);
+	CORE_API void EndNamedSpan(const EndThreadNamedSpanEvent& Event);
 
 } // namespace MicromegasTracing
