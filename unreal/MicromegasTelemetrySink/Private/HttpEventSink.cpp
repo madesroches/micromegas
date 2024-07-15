@@ -70,9 +70,10 @@ namespace
 			NewRequest->SetTimeout(Timeout.GetValue());
 		}
 		NewRequest->SetDelegateThreadPolicy(OldRequest->GetDelegateThreadPolicy());
-		NewRequest->OnProcessRequestComplete().BindLambda([RemainingRetries](FHttpRequestPtr HttpRequest, FHttpResponsePtr HttpResponse, bool bSucceeded) {
-			OnProcessRequestComplete(HttpRequest, HttpResponse, bSucceeded, RemainingRetries);
-		});
+		NewRequest->OnProcessRequestComplete().BindLambda([RemainingRetries](FHttpRequestPtr HttpRequest, FHttpResponsePtr HttpResponse, bool bSucceeded)
+			{
+				OnProcessRequestComplete(HttpRequest, HttpResponse, bSucceeded, RemainingRetries);
+			});
 		if (!NewRequest->ProcessRequest())
 		{
 			UE_LOG(LogMicromegasTelemetrySink, Warning, TEXT("Failed to retry telemetry http request"));
@@ -121,11 +122,12 @@ void HttpEventSink::OnStartup(const MicromegasTracing::ProcessInfoPtr& ProcessIn
 {
 	MicromegasTracing::InitCurrentThreadStream();
 	IncrementQueueSize();
-	Queue.Enqueue([this, ProcessInfo]() {
-		TArray<uint8> Body = FormatInsertProcessRequest(*ProcessInfo);
-		const float TimeoutSeconds = 30.0f;
-		SendBinaryRequest(TEXT("insert_process"), Body, TimeoutSeconds);
-	});
+	Queue.Enqueue([this, ProcessInfo]()
+		{
+			TArray<uint8> Body = FormatInsertProcessRequest(*ProcessInfo);
+			const float TimeoutSeconds = 30.0f;
+			SendBinaryRequest(TEXT("insert_process"), Body, TimeoutSeconds);
+		});
 	WakeupThread->Trigger();
 }
 
@@ -140,22 +142,24 @@ void HttpEventSink::OnShutdown()
 void HttpEventSink::OnInitLogStream(const MicromegasTracing::LogStreamPtr& Stream)
 {
 	IncrementQueueSize();
-	Queue.Enqueue([this, Stream]() {
-		TArray<uint8> Body = FormatInsertLogStreamRequest(*Stream);
-		const float TimeoutSeconds = 30.0f;
-		SendBinaryRequest(TEXT("insert_stream"), Body, TimeoutSeconds);
-	});
+	Queue.Enqueue([this, Stream]()
+		{
+			TArray<uint8> Body = FormatInsertLogStreamRequest(*Stream);
+			const float TimeoutSeconds = 30.0f;
+			SendBinaryRequest(TEXT("insert_stream"), Body, TimeoutSeconds);
+		});
 	WakeupThread->Trigger();
 }
 
 void HttpEventSink::OnInitMetricStream(const MicromegasTracing::MetricStreamPtr& Stream)
 {
 	IncrementQueueSize();
-	Queue.Enqueue([this, Stream]() {
-		TArray<uint8> Body = FormatInsertMetricStreamRequest(*Stream);
-		const float TimeoutSeconds = 30.0f;
-		SendBinaryRequest(TEXT("insert_stream"), Body, TimeoutSeconds);
-	});
+	Queue.Enqueue([this, Stream]()
+		{
+			TArray<uint8> Body = FormatInsertMetricStreamRequest(*Stream);
+			const float TimeoutSeconds = 30.0f;
+			SendBinaryRequest(TEXT("insert_stream"), Body, TimeoutSeconds);
+		});
 	WakeupThread->Trigger();
 }
 
@@ -168,11 +172,12 @@ void HttpEventSink::OnInitThreadStream(MicromegasTracing::ThreadStream* Stream)
 	Stream->SetProperty(TEXT("thread-id"), *FString::Format(TEXT("{0}"), { ThreadId }));
 
 	IncrementQueueSize();
-	Queue.Enqueue([this, Stream]() {
-		TArray<uint8> Body = FormatInsertThreadStreamRequest(*Stream);
-		const float TimeoutSeconds = 30.0f;
-		SendBinaryRequest(TEXT("insert_stream"), Body, TimeoutSeconds);
-	});
+	Queue.Enqueue([this, Stream]()
+		{
+			TArray<uint8> Body = FormatInsertThreadStreamRequest(*Stream);
+			const float TimeoutSeconds = 30.0f;
+			SendBinaryRequest(TEXT("insert_stream"), Body, TimeoutSeconds);
+		});
 	WakeupThread->Trigger();
 }
 
@@ -184,11 +189,12 @@ void HttpEventSink::OnProcessLogBlock(const MicromegasTracing::LogBlockPtr& Bloc
 		return;
 	}
 	IncrementQueueSize();
-	Queue.Enqueue([this, Block]() {
-		TArray<uint8> Content = FormatBlockRequest(*Process, *Block);
-		const float TimeoutSeconds = 10.0f;
-		SendBinaryRequest(TEXT("insert_block"), Content, TimeoutSeconds);
-	});
+	Queue.Enqueue([this, Block]()
+		{
+			TArray<uint8> Content = FormatBlockRequest(*Process, *Block);
+			const float TimeoutSeconds = 10.0f;
+			SendBinaryRequest(TEXT("insert_block"), Content, TimeoutSeconds);
+		});
 	WakeupThread->Trigger();
 }
 
@@ -200,11 +206,12 @@ void HttpEventSink::OnProcessMetricBlock(const MicromegasTracing::MetricsBlockPt
 		return;
 	}
 	IncrementQueueSize();
-	Queue.Enqueue([this, Block]() {
-		TArray<uint8> Content = FormatBlockRequest(*Process, *Block);
-		const float TimeoutSeconds = 10.0f;
-		SendBinaryRequest(TEXT("insert_block"), Content, TimeoutSeconds);
-	});
+	Queue.Enqueue([this, Block]()
+		{
+			TArray<uint8> Content = FormatBlockRequest(*Process, *Block);
+			const float TimeoutSeconds = 10.0f;
+			SendBinaryRequest(TEXT("insert_block"), Content, TimeoutSeconds);
+		});
 	WakeupThread->Trigger();
 }
 
@@ -216,11 +223,12 @@ void HttpEventSink::OnProcessThreadBlock(const MicromegasTracing::ThreadBlockPtr
 		return;
 	}
 	IncrementQueueSize();
-	Queue.Enqueue([this, Block]() {
-		TArray<uint8> Content = FormatBlockRequest(*Process, *Block);
-		const float TimeoutSeconds = 2.0f;
-		SendBinaryRequest(TEXT("insert_block"), Content, TimeoutSeconds);
-	});
+	Queue.Enqueue([this, Block]()
+		{
+			TArray<uint8> Content = FormatBlockRequest(*Process, *Block);
+			const float TimeoutSeconds = 2.0f;
+			SendBinaryRequest(TEXT("insert_block"), Content, TimeoutSeconds);
+		});
 	WakeupThread->Trigger();
 }
 
@@ -270,10 +278,11 @@ void HttpEventSink::SendBinaryRequest(const TCHAR* command, const TArray<uint8>&
 	HttpRequest->SetHeader(TEXT("Content-Type"), TEXT("application/octet-stream"));
 	HttpRequest->SetTimeout(TimeoutSeconds);
 	HttpRequest->SetDelegateThreadPolicy(EHttpRequestDelegateThreadPolicy::CompleteOnHttpThread);
-	HttpRequest->OnProcessRequestComplete().BindLambda([](FHttpRequestPtr HttpRequest, FHttpResponsePtr HttpResponse, bool bSucceeded) {
-		const int RetryCount = 1;
-		OnProcessRequestComplete(HttpRequest, HttpResponse, bSucceeded, RetryCount);
-	});
+	HttpRequest->OnProcessRequestComplete().BindLambda([](FHttpRequestPtr HttpRequest, FHttpResponsePtr HttpResponse, bool bSucceeded)
+		{
+			const int RetryCount = 1;
+			OnProcessRequestComplete(HttpRequest, HttpResponse, bSucceeded, RetryCount);
+		});
 	if (!Auth->Sign(*HttpRequest))
 	{
 		UE_LOG(LogMicromegasTelemetrySink, Warning, TEXT("Failed to sign telemetry http request"));
