@@ -8,7 +8,7 @@ mod lake_size;
 use anyhow::Context;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use lake_size::delete_old_blocks;
+use lake_size::delete_old_data;
 use micromegas::ingestion::data_lake_connection::connect_to_data_lake;
 use micromegas::telemetry_sink::TelemetryGuardBuilder;
 use micromegas::tracing::levels::LevelFilter;
@@ -25,8 +25,8 @@ struct Cli {
 #[derive(Subcommand, Debug)]
 enum Commands {
     /// Delete blocks x days old or older
-    #[clap(name = "delete-old-blocks")]
-    DeleteoldBlocks { min_days_old: i32 },
+    #[clap(name = "delete-old-data")]
+    DeleteOldData { min_days_old: i32 },
 }
 
 #[tokio::main]
@@ -44,8 +44,8 @@ async fn main() -> Result<()> {
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
     let data_lake = connect_to_data_lake(&connection_string, &object_store_uri).await?;
     match args.command {
-        Commands::DeleteoldBlocks { min_days_old } => {
-            delete_old_blocks(&data_lake, min_days_old).await?;
+        Commands::DeleteOldData { min_days_old } => {
+            delete_old_data(&data_lake, min_days_old).await?;
         }
     }
     Ok(())
