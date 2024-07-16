@@ -1,5 +1,6 @@
+use crate::payload::fetch_block_payload;
+use crate::payload::parse_block;
 use crate::scope::ScopeDesc;
-use crate::{fetch_block_payload, parse_block};
 use anyhow::{Context, Result};
 use micromegas_telemetry::blob_storage::BlobStorage;
 use micromegas_telemetry::stream_info::StreamInfo;
