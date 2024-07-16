@@ -1,9 +1,10 @@
 use crate::sql_telemetry_db::create_tables;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use micromegas_tracing::prelude::*;
+use sqlx::Executor;
 use sqlx::Row;
 
-pub const LATEST_SCHEMA_VERSION: i32 = 1;
+pub const LATEST_SCHEMA_VERSION: i32 = 2;
 
 pub async fn read_schema_version(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> i32 {
     match sqlx::query(
@@ -21,15 +22,30 @@ pub async fn read_schema_version(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>)
     }
 }
 
-// pub async fn upgrade_schema_v2(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Result<()> {
-//     tr.execute("ALTER TABLE blocks ADD payload_size BIGINT;")
-//         .await
-//         .with_context(|| "Adding column payload_size to table blocks")?;
-//     tr.execute("UPDATE migration SET version=2;")
-//         .await
-//         .with_context(|| "Updating schema version to 2")?;
-//     Ok(())
-// }
+pub async fn upgrade_schema_v2(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Result<()> {
+    tr.execute("ALTER TABLE blocks ADD insert_time TIMESTAMPTZ;")
+        .await
+        .with_context(|| "adding column insert_time to blocks table")?;
+    tr.execute("UPDATE blocks SET insert_time=end_time WHERE insert_time is NULL;")
+        .await
+        .with_context(|| "use end_time as insert_time to backfill missing data")?;
+    tr.execute("CREATE INDEX block_begin_time on blocks(begin_time);")
+        .await
+        .with_context(|| "adding index block_begin_time")?;
+    tr.execute("CREATE INDEX block_end_time on blocks(end_time);")
+        .await
+        .with_context(|| "adding index block_end_time")?;
+    tr.execute("CREATE INDEX block_insert_time on blocks(insert_time);")
+        .await
+        .with_context(|| "adding index block_insert_time")?;
+    tr.execute("CREATE INDEX process_insert_time on processes(insert_time);")
+        .await
+        .with_context(|| "adding index process_insert_time")?;
+    tr.execute("UPDATE migration SET version=2;")
+        .await
+        .with_context(|| "Updating schema version to 2")?;
+    Ok(())
+}
 
 pub async fn execute_migration(pool: sqlx::Pool<sqlx::Postgres>) -> Result<()> {
     let mut current_version = read_schema_version(&mut pool.begin().await?).await;
@@ -40,13 +56,13 @@ pub async fn execute_migration(pool: sqlx::Pool<sqlx::Postgres>) -> Result<()> {
         current_version = read_schema_version(&mut tr).await;
         tr.commit().await?;
     }
-    // if 1 == current_version {
-    //     info!("upgrading schema to v2");
-    //     let mut tr = pool.begin().await?;
-    //     upgrade_schema_v2(&mut tr).await?;
-    //     current_version = read_schema_version(&mut tr).await;
-    //     tr.commit().await?;
-    // }
+    if 1 == current_version {
+        info!("upgrading schema to v2");
+        let mut tr = pool.begin().await?;
+        upgrade_schema_v2(&mut tr).await?;
+        current_version = read_schema_version(&mut tr).await;
+        tr.commit().await?;
+    }
     assert_eq!(current_version, LATEST_SCHEMA_VERSION);
     Ok(())
 }

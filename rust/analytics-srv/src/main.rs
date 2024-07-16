@@ -12,12 +12,10 @@ use axum::routing::post;
 use axum::{Extension, Router};
 use clap::Parser;
 use micromegas::analytics::analytics_service::AnalyticsService;
-use micromegas::ingestion::data_lake_connection::DataLakeConnection;
-use micromegas::telemetry::blob_storage::BlobStorage;
+use micromegas::ingestion::data_lake_connection::{connect_to_data_lake, DataLakeConnection};
 use micromegas::telemetry_sink::TelemetryGuardBuilder;
 use micromegas::tracing::prelude::*;
 use std::net::SocketAddr;
-use std::sync::Arc;
 
 #[derive(Parser, Debug)]
 #[clap(name = "Analytics Server")]
@@ -172,21 +170,6 @@ async fn serve_http(
     axum::serve(listener, app).await.unwrap();
 
     Ok(())
-}
-
-pub async fn connect_to_data_lake(
-    db_uri: &str,
-    object_store_url: &str,
-) -> Result<DataLakeConnection> {
-    info!("connecting to blob storage");
-    let blob_storage = Arc::new(
-        BlobStorage::connect(object_store_url).with_context(|| "connecting to blob storage")?,
-    );
-    let pool = sqlx::postgres::PgPoolOptions::new()
-        .connect(db_uri)
-        .await
-        .with_context(|| String::from("Connecting to telemetry database"))?;
-    Ok(DataLakeConnection::new(pool, blob_storage))
 }
 
 #[tokio::main]

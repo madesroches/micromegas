@@ -1,4 +1,6 @@
+use anyhow::{Context, Result};
 use micromegas_telemetry::blob_storage::BlobStorage;
+use micromegas_tracing::info;
 use sqlx::PgPool;
 use std::sync::Arc;
 
@@ -15,4 +17,19 @@ impl DataLakeConnection {
             blob_storage,
         }
     }
+}
+
+pub async fn connect_to_data_lake(
+    db_uri: &str,
+    object_store_url: &str,
+) -> Result<DataLakeConnection> {
+    info!("connecting to blob storage");
+    let blob_storage = Arc::new(
+        BlobStorage::connect(object_store_url).with_context(|| "connecting to blob storage")?,
+    );
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .connect(db_uri)
+        .await
+        .with_context(|| String::from("Connecting to telemetry database"))?;
+    Ok(DataLakeConnection::new(pool, blob_storage))
 }

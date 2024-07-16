@@ -1,4 +1,7 @@
 use anyhow::Result;
+use futures::stream;
+use futures::StreamExt;
+use futures::TryStreamExt;
 use object_store::{path::Path, ObjectStore};
 use std::sync::Arc;
 
@@ -40,6 +43,30 @@ impl BlobStorage {
     pub async fn delete(&self, obj_path: &str) -> Result<()> {
         let full_path = Path::from(format!("{}/{obj_path}", self.blob_store_root));
         self.blob_store.delete(&full_path).await?;
+        Ok(())
+    }
+
+    pub async fn delete_batch(&self, objects: &[String]) -> Result<()> {
+        let path_stream = stream::iter(
+            objects
+                .iter()
+                .map(|obj_path| Path::from(format!("{}/{obj_path}", self.blob_store_root)))
+                .map(Ok),
+        );
+        self.blob_store
+            .delete_stream(Box::pin(path_stream))
+            .map(|res| {
+                if let Err(e) = res {
+                    match e {
+                        object_store::Error::NotFound { path: _, source: _ } => Ok(()),
+                        ref _other_error => Err(e),
+                    }
+                } else {
+                    Ok(())
+                }
+            })
+            .try_collect()
+            .await?;
         Ok(())
     }
 }
