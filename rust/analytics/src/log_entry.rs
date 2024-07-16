@@ -1,4 +1,7 @@
-use crate::{fetch_block_payload, parse_block, time::ConvertTicks};
+use crate::{
+    payload::{fetch_block_payload, parse_block},
+    time::ConvertTicks,
+};
 use anyhow::{Context, Result};
 use micromegas_telemetry::{
     blob_storage::BlobStorage, stream_info::StreamInfo, types::block::BlockMetadata,

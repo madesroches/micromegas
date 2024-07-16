@@ -1,14 +1,9 @@
 //! Telemetry Admin CLI
 
-// crate-specific lint exceptions:
-//#![]
-
-mod lake_size;
-
 use anyhow::Context;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use lake_size::delete_old_data;
+use micromegas::analytics::delete::delete_old_data;
 use micromegas::ingestion::data_lake_connection::connect_to_data_lake;
 use micromegas::telemetry_sink::TelemetryGuardBuilder;
 use micromegas::tracing::levels::LevelFilter;

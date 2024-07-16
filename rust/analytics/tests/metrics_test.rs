@@ -1,6 +1,6 @@
 use std::{collections::HashMap, sync::Arc};
 
-use micromegas_analytics::parse_block;
+use micromegas_analytics::payload::parse_block;
 use micromegas_telemetry_sink::{
     stream_block::StreamBlock, stream_info::make_stream_info, TelemetryGuard,
 };

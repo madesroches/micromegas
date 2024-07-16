@@ -8,7 +8,6 @@ pub struct ConvertTicks {
     tick_offset: i64,
     process_start_ns: i64,
     frequency: i64, // ticks per second
-    inv_tsc_frequency_ms: f64,
     inv_tsc_frequency_ns: f64,
 }
 
@@ -26,14 +25,8 @@ impl ConvertTicks {
             tick_offset: start_ticks,
             process_start_ns,
             frequency,
-            inv_tsc_frequency_ms: get_tsc_frequency_inverse_ms(frequency),
             inv_tsc_frequency_ns: get_tsc_frequency_inverse_ns(frequency),
         }
-    }
-
-    #[allow(clippy::cast_precision_loss)]
-    pub fn get_time(&self, ts: i64) -> f64 {
-        (ts - self.tick_offset) as f64 * self.inv_tsc_frequency_ms
     }
 
     pub fn to_ticks(&self, delta: TimeDelta) -> i64 {
@@ -48,10 +41,6 @@ impl ConvertTicks {
         let ns_since_process_start = (delta * self.inv_tsc_frequency_ns).round() as i64;
         self.process_start_ns + ns_since_process_start
     }
-}
-
-pub fn get_process_tick_length_ms(process_info: &ProcessInfo) -> f64 {
-    get_tsc_frequency_inverse_ms(process_info.tsc_frequency)
 }
 
 #[allow(clippy::cast_precision_loss)]

@@ -1,10 +1,9 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Days, Utc};
-use micromegas::chrono;
-use micromegas::ingestion::data_lake_connection::DataLakeConnection;
-use micromegas::sqlx::{query, Row};
-use micromegas::tracing::prelude::*;
-use micromegas::uuid::Uuid;
+use micromegas_ingestion::data_lake_connection::DataLakeConnection;
+use micromegas_tracing::prelude::*;
+use sqlx::{query, Row};
+use uuid::Uuid;
 
 // returns true if there is more data to delete
 pub async fn delete_expired_blocks_batch(
