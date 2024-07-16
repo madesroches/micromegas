@@ -1,35 +1,46 @@
 use anyhow::Result;
-use micromegas_telemetry::blob_storage::BlobStorage;
-use sqlx::Row;
-use std::sync::Arc;
+use micromegas::chrono::Days;
+use micromegas::chrono::Utc;
+use micromegas::ingestion::data_lake_connection::DataLakeConnection;
+use micromegas::sqlx::{query, Row};
+use micromegas::tracing::prelude::*;
+use micromegas::uuid::Uuid;
 
-pub async fn delete_old_blocks(
-    connection: &mut sqlx::PgConnection,
-    blob_storage: Arc<BlobStorage>,
-    min_days_old: i32,
-) -> Result<()> {
-    let rows = sqlx::query(
-        "SELECT blocks.block_id as block_id, payloads.block_id as payload_block_id
-         FROM   processes, streams, blocks
-         LEFT JOIN payloads ON blocks.block_id = payloads.block_id
-         WHERE  streams.process_id = processes.process_id
-         AND    blocks.stream_id = streams.stream_id
-         AND    DATEDIFF(NOW(), processes.start_time) >= ?",
+// returns true if there is more data to delete
+pub async fn delete_old_blocks_batch(lake: &DataLakeConnection, min_days_old: i32) -> Result<bool> {
+    let now = Utc::now();
+    let expiration = now.checked_sub_days(Days::new(min_days_old as u64));
+    let batch_size: i32 = 1000;
+    let rows = query(
+        "SELECT process_id, stream_id, block_id
+         FROM   blocks
+         WHERE  blocks.insert_time <= $1
+         LIMIT $2;",
     )
-    .bind(min_days_old)
-    .fetch_all(&mut *connection)
+    .bind(expiration)
+    .bind(batch_size)
+    .fetch_all(&lake.db_pool)
     .await?;
+    let mut paths = vec![];
+    let mut block_ids = vec![];
     for r in rows {
-        let process_id: String = r.try_get("process_id")?;
-        let stream_id: String = r.try_get("stream_id")?;
-        let block_id: String = r.try_get("block_id")?;
-        println!("Deleting block {}", block_id);
+        let process_id: Uuid = r.try_get("process_id")?;
+        let stream_id: Uuid = r.try_get("stream_id")?;
+        let block_id: Uuid = r.try_get("block_id")?;
         let path = format!("blobs/{process_id}/{stream_id}/{block_id}");
-        blob_storage.delete(&path).await?;
-        sqlx::query("DELETE FROM blocks WHERE block_id = ?;")
-            .bind(block_id)
-            .execute(&mut *connection)
-            .await?;
+        paths.push(path);
+        block_ids.push(block_id);
     }
+    info!("deleting {:?}", &paths);
+    lake.blob_storage.delete_batch(&paths).await?;
+    query("DELETE FROM blocks where block_id = ANY($1);")
+        .bind(block_ids)
+        .execute(&lake.db_pool)
+        .await?;
+    Ok(paths.len() == batch_size as usize)
+}
+
+pub async fn delete_old_blocks(lake: &DataLakeConnection, min_days_old: i32) -> Result<()> {
+    while delete_old_blocks_batch(lake, min_days_old).await? {}
     Ok(())
 }

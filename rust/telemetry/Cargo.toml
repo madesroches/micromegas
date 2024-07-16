@@ -17,6 +17,7 @@ async-trait.workspace = true
 bytes.workspace = true
 chrono.workspace = true
 ciborium.workspace = true
+futures.workspace = true
 http.workspace = true
 hyper.workspace = true
 lz4.workspace = true
