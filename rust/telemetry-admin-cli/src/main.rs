@@ -9,8 +9,8 @@ use micromegas::telemetry_sink::TelemetryGuardBuilder;
 use micromegas::tracing::levels::LevelFilter;
 
 #[derive(Parser, Debug)]
-#[clap(name = "Legion Telemetry Admin")]
-#[clap(about = "CLI to query a local telemetry data lake", version, author)]
+#[clap(name = "Micromegas Telemetry Admin")]
+#[clap(about = "CLI to administer a telemetry data lake", version, author)]
 #[clap(arg_required_else_help(true))]
 struct Cli {
     #[clap(subcommand)]
@@ -19,7 +19,7 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
-    /// Delete blocks x days old or older
+    /// Delete blocks, streams and processes x days old or older
     #[clap(name = "delete-old-data")]
     DeleteOldData { min_days_old: i32 },
 }
