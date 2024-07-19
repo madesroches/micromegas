@@ -4,6 +4,7 @@ use anyhow::Context;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use micromegas::analytics::delete::delete_old_data;
+use micromegas::analytics::lakehouse::migration::migrate_lakehouse;
 use micromegas::ingestion::data_lake_connection::connect_to_data_lake;
 use micromegas::telemetry_sink::TelemetryGuardBuilder;
 use micromegas::tracing::levels::LevelFilter;
@@ -22,6 +23,9 @@ enum Commands {
     /// Delete blocks, streams and processes x days old or older
     #[clap(name = "delete-old-data")]
     DeleteOldData { min_days_old: i32 },
+
+    #[clap(name = "update-lakehouse")]
+    UpdateLakehouse,
 }
 
 #[tokio::main]
@@ -38,9 +42,15 @@ async fn main() -> Result<()> {
     let object_store_uri = std::env::var("MICROMEGAS_OBJECT_STORE_URI")
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
     let data_lake = connect_to_data_lake(&connection_string, &object_store_uri).await?;
+    migrate_lakehouse(data_lake.db_pool.clone())
+        .await
+        .with_context(|| "migrate_lakehouse")?;
     match args.command {
         Commands::DeleteOldData { min_days_old } => {
             delete_old_data(&data_lake, min_days_old).await?;
+        }
+        Commands::UpdateLakehouse => {
+            //todo
         }
     }
     Ok(())

@@ -7,7 +7,7 @@ use micromegas_telemetry::blob_storage::BlobStorage;
 use micromegas_tracing::prelude::*;
 use std::sync::Arc;
 
-async fn acquire_lock(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>, key: i64) -> Result<()> {
+pub async fn acquire_lock(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>, key: i64) -> Result<()> {
     sqlx::query("SELECT pg_advisory_xact_lock($1)")
         .bind(key)
         .execute(&mut **tr)
