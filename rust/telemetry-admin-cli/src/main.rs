@@ -4,6 +4,7 @@ use anyhow::Context;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use micromegas::analytics::delete::delete_old_data;
+use micromegas::analytics::lakehouse::batch_update::update_partitions;
 use micromegas::analytics::lakehouse::migration::migrate_lakehouse;
 use micromegas::ingestion::data_lake_connection::connect_to_data_lake;
 use micromegas::telemetry_sink::TelemetryGuardBuilder;
@@ -50,7 +51,7 @@ async fn main() -> Result<()> {
             delete_old_data(&data_lake, min_days_old).await?;
         }
         Commands::UpdateLakehouse => {
-            //todo
+            update_partitions(&data_lake).await?;
         }
     }
     Ok(())

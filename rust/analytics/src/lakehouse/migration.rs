@@ -72,15 +72,20 @@ async fn create_partitions_table(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>)
          CREATE TABLE lakehouse_partitions(
                   table_set_name VARCHAR(255),
                   table_instance_id VARCHAR(255),
-                  begin_time TIMESTAMPTZ,
-                  end_time TIMESTAMPTZ,
+                  begin_insert_time TIMESTAMPTZ,
+                  end_insert_time TIMESTAMPTZ,
+                  min_event_time TIMESTAMPTZ,
+                  max_event_time TIMESTAMPTZ,
+                  updated TIMESTAMPTZ,
                   file_path VARCHAR(2047),
                   file_size BIGINT,
                   file_schema_hash bytea,
                   source_data_hash bytea
                   );
-         CREATE INDEX lh_part_begin on lakehouse_partitions(table_set_name, table_instance_id, begin_time);
-         CREATE INDEX lh_part_end on lakehouse_partitions(table_set_name, table_instance_id, end_time);
+         CREATE INDEX lh_part_begin_insert on lakehouse_partitions(table_set_name, table_instance_id, begin_insert_time);
+         CREATE INDEX lh_part_end_insert on lakehouse_partitions(table_set_name, table_instance_id, end_insert_time);
+         CREATE INDEX lh_part_min_time on lakehouse_partitions(table_set_name, table_instance_id, min_event_time);
+         CREATE INDEX lh_part_max_time on lakehouse_partitions(table_set_name, table_instance_id, max_event_time);
 ";
     tr.execute(sql)
         .await

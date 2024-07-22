@@ -5,21 +5,7 @@ use micromegas_tracing::prelude::*;
 use micromegas_transit::UserDefinedType;
 use sqlx::Row;
 
-#[span_fn]
-pub async fn find_stream(
-    connection: &mut sqlx::PgConnection,
-    stream_id: sqlx::types::Uuid,
-) -> Result<StreamInfo> {
-    let row = sqlx::query(
-        "SELECT process_id, dependencies_metadata, objects_metadata, tags, properties
-         FROM streams
-         WHERE stream_id = $1
-         ;",
-    )
-    .bind(stream_id)
-    .fetch_one(connection)
-    .await
-    .with_context(|| "select from streams")?;
+pub fn stream_from_row(row: &sqlx::postgres::PgRow) -> Result<StreamInfo> {
     let dependencies_metadata_buffer: Vec<u8> = row.try_get("dependencies_metadata")?;
     let dependencies_metadata: Vec<UserDefinedType> =
         ciborium::from_reader(&dependencies_metadata_buffer[..])
@@ -31,13 +17,31 @@ pub async fn find_stream(
     let tags: Vec<String> = row.try_get("tags")?;
     let properties: Vec<sql_property::Property> = row.try_get("properties")?;
     Ok(StreamInfo {
-        stream_id,
+        stream_id: row.try_get("stream_id")?,
         process_id: row.try_get("process_id")?,
         dependencies_metadata,
         objects_metadata,
         tags,
         properties: sql_property::into_hashmap(properties),
     })
+}
+
+#[span_fn]
+pub async fn find_stream(
+    connection: &mut sqlx::PgConnection,
+    stream_id: sqlx::types::Uuid,
+) -> Result<StreamInfo> {
+    let row = sqlx::query(
+        "SELECT stream_id, process_id, dependencies_metadata, objects_metadata, tags, properties
+         FROM streams
+         WHERE stream_id = $1
+         ;",
+    )
+    .bind(stream_id)
+    .fetch_one(connection)
+    .await
+    .with_context(|| "select from streams")?;
+    stream_from_row(&row)
 }
 
 #[span_fn]
@@ -88,7 +92,7 @@ pub async fn find_process(
 }
 
 #[span_fn]
-pub fn map_row_block(row: &sqlx::postgres::PgRow) -> Result<BlockMetadata> {
+pub fn block_from_row(row: &sqlx::postgres::PgRow) -> Result<BlockMetadata> {
     Ok(BlockMetadata {
         block_id: row.try_get("block_id")?,
         stream_id: row.try_get("stream_id")?,
@@ -126,7 +130,7 @@ pub async fn find_stream_blocks_in_range(
     .with_context(|| "find_stream_blocks")?;
     let mut blocks = Vec::new();
     for r in rows {
-        blocks.push(map_row_block(&r)?);
+        blocks.push(block_from_row(&r)?);
     }
     Ok(blocks)
 }
