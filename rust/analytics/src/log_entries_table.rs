@@ -61,7 +61,7 @@ impl LogEntriesRecordBuilder {
         if self.is_empty() {
             return None;
         }
-		// assuming that the events are in order
+        // assuming that the events are in order
         let slice = self.times.values_slice();
         Some((slice[0], slice[slice.len() - 1]))
     }

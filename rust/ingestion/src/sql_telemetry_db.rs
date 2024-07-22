@@ -68,7 +68,7 @@ async fn create_streams_table(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) ->
 }
 
 async fn create_blocks_table(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Result<()> {
-	// begin_ticks and end_ticks are relative to the start of the process
+    // begin_ticks and end_ticks are relative to the start of the process
     let sql = "
          CREATE TABLE blocks(
                   block_id UUID, 
