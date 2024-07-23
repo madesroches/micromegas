@@ -66,11 +66,11 @@ pub struct QueryThreadEventsRequest {
 
 #[derive(Debug, Deserialize)]
 pub struct QueryLogEntriesRequest {
-    pub limit: i64,
+    pub limit: Option<i64>,
     pub begin: String,
     pub end: String,
-    #[serde(deserialize_with = "micromegas_transit::uuid_utils::uuid_from_string")]
-    pub stream_id: Uuid,
+    #[serde(deserialize_with = "micromegas_transit::uuid_utils::opt_uuid_from_string")]
+    pub stream_id: Option<Uuid>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -309,17 +309,23 @@ impl AnalyticsService {
             .with_context(|| "parsing begin time range")?;
         let end = DateTime::<FixedOffset>::parse_from_rfc3339(&request.end)
             .with_context(|| "parsing end time range")?;
-        serialize_record_batch(
-            &crate::query_log_entries::query_log_entries(
+        let record_batch = if let Some(stream_id) = request.stream_id {
+            if request.limit.is_none() {
+                anyhow::bail!("limit is required for stream-specific log queries");
+            }
+            crate::query_log_entries::query_log_entries(
                 &self.data_lake,
-                request.stream_id,
+                stream_id,
                 begin.into(),
                 end.into(),
-                request.limit,
+                request.limit.unwrap(),
             )
             .await
-            .with_context(|| "query_log_entries")?,
-        )
+            .with_context(|| "query_log_entries")?
+        } else {
+            anyhow::bail!("not implemented");
+        };
+        serialize_record_batch(&record_batch)
     }
 
     pub async fn query_metrics(&self, body: bytes::Bytes) -> Result<bytes::Bytes> {
