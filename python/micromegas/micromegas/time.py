@@ -6,6 +6,8 @@ def format_datetime(value):
     nonetype = type(None)
     match type(value):
         case datetime.datetime:
+            if value.tzinfo is None:
+                raise RuntimeError("datetime needs a valid time zone")
             return value.isoformat()
         case pandas.Timestamp:
             return value.isoformat()
