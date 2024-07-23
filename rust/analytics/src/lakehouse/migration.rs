@@ -68,7 +68,7 @@ async fn create_partitions_table(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>)
     //    * Example 2:  if there is a table instance for each metric, the table_instance_id could be the name of the metric.
 
     // source_data_hash can be used to detect that the partition is out of date (sha1 of the block_ids, for example)
-    let sql = "
+    tr.execute("
          CREATE TABLE lakehouse_partitions(
                   table_set_name VARCHAR(255),
                   table_instance_id VARCHAR(255),
@@ -86,10 +86,25 @@ async fn create_partitions_table(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>)
          CREATE INDEX lh_part_end_insert on lakehouse_partitions(table_set_name, table_instance_id, end_insert_time);
          CREATE INDEX lh_part_min_time on lakehouse_partitions(table_set_name, table_instance_id, min_event_time);
          CREATE INDEX lh_part_max_time on lakehouse_partitions(table_set_name, table_instance_id, max_event_time);
-";
-    tr.execute(sql)
+")
         .await
-        .with_context(|| String::from("Creating table blocks and its indices"))?;
+        .with_context(|| "Creating table blocks and its indices")?;
+    Ok(())
+}
+
+async fn create_temp_files_table(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Result<()> {
+    // partitions that are out of date can still be referenced until they expire
+    tr.execute(
+        "
+         CREATE TABLE temporary_files(
+                  file_path VARCHAR(2047),
+                  file_size BIGINT,
+                  expiration TIMESTAMPTZ );
+         CREATE INDEX temporary_files_expiration on temporary_files(expiration);
+",
+    )
+    .await
+    .with_context(|| "Creating temporary_files table")?;
     Ok(())
 }
 
@@ -107,6 +122,7 @@ async fn create_migration_table(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) 
 
 async fn create_tables(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Result<()> {
     create_partitions_table(tr).await?;
+    create_temp_files_table(tr).await?;
     create_migration_table(tr).await?;
     Ok(())
 }

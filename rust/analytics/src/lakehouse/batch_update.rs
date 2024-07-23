@@ -13,7 +13,7 @@ use datafusion::parquet::{
     file::properties::{WriterProperties, WriterVersion},
 };
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
-use micromegas_tracing::info;
+use micromegas_tracing::{error, info};
 use sqlx::Row;
 use std::sync::Arc;
 use xxhash_rust::xxh32::xxh32;
@@ -58,7 +58,28 @@ async fn write_partition(
     .bind(&partition_metadata.source_data_hash)
     .execute(&mut *tr)
     .await
-    .with_context(|| "inserting into lakehouse_partitions")?;
+		.with_context(|| "inserting into lakehouse_partitions")?;
+
+
+    let old_partitions = sqlx::query(
+        "SELECT file_path, file_size
+         FROM lakehouse_partitions
+         WHERE table_set_name = $1
+         AND table_instance_id = $2
+         AND begin_insert_time = $3
+         AND end_insert_time = $4
+         AND source_data_hash != $5
+         ;",
+    )
+    .bind(&partition_metadata.table_set_name)
+    .bind(&partition_metadata.table_instance_id)
+    .bind(partition_metadata.begin_insert_time)
+    .bind(partition_metadata.end_insert_time)
+    .bind(&partition_metadata.source_data_hash)
+    .fetch_all(&lake.db_pool)
+    .await
+    .with_context(|| "listing up to date partitions")?;
+	
     tr.commit().await.with_context(|| "commit")?;
     Ok(())
 }
@@ -105,12 +126,49 @@ async fn update_log_partition(
 
     let mut arrow_writer = ArrowWriter::try_new(&mut buffer_writer, schema, Some(props))?;
 
+    let mut block_ids_hash = 0;
+
+    for src_block in &src_blocks {
+        let block_id: uuid::Uuid = src_block.try_get("block_id")?;
+        block_ids_hash = xxh32(block_id.as_bytes(), block_ids_hash);
+    }
+
+    let table_set_name = "logs";
+    let table_instance_id = "global";
+
+    let good_partitions = sqlx::query(
+        "SELECT file_path, file_size
+         FROM lakehouse_partitions
+         WHERE table_set_name = $1
+         AND table_instance_id = $2
+         AND begin_insert_time = $3
+         AND end_insert_time = $4
+         AND source_data_hash = $5
+         ;",
+    )
+    .bind(table_set_name)
+    .bind(table_instance_id)
+    .bind(begin)
+    .bind(end)
+    .bind(block_ids_hash.to_le_bytes().to_vec())
+    .fetch_all(&lake.db_pool)
+    .await
+    .with_context(|| "listing up to date partitions")?;
+
+    if good_partitions.len() == 1 {
+        info!("partition up to date, no need to replace it");
+        return Ok(());
+    }
+    if good_partitions.len() > 1 {
+        error!("too many partitions for the same time range");
+        return Ok(()); // continue with the rest of the process, the error has been logged
+    }
+    drop(good_partitions);
+
     let mut min_time = None;
     let mut max_time = None;
-    let mut block_ids_hash = 0;
     for src_block in src_blocks {
         let block = block_from_row(&src_block).with_context(|| "block_from_row")?;
-        block_ids_hash = xxh32(block.block_id.as_bytes(), block_ids_hash);
         let stream = stream_from_row(&src_block).with_context(|| "stream_from_row")?;
         let process_start_time: chrono::DateTime<chrono::Utc> = src_block.try_get("start_time")?;
         let process_start_ticks: i64 = src_block.try_get("start_ticks")?;
@@ -144,9 +202,6 @@ async fn update_log_partition(
         }
     }
     arrow_writer.close()?;
-
-    let table_set_name = "logs";
-    let table_instance_id = "global";
 
     let file_id = uuid::Uuid::new_v4();
     let file_path = format!(
