@@ -31,7 +31,9 @@ impl BlobStorage {
     }
 
     pub async fn put(&self, obj_path: &str, buffer: bytes::Bytes) -> Result<()> {
-        self.blob_store.put(&Path::from(obj_path), buffer.into()).await?;
+        self.blob_store
+            .put(&Path::from(obj_path), buffer.into())
+            .await?;
         Ok(())
     }
 

@@ -1,4 +1,3 @@
-
 pub struct Partition {
     pub table_set_name: String,
     pub table_instance_id: String,
