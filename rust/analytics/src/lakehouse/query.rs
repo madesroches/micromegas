@@ -1,5 +1,4 @@
-use std::sync::Arc;
-
+use super::answer::Answer;
 use anyhow::{Context, Result};
 use datafusion::{
     arrow::{array::RecordBatch, datatypes::Schema},
@@ -13,6 +12,7 @@ use datafusion::{
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use sqlx::types::chrono::{DateTime, Utc};
 use sqlx::Row;
+use std::sync::Arc;
 
 pub async fn query(
     lake: &DataLakeConnection,
@@ -23,7 +23,7 @@ pub async fn query(
     table_instance_id: &str,
     latest_schema_hash: &[u8],
     schema: Arc<Schema>,
-) -> Result<Vec<RecordBatch>> {
+) -> Result<Answer> {
     let ctx = SessionContext::new();
     let object_store_url = ObjectStoreUrl::parse("obj://lakehouse/").unwrap();
     ctx.register_object_store(object_store_url.as_ref(), lake.blob_storage.inner());
@@ -71,6 +71,7 @@ pub async fn query(
     )?;
 
     let df = ctx.sql(sql).await?;
-    let results: Vec<RecordBatch> = df.collect().await?;
-    Ok(results)
+    let schema = df.schema().inner().clone();
+    let batches: Vec<RecordBatch> = df.collect().await?;
+    Ok(Answer::new(schema, batches))
 }
