@@ -2,20 +2,19 @@ use anyhow::Result;
 use futures::stream;
 use futures::StreamExt;
 use futures::TryStreamExt;
+use object_store::prefix::PrefixStore;
 use object_store::{path::Path, ObjectStore};
 use std::sync::Arc;
 
 #[derive(Debug)]
 pub struct BlobStorage {
     blob_store: Arc<dyn ObjectStore>,
-    blob_store_root: Path,
 }
 
 impl BlobStorage {
     pub fn new(blob_store: Arc<dyn ObjectStore>, blob_store_root: Path) -> Self {
         Self {
-            blob_store,
-            blob_store_root,
+            blob_store: Arc::new(PrefixStore::new(blob_store, blob_store_root)),
         }
     }
 
@@ -23,26 +22,26 @@ impl BlobStorage {
         let (blob_store, blob_store_root) =
             object_store::parse_url(&url::Url::parse(object_store_url)?)?;
         Ok(Self {
-            blob_store: blob_store.into(),
-            blob_store_root,
+            blob_store: Arc::new(PrefixStore::new(blob_store, blob_store_root)),
         })
     }
 
+    pub fn inner(&self) -> Arc<dyn ObjectStore> {
+        self.blob_store.clone()
+    }
+
     pub async fn put(&self, obj_path: &str, buffer: bytes::Bytes) -> Result<()> {
-        let full_path = Path::from(format!("{}/{obj_path}", self.blob_store_root));
-        self.blob_store.put(&full_path, buffer).await?;
+        self.blob_store.put(&Path::from(obj_path), buffer.into()).await?;
         Ok(())
     }
 
     pub async fn read_blob(&self, obj_path: &str) -> Result<bytes::Bytes> {
-        let full_path = Path::from(format!("{}/{obj_path}", self.blob_store_root));
-        let get_result = self.blob_store.get(&full_path).await?;
+        let get_result = self.blob_store.get(&Path::from(obj_path)).await?;
         Ok(get_result.bytes().await?)
     }
 
     pub async fn delete(&self, obj_path: &str) -> Result<()> {
-        let full_path = Path::from(format!("{}/{obj_path}", self.blob_store_root));
-        self.blob_store.delete(&full_path).await?;
+        self.blob_store.delete(&Path::from(obj_path)).await?;
         Ok(())
     }
 
@@ -50,7 +49,7 @@ impl BlobStorage {
         let path_stream = stream::iter(
             objects
                 .iter()
-                .map(|obj_path| Path::from(format!("{}/{obj_path}", self.blob_store_root)))
+                .map(|obj_path| Path::from(obj_path.as_str()))
                 .map(Ok),
         );
         self.blob_store

@@ -1,6 +1,6 @@
 from . import request
 from . import time
-            
+
 
 class Client:
     def __init__(self, base_url, headers={}):
@@ -17,7 +17,11 @@ class Client:
     def query_processes(self, begin, end, limit):
         return request.request(
             self.analytics_base_url + "query_processes",
-            {"begin": time.format_datetime(begin), "end": time.format_datetime(end), "limit": limit},
+            {
+                "begin": time.format_datetime(begin),
+                "end": time.format_datetime(end),
+                "limit": limit,
+            },
             headers=self.headers,
         )
 
@@ -74,7 +78,14 @@ class Client:
             headers=self.headers,
         )
 
-    def query_log_entries(self, begin, end, limit, stream_id):
+    def query_log_entries(
+        self,
+        begin,
+        end,
+        limit=None,  # Necessary if stream_id is specified, ignored otherwise
+        stream_id=None,  # If none, query is run on cached lakehouse using query engine
+        sql=None,  # Necessary if stream_id is None, ignored otherwise
+    ):
         return request.request(
             self.analytics_base_url + "query_log_entries",
             {
@@ -82,6 +93,7 @@ class Client:
                 "end": time.format_datetime(end),
                 "limit": limit,
                 "stream_id": stream_id,
+                "sql": sql,
             },
             headers=self.headers,
         )

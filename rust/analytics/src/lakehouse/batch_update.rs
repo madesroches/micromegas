@@ -18,19 +18,7 @@ use sqlx::Row;
 use std::sync::Arc;
 use xxhash_rust::xxh32::xxh32;
 
-pub struct Partition {
-    pub table_set_name: String,
-    pub table_instance_id: String,
-    pub begin_insert_time: chrono::DateTime<chrono::Utc>,
-    pub end_insert_time: chrono::DateTime<chrono::Utc>,
-    pub min_event_time: chrono::DateTime<chrono::Utc>,
-    pub max_event_time: chrono::DateTime<chrono::Utc>,
-    pub updated: chrono::DateTime<chrono::Utc>,
-    pub file_path: String,
-    pub file_size: i64,
-    pub file_schema_hash: Vec<u8>,
-    pub source_data_hash: Vec<u8>,
-}
+use super::partition::Partition;
 
 async fn write_partition(
     lake: &DataLakeConnection,
@@ -163,7 +151,7 @@ async fn update_log_partition(
         block_ids_hash = xxh32(block_id.as_bytes(), block_ids_hash);
     }
 
-    let table_set_name = "logs";
+    let table_set_name = "log_entries";
     let table_instance_id = "global";
 
     let good_partitions = sqlx::query(
