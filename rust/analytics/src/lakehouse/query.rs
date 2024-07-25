@@ -14,6 +14,7 @@ use sqlx::types::chrono::{DateTime, Utc};
 use sqlx::Row;
 use std::sync::Arc;
 
+#[allow(clippy::too_many_arguments)]
 pub async fn query(
     lake: &DataLakeConnection,
     begin: DateTime<Utc>,
