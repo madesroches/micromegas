@@ -2219,6 +2219,7 @@ version = "0.1.6"
 dependencies = [
  "anyhow",
  "async-recursion",
+ "async-trait",
  "bytes",
  "chrono",
  "ciborium",

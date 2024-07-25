@@ -5,10 +5,12 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use micromegas::analytics::delete::delete_old_data;
 use micromegas::analytics::lakehouse::batch_update::create_or_update_minute_partitions;
+use micromegas::analytics::lakehouse::log_view::LogView;
 use micromegas::analytics::lakehouse::migration::migrate_lakehouse;
 use micromegas::ingestion::data_lake_connection::connect_to_data_lake;
 use micromegas::telemetry_sink::TelemetryGuardBuilder;
 use micromegas::tracing::levels::LevelFilter;
+use std::sync::Arc;
 
 #[derive(Parser, Debug)]
 #[clap(name = "Micromegas Telemetry Admin")]
@@ -51,16 +53,7 @@ async fn main() -> Result<()> {
             delete_old_data(&data_lake, min_days_old).await?;
         }
         Commands::UpdateLakehouse => {
-            let table_set_name = "log_entries";
-            let table_instance_id = "global";
-            let source_stream_tag = "log";
-            create_or_update_minute_partitions(
-                &data_lake,
-                table_set_name,
-                table_instance_id,
-                source_stream_tag,
-            )
-            .await?;
+            create_or_update_minute_partitions(&data_lake, Arc::new(LogView::default())).await?;
         }
     }
     Ok(())

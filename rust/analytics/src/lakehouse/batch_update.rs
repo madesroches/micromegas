@@ -1,8 +1,8 @@
+use super::{partition::Partition, partition_source_data::PartitionSourceBlock, view::View};
 use crate::{
     lakehouse::partition::write_partition,
     log_entries_table::{log_table_schema, LogEntriesRecordBuilder},
     log_entry::for_each_log_entry_in_block,
-    metadata::{block_from_row, stream_from_row},
     time::ConvertTicks,
 };
 use anyhow::{Context, Result};
@@ -17,74 +17,10 @@ use datafusion::{
     },
 };
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
-use micromegas_telemetry::{
-    blob_storage::BlobStorage, stream_info::StreamInfo, types::block::BlockMetadata,
-};
+use micromegas_telemetry::blob_storage::BlobStorage;
 use micromegas_tracing::{error, info};
 use sqlx::Row;
 use std::sync::Arc;
-use xxhash_rust::xxh32::xxh32;
-
-use super::partition::Partition;
-
-struct PartitionSourceBlock {
-    pub block: BlockMetadata,
-    pub stream: StreamInfo,
-    pub process_start_time: DateTime<Utc>,
-    pub process_start_ticks: i64,
-    pub process_tsc_frequency: i64,
-}
-
-struct PartitionSourceData {
-    pub blocks: Vec<PartitionSourceBlock>,
-    pub block_ids_hash: Vec<u8>,
-}
-
-async fn fetch_partition_source_data(
-    pool: &sqlx::PgPool,
-    begin_insert: DateTime<Utc>,
-    end_insert: DateTime<Utc>,
-    source_stream_tag: &str,
-) -> Result<PartitionSourceData> {
-    // this can scale to thousands, but not millions
-    let src_blocks = sqlx::query(
-        "SELECT block_id, streams.stream_id, processes.process_id, blocks.begin_time, blocks.begin_ticks, blocks.end_time, blocks.end_ticks, blocks.nb_objects, blocks.object_offset, blocks.payload_size,
-           streams.dependencies_metadata, streams.objects_metadata, streams.tags, streams.properties,
-           processes.start_time, processes.start_ticks, processes.tsc_frequency
-         FROM blocks, streams, processes
-         WHERE blocks.stream_id = streams.stream_id
-         AND streams.process_id = processes.process_id
-         AND array_position(tags, $1) is not NULL
-         AND blocks.insert_time >= $2
-         AND blocks.insert_time < $3
-         ;",
-    )
-    .bind(source_stream_tag)
-    .bind(begin_insert)
-    .bind(end_insert)
-    .fetch_all(pool)
-    .await
-    .with_context(|| "listing source blocks")?;
-
-    info!("nb_source_blocks: {}", src_blocks.len());
-    let mut block_ids_hash = 0;
-    let mut partition_src_blocks = vec![];
-    for src_block in &src_blocks {
-        let block = block_from_row(src_block).with_context(|| "block_from_row")?;
-        block_ids_hash = xxh32(block.block_id.as_bytes(), block_ids_hash);
-        partition_src_blocks.push(PartitionSourceBlock {
-            block,
-            stream: stream_from_row(src_block).with_context(|| "stream_from_row")?,
-            process_start_time: src_block.try_get("start_time")?,
-            process_start_ticks: src_block.try_get("start_ticks")?,
-            process_tsc_frequency: src_block.try_get("tsc_frequency")?,
-        });
-    }
-    Ok(PartitionSourceData {
-        blocks: partition_src_blocks,
-        block_ids_hash: block_ids_hash.to_le_bytes().to_vec(),
-    })
-}
 
 async fn count_equal_partitions(
     pool: &sqlx::PgPool,
@@ -122,6 +58,7 @@ pub struct PartitionRowSet {
     pub rows: RecordBatch,
 }
 
+//todo: move to the view
 async fn fetch_log_block_row_set(
     blob_storage: Arc<BlobStorage>,
     src_block: &PartitionSourceBlock,
@@ -166,23 +103,20 @@ async fn create_or_update_partition(
     lake: &DataLakeConnection,
     begin_insert: DateTime<Utc>,
     end_insert: DateTime<Utc>,
-    table_set_name: &str,
-    table_instance_id: &str,
-    source_stream_tag: &str,
+    view: Arc<dyn View>,
 ) -> Result<()> {
-    info!("updating {table_set_name} partition from {begin_insert} to {end_insert}");
-
-    let source_data =
-        fetch_partition_source_data(&lake.db_pool, begin_insert, end_insert, source_stream_tag)
-            .await
-            .with_context(|| "FetchPartitionSourceData")?;
-
+    let table_set_name = view.get_table_set_name();
+    let source_data = view
+        .fetch_source_data(&lake.db_pool, begin_insert, end_insert)
+        .await
+        .with_context(|| "fetch_source_data")?;
+    let table_instance_id = view.get_table_instance_id();
     let nb_equal_partitions = count_equal_partitions(
         &lake.db_pool,
         begin_insert,
         end_insert,
-        table_set_name,
-        table_instance_id,
+        &table_set_name,
+        &table_instance_id,
         &source_data.block_ids_hash,
     )
     .await?;
@@ -237,14 +171,15 @@ async fn create_or_update_partition(
     );
     if min_time.is_none() || max_time.is_none() {
         info!("no data for {file_path} partition, not writing the object");
+		// should we check that there is no stale partition left behind?
         return Ok(());
     }
     let buffer: bytes::Bytes = buffer_writer.into_inner().into();
     write_partition(
         lake,
         &Partition {
-            table_set_name: table_set_name.to_owned(),
-            table_instance_id: table_instance_id.to_owned(),
+            table_set_name: (*table_set_name).clone(),
+            table_instance_id: (*table_instance_id).clone(),
             begin_insert_time: begin_insert,
             end_insert_time: end_insert,
             min_event_time: min_time.map(DateTime::<Utc>::from_timestamp_nanos).unwrap(),
@@ -264,9 +199,7 @@ async fn create_or_update_partition(
 
 pub async fn create_or_update_minute_partitions(
     lake: &DataLakeConnection,
-    table_set_name: &str,
-    table_instance_id: &str,
-    source_stream_tag: &str,
+    view: Arc<dyn View>,
 ) -> Result<()> {
     let now = Utc::now();
     let one_minute = TimeDelta::try_minutes(1).with_context(|| "making a minute")?;
@@ -278,16 +211,9 @@ pub async fn create_or_update_minute_partitions(
     for index in 0..nb_minute_partitions {
         let start_partition = start + one_minute * index;
         let end_partition = start + one_minute * (index + 1);
-        create_or_update_partition(
-            lake,
-            start_partition,
-            end_partition,
-            table_set_name,
-            table_instance_id,
-            source_stream_tag,
-        )
-        .await
-        .with_context(|| "update_log_partition")?;
+        create_or_update_partition(lake, start_partition, end_partition, view.clone())
+            .await
+            .with_context(|| "update_log_partition")?;
     }
     Ok(())
 }
