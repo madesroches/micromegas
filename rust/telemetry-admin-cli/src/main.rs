@@ -44,7 +44,7 @@ async fn main() -> Result<()> {
         .with_context(|| "reading MICROMEGAS_SQL_CONNECTION_STRING")?;
     let object_store_uri = std::env::var("MICROMEGAS_OBJECT_STORE_URI")
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
-    let data_lake = connect_to_data_lake(&connection_string, &object_store_uri).await?;
+    let data_lake = Arc::new(connect_to_data_lake(&connection_string, &object_store_uri).await?);
     migrate_lakehouse(data_lake.db_pool.clone())
         .await
         .with_context(|| "migrate_lakehouse")?;
@@ -53,7 +53,7 @@ async fn main() -> Result<()> {
             delete_old_data(&data_lake, min_days_old).await?;
         }
         Commands::UpdateLakehouse => {
-            create_or_update_minute_partitions(&data_lake, Arc::new(LogView::default())).await?;
+            create_or_update_minute_partitions(data_lake, Arc::new(LogView::default())).await?;
         }
     }
     Ok(())
