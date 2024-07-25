@@ -171,7 +171,7 @@ async fn create_or_update_partition(
     );
     if min_time.is_none() || max_time.is_none() {
         info!("no data for {file_path} partition, not writing the object");
-		// should we check that there is no stale partition left behind?
+        // should we check that there is no stale partition left behind?
         return Ok(());
     }
     let buffer: bytes::Bytes = buffer_writer.into_inner().into();
