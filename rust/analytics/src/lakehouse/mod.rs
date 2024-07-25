@@ -1,5 +1,6 @@
 pub mod answer;
 pub mod batch_update;
+pub mod log_partition_spec;
 pub mod log_view;
 pub mod migration;
 pub mod partition;
