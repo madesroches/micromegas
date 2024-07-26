@@ -10,12 +10,15 @@ impl ::sqlx::encode::Encode<'_, ::sqlx::Postgres> for Property {
     fn encode_by_ref(
         &self,
         buf: &mut ::sqlx::postgres::PgArgumentBuffer,
-    ) -> ::sqlx::encode::IsNull {
+    ) -> std::result::Result<
+        sqlx::encode::IsNull,
+        std::boxed::Box<(dyn std::error::Error + std::marker::Send + std::marker::Sync + 'static)>,
+    > {
         let mut encoder = ::sqlx::postgres::types::PgRecordEncoder::new(buf);
-        encoder.encode(&self.key);
-        encoder.encode(&self.value);
+        encoder.encode(&self.key)?;
+        encoder.encode(&self.value)?;
         encoder.finish();
-        ::sqlx::encode::IsNull::No
+        Ok(::sqlx::encode::IsNull::No)
     }
     fn size_hint(&self) -> ::std::primitive::usize {
         2usize * (4 + 4)
