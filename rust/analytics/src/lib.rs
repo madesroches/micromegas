@@ -7,6 +7,7 @@ pub mod analytics_service;
 pub mod arrow_utils;
 pub mod call_tree;
 pub mod delete;
+pub mod lakehouse;
 pub mod log_entries_table;
 pub mod log_entry;
 pub mod measure;

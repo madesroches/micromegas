@@ -16,7 +16,30 @@ use datafusion::arrow::record_batch::RecordBatch;
 
 use crate::log_entry::LogEntry;
 
+pub fn log_table_schema() -> Schema {
+    Schema::new(vec![
+        Field::new(
+            "process_id",
+            DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
+            false,
+        ),
+        Field::new(
+            "time",
+            DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into())),
+            false,
+        ),
+        Field::new(
+            "target",
+            DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
+            false,
+        ),
+        Field::new("level", DataType::Int32, false),
+        Field::new("msg", DataType::Utf8, false),
+    ])
+}
+
 pub struct LogEntriesRecordBuilder {
+    pub process_ids: StringDictionaryBuilder<Int16Type>,
     pub times: PrimitiveBuilder<TimestampNanosecondType>,
     pub targets: StringDictionaryBuilder<Int16Type>,
     pub levels: PrimitiveBuilder<Int32Type>,
@@ -26,11 +49,21 @@ pub struct LogEntriesRecordBuilder {
 impl LogEntriesRecordBuilder {
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
+            process_ids: StringDictionaryBuilder::new(),
             times: PrimitiveBuilder::with_capacity(capacity),
             targets: StringDictionaryBuilder::new(),
             levels: PrimitiveBuilder::with_capacity(capacity),
             msgs: StringBuilder::new(),
         }
+    }
+
+    pub fn get_time_range(&self) -> Option<(i64, i64)> {
+        if self.is_empty() {
+            return None;
+        }
+        // assuming that the events are in order
+        let slice = self.times.values_slice();
+        Some((slice[0], slice[slice.len() - 1]))
     }
 
     pub fn len(&self) -> i64 {
@@ -42,6 +75,7 @@ impl LogEntriesRecordBuilder {
     }
 
     pub fn append(&mut self, row: &LogEntry) -> Result<()> {
+        self.process_ids.append_value(&*row.process_id);
         self.times.append_value(row.time);
         self.targets.append_value(&*row.target);
         self.levels.append_value(row.level);
@@ -50,23 +84,10 @@ impl LogEntriesRecordBuilder {
     }
 
     pub fn finish(mut self) -> Result<RecordBatch> {
-        let schema = Schema::new(vec![
-            Field::new(
-                "time",
-                DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into())),
-                false,
-            ),
-            Field::new(
-                "target",
-                DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
-                false,
-            ),
-            Field::new("level", DataType::Int32, false),
-            Field::new("msg", DataType::Utf8, false),
-        ]);
         RecordBatch::try_new(
-            Arc::new(schema),
+            Arc::new(log_table_schema()),
             vec![
+                Arc::new(self.process_ids.finish()),
                 Arc::new(self.times.finish().with_timezone_utc()),
                 Arc::new(self.targets.finish()),
                 Arc::new(self.levels.finish()),

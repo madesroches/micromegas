@@ -128,8 +128,9 @@ fn test_parse_log_interops() {
     let stream_info = make_stream_info(&stream);
     let mut nb_log_entries = 0;
     let convert_ticks = ConvertTicks::from_meta_data(0, 0, 1);
+    let ref_counted_process_id = Arc::new(format!("{process_id}"));
     parse_block(&stream_info, &received_block.payload, |val| {
-        if log_entry_from_value(&convert_ticks, &val)
+        if log_entry_from_value(&convert_ticks, ref_counted_process_id.clone(), &val)
             .unwrap()
             .is_some()
         {

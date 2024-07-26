@@ -1,15 +1,19 @@
+use std::sync::Arc;
+
 use anyhow::{Context, Result};
 use bytes::Buf;
 use bytes::BufMut;
+use datafusion::parquet::arrow::ArrowWriter;
 use datafusion::parquet::basic::Compression;
 use datafusion::parquet::file::properties::WriterProperties;
 use datafusion::parquet::file::properties::WriterVersion;
-use datafusion::{arrow::record_batch::RecordBatch, parquet::arrow::ArrowWriter};
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use serde::Deserialize;
 use sqlx::types::chrono::{DateTime, FixedOffset};
 use uuid::Uuid;
 
+use crate::lakehouse::answer::Answer;
+use crate::log_entries_table::log_table_schema;
 use crate::sql_arrow_bridge::rows_to_record_batch;
 
 #[derive(Debug, Clone)]
@@ -66,11 +70,12 @@ pub struct QueryThreadEventsRequest {
 
 #[derive(Debug, Deserialize)]
 pub struct QueryLogEntriesRequest {
-    pub limit: i64,
+    pub limit: Option<i64>,
     pub begin: String,
     pub end: String,
-    #[serde(deserialize_with = "micromegas_transit::uuid_utils::uuid_from_string")]
-    pub stream_id: Uuid,
+    #[serde(deserialize_with = "micromegas_transit::uuid_utils::opt_uuid_from_string")]
+    pub stream_id: Option<Uuid>,
+    pub sql: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -113,9 +118,10 @@ impl AnalyticsService {
         .fetch_all(&mut *connection)
         .await?;
         drop(connection);
-        serialize_record_batch(
-            &rows_to_record_batch(&rows).with_context(|| "converting rows to record batch")?,
-        )
+        let record_batch =
+            rows_to_record_batch(&rows).with_context(|| "converting rows to record batch")?;
+        let answer = Answer::new(record_batch.schema(), vec![record_batch]);
+        serialize_record_batches(&answer)
     }
 
     pub async fn query_processes(&self, body: bytes::Bytes) -> Result<bytes::Bytes> {
@@ -154,9 +160,10 @@ impl AnalyticsService {
         .fetch_all(&mut *connection)
         .await?;
         drop(connection);
-        serialize_record_batch(
-            &rows_to_record_batch(&rows).with_context(|| "converting rows to record batch")?,
-        )
+        let record_batch =
+            rows_to_record_batch(&rows).with_context(|| "converting rows to record batch")?;
+        let answer = Answer::new(record_batch.schema(), vec![record_batch]);
+        serialize_record_batches(&answer)
     }
 
     pub async fn query_streams(&self, body: bytes::Bytes) -> Result<bytes::Bytes> {
@@ -230,9 +237,10 @@ impl AnalyticsService {
         let mut connection = self.data_lake.db_pool.acquire().await?;
         let rows = query.fetch_all(&mut *connection).await?;
         drop(connection);
-        serialize_record_batch(
-            &rows_to_record_batch(&rows).with_context(|| "converting rows to record batch")?,
-        )
+        let record_batch =
+            rows_to_record_batch(&rows).with_context(|| "converting rows to record batch")?;
+        let answer = Answer::new(record_batch.schema(), vec![record_batch]);
+        serialize_record_batches(&answer)
     }
 
     pub async fn query_blocks(&self, body: bytes::Bytes) -> Result<bytes::Bytes> {
@@ -257,9 +265,10 @@ impl AnalyticsService {
             .fetch_all(&mut *connection)
             .await?;
         drop(connection);
-        serialize_record_batch(
-            &rows_to_record_batch(&rows).with_context(|| "converting rows to record batch")?,
-        )
+        let record_batch =
+            rows_to_record_batch(&rows).with_context(|| "converting rows to record batch")?;
+        let answer = Answer::new(record_batch.schema(), vec![record_batch]);
+        serialize_record_batches(&answer)
     }
 
     pub async fn query_spans(&self, body: bytes::Bytes) -> Result<bytes::Bytes> {
@@ -269,17 +278,17 @@ impl AnalyticsService {
             .with_context(|| "parsing begin time range")?;
         let end = DateTime::<FixedOffset>::parse_from_rfc3339(&request.end)
             .with_context(|| "parsing end time range")?;
-        serialize_record_batch(
-            &crate::query_spans::query_spans(
-                &self.data_lake,
-                request.limit,
-                request.stream_id,
-                begin.into(),
-                end.into(),
-            )
-            .await
-            .with_context(|| "query_spans")?,
+        let record_batch = crate::query_spans::query_spans(
+            &self.data_lake,
+            request.limit,
+            request.stream_id,
+            begin.into(),
+            end.into(),
         )
+        .await
+        .with_context(|| "query_spans")?;
+        let answer = Answer::new(record_batch.schema(), vec![record_batch]);
+        serialize_record_batches(&answer)
     }
 
     pub async fn query_thread_events(&self, body: bytes::Bytes) -> Result<bytes::Bytes> {
@@ -289,17 +298,17 @@ impl AnalyticsService {
             .with_context(|| "parsing begin time range")?;
         let end = DateTime::<FixedOffset>::parse_from_rfc3339(&request.end)
             .with_context(|| "parsing end time range")?;
-        serialize_record_batch(
-            &crate::query_thread_events::query_thread_events(
-                &self.data_lake,
-                request.limit,
-                request.stream_id,
-                begin.into(),
-                end.into(),
-            )
-            .await
-            .with_context(|| "query_thread_events")?,
+        let record_batch = crate::query_thread_events::query_thread_events(
+            &self.data_lake,
+            request.limit,
+            request.stream_id,
+            begin.into(),
+            end.into(),
         )
+        .await
+        .with_context(|| "query_thread_events")?;
+        let answer = Answer::new(record_batch.schema(), vec![record_batch]);
+        serialize_record_batches(&answer)
     }
 
     pub async fn query_log_entries(&self, body: bytes::Bytes) -> Result<bytes::Bytes> {
@@ -309,17 +318,40 @@ impl AnalyticsService {
             .with_context(|| "parsing begin time range")?;
         let end = DateTime::<FixedOffset>::parse_from_rfc3339(&request.end)
             .with_context(|| "parsing end time range")?;
-        serialize_record_batch(
-            &crate::query_log_entries::query_log_entries(
+        let answer = if let Some(stream_id) = request.stream_id {
+            if request.limit.is_none() {
+                anyhow::bail!("limit is required for stream-specific log queries");
+            }
+            let record_batch = crate::query_log_entries::query_log_entries(
                 &self.data_lake,
-                request.stream_id,
+                stream_id,
                 begin.into(),
                 end.into(),
-                request.limit,
+                request.limit.unwrap(),
             )
             .await
-            .with_context(|| "query_log_entries")?,
-        )
+            .with_context(|| "query_log_entries")?;
+            Answer::new(Arc::new(log_table_schema()), vec![record_batch])
+        } else {
+            if request.sql.is_none() {
+                anyhow::bail!("sql is required for lakehouse log queries");
+            }
+            let table_set_name = "log_entries";
+            let table_instance_id = "global";
+            crate::lakehouse::query::query(
+                &self.data_lake,
+                begin.into(),
+                end.into(),
+                &request.sql.unwrap(),
+                table_set_name,
+                table_instance_id,
+                &[0],
+                Arc::new(log_table_schema()),
+            )
+            .await
+            .with_context(|| "lakehouse::query::query")?
+        };
+        serialize_record_batches(&answer)
     }
 
     pub async fn query_metrics(&self, body: bytes::Bytes) -> Result<bytes::Bytes> {
@@ -329,17 +361,17 @@ impl AnalyticsService {
             .with_context(|| "parsing begin time range")?;
         let end = DateTime::<FixedOffset>::parse_from_rfc3339(&request.end)
             .with_context(|| "parsing end time range")?;
-        serialize_record_batch(
-            &crate::query_metrics::query_metrics(
-                &self.data_lake,
-                request.limit,
-                request.stream_id,
-                begin.into(),
-                end.into(),
-            )
-            .await
-            .with_context(|| "query_log_entries")?,
+        let record_batch = crate::query_metrics::query_metrics(
+            &self.data_lake,
+            request.limit,
+            request.stream_id,
+            begin.into(),
+            end.into(),
         )
+        .await
+        .with_context(|| "query_log_entries")?;
+        let answer = Answer::new(record_batch.schema(), vec![record_batch]);
+        serialize_record_batches(&answer)
     }
 }
 
@@ -347,15 +379,17 @@ fn format_postgres_placeholder(index: usize) -> String {
     format!("${}", index + 1)
 }
 
-fn serialize_record_batch(record_batch: &RecordBatch) -> Result<bytes::Bytes> {
+fn serialize_record_batches(answer: &Answer) -> Result<bytes::Bytes> {
     let mut buffer_writer = bytes::BytesMut::with_capacity(1024).writer();
     let props = WriterProperties::builder()
         .set_writer_version(WriterVersion::PARQUET_2_0)
         .set_compression(Compression::LZ4_RAW)
         .build();
     let mut arrow_writer =
-        ArrowWriter::try_new(&mut buffer_writer, record_batch.schema(), Some(props))?;
-    arrow_writer.write(record_batch)?;
+        ArrowWriter::try_new(&mut buffer_writer, answer.schema.clone(), Some(props))?;
+    for batch in &answer.record_batches {
+        arrow_writer.write(batch)?;
+    }
     arrow_writer.close()?;
     Ok(buffer_writer.into_inner().into())
 }
