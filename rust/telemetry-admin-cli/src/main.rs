@@ -6,8 +6,11 @@ use clap::{Parser, Subcommand};
 use micromegas::analytics::delete::delete_old_data;
 use micromegas::analytics::lakehouse::batch_update::create_or_update_recent_partitions;
 use micromegas::analytics::lakehouse::log_view::LogView;
+use micromegas::analytics::lakehouse::merge::merge_partitions;
 use micromegas::analytics::lakehouse::migration::migrate_lakehouse;
+use micromegas::chrono::DateTime;
 use micromegas::chrono::TimeDelta;
+use micromegas::chrono::Utc;
 use micromegas::ingestion::data_lake_connection::connect_to_data_lake;
 use micromegas::telemetry_sink::TelemetryGuardBuilder;
 use micromegas::tracing::levels::LevelFilter;
@@ -32,6 +35,13 @@ enum Commands {
     CreateRecentPartitions {
         partition_delta_seconds: i64,
         nb_partitions: i32,
+    },
+
+    #[clap(name = "merge-partitions")]
+    MergePartitions {
+        begin: DateTime<Utc>,
+        end: DateTime<Utc>,
+        partition_delta_seconds: i64,
     },
 }
 
@@ -60,15 +70,24 @@ async fn main() -> Result<()> {
             partition_delta_seconds,
             nb_partitions,
         } => {
-            let one_minute = TimeDelta::try_seconds(partition_delta_seconds)
+            let delta = TimeDelta::try_seconds(partition_delta_seconds)
                 .with_context(|| "making time delta")?;
             create_or_update_recent_partitions(
                 data_lake,
                 Arc::new(LogView::default()),
-                one_minute,
+                delta,
                 nb_partitions,
             )
             .await?;
+        }
+        Commands::MergePartitions {
+            begin,
+            end,
+            partition_delta_seconds,
+        } => {
+            let delta = TimeDelta::try_seconds(partition_delta_seconds)
+                .with_context(|| "making time delta")?;
+            merge_partitions(data_lake, Arc::new(LogView::default()), begin, end, delta).await?;
         }
     }
     Ok(())

@@ -1,3 +1,5 @@
+use crate::log_entries_table::log_table_schema;
+
 use super::{
     log_partition_spec::LogPartitionSpec,
     partition_source_data::fetch_partition_source_data,
@@ -6,6 +8,7 @@ use super::{
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use datafusion::arrow::datatypes::Schema;
 use std::sync::Arc;
 
 pub const TABLE_SET_NAME: &str = "log_entries";
@@ -60,5 +63,9 @@ impl View for LogView {
 
     fn get_file_schema_hash(&self) -> Vec<u8> {
         vec![0]
+    }
+
+    fn get_file_schema(&self) -> Arc<Schema> {
+        Arc::new(log_table_schema())
     }
 }
