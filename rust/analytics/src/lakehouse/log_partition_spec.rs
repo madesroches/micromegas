@@ -2,7 +2,7 @@ use super::{
     log_view::{TABLE_INSTANCE_ID, TABLE_SET_NAME},
     partition::{write_partition, Partition},
     partition_source_data::{PartitionSourceBlock, PartitionSourceData},
-    view::{PartitionSpec},
+    view::PartitionSpec,
 };
 use crate::{
     log_entries_table::{log_table_schema, LogEntriesRecordBuilder},
