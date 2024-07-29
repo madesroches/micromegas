@@ -4,9 +4,10 @@ use anyhow::Context;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use micromegas::analytics::delete::delete_old_data;
-use micromegas::analytics::lakehouse::batch_update::create_or_update_minute_partitions;
+use micromegas::analytics::lakehouse::batch_update::create_or_update_recent_partitions;
 use micromegas::analytics::lakehouse::log_view::LogView;
 use micromegas::analytics::lakehouse::migration::migrate_lakehouse;
+use micromegas::chrono::TimeDelta;
 use micromegas::ingestion::data_lake_connection::connect_to_data_lake;
 use micromegas::telemetry_sink::TelemetryGuardBuilder;
 use micromegas::tracing::levels::LevelFilter;
@@ -53,7 +54,15 @@ async fn main() -> Result<()> {
             delete_old_data(&data_lake, min_days_old).await?;
         }
         Commands::UpdateLakehouse => {
-            create_or_update_minute_partitions(data_lake, Arc::new(LogView::default())).await?;
+            let one_minute = TimeDelta::try_minutes(1).with_context(|| "making a minute")?;
+            let nb_minute_partitions: i32 = 15;
+            create_or_update_recent_partitions(
+                data_lake,
+                Arc::new(LogView::default()),
+                one_minute,
+                nb_minute_partitions,
+            )
+            .await?;
         }
     }
     Ok(())

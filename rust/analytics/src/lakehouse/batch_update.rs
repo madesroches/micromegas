@@ -74,20 +74,18 @@ async fn create_or_update_partition(
     Ok(())
 }
 
-pub async fn create_or_update_minute_partitions(
+pub async fn create_or_update_recent_partitions(
     lake: Arc<DataLakeConnection>,
     view: Arc<dyn View>,
+    partition_time_delta: TimeDelta,
+    nb_partitions: i32,
 ) -> Result<()> {
     let now = Utc::now();
-    let one_minute = TimeDelta::try_minutes(1).with_context(|| "making a minute")?;
-    let truncated = now.duration_trunc(one_minute)?;
-    let nb_minute_partitions: i32 = 15;
-    let start = truncated
-        - TimeDelta::try_minutes(nb_minute_partitions as i64)
-            .with_context(|| "making time delta")?;
-    for index in 0..nb_minute_partitions {
-        let start_partition = start + one_minute * index;
-        let end_partition = start + one_minute * (index + 1);
+    let truncated = now.duration_trunc(partition_time_delta)?;
+    let start = truncated - partition_time_delta * nb_partitions;
+    for index in 0..nb_partitions {
+        let start_partition = start + partition_time_delta * index;
+        let end_partition = start + partition_time_delta * (index + 1);
         create_or_update_partition(lake.clone(), start_partition, end_partition, view.clone())
             .await
             .with_context(|| "create_or_update_partition")?;
