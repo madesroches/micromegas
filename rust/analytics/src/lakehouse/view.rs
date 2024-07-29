@@ -20,4 +20,5 @@ pub trait View {
         begin_insert: DateTime<Utc>,
         end_insert: DateTime<Utc>,
     ) -> Result<Arc<dyn PartitionSpec>>;
+    fn get_file_schema_hash(&self) -> Vec<u8>;
 }

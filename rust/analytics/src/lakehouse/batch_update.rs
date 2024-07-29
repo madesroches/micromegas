@@ -2,38 +2,61 @@ use super::view::View;
 use anyhow::{Context, Result};
 use chrono::{DateTime, DurationRound, TimeDelta, Utc};
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
-use micromegas_tracing::{error, info};
+use micromegas_tracing::prelude::*;
 use sqlx::Row;
 use std::sync::Arc;
 
-async fn count_equal_partitions(
+// verify_overlapping_partitions returns true to continue and make a new partition,
+// returns false to abort (existing partition is up to date or there is a problem)
+async fn verify_overlapping_partitions(
     pool: &sqlx::PgPool,
     begin_insert: DateTime<Utc>,
     end_insert: DateTime<Utc>,
     table_set_name: &str,
     table_instance_id: &str,
-    block_ids_hash: &[u8],
-) -> Result<i64> {
-    let count: i64 = sqlx::query(
-        "SELECT count(*) as count
+    file_schema_hash: &[u8],
+    source_data_hash: &[u8],
+) -> Result<bool> {
+    let rows = sqlx::query(
+        "SELECT begin_insert_time, end_insert_time, file_schema_hash, source_data_hash
          FROM lakehouse_partitions
          WHERE table_set_name = $1
          AND table_instance_id = $2
-         AND begin_insert_time = $3
-         AND end_insert_time = $4
-         AND source_data_hash = $5
+         AND begin_insert_time < $3
+         AND end_insert_time > $4
          ;",
     )
     .bind(table_set_name)
     .bind(table_instance_id)
-    .bind(begin_insert)
     .bind(end_insert)
-    .bind(block_ids_hash)
-    .fetch_one(pool)
+    .bind(begin_insert)
+    .fetch_all(pool)
     .await
-    .with_context(|| "counting matching partitions")?
-    .try_get("count")?;
-    Ok(count)
+    .with_context(|| "fetching matching partitions")?;
+    if rows.is_empty() {
+        return Ok(true);
+    }
+    let mut matching_needs_update = false;
+    for r in rows {
+        let begin: DateTime<Utc> = r.try_get("begin_insert_time")?;
+        let end: DateTime<Utc> = r.try_get("end_insert_time")?;
+        if begin != begin_insert || end != end_insert {
+            info!("found overlapping partition of different size, aborting the update");
+            return Ok(false);
+        }
+        let part_file_schema: Vec<u8> = r.try_get("file_schema_hash")?;
+        if part_file_schema != file_schema_hash {
+            info!("found matching partition with different file schema");
+            matching_needs_update = true;
+        }
+        let part_source_data: Vec<u8> = r.try_get("source_data_hash")?;
+        if part_source_data != source_data_hash {
+            info!("found matching partition with different source data");
+            matching_needs_update = true;
+        }
+    }
+    info!("matching partition is up to date");
+    Ok(matching_needs_update)
 }
 
 async fn create_or_update_partition(
@@ -48,23 +71,19 @@ async fn create_or_update_partition(
         .await
         .with_context(|| "make_partition_spec")?;
     let table_instance_id = view.get_table_instance_id();
-    let nb_equal_partitions = count_equal_partitions(
+    let continue_with_creation = verify_overlapping_partitions(
         &lake.db_pool,
         begin_insert,
         end_insert,
         &table_set_name,
         &table_instance_id,
+        &view.get_file_schema_hash(),
         &partition_spec.get_source_data_hash(),
     )
     .await?;
 
-    if nb_equal_partitions == 1 {
-        info!("partition up to date, no need to replace it");
+    if !continue_with_creation {
         return Ok(());
-    }
-    if nb_equal_partitions > 1 {
-        error!("too many partitions for the same time range");
-        return Ok(()); // continue with the rest of the process, the error has been logged
     }
 
     partition_spec

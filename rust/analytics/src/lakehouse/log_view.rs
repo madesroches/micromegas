@@ -53,7 +53,12 @@ impl View for LogView {
         Ok(Arc::new(LogPartitionSpec {
             begin_insert,
             end_insert,
+            file_schema_hash: self.get_file_schema_hash(),
             source_data,
         }))
+    }
+
+    fn get_file_schema_hash(&self) -> Vec<u8> {
+        vec![0]
     }
 }

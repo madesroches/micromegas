@@ -2,7 +2,7 @@ use super::{
     log_view::{TABLE_INSTANCE_ID, TABLE_SET_NAME},
     partition::{write_partition, Partition},
     partition_source_data::{PartitionSourceBlock, PartitionSourceData},
-    view::PartitionSpec,
+    view::{PartitionSpec},
 };
 use crate::{
     log_entries_table::{log_table_schema, LogEntriesRecordBuilder},
@@ -29,6 +29,7 @@ use std::sync::Arc;
 pub struct LogPartitionSpec {
     pub begin_insert: DateTime<Utc>,
     pub end_insert: DateTime<Utc>,
+    pub file_schema_hash: Vec<u8>,
     pub source_data: PartitionSourceData,
 }
 
@@ -95,7 +96,7 @@ impl PartitionSpec for LogPartitionSpec {
                 updated: sqlx::types::chrono::Utc::now(),
                 file_path,
                 file_size: buffer.len() as i64,
-                file_schema_hash: vec![0],
+                file_schema_hash: self.file_schema_hash.clone(),
                 source_data_hash: self.source_data.block_ids_hash.clone(),
             },
             buffer,
