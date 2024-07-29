@@ -36,7 +36,6 @@ chrono = { version = "0.4", features = ["serde"] }
 ciborium = "0.2.2"
 clap = { version = "4", features = ["derive"] }
 colored = { version = "2" }
-criterion = "0.3"
 ctrlc = "3.2.0"
 datafusion = "40.0.0"
 futures = "0.3"
