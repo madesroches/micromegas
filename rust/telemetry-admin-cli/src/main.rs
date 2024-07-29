@@ -28,8 +28,11 @@ enum Commands {
     #[clap(name = "delete-old-data")]
     DeleteOldData { min_days_old: i32 },
 
-    #[clap(name = "update-lakehouse")]
-    UpdateLakehouse,
+    #[clap(name = "create-recent-partitions")]
+    CreateRecentPartitions {
+        partition_delta_seconds: i64,
+        nb_partitions: i32,
+    },
 }
 
 #[tokio::main]
@@ -53,14 +56,17 @@ async fn main() -> Result<()> {
         Commands::DeleteOldData { min_days_old } => {
             delete_old_data(&data_lake, min_days_old).await?;
         }
-        Commands::UpdateLakehouse => {
-            let one_minute = TimeDelta::try_minutes(1).with_context(|| "making a minute")?;
-            let nb_minute_partitions: i32 = 15;
+        Commands::CreateRecentPartitions {
+            partition_delta_seconds,
+            nb_partitions,
+        } => {
+            let one_minute = TimeDelta::try_seconds(partition_delta_seconds)
+                .with_context(|| "making time delta")?;
             create_or_update_recent_partitions(
                 data_lake,
                 Arc::new(LogView::default()),
                 one_minute,
-                nb_minute_partitions,
+                nb_partitions,
             )
             .await?;
         }
