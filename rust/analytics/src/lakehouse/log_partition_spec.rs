@@ -53,20 +53,26 @@ impl PartitionSpec for LogPartitionSpec {
         let mut min_time = None;
         let mut max_time = None;
         for src_block in &self.source_data.blocks {
-            if let Some(row_set) =
-                fetch_log_block_row_set(lake.blob_storage.clone(), src_block).await?
-            {
-                min_time = Some(
-                    min_time
-                        .unwrap_or(row_set.min_time_row)
-                        .min(row_set.min_time_row),
-                );
-                max_time = Some(
-                    max_time
-                        .unwrap_or(row_set.max_time_row)
-                        .max(row_set.max_time_row),
-                );
-                arrow_writer.write(&row_set.rows)?;
+            match fetch_log_block_row_set(lake.blob_storage.clone(), src_block).await {
+                Err(e) => {
+                    error!("error fetching log block: {e:?}");
+                }
+                Ok(Some(row_set)) => {
+                    min_time = Some(
+                        min_time
+                            .unwrap_or(row_set.min_time_row)
+                            .min(row_set.min_time_row),
+                    );
+                    max_time = Some(
+                        max_time
+                            .unwrap_or(row_set.max_time_row)
+                            .max(row_set.max_time_row),
+                    );
+                    arrow_writer.write(&row_set.rows)?;
+                }
+                Ok(None) => {
+                    debug!("empty log block");
+                }
             }
         }
         arrow_writer.close()?;
