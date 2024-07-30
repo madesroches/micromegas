@@ -8,6 +8,7 @@ use micromegas::analytics::lakehouse::batch_update::create_or_update_partitions;
 use micromegas::analytics::lakehouse::batch_update::create_or_update_recent_partitions;
 use micromegas::analytics::lakehouse::log_view::LogView;
 use micromegas::analytics::lakehouse::merge::merge_partitions;
+use micromegas::analytics::lakehouse::metrics_view::MetricsView;
 use micromegas::analytics::lakehouse::migration::migrate_lakehouse;
 use micromegas::analytics::lakehouse::temp::delete_expired_temporary_files;
 use micromegas::analytics::lakehouse::view::View;
@@ -69,6 +70,10 @@ fn make_view(table_set_name: &str, table_instance_id: &str) -> Result<Arc<dyn Vi
         "log_entries" => {
             assert_eq!(table_instance_id, "global");
             Ok(Arc::new(LogView::default()))
+        }
+        "measures" => {
+            assert_eq!(table_instance_id, "global");
+            Ok(Arc::new(MetricsView::default()))
         }
         _other => {
             anyhow::bail!("unknown table set {table_set_name}");
