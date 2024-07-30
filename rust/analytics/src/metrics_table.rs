@@ -9,6 +9,32 @@ use datafusion::arrow::{
 };
 use std::sync::Arc;
 
+pub fn metrics_table_schema() -> Schema {
+    Schema::new(vec![
+        Field::new(
+            "time",
+            DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into())),
+            false,
+        ),
+        Field::new(
+            "target",
+            DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
+            false,
+        ),
+        Field::new(
+            "name",
+            DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
+            false,
+        ),
+        Field::new(
+            "unit",
+            DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
+            false,
+        ),
+        Field::new("value", DataType::Float64, false),
+    ])
+}
+
 pub struct MetricsRecordBuilder {
     pub times: PrimitiveBuilder<TimestampNanosecondType>,
     pub targets: StringDictionaryBuilder<Int16Type>,
@@ -38,31 +64,8 @@ impl MetricsRecordBuilder {
     }
 
     pub fn finish(mut self) -> Result<RecordBatch> {
-        let schema = Schema::new(vec![
-            Field::new(
-                "time",
-                DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into())),
-                false,
-            ),
-            Field::new(
-                "target",
-                DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
-                false,
-            ),
-            Field::new(
-                "name",
-                DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
-                false,
-            ),
-            Field::new(
-                "unit",
-                DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
-                false,
-            ),
-            Field::new("value", DataType::Float64, false),
-        ]);
         RecordBatch::try_new(
-            Arc::new(schema),
+            Arc::new(metrics_table_schema()),
             vec![
                 Arc::new(self.times.finish().with_timezone_utc()),
                 Arc::new(self.targets.finish()),

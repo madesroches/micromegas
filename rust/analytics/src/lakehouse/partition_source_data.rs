@@ -15,7 +15,7 @@ pub struct PartitionSourceBlock {
     pub process_tsc_frequency: i64,
 }
 
-pub struct PartitionSourceData {
+pub struct PartitionSourceDataBlocks {
     pub blocks: Vec<PartitionSourceBlock>,
     pub block_ids_hash: Vec<u8>,
 }
@@ -25,7 +25,7 @@ pub async fn fetch_partition_source_data(
     begin_insert: DateTime<Utc>,
     end_insert: DateTime<Utc>,
     source_stream_tag: &str,
-) -> Result<PartitionSourceData> {
+) -> Result<PartitionSourceDataBlocks> {
     // this can scale to thousands, but not millions
     let src_blocks = sqlx::query(
         "SELECT block_id, streams.stream_id, processes.process_id, blocks.begin_time, blocks.begin_ticks, blocks.end_time, blocks.end_ticks, blocks.nb_objects, blocks.object_offset, blocks.payload_size,
@@ -60,7 +60,7 @@ pub async fn fetch_partition_source_data(
             process_tsc_frequency: src_block.try_get("tsc_frequency")?,
         });
     }
-    Ok(PartitionSourceData {
+    Ok(PartitionSourceDataBlocks {
         blocks: partition_src_blocks,
         block_ids_hash: block_ids_hash.to_le_bytes().to_vec(),
     })
