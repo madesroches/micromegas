@@ -79,10 +79,11 @@ impl PartitionSpec for LogPartitionSpec {
 
         let file_id = uuid::Uuid::new_v4();
         let file_path = format!(
-            "views/{}/{}/minutes/{}/{file_id}.parquet",
+            "views/{}/{}/{}/{}_{file_id}.parquet",
             TABLE_SET_NAME,
             TABLE_INSTANCE_ID,
-            self.begin_insert.format("%Y-%m-%d-%H-%M-%S")
+            self.begin_insert.format("%Y-%m-%d"),
+            self.begin_insert.format("%H-%M-%S")
         );
         if min_time.is_none() || max_time.is_none() {
             info!("no data for {file_path} partition, not writing the object");
