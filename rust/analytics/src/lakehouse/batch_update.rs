@@ -111,3 +111,22 @@ pub async fn create_or_update_recent_partitions(
     }
     Ok(())
 }
+
+pub async fn create_or_update_partitions(
+    lake: Arc<DataLakeConnection>,
+    view: Arc<dyn View>,
+    begin_range: DateTime<Utc>,
+    end_range: DateTime<Utc>,
+    partition_time_delta: TimeDelta,
+) -> Result<()> {
+    let mut begin_part = begin_range;
+    let mut end_part = begin_part + partition_time_delta;
+    while end_part <= end_range {
+        create_or_update_partition(lake.clone(), begin_part, end_part, view.clone())
+            .await
+            .with_context(|| "create_or_update_partition")?;
+        begin_part = end_part;
+        end_part = begin_part + partition_time_delta;
+    }
+    Ok(())
+}

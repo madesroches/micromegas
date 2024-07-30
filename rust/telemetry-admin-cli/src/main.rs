@@ -4,6 +4,7 @@ use anyhow::Context;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use micromegas::analytics::delete::delete_old_data;
+use micromegas::analytics::lakehouse::batch_update::create_or_update_partitions;
 use micromegas::analytics::lakehouse::batch_update::create_or_update_recent_partitions;
 use micromegas::analytics::lakehouse::log_view::LogView;
 use micromegas::analytics::lakehouse::merge::merge_partitions;
@@ -35,6 +36,13 @@ enum Commands {
     CreateRecentPartitions {
         partition_delta_seconds: i64,
         nb_partitions: i32,
+    },
+
+    #[clap(name = "create-partitions")]
+    CreatePartitions {
+        begin: DateTime<Utc>,
+        end: DateTime<Utc>,
+        partition_delta_seconds: i64,
     },
 
     #[clap(name = "merge-partitions")]
@@ -79,6 +87,16 @@ async fn main() -> Result<()> {
                 nb_partitions,
             )
             .await?;
+        }
+        Commands::CreatePartitions {
+            begin,
+            end,
+            partition_delta_seconds,
+        } => {
+            let delta = TimeDelta::try_seconds(partition_delta_seconds)
+                .with_context(|| "making time delta")?;
+            create_or_update_partitions(data_lake, Arc::new(LogView::default()), begin, end, delta)
+                .await?;
         }
         Commands::MergePartitions {
             begin,
