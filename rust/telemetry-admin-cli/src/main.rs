@@ -9,6 +9,7 @@ use micromegas::analytics::lakehouse::batch_update::create_or_update_recent_part
 use micromegas::analytics::lakehouse::log_view::LogView;
 use micromegas::analytics::lakehouse::merge::merge_partitions;
 use micromegas::analytics::lakehouse::migration::migrate_lakehouse;
+use micromegas::analytics::lakehouse::temp::delete_expired_temporary_files;
 use micromegas::chrono::DateTime;
 use micromegas::chrono::TimeDelta;
 use micromegas::chrono::Utc;
@@ -31,6 +32,9 @@ enum Commands {
     /// Delete blocks, streams and processes x days old or older
     #[clap(name = "delete-old-data")]
     DeleteOldData { min_days_old: i32 },
+
+    #[clap(name = "delete-expired-temp")]
+    DeleteExpiredTemp,
 
     #[clap(name = "create-recent-partitions")]
     CreateRecentPartitions {
@@ -73,6 +77,9 @@ async fn main() -> Result<()> {
     match args.command {
         Commands::DeleteOldData { min_days_old } => {
             delete_old_data(&data_lake, min_days_old).await?;
+        }
+        Commands::DeleteExpiredTemp => {
+            delete_expired_temporary_files(data_lake).await?;
         }
         Commands::CreateRecentPartitions {
             partition_delta_seconds,

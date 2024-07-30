@@ -7,4 +7,5 @@ pub mod migration;
 pub mod partition;
 pub mod partition_source_data;
 pub mod query;
+pub mod temp;
 pub mod view;
