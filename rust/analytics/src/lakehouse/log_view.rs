@@ -11,8 +11,8 @@ use chrono::{DateTime, Utc};
 use datafusion::arrow::datatypes::Schema;
 use std::sync::Arc;
 
-pub const TABLE_SET_NAME: &str = "log_entries";
-pub const TABLE_INSTANCE_ID: &str = "global";
+const TABLE_SET_NAME: &str = "log_entries";
+const TABLE_INSTANCE_ID: &str = "global";
 
 pub struct LogView {
     table_set_name: Arc<String>,
@@ -54,6 +54,8 @@ impl View for LogView {
             .await
             .with_context(|| "fetch_partition_source_data")?;
         Ok(Arc::new(LogPartitionSpec {
+            table_set_name: self.table_set_name.clone(),
+            table_instance_id: self.table_instance_id.clone(),
             begin_insert,
             end_insert,
             file_schema_hash: self.get_file_schema_hash(),

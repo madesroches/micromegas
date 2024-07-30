@@ -1,5 +1,4 @@
 use super::{
-    log_view::{TABLE_INSTANCE_ID, TABLE_SET_NAME},
     partition::{write_partition, Partition},
     partition_source_data::{PartitionSourceBlock, PartitionSourceData},
     view::PartitionSpec,
@@ -27,6 +26,8 @@ use micromegas_tracing::prelude::*;
 use std::sync::Arc;
 
 pub struct LogPartitionSpec {
+    pub table_set_name: Arc<String>,
+    pub table_instance_id: Arc<String>,
     pub begin_insert: DateTime<Utc>,
     pub end_insert: DateTime<Utc>,
     pub file_schema_hash: Vec<u8>,
@@ -80,8 +81,8 @@ impl PartitionSpec for LogPartitionSpec {
         let file_id = uuid::Uuid::new_v4();
         let file_path = format!(
             "views/{}/{}/{}/{}_{file_id}.parquet",
-            TABLE_SET_NAME,
-            TABLE_INSTANCE_ID,
+            *self.table_set_name,
+            *self.table_instance_id,
             self.begin_insert.format("%Y-%m-%d"),
             self.begin_insert.format("%H-%M-%S")
         );
@@ -94,8 +95,8 @@ impl PartitionSpec for LogPartitionSpec {
         write_partition(
             &lake,
             &Partition {
-                table_set_name: TABLE_SET_NAME.to_string(),
-                table_instance_id: TABLE_INSTANCE_ID.to_string(),
+                table_set_name: self.table_set_name.to_string(),
+                table_instance_id: self.table_instance_id.to_string(),
                 begin_insert_time: self.begin_insert,
                 end_insert_time: self.end_insert,
                 min_event_time: min_time.map(DateTime::<Utc>::from_timestamp_nanos).unwrap(),
