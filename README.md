@@ -43,6 +43,16 @@ In order to keep costs down, most payloads will remain unprocessed until they ex
 
 ## Status
 
+### July 2024
+Released [version 0.1.5](https://crates.io/crates/micromegas)
+
+Unreal
+ * Better reliability, retrying failed http requests
+ * Spike detection
+
+Maintenance
+ * Delete old blocks, streams & processes using cron task
+
 ### June 2024
 Released [version 0.1.4](https://crates.io/crates/micromegas)
 
