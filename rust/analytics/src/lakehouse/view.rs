@@ -1,6 +1,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use datafusion::arrow::datatypes::Schema;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use std::sync::Arc;
 
@@ -20,4 +21,6 @@ pub trait View {
         begin_insert: DateTime<Utc>,
         end_insert: DateTime<Utc>,
     ) -> Result<Arc<dyn PartitionSpec>>;
+    fn get_file_schema_hash(&self) -> Vec<u8>;
+    fn get_file_schema(&self) -> Arc<Schema>;
 }

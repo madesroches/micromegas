@@ -29,6 +29,7 @@ use std::sync::Arc;
 pub struct LogPartitionSpec {
     pub begin_insert: DateTime<Utc>,
     pub end_insert: DateTime<Utc>,
+    pub file_schema_hash: Vec<u8>,
     pub source_data: PartitionSourceData,
 }
 
@@ -52,30 +53,37 @@ impl PartitionSpec for LogPartitionSpec {
         let mut min_time = None;
         let mut max_time = None;
         for src_block in &self.source_data.blocks {
-            if let Some(row_set) =
-                fetch_log_block_row_set(lake.blob_storage.clone(), src_block).await?
-            {
-                min_time = Some(
-                    min_time
-                        .unwrap_or(row_set.min_time_row)
-                        .min(row_set.min_time_row),
-                );
-                max_time = Some(
-                    max_time
-                        .unwrap_or(row_set.max_time_row)
-                        .max(row_set.max_time_row),
-                );
-                arrow_writer.write(&row_set.rows)?;
+            match fetch_log_block_row_set(lake.blob_storage.clone(), src_block).await {
+                Err(e) => {
+                    error!("error fetching log block: {e:?}");
+                }
+                Ok(Some(row_set)) => {
+                    min_time = Some(
+                        min_time
+                            .unwrap_or(row_set.min_time_row)
+                            .min(row_set.min_time_row),
+                    );
+                    max_time = Some(
+                        max_time
+                            .unwrap_or(row_set.max_time_row)
+                            .max(row_set.max_time_row),
+                    );
+                    arrow_writer.write(&row_set.rows)?;
+                }
+                Ok(None) => {
+                    debug!("empty log block");
+                }
             }
         }
         arrow_writer.close()?;
 
         let file_id = uuid::Uuid::new_v4();
         let file_path = format!(
-            "views/{}/{}/minutes/{}/{file_id}.parquet",
+            "views/{}/{}/{}/{}_{file_id}.parquet",
             TABLE_SET_NAME,
             TABLE_INSTANCE_ID,
-            self.begin_insert.format("%Y-%m-%d-%H-%M-%S")
+            self.begin_insert.format("%Y-%m-%d"),
+            self.begin_insert.format("%H-%M-%S")
         );
         if min_time.is_none() || max_time.is_none() {
             info!("no data for {file_path} partition, not writing the object");
@@ -95,7 +103,7 @@ impl PartitionSpec for LogPartitionSpec {
                 updated: sqlx::types::chrono::Utc::now(),
                 file_path,
                 file_size: buffer.len() as i64,
-                file_schema_hash: vec![0],
+                file_schema_hash: self.file_schema_hash.clone(),
                 source_data_hash: self.source_data.block_ids_hash.clone(),
             },
             buffer,
