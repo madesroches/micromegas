@@ -1,11 +1,10 @@
-use crate::log_entries_table::log_table_schema;
-
 use super::{
     block_partition_spec::BlockPartitionSpec,
-    log_partition_spec::LogBlockProcessor,
+    log_block_processor::LogBlockProcessor,
     partition_source_data::fetch_partition_source_data,
     view::{PartitionSpec, View},
 };
+use crate::log_entries_table::log_table_schema;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
