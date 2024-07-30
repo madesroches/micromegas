@@ -1,7 +1,7 @@
 use crate::measure::Measure;
 use anyhow::{Context, Result};
 use datafusion::arrow::{
-    array::{PrimitiveBuilder, StringDictionaryBuilder},
+    array::{ArrayBuilder, PrimitiveBuilder, StringDictionaryBuilder},
     datatypes::{
         DataType, Field, Float64Type, Int16Type, Schema, TimeUnit, TimestampNanosecondType,
     },
@@ -52,6 +52,23 @@ impl MetricsRecordBuilder {
             units: StringDictionaryBuilder::new(),
             values: PrimitiveBuilder::with_capacity(capacity),
         }
+    }
+
+    pub fn len(&self) -> i64 {
+        self.times.len() as i64
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.times.len() == 0
+    }
+
+    pub fn get_time_range(&self) -> Option<(i64, i64)> {
+        if self.is_empty() {
+            return None;
+        }
+        // assuming that the events are in order
+        let slice = self.times.values_slice();
+        Some((slice[0], slice[slice.len() - 1]))
     }
 
     pub fn append(&mut self, row: &Measure) -> Result<()> {

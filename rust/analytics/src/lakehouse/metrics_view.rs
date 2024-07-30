@@ -1,6 +1,8 @@
 use crate::metrics_table::metrics_table_schema;
 
 use super::{
+    block_partition_spec::BlockPartitionSpec,
+    metrics_block_processor::MetricsBlockProcessor,
     partition_source_data::fetch_partition_source_data,
     view::{PartitionSpec, View},
 };
@@ -49,18 +51,19 @@ impl View for MetricsView {
         begin_insert: DateTime<Utc>,
         end_insert: DateTime<Utc>,
     ) -> Result<Arc<dyn PartitionSpec>> {
-        let _source_data = fetch_partition_source_data(pool, begin_insert, end_insert, "metrics")
+        let source_data = fetch_partition_source_data(pool, begin_insert, end_insert, "metrics")
             .await
             .with_context(|| "fetch_partition_source_data")?;
-        // Ok(Arc::new(MetricsPartitionSpec {
-        //     table_set_name: self.table_set_name.clone(),
-        //     table_instance_id: self.table_instance_id.clone(),
-        //     begin_insert,
-        //     end_insert,
-        //     file_schema_hash: self.get_file_schema_hash(),
-        //     source_data,
-        // }))
-        todo!();
+        Ok(Arc::new(BlockPartitionSpec {
+            table_set_name: self.table_set_name.clone(),
+            table_instance_id: self.table_instance_id.clone(),
+            begin_insert,
+            end_insert,
+            file_schema: self.get_file_schema(),
+            file_schema_hash: self.get_file_schema_hash(),
+            source_data,
+            block_processor: Arc::new(MetricsBlockProcessor {}),
+        }))
     }
 
     fn get_file_schema_hash(&self) -> Vec<u8> {

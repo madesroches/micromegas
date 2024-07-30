@@ -4,6 +4,7 @@ pub mod block_partition_spec;
 pub mod log_block_processor;
 pub mod log_view;
 pub mod merge;
+pub mod metrics_block_processor;
 pub mod metrics_view;
 pub mod migration;
 pub mod partition;
