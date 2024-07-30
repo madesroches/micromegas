@@ -36,8 +36,8 @@ pub trait BlockProcessor: Send + Sync {
 }
 
 pub struct BlockPartitionSpec {
-    pub table_set_name: Arc<String>,
-    pub table_instance_id: Arc<String>,
+    pub view_set_name: Arc<String>,
+    pub view_instance_id: Arc<String>,
     pub begin_insert: DateTime<Utc>,
     pub end_insert: DateTime<Utc>,
     pub file_schema: Arc<Schema>,
@@ -98,8 +98,8 @@ impl PartitionSpec for BlockPartitionSpec {
         let file_id = uuid::Uuid::new_v4();
         let file_path = format!(
             "views/{}/{}/{}/{}_{file_id}.parquet",
-            *self.table_set_name,
-            *self.table_instance_id,
+            *self.view_set_name,
+            *self.view_instance_id,
             self.begin_insert.format("%Y-%m-%d"),
             self.begin_insert.format("%H-%M-%S")
         );
@@ -112,8 +112,8 @@ impl PartitionSpec for BlockPartitionSpec {
         write_partition(
             &lake,
             &Partition {
-                table_set_name: self.table_set_name.to_string(),
-                table_instance_id: self.table_instance_id.to_string(),
+                view_set_name: self.view_set_name.to_string(),
+                view_instance_id: self.view_instance_id.to_string(),
                 begin_insert_time: self.begin_insert,
                 end_insert_time: self.end_insert,
                 min_event_time: min_time.map(DateTime::<Utc>::from_timestamp_nanos).unwrap(),

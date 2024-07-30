@@ -22,20 +22,20 @@ async fn create_merged_partition(
     begin: DateTime<Utc>,
     end: DateTime<Utc>,
 ) -> Result<()> {
-    let table_set_name = view.get_table_set_name().to_string();
-    let table_instance_id = view.get_table_instance_id().to_string();
+    let view_set_name = view.get_view_set_name().to_string();
+    let view_instance_id = view.get_view_instance_id().to_string();
     // we are not looking for intersecting partitions, but only those that fit completely in the range
     let rows = sqlx::query(
         "SELECT file_path, file_size, updated, file_schema_hash, source_data_hash, begin_insert_time, end_insert_time, min_event_time, max_event_time
          FROM lakehouse_partitions
-         WHERE table_set_name = $1
-         AND table_instance_id = $2
+         WHERE view_set_name = $1
+         AND view_instance_id = $2
          AND begin_insert_time >= $3
          AND end_insert_time <= $4
          ;",
     )
-    .bind(&table_set_name)
-    .bind(&table_instance_id)
+    .bind(&view_set_name)
+    .bind(&view_instance_id)
     .bind(begin)
     .bind(end)
     .fetch_all(&lake.db_pool)
@@ -70,7 +70,7 @@ async fn create_merged_partition(
 
         let file_schema_hash: Vec<u8> = r.try_get("file_schema_hash")?;
         if file_schema_hash != latest_file_schema_hash {
-            warn!("can't merge partition table_set_name={table_set_name} table_instance_id={table_instance_id} begin_insert_time={begin_insert_time} end_insert_time={end_insert_time}");
+            warn!("can't merge partition view_set_name={view_set_name} view_instance_id={view_instance_id} begin_insert_time={begin_insert_time} end_insert_time={end_insert_time}");
             return Ok(());
         }
     }
@@ -120,8 +120,8 @@ async fn create_merged_partition(
     let file_id = uuid::Uuid::new_v4();
     let file_path = format!(
         "views/{}/{}/{}/{}_{file_id}.parquet",
-        &table_set_name,
-        &table_instance_id,
+        &view_set_name,
+        &view_instance_id,
         min_insert_time.format("%Y-%m-%d"),
         min_insert_time.format("%H-%M-%S")
     );
@@ -130,8 +130,8 @@ async fn create_merged_partition(
     write_partition(
         &lake,
         &Partition {
-            table_set_name,
-            table_instance_id,
+            view_set_name,
+            view_instance_id,
             begin_insert_time: min_insert_time,
             end_insert_time: max_insert_time,
             min_event_time,

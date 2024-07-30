@@ -12,3 +12,4 @@ pub mod partition_source_data;
 pub mod query;
 pub mod temp;
 pub mod view;
+pub mod view_factory;

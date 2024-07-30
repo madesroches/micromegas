@@ -65,13 +65,13 @@ async fn create_partitions_table(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>)
     // The instance id is a unique key to the table within the table set.
     //    * Example 1: if there is a process_log table for each process, the instance id could be the process_id.
     //      It would not clash with an instance of process_metrics table for the same process.
-    //    * Example 2:  if there is a table instance for each metric, the table_instance_id could be the name of the metric.
+    //    * Example 2:  if there is a table instance for each metric, the view_instance_id could be the name of the metric.
 
     // source_data_hash can be used to detect that the partition is out of date (sha1 of the block_ids, for example)
     tr.execute("
          CREATE TABLE lakehouse_partitions(
-                  table_set_name VARCHAR(255),
-                  table_instance_id VARCHAR(255),
+                  view_set_name VARCHAR(255),
+                  view_instance_id VARCHAR(255),
                   begin_insert_time TIMESTAMPTZ,
                   end_insert_time TIMESTAMPTZ,
                   min_event_time TIMESTAMPTZ,
@@ -82,10 +82,10 @@ async fn create_partitions_table(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>)
                   file_schema_hash bytea,
                   source_data_hash bytea
                   );
-         CREATE INDEX lh_part_begin_insert on lakehouse_partitions(table_set_name, table_instance_id, begin_insert_time);
-         CREATE INDEX lh_part_end_insert on lakehouse_partitions(table_set_name, table_instance_id, end_insert_time);
-         CREATE INDEX lh_part_min_time on lakehouse_partitions(table_set_name, table_instance_id, min_event_time);
-         CREATE INDEX lh_part_max_time on lakehouse_partitions(table_set_name, table_instance_id, max_event_time);
+         CREATE INDEX lh_part_begin_insert on lakehouse_partitions(view_set_name, view_instance_id, begin_insert_time);
+         CREATE INDEX lh_part_end_insert on lakehouse_partitions(view_set_name, view_instance_id, end_insert_time);
+         CREATE INDEX lh_part_min_time on lakehouse_partitions(view_set_name, view_instance_id, min_event_time);
+         CREATE INDEX lh_part_max_time on lakehouse_partitions(view_set_name, view_instance_id, max_event_time);
 ")
         .await
         .with_context(|| "Creating table blocks and its indices")?;

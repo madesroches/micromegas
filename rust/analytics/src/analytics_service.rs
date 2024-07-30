@@ -13,12 +13,14 @@ use sqlx::types::chrono::{DateTime, FixedOffset};
 use uuid::Uuid;
 
 use crate::lakehouse::answer::Answer;
+use crate::lakehouse::view_factory::ViewFactory;
 use crate::log_entries_table::log_table_schema;
 use crate::sql_arrow_bridge::rows_to_record_batch;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct AnalyticsService {
     data_lake: DataLakeConnection,
+    view_factory: Arc<ViewFactory>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -87,9 +89,21 @@ pub struct QueryMetricsRequest {
     pub stream_id: Uuid,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct QueryViewRequest {
+    pub view_set_name: String,
+    pub view_instance_id: String,
+    pub begin: String,
+    pub end: String,
+    pub sql: String,
+}
+
 impl AnalyticsService {
-    pub fn new(data_lake: DataLakeConnection) -> Self {
-        Self { data_lake }
+    pub fn new(data_lake: DataLakeConnection, view_factory: Arc<ViewFactory>) -> Self {
+        Self {
+            data_lake,
+            view_factory,
+        }
     }
 
     pub async fn find_process(&self, body: bytes::Bytes) -> Result<bytes::Bytes> {
@@ -336,17 +350,13 @@ impl AnalyticsService {
             if request.sql.is_none() {
                 anyhow::bail!("sql is required for lakehouse log queries");
             }
-            let table_set_name = "log_entries";
-            let table_instance_id = "global";
+            let view = self.view_factory.make_view("log_entries", "global")?;
             crate::lakehouse::query::query(
                 &self.data_lake,
                 begin.into(),
                 end.into(),
                 &request.sql.unwrap(),
-                table_set_name,
-                table_instance_id,
-                &[0],
-                Arc::new(log_table_schema()),
+                view,
             )
             .await
             .with_context(|| "lakehouse::query::query")?
@@ -369,8 +379,31 @@ impl AnalyticsService {
             end.into(),
         )
         .await
-        .with_context(|| "query_log_entries")?;
+        .with_context(|| "query_metrics")?;
         let answer = Answer::new(record_batch.schema(), vec![record_batch]);
+        serialize_record_batches(&answer)
+    }
+
+    pub async fn query_view(&self, body: bytes::Bytes) -> Result<bytes::Bytes> {
+        let request: QueryViewRequest =
+            ciborium::from_reader(body.reader()).with_context(|| "parsing QueryViewRequest")?;
+        let begin = DateTime::<FixedOffset>::parse_from_rfc3339(&request.begin)
+            .with_context(|| "parsing begin time range")?;
+        let end = DateTime::<FixedOffset>::parse_from_rfc3339(&request.end)
+            .with_context(|| "parsing end time range")?;
+        let view = self
+            .view_factory
+            .make_view(&request.view_set_name, &request.view_instance_id)
+            .with_context(|| "making view")?;
+        let answer = crate::lakehouse::query::query(
+            &self.data_lake,
+            begin.into(),
+            end.into(),
+            &request.sql,
+            view,
+        )
+        .await
+        .with_context(|| "lakehouse::query::query")?;
         serialize_record_batches(&answer)
     }
 }

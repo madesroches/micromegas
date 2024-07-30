@@ -12,22 +12,22 @@ async fn verify_overlapping_partitions(
     pool: &sqlx::PgPool,
     begin_insert: DateTime<Utc>,
     end_insert: DateTime<Utc>,
-    table_set_name: &str,
-    table_instance_id: &str,
+    view_set_name: &str,
+    view_instance_id: &str,
     file_schema_hash: &[u8],
     source_data_hash: &[u8],
 ) -> Result<bool> {
     let rows = sqlx::query(
         "SELECT begin_insert_time, end_insert_time, file_schema_hash, source_data_hash
          FROM lakehouse_partitions
-         WHERE table_set_name = $1
-         AND table_instance_id = $2
+         WHERE view_set_name = $1
+         AND view_instance_id = $2
          AND begin_insert_time < $3
          AND end_insert_time > $4
          ;",
     )
-    .bind(table_set_name)
-    .bind(table_instance_id)
+    .bind(view_set_name)
+    .bind(view_instance_id)
     .bind(end_insert)
     .bind(begin_insert)
     .fetch_all(pool)
@@ -65,18 +65,18 @@ async fn create_or_update_partition(
     end_insert: DateTime<Utc>,
     view: Arc<dyn View>,
 ) -> Result<()> {
-    let table_set_name = view.get_table_set_name();
+    let view_set_name = view.get_view_set_name();
     let partition_spec = view
         .make_partition_spec(&lake.db_pool, begin_insert, end_insert)
         .await
         .with_context(|| "make_partition_spec")?;
-    let table_instance_id = view.get_table_instance_id();
+    let view_instance_id = view.get_view_instance_id();
     let continue_with_creation = verify_overlapping_partitions(
         &lake.db_pool,
         begin_insert,
         end_insert,
-        &table_set_name,
-        &table_instance_id,
+        &view_set_name,
+        &view_instance_id,
         &view.get_file_schema_hash(),
         &partition_spec.get_source_data_hash(),
     )
