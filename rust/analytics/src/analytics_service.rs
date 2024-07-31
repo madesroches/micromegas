@@ -286,6 +286,17 @@ impl AnalyticsService {
         serialize_record_batches(&answer)
     }
 
+    pub async fn query_partitions(&self) -> Result<bytes::Bytes> {
+        // if partitions are merged on a daily basis, there should not be that many
+        let rows = sqlx::query("SELECT * FROM lakehouse_partitions")
+            .fetch_all(&self.data_lake.db_pool)
+            .await?;
+        let record_batch =
+            rows_to_record_batch(&rows).with_context(|| "converting rows to record batch")?;
+        let answer = Answer::new(record_batch.schema(), vec![record_batch]);
+        serialize_record_batches(&answer)
+    }
+
     pub async fn query_spans(&self, body: bytes::Bytes) -> Result<bytes::Bytes> {
         let request: QuerySpansRequest =
             ciborium::from_reader(body.reader()).with_context(|| "parsing QuerySpansRequest")?;

@@ -90,6 +90,15 @@ async fn query_blocks_request(
     )
 }
 
+async fn query_partitions_request(Extension(service): Extension<AnalyticsService>) -> Response {
+    bytes_response(
+        service
+            .query_partitions()
+            .await
+            .with_context(|| "query_partitions"),
+    )
+}
+
 async fn query_spans_request(
     Extension(service): Extension<AnalyticsService>,
     body: bytes::Bytes,
@@ -156,6 +165,10 @@ async fn serve_http(
         .route("/analytics/query_processes", post(query_processes_request))
         .route("/analytics/query_streams", post(query_streams_request))
         .route("/analytics/query_blocks", post(query_blocks_request))
+        .route(
+            "/analytics/query_partitions",
+            post(query_partitions_request),
+        )
         .route("/analytics/query_spans", post(query_spans_request))
         .route(
             "/analytics/query_log_entries",

@@ -54,6 +54,14 @@ class Client:
             headers=self.headers,
         )
 
+    def query_partitions(self):
+        args = {}
+        return request.request(
+            self.analytics_base_url + "query_partitions",
+            args,
+            headers=self.headers,
+        )
+
     def query_spans(self, begin, end, limit, stream_id):
         return request.request(
             self.analytics_base_url + "query_spans",
