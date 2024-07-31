@@ -54,7 +54,7 @@ pub async fn query_log_entries(
     .with_context(|| "make_log_entries_record_batch")
 }
 
-#[allow(clippy::cast_precision_loss)]
+#[allow(clippy::cast_precision_loss, clippy::too_many_arguments)]
 #[span_fn]
 pub async fn make_log_entries_record_batch(
     blocks: &[BlockMetadata],
