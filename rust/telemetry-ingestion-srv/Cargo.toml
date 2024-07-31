@@ -12,6 +12,7 @@ default-run = "telemetry-ingestion-srv"
 
 [dependencies]
 micromegas.workspace = true
+micromegas-axum-utils.workspace = true
 
 anyhow.workspace = true
 axum.workspace = true

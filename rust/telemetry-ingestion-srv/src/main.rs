@@ -9,6 +9,7 @@
 
 use anyhow::{Context, Result};
 use axum::extract::DefaultBodyLimit;
+use axum::middleware;
 use axum::routing::post;
 use axum::Extension;
 use axum::Router;
@@ -18,6 +19,7 @@ use micromegas::ingestion::remote_data_lake::connect_to_remote_data_lake;
 use micromegas::ingestion::web_ingestion_service::WebIngestionService;
 use micromegas::telemetry_sink::TelemetryGuardBuilder;
 use micromegas::tracing::prelude::*;
+use micromegas_axum_utils::observability_middleware;
 use std::net::SocketAddr;
 use tower_http::limit::RequestBodyLimitLayer;
 
@@ -33,7 +35,6 @@ async fn insert_process_request(
     Extension(service): Extension<WebIngestionService>,
     body: bytes::Bytes,
 ) {
-    info!("insert_process_request");
     if let Err(e) = service.insert_process(body).await {
         error!("Error in insert_process_request: {:?}", e);
     }
@@ -43,7 +44,6 @@ async fn insert_stream_request(
     Extension(service): Extension<WebIngestionService>,
     body: bytes::Bytes,
 ) {
-    info!("insert_stream_request");
     if let Err(e) = service.insert_stream(body).await {
         error!("Error in insert_stream_request: {:?}", e);
     }
@@ -74,7 +74,8 @@ async fn serve_http(
         .route("/ingestion/insert_block", post(insert_block_request))
         .layer(DefaultBodyLimit::disable())
         .layer(RequestBodyLimitLayer::new(100 * 1024 * 1024))
-        .layer(Extension(service));
+        .layer(Extension(service))
+        .layer(middleware::from_fn(observability_middleware));
     let listener = tokio::net::TcpListener::bind(args.listen_endpoint_http)
         .await
         .unwrap();

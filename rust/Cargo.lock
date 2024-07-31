@@ -70,6 +70,7 @@ dependencies = [
  "bytes",
  "clap",
  "micromegas",
+ "micromegas-axum-utils",
  "sqlx",
  "tokio",
 ]
@@ -2160,6 +2161,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "micromegas-axum-utils"
+version = "0.1.6"
+dependencies = [
+ "axum",
+ "micromegas-tracing",
+]
+
+[[package]]
 name = "micromegas-derive-transit"
 version = "0.1.6"
 dependencies = [
@@ -3708,6 +3717,7 @@ dependencies = [
  "bytes",
  "clap",
  "micromegas",
+ "micromegas-axum-utils",
  "serde_json",
  "tokio",
  "tower-http",

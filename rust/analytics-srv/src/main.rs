@@ -7,8 +7,7 @@
 //!  - `MICROMEGAS_OBJECT_STORE_URI` : payloads, partitions
 
 use anyhow::{Context, Result};
-use axum::extract::Request;
-use axum::middleware::{self, Next};
+use axum::middleware;
 use axum::response::Response;
 use axum::routing::post;
 use axum::{Extension, Router};
@@ -18,6 +17,7 @@ use micromegas::analytics::lakehouse::view_factory::ViewFactory;
 use micromegas::ingestion::data_lake_connection::{connect_to_data_lake, DataLakeConnection};
 use micromegas::telemetry_sink::TelemetryGuardBuilder;
 use micromegas::tracing::prelude::*;
+use micromegas_axum_utils::observability_middleware;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -143,19 +143,6 @@ async fn query_view_request(
     body: bytes::Bytes,
 ) -> Response {
     bytes_response(service.query_view(body).await.with_context(|| "query_view"))
-}
-
-async fn observability_middleware(request: Request, next: Next) -> Response {
-    let (parts, body) = request.into_parts();
-    let uri = parts.uri.clone();
-    info!("request method={} uri={uri}", parts.method);
-    let begin_ticks = now();
-    let response = next.run(Request::from_parts(parts, body)).await;
-    let end_ticks = now();
-    let duration = end_ticks - begin_ticks;
-    imetric!("request_duration", "ticks", duration as u64);
-    info!("response status={} uri={uri}", response.status());
-    response
 }
 
 async fn serve_http(
