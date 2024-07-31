@@ -98,7 +98,7 @@ class Client:
             headers=self.headers,
         )
 
-    def query_metrics(self, begin, end, limit, stream_id):
+    def query_metrics(self, begin, end, limit=None, stream_id=None, sql=None):
         return request.request(
             self.analytics_base_url + "query_metrics",
             {
@@ -106,6 +106,20 @@ class Client:
                 "end": time.format_datetime(end),
                 "limit": limit,
                 "stream_id": stream_id,
+                "sql": sql,
+            },
+            headers=self.headers,
+        )
+
+    def query_view(self, view_set_name, view_instance_id, begin, end, sql):
+        return request.request(
+            self.analytics_base_url + "query_view",
+            {
+                "view_set_name": view_set_name,
+                "view_instance_id": view_instance_id,
+                "begin": time.format_datetime(begin),
+                "end": time.format_datetime(end),
+                "sql": sql,
             },
             headers=self.headers,
         )

@@ -82,11 +82,12 @@ pub struct QueryLogEntriesRequest {
 
 #[derive(Debug, Deserialize)]
 pub struct QueryMetricsRequest {
-    pub limit: i64,
+    pub limit: Option<i64>,
     pub begin: String,
     pub end: String,
-    #[serde(deserialize_with = "micromegas_transit::uuid_utils::uuid_from_string")]
-    pub stream_id: Uuid,
+    #[serde(deserialize_with = "micromegas_transit::uuid_utils::opt_uuid_from_string")]
+    pub stream_id: Option<Uuid>,
+    pub sql: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -334,7 +335,7 @@ impl AnalyticsService {
             .with_context(|| "parsing end time range")?;
         let answer = if let Some(stream_id) = request.stream_id {
             if request.limit.is_none() {
-                anyhow::bail!("limit is required for stream-specific log queries");
+                anyhow::bail!("limit is required for stream-specific queries");
             }
             let record_batch = crate::query_log_entries::query_log_entries(
                 &self.data_lake,
@@ -348,7 +349,10 @@ impl AnalyticsService {
             Answer::new(Arc::new(log_table_schema()), vec![record_batch])
         } else {
             if request.sql.is_none() {
-                anyhow::bail!("sql is required for lakehouse log queries");
+                anyhow::bail!("sql is required for lakehouse queries");
+            }
+            if request.limit.is_some() {
+                anyhow::bail!("limit must be included in the sql statement for lakehouse queries");
             }
             let view = self.view_factory.make_view("log_entries", "global")?;
             crate::lakehouse::query::query(
@@ -371,16 +375,38 @@ impl AnalyticsService {
             .with_context(|| "parsing begin time range")?;
         let end = DateTime::<FixedOffset>::parse_from_rfc3339(&request.end)
             .with_context(|| "parsing end time range")?;
-        let record_batch = crate::query_metrics::query_metrics(
-            &self.data_lake,
-            request.limit,
-            request.stream_id,
-            begin.into(),
-            end.into(),
-        )
-        .await
-        .with_context(|| "query_metrics")?;
-        let answer = Answer::new(record_batch.schema(), vec![record_batch]);
+        let answer = if let Some(stream_id) = request.stream_id {
+            if request.limit.is_none() {
+                anyhow::bail!("limit is required for stream-specific queries");
+            }
+            let record_batch = crate::query_metrics::query_metrics(
+                &self.data_lake,
+                request.limit.unwrap(),
+                stream_id,
+                begin.into(),
+                end.into(),
+            )
+            .await
+            .with_context(|| "query_metrics")?;
+            Answer::new(record_batch.schema(), vec![record_batch])
+        } else {
+            if request.sql.is_none() {
+                anyhow::bail!("sql is required for lakehouse queries");
+            }
+            if request.limit.is_some() {
+                anyhow::bail!("limit must be included in the sql statement for lakehouse queries");
+            }
+            let view = self.view_factory.make_view("measures", "global")?;
+            crate::lakehouse::query::query(
+                &self.data_lake,
+                begin.into(),
+                end.into(),
+                &request.sql.unwrap(),
+                view,
+            )
+            .await
+            .with_context(|| "lakehouse::query::query")?
+        };
         serialize_record_batches(&answer)
     }
 
