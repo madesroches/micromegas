@@ -24,6 +24,21 @@ pub fn log_table_schema() -> Schema {
             false,
         ),
         Field::new(
+            "exe",
+            DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
+            false,
+        ),
+        Field::new(
+            "username",
+            DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
+            false,
+        ),
+        Field::new(
+            "computer",
+            DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
+            false,
+        ),
+        Field::new(
             "time",
             DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into())),
             false,
@@ -40,6 +55,9 @@ pub fn log_table_schema() -> Schema {
 
 pub struct LogEntriesRecordBuilder {
     pub process_ids: StringDictionaryBuilder<Int16Type>,
+    pub exes: StringDictionaryBuilder<Int16Type>,
+    pub usernames: StringDictionaryBuilder<Int16Type>,
+    pub computers: StringDictionaryBuilder<Int16Type>,
     pub times: PrimitiveBuilder<TimestampNanosecondType>,
     pub targets: StringDictionaryBuilder<Int16Type>,
     pub levels: PrimitiveBuilder<Int32Type>,
@@ -50,6 +68,9 @@ impl LogEntriesRecordBuilder {
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             process_ids: StringDictionaryBuilder::new(),
+            exes: StringDictionaryBuilder::new(),
+            usernames: StringDictionaryBuilder::new(),
+            computers: StringDictionaryBuilder::new(),
             times: PrimitiveBuilder::with_capacity(capacity),
             targets: StringDictionaryBuilder::new(),
             levels: PrimitiveBuilder::with_capacity(capacity),
@@ -77,6 +98,9 @@ impl LogEntriesRecordBuilder {
     pub fn append(&mut self, row: &LogEntry) -> Result<()> {
         self.process_ids
             .append_value(format!("{}", row.process.process_id));
+        self.exes.append_value(&row.process.exe);
+        self.usernames.append_value(&row.process.username);
+        self.computers.append_value(&row.process.computer);
         self.times.append_value(row.time);
         self.targets.append_value(&*row.target);
         self.levels.append_value(row.level);
@@ -89,6 +113,9 @@ impl LogEntriesRecordBuilder {
             Arc::new(log_table_schema()),
             vec![
                 Arc::new(self.process_ids.finish()),
+                Arc::new(self.exes.finish()),
+                Arc::new(self.usernames.finish()),
+                Arc::new(self.computers.finish()),
                 Arc::new(self.times.finish().with_timezone_utc()),
                 Arc::new(self.targets.finish()),
                 Arc::new(self.levels.finish()),
