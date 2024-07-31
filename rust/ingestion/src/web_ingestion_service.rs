@@ -60,6 +60,7 @@ impl WebIngestionService {
             .execute(&self.lake.db_pool)
             .await
             .with_context(|| "inserting into blocks")?;
+        imetric!("payload_size_inserted", "bytes", payload_size as u64);
         debug!("recorded block_id={block_id} stream_id={stream_id} process_id={process_id}");
 
         Ok(())
