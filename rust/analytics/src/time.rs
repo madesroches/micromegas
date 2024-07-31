@@ -9,6 +9,7 @@ pub struct ConvertTicks {
     process_start_ns: i64,
     frequency: i64, // ticks per second
     inv_tsc_frequency_ns: f64,
+    inv_tsc_frequency_ms: f64,
 }
 
 impl ConvertTicks {
@@ -26,6 +27,7 @@ impl ConvertTicks {
             process_start_ns,
             frequency,
             inv_tsc_frequency_ns: get_tsc_frequency_inverse_ns(frequency),
+            inv_tsc_frequency_ms: get_tsc_frequency_inverse_ms(frequency),
         }
     }
 
@@ -40,6 +42,11 @@ impl ConvertTicks {
         let delta = (ticks - self.tick_offset) as f64;
         let ns_since_process_start = (delta * self.inv_tsc_frequency_ns).round() as i64;
         self.process_start_ns + ns_since_process_start
+    }
+
+    pub fn delta_ticks_to_ms(&self, delta_ticks: i64) -> f64 {
+        let delta = delta_ticks as f64;
+        delta * self.inv_tsc_frequency_ms
     }
 }
 

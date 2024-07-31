@@ -1,20 +1,14 @@
 use super::{
-    log_view::{TABLE_INSTANCE_ID, TABLE_SET_NAME},
     partition::{write_partition, Partition},
-    partition_source_data::{PartitionSourceBlock, PartitionSourceData},
+    partition_source_data::{PartitionSourceBlock, PartitionSourceDataBlocks},
     view::PartitionSpec,
-};
-use crate::{
-    log_entries_table::{log_table_schema, LogEntriesRecordBuilder},
-    log_entry::for_each_log_entry_in_block,
-    time::ConvertTicks,
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use bytes::BufMut;
 use chrono::{DateTime, Utc};
 use datafusion::{
-    arrow::array::RecordBatch,
+    arrow::{array::RecordBatch, datatypes::Schema},
     parquet::{
         arrow::ArrowWriter,
         basic::Compression,
@@ -26,15 +20,34 @@ use micromegas_telemetry::blob_storage::BlobStorage;
 use micromegas_tracing::prelude::*;
 use std::sync::Arc;
 
-pub struct LogPartitionSpec {
-    pub begin_insert: DateTime<Utc>,
-    pub end_insert: DateTime<Utc>,
-    pub file_schema_hash: Vec<u8>,
-    pub source_data: PartitionSourceData,
+pub struct PartitionRowSet {
+    pub min_time_row: i64,
+    pub max_time_row: i64,
+    pub rows: RecordBatch,
 }
 
 #[async_trait]
-impl PartitionSpec for LogPartitionSpec {
+pub trait BlockProcessor: Send + Sync {
+    async fn process(
+        &self,
+        blob_storage: Arc<BlobStorage>,
+        src_block: &PartitionSourceBlock,
+    ) -> Result<Option<PartitionRowSet>>;
+}
+
+pub struct BlockPartitionSpec {
+    pub view_set_name: Arc<String>,
+    pub view_instance_id: Arc<String>,
+    pub begin_insert: DateTime<Utc>,
+    pub end_insert: DateTime<Utc>,
+    pub file_schema: Arc<Schema>,
+    pub file_schema_hash: Vec<u8>,
+    pub source_data: PartitionSourceDataBlocks,
+    pub block_processor: Arc<dyn BlockProcessor>,
+}
+
+#[async_trait]
+impl PartitionSpec for BlockPartitionSpec {
     fn get_source_data_hash(&self) -> Vec<u8> {
         self.source_data.block_ids_hash.clone()
     }
@@ -47,15 +60,20 @@ impl PartitionSpec for LogPartitionSpec {
             .set_writer_version(WriterVersion::PARQUET_2_0)
             .set_compression(Compression::LZ4_RAW)
             .build();
-        let schema = Arc::new(log_table_schema());
-        let mut arrow_writer = ArrowWriter::try_new(&mut buffer_writer, schema, Some(props))?;
+        let mut arrow_writer =
+            ArrowWriter::try_new(&mut buffer_writer, self.file_schema.clone(), Some(props))?;
 
         let mut min_time = None;
         let mut max_time = None;
         for src_block in &self.source_data.blocks {
-            match fetch_log_block_row_set(lake.blob_storage.clone(), src_block).await {
+            match self
+                .block_processor
+                .process(lake.blob_storage.clone(), src_block)
+                .await
+                .with_context(|| "processing source block")
+            {
                 Err(e) => {
-                    error!("error fetching log block: {e:?}");
+                    error!("{e:?}");
                 }
                 Ok(Some(row_set)) => {
                     min_time = Some(
@@ -71,7 +89,7 @@ impl PartitionSpec for LogPartitionSpec {
                     arrow_writer.write(&row_set.rows)?;
                 }
                 Ok(None) => {
-                    debug!("empty log block");
+                    debug!("empty block");
                 }
             }
         }
@@ -80,8 +98,8 @@ impl PartitionSpec for LogPartitionSpec {
         let file_id = uuid::Uuid::new_v4();
         let file_path = format!(
             "views/{}/{}/{}/{}_{file_id}.parquet",
-            TABLE_SET_NAME,
-            TABLE_INSTANCE_ID,
+            *self.view_set_name,
+            *self.view_instance_id,
             self.begin_insert.format("%Y-%m-%d"),
             self.begin_insert.format("%H-%M-%S")
         );
@@ -94,8 +112,8 @@ impl PartitionSpec for LogPartitionSpec {
         write_partition(
             &lake,
             &Partition {
-                table_set_name: TABLE_SET_NAME.to_string(),
-                table_instance_id: TABLE_INSTANCE_ID.to_string(),
+                view_set_name: self.view_set_name.to_string(),
+                view_instance_id: self.view_instance_id.to_string(),
                 begin_insert_time: self.begin_insert,
                 end_insert_time: self.end_insert,
                 min_event_time: min_time.map(DateTime::<Utc>::from_timestamp_nanos).unwrap(),
@@ -110,51 +128,5 @@ impl PartitionSpec for LogPartitionSpec {
         )
         .await?;
         Ok(())
-    }
-}
-
-pub struct PartitionRowSet {
-    pub min_time_row: i64,
-    pub max_time_row: i64,
-    pub rows: RecordBatch,
-}
-
-async fn fetch_log_block_row_set(
-    blob_storage: Arc<BlobStorage>,
-    src_block: &PartitionSourceBlock,
-) -> Result<Option<PartitionRowSet>> {
-    let convert_ticks = ConvertTicks::from_meta_data(
-        src_block.process_start_ticks,
-        src_block
-            .process_start_time
-            .timestamp_nanos_opt()
-            .unwrap_or_default(),
-        src_block.process_tsc_frequency,
-    );
-    let nb_log_entries = src_block.block.nb_objects;
-    let mut record_builder = LogEntriesRecordBuilder::with_capacity(nb_log_entries as usize);
-
-    for_each_log_entry_in_block(
-        blob_storage,
-        &convert_ticks,
-        &src_block.stream,
-        &src_block.block,
-        |log_entry| {
-            record_builder.append(&log_entry)?;
-            Ok(true) // continue
-        },
-    )
-    .await
-    .with_context(|| "for_each_log_entry_in_block")?;
-
-    if let Some(time_range) = record_builder.get_time_range() {
-        let record_batch = record_builder.finish()?;
-        Ok(Some(PartitionRowSet {
-            min_time_row: time_range.0,
-            max_time_row: time_range.1,
-            rows: record_batch,
-        }))
-    } else {
-        Ok(None)
     }
 }

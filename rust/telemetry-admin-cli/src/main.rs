@@ -6,10 +6,10 @@ use clap::{Parser, Subcommand};
 use micromegas::analytics::delete::delete_old_data;
 use micromegas::analytics::lakehouse::batch_update::create_or_update_partitions;
 use micromegas::analytics::lakehouse::batch_update::create_or_update_recent_partitions;
-use micromegas::analytics::lakehouse::log_view::LogView;
 use micromegas::analytics::lakehouse::merge::merge_partitions;
 use micromegas::analytics::lakehouse::migration::migrate_lakehouse;
 use micromegas::analytics::lakehouse::temp::delete_expired_temporary_files;
+use micromegas::analytics::lakehouse::view_factory::ViewFactory;
 use micromegas::chrono::DateTime;
 use micromegas::chrono::TimeDelta;
 use micromegas::chrono::Utc;
@@ -38,12 +38,16 @@ enum Commands {
 
     #[clap(name = "create-recent-partitions")]
     CreateRecentPartitions {
+        view_set_name: String,
+        view_instance_id: String,
         partition_delta_seconds: i64,
         nb_partitions: i32,
     },
 
     #[clap(name = "create-partitions")]
     CreatePartitions {
+        view_set_name: String,
+        view_instance_id: String,
         begin: DateTime<Utc>,
         end: DateTime<Utc>,
         partition_delta_seconds: i64,
@@ -51,6 +55,8 @@ enum Commands {
 
     #[clap(name = "merge-partitions")]
     MergePartitions {
+        view_set_name: String,
+        view_instance_id: String,
         begin: DateTime<Utc>,
         end: DateTime<Utc>,
         partition_delta_seconds: i64,
@@ -74,6 +80,7 @@ async fn main() -> Result<()> {
     migrate_lakehouse(data_lake.db_pool.clone())
         .await
         .with_context(|| "migrate_lakehouse")?;
+    let view_factory = ViewFactory::default();
     match args.command {
         Commands::DeleteOldData { min_days_old } => {
             delete_old_data(&data_lake, min_days_old).await?;
@@ -82,6 +89,8 @@ async fn main() -> Result<()> {
             delete_expired_temporary_files(data_lake).await?;
         }
         Commands::CreateRecentPartitions {
+            view_set_name,
+            view_instance_id,
             partition_delta_seconds,
             nb_partitions,
         } => {
@@ -89,30 +98,47 @@ async fn main() -> Result<()> {
                 .with_context(|| "making time delta")?;
             create_or_update_recent_partitions(
                 data_lake,
-                Arc::new(LogView::default()),
+                view_factory.make_view(&view_set_name, &view_instance_id)?,
                 delta,
                 nb_partitions,
             )
             .await?;
         }
         Commands::CreatePartitions {
+            view_set_name,
+            view_instance_id,
             begin,
             end,
             partition_delta_seconds,
         } => {
             let delta = TimeDelta::try_seconds(partition_delta_seconds)
                 .with_context(|| "making time delta")?;
-            create_or_update_partitions(data_lake, Arc::new(LogView::default()), begin, end, delta)
-                .await?;
+            create_or_update_partitions(
+                data_lake,
+                view_factory.make_view(&view_set_name, &view_instance_id)?,
+                begin,
+                end,
+                delta,
+            )
+            .await?;
         }
         Commands::MergePartitions {
+            view_set_name,
+            view_instance_id,
             begin,
             end,
             partition_delta_seconds,
         } => {
             let delta = TimeDelta::try_seconds(partition_delta_seconds)
                 .with_context(|| "making time delta")?;
-            merge_partitions(data_lake, Arc::new(LogView::default()), begin, end, delta).await?;
+            merge_partitions(
+                data_lake,
+                view_factory.make_view(&view_set_name, &view_instance_id)?,
+                begin,
+                end,
+                delta,
+            )
+            .await?;
         }
     }
     Ok(())

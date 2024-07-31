@@ -1,39 +1,39 @@
+use crate::metrics_table::metrics_table_schema;
+
 use super::{
     block_partition_spec::BlockPartitionSpec,
-    log_block_processor::LogBlockProcessor,
+    metrics_block_processor::MetricsBlockProcessor,
     partition_source_data::fetch_partition_source_data,
     view::{PartitionSpec, View},
     view_factory::ViewMaker,
 };
-use crate::log_entries_table::log_table_schema;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use datafusion::arrow::datatypes::Schema;
 use std::sync::Arc;
 
-const VIEW_SET_NAME: &str = "log_entries";
+const VIEW_SET_NAME: &str = "measures";
 const VIEW_INSTANCE_ID: &str = "global";
 
-pub struct LogViewMaker {}
+pub struct MetricsViewMaker {}
 
-impl ViewMaker for LogViewMaker {
+impl ViewMaker for MetricsViewMaker {
     fn make_view(&self, view_instance_id: &str) -> Result<Arc<dyn View>> {
-        Ok(Arc::new(LogView::new(view_instance_id)?))
+        Ok(Arc::new(MetricsView::new(view_instance_id)?))
     }
 }
 
-pub struct LogView {
+pub struct MetricsView {
     view_set_name: Arc<String>,
     view_instance_id: Arc<String>,
 }
 
-impl LogView {
+impl MetricsView {
     pub fn new(view_instance_id: &str) -> Result<Self> {
         if view_instance_id != "global" {
             anyhow::bail!("only the global view instance is implemented");
         }
-
         Ok(Self {
             view_set_name: Arc::new(String::from(VIEW_SET_NAME)),
             view_instance_id: Arc::new(String::from(VIEW_INSTANCE_ID)),
@@ -42,7 +42,7 @@ impl LogView {
 }
 
 #[async_trait]
-impl View for LogView {
+impl View for MetricsView {
     fn get_view_set_name(&self) -> Arc<String> {
         self.view_set_name.clone()
     }
@@ -57,7 +57,7 @@ impl View for LogView {
         begin_insert: DateTime<Utc>,
         end_insert: DateTime<Utc>,
     ) -> Result<Arc<dyn PartitionSpec>> {
-        let source_data = fetch_partition_source_data(pool, begin_insert, end_insert, "log")
+        let source_data = fetch_partition_source_data(pool, begin_insert, end_insert, "metrics")
             .await
             .with_context(|| "fetch_partition_source_data")?;
         Ok(Arc::new(BlockPartitionSpec {
@@ -68,7 +68,7 @@ impl View for LogView {
             file_schema: self.get_file_schema(),
             file_schema_hash: self.get_file_schema_hash(),
             source_data,
-            block_processor: Arc::new(LogBlockProcessor {}),
+            block_processor: Arc::new(MetricsBlockProcessor {}),
         }))
     }
 
@@ -77,6 +77,6 @@ impl View for LogView {
     }
 
     fn get_file_schema(&self) -> Arc<Schema> {
-        Arc::new(log_table_schema())
+        Arc::new(metrics_table_schema())
     }
 }

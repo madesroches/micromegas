@@ -7,15 +7,19 @@
 //!  - `MICROMEGAS_OBJECT_STORE_URI` : payloads, partitions
 
 use anyhow::{Context, Result};
+use axum::middleware;
 use axum::response::Response;
 use axum::routing::post;
 use axum::{Extension, Router};
 use clap::Parser;
 use micromegas::analytics::analytics_service::AnalyticsService;
+use micromegas::analytics::lakehouse::view_factory::ViewFactory;
 use micromegas::ingestion::data_lake_connection::{connect_to_data_lake, DataLakeConnection};
 use micromegas::telemetry_sink::TelemetryGuardBuilder;
 use micromegas::tracing::prelude::*;
+use micromegas_axum_utils::observability_middleware;
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 #[derive(Parser, Debug)]
 #[clap(name = "Analytics Server")]
@@ -42,7 +46,6 @@ async fn find_process_request(
     Extension(service): Extension<AnalyticsService>,
     body: bytes::Bytes,
 ) -> Response {
-    info!("find_process_request");
     bytes_response(
         service
             .find_process(body)
@@ -55,7 +58,6 @@ async fn query_processes_request(
     Extension(service): Extension<AnalyticsService>,
     body: bytes::Bytes,
 ) -> Response {
-    info!("query_processes_request");
     bytes_response(
         service
             .query_processes(body)
@@ -68,7 +70,6 @@ async fn query_streams_request(
     Extension(service): Extension<AnalyticsService>,
     body: bytes::Bytes,
 ) -> Response {
-    info!("query_streams_request");
     bytes_response(
         service
             .query_streams(body)
@@ -81,7 +82,6 @@ async fn query_blocks_request(
     Extension(service): Extension<AnalyticsService>,
     body: bytes::Bytes,
 ) -> Response {
-    info!("query_blocks_request");
     bytes_response(
         service
             .query_blocks(body)
@@ -94,7 +94,6 @@ async fn query_spans_request(
     Extension(service): Extension<AnalyticsService>,
     body: bytes::Bytes,
 ) -> Response {
-    info!("query_spans_request");
     bytes_response(
         service
             .query_spans(body)
@@ -107,7 +106,6 @@ async fn query_thread_events_request(
     Extension(service): Extension<AnalyticsService>,
     body: bytes::Bytes,
 ) -> Response {
-    info!("query_thread_events_request");
     bytes_response(
         service
             .query_thread_events(body)
@@ -120,7 +118,6 @@ async fn query_log_entries_request(
     Extension(service): Extension<AnalyticsService>,
     body: bytes::Bytes,
 ) -> Response {
-    info!("query_log_entries_request");
     bytes_response(
         service
             .query_log_entries(body)
@@ -133,7 +130,6 @@ async fn query_metrics_request(
     Extension(service): Extension<AnalyticsService>,
     body: bytes::Bytes,
 ) -> Response {
-    info!("query_metrics_request");
     bytes_response(
         service
             .query_metrics(body)
@@ -142,11 +138,19 @@ async fn query_metrics_request(
     )
 }
 
+async fn query_view_request(
+    Extension(service): Extension<AnalyticsService>,
+    body: bytes::Bytes,
+) -> Response {
+    bytes_response(service.query_view(body).await.with_context(|| "query_view"))
+}
+
 async fn serve_http(
     args: &Cli,
     lake: DataLakeConnection,
+    view_factory: Arc<ViewFactory>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let service = AnalyticsService::new(lake);
+    let service = AnalyticsService::new(lake, view_factory);
     let app = Router::new()
         .route("/analytics/find_process", post(find_process_request))
         .route("/analytics/query_processes", post(query_processes_request))
@@ -158,11 +162,13 @@ async fn serve_http(
             post(query_log_entries_request),
         )
         .route("/analytics/query_metrics", post(query_metrics_request))
+        .route("/analytics/query_view", post(query_view_request))
         .route(
             "/analytics/query_thread_events",
             post(query_thread_events_request),
         )
-        .layer(Extension(service));
+        .layer(Extension(service))
+        .layer(middleware::from_fn(observability_middleware));
     let listener = tokio::net::TcpListener::bind(args.listen_endpoint)
         .await
         .unwrap();
@@ -184,6 +190,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let object_store_uri = std::env::var("MICROMEGAS_OBJECT_STORE_URI")
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
     let data_lake = connect_to_data_lake(&connection_string, &object_store_uri).await?;
-    serve_http(&args, data_lake).await?;
+    let view_factory = ViewFactory::default();
+    serve_http(&args, data_lake, Arc::new(view_factory)).await?;
     Ok(())
 }

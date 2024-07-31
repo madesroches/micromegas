@@ -105,7 +105,7 @@ fn test_log_encode_dynamic() {
 fn test_parse_log_interops() {
     let _telemetry_guard = TelemetryGuard::new();
     let process_id = uuid::Uuid::new_v4();
-    let process_info = make_process_info(process_id, Some(uuid::Uuid::new_v4()));
+    let process_info = Arc::new(make_process_info(process_id, Some(uuid::Uuid::new_v4())));
     let mut stream = LogStream::new(1024, process_id, &[], HashMap::new());
     let stream_id = stream.stream_id();
     stream.get_events_mut().push(LogStaticStrInteropEvent {
@@ -128,9 +128,8 @@ fn test_parse_log_interops() {
     let stream_info = make_stream_info(&stream);
     let mut nb_log_entries = 0;
     let convert_ticks = ConvertTicks::from_meta_data(0, 0, 1);
-    let ref_counted_process_id = Arc::new(format!("{process_id}"));
     parse_block(&stream_info, &received_block.payload, |val| {
-        if log_entry_from_value(&convert_ticks, ref_counted_process_id.clone(), &val)
+        if log_entry_from_value(&convert_ticks, process_info.clone(), &val)
             .unwrap()
             .is_some()
         {

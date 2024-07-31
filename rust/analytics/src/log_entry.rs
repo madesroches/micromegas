@@ -11,7 +11,7 @@ use micromegas_transit::Value;
 use std::sync::Arc;
 
 pub struct LogEntry {
-    pub process_id: Arc<String>,
+    pub process: Arc<ProcessInfo>,
     pub time: i64,
     pub level: i32,
     pub target: Arc<String>,
@@ -21,7 +21,7 @@ pub struct LogEntry {
 #[span_fn]
 pub fn log_entry_from_value(
     convert_ticks: &ConvertTicks,
-    process_id: Arc<String>,
+    process: Arc<ProcessInfo>,
     val: &Value,
 ) -> Result<Option<LogEntry>> {
     if let Value::Object(obj) = val {
@@ -43,7 +43,7 @@ pub fn log_entry_from_value(
                     .get::<Arc<String>>("fmt_str")
                     .with_context(|| "reading fmt_str from LogStaticStrEvent")?;
                 Ok(Some(LogEntry {
-                    process_id,
+                    process,
                     time: convert_ticks.ticks_to_nanoseconds(ticks),
                     level: level as i32,
                     target,
@@ -67,7 +67,7 @@ pub fn log_entry_from_value(
                     .get::<Arc<String>>("msg")
                     .with_context(|| "reading msg from LogStringEvent")?;
                 Ok(Some(LogEntry {
-                    process_id,
+                    process,
                     time: convert_ticks.ticks_to_nanoseconds(ticks),
                     level: level as i32,
                     target,
@@ -88,7 +88,7 @@ pub fn log_entry_from_value(
                     .get::<Arc<String>>("msg")
                     .with_context(|| format!("reading msg from {}", obj.type_name.as_str()))?;
                 Ok(Some(LogEntry {
-                    process_id,
+                    process,
                     time: convert_ticks.ticks_to_nanoseconds(ticks),
                     level: level as i32,
                     target,
@@ -109,6 +109,7 @@ pub fn log_entry_from_value(
 pub async fn for_each_log_entry_in_block<Predicate: FnMut(LogEntry) -> Result<bool>>(
     blob_storage: Arc<BlobStorage>,
     convert_ticks: &ConvertTicks,
+    process: Arc<ProcessInfo>,
     stream: &StreamInfo,
     block: &BlockMetadata,
     mut fun: Predicate,
@@ -120,9 +121,8 @@ pub async fn for_each_log_entry_in_block<Predicate: FnMut(LogEntry) -> Result<bo
         block.block_id,
     )
     .await?;
-    let process_id = Arc::new(format!("{}", stream.process_id));
     parse_block(stream, &payload, |val| {
-        if let Some(log_entry) = log_entry_from_value(convert_ticks, process_id.clone(), &val)
+        if let Some(log_entry) = log_entry_from_value(convert_ticks, process.clone(), &val)
             .with_context(|| "log_entry_from_value")?
         {
             if !fun(log_entry)? {
