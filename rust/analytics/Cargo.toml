@@ -23,6 +23,7 @@ chrono.workspace = true
 ciborium.workspace = true
 datafusion.workspace = true
 futures.workspace = true
+lazy_static.workspace = true
 object_store.workspace = true
 serde.workspace = true
 serde_json.workspace = true

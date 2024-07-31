@@ -1,7 +1,7 @@
 use chrono::prelude::*;
 use std::sync::atomic::{AtomicI64, Ordering};
 
-use crate::dispatch::{flush_log_buffer, flush_metrics_buffer, for_each_thread_stream, get_sink};
+use crate::dispatch::{flush_log_buffer, flush_metrics_buffer, for_each_thread_stream};
 
 // FlushMonitor triggers the flush of the telemetry streams every minute.
 //   Must be ticked.

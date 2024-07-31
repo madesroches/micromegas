@@ -2145,6 +2145,7 @@ dependencies = [
  "ciborium",
  "datafusion",
  "futures",
+ "lazy_static",
  "micromegas-ingestion",
  "micromegas-telemetry",
  "micromegas-telemetry-sink",

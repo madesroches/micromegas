@@ -52,6 +52,7 @@ pub fn measure_from_value(convert_ticks: &ConvertTicks, val: &Value) -> Result<O
                 let ticks = obj
                     .get::<i64>("time")
                     .with_context(|| "reading time from IntegerMetricEvent")?;
+                let time = convert_ticks.ticks_to_nanoseconds(ticks);
                 let value = obj
                     .get::<u64>("value")
                     .with_context(|| "reading value from IntegerMetricEvent")?;
@@ -67,13 +68,26 @@ pub fn measure_from_value(convert_ticks: &ConvertTicks, val: &Value) -> Result<O
                 let unit = desc
                     .get::<Arc<String>>("unit")
                     .with_context(|| "reading unit from IntegerMetricEvent")?;
-                Ok(Some(Measure {
-                    time: convert_ticks.ticks_to_nanoseconds(ticks),
-                    target,
-                    name,
-                    unit,
-                    value: value as f64,
-                }))
+                if *unit == "ticks" {
+                    lazy_static::lazy_static! {
+                        static ref SECONDS_METRIC_UNIT: Arc<String> = Arc::new( String::from("seconds"));
+                    }
+                    Ok(Some(Measure {
+                        time,
+                        target,
+                        name,
+                        unit: SECONDS_METRIC_UNIT.clone(),
+                        value: convert_ticks.delta_ticks_to_ms(value as i64) / 1000.0,
+                    }))
+                } else {
+                    Ok(Some(Measure {
+                        time,
+                        target,
+                        name,
+                        unit,
+                        value: value as f64,
+                    }))
+                }
             }
             _ => {
                 warn!("unknown metric event {:?}", obj);
