@@ -7,6 +7,8 @@
 //!  - `MICROMEGAS_OBJECT_STORE_URI` : payloads, partitions
 
 use anyhow::{Context, Result};
+use axum::extract::Request;
+use axum::middleware::{self, Next};
 use axum::response::Response;
 use axum::routing::post;
 use axum::{Extension, Router};
@@ -44,7 +46,6 @@ async fn find_process_request(
     Extension(service): Extension<AnalyticsService>,
     body: bytes::Bytes,
 ) -> Response {
-    info!("find_process_request");
     bytes_response(
         service
             .find_process(body)
@@ -57,7 +58,6 @@ async fn query_processes_request(
     Extension(service): Extension<AnalyticsService>,
     body: bytes::Bytes,
 ) -> Response {
-    info!("query_processes_request");
     bytes_response(
         service
             .query_processes(body)
@@ -70,7 +70,6 @@ async fn query_streams_request(
     Extension(service): Extension<AnalyticsService>,
     body: bytes::Bytes,
 ) -> Response {
-    info!("query_streams_request");
     bytes_response(
         service
             .query_streams(body)
@@ -83,7 +82,6 @@ async fn query_blocks_request(
     Extension(service): Extension<AnalyticsService>,
     body: bytes::Bytes,
 ) -> Response {
-    info!("query_blocks_request");
     bytes_response(
         service
             .query_blocks(body)
@@ -96,7 +94,6 @@ async fn query_spans_request(
     Extension(service): Extension<AnalyticsService>,
     body: bytes::Bytes,
 ) -> Response {
-    info!("query_spans_request");
     bytes_response(
         service
             .query_spans(body)
@@ -109,7 +106,6 @@ async fn query_thread_events_request(
     Extension(service): Extension<AnalyticsService>,
     body: bytes::Bytes,
 ) -> Response {
-    info!("query_thread_events_request");
     bytes_response(
         service
             .query_thread_events(body)
@@ -122,7 +118,6 @@ async fn query_log_entries_request(
     Extension(service): Extension<AnalyticsService>,
     body: bytes::Bytes,
 ) -> Response {
-    info!("query_log_entries_request");
     bytes_response(
         service
             .query_log_entries(body)
@@ -135,7 +130,6 @@ async fn query_metrics_request(
     Extension(service): Extension<AnalyticsService>,
     body: bytes::Bytes,
 ) -> Response {
-    info!("query_metrics_request");
     bytes_response(
         service
             .query_metrics(body)
@@ -148,8 +142,20 @@ async fn query_view_request(
     Extension(service): Extension<AnalyticsService>,
     body: bytes::Bytes,
 ) -> Response {
-    info!("query_view_request");
     bytes_response(service.query_view(body).await.with_context(|| "query_view"))
+}
+
+async fn observability_middleware(request: Request, next: Next) -> Response {
+    let (parts, body) = request.into_parts();
+    let uri = parts.uri.clone();
+    info!("request method={} uri={uri}", parts.method);
+    let begin_ticks = now();
+    let response = next.run(Request::from_parts(parts, body)).await;
+    let end_ticks = now();
+    let duration = end_ticks - begin_ticks;
+    imetric!("request_duration", "ticks", duration as u64);
+    info!("response status={} uri={uri}", response.status());
+    response
 }
 
 async fn serve_http(
@@ -174,7 +180,8 @@ async fn serve_http(
             "/analytics/query_thread_events",
             post(query_thread_events_request),
         )
-        .layer(Extension(service));
+        .layer(Extension(service))
+        .layer(middleware::from_fn(observability_middleware));
     let listener = tokio::net::TcpListener::bind(args.listen_endpoint)
         .await
         .unwrap();

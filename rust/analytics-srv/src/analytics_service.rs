@@ -19,30 +19,6 @@ use crate::lakehouse::jit_lakehouse::JitLakehouse;
 use crate::log_entry::Searchable;
 use crate::metrics::MetricHandler;
 
-static REQUEST_COUNT: AtomicU64 = AtomicU64::new(0);
-
-struct RequestGuard {
-    begin_ticks: i64,
-}
-
-impl RequestGuard {
-    fn new() -> Self {
-        init_thread_stream();
-        let previous_count = REQUEST_COUNT.fetch_add(1, Ordering::SeqCst);
-        imetric!("Request Count", "count", previous_count);
-
-        let begin_ticks = micromegas_tracing::now();
-        Self { begin_ticks }
-    }
-}
-
-impl Drop for RequestGuard {
-    fn drop(&mut self) {
-        let end_ticks = micromegas_tracing::now();
-        let duration = end_ticks - self.begin_ticks;
-        imetric!("Request Duration", "ticks", duration as u64);
-    }
-}
 
 pub struct AnalyticsService {
     pool: PgPool,
