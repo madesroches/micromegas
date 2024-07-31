@@ -34,6 +34,7 @@ impl BlockProcessor for MetricsBlockProcessor {
         for_each_measure_in_block(
             blob_storage,
             &convert_ticks,
+            src_block.process.clone(),
             &src_block.stream,
             &src_block.block,
             |measure| {

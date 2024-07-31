@@ -12,6 +12,26 @@ use std::sync::Arc;
 pub fn metrics_table_schema() -> Schema {
     Schema::new(vec![
         Field::new(
+            "process_id",
+            DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
+            false,
+        ),
+        Field::new(
+            "exe",
+            DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
+            false,
+        ),
+        Field::new(
+            "username",
+            DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
+            false,
+        ),
+        Field::new(
+            "computer",
+            DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
+            false,
+        ),
+        Field::new(
             "time",
             DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into())),
             false,
@@ -36,6 +56,10 @@ pub fn metrics_table_schema() -> Schema {
 }
 
 pub struct MetricsRecordBuilder {
+    pub process_ids: StringDictionaryBuilder<Int16Type>,
+    pub exes: StringDictionaryBuilder<Int16Type>,
+    pub usernames: StringDictionaryBuilder<Int16Type>,
+    pub computers: StringDictionaryBuilder<Int16Type>,
     pub times: PrimitiveBuilder<TimestampNanosecondType>,
     pub targets: StringDictionaryBuilder<Int16Type>,
     pub names: StringDictionaryBuilder<Int16Type>,
@@ -46,6 +70,10 @@ pub struct MetricsRecordBuilder {
 impl MetricsRecordBuilder {
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
+            process_ids: StringDictionaryBuilder::new(),
+            exes: StringDictionaryBuilder::new(),
+            usernames: StringDictionaryBuilder::new(),
+            computers: StringDictionaryBuilder::new(),
             times: PrimitiveBuilder::with_capacity(capacity),
             targets: StringDictionaryBuilder::new(),
             names: StringDictionaryBuilder::new(),
@@ -72,6 +100,11 @@ impl MetricsRecordBuilder {
     }
 
     pub fn append(&mut self, row: &Measure) -> Result<()> {
+        self.process_ids
+            .append_value(format!("{}", row.process.process_id));
+        self.exes.append_value(&row.process.exe);
+        self.usernames.append_value(&row.process.username);
+        self.computers.append_value(&row.process.computer);
         self.times.append_value(row.time);
         self.targets.append_value(&*row.target);
         self.names.append_value(&*row.name);
@@ -84,6 +117,10 @@ impl MetricsRecordBuilder {
         RecordBatch::try_new(
             Arc::new(metrics_table_schema()),
             vec![
+                Arc::new(self.process_ids.finish()),
+                Arc::new(self.exes.finish()),
+                Arc::new(self.usernames.finish()),
+                Arc::new(self.computers.finish()),
                 Arc::new(self.times.finish().with_timezone_utc()),
                 Arc::new(self.targets.finish()),
                 Arc::new(self.names.finish()),

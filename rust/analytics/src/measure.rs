@@ -11,6 +11,7 @@ use micromegas_transit::Value;
 use std::sync::Arc;
 
 pub struct Measure {
+    pub process: Arc<ProcessInfo>,
     pub time: i64,
     pub target: Arc<String>,
     pub name: Arc<String>,
@@ -18,7 +19,11 @@ pub struct Measure {
     pub value: f64,
 }
 
-pub fn measure_from_value(convert_ticks: &ConvertTicks, val: &Value) -> Result<Option<Measure>> {
+pub fn measure_from_value(
+    process: Arc<ProcessInfo>,
+    convert_ticks: &ConvertTicks,
+    val: &Value,
+) -> Result<Option<Measure>> {
     if let Value::Object(obj) = val {
         match obj.type_name.as_str() {
             "FloatMetricEvent" => {
@@ -41,6 +46,7 @@ pub fn measure_from_value(convert_ticks: &ConvertTicks, val: &Value) -> Result<O
                     .get::<Arc<String>>("unit")
                     .with_context(|| "reading unit from FloatMetricEvent")?;
                 Ok(Some(Measure {
+                    process,
                     time: convert_ticks.ticks_to_nanoseconds(ticks),
                     target,
                     name,
@@ -73,6 +79,7 @@ pub fn measure_from_value(convert_ticks: &ConvertTicks, val: &Value) -> Result<O
                         static ref SECONDS_METRIC_UNIT: Arc<String> = Arc::new( String::from("seconds"));
                     }
                     Ok(Some(Measure {
+                        process,
                         time,
                         target,
                         name,
@@ -81,6 +88,7 @@ pub fn measure_from_value(convert_ticks: &ConvertTicks, val: &Value) -> Result<O
                     }))
                 } else {
                     Ok(Some(Measure {
+                        process,
                         time,
                         target,
                         name,
@@ -103,6 +111,7 @@ pub fn measure_from_value(convert_ticks: &ConvertTicks, val: &Value) -> Result<O
 pub async fn for_each_measure_in_block<Predicate: FnMut(Measure) -> Result<bool>>(
     blob_storage: Arc<BlobStorage>,
     convert_ticks: &ConvertTicks,
+    process: Arc<ProcessInfo>,
     stream: &StreamInfo,
     block: &BlockMetadata,
     mut fun: Predicate,
@@ -115,8 +124,8 @@ pub async fn for_each_measure_in_block<Predicate: FnMut(Measure) -> Result<bool>
     )
     .await?;
     let continue_iterating = parse_block(stream, &payload, |val| {
-        if let Some(measure) =
-            measure_from_value(convert_ticks, &val).with_context(|| "measure_from_value")?
+        if let Some(measure) = measure_from_value(process.clone(), convert_ticks, &val)
+            .with_context(|| "measure_from_value")?
         {
             if !fun(measure)? {
                 return Ok(false); //do not continue

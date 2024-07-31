@@ -24,9 +24,11 @@ pub async fn query_metrics(
     let stream_info = find_stream(&mut connection, stream_id)
         .await
         .with_context(|| "find_stream")?;
-    let process_info = find_process(&mut connection, &stream_info.process_id)
-        .await
-        .with_context(|| "find_process")?;
+    let process_info = Arc::new(
+        find_process(&mut connection, &stream_info.process_id)
+            .await
+            .with_context(|| "find_process")?,
+    );
     let convert_ticks = ConvertTicks::new(&process_info);
     let relative_begin_ticks = convert_ticks.to_ticks(begin - process_info.start_time);
     let relative_end_ticks = convert_ticks.to_ticks(end - process_info.start_time);
@@ -47,6 +49,7 @@ pub async fn query_metrics(
         end,
         data_lake.blob_storage.clone(),
         convert_ticks,
+        process_info,
         &stream_info,
     )
     .await
@@ -62,6 +65,7 @@ pub async fn make_metrics_record_batch(
     end: DateTime<Utc>,
     blob_storage: Arc<BlobStorage>,
     convert_ticks: ConvertTicks,
+    process: Arc<ProcessInfo>,
     stream: &micromegas_telemetry::stream_info::StreamInfo,
 ) -> Result<RecordBatch> {
     let mut record_builder = MetricsRecordBuilder::with_capacity(1024);
@@ -72,6 +76,7 @@ pub async fn make_metrics_record_batch(
         let continue_iterating = for_each_measure_in_block(
             blob_storage.clone(),
             &convert_ticks,
+            process.clone(),
             stream,
             block,
             |measure| {
