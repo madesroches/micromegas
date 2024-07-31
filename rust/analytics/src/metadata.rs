@@ -46,7 +46,7 @@ pub async fn find_stream(
 
 #[span_fn]
 pub fn process_from_row(row: &sqlx::postgres::PgRow) -> Result<ProcessInfo> {
-    let properties: Vec<sql_property::Property> = row.try_get("properties")?;
+    let properties: Vec<sql_property::Property> = row.try_get("process_properties")?;
     Ok(ProcessInfo {
         process_id: row.try_get("process_id")?,
         exe: row.try_get("exe")?,
@@ -80,7 +80,7 @@ pub async fn find_process(
                 start_time,
                 start_ticks,
                 parent_process_id,
-                properties
+                properties as process_properties
          FROM processes
          WHERE process_id = $1;",
     )

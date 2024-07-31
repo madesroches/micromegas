@@ -75,7 +75,8 @@ impl LogEntriesRecordBuilder {
     }
 
     pub fn append(&mut self, row: &LogEntry) -> Result<()> {
-        self.process_ids.append_value(&*row.process_id);
+        self.process_ids
+            .append_value(format!("{}", row.process.process_id));
         self.times.append_value(row.time);
         self.targets.append_value(&*row.target);
         self.levels.append_value(row.level);

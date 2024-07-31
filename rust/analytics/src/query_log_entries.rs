@@ -47,6 +47,7 @@ pub async fn query_log_entries(
         limit,
         data_lake.blob_storage.clone(),
         convert_ticks,
+        Arc::new(process_info),
         &stream_info,
     )
     .await
@@ -62,6 +63,7 @@ pub async fn make_log_entries_record_batch(
     limit: i64,
     blob_storage: Arc<BlobStorage>,
     convert_ticks: ConvertTicks,
+    process: Arc<ProcessInfo>,
     stream: &micromegas_telemetry::stream_info::StreamInfo,
 ) -> Result<RecordBatch> {
     let mut record_builder = LogEntriesRecordBuilder::with_capacity(1024);
@@ -71,6 +73,7 @@ pub async fn make_log_entries_record_batch(
         for_each_log_entry_in_block(
             blob_storage.clone(),
             &convert_ticks,
+            process.clone(),
             stream,
             block,
             |log_entry| {

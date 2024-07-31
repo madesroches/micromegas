@@ -34,6 +34,7 @@ impl BlockProcessor for LogBlockProcessor {
         for_each_log_entry_in_block(
             blob_storage,
             &convert_ticks,
+            src_block.process.clone(),
             &src_block.stream,
             &src_block.block,
             |log_entry| {
