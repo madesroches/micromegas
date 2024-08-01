@@ -3,6 +3,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use bytes::Buf;
 use bytes::BufMut;
+use chrono::TimeDelta;
 use datafusion::parquet::arrow::ArrowWriter;
 use datafusion::parquet::basic::Compression;
 use datafusion::parquet::file::properties::WriterProperties;
@@ -12,14 +13,17 @@ use serde::Deserialize;
 use sqlx::types::chrono::{DateTime, FixedOffset};
 use uuid::Uuid;
 
+use crate::arrow_utils::make_empty_record_batch;
 use crate::lakehouse::answer::Answer;
+use crate::lakehouse::batch_update::create_or_update_partitions;
+use crate::lakehouse::merge::merge_partitions;
+use crate::lakehouse::partition::retire_partitions;
 use crate::lakehouse::view_factory::ViewFactory;
-use crate::log_entries_table::log_table_schema;
 use crate::sql_arrow_bridge::rows_to_record_batch;
 
 #[derive(Clone)]
 pub struct AnalyticsService {
-    data_lake: DataLakeConnection,
+    data_lake: Arc<DataLakeConnection>,
     view_factory: Arc<ViewFactory>,
 }
 
@@ -99,8 +103,34 @@ pub struct QueryViewRequest {
     pub sql: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct CreateOrUpdatePartitionsRequest {
+    pub view_set_name: String,
+    pub view_instance_id: String,
+    pub begin: String,
+    pub end: String,
+    pub partition_delta_seconds: i64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct MergePartitionsRequest {
+    pub view_set_name: String,
+    pub view_instance_id: String,
+    pub begin: String,
+    pub end: String,
+    pub partition_delta_seconds: i64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RetirePartitionsRequest {
+    pub view_set_name: String,
+    pub view_instance_id: String,
+    pub begin: String,
+    pub end: String,
+}
+
 impl AnalyticsService {
-    pub fn new(data_lake: DataLakeConnection, view_factory: Arc<ViewFactory>) -> Self {
+    pub fn new(data_lake: Arc<DataLakeConnection>, view_factory: Arc<ViewFactory>) -> Self {
         Self {
             data_lake,
             view_factory,
@@ -135,7 +165,7 @@ impl AnalyticsService {
         drop(connection);
         let record_batch =
             rows_to_record_batch(&rows).with_context(|| "converting rows to record batch")?;
-        let answer = Answer::new(record_batch.schema(), vec![record_batch]);
+        let answer = Answer::from_record_batch(record_batch);
         serialize_record_batches(&answer)
     }
 
@@ -177,7 +207,7 @@ impl AnalyticsService {
         drop(connection);
         let record_batch =
             rows_to_record_batch(&rows).with_context(|| "converting rows to record batch")?;
-        let answer = Answer::new(record_batch.schema(), vec![record_batch]);
+        let answer = Answer::from_record_batch(record_batch);
         serialize_record_batches(&answer)
     }
 
@@ -254,7 +284,7 @@ impl AnalyticsService {
         drop(connection);
         let record_batch =
             rows_to_record_batch(&rows).with_context(|| "converting rows to record batch")?;
-        let answer = Answer::new(record_batch.schema(), vec![record_batch]);
+        let answer = Answer::from_record_batch(record_batch);
         serialize_record_batches(&answer)
     }
 
@@ -282,7 +312,7 @@ impl AnalyticsService {
         drop(connection);
         let record_batch =
             rows_to_record_batch(&rows).with_context(|| "converting rows to record batch")?;
-        let answer = Answer::new(record_batch.schema(), vec![record_batch]);
+        let answer = Answer::from_record_batch(record_batch);
         serialize_record_batches(&answer)
     }
 
@@ -302,7 +332,7 @@ impl AnalyticsService {
         )
         .await
         .with_context(|| "query_spans")?;
-        let answer = Answer::new(record_batch.schema(), vec![record_batch]);
+        let answer = Answer::from_record_batch(record_batch);
         serialize_record_batches(&answer)
     }
 
@@ -322,7 +352,7 @@ impl AnalyticsService {
         )
         .await
         .with_context(|| "query_thread_events")?;
-        let answer = Answer::new(record_batch.schema(), vec![record_batch]);
+        let answer = Answer::from_record_batch(record_batch);
         serialize_record_batches(&answer)
     }
 
@@ -346,7 +376,7 @@ impl AnalyticsService {
             )
             .await
             .with_context(|| "query_log_entries")?;
-            Answer::new(Arc::new(log_table_schema()), vec![record_batch])
+            Answer::from_record_batch(record_batch)
         } else {
             if request.sql.is_none() {
                 anyhow::bail!("sql is required for lakehouse queries");
@@ -388,7 +418,7 @@ impl AnalyticsService {
             )
             .await
             .with_context(|| "query_metrics")?;
-            Answer::new(record_batch.schema(), vec![record_batch])
+            Answer::from_record_batch(record_batch)
         } else {
             if request.sql.is_none() {
                 anyhow::bail!("sql is required for lakehouse queries");
@@ -431,6 +461,84 @@ impl AnalyticsService {
         .await
         .with_context(|| "lakehouse::query::query")?;
         serialize_record_batches(&answer)
+    }
+
+    pub async fn query_partitions(&self) -> Result<bytes::Bytes> {
+        // if partitions are merged on a daily basis, there should not be that many
+        let rows = sqlx::query("SELECT * FROM lakehouse_partitions")
+            .fetch_all(&self.data_lake.db_pool)
+            .await?;
+        let record_batch =
+            rows_to_record_batch(&rows).with_context(|| "converting rows to record batch")?;
+        serialize_record_batches(&Answer::from_record_batch(record_batch))
+    }
+
+    pub async fn create_or_update_partitions(&self, body: bytes::Bytes) -> Result<bytes::Bytes> {
+        let request: CreateOrUpdatePartitionsRequest = ciborium::from_reader(body.reader())
+            .with_context(|| "parsing CreateOrUpdatePartitionsRequest")?;
+        let begin = DateTime::<FixedOffset>::parse_from_rfc3339(&request.begin)
+            .with_context(|| "parsing begin time range")?;
+        let end = DateTime::<FixedOffset>::parse_from_rfc3339(&request.end)
+            .with_context(|| "parsing end time range")?;
+        let view = self
+            .view_factory
+            .make_view(&request.view_set_name, &request.view_instance_id)
+            .with_context(|| "making view")?;
+        let delta = TimeDelta::try_seconds(request.partition_delta_seconds)
+            .with_context(|| "making time delta")?;
+        create_or_update_partitions(
+            self.data_lake.clone(),
+            view,
+            begin.into(),
+            end.into(),
+            delta,
+        )
+        .await?;
+        serialize_record_batches(&Answer::from_record_batch(make_empty_record_batch()))
+    }
+
+    pub async fn merge_partitions(&self, body: bytes::Bytes) -> Result<bytes::Bytes> {
+        let request: MergePartitionsRequest = ciborium::from_reader(body.reader())
+            .with_context(|| "parsing MergePartitionsRequest")?;
+        let begin = DateTime::<FixedOffset>::parse_from_rfc3339(&request.begin)
+            .with_context(|| "parsing begin time range")?;
+        let end = DateTime::<FixedOffset>::parse_from_rfc3339(&request.end)
+            .with_context(|| "parsing end time range")?;
+        let view = self
+            .view_factory
+            .make_view(&request.view_set_name, &request.view_instance_id)
+            .with_context(|| "making view")?;
+        let delta = TimeDelta::try_seconds(request.partition_delta_seconds)
+            .with_context(|| "making time delta")?;
+        merge_partitions(
+            self.data_lake.clone(),
+            view,
+            begin.into(),
+            end.into(),
+            delta,
+        )
+        .await?;
+        serialize_record_batches(&Answer::from_record_batch(make_empty_record_batch()))
+    }
+
+    pub async fn retire_partitions(&self, body: bytes::Bytes) -> Result<bytes::Bytes> {
+        let request: RetirePartitionsRequest = ciborium::from_reader(body.reader())
+            .with_context(|| "parsing RetirePartitionsRequest")?;
+        let begin = DateTime::<FixedOffset>::parse_from_rfc3339(&request.begin)
+            .with_context(|| "parsing begin time range")?;
+        let end = DateTime::<FixedOffset>::parse_from_rfc3339(&request.end)
+            .with_context(|| "parsing end time range")?;
+        let mut tr = self.data_lake.db_pool.begin().await?;
+        retire_partitions(
+            &mut tr,
+            &request.view_set_name,
+            &request.view_instance_id,
+            begin.into(),
+            end.into(),
+        )
+        .await?;
+        tr.commit().await.with_context(|| "commit")?;
+        serialize_record_batches(&Answer::from_record_batch(make_empty_record_batch()))
     }
 }
 

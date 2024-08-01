@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use datafusion::arrow::array::ArrayBuilder;
+use datafusion::arrow::array::BinaryBuilder;
 use datafusion::arrow::array::ListBuilder;
 use datafusion::arrow::array::PrimitiveBuilder;
 use datafusion::arrow::array::StringBuilder;
@@ -201,6 +202,32 @@ impl ColumnReader for StringArrayColumnReader {
     }
 }
 
+pub struct BlobColumnReader {
+    pub field: Field,
+    pub column_ordinal: usize,
+}
+
+impl ColumnReader for BlobColumnReader {
+    fn extract_column_from_row(
+        &self,
+        row: &PgRow,
+        struct_builder: &mut StructBuilder,
+    ) -> Result<()> {
+        let value: Vec<u8> = row
+            .try_get(self.column_ordinal)
+            .with_context(|| "try_get failed on row")?;
+        let field_builder = struct_builder
+            .field_builder::<BinaryBuilder>(self.column_ordinal)
+            .with_context(|| "getting field builder for blob column")?;
+        field_builder.append_value(value);
+        Ok(())
+    }
+
+    fn field(&self) -> Field {
+        self.field.clone()
+    }
+}
+
 pub struct PropertiesColumnReader {
     pub field: Field,
     pub column_ordinal: usize,
@@ -264,6 +291,10 @@ pub fn make_column_reader(column: &PgColumn) -> Result<Arc<dyn ColumnReader>> {
         })),
         "INT4" => Ok(Arc::new(Int32ColumnReader {
             field: Field::new(column.name(), DataType::Int32, true),
+            column_ordinal: column.ordinal(),
+        })),
+        "BYTEA" => Ok(Arc::new(BlobColumnReader {
+            field: Field::new(column.name(), DataType::Binary, true),
             column_ordinal: column.ordinal(),
         })),
         "TEXT[]" => Ok(Arc::new(StringArrayColumnReader {

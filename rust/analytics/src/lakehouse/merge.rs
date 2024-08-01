@@ -2,7 +2,7 @@ use super::view::View;
 use crate::lakehouse::partition::{write_partition, Partition};
 use anyhow::{Context, Result};
 use bytes::BufMut;
-use chrono::{DateTime, TimeDelta, Utc};
+use chrono::{DateTime, DurationRound, TimeDelta, Utc};
 use datafusion::parquet::{
     arrow::{async_reader::ParquetObjectReader, ArrowWriter, ParquetRecordBatchStreamBuilder},
     basic::Compression,
@@ -42,7 +42,7 @@ async fn create_merged_partition(
     .await
     .with_context(|| "fetching partitions to merge")?;
     if rows.len() < 2 {
-        info!("not enough partitions to merge");
+        info!("not enough partitions to merge between {begin} and {end}");
         return Ok(());
     }
     let latest_file_schema_hash = view.get_file_schema_hash();
@@ -164,6 +164,29 @@ pub async fn merge_partitions(
             .with_context(|| "create_merged_partition")?;
         begin_part = end_part;
         end_part = begin_part + partition_time_delta;
+    }
+    Ok(())
+}
+
+pub async fn merge_recent_partitions(
+    lake: Arc<DataLakeConnection>,
+    view: Arc<dyn View>,
+    partition_time_delta: TimeDelta,
+    nb_partitions: i32,
+    min_age: TimeDelta,
+) -> Result<()> {
+    let now = Utc::now();
+    let truncated = now.duration_trunc(partition_time_delta)?;
+    let start = truncated - partition_time_delta * nb_partitions;
+    for index in 0..nb_partitions {
+        let start_partition = start + partition_time_delta * index;
+        let end_partition = start + partition_time_delta * (index + 1);
+        if (now - end_partition) < min_age {
+            return Ok(());
+        }
+        create_merged_partition(lake.clone(), view.clone(), start_partition, end_partition)
+            .await
+            .with_context(|| "create_or_update_partition")?;
     }
     Ok(())
 }

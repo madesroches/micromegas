@@ -7,7 +7,9 @@ use micromegas::analytics::delete::delete_old_data;
 use micromegas::analytics::lakehouse::batch_update::create_or_update_partitions;
 use micromegas::analytics::lakehouse::batch_update::create_or_update_recent_partitions;
 use micromegas::analytics::lakehouse::merge::merge_partitions;
+use micromegas::analytics::lakehouse::merge::merge_recent_partitions;
 use micromegas::analytics::lakehouse::migration::migrate_lakehouse;
+use micromegas::analytics::lakehouse::partition::retire_partitions;
 use micromegas::analytics::lakehouse::temp::delete_expired_temporary_files;
 use micromegas::analytics::lakehouse::view_factory::ViewFactory;
 use micromegas::chrono::DateTime;
@@ -53,6 +55,15 @@ enum Commands {
         partition_delta_seconds: i64,
     },
 
+    #[clap(name = "merge-recent-partitions")]
+    MergeRecentPartitions {
+        view_set_name: String,
+        view_instance_id: String,
+        partition_delta_seconds: i64,
+        nb_partitions: i32,
+        min_age_seconds: i64, // do not merge partitions younger than min_age_seconds
+    },
+
     #[clap(name = "merge-partitions")]
     MergePartitions {
         view_set_name: String,
@@ -60,6 +71,14 @@ enum Commands {
         begin: DateTime<Utc>,
         end: DateTime<Utc>,
         partition_delta_seconds: i64,
+    },
+
+    #[clap(name = "retire-partitions")]
+    RetirePartitions {
+        view_set_name: String,
+        view_instance_id: String,
+        begin: DateTime<Utc>,
+        end: DateTime<Utc>,
     },
 }
 
@@ -122,6 +141,26 @@ async fn main() -> Result<()> {
             )
             .await?;
         }
+        Commands::MergeRecentPartitions {
+            view_set_name,
+            view_instance_id,
+            partition_delta_seconds,
+            nb_partitions,
+            min_age_seconds,
+        } => {
+            let delta = TimeDelta::try_seconds(partition_delta_seconds)
+                .with_context(|| "making time delta")?;
+            let min_age =
+                TimeDelta::try_seconds(min_age_seconds).with_context(|| "making min_age")?;
+            merge_recent_partitions(
+                data_lake,
+                view_factory.make_view(&view_set_name, &view_instance_id)?,
+                delta,
+                nb_partitions,
+                min_age,
+            )
+            .await?;
+        }
         Commands::MergePartitions {
             view_set_name,
             view_instance_id,
@@ -139,6 +178,16 @@ async fn main() -> Result<()> {
                 delta,
             )
             .await?;
+        }
+        Commands::RetirePartitions {
+            view_set_name,
+            view_instance_id,
+            begin,
+            end,
+        } => {
+            let mut tr = data_lake.db_pool.begin().await?;
+            retire_partitions(&mut tr, &view_set_name, &view_instance_id, begin, end).await?;
+            tr.commit().await.with_context(|| "commit")?;
         }
     }
     Ok(())

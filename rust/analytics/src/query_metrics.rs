@@ -56,7 +56,7 @@ pub async fn query_metrics(
     .with_context(|| "make_metrics_record_batch")
 }
 
-#[allow(clippy::cast_precision_loss)]
+#[allow(clippy::cast_precision_loss, clippy::too_many_arguments)]
 #[span_fn]
 pub async fn make_metrics_record_batch(
     blocks: &[BlockMetadata],
