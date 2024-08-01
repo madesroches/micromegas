@@ -13,6 +13,7 @@ use axum::routing::post;
 use axum::{Extension, Router};
 use clap::Parser;
 use micromegas::analytics::analytics_service::AnalyticsService;
+use micromegas::analytics::lakehouse::migration::migrate_lakehouse;
 use micromegas::analytics::lakehouse::view_factory::ViewFactory;
 use micromegas::ingestion::data_lake_connection::{connect_to_data_lake, DataLakeConnection};
 use micromegas::telemetry_sink::TelemetryGuardBuilder;
@@ -203,6 +204,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let object_store_uri = std::env::var("MICROMEGAS_OBJECT_STORE_URI")
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
     let data_lake = connect_to_data_lake(&connection_string, &object_store_uri).await?;
+    migrate_lakehouse(data_lake.db_pool.clone())
+        .await
+        .with_context(|| "migrate_lakehouse")?;
     let view_factory = ViewFactory::default();
     serve_http(&args, data_lake, Arc::new(view_factory)).await?;
     Ok(())
