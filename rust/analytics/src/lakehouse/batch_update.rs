@@ -55,7 +55,7 @@ async fn verify_overlapping_partitions(
             matching_needs_update = true;
         }
     }
-    info!("matching partition is up to date");
+    info!("partition is up to date {view_set_name} {view_instance_id} {begin_insert} {end_insert}");
     Ok(matching_needs_update)
 }
 

@@ -54,14 +54,6 @@ class Client:
             headers=self.headers,
         )
 
-    def query_partitions(self):
-        args = {}
-        return request.request(
-            self.analytics_base_url + "query_partitions",
-            args,
-            headers=self.headers,
-        )
-
     def query_spans(self, begin, end, limit, stream_id):
         return request.request(
             self.analytics_base_url + "query_spans",
@@ -129,5 +121,61 @@ class Client:
                 "end": time.format_datetime(end),
                 "sql": sql,
             },
+            headers=self.headers,
+        )
+
+    def query_partitions(self):
+        args = {}
+        return request.request(
+            self.analytics_base_url + "query_partitions",
+            args,
+            headers=self.headers,
+        )
+
+    def create_or_update_partitions(
+        self, view_set_name, view_instance_id, begin, end, partition_delta_seconds
+    ):
+        args = {
+            "view_set_name": view_set_name,
+            "view_instance_id": view_instance_id,
+            "begin": time.format_datetime(begin),
+            "end": time.format_datetime(end),
+            "partition_delta_seconds": partition_delta_seconds,
+        }
+        return request.request(
+            self.analytics_base_url + "create_or_update_partitions",
+            args,
+            headers=self.headers,
+        )
+
+    def merge_partitions(
+        self, view_set_name, view_instance_id, begin, end, partition_delta_seconds
+    ):
+        args = {
+            "view_set_name": view_set_name,
+            "view_instance_id": view_instance_id,
+            "begin": time.format_datetime(begin),
+            "end": time.format_datetime(end),
+            "partition_delta_seconds": partition_delta_seconds,
+        }
+        return request.request(
+            self.analytics_base_url + "merge_partitions",
+            args,
+            headers=self.headers,
+        )
+
+    def retire_partitions(
+        self, view_set_name, view_instance_id, begin, end, partition_delta_seconds
+    ):
+        args = {
+            "view_set_name": view_set_name,
+            "view_instance_id": view_instance_id,
+            "begin": time.format_datetime(begin),
+            "end": time.format_datetime(end),
+            "partition_delta_seconds": partition_delta_seconds,
+        }
+        return request.request(
+            self.analytics_base_url + "retire_partitions",
+            args,
             headers=self.headers,
         )
