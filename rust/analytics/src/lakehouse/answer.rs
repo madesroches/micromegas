@@ -13,4 +13,11 @@ impl Answer {
             record_batches,
         }
     }
+
+    pub fn from_record_batch(rc: RecordBatch) -> Self {
+        Self {
+            schema: rc.schema(),
+            record_batches: vec![rc],
+        }
+    }
 }

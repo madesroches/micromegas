@@ -91,15 +91,6 @@ async fn query_blocks_request(
     )
 }
 
-async fn query_partitions_request(Extension(service): Extension<AnalyticsService>) -> Response {
-    bytes_response(
-        service
-            .query_partitions()
-            .await
-            .with_context(|| "query_partitions"),
-    )
-}
-
 async fn query_spans_request(
     Extension(service): Extension<AnalyticsService>,
     body: bytes::Bytes,
@@ -155,9 +146,54 @@ async fn query_view_request(
     bytes_response(service.query_view(body).await.with_context(|| "query_view"))
 }
 
+async fn query_partitions_request(Extension(service): Extension<AnalyticsService>) -> Response {
+    bytes_response(
+        service
+            .query_partitions()
+            .await
+            .with_context(|| "query_partitions"),
+    )
+}
+
+async fn create_or_update_partitions_request(
+    Extension(service): Extension<AnalyticsService>,
+    body: bytes::Bytes,
+) -> Response {
+    bytes_response(
+        service
+            .create_or_update_partitions(body)
+            .await
+            .with_context(|| "create_or_update_partitions"),
+    )
+}
+
+async fn merge_partitions_request(
+    Extension(service): Extension<AnalyticsService>,
+    body: bytes::Bytes,
+) -> Response {
+    bytes_response(
+        service
+            .merge_partitions(body)
+            .await
+            .with_context(|| "merge_partitions"),
+    )
+}
+
+async fn retire_partitions_request(
+    Extension(service): Extension<AnalyticsService>,
+    body: bytes::Bytes,
+) -> Response {
+    bytes_response(
+        service
+            .retire_partitions(body)
+            .await
+            .with_context(|| "retire_partitions"),
+    )
+}
+
 async fn serve_http(
     args: &Cli,
-    lake: DataLakeConnection,
+    lake: Arc<DataLakeConnection>,
     view_factory: Arc<ViewFactory>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let service = AnalyticsService::new(lake, view_factory);
@@ -166,10 +202,6 @@ async fn serve_http(
         .route("/analytics/query_processes", post(query_processes_request))
         .route("/analytics/query_streams", post(query_streams_request))
         .route("/analytics/query_blocks", post(query_blocks_request))
-        .route(
-            "/analytics/query_partitions",
-            post(query_partitions_request),
-        )
         .route("/analytics/query_spans", post(query_spans_request))
         .route(
             "/analytics/query_log_entries",
@@ -180,6 +212,22 @@ async fn serve_http(
         .route(
             "/analytics/query_thread_events",
             post(query_thread_events_request),
+        )
+        .route(
+            "/analytics/query_partitions",
+            post(query_partitions_request),
+        )
+        .route(
+            "/analytics/create_or_update_partitions",
+            post(create_or_update_partitions_request),
+        )
+        .route(
+            "/analytics/merge_partitions",
+            post(merge_partitions_request),
+        )
+        .route(
+            "/analytics/retire_partitions",
+            post(retire_partitions_request),
         )
         .layer(Extension(service))
         .layer(middleware::from_fn(observability_middleware));
@@ -208,6 +256,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await
         .with_context(|| "migrate_lakehouse")?;
     let view_factory = ViewFactory::default();
-    serve_http(&args, data_lake, Arc::new(view_factory)).await?;
+    serve_http(&args, Arc::new(data_lake), Arc::new(view_factory)).await?;
     Ok(())
 }
