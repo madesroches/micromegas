@@ -9,6 +9,7 @@ use micromegas::analytics::lakehouse::batch_update::create_or_update_recent_part
 use micromegas::analytics::lakehouse::merge::merge_partitions;
 use micromegas::analytics::lakehouse::merge::merge_recent_partitions;
 use micromegas::analytics::lakehouse::migration::migrate_lakehouse;
+use micromegas::analytics::lakehouse::partition::retire_partitions;
 use micromegas::analytics::lakehouse::temp::delete_expired_temporary_files;
 use micromegas::analytics::lakehouse::view_factory::ViewFactory;
 use micromegas::chrono::DateTime;
@@ -70,6 +71,14 @@ enum Commands {
         begin: DateTime<Utc>,
         end: DateTime<Utc>,
         partition_delta_seconds: i64,
+    },
+
+    #[clap(name = "retire-partitions")]
+    RetirePartitions {
+        view_set_name: String,
+        view_instance_id: String,
+        begin: DateTime<Utc>,
+        end: DateTime<Utc>,
     },
 }
 
@@ -169,6 +178,16 @@ async fn main() -> Result<()> {
                 delta,
             )
             .await?;
+        }
+        Commands::RetirePartitions {
+            view_set_name,
+            view_instance_id,
+            begin,
+            end,
+        } => {
+            let mut tr = data_lake.db_pool.begin().await?;
+            retire_partitions(&mut tr, &view_set_name, &view_instance_id, begin, end).await?;
+            tr.commit().await.with_context(|| "commit")?;
         }
     }
     Ok(())
