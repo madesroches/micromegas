@@ -305,7 +305,7 @@ pub fn make_column_reader(column: &PgColumn) -> Result<Arc<dyn ColumnReader>> {
             ),
             column_ordinal: column.ordinal(),
         })),
-        "_micromegas_property" => Ok(Arc::new(PropertiesColumnReader {
+        "micromegas_property[]" => Ok(Arc::new(PropertiesColumnReader {
             field: Field::new(
                 column.name(),
                 DataType::List(Arc::new(Field::new(
