@@ -21,6 +21,7 @@ use micromegas::tracing::prelude::*;
 use micromegas_axum_utils::observability_middleware;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use tower_http::timeout::TimeoutLayer;
 
 #[derive(Parser, Debug)]
 #[clap(name = "Analytics Server")]
@@ -230,7 +231,8 @@ async fn serve_http(
             post(retire_partitions_request),
         )
         .layer(Extension(service))
-        .layer(middleware::from_fn(observability_middleware));
+        .layer(middleware::from_fn(observability_middleware))
+        .layer(TimeoutLayer::new(std::time::Duration::from_secs(5 * 60)));
     let listener = tokio::net::TcpListener::bind(args.listen_endpoint)
         .await
         .unwrap();
