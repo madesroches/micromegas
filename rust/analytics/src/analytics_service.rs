@@ -497,13 +497,17 @@ impl AnalyticsService {
             begin.into(),
             end.into(),
             delta,
-            writer.clone(),
+            writer,
         )
         .await?;
         Ok(())
     }
 
-    pub async fn merge_partitions(&self, body: bytes::Bytes) -> Result<bytes::Bytes> {
+    pub async fn merge_partitions(
+        &self,
+        body: bytes::Bytes,
+        writer: Arc<ResponseWriter>,
+    ) -> Result<()> {
         let request: MergePartitionsRequest = ciborium::from_reader(body.reader())
             .with_context(|| "parsing MergePartitionsRequest")?;
         let begin = DateTime::<FixedOffset>::parse_from_rfc3339(&request.begin)
@@ -522,9 +526,10 @@ impl AnalyticsService {
             begin.into(),
             end.into(),
             delta,
+			writer,
         )
         .await?;
-        serialize_record_batches(&Answer::from_record_batch(make_empty_record_batch()))
+        Ok(())
     }
 
     pub async fn retire_partitions(&self, body: bytes::Bytes) -> Result<bytes::Bytes> {

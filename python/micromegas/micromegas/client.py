@@ -2,6 +2,7 @@ from . import request
 from . import time
 import cbor2
 
+
 class Client:
     def __init__(self, base_url, headers={}):
         self.analytics_base_url = base_url + "analytics/"
@@ -132,6 +133,18 @@ class Client:
             headers=self.headers,
         )
 
+    def __stream_request(self, endpoint, args):
+        response = request.streamed_request(
+            self.analytics_base_url + endpoint,
+            args,
+            headers=self.headers,
+        )
+        while response.raw.readable():
+            try:
+                print(cbor2.load(response.raw))
+            except cbor2.CBORDecodeEOF:
+                break
+
     def create_or_update_partitions(
         self, view_set_name, view_instance_id, begin, end, partition_delta_seconds
     ):
@@ -142,16 +155,7 @@ class Client:
             "end": time.format_datetime(end),
             "partition_delta_seconds": partition_delta_seconds,
         }
-        response = request.streamed_request(
-            self.analytics_base_url + "create_or_update_partitions",
-            args,
-            headers=self.headers,
-        )
-        while response.raw.readable():
-            try:
-                print(cbor2.load(response.raw))
-            except cbor2.CBORDecodeEOF:
-                break
+        self.__stream_request("create_or_update_partitions", args)
 
     def merge_partitions(
         self, view_set_name, view_instance_id, begin, end, partition_delta_seconds
@@ -163,11 +167,7 @@ class Client:
             "end": time.format_datetime(end),
             "partition_delta_seconds": partition_delta_seconds,
         }
-        return request.request(
-            self.analytics_base_url + "merge_partitions",
-            args,
-            headers=self.headers,
-        )
+        self.__stream_request("merge_partitions", args)
 
     def retire_partitions(
         self, view_set_name, view_instance_id, begin, end, partition_delta_seconds

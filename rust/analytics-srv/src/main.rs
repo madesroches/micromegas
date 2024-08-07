@@ -22,7 +22,6 @@ use micromegas::tracing::prelude::*;
 use micromegas_axum_utils::{make_body_from_channel_receiver, observability_middleware};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::pin;
 use tower_http::timeout::TimeoutLayer;
 
 #[derive(Parser, Debug)]
@@ -160,25 +159,21 @@ async fn query_partitions_request(Extension(service): Extension<AnalyticsService
 
 fn stream_request<F, Fut>(callback: F) -> Response
 where
-    F: FnOnce(Arc<ResponseWriter>) -> Fut + 'static,
-    F: Send,
-    Fut: Send,
-    Fut: std::future::Future<Output = Result<()>>,
+    F: FnOnce(Arc<ResponseWriter>) -> Fut + 'static + Send,
+    Fut: std::future::Future<Output = Result<()>> + Send,
 {
     let (tx, rx) = tokio::sync::mpsc::channel(10);
     let writer = Arc::new(ResponseWriter::new(Some(tx)));
     let response_body = make_body_from_channel_receiver(rx);
     tokio::spawn(async move {
-        pin! {
-            let service_call = callback(writer.clone());
-        }
-        if let Err(e) = (&mut service_call).await {
+        let service_call = callback(writer.clone());
+        if let Err(e) = service_call.await {
             if writer.is_closed() {
                 info!("Error happened, but connection is closed: {e:?}");
             } else {
                 // the connection is live, this looks like a real error
                 error!("{e:?}");
-                if let Err(e) = writer.write_string(&format!("error: {e:?}")).await {
+                if let Err(e) = writer.write_string(&format!("{e:?}")).await {
                     //error writing can happen, probably not a big deal
                     info!("{e:?}");
                 }
@@ -193,13 +188,11 @@ async fn create_or_update_partitions_request(
     Extension(service): Extension<AnalyticsService>,
     body: bytes::Bytes,
 ) -> Response {
-    stream_request(|writer| {
-        Box::pin(async move {
-            service
-                .create_or_update_partitions(body, writer)
-                .await
-                .with_context(|| "create_or_update_partitions")
-        })
+    stream_request(|writer| async move {
+        service
+            .create_or_update_partitions(body, writer)
+            .await
+            .with_context(|| "create_or_update_partitions")
     })
 }
 
@@ -207,12 +200,12 @@ async fn merge_partitions_request(
     Extension(service): Extension<AnalyticsService>,
     body: bytes::Bytes,
 ) -> Response {
-    bytes_response(
+    stream_request(|writer| async move {
         service
-            .merge_partitions(body)
+            .merge_partitions(body, writer)
             .await
-            .with_context(|| "merge_partitions"),
-    )
+            .with_context(|| "merge_partitions")
+    })
 }
 
 async fn retire_partitions_request(
