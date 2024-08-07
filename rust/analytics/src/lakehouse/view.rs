@@ -1,3 +1,4 @@
+use crate::response_writer::ResponseWriter;
 use anyhow::Result;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -8,7 +9,8 @@ use std::sync::Arc;
 #[async_trait]
 pub trait PartitionSpec: Send + Sync {
     fn get_source_data_hash(&self) -> Vec<u8>;
-    async fn write(&self, lake: Arc<DataLakeConnection>) -> Result<()>;
+    async fn write(&self, lake: Arc<DataLakeConnection>, writer: Arc<ResponseWriter>)
+        -> Result<()>;
 }
 
 #[async_trait]

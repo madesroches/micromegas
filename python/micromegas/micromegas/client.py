@@ -179,8 +179,4 @@ class Client:
             "end": time.format_datetime(end),
             "partition_delta_seconds": partition_delta_seconds,
         }
-        return request.request(
-            self.analytics_base_url + "retire_partitions",
-            args,
-            headers=self.headers,
-        )
+        self.__stream_request("retire_partitions", args)

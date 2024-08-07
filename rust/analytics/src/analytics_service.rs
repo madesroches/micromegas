@@ -13,7 +13,6 @@ use serde::Deserialize;
 use sqlx::types::chrono::{DateTime, FixedOffset};
 use uuid::Uuid;
 
-use crate::arrow_utils::make_empty_record_batch;
 use crate::lakehouse::answer::Answer;
 use crate::lakehouse::batch_update::create_or_update_partitions;
 use crate::lakehouse::merge::merge_partitions;
@@ -532,7 +531,11 @@ impl AnalyticsService {
         Ok(())
     }
 
-    pub async fn retire_partitions(&self, body: bytes::Bytes) -> Result<bytes::Bytes> {
+    pub async fn retire_partitions(
+        &self,
+        body: bytes::Bytes,
+        writer: Arc<ResponseWriter>,
+    ) -> Result<()> {
         let request: RetirePartitionsRequest = ciborium::from_reader(body.reader())
             .with_context(|| "parsing RetirePartitionsRequest")?;
         let begin = DateTime::<FixedOffset>::parse_from_rfc3339(&request.begin)
@@ -546,10 +549,11 @@ impl AnalyticsService {
             &request.view_instance_id,
             begin.into(),
             end.into(),
+            writer,
         )
         .await?;
         tr.commit().await.with_context(|| "commit")?;
-        serialize_record_batches(&Answer::from_record_batch(make_empty_record_batch()))
+        Ok(())
     }
 }
 

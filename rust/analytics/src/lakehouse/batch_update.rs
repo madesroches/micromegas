@@ -108,7 +108,7 @@ async fn create_or_update_partition(
         &view_instance_id,
         &view.get_file_schema_hash(),
         &partition_spec.get_source_data_hash(),
-        writer,
+        writer.clone(),
     )
     .await?;
 
@@ -117,7 +117,7 @@ async fn create_or_update_partition(
     }
 
     partition_spec
-        .write(lake)
+        .write(lake, writer)
         .await
         .with_context(|| "writing partition")?;
     Ok(())

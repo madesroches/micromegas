@@ -157,6 +157,7 @@ async fn create_merged_partition(
             source_data_hash: source_hash.to_le_bytes().to_vec(),
         },
         buffer,
+        writer,
     )
     .await?;
 

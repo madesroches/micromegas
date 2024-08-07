@@ -3,6 +3,7 @@ use super::{
     partition_source_data::{PartitionSourceBlock, PartitionSourceDataBlocks},
     view::PartitionSpec,
 };
+use crate::response_writer::ResponseWriter;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use bytes::BufMut;
@@ -52,7 +53,11 @@ impl PartitionSpec for BlockPartitionSpec {
         self.source_data.block_ids_hash.clone()
     }
 
-    async fn write(&self, lake: Arc<DataLakeConnection>) -> Result<()> {
+    async fn write(
+        &self,
+        lake: Arc<DataLakeConnection>,
+        writer: Arc<ResponseWriter>,
+    ) -> Result<()> {
         // buffer the whole parquet in memory until https://github.com/apache/arrow-rs/issues/5766 is done
         // Impl AsyncFileWriter by object_store #5766
         let mut buffer_writer = bytes::BytesMut::with_capacity(1024 * 1024).writer();
@@ -125,6 +130,7 @@ impl PartitionSpec for BlockPartitionSpec {
                 source_data_hash: self.source_data.block_ids_hash.clone(),
             },
             buffer,
+            writer,
         )
         .await?;
         Ok(())

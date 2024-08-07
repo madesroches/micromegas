@@ -192,7 +192,15 @@ async fn main() -> Result<()> {
             end,
         } => {
             let mut tr = data_lake.db_pool.begin().await?;
-            retire_partitions(&mut tr, &view_set_name, &view_instance_id, begin, end).await?;
+            retire_partitions(
+                &mut tr,
+                &view_set_name,
+                &view_instance_id,
+                begin,
+                end,
+                null_response_writer,
+            )
+            .await?;
             tr.commit().await.with_context(|| "commit")?;
         }
     }

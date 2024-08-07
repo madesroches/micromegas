@@ -212,12 +212,12 @@ async fn retire_partitions_request(
     Extension(service): Extension<AnalyticsService>,
     body: bytes::Bytes,
 ) -> Response {
-    bytes_response(
+    stream_request(|writer| async move {
         service
-            .retire_partitions(body)
+            .retire_partitions(body, writer)
             .await
-            .with_context(|| "retire_partitions"),
-    )
+            .with_context(|| "retire_partitions")
+    })
 }
 
 async fn serve_http(
