@@ -497,9 +497,10 @@ impl AnalyticsService {
             begin.into(),
             end.into(),
             delta,
+            writer.clone(),
         )
         .await?;
-        writer.write_string("done").await
+        Ok(())
     }
 
     pub async fn merge_partitions(&self, body: bytes::Bytes) -> Result<bytes::Bytes> {

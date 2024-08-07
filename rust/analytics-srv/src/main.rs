@@ -163,14 +163,23 @@ async fn create_or_update_partitions_request(
 ) -> Response {
     let (tx, rx) = tokio::sync::mpsc::channel(10);
     let response_body = make_body_from_channel_receiver(rx);
-    let writer = ResponseWriter::new(tx);
+    let writer = Arc::new(ResponseWriter::new(tx));
     tokio::spawn(async move {
         if let Err(e) = service
-            .create_or_update_partitions(body, Arc::new(writer))
+            .create_or_update_partitions(body, writer.clone())
             .await
             .with_context(|| "create_or_update_partitions")
         {
-            error!("{e:?}");
+            if writer.is_closed() {
+                info!("Error happened, but connection is closed: {e:?}");
+            } else {
+                // the connection is live, this looks like a real error
+                error!("{e:?}");
+                if let Err(e) = writer.write_string(&format!("error: {e:?}")).await {
+                    //error writing can happen, probably not a big deal
+                    info!("{e:?}");
+                }
+            }
         }
     });
     Response::builder().status(200).body(response_body).unwrap()

@@ -1,6 +1,6 @@
 from . import request
 from . import time
-
+import cbor2
 
 class Client:
     def __init__(self, base_url, headers={}):
@@ -142,11 +142,16 @@ class Client:
             "end": time.format_datetime(end),
             "partition_delta_seconds": partition_delta_seconds,
         }
-        return request.request(
+        response = request.streamed_request(
             self.analytics_base_url + "create_or_update_partitions",
             args,
             headers=self.headers,
         )
+        while response.raw.readable():
+            try:
+                print(cbor2.load(response.raw))
+            except cbor2.CBORDecodeEOF:
+                break
 
     def merge_partitions(
         self, view_set_name, view_instance_id, begin, end, partition_delta_seconds
