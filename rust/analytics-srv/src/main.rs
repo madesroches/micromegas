@@ -22,6 +22,7 @@ use micromegas::tracing::prelude::*;
 use micromegas_axum_utils::{make_body_from_channel_receiver, observability_middleware};
 use std::net::SocketAddr;
 use std::sync::Arc;
+use tokio::pin;
 use tower_http::timeout::TimeoutLayer;
 
 #[derive(Parser, Debug)]
@@ -157,19 +158,21 @@ async fn query_partitions_request(Extension(service): Extension<AnalyticsService
     )
 }
 
-async fn create_or_update_partitions_request(
-    Extension(service): Extension<AnalyticsService>,
-    body: bytes::Bytes,
-) -> Response {
+fn stream_request<F, Fut>(callback: F) -> Response
+where
+    F: FnOnce(Arc<ResponseWriter>) -> Fut + 'static,
+    F: Send,
+    Fut: Send,
+    Fut: std::future::Future<Output = Result<()>>,
+{
     let (tx, rx) = tokio::sync::mpsc::channel(10);
-    let response_body = make_body_from_channel_receiver(rx);
     let writer = Arc::new(ResponseWriter::new(Some(tx)));
+    let response_body = make_body_from_channel_receiver(rx);
     tokio::spawn(async move {
-        if let Err(e) = service
-            .create_or_update_partitions(body, writer.clone())
-            .await
-            .with_context(|| "create_or_update_partitions")
-        {
+        pin! {
+            let service_call = callback(writer.clone());
+        }
+        if let Err(e) = (&mut service_call).await {
             if writer.is_closed() {
                 info!("Error happened, but connection is closed: {e:?}");
             } else {
@@ -182,7 +185,22 @@ async fn create_or_update_partitions_request(
             }
         }
     });
+
     Response::builder().status(200).body(response_body).unwrap()
+}
+
+async fn create_or_update_partitions_request(
+    Extension(service): Extension<AnalyticsService>,
+    body: bytes::Bytes,
+) -> Response {
+    stream_request(|writer| {
+        Box::pin(async move {
+            service
+                .create_or_update_partitions(body, writer)
+                .await
+                .with_context(|| "create_or_update_partitions")
+        })
+    })
 }
 
 async fn merge_partitions_request(
