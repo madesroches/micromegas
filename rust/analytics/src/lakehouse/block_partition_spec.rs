@@ -56,10 +56,22 @@ impl PartitionSpec for BlockPartitionSpec {
     async fn write(
         &self,
         lake: Arc<DataLakeConnection>,
-        writer: Arc<ResponseWriter>,
+        response_writer: Arc<ResponseWriter>,
     ) -> Result<()> {
         // buffer the whole parquet in memory until https://github.com/apache/arrow-rs/issues/5766 is done
         // Impl AsyncFileWriter by object_store #5766
+        let file_id = uuid::Uuid::new_v4();
+        let file_path = format!(
+            "views/{}/{}/{}/{}_{file_id}.parquet",
+            *self.view_set_name,
+            *self.view_instance_id,
+            self.begin_insert.format("%Y-%m-%d"),
+            self.begin_insert.format("%H-%M-%S")
+        );
+        response_writer
+            .write_string(&format!("writing {file_path}"))
+            .await?;
+
         let mut buffer_writer = bytes::BytesMut::with_capacity(1024 * 1024).writer();
         let props = WriterProperties::builder()
             .set_writer_version(WriterVersion::PARQUET_2_0)
@@ -70,6 +82,9 @@ impl PartitionSpec for BlockPartitionSpec {
 
         let mut min_time = None;
         let mut max_time = None;
+        response_writer
+            .write_string(&format!("reading {} blocks", self.source_data.blocks.len()))
+            .await?;
         for src_block in &self.source_data.blocks {
             match self
                 .block_processor
@@ -79,6 +94,7 @@ impl PartitionSpec for BlockPartitionSpec {
             {
                 Err(e) => {
                     error!("{e:?}");
+                    response_writer.write_string(&format!("{e:?}")).await?;
                 }
                 Ok(Some(row_set)) => {
                     min_time = Some(
@@ -100,16 +116,12 @@ impl PartitionSpec for BlockPartitionSpec {
         }
         arrow_writer.close()?;
 
-        let file_id = uuid::Uuid::new_v4();
-        let file_path = format!(
-            "views/{}/{}/{}/{}_{file_id}.parquet",
-            *self.view_set_name,
-            *self.view_instance_id,
-            self.begin_insert.format("%Y-%m-%d"),
-            self.begin_insert.format("%H-%M-%S")
-        );
         if min_time.is_none() || max_time.is_none() {
-            info!("no data for {file_path} partition, not writing the object");
+            response_writer
+                .write_string(&format!(
+                    "no data for {file_path} partition, not writing the object"
+                ))
+                .await?;
             // should we check that there is no stale partition left behind?
             return Ok(());
         }
@@ -130,7 +142,7 @@ impl PartitionSpec for BlockPartitionSpec {
                 source_data_hash: self.source_data.block_ids_hash.clone(),
             },
             buffer,
-            writer,
+            response_writer,
         )
         .await?;
         Ok(())
