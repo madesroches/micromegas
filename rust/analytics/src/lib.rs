@@ -24,3 +24,4 @@ pub mod sql_arrow_bridge;
 pub mod thread_block_processor;
 pub mod thread_events_table;
 pub mod time;
+pub mod response_writer;

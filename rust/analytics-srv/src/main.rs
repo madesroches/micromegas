@@ -15,10 +15,11 @@ use clap::Parser;
 use micromegas::analytics::analytics_service::AnalyticsService;
 use micromegas::analytics::lakehouse::migration::migrate_lakehouse;
 use micromegas::analytics::lakehouse::view_factory::ViewFactory;
+use micromegas::analytics::response_writer::ResponseWriter;
 use micromegas::ingestion::data_lake_connection::{connect_to_data_lake, DataLakeConnection};
 use micromegas::telemetry_sink::TelemetryGuardBuilder;
 use micromegas::tracing::prelude::*;
-use micromegas_axum_utils::observability_middleware;
+use micromegas_axum_utils::{make_body_from_channel_receiver, observability_middleware};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tower_http::timeout::TimeoutLayer;
@@ -160,12 +161,19 @@ async fn create_or_update_partitions_request(
     Extension(service): Extension<AnalyticsService>,
     body: bytes::Bytes,
 ) -> Response {
-    bytes_response(
-        service
-            .create_or_update_partitions(body)
+    let (tx, rx) = tokio::sync::mpsc::channel(10);
+    let response_body = make_body_from_channel_receiver(rx);
+    let writer = ResponseWriter::new(tx);
+    tokio::spawn(async move {
+        if let Err(e) = service
+            .create_or_update_partitions(body, Arc::new(writer))
             .await
-            .with_context(|| "create_or_update_partitions"),
-    )
+            .with_context(|| "create_or_update_partitions")
+        {
+            error!("{e:?}");
+        }
+    });
+    Response::builder().status(200).body(response_body).unwrap()
 }
 
 async fn merge_partitions_request(
