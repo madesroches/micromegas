@@ -163,7 +163,7 @@ async fn create_or_update_partitions_request(
 ) -> Response {
     let (tx, rx) = tokio::sync::mpsc::channel(10);
     let response_body = make_body_from_channel_receiver(rx);
-    let writer = Arc::new(ResponseWriter::new(tx));
+    let writer = Arc::new(ResponseWriter::new(Some(tx)));
     tokio::spawn(async move {
         if let Err(e) = service
             .create_or_update_partitions(body, writer.clone())

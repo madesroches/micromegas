@@ -42,7 +42,9 @@ async fn verify_overlapping_partitions(
     .await
     .with_context(|| "fetching matching partitions")?;
     if rows.is_empty() {
-        writer.write_string(&format!("{desc}: matching partitions not found")).await?;
+        writer
+            .write_string(&format!("{desc}: matching partitions not found"))
+            .await?;
         return Ok(true);
     }
     let mut matching_needs_update = false;

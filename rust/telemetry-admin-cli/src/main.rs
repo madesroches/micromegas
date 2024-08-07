@@ -12,6 +12,7 @@ use micromegas::analytics::lakehouse::migration::migrate_lakehouse;
 use micromegas::analytics::lakehouse::partition::retire_partitions;
 use micromegas::analytics::lakehouse::temp::delete_expired_temporary_files;
 use micromegas::analytics::lakehouse::view_factory::ViewFactory;
+use micromegas::analytics::response_writer::ResponseWriter;
 use micromegas::chrono::DateTime;
 use micromegas::chrono::TimeDelta;
 use micromegas::chrono::Utc;
@@ -100,6 +101,7 @@ async fn main() -> Result<()> {
         .await
         .with_context(|| "migrate_lakehouse")?;
     let view_factory = ViewFactory::default();
+    let null_response_writer = Arc::new(ResponseWriter::new(None));
     match args.command {
         Commands::DeleteOldData { min_days_old } => {
             delete_old_data(&data_lake, min_days_old).await?;
@@ -120,6 +122,7 @@ async fn main() -> Result<()> {
                 view_factory.make_view(&view_set_name, &view_instance_id)?,
                 delta,
                 nb_partitions,
+                null_response_writer,
             )
             .await?;
         }
@@ -138,6 +141,7 @@ async fn main() -> Result<()> {
                 begin,
                 end,
                 delta,
+                null_response_writer,
             )
             .await?;
         }

@@ -5,24 +5,30 @@ use micromegas_tracing::prelude::*;
 use tokio::sync::mpsc::Sender;
 
 pub struct ResponseWriter {
-    sender: Sender<Bytes>,
+    sender: Option<Sender<Bytes>>,
 }
 
 impl ResponseWriter {
-    pub fn new(sender: Sender<Bytes>) -> Self {
+    pub fn new(sender: Option<Sender<Bytes>>) -> Self {
         Self { sender }
     }
     pub async fn write_string(&self, value: &str) -> Result<()> {
         info!("{value}");
         let buffer = encode_cbor(&value)?;
-        self.sender
-            .send(buffer.into())
-            .await
-            .with_context(|| "writing response")?;
+        if let Some(sender) = &self.sender {
+            sender
+                .send(buffer.into())
+                .await
+                .with_context(|| "writing response")?;
+        }
         Ok(())
     }
 
     pub fn is_closed(&self) -> bool {
-        self.sender.is_closed()
+        if let Some(sender) = &self.sender {
+            sender.is_closed()
+        } else {
+            false
+        }
     }
 }
