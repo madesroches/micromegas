@@ -25,7 +25,6 @@ micromegas-axum-utils = { path = "axum-utils", version = "0.1.6" }
 micromegas = { path = "public" }
 
 anyhow = "1.0"
-async-recursion = "1"
 async-stream = "0.3"
 async-trait = "0.1"
 aws-config = "0.12"
