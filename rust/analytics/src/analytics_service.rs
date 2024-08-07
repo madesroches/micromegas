@@ -526,7 +526,7 @@ impl AnalyticsService {
             begin.into(),
             end.into(),
             delta,
-			writer,
+            writer,
         )
         .await?;
         Ok(())

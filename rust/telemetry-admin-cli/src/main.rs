@@ -162,6 +162,7 @@ async fn main() -> Result<()> {
                 delta,
                 nb_partitions,
                 min_age,
+                null_response_writer,
             )
             .await?;
         }
@@ -180,6 +181,7 @@ async fn main() -> Result<()> {
                 begin,
                 end,
                 delta,
+                null_response_writer,
             )
             .await?;
         }
