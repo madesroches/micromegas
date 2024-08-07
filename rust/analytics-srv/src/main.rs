@@ -15,11 +15,11 @@ use clap::Parser;
 use micromegas::analytics::analytics_service::AnalyticsService;
 use micromegas::analytics::lakehouse::migration::migrate_lakehouse;
 use micromegas::analytics::lakehouse::view_factory::ViewFactory;
-use micromegas::analytics::response_writer::ResponseWriter;
+use micromegas::axum_utils::observability_middleware;
+use micromegas::axum_utils::stream_request;
 use micromegas::ingestion::data_lake_connection::{connect_to_data_lake, DataLakeConnection};
 use micromegas::telemetry_sink::TelemetryGuardBuilder;
 use micromegas::tracing::prelude::*;
-use micromegas_axum_utils::{make_body_from_channel_receiver, observability_middleware};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tower_http::timeout::TimeoutLayer;
@@ -155,33 +155,6 @@ async fn query_partitions_request(Extension(service): Extension<AnalyticsService
             .await
             .with_context(|| "query_partitions"),
     )
-}
-
-fn stream_request<F, Fut>(callback: F) -> Response
-where
-    F: FnOnce(Arc<ResponseWriter>) -> Fut + 'static + Send,
-    Fut: std::future::Future<Output = Result<()>> + Send,
-{
-    let (tx, rx) = tokio::sync::mpsc::channel(10);
-    let writer = Arc::new(ResponseWriter::new(Some(tx)));
-    let response_body = make_body_from_channel_receiver(rx);
-    tokio::spawn(async move {
-        let service_call = callback(writer.clone());
-        if let Err(e) = service_call.await {
-            if writer.is_closed() {
-                info!("Error happened, but connection is closed: {e:?}");
-            } else {
-                // the connection is live, this looks like a real error
-                error!("{e:?}");
-                if let Err(e) = writer.write_string(&format!("{e:?}")).await {
-                    //error writing can happen, probably not a big deal
-                    info!("{e:?}");
-                }
-            }
-        }
-    });
-
-    Response::builder().status(200).body(response_body).unwrap()
 }
 
 async fn create_or_update_partitions_request(

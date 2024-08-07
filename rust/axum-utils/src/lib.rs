@@ -3,10 +3,13 @@
 // crate-specific lint exceptions:
 #![allow(clippy::missing_errors_doc)]
 
+use std::sync::Arc;
+
 use anyhow::Result;
 use async_stream::stream;
 use axum::response::Response;
 use axum::{extract::Request, middleware::Next};
+use micromegas_analytics::response_writer::ResponseWriter;
 use micromegas_tracing::prelude::*;
 use tokio::sync::mpsc::Receiver;
 
@@ -30,4 +33,31 @@ pub fn make_body_from_channel_receiver(mut rx: Receiver<bytes::Bytes>) -> axum::
         }
     };
     axum::body::Body::from_stream(read_stream)
+}
+
+pub fn stream_request<F, Fut>(callback: F) -> Response
+where
+    F: FnOnce(Arc<ResponseWriter>) -> Fut + 'static + Send,
+    Fut: std::future::Future<Output = Result<()>> + Send,
+{
+    let (tx, rx) = tokio::sync::mpsc::channel(10);
+    let writer = Arc::new(ResponseWriter::new(Some(tx)));
+    let response_body = make_body_from_channel_receiver(rx);
+    tokio::spawn(async move {
+        let service_call = callback(writer.clone());
+        if let Err(e) = service_call.await {
+            if writer.is_closed() {
+                info!("Error happened, but connection is closed: {e:?}");
+            } else {
+                // the connection is live, this looks like a real error
+                error!("{e:?}");
+                if let Err(e) = writer.write_string(&format!("{e:?}")).await {
+                    //error writing can happen, probably not a big deal
+                    info!("{e:?}");
+                }
+            }
+        }
+    });
+
+    Response::builder().status(200).body(response_body).unwrap()
 }

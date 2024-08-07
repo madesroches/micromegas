@@ -70,7 +70,6 @@ dependencies = [
  "bytes",
  "clap",
  "micromegas",
- "micromegas-axum-utils",
  "sqlx",
  "tokio",
  "tower-http",
@@ -2093,6 +2092,7 @@ dependencies = [
  "chrono",
  "datafusion",
  "micromegas-analytics",
+ "micromegas-axum-utils",
  "micromegas-ingestion",
  "micromegas-telemetry",
  "micromegas-telemetry-sink",
@@ -2136,6 +2136,7 @@ dependencies = [
  "async-stream",
  "axum",
  "bytes",
+ "micromegas-analytics",
  "micromegas-tracing",
  "tokio",
 ]
