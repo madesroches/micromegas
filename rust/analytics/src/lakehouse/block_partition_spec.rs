@@ -20,7 +20,7 @@ use futures::StreamExt;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_telemetry::blob_storage::BlobStorage;
 use micromegas_tracing::prelude::*;
-use std::sync::Arc;
+use std::{cmp::min, sync::Arc};
 
 pub struct PartitionRowSet {
     pub min_time_row: i64,
@@ -95,7 +95,7 @@ impl PartitionSpec for BlockPartitionSpec {
         for block in &self.source_data.blocks {
             max_size = max_size.max(block.block.payload_size as usize);
         }
-        let nb_tasks = (100 * 1024 * 1024) / max_size; // try to download up to 100 MB of payloads
+        let nb_tasks = min(64, (100 * 1024 * 1024) / max_size); // try to download up to 100 MB of payloads
 
         let mut stream = futures::stream::iter(self.source_data.blocks.clone())
             .map(|src_block| async {
