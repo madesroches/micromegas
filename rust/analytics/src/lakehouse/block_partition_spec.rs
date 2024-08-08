@@ -89,10 +89,15 @@ impl PartitionSpec for BlockPartitionSpec {
 
         let mut stream = futures::stream::iter(self.source_data.blocks.clone())
             .map(|src_block| async {
-                self.block_processor
-                    .process(lake.blob_storage.clone(), src_block)
-                    .await
-                    .with_context(|| "processing source block")
+                let block_processor = self.block_processor.clone();
+                let blob_storage = lake.blob_storage.clone();
+                let handle = tokio::spawn(async move {
+                    block_processor
+                        .process(blob_storage, src_block)
+                        .await
+                        .with_context(|| "processing source block")
+                });
+                handle.await.unwrap()
             })
             .buffer_unordered(10);
 
