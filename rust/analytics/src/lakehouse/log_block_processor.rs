@@ -18,7 +18,7 @@ impl BlockProcessor for LogBlockProcessor {
     async fn process(
         &self,
         blob_storage: Arc<BlobStorage>,
-        src_block: &PartitionSourceBlock,
+        src_block: Arc<PartitionSourceBlock>,
     ) -> Result<Option<PartitionRowSet>> {
         let convert_ticks = ConvertTicks::from_meta_data(
             src_block.process_start_ticks,

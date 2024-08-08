@@ -16,6 +16,7 @@ use datafusion::{
         file::properties::{WriterProperties, WriterVersion},
     },
 };
+use futures::StreamExt;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_telemetry::blob_storage::BlobStorage;
 use micromegas_tracing::prelude::*;
@@ -32,7 +33,7 @@ pub trait BlockProcessor: Send + Sync {
     async fn process(
         &self,
         blob_storage: Arc<BlobStorage>,
-        src_block: &PartitionSourceBlock,
+        src_block: Arc<PartitionSourceBlock>,
     ) -> Result<Option<PartitionRowSet>>;
 }
 
@@ -58,7 +59,7 @@ impl PartitionSpec for BlockPartitionSpec {
         lake: Arc<DataLakeConnection>,
         response_writer: Arc<ResponseWriter>,
     ) -> Result<()> {
-        // buffer the whole parquet in memory until https://github.com/apache/arrow-rs/issues/5766 is done
+        // buffer the whole parquet in memory until https://github.com/apache/arrow-rs/issues/5766 is available in a published version
         // Impl AsyncFileWriter by object_store #5766
         let file_id = uuid::Uuid::new_v4();
         let file_path = format!(
@@ -85,13 +86,18 @@ impl PartitionSpec for BlockPartitionSpec {
         response_writer
             .write_string(&format!("reading {} blocks", self.source_data.blocks.len()))
             .await?;
-        for src_block in &self.source_data.blocks {
-            match self
-                .block_processor
-                .process(lake.blob_storage.clone(), src_block)
-                .await
-                .with_context(|| "processing source block")
-            {
+
+        let mut stream = futures::stream::iter(self.source_data.blocks.clone())
+            .map(|src_block| async {
+                self.block_processor
+                    .process(lake.blob_storage.clone(), src_block)
+                    .await
+                    .with_context(|| "processing source block")
+            })
+            .buffer_unordered(10);
+
+        while let Some(res_opt_rows) = stream.next().await {
+            match res_opt_rows {
                 Err(e) => {
                     error!("{e:?}");
                     response_writer.write_string(&format!("{e:?}")).await?;
@@ -114,6 +120,7 @@ impl PartitionSpec for BlockPartitionSpec {
                 }
             }
         }
+
         arrow_writer.close()?;
 
         if min_time.is_none() || max_time.is_none() {

@@ -19,7 +19,7 @@ pub struct PartitionSourceBlock {
 }
 
 pub struct PartitionSourceDataBlocks {
-    pub blocks: Vec<PartitionSourceBlock>,
+    pub blocks: Vec<Arc<PartitionSourceBlock>>,
     pub block_ids_hash: Vec<u8>,
 }
 
@@ -56,14 +56,14 @@ pub async fn fetch_partition_source_data(
         let block = block_from_row(src_block).with_context(|| "block_from_row")?;
         let process = Arc::new(process_from_row(src_block).with_context(|| "process_from_row")?);
         block_ids_hash = xxh32(block.block_id.as_bytes(), block_ids_hash);
-        partition_src_blocks.push(PartitionSourceBlock {
+        partition_src_blocks.push(Arc::new(PartitionSourceBlock {
             block,
             stream: stream_from_row(src_block).with_context(|| "stream_from_row")?,
             process,
             process_start_time: src_block.try_get("start_time")?,
             process_start_ticks: src_block.try_get("start_ticks")?,
             process_tsc_frequency: src_block.try_get("tsc_frequency")?,
-        });
+        }));
     }
     Ok(PartitionSourceDataBlocks {
         blocks: partition_src_blocks,
