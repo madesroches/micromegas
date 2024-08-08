@@ -87,6 +87,16 @@ impl PartitionSpec for BlockPartitionSpec {
             .write_string(&format!("reading {} blocks", self.source_data.blocks.len()))
             .await?;
 
+        if self.source_data.blocks.is_empty() {
+            return Ok(());
+        }
+
+        let mut max_size = self.source_data.blocks[0].block.payload_size as usize;
+        for block in &self.source_data.blocks {
+            max_size = max_size.max(block.block.payload_size as usize);
+        }
+        let nb_tasks = (100 * 1024 * 1024) / max_size; // try to download up to 100 MB of payloads
+
         let mut stream = futures::stream::iter(self.source_data.blocks.clone())
             .map(|src_block| async {
                 let block_processor = self.block_processor.clone();
@@ -99,7 +109,7 @@ impl PartitionSpec for BlockPartitionSpec {
                 });
                 handle.await.unwrap()
             })
-            .buffer_unordered(10);
+            .buffer_unordered(nb_tasks);
 
         while let Some(res_opt_rows) = stream.next().await {
             match res_opt_rows {
