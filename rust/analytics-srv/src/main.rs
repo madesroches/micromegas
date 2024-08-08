@@ -15,10 +15,11 @@ use clap::Parser;
 use micromegas::analytics::analytics_service::AnalyticsService;
 use micromegas::analytics::lakehouse::migration::migrate_lakehouse;
 use micromegas::analytics::lakehouse::view_factory::ViewFactory;
+use micromegas::axum_utils::observability_middleware;
+use micromegas::axum_utils::stream_request;
 use micromegas::ingestion::data_lake_connection::{connect_to_data_lake, DataLakeConnection};
 use micromegas::telemetry_sink::TelemetryGuardBuilder;
 use micromegas::tracing::prelude::*;
-use micromegas_axum_utils::observability_middleware;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tower_http::timeout::TimeoutLayer;
@@ -160,36 +161,36 @@ async fn create_or_update_partitions_request(
     Extension(service): Extension<AnalyticsService>,
     body: bytes::Bytes,
 ) -> Response {
-    bytes_response(
+    stream_request(|writer| async move {
         service
-            .create_or_update_partitions(body)
+            .create_or_update_partitions(body, writer)
             .await
-            .with_context(|| "create_or_update_partitions"),
-    )
+            .with_context(|| "create_or_update_partitions")
+    })
 }
 
 async fn merge_partitions_request(
     Extension(service): Extension<AnalyticsService>,
     body: bytes::Bytes,
 ) -> Response {
-    bytes_response(
+    stream_request(|writer| async move {
         service
-            .merge_partitions(body)
+            .merge_partitions(body, writer)
             .await
-            .with_context(|| "merge_partitions"),
-    )
+            .with_context(|| "merge_partitions")
+    })
 }
 
 async fn retire_partitions_request(
     Extension(service): Extension<AnalyticsService>,
     body: bytes::Bytes,
 ) -> Response {
-    bytes_response(
+    stream_request(|writer| async move {
         service
-            .retire_partitions(body)
+            .retire_partitions(body, writer)
             .await
-            .with_context(|| "retire_partitions"),
-    )
+            .with_context(|| "retire_partitions")
+    })
 }
 
 async fn serve_http(

@@ -1,5 +1,8 @@
 use super::view::View;
-use crate::lakehouse::partition::{write_partition, Partition};
+use crate::{
+    lakehouse::partition::{write_partition, Partition},
+    response_writer::ResponseWriter,
+};
 use anyhow::{Context, Result};
 use bytes::BufMut;
 use chrono::{DateTime, DurationRound, TimeDelta, Utc};
@@ -10,7 +13,6 @@ use datafusion::parquet::{
 };
 use futures::stream::StreamExt;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
-use micromegas_tracing::prelude::*;
 use object_store::{path::Path, ObjectMeta};
 use sqlx::Row;
 use std::sync::Arc;
@@ -21,9 +23,15 @@ async fn create_merged_partition(
     view: Arc<dyn View>,
     begin: DateTime<Utc>,
     end: DateTime<Utc>,
+    writer: Arc<ResponseWriter>,
 ) -> Result<()> {
     let view_set_name = view.get_view_set_name().to_string();
     let view_instance_id = view.get_view_instance_id().to_string();
+    let desc = format!(
+        "[{}, {}] {view_set_name} {view_instance_id}",
+        begin.to_rfc3339(),
+        end.to_rfc3339()
+    );
     // we are not looking for intersecting partitions, but only those that fit completely in the range
     let rows = sqlx::query(
         "SELECT file_path, file_size, updated, file_schema_hash, source_data_hash, begin_insert_time, end_insert_time, min_event_time, max_event_time
@@ -42,15 +50,15 @@ async fn create_merged_partition(
     .await
     .with_context(|| "fetching partitions to merge")?;
     if rows.len() < 2 {
-        info!("not enough partitions to merge between {begin} and {end}");
+        writer
+            .write_string(&format!("{desc}: not enough partitions to merge"))
+            .await?;
         return Ok(());
     }
     let latest_file_schema_hash = view.get_file_schema_hash();
     let mut sum_size: i64 = 0;
     let mut min_event_time: DateTime<Utc> = rows[0].try_get("min_event_time")?;
     let mut max_event_time: DateTime<Utc> = rows[0].try_get("max_event_time")?;
-    let mut min_insert_time: DateTime<Utc> = rows[0].try_get("begin_insert_time")?;
-    let mut max_insert_time: DateTime<Utc> = rows[0].try_get("end_insert_time")?;
     let mut source_hash = 0;
     for r in &rows {
         let source_data_hash: Vec<u8> = r.try_get("source_data_hash")?;
@@ -59,10 +67,6 @@ async fn create_merged_partition(
         let file_size: i64 = r.try_get("file_size")?;
         sum_size += file_size;
 
-        let begin_insert_time: DateTime<Utc> = r.try_get("begin_insert_time")?;
-        let end_insert_time: DateTime<Utc> = r.try_get("end_insert_time")?;
-        min_insert_time = min_insert_time.min(begin_insert_time);
-        max_insert_time = max_insert_time.max(end_insert_time);
         let begin_event_time: DateTime<Utc> = r.try_get("min_event_time")?;
         let end_event_time: DateTime<Utc> = r.try_get("max_event_time")?;
         min_event_time = min_event_time.min(begin_event_time);
@@ -70,14 +74,24 @@ async fn create_merged_partition(
 
         let file_schema_hash: Vec<u8> = r.try_get("file_schema_hash")?;
         if file_schema_hash != latest_file_schema_hash {
-            warn!("can't merge partition view_set_name={view_set_name} view_instance_id={view_instance_id} begin_insert_time={begin_insert_time} end_insert_time={end_insert_time}");
+            let begin_insert_time: DateTime<Utc> = r.try_get("begin_insert_time")?;
+            let end_insert_time: DateTime<Utc> = r.try_get("end_insert_time")?;
+            writer
+                .write_string(&format!(
+                    "{desc}: incompatible file schema with [{},{}]",
+                    begin_insert_time.to_rfc3339(),
+                    end_insert_time.to_rfc3339()
+                ))
+                .await?;
             return Ok(());
         }
     }
-    info!(
-        "merging {} partitions sum_size={sum_size} min_insert_time={min_insert_time} max_insert_time={max_insert_time}",
-        rows.len()
-    );
+    writer
+        .write_string(&format!(
+            "{desc}: merging {} partitions sum_size={sum_size}",
+            rows.len()
+        ))
+        .await?;
 
     // buffer the whole parquet in memory until https://github.com/apache/arrow-rs/issues/5766 is done
     // Impl AsyncFileWriter by object_store #5766
@@ -122,8 +136,8 @@ async fn create_merged_partition(
         "views/{}/{}/{}/{}_{file_id}.parquet",
         &view_set_name,
         &view_instance_id,
-        min_insert_time.format("%Y-%m-%d"),
-        min_insert_time.format("%H-%M-%S")
+        begin.format("%Y-%m-%d"),
+        begin.format("%H-%M-%S")
     );
 
     let buffer: bytes::Bytes = buffer_writer.into_inner().into();
@@ -132,8 +146,8 @@ async fn create_merged_partition(
         &Partition {
             view_set_name,
             view_instance_id,
-            begin_insert_time: min_insert_time,
-            end_insert_time: max_insert_time,
+            begin_insert_time: begin,
+            end_insert_time: end,
             min_event_time,
             max_event_time,
             updated: sqlx::types::chrono::Utc::now(),
@@ -143,6 +157,7 @@ async fn create_merged_partition(
             source_data_hash: source_hash.to_le_bytes().to_vec(),
         },
         buffer,
+        writer,
     )
     .await?;
 
@@ -155,13 +170,20 @@ pub async fn merge_partitions(
     begin_range: DateTime<Utc>,
     end_range: DateTime<Utc>,
     partition_time_delta: TimeDelta,
+    writer: Arc<ResponseWriter>,
 ) -> Result<()> {
     let mut begin_part = begin_range;
     let mut end_part = begin_part + partition_time_delta;
     while end_part <= end_range {
-        create_merged_partition(lake.clone(), view.clone(), begin_part, end_part)
-            .await
-            .with_context(|| "create_merged_partition")?;
+        create_merged_partition(
+            lake.clone(),
+            view.clone(),
+            begin_part,
+            end_part,
+            writer.clone(),
+        )
+        .await
+        .with_context(|| "create_merged_partition")?;
         begin_part = end_part;
         end_part = begin_part + partition_time_delta;
     }
@@ -174,6 +196,7 @@ pub async fn merge_recent_partitions(
     partition_time_delta: TimeDelta,
     nb_partitions: i32,
     min_age: TimeDelta,
+    writer: Arc<ResponseWriter>,
 ) -> Result<()> {
     let now = Utc::now();
     let truncated = now.duration_trunc(partition_time_delta)?;
@@ -184,9 +207,15 @@ pub async fn merge_recent_partitions(
         if (now - end_partition) < min_age {
             return Ok(());
         }
-        create_merged_partition(lake.clone(), view.clone(), start_partition, end_partition)
-            .await
-            .with_context(|| "create_or_update_partition")?;
+        create_merged_partition(
+            lake.clone(),
+            view.clone(),
+            start_partition,
+            end_partition,
+            writer.clone(),
+        )
+        .await
+        .with_context(|| "create_or_update_partition")?;
     }
     Ok(())
 }

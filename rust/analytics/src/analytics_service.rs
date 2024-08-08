@@ -13,12 +13,12 @@ use serde::Deserialize;
 use sqlx::types::chrono::{DateTime, FixedOffset};
 use uuid::Uuid;
 
-use crate::arrow_utils::make_empty_record_batch;
 use crate::lakehouse::answer::Answer;
 use crate::lakehouse::batch_update::create_or_update_partitions;
 use crate::lakehouse::merge::merge_partitions;
 use crate::lakehouse::partition::retire_partitions;
 use crate::lakehouse::view_factory::ViewFactory;
+use crate::response_writer::ResponseWriter;
 use crate::sql_arrow_bridge::rows_to_record_batch;
 
 #[derive(Clone)]
@@ -473,7 +473,11 @@ impl AnalyticsService {
         serialize_record_batches(&Answer::from_record_batch(record_batch))
     }
 
-    pub async fn create_or_update_partitions(&self, body: bytes::Bytes) -> Result<bytes::Bytes> {
+    pub async fn create_or_update_partitions(
+        &self,
+        body: bytes::Bytes,
+        writer: Arc<ResponseWriter>,
+    ) -> Result<()> {
         let request: CreateOrUpdatePartitionsRequest = ciborium::from_reader(body.reader())
             .with_context(|| "parsing CreateOrUpdatePartitionsRequest")?;
         let begin = DateTime::<FixedOffset>::parse_from_rfc3339(&request.begin)
@@ -492,12 +496,17 @@ impl AnalyticsService {
             begin.into(),
             end.into(),
             delta,
+            writer,
         )
         .await?;
-        serialize_record_batches(&Answer::from_record_batch(make_empty_record_batch()))
+        Ok(())
     }
 
-    pub async fn merge_partitions(&self, body: bytes::Bytes) -> Result<bytes::Bytes> {
+    pub async fn merge_partitions(
+        &self,
+        body: bytes::Bytes,
+        writer: Arc<ResponseWriter>,
+    ) -> Result<()> {
         let request: MergePartitionsRequest = ciborium::from_reader(body.reader())
             .with_context(|| "parsing MergePartitionsRequest")?;
         let begin = DateTime::<FixedOffset>::parse_from_rfc3339(&request.begin)
@@ -516,12 +525,17 @@ impl AnalyticsService {
             begin.into(),
             end.into(),
             delta,
+            writer,
         )
         .await?;
-        serialize_record_batches(&Answer::from_record_batch(make_empty_record_batch()))
+        Ok(())
     }
 
-    pub async fn retire_partitions(&self, body: bytes::Bytes) -> Result<bytes::Bytes> {
+    pub async fn retire_partitions(
+        &self,
+        body: bytes::Bytes,
+        writer: Arc<ResponseWriter>,
+    ) -> Result<()> {
         let request: RetirePartitionsRequest = ciborium::from_reader(body.reader())
             .with_context(|| "parsing RetirePartitionsRequest")?;
         let begin = DateTime::<FixedOffset>::parse_from_rfc3339(&request.begin)
@@ -535,10 +549,11 @@ impl AnalyticsService {
             &request.view_instance_id,
             begin.into(),
             end.into(),
+            writer,
         )
         .await?;
         tr.commit().await.with_context(|| "commit")?;
-        serialize_record_batches(&Answer::from_record_batch(make_empty_record_batch()))
+        Ok(())
     }
 }
 

@@ -25,11 +25,11 @@ micromegas-axum-utils = { path = "axum-utils", version = "0.1.6" }
 micromegas = { path = "public" }
 
 anyhow = "1.0"
-async-recursion = "1"
+async-stream = "0.3"
 async-trait = "0.1"
 aws-config = "0.12"
 aws-sdk-s3 = "0.12"
-axum = "0.7.5"
+axum = "0.7"
 blake3 = { version = "1.3", features = ["prefer_intrinsics"] }
 bytes = "1.1"
 cfg-if = "1.0"
@@ -40,9 +40,6 @@ colored = { version = "2" }
 ctrlc = "3.2.0"
 datafusion = "40.0.0"
 futures = "0.3"
-http = "0.2"
-hyper = "0.14"
-json = "0.12"
 lazy_static = "1.4"
 log = { version = "0.4", features = ["std"] }
 lz4 = "1.23"

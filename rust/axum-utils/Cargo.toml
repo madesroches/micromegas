@@ -11,5 +11,10 @@ authors.workspace = true
 
 [dependencies]
 micromegas-tracing.workspace = true
+micromegas-analytics.workspace = true
 
+anyhow.workspace = true
+async-stream.workspace = true
 axum.workspace = true
+bytes.workspace = true
+tokio.workspace = true

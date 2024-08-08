@@ -1,8 +1,9 @@
+use crate::response_writer::ResponseWriter;
 use anyhow::{Context, Result};
 use chrono::{DateTime, TimeDelta, Utc};
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
-use micromegas_tracing::prelude::*;
 use sqlx::Row;
+use std::sync::Arc;
 
 pub struct Partition {
     pub view_set_name: String,
@@ -24,6 +25,7 @@ pub async fn retire_partitions(
     view_instance_id: &str,
     begin_insert_time: DateTime<Utc>,
     end_insert_time: DateTime<Utc>,
+    writer: Arc<ResponseWriter>,
 ) -> Result<()> {
     let old_partitions = sqlx::query(
         "SELECT file_path, file_size
@@ -45,7 +47,11 @@ pub async fn retire_partitions(
         let file_path: String = old_part.try_get("file_path")?;
         let file_size: i64 = old_part.try_get("file_size")?;
         let expiration = Utc::now() + TimeDelta::try_hours(1).with_context(|| "making one hour")?;
-        info!("adding out of date partition {file_path} to temporary files to be deleted");
+        writer
+            .write_string(&format!(
+                "adding out of date partition {file_path} to temporary files to be deleted"
+            ))
+            .await?;
         sqlx::query("INSERT INTO temporary_files VALUES ($1, $2, $3);")
             .bind(file_path)
             .bind(file_size)
@@ -77,6 +83,7 @@ pub async fn write_partition(
     lake: &DataLakeConnection,
     partition_metadata: &Partition,
     contents: bytes::Bytes,
+    writer: Arc<ResponseWriter>,
 ) -> Result<()> {
     lake.blob_storage
         .put(&partition_metadata.file_path, contents)
@@ -90,6 +97,7 @@ pub async fn write_partition(
         &partition_metadata.view_instance_id,
         partition_metadata.begin_insert_time,
         partition_metadata.end_insert_time,
+        writer,
     )
     .await
     .with_context(|| "retire_partitions")?;

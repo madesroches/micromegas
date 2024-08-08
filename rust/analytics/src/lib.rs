@@ -18,6 +18,7 @@ pub mod query_log_entries;
 pub mod query_metrics;
 pub mod query_spans;
 pub mod query_thread_events;
+pub mod response_writer;
 pub mod scope;
 pub mod span_table;
 pub mod sql_arrow_bridge;

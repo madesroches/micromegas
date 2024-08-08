@@ -16,6 +16,7 @@ micromegas-ingestion.workspace = true
 micromegas-telemetry-sink.workspace = true
 micromegas-telemetry.workspace = true
 micromegas-tracing.workspace = true
+micromegas-axum-utils.workspace = true
 
 chrono.workspace = true
 datafusion.workspace = true
