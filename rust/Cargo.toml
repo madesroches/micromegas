@@ -21,7 +21,6 @@ micromegas-telemetry = { path = "telemetry", version = "0.1.6" }
 micromegas-telemetry-sink = { path = "telemetry-sink", version = "0.1.6" }
 micromegas-tracing = { path = "tracing", version = "0.1.6" }
 micromegas-transit = { path = "transit", version = "0.1.6" }
-micromegas-axum-utils = { path = "axum-utils", version = "0.1.6" }
 micromegas = { path = "public" }
 
 anyhow = "1.0"

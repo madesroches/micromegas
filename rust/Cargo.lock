@@ -2089,16 +2089,20 @@ dependencies = [
 name = "micromegas"
 version = "0.1.6"
 dependencies = [
+ "anyhow",
+ "async-stream",
+ "axum",
+ "bytes",
  "chrono",
  "datafusion",
  "micromegas-analytics",
- "micromegas-axum-utils",
  "micromegas-ingestion",
  "micromegas-telemetry",
  "micromegas-telemetry-sink",
  "micromegas-tracing",
  "object_store",
  "sqlx",
+ "tokio",
  "uuid",
 ]
 
@@ -2126,19 +2130,6 @@ dependencies = [
  "tokio",
  "uuid",
  "xxhash-rust",
-]
-
-[[package]]
-name = "micromegas-axum-utils"
-version = "0.1.6"
-dependencies = [
- "anyhow",
- "async-stream",
- "axum",
- "bytes",
- "micromegas-analytics",
- "micromegas-tracing",
- "tokio",
 ]
 
 [[package]]
@@ -3689,7 +3680,6 @@ dependencies = [
  "bytes",
  "clap",
  "micromegas",
- "micromegas-axum-utils",
  "serde_json",
  "tokio",
  "tower-http",
