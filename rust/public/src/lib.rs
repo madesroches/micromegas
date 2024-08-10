@@ -26,6 +26,4 @@ pub mod analytics {
     pub use micromegas_analytics::*;
 }
 
-pub mod axum_utils {
-    pub use micromegas_axum_utils::*;
-}
+pub mod axum_utils;

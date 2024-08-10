@@ -16,10 +16,14 @@ micromegas-ingestion.workspace = true
 micromegas-telemetry-sink.workspace = true
 micromegas-telemetry.workspace = true
 micromegas-tracing.workspace = true
-micromegas-axum-utils.workspace = true
 
+anyhow.workspace = true
+async-stream.workspace = true
+axum.workspace = true
+bytes.workspace = true
 chrono.workspace = true
 datafusion.workspace = true
 object_store.workspace = true
 sqlx.workspace = true
+tokio.workspace = true
 uuid.workspace = true

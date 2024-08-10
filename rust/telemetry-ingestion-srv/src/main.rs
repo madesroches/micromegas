@@ -14,12 +14,12 @@ use axum::routing::post;
 use axum::Extension;
 use axum::Router;
 use clap::Parser;
+use micromegas::axum_utils::observability_middleware;
 use micromegas::ingestion::data_lake_connection::DataLakeConnection;
 use micromegas::ingestion::remote_data_lake::connect_to_remote_data_lake;
 use micromegas::ingestion::web_ingestion_service::WebIngestionService;
 use micromegas::telemetry_sink::TelemetryGuardBuilder;
 use micromegas::tracing::prelude::*;
-use micromegas_axum_utils::observability_middleware;
 use std::net::SocketAddr;
 use tower_http::limit::RequestBodyLimitLayer;
 
