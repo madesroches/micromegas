@@ -40,7 +40,7 @@ pub async fn fetch_partition_source_data(
          AND array_position(tags, $1) is not NULL
          AND blocks.insert_time >= $2
          AND blocks.insert_time < $3
-         ORDER BY blocks.insert_time
+         ORDER BY blocks.insert_time, blocks.block_id
          ;",
     )
     .bind(source_stream_tag)
