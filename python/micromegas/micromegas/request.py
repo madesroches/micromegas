@@ -24,7 +24,8 @@ def streamed_request(url, args, headers={}):
         url,
         headers=headers,
         data=cbor2.dumps(args),
-        stream=True
+        stream=True,
+        timeout=300,
     )
     if response.status_code != 200:
         raise Exception(
