@@ -29,6 +29,12 @@ pub async fn fetch_partition_source_data(
     end_insert: DateTime<Utc>,
     source_stream_tag: &str,
 ) -> Result<PartitionSourceDataBlocks> {
+    let desc = format!(
+        "[{}, {}] {source_stream_tag}",
+        begin_insert.to_rfc3339(),
+        end_insert.to_rfc3339()
+    );
+
     // this can scale to thousands, but not millions
     let src_blocks = sqlx::query(
         "SELECT block_id, streams.stream_id, processes.process_id, blocks.begin_time, blocks.begin_ticks, blocks.end_time, blocks.end_ticks, blocks.nb_objects, blocks.object_offset, blocks.payload_size,
@@ -50,7 +56,7 @@ pub async fn fetch_partition_source_data(
     .await
     .with_context(|| "listing source blocks")?;
 
-    info!("nb_source_blocks: {}", src_blocks.len());
+    info!("{desc} nb_source_blocks={}", src_blocks.len());
     let mut block_ids_hash = 0;
     let mut partition_src_blocks = vec![];
     for src_block in &src_blocks {
@@ -66,6 +72,7 @@ pub async fn fetch_partition_source_data(
             process_tsc_frequency: src_block.try_get("tsc_frequency")?,
         }));
     }
+    info!("{desc} block_ids_hash={block_ids_hash}");
     Ok(PartitionSourceDataBlocks {
         blocks: partition_src_blocks,
         block_ids_hash: block_ids_hash.to_le_bytes().to_vec(),
