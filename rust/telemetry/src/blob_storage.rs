@@ -1,7 +1,6 @@
 use anyhow::Result;
 use futures::stream;
 use futures::StreamExt;
-use futures::TryStreamExt;
 use object_store::prefix::PrefixStore;
 use object_store::{path::Path, ObjectStore};
 use std::sync::Arc;
@@ -54,20 +53,15 @@ impl BlobStorage {
                 .map(|obj_path| Path::from(obj_path.as_str()))
                 .map(Ok),
         );
-        self.blob_store
-            .delete_stream(Box::pin(path_stream))
-            .map(|res| {
-                if let Err(e) = res {
-                    match e {
-                        object_store::Error::NotFound { path: _, source: _ } => Ok(()),
-                        ref _other_error => Err(e),
-                    }
-                } else {
-                    Ok(())
-                }
-            })
-            .try_collect()
-            .await?;
+        let mut stream = self.blob_store.delete_stream(Box::pin(path_stream));
+        while let Some(res) = stream.next().await {
+            if let Err(e) = res {
+                match e {
+                    object_store::Error::NotFound { path: _, source: _ } => Ok(()),
+                    ref _other_error => Err(e),
+                }?
+            }
+        }
         Ok(())
     }
 }
