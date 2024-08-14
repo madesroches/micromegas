@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use anyhow::{Context, Result};
 use axum::response::Response;
 use axum::routing::post;
@@ -21,7 +23,7 @@ pub fn bytes_response(result: Result<bytes::Bytes>) -> Response {
 }
 
 pub async fn find_process_request(
-    Extension(service): Extension<AnalyticsService>,
+    Extension(service): Extension<Arc<AnalyticsService>>,
     body: bytes::Bytes,
 ) -> Response {
     bytes_response(
@@ -33,7 +35,7 @@ pub async fn find_process_request(
 }
 
 pub async fn query_processes_request(
-    Extension(service): Extension<AnalyticsService>,
+    Extension(service): Extension<Arc<AnalyticsService>>,
     body: bytes::Bytes,
 ) -> Response {
     bytes_response(
@@ -45,7 +47,7 @@ pub async fn query_processes_request(
 }
 
 pub async fn query_streams_request(
-    Extension(service): Extension<AnalyticsService>,
+    Extension(service): Extension<Arc<AnalyticsService>>,
     body: bytes::Bytes,
 ) -> Response {
     bytes_response(
@@ -57,7 +59,7 @@ pub async fn query_streams_request(
 }
 
 pub async fn query_blocks_request(
-    Extension(service): Extension<AnalyticsService>,
+    Extension(service): Extension<Arc<AnalyticsService>>,
     body: bytes::Bytes,
 ) -> Response {
     bytes_response(
@@ -69,7 +71,7 @@ pub async fn query_blocks_request(
 }
 
 pub async fn query_spans_request(
-    Extension(service): Extension<AnalyticsService>,
+    Extension(service): Extension<Arc<AnalyticsService>>,
     body: bytes::Bytes,
 ) -> Response {
     bytes_response(
@@ -81,7 +83,7 @@ pub async fn query_spans_request(
 }
 
 pub async fn query_thread_events_request(
-    Extension(service): Extension<AnalyticsService>,
+    Extension(service): Extension<Arc<AnalyticsService>>,
     body: bytes::Bytes,
 ) -> Response {
     bytes_response(
@@ -93,7 +95,7 @@ pub async fn query_thread_events_request(
 }
 
 pub async fn query_log_entries_request(
-    Extension(service): Extension<AnalyticsService>,
+    Extension(service): Extension<Arc<AnalyticsService>>,
     body: bytes::Bytes,
 ) -> Response {
     bytes_response(
@@ -105,7 +107,7 @@ pub async fn query_log_entries_request(
 }
 
 pub async fn query_metrics_request(
-    Extension(service): Extension<AnalyticsService>,
+    Extension(service): Extension<Arc<AnalyticsService>>,
     body: bytes::Bytes,
 ) -> Response {
     bytes_response(
@@ -117,13 +119,15 @@ pub async fn query_metrics_request(
 }
 
 pub async fn query_view_request(
-    Extension(service): Extension<AnalyticsService>,
+    Extension(service): Extension<Arc<AnalyticsService>>,
     body: bytes::Bytes,
 ) -> Response {
     bytes_response(service.query_view(body).await.with_context(|| "query_view"))
 }
 
-pub async fn query_partitions_request(Extension(service): Extension<AnalyticsService>) -> Response {
+pub async fn query_partitions_request(
+    Extension(service): Extension<Arc<AnalyticsService>>,
+) -> Response {
     bytes_response(
         service
             .query_partitions()
@@ -133,7 +137,7 @@ pub async fn query_partitions_request(Extension(service): Extension<AnalyticsSer
 }
 
 pub async fn create_or_update_partitions_request(
-    Extension(service): Extension<AnalyticsService>,
+    Extension(service): Extension<Arc<AnalyticsService>>,
     body: bytes::Bytes,
 ) -> Response {
     stream_request(|writer| async move {
@@ -145,7 +149,7 @@ pub async fn create_or_update_partitions_request(
 }
 
 pub async fn merge_partitions_request(
-    Extension(service): Extension<AnalyticsService>,
+    Extension(service): Extension<Arc<AnalyticsService>>,
     body: bytes::Bytes,
 ) -> Response {
     stream_request(|writer| async move {
@@ -157,7 +161,7 @@ pub async fn merge_partitions_request(
 }
 
 pub async fn retire_partitions_request(
-    Extension(service): Extension<AnalyticsService>,
+    Extension(service): Extension<Arc<AnalyticsService>>,
     body: bytes::Bytes,
 ) -> Response {
     stream_request(|writer| async move {

@@ -3,9 +3,10 @@ use axum::Extension;
 use axum::Router;
 use micromegas_ingestion::web_ingestion_service::WebIngestionService;
 use micromegas_tracing::prelude::*;
+use std::sync::Arc;
 
 pub async fn insert_process_request(
-    Extension(service): Extension<WebIngestionService>,
+    Extension(service): Extension<Arc<WebIngestionService>>,
     body: bytes::Bytes,
 ) {
     if let Err(e) = service.insert_process(body).await {
@@ -14,7 +15,7 @@ pub async fn insert_process_request(
 }
 
 pub async fn insert_stream_request(
-    Extension(service): Extension<WebIngestionService>,
+    Extension(service): Extension<Arc<WebIngestionService>>,
     body: bytes::Bytes,
 ) {
     if let Err(e) = service.insert_stream(body).await {
@@ -23,7 +24,7 @@ pub async fn insert_stream_request(
 }
 
 pub async fn insert_block_request(
-    Extension(service): Extension<WebIngestionService>,
+    Extension(service): Extension<Arc<WebIngestionService>>,
     body: bytes::Bytes,
 ) {
     if body.is_empty() {
