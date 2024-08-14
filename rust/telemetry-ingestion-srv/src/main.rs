@@ -21,6 +21,7 @@ use micromegas::servers;
 use micromegas::telemetry_sink::TelemetryGuardBuilder;
 use micromegas::tracing::prelude::*;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use tower_http::limit::RequestBodyLimitLayer;
 
 #[derive(Parser, Debug)]
@@ -35,7 +36,7 @@ async fn serve_http(
     args: &Cli,
     lake: DataLakeConnection,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let service = WebIngestionService::new(lake);
+    let service = Arc::new(WebIngestionService::new(lake));
 
     let app = servers::ingestion::register_routes(Router::new())
         .layer(DefaultBodyLimit::disable())

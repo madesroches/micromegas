@@ -35,7 +35,7 @@ async fn serve_http(
     lake: Arc<DataLakeConnection>,
     view_factory: Arc<ViewFactory>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let service = AnalyticsService::new(lake, view_factory);
+    let service = Arc::new(AnalyticsService::new(lake, view_factory));
     let app = register_routes(Router::new())
         .layer(Extension(service))
         .layer(middleware::from_fn(observability_middleware))
