@@ -10,7 +10,6 @@
 use anyhow::{Context, Result};
 use axum::extract::DefaultBodyLimit;
 use axum::middleware;
-use axum::routing::post;
 use axum::Extension;
 use axum::Router;
 use clap::Parser;
@@ -18,6 +17,7 @@ use micromegas::axum_utils::observability_middleware;
 use micromegas::ingestion::data_lake_connection::DataLakeConnection;
 use micromegas::ingestion::remote_data_lake::connect_to_remote_data_lake;
 use micromegas::ingestion::web_ingestion_service::WebIngestionService;
+use micromegas::servers;
 use micromegas::telemetry_sink::TelemetryGuardBuilder;
 use micromegas::tracing::prelude::*;
 use std::net::SocketAddr;
@@ -31,47 +31,13 @@ struct Cli {
     listen_endpoint_http: SocketAddr,
 }
 
-async fn insert_process_request(
-    Extension(service): Extension<WebIngestionService>,
-    body: bytes::Bytes,
-) {
-    if let Err(e) = service.insert_process(body).await {
-        error!("Error in insert_process_request: {:?}", e);
-    }
-}
-
-async fn insert_stream_request(
-    Extension(service): Extension<WebIngestionService>,
-    body: bytes::Bytes,
-) {
-    if let Err(e) = service.insert_stream(body).await {
-        error!("Error in insert_stream_request: {:?}", e);
-    }
-}
-
-async fn insert_block_request(
-    Extension(service): Extension<WebIngestionService>,
-    body: bytes::Bytes,
-) {
-    if body.is_empty() {
-        error!("insert_block_request: empty body");
-        return;
-    }
-    if let Err(e) = service.insert_block(body).await {
-        error!("Error in insert_block_request: {:?}", e);
-    }
-}
-
 async fn serve_http(
     args: &Cli,
     lake: DataLakeConnection,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let service = WebIngestionService::new(lake);
 
-    let app = Router::new()
-        .route("/ingestion/insert_process", post(insert_process_request))
-        .route("/ingestion/insert_stream", post(insert_stream_request))
-        .route("/ingestion/insert_block", post(insert_block_request))
+    let app = servers::ingestion::register_routes(Router::new())
         .layer(DefaultBodyLimit::disable())
         .layer(RequestBodyLimitLayer::new(100 * 1024 * 1024))
         .layer(Extension(service))

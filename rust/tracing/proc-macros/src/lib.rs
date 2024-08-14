@@ -6,15 +6,11 @@
 // crate-specific lint exceptions:
 //#![allow()]
 
-use std::collections::HashSet;
-
 use proc_macro2::Literal;
 use quote::quote;
 use syn::{
     parse::{Parse, ParseStream, Result},
-    parse_macro_input, parse_quote,
-    punctuated::Punctuated,
-    Ident, ItemFn, Token,
+    parse_macro_input, parse_quote, ItemFn,
 };
 
 struct TraceArgs {
@@ -65,20 +61,6 @@ pub fn span_fn(
     proc_macro::TokenStream::from(quote! {
         #function
     })
-}
-
-struct LogArgs {
-    #[allow(unused)]
-    vars: HashSet<Ident>,
-}
-
-impl Parse for LogArgs {
-    fn parse(input: ParseStream<'_>) -> Result<Self> {
-        let vars = Punctuated::<Ident, Token![,]>::parse_terminated(input)?;
-        Ok(Self {
-            vars: vars.into_iter().collect(),
-        })
-    }
 }
 
 #[proc_macro_attribute]
