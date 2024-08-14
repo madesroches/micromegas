@@ -23,7 +23,7 @@ async fn create_merged_partition(
     view: Arc<dyn View>,
     begin: DateTime<Utc>,
     end: DateTime<Utc>,
-    writer: Arc<ResponseWriter>,
+    response_writer: Arc<ResponseWriter>,
 ) -> Result<()> {
     let view_set_name = view.get_view_set_name().to_string();
     let view_instance_id = view.get_view_instance_id().to_string();
@@ -50,7 +50,7 @@ async fn create_merged_partition(
     .await
     .with_context(|| "fetching partitions to merge")?;
     if rows.len() < 2 {
-        writer
+        response_writer
             .write_string(&format!("{desc}: not enough partitions to merge"))
             .await?;
         return Ok(());
@@ -76,7 +76,7 @@ async fn create_merged_partition(
         if file_schema_hash != latest_file_schema_hash {
             let begin_insert_time: DateTime<Utc> = r.try_get("begin_insert_time")?;
             let end_insert_time: DateTime<Utc> = r.try_get("end_insert_time")?;
-            writer
+            response_writer
                 .write_string(&format!(
                     "{desc}: incompatible file schema with [{},{}]",
                     begin_insert_time.to_rfc3339(),
@@ -86,7 +86,7 @@ async fn create_merged_partition(
             return Ok(());
         }
     }
-    writer
+    response_writer
         .write_string(&format!(
             "{desc}: merging {} partitions sum_size={sum_size}",
             rows.len()
@@ -106,6 +106,10 @@ async fn create_merged_partition(
     for r in &rows {
         let file_path: String = r.try_get("file_path")?;
         let file_size: i64 = r.try_get("file_size")?;
+        response_writer
+            .write_string(&format!("reading path={file_path} size={file_size}"))
+            .await?;
+
         let updated: DateTime<Utc> = r.try_get("updated")?;
         let meta = ObjectMeta {
             location: Path::from(file_path),
@@ -119,7 +123,7 @@ async fn create_merged_partition(
             .await
             .with_context(|| "ParquetRecordBatchStreamBuilder::new")?;
         let mut rbstream = builder
-            // .with_batch_size(1024 * 1024) the default is 1024, which seems low
+            .with_batch_size(1024 * 1024) // the default is 1024, which seems low
             .build()
             .with_context(|| "builder.build()")?;
         while let Some(rb_res) = rbstream.next().await {
@@ -157,7 +161,7 @@ async fn create_merged_partition(
             source_data_hash: source_hash.to_le_bytes().to_vec(),
         },
         buffer,
-        writer,
+        response_writer,
     )
     .await?;
 
