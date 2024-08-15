@@ -194,15 +194,7 @@ impl HttpEventSink {
         let mut client = client_res.unwrap();
         // eagerly connect, a new process message is sure to follow if it's not already in queue
         if let Some(process_id) = micromegas_tracing::dispatch::process_id() {
-            info!("log: https://analytics.legionengine.com/log/{}", process_id);
-            info!(
-                "metrics: https://analytics.legionengine.com/metrics/{}",
-                process_id
-            );
-            info!(
-                "timeline: https://analytics.legionengine.com/timeline/{}",
-                process_id
-            );
+            info!("process_id={process_id}");
         }
         let flusher = FlushMonitor::default();
         loop {
