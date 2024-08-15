@@ -4,8 +4,7 @@
 //!
 //! Have the lowest impact on the critical path of execution while providing great
 //! visibility, `tracing` focusses on providing predictable performance for high
-//! performance applications. It's primary client is Legion Engine, which runs a
-//! distributed, highly compute demanding workloads.
+//! performance applications. It was originaly designed for video game engines.
 //!
 //! Contrary to other tracing crates, tracing does not provide hooks for individual
 //! events but rather a stream of events, internally it leverages transit
