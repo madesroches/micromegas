@@ -14,8 +14,7 @@ use sqlx::types::chrono::{DateTime, FixedOffset};
 use uuid::Uuid;
 
 use crate::lakehouse::answer::Answer;
-use crate::lakehouse::batch_update::create_or_update_partitions;
-use crate::lakehouse::merge::merge_partitions;
+use crate::lakehouse::batch_update::materialize_partition_range;
 use crate::lakehouse::partition::retire_partitions;
 use crate::lakehouse::view_factory::ViewFactory;
 use crate::response_writer::ResponseWriter;
@@ -490,36 +489,7 @@ impl AnalyticsService {
             .with_context(|| "making view")?;
         let delta = TimeDelta::try_seconds(request.partition_delta_seconds)
             .with_context(|| "making time delta")?;
-        create_or_update_partitions(
-            self.data_lake.clone(),
-            view,
-            begin.into(),
-            end.into(),
-            delta,
-            writer,
-        )
-        .await?;
-        Ok(())
-    }
-
-    pub async fn merge_partitions(
-        &self,
-        body: bytes::Bytes,
-        writer: Arc<ResponseWriter>,
-    ) -> Result<()> {
-        let request: MergePartitionsRequest = ciborium::from_reader(body.reader())
-            .with_context(|| "parsing MergePartitionsRequest")?;
-        let begin = DateTime::<FixedOffset>::parse_from_rfc3339(&request.begin)
-            .with_context(|| "parsing begin time range")?;
-        let end = DateTime::<FixedOffset>::parse_from_rfc3339(&request.end)
-            .with_context(|| "parsing end time range")?;
-        let view = self
-            .view_factory
-            .make_view(&request.view_set_name, &request.view_instance_id)
-            .with_context(|| "making view")?;
-        let delta = TimeDelta::try_seconds(request.partition_delta_seconds)
-            .with_context(|| "making time delta")?;
-        merge_partitions(
+        materialize_partition_range(
             self.data_lake.clone(),
             view,
             begin.into(),

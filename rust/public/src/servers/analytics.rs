@@ -136,27 +136,15 @@ pub async fn query_partitions_request(
     )
 }
 
-pub async fn create_or_update_partitions_request(
+pub async fn materialize_partitions_request(
     Extension(service): Extension<Arc<AnalyticsService>>,
     body: bytes::Bytes,
 ) -> Response {
     stream_request(|writer| async move {
         service
-            .create_or_update_partitions(body, writer)
+            .materialize_partitions(body, writer)
             .await
-            .with_context(|| "create_or_update_partitions")
-    })
-}
-
-pub async fn merge_partitions_request(
-    Extension(service): Extension<Arc<AnalyticsService>>,
-    body: bytes::Bytes,
-) -> Response {
-    stream_request(|writer| async move {
-        service
-            .merge_partitions(body, writer)
-            .await
-            .with_context(|| "merge_partitions")
+            .with_context(|| "materialize_partitions")
     })
 }
 
@@ -194,12 +182,8 @@ pub fn register_routes(router: Router) -> Router {
             post(query_partitions_request),
         )
         .route(
-            "/analytics/create_or_update_partitions",
-            post(create_or_update_partitions_request),
-        )
-        .route(
-            "/analytics/merge_partitions",
-            post(merge_partitions_request),
+            "/analytics/materialize_partitions",
+            post(materialize_partitions_request),
         )
         .route(
             "/analytics/retire_partitions",

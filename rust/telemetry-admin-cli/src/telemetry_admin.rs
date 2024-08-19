@@ -4,10 +4,8 @@ use anyhow::Context;
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use micromegas::analytics::delete::delete_old_data;
-use micromegas::analytics::lakehouse::batch_update::create_or_update_partitions;
-use micromegas::analytics::lakehouse::batch_update::create_or_update_recent_partitions;
-use micromegas::analytics::lakehouse::merge::merge_partitions;
-use micromegas::analytics::lakehouse::merge::merge_recent_partitions;
+use micromegas::analytics::lakehouse::batch_update::materialize_partition_range;
+use micromegas::analytics::lakehouse::batch_update::materialize_recent_partitions;
 use micromegas::analytics::lakehouse::migration::migrate_lakehouse;
 use micromegas::analytics::lakehouse::partition::retire_partitions;
 use micromegas::analytics::lakehouse::temp::delete_expired_temporary_files;
@@ -39,34 +37,16 @@ enum Commands {
     #[clap(name = "delete-expired-temp")]
     DeleteExpiredTemp,
 
-    #[clap(name = "create-recent-partitions")]
-    CreateRecentPartitions {
+    #[clap(name = "materialize-recent-partitions")]
+    MaterializeRecentPartitions {
         view_set_name: String,
         view_instance_id: String,
         partition_delta_seconds: i64,
         nb_partitions: i32,
     },
 
-    #[clap(name = "create-partitions")]
-    CreatePartitions {
-        view_set_name: String,
-        view_instance_id: String,
-        begin: DateTime<Utc>,
-        end: DateTime<Utc>,
-        partition_delta_seconds: i64,
-    },
-
-    #[clap(name = "merge-recent-partitions")]
-    MergeRecentPartitions {
-        view_set_name: String,
-        view_instance_id: String,
-        partition_delta_seconds: i64,
-        nb_partitions: i32,
-        min_age_seconds: i64, // do not merge partitions younger than min_age_seconds
-    },
-
-    #[clap(name = "merge-partitions")]
-    MergePartitions {
+    #[clap(name = "materialize-partitions")]
+    MaterializePartitions {
         view_set_name: String,
         view_instance_id: String,
         begin: DateTime<Utc>,
@@ -112,7 +92,7 @@ async fn main() -> Result<()> {
         Commands::DeleteExpiredTemp => {
             delete_expired_temporary_files(data_lake).await?;
         }
-        Commands::CreateRecentPartitions {
+        Commands::MaterializeRecentPartitions {
             view_set_name,
             view_instance_id,
             partition_delta_seconds,
@@ -120,7 +100,7 @@ async fn main() -> Result<()> {
         } => {
             let delta = TimeDelta::try_seconds(partition_delta_seconds)
                 .with_context(|| "making time delta")?;
-            create_or_update_recent_partitions(
+            materialize_recent_partitions(
                 data_lake,
                 view_factory.make_view(&view_set_name, &view_instance_id)?,
                 delta,
@@ -129,7 +109,7 @@ async fn main() -> Result<()> {
             )
             .await?;
         }
-        Commands::CreatePartitions {
+        Commands::MaterializePartitions {
             view_set_name,
             view_instance_id,
             begin,
@@ -138,47 +118,7 @@ async fn main() -> Result<()> {
         } => {
             let delta = TimeDelta::try_seconds(partition_delta_seconds)
                 .with_context(|| "making time delta")?;
-            create_or_update_partitions(
-                data_lake,
-                view_factory.make_view(&view_set_name, &view_instance_id)?,
-                begin,
-                end,
-                delta,
-                null_response_writer,
-            )
-            .await?;
-        }
-        Commands::MergeRecentPartitions {
-            view_set_name,
-            view_instance_id,
-            partition_delta_seconds,
-            nb_partitions,
-            min_age_seconds,
-        } => {
-            let delta = TimeDelta::try_seconds(partition_delta_seconds)
-                .with_context(|| "making time delta")?;
-            let min_age =
-                TimeDelta::try_seconds(min_age_seconds).with_context(|| "making min_age")?;
-            merge_recent_partitions(
-                data_lake,
-                view_factory.make_view(&view_set_name, &view_instance_id)?,
-                delta,
-                nb_partitions,
-                min_age,
-                null_response_writer,
-            )
-            .await?;
-        }
-        Commands::MergePartitions {
-            view_set_name,
-            view_instance_id,
-            begin,
-            end,
-            partition_delta_seconds,
-        } => {
-            let delta = TimeDelta::try_seconds(partition_delta_seconds)
-                .with_context(|| "making time delta")?;
-            merge_partitions(
+            materialize_partition_range(
                 data_lake,
                 view_factory.make_view(&view_set_name, &view_instance_id)?,
                 begin,
