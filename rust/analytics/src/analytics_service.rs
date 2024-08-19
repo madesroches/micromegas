@@ -103,7 +103,7 @@ pub struct QueryViewRequest {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct CreateOrUpdatePartitionsRequest {
+pub struct MetarializePartitionsRequest {
     pub view_set_name: String,
     pub view_instance_id: String,
     pub begin: String,
@@ -472,13 +472,13 @@ impl AnalyticsService {
         serialize_record_batches(&Answer::from_record_batch(record_batch))
     }
 
-    pub async fn create_or_update_partitions(
+    pub async fn materialize_partition_range(
         &self,
         body: bytes::Bytes,
         writer: Arc<ResponseWriter>,
     ) -> Result<()> {
-        let request: CreateOrUpdatePartitionsRequest = ciborium::from_reader(body.reader())
-            .with_context(|| "parsing CreateOrUpdatePartitionsRequest")?;
+        let request: MetarializePartitionsRequest = ciborium::from_reader(body.reader())
+            .with_context(|| "parsing MetarializePartitionsRequest")?;
         let begin = DateTime::<FixedOffset>::parse_from_rfc3339(&request.begin)
             .with_context(|| "parsing begin time range")?;
         let end = DateTime::<FixedOffset>::parse_from_rfc3339(&request.end)

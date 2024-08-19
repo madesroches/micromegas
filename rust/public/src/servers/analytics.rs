@@ -142,7 +142,7 @@ pub async fn materialize_partitions_request(
 ) -> Response {
     stream_request(|writer| async move {
         service
-            .materialize_partitions(body, writer)
+            .materialize_partition_range(body, writer)
             .await
             .with_context(|| "materialize_partitions")
     })
