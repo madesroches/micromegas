@@ -2,8 +2,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, DurationRound};
 use chrono::{TimeDelta, Utc};
 use micromegas_analytics::delete::delete_old_data;
-use micromegas_analytics::lakehouse::batch_update::create_or_update_recent_partitions;
-use micromegas_analytics::lakehouse::merge::merge_recent_partitions;
+use micromegas_analytics::lakehouse::batch_update::materialize_recent_partitions;
 use micromegas_analytics::lakehouse::temp::delete_expired_temporary_files;
 use micromegas_analytics::lakehouse::view::View;
 use micromegas_analytics::lakehouse::view_factory::ViewFactory;
@@ -65,15 +64,13 @@ impl TaskDef {
 
 pub async fn every_day(lake: Arc<DataLakeConnection>, views: Views) -> Result<()> {
     let delta = TimeDelta::days(1);
-    let min_age = TimeDelta::minutes(1);
     let null_response_writer = Arc::new(ResponseWriter::new(None));
     for view in &*views {
-        merge_recent_partitions(
+        materialize_recent_partitions(
             lake.clone(),
             view.clone(),
             delta,
             3,
-            min_age,
             null_response_writer.clone(),
         )
         .await?;
@@ -85,15 +82,13 @@ pub async fn every_hour(lake: Arc<DataLakeConnection>, views: Views) -> Result<(
     delete_old_data(&lake, 90).await?;
     delete_expired_temporary_files(lake.clone()).await?;
     let delta = TimeDelta::hours(1);
-    let min_age = TimeDelta::minutes(1);
     let null_response_writer = Arc::new(ResponseWriter::new(None));
     for view in &*views {
-        merge_recent_partitions(
+        materialize_recent_partitions(
             lake.clone(),
             view.clone(),
             delta,
             3,
-            min_age,
             null_response_writer.clone(),
         )
         .await?;
@@ -104,7 +99,7 @@ pub async fn every_hour(lake: Arc<DataLakeConnection>, views: Views) -> Result<(
 pub async fn every_minute(lake: Arc<DataLakeConnection>, views: Views) -> Result<()> {
     let null_response_writer = Arc::new(ResponseWriter::new(None));
     for view in &*views {
-        create_or_update_recent_partitions(
+        materialize_recent_partitions(
             lake.clone(),
             view.clone(),
             TimeDelta::minutes(1),

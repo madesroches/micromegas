@@ -5,7 +5,6 @@ use chrono::{DateTime, Utc};
 use micromegas_telemetry::{stream_info::StreamInfo, types::block::BlockMetadata};
 use micromegas_tracing::prelude::*;
 use sqlx::Row;
-use xxhash_rust::xxh32::xxh32;
 
 use crate::metadata::{block_from_row, process_from_row, stream_from_row};
 
@@ -57,12 +56,12 @@ pub async fn fetch_partition_source_data(
     .with_context(|| "listing source blocks")?;
 
     info!("{desc} nb_source_blocks={}", src_blocks.len());
-    let mut block_ids_hash = 0;
+    let mut block_ids_hash: i64 = 0;
     let mut partition_src_blocks = vec![];
     for src_block in &src_blocks {
         let block = block_from_row(src_block).with_context(|| "block_from_row")?;
         let process = Arc::new(process_from_row(src_block).with_context(|| "process_from_row")?);
-        block_ids_hash = xxh32(block.block_id.as_bytes(), block_ids_hash);
+        block_ids_hash += block.nb_objects as i64;
         partition_src_blocks.push(Arc::new(PartitionSourceBlock {
             block,
             stream: stream_from_row(src_block).with_context(|| "stream_from_row")?,

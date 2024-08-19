@@ -145,7 +145,7 @@ class Client:
             except cbor2.CBORDecodeEOF:
                 break
 
-    def create_or_update_partitions(
+    def materialize_partitions(
         self, view_set_name, view_instance_id, begin, end, partition_delta_seconds
     ):
         args = {
@@ -155,19 +155,7 @@ class Client:
             "end": time.format_datetime(end),
             "partition_delta_seconds": partition_delta_seconds,
         }
-        self.__stream_request("create_or_update_partitions", args)
-
-    def merge_partitions(
-        self, view_set_name, view_instance_id, begin, end, partition_delta_seconds
-    ):
-        args = {
-            "view_set_name": view_set_name,
-            "view_instance_id": view_instance_id,
-            "begin": time.format_datetime(begin),
-            "end": time.format_datetime(end),
-            "partition_delta_seconds": partition_delta_seconds,
-        }
-        self.__stream_request("merge_partitions", args)
+        self.__stream_request("materialize_partitions", args)
 
     def retire_partitions(
         self, view_set_name, view_instance_id, begin, end, partition_delta_seconds

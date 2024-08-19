@@ -1,11 +1,17 @@
 use crate::response_writer::ResponseWriter;
 
-use super::view::View;
+use super::{merge::create_merged_partition, view::View};
 use anyhow::{Context, Result};
 use chrono::{DateTime, DurationRound, TimeDelta, Utc};
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use sqlx::Row;
 use std::sync::Arc;
+
+pub enum PartitionCreationStrategy {
+    CreateFromSource,
+    MergeExisting,
+    Abort,
+}
 
 // verify_overlapping_partitions returns true to continue and make a new partition,
 // returns false to abort (existing partition is up to date or there is a problem)
@@ -19,12 +25,16 @@ async fn verify_overlapping_partitions(
     file_schema_hash: &[u8],
     source_data_hash: &[u8],
     writer: Arc<ResponseWriter>,
-) -> Result<bool> {
+) -> Result<PartitionCreationStrategy> {
     let desc = format!(
         "[{}, {}] {view_set_name} {view_instance_id}",
         begin_insert.to_rfc3339(),
         end_insert.to_rfc3339()
     );
+    if source_data_hash.len() != std::mem::size_of::<i64>() {
+        anyhow::bail!("Source data hash should be a i64");
+    }
+    let nb_source_events = i64::from_le_bytes(source_data_hash.try_into().unwrap());
     let rows = sqlx::query(
         "SELECT begin_insert_time, end_insert_time, file_schema_hash, source_data_hash
          FROM lakehouse_partitions
@@ -45,13 +55,14 @@ async fn verify_overlapping_partitions(
         writer
             .write_string(&format!("{desc}: matching partitions not found"))
             .await?;
-        return Ok(true);
+        return Ok(PartitionCreationStrategy::CreateFromSource);
     }
-    let mut matching_needs_update = false;
+    let mut existing_source_hash: i64 = 0;
+    let nb_existing_partitions = rows.len();
     for r in rows {
         let begin: DateTime<Utc> = r.try_get("begin_insert_time")?;
         let end: DateTime<Utc> = r.try_get("end_insert_time")?;
-        if begin != begin_insert || end != end_insert {
+        if begin < begin_insert || end > end_insert {
             writer
                 .write_string(&format!(
                     "{desc}: found overlapping partition [{}, {}], aborting the update",
@@ -59,7 +70,7 @@ async fn verify_overlapping_partitions(
                     end.to_rfc3339()
                 ))
                 .await?;
-            return Ok(false);
+            return Ok(PartitionCreationStrategy::Abort);
         }
         let part_file_schema: Vec<u8> = r.try_get("file_schema_hash")?;
         if part_file_schema != file_schema_hash {
@@ -68,26 +79,45 @@ async fn verify_overlapping_partitions(
                     "{desc}: found matching partition with different file schema"
                 ))
                 .await?;
-            matching_needs_update = true;
+            return Ok(PartitionCreationStrategy::CreateFromSource);
         }
         let part_source_data: Vec<u8> = r.try_get("source_data_hash")?;
-        if part_source_data != source_data_hash {
+        if part_source_data.len() == std::mem::size_of::<i64>() {
+            existing_source_hash += i64::from_le_bytes(part_source_data.try_into().unwrap())
+        } else {
+            // old hash that does not represent the number of events
             writer
                 .write_string(&format!(
-                    "{desc}: found matching partition with different source data"
+                    "{desc}: found partition with incompatible source hash: recreate"
                 ))
                 .await?;
-
-            matching_needs_update = true;
+            return Ok(PartitionCreationStrategy::CreateFromSource);
         }
     }
+
+    if nb_source_events != existing_source_hash {
+        writer
+            .write_string(&format!(
+                "{desc}: existing partitions don't make source data: creating a new partition"
+            ))
+            .await?;
+        return Ok(PartitionCreationStrategy::CreateFromSource);
+    }
+
+    if nb_existing_partitions > 1 {
+        writer
+            .write_string(&format!("{desc}: merging existing partitions"))
+            .await?;
+        return Ok(PartitionCreationStrategy::MergeExisting);
+    }
+
     writer
-        .write_string(&format!("{desc}: needs update: {matching_needs_update}"))
+        .write_string(&format!("{desc}: already up to date"))
         .await?;
-    Ok(matching_needs_update)
+    Ok(PartitionCreationStrategy::Abort)
 }
 
-async fn create_or_update_partition(
+async fn materialize_partition(
     lake: Arc<DataLakeConnection>,
     begin_insert: DateTime<Utc>,
     end_insert: DateTime<Utc>,
@@ -100,7 +130,7 @@ async fn create_or_update_partition(
         .await
         .with_context(|| "make_partition_spec")?;
     let view_instance_id = view.get_view_instance_id();
-    let continue_with_creation = verify_overlapping_partitions(
+    let strategy = verify_overlapping_partitions(
         &lake.db_pool,
         begin_insert,
         end_insert,
@@ -112,18 +142,23 @@ async fn create_or_update_partition(
     )
     .await?;
 
-    if !continue_with_creation {
-        return Ok(());
+    match strategy {
+        PartitionCreationStrategy::CreateFromSource => {
+            partition_spec
+                .write(lake, writer)
+                .await
+                .with_context(|| "writing partition")?;
+        }
+        PartitionCreationStrategy::MergeExisting => {
+            create_merged_partition(lake, view, begin_insert, end_insert, writer).await?;
+        }
+        PartitionCreationStrategy::Abort => {}
     }
 
-    partition_spec
-        .write(lake, writer)
-        .await
-        .with_context(|| "writing partition")?;
     Ok(())
 }
 
-pub async fn create_or_update_recent_partitions(
+pub async fn materialize_recent_partitions(
     lake: Arc<DataLakeConnection>,
     view: Arc<dyn View>,
     partition_time_delta: TimeDelta,
@@ -136,7 +171,7 @@ pub async fn create_or_update_recent_partitions(
     for index in 0..nb_partitions {
         let start_partition = start + partition_time_delta * index;
         let end_partition = start + partition_time_delta * (index + 1);
-        create_or_update_partition(
+        materialize_partition(
             lake.clone(),
             start_partition,
             end_partition,
@@ -149,7 +184,7 @@ pub async fn create_or_update_recent_partitions(
     Ok(())
 }
 
-pub async fn create_or_update_partitions(
+pub async fn materialize_partition_range(
     lake: Arc<DataLakeConnection>,
     view: Arc<dyn View>,
     begin_range: DateTime<Utc>,
@@ -160,7 +195,7 @@ pub async fn create_or_update_partitions(
     let mut begin_part = begin_range;
     let mut end_part = begin_part + partition_time_delta;
     while end_part <= end_range {
-        create_or_update_partition(
+        materialize_partition(
             lake.clone(),
             begin_part,
             end_part,
@@ -168,7 +203,7 @@ pub async fn create_or_update_partitions(
             writer.clone(),
         )
         .await
-        .with_context(|| "create_or_update_partition")?;
+        .with_context(|| "materialize_partition")?;
         begin_part = end_part;
         end_part = begin_part + partition_time_delta;
     }

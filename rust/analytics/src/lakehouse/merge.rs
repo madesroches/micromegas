@@ -5,7 +5,7 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use bytes::BufMut;
-use chrono::{DateTime, DurationRound, TimeDelta, Utc};
+use chrono::{DateTime, Utc};
 use datafusion::parquet::{
     arrow::{async_reader::ParquetObjectReader, ArrowWriter, ParquetRecordBatchStreamBuilder},
     basic::Compression,
@@ -18,7 +18,7 @@ use sqlx::Row;
 use std::sync::Arc;
 use xxhash_rust::xxh32::xxh32;
 
-async fn create_merged_partition(
+pub async fn create_merged_partition(
     lake: Arc<DataLakeConnection>,
     view: Arc<dyn View>,
     begin: DateTime<Utc>,
@@ -59,10 +59,17 @@ async fn create_merged_partition(
     let mut sum_size: i64 = 0;
     let mut min_event_time: DateTime<Utc> = rows[0].try_get("min_event_time")?;
     let mut max_event_time: DateTime<Utc> = rows[0].try_get("max_event_time")?;
-    let mut source_hash = 0;
+    let mut source_hash: i64 = 0;
     for r in &rows {
+        // for some time all the hashes will actually be the number of events in the source data
+        // when views have different hash algos, we should delegate to the view the creation of the merged hash
         let source_data_hash: Vec<u8> = r.try_get("source_data_hash")?;
-        source_hash = xxh32(&source_data_hash, source_hash);
+        source_hash = if source_data_hash.len() == std::mem::size_of::<i64>() {
+            source_hash + i64::from_le_bytes(source_data_hash.try_into().unwrap())
+        } else {
+            //previous hash algo
+            xxh32(&source_data_hash, source_hash as u32).into()
+        };
 
         let file_size: i64 = r.try_get("file_size")?;
         sum_size += file_size;
@@ -165,61 +172,5 @@ async fn create_merged_partition(
     )
     .await?;
 
-    Ok(())
-}
-
-pub async fn merge_partitions(
-    lake: Arc<DataLakeConnection>,
-    view: Arc<dyn View>,
-    begin_range: DateTime<Utc>,
-    end_range: DateTime<Utc>,
-    partition_time_delta: TimeDelta,
-    writer: Arc<ResponseWriter>,
-) -> Result<()> {
-    let mut begin_part = begin_range;
-    let mut end_part = begin_part + partition_time_delta;
-    while end_part <= end_range {
-        create_merged_partition(
-            lake.clone(),
-            view.clone(),
-            begin_part,
-            end_part,
-            writer.clone(),
-        )
-        .await
-        .with_context(|| "create_merged_partition")?;
-        begin_part = end_part;
-        end_part = begin_part + partition_time_delta;
-    }
-    Ok(())
-}
-
-pub async fn merge_recent_partitions(
-    lake: Arc<DataLakeConnection>,
-    view: Arc<dyn View>,
-    partition_time_delta: TimeDelta,
-    nb_partitions: i32,
-    min_age: TimeDelta,
-    writer: Arc<ResponseWriter>,
-) -> Result<()> {
-    let now = Utc::now();
-    let truncated = now.duration_trunc(partition_time_delta)?;
-    let start = truncated - partition_time_delta * nb_partitions;
-    for index in 0..nb_partitions {
-        let start_partition = start + partition_time_delta * index;
-        let end_partition = start + partition_time_delta * (index + 1);
-        if (now - end_partition) < min_age {
-            return Ok(());
-        }
-        create_merged_partition(
-            lake.clone(),
-            view.clone(),
-            start_partition,
-            end_partition,
-            writer.clone(),
-        )
-        .await
-        .with_context(|| "create_or_update_partition")?;
-    }
     Ok(())
 }
