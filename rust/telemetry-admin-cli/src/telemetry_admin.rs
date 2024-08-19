@@ -83,7 +83,7 @@ enum Commands {
     },
 
     #[clap(name = "crond")]
-    CronDeamon,
+    CronDaemon,
 }
 
 #[tokio::main]
@@ -207,7 +207,7 @@ async fn main() -> Result<()> {
             tr.commit().await.with_context(|| "commit")?;
         }
 
-        Commands::CronDeamon => {
+        Commands::CronDaemon => {
             micromegas::servers::maintenance::daemon(data_lake, Arc::new(view_factory)).await?
         }
     }
