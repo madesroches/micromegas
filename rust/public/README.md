@@ -1,3 +1,4 @@
 # Micromegas
 
-Micromegas is a work in progress. It is not yet ready for production.
+Micromegas is a unified and scalable observability stack.
+It can help you collect and query logs, metrics and traces.
