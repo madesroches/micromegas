@@ -53,16 +53,20 @@ pub async fn delete_empty_streams_batch(
     expiration: DateTime<Utc>,
 ) -> Result<bool> {
     let batch_size: i32 = 1000;
-    // it would be more efficient to just run a delete statetement, but I want to log what gets deleted and why
-    // in the future, we could also delete the associated caches
+    // delete returning would be more efficient
     let rows = query(
         "SELECT streams.stream_id
          FROM streams
-         LEFT OUTER JOIN blocks ON blocks.stream_id = streams.stream_id
          WHERE streams.insert_time <= $1
-         GROUP BY streams.stream_id
-         HAVING count(blocks.block_id) = 0
-         LIMIT $2;",
+         AND NOT EXISTS
+         (
+           SELECT 1
+           FROM blocks
+           WHERE blocks.stream_id = streams.stream_id
+           LIMIT 1
+          )
+         LIMIT $2
+         ;",
     )
     .bind(expiration)
     .bind(batch_size)
@@ -96,8 +100,8 @@ pub async fn delete_empty_processes_batch(
     expiration: DateTime<Utc>,
 ) -> Result<bool> {
     let batch_size: i32 = 1000;
-    // it would be more efficient to just run a delete statetement, but I want to log what gets deleted and why
-    // in the future, we could also delete the associated caches
+    // delete returning would be more efficient
+    // also, we should remove the group by and use a query similar to delete_empty_streams_batch
     let rows = query(
         "SELECT processes.process_id
          FROM processes
