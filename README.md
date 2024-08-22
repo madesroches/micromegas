@@ -50,6 +50,7 @@ Released [version 0.1.7](https://crates.io/crates/micromegas)
 
  * New global materialized views for logs & metrics of all processes
  * New daemon service to keep the views updated as data is ingested
+ * New analytics API based on SQL powered by Apache Datafusion
 
 ### July 2024
 Released [version 0.1.5](https://crates.io/crates/micromegas)
