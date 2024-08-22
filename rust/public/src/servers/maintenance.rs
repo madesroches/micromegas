@@ -111,6 +111,21 @@ pub async fn every_minute(lake: Arc<DataLakeConnection>, views: Views) -> Result
     Ok(())
 }
 
+pub async fn every_second(lake: Arc<DataLakeConnection>, views: Views) -> Result<()> {
+    let null_response_writer = Arc::new(ResponseWriter::new(None));
+    for view in &*views {
+        materialize_recent_partitions(
+            lake.clone(),
+            view.clone(),
+            TimeDelta::seconds(1),
+            5,
+            null_response_writer.clone(),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
 pub async fn daemon(lake: Arc<DataLakeConnection>, view_factory: Arc<ViewFactory>) -> Result<()> {
     let views = Arc::new(vec![
         view_factory.make_view("log_entries", "global")?,
@@ -144,13 +159,15 @@ pub async fn daemon(lake: Arc<DataLakeConnection>, view_factory: Arc<ViewFactory
             Box::new(|lake, views| Box::pin(every_minute(lake, views))),
         )
         .await?,
-        // TaskDef::start(
-        //     String::from("every second"),
-        //     TimeDelta::seconds(1),
-        //     TimeDelta::milliseconds(100),
-        //     Box::new(|| Box::pin(every_second())),
-        // )
-        // .await?,
+        TaskDef::start(
+            lake.clone(),
+            views.clone(),
+            String::from("every second"),
+            TimeDelta::seconds(1),
+            TimeDelta::milliseconds(100),
+            Box::new(|lake, views| Box::pin(every_second(lake, views))),
+        )
+        .await?,
     ];
 
     loop {
