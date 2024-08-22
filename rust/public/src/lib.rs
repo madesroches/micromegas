@@ -45,11 +45,12 @@
 //!  - `export MICROMEGAS_OBJECT_STORE_URI=file:///some/local/path`
 //!
 //! 1. Clone the github repository
-//! `git clone https://github.com/madesroches/micromegas.git`
+//! ```text
+//! > git clone https://github.com/madesroches/micromegas.git
+//! ```
 //!
 //! 2. Start a local instance of postgresql (requires docker and python)
 //!
-//! Initialize the  environment variables to your liking
 //! ```text
 //! > cd micromegas/local_test_env/db
 //! > ./run.py
@@ -65,14 +66,12 @@
 //! 4. In a new shell, start the analytics server
 //! ```text
 //! > cd micromegas/rust
-//! > export MICROMEGAS_TELEMETRY_URL=http://localhost:9000
 //! > cargo run -p analytics-srv
 //! ```
 //!
 //! 5. In a new shell, start the daemon
 //! ```text
 //! > cd micromegas/rust
-//! > export MICROMEGAS_TELEMETRY_URL=http://localhost:9000
 //! > cargo run -p telemetry-admin -- crond
 //! ```
 //!
