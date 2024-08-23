@@ -3,6 +3,7 @@
 //  MicromegasTracing/Macros.h
 //
 #include "HAL/PlatformTime.h"
+#include "Misc/Optional.h"
 #include "MicromegasTracing/Dispatch.h"
 #include "MicromegasTracing/Fwd.h"
 #include "MicromegasTracing/LogEvents.h"
@@ -51,17 +52,24 @@ namespace MicromegasTracing
 	struct NamedSpanGuard
 	{
 		const SpanLocation* Desc;
-		const StaticStringRef Name;
-		NamedSpanGuard(const SpanLocation* InDesc, const StaticStringRef& InName)
+		TOptional<const StaticStringRef> Name;
+
+		NamedSpanGuard(const SpanLocation* InDesc, const TOptional<const StaticStringRef>& InName)
 			: Desc(InDesc)
 			, Name(InName)
 		{
-			BeginNamedSpan(BeginThreadNamedSpanEvent(Desc, FPlatformTime::Cycles64(), Name));
+			if (Name.IsSet())
+			{
+				BeginNamedSpan(BeginThreadNamedSpanEvent(Desc, FPlatformTime::Cycles64(), *Name));
+			}
 		}
 
 		~NamedSpanGuard()
 		{
-			EndNamedSpan(EndThreadNamedSpanEvent(Desc, FPlatformTime::Cycles64(), Name));
+			if (Name.IsSet())
+			{
+				EndNamedSpan(EndThreadNamedSpanEvent(Desc, FPlatformTime::Cycles64(), *Name));
+			}
 		}
 	};
 
@@ -75,7 +83,21 @@ namespace MicromegasTracing
 // MICROMEGAS_SPAN_NAME: the specified name can be variable, but any specified variable must have a static lifetime
 #define MICROMEGAS_SPAN_NAME(target, name)                                                                          \
 	static const MicromegasTracing::SpanLocation PREPROCESSOR_JOIN(spanMeta, __LINE__)(target, __FILE__, __LINE__); \
-	MicromegasTracing::NamedSpanGuard PREPROCESSOR_JOIN(spanguard, __LINE__)(&PREPROCESSOR_JOIN(spanMeta, __LINE__), (name))
+	MicromegasTracing::NamedSpanGuard PREPROCESSOR_JOIN(spanguard, __LINE__)(&PREPROCESSOR_JOIN(spanMeta, __LINE__), MicromegasTracing::StaticStringRef((name)))
+
+#define MICROMEGAS_SPAN_NAME_CONDITIONAL(target, cond, name)                                                        \
+	static const MicromegasTracing::SpanLocation PREPROCESSOR_JOIN(spanMeta, __LINE__)(target, __FILE__, __LINE__); \
+	MicromegasTracing::NamedSpanGuard PREPROCESSOR_JOIN(spanguard, __LINE__)(&PREPROCESSOR_JOIN(spanMeta, __LINE__), (cond) ? MicromegasTracing::StaticStringRef((name)) : TOptional<const MicromegasTracing::StaticStringRef>())
+
+// MICROMEGAS_SPAN_UOBJECT: the specified object shall implement a method `GetFName` with a return type that is
+//                          compatible with StaticStringRef
+#define MICROMEGAS_SPAN_UOBJECT(target, object)                                                                     \
+	static const MicromegasTracing::SpanLocation PREPROCESSOR_JOIN(spanMeta, __LINE__)(target, __FILE__, __LINE__); \
+	MicromegasTracing::NamedSpanGuard PREPROCESSOR_JOIN(spanguard, __LINE__)(&PREPROCESSOR_JOIN(spanMeta, __LINE__), MicromegasTracing::StaticStringRef((object)->GetFName()))
+
+#define MICROMEGAS_SPAN_UOBJECT_CONDITIONAL(target, cond, object)                                                   \
+	static const MicromegasTracing::SpanLocation PREPROCESSOR_JOIN(spanMeta, __LINE__)(target, __FILE__, __LINE__); \
+	MicromegasTracing::NamedSpanGuard PREPROCESSOR_JOIN(spanguard, __LINE__)(&PREPROCESSOR_JOIN(spanMeta, __LINE__), (cond) ? MicromegasTracing::StaticStringRef((object)->GetFName()) : TOptional<const MicromegasTracing::StaticStringRef>())
 
 #if !defined(__clang__)
 	#define MICROMEGAS_FUNCTION_NAME __FUNCTION__
