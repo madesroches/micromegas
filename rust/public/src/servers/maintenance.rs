@@ -174,13 +174,21 @@ pub async fn daemon(lake: Arc<DataLakeConnection>, view_factory: Arc<ViewFactory
         let mut next_task_run = Utc::now() + TimeDelta::days(2);
         for task in &mut tasks {
             if task.next_run < Utc::now() {
-                task.tick().await?;
+                if let Err(e) = task.tick().await {
+                    error!("{e:?}");
+                }
             }
 
             if task.next_run < next_task_run {
                 next_task_run = task.next_run;
             }
         }
-        tokio::time::sleep((next_task_run - Utc::now()).to_std()?).await;
+        let delay = next_task_run - Utc::now();
+        if delay > TimeDelta::zero() {
+            match delay.to_std().with_context(|| "delay.to_std") {
+                Ok(wait) => tokio::time::sleep(wait).await,
+                Err(e) => warn!("{e:?}"),
+            }
+        }
     }
 }
