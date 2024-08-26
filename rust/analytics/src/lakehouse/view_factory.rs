@@ -1,4 +1,7 @@
-use super::{log_view::LogViewMaker, metrics_view::MetricsViewMaker, view::View};
+use super::{
+    log_view::LogViewMaker, metrics_view::MetricsViewMaker,
+    thread_spans_view::ThreadSpansViewMaker, view::View,
+};
 use anyhow::Result;
 use std::{collections::HashMap, sync::Arc};
 
@@ -35,6 +38,10 @@ impl Default for ViewFactory {
         let mut factory = Self::new();
         factory.add_view_set(String::from("log_entries"), Arc::new(LogViewMaker {}));
         factory.add_view_set(String::from("measures"), Arc::new(MetricsViewMaker {}));
+        factory.add_view_set(
+            String::from("thread_spans"),
+            Arc::new(ThreadSpansViewMaker {}),
+        );
         factory
     }
 }

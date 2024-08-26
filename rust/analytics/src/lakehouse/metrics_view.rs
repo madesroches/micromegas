@@ -11,6 +11,7 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use datafusion::arrow::datatypes::Schema;
+use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use std::sync::Arc;
 
 const VIEW_SET_NAME: &str = "measures";
@@ -78,5 +79,14 @@ impl View for MetricsView {
 
     fn get_file_schema(&self) -> Arc<Schema> {
         Arc::new(metrics_table_schema())
+    }
+
+    async fn jit_update(
+        &self,
+        _lake: Arc<DataLakeConnection>,
+        _begin_insert: DateTime<Utc>,
+        _end_insert: DateTime<Utc>,
+    ) -> Result<()> {
+        anyhow::bail!("not implemented");
     }
 }

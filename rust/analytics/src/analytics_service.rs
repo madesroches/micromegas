@@ -385,7 +385,7 @@ impl AnalyticsService {
             }
             let view = self.view_factory.make_view("log_entries", "global")?;
             crate::lakehouse::query::query(
-                &self.data_lake,
+                self.data_lake.clone(),
                 begin.into(),
                 end.into(),
                 &request.sql.unwrap(),
@@ -427,7 +427,7 @@ impl AnalyticsService {
             }
             let view = self.view_factory.make_view("measures", "global")?;
             crate::lakehouse::query::query(
-                &self.data_lake,
+                self.data_lake.clone(),
                 begin.into(),
                 end.into(),
                 &request.sql.unwrap(),
@@ -451,7 +451,7 @@ impl AnalyticsService {
             .make_view(&request.view_set_name, &request.view_instance_id)
             .with_context(|| "making view")?;
         let answer = crate::lakehouse::query::query(
-            &self.data_lake,
+            self.data_lake.clone(),
             begin.into(),
             end.into(),
             &request.sql,

@@ -13,3 +13,4 @@ pub mod query;
 pub mod temp;
 pub mod view;
 pub mod view_factory;
+pub mod thread_spans_view;

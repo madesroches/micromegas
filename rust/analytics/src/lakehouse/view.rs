@@ -25,4 +25,10 @@ pub trait View: Send + Sync {
     ) -> Result<Arc<dyn PartitionSpec>>;
     fn get_file_schema_hash(&self) -> Vec<u8>;
     fn get_file_schema(&self) -> Arc<Schema>;
+    async fn jit_update(
+        &self,
+        lake: Arc<DataLakeConnection>,
+        begin_insert: DateTime<Utc>,
+        end_insert: DateTime<Utc>,
+    ) -> Result<()>;
 }

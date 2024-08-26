@@ -44,6 +44,42 @@ pub struct SpanRecordBuilder {
     pub lines: PrimitiveBuilder<UInt32Type>,
 }
 
+pub fn get_spans_schema() -> Schema {
+    Schema::new(vec![
+        Field::new("id", DataType::Int64, false),
+        Field::new("parent", DataType::Int64, false),
+        Field::new("depth", DataType::UInt32, false),
+        Field::new("hash", DataType::UInt32, false),
+        Field::new(
+            "begin",
+            DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into())),
+            false,
+        ),
+        Field::new(
+            "end",
+            DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into())),
+            false,
+        ),
+        Field::new("duration", DataType::Int64, false), //DataType::Duration not supported by parquet
+        Field::new(
+            "name",
+            DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
+            false,
+        ),
+        Field::new(
+            "target",
+            DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
+            false,
+        ),
+        Field::new(
+            "filename",
+            DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
+            false,
+        ),
+        Field::new("line", DataType::UInt32, false),
+    ])
+}
+
 impl SpanRecordBuilder {
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
@@ -114,39 +150,7 @@ impl SpanRecordBuilder {
     }
 
     pub fn finish(mut self) -> Result<RecordBatch> {
-        let schema = Schema::new(vec![
-            Field::new("id", DataType::Int64, false),
-            Field::new("parent", DataType::Int64, false),
-            Field::new("depth", DataType::UInt32, false),
-            Field::new("hash", DataType::UInt32, false),
-            Field::new(
-                "begin",
-                DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into())),
-                false,
-            ),
-            Field::new(
-                "end",
-                DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into())),
-                false,
-            ),
-            Field::new("duration", DataType::Int64, false), //DataType::Duration not supported by parquet
-            Field::new(
-                "name",
-                DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
-                false,
-            ),
-            Field::new(
-                "target",
-                DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
-                false,
-            ),
-            Field::new(
-                "filename",
-                DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
-                false,
-            ),
-            Field::new("line", DataType::UInt32, false),
-        ]);
+        let schema = get_spans_schema();
         RecordBatch::try_new(
             Arc::new(schema),
             vec![
