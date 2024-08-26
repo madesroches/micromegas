@@ -29,8 +29,9 @@ namespace
 {
 	void RetryRequest(FHttpRequestPtr OldRequest, int RemainingRetries);
 
-	void OnProcessRequestComplete(FHttpRequestPtr HttpRequest, FHttpResponsePtr HttpResponse, bool bSucceeded, int RemainingRetries)
+	void OnProcessRequestComplete(FHttpRequestPtr HttpRequest, FHttpResponsePtr HttpResponse, bool bSucceeded, int RemainingRetries, uint64 StartTimestamp)
 	{
+		MICROMEGAS_IMETRIC("MicromegasTelemetrySink", MicromegasTracing::Verbosity::Min, TEXT("HttpRequestCompletionTime"), TEXT("ticks"), FPlatformTime::Cycles64() - StartTimestamp);
 		if (!HttpResponse.IsValid() && RemainingRetries > 0)
 		{
 			// the most common error we see is not from the server reporting an error, it's an internal client error failing to rewind a request
@@ -70,9 +71,10 @@ namespace
 			NewRequest->SetTimeout(Timeout.GetValue());
 		}
 		NewRequest->SetDelegateThreadPolicy(OldRequest->GetDelegateThreadPolicy());
-		NewRequest->OnProcessRequestComplete().BindLambda([RemainingRetries](FHttpRequestPtr HttpRequest, FHttpResponsePtr HttpResponse, bool bSucceeded)
+		uint64 StartTimestamp = FPlatformTime::Cycles64();
+		NewRequest->OnProcessRequestComplete().BindLambda([RemainingRetries, StartTimestamp](FHttpRequestPtr HttpRequest, FHttpResponsePtr HttpResponse, bool bSucceeded)
 			{
-				OnProcessRequestComplete(HttpRequest, HttpResponse, bSucceeded, RemainingRetries);
+				OnProcessRequestComplete(HttpRequest, HttpResponse, bSucceeded, RemainingRetries, StartTimestamp);
 			});
 		if (!NewRequest->ProcessRequest())
 		{
@@ -278,10 +280,11 @@ void HttpEventSink::SendBinaryRequest(const TCHAR* command, const TArray<uint8>&
 	HttpRequest->SetHeader(TEXT("Content-Type"), TEXT("application/octet-stream"));
 	HttpRequest->SetTimeout(TimeoutSeconds);
 	HttpRequest->SetDelegateThreadPolicy(EHttpRequestDelegateThreadPolicy::CompleteOnHttpThread);
-	HttpRequest->OnProcessRequestComplete().BindLambda([](FHttpRequestPtr HttpRequest, FHttpResponsePtr HttpResponse, bool bSucceeded)
+	uint64 StartTimestamp = FPlatformTime::Cycles64();
+	HttpRequest->OnProcessRequestComplete().BindLambda([StartTimestamp](FHttpRequestPtr HttpRequest, FHttpResponsePtr HttpResponse, bool bSucceeded)
 		{
 			const int RetryCount = 1;
-			OnProcessRequestComplete(HttpRequest, HttpResponse, bSucceeded, RetryCount);
+			OnProcessRequestComplete(HttpRequest, HttpResponse, bSucceeded, RetryCount, StartTimestamp);
 		});
 	if (!Auth->Sign(*HttpRequest))
 	{
