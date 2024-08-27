@@ -22,12 +22,14 @@ use micromegas_telemetry::blob_storage::BlobStorage;
 use micromegas_tracing::prelude::*;
 use std::sync::Arc;
 
+/// RecordBatch + time range associated with the events
 pub struct PartitionRowSet {
     pub min_time_row: i64,
     pub max_time_row: i64,
     pub rows: RecordBatch,
 }
 
+/// BlockProcessor transforms a single block of telemetry into a set of rows
 #[async_trait]
 pub trait BlockProcessor: Send + Sync {
     async fn process(
@@ -37,6 +39,8 @@ pub trait BlockProcessor: Send + Sync {
     ) -> Result<Option<PartitionRowSet>>;
 }
 
+/// BlockPartitionSpec processes blocks individually and out of order
+/// which works fine for measures & log entries
 pub struct BlockPartitionSpec {
     pub view_set_name: Arc<String>,
     pub view_instance_id: Arc<String>,

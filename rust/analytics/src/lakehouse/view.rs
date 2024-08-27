@@ -28,7 +28,7 @@ pub trait View: Send + Sync {
     async fn jit_update(
         &self,
         lake: Arc<DataLakeConnection>,
-        begin_insert: DateTime<Utc>,
-        end_insert: DateTime<Utc>,
+        begin_query: DateTime<Utc>,
+        end_query: DateTime<Utc>,
     ) -> Result<()>;
 }

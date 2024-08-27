@@ -4,17 +4,13 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use micromegas_telemetry::{stream_info::StreamInfo, types::block::BlockMetadata};
 use micromegas_tracing::prelude::*;
-use sqlx::Row;
 
 use crate::metadata::{block_from_row, process_from_row, stream_from_row};
 
 pub struct PartitionSourceBlock {
     pub block: BlockMetadata,
-    pub stream: StreamInfo,
+    pub stream: Arc<StreamInfo>,
     pub process: Arc<ProcessInfo>,
-    pub process_start_time: DateTime<Utc>,
-    pub process_start_ticks: i64,
-    pub process_tsc_frequency: i64,
 }
 
 pub struct PartitionSourceDataBlocks {
@@ -62,13 +58,11 @@ pub async fn fetch_partition_source_data(
         let block = block_from_row(src_block).with_context(|| "block_from_row")?;
         let process = Arc::new(process_from_row(src_block).with_context(|| "process_from_row")?);
         block_ids_hash += block.nb_objects as i64;
+        let stream = Arc::new(stream_from_row(src_block).with_context(|| "stream_from_row")?);
         partition_src_blocks.push(Arc::new(PartitionSourceBlock {
             block,
-            stream: stream_from_row(src_block).with_context(|| "stream_from_row")?,
+            stream,
             process,
-            process_start_time: src_block.try_get("start_time")?,
-            process_start_ticks: src_block.try_get("start_ticks")?,
-            process_tsc_frequency: src_block.try_get("tsc_frequency")?,
         }));
     }
     info!("{desc} block_ids_hash={block_ids_hash}");

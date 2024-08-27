@@ -1,4 +1,4 @@
-use chrono::TimeDelta;
+use chrono::{DateTime, TimeDelta, Utc};
 use micromegas_tracing::process_info::ProcessInfo;
 
 const NANOS_PER_SEC: f64 = 1000.0 * 1000.0 * 1000.0;
@@ -42,6 +42,11 @@ impl ConvertTicks {
         let delta = (ticks - self.tick_offset) as f64;
         let ns_since_process_start = (delta * self.inv_tsc_frequency_ns).round() as i64;
         self.process_start_ns + ns_since_process_start
+    }
+
+    pub fn delta_ticks_to_time(&self, process_rel_ticks: i64) -> DateTime<Utc> {
+        let ns = self.process_start_ns + process_rel_ticks;
+        DateTime::from_timestamp_nanos(ns)
     }
 
     pub fn delta_ticks_to_ms(&self, delta_ticks: i64) -> f64 {

@@ -21,12 +21,13 @@ impl BlockProcessor for MetricsBlockProcessor {
         src_block: Arc<PartitionSourceBlock>,
     ) -> Result<Option<PartitionRowSet>> {
         let convert_ticks = ConvertTicks::from_meta_data(
-            src_block.process_start_ticks,
+            src_block.process.start_ticks,
             src_block
-                .process_start_time
+                .process
+                .start_time
                 .timestamp_nanos_opt()
                 .unwrap_or_default(),
-            src_block.process_tsc_frequency,
+            src_block.process.tsc_frequency,
         );
         let nb_measures = src_block.block.nb_objects;
         let mut record_builder = MetricsRecordBuilder::with_capacity(nb_measures as usize);
