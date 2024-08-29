@@ -171,12 +171,14 @@ async fn is_partition_up_to_date(
     let r = &rows[0];
     let part_file_schema: Vec<u8> = r.try_get("file_schema_hash")?;
     if part_file_schema != view_meta.file_schema_hash {
-        info!("{desc}: found matching partition with different file schema");
+        // this is dangerous because we could be creating a new partition smaller than the old one, which is not supported.
+        // let's make sure there is no old data loitering
+        warn!("{desc}: found matching partition with different file schema");
         return Ok(false);
     }
     let part_source_data: Vec<u8> = r.try_get("source_data_hash")?;
-    if part_source_data != spec.block_ids_hash {
-        info!("{desc}: existing partition do not match source data: creating a new partition");
+    if hash_to_object_count(&part_source_data)? < hash_to_object_count(&spec.block_ids_hash)? {
+        info!("{desc}: existing partition lacks source data: creating a new partition");
         return Ok(false);
     }
     info!("{desc}: partition up to date");
@@ -190,7 +192,6 @@ async fn append_call_tree(
     blob_storage: Arc<BlobStorage>,
     stream: &micromegas_telemetry::stream_info::StreamInfo,
 ) -> Result<()> {
-    dbg!(blocks);
     let call_tree = make_call_tree(
         blocks,
         convert_ticks.delta_ticks_to_ns(blocks[0].begin_ticks),
