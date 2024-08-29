@@ -1,5 +1,5 @@
 use super::{
-    block_partition_spec::{BlockProcessor, PartitionRowSet},
+    block_partition_spec::BlockProcessor, partition::PartitionRowSet,
     partition_source_data::PartitionSourceBlock,
 };
 use crate::{

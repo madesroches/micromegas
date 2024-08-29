@@ -1,3 +1,4 @@
+/// block metadata stored in the relational database
 #[derive(Debug, Clone, PartialEq)]
 pub struct BlockMetadata {
     pub block_id: uuid::Uuid,
@@ -10,4 +11,5 @@ pub struct BlockMetadata {
     pub nb_objects: i32,
     pub payload_size: i64,
     pub object_offset: i64,
+    pub insert_time: chrono::DateTime<chrono::Utc>,
 }

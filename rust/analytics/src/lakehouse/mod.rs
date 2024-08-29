@@ -24,9 +24,9 @@ pub mod partition_source_data;
 pub mod query;
 /// Tracking of expired partitions
 pub mod temp;
+/// Jit view of the call tree built from the thread events of a single stream
+pub mod thread_spans_view;
 /// Basic interface for a set of rows queryable and materializable
 pub mod view;
 /// Access to global or process-specific views
 pub mod view_factory;
-/// Jit view of the call tree built from the thread events of a single stream
-pub mod thread_spans_view;

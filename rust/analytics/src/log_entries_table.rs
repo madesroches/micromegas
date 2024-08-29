@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use chrono::DateTime;
+use chrono::Utc;
 use datafusion::arrow::array::ArrayBuilder;
 use datafusion::arrow::array::PrimitiveBuilder;
 use datafusion::arrow::array::StringBuilder;
@@ -78,13 +80,16 @@ impl LogEntriesRecordBuilder {
         }
     }
 
-    pub fn get_time_range(&self) -> Option<(i64, i64)> {
+    pub fn get_time_range(&self) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
         if self.is_empty() {
             return None;
         }
         // assuming that the events are in order
         let slice = self.times.values_slice();
-        Some((slice[0], slice[slice.len() - 1]))
+        Some((
+            DateTime::from_timestamp_nanos(slice[0]),
+            DateTime::from_timestamp_nanos(slice[slice.len() - 1]),
+        ))
     }
 
     pub fn len(&self) -> i64 {

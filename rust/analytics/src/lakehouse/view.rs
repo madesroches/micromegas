@@ -13,6 +13,14 @@ pub trait PartitionSpec: Send + Sync {
         -> Result<()>;
 }
 
+#[derive(Clone)]
+pub struct ViewMetadata {
+    pub view_set_name: Arc<String>,
+    pub view_instance_id: Arc<String>,
+    pub file_schema_hash: Vec<u8>,
+    pub file_schema: Arc<Schema>,
+}
+
 #[async_trait]
 pub trait View: Send + Sync {
     fn get_view_set_name(&self) -> Arc<String>;
@@ -31,4 +39,15 @@ pub trait View: Send + Sync {
         begin_query: DateTime<Utc>,
         end_query: DateTime<Utc>,
     ) -> Result<()>;
+}
+
+impl dyn View {
+    pub fn get_meta(&self) -> ViewMetadata {
+        ViewMetadata {
+            view_set_name: self.get_view_set_name(),
+            view_instance_id: self.get_view_instance_id(),
+            file_schema_hash: self.get_file_schema_hash(),
+            file_schema: self.get_file_schema(),
+        }
+    }
 }

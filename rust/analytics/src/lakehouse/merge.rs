@@ -1,15 +1,13 @@
-use super::view::View;
-use crate::{
-    lakehouse::partition::{write_partition, Partition},
-    response_writer::ResponseWriter,
+use super::{
+    partition::{write_partition_from_rows, PartitionRowSet},
+    partition_source_data::hash_to_object_count,
+    view::View,
 };
+use crate::response_writer::ResponseWriter;
 use anyhow::{Context, Result};
-use bytes::BufMut;
 use chrono::{DateTime, Utc};
-use datafusion::parquet::{
-    arrow::{async_reader::ParquetObjectReader, ArrowWriter, ParquetRecordBatchStreamBuilder},
-    basic::Compression,
-    file::properties::{WriterProperties, WriterVersion},
+use datafusion::parquet::arrow::{
+    async_reader::ParquetObjectReader, ParquetRecordBatchStreamBuilder,
 };
 use futures::stream::StreamExt;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
@@ -57,15 +55,13 @@ pub async fn create_merged_partition(
     }
     let latest_file_schema_hash = view.get_file_schema_hash();
     let mut sum_size: i64 = 0;
-    let mut min_event_time: DateTime<Utc> = rows[0].try_get("min_event_time")?;
-    let mut max_event_time: DateTime<Utc> = rows[0].try_get("max_event_time")?;
     let mut source_hash: i64 = 0;
     for r in &rows {
         // for some time all the hashes will actually be the number of events in the source data
         // when views have different hash algos, we should delegate to the view the creation of the merged hash
         let source_data_hash: Vec<u8> = r.try_get("source_data_hash")?;
         source_hash = if source_data_hash.len() == std::mem::size_of::<i64>() {
-            source_hash + i64::from_le_bytes(source_data_hash.try_into().unwrap())
+            source_hash + hash_to_object_count(&source_data_hash)?
         } else {
             //previous hash algo
             xxh32(&source_data_hash, source_hash as u32).into()
@@ -73,11 +69,6 @@ pub async fn create_merged_partition(
 
         let file_size: i64 = r.try_get("file_size")?;
         sum_size += file_size;
-
-        let begin_event_time: DateTime<Utc> = r.try_get("min_event_time")?;
-        let end_event_time: DateTime<Utc> = r.try_get("max_event_time")?;
-        min_event_time = min_event_time.min(begin_event_time);
-        max_event_time = max_event_time.max(end_event_time);
 
         let file_schema_hash: Vec<u8> = r.try_get("file_schema_hash")?;
         if file_schema_hash != latest_file_schema_hash {
@@ -100,22 +91,25 @@ pub async fn create_merged_partition(
         ))
         .await?;
 
-    // buffer the whole parquet in memory until https://github.com/apache/arrow-rs/issues/5766 is done
-    // Impl AsyncFileWriter by object_store #5766
-    let mut buffer_writer = bytes::BytesMut::with_capacity(sum_size as usize).writer();
-    let props = WriterProperties::builder()
-        .set_writer_version(WriterVersion::PARQUET_2_0)
-        .set_compression(Compression::LZ4_RAW)
-        .build();
-    let mut arrow_writer =
-        ArrowWriter::try_new(&mut buffer_writer, view.get_file_schema(), Some(props))?;
-
+    let (tx, rx) = tokio::sync::mpsc::channel(1);
+    let join_handle = tokio::spawn(write_partition_from_rows(
+        lake.clone(),
+        view.get_meta(),
+        begin,
+        end,
+        source_hash.to_le_bytes().to_vec(),
+        rx,
+        sum_size as usize,
+        response_writer.clone(),
+    ));
     for r in &rows {
         let file_path: String = r.try_get("file_path")?;
         let file_size: i64 = r.try_get("file_size")?;
         response_writer
             .write_string(&format!("reading path={file_path} size={file_size}"))
             .await?;
+        let min_time_row: DateTime<Utc> = r.try_get("min_event_time")?;
+        let max_time_row: DateTime<Utc> = r.try_get("max_event_time")?;
 
         let updated: DateTime<Utc> = r.try_get("updated")?;
         let meta = ObjectMeta {
@@ -134,43 +128,17 @@ pub async fn create_merged_partition(
             .build()
             .with_context(|| "builder.build()")?;
         while let Some(rb_res) = rbstream.next().await {
-            let record_batch = rb_res?;
-            arrow_writer
-                .write(&record_batch)
-                .with_context(|| "arrow_writer.write")?;
+            let rows = rb_res?;
+            tx.send(PartitionRowSet {
+                min_time_row,
+                max_time_row,
+                rows,
+            })
+            .await?;
         }
     }
-    arrow_writer.close().with_context(|| "arrow_writer.close")?;
-
-    let file_id = uuid::Uuid::new_v4();
-    let file_path = format!(
-        "views/{}/{}/{}/{}_{file_id}.parquet",
-        &view_set_name,
-        &view_instance_id,
-        begin.format("%Y-%m-%d"),
-        begin.format("%H-%M-%S")
-    );
-
-    let buffer: bytes::Bytes = buffer_writer.into_inner().into();
-    write_partition(
-        &lake,
-        &Partition {
-            view_set_name,
-            view_instance_id,
-            begin_insert_time: begin,
-            end_insert_time: end,
-            min_event_time,
-            max_event_time,
-            updated: sqlx::types::chrono::Utc::now(),
-            file_path,
-            file_size: buffer.len() as i64,
-            file_schema_hash: latest_file_schema_hash,
-            source_data_hash: source_hash.to_le_bytes().to_vec(),
-        },
-        buffer,
-        response_writer,
-    )
-    .await?;
+    drop(tx);
+    join_handle.await??;
 
     Ok(())
 }

@@ -28,7 +28,7 @@ pub struct CallTree {
 pub struct CallTreeBuilder {
     begin_range_ns: i64,
     end_range_ns: i64,
-    limit: i64,
+    limit: Option<i64>,
     nb_spans: i64,
     stack: Vec<CallTreeNode>,
     scopes: ScopeHashMap,
@@ -40,7 +40,7 @@ impl CallTreeBuilder {
     pub fn new(
         begin_range_ns: i64,
         end_range_ns: i64,
-        limit: i64,
+        limit: Option<i64>,
         convert_ticks: ConvertTicks,
         thread_name: String,
     ) -> Self {
@@ -118,7 +118,7 @@ impl ThreadBlockProcessor for CallTreeBuilder {
         scope: ScopeDesc,
         ts: i64,
     ) -> Result<bool> {
-        if self.nb_spans >= self.limit {
+        if self.limit.is_some() && self.nb_spans >= self.limit.unwrap() {
             return Ok(false);
         }
         let time = self.convert_ticks.ticks_to_nanoseconds(ts);
@@ -171,7 +171,7 @@ impl ThreadBlockProcessor for CallTreeBuilder {
                 anyhow::bail!("top scope mismatch parsing thread block");
             }
         } else {
-            if self.nb_spans >= self.limit {
+            if self.limit.is_some() && self.nb_spans >= self.limit.unwrap() {
                 return Ok(false);
             }
             let node = CallTreeNode {
@@ -193,7 +193,7 @@ pub async fn make_call_tree(
     blocks: &[BlockMetadata],
     begin_range_ns: i64,
     end_range_ns: i64,
-    limit: i64,
+    limit: Option<i64>,
     blob_storage: Arc<BlobStorage>,
     convert_ticks: ConvertTicks,
     stream: &micromegas_telemetry::stream_info::StreamInfo,

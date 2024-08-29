@@ -18,6 +18,12 @@ pub struct PartitionSourceDataBlocks {
     pub block_ids_hash: Vec<u8>,
 }
 
+pub fn hash_to_object_count(hash: &[u8]) -> Result<i64> {
+    Ok(i64::from_le_bytes(
+        hash.try_into().with_context(|| "hash_to_object_count")?,
+    ))
+}
+
 pub async fn fetch_partition_source_data(
     pool: &sqlx::PgPool,
     begin_insert: DateTime<Utc>,
@@ -32,7 +38,7 @@ pub async fn fetch_partition_source_data(
 
     // this can scale to thousands, but not millions
     let src_blocks = sqlx::query(
-        "SELECT block_id, streams.stream_id, processes.process_id, blocks.begin_time, blocks.begin_ticks, blocks.end_time, blocks.end_ticks, blocks.nb_objects, blocks.object_offset, blocks.payload_size,
+        "SELECT block_id, streams.stream_id, processes.process_id, blocks.begin_time, blocks.begin_ticks, blocks.end_time, blocks.end_ticks, blocks.nb_objects, blocks.object_offset, blocks.payload_size, blocks.insert_time,
            streams.dependencies_metadata, streams.objects_metadata, streams.tags, streams.properties,
            processes.start_time, processes.start_ticks, processes.tsc_frequency, processes.exe, processes.username, processes.realname, processes.computer, processes.distro, processes.cpu_brand, processes.parent_process_id, processes.properties as process_properties
          FROM blocks, streams, processes

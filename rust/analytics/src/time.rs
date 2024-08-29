@@ -44,9 +44,14 @@ impl ConvertTicks {
         self.process_start_ns + ns_since_process_start
     }
 
-    pub fn delta_ticks_to_time(&self, process_rel_ticks: i64) -> DateTime<Utc> {
-        let ns = self.process_start_ns + process_rel_ticks;
-        DateTime::from_timestamp_nanos(ns)
+    pub fn delta_ticks_to_time(&self, delta: i64) -> DateTime<Utc> {
+        let ns_since_process_start = (delta as f64 * self.inv_tsc_frequency_ns).round() as i64;
+        DateTime::from_timestamp_nanos(self.process_start_ns + ns_since_process_start)
+    }
+
+    pub fn delta_ticks_to_ns(&self, delta: i64) -> i64 {
+        let ns_since_process_start = (delta as f64 * self.inv_tsc_frequency_ns).round() as i64;
+        self.process_start_ns + ns_since_process_start
     }
 
     pub fn delta_ticks_to_ms(&self, delta_ticks: i64) -> f64 {

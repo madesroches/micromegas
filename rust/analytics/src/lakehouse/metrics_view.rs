@@ -4,7 +4,7 @@ use super::{
     block_partition_spec::BlockPartitionSpec,
     metrics_block_processor::MetricsBlockProcessor,
     partition_source_data::fetch_partition_source_data,
-    view::{PartitionSpec, View},
+    view::{PartitionSpec, View, ViewMetadata},
     view_factory::ViewMaker,
 };
 use anyhow::{Context, Result};
@@ -62,12 +62,14 @@ impl View for MetricsView {
             .await
             .with_context(|| "fetch_partition_source_data")?;
         Ok(Arc::new(BlockPartitionSpec {
-            view_set_name: self.view_set_name.clone(),
-            view_instance_id: self.view_instance_id.clone(),
+            view_metadata: ViewMetadata {
+                view_set_name: self.view_set_name.clone(),
+                view_instance_id: self.view_instance_id.clone(),
+                file_schema: self.get_file_schema(),
+                file_schema_hash: self.get_file_schema_hash(),
+            },
             begin_insert,
             end_insert,
-            file_schema: self.get_file_schema(),
-            file_schema_hash: self.get_file_schema_hash(),
             source_data,
             block_processor: Arc::new(MetricsBlockProcessor {}),
         }))
