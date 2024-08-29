@@ -10,7 +10,9 @@ use super::{
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use datafusion::arrow::datatypes::Schema;
+use datafusion::{
+    arrow::datatypes::Schema, catalog::TableProvider, execution::context::SessionContext,
+};
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use std::sync::Arc;
 
@@ -90,5 +92,22 @@ impl View for MetricsView {
         _end_insert: DateTime<Utc>,
     ) -> Result<()> {
         anyhow::bail!("not implemented");
+    }
+
+    async fn make_filtering_table_provider(
+        &self,
+        ctx: &SessionContext,
+        full_table_name: &str,
+        begin: DateTime<Utc>,
+        end: DateTime<Utc>,
+    ) -> Result<Arc<dyn TableProvider>> {
+        let row_filter = ctx
+            .sql(&format!(
+                "SELECT * from {full_table_name} WHERE time BETWEEN '{}' AND '{}';",
+                end.to_rfc3339(),
+                begin.to_rfc3339()
+            ))
+            .await?;
+        Ok(row_filter.into_view())
     }
 }
