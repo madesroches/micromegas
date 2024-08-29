@@ -25,14 +25,14 @@ pub struct ViewMetadata {
 
 #[async_trait]
 pub trait View: Send + Sync {
-	/// name of the table from the user's perspective
+    /// name of the table from the user's perspective
     fn get_view_set_name(&self) -> Arc<String>;
 
-	/// get_view_instance_id can be a process_id, a stream_id or 'global'.
+    /// get_view_instance_id can be a process_id, a stream_id or 'global'.
     fn get_view_instance_id(&self) -> Arc<String>;
 
-	/// make_partition_spec determines what should be found in an up to date partition.
-	/// The resulting PartitionSpec can be used to validate existing partitions are create a new one.
+    /// make_partition_spec determines what should be found in an up to date partition.
+    /// The resulting PartitionSpec can be used to validate existing partitions are create a new one.
     async fn make_partition_spec(
         &self,
         pool: &sqlx::PgPool,
@@ -40,11 +40,11 @@ pub trait View: Send + Sync {
         end_insert: DateTime<Utc>,
     ) -> Result<Arc<dyn PartitionSpec>>;
 
-	/// get_file_schema_hash returns a hash (can be a version number, version string, etc.) that allows
-	/// to identify out of date partitions.
+    /// get_file_schema_hash returns a hash (can be a version number, version string, etc.) that allows
+    /// to identify out of date partitions.
     fn get_file_schema_hash(&self) -> Vec<u8>;
 
-	/// get_file_schema returns the schema of the partition file in object storage
+    /// get_file_schema returns the schema of the partition file in object storage
     fn get_file_schema(&self) -> Arc<Schema>;
     async fn jit_update(
         &self,
