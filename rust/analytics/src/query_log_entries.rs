@@ -70,13 +70,14 @@ pub async fn make_log_entries_record_batch(
     let begin_ns = begin.timestamp_nanos_opt().unwrap_or_default();
     let end_ns = end.timestamp_nanos_opt().unwrap_or_default();
     for block in blocks {
-        for_each_log_entry_in_block(
+        let continue_iterating = for_each_log_entry_in_block(
             blob_storage.clone(),
             &convert_ticks,
             process.clone(),
             stream,
             block,
             |log_entry| {
+                dbg!(record_builder.len());
                 if log_entry.time >= begin_ns
                     && log_entry.time <= end_ns
                     && record_builder.len() < limit
@@ -88,6 +89,9 @@ pub async fn make_log_entries_record_batch(
         )
         .await
         .with_context(|| "for_each_log_entry_in_block")?;
+        if !continue_iterating {
+            break;
+        }
     }
     record_builder.finish()
 }

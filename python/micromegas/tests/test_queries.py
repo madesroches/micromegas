@@ -65,6 +65,7 @@ def test_spans():
     print(df)
 
 def test_log():
+    print("searching for stream")
     stream_id = get_tagged_stream_with_most_events("log")
     print("log stream", stream_id)
     log_entries = client.query_log_entries(begin, end, limit, stream_id)

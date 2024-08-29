@@ -113,7 +113,7 @@ pub async fn for_each_log_entry_in_block<Predicate: FnMut(LogEntry) -> Result<bo
     stream: &StreamInfo,
     block: &BlockMetadata,
     mut fun: Predicate,
-) -> Result<()> {
+) -> Result<bool> {
     let payload = fetch_block_payload(
         blob_storage,
         stream.process_id,
@@ -121,7 +121,7 @@ pub async fn for_each_log_entry_in_block<Predicate: FnMut(LogEntry) -> Result<bo
         block.block_id,
     )
     .await?;
-    parse_block(stream, &payload, |val| {
+    let continue_iterating = parse_block(stream, &payload, |val| {
         if let Some(log_entry) = log_entry_from_value(convert_ticks, process.clone(), &val)
             .with_context(|| "log_entry_from_value")?
         {
@@ -132,5 +132,5 @@ pub async fn for_each_log_entry_in_block<Predicate: FnMut(LogEntry) -> Result<bo
         Ok(true) //continue
     })
     .with_context(|| "parse_block")?;
-    Ok(())
+    Ok(continue_iterating)
 }
