@@ -374,21 +374,6 @@ impl View for ThreadSpansView {
             .await
             .with_context(|| "update_partition")?;
         }
-
-        // let row = sqlx::query(
-        //     "SELECT sum(nb_objects) as nb_objects
-        //      FROM blocks
-        //      WHERE stream_id = $1
-        //      AND begin_ticks <= $2
-        //      AND end_ticks >= $3;",
-        // )
-        // .bind(self.stream_id)
-        // .bind(relative_end_ticks)
-        // .bind(relative_begin_ticks)
-        // .fetch_one(&mut *connection)
-        // .await
-        // .with_context(|| "counting objects in range")?;
-        // let nb_objects: i64 = row.try_get("nb_objects")?;
-        anyhow::bail!("not implemented");
+        Ok(())
     }
 }
