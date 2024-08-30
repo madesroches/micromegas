@@ -91,6 +91,10 @@ impl View for LogView {
         _begin_insert: DateTime<Utc>,
         _end_insert: DateTime<Utc>,
     ) -> Result<()> {
+        if *self.view_instance_id == "global" {
+            // this view instance is updated using the deamon
+            return Ok(());
+        }
         anyhow::bail!("not implemented");
     }
 
@@ -104,8 +108,8 @@ impl View for LogView {
         let row_filter = ctx
             .sql(&format!(
                 "SELECT * from {full_table_name} WHERE time BETWEEN '{}' AND '{}';",
+                begin.to_rfc3339(),
                 end.to_rfc3339(),
-                begin.to_rfc3339()
             ))
             .await?;
         Ok(row_filter.into_view())

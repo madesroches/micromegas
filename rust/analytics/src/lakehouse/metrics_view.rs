@@ -104,8 +104,8 @@ impl View for MetricsView {
         let row_filter = ctx
             .sql(&format!(
                 "SELECT * from {full_table_name} WHERE time BETWEEN '{}' AND '{}';",
+                begin.to_rfc3339(),
                 end.to_rfc3339(),
-                begin.to_rfc3339()
             ))
             .await?;
         Ok(row_filter.into_view())
