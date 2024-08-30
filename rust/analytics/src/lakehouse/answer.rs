@@ -1,6 +1,7 @@
 use datafusion::arrow::{array::RecordBatch, datatypes::Schema};
 use std::sync::Arc;
 
+/// Record batches + schema
 pub struct Answer {
     pub schema: Arc<Schema>,
     pub record_batches: Vec<RecordBatch>,

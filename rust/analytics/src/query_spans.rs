@@ -96,6 +96,7 @@ pub async fn query_spans(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// deprecated
 async fn append_call_tree(
     record_builder: &mut SpanRecordBuilder,
     process_info: &ProcessInfo,
@@ -113,7 +114,7 @@ async fn append_call_tree(
         blocks,
         convert_ticks.ticks_to_nanoseconds(begin_call_tree_rel_ticks + process_info.start_ticks),
         convert_ticks.ticks_to_nanoseconds(end_call_tree_rel_ticks + process_info.start_ticks),
-        limit - record_builder.len(),
+        Some(limit - record_builder.len()),
         blob_storage,
         convert_ticks,
         stream,

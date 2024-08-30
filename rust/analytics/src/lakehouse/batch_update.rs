@@ -1,6 +1,8 @@
 use crate::response_writer::ResponseWriter;
 
-use super::{merge::create_merged_partition, view::View};
+use super::{
+    merge::create_merged_partition, partition_source_data::hash_to_object_count, view::View,
+};
 use anyhow::{Context, Result};
 use chrono::{DateTime, DurationRound, TimeDelta, Utc};
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
@@ -34,7 +36,7 @@ async fn verify_overlapping_partitions(
     if source_data_hash.len() != std::mem::size_of::<i64>() {
         anyhow::bail!("Source data hash should be a i64");
     }
-    let nb_source_events = i64::from_le_bytes(source_data_hash.try_into().unwrap());
+    let nb_source_events = hash_to_object_count(source_data_hash)?;
     let rows = sqlx::query(
         "SELECT begin_insert_time, end_insert_time, file_schema_hash, source_data_hash
          FROM lakehouse_partitions
@@ -83,7 +85,7 @@ async fn verify_overlapping_partitions(
         }
         let part_source_data: Vec<u8> = r.try_get("source_data_hash")?;
         if part_source_data.len() == std::mem::size_of::<i64>() {
-            existing_source_hash += i64::from_le_bytes(part_source_data.try_into().unwrap())
+            existing_source_hash += hash_to_object_count(&part_source_data)?
         } else {
             // old hash that does not represent the number of events
             writer

@@ -1,33 +1,19 @@
 use super::{
-    partition::{write_partition, Partition},
+    partition::{write_partition_from_rows, PartitionRowSet},
     partition_source_data::{PartitionSourceBlock, PartitionSourceDataBlocks},
-    view::PartitionSpec,
+    view::{PartitionSpec, ViewMetadata},
 };
 use crate::response_writer::ResponseWriter;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use bytes::BufMut;
 use chrono::{DateTime, Utc};
-use datafusion::{
-    arrow::{array::RecordBatch, datatypes::Schema},
-    parquet::{
-        arrow::ArrowWriter,
-        basic::Compression,
-        file::properties::{WriterProperties, WriterVersion},
-    },
-};
 use futures::StreamExt;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_telemetry::blob_storage::BlobStorage;
 use micromegas_tracing::prelude::*;
 use std::sync::Arc;
 
-pub struct PartitionRowSet {
-    pub min_time_row: i64,
-    pub max_time_row: i64,
-    pub rows: RecordBatch,
-}
-
+/// BlockProcessor transforms a single block of telemetry into a set of rows
 #[async_trait]
 pub trait BlockProcessor: Send + Sync {
     async fn process(
@@ -37,13 +23,12 @@ pub trait BlockProcessor: Send + Sync {
     ) -> Result<Option<PartitionRowSet>>;
 }
 
+/// BlockPartitionSpec processes blocks individually and out of order
+/// which works fine for measures & log entries
 pub struct BlockPartitionSpec {
-    pub view_set_name: Arc<String>,
-    pub view_instance_id: Arc<String>,
+    pub view_metadata: ViewMetadata,
     pub begin_insert: DateTime<Utc>,
     pub end_insert: DateTime<Utc>,
-    pub file_schema: Arc<Schema>,
-    pub file_schema_hash: Vec<u8>,
     pub source_data: PartitionSourceDataBlocks,
     pub block_processor: Arc<dyn BlockProcessor>,
 }
@@ -61,28 +46,17 @@ impl PartitionSpec for BlockPartitionSpec {
     ) -> Result<()> {
         // buffer the whole parquet in memory until https://github.com/apache/arrow-rs/issues/5766 is available in a published version
         // Impl AsyncFileWriter by object_store #5766
-        let file_id = uuid::Uuid::new_v4();
-        let file_path = format!(
-            "views/{}/{}/{}/{}_{file_id}.parquet",
-            *self.view_set_name,
-            *self.view_instance_id,
-            self.begin_insert.format("%Y-%m-%d"),
-            self.begin_insert.format("%H-%M-%S")
+        let desc = format!(
+            "[{}, {}] {} {}",
+            self.view_metadata.view_set_name,
+            self.view_metadata.view_instance_id,
+            self.begin_insert.to_rfc3339(),
+            self.end_insert.to_rfc3339()
         );
         response_writer
-            .write_string(&format!("writing {file_path}"))
+            .write_string(&format!("writing {desc}"))
             .await?;
 
-        let mut buffer_writer = bytes::BytesMut::with_capacity(1024 * 1024).writer();
-        let props = WriterProperties::builder()
-            .set_writer_version(WriterVersion::PARQUET_2_0)
-            .set_compression(Compression::LZ4_RAW)
-            .build();
-        let mut arrow_writer =
-            ArrowWriter::try_new(&mut buffer_writer, self.file_schema.clone(), Some(props))?;
-
-        let mut min_time = None;
-        let mut max_time = None;
         response_writer
             .write_string(&format!("reading {} blocks", self.source_data.blocks.len()))
             .await?;
@@ -90,6 +64,18 @@ impl PartitionSpec for BlockPartitionSpec {
         if self.source_data.blocks.is_empty() {
             return Ok(());
         }
+
+        let (tx, rx) = tokio::sync::mpsc::channel(1);
+        let join_handle = tokio::spawn(write_partition_from_rows(
+            lake.clone(),
+            self.view_metadata.clone(),
+            self.begin_insert,
+            self.end_insert,
+            self.source_data.block_ids_hash.clone(),
+            rx,
+            1024 * 1024,
+            response_writer.clone(),
+        ));
 
         let mut max_size = self.source_data.blocks[0].block.payload_size as usize;
         for block in &self.source_data.blocks {
@@ -119,55 +105,15 @@ impl PartitionSpec for BlockPartitionSpec {
                     response_writer.write_string(&format!("{e:?}")).await?;
                 }
                 Ok(Some(row_set)) => {
-                    min_time = Some(
-                        min_time
-                            .unwrap_or(row_set.min_time_row)
-                            .min(row_set.min_time_row),
-                    );
-                    max_time = Some(
-                        max_time
-                            .unwrap_or(row_set.max_time_row)
-                            .max(row_set.max_time_row),
-                    );
-                    arrow_writer.write(&row_set.rows)?;
+                    tx.send(row_set).await?;
                 }
                 Ok(None) => {
                     debug!("empty block");
                 }
             }
         }
-
-        arrow_writer.close()?;
-
-        if min_time.is_none() || max_time.is_none() {
-            response_writer
-                .write_string(&format!(
-                    "no data for {file_path} partition, not writing the object"
-                ))
-                .await?;
-            // should we check that there is no stale partition left behind?
-            return Ok(());
-        }
-        let buffer: bytes::Bytes = buffer_writer.into_inner().into();
-        write_partition(
-            &lake,
-            &Partition {
-                view_set_name: self.view_set_name.to_string(),
-                view_instance_id: self.view_instance_id.to_string(),
-                begin_insert_time: self.begin_insert,
-                end_insert_time: self.end_insert,
-                min_event_time: min_time.map(DateTime::<Utc>::from_timestamp_nanos).unwrap(),
-                max_event_time: max_time.map(DateTime::<Utc>::from_timestamp_nanos).unwrap(),
-                updated: sqlx::types::chrono::Utc::now(),
-                file_path,
-                file_size: buffer.len() as i64,
-                file_schema_hash: self.file_schema_hash.clone(),
-                source_data_hash: self.source_data.block_ids_hash.clone(),
-            },
-            buffer,
-            response_writer,
-        )
-        .await?;
+        drop(tx);
+        join_handle.await??;
         Ok(())
     }
 }

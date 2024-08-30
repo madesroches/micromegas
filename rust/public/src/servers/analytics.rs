@@ -34,6 +34,18 @@ pub async fn find_process_request(
     )
 }
 
+pub async fn find_stream_request(
+    Extension(service): Extension<Arc<AnalyticsService>>,
+    body: bytes::Bytes,
+) -> Response {
+    bytes_response(
+        service
+            .find_stream(body)
+            .await
+            .with_context(|| "find_stream"),
+    )
+}
+
 pub async fn query_processes_request(
     Extension(service): Extension<Arc<AnalyticsService>>,
     body: bytes::Bytes,
@@ -163,6 +175,7 @@ pub async fn retire_partitions_request(
 pub fn register_routes(router: Router) -> Router {
     router
         .route("/analytics/find_process", post(find_process_request))
+        .route("/analytics/find_stream", post(find_stream_request))
         .route("/analytics/query_processes", post(query_processes_request))
         .route("/analytics/query_streams", post(query_streams_request))
         .route("/analytics/query_blocks", post(query_blocks_request))

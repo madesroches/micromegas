@@ -16,12 +16,15 @@ use std::sync::Arc;
 
 #[allow(clippy::too_many_arguments)]
 pub async fn query(
-    lake: &DataLakeConnection,
+    lake: Arc<DataLakeConnection>,
     begin: DateTime<Utc>,
     end: DateTime<Utc>,
     sql: &str,
     view: Arc<dyn View>,
 ) -> Result<Answer> {
+    view.jit_update(lake.clone(), begin, end)
+        .await
+        .with_context(|| "jit_update")?;
     let ctx = SessionContext::new();
     let object_store_url = ObjectStoreUrl::parse("obj://lakehouse/").unwrap();
     ctx.register_object_store(object_store_url.as_ref(), lake.blob_storage.inner());
@@ -62,11 +65,24 @@ pub async fn query(
         .with_schema(view.get_file_schema())
         .with_listing_options(options);
     let table = ListingTable::try_new(config)?;
+    let full_table_name = format!("__full_{}", &view_set_name);
+    ctx.register_table(
+        TableReference::Bare {
+            table: full_table_name.clone().into(),
+        },
+        Arc::new(table),
+    )?;
+
+    let filtering_table_provider = view
+        .make_filtering_table_provider(&ctx, &full_table_name, begin, end)
+        .await
+        .with_context(|| "make_filtering_table_provider")?;
+
     ctx.register_table(
         TableReference::Bare {
             table: view_set_name.into(),
         },
-        Arc::new(table),
+        filtering_table_provider,
     )?;
 
     let df = ctx.sql(sql).await?;

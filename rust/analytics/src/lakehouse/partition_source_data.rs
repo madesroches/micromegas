@@ -4,22 +4,24 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use micromegas_telemetry::{stream_info::StreamInfo, types::block::BlockMetadata};
 use micromegas_tracing::prelude::*;
-use sqlx::Row;
 
 use crate::metadata::{block_from_row, process_from_row, stream_from_row};
 
 pub struct PartitionSourceBlock {
     pub block: BlockMetadata,
-    pub stream: StreamInfo,
+    pub stream: Arc<StreamInfo>,
     pub process: Arc<ProcessInfo>,
-    pub process_start_time: DateTime<Utc>,
-    pub process_start_ticks: i64,
-    pub process_tsc_frequency: i64,
 }
 
 pub struct PartitionSourceDataBlocks {
     pub blocks: Vec<Arc<PartitionSourceBlock>>,
     pub block_ids_hash: Vec<u8>,
+}
+
+pub fn hash_to_object_count(hash: &[u8]) -> Result<i64> {
+    Ok(i64::from_le_bytes(
+        hash.try_into().with_context(|| "hash_to_object_count")?,
+    ))
 }
 
 pub async fn fetch_partition_source_data(
@@ -36,7 +38,7 @@ pub async fn fetch_partition_source_data(
 
     // this can scale to thousands, but not millions
     let src_blocks = sqlx::query(
-        "SELECT block_id, streams.stream_id, processes.process_id, blocks.begin_time, blocks.begin_ticks, blocks.end_time, blocks.end_ticks, blocks.nb_objects, blocks.object_offset, blocks.payload_size,
+        "SELECT block_id, streams.stream_id, processes.process_id, blocks.begin_time, blocks.begin_ticks, blocks.end_time, blocks.end_ticks, blocks.nb_objects, blocks.object_offset, blocks.payload_size, blocks.insert_time,
            streams.dependencies_metadata, streams.objects_metadata, streams.tags, streams.properties,
            processes.start_time, processes.start_ticks, processes.tsc_frequency, processes.exe, processes.username, processes.realname, processes.computer, processes.distro, processes.cpu_brand, processes.parent_process_id, processes.properties as process_properties
          FROM blocks, streams, processes
@@ -62,13 +64,11 @@ pub async fn fetch_partition_source_data(
         let block = block_from_row(src_block).with_context(|| "block_from_row")?;
         let process = Arc::new(process_from_row(src_block).with_context(|| "process_from_row")?);
         block_ids_hash += block.nb_objects as i64;
+        let stream = Arc::new(stream_from_row(src_block).with_context(|| "stream_from_row")?);
         partition_src_blocks.push(Arc::new(PartitionSourceBlock {
             block,
-            stream: stream_from_row(src_block).with_context(|| "stream_from_row")?,
+            stream,
             process,
-            process_start_time: src_block.try_get("start_time")?,
-            process_start_ticks: src_block.try_get("start_ticks")?,
-            process_tsc_frequency: src_block.try_get("tsc_frequency")?,
         }));
     }
     info!("{desc} block_ids_hash={block_ids_hash}");

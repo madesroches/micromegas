@@ -1,8 +1,9 @@
-use chrono::TimeDelta;
+use chrono::{DateTime, TimeDelta, Utc};
 use micromegas_tracing::process_info::ProcessInfo;
 
 const NANOS_PER_SEC: f64 = 1000.0 * 1000.0 * 1000.0;
 
+/// ConvertTicks helps converting between a process's tick count and more convenient date/time representations
 #[derive(Debug, Clone)]
 pub struct ConvertTicks {
     tick_offset: i64,
@@ -31,6 +32,7 @@ impl ConvertTicks {
         }
     }
 
+    /// from relative time to relative tick count
     pub fn to_ticks(&self, delta: TimeDelta) -> i64 {
         let mut seconds = delta.num_seconds() as f64;
         seconds += delta.subsec_nanos() as f64 / NANOS_PER_SEC;
@@ -38,12 +40,26 @@ impl ConvertTicks {
         (seconds * freq).round() as i64
     }
 
+    /// from absolute ticks to absolute nanoseconds
     pub fn ticks_to_nanoseconds(&self, ticks: i64) -> i64 {
         let delta = (ticks - self.tick_offset) as f64;
         let ns_since_process_start = (delta * self.inv_tsc_frequency_ns).round() as i64;
         self.process_start_ns + ns_since_process_start
     }
 
+    /// from relative ticks to absolute date/time
+    pub fn delta_ticks_to_time(&self, delta: i64) -> DateTime<Utc> {
+        let ns_since_process_start = (delta as f64 * self.inv_tsc_frequency_ns).round() as i64;
+        DateTime::from_timestamp_nanos(self.process_start_ns + ns_since_process_start)
+    }
+
+    /// from relative ticks to absolute nanoseconds
+    pub fn delta_ticks_to_ns(&self, delta: i64) -> i64 {
+        let ns_since_process_start = (delta as f64 * self.inv_tsc_frequency_ns).round() as i64;
+        self.process_start_ns + ns_since_process_start
+    }
+
+    /// from relative ticks to relative milliseconds
     pub fn delta_ticks_to_ms(&self, delta_ticks: i64) -> f64 {
         let delta = delta_ticks as f64;
         delta * self.inv_tsc_frequency_ms

@@ -2,14 +2,17 @@ use super::{
     block_partition_spec::BlockPartitionSpec,
     log_block_processor::LogBlockProcessor,
     partition_source_data::fetch_partition_source_data,
-    view::{PartitionSpec, View},
+    view::{PartitionSpec, View, ViewMetadata},
     view_factory::ViewMaker,
 };
 use crate::log_entries_table::log_table_schema;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use datafusion::arrow::datatypes::Schema;
+use datafusion::{
+    arrow::datatypes::Schema, catalog::TableProvider, execution::context::SessionContext,
+};
+use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use std::sync::Arc;
 
 const VIEW_SET_NAME: &str = "log_entries";
@@ -61,12 +64,14 @@ impl View for LogView {
             .await
             .with_context(|| "fetch_partition_source_data")?;
         Ok(Arc::new(BlockPartitionSpec {
-            view_set_name: self.view_set_name.clone(),
-            view_instance_id: self.view_instance_id.clone(),
+            view_metadata: ViewMetadata {
+                view_set_name: self.view_set_name.clone(),
+                view_instance_id: self.view_instance_id.clone(),
+                file_schema: self.get_file_schema(),
+                file_schema_hash: self.get_file_schema_hash(),
+            },
             begin_insert,
             end_insert,
-            file_schema: self.get_file_schema(),
-            file_schema_hash: self.get_file_schema_hash(),
             source_data,
             block_processor: Arc::new(LogBlockProcessor {}),
         }))
@@ -78,5 +83,35 @@ impl View for LogView {
 
     fn get_file_schema(&self) -> Arc<Schema> {
         Arc::new(log_table_schema())
+    }
+
+    async fn jit_update(
+        &self,
+        _lake: Arc<DataLakeConnection>,
+        _begin_insert: DateTime<Utc>,
+        _end_insert: DateTime<Utc>,
+    ) -> Result<()> {
+        if *self.view_instance_id == "global" {
+            // this view instance is updated using the deamon
+            return Ok(());
+        }
+        anyhow::bail!("not implemented");
+    }
+
+    async fn make_filtering_table_provider(
+        &self,
+        ctx: &SessionContext,
+        full_table_name: &str,
+        begin: DateTime<Utc>,
+        end: DateTime<Utc>,
+    ) -> Result<Arc<dyn TableProvider>> {
+        let row_filter = ctx
+            .sql(&format!(
+                "SELECT * from {full_table_name} WHERE time BETWEEN '{}' AND '{}';",
+                begin.to_rfc3339(),
+                end.to_rfc3339(),
+            ))
+            .await?;
+        Ok(row_filter.into_view())
     }
 }

@@ -4,15 +4,17 @@ import re
 
 def format_datetime(value):
     nonetype = type(None)
-    match type(value):
-        case datetime.datetime:
-            if value.tzinfo is None:
-                raise RuntimeError("datetime needs a valid time zone")
-            return value.isoformat()
-        case pandas.Timestamp:
-            return value.isoformat()
-        case nonetype:
-            return None
+    value_type = type(value)
+    if value_type == datetime.datetime:
+        if value.tzinfo is None:
+            raise RuntimeError("datetime needs a valid time zone")
+        return value.isoformat()
+    elif value_type == pandas.Timestamp:
+        return value.isoformat()
+    elif value_type == str:
+        return format_datetime(datetime.datetime.fromisoformat(value))
+    elif value_type == type(None):
+        return None
     raise RuntimeError("value of unknown type in format_datetime")
 
 def parse_time_delta(user_string):

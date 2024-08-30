@@ -104,6 +104,7 @@ pub fn block_from_row(row: &sqlx::postgres::PgRow) -> Result<BlockMetadata> {
         nb_objects: row.try_get("nb_objects")?,
         object_offset: row.try_get("object_offset")?,
         payload_size: row.try_get("payload_size")?,
+        insert_time: row.try_get("insert_time")?,
     })
 }
 
@@ -115,7 +116,7 @@ pub async fn find_stream_blocks_in_range(
     end_ticks: i64,
 ) -> Result<Vec<BlockMetadata>> {
     let rows = sqlx::query(
-        "SELECT block_id, stream_id, process_id, begin_time, begin_ticks, end_time, end_ticks, nb_objects, object_offset, payload_size
+        "SELECT block_id, stream_id, process_id, begin_time, begin_ticks, end_time, end_ticks, nb_objects, object_offset, payload_size, insert_time
          FROM blocks
          WHERE stream_id = $1
          AND begin_ticks <= $2

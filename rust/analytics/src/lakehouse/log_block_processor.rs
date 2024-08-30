@@ -1,5 +1,5 @@
 use super::{
-    block_partition_spec::{BlockProcessor, PartitionRowSet},
+    block_partition_spec::BlockProcessor, partition::PartitionRowSet,
     partition_source_data::PartitionSourceBlock,
 };
 use crate::{
@@ -21,12 +21,13 @@ impl BlockProcessor for LogBlockProcessor {
         src_block: Arc<PartitionSourceBlock>,
     ) -> Result<Option<PartitionRowSet>> {
         let convert_ticks = ConvertTicks::from_meta_data(
-            src_block.process_start_ticks,
+            src_block.process.start_ticks,
             src_block
-                .process_start_time
+                .process
+                .start_time
                 .timestamp_nanos_opt()
                 .unwrap_or_default(),
-            src_block.process_tsc_frequency,
+            src_block.process.tsc_frequency,
         );
         let nb_log_entries = src_block.block.nb_objects;
         let mut record_builder = LogEntriesRecordBuilder::with_capacity(nb_log_entries as usize);
