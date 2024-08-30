@@ -91,6 +91,10 @@ impl View for MetricsView {
         _begin_insert: DateTime<Utc>,
         _end_insert: DateTime<Utc>,
     ) -> Result<()> {
+        if *self.view_instance_id == "global" {
+            // this view instance is updated using the deamon
+            return Ok(());
+        }
         anyhow::bail!("not implemented");
     }
 
