@@ -33,6 +33,12 @@ pub struct FindProcessRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct FindStreamRequest {
+    #[serde(deserialize_with = "micromegas_transit::uuid_utils::uuid_from_string")]
+    pub stream_id: Uuid,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct QueryProcessesRequest {
     pub limit: i64,
     pub begin: String,
@@ -139,8 +145,6 @@ impl AnalyticsService {
     pub async fn find_process(&self, body: bytes::Bytes) -> Result<bytes::Bytes> {
         let request: FindProcessRequest =
             ciborium::from_reader(body.reader()).with_context(|| "parsing FindProcessRequest")?;
-
-        let mut connection = self.data_lake.db_pool.acquire().await?;
         let rows = sqlx::query(
             "SELECT process_id,
                     exe,
@@ -159,9 +163,25 @@ impl AnalyticsService {
              WHERE process_id = $1",
         )
         .bind(request.process_id)
-        .fetch_all(&mut *connection)
+        .fetch_all(&self.data_lake.db_pool)
         .await?;
-        drop(connection);
+        let record_batch =
+            rows_to_record_batch(&rows).with_context(|| "converting rows to record batch")?;
+        let answer = Answer::from_record_batch(record_batch);
+        serialize_record_batches(&answer)
+    }
+
+    pub async fn find_stream(&self, body: bytes::Bytes) -> Result<bytes::Bytes> {
+        let request: FindStreamRequest =
+            ciborium::from_reader(body.reader()).with_context(|| "parsing FindStreamRequest")?;
+        let rows = sqlx::query(
+            "SELECT stream_id, process_id, dependencies_metadata, objects_metadata, tags, properties
+             FROM streams
+             WHERE stream_id = $1",
+        )
+        .bind(request.stream_id)
+        .fetch_all(&self.data_lake.db_pool)
+        .await?;
         let record_batch =
             rows_to_record_batch(&rows).with_context(|| "converting rows to record batch")?;
         let answer = Answer::from_record_batch(record_batch);
@@ -176,8 +196,6 @@ impl AnalyticsService {
             .with_context(|| "parsing begin time range")?;
         let end = DateTime::<FixedOffset>::parse_from_rfc3339(&request.end)
             .with_context(|| "parsing end time range")?;
-
-        let mut connection = self.data_lake.db_pool.acquire().await?;
         let rows = sqlx::query(
             "SELECT process_id,
                     exe,
@@ -201,9 +219,8 @@ impl AnalyticsService {
         .bind(begin)
         .bind(end)
         .bind(request.limit)
-        .fetch_all(&mut *connection)
+        .fetch_all(&self.data_lake.db_pool)
         .await?;
-        drop(connection);
         let record_batch =
             rows_to_record_batch(&rows).with_context(|| "converting rows to record batch")?;
         let answer = Answer::from_record_batch(record_batch);
@@ -278,9 +295,7 @@ impl AnalyticsService {
             query = query.bind(request.tag_filter);
         }
         query = query.bind(request.limit);
-        let mut connection = self.data_lake.db_pool.acquire().await?;
-        let rows = query.fetch_all(&mut *connection).await?;
-        drop(connection);
+        let rows = query.fetch_all(&self.data_lake.db_pool).await?;
         let record_batch =
             rows_to_record_batch(&rows).with_context(|| "converting rows to record batch")?;
         let answer = Answer::from_record_batch(record_batch);
@@ -290,7 +305,6 @@ impl AnalyticsService {
     pub async fn query_blocks(&self, body: bytes::Bytes) -> Result<bytes::Bytes> {
         let request: QueryBlocksRequest =
             ciborium::from_reader(body.reader()).with_context(|| "parsing QueryBlocksRequest")?;
-        let mut connection = self.data_lake.db_pool.acquire().await?;
         let sql = "SELECT block_id,
                     stream_id,
                     process_id,
@@ -306,9 +320,8 @@ impl AnalyticsService {
              ORDER BY begin_time;";
         let rows = sqlx::query(sql)
             .bind(request.stream_id)
-            .fetch_all(&mut *connection)
+            .fetch_all(&self.data_lake.db_pool)
             .await?;
-        drop(connection);
         let record_batch =
             rows_to_record_batch(&rows).with_context(|| "converting rows to record batch")?;
         let answer = Answer::from_record_batch(record_batch);

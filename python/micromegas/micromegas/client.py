@@ -15,6 +15,13 @@ class Client:
             headers=self.headers,
         )
 
+    def find_stream(self, stream_id):
+        return request.request(
+            self.analytics_base_url + "find_stream",
+            {"stream_id": stream_id},
+            headers=self.headers,
+        )
+    
     def query_processes(self, begin, end, limit):
         return request.request(
             self.analytics_base_url + "query_processes",
