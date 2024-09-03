@@ -1,5 +1,5 @@
 use super::{
-    jit_partitions::{generate_jit_partitions, is_partition_up_to_date},
+    jit_partitions::{generate_jit_partitions, is_jit_partition_up_to_date},
     partition::{write_partition_from_rows, PartitionRowSet},
     partition_source_data::{hash_to_object_count, PartitionSourceDataBlocks},
     view::{PartitionSpec, View, ViewMetadata},
@@ -162,7 +162,7 @@ async fn update_partition(
     convert_ticks: &ConvertTicks,
     spec: &PartitionSourceDataBlocks,
 ) -> Result<()> {
-    if is_partition_up_to_date(&lake.db_pool, view_meta.clone(), convert_ticks, spec).await? {
+    if is_jit_partition_up_to_date(&lake.db_pool, view_meta.clone(), convert_ticks, spec).await? {
         return Ok(());
     }
     write_partition(lake, view_meta, convert_ticks, spec)
@@ -182,7 +182,7 @@ impl View for ThreadSpansView {
         self.view_instance_id.clone()
     }
 
-    async fn make_partition_spec(
+    async fn make_batch_partition_spec(
         &self,
         _pool: &sqlx::PgPool,
         _begin_insert: DateTime<Utc>,

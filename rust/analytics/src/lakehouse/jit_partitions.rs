@@ -82,8 +82,8 @@ pub async fn generate_jit_partitions(
     Ok(partitions)
 }
 
-/// is_partition_up_to_date compares a partition spec with the partitions that exist to know if it should be recreated
-pub async fn is_partition_up_to_date(
+/// is_jit_partition_up_to_date compares a partition spec with the partitions that exist to know if it should be recreated
+pub async fn is_jit_partition_up_to_date(
     pool: &sqlx::PgPool,
     view_meta: ViewMetadata,
     convert_ticks: &ConvertTicks,
@@ -100,7 +100,7 @@ pub async fn is_partition_up_to_date(
     );
 
     let rows = sqlx::query(
-        "SELECT begin_insert_time, end_insert_time, file_schema_hash, source_data_hash
+        "SELECT file_schema_hash, source_data_hash
          FROM lakehouse_partitions
          WHERE view_set_name = $1
          AND view_instance_id = $2
@@ -144,6 +144,7 @@ fn get_event_time_range(
     if spec.blocks.is_empty() {
         anyhow::bail!("empty partition should not exist");
     }
+    // blocks need to be sorted by (event & insert) time
     let min_rel_ticks = spec.blocks[0].block.begin_ticks;
     let max_rel_ticks = spec.blocks[spec.blocks.len() - 1].block.end_ticks;
     Ok((
@@ -161,6 +162,7 @@ pub async fn write_partition_from_blocks(
     if source_data.blocks.is_empty() {
         anyhow::bail!("empty partition spec");
     }
+    // blocks need to be sorted by (event & insert) time
     let min_insert_time = source_data.blocks[0].block.insert_time;
     let max_insert_time = source_data.blocks[source_data.blocks.len() - 1]
         .block

@@ -7,7 +7,7 @@ use super::{
     view_factory::ViewMaker,
 };
 use crate::{
-    lakehouse::jit_partitions::{generate_jit_partitions, is_partition_up_to_date},
+    lakehouse::jit_partitions::{generate_jit_partitions, is_jit_partition_up_to_date},
     log_entries_table::log_table_schema,
     metadata::{find_process, list_process_streams_tagged},
     time::ConvertTicks,
@@ -64,7 +64,7 @@ impl View for LogView {
         self.view_instance_id.clone()
     }
 
-    async fn make_partition_spec(
+    async fn make_batch_partition_spec(
         &self,
         pool: &sqlx::PgPool,
         begin_insert: DateTime<Utc>,
@@ -146,7 +146,7 @@ impl View for LogView {
 
         let convert_ticks = ConvertTicks::new(&process);
         for part in all_partitions {
-            if !is_partition_up_to_date(&lake.db_pool, view_meta.clone(), &convert_ticks, &part)
+            if !is_jit_partition_up_to_date(&lake.db_pool, view_meta.clone(), &convert_ticks, &part)
                 .await?
             {
                 write_partition_from_blocks(

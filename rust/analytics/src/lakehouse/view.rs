@@ -31,9 +31,9 @@ pub trait View: Send + Sync {
     /// get_view_instance_id can be a process_id, a stream_id or 'global'.
     fn get_view_instance_id(&self) -> Arc<String>;
 
-    /// make_partition_spec determines what should be found in an up to date partition.
+    /// make_batch_partition_spec determines what should be found in an up to date partition.
     /// The resulting PartitionSpec can be used to validate existing partitions are create a new one.
-    async fn make_partition_spec(
+    async fn make_batch_partition_spec(
         &self,
         pool: &sqlx::PgPool,
         begin_insert: DateTime<Utc>,

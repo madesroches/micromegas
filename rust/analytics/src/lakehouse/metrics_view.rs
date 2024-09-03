@@ -7,7 +7,7 @@ use crate::{
 use super::{
     block_partition_spec::BlockPartitionSpec,
     jit_partitions::{
-        generate_jit_partitions, is_partition_up_to_date, write_partition_from_blocks,
+        generate_jit_partitions, is_jit_partition_up_to_date, write_partition_from_blocks,
     },
     metrics_block_processor::MetricsBlockProcessor,
     partition_source_data::fetch_partition_source_data,
@@ -65,7 +65,7 @@ impl View for MetricsView {
         self.view_instance_id.clone()
     }
 
-    async fn make_partition_spec(
+    async fn make_batch_partition_spec(
         &self,
         pool: &sqlx::PgPool,
         begin_insert: DateTime<Utc>,
@@ -147,7 +147,7 @@ impl View for MetricsView {
 
         let convert_ticks = ConvertTicks::new(&process);
         for part in all_partitions {
-            if !is_partition_up_to_date(&lake.db_pool, view_meta.clone(), &convert_ticks, &part)
+            if !is_jit_partition_up_to_date(&lake.db_pool, view_meta.clone(), &convert_ticks, &part)
                 .await?
             {
                 write_partition_from_blocks(
