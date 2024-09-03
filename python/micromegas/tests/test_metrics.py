@@ -8,3 +8,8 @@ def test_measures_query():
     sql = "select * from measures where process_id='{process_id}' LIMIT 1024;".format( process_id=process_id )
     measures = client.query_view("measures", "global", begin, end, sql)
     print(measures)
+
+    sql = "select * from measures LIMIT 1024;"
+    measures = client.query_view("measures",  process_id, begin, end, sql)
+    print(measures)
+    

@@ -8,3 +8,7 @@ def test_log_query():
     sql = "select * from log_entries where process_id='{process_id}' LIMIT 1024;".format( process_id=process_id )
     log_entries = client.query_view("log_entries", "global", begin, end, sql)
     print(log_entries)
+
+    sql = "select * from log_entries LIMIT 1024;"
+    log_entries = client.query_view("log_entries", process_id, begin, end, sql)
+    print(log_entries)

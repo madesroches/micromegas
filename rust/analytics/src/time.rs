@@ -64,6 +64,11 @@ impl ConvertTicks {
         let delta = delta_ticks as f64;
         delta * self.inv_tsc_frequency_ms
     }
+
+    /// from time to relative ticks
+    pub fn time_to_delta_ticks(&self, time: DateTime<Utc>) -> i64 {
+        self.to_ticks(time - DateTime::from_timestamp_nanos(self.process_start_ns))
+    }
 }
 
 #[allow(clippy::cast_precision_loss)]

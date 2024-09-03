@@ -44,6 +44,31 @@ pub async fn find_stream(
     stream_from_row(&row)
 }
 
+pub async fn list_process_streams_tagged(
+    connection: &mut sqlx::PgConnection,
+    process_id: sqlx::types::Uuid,
+    tag: &str,
+) -> Result<Vec<StreamInfo>> {
+    let stream_rows = sqlx::query(
+        "SELECT stream_id, process_id, dependencies_metadata, objects_metadata, tags, properties
+         FROM streams
+         WHERE process_id = $1
+         AND array_position(tags, $2) is not NULL
+         ;",
+    )
+    .bind(process_id)
+    .bind(tag)
+    .fetch_all(&mut *connection)
+    .await
+    .with_context(|| "fetching streams")?;
+    let mut streams = vec![];
+    for row in stream_rows {
+        let stream = stream_from_row(&row).with_context(|| "stream_from_row")?;
+        streams.push(stream);
+    }
+    Ok(streams)
+}
+
 #[span_fn]
 pub fn process_from_row(row: &sqlx::postgres::PgRow) -> Result<ProcessInfo> {
     let properties: Vec<sql_property::Property> = row.try_get("process_properties")?;

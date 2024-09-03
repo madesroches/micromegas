@@ -10,6 +10,7 @@ use datafusion::{
     sql::TableReference,
 };
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
+use micromegas_tracing::prelude::*;
 use sqlx::types::chrono::{DateTime, Utc};
 use sqlx::Row;
 use std::sync::Arc;
@@ -22,14 +23,15 @@ pub async fn query(
     sql: &str,
     view: Arc<dyn View>,
 ) -> Result<Answer> {
+    let view_set_name = view.get_view_set_name().to_string();
+    let view_instance_id = view.get_view_instance_id().to_string();
+    info!("query {view_set_name} {view_instance_id} sql={sql}");
     view.jit_update(lake.clone(), begin, end)
         .await
         .with_context(|| "jit_update")?;
     let ctx = SessionContext::new();
     let object_store_url = ObjectStoreUrl::parse("obj://lakehouse/").unwrap();
     ctx.register_object_store(object_store_url.as_ref(), lake.blob_storage.inner());
-    let view_set_name = view.get_view_set_name().to_string();
-    let view_instance_id = view.get_view_instance_id().to_string();
     let partitions_to_read = sqlx::query(
         "SELECT file_path
          FROM lakehouse_partitions
