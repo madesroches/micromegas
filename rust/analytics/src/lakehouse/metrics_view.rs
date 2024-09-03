@@ -71,7 +71,7 @@ impl View for MetricsView {
         begin_insert: DateTime<Utc>,
         end_insert: DateTime<Utc>,
     ) -> Result<Arc<dyn PartitionSpec>> {
-        if *self.view_instance_id == "global" {
+        if *self.view_instance_id != "global" {
             anyhow::bail!("not supported for jit queries... should it?");
         }
         let source_data = fetch_partition_source_data(pool, begin_insert, end_insert, "metrics")
