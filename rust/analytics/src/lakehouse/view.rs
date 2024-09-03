@@ -46,6 +46,8 @@ pub trait View: Send + Sync {
 
     /// get_file_schema returns the schema of the partition file in object storage
     fn get_file_schema(&self) -> Arc<Schema>;
+
+    /// jit_update creates or updates process-specific partitions before a query
     async fn jit_update(
         &self,
         lake: Arc<DataLakeConnection>,

@@ -1,4 +1,5 @@
 use super::{
+    jit_partitions::{generate_jit_partitions, is_partition_up_to_date},
     partition::{write_partition_from_rows, PartitionRowSet},
     partition_source_data::{hash_to_object_count, PartitionSourceDataBlocks},
     view::{PartitionSpec, View, ViewMetadata},
@@ -6,8 +7,7 @@ use super::{
 };
 use crate::{
     call_tree::make_call_tree,
-    lakehouse::partition_source_data::PartitionSourceBlock,
-    metadata::{block_from_row, find_process, find_stream},
+    metadata::{find_process, find_stream},
     response_writer::ResponseWriter,
     span_table::{get_spans_schema, SpanRecordBuilder},
     time::ConvertTicks,
@@ -19,11 +19,8 @@ use datafusion::{
     arrow::datatypes::Schema, catalog::TableProvider, execution::context::SessionContext,
 };
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
-use micromegas_telemetry::{
-    blob_storage::BlobStorage, stream_info::StreamInfo, types::block::BlockMetadata,
-};
-use micromegas_tracing::{prelude::*, process_info::ProcessInfo};
-use sqlx::Row;
+use micromegas_telemetry::{blob_storage::BlobStorage, types::block::BlockMetadata};
+use micromegas_tracing::prelude::*;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -55,136 +52,6 @@ impl ThreadSpansView {
             stream_id: Uuid::parse_str(view_instance_id).with_context(|| "Uuid::parse_str")?,
         })
     }
-}
-
-/// generate_jit_partitions lists the partitiions that are needed to cover a time span
-/// these partitions may not exist or they could be out of date
-async fn generate_jit_partitions(
-    connection: &mut sqlx::PgConnection,
-    relative_begin_ticks: i64,
-    relative_end_ticks: i64,
-    stream: Arc<StreamInfo>,
-    process: Arc<ProcessInfo>,
-) -> Result<Vec<PartitionSourceDataBlocks>> {
-    // we go though all the blocks before the end of the query to avoid
-    // making a fragmented partition list over time
-    let rows = sqlx::query(
-            "SELECT block_id, stream_id, process_id, begin_time, end_time, begin_ticks, end_ticks, nb_objects, object_offset, payload_size, insert_time
-             FROM blocks
-             WHERE stream_id = $1
-             AND begin_ticks <= $2
-             ORDER BY begin_ticks;",
-        )
-        .bind(stream.stream_id)
-        .bind(relative_end_ticks)
-        .fetch_all(&mut *connection)
-        .await
-        .with_context(|| "listing blocks")?;
-
-    let mut partitions = vec![];
-    let mut partition_blocks = vec![];
-    let mut partition_nb_objects: i64 = 0;
-    let mut last_block_end_ticks: i64 = 0;
-    // we could do a smarter search using object_offset
-    for r in rows {
-        let block = block_from_row(&r)?;
-        last_block_end_ticks = block.end_ticks;
-        partition_nb_objects += block.nb_objects as i64;
-        partition_blocks.push(Arc::new(PartitionSourceBlock {
-            block,
-            stream: stream.clone(),
-            process: process.clone(),
-        }));
-
-        // should we also add a threshold on the number of source blocks?
-        if partition_nb_objects > 20 * 1024 * 1024 {
-            if last_block_end_ticks > relative_begin_ticks {
-                partitions.push(PartitionSourceDataBlocks {
-                    blocks: partition_blocks,
-                    block_ids_hash: partition_nb_objects.to_le_bytes().to_vec(),
-                });
-            }
-            partition_blocks = vec![];
-            partition_nb_objects = 0;
-        }
-    }
-    if partition_nb_objects != 0 && last_block_end_ticks > relative_begin_ticks {
-        partitions.push(PartitionSourceDataBlocks {
-            blocks: partition_blocks,
-            block_ids_hash: partition_nb_objects.to_le_bytes().to_vec(),
-        });
-    }
-    Ok(partitions)
-}
-
-/// get_event_time_range returns the time range covered by a partition spec
-fn get_event_time_range(
-    convert_ticks: &ConvertTicks,
-    spec: &PartitionSourceDataBlocks,
-) -> Result<(DateTime<Utc>, DateTime<Utc>)> {
-    if spec.blocks.is_empty() {
-        anyhow::bail!("empty partition should not exist");
-    }
-    let min_rel_ticks = spec.blocks[0].block.begin_ticks;
-    let max_rel_ticks = spec.blocks[spec.blocks.len() - 1].block.end_ticks;
-    Ok((
-        convert_ticks.delta_ticks_to_time(min_rel_ticks),
-        convert_ticks.delta_ticks_to_time(max_rel_ticks),
-    ))
-}
-
-/// compares a partition spec with the partitions that exist to know if it should be recreated
-async fn is_partition_up_to_date(
-    pool: &sqlx::PgPool,
-    view_meta: ViewMetadata,
-    convert_ticks: &ConvertTicks,
-    spec: &PartitionSourceDataBlocks,
-) -> Result<bool> {
-    let (min_event_time, max_event_time) =
-        get_event_time_range(convert_ticks, spec).with_context(|| "get_event_time_range")?;
-    let desc = format!(
-        "[{}, {}] {} {}",
-        min_event_time.to_rfc3339(),
-        max_event_time.to_rfc3339(),
-        &*view_meta.view_set_name,
-        &*view_meta.view_instance_id,
-    );
-
-    let rows = sqlx::query(
-        "SELECT begin_insert_time, end_insert_time, file_schema_hash, source_data_hash
-         FROM lakehouse_partitions
-         WHERE view_set_name = $1
-         AND view_instance_id = $2
-         AND min_event_time < $3
-         AND max_event_time > $4
-         ;",
-    )
-    .bind(&*view_meta.view_set_name)
-    .bind(&*view_meta.view_instance_id)
-    .bind(max_event_time)
-    .bind(min_event_time)
-    .fetch_all(pool)
-    .await
-    .with_context(|| "fetching matching partitions")?;
-    if rows.len() != 1 {
-        info!("{desc}: found {} partitions", rows.len());
-        return Ok(false);
-    }
-    let r = &rows[0];
-    let part_file_schema: Vec<u8> = r.try_get("file_schema_hash")?;
-    if part_file_schema != view_meta.file_schema_hash {
-        // this is dangerous because we could be creating a new partition smaller than the old one, which is not supported.
-        // let's make sure there is no old data loitering
-        warn!("{desc}: found matching partition with different file schema");
-        return Ok(false);
-    }
-    let part_source_data: Vec<u8> = r.try_get("source_data_hash")?;
-    if hash_to_object_count(&part_source_data)? < hash_to_object_count(&spec.block_ids_hash)? {
-        info!("{desc}: existing partition lacks source data: creating a new partition");
-        return Ok(false);
-    }
-    info!("{desc}: partition up to date");
-    Ok(true)
 }
 
 async fn append_call_tree(
@@ -360,7 +227,7 @@ impl View for ThreadSpansView {
             process.clone(),
         )
         .await
-        .with_context(|| "get_jit_partitions")?;
+        .with_context(|| "generate_jit_partitions")?;
         drop(connection);
         for part in &partitions {
             update_partition(

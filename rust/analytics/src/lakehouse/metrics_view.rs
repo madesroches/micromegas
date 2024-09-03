@@ -88,8 +88,8 @@ impl View for MetricsView {
     async fn jit_update(
         &self,
         _lake: Arc<DataLakeConnection>,
-        _begin_insert: DateTime<Utc>,
-        _end_insert: DateTime<Utc>,
+        _begin_query: DateTime<Utc>,
+        _end_query: DateTime<Utc>,
     ) -> Result<()> {
         if *self.view_instance_id == "global" {
             // this view instance is updated using the deamon
