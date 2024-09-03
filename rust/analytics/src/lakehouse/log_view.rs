@@ -1,15 +1,15 @@
 use super::{
     block_partition_spec::BlockPartitionSpec,
+    jit_partitions::write_partition_from_blocks,
     log_block_processor::LogBlockProcessor,
-    partition_source_data::{fetch_partition_source_data, PartitionSourceDataBlocks},
+    partition_source_data::fetch_partition_source_data,
     view::{PartitionSpec, View, ViewMetadata},
     view_factory::ViewMaker,
 };
 use crate::{
     lakehouse::jit_partitions::{generate_jit_partitions, is_partition_up_to_date},
     log_entries_table::log_table_schema,
-    metadata::{find_process, stream_from_row},
-    response_writer::ResponseWriter,
+    metadata::{find_process, list_process_streams_tagged},
     time::ConvertTicks,
 };
 use anyhow::{Context, Result};
@@ -71,7 +71,7 @@ impl View for LogView {
         end_insert: DateTime<Utc>,
     ) -> Result<Arc<dyn PartitionSpec>> {
         if *self.view_instance_id == "global" {
-            anyhow::bail!("not supported for jit queries... yet?");
+            anyhow::bail!("not supported for jit queries... should it?");
         }
         let source_data = fetch_partition_source_data(pool, begin_insert, end_insert, "log")
             .await
@@ -120,29 +120,16 @@ impl View for LogView {
             .with_context(|| "find_process")?,
         );
 
-        let stream_rows = sqlx::query(
-			"SELECT stream_id, process_id, dependencies_metadata, objects_metadata, tags, properties
-             FROM streams
-             WHERE process_id = $1
-             AND array_position(tags, $2) is not NULL
-             ;")
-             .bind(self.process_id)
-             .bind("log")
-			.fetch_all(&mut *connection)
+        let streams = list_process_streams_tagged(&mut connection, process.process_id, "log")
             .await
-			.with_context( || "fetching streams")?;
-        let convert_ticks = ConvertTicks::new(&process);
-        //todo: move to generate_jit_partitions
-        let relative_begin_ticks = convert_ticks.to_ticks(begin_query - process.start_time);
-        let relative_end_ticks = convert_ticks.to_ticks(end_query - process.start_time);
+            .with_context(|| "list_process_streams_tagged")?;
         let mut all_partitions = vec![];
-        for row in stream_rows {
-            let stream = Arc::new(stream_from_row(&row).with_context(|| "stream_from_row")?);
+        for stream in streams {
             let mut partitions = generate_jit_partitions(
                 &mut connection,
-                relative_begin_ticks,
-                relative_end_ticks,
-                stream,
+                begin_query,
+                end_query,
+                Arc::new(stream),
                 process.clone(),
             )
             .await
@@ -157,13 +144,19 @@ impl View for LogView {
             file_schema: self.get_file_schema(),
         };
 
+        let convert_ticks = ConvertTicks::new(&process);
         for part in all_partitions {
             if !is_partition_up_to_date(&lake.db_pool, view_meta.clone(), &convert_ticks, &part)
                 .await?
             {
-                write_partition(lake.clone(), view_meta.clone(), part)
-                    .await
-                    .with_context(|| "write_partition")?;
+                write_partition_from_blocks(
+                    lake.clone(),
+                    view_meta.clone(),
+                    part,
+                    Arc::new(LogBlockProcessor {}),
+                )
+                .await
+                .with_context(|| "write_partition_from_blocks")?;
             }
         }
         Ok(())
@@ -185,31 +178,4 @@ impl View for LogView {
             .await?;
         Ok(row_filter.into_view())
     }
-}
-
-async fn write_partition(
-    lake: Arc<DataLakeConnection>,
-    view_metadata: ViewMetadata,
-    source_data: PartitionSourceDataBlocks,
-) -> Result<()> {
-    if source_data.blocks.is_empty() {
-        anyhow::bail!("empty partition spec");
-    }
-    let min_insert_time = source_data.blocks[0].block.insert_time;
-    let max_insert_time = source_data.blocks[source_data.blocks.len() - 1]
-        .block
-        .insert_time;
-    let block_spec = BlockPartitionSpec {
-        view_metadata,
-        begin_insert: min_insert_time,
-        end_insert: max_insert_time,
-        source_data,
-        block_processor: Arc::new(LogBlockProcessor {}),
-    };
-    let null_response_writer = Arc::new(ResponseWriter::new(None));
-    block_spec
-        .write(lake, null_response_writer)
-        .await
-        .with_context(|| "block_spec.write")?;
-    Ok(())
 }

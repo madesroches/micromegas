@@ -1,13 +1,16 @@
 use super::{
+    block_partition_spec::{BlockPartitionSpec, BlockProcessor},
     partition_source_data::{PartitionSourceBlock, PartitionSourceDataBlocks},
     view::ViewMetadata,
 };
+use crate::lakehouse::view::PartitionSpec;
 use crate::{
     lakehouse::partition_source_data::hash_to_object_count, metadata::block_from_row,
-    time::ConvertTicks,
+    response_writer::ResponseWriter, time::ConvertTicks,
 };
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
+use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_telemetry::stream_info::StreamInfo;
 use micromegas_tracing::prelude::*;
 use micromegas_tracing::process_info::ProcessInfo;
@@ -20,11 +23,14 @@ const NB_OBJECTS_PER_PARTITION: i64 = 20 * 1024 * 1024;
 /// these partitions may not exist or they could be out of date
 pub async fn generate_jit_partitions(
     connection: &mut sqlx::PgConnection,
-    relative_begin_ticks: i64,
-    relative_end_ticks: i64,
+    begin_query: DateTime<Utc>,
+    end_query: DateTime<Utc>,
     stream: Arc<StreamInfo>,
     process: Arc<ProcessInfo>,
 ) -> Result<Vec<PartitionSourceDataBlocks>> {
+    let convert_ticks = ConvertTicks::new(&process);
+    let relative_begin_ticks = convert_ticks.time_to_delta_ticks(begin_query);
+    let relative_end_ticks = convert_ticks.time_to_delta_ticks(end_query);
     // we go though all the blocks before the end of the query to avoid
     // making a fragmented partition list over time
     let rows = sqlx::query(
@@ -144,4 +150,32 @@ fn get_event_time_range(
         convert_ticks.delta_ticks_to_time(min_rel_ticks),
         convert_ticks.delta_ticks_to_time(max_rel_ticks),
     ))
+}
+
+pub async fn write_partition_from_blocks(
+    lake: Arc<DataLakeConnection>,
+    view_metadata: ViewMetadata,
+    source_data: PartitionSourceDataBlocks,
+    block_processor: Arc<dyn BlockProcessor>,
+) -> Result<()> {
+    if source_data.blocks.is_empty() {
+        anyhow::bail!("empty partition spec");
+    }
+    let min_insert_time = source_data.blocks[0].block.insert_time;
+    let max_insert_time = source_data.blocks[source_data.blocks.len() - 1]
+        .block
+        .insert_time;
+    let block_spec = BlockPartitionSpec {
+        view_metadata,
+        begin_insert: min_insert_time,
+        end_insert: max_insert_time,
+        source_data,
+        block_processor,
+    };
+    let null_response_writer = Arc::new(ResponseWriter::new(None));
+    block_spec
+        .write(lake, null_response_writer)
+        .await
+        .with_context(|| "block_spec.write")?;
+    Ok(())
 }

@@ -216,19 +216,17 @@ impl View for ThreadSpansView {
                 .await
                 .with_context(|| "find_process")?,
         );
-        let convert_ticks = ConvertTicks::new(&process);
-        let relative_begin_ticks = convert_ticks.to_ticks(begin_query - process.start_time);
-        let relative_end_ticks = convert_ticks.to_ticks(end_query - process.start_time);
         let partitions = generate_jit_partitions(
             &mut connection,
-            relative_begin_ticks,
-            relative_end_ticks,
+            begin_query,
+            end_query,
             stream.clone(),
             process.clone(),
         )
         .await
         .with_context(|| "generate_jit_partitions")?;
         drop(connection);
+        let convert_ticks = ConvertTicks::new(&process);
         for part in &partitions {
             update_partition(
                 lake.clone(),
