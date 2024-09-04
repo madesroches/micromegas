@@ -1,6 +1,6 @@
 use super::{
     log_view::LogViewMaker, metrics_view::MetricsViewMaker, processes_view::ProcessesViewMaker,
-    thread_spans_view::ThreadSpansViewMaker, view::View,
+    streams_view::StreamsViewMaker, thread_spans_view::ThreadSpansViewMaker, view::View,
 };
 use anyhow::Result;
 use std::{collections::HashMap, sync::Arc};
@@ -28,7 +28,7 @@ impl ViewFactory {
         if let Some(maker) = self.view_sets.get(view_set_name) {
             maker.make_view(view_instance_id)
         } else {
-            anyhow::bail!("view set not found");
+            anyhow::bail!("view set {view_set_name} not found");
         }
     }
 }
@@ -43,6 +43,7 @@ impl Default for ViewFactory {
             Arc::new(ThreadSpansViewMaker {}),
         );
         factory.add_view_set(String::from("processes"), Arc::new(ProcessesViewMaker {}));
+        factory.add_view_set(String::from("streams"), Arc::new(StreamsViewMaker {}));
         factory
     }
 }
