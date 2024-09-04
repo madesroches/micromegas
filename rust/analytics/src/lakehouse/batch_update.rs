@@ -130,7 +130,7 @@ async fn materialize_partition(
     let partition_spec = view
         .make_batch_partition_spec(&lake.db_pool, begin_insert, end_insert)
         .await
-        .with_context(|| "make_partition_spec")?;
+        .with_context(|| "make_batch_partition_spec")?;
     let view_instance_id = view.get_view_instance_id();
     let strategy = verify_overlapping_partitions(
         &lake.db_pool,

@@ -1,5 +1,5 @@
 use super::{
-    log_view::LogViewMaker, metrics_view::MetricsViewMaker,
+    log_view::LogViewMaker, metrics_view::MetricsViewMaker, processes_view::ProcessesViewMaker,
     thread_spans_view::ThreadSpansViewMaker, view::View,
 };
 use anyhow::Result;
@@ -42,6 +42,7 @@ impl Default for ViewFactory {
             String::from("thread_spans"),
             Arc::new(ThreadSpansViewMaker {}),
         );
+        factory.add_view_set(String::from("processes"), Arc::new(ProcessesViewMaker {}));
         factory
     }
 }

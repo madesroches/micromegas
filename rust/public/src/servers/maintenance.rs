@@ -38,7 +38,9 @@ impl TaskDef {
     ) -> Result<Self> {
         let now = Utc::now();
         info!("running scheduled task name={name}");
-        callback(lake.clone(), views.clone()).await?;
+        if let Err(e) = callback(lake.clone(), views.clone()).await {
+            error!("{e:?}");
+        }
         let next_run = now.duration_trunc(period)? + period + offset;
         Ok(Self {
             lake,
@@ -84,14 +86,22 @@ pub async fn every_hour(lake: Arc<DataLakeConnection>, views: Views) -> Result<(
     let delta = TimeDelta::hours(1);
     let null_response_writer = Arc::new(ResponseWriter::new(None));
     for view in &*views {
-        materialize_recent_partitions(
+        if let Err(e) = materialize_recent_partitions(
             lake.clone(),
             view.clone(),
             delta,
             3,
             null_response_writer.clone(),
         )
-        .await?;
+        .await
+        .with_context(|| {
+            format!(
+                "materialize_recent_partitions view_set={}",
+                &view.get_view_set_name()
+            )
+        }) {
+            error!("{e:?}");
+        }
     }
     Ok(())
 }
@@ -99,14 +109,22 @@ pub async fn every_hour(lake: Arc<DataLakeConnection>, views: Views) -> Result<(
 pub async fn every_minute(lake: Arc<DataLakeConnection>, views: Views) -> Result<()> {
     let null_response_writer = Arc::new(ResponseWriter::new(None));
     for view in &*views {
-        materialize_recent_partitions(
+        if let Err(e) = materialize_recent_partitions(
             lake.clone(),
             view.clone(),
             TimeDelta::minutes(1),
             3,
             null_response_writer.clone(),
         )
-        .await?;
+        .await
+        .with_context(|| {
+            format!(
+                "materialize_recent_partitions view_set={}",
+                &view.get_view_set_name()
+            )
+        }) {
+            error!("{e:?}");
+        }
     }
     Ok(())
 }
@@ -114,20 +132,29 @@ pub async fn every_minute(lake: Arc<DataLakeConnection>, views: Views) -> Result
 pub async fn every_second(lake: Arc<DataLakeConnection>, views: Views) -> Result<()> {
     let null_response_writer = Arc::new(ResponseWriter::new(None));
     for view in &*views {
-        materialize_recent_partitions(
+        if let Err(e) = materialize_recent_partitions(
             lake.clone(),
             view.clone(),
             TimeDelta::seconds(1),
             5,
             null_response_writer.clone(),
         )
-        .await?;
+        .await
+        .with_context(|| {
+            format!(
+                "materialize_recent_partitions view_set={}",
+                &view.get_view_set_name()
+            )
+        }) {
+            error!("{e:?}");
+        }
     }
     Ok(())
 }
 
 pub async fn daemon(lake: Arc<DataLakeConnection>, view_factory: Arc<ViewFactory>) -> Result<()> {
     let views = Arc::new(vec![
+        view_factory.make_view("processes", "global")?,
         view_factory.make_view("log_entries", "global")?,
         view_factory.make_view("measures", "global")?,
     ]);

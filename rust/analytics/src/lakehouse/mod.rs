@@ -12,6 +12,8 @@ pub mod log_block_processor;
 pub mod log_view;
 /// Merge consecutive parquet partitions into a single file
 pub mod merge;
+/// Specification for a view partition backed by a table in the postgresql metadata database.
+pub mod metadata_partition_spec;
 /// Implementation of `BlockProcessor` for measures
 pub mod metrics_block_processor;
 /// Materializable view of measures accessible through datafusion
@@ -22,6 +24,8 @@ pub mod migration;
 pub mod partition;
 /// Describes the event blocks backing a partition
 pub mod partition_source_data;
+/// Replicated view of the `processes` table of the postgresql metadata database.
+pub mod processes_view;
 /// Datafusion integration
 pub mod query;
 /// Tracking of expired partitions
