@@ -101,25 +101,33 @@ pub use object_store;
 pub use sqlx;
 pub use uuid;
 
+/// telemetry protocol
 pub mod telemetry {
     pub use micromegas_telemetry::*;
 }
 
+/// publication of the recorded events using http
 pub mod telemetry_sink {
     pub use micromegas_telemetry_sink::*;
 }
 
+/// low level tracing - has minimal dependencies
 pub mod tracing {
     pub use micromegas_tracing::*;
 }
 
+/// records telemetry in data lake
 pub mod ingestion {
     pub use micromegas_ingestion::*;
 }
 
+/// makes the telemetry data lake accessible and useful
 pub mod analytics {
     pub use micromegas_analytics::*;
 }
 
 pub mod axum_utils;
+
+/// Embedable ingestion, analytics and maintenance services.
+/// The user is expected to provide their own authentication.
 pub mod servers;
