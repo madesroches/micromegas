@@ -280,7 +280,7 @@ pub fn make_column_reader(column: &PgColumn) -> Result<Arc<dyn ColumnReader>> {
         "TIMESTAMPTZ" => Ok(Arc::new(TimestampColumnReader {
             field: Field::new(
                 column.name(),
-                DataType::Timestamp(TimeUnit::Nanosecond, Some("UCT".into())), //postgres only stores microseconds, but every event is in nanoseconds
+                DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into())), //postgres only stores microseconds, but every event is in nanoseconds
                 true,
             ),
             column_ordinal: column.ordinal(),
