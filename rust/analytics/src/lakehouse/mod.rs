@@ -28,6 +28,8 @@ pub mod partition_source_data;
 pub mod processes_view;
 /// Datafusion integration
 pub mod query;
+/// Replicated view of the `streams` table of the postgresql metadata database.
+pub mod streams_view;
 /// Tracking of expired partitions
 pub mod temp;
 /// Jit view of the call tree built from the thread events of a single stream
