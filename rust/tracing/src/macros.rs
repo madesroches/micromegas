@@ -1,4 +1,4 @@
-/// Records a integer metric.
+/// Records a sync span as two thread events
 ///
 /// # Examples
 ///
@@ -30,6 +30,7 @@ macro_rules! span_scope {
 }
 
 /// Records a span with a name that is determined at runtime.
+/// The span name still needs to be statically allocated.
 ///
 /// # Examples
 ///
@@ -61,6 +62,7 @@ macro_rules! span_scope_named {
     };
 }
 
+/// async_span_scope is not supported yet
 #[macro_export]
 macro_rules! async_span_scope {
     ($scope_name:ident, $name:expr) => {
@@ -81,6 +83,7 @@ macro_rules! async_span_scope {
     };
 }
 
+/// async_span_scope_named is not supported yet
 #[macro_export]
 macro_rules! async_span_scope_named {
     ($scope_name:ident, $name:expr) => {
