@@ -3,7 +3,7 @@ use micromegas_analytics::payload::parse_block;
 use micromegas_analytics::time::ConvertTicks;
 use micromegas_telemetry_sink::stream_block::StreamBlock;
 use micromegas_telemetry_sink::stream_info::make_stream_info;
-use micromegas_telemetry_sink::TelemetryGuard;
+use micromegas_telemetry_sink::TelemetryGuardBuilder;
 use micromegas_tracing::dispatch::make_process_info;
 use micromegas_tracing::event::TracingBlock;
 use micromegas_tracing::logs::LogBlock;
@@ -35,7 +35,9 @@ fn test_log_interop_metadata() {
 
 #[test]
 fn test_log_encode_static() {
-    let _telemetry_guard = TelemetryGuard::new();
+    let _telemetry_guard = TelemetryGuardBuilder::default()
+        .with_install_tracing_capture(false)
+        .build();
     let process_id = uuid::Uuid::new_v4();
     let process_info = make_process_info(process_id, Some(uuid::Uuid::new_v4()));
     let mut stream = LogStream::new(1024, process_id.clone(), &[], HashMap::new());
@@ -69,7 +71,9 @@ fn test_log_encode_static() {
 
 #[test]
 fn test_log_encode_dynamic() {
-    let _telemetry_guard = TelemetryGuard::new();
+    let _telemetry_guard = TelemetryGuardBuilder::default()
+        .with_install_tracing_capture(false)
+        .build();
     let process_id = uuid::Uuid::new_v4();
     let process_info = make_process_info(process_id, Some(uuid::Uuid::new_v4()));
     let mut stream = LogStream::new(1024, process_id.clone(), &[], HashMap::new());
@@ -103,7 +107,9 @@ fn test_log_encode_dynamic() {
 
 #[test]
 fn test_parse_log_interops() {
-    let _telemetry_guard = TelemetryGuard::new();
+    let _telemetry_guard = TelemetryGuardBuilder::default()
+        .with_install_tracing_capture(false)
+        .build();
     let process_id = uuid::Uuid::new_v4();
     let process_info = Arc::new(make_process_info(process_id, Some(uuid::Uuid::new_v4())));
     let mut stream = LogStream::new(1024, process_id, &[], HashMap::new());
