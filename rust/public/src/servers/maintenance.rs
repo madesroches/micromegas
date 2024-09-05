@@ -154,6 +154,7 @@ pub async fn every_second(lake: Arc<DataLakeConnection>, views: Views) -> Result
 
 pub async fn daemon(lake: Arc<DataLakeConnection>, view_factory: Arc<ViewFactory>) -> Result<()> {
     let views = Arc::new(vec![
+        view_factory.make_view("blocks", "global")?,
         view_factory.make_view("processes", "global")?,
         view_factory.make_view("streams", "global")?,
         view_factory.make_view("log_entries", "global")?,
