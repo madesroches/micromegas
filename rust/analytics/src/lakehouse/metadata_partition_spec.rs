@@ -19,11 +19,13 @@ pub struct MetadataPartitionSpec {
     pub end_insert: DateTime<Utc>,
     pub record_count: i64,
     pub data_sql: Arc<String>,
+    pub event_time_column: Arc<String>,
 }
 
 pub async fn fetch_metadata_partition_spec(
     pool: &sqlx::PgPool,
     source_table: &str,
+    event_time_column: Arc<String>,
     data_sql: Arc<String>,
     view_metadata: ViewMetadata,
     begin_insert: DateTime<Utc>,
@@ -47,6 +49,7 @@ pub async fn fetch_metadata_partition_spec(
         end_insert,
         record_count: row.try_get("count").with_context(|| "reading count")?,
         data_sql,
+        event_time_column,
     })
 }
 
@@ -84,8 +87,13 @@ impl PartitionSpec for MetadataPartitionSpec {
         if row_count == 0 {
             return Ok(());
         }
-        let min_insert_time: DateTime<Utc> = rows[0].try_get("insert_time")?;
-        let max_insert_time: DateTime<Utc> = rows[rows.len() - 1].try_get("insert_time")?;
+        let min_event_time: DateTime<Utc> = rows[0].try_get(&**self.event_time_column)?;
+        assert!(min_event_time >= self.begin_insert);
+        assert!(min_event_time <= self.end_insert);
+        let max_event_time: DateTime<Utc> =
+            rows[rows.len() - 1].try_get(&**self.event_time_column)?;
+        assert!(max_event_time >= self.begin_insert);
+        assert!(max_event_time <= self.end_insert);
         let record_batch =
             rows_to_record_batch(&rows).with_context(|| "converting rows to record batch")?;
         drop(rows);
@@ -102,8 +110,8 @@ impl PartitionSpec for MetadataPartitionSpec {
             response_writer.clone(),
         ));
         tx.send(PartitionRowSet {
-            min_time_row: min_insert_time,
-            max_time_row: max_insert_time,
+            min_time_row: min_event_time,
+            max_time_row: max_event_time,
             rows: record_batch,
         })
         .await?;

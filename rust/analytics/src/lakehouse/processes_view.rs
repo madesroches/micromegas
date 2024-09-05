@@ -29,6 +29,7 @@ pub struct ProcessesView {
     view_set_name: Arc<String>,
     view_instance_id: Arc<String>,
     data_sql: Arc<String>,
+    event_time_column: Arc<String>,
 }
 
 impl ProcessesView {
@@ -56,11 +57,13 @@ impl ProcessesView {
              AND insert_time < $2
              ORDER BY insert_time;",
         ));
+        let event_time_column = Arc::new(String::from("insert_time"));
 
         Ok(Self {
             view_set_name: Arc::new(String::from(VIEW_SET_NAME)),
             view_instance_id: Arc::new(String::from(VIEW_INSTANCE_ID)),
             data_sql,
+            event_time_column,
         })
     }
 }
@@ -91,6 +94,7 @@ impl View for ProcessesView {
             fetch_metadata_partition_spec(
                 pool,
                 "processes",
+                self.event_time_column.clone(),
                 self.data_sql.clone(),
                 view_meta,
                 begin_insert,

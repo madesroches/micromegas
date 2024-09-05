@@ -34,7 +34,7 @@ pub async fn generate_jit_partitions(
     // we go though all the blocks before the end of the query to avoid
     // making a fragmented partition list over time
     let rows = sqlx::query(
-            "SELECT block_id, stream_id, process_id, begin_time, end_time, begin_ticks, end_ticks, nb_objects, object_offset, payload_size, insert_time
+            "SELECT block_id, stream_id, process_id, begin_time, end_time, begin_ticks, end_ticks, nb_objects, object_offset, payload_size, insert_time as block_insert_time
              FROM blocks
              WHERE stream_id = $1
              AND begin_ticks <= $2
