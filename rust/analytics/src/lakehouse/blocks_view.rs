@@ -29,6 +29,7 @@ pub struct BlocksView {
     view_set_name: Arc<String>,
     view_instance_id: Arc<String>,
     data_sql: Arc<String>,
+    event_time_column: Arc<String>,
 }
 
 impl BlocksView {
@@ -38,9 +39,9 @@ impl BlocksView {
         }
 
         let data_sql = Arc::new(String::from(
-        "SELECT block_id, streams.stream_id, processes.process_id, blocks.begin_time, blocks.begin_ticks, blocks.end_time, blocks.end_ticks, blocks.nb_objects, blocks.object_offset, blocks.payload_size, blocks.insert_time,
+        "SELECT block_id, streams.stream_id, processes.process_id, blocks.begin_time, blocks.begin_ticks, blocks.end_time, blocks.end_ticks, blocks.nb_objects, blocks.object_offset, blocks.payload_size, blocks.insert_time as block_insert_time,
            streams.dependencies_metadata, streams.objects_metadata, streams.tags, streams.properties,
-           processes.start_time, processes.start_ticks, processes.tsc_frequency, processes.exe, processes.username, processes.realname, processes.computer, processes.distro, processes.cpu_brand, processes.insert_time, processes.parent_process_id, processes.properties as process_properties
+           processes.start_time, processes.start_ticks, processes.tsc_frequency, processes.exe, processes.username, processes.realname, processes.computer, processes.distro, processes.cpu_brand, processes.insert_time as process_insert_time, processes.parent_process_id, processes.properties as process_properties
          FROM blocks, streams, processes
          WHERE blocks.stream_id = streams.stream_id
          AND streams.process_id = processes.process_id
@@ -49,11 +50,13 @@ impl BlocksView {
          ORDER BY blocks.insert_time, blocks.block_id
          ;",
         ));
+        let event_time_column = Arc::new(String::from("block_insert_time"));
 
         Ok(Self {
             view_set_name: Arc::new(String::from(VIEW_SET_NAME)),
             view_instance_id: Arc::new(String::from(VIEW_INSTANCE_ID)),
             data_sql,
+            event_time_column,
         })
     }
 }
@@ -84,6 +87,7 @@ impl View for BlocksView {
             fetch_metadata_partition_spec(
                 pool,
                 "blocks",
+                self.event_time_column.clone(),
                 self.data_sql.clone(),
                 view_meta,
                 begin_insert,
