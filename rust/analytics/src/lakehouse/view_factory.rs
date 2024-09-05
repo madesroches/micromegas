@@ -1,6 +1,7 @@
 use super::{
-    log_view::LogViewMaker, metrics_view::MetricsViewMaker, processes_view::ProcessesViewMaker,
-    streams_view::StreamsViewMaker, thread_spans_view::ThreadSpansViewMaker, view::View,
+    blocks_view::BlocksViewMaker, log_view::LogViewMaker, metrics_view::MetricsViewMaker,
+    processes_view::ProcessesViewMaker, streams_view::StreamsViewMaker,
+    thread_spans_view::ThreadSpansViewMaker, view::View,
 };
 use anyhow::Result;
 use std::{collections::HashMap, sync::Arc};
@@ -44,6 +45,7 @@ impl Default for ViewFactory {
         );
         factory.add_view_set(String::from("processes"), Arc::new(ProcessesViewMaker {}));
         factory.add_view_set(String::from("streams"), Arc::new(StreamsViewMaker {}));
+        factory.add_view_set(String::from("blocks"), Arc::new(BlocksViewMaker {}));
         factory
     }
 }

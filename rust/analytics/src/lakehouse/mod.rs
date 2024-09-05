@@ -4,6 +4,8 @@ pub mod answer;
 pub mod batch_update;
 /// Specification for a view partition backed by a set of telemetry blocks which can be processed out of order
 pub mod block_partition_spec;
+/// Replicated view of the `blocks` table of the postgresql metadata database.
+pub mod blocks_view;
 /// Management of process-specific partitions built on demand
 pub mod jit_partitions;
 /// Implementation of `BlockProcessor` for log entries
