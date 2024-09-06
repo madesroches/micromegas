@@ -21,7 +21,7 @@ class Client:
             {"stream_id": stream_id},
             headers=self.headers,
         )
-    
+
     def query_processes(self, begin, end, limit):
         return request.request(
             self.analytics_base_url + "query_processes",
@@ -164,14 +164,11 @@ class Client:
         }
         self.__stream_request("materialize_partitions", args)
 
-    def retire_partitions(
-        self, view_set_name, view_instance_id, begin, end, partition_delta_seconds
-    ):
+    def retire_partitions(self, view_set_name, view_instance_id, begin, end):
         args = {
             "view_set_name": view_set_name,
             "view_instance_id": view_instance_id,
             "begin": time.format_datetime(begin),
             "end": time.format_datetime(end),
-            "partition_delta_seconds": partition_delta_seconds,
         }
         self.__stream_request("retire_partitions", args)
