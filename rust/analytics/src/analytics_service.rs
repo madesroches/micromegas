@@ -15,8 +15,8 @@ use uuid::Uuid;
 
 use crate::lakehouse::answer::Answer;
 use crate::lakehouse::batch_update::materialize_partition_range;
-use crate::lakehouse::partition::retire_partitions;
 use crate::lakehouse::view_factory::ViewFactory;
+use crate::lakehouse::write_partition::retire_partitions;
 use crate::response_writer::ResponseWriter;
 use crate::sql_arrow_bridge::rows_to_record_batch;
 

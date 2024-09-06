@@ -1,7 +1,7 @@
 use super::{
-    partition::{write_partition_from_rows, PartitionRowSet},
     partition_source_data::hash_to_object_count,
     view::View,
+    write_partition::{write_partition_from_rows, PartitionRowSet},
 };
 use crate::response_writer::ResponseWriter;
 use anyhow::{Context, Result};

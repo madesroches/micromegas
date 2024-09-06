@@ -1,9 +1,7 @@
-use super::{
-    partition::PartitionRowSet,
-    view::{PartitionSpec, ViewMetadata},
-};
+use super::view::{PartitionSpec, ViewMetadata};
 use crate::{
-    lakehouse::partition::write_partition_from_rows, response_writer::ResponseWriter,
+    lakehouse::write_partition::{write_partition_from_rows, PartitionRowSet},
+    response_writer::ResponseWriter,
     sql_arrow_bridge::rows_to_record_batch,
 };
 use anyhow::{Context, Result};

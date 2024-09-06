@@ -1,12 +1,12 @@
 use super::{
     jit_partitions::{generate_jit_partitions, is_jit_partition_up_to_date},
-    partition::{write_partition_from_rows, PartitionRowSet},
     partition_source_data::{hash_to_object_count, PartitionSourceDataBlocks},
     view::{PartitionSpec, View, ViewMetadata},
     view_factory::ViewMaker,
 };
 use crate::{
     call_tree::make_call_tree,
+    lakehouse::write_partition::{write_partition_from_rows, PartitionRowSet},
     metadata::{find_process, find_stream},
     response_writer::ResponseWriter,
     span_table::{get_spans_schema, SpanRecordBuilder},

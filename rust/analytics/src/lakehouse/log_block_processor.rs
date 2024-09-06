@@ -1,7 +1,4 @@
-use super::{
-    block_partition_spec::BlockProcessor, partition::PartitionRowSet,
-    partition_source_data::PartitionSourceBlock,
-};
+use super::{block_partition_spec::BlockProcessor, partition_source_data::PartitionSourceBlock, write_partition::PartitionRowSet};
 use crate::{
     log_entries_table::LogEntriesRecordBuilder, log_entry::for_each_log_entry_in_block,
     time::ConvertTicks,

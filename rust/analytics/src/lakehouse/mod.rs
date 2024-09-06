@@ -40,3 +40,5 @@ pub mod thread_spans_view;
 pub mod view;
 /// Access to global or process-specific views
 pub mod view_factory;
+/// Add or remove view partitions
+pub mod write_partition;
