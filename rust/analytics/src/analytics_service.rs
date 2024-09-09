@@ -15,7 +15,7 @@ use uuid::Uuid;
 
 use crate::lakehouse::answer::Answer;
 use crate::lakehouse::batch_update::materialize_partition_range;
-use crate::lakehouse::partition::PartitionCache;
+use crate::lakehouse::partition_cache::PartitionCache;
 use crate::lakehouse::view_factory::ViewFactory;
 use crate::lakehouse::write_partition::retire_partitions;
 use crate::response_writer::ResponseWriter;

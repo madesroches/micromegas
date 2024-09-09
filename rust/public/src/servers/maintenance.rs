@@ -3,7 +3,7 @@ use chrono::{DateTime, DurationRound};
 use chrono::{TimeDelta, Utc};
 use micromegas_analytics::delete::delete_old_data;
 use micromegas_analytics::lakehouse::batch_update::materialize_partition_range;
-use micromegas_analytics::lakehouse::partition::PartitionCache;
+use micromegas_analytics::lakehouse::partition_cache::PartitionCache;
 use micromegas_analytics::lakehouse::temp::delete_expired_temporary_files;
 use micromegas_analytics::lakehouse::view::View;
 use micromegas_analytics::lakehouse::view_factory::ViewFactory;

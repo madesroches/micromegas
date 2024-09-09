@@ -6,7 +6,7 @@ use clap::{Parser, Subcommand};
 use micromegas::analytics::delete::delete_old_data;
 use micromegas::analytics::lakehouse::batch_update::materialize_partition_range;
 use micromegas::analytics::lakehouse::migration::migrate_lakehouse;
-use micromegas::analytics::lakehouse::partition::PartitionCache;
+use micromegas::analytics::lakehouse::partition_cache::PartitionCache;
 use micromegas::analytics::lakehouse::temp::delete_expired_temporary_files;
 use micromegas::analytics::lakehouse::view_factory::ViewFactory;
 use micromegas::analytics::lakehouse::write_partition::retire_partitions;

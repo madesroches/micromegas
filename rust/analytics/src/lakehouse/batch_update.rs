@@ -1,9 +1,8 @@
-use crate::response_writer::ResponseWriter;
-
 use super::{
-    merge::create_merged_partition, partition::PartitionCache,
+    merge::create_merged_partition, partition_cache::PartitionCache,
     partition_source_data::hash_to_object_count, view::View,
 };
+use crate::response_writer::ResponseWriter;
 use anyhow::{Context, Result};
 use chrono::{DateTime, TimeDelta, Utc};
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
