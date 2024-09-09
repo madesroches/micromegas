@@ -7,12 +7,14 @@ use crate::{
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use datafusion::arrow::datatypes::Schema;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use sqlx::Row;
 use std::sync::Arc;
 
 pub struct MetadataPartitionSpec {
     pub view_metadata: ViewMetadata,
+    pub schema: Arc<Schema>,
     pub begin_insert: DateTime<Utc>,
     pub end_insert: DateTime<Utc>,
     pub record_count: i64,
@@ -20,12 +22,14 @@ pub struct MetadataPartitionSpec {
     pub event_time_column: Arc<String>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn fetch_metadata_partition_spec(
     pool: &sqlx::PgPool,
     source_table: &str,
     event_time_column: Arc<String>,
     data_sql: Arc<String>,
     view_metadata: ViewMetadata,
+    schema: Arc<Schema>,
     begin_insert: DateTime<Utc>,
     end_insert: DateTime<Utc>,
 ) -> Result<MetadataPartitionSpec> {
@@ -43,6 +47,7 @@ pub async fn fetch_metadata_partition_spec(
     .with_context(|| "select count source metadata")?;
     Ok(MetadataPartitionSpec {
         view_metadata,
+        schema,
         begin_insert,
         end_insert,
         record_count: row.try_get("count").with_context(|| "reading count")?,
@@ -100,6 +105,7 @@ impl PartitionSpec for MetadataPartitionSpec {
         let join_handle = tokio::spawn(write_partition_from_rows(
             lake.clone(),
             self.view_metadata.clone(),
+            self.schema.clone(),
             self.begin_insert,
             self.end_insert,
             row_count.to_le_bytes().to_vec(),

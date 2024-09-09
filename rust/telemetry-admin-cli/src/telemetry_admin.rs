@@ -5,11 +5,11 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use micromegas::analytics::delete::delete_old_data;
 use micromegas::analytics::lakehouse::batch_update::materialize_partition_range;
-use micromegas::analytics::lakehouse::batch_update::materialize_recent_partitions;
 use micromegas::analytics::lakehouse::migration::migrate_lakehouse;
-use micromegas::analytics::lakehouse::partition::retire_partitions;
+use micromegas::analytics::lakehouse::partition::PartitionCache;
 use micromegas::analytics::lakehouse::temp::delete_expired_temporary_files;
 use micromegas::analytics::lakehouse::view_factory::ViewFactory;
+use micromegas::analytics::lakehouse::write_partition::retire_partitions;
 use micromegas::analytics::response_writer::ResponseWriter;
 use micromegas::chrono::DateTime;
 use micromegas::chrono::TimeDelta;
@@ -36,14 +36,6 @@ enum Commands {
 
     #[clap(name = "delete-expired-temp")]
     DeleteExpiredTemp,
-
-    #[clap(name = "materialize-recent-partitions")]
-    MaterializeRecentPartitions {
-        view_set_name: String,
-        view_instance_id: String,
-        partition_delta_seconds: i64,
-        nb_partitions: i32,
-    },
 
     #[clap(name = "materialize-partitions")]
     MaterializePartitions {
@@ -92,23 +84,6 @@ async fn main() -> Result<()> {
         Commands::DeleteExpiredTemp => {
             delete_expired_temporary_files(data_lake).await?;
         }
-        Commands::MaterializeRecentPartitions {
-            view_set_name,
-            view_instance_id,
-            partition_delta_seconds,
-            nb_partitions,
-        } => {
-            let delta = TimeDelta::try_seconds(partition_delta_seconds)
-                .with_context(|| "making time delta")?;
-            materialize_recent_partitions(
-                data_lake,
-                view_factory.make_view(&view_set_name, &view_instance_id)?,
-                delta,
-                nb_partitions,
-                null_response_writer,
-            )
-            .await?;
-        }
         Commands::MaterializePartitions {
             view_set_name,
             view_instance_id,
@@ -118,7 +93,11 @@ async fn main() -> Result<()> {
         } => {
             let delta = TimeDelta::try_seconds(partition_delta_seconds)
                 .with_context(|| "making time delta")?;
+            let existing_partitions =
+                PartitionCache::fetch_overlapping_insert_range(&data_lake.db_pool, begin, end)
+                    .await?;
             materialize_partition_range(
+                &existing_partitions,
                 data_lake,
                 view_factory.make_view(&view_set_name, &view_instance_id)?,
                 begin,

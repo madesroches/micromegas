@@ -95,6 +95,7 @@ pub async fn create_merged_partition(
     let join_handle = tokio::spawn(write_partition_from_rows(
         lake.clone(),
         view.get_meta(),
+        view.get_file_schema(),
         begin,
         end,
         source_hash.to_le_bytes().to_vec(),

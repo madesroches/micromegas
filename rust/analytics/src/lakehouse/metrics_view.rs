@@ -81,9 +81,9 @@ impl View for MetricsView {
             view_metadata: ViewMetadata {
                 view_set_name: self.view_set_name.clone(),
                 view_instance_id: self.view_instance_id.clone(),
-                file_schema: self.get_file_schema(),
                 file_schema_hash: self.get_file_schema_hash(),
             },
+            schema: self.get_file_schema(),
             begin_insert,
             end_insert,
             source_data,
@@ -142,7 +142,6 @@ impl View for MetricsView {
             view_set_name: self.get_view_set_name(),
             view_instance_id: self.get_view_instance_id(),
             file_schema_hash: self.get_file_schema_hash(),
-            file_schema: self.get_file_schema(),
         };
 
         let convert_ticks = ConvertTicks::new(&process);
@@ -153,6 +152,7 @@ impl View for MetricsView {
                 write_partition_from_blocks(
                     lake.clone(),
                     view_meta.clone(),
+                    self.get_file_schema(),
                     part,
                     Arc::new(MetricsBlockProcessor {}),
                 )

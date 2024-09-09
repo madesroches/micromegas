@@ -3,7 +3,7 @@ use anyhow::{Context, Result};
 use bytes::BufMut;
 use chrono::{DateTime, TimeDelta, Utc};
 use datafusion::{
-    arrow::array::RecordBatch,
+    arrow::{array::RecordBatch, datatypes::Schema},
     parquet::{
         arrow::ArrowWriter,
         basic::Compression,
@@ -140,6 +140,7 @@ pub async fn write_partition_from_buffer(
 pub async fn write_partition_from_rows(
     lake: Arc<DataLakeConnection>,
     view_metadata: ViewMetadata,
+    file_schema: Arc<Schema>,
     begin_insert_time: DateTime<Utc>,
     end_insert_time: DateTime<Utc>,
     source_data_hash: Vec<u8>,
@@ -154,11 +155,7 @@ pub async fn write_partition_from_rows(
         .set_writer_version(WriterVersion::PARQUET_2_0)
         .set_compression(Compression::LZ4_RAW)
         .build();
-    let mut arrow_writer = ArrowWriter::try_new(
-        &mut buffer_writer,
-        view_metadata.file_schema.clone(),
-        Some(props),
-    )?;
+    let mut arrow_writer = ArrowWriter::try_new(&mut buffer_writer, file_schema, Some(props))?;
 
     let mut min_event_time: Option<DateTime<Utc>> = None;
     let mut max_event_time: Option<DateTime<Utc>> = None;

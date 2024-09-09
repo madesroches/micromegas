@@ -82,7 +82,6 @@ impl View for StreamsView {
             view_set_name: self.get_view_set_name(),
             view_instance_id: self.get_view_instance_id(),
             file_schema_hash: self.get_file_schema_hash(),
-            file_schema: self.get_file_schema(),
         };
         Ok(Arc::new(
             fetch_metadata_partition_spec(
@@ -91,6 +90,7 @@ impl View for StreamsView {
                 self.event_time_column.clone(),
                 self.data_sql.clone(),
                 view_meta,
+                self.get_file_schema(),
                 begin_insert,
                 end_insert,
             )
