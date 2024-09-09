@@ -24,6 +24,8 @@ pub mod metrics_view;
 pub mod migration;
 /// Write & delete sections of views
 pub mod partition;
+/// In-memory copy of a subnet of the list of the partitions in the db
+pub mod partition_cache;
 /// Describes the event blocks backing a partition
 pub mod partition_source_data;
 /// Replicated view of the `processes` table of the postgresql metadata database.
@@ -40,3 +42,5 @@ pub mod thread_spans_view;
 pub mod view;
 /// Access to global or process-specific views
 pub mod view_factory;
+/// Add or remove view partitions
+pub mod write_partition;

@@ -3,8 +3,8 @@ use crate::{
 };
 
 use super::{
-    block_partition_spec::BlockProcessor, partition::PartitionRowSet,
-    partition_source_data::PartitionSourceBlock,
+    block_partition_spec::BlockProcessor, partition_source_data::PartitionSourceBlock,
+    write_partition::PartitionRowSet,
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;

@@ -20,7 +20,6 @@ pub struct ViewMetadata {
     pub view_set_name: Arc<String>,
     pub view_instance_id: Arc<String>,
     pub file_schema_hash: Vec<u8>,
-    pub file_schema: Arc<Schema>,
 }
 
 #[async_trait]
@@ -72,7 +71,6 @@ impl dyn View {
             view_set_name: self.get_view_set_name(),
             view_instance_id: self.get_view_instance_id(),
             file_schema_hash: self.get_file_schema_hash(),
-            file_schema: self.get_file_schema(),
         }
     }
 }

@@ -15,8 +15,9 @@ use uuid::Uuid;
 
 use crate::lakehouse::answer::Answer;
 use crate::lakehouse::batch_update::materialize_partition_range;
-use crate::lakehouse::partition::retire_partitions;
+use crate::lakehouse::partition_cache::PartitionCache;
 use crate::lakehouse::view_factory::ViewFactory;
+use crate::lakehouse::write_partition::retire_partitions;
 use crate::response_writer::ResponseWriter;
 use crate::sql_arrow_bridge::rows_to_record_batch;
 
@@ -502,7 +503,14 @@ impl AnalyticsService {
             .with_context(|| "making view")?;
         let delta = TimeDelta::try_seconds(request.partition_delta_seconds)
             .with_context(|| "making time delta")?;
+        let existing_partitions = PartitionCache::fetch_overlapping_insert_range(
+            &self.data_lake.db_pool,
+            begin.into(),
+            end.into(),
+        )
+        .await?;
         materialize_partition_range(
+            &existing_partitions,
             self.data_lake.clone(),
             view,
             begin.into(),

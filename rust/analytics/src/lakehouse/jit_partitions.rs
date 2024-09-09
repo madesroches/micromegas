@@ -10,6 +10,7 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
+use datafusion::arrow::datatypes::Schema;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_telemetry::stream_info::StreamInfo;
 use micromegas_tracing::prelude::*;
@@ -156,6 +157,7 @@ fn get_event_time_range(
 pub async fn write_partition_from_blocks(
     lake: Arc<DataLakeConnection>,
     view_metadata: ViewMetadata,
+    schema: Arc<Schema>,
     source_data: PartitionSourceDataBlocks,
     block_processor: Arc<dyn BlockProcessor>,
 ) -> Result<()> {
@@ -169,6 +171,7 @@ pub async fn write_partition_from_blocks(
         .insert_time;
     let block_spec = BlockPartitionSpec {
         view_metadata,
+        schema,
         begin_insert: min_insert_time,
         end_insert: max_insert_time,
         source_data,

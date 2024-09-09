@@ -1,12 +1,13 @@
 use super::{
-    partition::{write_partition_from_rows, PartitionRowSet},
     partition_source_data::{PartitionSourceBlock, PartitionSourceDataBlocks},
     view::{PartitionSpec, ViewMetadata},
+    write_partition::{write_partition_from_rows, PartitionRowSet},
 };
 use crate::response_writer::ResponseWriter;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use datafusion::arrow::datatypes::Schema;
 use futures::StreamExt;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_telemetry::blob_storage::BlobStorage;
@@ -27,6 +28,7 @@ pub trait BlockProcessor: Send + Sync {
 /// which works fine for measures & log entries
 pub struct BlockPartitionSpec {
     pub view_metadata: ViewMetadata,
+    pub schema: Arc<Schema>,
     pub begin_insert: DateTime<Utc>,
     pub end_insert: DateTime<Utc>,
     pub source_data: PartitionSourceDataBlocks,
@@ -69,6 +71,7 @@ impl PartitionSpec for BlockPartitionSpec {
         let join_handle = tokio::spawn(write_partition_from_rows(
             lake.clone(),
             self.view_metadata.clone(),
+            self.schema.clone(),
             self.begin_insert,
             self.end_insert,
             self.source_data.block_ids_hash.clone(),

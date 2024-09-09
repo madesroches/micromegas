@@ -1,12 +1,12 @@
 use super::{
     jit_partitions::{generate_jit_partitions, is_jit_partition_up_to_date},
-    partition::{write_partition_from_rows, PartitionRowSet},
     partition_source_data::{hash_to_object_count, PartitionSourceDataBlocks},
     view::{PartitionSpec, View, ViewMetadata},
     view_factory::ViewMaker,
 };
 use crate::{
     call_tree::make_call_tree,
+    lakehouse::write_partition::{write_partition_from_rows, PartitionRowSet},
     metadata::{find_process, find_stream},
     response_writer::ResponseWriter,
     span_table::{get_spans_schema, SpanRecordBuilder},
@@ -81,6 +81,7 @@ async fn append_call_tree(
 async fn write_partition(
     lake: Arc<DataLakeConnection>,
     view_meta: ViewMetadata,
+    schema: Arc<Schema>,
     convert_ticks: &ConvertTicks,
     spec: &PartitionSourceDataBlocks,
 ) -> Result<()> {
@@ -103,6 +104,7 @@ async fn write_partition(
     let join_handle = tokio::spawn(write_partition_from_rows(
         lake.clone(),
         view_meta,
+        schema,
         min_insert_time,
         max_insert_time,
         spec.block_ids_hash.clone(),
@@ -159,13 +161,14 @@ async fn write_partition(
 async fn update_partition(
     lake: Arc<DataLakeConnection>,
     view_meta: ViewMetadata,
+    schema: Arc<Schema>,
     convert_ticks: &ConvertTicks,
     spec: &PartitionSourceDataBlocks,
 ) -> Result<()> {
     if is_jit_partition_up_to_date(&lake.db_pool, view_meta.clone(), convert_ticks, spec).await? {
         return Ok(());
     }
-    write_partition(lake, view_meta, convert_ticks, spec)
+    write_partition(lake, view_meta, schema, convert_ticks, spec)
         .await
         .with_context(|| "write_partition")?;
 
@@ -234,8 +237,8 @@ impl View for ThreadSpansView {
                     view_set_name: self.get_view_set_name(),
                     view_instance_id: self.get_view_instance_id(),
                     file_schema_hash: self.get_file_schema_hash(),
-                    file_schema: self.get_file_schema(),
                 },
+                self.get_file_schema(),
                 &convert_ticks,
                 part,
             )

@@ -2,7 +2,8 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, DurationRound};
 use chrono::{TimeDelta, Utc};
 use micromegas_analytics::delete::delete_old_data;
-use micromegas_analytics::lakehouse::batch_update::materialize_recent_partitions;
+use micromegas_analytics::lakehouse::batch_update::materialize_partition_range;
+use micromegas_analytics::lakehouse::partition_cache::PartitionCache;
 use micromegas_analytics::lakehouse::temp::delete_expired_temporary_files;
 use micromegas_analytics::lakehouse::view::View;
 use micromegas_analytics::lakehouse::view_factory::ViewFactory;
@@ -64,15 +65,27 @@ impl TaskDef {
     }
 }
 
-pub async fn every_day(lake: Arc<DataLakeConnection>, views: Views) -> Result<()> {
-    let delta = TimeDelta::days(1);
+pub async fn materialize_all_views(
+    lake: Arc<DataLakeConnection>,
+    views: Views,
+    partition_time_delta: TimeDelta,
+    nb_partitions: i32,
+) -> Result<()> {
+    let now = Utc::now();
+    let end_range = now.duration_trunc(partition_time_delta)?;
+    let begin_range = end_range - (partition_time_delta * nb_partitions);
+    let existing_partitions =
+        PartitionCache::fetch_overlapping_insert_range(&lake.db_pool, begin_range, end_range)
+            .await?;
     let null_response_writer = Arc::new(ResponseWriter::new(None));
     for view in &*views {
-        materialize_recent_partitions(
+        materialize_partition_range(
+            &existing_partitions,
             lake.clone(),
             view.clone(),
-            delta,
-            3,
+            begin_range,
+            end_range,
+            partition_time_delta,
             null_response_writer.clone(),
         )
         .await?;
@@ -80,76 +93,22 @@ pub async fn every_day(lake: Arc<DataLakeConnection>, views: Views) -> Result<()
     Ok(())
 }
 
+pub async fn every_day(lake: Arc<DataLakeConnection>, views: Views) -> Result<()> {
+    materialize_all_views(lake, views, TimeDelta::days(1), 3).await
+}
+
 pub async fn every_hour(lake: Arc<DataLakeConnection>, views: Views) -> Result<()> {
     delete_old_data(&lake, 90).await?;
     delete_expired_temporary_files(lake.clone()).await?;
-    let delta = TimeDelta::hours(1);
-    let null_response_writer = Arc::new(ResponseWriter::new(None));
-    for view in &*views {
-        if let Err(e) = materialize_recent_partitions(
-            lake.clone(),
-            view.clone(),
-            delta,
-            3,
-            null_response_writer.clone(),
-        )
-        .await
-        .with_context(|| {
-            format!(
-                "materialize_recent_partitions view_set={}",
-                &view.get_view_set_name()
-            )
-        }) {
-            error!("{e:?}");
-        }
-    }
-    Ok(())
+    materialize_all_views(lake, views, TimeDelta::hours(1), 3).await
 }
 
 pub async fn every_minute(lake: Arc<DataLakeConnection>, views: Views) -> Result<()> {
-    let null_response_writer = Arc::new(ResponseWriter::new(None));
-    for view in &*views {
-        if let Err(e) = materialize_recent_partitions(
-            lake.clone(),
-            view.clone(),
-            TimeDelta::minutes(1),
-            3,
-            null_response_writer.clone(),
-        )
-        .await
-        .with_context(|| {
-            format!(
-                "materialize_recent_partitions view_set={}",
-                &view.get_view_set_name()
-            )
-        }) {
-            error!("{e:?}");
-        }
-    }
-    Ok(())
+    materialize_all_views(lake, views, TimeDelta::minutes(1), 3).await
 }
 
 pub async fn every_second(lake: Arc<DataLakeConnection>, views: Views) -> Result<()> {
-    let null_response_writer = Arc::new(ResponseWriter::new(None));
-    for view in &*views {
-        if let Err(e) = materialize_recent_partitions(
-            lake.clone(),
-            view.clone(),
-            TimeDelta::seconds(1),
-            5,
-            null_response_writer.clone(),
-        )
-        .await
-        .with_context(|| {
-            format!(
-                "materialize_recent_partitions view_set={}",
-                &view.get_view_set_name()
-            )
-        }) {
-            error!("{e:?}");
-        }
-    }
-    Ok(())
+    materialize_all_views(lake, views, TimeDelta::seconds(1), 5).await
 }
 
 pub async fn daemon(lake: Arc<DataLakeConnection>, view_factory: Arc<ViewFactory>) -> Result<()> {
