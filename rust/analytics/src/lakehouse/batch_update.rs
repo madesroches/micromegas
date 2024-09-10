@@ -105,7 +105,7 @@ async fn verify_overlapping_partitions(
 }
 
 async fn materialize_partition(
-    existing_partitions: &PartitionCache,
+    existing_partitions: Arc<PartitionCache>,
     lake: Arc<DataLakeConnection>,
     begin_insert: DateTime<Utc>,
     end_insert: DateTime<Utc>,
@@ -114,12 +114,17 @@ async fn materialize_partition(
 ) -> Result<()> {
     let view_set_name = view.get_view_set_name();
     let partition_spec = view
-        .make_batch_partition_spec(lake.clone(), begin_insert, end_insert)
+        .make_batch_partition_spec(
+            lake.clone(),
+            existing_partitions.clone(),
+            begin_insert,
+            end_insert,
+        )
         .await
         .with_context(|| "make_batch_partition_spec")?;
     let view_instance_id = view.get_view_instance_id();
     let strategy = verify_overlapping_partitions(
-        existing_partitions,
+        &existing_partitions,
         begin_insert,
         end_insert,
         &view_set_name,
@@ -147,7 +152,7 @@ async fn materialize_partition(
 }
 
 pub async fn materialize_partition_range(
-    existing_partitions: &PartitionCache,
+    existing_partitions: Arc<PartitionCache>,
     lake: Arc<DataLakeConnection>,
     view: Arc<dyn View>,
     begin_range: DateTime<Utc>,
@@ -159,7 +164,7 @@ pub async fn materialize_partition_range(
     let mut end_part = begin_part + partition_time_delta;
     while end_part <= end_range {
         materialize_partition(
-            existing_partitions,
+            existing_partitions.clone(),
             lake.clone(),
             begin_part,
             end_part,

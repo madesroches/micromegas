@@ -15,6 +15,7 @@ use uuid::Uuid;
 
 use crate::lakehouse::answer::Answer;
 use crate::lakehouse::batch_update::materialize_partition_range;
+use crate::lakehouse::partition_cache::LivePartitionProvider;
 use crate::lakehouse::partition_cache::PartitionCache;
 use crate::lakehouse::view_factory::ViewFactory;
 use crate::lakehouse::write_partition::retire_partitions;
@@ -400,6 +401,7 @@ impl AnalyticsService {
             let view = self.view_factory.make_view("log_entries", "global")?;
             crate::lakehouse::query::query(
                 self.data_lake.clone(),
+                Arc::new(LivePartitionProvider::new(self.data_lake.db_pool.clone())),
                 begin.into(),
                 end.into(),
                 &request.sql.unwrap(),
@@ -442,6 +444,7 @@ impl AnalyticsService {
             let view = self.view_factory.make_view("measures", "global")?;
             crate::lakehouse::query::query(
                 self.data_lake.clone(),
+                Arc::new(LivePartitionProvider::new(self.data_lake.db_pool.clone())),
                 begin.into(),
                 end.into(),
                 &request.sql.unwrap(),
@@ -466,6 +469,7 @@ impl AnalyticsService {
             .with_context(|| "making view")?;
         let answer = crate::lakehouse::query::query(
             self.data_lake.clone(),
+            Arc::new(LivePartitionProvider::new(self.data_lake.db_pool.clone())),
             begin.into(),
             end.into(),
             &request.sql,
@@ -503,14 +507,16 @@ impl AnalyticsService {
             .with_context(|| "making view")?;
         let delta = TimeDelta::try_seconds(request.partition_delta_seconds)
             .with_context(|| "making time delta")?;
-        let existing_partitions = PartitionCache::fetch_overlapping_insert_range(
-            &self.data_lake.db_pool,
-            begin.into(),
-            end.into(),
-        )
-        .await?;
+        let existing_partitions = Arc::new(
+            PartitionCache::fetch_overlapping_insert_range(
+                &self.data_lake.db_pool,
+                begin.into(),
+                end.into(),
+            )
+            .await?,
+        );
         materialize_partition_range(
-            &existing_partitions,
+            existing_partitions,
             self.data_lake.clone(),
             view,
             begin.into(),

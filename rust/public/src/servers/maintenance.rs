@@ -82,12 +82,13 @@ pub async fn materialize_all_views(
     let now = Utc::now();
     let end_range = now.duration_trunc(partition_time_delta)?;
     let begin_range = end_range - (partition_time_delta * nb_partitions);
-    let mut partitions =
+    let mut partitions = Arc::new(
         PartitionCache::fetch_overlapping_insert_range(&lake.db_pool, begin_range, end_range)
-            .await?;
+            .await?,
+    );
     let null_response_writer = Arc::new(ResponseWriter::new(None));
     materialize_partition_range(
-        &partitions,
+        partitions.clone(),
         lake.clone(),
         blocks_view,
         begin_range,
@@ -96,12 +97,13 @@ pub async fn materialize_all_views(
         null_response_writer.clone(),
     )
     .await?;
-    partitions =
+    partitions = Arc::new(
         PartitionCache::fetch_overlapping_insert_range(&lake.db_pool, begin_range, end_range)
-            .await?;
+            .await?,
+    );
     for view in &*views {
         materialize_partition_range(
-            &partitions,
+            partitions.clone(),
             lake.clone(),
             view.clone(),
             begin_range,

@@ -2,6 +2,7 @@ use super::{
     block_partition_spec::BlockPartitionSpec,
     jit_partitions::write_partition_from_blocks,
     log_block_processor::LogBlockProcessor,
+    partition_cache::QueryPartitionProvider,
     partition_source_data::fetch_partition_source_data,
     view::{PartitionSpec, View, ViewMetadata},
     view_factory::ViewMaker,
@@ -67,15 +68,17 @@ impl View for LogView {
     async fn make_batch_partition_spec(
         &self,
         lake: Arc<DataLakeConnection>,
+        part_provider: Arc<dyn QueryPartitionProvider>,
         begin_insert: DateTime<Utc>,
         end_insert: DateTime<Utc>,
     ) -> Result<Arc<dyn PartitionSpec>> {
         if *self.view_instance_id != "global" {
             anyhow::bail!("not supported for jit queries... should it?");
         }
-        let source_data = fetch_partition_source_data(lake, begin_insert, end_insert, "log")
-            .await
-            .with_context(|| "fetch_partition_source_data")?;
+        let source_data =
+            fetch_partition_source_data(lake, part_provider, begin_insert, end_insert, "log")
+                .await
+                .with_context(|| "fetch_partition_source_data")?;
         Ok(Arc::new(BlockPartitionSpec {
             view_metadata: ViewMetadata {
                 view_set_name: self.view_set_name.clone(),

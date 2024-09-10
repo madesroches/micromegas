@@ -14,6 +14,8 @@ use micromegas_tracing::prelude::*;
 use std::sync::Arc;
 use uuid::Uuid;
 
+use super::partition_cache::QueryPartitionProvider;
+
 pub struct PartitionSourceBlock {
     pub block: BlockMetadata,
     pub stream: Arc<StreamInfo>,
@@ -63,6 +65,7 @@ fn read_property_list(value: ArrayRef) -> Result<Vec<Property>> {
 
 pub async fn fetch_partition_source_data(
     lake: Arc<DataLakeConnection>,
+    part_provider: Arc<dyn QueryPartitionProvider>,
     begin_insert: DateTime<Utc>,
     end_insert: DateTime<Utc>,
     source_stream_tag: &str,
@@ -87,9 +90,16 @@ pub async fn fetch_partition_source_data(
           ;");
     let mut block_ids_hash: i64 = 0;
     let mut partition_src_blocks = vec![];
-    let blocks_answer = query(lake, begin_insert, end_insert, &sql, blocks_view)
-        .await
-        .with_context(|| "blocks query")?;
+    let blocks_answer = query(
+        lake,
+        part_provider,
+        begin_insert,
+        end_insert,
+        &sql,
+        blocks_view,
+    )
+    .await
+    .with_context(|| "blocks query")?;
     for b in blocks_answer.record_batches {
         let block_id_column: &StringArray = get_column(&b, "block_id")?;
         let stream_id_column: &StringArray = get_column(&b, "stream_id")?;
