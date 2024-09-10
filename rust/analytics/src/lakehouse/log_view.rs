@@ -66,14 +66,14 @@ impl View for LogView {
 
     async fn make_batch_partition_spec(
         &self,
-        pool: &sqlx::PgPool,
+        lake: Arc<DataLakeConnection>,
         begin_insert: DateTime<Utc>,
         end_insert: DateTime<Utc>,
     ) -> Result<Arc<dyn PartitionSpec>> {
         if *self.view_instance_id != "global" {
             anyhow::bail!("not supported for jit queries... should it?");
         }
-        let source_data = fetch_partition_source_data(pool, begin_insert, end_insert, "log")
+        let source_data = fetch_partition_source_data(lake, begin_insert, end_insert, "log")
             .await
             .with_context(|| "fetch_partition_source_data")?;
         Ok(Arc::new(BlockPartitionSpec {

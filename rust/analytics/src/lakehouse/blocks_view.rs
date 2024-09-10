@@ -21,7 +21,10 @@ pub struct BlocksViewMaker {}
 
 impl ViewMaker for BlocksViewMaker {
     fn make_view(&self, view_instance_id: &str) -> Result<Arc<dyn View>> {
-        Ok(Arc::new(BlocksView::new(view_instance_id)?))
+        if view_instance_id != "global" {
+            anyhow::bail!("only global view instance id is supported for metadata views");
+        }
+        Ok(Arc::new(BlocksView::new()?))
     }
 }
 
@@ -33,11 +36,7 @@ pub struct BlocksView {
 }
 
 impl BlocksView {
-    pub fn new(view_instance_id: &str) -> Result<Self> {
-        if view_instance_id != "global" {
-            anyhow::bail!("only global view instance id is supported for metadata views");
-        }
-
+    pub fn new() -> Result<Self> {
         let data_sql = Arc::new(String::from(
         "SELECT block_id, streams.stream_id, processes.process_id, blocks.begin_time, blocks.begin_ticks, blocks.end_time, blocks.end_ticks, blocks.nb_objects, blocks.object_offset, blocks.payload_size, blocks.insert_time as block_insert_time,
            streams.dependencies_metadata, streams.objects_metadata, streams.tags, streams.properties,
@@ -73,7 +72,7 @@ impl View for BlocksView {
 
     async fn make_batch_partition_spec(
         &self,
-        pool: &sqlx::PgPool,
+        lake: Arc<DataLakeConnection>,
         begin_insert: DateTime<Utc>,
         end_insert: DateTime<Utc>,
     ) -> Result<Arc<dyn PartitionSpec>> {
@@ -84,7 +83,7 @@ impl View for BlocksView {
         };
         Ok(Arc::new(
             fetch_metadata_partition_spec(
-                pool,
+                &lake.db_pool,
                 "blocks",
                 self.event_time_column.clone(),
                 self.data_sql.clone(),

@@ -187,7 +187,7 @@ impl View for ThreadSpansView {
 
     async fn make_batch_partition_spec(
         &self,
-        _pool: &sqlx::PgPool,
+        _lake: Arc<DataLakeConnection>,
         _begin_insert: DateTime<Utc>,
         _end_insert: DateTime<Utc>,
     ) -> Result<Arc<dyn PartitionSpec>> {

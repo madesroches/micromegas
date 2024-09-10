@@ -80,7 +80,7 @@ impl View for ProcessesView {
 
     async fn make_batch_partition_spec(
         &self,
-        pool: &sqlx::PgPool,
+        lake: Arc<DataLakeConnection>,
         begin_insert: DateTime<Utc>,
         end_insert: DateTime<Utc>,
     ) -> Result<Arc<dyn PartitionSpec>> {
@@ -91,7 +91,7 @@ impl View for ProcessesView {
         };
         Ok(Arc::new(
             fetch_metadata_partition_spec(
-                pool,
+                &lake.db_pool,
                 "processes",
                 self.event_time_column.clone(),
                 self.data_sql.clone(),
