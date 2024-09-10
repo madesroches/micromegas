@@ -34,7 +34,7 @@ pub trait View: Send + Sync {
     /// The resulting PartitionSpec can be used to validate existing partitions are create a new one.
     async fn make_batch_partition_spec(
         &self,
-        pool: &sqlx::PgPool,
+        lake: Arc<DataLakeConnection>,
         begin_insert: DateTime<Utc>,
         end_insert: DateTime<Utc>,
     ) -> Result<Arc<dyn PartitionSpec>>;

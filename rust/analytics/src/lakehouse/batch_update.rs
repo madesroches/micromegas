@@ -114,7 +114,7 @@ async fn materialize_partition(
 ) -> Result<()> {
     let view_set_name = view.get_view_set_name();
     let partition_spec = view
-        .make_batch_partition_spec(&lake.db_pool, begin_insert, end_insert)
+        .make_batch_partition_spec(lake.clone(), begin_insert, end_insert)
         .await
         .with_context(|| "make_batch_partition_spec")?;
     let view_instance_id = view.get_view_instance_id();
