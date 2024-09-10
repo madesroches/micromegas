@@ -1,5 +1,4 @@
-use std::sync::Arc;
-
+use crate::lakehouse::{blocks_view::BlocksView, query::query};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use datafusion::arrow::array::{
@@ -12,12 +11,8 @@ use micromegas_ingestion::{
 };
 use micromegas_telemetry::{stream_info::StreamInfo, types::block::BlockMetadata};
 use micromegas_tracing::prelude::*;
+use std::sync::Arc;
 use uuid::Uuid;
-
-use crate::{
-    lakehouse::{blocks_view::BlocksView, query::query},
-    metadata::{block_from_row, process_from_row, stream_from_row},
-};
 
 pub struct PartitionSourceBlock {
     pub block: BlockMetadata,
@@ -208,4 +203,3 @@ pub async fn fetch_partition_source_data(
         block_ids_hash: block_ids_hash.to_le_bytes().to_vec(),
     })
 }
-
