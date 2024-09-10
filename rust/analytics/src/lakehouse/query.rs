@@ -1,4 +1,4 @@
-use super::{answer::Answer, view::View};
+use super::{answer::Answer, partition_cache::QueryPartitionProvider, view::View};
 use anyhow::{Context, Result};
 use datafusion::{
     arrow::array::RecordBatch,
@@ -12,12 +12,12 @@ use datafusion::{
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_tracing::prelude::*;
 use sqlx::types::chrono::{DateTime, Utc};
-use sqlx::Row;
 use std::sync::Arc;
 
 #[allow(clippy::too_many_arguments)]
 pub async fn query(
     lake: Arc<DataLakeConnection>,
+    part_provider: Arc<dyn QueryPartitionProvider>,
     begin: DateTime<Utc>,
     end: DateTime<Utc>,
     sql: &str,
@@ -32,29 +32,18 @@ pub async fn query(
     let ctx = SessionContext::new();
     let object_store_url = ObjectStoreUrl::parse("obj://lakehouse/").unwrap();
     ctx.register_object_store(object_store_url.as_ref(), lake.blob_storage.inner());
-    let partitions_to_read = sqlx::query(
-        "SELECT file_path
-         FROM lakehouse_partitions
-         WHERE view_set_name = $1
-         AND view_instance_id = $2
-         AND min_event_time <= $3
-         AND max_event_time >= $4
-         AND file_schema_hash = $5;",
-    )
-    .bind(&view_set_name)
-    .bind(&view_instance_id)
-    .bind(end)
-    .bind(begin)
-    .bind(view.get_file_schema_hash())
-    .fetch_all(&lake.db_pool)
-    .await
-    .with_context(|| "listing lakehouse partitions")?;
-
+    let partitions = part_provider
+        .fetch(
+            &view_set_name,
+            &view_instance_id,
+            begin,
+            end,
+            view.get_file_schema_hash(),
+        )
+        .await?;
     let mut urls = vec![];
-    for row in partitions_to_read {
-        let file_path: String = row
-            .try_get("file_path")
-            .with_context(|| "getting file_path from row")?;
+    for part in partitions {
+        let file_path = part.file_path;
         urls.push(
             ListingTableUrl::parse(format!("obj://lakehouse/{file_path}"))
                 .with_context(|| "parsing obj://filepath as url")?,

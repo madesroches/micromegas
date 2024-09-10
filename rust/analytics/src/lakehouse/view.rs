@@ -8,6 +8,8 @@ use datafusion::{
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use std::sync::Arc;
 
+use super::partition_cache::QueryPartitionProvider;
+
 #[async_trait]
 pub trait PartitionSpec: Send + Sync {
     fn get_source_data_hash(&self) -> Vec<u8>;
@@ -35,6 +37,7 @@ pub trait View: Send + Sync {
     async fn make_batch_partition_spec(
         &self,
         lake: Arc<DataLakeConnection>,
+        part_provider: Arc<dyn QueryPartitionProvider>,
         begin_insert: DateTime<Utc>,
         end_insert: DateTime<Utc>,
     ) -> Result<Arc<dyn PartitionSpec>>;

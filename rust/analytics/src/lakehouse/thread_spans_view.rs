@@ -1,5 +1,6 @@
 use super::{
     jit_partitions::{generate_jit_partitions, is_jit_partition_up_to_date},
+    partition_cache::QueryPartitionProvider,
     partition_source_data::{hash_to_object_count, PartitionSourceDataBlocks},
     view::{PartitionSpec, View, ViewMetadata},
     view_factory::ViewMaker,
@@ -188,6 +189,7 @@ impl View for ThreadSpansView {
     async fn make_batch_partition_spec(
         &self,
         _lake: Arc<DataLakeConnection>,
+        _part_provider: Arc<dyn QueryPartitionProvider>,
         _begin_insert: DateTime<Utc>,
         _end_insert: DateTime<Utc>,
     ) -> Result<Arc<dyn PartitionSpec>> {

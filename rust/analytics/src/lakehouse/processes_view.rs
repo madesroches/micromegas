@@ -1,5 +1,6 @@
 use super::{
     metadata_partition_spec::fetch_metadata_partition_spec,
+    partition_cache::QueryPartitionProvider,
     view::{PartitionSpec, View, ViewMetadata},
     view_factory::ViewMaker,
 };
@@ -81,6 +82,7 @@ impl View for ProcessesView {
     async fn make_batch_partition_spec(
         &self,
         lake: Arc<DataLakeConnection>,
+        _part_provider: Arc<dyn QueryPartitionProvider>,
         begin_insert: DateTime<Utc>,
         end_insert: DateTime<Utc>,
     ) -> Result<Arc<dyn PartitionSpec>> {
