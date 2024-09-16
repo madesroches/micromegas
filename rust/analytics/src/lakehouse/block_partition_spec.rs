@@ -46,8 +46,6 @@ impl PartitionSpec for BlockPartitionSpec {
         lake: Arc<DataLakeConnection>,
         response_writer: Arc<ResponseWriter>,
     ) -> Result<()> {
-        // buffer the whole parquet in memory until https://github.com/apache/arrow-rs/issues/5766 is available in a published version
-        // Impl AsyncFileWriter by object_store #5766
         let desc = format!(
             "[{}, {}] {} {}",
             self.view_metadata.view_set_name,
@@ -76,7 +74,6 @@ impl PartitionSpec for BlockPartitionSpec {
             self.end_insert,
             self.source_data.block_ids_hash.clone(),
             rx,
-            1024 * 1024,
             response_writer.clone(),
         ));
 

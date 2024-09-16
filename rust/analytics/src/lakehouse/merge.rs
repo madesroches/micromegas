@@ -11,7 +11,8 @@ use datafusion::parquet::arrow::{
 };
 use futures::stream::StreamExt;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
-use object_store::{path::Path, ObjectMeta};
+use object_store::path::Path;
+use object_store::ObjectMeta;
 use sqlx::Row;
 use std::sync::Arc;
 use xxhash_rust::xxh32::xxh32;
@@ -100,7 +101,6 @@ pub async fn create_merged_partition(
         end,
         source_hash.to_le_bytes().to_vec(),
         rx,
-        sum_size as usize,
         response_writer.clone(),
     ));
     for r in &rows {

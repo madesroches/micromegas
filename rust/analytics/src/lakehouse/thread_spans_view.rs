@@ -110,7 +110,6 @@ async fn write_partition(
         max_insert_time,
         spec.block_ids_hash.clone(),
         rx,
-        1024 * 1024,
         null_response_writer,
     ));
 

@@ -1,5 +1,7 @@
 /// Record batches + schema
 pub mod answer;
+/// Write parquet in object store
+pub mod async_parquet_writer;
 /// Materialize views on a schedule based on the time data was received from the ingestion service
 pub mod batch_update;
 /// Specification for a view partition backed by a set of telemetry blocks which can be processed out of order
