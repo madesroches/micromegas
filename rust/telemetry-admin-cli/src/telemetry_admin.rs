@@ -63,6 +63,7 @@ async fn main() -> Result<()> {
     let _telemetry_guard = TelemetryGuardBuilder::default()
         .with_ctrlc_handling()
         .with_local_sink_max_level(LevelFilter::Debug)
+        .with_interop_max_level_override(LevelFilter::Info)
         .build();
 
     let args = Cli::parse();

@@ -10,9 +10,17 @@ use std::fmt::{self, Write};
 use tracing::field::{Field, Visit};
 pub struct FieldFormatVisitor<'a> {
     pub buffer: &'a mut String,
+    pub target: Option<String>,
 }
 
 impl<'a> Visit for FieldFormatVisitor<'a> {
+    fn record_str(&mut self, field: &Field, value: &str) {
+        if field.name() == "log.target" {
+            self.target = Some(value.to_owned());
+        } else {
+            self.record_debug(field, &value)
+        }
+    }
     fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
         if field.name() == "message" {
             write!(self.buffer, "{:?} ", value).unwrap();
@@ -44,20 +52,25 @@ where
         if level > self.max_level {
             return;
         }
+        let mut buffer = String::new();
+        let mut formatter = FieldFormatVisitor {
+            buffer: &mut buffer,
+            target: None,
+        };
+        event.record(&mut formatter);
         let log_desc = LogMetadata {
             level,
             level_filter: AtomicU32::new(FILTER_LEVEL_UNSET_VALUE),
             fmt_str: "{}",
-            target: event.metadata().target(),
+            target: formatter
+                .target
+                .as_deref()
+                .unwrap_or(event.metadata().target()),
             module_path: event.metadata().module_path().unwrap_or_default(),
             file: "",
             line: 0,
         };
-        let mut buffer = String::new();
-        let mut formatter = FieldFormatVisitor {
-            buffer: &mut buffer,
-        };
-        event.record(&mut formatter);
+
         log_interop(&log_desc, format_args!("{}", &buffer));
     }
 }
