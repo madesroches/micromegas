@@ -110,7 +110,6 @@ impl PartitionSpec for MetadataPartitionSpec {
             self.end_insert,
             row_count.to_le_bytes().to_vec(),
             rx,
-            1024 * 1024,
             response_writer.clone(),
         ));
         tx.send(PartitionRowSet {

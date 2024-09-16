@@ -1,18 +1,19 @@
-use crate::response_writer::ResponseWriter;
+use crate::{lakehouse::async_parquet_writer::AsyncParquetWriter, response_writer::ResponseWriter};
 use anyhow::{Context, Result};
-use bytes::BufMut;
 use chrono::{DateTime, TimeDelta, Utc};
 use datafusion::{
     arrow::{array::RecordBatch, datatypes::Schema},
     parquet::{
-        arrow::ArrowWriter,
+        arrow::AsyncArrowWriter,
         basic::Compression,
         file::properties::{WriterProperties, WriterVersion},
     },
 };
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
+use micromegas_tracing::prelude::*;
+use object_store::buffered::BufWriter;
 use sqlx::Row;
-use std::sync::Arc;
+use std::sync::{atomic::AtomicI64, Arc};
 use tokio::sync::mpsc::Receiver;
 
 use super::{partition::Partition, view::ViewMetadata};
@@ -37,6 +38,8 @@ pub async fn retire_partitions(
     // this is not an overlap test, we need to assume that we are not making a new smaller partition
     // where a bigger one existed
     // its gets tricky in the jit case where a partition can have only one block and begin_insert == end_insert
+
+    //todo: use PartitionCache here, add filter_contained
     let old_partitions = sqlx::query(
         "SELECT file_path, file_size
          FROM lakehouse_partitions
@@ -89,16 +92,11 @@ pub async fn retire_partitions(
     Ok(())
 }
 
-pub async fn write_partition_from_buffer(
+async fn write_partition_metadata(
     lake: &DataLakeConnection,
     partition: &Partition,
-    contents: bytes::Bytes,
     writer: Arc<ResponseWriter>,
 ) -> Result<()> {
-    lake.blob_storage
-        .put(&partition.file_path, contents)
-        .await
-        .with_context(|| "writing partition to object storage")?;
     let mut tr = lake.db_pool.begin().await?;
 
     // for jit partitions, we assume that the blocks were registered in order
@@ -145,17 +143,31 @@ pub async fn write_partition_from_rows(
     end_insert_time: DateTime<Utc>,
     source_data_hash: Vec<u8>,
     mut rb_stream: Receiver<PartitionRowSet>,
-    capacity: usize,
     response_writer: Arc<ResponseWriter>,
 ) -> Result<()> {
-    // buffer the whole parquet in memory until https://github.com/apache/arrow-rs/issues/5766 is done
-    // Impl AsyncFileWriter by object_store #5766
-    let mut buffer_writer = bytes::BytesMut::with_capacity(capacity).writer();
+    let file_id = uuid::Uuid::new_v4();
+    let file_path = format!(
+        "views/{}/{}/{}/{}_{file_id}.parquet",
+        &view_metadata.view_set_name,
+        &view_metadata.view_instance_id,
+        begin_insert_time.format("%Y-%m-%d"),
+        begin_insert_time.format("%H-%M-%S")
+    );
+    let byte_counter = Arc::new(AtomicI64::new(0));
+    let object_store_writer = AsyncParquetWriter::new(
+        BufWriter::new(
+            lake.blob_storage.inner(),
+            object_store::path::Path::parse(&file_path).with_context(|| "parsing path")?,
+        ),
+        byte_counter.clone(),
+    );
+
     let props = WriterProperties::builder()
         .set_writer_version(WriterVersion::PARQUET_2_0)
         .set_compression(Compression::LZ4_RAW)
         .build();
-    let mut arrow_writer = ArrowWriter::try_new(&mut buffer_writer, file_schema, Some(props))?;
+    let mut arrow_writer =
+        AsyncArrowWriter::try_new(object_store_writer, file_schema, Some(props))?;
 
     let mut min_event_time: Option<DateTime<Utc>> = None;
     let mut max_event_time: Option<DateTime<Utc>> = None;
@@ -172,6 +184,7 @@ pub async fn write_partition_from_rows(
         );
         arrow_writer
             .write(&row_set.rows)
+            .await
             .with_context(|| "arrow_writer.write")?;
     }
 
@@ -192,19 +205,16 @@ pub async fn write_partition_from_rows(
         return Ok(());
     }
 
-    arrow_writer.close().with_context(|| "arrow_writer.close")?;
-
-    let file_id = uuid::Uuid::new_v4();
-    let file_path = format!(
-        "views/{}/{}/{}/{}_{file_id}.parquet",
-        &view_metadata.view_set_name,
-        &view_metadata.view_instance_id,
-        begin_insert_time.format("%Y-%m-%d"),
-        begin_insert_time.format("%H-%M-%S")
+    let file_meta = arrow_writer
+        .close()
+        .await
+        .with_context(|| "arrow_writer.close")?;
+    debug!(
+        "wrote nb_rows={} size={} path={file_path}",
+        file_meta.num_rows,
+        byte_counter.load(std::sync::atomic::Ordering::Relaxed)
     );
-
-    let buffer: bytes::Bytes = buffer_writer.into_inner().into();
-    write_partition_from_buffer(
+    write_partition_metadata(
         &lake,
         &Partition {
             view_metadata,
@@ -214,10 +224,9 @@ pub async fn write_partition_from_rows(
             max_event_time: max_event_time.unwrap(),
             updated: sqlx::types::chrono::Utc::now(),
             file_path,
-            file_size: buffer.len() as i64,
+            file_size: byte_counter.load(std::sync::atomic::Ordering::Relaxed),
             source_data_hash,
         },
-        buffer,
         response_writer,
     )
     .await?;
