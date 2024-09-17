@@ -37,13 +37,13 @@ ciborium = "0.2.2"
 clap = { version = "4", features = ["derive"] }
 colored = { version = "2" }
 ctrlc = "3.2.0"
-datafusion = "41.0.0"
+datafusion = "42.0.0"
 futures = "0.3"
 lazy_static = "1.4"
 log = { version = "0.4", features = ["std"] }
 lz4 = "1.23"
 memoffset = "0.6"
-object_store = { version = "0.10.1", features = ["aws"] }
+object_store = { version = "0.11", features = ["aws"] }
 once_cell = "1.7.2"
 proc-macro2 = "1.0"
 quote = "1.0"
