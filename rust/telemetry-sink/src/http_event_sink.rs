@@ -18,7 +18,7 @@ use std::{
     sync::atomic::{AtomicIsize, Ordering},
     time::Duration,
 };
-use tokio_retry2::RetryError;
+use tokio_retry2::MapErr;
 
 use crate::request_decorator::RequestDecorator;
 use crate::stream_block::StreamBlock;
@@ -99,14 +99,17 @@ impl HttpEventSink {
         let url = format!("{root_path}/ingestion/insert_process");
         tokio_retry2::Retry::spawn(retry_strategy, || async {
             let body = encode_cbor(&*process_info)?;
-            let mut request = client.post(&url).body(body).build()
-            .with_context(|| "building request")
-            .map_err(RetryError::transient)?;
+            let mut request = client
+                .post(&url)
+                .body(body)
+                .build()
+                .with_context(|| "building request")
+                .map_transient()?;
             decorator
                 .decorate(&mut request)
                 .await
                 .with_context(|| "decorating request")
-                .map_err(RetryError::transient)?;
+                .map_transient()?;
             let result = client
                 .execute(request)
                 .await
@@ -114,7 +117,7 @@ impl HttpEventSink {
             if let Err(e) = &result {
                 debug!("insert_process error: {e:?}");
             }
-            result.map_err(RetryError::transient)
+            result.map_transient()
         })
         .await?;
         Ok(())
@@ -130,9 +133,12 @@ impl HttpEventSink {
         let url = format!("{root_path}/ingestion/insert_stream");
         tokio_retry2::Retry::spawn(retry_strategy, || async {
             let body = encode_cbor(&*stream_info)?;
-            let mut request = client.post(&url).body(body).build()
-            .with_context(|| "building request")
-            .map_err(RetryError::transient)?;
+            let mut request = client
+                .post(&url)
+                .body(body)
+                .build()
+                .with_context(|| "building request")
+                .map_transient()?;
             decorator.decorate(&mut request).await?;
             let result = client
                 .execute(request)
@@ -141,7 +147,7 @@ impl HttpEventSink {
             if let Err(e) = &result {
                 debug!("insert_stream error: {e}");
             }
-            result.map_err(RetryError::transient)
+            result.map_transient()
         })
         .await?;
         Ok(())
