@@ -14,8 +14,7 @@ use micromegas_tracing::prelude::*;
 use sqlx::types::chrono::{DateTime, Utc};
 use std::sync::Arc;
 
-#[allow(clippy::too_many_arguments)]
-pub async fn query(
+pub async fn query_single_view(
     lake: Arc<DataLakeConnection>,
     part_provider: Arc<dyn QueryPartitionProvider>,
     begin: DateTime<Utc>,

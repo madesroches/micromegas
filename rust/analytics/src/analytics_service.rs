@@ -399,7 +399,7 @@ impl AnalyticsService {
                 anyhow::bail!("limit must be included in the sql statement for lakehouse queries");
             }
             let view = self.view_factory.make_view("log_entries", "global")?;
-            crate::lakehouse::query::query(
+            crate::lakehouse::query::query_single_view(
                 self.data_lake.clone(),
                 Arc::new(LivePartitionProvider::new(self.data_lake.db_pool.clone())),
                 begin.into(),
@@ -442,7 +442,7 @@ impl AnalyticsService {
                 anyhow::bail!("limit must be included in the sql statement for lakehouse queries");
             }
             let view = self.view_factory.make_view("measures", "global")?;
-            crate::lakehouse::query::query(
+            crate::lakehouse::query::query_single_view(
                 self.data_lake.clone(),
                 Arc::new(LivePartitionProvider::new(self.data_lake.db_pool.clone())),
                 begin.into(),
@@ -467,7 +467,7 @@ impl AnalyticsService {
             .view_factory
             .make_view(&request.view_set_name, &request.view_instance_id)
             .with_context(|| "making view")?;
-        let answer = crate::lakehouse::query::query(
+        let answer = crate::lakehouse::query::query_single_view(
             self.data_lake.clone(),
             Arc::new(LivePartitionProvider::new(self.data_lake.db_pool.clone())),
             begin.into(),

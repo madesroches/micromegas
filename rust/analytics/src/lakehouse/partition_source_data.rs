@@ -1,4 +1,4 @@
-use crate::lakehouse::{blocks_view::BlocksView, query::query};
+use crate::lakehouse::{blocks_view::BlocksView, query::query_single_view};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use datafusion::arrow::array::{
@@ -90,7 +90,7 @@ pub async fn fetch_partition_source_data(
           ;");
     let mut block_ids_hash: i64 = 0;
     let mut partition_src_blocks = vec![];
-    let blocks_answer = query(
+    let blocks_answer = query_single_view(
         lake,
         part_provider,
         begin_insert,
