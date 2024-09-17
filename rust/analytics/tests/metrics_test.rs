@@ -17,7 +17,7 @@ fn test_parse_metric_interops() {
 
     let process_id = uuid::Uuid::new_v4();
     let process_info = make_process_info(process_id, Some(uuid::Uuid::new_v4()));
-    let mut stream = MetricsStream::new(1024, process_id.clone(), &[], HashMap::new());
+    let mut stream = MetricsStream::new(1024, process_id, &[], HashMap::new());
     let stream_id = stream.stream_id();
 
     static METRIC_DESC: MetricMetadata = MetricMetadata {

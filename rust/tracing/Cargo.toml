@@ -25,6 +25,7 @@ uuid.workspace = true
 whoami.workspace = true
 
 [dev-dependencies]
+criterion = "0.5.1"
 # to tests interop
 log.workspace = true
 

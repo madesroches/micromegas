@@ -18,6 +18,7 @@ use std::{
     sync::atomic::{AtomicIsize, Ordering},
     time::Duration,
 };
+use tokio_retry2::RetryError;
 
 use crate::request_decorator::RequestDecorator;
 use crate::stream_block::StreamBlock;
@@ -53,7 +54,7 @@ impl HttpEventSink {
     pub fn new(
         addr_server: &str,
         max_queue_size: isize,
-        metadata_retry: core::iter::Take<tokio_retry::strategy::ExponentialBackoff>,
+        metadata_retry: core::iter::Take<tokio_retry2::strategy::ExponentialBackoff>,
         make_decorator: Box<dyn FnOnce() -> Arc<dyn RequestDecorator> + Send>,
     ) -> Self {
         let addr = addr_server.to_owned();
@@ -91,18 +92,21 @@ impl HttpEventSink {
         client: &mut reqwest::Client,
         root_path: &str,
         process_info: Arc<ProcessInfo>,
-        retry_strategy: core::iter::Take<tokio_retry::strategy::ExponentialBackoff>,
+        retry_strategy: core::iter::Take<tokio_retry2::strategy::ExponentialBackoff>,
         decorator: &dyn RequestDecorator,
     ) -> Result<()> {
         debug!("sending process {process_info:?}");
         let url = format!("{root_path}/ingestion/insert_process");
-        tokio_retry::Retry::spawn(retry_strategy, || async {
+        tokio_retry2::Retry::spawn(retry_strategy, || async {
             let body = encode_cbor(&*process_info)?;
-            let mut request = client.post(&url).body(body).build()?;
+            let mut request = client.post(&url).body(body).build()
+            .with_context(|| "building request")
+            .map_err(RetryError::transient)?;
             decorator
                 .decorate(&mut request)
                 .await
-                .with_context(|| "decorating request")?;
+                .with_context(|| "decorating request")
+                .map_err(RetryError::transient)?;
             let result = client
                 .execute(request)
                 .await
@@ -110,7 +114,7 @@ impl HttpEventSink {
             if let Err(e) = &result {
                 debug!("insert_process error: {e:?}");
             }
-            result
+            result.map_err(RetryError::transient)
         })
         .await?;
         Ok(())
@@ -120,13 +124,15 @@ impl HttpEventSink {
         client: &mut reqwest::Client,
         root_path: &str,
         stream_info: Arc<StreamInfo>,
-        retry_strategy: core::iter::Take<tokio_retry::strategy::ExponentialBackoff>,
+        retry_strategy: core::iter::Take<tokio_retry2::strategy::ExponentialBackoff>,
         decorator: &dyn RequestDecorator,
     ) -> Result<()> {
         let url = format!("{root_path}/ingestion/insert_stream");
-        tokio_retry::Retry::spawn(retry_strategy, || async {
+        tokio_retry2::Retry::spawn(retry_strategy, || async {
             let body = encode_cbor(&*stream_info)?;
-            let mut request = client.post(&url).body(body).build()?;
+            let mut request = client.post(&url).body(body).build()
+            .with_context(|| "building request")
+            .map_err(RetryError::transient)?;
             decorator.decorate(&mut request).await?;
             let result = client
                 .execute(request)
@@ -135,7 +141,7 @@ impl HttpEventSink {
             if let Err(e) = &result {
                 debug!("insert_stream error: {e}");
             }
-            result
+            result.map_err(RetryError::transient)
         })
         .await?;
         Ok(())
@@ -180,7 +186,7 @@ impl HttpEventSink {
         receiver: std::sync::mpsc::Receiver<SinkEvent>,
         queue_size: Arc<AtomicIsize>,
         max_queue_size: isize,
-        retry_strategy: core::iter::Take<tokio_retry::strategy::ExponentialBackoff>,
+        retry_strategy: core::iter::Take<tokio_retry2::strategy::ExponentialBackoff>,
         decorator: &dyn RequestDecorator,
     ) {
         let mut opt_process_info = None;
@@ -305,7 +311,7 @@ impl HttpEventSink {
         receiver: std::sync::mpsc::Receiver<SinkEvent>,
         queue_size: Arc<AtomicIsize>,
         max_queue_size: isize,
-        retry_strategy: core::iter::Take<tokio_retry::strategy::ExponentialBackoff>,
+        retry_strategy: core::iter::Take<tokio_retry2::strategy::ExponentialBackoff>,
         make_decorator: Box<dyn FnOnce() -> Arc<dyn RequestDecorator> + Send>,
     ) {
         // TODO: add runtime as configuration option (or create one only if global don't exist)

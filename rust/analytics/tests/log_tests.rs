@@ -40,7 +40,7 @@ fn test_log_encode_static() {
         .build();
     let process_id = uuid::Uuid::new_v4();
     let process_info = make_process_info(process_id, Some(uuid::Uuid::new_v4()));
-    let mut stream = LogStream::new(1024, process_id.clone(), &[], HashMap::new());
+    let mut stream = LogStream::new(1024, process_id, &[], HashMap::new());
     let stream_id = stream.stream_id();
     stream.get_events_mut().push(LogStaticStrInteropEvent {
         time: 1,
@@ -76,7 +76,7 @@ fn test_log_encode_dynamic() {
         .build();
     let process_id = uuid::Uuid::new_v4();
     let process_info = make_process_info(process_id, Some(uuid::Uuid::new_v4()));
-    let mut stream = LogStream::new(1024, process_id.clone(), &[], HashMap::new());
+    let mut stream = LogStream::new(1024, process_id, &[], HashMap::new());
     let stream_id = stream.stream_id();
     stream.get_events_mut().push(LogStringInteropEvent {
         time: 1,
