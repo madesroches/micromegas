@@ -18,7 +18,6 @@ use std::{
     sync::atomic::{AtomicIsize, Ordering},
     time::Duration,
 };
-use tokio_retry2::MapErr;
 
 use crate::request_decorator::RequestDecorator;
 use crate::stream_block::StreamBlock;
@@ -103,13 +102,12 @@ impl HttpEventSink {
                 .post(&url)
                 .body(body)
                 .build()
-                .with_context(|| "building request")
-                .map_transient()?;
+                .with_context(|| "building request")?;
+
             decorator
                 .decorate(&mut request)
                 .await
-                .with_context(|| "decorating request")
-                .map_transient()?;
+                .with_context(|| "decorating request")?;
             let result = client
                 .execute(request)
                 .await
@@ -117,7 +115,7 @@ impl HttpEventSink {
             if let Err(e) = &result {
                 debug!("insert_process error: {e:?}");
             }
-            result.map_transient()
+            Ok(result?)
         })
         .await?;
         Ok(())
@@ -137,8 +135,7 @@ impl HttpEventSink {
                 .post(&url)
                 .body(body)
                 .build()
-                .with_context(|| "building request")
-                .map_transient()?;
+                .with_context(|| "building request")?;
             decorator.decorate(&mut request).await?;
             let result = client
                 .execute(request)
@@ -147,7 +144,7 @@ impl HttpEventSink {
             if let Err(e) = &result {
                 debug!("insert_stream error: {e}");
             }
-            result.map_transient()
+            Ok(result?)
         })
         .await?;
         Ok(())
