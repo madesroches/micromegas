@@ -115,6 +115,8 @@ impl HttpEventSink {
             if let Err(e) = &result {
                 debug!("insert_process error: {e:?}");
             }
+
+            // Implicit error conversion. Result type needs to be `Result<T,RetryError<E>>` and not `Result<T,E>`, so using `?` or `map_transient_err` are the best ways to do it.
             Ok(result?)
         })
         .await?;
