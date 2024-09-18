@@ -34,7 +34,7 @@ use composite_event_sink::CompositeSink;
 use local_event_sink::LocalEventSink;
 
 pub mod tokio_retry {
-    pub use tokio_retry::*;
+    pub use tokio_retry2::*;
 }
 
 pub mod reqwest {
