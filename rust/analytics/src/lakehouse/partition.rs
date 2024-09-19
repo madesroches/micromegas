@@ -1,5 +1,6 @@
 use super::view::ViewMetadata;
 use chrono::{DateTime, Utc};
+use datafusion::parquet::file::metadata::ParquetMetaData;
 
 /// Partition metadata
 #[derive(Clone)]
@@ -13,4 +14,5 @@ pub struct Partition {
     pub file_path: String,
     pub file_size: i64,
     pub source_data_hash: Vec<u8>,
+    pub file_metadata: ParquetMetaData,
 }

@@ -4,7 +4,7 @@ use micromegas_tracing::prelude::*;
 use sqlx::Executor;
 use sqlx::Row;
 
-pub const LATEST_LAKEHOUSE_SCHEMA_VERSION: i32 = 1;
+pub const LATEST_LAKEHOUSE_SCHEMA_VERSION: i32 = 2;
 
 async fn read_lakehouse_schema_version(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> i32 {
     match sqlx::query(
@@ -53,6 +53,13 @@ async fn execute_lakehouse_migration(pool: sqlx::Pool<sqlx::Postgres>) -> Result
         info!("creating v1 lakehouse_schema");
         let mut tr = pool.begin().await?;
         create_tables(&mut tr).await?;
+        current_version = read_lakehouse_schema_version(&mut tr).await;
+        tr.commit().await?;
+    }
+    if 1 == current_version {
+        info!("upgrade lakehouse schema to v2");
+        let mut tr = pool.begin().await?;
+        upgrade_v1_to_v2(&mut tr).await?;
         current_version = read_lakehouse_schema_version(&mut tr).await;
         tr.commit().await?;
     }
@@ -124,5 +131,17 @@ async fn create_tables(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Result
     create_partitions_table(tr).await?;
     create_temp_files_table(tr).await?;
     create_migration_table(tr).await?;
+    Ok(())
+}
+
+async fn upgrade_v1_to_v2(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Result<()> {
+    // file_metadata is meant to be the serialized ParquetMetaData
+    // which can be found in the footer of the file
+    tr.execute("ALTER TABLE lakehouse_partitions ADD file_metadata bytea;")
+        .await
+        .with_context(|| "adding column file_metadata to lakehouse_partitions table")?;
+    tr.execute("UPDATE lakehouse_migration SET version=2;")
+        .await
+        .with_context(|| "Updating lakehouse schema version to 2")?;
     Ok(())
 }

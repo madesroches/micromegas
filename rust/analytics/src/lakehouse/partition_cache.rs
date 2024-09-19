@@ -1,3 +1,5 @@
+use crate::arrow_utils::parse_parquet_metadata;
+
 use super::{partition::Partition, view::ViewMetadata};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -40,10 +42,12 @@ impl PartitionCache {
                     file_path,
                     file_size,
                     file_schema_hash,
-                    source_data_hash
+                    source_data_hash,
+                    file_metadata
              FROM lakehouse_partitions
              WHERE begin_insert_time < $1
              AND end_insert_time > $2
+             AND file_metadata IS NOT NULL
              ;",
         )
         .bind(end_insert)
@@ -58,6 +62,8 @@ impl PartitionCache {
                 view_instance_id: Arc::new(r.try_get("view_instance_id")?),
                 file_schema_hash: r.try_get("file_schema_hash")?,
             };
+            let file_metadata_buffer: Vec<u8> = r.try_get("file_metadata")?;
+            let file_metadata = parse_parquet_metadata(&file_metadata_buffer.into())?;
             partitions.push(Partition {
                 view_metadata,
                 begin_insert_time: r.try_get("begin_insert_time")?,
@@ -68,6 +74,7 @@ impl PartitionCache {
                 file_path: r.try_get("file_path")?,
                 file_size: r.try_get("file_size")?,
                 source_data_hash: r.try_get("source_data_hash")?,
+                file_metadata,
             });
         }
         Ok(Self {
@@ -162,13 +169,16 @@ impl QueryPartitionProvider for LivePartitionProvider {
                     file_path,
                     file_size,
                     file_schema_hash,
-                    source_data_hash
+                    source_data_hash,
+                    file_metadata
              FROM lakehouse_partitions
              WHERE view_set_name = $1
              AND view_instance_id = $2
              AND min_event_time <= $3
              AND max_event_time >= $4
-             AND file_schema_hash = $5;",
+             AND file_schema_hash = $5
+             AND file_metadata IS NOT NULL
+             ;",
         )
         .bind(view_set_name)
         .bind(view_instance_id)
@@ -184,6 +194,8 @@ impl QueryPartitionProvider for LivePartitionProvider {
                 view_instance_id: Arc::new(r.try_get("view_instance_id")?),
                 file_schema_hash: r.try_get("file_schema_hash")?,
             };
+            let file_metadata_buffer: Vec<u8> = r.try_get("file_metadata")?;
+            let file_metadata = parse_parquet_metadata(&file_metadata_buffer.into())?;
             partitions.push(Partition {
                 view_metadata,
                 begin_insert_time: r.try_get("begin_insert_time")?,
@@ -194,6 +206,7 @@ impl QueryPartitionProvider for LivePartitionProvider {
                 file_path: r.try_get("file_path")?,
                 file_size: r.try_get("file_size")?,
                 source_data_hash: r.try_get("source_data_hash")?,
+                file_metadata,
             });
         }
         Ok(partitions)
