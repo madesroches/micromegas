@@ -45,6 +45,12 @@ In order to keep costs down, most payloads will remain unprocessed until they ex
 
 ## Status
 
+### Septembre 2024
+Released [version 0.1.9](https://crates.io/crates/micromegas)
+
+ * Updating global views every second
+ * Caching metadata (processes, streams & blocks) in the lakehouse & allow sql queries on them
+
 ### August 2024
 Released [version 0.1.7](https://crates.io/crates/micromegas)
 
