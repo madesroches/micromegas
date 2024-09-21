@@ -1,14 +1,5 @@
 #!/bin/python3
-import subprocess
-import pathlib
-
-rust_root = pathlib.Path(__file__).parent.parent.absolute() / "rust"
-
-
-def run_command(cmd):
-    print("cmd=", cmd, "cwd=", rust_root)
-    subprocess.run(cmd, shell=True, cwd=rust_root, check=True)
-
+from rust_command import run_command
 
 run_command("cargo fmt --check")
 run_command("cargo test")
