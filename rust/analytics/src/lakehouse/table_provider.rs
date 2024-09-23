@@ -27,7 +27,7 @@ impl MaterializedView {
     pub fn new(
         object_store: Arc<dyn ObjectStore>,
         view: Arc<dyn View>,
-        partitions: Arc<Vec<Partition>>,
+        partitions: Arc<Vec<Partition>>, // todo: change this to allow the partition list to be queried only if the table is referenced
     ) -> Self {
         Self {
             object_store,
