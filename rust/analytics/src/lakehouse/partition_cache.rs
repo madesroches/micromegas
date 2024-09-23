@@ -1,12 +1,14 @@
+use crate::arrow_utils::parse_parquet_metadata;
+
 use super::{partition::Partition, view::ViewMetadata};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Row};
-use std::sync::Arc;
+use std::{fmt, sync::Arc};
 
 #[async_trait]
-pub trait QueryPartitionProvider: Send + Sync {
+pub trait QueryPartitionProvider: std::fmt::Display + Send + Sync + std::fmt::Debug {
     async fn fetch(
         &self,
         view_set_name: &str,
@@ -17,10 +19,17 @@ pub trait QueryPartitionProvider: Send + Sync {
     ) -> Result<Vec<Partition>>;
 }
 
+#[derive(Debug)]
 pub struct PartitionCache {
     pub partitions: Vec<Partition>,
     begin_insert: DateTime<Utc>,
     end_insert: DateTime<Utc>,
+}
+
+impl fmt::Display for PartitionCache {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:?}", self)
+    }
 }
 
 impl PartitionCache {
@@ -40,10 +49,12 @@ impl PartitionCache {
                     file_path,
                     file_size,
                     file_schema_hash,
-                    source_data_hash
+                    source_data_hash,
+                    file_metadata
              FROM lakehouse_partitions
              WHERE begin_insert_time < $1
              AND end_insert_time > $2
+             AND file_metadata IS NOT NULL
              ;",
         )
         .bind(end_insert)
@@ -58,6 +69,8 @@ impl PartitionCache {
                 view_instance_id: Arc::new(r.try_get("view_instance_id")?),
                 file_schema_hash: r.try_get("file_schema_hash")?,
             };
+            let file_metadata_buffer: Vec<u8> = r.try_get("file_metadata")?;
+            let file_metadata = Arc::new(parse_parquet_metadata(&file_metadata_buffer.into())?);
             partitions.push(Partition {
                 view_metadata,
                 begin_insert_time: r.try_get("begin_insert_time")?,
@@ -68,6 +81,7 @@ impl PartitionCache {
                 file_path: r.try_get("file_path")?,
                 file_size: r.try_get("file_size")?,
                 source_data_hash: r.try_get("source_data_hash")?,
+                file_metadata,
             });
         }
         Ok(Self {
@@ -130,8 +144,15 @@ impl QueryPartitionProvider for PartitionCache {
     }
 }
 
+#[derive(Debug)]
 pub struct LivePartitionProvider {
     db_pool: PgPool,
+}
+
+impl fmt::Display for LivePartitionProvider {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:?}", self)
+    }
 }
 
 impl LivePartitionProvider {
@@ -162,13 +183,16 @@ impl QueryPartitionProvider for LivePartitionProvider {
                     file_path,
                     file_size,
                     file_schema_hash,
-                    source_data_hash
+                    source_data_hash,
+                    file_metadata
              FROM lakehouse_partitions
              WHERE view_set_name = $1
              AND view_instance_id = $2
              AND min_event_time <= $3
              AND max_event_time >= $4
-             AND file_schema_hash = $5;",
+             AND file_schema_hash = $5
+             AND file_metadata IS NOT NULL
+             ;",
         )
         .bind(view_set_name)
         .bind(view_instance_id)
@@ -184,6 +208,8 @@ impl QueryPartitionProvider for LivePartitionProvider {
                 view_instance_id: Arc::new(r.try_get("view_instance_id")?),
                 file_schema_hash: r.try_get("file_schema_hash")?,
             };
+            let file_metadata_buffer: Vec<u8> = r.try_get("file_metadata")?;
+            let file_metadata = Arc::new(parse_parquet_metadata(&file_metadata_buffer.into())?);
             partitions.push(Partition {
                 view_metadata,
                 begin_insert_time: r.try_get("begin_insert_time")?,
@@ -194,6 +220,7 @@ impl QueryPartitionProvider for LivePartitionProvider {
                 file_path: r.try_get("file_path")?,
                 file_size: r.try_get("file_size")?,
                 source_data_hash: r.try_get("source_data_hash")?,
+                file_metadata,
             });
         }
         Ok(partitions)

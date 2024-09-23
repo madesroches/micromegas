@@ -21,6 +21,7 @@ use crate::lakehouse::view_factory::ViewFactory;
 use crate::lakehouse::write_partition::retire_partitions;
 use crate::response_writer::ResponseWriter;
 use crate::sql_arrow_bridge::rows_to_record_batch;
+use crate::time::TimeRange;
 
 #[derive(Clone)]
 pub struct AnalyticsService {
@@ -399,11 +400,10 @@ impl AnalyticsService {
                 anyhow::bail!("limit must be included in the sql statement for lakehouse queries");
             }
             let view = self.view_factory.make_view("log_entries", "global")?;
-            crate::lakehouse::query::query(
+            crate::lakehouse::query::query_single_view(
                 self.data_lake.clone(),
                 Arc::new(LivePartitionProvider::new(self.data_lake.db_pool.clone())),
-                begin.into(),
-                end.into(),
+                TimeRange::new(begin.into(), end.into()),
                 &request.sql.unwrap(),
                 view,
             )
@@ -442,11 +442,10 @@ impl AnalyticsService {
                 anyhow::bail!("limit must be included in the sql statement for lakehouse queries");
             }
             let view = self.view_factory.make_view("measures", "global")?;
-            crate::lakehouse::query::query(
+            crate::lakehouse::query::query_single_view(
                 self.data_lake.clone(),
                 Arc::new(LivePartitionProvider::new(self.data_lake.db_pool.clone())),
-                begin.into(),
-                end.into(),
+                TimeRange::new(begin.into(), end.into()),
                 &request.sql.unwrap(),
                 view,
             )
@@ -467,11 +466,10 @@ impl AnalyticsService {
             .view_factory
             .make_view(&request.view_set_name, &request.view_instance_id)
             .with_context(|| "making view")?;
-        let answer = crate::lakehouse::query::query(
+        let answer = crate::lakehouse::query::query_single_view(
             self.data_lake.clone(),
             Arc::new(LivePartitionProvider::new(self.data_lake.db_pool.clone())),
-            begin.into(),
-            end.into(),
+            TimeRange::new(begin.into(), end.into()),
             &request.sql,
             view,
         )
@@ -482,9 +480,14 @@ impl AnalyticsService {
 
     pub async fn query_partitions(&self) -> Result<bytes::Bytes> {
         // if partitions are merged on a daily basis, there should not be that many
-        let rows = sqlx::query("SELECT * FROM lakehouse_partitions")
-            .fetch_all(&self.data_lake.db_pool)
-            .await?;
+        let rows = sqlx::query(
+            "SELECT *
+             FROM lakehouse_partitions
+             WHERE file_metadata IS NOT NULL
+             ;",
+        )
+        .fetch_all(&self.data_lake.db_pool)
+        .await?;
         let record_batch =
             rows_to_record_batch(&rows).with_context(|| "converting rows to record batch")?;
         serialize_record_batches(&Answer::from_record_batch(record_batch))

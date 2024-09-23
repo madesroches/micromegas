@@ -26,6 +26,7 @@ impl ViewMaker for StreamsViewMaker {
     }
 }
 
+#[derive(Debug)]
 pub struct StreamsView {
     view_set_name: Arc<String>,
     view_instance_id: Arc<String>,

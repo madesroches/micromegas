@@ -1,12 +1,19 @@
-use crate::{lakehouse::async_parquet_writer::AsyncParquetWriter, response_writer::ResponseWriter};
+use crate::{
+    arrow_utils::serialize_parquet_metadata, lakehouse::async_parquet_writer::AsyncParquetWriter,
+    response_writer::ResponseWriter,
+};
 use anyhow::{Context, Result};
 use chrono::{DateTime, TimeDelta, Utc};
 use datafusion::{
     arrow::{array::RecordBatch, datatypes::Schema},
     parquet::{
-        arrow::AsyncArrowWriter,
+        arrow::{arrow_to_parquet_schema, AsyncArrowWriter},
         basic::Compression,
-        file::properties::{WriterProperties, WriterVersion},
+        file::{
+            metadata::{ParquetMetaData, RowGroupMetaData},
+            properties::{WriterProperties, WriterVersion},
+        },
+        schema::types::SchemaDescriptor,
     },
 };
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
@@ -97,6 +104,10 @@ async fn write_partition_metadata(
     partition: &Partition,
     writer: Arc<ResponseWriter>,
 ) -> Result<()> {
+    let file_metadata_buffer: Vec<u8> = serialize_parquet_metadata(&partition.file_metadata)
+        .with_context(|| "serialize_parquet_metadata")?
+        .into();
+
     let mut tr = lake.db_pool.begin().await?;
 
     // for jit partitions, we assume that the blocks were registered in order
@@ -113,7 +124,7 @@ async fn write_partition_metadata(
     .with_context(|| "retire_partitions")?;
 
     sqlx::query(
-        "INSERT INTO lakehouse_partitions VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11);",
+        "INSERT INTO lakehouse_partitions VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12);",
     )
     .bind(&*partition.view_metadata.view_set_name)
     .bind(&*partition.view_metadata.view_instance_id)
@@ -125,7 +136,8 @@ async fn write_partition_metadata(
     .bind(&partition.file_path)
     .bind(partition.file_size)
     .bind(&partition.view_metadata.file_schema_hash)
-    .bind(&partition.source_data_hash)
+	.bind(&partition.source_data_hash)
+	.bind(file_metadata_buffer)
     .execute(&mut *tr)
     .await
     .with_context(|| "inserting into lakehouse_partitions")?;
@@ -167,7 +179,7 @@ pub async fn write_partition_from_rows(
         .set_compression(Compression::LZ4_RAW)
         .build();
     let mut arrow_writer =
-        AsyncArrowWriter::try_new(object_store_writer, file_schema, Some(props))?;
+        AsyncArrowWriter::try_new(object_store_writer, file_schema.clone(), Some(props))?;
 
     let mut min_event_time: Option<DateTime<Utc>> = None;
     let mut max_event_time: Option<DateTime<Utc>> = None;
@@ -204,14 +216,13 @@ pub async fn write_partition_from_rows(
         // should we check that there is no stale partition left behind?
         return Ok(());
     }
-
-    let file_meta = arrow_writer
+    let thrift_file_meta = arrow_writer
         .close()
         .await
         .with_context(|| "arrow_writer.close")?;
     debug!(
         "wrote nb_rows={} size={} path={file_path}",
-        file_meta.num_rows,
+        thrift_file_meta.num_rows,
         byte_counter.load(std::sync::atomic::Ordering::Relaxed)
     );
     write_partition_metadata(
@@ -226,10 +237,72 @@ pub async fn write_partition_from_rows(
             file_path,
             file_size: byte_counter.load(std::sync::atomic::Ordering::Relaxed),
             source_data_hash,
+            file_metadata: Arc::new(
+                to_parquet_meta_data(&file_schema, thrift_file_meta)
+                    .with_context(|| "to_parquet_meta_data")?,
+            ),
         },
         response_writer,
     )
     .await?;
 
     Ok(())
+}
+// from parquet/src/file/footer.rs
+fn parse_column_orders(
+    t_column_orders: Option<Vec<datafusion::parquet::format::ColumnOrder>>,
+    schema_descr: &SchemaDescriptor,
+) -> Option<Vec<datafusion::parquet::basic::ColumnOrder>> {
+    match t_column_orders {
+        Some(orders) => {
+            // Should always be the case
+            assert_eq!(
+                orders.len(),
+                schema_descr.num_columns(),
+                "Column order length mismatch"
+            );
+            let mut res = Vec::new();
+            for (i, column) in schema_descr.columns().iter().enumerate() {
+                match orders[i] {
+                    datafusion::parquet::format::ColumnOrder::TYPEORDER(_) => {
+                        let sort_order = datafusion::parquet::basic::ColumnOrder::get_sort_order(
+                            column.logical_type(),
+                            column.converted_type(),
+                            column.physical_type(),
+                        );
+                        res.push(datafusion::parquet::basic::ColumnOrder::TYPE_DEFINED_ORDER(
+                            sort_order,
+                        ));
+                    }
+                }
+            }
+            Some(res)
+        }
+        None => None,
+    }
+}
+
+fn to_parquet_meta_data(
+    schema: &Schema,
+    thrift_file_meta: datafusion::parquet::format::FileMetaData,
+) -> Result<ParquetMetaData> {
+    let schema_descr = Arc::new(arrow_to_parquet_schema(schema)?);
+    let mut groups = vec![];
+    for rg in thrift_file_meta.row_groups {
+        groups.push(
+            RowGroupMetaData::from_thrift(schema_descr.clone(), rg)
+                .with_context(|| "RowGroupMetaData::from_thrift")?,
+        );
+    }
+    Ok(ParquetMetaData::new(
+        datafusion::parquet::file::metadata::FileMetaData::new(
+            thrift_file_meta.version,
+            thrift_file_meta.num_rows,
+            thrift_file_meta.created_by,
+            thrift_file_meta.key_value_metadata,
+            schema_descr.clone(),
+            parse_column_orders(thrift_file_meta.column_orders, &schema_descr),
+        ),
+        groups,
+    ))
 }

@@ -17,7 +17,7 @@ pub trait PartitionSpec: Send + Sync {
         -> Result<()>;
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct ViewMetadata {
     pub view_set_name: Arc<String>,
     pub view_instance_id: Arc<String>,
@@ -25,7 +25,7 @@ pub struct ViewMetadata {
 }
 
 #[async_trait]
-pub trait View: Send + Sync {
+pub trait View: std::fmt::Debug + Send + Sync {
     /// name of the table from the user's perspective
     fn get_view_set_name(&self) -> Arc<String>;
 
