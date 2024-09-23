@@ -33,6 +33,7 @@ impl ViewMaker for LogViewMaker {
     }
 }
 
+#[derive(Debug)]
 pub struct LogView {
     view_set_name: Arc<String>,
     view_instance_id: Arc<String>,

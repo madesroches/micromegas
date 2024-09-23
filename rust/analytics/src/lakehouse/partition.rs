@@ -1,9 +1,11 @@
+use std::sync::Arc;
+
 use super::view::ViewMetadata;
 use chrono::{DateTime, Utc};
 use datafusion::parquet::file::metadata::ParquetMetaData;
 
 /// Partition metadata
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Partition {
     pub view_metadata: ViewMetadata,
     pub begin_insert_time: DateTime<Utc>,
@@ -14,5 +16,5 @@ pub struct Partition {
     pub file_path: String,
     pub file_size: i64,
     pub source_data_hash: Vec<u8>,
-    pub file_metadata: ParquetMetaData,
+    pub file_metadata: Arc<ParquetMetaData>,
 }

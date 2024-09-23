@@ -35,6 +35,7 @@ impl ViewMaker for ThreadSpansViewMaker {
     }
 }
 
+#[derive(Debug)]
 pub struct ThreadSpansView {
     view_set_name: Arc<String>,
     view_instance_id: Arc<String>,

@@ -35,6 +35,7 @@ impl ViewMaker for MetricsViewMaker {
     }
 }
 
+#[derive(Debug)]
 pub struct MetricsView {
     view_set_name: Arc<String>,
     view_instance_id: Arc<String>,

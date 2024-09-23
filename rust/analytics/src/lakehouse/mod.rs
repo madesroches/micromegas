@@ -34,8 +34,12 @@ pub mod partition_source_data;
 pub mod processes_view;
 /// Datafusion integration
 pub mod query;
+/// Wrapper around ParquetObjectreader to provide ParquetMetaData without hitting the ObjectStore
+pub mod reader_factory;
 /// Replicated view of the `streams` table of the postgresql metadata database.
 pub mod streams_view;
+/// TableProvider implementation for the lakehouse
+pub mod table_provider;
 /// Tracking of expired partitions
 pub mod temp;
 /// Jit view of the call tree built from the thread events of a single stream

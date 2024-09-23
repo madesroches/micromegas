@@ -1,4 +1,7 @@
-use crate::lakehouse::{blocks_view::BlocksView, query::query_single_view};
+use crate::{
+    lakehouse::{blocks_view::BlocksView, query::query_single_view},
+    time::TimeRange,
+};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use datafusion::arrow::array::{
@@ -93,8 +96,7 @@ pub async fn fetch_partition_source_data(
     let blocks_answer = query_single_view(
         lake,
         part_provider,
-        begin_insert,
-        end_insert,
+        TimeRange::new(begin_insert, end_insert),
         &sql,
         blocks_view,
     )

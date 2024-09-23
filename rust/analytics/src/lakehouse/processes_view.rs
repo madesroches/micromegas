@@ -26,6 +26,7 @@ impl ViewMaker for ProcessesViewMaker {
     }
 }
 
+#[derive(Debug)]
 pub struct ProcessesView {
     view_set_name: Arc<String>,
     view_instance_id: Arc<String>,

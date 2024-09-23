@@ -29,6 +29,7 @@ impl ViewMaker for BlocksViewMaker {
     }
 }
 
+#[derive(Debug)]
 pub struct BlocksView {
     view_set_name: Arc<String>,
     view_instance_id: Arc<String>,

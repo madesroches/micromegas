@@ -21,6 +21,7 @@ use crate::lakehouse::view_factory::ViewFactory;
 use crate::lakehouse::write_partition::retire_partitions;
 use crate::response_writer::ResponseWriter;
 use crate::sql_arrow_bridge::rows_to_record_batch;
+use crate::time::TimeRange;
 
 #[derive(Clone)]
 pub struct AnalyticsService {
@@ -402,8 +403,7 @@ impl AnalyticsService {
             crate::lakehouse::query::query_single_view(
                 self.data_lake.clone(),
                 Arc::new(LivePartitionProvider::new(self.data_lake.db_pool.clone())),
-                begin.into(),
-                end.into(),
+                TimeRange::new(begin.into(), end.into()),
                 &request.sql.unwrap(),
                 view,
             )
@@ -445,8 +445,7 @@ impl AnalyticsService {
             crate::lakehouse::query::query_single_view(
                 self.data_lake.clone(),
                 Arc::new(LivePartitionProvider::new(self.data_lake.db_pool.clone())),
-                begin.into(),
-                end.into(),
+                TimeRange::new(begin.into(), end.into()),
                 &request.sql.unwrap(),
                 view,
             )
@@ -470,8 +469,7 @@ impl AnalyticsService {
         let answer = crate::lakehouse::query::query_single_view(
             self.data_lake.clone(),
             Arc::new(LivePartitionProvider::new(self.data_lake.db_pool.clone())),
-            begin.into(),
-            end.into(),
+            TimeRange::new(begin.into(), end.into()),
             &request.sql,
             view,
         )

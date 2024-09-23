@@ -237,8 +237,10 @@ pub async fn write_partition_from_rows(
             file_path,
             file_size: byte_counter.load(std::sync::atomic::Ordering::Relaxed),
             source_data_hash,
-            file_metadata: to_parquet_meta_data(&file_schema, thrift_file_meta)
-                .with_context(|| "to_parquet_meta_data")?,
+            file_metadata: Arc::new(
+                to_parquet_meta_data(&file_schema, thrift_file_meta)
+                    .with_context(|| "to_parquet_meta_data")?,
+            ),
         },
         response_writer,
     )

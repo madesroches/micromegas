@@ -3,6 +3,18 @@ use micromegas_tracing::process_info::ProcessInfo;
 
 const NANOS_PER_SEC: f64 = 1000.0 * 1000.0 * 1000.0;
 
+#[derive(Clone, Debug)]
+pub struct TimeRange {
+    pub begin: DateTime<Utc>,
+    pub end: DateTime<Utc>,
+}
+
+impl TimeRange {
+    pub fn new(begin: DateTime<Utc>, end: DateTime<Utc>) -> Self {
+        Self { begin, end }
+    }
+}
+
 /// ConvertTicks helps converting between a process's tick count and more convenient date/time representations
 #[derive(Debug, Clone)]
 pub struct ConvertTicks {

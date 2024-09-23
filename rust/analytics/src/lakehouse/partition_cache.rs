@@ -5,10 +5,10 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Row};
-use std::sync::Arc;
+use std::{fmt, sync::Arc};
 
 #[async_trait]
-pub trait QueryPartitionProvider: Send + Sync {
+pub trait QueryPartitionProvider: std::fmt::Display + Send + Sync + std::fmt::Debug {
     async fn fetch(
         &self,
         view_set_name: &str,
@@ -19,10 +19,17 @@ pub trait QueryPartitionProvider: Send + Sync {
     ) -> Result<Vec<Partition>>;
 }
 
+#[derive(Debug)]
 pub struct PartitionCache {
     pub partitions: Vec<Partition>,
     begin_insert: DateTime<Utc>,
     end_insert: DateTime<Utc>,
+}
+
+impl fmt::Display for PartitionCache {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:?}", self)
+    }
 }
 
 impl PartitionCache {
@@ -63,7 +70,7 @@ impl PartitionCache {
                 file_schema_hash: r.try_get("file_schema_hash")?,
             };
             let file_metadata_buffer: Vec<u8> = r.try_get("file_metadata")?;
-            let file_metadata = parse_parquet_metadata(&file_metadata_buffer.into())?;
+            let file_metadata = Arc::new(parse_parquet_metadata(&file_metadata_buffer.into())?);
             partitions.push(Partition {
                 view_metadata,
                 begin_insert_time: r.try_get("begin_insert_time")?,
@@ -137,8 +144,15 @@ impl QueryPartitionProvider for PartitionCache {
     }
 }
 
+#[derive(Debug)]
 pub struct LivePartitionProvider {
     db_pool: PgPool,
+}
+
+impl fmt::Display for LivePartitionProvider {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:?}", self)
+    }
 }
 
 impl LivePartitionProvider {
@@ -195,7 +209,7 @@ impl QueryPartitionProvider for LivePartitionProvider {
                 file_schema_hash: r.try_get("file_schema_hash")?,
             };
             let file_metadata_buffer: Vec<u8> = r.try_get("file_metadata")?;
-            let file_metadata = parse_parquet_metadata(&file_metadata_buffer.into())?;
+            let file_metadata = Arc::new(parse_parquet_metadata(&file_metadata_buffer.into())?);
             partitions.push(Partition {
                 view_metadata,
                 begin_insert_time: r.try_get("begin_insert_time")?,
