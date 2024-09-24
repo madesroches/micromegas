@@ -14,14 +14,14 @@ use std::sync::Arc;
 pub async fn query_single_view(
     lake: Arc<DataLakeConnection>,
     part_provider: Arc<dyn QueryPartitionProvider>,
-    query_range: TimeRange,
+    query_range: Option<TimeRange>,
     sql: &str,
     view: Arc<dyn View>,
 ) -> Result<Answer> {
     let view_set_name = view.get_view_set_name().to_string();
     let view_instance_id = view.get_view_instance_id().to_string();
     info!("query {view_set_name} {view_instance_id} sql={sql}");
-    view.jit_update(lake.clone(), query_range.begin, query_range.end)
+    view.jit_update(lake.clone(), query_range.clone())
         .await
         .with_context(|| "jit_update")?;
     let ctx = SessionContext::new();
@@ -34,25 +34,34 @@ pub async fn query_single_view(
         part_provider,
         query_range.clone(),
     );
-    let full_table_name = format!("__full_{}", &view_set_name);
-    ctx.register_table(
-        TableReference::Bare {
-            table: full_table_name.clone().into(),
-        },
-        Arc::new(table),
-    )?;
+    if let Some(range) = &query_range {
+        let full_table_name = format!("__full_{}", &view_set_name);
+        ctx.register_table(
+            TableReference::Bare {
+                table: full_table_name.clone().into(),
+            },
+            Arc::new(table),
+        )?;
 
-    let filtering_table_provider = view
-        .make_filtering_table_provider(&ctx, &full_table_name, query_range.begin, query_range.end)
-        .await
-        .with_context(|| "make_filtering_table_provider")?;
+        let filtering_table_provider = view
+            .make_filtering_table_provider(&ctx, &full_table_name, range.begin, range.end)
+            .await
+            .with_context(|| "make_filtering_table_provider")?;
 
-    ctx.register_table(
-        TableReference::Bare {
-            table: view_set_name.into(),
-        },
-        filtering_table_provider,
-    )?;
+        ctx.register_table(
+            TableReference::Bare {
+                table: view_set_name.into(),
+            },
+            filtering_table_provider,
+        )?;
+    } else {
+        ctx.register_table(
+            TableReference::Bare {
+                table: view_set_name.into(),
+            },
+            Arc::new(table),
+        )?;
+    }
 
     let df = ctx.sql(sql).await?;
     let schema = df.schema().inner().clone();

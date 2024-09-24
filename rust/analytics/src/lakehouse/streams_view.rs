@@ -1,3 +1,5 @@
+use crate::time::TimeRange;
+
 use super::{
     metadata_partition_spec::fetch_metadata_partition_spec,
     partition_cache::QueryPartitionProvider,
@@ -113,8 +115,7 @@ impl View for StreamsView {
     async fn jit_update(
         &self,
         _lake: Arc<DataLakeConnection>,
-        _begin_query: DateTime<Utc>,
-        _end_query: DateTime<Utc>,
+        _query_range: Option<TimeRange>,
     ) -> Result<()> {
         if *self.view_instance_id == "global" {
             // this view instance is updated using the deamon

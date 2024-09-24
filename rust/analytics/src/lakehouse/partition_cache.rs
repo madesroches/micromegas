@@ -1,4 +1,4 @@
-use crate::arrow_utils::parse_parquet_metadata;
+use crate::{arrow_utils::parse_parquet_metadata, time::TimeRange};
 
 use super::{partition::Partition, view::ViewMetadata};
 use anyhow::{Context, Result};
@@ -13,8 +13,7 @@ pub trait QueryPartitionProvider: std::fmt::Display + Send + Sync + std::fmt::De
         &self,
         view_set_name: &str,
         view_instance_id: &str,
-        begin_query: DateTime<Utc>,
-        end_query: DateTime<Utc>,
+        query_range: Option<TimeRange>,
         file_schema_hash: Vec<u8>,
     ) -> Result<Vec<Partition>>;
 }
@@ -125,19 +124,29 @@ impl QueryPartitionProvider for PartitionCache {
         &self,
         view_set_name: &str,
         view_instance_id: &str,
-        begin_query: DateTime<Utc>,
-        end_query: DateTime<Utc>,
+        query_range: Option<TimeRange>,
         file_schema_hash: Vec<u8>,
     ) -> Result<Vec<Partition>> {
         let mut partitions = vec![];
-        for part in &self.partitions {
-            if *part.view_metadata.view_set_name == view_set_name
-                && *part.view_metadata.view_instance_id == view_instance_id
-                && part.min_event_time < end_query
-                && part.max_event_time > begin_query
-                && part.view_metadata.file_schema_hash == file_schema_hash
-            {
-                partitions.push(part.clone());
+        if let Some(range) = query_range {
+            for part in &self.partitions {
+                if *part.view_metadata.view_set_name == view_set_name
+                    && *part.view_metadata.view_instance_id == view_instance_id
+                    && part.min_event_time < range.end
+                    && part.max_event_time > range.begin
+                    && part.view_metadata.file_schema_hash == file_schema_hash
+                {
+                    partitions.push(part.clone());
+                }
+            }
+        } else {
+            for part in &self.partitions {
+                if *part.view_metadata.view_set_name == view_set_name
+                    && *part.view_metadata.view_instance_id == view_instance_id
+                    && part.view_metadata.file_schema_hash == file_schema_hash
+                {
+                    partitions.push(part.clone());
+                }
             }
         }
         Ok(partitions)
@@ -167,13 +176,13 @@ impl QueryPartitionProvider for LivePartitionProvider {
         &self,
         view_set_name: &str,
         view_instance_id: &str,
-        begin_query: DateTime<Utc>,
-        end_query: DateTime<Utc>,
+        query_range: Option<TimeRange>,
         file_schema_hash: Vec<u8>,
     ) -> Result<Vec<Partition>> {
         let mut partitions = vec![];
-        let rows = sqlx::query(
-            "SELECT view_set_name,
+        let rows = if let Some(range) = query_range {
+            sqlx::query(
+                "SELECT view_set_name,
                     view_instance_id,
                     begin_insert_time,
                     end_insert_time,
@@ -193,15 +202,43 @@ impl QueryPartitionProvider for LivePartitionProvider {
              AND file_schema_hash = $5
              AND file_metadata IS NOT NULL
              ;",
-        )
-        .bind(view_set_name)
-        .bind(view_instance_id)
-        .bind(end_query)
-        .bind(begin_query)
-        .bind(file_schema_hash)
-        .fetch_all(&self.db_pool)
-        .await
-        .with_context(|| "listing lakehouse partitions")?;
+            )
+            .bind(view_set_name)
+            .bind(view_instance_id)
+            .bind(range.end)
+            .bind(range.begin)
+            .bind(file_schema_hash)
+            .fetch_all(&self.db_pool)
+            .await
+            .with_context(|| "listing lakehouse partitions")?
+        } else {
+            sqlx::query(
+                "SELECT view_set_name,
+                    view_instance_id,
+                    begin_insert_time,
+                    end_insert_time,
+                    min_event_time,
+                    max_event_time,
+                    updated,
+                    file_path,
+                    file_size,
+                    file_schema_hash,
+                    source_data_hash,
+                    file_metadata
+             FROM lakehouse_partitions
+             WHERE view_set_name = $1
+             AND view_instance_id = $2
+             AND file_schema_hash = $3
+             AND file_metadata IS NOT NULL
+             ;",
+            )
+            .bind(view_set_name)
+            .bind(view_instance_id)
+            .bind(file_schema_hash)
+            .fetch_all(&self.db_pool)
+            .await
+            .with_context(|| "listing lakehouse partitions")?
+        };
         for r in rows {
             let view_metadata = ViewMetadata {
                 view_set_name: Arc::new(r.try_get("view_set_name")?),

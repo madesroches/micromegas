@@ -11,7 +11,7 @@ use crate::{
     metadata::{find_process, find_stream},
     response_writer::ResponseWriter,
     span_table::{get_spans_schema, SpanRecordBuilder},
-    time::ConvertTicks,
+    time::{ConvertTicks, TimeRange},
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -207,9 +207,12 @@ impl View for ThreadSpansView {
     async fn jit_update(
         &self,
         lake: Arc<DataLakeConnection>,
-        begin_query: DateTime<Utc>,
-        end_query: DateTime<Utc>,
+        query_range: Option<TimeRange>,
     ) -> Result<()> {
+        if query_range.is_none() {
+            anyhow::bail!("query range mandatory for jit view");
+        }
+        let query_range = query_range.unwrap();
         let mut connection = lake.db_pool.acquire().await?;
         let stream = Arc::new(
             find_stream(&mut connection, self.stream_id)
@@ -223,8 +226,8 @@ impl View for ThreadSpansView {
         );
         let partitions = generate_jit_partitions(
             &mut connection,
-            begin_query,
-            end_query,
+            query_range.begin,
+            query_range.end,
             stream.clone(),
             process.clone(),
         )
