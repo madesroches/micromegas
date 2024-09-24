@@ -212,7 +212,7 @@ impl View for ThreadSpansView {
         if query_range.is_none() {
             anyhow::bail!("query range mandatory for jit view");
         }
-		let query_range = query_range.unwrap();
+        let query_range = query_range.unwrap();
         let mut connection = lake.db_pool.acquire().await?;
         let stream = Arc::new(
             find_stream(&mut connection, self.stream_id)
