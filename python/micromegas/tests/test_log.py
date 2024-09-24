@@ -12,3 +12,9 @@ def test_log_query():
     sql = "select * from log_entries LIMIT 1024;"
     log_entries = client.query_view("log_entries", process_id, begin, end, sql)
     print(log_entries)
+
+def test_whole_log_query():
+    # query with no specified time range
+    sql = "select count(*) from log_entries;"
+    rows = client.query_view("log_entries", "global", begin=None, end=None, sql=sql)
+    print(rows)

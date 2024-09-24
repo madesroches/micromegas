@@ -21,7 +21,7 @@ pub struct MaterializedView {
     object_store: Arc<dyn ObjectStore>,
     view: Arc<dyn View>,
     part_provider: Arc<dyn QueryPartitionProvider>,
-    query_range: TimeRange,
+    query_range: Option<TimeRange>,
 }
 
 impl MaterializedView {
@@ -29,7 +29,7 @@ impl MaterializedView {
         object_store: Arc<dyn ObjectStore>,
         view: Arc<dyn View>,
         part_provider: Arc<dyn QueryPartitionProvider>,
-        query_range: TimeRange,
+        query_range: Option<TimeRange>,
     ) -> Self {
         Self {
             object_store,
@@ -86,8 +86,7 @@ impl TableProvider for MaterializedView {
             .fetch(
                 &self.view.get_view_set_name(),
                 &self.view.get_view_instance_id(),
-                self.query_range.begin,
-                self.query_range.end,
+                self.query_range.clone(),
                 self.view.get_file_schema_hash(),
             )
             .await

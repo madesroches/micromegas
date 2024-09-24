@@ -1,4 +1,4 @@
-use crate::response_writer::ResponseWriter;
+use crate::{response_writer::ResponseWriter, time::TimeRange};
 use anyhow::Result;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -53,8 +53,7 @@ pub trait View: std::fmt::Debug + Send + Sync {
     async fn jit_update(
         &self,
         lake: Arc<DataLakeConnection>,
-        begin_query: DateTime<Utc>,
-        end_query: DateTime<Utc>,
+        query_range: Option<TimeRange>,
     ) -> Result<()>;
 
     /// make_filtering_table_provider returns a view that will filter out the rows of the partition

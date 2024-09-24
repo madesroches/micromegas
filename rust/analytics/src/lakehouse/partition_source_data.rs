@@ -96,7 +96,7 @@ pub async fn fetch_partition_source_data(
     let blocks_answer = query_single_view(
         lake,
         part_provider,
-        TimeRange::new(begin_insert, end_insert),
+        Some(TimeRange::new(begin_insert, end_insert)),
         &sql,
         blocks_view,
     )

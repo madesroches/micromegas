@@ -106,8 +106,8 @@ pub struct QueryMetricsRequest {
 pub struct QueryViewRequest {
     pub view_set_name: String,
     pub view_instance_id: String,
-    pub begin: String,
-    pub end: String,
+    pub begin: Option<String>,
+    pub end: Option<String>,
     pub sql: String,
 }
 
@@ -403,7 +403,7 @@ impl AnalyticsService {
             crate::lakehouse::query::query_single_view(
                 self.data_lake.clone(),
                 Arc::new(LivePartitionProvider::new(self.data_lake.db_pool.clone())),
-                TimeRange::new(begin.into(), end.into()),
+                Some(TimeRange::new(begin.into(), end.into())),
                 &request.sql.unwrap(),
                 view,
             )
@@ -445,7 +445,7 @@ impl AnalyticsService {
             crate::lakehouse::query::query_single_view(
                 self.data_lake.clone(),
                 Arc::new(LivePartitionProvider::new(self.data_lake.db_pool.clone())),
-                TimeRange::new(begin.into(), end.into()),
+                Some(TimeRange::new(begin.into(), end.into())),
                 &request.sql.unwrap(),
                 view,
             )
@@ -458,10 +458,18 @@ impl AnalyticsService {
     pub async fn query_view(&self, body: bytes::Bytes) -> Result<bytes::Bytes> {
         let request: QueryViewRequest =
             ciborium::from_reader(body.reader()).with_context(|| "parsing QueryViewRequest")?;
-        let begin = DateTime::<FixedOffset>::parse_from_rfc3339(&request.begin)
-            .with_context(|| "parsing begin time range")?;
-        let end = DateTime::<FixedOffset>::parse_from_rfc3339(&request.end)
-            .with_context(|| "parsing end time range")?;
+        let time_range = if request.begin.is_some() || request.end.is_some() {
+            if request.begin.is_none() || request.end.is_none() {
+                anyhow::bail!("Either specify both begin & end or specify none");
+            }
+            let begin = DateTime::<FixedOffset>::parse_from_rfc3339(&request.begin.unwrap())
+                .with_context(|| "parsing begin time range")?;
+            let end = DateTime::<FixedOffset>::parse_from_rfc3339(&request.end.unwrap())
+                .with_context(|| "parsing end time range")?;
+            Some(TimeRange::new(begin.into(), end.into()))
+        } else {
+            None
+        };
         let view = self
             .view_factory
             .make_view(&request.view_set_name, &request.view_instance_id)
@@ -469,7 +477,7 @@ impl AnalyticsService {
         let answer = crate::lakehouse::query::query_single_view(
             self.data_lake.clone(),
             Arc::new(LivePartitionProvider::new(self.data_lake.db_pool.clone())),
-            TimeRange::new(begin.into(), end.into()),
+            time_range,
             &request.sql,
             view,
         )

@@ -11,7 +11,7 @@ use crate::{
     lakehouse::jit_partitions::{generate_jit_partitions, is_jit_partition_up_to_date},
     log_entries_table::log_table_schema,
     metadata::{find_process, list_process_streams_tagged},
-    time::ConvertTicks,
+    time::{ConvertTicks, TimeRange},
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -105,13 +105,16 @@ impl View for LogView {
     async fn jit_update(
         &self,
         lake: Arc<DataLakeConnection>,
-        begin_query: DateTime<Utc>,
-        end_query: DateTime<Utc>,
+        query_range: Option<TimeRange>,
     ) -> Result<()> {
         if *self.view_instance_id == "global" {
             // this view instance is updated using the deamon
             return Ok(());
         }
+        if query_range.is_none() {
+            anyhow::bail!("query range mandatory for jit view");
+        }
+		let query_range = query_range.unwrap();
         let mut connection = lake.db_pool.acquire().await?;
         let process = Arc::new(
             find_process(
@@ -131,8 +134,8 @@ impl View for LogView {
         for stream in streams {
             let mut partitions = generate_jit_partitions(
                 &mut connection,
-                begin_query,
-                end_query,
+                query_range.begin,
+                query_range.end,
                 Arc::new(stream),
                 process.clone(),
             )
