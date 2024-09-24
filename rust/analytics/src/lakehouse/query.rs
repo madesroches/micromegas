@@ -28,18 +28,12 @@ pub async fn query_single_view(
     let object_store_url = ObjectStoreUrl::parse("obj://lakehouse/").unwrap();
     let object_store = lake.blob_storage.inner();
     ctx.register_object_store(object_store_url.as_ref(), object_store.clone());
-    let partitions = Arc::new(
-        part_provider
-            .fetch(
-                &view_set_name,
-                &view_instance_id,
-                query_range.begin,
-                query_range.end,
-                view.get_file_schema_hash(),
-            )
-            .await?,
+    let table = MaterializedView::new(
+        object_store,
+        view.clone(),
+        part_provider,
+        query_range.clone(),
     );
-    let table = MaterializedView::new(object_store, view.clone(), partitions);
     let full_table_name = format!("__full_{}", &view_set_name);
     ctx.register_table(
         TableReference::Bare {

@@ -1,5 +1,5 @@
-use super::{partition::Partition, view::View};
-use crate::lakehouse::reader_factory::ReaderFactory;
+use super::{partition_cache::QueryPartitionProvider, view::View};
+use crate::{lakehouse::reader_factory::ReaderFactory, time::TimeRange};
 use async_trait::async_trait;
 use datafusion::{
     arrow::datatypes::SchemaRef,
@@ -20,19 +20,22 @@ use std::{any::Any, sync::Arc};
 pub struct MaterializedView {
     object_store: Arc<dyn ObjectStore>,
     view: Arc<dyn View>,
-    partitions: Arc<Vec<Partition>>,
+    part_provider: Arc<dyn QueryPartitionProvider>,
+    query_range: TimeRange,
 }
 
 impl MaterializedView {
     pub fn new(
         object_store: Arc<dyn ObjectStore>,
         view: Arc<dyn View>,
-        partitions: Arc<Vec<Partition>>, // todo: change this to allow the partition list to be queried only if the table is referenced
+        part_provider: Arc<dyn QueryPartitionProvider>,
+        query_range: TimeRange,
     ) -> Self {
         Self {
             object_store,
             view,
-            partitions,
+            part_provider,
+            query_range,
         }
     }
 
@@ -78,7 +81,19 @@ impl TableProvider for MaterializedView {
     ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
         let predicate = self.filters_to_predicate(state, filters)?;
         let mut file_group = vec![];
-        for part in &*self.partitions {
+        let partitions = self
+            .part_provider
+            .fetch(
+                &self.view.get_view_set_name(),
+                &self.view.get_view_instance_id(),
+                self.query_range.begin,
+                self.query_range.end,
+                self.view.get_file_schema_hash(),
+            )
+            .await
+            .map_err(|e| datafusion::error::DataFusionError::External(e.into()))?;
+
+        for part in &partitions {
             file_group.push(PartitionedFile::new(&part.file_path, part.file_size as u64));
         }
 
@@ -89,7 +104,7 @@ impl TableProvider for MaterializedView {
             .with_projection(projection.cloned())
             .with_file_groups(vec![file_group]);
         let reader_factory =
-            ReaderFactory::new(Arc::clone(&self.object_store), self.partitions.clone());
+            ReaderFactory::new(Arc::clone(&self.object_store), Arc::new(partitions));
         Ok(ParquetExecBuilder::new(file_scan_config)
             .with_predicate(predicate)
             .with_parquet_file_reader_factory(Arc::new(reader_factory))
