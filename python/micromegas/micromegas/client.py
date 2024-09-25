@@ -132,6 +132,15 @@ class Client:
             headers=self.headers,
         )
 
+    def query(self, sql):
+        return request.request(
+            self.analytics_base_url + "query",
+            {
+                "sql": sql,
+            },
+            headers=self.headers,
+        )
+    
     def query_partitions(self):
         args = {}
         return request.request(

@@ -18,3 +18,9 @@ def test_whole_log_query():
     sql = "select count(*) from log_entries;"
     rows = client.query_view("log_entries", "global", begin=None, end=None, sql=sql)
     print(rows)
+
+def test_implicit_log_query():
+    # query with no specified time range
+    rows = client.query("SELECT COUNT(*) FROM log_entries;")
+    print(rows)
+    

@@ -137,6 +137,13 @@ pub async fn query_view_request(
     bytes_response(service.query_view(body).await.with_context(|| "query_view"))
 }
 
+pub async fn query_request(
+    Extension(service): Extension<Arc<AnalyticsService>>,
+    body: bytes::Bytes,
+) -> Response {
+    bytes_response(service.query(body).await.with_context(|| "query"))
+}
+
 pub async fn query_partitions_request(
     Extension(service): Extension<Arc<AnalyticsService>>,
 ) -> Response {
@@ -186,6 +193,7 @@ pub fn register_routes(router: Router) -> Router {
         )
         .route("/analytics/query_metrics", post(query_metrics_request))
         .route("/analytics/query_view", post(query_view_request))
+        .route("/analytics/query", post(query_request))
         .route(
             "/analytics/query_thread_events",
             post(query_thread_events_request),

@@ -112,6 +112,13 @@ pub struct QueryViewRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct QueryRequest {
+    pub sql: String,
+    pub begin: Option<String>,
+    pub end: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct MetarializePartitionsRequest {
     pub view_set_name: String,
     pub view_instance_id: String,
@@ -480,6 +487,33 @@ impl AnalyticsService {
             time_range,
             &request.sql,
             view,
+        )
+        .await
+        .with_context(|| "lakehouse::query::query")?;
+        serialize_record_batches(&answer)
+    }
+
+    pub async fn query(&self, body: bytes::Bytes) -> Result<bytes::Bytes> {
+        let request: QueryRequest =
+            ciborium::from_reader(body.reader()).with_context(|| "parsing QueryRequest")?;
+        let time_range = if request.begin.is_some() || request.end.is_some() {
+            if request.begin.is_none() || request.end.is_none() {
+                anyhow::bail!("Either specify both begin & end or specify none");
+            }
+            let begin = DateTime::<FixedOffset>::parse_from_rfc3339(&request.begin.unwrap())
+                .with_context(|| "parsing begin time range")?;
+            let end = DateTime::<FixedOffset>::parse_from_rfc3339(&request.end.unwrap())
+                .with_context(|| "parsing end time range")?;
+            Some(TimeRange::new(begin.into(), end.into()))
+        } else {
+            None
+        };
+        let answer = crate::lakehouse::query::query(
+            self.data_lake.clone(),
+            Arc::new(LivePartitionProvider::new(self.data_lake.db_pool.clone())),
+            time_range,
+            &request.sql,
+            self.view_factory.get_global_views(),
         )
         .await
         .with_context(|| "lakehouse::query::query")?;
