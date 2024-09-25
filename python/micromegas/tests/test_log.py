@@ -2,22 +2,16 @@ from .test_utils import *
 
 def test_log_query():
     sql = "select process_id from log_entries LIMIT 1;"
-    rows = client.query_view("log_entries", "global", begin, end, sql)
+    rows = client.query(sql, begin, end)
     process_id = rows.iloc[0]["process_id"]
 
-    sql = "select * from log_entries where process_id='{process_id}' LIMIT 1024;".format( process_id=process_id )
-    log_entries = client.query_view("log_entries", "global", begin, end, sql)
+    sql = "select * from log_entries where process_id='{process_id}' LIMIT 10;".format( process_id=process_id )
+    log_entries = client.query(sql, begin, end)
     print(log_entries)
 
-    sql = "select * from log_entries LIMIT 1024;"
-    log_entries = client.query_view("log_entries", process_id, begin, end, sql)
+    sql = "select * from log_entries LIMIT 10;"
+    log_entries = client.query(sql, begin, end)
     print(log_entries)
-
-def test_whole_log_query():
-    # query with no specified time range
-    sql = "select count(*) from log_entries;"
-    rows = client.query_view("log_entries", "global", begin=None, end=None, sql=sql)
-    print(rows)
 
 def test_implicit_log_query():
     # query with no specified time range
