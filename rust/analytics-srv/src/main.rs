@@ -12,7 +12,7 @@ use axum::{Extension, Router};
 use clap::Parser;
 use micromegas::analytics::analytics_service::AnalyticsService;
 use micromegas::analytics::lakehouse::migration::migrate_lakehouse;
-use micromegas::analytics::lakehouse::view_factory::ViewFactory;
+use micromegas::analytics::lakehouse::view_factory::{default_view_factory, ViewFactory};
 use micromegas::axum_utils::observability_middleware;
 use micromegas::ingestion::data_lake_connection::{connect_to_data_lake, DataLakeConnection};
 use micromegas::servers::analytics::register_routes;
@@ -64,7 +64,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     migrate_lakehouse(data_lake.db_pool.clone())
         .await
         .with_context(|| "migrate_lakehouse")?;
-    let view_factory = ViewFactory::default();
+    let view_factory = default_view_factory()?;
     serve_http(&args, Arc::new(data_lake), Arc::new(view_factory)).await?;
     Ok(())
 }

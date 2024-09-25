@@ -12,13 +12,19 @@ pub trait ViewMaker: Send + Sync {
 
 pub struct ViewFactory {
     view_sets: HashMap<String, Arc<dyn ViewMaker>>,
+    global_views: Vec<Arc<dyn View>>,
 }
 
 impl ViewFactory {
-    pub fn new() -> Self {
+    pub fn new(global_views: Vec<Arc<dyn View>>) -> Self {
         Self {
             view_sets: HashMap::new(),
+            global_views,
         }
+    }
+
+    pub fn get_global_views(&self) -> &[Arc<dyn View>] {
+        &self.global_views
     }
 
     pub fn add_view_set(&mut self, view_set_name: String, maker: Arc<dyn ViewMaker>) {
@@ -34,18 +40,22 @@ impl ViewFactory {
     }
 }
 
-impl Default for ViewFactory {
-    fn default() -> Self {
-        let mut factory = Self::new();
-        factory.add_view_set(String::from("log_entries"), Arc::new(LogViewMaker {}));
-        factory.add_view_set(String::from("measures"), Arc::new(MetricsViewMaker {}));
-        factory.add_view_set(
-            String::from("thread_spans"),
-            Arc::new(ThreadSpansViewMaker {}),
-        );
-        factory.add_view_set(String::from("processes"), Arc::new(ProcessesViewMaker {}));
-        factory.add_view_set(String::from("streams"), Arc::new(StreamsViewMaker {}));
-        factory.add_view_set(String::from("blocks"), Arc::new(BlocksViewMaker {}));
-        factory
-    }
+pub fn default_view_factory() -> Result<ViewFactory> {
+    let log_view_maker = Arc::new(LogViewMaker {});
+    let metrics_view_maker = Arc::new(MetricsViewMaker {});
+    let global_views = vec![
+        log_view_maker.make_view("global")?,
+        metrics_view_maker.make_view("global")?,
+    ];
+    let mut factory = ViewFactory::new(global_views);
+    factory.add_view_set(String::from("log_entries"), log_view_maker);
+    factory.add_view_set(String::from("measures"), metrics_view_maker);
+    factory.add_view_set(
+        String::from("thread_spans"),
+        Arc::new(ThreadSpansViewMaker {}),
+    );
+    factory.add_view_set(String::from("processes"), Arc::new(ProcessesViewMaker {}));
+    factory.add_view_set(String::from("streams"), Arc::new(StreamsViewMaker {}));
+    factory.add_view_set(String::from("blocks"), Arc::new(BlocksViewMaker {}));
+    Ok(factory)
 }
