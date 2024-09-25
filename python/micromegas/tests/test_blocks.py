@@ -2,6 +2,6 @@ from .test_utils import *
 
 
 def test_blocks_query():
-    sql = "select * from blocks LIMIT 1024;"
-    blocks = client.query_view("blocks", "global", begin, end, sql)
+    sql = "select * from blocks LIMIT 10;"
+    blocks = client.query(sql)
     print(blocks)
