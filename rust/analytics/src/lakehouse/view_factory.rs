@@ -43,9 +43,15 @@ impl ViewFactory {
 pub fn default_view_factory() -> Result<ViewFactory> {
     let log_view_maker = Arc::new(LogViewMaker {});
     let metrics_view_maker = Arc::new(MetricsViewMaker {});
+    let processes_view_maker = Arc::new(ProcessesViewMaker {});
+    let streams_view_maker = Arc::new(StreamsViewMaker {});
+    let blocks_view_maker = Arc::new(BlocksViewMaker {});
     let global_views = vec![
         log_view_maker.make_view("global")?,
         metrics_view_maker.make_view("global")?,
+        processes_view_maker.make_view("global")?,
+        streams_view_maker.make_view("global")?,
+        blocks_view_maker.make_view("global")?,
     ];
     let mut factory = ViewFactory::new(global_views);
     factory.add_view_set(String::from("log_entries"), log_view_maker);
@@ -54,8 +60,8 @@ pub fn default_view_factory() -> Result<ViewFactory> {
         String::from("thread_spans"),
         Arc::new(ThreadSpansViewMaker {}),
     );
-    factory.add_view_set(String::from("processes"), Arc::new(ProcessesViewMaker {}));
-    factory.add_view_set(String::from("streams"), Arc::new(StreamsViewMaker {}));
-    factory.add_view_set(String::from("blocks"), Arc::new(BlocksViewMaker {}));
+    factory.add_view_set(String::from("processes"), processes_view_maker);
+    factory.add_view_set(String::from("streams"), streams_view_maker);
+    factory.add_view_set(String::from("blocks"), blocks_view_maker);
     Ok(factory)
 }
