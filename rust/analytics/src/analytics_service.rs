@@ -513,7 +513,7 @@ impl AnalyticsService {
             Arc::new(LivePartitionProvider::new(self.data_lake.db_pool.clone())),
             time_range,
             &request.sql,
-            self.view_factory.get_global_views(),
+            self.view_factory.clone(),
         )
         .await
         .with_context(|| "lakehouse::query::query")?;

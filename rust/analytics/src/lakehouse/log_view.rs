@@ -17,7 +17,9 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use datafusion::{
-    arrow::datatypes::Schema, catalog::TableProvider, execution::context::SessionContext,
+    arrow::datatypes::Schema,
+    logical_expr::{col, Between, Expr},
+    scalar::ScalarValue,
 };
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use std::sync::Arc;
@@ -169,20 +171,21 @@ impl View for LogView {
         Ok(())
     }
 
-    async fn make_filtering_table_provider(
-        &self,
-        ctx: &SessionContext,
-        full_table_name: &str,
-        begin: DateTime<Utc>,
-        end: DateTime<Utc>,
-    ) -> Result<Arc<dyn TableProvider>> {
-        let row_filter = ctx
-            .sql(&format!(
-                "SELECT * from {full_table_name} WHERE time BETWEEN '{}' AND '{}';",
-                begin.to_rfc3339(),
-                end.to_rfc3339(),
+    fn make_time_filter(&self, begin: DateTime<Utc>, end: DateTime<Utc>) -> Result<Vec<Expr>> {
+        let utc: Arc<str> = Arc::from("+00:00");
+        Ok(vec![Expr::Between(Between::new(
+            col("time").into(),
+            false,
+            Expr::Literal(ScalarValue::TimestampNanosecond(
+                begin.timestamp_nanos_opt(),
+                Some(utc.clone()),
             ))
-            .await?;
-        Ok(row_filter.into_view())
+            .into(),
+            Expr::Literal(ScalarValue::TimestampNanosecond(
+                end.timestamp_nanos_opt(),
+                Some(utc.clone()),
+            ))
+            .into(),
+        ))])
     }
 }

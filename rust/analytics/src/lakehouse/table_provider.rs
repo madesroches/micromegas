@@ -10,14 +10,17 @@ use datafusion::{
         physical_plan::{parquet::ParquetExecBuilder, FileScanConfig},
         TableType,
     },
+    error::DataFusionError,
     execution::object_store::ObjectStoreUrl,
     logical_expr::{utils::conjunction, Expr, TableProviderFilterPushDown},
     physical_plan::{expressions, ExecutionPlan, PhysicalExpr},
 };
+use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use object_store::ObjectStore;
 use std::{any::Any, sync::Arc};
 
 pub struct MaterializedView {
+    lake: Arc<DataLakeConnection>,
     object_store: Arc<dyn ObjectStore>,
     view: Arc<dyn View>,
     part_provider: Arc<dyn QueryPartitionProvider>,
@@ -26,12 +29,14 @@ pub struct MaterializedView {
 
 impl MaterializedView {
     pub fn new(
+        lake: Arc<DataLakeConnection>,
         object_store: Arc<dyn ObjectStore>,
         view: Arc<dyn View>,
         part_provider: Arc<dyn QueryPartitionProvider>,
         query_range: Option<TimeRange>,
     ) -> Self {
         Self {
+            lake,
             object_store,
             view,
             part_provider,
@@ -39,13 +44,18 @@ impl MaterializedView {
         }
     }
 
+    pub fn get_view(&self) -> Arc<dyn View> {
+        self.view.clone()
+    }
+
     // from datafusion/datafusion-examples/examples/advanced_parquet_index.rs
     fn filters_to_predicate(
         &self,
+        schema: SchemaRef,
         state: &dyn Session,
         filters: &[Expr],
     ) -> datafusion::error::Result<Arc<dyn PhysicalExpr>> {
-        let df_schema = DFSchema::try_from(self.schema())?;
+        let df_schema = DFSchema::try_from(schema)?;
         let predicate = conjunction(filters.to_vec());
         let predicate = predicate
             .map(|predicate| state.create_physical_expr(predicate, &df_schema))
@@ -79,7 +89,12 @@ impl TableProvider for MaterializedView {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
-        let predicate = self.filters_to_predicate(state, filters)?;
+        let predicate = self.filters_to_predicate(self.view.get_file_schema(), state, filters)?;
+        self.view
+            .jit_update(self.lake.clone(), self.query_range.clone())
+            .await
+            .map_err(|e| DataFusionError::External(e.into()))?;
+
         let mut file_group = vec![];
         let partitions = self
             .part_provider
@@ -105,7 +120,7 @@ impl TableProvider for MaterializedView {
         let reader_factory =
             ReaderFactory::new(Arc::clone(&self.object_store), Arc::new(partitions));
         Ok(ParquetExecBuilder::new(file_scan_config)
-            .with_predicate(predicate)
+            .with_predicate(predicate.clone())
             .with_parquet_file_reader_factory(Arc::new(reader_factory))
             .build_arc())
     }

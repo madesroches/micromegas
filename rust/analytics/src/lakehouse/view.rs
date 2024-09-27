@@ -2,9 +2,7 @@ use crate::{response_writer::ResponseWriter, time::TimeRange};
 use anyhow::Result;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use datafusion::{
-    arrow::datatypes::Schema, catalog::TableProvider, execution::context::SessionContext,
-};
+use datafusion::{arrow::datatypes::Schema, logical_expr::Expr};
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use std::sync::Arc;
 
@@ -56,15 +54,9 @@ pub trait View: std::fmt::Debug + Send + Sync {
         query_range: Option<TimeRange>,
     ) -> Result<()>;
 
-    /// make_filtering_table_provider returns a view that will filter out the rows of the partition
+    /// make_time_filter returns a set of expressions that will filter out the rows of the partition
     /// outside the time range requested.
-    async fn make_filtering_table_provider(
-        &self,
-        ctx: &SessionContext,
-        full_table_name: &str,
-        begin: DateTime<Utc>,
-        end: DateTime<Utc>,
-    ) -> Result<Arc<dyn TableProvider>>;
+    fn make_time_filter(&self, _begin: DateTime<Utc>, _end: DateTime<Utc>) -> Result<Vec<Expr>>;
 }
 
 impl dyn View {
