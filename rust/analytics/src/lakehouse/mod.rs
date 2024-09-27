@@ -40,6 +40,8 @@ pub mod reader_factory;
 pub mod streams_view;
 /// TableProvider implementation for the lakehouse
 pub mod table_provider;
+/// Rewrite table scans to take the query range into account
+pub mod table_scan_rewrite;
 /// Tracking of expired partitions
 pub mod temp;
 /// Jit view of the call tree built from the thread events of a single stream
@@ -48,5 +50,7 @@ pub mod thread_spans_view;
 pub mod view;
 /// Access to global or process-specific views
 pub mod view_factory;
+/// Table function to query process-specific views
+pub mod view_instance_table_function;
 /// Add or remove view partitions
 pub mod write_partition;

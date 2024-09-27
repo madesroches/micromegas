@@ -1,7 +1,14 @@
-use crate::{lakehouse::table_provider::MaterializedView, time::TimeRange};
-
-use super::{answer::Answer, partition_cache::QueryPartitionProvider, view::View};
-use anyhow::{Context, Result};
+use super::{
+    answer::Answer, partition_cache::QueryPartitionProvider, view::View, view_factory::ViewFactory,
+};
+use crate::{
+    lakehouse::{
+        table_provider::MaterializedView, table_scan_rewrite::TableScanRewrite,
+        view_instance_table_function::ViewInstanceTableFunction,
+    },
+    time::TimeRange,
+};
+use anyhow::Result;
 use datafusion::{
     arrow::array::RecordBatch,
     execution::{context::SessionContext, object_store::ObjectStoreUrl},
@@ -20,44 +27,20 @@ async fn register_table(
     object_store: Arc<dyn ObjectStore>,
     view: Arc<dyn View>,
 ) -> Result<()> {
-    view.jit_update(lake.clone(), query_range.clone())
-        .await
-        .with_context(|| "jit_update")?;
     let table = MaterializedView::new(
+        lake,
         object_store,
         view.clone(),
         part_provider,
         query_range.clone(),
     );
     let view_set_name = view.get_view_set_name().to_string();
-    if let Some(range) = &query_range {
-        let full_table_name = format!("__full_{}", &view_set_name);
-        ctx.register_table(
-            TableReference::Bare {
-                table: full_table_name.clone().into(),
-            },
-            Arc::new(table),
-        )?;
-
-        let filtering_table_provider = view
-            .make_filtering_table_provider(ctx, &full_table_name, range.begin, range.end)
-            .await
-            .with_context(|| "make_filtering_table_provider")?;
-
-        ctx.register_table(
-            TableReference::Bare {
-                table: view_set_name.into(),
-            },
-            filtering_table_provider,
-        )?;
-    } else {
-        ctx.register_table(
-            TableReference::Bare {
-                table: view_set_name.into(),
-            },
-            Arc::new(table),
-        )?;
-    }
+    ctx.register_table(
+        TableReference::Bare {
+            table: view_set_name.into(),
+        },
+        Arc::new(table),
+    )?;
     Ok(())
 }
 
@@ -72,6 +55,9 @@ pub async fn query_single_view(
     let view_instance_id = view.get_view_instance_id().to_string();
     info!("query_single_view {view_set_name} {view_instance_id} sql={sql}");
     let ctx = SessionContext::new();
+    if let Some(range) = &query_range {
+        ctx.add_analyzer_rule(Arc::new(TableScanRewrite::new(range.clone())));
+    }
     let object_store_url = ObjectStoreUrl::parse("obj://lakehouse/").unwrap();
     let object_store = lake.blob_storage.inner();
     ctx.register_object_store(object_store_url.as_ref(), object_store.clone());
@@ -87,14 +73,27 @@ pub async fn query(
     part_provider: Arc<dyn QueryPartitionProvider>,
     query_range: Option<TimeRange>,
     sql: &str,
-    views: &[Arc<dyn View>],
+    view_factory: Arc<ViewFactory>,
 ) -> Result<Answer> {
     info!("query sql={sql}");
     let ctx = SessionContext::new();
+    if let Some(range) = &query_range {
+        ctx.add_analyzer_rule(Arc::new(TableScanRewrite::new(range.clone())));
+    }
     let object_store_url = ObjectStoreUrl::parse("obj://lakehouse/").unwrap();
     let object_store = lake.blob_storage.inner();
+    ctx.register_udtf(
+        "view_instance",
+        Arc::new(ViewInstanceTableFunction::new(
+            lake.clone(),
+            object_store.clone(),
+            view_factory.clone(),
+            part_provider.clone(),
+            query_range.clone(),
+        )),
+    );
     ctx.register_object_store(object_store_url.as_ref(), object_store.clone());
-    for view in views {
+    for view in view_factory.get_global_views() {
         register_table(
             lake.clone(),
             part_provider.clone(),

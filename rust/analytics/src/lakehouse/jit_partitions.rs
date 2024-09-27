@@ -107,6 +107,7 @@ pub async fn is_jit_partition_up_to_date(
          AND view_instance_id = $2
          AND min_event_time < $3
          AND max_event_time > $4
+         AND file_metadata IS NOT NULL
          ;",
     )
     .bind(&*view_meta.view_set_name)
