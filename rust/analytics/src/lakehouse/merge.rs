@@ -125,7 +125,7 @@ pub async fn create_merged_partition(
             .await
             .with_context(|| "ParquetRecordBatchStreamBuilder::new")?;
         let mut rbstream = builder
-            .with_batch_size(1024 * 1024) // the default is 1024, which seems low
+            .with_batch_size(100 * 1024) // the default is 1024, which seems low
             .build()
             .with_context(|| "builder.build()")?;
         while let Some(rb_res) = rbstream.next().await {
