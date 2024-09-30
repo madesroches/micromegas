@@ -85,7 +85,7 @@ async fn verify_overlapping_partitions(
     if nb_source_events != existing_source_hash {
         writer
             .write_string(&format!(
-                "{desc}: existing partitions do not match source data: creating a new partition"
+                "{desc}: existing partitions do not match source data ({nb_source_events} vs {existing_source_hash}) : creating a new partition"
             ))
             .await?;
         return Ok(PartitionCreationStrategy::CreateFromSource);
@@ -93,13 +93,17 @@ async fn verify_overlapping_partitions(
 
     if nb_existing_partitions > 1 {
         writer
-            .write_string(&format!("{desc}: merging existing partitions"))
+            .write_string(&format!(
+                "{desc}: merging existing partitions, nb_source_events={nb_source_events}"
+            ))
             .await?;
         return Ok(PartitionCreationStrategy::MergeExisting);
     }
 
     writer
-        .write_string(&format!("{desc}: already up to date"))
+        .write_string(&format!(
+            "{desc}: already up to date, nb_source_events={nb_source_events}"
+        ))
         .await?;
     Ok(PartitionCreationStrategy::Abort)
 }
