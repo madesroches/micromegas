@@ -85,7 +85,7 @@ async fn verify_overlapping_partitions(
     if nb_source_events != existing_source_hash {
         writer
             .write_string(&format!(
-                "{desc}: existing partitions do not match source data: creating a new partition"
+                "{desc}: existing partitions do not match source data ({nb_source_events} vs {existing_source_hash}) : creating a new partition"
             ))
             .await?;
         return Ok(PartitionCreationStrategy::CreateFromSource);
