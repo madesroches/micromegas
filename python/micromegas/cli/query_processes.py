@@ -24,21 +24,15 @@ def main():
     now = datetime.datetime.now(datetime.timezone.utc)
     begin = now - delta
     end = now
-    df_processes = client.query_processes(begin, end, limit)
+    sql = """
+    SELECT process_id, exe, start_time, username, computer, distro, cpu_brand
+    FROM processes
+    LIMIT {limit}
+    ;""".format(limit=limit)
+    df_processes = client.query(sql, begin, end)
     if df_processes.empty:
         print("no data")
         return
-    df_processes = df_processes[
-        [
-            "process_id",
-            "exe",
-            "start_time",
-            "username",
-            "computer",
-            "distro",
-            "cpu_brand",
-        ]
-    ]
 
     if args.username is not None:
         df_processes = df_processes[
