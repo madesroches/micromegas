@@ -192,6 +192,7 @@ pub async fn write_partition_from_rows(
 
     let mut min_event_time: Option<DateTime<Utc>> = None;
     let mut max_event_time: Option<DateTime<Utc>> = None;
+    let mut write_progression = 0;
     while let Some(row_set) = rb_stream.recv().await {
         min_event_time = Some(
             min_event_time
@@ -212,6 +213,13 @@ pub async fn write_partition_from_rows(
                 .flush()
                 .await
                 .with_context(|| "arrow_writer.flush")?;
+        }
+
+        // we don't want to spam the connection with progress reports
+        // but we also don't want to trigger the idle timeout
+        let progression = arrow_writer.bytes_written() / (10 * 1024 * 1024);
+        if progression != write_progression {
+            write_progression = progression;
             let written = arrow_writer.bytes_written();
             response_writer
                 .write_string(&format!("{desc}: written {written} bytes"))
