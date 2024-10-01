@@ -182,6 +182,14 @@ pub async fn write_partition_from_rows(
     let mut arrow_writer =
         AsyncArrowWriter::try_new(object_store_writer, file_schema.clone(), Some(props))?;
 
+    let desc = format!(
+        "[{}, {}] {} {}",
+        view_metadata.view_set_name,
+        view_metadata.view_instance_id,
+        begin_insert_time.to_rfc3339(),
+        end_insert_time.to_rfc3339()
+    );
+
     let mut min_event_time: Option<DateTime<Utc>> = None;
     let mut max_event_time: Option<DateTime<Utc>> = None;
     while let Some(row_set) = rb_stream.recv().await {
@@ -204,16 +212,13 @@ pub async fn write_partition_from_rows(
                 .flush()
                 .await
                 .with_context(|| "arrow_writer.flush")?;
+            let written = arrow_writer.bytes_written();
+            response_writer
+                .write_string(&format!("{desc}: written {written} bytes"))
+                .await?;
         }
     }
 
-    let desc = format!(
-        "[{}, {}] {} {}",
-        view_metadata.view_set_name,
-        view_metadata.view_instance_id,
-        begin_insert_time.to_rfc3339(),
-        end_insert_time.to_rfc3339()
-    );
     if min_event_time.is_none() || max_event_time.is_none() {
         response_writer
             .write_string(&format!(
