@@ -27,48 +27,42 @@ def main():
     assert df_process.shape[0] == 1
     process = df_process.iloc[0]
     process_id = process["process_id"]
-    df_streams = client.query_streams(
-        begin=None, end=None, limit=1024, tag_filter="log", process_id=process_id
-    )
-    if df_streams.empty:
-        print("log stream not found")
-        sys.exit(1)
-    assert df_streams.shape[0] == 1
-    stream = df_streams.iloc[0]
-    stream_id = stream["stream_id"]
+    process_start_time = process["start_time"]
+    end = datetime.datetime.now(datetime.timezone.utc)
 
-    df_blocks = client.query_blocks(
-        begin=None, end=None, limit=1024, stream_id=stream_id
-    )
-    if df_blocks.empty:
-        print("no log entries")
-        sys.exit(0)
-
-    last_end = df_blocks["end_time"].max()
-    df_log = client.query_log_entries(
-        process["start_time"],
-        last_end,
-        limit=10 * 1024 * 1024,  # request lots of data
-        stream_id=stream_id,
-    )
-    df_log = df_log[df_log["level"] <= int(args.maxlevel)]
+    sort_order = ""
+    limit = 1024
+    conditions = []
 
     if args.target is not None:
-        df_log = df_log[df_log["target"].str.contains(args.target, case=False)]
+        conditions.append("AND target ILIKE '%{target}%'".format(target=args.target))
 
     if args.msg is not None:
-        df_log = df_log[df_log["msg"].str.contains(args.msg, case=False)]
-        
-    if args.last is not None:
-        assert args.first is None
-        df_log = df_log.tail(int(args.last))
-    else:
-        limit = (
-            args.first
-            or 1024 * 1024  # it would be too slow to print it all if it's a large log
-        )
-        df_log = df_log.head(int(limit))
+        conditions.append("AND msg ILIKE '%{msg}%'".format(msg=args.msg))
 
+    if args.first is not None:
+        sort_order = "ASC"
+        limit = int(args.first)
+
+    if args.last is not None:
+        sort_order = "DESC"
+        limit = int(args.last)
+        
+    sql = """
+    SELECT *
+    FROM view_instance('log_entries', '{process_id}')
+    WHERE level <= {max_level}
+    {conditions}
+    ORDER BY time {sort_order}
+    LIMIT {limit}
+    ;""".format(
+        process_id=process_id,
+        sort_order=sort_order,
+        max_level=int(args.maxlevel),
+        limit=limit,
+        conditions="\n".join(conditions),
+    )
+    df_log = client.query(sql, process_start_time, end).sort_values('time')
     print(tabulate(df_log, headers="keys"))
 
 
