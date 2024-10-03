@@ -7,9 +7,9 @@
 //! Some view instances are global (their view_instance_id is 'global').
 //! Global view instances are implicitly accessible to SQL queries.
 //! Non-global view instances are accessible using the table function `view_instance`. See [ViewInstanceTableFunction](super::view_instance_table_function::ViewInstanceTableFunction).
-//! 
+//!
 //! ## log_entries
-//! 
+//!
 //! | field        | type                        | description                                               |
 //! |------------- |-----------------------------|-----------------------------------------------------------|
 //! |process_id    |Utf8                         | unique id of the process, references the processes table  |
@@ -20,15 +20,15 @@
 //! |target        |Utf8                         | category or module name of the log entry                  |
 //! |level         |int32                        | verbosity level (Fatal=1, Error=2, Warning=3, Info=4, Debug=5, Trace=6)|                                           |
 //! |msg           |Utf8                         | message                                                   |
-//! 
+//!
 //! ### log_entries view instances
-//! 
+//!
 //! The implicit use of the `log_entries` table corresponds to the 'global' instance, which contains the log entries of all the processes.
-//! 
+//!
 //! Except the 'global' instance, the instance_id refers to any process_id. `view_instance('log_entries', process_id)` contains that process's log. Process-specific views are materialized just-in-time and can provide much better query performance compared to the 'global' instance.
-//! 
+//!
 //! ## measures
-//! 
+//!
 //! | field        | type                        | description                                               |
 //! |------------- |-----------------------------|-----------------------------------------------------------|
 //! |process_id    |Utf8                         | unique id of the process, references the processes table  |
@@ -40,16 +40,16 @@
 //! |name          |Utf8                         | name of the measure                                       |
 //! |unit          |Utf8                         | unit of measure                                           |
 //! |value         |Float64                      | value measured                                            |
-//! 
-//! 
+//!
+//!
 //! ### measures view instances
-//! 
+//!
 //! The implicit use of the `measures` table corresponds to the 'global' instance, which contains the metrics of all the processes.
-//! 
+//!
 //! Except the 'global' instance, the instance_id refers to any process_id. `view_instance('measures', process_id)` contains that process's metrics. Process-specific views are materialized just-in-time and can provide much better query performance compared to the 'global' instance.
-//! 
+//!
 //! ## thread_spans
-//! 
+//!
 //! | field        | type                        | description                                                |
 //! |------------- |-----------------------------|------------------------------------------------------------|
 //! |id            |Int64                        | span id, unique within this thread                         |
@@ -63,14 +63,14 @@
 //! |target        |Utf8                         | category or module name                                    |
 //! |filename      |Utf8                         | name or path of the source file where the span is coded    |
 //! |line          |UInt32                       | line number in the file where the span can be found        |
-//! 
+//!
 //! ### thread_spans view instances
-//! 
+//!
 //! There is no 'global' instance in the 'thread_spans' view set, there is therefore no implicit thread_spans table availble.
 //! Users can call the table function `view_instance('thread_spans', stream_id)` to query the spans in the thread associated with the specified stream_id.
-//! 
+//!
 //! ## processes
-//! 
+//!
 //! | field        | type                        | description                                                |
 //! |------------- |-----------------------------|------------------------------------------------------------|
 //! |process_id    |Utf8                         | process unique id                                          |
@@ -86,11 +86,11 @@
 //! |insert_time   |UTC Timestamp (nanoseconds)  | server-side timestamp when the process metedata was received |
 //! |parent_process_id |Utf8                     | unique id of the parent process                            |
 //! |properties | Array of {key: utf8, value: utf8} | self-reported metadata by the process                   |
-//! 
+//!
 //! There is only one instance in this view set and it is implicitly available.
-//! 
+//!
 //! ## streams
-//! 
+//!
 //! | field        | type                        | description                                                |
 //! |------------- |-----------------------------|------------------------------------------------------------|
 //! |stream_id     |Utf8                         | stream unique id                                           |
@@ -100,11 +100,11 @@
 //! |tags          | Array of utf8               | Purpose of the stream, can contain "log", "metrics" or "cpu" |
 //! |properties | Array of {key: utf8, value: utf8} | self-reported stream metadata by the process            |
 //! |insert_time   |UTC Timestamp (nanoseconds)  | server-side timestamp when the stream metedata was received |
-//! 
+//!
 //! There is only one instance in this view set and it is implicitly available.
-//! 
+//!
 //! ## blocks
-//! 
+//!
 //! | field        | type                        | description                                                |
 //! |------------- |-----------------------------|------------------------------------------------------------|
 //! |block_id      |Utf8                         | block unique id                                            |
@@ -131,11 +131,11 @@
 //! |processes.computer      |Utf8                         | name of the computer or vm                                 |
 //! |processes.distro        |Utf8                         | name of operating system                                   |
 //! |processes.cpu_brand     |Utf8                         | identifies the cpu                                         |
-//! 
+//!
 //! There is only one instance in this view set and it is implicitly available.
-//! 
-//! 
-//! 
+//!
+//!
+//!
 use super::{
     blocks_view::BlocksViewMaker, log_view::LogViewMaker, metrics_view::MetricsViewMaker,
     processes_view::ProcessesViewMaker, streams_view::StreamsViewMaker,
