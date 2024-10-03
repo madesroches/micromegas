@@ -1,4 +1,5 @@
-pushd ..\rust
+pushd %~dp0..\rust
+
 set PUBLISH_GRACE_SLEEP=60
 
 cargo release -p micromegas-derive-transit -x --no-confirm
