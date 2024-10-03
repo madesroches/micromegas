@@ -48,7 +48,6 @@ pub mod temp;
 pub mod thread_spans_view;
 /// Basic interface for a set of rows queryable and materializable
 pub mod view;
-/// Access to global or process-specific views
 pub mod view_factory;
 /// Table function to query process-specific views
 pub mod view_instance_table_function;

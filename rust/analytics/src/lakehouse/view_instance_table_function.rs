@@ -11,6 +11,17 @@ use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use object_store::ObjectStore;
 use std::sync::Arc;
 
+/// `ViewInstanceTableFunction` gives access to any view instance using a [ViewFactory].
+///
+/// ```python
+/// # Python code showing the usage of `view_instance(view_set_name, view_instance_id)`
+/// sql = """
+/// SELECT *
+/// FROM view_instance('thread_spans', '{stream_id}')
+/// ;""".format(stream_id=stream_id)
+/// df_spans = client.query(sql, begin_spans, end_spans)
+/// ```
+///
 pub struct ViewInstanceTableFunction {
     lake: Arc<DataLakeConnection>,
     object_store: Arc<dyn ObjectStore>,
