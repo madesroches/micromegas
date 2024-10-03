@@ -46,18 +46,6 @@ pub async fn find_stream_request(
     )
 }
 
-pub async fn query_processes_request(
-    Extension(service): Extension<Arc<AnalyticsService>>,
-    body: bytes::Bytes,
-) -> Response {
-    bytes_response(
-        service
-            .query_processes(body)
-            .await
-            .with_context(|| "query_processes"),
-    )
-}
-
 pub async fn query_streams_request(
     Extension(service): Extension<Arc<AnalyticsService>>,
     body: bytes::Bytes,
@@ -79,54 +67,6 @@ pub async fn query_blocks_request(
             .query_blocks(body)
             .await
             .with_context(|| "query_blocks"),
-    )
-}
-
-pub async fn query_spans_request(
-    Extension(service): Extension<Arc<AnalyticsService>>,
-    body: bytes::Bytes,
-) -> Response {
-    bytes_response(
-        service
-            .query_spans(body)
-            .await
-            .with_context(|| "query_spans"),
-    )
-}
-
-pub async fn query_thread_events_request(
-    Extension(service): Extension<Arc<AnalyticsService>>,
-    body: bytes::Bytes,
-) -> Response {
-    bytes_response(
-        service
-            .query_thread_events(body)
-            .await
-            .with_context(|| "query_thread_events"),
-    )
-}
-
-pub async fn query_log_entries_request(
-    Extension(service): Extension<Arc<AnalyticsService>>,
-    body: bytes::Bytes,
-) -> Response {
-    bytes_response(
-        service
-            .query_log_entries(body)
-            .await
-            .with_context(|| "query_log_entries"),
-    )
-}
-
-pub async fn query_metrics_request(
-    Extension(service): Extension<Arc<AnalyticsService>>,
-    body: bytes::Bytes,
-) -> Response {
-    bytes_response(
-        service
-            .query_metrics(body)
-            .await
-            .with_context(|| "query_metrics"),
     )
 }
 
@@ -183,21 +123,10 @@ pub fn register_routes(router: Router) -> Router {
     router
         .route("/analytics/find_process", post(find_process_request))
         .route("/analytics/find_stream", post(find_stream_request))
-        .route("/analytics/query_processes", post(query_processes_request))
         .route("/analytics/query_streams", post(query_streams_request))
         .route("/analytics/query_blocks", post(query_blocks_request))
-        .route("/analytics/query_spans", post(query_spans_request))
-        .route(
-            "/analytics/query_log_entries",
-            post(query_log_entries_request),
-        )
-        .route("/analytics/query_metrics", post(query_metrics_request))
         .route("/analytics/query_view", post(query_view_request))
         .route("/analytics/query", post(query_request))
-        .route(
-            "/analytics/query_thread_events",
-            post(query_thread_events_request),
-        )
         .route(
             "/analytics/query_partitions",
             post(query_partitions_request),

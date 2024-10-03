@@ -42,13 +42,6 @@ pub struct FindStreamRequest {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct QueryProcessesRequest {
-    pub limit: i64,
-    pub begin: String,
-    pub end: String,
-}
-
-#[derive(Debug, Deserialize)]
 pub struct QueryStreamsRequest {
     pub limit: i64,
     pub begin: Option<String>,
@@ -62,44 +55,6 @@ pub struct QueryStreamsRequest {
 pub struct QueryBlocksRequest {
     #[serde(deserialize_with = "micromegas_transit::uuid_utils::uuid_from_string")]
     pub stream_id: Uuid,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct QuerySpansRequest {
-    pub limit: i64,
-    pub begin: String,
-    pub end: String,
-    #[serde(deserialize_with = "micromegas_transit::uuid_utils::uuid_from_string")]
-    pub stream_id: Uuid,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct QueryThreadEventsRequest {
-    pub limit: i64,
-    pub begin: String,
-    pub end: String,
-    #[serde(deserialize_with = "micromegas_transit::uuid_utils::uuid_from_string")]
-    pub stream_id: Uuid,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct QueryLogEntriesRequest {
-    pub limit: Option<i64>,
-    pub begin: String,
-    pub end: String,
-    #[serde(deserialize_with = "micromegas_transit::uuid_utils::opt_uuid_from_string")]
-    pub stream_id: Option<Uuid>,
-    pub sql: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct QueryMetricsRequest {
-    pub limit: Option<i64>,
-    pub begin: String,
-    pub end: String,
-    #[serde(deserialize_with = "micromegas_transit::uuid_utils::opt_uuid_from_string")]
-    pub stream_id: Option<Uuid>,
-    pub sql: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -190,45 +145,6 @@ impl AnalyticsService {
              WHERE stream_id = $1",
         )
         .bind(request.stream_id)
-        .fetch_all(&self.data_lake.db_pool)
-        .await?;
-        let record_batch =
-            rows_to_record_batch(&rows).with_context(|| "converting rows to record batch")?;
-        let answer = Answer::from_record_batch(record_batch);
-        serialize_record_batches(&answer)
-    }
-
-    pub async fn query_processes(&self, body: bytes::Bytes) -> Result<bytes::Bytes> {
-        let request: QueryProcessesRequest = ciborium::from_reader(body.reader())
-            .with_context(|| "parsing QueryProcessesRequest")?;
-
-        let begin = DateTime::<FixedOffset>::parse_from_rfc3339(&request.begin)
-            .with_context(|| "parsing begin time range")?;
-        let end = DateTime::<FixedOffset>::parse_from_rfc3339(&request.end)
-            .with_context(|| "parsing end time range")?;
-        let rows = sqlx::query(
-            "SELECT process_id,
-                    exe,
-                    username,
-                    realname,
-                    computer,
-                    distro,
-                    cpu_brand,
-                    tsc_frequency,
-                    start_time,
-                    start_ticks,
-                    insert_time,
-                    parent_process_id,
-                    properties
-             FROM processes
-             WHERE start_time >= $1
-             AND start_time < $2
-             ORDER BY start_time
-             LIMIT $3",
-        )
-        .bind(begin)
-        .bind(end)
-        .bind(request.limit)
         .fetch_all(&self.data_lake.db_pool)
         .await?;
         let record_batch =
@@ -335,130 +251,6 @@ impl AnalyticsService {
         let record_batch =
             rows_to_record_batch(&rows).with_context(|| "converting rows to record batch")?;
         let answer = Answer::from_record_batch(record_batch);
-        serialize_record_batches(&answer)
-    }
-
-    pub async fn query_spans(&self, body: bytes::Bytes) -> Result<bytes::Bytes> {
-        let request: QuerySpansRequest =
-            ciborium::from_reader(body.reader()).with_context(|| "parsing QuerySpansRequest")?;
-        let begin = DateTime::<FixedOffset>::parse_from_rfc3339(&request.begin)
-            .with_context(|| "parsing begin time range")?;
-        let end = DateTime::<FixedOffset>::parse_from_rfc3339(&request.end)
-            .with_context(|| "parsing end time range")?;
-        let record_batch = crate::query_spans::query_spans(
-            &self.data_lake,
-            request.limit,
-            request.stream_id,
-            begin.into(),
-            end.into(),
-        )
-        .await
-        .with_context(|| "query_spans")?;
-        let answer = Answer::from_record_batch(record_batch);
-        serialize_record_batches(&answer)
-    }
-
-    pub async fn query_thread_events(&self, body: bytes::Bytes) -> Result<bytes::Bytes> {
-        let request: QueryThreadEventsRequest = ciborium::from_reader(body.reader())
-            .with_context(|| "parsing QueryThreadEventsRequest")?;
-        let begin = DateTime::<FixedOffset>::parse_from_rfc3339(&request.begin)
-            .with_context(|| "parsing begin time range")?;
-        let end = DateTime::<FixedOffset>::parse_from_rfc3339(&request.end)
-            .with_context(|| "parsing end time range")?;
-        let record_batch = crate::query_thread_events::query_thread_events(
-            &self.data_lake,
-            request.limit,
-            request.stream_id,
-            begin.into(),
-            end.into(),
-        )
-        .await
-        .with_context(|| "query_thread_events")?;
-        let answer = Answer::from_record_batch(record_batch);
-        serialize_record_batches(&answer)
-    }
-
-    pub async fn query_log_entries(&self, body: bytes::Bytes) -> Result<bytes::Bytes> {
-        let request: QueryLogEntriesRequest = ciborium::from_reader(body.reader())
-            .with_context(|| "parsing QueryLogEntriesRequest")?;
-        let begin = DateTime::<FixedOffset>::parse_from_rfc3339(&request.begin)
-            .with_context(|| "parsing begin time range")?;
-        let end = DateTime::<FixedOffset>::parse_from_rfc3339(&request.end)
-            .with_context(|| "parsing end time range")?;
-        let answer = if let Some(stream_id) = request.stream_id {
-            if request.limit.is_none() {
-                anyhow::bail!("limit is required for stream-specific queries");
-            }
-            let record_batch = crate::query_log_entries::query_log_entries(
-                &self.data_lake,
-                stream_id,
-                begin.into(),
-                end.into(),
-                request.limit.unwrap(),
-            )
-            .await
-            .with_context(|| "query_log_entries")?;
-            Answer::from_record_batch(record_batch)
-        } else {
-            if request.sql.is_none() {
-                anyhow::bail!("sql is required for lakehouse queries");
-            }
-            if request.limit.is_some() {
-                anyhow::bail!("limit must be included in the sql statement for lakehouse queries");
-            }
-            let view = self.view_factory.make_view("log_entries", "global")?;
-            crate::lakehouse::query::query_single_view(
-                self.data_lake.clone(),
-                Arc::new(LivePartitionProvider::new(self.data_lake.db_pool.clone())),
-                Some(TimeRange::new(begin.into(), end.into())),
-                &request.sql.unwrap(),
-                view,
-            )
-            .await
-            .with_context(|| "lakehouse::query::query")?
-        };
-        serialize_record_batches(&answer)
-    }
-
-    pub async fn query_metrics(&self, body: bytes::Bytes) -> Result<bytes::Bytes> {
-        let request: QueryMetricsRequest =
-            ciborium::from_reader(body.reader()).with_context(|| "parsing QueryMetricsRequest")?;
-        let begin = DateTime::<FixedOffset>::parse_from_rfc3339(&request.begin)
-            .with_context(|| "parsing begin time range")?;
-        let end = DateTime::<FixedOffset>::parse_from_rfc3339(&request.end)
-            .with_context(|| "parsing end time range")?;
-        let answer = if let Some(stream_id) = request.stream_id {
-            if request.limit.is_none() {
-                anyhow::bail!("limit is required for stream-specific queries");
-            }
-            let record_batch = crate::query_metrics::query_metrics(
-                &self.data_lake,
-                request.limit.unwrap(),
-                stream_id,
-                begin.into(),
-                end.into(),
-            )
-            .await
-            .with_context(|| "query_metrics")?;
-            Answer::from_record_batch(record_batch)
-        } else {
-            if request.sql.is_none() {
-                anyhow::bail!("sql is required for lakehouse queries");
-            }
-            if request.limit.is_some() {
-                anyhow::bail!("limit must be included in the sql statement for lakehouse queries");
-            }
-            let view = self.view_factory.make_view("measures", "global")?;
-            crate::lakehouse::query::query_single_view(
-                self.data_lake.clone(),
-                Arc::new(LivePartitionProvider::new(self.data_lake.db_pool.clone())),
-                Some(TimeRange::new(begin.into(), end.into())),
-                &request.sql.unwrap(),
-                view,
-            )
-            .await
-            .with_context(|| "lakehouse::query::query")?
-        };
         serialize_record_batches(&answer)
     }
 

@@ -32,14 +32,6 @@ pub mod metadata;
 pub mod metrics_table;
 /// Access to the raw binary telemetry payload
 pub mod payload;
-/// Deprecated - will be replaced with lakehouse queries
-pub mod query_log_entries;
-/// Deprecated - will be replaced with lakehouse queries
-pub mod query_metrics;
-/// Deprecated - will be replaced with lakehouse queries
-pub mod query_spans;
-/// Access to individual thread events
-pub mod query_thread_events;
 /// Streams response for long requests
 pub mod response_writer;
 /// Location in instrumented source code
@@ -50,7 +42,5 @@ pub mod span_table;
 pub mod sql_arrow_bridge;
 /// Parses thread event streams
 pub mod thread_block_processor;
-/// In-memory thread event in arrow format
-pub mod thread_events_table;
 /// Conversion between ticks and more convenient date/time representations
 pub mod time;
