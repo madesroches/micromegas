@@ -45,6 +45,13 @@ In order to keep costs down, most payloads will remain unprocessed until they ex
 
 ## Status
 
+### October 2024
+Released [version 0.2.0](https://crates.io/crates/micromegas)
+
+ * Unified the query interface
+   * Using [`view_instance`](https://docs.rs/micromegas/latest/micromegas/analytics/lakehouse/view_instance_table_function/struct.ViewInstanceTableFunction.html) table function to materialize just-in-time process-specific views from within SQL
+ * Updated python doc to reflect the new API: https://pypi.org/project/micromegas/
+
 ### Septembre 2024
 Released [version 0.1.9](https://crates.io/crates/micromegas)
 
