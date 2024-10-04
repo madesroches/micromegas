@@ -4,7 +4,7 @@ Python analytics client for https://github.com/madesroches/micromegas/
 
 ## Example usage
 
-Query the most recent 2 log entries from the analytics service
+Query the 2 most recent log entries from the analytics service
 
 ```python
 import datetime

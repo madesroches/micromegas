@@ -105,49 +105,55 @@ MICROMEGAS_FMETRIC("Frame", MicromegasTracing::Verbosity::Med, TEXT("DeltaTime")
  * APIs are for programmers - more accessible tooling is on the way
  
 ---
+<style scoped>
+table {
+  font-size: 13px;
+}
+</style>
 # Analytics: Python API
 
-All methods of client return pandas dataframes or throw errors.
+Query using SQL
 
 ```python
+client = micromegas.client.Client("http://localhost:8082/")
+sql = """SELECT time, process_id, level, target, msg
+FROM log_entries
+WHERE level <= 4
+AND exe LIKE '%analytics%'
+ORDER BY time DESC
+LIMIT 2
+"""
+client.query(sql, begin, end)
 
-In [2]: import micromegas                                                     
-                                                                              
-In [3]: client = micromegas.connect()                                         
-                                                                              
-In [4]: help(client)                                                          
-Help on Client in module micromegas.client object:                            
-                                                                              
-class Client(builtins.object)                                                 
- |  Client(base_url, headers={})                                              
- |                                                                            
- |  Methods defined here:                                                     
- |                                                                            
- |  __init__(self, base_url, headers={})                                      
- |      Initialize self.  See help(type(self)) for accurate signature.        
- |                                                                            
- |  find_process(self, process_id)                                            
- |                                                                            
- |  query_blocks(self, begin, end, limit, stream_id)                          
- |                                                                            
- |  query_log_entries(self, begin, end, limit, stream_id)                     
- |                                                                            
- |  query_metrics(self, begin, end, limit, stream_id)                         
- |                                                                            
- |  query_processes(self, begin, end, limit)                                  
- |                                                                            
- |  query_spans(self, begin, end, limit, stream_id)                           
- |                                                                            
- |  query_streams(self, begin, end, limit, process_id=None, tag_filter=None)  
- |                                                                            
- |  query_thread_events(self, begin, end, limit, stream_id)                   
- |                                                                            
 ```
+
+---
+
+Returns pandas DataFrame
+
+<style scoped>
+table {
+  font-size: 13px;
+}
+</style>
+
+|    | time                                | process_id                           |   level | target                                 | msg                                         |
+|---:|:------------------------------------|:-------------------------------------|--------:|:---------------------------------------|:--------------------------------------------|
+|  0 | 2024-10-03 18:17:56.087543714+00:00 | 1db06afc-1c88-47d1-81b3-f398c5f93616 |       4 | acme_telemetry::trace_middleware       | response status=200 OK uri=/analytics/query |
+|  1 | 2024-10-03 18:17:53.924037729+00:00 | 1db06afc-1c88-47d1-81b3-f398c5f93616 |       4 | micromegas_analytics::lakehouse::query | query sql=                                  |
+|    |                                     |                                      |         |                                        | SELECT time, process_id, level, target, msg |
+|    |                                     |                                      |         |                                        | FROM log_entries                            |
+|    |                                     |                                      |         |                                        | WHERE level <= 4                            |
+|    |                                     |                                      |         |                                        | AND exe LIKE '%analytics%'                  |
+|    |                                     |                                      |         |                                        | ORDER BY time DESC                          |
+|    |                                     |                                      |         |                                        | LIMIT 2                                     |
+
+See https://pypi.org/project/micromegas
 
 ---
 # Analytics: Command-line interface
 
-Not even pre-alpha - work in progress.
+For when you don't feel like starting up a python interpreter...
 
 ```cmd
 F:\git\micromegas\python\micromegas\cli>python query_processes.py --help                                                                                                                       
