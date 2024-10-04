@@ -45,6 +45,12 @@ In order to keep costs down, most payloads will remain unprocessed until they ex
 
 ## Status
 
+### October 2024
+Released [version 0.2.0](https://crates.io/crates/micromegas)
+
+ * Unified the query interface
+ * Updated python doc to reflect the new API: https://pypi.org/project/micromegas/
+
 ### Septembre 2024
 Released [version 0.1.9](https://crates.io/crates/micromegas)
 
