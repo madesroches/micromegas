@@ -7,6 +7,7 @@
 //!  - `MICROMEGAS_OBJECT_STORE_URI` : payloads, partitions
 
 use anyhow::{Context, Result};
+use axum::http::Method;
 use axum::middleware;
 use axum::{Extension, Router};
 use clap::Parser;
@@ -20,6 +21,7 @@ use micromegas::telemetry_sink::TelemetryGuardBuilder;
 use micromegas::tracing::prelude::*;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use tower_http::cors::{Any, CorsLayer};
 use tower_http::timeout::TimeoutLayer;
 
 #[derive(Parser, Debug)]
@@ -36,10 +38,16 @@ async fn serve_http(
     view_factory: Arc<ViewFactory>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let service = Arc::new(AnalyticsService::new(lake, view_factory));
+
     let app = register_routes(Router::new())
         .layer(Extension(service))
         .layer(middleware::from_fn(observability_middleware))
-        .layer(TimeoutLayer::new(std::time::Duration::from_secs(5 * 60)));
+        .layer(TimeoutLayer::new(std::time::Duration::from_secs(5 * 60)))
+        .layer(
+            CorsLayer::new()
+                .allow_methods([Method::POST])
+                .allow_origin(Any),
+        );
     let listener = tokio::net::TcpListener::bind(args.listen_endpoint)
         .await
         .unwrap();
