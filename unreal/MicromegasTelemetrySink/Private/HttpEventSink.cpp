@@ -320,7 +320,10 @@ TSharedPtr<MicromegasTracing::EventSink, ESPMode::ThreadSafe> InitHttpEventSink(
 	DualTime StartTime = DualTime::Now();
 	FString ProcessId = CreateGuid();
 	FString ParentProcessId = FPlatformMisc::GetEnvironmentVariable(TEXT("MICROMEGAS_TELEMETRY_PARENT_PROCESS"));
+#if UE_EDITOR
+	// this logs an error in console builds, the game should not be spawning processes anyway
 	FPlatformMisc::SetEnvironmentVar(TEXT("MICROMEGAS_TELEMETRY_PARENT_PROCESS"), *ProcessId);
+#endif
 
 	ProcessInfoPtr Process(new ProcessInfo());
 	Process->ProcessId = ProcessId;
@@ -329,6 +332,10 @@ TSharedPtr<MicromegasTracing::EventSink, ESPMode::ThreadSafe> InitHttpEventSink(
 	Process->Exe = FPlatformProcess::ExecutableName(false);
 #else
 	Process->Exe = FPlatformProcess::ExecutablePath();
+	if (Process->Exe.IsEmpty())
+	{
+		Process->Exe = FApp::GetProjectName();
+	}
 #endif
 	Process->Username = FPlatformProcess::UserName(false);
 	Process->Computer = FPlatformProcess::ComputerName();

@@ -27,6 +27,7 @@ def main():
     sql = """
     SELECT process_id, exe, start_time, username, computer, distro, cpu_brand
     FROM processes
+    ORDER BY start_time
     LIMIT {limit}
     ;""".format(limit=limit)
     df_processes = client.query(sql, begin, end)
