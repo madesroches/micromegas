@@ -24,11 +24,14 @@ micromegas-transit = { path = "transit", version = "0.2.1" }
 micromegas = { path = "public" }
 
 anyhow = "1.0"
+arrow-flight = { version = "53", features = ["flight-sql-experimental"] }
+arrow-ipc = { version = "53" }
 async-stream = "0.3"
 async-trait = "0.1"
 aws-config = "0.12"
 aws-sdk-s3 = "0.12"
 axum = "0.7"
+base64 = "0.22"
 blake3 = { version = "1.3", features = ["prefer_intrinsics"] }
 bytes = "1.1"
 cfg-if = "1.0"
@@ -37,7 +40,7 @@ ciborium = "0.2.2"
 clap = { version = "4", features = ["derive"] }
 colored = { version = "2" }
 ctrlc = "3.2.0"
-datafusion = "42.0.0"
+datafusion = "42"
 futures = "0.3"
 lazy_static = "1.4"
 log = { version = "0.4", features = ["std"] }
@@ -46,6 +49,7 @@ memoffset = "0.6"
 object_store = { version = "0.11", features = ["aws"] }
 once_cell = "1.7.2"
 proc-macro2 = "1.0"
+prost = { version = "0.13" }
 quote = "1.0"
 raw-cpuid = "10.2.0"
 reqwest = {version = "0.12.4"}
@@ -57,6 +61,7 @@ thiserror = "1.0"
 thread-id = "4.0"
 tokio = { version = "1.33", features = ["macros","rt-multi-thread","tracing"]}
 tokio-retry2 = "0.5.3"
+tonic = { version = "0.12", features = ["transport", "tls-webpki-roots"] }
 tower-http = { version = "0.5.2", features = ["cors", "limit", "timeout"] }
 tracing = "0.1.40"
 tracing-core = "0.1.32"
