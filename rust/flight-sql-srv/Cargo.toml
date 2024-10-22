@@ -1,0 +1,33 @@
+[package]
+name = "flight-sql-srv"
+description = "FlightSQL server for micromegas"
+keywords.workspace = true
+version.workspace = true
+edition.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+micromegas.workspace = true
+
+anyhow.workspace = true
+arrow-flight.workspace = true
+arrow-ipc.workspace = true
+axum.workspace = true
+base64.workspace = true
+bytes.workspace = true
+clap.workspace = true
+datafusion.workspace = true
+futures.workspace = true
+once_cell.workspace = true
+prost.workspace = true
+sqlx.workspace = true
+tokio.workspace = true
+tonic.workspace = true
+tower-http.workspace = true
+
+[[bin]]
+name = "flight-sql-srv"
+path = "src/flight_sql_srv.rs"
