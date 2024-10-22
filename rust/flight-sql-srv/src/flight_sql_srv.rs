@@ -20,7 +20,6 @@ use std::str::FromStr;
 use std::sync::Arc;
 use tonic::metadata::MetadataValue;
 use tonic::transport::Server;
-use tonic::transport::{Certificate, Identity, ServerTlsConfig};
 use tonic::{Request, Response, Status, Streaming};
 
 use arrow_flight::encode::FlightDataEncoderBuilder;
@@ -784,7 +783,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     migrate_lakehouse(data_lake.db_pool.clone())
         .await
         .with_context(|| "migrate_lakehouse")?;
-    let view_factory = default_view_factory()?;
+    let _view_factory = default_view_factory()?;
 
     let addr_str = "0.0.0.0:50051";
     let addr = addr_str.parse()?;
