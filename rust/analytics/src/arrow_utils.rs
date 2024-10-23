@@ -1,13 +1,14 @@
 use anyhow::{Context, Result};
 use bytes::BufMut;
 use bytes::{Bytes, BytesMut};
+use datafusion::parquet::file::metadata::ParquetMetaDataReader;
 use datafusion::{
     arrow::{
         array::{as_struct_array, ListBuilder, StructBuilder},
         record_batch::RecordBatch,
     },
+    parquet::file::metadata::ParquetMetaData,
     parquet::file::metadata::ParquetMetaDataWriter,
-    parquet::file::{footer::parse_metadata, metadata::ParquetMetaData},
 };
 
 pub fn make_empty_record_batch() -> RecordBatch {
@@ -17,7 +18,7 @@ pub fn make_empty_record_batch() -> RecordBatch {
 }
 
 pub fn parse_parquet_metadata(bytes: &Bytes) -> Result<ParquetMetaData> {
-    parse_metadata(bytes).with_context(|| "parsing ParquetMetaData")
+    ParquetMetaDataReader::decode_metadata(bytes).with_context(|| "parsing ParquetMetaData")
 }
 
 pub fn serialize_parquet_metadata(pmd: &ParquetMetaData) -> Result<bytes::Bytes> {
