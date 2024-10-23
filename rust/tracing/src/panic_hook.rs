@@ -1,11 +1,11 @@
 use std::io::Write;
-use std::panic::{take_hook, PanicInfo};
+use std::panic::{take_hook, PanicHookInfo};
 
 use crate::error;
 use crate::guards::shutdown_telemetry;
 
 pub fn init_panic_hook() {
-    type BoxedHook = Box<dyn Fn(&PanicInfo<'_>) + Sync + Send + 'static>;
+    type BoxedHook = Box<dyn Fn(&PanicHookInfo<'_>) + Sync + Send + 'static>;
     static mut PREVIOUS_HOOK: Option<BoxedHook> = None;
     unsafe {
         assert!(PREVIOUS_HOOK.is_none());
