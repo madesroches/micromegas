@@ -17,9 +17,7 @@ use tonic::metadata::MetadataValue;
 use tonic::{Request, Response, Status, Streaming};
 
 use arrow_flight::encode::FlightDataEncoderBuilder;
-use arrow_flight::sql::metadata::{
-    SqlInfoData, SqlInfoDataBuilder, XdbcTypeInfo, XdbcTypeInfoData, XdbcTypeInfoDataBuilder,
-};
+use arrow_flight::sql::metadata::{SqlInfoData, SqlInfoDataBuilder};
 use arrow_flight::sql::{
     server::FlightSqlService, ActionBeginSavepointRequest, ActionBeginSavepointResult,
     ActionBeginTransactionRequest, ActionBeginTransactionResult, ActionCancelQueryRequest,
@@ -30,8 +28,8 @@ use arrow_flight::sql::{
     CommandGetDbSchemas, CommandGetExportedKeys, CommandGetImportedKeys, CommandGetPrimaryKeys,
     CommandGetSqlInfo, CommandGetTableTypes, CommandGetTables, CommandGetXdbcTypeInfo,
     CommandPreparedStatementQuery, CommandPreparedStatementUpdate, CommandStatementIngest,
-    CommandStatementQuery, CommandStatementSubstraitPlan, CommandStatementUpdate, Nullable,
-    ProstMessageExt, Searchable, SqlInfo, TicketStatementQuery, XdbcDataType,
+    CommandStatementQuery, CommandStatementSubstraitPlan, CommandStatementUpdate, ProstMessageExt,
+    SqlInfo, TicketStatementQuery,
 };
 use arrow_flight::utils::batches_to_flight_data;
 use arrow_flight::{
@@ -71,36 +69,10 @@ const FAKE_UPDATE_RESULT: i64 = 1;
 static INSTANCE_SQL_DATA: Lazy<SqlInfoData> = Lazy::new(|| {
     let mut builder = SqlInfoDataBuilder::new();
     // Server information
-    builder.append(SqlInfo::FlightSqlServerName, "Example Flight SQL Server");
+    builder.append(SqlInfo::FlightSqlServerName, "Micromegas Flight SQL Server");
     builder.append(SqlInfo::FlightSqlServerVersion, "1");
     // 1.3 comes from https://github.com/apache/arrow/blob/f9324b79bf4fc1ec7e97b32e3cce16e75ef0f5e3/format/Schema.fbs#L24
     builder.append(SqlInfo::FlightSqlServerArrowVersion, "1.3");
-    builder.build().unwrap()
-});
-
-static INSTANCE_XBDC_DATA: Lazy<XdbcTypeInfoData> = Lazy::new(|| {
-    let mut builder = XdbcTypeInfoDataBuilder::new();
-    builder.append(XdbcTypeInfo {
-        type_name: "INTEGER".into(),
-        data_type: XdbcDataType::XdbcInteger,
-        column_size: Some(32),
-        literal_prefix: None,
-        literal_suffix: None,
-        create_params: None,
-        nullable: Nullable::NullabilityNullable,
-        case_sensitive: false,
-        searchable: Searchable::Full,
-        unsigned_attribute: Some(false),
-        fixed_prec_scale: false,
-        auto_increment: Some(false),
-        local_type_name: Some("INTEGER".into()),
-        minimum_scale: None,
-        maximum_scale: None,
-        sql_data_type: XdbcDataType::XdbcInteger,
-        datetime_subcode: None,
-        num_prec_radix: Some(2),
-        interval_precision: None,
-    });
     builder.build().unwrap()
 });
 
@@ -316,13 +288,11 @@ impl FlightSqlService for FlightSqlServiceImpl {
         let flight_descriptor = request.into_inner();
         let ticket = Ticket::new(query.as_any().encode_to_vec());
         let endpoint = FlightEndpoint::new().with_ticket(ticket);
-
         let flight_info = FlightInfo::new()
             .try_with_schema(query.into_builder(&INSTANCE_SQL_DATA).schema().as_ref())
             .map_err(|e| status!("Unable to encode schema", e))?
             .with_endpoint(endpoint)
             .with_descriptor(flight_descriptor);
-
         Ok(tonic::Response::new(flight_info))
     }
 
@@ -360,24 +330,12 @@ impl FlightSqlService for FlightSqlServiceImpl {
 
     async fn get_flight_info_xdbc_type_info(
         &self,
-        query: CommandGetXdbcTypeInfo,
-        request: Request<FlightDescriptor>,
+        _query: CommandGetXdbcTypeInfo,
+        _request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
-        info!("get_flight_info_xdbc_type_info");
-        let flight_descriptor = request.into_inner();
-        let ticket = Ticket::new(query.as_any().encode_to_vec());
-        let endpoint = FlightEndpoint::new().with_ticket(ticket);
-
-        let flight_info = FlightInfo::new()
-            .try_with_schema(query.into_builder(&INSTANCE_XBDC_DATA).schema().as_ref())
-            .map_err(|e| status!("Unable to encode schema", e))?
-            .with_endpoint(endpoint)
-            .with_descriptor(flight_descriptor);
-
-        Ok(tonic::Response::new(flight_info))
+        api_entry_not_implemented!()
     }
 
-    // do_get
     async fn do_get_statement(
         &self,
         _ticket: TicketStatementQuery,
@@ -544,19 +502,10 @@ impl FlightSqlService for FlightSqlServiceImpl {
 
     async fn do_get_xdbc_type_info(
         &self,
-        query: CommandGetXdbcTypeInfo,
+        _query: CommandGetXdbcTypeInfo,
         _request: Request<Ticket>,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
-        info!("do_get_xdbc_type_info");
-        // create a builder with pre-defined Xdbc data:
-        let builder = query.into_builder(&INSTANCE_XBDC_DATA);
-        let schema = builder.schema();
-        let batch = builder.build();
-        let stream = FlightDataEncoderBuilder::new()
-            .with_schema(schema)
-            .build(futures::stream::once(async { batch }))
-            .map_err(Status::from);
-        Ok(Response::new(Box::pin(stream)))
+        api_entry_not_implemented!()
     }
 
     // do_put
