@@ -544,7 +544,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
                     catalog_name,
                     schema_name,
                     table_name,
-                    "TABLE",
+                    "table",
                     &dummy_schema,
                 )
                 .map_err(Status::from)?;
