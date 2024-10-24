@@ -21,8 +21,6 @@ use arrow_flight::{
     flight_service_server::FlightService, Action, FlightDescriptor, FlightEndpoint, FlightInfo,
     HandshakeRequest, HandshakeResponse, Ticket,
 };
-use base64::prelude::BASE64_STANDARD;
-use base64::Engine;
 use core::str;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::arrow::datatypes::Field;
@@ -37,9 +35,7 @@ use micromegas::tracing::prelude::*;
 use once_cell::sync::Lazy;
 use prost::Message;
 use std::pin::Pin;
-use std::str::FromStr;
 use std::sync::Arc;
-use tonic::metadata::MetadataValue;
 use tonic::{Request, Response, Status, Streaming};
 
 macro_rules! status {
@@ -61,7 +57,6 @@ macro_rules! api_entry_not_implemented {
 }
 
 const FAKE_TOKEN: &str = "uuid_token";
-const FAKE_UPDATE_RESULT: i64 = 1;
 
 static INSTANCE_SQL_DATA: Lazy<SqlInfoData> = Lazy::new(|| {
     let mut builder = SqlInfoDataBuilder::new();
@@ -121,55 +116,12 @@ impl FlightSqlService for FlightSqlServiceImpl {
 
     async fn do_handshake(
         &self,
-        request: Request<Streaming<HandshakeRequest>>,
+        _request: Request<Streaming<HandshakeRequest>>,
     ) -> Result<
         Response<Pin<Box<dyn Stream<Item = Result<HandshakeResponse, Status>> + Send>>>,
         Status,
     > {
-        info!("do_handshake");
-        let basic = "Basic ";
-        let authorization = request
-            .metadata()
-            .get("authorization")
-            .ok_or_else(|| Status::invalid_argument("authorization field not present"))?
-            .to_str()
-            .map_err(|e| status!("authorization not parsable", e))?;
-        if !authorization.starts_with(basic) {
-            Err(Status::invalid_argument(format!(
-                "Auth type not implemented: {authorization}"
-            )))?;
-        }
-        let base64 = &authorization[basic.len()..];
-        let bytes = BASE64_STANDARD
-            .decode(base64)
-            .map_err(|e| status!("authorization not decodable", e))?;
-        let str = str::from_utf8(&bytes).map_err(|e| status!("authorization not parsable", e))?;
-        let parts: Vec<_> = str.split(':').collect();
-        let (user, pass) = match parts.as_slice() {
-            [user, pass] => (user, pass),
-            _ => Err(Status::invalid_argument(
-                "Invalid authorization header".to_string(),
-            ))?,
-        };
-        if user != &"admin" || pass != &"password" {
-            Err(Status::unauthenticated("Invalid credentials!"))?
-        }
-
-        let result = HandshakeResponse {
-            protocol_version: 0,
-            payload: FAKE_TOKEN.into(),
-        };
-        let result = Ok(result);
-        let output = futures::stream::iter(vec![result]);
-
-        let token = format!("Bearer {}", FAKE_TOKEN);
-        let mut response: Response<Pin<Box<dyn Stream<Item = _> + Send>>> =
-            Response::new(Box::pin(output));
-        response.metadata_mut().append(
-            "authorization",
-            MetadataValue::from_str(token.as_str()).unwrap(),
-        );
-        return Ok(response);
+        api_entry_not_implemented!()
     }
 
     async fn do_get_fallback(
@@ -475,14 +427,12 @@ impl FlightSqlService for FlightSqlServiceImpl {
         api_entry_not_implemented!()
     }
 
-    // do_put
     async fn do_put_statement_update(
         &self,
         _ticket: CommandStatementUpdate,
         _request: Request<PeekableFlightDataStream>,
     ) -> Result<i64, Status> {
-        info!("do_put_statement_update");
-        Ok(FAKE_UPDATE_RESULT)
+        api_entry_not_implemented!()
     }
 
     async fn do_put_statement_ingest(
@@ -490,8 +440,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         _ticket: CommandStatementIngest,
         _request: Request<PeekableFlightDataStream>,
     ) -> Result<i64, Status> {
-        info!("do_put_statement_ingest");
-        Ok(FAKE_UPDATE_RESULT)
+        api_entry_not_implemented!()
     }
 
     async fn do_put_substrait_plan(
