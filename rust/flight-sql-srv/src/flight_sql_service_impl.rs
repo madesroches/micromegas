@@ -1,4 +1,5 @@
 use anyhow::Result;
+use micromegas::analytics::lakehouse::view_factory::ViewFactory;
 use micromegas::tracing::prelude::*;
 
 use arrow_flight::sql::server::PeekableFlightDataStream;
@@ -9,7 +10,6 @@ use core::str;
 use futures::{stream, Stream, TryStreamExt};
 use once_cell::sync::Lazy;
 use prost::Message;
-use std::collections::HashSet;
 use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -76,12 +76,16 @@ static INSTANCE_SQL_DATA: Lazy<SqlInfoData> = Lazy::new(|| {
     builder.build().unwrap()
 });
 
-static TABLES: Lazy<Vec<&'static str>> = Lazy::new(|| vec!["flight_sql.example.table"]);
-
 #[derive(Clone)]
-pub struct FlightSqlServiceImpl {}
+pub struct FlightSqlServiceImpl {
+    view_factory: Arc<ViewFactory>,
+}
 
 impl FlightSqlServiceImpl {
+    pub fn new(view_factory: Arc<ViewFactory>) -> Self {
+        Self { view_factory }
+    }
+
     fn check_token<T>(&self, req: &Request<T>) -> Result<(), Status> {
         let metadata = req.metadata();
         let auth = metadata.get("authorization").ok_or_else(|| {
@@ -354,53 +358,18 @@ impl FlightSqlService for FlightSqlServiceImpl {
 
     async fn do_get_catalogs(
         &self,
-        query: CommandGetCatalogs,
+        _query: CommandGetCatalogs,
         _request: Request<Ticket>,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
-        info!("do_get_catalogs");
-        let catalog_names = TABLES
-            .iter()
-            .map(|full_name| full_name.split('.').collect::<Vec<_>>()[0].to_string())
-            .collect::<HashSet<_>>();
-        let mut builder = query.into_builder();
-        for catalog_name in catalog_names {
-            builder.append(catalog_name);
-        }
-        let schema = builder.schema();
-        let batch = builder.build();
-        let stream = FlightDataEncoderBuilder::new()
-            .with_schema(schema)
-            .build(futures::stream::once(async { batch }))
-            .map_err(Status::from);
-        Ok(Response::new(Box::pin(stream)))
+        api_entry_not_implemented!()
     }
 
     async fn do_get_schemas(
         &self,
-        query: CommandGetDbSchemas,
+        _query: CommandGetDbSchemas,
         _request: Request<Ticket>,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
-        info!("do_get_schemas");
-        let schemas = TABLES
-            .iter()
-            .map(|full_name| {
-                let parts = full_name.split('.').collect::<Vec<_>>();
-                (parts[0].to_string(), parts[1].to_string())
-            })
-            .collect::<HashSet<_>>();
-
-        let mut builder = query.into_builder();
-        for (catalog_name, schema_name) in schemas {
-            builder.append(catalog_name, schema_name);
-        }
-
-        let schema = builder.schema();
-        let batch = builder.build();
-        let stream = FlightDataEncoderBuilder::new()
-            .with_schema(schema)
-            .build(futures::stream::once(async { batch }))
-            .map_err(Status::from);
-        Ok(Response::new(Box::pin(stream)))
+        api_entry_not_implemented!()
     }
 
     async fn do_get_tables(
@@ -409,32 +378,20 @@ impl FlightSqlService for FlightSqlServiceImpl {
         _request: Request<Ticket>,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
         info!("do_get_tables {query:?}");
-        let tables = TABLES
-            .iter()
-            .map(|full_name| {
-                let parts = full_name.split('.').collect::<Vec<_>>();
-                (
-                    parts[0].to_string(),
-                    parts[1].to_string(),
-                    parts[2].to_string(),
-                )
-            })
-            .collect::<HashSet<_>>();
-
-        let dummy_schema = Schema::empty();
         let mut builder = query.into_builder();
-        for (catalog_name, schema_name, table_name) in tables {
+        for view in self.view_factory.get_global_views() {
+            let catalog_name = "";
+            let schema_name = "";
             builder
                 .append(
                     catalog_name,
                     schema_name,
-                    table_name,
+                    &*view.get_view_set_name(),
                     "table",
-                    &dummy_schema,
+                    &view.get_file_schema(),
                 )
                 .map_err(Status::from)?;
         }
-
         let schema = builder.schema();
         let batch = builder.build();
         let stream = FlightDataEncoderBuilder::new()
