@@ -6,6 +6,7 @@ use anyhow::Context;
 use arrow_flight::flight_service_server::FlightServiceServer;
 use flight_sql_service_impl::FlightSqlServiceImpl;
 use micromegas::analytics::lakehouse::migration::migrate_lakehouse;
+use micromegas::analytics::lakehouse::partition_cache::LivePartitionProvider;
 use micromegas::analytics::lakehouse::view_factory::default_view_factory;
 use micromegas::ingestion::data_lake_connection::connect_to_data_lake;
 use micromegas::telemetry_sink::TelemetryGuardBuilder;
@@ -27,12 +28,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await
         .with_context(|| "migrate_lakehouse")?;
     let view_factory = Arc::new(default_view_factory()?);
+    let partition_provider = Arc::new(LivePartitionProvider::new(data_lake.db_pool.clone()));
 
     let addr_str = "0.0.0.0:50051";
     let addr = addr_str.parse()?;
     info!("Listening on {:?}", addr);
 
-    let svc = FlightServiceServer::new(FlightSqlServiceImpl::new(view_factory));
+    let svc = FlightServiceServer::new(FlightSqlServiceImpl::new(
+        Arc::new(data_lake),
+        partition_provider,
+        view_factory,
+    ));
     Server::builder().add_service(svc).serve(addr).await?;
     info!("bye");
     Ok(())

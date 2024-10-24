@@ -1,23 +1,9 @@
 use anyhow::Result;
-use micromegas::analytics::lakehouse::view_factory::ViewFactory;
-use micromegas::tracing::prelude::*;
-
+use arrow_flight::encode::FlightDataEncoderBuilder;
+use arrow_flight::error::FlightError;
+use arrow_flight::sql::metadata::{SqlInfoData, SqlInfoDataBuilder};
 use arrow_flight::sql::server::PeekableFlightDataStream;
 use arrow_flight::sql::DoPutPreparedStatementResult;
-use base64::prelude::BASE64_STANDARD;
-use base64::Engine;
-use core::str;
-use futures::{stream, Stream, TryStreamExt};
-use once_cell::sync::Lazy;
-use prost::Message;
-use std::pin::Pin;
-use std::str::FromStr;
-use std::sync::Arc;
-use tonic::metadata::MetadataValue;
-use tonic::{Request, Response, Status, Streaming};
-
-use arrow_flight::encode::FlightDataEncoderBuilder;
-use arrow_flight::sql::metadata::{SqlInfoData, SqlInfoDataBuilder};
 use arrow_flight::sql::{
     server::FlightSqlService, ActionBeginSavepointRequest, ActionBeginSavepointResult,
     ActionBeginTransactionRequest, ActionBeginTransactionResult, ActionCancelQueryRequest,
@@ -31,18 +17,30 @@ use arrow_flight::sql::{
     CommandStatementQuery, CommandStatementSubstraitPlan, CommandStatementUpdate, ProstMessageExt,
     SqlInfo, TicketStatementQuery,
 };
-use arrow_flight::utils::batches_to_flight_data;
 use arrow_flight::{
-    flight_service_server::FlightService, Action, FlightData, FlightDescriptor, FlightEndpoint,
-    FlightInfo, HandshakeRequest, HandshakeResponse, IpcMessage, SchemaAsIpc, Ticket,
+    flight_service_server::FlightService, Action, FlightDescriptor, FlightEndpoint, FlightInfo,
+    HandshakeRequest, HandshakeResponse, Ticket,
 };
-use arrow_ipc::writer::IpcWriteOptions;
-use datafusion::arrow::array::StringBuilder;
-use datafusion::arrow::array::{ArrayRef, RecordBatch};
+use base64::prelude::BASE64_STANDARD;
+use base64::Engine;
+use core::str;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::arrow::datatypes::Field;
 use datafusion::arrow::datatypes::Schema;
-use datafusion::arrow::error::ArrowError;
+use futures::StreamExt;
+use futures::{Stream, TryStreamExt};
+use micromegas::analytics::lakehouse::partition_cache::QueryPartitionProvider;
+use micromegas::analytics::lakehouse::query::make_session_context;
+use micromegas::analytics::lakehouse::view_factory::ViewFactory;
+use micromegas::ingestion::data_lake_connection::DataLakeConnection;
+use micromegas::tracing::prelude::*;
+use once_cell::sync::Lazy;
+use prost::Message;
+use std::pin::Pin;
+use std::str::FromStr;
+use std::sync::Arc;
+use tonic::metadata::MetadataValue;
+use tonic::{Request, Response, Status, Streaming};
 
 macro_rules! status {
     ($desc:expr, $err:expr) => {
@@ -63,7 +61,6 @@ macro_rules! api_entry_not_implemented {
 }
 
 const FAKE_TOKEN: &str = "uuid_token";
-const FAKE_HANDLE: &str = "uuid_handle";
 const FAKE_UPDATE_RESULT: i64 = 1;
 
 static INSTANCE_SQL_DATA: Lazy<SqlInfoData> = Lazy::new(|| {
@@ -78,12 +75,22 @@ static INSTANCE_SQL_DATA: Lazy<SqlInfoData> = Lazy::new(|| {
 
 #[derive(Clone)]
 pub struct FlightSqlServiceImpl {
+    lake: Arc<DataLakeConnection>,
+    part_provider: Arc<dyn QueryPartitionProvider>,
     view_factory: Arc<ViewFactory>,
 }
 
 impl FlightSqlServiceImpl {
-    pub fn new(view_factory: Arc<ViewFactory>) -> Self {
-        Self { view_factory }
+    pub fn new(
+        lake: Arc<DataLakeConnection>,
+        part_provider: Arc<dyn QueryPartitionProvider>,
+        view_factory: Arc<ViewFactory>,
+    ) -> Self {
+        Self {
+            lake,
+            part_provider,
+            view_factory,
+        }
     }
 
     fn check_token<T>(&self, req: &Request<T>) -> Result<(), Status> {
@@ -105,14 +112,6 @@ impl FlightSqlServiceImpl {
         } else {
             Err(Status::unauthenticated("invalid token "))
         }
-    }
-
-    fn fake_result() -> Result<RecordBatch, ArrowError> {
-        let schema = Schema::new(vec![Field::new("salutation", DataType::Utf8, false)]);
-        let mut builder = StringBuilder::new();
-        builder.append_value("Hello, FlightSQL!");
-        let cols = vec![Arc::new(builder.finish()) as ArrayRef];
-        RecordBatch::try_new(Arc::new(schema), cols)
     }
 }
 
@@ -181,21 +180,32 @@ impl FlightSqlService for FlightSqlServiceImpl {
         self.check_token(&request)?;
         let ticket_stmt = TicketStatementQuery::decode(request.get_ref().ticket.clone())
             .map_err(|e| status!("Could not read ticket", e))?;
-        let query = std::str::from_utf8(&ticket_stmt.statement_handle)
+        let sql = std::str::from_utf8(&ticket_stmt.statement_handle)
             .map_err(|e| status!("Unable to parse query", e))?;
-        info!("do_get_fallback {query:?}");
-        let batch = Self::fake_result().map_err(|e| status!("Could not fake a result", e))?;
-        let schema = batch.schema_ref();
-        let batches = vec![batch.clone()];
-        let flight_data = batches_to_flight_data(schema, batches)
-            .map_err(|e| status!("Could not convert batches", e))?
-            .into_iter()
-            .map(Ok);
-
-        let stream: Pin<Box<dyn Stream<Item = Result<FlightData, Status>> + Send>> =
-            Box::pin(stream::iter(flight_data));
-        let resp = Response::new(stream);
-        Ok(resp)
+        info!("do_get_fallback {sql:?}");
+        let ctx = make_session_context(
+            self.lake.clone(),
+            self.part_provider.clone(),
+            None,
+            self.view_factory.clone(),
+        )
+        .await
+        .map_err(|e| status!("error in make_session_context", e))?;
+        let df = ctx
+            .sql(sql)
+            .await
+            .map_err(|e| status!("error building dataframe", e))?;
+        let stream = df
+            .execute_stream()
+            .await
+            .map_err(|_| Status::internal("Error executing plan"))?
+            .map_err(|e| FlightError::ExternalError(Box::new(e)));
+        let builder = FlightDataEncoderBuilder::new();
+        let flight_data_stream = builder.build(stream);
+        let boxed_flight_stream = flight_data_stream
+            .map_err(|e| status!("error building data stream", e))
+            .boxed();
+        Ok(Response::new(boxed_flight_stream))
     }
 
     async fn get_flight_info_statement(
@@ -511,23 +521,9 @@ impl FlightSqlService for FlightSqlServiceImpl {
     async fn do_action_create_prepared_statement(
         &self,
         _query: ActionCreatePreparedStatementRequest,
-        request: Request<Action>,
+        _request: Request<Action>,
     ) -> Result<ActionCreatePreparedStatementResult, Status> {
-        info!("do_action_create_prepared_statement");
-        self.check_token(&request)?;
-        let record_batch =
-            Self::fake_result().map_err(|e| status!("Error getting result schema", e))?;
-        let schema = record_batch.schema_ref();
-        let message = SchemaAsIpc::new(schema, &IpcWriteOptions::default())
-            .try_into()
-            .map_err(|e| status!("Unable to serialize schema", e))?;
-        let IpcMessage(schema_bytes) = message;
-        let res = ActionCreatePreparedStatementResult {
-            prepared_statement_handle: FAKE_HANDLE.into(),
-            dataset_schema: schema_bytes,
-            parameter_schema: Default::default(), // TODO: parameters
-        };
-        Ok(res)
+        api_entry_not_implemented!()
     }
 
     async fn do_action_close_prepared_statement(
