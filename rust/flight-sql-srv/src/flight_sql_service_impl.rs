@@ -54,8 +54,6 @@ macro_rules! api_entry_not_implemented {
     }};
 }
 
-const FAKE_TOKEN: &str = "uuid_token";
-
 static INSTANCE_SQL_DATA: Lazy<SqlInfoData> = Lazy::new(|| {
     let mut builder = SqlInfoDataBuilder::new();
     // Server information
@@ -85,27 +83,6 @@ impl FlightSqlServiceImpl {
             view_factory,
         }
     }
-
-    fn check_token<T>(&self, req: &Request<T>) -> Result<(), Status> {
-        let metadata = req.metadata();
-        let auth = metadata.get("authorization").ok_or_else(|| {
-            Status::internal(format!("No authorization header! metadata = {metadata:?}"))
-        })?;
-        let str = auth
-            .to_str()
-            .map_err(|e| Status::internal(format!("Error parsing header: {e}")))?;
-        let authorization = str.to_string();
-        let bearer = "Bearer ";
-        if !authorization.starts_with(bearer) {
-            Err(Status::internal("Invalid auth header!"))?;
-        }
-        let token = authorization[bearer.len()..].to_string();
-        if token == FAKE_TOKEN {
-            Ok(())
-        } else {
-            Err(Status::unauthenticated("invalid token "))
-        }
-    }
 }
 
 #[tonic::async_trait]
@@ -127,7 +104,6 @@ impl FlightSqlService for FlightSqlServiceImpl {
         request: Request<Ticket>,
         _message: Any,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
-        self.check_token(&request)?;
         let ticket_stmt = TicketStatementQuery::decode(request.get_ref().ticket.clone())
             .map_err(|e| status!("Could not read ticket", e))?;
         let sql = std::str::from_utf8(&ticket_stmt.statement_handle)

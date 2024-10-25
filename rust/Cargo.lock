@@ -1503,9 +1503,12 @@ dependencies = [
  "micromegas",
  "once_cell",
  "prost",
+ "serde",
+ "serde_json",
  "sqlx",
  "tokio",
  "tonic",
+ "tower 0.5.1",
  "tower-http",
 ]
 
