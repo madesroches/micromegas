@@ -67,10 +67,8 @@ version = "0.2.1"
 dependencies = [
  "anyhow",
  "axum",
- "bytes",
  "clap",
  "micromegas",
- "sqlx",
  "tokio",
  "tower-http",
 ]
@@ -1493,11 +1491,6 @@ version = "0.2.1"
 dependencies = [
  "anyhow",
  "arrow-flight",
- "arrow-ipc",
- "axum",
- "base64",
- "bytes",
- "clap",
  "datafusion",
  "futures",
  "micromegas",
@@ -1505,11 +1498,9 @@ dependencies = [
  "prost",
  "serde",
  "serde_json",
- "sqlx",
  "tokio",
  "tonic",
  "tower 0.5.1",
- "tower-http",
 ]
 
 [[package]]
@@ -2275,7 +2266,6 @@ dependencies = [
  "micromegas-transit",
  "object_store",
  "serde",
- "serde_json",
  "sqlx",
  "tokio",
  "uuid",
@@ -2299,11 +2289,7 @@ dependencies = [
  "ciborium",
  "micromegas-telemetry",
  "micromegas-tracing",
- "micromegas-transit",
- "object_store",
- "serde_json",
  "sqlx",
- "url",
 ]
 
 [[package]]
@@ -2311,7 +2297,6 @@ name = "micromegas-telemetry"
 version = "0.2.1"
 dependencies = [
  "anyhow",
- "async-trait",
  "bytes",
  "chrono",
  "ciborium",
@@ -2331,19 +2316,14 @@ dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
- "ciborium",
  "colored",
  "ctrlc",
  "lazy_static",
  "log",
- "lz4",
  "micromegas-telemetry",
  "micromegas-tracing",
  "micromegas-transit",
- "once_cell",
  "reqwest",
- "serde",
- "serde_json",
  "tokio",
  "tokio-retry2",
  "tracing",
@@ -3857,10 +3837,8 @@ version = "0.2.1"
 dependencies = [
  "anyhow",
  "axum",
- "bytes",
  "clap",
  "micromegas",
- "serde_json",
  "tokio",
  "tower-http",
 ]
