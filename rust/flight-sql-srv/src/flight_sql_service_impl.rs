@@ -22,8 +22,6 @@ use arrow_flight::{
     HandshakeRequest, HandshakeResponse, Ticket,
 };
 use core::str;
-use datafusion::arrow::datatypes::DataType;
-use datafusion::arrow::datatypes::Field;
 use datafusion::arrow::datatypes::Schema;
 use futures::StreamExt;
 use futures::{Stream, TryStreamExt};
@@ -167,7 +165,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
     ) -> Result<Response<FlightInfo>, Status> {
         info!("get_flight_info_statement {query:?} ");
         let CommandStatementQuery { query, .. } = query;
-        let schema = Schema::new(vec![Field::new("salutation", DataType::Utf8, false)]);
+        let schema = Schema::empty();
         let ticket = TicketStatementQuery {
             statement_handle: query.into(),
         };
