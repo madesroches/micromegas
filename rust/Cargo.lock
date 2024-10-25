@@ -1493,6 +1493,7 @@ dependencies = [
  "arrow-flight",
  "datafusion",
  "futures",
+ "http",
  "micromegas",
  "once_cell",
  "prost",

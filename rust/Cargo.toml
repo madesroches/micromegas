@@ -42,6 +42,7 @@ colored = { version = "2" }
 ctrlc = "3.2.0"
 datafusion = "42"
 futures = "0.3"
+http= "1.1"
 lazy_static = "1.4"
 log = { version = "0.4", features = ["std"] }
 lz4 = "1.23"

@@ -1,5 +1,6 @@
 mod api_keyring;
 mod flight_sql_service_impl;
+mod obs_layer;
 
 use anyhow::Context;
 use api_keyring::{parse_key_ring, KeyRing};
@@ -11,10 +12,12 @@ use micromegas::analytics::lakehouse::view_factory::default_view_factory;
 use micromegas::ingestion::data_lake_connection::connect_to_data_lake;
 use micromegas::telemetry_sink::TelemetryGuardBuilder;
 use micromegas::tracing::prelude::*;
+use obs_layer::LogService;
 use std::sync::Arc;
 use tonic::service::interceptor;
 use tonic::transport::Server;
 use tonic::{Request, Status};
+use tower::layer::layer_fn;
 use tower::ServiceBuilder;
 
 fn check_auth(req: Request<()>, keyring: Arc<KeyRing>) -> Result<Request<()>, Status> {
@@ -43,7 +46,7 @@ fn check_auth(req: Request<()>, keyring: Arc<KeyRing>) -> Result<Request<()>, St
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _telemetry_guard = TelemetryGuardBuilder::default()
         .with_ctrlc_handling()
-        .with_local_sink_max_level(LevelFilter::Debug)
+        .with_local_sink_max_level(LevelFilter::Info)
         .build();
     let keyring = Arc::new(parse_key_ring(
         &std::env::var("MICROMEGAS_API_KEYS").with_context(|| "reading MICROMEGAS_API_KEYS")?,
@@ -69,8 +72,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let addr_str = "0.0.0.0:50051";
     let addr = addr_str.parse()?;
     info!("Listening on {:?}", addr);
+
     Server::builder()
         .layer(layer)
+        .layer(layer_fn(|service| LogService { service }))
         .add_service(svc)
         .serve(addr)
         .await?;
