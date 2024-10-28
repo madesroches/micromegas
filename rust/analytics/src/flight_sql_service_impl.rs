@@ -1,3 +1,6 @@
+use crate::lakehouse::partition_cache::QueryPartitionProvider;
+use crate::lakehouse::query::make_session_context;
+use crate::lakehouse::view_factory::ViewFactory;
 use anyhow::Result;
 use arrow_flight::encode::FlightDataEncoderBuilder;
 use arrow_flight::error::FlightError;
@@ -25,11 +28,8 @@ use core::str;
 use datafusion::arrow::datatypes::Schema;
 use futures::StreamExt;
 use futures::{Stream, TryStreamExt};
-use micromegas::analytics::lakehouse::partition_cache::QueryPartitionProvider;
-use micromegas::analytics::lakehouse::query::make_session_context;
-use micromegas::analytics::lakehouse::view_factory::ViewFactory;
-use micromegas::ingestion::data_lake_connection::DataLakeConnection;
-use micromegas::tracing::prelude::*;
+use micromegas_ingestion::data_lake_connection::DataLakeConnection;
+use micromegas_tracing::prelude::*;
 use once_cell::sync::Lazy;
 use prost::Message;
 use std::pin::Pin;
@@ -44,7 +44,7 @@ macro_rules! status {
 
 macro_rules! api_entry_not_implemented {
     () => {{
-        let function_name = micromegas::tracing::__function_name!();
+        let function_name = micromegas_tracing::__function_name!();
         error!("not implemented: {function_name}");
         Err(Status::unimplemented(format!(
             "{}:{} not implemented: {function_name}",

@@ -1,44 +1,18 @@
-mod api_keyring;
-mod flight_sql_service_impl;
-
 use anyhow::Context;
-use api_keyring::{parse_key_ring, KeyRing};
 use arrow_flight::flight_service_server::FlightServiceServer;
-use flight_sql_service_impl::FlightSqlServiceImpl;
+use micromegas::analytics::flight_sql_service_impl::FlightSqlServiceImpl;
 use micromegas::analytics::lakehouse::migration::migrate_lakehouse;
 use micromegas::analytics::lakehouse::partition_cache::LivePartitionProvider;
 use micromegas::analytics::lakehouse::view_factory::default_view_factory;
 use micromegas::ingestion::data_lake_connection::connect_to_data_lake;
+use micromegas::key_ring::parse_key_ring;
 use micromegas::telemetry_sink::TelemetryGuardBuilder;
+use micromegas::tonic_auth_interceptor::check_auth;
 use micromegas::tracing::prelude::*;
 use std::sync::Arc;
 use tonic::service::interceptor;
 use tonic::transport::Server;
-use tonic::{Request, Status};
 use tower::ServiceBuilder;
-
-fn check_auth(req: Request<()>, keyring: Arc<KeyRing>) -> Result<Request<()>, Status> {
-    let metadata = req.metadata();
-    let authorization = metadata
-        .get("authorization")
-        .ok_or_else(|| {
-            Status::internal(format!("No authorization header! metadata = {metadata:?}"))
-        })?
-        .to_str()
-        .map_err(|e| Status::internal(format!("Error parsing header: {e}")))?;
-    let bearer = "Bearer ";
-    if !authorization.starts_with(bearer) {
-        return Err(Status::internal("Invalid auth header!"));
-    }
-    let token = authorization[bearer.len()..].to_string();
-    if let Some(name) = keyring.get(&token) {
-        info!("caller={name}");
-        Ok(req)
-    } else {
-        warn!("invalid API token");
-        Err(Status::unauthenticated("invalid API token"))
-    }
-}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -65,7 +39,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         view_factory,
     ));
     let layer = ServiceBuilder::new()
-        .layer(interceptor(move |req| check_auth(req, keyring.clone())))
+        .layer(interceptor(move |req| check_auth(req, &keyring)))
         .into_inner();
     let addr_str = "0.0.0.0:50051";
     let addr = addr_str.parse()?;

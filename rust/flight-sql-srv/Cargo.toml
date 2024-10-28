@@ -14,12 +14,6 @@ micromegas.workspace = true
 
 anyhow.workspace = true
 arrow-flight.workspace = true
-datafusion.workspace = true
-futures.workspace = true
-once_cell.workspace = true
-prost.workspace = true
-serde.workspace = true
-serde_json.workspace = true
 tokio.workspace = true
 tonic.workspace = true
 tower.workspace = true

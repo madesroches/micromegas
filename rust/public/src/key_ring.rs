@@ -1,5 +1,5 @@
 use anyhow::Result;
-use micromegas::tracing::prelude::*;
+use micromegas_tracing::prelude::*;
 use serde::Deserialize;
 use std::collections::HashMap;
 
