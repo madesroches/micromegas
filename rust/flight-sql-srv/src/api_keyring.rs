@@ -1,5 +1,5 @@
 use anyhow::Result;
-use micromegas::tracing::debug;
+use micromegas::tracing::prelude::*;
 use serde::Deserialize;
 use std::collections::HashMap;
 
@@ -17,6 +17,6 @@ pub fn parse_key_ring(json: &str) -> Result<KeyRing> {
     for entry in entries {
         ring.insert(entry.key, entry.name);
     }
-    debug!("loaded keys: {:?}", ring.values());
+    info!("loaded keys: {:?}", ring.values());
     Ok(ring)
 }

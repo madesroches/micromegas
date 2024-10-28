@@ -19,16 +19,16 @@ use tower::ServiceBuilder;
 
 fn check_auth(req: Request<()>, keyring: Arc<KeyRing>) -> Result<Request<()>, Status> {
     let metadata = req.metadata();
-    let auth = metadata.get("authorization").ok_or_else(|| {
-        Status::internal(format!("No authorization header! metadata = {metadata:?}"))
-    })?;
-    let str = auth
+    let authorization = metadata
+        .get("authorization")
+        .ok_or_else(|| {
+            Status::internal(format!("No authorization header! metadata = {metadata:?}"))
+        })?
         .to_str()
         .map_err(|e| Status::internal(format!("Error parsing header: {e}")))?;
-    let authorization = str.to_string();
     let bearer = "Bearer ";
     if !authorization.starts_with(bearer) {
-        Err(Status::internal("Invalid auth header!"))?;
+        return Err(Status::internal("Invalid auth header!"));
     }
     let token = authorization[bearer.len()..].to_string();
     if let Some(name) = keyring.get(&token) {
