@@ -8,7 +8,7 @@ use crate::{
     },
     time::TimeRange,
 };
-use anyhow::Result;
+use anyhow::{Context, Result};
 use datafusion::{
     arrow::array::RecordBatch,
     execution::{context::SessionContext, object_store::ObjectStoreUrl},
@@ -68,14 +68,12 @@ pub async fn query_single_view(
     Ok(Answer::new(schema, batches))
 }
 
-pub async fn query(
+pub async fn make_session_context(
     lake: Arc<DataLakeConnection>,
     part_provider: Arc<dyn QueryPartitionProvider>,
     query_range: Option<TimeRange>,
-    sql: &str,
     view_factory: Arc<ViewFactory>,
-) -> Result<Answer> {
-    info!("query sql={sql}");
+) -> Result<SessionContext> {
     let ctx = SessionContext::new();
     if let Some(range) = &query_range {
         ctx.add_analyzer_rule(Arc::new(TableScanRewrite::new(range.clone())));
@@ -104,6 +102,20 @@ pub async fn query(
         )
         .await?;
     }
+    Ok(ctx)
+}
+
+pub async fn query(
+    lake: Arc<DataLakeConnection>,
+    part_provider: Arc<dyn QueryPartitionProvider>,
+    query_range: Option<TimeRange>,
+    sql: &str,
+    view_factory: Arc<ViewFactory>,
+) -> Result<Answer> {
+    info!("query sql={sql}");
+    let ctx = make_session_context(lake, part_provider, query_range, view_factory)
+        .await
+        .with_context(|| "make_session_context")?;
     let df = ctx.sql(sql).await?;
     let schema = df.schema().inner().clone();
     let batches: Vec<RecordBatch> = df.collect().await?;

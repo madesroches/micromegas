@@ -12,13 +12,9 @@ authors.workspace = true
 [dependencies]
 micromegas-telemetry.workspace = true
 micromegas-tracing.workspace = true
-micromegas-transit.workspace = true
 
 anyhow.workspace = true
 bytes.workspace = true
 ciborium.workspace = true
-object_store.workspace = true
-serde_json.workspace = true
 sqlx.workspace = true
-url.workspace = true
 

@@ -13,7 +13,6 @@ authors.workspace = true
 micromegas-transit.workspace = true
 
 anyhow.workspace = true
-async-trait.workspace = true
 bytes.workspace = true
 chrono.workspace = true
 ciborium.workspace = true

@@ -42,6 +42,7 @@ colored = { version = "2" }
 ctrlc = "3.2.0"
 datafusion = "42"
 futures = "0.3"
+http= "1.1"
 lazy_static = "1.4"
 log = { version = "0.4", features = ["std"] }
 lz4 = "1.23"
@@ -62,6 +63,7 @@ thread-id = "4.0"
 tokio = { version = "1.33", features = ["macros","rt-multi-thread","tracing"]}
 tokio-retry2 = "0.5.3"
 tonic = { version = "0.12", features = ["transport"] }
+tower = { version = "0.5" }
 tower-http = { version = "0.5.2", features = ["cors", "limit", "timeout"] }
 tracing = "0.1.40"
 tracing-core = "0.1.32"
