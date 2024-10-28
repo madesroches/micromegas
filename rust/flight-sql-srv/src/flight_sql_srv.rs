@@ -65,7 +65,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         view_factory,
     ));
     let layer = ServiceBuilder::new()
-        // .layer(layer_fn(LogService::new))
         .layer(interceptor(move |req| check_auth(req, keyring.clone())))
         .into_inner();
     let addr_str = "0.0.0.0:50051";

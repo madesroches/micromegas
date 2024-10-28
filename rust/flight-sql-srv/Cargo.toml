@@ -16,7 +16,6 @@ anyhow.workspace = true
 arrow-flight.workspace = true
 datafusion.workspace = true
 futures.workspace = true
-http.workspace = true
 once_cell.workspace = true
 prost.workspace = true
 serde.workspace = true
