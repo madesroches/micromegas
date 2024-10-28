@@ -1,6 +1,5 @@
 mod api_keyring;
 mod flight_sql_service_impl;
-mod obs_layer;
 
 use anyhow::Context;
 use api_keyring::{parse_key_ring, KeyRing};
@@ -12,12 +11,10 @@ use micromegas::analytics::lakehouse::view_factory::default_view_factory;
 use micromegas::ingestion::data_lake_connection::connect_to_data_lake;
 use micromegas::telemetry_sink::TelemetryGuardBuilder;
 use micromegas::tracing::prelude::*;
-use obs_layer::LogService;
 use std::sync::Arc;
 use tonic::service::interceptor;
 use tonic::transport::Server;
 use tonic::{Request, Status};
-use tower::layer::layer_fn;
 use tower::ServiceBuilder;
 
 fn check_auth(req: Request<()>, keyring: Arc<KeyRing>) -> Result<Request<()>, Status> {
@@ -38,6 +35,7 @@ fn check_auth(req: Request<()>, keyring: Arc<KeyRing>) -> Result<Request<()>, St
         info!("caller={name}");
         Ok(req)
     } else {
+        warn!("invalid API token");
         Err(Status::unauthenticated("invalid API token"))
     }
 }
@@ -67,6 +65,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         view_factory,
     ));
     let layer = ServiceBuilder::new()
+        // .layer(layer_fn(LogService::new))
         .layer(interceptor(move |req| check_auth(req, keyring.clone())))
         .into_inner();
     let addr_str = "0.0.0.0:50051";
@@ -75,7 +74,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     Server::builder()
         .layer(layer)
-        .layer(layer_fn(|service| LogService { service }))
         .add_service(svc)
         .serve(addr)
         .await?;

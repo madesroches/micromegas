@@ -104,6 +104,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         request: Request<Ticket>,
         _message: Any,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
+        let begin_request = now();
         let ticket_stmt = TicketStatementQuery::decode(request.get_ref().ticket.clone())
             .map_err(|e| status!("Could not read ticket", e))?;
         let sql = std::str::from_utf8(&ticket_stmt.statement_handle)
@@ -131,6 +132,8 @@ impl FlightSqlService for FlightSqlServiceImpl {
         let boxed_flight_stream = flight_data_stream
             .map_err(|e| status!("error building data stream", e))
             .boxed();
+        let duration = now() - begin_request;
+        imetric!("request_duration", "ticks", duration as u64);
         Ok(Response::new(boxed_flight_stream))
     }
 
@@ -139,6 +142,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         query: CommandStatementQuery,
         _request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
+        let begin_request = now();
         info!("get_flight_info_statement {query:?} ");
         let CommandStatementQuery { query, .. } = query;
         let schema = Schema::empty();
@@ -151,6 +155,8 @@ impl FlightSqlService for FlightSqlServiceImpl {
                 .try_with_schema(&schema)
                 .unwrap()
                 .with_endpoint(FlightEndpoint::new().with_ticket(Ticket::new(bytes)));
+            let duration = now() - begin_request;
+            imetric!("request_duration", "ticks", duration as u64);
             Ok(Response::new(info))
         } else {
             error!("Error encoding ticket");
@@ -195,19 +201,20 @@ impl FlightSqlService for FlightSqlServiceImpl {
         query: CommandGetTables,
         request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
+        let begin_request = now();
         info!("get_flight_info_tables");
         let flight_descriptor = request.into_inner();
         let ticket = Ticket {
             ticket: query.as_any().encode_to_vec().into(),
         };
         let endpoint = FlightEndpoint::new().with_ticket(ticket);
-
         let flight_info = FlightInfo::new()
             .try_with_schema(&query.into_builder().schema())
             .map_err(|e| status!("Unable to encode schema", e))?
             .with_endpoint(endpoint)
             .with_descriptor(flight_descriptor);
-
+        let duration = now() - begin_request;
+        imetric!("request_duration", "ticks", duration as u64);
         Ok(tonic::Response::new(flight_info))
     }
 
@@ -224,6 +231,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         query: CommandGetSqlInfo,
         request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
+        let begin_request = now();
         info!("get_flight_info_sql_info");
         let flight_descriptor = request.into_inner();
         let ticket = Ticket::new(query.as_any().encode_to_vec());
@@ -233,6 +241,8 @@ impl FlightSqlService for FlightSqlServiceImpl {
             .map_err(|e| status!("Unable to encode schema", e))?
             .with_endpoint(endpoint)
             .with_descriptor(flight_descriptor);
+        let duration = now() - begin_request;
+        imetric!("request_duration", "ticks", duration as u64);
         Ok(tonic::Response::new(flight_info))
     }
 
@@ -313,6 +323,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         query: CommandGetTables,
         _request: Request<Ticket>,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
+        let begin_request = now();
         info!("do_get_tables {query:?}");
         let mut builder = query.into_builder();
         for view in self.view_factory.get_global_views() {
@@ -334,6 +345,8 @@ impl FlightSqlService for FlightSqlServiceImpl {
             .with_schema(schema)
             .build(futures::stream::once(async { batch }))
             .map_err(Status::from);
+        let duration = now() - begin_request;
+        imetric!("request_duration", "ticks", duration as u64);
         Ok(Response::new(Box::pin(stream)))
     }
 
