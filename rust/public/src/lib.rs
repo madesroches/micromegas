@@ -131,3 +131,9 @@ pub mod axum_utils;
 /// Embedable ingestion, analytics and maintenance services.
 /// The user is expected to provide their own authentication.
 pub mod servers;
+
+/// named keys for authentication
+pub mod key_ring;
+
+/// authentication for the gRPC stack
+pub mod tonic_auth_interceptor;
