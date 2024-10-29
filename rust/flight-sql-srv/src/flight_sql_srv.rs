@@ -1,11 +1,11 @@
 use anyhow::Context;
 use arrow_flight::flight_service_server::FlightServiceServer;
-use micromegas::analytics::flight_sql_service_impl::FlightSqlServiceImpl;
 use micromegas::analytics::lakehouse::migration::migrate_lakehouse;
 use micromegas::analytics::lakehouse::partition_cache::LivePartitionProvider;
 use micromegas::analytics::lakehouse::view_factory::default_view_factory;
 use micromegas::ingestion::data_lake_connection::connect_to_data_lake;
 use micromegas::key_ring::parse_key_ring;
+use micromegas::servers::flight_sql_service_impl::FlightSqlServiceImpl;
 use micromegas::telemetry_sink::TelemetryGuardBuilder;
 use micromegas::tonic_auth_interceptor::check_auth;
 use micromegas::tracing::prelude::*;

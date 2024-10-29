@@ -16,7 +16,6 @@ micromegas-transit.workspace = true
 micromegas-ingestion.workspace = true
 
 anyhow.workspace = true
-arrow-flight.workspace = true
 async-trait.workspace = true
 bytes.workspace = true
 chrono.workspace = true
@@ -25,12 +24,9 @@ datafusion.workspace = true
 futures.workspace = true
 lazy_static.workspace = true
 object_store.workspace = true
-once_cell.workspace = true
-prost.workspace = true
 serde.workspace = true
 sqlx.workspace = true
 tokio.workspace = true
-tonic.workspace = true
 uuid.workspace = true
 xxhash-rust.workspace = true
 

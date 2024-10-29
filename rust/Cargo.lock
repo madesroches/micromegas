@@ -2225,17 +2225,21 @@ name = "micromegas"
 version = "0.2.1"
 dependencies = [
  "anyhow",
+ "arrow-flight",
  "async-stream",
  "axum",
  "bytes",
  "chrono",
  "datafusion",
+ "futures",
  "micromegas-analytics",
  "micromegas-ingestion",
  "micromegas-telemetry",
  "micromegas-telemetry-sink",
  "micromegas-tracing",
  "object_store",
+ "once_cell",
+ "prost",
  "serde",
  "serde_json",
  "sqlx",
@@ -2249,7 +2253,6 @@ name = "micromegas-analytics"
 version = "0.2.1"
 dependencies = [
  "anyhow",
- "arrow-flight",
  "async-trait",
  "bytes",
  "chrono",
@@ -2263,12 +2266,9 @@ dependencies = [
  "micromegas-tracing",
  "micromegas-transit",
  "object_store",
- "once_cell",
- "prost",
  "serde",
  "sqlx",
  "tokio",
- "tonic",
  "uuid",
  "xxhash-rust",
 ]

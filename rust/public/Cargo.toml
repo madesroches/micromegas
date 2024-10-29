@@ -18,12 +18,16 @@ micromegas-telemetry.workspace = true
 micromegas-tracing.workspace = true
 
 anyhow.workspace = true
+arrow-flight.workspace = true
 async-stream.workspace = true
 axum.workspace = true
 bytes.workspace = true
 chrono.workspace = true
 datafusion.workspace = true
+futures.workspace = true
 object_store.workspace = true
+once_cell.workspace = true
+prost.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sqlx.workspace = true
