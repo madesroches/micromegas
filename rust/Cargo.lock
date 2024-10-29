@@ -1490,10 +1490,8 @@ name = "flight-sql-srv"
 version = "0.2.1"
 dependencies = [
  "anyhow",
- "arrow-flight",
  "micromegas",
  "tokio",
- "tonic",
  "tower 0.5.1",
 ]
 
