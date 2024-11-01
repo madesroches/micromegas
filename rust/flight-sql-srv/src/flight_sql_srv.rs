@@ -7,11 +7,11 @@ use micromegas::ingestion::data_lake_connection::connect_to_data_lake;
 use micromegas::key_ring::parse_key_ring;
 use micromegas::servers::flight_sql_service_impl::FlightSqlServiceImpl;
 use micromegas::telemetry_sink::TelemetryGuardBuilder;
+use micromegas::tonic::service::interceptor;
+use micromegas::tonic::transport::Server;
 use micromegas::tonic_auth_interceptor::check_auth;
 use micromegas::tracing::prelude::*;
 use std::sync::Arc;
-use micromegas::tonic::service::interceptor;
-use micromegas::tonic::transport::Server;
 use tower::ServiceBuilder;
 
 #[tokio::main]
