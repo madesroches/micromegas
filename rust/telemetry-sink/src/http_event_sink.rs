@@ -104,10 +104,14 @@ impl HttpEventSink {
                 .build()
                 .with_context(|| "building request")?;
 
-            decorator
+            if let Err(e) = decorator
                 .decorate(&mut request)
                 .await
-                .with_context(|| "decorating request")?;
+                .with_context(|| "decorating request")
+            {
+                warn!("request decorator: {e:?}");
+                return Err(e.into());
+            }
             let result = client
                 .execute(request)
                 .await
@@ -138,7 +142,10 @@ impl HttpEventSink {
                 .body(body)
                 .build()
                 .with_context(|| "building request")?;
-            decorator.decorate(&mut request).await?;
+            if let Err(e) = decorator.decorate(&mut request).await {
+                warn!("request decorator: {e:?}");
+                return Err(e.into());
+            }
             let result = client
                 .execute(request)
                 .await
@@ -174,10 +181,14 @@ impl HttpEventSink {
             .body(encoded_block)
             .build()
             .with_context(|| "building request")?;
-        decorator
+        if let Err(e) = decorator
             .decorate(&mut request)
             .await
-            .with_context(|| "decorating request")?;
+            .with_context(|| "decorating request")
+        {
+            warn!("request decorator: {e:?}");
+            return Err(e);
+        }
         debug!("push_block: executing request");
         client
             .execute(request)
