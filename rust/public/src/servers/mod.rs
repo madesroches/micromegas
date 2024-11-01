@@ -6,3 +6,6 @@ pub mod ingestion;
 
 /// implementation of maintenance daemon keeping the lakehouse updated
 pub mod maintenance;
+
+/// minimal FlightSQL protocol implementation
+pub mod flight_sql_service_impl;

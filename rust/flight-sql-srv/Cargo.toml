@@ -13,9 +13,7 @@ authors.workspace = true
 micromegas.workspace = true
 
 anyhow.workspace = true
-arrow-flight.workspace = true
 tokio.workspace = true
-tonic.workspace = true
 tower.workspace = true
 
 [[bin]]

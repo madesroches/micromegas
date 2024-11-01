@@ -95,10 +95,12 @@
 //! ```
 //!
 
+pub use arrow_flight;
 pub use chrono;
 pub use datafusion;
 pub use object_store;
 pub use sqlx;
+pub use tonic;
 pub use uuid;
 
 /// telemetry protocol

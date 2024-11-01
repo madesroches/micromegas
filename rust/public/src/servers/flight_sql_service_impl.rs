@@ -1,6 +1,3 @@
-use crate::lakehouse::partition_cache::QueryPartitionProvider;
-use crate::lakehouse::query::make_session_context;
-use crate::lakehouse::view_factory::ViewFactory;
 use anyhow::Result;
 use arrow_flight::encode::FlightDataEncoderBuilder;
 use arrow_flight::error::FlightError;
@@ -28,6 +25,9 @@ use core::str;
 use datafusion::arrow::datatypes::Schema;
 use futures::StreamExt;
 use futures::{Stream, TryStreamExt};
+use micromegas_analytics::lakehouse::partition_cache::QueryPartitionProvider;
+use micromegas_analytics::lakehouse::query::make_session_context;
+use micromegas_analytics::lakehouse::view_factory::ViewFactory;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_tracing::prelude::*;
 use once_cell::sync::Lazy;
