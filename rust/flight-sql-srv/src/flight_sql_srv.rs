@@ -5,6 +5,7 @@ use micromegas::analytics::lakehouse::view_factory::default_view_factory;
 use micromegas::arrow_flight::flight_service_server::FlightServiceServer;
 use micromegas::ingestion::data_lake_connection::connect_to_data_lake;
 use micromegas::key_ring::parse_key_ring;
+use micromegas::log_uri_service::LogUriService;
 use micromegas::servers::flight_sql_service_impl::FlightSqlServiceImpl;
 use micromegas::telemetry_sink::TelemetryGuardBuilder;
 use micromegas::tonic::service::interceptor;
@@ -12,6 +13,7 @@ use micromegas::tonic::transport::Server;
 use micromegas::tonic_auth_interceptor::check_auth;
 use micromegas::tracing::prelude::*;
 use std::sync::Arc;
+use tower::layer::layer_fn;
 use tower::ServiceBuilder;
 
 #[tokio::main]
@@ -39,6 +41,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         view_factory,
     ));
     let layer = ServiceBuilder::new()
+        .layer(layer_fn(|service| LogUriService { service }))
         .layer(interceptor(move |req| check_auth(req, &keyring)))
         .into_inner();
     let addr_str = "0.0.0.0:50051";

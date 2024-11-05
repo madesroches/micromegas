@@ -2230,6 +2230,7 @@ dependencies = [
  "chrono",
  "datafusion",
  "futures",
+ "http",
  "micromegas-analytics",
  "micromegas-ingestion",
  "micromegas-telemetry",
@@ -2243,6 +2244,7 @@ dependencies = [
  "sqlx",
  "tokio",
  "tonic",
+ "tower 0.5.1",
  "uuid",
 ]
 

@@ -16,7 +16,7 @@ pub fn check_auth(req: Request<()>, keyring: &KeyRing) -> Result<Request<()>, St
         return Err(Status::internal("Invalid auth header!"));
     }
     let token = authorization[bearer.len()..].to_string();
-    if let Some(name) = keyring.get(&token) {
+    if let Some(name) = keyring.get(&token.into()) {
         info!("caller={name}");
         Ok(req)
     } else {

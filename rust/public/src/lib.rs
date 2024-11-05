@@ -137,5 +137,8 @@ pub mod servers;
 /// named keys for authentication
 pub mod key_ring;
 
+/// log uris of http requests
+pub mod log_uri_service;
+
 /// authentication for the gRPC stack
 pub mod tonic_auth_interceptor;
