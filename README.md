@@ -5,7 +5,9 @@
 [![Apache licensed][license-badge]][license-url]
 [![Build Status][actions-badge]][actions-url]
 
-[rust api documentation](https://docs.rs/micromegas/latest/micromegas/) 
+[rust API documentation](https://docs.rs/micromegas/latest/micromegas/) 
+
+[python API](https://pypi.org/project/micromegas/)
 
 [design presentation](https://madesroches.github.io/micromegas/doc/design-presentation/design.html) 
 
@@ -21,6 +23,16 @@
 
 
 ## Objectives
+
+ * Spend less time reproducing problems.
+ 
+ * Collect enough data to understand how to correct the problems. 
+ 
+ * Quantify the frequency and severity of the issues instead of debugging the first one you can reproduce.
+ 
+ * Monitor & catch problems before they get noticed by users.
+
+## Design Strategies
 
 ### Low overhead instrumentation
 
