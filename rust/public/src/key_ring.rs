@@ -47,7 +47,7 @@ pub fn parse_key_ring(json: &str) -> Result<KeyRing> {
     let entries: Vec<KeyRingEntry> = serde_json::from_str(json)?;
     let mut ring = KeyRing::new();
     for entry in entries {
-        ring.insert(entry.key.into(), entry.name);
+        ring.insert(entry.key, entry.name);
     }
     info!("loaded keys: {:?}", ring.values());
     Ok(ring)
