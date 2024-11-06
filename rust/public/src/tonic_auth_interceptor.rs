@@ -3,18 +3,17 @@ use micromegas_tracing::prelude::*;
 use tonic::{Request, Status};
 
 pub fn check_auth(req: Request<()>, keyring: &KeyRing) -> Result<Request<()>, Status> {
-    info!("check_auth");
     let metadata = req.metadata();
     let authorization = metadata
         .get(http::header::AUTHORIZATION.as_str())
         .ok_or_else(|| {
-            warn!("missing authorization header");
-            Status::unauthenticated(format!("No authorization header! metadata = {metadata:?}"))
+            trace!("missing authorization header"); // expected for health check from load balancer
+            Status::unauthenticated("missing authorization header")
         })?
         .to_str()
-        .map_err(|e| {
+        .map_err(|_e| {
             warn!("error parsing authorization header");
-            Status::unauthenticated(format!("Error parsing header: {e}"))
+            Status::unauthenticated("error parsing authorization header")
         })?;
     let bearer = "Bearer ";
     if !authorization.starts_with(bearer) {
