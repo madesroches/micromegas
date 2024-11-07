@@ -1,5 +1,6 @@
 use super::{
-    answer::Answer, partition_cache::QueryPartitionProvider, view::View, view_factory::ViewFactory,
+    answer::Answer, partition_cache::QueryPartitionProvider, property_get_function::PropertyGet,
+    view::View, view_factory::ViewFactory,
 };
 use crate::{
     lakehouse::{
@@ -12,6 +13,7 @@ use anyhow::{Context, Result};
 use datafusion::{
     arrow::array::RecordBatch,
     execution::{context::SessionContext, object_store::ObjectStoreUrl},
+    logical_expr::ScalarUDF,
     sql::TableReference,
 };
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
@@ -90,6 +92,9 @@ pub async fn make_session_context(
             query_range.clone(),
         )),
     );
+
+    ctx.register_udf(ScalarUDF::from(PropertyGet::new()));
+
     ctx.register_object_store(object_store_url.as_ref(), object_store.clone());
     for view in view_factory.get_global_views() {
         register_table(
