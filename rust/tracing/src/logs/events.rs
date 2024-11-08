@@ -163,6 +163,7 @@ pub struct LogStaticStrInteropEvent {
 
 impl InProcSerialize for LogStaticStrInteropEvent {}
 
+// todo: change from LogStringInteropEventV2 to LogStringInteropEventV3 to keep rust code in sync with unreal code
 #[derive(Debug)]
 pub struct LogStringInteropEvent {
     pub time: i64,
