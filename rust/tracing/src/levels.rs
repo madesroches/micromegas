@@ -1,3 +1,4 @@
+//! Verbosity management
 use std::{
     cmp, fmt,
     hash::Hash,

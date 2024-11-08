@@ -1,3 +1,4 @@
+//! Where events are recorded and eventually sent to a sink
 pub use crate::errors::{Error, Result};
 use crate::intern_string::intern_string;
 use crate::prelude::*;

@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use crate::event::TracingBlock;
 
+/// StreamDesc is the metadata associated with an event stream
 #[derive(Debug, Serialize, Deserialize)]
 pub struct StreamDesc {
     pub stream_id: uuid::Uuid,
@@ -29,6 +30,7 @@ impl StreamDesc {
     }
 }
 
+/// EventStream are a sequence of blocks sent (or dropped) as they become full
 #[derive(Debug)]
 pub struct EventStream<Block> {
     stream_desc: Arc<StreamDesc>,

@@ -1,3 +1,4 @@
+//! System & monotonic tick count
 use chrono::{DateTime, Utc};
 
 #[derive(Debug)]

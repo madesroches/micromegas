@@ -1,7 +1,7 @@
+//! StringId serializes the value of the pointer and the size
+//! Also provides a facility to extract a StaticString from it
 use micromegas_transit::{InProcSerialize, Member, Reflect, StaticString, UserDefinedType};
 
-// StringId serializes the value of the pointer and the size
-// Also provides a facility to extract a StaticString from it
 #[derive(Debug)]
 pub struct StringId {
     pub ptr: *const u8,

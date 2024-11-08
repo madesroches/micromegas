@@ -1,7 +1,8 @@
+//! Reports panics as fatal log entries and shuts down the telemetry system
 use std::io::Write;
 use std::panic::{take_hook, PanicHookInfo};
 
-use crate::error;
+use crate::fatal;
 use crate::guards::shutdown_telemetry;
 
 pub fn init_panic_hook() {
@@ -13,7 +14,7 @@ pub fn init_panic_hook() {
     }
 
     std::panic::set_hook(Box::new(|panic_info| unsafe {
-        error!("panic: {:?}", panic_info);
+        fatal!("panic: {:?}", panic_info);
         shutdown_telemetry();
         if let Some(hook) = PREVIOUS_HOOK.as_ref() {
             std::io::stdout().flush().unwrap();

@@ -1,3 +1,4 @@
+//! RAII-style guards
 use std::{marker::PhantomData, sync::Arc};
 
 use crate::{

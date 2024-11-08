@@ -1,5 +1,6 @@
 use crate::prelude::*;
 
+/// Blocks are a batch of events sent as a unit
 #[derive(Debug)]
 pub struct EventBlock<Q> {
     pub process_id: uuid::Uuid,
@@ -19,11 +20,13 @@ where
     }
 }
 
+/// Serialize the dependencies of the events in the primary queue
 pub trait ExtractDeps {
     type DepsQueue;
     fn extract(&self) -> Self::DepsQueue;
 }
 
+/// Event blocks must adhere to TracingBlock in order to be managed by the stream
 pub trait TracingBlock {
     type Queue: ExtractDeps;
 

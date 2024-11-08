@@ -1,11 +1,9 @@
+//! FlushMonitor triggers the flush of the telemetry streams at regular interval.
 use chrono::prelude::*;
 use std::sync::atomic::{AtomicI64, Ordering};
 
 use crate::dispatch::{flush_log_buffer, flush_metrics_buffer, for_each_thread_stream};
 
-// FlushMonitor triggers the flush of the telemetry streams every minute.
-//   Must be ticked.
-//   Thread streams can't be flushed without introducing a synchronization mechanism. Their capacity is reduced so that the calling code will flush them in a safe manner.
 pub struct FlushMonitor {
     last_flush: AtomicI64,
     flush_period_seconds: i64,
@@ -32,6 +30,7 @@ impl FlushMonitor {
             flush_log_buffer();
             flush_metrics_buffer();
             for_each_thread_stream(&mut |stream_ptr| unsafe {
+                //Thread streams can't be flushed without introducing a synchronization mechanism. They are marked as full so that the calling code will flush them in a safe manner.
                 (*stream_ptr).set_full();
             });
         }

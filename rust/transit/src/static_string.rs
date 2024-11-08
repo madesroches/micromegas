@@ -1,7 +1,7 @@
 use crate::{read_any, write_any, InProcSerialize, InProcSize, Reflect, UserDefinedType};
 
-// StaticString serializes the value of the pointer and the contents of the
-// string
+/// StaticString serializes the value of the pointer and the contents of the string
+/// It should not be part of the event - it's the dependency of the StringId
 #[derive(Debug)]
 pub struct StaticString {
     pub len: u32,
