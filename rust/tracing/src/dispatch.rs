@@ -471,7 +471,7 @@ impl Dispatch {
             log_stream.get_events_mut().push(LogStringEvent {
                 desc: metadata,
                 time,
-                dyn_str: micromegas_transit::DynString(args.to_string()),
+                msg: micromegas_transit::DynString(args.to_string()),
             });
         }
         if log_stream.is_full() {
@@ -498,7 +498,7 @@ impl Dispatch {
                 time,
                 level: desc.level as u32,
                 target: intern_string(desc.target).into(),
-                msg: micromegas_transit::DynString(args.to_string()),
+                msg: micromegas_transit::LegacyDynString(args.to_string()),
             });
         }
         if log_stream.is_full() {

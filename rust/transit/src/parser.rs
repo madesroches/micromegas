@@ -1,7 +1,9 @@
-use std::{collections::HashMap, hash::BuildHasher, sync::Arc};
-
-use crate::{parse_string::parse_string, read_any, DynString, InProcSerialize, UserDefinedType};
+use crate::{
+    advance_window, read_advance_any, read_advance_string, read_any, InProcSerialize,
+    LegacyDynString, UserDefinedType,
+};
 use anyhow::{bail, Context, Result};
+use std::{collections::HashMap, hash::BuildHasher, sync::Arc};
 
 #[derive(Debug, Clone)]
 pub struct Object {
@@ -175,10 +177,11 @@ pub fn read_dependencies(udts: &[UserDefinedType], buffer: &[u8]) -> Result<Hash
                 assert!(insert_res.is_none());
             },
             "StaticStringDependency" => unsafe {
-                let mut cursor = offset;
-                let string_id = read_any::<u64>(buffer.as_ptr().add(cursor));
-                cursor += std::mem::size_of::<u64>();
-                let string = parse_string(buffer, &mut cursor).with_context(|| "parsing string")?;
+                let buffer_slice = advance_window(buffer, offset);
+                let string_id: u64 = read_advance_any(&mut &*buffer_slice);
+                let string =
+                    read_advance_string(&mut &*buffer_slice).with_context(|| "parsing string")?;
+
                 let insert_res = hash.insert(string_id, Value::String(Arc::new(string)));
                 assert!(insert_res.is_none());
             },
@@ -215,7 +218,7 @@ where
         let time_ptr = buffer.as_ptr().add(offset + 8);
         let time = read_any::<i64>(time_ptr);
         let msg_offset = 8 * 2;
-        let msg = <DynString as InProcSerialize>::read_value(
+        let msg = <LegacyDynString as InProcSerialize>::read_value(
             buffer.as_ptr().add(offset + msg_offset),
             Some((object_size - msg_offset) as u32),
         );
@@ -233,10 +236,35 @@ where
     }
 }
 
+fn parse_log_string_event_v2<S>(
+    dependencies: &HashMap<u64, Value, S>,
+    mut object_window: &[u8],
+) -> Vec<(String, Value)>
+where
+    S: BuildHasher,
+{
+    unsafe {
+        let desc_id: u64 = read_advance_any(&mut object_window);
+        let time: i64 = read_advance_any(&mut object_window);
+        let msg = read_advance_string(&mut object_window).unwrap();
+        let mut desc: Value = Value::None;
+        if let Some(found_desc) = dependencies.get(&desc_id) {
+            desc = found_desc.clone();
+        } else {
+            log::warn!("desc member {} of LogStringEvent not found", desc_id);
+        }
+        vec![
+            (String::from("time"), Value::I64(time)),
+            (String::from("msg"), Value::String(Arc::new(msg))),
+            (String::from("desc"), desc),
+        ]
+    }
+}
+
 fn parse_log_string_interop_event_v3<S>(
     udts: &[UserDefinedType],
     dependencies: &HashMap<u64, Value, S>,
-    buffer: &[u8],
+    mut buffer: &[u8],
 ) -> Result<Vec<(String, Value)>>
 where
     S: BuildHasher,
@@ -244,15 +272,11 @@ where
     if let Some(index) = udts.iter().position(|t| t.name == "StaticStringRef") {
         let string_ref_metadata = &udts[index];
         unsafe {
-            let ptr = buffer.as_ptr();
-            let time = read_any::<i64>(ptr);
-            let mut cursor = std::mem::size_of::<i64>();
-            let level = read_any::<u8>(ptr.add(cursor));
-            cursor += 1;
-            let target =
-                parse_pod_instance(string_ref_metadata, udts, dependencies, cursor, buffer);
-            cursor += string_ref_metadata.size;
-            let msg = parse_string(buffer, &mut cursor)?;
+            let time: i64 = read_advance_any(&mut buffer);
+            let level: u8 = read_advance_any(&mut buffer);
+            let target = parse_pod_instance(string_ref_metadata, udts, dependencies, 0, buffer);
+            buffer = advance_window(buffer, string_ref_metadata.size);
+            let msg = read_advance_string(&mut buffer)?;
 
             Ok(vec![
                 (String::from("time"), Value::I64(time)),
@@ -287,7 +311,7 @@ where
             let target =
                 parse_pod_instance(stringid_metadata, udts, dependencies, target_offset, buffer);
             let message_offset = target_offset + stringid_metadata.size;
-            let msg = <DynString as InProcSerialize>::read_value(
+            let msg = <LegacyDynString as InProcSerialize>::read_value(
                 buffer.as_ptr().add(message_offset),
                 Some((object_size - (message_offset - offset)) as u32),
             );
@@ -316,17 +340,18 @@ fn parse_custom_instance<S>(
 where
     S: BuildHasher,
 {
+    let object_window = &buffer[offset..(offset + object_size)];
     let members = match udt.name.as_str() {
         // todo: move out of transit lib.
         // LogStringEvent belongs to the tracing lib
         // we need to inject the serialization logic of custom objects
         "LogStringEvent" => parse_log_string_event(dependencies, offset, object_size, buffer),
+        "LogStringEventV2" => parse_log_string_event_v2(dependencies, object_window),
         "LogStringInteropEventV2" => {
             parse_log_string_interop_event(udts, dependencies, offset, object_size, buffer)
         }
         "LogStringInteropEventV3" => {
-            let object_buffer = &buffer[offset..(offset + object_size)];
-            match parse_log_string_interop_event_v3(udts, dependencies, object_buffer) {
+            match parse_log_string_interop_event_v3(udts, dependencies, object_window) {
                 Ok(members) => members,
                 Err(e) => {
                     log::warn!("Error parsing LogStringInteropEventV3: {:?}", e);
