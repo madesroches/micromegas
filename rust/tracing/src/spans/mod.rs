@@ -1,3 +1,4 @@
+//! Events reprensenting units of code execution
 mod block;
 pub use block::*;
 

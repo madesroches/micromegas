@@ -218,6 +218,17 @@ macro_rules! error {
     )
 }
 
+/// Logs a message representing a crash or panic
+#[macro_export]
+macro_rules! fatal {
+    (target: $target:expr, $($arg:tt)+) => (
+        $crate::log!(target: $target, $crate::levels::Level::Fatal, $($arg)+)
+    );
+    ($($arg:tt)+) => (
+        $crate::log!($crate::levels::Level::Fatal, $($arg)+)
+    )
+}
+
 /// Logs a message at the warn level.
 ///
 /// # Examples

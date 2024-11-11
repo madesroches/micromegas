@@ -73,8 +73,8 @@ pub mod prelude {
     pub use crate::process_info::*;
     pub use crate::time::*;
     pub use crate::{
-        async_span_scope, debug, error, fmetric, imetric, info, log, log_enabled, span_scope,
-        trace, warn,
+        async_span_scope, debug, error, fatal, fmetric, imetric, info, log, log_enabled,
+        span_scope, trace, warn,
     };
     pub use micromegas_tracing_proc_macros::*;
 }

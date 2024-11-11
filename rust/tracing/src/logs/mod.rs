@@ -1,3 +1,4 @@
+//! Events representing a process's log
 mod block;
 pub use block::*;
 

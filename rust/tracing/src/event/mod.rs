@@ -1,3 +1,4 @@
+//! Structure to record events in memory
 mod block;
 pub use block::*;
 

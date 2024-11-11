@@ -1,3 +1,4 @@
+//! Process metadata
 use micromegas_transit::uuid_utils;
 use std::collections::HashMap;
 

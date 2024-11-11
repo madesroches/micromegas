@@ -9,6 +9,7 @@ use crate::{
 
 pub type BoxedEventSink = Box<dyn EventSink>;
 
+/// interface needed by the dispatch module to send out telemetry
 pub trait EventSink {
     fn on_startup(&self, process_info: Arc<ProcessInfo>);
     fn on_shutdown(&self);
@@ -27,6 +28,7 @@ pub trait EventSink {
     fn is_busy(&self) -> bool; // sink is busy writing to disk or network, avoid extra flushing
 }
 
+/// for tests
 pub struct NullEventSink {}
 
 impl EventSink for NullEventSink {
