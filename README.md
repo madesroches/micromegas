@@ -49,6 +49,9 @@ Up to 100000 events / second for a single instrumented process.
 
 Scalable backend can accept data from millions of concurrent instrumented processes.
 
+  * Data stored in S3
+  * Metadata stored in https://www.postgresql.org/
+
 ### Tail sampling & ETL on demand
 
 In order to keep costs down, most payloads will remain unprocessed until they expire.
@@ -56,7 +59,6 @@ In order to keep costs down, most payloads will remain unprocessed until they ex
 ### Query using SQL
 
  * Analytics built on https://arrow.apache.org/datafusion/
- * Metadata stored in https://www.postgresql.org/
 
 ## Status
 
