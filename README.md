@@ -24,15 +24,18 @@
 
 ## Objectives
 
- * Spend less time reproducing problems.
+ * Unified observability: logs, metrics and traces in the same database.
  
- * Collect enough data to understand how to correct the problems. 
- 
- * Quantify the frequency and severity of the issues instead of debugging the first one you can reproduce.
- 
- * Monitor & catch problems before they get noticed by users.
+ * Spend less time reproducing problems
 
+   * Collect enough data to understand how to correct the problems. 
+ 
+   * Quantify the frequency and severity of the issues instead of debugging the first one you can reproduce.
+ 
+ * Achieve better quality: monitor & catch problems before they get noticed by users.
+ 
 ## Design Strategies
+
 
 ### Low overhead instrumentation
 
