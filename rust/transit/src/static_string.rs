@@ -1,6 +1,6 @@
 use crate::{
-    read_advance_any, read_any, string_codec::StringCodec, write_any, InProcSerialize, InProcSize,
-    Reflect, UserDefinedType,
+    read_consume_pod, string_codec::StringCodec, write_any, InProcSerialize, InProcSize, Reflect,
+    UserDefinedType,
 };
 
 /// Utf8StaticString serializes the value of the pointer and the contents of the string
@@ -51,12 +51,9 @@ impl InProcSerialize for Utf8StaticString {
     }
 
     #[allow(unsafe_code)]
-    unsafe fn read_value(ptr: *const u8, value_size_opt: Option<u32>) -> Self {
-        let id_size = std::mem::size_of::<usize>() as u32;
-        let value_size = value_size_opt.unwrap();
-        assert!(id_size <= value_size);
-        let buffer_size = value_size - id_size;
-        let static_buffer_ptr = read_any::<*const u8>(ptr);
+    unsafe fn read_value(mut window: &[u8]) -> Self {
+        let static_buffer_ptr: *const u8 = read_consume_pod(&mut window);
+        let buffer_size = window.len() as u32;
         Self {
             len: buffer_size,
             ptr: static_buffer_ptr,
@@ -114,12 +111,11 @@ impl InProcSerialize for StaticStringDependency {
     }
 
     #[allow(unsafe_code)]
-    unsafe fn read_value(ptr: *const u8, value_size: Option<u32>) -> Self {
-        let mut window = &*std::ptr::slice_from_raw_parts(ptr, value_size.unwrap() as usize);
-        let id: u64 = read_advance_any(&mut window);
+    unsafe fn read_value(mut window: &[u8]) -> Self {
+        let id: u64 = read_consume_pod(&mut window);
         let static_buffer_ptr: *const u8 = id as *const u8;
-        let codec = StringCodec::try_from(read_advance_any::<u8>(&mut window)).unwrap();
-        let buffer_size: u32 = read_advance_any(&mut window);
+        let codec = StringCodec::try_from(read_consume_pod::<u8>(&mut window)).unwrap();
+        let buffer_size: u32 = read_consume_pod(&mut window);
         assert_eq!(buffer_size as usize, window.len());
         Self {
             codec,

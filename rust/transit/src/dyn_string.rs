@@ -1,5 +1,5 @@
 use crate::{
-    advance_window, read_advance_any, string_codec::StringCodec, write_any, InProcSerialize,
+    advance_window, read_consume_pod, string_codec::StringCodec, write_any, InProcSerialize,
     InProcSize,
 };
 use anyhow::Result;
@@ -19,10 +19,8 @@ impl InProcSerialize for LegacyDynString {
     }
 
     #[allow(unsafe_code)]
-    unsafe fn read_value(ptr: *const u8, value_size: Option<u32>) -> Self {
-        let buffer_size = value_size.unwrap();
-        let slice = std::ptr::slice_from_raw_parts(ptr, buffer_size as usize);
-        Self(String::from_utf8((*slice).to_vec()).unwrap())
+    unsafe fn read_value(window: &[u8]) -> Self {
+        Self(String::from_utf8(window.to_vec()).unwrap())
     }
 }
 
@@ -49,8 +47,7 @@ impl InProcSerialize for DynString {
     }
 
     #[allow(unsafe_code)]
-    unsafe fn read_value(ptr: *const u8, value_size: Option<u32>) -> Self {
-        let mut window = &*std::ptr::slice_from_raw_parts(ptr, value_size.unwrap() as usize);
+    unsafe fn read_value(mut window: &[u8]) -> Self {
         let res = read_advance_string(&mut window).unwrap();
         assert_eq!(window.len(), 0);
         Self(res)
@@ -61,9 +58,9 @@ impl InProcSerialize for DynString {
 #[allow(unsafe_code, clippy::cast_ptr_alignment)]
 pub fn read_advance_string(window: &mut &[u8]) -> Result<String> {
     unsafe {
-        let codec = StringCodec::try_from(read_advance_any::<u8>(window))?;
-        let string_len_bytes: u32 = read_advance_any(window);
-        let string_buffer = &(*window)[0..(string_len_bytes as usize)];
+        let codec = StringCodec::try_from(read_consume_pod::<u8>(window))?;
+        let string_len_bytes: u32 = read_consume_pod(window);
+        let string_buffer = &window[0..(string_len_bytes as usize)];
         *window = advance_window(window, string_len_bytes as usize);
         match codec {
             StringCodec::Ansi => {

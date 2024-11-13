@@ -1,5 +1,5 @@
 use crate::{prelude::*, static_string_ref::StaticStringRef, string_id::StringId};
-use micromegas_transit::{prelude::*, read_advance_any, read_advance_string, DynString};
+use micromegas_transit::{prelude::*, read_advance_string, read_consume_pod, DynString};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 #[derive(Debug)]
@@ -119,12 +119,11 @@ impl InProcSerialize for LogStringEvent {
         self.msg.write_value(buffer);
     }
 
-    unsafe fn read_value(ptr: *const u8, value_size: Option<u32>) -> Self {
+    unsafe fn read_value(mut window: &[u8]) -> Self {
         // it does no good to parse this object when looking for dependencies, we should skip this code
-        let mut window = &*std::ptr::slice_from_raw_parts(ptr, value_size.unwrap() as usize);
-        let desc_id: usize = read_advance_any(&mut window);
+        let desc_id: usize = read_consume_pod(&mut window);
         let desc = &*(desc_id as *const LogMetadata);
-        let time: i64 = read_advance_any(&mut window);
+        let time: i64 = read_consume_pod(&mut window);
         let msg = DynString(read_advance_string(&mut window).unwrap());
         assert_eq!(window.len(), 0);
         Self { desc, time, msg }
@@ -182,11 +181,10 @@ impl InProcSerialize for LogStringInteropEvent {
         self.msg.write_value(buffer);
     }
 
-    unsafe fn read_value(ptr: *const u8, value_size: Option<u32>) -> Self {
-        let mut window = &*std::ptr::slice_from_raw_parts(ptr, value_size.unwrap() as usize);
-        let time: i64 = read_advance_any(&mut window);
-        let level: u8 = read_advance_any(&mut window);
-        let target: StaticStringRef = read_advance_any(&mut window);
+    unsafe fn read_value(mut window: &[u8]) -> Self {
+        let time: i64 = read_consume_pod(&mut window);
+        let level: u8 = read_consume_pod(&mut window);
+        let target: StaticStringRef = read_consume_pod(&mut window);
         let msg = DynString(read_advance_string(&mut window).unwrap());
         Self {
             time,

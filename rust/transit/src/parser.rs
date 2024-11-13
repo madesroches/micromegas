@@ -1,5 +1,5 @@
 use crate::{
-    advance_window, read_advance_any, read_advance_string, read_any, InProcSerialize,
+    advance_window, read_advance_string, read_any, read_consume_pod, InProcSerialize,
     LegacyDynString, UserDefinedType,
 };
 use anyhow::{bail, Context, Result};
@@ -177,21 +177,22 @@ pub fn read_dependencies(udts: &[UserDefinedType], buffer: &[u8]) -> Result<Hash
                 let insert_res = hash.insert(string_id, Value::String(Arc::new(string)));
                 assert!(insert_res.is_none());
             },
-            "StaticStringDependency" => unsafe {
+            "StaticStringDependency" => {
                 let mut window = advance_window(buffer, offset);
-                let string_id: u64 = read_advance_any(&mut window);
+                let string_id: u64 = read_consume_pod(&mut window);
                 let string = read_advance_string(&mut window).with_context(|| "parsing string")?;
 
                 let insert_res = hash.insert(string_id, Value::String(Arc::new(string)));
                 assert!(insert_res.is_none());
-            },
+            }
 
             _ => {
                 if udt.size == 0 {
                     anyhow::bail!("invalid user-defined type {:?}", udt);
                 }
-                let instance = parse_pod_instance(udt, udts, &hash, offset, buffer)
-                    .with_context(|| "parse_pod_instance")?;
+                let instance =
+                    parse_pod_instance(udt, udts, &hash, &buffer[offset..offset + udt.size])
+                        .with_context(|| "parse_pod_instance")?;
                 if let Value::Object(obj) = instance {
                     let insert_res = hash.insert(obj.get::<u64>("id")?, Value::Object(obj));
                     assert!(insert_res.is_none());
@@ -206,23 +207,15 @@ pub fn read_dependencies(udts: &[UserDefinedType], buffer: &[u8]) -> Result<Hash
 
 fn parse_log_string_event<S>(
     dependencies: &HashMap<u64, Value, S>,
-    offset: usize,
-    object_size: usize,
-    buffer: &[u8],
+    mut object_window: &[u8],
 ) -> Vec<(String, Value)>
 where
     S: BuildHasher,
 {
     unsafe {
-        let begin_obj_ptr = buffer.as_ptr().add(offset);
-        let desc_id = read_any::<u64>(begin_obj_ptr);
-        let time_ptr = buffer.as_ptr().add(offset + 8);
-        let time = read_any::<i64>(time_ptr);
-        let msg_offset = 8 * 2;
-        let msg = <LegacyDynString as InProcSerialize>::read_value(
-            buffer.as_ptr().add(offset + msg_offset),
-            Some((object_size - msg_offset) as u32),
-        );
+        let desc_id: u64 = read_consume_pod(&mut object_window);
+        let time: i64 = read_consume_pod(&mut object_window);
+        let msg = <LegacyDynString as InProcSerialize>::read_value(object_window);
         let mut desc: Value = Value::None;
         if let Some(found_desc) = dependencies.get(&desc_id) {
             desc = found_desc.clone();
@@ -244,22 +237,20 @@ fn parse_log_string_event_v2<S>(
 where
     S: BuildHasher,
 {
-    unsafe {
-        let desc_id: u64 = read_advance_any(&mut object_window);
-        let time: i64 = read_advance_any(&mut object_window);
-        let msg = read_advance_string(&mut object_window).with_context(|| "parsing string")?;
-        let mut desc: Value = Value::None;
-        if let Some(found_desc) = dependencies.get(&desc_id) {
-            desc = found_desc.clone();
-        } else {
-            log::warn!("desc member {} of LogStringEvent not found", desc_id);
-        }
-        Ok(vec![
-            (String::from("time"), Value::I64(time)),
-            (String::from("msg"), Value::String(Arc::new(msg))),
-            (String::from("desc"), desc),
-        ])
+    let desc_id: u64 = read_consume_pod(&mut object_window);
+    let time: i64 = read_consume_pod(&mut object_window);
+    let msg = read_advance_string(&mut object_window).with_context(|| "parsing string")?;
+    let mut desc: Value = Value::None;
+    if let Some(found_desc) = dependencies.get(&desc_id) {
+        desc = found_desc.clone();
+    } else {
+        log::warn!("desc member {} of LogStringEvent not found", desc_id);
     }
+    Ok(vec![
+        (String::from("time"), Value::I64(time)),
+        (String::from("msg"), Value::String(Arc::new(msg))),
+        (String::from("desc"), desc),
+    ])
 }
 
 fn parse_log_string_interop_event_v3<S>(
@@ -272,22 +263,24 @@ where
 {
     if let Some(index) = udts.iter().position(|t| t.name == "StaticStringRef") {
         let string_ref_metadata = &udts[index];
-        unsafe {
-            let time: i64 = read_advance_any(&mut object_window);
-            let level: u8 = read_advance_any(&mut object_window);
-            let target =
-                parse_pod_instance(string_ref_metadata, udts, dependencies, 0, object_window)
-                    .with_context(|| "parse_pod_instance")?;
-            object_window = advance_window(object_window, string_ref_metadata.size);
-            let msg = read_advance_string(&mut object_window)?;
+        let time: i64 = read_consume_pod(&mut object_window);
+        let level: u8 = read_consume_pod(&mut object_window);
+        let target = parse_pod_instance(
+            string_ref_metadata,
+            udts,
+            dependencies,
+            &object_window[0..string_ref_metadata.size],
+        )
+        .with_context(|| "parse_pod_instance")?;
+        object_window = advance_window(object_window, string_ref_metadata.size);
+        let msg = read_advance_string(&mut object_window)?;
 
-            Ok(vec![
-                (String::from("time"), Value::I64(time)),
-                (String::from("level"), Value::U8(level)),
-                (String::from("target"), target),
-                (String::from("msg"), Value::String(Arc::new(msg))),
-            ])
-        }
+        Ok(vec![
+            (String::from("time"), Value::I64(time)),
+            (String::from("level"), Value::U8(level)),
+            (String::from("target"), target),
+            (String::from("msg"), Value::String(Arc::new(msg))),
+        ])
     } else {
         bail!("Can't parse log string interop event with no metadata for StaticStringRef");
     }
@@ -296,9 +289,7 @@ where
 fn parse_log_string_interop_event<S>(
     udts: &[UserDefinedType],
     dependencies: &HashMap<u64, Value, S>,
-    offset: usize,
-    object_size: usize,
-    buffer: &[u8],
+    mut object_window: &[u8],
 ) -> Result<Vec<(String, Value)>>
 where
     S: BuildHasher,
@@ -306,19 +297,17 @@ where
     if let Some(index) = udts.iter().position(|t| t.name == "StringId") {
         let stringid_metadata = &udts[index];
         unsafe {
-            let buffer_ptr = buffer.as_ptr();
-            let time = read_any::<i64>(buffer_ptr.add(offset));
-            let level_offset = offset + std::mem::size_of::<i64>();
-            let level = read_any::<u32>(buffer_ptr.add(level_offset));
-            let target_offset = level_offset + std::mem::size_of::<u32>();
-            let target =
-                parse_pod_instance(stringid_metadata, udts, dependencies, target_offset, buffer)
-                    .with_context(|| "parse_pod_instance")?;
-            let message_offset = target_offset + stringid_metadata.size;
-            let msg = <LegacyDynString as InProcSerialize>::read_value(
-                buffer.as_ptr().add(message_offset),
-                Some((object_size - (message_offset - offset)) as u32),
-            );
+            let time: i64 = read_consume_pod(&mut object_window);
+            let level: u32 = read_consume_pod(&mut object_window);
+            let target = parse_pod_instance(
+                stringid_metadata,
+                udts,
+                dependencies,
+                &object_window[0..stringid_metadata.size],
+            )
+            .with_context(|| "parse_pod_instance")?;
+            object_window = advance_window(object_window, stringid_metadata.size);
+            let msg = <LegacyDynString as InProcSerialize>::read_value(object_window);
 
             Ok(vec![
                 (String::from("time"), Value::I64(time)),
@@ -336,23 +325,20 @@ fn parse_custom_instance<S>(
     udt: &UserDefinedType,
     udts: &[UserDefinedType],
     dependencies: &HashMap<u64, Value, S>,
-    offset: usize,
-    object_size: usize,
-    buffer: &[u8],
+    object_window: &[u8],
 ) -> Result<Value>
 where
     S: BuildHasher,
 {
-    let object_window = &buffer[offset..(offset + object_size)];
     let members = match udt.name.as_str() {
         // todo: move out of transit lib.
         // LogStringEvent belongs to the tracing lib
         // we need to inject the serialization logic of custom objects
-        "LogStringEvent" => parse_log_string_event(dependencies, offset, object_size, buffer),
+        "LogStringEvent" => parse_log_string_event(dependencies, object_window),
         "LogStringEventV2" => parse_log_string_event_v2(dependencies, object_window)
             .with_context(|| "parse_log_string_event_v2")?,
         "LogStringInteropEventV2" => {
-            parse_log_string_interop_event(udts, dependencies, offset, object_size, buffer)
+            parse_log_string_interop_event(udts, dependencies, object_window)
                 .with_context(|| "parse_log_string_interop_event")?
         }
         "LogStringInteropEventV3" => {
@@ -374,8 +360,7 @@ fn parse_pod_instance<S>(
     udt: &UserDefinedType,
     udts: &[UserDefinedType],
     dependencies: &HashMap<u64, Value, S>,
-    offset: usize,
-    buffer: &[u8],
+    object_window: &[u8],
 ) -> Result<Value>
 where
     S: BuildHasher,
@@ -391,7 +376,7 @@ where
                     member_meta
                 );
             }
-            let key = unsafe { read_any::<u64>(buffer.as_ptr().add(offset + member_meta.offset)) };
+            let key = unsafe { read_any::<u64>(object_window.as_ptr().add(member_meta.offset)) };
             if let Some(v) = dependencies.get(&key) {
                 v.clone()
             } else {
@@ -404,7 +389,7 @@ where
                     assert_eq!(std::mem::size_of::<u8>(), member_meta.size);
                     unsafe {
                         Value::U8(read_any::<u8>(
-                            buffer.as_ptr().add(offset + member_meta.offset),
+                            object_window.as_ptr().add(member_meta.offset),
                         ))
                     }
                 }
@@ -412,7 +397,7 @@ where
                     assert_eq!(std::mem::size_of::<u32>(), member_meta.size);
                     unsafe {
                         Value::U32(read_any::<u32>(
-                            buffer.as_ptr().add(offset + member_meta.offset),
+                            object_window.as_ptr().add(member_meta.offset),
                         ))
                     }
                 }
@@ -420,7 +405,7 @@ where
                     assert_eq!(std::mem::size_of::<u64>(), member_meta.size);
                     unsafe {
                         Value::U64(read_any::<u64>(
-                            buffer.as_ptr().add(offset + member_meta.offset),
+                            object_window.as_ptr().add(member_meta.offset),
                         ))
                     }
                 }
@@ -428,7 +413,7 @@ where
                     assert_eq!(std::mem::size_of::<i64>(), member_meta.size);
                     unsafe {
                         Value::I64(read_any::<i64>(
-                            buffer.as_ptr().add(offset + member_meta.offset),
+                            object_window.as_ptr().add(member_meta.offset),
                         ))
                     }
                 }
@@ -436,7 +421,7 @@ where
                     assert_eq!(std::mem::size_of::<f64>(), member_meta.size);
                     unsafe {
                         Value::F64(read_any::<f64>(
-                            buffer.as_ptr().add(offset + member_meta.offset),
+                            object_window.as_ptr().add(member_meta.offset),
                         ))
                     }
                 }
@@ -450,8 +435,8 @@ where
                             member_udt,
                             udts,
                             dependencies,
-                            offset + member_meta.offset,
-                            buffer,
+                            &object_window
+                                [member_meta.offset..member_meta.offset + member_udt.size],
                         )
                         .with_context(|| "parse_pod_instance")?
                     } else {
@@ -510,10 +495,15 @@ where
             static_size => (static_size, false),
         };
         let instance = if is_size_dynamic {
-            parse_custom_instance(udt, udts, dependencies, offset, object_size, buffer)
-                .with_context(|| "parse_custom_instance")?
+            parse_custom_instance(
+                udt,
+                udts,
+                dependencies,
+                &buffer[offset..offset + object_size],
+            )
+            .with_context(|| "parse_custom_instance")?
         } else {
-            parse_pod_instance(udt, udts, dependencies, offset, buffer)
+            parse_pod_instance(udt, udts, dependencies, &buffer[offset..offset + udt.size])
                 .with_context(|| "parse_pod_instance")?
         };
         if !fun(instance)? {

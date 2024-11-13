@@ -67,7 +67,7 @@ mod test {
         string_id.write_value(&mut buffer);
         assert_eq!(buffer.len(), std::mem::size_of::<StringId>());
 
-        let string_id = unsafe { StringId::read_value(buffer.as_ptr(), None) };
+        let string_id = unsafe { StringId::read_value(&buffer) };
         assert_eq!(string_id.len, 5);
         assert_eq!(string_id.ptr, "hello".as_ptr());
     }
