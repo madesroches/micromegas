@@ -208,26 +208,21 @@ pub fn read_dependencies(udts: &[UserDefinedType], buffer: &[u8]) -> Result<Hash
 fn parse_log_string_event<S>(
     dependencies: &HashMap<u64, Value, S>,
     mut object_window: &[u8],
-) -> Vec<(String, Value)>
+) -> Result<Vec<(String, Value)>>
 where
     S: BuildHasher,
 {
-    unsafe {
-        let desc_id: u64 = read_consume_pod(&mut object_window);
-        let time: i64 = read_consume_pod(&mut object_window);
-        let msg = <LegacyDynString as InProcSerialize>::read_value(object_window);
-        let mut desc: Value = Value::None;
-        if let Some(found_desc) = dependencies.get(&desc_id) {
-            desc = found_desc.clone();
-        } else {
-            log::warn!("desc member {} of LogStringEvent not found", desc_id);
-        }
-        vec![
-            (String::from("time"), Value::I64(time)),
-            (String::from("msg"), Value::String(Arc::new(msg.0))),
-            (String::from("desc"), desc),
-        ]
-    }
+    let desc_id: u64 = read_consume_pod(&mut object_window);
+    let time: i64 = read_consume_pod(&mut object_window);
+    let msg = String::from_utf8(object_window.to_vec()).with_context(|| "parsing legacy string")?;
+    let desc = dependencies
+        .get(&desc_id)
+        .with_context(|| format!("desc member {} of LogStringEvent not found", desc_id))?;
+    Ok(vec![
+        (String::from("time"), Value::I64(time)),
+        (String::from("msg"), Value::String(Arc::new(msg))),
+        (String::from("desc"), desc.clone()),
+    ])
 }
 
 fn parse_log_string_event_v2<S>(
@@ -334,7 +329,8 @@ where
         // todo: move out of transit lib.
         // LogStringEvent belongs to the tracing lib
         // we need to inject the serialization logic of custom objects
-        "LogStringEvent" => parse_log_string_event(dependencies, object_window),
+        "LogStringEvent" => parse_log_string_event(dependencies, object_window)
+            .with_context(|| "parse_log_string_event")?,
         "LogStringEventV2" => parse_log_string_event_v2(dependencies, object_window)
             .with_context(|| "parse_log_string_event_v2")?,
         "LogStringInteropEventV2" => {
