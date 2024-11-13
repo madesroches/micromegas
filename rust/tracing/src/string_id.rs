@@ -1,6 +1,6 @@
 //! StringId serializes the value of the pointer and the size
 //! Also provides a facility to extract a StaticString from it
-use micromegas_transit::{InProcSerialize, Member, Reflect, StaticString, UserDefinedType};
+use micromegas_transit::{InProcSerialize, Member, Reflect, UserDefinedType, Utf8StaticString};
 
 #[derive(Debug)]
 pub struct StringId {
@@ -17,7 +17,7 @@ impl std::convert::From<&'static str> for StringId {
     }
 }
 
-impl std::convert::From<&StringId> for StaticString {
+impl std::convert::From<&StringId> for Utf8StaticString {
     fn from(src: &StringId) -> Self {
         Self {
             len: src.len,
@@ -26,13 +26,14 @@ impl std::convert::From<&StringId> for StaticString {
     }
 }
 
+// TransitReflect derive macro does not support reference udts, only reference members
 impl Reflect for StringId {
     fn reflect() -> UserDefinedType {
         UserDefinedType {
             name: String::from("StringId"),
             size: std::mem::size_of::<Self>(),
             members: vec![Member {
-                name: "id".to_string(),
+                name: "id".to_string(), // reference udt need a member named id that's 8 bytes
                 type_name: "usize".to_string(),
                 offset: memoffset::offset_of!(Self, ptr),
                 size: std::mem::size_of::<*const u8>(),
@@ -66,7 +67,7 @@ mod test {
         string_id.write_value(&mut buffer);
         assert_eq!(buffer.len(), std::mem::size_of::<StringId>());
 
-        let string_id = unsafe { StringId::read_value(buffer.as_ptr(), None) };
+        let string_id = unsafe { StringId::read_value(&buffer) };
         assert_eq!(string_id.len, 5);
         assert_eq!(string_id.ptr, "hello".as_ptr());
     }

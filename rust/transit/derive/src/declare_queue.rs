@@ -13,18 +13,19 @@ fn gen_read_method(
         quote! {
             #index => {
                 unsafe {
-                    let mut begin_obj = self.buffer.as_ptr().add( offset+1 );
+					let mut begin_obj_offset = offset+1;
+                    let begin_obj = self.buffer.as_ptr().add( begin_obj_offset );
                     let next_object_offset;
                     let value_size = if let InProcSize::Const(size) = <#value_type_id as micromegas_transit::InProcSerialize>::IN_PROC_SIZE {
                         next_object_offset = offset + 1 + size;
-                        None
+                        size
                     } else {
                         let size_instance = micromegas_transit::read_any::<u32>(begin_obj);
-                        begin_obj = begin_obj.add( std::mem::size_of::<u32>() );
+						begin_obj_offset += std::mem::size_of::<u32>();
                         next_object_offset = offset + 1 + std::mem::size_of::<u32>() + size_instance as usize;
-                        Some(size_instance)
+                        size_instance as usize
                     };
-                    let obj = #any_ident::#value_type_id( <#value_type_id as micromegas_transit::InProcSerialize>::read_value(begin_obj, value_size) );
+                    let obj = #any_ident::#value_type_id( <#value_type_id as micromegas_transit::InProcSerialize>::read_value(&self.buffer[begin_obj_offset..begin_obj_offset+value_size]) );
                     (obj,next_object_offset)
                 }
             },

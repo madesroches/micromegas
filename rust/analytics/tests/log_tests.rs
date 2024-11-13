@@ -6,10 +6,14 @@ use micromegas_telemetry_sink::stream_info::make_stream_info;
 use micromegas_telemetry_sink::TelemetryGuardBuilder;
 use micromegas_tracing::dispatch::make_process_info;
 use micromegas_tracing::event::TracingBlock;
+use micromegas_tracing::levels::Level;
+use micromegas_tracing::logs;
 use micromegas_tracing::logs::LogBlock;
 use micromegas_tracing::logs::LogStaticStrInteropEvent;
 use micromegas_tracing::logs::LogStream;
+use micromegas_tracing::logs::LogStringEvent;
 use micromegas_tracing::logs::LogStringInteropEvent;
+use micromegas_transit::Object;
 use micromegas_transit::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -21,7 +25,7 @@ fn test_log_interop_metadata() {
     let obj_meta = &stream_proto.objects_metadata;
     obj_meta
         .iter()
-        .position(|udt| udt.name == "LogStringInteropEventV2")
+        .position(|udt| udt.name == "LogStringInteropEventV3")
         .unwrap();
     obj_meta
         .iter()
@@ -78,10 +82,20 @@ fn test_log_encode_dynamic() {
     let process_info = make_process_info(process_id, Some(uuid::Uuid::new_v4()));
     let mut stream = LogStream::new(1024, process_id, &[], HashMap::new());
     let stream_id = stream.stream_id();
-    stream.get_events_mut().push(LogStringInteropEvent {
+
+    static LOG_DESC: logs::LogMetadata = logs::LogMetadata {
+        level: Level::Info,
+        level_filter: std::sync::atomic::AtomicU32::new(logs::FILTER_LEVEL_UNSET_VALUE),
+        fmt_str: "",
+        target: "target_name",
+        module_path: "module_path",
+        file: file!(),
+        line: line!(),
+    };
+
+    stream.get_events_mut().push(LogStringEvent {
+        desc: &LOG_DESC,
         time: 1,
-        level: 2,
-        target: "target_name".into(),
         msg: micromegas_transit::DynString(String::from("my message")),
     });
     let mut block = stream.replace_block(Arc::new(LogBlock::new(1024, process_id, stream_id, 0)));
@@ -92,10 +106,11 @@ fn test_log_encode_dynamic() {
         ciborium::from_reader(&encoded[..]).unwrap();
     parse_block(&stream_info, &received_block.payload, |val| {
         if let Value::Object(obj) = val {
-            assert_eq!(obj.type_name.as_str(), "LogStringInteropEventV2");
+            assert_eq!(obj.type_name.as_str(), "LogStringEventV2");
             assert_eq!(obj.get::<i64>("time").unwrap(), 1);
-            assert_eq!(obj.get::<u32>("level").unwrap(), 2);
-            assert_eq!(&*obj.get::<Arc<String>>("target").unwrap(), "target_name");
+            let desc = obj.get::<Arc<Object>>("desc").unwrap();
+            assert_eq!(desc.get::<u32>("level").unwrap(), 4);
+            assert_eq!(&*desc.get::<Arc<String>>("target").unwrap(), "target_name");
             assert_eq!(&*obj.get::<Arc<String>>("msg").unwrap(), "my message");
         } else {
             panic!("log entry not an object");

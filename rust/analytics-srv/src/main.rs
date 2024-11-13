@@ -62,6 +62,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _telemetry_guard = TelemetryGuardBuilder::default()
         .with_ctrlc_handling()
         .with_local_sink_max_level(LevelFilter::Debug)
+        .with_interop_max_level_override(LevelFilter::Info)
         .build();
     let args = Cli::parse();
     let connection_string = std::env::var("MICROMEGAS_SQL_CONNECTION_STRING")

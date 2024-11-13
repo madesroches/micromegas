@@ -101,7 +101,6 @@ async fn write_partition(
     // since they are built based on begin_ticks, not insert_time
     let min_insert_time = spec.blocks[0].block.insert_time;
     let max_insert_time = spec.blocks[spec.blocks.len() - 1].block.insert_time;
-    dbg!((min_insert_time, max_insert_time));
 
     let (tx, rx) = tokio::sync::mpsc::channel(1);
     let null_response_writer = Arc::new(ResponseWriter::new(None));

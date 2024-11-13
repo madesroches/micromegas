@@ -6,11 +6,11 @@
 
 mod dyn_string;
 mod heterogeneous_queue;
-pub mod parse_string;
 mod parser;
 mod reflect;
 mod serialize;
 mod static_string;
+pub mod string_codec;
 pub mod uuid_utils;
 
 pub use dyn_string::*;
@@ -28,7 +28,7 @@ pub mod prelude {
     pub use micromegas_derive_transit::*;
 
     pub use crate::{
-        read_any, write_any, DynString, HeterogeneousQueue, InProcSerialize, InProcSize, Member,
-        Object, QueueIterator, Reflect, StaticString, UserDefinedType, Value,
+        read_any, write_any, HeterogeneousQueue, InProcSerialize, InProcSize, Member, Object,
+        QueueIterator, Reflect, UserDefinedType, Utf8StaticString, Value,
     };
 }

@@ -19,6 +19,18 @@ pub unsafe fn read_any<T>(ptr: *const u8) -> T {
     std::ptr::read_unaligned(ptr.cast::<T>())
 }
 
+pub fn advance_window(window: &[u8], offset: usize) -> &[u8] {
+    assert!(offset <= window.len());
+    &window[offset..]
+}
+
+pub fn read_consume_pod<T>(window: &mut &[u8]) -> T {
+    let object_size = std::mem::size_of::<T>();
+    let begin: *const u8 = window.as_ptr();
+    *window = advance_window(window, object_size);
+    unsafe { std::ptr::read_unaligned(begin.cast::<T>()) }
+}
+
 /// Helps speed up the serialization of types which size is known at compile time.
 pub enum InProcSize {
     Const(usize),
@@ -51,7 +63,9 @@ pub trait InProcSerialize: Sized {
     /// call to make sure that the proper size is used
     #[allow(unsafe_code)]
     #[inline(always)]
-    unsafe fn read_value(ptr: *const u8, _value_size: Option<u32>) -> Self {
-        read_any::<Self>(ptr)
+    unsafe fn read_value(mut window: &[u8]) -> Self {
+        let res = read_consume_pod(&mut window);
+        assert_eq!(window.len(), 0);
+        res
     }
 }
