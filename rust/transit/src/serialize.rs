@@ -20,12 +20,8 @@ pub unsafe fn read_any<T>(ptr: *const u8) -> T {
 }
 
 pub unsafe fn advance_window(window: &[u8], offset: usize) -> &[u8] {
-    let size_before = window.len();
-    assert!(size_before >= offset);
-    let size_after = size_before - offset;
-    let begin_before: *const u8 = window.as_ptr();
-    let begin_after = begin_before.add(offset);
-    &*std::ptr::slice_from_raw_parts(begin_after, size_after)
+    assert!(offset <= window.len());
+    &window[offset..]
 }
 
 pub unsafe fn read_advance_any<T>(window: &mut &[u8]) -> T {

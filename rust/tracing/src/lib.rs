@@ -58,6 +58,7 @@ pub mod metrics;
 pub mod panic_hook;
 pub mod process_info;
 pub mod spans;
+pub mod static_string_ref;
 pub mod string_id;
 pub mod time;
 

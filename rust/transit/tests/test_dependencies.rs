@@ -18,7 +18,7 @@ declare_queue_struct!(
 );
 
 declare_queue_struct!(
-    struct DepQueue<StaticString> {}
+    struct DepQueue<Utf8StaticString> {}
 );
 
 #[test]
@@ -42,7 +42,7 @@ fn test_deps() {
     for x in q.iter() {
         match x {
             LogMsgQueueAny::LogMsgEvent(evt) => {
-                deps.push(StaticString {
+                deps.push(Utf8StaticString {
                     len: evt.msg.len() as u32,
                     ptr: evt.msg.as_ptr(),
                 });

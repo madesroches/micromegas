@@ -496,9 +496,9 @@ impl Dispatch {
         } else {
             log_stream.get_events_mut().push(LogStringInteropEvent {
                 time,
-                level: desc.level as u32,
+                level: desc.level as u8,
                 target: intern_string(desc.target).into(),
-                msg: micromegas_transit::LegacyDynString(args.to_string()),
+                msg: micromegas_transit::DynString(args.to_string()),
             });
         }
         if log_stream.is_full() {

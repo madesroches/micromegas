@@ -133,6 +133,6 @@ pub async fn for_each_measure_in_block<Predicate: FnMut(Measure) -> Result<bool>
         }
         Ok(true) //continue
     })
-    .with_context(|| "parse_block")?;
+    .with_context(|| format!("parse_block {}", block.block_id))?;
     Ok(continue_iterating)
 }

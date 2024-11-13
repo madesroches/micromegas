@@ -25,7 +25,7 @@ fn test_log_interop_metadata() {
     let obj_meta = &stream_proto.objects_metadata;
     obj_meta
         .iter()
-        .position(|udt| udt.name == "LogStringInteropEventV2")
+        .position(|udt| udt.name == "LogStringInteropEventV3")
         .unwrap();
     obj_meta
         .iter()
@@ -106,7 +106,6 @@ fn test_log_encode_dynamic() {
         ciborium::from_reader(&encoded[..]).unwrap();
     parse_block(&stream_info, &received_block.payload, |val| {
         if let Value::Object(obj) = val {
-            dbg!(&obj);
             assert_eq!(obj.type_name.as_str(), "LogStringEventV2");
             assert_eq!(obj.get::<i64>("time").unwrap(), 1);
             let desc = obj.get::<Arc<Object>>("desc").unwrap();
@@ -140,7 +139,7 @@ fn test_parse_log_interops() {
         time: 1,
         level: 2,
         target: "target_name".into(),
-        msg: micromegas_transit::LegacyDynString(String::from("my message")),
+        msg: micromegas_transit::DynString(String::from("my message")),
     });
     let mut block = stream.replace_block(Arc::new(LogBlock::new(1024, process_id, stream_id, 0)));
     Arc::get_mut(&mut block).unwrap().close();

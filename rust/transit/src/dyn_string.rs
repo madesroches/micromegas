@@ -1,4 +1,7 @@
-use crate::{advance_window, read_advance_any, write_any, InProcSerialize, InProcSize};
+use crate::{
+    advance_window, read_advance_any, string_codec::StringCodec, write_any, InProcSerialize,
+    InProcSize,
+};
 use anyhow::Result;
 
 #[derive(Debug)]
@@ -20,27 +23,6 @@ impl InProcSerialize for LegacyDynString {
         let buffer_size = value_size.unwrap();
         let slice = std::ptr::slice_from_raw_parts(ptr, buffer_size as usize);
         Self(String::from_utf8((*slice).to_vec()).unwrap())
-    }
-}
-
-#[repr(u8)]
-#[derive(Debug)]
-pub enum StringCodec {
-    Ansi = 0,
-    Wide = 1,
-    Utf8 = 2,
-}
-
-impl TryFrom<u8> for StringCodec {
-    type Error = anyhow::Error;
-
-    fn try_from(value: u8) -> std::result::Result<Self, Self::Error> {
-        match value {
-            0 => Ok(StringCodec::Ansi),
-            1 => Ok(StringCodec::Wide),
-            2 => Ok(StringCodec::Utf8),
-            other => anyhow::bail!("invalid codec id {other}"),
-        }
     }
 }
 

@@ -1,7 +1,5 @@
-use crate::{prelude::*, string_id::StringId};
-use micromegas_transit::{
-    prelude::*, read_advance_any, read_advance_string, DynString, LegacyDynString,
-};
+use crate::{prelude::*, static_string_ref::StaticStringRef, string_id::StringId};
+use micromegas_transit::{prelude::*, read_advance_any, read_advance_string, DynString};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 #[derive(Debug)]
@@ -157,13 +155,12 @@ pub struct LogStaticStrInteropEvent {
 
 impl InProcSerialize for LogStaticStrInteropEvent {}
 
-// todo: change from LogStringInteropEventV2 to LogStringInteropEventV3 to keep rust code in sync with unreal code
 #[derive(Debug)]
 pub struct LogStringInteropEvent {
     pub time: i64,
-    pub level: u32,
-    pub target: StringId,
-    pub msg: LegacyDynString,
+    pub level: u8,
+    pub target: StaticStringRef, //for unreal compatibility
+    pub msg: DynString,
 }
 
 impl InProcSerialize for LogStringInteropEvent {
@@ -172,7 +169,7 @@ impl InProcSerialize for LogStringInteropEvent {
     fn get_value_size(&self) -> Option<u32> {
         Some(
             std::mem::size_of::<i64>() as u32 //time
-                + std::mem::size_of::<u32>() as u32 //level
+                + std::mem::size_of::<u8>() as u32 //level
                 + std::mem::size_of::<StringId>() as u32 //target
                 + self.msg.get_value_size().unwrap(), //message
         )
@@ -186,18 +183,11 @@ impl InProcSerialize for LogStringInteropEvent {
     }
 
     unsafe fn read_value(ptr: *const u8, value_size: Option<u32>) -> Self {
-        let time = read_any::<i64>(ptr);
-        let level_offset = std::mem::size_of::<i64>();
-        let level = read_any::<u32>(ptr.add(level_offset));
-        let target_offset = level_offset + std::mem::size_of::<u32>();
-        let target = read_any::<StringId>(ptr.add(target_offset));
-        let buffer_size = value_size.unwrap();
-        let msg_offset = target_offset + std::mem::size_of::<StringId>();
-        let msg_ptr = ptr.add(msg_offset);
-        let msg = <LegacyDynString as InProcSerialize>::read_value(
-            msg_ptr,
-            Some(buffer_size - msg_offset as u32),
-        );
+        let mut window = &*std::ptr::slice_from_raw_parts(ptr, value_size.unwrap() as usize);
+        let time: i64 = read_advance_any(&mut window);
+        let level: u8 = read_advance_any(&mut window);
+        let target: StaticStringRef = read_advance_any(&mut window);
+        let msg = DynString(read_advance_string(&mut window).unwrap());
         Self {
             time,
             level,
@@ -212,11 +202,11 @@ impl InProcSerialize for LogStringInteropEvent {
 impl Reflect for LogStringInteropEvent {
     fn reflect() -> UserDefinedType {
         UserDefinedType {
-            name: String::from("LogStringInteropEventV2"),
+            name: String::from("LogStringInteropEventV3"),
             size: 0,
             members: vec![],
             is_reference: false,
-            secondary_udts: vec![],
+            secondary_udts: vec![StaticStringRef::reflect()],
         }
     }
 }

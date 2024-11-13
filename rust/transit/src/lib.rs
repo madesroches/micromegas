@@ -10,6 +10,7 @@ mod parser;
 mod reflect;
 mod serialize;
 mod static_string;
+pub mod string_codec;
 pub mod uuid_utils;
 
 pub use dyn_string::*;
@@ -28,6 +29,6 @@ pub mod prelude {
 
     pub use crate::{
         read_any, write_any, HeterogeneousQueue, InProcSerialize, InProcSize, Member, Object,
-        QueueIterator, Reflect, StaticString, UserDefinedType, Value,
+        QueueIterator, Reflect, UserDefinedType, Utf8StaticString, Value,
     };
 }

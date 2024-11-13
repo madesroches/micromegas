@@ -177,10 +177,9 @@ pub fn read_dependencies(udts: &[UserDefinedType], buffer: &[u8]) -> Result<Hash
                 assert!(insert_res.is_none());
             },
             "StaticStringDependency" => unsafe {
-                let buffer_slice = advance_window(buffer, offset);
-                let string_id: u64 = read_advance_any(&mut &*buffer_slice);
-                let string =
-                    read_advance_string(&mut &*buffer_slice).with_context(|| "parsing string")?;
+                let mut window = advance_window(buffer, offset);
+                let string_id: u64 = read_advance_any(&mut window);
+                let string = read_advance_string(&mut window).with_context(|| "parsing string")?;
 
                 let insert_res = hash.insert(string_id, Value::String(Arc::new(string)));
                 assert!(insert_res.is_none());
@@ -264,7 +263,7 @@ where
 fn parse_log_string_interop_event_v3<S>(
     udts: &[UserDefinedType],
     dependencies: &HashMap<u64, Value, S>,
-    mut buffer: &[u8],
+    mut object_window: &[u8],
 ) -> Result<Vec<(String, Value)>>
 where
     S: BuildHasher,
@@ -272,11 +271,12 @@ where
     if let Some(index) = udts.iter().position(|t| t.name == "StaticStringRef") {
         let string_ref_metadata = &udts[index];
         unsafe {
-            let time: i64 = read_advance_any(&mut buffer);
-            let level: u8 = read_advance_any(&mut buffer);
-            let target = parse_pod_instance(string_ref_metadata, udts, dependencies, 0, buffer);
-            buffer = advance_window(buffer, string_ref_metadata.size);
-            let msg = read_advance_string(&mut buffer)?;
+            let time: i64 = read_advance_any(&mut object_window);
+            let level: u8 = read_advance_any(&mut object_window);
+            let target =
+                parse_pod_instance(string_ref_metadata, udts, dependencies, 0, object_window);
+            object_window = advance_window(object_window, string_ref_metadata.size);
+            let msg = read_advance_string(&mut object_window)?;
 
             Ok(vec![
                 (String::from("time"), Value::I64(time)),

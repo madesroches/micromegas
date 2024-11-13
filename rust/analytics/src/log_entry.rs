@@ -50,7 +50,7 @@ pub fn log_entry_from_value(
                     msg,
                 }))
             }
-            "LogStringEvent" => {
+            "LogStringEvent" | "LogStringEventV2" => {
                 let ticks = obj
                     .get::<i64>("time")
                     .with_context(|| "reading time from LogStringEvent")?;
@@ -131,6 +131,6 @@ pub async fn for_each_log_entry_in_block<Predicate: FnMut(LogEntry) -> Result<bo
         }
         Ok(true) //continue
     })
-    .with_context(|| "parse_block")?;
+    .with_context(|| format!("parse_block {}", block.block_id))?;
     Ok(continue_iterating)
 }

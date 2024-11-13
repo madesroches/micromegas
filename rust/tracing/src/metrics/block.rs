@@ -10,7 +10,7 @@ declare_queue_struct!(
 );
 
 declare_queue_struct!(
-    struct MetricsDepsQueue<StaticString, MetricMetadataRecord> {}
+    struct MetricsDepsQueue<Utf8StaticString, MetricMetadataRecord> {}
 );
 
 fn record_metric_event_dependencies(
@@ -20,23 +20,23 @@ fn record_metric_event_dependencies(
 ) {
     let metric_ptr = metric_desc as *const _ as u64;
     if recorded_deps.insert(metric_ptr) {
-        let name = StaticString::from(metric_desc.name);
+        let name = Utf8StaticString::from(metric_desc.name);
         if recorded_deps.insert(name.ptr as u64) {
             deps.push(name);
         }
-        let unit = StaticString::from(metric_desc.unit);
+        let unit = Utf8StaticString::from(metric_desc.unit);
         if recorded_deps.insert(unit.ptr as u64) {
             deps.push(unit);
         }
-        let target = StaticString::from(metric_desc.target);
+        let target = Utf8StaticString::from(metric_desc.target);
         if recorded_deps.insert(target.ptr as u64) {
             deps.push(target);
         }
-        let module_path = StaticString::from(metric_desc.module_path);
+        let module_path = Utf8StaticString::from(metric_desc.module_path);
         if recorded_deps.insert(module_path.ptr as u64) {
             deps.push(module_path);
         }
-        let file = StaticString::from(metric_desc.file);
+        let file = Utf8StaticString::from(metric_desc.file);
         if recorded_deps.insert(file.ptr as u64) {
             deps.push(file);
         }

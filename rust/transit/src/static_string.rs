@@ -1,14 +1,17 @@
-use crate::{read_any, write_any, InProcSerialize, InProcSize, Reflect, UserDefinedType};
+use crate::{
+    read_advance_any, read_any, string_codec::StringCodec, write_any, InProcSerialize, InProcSize,
+    Reflect, UserDefinedType,
+};
 
-/// StaticString serializes the value of the pointer and the contents of the string
+/// Utf8StaticString serializes the value of the pointer and the contents of the string
 /// It should not be part of the event - it's the dependency of the StringId
 #[derive(Debug)]
-pub struct StaticString {
+pub struct Utf8StaticString {
     pub len: u32,
     pub ptr: *const u8,
 }
 
-impl std::convert::From<&str> for StaticString {
+impl std::convert::From<&str> for Utf8StaticString {
     fn from(src: &str) -> Self {
         Self {
             len: src.len() as u32,
@@ -18,7 +21,7 @@ impl std::convert::From<&str> for StaticString {
 }
 
 // dummy impl for Reflect
-impl Reflect for StaticString {
+impl Reflect for Utf8StaticString {
     fn reflect() -> UserDefinedType {
         UserDefinedType {
             name: String::from("StaticString"),
@@ -30,7 +33,7 @@ impl Reflect for StaticString {
     }
 }
 
-impl InProcSerialize for StaticString {
+impl InProcSerialize for Utf8StaticString {
     const IN_PROC_SIZE: InProcSize = InProcSize::Dynamic;
 
     fn get_value_size(&self) -> Option<u32> {
@@ -55,6 +58,71 @@ impl InProcSerialize for StaticString {
         let buffer_size = value_size - id_size;
         let static_buffer_ptr = read_any::<*const u8>(ptr);
         Self {
+            len: buffer_size,
+            ptr: static_buffer_ptr,
+        }
+    }
+}
+
+/// StaticStringDependency serializes the value of the pointer and the contents of the string
+/// It is designed to be wire-compatible with the unreal instrumentation
+#[derive(Debug)]
+pub struct StaticStringDependency {
+    pub codec: StringCodec,
+    pub len: u32,
+    pub ptr: *const u8,
+}
+
+// dummy impl for Reflect
+impl Reflect for StaticStringDependency {
+    fn reflect() -> UserDefinedType {
+        UserDefinedType {
+            name: String::from("StaticStringDependency"),
+            size: 0,
+            members: vec![],
+            is_reference: false,
+            secondary_udts: vec![],
+        }
+    }
+}
+
+impl InProcSerialize for StaticStringDependency {
+    const IN_PROC_SIZE: InProcSize = InProcSize::Dynamic;
+
+    fn get_value_size(&self) -> Option<u32> {
+        let id_size = std::mem::size_of::<usize>() as u32;
+        let size =
+			id_size +
+			1 + // codec
+			std::mem::size_of::<u32>() as u32 +// size in bytes
+			self.len // actual buffer
+			;
+        Some(size)
+    }
+
+    #[allow(unsafe_code)]
+    fn write_value(&self, buffer: &mut Vec<u8>) {
+        let id = self.ptr as u64;
+        write_any(buffer, &id);
+        let codec = self.codec as u8;
+        write_any(buffer, &codec);
+        write_any(buffer, &self.len);
+        unsafe {
+            let slice = std::slice::from_raw_parts(self.ptr, self.len as usize);
+            buffer.extend_from_slice(slice);
+        }
+    }
+
+    #[allow(unsafe_code)]
+    unsafe fn read_value(ptr: *const u8, value_size: Option<u32>) -> Self {
+        let mut window = &*std::ptr::slice_from_raw_parts(ptr, value_size.unwrap() as usize);
+        let id: u64 = read_advance_any(&mut window);
+        let static_buffer_ptr: *const u8 = id as *const u8;
+        let codec = StringCodec::try_from(read_advance_any::<u8>(&mut window)).unwrap();
+        let buffer_size: u32 = read_advance_any(&mut window);
+        assert_eq!(buffer_size as usize, window.len());
+        Self {
+            codec,
             len: buffer_size,
             ptr: static_buffer_ptr,
         }
