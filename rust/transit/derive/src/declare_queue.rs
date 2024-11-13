@@ -81,7 +81,7 @@ fn gen_hetero_queue_impl(
                 }
             }
 
-            fn reflect_contained() -> Vec<UserDefinedType> {
+            fn reflect_contained() -> Vec<micromegas_transit::UserDefinedType> {
                 vec![ #(#type_args::reflect(),)* ]
             }
 

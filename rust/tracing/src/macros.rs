@@ -121,7 +121,6 @@ macro_rules! imetric {
             name: $name,
             unit: $unit,
             target: module_path!(),
-            module_path: module_path!(),
             file: file!(),
             line: line!(),
         };
@@ -149,7 +148,6 @@ macro_rules! fmetric {
             name: $name,
             unit: $unit,
             target: module_path!(),
-            module_path: module_path!(),
             file: file!(),
             line: line!(),
         };

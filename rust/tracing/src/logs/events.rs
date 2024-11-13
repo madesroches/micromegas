@@ -1,5 +1,7 @@
 use crate::{prelude::*, static_string_ref::StaticStringRef, string_id::StringId};
-use micromegas_transit::{prelude::*, read_advance_string, read_consume_pod, DynString};
+use micromegas_transit::{
+    prelude::*, read_advance_string, read_consume_pod, DynString, UserDefinedType,
+};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 #[derive(Debug)]

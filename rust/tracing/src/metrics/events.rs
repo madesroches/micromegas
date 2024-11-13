@@ -7,7 +7,6 @@ pub struct MetricMetadata {
     pub name: &'static str,
     pub unit: &'static str,
     pub target: &'static str,
-    pub module_path: &'static str,
     pub file: &'static str,
     pub line: u32,
 }
@@ -30,15 +29,14 @@ pub struct FloatMetricEvent {
 
 impl InProcSerialize for FloatMetricEvent {}
 #[derive(Debug, TransitReflect)]
-pub struct MetricMetadataRecord {
+pub struct MetricMetadataDependency {
     pub id: u64,
     pub name: *const u8,
     pub unit: *const u8,
     pub target: *const u8,
-    pub module_path: *const u8,
     pub file: *const u8,
     pub line: u32,
     pub lod: u32,
 }
 
-impl InProcSerialize for MetricMetadataRecord {}
+impl InProcSerialize for MetricMetadataDependency {}

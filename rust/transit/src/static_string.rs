@@ -3,15 +3,15 @@ use crate::{
     UserDefinedType,
 };
 
-/// Utf8StaticString serializes the value of the pointer and the contents of the string
+/// Utf8StaticStringDependency serializes the value of the pointer and the contents of the string
 /// It should not be part of the event - it's the dependency of the StringId
 #[derive(Debug)]
-pub struct Utf8StaticString {
+pub struct Utf8StaticStringDependency {
     pub len: u32,
     pub ptr: *const u8,
 }
 
-impl std::convert::From<&str> for Utf8StaticString {
+impl std::convert::From<&str> for Utf8StaticStringDependency {
     fn from(src: &str) -> Self {
         Self {
             len: src.len() as u32,
@@ -21,7 +21,7 @@ impl std::convert::From<&str> for Utf8StaticString {
 }
 
 // dummy impl for Reflect
-impl Reflect for Utf8StaticString {
+impl Reflect for Utf8StaticStringDependency {
     fn reflect() -> UserDefinedType {
         UserDefinedType {
             name: String::from("StaticString"),
@@ -33,7 +33,7 @@ impl Reflect for Utf8StaticString {
     }
 }
 
-impl InProcSerialize for Utf8StaticString {
+impl InProcSerialize for Utf8StaticStringDependency {
     const IN_PROC_SIZE: InProcSize = InProcSize::Dynamic;
 
     fn get_value_size(&self) -> Option<u32> {

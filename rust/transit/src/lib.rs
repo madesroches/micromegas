@@ -28,7 +28,7 @@ pub mod prelude {
     pub use micromegas_derive_transit::*;
 
     pub use crate::{
-        read_any, write_any, HeterogeneousQueue, InProcSerialize, InProcSize, Member, Object,
-        QueueIterator, Reflect, UserDefinedType, Utf8StaticString, Value,
+        read_any, write_any, HeterogeneousQueue, InProcSerialize, InProcSize, Object,
+        QueueIterator, Reflect,
     };
 }

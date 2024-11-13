@@ -25,7 +25,6 @@ fn test_parse_metric_interops() {
         name: "name",
         unit: "cubits",
         target: "target",
-        module_path: "module_path",
         file: "file",
         line: 123,
     };
