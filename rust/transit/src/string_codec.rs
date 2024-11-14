@@ -1,7 +1,7 @@
 use crate::{Reflect, UserDefinedType};
 
 #[repr(u8)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Eq, PartialEq, Debug, Copy, Clone)]
 pub enum StringCodec {
     Ansi = 0,
     Wide = 1,

@@ -13,6 +13,7 @@ authors.workspace = true
 micromegas-transit.workspace = true
 micromegas-tracing-proc-macros = { path = "./proc-macros", version = "^0.2" }
 
+anyhow.workspace = true
 cfg-if.workspace = true
 chrono.workspace = true
 lazy_static.workspace = true
