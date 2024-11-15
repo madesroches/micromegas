@@ -49,6 +49,13 @@ impl StaticStringRef {
             ptr: self.ptr as *const u8,
         }
     }
+
+    pub fn as_str(&self) -> &str {
+        unsafe {
+            let slice = std::slice::from_raw_parts(self.ptr as *const u8, self.len as usize);
+            std::str::from_utf8_unchecked(slice)
+        }
+    }
 }
 
 impl std::convert::From<&'static str> for StaticStringRef {

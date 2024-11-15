@@ -111,16 +111,8 @@ impl InProcSerialize for StaticStringDependency {
     }
 
     #[allow(unsafe_code)]
-    unsafe fn read_value(mut window: &[u8]) -> Self {
-        let id: u64 = read_consume_pod(&mut window);
-        let static_buffer_ptr: *const u8 = id as *const u8;
-        let codec = StringCodec::try_from(read_consume_pod::<u8>(&mut window)).unwrap();
-        let buffer_size: u32 = read_consume_pod(&mut window);
-        assert_eq!(buffer_size as usize, window.len());
-        Self {
-            codec,
-            len: buffer_size,
-            ptr: static_buffer_ptr,
-        }
+    unsafe fn read_value(_window: &[u8]) -> Self {
+        // dependencies don't need to be read in the instrumented process
+        unimplemented!();
     }
 }

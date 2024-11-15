@@ -1,20 +1,29 @@
+use super::TaggedFloatMetricEvent;
 use crate::{
     event::{EventBlock, EventStream, ExtractDeps},
-    metrics::{FloatMetricEvent, IntegerMetricEvent, MetricMetadata, MetricMetadataDependency},
+    metrics::{
+        FloatMetricEvent, IntegerMetricEvent, MetricMetadataDependency, StaticMetricMetadata,
+    },
+    property_set::{PropertySet, PropertySetDependency},
 };
-use micromegas_transit::{prelude::*, Utf8StaticStringDependency};
+use micromegas_transit::{prelude::*, StaticStringDependency, Utf8StaticStringDependency};
 use std::collections::HashSet;
 
 declare_queue_struct!(
-    struct MetricsMsgQueue<IntegerMetricEvent, FloatMetricEvent> {}
+    struct MetricsMsgQueue<IntegerMetricEvent, FloatMetricEvent, TaggedFloatMetricEvent> {}
 );
 
 declare_queue_struct!(
-    struct MetricsDepsQueue<Utf8StaticStringDependency, MetricMetadataDependency> {}
+    struct MetricsDepsQueue<
+        Utf8StaticStringDependency,
+        StaticStringDependency,
+        MetricMetadataDependency,
+        PropertySetDependency,
+    > {}
 );
 
 fn record_metric_event_dependencies(
-    metric_desc: &MetricMetadata,
+    metric_desc: &StaticMetricMetadata,
     recorded_deps: &mut HashSet<u64>,
     deps: &mut MetricsDepsQueue,
 ) {
@@ -48,6 +57,25 @@ fn record_metric_event_dependencies(
     }
 }
 
+fn record_properties(
+    set: &'static PropertySet,
+    recorded_deps: &mut HashSet<u64>,
+    deps: &mut MetricsDepsQueue,
+) {
+    let id = set as *const _ as u64;
+    if recorded_deps.insert(id) {
+        for prop in set.get_properties() {
+            if recorded_deps.insert(prop.name.id()) {
+                deps.push(prop.name.into_dependency());
+            }
+            if recorded_deps.insert(prop.value.id()) {
+                deps.push(prop.value.into_dependency());
+            }
+        }
+        deps.push(PropertySetDependency::new(set));
+    }
+}
+
 impl ExtractDeps for MetricsMsgQueue {
     type DepsQueue = MetricsDepsQueue;
 
@@ -61,6 +89,9 @@ impl ExtractDeps for MetricsMsgQueue {
                 }
                 MetricsMsgQueueAny::FloatMetricEvent(evt) => {
                     record_metric_event_dependencies(evt.desc, &mut recorded_deps, &mut deps);
+                }
+                MetricsMsgQueueAny::TaggedFloatMetricEvent(evt) => {
+                    record_properties(evt.properties, &mut recorded_deps, &mut deps);
                 }
             }
         }

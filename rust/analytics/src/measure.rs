@@ -7,7 +7,7 @@ use micromegas_telemetry::{
     blob_storage::BlobStorage, stream_info::StreamInfo, types::block::BlockMetadata,
 };
 use micromegas_tracing::prelude::*;
-use micromegas_transit::Value;
+use micromegas_transit::value::{Object, Value};
 use std::sync::Arc;
 
 pub struct Measure {
@@ -34,7 +34,7 @@ pub fn measure_from_value(
                     .get::<f64>("value")
                     .with_context(|| "reading value from FloatMetricEvent")?;
                 let desc = obj
-                    .get::<Arc<micromegas_transit::Object>>("desc")
+                    .get::<Arc<Object>>("desc")
                     .with_context(|| "reading desc from FloatMetricEvent")?;
                 let target = desc
                     .get::<Arc<String>>("target")
@@ -63,7 +63,7 @@ pub fn measure_from_value(
                     .get::<u64>("value")
                     .with_context(|| "reading value from IntegerMetricEvent")?;
                 let desc = obj
-                    .get::<Arc<micromegas_transit::Object>>("desc")
+                    .get::<Arc<Object>>("desc")
                     .with_context(|| "reading desc from IntegerMetricEvent")?;
                 let target = desc
                     .get::<Arc<String>>("target")

@@ -13,8 +13,7 @@ use micromegas_tracing::logs::LogStaticStrInteropEvent;
 use micromegas_tracing::logs::LogStream;
 use micromegas_tracing::logs::LogStringEvent;
 use micromegas_tracing::logs::LogStringInteropEvent;
-use micromegas_transit::Object;
-use micromegas_transit::Value;
+use micromegas_transit::value::{Object, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
 

@@ -9,7 +9,9 @@ use crate::{
         LogBlock, LogMetadata, LogStaticStrEvent, LogStaticStrInteropEvent, LogStream,
         LogStringEvent, LogStringInteropEvent,
     },
-    metrics::{FloatMetricEvent, IntegerMetricEvent, MetricMetadata, MetricsBlock, MetricsStream},
+    metrics::{
+        FloatMetricEvent, IntegerMetricEvent, MetricsBlock, MetricsStream, StaticMetricMetadata,
+    },
     spans::{
         BeginAsyncNamedSpanEvent, BeginAsyncSpanEvent, BeginThreadNamedSpanEvent,
         BeginThreadSpanEvent, EndAsyncNamedSpanEvent, EndAsyncSpanEvent, EndThreadNamedSpanEvent,
@@ -72,7 +74,7 @@ pub fn shutdown_dispatch() {
 }
 
 #[inline(always)]
-pub fn int_metric(metric_desc: &'static MetricMetadata, value: u64) {
+pub fn int_metric(metric_desc: &'static StaticMetricMetadata, value: u64) {
     unsafe {
         #[allow(static_mut_refs)]
         if let Some(d) = &mut G_DISPATCH {
@@ -82,7 +84,7 @@ pub fn int_metric(metric_desc: &'static MetricMetadata, value: u64) {
 }
 
 #[inline(always)]
-pub fn float_metric(metric_desc: &'static MetricMetadata, value: f64) {
+pub fn float_metric(metric_desc: &'static StaticMetricMetadata, value: f64) {
     unsafe {
         #[allow(static_mut_refs)]
         if let Some(d) = &mut G_DISPATCH {
@@ -403,7 +405,7 @@ impl Dispatch {
     }
 
     #[inline]
-    fn int_metric(&mut self, desc: &'static MetricMetadata, value: u64) {
+    fn int_metric(&mut self, desc: &'static StaticMetricMetadata, value: u64) {
         let time = now();
         let mut metrics_stream = self.metrics_stream.lock().unwrap();
         metrics_stream
@@ -417,7 +419,7 @@ impl Dispatch {
     }
 
     #[inline]
-    fn float_metric(&mut self, desc: &'static MetricMetadata, value: f64) {
+    fn float_metric(&mut self, desc: &'static StaticMetricMetadata, value: f64) {
         let time = now();
         let mut metrics_stream = self.metrics_stream.lock().unwrap();
         metrics_stream
