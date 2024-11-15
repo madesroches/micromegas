@@ -1,7 +1,9 @@
 //! Where events are recorded and eventually sent to a sink
 pub use crate::errors::{Error, Result};
 use crate::intern_string::intern_string;
+use crate::metrics::{TaggedFloatMetricEvent, TaggedIntegerMetricEvent};
 use crate::prelude::*;
+use crate::property_set::PropertySet;
 use crate::{
     event::{EventSink, NullEventSink, TracingBlock},
     info,
@@ -89,6 +91,26 @@ pub fn float_metric(metric_desc: &'static StaticMetricMetadata, value: f64) {
         #[allow(static_mut_refs)]
         if let Some(d) = &mut G_DISPATCH {
             d.float_metric(metric_desc, value);
+        }
+    }
+}
+
+#[inline(always)]
+pub fn tagged_float_metric(value: f64, properties: &'static PropertySet) {
+    unsafe {
+        #[allow(static_mut_refs)]
+        if let Some(d) = &mut G_DISPATCH {
+            d.tagged_float_metric(value, properties);
+        }
+    }
+}
+
+#[inline(always)]
+pub fn tagged_integer_metric(value: u64, properties: &'static PropertySet) {
+    unsafe {
+        #[allow(static_mut_refs)]
+        if let Some(d) = &mut G_DISPATCH {
+            d.tagged_integer_metric(value, properties);
         }
     }
 }
@@ -425,6 +447,42 @@ impl Dispatch {
         metrics_stream
             .get_events_mut()
             .push(FloatMetricEvent { desc, value, time });
+        if metrics_stream.is_full() {
+            drop(metrics_stream);
+            // Release the lock before calling flush_metrics_buffer
+            self.flush_metrics_buffer();
+        }
+    }
+
+    #[inline]
+    fn tagged_float_metric(&mut self, value: f64, properties: &'static PropertySet) {
+        let time = now();
+        let mut metrics_stream = self.metrics_stream.lock().unwrap();
+        metrics_stream
+            .get_events_mut()
+            .push(TaggedFloatMetricEvent {
+                properties,
+                value,
+                time,
+            });
+        if metrics_stream.is_full() {
+            drop(metrics_stream);
+            // Release the lock before calling flush_metrics_buffer
+            self.flush_metrics_buffer();
+        }
+    }
+
+    #[inline]
+    fn tagged_integer_metric(&mut self, value: u64, properties: &'static PropertySet) {
+        let time = now();
+        let mut metrics_stream = self.metrics_stream.lock().unwrap();
+        metrics_stream
+            .get_events_mut()
+            .push(TaggedIntegerMetricEvent {
+                properties,
+                value,
+                time,
+            });
         if metrics_stream.is_full() {
             drop(metrics_stream);
             // Release the lock before calling flush_metrics_buffer

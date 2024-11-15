@@ -127,6 +127,9 @@ macro_rules! imetric {
             };
         $crate::dispatch::int_metric(&METRIC_METADATA, $value);
     }};
+    ($value:expr, $properties:expr) => {{
+        $crate::dispatch::tagged_integer_metric($value, $properties);
+    }};
 }
 
 /// Records a float metric.
@@ -154,6 +157,10 @@ macro_rules! fmetric {
                 line: line!(),
             };
         $crate::dispatch::float_metric(&METRIC_METADATA, $value);
+    }};
+
+    ($value:expr, $properties:expr) => {{
+        $crate::dispatch::tagged_float_metric($value, $properties);
     }};
 }
 

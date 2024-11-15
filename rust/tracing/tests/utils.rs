@@ -80,6 +80,7 @@ impl EventSink for DebugEventSink {
                 MetricsMsgQueueAny::IntegerMetricEvent(_evt) => {}
                 MetricsMsgQueueAny::FloatMetricEvent(_evt) => {}
                 MetricsMsgQueueAny::TaggedFloatMetricEvent(_) => {}
+                MetricsMsgQueueAny::TaggedIntegerMetricEvent(_) => {}
             }
         }
         *self.0.lock().unwrap() = Some(State::ProcessMetricsBlock(

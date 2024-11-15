@@ -1,4 +1,4 @@
-use super::TaggedFloatMetricEvent;
+use super::{TaggedFloatMetricEvent, TaggedIntegerMetricEvent};
 use crate::{
     event::{EventBlock, EventStream, ExtractDeps},
     metrics::{
@@ -10,7 +10,12 @@ use micromegas_transit::{prelude::*, StaticStringDependency, Utf8StaticStringDep
 use std::collections::HashSet;
 
 declare_queue_struct!(
-    struct MetricsMsgQueue<IntegerMetricEvent, FloatMetricEvent, TaggedFloatMetricEvent> {}
+    struct MetricsMsgQueue<
+        IntegerMetricEvent,
+        FloatMetricEvent,
+        TaggedFloatMetricEvent,
+        TaggedIntegerMetricEvent,
+    > {}
 );
 
 declare_queue_struct!(
@@ -91,6 +96,9 @@ impl ExtractDeps for MetricsMsgQueue {
                     record_metric_event_dependencies(evt.desc, &mut recorded_deps, &mut deps);
                 }
                 MetricsMsgQueueAny::TaggedFloatMetricEvent(evt) => {
+                    record_properties(evt.properties, &mut recorded_deps, &mut deps);
+                }
+                MetricsMsgQueueAny::TaggedIntegerMetricEvent(evt) => {
                     record_properties(evt.properties, &mut recorded_deps, &mut deps);
                 }
             }
