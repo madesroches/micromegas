@@ -186,6 +186,32 @@ fn parse_log_string_interop_event_v3(
     }
 }
 
+fn parse_tagged_log_string(
+    _udts: &[UserDefinedType],
+    dependencies: &HashMap<u64, Value>,
+    mut object_window: &[u8],
+) -> Result<Vec<(String, Value)>> {
+    let desc_id: u64 = read_consume_pod(&mut object_window);
+    let desc = dependencies
+        .get(&desc_id)
+        .with_context(|| "fetching desc in parse_tagged_log_string")?
+        .clone();
+    let properties_id: u64 = read_consume_pod(&mut object_window);
+    let properties = dependencies
+        .get(&properties_id)
+        .with_context(|| "fetching property set in parse_tagged_log_string")?
+        .clone();
+    let time: i64 = read_consume_pod(&mut object_window);
+    let msg = read_advance_string(&mut object_window)?;
+
+    Ok(vec![
+        (String::from("time"), Value::I64(time)),
+        (String::from("desc"), desc),
+        (String::from("properties"), properties),
+        (String::from("msg"), Value::String(Arc::new(msg))),
+    ])
+}
+
 fn parse_log_string_interop_event(
     udts: &[UserDefinedType],
     dependencies: &HashMap<u64, Value>,
@@ -240,6 +266,8 @@ fn parse_custom_instance(
             parse_log_string_interop_event_v3(udts, dependencies, object_window)
                 .with_context(|| "parse_log_string_interop_event_v3")?
         }
+        "TaggedLogString" => parse_tagged_log_string(udts, dependencies, object_window)
+            .with_context(|| "parse_tagged_log_string")?,
         other => {
             log::warn!("unknown custom object {}", other);
             Vec::new()

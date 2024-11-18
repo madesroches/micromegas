@@ -95,6 +95,34 @@ pub fn log_entry_from_value(
                     msg,
                 }))
             }
+            "TaggedLogString" => {
+                let ticks = obj
+                    .get::<i64>("time")
+                    .with_context(|| format!("reading time from {}", obj.type_name.as_str()))?;
+                let msg = obj
+                    .get::<Arc<String>>("msg")
+                    .with_context(|| format!("reading msg from {}", obj.type_name.as_str()))?;
+                let _properties = obj.get::<Arc<Object>>("properties").with_context(|| {
+                    format!("reading properties from {}", obj.type_name.as_str())
+                })?;
+                let desc = obj
+                    .get::<Arc<Object>>("desc")
+                    .with_context(|| format!("reading desc from {}", obj.type_name.as_str()))?;
+                let level = desc
+                    .get::<u32>("level")
+                    .with_context(|| format!("reading level from {}", obj.type_name.as_str()))?;
+                let target = desc
+                    .get::<Arc<String>>("target")
+                    .with_context(|| format!("reading target from {}", obj.type_name.as_str()))?;
+                Ok(Some(LogEntry {
+                    process,
+                    time: convert_ticks.ticks_to_nanoseconds(ticks),
+                    level: level as i32,
+                    target,
+                    msg,
+                }))
+            }
+
             _ => {
                 warn!("unknown log event {:?}", obj);
                 Ok(None)

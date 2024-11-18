@@ -1,4 +1,6 @@
-use crate::{prelude::*, static_string_ref::StaticStringRef, string_id::StringId};
+use crate::{
+    prelude::*, property_set::PropertySet, static_string_ref::StaticStringRef, string_id::StringId,
+};
 use micromegas_transit::{
     prelude::*, read_advance_string, read_consume_pod, DynString, UserDefinedType,
 };
@@ -223,6 +225,59 @@ pub struct LogMetadataRecord {
 }
 
 impl InProcSerialize for LogMetadataRecord {}
+
+#[derive(Debug)]
+pub struct TaggedLogString {
+    pub desc: &'static LogMetadata<'static>,
+    pub properties: &'static PropertySet,
+    pub time: i64,
+    pub msg: DynString,
+}
+
+impl Reflect for TaggedLogString {
+    fn reflect() -> UserDefinedType {
+        UserDefinedType {
+            name: String::from("TaggedLogString"),
+            size: 0,
+            members: vec![],
+            is_reference: false,
+            secondary_udts: vec![],
+        }
+    }
+}
+
+impl InProcSerialize for TaggedLogString {
+    const IN_PROC_SIZE: InProcSize = InProcSize::Dynamic;
+
+    fn get_value_size(&self) -> Option<u32> {
+        Some(
+            std::mem::size_of::<u64>() as u32 // desc ptr
+            + std::mem::size_of::<u64>() as u32 // properties ptr
+            + std::mem::size_of::<i64>() as u32 // time
+                + self.msg.get_value_size().unwrap(), // message
+        )
+    }
+
+    fn write_value(&self, buffer: &mut Vec<u8>) {
+        write_any(buffer, &self.desc);
+        write_any(buffer, &self.properties);
+        write_any(buffer, &self.time);
+        self.msg.write_value(buffer);
+    }
+
+    unsafe fn read_value(mut window: &[u8]) -> Self {
+        let desc_id: u64 = read_consume_pod(&mut window);
+        let properties_id: u64 = read_consume_pod(&mut window);
+        let time: i64 = read_consume_pod(&mut window);
+        let msg = DynString(read_advance_string(&mut window).unwrap());
+        Self {
+            desc: std::mem::transmute::<u64, &LogMetadata<'static>>(desc_id),
+            properties: std::mem::transmute::<u64, &PropertySet>(properties_id),
+            time,
+            msg,
+        }
+    }
+}
 
 #[cfg(test)]
 mod test {

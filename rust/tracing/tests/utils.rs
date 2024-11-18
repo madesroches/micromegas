@@ -65,6 +65,7 @@ impl EventSink for DebugEventSink {
                 LogMsgQueueAny::LogStringEvent(_evt) => {}
                 LogMsgQueueAny::LogStaticStrInteropEvent(_evt) => {}
                 LogMsgQueueAny::LogStringInteropEvent(_evt) => {}
+                LogMsgQueueAny::TaggedLogString(_) => {}
             }
         }
         *self.0.lock().unwrap() = Some(State::ProcessLogBlock(log_block.events.nb_objects()));

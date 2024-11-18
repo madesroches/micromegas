@@ -128,6 +128,7 @@ macro_rules! imetric {
         $crate::dispatch::int_metric(&METRIC_METADATA, $value);
     }};
     ($value:expr, $properties:expr) => {{
+        //todo: put properties first
         $crate::dispatch::tagged_integer_metric($value, $properties);
     }};
 }
@@ -199,7 +200,21 @@ macro_rules! log {
             $crate::dispatch::log(&LOG_DESC, format_args!($($arg)+));
         }
     });
-    ($lvl:expr, $($arg:tt)+) => ($crate::log!(target: $crate::__log_module_path!(), $lvl, $($arg)+))
+    ($lvl:expr, properties: $properties:expr, $($arg:tt)+) => ({
+        static LOG_DESC: $crate::logs::LogMetadata = $crate::logs::LogMetadata {
+            level: $lvl,
+            level_filter: std::sync::atomic::AtomicU32::new($crate::logs::FILTER_LEVEL_UNSET_VALUE),
+            fmt_str: $crate::__first_arg!($($arg)+),
+            target: $crate::__log_module_path!(),
+            module_path: $crate::__log_module_path!(),
+            file: file!(),
+            line: line!(),
+        };
+        if $lvl <= $crate::levels::STATIC_MAX_LEVEL && $lvl <= $crate::levels::max_level() {
+            $crate::dispatch::log_tagged(&LOG_DESC, $properties, format_args!($($arg)+));
+        }
+    });
+    ($lvl:expr, $($arg:tt)+) => ($crate::log!(target: $crate::__log_module_path!(), $lvl, $($arg)+));
 }
 /// Logs a message at the error level.
 ///
