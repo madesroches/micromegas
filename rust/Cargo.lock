@@ -2337,6 +2337,7 @@ dependencies = [
 name = "micromegas-tracing"
 version = "0.2.1"
 dependencies = [
+ "anyhow",
  "cfg-if",
  "chrono",
  "lazy_static",

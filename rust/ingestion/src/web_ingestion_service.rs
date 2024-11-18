@@ -7,6 +7,7 @@ use micromegas_telemetry::block_wire_format;
 use micromegas_telemetry::stream_info::StreamInfo;
 use micromegas_telemetry::wire_format::encode_cbor;
 use micromegas_tracing::prelude::*;
+use micromegas_tracing::property_set;
 
 #[derive(Clone)]
 pub struct WebIngestionService {
@@ -60,7 +61,16 @@ impl WebIngestionService {
             .execute(&self.lake.db_pool)
             .await
             .with_context(|| "inserting into blocks")?;
-        imetric!("payload_size_inserted", "bytes", payload_size as u64);
+        // this measure does not benefit from a dynamic property - I just want to make sure the feature works well
+        // the cost in this context should be reasonnable
+        imetric!(
+            payload_size as u64,
+            property_set::PropertySet::find_or_create(vec![
+                property_set::Property::new("name", "payload_size_inserted"),
+                property_set::Property::new("unit", "bytes"),
+                property_set::Property::new("target", "micromegas::ingestion"),
+            ])
+        );
         debug!("recorded block_id={block_id} stream_id={stream_id} process_id={process_id}");
 
         Ok(())

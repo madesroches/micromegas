@@ -1,4 +1,4 @@
-use micromegas_transit::prelude::*;
+use micromegas_transit::{prelude::*, Utf8StaticStringDependency};
 
 #[derive(Debug, TransitReflect)]
 pub struct LogMsgEvent {
@@ -18,7 +18,7 @@ declare_queue_struct!(
 );
 
 declare_queue_struct!(
-    struct DepQueue<Utf8StaticString> {}
+    struct DepQueue<Utf8StaticStringDependency> {}
 );
 
 #[test]
@@ -42,7 +42,7 @@ fn test_deps() {
     for x in q.iter() {
         match x {
             LogMsgQueueAny::LogMsgEvent(evt) => {
-                deps.push(Utf8StaticString {
+                deps.push(Utf8StaticStringDependency {
                     len: evt.msg.len() as u32,
                     ptr: evt.msg.as_ptr(),
                 });

@@ -7,6 +7,7 @@ use micromegas_tracing::dispatch::{
     init_thread_stream, process_id,
 };
 use micromegas_tracing::levels::{set_max_level, LevelFilter};
+use micromegas_tracing::property_set::{Property, PropertySet};
 use micromegas_tracing::time::frequency;
 use micromegas_tracing::{fmetric, imetric, info, span_scope};
 use micromegas_tracing_proc_macros::{log_fn, span_fn};
@@ -61,8 +62,22 @@ fn test_thread_spans(state: &SharedState) {
 fn test_metrics(state: &SharedState) {
     imetric!("Frame Time", "ticks", 1000);
     fmetric!("Frame Time", "ticks", 1.0);
+    fmetric!(
+        1.0,
+        PropertySet::find_or_create(vec![
+            Property::new("name", "road_width"),
+            Property::new("animal", "chicken"),
+        ])
+    );
+    imetric!(
+        2,
+        PropertySet::find_or_create(vec![
+            Property::new("name", "road_width"),
+            Property::new("animal", "chicken"),
+        ])
+    );
     flush_metrics_buffer();
-    expect_state!(state, Some(State::ProcessMetricsBlock(2)));
+    expect_state!(state, Some(State::ProcessMetricsBlock(4)));
 }
 
 #[span_fn]

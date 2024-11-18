@@ -1,16 +1,23 @@
 //! StaticStringRef points to a string dependency keeping track of the codec.
 //! Necessary for unreal instrumentation where ansi and wide strings can coexist.
 //! In cases where the event format does not have to be compatible with unreal, StringId can be used.
-use micromegas_transit::{prelude::*, string_codec::StringCodec, StaticStringDependency};
+use micromegas_transit::{
+    prelude::*, string_codec::StringCodec, Member, StaticStringDependency, UserDefinedType,
+};
+use std::hash::{Hash, Hasher};
 
-#[derive(Debug)]
+#[derive(Eq, PartialEq, Debug, Clone)]
 pub struct StaticStringRef {
-    pub ptr: *const u8,
+    pub ptr: u64,
     pub len: u32,
     pub codec: StringCodec,
 }
 
-impl InProcSerialize for StaticStringRef {}
+impl Hash for StaticStringRef {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.ptr.hash(state);
+    }
+}
 
 impl Reflect for StaticStringRef {
     fn reflect() -> UserDefinedType {
@@ -32,14 +39,21 @@ impl Reflect for StaticStringRef {
 
 impl StaticStringRef {
     pub fn id(&self) -> u64 {
-        self.ptr as u64
+        self.ptr
     }
 
     pub fn into_dependency(&self) -> StaticStringDependency {
         StaticStringDependency {
             codec: self.codec,
             len: self.len,
-            ptr: self.ptr,
+            ptr: self.ptr as *const u8,
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        unsafe {
+            let slice = std::slice::from_raw_parts(self.ptr as *const u8, self.len as usize);
+            std::str::from_utf8_unchecked(slice)
         }
     }
 }
@@ -48,7 +62,7 @@ impl std::convert::From<&'static str> for StaticStringRef {
     fn from(src: &'static str) -> Self {
         Self {
             len: src.len() as u32,
-            ptr: src.as_ptr(),
+            ptr: src.as_ptr() as u64,
             codec: StringCodec::Utf8,
         }
     }

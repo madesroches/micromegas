@@ -7,7 +7,7 @@ use micromegas_telemetry::{
     blob_storage::BlobStorage, stream_info::StreamInfo, types::block::BlockMetadata,
 };
 use micromegas_tracing::prelude::*;
-use micromegas_transit::Value;
+use micromegas_transit::value::{Object, Value};
 use std::sync::Arc;
 
 pub struct LogEntry {
@@ -31,7 +31,7 @@ pub fn log_entry_from_value(
                     .get::<i64>("time")
                     .with_context(|| "reading time from LogStaticStrEvent")?;
                 let desc = obj
-                    .get::<Arc<micromegas_transit::Object>>("desc")
+                    .get::<Arc<Object>>("desc")
                     .with_context(|| "reading desc from LogStaticStrEvent")?;
                 let level = desc
                     .get::<u32>("level")
@@ -55,7 +55,7 @@ pub fn log_entry_from_value(
                     .get::<i64>("time")
                     .with_context(|| "reading time from LogStringEvent")?;
                 let desc = obj
-                    .get::<Arc<micromegas_transit::Object>>("desc")
+                    .get::<Arc<Object>>("desc")
                     .with_context(|| "reading desc from LogStringEvent")?;
                 let level = desc
                     .get::<u32>("level")

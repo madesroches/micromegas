@@ -116,16 +116,19 @@ macro_rules! async_span_scope_named {
 #[macro_export]
 macro_rules! imetric {
     ($name:literal, $unit:literal, $value:expr) => {{
-        static METRIC_METADATA: $crate::metrics::MetricMetadata = $crate::metrics::MetricMetadata {
-            lod: $crate::levels::Verbosity::Max,
-            name: $name,
-            unit: $unit,
-            target: module_path!(),
-            module_path: module_path!(),
-            file: file!(),
-            line: line!(),
-        };
+        static METRIC_METADATA: $crate::metrics::StaticMetricMetadata =
+            $crate::metrics::StaticMetricMetadata {
+                lod: $crate::levels::Verbosity::Max,
+                name: $name,
+                unit: $unit,
+                target: module_path!(),
+                file: file!(),
+                line: line!(),
+            };
         $crate::dispatch::int_metric(&METRIC_METADATA, $value);
+    }};
+    ($value:expr, $properties:expr) => {{
+        $crate::dispatch::tagged_integer_metric($value, $properties);
     }};
 }
 
@@ -144,16 +147,20 @@ macro_rules! imetric {
 #[macro_export]
 macro_rules! fmetric {
     ($name:literal, $unit:literal, $value:expr) => {{
-        static METRIC_METADATA: $crate::metrics::MetricMetadata = $crate::metrics::MetricMetadata {
-            lod: $crate::levels::Verbosity::Max,
-            name: $name,
-            unit: $unit,
-            target: module_path!(),
-            module_path: module_path!(),
-            file: file!(),
-            line: line!(),
-        };
+        static METRIC_METADATA: $crate::metrics::StaticMetricMetadata =
+            $crate::metrics::StaticMetricMetadata {
+                lod: $crate::levels::Verbosity::Max,
+                name: $name,
+                unit: $unit,
+                target: module_path!(),
+                file: file!(),
+                line: line!(),
+            };
         $crate::dispatch::float_metric(&METRIC_METADATA, $value);
+    }};
+
+    ($value:expr, $properties:expr) => {{
+        $crate::dispatch::tagged_float_metric($value, $properties);
     }};
 }
 

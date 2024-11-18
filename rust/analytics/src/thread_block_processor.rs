@@ -6,7 +6,7 @@ use micromegas_telemetry::blob_storage::BlobStorage;
 use micromegas_telemetry::stream_info::StreamInfo;
 use micromegas_tracing::prelude::*;
 use micromegas_tracing::warn;
-use micromegas_transit::{Object, Value};
+use micromegas_transit::value::{Object, Value};
 use std::sync::Arc;
 
 pub trait ThreadBlockProcessor {
@@ -27,7 +27,7 @@ pub trait ThreadBlockProcessor {
     ) -> Result<bool>;
 }
 
-fn on_thread_event<F>(obj: &micromegas_transit::Object, mut fun: F) -> Result<bool>
+fn on_thread_event<F>(obj: &Object, mut fun: F) -> Result<bool>
 where
     F: FnMut(Arc<Object>, i64) -> Result<bool>,
 {
@@ -36,7 +36,7 @@ where
     fun(scope, tick)
 }
 
-fn on_thread_named_event<F>(obj: &micromegas_transit::Object, mut fun: F) -> Result<bool>
+fn on_thread_named_event<F>(obj: &Object, mut fun: F) -> Result<bool>
 where
     F: FnMut(Arc<Object>, Arc<String>, i64) -> Result<bool>,
 {

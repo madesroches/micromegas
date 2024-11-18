@@ -7,7 +7,7 @@ use micromegas_telemetry::{
     blob_storage::BlobStorage, stream_info::StreamInfo, types::block::BlockMetadata,
 };
 use micromegas_tracing::prelude::*;
-use micromegas_transit::Value;
+use micromegas_transit::value::{Object, Value};
 use std::sync::Arc;
 
 pub struct Measure {
@@ -34,7 +34,7 @@ pub fn measure_from_value(
                     .get::<f64>("value")
                     .with_context(|| "reading value from FloatMetricEvent")?;
                 let desc = obj
-                    .get::<Arc<micromegas_transit::Object>>("desc")
+                    .get::<Arc<Object>>("desc")
                     .with_context(|| "reading desc from FloatMetricEvent")?;
                 let target = desc
                     .get::<Arc<String>>("target")
@@ -63,7 +63,7 @@ pub fn measure_from_value(
                     .get::<u64>("value")
                     .with_context(|| "reading value from IntegerMetricEvent")?;
                 let desc = obj
-                    .get::<Arc<micromegas_transit::Object>>("desc")
+                    .get::<Arc<Object>>("desc")
                     .with_context(|| "reading desc from IntegerMetricEvent")?;
                 let target = desc
                     .get::<Arc<String>>("target")
@@ -97,6 +97,67 @@ pub fn measure_from_value(
                     }))
                 }
             }
+            "TaggedIntegerMetricEvent" => {
+                let ticks = obj
+                    .get::<i64>("time")
+                    .with_context(|| "reading time from TaggedIntegerMetricEvent")?;
+                let time = convert_ticks.ticks_to_nanoseconds(ticks);
+                let value = obj
+                    .get::<u64>("value")
+                    .with_context(|| "reading value from TaggedIntegerMetricEvent")?;
+                let properties = obj
+                    .get::<Arc<Object>>("properties")
+                    .with_context(|| "reading properties from TaggedIntegerMetricEvent")?;
+                let target = properties.get::<Arc<String>>("target").unwrap_or_default();
+                let name = properties.get::<Arc<String>>("name").unwrap_or_default();
+                let unit = properties.get::<Arc<String>>("unit").unwrap_or_default();
+                if *unit == "ticks" {
+                    lazy_static::lazy_static! {
+                        static ref SECONDS_METRIC_UNIT: Arc<String> = Arc::new( String::from("seconds"));
+                    }
+                    Ok(Some(Measure {
+                        process,
+                        time,
+                        target,
+                        name,
+                        unit: SECONDS_METRIC_UNIT.clone(),
+                        value: convert_ticks.delta_ticks_to_ms(value as i64) / 1000.0,
+                    }))
+                } else {
+                    Ok(Some(Measure {
+                        process,
+                        time,
+                        target,
+                        name,
+                        unit,
+                        value: value as f64,
+                    }))
+                }
+            }
+            "TaggedFloatMetricEvent" => {
+                let ticks = obj
+                    .get::<i64>("time")
+                    .with_context(|| "reading time from TaggedFloatMetricEvent")?;
+                let time = convert_ticks.ticks_to_nanoseconds(ticks);
+                let value = obj
+                    .get::<f64>("value")
+                    .with_context(|| "reading value from TaggedFloatMetricEvent")?;
+                let properties = obj
+                    .get::<Arc<Object>>("properties")
+                    .with_context(|| "reading properties from TaggedFloatMetricEvent")?;
+                let target = properties.get::<Arc<String>>("target").unwrap_or_default();
+                let name = properties.get::<Arc<String>>("name").unwrap_or_default();
+                let unit = properties.get::<Arc<String>>("unit").unwrap_or_default();
+                Ok(Some(Measure {
+                    process,
+                    time,
+                    target,
+                    name,
+                    unit,
+                    value,
+                }))
+            }
+
             _ => {
                 warn!("unknown metric event {:?}", obj);
                 Ok(None)

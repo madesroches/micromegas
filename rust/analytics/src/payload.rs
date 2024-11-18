@@ -3,7 +3,7 @@ use micromegas_telemetry::{
     blob_storage::BlobStorage, compression::decompress, stream_info::StreamInfo,
 };
 use micromegas_tracing::prelude::*;
-use micromegas_transit::{parse_object_buffer, read_dependencies, Value};
+use micromegas_transit::{parse_object_buffer, read_dependencies, value::Value};
 use std::sync::Arc;
 
 #[span_fn]

@@ -1,142 +1,44 @@
 use crate::{
-    advance_window, read_advance_string, read_any, read_consume_pod, InProcSerialize,
-    LegacyDynString, UserDefinedType,
+    advance_window, read_advance_string, read_any, read_consume_pod,
+    value::{Object, Value},
+    InProcSerialize, LegacyDynString, UserDefinedType,
 };
 use anyhow::{bail, Context, Result};
 use std::{collections::HashMap, hash::BuildHasher, sync::Arc};
 
-#[derive(Debug, Clone)]
-pub struct Object {
-    pub type_name: String,
-    pub members: Vec<(String, Value)>,
-}
+fn parse_property_set(
+    udts: &[UserDefinedType],
+    dependencies: &HashMap<u64, Value>,
+    mut window: &[u8],
+) -> Result<(u64, Value)> {
+    let property_layout = udts
+        .iter()
+        .find(|t| t.name == "Property")
+        .with_context(|| "could not find Property layout")?;
 
-impl Object {
-    pub fn get<T>(&self, member_name: &str) -> Result<T>
-    where
-        T: TransitValue,
-    {
-        for m in &self.members {
-            if m.0 == member_name {
-                return T::get(&m.1);
-            }
-        }
-        bail!("member {} not found in {:?}", member_name, self);
-    }
-
-    pub fn get_ref(&self, member_name: &str) -> Result<&Value> {
-        for m in &self.members {
-            if m.0 == member_name {
-                return Ok(&m.1);
-            }
-        }
-        bail!("member {} not found", member_name);
-    }
-}
-
-pub trait TransitValue {
-    fn get(value: &Value) -> Result<Self>
-    where
-        Self: Sized;
-}
-
-impl TransitValue for u8 {
-    fn get(value: &Value) -> Result<Self> {
-        if let Value::U8(val) = value {
-            Ok(*val)
+    let object_id: u64 = read_consume_pod(&mut window);
+    let nb_properties: u32 = read_consume_pod(&mut window);
+    let mut members = vec![];
+    for i in 0..nb_properties {
+        let property_size = property_layout.size as usize;
+        let begin = i as usize * property_size;
+        let property_window = &window[begin..begin + property_size];
+        if let Value::Object(obj) =
+            parse_pod_instance(property_layout, udts, dependencies, property_window)?
+        {
+            members.push((
+                (*obj.get::<Arc<String>>("name")?).clone(),
+                Value::String(obj.get::<Arc<String>>("value")?),
+            ));
         } else {
-            bail!("bad type cast u8 for value {:?}", value);
+            bail!("invalid property in propertyset");
         }
     }
-}
-
-impl TransitValue for u32 {
-    fn get(value: &Value) -> Result<Self> {
-        match value {
-            Value::U32(val) => Ok(*val),
-            Value::U8(val) => Ok(Self::from(*val)),
-            _ => {
-                bail!("bad type cast u32 for value {:?}", value);
-            }
-        }
-    }
-}
-
-impl TransitValue for u64 {
-    fn get(value: &Value) -> Result<Self> {
-        match value {
-            Value::I64(val) => Ok(*val as Self),
-            Value::U64(val) => Ok(*val),
-            _ => {
-                bail!("bad type cast u64 for value {:?}", value)
-            }
-        }
-    }
-}
-
-impl TransitValue for i64 {
-    #[allow(clippy::cast_possible_wrap)]
-    fn get(value: &Value) -> Result<Self> {
-        match value {
-            Value::I64(val) => Ok(*val),
-            Value::U64(val) => Ok(*val as Self),
-            _ => {
-                bail!("bad type cast i64 for value {:?}", value)
-            }
-        }
-    }
-}
-
-impl TransitValue for f64 {
-    fn get(value: &Value) -> Result<Self> {
-        if let Value::F64(val) = value {
-            Ok(*val)
-        } else {
-            bail!("bad type cast f64 for value {:?}", value);
-        }
-    }
-}
-
-impl TransitValue for Arc<String> {
-    fn get(value: &Value) -> Result<Self> {
-        if let Value::String(val) = value {
-            Ok(val.clone())
-        } else {
-            bail!("bad type cast String for value {:?}", value);
-        }
-    }
-}
-
-impl TransitValue for Arc<Object> {
-    fn get(value: &Value) -> Result<Self> {
-        if let Value::Object(val) = value {
-            Ok(val.clone())
-        } else {
-            bail!("bad type cast String for value {:?}", value);
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub enum Value {
-    String(Arc<String>),
-    Object(Arc<Object>),
-    U8(u8),
-    U32(u32),
-    U64(u64),
-    I64(i64),
-    F64(f64),
-    None,
-}
-
-impl Value {
-    pub fn as_str(&self) -> Option<&str> {
-        if let Value::String(s) = &self {
-            Some(s.as_str())
-        } else {
-            None
-        }
-    }
+    let set = Value::Object(Arc::new(Object {
+        type_name: "property_set".into(),
+        members,
+    }));
+    Ok((object_id, set))
 }
 
 pub fn read_dependencies(udts: &[UserDefinedType], buffer: &[u8]) -> Result<HashMap<u64, Value>> {
@@ -183,6 +85,12 @@ pub fn read_dependencies(udts: &[UserDefinedType], buffer: &[u8]) -> Result<Hash
                 let string = read_advance_string(&mut window).with_context(|| "parsing string")?;
 
                 let insert_res = hash.insert(string_id, Value::String(Arc::new(string)));
+                assert!(insert_res.is_none());
+            }
+            "PropertySetDependency" => {
+                let window = advance_window(buffer, offset);
+                let (id, value) = parse_property_set(udts, &hash, window)?;
+                let insert_res = hash.insert(id, value);
                 assert!(insert_res.is_none());
             }
 
@@ -248,14 +156,11 @@ where
     ])
 }
 
-fn parse_log_string_interop_event_v3<S>(
+fn parse_log_string_interop_event_v3(
     udts: &[UserDefinedType],
-    dependencies: &HashMap<u64, Value, S>,
+    dependencies: &HashMap<u64, Value>,
     mut object_window: &[u8],
-) -> Result<Vec<(String, Value)>>
-where
-    S: BuildHasher,
-{
+) -> Result<Vec<(String, Value)>> {
     if let Some(index) = udts.iter().position(|t| t.name == "StaticStringRef") {
         let string_ref_metadata = &udts[index];
         let time: i64 = read_consume_pod(&mut object_window);
@@ -281,14 +186,11 @@ where
     }
 }
 
-fn parse_log_string_interop_event<S>(
+fn parse_log_string_interop_event(
     udts: &[UserDefinedType],
-    dependencies: &HashMap<u64, Value, S>,
+    dependencies: &HashMap<u64, Value>,
     mut object_window: &[u8],
-) -> Result<Vec<(String, Value)>>
-where
-    S: BuildHasher,
-{
+) -> Result<Vec<(String, Value)>> {
     if let Some(index) = udts.iter().position(|t| t.name == "StringId") {
         let stringid_metadata = &udts[index];
         unsafe {
@@ -316,15 +218,12 @@ where
     }
 }
 
-fn parse_custom_instance<S>(
+fn parse_custom_instance(
     udt: &UserDefinedType,
     udts: &[UserDefinedType],
-    dependencies: &HashMap<u64, Value, S>,
+    dependencies: &HashMap<u64, Value>,
     object_window: &[u8],
-) -> Result<Value>
-where
-    S: BuildHasher,
-{
+) -> Result<Value> {
     let members = match udt.name.as_str() {
         // todo: move out of transit lib.
         // LogStringEvent belongs to the tracing lib
@@ -352,15 +251,12 @@ where
     })))
 }
 
-fn parse_pod_instance<S>(
+fn parse_pod_instance(
     udt: &UserDefinedType,
     udts: &[UserDefinedType],
-    dependencies: &HashMap<u64, Value, S>,
+    dependencies: &HashMap<u64, Value>,
     object_window: &[u8],
-) -> Result<Value>
-where
-    S: BuildHasher,
-{
+) -> Result<Value> {
     let mut members: Vec<(String, Value)> = vec![];
     for member_meta in &udt.members {
         let name = member_meta.name.clone();
@@ -376,8 +272,7 @@ where
             if let Some(v) = dependencies.get(&key) {
                 v.clone()
             } else {
-                log::warn!("dependency not found: {}", key);
-                Value::None
+                bail!("dependency not found: member={member_meta:?} key={key}");
             }
         } else {
             match type_name.as_str() {
@@ -460,15 +355,14 @@ where
 
 // parse_object_buffer calls fun for each object in the buffer until fun returns
 // `false`
-pub fn parse_object_buffer<F, S>(
-    dependencies: &HashMap<u64, Value, S>,
+pub fn parse_object_buffer<F>(
+    dependencies: &HashMap<u64, Value>,
     udts: &[UserDefinedType],
     buffer: &[u8],
     mut fun: F,
 ) -> Result<bool>
 where
     F: FnMut(Value) -> Result<bool>,
-    S: BuildHasher,
 {
     let mut offset = 0;
     while offset < buffer.len() {

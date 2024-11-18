@@ -7,7 +7,7 @@ use crate::{
     event::{EventBlock, EventStream, ExtractDeps},
     string_id::StringId,
 };
-use micromegas_transit::prelude::*;
+use micromegas_transit::{prelude::*, Utf8StaticStringDependency};
 use std::collections::HashSet;
 
 declare_queue_struct!(
@@ -24,7 +24,7 @@ declare_queue_struct!(
 );
 
 declare_queue_struct!(
-    struct ThreadDepsQueue<SpanRecord, SpanLocationRecord, Utf8StaticString> {}
+    struct ThreadDepsQueue<SpanRecord, SpanLocationRecord, Utf8StaticStringDependency> {}
 );
 
 fn record_scope_event_dependencies(
@@ -34,19 +34,19 @@ fn record_scope_event_dependencies(
 ) {
     let thread_span_ptr = thread_span_desc as *const _ as u64;
     if recorded_deps.insert(thread_span_ptr) {
-        let name = Utf8StaticString::from(thread_span_desc.name);
+        let name = Utf8StaticStringDependency::from(thread_span_desc.name);
         if recorded_deps.insert(name.ptr as u64) {
             deps.push(name);
         }
-        let target = Utf8StaticString::from(thread_span_desc.location.target);
+        let target = Utf8StaticStringDependency::from(thread_span_desc.location.target);
         if recorded_deps.insert(target.ptr as u64) {
             deps.push(target);
         }
-        let module_path = Utf8StaticString::from(thread_span_desc.location.module_path);
+        let module_path = Utf8StaticStringDependency::from(thread_span_desc.location.module_path);
         if recorded_deps.insert(module_path.ptr as u64) {
             deps.push(module_path);
         }
-        let file = Utf8StaticString::from(thread_span_desc.location.file);
+        let file = Utf8StaticStringDependency::from(thread_span_desc.location.file);
         if recorded_deps.insert(file.ptr as u64) {
             deps.push(file);
         }
@@ -70,15 +70,15 @@ fn record_named_scope_event_dependencies(
 ) {
     let location_id = thread_span_location as *const _ as u64;
     if recorded_deps.insert(location_id) {
-        let target = Utf8StaticString::from(thread_span_location.target);
+        let target = Utf8StaticStringDependency::from(thread_span_location.target);
         if recorded_deps.insert(target.ptr as u64) {
             deps.push(target);
         }
-        let module_path = Utf8StaticString::from(thread_span_location.module_path);
+        let module_path = Utf8StaticStringDependency::from(thread_span_location.module_path);
         if recorded_deps.insert(module_path.ptr as u64) {
             deps.push(module_path);
         }
-        let file = Utf8StaticString::from(thread_span_location.file);
+        let file = Utf8StaticStringDependency::from(thread_span_location.file);
         if recorded_deps.insert(file.ptr as u64) {
             deps.push(file);
         }
@@ -93,7 +93,7 @@ fn record_named_scope_event_dependencies(
     }
 
     if recorded_deps.insert(name.id()) {
-        deps.push(Utf8StaticString::from(name));
+        deps.push(Utf8StaticStringDependency::from(name));
     }
 }
 

@@ -1,6 +1,8 @@
-//! StringId serializes the value of the pointer and the size
-//! Also provides a facility to extract a StaticString from it
-use micromegas_transit::{InProcSerialize, Member, Reflect, UserDefinedType, Utf8StaticString};
+//! StringId serializes the value of the pointer and the size of a UTF8 string.
+//! StaticStringRef should be prefered where wire compatibility with unreal is important.
+use micromegas_transit::{
+    InProcSerialize, Member, Reflect, UserDefinedType, Utf8StaticStringDependency,
+};
 
 #[derive(Debug)]
 pub struct StringId {
@@ -17,7 +19,7 @@ impl std::convert::From<&'static str> for StringId {
     }
 }
 
-impl std::convert::From<&StringId> for Utf8StaticString {
+impl std::convert::From<&StringId> for Utf8StaticStringDependency {
     fn from(src: &StringId) -> Self {
         Self {
             len: src.len,

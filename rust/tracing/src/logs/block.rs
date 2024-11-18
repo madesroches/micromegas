@@ -3,7 +3,7 @@ use super::{
     LogStringInteropEvent,
 };
 use crate::event::{EventBlock, EventStream, ExtractDeps};
-use micromegas_transit::{prelude::*, StaticStringDependency};
+use micromegas_transit::{prelude::*, StaticStringDependency, Utf8StaticStringDependency};
 use std::collections::HashSet;
 
 declare_queue_struct!(
@@ -16,7 +16,7 @@ declare_queue_struct!(
 );
 
 declare_queue_struct!(
-    struct LogDepsQueue<Utf8StaticString, StaticStringDependency, LogMetadataRecord> {}
+    struct LogDepsQueue<Utf8StaticStringDependency, StaticStringDependency, LogMetadataRecord> {}
 );
 
 fn record_log_event_dependencies(
@@ -26,19 +26,19 @@ fn record_log_event_dependencies(
 ) {
     let log_ptr = log_desc as *const _ as u64;
     if recorded_deps.insert(log_ptr) {
-        let name = Utf8StaticString::from(log_desc.fmt_str);
+        let name = Utf8StaticStringDependency::from(log_desc.fmt_str);
         if recorded_deps.insert(name.ptr as u64) {
             deps.push(name);
         }
-        let target = Utf8StaticString::from(log_desc.target);
+        let target = Utf8StaticStringDependency::from(log_desc.target);
         if recorded_deps.insert(target.ptr as u64) {
             deps.push(target);
         }
-        let module_path = Utf8StaticString::from(log_desc.module_path);
+        let module_path = Utf8StaticStringDependency::from(log_desc.module_path);
         if recorded_deps.insert(module_path.ptr as u64) {
             deps.push(module_path);
         }
-        let file = Utf8StaticString::from(log_desc.file);
+        let file = Utf8StaticStringDependency::from(log_desc.file);
         if recorded_deps.insert(file.ptr as u64) {
             deps.push(file);
         }
@@ -70,10 +70,10 @@ impl ExtractDeps for LogMsgQueue {
                 }
                 LogMsgQueueAny::LogStaticStrInteropEvent(evt) => {
                     if recorded_deps.insert(evt.target.id()) {
-                        deps.push(Utf8StaticString::from(&evt.target));
+                        deps.push(Utf8StaticStringDependency::from(&evt.target));
                     }
                     if recorded_deps.insert(evt.msg.id()) {
-                        deps.push(Utf8StaticString::from(&evt.msg));
+                        deps.push(Utf8StaticStringDependency::from(&evt.msg));
                     }
                 }
                 LogMsgQueueAny::LogStringInteropEvent(evt) => {
