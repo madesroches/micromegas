@@ -1,6 +1,7 @@
 //! Where events are recorded and eventually sent to a sink
 pub use crate::errors::{Error, Result};
 use crate::intern_string::intern_string;
+use crate::logs::TaggedLogString;
 use crate::metrics::{TaggedFloatMetricEvent, TaggedIntegerMetricEvent};
 use crate::prelude::*;
 use crate::property_set::PropertySet;
@@ -121,6 +122,20 @@ pub fn log(desc: &'static LogMetadata, args: fmt::Arguments<'_>) {
         #[allow(static_mut_refs)]
         if let Some(d) = &mut G_DISPATCH {
             d.log(desc, args);
+        }
+    }
+}
+
+#[inline(always)]
+pub fn log_tagged(
+    desc: &'static LogMetadata,
+    properties: &'static PropertySet,
+    args: fmt::Arguments<'_>,
+) {
+    unsafe {
+        #[allow(static_mut_refs)]
+        if let Some(d) = &mut G_DISPATCH {
+            d.log_tagged(desc, properties, args);
         }
     }
 }
@@ -534,6 +549,32 @@ impl Dispatch {
                 msg: micromegas_transit::DynString(args.to_string()),
             });
         }
+        if log_stream.is_full() {
+            // Release the lock before calling flush_log_buffer
+            drop(log_stream);
+            self.flush_log_buffer();
+        }
+    }
+
+    #[inline]
+    fn log_tagged(
+        &mut self,
+        desc: &'static LogMetadata,
+        properties: &'static PropertySet,
+        args: fmt::Arguments<'_>,
+    ) {
+        if !self.log_enabled(desc) {
+            return;
+        }
+        let time = now();
+        self.sink.on_log(desc, time, args);
+        let mut log_stream = self.log_stream.lock().unwrap();
+        log_stream.get_events_mut().push(TaggedLogString {
+            desc,
+            properties,
+            time,
+            msg: micromegas_transit::DynString(args.to_string()),
+        });
         if log_stream.is_full() {
             // Release the lock before calling flush_log_buffer
             drop(log_stream);

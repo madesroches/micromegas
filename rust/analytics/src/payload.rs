@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use micromegas_telemetry::{
     blob_storage::BlobStorage, compression::decompress, stream_info::StreamInfo,
 };
-use micromegas_tracing::prelude::*;
+use micromegas_tracing::{parsing::make_custom_readers, prelude::*};
 use micromegas_transit::{parse_object_buffer, read_dependencies, value::Value};
 use std::sync::Arc;
 
@@ -39,13 +39,16 @@ where
     F: FnMut(Value) -> Result<bool>,
 {
     let dep_udts = &stream.dependencies_metadata;
+    let custom_readers = make_custom_readers();
     let dependencies = read_dependencies(
+        &custom_readers,
         dep_udts,
         &decompress(&payload.dependencies).with_context(|| "decompressing dependencies payload")?,
     )
     .with_context(|| "reading dependencies")?;
     let obj_udts = &stream.objects_metadata;
     let continue_iterating = parse_object_buffer(
+        &custom_readers,
         &dependencies,
         obj_udts,
         &decompress(&payload.objects).with_context(|| "decompressing objects payload")?,

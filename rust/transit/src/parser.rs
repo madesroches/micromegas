@@ -1,47 +1,20 @@
 use crate::{
     advance_window, read_advance_string, read_any, read_consume_pod,
     value::{Object, Value},
-    InProcSerialize, LegacyDynString, UserDefinedType,
+    UserDefinedType,
 };
 use anyhow::{bail, Context, Result};
-use std::{collections::HashMap, hash::BuildHasher, sync::Arc};
+use std::{collections::HashMap, sync::Arc};
 
-fn parse_property_set(
+pub type CustomReader =
+    Arc<dyn Fn(&UserDefinedType, &[UserDefinedType], &HashMap<u64, Value>, &[u8]) -> Result<Value>>;
+pub type CustomReaderMap = HashMap<String, CustomReader>;
+
+pub fn read_dependencies(
+    custom_readers: &CustomReaderMap,
     udts: &[UserDefinedType],
-    dependencies: &HashMap<u64, Value>,
-    mut window: &[u8],
-) -> Result<(u64, Value)> {
-    let property_layout = udts
-        .iter()
-        .find(|t| t.name == "Property")
-        .with_context(|| "could not find Property layout")?;
-
-    let object_id: u64 = read_consume_pod(&mut window);
-    let nb_properties: u32 = read_consume_pod(&mut window);
-    let mut members = vec![];
-    for i in 0..nb_properties {
-        let property_size = property_layout.size as usize;
-        let begin = i as usize * property_size;
-        let property_window = &window[begin..begin + property_size];
-        if let Value::Object(obj) =
-            parse_pod_instance(property_layout, udts, dependencies, property_window)?
-        {
-            members.push((
-                (*obj.get::<Arc<String>>("name")?).clone(),
-                Value::String(obj.get::<Arc<String>>("value")?),
-            ));
-        } else {
-            bail!("invalid property in propertyset");
-        }
-    }
-    let set = Value::Object(Arc::new(Object {
-        type_name: "property_set".into(),
-        members,
-    }));
-    Ok((object_id, set))
-}
-
-pub fn read_dependencies(udts: &[UserDefinedType], buffer: &[u8]) -> Result<HashMap<u64, Value>> {
+    buffer: &[u8],
+) -> Result<HashMap<u64, Value>> {
     let mut hash = HashMap::new();
     let mut offset = 0;
     while offset < buffer.len() {
@@ -87,23 +60,35 @@ pub fn read_dependencies(udts: &[UserDefinedType], buffer: &[u8]) -> Result<Hash
                 let insert_res = hash.insert(string_id, Value::String(Arc::new(string)));
                 assert!(insert_res.is_none());
             }
-            "PropertySetDependency" => {
-                let window = advance_window(buffer, offset);
-                let (id, value) = parse_property_set(udts, &hash, window)?;
-                let insert_res = hash.insert(id, value);
-                assert!(insert_res.is_none());
-            }
-
-            _ => {
-                if udt.size == 0 {
-                    anyhow::bail!("invalid user-defined type {:?}", udt);
-                }
-                let instance =
-                    parse_pod_instance(udt, udts, &hash, &buffer[offset..offset + udt.size])
-                        .with_context(|| "parse_pod_instance")?;
-                if let Value::Object(obj) = instance {
-                    let insert_res = hash.insert(obj.get::<u64>("id")?, Value::Object(obj));
-                    assert!(insert_res.is_none());
+            type_name => {
+                if let Some(reader) = custom_readers.get(type_name) {
+                    let window = advance_window(buffer, offset);
+                    if let Value::Object(obj) = (*reader)(udt, udts, &hash, window)
+                        .with_context(|| "parsing custom dependency")?
+                    {
+                        let id: u64 = obj
+                            .get("id")
+                            .with_context(|| "reading id of custom dependency")?;
+                        let value = obj
+                            .get_ref("value")
+                            .with_context(|| "reading value of custom dependency")?
+                            .clone();
+                        let insert_res = hash.insert(id, value);
+                        assert!(insert_res.is_none());
+                    } else {
+                        anyhow::bail!("custom dependency is not an object");
+                    }
+                } else {
+                    if udt.size == 0 {
+                        anyhow::bail!("invalid user-defined type {:?}", udt);
+                    }
+                    let instance =
+                        parse_pod_instance(udt, udts, &hash, &buffer[offset..offset + udt.size])
+                            .with_context(|| "parse_pod_instance")?;
+                    if let Value::Object(obj) = instance {
+                        let insert_res = hash.insert(obj.get::<u64>("id")?, Value::Object(obj));
+                        assert!(insert_res.is_none());
+                    }
                 }
             }
         }
@@ -113,151 +98,31 @@ pub fn read_dependencies(udts: &[UserDefinedType], buffer: &[u8]) -> Result<Hash
     Ok(hash)
 }
 
-fn parse_log_string_event<S>(
-    dependencies: &HashMap<u64, Value, S>,
-    mut object_window: &[u8],
-) -> Result<Vec<(String, Value)>>
-where
-    S: BuildHasher,
-{
-    let desc_id: u64 = read_consume_pod(&mut object_window);
-    let time: i64 = read_consume_pod(&mut object_window);
-    let msg = String::from_utf8(object_window.to_vec()).with_context(|| "parsing legacy string")?;
-    let desc = dependencies
-        .get(&desc_id)
-        .with_context(|| format!("desc member {} of LogStringEvent not found", desc_id))?;
-    Ok(vec![
-        (String::from("time"), Value::I64(time)),
-        (String::from("msg"), Value::String(Arc::new(msg))),
-        (String::from("desc"), desc.clone()),
-    ])
-}
-
-fn parse_log_string_event_v2<S>(
-    dependencies: &HashMap<u64, Value, S>,
-    mut object_window: &[u8],
-) -> Result<Vec<(String, Value)>>
-where
-    S: BuildHasher,
-{
-    let desc_id: u64 = read_consume_pod(&mut object_window);
-    let time: i64 = read_consume_pod(&mut object_window);
-    let msg = read_advance_string(&mut object_window).with_context(|| "parsing string")?;
-    let mut desc: Value = Value::None;
-    if let Some(found_desc) = dependencies.get(&desc_id) {
-        desc = found_desc.clone();
-    } else {
-        log::warn!("desc member {} of LogStringEvent not found", desc_id);
-    }
-    Ok(vec![
-        (String::from("time"), Value::I64(time)),
-        (String::from("msg"), Value::String(Arc::new(msg))),
-        (String::from("desc"), desc),
-    ])
-}
-
-fn parse_log_string_interop_event_v3(
-    udts: &[UserDefinedType],
-    dependencies: &HashMap<u64, Value>,
-    mut object_window: &[u8],
-) -> Result<Vec<(String, Value)>> {
-    if let Some(index) = udts.iter().position(|t| t.name == "StaticStringRef") {
-        let string_ref_metadata = &udts[index];
-        let time: i64 = read_consume_pod(&mut object_window);
-        let level: u8 = read_consume_pod(&mut object_window);
-        let target = parse_pod_instance(
-            string_ref_metadata,
-            udts,
-            dependencies,
-            &object_window[0..string_ref_metadata.size],
-        )
-        .with_context(|| "parse_pod_instance")?;
-        object_window = advance_window(object_window, string_ref_metadata.size);
-        let msg = read_advance_string(&mut object_window)?;
-
-        Ok(vec![
-            (String::from("time"), Value::I64(time)),
-            (String::from("level"), Value::U8(level)),
-            (String::from("target"), target),
-            (String::from("msg"), Value::String(Arc::new(msg))),
-        ])
-    } else {
-        bail!("Can't parse log string interop event with no metadata for StaticStringRef");
-    }
-}
-
-fn parse_log_string_interop_event(
-    udts: &[UserDefinedType],
-    dependencies: &HashMap<u64, Value>,
-    mut object_window: &[u8],
-) -> Result<Vec<(String, Value)>> {
-    if let Some(index) = udts.iter().position(|t| t.name == "StringId") {
-        let stringid_metadata = &udts[index];
-        unsafe {
-            let time: i64 = read_consume_pod(&mut object_window);
-            let level: u32 = read_consume_pod(&mut object_window);
-            let target = parse_pod_instance(
-                stringid_metadata,
-                udts,
-                dependencies,
-                &object_window[0..stringid_metadata.size],
-            )
-            .with_context(|| "parse_pod_instance")?;
-            object_window = advance_window(object_window, stringid_metadata.size);
-            let msg = <LegacyDynString as InProcSerialize>::read_value(object_window);
-
-            Ok(vec![
-                (String::from("time"), Value::I64(time)),
-                (String::from("level"), Value::U32(level)),
-                (String::from("target"), target),
-                (String::from("msg"), Value::String(Arc::new(msg.0))),
-            ])
-        }
-    } else {
-        bail!("Can't parse log string interop event with no metadata for StringId");
-    }
-}
-
 fn parse_custom_instance(
+    custom_readers: &CustomReaderMap,
     udt: &UserDefinedType,
     udts: &[UserDefinedType],
     dependencies: &HashMap<u64, Value>,
     object_window: &[u8],
 ) -> Result<Value> {
-    let members = match udt.name.as_str() {
-        // todo: move out of transit lib.
-        // LogStringEvent belongs to the tracing lib
-        // we need to inject the serialization logic of custom objects
-        "LogStringEvent" => parse_log_string_event(dependencies, object_window)
-            .with_context(|| "parse_log_string_event")?,
-        "LogStringEventV2" => parse_log_string_event_v2(dependencies, object_window)
-            .with_context(|| "parse_log_string_event_v2")?,
-        "LogStringInteropEventV2" => {
-            parse_log_string_interop_event(udts, dependencies, object_window)
-                .with_context(|| "parse_log_string_interop_event")?
-        }
-        "LogStringInteropEventV3" => {
-            parse_log_string_interop_event_v3(udts, dependencies, object_window)
-                .with_context(|| "parse_log_string_interop_event_v3")?
-        }
-        other => {
-            log::warn!("unknown custom object {}", other);
-            Vec::new()
-        }
-    };
-    Ok(Value::Object(Arc::new(Object {
-        type_name: udt.name.clone(),
-        members,
-    })))
+    if let Some(reader) = custom_readers.get(&*udt.name) {
+        (*reader)(udt, udts, dependencies, object_window)
+    } else {
+        log::warn!("unknown custom object {}", &udt.name);
+        Ok(Value::Object(Arc::new(Object {
+            type_name: udt.name.clone(),
+            members: vec![],
+        })))
+    }
 }
 
-fn parse_pod_instance(
+pub fn parse_pod_instance(
     udt: &UserDefinedType,
     udts: &[UserDefinedType],
     dependencies: &HashMap<u64, Value>,
     object_window: &[u8],
 ) -> Result<Value> {
-    let mut members: Vec<(String, Value)> = vec![];
+    let mut members: Vec<(Arc<String>, Value)> = vec![];
     for member_meta in &udt.members {
         let name = member_meta.name.clone();
         let type_name = member_meta.type_name.clone();
@@ -319,7 +184,7 @@ fn parse_pod_instance(
                 non_intrinsic_member_type_name => {
                     if let Some(index) = udts
                         .iter()
-                        .position(|t| t.name == non_intrinsic_member_type_name)
+                        .position(|t| *t.name == non_intrinsic_member_type_name)
                     {
                         let member_udt = &udts[index];
                         parse_pod_instance(
@@ -341,7 +206,7 @@ fn parse_pod_instance(
 
     if udt.is_reference {
         // reference objects need a member called 'id' which is the key to the dependency
-        if let Some(id_index) = members.iter().position(|m| m.0 == "id") {
+        if let Some(id_index) = members.iter().position(|m| *m.0 == "id") {
             return Ok(members[id_index].1.clone());
         }
         bail!("reference object has no 'id' member");
@@ -356,6 +221,7 @@ fn parse_pod_instance(
 // parse_object_buffer calls fun for each object in the buffer until fun returns
 // `false`
 pub fn parse_object_buffer<F>(
+    custom_readers: &CustomReaderMap,
     dependencies: &HashMap<u64, Value>,
     udts: &[UserDefinedType],
     buffer: &[u8],
@@ -386,6 +252,7 @@ where
         };
         let instance = if is_size_dynamic {
             parse_custom_instance(
+                &custom_readers,
                 udt,
                 udts,
                 dependencies,

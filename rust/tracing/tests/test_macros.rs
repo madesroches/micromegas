@@ -6,7 +6,8 @@ use micromegas_tracing::dispatch::{
     flush_log_buffer, flush_metrics_buffer, flush_thread_buffer, init_event_dispatch,
     init_thread_stream, process_id,
 };
-use micromegas_tracing::levels::{set_max_level, LevelFilter};
+use micromegas_tracing::levels::{set_max_level, Level, LevelFilter};
+use micromegas_tracing::log;
 use micromegas_tracing::property_set::{Property, PropertySet};
 use micromegas_tracing::time::frequency;
 use micromegas_tracing::{fmetric, imetric, info, span_scope};
@@ -18,6 +19,25 @@ fn test_log_str(state: &SharedState) {
         info!("test");
         expect_state!(state, Some(State::Log(String::from("test"))));
         info!("test {}", x);
+        expect_state!(state, Some(State::Log(format!("test {}", x))));
+    }
+    flush_log_buffer();
+    expect_state!(state, Some(State::ProcessLogBlock(10)));
+}
+
+fn test_log_properties(state: &SharedState) {
+    for x in 0..5 {
+        log!(Level::Info,
+			 properties: PropertySet::find_or_create(vec![
+				 Property::new("world", "some_world"),
+				 Property::new("mode", "some_mode")]),
+			 "test");
+        expect_state!(state, Some(State::Log(String::from("test"))));
+        log!(Level::Info,
+			 properties: PropertySet::find_or_create(vec![
+				 Property::new("world", "some_world"),
+				 Property::new("mode", "some_mode")]),
+			 "test {}", x);
         expect_state!(state, Some(State::Log(format!("test {}", x))));
     }
     flush_log_buffer();
@@ -116,6 +136,7 @@ fn test_log() {
     log::set_max_level(log::LevelFilter::Trace);
     assert!(process_id().is_some());
     test_log_str(&state);
+    test_log_properties(&state);
     test_log_interop_str(&state);
     test_thread_spans(&state);
     test_proc_macros(&state);

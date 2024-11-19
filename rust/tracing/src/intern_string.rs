@@ -1,3 +1,5 @@
+//! Store dynamically-created strings in a global container.
+//! Strings are never released from the container.
 use std::{collections::HashSet, sync::Mutex};
 
 lazy_static! {

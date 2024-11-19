@@ -13,7 +13,11 @@ use micromegas_tracing::logs::LogStaticStrInteropEvent;
 use micromegas_tracing::logs::LogStream;
 use micromegas_tracing::logs::LogStringEvent;
 use micromegas_tracing::logs::LogStringInteropEvent;
+use micromegas_tracing::logs::TaggedLogString;
+use micromegas_tracing::property_set::Property;
+use micromegas_tracing::property_set::PropertySet;
 use micromegas_transit::value::{Object, Value};
+use micromegas_transit::DynString;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -24,15 +28,15 @@ fn test_log_interop_metadata() {
     let obj_meta = &stream_proto.objects_metadata;
     obj_meta
         .iter()
-        .position(|udt| udt.name == "LogStringInteropEventV3")
+        .position(|udt| *udt.name == "LogStringInteropEventV3")
         .unwrap();
     obj_meta
         .iter()
-        .position(|udt| udt.name == "LogStaticStrInteropEvent")
+        .position(|udt| *udt.name == "LogStaticStrInteropEvent")
         .unwrap();
     obj_meta
         .iter()
-        .position(|udt| udt.name == "StringId")
+        .position(|udt| *udt.name == "StringId")
         .unwrap();
 }
 
@@ -159,4 +163,47 @@ fn test_parse_log_interops() {
     })
     .unwrap();
     assert_eq!(nb_log_entries, 2);
+}
+
+#[test]
+fn test_tagged_log_entries() {
+    let _telemetry_guard = TelemetryGuardBuilder::default()
+        .with_install_tracing_capture(false)
+        .build();
+    let process_id = uuid::Uuid::new_v4();
+    let process_info = Arc::new(make_process_info(process_id, Some(uuid::Uuid::new_v4())));
+    let mut stream = LogStream::new(1024, process_id, &[], HashMap::new());
+    let stream_id = stream.stream_id();
+    static LOG_DESC: logs::LogMetadata = logs::LogMetadata {
+        level: Level::Info,
+        level_filter: std::sync::atomic::AtomicU32::new(logs::FILTER_LEVEL_UNSET_VALUE),
+        fmt_str: "",
+        target: "target_name",
+        module_path: "module_path",
+        file: file!(),
+        line: line!(),
+    };
+    stream.get_events_mut().push(TaggedLogString {
+        desc: &LOG_DESC,
+        properties: PropertySet::find_or_create(vec![
+            Property::new("name", "road_width"),
+            Property::new("animal", "chicken"),
+        ]),
+        time: 1,
+        msg: DynString("my message".into()),
+    });
+    let mut block = stream.replace_block(Arc::new(LogBlock::new(1024, process_id, stream_id, 0)));
+    Arc::get_mut(&mut block).unwrap().close();
+    let encoded = block.encode_bin(&process_info).unwrap();
+    let received_block: micromegas_telemetry::block_wire_format::Block =
+        ciborium::from_reader(&encoded[..]).unwrap();
+    let stream_info = make_stream_info(&stream);
+    let convert_ticks = ConvertTicks::from_meta_data(0, 0, 1);
+    parse_block(&stream_info, &received_block.payload, |val| {
+        let _log_entry = log_entry_from_value(&convert_ticks, process_info.clone(), &val)
+            .unwrap()
+            .unwrap();
+        Ok(true)
+    })
+    .unwrap();
 }

@@ -1,6 +1,16 @@
+//! Interned collection of PropertySet instances. Each PropertySet contains properties where the names and the values are statically allocated.
+//! The user is expected to manage the cardinality.
 use crate::static_string_ref::StaticStringRef;
 use micromegas_transit::{prelude::*, UserDefinedType};
-use std::{collections::HashSet, hash::Hash, sync::Mutex};
+use std::{
+    collections::HashSet,
+    hash::Hash,
+    sync::{Arc, Mutex},
+};
+
+lazy_static::lazy_static! {
+    pub static ref PROPERTY_SET_DEP_TYPE_NAME: Arc<String> = Arc::new("PropertySetDependency".into());
+}
 
 #[derive(Debug, Eq, PartialEq, Hash, Clone, TransitReflect)]
 pub struct Property {
@@ -60,7 +70,7 @@ impl PropertySetDependency {
 impl Reflect for PropertySetDependency {
     fn reflect() -> UserDefinedType {
         UserDefinedType {
-            name: String::from("PropertySetDependency"),
+            name: PROPERTY_SET_DEP_TYPE_NAME.clone(),
             size: 0,
             members: vec![],
             is_reference: false,
