@@ -39,14 +39,16 @@ where
     F: FnMut(Value) -> Result<bool>,
 {
     let dep_udts = &stream.dependencies_metadata;
+    let custom_readers = make_custom_readers();
     let dependencies = read_dependencies(
+        &custom_readers,
         dep_udts,
         &decompress(&payload.dependencies).with_context(|| "decompressing dependencies payload")?,
     )
     .with_context(|| "reading dependencies")?;
     let obj_udts = &stream.objects_metadata;
     let continue_iterating = parse_object_buffer(
-        &make_custom_readers(),
+        &custom_readers,
         &dependencies,
         obj_udts,
         &decompress(&payload.objects).with_context(|| "decompressing objects payload")?,

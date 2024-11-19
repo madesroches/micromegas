@@ -8,6 +8,10 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+lazy_static::lazy_static! {
+    pub static ref PROPERTY_SET_DEP_TYPE_NAME: Arc<String> = Arc::new("PropertySetDependency".into());
+}
+
 #[derive(Debug, Eq, PartialEq, Hash, Clone, TransitReflect)]
 pub struct Property {
     pub name: StaticStringRef,
@@ -65,11 +69,8 @@ impl PropertySetDependency {
 
 impl Reflect for PropertySetDependency {
     fn reflect() -> UserDefinedType {
-        lazy_static::lazy_static! {
-            static ref TYPE_NAME: Arc<String> = Arc::new("PropertySetDependency".into());
-        }
         UserDefinedType {
-            name: TYPE_NAME.clone(),
+            name: PROPERTY_SET_DEP_TYPE_NAME.clone(),
             size: 0,
             members: vec![],
             is_reference: false,

@@ -4,51 +4,17 @@ use crate::{
     UserDefinedType,
 };
 use anyhow::{bail, Context, Result};
-use lazy_static::lazy_static;
 use std::{collections::HashMap, sync::Arc};
 
-fn parse_property_set(
+pub type CustomReader =
+    Arc<dyn Fn(&UserDefinedType, &[UserDefinedType], &HashMap<u64, Value>, &[u8]) -> Result<Value>>;
+pub type CustomReaderMap = HashMap<String, CustomReader>;
+
+pub fn read_dependencies(
+    custom_readers: &CustomReaderMap,
     udts: &[UserDefinedType],
-    dependencies: &HashMap<u64, Value>,
-    mut window: &[u8],
-) -> Result<(u64, Value)> {
-    let property_layout = udts
-        .iter()
-        .find(|t| *t.name == "Property")
-        .with_context(|| "could not find Property layout")?;
-
-    let object_id: u64 = read_consume_pod(&mut window);
-    let nb_properties: u32 = read_consume_pod(&mut window);
-    let mut members = vec![];
-    for i in 0..nb_properties {
-        let property_size = property_layout.size as usize;
-        let begin = i as usize * property_size;
-        let property_window = &window[begin..begin + property_size];
-        if let Value::Object(obj) =
-            parse_pod_instance(property_layout, udts, dependencies, property_window)?
-        {
-            members.push((
-                obj.get::<Arc<String>>("name")?,
-                Value::String(obj.get::<Arc<String>>("value")?),
-            ));
-        } else {
-            bail!("invalid property in propertyset");
-        }
-    }
-
-    lazy_static! {
-        static ref PROPERTY_SET_TYPE_NAME: Arc<String> = Arc::new("property_set".into());
-    }
-
-    let set = Value::Object(Arc::new(Object {
-        type_name: PROPERTY_SET_TYPE_NAME.clone(),
-        members,
-    }));
-    Ok((object_id, set))
-}
-
-// todo: move the parsing dynamically-sized deps from tracing to that crate
-pub fn read_dependencies(udts: &[UserDefinedType], buffer: &[u8]) -> Result<HashMap<u64, Value>> {
+    buffer: &[u8],
+) -> Result<HashMap<u64, Value>> {
     let mut hash = HashMap::new();
     let mut offset = 0;
     while offset < buffer.len() {
@@ -94,23 +60,35 @@ pub fn read_dependencies(udts: &[UserDefinedType], buffer: &[u8]) -> Result<Hash
                 let insert_res = hash.insert(string_id, Value::String(Arc::new(string)));
                 assert!(insert_res.is_none());
             }
-            "PropertySetDependency" => {
-                let window = advance_window(buffer, offset);
-                let (id, value) = parse_property_set(udts, &hash, window)?;
-                let insert_res = hash.insert(id, value);
-                assert!(insert_res.is_none());
-            }
-
-            _ => {
-                if udt.size == 0 {
-                    anyhow::bail!("invalid user-defined type {:?}", udt);
-                }
-                let instance =
-                    parse_pod_instance(udt, udts, &hash, &buffer[offset..offset + udt.size])
-                        .with_context(|| "parse_pod_instance")?;
-                if let Value::Object(obj) = instance {
-                    let insert_res = hash.insert(obj.get::<u64>("id")?, Value::Object(obj));
-                    assert!(insert_res.is_none());
+            type_name => {
+                if let Some(reader) = custom_readers.get(type_name) {
+                    let window = advance_window(buffer, offset);
+                    if let Value::Object(obj) = (*reader)(udt, udts, &hash, window)
+                        .with_context(|| "parsing custom dependency")?
+                    {
+                        let id: u64 = obj
+                            .get("id")
+                            .with_context(|| "reading id of custom dependency")?;
+                        let value = obj
+                            .get_ref("value")
+                            .with_context(|| "reading value of custom dependency")?
+                            .clone();
+                        let insert_res = hash.insert(id, value);
+                        assert!(insert_res.is_none());
+                    } else {
+                        anyhow::bail!("custom dependency is not an object");
+                    }
+                } else {
+                    if udt.size == 0 {
+                        anyhow::bail!("invalid user-defined type {:?}", udt);
+                    }
+                    let instance =
+                        parse_pod_instance(udt, udts, &hash, &buffer[offset..offset + udt.size])
+                            .with_context(|| "parse_pod_instance")?;
+                    if let Value::Object(obj) = instance {
+                        let insert_res = hash.insert(obj.get::<u64>("id")?, Value::Object(obj));
+                        assert!(insert_res.is_none());
+                    }
                 }
             }
         }
@@ -119,10 +97,6 @@ pub fn read_dependencies(udts: &[UserDefinedType], buffer: &[u8]) -> Result<Hash
 
     Ok(hash)
 }
-
-pub type CustomReader =
-    Arc<dyn Fn(&UserDefinedType, &[UserDefinedType], &HashMap<u64, Value>, &[u8]) -> Result<Value>>;
-pub type CustomReaderMap = HashMap<String, CustomReader>;
 
 fn parse_custom_instance(
     custom_readers: &CustomReaderMap,

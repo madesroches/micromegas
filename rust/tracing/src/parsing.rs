@@ -7,6 +7,8 @@ use micromegas_transit::{
 };
 use std::{collections::HashMap, sync::Arc};
 
+use crate::property_set::PROPERTY_SET_DEP_TYPE_NAME;
+
 lazy_static::lazy_static! {
     static ref TIME: Arc<String> = Arc::new("time".into());
     static ref LEVEL: Arc<String> = Arc::new("level".into());
@@ -164,6 +166,55 @@ fn parse_log_string_interop_event(
     }
 }
 
+fn parse_property_set(
+    _udt: &UserDefinedType,
+    udts: &[UserDefinedType],
+    dependencies: &HashMap<u64, Value>,
+    mut window: &[u8],
+) -> Result<Value> {
+    let property_layout = udts
+        .iter()
+        .find(|t| *t.name == "Property")
+        .with_context(|| "could not find Property layout")?;
+
+    let object_id: u64 = read_consume_pod(&mut window);
+    let nb_properties: u32 = read_consume_pod(&mut window);
+    let mut members = vec![];
+    for i in 0..nb_properties {
+        let property_size = property_layout.size as usize;
+        let begin = i as usize * property_size;
+        let property_window = &window[begin..begin + property_size];
+        if let Value::Object(obj) =
+            parse_pod_instance(property_layout, udts, dependencies, property_window)?
+        {
+            members.push((
+                obj.get::<Arc<String>>("name")?,
+                Value::String(obj.get::<Arc<String>>("value")?),
+            ));
+        } else {
+            anyhow::bail!("invalid property in propertyset");
+        }
+    }
+
+    lazy_static! {
+        static ref PROPERTY_SET_TYPE_NAME: Arc<String> = Arc::new("property_set".into());
+        static ref ID: Arc<String> = Arc::new("id".into());
+        static ref VALUE: Arc<String> = Arc::new("value".into());
+    }
+
+    let set = Arc::new(Object {
+        type_name: PROPERTY_SET_TYPE_NAME.clone(),
+        members,
+    });
+    Ok(Value::Object(Arc::new(Object {
+        type_name: PROPERTY_SET_DEP_TYPE_NAME.clone(),
+        members: vec![
+            (ID.clone(), Value::U64(object_id)),
+            (VALUE.clone(), Value::Object(set)),
+        ],
+    })))
+}
+
 /// Dictionnary of custom readers for dynamically sized events
 pub fn make_custom_readers() -> CustomReaderMap {
     let mut custom_readers: CustomReaderMap = HashMap::new();
@@ -181,5 +232,9 @@ pub fn make_custom_readers() -> CustomReaderMap {
         Arc::new(parse_log_string_interop_event_v3),
     );
     custom_readers.insert("TaggedLogString".into(), Arc::new(parse_tagged_log_string));
+    custom_readers.insert(
+        PROPERTY_SET_DEP_TYPE_NAME.to_string(),
+        Arc::new(parse_property_set),
+    );
     custom_readers
 }

@@ -1,7 +1,6 @@
 use anyhow::{bail, Result};
 use std::sync::Arc;
 
-//todo: type name and member names should use Arc<String>
 #[derive(Debug, Clone)]
 pub struct Object {
     pub type_name: Arc<String>,
