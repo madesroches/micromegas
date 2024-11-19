@@ -4,7 +4,10 @@ use crate::{
 use micromegas_transit::{
     prelude::*, read_advance_string, read_consume_pod, DynString, UserDefinedType,
 };
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{
+    atomic::{AtomicU32, Ordering},
+    Arc,
+};
 
 #[derive(Debug)]
 pub struct LogMetadata<'a> {
@@ -138,8 +141,11 @@ impl InProcSerialize for LogStringEvent {
 // strategies: pod and custom
 impl Reflect for LogStringEvent {
     fn reflect() -> UserDefinedType {
+        lazy_static::lazy_static! {
+            static ref TYPE_NAME: Arc<String> = Arc::new("LogStringEventV2".into());
+        }
         UserDefinedType {
-            name: String::from("LogStringEventV2"),
+            name: TYPE_NAME.clone(),
             size: 0,
             members: vec![],
             is_reference: false,
@@ -203,8 +209,11 @@ impl InProcSerialize for LogStringInteropEvent {
 // strategies: pod and custom
 impl Reflect for LogStringInteropEvent {
     fn reflect() -> UserDefinedType {
+        lazy_static::lazy_static! {
+            static ref TYPE_NAME: Arc<String> = Arc::new("LogStringInteropEventV3".into());
+        }
         UserDefinedType {
-            name: String::from("LogStringInteropEventV3"),
+            name: TYPE_NAME.clone(),
             size: 0,
             members: vec![],
             is_reference: false,
@@ -236,8 +245,11 @@ pub struct TaggedLogString {
 
 impl Reflect for TaggedLogString {
     fn reflect() -> UserDefinedType {
+        lazy_static::lazy_static! {
+            static ref TYPE_NAME: Arc<String> = Arc::new("TaggedLogString".into());
+        }
         UserDefinedType {
-            name: String::from("TaggedLogString"),
+            name: TYPE_NAME.clone(),
             size: 0,
             members: vec![],
             is_reference: false,

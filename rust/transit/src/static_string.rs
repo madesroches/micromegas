@@ -2,6 +2,8 @@ use crate::{
     read_consume_pod, string_codec::StringCodec, write_any, InProcSerialize, InProcSize, Reflect,
     UserDefinedType,
 };
+use lazy_static::lazy_static;
+use std::sync::Arc;
 
 /// Utf8StaticStringDependency serializes the value of the pointer and the contents of the string
 /// It should not be part of the event - it's the dependency of the StringId
@@ -23,8 +25,11 @@ impl std::convert::From<&str> for Utf8StaticStringDependency {
 // dummy impl for Reflect
 impl Reflect for Utf8StaticStringDependency {
     fn reflect() -> UserDefinedType {
+        lazy_static! {
+            static ref TYPE_NAME: Arc<String> = Arc::new("StaticString".into());
+        }
         UserDefinedType {
-            name: String::from("StaticString"),
+            name: TYPE_NAME.clone(),
             size: 0,
             members: vec![],
             is_reference: false,
@@ -73,8 +78,11 @@ pub struct StaticStringDependency {
 // dummy impl for Reflect
 impl Reflect for StaticStringDependency {
     fn reflect() -> UserDefinedType {
+        lazy_static! {
+            static ref TYPE_NAME: Arc<String> = Arc::new("StaticStringDependency".into());
+        }
         UserDefinedType {
-            name: String::from("StaticStringDependency"),
+            name: TYPE_NAME.clone(),
             size: 0,
             members: vec![],
             is_reference: false,

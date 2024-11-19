@@ -1,8 +1,9 @@
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Member {
-    pub name: String,
+    pub name: Arc<String>,
     pub type_name: String,
     pub offset: usize,
     pub size: usize,
@@ -11,7 +12,7 @@ pub struct Member {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct UserDefinedType {
-    pub name: String,
+    pub name: Arc<String>,
     pub size: usize,
     pub members: Vec<Member>,
     pub is_reference: bool,

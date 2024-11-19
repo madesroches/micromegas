@@ -4,8 +4,8 @@ use std::sync::Arc;
 //todo: type name and member names should use Arc<String>
 #[derive(Debug, Clone)]
 pub struct Object {
-    pub type_name: String,
-    pub members: Vec<(String, Value)>,
+    pub type_name: Arc<String>,
+    pub members: Vec<(Arc<String>, Value)>,
 }
 
 impl Object {
@@ -14,7 +14,7 @@ impl Object {
         T: TransitValue,
     {
         for m in &self.members {
-            if m.0 == member_name {
+            if *m.0 == member_name {
                 return T::get(&m.1);
             }
         }
@@ -23,7 +23,7 @@ impl Object {
 
     pub fn get_ref(&self, member_name: &str) -> Result<&Value> {
         for m in &self.members {
-            if m.0 == member_name {
+            if *m.0 == member_name {
                 return Ok(&m.1);
             }
         }

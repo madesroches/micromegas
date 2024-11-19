@@ -4,7 +4,10 @@
 use micromegas_transit::{
     prelude::*, string_codec::StringCodec, Member, StaticStringDependency, UserDefinedType,
 };
-use std::hash::{Hash, Hasher};
+use std::{
+    hash::{Hash, Hasher},
+    sync::Arc,
+};
 
 #[derive(Eq, PartialEq, Debug, Clone)]
 pub struct StaticStringRef {
@@ -21,11 +24,15 @@ impl Hash for StaticStringRef {
 
 impl Reflect for StaticStringRef {
     fn reflect() -> UserDefinedType {
+        lazy_static::lazy_static! {
+            static ref TYPE_NAME: Arc<String> = Arc::new("StaticStringRef".into());
+            static ref ID: Arc<String> = Arc::new("id".into());
+        }
         UserDefinedType {
-            name: String::from("StaticStringRef"),
+            name: TYPE_NAME.clone(),
             size: std::mem::size_of::<Self>(),
             members: vec![Member {
-                name: "id".to_string(),
+                name: ID.clone(),
                 type_name: "usize".to_string(),
                 offset: memoffset::offset_of!(Self, ptr),
                 size: std::mem::size_of::<*const u8>(),

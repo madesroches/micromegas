@@ -28,15 +28,15 @@ fn test_log_interop_metadata() {
     let obj_meta = &stream_proto.objects_metadata;
     obj_meta
         .iter()
-        .position(|udt| udt.name == "LogStringInteropEventV3")
+        .position(|udt| *udt.name == "LogStringInteropEventV3")
         .unwrap();
     obj_meta
         .iter()
-        .position(|udt| udt.name == "LogStaticStrInteropEvent")
+        .position(|udt| *udt.name == "LogStaticStrInteropEvent")
         .unwrap();
     obj_meta
         .iter()
-        .position(|udt| udt.name == "StringId")
+        .position(|udt| *udt.name == "StringId")
         .unwrap();
 }
 

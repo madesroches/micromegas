@@ -1,4 +1,6 @@
 use crate::{Reflect, UserDefinedType};
+use lazy_static::lazy_static;
+use std::sync::Arc;
 
 #[repr(u8)]
 #[derive(Eq, PartialEq, Debug, Copy, Clone)]
@@ -10,8 +12,11 @@ pub enum StringCodec {
 
 impl Reflect for StringCodec {
     fn reflect() -> UserDefinedType {
+        lazy_static! {
+            static ref TYPE_NAME: Arc<String> = Arc::new("StringCodec".into());
+        }
         UserDefinedType {
-            name: String::from("StringCodec"),
+            name: TYPE_NAME.clone(),
             size: 1,
             members: vec![],
             is_reference: false,

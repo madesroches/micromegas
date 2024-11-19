@@ -78,7 +78,7 @@ pub fn derive_reflect_impl(input: TokenStream) -> TokenStream {
         let member_type_name = member_type.to_string();
         let is_reference = &m.2;
         quote! {
-            micromegas_transit::Member{ name: String::from(#member_name),
+            micromegas_transit::Member{ name: std::sync::Arc::new(String::from(#member_name)),
                     type_name: String::from(#member_type_name),
                     offset: memoffset::offset_of!(#udt_identifier,#member_ident),
                     size: std::mem::size_of::<#member_type>(),
@@ -91,7 +91,7 @@ pub fn derive_reflect_impl(input: TokenStream) -> TokenStream {
         impl micromegas_transit::Reflect for #udt_identifier{
             fn reflect() -> micromegas_transit::UserDefinedType{
                 micromegas_transit::UserDefinedType{
-                    name: String::from(#udt_name),
+                    name: std::sync::Arc::new(String::from(#udt_name)),
                     size: std::mem::size_of::<#udt_identifier>(),
                     members: vec![#(#members_toks)*],
                     is_reference: false,

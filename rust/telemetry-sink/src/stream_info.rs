@@ -9,7 +9,7 @@ fn extract_secondary_udts(
     udt: &UserDefinedType,
 ) {
     for secondary in &udt.secondary_udts {
-        secondary_types.insert(secondary.name.clone(), secondary.clone());
+        secondary_types.insert((*secondary.name).clone(), secondary.clone());
         extract_secondary_udts(secondary_types, secondary);
     }
 }

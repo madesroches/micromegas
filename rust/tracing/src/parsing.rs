@@ -7,6 +7,15 @@ use micromegas_transit::{
 };
 use std::{collections::HashMap, sync::Arc};
 
+lazy_static::lazy_static! {
+    static ref TIME: Arc<String> = Arc::new("time".into());
+    static ref LEVEL: Arc<String> = Arc::new("level".into());
+    static ref TARGET: Arc<String> = Arc::new("target".into());
+    static ref MSG: Arc<String> = Arc::new("msg".into());
+    static ref DESC: Arc<String> = Arc::new("desc".into());
+    static ref PROPERTIES: Arc<String> = Arc::new("properties".into());
+}
+
 fn parse_log_string_event(
     udt: &UserDefinedType,
     _udts: &[UserDefinedType],
@@ -20,9 +29,9 @@ fn parse_log_string_event(
         .get(&desc_id)
         .with_context(|| format!("desc member {} of LogStringEvent not found", desc_id))?;
     let members = vec![
-        (String::from("time"), Value::I64(time)),
-        (String::from("msg"), Value::String(Arc::new(msg))),
-        (String::from("desc"), desc.clone()),
+        (TIME.clone(), Value::I64(time)),
+        (MSG.clone(), Value::String(Arc::new(msg))),
+        (DESC.clone(), desc.clone()),
     ];
     Ok(Value::Object(Arc::new(Object {
         type_name: udt.name.clone(),
@@ -44,9 +53,9 @@ fn parse_log_string_event_v2(
         .with_context(|| format!("desc member {} of LogStringEvent not found", desc_id))?
         .clone();
     let members = vec![
-        (String::from("time"), Value::I64(time)),
-        (String::from("msg"), Value::String(Arc::new(msg))),
-        (String::from("desc"), desc),
+        (TIME.clone(), Value::I64(time)),
+        (MSG.clone(), Value::String(Arc::new(msg))),
+        (DESC.clone(), desc),
     ];
     Ok(Value::Object(Arc::new(Object {
         type_name: udt.name.clone(),
@@ -62,7 +71,7 @@ fn parse_log_string_interop_event_v3(
 ) -> Result<Value> {
     let string_ref_metadata = udts
         .iter()
-        .find(|t| t.name == "StaticStringRef")
+        .find(|t| *t.name == "StaticStringRef")
         .with_context(|| {
             "Can't parse log string interop event with no metadata for StaticStringRef"
         })?;
@@ -78,10 +87,10 @@ fn parse_log_string_interop_event_v3(
     object_window = advance_window(object_window, string_ref_metadata.size);
     let msg = read_advance_string(&mut object_window)?;
     let members = vec![
-        (String::from("time"), Value::I64(time)),
-        (String::from("level"), Value::U8(level)),
-        (String::from("target"), target),
-        (String::from("msg"), Value::String(Arc::new(msg))),
+        (TIME.clone(), Value::I64(time)),
+        (LEVEL.clone(), Value::U8(level)),
+        (TARGET.clone(), target),
+        (MSG.clone(), Value::String(Arc::new(msg))),
     ];
     Ok(Value::Object(Arc::new(Object {
         type_name: udt.name.clone(),
@@ -109,10 +118,10 @@ fn parse_tagged_log_string(
     let msg = read_advance_string(&mut object_window)?;
 
     let members = vec![
-        (String::from("time"), Value::I64(time)),
-        (String::from("desc"), desc),
-        (String::from("properties"), properties),
-        (String::from("msg"), Value::String(Arc::new(msg))),
+        (TIME.clone(), Value::I64(time)),
+        (DESC.clone(), desc),
+        (PROPERTIES.clone(), properties),
+        (MSG.clone(), Value::String(Arc::new(msg))),
     ];
     Ok(Value::Object(Arc::new(Object {
         type_name: udt.name.clone(),
@@ -128,7 +137,7 @@ fn parse_log_string_interop_event(
 ) -> Result<Value> {
     let stringid_metadata = udts
         .iter()
-        .find(|t| t.name == "StringId")
+        .find(|t| *t.name == "StringId")
         .with_context(|| "Can't parse log string interop event with no metadata for StringId")?;
     unsafe {
         let time: i64 = read_consume_pod(&mut object_window);
@@ -143,10 +152,10 @@ fn parse_log_string_interop_event(
         object_window = advance_window(object_window, stringid_metadata.size);
         let msg = <LegacyDynString as InProcSerialize>::read_value(object_window);
         let members = vec![
-            (String::from("time"), Value::I64(time)),
-            (String::from("level"), Value::U32(level)),
-            (String::from("target"), target),
-            (String::from("msg"), Value::String(Arc::new(msg.0))),
+            (TIME.clone(), Value::I64(time)),
+            (LEVEL.clone(), Value::U32(level)),
+            (TARGET.clone(), target),
+            (MSG.clone(), Value::String(Arc::new(msg.0))),
         ];
         Ok(Value::Object(Arc::new(Object {
             type_name: udt.name.clone(),

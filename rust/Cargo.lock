@@ -2367,6 +2367,7 @@ name = "micromegas-transit"
 version = "0.2.1"
 dependencies = [
  "anyhow",
+ "lazy_static",
  "log",
  "memoffset",
  "micromegas-derive-transit",

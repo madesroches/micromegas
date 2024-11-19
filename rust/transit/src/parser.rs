@@ -4,6 +4,7 @@ use crate::{
     UserDefinedType,
 };
 use anyhow::{bail, Context, Result};
+use lazy_static::lazy_static;
 use std::{collections::HashMap, sync::Arc};
 
 fn parse_property_set(
@@ -13,7 +14,7 @@ fn parse_property_set(
 ) -> Result<(u64, Value)> {
     let property_layout = udts
         .iter()
-        .find(|t| t.name == "Property")
+        .find(|t| *t.name == "Property")
         .with_context(|| "could not find Property layout")?;
 
     let object_id: u64 = read_consume_pod(&mut window);
@@ -27,20 +28,26 @@ fn parse_property_set(
             parse_pod_instance(property_layout, udts, dependencies, property_window)?
         {
             members.push((
-                (*obj.get::<Arc<String>>("name")?).clone(),
+                obj.get::<Arc<String>>("name")?,
                 Value::String(obj.get::<Arc<String>>("value")?),
             ));
         } else {
             bail!("invalid property in propertyset");
         }
     }
+
+    lazy_static! {
+        static ref PROPERTY_SET_TYPE_NAME: Arc<String> = Arc::new("property_set".into());
+    }
+
     let set = Value::Object(Arc::new(Object {
-        type_name: "property_set".into(),
+        type_name: PROPERTY_SET_TYPE_NAME.clone(),
         members,
     }));
     Ok((object_id, set))
 }
 
+// todo: move the parsing dynamically-sized deps from tracing to that crate
 pub fn read_dependencies(udts: &[UserDefinedType], buffer: &[u8]) -> Result<HashMap<u64, Value>> {
     let mut hash = HashMap::new();
     let mut offset = 0;
@@ -124,7 +131,7 @@ fn parse_custom_instance(
     dependencies: &HashMap<u64, Value>,
     object_window: &[u8],
 ) -> Result<Value> {
-    if let Some(reader) = custom_readers.get(&udt.name) {
+    if let Some(reader) = custom_readers.get(&*udt.name) {
         (*reader)(udt, udts, dependencies, object_window)
     } else {
         log::warn!("unknown custom object {}", &udt.name);
@@ -141,7 +148,7 @@ pub fn parse_pod_instance(
     dependencies: &HashMap<u64, Value>,
     object_window: &[u8],
 ) -> Result<Value> {
-    let mut members: Vec<(String, Value)> = vec![];
+    let mut members: Vec<(Arc<String>, Value)> = vec![];
     for member_meta in &udt.members {
         let name = member_meta.name.clone();
         let type_name = member_meta.type_name.clone();
@@ -203,7 +210,7 @@ pub fn parse_pod_instance(
                 non_intrinsic_member_type_name => {
                     if let Some(index) = udts
                         .iter()
-                        .position(|t| t.name == non_intrinsic_member_type_name)
+                        .position(|t| *t.name == non_intrinsic_member_type_name)
                     {
                         let member_udt = &udts[index];
                         parse_pod_instance(
@@ -225,7 +232,7 @@ pub fn parse_pod_instance(
 
     if udt.is_reference {
         // reference objects need a member called 'id' which is the key to the dependency
-        if let Some(id_index) = members.iter().position(|m| m.0 == "id") {
+        if let Some(id_index) = members.iter().position(|m| *m.0 == "id") {
             return Ok(members[id_index].1.clone());
         }
         bail!("reference object has no 'id' member");

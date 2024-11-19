@@ -2,7 +2,11 @@
 //! The user is expected to manage the cardinality.
 use crate::static_string_ref::StaticStringRef;
 use micromegas_transit::{prelude::*, UserDefinedType};
-use std::{collections::HashSet, hash::Hash, sync::Mutex};
+use std::{
+    collections::HashSet,
+    hash::Hash,
+    sync::{Arc, Mutex},
+};
 
 #[derive(Debug, Eq, PartialEq, Hash, Clone, TransitReflect)]
 pub struct Property {
@@ -61,8 +65,11 @@ impl PropertySetDependency {
 
 impl Reflect for PropertySetDependency {
     fn reflect() -> UserDefinedType {
+        lazy_static::lazy_static! {
+            static ref TYPE_NAME: Arc<String> = Arc::new("PropertySetDependency".into());
+        }
         UserDefinedType {
-            name: String::from("PropertySetDependency"),
+            name: TYPE_NAME.clone(),
             size: 0,
             members: vec![],
             is_reference: false,
