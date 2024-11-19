@@ -252,7 +252,7 @@ where
         };
         let instance = if is_size_dynamic {
             parse_custom_instance(
-                &custom_readers,
+                custom_readers,
                 udt,
                 udts,
                 dependencies,
