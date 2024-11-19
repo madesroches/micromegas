@@ -56,6 +56,7 @@ pub mod levels;
 pub mod logs;
 pub mod metrics;
 pub mod panic_hook;
+pub mod parsing;
 pub mod process_info;
 pub mod property_set;
 pub mod spans;

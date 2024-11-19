@@ -1,3 +1,5 @@
+//! Interned collection of PropertySet instances. Each PropertySet contains properties where the names and the values are statically allocated.
+//! The user is expected to manage the cardinality.
 use crate::static_string_ref::StaticStringRef;
 use micromegas_transit::{prelude::*, UserDefinedType};
 use std::{collections::HashSet, hash::Hash, sync::Mutex};

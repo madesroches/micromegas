@@ -1,10 +1,10 @@
 use crate::{
     advance_window, read_advance_string, read_any, read_consume_pod,
     value::{Object, Value},
-    InProcSerialize, LegacyDynString, UserDefinedType,
+    UserDefinedType,
 };
 use anyhow::{bail, Context, Result};
-use std::{collections::HashMap, hash::BuildHasher, sync::Arc};
+use std::{collections::HashMap, sync::Arc};
 
 fn parse_property_set(
     udts: &[UserDefinedType],
@@ -113,165 +113,9 @@ pub fn read_dependencies(udts: &[UserDefinedType], buffer: &[u8]) -> Result<Hash
     Ok(hash)
 }
 
-fn parse_log_string_event<S>(
-    udt: &UserDefinedType,
-    _udts: &[UserDefinedType],
-    dependencies: &HashMap<u64, Value, S>,
-    mut object_window: &[u8],
-) -> Result<Value>
-where
-    S: BuildHasher,
-{
-    let desc_id: u64 = read_consume_pod(&mut object_window);
-    let time: i64 = read_consume_pod(&mut object_window);
-    let msg = String::from_utf8(object_window.to_vec()).with_context(|| "parsing legacy string")?;
-    let desc = dependencies
-        .get(&desc_id)
-        .with_context(|| format!("desc member {} of LogStringEvent not found", desc_id))?;
-    let members = vec![
-        (String::from("time"), Value::I64(time)),
-        (String::from("msg"), Value::String(Arc::new(msg))),
-        (String::from("desc"), desc.clone()),
-    ];
-    Ok(Value::Object(Arc::new(Object {
-        type_name: udt.name.clone(),
-        members,
-    })))
-}
-
-fn parse_log_string_event_v2<S>(
-    udt: &UserDefinedType,
-    _udts: &[UserDefinedType],
-    dependencies: &HashMap<u64, Value, S>,
-    mut object_window: &[u8],
-) -> Result<Value>
-where
-    S: BuildHasher,
-{
-    let desc_id: u64 = read_consume_pod(&mut object_window);
-    let time: i64 = read_consume_pod(&mut object_window);
-    let msg = read_advance_string(&mut object_window).with_context(|| "parsing string")?;
-    let mut desc: Value = Value::None;
-    if let Some(found_desc) = dependencies.get(&desc_id) {
-        desc = found_desc.clone();
-    } else {
-        log::warn!("desc member {} of LogStringEvent not found", desc_id);
-    }
-    let members = vec![
-        (String::from("time"), Value::I64(time)),
-        (String::from("msg"), Value::String(Arc::new(msg))),
-        (String::from("desc"), desc),
-    ];
-    Ok(Value::Object(Arc::new(Object {
-        type_name: udt.name.clone(),
-        members,
-    })))
-}
-
-fn parse_log_string_interop_event_v3(
-    udt: &UserDefinedType,
-    udts: &[UserDefinedType],
-    dependencies: &HashMap<u64, Value>,
-    mut object_window: &[u8],
-) -> Result<Value> {
-    let string_ref_metadata = udts
-        .iter()
-        .find(|t| t.name == "StaticStringRef")
-        .with_context(|| {
-            "Can't parse log string interop event with no metadata for StaticStringRef"
-        })?;
-    let time: i64 = read_consume_pod(&mut object_window);
-    let level: u8 = read_consume_pod(&mut object_window);
-    let target = parse_pod_instance(
-        string_ref_metadata,
-        udts,
-        dependencies,
-        &object_window[0..string_ref_metadata.size],
-    )
-    .with_context(|| "parse_pod_instance")?;
-    object_window = advance_window(object_window, string_ref_metadata.size);
-    let msg = read_advance_string(&mut object_window)?;
-    let members = vec![
-        (String::from("time"), Value::I64(time)),
-        (String::from("level"), Value::U8(level)),
-        (String::from("target"), target),
-        (String::from("msg"), Value::String(Arc::new(msg))),
-    ];
-    Ok(Value::Object(Arc::new(Object {
-        type_name: udt.name.clone(),
-        members,
-    })))
-}
-
-fn parse_tagged_log_string(
-    udt: &UserDefinedType,
-    _udts: &[UserDefinedType],
-    dependencies: &HashMap<u64, Value>,
-    mut object_window: &[u8],
-) -> Result<Value> {
-    let desc_id: u64 = read_consume_pod(&mut object_window);
-    let desc = dependencies
-        .get(&desc_id)
-        .with_context(|| "fetching desc in parse_tagged_log_string")?
-        .clone();
-    let properties_id: u64 = read_consume_pod(&mut object_window);
-    let properties = dependencies
-        .get(&properties_id)
-        .with_context(|| "fetching property set in parse_tagged_log_string")?
-        .clone();
-    let time: i64 = read_consume_pod(&mut object_window);
-    let msg = read_advance_string(&mut object_window)?;
-
-    let members = vec![
-        (String::from("time"), Value::I64(time)),
-        (String::from("desc"), desc),
-        (String::from("properties"), properties),
-        (String::from("msg"), Value::String(Arc::new(msg))),
-    ];
-    Ok(Value::Object(Arc::new(Object {
-        type_name: udt.name.clone(),
-        members,
-    })))
-}
-
-fn parse_log_string_interop_event(
-    udt: &UserDefinedType,
-    udts: &[UserDefinedType],
-    dependencies: &HashMap<u64, Value>,
-    mut object_window: &[u8],
-) -> Result<Value> {
-    let stringid_metadata = udts
-        .iter()
-        .find(|t| t.name == "StringId")
-        .with_context(|| "Can't parse log string interop event with no metadata for StringId")?;
-    unsafe {
-        let time: i64 = read_consume_pod(&mut object_window);
-        let level: u32 = read_consume_pod(&mut object_window);
-        let target = parse_pod_instance(
-            stringid_metadata,
-            udts,
-            dependencies,
-            &object_window[0..stringid_metadata.size],
-        )
-        .with_context(|| "parse_pod_instance")?;
-        object_window = advance_window(object_window, stringid_metadata.size);
-        let msg = <LegacyDynString as InProcSerialize>::read_value(object_window);
-        let members = vec![
-            (String::from("time"), Value::I64(time)),
-            (String::from("level"), Value::U32(level)),
-            (String::from("target"), target),
-            (String::from("msg"), Value::String(Arc::new(msg.0))),
-        ];
-        Ok(Value::Object(Arc::new(Object {
-            type_name: udt.name.clone(),
-            members,
-        })))
-    }
-}
-
-type CustomReader =
+pub type CustomReader =
     Arc<dyn Fn(&UserDefinedType, &[UserDefinedType], &HashMap<u64, Value>, &[u8]) -> Result<Value>>;
-type CustomReaderMap = HashMap<String, CustomReader>;
+pub type CustomReaderMap = HashMap<String, CustomReader>;
 
 fn parse_custom_instance(
     custom_readers: &CustomReaderMap,
@@ -291,7 +135,7 @@ fn parse_custom_instance(
     }
 }
 
-fn parse_pod_instance(
+pub fn parse_pod_instance(
     udt: &UserDefinedType,
     udts: &[UserDefinedType],
     dependencies: &HashMap<u64, Value>,
@@ -396,6 +240,7 @@ fn parse_pod_instance(
 // parse_object_buffer calls fun for each object in the buffer until fun returns
 // `false`
 pub fn parse_object_buffer<F>(
+    custom_readers: &CustomReaderMap,
     dependencies: &HashMap<u64, Value>,
     udts: &[UserDefinedType],
     buffer: &[u8],
@@ -404,22 +249,6 @@ pub fn parse_object_buffer<F>(
 where
     F: FnMut(Value) -> Result<bool>,
 {
-    let mut custom_readers: CustomReaderMap = HashMap::new();
-    custom_readers.insert("LogStringEvent".into(), Arc::new(parse_log_string_event));
-    custom_readers.insert(
-        "LogStringEventV2".into(),
-        Arc::new(parse_log_string_event_v2),
-    );
-    custom_readers.insert(
-        "LogStringInteropEventV2".into(),
-        Arc::new(parse_log_string_interop_event),
-    );
-    custom_readers.insert(
-        "LogStringInteropEventV3".into(),
-        Arc::new(parse_log_string_interop_event_v3),
-    );
-    custom_readers.insert("TaggedLogString".into(), Arc::new(parse_tagged_log_string));
-
     let mut offset = 0;
     while offset < buffer.len() {
         let type_index = buffer[offset] as usize;
