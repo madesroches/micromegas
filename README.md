@@ -67,7 +67,7 @@ Released [version 0.2.1](https://crates.io/crates/micromegas)
 
  * FlightSQL support
  * Measures and log entries can now be tagged with properties
-  * Not yet available in SQL queries
+   * Not yet available in SQL queries
 
 ### October 2024
 Released [version 0.2.0](https://crates.io/crates/micromegas)
