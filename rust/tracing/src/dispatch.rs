@@ -97,21 +97,29 @@ pub fn float_metric(metric_desc: &'static StaticMetricMetadata, value: f64) {
 }
 
 #[inline(always)]
-pub fn tagged_float_metric(value: f64, properties: &'static PropertySet) {
+pub fn tagged_float_metric(
+    desc: &'static StaticMetricMetadata,
+    properties: &'static PropertySet,
+    value: f64,
+) {
     unsafe {
         #[allow(static_mut_refs)]
         if let Some(d) = &mut G_DISPATCH {
-            d.tagged_float_metric(value, properties);
+            d.tagged_float_metric(desc, properties, value);
         }
     }
 }
 
 #[inline(always)]
-pub fn tagged_integer_metric(value: u64, properties: &'static PropertySet) {
+pub fn tagged_integer_metric(
+    desc: &'static StaticMetricMetadata,
+    properties: &'static PropertySet,
+    value: u64,
+) {
     unsafe {
         #[allow(static_mut_refs)]
         if let Some(d) = &mut G_DISPATCH {
-            d.tagged_integer_metric(value, properties);
+            d.tagged_integer_metric(desc, properties, value);
         }
     }
 }
@@ -470,12 +478,18 @@ impl Dispatch {
     }
 
     #[inline]
-    fn tagged_float_metric(&mut self, value: f64, properties: &'static PropertySet) {
+    fn tagged_float_metric(
+        &mut self,
+        desc: &'static StaticMetricMetadata,
+        properties: &'static PropertySet,
+        value: f64,
+    ) {
         let time = now();
         let mut metrics_stream = self.metrics_stream.lock().unwrap();
         metrics_stream
             .get_events_mut()
             .push(TaggedFloatMetricEvent {
+                desc,
                 properties,
                 value,
                 time,
@@ -488,12 +502,18 @@ impl Dispatch {
     }
 
     #[inline]
-    fn tagged_integer_metric(&mut self, value: u64, properties: &'static PropertySet) {
+    fn tagged_integer_metric(
+        &mut self,
+        desc: &'static StaticMetricMetadata,
+        properties: &'static PropertySet,
+        value: u64,
+    ) {
         let time = now();
         let mut metrics_stream = self.metrics_stream.lock().unwrap();
         metrics_stream
             .get_events_mut()
             .push(TaggedIntegerMetricEvent {
+                desc,
                 properties,
                 value,
                 time,

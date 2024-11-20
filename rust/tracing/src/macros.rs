@@ -127,9 +127,17 @@ macro_rules! imetric {
             };
         $crate::dispatch::int_metric(&METRIC_METADATA, $value);
     }};
-    ($value:expr, $properties:expr) => {{
-        //todo: put properties first
-        $crate::dispatch::tagged_integer_metric($value, $properties);
+    ($name:literal, $unit:literal, $properties:expr, $value:expr) => {{
+        static METRIC_METADATA: $crate::metrics::StaticMetricMetadata =
+            $crate::metrics::StaticMetricMetadata {
+                lod: $crate::levels::Verbosity::Max,
+                name: $name,
+                unit: $unit,
+                target: module_path!(),
+                file: file!(),
+                line: line!(),
+            };
+        $crate::dispatch::tagged_integer_metric(&METRIC_METADATA, $properties, $value);
     }};
 }
 
@@ -160,8 +168,17 @@ macro_rules! fmetric {
         $crate::dispatch::float_metric(&METRIC_METADATA, $value);
     }};
 
-    ($value:expr, $properties:expr) => {{
-        $crate::dispatch::tagged_float_metric($value, $properties);
+    ($name:literal, $unit:literal, $properties:expr, $value:expr) => {{
+        static METRIC_METADATA: $crate::metrics::StaticMetricMetadata =
+            $crate::metrics::StaticMetricMetadata {
+                lod: $crate::levels::Verbosity::Max,
+                name: $name,
+                unit: $unit,
+                target: module_path!(),
+                file: file!(),
+                line: line!(),
+            };
+        $crate::dispatch::tagged_float_metric(&METRIC_METADATA, $properties, $value);
     }};
 }
 

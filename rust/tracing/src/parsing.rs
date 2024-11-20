@@ -181,7 +181,7 @@ fn parse_property_set(
     let nb_properties: u32 = read_consume_pod(&mut window);
     let mut members = vec![];
     for i in 0..nb_properties {
-        let property_size = property_layout.size as usize;
+        let property_size = property_layout.size;
         let begin = i as usize * property_size;
         let property_window = &window[begin..begin + property_size];
         if let Value::Object(obj) =
