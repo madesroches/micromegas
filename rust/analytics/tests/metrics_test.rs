@@ -1,9 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use micromegas_analytics::{measure::measure_from_value, payload::parse_block, time::ConvertTicks};
-use micromegas_telemetry_sink::{
-    stream_block::StreamBlock, stream_info::make_stream_info, TelemetryGuard,
-};
+use micromegas_telemetry_sink::{stream_block::StreamBlock, stream_info::make_stream_info};
 use micromegas_tracing::{
     dispatch::make_process_info,
     event::TracingBlock,
@@ -18,8 +16,6 @@ use micromegas_tracing::{
 
 #[test]
 fn test_static_metrics() {
-    let _telemetry_guard = TelemetryGuard::new();
-
     let process_id = uuid::Uuid::new_v4();
     let process_info = make_process_info(process_id, Some(uuid::Uuid::new_v4()));
     let mut stream = MetricsStream::new(1024, process_id, &[], HashMap::new());
@@ -63,8 +59,6 @@ fn test_static_metrics() {
 
 #[test]
 fn test_tagged_measures() {
-    let _telemetry_guard = TelemetryGuard::new();
-
     let process_id = uuid::Uuid::new_v4();
     let process_info = Arc::new(make_process_info(process_id, Some(uuid::Uuid::new_v4())));
     let mut stream = MetricsStream::new(1024, process_id, &[], HashMap::new());
