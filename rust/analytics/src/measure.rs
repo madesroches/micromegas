@@ -105,12 +105,36 @@ pub fn measure_from_value(
                 let value = obj
                     .get::<u64>("value")
                     .with_context(|| "reading value from TaggedIntegerMetricEvent")?;
+                let desc = obj
+                    .get::<Arc<Object>>("desc")
+                    .with_context(|| "reading desc from IntegerMetricEvent")?;
+                let mut target = desc
+                    .get::<Arc<String>>("target")
+                    .with_context(|| "reading target from IntegerMetricEvent")?;
+                let mut name = desc
+                    .get::<Arc<String>>("name")
+                    .with_context(|| "reading name from IntegerMetricEvent")?;
+                let mut unit = desc
+                    .get::<Arc<String>>("unit")
+                    .with_context(|| "reading unit from IntegerMetricEvent")?;
                 let properties = obj
                     .get::<Arc<Object>>("properties")
                     .with_context(|| "reading properties from TaggedIntegerMetricEvent")?;
-                let target = properties.get::<Arc<String>>("target").unwrap_or_default();
-                let name = properties.get::<Arc<String>>("name").unwrap_or_default();
-                let unit = properties.get::<Arc<String>>("unit").unwrap_or_default();
+                for (prop_name, prop_value) in &properties.members {
+                    match (prop_name.as_str(), prop_value) {
+                        ("target", Value::String(value_str)) => {
+                            target = value_str.clone();
+                        }
+                        ("name", Value::String(value_str)) => {
+                            name = value_str.clone();
+                        }
+                        ("unit", Value::String(value_str)) => {
+                            unit = value_str.clone();
+                        }
+                        (&_, _) => {}
+                    }
+                }
+
                 if *unit == "ticks" {
                     lazy_static::lazy_static! {
                         static ref SECONDS_METRIC_UNIT: Arc<String> = Arc::new( String::from("seconds"));
@@ -142,12 +166,35 @@ pub fn measure_from_value(
                 let value = obj
                     .get::<f64>("value")
                     .with_context(|| "reading value from TaggedFloatMetricEvent")?;
+                let desc = obj
+                    .get::<Arc<Object>>("desc")
+                    .with_context(|| "reading desc from TaggedFloatMetricEvent")?;
+                let mut target = desc
+                    .get::<Arc<String>>("target")
+                    .with_context(|| "reading target from TaggedFloatMetricEvent")?;
+                let mut name = desc
+                    .get::<Arc<String>>("name")
+                    .with_context(|| "reading name from TaggedFloatMetricEvent")?;
+                let mut unit = desc
+                    .get::<Arc<String>>("unit")
+                    .with_context(|| "reading unit from TaggedFloatMetricEvent")?;
                 let properties = obj
                     .get::<Arc<Object>>("properties")
                     .with_context(|| "reading properties from TaggedFloatMetricEvent")?;
-                let target = properties.get::<Arc<String>>("target").unwrap_or_default();
-                let name = properties.get::<Arc<String>>("name").unwrap_or_default();
-                let unit = properties.get::<Arc<String>>("unit").unwrap_or_default();
+                for (prop_name, prop_value) in &properties.members {
+                    match (prop_name.as_str(), prop_value) {
+                        ("target", Value::String(value_str)) => {
+                            target = value_str.clone();
+                        }
+                        ("name", Value::String(value_str)) => {
+                            name = value_str.clone();
+                        }
+                        ("unit", Value::String(value_str)) => {
+                            unit = value_str.clone();
+                        }
+                        (&_, _) => {}
+                    }
+                }
                 Ok(Some(Measure {
                     process,
                     time,

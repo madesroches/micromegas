@@ -83,18 +83,22 @@ fn test_metrics(state: &SharedState) {
     imetric!("Frame Time", "ticks", 1000);
     fmetric!("Frame Time", "ticks", 1.0);
     fmetric!(
-        1.0,
+        "",
+        "",
         PropertySet::find_or_create(vec![
             Property::new("name", "road_width"),
             Property::new("animal", "chicken"),
-        ])
+        ]),
+        1.0
     );
     imetric!(
-        2,
+        "",
+        "",
         PropertySet::find_or_create(vec![
             Property::new("name", "road_width"),
             Property::new("animal", "chicken"),
-        ])
+        ]),
+        2
     );
     flush_metrics_buffer();
     expect_state!(state, Some(State::ProcessMetricsBlock(4)));

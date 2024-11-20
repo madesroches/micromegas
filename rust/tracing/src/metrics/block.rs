@@ -96,9 +96,11 @@ impl ExtractDeps for MetricsMsgQueue {
                     record_metric_event_dependencies(evt.desc, &mut recorded_deps, &mut deps);
                 }
                 MetricsMsgQueueAny::TaggedFloatMetricEvent(evt) => {
+                    record_metric_event_dependencies(evt.desc, &mut recorded_deps, &mut deps);
                     record_properties(evt.properties, &mut recorded_deps, &mut deps);
                 }
                 MetricsMsgQueueAny::TaggedIntegerMetricEvent(evt) => {
+                    record_metric_event_dependencies(evt.desc, &mut recorded_deps, &mut deps);
                     record_properties(evt.properties, &mut recorded_deps, &mut deps);
                 }
             }
