@@ -35,7 +35,7 @@ struct LogBridge : public FOutputDevice
 			default:
 				level = LogLevel::Trace;
 		};
-		LogInterop(LogStringInteropEvent(FPlatformTime::Cycles64(),
+		Dispatch::LogInterop(LogStringInteropEvent(FPlatformTime::Cycles64(),
 			level,
 			StaticStringRef(Category.GetDisplayNameEntry()),
 			DynamicString(V)));

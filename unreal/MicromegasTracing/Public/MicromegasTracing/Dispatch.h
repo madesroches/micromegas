@@ -25,31 +25,34 @@ namespace MicromegasTracing
 			size_t ThreadBufferSize);
 		~Dispatch();
 
-		friend CORE_API void Shutdown();
-		friend CORE_API void FlushLogStream();
-		friend CORE_API void FlushMetricStream();
-		friend CORE_API void FlushCurrentThreadStream();
-		friend CORE_API void LogInterop(const LogStringInteropEvent& Event);
-		friend CORE_API void LogStaticStr(const LogStaticStrEvent& Event);
-		friend CORE_API void IntMetric(const IntegerMetricEvent& Event);
-		friend CORE_API void FloatMetric(const FloatMetricEvent& Event);
-		friend CORE_API void BeginScope(const BeginThreadSpanEvent& Event);
-		friend CORE_API void EndScope(const EndThreadSpanEvent& Event);
-		friend CORE_API void BeginNamedSpan(const BeginThreadNamedSpanEvent& Event);
-		friend CORE_API void EndNamedSpan(const EndThreadSpanEvent& Event);
+		static void InitCurrentThreadStream();
+		static void Shutdown();
+		static void FlushLogStream();
+		static void FlushMetricStream();
+		static void FlushCurrentThreadStream();
+		static void LogInterop(const LogStringInteropEvent& Event);
+		static void LogStaticStr(const LogStaticStrEvent& Event);
+		static void IntMetric(const MetricMetadata* desc, uint64 value, uint64 timestamp);
+		static void FloatMetric(const MetricMetadata* desc, double value, uint64 timestamp);
+		static void BeginScope(const BeginThreadSpanEvent& Event);
+		static void EndScope(const EndThreadSpanEvent& Event);
+		static void BeginNamedSpan(const BeginThreadNamedSpanEvent& Event);
+		static void EndNamedSpan(const EndThreadNamedSpanEvent& Event);
 
-		friend CORE_API void ForEachThreadStream(ThreadStreamCallback Callback);
-
-		template <typename T>
-		friend void QueueLogEntry(const T& Event);
+		static void ForEachThreadStream(ThreadStreamCallback Callback);
 
 		template <typename T>
-		friend void QueueMetric(const T& Event);
+		static void QueueLogEntry(const T& Event);
 
 		template <typename T>
-		friend void QueueThreadEvent(const T& Event);
+		static void QueueMetric(const T& Event);
 
-		friend ThreadStream* GetCurrentThreadStream();
+		template <typename T>
+		static void QueueThreadEvent(const T& Event);
+
+		static ThreadStream* GetCurrentThreadStream();
+
+		static PropertySetStore* GetPropertySetStore();
 
 	private:
 		Dispatch(NewGuid AllocNewGuid,
@@ -81,18 +84,10 @@ namespace MicromegasTracing
 		UE::FMutex ThreadStreamsMutex;
 		TArray<ThreadStream*> ThreadStreams;
 		size_t ThreadBufferSize;
+
+		PropertySetStore* PropertySets;
 	};
 
 	extern CORE_API Dispatch* GDispatch;
-
-	CORE_API void Shutdown();
-	CORE_API void FlushLogStream();
-	CORE_API void FlushMetricStream();
-	CORE_API void InitCurrentThreadStream();
-	CORE_API void FlushCurrentThreadStream();
-	CORE_API void LogInterop(const LogStringInteropEvent& Event);
-	CORE_API void ForEachThreadStream(ThreadStreamCallback Callback);
-	CORE_API void BeginNamedSpan(const BeginThreadNamedSpanEvent& Event);
-	CORE_API void EndNamedSpan(const EndThreadNamedSpanEvent& Event);
 
 } // namespace MicromegasTracing

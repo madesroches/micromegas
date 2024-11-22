@@ -122,7 +122,7 @@ void HttpEventSink::OnAuthUpdated()
 
 void HttpEventSink::OnStartup(const MicromegasTracing::ProcessInfoPtr& ProcessInfo)
 {
-	MicromegasTracing::InitCurrentThreadStream();
+	MicromegasTracing::Dispatch::InitCurrentThreadStream();
 	IncrementQueueSize();
 	Queue.Enqueue([this, ProcessInfo]()
 		{

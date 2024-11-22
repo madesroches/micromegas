@@ -86,7 +86,7 @@ void FMicromegasTelemetrySinkModule::PreUnloadCallback()
 void FMicromegasTelemetrySinkModule::ShutdownModule()
 {
 	FCoreDelegates::OnCommandletPostMain.RemoveAll(this);
-	MicromegasTracing::Shutdown();
+	MicromegasTracing::Dispatch::Shutdown();
 }
 
 void FMicromegasTelemetrySinkModule::InitTelemetry(const FString& BaseUrl, const SharedTelemetryAuthenticator& Auth)

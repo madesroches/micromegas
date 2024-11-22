@@ -10,6 +10,7 @@ namespace MicromegasTracing
 	typedef TSharedPtr<EventSink, ESPMode::ThreadSafe> EventSinkPtr;
 	struct LogStringInteropEvent;
 	struct LogStaticStrEvent;
+	struct MetricMetadata;
 	struct IntegerMetricEvent;
 	struct FloatMetricEvent;
 	struct BeginThreadSpanEvent;
@@ -40,4 +41,7 @@ namespace MicromegasTracing
 	typedef EventBlock<ThreadEventQueue> ThreadBlock;
 	typedef TSharedPtr<ThreadBlock, ESPMode::ThreadSafe> ThreadBlockPtr;
 	typedef EventStreamImpl<ThreadBlock, 128> ThreadStream;
+	class PropertySetStore;
+	class PropertySet;
+	class Property;
 } // namespace MicromegasTracing

@@ -2,11 +2,13 @@
 //
 //  MicromegasTracing/strings.h
 //
-#include <cassert>
-#include <vector>
+#include <cassert> //todo: change to check
+#include <vector> //todo: change to TArray
 #include "Misc/CString.h"
+#include "UObject/NameTypes.h"
 
 struct FNameEntry;
+class FName;
 
 namespace MicromegasTracing
 {
