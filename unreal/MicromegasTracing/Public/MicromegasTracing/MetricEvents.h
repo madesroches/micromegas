@@ -61,6 +61,22 @@ namespace MicromegasTracing
 		}
 	};
 
+	struct TaggedIntegerMetricEvent
+	{
+		const MetricMetadata* Desc;
+		const PropertySet* Properties;
+		uint64 Value;
+		uint64 Timestamp;
+
+		TaggedIntegerMetricEvent(const MetricMetadata* desc, const PropertySet* properties, uint64 value, uint64 timestamp)
+			: Desc(desc)
+			, Properties(properties)
+			, Value(value)
+			, Timestamp(timestamp)
+		{
+		}
+	};
+
 	struct TaggedFloatMetricEvent
 	{
 		const MetricMetadata* Desc;

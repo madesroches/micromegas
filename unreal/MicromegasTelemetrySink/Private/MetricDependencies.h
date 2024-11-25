@@ -3,9 +3,14 @@
 //  MicromegasTelemetrySink/MetricDependencies.h
 //
 #include "MicromegasTracing/MetricEvents.h"
+#include "MicromegasTracing/PropertySet.h"
+#include "MicromegasTracing/PropertySetDependency.h"
+
 typedef MicromegasTracing::HeterogeneousQueue<
 	MicromegasTracing::StaticStringDependency,
-	MicromegasTracing::MetricMetadataDependency>
+	MicromegasTracing::MetricMetadataDependency,
+	MicromegasTracing::PropertySetDependency,
+	MicromegasTracing::Property>
 	MetricDependenciesQueue;
 
 struct ExtractMetricDependencies
@@ -42,6 +47,21 @@ struct ExtractMetricDependencies
 		}
 	}
 
+	void operator()(const MicromegasTracing::PropertySet* Properties)
+	{
+		bool alreadyInSet = false;
+		Ids.Add(Properties, &alreadyInSet);
+		if (!alreadyInSet)
+		{
+			for (const TPair<FName, FName>& Prop : Properties->GetContext())
+			{
+				(*this)(MicromegasTracing::StaticStringRef(Prop.Key));
+				(*this)(MicromegasTracing::StaticStringRef(Prop.Value));
+			}
+			Dependencies.Push(MicromegasTracing::PropertySetDependency(Properties));
+		}
+	}
+
 	void operator()(const MicromegasTracing::IntegerMetricEvent& event)
 	{
 		(*this)(event.Desc);
@@ -50,6 +70,18 @@ struct ExtractMetricDependencies
 	void operator()(const MicromegasTracing::FloatMetricEvent& event)
 	{
 		(*this)(event.Desc);
+	}
+
+	void operator()(const MicromegasTracing::TaggedIntegerMetricEvent& event)
+	{
+		(*this)(event.Desc);
+		(*this)(event.Properties);
+	}
+
+	void operator()(const MicromegasTracing::TaggedFloatMetricEvent& event)
+	{
+		(*this)(event.Desc);
+		(*this)(event.Properties);
 	}
 
 	ExtractMetricDependencies(const ExtractMetricDependencies&) = delete;

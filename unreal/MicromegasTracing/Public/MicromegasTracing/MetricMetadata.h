@@ -37,6 +37,38 @@ namespace MicromegasTracing
 	};
 
 	template <>
+	struct GetEventMetadata<TaggedIntegerMetricEvent>
+	{
+		UserDefinedType operator()()
+		{
+			return UserDefinedType(
+				TEXT("TaggedIntegerMetricEvent"),
+				sizeof(TaggedIntegerMetricEvent),
+				false,
+				{ MAKE_UDT_MEMBER_METADATA(TaggedIntegerMetricEvent, "desc", Desc, MetricMetadata*, true),
+					MAKE_UDT_MEMBER_METADATA(TaggedIntegerMetricEvent, "properties", Properties, PropertySet*, true),
+					MAKE_UDT_MEMBER_METADATA(TaggedIntegerMetricEvent, "value", Value, uint64, false),
+					MAKE_UDT_MEMBER_METADATA(TaggedIntegerMetricEvent, "time", Timestamp, uint64, false) });
+		}
+	};
+
+	template <>
+	struct GetEventMetadata<TaggedFloatMetricEvent>
+	{
+		UserDefinedType operator()()
+		{
+			return UserDefinedType(
+				TEXT("TaggedFloatMetricEvent"),
+				sizeof(TaggedFloatMetricEvent),
+				false,
+				{ MAKE_UDT_MEMBER_METADATA(TaggedFloatMetricEvent, "desc", Desc, MetricMetadata*, true),
+					MAKE_UDT_MEMBER_METADATA(TaggedFloatMetricEvent, "properties", Properties, PropertySet*, true),
+					MAKE_UDT_MEMBER_METADATA(TaggedFloatMetricEvent, "value", Value, f64, false),
+					MAKE_UDT_MEMBER_METADATA(TaggedFloatMetricEvent, "time", Timestamp, uint64, false) });
+		}
+	};
+
+	template <>
 	struct GetEventMetadata<MetricMetadataDependency>
 	{
 		UserDefinedType operator()()
