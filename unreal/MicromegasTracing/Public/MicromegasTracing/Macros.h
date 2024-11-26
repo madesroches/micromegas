@@ -3,11 +3,12 @@
 //  MicromegasTracing/Macros.h
 //
 #include "HAL/PlatformTime.h"
-#include "Misc/Optional.h"
 #include "MicromegasTracing/Dispatch.h"
 #include "MicromegasTracing/Fwd.h"
 #include "MicromegasTracing/LogEvents.h"
+#include "MicromegasTracing/MetricEvents.h"
 #include "MicromegasTracing/SpanEvents.h"
+#include "Misc/Optional.h"
 
 #define MICROMEGAS_LOG_STATIC(target, level, msg)                                                                             \
 	static const MicromegasTracing::LogMetadata PREPROCESSOR_JOIN(logMeta, __LINE__)(level, target, msg, __FILE__, __LINE__); \

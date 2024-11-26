@@ -51,9 +51,9 @@ void FMicromegasTelemetrySinkModule::OnEnable()
 	check(Authenticator.IsValid());
 	Flusher = MakeShared<FlushMonitor>();
 	SamplingController = MakeShared<FSamplingController>(Flusher);
-	MetricPub = MakeShared<MetricPublisher>();
 	TSharedPtr<MicromegasTracing::EventSink, ESPMode::ThreadSafe> Sink = InitHttpEventSink(UploadBaseUrl, Authenticator, SamplingController, Flusher);
 	Authenticator->Init(Sink);
+	MetricPub = MakeShared<MetricPublisher>();
 	CmdEnable.Reset();
 	InitLogInterop();
 	CmdFlush.Reset(new FAutoConsoleCommand(TEXT("telemetry.flush"),

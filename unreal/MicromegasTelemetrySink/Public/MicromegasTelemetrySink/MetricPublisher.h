@@ -4,8 +4,11 @@
 //
 #include "HAL/Platform.h"
 #include "Templates/SharedPointer.h"
+#include "Engine/EngineBaseTypes.h"
+#include "Engine/World.h"
 
 class UWorld;
+class ULevel;
 
 class MICROMEGASTELEMETRYSINK_API MetricPublisher
 {
@@ -15,9 +18,12 @@ public:
 
 private:
 	void Tick();
+	void UpdateMapInContext(UWorld* World);
 
-	void OnWorldCreated(UWorld* World);
+	void OnWorldInit(UWorld* /*World*/, const UWorld::InitializationValues /*IVS*/);
 	void OnWorldTornDown(UWorld* World);
+
+	FName CurrentWorld;
 };
 
 typedef TSharedPtr<MetricPublisher, ESPMode::ThreadSafe> SharedMetricPublisher;

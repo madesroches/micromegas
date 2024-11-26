@@ -54,6 +54,8 @@ namespace MicromegasTracing
 
 		static PropertySetStore* GetPropertySetStore();
 
+		static DefaultContext* GetDefaultContext();
+
 	private:
 		Dispatch(NewGuid AllocNewGuid,
 			const ProcessInfoPtr& ProcessInfo,
@@ -86,6 +88,7 @@ namespace MicromegasTracing
 		size_t ThreadBufferSize;
 
 		PropertySetStore* PropertySets;
+		DefaultContext* Ctx;
 	};
 
 	extern CORE_API Dispatch* GDispatch;

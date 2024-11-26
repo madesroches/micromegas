@@ -4,6 +4,7 @@
 #include "MicromegasTracing/Dispatch.h"
 #include "Async/UniqueLock.h"
 #include "HAL/PlatformProcess.h"
+#include "MicromegasTracing/DefaultContext.h"
 #include "MicromegasTracing/EventSink.h"
 #include "MicromegasTracing/EventStream.h"
 #include "MicromegasTracing/LogBlock.h"
@@ -32,6 +33,7 @@ namespace MicromegasTracing
 		, MetricBufferSize(InMetricBufferSize)
 		, ThreadBufferSize(InThreadBufferSize)
 		, PropertySets(new PropertySetStore())
+		, Ctx(new DefaultContext(PropertySets))
 	{
 		FString LogStreamId = AllocNewGuid();
 		LogBlockPtr NewLogBlock = MakeShared<LogBlock>(LogStreamId,
@@ -357,6 +359,16 @@ namespace MicromegasTracing
 			return nullptr;
 		}
 		return Dispatch->PropertySets;
+	}
+
+	DefaultContext* Dispatch::GetDefaultContext()
+	{
+		Dispatch* Dispatch = GDispatch;
+		if (!Dispatch)
+		{
+			return nullptr;
+		}
+		return Dispatch->Ctx;
 	}
 
 } // namespace MicromegasTracing

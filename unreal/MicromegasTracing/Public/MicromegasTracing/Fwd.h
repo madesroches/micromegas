@@ -46,4 +46,5 @@ namespace MicromegasTracing
 	class PropertySetStore;
 	class PropertySet;
 	struct Property;
+	class DefaultContext;
 } // namespace MicromegasTracing
