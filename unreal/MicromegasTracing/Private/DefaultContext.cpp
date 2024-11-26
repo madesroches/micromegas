@@ -56,6 +56,7 @@ namespace MicromegasTracing
 
 	void DefaultContext::UpdatePropertySet()
 	{
+		FPlatformMisc::MemoryBarrier(); // make sure property set is flushed before it's available to other threads
 		CurrentPropertySet = Store->Get(Context);
 	}
 

@@ -223,31 +223,56 @@ namespace MicromegasTracing
 	template <typename T>
 	void Dispatch::QueueMetric(const T& Event)
 	{
+		MetricMutex.Lock();
+		Metrics->GetCurrentBlock().GetEvents().Push(Event);
+		if (Metrics->IsFull())
+		{
+			FlushMetricStreamImpl(MetricMutex); // unlocks the mutex
+		}
+		else
+		{
+			MetricMutex.Unlock();
+		}
+	}
+
+	void Dispatch::IntMetric(const MetricMetadata* Desc, uint64 Value, uint64 Timestamp)
+	{
 		Dispatch* Dispatch = GDispatch;
 		if (!Dispatch)
 		{
 			return;
 		}
-		Dispatch->MetricMutex.Lock();
-		Dispatch->Metrics->GetCurrentBlock().GetEvents().Push(Event);
-		if (Dispatch->Metrics->IsFull())
-		{
-			Dispatch->FlushMetricStreamImpl(Dispatch->MetricMutex); // unlocks the mutex
-		}
-		else
-		{
-			Dispatch->MetricMutex.Unlock();
-		}
+		Dispatch->QueueMetric(TaggedIntegerMetricEvent(Desc, Dispatch->Ctx->GetCurrentPropertySet(), Value, Timestamp));
 	}
 
-	void Dispatch::IntMetric(const MetricMetadata* desc, uint64 value, uint64 timestamp)
+	void Dispatch::IntMetric(const MetricMetadata* Desc, const PropertySet* Properties, uint64 Value, uint64 Timestamp)
 	{
-		Dispatch::QueueMetric(IntegerMetricEvent(desc, value, timestamp));
+		Dispatch* Dispatch = GDispatch;
+		if (!Dispatch)
+		{
+			return;
+		}
+		Dispatch->QueueMetric(TaggedIntegerMetricEvent(Desc, Properties, Value, Timestamp));
 	}
 
-	void Dispatch::FloatMetric(const MetricMetadata* desc, double value, uint64 timestamp)
+	void Dispatch::FloatMetric(const MetricMetadata* Desc, double Value, uint64 Timestamp)
 	{
-		Dispatch::QueueMetric(FloatMetricEvent(desc, value, timestamp));
+		Dispatch* Dispatch = GDispatch;
+		if (!Dispatch)
+		{
+			return;
+		}
+		Dispatch->QueueMetric(TaggedFloatMetricEvent(Desc, Dispatch->Ctx->GetCurrentPropertySet(), Value, Timestamp));
+	}
+
+	void Dispatch::FloatMetric(const MetricMetadata* Desc, const PropertySet* Properties, double Value, uint64 Timestamp)
+	{
+		Dispatch* Dispatch = GDispatch;
+		if (!Dispatch)
+		{
+			return;
+		}
+		Dispatch->QueueMetric(TaggedFloatMetricEvent(Desc, Properties, Value, Timestamp));
 	}
 
 	ThreadStream* Dispatch::GetCurrentThreadStream()

@@ -32,8 +32,10 @@ namespace MicromegasTracing
 		static void FlushCurrentThreadStream();
 		static void LogInterop(const LogStringInteropEvent& Event);
 		static void LogStaticStr(const LogStaticStrEvent& Event);
-		static void IntMetric(const MetricMetadata* desc, uint64 value, uint64 timestamp);
-		static void FloatMetric(const MetricMetadata* desc, double value, uint64 timestamp);
+		static void IntMetric(const MetricMetadata* Desc, uint64 Value, uint64 Timestamp);
+		static void IntMetric(const MetricMetadata* Desc, const PropertySet* Properties, uint64 Value, uint64 Timestamp);
+		static void FloatMetric(const MetricMetadata* Desc, double Value, uint64 Timestamp);
+		static void FloatMetric(const MetricMetadata* Desc, const PropertySet* Properties, double Value, uint64 Timestamp);
 		static void BeginScope(const BeginThreadSpanEvent& Event);
 		static void EndScope(const EndThreadSpanEvent& Event);
 		static void BeginNamedSpan(const BeginThreadNamedSpanEvent& Event);
@@ -45,7 +47,7 @@ namespace MicromegasTracing
 		static void QueueLogEntry(const T& Event);
 
 		template <typename T>
-		static void QueueMetric(const T& Event);
+		void QueueMetric(const T& Event);
 
 		template <typename T>
 		static void QueueThreadEvent(const T& Event);
