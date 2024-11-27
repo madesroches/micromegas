@@ -29,6 +29,7 @@ use uuid::Uuid;
 
 const VIEW_SET_NAME: &str = "thread_spans";
 
+#[derive(Debug)]
 pub struct ThreadSpansViewMaker {}
 
 impl ViewMaker for ThreadSpansViewMaker {

@@ -22,6 +22,7 @@ use std::sync::Arc;
 /// df_spans = client.query(sql, begin_spans, end_spans)
 /// ```
 ///
+#[derive(Debug)]
 pub struct ViewInstanceTableFunction {
     lake: Arc<DataLakeConnection>,
     object_store: Arc<dyn ObjectStore>,

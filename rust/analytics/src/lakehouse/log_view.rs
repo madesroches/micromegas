@@ -27,6 +27,7 @@ use uuid::Uuid;
 
 const VIEW_SET_NAME: &str = "log_entries";
 
+#[derive(Debug)]
 pub struct LogViewMaker {}
 
 impl ViewMaker for LogViewMaker {

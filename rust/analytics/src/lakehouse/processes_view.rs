@@ -20,6 +20,7 @@ use std::sync::Arc;
 const VIEW_SET_NAME: &str = "processes";
 const VIEW_INSTANCE_ID: &str = "global";
 
+#[derive(Debug)]
 pub struct ProcessesViewMaker {}
 
 impl ViewMaker for ProcessesViewMaker {

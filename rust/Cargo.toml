@@ -40,7 +40,7 @@ ciborium = "0.2.2"
 clap = { version = "4", features = ["derive"] }
 colored = { version = "2" }
 ctrlc = "3.2.0"
-datafusion = "42.1"
+datafusion = "43"
 futures = "0.3"
 http= "1.1"
 lazy_static = "1.4"

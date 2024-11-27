@@ -8,6 +8,7 @@ use datafusion::{
 };
 use std::sync::Arc;
 
+#[derive(Debug)]
 pub struct TableScanRewrite {
     query_range: TimeRange,
 }

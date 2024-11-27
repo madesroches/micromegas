@@ -29,6 +29,7 @@ use uuid::Uuid;
 
 const VIEW_SET_NAME: &str = "measures";
 
+#[derive(Debug)]
 pub struct MetricsViewMaker {}
 
 impl ViewMaker for MetricsViewMaker {
