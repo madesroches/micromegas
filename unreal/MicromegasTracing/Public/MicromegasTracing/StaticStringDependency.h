@@ -2,6 +2,7 @@
 //
 //  MicromegasTracing/StaticStringDependency.h
 //
+#include "Containers/Array.h"
 #include "MicromegasTracing/QueueMetadata.h"
 #include "UObject/NameTypes.h"
 
@@ -46,7 +47,7 @@ namespace MicromegasTracing
 			return sizeof(uint64) + Serializer<DynamicString>::GetHeaderSize() + bytes;
 		}
 
-		static void Write(const StaticStringDependency& dep, std::vector<uint8>& buffer)
+		static void Write(const StaticStringDependency& dep, TArray<uint8>& buffer)
 		{
 			details::WritePOD(dep.Ref.GetID(), buffer);
 			if (dep.Ref.GetCodec() == StringCodec::UnrealName)

@@ -59,7 +59,7 @@ namespace MicromegasTracing
 
 		const DualTime& GetEndTime() const
 		{
-			assert(End.Timestamp != 0);
+			check(End.Timestamp != 0);
 			return End;
 		}
 

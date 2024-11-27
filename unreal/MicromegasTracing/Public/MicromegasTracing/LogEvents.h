@@ -2,6 +2,7 @@
 //
 //  MicromegasTracing/LogEvents.h
 //
+#include "Containers/Array.h"
 #include "MicromegasTracing/strings.h"
 
 namespace MicromegasTracing
@@ -61,7 +62,7 @@ namespace MicromegasTracing
 				+ Serializer<DynamicString>::GetSize(value.Msg);
 		}
 
-		static void Write(const T& value, std::vector<uint8>& buffer)
+		static void Write(const T& value, TArray<uint8>& buffer)
 		{
 			details::WritePOD(value.Timestamp, buffer);
 			details::WritePOD(value.Level, buffer);
@@ -71,7 +72,7 @@ namespace MicromegasTracing
 		}
 
 		template <typename Callback>
-		static void Read(Callback& callback, const std::vector<uint8>& buffer, size_t& cursor)
+		static void Read(Callback& callback, const TArray<uint8>& buffer, size_t& cursor)
 		{
 			uint64 Timestamp = details::ReadPOD<uint64>(buffer, cursor);
 			LogLevel::Type Level = details::ReadPOD<LogLevel::Type>(buffer, cursor);
@@ -166,7 +167,7 @@ namespace MicromegasTracing
 				+ Serializer<DynamicString>::GetSize(value.Msg);
 		}
 
-		static void Write(const T& value, std::vector<uint8>& buffer)
+		static void Write(const T& value, TArray<uint8>& buffer)
 		{
 			details::WritePOD(value.Desc, buffer);
 			details::WritePOD(value.Properties, buffer);
@@ -175,7 +176,7 @@ namespace MicromegasTracing
 		}
 
 		template <typename Callback>
-		static void Read(Callback& callback, const std::vector<uint8>& buffer, size_t& cursor)
+		static void Read(Callback& callback, const TArray<uint8>& buffer, size_t& cursor)
 		{
 			const LogMetadata* Desc = details::ReadPOD<LogMetadata*>(buffer, cursor);
 			const PropertySet* Properties = details::ReadPOD<PropertySet*>(buffer, cursor);
