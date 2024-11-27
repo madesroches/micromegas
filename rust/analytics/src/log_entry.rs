@@ -95,6 +95,31 @@ pub fn log_entry_from_value(
                     msg,
                 }))
             }
+            "TaggedLogInteropEvent" => {
+                let ticks = obj
+                    .get::<i64>("time")
+                    .with_context(|| format!("reading time from {}", obj.type_name.as_str()))?;
+                let level = obj
+                    .get::<u32>("level")
+                    .with_context(|| format!("reading level from {}", obj.type_name.as_str()))?;
+                let target = obj
+                    .get::<Arc<String>>("target")
+                    .with_context(|| format!("reading target from {}", obj.type_name.as_str()))?;
+                let msg = obj
+                    .get::<Arc<String>>("msg")
+                    .with_context(|| format!("reading msg from {}", obj.type_name.as_str()))?;
+                let _properties = obj.get::<Arc<Object>>("properties").with_context(|| {
+                    format!("reading properties from {}", obj.type_name.as_str())
+                })?;
+                let time = convert_ticks.ticks_to_nanoseconds(ticks);
+                Ok(Some(LogEntry {
+                    process,
+                    time,
+                    level: level as i32,
+                    target,
+                    msg,
+                }))
+            }
             "TaggedLogString" => {
                 let ticks = obj
                     .get::<i64>("time")
@@ -102,18 +127,30 @@ pub fn log_entry_from_value(
                 let msg = obj
                     .get::<Arc<String>>("msg")
                     .with_context(|| format!("reading msg from {}", obj.type_name.as_str()))?;
-                let _properties = obj.get::<Arc<Object>>("properties").with_context(|| {
-                    format!("reading properties from {}", obj.type_name.as_str())
-                })?;
                 let desc = obj
                     .get::<Arc<Object>>("desc")
                     .with_context(|| format!("reading desc from {}", obj.type_name.as_str()))?;
-                let level = desc
+                let mut level = desc
                     .get::<u32>("level")
                     .with_context(|| format!("reading level from {}", obj.type_name.as_str()))?;
-                let target = desc
+                let mut target = desc
                     .get::<Arc<String>>("target")
                     .with_context(|| format!("reading target from {}", obj.type_name.as_str()))?;
+                let properties = obj.get::<Arc<Object>>("properties").with_context(|| {
+                    format!("reading properties from {}", obj.type_name.as_str())
+                })?;
+                for (prop_name, prop_value) in &properties.members {
+                    match (prop_name.as_str(), prop_value) {
+                        ("target", Value::String(value_str)) => {
+                            target = value_str.clone();
+                        }
+                        ("level", Value::String(level_str)) => {
+                            level = Level::parse(level_str).with_context(|| "parsing log level")?
+                                as u32;
+                        }
+                        (&_, _) => {}
+                    }
+                }
                 Ok(Some(LogEntry {
                     process,
                     time: convert_ticks.ticks_to_nanoseconds(ticks),

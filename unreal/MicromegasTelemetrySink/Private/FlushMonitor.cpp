@@ -44,9 +44,9 @@ double FlushMonitor::Tick(MicromegasTracing::EventSink* sink)
 
 void FlushMonitor::Flush()
 {
-	MicromegasTracing::FlushLogStream();
-	MicromegasTracing::FlushMetricStream();
-	MicromegasTracing::ForEachThreadStream(&MarkStreamFull);
-	MicromegasTracing::FlushCurrentThreadStream();
+	MicromegasTracing::Dispatch::FlushLogStream();
+	MicromegasTracing::Dispatch::FlushMetricStream();
+	MicromegasTracing::Dispatch::ForEachThreadStream(&MarkStreamFull);
+	MicromegasTracing::Dispatch::FlushCurrentThreadStream();
 	LastFlush = FPlatformTime::Seconds();
 }

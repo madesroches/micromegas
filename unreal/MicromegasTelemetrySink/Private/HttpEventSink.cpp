@@ -122,7 +122,7 @@ void HttpEventSink::OnAuthUpdated()
 
 void HttpEventSink::OnStartup(const MicromegasTracing::ProcessInfoPtr& ProcessInfo)
 {
-	MicromegasTracing::InitCurrentThreadStream();
+	MicromegasTracing::Dispatch::InitCurrentThreadStream();
 	IncrementQueueSize();
 	Queue.Enqueue([this, ProcessInfo]()
 		{
@@ -135,7 +135,7 @@ void HttpEventSink::OnStartup(const MicromegasTracing::ProcessInfoPtr& ProcessIn
 
 void HttpEventSink::OnShutdown()
 {
-	MICROMEGAS_LOG_STATIC("MicromegasTelemetrySink", MicromegasTracing::LogLevel::Info, TEXT("Shutting down"));
+	MICROMEGAS_LOG("MicromegasTelemetrySink", MicromegasTracing::LogLevel::Info, TEXT("Shutting down"));
 	RequestShutdown = true;
 	WakeupThread->Trigger();
 	Thread->WaitForCompletion();
@@ -351,6 +351,6 @@ TSharedPtr<MicromegasTracing::EventSink, ESPMode::ThreadSafe> InitHttpEventSink(
 	const size_t THREAD_BUFFER_SIZE = 10 * 1024 * 1024;
 
 	Dispatch::Init(&CreateGuid, Process, Sink, LOG_BUFFER_SIZE, METRICS_BUFFER_SIZE, THREAD_BUFFER_SIZE);
-	UE_LOG(LogMicromegasTelemetrySink, Log, TEXT("Initializing Micromegas Telemetry for process %s"), *Process->ProcessId);
+	UE_LOG(LogMicromegasTelemetrySink, Log, TEXT("Initializing Micromegas Telemetry process_id=%s"), *Process->ProcessId);
 	return Sink;
 }

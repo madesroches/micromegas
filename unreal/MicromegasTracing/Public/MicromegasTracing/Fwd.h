@@ -8,10 +8,11 @@ namespace MicromegasTracing
 {
 	class EventSink;
 	typedef TSharedPtr<EventSink, ESPMode::ThreadSafe> EventSinkPtr;
-	struct LogStringInteropEvent;
-	struct LogStaticStrEvent;
-	struct IntegerMetricEvent;
-	struct FloatMetricEvent;
+	struct TaggedLogInteropEvent;
+	struct TaggedLogString;
+	struct MetricMetadata;
+	struct TaggedIntegerMetricEvent;
+	struct TaggedFloatMetricEvent;
 	struct BeginThreadSpanEvent;
 	struct EndThreadSpanEvent;
 	struct BeginThreadNamedSpanEvent;
@@ -24,12 +25,12 @@ namespace MicromegasTracing
 	template <typename... TS>
 	class HeterogeneousQueue;
 	struct StaticStringRef;
-	typedef HeterogeneousQueue<LogStaticStrEvent, LogStringInteropEvent, StaticStringRef> LogEventQueue;
+	typedef HeterogeneousQueue<TaggedLogInteropEvent, TaggedLogString, StaticStringRef> LogEventQueue;
 	typedef EventBlock<LogEventQueue> LogBlock;
 	typedef TSharedPtr<LogBlock, ESPMode::ThreadSafe> LogBlockPtr;
 	typedef EventStreamImpl<LogBlock, 1024> LogStream;
 	typedef TSharedPtr<LogStream, ESPMode::ThreadSafe> LogStreamPtr;
-	typedef HeterogeneousQueue<IntegerMetricEvent, FloatMetricEvent> MetricEventQueue;
+	typedef HeterogeneousQueue<TaggedIntegerMetricEvent, TaggedFloatMetricEvent> MetricEventQueue;
 	typedef EventBlock<MetricEventQueue> MetricBlock;
 	typedef TSharedPtr<MetricBlock, ESPMode::ThreadSafe> MetricsBlockPtr;
 	typedef EventStreamImpl<MetricBlock, 128> MetricStream;
@@ -40,4 +41,8 @@ namespace MicromegasTracing
 	typedef EventBlock<ThreadEventQueue> ThreadBlock;
 	typedef TSharedPtr<ThreadBlock, ESPMode::ThreadSafe> ThreadBlockPtr;
 	typedef EventStreamImpl<ThreadBlock, 128> ThreadStream;
+	class PropertySetStore;
+	class PropertySet;
+	struct Property;
+	class DefaultContext;
 } // namespace MicromegasTracing

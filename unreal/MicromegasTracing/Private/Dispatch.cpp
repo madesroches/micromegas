@@ -4,12 +4,14 @@
 #include "MicromegasTracing/Dispatch.h"
 #include "Async/UniqueLock.h"
 #include "HAL/PlatformProcess.h"
+#include "MicromegasTracing/DefaultContext.h"
 #include "MicromegasTracing/EventSink.h"
 #include "MicromegasTracing/EventStream.h"
 #include "MicromegasTracing/LogBlock.h"
 #include "MicromegasTracing/Macros.h"
 #include "MicromegasTracing/MetricEvents.h"
 #include "MicromegasTracing/ProcessInfo.h"
+#include "MicromegasTracing/PropertySetStore.h"
 #include "MicromegasTracing/SpanEvents.h"
 #include "Misc/Guid.h"
 #include "Misc/ScopeLock.h"
@@ -30,6 +32,8 @@ namespace MicromegasTracing
 		, LogBufferSize(InLogBufferSize)
 		, MetricBufferSize(InMetricBufferSize)
 		, ThreadBufferSize(InThreadBufferSize)
+		, PropertySets(new PropertySetStore())
+		, Ctx(new DefaultContext(PropertySets))
 	{
 		FString LogStreamId = AllocNewGuid();
 		LogBlockPtr NewLogBlock = MakeShared<LogBlock>(LogStreamId,
@@ -154,26 +158,21 @@ namespace MicromegasTracing
 	}
 
 	template <typename T>
-	void QueueLogEntry(const T& Event)
+	void Dispatch::QueueLogEntry(const T& Event)
 	{
-		Dispatch* Dispatch = GDispatch;
-		if (!Dispatch)
+		LogMutex.Lock();
+		LogEntries->GetCurrentBlock().GetEvents().Push(Event);
+		if (LogEntries->IsFull())
 		{
-			return;
-		}
-		Dispatch->LogMutex.Lock();
-		Dispatch->LogEntries->GetCurrentBlock().GetEvents().Push(Event);
-		if (Dispatch->LogEntries->IsFull())
-		{
-			Dispatch->FlushLogStreamImpl(Dispatch->LogMutex); // unlocks the mutex
+			FlushLogStreamImpl(LogMutex); // unlocks the mutex
 		}
 		else
 		{
-			Dispatch->LogMutex.Unlock();
+			LogMutex.Unlock();
 		}
 	}
 
-	void FlushLogStream()
+	void Dispatch::FlushLogStream()
 	{
 		Dispatch* Dispatch = GDispatch;
 		if (!Dispatch)
@@ -184,7 +183,7 @@ namespace MicromegasTracing
 		Dispatch->FlushLogStreamImpl(Dispatch->LogMutex); // unlocks the mutex
 	}
 
-	void FlushMetricStream()
+	void Dispatch::FlushMetricStream()
 	{
 		Dispatch* Dispatch = GDispatch;
 		if (!Dispatch)
@@ -195,7 +194,7 @@ namespace MicromegasTracing
 		Dispatch->FlushMetricStreamImpl(Dispatch->MetricMutex); // unlocks the mutex
 	}
 
-	void Shutdown()
+	void Dispatch::Shutdown()
 	{
 		Dispatch* Dispatch = GDispatch;
 		if (!Dispatch)
@@ -206,47 +205,92 @@ namespace MicromegasTracing
 		GDispatch = nullptr;
 	}
 
-	void LogInterop(const LogStringInteropEvent& Event)
-	{
-		QueueLogEntry(Event);
-	}
-
-	void LogStaticStr(const LogStaticStrEvent& Event)
-	{
-		QueueLogEntry(Event);
-	}
-
-	template <typename T>
-	void QueueMetric(const T& Event)
+	void Dispatch::LogInterop(uint64 Timestamp, LogLevel::Type Level, const StaticStringRef& Target, const DynamicString& Msg)
 	{
 		Dispatch* Dispatch = GDispatch;
 		if (!Dispatch)
 		{
 			return;
 		}
-		Dispatch->MetricMutex.Lock();
-		Dispatch->Metrics->GetCurrentBlock().GetEvents().Push(Event);
-		if (Dispatch->Metrics->IsFull())
+		Dispatch->QueueLogEntry(TaggedLogInteropEvent(Timestamp, Level, Target, Dispatch->Ctx->GetCurrentPropertySet(), Msg));
+	}
+
+	void Dispatch::Log(const LogMetadata* Desc, uint64 Timestamp, const DynamicString& Msg)
+	{
+		Dispatch* Dispatch = GDispatch;
+		if (!Dispatch)
 		{
-			Dispatch->FlushMetricStreamImpl(Dispatch->MetricMutex); // unlocks the mutex
+			return;
+		}
+		Dispatch->QueueLogEntry(TaggedLogString(Desc, Dispatch->Ctx->GetCurrentPropertySet(), Timestamp, Msg));
+	}
+
+	void Dispatch::Log(const LogMetadata* Desc, const PropertySet* Properties, uint64 Timestamp, const DynamicString& Msg)
+	{
+		Dispatch* Dispatch = GDispatch;
+		if (!Dispatch)
+		{
+			return;
+		}
+		Dispatch->QueueLogEntry(TaggedLogString(Desc, Properties, Timestamp, Msg));
+	}
+
+	template <typename T>
+	void Dispatch::QueueMetric(const T& Event)
+	{
+		MetricMutex.Lock();
+		Metrics->GetCurrentBlock().GetEvents().Push(Event);
+		if (Metrics->IsFull())
+		{
+			FlushMetricStreamImpl(MetricMutex); // unlocks the mutex
 		}
 		else
 		{
-			Dispatch->MetricMutex.Unlock();
+			MetricMutex.Unlock();
 		}
 	}
 
-	void IntMetric(const IntegerMetricEvent& Event)
+	void Dispatch::IntMetric(const MetricMetadata* Desc, uint64 Value, uint64 Timestamp)
 	{
-		QueueMetric(Event);
+		Dispatch* Dispatch = GDispatch;
+		if (!Dispatch)
+		{
+			return;
+		}
+		Dispatch->QueueMetric(TaggedIntegerMetricEvent(Desc, Dispatch->Ctx->GetCurrentPropertySet(), Value, Timestamp));
 	}
 
-	void FloatMetric(const FloatMetricEvent& Event)
+	void Dispatch::IntMetric(const MetricMetadata* Desc, const PropertySet* Properties, uint64 Value, uint64 Timestamp)
 	{
-		QueueMetric(Event);
+		Dispatch* Dispatch = GDispatch;
+		if (!Dispatch)
+		{
+			return;
+		}
+		Dispatch->QueueMetric(TaggedIntegerMetricEvent(Desc, Properties, Value, Timestamp));
 	}
 
-	ThreadStream* GetCurrentThreadStream()
+	void Dispatch::FloatMetric(const MetricMetadata* Desc, double Value, uint64 Timestamp)
+	{
+		Dispatch* Dispatch = GDispatch;
+		if (!Dispatch)
+		{
+			return;
+		}
+		Dispatch->QueueMetric(TaggedFloatMetricEvent(Desc, Dispatch->Ctx->GetCurrentPropertySet(), Value, Timestamp));
+	}
+
+	void Dispatch::FloatMetric(const MetricMetadata* Desc, const PropertySet* Properties, double Value, uint64 Timestamp)
+	{
+		Dispatch* Dispatch = GDispatch;
+		if (!Dispatch)
+		{
+			return;
+		}
+		Dispatch->QueueMetric(TaggedFloatMetricEvent(Desc, Properties, Value, Timestamp));
+	}
+
+	ThreadStream* Dispatch::GetCurrentThreadStream()
 	{
 		thread_local ThreadStream* Ptr = nullptr;
 		if (Ptr)
@@ -271,7 +315,7 @@ namespace MicromegasTracing
 	}
 
 	template <typename T>
-	void QueueThreadEvent(const T& Event)
+	void Dispatch::QueueThreadEvent(const T& Event)
 	{
 		if (ThreadStream* Stream = GetCurrentThreadStream())
 		{
@@ -288,27 +332,27 @@ namespace MicromegasTracing
 		}
 	}
 
-	void BeginScope(const BeginThreadSpanEvent& Event)
+	void Dispatch::BeginScope(const BeginThreadSpanEvent& Event)
 	{
 		QueueThreadEvent(Event);
 	}
 
-	void EndScope(const EndThreadSpanEvent& Event)
+	void Dispatch::EndScope(const EndThreadSpanEvent& Event)
 	{
 		QueueThreadEvent(Event);
 	}
 
-	void BeginNamedSpan(const BeginThreadNamedSpanEvent& Event)
+	void Dispatch::BeginNamedSpan(const BeginThreadNamedSpanEvent& Event)
 	{
 		QueueThreadEvent(Event);
 	}
 
-	void EndNamedSpan(const EndThreadNamedSpanEvent& Event)
+	void Dispatch::EndNamedSpan(const EndThreadNamedSpanEvent& Event)
 	{
 		QueueThreadEvent(Event);
 	}
 
-	void ForEachThreadStream(ThreadStreamCallback Callback)
+	void Dispatch::ForEachThreadStream(ThreadStreamCallback Callback)
 	{
 		Dispatch* Dispatch = GDispatch;
 		if (!Dispatch)
@@ -322,17 +366,17 @@ namespace MicromegasTracing
 		}
 	}
 
-	void InitCurrentThreadStream()
+	void Dispatch::InitCurrentThreadStream()
 	{
 		// Thread streams will be implicitly initialized as soon as they emit events,
 		// but the first event's timestamp will be before the beginning of the block
 		// (since it will be allocated after that event).
 		// This could confuse some tooling. Calling InitCurrentThreadStream() explicitly before
 		// events are emitted prevents this problem.
-		GetCurrentThreadStream();
+		Dispatch::GetCurrentThreadStream();
 	}
 
-	void FlushCurrentThreadStream()
+	void Dispatch::FlushCurrentThreadStream()
 	{
 		Dispatch* Dispatch = GDispatch;
 		if (!Dispatch)
@@ -345,6 +389,35 @@ namespace MicromegasTracing
 			return;
 		}
 		Dispatch->FlushThreadStream(Stream);
+	}
+
+	PropertySetStore* Dispatch::GetPropertySetStore()
+	{
+		Dispatch* Dispatch = GDispatch;
+		if (!Dispatch)
+		{
+			return nullptr;
+		}
+		return Dispatch->PropertySets;
+	}
+
+	DefaultContext* Dispatch::GetDefaultContext()
+	{
+		Dispatch* Dispatch = GDispatch;
+		if (!Dispatch)
+		{
+			return nullptr;
+		}
+		return Dispatch->Ctx;
+	}
+
+	const PropertySet* Dispatch::GetPropertySet(const TMap<FName, FName>& Context)
+	{
+		if (PropertySetStore* store = GetPropertySetStore())
+		{
+			return store->Get(Context);
+		}
+		return nullptr;
 	}
 
 } // namespace MicromegasTracing

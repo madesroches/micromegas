@@ -2,21 +2,29 @@
 //
 //  MicromegasTracing/LogMetadata.h
 //
+#include "MicromegasTracing/QueueMetadata.h"
+
 namespace MicromegasTracing
 {
 	template <typename T>
 	struct GetEventMetadata;
 
 	template <>
-	struct GetEventMetadata<LogStringInteropEvent>
+	struct GetEventMetadata<TaggedLogInteropEvent>
 	{
 		UserDefinedType operator()()
 		{
 			return UserDefinedType(
-				TEXT("LogStringInteropEventV3"),
+				TEXT("TaggedLogInteropEvent"),
 				0, // requires custom parsing logic
 				false,
-				{});
+				{
+					MAKE_UDT_MEMBER_METADATA(TaggedLogInteropEvent, "time", Timestamp, uint64, false),
+					MAKE_UDT_MEMBER_METADATA(TaggedLogInteropEvent, "level", Level, Level, false),
+					MAKE_UDT_MEMBER_METADATA(TaggedLogInteropEvent, "target", Target, StaticStringRef, true),
+					MAKE_UDT_MEMBER_METADATA(TaggedLogInteropEvent, "properties", Properties, PropertySet*, true),
+					MAKE_UDT_MEMBER_METADATA(TaggedLogInteropEvent, "msg", Msg, DynamicString, false),
+				});
 		}
 	};
 
@@ -41,17 +49,19 @@ namespace MicromegasTracing
 	};
 
 	template <>
-	struct GetEventMetadata<LogStaticStrEvent>
+	struct GetEventMetadata<TaggedLogString>
 	{
 		UserDefinedType operator()()
 		{
 			return UserDefinedType(
-				TEXT("LogStaticStrEvent"),
-				sizeof(LogStaticStrEvent),
+				TEXT("TaggedLogString"),
+				0, // requires custom parsing logic
 				false,
 				{
-					MAKE_UDT_MEMBER_METADATA(LogStaticStrEvent, "desc", Desc, LogMetadata*, true),
-					MAKE_UDT_MEMBER_METADATA(LogStaticStrEvent, "time", Timestamp, uint64, false),
+					MAKE_UDT_MEMBER_METADATA(TaggedLogString, "desc", Desc, LogMetadata*, true),
+					MAKE_UDT_MEMBER_METADATA(TaggedLogString, "properties", Properties, PropertySet*, true),
+					MAKE_UDT_MEMBER_METADATA(TaggedLogString, "time", Timestamp, uint64, false),
+					MAKE_UDT_MEMBER_METADATA(TaggedLogString, "msg", Msg, DynamicString, false),
 				});
 		}
 	};

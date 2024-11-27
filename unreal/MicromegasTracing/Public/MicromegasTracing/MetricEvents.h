@@ -6,6 +6,8 @@
 
 namespace MicromegasTracing
 {
+	class PropertySet;
+
 	struct MetricMetadata
 	{
 		Verbosity::Type Lod;
@@ -31,28 +33,32 @@ namespace MicromegasTracing
 		}
 	};
 
-	struct IntegerMetricEvent
+	struct TaggedIntegerMetricEvent
 	{
 		const MetricMetadata* Desc;
+		const PropertySet* Properties;
 		uint64 Value;
 		uint64 Timestamp;
 
-		IntegerMetricEvent(const MetricMetadata* desc, uint64 value, uint64 timestamp)
+		TaggedIntegerMetricEvent(const MetricMetadata* desc, const PropertySet* properties, uint64 value, uint64 timestamp)
 			: Desc(desc)
+			, Properties(properties)
 			, Value(value)
 			, Timestamp(timestamp)
 		{
 		}
 	};
 
-	struct FloatMetricEvent
+	struct TaggedFloatMetricEvent
 	{
 		const MetricMetadata* Desc;
+		const PropertySet* Properties;
 		double Value;
 		uint64 Timestamp;
 
-		FloatMetricEvent(const MetricMetadata* desc, double value, uint64 timestamp)
+		TaggedFloatMetricEvent(const MetricMetadata* desc, const PropertySet* properties, double value, uint64 timestamp)
 			: Desc(desc)
+			, Properties(properties)
 			, Value(value)
 			, Timestamp(timestamp)
 		{

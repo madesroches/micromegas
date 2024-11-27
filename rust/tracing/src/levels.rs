@@ -48,6 +48,18 @@ impl Level {
             _ => None,
         }
     }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "fatal" => Some(Self::Fatal),
+            "error" => Some(Self::Error),
+            "warning" => Some(Self::Warn),
+            "info" => Some(Self::Info),
+            "debug" => Some(Self::Debug),
+            "trace" => Some(Self::Trace),
+            _ => None,
+        }
+    }
 }
 
 /// An enum representing the available verbosity level filters of the logger.

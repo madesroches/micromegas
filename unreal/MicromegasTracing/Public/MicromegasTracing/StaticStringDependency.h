@@ -51,6 +51,7 @@ namespace MicromegasTracing
 			details::WritePOD(dep.Ref.GetID(), buffer);
 			if (dep.Ref.GetCodec() == StringCodec::UnrealName)
 			{
+				// we should not copy the string on the stack, we should copy it directly in the buffer
 				union
 				{
 					ANSICHAR AnsiName[NAME_SIZE];

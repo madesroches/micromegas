@@ -2,13 +2,20 @@
 //
 //  MicromegasTelemetrySink/LogDependencies.h
 //
-#include "MicromegasTracing/HeterogeneousQueue.h"
-#include "MicromegasTracing/strings.h"
-#include "MicromegasTracing/LogEvents.h"
-#include "MicromegasTracing/StaticStringDependency.h"
 #include "Containers/Set.h"
+#include "MicromegasTracing/HeterogeneousQueue.h"
+#include "MicromegasTracing/LogEvents.h"
+#include "MicromegasTracing/PropertySet.h"
+#include "MicromegasTracing/PropertySetDependency.h"
+#include "MicromegasTracing/StaticStringDependency.h"
+#include "MicromegasTracing/strings.h"
 
-typedef MicromegasTracing::HeterogeneousQueue<MicromegasTracing::StaticStringDependency, MicromegasTracing::LogMetadataDependency> LogDependenciesQueue;
+typedef MicromegasTracing::HeterogeneousQueue<
+	MicromegasTracing::StaticStringDependency,
+	MicromegasTracing::LogMetadataDependency,
+	MicromegasTracing::PropertySetDependency,
+	MicromegasTracing::Property>
+	LogDependenciesQueue;
 
 struct ExtractLogDependencies
 {
@@ -43,14 +50,31 @@ struct ExtractLogDependencies
 		}
 	}
 
-	void operator()(const MicromegasTracing::LogStringInteropEvent& evt)
+	void operator()(const MicromegasTracing::TaggedLogInteropEvent& evt)
 	{
 		(*this)(evt.Target);
+		(*this)(evt.Properties);
 	}
 
-	void operator()(const MicromegasTracing::LogStaticStrEvent& evt)
+	void operator()(const MicromegasTracing::PropertySet* Properties)
+	{
+		bool alreadyInSet = false;
+		Ids.Add(Properties, &alreadyInSet);
+		if (!alreadyInSet)
+		{
+			for (const TPair<FName, FName>& Prop : Properties->GetContext())
+			{
+				(*this)(MicromegasTracing::StaticStringRef(Prop.Key));
+				(*this)(MicromegasTracing::StaticStringRef(Prop.Value));
+			}
+			Dependencies.Push(MicromegasTracing::PropertySetDependency(Properties));
+		}
+	}
+
+	void operator()(const MicromegasTracing::TaggedLogString& evt)
 	{
 		(*this)(evt.Desc);
+		(*this)(evt.Properties);
 	}
 
 	ExtractLogDependencies(const ExtractLogDependencies&) = delete;
