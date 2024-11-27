@@ -6,6 +6,5 @@
 pub mod data_lake_connection;
 pub mod remote_data_lake;
 pub mod sql_migration;
-pub mod sql_property;
 pub mod sql_telemetry_db;
 pub mod web_ingestion_service;

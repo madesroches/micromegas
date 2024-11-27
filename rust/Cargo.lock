@@ -2306,6 +2306,7 @@ dependencies = [
  "micromegas-transit",
  "object_store",
  "serde",
+ "sqlx",
  "url",
  "uuid",
 ]

@@ -8,10 +8,8 @@ use datafusion::arrow::array::{
     Array, ArrayRef, AsArray, BinaryArray, GenericListArray, Int32Array, Int64Array, RecordBatch,
     StringArray, StructArray, TimestampNanosecondArray,
 };
-use micromegas_ingestion::{
-    data_lake_connection::DataLakeConnection,
-    sql_property::{self, Property},
-};
+use micromegas_ingestion::data_lake_connection::DataLakeConnection;
+use micromegas_telemetry::property::Property;
 use micromegas_telemetry::{stream_info::StreamInfo, types::block::BlockMetadata};
 use micromegas_tracing::prelude::*;
 use std::sync::Arc;
@@ -174,7 +172,7 @@ pub async fn fetch_partition_source_data(
                 objects_metadata: ciborium::from_reader(objects_metadata)
                     .with_context(|| "decoding objects_metadata")?,
                 tags: stream_tags,
-                properties: sql_property::into_hashmap(stream_properties),
+                properties: micromegas_telemetry::property::into_hashmap(stream_properties),
             };
             let process_properties = read_property_list(process_properties_column.value(ir))?;
             let parent_value = process_parent_column.value(ir);
@@ -195,7 +193,7 @@ pub async fn fetch_partition_source_data(
                 start_time: DateTime::from_timestamp_nanos(process_start_time_column.value(ir)),
                 start_ticks: process_start_ticks_column.value(ir),
                 parent_process_id,
-                properties: sql_property::into_hashmap(process_properties),
+                properties: micromegas_telemetry::property::into_hashmap(process_properties),
             };
             block_ids_hash += block.nb_objects as i64;
             partition_src_blocks.push(Arc::new(PartitionSourceBlock {
