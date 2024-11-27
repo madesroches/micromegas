@@ -11,8 +11,6 @@ namespace MicromegasTracing
 	struct TaggedLogInteropEvent;
 	struct TaggedLogString;
 	struct MetricMetadata;
-	struct IntegerMetricEvent;
-	struct FloatMetricEvent;
 	struct TaggedIntegerMetricEvent;
 	struct TaggedFloatMetricEvent;
 	struct BeginThreadSpanEvent;
@@ -32,7 +30,7 @@ namespace MicromegasTracing
 	typedef TSharedPtr<LogBlock, ESPMode::ThreadSafe> LogBlockPtr;
 	typedef EventStreamImpl<LogBlock, 1024> LogStream;
 	typedef TSharedPtr<LogStream, ESPMode::ThreadSafe> LogStreamPtr;
-	typedef HeterogeneousQueue<TaggedIntegerMetricEvent, TaggedFloatMetricEvent, IntegerMetricEvent, FloatMetricEvent> MetricEventQueue;
+	typedef HeterogeneousQueue<TaggedIntegerMetricEvent, TaggedFloatMetricEvent> MetricEventQueue;
 	typedef EventBlock<MetricEventQueue> MetricBlock;
 	typedef TSharedPtr<MetricBlock, ESPMode::ThreadSafe> MetricsBlockPtr;
 	typedef EventStreamImpl<MetricBlock, 128> MetricStream;

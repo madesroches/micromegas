@@ -33,36 +33,6 @@ namespace MicromegasTracing
 		}
 	};
 
-	// IntegerMetricEvent is deprecated, use TaggedIntegerMetricEvent
-	struct IntegerMetricEvent
-	{
-		const MetricMetadata* Desc;
-		uint64 Value;
-		uint64 Timestamp;
-
-		IntegerMetricEvent(const MetricMetadata* desc, uint64 value, uint64 timestamp)
-			: Desc(desc)
-			, Value(value)
-			, Timestamp(timestamp)
-		{
-		}
-	};
-
-	// FloatMetricEvent is deprecated, use TaggedFloatMetricEvent
-	struct FloatMetricEvent
-	{
-		const MetricMetadata* Desc;
-		double Value;
-		uint64 Timestamp;
-
-		FloatMetricEvent(const MetricMetadata* desc, double value, uint64 timestamp)
-			: Desc(desc)
-			, Value(value)
-			, Timestamp(timestamp)
-		{
-		}
-	};
-
 	struct TaggedIntegerMetricEvent
 	{
 		const MetricMetadata* Desc;

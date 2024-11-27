@@ -2,7 +2,6 @@
 //  MicromegasTelemetrySink/LogInterop.cpp
 //
 #include "MicromegasTelemetrySink/LogInterop.h"
-#include "MicromegasTracing/DefaultContext.h"
 #include "MicromegasTracing/Dispatch.h"
 #include "MicromegasTracing/LogEvents.h"
 #include "MicromegasTracing/Macros.h"

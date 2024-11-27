@@ -62,16 +62,6 @@ struct ExtractMetricDependencies
 		}
 	}
 
-	void operator()(const MicromegasTracing::IntegerMetricEvent& event)
-	{
-		(*this)(event.Desc);
-	}
-
-	void operator()(const MicromegasTracing::FloatMetricEvent& event)
-	{
-		(*this)(event.Desc);
-	}
-
 	void operator()(const MicromegasTracing::TaggedIntegerMetricEvent& event)
 	{
 		(*this)(event.Desc);
