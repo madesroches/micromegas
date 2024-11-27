@@ -2,6 +2,8 @@
 //
 //  MicromegasTracing/PropertySetDependency.h
 //
+#include "MicromegasTracing/QueueMetadata.h"
+
 namespace MicromegasTracing
 {
 	struct Property

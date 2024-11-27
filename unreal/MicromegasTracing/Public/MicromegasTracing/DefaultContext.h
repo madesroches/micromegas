@@ -25,16 +25,18 @@ namespace MicromegasTracing
 		void Unset(FName Key);
 		void Clear();
 
-		PropertySet* GetCurrentPropertySet()
+		const PropertySet* GetCurrentPropertySet()const
 		{
 			return CurrentPropertySet;
 		}
+
+		void Copy(TMap<FName, FName>& Out)const;
 
 	private:
 		void UpdatePropertySet();
 
 		PropertySetStore* Store;
-		FCriticalSection Mutex;
+		mutable FCriticalSection Mutex;
 		TMap<FName, FName> Context;
 		PropertySet* CurrentPropertySet = nullptr;
 	};

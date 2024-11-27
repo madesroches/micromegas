@@ -54,6 +54,12 @@ namespace MicromegasTracing
 		UpdatePropertySet();
 	}
 
+	void DefaultContext::Copy(TMap<FName, FName>& Out)const
+	{
+		FScopeLock Lock(&Mutex);
+		Out = Context;
+	}
+
 	void DefaultContext::UpdatePropertySet()
 	{
 		FPlatformMisc::MemoryBarrier(); // make sure property set is flushed before it's available to other threads

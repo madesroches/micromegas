@@ -100,6 +100,47 @@ fn parse_log_string_interop_event_v3(
     })))
 }
 
+fn parse_tagged_log_interop_event(
+    udt: &UserDefinedType,
+    udts: &[UserDefinedType],
+    dependencies: &HashMap<u64, Value>,
+    mut object_window: &[u8],
+) -> Result<Value> {
+    let string_ref_metadata = udts
+        .iter()
+        .find(|t| *t.name == "StaticStringRef")
+        .with_context(|| {
+            "Can't parse log string interop event with no metadata for StaticStringRef"
+        })?;
+    let time: i64 = read_consume_pod(&mut object_window);
+    let level: u8 = read_consume_pod(&mut object_window);
+    let target = parse_pod_instance(
+        string_ref_metadata,
+        udts,
+        dependencies,
+        &object_window[0..string_ref_metadata.size],
+    )
+    .with_context(|| "parse_pod_instance")?;
+    object_window = advance_window(object_window, string_ref_metadata.size);
+    let properties_id: u64 = read_consume_pod(&mut object_window);
+    let properties = dependencies
+        .get(&properties_id)
+        .with_context(|| "fetching properties in parse_tagged_log_interop_event")?
+        .clone();
+    let msg = read_advance_string(&mut object_window)?;
+    let members = vec![
+        (TIME.clone(), Value::I64(time)),
+        (LEVEL.clone(), Value::U8(level)),
+        (TARGET.clone(), target),
+        (PROPERTIES.clone(), properties),
+        (MSG.clone(), Value::String(Arc::new(msg))),
+    ];
+    Ok(Value::Object(Arc::new(Object {
+        type_name: udt.name.clone(),
+        members,
+    })))
+}
+
 fn parse_tagged_log_string(
     udt: &UserDefinedType,
     _udts: &[UserDefinedType],
@@ -235,6 +276,10 @@ pub fn make_custom_readers() -> CustomReaderMap {
     custom_readers.insert(
         PROPERTY_SET_DEP_TYPE_NAME.to_string(),
         Arc::new(parse_property_set),
+    );
+    custom_readers.insert(
+        "TaggedLogInteropEvent".into(),
+        Arc::new(parse_tagged_log_interop_event),
     );
     custom_readers
 }

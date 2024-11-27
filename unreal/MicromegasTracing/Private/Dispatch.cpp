@@ -160,20 +160,15 @@ namespace MicromegasTracing
 	template <typename T>
 	void Dispatch::QueueLogEntry(const T& Event)
 	{
-		Dispatch* Dispatch = GDispatch;
-		if (!Dispatch)
+		LogMutex.Lock();
+		LogEntries->GetCurrentBlock().GetEvents().Push(Event);
+		if (LogEntries->IsFull())
 		{
-			return;
-		}
-		Dispatch->LogMutex.Lock();
-		Dispatch->LogEntries->GetCurrentBlock().GetEvents().Push(Event);
-		if (Dispatch->LogEntries->IsFull())
-		{
-			Dispatch->FlushLogStreamImpl(Dispatch->LogMutex); // unlocks the mutex
+			FlushLogStreamImpl(LogMutex); // unlocks the mutex
 		}
 		else
 		{
-			Dispatch->LogMutex.Unlock();
+			LogMutex.Unlock();
 		}
 	}
 
@@ -210,14 +205,34 @@ namespace MicromegasTracing
 		GDispatch = nullptr;
 	}
 
-	void Dispatch::LogInterop(const LogStringInteropEvent& Event)
+	void Dispatch::LogInterop(uint64 Timestamp, LogLevel::Type Level, const StaticStringRef& Target, const DynamicString& Msg)
 	{
-		QueueLogEntry(Event);
+		Dispatch* Dispatch = GDispatch;
+		if (!Dispatch)
+		{
+			return;
+		}
+		Dispatch->QueueLogEntry(TaggedLogInteropEvent(Timestamp, Level, Target, Dispatch->Ctx->GetCurrentPropertySet(), Msg));
 	}
 
-	void Dispatch::LogStaticStr(const LogStaticStrEvent& Event)
+	void Dispatch::Log(const LogMetadata* Desc, uint64 Timestamp, const DynamicString& Msg)
 	{
-		QueueLogEntry(Event);
+		Dispatch* Dispatch = GDispatch;
+		if (!Dispatch)
+		{
+			return;
+		}
+		Dispatch->QueueLogEntry(TaggedLogString(Desc, Dispatch->Ctx->GetCurrentPropertySet(), Timestamp, Msg));
+	}
+
+	void Dispatch::Log(const LogMetadata* Desc, const PropertySet* Properties, uint64 Timestamp, const DynamicString& Msg)
+	{
+		Dispatch* Dispatch = GDispatch;
+		if (!Dispatch)
+		{
+			return;
+		}
+		Dispatch->QueueLogEntry(TaggedLogString(Desc, Properties, Timestamp, Msg));
 	}
 
 	template <typename T>
@@ -394,6 +409,15 @@ namespace MicromegasTracing
 			return nullptr;
 		}
 		return Dispatch->Ctx;
+	}
+
+	const PropertySet* Dispatch::GetPropertySet(const TMap<FName, FName>& Context)
+	{
+		if (PropertySetStore* store = GetPropertySetStore())
+		{
+			return store->Get(Context);
+		}
+		return nullptr;
 	}
 
 } // namespace MicromegasTracing

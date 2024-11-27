@@ -2,6 +2,7 @@
 //  MicromegasTelemetrySink/LogInterop.cpp
 //
 #include "MicromegasTelemetrySink/LogInterop.h"
+#include "MicromegasTracing/DefaultContext.h"
 #include "MicromegasTracing/Dispatch.h"
 #include "MicromegasTracing/LogEvents.h"
 #include "MicromegasTracing/Macros.h"
@@ -35,10 +36,10 @@ struct LogBridge : public FOutputDevice
 			default:
 				level = LogLevel::Trace;
 		};
-		Dispatch::LogInterop(LogStringInteropEvent(FPlatformTime::Cycles64(),
+		Dispatch::LogInterop(FPlatformTime::Cycles64(),
 			level,
-			StaticStringRef(Category.GetDisplayNameEntry()),
-			DynamicString(V)));
+			StaticStringRef(Category),
+			DynamicString(V));
 	}
 };
 

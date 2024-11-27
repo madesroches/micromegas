@@ -33,6 +33,7 @@ namespace MicromegasTracing
 		}
 	};
 
+	// IntegerMetricEvent is deprecated, use TaggedIntegerMetricEvent
 	struct IntegerMetricEvent
 	{
 		const MetricMetadata* Desc;
@@ -47,6 +48,7 @@ namespace MicromegasTracing
 		}
 	};
 
+	// FloatMetricEvent is deprecated, use TaggedFloatMetricEvent
 	struct FloatMetricEvent
 	{
 		const MetricMetadata* Desc;

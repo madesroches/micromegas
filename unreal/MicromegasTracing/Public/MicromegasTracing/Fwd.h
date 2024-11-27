@@ -8,8 +8,8 @@ namespace MicromegasTracing
 {
 	class EventSink;
 	typedef TSharedPtr<EventSink, ESPMode::ThreadSafe> EventSinkPtr;
-	struct LogStringInteropEvent;
-	struct LogStaticStrEvent;
+	struct TaggedLogInteropEvent;
+	struct TaggedLogString;
 	struct MetricMetadata;
 	struct IntegerMetricEvent;
 	struct FloatMetricEvent;
@@ -27,7 +27,7 @@ namespace MicromegasTracing
 	template <typename... TS>
 	class HeterogeneousQueue;
 	struct StaticStringRef;
-	typedef HeterogeneousQueue<LogStaticStrEvent, LogStringInteropEvent, StaticStringRef> LogEventQueue;
+	typedef HeterogeneousQueue<TaggedLogInteropEvent, TaggedLogString, StaticStringRef> LogEventQueue;
 	typedef EventBlock<LogEventQueue> LogBlock;
 	typedef TSharedPtr<LogBlock, ESPMode::ThreadSafe> LogBlockPtr;
 	typedef EventStreamImpl<LogBlock, 1024> LogStream;
