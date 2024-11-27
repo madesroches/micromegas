@@ -2,6 +2,7 @@
 //
 //  MicromegasTracing/PropertySetDependency.h
 //
+#include "Containers/Array.h"
 #include "MicromegasTracing/QueueMetadata.h"
 
 namespace MicromegasTracing
@@ -61,7 +62,7 @@ namespace MicromegasTracing
 			return HeaderSize + ContainerSize;
 		}
 
-		static void Write(const PropertySetDependency& dep, std::vector<uint8>& buffer)
+		static void Write(const PropertySetDependency& dep, TArray<uint8>& buffer)
 		{
 			details::WritePOD(dep.Properties, buffer);
 			uint32 NbProperties = dep.Properties->GetContext().Num();

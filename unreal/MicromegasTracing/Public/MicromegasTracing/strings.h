@@ -2,8 +2,7 @@
 //
 //  MicromegasTracing/strings.h
 //
-#include <cassert> //todo: change to check
-#include <vector> //todo: change to TArray
+#include "Containers/Array.h"
 #include "Misc/CString.h"
 #include "UObject/NameTypes.h"
 
@@ -71,7 +70,7 @@ namespace MicromegasTracing
 		explicit DynamicString(const StringReference& ref)
 			: StringReference(ref)
 		{
-			assert(ref.GetCodec() == StringCodec::Ansi || ref.GetCodec() == StringCodec::Wide);
+			check(ref.GetCodec() == StringCodec::Ansi || ref.GetCodec() == StringCodec::Wide);
 		}
 
 		explicit DynamicString(const FString& str)
@@ -91,10 +90,10 @@ namespace MicromegasTracing
 	namespace details
 	{
 		template <typename T>
-		void WritePOD(const T& value, std::vector<uint8>& buffer);
+		void WritePOD(const T& value, TArray<uint8>& buffer);
 
 		template <typename T>
-		const T& ReadPOD(const std::vector<uint8>& buffer, size_t& cursor);
+		const T& ReadPOD(const TArray<uint8>& buffer, size_t& cursor);
 	} // namespace details
 
 	template <>
@@ -112,17 +111,17 @@ namespace MicromegasTracing
 				+ value.GetSizeBytes(); // buffer
 		}
 
-		static void Write(const DynamicString& value, std::vector<uint8>& buffer)
+		static void Write(const DynamicString& value, TArray<uint8>& buffer)
 		{
-			assert(value.GetCodec() == StringCodec::Ansi || value.GetCodec() == StringCodec::Wide);
+			check(value.GetCodec() == StringCodec::Ansi || value.GetCodec() == StringCodec::Wide);
 			details::WritePOD(value.GetCodec(), buffer);
 			details::WritePOD(value.GetSizeBytes(), buffer);
 			const uint8* beginString = reinterpret_cast<const uint8*>(value.GetPtr());
-			buffer.insert(buffer.end(), beginString, beginString + value.GetSizeBytes());
+			buffer.Append(beginString, value.GetSizeBytes());
 		}
 
 		template <typename Callback>
-		static void Read(Callback callback, const std::vector<uint8>& buffer, size_t& cursor)
+		static void Read(Callback callback, const TArray<uint8>& buffer, size_t& cursor)
 		{
 			StringCodec::Type codec = details::ReadPOD<StringCodec::Type>(buffer, cursor);
 			uint32 bufferSize = details::ReadPOD<uint32>(buffer, cursor);

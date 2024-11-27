@@ -3,6 +3,7 @@
 //  MicromegasTracing/Dispatch.h
 //
 #include "Async/Mutex.h"
+#include "Containers/Array.h"
 #include "Containers/UnrealString.h"
 #include "HAL/Platform.h"
 #include "MicromegasTracing/Fwd.h"

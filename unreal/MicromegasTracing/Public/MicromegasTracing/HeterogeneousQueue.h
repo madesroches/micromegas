@@ -2,8 +2,7 @@
 //
 //  MicromegasTracing/HeterogeneousQueue.h
 //
-#include <vector>
-#include <cassert>
+#include "Containers/Array.h"
 #include "MicromegasTracing/Macros.h"
 
 namespace MicromegasTracing
@@ -26,7 +25,7 @@ namespace MicromegasTracing
 		};
 
 		template <typename T>
-		const T& ReadPOD(const std::vector<uint8>& buffer, size_t& cursor)
+		const T& ReadPOD(const TArray<uint8>& buffer, size_t& cursor)
 		{
 			size_t indexToRead = cursor;
 			cursor += sizeof(T);
@@ -34,10 +33,10 @@ namespace MicromegasTracing
 		}
 
 		template <typename T>
-		void WritePOD(const T& value, std::vector<uint8>& buffer)
+		void WritePOD(const T& value, TArray<uint8>& buffer)
 		{
 			const uint8* beginBytes = reinterpret_cast<const uint8*>(&value);
-			buffer.insert(buffer.end(), beginBytes, beginBytes + sizeof(T));
+			buffer.Append(beginBytes, sizeof(T));
 		}
 	} // namespace details
 
@@ -54,13 +53,13 @@ namespace MicromegasTracing
 			return sizeof(T);
 		}
 
-		static void Write(const T& value, std::vector<uint8>& buffer)
+		static void Write(const T& value, TArray<uint8>& buffer)
 		{
 			details::WritePOD(value, buffer);
 		}
 
 		template <typename Callback>
-		static void Read(Callback& callback, const std::vector<uint8>& buffer, size_t& cursor)
+		static void Read(Callback& callback, const TArray<uint8>& buffer, size_t& cursor)
 		{
 			callback(*reinterpret_cast<const T*>(&buffer[0] + cursor));
 			cursor += sizeof(T);
@@ -74,12 +73,12 @@ namespace MicromegasTracing
 		explicit HeterogeneousQueue(size_t bufferSize)
 			: NbEvents(0)
 		{
-			Buffer.reserve(bufferSize);
+			Buffer.Reserve(bufferSize);
 		}
 
 		size_t GetSizeBytes() const
 		{
-			return Buffer.size();
+			return Buffer.Num();
 		}
 
 		template <typename T>
@@ -87,7 +86,7 @@ namespace MicromegasTracing
 		{
 			++NbEvents;
 			uint8 typeIndex = details::IndexOfType<T, TS...>::value;
-			Buffer.push_back(typeIndex);
+			Buffer.Add(typeIndex);
 			if (!Serializer<T>::IsSizeStatic())
 			{
 				details::WritePOD(Serializer<T>::GetSize(event), Buffer);
@@ -139,10 +138,10 @@ namespace MicromegasTracing
 		template <typename Visitor>
 		void VisitValue(uint8 typeIndex, Visitor& v, size_t& cursor) const
 		{
-			assert(!"type not found");
+			check(!"type not found");
 		}
 
-		std::vector<uint8> Buffer;
+		TArray<uint8> Buffer;
 		size_t NbEvents;
 	};
 
