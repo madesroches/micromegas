@@ -115,10 +115,6 @@ impl View for MetricsView {
             // this view instance is updated using the deamon
             return Ok(());
         }
-        if query_range.is_none() {
-            anyhow::bail!("query range mandatory for jit view");
-        }
-        let query_range = query_range.unwrap();
         let mut connection = lake.db_pool.acquire().await?;
         let process = Arc::new(
             find_process(
@@ -130,6 +126,9 @@ impl View for MetricsView {
             .await
             .with_context(|| "find_process")?,
         );
+
+        let query_range =
+            query_range.unwrap_or_else(|| TimeRange::new(process.start_time, chrono::Utc::now()));
 
         let streams = list_process_streams_tagged(&mut connection, process.process_id, "metrics")
             .await
