@@ -1,5 +1,6 @@
 use crate::{
     payload::{fetch_block_payload, parse_block},
+    property_set::PropertySet,
     time::ConvertTicks,
 };
 use anyhow::{Context, Result};
@@ -17,6 +18,7 @@ pub struct Measure {
     pub name: Arc<String>,
     pub unit: Arc<String>,
     pub value: f64,
+    pub properties: PropertySet,
 }
 
 pub fn measure_from_value(
@@ -52,6 +54,7 @@ pub fn measure_from_value(
                     name,
                     unit,
                     value,
+                    properties: PropertySet::empty(),
                 }))
             }
             "IntegerMetricEvent" => {
@@ -85,6 +88,7 @@ pub fn measure_from_value(
                         name,
                         unit: SECONDS_METRIC_UNIT.clone(),
                         value: convert_ticks.delta_ticks_to_ms(value as i64) / 1000.0,
+                        properties: PropertySet::empty(),
                     }))
                 } else {
                     Ok(Some(Measure {
@@ -94,6 +98,7 @@ pub fn measure_from_value(
                         name,
                         unit,
                         value: value as f64,
+                        properties: PropertySet::empty(),
                     }))
                 }
             }
@@ -146,6 +151,7 @@ pub fn measure_from_value(
                         name,
                         unit: SECONDS_METRIC_UNIT.clone(),
                         value: convert_ticks.delta_ticks_to_ms(value as i64) / 1000.0,
+                        properties: properties.into(),
                     }))
                 } else {
                     Ok(Some(Measure {
@@ -155,6 +161,7 @@ pub fn measure_from_value(
                         name,
                         unit,
                         value: value as f64,
+                        properties: properties.into(),
                     }))
                 }
             }
@@ -202,6 +209,7 @@ pub fn measure_from_value(
                     name,
                     unit,
                     value,
+                    properties: properties.into(),
                 }))
             }
 
