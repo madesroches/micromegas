@@ -1,6 +1,7 @@
 use sqlx::postgres::{PgHasArrayType, PgTypeInfo};
 use std::{collections::HashMap, sync::Arc};
 
+#[derive(Debug)]
 pub struct Property {
     key: Arc<String>,
     value: Arc<String>,
