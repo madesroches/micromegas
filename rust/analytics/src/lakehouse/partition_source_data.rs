@@ -59,7 +59,7 @@ fn read_property_list(value: ArrayRef) -> Result<Vec<Property>> {
     for i in 0..properties.len() {
         let key = properties.column(key_index).as_string::<i32>().value(i);
         let value = properties.column(value_index).as_string::<i32>().value(i);
-        properties_vec.push(Property::new(key.into(), value.into()));
+        properties_vec.push(Property::new(Arc::new(key.into()), Arc::new(value.into())));
     }
     Ok(properties_vec)
 }

@@ -1,9 +1,23 @@
 use sqlx::postgres::{PgHasArrayType, PgTypeInfo};
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 pub struct Property {
-    pub key: String,
-    pub value: String,
+    key: Arc<String>,
+    value: Arc<String>,
+}
+
+impl Property {
+    pub fn new(key: Arc<String>, value: Arc<String>) -> Self {
+        Self { key, value }
+    }
+
+    pub fn key_str(&self) -> &str {
+        self.key.as_str()
+    }
+
+    pub fn value_str(&self) -> &str {
+        self.value.as_str()
+    }
 }
 
 impl ::sqlx::encode::Encode<'_, ::sqlx::Postgres> for Property {
@@ -15,8 +29,8 @@ impl ::sqlx::encode::Encode<'_, ::sqlx::Postgres> for Property {
         std::boxed::Box<(dyn std::error::Error + std::marker::Send + std::marker::Sync + 'static)>,
     > {
         let mut encoder = ::sqlx::postgres::types::PgRecordEncoder::new(buf);
-        encoder.encode(&self.key)?;
-        encoder.encode(&self.value)?;
+        encoder.encode(self.key.as_str())?;
+        encoder.encode(self.value.as_str())?;
         encoder.finish();
         Ok(::sqlx::encode::IsNull::No)
     }
@@ -39,7 +53,7 @@ impl ::sqlx::decode::Decode<'_, ::sqlx::Postgres> for Property {
         let mut decoder = ::sqlx::postgres::types::PgRecordDecoder::new(value)?;
         let key = decoder.try_decode::<String>()?;
         let value = decoder.try_decode::<String>()?;
-        ::std::result::Result::Ok(Property { key, value })
+        ::std::result::Result::Ok(Property::new(Arc::new(key), Arc::new(value)))
     }
 }
 #[automatically_derived]
@@ -56,22 +70,16 @@ impl PgHasArrayType for Property {
     }
 }
 
-impl Property {
-    pub fn new(key: String, value: String) -> Self {
-        Self { key, value }
-    }
-}
-
 pub fn make_properties(map: &HashMap<String, String>) -> Vec<Property> {
     map.iter()
-        .map(|(k, v)| Property::new(k.to_owned(), v.to_owned()))
+        .map(|(k, v)| Property::new(Arc::new(k.clone()), Arc::new(v.clone())))
         .collect()
 }
 
 pub fn into_hashmap(properties: Vec<Property>) -> HashMap<String, String> {
     let mut hashmap = HashMap::new();
     for property in properties {
-        hashmap.insert(property.key, property.value);
+        hashmap.insert((*property.key).clone(), (*property.value).clone());
     }
     hashmap
 }
