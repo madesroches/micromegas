@@ -212,7 +212,7 @@ impl View for ThreadSpansView {
         query_range: Option<TimeRange>,
     ) -> Result<()> {
         if query_range.is_none() {
-            anyhow::bail!("query range mandatory for jit view");
+            anyhow::bail!("query range mandatory for thread spans view");
         }
         let query_range = query_range.unwrap();
         let mut connection = lake.db_pool.acquire().await?;
