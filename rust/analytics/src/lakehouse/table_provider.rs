@@ -19,6 +19,7 @@ use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use object_store::ObjectStore;
 use std::{any::Any, sync::Arc};
 
+#[derive(Debug)]
 pub struct MaterializedView {
     lake: Arc<DataLakeConnection>,
     object_store: Arc<dyn ObjectStore>,

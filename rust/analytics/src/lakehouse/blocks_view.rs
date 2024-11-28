@@ -20,6 +20,7 @@ use std::sync::Arc;
 const VIEW_SET_NAME: &str = "blocks";
 const VIEW_INSTANCE_ID: &str = "global";
 
+#[derive(Debug)]
 pub struct BlocksViewMaker {}
 
 impl ViewMaker for BlocksViewMaker {

@@ -1,9 +1,9 @@
 use crate::data_lake_connection::DataLakeConnection;
-use crate::sql_property::make_properties;
 use anyhow::Context;
 use anyhow::Result;
 use bytes::Buf;
 use micromegas_telemetry::block_wire_format;
+use micromegas_telemetry::property::make_properties;
 use micromegas_telemetry::stream_info::StreamInfo;
 use micromegas_telemetry::wire_format::encode_cbor;
 use micromegas_tracing::prelude::*;

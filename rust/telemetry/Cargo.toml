@@ -20,5 +20,6 @@ futures.workspace = true
 lz4.workspace = true
 object_store.workspace = true
 serde.workspace = true
+sqlx.workspace = true
 url.workspace = true
 uuid.workspace = true

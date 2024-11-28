@@ -32,6 +32,8 @@ pub mod metadata;
 pub mod metrics_table;
 /// Access to the raw binary telemetry payload
 pub mod payload;
+/// Reference-counted set of properties in transit format
+pub mod property_set;
 /// Streams response for long requests
 pub mod response_writer;
 /// Location in instrumented source code

@@ -142,12 +142,14 @@ use super::{
     thread_spans_view::ThreadSpansViewMaker, view::View,
 };
 use anyhow::Result;
+use std::fmt::Debug;
 use std::{collections::HashMap, sync::Arc};
 
-pub trait ViewMaker: Send + Sync {
+pub trait ViewMaker: Send + Sync + Debug {
     fn make_view(&self, view_instance_id: &str) -> Result<Arc<dyn View>>;
 }
 
+#[derive(Debug)]
 pub struct ViewFactory {
     view_sets: HashMap<String, Arc<dyn ViewMaker>>,
     global_views: Vec<Arc<dyn View>>,

@@ -29,6 +29,7 @@ use uuid::Uuid;
 
 const VIEW_SET_NAME: &str = "measures";
 
+#[derive(Debug)]
 pub struct MetricsViewMaker {}
 
 impl ViewMaker for MetricsViewMaker {
@@ -98,7 +99,7 @@ impl View for MetricsView {
     }
 
     fn get_file_schema_hash(&self) -> Vec<u8> {
-        vec![0]
+        vec![1]
     }
 
     fn get_file_schema(&self) -> Arc<Schema> {

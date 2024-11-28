@@ -27,6 +27,7 @@ use uuid::Uuid;
 
 const VIEW_SET_NAME: &str = "log_entries";
 
+#[derive(Debug)]
 pub struct LogViewMaker {}
 
 impl ViewMaker for LogViewMaker {
@@ -97,7 +98,7 @@ impl View for LogView {
     }
 
     fn get_file_schema_hash(&self) -> Vec<u8> {
-        vec![0]
+        vec![1]
     }
 
     fn get_file_schema(&self) -> Arc<Schema> {

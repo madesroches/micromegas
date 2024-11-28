@@ -54,7 +54,7 @@ fn find_property_in_list(properties: ArrayRef, name: &str) -> anyhow::Result<Opt
         .with_context(|| "getting value field")?;
     for i in 0..properties.len() {
         let key = properties.column(key_index).as_string::<i32>().value(i);
-        if key == name {
+        if key.eq_ignore_ascii_case(name) {
             let value = properties.column(value_index).as_string::<i32>().value(i);
             return Ok(Some(value.into()));
         }

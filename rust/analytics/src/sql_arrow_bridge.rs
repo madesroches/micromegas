@@ -14,7 +14,7 @@ use datafusion::arrow::datatypes::TimeUnit;
 use datafusion::arrow::datatypes::TimestampNanosecondType;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::cast::as_struct_array;
-use micromegas_ingestion::sql_property::Property;
+use micromegas_telemetry::property::Property;
 use sqlx::postgres::{PgColumn, PgRow};
 use sqlx::Column;
 use sqlx::Row;
@@ -253,9 +253,9 @@ impl ColumnReader for PropertiesColumnReader {
         for p in props {
             // borrow checker insists on keeping the builder references in the loop
             let key_builder = property_builder.field_builder::<StringBuilder>(0).unwrap();
-            key_builder.append_value(p.key);
+            key_builder.append_value(p.key_str());
             let value_builder = property_builder.field_builder::<StringBuilder>(1).unwrap();
-            value_builder.append_value(p.value);
+            value_builder.append_value(p.value_str());
             property_builder.append(true);
         }
         list_builder.append(true);

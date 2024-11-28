@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
-use micromegas_ingestion::sql_property;
-use micromegas_telemetry::{stream_info::StreamInfo, types::block::BlockMetadata};
+use micromegas_telemetry::{
+    property::Property, stream_info::StreamInfo, types::block::BlockMetadata,
+};
 use micromegas_tracing::prelude::*;
 use micromegas_transit::UserDefinedType;
 use sqlx::Row;
@@ -15,14 +16,14 @@ pub fn stream_from_row(row: &sqlx::postgres::PgRow) -> Result<StreamInfo> {
         ciborium::from_reader(&objects_metadata_buffer[..])
             .with_context(|| "decoding objects metadata")?;
     let tags: Vec<String> = row.try_get("tags")?;
-    let properties: Vec<sql_property::Property> = row.try_get("properties")?;
+    let properties: Vec<Property> = row.try_get("properties")?;
     Ok(StreamInfo {
         stream_id: row.try_get("stream_id")?,
         process_id: row.try_get("process_id")?,
         dependencies_metadata,
         objects_metadata,
         tags,
-        properties: sql_property::into_hashmap(properties),
+        properties: micromegas_telemetry::property::into_hashmap(properties),
     })
 }
 
@@ -71,7 +72,7 @@ pub async fn list_process_streams_tagged(
 
 #[span_fn]
 pub fn process_from_row(row: &sqlx::postgres::PgRow) -> Result<ProcessInfo> {
-    let properties: Vec<sql_property::Property> = row.try_get("process_properties")?;
+    let properties: Vec<Property> = row.try_get("process_properties")?;
     Ok(ProcessInfo {
         process_id: row.try_get("process_id")?,
         exe: row.try_get("exe")?,
@@ -84,7 +85,7 @@ pub fn process_from_row(row: &sqlx::postgres::PgRow) -> Result<ProcessInfo> {
         start_time: row.try_get("start_time")?,
         start_ticks: row.try_get("start_ticks")?,
         parent_process_id: row.try_get("parent_process_id")?,
-        properties: sql_property::into_hashmap(properties),
+        properties: micromegas_telemetry::property::into_hashmap(properties),
     })
 }
 

@@ -4,11 +4,14 @@ use anyhow::{Context, Result};
 use chrono::DateTime;
 use chrono::Utc;
 use datafusion::arrow::array::ArrayBuilder;
+use datafusion::arrow::array::ListBuilder;
 use datafusion::arrow::array::PrimitiveBuilder;
 use datafusion::arrow::array::StringBuilder;
 use datafusion::arrow::array::StringDictionaryBuilder;
+use datafusion::arrow::array::StructBuilder;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::arrow::datatypes::Field;
+use datafusion::arrow::datatypes::Fields;
 use datafusion::arrow::datatypes::Int16Type;
 use datafusion::arrow::datatypes::Int32Type;
 use datafusion::arrow::datatypes::Schema;
@@ -52,6 +55,18 @@ pub fn log_table_schema() -> Schema {
         ),
         Field::new("level", DataType::Int32, false),
         Field::new("msg", DataType::Utf8, false),
+        Field::new(
+            "properties",
+            DataType::List(Arc::new(Field::new(
+                "Property",
+                DataType::Struct(Fields::from(vec![
+                    Field::new("key", DataType::Utf8, false),
+                    Field::new("value", DataType::Utf8, false),
+                ])),
+                false,
+            ))),
+            false,
+        ),
     ])
 }
 
@@ -64,10 +79,24 @@ pub struct LogEntriesRecordBuilder {
     pub targets: StringDictionaryBuilder<Int16Type>,
     pub levels: PrimitiveBuilder<Int32Type>,
     pub msgs: StringBuilder,
+    pub properties: ListBuilder<StructBuilder>,
 }
 
 impl LogEntriesRecordBuilder {
     pub fn with_capacity(capacity: usize) -> Self {
+        let prop_struct_fields = vec![
+            Field::new("key", DataType::Utf8, false),
+            Field::new("value", DataType::Utf8, false),
+        ];
+        let prop_field = Arc::new(Field::new(
+            "Property",
+            DataType::Struct(Fields::from(prop_struct_fields.clone())),
+            false,
+        ));
+        let props_builder =
+            ListBuilder::new(StructBuilder::from_fields(prop_struct_fields, capacity))
+                .with_field(prop_field);
+
         Self {
             process_ids: StringDictionaryBuilder::new(),
             exes: StringDictionaryBuilder::new(),
@@ -77,6 +106,7 @@ impl LogEntriesRecordBuilder {
             targets: StringDictionaryBuilder::new(),
             levels: PrimitiveBuilder::with_capacity(capacity),
             msgs: StringBuilder::new(),
+            properties: props_builder,
         }
     }
 
@@ -110,6 +140,21 @@ impl LogEntriesRecordBuilder {
         self.targets.append_value(&*row.target);
         self.levels.append_value(row.level);
         self.msgs.append_value(&*row.msg);
+
+        let property_builder = self.properties.values();
+        row.properties.for_each_property(|prop| {
+            let key_builder = property_builder
+                .field_builder::<StringBuilder>(0)
+                .with_context(|| "getting key field builder")?;
+            key_builder.append_value(prop.key_str());
+            let value_builder = property_builder
+                .field_builder::<StringBuilder>(1)
+                .with_context(|| "getting value field builder")?;
+            value_builder.append_value(prop.value_str());
+            property_builder.append(true);
+            Ok(())
+        })?;
+        self.properties.append(true);
         Ok(())
     }
 
@@ -125,6 +170,7 @@ impl LogEntriesRecordBuilder {
                 Arc::new(self.targets.finish()),
                 Arc::new(self.levels.finish()),
                 Arc::new(self.msgs.finish()),
+                Arc::new(self.properties.finish()),
             ],
         )
         .with_context(|| "building record batch")

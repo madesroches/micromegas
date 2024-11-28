@@ -20,6 +20,7 @@ use std::sync::Arc;
 const VIEW_SET_NAME: &str = "streams";
 const VIEW_INSTANCE_ID: &str = "global";
 
+#[derive(Debug)]
 pub struct StreamsViewMaker {}
 
 impl ViewMaker for StreamsViewMaker {

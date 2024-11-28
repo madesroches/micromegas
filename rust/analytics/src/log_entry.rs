@@ -1,5 +1,6 @@
 use crate::{
     payload::{fetch_block_payload, parse_block},
+    property_set::PropertySet,
     time::ConvertTicks,
 };
 use anyhow::{Context, Result};
@@ -10,12 +11,14 @@ use micromegas_tracing::prelude::*;
 use micromegas_transit::value::{Object, Value};
 use std::sync::Arc;
 
+#[derive(Debug)]
 pub struct LogEntry {
     pub process: Arc<ProcessInfo>,
     pub time: i64,
     pub level: i32,
     pub target: Arc<String>,
     pub msg: Arc<String>,
+    pub properties: PropertySet,
 }
 
 #[span_fn]
@@ -48,6 +51,7 @@ pub fn log_entry_from_value(
                     level: level as i32,
                     target,
                     msg,
+                    properties: PropertySet::empty(),
                 }))
             }
             "LogStringEvent" | "LogStringEventV2" => {
@@ -72,6 +76,7 @@ pub fn log_entry_from_value(
                     level: level as i32,
                     target,
                     msg,
+                    properties: PropertySet::empty(),
                 }))
             }
             "LogStaticStrInteropEvent" | "LogStringInteropEventV2" | "LogStringInteropEventV3" => {
@@ -93,6 +98,7 @@ pub fn log_entry_from_value(
                     level: level as i32,
                     target,
                     msg,
+                    properties: PropertySet::empty(),
                 }))
             }
             "TaggedLogInteropEvent" => {
@@ -108,7 +114,7 @@ pub fn log_entry_from_value(
                 let msg = obj
                     .get::<Arc<String>>("msg")
                     .with_context(|| format!("reading msg from {}", obj.type_name.as_str()))?;
-                let _properties = obj.get::<Arc<Object>>("properties").with_context(|| {
+                let properties = obj.get::<Arc<Object>>("properties").with_context(|| {
                     format!("reading properties from {}", obj.type_name.as_str())
                 })?;
                 let time = convert_ticks.ticks_to_nanoseconds(ticks);
@@ -118,6 +124,7 @@ pub fn log_entry_from_value(
                     level: level as i32,
                     target,
                     msg,
+                    properties: properties.into(),
                 }))
             }
             "TaggedLogString" => {
@@ -157,6 +164,7 @@ pub fn log_entry_from_value(
                     level: level as i32,
                     target,
                     msg,
+                    properties: properties.into(),
                 }))
             }
 
