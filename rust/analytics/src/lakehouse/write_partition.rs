@@ -208,7 +208,7 @@ pub async fn write_partition_from_rows(
             .write(&row_set.rows)
             .await
             .with_context(|| "arrow_writer.write")?;
-        if arrow_writer.in_progress_size() > 5 * 1024 * 1024 {
+        if arrow_writer.in_progress_size() > 100 * 1024 * 1024 {
             arrow_writer
                 .flush()
                 .await
