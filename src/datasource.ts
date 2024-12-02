@@ -1,7 +1,8 @@
 import {DataQueryResponse, MetricFindValue, DataSourceInstanceSettings, CoreApp, ScopedVars, VariableWithMultiSupport} from '@grafana/data'
 import {frameToMetricFindValue, DataSourceWithBackend, getTemplateSrv} from '@grafana/runtime'
-import {SQLQuery, FlightSQLDataSourceOptions, DEFAULT_QUERY} from './types'
+import {SQLQuery, QueryFormat, FlightSQLDataSourceOptions, DEFAULT_QUERY} from './types'
 import { lastValueFrom } from 'rxjs';
+
 
 export class FlightSQLDataSource extends DataSourceWithBackend<SQLQuery, FlightSQLDataSourceOptions> {
   constructor(instanceSettings: DataSourceInstanceSettings<FlightSQLDataSourceOptions>) {
@@ -13,7 +14,7 @@ async metricFindQuery(queryText: string, options?: any): Promise<MetricFindValue
         refId: 'metricFindQuery',
         queryText,
         rawEditor: true,
-        format: 'table'
+        format: QueryFormat.Table
       };
       return lastValueFrom(
         super.query({

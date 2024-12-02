@@ -55,9 +55,11 @@ export const sqlLanguageDefinition = {
 export enum QueryFormat {
   Timeseries = 'time_series',
   Table = 'table',
+  Logs = 'logs',
 }
 
 export const QUERY_FORMAT_OPTIONS = [
   {label: 'Time series', value: QueryFormat.Timeseries},
   {label: 'Table', value: QueryFormat.Table},
+  {label: 'Logs', value: QueryFormat.Logs},
 ]
