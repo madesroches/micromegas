@@ -61,6 +61,8 @@ func decodeQueryRequest(dataQuery backend.DataQuery) (*sqlutil.Query, error) {
 		format = sqlutil.FormatOptionTimeSeries
 	case "table":
 		format = sqlutil.FormatOptionTable
+	case "logs":
+		format = sqlutil.FormatOptionLogs
 	default:
 		format = sqlutil.FormatOptionTimeSeries
 	}

@@ -1,19 +1,20 @@
 {
   "$schema": "https://raw.githubusercontent.com/grafana/grafana/master/docs/sources/developers/plugins/plugin.schema.json",
   "type": "datasource",
-  "name": "FlightSQL",
-  "id": "influxdata-flightsql-datasource",
+  "name": "Micromegas",
+  "id": "micromegas-datasource",
+  "logs": true,
   "metrics": true,
   "backend": true,
   "alerting": true,
   "executable": "gpx_flightsql_datasource",
   "info": {
-    "description": "Query databases that support Flight SQL transport.",
+    "description": "Query Micromegas.",
     "author": {
-      "name": "InfluxData",
-      "url": "https://influxdata.com"
+      "name": "Marc-Antoine Desroches",
+      "url": "https://github.com/madesroches/"
     },
-    "keywords": ["datasource", "apache", "arrow", "flight", "flightsql"],
+    "keywords": ["datasource", "apache", "arrow", "flight", "flightsql", "micromegas"],
     "logos": {
       "small": "img/arrow-logo.png",
       "large": "img/arrow-logo.png"
@@ -21,19 +22,15 @@
     "links": [
       {
         "name": "Github",
-        "url": "https://github.com/influxdata/grafana-flightsql-datasource"
+        "url": "https://github.com/madesroches/grafana-micromegas-datasource"
       },
       {
         "name": "Docs",
-        "url": "https://github.com/influxdata/grafana-flightsql-datasource/blob/main/README.md#usage"
+        "url": "https://github.com/madesroches/grafana-micromegas-datasource/blob/main/README.md#usage"
       },
       {
         "name": "License",
-        "url": "https://github.com/influxdata/grafana-flightsql-datasource/blob/main/LICENSE"
-      },
-      {
-        "name": "Arrow",
-        "url": "https://arrow.apache.org/blog/2022/02/16/introducing-arrow-flight-sql/"
+        "url": "https://github.com/madesroches/grafana-micromegas-datasource/blob/main/LICENSE"
       }
     ],
     "screenshots": [

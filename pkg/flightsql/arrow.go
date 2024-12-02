@@ -68,8 +68,9 @@ func newQueryDataResponse(reader recordReader, query sqlutil.Query, headers meta
 	case sqlutil.FormatOptionTable:
 		// No changes to the output. Send it as is.
 	case sqlutil.FormatOptionLogs:
-		// TODO(brett): We need to find out what this actually is and if its
-		// worth supporting. Pass through as "table" for now.
+		// https://grafana.com/developers/dataplane/logs
+		frame.Meta.Type = data.FrameTypeLogLines
+		frame.Meta.PreferredVisualization = "logs"
 	default:
 		resp.Error = fmt.Errorf("unsupported format")
 	}
