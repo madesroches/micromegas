@@ -1,6 +1,6 @@
 {
   "name": "micromegas-datasource",
-  "version": "0.1",
+  "version": "0.1.0",
   "description": "",
   "scripts": {
     "build": "webpack -c ./.config/webpack/webpack.config.ts --env production",
@@ -16,7 +16,7 @@
     "server": "docker compose up --build",
     "sign": "npx --yes @grafana/sign-plugin"
   },
-  "author": "Grafana",
+  "author": "Marc-Antoine Desroches",
   "license": "Apache-2.0",
   "devDependencies": {
     "@babel/core": "^7.16.7",
