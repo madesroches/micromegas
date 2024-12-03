@@ -4,12 +4,12 @@
 
 ## Usage
 
-### Adding a Flight SQL Datasource
+### Adding a Micromegas Datasource
 
 1. Open the side menu by clicking the Grafana icon in the top header.
 1. In the side menu under the Dashboards link you should find a link named Data Sources.
 1. Click the + Add data source button in the top header.
-1. Select FlightSQL from the Type dropdown.
+1. Select Micromegas from the Type dropdown.
 
 ### Configuring the Plugin
 
