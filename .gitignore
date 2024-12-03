@@ -31,6 +31,9 @@ e2e-results/
 # Editor
 .idea
 
+# emacs temp files
+*~
+
 .eslintcache
 
-grafana-flightsql-datasource*.tar.gz
+micromegas-datasource*.tar.gz

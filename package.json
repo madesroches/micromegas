@@ -4,7 +4,7 @@
   "description": "",
   "scripts": {
     "build": "webpack -c ./.config/webpack/webpack.config.ts --env production",
-    "build-plugin": "yarn install --pure-lockfile && yarn build && mage -v && pushd dist && tar -czvf ../influxdata-flightsql-datasource.tar.gz * && popd",
+    "build-plugin": "./build-plugin.sh",
     "dev": "webpack -w -c ./.config/webpack/webpack.config.ts --env development",
     "test": "jest --watch --onlyChanged",
     "test:ci": "jest --maxWorkers 4 --passWithNoTests",
