@@ -37,3 +37,4 @@ e2e-results/
 .eslintcache
 
 micromegas-datasource*.tar.gz
+micromegas-datasource.zip
