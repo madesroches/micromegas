@@ -14,7 +14,7 @@ export function QueryEditor(props: QueryEditorProps<FlightSQLDataSource, SQLQuer
   const {onChange, query, datasource} = props
   const [warningModal, showWarningModal] = useState(false)
   const [helpModal, showHelpModal] = useState(false)
-  const [sqlInfo, setSqlInfo] = useState<any>()
+  const [sqlInfo, _setSqlInfo] = useState<any>()
   const [macros, setMacros] = useState<any>()
   const [rawEditor, setRawEditor] = useState<any>(false)
   const [format, setFormat] = useState<SelectableValue<string>>()

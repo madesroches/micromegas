@@ -55,6 +55,8 @@ func decodeQueryRequest(dataQuery backend.DataQuery) (*sqlutil.Query, error) {
 		return nil, fmt.Errorf("unmarshal json: %w", err)
 	}
 
+	logInfof("q=%+v", q);
+
 	var format sqlutil.FormatQueryOption
 	switch q.Format {
 	case "time_series":
@@ -100,6 +102,7 @@ type queryRequest struct {
 	IntervalMilliseconds int    `json:"intervalMs"`
 	MaxDataPoints        int64  `json:"maxDataPoints"`
 	Format               string `json:"format"`
+	TimeFilter           bool   `json:"timeFilter"`
 }
 
 // query executes a SQL statement by issuing a `CommandStatementQuery` command to Flight SQL.
