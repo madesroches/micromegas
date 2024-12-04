@@ -49,13 +49,13 @@ func (d *FlightSQLDatasource) QueryData(ctx context.Context, req *backend.QueryD
 
 // decodeQueryRequest decodes a [backend.DataQuery] and returns a
 // [*sqlutil.Query] where all macros are expanded.
-func decodeQueryRequest(dataQuery backend.DataQuery) (*sqlutil.Query, error) {
+func decodeQueryRequest(dataQuery backend.DataQuery) (*Query, error) {
 	var q queryRequest
 	if err := json.Unmarshal(dataQuery.JSON, &q); err != nil {
 		return nil, fmt.Errorf("unmarshal json: %w", err)
 	}
 
-	logInfof("q=%+v", q);
+	logInfof("q=%+v", q)
 
 	var format sqlutil.FormatQueryOption
 	switch q.Format {
@@ -85,7 +85,11 @@ func decodeQueryRequest(dataQuery backend.DataQuery) (*sqlutil.Query, error) {
 	}
 	query.RawSQL = sql
 
-	return query, nil
+	return &Query{
+		SQL:    sql,
+		Format: format,
+		RefID:         q.RefID,
+	}, nil
 }
 
 // executeResult is an envelope for concurrent query responses.
@@ -106,7 +110,7 @@ type queryRequest struct {
 }
 
 // query executes a SQL statement by issuing a `CommandStatementQuery` command to Flight SQL.
-func (d *FlightSQLDatasource) query(ctx context.Context, query sqlutil.Query) (resp backend.DataResponse) {
+func (d *FlightSQLDatasource) query(ctx context.Context, query Query) (resp backend.DataResponse) {
 	defer func() {
 		if r := recover(); r != nil {
 			logErrorf("Panic: %s %s", r, string(debug.Stack()))
@@ -118,7 +122,7 @@ func (d *FlightSQLDatasource) query(ctx context.Context, query sqlutil.Query) (r
 		ctx = metadata.NewOutgoingContext(ctx, d.md)
 	}
 
-	info, err := d.client.Execute(ctx, query.RawSQL)
+	info, err := d.client.Execute(ctx, query.SQL)
 	if err != nil {
 		return backend.ErrDataResponse(backend.StatusInternal, fmt.Sprintf("flightsql: %s", err))
 	}
