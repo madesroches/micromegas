@@ -9,7 +9,7 @@ import (
 )
 
 func main() {
-	if err := datasource.Manage("influxdata-flightsql-datasource", flightsql.NewDatasource, datasource.ManageOpts{}); err != nil {
+	if err := datasource.Manage("micromegas-datasource", flightsql.NewDatasource, datasource.ManageOpts{}); err != nil {
 		log.DefaultLogger.Error(err.Error())
 		os.Exit(1)
 	}
