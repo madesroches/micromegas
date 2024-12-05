@@ -28,6 +28,7 @@ use futures::{Stream, TryStreamExt};
 use micromegas_analytics::lakehouse::partition_cache::QueryPartitionProvider;
 use micromegas_analytics::lakehouse::query::make_session_context;
 use micromegas_analytics::lakehouse::view_factory::ViewFactory;
+use micromegas_analytics::time::TimeRange;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_tracing::prelude::*;
 use once_cell::sync::Lazy;
@@ -109,11 +110,33 @@ impl FlightSqlService for FlightSqlServiceImpl {
             .map_err(|e| status!("Could not read ticket", e))?;
         let sql = std::str::from_utf8(&ticket_stmt.statement_handle)
             .map_err(|e| status!("Unable to parse query", e))?;
-        info!("do_get_fallback {sql:?}");
+
+        let begin = request.metadata().get("query_range_begin");
+        let end = request.metadata().get("query_range_end");
+        let query_range = if begin.is_some() && end.is_some() {
+            let begin_datetime = chrono::DateTime::parse_from_rfc3339(
+                begin
+                    .unwrap()
+                    .to_str()
+                    .map_err(|e| status!("Unable to convert query_range_begin to string", e))?,
+            )
+            .map_err(|e| status!("Unable to parse query_range_begin as a rfc3339 datetime", e))?;
+            let end_datetime = chrono::DateTime::parse_from_rfc3339(
+                end.unwrap()
+                    .to_str()
+                    .map_err(|e| status!("Unable to convert query_range_end to string", e))?,
+            )
+            .map_err(|e| status!("Unable to parse query_range_end as a rfc3339 datetime", e))?;
+            Some(TimeRange::new(begin_datetime.into(), end_datetime.into()))
+        } else {
+            None
+        };
+
+        info!("do_get_fallback range={query_range:?} sql={sql:?}");
         let ctx = make_session_context(
             self.lake.clone(),
             self.part_provider.clone(),
-            None,
+            query_range,
             self.view_factory.clone(),
         )
         .await
