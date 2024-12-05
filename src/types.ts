@@ -11,9 +11,12 @@ export interface SQLQuery extends DataQuery {
   orderBy?: string
   groupBy?: string
   limit?: string
+  timeFilter?: boolean
 }
 
-export const DEFAULT_QUERY: Partial<SQLQuery> = {}
+export const DEFAULT_QUERY: Partial<SQLQuery> = {
+  timeFilter: true
+}
 
 /**
  * These are options configured for each DataSource instance

@@ -1,4 +1,4 @@
-module github.com/influxdata/grafana-flightsql-datasource
+module github.com/madesroches/grafana-micromegas-datasource
 
 go 1.22
 

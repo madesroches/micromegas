@@ -1,5 +1,5 @@
 import React, {useState, useMemo, useCallback, useEffect} from 'react'
-import {Button, Modal, SegmentSection, Select, InlineFieldRow, SegmentInput} from '@grafana/ui'
+import {Button, Modal, SegmentSection, Select, InlineFieldRow, SegmentInput, Checkbox} from '@grafana/ui'
 import {QueryEditorProps, SelectableValue} from '@grafana/data'
 import {MacroType} from '@grafana/experimental'
 import {FlightSQLDataSource} from '../datasource'
@@ -14,24 +14,26 @@ export function QueryEditor(props: QueryEditorProps<FlightSQLDataSource, SQLQuer
   const {onChange, query, datasource} = props
   const [warningModal, showWarningModal] = useState(false)
   const [helpModal, showHelpModal] = useState(false)
-  const [sqlInfo, setSqlInfo] = useState<any>()
+  const [sqlInfo, _setSqlInfo] = useState<any>()
   const [macros, setMacros] = useState<any>()
   const [rawEditor, setRawEditor] = useState<any>(false)
   const [format, setFormat] = useState<SelectableValue<string>>()
   const [fromRawSql, setFromSql] = useState(false)
+  const [timeFilter, setTimeFilter] = useState(true)
 
-  useEffect(() => {
-    ;(async () => {
-      const res = await datasource.getSQLInfo()
-      const keywords = res?.frames[0].data.values[1][17]
-      const numericFunctions = res?.frames[0].data.values[1][18]
-      const stringFunctions = res?.frames[0].data.values[1][19]
-      const systemFunctions = res?.frames[0].data.values[1][20]
-      const sqlDateTimeFunctions = res?.frames[0].data.values[1][21]
-      const functions = [...numericFunctions, ...stringFunctions, ...systemFunctions, ...sqlDateTimeFunctions]
-      setSqlInfo({keywords: keywords, builtinFunctions: functions})
-    })()
-  }, [datasource])
+  // TODO: fix getSQLInfo on flightsql-srv
+  // useEffect(() => {
+  //   ;(async () => {
+  // 		const res = await datasource.getSQLInfo()
+  // 		const keywords = res?.frames[0].data.values[1][17]
+  // 		const numericFunctions = res?.frames[0].data.values[1][18]
+  // 		const stringFunctions = res?.frames[0].data.values[1][19]
+  // 		const systemFunctions = res?.frames[0].data.values[1][20]
+  // 		const sqlDateTimeFunctions = res?.frames[0].data.values[1][21]
+  // 		const functions = [...numericFunctions, ...stringFunctions, ...systemFunctions, ...sqlDateTimeFunctions]
+  // 		setSqlInfo({keywords: keywords, builtinFunctions: functions})
+  //   })()
+  // }, [datasource])
 
   useEffect(() => {
     ;(async () => {
@@ -82,6 +84,12 @@ export function QueryEditor(props: QueryEditorProps<FlightSQLDataSource, SQLQuer
   }, [format])
 
   useEffect(() => {
+      // sets the timeFilter on the query on checkbox change
+	  onChange({...query, timeFilter: timeFilter})
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [timeFilter])
+	
+  useEffect(() => {
     // set the editor on the query
     onChange({...query, rawEditor: rawEditor})
 
@@ -106,6 +114,14 @@ export function QueryEditor(props: QueryEditorProps<FlightSQLDataSource, SQLQuer
     } else {
       setRawEditor(false)
     }
+
+    if (query.timeFilter) {
+      setTimeFilter(query.timeFilter)
+    } else {
+      setTimeFilter(true)
+    }
+
+	  
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -175,15 +191,22 @@ export function QueryEditor(props: QueryEditorProps<FlightSQLDataSource, SQLQuer
           <Button style={{marginLeft: '5px'}} fill="outline" size="md" onClick={() => showHelpModal(!helpModal)}>
             Show Query Help
           </Button>
+          </InlineFieldRow>
+
+        <InlineFieldRow style={{flexFlow: 'row', alignItems: 'center'}}>
+          <SegmentSection label="Time Filter">
+		  <Checkbox value={query.timeFilter} onChange={() => { setTimeFilter(!timeFilter);}}/>
+          </SegmentSection>
         </InlineFieldRow>
+		  
       </div>
       {!rawEditor && (
-        <div style={{marginTop: '5px'}}>
-          <SegmentSection label="Query Preview">
+          <div style={{marginTop: '5px'}}>
+          <SegmentSection label="SQL">
             <div style={{fontFamily: 'monospace', minWidth: '200px'}}>
               <SegmentInput disabled value={query.queryText || ''} onChange={() => {}} />
             </div>
-          </SegmentSection>{' '}
+          </SegmentSection>
         </div>
       )}
       {helpModal && <QueryHelp />}

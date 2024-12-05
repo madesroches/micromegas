@@ -33,7 +33,7 @@ type recordReader interface {
 // [arrow.Record]s.
 //
 // The backend.DataResponse contains a single [data.Frame].
-func newQueryDataResponse(reader recordReader, query sqlutil.Query, headers metadata.MD) backend.DataResponse {
+func newQueryDataResponse(reader recordReader, query Query, headers metadata.MD) backend.DataResponse {
 	var resp backend.DataResponse
 	frame, err := frameForRecords(reader)
 	if err != nil {
@@ -47,8 +47,8 @@ func newQueryDataResponse(reader recordReader, query sqlutil.Query, headers meta
 	frame.Meta.Custom = map[string]any{
 		"headers": headers,
 	}
-	frame.Meta.ExecutedQueryString = query.RawSQL
-	frame.Meta.DataTopic = data.DataTopic(query.RawSQL)
+	frame.Meta.ExecutedQueryString = query.SQL
+	frame.Meta.DataTopic = data.DataTopic(query.SQL)
 
 	switch query.Format {
 	case sqlutil.FormatOptionTimeSeries:

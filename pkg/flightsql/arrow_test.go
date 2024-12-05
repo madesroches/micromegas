@@ -79,7 +79,7 @@ func TestNewQueryDataResponse(t *testing.T) {
 	reader, err := array.NewRecordReader(schema, records)
 	require.NoError(t, err)
 
-	query := sqlutil.Query{Format: sqlutil.FormatOptionTable}
+	query := Query{Format: sqlutil.FormatOptionTable}
 	resp := newQueryDataResponse(errReader{RecordReader: reader}, query, metadata.MD{})
 	require.NoError(t, resp.Error)
 	require.Len(t, resp.Frames, 1)
@@ -200,7 +200,7 @@ func TestNewQueryDataResponse_Error(t *testing.T) {
 		RecordReader: reader,
 		err:          fmt.Errorf("explosion!"),
 	}
-	query := sqlutil.Query{Format: sqlutil.FormatOptionTable}
+	query := Query{Format: sqlutil.FormatOptionTable}
 	resp := newQueryDataResponse(wrappedReader, query, metadata.MD{})
 	require.Error(t, resp.Error)
 	require.Equal(t, fmt.Errorf("explosion!"), resp.Error)
@@ -241,7 +241,7 @@ func TestNewQueryDataResponse_WideTable(t *testing.T) {
 	reader, err := array.NewRecordReader(schema, records)
 	require.NoError(t, err)
 
-	resp := newQueryDataResponse(errReader{RecordReader: reader}, sqlutil.Query{}, metadata.MD{})
+	resp := newQueryDataResponse(errReader{RecordReader: reader}, Query{}, metadata.MD{})
 	require.NoError(t, resp.Error)
 	require.Len(t, resp.Frames, 1)
 	require.Equal(t, 3, resp.Frames[0].Rows())
@@ -472,7 +472,7 @@ func TestCustomMetadata(t *testing.T) {
 	md := metadata.MD{}
 	md.Set("trace-id", "abc")
 	md.Set("trace-sampled", "true")
-	query := sqlutil.Query{
+	query := Query{
 		Format: sqlutil.FormatOptionTable,
 	}
 	resp := newQueryDataResponse(errReader{RecordReader: reader}, query, md)

@@ -49,7 +49,7 @@ func (d *FlightSQLDatasource) QueryData(ctx context.Context, req *backend.QueryD
 
 // decodeQueryRequest decodes a [backend.DataQuery] and returns a
 // [*sqlutil.Query] where all macros are expanded.
-func decodeQueryRequest(dataQuery backend.DataQuery) (*sqlutil.Query, error) {
+func decodeQueryRequest(dataQuery backend.DataQuery) (*Query, error) {
 	var q queryRequest
 	if err := json.Unmarshal(dataQuery.JSON, &q); err != nil {
 		return nil, fmt.Errorf("unmarshal json: %w", err)
@@ -81,9 +81,19 @@ func decodeQueryRequest(dataQuery backend.DataQuery) (*sqlutil.Query, error) {
 	if err != nil {
 		return nil, fmt.Errorf("macro interpolation: %w", err)
 	}
-	query.RawSQL = sql
 
-	return query, nil
+	query_metadata := make(map[string]string)
+	if q.TimeFilter {
+		query_metadata["query_range_begin"] = dataQuery.TimeRange.From.Format(time.RFC3339Nano)
+		query_metadata["query_range_end"] = dataQuery.TimeRange.To.Format(time.RFC3339Nano)
+	}
+	var fsqlQuery = &Query{
+		SQL:      sql,
+		Format:   format,
+		RefID:    q.RefID,
+		Metadata: metadata.New(query_metadata),
+	}
+	return fsqlQuery, nil
 }
 
 // executeResult is an envelope for concurrent query responses.
@@ -100,10 +110,11 @@ type queryRequest struct {
 	IntervalMilliseconds int    `json:"intervalMs"`
 	MaxDataPoints        int64  `json:"maxDataPoints"`
 	Format               string `json:"format"`
+	TimeFilter           bool   `json:"timeFilter"`
 }
 
 // query executes a SQL statement by issuing a `CommandStatementQuery` command to Flight SQL.
-func (d *FlightSQLDatasource) query(ctx context.Context, query sqlutil.Query) (resp backend.DataResponse) {
+func (d *FlightSQLDatasource) query(ctx context.Context, query Query) (resp backend.DataResponse) {
 	defer func() {
 		if r := recover(); r != nil {
 			logErrorf("Panic: %s %s", r, string(debug.Stack()))
@@ -111,11 +122,12 @@ func (d *FlightSQLDatasource) query(ctx context.Context, query sqlutil.Query) (r
 		}
 	}()
 
-	if d.md.Len() != 0 {
-		ctx = metadata.NewOutgoingContext(ctx, d.md)
+	var md = metadata.Join(d.md, query.Metadata)
+	if md.Len() != 0 {
+		ctx = metadata.NewOutgoingContext(ctx, md)
 	}
 
-	info, err := d.client.Execute(ctx, query.RawSQL)
+	info, err := d.client.Execute(ctx, query.SQL)
 	if err != nil {
 		return backend.ErrDataResponse(backend.StatusInternal, fmt.Sprintf("flightsql: %s", err))
 	}
