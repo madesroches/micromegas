@@ -55,8 +55,6 @@ func decodeQueryRequest(dataQuery backend.DataQuery) (*Query, error) {
 		return nil, fmt.Errorf("unmarshal json: %w", err)
 	}
 
-	logInfof("q=%+v", q)
-
 	var format sqlutil.FormatQueryOption
 	switch q.Format {
 	case "time_series":
@@ -83,13 +81,19 @@ func decodeQueryRequest(dataQuery backend.DataQuery) (*Query, error) {
 	if err != nil {
 		return nil, fmt.Errorf("macro interpolation: %w", err)
 	}
-	query.RawSQL = sql
 
-	return &Query{
-		SQL:    sql,
-		Format: format,
-		RefID:         q.RefID,
-	}, nil
+	query_metadata := make(map[string]string)
+	if q.TimeFilter {
+		query_metadata["query_range_begin"] = dataQuery.TimeRange.From.Format(time.RFC3339Nano)
+		query_metadata["query_range_end"] = dataQuery.TimeRange.To.Format(time.RFC3339Nano)
+	}
+	var fsqlQuery = &Query{
+		SQL:      sql,
+		Format:   format,
+		RefID:    q.RefID,
+		Metadata: metadata.New(query_metadata),
+	}
+	return fsqlQuery, nil
 }
 
 // executeResult is an envelope for concurrent query responses.
@@ -118,8 +122,9 @@ func (d *FlightSQLDatasource) query(ctx context.Context, query Query) (resp back
 		}
 	}()
 
-	if d.md.Len() != 0 {
-		ctx = metadata.NewOutgoingContext(ctx, d.md)
+	var md = metadata.Join(d.md, query.Metadata)
+	if md.Len() != 0 {
+		ctx = metadata.NewOutgoingContext(ctx, md)
 	}
 
 	info, err := d.client.Execute(ctx, query.SQL)
