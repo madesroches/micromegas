@@ -12,10 +12,12 @@ export interface SQLQuery extends DataQuery {
   groupBy?: string
   limit?: string
   timeFilter?: boolean
+  autoLimit?: boolean
 }
 
 export const DEFAULT_QUERY: Partial<SQLQuery> = {
-  timeFilter: true
+	timeFilter: true,
+	autoLimit: true
 }
 
 /**

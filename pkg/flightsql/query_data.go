@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"runtime/debug"
+	"strconv"
 	"sync"
 	"time"
 
@@ -50,6 +51,7 @@ func (d *FlightSQLDatasource) QueryData(ctx context.Context, req *backend.QueryD
 // decodeQueryRequest decodes a [backend.DataQuery] and returns a
 // [*sqlutil.Query] where all macros are expanded.
 func decodeQueryRequest(dataQuery backend.DataQuery) (*Query, error) {
+
 	var q queryRequest
 	if err := json.Unmarshal(dataQuery.JSON, &q); err != nil {
 		return nil, fmt.Errorf("unmarshal json: %w", err)
@@ -87,6 +89,9 @@ func decodeQueryRequest(dataQuery backend.DataQuery) (*Query, error) {
 		query_metadata["query_range_begin"] = dataQuery.TimeRange.From.Format(time.RFC3339Nano)
 		query_metadata["query_range_end"] = dataQuery.TimeRange.To.Format(time.RFC3339Nano)
 	}
+	if q.AutoLimit {
+		query_metadata["limit"] = strconv.FormatInt(q.MaxDataPoints, 10)
+	}
 	var fsqlQuery = &Query{
 		SQL:      sql,
 		Format:   format,
@@ -111,6 +116,7 @@ type queryRequest struct {
 	MaxDataPoints        int64  `json:"maxDataPoints"`
 	Format               string `json:"format"`
 	TimeFilter           bool   `json:"timeFilter"`
+	AutoLimit            bool   `json:"autoLimit"`
 }
 
 // query executes a SQL statement by issuing a `CommandStatementQuery` command to Flight SQL.

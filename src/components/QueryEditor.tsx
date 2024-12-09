@@ -20,6 +20,7 @@ export function QueryEditor(props: QueryEditorProps<FlightSQLDataSource, SQLQuer
   const [format, setFormat] = useState<SelectableValue<string>>()
   const [fromRawSql, setFromSql] = useState(false)
   const [timeFilter, setTimeFilter] = useState(true)
+  const [autoLimit, setAutoLimit] = useState(true)
 
   // TODO: fix getSQLInfo on flightsql-srv
   // useEffect(() => {
@@ -88,6 +89,12 @@ export function QueryEditor(props: QueryEditorProps<FlightSQLDataSource, SQLQuer
 	  onChange({...query, timeFilter: timeFilter})
       // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [timeFilter])
+
+  useEffect(() => {
+      // sets the autoLimit on the query on checkbox change
+	  onChange({...query, autoLimit: autoLimit})
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoLimit])
 	
   useEffect(() => {
     // set the editor on the query
@@ -121,6 +128,11 @@ export function QueryEditor(props: QueryEditorProps<FlightSQLDataSource, SQLQuer
       setTimeFilter(true)
     }
 
+    if (query.autoLimit) {
+      setTimeFilter(query.autoLimit)
+    } else {
+      setTimeFilter(true)
+    }
 	  
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -196,6 +208,12 @@ export function QueryEditor(props: QueryEditorProps<FlightSQLDataSource, SQLQuer
         <InlineFieldRow style={{flexFlow: 'row', alignItems: 'center'}}>
           <SegmentSection label="Time Filter">
 		  <Checkbox value={query.timeFilter} onChange={() => { setTimeFilter(!timeFilter);}}/>
+          </SegmentSection>
+        </InlineFieldRow>
+
+        <InlineFieldRow style={{flexFlow: 'row', alignItems: 'center'}}>
+          <SegmentSection label="Auto Limit">
+		  <Checkbox value={query.autoLimit} onChange={() => { setAutoLimit(!autoLimit);}}/>
           </SegmentSection>
         </InlineFieldRow>
 		  
