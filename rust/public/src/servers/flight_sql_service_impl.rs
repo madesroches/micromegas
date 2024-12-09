@@ -1,3 +1,7 @@
+use super::sqlinfo::{
+    SQL_INFO_DATE_TIME_FUNCTIONS, SQL_INFO_NUMERIC_FUNCTIONS, SQL_INFO_SQL_KEYWORDS,
+    SQL_INFO_STRING_FUNCTIONS, SQL_INFO_SYSTEM_FUNCTIONS,
+};
 use anyhow::Result;
 use arrow_flight::encode::FlightDataEncoderBuilder;
 use arrow_flight::error::FlightError;
@@ -63,6 +67,11 @@ static INSTANCE_SQL_DATA: Lazy<SqlInfoData> = Lazy::new(|| {
     builder.append(SqlInfo::FlightSqlServerVersion, "1");
     // 1.3 comes from https://github.com/apache/arrow/blob/f9324b79bf4fc1ec7e97b32e3cce16e75ef0f5e3/format/Schema.fbs#L24
     builder.append(SqlInfo::FlightSqlServerArrowVersion, "1.3");
+    builder.append(SqlInfo::SqlKeywords, SQL_INFO_SQL_KEYWORDS);
+    builder.append(SqlInfo::SqlNumericFunctions, SQL_INFO_NUMERIC_FUNCTIONS);
+    builder.append(SqlInfo::SqlStringFunctions, SQL_INFO_STRING_FUNCTIONS);
+    builder.append(SqlInfo::SqlSystemFunctions, SQL_INFO_SYSTEM_FUNCTIONS);
+    builder.append(SqlInfo::SqlDatetimeFunctions, SQL_INFO_DATE_TIME_FUNCTIONS);
     builder.build().unwrap()
 });
 
