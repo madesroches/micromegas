@@ -14,7 +14,7 @@ export function QueryEditor(props: QueryEditorProps<FlightSQLDataSource, SQLQuer
   const {onChange, query, datasource} = props
   const [warningModal, showWarningModal] = useState(false)
   const [helpModal, showHelpModal] = useState(false)
-  const [sqlInfo, _setSqlInfo] = useState<any>()
+  const [sqlInfo, setSqlInfo] = useState<any>()
   const [macros, setMacros] = useState<any>()
   const [rawEditor, setRawEditor] = useState<any>(false)
   const [format, setFormat] = useState<SelectableValue<string>>()
@@ -22,19 +22,23 @@ export function QueryEditor(props: QueryEditorProps<FlightSQLDataSource, SQLQuer
   const [timeFilter, setTimeFilter] = useState(true)
   const [autoLimit, setAutoLimit] = useState(true)
 
-  // TODO: fix getSQLInfo on flightsql-srv
-  // useEffect(() => {
-  //   ;(async () => {
-  // 		const res = await datasource.getSQLInfo()
-  // 		const keywords = res?.frames[0].data.values[1][17]
-  // 		const numericFunctions = res?.frames[0].data.values[1][18]
-  // 		const stringFunctions = res?.frames[0].data.values[1][19]
-  // 		const systemFunctions = res?.frames[0].data.values[1][20]
-  // 		const sqlDateTimeFunctions = res?.frames[0].data.values[1][21]
-  // 		const functions = [...numericFunctions, ...stringFunctions, ...systemFunctions, ...sqlDateTimeFunctions]
-  // 		setSqlInfo({keywords: keywords, builtinFunctions: functions})
-  //   })()
-  // }, [datasource])
+  useEffect(() => {
+    ;(async () => {
+		const res = await datasource.getSQLInfo()
+		const keywordsIndex = res?.frames[0].data.values[0].indexOf(508);
+		const keywords = res?.frames[0].data.values[1][keywordsIndex];
+		const numericFunIndex = res?.frames[0].data.values[0].indexOf(509);
+		const numericFunctions = res?.frames[0].data.values[1][numericFunIndex];
+		const stringFunIndex = res?.frames[0].data.values[0].indexOf(510);
+		const stringFunctions = res?.frames[0].data.values[1][stringFunIndex];
+		const sysFunIndex = res?.frames[0].data.values[0].indexOf(511);
+		const systemFunctions = res?.frames[0].data.values[1][sysFunIndex];
+		const dateTimeFunIndex = res?.frames[0].data.values[0].indexOf(512);
+		const sqlDateTimeFunctions = res?.frames[0].data.values[1][dateTimeFunIndex];
+		const functions = [...numericFunctions, ...stringFunctions, ...systemFunctions, ...sqlDateTimeFunctions]
+		setSqlInfo({keywords: keywords, builtinFunctions: functions})
+    })()
+  }, [datasource])
 
   useEffect(() => {
     ;(async () => {
