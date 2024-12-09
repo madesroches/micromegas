@@ -9,3 +9,6 @@ pub mod maintenance;
 
 /// minimal FlightSQL protocol implementation
 pub mod flight_sql_service_impl;
+
+/// metadata about this implementation of FlightSQL
+pub mod sqlinfo;
