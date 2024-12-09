@@ -34,6 +34,7 @@ use micromegas_tracing::prelude::*;
 use once_cell::sync::Lazy;
 use prost::Message;
 use std::pin::Pin;
+use std::str::FromStr;
 use std::sync::Arc;
 use tonic::{Request, Response, Status, Streaming};
 
@@ -132,7 +133,10 @@ impl FlightSqlService for FlightSqlServiceImpl {
             None
         };
 
-        info!("do_get_fallback range={query_range:?} sql={sql:?}");
+        info!(
+            "do_get_fallback range={query_range:?} sql={sql:?} limit={:?}",
+            request.metadata().get("limit")
+        );
         let ctx = make_session_context(
             self.lake.clone(),
             self.part_provider.clone(),
@@ -141,10 +145,23 @@ impl FlightSqlService for FlightSqlServiceImpl {
         )
         .await
         .map_err(|e| status!("error in make_session_context", e))?;
-        let df = ctx
+        let mut df = ctx
             .sql(sql)
             .await
             .map_err(|e| status!("error building dataframe", e))?;
+
+        if let Some(limit_str) = request.metadata().get("limit") {
+            let limit: usize = usize::from_str(
+                limit_str
+                    .to_str()
+                    .map_err(|e| status!("error converting limit to str", e))?,
+            )
+            .map_err(|e| status!("error parsing limit", e))?;
+            df = df
+                .limit(0, Some(limit))
+                .map_err(|e| status!("error building dataframe with limit", e))?;
+        }
+
         let stream = df
             .execute_stream()
             .await
