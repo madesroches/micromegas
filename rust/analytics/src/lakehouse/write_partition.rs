@@ -32,6 +32,7 @@ pub struct PartitionRowSet {
     pub rows: RecordBatch,
 }
 
+/// retire_expired_partitions moves old partitions to the temporary_files table
 pub async fn retire_expired_partitions(
     lake: &DataLakeConnection,
     expiration: DateTime<Utc>,
@@ -190,6 +191,7 @@ async fn write_partition_metadata(
     Ok(())
 }
 
+/// write_partition_from_rows creates parquet file from a stream of [PartitionRowSet]
 #[allow(clippy::too_many_arguments)]
 pub async fn write_partition_from_rows(
     lake: Arc<DataLakeConnection>,
