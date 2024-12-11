@@ -62,6 +62,16 @@ In order to keep costs down, most payloads will remain unprocessed until they ex
 
 ## Status
 
+### Soon
+
+ * Migration of Python API to use FlightSQL
+
+### Decembre 2024
+
+ * [Grafana plugin](https://github.com/madesroches/grafana-micromegas-datasource/)
+ * Released [version 0.2.3](https://crates.io/crates/micromegas)
+ * Properties on measures & log entries available in SQL queries
+
 ### Novembre 2024
 Released [version 0.2.1](https://crates.io/crates/micromegas)
 
