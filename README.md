@@ -9,6 +9,8 @@
 
 [python API](https://pypi.org/project/micromegas/)
 
+[grafana plugin](https://github.com/madesroches/grafana-micromegas-datasource/)
+
 [design presentation](https://madesroches.github.io/micromegas/doc/design-presentation/design.html) 
 
 [unreal observability](https://madesroches.github.io/micromegas/doc/unreal-observability/unreal-observability.html)
