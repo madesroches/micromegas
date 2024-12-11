@@ -5,6 +5,8 @@ use micromegas_tracing::prelude::*;
 use sqlx::{query, Row};
 use uuid::Uuid;
 
+use crate::lakehouse::write_partition::retire_expired_partitions;
+
 // returns true if there is more data to delete
 pub async fn delete_expired_blocks_batch(
     lake: &DataLakeConnection,
@@ -152,5 +154,8 @@ pub async fn delete_old_data(lake: &DataLakeConnection, min_days_old: i32) -> Re
     delete_empty_processes(lake, expiration)
         .await
         .with_context(|| "delete_empty_processes")?;
+    retire_expired_partitions(lake, expiration)
+        .await
+        .with_context(|| "retire_expired_partitions")?;
     Ok(())
 }
