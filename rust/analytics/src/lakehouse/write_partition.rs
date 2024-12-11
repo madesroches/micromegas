@@ -32,6 +32,50 @@ pub struct PartitionRowSet {
     pub rows: RecordBatch,
 }
 
+pub async fn retire_expired_partitions(
+    lake: &DataLakeConnection,
+    expiration: DateTime<Utc>,
+) -> Result<()> {
+    let mut transaction = lake.db_pool.begin().await?;
+    let old_partitions = sqlx::query(
+        "SELECT file_path, file_size
+         FROM lakehouse_partitions
+         WHERE end_insert_time < $1
+         ;",
+    )
+    .bind(expiration)
+    .fetch_all(&mut *transaction)
+    .await
+    .with_context(|| "listing expired partitions")?;
+
+    for old_part in old_partitions {
+        let file_path: String = old_part.try_get("file_path")?;
+        let file_size: i64 = old_part.try_get("file_size")?;
+        let temp_expiration =
+            Utc::now() + TimeDelta::try_hours(1).with_context(|| "making one hour")?;
+        info!("adding out of date partition {file_path} to temporary files to be deleted");
+        sqlx::query("INSERT INTO temporary_files VALUES ($1, $2, $3);")
+            .bind(file_path)
+            .bind(file_size)
+            .bind(temp_expiration)
+            .execute(&mut *transaction)
+            .await
+            .with_context(|| "adding old partition to temporary files to be deleted")?;
+    }
+
+    sqlx::query(
+        "DELETE from lakehouse_partitions
+         WHERE end_insert_time < $1
+         ;",
+    )
+    .bind(expiration)
+    .execute(&mut *transaction)
+    .await
+    .with_context(|| "deleting expired partitions")?;
+    transaction.commit().await.with_context(|| "commit")?;
+    Ok(())
+}
+
 /// retire_partitions removes out of date partitions from the active set.
 /// Overlap is determined by the insert_time of the telemetry.
 pub async fn retire_partitions(
