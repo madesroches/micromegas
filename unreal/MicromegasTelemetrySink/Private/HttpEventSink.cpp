@@ -328,10 +328,8 @@ TSharedPtr<MicromegasTracing::EventSink, ESPMode::ThreadSafe> InitHttpEventSink(
 	ProcessInfoPtr Process(new ProcessInfo());
 	Process->ProcessId = ProcessId;
 	Process->ParentProcessId = ParentProcessId;
-#if PLATFORM_ANDROID
 	Process->Exe = FPlatformProcess::ExecutableName(false);
-#else
-	Process->Exe = FPlatformProcess::ExecutablePath();
+#if !PLATFORM_ANDROID
 	if (Process->Exe.IsEmpty())
 	{
 		Process->Exe = FApp::GetProjectName();
