@@ -329,12 +329,14 @@ TSharedPtr<MicromegasTracing::EventSink, ESPMode::ThreadSafe> InitHttpEventSink(
 	Process->ProcessId = ProcessId;
 	Process->ParentProcessId = ParentProcessId;
 	Process->Exe = FPlatformProcess::ExecutableName(false);
-#if !PLATFORM_ANDROID
 	if (Process->Exe.IsEmpty())
 	{
 		Process->Exe = FApp::GetProjectName();
 	}
-#endif
+	if (Process->Exe.IsEmpty())
+	{
+  		Process->Exe = TEXT("UnrealEngine");
+	}
 	Process->Username = FPlatformProcess::UserName(false);
 	Process->Computer = FPlatformProcess::ComputerName();
 	Process->Distro = GetDistro();
