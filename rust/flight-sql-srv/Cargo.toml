@@ -13,6 +13,7 @@ authors.workspace = true
 micromegas.workspace = true
 
 anyhow.workspace = true
+clap.workspace = true
 tokio.workspace = true
 tower.workspace = true
 
