@@ -3,6 +3,7 @@ from . import time
 from . import request
 from . import client
 from . import perfetto
+from . import flightsql
 
 def connect():
     "connect to the analytics service using default values"
