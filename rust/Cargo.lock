@@ -1527,6 +1527,7 @@ name = "flight-sql-srv"
 version = "0.3.0"
 dependencies = [
  "anyhow",
+ "clap",
  "micromegas",
  "tokio",
  "tower 0.5.2",

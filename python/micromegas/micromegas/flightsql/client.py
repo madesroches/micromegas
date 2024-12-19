@@ -152,8 +152,14 @@ class FlightSQLClient:
         self.__host_port = host_port
         self.__channel_creds = channel_creds
 
+    def make_channel(self):
+        if self.__channel_creds is None:
+            return grpc.insecure_channel(self.__host_port)
+        else:
+            return grpc.secure_channel(self.__host_port, self.__channel_creds)
+
     def query(self, sql):
-        channel = grpc.secure_channel(self.__host_port, self.__channel_creds)
+        channel = self.make_channel()
         stub = Flight_pb2_grpc.FlightServiceStub(channel)
         desc = make_query_flight_descriptor(sql)
         info = stub.GetFlightInfo(desc)
