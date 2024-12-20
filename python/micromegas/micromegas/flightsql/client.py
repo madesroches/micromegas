@@ -143,6 +143,10 @@ def read_record_batch_from_flight_data(arrow_schema, flight_data):
     rb = arrow_ipc_reader.read_record_batch(arrow_schema, nodes, arrow_buffers)
     return rb
 
+def channel_creds_from_token(token):
+    call_credentials = grpc.access_token_call_credentials(token)
+    channel_cred = grpc.composite_channel_credentials(grpc.ssl_channel_credentials(), call_credentials)
+    return channel_cred
 
 class FlightSQLClient:
     def __init__(self, host_port, channel_creds):
