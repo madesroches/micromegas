@@ -125,8 +125,6 @@ def read_record_batch_from_flight_data(arrow_schema, flight_data):
     header = msg.Header()
     fb_record_batch = arrow_flatbuffers.RecordBatch()
     fb_record_batch.Init(header.Bytes, header.Pos)
-    # print("compression:", fb_record_batch.Compression())
-    # print( "nodes: ", fb_record_batch.NodesLength())
     nodes = []
     for node_index in range(fb_record_batch.NodesLength()):
         node = fb_record_batch.Nodes(node_index)
@@ -136,7 +134,6 @@ def read_record_batch_from_flight_data(arrow_schema, flight_data):
     for buffer_index in range(fb_record_batch.BuffersLength()):
         buffer = fb_record_batch.Buffers(buffer_index)
         buffers.append(buffer)
-    # print( "VariadicBufferCountsLength:", fb_record_batch.VariadicBufferCountsLength())
 
     body = pyarrow.py_buffer(flight_data.data_body)
     arrow_buffers = []
