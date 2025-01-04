@@ -5,3 +5,4 @@ RUN apt-get upgrade -y
 
 COPY telemetry-ingestion-srv .
 COPY flight-sql-srv .
+COPY telemetry-admin .

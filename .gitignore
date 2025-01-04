@@ -25,3 +25,4 @@ unreal/GTAGS
 # docker temp files
 docker/telemetry-ingestion-srv
 docker/flight-sql-srv
+docker/telemetry-admin

@@ -16,6 +16,10 @@ def main():
         os.path.join(target_dir, "release", "flight-sql-srv"),
         os.path.join(docker_command.docker_root, "flight-sql-srv"),
     )
+    shutil.copyfile(
+        os.path.join(target_dir, "release", "telemetry-admin"),
+        os.path.join(docker_command.docker_root, "telemetry-admin"),
+    )
     docker_command.run_docker_command("docker build . --tag marcantoinedesroches/micromegas:0.3")
     docker_command.run_docker_command("docker push marcantoinedesroches/micromegas:0.3")
 
