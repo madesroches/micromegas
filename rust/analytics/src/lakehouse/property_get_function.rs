@@ -18,7 +18,7 @@ pub struct PropertyGet {
 impl PropertyGet {
     pub fn new() -> Self {
         Self {
-            signature: Signature::coercible(
+            signature: Signature::exact(
                 vec![
                     DataType::List(Arc::new(Field::new(
                         "Property",
