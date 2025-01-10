@@ -3,11 +3,6 @@ import tabulate
 from .test_utils import *
 
 
-def test_list_streams():
-    df = client.query_streams(begin, end, limit)
-    print(df)
-
-
 def test_process_streams():
     sql = """
     SELECT processes.process_id, stream_id, cpu_brand
@@ -18,11 +13,6 @@ def test_process_streams():
     """
     df = client.query(sql)
     print("\n", df)
-
-
-def test_find_cpu_stream():
-    df = client.query_streams(begin, end, limit, tag_filter="cpu")
-    print(df)
 
 
 def test_spans():
