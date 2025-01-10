@@ -10,6 +10,8 @@ pub mod block_partition_spec;
 pub mod blocks_view;
 /// Management of process-specific partitions built on demand
 pub mod jit_partitions;
+/// Read access to the list of lakehouse partitions
+pub mod list_partitions_table_function;
 /// Implementation of `BlockProcessor` for log entries
 pub mod log_block_processor;
 /// Materializable view of log entries accessible through datafusion
