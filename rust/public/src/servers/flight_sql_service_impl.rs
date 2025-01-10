@@ -170,13 +170,13 @@ impl FlightSqlService for FlightSqlServiceImpl {
                 .limit(0, Some(limit))
                 .map_err(|e| status!("error building dataframe with limit", e))?;
         }
-
+        let schema = Arc::new(df.schema().as_arrow().clone());
         let stream = df
             .execute_stream()
             .await
             .map_err(|_| Status::internal("Error executing plan"))?
             .map_err(|e| FlightError::ExternalError(Box::new(e)));
-        let builder = FlightDataEncoderBuilder::new();
+        let builder = FlightDataEncoderBuilder::new().with_schema(schema);
         let flight_data_stream = builder.build(stream);
         let boxed_flight_stream = flight_data_stream
             .map_err(|e| status!("error building data stream", e))

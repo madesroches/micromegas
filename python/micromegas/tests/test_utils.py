@@ -2,8 +2,7 @@ import datetime
 import pandas as pd
 import micromegas
 
-BASE_URL = "http://localhost:8082/"
-client = micromegas.client.Client(BASE_URL)
+client = micromegas.connect()
 
 now = datetime.datetime.now(datetime.timezone.utc)
 begin = now - datetime.timedelta(days=10000)

@@ -20,16 +20,6 @@ def main():
     args = parser.parse_args()
 
     client = connection.connect()
-    df_process = client.find_process(args.process_id)
-    if df_process.empty:
-        print("process not found")
-        sys.exit(1)
-    assert df_process.shape[0] == 1
-    process = df_process.iloc[0]
-    process_id = process["process_id"]
-    process_start_time = process["start_time"]
-    end = datetime.datetime.now(datetime.timezone.utc)
-
     sort_order = ""
     limit = 1024
     conditions = []
@@ -56,13 +46,13 @@ def main():
     ORDER BY time {sort_order}
     LIMIT {limit}
     ;""".format(
-        process_id=process_id,
+        process_id=args.process_id,
         sort_order=sort_order,
         max_level=int(args.maxlevel),
         limit=limit,
         conditions="\n".join(conditions),
     )
-    df_log = client.query(sql, process_start_time, end).sort_values('time')
+    df_log = client.query(sql).sort_values('time')
     print(tabulate(df_log, headers="keys"))
 
 

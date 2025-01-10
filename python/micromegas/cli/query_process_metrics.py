@@ -18,15 +18,6 @@ def main():
     parser.add_argument("process_id")
     args = parser.parse_args()
     client = connection.connect()
-    df_process = client.find_process(args.process_id)
-    if df_process.empty:
-        print("process not found")
-        sys.exit(1)
-    assert df_process.shape[0] == 1
-    process = df_process.iloc[0]
-    process_id = process["process_id"]
-    process_start_time = process["start_time"]
-    end = datetime.datetime.now(datetime.timezone.utc)
 
     conditions = []
     if args.target is not None:
@@ -34,7 +25,7 @@ def main():
 
     if args.name is not None:
         conditions.append("name = '{name}'".format(name=args.name))
-        
+
     where = ""
     if len(conditions) > 0:
         where = "WHERE " + "\n AND".join(conditions)
@@ -46,16 +37,10 @@ def main():
     ORDER BY time
     LIMIT {limit}
     ;""".format(
-        process_id=process_id,
-        limit=int(args.limit),
-        where=where
+        process_id=args.process_id, limit=int(args.limit), where=where
     )
 
-    df_metrics = client.query(
-        sql,
-        process_start_time,
-        end,
-    )
+    df_metrics = client.query(sql)
 
     if args.stats:
         df_metrics = df_metrics.groupby("name", observed=True)["value"].agg(
