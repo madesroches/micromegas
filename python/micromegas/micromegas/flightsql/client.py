@@ -143,10 +143,32 @@ def read_record_batch_from_flight_data(arrow_schema, flight_data):
     rb = arrow_ipc_reader.read_record_batch(arrow_schema, nodes, arrow_buffers)
     return rb
 
+
 def channel_creds_from_token(token):
     call_credentials = grpc.access_token_call_credentials(token)
-    channel_cred = grpc.composite_channel_credentials(grpc.ssl_channel_credentials(), call_credentials)
+    channel_cred = grpc.composite_channel_credentials(
+        grpc.ssl_channel_credentials(), call_credentials
+    )
     return channel_cred
+
+
+class FlightSQLAuthMetadataPlugin(grpc.AuthMetadataPlugin):
+    def __init__(self, headers):
+        # we transform the keys into lowercase to avoid illegal grpc metadata (like 'Authorization', for example)
+        self.__headers = [(k.lower(), v) for (k, v) in headers.items()]
+
+    def __call__(self, context, callback):
+        callback(self.__headers, None)
+
+
+def channel_creds_from_headers(headers):
+    auth_plugin = FlightSQLAuthMetadataPlugin(headers)
+    call_credentials = grpc.metadata_call_credentials(auth_plugin)
+    channel_cred = grpc.composite_channel_credentials(
+        grpc.ssl_channel_credentials(), call_credentials
+    )
+    return channel_cred
+
 
 class FlightSQLClient:
     def __init__(self, host_port, channel_creds):
