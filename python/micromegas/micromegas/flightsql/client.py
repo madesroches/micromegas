@@ -7,6 +7,7 @@ from . import FlightSql_pb2
 from . import Flight_pb2
 from . import arrow_flatbuffers
 from . import arrow_ipc_reader
+from . import time
 
 
 def fb_time_unit_to_string(fb_time_unit):
@@ -181,14 +182,20 @@ class FlightSQLClient:
         else:
             return grpc.secure_channel(self.__host_port, self.__channel_creds)
 
-    def query(self, sql):
+    def query(self, sql, begin=None, end=None):
+        metadata = []
+        if begin is not None:
+            metadata.append(("query_range_begin", time.format_datetime(begin)))
+        if end is not None:
+            metadata.append(("query_range_end", time.format_datetime(end)))
+
         channel = self.make_channel()
         stub = Flight_pb2_grpc.FlightServiceStub(channel)
         desc = make_query_flight_descriptor(sql)
         info = stub.GetFlightInfo(desc)
-        grpc_rdv = stub.DoGet(info.endpoint[0].ticket)
+        grpc_rdv = stub.DoGet(info.endpoint[0].ticket, metadata=metadata)
         flight_data_list = list(grpc_rdv)
-        if len(flight_data_list) < 2:
+        if len(flight_data_list) < 1:
             raise RuntimeError("too few flightdata messages {}", len(flight_data_list))
         schema_message = flight_data_list[0]
         data_messages = flight_data_list[1:]
@@ -196,4 +203,5 @@ class FlightSQLClient:
         record_batches = []
         for msg in data_messages:
             record_batches.append(read_record_batch_from_flight_data(schema, msg))
-        return pyarrow.Table.from_batches(record_batches)
+        table = pyarrow.Table.from_batches(record_batches, schema)
+        return table.to_pandas()

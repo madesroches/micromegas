@@ -8,6 +8,8 @@ readme = "README.md"
 [tool.poetry.dependencies]
 cbor2 = "^5.6.3"
 crc = "^7.0.0"
+flatbuffers = "^24.12.23"
+grpcio = "^1.69.0"
 pandas = "^2.2.2"
 protobuf = "^5.29.1"
 pyarrow = "^18.1.0"
