@@ -97,10 +97,22 @@ impl TableProvider for ListPartitionsTableProvider {
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
-        let rows = sqlx::query("SELECT * from lakehouse_partitions;")
-            .fetch_all(&self.lake.db_pool)
-            .await
-            .map_err(|e| DataFusionError::External(e.into()))?;
+        let rows = sqlx::query(
+            "SELECT view_set_name,
+				    view_instance_id,
+				    begin_insert_time,
+				    end_insert_time,
+				    min_event_time,
+				    max_event_time,
+				    updated, file_path,
+				    file_size,
+				    file_schema_hash,
+				    source_data_hash
+			 FROM lakehouse_partitions;",
+        )
+        .fetch_all(&self.lake.db_pool)
+        .await
+        .map_err(|e| DataFusionError::External(e.into()))?;
         let rb = rows_to_record_batch(&rows).map_err(|e| DataFusionError::External(e.into()))?;
         Ok(Arc::new(MemoryExec::try_new(
             &[vec![rb]],
