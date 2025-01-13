@@ -4,8 +4,8 @@ use super::{
 };
 use crate::time::TimeRange;
 use datafusion::{
-    catalog::TableProvider, common::plan_err, datasource::function::TableFunctionImpl,
-    error::DataFusionError, logical_expr::Expr, scalar::ScalarValue,
+    catalog::TableFunctionImpl, catalog::TableProvider, common::plan_err, error::DataFusionError,
+    logical_expr::Expr, scalar::ScalarValue,
 };
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use object_store::ObjectStore;
