@@ -1,6 +1,7 @@
 use super::{
     answer::Answer, list_partitions_table_function::ListPartitionsTableFunction,
-    partition_cache::QueryPartitionProvider, property_get_function::PropertyGet, view::View,
+    partition_cache::QueryPartitionProvider, property_get_function::PropertyGet,
+    retire_partitions_table_function::RetirePartitionsTableFunction, view::View,
     view_factory::ViewFactory,
 };
 use crate::{
@@ -96,6 +97,10 @@ pub async fn make_session_context(
     ctx.register_udtf(
         "list_partitions",
         Arc::new(ListPartitionsTableFunction::new(lake.clone())),
+    );
+    ctx.register_udtf(
+        "retire_partitions",
+        Arc::new(RetirePartitionsTableFunction::new(lake.clone())),
     );
 
     ctx.register_udf(ScalarUDF::from(PropertyGet::new()));

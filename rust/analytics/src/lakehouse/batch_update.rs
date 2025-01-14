@@ -2,7 +2,7 @@ use super::{
     merge::create_merged_partition, partition_cache::PartitionCache,
     partition_source_data::hash_to_object_count, view::View,
 };
-use crate::response_writer::ResponseWriter;
+use crate::response_writer::{Logger, ResponseWriter};
 use anyhow::{Context, Result};
 use chrono::{DateTime, TimeDelta, Utc};
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
@@ -25,7 +25,7 @@ async fn verify_overlapping_partitions(
     view_instance_id: &str,
     file_schema_hash: &[u8],
     source_data_hash: &[u8],
-    writer: Arc<ResponseWriter>,
+    logger: Arc<dyn Logger>,
 ) -> Result<PartitionCreationStrategy> {
     let desc = format!(
         "[{}, {}] {view_set_name} {view_instance_id}",
@@ -41,8 +41,8 @@ async fn verify_overlapping_partitions(
         .with_context(|| "filtering partition cache")?
         .partitions;
     if filtered.is_empty() {
-        writer
-            .write_string(&format!("{desc}: matching partitions not found"))
+        logger
+            .write_log_entry(format!("{desc}: matching partitions not found"))
             .await?;
         return Ok(PartitionCreationStrategy::CreateFromSource);
     }
@@ -52,8 +52,8 @@ async fn verify_overlapping_partitions(
         let begin = part.begin_insert_time;
         let end = part.end_insert_time;
         if begin < begin_insert || end > end_insert {
-            writer
-                .write_string(&format!(
+            logger
+                .write_log_entry(format!(
                     "{desc}: found overlapping partition [{}, {}], aborting the update",
                     begin.to_rfc3339(),
                     end.to_rfc3339()
@@ -62,8 +62,8 @@ async fn verify_overlapping_partitions(
             return Ok(PartitionCreationStrategy::Abort);
         }
         if part.view_metadata.file_schema_hash != file_schema_hash {
-            writer
-                .write_string(&format!(
+            logger
+                .write_log_entry(format!(
                     "{desc}: found matching partition with different file schema"
                 ))
                 .await?;
@@ -73,8 +73,8 @@ async fn verify_overlapping_partitions(
             existing_source_hash += hash_to_object_count(&part.source_data_hash)?
         } else {
             // old hash that does not represent the number of events
-            writer
-                .write_string(&format!(
+            logger
+                .write_log_entry(format!(
                     "{desc}: found partition with incompatible source hash: recreate"
                 ))
                 .await?;
@@ -83,8 +83,8 @@ async fn verify_overlapping_partitions(
     }
 
     if nb_source_events != existing_source_hash {
-        writer
-            .write_string(&format!(
+        logger
+            .write_log_entry(format!(
                 "{desc}: existing partitions do not match source data ({nb_source_events} vs {existing_source_hash}) : creating a new partition"
             ))
             .await?;
@@ -92,16 +92,16 @@ async fn verify_overlapping_partitions(
     }
 
     if nb_existing_partitions > 1 {
-        writer
-            .write_string(&format!(
+        logger
+            .write_log_entry(format!(
                 "{desc}: merging existing partitions, nb_source_events={nb_source_events}"
             ))
             .await?;
         return Ok(PartitionCreationStrategy::MergeExisting);
     }
 
-    writer
-        .write_string(&format!(
+    logger
+        .write_log_entry(format!(
             "{desc}: already up to date, nb_source_events={nb_source_events}"
         ))
         .await?;

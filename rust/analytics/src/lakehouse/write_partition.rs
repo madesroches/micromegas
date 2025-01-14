@@ -1,6 +1,6 @@
 use crate::{
     arrow_utils::serialize_parquet_metadata, lakehouse::async_parquet_writer::AsyncParquetWriter,
-    response_writer::ResponseWriter,
+    response_writer::Logger,
 };
 use anyhow::{Context, Result};
 use chrono::{DateTime, TimeDelta, Utc};
@@ -85,7 +85,7 @@ pub async fn retire_partitions(
     view_instance_id: &str,
     begin_insert_time: DateTime<Utc>,
     end_insert_time: DateTime<Utc>,
-    writer: Arc<ResponseWriter>,
+    logger: Arc<dyn Logger>,
 ) -> Result<()> {
     // this is not an overlap test, we need to assume that we are not making a new smaller partition
     // where a bigger one existed
@@ -112,8 +112,8 @@ pub async fn retire_partitions(
         let file_path: String = old_part.try_get("file_path")?;
         let file_size: i64 = old_part.try_get("file_size")?;
         let expiration = Utc::now() + TimeDelta::try_hours(1).with_context(|| "making one hour")?;
-        writer
-            .write_string(&format!(
+        logger
+            .write_log_entry(format!(
                 "adding out of date partition {file_path} to temporary files to be deleted"
             ))
             .await?;
@@ -147,7 +147,7 @@ pub async fn retire_partitions(
 async fn write_partition_metadata(
     lake: &DataLakeConnection,
     partition: &Partition,
-    writer: Arc<ResponseWriter>,
+    logger: Arc<dyn Logger>,
 ) -> Result<()> {
     let file_metadata_buffer: Vec<u8> = serialize_parquet_metadata(&partition.file_metadata)
         .with_context(|| "serialize_parquet_metadata")?
@@ -163,7 +163,7 @@ async fn write_partition_metadata(
         &partition.view_metadata.view_instance_id,
         partition.begin_insert_time,
         partition.end_insert_time,
-        writer,
+        logger,
     )
     .await
     .with_context(|| "retire_partitions")?;
@@ -201,7 +201,7 @@ pub async fn write_partition_from_rows(
     end_insert_time: DateTime<Utc>,
     source_data_hash: Vec<u8>,
     mut rb_stream: Receiver<PartitionRowSet>,
-    response_writer: Arc<ResponseWriter>,
+    logger: Arc<dyn Logger>,
 ) -> Result<()> {
     let file_id = uuid::Uuid::new_v4();
     let file_path = format!(
@@ -267,15 +267,15 @@ pub async fn write_partition_from_rows(
         if progression != write_progression {
             write_progression = progression;
             let written = arrow_writer.bytes_written();
-            response_writer
-                .write_string(&format!("{desc}: written {written} bytes"))
+            logger
+                .write_log_entry(format!("{desc}: written {written} bytes"))
                 .await?;
         }
     }
 
     if min_event_time.is_none() || max_event_time.is_none() {
-        response_writer
-            .write_string(&format!(
+        logger
+            .write_log_entry(format!(
                 "no data for {desc} partition, not writing the object"
             ))
             .await?;
@@ -308,7 +308,7 @@ pub async fn write_partition_from_rows(
                     .with_context(|| "to_parquet_meta_data")?,
             ),
         },
-        response_writer,
+        logger,
     )
     .await?;
 

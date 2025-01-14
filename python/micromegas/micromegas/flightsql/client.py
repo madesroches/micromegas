@@ -205,3 +205,21 @@ class FlightSQLClient:
             record_batches.append(read_record_batch_from_flight_data(schema, msg))
         table = pyarrow.Table.from_batches(record_batches, schema)
         return table.to_pandas()
+
+    def query_stream(self, sql, begin=None, end=None):
+        metadata = []
+        if begin is not None:
+            metadata.append(("query_range_begin", time.format_datetime(begin)))
+        if end is not None:
+            metadata.append(("query_range_end", time.format_datetime(end)))
+
+        channel = self.make_channel()
+        stub = Flight_pb2_grpc.FlightServiceStub(channel)
+        desc = make_query_flight_descriptor(sql)
+        info = stub.GetFlightInfo(desc)
+        grpc_rdv = stub.DoGet(info.endpoint[0].ticket, metadata=metadata)
+        schema_message = grpc_rdv.next()
+        schema = read_schema_from_flight_data(schema_message)
+        for msg in grpc_rdv:
+            yield read_record_batch_from_flight_data(schema, msg)
+    

@@ -3,7 +3,7 @@ use super::{
     view::View,
     write_partition::{write_partition_from_rows, PartitionRowSet},
 };
-use crate::response_writer::ResponseWriter;
+use crate::response_writer::Logger;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use datafusion::parquet::arrow::{
@@ -22,7 +22,7 @@ pub async fn create_merged_partition(
     view: Arc<dyn View>,
     begin: DateTime<Utc>,
     end: DateTime<Utc>,
-    response_writer: Arc<ResponseWriter>,
+    logger: Arc<dyn Logger>,
 ) -> Result<()> {
     let view_set_name = view.get_view_set_name().to_string();
     let view_instance_id = view.get_view_instance_id().to_string();
@@ -49,8 +49,8 @@ pub async fn create_merged_partition(
     .await
     .with_context(|| "fetching partitions to merge")?;
     if rows.len() < 2 {
-        response_writer
-            .write_string(&format!("{desc}: not enough partitions to merge"))
+        logger
+            .write_log_entry(format!("{desc}: not enough partitions to merge"))
             .await?;
         return Ok(());
     }
@@ -75,8 +75,8 @@ pub async fn create_merged_partition(
         if file_schema_hash != latest_file_schema_hash {
             let begin_insert_time: DateTime<Utc> = r.try_get("begin_insert_time")?;
             let end_insert_time: DateTime<Utc> = r.try_get("end_insert_time")?;
-            response_writer
-                .write_string(&format!(
+            logger
+                .write_log_entry(format!(
                     "{desc}: incompatible file schema with [{},{}]",
                     begin_insert_time.to_rfc3339(),
                     end_insert_time.to_rfc3339()
@@ -85,8 +85,8 @@ pub async fn create_merged_partition(
             return Ok(());
         }
     }
-    response_writer
-        .write_string(&format!(
+    logger
+        .write_log_entry(format!(
             "{desc}: merging {} partitions sum_size={sum_size}",
             rows.len()
         ))
@@ -101,13 +101,13 @@ pub async fn create_merged_partition(
         end,
         source_hash.to_le_bytes().to_vec(),
         rx,
-        response_writer.clone(),
+        logger.clone(),
     ));
     for r in &rows {
         let file_path: String = r.try_get("file_path")?;
         let file_size: i64 = r.try_get("file_size")?;
-        response_writer
-            .write_string(&format!("reading path={file_path} size={file_size}"))
+        logger
+            .write_log_entry(format!("reading path={file_path} size={file_size}"))
             .await?;
         let min_time_row: DateTime<Utc> = r.try_get("min_event_time")?;
         let max_time_row: DateTime<Utc> = r.try_get("max_event_time")?;
