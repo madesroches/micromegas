@@ -24,8 +24,10 @@ use crate::{
     warn,
 };
 use chrono::Utc;
+use std::cell::OnceCell;
 use std::collections::HashMap;
 use std::fmt;
+use std::sync::RwLock;
 use std::{
     cell::Cell,
     sync::{Arc, Mutex},
@@ -41,58 +43,46 @@ pub fn init_event_dispatch(
         static ref INIT_MUTEX: Mutex<()> = Mutex::new(());
     }
     let _guard = INIT_MUTEX.lock().unwrap();
-
-    unsafe {
-        if G_DISPATCH.is_none() {
-            G_DISPATCH = Some(Dispatch::new(
+    let dispatch_ref = &G_DISPATCH.inner;
+    if dispatch_ref.get().is_none() {
+        dispatch_ref
+            .set(Dispatch::new(
                 logs_buffer_size,
                 metrics_buffer_size,
                 threads_buffer_size,
                 sink,
-            ));
-            Ok(())
-        } else {
-            info!("event dispatch already initialized");
-            Err(Error::AlreadyInitialized())
-        }
+            ))
+            .map_err(|_| Error::AlreadyInitialized())
+    } else {
+        info!("event dispatch already initialized");
+        Err(Error::AlreadyInitialized())
     }
 }
 
 #[inline]
 pub fn process_id() -> Option<uuid::Uuid> {
-    unsafe { G_DISPATCH.as_ref().map(Dispatch::get_process_id) }
+    G_DISPATCH.get().map(Dispatch::get_process_id)
 }
 
 pub fn get_sink() -> Option<Arc<dyn EventSink>> {
-    unsafe { G_DISPATCH.as_ref().map(Dispatch::get_sink) }
+    G_DISPATCH.get().map(Dispatch::get_sink)
 }
 
 pub fn shutdown_dispatch() {
-    unsafe {
-        #[allow(static_mut_refs)]
-        if let Some(d) = &mut G_DISPATCH {
-            d.shutdown();
-        }
-    }
+    G_DISPATCH.get().map(Dispatch::shutdown);
 }
 
 #[inline(always)]
 pub fn int_metric(metric_desc: &'static StaticMetricMetadata, value: u64) {
-    unsafe {
-        #[allow(static_mut_refs)]
-        if let Some(d) = &mut G_DISPATCH {
-            d.int_metric(metric_desc, value);
-        }
+    if let Some(d) = G_DISPATCH.get() {
+        d.int_metric(metric_desc, value);
     }
 }
 
 #[inline(always)]
 pub fn float_metric(metric_desc: &'static StaticMetricMetadata, value: f64) {
-    unsafe {
-        #[allow(static_mut_refs)]
-        if let Some(d) = &mut G_DISPATCH {
-            d.float_metric(metric_desc, value);
-        }
+    if let Some(d) = G_DISPATCH.get() {
+        d.float_metric(metric_desc, value);
     }
 }
 
@@ -102,11 +92,8 @@ pub fn tagged_float_metric(
     properties: &'static PropertySet,
     value: f64,
 ) {
-    unsafe {
-        #[allow(static_mut_refs)]
-        if let Some(d) = &mut G_DISPATCH {
-            d.tagged_float_metric(desc, properties, value);
-        }
+    if let Some(d) = G_DISPATCH.get() {
+        d.tagged_float_metric(desc, properties, value);
     }
 }
 
@@ -116,21 +103,15 @@ pub fn tagged_integer_metric(
     properties: &'static PropertySet,
     value: u64,
 ) {
-    unsafe {
-        #[allow(static_mut_refs)]
-        if let Some(d) = &mut G_DISPATCH {
-            d.tagged_integer_metric(desc, properties, value);
-        }
+    if let Some(d) = G_DISPATCH.get() {
+        d.tagged_integer_metric(desc, properties, value);
     }
 }
 
 #[inline(always)]
 pub fn log(desc: &'static LogMetadata, args: fmt::Arguments<'_>) {
-    unsafe {
-        #[allow(static_mut_refs)]
-        if let Some(d) = &mut G_DISPATCH {
-            d.log(desc, args);
-        }
+    if let Some(d) = G_DISPATCH.get() {
+        d.log(desc, args);
     }
 }
 
@@ -140,53 +121,38 @@ pub fn log_tagged(
     properties: &'static PropertySet,
     args: fmt::Arguments<'_>,
 ) {
-    unsafe {
-        #[allow(static_mut_refs)]
-        if let Some(d) = &mut G_DISPATCH {
-            d.log_tagged(desc, properties, args);
-        }
+    if let Some(d) = G_DISPATCH.get() {
+        d.log_tagged(desc, properties, args);
     }
 }
 
 #[inline(always)]
 pub fn log_interop(metadata: &LogMetadata, args: fmt::Arguments<'_>) {
-    unsafe {
-        #[allow(static_mut_refs)]
-        if let Some(d) = &mut G_DISPATCH {
-            d.log_interop(metadata, args);
-        }
+    if let Some(d) = G_DISPATCH.get() {
+        d.log_interop(metadata, args);
     }
 }
 
 #[inline(always)]
 pub fn log_enabled(metadata: &LogMetadata) -> bool {
-    unsafe {
-        #[allow(static_mut_refs)]
-        if let Some(d) = &G_DISPATCH {
-            d.log_enabled(metadata)
-        } else {
-            false
-        }
+    if let Some(d) = G_DISPATCH.get() {
+        d.log_enabled(metadata)
+    } else {
+        false
     }
 }
 
 #[inline(always)]
 pub fn flush_log_buffer() {
-    unsafe {
-        #[allow(static_mut_refs)]
-        if let Some(d) = &mut G_DISPATCH {
-            d.flush_log_buffer();
-        }
+    if let Some(d) = G_DISPATCH.get() {
+        d.flush_log_buffer();
     }
 }
 
 #[inline(always)]
 pub fn flush_metrics_buffer() {
-    unsafe {
-        #[allow(static_mut_refs)]
-        if let Some(d) = &mut G_DISPATCH {
-            d.flush_metrics_buffer();
-        }
+    if let Some(d) = G_DISPATCH.get() {
+        d.flush_metrics_buffer();
     }
 }
 
@@ -199,7 +165,7 @@ pub fn init_thread_stream() {
             return;
         }
         #[allow(static_mut_refs)]
-        if let Some(d) = &mut G_DISPATCH {
+        if let Some(d) = G_DISPATCH.get() {
             d.init_thread_stream(cell);
         } else {
             warn!("dispatch not initialized, cannot init thread stream, events will be lost for this thread");
@@ -208,11 +174,8 @@ pub fn init_thread_stream() {
 }
 
 pub fn for_each_thread_stream(fun: &mut dyn FnMut(*mut ThreadStream)) {
-    unsafe {
-        #[allow(static_mut_refs)]
-        if let Some(d) = &mut G_DISPATCH {
-            d.for_each_thread_stream(fun);
-        }
+    if let Some(d) = G_DISPATCH.get() {
+        d.for_each_thread_stream(fun);
     }
 }
 
@@ -222,7 +185,7 @@ pub fn flush_thread_buffer() {
         let opt_stream = &mut *cell.as_ptr();
         if let Some(stream) = opt_stream {
             #[allow(static_mut_refs)]
-            match &mut G_DISPATCH {
+            match G_DISPATCH.get() {
                 Some(d) => {
                     d.flush_thread_buffer(stream);
                 }
@@ -270,7 +233,7 @@ pub fn on_end_named_scope(thread_span_location: &'static SpanLocation, name: &'s
 
 #[inline(always)]
 pub fn on_begin_async_scope(scope: &'static SpanMetadata) -> u64 {
-    let id = unsafe { G_ASYNC_SPAN_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed) };
+    let id = G_ASYNC_SPAN_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     on_thread_event(BeginAsyncSpanEvent {
         span_desc: scope,
         span_id: id as u64,
@@ -290,7 +253,7 @@ pub fn on_end_async_scope(span_id: u64, scope: &'static SpanMetadata) {
 
 #[inline(always)]
 pub fn on_begin_async_named_scope(span_location: &'static SpanLocation, name: &'static str) -> u64 {
-    let id = unsafe { G_ASYNC_SPAN_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed) };
+    let id = G_ASYNC_SPAN_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     on_thread_event(BeginAsyncNamedSpanEvent {
         span_location,
         name: name.into(),
@@ -314,8 +277,27 @@ pub fn on_end_async_named_scope(
     });
 }
 
-static mut G_DISPATCH: Option<Dispatch> = None;
-static mut G_ASYNC_SPAN_COUNTER: std::sync::atomic::AtomicUsize =
+pub struct DispatchCell {
+    inner: OnceCell<Dispatch>,
+}
+
+impl DispatchCell {
+    const fn new() -> Self {
+        Self {
+            inner: OnceCell::new(),
+        }
+    }
+
+    fn get(&self) -> Option<&Dispatch> {
+        self.inner.get()
+    }
+}
+
+// very unsafe indeed - we don't want to pay for locking every time we need to record an event
+unsafe impl Sync for DispatchCell {}
+
+static G_DISPATCH: DispatchCell = DispatchCell::new();
+static G_ASYNC_SPAN_COUNTER: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
 
 thread_local! {
@@ -346,7 +328,7 @@ struct Dispatch {
     log_stream: Mutex<LogStream>,
     metrics_stream: Mutex<MetricsStream>,
     thread_streams: Mutex<Vec<*mut ThreadStream>>, // very very unsafe - threads would need to be unregistered before they are destroyed
-    sink: Arc<dyn EventSink>,
+    sink: RwLock<Arc<dyn EventSink>>,
 }
 
 impl Dispatch {
@@ -357,7 +339,7 @@ impl Dispatch {
         sink: Arc<dyn EventSink>,
     ) -> Self {
         let process_id = uuid::Uuid::new_v4();
-        let mut obj = Self {
+        let obj = Self {
             process_id,
             logs_buffer_size,
             metrics_buffer_size,
@@ -375,7 +357,7 @@ impl Dispatch {
                 HashMap::new(),
             )),
             thread_streams: Mutex::new(vec![]),
-            sink,
+            sink: RwLock::new(sink),
         };
         obj.startup();
         obj.init_log_stream();
@@ -388,15 +370,17 @@ impl Dispatch {
     }
 
     pub fn get_sink(&self) -> Arc<dyn EventSink> {
-        self.sink.clone()
+        self.sink.read().unwrap().clone()
     }
 
-    fn shutdown(&mut self) {
-        self.sink.on_shutdown();
-        self.sink = Arc::new(NullEventSink {});
+    fn shutdown(&self) {
+        let old_sink = self.get_sink();
+        old_sink.on_shutdown();
+        let null_sink = Arc::new(NullEventSink {});
+        *self.sink.write().unwrap() = null_sink;
     }
 
-    fn startup(&mut self) {
+    fn startup(&self) {
         let mut parent_process = None;
         if let Ok(parent_process_guid) = std::env::var("MICROMEGAS_TELEMETRY_PARENT_PROCESS") {
             if let Ok(parent_process_id) = uuid::Uuid::try_parse(&parent_process_guid) {
@@ -408,20 +392,20 @@ impl Dispatch {
             self.process_id.to_string(),
         );
         let process_info = Arc::new(make_process_info(self.process_id, parent_process));
-        self.sink.on_startup(process_info);
+        self.get_sink().on_startup(process_info);
     }
 
-    fn init_log_stream(&mut self) {
+    fn init_log_stream(&self) {
         let log_stream = self.log_stream.lock().unwrap();
-        self.sink.on_init_log_stream(&log_stream);
+        self.get_sink().on_init_log_stream(&log_stream);
     }
 
-    fn init_metrics_stream(&mut self) {
+    fn init_metrics_stream(&self) {
         let metrics_stream = self.metrics_stream.lock().unwrap();
-        self.sink.on_init_metrics_stream(&metrics_stream);
+        self.get_sink().on_init_metrics_stream(&metrics_stream);
     }
 
-    fn init_thread_stream(&mut self, cell: &Cell<Option<ThreadStream>>) {
+    fn init_thread_stream(&self, cell: &Cell<Option<ThreadStream>>) {
         let mut properties = HashMap::new();
         properties.insert(String::from("thread-id"), thread_id::get().to_string());
         if let Some(name) = std::thread::current().name() {
@@ -435,14 +419,14 @@ impl Dispatch {
         );
         unsafe {
             let opt_ref = &mut *cell.as_ptr();
-            self.sink.on_init_thread_stream(&thread_stream);
+            self.get_sink().on_init_thread_stream(&thread_stream);
             *opt_ref = Some(thread_stream);
             let mut vec_guard = self.thread_streams.lock().unwrap();
             vec_guard.push(opt_ref.as_mut().unwrap());
         }
     }
 
-    fn for_each_thread_stream(&mut self, fun: &mut dyn FnMut(*mut ThreadStream)) {
+    fn for_each_thread_stream(&self, fun: &mut dyn FnMut(*mut ThreadStream)) {
         let mut vec_guard = self.thread_streams.lock().unwrap();
         for stream in &mut *vec_guard {
             fun(*stream);
@@ -450,7 +434,7 @@ impl Dispatch {
     }
 
     #[inline]
-    fn int_metric(&mut self, desc: &'static StaticMetricMetadata, value: u64) {
+    fn int_metric(&self, desc: &'static StaticMetricMetadata, value: u64) {
         let time = now();
         let mut metrics_stream = self.metrics_stream.lock().unwrap();
         metrics_stream
@@ -464,7 +448,7 @@ impl Dispatch {
     }
 
     #[inline]
-    fn float_metric(&mut self, desc: &'static StaticMetricMetadata, value: f64) {
+    fn float_metric(&self, desc: &'static StaticMetricMetadata, value: f64) {
         let time = now();
         let mut metrics_stream = self.metrics_stream.lock().unwrap();
         metrics_stream
@@ -479,7 +463,7 @@ impl Dispatch {
 
     #[inline]
     fn tagged_float_metric(
-        &mut self,
+        &self,
         desc: &'static StaticMetricMetadata,
         properties: &'static PropertySet,
         value: f64,
@@ -503,7 +487,7 @@ impl Dispatch {
 
     #[inline]
     fn tagged_integer_metric(
-        &mut self,
+        &self,
         desc: &'static StaticMetricMetadata,
         properties: &'static PropertySet,
         value: u64,
@@ -526,7 +510,7 @@ impl Dispatch {
     }
 
     #[inline]
-    fn flush_metrics_buffer(&mut self) {
+    fn flush_metrics_buffer(&self) {
         let mut metrics_stream = self.metrics_stream.lock().unwrap();
         if metrics_stream.is_empty() {
             return;
@@ -542,20 +526,20 @@ impl Dispatch {
         )));
         assert!(!metrics_stream.is_full());
         Arc::get_mut(&mut old_event_block).unwrap().close();
-        self.sink.on_process_metrics_block(old_event_block);
+        self.get_sink().on_process_metrics_block(old_event_block);
     }
 
     fn log_enabled(&self, metadata: &LogMetadata) -> bool {
-        self.sink.on_log_enabled(metadata)
+        self.get_sink().on_log_enabled(metadata)
     }
 
     #[inline]
-    fn log(&mut self, metadata: &'static LogMetadata, args: fmt::Arguments<'_>) {
+    fn log(&self, metadata: &'static LogMetadata, args: fmt::Arguments<'_>) {
         if !self.log_enabled(metadata) {
             return;
         }
         let time = now();
-        self.sink.on_log(metadata, time, args);
+        self.get_sink().on_log(metadata, time, args);
         let mut log_stream = self.log_stream.lock().unwrap();
         if args.as_str().is_some() {
             log_stream.get_events_mut().push(LogStaticStrEvent {
@@ -578,7 +562,7 @@ impl Dispatch {
 
     #[inline]
     fn log_tagged(
-        &mut self,
+        &self,
         desc: &'static LogMetadata,
         properties: &'static PropertySet,
         args: fmt::Arguments<'_>,
@@ -587,7 +571,7 @@ impl Dispatch {
             return;
         }
         let time = now();
-        self.sink.on_log(desc, time, args);
+        self.get_sink().on_log(desc, time, args);
         let mut log_stream = self.log_stream.lock().unwrap();
         log_stream.get_events_mut().push(TaggedLogString {
             desc,
@@ -603,9 +587,9 @@ impl Dispatch {
     }
 
     #[inline]
-    fn log_interop(&mut self, desc: &LogMetadata, args: fmt::Arguments<'_>) {
+    fn log_interop(&self, desc: &LogMetadata, args: fmt::Arguments<'_>) {
         let time = now();
-        self.sink.on_log(desc, time, args);
+        self.get_sink().on_log(desc, time, args);
         let mut log_stream = self.log_stream.lock().unwrap();
         if let Some(msg) = args.as_str() {
             log_stream.get_events_mut().push(LogStaticStrInteropEvent {
@@ -630,7 +614,7 @@ impl Dispatch {
     }
 
     #[inline]
-    fn flush_log_buffer(&mut self) {
+    fn flush_log_buffer(&self) {
         let mut log_stream = self.log_stream.lock().unwrap();
         if log_stream.is_empty() {
             return;
@@ -646,11 +630,11 @@ impl Dispatch {
         )));
         assert!(!log_stream.is_full());
         Arc::get_mut(&mut old_event_block).unwrap().close();
-        self.sink.on_process_log_block(old_event_block);
+        self.get_sink().on_process_log_block(old_event_block);
     }
 
     #[inline]
-    fn flush_thread_buffer(&mut self, stream: &mut ThreadStream) {
+    fn flush_thread_buffer(&self, stream: &mut ThreadStream) {
         if stream.is_empty() {
             return;
         }
@@ -664,7 +648,7 @@ impl Dispatch {
         )));
         assert!(!stream.is_full());
         Arc::get_mut(&mut old_block).unwrap().close();
-        self.sink.on_process_thread_block(old_block);
+        self.get_sink().on_process_thread_block(old_block);
     }
 }
 

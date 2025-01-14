@@ -13,7 +13,7 @@ pub struct FieldFormatVisitor<'a> {
     pub target: Option<String>,
 }
 
-impl<'a> Visit for FieldFormatVisitor<'a> {
+impl Visit for FieldFormatVisitor<'_> {
     fn record_str(&mut self, field: &Field, value: &str) {
         if field.name() == "log.target" {
             self.target = Some(value.to_owned());
