@@ -222,4 +222,17 @@ class FlightSQLClient:
         schema = read_schema_from_flight_data(schema_message)
         for msg in grpc_rdv:
             yield read_record_batch_from_flight_data(schema, msg)
-    
+
+    def retire_partitions(self, view_set_name, view_instance_id, begin, end):
+        sql = """
+          SELECT time, msg
+          FROM retire_partitions('{view_set_name}', '{view_instance_id}', '{begin}', '{end}')
+        """.format(
+            view_set_name=view_set_name,
+            view_instance_id=view_instance_id,
+            begin=begin.isoformat(),
+            end=end.isoformat(),
+        )
+        for rb in self.query_stream(sql):
+            for index, row in rb.to_pandas().iterrows():
+                print(row['time'], row['msg'])
