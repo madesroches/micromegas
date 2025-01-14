@@ -63,6 +63,7 @@ pub fn frequency() -> u64 {
 }
 
 #[cfg(windows)]
+#[allow(clippy::manual_c_str_literals)]
 fn frequency_fallback() -> u64 {
     // https://www.codeproject.com/Articles/7340/Get-the-Processor-Speed-in-two-simple-ways
     #[link(name = "kernel32")]
