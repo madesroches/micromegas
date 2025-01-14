@@ -51,7 +51,7 @@ where
             } else {
                 // the connection is live, this looks like a real error
                 error!("{e:?}");
-                if let Err(e) = writer.write_string(&format!("{e:?}")).await {
+                if let Err(e) = writer.write_string(format!("{e:?}")).await {
                     //error writing can happen, probably not a big deal
                     info!("{e:?}");
                 }

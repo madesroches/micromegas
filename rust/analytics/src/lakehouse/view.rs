@@ -1,4 +1,4 @@
-use crate::{response_writer::ResponseWriter, time::TimeRange};
+use crate::{response_writer::Logger, time::TimeRange};
 use anyhow::Result;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -11,8 +11,7 @@ use super::partition_cache::QueryPartitionProvider;
 #[async_trait]
 pub trait PartitionSpec: Send + Sync {
     fn get_source_data_hash(&self) -> Vec<u8>;
-    async fn write(&self, lake: Arc<DataLakeConnection>, writer: Arc<ResponseWriter>)
-        -> Result<()>;
+    async fn write(&self, lake: Arc<DataLakeConnection>, logger: Arc<dyn Logger>) -> Result<()>;
 }
 
 #[derive(Debug, Clone)]

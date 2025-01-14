@@ -3,7 +3,7 @@ use super::{
     view::{PartitionSpec, ViewMetadata},
     write_partition::{write_partition_from_rows, PartitionRowSet},
 };
-use crate::response_writer::ResponseWriter;
+use crate::response_writer::Logger;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -41,11 +41,7 @@ impl PartitionSpec for BlockPartitionSpec {
         self.source_data.block_ids_hash.clone()
     }
 
-    async fn write(
-        &self,
-        lake: Arc<DataLakeConnection>,
-        response_writer: Arc<ResponseWriter>,
-    ) -> Result<()> {
+    async fn write(&self, lake: Arc<DataLakeConnection>, logger: Arc<dyn Logger>) -> Result<()> {
         let desc = format!(
             "[{}, {}] {} {}",
             self.view_metadata.view_set_name,
@@ -53,12 +49,10 @@ impl PartitionSpec for BlockPartitionSpec {
             self.begin_insert.to_rfc3339(),
             self.end_insert.to_rfc3339()
         );
-        response_writer
-            .write_string(&format!("writing {desc}"))
-            .await?;
+        logger.write_log_entry(format!("writing {desc}")).await?;
 
-        response_writer
-            .write_string(&format!("reading {} blocks", self.source_data.blocks.len()))
+        logger
+            .write_log_entry(format!("reading {} blocks", self.source_data.blocks.len()))
             .await?;
 
         if self.source_data.blocks.is_empty() {
@@ -74,7 +68,7 @@ impl PartitionSpec for BlockPartitionSpec {
             self.end_insert,
             self.source_data.block_ids_hash.clone(),
             rx,
-            response_writer.clone(),
+            logger.clone(),
         ));
 
         let mut max_size = self.source_data.blocks[0].block.payload_size as usize;
@@ -102,7 +96,7 @@ impl PartitionSpec for BlockPartitionSpec {
             match res_opt_rows {
                 Err(e) => {
                     error!("{e:?}");
-                    response_writer.write_string(&format!("{e:?}")).await?;
+                    logger.write_log_entry(format!("{e:?}")).await?;
                 }
                 Ok(Some(row_set)) => {
                     tx.send(row_set).await?;

@@ -40,6 +40,8 @@ pub mod property_get_function;
 pub mod query;
 /// Wrapper around ParquetObjectreader to provide ParquetMetaData without hitting the ObjectStore
 pub mod reader_factory;
+/// Exposes retire_partitions as a table function
+pub mod retire_partitions_table_function;
 /// Replicated view of the `streams` table of the postgresql metadata database.
 pub mod streams_view;
 /// TableProvider implementation for the lakehouse

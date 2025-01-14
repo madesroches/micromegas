@@ -1,7 +1,7 @@
 use super::view::{PartitionSpec, ViewMetadata};
 use crate::{
     lakehouse::write_partition::{write_partition_from_rows, PartitionRowSet},
-    response_writer::ResponseWriter,
+    response_writer::Logger,
     sql_arrow_bridge::rows_to_record_batch,
 };
 use anyhow::{Context, Result};
@@ -62,11 +62,7 @@ impl PartitionSpec for MetadataPartitionSpec {
         self.record_count.to_le_bytes().to_vec()
     }
 
-    async fn write(
-        &self,
-        lake: Arc<DataLakeConnection>,
-        response_writer: Arc<ResponseWriter>,
-    ) -> Result<()> {
+    async fn write(&self, lake: Arc<DataLakeConnection>, logger: Arc<dyn Logger>) -> Result<()> {
         if self.record_count == 0 {
             return Ok(());
         }
@@ -77,9 +73,7 @@ impl PartitionSpec for MetadataPartitionSpec {
             self.begin_insert.to_rfc3339(),
             self.end_insert.to_rfc3339()
         );
-        response_writer
-            .write_string(&format!("writing {desc}"))
-            .await?;
+        logger.write_log_entry(format!("writing {desc}")).await?;
 
         let rows = sqlx::query(&self.data_sql)
             .bind(self.begin_insert)
@@ -110,7 +104,7 @@ impl PartitionSpec for MetadataPartitionSpec {
             self.end_insert,
             row_count.to_le_bytes().to_vec(),
             rx,
-            response_writer.clone(),
+            logger.clone(),
         ));
         tx.send(PartitionRowSet {
             min_time_row: min_event_time,

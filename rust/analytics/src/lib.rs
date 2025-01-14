@@ -11,7 +11,8 @@ pub mod arrow_utils;
 pub mod call_tree;
 /// Removal of old data
 pub mod delete;
-
+/// Datafusion extensions
+pub mod dfext;
 /// Module dedicated to the maintenance and query of materialized views
 ///
 /// Unlike the telemetry data lake where it's fast & cheap to write but costly to read,
