@@ -59,6 +59,7 @@ impl LogSender {
 #[async_trait]
 impl Logger for LogSender {
     async fn write_log_entry(&self, msg: String) -> Result<()> {
+        info!("{msg}");
         self.sender
             .send((chrono::Utc::now(), msg))
             .await
