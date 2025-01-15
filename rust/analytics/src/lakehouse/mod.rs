@@ -16,6 +16,8 @@ pub mod list_partitions_table_function;
 pub mod log_block_processor;
 /// Materializable view of log entries accessible through datafusion
 pub mod log_view;
+/// Exposes materialize_partitions as a table function
+pub mod materialize_partitions_table_function;
 /// Merge consecutive parquet partitions into a single file
 pub mod merge;
 /// Specification for a view partition backed by a table in the postgresql metadata database.

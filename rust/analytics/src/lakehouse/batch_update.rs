@@ -2,7 +2,7 @@ use super::{
     merge::create_merged_partition, partition_cache::PartitionCache,
     partition_source_data::hash_to_object_count, view::View,
 };
-use crate::response_writer::{Logger, ResponseWriter};
+use crate::response_writer::Logger;
 use anyhow::{Context, Result};
 use chrono::{DateTime, TimeDelta, Utc};
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
@@ -114,7 +114,7 @@ async fn materialize_partition(
     begin_insert: DateTime<Utc>,
     end_insert: DateTime<Utc>,
     view: Arc<dyn View>,
-    writer: Arc<ResponseWriter>,
+    logger: Arc<dyn Logger>,
 ) -> Result<()> {
     let view_set_name = view.get_view_set_name();
     let partition_spec = view
@@ -135,19 +135,19 @@ async fn materialize_partition(
         &view_instance_id,
         &view.get_file_schema_hash(),
         &partition_spec.get_source_data_hash(),
-        writer.clone(),
+        logger.clone(),
     )
     .await?;
 
     match strategy {
         PartitionCreationStrategy::CreateFromSource => {
             partition_spec
-                .write(lake, writer)
+                .write(lake, logger)
                 .await
                 .with_context(|| "writing partition")?;
         }
         PartitionCreationStrategy::MergeExisting => {
-            create_merged_partition(lake, view, begin_insert, end_insert, writer).await?;
+            create_merged_partition(lake, view, begin_insert, end_insert, logger).await?;
         }
         PartitionCreationStrategy::Abort => {}
     }
@@ -162,7 +162,7 @@ pub async fn materialize_partition_range(
     begin_range: DateTime<Utc>,
     end_range: DateTime<Utc>,
     partition_time_delta: TimeDelta,
-    writer: Arc<ResponseWriter>,
+    logger: Arc<dyn Logger>,
 ) -> Result<()> {
     let mut begin_part = begin_range;
     let mut end_part = begin_part + partition_time_delta;
@@ -173,7 +173,7 @@ pub async fn materialize_partition_range(
             begin_part,
             end_part,
             view.clone(),
-            writer.clone(),
+            logger.clone(),
         )
         .await
         .with_context(|| "materialize_partition")?;
