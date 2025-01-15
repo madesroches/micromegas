@@ -22,6 +22,15 @@ pub fn exp_to_string(expr: &Expr) -> datafusion::error::Result<String> {
     }
 }
 
+pub fn exp_to_i64(expr: &Expr) -> datafusion::error::Result<i64> {
+    match simplify_exp(expr)? {
+        Expr::Literal(ScalarValue::Int64(Some(value))) => Ok(value),
+        other => {
+            plan_err!("can't convert {other:?} to string")
+        }
+    }
+}
+
 pub fn exp_to_timestamp(expr: &Expr) -> datafusion::error::Result<DateTime<Utc>> {
     match simplify_exp(expr)? {
         Expr::Literal(ScalarValue::Utf8(Some(string))) => {

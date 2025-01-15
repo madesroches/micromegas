@@ -235,4 +235,21 @@ class FlightSQLClient:
         )
         for rb in self.query_stream(sql):
             for index, row in rb.to_pandas().iterrows():
-                print(row['time'], row['msg'])
+                print(row["time"], row["msg"])
+
+    def materialize_partitions(
+        self, view_set_name, view_instance_id, begin, end, partition_delta_seconds
+    ):
+        sql = """
+          SELECT time, msg
+          FROM materialize_partitions('{view_set_name}', '{view_instance_id}', '{begin}', '{end}', {partition_delta_seconds})
+        """.format(
+            view_set_name=view_set_name,
+            view_instance_id=view_instance_id,
+            begin=begin.isoformat(),
+            end=end.isoformat(),
+            partition_delta_seconds=partition_delta_seconds,
+        )
+        for rb in self.query_stream(sql):
+            for index, row in rb.to_pandas().iterrows():
+                print(row["time"], row["msg"])

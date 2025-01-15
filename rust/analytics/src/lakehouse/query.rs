@@ -1,5 +1,6 @@
 use super::{
     answer::Answer, list_partitions_table_function::ListPartitionsTableFunction,
+    materialize_partitions_table_function::MaterializePartitionsTableFunction,
     partition_cache::QueryPartitionProvider, property_get_function::PropertyGet,
     retire_partitions_table_function::RetirePartitionsTableFunction, view::View,
     view_factory::ViewFactory,
@@ -101,6 +102,13 @@ pub async fn make_session_context(
     ctx.register_udtf(
         "retire_partitions",
         Arc::new(RetirePartitionsTableFunction::new(lake.clone())),
+    );
+    ctx.register_udtf(
+        "materialize_partitions",
+        Arc::new(MaterializePartitionsTableFunction::new(
+            lake.clone(),
+            view_factory.clone(),
+        )),
     );
 
     ctx.register_udf(ScalarUDF::from(PropertyGet::new()));
