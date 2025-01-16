@@ -63,10 +63,12 @@ In order to keep costs down, most payloads will remain unprocessed until they ex
  * Analytics built on https://arrow.apache.org/datafusion/
 
 ## Status
+ 
+### January 2025
 
-### Soon
-
- * Migration of Python API to use FlightSQL
+ * Released [version 0.3.0](https://crates.io/crates/micromegas)
+ * New FlightSQL python API
+   * Ready to replace analytics-srv with flight-sql-srv
 
 ### Decembre 2024
 
