@@ -4,20 +4,22 @@ Python analytics client for https://github.com/madesroches/micromegas/
 
 ## Example usage
 
-Query the 2 most recent log entries from the analytics service
+Query the 2 most recent log entries from the flightsql service
 
 ```python
 import datetime
 import pandas as pd
 import micromegas
+import grpc
 
-BASE_URL = "http://localhost:8082/"
-client = micromegas.client.Client(BASE_URL)
+host_port = "localhost:50051"
+channel_cred = grpc.local_channel_credentials()
+client = micromegas.flightsql.client.FlightSQLClient(host_port, channel_cred)
 sql = """
 SELECT time, process_id, level, target, msg
 FROM log_entries
 WHERE level <= 4
-AND exe LIKE '%analytics%'
+AND exe LIKE '%flight%'
 ORDER BY time DESC
 LIMIT 2
 """
