@@ -67,6 +67,12 @@ In order to keep costs down, most payloads will remain unprocessed until they ex
 ### Soon
 
  * Migration of Python API to use FlightSQL
+ 
+### January 2025
+
+ * Released [version 0.3.0](https://crates.io/crates/micromegas)
+ * New FlightSQL python API
+   * Ready to replace analytics-srv with flight-sql-srv
 
 ### Decembre 2024
 
