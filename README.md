@@ -63,10 +63,6 @@ In order to keep costs down, most payloads will remain unprocessed until they ex
  * Analytics built on https://arrow.apache.org/datafusion/
 
 ## Status
-
-### Soon
-
- * Migration of Python API to use FlightSQL
  
 ### January 2025
 
