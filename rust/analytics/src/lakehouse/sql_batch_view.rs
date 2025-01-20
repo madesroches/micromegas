@@ -1,6 +1,7 @@
 use super::{
-    partition_cache::{NullPartitionProvider, QueryPartitionProvider},
+    partition_cache::{NullPartitionProvider, PartitionCache},
     query::make_session_context,
+    sql_partition_spec::fetch_sql_partition_spec,
     view::{PartitionSpec, View},
     view_factory::ViewFactory,
 };
@@ -23,9 +24,11 @@ pub struct SqlBatchView {
     transform_query: Arc<String>,
     merge_partitions_query: Arc<String>,
     schema: Arc<Schema>,
+    view_factory: Arc<ViewFactory>,
 }
 
 impl SqlBatchView {
+    #[allow(clippy::too_many_arguments)]
     pub async fn new(
         view_set_name: Arc<String>,
         view_instance_id: Arc<String>,
@@ -37,7 +40,7 @@ impl SqlBatchView {
         view_factory: Arc<ViewFactory>,
     ) -> Result<Self> {
         let null_part_provider = Arc::new(NullPartitionProvider {});
-        let ctx = make_session_context(lake, null_part_provider, None, view_factory)
+        let ctx = make_session_context(lake, null_part_provider, None, view_factory.clone())
             .await
             .with_context(|| "make_session_context")?;
         let src_df = ctx.sql(&src_query).await?;
@@ -60,6 +63,7 @@ impl SqlBatchView {
             transform_query,
             merge_partitions_query,
             schema,
+            view_factory,
         })
     }
 }
@@ -76,12 +80,35 @@ impl View for SqlBatchView {
 
     async fn make_batch_partition_spec(
         &self,
-        _lake: Arc<DataLakeConnection>,
-        _part_provider: Arc<dyn QueryPartitionProvider>,
-        _begin_insert: DateTime<Utc>,
-        _end_insert: DateTime<Utc>,
+        lake: Arc<DataLakeConnection>,
+        existing_partitions: Arc<PartitionCache>,
+        begin_insert: DateTime<Utc>,
+        end_insert: DateTime<Utc>,
     ) -> Result<Arc<dyn PartitionSpec>> {
-        todo!();
+        let partitions_in_range =
+            Arc::new(existing_partitions.filter_insert_range(begin_insert, end_insert));
+        let ctx = make_session_context(
+            lake.clone(),
+            partitions_in_range.clone(),
+            None,
+            self.view_factory.clone(),
+        )
+        .await
+        .with_context(|| "make_session_context")?;
+        let src_df = ctx.sql(&self.src_query).await?;
+        let src_view = src_df.into_view();
+        ctx.register_table(
+            TableReference::Bare {
+                table: "source".into(),
+            },
+            src_view,
+        )?;
+
+        Ok(Arc::new(
+            fetch_sql_partition_spec(ctx, begin_insert, end_insert)
+                .await
+                .with_context(|| "fetch_sql_partition_spec")?,
+        ))
     }
     fn get_file_schema_hash(&self) -> Vec<u8> {
         let mut hasher = DefaultHasher::new();

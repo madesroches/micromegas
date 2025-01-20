@@ -2,7 +2,7 @@ use crate::time::TimeRange;
 
 use super::{
     metadata_partition_spec::fetch_metadata_partition_spec,
-    partition_cache::QueryPartitionProvider,
+    partition_cache::PartitionCache,
     view::{PartitionSpec, View, ViewMetadata},
     view_factory::ViewMaker,
 };
@@ -80,7 +80,7 @@ impl View for StreamsView {
     async fn make_batch_partition_spec(
         &self,
         lake: Arc<DataLakeConnection>,
-        _part_provider: Arc<dyn QueryPartitionProvider>,
+        _existing_partitions: Arc<PartitionCache>,
         begin_insert: DateTime<Utc>,
         end_insert: DateTime<Utc>,
     ) -> Result<Arc<dyn PartitionSpec>> {

@@ -1,12 +1,14 @@
+use super::partition_cache::PartitionCache;
 use crate::{
+    dfext::get_column::get_column,
     lakehouse::{blocks_view::BlocksView, query::query_single_view},
     time::TimeRange,
 };
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use datafusion::arrow::array::{
-    Array, ArrayRef, AsArray, BinaryArray, GenericListArray, Int32Array, Int64Array, RecordBatch,
-    StringArray, StructArray, TimestampNanosecondArray,
+    Array, ArrayRef, AsArray, BinaryArray, GenericListArray, Int32Array, Int64Array, StringArray,
+    StructArray, TimestampNanosecondArray,
 };
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_telemetry::property::Property;
@@ -14,8 +16,6 @@ use micromegas_telemetry::{stream_info::StreamInfo, types::block::BlockMetadata}
 use micromegas_tracing::prelude::*;
 use std::sync::Arc;
 use uuid::Uuid;
-
-use super::partition_cache::QueryPartitionProvider;
 
 pub struct PartitionSourceBlock {
     pub block: BlockMetadata,
@@ -32,16 +32,6 @@ pub fn hash_to_object_count(hash: &[u8]) -> Result<i64> {
     Ok(i64::from_le_bytes(
         hash.try_into().with_context(|| "hash_to_object_count")?,
     ))
-}
-
-pub fn get_column<'a, T: core::any::Any>(rc: &'a RecordBatch, column_name: &str) -> Result<&'a T> {
-    let column = rc
-        .column_by_name(column_name)
-        .with_context(|| format!("getting column {column_name}"))?;
-    column
-        .as_any()
-        .downcast_ref::<T>()
-        .with_context(|| format!("casting {column_name}: {:?}", column.data_type()))
 }
 
 fn read_property_list(value: ArrayRef) -> Result<Vec<Property>> {
@@ -66,7 +56,7 @@ fn read_property_list(value: ArrayRef) -> Result<Vec<Property>> {
 
 pub async fn fetch_partition_source_data(
     lake: Arc<DataLakeConnection>,
-    part_provider: Arc<dyn QueryPartitionProvider>,
+    existing_partitions: Arc<PartitionCache>,
     begin_insert: DateTime<Utc>,
     end_insert: DateTime<Utc>,
     source_stream_tag: &str,
@@ -93,7 +83,7 @@ pub async fn fetch_partition_source_data(
     let mut partition_src_blocks = vec![];
     let blocks_answer = query_single_view(
         lake,
-        part_provider,
+        existing_partitions,
         Some(TimeRange::new(begin_insert, end_insert)),
         &sql,
         blocks_view,

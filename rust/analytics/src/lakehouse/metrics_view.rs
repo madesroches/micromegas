@@ -10,7 +10,7 @@ use super::{
         generate_jit_partitions, is_jit_partition_up_to_date, write_partition_from_blocks,
     },
     metrics_block_processor::MetricsBlockProcessor,
-    partition_cache::QueryPartitionProvider,
+    partition_cache::PartitionCache,
     partition_source_data::fetch_partition_source_data,
     view::{PartitionSpec, View, ViewMetadata},
     view_factory::ViewMaker,
@@ -73,17 +73,22 @@ impl View for MetricsView {
     async fn make_batch_partition_spec(
         &self,
         lake: Arc<DataLakeConnection>,
-        part_provider: Arc<dyn QueryPartitionProvider>,
+        existing_partitions: Arc<PartitionCache>,
         begin_insert: DateTime<Utc>,
         end_insert: DateTime<Utc>,
     ) -> Result<Arc<dyn PartitionSpec>> {
         if *self.view_instance_id != "global" {
             anyhow::bail!("not supported for jit queries... should it?");
         }
-        let source_data =
-            fetch_partition_source_data(lake, part_provider, begin_insert, end_insert, "metrics")
-                .await
-                .with_context(|| "fetch_partition_source_data")?;
+        let source_data = fetch_partition_source_data(
+            lake,
+            existing_partitions,
+            begin_insert,
+            end_insert,
+            "metrics",
+        )
+        .await
+        .with_context(|| "fetch_partition_source_data")?;
         Ok(Arc::new(BlockPartitionSpec {
             view_metadata: ViewMetadata {
                 view_set_name: self.view_set_name.clone(),

@@ -1,4 +1,4 @@
-/// Record batches + schema
+// Record batches + schema
 pub mod answer;
 /// Write parquet in object store
 pub mod async_parquet_writer;
@@ -46,6 +46,8 @@ pub mod reader_factory;
 pub mod retire_partitions_table_function;
 /// Sql-defined view updated at regular intervals
 pub mod sql_batch_view;
+/// Specification for a view partition backed by a SQL query on the lakehouse.
+pub mod sql_partition_spec;
 /// Replicated view of the `streams` table of the postgresql metadata database.
 pub mod streams_view;
 /// TableProvider implementation for the lakehouse

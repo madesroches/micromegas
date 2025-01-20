@@ -1,8 +1,13 @@
 use anyhow::{Context, Result};
+use chrono::DurationRound;
+use chrono::{TimeDelta, Utc};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+use micromegas_analytics::lakehouse::batch_update::materialize_partition_range;
+use micromegas_analytics::lakehouse::partition_cache::PartitionCache;
 use micromegas_analytics::lakehouse::view::View;
 use micromegas_analytics::lakehouse::view_factory::default_view_factory;
 use micromegas_analytics::lakehouse::{sql_batch_view::SqlBatchView, view_factory::ViewFactory};
+use micromegas_analytics::response_writer::ResponseWriter;
 use micromegas_ingestion::data_lake_connection::{connect_to_data_lake, DataLakeConnection};
 use micromegas_telemetry_sink::TelemetryGuardBuilder;
 use micromegas_tracing::prelude::*;
@@ -22,7 +27,7 @@ async fn make_log_entries_levels_per_process_view(
                CAST(level==4 as INT) as info,
                CAST(level==5 as INT) as debug,
                CAST(level==6 as INT) as trace
-       FROM log_entries;",
+        FROM log_entries;",
     ));
 
     let transform_query = Arc::new(String::from(
@@ -81,7 +86,8 @@ async fn sql_view_test() -> Result<()> {
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
     let lake = Arc::new(connect_to_data_lake(&connection_string, &object_store_uri).await?);
     let view_factory = Arc::new(default_view_factory()?);
-    let log_summary = make_log_entries_levels_per_process_view(lake, view_factory).await?;
+    let log_summary_view =
+        make_log_entries_levels_per_process_view(lake.clone(), view_factory.clone()).await?;
     let ref_schema = Arc::new(Schema::new(vec![
         Field::new(
             "time_bin",
@@ -101,10 +107,63 @@ async fn sql_view_test() -> Result<()> {
         Field::new("nb_trace", DataType::Int64, true),
     ]));
 
-    assert_eq!(log_summary.get_file_schema(), ref_schema);
+    assert_eq!(log_summary_view.get_file_schema(), ref_schema);
 
     let ref_schema_hash: Vec<u8> = vec![219, 37, 165, 158, 123, 73, 39, 204];
-    assert_eq!(log_summary.get_file_schema_hash(), ref_schema_hash);
+    assert_eq!(log_summary_view.get_file_schema_hash(), ref_schema_hash);
+
+    let nb_partitions = 2;
+    let partition_time_delta = TimeDelta::minutes(1);
+    let now = Utc::now();
+    let end_range = now.duration_trunc(partition_time_delta)?;
+    let begin_range = end_range - (partition_time_delta * nb_partitions);
+
+    let mut partitions = Arc::new(
+        // we only need the blocks partitions for this call
+        PartitionCache::fetch_overlapping_insert_range(&lake.db_pool, begin_range, end_range)
+            .await?,
+    );
+    let null_response_writer = Arc::new(ResponseWriter::new(None));
+    let blocks_view = view_factory.make_view("blocks", "global")?;
+    materialize_partition_range(
+        partitions.clone(),
+        lake.clone(),
+        blocks_view,
+        begin_range,
+        end_range,
+        partition_time_delta,
+        null_response_writer.clone(),
+    )
+    .await?;
+    partitions = Arc::new(
+        PartitionCache::fetch_overlapping_insert_range(&lake.db_pool, begin_range, end_range)
+            .await?,
+    );
+    let log_entries_view = view_factory.make_view("log_entries", "global")?;
+    materialize_partition_range(
+        partitions.clone(),
+        lake.clone(),
+        log_entries_view,
+        begin_range,
+        end_range,
+        partition_time_delta,
+        null_response_writer.clone(),
+    )
+    .await?;
+    partitions = Arc::new(
+        PartitionCache::fetch_overlapping_insert_range(&lake.db_pool, begin_range, end_range)
+            .await?,
+    );
+    materialize_partition_range(
+        partitions.clone(),
+        lake.clone(),
+        Arc::new(log_summary_view),
+        begin_range,
+        end_range,
+        partition_time_delta,
+        null_response_writer.clone(),
+    )
+    .await?;
 
     Ok(())
 }

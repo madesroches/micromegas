@@ -38,7 +38,6 @@ async fn verify_overlapping_partitions(
     let nb_source_events = hash_to_object_count(source_data_hash)?;
     let filtered = existing_partitions
         .filter(view_set_name, view_instance_id, begin_insert, end_insert)
-        .with_context(|| "filtering partition cache")?
         .partitions;
     if filtered.is_empty() {
         logger

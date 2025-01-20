@@ -1,3 +1,4 @@
+use super::partition_cache::PartitionCache;
 use crate::{response_writer::Logger, time::TimeRange};
 use anyhow::Result;
 use async_trait::async_trait;
@@ -5,8 +6,6 @@ use chrono::{DateTime, Utc};
 use datafusion::{arrow::datatypes::Schema, logical_expr::Expr};
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use std::sync::Arc;
-
-use super::partition_cache::QueryPartitionProvider;
 
 #[async_trait]
 pub trait PartitionSpec: Send + Sync {
@@ -34,7 +33,7 @@ pub trait View: std::fmt::Debug + Send + Sync {
     async fn make_batch_partition_spec(
         &self,
         lake: Arc<DataLakeConnection>,
-        part_provider: Arc<dyn QueryPartitionProvider>,
+        existing_partitions: Arc<PartitionCache>,
         begin_insert: DateTime<Utc>,
         end_insert: DateTime<Utc>,
     ) -> Result<Arc<dyn PartitionSpec>>;

@@ -18,6 +18,7 @@ pub trait QueryPartitionProvider: std::fmt::Display + Send + Sync + std::fmt::De
     ) -> Result<Vec<Partition>>;
 }
 
+/// PartitionCache allows to query partitions based on the insert_time range
 #[derive(Debug)]
 pub struct PartitionCache {
     pub partitions: Vec<Partition>,
@@ -96,10 +97,7 @@ impl PartitionCache {
         view_instance_id: &str,
         begin_insert: DateTime<Utc>,
         end_insert: DateTime<Utc>,
-    ) -> Result<Self> {
-        if begin_insert < self.begin_insert || end_insert > self.end_insert {
-            anyhow::bail!("filtering from a result set that's not large enough");
-        }
+    ) -> Self {
         let mut partitions = vec![];
         for part in &self.partitions {
             if *part.view_metadata.view_set_name == view_set_name
@@ -110,16 +108,35 @@ impl PartitionCache {
                 partitions.push(part.clone());
             }
         }
-        Ok(Self {
+        Self {
             partitions,
             begin_insert,
             end_insert,
-        })
+        }
+    }
+
+    pub fn filter_insert_range(
+        &self,
+        begin_insert: DateTime<Utc>,
+        end_insert: DateTime<Utc>,
+    ) -> Self {
+        let mut partitions = vec![];
+        for part in &self.partitions {
+            if part.begin_insert_time < end_insert && part.end_insert_time > begin_insert {
+                partitions.push(part.clone());
+            }
+        }
+        Self {
+            partitions,
+            begin_insert,
+            end_insert,
+        }
     }
 }
 
 #[async_trait]
 impl QueryPartitionProvider for PartitionCache {
+    /// unlike LivePartitionProvider, the query_range is tested against the insertion time, not the event time
     async fn fetch(
         &self,
         view_set_name: &str,
@@ -129,11 +146,14 @@ impl QueryPartitionProvider for PartitionCache {
     ) -> Result<Vec<Partition>> {
         let mut partitions = vec![];
         if let Some(range) = query_range {
+            if range.begin < self.begin_insert || range.end > self.end_insert {
+                anyhow::bail!("filtering from a result set that's not large enough");
+            }
             for part in &self.partitions {
                 if *part.view_metadata.view_set_name == view_set_name
                     && *part.view_metadata.view_instance_id == view_instance_id
-                    && part.min_event_time < range.end
-                    && part.max_event_time > range.begin
+                    && part.begin_insert_time < range.end
+                    && part.end_insert_time > range.begin
                     && part.view_metadata.file_schema_hash == file_schema_hash
                 {
                     partitions.push(part.clone());
