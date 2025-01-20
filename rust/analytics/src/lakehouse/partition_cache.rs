@@ -263,3 +263,25 @@ impl QueryPartitionProvider for LivePartitionProvider {
         Ok(partitions)
     }
 }
+
+#[derive(Debug)]
+pub struct NullPartitionProvider {}
+
+impl fmt::Display for NullPartitionProvider {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
+#[async_trait]
+impl QueryPartitionProvider for NullPartitionProvider {
+    async fn fetch(
+        &self,
+        _view_set_name: &str,
+        _view_instance_id: &str,
+        _query_range: Option<TimeRange>,
+        _file_schema_hash: Vec<u8>,
+    ) -> Result<Vec<Partition>> {
+        Ok(vec![])
+    }
+}
