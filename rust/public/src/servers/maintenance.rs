@@ -3,7 +3,10 @@ use chrono::{DateTime, DurationRound};
 use chrono::{TimeDelta, Utc};
 use micromegas_analytics::delete::delete_old_data;
 use micromegas_analytics::lakehouse::batch_update::materialize_partition_range;
+use micromegas_analytics::lakehouse::blocks_view::BlocksView;
 use micromegas_analytics::lakehouse::partition_cache::PartitionCache;
+use micromegas_analytics::lakehouse::processes_view::ProcessesView;
+use micromegas_analytics::lakehouse::streams_view::StreamsView;
 use micromegas_analytics::lakehouse::temp::delete_expired_temporary_files;
 use micromegas_analytics::lakehouse::view::View;
 use micromegas_analytics::lakehouse::view_factory::ViewFactory;
@@ -152,10 +155,10 @@ pub async fn every_second(
 }
 
 pub async fn daemon(lake: Arc<DataLakeConnection>, view_factory: Arc<ViewFactory>) -> Result<()> {
-    let blocks_view = view_factory.make_view("blocks", "global")?;
-    let views = Arc::new(vec![
-        view_factory.make_view("processes", "global")?,
-        view_factory.make_view("streams", "global")?,
+    let blocks_view = Arc::new(BlocksView::new()?);
+    let views: Arc<Vec<Arc<dyn View>>> = Arc::new(vec![
+        Arc::new(ProcessesView::new()?),
+        Arc::new(StreamsView::new()?),
         view_factory.make_view("log_entries", "global")?,
         view_factory.make_view("measures", "global")?,
     ]);

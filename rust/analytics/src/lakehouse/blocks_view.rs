@@ -2,7 +2,6 @@ use super::{
     metadata_partition_spec::fetch_metadata_partition_spec,
     partition_cache::PartitionCache,
     view::{PartitionSpec, View, ViewMetadata},
-    view_factory::ViewMaker,
 };
 use crate::time::TimeRange;
 use anyhow::{Context, Result};
@@ -18,18 +17,6 @@ use std::sync::Arc;
 
 const VIEW_SET_NAME: &str = "blocks";
 const VIEW_INSTANCE_ID: &str = "global";
-
-#[derive(Debug)]
-pub struct BlocksViewMaker {}
-
-impl ViewMaker for BlocksViewMaker {
-    fn make_view(&self, view_instance_id: &str) -> Result<Arc<dyn View>> {
-        if view_instance_id != "global" {
-            anyhow::bail!("only global view instance id is supported for metadata views");
-        }
-        Ok(Arc::new(BlocksView::new()?))
-    }
-}
 
 #[derive(Debug)]
 pub struct BlocksView {

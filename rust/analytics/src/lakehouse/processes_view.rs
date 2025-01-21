@@ -4,7 +4,6 @@ use super::{
     metadata_partition_spec::fetch_metadata_partition_spec,
     partition_cache::PartitionCache,
     view::{PartitionSpec, View, ViewMetadata},
-    view_factory::ViewMaker,
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -21,15 +20,6 @@ const VIEW_SET_NAME: &str = "processes";
 const VIEW_INSTANCE_ID: &str = "global";
 
 #[derive(Debug)]
-pub struct ProcessesViewMaker {}
-
-impl ViewMaker for ProcessesViewMaker {
-    fn make_view(&self, view_instance_id: &str) -> Result<Arc<dyn View>> {
-        Ok(Arc::new(ProcessesView::new(view_instance_id)?))
-    }
-}
-
-#[derive(Debug)]
 pub struct ProcessesView {
     view_set_name: Arc<String>,
     view_instance_id: Arc<String>,
@@ -38,11 +28,7 @@ pub struct ProcessesView {
 }
 
 impl ProcessesView {
-    pub fn new(view_instance_id: &str) -> Result<Self> {
-        if view_instance_id != "global" {
-            anyhow::bail!("only global view instance id is supported for metadata views");
-        }
-
+    pub fn new() -> Result<Self> {
         let data_sql = Arc::new(String::from(
             "SELECT process_id,
                     exe,

@@ -3,6 +3,7 @@ use chrono::DurationRound;
 use chrono::{TimeDelta, Utc};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use micromegas_analytics::lakehouse::batch_update::materialize_partition_range;
+use micromegas_analytics::lakehouse::blocks_view::BlocksView;
 use micromegas_analytics::lakehouse::partition_cache::PartitionCache;
 use micromegas_analytics::lakehouse::view::View;
 use micromegas_analytics::lakehouse::view_factory::default_view_factory;
@@ -124,7 +125,7 @@ async fn sql_view_test() -> Result<()> {
             .await?,
     );
     let null_response_writer = Arc::new(ResponseWriter::new(None));
-    let blocks_view = view_factory.make_view("blocks", "global")?;
+    let blocks_view = Arc::new(BlocksView::new()?);
     materialize_partition_range(
         partitions.clone(),
         lake.clone(),
