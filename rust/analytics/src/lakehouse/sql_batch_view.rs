@@ -2,7 +2,7 @@ use super::{
     partition_cache::{NullPartitionProvider, PartitionCache},
     query::make_session_context,
     sql_partition_spec::fetch_sql_partition_spec,
-    view::{PartitionSpec, View},
+    view::{PartitionSpec, View, ViewMetadata},
     view_factory::ViewFactory,
 };
 use crate::time::TimeRange;
@@ -22,7 +22,7 @@ pub struct SqlBatchView {
     event_time_column: Arc<String>, // could be more general - for filtering
     src_query: Arc<String>,
     transform_query: Arc<String>,
-    merge_partitions_query: Arc<String>,
+    _merge_partitions_query: Arc<String>,
     schema: Arc<Schema>,
     view_factory: Arc<ViewFactory>,
 }
@@ -61,7 +61,7 @@ impl SqlBatchView {
             event_time_column,
             src_query,
             transform_query,
-            merge_partitions_query,
+            _merge_partitions_query: merge_partitions_query,
             schema,
             view_factory,
         })
@@ -85,6 +85,11 @@ impl View for SqlBatchView {
         begin_insert: DateTime<Utc>,
         end_insert: DateTime<Utc>,
     ) -> Result<Arc<dyn PartitionSpec>> {
+        let view_meta = ViewMetadata {
+            view_set_name: self.get_view_set_name(),
+            view_instance_id: self.get_view_instance_id(),
+            file_schema_hash: self.get_file_schema_hash(),
+        };
         let partitions_in_range =
             Arc::new(existing_partitions.filter_insert_range(begin_insert, end_insert));
         let ctx = make_session_context(
@@ -105,9 +110,16 @@ impl View for SqlBatchView {
         )?;
 
         Ok(Arc::new(
-            fetch_sql_partition_spec(ctx, begin_insert, end_insert)
-                .await
-                .with_context(|| "fetch_sql_partition_spec")?,
+            fetch_sql_partition_spec(
+                ctx,
+                self.transform_query.clone(),
+                self.event_time_column.clone(),
+                view_meta,
+                begin_insert,
+                end_insert,
+            )
+            .await
+            .with_context(|| "fetch_sql_partition_spec")?,
         ))
     }
     fn get_file_schema_hash(&self) -> Vec<u8> {

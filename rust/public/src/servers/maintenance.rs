@@ -83,7 +83,7 @@ pub async fn materialize_all_views(
     let end_range = now.duration_trunc(partition_time_delta)?;
     let begin_range = end_range - (partition_time_delta * nb_partitions);
     let mut partitions = Arc::new(
-		// we only need the blocks partitions for this call
+        // we only need the blocks partitions for this call
         PartitionCache::fetch_overlapping_insert_range(&lake.db_pool, begin_range, end_range)
             .await?,
     );
