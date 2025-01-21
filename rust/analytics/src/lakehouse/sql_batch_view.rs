@@ -135,7 +135,7 @@ impl View for SqlBatchView {
         _lake: Arc<DataLakeConnection>,
         _query_range: Option<TimeRange>,
     ) -> Result<()> {
-        anyhow::bail!("jit_update not supported on SqlBatchView");
+        Ok(())
     }
     fn make_time_filter(&self, _begin: DateTime<Utc>, _end: DateTime<Utc>) -> Result<Vec<Expr>> {
         todo!();

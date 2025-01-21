@@ -4,7 +4,8 @@ use chrono::{TimeDelta, Utc};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use micromegas_analytics::lakehouse::batch_update::materialize_partition_range;
 use micromegas_analytics::lakehouse::blocks_view::BlocksView;
-use micromegas_analytics::lakehouse::partition_cache::PartitionCache;
+use micromegas_analytics::lakehouse::partition_cache::{LivePartitionProvider, PartitionCache};
+use micromegas_analytics::lakehouse::query::query_single_view;
 use micromegas_analytics::lakehouse::view::View;
 use micromegas_analytics::lakehouse::view_factory::default_view_factory;
 use micromegas_analytics::lakehouse::{sql_batch_view::SqlBatchView, view_factory::ViewFactory};
@@ -87,8 +88,9 @@ async fn sql_view_test() -> Result<()> {
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
     let lake = Arc::new(connect_to_data_lake(&connection_string, &object_store_uri).await?);
     let view_factory = Arc::new(default_view_factory()?);
-    let log_summary_view =
-        make_log_entries_levels_per_process_view(lake.clone(), view_factory.clone()).await?;
+    let log_summary_view = Arc::new(
+        make_log_entries_levels_per_process_view(lake.clone(), view_factory.clone()).await?,
+    );
     let ref_schema = Arc::new(Schema::new(vec![
         Field::new(
             "time_bin",
@@ -113,7 +115,7 @@ async fn sql_view_test() -> Result<()> {
     let ref_schema_hash: Vec<u8> = vec![219, 37, 165, 158, 123, 73, 39, 204];
     assert_eq!(log_summary_view.get_file_schema_hash(), ref_schema_hash);
 
-    let nb_partitions = 2;
+    let nb_partitions = 3;
     let partition_time_delta = TimeDelta::minutes(1);
     let now = Utc::now();
     let end_range = now.duration_trunc(partition_time_delta)?;
@@ -158,13 +160,27 @@ async fn sql_view_test() -> Result<()> {
     materialize_partition_range(
         partitions.clone(),
         lake.clone(),
-        Arc::new(log_summary_view),
+        log_summary_view.clone(),
         begin_range,
         end_range,
         partition_time_delta,
         null_response_writer.clone(),
     )
     .await?;
+
+    let answer = query_single_view(
+        lake.clone(),
+        Arc::new(LivePartitionProvider::new(lake.db_pool.clone())),
+        None,
+        "SELECT * FROM log_entries_per_process;",
+        log_summary_view,
+    )
+    .await?;
+    let pretty_results =
+        datafusion::arrow::util::pretty::pretty_format_batches(&answer.record_batches)?.to_string();
+    eprintln!("{pretty_results}");
+
+    info!("bye");
 
     Ok(())
 }
