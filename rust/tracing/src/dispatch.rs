@@ -370,7 +370,7 @@ impl Dispatch {
     }
 
     pub fn get_sink(&self) -> Arc<dyn EventSink> {
-        if let Ok(guard) = self.sink.read() {
+        if let Ok(guard) = self.sink.try_read() {
             guard.clone()
         } else {
             Arc::new(NullEventSink {})
