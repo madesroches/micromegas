@@ -9,7 +9,10 @@ use crate::time::TimeRange;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use datafusion::{arrow::datatypes::Schema, prelude::*, sql::TableReference};
+use datafusion::{
+    arrow::datatypes::Schema, logical_expr::Between, prelude::*, scalar::ScalarValue,
+    sql::TableReference,
+};
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use std::hash::Hash;
 use std::hash::Hasher;
@@ -141,8 +144,22 @@ impl View for SqlBatchView {
     ) -> Result<()> {
         Ok(())
     }
-    fn make_time_filter(&self, _begin: DateTime<Utc>, _end: DateTime<Utc>) -> Result<Vec<Expr>> {
-        todo!();
+    fn make_time_filter(&self, begin: DateTime<Utc>, end: DateTime<Utc>) -> Result<Vec<Expr>> {
+        let utc: Arc<str> = Arc::from("+00:00");
+        Ok(vec![Expr::Between(Between::new(
+            col("time_bin").into(),
+            false,
+            Expr::Literal(ScalarValue::TimestampNanosecond(
+                begin.timestamp_nanos_opt(),
+                Some(utc.clone()),
+            ))
+            .into(),
+            Expr::Literal(ScalarValue::TimestampNanosecond(
+                end.timestamp_nanos_opt(),
+                Some(utc.clone()),
+            ))
+            .into(),
+        ))])
     }
 
     fn get_min_event_time_column_name(&self) -> Arc<String> {

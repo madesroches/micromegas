@@ -1,16 +1,17 @@
 use anyhow::{Context, Result};
-use chrono::DurationRound;
+use chrono::{DateTime, DurationRound};
 use chrono::{TimeDelta, Utc};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use micromegas_analytics::lakehouse::batch_update::materialize_partition_range;
 use micromegas_analytics::lakehouse::blocks_view::BlocksView;
 use micromegas_analytics::lakehouse::partition_cache::{LivePartitionProvider, PartitionCache};
-use micromegas_analytics::lakehouse::query::query_single_view;
+use micromegas_analytics::lakehouse::query::{query, query_single_view};
 use micromegas_analytics::lakehouse::view::View;
 use micromegas_analytics::lakehouse::view_factory::default_view_factory;
 use micromegas_analytics::lakehouse::write_partition::retire_partitions;
 use micromegas_analytics::lakehouse::{sql_batch_view::SqlBatchView, view_factory::ViewFactory};
 use micromegas_analytics::response_writer::{Logger, ResponseWriter};
+use micromegas_analytics::time::TimeRange;
 use micromegas_ingestion::data_lake_connection::{connect_to_data_lake, DataLakeConnection};
 use micromegas_telemetry_sink::TelemetryGuardBuilder;
 use micromegas_tracing::prelude::*;
@@ -83,13 +84,11 @@ pub async fn materialize_range(
     lake: Arc<DataLakeConnection>,
     view_factory: Arc<ViewFactory>,
     log_summary_view: Arc<dyn View>,
-    nb_partitions: i32,
+    begin_range: DateTime<Utc>,
+    end_range: DateTime<Utc>,
     partition_time_delta: TimeDelta,
     logger: Arc<dyn Logger>,
 ) -> Result<()> {
-    let now = Utc::now();
-    let end_range = now.duration_trunc(partition_time_delta)?;
-    let begin_range = end_range - (partition_time_delta * nb_partitions);
     let mut partitions = Arc::new(
         // we only need the blocks partitions for this call
         PartitionCache::fetch_overlapping_insert_range(&lake.db_pool, begin_range, end_range)
@@ -213,11 +212,16 @@ async fn sql_view_test() -> Result<()> {
     assert_eq!(log_summary_view.get_file_schema(), ref_schema);
     let ref_schema_hash: Vec<u8> = vec![105, 221, 132, 185, 221, 232, 62, 136];
     assert_eq!(log_summary_view.get_file_schema_hash(), ref_schema_hash);
+
+    let end_range = Utc::now().duration_trunc(TimeDelta::minutes(1))?;
+    let begin_range = end_range - (TimeDelta::minutes(3));
+
     materialize_range(
         lake.clone(),
         view_factory.clone(),
         log_summary_view.clone(),
-        12,
+        begin_range,
+        end_range,
         TimeDelta::seconds(10),
         null_response_writer.clone(),
     )
@@ -226,7 +230,8 @@ async fn sql_view_test() -> Result<()> {
         lake.clone(),
         view_factory.clone(),
         log_summary_view.clone(),
-        2,
+        begin_range,
+        end_range,
         TimeDelta::minutes(1),
         null_response_writer.clone(),
     )
@@ -234,10 +239,21 @@ async fn sql_view_test() -> Result<()> {
     let answer = query_single_view(
         lake.clone(),
         Arc::new(LivePartitionProvider::new(lake.db_pool.clone())),
-        None,
-        "SELECT time_bin, process_id, min_time, max_time
-         FROM log_entries_per_process
-         ORDER BY time_bin, process_id, min_time, max_time;",
+        Some(TimeRange::new(begin_range, end_range)),
+        "
+        SELECT time_bin,
+               min(min_time) as min_time,
+               max(max_time) as max_time,
+               process_id,
+               sum(nb_fatal) as nb_fatal,
+               sum(nb_err)   as nb_err,
+               sum(nb_warn)  as nb_warn,
+               sum(nb_info)  as nb_info,
+               sum(nb_debug) as nb_debug,
+               sum(nb_trace) as nb_trace
+        FROM   log_entries_per_process
+        GROUP BY process_id, time_bin
+        ORDER BY time_bin, process_id;",
         log_summary_view,
     )
     .await?;
@@ -245,7 +261,39 @@ async fn sql_view_test() -> Result<()> {
         datafusion::arrow::util::pretty::pretty_format_batches(&answer.record_batches)?.to_string();
     eprintln!("{pretty_results}");
 
-    //todo: validate that the sums match the number of log entries
-    info!("bye");
+    let answer = query(
+        lake.clone(),
+        Arc::new(LivePartitionProvider::new(lake.db_pool.clone())),
+        Some(TimeRange::new(begin_range, end_range)),
+        "
+        SELECT date_bin('1 minute', time) as time_bin,
+               min(time) as min_time,
+               max(time) as max_time,
+               process_id,
+               sum(nb_fatal) as nb_fatal,
+               sum(nb_err)   as nb_err,
+               sum(nb_warn)  as nb_warn,
+               sum(nb_info)  as nb_info,
+               sum(nb_debug) as nb_debug,
+               sum(nb_trace) as nb_trace
+        FROM   (
+                    SELECT process_id,
+                           time,
+                           CAST(level==1 as INT) as nb_fatal,
+                           CAST(level==2 as INT) as nb_err,
+                           CAST(level==3 as INT) as nb_warn,
+                           CAST(level==4 as INT) as nb_info,
+                           CAST(level==5 as INT) as nb_debug,
+                           CAST(level==6 as INT) as nb_trace
+                    FROM log_entries
+               )
+        GROUP BY process_id, time_bin
+        ORDER BY time_bin, process_id;",
+        view_factory,
+    )
+    .await?;
+    let pretty_results =
+        datafusion::arrow::util::pretty::pretty_format_batches(&answer.record_batches)?.to_string();
+    eprintln!("{pretty_results}");
     Ok(())
 }
