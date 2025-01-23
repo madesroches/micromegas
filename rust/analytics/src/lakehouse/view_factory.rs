@@ -151,7 +151,7 @@ pub trait ViewMaker: Send + Sync + Debug {
     fn make_view(&self, view_instance_id: &str) -> Result<Arc<dyn View>>;
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ViewFactory {
     view_sets: HashMap<String, Arc<dyn ViewMaker>>,
     global_views: Vec<Arc<dyn View>>,
@@ -167,6 +167,10 @@ impl ViewFactory {
 
     pub fn get_global_views(&self) -> &[Arc<dyn View>] {
         &self.global_views
+    }
+
+    pub fn add_global_view(&mut self, view: Arc<dyn View>) {
+        self.global_views.push(view);
     }
 
     pub fn add_view_set(&mut self, view_set_name: String, maker: Arc<dyn ViewMaker>) {

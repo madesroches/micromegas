@@ -5,7 +5,7 @@ use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use micromegas_analytics::lakehouse::batch_update::materialize_partition_range;
 use micromegas_analytics::lakehouse::blocks_view::BlocksView;
 use micromegas_analytics::lakehouse::partition_cache::{LivePartitionProvider, PartitionCache};
-use micromegas_analytics::lakehouse::query::{query, query_single_view};
+use micromegas_analytics::lakehouse::query::query;
 use micromegas_analytics::lakehouse::view::View;
 use micromegas_analytics::lakehouse::view_factory::default_view_factory;
 use micromegas_analytics::lakehouse::write_partition::retire_partitions;
@@ -170,10 +170,13 @@ async fn sql_view_test() -> Result<()> {
     let object_store_uri = std::env::var("MICROMEGAS_OBJECT_STORE_URI")
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
     let lake = Arc::new(connect_to_data_lake(&connection_string, &object_store_uri).await?);
-    let view_factory = Arc::new(default_view_factory()?);
+    let mut view_factory = default_view_factory()?;
     let log_summary_view = Arc::new(
-        make_log_entries_levels_per_process_view(lake.clone(), view_factory.clone()).await?,
+        make_log_entries_levels_per_process_view(lake.clone(), Arc::new(view_factory.clone()))
+            .await?,
     );
+    view_factory.add_global_view(log_summary_view.clone());
+    let view_factory = Arc::new(view_factory);
     let null_response_writer = Arc::new(ResponseWriter::new(None));
     retire_existing_partitions(
         lake.clone(),
@@ -236,7 +239,7 @@ async fn sql_view_test() -> Result<()> {
         null_response_writer.clone(),
     )
     .await?;
-    let answer = query_single_view(
+    let answer = query(
         lake.clone(),
         Arc::new(LivePartitionProvider::new(lake.db_pool.clone())),
         Some(TimeRange::new(begin_range, end_range)),
@@ -254,7 +257,7 @@ async fn sql_view_test() -> Result<()> {
         FROM   log_entries_per_process
         GROUP BY process_id, time_bin
         ORDER BY time_bin, process_id;",
-        log_summary_view,
+        view_factory.clone(),
     )
     .await?;
     let pretty_results =
