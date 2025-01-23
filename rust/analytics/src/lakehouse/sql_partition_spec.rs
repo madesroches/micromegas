@@ -3,7 +3,7 @@ use super::{
     write_partition::write_partition_from_rows,
 };
 use crate::{
-    dfext::get_column::{typed_column, typed_column_by_name},
+    dfext::{get_column::typed_column_by_name, min_max_time_df::min_max_time_dataframe},
     lakehouse::write_partition::PartitionRowSet,
     response_writer::Logger,
 };
@@ -11,8 +11,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use datafusion::{
-    arrow::array::{Int64Array, RecordBatch, TimestampNanosecondArray},
-    functions_aggregate::min_max::{max, min},
+    arrow::array::{Int64Array, RecordBatch},
     prelude::*,
 };
 use futures::StreamExt;
@@ -22,7 +21,8 @@ use std::sync::Arc;
 pub struct SqlPartitionSpec {
     ctx: SessionContext,
     transform_query: Arc<String>,
-    event_time_column: Arc<String>,
+    min_event_time_column: Arc<String>,
+    max_event_time_column: Arc<String>,
     view_metadata: ViewMetadata,
     begin_insert: DateTime<Utc>,
     end_insert: DateTime<Utc>,
@@ -30,10 +30,12 @@ pub struct SqlPartitionSpec {
 }
 
 impl SqlPartitionSpec {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         ctx: SessionContext,
         transform_query: Arc<String>,
-        event_time_column: Arc<String>,
+        min_event_time_column: Arc<String>,
+        max_event_time_column: Arc<String>,
         view_metadata: ViewMetadata,
         begin_insert: DateTime<Utc>,
         end_insert: DateTime<Utc>,
@@ -42,7 +44,8 @@ impl SqlPartitionSpec {
         Self {
             ctx,
             transform_query,
-            event_time_column,
+            min_event_time_column,
+            max_event_time_column,
             view_metadata,
             begin_insert,
             end_insert,
@@ -87,27 +90,15 @@ impl PartitionSpec for SqlPartitionSpec {
 
         while let Some(rb_res) = stream.next().await {
             let rb = rb_res?;
-            let df = self.ctx.read_batch(rb.clone())?;
-            let df = df.aggregate(
-                vec![],
-                vec![
-                    min(col(&*self.event_time_column)),
-                    max(col(&*self.event_time_column)),
-                ],
-            )?;
-            let minmax = df.collect().await?;
-            if minmax.len() != 1 {
-                anyhow::bail!("expected minmax to be size 1");
-            }
-            let minmax = &minmax[0];
-            let min_column: &TimestampNanosecondArray = typed_column(minmax, 0)?;
-            let max_column: &TimestampNanosecondArray = typed_column(minmax, 1)?;
-            if min_column.is_empty() || max_column.is_empty() {
-                anyhow::bail!("expected minmax to be size 1");
-            }
+            let (mintime, maxtime) = min_max_time_dataframe(
+                self.ctx.read_batch(rb.clone())?,
+                &self.min_event_time_column,
+                &self.max_event_time_column,
+            )
+            .await?;
             tx.send(PartitionRowSet {
-                min_time_row: DateTime::from_timestamp_nanos(min_column.value(0)),
-                max_time_row: DateTime::from_timestamp_nanos(max_column.value(0)),
+                min_time_row: mintime,
+                max_time_row: maxtime,
                 rows: rb,
             })
             .await?;
@@ -121,7 +112,8 @@ impl PartitionSpec for SqlPartitionSpec {
 pub async fn fetch_sql_partition_spec(
     ctx: SessionContext,
     transform_query: Arc<String>,
-    event_time_column: Arc<String>,
+    min_event_time_column: Arc<String>,
+    max_event_time_column: Arc<String>,
     view_metadata: ViewMetadata,
     begin_insert: DateTime<Utc>,
     end_insert: DateTime<Utc>,
@@ -140,7 +132,8 @@ pub async fn fetch_sql_partition_spec(
     Ok(SqlPartitionSpec::new(
         ctx,
         transform_query,
-        event_time_column,
+        min_event_time_column,
+        max_event_time_column,
         view_metadata,
         begin_insert,
         end_insert,

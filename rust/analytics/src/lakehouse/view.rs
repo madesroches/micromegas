@@ -55,6 +55,12 @@ pub trait View: std::fmt::Debug + Send + Sync {
     /// make_time_filter returns a set of expressions that will filter out the rows of the partition
     /// outside the time range requested.
     fn make_time_filter(&self, _begin: DateTime<Utc>, _end: DateTime<Utc>) -> Result<Vec<Expr>>;
+
+    /// name of the column to take the min() of to get the first event timestamp in a dataframe
+    fn get_min_event_time_column_name(&self) -> Arc<String>;
+
+    /// name of the column to take the max() of to get the last event timestamp in a dataframe
+    fn get_max_event_time_column_name(&self) -> Arc<String>;
 }
 
 impl dyn View {

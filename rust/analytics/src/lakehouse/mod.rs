@@ -18,6 +18,8 @@ pub mod log_block_processor;
 pub mod log_view;
 /// Exposes materialize_partitions as a table function
 pub mod materialize_partitions_table_function;
+/// TableProvider implementation for the lakehouse
+pub mod materialized_view;
 /// Merge consecutive parquet partitions into a single file
 pub mod merge;
 /// Specification for a view partition backed by a table in the postgresql metadata database.
@@ -34,6 +36,10 @@ pub mod partition;
 pub mod partition_cache;
 /// Describes the event blocks backing a partition
 pub mod partition_source_data;
+/// ExecutionPlan based on a set of parquet files
+pub mod partitioned_execution_plan;
+/// TableProvider based on a set of parquet files
+pub mod partitioned_table_provider;
 /// Replicated view of the `processes` table of the postgresql metadata database.
 pub mod processes_view;
 /// property_get function support from SQL
@@ -50,8 +56,6 @@ pub mod sql_batch_view;
 pub mod sql_partition_spec;
 /// Replicated view of the `streams` table of the postgresql metadata database.
 pub mod streams_view;
-/// TableProvider implementation for the lakehouse
-pub mod table_provider;
 /// Rewrite table scans to take the query range into account
 pub mod table_scan_rewrite;
 /// Tracking of expired partitions

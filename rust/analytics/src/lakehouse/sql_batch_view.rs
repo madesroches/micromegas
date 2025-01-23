@@ -19,7 +19,8 @@ use std::{hash::DefaultHasher, sync::Arc};
 pub struct SqlBatchView {
     view_set_name: Arc<String>,
     view_instance_id: Arc<String>,
-    event_time_column: Arc<String>, // could be more general - for filtering
+    min_event_time_column: Arc<String>,
+    max_event_time_column: Arc<String>,
     src_query: Arc<String>,
     transform_query: Arc<String>,
     _merge_partitions_query: Arc<String>,
@@ -32,7 +33,8 @@ impl SqlBatchView {
     pub async fn new(
         view_set_name: Arc<String>,
         view_instance_id: Arc<String>,
-        event_time_column: Arc<String>,
+        min_event_time_column: Arc<String>,
+        max_event_time_column: Arc<String>,
         src_query: Arc<String>,
         transform_query: Arc<String>,
         merge_partitions_query: Arc<String>,
@@ -58,7 +60,8 @@ impl SqlBatchView {
         Ok(Self {
             view_set_name,
             view_instance_id,
-            event_time_column,
+            min_event_time_column,
+            max_event_time_column,
             src_query,
             transform_query,
             _merge_partitions_query: merge_partitions_query,
@@ -113,7 +116,8 @@ impl View for SqlBatchView {
             fetch_sql_partition_spec(
                 ctx,
                 self.transform_query.clone(),
-                self.event_time_column.clone(),
+                self.min_event_time_column.clone(),
+                self.max_event_time_column.clone(),
                 view_meta,
                 begin_insert,
                 end_insert,
@@ -139,5 +143,13 @@ impl View for SqlBatchView {
     }
     fn make_time_filter(&self, _begin: DateTime<Utc>, _end: DateTime<Utc>) -> Result<Vec<Expr>> {
         todo!();
+    }
+
+    fn get_min_event_time_column_name(&self) -> Arc<String> {
+        self.min_event_time_column.clone()
+    }
+
+    fn get_max_event_time_column_name(&self) -> Arc<String> {
+        self.max_event_time_column.clone()
     }
 }

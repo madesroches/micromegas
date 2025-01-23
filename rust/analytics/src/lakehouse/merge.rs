@@ -1,145 +1,127 @@
 use super::{
+    partition::Partition,
+    partition_cache::PartitionCache,
     partition_source_data::hash_to_object_count,
+    partitioned_table_provider::PartitionedTableProvider,
     view::View,
     write_partition::{write_partition_from_rows, PartitionRowSet},
 };
-use crate::response_writer::Logger;
-use anyhow::{Context, Result};
+use crate::{dfext::min_max_time_df::min_max_time_dataframe, response_writer::Logger};
+use anyhow::Result;
 use chrono::{DateTime, Utc};
-use datafusion::parquet::arrow::{
-    async_reader::ParquetObjectReader, ParquetRecordBatchStreamBuilder,
-};
+use datafusion::{execution::object_store::ObjectStoreUrl, prelude::*, sql::TableReference};
 use futures::stream::StreamExt;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
-use object_store::path::Path;
-use object_store::ObjectMeta;
-use sqlx::Row;
 use std::sync::Arc;
 use xxhash_rust::xxh32::xxh32;
 
+fn partition_set_stats(
+    view: Arc<dyn View>,
+    filtered_partitions: &[Partition],
+) -> Result<(i64, i64)> {
+    let mut sum_size: i64 = 0;
+    let mut source_hash: i64 = 0;
+    let latest_file_schema_hash = view.get_file_schema_hash();
+    for p in filtered_partitions {
+        // for some time all the hashes will actually be the number of events in the source data
+        // when views have different hash algos, we should delegate to the view the creation of the merged hash
+        source_hash = if p.source_data_hash.len() == std::mem::size_of::<i64>() {
+            source_hash + hash_to_object_count(&p.source_data_hash)?
+        } else {
+            //previous hash algo
+            xxh32(&p.source_data_hash, source_hash as u32).into()
+        };
+
+        sum_size += p.file_size;
+
+        if p.view_metadata.file_schema_hash != latest_file_schema_hash {
+            anyhow::bail!(
+                "incompatible file schema with [{},{}]",
+                p.begin_insert_time.to_rfc3339(),
+                p.end_insert_time.to_rfc3339()
+            );
+        }
+    }
+    Ok((sum_size, source_hash))
+}
+
 pub async fn create_merged_partition(
+    existing_partitions: Arc<PartitionCache>,
     lake: Arc<DataLakeConnection>,
     view: Arc<dyn View>,
-    begin: DateTime<Utc>,
-    end: DateTime<Utc>,
+    begin_insert: DateTime<Utc>,
+    end_insert: DateTime<Utc>,
     logger: Arc<dyn Logger>,
 ) -> Result<()> {
-    let view_set_name = view.get_view_set_name().to_string();
-    let view_instance_id = view.get_view_instance_id().to_string();
+    let view_set_name = &view.get_view_set_name();
+    let view_instance_id = &view.get_view_instance_id();
     let desc = format!(
         "[{}, {}] {view_set_name} {view_instance_id}",
-        begin.to_rfc3339(),
-        end.to_rfc3339()
+        begin_insert.to_rfc3339(),
+        end_insert.to_rfc3339()
     );
     // we are not looking for intersecting partitions, but only those that fit completely in the range
-    let rows = sqlx::query(
-        "SELECT file_path, file_size, updated, file_schema_hash, source_data_hash, begin_insert_time, end_insert_time, min_event_time, max_event_time
-         FROM lakehouse_partitions
-         WHERE view_set_name = $1
-         AND view_instance_id = $2
-         AND begin_insert_time >= $3
-         AND end_insert_time <= $4
-         ;",
-    )
-    .bind(&view_set_name)
-    .bind(&view_instance_id)
-    .bind(begin)
-    .bind(end)
-    .fetch_all(&lake.db_pool)
-    .await
-    .with_context(|| "fetching partitions to merge")?;
-    if rows.len() < 2 {
+    // otherwise we'd get duplicated records
+    let filtered_partitions = existing_partitions
+        .filter_inside_range(view_set_name, view_instance_id, begin_insert, end_insert)
+        .partitions;
+    if filtered_partitions.len() < 2 {
         logger
             .write_log_entry(format!("{desc}: not enough partitions to merge"))
             .await?;
         return Ok(());
     }
-    let latest_file_schema_hash = view.get_file_schema_hash();
-    let mut sum_size: i64 = 0;
-    let mut source_hash: i64 = 0;
-    for r in &rows {
-        // for some time all the hashes will actually be the number of events in the source data
-        // when views have different hash algos, we should delegate to the view the creation of the merged hash
-        let source_data_hash: Vec<u8> = r.try_get("source_data_hash")?;
-        source_hash = if source_data_hash.len() == std::mem::size_of::<i64>() {
-            source_hash + hash_to_object_count(&source_data_hash)?
-        } else {
-            //previous hash algo
-            xxh32(&source_data_hash, source_hash as u32).into()
-        };
-
-        let file_size: i64 = r.try_get("file_size")?;
-        sum_size += file_size;
-
-        let file_schema_hash: Vec<u8> = r.try_get("file_schema_hash")?;
-        if file_schema_hash != latest_file_schema_hash {
-            let begin_insert_time: DateTime<Utc> = r.try_get("begin_insert_time")?;
-            let end_insert_time: DateTime<Utc> = r.try_get("end_insert_time")?;
-            logger
-                .write_log_entry(format!(
-                    "{desc}: incompatible file schema with [{},{}]",
-                    begin_insert_time.to_rfc3339(),
-                    end_insert_time.to_rfc3339()
-                ))
-                .await?;
-            return Ok(());
-        }
-    }
+    let (sum_size, source_hash) = partition_set_stats(view.clone(), &filtered_partitions)?;
     logger
         .write_log_entry(format!(
             "{desc}: merging {} partitions sum_size={sum_size}",
-            rows.len()
+            filtered_partitions.len()
         ))
         .await?;
-
+    let object_store = lake.blob_storage.inner();
+    let table = PartitionedTableProvider::new(
+        view.get_file_schema(),
+        object_store.clone(),
+        Arc::new(filtered_partitions),
+    );
+    let ctx = SessionContext::new();
+    let object_store_url = ObjectStoreUrl::parse("obj://lakehouse/").unwrap();
+    ctx.register_object_store(object_store_url.as_ref(), object_store.clone());
+    ctx.register_table(
+        TableReference::Bare {
+            table: "source".into(),
+        },
+        Arc::new(table),
+    )?;
+    let merged_df = ctx.sql("SELECT * FROM source;").await?;
     let (tx, rx) = tokio::sync::mpsc::channel(1);
     let join_handle = tokio::spawn(write_partition_from_rows(
         lake.clone(),
         view.get_meta(),
         view.get_file_schema(),
-        begin,
-        end,
+        begin_insert,
+        end_insert,
         source_hash.to_le_bytes().to_vec(),
         rx,
         logger.clone(),
     ));
-    for r in &rows {
-        let file_path: String = r.try_get("file_path")?;
-        let file_size: i64 = r.try_get("file_size")?;
-        logger
-            .write_log_entry(format!("reading path={file_path} size={file_size}"))
-            .await?;
-        let min_time_row: DateTime<Utc> = r.try_get("min_event_time")?;
-        let max_time_row: DateTime<Utc> = r.try_get("max_event_time")?;
-
-        let updated: DateTime<Utc> = r.try_get("updated")?;
-        let meta = ObjectMeta {
-            location: Path::from(file_path),
-            last_modified: updated,
-            size: file_size as usize,
-            e_tag: None,
-            version: None,
-        };
-        let reader = ParquetObjectReader::new(lake.blob_storage.inner(), meta);
-        let builder = ParquetRecordBatchStreamBuilder::new(reader)
-            .await
-            .with_context(|| "ParquetRecordBatchStreamBuilder::new")?;
-        let mut rbstream = builder
-            .with_batch_size(100 * 1024) // the default is 1024, which seems low
-            .build()
-            .with_context(|| "builder.build()")?;
-        while let Some(rb_res) = rbstream.next().await {
-            let rows = rb_res?;
-            tx.send(PartitionRowSet {
-                min_time_row,
-                max_time_row,
-                rows,
-            })
-            .await?;
-        }
+    let mut stream = merged_df.execute_stream().await?;
+    while let Some(rb_res) = stream.next().await {
+        let rb = rb_res?;
+        let (mintime, maxtime) = min_max_time_dataframe(
+            ctx.read_batch(rb.clone())?,
+            &view.get_min_event_time_column_name(),
+            &view.get_max_event_time_column_name(),
+        )
+        .await?;
+        tx.send(PartitionRowSet {
+            min_time_row: mintime,
+            max_time_row: maxtime,
+            rows: rb,
+        })
+        .await?;
     }
     drop(tx);
     join_handle.await??;
-
     Ok(())
 }

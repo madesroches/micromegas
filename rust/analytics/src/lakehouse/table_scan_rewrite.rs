@@ -1,4 +1,4 @@
-use crate::{lakehouse::table_provider::MaterializedView, time::TimeRange};
+use crate::{lakehouse::materialized_view::MaterializedView, time::TimeRange};
 use datafusion::error::DataFusionError;
 use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::Filter;

@@ -7,7 +7,7 @@ use super::{
 };
 use crate::{
     lakehouse::{
-        table_provider::MaterializedView, table_scan_rewrite::TableScanRewrite,
+        materialized_view::MaterializedView, table_scan_rewrite::TableScanRewrite,
         view_instance_table_function::ViewInstanceTableFunction,
     },
     time::TimeRange,

@@ -91,6 +91,7 @@ impl PartitionCache {
         })
     }
 
+    // overlap test for a specific view
     pub fn filter(
         &self,
         view_set_name: &str,
@@ -115,6 +116,7 @@ impl PartitionCache {
         }
     }
 
+    // overlap test for a all views
     pub fn filter_insert_range(
         &self,
         begin_insert: DateTime<Utc>,
@@ -123,6 +125,31 @@ impl PartitionCache {
         let mut partitions = vec![];
         for part in &self.partitions {
             if part.begin_insert_time < end_insert && part.end_insert_time > begin_insert {
+                partitions.push(part.clone());
+            }
+        }
+        Self {
+            partitions,
+            begin_insert,
+            end_insert,
+        }
+    }
+
+    // single view that fits completely in the specified range
+    pub fn filter_inside_range(
+        &self,
+        view_set_name: &str,
+        view_instance_id: &str,
+        begin_insert: DateTime<Utc>,
+        end_insert: DateTime<Utc>,
+    ) -> Self {
+        let mut partitions = vec![];
+        for part in &self.partitions {
+            if *part.view_metadata.view_set_name == view_set_name
+                && *part.view_metadata.view_instance_id == view_instance_id
+                && part.begin_insert_time >= begin_insert
+                && part.end_insert_time <= end_insert
+            {
                 partitions.push(part.clone());
             }
         }

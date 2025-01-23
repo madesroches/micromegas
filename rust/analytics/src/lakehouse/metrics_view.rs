@@ -28,6 +28,9 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 const VIEW_SET_NAME: &str = "measures";
+lazy_static::lazy_static! {
+    static ref TIME_COLUMN: Arc<String> = Arc::new( String::from("time"));
+}
 
 #[derive(Debug)]
 pub struct MetricsViewMaker {}
@@ -193,5 +196,13 @@ impl View for MetricsView {
             ))
             .into(),
         ))])
+    }
+
+    fn get_min_event_time_column_name(&self) -> Arc<String> {
+        TIME_COLUMN.clone()
+    }
+
+    fn get_max_event_time_column_name(&self) -> Arc<String> {
+        TIME_COLUMN.clone()
     }
 }

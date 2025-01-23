@@ -8,8 +8,9 @@ use micromegas_analytics::lakehouse::partition_cache::{LivePartitionProvider, Pa
 use micromegas_analytics::lakehouse::query::query_single_view;
 use micromegas_analytics::lakehouse::view::View;
 use micromegas_analytics::lakehouse::view_factory::default_view_factory;
+use micromegas_analytics::lakehouse::write_partition::retire_partitions;
 use micromegas_analytics::lakehouse::{sql_batch_view::SqlBatchView, view_factory::ViewFactory};
-use micromegas_analytics::response_writer::ResponseWriter;
+use micromegas_analytics::response_writer::{Logger, ResponseWriter};
 use micromegas_ingestion::data_lake_connection::{connect_to_data_lake, DataLakeConnection};
 use micromegas_telemetry_sink::TelemetryGuardBuilder;
 use micromegas_tracing::prelude::*;
@@ -22,7 +23,7 @@ async fn make_log_entries_levels_per_process_view(
     let src_query = Arc::new(String::from(
         "
         SELECT process_id,
-               date_bin('1 minute', time) as time_bin,
+               time,
                CAST(level==1 as INT) as fatal,
                CAST(level==2 as INT) as err,
                CAST(level==3 as INT) as warn,
@@ -31,10 +32,11 @@ async fn make_log_entries_levels_per_process_view(
                CAST(level==6 as INT) as trace
         FROM log_entries;",
     ));
-
     let transform_query = Arc::new(String::from(
         "
-        SELECT time_bin,
+        SELECT date_bin('1 minute', time) as time_bin,
+               min(time) as min_time,
+               max(time) as max_time,
                process_id,
                sum(fatal) as nb_fatal,
                sum(err)   as nb_err,
@@ -46,10 +48,11 @@ async fn make_log_entries_levels_per_process_view(
         GROUP BY process_id, time_bin
         ORDER BY time_bin, process_id;",
     ));
-
     let merge_partitions_query = Arc::new(String::from(
         "
         SELECT time_bin,
+               min(min_time) as min_time,
+               max(max_time) as max_time,
                process_id,
                sum(nb_fatal) as nb_fatal,
                sum(nb_err)   as nb_err,
@@ -57,15 +60,16 @@ async fn make_log_entries_levels_per_process_view(
                sum(nb_info)  as nb_info,
                sum(nb_debug) as nb_debug,
                sum(nb_trace) as nb_trace
-        FROM   src
+        FROM   source
         GROUP BY process_id, time_bin
         ORDER BY time_bin, process_id;",
     ));
-
+    let time_column = Arc::new(String::from("time_bin"));
     SqlBatchView::new(
         Arc::new("log_entries_per_process".to_owned()),
         Arc::new("global".to_owned()),
-        Arc::new("time_bin".to_owned()),
+        time_column.clone(),
+        time_column,
         src_query,
         transform_query,
         merge_partitions_query,
@@ -73,6 +77,86 @@ async fn make_log_entries_levels_per_process_view(
         view_factory,
     )
     .await
+}
+
+pub async fn materialize_range(
+    lake: Arc<DataLakeConnection>,
+    view_factory: Arc<ViewFactory>,
+    log_summary_view: Arc<dyn View>,
+    nb_partitions: i32,
+    partition_time_delta: TimeDelta,
+    logger: Arc<dyn Logger>,
+) -> Result<()> {
+    let now = Utc::now();
+    let end_range = now.duration_trunc(partition_time_delta)?;
+    let begin_range = end_range - (partition_time_delta * nb_partitions);
+    let mut partitions = Arc::new(
+        // we only need the blocks partitions for this call
+        PartitionCache::fetch_overlapping_insert_range(&lake.db_pool, begin_range, end_range)
+            .await?,
+    );
+    let blocks_view = Arc::new(BlocksView::new()?);
+    materialize_partition_range(
+        partitions.clone(),
+        lake.clone(),
+        blocks_view,
+        begin_range,
+        end_range,
+        partition_time_delta,
+        logger.clone(),
+    )
+    .await?;
+    partitions = Arc::new(
+        PartitionCache::fetch_overlapping_insert_range(&lake.db_pool, begin_range, end_range)
+            .await?,
+    );
+    let log_entries_view = view_factory.make_view("log_entries", "global")?;
+    materialize_partition_range(
+        partitions.clone(),
+        lake.clone(),
+        log_entries_view,
+        begin_range,
+        end_range,
+        partition_time_delta,
+        logger.clone(),
+    )
+    .await?;
+    partitions = Arc::new(
+        PartitionCache::fetch_overlapping_insert_range(&lake.db_pool, begin_range, end_range)
+            .await?,
+    );
+    materialize_partition_range(
+        partitions.clone(),
+        lake.clone(),
+        log_summary_view.clone(),
+        begin_range,
+        end_range,
+        partition_time_delta,
+        logger.clone(),
+    )
+    .await?;
+    Ok(())
+}
+
+async fn retire_existing_partitions(
+    lake: Arc<DataLakeConnection>,
+    log_summary_view: Arc<dyn View>,
+    logger: Arc<dyn Logger>,
+) -> Result<()> {
+    let mut tr = lake.db_pool.begin().await?;
+    let now = Utc::now();
+    let begin = now - TimeDelta::days(10);
+    retire_partitions(
+        &mut tr,
+        &log_summary_view.get_view_set_name(),
+        &log_summary_view.get_view_instance_id(),
+        begin,
+        now,
+        logger,
+    )
+    .await?;
+    tr.commit().await.with_context(|| "commit")?;
+    Ok(())
 }
 
 #[ignore]
@@ -91,9 +175,26 @@ async fn sql_view_test() -> Result<()> {
     let log_summary_view = Arc::new(
         make_log_entries_levels_per_process_view(lake.clone(), view_factory.clone()).await?,
     );
+    let null_response_writer = Arc::new(ResponseWriter::new(None));
+    retire_existing_partitions(
+        lake.clone(),
+        log_summary_view.clone(),
+        null_response_writer.clone(),
+    )
+    .await?;
     let ref_schema = Arc::new(Schema::new(vec![
         Field::new(
             "time_bin",
+            DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into())),
+            true,
+        ),
+        Field::new(
+            "min_time",
+            DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into())),
+            true,
+        ),
+        Field::new(
+            "max_time",
             DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into())),
             true,
         ),
@@ -109,70 +210,34 @@ async fn sql_view_test() -> Result<()> {
         Field::new("nb_debug", DataType::Int64, true),
         Field::new("nb_trace", DataType::Int64, true),
     ]));
-
     assert_eq!(log_summary_view.get_file_schema(), ref_schema);
-
-    let ref_schema_hash: Vec<u8> = vec![219, 37, 165, 158, 123, 73, 39, 204];
+    let ref_schema_hash: Vec<u8> = vec![105, 221, 132, 185, 221, 232, 62, 136];
     assert_eq!(log_summary_view.get_file_schema_hash(), ref_schema_hash);
-
-    let nb_partitions = 3;
-    let partition_time_delta = TimeDelta::minutes(1);
-    let now = Utc::now();
-    let end_range = now.duration_trunc(partition_time_delta)?;
-    let begin_range = end_range - (partition_time_delta * nb_partitions);
-
-    let mut partitions = Arc::new(
-        // we only need the blocks partitions for this call
-        PartitionCache::fetch_overlapping_insert_range(&lake.db_pool, begin_range, end_range)
-            .await?,
-    );
-    let null_response_writer = Arc::new(ResponseWriter::new(None));
-    let blocks_view = Arc::new(BlocksView::new()?);
-    materialize_partition_range(
-        partitions.clone(),
+    materialize_range(
         lake.clone(),
-        blocks_view,
-        begin_range,
-        end_range,
-        partition_time_delta,
-        null_response_writer.clone(),
-    )
-    .await?;
-    partitions = Arc::new(
-        PartitionCache::fetch_overlapping_insert_range(&lake.db_pool, begin_range, end_range)
-            .await?,
-    );
-    let log_entries_view = view_factory.make_view("log_entries", "global")?;
-    materialize_partition_range(
-        partitions.clone(),
-        lake.clone(),
-        log_entries_view,
-        begin_range,
-        end_range,
-        partition_time_delta,
-        null_response_writer.clone(),
-    )
-    .await?;
-    partitions = Arc::new(
-        PartitionCache::fetch_overlapping_insert_range(&lake.db_pool, begin_range, end_range)
-            .await?,
-    );
-    materialize_partition_range(
-        partitions.clone(),
-        lake.clone(),
+        view_factory.clone(),
         log_summary_view.clone(),
-        begin_range,
-        end_range,
-        partition_time_delta,
+        12,
+        TimeDelta::seconds(10),
         null_response_writer.clone(),
     )
     .await?;
-
+    materialize_range(
+        lake.clone(),
+        view_factory.clone(),
+        log_summary_view.clone(),
+        2,
+        TimeDelta::minutes(1),
+        null_response_writer.clone(),
+    )
+    .await?;
     let answer = query_single_view(
         lake.clone(),
         Arc::new(LivePartitionProvider::new(lake.db_pool.clone())),
         None,
-        "SELECT * FROM log_entries_per_process;",
+        "SELECT time_bin, process_id, min_time, max_time
+         FROM log_entries_per_process
+         ORDER BY time_bin, process_id, min_time, max_time;",
         log_summary_view,
     )
     .await?;
@@ -180,7 +245,7 @@ async fn sql_view_test() -> Result<()> {
         datafusion::arrow::util::pretty::pretty_format_batches(&answer.record_batches)?.to_string();
     eprintln!("{pretty_results}");
 
+    //todo: validate that the sums match the number of log entries
     info!("bye");
-
     Ok(())
 }

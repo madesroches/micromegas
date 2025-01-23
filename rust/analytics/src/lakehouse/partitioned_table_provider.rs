@@ -1,60 +1,46 @@
-use super::{
-    partition_cache::QueryPartitionProvider,
-    partitioned_execution_plan::make_partitioned_execution_plan, view::View,
-};
-use crate::time::TimeRange;
+use super::{partition::Partition, partitioned_execution_plan::make_partitioned_execution_plan};
 use async_trait::async_trait;
 use datafusion::{
     arrow::datatypes::SchemaRef,
     catalog::{Session, TableProvider},
     datasource::TableType,
-    error::DataFusionError,
-    logical_expr::{Expr, TableProviderFilterPushDown},
+    logical_expr::TableProviderFilterPushDown,
     physical_plan::ExecutionPlan,
+    prelude::*,
 };
-use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use object_store::ObjectStore;
 use std::{any::Any, sync::Arc};
 
+// unlike MaterializedView, the partition list is fixed at construction
 #[derive(Debug)]
-pub struct MaterializedView {
-    lake: Arc<DataLakeConnection>,
+pub struct PartitionedTableProvider {
+    schema: SchemaRef,
     object_store: Arc<dyn ObjectStore>,
-    view: Arc<dyn View>,
-    part_provider: Arc<dyn QueryPartitionProvider>,
-    query_range: Option<TimeRange>,
+    partitions: Arc<Vec<Partition>>,
 }
 
-impl MaterializedView {
+impl PartitionedTableProvider {
     pub fn new(
-        lake: Arc<DataLakeConnection>,
+        schema: SchemaRef,
         object_store: Arc<dyn ObjectStore>,
-        view: Arc<dyn View>,
-        part_provider: Arc<dyn QueryPartitionProvider>,
-        query_range: Option<TimeRange>,
+        partitions: Arc<Vec<Partition>>,
     ) -> Self {
         Self {
-            lake,
+            schema,
             object_store,
-            view,
-            part_provider,
-            query_range,
+            partitions,
         }
-    }
-
-    pub fn get_view(&self) -> Arc<dyn View> {
-        self.view.clone()
     }
 }
 
 #[async_trait]
-impl TableProvider for MaterializedView {
+impl TableProvider for PartitionedTableProvider {
     fn as_any(&self) -> &dyn Any {
         self
     }
 
     fn schema(&self) -> SchemaRef {
-        self.view.get_file_schema()
+        self.schema.clone()
     }
 
     fn table_type(&self) -> TableType {
@@ -68,22 +54,6 @@ impl TableProvider for MaterializedView {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
-        self.view
-            .jit_update(self.lake.clone(), self.query_range.clone())
-            .await
-            .map_err(|e| DataFusionError::External(e.into()))?;
-
-        let partitions = self
-            .part_provider
-            .fetch(
-                &self.view.get_view_set_name(),
-                &self.view.get_view_instance_id(),
-                self.query_range.clone(),
-                self.view.get_file_schema_hash(),
-            )
-            .await
-            .map_err(|e| datafusion::error::DataFusionError::External(e.into()))?;
-
         make_partitioned_execution_plan(
             self.schema(),
             self.object_store.clone(),
@@ -91,7 +61,7 @@ impl TableProvider for MaterializedView {
             projection,
             filters,
             limit,
-            Arc::new(partitions),
+            self.partitions.clone(),
         )
     }
 

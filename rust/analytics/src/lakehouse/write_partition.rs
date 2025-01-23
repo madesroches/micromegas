@@ -197,7 +197,7 @@ pub async fn write_partition_from_rows(
     lake: Arc<DataLakeConnection>,
     view_metadata: ViewMetadata,
     file_schema: Arc<Schema>,
-    begin_insert_time: DateTime<Utc>,
+    begin_insert_time: DateTime<Utc>, //todo:change to min_insert_time & max_insert_time
     end_insert_time: DateTime<Utc>,
     source_data_hash: Vec<u8>,
     mut rb_stream: Receiver<PartitionRowSet>,

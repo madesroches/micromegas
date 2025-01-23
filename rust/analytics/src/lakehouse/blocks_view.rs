@@ -17,6 +17,9 @@ use std::sync::Arc;
 
 const VIEW_SET_NAME: &str = "blocks";
 const VIEW_INSTANCE_ID: &str = "global";
+lazy_static::lazy_static! {
+    static ref INSERT_TIME_COLUMN: Arc<String> = Arc::new( String::from("insert_time"));
+}
 
 #[derive(Debug)]
 pub struct BlocksView {
@@ -109,6 +112,7 @@ impl View for BlocksView {
         anyhow::bail!("not supported");
     }
 
+    // fetch_partition_source_data relies on this filter being on insert_time
     fn make_time_filter(&self, begin: DateTime<Utc>, end: DateTime<Utc>) -> Result<Vec<Expr>> {
         let utc: Arc<str> = Arc::from("+00:00");
         Ok(vec![Expr::Between(Between::new(
@@ -125,6 +129,14 @@ impl View for BlocksView {
             ))
             .into(),
         ))])
+    }
+
+    fn get_min_event_time_column_name(&self) -> Arc<String> {
+        INSERT_TIME_COLUMN.clone()
+    }
+
+    fn get_max_event_time_column_name(&self) -> Arc<String> {
+        INSERT_TIME_COLUMN.clone()
     }
 }
 

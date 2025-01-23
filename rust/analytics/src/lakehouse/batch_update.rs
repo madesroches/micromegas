@@ -146,7 +146,15 @@ async fn materialize_partition(
                 .with_context(|| "writing partition")?;
         }
         PartitionCreationStrategy::MergeExisting => {
-            create_merged_partition(lake, view, begin_insert, end_insert, logger).await?;
+            create_merged_partition(
+                existing_partitions,
+                lake,
+                view,
+                begin_insert,
+                end_insert,
+                logger,
+            )
+            .await?;
         }
         PartitionCreationStrategy::Abort => {}
     }

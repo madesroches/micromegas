@@ -81,6 +81,12 @@ pub async fn fetch_partition_source_data(
           ;");
     let mut block_ids_hash: i64 = 0;
     let mut partition_src_blocks = vec![];
+    // I really don't like the dependency on the blocks_view time filter being on insert_time.
+    // If we were to make the 'time relevance' of a block more generous, we would need to add a condition
+    // on the insert_time of the blocks in the previous SQL.
+
+    // todo: remove query_single_view, use PartitionCache::filter
+    // todo: add query_partitions to use PartitionedTableProvider
     let blocks_answer = query_single_view(
         lake,
         existing_partitions,

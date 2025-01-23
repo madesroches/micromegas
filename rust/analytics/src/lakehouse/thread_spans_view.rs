@@ -28,6 +28,10 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 const VIEW_SET_NAME: &str = "thread_spans";
+lazy_static::lazy_static! {
+    static ref MIN_TIME_COLUMN: Arc<String> = Arc::new( String::from("begin"));
+    static ref MAX_TIME_COLUMN: Arc<String> = Arc::new( String::from("end"));
+}
 
 #[derive(Debug)]
 pub struct ThreadSpansViewMaker {}
@@ -277,5 +281,13 @@ impl View for ThreadSpansView {
                 .into(),
             )),
         ])
+    }
+
+    fn get_min_event_time_column_name(&self) -> Arc<String> {
+        MIN_TIME_COLUMN.clone()
+    }
+
+    fn get_max_event_time_column_name(&self) -> Arc<String> {
+        MAX_TIME_COLUMN.clone()
     }
 }

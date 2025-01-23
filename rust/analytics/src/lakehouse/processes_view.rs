@@ -18,6 +18,9 @@ use std::sync::Arc;
 
 const VIEW_SET_NAME: &str = "processes";
 const VIEW_INSTANCE_ID: &str = "global";
+lazy_static::lazy_static! {
+    static ref INSERT_TIME_COLUMN: Arc<String> = Arc::new( String::from("insert_time"));
+}
 
 #[derive(Debug)]
 pub struct ProcessesView {
@@ -133,6 +136,14 @@ impl View for ProcessesView {
             ))
             .into(),
         ))])
+    }
+
+    fn get_min_event_time_column_name(&self) -> Arc<String> {
+        INSERT_TIME_COLUMN.clone()
+    }
+
+    fn get_max_event_time_column_name(&self) -> Arc<String> {
+        INSERT_TIME_COLUMN.clone()
     }
 }
 
