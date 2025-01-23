@@ -1,4 +1,5 @@
 use super::{
+    materialized_view::MaterializedView,
     partition_cache::{NullPartitionProvider, PartitionCache},
     query::make_session_context,
     sql_partition_spec::fetch_sql_partition_spec,
@@ -26,7 +27,7 @@ pub struct SqlBatchView {
     max_event_time_column: Arc<String>,
     src_query: Arc<String>,
     transform_query: Arc<String>,
-    _merge_partitions_query: Arc<String>,
+    merge_partitions_query: Arc<String>,
     schema: Arc<Schema>,
     view_factory: Arc<ViewFactory>,
 }
@@ -67,7 +68,7 @@ impl SqlBatchView {
             max_event_time_column,
             src_query,
             transform_query,
-            _merge_partitions_query: merge_partitions_query,
+            merge_partitions_query,
             schema,
             view_factory,
         })
@@ -168,5 +169,30 @@ impl View for SqlBatchView {
 
     fn get_max_event_time_column_name(&self) -> Arc<String> {
         self.max_event_time_column.clone()
+    }
+
+    async fn register_table(&self, ctx: &SessionContext, table: MaterializedView) -> Result<()> {
+        let view_name = self.get_view_set_name().to_string();
+        let partitions_table_name = format!("__{view_name}__partitions");
+        ctx.register_table(
+            TableReference::Bare {
+                table: partitions_table_name.clone().into(),
+            },
+            Arc::new(table),
+        )?;
+        let df = ctx
+            .sql(
+                &self
+                    .merge_partitions_query
+                    .replace("{source}", &partitions_table_name),
+            )
+            .await?;
+        ctx.register_table(
+            TableReference::Bare {
+                table: view_name.into(),
+            },
+            df.into_view(),
+        )?;
+        Ok(())
     }
 }

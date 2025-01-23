@@ -1,9 +1,9 @@
-use super::partition_cache::PartitionCache;
+use super::{materialized_view::MaterializedView, partition_cache::PartitionCache};
 use crate::{response_writer::Logger, time::TimeRange};
 use anyhow::Result;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use datafusion::{arrow::datatypes::Schema, logical_expr::Expr};
+use datafusion::{arrow::datatypes::Schema, logical_expr::Expr, prelude::*, sql::TableReference};
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use std::sync::Arc;
 
@@ -61,6 +61,18 @@ pub trait View: std::fmt::Debug + Send + Sync {
 
     /// name of the column to take the max() of to get the last event timestamp in a dataframe
     fn get_max_event_time_column_name(&self) -> Arc<String>;
+
+    /// register the table in the SessionContext
+    async fn register_table(&self, ctx: &SessionContext, table: MaterializedView) -> Result<()> {
+        let view_set_name = self.get_view_set_name().to_string();
+        ctx.register_table(
+            TableReference::Bare {
+                table: view_set_name.into(),
+            },
+            Arc::new(table),
+        )?;
+        Ok(())
+    }
 }
 
 impl dyn View {

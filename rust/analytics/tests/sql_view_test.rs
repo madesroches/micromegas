@@ -61,13 +61,13 @@ async fn make_log_entries_levels_per_process_view(
                sum(nb_info)  as nb_info,
                sum(nb_debug) as nb_debug,
                sum(nb_trace) as nb_trace
-        FROM   source
+        FROM   {source}
         GROUP BY process_id, time_bin
         ORDER BY time_bin, process_id;",
     ));
     let time_column = Arc::new(String::from("time_bin"));
     SqlBatchView::new(
-        Arc::new("log_entries_per_process".to_owned()),
+        Arc::new("log_entries_per_process_per_minute".to_owned()),
         Arc::new("global".to_owned()),
         time_column.clone(),
         time_column,
@@ -245,17 +245,16 @@ async fn sql_view_test() -> Result<()> {
         Some(TimeRange::new(begin_range, end_range)),
         "
         SELECT time_bin,
-               min(min_time) as min_time,
-               max(max_time) as max_time,
+               min_time,
+               max_time,
                process_id,
-               sum(nb_fatal) as nb_fatal,
-               sum(nb_err)   as nb_err,
-               sum(nb_warn)  as nb_warn,
-               sum(nb_info)  as nb_info,
-               sum(nb_debug) as nb_debug,
-               sum(nb_trace) as nb_trace
-        FROM   log_entries_per_process
-        GROUP BY process_id, time_bin
+               nb_fatal,
+               nb_err,
+               nb_warn,
+               nb_info,
+               nb_debug,
+               nb_trace
+        FROM   log_entries_per_process_per_minute
         ORDER BY time_bin, process_id;",
         view_factory.clone(),
     )
