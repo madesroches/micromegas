@@ -73,6 +73,10 @@ pub trait View: std::fmt::Debug + Send + Sync {
         )?;
         Ok(())
     }
+
+    fn get_merge_partitions_query(&self) -> Arc<String> {
+        Arc::new(String::from("SELECT * FROM {source};"))
+    }
 }
 
 impl dyn View {

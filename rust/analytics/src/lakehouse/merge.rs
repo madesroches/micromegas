@@ -93,7 +93,10 @@ pub async fn create_merged_partition(
         },
         Arc::new(table),
     )?;
-    let merged_df = ctx.sql("SELECT * FROM source;").await?;
+    let merge_query = view
+        .get_merge_partitions_query()
+        .replace("{source}", "source");
+    let merged_df = ctx.sql(&merge_query).await?;
     let (tx, rx) = tokio::sync::mpsc::channel(1);
     let join_handle = tokio::spawn(write_partition_from_rows(
         lake.clone(),

@@ -195,4 +195,8 @@ impl View for SqlBatchView {
         )?;
         Ok(())
     }
+
+    fn get_merge_partitions_query(&self) -> Arc<String> {
+        self.merge_partitions_query.clone()
+    }
 }
