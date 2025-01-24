@@ -19,6 +19,7 @@ use std::hash::Hash;
 use std::hash::Hasher;
 use std::{hash::DefaultHasher, sync::Arc};
 
+/// SQL-defined view updated in batch
 #[derive(Debug)]
 pub struct SqlBatchView {
     view_set_name: Arc<String>,
@@ -34,9 +35,18 @@ pub struct SqlBatchView {
 
 impl SqlBatchView {
     #[allow(clippy::too_many_arguments)]
+    /// # Arguments
+    ///
+    /// * `view_set_name` - name of the table
+    /// * `min_event_time_column` - min(column) should result in the first timestamp in a dataframe
+    /// * `max_event_time_column` - max(column) should result in the last timestamp in a dataframe
+    /// * `src_query` - used to count the rows of the underlying data to know if a cached partition is up to date
+    /// * `transform_query` - used to transform the source data into a cached partition
+    /// * `merge_partitions_query` - used to merge multiple partitions into a single one (and user queries which are one multiple partitions by default)
+    /// * `lake` - data lake
+    /// * `view_factory` - all views accessible to the `src_query`
     pub async fn new(
         view_set_name: Arc<String>,
-        view_instance_id: Arc<String>,
         min_event_time_column: Arc<String>,
         max_event_time_column: Arc<String>,
         src_query: Arc<String>,
@@ -63,7 +73,7 @@ impl SqlBatchView {
 
         Ok(Self {
             view_set_name,
-            view_instance_id,
+            view_instance_id: Arc::new(String::from("global")),
             min_event_time_column,
             max_event_time_column,
             src_query,

@@ -1,4 +1,4 @@
-// Record batches + schema
+/// Record batches + schema
 pub mod answer;
 /// Write parquet in object store
 pub mod async_parquet_writer;
@@ -50,7 +50,7 @@ pub mod query;
 pub mod reader_factory;
 /// Exposes retire_partitions as a table function
 pub mod retire_partitions_table_function;
-/// Sql-defined view updated at regular intervals
+/// Sql-defined view updated in batch
 pub mod sql_batch_view;
 /// Specification for a view partition backed by a SQL query on the lakehouse.
 pub mod sql_partition_spec;
