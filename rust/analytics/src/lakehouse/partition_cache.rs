@@ -91,6 +91,68 @@ impl PartitionCache {
         })
     }
 
+    pub async fn fetch_overlapping_insert_range_for_view(
+        pool: &sqlx::PgPool,
+        view_set_name: Arc<String>,
+        view_instance_id: Arc<String>,
+        begin_insert: DateTime<Utc>,
+        end_insert: DateTime<Utc>,
+    ) -> Result<Self> {
+        let rows = sqlx::query(
+            "SELECT begin_insert_time,
+                    end_insert_time,
+                    min_event_time,
+                    max_event_time,
+                    updated,
+                    file_path,
+                    file_size,
+                    file_schema_hash,
+                    source_data_hash,
+                    file_metadata
+             FROM lakehouse_partitions
+             WHERE begin_insert_time < $1
+             AND end_insert_time > $2
+             AND view_set_name = $3
+             AND view_instance_id = $4
+             AND file_metadata IS NOT NULL
+             ;",
+        )
+        .bind(end_insert)
+        .bind(begin_insert)
+        .bind(&*view_set_name)
+        .bind(&*view_instance_id)
+        .fetch_all(pool)
+        .await
+        .with_context(|| "fetching partitions")?;
+        let mut partitions = vec![];
+        for r in rows {
+            let view_metadata = ViewMetadata {
+                view_set_name: view_set_name.clone(),
+                view_instance_id: view_instance_id.clone(),
+                file_schema_hash: r.try_get("file_schema_hash")?,
+            };
+            let file_metadata_buffer: Vec<u8> = r.try_get("file_metadata")?;
+            let file_metadata = Arc::new(parse_parquet_metadata(&file_metadata_buffer.into())?);
+            partitions.push(Partition {
+                view_metadata,
+                begin_insert_time: r.try_get("begin_insert_time")?,
+                end_insert_time: r.try_get("end_insert_time")?,
+                min_event_time: r.try_get("min_event_time")?,
+                max_event_time: r.try_get("max_event_time")?,
+                updated: r.try_get("updated")?,
+                file_path: r.try_get("file_path")?,
+                file_size: r.try_get("file_size")?,
+                source_data_hash: r.try_get("source_data_hash")?,
+                file_metadata,
+            });
+        }
+        Ok(Self {
+            partitions,
+            begin_insert,
+            end_insert,
+        })
+    }
+
     // overlap test for a specific view
     pub fn filter(
         &self,
