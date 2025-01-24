@@ -1,6 +1,6 @@
 use super::partition_cache::PartitionCache;
 use crate::{
-    dfext::get_column::typed_column_by_name,
+    dfext::typed_column::typed_column_by_name,
     lakehouse::{blocks_view::BlocksView, query::query_single_view},
     time::TimeRange,
 };

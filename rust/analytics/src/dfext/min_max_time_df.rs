@@ -6,7 +6,7 @@ use datafusion::{
     functions_aggregate::min_max::{max, min},
 };
 
-use super::get_column::typed_column;
+use super::typed_column::typed_column;
 
 pub async fn min_max_time_dataframe(
     df: DataFrame,

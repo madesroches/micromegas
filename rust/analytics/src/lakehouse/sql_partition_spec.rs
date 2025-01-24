@@ -3,7 +3,7 @@ use super::{
     write_partition::write_partition_from_rows,
 };
 use crate::{
-    dfext::{get_column::typed_column_by_name, min_max_time_df::min_max_time_dataframe},
+    dfext::{min_max_time_df::min_max_time_dataframe, typed_column::typed_column_by_name},
     lakehouse::write_partition::PartitionRowSet,
     response_writer::Logger,
 };
