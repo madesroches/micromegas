@@ -1,8 +1,7 @@
 use super::partition_cache::PartitionCache;
 use crate::{
     dfext::typed_column::typed_column_by_name,
-    lakehouse::{blocks_view::BlocksView, query::query_single_view},
-    time::TimeRange,
+    lakehouse::{blocks_view::blocks_view_schema, query::query_partitions},
 };
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
@@ -61,13 +60,9 @@ pub async fn fetch_partition_source_data(
     end_insert: DateTime<Utc>,
     source_stream_tag: &str,
 ) -> Result<PartitionSourceDataBlocks> {
-    let desc = format!(
-        "[{}, {}] {source_stream_tag}",
-        begin_insert.to_rfc3339(),
-        end_insert.to_rfc3339()
-    );
-
-    let blocks_view = Arc::new(BlocksView::new().with_context(|| "BlocksView::new")?);
+    let begin_rfc = begin_insert.to_rfc3339();
+    let end_rfc = end_insert.to_rfc3339();
+    let desc = format!("[{begin_rfc}, {end_rfc}] {source_stream_tag}",);
     let sql = format!("
           SELECT block_id, stream_id, process_id, begin_time, begin_ticks, end_time, end_ticks, nb_objects,
               object_offset, payload_size, insert_time as block_insert_time,
@@ -75,28 +70,27 @@ pub async fn fetch_partition_source_data(
               \"processes.start_time\", \"processes.start_ticks\", \"processes.tsc_frequency\", \"processes.exe\",
               \"processes.username\", \"processes.realname\", \"processes.computer\", \"processes.distro\", \"processes.cpu_brand\",
               \"processes.parent_process_id\", \"processes.properties\"
-          FROM blocks
+          FROM source
           WHERE array_has( \"streams.tags\", '{source_stream_tag}' )
+          AND insert_time >= '{begin_rfc}'
+          AND insert_time < '{end_rfc}'
           ORDER BY insert_time, block_id
           ;");
     let mut block_ids_hash: i64 = 0;
     let mut partition_src_blocks = vec![];
-    // I really don't like the dependency on the blocks_view time filter being on insert_time.
-    // If we were to make the 'time relevance' of a block more generous, we would need to add a condition
-    // on the insert_time of the blocks in the previous SQL.
-
-    // todo: remove query_single_view, use PartitionCache::filter
-    // todo: add query_partitions to use PartitionedTableProvider
-    let blocks_answer = query_single_view(
-        lake,
-        existing_partitions,
-        Some(TimeRange::new(begin_insert, end_insert)),
+    let block_partitions = existing_partitions
+        .filter("blocks", "global", begin_insert, end_insert)
+        .partitions;
+    let df = query_partitions(
+        lake.clone(),
+        Arc::new(blocks_view_schema()),
+        block_partitions,
         &sql,
-        blocks_view,
     )
     .await
     .with_context(|| "blocks query")?;
-    for b in blocks_answer.record_batches {
+    let record_batches = df.collect().await?;
+    for b in record_batches {
         let block_id_column: &StringArray = typed_column_by_name(&b, "block_id")?;
         let stream_id_column: &StringArray = typed_column_by_name(&b, "stream_id")?;
         let process_id_column: &StringArray = typed_column_by_name(&b, "process_id")?;

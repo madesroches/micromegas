@@ -88,12 +88,17 @@ pub async fn materialize_range(
     partition_time_delta: TimeDelta,
     logger: Arc<dyn Logger>,
 ) -> Result<()> {
-    let mut partitions = Arc::new(
-        // todo: query only the blocks partitions for this call
-        PartitionCache::fetch_overlapping_insert_range(&lake.db_pool, begin_range, end_range)
-            .await?,
-    );
     let blocks_view = Arc::new(BlocksView::new()?);
+    let mut partitions = Arc::new(
+        PartitionCache::fetch_overlapping_insert_range_for_view(
+            &lake.db_pool,
+            blocks_view.get_view_set_name(),
+            blocks_view.get_view_instance_id(),
+            begin_range,
+            end_range,
+        )
+        .await?,
+    );
     materialize_partition_range(
         partitions.clone(),
         lake.clone(),

@@ -37,6 +37,10 @@ pub struct BlockPartitionSpec {
 
 #[async_trait]
 impl PartitionSpec for BlockPartitionSpec {
+    fn is_empty(&self) -> bool {
+        self.source_data.blocks.is_empty()
+    }
+
     fn get_source_data_hash(&self) -> Vec<u8> {
         self.source_data.block_ids_hash.clone()
     }

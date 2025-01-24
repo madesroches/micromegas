@@ -91,7 +91,7 @@ pub async fn retire_partitions(
     // where a bigger one existed
     // its gets tricky in the jit case where a partition can have only one block and begin_insert == end_insert
 
-    //todo: use PartitionCache here, add filter_contained
+    //todo: use DELETE+RETURNING
     let old_partitions = sqlx::query(
         "SELECT file_path, file_size
          FROM lakehouse_partitions

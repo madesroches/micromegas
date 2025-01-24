@@ -112,7 +112,6 @@ impl View for BlocksView {
         anyhow::bail!("not supported");
     }
 
-    // fetch_partition_source_data relies on this filter being on insert_time
     fn make_time_filter(&self, begin: DateTime<Utc>, end: DateTime<Utc>) -> Result<Vec<Expr>> {
         let utc: Arc<str> = Arc::from("+00:00");
         Ok(vec![Expr::Between(Between::new(

@@ -1,7 +1,8 @@
 use super::{
     answer::Answer, list_partitions_table_function::ListPartitionsTableFunction,
     materialize_partitions_table_function::MaterializePartitionsTableFunction,
-    partition_cache::QueryPartitionProvider, property_get_function::PropertyGet,
+    partition::Partition, partition_cache::QueryPartitionProvider,
+    partitioned_table_provider::PartitionedTableProvider, property_get_function::PropertyGet,
     retire_partitions_table_function::RetirePartitionsTableFunction, view::View,
     view_factory::ViewFactory,
 };
@@ -14,9 +15,11 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use datafusion::{
-    arrow::array::RecordBatch,
+    arrow::{array::RecordBatch, datatypes::SchemaRef},
     execution::{context::SessionContext, object_store::ObjectStoreUrl},
     logical_expr::ScalarUDF,
+    prelude::*,
+    sql::TableReference,
 };
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_tracing::prelude::*;
@@ -39,6 +42,27 @@ async fn register_table(
         query_range.clone(),
     );
     view.register_table(ctx, table).await
+}
+
+/// query_partitions returns a dataframe, leaving the option of streaming the results
+pub async fn query_partitions(
+    lake: Arc<DataLakeConnection>,
+    schema: SchemaRef,
+    partitions: Vec<Partition>,
+    sql: &str,
+) -> Result<DataFrame> {
+    let object_store = lake.blob_storage.inner();
+    let table = PartitionedTableProvider::new(schema, object_store.clone(), Arc::new(partitions));
+    let object_store_url = ObjectStoreUrl::parse("obj://lakehouse/").unwrap();
+    let ctx = SessionContext::new();
+    ctx.register_object_store(object_store_url.as_ref(), object_store.clone());
+    ctx.register_table(
+        TableReference::Bare {
+            table: "source".into(),
+        },
+        Arc::new(table),
+    )?;
+    Ok(ctx.sql(sql).await?)
 }
 
 pub async fn query_single_view(
