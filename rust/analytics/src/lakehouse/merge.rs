@@ -2,14 +2,14 @@ use super::{
     partition::Partition,
     partition_cache::PartitionCache,
     partition_source_data::hash_to_object_count,
-    partitioned_table_provider::PartitionedTableProvider,
+    query::query_partitions,
     view::View,
     write_partition::{write_partition_from_rows, PartitionRowSet},
 };
 use crate::{dfext::min_max_time_df::min_max_time_dataframe, response_writer::Logger};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use datafusion::{execution::object_store::ObjectStoreUrl, prelude::*, sql::TableReference};
+use datafusion::prelude::*;
 use futures::stream::StreamExt;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use std::sync::Arc;
@@ -78,25 +78,16 @@ pub async fn create_merged_partition(
             filtered_partitions.len()
         ))
         .await?;
-    let object_store = lake.blob_storage.inner();
-    let table = PartitionedTableProvider::new(
-        view.get_file_schema(),
-        object_store.clone(),
-        Arc::new(filtered_partitions),
-    );
-    let ctx = SessionContext::new();
-    let object_store_url = ObjectStoreUrl::parse("obj://lakehouse/").unwrap();
-    ctx.register_object_store(object_store_url.as_ref(), object_store.clone());
-    ctx.register_table(
-        TableReference::Bare {
-            table: "source".into(),
-        },
-        Arc::new(table),
-    )?;
     let merge_query = view
         .get_merge_partitions_query()
         .replace("{source}", "source");
-    let merged_df = ctx.sql(&merge_query).await?;
+    let merged_df = query_partitions(
+        lake.clone(),
+        view.get_file_schema(),
+        filtered_partitions,
+        &merge_query,
+    )
+    .await?;
     let (tx, rx) = tokio::sync::mpsc::channel(1);
     let join_handle = tokio::spawn(write_partition_from_rows(
         lake.clone(),
@@ -109,6 +100,7 @@ pub async fn create_merged_partition(
         logger.clone(),
     ));
     let mut stream = merged_df.execute_stream().await?;
+    let ctx = SessionContext::new();
     while let Some(rb_res) = stream.next().await {
         let rb = rb_res?;
         let (mintime, maxtime) = min_max_time_dataframe(
