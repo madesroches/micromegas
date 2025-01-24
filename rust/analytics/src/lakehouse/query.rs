@@ -7,7 +7,7 @@ use super::{
 };
 use crate::{
     lakehouse::{
-        table_provider::MaterializedView, table_scan_rewrite::TableScanRewrite,
+        materialized_view::MaterializedView, table_scan_rewrite::TableScanRewrite,
         view_instance_table_function::ViewInstanceTableFunction,
     },
     time::TimeRange,
@@ -17,7 +17,6 @@ use datafusion::{
     arrow::array::RecordBatch,
     execution::{context::SessionContext, object_store::ObjectStoreUrl},
     logical_expr::ScalarUDF,
-    sql::TableReference,
 };
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_tracing::prelude::*;
@@ -39,14 +38,7 @@ async fn register_table(
         part_provider,
         query_range.clone(),
     );
-    let view_set_name = view.get_view_set_name().to_string();
-    ctx.register_table(
-        TableReference::Bare {
-            table: view_set_name.into(),
-        },
-        Arc::new(table),
-    )?;
-    Ok(())
+    view.register_table(ctx, table).await
 }
 
 pub async fn query_single_view(

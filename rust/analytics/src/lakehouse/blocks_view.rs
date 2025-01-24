@@ -1,11 +1,9 @@
-use crate::time::TimeRange;
-
 use super::{
     metadata_partition_spec::fetch_metadata_partition_spec,
-    partition_cache::QueryPartitionProvider,
+    partition_cache::PartitionCache,
     view::{PartitionSpec, View, ViewMetadata},
-    view_factory::ViewMaker,
 };
+use crate::time::TimeRange;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -19,17 +17,8 @@ use std::sync::Arc;
 
 const VIEW_SET_NAME: &str = "blocks";
 const VIEW_INSTANCE_ID: &str = "global";
-
-#[derive(Debug)]
-pub struct BlocksViewMaker {}
-
-impl ViewMaker for BlocksViewMaker {
-    fn make_view(&self, view_instance_id: &str) -> Result<Arc<dyn View>> {
-        if view_instance_id != "global" {
-            anyhow::bail!("only global view instance id is supported for metadata views");
-        }
-        Ok(Arc::new(BlocksView::new()?))
-    }
+lazy_static::lazy_static! {
+    static ref INSERT_TIME_COLUMN: Arc<String> = Arc::new( String::from("insert_time"));
 }
 
 #[derive(Debug)]
@@ -78,7 +67,7 @@ impl View for BlocksView {
     async fn make_batch_partition_spec(
         &self,
         lake: Arc<DataLakeConnection>,
-        _part_provider: Arc<dyn QueryPartitionProvider>,
+        _existing_partitions: Arc<PartitionCache>,
         begin_insert: DateTime<Utc>,
         end_insert: DateTime<Utc>,
     ) -> Result<Arc<dyn PartitionSpec>> {
@@ -123,6 +112,7 @@ impl View for BlocksView {
         anyhow::bail!("not supported");
     }
 
+    // fetch_partition_source_data relies on this filter being on insert_time
     fn make_time_filter(&self, begin: DateTime<Utc>, end: DateTime<Utc>) -> Result<Vec<Expr>> {
         let utc: Arc<str> = Arc::from("+00:00");
         Ok(vec![Expr::Between(Between::new(
@@ -139,6 +129,14 @@ impl View for BlocksView {
             ))
             .into(),
         ))])
+    }
+
+    fn get_min_event_time_column_name(&self) -> Arc<String> {
+        INSERT_TIME_COLUMN.clone()
+    }
+
+    fn get_max_event_time_column_name(&self) -> Arc<String> {
+        INSERT_TIME_COLUMN.clone()
     }
 }
 

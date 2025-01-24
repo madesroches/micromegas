@@ -2,9 +2,8 @@ use crate::time::TimeRange;
 
 use super::{
     metadata_partition_spec::fetch_metadata_partition_spec,
-    partition_cache::QueryPartitionProvider,
+    partition_cache::PartitionCache,
     view::{PartitionSpec, View, ViewMetadata},
-    view_factory::ViewMaker,
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -19,14 +18,8 @@ use std::sync::Arc;
 
 const VIEW_SET_NAME: &str = "processes";
 const VIEW_INSTANCE_ID: &str = "global";
-
-#[derive(Debug)]
-pub struct ProcessesViewMaker {}
-
-impl ViewMaker for ProcessesViewMaker {
-    fn make_view(&self, view_instance_id: &str) -> Result<Arc<dyn View>> {
-        Ok(Arc::new(ProcessesView::new(view_instance_id)?))
-    }
+lazy_static::lazy_static! {
+    static ref INSERT_TIME_COLUMN: Arc<String> = Arc::new( String::from("insert_time"));
 }
 
 #[derive(Debug)]
@@ -38,11 +31,7 @@ pub struct ProcessesView {
 }
 
 impl ProcessesView {
-    pub fn new(view_instance_id: &str) -> Result<Self> {
-        if view_instance_id != "global" {
-            anyhow::bail!("only global view instance id is supported for metadata views");
-        }
-
+    pub fn new() -> Result<Self> {
         let data_sql = Arc::new(String::from(
             "SELECT process_id,
                     exe,
@@ -86,7 +75,7 @@ impl View for ProcessesView {
     async fn make_batch_partition_spec(
         &self,
         lake: Arc<DataLakeConnection>,
-        _part_provider: Arc<dyn QueryPartitionProvider>,
+        _existing_partitions: Arc<PartitionCache>,
         begin_insert: DateTime<Utc>,
         end_insert: DateTime<Utc>,
     ) -> Result<Arc<dyn PartitionSpec>> {
@@ -147,6 +136,14 @@ impl View for ProcessesView {
             ))
             .into(),
         ))])
+    }
+
+    fn get_min_event_time_column_name(&self) -> Arc<String> {
+        INSERT_TIME_COLUMN.clone()
+    }
+
+    fn get_max_event_time_column_name(&self) -> Arc<String> {
+        INSERT_TIME_COLUMN.clone()
     }
 }
 

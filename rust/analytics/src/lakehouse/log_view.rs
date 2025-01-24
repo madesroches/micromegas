@@ -2,7 +2,7 @@ use super::{
     block_partition_spec::BlockPartitionSpec,
     jit_partitions::write_partition_from_blocks,
     log_block_processor::LogBlockProcessor,
-    partition_cache::QueryPartitionProvider,
+    partition_cache::PartitionCache,
     partition_source_data::fetch_partition_source_data,
     view::{PartitionSpec, View, ViewMetadata},
     view_factory::ViewMaker,
@@ -26,6 +26,9 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 const VIEW_SET_NAME: &str = "log_entries";
+lazy_static::lazy_static! {
+    static ref TIME_COLUMN: Arc<String> = Arc::new( String::from("time"));
+}
 
 #[derive(Debug)]
 pub struct LogViewMaker {}
@@ -72,7 +75,7 @@ impl View for LogView {
     async fn make_batch_partition_spec(
         &self,
         lake: Arc<DataLakeConnection>,
-        part_provider: Arc<dyn QueryPartitionProvider>,
+        existing_partitions: Arc<PartitionCache>,
         begin_insert: DateTime<Utc>,
         end_insert: DateTime<Utc>,
     ) -> Result<Arc<dyn PartitionSpec>> {
@@ -80,7 +83,7 @@ impl View for LogView {
             anyhow::bail!("not supported for jit queries... should it?");
         }
         let source_data =
-            fetch_partition_source_data(lake, part_provider, begin_insert, end_insert, "log")
+            fetch_partition_source_data(lake, existing_partitions, begin_insert, end_insert, "log")
                 .await
                 .with_context(|| "fetch_partition_source_data")?;
         Ok(Arc::new(BlockPartitionSpec {
@@ -186,5 +189,13 @@ impl View for LogView {
             ))
             .into(),
         ))])
+    }
+
+    fn get_min_event_time_column_name(&self) -> Arc<String> {
+        TIME_COLUMN.clone()
+    }
+
+    fn get_max_event_time_column_name(&self) -> Arc<String> {
+        TIME_COLUMN.clone()
     }
 }

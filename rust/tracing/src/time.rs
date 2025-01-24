@@ -147,9 +147,10 @@ fn frequency_fallback() -> u64 {
     0
 }
 
+#[allow(unused_imports)]
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::time::frequency;
 
     #[test]
     fn test_frequency() {

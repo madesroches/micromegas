@@ -1,12 +1,11 @@
+use super::{materialized_view::MaterializedView, partition_cache::PartitionCache};
 use crate::{response_writer::Logger, time::TimeRange};
 use anyhow::Result;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use datafusion::{arrow::datatypes::Schema, logical_expr::Expr};
+use datafusion::{arrow::datatypes::Schema, logical_expr::Expr, prelude::*, sql::TableReference};
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use std::sync::Arc;
-
-use super::partition_cache::QueryPartitionProvider;
 
 #[async_trait]
 pub trait PartitionSpec: Send + Sync {
@@ -34,7 +33,7 @@ pub trait View: std::fmt::Debug + Send + Sync {
     async fn make_batch_partition_spec(
         &self,
         lake: Arc<DataLakeConnection>,
-        part_provider: Arc<dyn QueryPartitionProvider>,
+        existing_partitions: Arc<PartitionCache>,
         begin_insert: DateTime<Utc>,
         end_insert: DateTime<Utc>,
     ) -> Result<Arc<dyn PartitionSpec>>;
@@ -56,6 +55,28 @@ pub trait View: std::fmt::Debug + Send + Sync {
     /// make_time_filter returns a set of expressions that will filter out the rows of the partition
     /// outside the time range requested.
     fn make_time_filter(&self, _begin: DateTime<Utc>, _end: DateTime<Utc>) -> Result<Vec<Expr>>;
+
+    /// name of the column to take the min() of to get the first event timestamp in a dataframe
+    fn get_min_event_time_column_name(&self) -> Arc<String>;
+
+    /// name of the column to take the max() of to get the last event timestamp in a dataframe
+    fn get_max_event_time_column_name(&self) -> Arc<String>;
+
+    /// register the table in the SessionContext
+    async fn register_table(&self, ctx: &SessionContext, table: MaterializedView) -> Result<()> {
+        let view_set_name = self.get_view_set_name().to_string();
+        ctx.register_table(
+            TableReference::Bare {
+                table: view_set_name.into(),
+            },
+            Arc::new(table),
+        )?;
+        Ok(())
+    }
+
+    fn get_merge_partitions_query(&self) -> Arc<String> {
+        Arc::new(String::from("SELECT * FROM {source};"))
+    }
 }
 
 impl dyn View {

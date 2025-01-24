@@ -1,5 +1,5 @@
 use super::{
-    partition_cache::QueryPartitionProvider, table_provider::MaterializedView,
+    materialized_view::MaterializedView, partition_cache::QueryPartitionProvider,
     view_factory::ViewFactory,
 };
 use crate::time::TimeRange;

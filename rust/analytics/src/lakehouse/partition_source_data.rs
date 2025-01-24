@@ -1,12 +1,14 @@
+use super::partition_cache::PartitionCache;
 use crate::{
+    dfext::typed_column::typed_column_by_name,
     lakehouse::{blocks_view::BlocksView, query::query_single_view},
     time::TimeRange,
 };
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use datafusion::arrow::array::{
-    Array, ArrayRef, AsArray, BinaryArray, GenericListArray, Int32Array, Int64Array, RecordBatch,
-    StringArray, StructArray, TimestampNanosecondArray,
+    Array, ArrayRef, AsArray, BinaryArray, GenericListArray, Int32Array, Int64Array, StringArray,
+    StructArray, TimestampNanosecondArray,
 };
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_telemetry::property::Property;
@@ -14,8 +16,6 @@ use micromegas_telemetry::{stream_info::StreamInfo, types::block::BlockMetadata}
 use micromegas_tracing::prelude::*;
 use std::sync::Arc;
 use uuid::Uuid;
-
-use super::partition_cache::QueryPartitionProvider;
 
 pub struct PartitionSourceBlock {
     pub block: BlockMetadata,
@@ -32,16 +32,6 @@ pub fn hash_to_object_count(hash: &[u8]) -> Result<i64> {
     Ok(i64::from_le_bytes(
         hash.try_into().with_context(|| "hash_to_object_count")?,
     ))
-}
-
-pub fn get_column<'a, T: core::any::Any>(rc: &'a RecordBatch, column_name: &str) -> Result<&'a T> {
-    let column = rc
-        .column_by_name(column_name)
-        .with_context(|| format!("getting column {column_name}"))?;
-    column
-        .as_any()
-        .downcast_ref::<T>()
-        .with_context(|| format!("casting {column_name}: {:?}", column.data_type()))
 }
 
 fn read_property_list(value: ArrayRef) -> Result<Vec<Property>> {
@@ -66,7 +56,7 @@ fn read_property_list(value: ArrayRef) -> Result<Vec<Property>> {
 
 pub async fn fetch_partition_source_data(
     lake: Arc<DataLakeConnection>,
-    part_provider: Arc<dyn QueryPartitionProvider>,
+    existing_partitions: Arc<PartitionCache>,
     begin_insert: DateTime<Utc>,
     end_insert: DateTime<Utc>,
     source_stream_tag: &str,
@@ -91,9 +81,15 @@ pub async fn fetch_partition_source_data(
           ;");
     let mut block_ids_hash: i64 = 0;
     let mut partition_src_blocks = vec![];
+    // I really don't like the dependency on the blocks_view time filter being on insert_time.
+    // If we were to make the 'time relevance' of a block more generous, we would need to add a condition
+    // on the insert_time of the blocks in the previous SQL.
+
+    // todo: remove query_single_view, use PartitionCache::filter
+    // todo: add query_partitions to use PartitionedTableProvider
     let blocks_answer = query_single_view(
         lake,
-        part_provider,
+        existing_partitions,
         Some(TimeRange::new(begin_insert, end_insert)),
         &sql,
         blocks_view,
@@ -101,38 +97,42 @@ pub async fn fetch_partition_source_data(
     .await
     .with_context(|| "blocks query")?;
     for b in blocks_answer.record_batches {
-        let block_id_column: &StringArray = get_column(&b, "block_id")?;
-        let stream_id_column: &StringArray = get_column(&b, "stream_id")?;
-        let process_id_column: &StringArray = get_column(&b, "process_id")?;
-        let begin_time_column: &TimestampNanosecondArray = get_column(&b, "begin_time")?;
-        let begin_ticks_column: &Int64Array = get_column(&b, "begin_ticks")?;
-        let end_time_column: &TimestampNanosecondArray = get_column(&b, "end_time")?;
-        let end_ticks_column: &Int64Array = get_column(&b, "end_ticks")?;
-        let nb_objects_column: &Int32Array = get_column(&b, "nb_objects")?;
-        let object_offset_column: &Int64Array = get_column(&b, "object_offset")?;
-        let payload_size_column: &Int64Array = get_column(&b, "payload_size")?;
+        let block_id_column: &StringArray = typed_column_by_name(&b, "block_id")?;
+        let stream_id_column: &StringArray = typed_column_by_name(&b, "stream_id")?;
+        let process_id_column: &StringArray = typed_column_by_name(&b, "process_id")?;
+        let begin_time_column: &TimestampNanosecondArray = typed_column_by_name(&b, "begin_time")?;
+        let begin_ticks_column: &Int64Array = typed_column_by_name(&b, "begin_ticks")?;
+        let end_time_column: &TimestampNanosecondArray = typed_column_by_name(&b, "end_time")?;
+        let end_ticks_column: &Int64Array = typed_column_by_name(&b, "end_ticks")?;
+        let nb_objects_column: &Int32Array = typed_column_by_name(&b, "nb_objects")?;
+        let object_offset_column: &Int64Array = typed_column_by_name(&b, "object_offset")?;
+        let payload_size_column: &Int64Array = typed_column_by_name(&b, "payload_size")?;
         let block_insert_time_column: &TimestampNanosecondArray =
-            get_column(&b, "block_insert_time")?;
+            typed_column_by_name(&b, "block_insert_time")?;
         let dependencies_metadata_column: &BinaryArray =
-            get_column(&b, "streams.dependencies_metadata")?;
-        let objects_metadata_column: &BinaryArray = get_column(&b, "streams.objects_metadata")?;
-        let stream_tags_column: &GenericListArray<i32> = get_column(&b, "streams.tags")?;
+            typed_column_by_name(&b, "streams.dependencies_metadata")?;
+        let objects_metadata_column: &BinaryArray =
+            typed_column_by_name(&b, "streams.objects_metadata")?;
+        let stream_tags_column: &GenericListArray<i32> = typed_column_by_name(&b, "streams.tags")?;
         let stream_properties_column: &GenericListArray<i32> =
-            get_column(&b, "streams.properties")?;
+            typed_column_by_name(&b, "streams.properties")?;
 
         let process_start_time_column: &TimestampNanosecondArray =
-            get_column(&b, "processes.start_time")?;
-        let process_start_ticks_column: &Int64Array = get_column(&b, "processes.start_ticks")?;
-        let process_tsc_freq_column: &Int64Array = get_column(&b, "processes.tsc_frequency")?;
-        let process_exe_column: &StringArray = get_column(&b, "processes.exe")?;
-        let process_username_column: &StringArray = get_column(&b, "processes.username")?;
-        let process_realname_column: &StringArray = get_column(&b, "processes.realname")?;
-        let process_computer_column: &StringArray = get_column(&b, "processes.computer")?;
-        let process_distro_column: &StringArray = get_column(&b, "processes.distro")?;
-        let process_cpu_column: &StringArray = get_column(&b, "processes.cpu_brand")?;
-        let process_parent_column: &StringArray = get_column(&b, "processes.parent_process_id")?;
+            typed_column_by_name(&b, "processes.start_time")?;
+        let process_start_ticks_column: &Int64Array =
+            typed_column_by_name(&b, "processes.start_ticks")?;
+        let process_tsc_freq_column: &Int64Array =
+            typed_column_by_name(&b, "processes.tsc_frequency")?;
+        let process_exe_column: &StringArray = typed_column_by_name(&b, "processes.exe")?;
+        let process_username_column: &StringArray = typed_column_by_name(&b, "processes.username")?;
+        let process_realname_column: &StringArray = typed_column_by_name(&b, "processes.realname")?;
+        let process_computer_column: &StringArray = typed_column_by_name(&b, "processes.computer")?;
+        let process_distro_column: &StringArray = typed_column_by_name(&b, "processes.distro")?;
+        let process_cpu_column: &StringArray = typed_column_by_name(&b, "processes.cpu_brand")?;
+        let process_parent_column: &StringArray =
+            typed_column_by_name(&b, "processes.parent_process_id")?;
         let process_properties_column: &GenericListArray<i32> =
-            get_column(&b, "processes.properties")?;
+            typed_column_by_name(&b, "processes.properties")?;
 
         for ir in 0..b.num_rows() {
             let block_insert_time = block_insert_time_column.value(ir);

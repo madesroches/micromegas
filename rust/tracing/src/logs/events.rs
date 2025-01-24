@@ -291,14 +291,14 @@ impl InProcSerialize for TaggedLogString {
     }
 }
 
+#[allow(unused_imports)]
 #[cfg(test)]
 mod test {
-    use std::thread;
-
     use crate::logs::{
         events::{Level, LevelFilter},
         FilterState, LogMetadata, FILTER_LEVEL_UNSET_VALUE,
     };
+    use std::thread;
 
     #[test]
     fn test_filter_levels() {

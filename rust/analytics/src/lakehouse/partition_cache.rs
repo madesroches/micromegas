@@ -18,6 +18,7 @@ pub trait QueryPartitionProvider: std::fmt::Display + Send + Sync + std::fmt::De
     ) -> Result<Vec<Partition>>;
 }
 
+/// PartitionCache allows to query partitions based on the insert_time range
 #[derive(Debug)]
 pub struct PartitionCache {
     pub partitions: Vec<Partition>,
@@ -90,16 +91,14 @@ impl PartitionCache {
         })
     }
 
+    // overlap test for a specific view
     pub fn filter(
         &self,
         view_set_name: &str,
         view_instance_id: &str,
         begin_insert: DateTime<Utc>,
         end_insert: DateTime<Utc>,
-    ) -> Result<Self> {
-        if begin_insert < self.begin_insert || end_insert > self.end_insert {
-            anyhow::bail!("filtering from a result set that's not large enough");
-        }
+    ) -> Self {
         let mut partitions = vec![];
         for part in &self.partitions {
             if *part.view_metadata.view_set_name == view_set_name
@@ -110,16 +109,61 @@ impl PartitionCache {
                 partitions.push(part.clone());
             }
         }
-        Ok(Self {
+        Self {
             partitions,
             begin_insert,
             end_insert,
-        })
+        }
+    }
+
+    // overlap test for a all views
+    pub fn filter_insert_range(
+        &self,
+        begin_insert: DateTime<Utc>,
+        end_insert: DateTime<Utc>,
+    ) -> Self {
+        let mut partitions = vec![];
+        for part in &self.partitions {
+            if part.begin_insert_time < end_insert && part.end_insert_time > begin_insert {
+                partitions.push(part.clone());
+            }
+        }
+        Self {
+            partitions,
+            begin_insert,
+            end_insert,
+        }
+    }
+
+    // single view that fits completely in the specified range
+    pub fn filter_inside_range(
+        &self,
+        view_set_name: &str,
+        view_instance_id: &str,
+        begin_insert: DateTime<Utc>,
+        end_insert: DateTime<Utc>,
+    ) -> Self {
+        let mut partitions = vec![];
+        for part in &self.partitions {
+            if *part.view_metadata.view_set_name == view_set_name
+                && *part.view_metadata.view_instance_id == view_instance_id
+                && part.begin_insert_time >= begin_insert
+                && part.end_insert_time <= end_insert
+            {
+                partitions.push(part.clone());
+            }
+        }
+        Self {
+            partitions,
+            begin_insert,
+            end_insert,
+        }
     }
 }
 
 #[async_trait]
 impl QueryPartitionProvider for PartitionCache {
+    /// unlike LivePartitionProvider, the query_range is tested against the insertion time, not the event time
     async fn fetch(
         &self,
         view_set_name: &str,
@@ -129,11 +173,14 @@ impl QueryPartitionProvider for PartitionCache {
     ) -> Result<Vec<Partition>> {
         let mut partitions = vec![];
         if let Some(range) = query_range {
+            if range.begin < self.begin_insert || range.end > self.end_insert {
+                anyhow::bail!("filtering from a result set that's not large enough");
+            }
             for part in &self.partitions {
                 if *part.view_metadata.view_set_name == view_set_name
                     && *part.view_metadata.view_instance_id == view_instance_id
-                    && part.min_event_time < range.end
-                    && part.max_event_time > range.begin
+                    && part.begin_insert_time < range.end
+                    && part.end_insert_time > range.begin
                     && part.view_metadata.file_schema_hash == file_schema_hash
                 {
                     partitions.push(part.clone());
@@ -261,5 +308,27 @@ impl QueryPartitionProvider for LivePartitionProvider {
             });
         }
         Ok(partitions)
+    }
+}
+
+#[derive(Debug)]
+pub struct NullPartitionProvider {}
+
+impl fmt::Display for NullPartitionProvider {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
+#[async_trait]
+impl QueryPartitionProvider for NullPartitionProvider {
+    async fn fetch(
+        &self,
+        _view_set_name: &str,
+        _view_instance_id: &str,
+        _query_range: Option<TimeRange>,
+        _file_schema_hash: Vec<u8>,
+    ) -> Result<Vec<Partition>> {
+        Ok(vec![])
     }
 }

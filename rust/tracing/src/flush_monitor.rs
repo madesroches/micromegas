@@ -39,7 +39,11 @@ impl FlushMonitor {
 
 impl Default for FlushMonitor {
     fn default() -> Self {
-        // Default is to flush every minute
-        Self::new(60)
+        // Default is to flush every minute unless specified by the env variable
+        const DEFAULT_PERIOD: i64 = 60;
+        let nb_seconds = std::env::var("MICROMEGAS_FLUSH_PERIOD")
+            .map(|v| v.parse::<i64>().unwrap_or(DEFAULT_PERIOD))
+            .unwrap_or(DEFAULT_PERIOD);
+        Self::new(nb_seconds)
     }
 }

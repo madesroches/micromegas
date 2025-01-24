@@ -1,6 +1,6 @@
 use super::{
     jit_partitions::{generate_jit_partitions, is_jit_partition_up_to_date},
-    partition_cache::QueryPartitionProvider,
+    partition_cache::PartitionCache,
     partition_source_data::{hash_to_object_count, PartitionSourceDataBlocks},
     view::{PartitionSpec, View, ViewMetadata},
     view_factory::ViewMaker,
@@ -28,6 +28,10 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 const VIEW_SET_NAME: &str = "thread_spans";
+lazy_static::lazy_static! {
+    static ref MIN_TIME_COLUMN: Arc<String> = Arc::new( String::from("begin"));
+    static ref MAX_TIME_COLUMN: Arc<String> = Arc::new( String::from("end"));
+}
 
 #[derive(Debug)]
 pub struct ThreadSpansViewMaker {}
@@ -191,7 +195,7 @@ impl View for ThreadSpansView {
     async fn make_batch_partition_spec(
         &self,
         _lake: Arc<DataLakeConnection>,
-        _part_provider: Arc<dyn QueryPartitionProvider>,
+        _existing_partitions: Arc<PartitionCache>,
         _begin_insert: DateTime<Utc>,
         _end_insert: DateTime<Utc>,
     ) -> Result<Arc<dyn PartitionSpec>> {
@@ -277,5 +281,13 @@ impl View for ThreadSpansView {
                 .into(),
             )),
         ])
+    }
+
+    fn get_min_event_time_column_name(&self) -> Arc<String> {
+        MIN_TIME_COLUMN.clone()
+    }
+
+    fn get_max_event_time_column_name(&self) -> Arc<String> {
+        MAX_TIME_COLUMN.clone()
     }
 }

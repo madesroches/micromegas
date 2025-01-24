@@ -38,7 +38,6 @@ async fn verify_overlapping_partitions(
     let nb_source_events = hash_to_object_count(source_data_hash)?;
     let filtered = existing_partitions
         .filter(view_set_name, view_instance_id, begin_insert, end_insert)
-        .with_context(|| "filtering partition cache")?
         .partitions;
     if filtered.is_empty() {
         logger
@@ -147,7 +146,15 @@ async fn materialize_partition(
                 .with_context(|| "writing partition")?;
         }
         PartitionCreationStrategy::MergeExisting => {
-            create_merged_partition(lake, view, begin_insert, end_insert, logger).await?;
+            create_merged_partition(
+                existing_partitions,
+                lake,
+                view,
+                begin_insert,
+                end_insert,
+                logger,
+            )
+            .await?;
         }
         PartitionCreationStrategy::Abort => {}
     }
