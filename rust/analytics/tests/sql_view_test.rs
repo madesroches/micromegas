@@ -17,7 +17,7 @@ use micromegas_telemetry_sink::TelemetryGuardBuilder;
 use micromegas_tracing::prelude::*;
 use std::sync::Arc;
 
-async fn make_log_entries_levels_per_process_view(
+async fn make_log_entries_levels_per_process_minute_view(
     lake: Arc<DataLakeConnection>,
     view_factory: Arc<ViewFactory>,
 ) -> Result<SqlBatchView> {
@@ -90,7 +90,7 @@ pub async fn materialize_range(
     logger: Arc<dyn Logger>,
 ) -> Result<()> {
     let mut partitions = Arc::new(
-        // we only need the blocks partitions for this call
+        // todo: query only the blocks partitions for this call
         PartitionCache::fetch_overlapping_insert_range(&lake.db_pool, begin_range, end_range)
             .await?,
     );
@@ -172,8 +172,11 @@ async fn sql_view_test() -> Result<()> {
     let lake = Arc::new(connect_to_data_lake(&connection_string, &object_store_uri).await?);
     let mut view_factory = default_view_factory()?;
     let log_summary_view = Arc::new(
-        make_log_entries_levels_per_process_view(lake.clone(), Arc::new(view_factory.clone()))
-            .await?,
+        make_log_entries_levels_per_process_minute_view(
+            lake.clone(),
+            Arc::new(view_factory.clone()),
+        )
+        .await?,
     );
     view_factory.add_global_view(log_summary_view.clone());
     let view_factory = Arc::new(view_factory);
@@ -215,10 +218,8 @@ async fn sql_view_test() -> Result<()> {
     assert_eq!(log_summary_view.get_file_schema(), ref_schema);
     let ref_schema_hash: Vec<u8> = vec![105, 221, 132, 185, 221, 232, 62, 136];
     assert_eq!(log_summary_view.get_file_schema_hash(), ref_schema_hash);
-
     let end_range = Utc::now().duration_trunc(TimeDelta::minutes(1))?;
     let begin_range = end_range - (TimeDelta::minutes(3));
-
     materialize_range(
         lake.clone(),
         view_factory.clone(),
@@ -259,9 +260,9 @@ async fn sql_view_test() -> Result<()> {
         view_factory.clone(),
     )
     .await?;
-    let pretty_results =
+    let pretty_results_view =
         datafusion::arrow::util::pretty::pretty_format_batches(&answer.record_batches)?.to_string();
-    eprintln!("{pretty_results}");
+    eprintln!("{pretty_results_view}");
 
     let answer = query(
         lake.clone(),
@@ -294,8 +295,9 @@ async fn sql_view_test() -> Result<()> {
         view_factory,
     )
     .await?;
-    let pretty_results =
+    let pretty_results_ref =
         datafusion::arrow::util::pretty::pretty_format_batches(&answer.record_batches)?.to_string();
-    eprintln!("{pretty_results}");
+    eprintln!("{pretty_results_ref}");
+    assert_eq!(pretty_results_view, pretty_results_ref);
     Ok(())
 }
