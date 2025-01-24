@@ -68,7 +68,6 @@ async fn make_log_entries_levels_per_process_minute_view(
     let time_column = Arc::new(String::from("time_bin"));
     SqlBatchView::new(
         Arc::new("log_entries_per_process_per_minute".to_owned()),
-        Arc::new("global".to_owned()),
         time_column.clone(),
         time_column,
         src_query,
