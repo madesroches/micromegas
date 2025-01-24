@@ -56,6 +56,10 @@ impl SqlPartitionSpec {
 
 #[async_trait]
 impl PartitionSpec for SqlPartitionSpec {
+    fn is_empty(&self) -> bool {
+        self.record_count < 1
+    }
+
     fn get_source_data_hash(&self) -> Vec<u8> {
         self.record_count.to_le_bytes().to_vec()
     }

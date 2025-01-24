@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 #[async_trait]
 pub trait PartitionSpec: Send + Sync {
+    fn is_empty(&self) -> bool;
     fn get_source_data_hash(&self) -> Vec<u8>;
     async fn write(&self, lake: Arc<DataLakeConnection>, logger: Arc<dyn Logger>) -> Result<()>;
 }
