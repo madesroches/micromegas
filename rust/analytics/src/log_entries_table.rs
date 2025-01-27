@@ -29,6 +29,16 @@ pub fn log_table_schema() -> Schema {
             false,
         ),
         Field::new(
+            "stream_id",
+            DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
+            false,
+        ),
+        Field::new(
+            "block_id",
+            DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
+            false,
+        ),
+        Field::new(
             "exe",
             DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
             false,
@@ -72,6 +82,8 @@ pub fn log_table_schema() -> Schema {
 
 pub struct LogEntriesRecordBuilder {
     pub process_ids: StringDictionaryBuilder<Int16Type>,
+    pub stream_ids: StringDictionaryBuilder<Int16Type>,
+    pub block_ids: StringDictionaryBuilder<Int16Type>,
     pub exes: StringDictionaryBuilder<Int16Type>,
     pub usernames: StringDictionaryBuilder<Int16Type>,
     pub computers: StringDictionaryBuilder<Int16Type>,
@@ -99,6 +111,8 @@ impl LogEntriesRecordBuilder {
 
         Self {
             process_ids: StringDictionaryBuilder::new(),
+            stream_ids: StringDictionaryBuilder::new(),
+            block_ids: StringDictionaryBuilder::new(),
             exes: StringDictionaryBuilder::new(),
             usernames: StringDictionaryBuilder::new(),
             computers: StringDictionaryBuilder::new(),
@@ -133,6 +147,8 @@ impl LogEntriesRecordBuilder {
     pub fn append(&mut self, row: &LogEntry) -> Result<()> {
         self.process_ids
             .append_value(format!("{}", row.process.process_id));
+        self.stream_ids.append_value(&*row.stream_id);
+        self.block_ids.append_value(&*row.block_id);
         self.exes.append_value(&row.process.exe);
         self.usernames.append_value(&row.process.username);
         self.computers.append_value(&row.process.computer);
@@ -163,6 +179,8 @@ impl LogEntriesRecordBuilder {
             Arc::new(log_table_schema()),
             vec![
                 Arc::new(self.process_ids.finish()),
+                Arc::new(self.stream_ids.finish()),
+                Arc::new(self.block_ids.finish()),
                 Arc::new(self.exes.finish()),
                 Arc::new(self.usernames.finish()),
                 Arc::new(self.computers.finish()),
