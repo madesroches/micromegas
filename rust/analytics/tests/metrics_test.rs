@@ -103,9 +103,15 @@ fn test_tagged_measures() {
     let convert_ticks = ConvertTicks::new(&process_info);
     let mut measures = vec![];
     parse_block(&stream_info, &received_block.payload, |val| {
-        let measure = measure_from_value(process_info.clone(), &convert_ticks, &val)
-            .unwrap()
-            .unwrap();
+        let measure = measure_from_value(
+            process_info.clone(),
+            stream_info.stream_id.to_string().into(),
+            received_block.block_id.to_string().into(),
+            &convert_ticks,
+            &val,
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(measure.name.as_str(), "override_name");
         assert_eq!(measure.unit.as_str(), "override_unit");
         assert_eq!(measure.target.as_str(), "override_target");

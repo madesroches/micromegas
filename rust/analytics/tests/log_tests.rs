@@ -153,9 +153,15 @@ fn test_parse_log_interops() {
     let mut nb_log_entries = 0;
     let convert_ticks = ConvertTicks::from_meta_data(0, 0, 1);
     parse_block(&stream_info, &received_block.payload, |val| {
-        if log_entry_from_value(&convert_ticks, process_info.clone(), &val)
-            .unwrap()
-            .is_some()
+        if log_entry_from_value(
+            &convert_ticks,
+            process_info.clone(),
+            stream_id.to_string().into(),
+            received_block.block_id.to_string().into(),
+            &val,
+        )
+        .unwrap()
+        .is_some()
         {
             nb_log_entries += 1;
         }
@@ -200,9 +206,15 @@ fn test_tagged_log_entries() {
     let stream_info = make_stream_info(&stream);
     let convert_ticks = ConvertTicks::from_meta_data(0, 0, 1);
     parse_block(&stream_info, &received_block.payload, |val| {
-        let _log_entry = log_entry_from_value(&convert_ticks, process_info.clone(), &val)
-            .unwrap()
-            .unwrap();
+        let _log_entry = log_entry_from_value(
+            &convert_ticks,
+            process_info.clone(),
+            stream_id.to_string().into(),
+            received_block.block_id.to_string().into(),
+            &val,
+        )
+        .unwrap()
+        .unwrap();
         Ok(true)
     })
     .unwrap();

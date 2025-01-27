@@ -101,7 +101,7 @@ impl View for LogView {
     }
 
     fn get_file_schema_hash(&self) -> Vec<u8> {
-        vec![1]
+        vec![2]
     }
 
     fn get_file_schema(&self) -> Arc<Schema> {

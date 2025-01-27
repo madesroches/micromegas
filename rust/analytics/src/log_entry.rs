@@ -14,6 +14,8 @@ use std::sync::Arc;
 #[derive(Debug)]
 pub struct LogEntry {
     pub process: Arc<ProcessInfo>,
+    pub stream_id: Arc<String>,
+    pub block_id: Arc<String>,
     pub time: i64,
     pub level: i32,
     pub target: Arc<String>,
@@ -25,6 +27,8 @@ pub struct LogEntry {
 pub fn log_entry_from_value(
     convert_ticks: &ConvertTicks,
     process: Arc<ProcessInfo>,
+    stream_id: Arc<String>,
+    block_id: Arc<String>,
     val: &Value,
 ) -> Result<Option<LogEntry>> {
     if let Value::Object(obj) = val {
@@ -47,6 +51,8 @@ pub fn log_entry_from_value(
                     .with_context(|| "reading fmt_str from LogStaticStrEvent")?;
                 Ok(Some(LogEntry {
                     process,
+                    stream_id,
+                    block_id,
                     time: convert_ticks.ticks_to_nanoseconds(ticks),
                     level: level as i32,
                     target,
@@ -72,6 +78,8 @@ pub fn log_entry_from_value(
                     .with_context(|| "reading msg from LogStringEvent")?;
                 Ok(Some(LogEntry {
                     process,
+                    stream_id,
+                    block_id,
                     time: convert_ticks.ticks_to_nanoseconds(ticks),
                     level: level as i32,
                     target,
@@ -94,6 +102,8 @@ pub fn log_entry_from_value(
                     .with_context(|| format!("reading msg from {}", obj.type_name.as_str()))?;
                 Ok(Some(LogEntry {
                     process,
+                    stream_id,
+                    block_id,
                     time: convert_ticks.ticks_to_nanoseconds(ticks),
                     level: level as i32,
                     target,
@@ -120,6 +130,8 @@ pub fn log_entry_from_value(
                 let time = convert_ticks.ticks_to_nanoseconds(ticks);
                 Ok(Some(LogEntry {
                     process,
+                    stream_id,
+                    block_id,
                     time,
                     level: level as i32,
                     target,
@@ -160,6 +172,8 @@ pub fn log_entry_from_value(
                 }
                 Ok(Some(LogEntry {
                     process,
+                    stream_id,
+                    block_id,
                     time: convert_ticks.ticks_to_nanoseconds(ticks),
                     level: level as i32,
                     target,
@@ -194,9 +208,17 @@ pub async fn for_each_log_entry_in_block<Predicate: FnMut(LogEntry) -> Result<bo
         block.block_id,
     )
     .await?;
+    let stream_id = Arc::new(stream.stream_id.to_string());
+    let block_id = Arc::new(block.block_id.to_string());
     let continue_iterating = parse_block(stream, &payload, |val| {
-        if let Some(log_entry) = log_entry_from_value(convert_ticks, process.clone(), &val)
-            .with_context(|| "log_entry_from_value")?
+        if let Some(log_entry) = log_entry_from_value(
+            convert_ticks,
+            process.clone(),
+            stream_id.clone(),
+            block_id.clone(),
+            &val,
+        )
+        .with_context(|| "log_entry_from_value")?
         {
             if !fun(log_entry)? {
                 return Ok(false); //do not continue

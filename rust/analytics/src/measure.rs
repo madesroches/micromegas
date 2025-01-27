@@ -13,6 +13,8 @@ use std::sync::Arc;
 
 pub struct Measure {
     pub process: Arc<ProcessInfo>,
+    pub stream_id: Arc<String>,
+    pub block_id: Arc<String>,
     pub time: i64,
     pub target: Arc<String>,
     pub name: Arc<String>,
@@ -23,6 +25,8 @@ pub struct Measure {
 
 pub fn measure_from_value(
     process: Arc<ProcessInfo>,
+    stream_id: Arc<String>,
+    block_id: Arc<String>,
     convert_ticks: &ConvertTicks,
     val: &Value,
 ) -> Result<Option<Measure>> {
@@ -49,6 +53,8 @@ pub fn measure_from_value(
                     .with_context(|| "reading unit from FloatMetricEvent")?;
                 Ok(Some(Measure {
                     process,
+                    stream_id,
+                    block_id,
                     time: convert_ticks.ticks_to_nanoseconds(ticks),
                     target,
                     name,
@@ -83,6 +89,8 @@ pub fn measure_from_value(
                     }
                     Ok(Some(Measure {
                         process,
+                        stream_id,
+                        block_id,
                         time,
                         target,
                         name,
@@ -93,6 +101,8 @@ pub fn measure_from_value(
                 } else {
                     Ok(Some(Measure {
                         process,
+                        stream_id,
+                        block_id,
                         time,
                         target,
                         name,
@@ -146,6 +156,8 @@ pub fn measure_from_value(
                     }
                     Ok(Some(Measure {
                         process,
+                        stream_id,
+                        block_id,
                         time,
                         target,
                         name,
@@ -156,6 +168,8 @@ pub fn measure_from_value(
                 } else {
                     Ok(Some(Measure {
                         process,
+                        stream_id,
+                        block_id,
                         time,
                         target,
                         name,
@@ -204,6 +218,8 @@ pub fn measure_from_value(
                 }
                 Ok(Some(Measure {
                     process,
+                    stream_id,
+                    block_id,
                     time,
                     target,
                     name,
@@ -239,9 +255,17 @@ pub async fn for_each_measure_in_block<Predicate: FnMut(Measure) -> Result<bool>
         block.block_id,
     )
     .await?;
+    let stream_id = Arc::new(stream.stream_id.to_string());
+    let block_id = Arc::new(block.block_id.to_string());
     let continue_iterating = parse_block(stream, &payload, |val| {
-        if let Some(measure) = measure_from_value(process.clone(), convert_ticks, &val)
-            .with_context(|| "measure_from_value")?
+        if let Some(measure) = measure_from_value(
+            process.clone(),
+            stream_id.clone(),
+            block_id.clone(),
+            convert_ticks,
+            &val,
+        )
+        .with_context(|| "measure_from_value")?
         {
             if !fun(measure)? {
                 return Ok(false); //do not continue
