@@ -238,14 +238,13 @@ class FlightSQLClient:
                 print(row["time"], row["msg"])
 
     def materialize_partitions(
-        self, view_set_name, view_instance_id, begin, end, partition_delta_seconds
+        self, view_set_name, begin, end, partition_delta_seconds
     ):
         sql = """
           SELECT time, msg
-          FROM materialize_partitions('{view_set_name}', '{view_instance_id}', '{begin}', '{end}', {partition_delta_seconds})
+          FROM materialize_partitions('{view_set_name}', '{begin}', '{end}', {partition_delta_seconds})
         """.format(
             view_set_name=view_set_name,
-            view_instance_id=view_instance_id,
             begin=begin.isoformat(),
             end=end.isoformat(),
             partition_delta_seconds=partition_delta_seconds,
