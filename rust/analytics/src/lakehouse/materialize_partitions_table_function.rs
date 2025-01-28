@@ -36,16 +36,15 @@ impl MaterializePartitionsTableFunction {
 async fn materialize_partitions_impl(
     lake: Arc<DataLakeConnection>,
     view_factory: Arc<ViewFactory>,
-    view_set_name: &str,
-    view_instance_id: &str,
+    view_name: &str,
     begin: DateTime<Utc>,
     end: DateTime<Utc>,
     partition_time_delta: TimeDelta,
     logger: Arc<dyn Logger>,
 ) -> anyhow::Result<()> {
     let view = view_factory
-        .make_view(view_set_name, view_instance_id)
-        .with_context(|| "making view")?;
+        .get_global_view(view_name)
+        .with_context(|| format!("can't find view {view_name}"))?;
 
     let existing_partitions =
         Arc::new(PartitionCache::fetch_overlapping_insert_range(&lake.db_pool, begin, end).await?);
@@ -69,16 +68,13 @@ impl TableFunctionImpl for MaterializePartitionsTableFunction {
         let Some(view_set_name) = args.first().map(exp_to_string).transpose()? else {
             return plan_err!("Missing first argument, expected view_set_name: String");
         };
-        let Some(view_instance_id) = args.get(1).map(exp_to_string).transpose()? else {
-            return plan_err!("Missing 2nd argument, expected view_instance_id: String");
-        };
-        let Some(begin) = args.get(2).map(exp_to_timestamp).transpose()? else {
+        let Some(begin) = args.get(1).map(exp_to_timestamp).transpose()? else {
             return plan_err!("Missing 3rd argument, expected a UTC nanoseconds timestamp");
         };
-        let Some(end) = args.get(3).map(exp_to_timestamp).transpose()? else {
+        let Some(end) = args.get(2).map(exp_to_timestamp).transpose()? else {
             return plan_err!("Missing 4th argument, expected a UTC nanoseconds timestamp");
         };
-        let Some(delta) = args.get(4).map(exp_to_i64).transpose()? else {
+        let Some(delta) = args.get(3).map(exp_to_i64).transpose()? else {
             return plan_err!("Missing 5th argument, expected a number of seconds(i64)");
         };
 
@@ -93,7 +89,6 @@ impl TableFunctionImpl for MaterializePartitionsTableFunction {
                     lake,
                     view_factory,
                     &view_set_name,
-                    &view_instance_id,
                     begin,
                     end,
                     TimeDelta::seconds(delta),

@@ -169,6 +169,13 @@ impl ViewFactory {
         &self.global_views
     }
 
+    pub fn get_global_view(&self, view_name: &str) -> Option<Arc<dyn View>> {
+        self.global_views
+            .iter()
+            .find(|v| *(v.get_view_set_name()) == view_name)
+            .cloned()
+    }
+
     pub fn add_global_view(&mut self, view: Arc<dyn View>) {
         self.global_views.push(view);
     }
