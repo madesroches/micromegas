@@ -75,6 +75,7 @@ async fn make_log_entries_levels_per_process_minute_view(
         merge_partitions_query,
         lake,
         view_factory,
+        Some(4000),
     )
     .await
 }

@@ -75,9 +75,13 @@ pub trait View: std::fmt::Debug + Send + Sync {
         Ok(())
     }
 
+    /// how to merge smaller partitions into a bigger one
     fn get_merge_partitions_query(&self) -> Arc<String> {
         Arc::new(String::from("SELECT * FROM {source};"))
     }
+
+    /// tells the daemon which view should be materialized and in what order
+    fn get_update_group(&self) -> Option<i32>;
 }
 
 impl dyn View {

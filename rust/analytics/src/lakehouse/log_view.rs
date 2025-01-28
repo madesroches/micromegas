@@ -198,4 +198,12 @@ impl View for LogView {
     fn get_max_event_time_column_name(&self) -> Arc<String> {
         TIME_COLUMN.clone()
     }
+
+    fn get_update_group(&self) -> Option<i32> {
+        if *(self.get_view_instance_id()) == "global" {
+            Some(2000)
+        } else {
+            None
+        }
+    }
 }

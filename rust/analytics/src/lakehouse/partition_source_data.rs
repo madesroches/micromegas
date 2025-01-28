@@ -62,7 +62,6 @@ pub async fn fetch_partition_source_data(
 ) -> Result<PartitionSourceDataBlocks> {
     let begin_rfc = begin_insert.to_rfc3339();
     let end_rfc = end_insert.to_rfc3339();
-    let desc = format!("[{begin_rfc}, {end_rfc}] {source_stream_tag}",);
     let sql = format!("
           SELECT block_id, stream_id, process_id, begin_time, begin_ticks, end_time, end_ticks, nb_objects,
               object_offset, payload_size, insert_time as block_insert_time,
@@ -197,11 +196,6 @@ pub async fn fetch_partition_source_data(
             }));
         }
     }
-
-    info!(
-        "{desc} block_ids_hash={block_ids_hash} nb_source_blocks={}",
-        partition_src_blocks.len()
-    );
     Ok(PartitionSourceDataBlocks {
         blocks: partition_src_blocks,
         block_ids_hash: block_ids_hash.to_le_bytes().to_vec(),

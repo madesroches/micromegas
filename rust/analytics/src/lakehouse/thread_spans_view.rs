@@ -290,4 +290,8 @@ impl View for ThreadSpansView {
     fn get_max_event_time_column_name(&self) -> Arc<String> {
         MAX_TIME_COLUMN.clone()
     }
+
+    fn get_update_group(&self) -> Option<i32> {
+        None
+    }
 }
