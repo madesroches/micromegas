@@ -145,6 +145,10 @@ impl View for ProcessesView {
     fn get_max_event_time_column_name(&self) -> Arc<String> {
         INSERT_TIME_COLUMN.clone()
     }
+
+    fn get_update_group(&self) -> Option<i32> {
+        Some(1000)
+    }
 }
 
 pub fn processes_view_schema() -> Schema {

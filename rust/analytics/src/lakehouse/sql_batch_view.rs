@@ -31,6 +31,7 @@ pub struct SqlBatchView {
     merge_partitions_query: Arc<String>,
     schema: Arc<Schema>,
     view_factory: Arc<ViewFactory>,
+    update_group: Option<i32>,
 }
 
 impl SqlBatchView {
@@ -45,6 +46,7 @@ impl SqlBatchView {
     /// * `merge_partitions_query` - used to merge multiple partitions into a single one (and user queries which are one multiple partitions by default)
     /// * `lake` - data lake
     /// * `view_factory` - all views accessible to the `src_query`
+    /// * `update_group` - tells the daemon which view should be materialized and in what order
     pub async fn new(
         view_set_name: Arc<String>,
         min_event_time_column: Arc<String>,
@@ -54,6 +56,7 @@ impl SqlBatchView {
         merge_partitions_query: Arc<String>,
         lake: Arc<DataLakeConnection>,
         view_factory: Arc<ViewFactory>,
+        update_group: Option<i32>,
     ) -> Result<Self> {
         let null_part_provider = Arc::new(NullPartitionProvider {});
         let ctx = make_session_context(lake, null_part_provider, None, view_factory.clone())
@@ -81,6 +84,7 @@ impl SqlBatchView {
             merge_partitions_query,
             schema,
             view_factory,
+            update_group,
         })
     }
 }
@@ -208,5 +212,9 @@ impl View for SqlBatchView {
 
     fn get_merge_partitions_query(&self) -> Arc<String> {
         self.merge_partitions_query.clone()
+    }
+
+    fn get_update_group(&self) -> Option<i32> {
+        self.update_group
     }
 }
