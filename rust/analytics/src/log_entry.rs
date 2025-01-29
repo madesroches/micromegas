@@ -16,6 +16,7 @@ pub struct LogEntry {
     pub process: Arc<ProcessInfo>,
     pub stream_id: Arc<String>,
     pub block_id: Arc<String>,
+    pub insert_time: i64,
     pub time: i64,
     pub level: i32,
     pub target: Arc<String>,
@@ -29,6 +30,7 @@ pub fn log_entry_from_value(
     process: Arc<ProcessInfo>,
     stream_id: Arc<String>,
     block_id: Arc<String>,
+    block_insert_time_ns: i64,
     val: &Value,
 ) -> Result<Option<LogEntry>> {
     if let Value::Object(obj) = val {
@@ -53,6 +55,7 @@ pub fn log_entry_from_value(
                     process,
                     stream_id,
                     block_id,
+                    insert_time: block_insert_time_ns,
                     time: convert_ticks.ticks_to_nanoseconds(ticks),
                     level: level as i32,
                     target,
@@ -80,6 +83,7 @@ pub fn log_entry_from_value(
                     process,
                     stream_id,
                     block_id,
+                    insert_time: block_insert_time_ns,
                     time: convert_ticks.ticks_to_nanoseconds(ticks),
                     level: level as i32,
                     target,
@@ -104,6 +108,7 @@ pub fn log_entry_from_value(
                     process,
                     stream_id,
                     block_id,
+                    insert_time: block_insert_time_ns,
                     time: convert_ticks.ticks_to_nanoseconds(ticks),
                     level: level as i32,
                     target,
@@ -132,6 +137,7 @@ pub fn log_entry_from_value(
                     process,
                     stream_id,
                     block_id,
+                    insert_time: block_insert_time_ns,
                     time,
                     level: level as i32,
                     target,
@@ -174,6 +180,7 @@ pub fn log_entry_from_value(
                     process,
                     stream_id,
                     block_id,
+                    insert_time: block_insert_time_ns,
                     time: convert_ticks.ticks_to_nanoseconds(ticks),
                     level: level as i32,
                     target,
@@ -210,12 +217,14 @@ pub async fn for_each_log_entry_in_block<Predicate: FnMut(LogEntry) -> Result<bo
     .await?;
     let stream_id = Arc::new(stream.stream_id.to_string());
     let block_id = Arc::new(block.block_id.to_string());
+    let block_insert_time_ns = block.insert_time.timestamp_nanos_opt().unwrap_or_default();
     let continue_iterating = parse_block(stream, &payload, |val| {
         if let Some(log_entry) = log_entry_from_value(
             convert_ticks,
             process.clone(),
             stream_id.clone(),
             block_id.clone(),
+            block_insert_time_ns,
             &val,
         )
         .with_context(|| "log_entry_from_value")?

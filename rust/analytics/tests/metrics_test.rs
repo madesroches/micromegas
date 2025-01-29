@@ -107,6 +107,7 @@ fn test_tagged_measures() {
             process_info.clone(),
             stream_info.stream_id.to_string().into(),
             received_block.block_id.to_string().into(),
+            0,
             &convert_ticks,
             &val,
         )

@@ -31,7 +31,10 @@ async fn make_log_entries_levels_per_process_minute_view(
                CAST(level==4 as INT) as info,
                CAST(level==5 as INT) as debug,
                CAST(level==6 as INT) as trace
-        FROM log_entries;",
+        FROM log_entries
+        WHERE insert_time >= '{begin}'
+        AND   insert_time < '{end}'
+        ;",
     ));
     let transform_query = Arc::new(String::from(
         "
@@ -135,7 +138,7 @@ pub async fn materialize_range(
         log_summary_view.clone(),
         begin_range,
         end_range,
-        partition_time_delta,
+        partition_time_delta / 2, // this validates that the source rows are not read twice
         logger.clone(),
     )
     .await?;

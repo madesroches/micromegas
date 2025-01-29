@@ -15,7 +15,8 @@ pub struct Measure {
     pub process: Arc<ProcessInfo>,
     pub stream_id: Arc<String>,
     pub block_id: Arc<String>,
-    pub time: i64,
+    pub insert_time: i64, // nanoseconds
+    pub time: i64,        // nanoseconds
     pub target: Arc<String>,
     pub name: Arc<String>,
     pub unit: Arc<String>,
@@ -27,6 +28,7 @@ pub fn measure_from_value(
     process: Arc<ProcessInfo>,
     stream_id: Arc<String>,
     block_id: Arc<String>,
+    block_insert_time_ns: i64,
     convert_ticks: &ConvertTicks,
     val: &Value,
 ) -> Result<Option<Measure>> {
@@ -55,6 +57,7 @@ pub fn measure_from_value(
                     process,
                     stream_id,
                     block_id,
+                    insert_time: block_insert_time_ns,
                     time: convert_ticks.ticks_to_nanoseconds(ticks),
                     target,
                     name,
@@ -91,6 +94,7 @@ pub fn measure_from_value(
                         process,
                         stream_id,
                         block_id,
+                        insert_time: block_insert_time_ns,
                         time,
                         target,
                         name,
@@ -103,6 +107,7 @@ pub fn measure_from_value(
                         process,
                         stream_id,
                         block_id,
+                        insert_time: block_insert_time_ns,
                         time,
                         target,
                         name,
@@ -158,6 +163,7 @@ pub fn measure_from_value(
                         process,
                         stream_id,
                         block_id,
+                        insert_time: block_insert_time_ns,
                         time,
                         target,
                         name,
@@ -170,6 +176,7 @@ pub fn measure_from_value(
                         process,
                         stream_id,
                         block_id,
+                        insert_time: block_insert_time_ns,
                         time,
                         target,
                         name,
@@ -220,6 +227,7 @@ pub fn measure_from_value(
                     process,
                     stream_id,
                     block_id,
+                    insert_time: block_insert_time_ns,
                     time,
                     target,
                     name,
@@ -257,11 +265,13 @@ pub async fn for_each_measure_in_block<Predicate: FnMut(Measure) -> Result<bool>
     .await?;
     let stream_id = Arc::new(stream.stream_id.to_string());
     let block_id = Arc::new(block.block_id.to_string());
+    let block_insert_time_ns = block.insert_time.timestamp_nanos_opt().unwrap_or_default();
     let continue_iterating = parse_block(stream, &payload, |val| {
         if let Some(measure) = measure_from_value(
             process.clone(),
             stream_id.clone(),
             block_id.clone(),
+            block_insert_time_ns,
             convert_ticks,
             &val,
         )
