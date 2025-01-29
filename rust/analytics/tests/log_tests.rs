@@ -158,6 +158,7 @@ fn test_parse_log_interops() {
             process_info.clone(),
             stream_id.to_string().into(),
             received_block.block_id.to_string().into(),
+            0,
             &val,
         )
         .unwrap()
@@ -211,6 +212,7 @@ fn test_tagged_log_entries() {
             process_info.clone(),
             stream_id.to_string().into(),
             received_block.block_id.to_string().into(),
+            0,
             &val,
         )
         .unwrap()
