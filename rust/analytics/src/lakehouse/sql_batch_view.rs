@@ -62,7 +62,11 @@ impl SqlBatchView {
         let ctx = make_session_context(lake, null_part_provider, None, view_factory.clone())
             .await
             .with_context(|| "make_session_context")?;
-        let src_df = ctx.sql(&src_query).await?;
+        let now_str = Utc::now().to_rfc3339();
+        let src_sql = src_query
+            .replace("{begin}", &now_str)
+            .replace("{end}", &now_str);
+        let src_df = ctx.sql(&src_sql).await?;
         let src_view = src_df.into_view();
         ctx.register_table(
             TableReference::Bare {
@@ -121,7 +125,12 @@ impl View for SqlBatchView {
         )
         .await
         .with_context(|| "make_session_context")?;
-        let src_df = ctx.sql(&self.src_query).await?;
+
+        let src_sql = self
+            .src_query
+            .replace("{begin}", &begin_insert.to_rfc3339())
+            .replace("{end}", &end_insert.to_rfc3339());
+        let src_df = ctx.sql(&src_sql).await?;
         let src_view = src_df.into_view();
         ctx.register_table(
             TableReference::Bare {
