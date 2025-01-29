@@ -107,7 +107,7 @@ impl View for MetricsView {
     }
 
     fn get_file_schema_hash(&self) -> Vec<u8> {
-        vec![2]
+        vec![3]
     }
 
     fn get_file_schema(&self) -> Arc<Schema> {

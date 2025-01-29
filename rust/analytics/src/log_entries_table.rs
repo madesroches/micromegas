@@ -39,6 +39,11 @@ pub fn log_table_schema() -> Schema {
             false,
         ),
         Field::new(
+            "insert_time",
+            DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into())),
+            false,
+        ),
+        Field::new(
             "exe",
             DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
             false,
@@ -84,6 +89,7 @@ pub struct LogEntriesRecordBuilder {
     pub process_ids: StringDictionaryBuilder<Int16Type>,
     pub stream_ids: StringDictionaryBuilder<Int16Type>,
     pub block_ids: StringDictionaryBuilder<Int16Type>,
+    pub insert_times: PrimitiveBuilder<TimestampNanosecondType>,
     pub exes: StringDictionaryBuilder<Int16Type>,
     pub usernames: StringDictionaryBuilder<Int16Type>,
     pub computers: StringDictionaryBuilder<Int16Type>,
@@ -113,6 +119,7 @@ impl LogEntriesRecordBuilder {
             process_ids: StringDictionaryBuilder::new(),
             stream_ids: StringDictionaryBuilder::new(),
             block_ids: StringDictionaryBuilder::new(),
+            insert_times: PrimitiveBuilder::with_capacity(capacity),
             exes: StringDictionaryBuilder::new(),
             usernames: StringDictionaryBuilder::new(),
             computers: StringDictionaryBuilder::new(),
@@ -149,6 +156,7 @@ impl LogEntriesRecordBuilder {
             .append_value(format!("{}", row.process.process_id));
         self.stream_ids.append_value(&*row.stream_id);
         self.block_ids.append_value(&*row.block_id);
+        self.insert_times.append_value(row.insert_time);
         self.exes.append_value(&row.process.exe);
         self.usernames.append_value(&row.process.username);
         self.computers.append_value(&row.process.computer);
@@ -181,6 +189,7 @@ impl LogEntriesRecordBuilder {
                 Arc::new(self.process_ids.finish()),
                 Arc::new(self.stream_ids.finish()),
                 Arc::new(self.block_ids.finish()),
+                Arc::new(self.insert_times.finish().with_timezone_utc()),
                 Arc::new(self.exes.finish()),
                 Arc::new(self.usernames.finish()),
                 Arc::new(self.computers.finish()),
