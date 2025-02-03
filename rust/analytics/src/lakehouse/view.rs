@@ -2,7 +2,7 @@ use super::{materialized_view::MaterializedView, partition_cache::PartitionCache
 use crate::{response_writer::Logger, time::TimeRange};
 use anyhow::Result;
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 use datafusion::{arrow::datatypes::Schema, logical_expr::Expr, prelude::*, sql::TableReference};
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use std::sync::Arc;
@@ -82,6 +82,11 @@ pub trait View: std::fmt::Debug + Send + Sync {
 
     /// tells the daemon which view should be materialized and in what order
     fn get_update_group(&self) -> Option<i32>;
+
+    /// max time range for a single file
+    fn get_max_partition_time_delta(&self) -> TimeDelta {
+        TimeDelta::days(1)
+    }
 }
 
 impl dyn View {

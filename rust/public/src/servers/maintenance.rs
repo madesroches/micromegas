@@ -101,6 +101,7 @@ pub async fn materialize_all_views(
                 .await?,
             );
         }
+        let partition_time_delta = partition_time_delta.min(view.get_max_partition_time_delta());
         materialize_partition_range(
             partitions.clone(),
             lake.clone(),
