@@ -37,8 +37,7 @@ impl WebIngestionService {
             .with_context(|| "parsing begin_time")?;
         let end_time = DateTime::<FixedOffset>::parse_from_rfc3339(&block.end_time)
             .with_context(|| "parsing end_time")?;
-        let insert_time = sqlx::types::chrono::Utc::now();
-
+        //todo: track "put" time as metric
         self.lake
             .blob_storage
             .put(&obj_path, encoded_payload.into())
@@ -46,6 +45,8 @@ impl WebIngestionService {
             .with_context(|| "Error writing block to blob storage")?;
 
         debug!("recording block_id={block_id} stream_id={stream_id} process_id={process_id}");
+        let insert_time = sqlx::types::chrono::Utc::now();
+        //todo: track "insert into" time as metric
         sqlx::query("INSERT INTO blocks VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11);")
             .bind(block_id)
             .bind(stream_id)

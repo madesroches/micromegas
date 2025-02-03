@@ -33,6 +33,7 @@ pub async fn fetch_metadata_partition_spec(
     begin_insert: DateTime<Utc>,
     end_insert: DateTime<Utc>,
 ) -> Result<MetadataPartitionSpec> {
+    //todo: extract this query to allow join (instead of source_table)
     let row = sqlx::query(&format!(
         "SELECT COUNT(*) as count
          FROM {source_table}

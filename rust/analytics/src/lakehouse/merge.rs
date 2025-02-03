@@ -81,6 +81,7 @@ pub async fn create_merged_partition(
     let merge_query = view
         .get_merge_partitions_query()
         .replace("{source}", "source");
+    //todo: sort partitions
     let merged_df = query_partitions(
         lake.clone(),
         view.get_file_schema(),

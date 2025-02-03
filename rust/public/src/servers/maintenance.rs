@@ -57,6 +57,8 @@ impl TaskDef {
     pub async fn tick(&mut self) -> Result<()> {
         let now = Utc::now();
         info!("running scheduled task name={}", &self.name);
+        //todo: give self.next_run to the task and make sure we don't skip any time slice
+        // report errors when delays get over a threshold
         (self.callback)(self.lake.clone(), self.views.clone())
             .await
             .with_context(|| "TaskDef::tick")?;
@@ -71,7 +73,7 @@ pub async fn materialize_all_views(
     partition_time_delta: TimeDelta,
     nb_partitions: i32,
 ) -> Result<()> {
-    let now = Utc::now();
+    let now = Utc::now(); //todo: remove use of now, use the due time of the task
     let end_range = now.duration_trunc(partition_time_delta)?;
     let begin_range = end_range - (partition_time_delta * nb_partitions);
     let mut last_group = views.first().unwrap().get_update_group();
@@ -122,6 +124,7 @@ pub async fn every_minute(lake: Arc<DataLakeConnection>, views: Views) -> Result
 }
 
 pub async fn every_second(lake: Arc<DataLakeConnection>, views: Views) -> Result<()> {
+    //todo :change logic to skip the last 2 seconds
     materialize_all_views(lake, views, TimeDelta::seconds(1), 5).await
 }
 
