@@ -78,10 +78,16 @@ impl View for StreamsView {
             view_instance_id: self.get_view_instance_id(),
             file_schema_hash: self.get_file_schema_hash(),
         };
+        let source_count_query = "
+             SELECT COUNT(*) as count
+             FROM streams
+             WHERE insert_time >= $1
+             AND insert_time < $2
+             ;";
         Ok(Arc::new(
             fetch_metadata_partition_spec(
                 &lake.db_pool,
-                "streams",
+                source_count_query,
                 self.event_time_column.clone(),
                 self.data_sql.clone(),
                 view_meta,

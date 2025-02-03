@@ -37,7 +37,7 @@ impl BlocksView {
            processes.start_time, processes.start_ticks, processes.tsc_frequency, processes.exe, processes.username, processes.realname, processes.computer, processes.distro, processes.cpu_brand, processes.insert_time as process_insert_time, processes.parent_process_id, processes.properties as process_properties
          FROM blocks, streams, processes
          WHERE blocks.stream_id = streams.stream_id
-         AND streams.process_id = processes.process_id
+         AND blocks.process_id = processes.process_id
          AND blocks.insert_time >= $1
          AND blocks.insert_time < $2
          ORDER BY blocks.insert_time, blocks.block_id
@@ -76,10 +76,18 @@ impl View for BlocksView {
             view_instance_id: self.get_view_instance_id(),
             file_schema_hash: self.get_file_schema_hash(),
         };
+        let source_count_query = "
+             SELECT COUNT(*) as count
+             FROM blocks, streams, processes
+             WHERE blocks.stream_id = streams.stream_id
+             AND blocks.process_id = processes.process_id
+             AND blocks.insert_time >= $1
+             AND blocks.insert_time < $2
+             ;";
         Ok(Arc::new(
             fetch_metadata_partition_spec(
                 &lake.db_pool,
-                "blocks",
+                source_count_query,
                 self.event_time_column.clone(),
                 self.data_sql.clone(),
                 view_meta,
