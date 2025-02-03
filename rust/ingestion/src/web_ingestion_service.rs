@@ -37,16 +37,19 @@ impl WebIngestionService {
             .with_context(|| "parsing begin_time")?;
         let end_time = DateTime::<FixedOffset>::parse_from_rfc3339(&block.end_time)
             .with_context(|| "parsing end_time")?;
-        //todo: track "put" time as metric
-        self.lake
-            .blob_storage
-            .put(&obj_path, encoded_payload.into())
-            .await
-            .with_context(|| "Error writing block to blob storage")?;
+        {
+            let begin_put = now();
+            self.lake
+                .blob_storage
+                .put(&obj_path, encoded_payload.into())
+                .await
+                .with_context(|| "Error writing block to blob storage")?;
+            imetric!("put_duration", "ticks", (now() - begin_put) as u64);
+        }
 
         debug!("recording block_id={block_id} stream_id={stream_id} process_id={process_id}");
+        let begin_insert = now();
         let insert_time = sqlx::types::chrono::Utc::now();
-        //todo: track "insert into" time as metric
         sqlx::query("INSERT INTO blocks VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11);")
             .bind(block_id)
             .bind(stream_id)
@@ -62,6 +65,7 @@ impl WebIngestionService {
             .execute(&self.lake.db_pool)
             .await
             .with_context(|| "inserting into blocks")?;
+        imetric!("insert_duration", "ticks", (now() - begin_insert) as u64);
         // this measure does not benefit from a dynamic property - I just want to make sure the feature works well
         // the cost in this context should be reasonnable
         imetric!(
