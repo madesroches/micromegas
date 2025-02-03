@@ -15,7 +15,7 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 use datafusion::{
     arrow::datatypes::Schema,
     logical_expr::{col, Between, Expr},
@@ -205,5 +205,9 @@ impl View for LogView {
         } else {
             None
         }
+    }
+
+    fn get_max_partition_time_delta(&self) -> TimeDelta {
+        TimeDelta::hours(1)
     }
 }

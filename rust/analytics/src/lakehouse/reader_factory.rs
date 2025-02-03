@@ -79,6 +79,7 @@ impl AsyncFileReader for ParquetReader {
         &mut self,
         range: Range<usize>,
     ) -> BoxFuture<'_, datafusion::parquet::errors::Result<Bytes>> {
+        // debug!("ParquetReader::get_bytes {}", &self.filename);
         self.inner.get_bytes(range)
     }
 
@@ -86,6 +87,7 @@ impl AsyncFileReader for ParquetReader {
         &mut self,
         ranges: Vec<Range<usize>>,
     ) -> BoxFuture<'_, datafusion::parquet::errors::Result<Vec<Bytes>>> {
+        // debug!("ParquetReader::get_byte_ranges {}", &self.filename);
         self.inner.get_byte_ranges(ranges)
     }
 

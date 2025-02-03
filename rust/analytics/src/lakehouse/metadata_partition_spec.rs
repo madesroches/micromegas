@@ -25,7 +25,7 @@ pub struct MetadataPartitionSpec {
 #[allow(clippy::too_many_arguments)]
 pub async fn fetch_metadata_partition_spec(
     pool: &sqlx::PgPool,
-    source_table: &str,
+    source_count_query: &str,
     event_time_column: Arc<String>,
     data_sql: Arc<String>,
     view_metadata: ViewMetadata,
@@ -33,18 +33,13 @@ pub async fn fetch_metadata_partition_spec(
     begin_insert: DateTime<Utc>,
     end_insert: DateTime<Utc>,
 ) -> Result<MetadataPartitionSpec> {
-    let row = sqlx::query(&format!(
-        "SELECT COUNT(*) as count
-         FROM {source_table}
-         WHERE insert_time >= $1
-         AND insert_time < $2
-         ;"
-    ))
-    .bind(begin_insert)
-    .bind(end_insert)
-    .fetch_one(pool)
-    .await
-    .with_context(|| "select count source metadata")?;
+    //todo: extract this query to allow join (instead of source_table)
+    let row = sqlx::query(source_count_query)
+        .bind(begin_insert)
+        .bind(end_insert)
+        .fetch_one(pool)
+        .await
+        .with_context(|| "select count source metadata")?;
     Ok(MetadataPartitionSpec {
         view_metadata,
         schema,

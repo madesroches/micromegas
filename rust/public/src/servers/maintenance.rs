@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 type Views = Arc<Vec<Arc<dyn View>>>;
 type FutureTask = Pin<Box<dyn Future<Output = Result<()>>>>;
-type Callback = Box<dyn Fn(Arc<DataLakeConnection>, Views) -> FutureTask>;
+type Callback = Box<dyn Fn(DateTime<Utc>, Arc<DataLakeConnection>, Views) -> FutureTask>;
 
 pub struct TaskDef {
     lake: Arc<DataLakeConnection>,
@@ -39,7 +39,7 @@ impl TaskDef {
     ) -> Result<Self> {
         let now = Utc::now();
         info!("running scheduled task name={name}");
-        if let Err(e) = callback(lake.clone(), views.clone()).await {
+        if let Err(e) = callback(now, lake.clone(), views.clone()).await {
             error!("{e:?}");
         }
         let next_run = now.duration_trunc(period)? + period + offset;
@@ -57,10 +57,18 @@ impl TaskDef {
     pub async fn tick(&mut self) -> Result<()> {
         let now = Utc::now();
         info!("running scheduled task name={}", &self.name);
-        (self.callback)(self.lake.clone(), self.views.clone())
+        imetric!(
+            "task_tick_delay",
+            "ns",
+            (now - self.next_run)
+                .num_nanoseconds()
+                .with_context(|| "get tick delay as ns")? as u64
+        );
+        let task_time = self.next_run;
+        self.next_run = now.duration_trunc(self.period)? + self.period + self.offset;
+        (self.callback)(task_time, self.lake.clone(), self.views.clone())
             .await
             .with_context(|| "TaskDef::tick")?;
-        self.next_run = now.duration_trunc(self.period)? + self.period + self.offset;
         Ok(())
     }
 }
@@ -68,12 +76,12 @@ impl TaskDef {
 pub async fn materialize_all_views(
     lake: Arc<DataLakeConnection>,
     views: Views,
+    task_scheduled_time: DateTime<Utc>,
     partition_time_delta: TimeDelta,
-    nb_partitions: i32,
 ) -> Result<()> {
-    let now = Utc::now();
-    let end_range = now.duration_trunc(partition_time_delta)?;
-    let begin_range = end_range - (partition_time_delta * nb_partitions);
+    let trunc_task_time = task_scheduled_time.duration_trunc(partition_time_delta)?;
+    let begin_range = trunc_task_time - (partition_time_delta * 2);
+    let end_range = trunc_task_time;
     let mut last_group = views.first().unwrap().get_update_group();
     let mut partitions = Arc::new(
         PartitionCache::fetch_overlapping_insert_range(&lake.db_pool, begin_range, end_range)
@@ -93,6 +101,7 @@ pub async fn materialize_all_views(
                 .await?,
             );
         }
+        let partition_time_delta = partition_time_delta.min(view.get_max_partition_time_delta());
         materialize_partition_range(
             partitions.clone(),
             lake.clone(),
@@ -107,22 +116,38 @@ pub async fn materialize_all_views(
     Ok(())
 }
 
-pub async fn every_day(lake: Arc<DataLakeConnection>, views: Views) -> Result<()> {
-    materialize_all_views(lake, views, TimeDelta::days(1), 3).await
+pub async fn every_day(
+    task_scheduled_time: DateTime<Utc>,
+    lake: Arc<DataLakeConnection>,
+    views: Views,
+) -> Result<()> {
+    materialize_all_views(lake, views, task_scheduled_time, TimeDelta::days(1)).await
 }
 
-pub async fn every_hour(lake: Arc<DataLakeConnection>, views: Views) -> Result<()> {
+pub async fn every_hour(
+    task_scheduled_time: DateTime<Utc>,
+    lake: Arc<DataLakeConnection>,
+    views: Views,
+) -> Result<()> {
     delete_old_data(&lake, 90).await?;
     delete_expired_temporary_files(lake.clone()).await?;
-    materialize_all_views(lake, views, TimeDelta::hours(1), 3).await
+    materialize_all_views(lake, views, task_scheduled_time, TimeDelta::hours(1)).await
 }
 
-pub async fn every_minute(lake: Arc<DataLakeConnection>, views: Views) -> Result<()> {
-    materialize_all_views(lake, views, TimeDelta::minutes(1), 3).await
+pub async fn every_minute(
+    task_scheduled_time: DateTime<Utc>,
+    lake: Arc<DataLakeConnection>,
+    views: Views,
+) -> Result<()> {
+    materialize_all_views(lake, views, task_scheduled_time, TimeDelta::minutes(1)).await
 }
 
-pub async fn every_second(lake: Arc<DataLakeConnection>, views: Views) -> Result<()> {
-    materialize_all_views(lake, views, TimeDelta::seconds(1), 5).await
+pub async fn every_second(
+    task_scheduled_time: DateTime<Utc>,
+    lake: Arc<DataLakeConnection>,
+    views: Views,
+) -> Result<()> {
+    materialize_all_views(lake, views, task_scheduled_time, TimeDelta::seconds(1)).await
 }
 
 pub async fn daemon(lake: Arc<DataLakeConnection>, view_factory: Arc<ViewFactory>) -> Result<()> {
@@ -140,8 +165,10 @@ pub async fn daemon(lake: Arc<DataLakeConnection>, view_factory: Arc<ViewFactory
             views.clone(),
             String::from("every_day"),
             TimeDelta::days(1),
-            TimeDelta::minutes(5),
-            Box::new(|lake, views| Box::pin(every_day(lake, views))),
+            TimeDelta::hours(4),
+            Box::new(|task_scheduled_time, lake, views| {
+                Box::pin(every_day(task_scheduled_time, lake, views))
+            }),
         )
         .await?,
         TaskDef::start(
@@ -149,8 +176,10 @@ pub async fn daemon(lake: Arc<DataLakeConnection>, view_factory: Arc<ViewFactory
             views.clone(),
             String::from("every_hour"),
             TimeDelta::hours(1),
-            TimeDelta::minutes(2),
-            Box::new(|lake, views| Box::pin(every_hour(lake, views))),
+            TimeDelta::minutes(10),
+            Box::new(|task_scheduled_time, lake, views| {
+                Box::pin(every_hour(task_scheduled_time, lake, views))
+            }),
         )
         .await?,
         TaskDef::start(
@@ -158,8 +187,10 @@ pub async fn daemon(lake: Arc<DataLakeConnection>, view_factory: Arc<ViewFactory
             views.clone(),
             String::from("every minute"),
             TimeDelta::minutes(1),
-            TimeDelta::seconds(2),
-            Box::new(|lake, views| Box::pin(every_minute(lake, views))),
+            TimeDelta::seconds(10),
+            Box::new(|task_scheduled_time, lake, views| {
+                Box::pin(every_minute(task_scheduled_time, lake, views))
+            }),
         )
         .await?,
         TaskDef::start(
@@ -167,8 +198,10 @@ pub async fn daemon(lake: Arc<DataLakeConnection>, view_factory: Arc<ViewFactory
             views.clone(),
             String::from("every second"),
             TimeDelta::seconds(1),
-            TimeDelta::milliseconds(100),
-            Box::new(|lake, views| Box::pin(every_second(lake, views))),
+            TimeDelta::milliseconds(500),
+            Box::new(|task_scheduled_time, lake, views| {
+                Box::pin(every_second(task_scheduled_time, lake, views))
+            }),
         )
         .await?,
     ];
