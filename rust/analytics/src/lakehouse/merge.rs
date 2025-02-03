@@ -62,7 +62,7 @@ pub async fn create_merged_partition(
     );
     // we are not looking for intersecting partitions, but only those that fit completely in the range
     // otherwise we'd get duplicated records
-    let filtered_partitions = existing_partitions
+    let mut filtered_partitions = existing_partitions
         .filter_inside_range(view_set_name, view_instance_id, begin_insert, end_insert)
         .partitions;
     if filtered_partitions.len() < 2 {
@@ -81,7 +81,7 @@ pub async fn create_merged_partition(
     let merge_query = view
         .get_merge_partitions_query()
         .replace("{source}", "source");
-    //todo: sort partitions
+    filtered_partitions.sort_by_key(|p| p.begin_insert_time);
     let merged_df = query_partitions(
         lake.clone(),
         view.get_file_schema(),
