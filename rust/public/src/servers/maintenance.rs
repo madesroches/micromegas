@@ -164,7 +164,7 @@ pub async fn daemon(lake: Arc<DataLakeConnection>, view_factory: Arc<ViewFactory
             views.clone(),
             String::from("every_day"),
             TimeDelta::days(1),
-            TimeDelta::hours(1),
+            TimeDelta::hours(4),
             Box::new(|task_scheduled_time, lake, views| {
                 Box::pin(every_day(task_scheduled_time, lake, views))
             }),
