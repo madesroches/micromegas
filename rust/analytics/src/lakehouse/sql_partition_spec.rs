@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 pub struct SqlPartitionSpec {
     ctx: SessionContext,
-    transform_query: Arc<String>,
+    transform_query: String,
     min_event_time_column: Arc<String>,
     max_event_time_column: Arc<String>,
     view_metadata: ViewMetadata,
@@ -34,7 +34,7 @@ impl SqlPartitionSpec {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         ctx: SessionContext,
-        transform_query: Arc<String>,
+        transform_query: String,
         min_event_time_column: Arc<String>,
         max_event_time_column: Arc<String>,
         view_metadata: ViewMetadata,
@@ -114,9 +114,11 @@ impl PartitionSpec for SqlPartitionSpec {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn fetch_sql_partition_spec(
     ctx: SessionContext,
-    transform_query: Arc<String>,
+    count_src_sql: String,
+    transform_query: String,
     min_event_time_column: Arc<String>,
     max_event_time_column: Arc<String>,
     view_metadata: ViewMetadata,
@@ -127,7 +129,7 @@ pub async fn fetch_sql_partition_spec(
         "fetch_sql_partition_spec for view {}",
         &*view_metadata.view_set_name
     );
-    let df = ctx.sql("SELECT COUNT(*) as count FROM source;").await?;
+    let df = ctx.sql(&count_src_sql).await?;
     let batches: Vec<RecordBatch> = df.collect().await?;
     if batches.len() != 1 {
         anyhow::bail!("fetch_sql_partition_spec: query should return a single batch");

@@ -151,6 +151,7 @@ pub async fn every_second(
 }
 
 pub async fn daemon(lake: Arc<DataLakeConnection>, view_factory: Arc<ViewFactory>) -> Result<()> {
+    //todo: spawn two tasks - one for high-frequency small tasks, the other for tasks that can take longer to complete
     let mut views_to_update: Vec<Arc<dyn View>> = view_factory
         .get_global_views()
         .iter()
