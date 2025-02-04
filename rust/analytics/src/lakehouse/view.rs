@@ -85,6 +85,8 @@ pub trait View: std::fmt::Debug + Send + Sync {
 
     /// max time range for a single file
     fn get_max_partition_time_delta(&self) -> TimeDelta {
+        //todo: add context to differentiate between merge and create from source
+        //todo: merge: limit resulting time delta in fct of the size of the partitions to merge
         TimeDelta::days(1)
     }
 }

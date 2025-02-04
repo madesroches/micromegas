@@ -16,6 +16,7 @@ use datafusion::{
 };
 use futures::StreamExt;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
+use micromegas_tracing::debug;
 use std::sync::Arc;
 
 pub struct SqlPartitionSpec {
@@ -122,6 +123,10 @@ pub async fn fetch_sql_partition_spec(
     begin_insert: DateTime<Utc>,
     end_insert: DateTime<Utc>,
 ) -> Result<SqlPartitionSpec> {
+    debug!(
+        "fetch_sql_partition_spec for view {}",
+        &*view_metadata.view_set_name
+    );
     let df = ctx.sql("SELECT COUNT(*) as count FROM source;").await?;
     let batches: Vec<RecordBatch> = df.collect().await?;
     if batches.len() != 1 {
@@ -133,6 +138,10 @@ pub async fn fetch_sql_partition_spec(
         anyhow::bail!("fetch_sql_partition_spec: query should return a single row");
     }
     let count = count_column.value(0);
+    debug!(
+        "fetch_sql_partition_spec for view {}, count={count}",
+        &*view_metadata.view_set_name
+    );
     Ok(SqlPartitionSpec::new(
         ctx,
         transform_query,
