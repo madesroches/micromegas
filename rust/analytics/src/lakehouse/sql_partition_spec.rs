@@ -126,7 +126,7 @@ pub async fn fetch_sql_partition_spec(
     end_insert: DateTime<Utc>,
 ) -> Result<SqlPartitionSpec> {
     debug!(
-        "fetch_sql_partition_spec for view {}",
+        "fetch_sql_partition_spec for view {} sql={count_src_sql}",
         &*view_metadata.view_set_name
     );
     let df = ctx.sql(&count_src_sql).await?;
