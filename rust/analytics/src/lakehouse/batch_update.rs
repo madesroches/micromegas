@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 pub enum PartitionCreationStrategy {
     CreateFromSource,
-    MergeExisting,
+    MergeExisting(Arc<PartitionCache>),
     Abort,
 }
 
@@ -36,18 +36,17 @@ async fn verify_overlapping_partitions(
         anyhow::bail!("Source data hash should be a i64");
     }
     let nb_source_events = hash_to_object_count(source_data_hash)?;
-    let filtered = existing_partitions
-        .filter(view_set_name, view_instance_id, begin_insert, end_insert)
-        .partitions;
-    if filtered.is_empty() {
+    let filtered =
+        existing_partitions.filter(view_set_name, view_instance_id, begin_insert, end_insert);
+    if filtered.partitions.is_empty() {
         logger
             .write_log_entry(format!("{desc}: matching partitions not found"))
             .await?;
         return Ok(PartitionCreationStrategy::CreateFromSource);
     }
     let mut existing_source_hash: i64 = 0;
-    let nb_existing_partitions = filtered.len();
-    for part in filtered {
+    let nb_existing_partitions = filtered.partitions.len();
+    for part in &filtered.partitions {
         let begin = part.begin_insert_time;
         let end = part.end_insert_time;
         if begin < begin_insert || end > end_insert {
@@ -96,7 +95,7 @@ async fn verify_overlapping_partitions(
                 "{desc}: merging existing partitions, nb_source_events={nb_source_events}"
             ))
             .await?;
-        return Ok(PartitionCreationStrategy::MergeExisting);
+        return Ok(PartitionCreationStrategy::MergeExisting(Arc::new(filtered)));
     }
 
     logger
@@ -148,16 +147,9 @@ async fn materialize_partition(
                 .await
                 .with_context(|| "writing partition")?;
         }
-        PartitionCreationStrategy::MergeExisting => {
-            create_merged_partition(
-                existing_partitions,
-                lake,
-                view,
-                begin_insert,
-                end_insert,
-                logger,
-            )
-            .await?;
+        PartitionCreationStrategy::MergeExisting(partitions) => {
+            create_merged_partition(partitions, lake, view, begin_insert, end_insert, logger)
+                .await?;
         }
         PartitionCreationStrategy::Abort => {}
     }

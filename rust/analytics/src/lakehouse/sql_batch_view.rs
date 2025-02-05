@@ -26,7 +26,7 @@ pub struct SqlBatchView {
     view_instance_id: Arc<String>,
     min_event_time_column: Arc<String>,
     max_event_time_column: Arc<String>,
-    src_query: Arc<String>,
+    count_src_query: Arc<String>,
     transform_query: Arc<String>,
     merge_partitions_query: Arc<String>,
     schema: Arc<Schema>,
@@ -41,17 +41,17 @@ impl SqlBatchView {
     /// * `view_set_name` - name of the table
     /// * `min_event_time_column` - min(column) should result in the first timestamp in a dataframe
     /// * `max_event_time_column` - max(column) should result in the last timestamp in a dataframe
-    /// * `src_query` - used to count the rows of the underlying data to know if a cached partition is up to date
+    /// * `count_src_query` - used to count the rows of the underlying data to know if a cached partition is up to date
     /// * `transform_query` - used to transform the source data into a cached partition
     /// * `merge_partitions_query` - used to merge multiple partitions into a single one (and user queries which are one multiple partitions by default)
     /// * `lake` - data lake
-    /// * `view_factory` - all views accessible to the `src_query`
+    /// * `view_factory` - all views accessible to the `count_src_query`
     /// * `update_group` - tells the daemon which view should be materialized and in what order
     pub async fn new(
         view_set_name: Arc<String>,
         min_event_time_column: Arc<String>,
         max_event_time_column: Arc<String>,
-        src_query: Arc<String>,
+        count_src_query: Arc<String>,
         transform_query: Arc<String>,
         merge_partitions_query: Arc<String>,
         lake: Arc<DataLakeConnection>,
@@ -63,19 +63,10 @@ impl SqlBatchView {
             .await
             .with_context(|| "make_session_context")?;
         let now_str = Utc::now().to_rfc3339();
-        let src_sql = src_query
+        let sql = transform_query
             .replace("{begin}", &now_str)
             .replace("{end}", &now_str);
-        let src_df = ctx.sql(&src_sql).await?;
-        let src_view = src_df.into_view();
-        ctx.register_table(
-            TableReference::Bare {
-                table: "source".into(),
-            },
-            src_view,
-        )?;
-
-        let transformed_df = ctx.sql(&transform_query).await?;
+        let transformed_df = ctx.sql(&sql).await?;
         let schema = transformed_df.schema().inner().clone();
 
         Ok(Self {
@@ -83,7 +74,7 @@ impl SqlBatchView {
             view_instance_id: Arc::new(String::from("global")),
             min_event_time_column,
             max_event_time_column,
-            src_query,
+            count_src_query,
             transform_query,
             merge_partitions_query,
             schema,
@@ -126,23 +117,21 @@ impl View for SqlBatchView {
         .await
         .with_context(|| "make_session_context")?;
 
-        let src_sql = self
-            .src_query
+        let count_src_sql = self
+            .count_src_query
             .replace("{begin}", &begin_insert.to_rfc3339())
             .replace("{end}", &end_insert.to_rfc3339());
-        let src_df = ctx.sql(&src_sql).await?;
-        let src_view = src_df.into_view();
-        ctx.register_table(
-            TableReference::Bare {
-                table: "source".into(),
-            },
-            src_view,
-        )?;
+
+        let transform_sql = self
+            .transform_query
+            .replace("{begin}", &begin_insert.to_rfc3339())
+            .replace("{end}", &end_insert.to_rfc3339());
 
         Ok(Arc::new(
             fetch_sql_partition_spec(
                 ctx,
-                self.transform_query.clone(),
+                count_src_sql,
+                transform_sql,
                 self.min_event_time_column.clone(),
                 self.max_event_time_column.clone(),
                 view_meta,

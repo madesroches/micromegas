@@ -21,16 +21,9 @@ async fn make_log_entries_levels_per_process_minute_view(
     lake: Arc<DataLakeConnection>,
     view_factory: Arc<ViewFactory>,
 ) -> Result<SqlBatchView> {
-    let src_query = Arc::new(String::from(
+    let count_src_query = Arc::new(String::from(
         "
-        SELECT process_id,
-               time,
-               CAST(level==1 as INT) as fatal,
-               CAST(level==2 as INT) as err,
-               CAST(level==3 as INT) as warn,
-               CAST(level==4 as INT) as info,
-               CAST(level==5 as INT) as debug,
-               CAST(level==6 as INT) as trace
+        SELECT count(*) as count
         FROM log_entries
         WHERE insert_time >= '{begin}'
         AND   insert_time < '{end}'
@@ -48,7 +41,19 @@ async fn make_log_entries_levels_per_process_minute_view(
                sum(info)  as nb_info,
                sum(debug) as nb_debug,
                sum(trace) as nb_trace
-        FROM   source
+        FROM
+          (  SELECT process_id,
+                    time,
+                    CAST(level==1 as INT) as fatal,
+                    CAST(level==2 as INT) as err,
+                    CAST(level==3 as INT) as warn,
+                    CAST(level==4 as INT) as info,
+                    CAST(level==5 as INT) as debug,
+                    CAST(level==6 as INT) as trace
+             FROM log_entries
+             WHERE insert_time >= '{begin}'
+             AND insert_time < '{end}'
+          )
         GROUP BY process_id, time_bin
         ORDER BY time_bin, process_id;",
     ));
@@ -73,7 +78,7 @@ async fn make_log_entries_levels_per_process_minute_view(
         Arc::new("log_entries_per_process_per_minute".to_owned()),
         time_column.clone(),
         time_column,
-        src_query,
+        count_src_query,
         transform_query,
         merge_partitions_query,
         lake,

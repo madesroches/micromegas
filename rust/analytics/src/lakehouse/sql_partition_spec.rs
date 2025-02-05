@@ -16,11 +16,12 @@ use datafusion::{
 };
 use futures::StreamExt;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
+use micromegas_tracing::debug;
 use std::sync::Arc;
 
 pub struct SqlPartitionSpec {
     ctx: SessionContext,
-    transform_query: Arc<String>,
+    transform_query: String,
     min_event_time_column: Arc<String>,
     max_event_time_column: Arc<String>,
     view_metadata: ViewMetadata,
@@ -33,7 +34,7 @@ impl SqlPartitionSpec {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         ctx: SessionContext,
-        transform_query: Arc<String>,
+        transform_query: String,
         min_event_time_column: Arc<String>,
         max_event_time_column: Arc<String>,
         view_metadata: ViewMetadata,
@@ -113,16 +114,22 @@ impl PartitionSpec for SqlPartitionSpec {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn fetch_sql_partition_spec(
     ctx: SessionContext,
-    transform_query: Arc<String>,
+    count_src_sql: String,
+    transform_query: String,
     min_event_time_column: Arc<String>,
     max_event_time_column: Arc<String>,
     view_metadata: ViewMetadata,
     begin_insert: DateTime<Utc>,
     end_insert: DateTime<Utc>,
 ) -> Result<SqlPartitionSpec> {
-    let df = ctx.sql("SELECT COUNT(*) as count FROM source;").await?;
+    debug!(
+        "fetch_sql_partition_spec for view {}",
+        &*view_metadata.view_set_name
+    );
+    let df = ctx.sql(&count_src_sql).await?;
     let batches: Vec<RecordBatch> = df.collect().await?;
     if batches.len() != 1 {
         anyhow::bail!("fetch_sql_partition_spec: query should return a single batch");
@@ -133,6 +140,10 @@ pub async fn fetch_sql_partition_spec(
         anyhow::bail!("fetch_sql_partition_spec: query should return a single row");
     }
     let count = count_column.value(0);
+    debug!(
+        "fetch_sql_partition_spec for view {}, count={count}",
+        &*view_metadata.view_set_name
+    );
     Ok(SqlPartitionSpec::new(
         ctx,
         transform_query,
