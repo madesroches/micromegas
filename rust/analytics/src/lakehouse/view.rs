@@ -1,4 +1,7 @@
-use super::{materialized_view::MaterializedView, partition_cache::PartitionCache};
+use super::{
+    batch_update::PartitionCreationStrategy, materialized_view::MaterializedView,
+    partition_cache::PartitionCache,
+};
 use crate::{response_writer::Logger, time::TimeRange};
 use anyhow::Result;
 use async_trait::async_trait;
@@ -83,10 +86,8 @@ pub trait View: std::fmt::Debug + Send + Sync {
     /// tells the daemon which view should be materialized and in what order
     fn get_update_group(&self) -> Option<i32>;
 
-    /// max time range for a single file
-    fn get_max_partition_time_delta(&self) -> TimeDelta {
-        //todo: add context to differentiate between merge and create from source
-        //todo: merge: limit resulting time delta in fct of the size of the partitions to merge
+    /// allow the view to subdivide the requested partition
+    fn get_max_partition_time_delta(&self, _strategy: &PartitionCreationStrategy) -> TimeDelta {
         TimeDelta::days(1)
     }
 }

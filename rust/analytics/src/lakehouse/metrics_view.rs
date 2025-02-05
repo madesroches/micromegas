@@ -5,6 +5,7 @@ use crate::{
 };
 
 use super::{
+    batch_update::PartitionCreationStrategy,
     block_partition_spec::BlockPartitionSpec,
     jit_partitions::{
         generate_jit_partitions, is_jit_partition_up_to_date, write_partition_from_blocks,
@@ -214,7 +215,7 @@ impl View for MetricsView {
         }
     }
 
-    fn get_max_partition_time_delta(&self) -> TimeDelta {
+    fn get_max_partition_time_delta(&self, _strategy: &PartitionCreationStrategy) -> TimeDelta {
         TimeDelta::hours(1)
     }
 }

@@ -1,4 +1,5 @@
 use super::{
+    batch_update::PartitionCreationStrategy,
     block_partition_spec::BlockPartitionSpec,
     jit_partitions::write_partition_from_blocks,
     log_block_processor::LogBlockProcessor,
@@ -207,7 +208,7 @@ impl View for LogView {
         }
     }
 
-    fn get_max_partition_time_delta(&self) -> TimeDelta {
+    fn get_max_partition_time_delta(&self, _strategy: &PartitionCreationStrategy) -> TimeDelta {
         TimeDelta::hours(1)
     }
 }

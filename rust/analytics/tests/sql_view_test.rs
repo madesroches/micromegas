@@ -84,6 +84,8 @@ async fn make_log_entries_levels_per_process_minute_view(
         lake,
         view_factory,
         Some(4000),
+        TimeDelta::days(1),
+        TimeDelta::days(1),
     )
     .await
 }
