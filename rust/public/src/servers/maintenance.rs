@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use async_trait::async_trait;
 use chrono::{DateTime, DurationRound};
 use chrono::{TimeDelta, Utc};
 use micromegas_analytics::delete::delete_old_data;
@@ -10,68 +11,11 @@ use micromegas_analytics::lakehouse::view_factory::ViewFactory;
 use micromegas_analytics::response_writer::ResponseWriter;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_tracing::prelude::*;
-use std::future::Future;
-use std::pin::Pin;
 use std::sync::Arc;
 
+use super::cron_task::{CronTask, TaskCallback};
+
 type Views = Arc<Vec<Arc<dyn View>>>;
-type FutureTask = Pin<Box<dyn Future<Output = Result<()>>>>;
-type Callback = Box<dyn Fn(DateTime<Utc>, Arc<DataLakeConnection>, Views) -> FutureTask>;
-
-pub struct TaskDef {
-    lake: Arc<DataLakeConnection>,
-    views: Views,
-    pub name: String,
-    pub period: TimeDelta,
-    pub offset: TimeDelta,
-    pub callback: Callback,
-    pub next_run: DateTime<Utc>,
-}
-
-impl TaskDef {
-    pub async fn start(
-        lake: Arc<DataLakeConnection>,
-        views: Views,
-        name: String,
-        period: TimeDelta,
-        offset: TimeDelta,
-        callback: Callback,
-    ) -> Result<Self> {
-        let now = Utc::now();
-        info!("running scheduled task name={name}");
-        if let Err(e) = callback(now, lake.clone(), views.clone()).await {
-            error!("{e:?}");
-        }
-        let next_run = now.duration_trunc(period)? + period + offset;
-        Ok(Self {
-            lake,
-            views,
-            name,
-            period,
-            offset,
-            callback,
-            next_run,
-        })
-    }
-
-    pub async fn tick(&mut self) -> Result<()> {
-        let now = Utc::now();
-        info!("running scheduled task name={}", &self.name);
-        imetric!(
-            "task_tick_delay",
-            "ns",
-            (now - self.next_run)
-                .num_nanoseconds()
-                .with_context(|| "get tick delay as ns")? as u64
-        );
-        let task_time = self.next_run;
-        self.next_run = now.duration_trunc(self.period)? + self.period + self.offset;
-        (self.callback)(task_time, self.lake.clone(), self.views.clone())
-            .await
-            .with_context(|| "TaskDef::tick")?;
-        Ok(())
-    }
-}
 
 pub async fn materialize_all_views(
     lake: Arc<DataLakeConnection>,
@@ -116,97 +60,81 @@ pub async fn materialize_all_views(
     Ok(())
 }
 
-pub async fn every_day(
-    task_scheduled_time: DateTime<Utc>,
-    lake: Arc<DataLakeConnection>,
-    views: Views,
-) -> Result<()> {
-    materialize_all_views(lake, views, task_scheduled_time, TimeDelta::days(1)).await
+pub struct EveryDayTask {
+    pub lake: Arc<DataLakeConnection>,
+    pub views: Views,
 }
 
-pub async fn every_hour(
-    task_scheduled_time: DateTime<Utc>,
-    lake: Arc<DataLakeConnection>,
-    views: Views,
-) -> Result<()> {
-    delete_old_data(&lake, 90).await?;
-    delete_expired_temporary_files(lake.clone()).await?;
-    materialize_all_views(lake, views, task_scheduled_time, TimeDelta::hours(1)).await
-}
-
-pub async fn every_minute(
-    task_scheduled_time: DateTime<Utc>,
-    lake: Arc<DataLakeConnection>,
-    views: Views,
-) -> Result<()> {
-    materialize_all_views(lake, views, task_scheduled_time, TimeDelta::minutes(1)).await
-}
-
-pub async fn every_second(
-    task_scheduled_time: DateTime<Utc>,
-    lake: Arc<DataLakeConnection>,
-    views: Views,
-) -> Result<()> {
-    materialize_all_views(lake, views, task_scheduled_time, TimeDelta::seconds(1)).await
-}
-
-pub async fn daemon(lake: Arc<DataLakeConnection>, view_factory: Arc<ViewFactory>) -> Result<()> {
-    //todo: spawn two tasks - one for high-frequency small tasks, the other for tasks that can take longer to complete
-    let mut views_to_update: Vec<Arc<dyn View>> = view_factory
-        .get_global_views()
-        .iter()
-        .filter(|v| v.get_update_group().is_some())
-        .cloned()
-        .collect();
-    views_to_update.sort_by_key(|v| v.get_update_group().unwrap_or(i32::MAX));
-    let views = Arc::new(views_to_update);
-    let mut tasks = vec![
-        TaskDef::start(
-            lake.clone(),
-            views.clone(),
-            String::from("every_day"),
+#[async_trait]
+impl TaskCallback for EveryDayTask {
+    async fn run(&self, task_scheduled_time: DateTime<Utc>) -> Result<()> {
+        materialize_all_views(
+            self.lake.clone(),
+            self.views.clone(),
+            task_scheduled_time,
             TimeDelta::days(1),
-            TimeDelta::hours(4),
-            Box::new(|task_scheduled_time, lake, views| {
-                Box::pin(every_day(task_scheduled_time, lake, views))
-            }),
         )
-        .await?,
-        TaskDef::start(
-            lake.clone(),
-            views.clone(),
-            String::from("every_hour"),
-            TimeDelta::hours(1),
-            TimeDelta::minutes(10),
-            Box::new(|task_scheduled_time, lake, views| {
-                Box::pin(every_hour(task_scheduled_time, lake, views))
-            }),
-        )
-        .await?,
-        TaskDef::start(
-            lake.clone(),
-            views.clone(),
-            String::from("every minute"),
-            TimeDelta::minutes(1),
-            TimeDelta::seconds(10),
-            Box::new(|task_scheduled_time, lake, views| {
-                Box::pin(every_minute(task_scheduled_time, lake, views))
-            }),
-        )
-        .await?,
-        TaskDef::start(
-            lake.clone(),
-            views.clone(),
-            String::from("every second"),
-            TimeDelta::seconds(1),
-            TimeDelta::milliseconds(500),
-            Box::new(|task_scheduled_time, lake, views| {
-                Box::pin(every_second(task_scheduled_time, lake, views))
-            }),
-        )
-        .await?,
-    ];
+        .await
+    }
+}
 
+pub struct EveryHourTask {
+    pub lake: Arc<DataLakeConnection>,
+    pub views: Views,
+}
+
+#[async_trait]
+impl TaskCallback for EveryHourTask {
+    async fn run(&self, task_scheduled_time: DateTime<Utc>) -> Result<()> {
+        delete_old_data(&self.lake, 90).await?;
+        delete_expired_temporary_files(self.lake.clone()).await?;
+        materialize_all_views(
+            self.lake.clone(),
+            self.views.clone(),
+            task_scheduled_time,
+            TimeDelta::hours(1),
+        )
+        .await
+    }
+}
+
+pub struct EveryMinuteTask {
+    pub lake: Arc<DataLakeConnection>,
+    pub views: Views,
+}
+
+#[async_trait]
+impl TaskCallback for EveryMinuteTask {
+    async fn run(&self, task_scheduled_time: DateTime<Utc>) -> Result<()> {
+        materialize_all_views(
+            self.lake.clone(),
+            self.views.clone(),
+            task_scheduled_time,
+            TimeDelta::minutes(1),
+        )
+        .await
+    }
+}
+
+pub struct EverySecondTask {
+    pub lake: Arc<DataLakeConnection>,
+    pub views: Views,
+}
+
+#[async_trait]
+impl TaskCallback for EverySecondTask {
+    async fn run(&self, task_scheduled_time: DateTime<Utc>) -> Result<()> {
+        materialize_all_views(
+            self.lake.clone(),
+            self.views.clone(),
+            task_scheduled_time,
+            TimeDelta::seconds(1),
+        )
+        .await
+    }
+}
+
+pub async fn run_tasks_forever(mut tasks: Vec<CronTask>) {
     loop {
         let mut next_task_run = Utc::now() + TimeDelta::days(2);
         for task in &mut tasks {
@@ -228,4 +156,63 @@ pub async fn daemon(lake: Arc<DataLakeConnection>, view_factory: Arc<ViewFactory
             }
         }
     }
+}
+
+pub async fn daemon(lake: Arc<DataLakeConnection>, view_factory: Arc<ViewFactory>) -> Result<()> {
+    let mut views_to_update: Vec<Arc<dyn View>> = view_factory
+        .get_global_views()
+        .iter()
+        .filter(|v| v.get_update_group().is_some())
+        .cloned()
+        .collect();
+    views_to_update.sort_by_key(|v| v.get_update_group().unwrap_or(i32::MAX));
+    let views = Arc::new(views_to_update);
+
+    let lf_tasks = vec![
+        CronTask::start(
+            String::from("every_day"),
+            TimeDelta::days(1),
+            TimeDelta::hours(4),
+            Arc::new(EveryDayTask {
+                lake: lake.clone(),
+                views: views.clone(),
+            }),
+        )
+        .await?,
+        CronTask::start(
+            String::from("every_hour"),
+            TimeDelta::hours(1),
+            TimeDelta::minutes(10),
+            Arc::new(EveryHourTask {
+                lake: lake.clone(),
+                views: views.clone(),
+            }),
+        )
+        .await?,
+    ];
+    let hf_tasks = vec![
+        CronTask::start(
+            String::from("every minute"),
+            TimeDelta::minutes(1),
+            TimeDelta::seconds(10),
+            Arc::new(EveryMinuteTask {
+                lake: lake.clone(),
+                views: views.clone(),
+            }),
+        )
+        .await?,
+        CronTask::start(
+            String::from("every second"),
+            TimeDelta::seconds(1),
+            TimeDelta::milliseconds(500),
+            Arc::new(EverySecondTask { lake, views }),
+        )
+        .await?,
+    ];
+
+    let mut runners = tokio::task::JoinSet::new();
+    runners.spawn(async move { run_tasks_forever(lf_tasks).await });
+    runners.spawn(async move { run_tasks_forever(hf_tasks).await });
+    runners.join_all().await;
+    Ok(())
 }

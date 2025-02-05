@@ -2500,6 +2500,7 @@ dependencies = [
  "anyhow",
  "arrow-flight",
  "async-stream",
+ "async-trait",
  "axum 0.8.1",
  "bytes",
  "chrono",
