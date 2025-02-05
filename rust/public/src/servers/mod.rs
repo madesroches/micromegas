@@ -1,6 +1,9 @@
 /// routes for analytics server based on axum
 pub mod analytics;
 
+/// scheduled task for daemon
+pub mod cron_task;
+
 /// routes for ingestion server based on axum
 pub mod ingestion;
 

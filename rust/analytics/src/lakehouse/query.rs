@@ -51,7 +51,6 @@ pub async fn query_partitions(
     partitions: Vec<Partition>,
     sql: &str,
 ) -> Result<DataFrame> {
-    debug!("query_partitions: {sql}");
     let object_store = lake.blob_storage.inner();
     let table = PartitionedTableProvider::new(schema, object_store.clone(), Arc::new(partitions));
     let object_store_url = ObjectStoreUrl::parse("obj://lakehouse/").unwrap();

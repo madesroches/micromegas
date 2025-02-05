@@ -1,4 +1,5 @@
 use super::{
+    batch_update::PartitionCreationStrategy,
     materialized_view::MaterializedView,
     partition_cache::{NullPartitionProvider, PartitionCache},
     query::make_session_context,
@@ -9,7 +10,7 @@ use super::{
 use crate::time::TimeRange;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 use datafusion::{
     arrow::datatypes::Schema, logical_expr::Between, prelude::*, scalar::ScalarValue,
     sql::TableReference,
@@ -32,6 +33,8 @@ pub struct SqlBatchView {
     schema: Arc<Schema>,
     view_factory: Arc<ViewFactory>,
     update_group: Option<i32>,
+    max_partition_delta_from_source: TimeDelta,
+    max_partition_delta_from_merge: TimeDelta,
 }
 
 impl SqlBatchView {
@@ -57,6 +60,8 @@ impl SqlBatchView {
         lake: Arc<DataLakeConnection>,
         view_factory: Arc<ViewFactory>,
         update_group: Option<i32>,
+        max_partition_delta_from_source: TimeDelta,
+        max_partition_delta_from_merge: TimeDelta,
     ) -> Result<Self> {
         let null_part_provider = Arc::new(NullPartitionProvider {});
         let ctx = make_session_context(lake, null_part_provider, None, view_factory.clone())
@@ -80,6 +85,8 @@ impl SqlBatchView {
             schema,
             view_factory,
             update_group,
+            max_partition_delta_from_source,
+            max_partition_delta_from_merge,
         })
     }
 }
@@ -214,5 +221,16 @@ impl View for SqlBatchView {
 
     fn get_update_group(&self) -> Option<i32> {
         self.update_group
+    }
+
+    fn get_max_partition_time_delta(&self, strategy: &PartitionCreationStrategy) -> TimeDelta {
+        match strategy {
+            PartitionCreationStrategy::Abort | PartitionCreationStrategy::CreateFromSource => {
+                self.max_partition_delta_from_source
+            }
+            PartitionCreationStrategy::MergeExisting(_partitions) => {
+                self.max_partition_delta_from_merge
+            }
+        }
     }
 }
