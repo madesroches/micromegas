@@ -63,7 +63,7 @@ checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
 name = "analytics-srv"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "anyhow",
  "axum 0.8.1",
@@ -1613,7 +1613,7 @@ dependencies = [
 
 [[package]]
 name = "flight-sql-srv"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -2495,7 +2495,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "anyhow",
  "arrow-flight",
@@ -2526,7 +2526,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-analytics"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2551,7 +2551,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-derive-transit"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "quote",
  "syn 1.0.109",
@@ -2559,7 +2559,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-ingestion"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "anyhow",
  "bytes",
@@ -2571,7 +2571,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-telemetry"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "anyhow",
  "bytes",
@@ -2589,7 +2589,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-telemetry-sink"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2612,7 +2612,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-tracing"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "anyhow",
  "cfg-if",
@@ -2632,7 +2632,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-tracing-proc-macros"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2641,7 +2641,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-transit"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "anyhow",
  "lazy_static",
@@ -4129,7 +4129,7 @@ dependencies = [
 
 [[package]]
 name = "telemetry-admin"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -4139,7 +4139,7 @@ dependencies = [
 
 [[package]]
 name = "telemetry-ingestion-srv"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "anyhow",
  "axum 0.8.1",
