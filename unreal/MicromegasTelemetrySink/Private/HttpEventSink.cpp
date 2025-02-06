@@ -16,6 +16,8 @@
 #include "MicromegasTracing/Macros.h"
 #include "MicromegasTracing/ProcessInfo.h"
 #include "Misc/App.h"
+#include "BuildSettings.h"
+#include "Misc/EngineVersion.h"
 #include <sstream>
 #include <string>
 #if PLATFORM_WINDOWS
@@ -343,7 +345,21 @@ TSharedPtr<MicromegasTracing::EventSink, ESPMode::ThreadSafe> InitHttpEventSink(
 	Process->CpuBrand = *FPlatformMisc::GetCPUBrand();
 	Process->TscFrequency = GetTscFrequency();
 	Process->StartTime = StartTime;
+
+	// Currently this data duplicates some of the data in the process info, but the goal is to move it here
+	// and leave the process info with only the minimum necessary
+	Process->Properties.Add(TEXT("platform-name"), FPlatformProperties::IniPlatformName());
 	Process->Properties.Add(TEXT("build-version"), FApp::GetBuildVersion());
+	Process->Properties.Add(TEXT("engine-version"), *FEngineVersion::Current().ToString());
+	Process->Properties.Add(TEXT("build-config"), LexToString(FApp::GetBuildConfiguration()));
+	Process->Properties.Add(TEXT("build-target"), LexToString(FApp::GetBuildTargetType()));
+	Process->Properties.Add(TEXT("branch-name"), FApp::GetBranchName().ToLower());
+	Process->Properties.Add(TEXT("commit"), FString::FromInt(BuildSettings::GetCurrentChangelist()));
+	//Process->Properties.Add(TEXT("gpu"), GRHIAdapterName);
+	Process->Properties.Add(TEXT("cpu"), FPlatformMisc::GetCPUBrand());
+	Process->Properties.Add(TEXT("cpu-logical-cores"), FString::FromInt(FPlatformMisc::NumberOfCores()));
+	Process->Properties.Add(TEXT("cpu-physical-cores"), FString::FromInt(FPlatformMisc::NumberOfCoresIncludingHyperthreads()));
+	Process->Properties.Add(TEXT("ram_mb"), FString::FromInt(static_cast<int32>(FPlatformMemory::GetStats().TotalPhysical / (1024 * 1024))));
 
 	TSharedPtr<MicromegasTracing::EventSink, ESPMode::ThreadSafe> Sink = MakeShared<HttpEventSink>(BaseUrl, Process, Auth, Sampling, Flusher);
 	const size_t LOG_BUFFER_SIZE = 10 * 1024 * 1024;
