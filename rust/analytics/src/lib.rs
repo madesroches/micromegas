@@ -3,8 +3,6 @@
 // crate-specific lint exceptions:
 #![allow(clippy::missing_errors_doc)]
 
-/// Where web requests to the analytics server are handled
-pub mod analytics_service;
 /// Misc arrow utilities
 pub mod arrow_utils;
 /// Transforms thread events into call trees

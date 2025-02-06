@@ -23,8 +23,8 @@
 //! ## Telemetry ingestion server
 //! <https://github.com/madesroches/micromegas/blob/main/rust/telemetry-ingestion-srv/src/main.rs>
 //!
-//! ## Analytics server
-//! <https://github.com/madesroches/micromegas/blob/main/rust/analytics-srv/src/main.rs>
+//! ## FlightSQL server
+//! <https://github.com/madesroches/micromegas/blob/main/rust/flight-sql-srv/src/flight_sql_srv.rs>
 //!
 //! ## Lakehouse daemon
 //! <https://github.com/madesroches/micromegas/blob/main/rust/telemetry-admin-cli/src/telemetry_admin.rs> (with `crond` argument)
@@ -63,10 +63,10 @@
 //! ```
 //!
 //!
-//! 4. In a new shell, start the analytics server
+//! 4. In a new shell, start the flightsql server
 //! ```text
 //! > cd micromegas/rust
-//! > cargo run -p analytics-srv
+//! > cargo run -p flight-sql-srv -- --disable-auth
 //! ```
 //!
 //! 5. In a new shell, start the daemon
@@ -80,8 +80,7 @@
 //! # local connection test
 //! import datetime
 //! import micromegas
-//! BASE_URL = "http://localhost:8082/"
-//! client = micromegas.client.Client(BASE_URL)
+//! client = micromegas.connect() #connects to localhost by default
 //! now = datetime.datetime.now(datetime.timezone.utc)
 //! begin = now - datetime.timedelta(days=1)
 //! end = now
@@ -91,7 +90,8 @@
 //! ORDER BY time DESC
 //! LIMIT 10
 //! ;"""
-//! client.query_view("log_entries", "global", begin, end, sql)
+//! df = client.query(sql, begin, end)
+//! df #dataframe containing the result of the query
 //! ```
 //!
 
