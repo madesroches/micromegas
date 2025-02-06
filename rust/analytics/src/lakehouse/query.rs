@@ -65,30 +65,6 @@ pub async fn query_partitions(
     Ok(ctx.sql(sql).await?)
 }
 
-pub async fn query_single_view(
-    lake: Arc<DataLakeConnection>,
-    part_provider: Arc<dyn QueryPartitionProvider>,
-    query_range: Option<TimeRange>,
-    sql: &str,
-    view: Arc<dyn View>,
-) -> Result<Answer> {
-    let view_set_name = view.get_view_set_name().to_string();
-    let view_instance_id = view.get_view_instance_id().to_string();
-    info!("query_single_view {view_set_name} {view_instance_id} sql={sql}");
-    let ctx = SessionContext::new();
-    if let Some(range) = &query_range {
-        ctx.add_analyzer_rule(Arc::new(TableScanRewrite::new(range.clone())));
-    }
-    let object_store_url = ObjectStoreUrl::parse("obj://lakehouse/").unwrap();
-    let object_store = lake.blob_storage.inner();
-    ctx.register_object_store(object_store_url.as_ref(), object_store.clone());
-    register_table(lake, part_provider, query_range, &ctx, object_store, view).await?;
-    let df = ctx.sql(sql).await?;
-    let schema = df.schema().inner().clone();
-    let batches: Vec<RecordBatch> = df.collect().await?;
-    Ok(Answer::new(schema, batches))
-}
-
 pub async fn make_session_context(
     lake: Arc<DataLakeConnection>,
     part_provider: Arc<dyn QueryPartitionProvider>,
