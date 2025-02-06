@@ -134,10 +134,13 @@ async fn materialize_partition(
         logger.clone(),
     )
     .await?;
+    if let PartitionCreationStrategy::Abort = &strategy {
+        return Ok(());
+    }
 
     let new_delta = view.get_max_partition_time_delta(&strategy);
     if new_delta < (end_insert - begin_insert) {
-        if let PartitionCreationStrategy::MergeExisting(partition_cache) = strategy {
+        if let PartitionCreationStrategy::MergeExisting(partition_cache) = &strategy {
             if partition_cache
                 .partitions
                 .iter()
