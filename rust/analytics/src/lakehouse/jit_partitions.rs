@@ -23,13 +23,13 @@ const NB_OBJECTS_PER_PARTITION: i64 = 20 * 1024 * 1024;
 /// generate_jit_partitions lists the partitiions that are needed to cover a time span
 /// these partitions may not exist or they could be out of date
 pub async fn generate_jit_partitions(
-    connection: &mut sqlx::PgConnection,
+    pool: &sqlx::Pool<sqlx::Postgres>,
     begin_query: DateTime<Utc>,
     end_query: DateTime<Utc>,
     stream: Arc<StreamInfo>,
     process: Arc<ProcessInfo>,
+    convert_ticks: &ConvertTicks,
 ) -> Result<Vec<PartitionSourceDataBlocks>> {
-    let convert_ticks = ConvertTicks::new(&process);
     let relative_begin_ticks = convert_ticks.time_to_delta_ticks(begin_query);
     let relative_end_ticks = convert_ticks.time_to_delta_ticks(end_query);
     // we go though all the blocks before the end of the query to avoid
@@ -43,7 +43,7 @@ pub async fn generate_jit_partitions(
         )
         .bind(stream.stream_id)
         .bind(relative_end_ticks)
-        .fetch_all(&mut *connection)
+        .fetch_all(pool)
         .await
         .with_context(|| "listing blocks")?;
 

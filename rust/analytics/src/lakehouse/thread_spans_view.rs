@@ -11,7 +11,7 @@ use crate::{
     metadata::{find_process, find_stream},
     response_writer::ResponseWriter,
     span_table::{get_spans_schema, SpanRecordBuilder},
-    time::{ConvertTicks, TimeRange},
+    time::{make_time_converter_from_db, ConvertTicks, TimeRange},
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -219,28 +219,27 @@ impl View for ThreadSpansView {
             anyhow::bail!("query range mandatory for thread spans view");
         }
         let query_range = query_range.unwrap();
-        let mut connection = lake.db_pool.acquire().await?;
         let stream = Arc::new(
-            find_stream(&mut connection, self.stream_id)
+            find_stream(&lake.db_pool, self.stream_id)
                 .await
                 .with_context(|| "find_stream")?,
         );
         let process = Arc::new(
-            find_process(&mut connection, &stream.process_id)
+            find_process(&lake.db_pool, &stream.process_id)
                 .await
                 .with_context(|| "find_process")?,
         );
+        let convert_ticks = make_time_converter_from_db(&lake.db_pool, &process).await?;
         let partitions = generate_jit_partitions(
-            &mut connection,
+            &lake.db_pool,
             query_range.begin,
             query_range.end,
             stream.clone(),
             process.clone(),
+            &convert_ticks,
         )
         .await
         .with_context(|| "generate_jit_partitions")?;
-        drop(connection);
-        let convert_ticks = ConvertTicks::new(&process);
         for part in &partitions {
             update_partition(
                 lake.clone(),

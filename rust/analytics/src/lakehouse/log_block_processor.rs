@@ -4,7 +4,7 @@ use super::{
 };
 use crate::{
     log_entries_table::LogEntriesRecordBuilder, log_entry::for_each_log_entry_in_block,
-    time::ConvertTicks,
+    time::make_time_converter_from_block_meta,
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -20,15 +20,8 @@ impl BlockProcessor for LogBlockProcessor {
         blob_storage: Arc<BlobStorage>,
         src_block: Arc<PartitionSourceBlock>,
     ) -> Result<Option<PartitionRowSet>> {
-        let convert_ticks = ConvertTicks::from_meta_data(
-            src_block.process.start_ticks,
-            src_block
-                .process
-                .start_time
-                .timestamp_nanos_opt()
-                .unwrap_or_default(),
-            src_block.process.tsc_frequency,
-        );
+        let convert_ticks =
+            make_time_converter_from_block_meta(&src_block.process, &src_block.block)?;
         let nb_log_entries = src_block.block.nb_objects;
         let mut record_builder = LogEntriesRecordBuilder::with_capacity(nb_log_entries as usize);
 

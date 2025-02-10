@@ -12,7 +12,7 @@ use crate::{
     lakehouse::jit_partitions::{generate_jit_partitions, is_jit_partition_up_to_date},
     log_entries_table::log_table_schema,
     metadata::{find_process, list_process_streams_tagged},
-    time::{ConvertTicks, TimeRange},
+    time::{make_time_converter_from_db, TimeRange},
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -118,10 +118,9 @@ impl View for LogView {
             // this view instance is updated using the deamon
             return Ok(());
         }
-        let mut connection = lake.db_pool.acquire().await?;
         let process = Arc::new(
             find_process(
-                &mut connection,
+                &lake.db_pool,
                 &self
                     .process_id
                     .with_context(|| "getting a view's process_id")?,
@@ -132,30 +131,30 @@ impl View for LogView {
         let query_range =
             query_range.unwrap_or_else(|| TimeRange::new(process.start_time, chrono::Utc::now()));
 
-        let streams = list_process_streams_tagged(&mut connection, process.process_id, "log")
+        let streams = list_process_streams_tagged(&lake.db_pool, process.process_id, "log")
             .await
             .with_context(|| "list_process_streams_tagged")?;
+        let convert_ticks = make_time_converter_from_db(&lake.db_pool, &process).await?;
         let mut all_partitions = vec![];
         for stream in streams {
             let mut partitions = generate_jit_partitions(
-                &mut connection,
+                &lake.db_pool,
                 query_range.begin,
                 query_range.end,
                 Arc::new(stream),
                 process.clone(),
+                &convert_ticks,
             )
             .await
             .with_context(|| "generate_jit_partitions")?;
             all_partitions.append(&mut partitions);
         }
-        drop(connection);
         let view_meta = ViewMetadata {
             view_set_name: self.get_view_set_name(),
             view_instance_id: self.get_view_instance_id(),
             file_schema_hash: self.get_file_schema_hash(),
         };
 
-        let convert_ticks = ConvertTicks::new(&process);
         for part in all_partitions {
             if !is_jit_partition_up_to_date(&lake.db_pool, view_meta.clone(), &convert_ticks, &part)
                 .await?

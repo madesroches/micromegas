@@ -686,7 +686,7 @@ pub fn make_process_info(
         computer: whoami::devicename(),
         distro: whoami::distro(),
         cpu_brand,
-        tsc_frequency: frequency() as i64,
+        tsc_frequency: frequency(),
         start_time,
         start_ticks,
         parent_process_id,
