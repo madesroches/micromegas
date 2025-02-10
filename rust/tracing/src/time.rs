@@ -79,7 +79,7 @@ pub fn frequency() -> i64 {
     {
         let counter_frequency: i64;
         unsafe {
-            asm!(
+            core::arch::asm!(
                 "mrs x0, cntfrq_el0",
                 out("x0") counter_frequency
             );
