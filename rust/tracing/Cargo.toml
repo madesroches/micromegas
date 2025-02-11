@@ -25,6 +25,9 @@ thread-id.workspace = true
 uuid.workspace = true
 whoami.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+winapi.workspace = true
+
 [dev-dependencies]
 # to tests interop
 log.workspace = true

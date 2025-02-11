@@ -1,5 +1,6 @@
 use crate::{
-    measure::for_each_measure_in_block, metrics_table::MetricsRecordBuilder, time::ConvertTicks,
+    measure::for_each_measure_in_block, metrics_table::MetricsRecordBuilder,
+    time::make_time_converter_from_block_meta,
 };
 
 use super::{
@@ -20,15 +21,8 @@ impl BlockProcessor for MetricsBlockProcessor {
         blob_storage: Arc<BlobStorage>,
         src_block: Arc<PartitionSourceBlock>,
     ) -> Result<Option<PartitionRowSet>> {
-        let convert_ticks = ConvertTicks::from_meta_data(
-            src_block.process.start_ticks,
-            src_block
-                .process
-                .start_time
-                .timestamp_nanos_opt()
-                .unwrap_or_default(),
-            src_block.process.tsc_frequency,
-        );
+        let convert_ticks =
+            make_time_converter_from_block_meta(&src_block.process, &src_block.block)?;
         let nb_measures = src_block.block.nb_objects;
         let mut record_builder = MetricsRecordBuilder::with_capacity(nb_measures as usize);
 

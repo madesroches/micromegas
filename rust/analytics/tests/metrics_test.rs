@@ -100,7 +100,7 @@ fn test_tagged_measures() {
     let received_block: micromegas_telemetry::block_wire_format::Block =
         ciborium::from_reader(&encoded[..]).unwrap();
     let stream_info = make_stream_info(&stream);
-    let convert_ticks = ConvertTicks::new(&process_info);
+    let convert_ticks = ConvertTicks::from_meta_data(0, 0, 1).unwrap();
     let mut measures = vec![];
     parse_block(&stream_info, &received_block.payload, |val| {
         let measure = measure_from_value(

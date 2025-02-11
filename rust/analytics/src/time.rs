@@ -1,5 +1,8 @@
+use anyhow::{Context, Result};
 use chrono::{DateTime, TimeDelta, Utc};
+use micromegas_telemetry::types::block::BlockMetadata;
 use micromegas_tracing::process_info::ProcessInfo;
+use sqlx::Row;
 
 const NANOS_PER_SEC: f64 = 1000.0 * 1000.0 * 1000.0;
 
@@ -15,6 +18,64 @@ impl TimeRange {
     }
 }
 
+pub async fn make_time_converter_from_db(
+    pool: &sqlx::Pool<sqlx::Postgres>,
+    process: &ProcessInfo,
+) -> Result<ConvertTicks> {
+    if process.tsc_frequency > 0 {
+        // we have a good tsc freq provided
+        return ConvertTicks::from_meta_data(
+            process.start_ticks,
+            process.start_time.timestamp_nanos_opt().unwrap_or_default(),
+            process.tsc_frequency,
+        );
+    }
+    // we need to estimate the tsc frequency
+    let row = sqlx::query(
+        "SELECT end_time, end_ticks
+         FROM blocks
+         WHERE process_id = $1
+         ORDER BY end_time DESC
+         LIMIT 1",
+    )
+    .bind(process.process_id)
+    .fetch_one(pool)
+    .await
+    .with_context(|| "getting last block end time for tsc estimation")?;
+    let end_time: chrono::DateTime<chrono::Utc> = row.try_get("end_time")?;
+    let relative_end_ticks: i64 = row.try_get("end_ticks")?;
+    let delta_time = end_time - process.start_time;
+    let nb_seconds = delta_time.num_nanoseconds().unwrap_or_default() as f64 / 1_000_000_000.0;
+    let ticks_per_second = relative_end_ticks as f64 / nb_seconds;
+    ConvertTicks::from_meta_data(
+        process.start_ticks,
+        process.start_time.timestamp_nanos_opt().unwrap_or_default(),
+        ticks_per_second.round() as i64,
+    )
+}
+
+pub fn make_time_converter_from_block_meta(
+    process: &ProcessInfo,
+    block: &BlockMetadata,
+) -> Result<ConvertTicks> {
+    if process.tsc_frequency > 0 {
+        // we have a good tsc freq provided
+        return ConvertTicks::from_meta_data(
+            process.start_ticks,
+            process.start_time.timestamp_nanos_opt().unwrap_or_default(),
+            process.tsc_frequency,
+        );
+    }
+    let delta_time = block.end_time - process.start_time;
+    let nb_seconds = delta_time.num_nanoseconds().unwrap_or_default() as f64 / 1_000_000_000.0;
+    let ticks_per_second = block.end_ticks as f64 / nb_seconds;
+    ConvertTicks::from_meta_data(
+        process.start_ticks,
+        process.start_time.timestamp_nanos_opt().unwrap_or_default(),
+        ticks_per_second.round() as i64,
+    )
+}
+
 /// ConvertTicks helps converting between a process's tick count and more convenient date/time representations
 #[derive(Debug, Clone)]
 pub struct ConvertTicks {
@@ -26,22 +87,17 @@ pub struct ConvertTicks {
 }
 
 impl ConvertTicks {
-    pub fn new(process: &ProcessInfo) -> Self {
-        Self::from_meta_data(
-            process.start_ticks,
-            process.start_time.timestamp_nanos_opt().unwrap_or_default(),
-            process.tsc_frequency,
-        )
-    }
-
-    pub fn from_meta_data(start_ticks: i64, process_start_ns: i64, frequency: i64) -> Self {
-        Self {
+    pub fn from_meta_data(start_ticks: i64, process_start_ns: i64, frequency: i64) -> Result<Self> {
+        if frequency <= 0 {
+            anyhow::bail!("invalid frequency")
+        }
+        Ok(Self {
             tick_offset: start_ticks,
             process_start_ns,
             frequency,
             inv_tsc_frequency_ns: get_tsc_frequency_inverse_ns(frequency),
             inv_tsc_frequency_ms: get_tsc_frequency_inverse_ms(frequency),
-        }
+        })
     }
 
     /// from relative time to relative tick count

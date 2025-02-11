@@ -29,7 +29,7 @@ pub fn stream_from_row(row: &sqlx::postgres::PgRow) -> Result<StreamInfo> {
 
 #[span_fn]
 pub async fn find_stream(
-    connection: &mut sqlx::PgConnection,
+    pool: &sqlx::Pool<sqlx::Postgres>,
     stream_id: sqlx::types::Uuid,
 ) -> Result<StreamInfo> {
     let row = sqlx::query(
@@ -39,14 +39,14 @@ pub async fn find_stream(
          ;",
     )
     .bind(stream_id)
-    .fetch_one(connection)
+    .fetch_one(pool)
     .await
     .with_context(|| "select from streams")?;
     stream_from_row(&row)
 }
 
 pub async fn list_process_streams_tagged(
-    connection: &mut sqlx::PgConnection,
+    pool: &sqlx::Pool<sqlx::Postgres>,
     process_id: sqlx::types::Uuid,
     tag: &str,
 ) -> Result<Vec<StreamInfo>> {
@@ -59,7 +59,7 @@ pub async fn list_process_streams_tagged(
     )
     .bind(process_id)
     .bind(tag)
-    .fetch_all(&mut *connection)
+    .fetch_all(pool)
     .await
     .with_context(|| "fetching streams")?;
     let mut streams = vec![];
@@ -91,7 +91,7 @@ pub fn process_from_row(row: &sqlx::postgres::PgRow) -> Result<ProcessInfo> {
 
 #[span_fn]
 pub async fn find_process(
-    connection: &mut sqlx::PgConnection,
+    pool: &sqlx::Pool<sqlx::Postgres>,
     process_id: &sqlx::types::Uuid,
 ) -> Result<ProcessInfo> {
     let row = sqlx::query(
@@ -111,7 +111,7 @@ pub async fn find_process(
          WHERE process_id = $1;",
     )
     .bind(process_id)
-    .fetch_one(connection)
+    .fetch_one(pool)
     .await
     .with_context(|| "select from processes")?;
     process_from_row(&row)
