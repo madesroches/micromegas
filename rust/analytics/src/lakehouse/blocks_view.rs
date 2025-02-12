@@ -9,7 +9,8 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use datafusion::{
     arrow::datatypes::{DataType, Field, Fields, Schema, TimeUnit},
-    logical_expr::{col, Between, Expr},
+    logical_expr::{col, Expr},
+    prelude::*,
     scalar::ScalarValue,
 };
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
@@ -122,20 +123,16 @@ impl View for BlocksView {
 
     fn make_time_filter(&self, begin: DateTime<Utc>, end: DateTime<Utc>) -> Result<Vec<Expr>> {
         let utc: Arc<str> = Arc::from("+00:00");
-        Ok(vec![Expr::Between(Between::new(
-            col("insert_time").into(),
-            false,
-            Expr::Literal(ScalarValue::TimestampNanosecond(
-                begin.timestamp_nanos_opt(),
-                Some(utc.clone()),
-            ))
-            .into(),
-            Expr::Literal(ScalarValue::TimestampNanosecond(
+        Ok(vec![
+            col("begin_time").lt_eq(lit(ScalarValue::TimestampNanosecond(
                 end.timestamp_nanos_opt(),
                 Some(utc.clone()),
-            ))
-            .into(),
-        ))])
+            ))),
+            col("end_time").gt_eq(lit(ScalarValue::TimestampNanosecond(
+                begin.timestamp_nanos_opt(),
+                Some(utc.clone()),
+            ))),
+        ])
     }
 
     fn get_min_event_time_column_name(&self) -> Arc<String> {
