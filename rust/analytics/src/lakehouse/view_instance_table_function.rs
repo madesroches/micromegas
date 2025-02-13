@@ -2,7 +2,7 @@ use super::{
     materialized_view::MaterializedView, partition_cache::QueryPartitionProvider,
     view_factory::ViewFactory,
 };
-use crate::time::TimeRange;
+use crate::{dfext::expressions::exp_to_string, time::TimeRange};
 use datafusion::{
     catalog::TableFunctionImpl, catalog::TableProvider, common::plan_err, error::DataFusionError,
     logical_expr::Expr, scalar::ScalarValue,
@@ -56,15 +56,16 @@ impl TableFunctionImpl for ViewInstanceTableFunction {
                 "First argument to view_instance must be a string (the view set name)"
             );
         };
-        let Some(Expr::Literal(ScalarValue::Utf8(Some(view_instance_id)))) = exprs.get(1) else {
+        let arg2 = exprs.get(1).map(exp_to_string);
+        let Some(Ok(view_instance_id)) = arg2 else {
             return plan_err!(
-                "Second argument to view_instance must be a string (the view instance id)"
+                "Second argument to view_instance must be a string (the view instance id), given {:?}",arg2
             );
         };
 
         let view = self
             .view_factory
-            .make_view(view_set_name, view_instance_id)
+            .make_view(view_set_name, &view_instance_id)
             .map_err(|e| DataFusionError::Plan(format!("error making view {e:?}")))?;
 
         Ok(Arc::new(MaterializedView::new(
