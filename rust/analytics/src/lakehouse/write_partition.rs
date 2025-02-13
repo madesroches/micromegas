@@ -7,7 +7,7 @@ use chrono::{DateTime, TimeDelta, Utc};
 use datafusion::{
     arrow::{array::RecordBatch, datatypes::Schema},
     parquet::{
-        arrow::{arrow_to_parquet_schema, AsyncArrowWriter},
+        arrow::{ArrowSchemaConverter, AsyncArrowWriter},
         basic::Compression,
         file::{
             metadata::{ParquetMetaData, RowGroupMetaData},
@@ -352,7 +352,7 @@ fn to_parquet_meta_data(
     schema: &Schema,
     thrift_file_meta: datafusion::parquet::format::FileMetaData,
 ) -> Result<ParquetMetaData> {
-    let schema_descr = Arc::new(arrow_to_parquet_schema(schema)?);
+    let schema_descr = Arc::new(ArrowSchemaConverter::new().convert(schema)?);
     let mut groups = vec![];
     for rg in thrift_file_meta.row_groups {
         groups.push(
