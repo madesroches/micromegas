@@ -11,7 +11,7 @@ authors.workspace = true
 
 [dependencies]
 micromegas-transit.workspace = true
-micromegas-tracing-proc-macros = { path = "./proc-macros", version = "^0.3" }
+micromegas-tracing-proc-macros = { path = "./proc-macros", version = "^0.4" }
 
 anyhow.workspace = true
 cfg-if.workspace = true
