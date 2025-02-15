@@ -5,7 +5,7 @@ resolver = "2"
 
 
 [workspace.package]
-version = "0.3.3"
+version = "0.4.0"
 edition = "2021"
 license = "Apache-2.0"
 homepage = "https://github.com/madesroches/micromegas/"
@@ -15,12 +15,12 @@ keywords = ["observability", "telemetry", "analytics"]
 
 
 [workspace.dependencies]
-micromegas-analytics = { path = "analytics", version = "0.3.3" }
-micromegas-ingestion = { path = "ingestion", version = "0.3.3" }
-micromegas-telemetry = { path = "telemetry", version = "0.3.3" }
-micromegas-telemetry-sink = { path = "telemetry-sink", version = "0.3.3" }
-micromegas-tracing = { path = "tracing", version = "0.3.3" }
-micromegas-transit = { path = "transit", version = "0.3.3" }
+micromegas-analytics = { path = "analytics", version = "0.4.0" }
+micromegas-ingestion = { path = "ingestion", version = "0.4.0" }
+micromegas-telemetry = { path = "telemetry", version = "0.4.0" }
+micromegas-telemetry-sink = { path = "telemetry-sink", version = "0.4.0" }
+micromegas-tracing = { path = "tracing", version = "0.4.0" }
+micromegas-transit = { path = "transit", version = "0.4.0" }
 micromegas = { path = "public" }
 
 anyhow = "1.0"
