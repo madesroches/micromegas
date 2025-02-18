@@ -8,34 +8,51 @@ marp: true
 </script>
 
 # Micromegas
-High Frequency Telemetry
+Scalable Observability
 
-April 2024
+Frebruary 2025
 
 https://github.com/madesroches/micromegas/
 
 Marc-Antoine Desroches <madesroches@gmail.com>
 
 ---
-# High Frequency Telemetry
- * The big picture
- * Low overhead instrumentation (unreal)
- * Scalable ingestion service
- * JIT analytics service
+# Scalable Observability
+ * The big picture: objectives and strategies to achieve them
+ * High-frequency telemetry
+ * Unified observability
+ * Just-in-time ETL and tail sampling
+ * Live ETL when possible
+ * Incremental data reduction
 
 ---
 # The Big Picture
-## Performance objectives
 
- * Tracking millions of concurrent instrumented processes
- * Up to 100 000 events / second / process
- * 20 ns overhead in calling thread when recording high-frequency events
- * Most of the storage is cheap object storage
-   * Metadata in relational database
-   * Actual data in S3
- * Tail sampling
-   * Most recorded events are left unprocessed until requested
- * Compute capacity is scalable and adaptable
+## Objectives
+
+ * Spend less time reproducing problems
+   * Collect enough data to understand how to correct the problems. 
+   * Quantify the frequency and severity of the issues instead of debugging the first one you can reproduce.
+ * Unified observability: logs, metrics and traces in the same database.
+ * Achieve better quality
+   * Live dashboards to monitor the current state and react quickly
+   * Retrospective dashboards to quantify trends and promote a global understanding
+   
+---
+
+# The Big Picture
+## Data flow
+<div class="mermaid">
+graph LR;
+    rust-->ingestion-srv
+    unreal-->ingestion-srv
+    ingestion-srv-->postgresql[(PostgreSQL)]
+    ingestion-srv-->s3[(S3)]
+    postgresql-->flight-sql-srv
+    s3-->flight-sql-srv
+    flight-sql-srv-->grafana
+    flight-sql-srv-->python_api[Python API]
+</div>
 
 ---
 
@@ -47,11 +64,27 @@ graph LR;
     unreal-->ingestion-srv
     ingestion-srv-->postgresql[(PostgreSQL)]
     ingestion-srv-->s3[(S3)]
-    postgresql-->analytics-srv
-    s3-->analytics-srv
-    analytics-srv-->grafana
-    analytics-srv-->python_cli
+    postgresql-->flight-sql-srv
+    s3-->flight-sql-srv
+    daemon<-->postgresql
+    daemon<-->s3
+    flight-sql-srv-->grafana
+    flight-sql-srv-->python_api[Python API]
 </div>
+
+---
+# The Big Picture
+
+## High-frequency telemetry: collecting enough data
+
+ * CPU traces: up to 200 000 events / second / process
+   * Lots of data
+ * Cheap to instrument 
+   * 20 ns overhead in calling thread when recording high-frequency events
+ * Cheap to ingest
+   * Compressed payload sent directly to S3
+ * Cheap to store
+   * Most of the storage is cheap object storage
 
 ---
 
@@ -258,26 +291,26 @@ graph LR;
 # Scalable ingestion service
 Event block as seen from ingestion-srv
 ```rust
-// block wire format
-use serde::{Deserialize, Serialize};
-
+/// payload sent by instrumented processes
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BlockPayload {
     pub dependencies: Vec<u8>,
     pub objects: Vec<u8>,
 }
 
+/// block metadata sent by instrumented processes
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Block {
-    pub block_id: String,
-    pub stream_id: String,
-    pub process_id: String,
+    pub block_id: uuid::Uuid,
+    pub stream_id: uuid::Uuid,
+    pub process_id: uuid::Uuid,
     /// we send both RFC3339 times and ticks to be able to calibrate the tick
     pub begin_time: String,
     pub begin_ticks: i64,
     pub end_time: String,
     pub end_ticks: i64,
     pub payload: BlockPayload,
+    pub object_offset: i64,
     pub nb_objects: i32,
 }
 ```
@@ -286,61 +319,93 @@ pub struct Block {
 # Scalable ingestion service
 Recording an event block
 ```rust
-    pub async fn insert_block(&self, body: bytes::Bytes) -> Result<()> {
-        let block: block_wire_format::Block = ciborium::from_reader(body.reader())
-            .with_context(|| "parsing block_wire_format::Block")?;
-        let encoded_payload = encode_cbor(&block.payload)?;
-        let payload_size = encoded_payload.len();
+{
+    let begin_put = now();
+    self.lake
+        .blob_storage
+        .put(&obj_path, encoded_payload.into())
+        .await
+        .with_context(|| "Error writing block to blob storage")?;
+    imetric!("put_duration", "ticks", (now() - begin_put) as u64);
+}
 
-        let process_id = &block.process_id;
-        let stream_id = &block.stream_id;
-        let block_id = &block.block_id;
-        let obj_path = format!("blobs/{process_id}/{stream_id}/{block_id}");
-
-        self.lake
-            .blob_storage
-            .put(&obj_path, encoded_payload.into())
-            .await
-            .with_context(|| "Error writing block to blob storage")?;
-
-        sqlx::query("INSERT INTO blocks VALUES($1,$2,$3,$4,$5,$6,$7,$8);")
-            .bind(block.block_id)
-            .bind(block.stream_id)
-            .bind(block.process_id)
-            .bind(block.begin_time)
-            .bind(block.begin_ticks)
-            .bind(block.end_time)
-            .bind(block.end_ticks)
-            .bind(block.nb_objects)
-            .bind(payload_size as i64)
-            .execute(&self.lake.db_pool)
-            .await
-            .with_context(|| "inserting into blocks")?;
-
-        Ok(())
-    }
+debug!("recording block_id={block_id} stream_id={stream_id} process_id={process_id}");
+let begin_insert = now();
+let insert_time = sqlx::types::chrono::Utc::now();
+sqlx::query("INSERT INTO blocks VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11);")
+    .bind(block_id)
+    .bind(stream_id)
+    .bind(process_id)
+    .bind(begin_time)
+    .bind(block.begin_ticks)
+    .bind(end_time)
+    .bind(block.end_ticks)
+    .bind(block.nb_objects)
+    .bind(block.object_offset)
+    .bind(payload_size as i64)
+    .bind(insert_time)
+    .execute(&self.lake.db_pool)
+    .await
+    .with_context(|| "inserting into blocks")?;
+imetric!("insert_duration", "ticks", (now() - begin_insert) as u64);
 ```
 
 ---
+# Unified observability
 
-## Analytics service
+ * One extensible format for all data streams
+   * Logs, metrics and traces stream contain different events, but they share the same format
+ * One custom ingestion protocol
+ * One database
+ * One query language: SQL
+ * One query protocol: FlightSQL
+   * Grafana plugin forked from FlightSQL Grafana datasource
+   * Custom python FlightSQL client
 
- * Transformation of opaque binary data into tables
- * Can be batched or just-in-time
+---
+
+# Just-in-time ETL and tail sampling
+## flight-sql-srv
+
+Transformation of opaque binary data into tables
+
 <div class="mermaid">
 graph RL;
-    cli[python cli]-->analytics-srv;
-    grafana-->analytics-srv;
-    analytics-srv-->etl[JIT ETL];
+    cli[Python API]-->flight-sql-srv;
+    grafana-->flight-sql-srv;
+    flight-sql-srv-->etl[JIT ETL];
     etl-->datalake[(Datalake)];
     etl-->lakehouse[(Lakehouse)];
     lakehouse-->postgres[("`**PostgreSQL**
     tables partitions`")]
     lakehouse-->s3[("`**S3**
     parquet files`")]
-    analytics-srv-->datafusion[Datafusion SQL engine];
+    flight-sql-srv-->datafusion[Datafusion SQL engine];
     datafusion-->lakehouse
 </div>
+
+---
+
+# Just-in-time ETL and tail sampling
+
+```python
+#materialize and query the view specific to that process using view_instance
+sql = """
+SELECT *
+FROM view_instance('log_entries', '2faf371c-6941-46df-b4fb-236c999f0539')
+ORDER BY time DESC
+LIMIT 10
+;"""
+log = client.query(sql) #FlightSQL request
+log # pandas dataframe
+```
+
+* flight-sql-srv receives SQL query
+* `view_instance` function is called
+   * fetch blocks tagged `log` from process `2faf371c-6941-46df-b4fb-236c999f0539`
+   * decompress, parse, write parquet files containing log entries
+* let Apache DataFusion run on the generated parquet files
+* return Apache Arrow record batches
 
 ---
 
@@ -357,15 +422,106 @@ graph RL;
 
 ---
 
-## Materialized views
-To be implemented
- * thread spans (jit per thread)
-   * begin/end events -> call tree -> span table
- * log entries (jit per process)
- * metrics (jit per process)
- * metric stats (jit per process)
- * log entries for all processes (batches of ~ 1 minute)
- * metrics for all processes (batches of ~ 1 minute)
- * high frequency metrics for a subset of processes (batches of ~ 10 seconds)
+# Tail sampling
+
+ * Because heavy data streams are unprocessed until requested...
+ * And because it's cheap to delete data
+ * And because it's cheap to keep data in S3
+ * It's cheap to delay the decision to query or delete
+ * Use information in low-frequency streams to sample high-frequency stream
+
+---
+
+# Live ETL when possible
+
+ * Every second
+   * `log` blocks received are processed into a global `log_entries` view.
+   * `metrics` blocks received are processed into a global `measures` view.
+ * Every minute
+   * second partitions are merged into minute partitions
+ * Every hour
+   * minute partitions are merged into hours partitions
+ * Global views grow quickly.
+   * &#9989; simple queries on a small & recent time window
+   * &#10060; queries on a large time window with joins
 
 
+---
+
+# Incremental data reduction: SQL-defined view
+
+ * every second
+   * execute `transform` SQL query to materialize
+ * every minute
+   * execute `merge` SQL query to merge already created partitions
+ * every hour
+   * execute `merge` SQL query to merge already created partitions
+
+---
+
+# Incremental data reduction: SQL-defined view
+Example: log_entries_per_process_per_minute transform query
+
+```SQL
+SELECT date_bin('1 minute', time) as time_bin,
+       min(time) as min_time,
+       max(time) as max_time,
+       process_id,
+       sum(fatal) as nb_fatal,
+       sum(err)   as nb_err,
+       sum(warn)  as nb_warn,
+       sum(info)  as nb_info,
+       sum(debug) as nb_debug,
+       sum(trace) as nb_trace
+FROM (SELECT process_id,
+            time,
+            CAST(level==1 as INT) as fatal,
+            CAST(level==2 as INT) as err,
+            CAST(level==3 as INT) as warn,
+            CAST(level==4 as INT) as info,
+            CAST(level==5 as INT) as debug,
+            CAST(level==6 as INT) as trace
+     FROM log_entries
+     WHERE insert_time >= '{begin}'
+     AND insert_time < '{end}' )
+GROUP BY process_id, time_bin
+ORDER BY time_bin, process_id;
+```
+
+---
+
+# Incremental data reduction: SQL-defined view
+Example: log_entries_per_process_per_minute merge query
+
+```SQL
+SELECT time_bin,
+       min(min_time) as min_time,
+       max(max_time) as max_time,
+       process_id,
+       sum(nb_fatal) as nb_fatal,
+       sum(nb_err)   as nb_err,
+       sum(nb_warn)  as nb_warn,
+       sum(nb_info)  as nb_info,
+       sum(nb_debug) as nb_debug,
+       sum(nb_trace) as nb_trace
+FROM   {source}
+GROUP BY process_id, time_bin
+ORDER BY time_bin, process_id;
+```
+---
+
+# Incremental data reduction
+
+   * &#9989; queries on weeks of reduced data for trends and problem detection
+   * :arrow_right: pivot to process-specific views for detailed traces
+
+---
+
+# Join the fun
+
+https://github.com/madesroches/micromegas
+
+Liberally licensed under the Apache 2.0 license
+
+
+Marc-Antoine Desroches <madesroches@gmail.com>
