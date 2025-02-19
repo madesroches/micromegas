@@ -1,5 +1,5 @@
-#include "BuildSettings.h"
 #include "MicromegasTelemetrySink/HttpEventSink.h"
+#include "BuildSettings.h"
 #include "HAL/PlatformProcess.h"
 #include "HAL/Runnable.h"
 #include "HAL/RunnableThread.h"
