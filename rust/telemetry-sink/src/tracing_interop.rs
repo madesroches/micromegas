@@ -30,7 +30,10 @@ impl Visit for FieldFormatVisitor<'_> {
     }
 }
 
-struct TracingCaptureLayer {
+/// A tracing layer compatible with `tracing_subscriber`.
+///
+/// Setting-up this layer still requires the proper initialization of a `TelemetryGuard`.
+pub struct TracingCaptureLayer {
     pub max_level: LevelFilter,
 }
 
