@@ -354,11 +354,17 @@ TSharedPtr<MicromegasTracing::EventSink, ESPMode::ThreadSafe> InitHttpEventSink(
 	Process->Properties.Add(TEXT("build-config"), LexToString(FApp::GetBuildConfiguration()));
 	Process->Properties.Add(TEXT("build-target"), LexToString(FApp::GetBuildTargetType()));
 	Process->Properties.Add(TEXT("branch-name"), FApp::GetBranchName().ToLower());
+    // Would be 0 on local builds
 	Process->Properties.Add(TEXT("commit"), FString::FromInt(BuildSettings::GetCurrentChangelist()));
+    // note that the following doesn't necessarily get the device in use by RHI Adapter
+    // but not to have to wait for the graphics init or depend on the graphics
+    // it makes up for a good candidate still, especially on the prod floor
+    // that is single adapter dominated
 	Process->Properties.Add(TEXT("gpu"), FPlatformMisc::GetPrimaryGPUBrand());
 	Process->Properties.Add(TEXT("cpu"), FPlatformMisc::GetCPUBrand());
 	Process->Properties.Add(TEXT("cpu-physical-cores"), FString::FromInt(FPlatformMisc::NumberOfCores()));
 	Process->Properties.Add(TEXT("cpu-logical-cores"), FString::FromInt(FPlatformMisc::NumberOfCoresIncludingHyperthreads()));
+    // this is not a typo, _ was chosen to delimit the unit
 	Process->Properties.Add(TEXT("ram_mb"), FString::FromInt(static_cast<int32>(FPlatformMemory::GetStats().TotalPhysical / (1024 * 1024))));
 
 	TSharedPtr<MicromegasTracing::EventSink, ESPMode::ThreadSafe> Sink = MakeShared<HttpEventSink>(BaseUrl, Process, Auth, Sampling, Flusher);
