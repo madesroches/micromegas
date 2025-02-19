@@ -17,6 +17,7 @@ pub mod log_interop;
 pub mod request_decorator;
 pub mod stream_block;
 pub mod stream_info;
+pub mod system_monitor;
 pub mod tracing_interop;
 
 use crate::log_interop::install_log_interop;
@@ -32,6 +33,7 @@ use micromegas_tracing::{
 
 use composite_event_sink::CompositeSink;
 use local_event_sink::LocalEventSink;
+use system_monitor::spawn_system_monitor;
 
 pub mod tokio_retry {
     pub use tokio_retry2::*;
@@ -59,6 +61,7 @@ pub struct TelemetryGuardBuilder {
     telemetry_metadata_retry: Option<core::iter::Take<tokio_retry::strategy::ExponentialBackoff>>,
     telemetry_make_request_decorator: Box<dyn FnOnce() -> Arc<dyn RequestDecorator> + Send>,
     extra_sinks: HashMap<TypeId, (LevelFilter, BoxedEventSink)>,
+    system_metrics_enabled: bool,
 }
 
 impl Default for TelemetryGuardBuilder {
@@ -81,6 +84,7 @@ impl Default for TelemetryGuardBuilder {
             install_log_capture: false,
             install_tracing_capture: true,
             extra_sinks: HashMap::default(),
+            system_metrics_enabled: true,
         }
     }
 }
@@ -167,6 +171,12 @@ impl TelemetryGuardBuilder {
         self
     }
 
+    #[must_use]
+    pub fn with_system_metrics_enabled(mut self, enabled: bool) -> Self {
+        self.system_metrics_enabled = enabled;
+        self
+    }
+
     pub fn build(self) -> anyhow::Result<TelemetryGuard> {
         let target_max_level: Vec<_> = self
             .target_max_levels
@@ -231,6 +241,11 @@ impl TelemetryGuardBuilder {
                     self.threads_buffer_size,
                     sink.into(),
                 )?);
+
+                if self.system_metrics_enabled {
+                    spawn_system_monitor();
+                }
+
                 *weak = Arc::<TracingSystemGuard>::downgrade(&arc);
                 arc
             }

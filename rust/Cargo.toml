@@ -58,6 +58,7 @@ serde = { version = "1.0", features = ["derive", "rc"]}
 serde_json = "1.0"
 sqlx = { version = "0.8.1", features = ["runtime-tokio", "postgres", "chrono", "uuid"] }
 syn = { version = "1.0", features = ["extra-traits", "full"] }
+sysinfo = "0.33"
 thiserror = "1.0"
 thread-id = "4.0"
 tokio = { version = "1.33", features = ["macros","rt-multi-thread","tracing"]}
