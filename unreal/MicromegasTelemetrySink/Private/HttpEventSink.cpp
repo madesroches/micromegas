@@ -1,3 +1,4 @@
+#include "BuildSettings.h"
 #include "MicromegasTelemetrySink/HttpEventSink.h"
 #include "HAL/PlatformProcess.h"
 #include "HAL/Runnable.h"
@@ -16,8 +17,8 @@
 #include "MicromegasTracing/Macros.h"
 #include "MicromegasTracing/ProcessInfo.h"
 #include "Misc/App.h"
-#include "BuildSettings.h"
 #include "Misc/EngineVersion.h"
+#include "RHIGlobals.h"
 #include <sstream>
 #include <string>
 #if PLATFORM_WINDOWS
@@ -355,7 +356,7 @@ TSharedPtr<MicromegasTracing::EventSink, ESPMode::ThreadSafe> InitHttpEventSink(
 	Process->Properties.Add(TEXT("build-target"), LexToString(FApp::GetBuildTargetType()));
 	Process->Properties.Add(TEXT("branch-name"), FApp::GetBranchName().ToLower());
 	Process->Properties.Add(TEXT("commit"), FString::FromInt(BuildSettings::GetCurrentChangelist()));
-	//Process->Properties.Add(TEXT("gpu"), GRHIAdapterName);
+	Process->Properties.Add(TEXT("gpu"), GRHIAdapterName);
 	Process->Properties.Add(TEXT("cpu"), FPlatformMisc::GetCPUBrand());
 	Process->Properties.Add(TEXT("cpu-logical-cores"), FString::FromInt(FPlatformMisc::NumberOfCores()));
 	Process->Properties.Add(TEXT("cpu-physical-cores"), FString::FromInt(FPlatformMisc::NumberOfCoresIncludingHyperthreads()));
