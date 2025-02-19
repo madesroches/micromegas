@@ -12,6 +12,7 @@ public class MicromegasTelemetrySink : ModuleRules
 			"Core",
 			"CoreUObject",
 			"HTTP",
+			"BuildSettings",
 			"Engine",
 		});
 
