@@ -18,7 +18,6 @@
 #include "MicromegasTracing/ProcessInfo.h"
 #include "Misc/App.h"
 #include "Misc/EngineVersion.h"
-#include "RHIGlobals.h"
 #include <sstream>
 #include <string>
 #if PLATFORM_WINDOWS
@@ -356,10 +355,10 @@ TSharedPtr<MicromegasTracing::EventSink, ESPMode::ThreadSafe> InitHttpEventSink(
 	Process->Properties.Add(TEXT("build-target"), LexToString(FApp::GetBuildTargetType()));
 	Process->Properties.Add(TEXT("branch-name"), FApp::GetBranchName().ToLower());
 	Process->Properties.Add(TEXT("commit"), FString::FromInt(BuildSettings::GetCurrentChangelist()));
-	Process->Properties.Add(TEXT("gpu"), GRHIAdapterName);
+	Process->Properties.Add(TEXT("gpu"), FPlatformMisc::GetPrimaryGPUBrand());
 	Process->Properties.Add(TEXT("cpu"), FPlatformMisc::GetCPUBrand());
-	Process->Properties.Add(TEXT("cpu-logical-cores"), FString::FromInt(FPlatformMisc::NumberOfCores()));
-	Process->Properties.Add(TEXT("cpu-physical-cores"), FString::FromInt(FPlatformMisc::NumberOfCoresIncludingHyperthreads()));
+	Process->Properties.Add(TEXT("cpu-physical-cores"), FString::FromInt(FPlatformMisc::NumberOfCores()));
+	Process->Properties.Add(TEXT("cpu-logical-cores"), FString::FromInt(FPlatformMisc::NumberOfCoresIncludingHyperthreads()));
 	Process->Properties.Add(TEXT("ram_mb"), FString::FromInt(static_cast<int32>(FPlatformMemory::GetStats().TotalPhysical / (1024 * 1024))));
 
 	TSharedPtr<MicromegasTracing::EventSink, ESPMode::ThreadSafe> Sink = MakeShared<HttpEventSink>(BaseUrl, Process, Auth, Sampling, Flusher);
