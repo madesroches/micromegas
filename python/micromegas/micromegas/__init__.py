@@ -1,8 +1,5 @@
-import os
 import grpc
 from . import time
-from . import request
-from . import client
 from . import perfetto
 from . import flightsql
 
