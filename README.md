@@ -69,6 +69,7 @@ In order to keep costs down, most payloads will remain unprocessed until they ex
  * Released [version 0.4.0](https://crates.io/crates/micromegas)
  * Incremental data reduction using sql-defined views
  * System monitor thread
+ * Added support for ARM (& macos)
  * Deleted analytics-srv and the custom http python client to connect to it
  
 ### January 2025
