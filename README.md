@@ -63,6 +63,13 @@ In order to keep costs down, most payloads will remain unprocessed until they ex
  * Analytics built on https://arrow.apache.org/datafusion/
 
 ## Status
+
+### February 2025
+
+ * Released [version 0.4.0](https://crates.io/crates/micromegas)
+ * Incremental data reduction using sql-defined views
+ * System monitor thread
+ * Deleted analytics-srv and the custom http python client to connect to it
  
 ### January 2025
 
