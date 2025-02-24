@@ -11,7 +11,7 @@ use datafusion::{
 };
 use futures::future::BoxFuture;
 use futures::FutureExt;
-use micromegas_tracing::debug;
+// use micromegas_tracing::debug;
 use object_store::ObjectStore;
 use std::ops::Range;
 use std::sync::Arc;
@@ -59,7 +59,7 @@ impl ParquetFileReaderFactory for ReaderFactory {
         };
         let metadata = find_parquet_metadata(&filename, &self.partition_domain)
             .map_err(|e| datafusion::error::DataFusionError::External(e.into()))?;
-        debug!("create_reader filename={filename}");
+        // debug!("create_reader filename={filename}");
         Ok(Box::new(ParquetReader {
             filename,
             metadata,
@@ -81,7 +81,7 @@ impl AsyncFileReader for ParquetReader {
         &mut self,
         range: Range<usize>,
     ) -> BoxFuture<'_, datafusion::parquet::errors::Result<Bytes>> {
-        debug!("ParquetReader::get_bytes {}", &self.filename);
+        // debug!("ParquetReader::get_bytes {}", &self.filename);
         self.inner.get_bytes(range)
     }
 
@@ -89,7 +89,7 @@ impl AsyncFileReader for ParquetReader {
         &mut self,
         ranges: Vec<Range<usize>>,
     ) -> BoxFuture<'_, datafusion::parquet::errors::Result<Vec<Bytes>>> {
-        debug!("ParquetReader::get_byte_ranges {}", &self.filename);
+        // debug!("ParquetReader::get_byte_ranges {}", &self.filename);
         self.inner.get_byte_ranges(ranges)
     }
 
