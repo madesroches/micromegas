@@ -65,23 +65,19 @@ pub async fn query_partitions(
     Ok(ctx.sql(sql).await?)
 }
 
-pub async fn make_session_context(
+pub fn register_functions(
+    ctx: &SessionContext,
     lake: Arc<DataLakeConnection>,
     part_provider: Arc<dyn QueryPartitionProvider>,
     query_range: Option<TimeRange>,
     view_factory: Arc<ViewFactory>,
-) -> Result<SessionContext> {
-    let ctx = SessionContext::new();
-    if let Some(range) = &query_range {
-        ctx.add_analyzer_rule(Arc::new(TableScanRewrite::new(range.clone())));
-    }
-    let object_store_url = ObjectStoreUrl::parse("obj://lakehouse/").unwrap();
-    let object_store = lake.blob_storage.inner();
+    object_store: Arc<dyn ObjectStore>,
+) {
     ctx.register_udtf(
         "view_instance",
         Arc::new(ViewInstanceTableFunction::new(
             lake.clone(),
-            object_store.clone(),
+            object_store,
             view_factory.clone(),
             part_provider.clone(),
             query_range.clone(),
@@ -102,10 +98,30 @@ pub async fn make_session_context(
             view_factory.clone(),
         )),
     );
-
     ctx.register_udf(ScalarUDF::from(PropertyGet::new()));
+}
 
+pub async fn make_session_context(
+    lake: Arc<DataLakeConnection>,
+    part_provider: Arc<dyn QueryPartitionProvider>,
+    query_range: Option<TimeRange>,
+    view_factory: Arc<ViewFactory>,
+) -> Result<SessionContext> {
+    let ctx = SessionContext::new();
+    if let Some(range) = &query_range {
+        ctx.add_analyzer_rule(Arc::new(TableScanRewrite::new(range.clone())));
+    }
+    let object_store_url = ObjectStoreUrl::parse("obj://lakehouse/").unwrap();
+    let object_store = lake.blob_storage.inner();
     ctx.register_object_store(object_store_url.as_ref(), object_store.clone());
+    register_functions(
+        &ctx,
+        lake.clone(),
+        part_provider.clone(),
+        query_range.clone(),
+        view_factory.clone(),
+        object_store.clone(),
+    );
     for view in view_factory.get_global_views() {
         register_table(
             lake.clone(),
