@@ -174,7 +174,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         let stream = df
             .execute_stream()
             .await
-            .map_err(|_| Status::internal("Error executing plan"))?
+            .map_err(|e| Status::internal(format!("Error executing plan: {e:?}")))?
             .map_err(|e| FlightError::ExternalError(Box::new(e)));
         let builder = FlightDataEncoderBuilder::new().with_schema(schema);
         let flight_data_stream = builder.build(stream);
