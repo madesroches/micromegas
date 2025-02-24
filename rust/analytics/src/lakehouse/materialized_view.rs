@@ -84,7 +84,7 @@ impl TableProvider for MaterializedView {
             )
             .await
             .map_err(|e| datafusion::error::DataFusionError::External(e.into()))?;
-        debug!("MaterializedView::scan partitions={partitions:?}");
+        debug!("MaterializedView::scan nb_partitions={}", partitions.len());
 
         make_partitioned_execution_plan(
             self.schema(),
