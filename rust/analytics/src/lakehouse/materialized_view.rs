@@ -13,6 +13,7 @@ use datafusion::{
     physical_plan::ExecutionPlan,
 };
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
+use micromegas_tracing::debug;
 use object_store::ObjectStore;
 use std::{any::Any, sync::Arc};
 
@@ -83,6 +84,7 @@ impl TableProvider for MaterializedView {
             )
             .await
             .map_err(|e| datafusion::error::DataFusionError::External(e.into()))?;
+        debug!("MaterializedView::scan nb_partitions={}", partitions.len());
 
         make_partitioned_execution_plan(
             self.schema(),

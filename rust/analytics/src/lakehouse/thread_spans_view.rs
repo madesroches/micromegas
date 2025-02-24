@@ -133,8 +133,8 @@ async fn write_partition(
                 &block.stream,
             )
             .await?;
-            blocks_to_process = vec![];
-            last_end = None;
+            last_end = Some(block.block.end_ticks);
+            blocks_to_process = vec![block.block.clone()];
         }
     }
     if !blocks_to_process.is_empty() {

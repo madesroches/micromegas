@@ -11,6 +11,7 @@ use datafusion::{
 };
 use futures::future::BoxFuture;
 use futures::FutureExt;
+// use micromegas_tracing::debug;
 use object_store::ObjectStore;
 use std::ops::Range;
 use std::sync::Arc;
@@ -58,6 +59,7 @@ impl ParquetFileReaderFactory for ReaderFactory {
         };
         let metadata = find_parquet_metadata(&filename, &self.partition_domain)
             .map_err(|e| datafusion::error::DataFusionError::External(e.into()))?;
+        // debug!("create_reader filename={filename}");
         Ok(Box::new(ParquetReader {
             filename,
             metadata,

@@ -19,7 +19,7 @@ where
     <Q as ExtractDeps>::DepsQueue: HeterogeneousQueue,
 {
     let block_id = uuid::Uuid::new_v4();
-    debug!("encoding block_id={block_id}");
+    trace!("encoding block_id={block_id}");
     let end = block.end.as_ref().unwrap();
 
     let payload = block_wire_format::BlockPayload {
