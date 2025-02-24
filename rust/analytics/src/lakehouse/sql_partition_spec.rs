@@ -125,10 +125,6 @@ pub async fn fetch_sql_partition_spec(
     begin_insert: DateTime<Utc>,
     end_insert: DateTime<Utc>,
 ) -> Result<SqlPartitionSpec> {
-    debug!(
-        "fetch_sql_partition_spec for view {}",
-        &*view_metadata.view_set_name
-    );
     let df = ctx.sql(&count_src_sql).await?;
     let batches: Vec<RecordBatch> = df.collect().await?;
     if batches.len() != 1 {
@@ -140,10 +136,12 @@ pub async fn fetch_sql_partition_spec(
         anyhow::bail!("fetch_sql_partition_spec: query should return a single row");
     }
     let count = count_column.value(0);
-    debug!(
-        "fetch_sql_partition_spec for view {}, count={count}",
-        &*view_metadata.view_set_name
-    );
+    if count > 0 {
+        debug!(
+            "fetch_sql_partition_spec for view {}, count={count}",
+            &*view_metadata.view_set_name
+        );
+    }
     Ok(SqlPartitionSpec::new(
         ctx,
         transform_query,
