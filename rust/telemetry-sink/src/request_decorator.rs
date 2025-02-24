@@ -47,7 +47,7 @@ impl From<RequestDecoratorError> for tokio_retry2::RetryError<anyhow::Error> {
 }
 
 /// A result type for request decorators.
-type Result<T> = std::result::Result<T, RequestDecoratorError>;
+pub type Result<T> = std::result::Result<T, RequestDecoratorError>;
 
 #[async_trait] // otherwise we get: cannot be made into an object
 pub trait RequestDecorator: Send {
