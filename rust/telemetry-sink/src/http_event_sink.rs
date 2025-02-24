@@ -168,7 +168,7 @@ impl HttpEventSink {
         decorator: &dyn RequestDecorator,
         process_info: &ProcessInfo,
     ) -> Result<()> {
-        debug!("push_block");
+        trace!("push_block");
         if current_queue_size.load(Ordering::Relaxed) >= max_queue_size {
             // could be better to have a budget for each block type
             // this way thread data would not starve the other streams
@@ -189,7 +189,7 @@ impl HttpEventSink {
             warn!("request decorator: {e:?}");
             return Err(e);
         }
-        debug!("push_block: executing request");
+        trace!("push_block: executing request");
         client
             .execute(request)
             .await
