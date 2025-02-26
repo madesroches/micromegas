@@ -1,4 +1,5 @@
 import crc
+import pyarrow
 from tqdm import tqdm
 
 
@@ -39,7 +40,7 @@ class Writer:
     Traces can be viewed using https://ui.perfetto.dev/
     """
 
-    def __init__(self, client, process_id, exe):
+    def __init__(self, client, process_id, begin, end, exe):
         load_perfetto_protos()
         from protos.perfetto.trace import trace_pb2, trace_packet_pb2
 
@@ -51,6 +52,8 @@ class Writer:
         self.trace = trace_pb2.Trace()
         self.packets = self.trace.packet
         self.process_uuid = crc64_str(process_id)
+        self.begin = begin
+        self.end = end
 
         packet = trace_packet_pb2.TracePacket()
         packet.track_descriptor.uuid = self.process_uuid
@@ -88,12 +91,6 @@ class Writer:
     def append_thread(self, stream_id, thread_name, thread_id):
         from protos.perfetto.trace import trace_pb2, trace_packet_pb2, track_event
 
-        df_blocks = self.client.query_blocks(
-            begin=None, end=None, limit=100_000, stream_id=stream_id
-        )
-        if df_blocks.empty:
-            return
-
         packet = trace_packet_pb2.TracePacket()
         thread_uuid = crc64_str(stream_id)
         packet.track_descriptor.uuid = thread_uuid
@@ -104,11 +101,13 @@ class Writer:
         self.packets.append(packet)
         trusted_packet_sequence_id = 1
 
-        batches = list(generate_batches(df_blocks))
-        for begin, end, limit in tqdm(batches, unit="event batches"):
-            df_spans = self.client.query_spans(
-                begin, end, limit=limit, stream_id=stream_id
-            )
+        sql = """
+          SELECT *
+          FROM view_instance('thread_spans', '{stream_id}');
+        """.format(stream_id=stream_id)
+
+        for rb_spans in self.client.query_stream(sql, self.begin, self.end):
+            df_spans = pyarrow.Table.from_batches([rb_spans]).to_pandas()
             begin_ns = df_spans["begin"].astype("int64")
             end_ns = df_spans["end"].astype("int64")
             for index, span in df_spans.iterrows():
@@ -171,35 +170,36 @@ class Writer:
             f.write(self.trace.SerializeToString())
 
 
-def get_process_cpu_streams(client, process_id):
-    def prop_to_dict(props):
-        prop_dict = {}
-        for p in props:
-            prop_dict[p["key"]] = p["value"]
-        return prop_dict
-
-    def get_thread_name(prop_dict):
-        return prop_dict["thread-name"]
-
-    def get_thread_id(prop_dict):
-        return int(prop_dict["thread-id"])
-
-    df_streams = client.query_streams(
-        begin=None, end=None, limit=1024, tag_filter="cpu", process_id=process_id
-    )
-    df_streams["properties"] = df_streams["properties"].apply(prop_to_dict)
-    df_streams["thread_name"] = df_streams["properties"].apply(get_thread_name)
-    df_streams["thread_id"] = df_streams["properties"].apply(get_thread_id)
+def get_process_cpu_streams(client, process_id, begin, end):
+    sql = """
+      SELECT stream_id,
+             property_get("streams.properties", 'thread-name') as thread_name,
+             property_get("streams.properties", 'thread-id') as thread_id
+      FROM blocks
+      WHERE process_id = '{process_id}'
+      AND array_has("streams.tags", 'cpu')
+      GROUP BY stream_id, thread_name, thread_id
+    """.format(process_id=process_id)
+    df_streams = client.query(sql)
     return df_streams
 
+def get_exe(client, process_id, begin, end):
+    sql = """
+      SELECT "processes.exe" as exe
+      FROM blocks
+      WHERE process_id='{process_id}'
+      LIMIT 1;""".format(process_id=process_id)
+    return client.query(sql, begin, end).iloc[0]["exe"]
+    
 
-def write_process_trace(client, process_id, trace_filepath):
-    process_df = client.find_process(process_id)
-    assert process_df.shape[0] == 1
-    process = process_df.iloc[0]
-    streams = get_process_cpu_streams(client, process_id)
-    writer = Writer(client, process_id, process["exe"])
-    for index, stream in tqdm(list(streams.iterrows()), unit="threads"):
-        stream_id = stream["thread_id"]
+def write_process_trace(client, process_id, begin, end, trace_filepath):
+    exe = get_exe(client, process_id, begin, end)
+    print(exe)
+    streams = get_process_cpu_streams(client, process_id, begin, end)
+    writer = Writer(client, process_id, begin, end, exe)
+    progress_bar = tqdm(list(streams.iterrows()), unit="threads")
+    for index, stream in progress_bar:
+        progress_bar.set_description(stream["thread_name"])
+        stream_id = int(stream["thread_id"])
         writer.append_thread(stream["stream_id"], stream["thread_name"], stream_id)
     writer.write_file(trace_filepath)
