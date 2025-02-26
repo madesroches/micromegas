@@ -18,22 +18,6 @@ def crc64_str(s):
     return calculator.checksum(str.encode(s))
 
 
-def generate_batches(df_blocks):
-    nb_events_threshold = 1024 * 1024
-    begin = df_blocks.iloc[0]["begin_time"]
-    end = df_blocks.iloc[0]["end_time"]
-    nb_events = 0
-    for index, block in df_blocks.iterrows():
-        nb_events += block["nb_objects"]
-        end = block["end_time"]
-        if nb_events > nb_events_threshold:
-            yield (begin, end, nb_events)
-            begin = block["end_time"]
-            nb_events = 0
-    if nb_events > 0:
-        yield (begin, end, nb_events)
-
-
 class Writer:
     """
     Fetches thread events from the analytics server and formats them in the perfetto format.
