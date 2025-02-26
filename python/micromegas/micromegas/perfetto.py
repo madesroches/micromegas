@@ -87,7 +87,7 @@ class Writer:
             iid = len(self.source_locations) + 1
             self.source_locations[loc] = iid
         return iid, is_new
-    
+
     def append_thread(self, stream_id, thread_name, thread_id):
         from protos.perfetto.trace import trace_pb2, trace_packet_pb2, track_event
 
@@ -104,7 +104,9 @@ class Writer:
         sql = """
           SELECT *
           FROM view_instance('thread_spans', '{stream_id}');
-        """.format(stream_id=stream_id)
+        """.format(
+            stream_id=stream_id
+        )
 
         for rb_spans in self.client.query_stream(sql, self.begin, self.end):
             df_spans = pyarrow.Table.from_batches([rb_spans]).to_pandas()
@@ -124,7 +126,9 @@ class Writer:
                 packet.track_event.category_iids.append(category_iid)
 
                 source_location = (span["filename"], span["line"])
-                source_location_iid, new_source_location = self.get_location_iid(source_location)
+                source_location_iid, new_source_location = self.get_location_iid(
+                    source_location
+                )
                 packet.track_event.source_location_iid = source_location_iid
                 if self.first:
                     # this is necessary for interning to work
@@ -179,18 +183,23 @@ def get_process_cpu_streams(client, process_id, begin, end):
       WHERE process_id = '{process_id}'
       AND array_has("streams.tags", 'cpu')
       GROUP BY stream_id, thread_name, thread_id
-    """.format(process_id=process_id)
+    """.format(
+        process_id=process_id
+    )
     df_streams = client.query(sql)
     return df_streams
+
 
 def get_exe(client, process_id, begin, end):
     sql = """
       SELECT "processes.exe" as exe
       FROM blocks
       WHERE process_id='{process_id}'
-      LIMIT 1;""".format(process_id=process_id)
+      LIMIT 1;""".format(
+        process_id=process_id
+    )
     return client.query(sql, begin, end).iloc[0]["exe"]
-    
+
 
 def write_process_trace(client, process_id, begin, end, trace_filepath):
     exe = get_exe(client, process_id, begin, end)
