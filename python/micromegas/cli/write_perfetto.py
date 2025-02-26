@@ -12,10 +12,14 @@ def main():
         description="Write span events in perfetto format",
     )
     parser.add_argument("process_id")
+    parser.add_argument("begin")
+    parser.add_argument("end")
     parser.add_argument("filename")
     args = parser.parse_args()
+    begin = datetime.datetime.fromisoformat(args.begin)
+    end = datetime.datetime.fromisoformat(args.end)
     client = connection.connect()
-    micromegas.perfetto.write_process_trace(client, args.process_id, args.filename)
+    micromegas.perfetto.write_process_trace(client, args.process_id, begin, end, args.filename)
 
 
 if __name__ == "__main__":
