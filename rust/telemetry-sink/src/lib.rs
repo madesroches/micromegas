@@ -57,6 +57,7 @@ pub struct TelemetryGuardBuilder {
     install_tracing_capture: bool,
     local_sink_enabled: bool,
     local_sink_max_level: LevelFilter,
+    telemetry_sink_url: Option<String>,
     telemetry_sink_max_level: LevelFilter,
     telemetry_metadata_retry: Option<core::iter::Take<tokio_retry::strategy::ExponentialBackoff>>,
     telemetry_make_request_decorator: Box<dyn FnOnce() -> Arc<dyn RequestDecorator> + Send>,
@@ -72,6 +73,7 @@ impl Default for TelemetryGuardBuilder {
             threads_buffer_size: 10 * 1024 * 1024,
             local_sink_enabled: true,
             local_sink_max_level: LevelFilter::Info,
+            telemetry_sink_url: None,
             telemetry_sink_max_level: LevelFilter::Debug,
             telemetry_metadata_retry: None,
             telemetry_make_request_decorator: Box::new(|| {
@@ -177,6 +179,16 @@ impl TelemetryGuardBuilder {
         self
     }
 
+    /// Set the URL of telemetry sink.
+    ///
+    /// If not explicitly set, the URL will be read from the `MICROMEGAS_TELEMETRY_URL` environment
+    /// variable.
+    #[must_use]
+    pub fn with_telemetry_sink_url(mut self, url: String) -> Self {
+        self.telemetry_sink_url = Some(url);
+        self
+    }
+
     pub fn build(self) -> anyhow::Result<TelemetryGuard> {
         let target_max_level: Vec<_> = self
             .target_max_levels
@@ -201,7 +213,11 @@ impl TelemetryGuardBuilder {
                 arc
             } else {
                 let mut sinks: Vec<(LevelFilter, BoxedEventSink)> = vec![];
-                if let Ok(url) = std::env::var("MICROMEGAS_TELEMETRY_URL") {
+                let telemetry_sink_url = self
+                    .telemetry_sink_url
+                    .or_else(|| std::env::var("MICROMEGAS_TELEMETRY_URL").ok());
+
+                if let Some(url) = telemetry_sink_url {
                     let retry_strategy = self.telemetry_metadata_retry.unwrap_or_else(|| {
                         tokio_retry::strategy::ExponentialBackoff::from_millis(10).take(3)
                     });
