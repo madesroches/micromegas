@@ -1,0 +1,23 @@
+[package]
+name = "micromegas-perfetto"
+description = "perfetto module of micromegas"
+keywords.workspace = true
+version.workspace = true
+edition.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+prost.workspace = true
+prost-build = { version = "0.13", optional=true }
+
+[features]
+protogen = ["prost-build"]
+
+[[bin]]
+name = "update-perfetto-protos"
+path = "src/update_perfetto_protos.rs"
+required-features = ["protogen"]
