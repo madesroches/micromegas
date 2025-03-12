@@ -21,6 +21,7 @@ micromegas-telemetry = { path = "telemetry", version = "0.4.1" }
 micromegas-telemetry-sink = { path = "telemetry-sink", version = "0.4.1" }
 micromegas-tracing = { path = "tracing", version = "0.4.1" }
 micromegas-transit = { path = "transit", version = "0.4.1" }
+micromegas-perfetto = { path = "perfetto", version = "0.4.1" }
 micromegas = { path = "public" }
 
 anyhow = "1.0"
@@ -72,6 +73,6 @@ tracing-subscriber = "0.3.18"
 url = "2.5.0"
 uuid = { version = "1.8", features = ["v4", "serde"] }
 whoami = "1.2"
-xxhash-rust = { version = "0.8.10", features = ["xxh32"] }
+xxhash-rust = { version = "0.8.10", features = ["xxh32", "xxh64"] }
 
 winapi = { version = "0.3", features = ["profileapi"] }

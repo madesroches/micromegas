@@ -7,3 +7,6 @@
 pub mod protos {
     include!("perfetto.protos.rs");
 }
+
+#[cfg(not(feature = "protogen"))]
+pub mod writer;

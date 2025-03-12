@@ -1,6 +1,6 @@
 [package]
 name = "micromegas-perfetto"
-description = "perfetto module of micromegas"
+description = "perfetto trace writer, part of micromegas"
 keywords.workspace = true
 version.workspace = true
 edition.workspace = true
@@ -13,6 +13,7 @@ authors.workspace = true
 anyhow.workspace = true
 prost.workspace = true
 prost-build = { version = "0.13", optional=true }
+xxhash-rust.workspace = true
 
 [features]
 protogen = ["prost-build"]

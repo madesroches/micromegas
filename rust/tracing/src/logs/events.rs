@@ -66,7 +66,7 @@ impl LogMetadata<'_> {
     ///
     pub fn set_level_filter(&self, generation: u16, level_filter: Option<LevelFilter>) {
         let new = level_filter.map_or(FILTER_LEVEL_UNSET_VALUE, |filter_level| filter_level as u32)
-            | u32::from(generation) << 16;
+            | (u32::from(generation) << 16);
         let mut current = self.level_filter.load(Ordering::Relaxed);
         if generation <= (current >> 16) as u16 {
             // value was updated form another thread with a newer generation

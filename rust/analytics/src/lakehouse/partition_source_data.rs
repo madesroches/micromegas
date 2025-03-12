@@ -62,19 +62,21 @@ pub async fn fetch_partition_source_data(
 ) -> Result<PartitionSourceDataBlocks> {
     let begin_rfc = begin_insert.to_rfc3339();
     let end_rfc = end_insert.to_rfc3339();
-    let sql = format!("
+    let sql = format!(
+        r#"
           SELECT block_id, stream_id, process_id, begin_time, begin_ticks, end_time, end_ticks, nb_objects,
               object_offset, payload_size, insert_time as block_insert_time,
-              \"streams.dependencies_metadata\", \"streams.objects_metadata\", \"streams.tags\", \"streams.properties\",
-              \"processes.start_time\", \"processes.start_ticks\", \"processes.tsc_frequency\", \"processes.exe\",
-              \"processes.username\", \"processes.realname\", \"processes.computer\", \"processes.distro\", \"processes.cpu_brand\",
-              \"processes.parent_process_id\", \"processes.properties\"
+              "streams.dependencies_metadata", "streams.objects_metadata", "streams.tags", "streams.properties",
+              "processes.start_time", "processes.start_ticks", "processes.tsc_frequency", "processes.exe",
+              "processes.username", "processes.realname", "processes.computer", "processes.distro", "processes.cpu_brand",
+              "processes.parent_process_id", "processes.properties"
           FROM source
-          WHERE array_has( \"streams.tags\", '{source_stream_tag}' )
+          WHERE array_has( "streams.tags", '{source_stream_tag}' )
           AND insert_time >= '{begin_rfc}'
           AND insert_time < '{end_rfc}'
           ORDER BY insert_time, block_id
-          ;");
+          ;"#
+    );
     let mut block_ids_hash: i64 = 0;
     let mut partition_src_blocks = vec![];
     let block_partitions = existing_partitions
