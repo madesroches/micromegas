@@ -7,9 +7,16 @@
 #include "MicromegasTracing/Dispatch.h"
 #include "Misc/CoreDelegates.h"
 #include "SamplingController.h"
+#include "SystemErrorReporter.h"
 #include "Templates/UniquePtr.h"
 
 #define MICROMEGAS_ENABLE_TELEMETRY_ON_START 1
+
+#if PLATFORM_WINDOWS
+	#define MICROMEGAS_CRASH_REPORTING 1
+#else
+	#define MICROMEGAS_CRASH_REPORTING 0
+#endif
 
 //================================================================================
 class FMicromegasTelemetrySinkModule : public IMicromegasTelemetrySinkModule
@@ -32,6 +39,7 @@ private:
 	SharedSamplingController SamplingController;
 	SharedFlushMonitor Flusher;
 	SharedMetricPublisher MetricPub;
+	TUniquePtr<FSystemErrorReporter> SystemErrorReporter;
 };
 
 //================================================================================
@@ -56,6 +64,9 @@ void FMicromegasTelemetrySinkModule::OnEnable()
 	MetricPub = MakeShared<MetricPublisher>();
 	CmdEnable.Reset();
 	InitLogInterop();
+#if MICROMEGAS_CRASH_REPORTING
+	SystemErrorReporter.Reset(new FSystemErrorReporter());
+#endif
 	CmdFlush.Reset(new FAutoConsoleCommand(TEXT("telemetry.flush"),
 		TEXT("Marks telemetry buffers as full"),
 		FConsoleCommandDelegate::CreateRaw(this, &FMicromegasTelemetrySinkModule::OnFlush)));
