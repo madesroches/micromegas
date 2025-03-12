@@ -104,7 +104,6 @@ pub use sqlx;
 pub use tonic;
 pub use uuid;
 
-
 /// FlightSQL client
 pub mod client;
 
