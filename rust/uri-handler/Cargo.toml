@@ -1,5 +1,5 @@
 [package]
-name = "perfetto-cli"
+name = "uri-handler"
 description = "command-line client to produce a perfetto trace"
 keywords.workspace = true
 version.workspace = true
@@ -10,8 +10,8 @@ license.workspace = true
 authors.workspace = true
 
 [[bin]]
-name = "perfetto-cli"
-path = "src/perfetto_cli.rs"
+name = "micromegas-uri-handler"
+path = "src/uri_handler.rs"
 
 [dependencies]
 micromegas.workspace = true

@@ -2974,17 +2974,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e3148f5046208a5d56bcfc03053e3ca6334e51da8dfb19b6cdc8b306fae3283e"
 
 [[package]]
-name = "perfetto-cli"
-version = "0.4.1"
-dependencies = [
- "anyhow",
- "clap",
- "futures",
- "micromegas",
- "tokio",
-]
-
-[[package]]
 name = "petgraph"
 version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4571,6 +4560,17 @@ name = "untrusted"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
+
+[[package]]
+name = "uri-handler"
+version = "0.4.1"
+dependencies = [
+ "anyhow",
+ "clap",
+ "futures",
+ "micromegas",
+ "tokio",
+]
 
 [[package]]
 name = "url"
