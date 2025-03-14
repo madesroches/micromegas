@@ -19,4 +19,6 @@ micromegas.workspace = true
 anyhow.workspace = true
 tokio.workspace = true
 url.workspace = true
+
+[target.'cfg(windows)'.dependencies]
 windows = { version = "0.60", features=["Win32_System_Registry", "Win32_Security"] }

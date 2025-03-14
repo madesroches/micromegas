@@ -1,3 +1,4 @@
+#[cfg(any(windows, doc))]
 mod installation;
 mod perfetto_trace_client;
 
@@ -90,6 +91,7 @@ async fn main() {
         return;
     }
 
+    #[cfg(any(windows, doc))]
     if args[1] == "--install" {
         unsafe {
             return installation::install().unwrap();
