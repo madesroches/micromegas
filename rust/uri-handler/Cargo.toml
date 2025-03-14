@@ -1,0 +1,24 @@
+[package]
+name = "uri-handler"
+description = "command-line client to produce a perfetto trace"
+keywords.workspace = true
+version.workspace = true
+edition.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "micromegas-uri-handler"
+path = "src/uri_handler.rs"
+
+[dependencies]
+micromegas.workspace = true
+
+anyhow.workspace = true
+tokio.workspace = true
+url.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.60", features=["Win32_System_Registry", "Win32_Security"] }

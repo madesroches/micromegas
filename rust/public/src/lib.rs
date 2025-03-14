@@ -99,9 +99,13 @@ pub use arrow_flight;
 pub use chrono;
 pub use datafusion;
 pub use object_store;
+pub use prost;
 pub use sqlx;
 pub use tonic;
 pub use uuid;
+
+/// FlightSQL client
+pub mod client;
 
 /// telemetry protocol
 pub mod telemetry {
@@ -126,6 +130,11 @@ pub mod ingestion {
 /// makes the telemetry data lake accessible and useful
 pub mod analytics {
     pub use micromegas_analytics::*;
+}
+
+/// perfetto protobufs
+pub mod perfetto {
+    pub use micromegas_perfetto::*;
 }
 
 pub mod axum_utils;
