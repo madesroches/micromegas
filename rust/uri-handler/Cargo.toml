@@ -17,6 +17,6 @@ path = "src/uri_handler.rs"
 micromegas.workspace = true
 
 anyhow.workspace = true
-clap.workspace = true
-futures.workspace = true
 tokio.workspace = true
+url.workspace = true
+windows = { version = "0.60", features=["Win32_System_Registry", "Win32_Security"] }

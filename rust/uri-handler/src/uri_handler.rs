@@ -1,106 +1,102 @@
-use anyhow::Result;
-use micromegas::analytics::dfext::typed_column::typed_column_by_name;
-use micromegas::chrono::{DateTime, Utc};
-use micromegas::client::Client;
-use micromegas::datafusion::arrow::array::{StringArray, TimestampNanosecondArray, UInt32Array};
-use micromegas::perfetto::writer::Writer;
-use micromegas::prost::Message;
-use micromegas::tonic::transport::Channel;
-use tokio::fs::File;
-use tokio::io::AsyncWriteExt;
+mod installation;
+mod perfetto_trace_client;
 
-async fn get_process_exe(
-    process_id: &str,
-    client: &mut Client,
-    begin: DateTime<Utc>,
-    end: DateTime<Utc>,
-) -> Result<String> {
-    let sql_process = format!(
-        r#"
-        SELECT "processes.exe" as exe
-        FROM blocks
-        WHERE process_id = '{process_id}'
-        LIMIT 1
-        "#
+use anyhow::{Context, Result};
+use micromegas::chrono::DateTime;
+use micromegas::client::Client;
+use micromegas::tonic::transport::{Channel, Uri};
+use perfetto_trace_client::write_perfetto_trace;
+use std::collections::HashMap;
+
+fn help() {
+    println!(
+        r#"micromegas-uri-handler [command]
+commands: 
+  --help : prints this message
+  --install : registers this executable as the micromegas:// uri handler
+  write-perfetto-trace <process_id> <begin> <end> <out_filename>
+"#
     );
-    let batches = client.query(sql_process, begin, end).await?;
-    if batches.len() != 1 || batches[0].num_rows() != 1 {
-        anyhow::bail!("process not found");
-    }
-    let exes: &StringArray = typed_column_by_name(&batches[0], "exe")?;
-    Ok(exes.value(0).to_owned())
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    let channel = Channel::from_static("grpc://localhost:50051")
-        .connect()
-        .await?;
-    let mut client = Client::new(channel);
-    let begin = DateTime::parse_from_rfc3339("2025-01-16T14:36:15.00+00:00")?.into();
-    let end = DateTime::parse_from_rfc3339("2025-01-16T14:36:16.00+00:00")?.into();
+fn pause() {
+    println!("Press <Enter> to continue...");
+    std::io::stdin().read_line(&mut String::new()).unwrap();
+}
 
-    let process_id = "941c19c3-4de2-5879-76be-e3af810930be";
-    let mut writer = Writer::new(process_id);
+async fn execute_uri_command(str_uri: &str) -> Result<()> {
+    let url = url::Url::parse(str_uri)?;
+    let command = url.path().to_owned();
+    let mut arguments: HashMap<String, String> = HashMap::new();
+    for (k, v) in url.query_pairs() {
+        arguments.insert(k.into(), v.into());
+    }
+    if command == "write-perfetto-trace" {
+        return Box::pin(execute_command(&vec![
+            command,
+            arguments
+                .get("process_id")
+                .with_context(|| "missing process_id")?
+                .to_owned(),
+            arguments
+                .get("begin")
+                .with_context(|| "missing begin")?
+                .to_owned(),
+            arguments
+                .get("end")
+                .with_context(|| "missing end")?
+                .to_owned(),
+            arguments
+                .get("out_filename")
+                .with_context(|| "missing out_filename")?
+                .to_owned(),
+        ]))
+        .await;
+    }
+    anyhow::bail!("unknown command {command}")
+}
 
-    let exe = get_process_exe(process_id, &mut client, begin, end).await?;
-    writer.append_process_descriptor(&exe);
-
-    let sql_streams = format!(
-        r#"
-        SELECT stream_id,
-               property_get("streams.properties", 'thread-name') as thread_name,
-               property_get("streams.properties", 'thread-id') as thread_id
-        FROM blocks
-        WHERE process_id = '{process_id}'
-        AND array_has("streams.tags", 'cpu')
-        GROUP BY stream_id, thread_name, thread_id
-    "#
-    );
-
-    let batches = client.query(sql_streams, begin, end).await?;
-    for b in batches {
-        let stream_id_column: &StringArray = typed_column_by_name(&b, "stream_id")?;
-        let thread_name_column: &StringArray = typed_column_by_name(&b, "thread_name")?;
-        let thread_id_column: &StringArray = typed_column_by_name(&b, "thread_id")?;
-        for row in 0..b.num_rows() {
-            let stream_id = stream_id_column.value(row);
-            let thread_name = thread_name_column.value(row);
-            eprintln!("stream_id={stream_id} thread_name={thread_name}");
-            let thread_id = thread_id_column.value(row);
-            writer.append_thread_descriptor(stream_id, thread_id.parse::<i32>()?, thread_name);
-
-            let sql_spans = format!(
-                r#"
-                SELECT id, parent, depth, hash, begin, end, duration, name, target, filename, line
-                FROM view_instance('thread_spans', '{stream_id}');
-            "#
-            );
-            let span_batches = client.query(sql_spans, begin, end).await?;
-            for b in span_batches {
-                let begins: &TimestampNanosecondArray = typed_column_by_name(&b, "begin")?;
-                let ends: &TimestampNanosecondArray = typed_column_by_name(&b, "end")?;
-                let names: &StringArray = typed_column_by_name(&b, "name")?;
-                let targets: &StringArray = typed_column_by_name(&b, "target")?;
-                let filenames: &StringArray = typed_column_by_name(&b, "filename")?;
-                let lines: &UInt32Array = typed_column_by_name(&b, "line")?;
-                for row in 0..b.num_rows() {
-                    writer.append_span(
-                        begins.value(row) as u64,
-                        ends.value(row) as u64,
-                        names.value(row),
-                        targets.value(row),
-                        filenames.value(row),
-                        lines.value(row),
-                    );
-                }
-            }
+async fn execute_command(args: &[String]) -> Result<()> {
+    if args[0] == "write-perfetto-trace" && args.len() == 5 {
+        let process_id = &args[1];
+        let begin = DateTime::parse_from_rfc3339(&args[2])?.into();
+        let end = DateTime::parse_from_rfc3339(&args[3])?.into();
+        let out_filename = &args[4];
+        let flight_url = std::env::var("MICROMEGAS_FLIGHT_URL")
+            .with_context(|| "error reading MICROMEGAS_FLIGHT_URL environment variable")?
+            .parse::<Uri>()?;
+        let channel = Channel::builder(flight_url).connect().await?;
+        let mut client = Client::new(channel);
+        return write_perfetto_trace(&mut client, process_id, begin, end, out_filename).await;
+    }
+    let uri_start = "micromegas:";
+    if args[0].starts_with(uri_start) {
+        if let Err(e) = execute_uri_command(&args[0]).await {
+            println!("{e:?}");
+            pause();
         }
     }
 
-    let mut file = File::create("f:/temp/trace.pb").await?;
-    let buf = writer.into_trace().encode_to_vec();
-    file.write_all(&buf).await?;
-
+    println!("unrecognized command {}", args[0]);
+    help();
     Ok(())
+}
+
+#[tokio::main]
+async fn main() {
+    let args: Vec<_> = std::env::args().collect();
+    if args.len() < 2 {
+        help();
+        return;
+    }
+
+    if args[1] == "--install" {
+        unsafe {
+            return installation::install().unwrap();
+        }
+    }
+
+    if let Err(e) = execute_command(&args[1..args.len()]).await {
+        println!("{e:?}");
+    }
 }
