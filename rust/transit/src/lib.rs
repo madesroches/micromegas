@@ -2,7 +2,12 @@
 //! provides fast binary serialization for Plain Old Data structures
 
 // crate-specific lint exceptions:
-#![allow(unsafe_code, clippy::missing_errors_doc, clippy::inline_always)]
+#![allow(
+    unsafe_code,
+    missing_docs,
+    clippy::missing_errors_doc,
+    clippy::inline_always
+)]
 
 mod dyn_string;
 mod heterogeneous_queue;
@@ -10,8 +15,11 @@ mod parser;
 mod reflect;
 mod serialize;
 mod static_string;
+/// string encoding
 pub mod string_codec;
+/// uuid encoding
 pub mod uuid_utils;
+/// json-like variant
 pub mod value;
 
 pub use dyn_string::*;

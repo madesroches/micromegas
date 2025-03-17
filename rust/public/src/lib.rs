@@ -94,6 +94,7 @@
 //! df #dataframe containing the result of the query
 //! ```
 //!
+#![allow(missing_docs)]
 
 pub use arrow_flight;
 pub use chrono;
