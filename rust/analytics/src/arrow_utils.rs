@@ -11,6 +11,7 @@ use datafusion::{
     parquet::file::metadata::ParquetMetaDataWriter,
 };
 
+/// make_empty_record_batch returns an empty record batch with an empty schema
 pub fn make_empty_record_batch() -> RecordBatch {
     let mut list_builder = ListBuilder::new(StructBuilder::from_fields([], 0));
     let array = list_builder.finish();

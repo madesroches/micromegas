@@ -3,7 +3,12 @@
 //! Provides logging, metrics, memory and performance profiling
 
 // crate-specific lint exceptions:
-#![allow(unsafe_code, clippy::missing_errors_doc, clippy::new_without_default)]
+#![allow(
+    unsafe_code,
+    missing_docs,
+    clippy::missing_errors_doc,
+    clippy::new_without_default
+)]
 
 use std::any::TypeId;
 use std::collections::HashMap;

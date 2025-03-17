@@ -45,7 +45,12 @@
 //!
 
 // crate-specific lint exceptions:
-#![allow(unsafe_code, clippy::missing_errors_doc, clippy::inline_always)]
+#![allow(
+    unsafe_code,
+    missing_docs,
+    clippy::missing_errors_doc,
+    clippy::inline_always
+)]
 
 pub mod dispatch;
 pub mod errors;

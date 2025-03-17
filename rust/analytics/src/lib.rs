@@ -1,7 +1,7 @@
 //! Micromegas analytics: makes the telemetry data lake accessible and useful.
 
 // crate-specific lint exceptions:
-#![allow(clippy::missing_errors_doc)]
+#![allow(missing_docs, clippy::missing_errors_doc)]
 
 /// Misc arrow utilities
 pub mod arrow_utils;

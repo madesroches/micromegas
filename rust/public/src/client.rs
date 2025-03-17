@@ -5,16 +5,19 @@ use datafusion::arrow::array::RecordBatch;
 use futures::stream::StreamExt;
 use tonic::transport::Channel;
 
+/// Micromegas FlightSQL client
 pub struct Client {
     inner: FlightSqlServiceClient<Channel>,
 }
 
 impl Client {
+    /// Creates a new client from a grpc channel
     pub fn new(channel: Channel) -> Self {
         let inner = FlightSqlServiceClient::new(channel);
         Self { inner }
     }
 
+    /// Execute SQL query
     pub async fn query(
         &mut self,
         sql: String,

@@ -31,6 +31,7 @@ impl Parse for TraceArgs {
     }
 }
 
+/// span_fn: trace the execution of a function
 #[proc_macro_attribute]
 pub fn span_fn(
     args: proc_macro::TokenStream,
@@ -63,6 +64,7 @@ pub fn span_fn(
     })
 }
 
+/// log_fn: log the execution of a function
 #[proc_macro_attribute]
 pub fn log_fn(
     args: proc_macro::TokenStream,

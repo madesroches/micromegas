@@ -3,16 +3,16 @@
 // crate-specific lint exceptions:
 #![allow(clippy::missing_errors_doc)]
 
-use std::sync::Arc;
-
 use anyhow::Result;
 use async_stream::stream;
 use axum::response::Response;
 use axum::{extract::Request, middleware::Next};
 use micromegas_analytics::response_writer::ResponseWriter;
 use micromegas_tracing::prelude::*;
+use std::sync::Arc;
 use tokio::sync::mpsc::Receiver;
 
+/// observability_middleware logs http requests, their duration and status code
 pub async fn observability_middleware(request: Request, next: Next) -> Response {
     let (parts, body) = request.into_parts();
     let uri = parts.uri.clone();
@@ -26,6 +26,7 @@ pub async fn observability_middleware(request: Request, next: Next) -> Response 
     response
 }
 
+/// make streaming body
 pub fn make_body_from_channel_receiver(mut rx: Receiver<bytes::Bytes>) -> axum::body::Body {
     let read_stream = stream! {
         while let Some(value) = rx.recv().await{
