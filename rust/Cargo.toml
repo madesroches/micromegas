@@ -64,7 +64,7 @@ thiserror = "1.0"
 thread-id = "4.0"
 tokio = { version = "1.33", features = ["macros","rt-multi-thread","tracing"]}
 tokio-retry2 = "0.5.7"
-tonic = { version = "0.12", features = ["server"] }
+tonic = { version = "0.12", features = ["server", "tls", "tls-native-roots"] }
 tower = { version = "0.5" }
 tower-http = { version = "0.5.2", features = ["cors", "limit", "timeout"] }
 tracing = "0.1.40"

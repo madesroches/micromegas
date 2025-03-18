@@ -17,6 +17,10 @@ impl Client {
         Self { inner }
     }
 
+    pub fn inner_mut(&mut self) -> &mut FlightSqlServiceClient<Channel> {
+        &mut self.inner
+    }
+
     /// Execute SQL query
     pub async fn query(
         &mut self,
