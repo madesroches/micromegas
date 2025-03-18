@@ -1,10 +1,10 @@
+use crate::client::Client;
+use crate::perfetto::writer::Writer;
 use anyhow::Result;
-use micromegas::analytics::dfext::typed_column::typed_column_by_name;
-use micromegas::chrono::{DateTime, Utc};
-use micromegas::client::Client;
-use micromegas::datafusion::arrow::array::{StringArray, TimestampNanosecondArray, UInt32Array};
-use micromegas::perfetto::writer::Writer;
-use micromegas::prost::Message;
+use chrono::{DateTime, Utc};
+use datafusion::arrow::array::{StringArray, TimestampNanosecondArray, UInt32Array};
+use micromegas_analytics::dfext::typed_column::typed_column_by_name;
+use prost::Message;
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
 
