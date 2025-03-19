@@ -152,3 +152,6 @@ pub mod log_uri_service;
 
 /// authentication for the gRPC stack
 pub mod tonic_auth_interceptor;
+
+/// fetch cpu traces and transform them into perfetto format
+pub mod perfetto_trace_client;

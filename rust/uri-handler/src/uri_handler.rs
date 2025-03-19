@@ -1,12 +1,11 @@
 #[cfg(any(windows, doc))]
 mod installation;
-mod perfetto_trace_client;
 
 use anyhow::{Context, Result};
 use micromegas::chrono::DateTime;
 use micromegas::client::Client;
+use micromegas::perfetto_trace_client::write_perfetto_trace;
 use micromegas::tonic::transport::{Channel, Uri};
-use perfetto_trace_client::write_perfetto_trace;
 use std::collections::HashMap;
 
 fn help() {
@@ -33,7 +32,7 @@ async fn execute_uri_command(str_uri: &str) -> Result<()> {
         arguments.insert(k.into(), v.into());
     }
     if command == "write-perfetto-trace" {
-        return Box::pin(execute_command(&vec![
+        return Box::pin(execute_command(&[
             command,
             arguments
                 .get("process_id")

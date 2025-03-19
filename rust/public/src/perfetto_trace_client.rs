@@ -1,10 +1,10 @@
+use crate::client::Client;
+use crate::perfetto::writer::Writer;
 use anyhow::Result;
-use micromegas::analytics::dfext::typed_column::typed_column_by_name;
-use micromegas::chrono::{DateTime, Utc};
-use micromegas::client::Client;
-use micromegas::datafusion::arrow::array::{StringArray, TimestampNanosecondArray, UInt32Array};
-use micromegas::perfetto::writer::Writer;
-use micromegas::prost::Message;
+use chrono::{DateTime, Utc};
+use datafusion::arrow::array::{StringArray, TimestampNanosecondArray, UInt32Array};
+use micromegas_analytics::dfext::typed_column::typed_column_by_name;
+use prost::Message;
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
 
@@ -30,13 +30,12 @@ async fn get_process_exe(
     Ok(exes.value(0).to_owned())
 }
 
-pub async fn write_perfetto_trace(
+pub async fn format_perfetto_trace(
     client: &mut Client,
     process_id: &str,
     begin: DateTime<Utc>,
     end: DateTime<Utc>,
-    out_filename: &str,
-) -> Result<()> {
+) -> Result<Vec<u8>> {
     let mut writer = Writer::new(process_id);
     let exe = get_process_exe(process_id, client, begin, end).await?;
     writer.append_process_descriptor(&exe);
@@ -93,8 +92,18 @@ pub async fn write_perfetto_trace(
         }
     }
 
+    Ok(writer.into_trace().encode_to_vec())
+}
+
+pub async fn write_perfetto_trace(
+    client: &mut Client,
+    process_id: &str,
+    begin: DateTime<Utc>,
+    end: DateTime<Utc>,
+    out_filename: &str,
+) -> Result<()> {
+    let buf = format_perfetto_trace(client, process_id, begin, end).await?;
     let mut file = File::create(out_filename).await?;
-    let buf = writer.into_trace().encode_to_vec();
     file.write_all(&buf).await?;
     Ok(())
 }
