@@ -26,6 +26,9 @@ cargo release -p micromegas-telemetry-sink -x --no-confirm
 cargo release -p micromegas-analytics -x --no-confirm
 @if %ERRORLEVEL% NEQ 0 exit /b %ERRORLEVEL%
 
+cargo release -p micromegas-perfetto -x --no-confirm
+@if %ERRORLEVEL% NEQ 0 exit /b %ERRORLEVEL%
+
 cargo release -p micromegas -x --no-confirm
 @if %ERRORLEVEL% NEQ 0 exit /b %ERRORLEVEL%
 
