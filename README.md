@@ -64,6 +64,12 @@ In order to keep costs down, most payloads will remain unprocessed until they ex
 
 ## Status
 
+### March 2025
+ * Released [version 0.5.0](https://crates.io/crates/micromegas)
+ * Better perfetto support
+ * New rust FlightSQL client
+ * Unreal crash reporting
+
 ### February 2025
 
  * Released [version 0.4.0](https://crates.io/crates/micromegas)
