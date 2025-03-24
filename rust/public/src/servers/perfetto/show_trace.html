@@ -1,0 +1,84 @@
+<HTML>
+  <HEAD>
+	<SCRIPT type="text/javascript">
+
+	  var g_trace = undefined;
+
+	  function open_perfetto(trace){{
+		  let begin = '{begin}';
+		  let end = '{end}';
+		  let begin_ms = Date.parse(begin)
+		  let begin_ns = begin_ms * 1_000_000;
+		  let end_ms = Date.parse(end)
+		  let end_ns = end_ms * 1_000_000;
+		  let perfetto_url = `https://ui.perfetto.dev/#!/?visStart=${{begin_ns}}&visEnd=${{end_ns}}`;
+		  var win = window.open(perfetto_url);
+		  if (!win) {{
+			  g_log.innerText += "can't open window\n";
+			  return;
+		  }}
+
+		  const timer = setInterval(() => win.postMessage('PING', perfetto_url), 50);
+
+		  const onMessageHandler = (evt) => {{
+			  if (evt.data !== 'PONG') return;
+
+			  // We got a PONG, the UI is ready.
+			  window.clearInterval(timer);
+			  window.removeEventListener('message', onMessageHandler);
+
+			  win.postMessage({{
+				  perfetto: {{
+					  buffer: g_trace,
+					  title: 'Micromegas trace of process {process_id}',
+				  }}}}, perfetto_url);
+		  }};
+
+		  window.addEventListener('message', onMessageHandler);
+	  }}
+
+	  function on_button_click(){{
+		  open_perfetto(g_trace);
+	  }}
+
+	  function download_trace(process_id, begin, end){{
+		  const params = new URLSearchParams({{
+			  process_id: process_id,
+			  begin: begin,
+			  end: end
+		  }});
+		  let traceurl = `fetch_trace?${{params.toString()}}`;
+		  fetch(traceurl)
+			  .then(response => {{
+				  g_log.innerText += 'received response\n';
+				  return response.arrayBuffer();
+               }})
+              .then( buffer => {{
+                  g_trace = buffer;
+				  btn_open_perfetto.removeAttribute('hidden');
+				  btn_open_perfetto.focus();
+			  }})
+			  .catch(error => {{
+				  console.error('Error fetching binary data:', error);
+			  }});
+	  }}
+
+	</SCRIPT>
+
+  </HEAD>
+  <BODY>
+	
+	<pre id="log" cols="80" rows="20"></pre>
+
+	<button type="button" autofocus="true" id='btn_open_perfetto' onClick='on_button_click()' hidden>Open Perfetto</button>
+
+	<SCRIPT type="text/javascript">
+	  const g_log = document.getElementById('log');
+	  const btn_open_perfetto = document.getElementById('btn_open_perfetto');
+	  g_log.innerText += 'Hi {caller}\n';
+	  g_log.innerText += 'Fetching process {process_id}\n';
+	  download_trace( '{process_id}', '{begin}', '{end}' );
+	</SCRIPT>
+
+  </BODY>
+</HTML>

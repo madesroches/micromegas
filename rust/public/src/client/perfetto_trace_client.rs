@@ -1,4 +1,4 @@
-use crate::client::Client;
+use super::flightsql_client::Client;
 use crate::perfetto::writer::Writer;
 use anyhow::Result;
 use chrono::{DateTime, Utc};

@@ -97,6 +97,7 @@
 #![allow(missing_docs)]
 
 pub use arrow_flight;
+pub use axum;
 pub use chrono;
 pub use datafusion;
 pub use object_store;
@@ -104,9 +105,6 @@ pub use prost;
 pub use sqlx;
 pub use tonic;
 pub use uuid;
-
-/// FlightSQL client
-pub mod client;
 
 /// telemetry protocol
 pub mod telemetry {
@@ -153,5 +151,5 @@ pub mod log_uri_service;
 /// authentication for the gRPC stack
 pub mod tonic_auth_interceptor;
 
-/// fetch cpu traces and transform them into perfetto format
-pub mod perfetto_trace_client;
+/// rust analytics client
+pub mod client;

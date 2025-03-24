@@ -3,8 +3,8 @@ mod installation;
 
 use anyhow::{Context, Result};
 use micromegas::chrono::DateTime;
-use micromegas::client::Client;
-use micromegas::perfetto_trace_client::write_perfetto_trace;
+use micromegas::client::flightsql_client::Client;
+use micromegas::client::perfetto_trace_client::write_perfetto_trace;
 use micromegas::tonic::transport::{Channel, Uri};
 use std::collections::HashMap;
 
