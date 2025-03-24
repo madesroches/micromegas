@@ -105,9 +105,6 @@ pub use sqlx;
 pub use tonic;
 pub use uuid;
 
-/// FlightSQL client
-pub mod client;
-
 /// telemetry protocol
 pub mod telemetry {
     pub use micromegas_telemetry::*;
@@ -153,5 +150,5 @@ pub mod log_uri_service;
 /// authentication for the gRPC stack
 pub mod tonic_auth_interceptor;
 
-/// fetch cpu traces and transform them into perfetto format
-pub mod perfetto_trace_client;
+/// rust analytics client
+pub mod client;
