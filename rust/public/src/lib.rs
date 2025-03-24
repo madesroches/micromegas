@@ -97,6 +97,7 @@
 #![allow(missing_docs)]
 
 pub use arrow_flight;
+pub use axum;
 pub use chrono;
 pub use datafusion;
 pub use object_store;

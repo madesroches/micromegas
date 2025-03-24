@@ -2,7 +2,6 @@ use crate::client::{
     flightsql_client_factory::FlightSQLClientFactory, perfetto_trace_client::format_perfetto_trace,
 };
 use anyhow::{Context, Result};
-use axum::response::Html;
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use std::sync::Arc;
@@ -24,7 +23,7 @@ impl PerfettoTraceServer {
     }
 }
 
-pub async fn show_trace(caller: &str, params: FetchTraceParams) -> Result<Html<String>> {
+pub async fn show_trace(caller: &str, params: FetchTraceParams) -> Result<String> {
     let process_id = params.process_id;
     let begin = params.begin.to_rfc3339();
     let end = params.end.to_rfc3339();
@@ -35,7 +34,7 @@ pub async fn show_trace(caller: &str, params: FetchTraceParams) -> Result<Html<S
         begin = begin,
         end = end
     ));
-    Ok(content.into())
+    Ok(content)
 }
 
 pub async fn fetch_trace(
