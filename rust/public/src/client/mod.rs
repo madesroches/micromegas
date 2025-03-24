@@ -1,5 +1,8 @@
 /// FlightSQL client
 pub mod flightsql_client;
 
-/// fetch cpu traces and transform them into perfetto format
+/// FlightSQLClientFactory allows the creation of authenticated clients
+pub mod flightsql_client_factory;
+
+/// Fetch cpu traces and transform them into perfetto format
 pub mod perfetto_trace_client;
