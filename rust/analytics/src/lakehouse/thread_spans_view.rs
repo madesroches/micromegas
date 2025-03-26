@@ -1,5 +1,5 @@
 use super::{
-    jit_partitions::{generate_jit_partitions, is_jit_partition_up_to_date},
+    jit_partitions::{generate_jit_partitions, is_jit_partition_up_to_date, JitPartitionConfig},
     partition_cache::PartitionCache,
     partition_source_data::{hash_to_object_count, PartitionSourceDataBlocks},
     view::{PartitionSpec, View, ViewMetadata},
@@ -231,9 +231,9 @@ impl View for ThreadSpansView {
         );
         let convert_ticks = make_time_converter_from_db(&lake.db_pool, &process).await?;
         let partitions = generate_jit_partitions(
+            &JitPartitionConfig::default(),
             &lake.db_pool,
-            query_range.begin,
-            query_range.end,
+            &query_range,
             stream.clone(),
             process.clone(),
             &convert_ticks,

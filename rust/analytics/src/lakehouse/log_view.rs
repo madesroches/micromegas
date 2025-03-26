@@ -1,7 +1,7 @@
 use super::{
     batch_update::PartitionCreationStrategy,
     block_partition_spec::BlockPartitionSpec,
-    jit_partitions::write_partition_from_blocks,
+    jit_partitions::{write_partition_from_blocks, JitPartitionConfig},
     log_block_processor::LogBlockProcessor,
     partition_cache::PartitionCache,
     partition_source_data::fetch_partition_source_data,
@@ -138,9 +138,9 @@ impl View for LogView {
         let mut all_partitions = vec![];
         for stream in streams {
             let mut partitions = generate_jit_partitions(
+                &JitPartitionConfig::default(),
                 &lake.db_pool,
-                query_range.begin,
-                query_range.end,
+                &query_range,
                 Arc::new(stream),
                 process.clone(),
                 &convert_ticks,

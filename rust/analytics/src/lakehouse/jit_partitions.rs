@@ -3,13 +3,14 @@ use super::{
     partition_source_data::{PartitionSourceBlock, PartitionSourceDataBlocks},
     view::ViewMetadata,
 };
-use crate::lakehouse::view::PartitionSpec;
 use crate::{
     lakehouse::partition_source_data::hash_to_object_count, metadata::block_from_row,
     response_writer::ResponseWriter, time::ConvertTicks,
 };
+use crate::{lakehouse::view::PartitionSpec, time::TimeRange};
 use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
+use chrono::DurationRound;
+use chrono::{DateTime, TimeDelta, Utc};
 use datafusion::arrow::datatypes::Schema;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_telemetry::stream_info::StreamInfo;
@@ -18,35 +19,70 @@ use micromegas_tracing::process_info::ProcessInfo;
 use sqlx::Row;
 use std::sync::Arc;
 
-const NB_OBJECTS_PER_PARTITION: i64 = 20 * 1024 * 1024;
+pub struct JitPartitionConfig {
+    pub max_nb_objects: i64,
+    pub max_insert_time_slice: TimeDelta,
+}
 
-/// generate_jit_partitions lists the partitiions that are needed to cover a time span
-/// these partitions may not exist or they could be out of date
-pub async fn generate_jit_partitions(
+impl Default for JitPartitionConfig {
+    fn default() -> Self {
+        JitPartitionConfig {
+            max_nb_objects: 20 * 1024 * 1024,
+            max_insert_time_slice: TimeDelta::hours(1),
+        }
+    }
+}
+
+async fn get_insert_time_range(
     pool: &sqlx::Pool<sqlx::Postgres>,
-    begin_query: DateTime<Utc>,
-    end_query: DateTime<Utc>,
+    query_time_range: &TimeRange,
+    stream: Arc<StreamInfo>,
+    convert_ticks: &ConvertTicks,
+) -> Result<TimeRange> {
+    let relative_begin_ticks = convert_ticks.time_to_delta_ticks(query_time_range.begin);
+    let relative_end_ticks = convert_ticks.time_to_delta_ticks(query_time_range.end);
+    let row = sqlx::query(
+        "SELECT MIN(insert_time) as min_insert_time, MAX(insert_time) as max_insert_time
+        FROM BLOCKS
+        WHERE stream_id = $1
+        AND begin_ticks <= $2
+        AND end_ticks >= $3;",
+    )
+    .bind(stream.stream_id)
+    .bind(relative_end_ticks)
+    .bind(relative_begin_ticks)
+    .fetch_one(pool)
+    .await
+    .with_context(|| "get_insert_time_range")?;
+    let begin_insert_range: DateTime<Utc> = row.try_get("min_insert_time")?;
+    let end_insert_range: DateTime<Utc> = row.try_get("max_insert_time")?;
+    Ok(TimeRange::new(begin_insert_range, end_insert_range))
+}
+
+pub async fn generate_jit_partitions_segment(
+    config: &JitPartitionConfig,
+    pool: &sqlx::Pool<sqlx::Postgres>,
+    query_time_range: &TimeRange,
+    insert_time_range: &TimeRange,
     stream: Arc<StreamInfo>,
     process: Arc<ProcessInfo>,
     convert_ticks: &ConvertTicks,
 ) -> Result<Vec<PartitionSourceDataBlocks>> {
-    let relative_begin_ticks = convert_ticks.time_to_delta_ticks(begin_query);
-    let relative_end_ticks = convert_ticks.time_to_delta_ticks(end_query);
-    // we go though all the blocks before the end of the query to avoid
-    // making a fragmented partition list over time
-
-    // perf problem: this list is too large for long running processes
-    // if we limit the time span of a partition (hourly or daily, for example)
-    // we could limit the list to the time spans overlapping the query time span
+    let relative_begin_ticks = convert_ticks.time_to_delta_ticks(query_time_range.begin);
+    let relative_end_ticks = convert_ticks.time_to_delta_ticks(query_time_range.end);
     let rows = sqlx::query(
             "SELECT block_id, stream_id, process_id, begin_time, end_time, begin_ticks, end_ticks, nb_objects, object_offset, payload_size, insert_time as block_insert_time
              FROM blocks
              WHERE stream_id = $1
              AND begin_ticks <= $2
+             AND insert_time >= $3
+             AND insert_time < $4
              ORDER BY begin_ticks;",
         )
         .bind(stream.stream_id)
         .bind(relative_end_ticks)
+        .bind(insert_time_range.begin)
+        .bind(insert_time_range.end)
         .fetch_all(pool)
         .await
         .with_context(|| "listing blocks")?;
@@ -66,8 +102,7 @@ pub async fn generate_jit_partitions(
             process: process.clone(),
         }));
 
-        // should we also add a threshold on the number of source blocks?
-        if partition_nb_objects > NB_OBJECTS_PER_PARTITION {
+        if partition_nb_objects > config.max_nb_objects {
             if last_block_end_ticks > relative_begin_ticks {
                 partitions.push(PartitionSourceDataBlocks {
                     blocks: partition_blocks,
@@ -83,6 +118,49 @@ pub async fn generate_jit_partitions(
             blocks: partition_blocks,
             block_ids_hash: partition_nb_objects.to_le_bytes().to_vec(),
         });
+    }
+    Ok(partitions)
+}
+
+/// generate_jit_partitions lists the partitiions that are needed to cover a time span
+/// these partitions may not exist or they could be out of date
+pub async fn generate_jit_partitions(
+    config: &JitPartitionConfig,
+    pool: &sqlx::Pool<sqlx::Postgres>,
+    query_time_range: &TimeRange,
+    stream: Arc<StreamInfo>,
+    process: Arc<ProcessInfo>,
+    convert_ticks: &ConvertTicks,
+) -> Result<Vec<PartitionSourceDataBlocks>> {
+    let insert_time_range =
+        get_insert_time_range(pool, query_time_range, stream.clone(), convert_ticks).await?;
+    let insert_time_range = TimeRange::new(
+        insert_time_range
+            .begin
+            .duration_trunc(config.max_insert_time_slice)?,
+        insert_time_range
+            .end
+            .duration_trunc(config.max_insert_time_slice)?
+            + config.max_insert_time_slice,
+    );
+    let mut begin_segment = insert_time_range.begin;
+    let mut end_segment = begin_segment + config.max_insert_time_slice;
+    let mut partitions = vec![];
+    while end_segment <= insert_time_range.end {
+        let insert_time_range = TimeRange::new(begin_segment, end_segment);
+        let mut segment_partitions = generate_jit_partitions_segment(
+            config,
+            pool,
+            query_time_range,
+            &insert_time_range,
+            stream.clone(),
+            process.clone(),
+            convert_ticks,
+        )
+        .await?;
+        partitions.append(&mut segment_partitions);
+        begin_segment = end_segment;
+        end_segment = begin_segment + config.max_insert_time_slice;
     }
     Ok(partitions)
 }

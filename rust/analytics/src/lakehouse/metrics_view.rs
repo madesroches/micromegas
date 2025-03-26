@@ -9,6 +9,7 @@ use super::{
     block_partition_spec::BlockPartitionSpec,
     jit_partitions::{
         generate_jit_partitions, is_jit_partition_up_to_date, write_partition_from_blocks,
+        JitPartitionConfig,
     },
     metrics_block_processor::MetricsBlockProcessor,
     partition_cache::PartitionCache,
@@ -145,9 +146,9 @@ impl View for MetricsView {
         let mut all_partitions = vec![];
         for stream in streams {
             let mut partitions = generate_jit_partitions(
+                &JitPartitionConfig::default(),
                 &lake.db_pool,
-                query_range.begin,
-                query_range.end,
+                &query_range,
                 Arc::new(stream),
                 process.clone(),
                 &convert_ticks,
