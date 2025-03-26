@@ -8,9 +8,9 @@ use datafusion::arrow::datatypes::TimeUnit;
 use datafusion::catalog::Session;
 use datafusion::catalog::TableFunctionImpl;
 use datafusion::catalog::TableProvider;
+use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::TableType;
 use datafusion::error::DataFusionError;
-use datafusion::physical_plan::memory::MemoryExec;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::Expr;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
@@ -114,10 +114,10 @@ impl TableProvider for ListPartitionsTableProvider {
         .await
         .map_err(|e| DataFusionError::External(e.into()))?;
         let rb = rows_to_record_batch(&rows).map_err(|e| DataFusionError::External(e.into()))?;
-        Ok(Arc::new(MemoryExec::try_new(
+        Ok(MemorySourceConfig::try_new_exec(
             &[vec![rb]],
             self.schema(),
             projection.map(|v| v.to_owned()),
-        )?))
+        )?)
     }
 }

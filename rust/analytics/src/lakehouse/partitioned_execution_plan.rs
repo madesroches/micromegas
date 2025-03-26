@@ -5,7 +5,7 @@ use datafusion::{
     catalog::Session,
     datasource::{
         listing::PartitionedFile,
-        physical_plan::{parquet::ParquetExecBuilder, FileScanConfig},
+        physical_plan::{FileScanConfig, ParquetSource},
     },
     execution::object_store::ObjectStoreUrl,
     physical_plan::ExecutionPlan,
@@ -30,13 +30,15 @@ pub fn make_partitioned_execution_plan(
     }
 
     let object_store_url = ObjectStoreUrl::parse("obj://lakehouse/").unwrap();
-    let file_scan_config = FileScanConfig::new(object_store_url, schema)
+    let reader_factory = Arc::new(ReaderFactory::new(object_store, partitions));
+    let source = Arc::new(
+        ParquetSource::default()
+            .with_predicate(schema.clone(), predicate)
+            .with_parquet_file_reader_factory(reader_factory),
+    );
+    Ok(FileScanConfig::new(object_store_url, schema, source)
         .with_limit(limit)
         .with_projection(projection.cloned())
-        .with_file_groups(vec![file_group]);
-    let reader_factory = ReaderFactory::new(object_store, partitions);
-    Ok(ParquetExecBuilder::new(file_scan_config)
-        .with_predicate(predicate.clone())
-        .with_parquet_file_reader_factory(Arc::new(reader_factory))
-        .build_arc())
+        .with_file_groups(vec![file_group])
+        .build())
 }
