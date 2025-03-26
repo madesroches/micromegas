@@ -34,6 +34,10 @@ pub async fn generate_jit_partitions(
     let relative_end_ticks = convert_ticks.time_to_delta_ticks(end_query);
     // we go though all the blocks before the end of the query to avoid
     // making a fragmented partition list over time
+
+    // perf problem: this list is too large for long running processes
+    // if we limit the time span of a partition (hourly or daily, for example)
+    // we could limit the list to the time spans overlapping the query time span
     let rows = sqlx::query(
             "SELECT block_id, stream_id, process_id, begin_time, end_time, begin_ticks, end_ticks, nb_objects, object_offset, payload_size, insert_time as block_insert_time
              FROM blocks
