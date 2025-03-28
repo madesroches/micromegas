@@ -7,13 +7,57 @@ use super::{
     write_partition::{write_partition_from_rows, PartitionRowSet},
 };
 use crate::{dfext::min_max_time_df::min_max_time_dataframe, response_writer::Logger};
-use anyhow::Result;
+use anyhow::{Context, Result};
+use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use datafusion::prelude::*;
+use datafusion::{arrow::datatypes::Schema, execution::SendableRecordBatchStream, prelude::*};
 use futures::stream::StreamExt;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
+use std::fmt::Debug;
 use std::sync::Arc;
 use xxhash_rust::xxh32::xxh32;
+
+#[async_trait]
+pub trait PartitionMerger: Send + Sync + Debug {
+    async fn execute_merge_query(
+        &self,
+        lake: Arc<DataLakeConnection>,
+        partitions: Vec<Partition>,
+    ) -> Result<SendableRecordBatchStream>;
+}
+
+#[derive(Debug)]
+pub struct QueryMerger {
+    file_schema: Arc<Schema>,
+    query: Arc<String>,
+}
+
+impl QueryMerger {
+    pub fn new(file_schema: Arc<Schema>, query: Arc<String>) -> Self {
+        Self { file_schema, query }
+    }
+}
+
+#[async_trait]
+impl PartitionMerger for QueryMerger {
+    async fn execute_merge_query(
+        &self,
+        lake: Arc<DataLakeConnection>,
+        partitions: Vec<Partition>,
+    ) -> Result<SendableRecordBatchStream> {
+        let merged_df = query_partitions(
+            lake.clone(),
+            self.file_schema.clone(),
+            partitions,
+            &self.query,
+        )
+        .await?;
+        merged_df
+            .execute_stream()
+            .await
+            .with_context(|| "merged_df.execute_stream")
+    }
+}
 
 fn partition_set_stats(
     view: Arc<dyn View>,
@@ -78,17 +122,10 @@ pub async fn create_merged_partition(
             filtered_partitions.len()
         ))
         .await?;
-    let merge_query = view
-        .get_merge_partitions_query()
-        .replace("{source}", "source");
     filtered_partitions.sort_by_key(|p| p.begin_insert_time);
-    let merged_df = query_partitions(
-        lake.clone(),
-        view.get_file_schema(),
-        filtered_partitions,
-        &merge_query,
-    )
-    .await?;
+    let mut merged_stream = view
+        .merge_partitions(lake.clone(), filtered_partitions)
+        .await?;
     let (tx, rx) = tokio::sync::mpsc::channel(1);
     let join_handle = tokio::spawn(write_partition_from_rows(
         lake.clone(),
@@ -100,9 +137,8 @@ pub async fn create_merged_partition(
         rx,
         logger.clone(),
     ));
-    let mut stream = merged_df.execute_stream().await?;
     let ctx = SessionContext::new();
-    while let Some(rb_res) = stream.next().await {
+    while let Some(rb_res) = merged_stream.next().await {
         let rb = rb_res?;
         let (mintime, maxtime) = min_max_time_dataframe(
             ctx.read_batch(rb.clone())?,
