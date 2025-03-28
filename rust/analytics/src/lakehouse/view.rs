@@ -1,12 +1,18 @@
 use super::{
-    batch_update::PartitionCreationStrategy, materialized_view::MaterializedView,
+    batch_update::PartitionCreationStrategy,
+    materialized_view::MaterializedView,
+    merge::{PartitionMerger, QueryMerger},
+    partition::Partition,
     partition_cache::PartitionCache,
 };
 use crate::{response_writer::Logger, time::TimeRange};
 use anyhow::Result;
 use async_trait::async_trait;
 use chrono::{DateTime, TimeDelta, Utc};
-use datafusion::{arrow::datatypes::Schema, logical_expr::Expr, prelude::*, sql::TableReference};
+use datafusion::{
+    arrow::datatypes::Schema, execution::SendableRecordBatchStream, logical_expr::Expr, prelude::*,
+    sql::TableReference,
+};
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use std::sync::Arc;
 
@@ -78,9 +84,14 @@ pub trait View: std::fmt::Debug + Send + Sync {
         Ok(())
     }
 
-    /// how to merge smaller partitions into a bigger one
-    fn get_merge_partitions_query(&self) -> Arc<String> {
-        Arc::new(String::from("SELECT * FROM {source};"))
+    async fn merge_partitions(
+        &self,
+        lake: Arc<DataLakeConnection>,
+        partitions: Vec<Partition>,
+    ) -> Result<SendableRecordBatchStream> {
+        let merge_query = Arc::new(String::from("SELECT * FROM source;"));
+        let merger = QueryMerger::new(self.get_file_schema(), merge_query);
+        merger.execute_merge_query(lake, partitions).await
     }
 
     /// tells the daemon which view should be materialized and in what order

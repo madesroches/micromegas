@@ -1,6 +1,8 @@
 use super::{
     batch_update::PartitionCreationStrategy,
     materialized_view::MaterializedView,
+    merge::{PartitionMerger, QueryMerger},
+    partition::Partition,
     partition_cache::{NullPartitionProvider, PartitionCache},
     query::make_session_context,
     sql_partition_spec::fetch_sql_partition_spec,
@@ -11,11 +13,16 @@ use crate::time::TimeRange;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, TimeDelta, Utc};
-use datafusion::{arrow::datatypes::Schema, prelude::*, scalar::ScalarValue, sql::TableReference};
+use datafusion::{
+    arrow::datatypes::Schema, execution::SendableRecordBatchStream, prelude::*,
+    scalar::ScalarValue, sql::TableReference,
+};
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use std::hash::Hash;
 use std::hash::Hasher;
 use std::{hash::DefaultHasher, sync::Arc};
+
+pub type MergerMaker = dyn Fn(Arc<Schema>) -> Arc<dyn PartitionMerger>;
 
 /// SQL-defined view updated in batch
 #[derive(Debug)]
@@ -28,6 +35,7 @@ pub struct SqlBatchView {
     transform_query: Arc<String>,
     merge_partitions_query: Arc<String>,
     schema: Arc<Schema>,
+    merger: Arc<dyn PartitionMerger>,
     view_factory: Arc<ViewFactory>,
     update_group: Option<i32>,
     max_partition_delta_from_source: TimeDelta,
@@ -59,6 +67,7 @@ impl SqlBatchView {
         update_group: Option<i32>,
         max_partition_delta_from_source: TimeDelta,
         max_partition_delta_from_merge: TimeDelta,
+        merger_maker: Option<&MergerMaker>,
     ) -> Result<Self> {
         let null_part_provider = Arc::new(NullPartitionProvider {});
         let ctx = make_session_context(lake, null_part_provider, None, view_factory.clone())
@@ -70,6 +79,10 @@ impl SqlBatchView {
             .replace("{end}", &now_str);
         let transformed_df = ctx.sql(&sql).await?;
         let schema = transformed_df.schema().inner().clone();
+        let merger = merger_maker.unwrap_or(&|schema| {
+            let merge_query = Arc::new(merge_partitions_query.replace("{source}", "source"));
+            Arc::new(QueryMerger::new(schema, merge_query))
+        })(schema.clone());
 
         Ok(Self {
             view_set_name,
@@ -80,6 +93,7 @@ impl SqlBatchView {
             transform_query,
             merge_partitions_query,
             schema,
+            merger,
             view_factory,
             update_group,
             max_partition_delta_from_source,
@@ -208,8 +222,12 @@ impl View for SqlBatchView {
         Ok(())
     }
 
-    fn get_merge_partitions_query(&self) -> Arc<String> {
-        self.merge_partitions_query.clone()
+    async fn merge_partitions(
+        &self,
+        lake: Arc<DataLakeConnection>,
+        partitions: Vec<Partition>,
+    ) -> Result<SendableRecordBatchStream> {
+        self.merger.execute_merge_query(lake, partitions).await
     }
 
     fn get_update_group(&self) -> Option<i32> {
