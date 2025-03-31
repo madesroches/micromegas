@@ -1,11 +1,19 @@
 use anyhow::{Context, Result};
+use async_trait::async_trait;
 use chrono::{DateTime, DurationRound};
 use chrono::{TimeDelta, Utc};
-use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+use datafusion::arrow::array::{DictionaryArray, StringArray};
+use datafusion::arrow::datatypes::{DataType, Field, Int16Type, Schema, TimeUnit};
+use datafusion::error::DataFusionError;
+use datafusion::execution::SendableRecordBatchStream;
+use datafusion::physical_plan::stream::RecordBatchReceiverStreamBuilder;
+use micromegas_analytics::dfext::typed_column::typed_column_by_name;
 use micromegas_analytics::lakehouse::batch_update::materialize_partition_range;
 use micromegas_analytics::lakehouse::blocks_view::BlocksView;
+use micromegas_analytics::lakehouse::merge::PartitionMerger;
+use micromegas_analytics::lakehouse::partition::Partition;
 use micromegas_analytics::lakehouse::partition_cache::{LivePartitionProvider, PartitionCache};
-use micromegas_analytics::lakehouse::query::query;
+use micromegas_analytics::lakehouse::query::{query, query_partitions};
 use micromegas_analytics::lakehouse::view::View;
 use micromegas_analytics::lakehouse::view_factory::default_view_factory;
 use micromegas_analytics::lakehouse::write_partition::retire_partitions;
@@ -18,6 +26,154 @@ use micromegas_tracing::prelude::*;
 use std::sync::Arc;
 
 async fn make_log_entries_levels_per_process_minute_view(
+    lake: Arc<DataLakeConnection>,
+    view_factory: Arc<ViewFactory>,
+) -> Result<SqlBatchView> {
+    let count_src_query = Arc::new(String::from(
+        "
+        SELECT count(*) as count
+        FROM log_entries
+        WHERE insert_time >= '{begin}'
+        AND   insert_time < '{end}'
+        ;",
+    ));
+    let transform_query = Arc::new(String::from(
+        "
+        SELECT date_bin('1 minute', time) as time_bin,
+               min(time) as min_time,
+               max(time) as max_time,
+               process_id,
+               sum(fatal) as nb_fatal,
+               sum(err)   as nb_err,
+               sum(warn)  as nb_warn,
+               sum(info)  as nb_info,
+               sum(debug) as nb_debug,
+               sum(trace) as nb_trace
+        FROM
+          (  SELECT process_id,
+                    time,
+                    CAST(level==1 as INT) as fatal,
+                    CAST(level==2 as INT) as err,
+                    CAST(level==3 as INT) as warn,
+                    CAST(level==4 as INT) as info,
+                    CAST(level==5 as INT) as debug,
+                    CAST(level==6 as INT) as trace
+             FROM log_entries
+             WHERE insert_time >= '{begin}'
+             AND insert_time < '{end}'
+          )
+        GROUP BY process_id, time_bin
+        ORDER BY time_bin, process_id;",
+    ));
+    let merge_partitions_query = Arc::new(String::from(
+        "SELECT time_bin,
+               min(min_time) as min_time,
+               max(max_time) as max_time,
+               process_id,
+               sum(nb_fatal) as nb_fatal,
+               sum(nb_err)   as nb_err,
+               sum(nb_warn)  as nb_warn,
+               sum(nb_info)  as nb_info,
+               sum(nb_debug) as nb_debug,
+               sum(nb_trace) as nb_trace
+        FROM   {source}
+        GROUP BY process_id, time_bin
+        ORDER BY time_bin, process_id;",
+    ));
+    let time_column = Arc::new(String::from("time_bin"));
+    SqlBatchView::new(
+        Arc::new("log_entries_per_process_per_minute".to_owned()),
+        time_column.clone(),
+        time_column,
+        count_src_query,
+        transform_query,
+        merge_partitions_query,
+        lake,
+        view_factory,
+        Some(4000),
+        TimeDelta::days(1),
+        TimeDelta::days(1),
+        None,
+    )
+    .await
+}
+
+#[derive(Debug)]
+pub struct LogSummaryMerger {
+    pub file_schema: Arc<Schema>,
+}
+
+#[async_trait]
+impl PartitionMerger for LogSummaryMerger {
+    async fn execute_merge_query(
+        &self,
+        lake: Arc<DataLakeConnection>,
+        partitions: Vec<Partition>,
+    ) -> Result<SendableRecordBatchStream> {
+        let processes_df = query_partitions(
+            lake.clone(),
+            self.file_schema.clone(),
+            partitions.clone(),
+            "SELECT DISTINCT process_id FROM source ORDER BY process_id;",
+        )
+        .await?;
+        let processses_rbs = processes_df.collect().await?;
+        let mut builder = RecordBatchReceiverStreamBuilder::new(self.file_schema.clone(), 10);
+        for b in processses_rbs {
+            let process_id_column: &DictionaryArray<Int16Type> =
+                typed_column_by_name(&b, "process_id")?;
+            let process_id_column: &StringArray = process_id_column
+                .values()
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .with_context(|| "casting process_id column values into string array")?;
+            for ir in 0..b.num_rows() {
+                let process_id: &str = process_id_column.value(ir);
+                let single_process_merge_query = format!(
+                    "
+                  SELECT time_bin,
+                         min(min_time) as min_time,
+                         max(max_time) as max_time,
+                         process_id,
+                         sum(nb_fatal) as nb_fatal,
+                         sum(nb_err)   as nb_err,
+                         sum(nb_warn)  as nb_warn,
+                         sum(nb_info)  as nb_info,
+                         sum(nb_debug) as nb_debug,
+                         sum(nb_trace) as nb_trace
+                  FROM   source
+                  WHERE process_id = '{process_id}'
+                  GROUP BY process_id, time_bin
+                  ORDER BY time_bin;"
+                );
+                let df = query_partitions(
+                    lake.clone(),
+                    self.file_schema.clone(),
+                    partitions.clone(),
+                    &single_process_merge_query,
+                )
+                .await?;
+                let sender = builder.tx();
+                builder.spawn(async move {
+                    let rbs = df.collect().await?;
+                    for rb in rbs {
+                        sender.send(Ok(rb)).await.map_err(|e| {
+                            DataFusionError::Execution(format!("sending record batch: {e:?}"))
+                        })?;
+                    }
+                    Ok(())
+                });
+            }
+        }
+        Ok(builder.build())
+    }
+}
+
+fn make_merger(file_schema: Arc<Schema>) -> Arc<dyn PartitionMerger> {
+    Arc::new(LogSummaryMerger { file_schema })
+}
+
+async fn make_log_entries_levels_per_process_minute_view_with_custom_merge(
     lake: Arc<DataLakeConnection>,
     view_factory: Arc<ViewFactory>,
 ) -> Result<SqlBatchView> {
@@ -86,6 +242,7 @@ async fn make_log_entries_levels_per_process_minute_view(
         Some(4000),
         TimeDelta::days(1),
         TimeDelta::days(1),
+        Some(&make_merger),
     )
     .await
 }
@@ -173,26 +330,11 @@ async fn retire_existing_partitions(
     Ok(())
 }
 
-#[ignore]
-#[tokio::test]
-async fn sql_view_test() -> Result<()> {
-    let _telemetry_guard = TelemetryGuardBuilder::default()
-        .with_ctrlc_handling()
-        .with_local_sink_max_level(LevelFilter::Info)
-        .build();
-    let connection_string = std::env::var("MICROMEGAS_SQL_CONNECTION_STRING")
-        .with_context(|| "reading MICROMEGAS_SQL_CONNECTION_STRING")?;
-    let object_store_uri = std::env::var("MICROMEGAS_OBJECT_STORE_URI")
-        .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
-    let lake = Arc::new(connect_to_data_lake(&connection_string, &object_store_uri).await?);
+async fn test_log_summary_view(
+    lake: Arc<DataLakeConnection>,
+    log_summary_view: Arc<SqlBatchView>,
+) -> Result<()> {
     let mut view_factory = default_view_factory()?;
-    let log_summary_view = Arc::new(
-        make_log_entries_levels_per_process_minute_view(
-            lake.clone(),
-            Arc::new(view_factory.clone()),
-        )
-        .await?,
-    );
     view_factory.add_global_view(log_summary_view.clone());
     let view_factory = Arc::new(view_factory);
     let null_response_writer = Arc::new(ResponseWriter::new(None));
@@ -314,5 +456,38 @@ async fn sql_view_test() -> Result<()> {
         datafusion::arrow::util::pretty::pretty_format_batches(&answer.record_batches)?.to_string();
     eprintln!("{pretty_results_ref}");
     assert_eq!(pretty_results_view, pretty_results_ref);
+    Ok(())
+}
+
+#[ignore]
+#[tokio::test]
+async fn sql_view_test() -> Result<()> {
+    let _telemetry_guard = TelemetryGuardBuilder::default()
+        .with_ctrlc_handling()
+        .with_local_sink_max_level(LevelFilter::Info)
+        .build();
+    let connection_string = std::env::var("MICROMEGAS_SQL_CONNECTION_STRING")
+        .with_context(|| "reading MICROMEGAS_SQL_CONNECTION_STRING")?;
+    let object_store_uri = std::env::var("MICROMEGAS_OBJECT_STORE_URI")
+        .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
+    let lake = Arc::new(connect_to_data_lake(&connection_string, &object_store_uri).await?);
+    let log_summary_view_merge = Arc::new(
+        make_log_entries_levels_per_process_minute_view_with_custom_merge(
+            lake.clone(),
+            Arc::new(default_view_factory()?),
+        )
+        .await?,
+    );
+    test_log_summary_view(lake.clone(), log_summary_view_merge).await?;
+
+    let log_summary_view = Arc::new(
+        make_log_entries_levels_per_process_minute_view(
+            lake.clone(),
+            Arc::new(default_view_factory()?),
+        )
+        .await?,
+    );
+    test_log_summary_view(lake.clone(), log_summary_view).await?;
+
     Ok(())
 }
