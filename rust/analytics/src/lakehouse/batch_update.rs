@@ -133,7 +133,8 @@ async fn materialize_partition(
         &partition_spec.get_source_data_hash(),
         logger.clone(),
     )
-    .await?;
+    .await
+    .with_context(|| "verify_overlapping_partitions")?;
     if let PartitionCreationStrategy::Abort = &strategy {
         return Ok(());
     }
@@ -167,7 +168,8 @@ async fn materialize_partition(
             new_delta,
             logger,
         ))
-        .await;
+        .await
+        .with_context(|| "materialize_partition_range");
     }
 
     match strategy {
@@ -179,7 +181,8 @@ async fn materialize_partition(
         }
         PartitionCreationStrategy::MergeExisting(partitions) => {
             create_merged_partition(partitions, lake, view, begin_insert, end_insert, logger)
-                .await?;
+                .await
+                .with_context(|| "create_merged_partition")?;
         }
         PartitionCreationStrategy::Abort => {}
     }

@@ -226,7 +226,8 @@ pub async fn write_partition_from_rows(
         .set_compression(Compression::LZ4_RAW)
         .build();
     let mut arrow_writer =
-        AsyncArrowWriter::try_new(object_store_writer, file_schema.clone(), Some(props))?;
+        AsyncArrowWriter::try_new(object_store_writer, file_schema.clone(), Some(props))
+            .with_context(|| "allocating async arrow writer")?;
 
     let desc = format!(
         "[{}, {}] {} {}",
@@ -269,7 +270,8 @@ pub async fn write_partition_from_rows(
             let written = arrow_writer.bytes_written();
             logger
                 .write_log_entry(format!("{desc}: written {written} bytes"))
-                .await?;
+                .await
+                .with_context(|| "writing log entry")?;
         }
     }
 
@@ -278,7 +280,8 @@ pub async fn write_partition_from_rows(
             .write_log_entry(format!(
                 "no data for {desc} partition, not writing the object"
             ))
-            .await?;
+            .await
+            .with_context(|| "writing log entry")?;
         // should we check that there is no stale partition left behind?
         return Ok(());
     }
@@ -310,8 +313,8 @@ pub async fn write_partition_from_rows(
         },
         logger,
     )
-    .await?;
-
+    .await
+    .with_context(|| "write_partition_metadata")?;
     Ok(())
 }
 // from parquet/src/file/footer.rs

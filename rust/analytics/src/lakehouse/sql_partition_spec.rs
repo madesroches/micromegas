@@ -16,7 +16,7 @@ use datafusion::{
 };
 use futures::StreamExt;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
-use micromegas_tracing::debug;
+use micromegas_tracing::trace;
 use std::sync::Arc;
 
 pub struct SqlPartitionSpec {
@@ -137,7 +137,7 @@ pub async fn fetch_sql_partition_spec(
     }
     let count = count_column.value(0);
     if count > 0 {
-        debug!(
+        trace!(
             "fetch_sql_partition_spec for view {}, count={count}",
             &*view_metadata.view_set_name
         );

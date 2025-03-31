@@ -18,6 +18,7 @@ use datafusion::{
     scalar::ScalarValue, sql::TableReference,
 };
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
+use micromegas_tracing::error;
 use std::hash::Hash;
 use std::hash::Hasher;
 use std::{hash::DefaultHasher, sync::Arc};
@@ -227,7 +228,11 @@ impl View for SqlBatchView {
         lake: Arc<DataLakeConnection>,
         partitions: Vec<Partition>,
     ) -> Result<SendableRecordBatchStream> {
-        self.merger.execute_merge_query(lake, partitions).await
+        let res = self.merger.execute_merge_query(lake, partitions).await;
+        if let Err(e) = &res {
+            error!("{e:?}");
+        }
+        res
     }
 
     fn get_update_group(&self) -> Option<i32> {

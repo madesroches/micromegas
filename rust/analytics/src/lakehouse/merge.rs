@@ -13,6 +13,7 @@ use chrono::{DateTime, Utc};
 use datafusion::{arrow::datatypes::Schema, execution::SendableRecordBatchStream, prelude::*};
 use futures::stream::StreamExt;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
+use micromegas_tracing::error;
 use std::fmt::Debug;
 use std::sync::Arc;
 use xxhash_rust::xxh32::xxh32;
@@ -112,46 +113,60 @@ pub async fn create_merged_partition(
     if filtered_partitions.len() < 2 {
         logger
             .write_log_entry(format!("{desc}: not enough partitions to merge"))
-            .await?;
+            .await
+            .with_context(|| "writing log")?;
         return Ok(());
     }
-    let (sum_size, source_hash) = partition_set_stats(view.clone(), &filtered_partitions)?;
+    let (sum_size, source_hash) = partition_set_stats(view.clone(), &filtered_partitions)
+        .with_context(|| "partition_set_stats")?;
     logger
         .write_log_entry(format!(
             "{desc}: merging {} partitions sum_size={sum_size}",
             filtered_partitions.len()
         ))
-        .await?;
+        .await
+        .with_context(|| "write_log_entry")?;
     filtered_partitions.sort_by_key(|p| p.begin_insert_time);
     let mut merged_stream = view
         .merge_partitions(lake.clone(), filtered_partitions)
-        .await?;
+        .await
+        .with_context(|| "view.merge_partitions")?;
     let (tx, rx) = tokio::sync::mpsc::channel(1);
-    let join_handle = tokio::spawn(write_partition_from_rows(
-        lake.clone(),
-        view.get_meta(),
-        view.get_file_schema(),
-        begin_insert,
-        end_insert,
-        source_hash.to_le_bytes().to_vec(),
-        rx,
-        logger.clone(),
-    ));
+    let view_copy = view.clone();
+    let join_handle = tokio::spawn(async move {
+        let res = write_partition_from_rows(
+            lake.clone(),
+            view_copy.get_meta(),
+            view_copy.get_file_schema(),
+            begin_insert,
+            end_insert,
+            source_hash.to_le_bytes().to_vec(),
+            rx,
+            logger.clone(),
+        )
+        .await;
+        if let Err(e) = &res {
+            error!("{e:?}");
+        }
+        res
+    });
     let ctx = SessionContext::new();
     while let Some(rb_res) = merged_stream.next().await {
-        let rb = rb_res?;
+        let rb = rb_res.with_context(|| "receiving record_batch from stream")?;
         let (mintime, maxtime) = min_max_time_dataframe(
-            ctx.read_batch(rb.clone())?,
+            ctx.read_batch(rb.clone()).with_context(|| "read_batch")?,
             &view.get_min_event_time_column_name(),
             &view.get_max_event_time_column_name(),
         )
-        .await?;
+        .await
+        .with_context(|| "min_max_time_dataframe")?;
         tx.send(PartitionRowSet {
             min_time_row: mintime,
             max_time_row: maxtime,
             rows: rb,
         })
-        .await?;
+        .await
+        .with_context(|| "sending partition row set")?;
     }
     drop(tx);
     join_handle.await??;
