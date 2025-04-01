@@ -226,7 +226,7 @@ impl View for SqlBatchView {
     async fn merge_partitions(
         &self,
         lake: Arc<DataLakeConnection>,
-        partitions: Vec<Partition>,
+        partitions: Arc<Vec<Partition>>,
     ) -> Result<SendableRecordBatchStream> {
         let res = self.merger.execute_merge_query(lake, partitions).await;
         if let Err(e) = &res {

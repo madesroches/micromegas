@@ -87,7 +87,7 @@ pub trait View: std::fmt::Debug + Send + Sync {
     async fn merge_partitions(
         &self,
         lake: Arc<DataLakeConnection>,
-        partitions: Vec<Partition>,
+        partitions: Arc<Vec<Partition>>,
     ) -> Result<SendableRecordBatchStream> {
         let merge_query = Arc::new(String::from("SELECT * FROM source;"));
         let merger = QueryMerger::new(self.get_file_schema(), merge_query);

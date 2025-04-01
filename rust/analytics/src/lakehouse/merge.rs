@@ -23,7 +23,7 @@ pub trait PartitionMerger: Send + Sync + Debug {
     async fn execute_merge_query(
         &self,
         lake: Arc<DataLakeConnection>,
-        partitions: Vec<Partition>,
+        partitions: Arc<Vec<Partition>>,
     ) -> Result<SendableRecordBatchStream>;
 }
 
@@ -44,7 +44,7 @@ impl PartitionMerger for QueryMerger {
     async fn execute_merge_query(
         &self,
         lake: Arc<DataLakeConnection>,
-        partitions: Vec<Partition>,
+        partitions: Arc<Vec<Partition>>,
     ) -> Result<SendableRecordBatchStream> {
         let merged_df = query_partitions(
             lake.clone(),
@@ -128,7 +128,7 @@ pub async fn create_merged_partition(
         .with_context(|| "write_log_entry")?;
     filtered_partitions.sort_by_key(|p| p.begin_insert_time);
     let mut merged_stream = view
-        .merge_partitions(lake.clone(), filtered_partitions)
+        .merge_partitions(lake.clone(), Arc::new(filtered_partitions))
         .await
         .with_context(|| "view.merge_partitions")?;
     let (tx, rx) = tokio::sync::mpsc::channel(1);

@@ -48,11 +48,11 @@ async fn register_table(
 pub async fn query_partitions(
     lake: Arc<DataLakeConnection>,
     schema: SchemaRef,
-    partitions: Vec<Partition>,
+    partitions: Arc<Vec<Partition>>,
     sql: &str,
 ) -> Result<DataFrame> {
     let object_store = lake.blob_storage.inner();
-    let table = PartitionedTableProvider::new(schema, object_store.clone(), Arc::new(partitions));
+    let table = PartitionedTableProvider::new(schema, object_store.clone(), partitions);
     let object_store_url = ObjectStoreUrl::parse("obj://lakehouse/").unwrap();
     let ctx = SessionContext::new();
     ctx.register_object_store(object_store_url.as_ref(), object_store.clone());

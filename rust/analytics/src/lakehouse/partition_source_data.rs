@@ -85,7 +85,7 @@ pub async fn fetch_partition_source_data(
     let df = query_partitions(
         lake.clone(),
         Arc::new(blocks_view_schema()),
-        block_partitions,
+        Arc::new(block_partitions),
         &sql,
     )
     .await
