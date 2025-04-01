@@ -108,7 +108,7 @@ impl PartitionMerger for LogSummaryMerger {
     async fn execute_merge_query(
         &self,
         lake: Arc<DataLakeConnection>,
-        partitions: Vec<Partition>,
+        partitions: Arc<Vec<Partition>>,
     ) -> Result<SendableRecordBatchStream> {
         let processes_df = query_partitions(
             lake.clone(),
