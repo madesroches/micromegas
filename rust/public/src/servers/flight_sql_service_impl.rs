@@ -32,7 +32,6 @@ use futures::StreamExt;
 use futures::{Stream, TryStreamExt};
 use micromegas_analytics::lakehouse::partition_cache::QueryPartitionProvider;
 use micromegas_analytics::lakehouse::query::make_session_context;
-use micromegas_analytics::lakehouse::runtime::make_runtime_env;
 use micromegas_analytics::lakehouse::view_factory::ViewFactory;
 use micromegas_analytics::time::TimeRange;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
@@ -87,11 +86,11 @@ pub struct FlightSqlServiceImpl {
 
 impl FlightSqlServiceImpl {
     pub fn new(
+        runtime: Arc<RuntimeEnv>,
         lake: Arc<DataLakeConnection>,
         part_provider: Arc<dyn QueryPartitionProvider>,
         view_factory: Arc<ViewFactory>,
     ) -> Result<Self> {
-        let runtime = Arc::new(make_runtime_env()?);
         Ok(Self {
             runtime,
             lake,

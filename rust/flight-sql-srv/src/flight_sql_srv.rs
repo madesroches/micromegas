@@ -2,6 +2,7 @@ use anyhow::Context;
 use clap::Parser;
 use micromegas::analytics::lakehouse::migration::migrate_lakehouse;
 use micromegas::analytics::lakehouse::partition_cache::LivePartitionProvider;
+use micromegas::analytics::lakehouse::runtime::make_runtime_env;
 use micromegas::analytics::lakehouse::view_factory::default_view_factory;
 use micromegas::arrow_flight::flight_service_server::FlightServiceServer;
 use micromegas::ingestion::data_lake_connection::connect_to_data_lake;
@@ -42,7 +43,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_context(|| "migrate_lakehouse")?;
     let view_factory = Arc::new(default_view_factory()?);
     let partition_provider = Arc::new(LivePartitionProvider::new(data_lake.db_pool.clone()));
+    let runtime = Arc::new(make_runtime_env()?);
     let svc = FlightServiceServer::new(FlightSqlServiceImpl::new(
+        runtime,
         Arc::new(data_lake),
         partition_provider,
         view_factory,
