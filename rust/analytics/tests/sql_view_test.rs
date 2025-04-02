@@ -5,6 +5,7 @@ use chrono::{TimeDelta, Utc};
 use datafusion::arrow::array::{DictionaryArray, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Int16Type, Schema, TimeUnit};
 use datafusion::error::DataFusionError;
+use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::stream::RecordBatchReceiverStreamBuilder;
 use micromegas_analytics::dfext::typed_column::typed_column_by_name;
@@ -14,6 +15,7 @@ use micromegas_analytics::lakehouse::merge::PartitionMerger;
 use micromegas_analytics::lakehouse::partition::Partition;
 use micromegas_analytics::lakehouse::partition_cache::{LivePartitionProvider, PartitionCache};
 use micromegas_analytics::lakehouse::query::{query, query_partitions};
+use micromegas_analytics::lakehouse::runtime::make_runtime_env;
 use micromegas_analytics::lakehouse::view::View;
 use micromegas_analytics::lakehouse::view_factory::default_view_factory;
 use micromegas_analytics::lakehouse::write_partition::retire_partitions;
@@ -26,6 +28,7 @@ use micromegas_tracing::prelude::*;
 use std::sync::Arc;
 
 async fn make_log_entries_levels_per_process_minute_view(
+    runtime: Arc<RuntimeEnv>,
     lake: Arc<DataLakeConnection>,
     view_factory: Arc<ViewFactory>,
 ) -> Result<SqlBatchView> {
@@ -82,6 +85,7 @@ async fn make_log_entries_levels_per_process_minute_view(
     ));
     let time_column = Arc::new(String::from("time_bin"));
     SqlBatchView::new(
+        runtime,
         Arc::new("log_entries_per_process_per_minute".to_owned()),
         time_column.clone(),
         time_column,
@@ -100,6 +104,7 @@ async fn make_log_entries_levels_per_process_minute_view(
 
 #[derive(Debug)]
 pub struct LogSummaryMerger {
+    pub runtime: Arc<RuntimeEnv>,
     pub file_schema: Arc<Schema>,
 }
 
@@ -111,6 +116,7 @@ impl PartitionMerger for LogSummaryMerger {
         partitions: Arc<Vec<Partition>>,
     ) -> Result<SendableRecordBatchStream> {
         let processes_df = query_partitions(
+            self.runtime.clone(),
             lake.clone(),
             self.file_schema.clone(),
             partitions.clone(),
@@ -147,6 +153,7 @@ impl PartitionMerger for LogSummaryMerger {
                   ORDER BY time_bin;"
                 );
                 let df = query_partitions(
+                    self.runtime.clone(),
                     lake.clone(),
                     self.file_schema.clone(),
                     partitions.clone(),
@@ -169,11 +176,15 @@ impl PartitionMerger for LogSummaryMerger {
     }
 }
 
-fn make_merger(file_schema: Arc<Schema>) -> Arc<dyn PartitionMerger> {
-    Arc::new(LogSummaryMerger { file_schema })
+fn make_merger(runtime: Arc<RuntimeEnv>, file_schema: Arc<Schema>) -> Arc<dyn PartitionMerger> {
+    Arc::new(LogSummaryMerger {
+        runtime,
+        file_schema,
+    })
 }
 
 async fn make_log_entries_levels_per_process_minute_view_with_custom_merge(
+    runtime: Arc<RuntimeEnv>,
     lake: Arc<DataLakeConnection>,
     view_factory: Arc<ViewFactory>,
 ) -> Result<SqlBatchView> {
@@ -231,6 +242,7 @@ async fn make_log_entries_levels_per_process_minute_view_with_custom_merge(
     ));
     let time_column = Arc::new(String::from("time_bin"));
     SqlBatchView::new(
+        runtime,
         Arc::new("log_entries_per_process_per_minute".to_owned()),
         time_column.clone(),
         time_column,
@@ -248,6 +260,7 @@ async fn make_log_entries_levels_per_process_minute_view_with_custom_merge(
 }
 
 pub async fn materialize_range(
+    runtime: Arc<RuntimeEnv>,
     lake: Arc<DataLakeConnection>,
     view_factory: Arc<ViewFactory>,
     log_summary_view: Arc<dyn View>,
@@ -269,6 +282,7 @@ pub async fn materialize_range(
     );
     materialize_partition_range(
         partitions.clone(),
+        runtime.clone(),
         lake.clone(),
         blocks_view,
         begin_range,
@@ -284,6 +298,7 @@ pub async fn materialize_range(
     let log_entries_view = view_factory.make_view("log_entries", "global")?;
     materialize_partition_range(
         partitions.clone(),
+        runtime.clone(),
         lake.clone(),
         log_entries_view,
         begin_range,
@@ -298,6 +313,7 @@ pub async fn materialize_range(
     );
     materialize_partition_range(
         partitions.clone(),
+        runtime.clone(),
         lake.clone(),
         log_summary_view.clone(),
         begin_range,
@@ -331,6 +347,7 @@ async fn retire_existing_partitions(
 }
 
 async fn test_log_summary_view(
+    runtime: Arc<RuntimeEnv>,
     lake: Arc<DataLakeConnection>,
     log_summary_view: Arc<SqlBatchView>,
 ) -> Result<()> {
@@ -378,6 +395,7 @@ async fn test_log_summary_view(
     let end_range = Utc::now().duration_trunc(TimeDelta::minutes(1))?;
     let begin_range = end_range - (TimeDelta::minutes(3));
     materialize_range(
+        runtime.clone(),
         lake.clone(),
         view_factory.clone(),
         log_summary_view.clone(),
@@ -388,6 +406,7 @@ async fn test_log_summary_view(
     )
     .await?;
     materialize_range(
+        runtime.clone(),
         lake.clone(),
         view_factory.clone(),
         log_summary_view.clone(),
@@ -398,6 +417,7 @@ async fn test_log_summary_view(
     )
     .await?;
     let answer = query(
+        runtime.clone(),
         lake.clone(),
         Arc::new(LivePartitionProvider::new(lake.db_pool.clone())),
         Some(TimeRange::new(begin_range, end_range)),
@@ -422,6 +442,7 @@ async fn test_log_summary_view(
     eprintln!("{pretty_results_view}");
 
     let answer = query(
+        runtime.clone(),
         lake.clone(),
         Arc::new(LivePartitionProvider::new(lake.db_pool.clone())),
         Some(TimeRange::new(begin_range, end_range)),
@@ -470,24 +491,27 @@ async fn sql_view_test() -> Result<()> {
         .with_context(|| "reading MICROMEGAS_SQL_CONNECTION_STRING")?;
     let object_store_uri = std::env::var("MICROMEGAS_OBJECT_STORE_URI")
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
+    let runtime = Arc::new(make_runtime_env()?);
     let lake = Arc::new(connect_to_data_lake(&connection_string, &object_store_uri).await?);
     let log_summary_view_merge = Arc::new(
         make_log_entries_levels_per_process_minute_view_with_custom_merge(
+            runtime.clone(),
             lake.clone(),
             Arc::new(default_view_factory()?),
         )
         .await?,
     );
-    test_log_summary_view(lake.clone(), log_summary_view_merge).await?;
+    test_log_summary_view(runtime.clone(), lake.clone(), log_summary_view_merge).await?;
 
     let log_summary_view = Arc::new(
         make_log_entries_levels_per_process_minute_view(
+            runtime.clone(),
             lake.clone(),
             Arc::new(default_view_factory()?),
         )
         .await?,
     );
-    test_log_summary_view(lake.clone(), log_summary_view).await?;
+    test_log_summary_view(runtime, lake.clone(), log_summary_view).await?;
 
     Ok(())
 }

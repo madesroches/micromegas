@@ -22,6 +22,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, TimeDelta, Utc};
 use datafusion::{
     arrow::datatypes::Schema,
+    execution::runtime_env::RuntimeEnv,
     logical_expr::{col, Between, Expr},
     scalar::ScalarValue,
 };
@@ -77,6 +78,7 @@ impl View for MetricsView {
 
     async fn make_batch_partition_spec(
         &self,
+        runtime: Arc<RuntimeEnv>,
         lake: Arc<DataLakeConnection>,
         existing_partitions: Arc<PartitionCache>,
         begin_insert: DateTime<Utc>,
@@ -86,6 +88,7 @@ impl View for MetricsView {
             anyhow::bail!("not supported for jit queries... should it?");
         }
         let source_data = fetch_partition_source_data(
+            runtime,
             lake,
             existing_partitions,
             begin_insert,

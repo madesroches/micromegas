@@ -16,7 +16,9 @@ use crate::{
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use datafusion::{arrow::datatypes::Schema, logical_expr::expr_fn::col};
+use datafusion::{
+    arrow::datatypes::Schema, execution::runtime_env::RuntimeEnv, logical_expr::expr_fn::col,
+};
 use datafusion::{
     logical_expr::{BinaryExpr, Expr, Operator},
     scalar::ScalarValue,
@@ -194,6 +196,7 @@ impl View for ThreadSpansView {
 
     async fn make_batch_partition_spec(
         &self,
+        _runtime: Arc<RuntimeEnv>,
         _lake: Arc<DataLakeConnection>,
         _existing_partitions: Arc<PartitionCache>,
         _begin_insert: DateTime<Utc>,

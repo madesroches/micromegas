@@ -10,6 +10,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use datafusion::{
     arrow::datatypes::{DataType, Field, Fields, Schema, TimeUnit},
+    execution::runtime_env::RuntimeEnv,
     logical_expr::{col, Between, Expr},
     scalar::ScalarValue,
 };
@@ -68,6 +69,7 @@ impl View for StreamsView {
 
     async fn make_batch_partition_spec(
         &self,
+        _runtime: Arc<RuntimeEnv>,
         lake: Arc<DataLakeConnection>,
         _existing_partitions: Arc<PartitionCache>,
         begin_insert: DateTime<Utc>,

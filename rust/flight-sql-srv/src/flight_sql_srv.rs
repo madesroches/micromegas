@@ -46,7 +46,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Arc::new(data_lake),
         partition_provider,
         view_factory,
-    ));
+    )?);
     let auth_required = !args.disable_auth;
     let keyring = if auth_required {
         Arc::new(parse_key_ring(

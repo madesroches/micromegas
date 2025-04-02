@@ -7,6 +7,7 @@ use micromegas::analytics::delete::delete_old_data;
 use micromegas::analytics::lakehouse::batch_update::materialize_partition_range;
 use micromegas::analytics::lakehouse::migration::migrate_lakehouse;
 use micromegas::analytics::lakehouse::partition_cache::PartitionCache;
+use micromegas::analytics::lakehouse::runtime::make_runtime_env;
 use micromegas::analytics::lakehouse::temp::delete_expired_temporary_files;
 use micromegas::analytics::lakehouse::view_factory::default_view_factory;
 use micromegas::analytics::lakehouse::write_partition::retire_partitions;
@@ -77,6 +78,7 @@ async fn main() -> Result<()> {
         .await
         .with_context(|| "migrate_lakehouse")?;
     let view_factory = default_view_factory()?;
+    let runtime = Arc::new(make_runtime_env()?);
     let null_response_writer = Arc::new(ResponseWriter::new(None));
     match args.command {
         Commands::DeleteOldData { min_days_old } => {
@@ -100,6 +102,7 @@ async fn main() -> Result<()> {
             );
             materialize_partition_range(
                 existing_partitions,
+                runtime.clone(),
                 data_lake,
                 view_factory.make_view(&view_set_name, &view_instance_id)?,
                 begin,
@@ -129,7 +132,8 @@ async fn main() -> Result<()> {
         }
 
         Commands::CronDaemon => {
-            micromegas::servers::maintenance::daemon(data_lake, Arc::new(view_factory)).await?
+            micromegas::servers::maintenance::daemon(runtime, data_lake, Arc::new(view_factory))
+                .await?
         }
     }
     Ok(())
