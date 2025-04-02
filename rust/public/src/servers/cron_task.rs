@@ -18,17 +18,13 @@ pub struct CronTask {
 }
 
 impl CronTask {
-    pub async fn start(
+    pub fn new(
         name: String,
         period: TimeDelta,
         offset: TimeDelta,
         callback: Arc<dyn TaskCallback>,
     ) -> Result<Self> {
         let now = Utc::now();
-        info!("running scheduled task name={name}");
-        if let Err(e) = callback.run(now).await {
-            error!("{e:?}");
-        }
         let next_run = now.duration_trunc(period)? + period + offset;
         Ok(Self {
             name,
