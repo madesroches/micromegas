@@ -182,58 +182,52 @@ pub async fn daemon(
     views_to_update.sort_by_key(|v| v.get_update_group().unwrap_or(i32::MAX));
     let views = Arc::new(views_to_update);
 
-    let lf_tasks = vec![
-        CronTask::start(
-            String::from("every_day"),
-            TimeDelta::days(1),
-            TimeDelta::hours(4),
-            Arc::new(EveryDayTask {
-                runtime: runtime.clone(),
-                lake: lake.clone(),
-                views: views.clone(),
-            }),
-        )
-        .await?,
-        CronTask::start(
-            String::from("every_hour"),
-            TimeDelta::hours(1),
-            TimeDelta::minutes(10),
-            Arc::new(EveryHourTask {
-                runtime: runtime.clone(),
-                lake: lake.clone(),
-                views: views.clone(),
-            }),
-        )
-        .await?,
-    ];
-    let hf_tasks = vec![
-        CronTask::start(
-            String::from("every minute"),
-            TimeDelta::minutes(1),
-            TimeDelta::seconds(10),
-            Arc::new(EveryMinuteTask {
-                runtime: runtime.clone(),
-                lake: lake.clone(),
-                views: views.clone(),
-            }),
-        )
-        .await?,
-        CronTask::start(
-            String::from("every second"),
-            TimeDelta::seconds(1),
-            TimeDelta::milliseconds(500),
-            Arc::new(EverySecondTask {
-                runtime,
-                lake,
-                views,
-            }),
-        )
-        .await?,
-    ];
+    let every_day = CronTask::new(
+        String::from("every_day"),
+        TimeDelta::days(1),
+        TimeDelta::hours(4),
+        Arc::new(EveryDayTask {
+            runtime: runtime.clone(),
+            lake: lake.clone(),
+            views: views.clone(),
+        }),
+    )?;
+    let every_hour = CronTask::new(
+        String::from("every_hour"),
+        TimeDelta::hours(1),
+        TimeDelta::minutes(10),
+        Arc::new(EveryHourTask {
+            runtime: runtime.clone(),
+            lake: lake.clone(),
+            views: views.clone(),
+        }),
+    )?;
+    let every_minute = CronTask::new(
+        String::from("every minute"),
+        TimeDelta::minutes(1),
+        TimeDelta::seconds(10),
+        Arc::new(EveryMinuteTask {
+            runtime: runtime.clone(),
+            lake: lake.clone(),
+            views: views.clone(),
+        }),
+    )?;
+    let every_second = CronTask::new(
+        String::from("every second"),
+        TimeDelta::seconds(1),
+        TimeDelta::milliseconds(500),
+        Arc::new(EverySecondTask {
+            runtime,
+            lake,
+            views,
+        }),
+    )?;
 
     let mut runners = tokio::task::JoinSet::new();
-    runners.spawn(async move { run_tasks_forever(lf_tasks).await });
-    runners.spawn(async move { run_tasks_forever(hf_tasks).await });
+    runners.spawn(async move { run_tasks_forever(vec![every_day]).await });
+    runners.spawn(async move { run_tasks_forever(vec![every_hour]).await });
+    runners.spawn(async move { run_tasks_forever(vec![every_minute]).await });
+    runners.spawn(async move { run_tasks_forever(vec![every_second]).await });
     runners.join_all().await;
     Ok(())
 }
