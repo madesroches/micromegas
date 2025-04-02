@@ -5,9 +5,12 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use datafusion::arrow::array::{
-    Array, ArrayRef, AsArray, BinaryArray, GenericListArray, Int32Array, Int64Array, StringArray,
-    StructArray, TimestampNanosecondArray,
+use datafusion::{
+    arrow::array::{
+        Array, ArrayRef, AsArray, BinaryArray, GenericListArray, Int32Array, Int64Array,
+        StringArray, StructArray, TimestampNanosecondArray,
+    },
+    execution::runtime_env::RuntimeEnv,
 };
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_telemetry::property::Property;
@@ -54,6 +57,7 @@ fn read_property_list(value: ArrayRef) -> Result<Vec<Property>> {
 }
 
 pub async fn fetch_partition_source_data(
+    runtime: Arc<RuntimeEnv>,
     lake: Arc<DataLakeConnection>,
     existing_partitions: Arc<PartitionCache>,
     begin_insert: DateTime<Utc>,
@@ -83,6 +87,7 @@ pub async fn fetch_partition_source_data(
         .filter("blocks", "global", begin_insert, end_insert)
         .partitions;
     let df = query_partitions(
+        runtime,
         lake.clone(),
         Arc::new(blocks_view_schema()),
         Arc::new(block_partitions),

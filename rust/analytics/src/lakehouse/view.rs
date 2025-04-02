@@ -10,7 +10,10 @@ use anyhow::Result;
 use async_trait::async_trait;
 use chrono::{DateTime, TimeDelta, Utc};
 use datafusion::{
-    arrow::datatypes::Schema, execution::SendableRecordBatchStream, logical_expr::Expr, prelude::*,
+    arrow::datatypes::Schema,
+    execution::{runtime_env::RuntimeEnv, SendableRecordBatchStream},
+    logical_expr::Expr,
+    prelude::*,
     sql::TableReference,
 };
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
@@ -42,6 +45,7 @@ pub trait View: std::fmt::Debug + Send + Sync {
     /// The resulting PartitionSpec can be used to validate existing partitions are create a new one.
     async fn make_batch_partition_spec(
         &self,
+        runtime: Arc<RuntimeEnv>,
         lake: Arc<DataLakeConnection>,
         existing_partitions: Arc<PartitionCache>,
         begin_insert: DateTime<Utc>,
@@ -86,11 +90,12 @@ pub trait View: std::fmt::Debug + Send + Sync {
 
     async fn merge_partitions(
         &self,
+        runtime: Arc<RuntimeEnv>,
         lake: Arc<DataLakeConnection>,
         partitions: Arc<Vec<Partition>>,
     ) -> Result<SendableRecordBatchStream> {
         let merge_query = Arc::new(String::from("SELECT * FROM source;"));
-        let merger = QueryMerger::new(self.get_file_schema(), merge_query);
+        let merger = QueryMerger::new(runtime, self.get_file_schema(), merge_query);
         merger.execute_merge_query(lake, partitions).await
     }
 

@@ -16,7 +16,7 @@ use crate::{
 use anyhow::{Context, Result};
 use datafusion::{
     arrow::{array::RecordBatch, datatypes::SchemaRef},
-    execution::{context::SessionContext, object_store::ObjectStoreUrl},
+    execution::{context::SessionContext, object_store::ObjectStoreUrl, runtime_env::RuntimeEnv},
     logical_expr::ScalarUDF,
     prelude::*,
     sql::TableReference,
@@ -46,6 +46,7 @@ async fn register_table(
 
 /// query_partitions returns a dataframe, leaving the option of streaming the results
 pub async fn query_partitions(
+    runtime: Arc<RuntimeEnv>,
     lake: Arc<DataLakeConnection>,
     schema: SchemaRef,
     partitions: Arc<Vec<Partition>>,
@@ -54,7 +55,7 @@ pub async fn query_partitions(
     let object_store = lake.blob_storage.inner();
     let table = PartitionedTableProvider::new(schema, object_store.clone(), partitions);
     let object_store_url = ObjectStoreUrl::parse("obj://lakehouse/").unwrap();
-    let ctx = SessionContext::new();
+    let ctx = SessionContext::new_with_config_rt(SessionConfig::default(), runtime);
     ctx.register_object_store(object_store_url.as_ref(), object_store.clone());
     ctx.register_table(
         TableReference::Bare {
@@ -67,6 +68,7 @@ pub async fn query_partitions(
 
 pub fn register_functions(
     ctx: &SessionContext,
+    runtime: Arc<RuntimeEnv>,
     lake: Arc<DataLakeConnection>,
     part_provider: Arc<dyn QueryPartitionProvider>,
     query_range: Option<TimeRange>,
@@ -94,6 +96,7 @@ pub fn register_functions(
     ctx.register_udtf(
         "materialize_partitions",
         Arc::new(MaterializePartitionsTableFunction::new(
+            runtime,
             lake.clone(),
             view_factory.clone(),
         )),
@@ -102,12 +105,13 @@ pub fn register_functions(
 }
 
 pub async fn make_session_context(
+    runtime: Arc<RuntimeEnv>,
     lake: Arc<DataLakeConnection>,
     part_provider: Arc<dyn QueryPartitionProvider>,
     query_range: Option<TimeRange>,
     view_factory: Arc<ViewFactory>,
 ) -> Result<SessionContext> {
-    let ctx = SessionContext::new();
+    let ctx = SessionContext::new_with_config_rt(SessionConfig::default(), runtime.clone());
     if let Some(range) = &query_range {
         ctx.add_analyzer_rule(Arc::new(TableScanRewrite::new(range.clone())));
     }
@@ -116,6 +120,7 @@ pub async fn make_session_context(
     ctx.register_object_store(object_store_url.as_ref(), object_store.clone());
     register_functions(
         &ctx,
+        runtime,
         lake.clone(),
         part_provider.clone(),
         query_range.clone(),
@@ -137,6 +142,7 @@ pub async fn make_session_context(
 }
 
 pub async fn query(
+    runtime: Arc<RuntimeEnv>,
     lake: Arc<DataLakeConnection>,
     part_provider: Arc<dyn QueryPartitionProvider>,
     query_range: Option<TimeRange>,
@@ -144,7 +150,7 @@ pub async fn query(
     view_factory: Arc<ViewFactory>,
 ) -> Result<Answer> {
     info!("query sql={sql}");
-    let ctx = make_session_context(lake, part_provider, query_range, view_factory)
+    let ctx = make_session_context(runtime, lake, part_provider, query_range, view_factory)
         .await
         .with_context(|| "make_session_context")?;
     let df = ctx.sql(sql).await?;

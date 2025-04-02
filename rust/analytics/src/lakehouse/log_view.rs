@@ -19,6 +19,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, TimeDelta, Utc};
 use datafusion::{
     arrow::datatypes::Schema,
+    execution::runtime_env::RuntimeEnv,
     logical_expr::{col, Between, Expr},
     scalar::ScalarValue,
 };
@@ -75,6 +76,7 @@ impl View for LogView {
 
     async fn make_batch_partition_spec(
         &self,
+        runtime: Arc<RuntimeEnv>,
         lake: Arc<DataLakeConnection>,
         existing_partitions: Arc<PartitionCache>,
         begin_insert: DateTime<Utc>,
@@ -83,10 +85,16 @@ impl View for LogView {
         if *self.view_instance_id != "global" {
             anyhow::bail!("not supported for jit queries... should it?");
         }
-        let source_data =
-            fetch_partition_source_data(lake, existing_partitions, begin_insert, end_insert, "log")
-                .await
-                .with_context(|| "fetch_partition_source_data")?;
+        let source_data = fetch_partition_source_data(
+            runtime,
+            lake,
+            existing_partitions,
+            begin_insert,
+            end_insert,
+            "log",
+        )
+        .await
+        .with_context(|| "fetch_partition_source_data")?;
         Ok(Arc::new(BlockPartitionSpec {
             view_metadata: ViewMetadata {
                 view_set_name: self.view_set_name.clone(),

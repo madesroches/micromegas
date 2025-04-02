@@ -27,10 +27,12 @@ use arrow_flight::{
 };
 use core::str;
 use datafusion::arrow::datatypes::Schema;
+use datafusion::execution::runtime_env::RuntimeEnv;
 use futures::StreamExt;
 use futures::{Stream, TryStreamExt};
 use micromegas_analytics::lakehouse::partition_cache::QueryPartitionProvider;
 use micromegas_analytics::lakehouse::query::make_session_context;
+use micromegas_analytics::lakehouse::runtime::make_runtime_env;
 use micromegas_analytics::lakehouse::view_factory::ViewFactory;
 use micromegas_analytics::time::TimeRange;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
@@ -77,6 +79,7 @@ static INSTANCE_SQL_DATA: Lazy<SqlInfoData> = Lazy::new(|| {
 
 #[derive(Clone)]
 pub struct FlightSqlServiceImpl {
+    runtime: Arc<RuntimeEnv>,
     lake: Arc<DataLakeConnection>,
     part_provider: Arc<dyn QueryPartitionProvider>,
     view_factory: Arc<ViewFactory>,
@@ -87,12 +90,14 @@ impl FlightSqlServiceImpl {
         lake: Arc<DataLakeConnection>,
         part_provider: Arc<dyn QueryPartitionProvider>,
         view_factory: Arc<ViewFactory>,
-    ) -> Self {
-        Self {
+    ) -> Result<Self> {
+        let runtime = Arc::new(make_runtime_env()?);
+        Ok(Self {
+            runtime,
             lake,
             part_provider,
             view_factory,
-        }
+        })
     }
 }
 
@@ -147,6 +152,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
             request.metadata().get("limit")
         );
         let ctx = make_session_context(
+            self.runtime.clone(),
             self.lake.clone(),
             self.part_provider.clone(),
             query_range,

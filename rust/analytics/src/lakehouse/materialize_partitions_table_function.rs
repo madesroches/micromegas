@@ -15,6 +15,7 @@ use chrono::Utc;
 use datafusion::catalog::TableFunctionImpl;
 use datafusion::catalog::TableProvider;
 use datafusion::common::plan_err;
+use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::prelude::Expr;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_tracing::error;
@@ -22,18 +23,28 @@ use std::sync::Arc;
 
 #[derive(Debug)]
 pub struct MaterializePartitionsTableFunction {
+    runtime: Arc<RuntimeEnv>,
     lake: Arc<DataLakeConnection>,
     view_factory: Arc<ViewFactory>,
 }
 
 impl MaterializePartitionsTableFunction {
-    pub fn new(lake: Arc<DataLakeConnection>, view_factory: Arc<ViewFactory>) -> Self {
-        Self { lake, view_factory }
+    pub fn new(
+        runtime: Arc<RuntimeEnv>,
+        lake: Arc<DataLakeConnection>,
+        view_factory: Arc<ViewFactory>,
+    ) -> Self {
+        Self {
+            runtime,
+            lake,
+            view_factory,
+        }
     }
 }
 
 #[allow(clippy::too_many_arguments)]
 async fn materialize_partitions_impl(
+    runtime: Arc<RuntimeEnv>,
     lake: Arc<DataLakeConnection>,
     view_factory: Arc<ViewFactory>,
     view_name: &str,
@@ -51,7 +62,8 @@ async fn materialize_partitions_impl(
 
     materialize_partition_range(
         existing_partitions,
-        lake.clone(),
+        runtime,
+        lake,
         view,
         begin,
         end,
@@ -80,12 +92,14 @@ impl TableFunctionImpl for MaterializePartitionsTableFunction {
 
         let lake = self.lake.clone();
         let view_factory = self.view_factory.clone();
+        let runtime = self.runtime.clone();
 
         let spawner = move || {
             let (tx, rx) = tokio::sync::mpsc::channel(100);
             let logger = Arc::new(LogSender::new(tx));
             tokio::spawn(async move {
                 if let Err(e) = materialize_partitions_impl(
+                    runtime,
                     lake,
                     view_factory,
                     &view_set_name,

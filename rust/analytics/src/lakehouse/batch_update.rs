@@ -5,6 +5,7 @@ use super::{
 use crate::response_writer::Logger;
 use anyhow::{Context, Result};
 use chrono::{DateTime, TimeDelta, Utc};
+use datafusion::execution::runtime_env::RuntimeEnv;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use std::sync::Arc;
 
@@ -103,6 +104,7 @@ async fn verify_overlapping_partitions(
 
 async fn materialize_partition(
     existing_partitions: Arc<PartitionCache>,
+    runtime: Arc<RuntimeEnv>,
     lake: Arc<DataLakeConnection>,
     begin_insert: DateTime<Utc>,
     end_insert: DateTime<Utc>,
@@ -112,6 +114,7 @@ async fn materialize_partition(
     let view_set_name = view.get_view_set_name();
     let partition_spec = view
         .make_batch_partition_spec(
+            runtime.clone(),
             lake.clone(),
             existing_partitions.clone(),
             begin_insert,
@@ -161,6 +164,7 @@ async fn materialize_partition(
 
         return Box::pin(materialize_partition_range(
             existing_partitions,
+            runtime,
             lake,
             view,
             begin_insert,
@@ -180,9 +184,17 @@ async fn materialize_partition(
                 .with_context(|| "writing partition")?;
         }
         PartitionCreationStrategy::MergeExisting(partitions) => {
-            create_merged_partition(partitions, lake, view, begin_insert, end_insert, logger)
-                .await
-                .with_context(|| "create_merged_partition")?;
+            create_merged_partition(
+                partitions,
+                runtime,
+                lake,
+                view,
+                begin_insert,
+                end_insert,
+                logger,
+            )
+            .await
+            .with_context(|| "create_merged_partition")?;
         }
         PartitionCreationStrategy::Abort => {}
     }
@@ -190,8 +202,10 @@ async fn materialize_partition(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn materialize_partition_range(
     existing_partitions: Arc<PartitionCache>,
+    runtime: Arc<RuntimeEnv>,
     lake: Arc<DataLakeConnection>,
     view: Arc<dyn View>,
     begin_range: DateTime<Utc>,
@@ -204,6 +218,7 @@ pub async fn materialize_partition_range(
     while end_part <= end_range {
         materialize_partition(
             existing_partitions.clone(),
+            runtime.clone(),
             lake.clone(),
             begin_part,
             end_part,

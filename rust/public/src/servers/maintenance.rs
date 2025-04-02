@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, DurationRound};
 use chrono::{TimeDelta, Utc};
+use datafusion::execution::runtime_env::RuntimeEnv;
 use micromegas_analytics::delete::delete_old_data;
 use micromegas_analytics::lakehouse::batch_update::materialize_partition_range;
 use micromegas_analytics::lakehouse::partition_cache::PartitionCache;
@@ -18,6 +19,7 @@ use super::cron_task::{CronTask, TaskCallback};
 type Views = Arc<Vec<Arc<dyn View>>>;
 
 pub async fn materialize_all_views(
+    runtime: Arc<RuntimeEnv>,
     lake: Arc<DataLakeConnection>,
     views: Views,
     task_scheduled_time: DateTime<Utc>,
@@ -47,6 +49,7 @@ pub async fn materialize_all_views(
         }
         materialize_partition_range(
             partitions.clone(),
+            runtime.clone(),
             lake.clone(),
             view.clone(),
             begin_range,
@@ -60,6 +63,7 @@ pub async fn materialize_all_views(
 }
 
 pub struct EveryDayTask {
+    pub runtime: Arc<RuntimeEnv>,
     pub lake: Arc<DataLakeConnection>,
     pub views: Views,
 }
@@ -68,6 +72,7 @@ pub struct EveryDayTask {
 impl TaskCallback for EveryDayTask {
     async fn run(&self, task_scheduled_time: DateTime<Utc>) -> Result<()> {
         materialize_all_views(
+            self.runtime.clone(),
             self.lake.clone(),
             self.views.clone(),
             task_scheduled_time,
@@ -78,6 +83,7 @@ impl TaskCallback for EveryDayTask {
 }
 
 pub struct EveryHourTask {
+    pub runtime: Arc<RuntimeEnv>,
     pub lake: Arc<DataLakeConnection>,
     pub views: Views,
 }
@@ -88,6 +94,7 @@ impl TaskCallback for EveryHourTask {
         delete_old_data(&self.lake, 90).await?;
         delete_expired_temporary_files(self.lake.clone()).await?;
         materialize_all_views(
+            self.runtime.clone(),
             self.lake.clone(),
             self.views.clone(),
             task_scheduled_time,
@@ -98,6 +105,7 @@ impl TaskCallback for EveryHourTask {
 }
 
 pub struct EveryMinuteTask {
+    pub runtime: Arc<RuntimeEnv>,
     pub lake: Arc<DataLakeConnection>,
     pub views: Views,
 }
@@ -106,6 +114,7 @@ pub struct EveryMinuteTask {
 impl TaskCallback for EveryMinuteTask {
     async fn run(&self, task_scheduled_time: DateTime<Utc>) -> Result<()> {
         materialize_all_views(
+            self.runtime.clone(),
             self.lake.clone(),
             self.views.clone(),
             task_scheduled_time,
@@ -116,6 +125,7 @@ impl TaskCallback for EveryMinuteTask {
 }
 
 pub struct EverySecondTask {
+    pub runtime: Arc<RuntimeEnv>,
     pub lake: Arc<DataLakeConnection>,
     pub views: Views,
 }
@@ -124,6 +134,7 @@ pub struct EverySecondTask {
 impl TaskCallback for EverySecondTask {
     async fn run(&self, task_scheduled_time: DateTime<Utc>) -> Result<()> {
         materialize_all_views(
+            self.runtime.clone(),
             self.lake.clone(),
             self.views.clone(),
             task_scheduled_time,
@@ -157,7 +168,11 @@ pub async fn run_tasks_forever(mut tasks: Vec<CronTask>) {
     }
 }
 
-pub async fn daemon(lake: Arc<DataLakeConnection>, view_factory: Arc<ViewFactory>) -> Result<()> {
+pub async fn daemon(
+    runtime: Arc<RuntimeEnv>,
+    lake: Arc<DataLakeConnection>,
+    view_factory: Arc<ViewFactory>,
+) -> Result<()> {
     let mut views_to_update: Vec<Arc<dyn View>> = view_factory
         .get_global_views()
         .iter()
@@ -173,6 +188,7 @@ pub async fn daemon(lake: Arc<DataLakeConnection>, view_factory: Arc<ViewFactory
             TimeDelta::days(1),
             TimeDelta::hours(4),
             Arc::new(EveryDayTask {
+                runtime: runtime.clone(),
                 lake: lake.clone(),
                 views: views.clone(),
             }),
@@ -183,6 +199,7 @@ pub async fn daemon(lake: Arc<DataLakeConnection>, view_factory: Arc<ViewFactory
             TimeDelta::hours(1),
             TimeDelta::minutes(10),
             Arc::new(EveryHourTask {
+                runtime: runtime.clone(),
                 lake: lake.clone(),
                 views: views.clone(),
             }),
@@ -195,6 +212,7 @@ pub async fn daemon(lake: Arc<DataLakeConnection>, view_factory: Arc<ViewFactory
             TimeDelta::minutes(1),
             TimeDelta::seconds(10),
             Arc::new(EveryMinuteTask {
+                runtime: runtime.clone(),
                 lake: lake.clone(),
                 views: views.clone(),
             }),
@@ -204,7 +222,11 @@ pub async fn daemon(lake: Arc<DataLakeConnection>, view_factory: Arc<ViewFactory
             String::from("every second"),
             TimeDelta::seconds(1),
             TimeDelta::milliseconds(500),
-            Arc::new(EverySecondTask { lake, views }),
+            Arc::new(EverySecondTask {
+                runtime,
+                lake,
+                views,
+            }),
         )
         .await?,
     ];

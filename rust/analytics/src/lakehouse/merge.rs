@@ -10,7 +10,11 @@ use crate::{dfext::min_max_time_df::min_max_time_dataframe, response_writer::Log
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use datafusion::{arrow::datatypes::Schema, execution::SendableRecordBatchStream, prelude::*};
+use datafusion::{
+    arrow::datatypes::Schema,
+    execution::{runtime_env::RuntimeEnv, SendableRecordBatchStream},
+    prelude::*,
+};
 use futures::stream::StreamExt;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_tracing::error;
@@ -29,13 +33,18 @@ pub trait PartitionMerger: Send + Sync + Debug {
 
 #[derive(Debug)]
 pub struct QueryMerger {
+    runtime: Arc<RuntimeEnv>,
     file_schema: Arc<Schema>,
     query: Arc<String>,
 }
 
 impl QueryMerger {
-    pub fn new(file_schema: Arc<Schema>, query: Arc<String>) -> Self {
-        Self { file_schema, query }
+    pub fn new(runtime: Arc<RuntimeEnv>, file_schema: Arc<Schema>, query: Arc<String>) -> Self {
+        Self {
+            runtime,
+            file_schema,
+            query,
+        }
     }
 }
 
@@ -47,6 +56,7 @@ impl PartitionMerger for QueryMerger {
         partitions: Arc<Vec<Partition>>,
     ) -> Result<SendableRecordBatchStream> {
         let merged_df = query_partitions(
+            self.runtime.clone(),
             lake.clone(),
             self.file_schema.clone(),
             partitions,
@@ -92,6 +102,7 @@ fn partition_set_stats(
 
 pub async fn create_merged_partition(
     existing_partitions: Arc<PartitionCache>,
+    runtime: Arc<RuntimeEnv>,
     lake: Arc<DataLakeConnection>,
     view: Arc<dyn View>,
     begin_insert: DateTime<Utc>,
@@ -128,7 +139,7 @@ pub async fn create_merged_partition(
         .with_context(|| "write_log_entry")?;
     filtered_partitions.sort_by_key(|p| p.begin_insert_time);
     let mut merged_stream = view
-        .merge_partitions(lake.clone(), Arc::new(filtered_partitions))
+        .merge_partitions(runtime.clone(), lake.clone(), Arc::new(filtered_partitions))
         .await
         .with_context(|| "view.merge_partitions")?;
     let (tx, rx) = tokio::sync::mpsc::channel(1);
@@ -150,7 +161,7 @@ pub async fn create_merged_partition(
         }
         res
     });
-    let ctx = SessionContext::new();
+    let ctx = SessionContext::new_with_config_rt(SessionConfig::default(), runtime);
     while let Some(rb_res) = merged_stream.next().await {
         let rb = rb_res.with_context(|| "receiving record_batch from stream")?;
         let (mintime, maxtime) = min_max_time_dataframe(
