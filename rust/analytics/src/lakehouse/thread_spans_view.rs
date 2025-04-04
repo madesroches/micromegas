@@ -1,7 +1,7 @@
 use super::{
     jit_partitions::{generate_jit_partitions, is_jit_partition_up_to_date, JitPartitionConfig},
     partition_cache::PartitionCache,
-    partition_source_data::{hash_to_object_count, PartitionSourceDataBlocks},
+    partition_source_data::{hash_to_object_count, SourceDataBlocksInMemory},
     view::{PartitionSpec, View, ViewMetadata},
     view_factory::ViewMaker,
 };
@@ -94,7 +94,7 @@ async fn write_partition(
     view_meta: ViewMetadata,
     schema: Arc<Schema>,
     convert_ticks: &ConvertTicks,
-    spec: &PartitionSourceDataBlocks,
+    spec: &SourceDataBlocksInMemory,
 ) -> Result<()> {
     let nb_events = hash_to_object_count(&spec.block_ids_hash)? as usize;
     info!("nb_events: {nb_events}");
@@ -172,7 +172,7 @@ async fn update_partition(
     view_meta: ViewMetadata,
     schema: Arc<Schema>,
     convert_ticks: &ConvertTicks,
-    spec: &PartitionSourceDataBlocks,
+    spec: &SourceDataBlocksInMemory,
 ) -> Result<()> {
     if is_jit_partition_up_to_date(&lake.db_pool, view_meta.clone(), convert_ticks, spec).await? {
         return Ok(());
