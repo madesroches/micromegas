@@ -87,16 +87,18 @@ impl View for MetricsView {
         if *self.view_instance_id != "global" {
             anyhow::bail!("not supported for jit queries... should it?");
         }
-        let source_data = fetch_partition_source_data(
-            runtime,
-            lake,
-            existing_partitions,
-            begin_insert,
-            end_insert,
-            "metrics",
-        )
-        .await
-        .with_context(|| "fetch_partition_source_data")?;
+        let source_data = Arc::new(
+            fetch_partition_source_data(
+                runtime,
+                lake,
+                existing_partitions,
+                begin_insert,
+                end_insert,
+                "metrics",
+            )
+            .await
+            .with_context(|| "fetch_partition_source_data")?,
+        );
         Ok(Arc::new(BlockPartitionSpec {
             view_metadata: ViewMetadata {
                 view_set_name: self.view_set_name.clone(),

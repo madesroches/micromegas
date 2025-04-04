@@ -1,6 +1,6 @@
 use super::{
     block_partition_spec::{BlockPartitionSpec, BlockProcessor},
-    partition_source_data::{PartitionSourceBlock, PartitionSourceDataBlocks},
+    partition_source_data::{PartitionSourceBlock, SourceDataBlocksInMemory},
     view::ViewMetadata,
 };
 use crate::{
@@ -67,7 +67,7 @@ pub async fn generate_jit_partitions_segment(
     stream: Arc<StreamInfo>,
     process: Arc<ProcessInfo>,
     convert_ticks: &ConvertTicks,
-) -> Result<Vec<PartitionSourceDataBlocks>> {
+) -> Result<Vec<SourceDataBlocksInMemory>> {
     let relative_begin_ticks = convert_ticks.time_to_delta_ticks(query_time_range.begin);
     let relative_end_ticks = convert_ticks.time_to_delta_ticks(query_time_range.end);
     let rows = sqlx::query(
@@ -104,7 +104,7 @@ pub async fn generate_jit_partitions_segment(
 
         if partition_nb_objects > config.max_nb_objects {
             if last_block_end_ticks > relative_begin_ticks {
-                partitions.push(PartitionSourceDataBlocks {
+                partitions.push(SourceDataBlocksInMemory {
                     blocks: partition_blocks,
                     block_ids_hash: partition_nb_objects.to_le_bytes().to_vec(),
                 });
@@ -114,7 +114,7 @@ pub async fn generate_jit_partitions_segment(
         }
     }
     if partition_nb_objects != 0 && last_block_end_ticks > relative_begin_ticks {
-        partitions.push(PartitionSourceDataBlocks {
+        partitions.push(SourceDataBlocksInMemory {
             blocks: partition_blocks,
             block_ids_hash: partition_nb_objects.to_le_bytes().to_vec(),
         });
@@ -131,7 +131,7 @@ pub async fn generate_jit_partitions(
     stream: Arc<StreamInfo>,
     process: Arc<ProcessInfo>,
     convert_ticks: &ConvertTicks,
-) -> Result<Vec<PartitionSourceDataBlocks>> {
+) -> Result<Vec<SourceDataBlocksInMemory>> {
     let insert_time_range =
         get_insert_time_range(pool, query_time_range, stream.clone(), convert_ticks).await?;
     let insert_time_range = TimeRange::new(
@@ -170,7 +170,7 @@ pub async fn is_jit_partition_up_to_date(
     pool: &sqlx::PgPool,
     view_meta: ViewMetadata,
     convert_ticks: &ConvertTicks,
-    spec: &PartitionSourceDataBlocks,
+    spec: &SourceDataBlocksInMemory,
 ) -> Result<bool> {
     let (min_event_time, max_event_time) =
         get_event_time_range(convert_ticks, spec).with_context(|| "get_event_time_range")?;
@@ -223,7 +223,7 @@ pub async fn is_jit_partition_up_to_date(
 /// get_event_time_range returns the time range covered by a partition spec
 fn get_event_time_range(
     convert_ticks: &ConvertTicks,
-    spec: &PartitionSourceDataBlocks,
+    spec: &SourceDataBlocksInMemory,
 ) -> Result<(DateTime<Utc>, DateTime<Utc>)> {
     if spec.blocks.is_empty() {
         anyhow::bail!("empty partition should not exist");
@@ -241,7 +241,7 @@ pub async fn write_partition_from_blocks(
     lake: Arc<DataLakeConnection>,
     view_metadata: ViewMetadata,
     schema: Arc<Schema>,
-    source_data: PartitionSourceDataBlocks,
+    source_data: SourceDataBlocksInMemory,
     block_processor: Arc<dyn BlockProcessor>,
 ) -> Result<()> {
     if source_data.blocks.is_empty() {
@@ -257,7 +257,7 @@ pub async fn write_partition_from_blocks(
         schema,
         begin_insert: min_insert_time,
         end_insert: max_insert_time,
-        source_data,
+        source_data: Arc::new(source_data),
         block_processor,
     };
     let null_response_writer = Arc::new(ResponseWriter::new(None));

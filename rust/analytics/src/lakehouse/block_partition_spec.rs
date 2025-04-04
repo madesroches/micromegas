@@ -1,5 +1,5 @@
 use super::{
-    partition_source_data::{PartitionSourceBlock, PartitionSourceDataBlocks},
+    partition_source_data::{PartitionBlocksSource, PartitionSourceBlock},
     view::{PartitionSpec, ViewMetadata},
     write_partition::{write_partition_from_rows, PartitionRowSet},
 };
@@ -31,18 +31,18 @@ pub struct BlockPartitionSpec {
     pub schema: Arc<Schema>,
     pub begin_insert: DateTime<Utc>,
     pub end_insert: DateTime<Utc>,
-    pub source_data: PartitionSourceDataBlocks,
+    pub source_data: Arc<dyn PartitionBlocksSource>,
     pub block_processor: Arc<dyn BlockProcessor>,
 }
 
 #[async_trait]
 impl PartitionSpec for BlockPartitionSpec {
     fn is_empty(&self) -> bool {
-        self.source_data.blocks.is_empty()
+        self.source_data.is_empty()
     }
 
     fn get_source_data_hash(&self) -> Vec<u8> {
-        self.source_data.block_ids_hash.clone()
+        self.source_data.get_source_data_hash()
     }
 
     async fn write(&self, lake: Arc<DataLakeConnection>, logger: Arc<dyn Logger>) -> Result<()> {
@@ -56,10 +56,13 @@ impl PartitionSpec for BlockPartitionSpec {
         logger.write_log_entry(format!("writing {desc}")).await?;
 
         logger
-            .write_log_entry(format!("reading {} blocks", self.source_data.blocks.len()))
+            .write_log_entry(format!(
+                "reading {} blocks",
+                self.source_data.get_nb_blocks()
+            ))
             .await?;
 
-        if self.source_data.blocks.is_empty() {
+        if self.source_data.is_empty() {
             return Ok(());
         }
 
@@ -70,20 +73,21 @@ impl PartitionSpec for BlockPartitionSpec {
             self.schema.clone(),
             self.begin_insert,
             self.end_insert,
-            self.source_data.block_ids_hash.clone(),
+            self.source_data.get_source_data_hash(),
             rx,
             logger.clone(),
         ));
 
-        let mut max_size = self.source_data.blocks[0].block.payload_size as usize;
-        for block in &self.source_data.blocks {
-            max_size = max_size.max(block.block.payload_size as usize);
-        }
+        let max_size = self.source_data.get_max_payload_size() as usize;
         let mut nb_tasks = (100 * 1024 * 1024) / max_size; // try to download up to 100 MB of payloads
         nb_tasks = nb_tasks.clamp(1, 64);
 
-        let mut stream = futures::stream::iter(self.source_data.blocks.clone())
-            .map(|src_block| async {
+        let mut stream = self
+            .source_data
+            .get_blocks_stream()
+            .await
+            .map(|src_block_res| async {
+                let src_block = src_block_res?;
                 let block_processor = self.block_processor.clone();
                 let blob_storage = lake.blob_storage.clone();
                 let handle = tokio::spawn(async move {
@@ -92,7 +96,7 @@ impl PartitionSpec for BlockPartitionSpec {
                         .await
                         .with_context(|| "processing source block")
                 });
-                handle.await.unwrap()
+                handle.await.with_context(|| "handle.await")?
             })
             .buffer_unordered(nb_tasks);
 

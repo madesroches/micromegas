@@ -2554,6 +2554,7 @@ name = "micromegas-analytics"
 version = "0.5.1"
 dependencies = [
  "anyhow",
+ "async-stream",
  "async-trait",
  "bytes",
  "chrono",
