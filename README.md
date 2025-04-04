@@ -64,6 +64,12 @@ In order to keep costs down, most payloads will remain unprocessed until they ex
 
 ## Status
 
+### April 2025
+ * Released [version 0.6.0](https://crates.io/crates/micromegas)
+ * Perfetto trace server
+ * Datafusion memory budget
+ * Memory optimizations
+
 ### March 2025
  * Released [version 0.5.0](https://crates.io/crates/micromegas)
  * Better perfetto support
