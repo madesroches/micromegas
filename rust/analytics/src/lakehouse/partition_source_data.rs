@@ -68,7 +68,7 @@ impl PartitionBlocksSource for SourceDataBlocksInMemory {
     }
 
     async fn get_blocks_stream(&self) -> BoxStream<'static, Result<Arc<PartitionSourceBlock>>> {
-        let stream = futures::stream::iter(self.blocks.clone()).map(|v| Ok(v));
+        let stream = futures::stream::iter(self.blocks.clone()).map(Ok);
         stream.boxed()
     }
 }
