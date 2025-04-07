@@ -46,7 +46,7 @@ impl CronTask {
                 .with_context(|| "get tick delay as ns")? as u64
         );
         let task_time = self.next_run;
-        self.next_run = now.duration_trunc(self.period)? + self.period + self.offset;
+        self.next_run += self.period;
         self.callback
             .run(task_time)
             .await
