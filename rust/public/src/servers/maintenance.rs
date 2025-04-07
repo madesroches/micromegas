@@ -22,12 +22,10 @@ pub async fn materialize_all_views(
     runtime: Arc<RuntimeEnv>,
     lake: Arc<DataLakeConnection>,
     views: Views,
-    task_scheduled_time: DateTime<Utc>,
+    begin_range: DateTime<Utc>,
+    end_range: DateTime<Utc>,
     partition_time_delta: TimeDelta,
 ) -> Result<()> {
-    let trunc_task_time = task_scheduled_time.duration_trunc(partition_time_delta)?;
-    let begin_range = trunc_task_time - (partition_time_delta * 2);
-    let end_range = trunc_task_time;
     let mut last_group = views.first().unwrap().get_update_group();
     let mut partitions = Arc::new(
         PartitionCache::fetch_overlapping_insert_range(&lake.db_pool, begin_range, end_range)
@@ -71,12 +69,17 @@ pub struct EveryDayTask {
 #[async_trait]
 impl TaskCallback for EveryDayTask {
     async fn run(&self, task_scheduled_time: DateTime<Utc>) -> Result<()> {
+        let partition_time_delta = TimeDelta::days(1);
+        let trunc_task_time = task_scheduled_time.duration_trunc(partition_time_delta)?;
+        let begin_range = trunc_task_time - (partition_time_delta * 2);
+        let end_range = trunc_task_time;
         materialize_all_views(
             self.runtime.clone(),
             self.lake.clone(),
             self.views.clone(),
-            task_scheduled_time,
-            TimeDelta::days(1),
+            begin_range,
+            end_range,
+            partition_time_delta,
         )
         .await
     }
@@ -93,12 +96,18 @@ impl TaskCallback for EveryHourTask {
     async fn run(&self, task_scheduled_time: DateTime<Utc>) -> Result<()> {
         delete_old_data(&self.lake, 90).await?;
         delete_expired_temporary_files(self.lake.clone()).await?;
+
+        let partition_time_delta = TimeDelta::hours(1);
+        let trunc_task_time = task_scheduled_time.duration_trunc(partition_time_delta)?;
+        let begin_range = trunc_task_time - (partition_time_delta * 2);
+        let end_range = trunc_task_time;
         materialize_all_views(
             self.runtime.clone(),
             self.lake.clone(),
             self.views.clone(),
-            task_scheduled_time,
-            TimeDelta::hours(1),
+            begin_range,
+            end_range,
+            partition_time_delta,
         )
         .await
     }
@@ -113,12 +122,17 @@ pub struct EveryMinuteTask {
 #[async_trait]
 impl TaskCallback for EveryMinuteTask {
     async fn run(&self, task_scheduled_time: DateTime<Utc>) -> Result<()> {
+        let partition_time_delta = TimeDelta::minutes(1);
+        let trunc_task_time = task_scheduled_time.duration_trunc(partition_time_delta)?;
+        let begin_range = trunc_task_time - (partition_time_delta * 2);
+        let end_range = trunc_task_time;
         materialize_all_views(
             self.runtime.clone(),
             self.lake.clone(),
             self.views.clone(),
-            task_scheduled_time,
-            TimeDelta::minutes(1),
+            begin_range,
+            end_range,
+            partition_time_delta,
         )
         .await
     }
@@ -133,12 +147,24 @@ pub struct EverySecondTask {
 #[async_trait]
 impl TaskCallback for EverySecondTask {
     async fn run(&self, task_scheduled_time: DateTime<Utc>) -> Result<()> {
+        let delay = Utc::now() - task_scheduled_time;
+        if delay > TimeDelta::seconds(10) {
+            // we don't want to accumulate too much delay - the minutes task will fill the missing data
+            warn!("skipping `seconds` task, delay={delay}");
+            return Ok(());
+        }
+        let partition_time_delta = TimeDelta::seconds(1);
+        let trunc_task_time = task_scheduled_time.duration_trunc(partition_time_delta)?;
+        let begin_range = trunc_task_time - (partition_time_delta * 2);
+        // unlike the other tasks, we only try to process a single partition per view
+        let end_range = trunc_task_time - partition_time_delta;
         materialize_all_views(
             self.runtime.clone(),
             self.lake.clone(),
             self.views.clone(),
-            task_scheduled_time,
-            TimeDelta::seconds(1),
+            begin_range,
+            end_range,
+            partition_time_delta,
         )
         .await
     }
@@ -158,9 +184,12 @@ pub async fn run_tasks_forever(mut tasks: Vec<CronTask>) {
                 next_task_run = task.next_run;
             }
         }
-        let delay = next_task_run - Utc::now();
-        if delay > TimeDelta::zero() {
-            match delay.to_std().with_context(|| "delay.to_std") {
+        let time_until_next_task = next_task_run - Utc::now();
+        if time_until_next_task > TimeDelta::zero() {
+            match time_until_next_task
+                .to_std()
+                .with_context(|| "delay.to_std")
+            {
                 Ok(wait) => tokio::time::sleep(wait).await,
                 Err(e) => warn!("{e:?}"),
             }
@@ -205,7 +234,7 @@ pub async fn daemon(
     let every_minute = CronTask::new(
         String::from("every minute"),
         TimeDelta::minutes(1),
-        TimeDelta::seconds(10),
+        TimeDelta::seconds(30),
         Arc::new(EveryMinuteTask {
             runtime: runtime.clone(),
             lake: lake.clone(),
