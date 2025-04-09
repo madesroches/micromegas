@@ -115,7 +115,7 @@ macro_rules! async_span_scope_named {
 /// ```
 #[macro_export]
 macro_rules! imetric {
-    ($name:literal, $unit:literal, $value:expr) => {{
+    ($name:expr, $unit:expr, $value:expr) => {{
         static METRIC_METADATA: $crate::metrics::StaticMetricMetadata =
             $crate::metrics::StaticMetricMetadata {
                 lod: $crate::levels::Verbosity::Max,
@@ -127,7 +127,7 @@ macro_rules! imetric {
             };
         $crate::dispatch::int_metric(&METRIC_METADATA, $value);
     }};
-    ($name:literal, $unit:literal, $properties:expr, $value:expr) => {{
+    ($name:expr, $unit:expr, $properties:expr, $value:expr) => {{
         static METRIC_METADATA: $crate::metrics::StaticMetricMetadata =
             $crate::metrics::StaticMetricMetadata {
                 lod: $crate::levels::Verbosity::Max,
@@ -155,7 +155,7 @@ macro_rules! imetric {
 /// ```
 #[macro_export]
 macro_rules! fmetric {
-    ($name:literal, $unit:literal, $value:expr) => {{
+    ($name:expr, $unit:expr, $value:expr) => {{
         static METRIC_METADATA: $crate::metrics::StaticMetricMetadata =
             $crate::metrics::StaticMetricMetadata {
                 lod: $crate::levels::Verbosity::Max,
@@ -168,7 +168,7 @@ macro_rules! fmetric {
         $crate::dispatch::float_metric(&METRIC_METADATA, $value);
     }};
 
-    ($name:literal, $unit:literal, $properties:expr, $value:expr) => {{
+    ($name:expr, $unit:expr, $properties:expr, $value:expr) => {{
         static METRIC_METADATA: $crate::metrics::StaticMetricMetadata =
             $crate::metrics::StaticMetricMetadata {
                 lod: $crate::levels::Verbosity::Max,
