@@ -38,7 +38,7 @@ async fn get_insert_time_range(
     query_time_range: &TimeRange,
     stream: Arc<StreamInfo>,
     convert_ticks: &ConvertTicks,
-) -> Result<TimeRange> {
+) -> Result<Option<TimeRange>> {
     let relative_begin_ticks = convert_ticks.time_to_delta_ticks(query_time_range.begin);
     let relative_end_ticks = convert_ticks.time_to_delta_ticks(query_time_range.end);
     let row = sqlx::query(
@@ -54,9 +54,15 @@ async fn get_insert_time_range(
     .fetch_one(pool)
     .await
     .with_context(|| "get_insert_time_range")?;
-    let begin_insert_range: DateTime<Utc> = row.try_get("min_insert_time")?;
-    let end_insert_range: DateTime<Utc> = row.try_get("max_insert_time")?;
-    Ok(TimeRange::new(begin_insert_range, end_insert_range))
+    let begin_insert_range: Option<DateTime<Utc>> = row.try_get("min_insert_time")?;
+    let end_insert_range: Option<DateTime<Utc>> = row.try_get("max_insert_time")?;
+    if begin_insert_range.is_none() {
+        return Ok(None);
+    }
+    Ok(Some(TimeRange::new(
+        begin_insert_range.with_context(|| "missing begin_insert_range")?,
+        end_insert_range.with_context(|| "missing end_insert_range")?,
+    )))
 }
 
 pub async fn generate_jit_partitions_segment(
@@ -134,6 +140,10 @@ pub async fn generate_jit_partitions(
 ) -> Result<Vec<SourceDataBlocksInMemory>> {
     let insert_time_range =
         get_insert_time_range(pool, query_time_range, stream.clone(), convert_ticks).await?;
+    if insert_time_range.is_none() {
+        return Ok(vec![]);
+    }
+    let insert_time_range = insert_time_range.with_context(|| "missing insert_time_range")?;
     let insert_time_range = TimeRange::new(
         insert_time_range
             .begin
