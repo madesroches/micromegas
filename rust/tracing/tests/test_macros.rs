@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -134,6 +135,7 @@ fn test_log() {
         1024,
         64 * 1024,
         Arc::new(DebugEventSink::new(state.clone())),
+        HashMap::new(),
     )
     .unwrap();
     set_max_level(LevelFilter::Trace);

@@ -259,6 +259,7 @@ async fn make_log_entries_levels_per_process_minute_view_with_custom_merge(
     .await
 }
 
+#[expect(clippy::too_many_arguments)]
 pub async fn materialize_range(
     runtime: Arc<RuntimeEnv>,
     lake: Arc<DataLakeConnection>,

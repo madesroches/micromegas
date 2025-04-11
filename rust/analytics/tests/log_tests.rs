@@ -46,7 +46,7 @@ fn test_log_encode_static() {
         .with_install_tracing_capture(false)
         .build();
     let process_id = uuid::Uuid::new_v4();
-    let process_info = make_process_info(process_id, Some(uuid::Uuid::new_v4()));
+    let process_info = make_process_info(process_id, Some(uuid::Uuid::new_v4()), HashMap::new());
     let mut stream = LogStream::new(1024, process_id, &[], HashMap::new());
     let stream_id = stream.stream_id();
     stream.get_events_mut().push(LogStaticStrInteropEvent {
@@ -82,7 +82,7 @@ fn test_log_encode_dynamic() {
         .with_install_tracing_capture(false)
         .build();
     let process_id = uuid::Uuid::new_v4();
-    let process_info = make_process_info(process_id, Some(uuid::Uuid::new_v4()));
+    let process_info = make_process_info(process_id, Some(uuid::Uuid::new_v4()), HashMap::new());
     let mut stream = LogStream::new(1024, process_id, &[], HashMap::new());
     let stream_id = stream.stream_id();
 
@@ -129,7 +129,11 @@ fn test_parse_log_interops() {
         .with_install_tracing_capture(false)
         .build();
     let process_id = uuid::Uuid::new_v4();
-    let process_info = Arc::new(make_process_info(process_id, Some(uuid::Uuid::new_v4())));
+    let process_info = Arc::new(make_process_info(
+        process_id,
+        Some(uuid::Uuid::new_v4()),
+        HashMap::new(),
+    ));
     let mut stream = LogStream::new(1024, process_id, &[], HashMap::new());
     let stream_id = stream.stream_id();
     stream.get_events_mut().push(LogStaticStrInteropEvent {
@@ -178,7 +182,11 @@ fn test_tagged_log_entries() {
         .with_install_tracing_capture(false)
         .build();
     let process_id = uuid::Uuid::new_v4();
-    let process_info = Arc::new(make_process_info(process_id, Some(uuid::Uuid::new_v4())));
+    let process_info = Arc::new(make_process_info(
+        process_id,
+        Some(uuid::Uuid::new_v4()),
+        HashMap::new(),
+    ));
     let mut stream = LogStream::new(1024, process_id, &[], HashMap::new());
     let stream_id = stream.stream_id();
     static LOG_DESC: logs::LogMetadata = logs::LogMetadata {
