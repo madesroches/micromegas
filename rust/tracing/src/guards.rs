@@ -17,17 +17,20 @@ use crate::{
 pub struct TracingSystemGuard {}
 
 impl TracingSystemGuard {
+    /// Instantiates a new system guard that initializes the telemetry system.
     pub fn new(
         logs_buffer_size: usize,
         metrics_buffer_size: usize,
         threads_buffer_size: usize,
         sink: Arc<dyn EventSink>,
+        properties: impl IntoIterator<Item = (String, String)>,
     ) -> Result<Self> {
         init_telemetry(
             logs_buffer_size,
             metrics_buffer_size,
             threads_buffer_size,
             sink,
+            properties,
         )?;
         Ok(Self {})
     }
@@ -44,12 +47,14 @@ pub fn init_telemetry(
     metrics_buffer_size: usize,
     threads_buffer_size: usize,
     sink: Arc<dyn EventSink>,
+    properties: impl IntoIterator<Item = (String, String)>,
 ) -> Result<()> {
     init_event_dispatch(
         logs_buffer_size,
         metrics_buffer_size,
         threads_buffer_size,
         sink,
+        properties,
     )?;
     init_panic_hook();
     Ok(())

@@ -38,6 +38,7 @@ pub fn init_event_dispatch(
     metrics_buffer_size: usize,
     threads_buffer_size: usize,
     sink: Arc<dyn EventSink>,
+    properties: impl IntoIterator<Item = (String, String)>,
 ) -> Result<()> {
     lazy_static::lazy_static! {
         static ref INIT_MUTEX: Mutex<()> = Mutex::new(());
@@ -51,6 +52,7 @@ pub fn init_event_dispatch(
                 metrics_buffer_size,
                 threads_buffer_size,
                 sink,
+                properties,
             ))
             .map_err(|_| Error::AlreadyInitialized())
     } else {
@@ -337,6 +339,7 @@ impl Dispatch {
         metrics_buffer_size: usize,
         threads_buffer_size: usize,
         sink: Arc<dyn EventSink>,
+        properties: impl IntoIterator<Item = (String, String)>,
     ) -> Self {
         let process_id = uuid::Uuid::new_v4();
         let obj = Self {
@@ -359,7 +362,7 @@ impl Dispatch {
             thread_streams: Mutex::new(vec![]),
             sink: RwLock::new(sink),
         };
-        obj.startup();
+        obj.startup(properties.into_iter().collect());
         obj.init_log_stream();
         obj.init_metrics_stream();
         obj
@@ -387,19 +390,24 @@ impl Dispatch {
         old_sink.on_shutdown();
     }
 
-    fn startup(&self) {
+    fn startup(&self, properties: HashMap<String, String>) {
         let mut parent_process = None;
+
         if let Ok(parent_process_guid) = std::env::var("MICROMEGAS_TELEMETRY_PARENT_PROCESS") {
             if let Ok(parent_process_id) = uuid::Uuid::try_parse(&parent_process_guid) {
                 parent_process = Some(parent_process_id);
             }
         }
+
         std::env::set_var(
             "MICROMEGAS_TELEMETRY_PARENT_PROCESS",
             self.process_id.to_string(),
         );
-        let process_info = Arc::new(make_process_info(self.process_id, parent_process));
-        self.get_sink().on_startup(process_info);
+
+        let mut process_info = make_process_info(self.process_id, parent_process);
+        process_info.properties = properties;
+
+        self.get_sink().on_startup(Arc::new(process_info));
     }
 
     fn init_log_stream(&self) {

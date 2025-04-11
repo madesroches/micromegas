@@ -134,6 +134,7 @@ fn test_log() {
         1024,
         64 * 1024,
         Arc::new(DebugEventSink::new(state.clone())),
+        [],
     )
     .unwrap();
     set_max_level(LevelFilter::Trace);
