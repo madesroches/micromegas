@@ -17,7 +17,7 @@ use micromegas_tracing::{
 #[test]
 fn test_static_metrics() {
     let process_id = uuid::Uuid::new_v4();
-    let process_info = make_process_info(process_id, Some(uuid::Uuid::new_v4()));
+    let process_info = make_process_info(process_id, Some(uuid::Uuid::new_v4()), HashMap::new());
     let mut stream = MetricsStream::new(1024, process_id, &[], HashMap::new());
     let stream_id = stream.stream_id();
 
@@ -60,7 +60,11 @@ fn test_static_metrics() {
 #[test]
 fn test_tagged_measures() {
     let process_id = uuid::Uuid::new_v4();
-    let process_info = Arc::new(make_process_info(process_id, Some(uuid::Uuid::new_v4())));
+    let process_info = Arc::new(make_process_info(
+        process_id,
+        Some(uuid::Uuid::new_v4()),
+        HashMap::new(),
+    ));
     let mut stream = MetricsStream::new(1024, process_id, &[], HashMap::new());
     let stream_id = stream.stream_id();
 

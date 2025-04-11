@@ -68,6 +68,7 @@ pub struct TelemetryGuardBuilder {
     telemetry_make_request_decorator: Box<dyn FnOnce() -> Arc<dyn RequestDecorator> + Send>,
     extra_sinks: HashMap<TypeId, (LevelFilter, BoxedEventSink)>,
     system_metrics_enabled: bool,
+    process_properties: HashMap<String, String>,
 }
 
 impl Default for TelemetryGuardBuilder {
@@ -92,6 +93,7 @@ impl Default for TelemetryGuardBuilder {
             install_tracing_capture: true,
             extra_sinks: HashMap::default(),
             system_metrics_enabled: true,
+            process_properties: HashMap::default(),
         }
     }
 }
@@ -194,6 +196,28 @@ impl TelemetryGuardBuilder {
         self
     }
 
+    /// Add a single property to the process info.
+    ///
+    /// # Warning
+    ///
+    /// This will override any existing properties.
+    #[must_use]
+    pub fn with_process_property(mut self, key: String, value: String) -> Self {
+        self.process_properties.insert(key, value);
+        self
+    }
+
+    /// Add multiple properties to the process info.
+    ///
+    /// # Warning
+    ///
+    /// This will override any existing properties.
+    #[must_use]
+    pub fn with_process_properties(mut self, process_properties: HashMap<String, String>) -> Self {
+        self.process_properties.extend(process_properties);
+        self
+    }
+
     pub fn build(self) -> anyhow::Result<TelemetryGuard> {
         let target_max_level: Vec<_> = self
             .target_max_levels
@@ -261,6 +285,7 @@ impl TelemetryGuardBuilder {
                     self.metrics_buffer_size,
                     self.threads_buffer_size,
                     sink.into(),
+                    self.process_properties,
                 )?);
 
                 if self.system_metrics_enabled {

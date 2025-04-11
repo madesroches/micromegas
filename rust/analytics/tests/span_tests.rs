@@ -16,7 +16,7 @@ fn test_parse_span_interops() {
     let _telemetry_guard = TelemetryGuard::new();
 
     let process_id = uuid::Uuid::new_v4();
-    let process_info = make_process_info(process_id, Some(uuid::Uuid::new_v4()));
+    let process_info = make_process_info(process_id, Some(uuid::Uuid::new_v4()), HashMap::new());
     let mut stream = ThreadStream::new(1024, process_id, &[], HashMap::new());
     let stream_id = stream.stream_id();
 
