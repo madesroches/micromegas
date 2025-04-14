@@ -37,20 +37,17 @@ async fn get_insert_time_range(
     pool: &sqlx::Pool<sqlx::Postgres>,
     query_time_range: &TimeRange,
     stream: Arc<StreamInfo>,
-    convert_ticks: &ConvertTicks,
 ) -> Result<Option<TimeRange>> {
-    let relative_begin_ticks = convert_ticks.time_to_delta_ticks(query_time_range.begin);
-    let relative_end_ticks = convert_ticks.time_to_delta_ticks(query_time_range.end);
     let row = sqlx::query(
         "SELECT MIN(insert_time) as min_insert_time, MAX(insert_time) as max_insert_time
         FROM BLOCKS
         WHERE stream_id = $1
-        AND begin_ticks <= $2
-        AND end_ticks >= $3;",
+        AND begin_time <= $2
+        AND end_time >= $3;",
     )
     .bind(stream.stream_id)
-    .bind(relative_end_ticks)
-    .bind(relative_begin_ticks)
+    .bind(query_time_range.end)
+    .bind(query_time_range.begin)
     .fetch_one(pool)
     .await
     .with_context(|| "get_insert_time_range")?;
@@ -138,8 +135,7 @@ pub async fn generate_jit_partitions(
     process: Arc<ProcessInfo>,
     convert_ticks: &ConvertTicks,
 ) -> Result<Vec<SourceDataBlocksInMemory>> {
-    let insert_time_range =
-        get_insert_time_range(pool, query_time_range, stream.clone(), convert_ticks).await?;
+    let insert_time_range = get_insert_time_range(pool, query_time_range, stream.clone()).await?;
     if insert_time_range.is_none() {
         return Ok(vec![]);
     }
