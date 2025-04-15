@@ -27,13 +27,13 @@ impl Property {
     }
 }
 
-#[derive(Debug, Eq, PartialEq, Hash, Clone)]
+#[derive(Debug, Eq, PartialEq, Hash)]
 pub struct PropertySet {
     properties: Vec<Property>,
 }
 
 lazy_static! {
-    static ref STORE: Mutex<HashSet<PropertySet>> = Mutex::new(HashSet::new());
+    static ref STORE: Mutex<HashSet<Arc<PropertySet>>> = Mutex::new(HashSet::new());
 }
 
 impl PropertySet {
@@ -43,11 +43,13 @@ impl PropertySet {
         let set = PropertySet { properties };
         let mut guard = STORE.lock().unwrap();
         if let Some(found) = guard.get(&set) {
-            unsafe { std::mem::transmute::<&PropertySet, &PropertySet>(found) }
+	    let set_ref: &PropertySet = found.as_ref();
+            unsafe { std::mem::transmute::<&PropertySet, &PropertySet>(set_ref) }
         } else {
-            guard.insert(set.clone());
-            let found = guard.get(&set).unwrap();
-            unsafe { std::mem::transmute::<&PropertySet, &PropertySet>(found) }
+            let new_set = Arc::new(set);
+            guard.insert(new_set.clone());
+            let set_ref: &PropertySet = new_set.as_ref();
+            unsafe { std::mem::transmute::<&PropertySet, &PropertySet>(set_ref) }
         }
     }
 
