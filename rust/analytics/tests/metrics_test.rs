@@ -80,7 +80,7 @@ fn test_stress_tagged_measures() {
     };
 
     for i in 0..2000 {
-        let value_str = intern_string(&format!("{}", i%127));
+        let value_str = intern_string(&format!("{}", i % 127));
         stream.get_events_mut().push(TaggedIntegerMetricEvent {
             desc: &METRIC_DESC,
             properties: PropertySet::find_or_create(vec![
