@@ -43,7 +43,7 @@ impl PropertySet {
         let set = PropertySet { properties };
         let mut guard = STORE.lock().unwrap();
         if let Some(found) = guard.get(&set) {
-	    let set_ref: &PropertySet = found.as_ref();
+            let set_ref: &PropertySet = found.as_ref();
             unsafe { std::mem::transmute::<&PropertySet, &PropertySet>(set_ref) }
         } else {
             let new_set = Arc::new(set);
