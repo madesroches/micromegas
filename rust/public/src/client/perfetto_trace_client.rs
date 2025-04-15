@@ -4,6 +4,7 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use datafusion::arrow::array::{StringArray, TimestampNanosecondArray, UInt32Array};
 use micromegas_analytics::dfext::typed_column::typed_column_by_name;
+use micromegas_analytics::time::TimeRange;
 use prost::Message;
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
@@ -11,8 +12,7 @@ use tokio::io::AsyncWriteExt;
 async fn get_process_exe(
     process_id: &str,
     client: &mut Client,
-    begin: DateTime<Utc>,
-    end: DateTime<Utc>,
+    query_range: TimeRange,
 ) -> Result<String> {
     let sql_process = format!(
         r#"
@@ -22,7 +22,7 @@ async fn get_process_exe(
         LIMIT 1
         "#
     );
-    let batches = client.query(sql_process, begin, end).await?;
+    let batches = client.query(sql_process, Some(query_range)).await?;
     if batches.len() != 1 || batches[0].num_rows() != 1 {
         anyhow::bail!("process not found");
     }
@@ -33,11 +33,10 @@ async fn get_process_exe(
 pub async fn format_perfetto_trace(
     client: &mut Client,
     process_id: &str,
-    begin: DateTime<Utc>,
-    end: DateTime<Utc>,
+    query_range: TimeRange,
 ) -> Result<Vec<u8>> {
     let mut writer = Writer::new(process_id);
-    let exe = get_process_exe(process_id, client, begin, end).await?;
+    let exe = get_process_exe(process_id, client, query_range).await?;
     writer.append_process_descriptor(&exe);
 
     let sql_streams = format!(
@@ -52,7 +51,7 @@ pub async fn format_perfetto_trace(
     "#
     );
 
-    let batches = client.query(sql_streams, begin, end).await?;
+    let batches = client.query(sql_streams, Some(query_range)).await?;
     for b in batches {
         let stream_id_column: &StringArray = typed_column_by_name(&b, "stream_id")?;
         let thread_name_column: &StringArray = typed_column_by_name(&b, "thread_name")?;
@@ -70,7 +69,7 @@ pub async fn format_perfetto_trace(
                 FROM view_instance('thread_spans', '{stream_id}');
             "#
             );
-            let span_batches = client.query(sql_spans, begin, end).await?;
+            let span_batches = client.query(sql_spans, Some(query_range)).await?;
             for b in span_batches {
                 let begins: &TimestampNanosecondArray = typed_column_by_name(&b, "begin")?;
                 let ends: &TimestampNanosecondArray = typed_column_by_name(&b, "end")?;
@@ -102,7 +101,7 @@ pub async fn write_perfetto_trace(
     end: DateTime<Utc>,
     out_filename: &str,
 ) -> Result<()> {
-    let buf = format_perfetto_trace(client, process_id, begin, end).await?;
+    let buf = format_perfetto_trace(client, process_id, TimeRange::new(begin, end)).await?;
     let mut file = File::create(out_filename).await?;
     file.write_all(&buf).await?;
     Ok(())

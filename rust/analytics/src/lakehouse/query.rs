@@ -34,13 +34,7 @@ async fn register_table(
     object_store: Arc<dyn ObjectStore>,
     view: Arc<dyn View>,
 ) -> Result<()> {
-    let table = MaterializedView::new(
-        lake,
-        object_store,
-        view.clone(),
-        part_provider,
-        query_range.clone(),
-    );
+    let table = MaterializedView::new(lake, object_store, view.clone(), part_provider, query_range);
     view.register_table(ctx, table).await
 }
 
@@ -82,7 +76,7 @@ pub fn register_functions(
             object_store,
             view_factory.clone(),
             part_provider.clone(),
-            query_range.clone(),
+            query_range,
         )),
     );
     ctx.register_udtf(
@@ -113,7 +107,7 @@ pub async fn make_session_context(
 ) -> Result<SessionContext> {
     let ctx = SessionContext::new_with_config_rt(SessionConfig::default(), runtime.clone());
     if let Some(range) = &query_range {
-        ctx.add_analyzer_rule(Arc::new(TableScanRewrite::new(range.clone())));
+        ctx.add_analyzer_rule(Arc::new(TableScanRewrite::new(*range)));
     }
     let object_store_url = ObjectStoreUrl::parse("obj://lakehouse/").unwrap();
     let object_store = lake.blob_storage.inner();
@@ -123,7 +117,7 @@ pub async fn make_session_context(
         runtime,
         lake.clone(),
         part_provider.clone(),
-        query_range.clone(),
+        query_range,
         view_factory.clone(),
         object_store.clone(),
     );
@@ -131,7 +125,7 @@ pub async fn make_session_context(
         register_table(
             lake.clone(),
             part_provider.clone(),
-            query_range.clone(),
+            query_range,
             &ctx,
             object_store.clone(),
             view.clone(),

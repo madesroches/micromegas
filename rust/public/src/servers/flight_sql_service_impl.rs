@@ -125,8 +125,18 @@ impl FlightSqlService for FlightSqlServiceImpl {
         let sql = std::str::from_utf8(&ticket_stmt.statement_handle)
             .map_err(|e| status!("Unable to parse query", e))?;
 
-        let begin = request.metadata().get("query_range_begin");
-        let end = request.metadata().get("query_range_end");
+        let mut begin = request.metadata().get("query_range_begin");
+        if let Some(s) = &begin {
+            if s.is_empty() {
+                begin = None;
+            }
+        }
+        let mut end = request.metadata().get("query_range_end");
+        if let Some(s) = &end {
+            if s.is_empty() {
+                end = None;
+            }
+        }
         let query_range = if begin.is_some() && end.is_some() {
             let begin_datetime = chrono::DateTime::parse_from_rfc3339(
                 begin

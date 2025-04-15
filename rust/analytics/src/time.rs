@@ -6,7 +6,7 @@ use sqlx::Row;
 
 const NANOS_PER_SEC: f64 = 1000.0 * 1000.0 * 1000.0;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct TimeRange {
     pub begin: DateTime<Utc>,
     pub end: DateTime<Utc>,
