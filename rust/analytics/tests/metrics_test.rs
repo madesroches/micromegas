@@ -1,10 +1,12 @@
 use std::{collections::HashMap, sync::Arc};
 
+use crate::intern_string::intern_string;
 use micromegas_analytics::{measure::measure_from_value, payload::parse_block, time::ConvertTicks};
 use micromegas_telemetry_sink::{stream_block::StreamBlock, stream_info::make_stream_info};
 use micromegas_tracing::{
     dispatch::make_process_info,
     event::TracingBlock,
+    intern_string,
     metrics::{
         FloatMetricEvent, IntegerMetricEvent, MetricsBlock, MetricsStream, StaticMetricMetadata,
         TaggedFloatMetricEvent, TaggedIntegerMetricEvent,
@@ -55,6 +57,46 @@ fn test_static_metrics() {
     })
     .unwrap();
     assert_eq!(nb_metric_entries, 2);
+}
+
+#[test]
+fn test_stress_tagged_measures() {
+    let process_id = uuid::Uuid::new_v4();
+    let process_info = Arc::new(make_process_info(
+        process_id,
+        Some(uuid::Uuid::new_v4()),
+        HashMap::new(),
+    ));
+    let mut stream = MetricsStream::new(1024, process_id, &[], HashMap::new());
+    let stream_id = stream.stream_id();
+
+    static METRIC_DESC: StaticMetricMetadata = StaticMetricMetadata {
+        lod: Verbosity::Med,
+        name: "static_name",
+        unit: "static_unit",
+        target: "static_target",
+        file: "file",
+        line: 123,
+    };
+
+    for i in 0..2000 {
+        let value_str = intern_string(&format!("{}", i % 127));
+        stream.get_events_mut().push(TaggedIntegerMetricEvent {
+            desc: &METRIC_DESC,
+            properties: PropertySet::find_or_create(vec![
+                Property::new("value", value_str),
+                Property::new("name", "override_name"),
+                Property::new("unit", "override_unit"),
+                Property::new("target", "override_target"),
+            ]),
+            value: 2,
+            time: now(),
+        });
+    }
+    let mut block =
+        stream.replace_block(Arc::new(MetricsBlock::new(1024, process_id, stream_id, 0)));
+    Arc::get_mut(&mut block).unwrap().close();
+    let _encoded = block.encode_bin(&process_info).unwrap();
 }
 
 #[test]
