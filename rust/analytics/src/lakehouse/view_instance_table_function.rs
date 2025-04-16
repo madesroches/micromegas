@@ -75,7 +75,7 @@ impl TableFunctionImpl for ViewInstanceTableFunction {
             self.object_store.clone(),
             view,
             self.part_provider.clone(),
-            self.query_range.clone(),
+            self.query_range,
         )))
     }
 }

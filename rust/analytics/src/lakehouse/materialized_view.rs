@@ -70,7 +70,7 @@ impl TableProvider for MaterializedView {
         limit: Option<usize>,
     ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
         self.view
-            .jit_update(self.lake.clone(), self.query_range.clone())
+            .jit_update(self.lake.clone(), self.query_range)
             .await
             .map_err(|e| DataFusionError::External(e.into()))?;
 
@@ -79,7 +79,7 @@ impl TableProvider for MaterializedView {
             .fetch(
                 &self.view.get_view_set_name(),
                 &self.view.get_view_instance_id(),
-                self.query_range.clone(),
+                self.query_range,
                 self.view.get_file_schema_hash(),
             )
             .await

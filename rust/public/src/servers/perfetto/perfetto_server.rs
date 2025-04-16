@@ -3,6 +3,7 @@ use crate::client::{
 };
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
+use micromegas_analytics::time::TimeRange;
 use serde::Deserialize;
 use std::sync::Arc;
 
@@ -50,7 +51,7 @@ pub async fn fetch_trace(
         .make_client()
         .await
         .with_context(|| "make_client")?;
-    let buffer = format_perfetto_trace(&mut client, &process_id, begin, end)
+    let buffer = format_perfetto_trace(&mut client, &process_id, TimeRange::new(begin, end))
         .await
         .with_context(|| "format_perfetto_trace")?;
     Ok(buffer.into())

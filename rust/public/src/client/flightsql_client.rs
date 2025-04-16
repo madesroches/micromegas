@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 use arrow_flight::{decode::FlightRecordBatchStream, sql::client::FlightSqlServiceClient};
-use chrono::{DateTime, Utc};
 use datafusion::arrow::array::RecordBatch;
 use futures::stream::StreamExt;
+use micromegas_analytics::time::TimeRange;
 use tonic::transport::Channel;
 
 /// Micromegas FlightSQL client
@@ -21,16 +21,24 @@ impl Client {
         &mut self.inner
     }
 
+    fn set_query_range(&mut self, query_range: Option<TimeRange>) {
+        self.inner.set_header(
+            "query_range_begin",
+            query_range.map_or(String::from(""), |r| r.begin.to_rfc3339()),
+        );
+        self.inner.set_header(
+            "query_range_end",
+            query_range.map_or(String::from(""), |r| r.end.to_rfc3339()),
+        );
+    }
+
     /// Execute SQL query
     pub async fn query(
         &mut self,
         sql: String,
-        begin: DateTime<Utc>,
-        end: DateTime<Utc>,
+        query_range: Option<TimeRange>,
     ) -> Result<Vec<RecordBatch>> {
-        self.inner
-            .set_header("query_range_begin", begin.to_rfc3339());
-        self.inner.set_header("query_range_end", end.to_rfc3339());
+        self.set_query_range(query_range);
         let info = self.inner.execute(sql, None).await?;
         let ticket = info.endpoint[0]
             .ticket
