@@ -65,6 +65,7 @@ pub struct TelemetryGuardBuilder {
     telemetry_sink_url: Option<String>,
     telemetry_sink_max_level: LevelFilter,
     telemetry_metadata_retry: Option<core::iter::Take<tokio_retry::strategy::ExponentialBackoff>>,
+    telemetry_blocks_retry: Option<core::iter::Take<tokio_retry::strategy::ExponentialBackoff>>,
     telemetry_make_request_decorator: Box<dyn FnOnce() -> Arc<dyn RequestDecorator> + Send>,
     extra_sinks: HashMap<TypeId, (LevelFilter, BoxedEventSink)>,
     system_metrics_enabled: bool,
@@ -82,6 +83,7 @@ impl Default for TelemetryGuardBuilder {
             telemetry_sink_url: None,
             telemetry_sink_max_level: LevelFilter::Debug,
             telemetry_metadata_retry: None,
+            telemetry_blocks_retry: None,
             telemetry_make_request_decorator: Box::new(|| {
                 Arc::new(request_decorator::TrivialRequestDecorator {})
             }),
@@ -172,6 +174,15 @@ impl TelemetryGuardBuilder {
     }
 
     #[must_use]
+    pub fn with_telemetry_blocks_retry(
+        mut self,
+        retry_strategy: core::iter::Take<tokio_retry::strategy::ExponentialBackoff>,
+    ) -> Self {
+        self.telemetry_blocks_retry = Some(retry_strategy);
+        self
+    }
+
+    #[must_use]
     pub fn with_request_decorator(
         mut self,
         make_decorator: Box<dyn FnOnce() -> Arc<dyn RequestDecorator> + Send>,
@@ -247,7 +258,10 @@ impl TelemetryGuardBuilder {
                     .or_else(|| std::env::var("MICROMEGAS_TELEMETRY_URL").ok());
 
                 if let Some(url) = telemetry_sink_url {
-                    let retry_strategy = self.telemetry_metadata_retry.unwrap_or_else(|| {
+                    let metadata_retry = self.telemetry_metadata_retry.unwrap_or_else(|| {
+                        tokio_retry::strategy::ExponentialBackoff::from_millis(10).take(3)
+                    });
+                    let blocks_retry = self.telemetry_blocks_retry.unwrap_or_else(|| {
                         tokio_retry::strategy::ExponentialBackoff::from_millis(10).take(3)
                     });
                     sinks.push((
@@ -255,7 +269,8 @@ impl TelemetryGuardBuilder {
                         Box::new(HttpEventSink::new(
                             &url,
                             self.max_queue_size,
-                            retry_strategy,
+                            metadata_retry,
+                            blocks_retry,
                             self.telemetry_make_request_decorator,
                         )),
                     ));

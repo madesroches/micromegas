@@ -54,6 +54,7 @@ impl HttpEventSink {
         addr_server: &str,
         max_queue_size: isize,
         metadata_retry: core::iter::Take<tokio_retry2::strategy::ExponentialBackoff>,
+        blocks_retry: core::iter::Take<tokio_retry2::strategy::ExponentialBackoff>,
         make_decorator: Box<dyn FnOnce() -> Arc<dyn RequestDecorator> + Send>,
     ) -> Self {
         let addr = addr_server.to_owned();
@@ -68,6 +69,7 @@ impl HttpEventSink {
                     thread_queue_size,
                     max_queue_size,
                     metadata_retry,
+                    blocks_retry,
                     make_decorator,
                 );
             })),
@@ -165,6 +167,7 @@ impl HttpEventSink {
         buffer: &dyn StreamBlock,
         current_queue_size: &AtomicIsize,
         max_queue_size: isize,
+        retry_strategy: core::iter::Take<tokio_retry2::strategy::ExponentialBackoff>,
         decorator: &dyn RequestDecorator,
         process_info: &ProcessInfo,
     ) -> Result<()> {
@@ -175,25 +178,39 @@ impl HttpEventSink {
             debug!("dropping data, queue over max_queue_size");
             return Ok(());
         }
-        let encoded_block = buffer.encode_bin(process_info)?;
-        let mut request = client
-            .post(format!("{root_path}/ingestion/insert_block"))
-            .body(encoded_block)
-            .build()
-            .with_context(|| "building request")?;
-        if let Err(e) = decorator
-            .decorate(&mut request)
-            .await
-            .with_context(|| "decorating request")
+        let encoded_block: bytes::Bytes = buffer.encode_bin(process_info)?.into();
+
+        let url = format!("{root_path}/ingestion/insert_block");
+
+        if let Err(err) = tokio_retry2::Retry::spawn(retry_strategy, || async {
+            let mut request = client
+                .post(&url)
+                .body(encoded_block.clone())
+                .build()
+                .with_context(|| "building request")?;
+
+            if let Err(e) = decorator
+                .decorate(&mut request)
+                .await
+                .with_context(|| "decorating request")
+            {
+                debug!("request decorator: {e:?}");
+                return Err(e.into());
+            }
+
+            trace!("push_block: executing request");
+
+            client
+                .execute(request)
+                .await
+                .with_context(|| "executing request")
+                .map_err(Into::into)
+        })
+        .await
         {
-            warn!("request decorator: {e:?}");
-            return Err(e);
+            warn!("failed to push block: {err}");
         }
-        trace!("push_block: executing request");
-        client
-            .execute(request)
-            .await
-            .with_context(|| "executing request")?;
+
         Ok(())
     }
 
@@ -202,7 +219,8 @@ impl HttpEventSink {
         receiver: std::sync::mpsc::Receiver<SinkEvent>,
         queue_size: Arc<AtomicIsize>,
         max_queue_size: isize,
-        retry_strategy: core::iter::Take<tokio_retry2::strategy::ExponentialBackoff>,
+        metadata_retry: core::iter::Take<tokio_retry2::strategy::ExponentialBackoff>,
+        blocks_retry: core::iter::Take<tokio_retry2::strategy::ExponentialBackoff>,
         decorator: &dyn RequestDecorator,
     ) {
         let mut opt_process_info = None;
@@ -229,7 +247,7 @@ impl HttpEventSink {
                             &mut client,
                             &addr,
                             process_info,
-                            retry_strategy.clone(),
+                            metadata_retry.clone(),
                             decorator,
                         )
                         .await
@@ -242,7 +260,7 @@ impl HttpEventSink {
                             &mut client,
                             &addr,
                             stream_info,
-                            retry_strategy.clone(),
+                            metadata_retry.clone(),
                             decorator,
                         )
                         .await
@@ -258,6 +276,7 @@ impl HttpEventSink {
                                 &*buffer,
                                 &queue_size,
                                 max_queue_size,
+                                blocks_retry.clone(),
                                 decorator,
                                 process_info,
                             )
@@ -277,6 +296,7 @@ impl HttpEventSink {
                                 &*buffer,
                                 &queue_size,
                                 max_queue_size,
+                                blocks_retry.clone(),
                                 decorator,
                                 process_info,
                             )
@@ -296,6 +316,7 @@ impl HttpEventSink {
                                 &*buffer,
                                 &queue_size,
                                 max_queue_size,
+                                blocks_retry.clone(),
                                 decorator,
                                 process_info,
                             )
@@ -327,7 +348,8 @@ impl HttpEventSink {
         receiver: std::sync::mpsc::Receiver<SinkEvent>,
         queue_size: Arc<AtomicIsize>,
         max_queue_size: isize,
-        retry_strategy: core::iter::Take<tokio_retry2::strategy::ExponentialBackoff>,
+        metadata_retry: core::iter::Take<tokio_retry2::strategy::ExponentialBackoff>,
+        blocks_retry: core::iter::Take<tokio_retry2::strategy::ExponentialBackoff>,
         make_decorator: Box<dyn FnOnce() -> Arc<dyn RequestDecorator> + Send>,
     ) {
         // TODO: add runtime as configuration option (or create one only if global don't exist)
@@ -338,7 +360,8 @@ impl HttpEventSink {
             receiver,
             queue_size,
             max_queue_size,
-            retry_strategy,
+            metadata_retry,
+            blocks_retry,
             decorator.as_ref(),
         ));
     }
