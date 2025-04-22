@@ -47,7 +47,7 @@ pub fn get_only_string_value(rbs: &[RecordBatch]) -> Result<String> {
     Ok(column.value(0).into())
 }
 
-pub fn get_single_row_primitive_value<T: ArrowPrimitiveType>(
+pub fn get_single_row_primitive_value_by_name<T: ArrowPrimitiveType>(
     rbs: &[RecordBatch],
     column_name: &str,
 ) -> Result<T::Native> {
@@ -58,5 +58,19 @@ pub fn get_single_row_primitive_value<T: ArrowPrimitiveType>(
         );
     }
     let column: &PrimitiveArray<T> = typed_column_by_name(&rbs[0], column_name)?;
+    Ok(column.value(0))
+}
+
+pub fn get_single_row_primitive_value<T: ArrowPrimitiveType>(
+    rbs: &[RecordBatch],
+    column_index: usize,
+) -> Result<T::Native> {
+    if rbs.len() != 1 {
+        anyhow::bail!(
+            "get_single_row_primitive_value given {} record batches",
+            rbs.len()
+        );
+    }
+    let column: &PrimitiveArray<T> = typed_column(&rbs[0], column_index)?;
     Ok(column.value(0))
 }
