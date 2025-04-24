@@ -5,7 +5,7 @@ use datafusion::arrow::array::{AsArray, StructArray};
 use datafusion::arrow::datatypes::{Field, Fields};
 use datafusion::common::{internal_err, Result};
 use datafusion::error::DataFusionError;
-use datafusion::logical_expr::{ColumnarValue, ScalarUDFImpl, Volatility};
+use datafusion::logical_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Volatility};
 use datafusion::{arrow::datatypes::DataType, logical_expr::Signature};
 use std::any::Any;
 use std::sync::Arc;
@@ -75,8 +75,8 @@ impl ScalarUDFImpl for PropertyGet {
     fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
         Ok(DataType::Utf8)
     }
-    fn invoke(&self, args: &[ColumnarValue]) -> Result<ColumnarValue> {
-        let args = ColumnarValue::values_to_arrays(args)?;
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let args = ColumnarValue::values_to_arrays(&args.args)?;
         if args.len() != 2 {
             return internal_err!("wrong number of arguments to property_get()");
         }
