@@ -161,6 +161,7 @@ impl HttpEventSink {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn push_block(
         client: &mut reqwest::Client,
         root_path: &str,

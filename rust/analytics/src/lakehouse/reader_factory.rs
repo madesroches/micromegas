@@ -4,7 +4,10 @@ use bytes::Bytes;
 use datafusion::{
     datasource::physical_plan::{FileMeta, ParquetFileReaderFactory},
     parquet::{
-        arrow::async_reader::{AsyncFileReader, ParquetObjectReader},
+        arrow::{
+            arrow_reader::ArrowReaderOptions,
+            async_reader::{AsyncFileReader, ParquetObjectReader},
+        },
         file::metadata::ParquetMetaData,
     },
     physical_plan::metrics::ExecutionPlanMetricsSet,
@@ -53,7 +56,7 @@ impl ParquetFileReaderFactory for ReaderFactory {
         // todo: don't ignore metrics, report performance of the reader
         let filename = file_meta.location().to_string();
         let object_store = Arc::clone(&self.object_store);
-        let mut inner = ParquetObjectReader::new(object_store, file_meta.object_meta);
+        let mut inner = ParquetObjectReader::new(object_store, file_meta.location().clone());
         if let Some(hint) = metadata_size_hint {
             inner = inner.with_footer_size_hint(hint)
         };
@@ -79,7 +82,7 @@ pub struct ParquetReader {
 impl AsyncFileReader for ParquetReader {
     fn get_bytes(
         &mut self,
-        range: Range<usize>,
+        range: Range<u64>,
     ) -> BoxFuture<'_, datafusion::parquet::errors::Result<Bytes>> {
         // debug!("ParquetReader::get_bytes {}", &self.filename);
         self.inner.get_bytes(range)
@@ -87,7 +90,7 @@ impl AsyncFileReader for ParquetReader {
 
     fn get_byte_ranges(
         &mut self,
-        ranges: Vec<Range<usize>>,
+        ranges: Vec<Range<u64>>,
     ) -> BoxFuture<'_, datafusion::parquet::errors::Result<Vec<Bytes>>> {
         // debug!("ParquetReader::get_byte_ranges {}", &self.filename);
         self.inner.get_byte_ranges(ranges)
@@ -95,6 +98,7 @@ impl AsyncFileReader for ParquetReader {
 
     fn get_metadata(
         &mut self,
+        _options: Option<&ArrowReaderOptions>,
     ) -> BoxFuture<'_, datafusion::parquet::errors::Result<Arc<ParquetMetaData>>> {
         let metadata = self.metadata.clone();
         async move { Ok(metadata) }.boxed()

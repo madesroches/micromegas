@@ -2,10 +2,10 @@ use super::{partition::Partition, reader_factory::ReaderFactory};
 use crate::dfext::predicate::filters_to_predicate;
 use datafusion::{
     arrow::datatypes::SchemaRef,
-    catalog::Session,
+    catalog::{memory::DataSourceExec, Session},
     datasource::{
         listing::PartitionedFile,
-        physical_plan::{FileScanConfig, ParquetSource},
+        physical_plan::{FileScanConfigBuilder, ParquetSource},
     },
     execution::object_store::ObjectStoreUrl,
     physical_plan::ExecutionPlan,
@@ -36,9 +36,10 @@ pub fn make_partitioned_execution_plan(
             .with_predicate(schema.clone(), predicate)
             .with_parquet_file_reader_factory(reader_factory),
     );
-    Ok(FileScanConfig::new(object_store_url, schema, source)
+    let file_scan_config = FileScanConfigBuilder::new(object_store_url, schema, source)
         .with_limit(limit)
         .with_projection(projection.cloned())
-        .with_file_groups(vec![file_group])
-        .build())
+        .with_file_groups(vec![file_group.into()])
+        .build();
+    Ok(Arc::new(DataSourceExec::new(Arc::new(file_scan_config))))
 }
