@@ -3,6 +3,7 @@ use micromegas_tracing::{
     logs::{LogBlock, LogMetadata, LogStream},
     metrics::{MetricsBlock, MetricsStream},
     prelude::*,
+    property_set::{property_get, Property},
     spans::{ThreadBlock, ThreadStream},
 };
 use std::{fmt, sync::Arc};
@@ -45,7 +46,13 @@ impl EventSink for LocalEventSink {
         true
     }
 
-    fn on_log(&self, metadata: &LogMetadata, _time: i64, args: fmt::Arguments<'_>) {
+    fn on_log(
+        &self,
+        metadata: &LogMetadata,
+        properties: &[Property],
+        _time: i64,
+        args: fmt::Arguments<'_>,
+    ) {
         let level_string = {
             #[cfg(feature = "colored")]
             {
@@ -68,11 +75,15 @@ impl EventSink for LocalEventSink {
             }
         };
 
-        let target = if !metadata.target.is_empty() {
+        let mut target = if !metadata.target.is_empty() {
             metadata.target
         } else {
             metadata.module_path
         };
+
+        if let Some(t) = property_get(properties, "target") {
+            target = t;
+        }
 
         let timestamp = {
             #[cfg(feature = "timestamps")]

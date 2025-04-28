@@ -7,6 +7,7 @@ use micromegas_tracing::{
     logs::{LogBlock, LogMetadata, LogStream},
     metrics::{MetricsBlock, MetricsStream},
     prelude::*,
+    property_set::Property,
     spans::{ThreadBlock, ThreadStream},
 };
 use std::{
@@ -382,7 +383,14 @@ impl EventSink for HttpEventSink {
         true
     }
 
-    fn on_log(&self, _metadata: &LogMetadata, _time: i64, _args: fmt::Arguments<'_>) {}
+    fn on_log(
+        &self,
+        _metadata: &LogMetadata,
+        _properties: &[Property],
+        _time: i64,
+        _args: fmt::Arguments<'_>,
+    ) {
+    }
 
     fn on_init_log_stream(&self, log_stream: &LogStream) {
         self.send(SinkEvent::InitStream(Arc::new(make_stream_info(

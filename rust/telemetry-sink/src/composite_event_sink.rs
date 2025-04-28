@@ -3,6 +3,7 @@ use micromegas_tracing::{
     logs::{LogBlock, LogMetadata, LogStream},
     metrics::{MetricsBlock, MetricsStream},
     prelude::*,
+    property_set::Property,
     spans::{ThreadBlock, ThreadStream},
 };
 use std::{fmt, sync::Arc};
@@ -94,13 +95,19 @@ impl EventSink for CompositeSink {
         })
     }
 
-    fn on_log(&self, metadata: &LogMetadata, time: i64, args: fmt::Arguments<'_>) {
+    fn on_log(
+        &self,
+        metadata: &LogMetadata,
+        properties: &[Property],
+        time: i64,
+        args: fmt::Arguments<'_>,
+    ) {
         let target_max_level = self.target_max_level(metadata);
         self.sinks.iter().for_each(|(max_level, sink)| {
             if metadata.level <= target_max_level.unwrap_or(*max_level)
                 && sink.on_log_enabled(metadata)
             {
-                sink.on_log(metadata, time, args);
+                sink.on_log(metadata, properties, time, args);
             }
         });
     }
