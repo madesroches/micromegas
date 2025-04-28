@@ -557,7 +557,7 @@ impl Dispatch {
             return;
         }
         let time = now();
-        self.get_sink().on_log(metadata, time, args);
+        self.get_sink().on_log(metadata, &[], time, args);
         let mut log_stream = self.log_stream.lock().unwrap();
         if args.as_str().is_some() {
             log_stream.get_events_mut().push(LogStaticStrEvent {
@@ -589,7 +589,8 @@ impl Dispatch {
             return;
         }
         let time = now();
-        self.get_sink().on_log(desc, time, args);
+        self.get_sink()
+            .on_log(desc, properties.get_properties(), time, args);
         let mut log_stream = self.log_stream.lock().unwrap();
         log_stream.get_events_mut().push(TaggedLogString {
             desc,
@@ -607,7 +608,7 @@ impl Dispatch {
     #[inline]
     fn log_interop(&self, desc: &LogMetadata, args: fmt::Arguments<'_>) {
         let time = now();
-        self.get_sink().on_log(desc, time, args);
+        self.get_sink().on_log(desc, &[], time, args);
         let mut log_stream = self.log_stream.lock().unwrap();
         if let Some(msg) = args.as_str() {
             log_stream.get_events_mut().push(LogStaticStrInteropEvent {

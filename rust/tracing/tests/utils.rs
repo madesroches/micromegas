@@ -5,6 +5,7 @@ use micromegas_tracing::{
     logs::{LogBlock, LogMetadata, LogMsgQueueAny, LogStream},
     metrics::{MetricsBlock, MetricsMsgQueueAny, MetricsStream},
     process_info::ProcessInfo,
+    property_set::Property,
     spans::{ThreadBlock, ThreadEventQueueAny, ThreadStream},
 };
 use micromegas_transit::HeterogeneousQueue;
@@ -50,7 +51,13 @@ impl EventSink for DebugEventSink {
         true
     }
 
-    fn on_log(&self, _desc: &LogMetadata, _time: i64, args: fmt::Arguments<'_>) {
+    fn on_log(
+        &self,
+        _desc: &LogMetadata,
+        __properties: &[Property],
+        _time: i64,
+        args: fmt::Arguments<'_>,
+    ) {
         *self.0.lock().unwrap() = Some(State::Log(args.to_string()));
     }
 

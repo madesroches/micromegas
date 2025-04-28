@@ -27,6 +27,16 @@ impl Property {
     }
 }
 
+pub fn property_get<'a>(properties: &'a [Property], name: &str) -> Option<&'a str> {
+    properties.iter().find_map(|p| {
+        if p.name.as_str().eq_ignore_ascii_case(name) {
+            Some(p.value.as_str())
+        } else {
+            None
+        }
+    })
+}
+
 #[derive(Debug, Eq, PartialEq, Hash)]
 pub struct PropertySet {
     properties: Vec<Property>,
