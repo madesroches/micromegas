@@ -1,3 +1,5 @@
+pub mod axum_utils;
+
 /// scheduled task for daemon
 pub mod cron_task;
 
@@ -15,3 +17,12 @@ pub mod perfetto;
 
 /// metadata about this implementation of FlightSQL
 pub mod sqlinfo;
+
+/// named keys for authentication
+pub mod key_ring;
+
+/// log uris of http requests
+pub mod log_uri_service;
+
+/// authentication for the gRPC stack
+pub mod tonic_auth_interceptor;

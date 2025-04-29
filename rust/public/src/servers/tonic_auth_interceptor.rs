@@ -1,4 +1,4 @@
-use crate::key_ring::KeyRing;
+use crate::servers::key_ring::KeyRing;
 use micromegas_tracing::prelude::*;
 use tonic::{Request, Status};
 
