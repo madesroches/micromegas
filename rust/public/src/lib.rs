@@ -136,20 +136,11 @@ pub mod perfetto {
     pub use micromegas_perfetto::*;
 }
 
-pub mod axum_utils;
-
 /// Embedable ingestion, analytics and maintenance services.
 /// The user is expected to provide their own authentication.
 pub mod servers;
 
-/// named keys for authentication
-pub mod key_ring;
-
-/// log uris of http requests
-pub mod log_uri_service;
-
-/// authentication for the gRPC stack
-pub mod tonic_auth_interceptor;
-
 /// rust analytics client
 pub mod client;
+
+pub mod utils;
