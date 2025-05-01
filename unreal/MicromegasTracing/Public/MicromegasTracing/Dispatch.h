@@ -63,6 +63,8 @@ namespace MicromegasTracing
 
 		static const PropertySet* GetPropertySet(const TMap<FName, FName>& Context);
 
+		static ProcessInfoConstPtr GetCurrentProcessInfo();
+
 	private:
 		Dispatch(NewGuid AllocNewGuid,
 			const ProcessInfoPtr& ProcessInfo,

@@ -11,22 +11,22 @@ namespace MicromegasTracing
 	{
 		uint32 HashProperties(const TContext& Context)
 		{
-			uint32 hash = 0;
+			uint32 Hash = 0;
 			for (const TPair<FName, FName>& prop : Context)
 			{
-				hash = HashCombine(GetTypeHash(prop.Key), hash);
-				hash = HashCombine(GetTypeHash(prop.Value), hash);
+				Hash = HashCombine(GetTypeHash(prop.Key), Hash);
+				Hash = HashCombine(GetTypeHash(prop.Value), Hash);
 			}
-			return hash;
+			return Hash;
 		}
 	} // namespace
 
 	//
 	// SetStoreKeyFuncs
 	//
-	const TContext* SetStoreKeyFuncs::GetSetKey(PropertySet* set)
+	const TContext* SetStoreKeyFuncs::GetSetKey(PropertySet* Properties)
 	{
-		return &set->GetContext();
+		return &Properties->GetContext();
 	}
 	bool SetStoreKeyFuncs::Matches(const TContext* Lhs, const TContext* Rhs)
 	{
@@ -58,6 +58,7 @@ namespace MicromegasTracing
 		}
 		else
 		{
+			// leaked by design, be careful of the cardinality
 			PropertySet* NewSet = new PropertySet(Context);
 			PropertySets.Add(NewSet);
 			return NewSet;

@@ -420,4 +420,14 @@ namespace MicromegasTracing
 		return nullptr;
 	}
 
+	ProcessInfoConstPtr Dispatch::GetCurrentProcessInfo()
+	{
+		Dispatch* Dispatch = GDispatch;
+		if (!Dispatch)
+		{
+			return nullptr;
+		}
+		return Dispatch->CurrentProcessInfo;
+	}
+
 } // namespace MicromegasTracing
