@@ -37,6 +37,7 @@ namespace MicromegasTracing
 	typedef TSharedPtr<MetricStream, ESPMode::ThreadSafe> MetricStreamPtr;
 	struct ProcessInfo;
 	typedef TSharedPtr<ProcessInfo, ESPMode::ThreadSafe> ProcessInfoPtr;
+	typedef TSharedPtr<const ProcessInfo, ESPMode::ThreadSafe> ProcessInfoConstPtr;
 	typedef HeterogeneousQueue<BeginThreadSpanEvent, EndThreadSpanEvent, BeginThreadNamedSpanEvent, EndThreadNamedSpanEvent> ThreadEventQueue;
 	typedef EventBlock<ThreadEventQueue> ThreadBlock;
 	typedef TSharedPtr<ThreadBlock, ESPMode::ThreadSafe> ThreadBlockPtr;
