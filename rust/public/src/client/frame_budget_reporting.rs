@@ -1,6 +1,7 @@
+use super::flightsql_client::Client;
 use anyhow::{Context, Result};
 use async_stream::try_stream;
-use chrono::{DateTime, TimeDelta, Utc};
+use chrono::{DateTime, Utc};
 use datafusion::{
     arrow::{
         self,
@@ -28,8 +29,6 @@ use micromegas_analytics::{
     time::TimeRange,
 };
 use std::{collections::HashMap, sync::Arc};
-
-use super::{flightsql_client::Client, flightsql_client_factory::FlightSQLClientFactory};
 
 pub fn budget_map_to_properties(
     span_name_to_budget: &HashMap<String, String>,
@@ -282,19 +281,16 @@ pub async fn get_main_thread_stream_id(
     client: &mut Client,
     process_id: &str,
     main_thread_name: &str,
-    start_time: DateTime<Utc>,
+    query_range: TimeRange,
 ) -> Result<String> {
-    let query_range = Some(TimeRange::new(
-        start_time - TimeDelta::minutes(5),
-        start_time + TimeDelta::minutes(5),
-    ));
     let sql = format!(
-        "SELECT stream_id
-	 FROM streams
+        r#"SELECT stream_id
+	 FROM blocks
 	 WHERE process_id = '{process_id}'
-	 AND property_get(properties, 'thread-name') = '{main_thread_name}'"
+	 AND property_get("streams.properties", 'thread-name') = '{main_thread_name}'
+         LIMIT 1"#
     );
-    let rbs = client.query(sql, query_range).await?;
+    let rbs = client.query(sql, Some(query_range)).await?;
     get_only_string_value(&rbs)
 }
 
@@ -356,22 +352,20 @@ pub fn gen_frame_batches(
 }
 
 pub async fn gen_span_batches(
-    sender: tokio::sync::mpsc::Sender<(RecordBatch, Vec<RecordBatch>)>,
-    client_factory: Arc<dyn FlightSQLClientFactory>,
+    sender: tokio::sync::mpsc::Sender<(RecordBatch, Vec<RecordBatch>, String)>,
+    client: &mut Client,
     process_id: &str,
+    time_range: TimeRange,
     main_thread_name: &str,
     top_level_span_name: &str,
     span_to_budget: &HashMap<String, String>,
 ) -> Result<()> {
-    let mut client = client_factory.make_client().await?;
-    let start_time = get_process_start_time(&mut client, process_id)
-        .await
-        .with_context(|| "Process not found")?;
+    //todo: fetch thread id with processes
     let main_thread_stream_id =
-        get_main_thread_stream_id(&mut client, process_id, main_thread_name, start_time).await?;
-    let main_thread_time_range = get_stream_time_range(&mut client, &main_thread_stream_id).await?;
+        get_main_thread_stream_id(client, process_id, main_thread_name, time_range).await?;
+    let main_thread_time_range = get_stream_time_range(client, &main_thread_stream_id).await?;
     let frames_record_batches = get_frames(
-        &mut client,
+        client,
         &main_thread_stream_id,
         main_thread_time_range,
         top_level_span_name,
@@ -381,13 +375,15 @@ pub async fn gen_span_batches(
     while let Some(res) = frame_batch_stream.next().await {
         let frame_batch = res?;
         let spans_rbs = fetch_spans_batch(
-            &mut client,
+            client,
             &main_thread_stream_id,
             frame_batch.clone(),
             span_to_budget,
         )
         .await?;
-        sender.send((frame_batch, spans_rbs)).await?;
+        sender
+            .send((frame_batch, spans_rbs, process_id.to_owned()))
+            .await?;
     }
     Ok(())
 }
