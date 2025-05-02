@@ -30,6 +30,12 @@ use micromegas_analytics::{
 };
 use std::{collections::HashMap, sync::Arc};
 
+#[derive(Clone)]
+pub enum GroupBy {
+    Budget(HashMap<String, String>),
+    SpanName,
+}
+
 pub fn budget_map_to_properties(
     span_name_to_budget: &HashMap<String, String>,
 ) -> Result<ScalarValue> {
@@ -81,39 +87,53 @@ pub async fn fetch_spans_batch(
     client: &mut Client,
     stream_id: &str,
     frames_rb: RecordBatch,
-    span_to_budget: &HashMap<String, String>,
+    group_by_config: &GroupBy,
 ) -> Result<Vec<RecordBatch>> {
     let time_range = get_record_batch_time_range(&frames_rb)?;
     if time_range.is_none() {
         return Ok(vec![]);
     }
     let time_range = time_range.unwrap();
-    let sql = format!(
-        "SELECT name, begin, end, duration
-         FROM view_instance('thread_spans', '{stream_id}')
-         "
-    );
-    let spans_rbs = client.query(sql, Some(time_range)).await?;
-    // add budget column locally
-    let ctx = SessionContext::new();
-    let table = MemTable::try_new(spans_rbs[0].schema(), vec![spans_rbs])?;
-    ctx.register_table("spans", Arc::new(table))?;
-    ctx.register_udf(ScalarUDF::from(PropertyGet::new()));
+    match group_by_config {
+        GroupBy::Budget(span_to_budget) => {
+            let sql = format!(
+                "SELECT name, begin, end, duration
+                 FROM view_instance('thread_spans', '{stream_id}')
+                 "
+            );
+            let spans_rbs = client.query(sql, Some(time_range)).await?;
 
-    let spans = ctx
-        .sql(
-            "SELECT name, begin, end, duration, property_get($span_to_budget_map, name) as budget
-             FROM spans
-             WHERE property_get($span_to_budget_map, name) IS NOT NULL",
-        )
-        .await?
-        .with_param_values(vec![(
-            "span_to_budget_map",
-            budget_map_to_properties(span_to_budget)?,
-        )])?
-        .collect()
-        .await?;
-    Ok(spans)
+            // add budget column locally
+            let ctx = SessionContext::new();
+            let table = MemTable::try_new(spans_rbs[0].schema(), vec![spans_rbs])?;
+            ctx.register_table("spans", Arc::new(table))?;
+            ctx.register_udf(ScalarUDF::from(PropertyGet::new()));
+
+            let spans = ctx
+		.sql(
+		    "SELECT name, begin, end, duration, property_get($span_to_budget_map, name) as budget
+                     FROM spans
+                     WHERE property_get($span_to_budget_map, name) IS NOT NULL",
+		)
+		.await?
+		.with_param_values(vec![(
+		    "span_to_budget_map",
+		    budget_map_to_properties(span_to_budget)?,
+		)])?
+		.collect()
+		.await?;
+            Ok(spans)
+        }
+        GroupBy::SpanName => {
+            let sql = format!(
+                "SELECT name, name as budget, begin, end, duration
+                 FROM view_instance('thread_spans', '{stream_id}')
+                "
+            );
+            let spans_rbs = client.query(sql, Some(time_range)).await?;
+            Ok(spans_rbs)
+        }
+    }
 }
 
 pub async fn extract_top_offenders(ctx: &SessionContext) -> Result<Vec<RecordBatch>> {
@@ -316,10 +336,14 @@ pub async fn get_frames(
     time_range: TimeRange,
     top_level_span_name: &str,
 ) -> Result<Vec<RecordBatch>> {
+    let begin_iso = time_range.begin.to_rfc3339();
+    let end_iso = time_range.end.to_rfc3339();
     let sql = format!(
         "SELECT begin, end
          FROM view_instance('thread_spans', '{stream_id}')
          WHERE name = '{top_level_span_name}'
+         AND begin >= '{begin_iso}'
+         AND end <= '{end_iso}'
          ORDER BY begin"
     );
     client.query(sql, Some(time_range)).await
@@ -358,19 +382,26 @@ pub async fn gen_span_batches(
     time_range: TimeRange,
     main_thread_name: &str,
     top_level_span_name: &str,
-    span_to_budget: &HashMap<String, String>,
+    group_by_config: &GroupBy,
 ) -> Result<()> {
     //todo: fetch thread id with processes
     let main_thread_stream_id =
-        get_main_thread_stream_id(client, process_id, main_thread_name, time_range).await?;
-    let main_thread_time_range = get_stream_time_range(client, &main_thread_stream_id).await?;
+        get_main_thread_stream_id(client, process_id, main_thread_name, time_range)
+            .await
+            .with_context(|| "get_main_thread_stream_id")?;
+    let mut main_thread_time_range = get_stream_time_range(client, &main_thread_stream_id)
+        .await
+        .with_context(|| "get_stream_time_range")?;
+    main_thread_time_range.begin = main_thread_time_range.begin.max(time_range.begin);
+    main_thread_time_range.end = main_thread_time_range.end.min(time_range.end);
     let frames_record_batches = get_frames(
         client,
         &main_thread_stream_id,
         main_thread_time_range,
         top_level_span_name,
     )
-    .await?;
+    .await
+    .with_context(|| "get_frames")?;
     let mut frame_batch_stream = gen_frame_batches(frames_record_batches);
     while let Some(res) = frame_batch_stream.next().await {
         let frame_batch = res?;
@@ -378,9 +409,10 @@ pub async fn gen_span_batches(
             client,
             &main_thread_stream_id,
             frame_batch.clone(),
-            span_to_budget,
+            group_by_config,
         )
-        .await?;
+        .await
+        .with_context(|| "fetch_spans_batch")?;
         sender
             .send((frame_batch, spans_rbs, process_id.to_owned()))
             .await?;

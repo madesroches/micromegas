@@ -13,11 +13,11 @@ use std::{str::from_utf8, sync::Arc};
 
 pub async fn log_json_rows(
     target: &'static str,
-    rbs: Vec<RecordBatch>,
+    rbs: &[RecordBatch],
     columns_as_properties: &[&str],
 ) -> Result<()> {
     let options = EncoderOptions::default();
-    for batch in &rbs {
+    for batch in rbs {
         let mut prop_columns = vec![];
         for prop_name in columns_as_properties {
             let c: &StringArray = typed_column_by_name(batch, prop_name)?;
