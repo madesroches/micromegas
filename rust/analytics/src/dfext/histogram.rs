@@ -68,6 +68,7 @@ impl Accumulator for HistogramAccumulator {
             ));
         }
         let range = self.end - self.start;
+        let bin_width = range / (self.bins.len() as f64);
         for i in 0..values.len() {
             let v = values.value(i);
             self.min = self.min.min(v);
@@ -75,7 +76,7 @@ impl Accumulator for HistogramAccumulator {
             self.sum += v;
             self.sum_sq += v * v;
             self.count += 1;
-            let bin_index = (((v - self.start) / range).floor()) as usize;
+            let bin_index = (((v - self.start) / bin_width).floor()) as usize;
             let bin_index = bin_index.clamp(0, self.bins.len() - 1);
             self.bins[bin_index] += 1;
         }
