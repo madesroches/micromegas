@@ -4,7 +4,7 @@ use datafusion::{
             Array, ArrayBuilder, Float64Array, ListArray, ListBuilder, PrimitiveBuilder,
             StructArray, StructBuilder, UInt64Array, UInt64Builder,
         },
-        datatypes::{DataType, Field, Fields, Float64Type},
+        datatypes::{DataType, Field, Fields, Float64Type, UInt64Type},
     },
     error::DataFusionError,
     logical_expr::{function::AccumulatorArgs, Accumulator, AggregateUDF, Volatility},
@@ -18,13 +18,27 @@ use std::sync::Arc;
 struct HistogramAccumulator {
     start: f64,
     end: f64,
+    min: f64,
+    max: f64,
+    sum: f64,
+    sum_sq: f64,
+    count: u64,
     bins: Vec<u64>,
 }
 
 impl HistogramAccumulator {
     pub fn new(start: f64, end: f64, nb_bins: usize) -> Self {
         let bins = vec![0; nb_bins];
-        Self { start, end, bins }
+        Self {
+            start,
+            end,
+            bins,
+            min: f64::MAX,
+            max: f64::MIN,
+            sum: 0.0,
+            sum_sq: 0.0,
+            count: 0,
+        }
     }
 }
 
@@ -56,6 +70,11 @@ impl Accumulator for HistogramAccumulator {
         let range = self.end - self.start;
         for i in 0..values.len() {
             let v = values.value(i);
+            self.min = self.min.min(v);
+            self.max = self.max.max(v);
+            self.sum += v;
+            self.sum_sq += v * v;
+            self.count += 1;
             let bin_index = (((v - self.start) / range).floor()) as usize;
             let bin_index = bin_index.clamp(0, self.bins.len() - 1);
             self.bins[bin_index] += 1;
@@ -64,15 +83,7 @@ impl Accumulator for HistogramAccumulator {
     }
 
     fn evaluate(&mut self) -> datafusion::error::Result<datafusion::scalar::ScalarValue> {
-        let fields = vec![
-            Field::new("start", DataType::Float64, false),
-            Field::new("end", DataType::Float64, false),
-            Field::new(
-                "bins",
-                DataType::List(Arc::new(Field::new("bin", DataType::UInt64, false))),
-                false,
-            ),
-        ];
+        let fields = state_arrow_fields();
         let mut struct_builder = StructBuilder::from_fields(fields, 1);
         let start_builder = struct_builder
             .field_builder::<PrimitiveBuilder<Float64Type>>(0)
@@ -84,8 +95,35 @@ impl Accumulator for HistogramAccumulator {
             .ok_or_else(|| DataFusionError::Execution("Error accessing to end builder".into()))?;
         end_builder.append_value(self.end);
 
+        let min_builder = struct_builder
+            .field_builder::<PrimitiveBuilder<Float64Type>>(2)
+            .ok_or_else(|| DataFusionError::Execution("Error accessing to min builder".into()))?;
+        min_builder.append_value(self.min);
+
+        let max_builder = struct_builder
+            .field_builder::<PrimitiveBuilder<Float64Type>>(3)
+            .ok_or_else(|| DataFusionError::Execution("Error accessing to max builder".into()))?;
+        max_builder.append_value(self.max);
+
+        let sum_builder = struct_builder
+            .field_builder::<PrimitiveBuilder<Float64Type>>(4)
+            .ok_or_else(|| DataFusionError::Execution("Error accessing to sum builder".into()))?;
+        sum_builder.append_value(self.sum);
+
+        let sum_sq_builder = struct_builder
+            .field_builder::<PrimitiveBuilder<Float64Type>>(5)
+            .ok_or_else(|| {
+                DataFusionError::Execution("Error accessing to sum_sq builder".into())
+            })?;
+        sum_sq_builder.append_value(self.sum_sq);
+
+        let count_builder = struct_builder
+            .field_builder::<PrimitiveBuilder<UInt64Type>>(6)
+            .ok_or_else(|| DataFusionError::Execution("Error accessing to count builder".into()))?;
+        count_builder.append_value(self.count);
+
         let bins_builder = struct_builder
-            .field_builder::<ListBuilder<Box<dyn ArrayBuilder>>>(2)
+            .field_builder::<ListBuilder<Box<dyn ArrayBuilder>>>(7)
             .ok_or_else(|| DataFusionError::Execution("Error accessing to bins builder".into()))?;
         let bin_array_builder = bins_builder
             .values()
@@ -145,8 +183,38 @@ impl Accumulator for HistogramAccumulator {
                 ));
             }
 
-            let bins_list = struct_array
+            let min = struct_array
                 .column(2)
+                .as_any()
+                .downcast_ref::<Float64Array>()
+                .ok_or_else(|| DataFusionError::Execution("downcasting to Float64Array".into()))?
+                .value(0);
+            let max = struct_array
+                .column(3)
+                .as_any()
+                .downcast_ref::<Float64Array>()
+                .ok_or_else(|| DataFusionError::Execution("downcasting to Float64Array".into()))?
+                .value(0);
+            let sum = struct_array
+                .column(4)
+                .as_any()
+                .downcast_ref::<Float64Array>()
+                .ok_or_else(|| DataFusionError::Execution("downcasting to Float64Array".into()))?
+                .value(0);
+            let sum_sq = struct_array
+                .column(5)
+                .as_any()
+                .downcast_ref::<Float64Array>()
+                .ok_or_else(|| DataFusionError::Execution("downcasting to Float64Array".into()))?
+                .value(0);
+            let count = struct_array
+                .column(6)
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .ok_or_else(|| DataFusionError::Execution("downcasting to UInt64Array".into()))?
+                .value(0);
+            let bins_list = struct_array
+                .column(7)
                 .as_any()
                 .downcast_ref::<ListArray>()
                 .ok_or_else(|| DataFusionError::Execution("downcasting to ListArray".into()))?;
@@ -160,7 +228,13 @@ impl Accumulator for HistogramAccumulator {
                     "Error merging incompatible histograms".into(),
                 ));
             }
-            // todo: use arrow compute
+            self.min = self.min.min(min);
+            self.max = self.max.max(max);
+            self.sum += sum;
+            self.sum_sq += sum_sq;
+            self.count += count;
+
+            // optim opportunity: use arrow compute
             for i in 0..self.bins.len() {
                 self.bins[i] += bins.value(i);
             }
@@ -225,17 +299,25 @@ fn make_state(args: AccumulatorArgs) -> Result<Box<dyn Accumulator>, DataFusionE
     )))
 }
 
-fn make_state_arrow_type() -> DataType {
-    let fields = vec![
+fn state_arrow_fields() -> Vec<Field> {
+    vec![
         Field::new("start", DataType::Float64, false),
         Field::new("end", DataType::Float64, false),
+        Field::new("min", DataType::Float64, false),
+        Field::new("max", DataType::Float64, false),
+        Field::new("sum", DataType::Float64, false),
+        Field::new("sum_sq", DataType::Float64, false),
+        Field::new("count", DataType::UInt64, false),
         Field::new(
             "bins",
             DataType::List(Arc::new(Field::new("bin", DataType::UInt64, false))),
             false,
         ),
-    ];
-    DataType::Struct(Fields::from(fields))
+    ]
+}
+
+fn make_state_arrow_type() -> DataType {
+    DataType::Struct(Fields::from(state_arrow_fields()))
 }
 
 pub fn make_histo_udaf() -> AggregateUDF {
