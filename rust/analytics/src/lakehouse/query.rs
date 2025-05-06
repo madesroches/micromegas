@@ -7,6 +7,7 @@ use super::{
     view_factory::ViewFactory,
 };
 use crate::{
+    dfext::histogram::make_histo_udaf,
     lakehouse::{
         materialized_view::MaterializedView, table_scan_rewrite::TableScanRewrite,
         view_instance_table_function::ViewInstanceTableFunction,
@@ -96,6 +97,7 @@ pub fn register_functions(
         )),
     );
     ctx.register_udf(ScalarUDF::from(PropertyGet::new()));
+    ctx.register_udaf(make_histo_udaf());
 }
 
 pub async fn make_session_context(
