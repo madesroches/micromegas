@@ -1,11 +1,8 @@
-use anyhow::Context;
-use std::sync::Arc;
-
 use datafusion::{
     arrow::{
         array::{
-            ArrayBuilder, Float64Array, ListArray, ListBuilder, PrimitiveBuilder, StructArray,
-            StructBuilder, UInt64Array, UInt64Builder,
+            Array, ArrayBuilder, Float64Array, ListArray, ListBuilder, PrimitiveBuilder,
+            StructArray, StructBuilder, UInt64Array, UInt64Builder,
         },
         datatypes::{DataType, Field, Fields, Float64Type},
     },
@@ -15,6 +12,7 @@ use datafusion::{
     prelude::*,
     scalar::ScalarValue,
 };
+use std::sync::Arc;
 
 #[derive(Debug)]
 struct HistogramAccumulator {
@@ -44,7 +42,17 @@ impl Accumulator for HistogramAccumulator {
                 "invalid arguments to HistogramAccumulator::update_batch".into(),
             ));
         }
-        let values = values[3].as_any().downcast_ref::<Float64Array>().unwrap();
+        let values = values[3]
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .ok_or_else(|| {
+                DataFusionError::Execution("values[3] should ne a Float64Array".into())
+            })?;
+        if values.null_count() > 0 {
+            return Err(DataFusionError::Execution(
+                "null values not supported for histogram".into(),
+            ));
+        }
         let range = self.end - self.start;
         for i in 0..values.len() {
             let v = values.value(i);
@@ -56,15 +64,6 @@ impl Accumulator for HistogramAccumulator {
     }
 
     fn evaluate(&mut self) -> datafusion::error::Result<datafusion::scalar::ScalarValue> {
-        let state = self.state()?;
-        Ok(state[0].clone())
-    }
-
-    fn size(&self) -> usize {
-        size_of_val(self) + size_of_val(&self.bins)
-    }
-
-    fn state(&mut self) -> datafusion::error::Result<Vec<datafusion::scalar::ScalarValue>> {
         let fields = vec![
             Field::new("start", DataType::Float64, false),
             Field::new("end", DataType::Float64, false),
@@ -77,27 +76,36 @@ impl Accumulator for HistogramAccumulator {
         let mut struct_builder = StructBuilder::from_fields(fields, 1);
         let start_builder = struct_builder
             .field_builder::<PrimitiveBuilder<Float64Type>>(0)
-            .unwrap();
+            .ok_or_else(|| DataFusionError::Execution("Error accessing to start builder".into()))?;
         start_builder.append_value(self.start);
 
         let end_builder = struct_builder
             .field_builder::<PrimitiveBuilder<Float64Type>>(1)
-            .unwrap();
+            .ok_or_else(|| DataFusionError::Execution("Error accessing to end builder".into()))?;
         end_builder.append_value(self.end);
 
         let bins_builder = struct_builder
             .field_builder::<ListBuilder<Box<dyn ArrayBuilder>>>(2)
-            .with_context(|| "wrong bins builder in struct_builder")
-            .map_err(|e| DataFusionError::External(e.into()))?;
+            .ok_or_else(|| DataFusionError::Execution("Error accessing to bins builder".into()))?;
         let bin_array_builder = bins_builder
             .values()
             .as_any_mut()
             .downcast_mut::<UInt64Builder>()
-            .unwrap();
+            .ok_or_else(|| {
+                DataFusionError::Execution("Error accessing to bins array builder".into())
+            })?;
         bin_array_builder.append_slice(&self.bins);
         bins_builder.append(true);
         struct_builder.append(true);
-        Ok(vec![ScalarValue::Struct(Arc::new(struct_builder.finish()))])
+        Ok(ScalarValue::Struct(Arc::new(struct_builder.finish())))
+    }
+
+    fn size(&self) -> usize {
+        size_of_val(self) + size_of_val(&self.bins)
+    }
+
+    fn state(&mut self) -> datafusion::error::Result<Vec<datafusion::scalar::ScalarValue>> {
+        Ok(vec![self.evaluate()?])
     }
 
     fn merge_batch(
@@ -110,12 +118,15 @@ impl Accumulator for HistogramAccumulator {
                     "invalid state in HistogramAccumulator::merge_batch".into(),
                 ));
             }
-            let struct_array = state.as_any().downcast_ref::<StructArray>().unwrap();
+            let struct_array = state
+                .as_any()
+                .downcast_ref::<StructArray>()
+                .ok_or_else(|| DataFusionError::Execution("downcasting to StructArray".into()))?;
             let starts = struct_array
                 .column(0)
                 .as_any()
                 .downcast_ref::<Float64Array>()
-                .unwrap();
+                .ok_or_else(|| DataFusionError::Execution("downcasting to Float64Array".into()))?;
             let start = starts.value(0);
             if self.start != start {
                 return Err(DataFusionError::Execution(
@@ -126,7 +137,7 @@ impl Accumulator for HistogramAccumulator {
                 .column(1)
                 .as_any()
                 .downcast_ref::<Float64Array>()
-                .unwrap();
+                .ok_or_else(|| DataFusionError::Execution("downcasting to Float64Array".into()))?;
             let end = ends.value(0);
             if self.end != end {
                 return Err(DataFusionError::Execution(
@@ -138,9 +149,12 @@ impl Accumulator for HistogramAccumulator {
                 .column(2)
                 .as_any()
                 .downcast_ref::<ListArray>()
-                .unwrap();
+                .ok_or_else(|| DataFusionError::Execution("downcasting to ListArray".into()))?;
             let bins = bins_list.value(0);
-            let bins = bins.as_any().downcast_ref::<UInt64Array>().unwrap();
+            let bins = bins
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .ok_or_else(|| DataFusionError::Execution("downcasting to UInt64Array".into()))?;
             if bins.len() != self.bins.len() {
                 return Err(DataFusionError::Execution(
                     "Error merging incompatible histograms".into(),
@@ -159,10 +173,10 @@ fn make_state(args: AccumulatorArgs) -> Result<Box<dyn Accumulator>, DataFusionE
     let start_arg = args
         .exprs
         .first()
-        .unwrap()
+        .ok_or_else(|| DataFusionError::Execution("Reading first argument".into()))?
         .as_any()
         .downcast_ref::<Literal>()
-        .unwrap()
+        .ok_or_else(|| DataFusionError::Execution("Downcasting first argument to Literal".into()))?
         .value();
     let start = if let ScalarValue::Float64(Some(start_value)) = start_arg {
         start_value
@@ -175,10 +189,10 @@ fn make_state(args: AccumulatorArgs) -> Result<Box<dyn Accumulator>, DataFusionE
     let end_arg = args
         .exprs
         .get(1)
-        .unwrap()
+        .ok_or_else(|| DataFusionError::Execution("Reading argument 1".into()))?
         .as_any()
         .downcast_ref::<Literal>()
-        .unwrap()
+        .ok_or_else(|| DataFusionError::Execution("Downcasting argument 1 to Literal".into()))?
         .value();
     let end = if let ScalarValue::Float64(Some(end_value)) = end_arg {
         end_value
@@ -191,10 +205,10 @@ fn make_state(args: AccumulatorArgs) -> Result<Box<dyn Accumulator>, DataFusionE
     let nb_bins_arg = args
         .exprs
         .get(2)
-        .unwrap()
+        .ok_or_else(|| DataFusionError::Execution("Reading argument 2".into()))?
         .as_any()
         .downcast_ref::<Literal>()
-        .unwrap()
+        .ok_or_else(|| DataFusionError::Execution("Downcasting argument 2 to Literal".into()))?
         .value();
     let nb_bins = if let ScalarValue::Int64(Some(nb_bins_value)) = nb_bins_arg {
         nb_bins_value
@@ -233,12 +247,9 @@ pub fn make_histo_udaf() -> AggregateUDF {
             DataType::Int64,
             DataType::Float64,
         ],
-        // the return type; DataFusion expects this to match the type returned by `evaluate`.
         Arc::new(make_state_arrow_type()),
         Volatility::Immutable,
-        // This is the accumulator factory; DataFusion uses it to create new accumulators.
         Arc::new(&make_state),
-        // This is the description of the state. `state()` must match the types here.
         Arc::new(vec![make_state_arrow_type()]),
     )
 }
