@@ -10,8 +10,6 @@ pub mod log_stream_table_provider;
 pub mod min_max_time_df;
 /// Convert a filtering expression to a physical predicate
 pub mod predicate;
-/// Estimate quantiles based on a histogram
-pub mod quantile;
 /// Execution plan interface for an async task
 pub mod task_log_exec_plan;
 /// Access to a RecordBatch's columns

@@ -7,7 +7,10 @@ use super::{
     view_factory::ViewFactory,
 };
 use crate::{
-    dfext::{histogram::make_histo_udaf, quantile::make_quantile_from_histogram_udf},
+    dfext::{
+        histogram::histogram_udaf::make_histo_udaf,
+        histogram::quantile::make_quantile_from_histogram_udf,
+    },
     lakehouse::{
         materialized_view::MaterializedView, table_scan_rewrite::TableScanRewrite,
         view_instance_table_function::ViewInstanceTableFunction,
