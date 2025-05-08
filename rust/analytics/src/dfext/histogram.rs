@@ -1,18 +1,158 @@
 use datafusion::{
     arrow::{
         array::{
-            Array, ArrayBuilder, Float64Array, ListArray, ListBuilder, PrimitiveBuilder,
+            Array, ArrayBuilder, ArrayRef, Float64Array, ListArray, ListBuilder, PrimitiveBuilder,
             StructArray, StructBuilder, UInt64Array, UInt64Builder,
         },
         datatypes::{DataType, Field, Fields, Float64Type, UInt64Type},
     },
     error::DataFusionError,
-    logical_expr::{function::AccumulatorArgs, Accumulator, AggregateUDF, Volatility},
+    logical_expr::{
+        function::AccumulatorArgs, Accumulator, AggregateUDF, ColumnarValue, Volatility,
+    },
     physical_plan::expressions::Literal,
     prelude::*,
     scalar::ScalarValue,
 };
 use std::sync::Arc;
+
+#[derive(Debug)]
+pub struct HistogramArray {
+    inner: Arc<StructArray>,
+}
+
+impl HistogramArray {
+    pub fn new(inner: Arc<StructArray>) -> Self {
+        Self { inner }
+    }
+
+    pub fn inner(&self) -> Arc<StructArray> {
+        self.inner.clone()
+    }
+
+    pub fn len(&self) -> usize {
+        self.inner.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+
+    pub fn get_start(&self, index: usize) -> Result<f64, DataFusionError> {
+        let starts = self
+            .inner
+            .column(0)
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .ok_or_else(|| DataFusionError::Execution("downcasting to Float64Array".into()))?;
+        Ok(starts.value(index))
+    }
+
+    pub fn get_end(&self, index: usize) -> Result<f64, DataFusionError> {
+        let ends = self
+            .inner
+            .column(1)
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .ok_or_else(|| DataFusionError::Execution("downcasting to Float64Array".into()))?;
+        Ok(ends.value(index))
+    }
+
+    pub fn get_min(&self, index: usize) -> Result<f64, DataFusionError> {
+        let mins = self
+            .inner
+            .column(2)
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .ok_or_else(|| DataFusionError::Execution("downcasting to Float64Array".into()))?;
+        Ok(mins.value(index))
+    }
+
+    pub fn get_max(&self, index: usize) -> Result<f64, DataFusionError> {
+        let maxs = self
+            .inner
+            .column(3)
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .ok_or_else(|| DataFusionError::Execution("downcasting to Float64Array".into()))?;
+        Ok(maxs.value(index))
+    }
+
+    pub fn get_sum(&self, index: usize) -> Result<f64, DataFusionError> {
+        let sums = self
+            .inner
+            .column(4)
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .ok_or_else(|| DataFusionError::Execution("downcasting to Float64Array".into()))?;
+        Ok(sums.value(index))
+    }
+
+    pub fn get_sum_sq(&self, index: usize) -> Result<f64, DataFusionError> {
+        let sums_sq = self
+            .inner
+            .column(5)
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .ok_or_else(|| DataFusionError::Execution("downcasting to Float64Array".into()))?;
+        Ok(sums_sq.value(index))
+    }
+
+    pub fn get_count(&self, index: usize) -> Result<u64, DataFusionError> {
+        let counts = self
+            .inner
+            .column(6)
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or_else(|| DataFusionError::Execution("downcasting to UInt64Array".into()))?;
+        Ok(counts.value(index))
+    }
+
+    pub fn get_bins(&self, index: usize) -> Result<UInt64Array, DataFusionError> {
+        let bins_list = self
+            .inner
+            .column(7)
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .ok_or_else(|| DataFusionError::Execution("downcasting to ListArray".into()))?;
+        let bins = bins_list.value(index);
+        let bins = bins
+            .as_any()
+            .downcast_ref::<UInt64Array>()
+            .ok_or_else(|| DataFusionError::Execution("downcasting to UInt64Array".into()))?;
+        Ok(bins.clone())
+    }
+}
+
+impl TryFrom<&ArrayRef> for HistogramArray {
+    type Error = DataFusionError;
+
+    fn try_from(value: &ArrayRef) -> Result<Self, Self::Error> {
+        let struct_array = value
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .ok_or_else(|| DataFusionError::Execution("downcasting to StructArray".into()))?;
+        let inner = Arc::new(struct_array.clone());
+        Ok(Self { inner })
+    }
+}
+
+impl TryFrom<&ColumnarValue> for HistogramArray {
+    type Error = DataFusionError;
+
+    fn try_from(value: &ColumnarValue) -> Result<Self, Self::Error> {
+        match value {
+            ColumnarValue::Array(array) => array.try_into(),
+            ColumnarValue::Scalar(scalar_value) => {
+                if let ScalarValue::Struct(array) = scalar_value {
+                    Ok(Self::new(array.clone()))
+                } else {
+                    Err(DataFusionError::Execution( "Can't convert ColumnarValue into HistogramArray: ScalarValue is not a struct".into()))
+                }
+            }
+        }
+    }
+}
 
 #[derive(Debug)]
 struct HistogramAccumulator {
@@ -147,83 +287,33 @@ impl Accumulator for HistogramAccumulator {
         Ok(vec![self.evaluate()?])
     }
 
-    fn merge_batch(
-        &mut self,
-        states: &[datafusion::arrow::array::ArrayRef],
-    ) -> datafusion::error::Result<()> {
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> datafusion::error::Result<()> {
         for state in states {
-            if state.len() != 1 {
+            let histo_array: HistogramArray = state.try_into()?;
+            if histo_array.len() != 1 {
                 return Err(DataFusionError::Execution(
                     "invalid state in HistogramAccumulator::merge_batch".into(),
                 ));
             }
-            let struct_array = state
-                .as_any()
-                .downcast_ref::<StructArray>()
-                .ok_or_else(|| DataFusionError::Execution("downcasting to StructArray".into()))?;
-            let starts = struct_array
-                .column(0)
-                .as_any()
-                .downcast_ref::<Float64Array>()
-                .ok_or_else(|| DataFusionError::Execution("downcasting to Float64Array".into()))?;
-            let start = starts.value(0);
+            let start = histo_array.get_start(0)?;
             if self.start != start {
                 return Err(DataFusionError::Execution(
                     "Error merging incompatible histograms".into(),
                 ));
             }
-            let ends = struct_array
-                .column(1)
-                .as_any()
-                .downcast_ref::<Float64Array>()
-                .ok_or_else(|| DataFusionError::Execution("downcasting to Float64Array".into()))?;
-            let end = ends.value(0);
+            let end = histo_array.get_end(0)?;
             if self.end != end {
                 return Err(DataFusionError::Execution(
                     "Error merging incompatible histograms".into(),
                 ));
             }
 
-            let min = struct_array
-                .column(2)
-                .as_any()
-                .downcast_ref::<Float64Array>()
-                .ok_or_else(|| DataFusionError::Execution("downcasting to Float64Array".into()))?
-                .value(0);
-            let max = struct_array
-                .column(3)
-                .as_any()
-                .downcast_ref::<Float64Array>()
-                .ok_or_else(|| DataFusionError::Execution("downcasting to Float64Array".into()))?
-                .value(0);
-            let sum = struct_array
-                .column(4)
-                .as_any()
-                .downcast_ref::<Float64Array>()
-                .ok_or_else(|| DataFusionError::Execution("downcasting to Float64Array".into()))?
-                .value(0);
-            let sum_sq = struct_array
-                .column(5)
-                .as_any()
-                .downcast_ref::<Float64Array>()
-                .ok_or_else(|| DataFusionError::Execution("downcasting to Float64Array".into()))?
-                .value(0);
-            let count = struct_array
-                .column(6)
-                .as_any()
-                .downcast_ref::<UInt64Array>()
-                .ok_or_else(|| DataFusionError::Execution("downcasting to UInt64Array".into()))?
-                .value(0);
-            let bins_list = struct_array
-                .column(7)
-                .as_any()
-                .downcast_ref::<ListArray>()
-                .ok_or_else(|| DataFusionError::Execution("downcasting to ListArray".into()))?;
-            let bins = bins_list.value(0);
-            let bins = bins
-                .as_any()
-                .downcast_ref::<UInt64Array>()
-                .ok_or_else(|| DataFusionError::Execution("downcasting to UInt64Array".into()))?;
+            let min = histo_array.get_min(0)?;
+            let max = histo_array.get_max(0)?;
+            let sum = histo_array.get_sum(0)?;
+            let sum_sq = histo_array.get_sum_sq(0)?;
+            let count = histo_array.get_count(0)?;
+            let bins = histo_array.get_bins(0)?;
             if bins.len() != self.bins.len() {
                 return Err(DataFusionError::Execution(
                     "Error merging incompatible histograms".into(),
@@ -317,7 +407,7 @@ fn state_arrow_fields() -> Vec<Field> {
     ]
 }
 
-fn make_state_arrow_type() -> DataType {
+pub fn make_histogram_arrow_type() -> DataType {
     DataType::Struct(Fields::from(state_arrow_fields()))
 }
 
@@ -330,9 +420,9 @@ pub fn make_histo_udaf() -> AggregateUDF {
             DataType::Int64,
             DataType::Float64,
         ],
-        Arc::new(make_state_arrow_type()),
+        Arc::new(make_histogram_arrow_type()),
         Volatility::Immutable,
         Arc::new(&make_state),
-        Arc::new(vec![make_state_arrow_type()]),
+        Arc::new(vec![make_histogram_arrow_type()]),
     )
 }
