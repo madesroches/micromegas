@@ -7,6 +7,11 @@ use super::{
     view_factory::ViewFactory,
 };
 use crate::{
+    dfext::{
+        histogram::histogram_udaf::make_histo_udaf,
+        histogram::quantile::make_quantile_from_histogram_udf,
+        histogram::variance::make_variance_from_histogram_udf,
+    },
     lakehouse::{
         materialized_view::MaterializedView, table_scan_rewrite::TableScanRewrite,
         view_instance_table_function::ViewInstanceTableFunction,
@@ -96,6 +101,9 @@ pub fn register_functions(
         )),
     );
     ctx.register_udf(ScalarUDF::from(PropertyGet::new()));
+    ctx.register_udaf(make_histo_udaf());
+    ctx.register_udf(make_quantile_from_histogram_udf());
+    ctx.register_udf(make_variance_from_histogram_udf());
 }
 
 pub async fn make_session_context(

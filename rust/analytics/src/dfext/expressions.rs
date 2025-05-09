@@ -26,7 +26,16 @@ pub fn exp_to_i64(expr: &Expr) -> datafusion::error::Result<i64> {
     match simplify_exp(expr)? {
         Expr::Literal(ScalarValue::Int64(Some(value))) => Ok(value),
         other => {
-            plan_err!("can't convert {other:?} to string")
+            plan_err!("can't convert {other:?} to i64")
+        }
+    }
+}
+
+pub fn exp_to_f64(expr: &Expr) -> datafusion::error::Result<f64> {
+    match simplify_exp(expr)? {
+        Expr::Literal(ScalarValue::Float64(Some(value))) => Ok(value),
+        other => {
+            plan_err!("can't convert {other:?} to f64")
         }
     }
 }

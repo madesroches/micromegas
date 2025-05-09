@@ -2,6 +2,8 @@
 pub mod async_log_stream;
 /// Utilities to help deal with df expressions
 pub mod expressions;
+/// Compute histograms from SQL
+pub mod histogram;
 /// Stream a function's log as a table
 pub mod log_stream_table_provider;
 /// Get min & max from the time column

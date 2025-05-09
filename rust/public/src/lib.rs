@@ -95,6 +95,7 @@
 //! ```
 //!
 #![allow(missing_docs)]
+#![allow(clippy::new_without_default)]
 
 pub use arrow_flight;
 pub use axum;
