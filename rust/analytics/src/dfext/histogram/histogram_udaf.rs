@@ -290,44 +290,41 @@ impl Accumulator for HistogramAccumulator {
     fn merge_batch(&mut self, states: &[ArrayRef]) -> datafusion::error::Result<()> {
         for state in states {
             let histo_array: HistogramArray = state.try_into()?;
-            if histo_array.len() != 1 {
-                return Err(DataFusionError::Execution(
-                    "invalid state in HistogramAccumulator::merge_batch".into(),
-                ));
-            }
-            let start = histo_array.get_start(0)?;
-            if self.start != start {
-                return Err(DataFusionError::Execution(
-                    "Error merging incompatible histograms".into(),
-                ));
-            }
-            let end = histo_array.get_end(0)?;
-            if self.end != end {
-                return Err(DataFusionError::Execution(
-                    "Error merging incompatible histograms".into(),
-                ));
-            }
+            for index_histo in 0..histo_array.len() {
+                let start = histo_array.get_start(index_histo)?;
+                if self.start != start {
+                    return Err(DataFusionError::Execution(
+                        "Error merging incompatible histograms".into(),
+                    ));
+                }
+                let end = histo_array.get_end(index_histo)?;
+                if self.end != end {
+                    return Err(DataFusionError::Execution(
+                        "Error merging incompatible histograms".into(),
+                    ));
+                }
 
-            let min = histo_array.get_min(0)?;
-            let max = histo_array.get_max(0)?;
-            let sum = histo_array.get_sum(0)?;
-            let sum_sq = histo_array.get_sum_sq(0)?;
-            let count = histo_array.get_count(0)?;
-            let bins = histo_array.get_bins(0)?;
-            if bins.len() != self.bins.len() {
-                return Err(DataFusionError::Execution(
-                    "Error merging incompatible histograms".into(),
-                ));
-            }
-            self.min = self.min.min(min);
-            self.max = self.max.max(max);
-            self.sum += sum;
-            self.sum_sq += sum_sq;
-            self.count += count;
+                let min = histo_array.get_min(index_histo)?;
+                let max = histo_array.get_max(index_histo)?;
+                let sum = histo_array.get_sum(index_histo)?;
+                let sum_sq = histo_array.get_sum_sq(index_histo)?;
+                let count = histo_array.get_count(index_histo)?;
+                let bins = histo_array.get_bins(index_histo)?;
+                if bins.len() != self.bins.len() {
+                    return Err(DataFusionError::Execution(
+                        "Error merging incompatible histograms".into(),
+                    ));
+                }
+                self.min = self.min.min(min);
+                self.max = self.max.max(max);
+                self.sum += sum;
+                self.sum_sq += sum_sq;
+                self.count += count;
 
-            // optim opportunity: use arrow compute
-            for i in 0..self.bins.len() {
-                self.bins[i] += bins.value(i);
+                // optim opportunity: use arrow compute
+                for i in 0..self.bins.len() {
+                    self.bins[i] += bins.value(i);
+                }
             }
         }
         Ok(())
