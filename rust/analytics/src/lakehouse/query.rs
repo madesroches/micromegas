@@ -7,10 +7,9 @@ use super::{
     view_factory::ViewFactory,
 };
 use crate::{
-    dfext::{
-        histogram::histogram_udaf::make_histo_udaf,
-        histogram::quantile::make_quantile_from_histogram_udf,
-        histogram::variance::make_variance_from_histogram_udf,
+    dfext::histogram::{
+        histogram_udaf::make_histo_udaf, quantile::make_quantile_from_histogram_udf,
+        sum_histograms_udaf::sum_histograms_udaf, variance::make_variance_from_histogram_udf,
     },
     lakehouse::{
         materialized_view::MaterializedView, table_scan_rewrite::TableScanRewrite,
@@ -62,10 +61,12 @@ pub async fn query_partitions(
         },
         Arc::new(table),
     )?;
+    register_extension_functions(&ctx);
     Ok(ctx.sql(sql).await?)
 }
 
-pub fn register_functions(
+/// register functions that are part of the lakehouse architecture
+pub fn register_lakehouse_functions(
     ctx: &SessionContext,
     runtime: Arc<RuntimeEnv>,
     lake: Arc<DataLakeConnection>,
@@ -100,10 +101,36 @@ pub fn register_functions(
             view_factory.clone(),
         )),
     );
+}
+
+/// register functions that are not depended on the lakehouse architecture
+pub fn register_extension_functions(ctx: &SessionContext) {
     ctx.register_udf(ScalarUDF::from(PropertyGet::new()));
     ctx.register_udaf(make_histo_udaf());
+    ctx.register_udaf(sum_histograms_udaf());
     ctx.register_udf(make_quantile_from_histogram_udf());
     ctx.register_udf(make_variance_from_histogram_udf());
+}
+
+pub fn register_functions(
+    ctx: &SessionContext,
+    runtime: Arc<RuntimeEnv>,
+    lake: Arc<DataLakeConnection>,
+    part_provider: Arc<dyn QueryPartitionProvider>,
+    query_range: Option<TimeRange>,
+    view_factory: Arc<ViewFactory>,
+    object_store: Arc<dyn ObjectStore>,
+) {
+    register_lakehouse_functions(
+        ctx,
+        runtime,
+        lake,
+        part_provider,
+        query_range,
+        view_factory,
+        object_store,
+    );
+    register_extension_functions(ctx);
 }
 
 pub async fn make_session_context(
