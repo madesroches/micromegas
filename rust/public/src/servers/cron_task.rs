@@ -1,8 +1,10 @@
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, DurationRound, TimeDelta, Utc};
+use futures::future::BoxFuture;
 use micromegas_tracing::prelude::*;
 use std::sync::Arc;
+use tokio::task::JoinError;
 
 #[async_trait]
 pub trait TaskCallback: Send + Sync {
@@ -10,11 +12,10 @@ pub trait TaskCallback: Send + Sync {
 }
 
 pub struct CronTask {
-    pub name: String,
-    pub period: TimeDelta,
-    pub offset: TimeDelta,
-    pub callback: Arc<dyn TaskCallback>,
-    pub next_run: DateTime<Utc>,
+    name: String,
+    period: TimeDelta,
+    callback: Arc<dyn TaskCallback>,
+    next_run: DateTime<Utc>,
 }
 
 impl CronTask {
@@ -29,28 +30,43 @@ impl CronTask {
         Ok(Self {
             name,
             period,
-            offset,
             callback,
             next_run,
         })
     }
 
-    pub async fn tick(&mut self) -> Result<()> {
+    pub fn get_next_run(&self) -> DateTime<Utc> {
+        self.next_run
+    }
+
+    pub async fn spawn(&mut self) -> BoxFuture<'static, Result<Result<()>, JoinError>> {
         let now = Utc::now();
         info!("running scheduled task name={}", &self.name);
+        let task_time: DateTime<Utc> = self.next_run;
+        self.next_run += self.period;
         imetric!(
             "task_tick_delay",
             "ns",
-            (now - self.next_run)
+            (now - task_time)
                 .num_nanoseconds()
-                .with_context(|| "get tick delay as ns")? as u64
+                .with_context(|| "get tick delay as ns")
+                .unwrap() as u64
         );
-        let task_time = self.next_run;
-        self.next_run += self.period;
-        self.callback
-            .run(task_time)
-            .await
-            .with_context(|| "TaskDef::tick")?;
-        Ok(())
+        let callback = self.callback.clone();
+        Box::pin(tokio::spawn(async move {
+            let res = callback
+                .run(task_time)
+                .await
+                .with_context(|| "TaskDef::tick");
+            imetric!(
+                "task_tick_latency",
+                "ns",
+                (Utc::now() - task_time)
+                    .num_nanoseconds()
+                    .with_context(|| "get tick delay as ns")
+                    .unwrap() as u64
+            );
+            res
+        }))
     }
 }

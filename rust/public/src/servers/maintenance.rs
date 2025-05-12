@@ -13,6 +13,7 @@ use micromegas_analytics::response_writer::ResponseWriter;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_tracing::prelude::*;
 use std::sync::Arc;
+use tokio::task::JoinSet;
 
 use super::cron_task::{CronTask, TaskCallback};
 
@@ -170,18 +171,29 @@ impl TaskCallback for EverySecondTask {
     }
 }
 
-pub async fn run_tasks_forever(mut tasks: Vec<CronTask>) {
+pub async fn run_tasks_forever(mut tasks: Vec<CronTask>, max_parallelism: usize) {
+    let mut task_set = JoinSet::new();
     loop {
         let mut next_task_run = Utc::now() + TimeDelta::days(2);
         for task in &mut tasks {
-            if task.next_run < Utc::now() {
-                if let Err(e) = task.tick().await {
-                    error!("{e:?}");
+            if task.get_next_run() < Utc::now() {
+                task_set.spawn(task.spawn().await);
+                if task_set.len() >= max_parallelism {
+                    if let Some(res) = task_set.join_next().await {
+                        match res {
+                            Ok(res) => {
+                                if let Err(e) = res {
+                                    error!("{e:?}")
+                                }
+                            }
+                            Err(e) => error!("{e:?}"),
+                        }
+                    }
                 }
             }
-
-            if task.next_run < next_task_run {
-                next_task_run = task.next_run;
+            let task_next_run = task.get_next_run();
+            if task_next_run < next_task_run {
+                next_task_run = task_next_run;
             }
         }
         let time_until_next_task = next_task_run - Utc::now();
@@ -253,10 +265,10 @@ pub async fn daemon(
     )?;
 
     let mut runners = tokio::task::JoinSet::new();
-    runners.spawn(async move { run_tasks_forever(vec![every_day]).await });
-    runners.spawn(async move { run_tasks_forever(vec![every_hour]).await });
-    runners.spawn(async move { run_tasks_forever(vec![every_minute]).await });
-    runners.spawn(async move { run_tasks_forever(vec![every_second]).await });
+    runners.spawn(async move { run_tasks_forever(vec![every_day], 1).await });
+    runners.spawn(async move { run_tasks_forever(vec![every_hour], 1).await });
+    runners.spawn(async move { run_tasks_forever(vec![every_minute], 1).await });
+    runners.spawn(async move { run_tasks_forever(vec![every_second], 5).await });
     runners.join_all().await;
     Ok(())
 }
