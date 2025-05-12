@@ -64,6 +64,12 @@ In order to keep costs down, most payloads will remain unprocessed until they ex
 
 ## Status
 
+### May 2025
+ * Released [version 0.8.0](https://crates.io/crates/micromegas)
+ * Frame budget reporting
+ * Histogram support with quantile estimation
+ * Run seconds task in parallel in daemon
+
 ### April 2025
  * Released [version 0.7.0](https://crates.io/crates/micromegas)
  * Perfetto trace server
