@@ -126,7 +126,8 @@ impl TaskCallback for EveryMinuteTask {
         let partition_time_delta = TimeDelta::minutes(1);
         let trunc_task_time = task_scheduled_time.duration_trunc(partition_time_delta)?;
         let begin_range = trunc_task_time - (partition_time_delta * 2);
-        let end_range = trunc_task_time;
+        // we only try to process a single partition per view
+        let end_range = trunc_task_time - partition_time_delta;
         materialize_all_views(
             self.runtime.clone(),
             self.lake.clone(),
@@ -157,7 +158,7 @@ impl TaskCallback for EverySecondTask {
         let partition_time_delta = TimeDelta::seconds(1);
         let trunc_task_time = task_scheduled_time.duration_trunc(partition_time_delta)?;
         let begin_range = trunc_task_time - (partition_time_delta * 2);
-        // unlike the other tasks, we only try to process a single partition per view
+        // we only try to process a single partition per view
         let end_range = trunc_task_time - partition_time_delta;
         materialize_all_views(
             self.runtime.clone(),
@@ -267,7 +268,7 @@ pub async fn daemon(
     let mut runners = tokio::task::JoinSet::new();
     runners.spawn(async move { run_tasks_forever(vec![every_day], 1).await });
     runners.spawn(async move { run_tasks_forever(vec![every_hour], 1).await });
-    runners.spawn(async move { run_tasks_forever(vec![every_minute], 1).await });
+    runners.spawn(async move { run_tasks_forever(vec![every_minute], 5).await });
     runners.spawn(async move { run_tasks_forever(vec![every_second], 5).await });
     runners.join_all().await;
     Ok(())
