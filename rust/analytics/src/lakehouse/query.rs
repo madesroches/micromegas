@@ -42,14 +42,13 @@ async fn register_table(
     view.register_table(ctx, table).await
 }
 
-/// query_partitions returns a dataframe, leaving the option of streaming the results
-pub async fn query_partitions(
+/// query_partitions_context returns a context to run queries using the partitions as the "source" table
+pub async fn query_partitions_context(
     runtime: Arc<RuntimeEnv>,
     lake: Arc<DataLakeConnection>,
     schema: SchemaRef,
     partitions: Arc<Vec<Partition>>,
-    sql: &str,
-) -> Result<DataFrame> {
+) -> Result<SessionContext> {
     let object_store = lake.blob_storage.inner();
     let table = PartitionedTableProvider::new(schema, object_store.clone(), partitions);
     let object_store_url = ObjectStoreUrl::parse("obj://lakehouse/").unwrap();
@@ -62,6 +61,18 @@ pub async fn query_partitions(
         Arc::new(table),
     )?;
     register_extension_functions(&ctx);
+    Ok(ctx)
+}
+
+// query_partitions returns a dataframe, leaving the option of streaming the results
+pub async fn query_partitions(
+    runtime: Arc<RuntimeEnv>,
+    lake: Arc<DataLakeConnection>,
+    schema: SchemaRef,
+    partitions: Arc<Vec<Partition>>,
+    sql: &str,
+) -> Result<DataFrame> {
+    let ctx = query_partitions_context(runtime, lake, schema, partitions).await?;
     Ok(ctx.sql(sql).await?)
 }
 
