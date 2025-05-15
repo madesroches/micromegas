@@ -1,6 +1,6 @@
 use anyhow::Context;
-use datafusion::arrow::array::{as_string_array, ArrayRef, GenericListArray};
 use datafusion::arrow::array::{Array, StringBuilder};
+use datafusion::arrow::array::{ArrayRef, GenericListArray, StringArray};
 use datafusion::arrow::array::{AsArray, StructArray};
 use datafusion::arrow::datatypes::{Field, Fields};
 use datafusion::common::{internal_err, Result};
@@ -84,7 +84,10 @@ impl ScalarUDFImpl for PropertyGet {
             .as_any()
             .downcast_ref::<GenericListArray<i32>>()
             .ok_or_else(|| DataFusionError::Internal("error casting property list".into()))?;
-        let names = as_string_array(&args[1]);
+        let names = args[1]
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .ok_or_else(|| DataFusionError::Execution("downcasting names in PropertyGet".into()))?;
         if prop_lists.len() != names.len() {
             return internal_err!("arrays of different lengths in property_get()");
         }

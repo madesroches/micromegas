@@ -1,5 +1,6 @@
 use super::{
-    answer::Answer, list_partitions_table_function::ListPartitionsTableFunction,
+    answer::Answer, get_payload_function::GetPayload,
+    list_partitions_table_function::ListPartitionsTableFunction,
     materialize_partitions_table_function::MaterializePartitionsTableFunction,
     partition::Partition, partition_cache::QueryPartitionProvider,
     partitioned_table_provider::PartitionedTableProvider, property_get_function::PropertyGet,
@@ -112,6 +113,7 @@ pub fn register_lakehouse_functions(
             view_factory.clone(),
         )),
     );
+    ctx.register_udf(ScalarUDF::from(GetPayload::new(lake)));
 }
 
 /// register functions that are not depended on the lakehouse architecture
