@@ -53,7 +53,6 @@ impl ScalarUDFImpl for GetPayload {
         if args.len() != 3 {
             return internal_err!("wrong number of arguments to get_payload()");
         }
-        //todo: remove as_string_array - can panic
         let process_ids = args[0]
             .as_any()
             .downcast_ref::<StringArray>()
