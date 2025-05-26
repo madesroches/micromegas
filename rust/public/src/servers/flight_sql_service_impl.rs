@@ -3,6 +3,7 @@ use super::sqlinfo::{
     SQL_INFO_STRING_FUNCTIONS, SQL_INFO_SYSTEM_FUNCTIONS,
 };
 use anyhow::Result;
+use arrow_flight::decode::FlightRecordBatchStream;
 use arrow_flight::encode::FlightDataEncoderBuilder;
 use arrow_flight::error::FlightError;
 use arrow_flight::sql::metadata::{SqlInfoData, SqlInfoDataBuilder};
@@ -41,6 +42,7 @@ use prost::Message;
 use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::Arc;
+use tonic::metadata::MetadataMap;
 use tonic::{Request, Response, Status, Streaming};
 
 macro_rules! status {
@@ -98,40 +100,23 @@ impl FlightSqlServiceImpl {
             view_factory,
         })
     }
-}
 
-#[tonic::async_trait]
-impl FlightSqlService for FlightSqlServiceImpl {
-    type FlightService = FlightSqlServiceImpl;
-
-    async fn do_handshake(
+    async fn execute_query(
         &self,
-        _request: Request<Streaming<HandshakeRequest>>,
-    ) -> Result<
-        Response<Pin<Box<dyn Stream<Item = Result<HandshakeResponse, Status>> + Send>>>,
-        Status,
-    > {
-        api_entry_not_implemented!()
-    }
-
-    async fn do_get_fallback(
-        &self,
-        request: Request<Ticket>,
-        _message: Any,
+        ticket_stmt: TicketStatementQuery,
+        metadata: &MetadataMap,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
         let begin_request = now();
-        let ticket_stmt = TicketStatementQuery::decode(request.get_ref().ticket.clone())
-            .map_err(|e| status!("Could not read ticket", e))?;
         let sql = std::str::from_utf8(&ticket_stmt.statement_handle)
             .map_err(|e| status!("Unable to parse query", e))?;
 
-        let mut begin = request.metadata().get("query_range_begin");
+        let mut begin = metadata.get("query_range_begin");
         if let Some(s) = &begin {
             if s.is_empty() {
                 begin = None;
             }
         }
-        let mut end = request.metadata().get("query_range_end");
+        let mut end = metadata.get("query_range_end");
         if let Some(s) = &end {
             if s.is_empty() {
                 end = None;
@@ -157,8 +142,8 @@ impl FlightSqlService for FlightSqlServiceImpl {
         };
 
         info!(
-            "do_get_fallback range={query_range:?} sql={sql:?} limit={:?}",
-            request.metadata().get("limit")
+            "execute_query range={query_range:?} sql={sql:?} limit={:?}",
+            metadata.get("limit")
         );
         let ctx = make_session_context(
             self.runtime.clone(),
@@ -174,7 +159,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
             .await
             .map_err(|e| status!("error building dataframe", e))?;
 
-        if let Some(limit_str) = request.metadata().get("limit") {
+        if let Some(limit_str) = metadata.get("limit") {
             let limit: usize = usize::from_str(
                 limit_str
                     .to_str()
@@ -199,6 +184,31 @@ impl FlightSqlService for FlightSqlServiceImpl {
         let duration = now() - begin_request;
         imetric!("request_duration", "ticks", duration as u64);
         Ok(Response::new(boxed_flight_stream))
+    }
+}
+
+#[tonic::async_trait]
+impl FlightSqlService for FlightSqlServiceImpl {
+    type FlightService = FlightSqlServiceImpl;
+
+    async fn do_handshake(
+        &self,
+        _request: Request<Streaming<HandshakeRequest>>,
+    ) -> Result<
+        Response<Pin<Box<dyn Stream<Item = Result<HandshakeResponse, Status>> + Send>>>,
+        Status,
+    > {
+        api_entry_not_implemented!()
+    }
+
+    async fn do_get_fallback(
+        &self,
+        request: Request<Ticket>,
+        _message: Any,
+    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
+        let ticket_stmt = TicketStatementQuery::decode(request.get_ref().ticket.clone())
+            .map_err(|e| status!("Could not read ticket", e))?;
+        self.execute_query(ticket_stmt, request.metadata()).await
     }
 
     async fn get_flight_info_statement(
@@ -352,10 +362,10 @@ impl FlightSqlService for FlightSqlServiceImpl {
 
     async fn do_get_statement(
         &self,
-        _ticket: TicketStatementQuery,
-        _request: Request<Ticket>,
+        ticket: TicketStatementQuery,
+        request: Request<Ticket>,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
-        api_entry_not_implemented!()
+        self.execute_query(ticket, request.metadata()).await
     }
 
     async fn do_get_prepared_statement(
@@ -488,10 +498,20 @@ impl FlightSqlService for FlightSqlServiceImpl {
 
     async fn do_put_statement_ingest(
         &self,
-        _ticket: CommandStatementIngest,
-        _request: Request<PeekableFlightDataStream>,
+        command: CommandStatementIngest,
+        request: Request<PeekableFlightDataStream>,
     ) -> Result<i64, Status> {
-        api_entry_not_implemented!()
+        let table_name = command.table;
+        info!("do_put_statement_ingest table_name={table_name}");
+        let mut stream = FlightRecordBatchStream::new_from_flight_data(
+            request.into_inner().map_err(|e| e.into()),
+        );
+        let mut nb_rows: i64 = 0;
+        while let Some(res) = stream.next().await {
+            let rb = res?;
+            nb_rows += rb.num_rows() as i64;
+        }
+        Ok(nb_rows)
     }
 
     async fn do_put_substrait_plan(
