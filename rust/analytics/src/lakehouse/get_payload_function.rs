@@ -94,15 +94,21 @@ async fn fetch_blocks(
     block_ids: StringArray,
 ) -> datafusion::error::Result<ColumnarValue> {
     let mut result_builder = BinaryBuilder::with_capacity(block_ids.len(), 1024 * 1024);
+    let mut futures = vec![];
     for i in 0..process_ids.len() {
         let process_id = process_ids.value(i);
         let stream_id = stream_ids.value(i);
         let block_id = block_ids.value(i);
         let obj_path = format!("blobs/{process_id}/{stream_id}/{block_id}");
-        let buffer = lake
-            .blob_storage
-            .read_blob(&obj_path)
+        let lake = lake.clone();
+        futures.push(tokio::spawn(async move {
+            lake.blob_storage.read_blob(&obj_path).await
+        }));
+    }
+    for f in futures {
+        let buffer = f
             .await
+            .map_err(|e| DataFusionError::External(e.into()))?
             .map_err(|e| DataFusionError::External(e.into()))?;
         result_builder.append_value(buffer);
     }
