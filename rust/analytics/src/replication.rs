@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use arrow_flight::decode::FlightRecordBatchStream;
 use chrono::DateTime;
 use datafusion::arrow::array::{
-    GenericListArray, Int64Array, StringArray, TimestampNanosecondArray,
+    BinaryArray, GenericListArray, Int64Array, StringArray, TimestampNanosecondArray,
 };
 use futures::StreamExt;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
@@ -11,6 +11,58 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::{arrow_properties::read_property_list, dfext::typed_column::typed_column_by_name};
+
+pub async fn ingest_streams(
+    lake: Arc<DataLakeConnection>,
+    mut rb_stream: FlightRecordBatchStream,
+) -> Result<i64> {
+    let mut tr = lake.db_pool.begin().await?;
+    let mut nb_rows: i64 = 0;
+    while let Some(res) = rb_stream.next().await {
+        let b = res?;
+        nb_rows += b.num_rows() as i64;
+        let stream_id_column: &StringArray = typed_column_by_name(&b, "stream_id")?;
+        let process_id_column: &StringArray = typed_column_by_name(&b, "process_id")?;
+        let dependencies_metadata_column: &BinaryArray =
+            typed_column_by_name(&b, "dependencies_metadata")?;
+        let objects_metadata_column: &BinaryArray = typed_column_by_name(&b, "objects_metadata")?;
+        let tags_column: &GenericListArray<i32> = typed_column_by_name(&b, "tags")?;
+        let properties_column: &GenericListArray<i32> = typed_column_by_name(&b, "properties")?;
+        let insert_time_column: &TimestampNanosecondArray =
+            typed_column_by_name(&b, "insert_time")?;
+
+        for row in 0..b.num_rows() {
+            let stream_id = Uuid::parse_str(stream_id_column.value(row))?;
+            let process_id = Uuid::parse_str(process_id_column.value(row))?;
+            let tags: Vec<String> = tags_column
+                .value(row)
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .with_context(|| "casting tags")?
+                .iter()
+                .map(|item| String::from(item.unwrap_or_default()))
+                .collect();
+            let properties = read_property_list(properties_column.value(row))?;
+
+            sqlx::query("INSERT INTO streams VALUES($1,$2,$3,$4,$5,$6,$7);")
+                .bind(stream_id)
+                .bind(process_id)
+                .bind(dependencies_metadata_column.value(row))
+                .bind(objects_metadata_column.value(row))
+                .bind(tags)
+                .bind(properties)
+                .bind(DateTime::from_timestamp_nanos(
+                    insert_time_column.value(row),
+                ))
+                .execute(&mut *tr)
+                .await
+                .with_context(|| "inserting into streams")?;
+        }
+    }
+    tr.commit().await?;
+    info!("ingested {nb_rows} streams");
+    Ok(nb_rows)
+}
 
 pub async fn ingest_processes(
     lake: Arc<DataLakeConnection>,
@@ -79,6 +131,7 @@ pub async fn bulk_ingest(
 ) -> Result<i64> {
     match table_name {
         "processes" => ingest_processes(lake, rb_stream).await,
+        "streams" => ingest_streams(lake, rb_stream).await,
         other => anyhow::bail!("bulk ingest for table {other} not supported"),
     }
 }
