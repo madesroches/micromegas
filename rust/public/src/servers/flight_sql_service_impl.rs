@@ -34,6 +34,7 @@ use futures::{Stream, TryStreamExt};
 use micromegas_analytics::lakehouse::partition_cache::QueryPartitionProvider;
 use micromegas_analytics::lakehouse::query::make_session_context;
 use micromegas_analytics::lakehouse::view_factory::ViewFactory;
+use micromegas_analytics::replication::bulk_ingest;
 use micromegas_analytics::time::TimeRange;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_tracing::prelude::*;
@@ -503,15 +504,16 @@ impl FlightSqlService for FlightSqlServiceImpl {
     ) -> Result<i64, Status> {
         let table_name = command.table;
         info!("do_put_statement_ingest table_name={table_name}");
-        let mut stream = FlightRecordBatchStream::new_from_flight_data(
+        let stream = FlightRecordBatchStream::new_from_flight_data(
             request.into_inner().map_err(|e| e.into()),
         );
-        let mut nb_rows: i64 = 0;
-        while let Some(res) = stream.next().await {
-            let rb = res?;
-            nb_rows += rb.num_rows() as i64;
-        }
-        Ok(nb_rows)
+        bulk_ingest(self.lake.clone(), &table_name, stream)
+            .await
+            .map_err(|e| {
+                let msg = format!("error ingesting into {table_name}: {e:?}");
+                error!("{msg}");
+                status!(msg, e)
+            })
     }
 
     async fn do_put_substrait_plan(

@@ -16,6 +16,7 @@ micromegas-transit.workspace = true
 micromegas-ingestion.workspace = true
 
 anyhow.workspace = true
+arrow-flight.workspace = true
 async-stream.workspace = true
 async-trait.workspace = true
 bytes.workspace = true

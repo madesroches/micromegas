@@ -2643,6 +2643,7 @@ name = "micromegas-analytics"
 version = "0.8.1"
 dependencies = [
  "anyhow",
+ "arrow-flight",
  "async-stream",
  "async-trait",
  "bytes",
