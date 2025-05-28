@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use crate::{arrow_properties::read_property_list, dfext::typed_column::typed_column_by_name};
 
-pub async fn ingest_streams(
+async fn ingest_streams(
     lake: Arc<DataLakeConnection>,
     mut rb_stream: FlightRecordBatchStream,
 ) -> Result<i64> {
@@ -64,7 +64,7 @@ pub async fn ingest_streams(
     Ok(nb_rows)
 }
 
-pub async fn ingest_processes(
+async fn ingest_processes(
     lake: Arc<DataLakeConnection>,
     mut rb_stream: FlightRecordBatchStream,
 ) -> Result<i64> {
@@ -124,6 +124,34 @@ pub async fn ingest_processes(
     Ok(nb_rows)
 }
 
+async fn ingest_payloads(
+    lake: Arc<DataLakeConnection>,
+    mut rb_stream: FlightRecordBatchStream,
+) -> Result<i64> {
+    let mut nb_rows: i64 = 0;
+    while let Some(res) = rb_stream.next().await {
+        let b = res?;
+        nb_rows += b.num_rows() as i64;
+        let process_id_column: &StringArray = typed_column_by_name(&b, "process_id")?;
+        let stream_id_column: &StringArray = typed_column_by_name(&b, "stream_id")?;
+        let block_id_column: &StringArray = typed_column_by_name(&b, "block_id")?;
+        let payload_column: &BinaryArray = typed_column_by_name(&b, "payload")?;
+        for row in 0..b.num_rows() {
+            let process_id = process_id_column.value(row);
+            let stream_id = stream_id_column.value(row);
+            let block_id = block_id_column.value(row);
+            let obj_path = format!("blobs/{process_id}/{stream_id}/{block_id}");
+            let payload = bytes::Bytes::copy_from_slice(payload_column.value(row));
+            lake.blob_storage
+                .put(&obj_path, payload)
+                .await
+                .with_context(|| "Error writing block to blob storage")?;
+        }
+    }
+    info!("ingested {nb_rows} payloads");
+    Ok(nb_rows)
+}
+
 pub async fn bulk_ingest(
     lake: Arc<DataLakeConnection>,
     table_name: &str,
@@ -132,6 +160,7 @@ pub async fn bulk_ingest(
     match table_name {
         "processes" => ingest_processes(lake, rb_stream).await,
         "streams" => ingest_streams(lake, rb_stream).await,
+        "payloads" => ingest_payloads(lake, rb_stream).await,
         other => anyhow::bail!("bulk ingest for table {other} not supported"),
     }
 }
