@@ -177,10 +177,16 @@ class FlightSQLClient:
         self.__channel_creds = channel_creds
 
     def make_channel(self):
+
+        options = [
+            ("grpc.max_send_message_length", 100 * 1024 * 1024),
+            ("grpc.max_receive_message_length", 100 * 1024 * 1024),
+        ]
+
         if self.__channel_creds is None:
-            return grpc.insecure_channel(self.__host_port)
+            return grpc.insecure_channel(self.__host_port, options=options)
         else:
-            return grpc.secure_channel(self.__host_port, self.__channel_creds)
+            return grpc.secure_channel(self.__host_port, self.__channel_creds, options=options)
 
     def query(self, sql, begin=None, end=None):
         metadata = []
@@ -291,7 +297,7 @@ class FlightSQLClient:
             WHERE stream_id='{stream_id}'
             LIMIT {limit};
             """.format(
-                limit=limit,stream_id=stream_id
+            limit=limit, stream_id=stream_id
         )
         return self.query(sql, begin, end)
 
@@ -301,7 +307,6 @@ class FlightSQLClient:
             FROM view_instance('thread_spans', '{stream_id}')
             LIMIT {limit};
             """.format(
-                limit=limit,stream_id=stream_id
+            limit=limit, stream_id=stream_id
         )
         return self.query(sql, begin, end)
-    

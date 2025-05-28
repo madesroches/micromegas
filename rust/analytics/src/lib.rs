@@ -3,6 +3,8 @@
 // crate-specific lint exceptions:
 #![allow(missing_docs, clippy::missing_errors_doc)]
 
+/// Convert arrow array into Property instances
+pub mod arrow_properties;
 /// Misc arrow utilities
 pub mod arrow_utils;
 /// Transforms thread events into call trees
@@ -33,6 +35,8 @@ pub mod metrics_table;
 pub mod payload;
 /// Reference-counted set of properties in transit format
 pub mod property_set;
+/// bulk metadata & payload ingestion using Arrow
+pub mod replication;
 /// Streams response for long requests
 pub mod response_writer;
 /// Location in instrumented source code
