@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use arrow_flight::decode::FlightRecordBatchStream;
 use chrono::DateTime;
 use datafusion::arrow::array::{
-    BinaryArray, GenericListArray, Int64Array, StringArray, TimestampNanosecondArray,
+    BinaryArray, GenericListArray, Int32Array, Int64Array, StringArray, TimestampNanosecondArray,
 };
 use futures::StreamExt;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
@@ -152,6 +152,55 @@ async fn ingest_payloads(
     Ok(nb_rows)
 }
 
+async fn ingest_blocks(
+    lake: Arc<DataLakeConnection>,
+    mut rb_stream: FlightRecordBatchStream,
+) -> Result<i64> {
+    let mut tr = lake.db_pool.begin().await?;
+    let mut nb_rows: i64 = 0;
+    while let Some(res) = rb_stream.next().await {
+        let b = res?;
+        nb_rows += b.num_rows() as i64;
+        let block_id_column: &StringArray = typed_column_by_name(&b, "block_id")?;
+        let stream_id_column: &StringArray = typed_column_by_name(&b, "stream_id")?;
+        let process_id_column: &StringArray = typed_column_by_name(&b, "process_id")?;
+        let begin_time_column: &TimestampNanosecondArray = typed_column_by_name(&b, "begin_time")?;
+        let begin_ticks_column: &Int64Array = typed_column_by_name(&b, "begin_ticks")?;
+        let end_time_column: &TimestampNanosecondArray = typed_column_by_name(&b, "end_time")?;
+        let end_ticks_column: &Int64Array = typed_column_by_name(&b, "end_ticks")?;
+        let nb_objects_column: &Int32Array = typed_column_by_name(&b, "nb_objects")?;
+        let object_offset_column: &Int64Array = typed_column_by_name(&b, "object_offset")?;
+        let payload_size_column: &Int64Array = typed_column_by_name(&b, "payload_size")?;
+        let insert_time_column: &TimestampNanosecondArray =
+            typed_column_by_name(&b, "insert_time")?;
+        for row in 0..b.num_rows() {
+            let block_id = Uuid::parse_str(block_id_column.value(row))?;
+            let stream_id = Uuid::parse_str(stream_id_column.value(row))?;
+            let process_id = Uuid::parse_str(process_id_column.value(row))?;
+            sqlx::query("INSERT INTO blocks VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11);")
+                .bind(block_id)
+                .bind(stream_id)
+                .bind(process_id)
+                .bind(DateTime::from_timestamp_nanos(begin_time_column.value(row)))
+                .bind(begin_ticks_column.value(row))
+                .bind(DateTime::from_timestamp_nanos(end_time_column.value(row)))
+                .bind(end_ticks_column.value(row))
+                .bind(nb_objects_column.value(row))
+                .bind(object_offset_column.value(row))
+                .bind(payload_size_column.value(row))
+                .bind(DateTime::from_timestamp_nanos(
+                    insert_time_column.value(row),
+                ))
+                .execute(&mut *tr)
+                .await
+                .with_context(|| "executing sql insert into blocks")?;
+        }
+    }
+    tr.commit().await?;
+    info!("ingested {nb_rows} blocks");
+    Ok(nb_rows)
+}
+
 pub async fn bulk_ingest(
     lake: Arc<DataLakeConnection>,
     table_name: &str,
@@ -160,6 +209,7 @@ pub async fn bulk_ingest(
     match table_name {
         "processes" => ingest_processes(lake, rb_stream).await,
         "streams" => ingest_streams(lake, rb_stream).await,
+        "blocks" => ingest_blocks(lake, rb_stream).await,
         "payloads" => ingest_payloads(lake, rb_stream).await,
         other => anyhow::bail!("bulk ingest for table {other} not supported"),
     }
