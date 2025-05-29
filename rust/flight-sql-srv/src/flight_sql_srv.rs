@@ -49,7 +49,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Arc::new(data_lake),
         partition_provider,
         view_factory,
-    )?);
+    )?)
+    .max_decoding_message_size(100 * 1024 * 1024);
     let auth_required = !args.disable_auth;
     let keyring = if auth_required {
         Arc::new(parse_key_ring(
