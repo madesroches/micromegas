@@ -4,7 +4,12 @@ use micromegas_telemetry::property::Property;
 use std::sync::Arc;
 
 pub fn read_property_list(value: ArrayRef) -> Result<Vec<Property>> {
-    let properties: &StructArray = value.as_struct();
+    if value.is_empty() {
+        return Ok(vec![]);
+    }
+    let properties: &StructArray = value
+        .as_struct_opt()
+        .with_context(|| format!("property list in not a struct array: {:?}", value.as_any()))?;
     let (key_index, _key_field) = properties
         .fields()
         .find("key")
