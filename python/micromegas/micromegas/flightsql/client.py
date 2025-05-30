@@ -1,6 +1,7 @@
 import certifi
 import pyarrow
 from pyarrow import flight
+from typing import Any
 import sys
 from google.protobuf import any_pb2
 from . import FlightSql_pb2
@@ -56,6 +57,16 @@ def make_query_ticket(sql):
     ticket = flight.Ticket(any.SerializeToString())
     return ticket
 
+def make_arrow_flight_descriptor(command: Any) -> flight.FlightDescriptor:
+    any = any_pb2.Any()
+    any.Pack(command)
+    return flight.FlightDescriptor.for_command(any.SerializeToString())
+
+def make_ingest_flight_desc(table_name):
+    ingest_statement = FlightSql_pb2.CommandStatementIngest(table=table_name, temporary=False)
+    desc = make_arrow_flight_descriptor(ingest_statement)
+    return desc
+
 class FlightSQLClient:
     def __init__(self, uri, headers=None):
         fh = open(certifi.where(), "r")
@@ -85,6 +96,21 @@ class FlightSQLClient:
         record_batches = []
         for chunk in reader:
             yield chunk.data
+
+    def bulk_ingest(self, table_name, df):
+        desc = make_ingest_flight_desc(table_name)
+        table = pyarrow.Table.from_pandas(df)
+        writer, reader = self.__flight_client.do_put(desc, table.schema)
+        for rb in table.to_batches():
+            writer.write(rb)
+        writer.done_writing()
+        result = reader.read()
+        if result is not None:
+            update_result = FlightSql_pb2.DoPutUpdateResult()
+            update_result.ParseFromString(result.to_pybytes())
+            return update_result
+        else:
+            return None
 
     def retire_partitions(self, view_set_name, view_instance_id, begin, end):
         sql = """
