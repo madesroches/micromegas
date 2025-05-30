@@ -10,7 +10,7 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
-micromegas-derive-transit = { path = "derive", version = "^0.8" }
+micromegas-derive-transit = { path = "derive", version = "^0.9" }
 
 anyhow.workspace = true
 lazy_static.workspace = true
