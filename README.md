@@ -65,10 +65,12 @@ In order to keep costs down, most payloads will remain unprocessed until they ex
 ## Status
 
 ### May 2025
- * Released [version 0.8.0](https://crates.io/crates/micromegas)
+ * Released [version 0.8.0](https://crates.io/crates/micromegas) and [version 0.9.0](https://crates.io/crates/micromegas)
  * Frame budget reporting
  * Histogram support with quantile estimation
- * Run seconds task in parallel in daemon
+ * Run seconds & minutes tasks in parallel in daemon
+ * GetPayload user defined function
+ * Add bulk ingestion API for replication
 
 ### April 2025
  * Released [version 0.7.0](https://crates.io/crates/micromegas)
