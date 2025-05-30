@@ -1,233 +1,116 @@
+import certifi
 import pyarrow
-import grpc
+from pyarrow import flight
+from typing import Any
+import sys
 from google.protobuf import any_pb2
-from . import Flight_pb2_grpc
-from . import FlightSql_pb2_grpc
 from . import FlightSql_pb2
-from . import Flight_pb2
-from . import arrow_flatbuffers
-from . import arrow_ipc_reader
 from . import time
 
 
-def fb_time_unit_to_string(fb_time_unit):
-    time_unit_enum = arrow_flatbuffers.TimeUnit
-    if fb_time_unit == time_unit_enum.SECOND:
-        return "s"
-    if fb_time_unit == time_unit_enum.MILLISECOND:
-        return "ms"
-    if fb_time_unit == time_unit_enum.MICROSECOND:
-        return "us"
-    if fb_time_unit == time_unit_enum.NANOSECOND:
-        return "ns"
-    raise RuntimeError("unsupported time unit {}".format(fb_time_unit))
+class MicromegasMiddleware(flight.ClientMiddleware):
+    def __init__(self, headers):
+        self.headers = headers
+
+    def call_completed(self, exception):
+        if exception is not None:
+            print(exception, file=sys.stderr)
+
+    def received_headers(self, headers):
+        pass
+
+    def sending_headers(self):
+        return self.headers
 
 
-def fb_field_type_to_arrow(fb_field):
-    fb_type = fb_field.TypeType()
-    fb_type_enum = arrow_flatbuffers.Type
-    assert fb_type != fb_type_enum.NONE
-    if fb_type == fb_type_enum.Null:
-        return pyarrow.null()
-    elif fb_type == fb_type_enum.Int:
-        type_int = arrow_flatbuffers.Int()
-        field_type_table = fb_field.Type()
-        type_int.Init(field_type_table.Bytes, field_type_table.Pos)
-        if type_int.IsSigned():
-            if type_int.BitWidth() == 8:
-                return pyarrow.int8()
-            elif type_int.BitWidth() == 16:
-                return pyarrow.int16()
-            elif type_int.BitWidth() == 32:
-                return pyarrow.int32()
-            elif type_int.BitWidth() == 64:
-                return pyarrow.int64()
-            else:
-                raise RuntimeError(
-                    "unsupported int size {}".format(type_int.BitWidth())
-                )
-        else:
-            if type_int.BitWidth() == 8:
-                return pyarrow.uint8()
-            elif type_int.BitWidth() == 16:
-                return pyarrow.uint16()
-            elif type_int.BitWidth() == 32:
-                return pyarrow.uint32()
-            elif type_int.BitWidth() == 64:
-                return pyarrow.uint64()
-            else:
-                raise RuntimeError(
-                    "unsupported uint size {}".format(type_int.BitWidth())
-                )
-    elif fb_type == fb_type_enum.FloatingPoint:
-        return pyarrow.float64()
-    elif fb_type == fb_type_enum.Binary:
-        return pyarrow.binary()
-    elif fb_type == fb_type_enum.Utf8:
-        return pyarrow.utf8()
-    elif fb_type == fb_type_enum.Bool:
-        return pyarrow.bool()
-    elif fb_type == fb_type_enum.Timestamp:
-        ts_type = arrow_flatbuffers.Timestamp()
-        field_type_table = fb_field.Type()
-        ts_type.Init(field_type_table.Bytes, field_type_table.Pos)
-        return pyarrow.timestamp(
-            fb_time_unit_to_string(ts_type.Unit()), ts_type.Timezone()
+class MicromegasMiddlewareFactory(flight.ClientMiddlewareFactory):
+    def __init__(self, headers):
+        self.headers = headers
+
+    def start_call(self, info):
+        return MicromegasMiddleware(self.headers)
+
+def make_call_headers( begin, end ):
+    call_headers = []
+    if begin is not None:
+        call_headers.append(
+            (
+                "query_range_begin".encode("utf8"),
+                time.format_datetime(begin).encode("utf8"),
+            )
         )
-    elif fb_type == fb_type_enum.List:
-        assert 1 == fb_field.ChildrenLength()
-        child_field = fb_field_to_arrow(fb_field.Children(0))
-        return pyarrow.list_(child_field)
-    elif fb_type == fb_type_enum.Struct_:
-        struct_fields = []
-        for child_index in range(fb_field.ChildrenLength()):
-            child = fb_field_to_arrow(fb_field.Children(child_index))
-            struct_fields.append(child)
-        return pyarrow.struct(struct_fields)
-    raise RuntimeError("unknown flatbuffer type {}".format(fb_type))
+    if end is not None:
+        call_headers.append(
+            (
+                "query_range_end".encode("utf8"),
+                time.format_datetime(end).encode("utf8"),
+            )
+        )
+    return call_headers
 
+def make_query_ticket(sql):
+    ticket_statement_query = FlightSql_pb2.TicketStatementQuery(
+        statement_handle=sql.encode("utf8")
+    )
+    any = any_pb2.Any()
+    any.Pack(ticket_statement_query)
+    ticket = flight.Ticket(any.SerializeToString())
+    return ticket
 
-def fb_field_to_arrow(fb_field):
-    arrow_type = fb_field_type_to_arrow(fb_field)
-    return pyarrow.field(fb_field.Name(), arrow_type)
+def make_arrow_flight_descriptor(command: Any) -> flight.FlightDescriptor:
+    any = any_pb2.Any()
+    any.Pack(command)
+    return flight.FlightDescriptor.for_command(any.SerializeToString())
 
-
-def make_query_flight_descriptor(sql):
-    command_query = FlightSql_pb2.CommandStatementQuery(query=sql)
-    any_cmd = any_pb2.Any()
-    any_cmd.Pack(command_query)
-    desc = Flight_pb2.FlightDescriptor()
-    desc.type = Flight_pb2.FlightDescriptor.DescriptorType.CMD
-    desc.cmd = any_cmd.SerializeToString()
+def make_ingest_flight_desc(table_name):
+    ingest_statement = FlightSql_pb2.CommandStatementIngest(table=table_name, temporary=False)
+    desc = make_arrow_flight_descriptor(ingest_statement)
     return desc
 
-
-def read_schema_from_flight_data(flight_data):
-    msg = arrow_flatbuffers.Message.GetRootAs(flight_data.data_header, 0)
-    assert msg.Version() == arrow_flatbuffers.MetadataVersion.V5
-    header = msg.Header()
-    assert msg.HeaderType() == arrow_flatbuffers.MessageHeader.Schema
-
-    schema = arrow_flatbuffers.Schema()
-    schema.Init(header.Bytes, header.Pos)
-    nb_fields = schema.FieldsLength()
-    arrow_fields = []
-    for x in range(nb_fields):
-        field = schema.Fields(x)
-        arrow_f = fb_field_to_arrow(field)
-        arrow_fields.append(arrow_f)
-    arrow_schema = pyarrow.schema(arrow_fields)
-    return arrow_schema
-
-
-def read_record_batch_from_flight_data(arrow_schema, flight_data):
-    msg = arrow_flatbuffers.Message.GetRootAs(flight_data.data_header, 0)
-    assert msg.HeaderType() == arrow_flatbuffers.MessageHeader.RecordBatch
-    header = msg.Header()
-    fb_record_batch = arrow_flatbuffers.RecordBatch()
-    fb_record_batch.Init(header.Bytes, header.Pos)
-    nodes = []
-    for node_index in range(fb_record_batch.NodesLength()):
-        node = fb_record_batch.Nodes(node_index)
-        nodes.append(node)
-
-    buffers = []
-    for buffer_index in range(fb_record_batch.BuffersLength()):
-        buffer = fb_record_batch.Buffers(buffer_index)
-        buffers.append(buffer)
-
-    body = pyarrow.py_buffer(flight_data.data_body)
-    arrow_buffers = []
-    for b in buffers:
-        s = body.slice(b.Offset(), b.Length())
-        arrow_buffers.append(s)
-    rb = arrow_ipc_reader.read_record_batch(arrow_schema, nodes, arrow_buffers)
-    return rb
-
-
-def channel_creds_from_token(token):
-    call_credentials = grpc.access_token_call_credentials(token)
-    channel_cred = grpc.composite_channel_credentials(
-        grpc.ssl_channel_credentials(), call_credentials
-    )
-    return channel_cred
-
-
-class FlightSQLAuthMetadataPlugin(grpc.AuthMetadataPlugin):
-    def __init__(self, headers):
-        # we transform the keys into lowercase to avoid illegal grpc metadata (like 'Authorization', for example)
-        self.__headers = [(k.lower(), v) for (k, v) in headers.items()]
-
-    def __call__(self, context, callback):
-        callback(self.__headers, None)
-
-
-def channel_creds_from_headers(headers):
-    auth_plugin = FlightSQLAuthMetadataPlugin(headers)
-    call_credentials = grpc.metadata_call_credentials(auth_plugin)
-    channel_cred = grpc.composite_channel_credentials(
-        grpc.ssl_channel_credentials(), call_credentials
-    )
-    return channel_cred
-
-
 class FlightSQLClient:
-    def __init__(self, host_port, channel_creds):
-        self.__host_port = host_port
-        self.__channel_creds = channel_creds
-
-    def make_channel(self):
-
-        options = [
-            ("grpc.max_send_message_length", 100 * 1024 * 1024),
-            ("grpc.max_receive_message_length", 100 * 1024 * 1024),
-        ]
-
-        if self.__channel_creds is None:
-            return grpc.insecure_channel(self.__host_port, options=options)
-        else:
-            return grpc.secure_channel(self.__host_port, self.__channel_creds, options=options)
+    def __init__(self, uri, headers=None):
+        fh = open(certifi.where(), "r")
+        cert = fh.read()
+        fh.close()
+        factory = MicromegasMiddlewareFactory(headers)
+        self.__flight_client = flight.connect(
+            location=uri, tls_root_certs=cert, middleware=[factory]
+        )
 
     def query(self, sql, begin=None, end=None):
-        metadata = []
-        if begin is not None:
-            metadata.append(("query_range_begin", time.format_datetime(begin)))
-        if end is not None:
-            metadata.append(("query_range_end", time.format_datetime(end)))
-
-        channel = self.make_channel()
-        stub = Flight_pb2_grpc.FlightServiceStub(channel)
-        desc = make_query_flight_descriptor(sql)
-        info = stub.GetFlightInfo(desc)
-        grpc_rdv = stub.DoGet(info.endpoint[0].ticket, metadata=metadata)
-        flight_data_list = list(grpc_rdv)
-        if len(flight_data_list) < 1:
-            raise RuntimeError("too few flightdata messages {}", len(flight_data_list))
-        schema_message = flight_data_list[0]
-        data_messages = flight_data_list[1:]
-        schema = read_schema_from_flight_data(schema_message)
+        call_headers = make_call_headers(begin, end)
+        options = flight.FlightCallOptions(headers=call_headers)
+        ticket = make_query_ticket(sql)
+        reader = self.__flight_client.do_get(ticket, options=options)
         record_batches = []
-        for msg in data_messages:
-            record_batches.append(read_record_batch_from_flight_data(schema, msg))
-        table = pyarrow.Table.from_batches(record_batches, schema)
+        for chunk in reader:
+            record_batches.append(chunk.data)
+        table = pyarrow.Table.from_batches(record_batches, reader.schema)
         return table.to_pandas()
 
     def query_stream(self, sql, begin=None, end=None):
-        metadata = []
-        if begin is not None:
-            metadata.append(("query_range_begin", time.format_datetime(begin)))
-        if end is not None:
-            metadata.append(("query_range_end", time.format_datetime(end)))
+        ticket = make_query_ticket(sql)
+        call_headers = make_call_headers(begin, end)
+        options = flight.FlightCallOptions(headers=call_headers)
+        reader = self.__flight_client.do_get(ticket, options=options)
+        record_batches = []
+        for chunk in reader:
+            yield chunk.data
 
-        channel = self.make_channel()
-        stub = Flight_pb2_grpc.FlightServiceStub(channel)
-        desc = make_query_flight_descriptor(sql)
-        info = stub.GetFlightInfo(desc)
-        grpc_rdv = stub.DoGet(info.endpoint[0].ticket, metadata=metadata)
-        schema_message = grpc_rdv.next()
-        schema = read_schema_from_flight_data(schema_message)
-        for msg in grpc_rdv:
-            yield read_record_batch_from_flight_data(schema, msg)
+    def bulk_ingest(self, table_name, df):
+        desc = make_ingest_flight_desc(table_name)
+        table = pyarrow.Table.from_pandas(df)
+        writer, reader = self.__flight_client.do_put(desc, table.schema)
+        for rb in table.to_batches():
+            writer.write(rb)
+        writer.done_writing()
+        result = reader.read()
+        if result is not None:
+            update_result = FlightSql_pb2.DoPutUpdateResult()
+            update_result.ParseFromString(result.to_pybytes())
+            return update_result
+        else:
+            return None
 
     def retire_partitions(self, view_set_name, view_instance_id, begin, end):
         sql = """
