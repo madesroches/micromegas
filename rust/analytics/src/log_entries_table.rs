@@ -19,6 +19,8 @@ use datafusion::arrow::datatypes::TimeUnit;
 use datafusion::arrow::datatypes::TimestampNanosecondType;
 use datafusion::arrow::record_batch::RecordBatch;
 
+use crate::arrow_properties::add_properties_to_builder;
+use crate::arrow_properties::add_property_set_to_builder;
 use crate::log_entry::LogEntry;
 
 pub fn log_table_schema() -> Schema {
@@ -82,6 +84,18 @@ pub fn log_table_schema() -> Schema {
             ))),
             false,
         ),
+        Field::new(
+            "process_properties",
+            DataType::List(Arc::new(Field::new(
+                "Property",
+                DataType::Struct(Fields::from(vec![
+                    Field::new("key", DataType::Utf8, false),
+                    Field::new("value", DataType::Utf8, false),
+                ])),
+                false,
+            ))),
+            false,
+        ),
     ])
 }
 
@@ -98,6 +112,7 @@ pub struct LogEntriesRecordBuilder {
     pub levels: PrimitiveBuilder<Int32Type>,
     pub msgs: StringBuilder,
     pub properties: ListBuilder<StructBuilder>,
+    pub process_properties: ListBuilder<StructBuilder>,
 }
 
 impl LogEntriesRecordBuilder {
@@ -111,7 +126,12 @@ impl LogEntriesRecordBuilder {
             DataType::Struct(Fields::from(prop_struct_fields.clone())),
             false,
         ));
-        let props_builder =
+        let props_builder = ListBuilder::new(StructBuilder::from_fields(
+            prop_struct_fields.clone(),
+            capacity,
+        ))
+        .with_field(prop_field.clone());
+        let process_props_builder =
             ListBuilder::new(StructBuilder::from_fields(prop_struct_fields, capacity))
                 .with_field(prop_field);
 
@@ -128,6 +148,7 @@ impl LogEntriesRecordBuilder {
             levels: PrimitiveBuilder::with_capacity(capacity),
             msgs: StringBuilder::new(),
             properties: props_builder,
+            process_properties: process_props_builder,
         }
     }
 
@@ -164,21 +185,8 @@ impl LogEntriesRecordBuilder {
         self.targets.append_value(&*row.target);
         self.levels.append_value(row.level);
         self.msgs.append_value(&*row.msg);
-
-        let property_builder = self.properties.values();
-        row.properties.for_each_property(|prop| {
-            let key_builder = property_builder
-                .field_builder::<StringBuilder>(0)
-                .with_context(|| "getting key field builder")?;
-            key_builder.append_value(prop.key_str());
-            let value_builder = property_builder
-                .field_builder::<StringBuilder>(1)
-                .with_context(|| "getting value field builder")?;
-            value_builder.append_value(prop.value_str());
-            property_builder.append(true);
-            Ok(())
-        })?;
-        self.properties.append(true);
+        add_property_set_to_builder(&row.properties, &mut self.properties)?;
+        add_properties_to_builder(&row.process.properties, &mut self.process_properties)?;
         Ok(())
     }
 
@@ -198,6 +206,7 @@ impl LogEntriesRecordBuilder {
                 Arc::new(self.levels.finish()),
                 Arc::new(self.msgs.finish()),
                 Arc::new(self.properties.finish()),
+                Arc::new(self.process_properties.finish()),
             ],
         )
         .with_context(|| "building record batch")

@@ -1,11 +1,11 @@
-use crate::measure::Measure;
+use crate::{
+    arrow_properties::{add_properties_to_builder, add_property_set_to_builder},
+    measure::Measure,
+};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use datafusion::arrow::{
-    array::{
-        ArrayBuilder, ListBuilder, PrimitiveBuilder, StringBuilder, StringDictionaryBuilder,
-        StructBuilder,
-    },
+    array::{ArrayBuilder, ListBuilder, PrimitiveBuilder, StringDictionaryBuilder, StructBuilder},
     datatypes::{
         DataType, Field, Fields, Float64Type, Int16Type, Schema, TimeUnit, TimestampNanosecondType,
     },
@@ -186,33 +186,8 @@ impl MetricsRecordBuilder {
         self.names.append_value(&*row.name);
         self.units.append_value(&*row.unit);
         self.values.append_value(row.value);
-        let property_builder = self.properties.values();
-        row.properties.for_each_property(|prop| {
-            let key_builder = property_builder
-                .field_builder::<StringBuilder>(0)
-                .with_context(|| "getting key field builder")?;
-            key_builder.append_value(prop.key_str());
-            let value_builder = property_builder
-                .field_builder::<StringBuilder>(1)
-                .with_context(|| "getting value field builder")?;
-            value_builder.append_value(prop.value_str());
-            property_builder.append(true);
-            Ok(())
-        })?;
-        self.properties.append(true);
-        let process_property_builder = self.process_properties.values();
-        for (k, v) in row.process.properties.iter() {
-            let key_builder = process_property_builder
-                .field_builder::<StringBuilder>(0)
-                .with_context(|| "getting key field builder")?;
-            key_builder.append_value(k);
-            let value_builder = process_property_builder
-                .field_builder::<StringBuilder>(1)
-                .with_context(|| "getting value field builder")?;
-            value_builder.append_value(v);
-            process_property_builder.append(true);
-        }
-        self.process_properties.append(true);
+        add_property_set_to_builder(&row.properties, &mut self.properties)?;
+        add_properties_to_builder(&row.process.properties, &mut self.process_properties)?;
         Ok(())
     }
 
