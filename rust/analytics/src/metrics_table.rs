@@ -83,6 +83,18 @@ pub fn metrics_table_schema() -> Schema {
             ))),
             false,
         ),
+        Field::new(
+            "process_properties",
+            DataType::List(Arc::new(Field::new(
+                "Property",
+                DataType::Struct(Fields::from(vec![
+                    Field::new("key", DataType::Utf8, false),
+                    Field::new("value", DataType::Utf8, false),
+                ])),
+                false,
+            ))),
+            false,
+        ),
     ])
 }
 
@@ -100,6 +112,7 @@ pub struct MetricsRecordBuilder {
     pub units: StringDictionaryBuilder<Int16Type>,
     pub values: PrimitiveBuilder<Float64Type>,
     pub properties: ListBuilder<StructBuilder>,
+    pub process_properties: ListBuilder<StructBuilder>,
 }
 
 impl MetricsRecordBuilder {
@@ -113,7 +126,12 @@ impl MetricsRecordBuilder {
             DataType::Struct(Fields::from(prop_struct_fields.clone())),
             false,
         ));
-        let props_builder =
+        let props_builder = ListBuilder::new(StructBuilder::from_fields(
+            prop_struct_fields.clone(),
+            capacity,
+        ))
+        .with_field(prop_field.clone());
+        let process_props_builder =
             ListBuilder::new(StructBuilder::from_fields(prop_struct_fields, capacity))
                 .with_field(prop_field);
         Self {
@@ -130,6 +148,7 @@ impl MetricsRecordBuilder {
             units: StringDictionaryBuilder::new(),
             values: PrimitiveBuilder::with_capacity(capacity),
             properties: props_builder,
+            process_properties: process_props_builder,
         }
     }
 
@@ -181,6 +200,19 @@ impl MetricsRecordBuilder {
             Ok(())
         })?;
         self.properties.append(true);
+        let process_property_builder = self.process_properties.values();
+        for (k, v) in row.process.properties.iter() {
+            let key_builder = process_property_builder
+                .field_builder::<StringBuilder>(0)
+                .with_context(|| "getting key field builder")?;
+            key_builder.append_value(k);
+            let value_builder = process_property_builder
+                .field_builder::<StringBuilder>(1)
+                .with_context(|| "getting value field builder")?;
+            value_builder.append_value(v);
+            process_property_builder.append(true);
+        }
+        self.process_properties.append(true);
         Ok(())
     }
 
@@ -201,6 +233,7 @@ impl MetricsRecordBuilder {
                 Arc::new(self.units.finish()),
                 Arc::new(self.values.finish()),
                 Arc::new(self.properties.finish()),
+                Arc::new(self.process_properties.finish()),
             ],
         )
         .with_context(|| "building record batch")
