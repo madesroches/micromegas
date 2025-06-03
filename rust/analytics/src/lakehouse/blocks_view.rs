@@ -104,7 +104,7 @@ impl View for BlocksView {
     }
 
     fn get_file_schema_hash(&self) -> Vec<u8> {
-        vec![0]
+        blocks_file_schema_hash()
     }
 
     fn get_file_schema(&self) -> Arc<Schema> {
@@ -226,4 +226,8 @@ pub fn blocks_view_schema() -> Schema {
             false,
         ),
     ])
+}
+
+pub fn blocks_file_schema_hash() -> Vec<u8> {
+    vec![0]
 }

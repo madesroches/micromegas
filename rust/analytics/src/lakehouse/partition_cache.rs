@@ -158,6 +158,7 @@ impl PartitionCache {
         &self,
         view_set_name: &str,
         view_instance_id: &str,
+        file_schema_hash: &[u8],
         begin_insert: DateTime<Utc>,
         end_insert: DateTime<Utc>,
     ) -> Self {
@@ -165,6 +166,7 @@ impl PartitionCache {
         for part in &self.partitions {
             if *part.view_metadata.view_set_name == view_set_name
                 && *part.view_metadata.view_instance_id == view_instance_id
+                && part.view_metadata.file_schema_hash == file_schema_hash
                 && part.begin_insert_time < end_insert
                 && part.end_insert_time > begin_insert
             {
