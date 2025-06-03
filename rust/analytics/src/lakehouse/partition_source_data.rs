@@ -1,3 +1,4 @@
+use super::blocks_view::blocks_file_schema_hash;
 use super::partition_cache::PartitionCache;
 use crate::arrow_properties::read_property_list;
 use crate::dfext::typed_column::typed_column_by_name;
@@ -244,7 +245,13 @@ pub async fn fetch_partition_source_data(
           ;"#
     );
     let block_partitions = existing_partitions
-        .filter("blocks", "global", begin_insert, end_insert)
+        .filter(
+            "blocks",
+            "global",
+            &blocks_file_schema_hash(),
+            begin_insert,
+            end_insert,
+        )
         .partitions;
     let df = query_partitions(
         runtime,

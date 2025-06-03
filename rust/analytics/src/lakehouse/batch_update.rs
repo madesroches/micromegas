@@ -37,8 +37,13 @@ async fn verify_overlapping_partitions(
         anyhow::bail!("Source data hash should be a i64");
     }
     let nb_source_events = hash_to_object_count(source_data_hash)?;
-    let filtered =
-        existing_partitions.filter(view_set_name, view_instance_id, begin_insert, end_insert);
+    let filtered = existing_partitions.filter(
+        view_set_name,
+        view_instance_id,
+        file_schema_hash,
+        begin_insert,
+        end_insert,
+    );
     if filtered.partitions.is_empty() {
         logger
             .write_log_entry(format!("{desc}: matching partitions not found"))
@@ -59,14 +64,6 @@ async fn verify_overlapping_partitions(
                 ))
                 .await?;
             return Ok(PartitionCreationStrategy::Abort);
-        }
-        if part.view_metadata.file_schema_hash != file_schema_hash {
-            logger
-                .write_log_entry(format!(
-                    "{desc}: found matching partition with different file schema"
-                ))
-                .await?;
-            return Ok(PartitionCreationStrategy::CreateFromSource);
         }
         if part.source_data_hash.len() == std::mem::size_of::<i64>() {
             existing_source_hash += hash_to_object_count(&part.source_data_hash)?
