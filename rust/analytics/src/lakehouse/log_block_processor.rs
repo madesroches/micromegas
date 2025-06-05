@@ -11,6 +11,7 @@ use async_trait::async_trait;
 use micromegas_telemetry::blob_storage::BlobStorage;
 use std::sync::Arc;
 
+#[derive(Debug)]
 pub struct LogBlockProcessor {}
 
 #[async_trait]

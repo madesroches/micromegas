@@ -12,11 +12,12 @@ use futures::StreamExt;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_telemetry::blob_storage::BlobStorage;
 use micromegas_tracing::prelude::*;
+use std::fmt::Debug;
 use std::sync::Arc;
 
 /// BlockProcessor transforms a single block of telemetry into a set of rows
 #[async_trait]
-pub trait BlockProcessor: Send + Sync {
+pub trait BlockProcessor: Send + Sync + Debug {
     async fn process(
         &self,
         blob_storage: Arc<BlobStorage>,
@@ -26,6 +27,7 @@ pub trait BlockProcessor: Send + Sync {
 
 /// BlockPartitionSpec processes blocks individually and out of order
 /// which works fine for measures & log entries
+#[derive(Debug)]
 pub struct BlockPartitionSpec {
     pub view_metadata: ViewMetadata,
     pub schema: Arc<Schema>,

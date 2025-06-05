@@ -23,9 +23,11 @@ use futures::{stream::BoxStream, StreamExt};
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_telemetry::{stream_info::StreamInfo, types::block::BlockMetadata};
 use micromegas_tracing::prelude::*;
+use std::fmt::Debug;
 use std::sync::Arc;
 use uuid::Uuid;
 
+#[derive(Debug)]
 pub struct PartitionSourceBlock {
     pub block: BlockMetadata,
     pub stream: Arc<StreamInfo>,
@@ -33,7 +35,7 @@ pub struct PartitionSourceBlock {
 }
 
 #[async_trait]
-pub trait PartitionBlocksSource: Sync + Send {
+pub trait PartitionBlocksSource: Sync + Send + Debug {
     fn is_empty(&self) -> bool;
     fn get_nb_blocks(&self) -> i64;
     fn get_max_payload_size(&self) -> i64;
@@ -41,6 +43,7 @@ pub trait PartitionBlocksSource: Sync + Send {
     async fn get_blocks_stream(&self) -> BoxStream<'static, Result<Arc<PartitionSourceBlock>>>;
 }
 
+#[derive(Debug)]
 pub struct SourceDataBlocksInMemory {
     pub blocks: Vec<Arc<PartitionSourceBlock>>,
     pub block_ids_hash: Vec<u8>,
@@ -74,6 +77,7 @@ impl PartitionBlocksSource for SourceDataBlocksInMemory {
     }
 }
 
+#[derive(Debug)]
 pub struct SourceDataBlocks {
     pub blocks_dataframe: DataFrame,
     pub object_count: i64,

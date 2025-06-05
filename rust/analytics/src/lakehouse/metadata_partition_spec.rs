@@ -12,6 +12,7 @@ use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use sqlx::Row;
 use std::sync::Arc;
 
+#[derive(Debug)]
 pub struct MetadataPartitionSpec {
     pub view_metadata: ViewMetadata,
     pub schema: Arc<Schema>,
