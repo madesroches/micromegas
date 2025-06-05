@@ -17,10 +17,11 @@ use datafusion::{
     sql::TableReference,
 };
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
+use std::fmt::Debug;
 use std::sync::Arc;
 
 #[async_trait]
-pub trait PartitionSpec: Send + Sync {
+pub trait PartitionSpec: Send + Sync + Debug {
     fn is_empty(&self) -> bool;
     fn get_source_data_hash(&self) -> Vec<u8>;
     async fn write(&self, lake: Arc<DataLakeConnection>, logger: Arc<dyn Logger>) -> Result<()>;

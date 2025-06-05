@@ -55,6 +55,12 @@ impl SqlPartitionSpec {
     }
 }
 
+impl std::fmt::Debug for SqlPartitionSpec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "SqlPartitionSpec")
+    }
+}
+
 #[async_trait]
 impl PartitionSpec for SqlPartitionSpec {
     fn is_empty(&self) -> bool {

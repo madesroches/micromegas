@@ -106,12 +106,14 @@ impl TableFunctionImpl for MaterializePartitionsTableFunction {
                     begin,
                     end,
                     TimeDelta::seconds(delta),
-                    logger,
+                    logger.clone(),
                 )
                 .await
                 .with_context(|| "materialize_partitions_impl")
                 {
-                    error!("{e:?}");
+                    let msg = format!("{e:?}");
+                    let _ = logger.write_log_entry(msg.clone()).await;
+                    error!("{msg}");
                 }
             });
             rx
