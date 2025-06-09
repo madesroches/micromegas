@@ -83,15 +83,17 @@ impl HistogramAccumulator {
         let range = self.end.unwrap() - start;
         let bin_width = range / (self.bins.len() as f64);
         for i in 0..scalars.len() {
-            let v = scalars.value(i);
-            self.min = self.min.min(v);
-            self.max = self.max.max(v);
-            self.sum += v;
-            self.sum_sq += v * v;
-            self.count += 1;
-            let bin_index = (((v - start) / bin_width).floor()) as usize;
-            let bin_index = bin_index.clamp(0, self.bins.len() - 1);
-            self.bins[bin_index] += 1;
+            if !scalars.is_null(i) {
+                let v = scalars.value(i);
+                self.min = self.min.min(v);
+                self.max = self.max.max(v);
+                self.sum += v;
+                self.sum_sq += v * v;
+                self.count += 1;
+                let bin_index = (((v - start) / bin_width).floor()) as usize;
+                let bin_index = bin_index.clamp(0, self.bins.len() - 1);
+                self.bins[bin_index] += 1;
+            }
         }
         Ok(())
     }
@@ -155,11 +157,6 @@ impl Accumulator for HistogramAccumulator {
                     .ok_or_else(|| {
                         DataFusionError::Execution("values[3] should ne a Float64Array".into())
                     })?;
-                if scalars.null_count() > 0 {
-                    return Err(DataFusionError::Execution(
-                        "null values not supported for histogram".into(),
-                    ));
-                }
                 self.update_batch_scalars(scalars)
             }
             1 => {
