@@ -9,8 +9,11 @@ use super::{
 };
 use crate::{
     dfext::histogram::{
-        histogram_udaf::make_histo_udaf, quantile::make_quantile_from_histogram_udf,
-        sum_histograms_udaf::sum_histograms_udaf, variance::make_variance_from_histogram_udf,
+        accessors::{make_count_from_histogram_udf, make_sum_from_histogram_udf},
+        histogram_udaf::make_histo_udaf,
+        quantile::make_quantile_from_histogram_udf,
+        sum_histograms_udaf::sum_histograms_udaf,
+        variance::make_variance_from_histogram_udf,
     },
     lakehouse::{
         materialized_view::MaterializedView, table_scan_rewrite::TableScanRewrite,
@@ -123,6 +126,8 @@ pub fn register_extension_functions(ctx: &SessionContext) {
     ctx.register_udaf(sum_histograms_udaf());
     ctx.register_udf(make_quantile_from_histogram_udf());
     ctx.register_udf(make_variance_from_histogram_udf());
+    ctx.register_udf(make_count_from_histogram_udf());
+    ctx.register_udf(make_sum_from_histogram_udf());
 }
 
 pub fn register_functions(
