@@ -138,7 +138,7 @@
 //!
 use super::blocks_view::BlocksView;
 use super::processes_view::make_processes_view;
-use super::streams_view::StreamsView;
+use super::streams_view::make_streams_view;
 use super::{
     log_view::LogViewMaker, metrics_view::MetricsViewMaker,
     thread_spans_view::ThreadSpansViewMaker, view::View,
@@ -202,6 +202,14 @@ pub async fn default_view_factory(
     let blocks_view = Arc::new(BlocksView::new()?);
     let processes_view = Arc::new(
         make_processes_view(
+            runtime.clone(),
+            lake.clone(),
+            Arc::new(ViewFactory::new(vec![blocks_view.clone()])),
+        )
+        .await?,
+    );
+    let streams_view = Arc::new(
+        make_streams_view(
             runtime,
             lake,
             Arc::new(ViewFactory::new(vec![blocks_view.clone()])),
@@ -210,7 +218,6 @@ pub async fn default_view_factory(
     );
     let log_view_maker = Arc::new(LogViewMaker {});
     let metrics_view_maker = Arc::new(MetricsViewMaker {});
-    let streams_view = Arc::new(StreamsView::new()?);
     let global_views = vec![
         log_view_maker.make_view("global")?,
         metrics_view_maker.make_view("global")?,

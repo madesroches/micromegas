@@ -1,185 +1,67 @@
-use crate::time::TimeRange;
-
-use super::{
-    metadata_partition_spec::fetch_metadata_partition_spec,
-    partition_cache::PartitionCache,
-    view::{PartitionSpec, View, ViewMetadata},
-};
-use anyhow::{Context, Result};
-use async_trait::async_trait;
-use chrono::{DateTime, Utc};
-use datafusion::{
-    arrow::datatypes::{DataType, Field, Fields, Schema, TimeUnit},
-    execution::runtime_env::RuntimeEnv,
-    logical_expr::{col, Between, Expr},
-    scalar::ScalarValue,
-};
+use super::{sql_batch_view::SqlBatchView, view_factory::ViewFactory};
+use anyhow::Result;
+use chrono::TimeDelta;
+use datafusion::execution::runtime_env::RuntimeEnv;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use std::sync::Arc;
 
-const VIEW_SET_NAME: &str = "streams";
-const VIEW_INSTANCE_ID: &str = "global";
-lazy_static::lazy_static! {
-    static ref INSERT_TIME_COLUMN: Arc<String> = Arc::new( String::from("insert_time"));
-}
-
-#[derive(Debug)]
-pub struct StreamsView {
-    view_set_name: Arc<String>,
-    view_instance_id: Arc<String>,
-    data_sql: Arc<String>,
-    event_time_column: Arc<String>,
-}
-
-impl StreamsView {
-    pub fn new() -> Result<Self> {
-        let data_sql = Arc::new(String::from(
-            "SELECT stream_id,
-                    process_id,
-                    dependencies_metadata,
-                    objects_metadata,
-                    tags,
-                    properties,
-                    insert_time
-             FROM streams
-             WHERE insert_time >= $1
-             AND insert_time < $2
-             ORDER BY insert_time;",
-        ));
-        let event_time_column = Arc::new(String::from("insert_time"));
-
-        Ok(Self {
-            view_set_name: Arc::new(String::from(VIEW_SET_NAME)),
-            view_instance_id: Arc::new(String::from(VIEW_INSTANCE_ID)),
-            data_sql,
-            event_time_column,
-        })
-    }
-}
-
-#[async_trait]
-impl View for StreamsView {
-    fn get_view_set_name(&self) -> Arc<String> {
-        self.view_set_name.clone()
-    }
-
-    fn get_view_instance_id(&self) -> Arc<String> {
-        self.view_instance_id.clone()
-    }
-
-    async fn make_batch_partition_spec(
-        &self,
-        _runtime: Arc<RuntimeEnv>,
-        lake: Arc<DataLakeConnection>,
-        _existing_partitions: Arc<PartitionCache>,
-        begin_insert: DateTime<Utc>,
-        end_insert: DateTime<Utc>,
-    ) -> Result<Arc<dyn PartitionSpec>> {
-        let view_meta = ViewMetadata {
-            view_set_name: self.get_view_set_name(),
-            view_instance_id: self.get_view_instance_id(),
-            file_schema_hash: self.get_file_schema_hash(),
-        };
-        let source_count_query = "
-             SELECT COUNT(*) as count
-             FROM streams
-             WHERE insert_time >= $1
-             AND insert_time < $2
-             ;";
-        Ok(Arc::new(
-            fetch_metadata_partition_spec(
-                &lake.db_pool,
-                source_count_query,
-                self.event_time_column.clone(),
-                self.data_sql.clone(),
-                view_meta,
-                self.get_file_schema(),
-                begin_insert,
-                end_insert,
-            )
-            .await
-            .with_context(|| "fetch_metadata_partition_spec")?,
-        ))
-    }
-
-    fn get_file_schema_hash(&self) -> Vec<u8> {
-        vec![0]
-    }
-
-    fn get_file_schema(&self) -> Arc<Schema> {
-        Arc::new(streams_view_schema())
-    }
-
-    async fn jit_update(
-        &self,
-        _lake: Arc<DataLakeConnection>,
-        _query_range: Option<TimeRange>,
-    ) -> Result<()> {
-        if *self.view_instance_id == "global" {
-            // this view instance is updated using the deamon
-            return Ok(());
-        }
-        anyhow::bail!("not supported");
-    }
-
-    fn make_time_filter(&self, begin: DateTime<Utc>, end: DateTime<Utc>) -> Result<Vec<Expr>> {
-        let utc: Arc<str> = Arc::from("+00:00");
-        Ok(vec![Expr::Between(Between::new(
-            col("insert_time").into(),
-            false,
-            Expr::Literal(ScalarValue::TimestampNanosecond(
-                begin.timestamp_nanos_opt(),
-                Some(utc.clone()),
-            ))
-            .into(),
-            Expr::Literal(ScalarValue::TimestampNanosecond(
-                end.timestamp_nanos_opt(),
-                Some(utc.clone()),
-            ))
-            .into(),
-        ))])
-    }
-
-    fn get_min_event_time_column_name(&self) -> Arc<String> {
-        INSERT_TIME_COLUMN.clone()
-    }
-
-    fn get_max_event_time_column_name(&self) -> Arc<String> {
-        INSERT_TIME_COLUMN.clone()
-    }
-
-    fn get_update_group(&self) -> Option<i32> {
-        Some(1000)
-    }
-}
-
-pub fn streams_view_schema() -> Schema {
-    Schema::new(vec![
-        Field::new("stream_id", DataType::Utf8, false),
-        Field::new("process_id", DataType::Utf8, false),
-        Field::new("dependencies_metadata", DataType::Binary, false),
-        Field::new("objects_metadata", DataType::Binary, false),
-        Field::new(
-            "tags",
-            DataType::List(Arc::new(Field::new("tag", DataType::Utf8, false))),
-            true,
-        ),
-        Field::new(
-            "properties",
-            DataType::List(Arc::new(Field::new(
-                "Property",
-                DataType::Struct(Fields::from(vec![
-                    Field::new("key", DataType::Utf8, false),
-                    Field::new("value", DataType::Utf8, false),
-                ])),
-                false,
-            ))),
-            false,
-        ),
-        Field::new(
-            "insert_time",
-            DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into())),
-            false,
-        ),
-    ])
+pub async fn make_streams_view(
+    runtime: Arc<RuntimeEnv>,
+    lake: Arc<DataLakeConnection>,
+    view_factory: Arc<ViewFactory>,
+) -> Result<SqlBatchView> {
+    let count_src_query = Arc::new(String::from(
+        r#"
+        SELECT count(*) as count
+        FROM  blocks
+        WHERE insert_time >= '{begin}'
+        AND   insert_time < '{end}'
+        ;"#,
+    ));
+    let transform_query = Arc::new(String::from(
+        r#"
+SELECT stream_id,
+       first_value("process_id") as process_id,
+       first_value("streams.dependencies_metadata") as dependencies_metadata,
+       first_value("streams.objects_metadata") as objects_metadata,
+       first_value("streams.tags") as tags,
+       first_value("streams.properties") as properties,
+       first_value("streams.insert_time") as insert_time,
+       max(insert_time) as last_update_time
+FROM blocks
+GROUP BY stream_id
+        ;"#,
+    ));
+    let merge_query = Arc::new(String::from(
+        r#"
+SELECT stream_id,
+       first_value(process_id) as process_id,
+       first_value(dependencies_metadata) as dependencies_metadata,
+       first_value(objects_metadata) as objects_metadata,
+       first_value(tags) as tags,
+       first_value(properties) as properties,
+       first_value(insert_time) as insert_time,
+       max(last_update_time) as last_update_time
+FROM {source}
+GROUP BY stream_id
+        ;"#,
+    ));
+    let min_time_column = Arc::new(String::from("insert_time"));
+    let max_time_column = Arc::new(String::from("last_update_time"));
+    SqlBatchView::new(
+        runtime,
+        Arc::new("streams".to_owned()),
+        min_time_column,
+        max_time_column,
+        count_src_query,
+        transform_query,
+        merge_query,
+        lake,
+        view_factory,
+        Some(2000),
+        TimeDelta::days(1), // from source
+        TimeDelta::days(1), // when merging
+        None,
+    )
+    .await
 }
