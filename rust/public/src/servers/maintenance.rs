@@ -39,6 +39,7 @@ pub async fn materialize_all_views(
             last_group = view.get_update_group();
             partitions = Arc::new(
                 PartitionCache::fetch_overlapping_insert_range(
+                    // we are fetching more partitions than we need, could be optimized
                     &lake.db_pool,
                     begin_range,
                     end_range,

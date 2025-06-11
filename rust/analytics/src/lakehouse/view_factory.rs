@@ -137,13 +137,15 @@
 //!
 //!
 use super::blocks_view::BlocksView;
-use super::processes_view::ProcessesView;
+use super::processes_view::make_processes_view;
 use super::streams_view::StreamsView;
 use super::{
     log_view::LogViewMaker, metrics_view::MetricsViewMaker,
     thread_spans_view::ThreadSpansViewMaker, view::View,
 };
 use anyhow::Result;
+use datafusion::execution::runtime_env::RuntimeEnv;
+use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use std::fmt::Debug;
 use std::{collections::HashMap, sync::Arc};
 
@@ -193,12 +195,22 @@ impl ViewFactory {
     }
 }
 
-pub fn default_view_factory() -> Result<ViewFactory> {
+pub async fn default_view_factory(
+    runtime: Arc<RuntimeEnv>,
+    lake: Arc<DataLakeConnection>,
+) -> Result<ViewFactory> {
+    let blocks_view = Arc::new(BlocksView::new()?);
+    let processes_view = Arc::new(
+        make_processes_view(
+            runtime,
+            lake,
+            Arc::new(ViewFactory::new(vec![blocks_view.clone()])),
+        )
+        .await?,
+    );
     let log_view_maker = Arc::new(LogViewMaker {});
     let metrics_view_maker = Arc::new(MetricsViewMaker {});
-    let processes_view = Arc::new(ProcessesView::new()?);
     let streams_view = Arc::new(StreamsView::new()?);
-    let blocks_view = Arc::new(BlocksView::new()?);
     let global_views = vec![
         log_view_maker.make_view("global")?,
         metrics_view_maker.make_view("global")?,

@@ -77,8 +77,8 @@ async fn main() -> Result<()> {
     migrate_lakehouse(data_lake.db_pool.clone())
         .await
         .with_context(|| "migrate_lakehouse")?;
-    let view_factory = default_view_factory()?;
     let runtime = Arc::new(make_runtime_env()?);
+    let view_factory = default_view_factory(runtime.clone(), data_lake.clone()).await?;
     let null_response_writer = Arc::new(ResponseWriter::new(None));
     match args.command {
         Commands::DeleteOldData { min_days_old } => {
