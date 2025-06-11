@@ -165,7 +165,7 @@ async fn test_cpu_usage_view(
     lake: Arc<DataLakeConnection>,
     cpu_usage_view: Arc<SqlBatchView>,
 ) -> Result<()> {
-    let mut view_factory = default_view_factory()?;
+    let mut view_factory = default_view_factory(runtime.clone(), lake.clone()).await?;
     view_factory.add_global_view(cpu_usage_view.clone());
     let view_factory = Arc::new(view_factory);
     let null_response_writer = Arc::new(ResponseWriter::new(None));
@@ -241,7 +241,7 @@ async fn histo_view_test() -> Result<()> {
         make_cpu_usage_per_process_per_minute_view(
             runtime.clone(),
             lake.clone(),
-            Arc::new(default_view_factory()?),
+            Arc::new(default_view_factory(runtime.clone(), lake.clone()).await?),
         )
         .await?,
     );

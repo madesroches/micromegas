@@ -352,7 +352,7 @@ async fn test_log_summary_view(
     lake: Arc<DataLakeConnection>,
     log_summary_view: Arc<SqlBatchView>,
 ) -> Result<()> {
-    let mut view_factory = default_view_factory()?;
+    let mut view_factory = default_view_factory(runtime.clone(), lake.clone()).await?;
     view_factory.add_global_view(log_summary_view.clone());
     let view_factory = Arc::new(view_factory);
     let null_response_writer = Arc::new(ResponseWriter::new(None));
@@ -498,7 +498,7 @@ async fn sql_view_test() -> Result<()> {
         make_log_entries_levels_per_process_minute_view_with_custom_merge(
             runtime.clone(),
             lake.clone(),
-            Arc::new(default_view_factory()?),
+            Arc::new(default_view_factory(runtime.clone(), lake.clone()).await?),
         )
         .await?,
     );
@@ -508,7 +508,7 @@ async fn sql_view_test() -> Result<()> {
         make_log_entries_levels_per_process_minute_view(
             runtime.clone(),
             lake.clone(),
-            Arc::new(default_view_factory()?),
+            Arc::new(default_view_factory(runtime.clone(), lake.clone()).await?),
         )
         .await?,
     );

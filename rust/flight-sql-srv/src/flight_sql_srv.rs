@@ -37,16 +37,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_context(|| "reading MICROMEGAS_SQL_CONNECTION_STRING")?;
     let object_store_uri = std::env::var("MICROMEGAS_OBJECT_STORE_URI")
         .with_context(|| "reading MICROMEGAS_OBJECT_STORE_URI")?;
-    let data_lake = connect_to_data_lake(&connection_string, &object_store_uri).await?;
+    let data_lake = Arc::new(connect_to_data_lake(&connection_string, &object_store_uri).await?);
     migrate_lakehouse(data_lake.db_pool.clone())
         .await
         .with_context(|| "migrate_lakehouse")?;
-    let view_factory = Arc::new(default_view_factory()?);
-    let partition_provider = Arc::new(LivePartitionProvider::new(data_lake.db_pool.clone()));
     let runtime = Arc::new(make_runtime_env()?);
+    let view_factory = Arc::new(default_view_factory(runtime.clone(), data_lake.clone()).await?);
+    let partition_provider = Arc::new(LivePartitionProvider::new(data_lake.db_pool.clone()));
     let svc = FlightServiceServer::new(FlightSqlServiceImpl::new(
         runtime,
-        Arc::new(data_lake),
+        data_lake,
         partition_provider,
         view_factory,
     )?)
