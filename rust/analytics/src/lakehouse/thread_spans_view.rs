@@ -267,19 +267,19 @@ impl View for ThreadSpansView {
             Expr::BinaryExpr(BinaryExpr::new(
                 col("begin").into(),
                 Operator::LtEq,
-                Expr::Literal(ScalarValue::TimestampNanosecond(
-                    end.timestamp_nanos_opt(),
-                    Some(utc.clone()),
-                ))
+                Expr::Literal(
+                    ScalarValue::TimestampNanosecond(end.timestamp_nanos_opt(), Some(utc.clone())),
+                    None,
+                )
                 .into(),
             )),
             Expr::BinaryExpr(BinaryExpr::new(
                 col("end").into(),
                 Operator::GtEq,
-                Expr::Literal(ScalarValue::TimestampNanosecond(
-                    begin.timestamp_nanos_opt(),
-                    Some(utc),
-                ))
+                Expr::Literal(
+                    ScalarValue::TimestampNanosecond(begin.timestamp_nanos_opt(), Some(utc)),
+                    None,
+                )
                 .into(),
             )),
         ])

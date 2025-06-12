@@ -33,7 +33,7 @@ pub fn make_partitioned_execution_plan(
     let reader_factory = Arc::new(ReaderFactory::new(object_store, partitions));
     let source = Arc::new(
         ParquetSource::default()
-            .with_predicate(schema.clone(), predicate)
+            .with_predicate(predicate)
             .with_parquet_file_reader_factory(reader_factory),
     );
     let file_scan_config = FileScanConfigBuilder::new(object_store_url, schema, source)
