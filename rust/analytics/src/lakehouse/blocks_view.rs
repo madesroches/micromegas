@@ -1,4 +1,5 @@
 use super::{
+    batch_update::PartitionCreationStrategy,
     metadata_partition_spec::fetch_metadata_partition_spec,
     partition_cache::PartitionCache,
     view::{PartitionSpec, View, ViewMetadata},
@@ -6,7 +7,7 @@ use super::{
 use crate::time::TimeRange;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 use datafusion::{
     arrow::datatypes::{DataType, Field, Fields, Schema, TimeUnit},
     execution::runtime_env::RuntimeEnv,
@@ -147,6 +148,15 @@ impl View for BlocksView {
 
     fn get_update_group(&self) -> Option<i32> {
         Some(1000)
+    }
+
+    fn get_max_partition_time_delta(&self, strategy: &PartitionCreationStrategy) -> TimeDelta {
+        match strategy {
+            PartitionCreationStrategy::Abort | PartitionCreationStrategy::CreateFromSource => {
+                TimeDelta::hours(1)
+            }
+            PartitionCreationStrategy::MergeExisting(_partitions) => TimeDelta::days(1),
+        }
     }
 }
 
