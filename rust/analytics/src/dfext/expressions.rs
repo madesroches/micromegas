@@ -15,7 +15,7 @@ pub fn simplify_exp(expr: &Expr) -> datafusion::error::Result<Expr> {
 
 pub fn exp_to_string(expr: &Expr) -> datafusion::error::Result<String> {
     match simplify_exp(expr)? {
-        Expr::Literal(ScalarValue::Utf8(Some(string))) => Ok(string),
+        Expr::Literal(ScalarValue::Utf8(Some(string)), _metadata) => Ok(string),
         other => {
             plan_err!("can't convert {other:?} to string")
         }
@@ -24,7 +24,7 @@ pub fn exp_to_string(expr: &Expr) -> datafusion::error::Result<String> {
 
 pub fn exp_to_i64(expr: &Expr) -> datafusion::error::Result<i64> {
     match simplify_exp(expr)? {
-        Expr::Literal(ScalarValue::Int64(Some(value))) => Ok(value),
+        Expr::Literal(ScalarValue::Int64(Some(value)), _metadata) => Ok(value),
         other => {
             plan_err!("can't convert {other:?} to i64")
         }
@@ -33,7 +33,7 @@ pub fn exp_to_i64(expr: &Expr) -> datafusion::error::Result<i64> {
 
 pub fn exp_to_f64(expr: &Expr) -> datafusion::error::Result<f64> {
     match simplify_exp(expr)? {
-        Expr::Literal(ScalarValue::Float64(Some(value))) => Ok(value),
+        Expr::Literal(ScalarValue::Float64(Some(value)), _metadata) => Ok(value),
         other => {
             plan_err!("can't convert {other:?} to f64")
         }
@@ -42,12 +42,12 @@ pub fn exp_to_f64(expr: &Expr) -> datafusion::error::Result<f64> {
 
 pub fn exp_to_timestamp(expr: &Expr) -> datafusion::error::Result<DateTime<Utc>> {
     match simplify_exp(expr)? {
-        Expr::Literal(ScalarValue::Utf8(Some(string))) => {
+        Expr::Literal(ScalarValue::Utf8(Some(string)), _metadata) => {
             let ts = chrono::DateTime::parse_from_rfc3339(&string)
                 .map_err(|e| DataFusionError::External(e.into()))?;
             Ok(ts.into())
         }
-        Expr::Literal(ScalarValue::TimestampNanosecond(Some(ns), timezone)) => {
+        Expr::Literal(ScalarValue::TimestampNanosecond(Some(ns), timezone), _metadata) => {
             if let Some(tz) = timezone {
                 if *tz != *"+00:00" {
                     return plan_err!("Timestamp should be in UTC");

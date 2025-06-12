@@ -188,15 +188,15 @@ impl View for LogView {
         Ok(vec![Expr::Between(Between::new(
             col("time").into(),
             false,
-            Expr::Literal(ScalarValue::TimestampNanosecond(
-                begin.timestamp_nanos_opt(),
-                Some(utc.clone()),
-            ))
+            Expr::Literal(
+                ScalarValue::TimestampNanosecond(begin.timestamp_nanos_opt(), Some(utc.clone())),
+                None,
+            )
             .into(),
-            Expr::Literal(ScalarValue::TimestampNanosecond(
-                end.timestamp_nanos_opt(),
-                Some(utc.clone()),
-            ))
+            Expr::Literal(
+                ScalarValue::TimestampNanosecond(end.timestamp_nanos_opt(), Some(utc.clone())),
+                None,
+            )
             .into(),
         ))])
     }
