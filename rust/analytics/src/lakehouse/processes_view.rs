@@ -71,8 +71,8 @@ GROUP BY process_id
         lake,
         view_factory,
         Some(2000),
-        TimeDelta::hours(1), // from source
-        TimeDelta::hours(1), // when merging
+        TimeDelta::days(1), // from source
+        TimeDelta::days(1), // when merging
         None,
     )
     .await
