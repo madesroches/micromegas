@@ -64,6 +64,12 @@ In order to keep costs down, most payloads will remain unprocessed until they ex
 
 ## Status
 
+### June 2025
+ * Released [version 0.10.0](https://crates.io/crates/micromegas)
+ * Process properties in measures and log_entries
+ * Better histogram support
+ * Processes and streams views now contain all processes/streams updated in the requested time range - based on SqlBatchView.
+
 ### May 2025
  * Released [version 0.8.0](https://crates.io/crates/micromegas) and [version 0.9.0](https://crates.io/crates/micromegas)
  * Frame budget reporting
