@@ -1,5 +1,8 @@
+use std::sync::Arc;
+
 use anyhow::{Context, Result};
 use chrono::{DateTime, TimeDelta, Utc};
+use datafusion::scalar::ScalarValue;
 use micromegas_telemetry::types::block::BlockMetadata;
 use micromegas_tracing::process_info::ProcessInfo;
 use sqlx::Row;
@@ -147,4 +150,11 @@ pub fn get_tsc_frequency_inverse_ms(tsc_frequency: i64) -> f64 {
 #[allow(clippy::cast_precision_loss)]
 pub fn get_tsc_frequency_inverse_ns(tsc_frequency: i64) -> f64 {
     NANOS_PER_SEC / tsc_frequency as f64
+}
+
+pub fn datetime_to_scalar(v: DateTime<Utc>) -> ScalarValue {
+    lazy_static::lazy_static! {
+        static ref UTC_OFFSET: Arc<str> = Arc::from("+00:00");
+    }
+    ScalarValue::TimestampNanosecond(v.timestamp_nanos_opt(), Some(UTC_OFFSET.clone()))
 }
