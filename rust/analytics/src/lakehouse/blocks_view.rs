@@ -4,7 +4,7 @@ use super::{
     partition_cache::PartitionCache,
     view::{PartitionSpec, View, ViewMetadata},
 };
-use crate::time::TimeRange;
+use crate::time::{datetime_to_scalar, TimeRange};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, TimeDelta, Utc};
@@ -13,7 +13,6 @@ use datafusion::{
     execution::runtime_env::RuntimeEnv,
     logical_expr::{col, Expr},
     prelude::*,
-    scalar::ScalarValue,
 };
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use std::sync::Arc;
@@ -125,16 +124,9 @@ impl View for BlocksView {
     }
 
     fn make_time_filter(&self, begin: DateTime<Utc>, end: DateTime<Utc>) -> Result<Vec<Expr>> {
-        let utc: Arc<str> = Arc::from("+00:00");
         Ok(vec![
-            col("begin_time").lt_eq(lit(ScalarValue::TimestampNanosecond(
-                end.timestamp_nanos_opt(),
-                Some(utc.clone()),
-            ))),
-            col("end_time").gt_eq(lit(ScalarValue::TimestampNanosecond(
-                begin.timestamp_nanos_opt(),
-                Some(utc.clone()),
-            ))),
+            col("begin_time").lt_eq(lit(datetime_to_scalar(end))),
+            col("end_time").gt_eq(lit(datetime_to_scalar(begin))),
         ])
     }
 

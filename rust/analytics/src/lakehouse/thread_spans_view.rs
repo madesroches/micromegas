@@ -11,17 +11,14 @@ use crate::{
     metadata::{find_process, find_stream},
     response_writer::ResponseWriter,
     span_table::{get_spans_schema, SpanRecordBuilder},
-    time::{make_time_converter_from_db, ConvertTicks, TimeRange},
+    time::{datetime_to_scalar, make_time_converter_from_db, ConvertTicks, TimeRange},
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use datafusion::logical_expr::{BinaryExpr, Expr, Operator};
 use datafusion::{
     arrow::datatypes::Schema, execution::runtime_env::RuntimeEnv, logical_expr::expr_fn::col,
-};
-use datafusion::{
-    logical_expr::{BinaryExpr, Expr, Operator},
-    scalar::ScalarValue,
 };
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_telemetry::{blob_storage::BlobStorage, types::block::BlockMetadata};
@@ -262,25 +259,16 @@ impl View for ThreadSpansView {
     }
 
     fn make_time_filter(&self, begin: DateTime<Utc>, end: DateTime<Utc>) -> Result<Vec<Expr>> {
-        let utc: Arc<str> = Arc::from("+00:00");
         Ok(vec![
             Expr::BinaryExpr(BinaryExpr::new(
                 col("begin").into(),
                 Operator::LtEq,
-                Expr::Literal(
-                    ScalarValue::TimestampNanosecond(end.timestamp_nanos_opt(), Some(utc.clone())),
-                    None,
-                )
-                .into(),
+                Expr::Literal(datetime_to_scalar(end), None).into(),
             )),
             Expr::BinaryExpr(BinaryExpr::new(
                 col("end").into(),
                 Operator::GtEq,
-                Expr::Literal(
-                    ScalarValue::TimestampNanosecond(begin.timestamp_nanos_opt(), Some(utc)),
-                    None,
-                )
-                .into(),
+                Expr::Literal(datetime_to_scalar(begin), None).into(),
             )),
         ])
     }

@@ -9,7 +9,7 @@ use super::{
     view::{PartitionSpec, View, ViewMetadata},
     view_factory::ViewFactory,
 };
-use crate::time::TimeRange;
+use crate::time::{datetime_to_scalar, TimeRange};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, TimeDelta, Utc};
@@ -17,7 +17,6 @@ use datafusion::{
     arrow::datatypes::Schema,
     execution::{runtime_env::RuntimeEnv, SendableRecordBatchStream},
     prelude::*,
-    scalar::ScalarValue,
     sql::TableReference,
 };
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
@@ -192,16 +191,9 @@ impl View for SqlBatchView {
         Ok(())
     }
     fn make_time_filter(&self, begin: DateTime<Utc>, end: DateTime<Utc>) -> Result<Vec<Expr>> {
-        let utc: Arc<str> = Arc::from("+00:00");
         Ok(vec![
-            col(&*self.min_event_time_column).lt_eq(lit(ScalarValue::TimestampNanosecond(
-                end.timestamp_nanos_opt(),
-                Some(utc.clone()),
-            ))),
-            col(&*self.max_event_time_column).gt_eq(lit(ScalarValue::TimestampNanosecond(
-                begin.timestamp_nanos_opt(),
-                Some(utc.clone()),
-            ))),
+            col(&*self.min_event_time_column).lt_eq(lit(datetime_to_scalar(end))),
+            col(&*self.max_event_time_column).gt_eq(lit(datetime_to_scalar(begin))),
         ])
     }
 
