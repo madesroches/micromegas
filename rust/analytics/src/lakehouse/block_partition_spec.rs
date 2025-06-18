@@ -3,10 +3,9 @@ use super::{
     view::{PartitionSpec, ViewMetadata},
     write_partition::{write_partition_from_rows, PartitionRowSet},
 };
-use crate::response_writer::Logger;
+use crate::{response_writer::Logger, time::TimeRange};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 use datafusion::arrow::datatypes::Schema;
 use futures::StreamExt;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
@@ -31,8 +30,7 @@ pub trait BlockProcessor: Send + Sync + Debug {
 pub struct BlockPartitionSpec {
     pub view_metadata: ViewMetadata,
     pub schema: Arc<Schema>,
-    pub begin_insert: DateTime<Utc>,
-    pub end_insert: DateTime<Utc>,
+    pub insert_range: TimeRange,
     pub source_data: Arc<dyn PartitionBlocksSource>,
     pub block_processor: Arc<dyn BlockProcessor>,
 }
@@ -52,8 +50,8 @@ impl PartitionSpec for BlockPartitionSpec {
             "[{}, {}] {} {}",
             self.view_metadata.view_set_name,
             self.view_metadata.view_instance_id,
-            self.begin_insert.to_rfc3339(),
-            self.end_insert.to_rfc3339()
+            self.insert_range.begin.to_rfc3339(),
+            self.insert_range.end.to_rfc3339()
         );
         logger.write_log_entry(format!("writing {desc}")).await?;
 
@@ -73,8 +71,7 @@ impl PartitionSpec for BlockPartitionSpec {
             lake.clone(),
             self.view_metadata.clone(),
             self.schema.clone(),
-            self.begin_insert,
-            self.end_insert,
+            self.insert_range,
             self.source_data.get_source_data_hash(),
             rx,
             logger.clone(),

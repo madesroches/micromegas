@@ -2,6 +2,7 @@ use super::blocks_view::blocks_file_schema_hash;
 use super::partition_cache::PartitionCache;
 use crate::arrow_properties::read_property_list;
 use crate::dfext::typed_column::typed_column_by_name;
+use crate::time::TimeRange;
 use crate::{
     dfext::typed_column::typed_column,
     lakehouse::{blocks_view::blocks_view_schema, query::query_partitions},
@@ -9,7 +10,7 @@ use crate::{
 use anyhow::{Context, Result};
 use async_stream::try_stream;
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use chrono::DateTime;
 use datafusion::functions_aggregate::{count::count_all, expr_fn::sum, min_max::max};
 use datafusion::{
     arrow::array::{
@@ -228,12 +229,11 @@ pub async fn fetch_partition_source_data(
     runtime: Arc<RuntimeEnv>,
     lake: Arc<DataLakeConnection>,
     existing_partitions: Arc<PartitionCache>,
-    begin_insert: DateTime<Utc>,
-    end_insert: DateTime<Utc>,
+    insert_range: TimeRange,
     source_stream_tag: &str,
 ) -> Result<SourceDataBlocks> {
-    let begin_rfc = begin_insert.to_rfc3339();
-    let end_rfc = end_insert.to_rfc3339();
+    let begin_rfc = insert_range.begin.to_rfc3339();
+    let end_rfc = insert_range.end.to_rfc3339();
     let sql = format!(
         r#"
           SELECT block_id, stream_id, process_id, begin_time, begin_ticks, end_time, end_ticks, nb_objects,
@@ -249,13 +249,7 @@ pub async fn fetch_partition_source_data(
           ;"#
     );
     let block_partitions = existing_partitions
-        .filter(
-            "blocks",
-            "global",
-            &blocks_file_schema_hash(),
-            begin_insert,
-            end_insert,
-        )
+        .filter("blocks", "global", &blocks_file_schema_hash(), insert_range)
         .partitions;
     let df = query_partitions(
         runtime,

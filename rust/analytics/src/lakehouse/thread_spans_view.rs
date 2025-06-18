@@ -112,8 +112,7 @@ async fn write_partition(
         lake.clone(),
         view_meta,
         schema,
-        min_insert_time,
-        max_insert_time,
+        TimeRange::new(min_insert_time, max_insert_time),
         spec.block_ids_hash.clone(),
         rx,
         null_response_writer,
@@ -196,8 +195,7 @@ impl View for ThreadSpansView {
         _runtime: Arc<RuntimeEnv>,
         _lake: Arc<DataLakeConnection>,
         _existing_partitions: Arc<PartitionCache>,
-        _begin_insert: DateTime<Utc>,
-        _end_insert: DateTime<Utc>,
+        _insert_range: TimeRange,
     ) -> Result<Arc<dyn PartitionSpec>> {
         anyhow::bail!("not implemented")
     }

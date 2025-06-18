@@ -12,6 +12,7 @@ use micromegas::analytics::lakehouse::temp::delete_expired_temporary_files;
 use micromegas::analytics::lakehouse::view_factory::default_view_factory;
 use micromegas::analytics::lakehouse::write_partition::retire_partitions;
 use micromegas::analytics::response_writer::ResponseWriter;
+use micromegas::analytics::time::TimeRange;
 use micromegas::chrono::DateTime;
 use micromegas::chrono::TimeDelta;
 use micromegas::chrono::Utc;
@@ -96,17 +97,17 @@ async fn main() -> Result<()> {
         } => {
             let delta = TimeDelta::try_seconds(partition_delta_seconds)
                 .with_context(|| "making time delta")?;
-            let existing_partitions = Arc::new(
-                PartitionCache::fetch_overlapping_insert_range(&data_lake.db_pool, begin, end)
+            let insert_range = TimeRange::new(begin, end);
+            let existing_partitions_all_views = Arc::new(
+                PartitionCache::fetch_overlapping_insert_range(&data_lake.db_pool, insert_range)
                     .await?,
             );
             materialize_partition_range(
-                existing_partitions,
+                existing_partitions_all_views,
                 runtime.clone(),
                 data_lake,
                 view_factory.make_view(&view_set_name, &view_instance_id)?,
-                begin,
-                end,
+                insert_range,
                 delta,
                 null_response_writer,
             )

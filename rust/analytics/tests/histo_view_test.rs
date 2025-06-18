@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use chrono::{DateTime, DurationRound, TimeDelta, Utc};
+use chrono::{DurationRound, TimeDelta, Utc};
 use datafusion::execution::runtime_env::RuntimeEnv;
 use micromegas_analytics::{
     lakehouse::{
@@ -99,8 +99,7 @@ pub async fn materialize_range(
     lake: Arc<DataLakeConnection>,
     view_factory: Arc<ViewFactory>,
     cpu_usage_view: Arc<dyn View>,
-    begin_range: DateTime<Utc>,
-    end_range: DateTime<Utc>,
+    insert_range: TimeRange,
     partition_time_delta: TimeDelta,
     logger: Arc<dyn Logger>,
 ) -> Result<()> {
@@ -110,8 +109,7 @@ pub async fn materialize_range(
             &lake.db_pool,
             blocks_view.get_view_set_name(),
             blocks_view.get_view_instance_id(),
-            begin_range,
-            end_range,
+            insert_range,
         )
         .await?,
     );
@@ -120,15 +118,13 @@ pub async fn materialize_range(
         runtime.clone(),
         lake.clone(),
         blocks_view,
-        begin_range,
-        end_range,
+        insert_range,
         partition_time_delta,
         logger.clone(),
     )
     .await?;
     partitions = Arc::new(
-        PartitionCache::fetch_overlapping_insert_range(&lake.db_pool, begin_range, end_range)
-            .await?,
+        PartitionCache::fetch_overlapping_insert_range(&lake.db_pool, insert_range).await?,
     );
     let measures_view = view_factory.make_view("measures", "global")?;
     materialize_partition_range(
@@ -136,23 +132,20 @@ pub async fn materialize_range(
         runtime.clone(),
         lake.clone(),
         measures_view,
-        begin_range,
-        end_range,
+        insert_range,
         partition_time_delta,
         logger.clone(),
     )
     .await?;
     partitions = Arc::new(
-        PartitionCache::fetch_overlapping_insert_range(&lake.db_pool, begin_range, end_range)
-            .await?,
+        PartitionCache::fetch_overlapping_insert_range(&lake.db_pool, insert_range).await?,
     );
     materialize_partition_range(
         partitions.clone(),
         runtime.clone(),
         lake.clone(),
         cpu_usage_view.clone(),
-        begin_range,
-        end_range,
+        insert_range,
         partition_time_delta / 2, // this validates that the source rows are not read twice
         logger.clone(),
     )
@@ -181,13 +174,13 @@ async fn test_cpu_usage_view(
 
     let end_range = Utc::now().duration_trunc(TimeDelta::minutes(1))?;
     let begin_range = end_range - (TimeDelta::minutes(3));
+    let insert_range = TimeRange::new(begin_range, end_range);
     materialize_range(
         runtime.clone(),
         lake.clone(),
         view_factory.clone(),
         cpu_usage_view.clone(),
-        begin_range,
-        end_range,
+        insert_range,
         TimeDelta::seconds(10),
         null_response_writer.clone(),
     )
@@ -197,8 +190,7 @@ async fn test_cpu_usage_view(
         lake.clone(),
         view_factory.clone(),
         cpu_usage_view.clone(),
-        begin_range,
-        end_range,
+        insert_range,
         TimeDelta::minutes(1),
         null_response_writer.clone(),
     )

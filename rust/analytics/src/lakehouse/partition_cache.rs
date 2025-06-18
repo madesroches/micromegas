@@ -3,7 +3,6 @@ use crate::{arrow_utils::parse_parquet_metadata, time::TimeRange};
 use super::{partition::Partition, view::ViewMetadata};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Row};
 use std::{fmt, sync::Arc};
 
@@ -22,8 +21,7 @@ pub trait QueryPartitionProvider: std::fmt::Display + Send + Sync + std::fmt::De
 #[derive(Debug)]
 pub struct PartitionCache {
     pub partitions: Vec<Partition>,
-    begin_insert: DateTime<Utc>,
-    end_insert: DateTime<Utc>,
+    insert_range: TimeRange,
 }
 
 impl fmt::Display for PartitionCache {
@@ -33,10 +31,17 @@ impl fmt::Display for PartitionCache {
 }
 
 impl PartitionCache {
+    pub fn len(&self) -> usize {
+        self.partitions.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.partitions.is_empty()
+    }
+
     pub async fn fetch_overlapping_insert_range(
         pool: &sqlx::PgPool,
-        begin_insert: DateTime<Utc>,
-        end_insert: DateTime<Utc>,
+        insert_range: TimeRange,
     ) -> Result<Self> {
         let rows = sqlx::query(
             "SELECT view_set_name,
@@ -57,8 +62,8 @@ impl PartitionCache {
              AND file_metadata IS NOT NULL
              ;",
         )
-        .bind(end_insert)
-        .bind(begin_insert)
+        .bind(insert_range.end)
+        .bind(insert_range.begin)
         .fetch_all(pool)
         .await
         .with_context(|| "fetching partitions")?;
@@ -86,8 +91,7 @@ impl PartitionCache {
         }
         Ok(Self {
             partitions,
-            begin_insert,
-            end_insert,
+            insert_range,
         })
     }
 
@@ -95,8 +99,7 @@ impl PartitionCache {
         pool: &sqlx::PgPool,
         view_set_name: Arc<String>,
         view_instance_id: Arc<String>,
-        begin_insert: DateTime<Utc>,
-        end_insert: DateTime<Utc>,
+        insert_range: TimeRange,
     ) -> Result<Self> {
         let rows = sqlx::query(
             "SELECT begin_insert_time,
@@ -117,8 +120,8 @@ impl PartitionCache {
              AND file_metadata IS NOT NULL
              ;",
         )
-        .bind(end_insert)
-        .bind(begin_insert)
+        .bind(insert_range.end)
+        .bind(insert_range.begin)
         .bind(&*view_set_name)
         .bind(&*view_instance_id)
         .fetch_all(pool)
@@ -148,8 +151,7 @@ impl PartitionCache {
         }
         Ok(Self {
             partitions,
-            begin_insert,
-            end_insert,
+            insert_range,
         })
     }
 
@@ -159,43 +161,38 @@ impl PartitionCache {
         view_set_name: &str,
         view_instance_id: &str,
         file_schema_hash: &[u8],
-        begin_insert: DateTime<Utc>,
-        end_insert: DateTime<Utc>,
+        insert_range: TimeRange,
     ) -> Self {
         let mut partitions = vec![];
         for part in &self.partitions {
             if *part.view_metadata.view_set_name == view_set_name
                 && *part.view_metadata.view_instance_id == view_instance_id
                 && part.view_metadata.file_schema_hash == file_schema_hash
-                && part.begin_insert_time < end_insert
-                && part.end_insert_time > begin_insert
+                && part.begin_insert_time < insert_range.end
+                && part.end_insert_time > insert_range.begin
             {
                 partitions.push(part.clone());
             }
         }
         Self {
             partitions,
-            begin_insert,
-            end_insert,
+            insert_range,
         }
     }
 
     // overlap test for a all views
-    pub fn filter_insert_range(
-        &self,
-        begin_insert: DateTime<Utc>,
-        end_insert: DateTime<Utc>,
-    ) -> Self {
+    pub fn filter_insert_range(&self, insert_range: TimeRange) -> Self {
         let mut partitions = vec![];
         for part in &self.partitions {
-            if part.begin_insert_time < end_insert && part.end_insert_time > begin_insert {
+            if part.begin_insert_time < insert_range.end
+                && part.end_insert_time > insert_range.begin
+            {
                 partitions.push(part.clone());
             }
         }
         Self {
             partitions,
-            begin_insert,
-            end_insert,
+            insert_range,
         }
     }
 
@@ -204,23 +201,21 @@ impl PartitionCache {
         &self,
         view_set_name: &str,
         view_instance_id: &str,
-        begin_insert: DateTime<Utc>,
-        end_insert: DateTime<Utc>,
+        insert_range: TimeRange,
     ) -> Self {
         let mut partitions = vec![];
         for part in &self.partitions {
             if *part.view_metadata.view_set_name == view_set_name
                 && *part.view_metadata.view_instance_id == view_instance_id
-                && part.begin_insert_time >= begin_insert
-                && part.end_insert_time <= end_insert
+                && part.begin_insert_time >= insert_range.begin
+                && part.end_insert_time <= insert_range.end
             {
                 partitions.push(part.clone());
             }
         }
         Self {
             partitions,
-            begin_insert,
-            end_insert,
+            insert_range,
         }
     }
 }
@@ -237,7 +232,7 @@ impl QueryPartitionProvider for PartitionCache {
     ) -> Result<Vec<Partition>> {
         let mut partitions = vec![];
         if let Some(range) = query_range {
-            if range.begin < self.begin_insert || range.end > self.end_insert {
+            if range.begin < self.insert_range.begin || range.end > self.insert_range.end {
                 anyhow::bail!("filtering from a result set that's not large enough");
             }
             for part in &self.partitions {

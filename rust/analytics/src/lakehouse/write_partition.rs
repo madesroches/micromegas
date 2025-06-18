@@ -1,6 +1,6 @@
 use crate::{
     arrow_utils::serialize_parquet_metadata, lakehouse::async_parquet_writer::AsyncParquetWriter,
-    response_writer::Logger,
+    response_writer::Logger, time::TimeRange,
 };
 use anyhow::{Context, Result};
 use chrono::{DateTime, TimeDelta, Utc};
@@ -197,8 +197,7 @@ pub async fn write_partition_from_rows(
     lake: Arc<DataLakeConnection>,
     view_metadata: ViewMetadata,
     file_schema: Arc<Schema>,
-    begin_insert_time: DateTime<Utc>, //todo:change to min_insert_time & max_insert_time
-    end_insert_time: DateTime<Utc>,
+    insert_range: TimeRange,
     source_data_hash: Vec<u8>,
     mut rb_stream: Receiver<PartitionRowSet>,
     logger: Arc<dyn Logger>,
@@ -208,8 +207,8 @@ pub async fn write_partition_from_rows(
         "views/{}/{}/{}/{}_{file_id}.parquet",
         &view_metadata.view_set_name,
         &view_metadata.view_instance_id,
-        begin_insert_time.format("%Y-%m-%d"),
-        begin_insert_time.format("%H-%M-%S")
+        insert_range.begin.format("%Y-%m-%d"),
+        insert_range.begin.format("%H-%M-%S")
     );
     let byte_counter = Arc::new(AtomicI64::new(0));
     let object_store_writer = AsyncParquetWriter::new(
@@ -233,8 +232,8 @@ pub async fn write_partition_from_rows(
         "[{}, {}] {} {}",
         view_metadata.view_set_name,
         view_metadata.view_instance_id,
-        begin_insert_time.to_rfc3339(),
-        end_insert_time.to_rfc3339()
+        insert_range.begin.to_rfc3339(),
+        insert_range.end.to_rfc3339()
     );
 
     let mut min_event_time: Option<DateTime<Utc>> = None;
@@ -298,8 +297,8 @@ pub async fn write_partition_from_rows(
         &lake,
         &Partition {
             view_metadata,
-            begin_insert_time,
-            end_insert_time,
+            begin_insert_time: insert_range.begin,
+            end_insert_time: insert_range.end,
             min_event_time: min_event_time.unwrap(),
             max_event_time: max_event_time.unwrap(),
             updated: sqlx::types::chrono::Utc::now(),

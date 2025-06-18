@@ -3,6 +3,7 @@ use crate::{
     lakehouse::write_partition::{write_partition_from_rows, PartitionRowSet},
     response_writer::Logger,
     sql_arrow_bridge::rows_to_record_batch,
+    time::TimeRange,
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -16,8 +17,7 @@ use std::sync::Arc;
 pub struct MetadataPartitionSpec {
     pub view_metadata: ViewMetadata,
     pub schema: Arc<Schema>,
-    pub begin_insert: DateTime<Utc>,
-    pub end_insert: DateTime<Utc>,
+    pub insert_range: TimeRange,
     pub record_count: i64,
     pub data_sql: Arc<String>,
     pub event_time_column: Arc<String>,
@@ -31,21 +31,19 @@ pub async fn fetch_metadata_partition_spec(
     data_sql: Arc<String>,
     view_metadata: ViewMetadata,
     schema: Arc<Schema>,
-    begin_insert: DateTime<Utc>,
-    end_insert: DateTime<Utc>,
+    insert_range: TimeRange,
 ) -> Result<MetadataPartitionSpec> {
     //todo: extract this query to allow join (instead of source_table)
     let row = sqlx::query(source_count_query)
-        .bind(begin_insert)
-        .bind(end_insert)
+        .bind(insert_range.begin)
+        .bind(insert_range.end)
         .fetch_one(pool)
         .await
         .with_context(|| "select count source metadata")?;
     Ok(MetadataPartitionSpec {
         view_metadata,
         schema,
-        begin_insert,
-        end_insert,
+        insert_range,
         record_count: row.try_get("count").with_context(|| "reading count")?,
         data_sql,
         event_time_column,
@@ -70,14 +68,14 @@ impl PartitionSpec for MetadataPartitionSpec {
             "[{}, {}] {} {}",
             self.view_metadata.view_set_name,
             self.view_metadata.view_instance_id,
-            self.begin_insert.to_rfc3339(),
-            self.end_insert.to_rfc3339()
+            self.insert_range.begin.to_rfc3339(),
+            self.insert_range.end.to_rfc3339()
         );
         logger.write_log_entry(format!("writing {desc}")).await?;
 
         let rows = sqlx::query(&self.data_sql)
-            .bind(self.begin_insert)
-            .bind(self.end_insert)
+            .bind(self.insert_range.begin)
+            .bind(self.insert_range.end)
             .fetch_all(&lake.db_pool)
             .await?;
         let row_count = rows.len() as i64;
@@ -85,12 +83,12 @@ impl PartitionSpec for MetadataPartitionSpec {
             return Ok(());
         }
         let min_event_time: DateTime<Utc> = rows[0].try_get(&**self.event_time_column)?;
-        assert!(min_event_time >= self.begin_insert);
-        assert!(min_event_time <= self.end_insert);
+        assert!(min_event_time >= self.insert_range.begin);
+        assert!(min_event_time <= self.insert_range.end);
         let max_event_time: DateTime<Utc> =
             rows[rows.len() - 1].try_get(&**self.event_time_column)?;
-        assert!(max_event_time >= self.begin_insert);
-        assert!(max_event_time <= self.end_insert);
+        assert!(max_event_time >= self.insert_range.begin);
+        assert!(max_event_time <= self.insert_range.end);
         let record_batch =
             rows_to_record_batch(&rows).with_context(|| "converting rows to record batch")?;
         drop(rows);
@@ -100,8 +98,7 @@ impl PartitionSpec for MetadataPartitionSpec {
             lake.clone(),
             self.view_metadata.clone(),
             self.schema.clone(),
-            self.begin_insert,
-            self.end_insert,
+            self.insert_range,
             row_count.to_le_bytes().to_vec(),
             rx,
             logger.clone(),

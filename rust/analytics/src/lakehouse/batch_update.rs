@@ -2,9 +2,9 @@ use super::{
     merge::create_merged_partition, partition_cache::PartitionCache,
     partition_source_data::hash_to_object_count, view::View,
 };
-use crate::response_writer::Logger;
+use crate::{response_writer::Logger, time::TimeRange};
 use anyhow::{Context, Result};
-use chrono::{DateTime, TimeDelta, Utc};
+use chrono::TimeDelta;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use std::sync::Arc;
@@ -19,9 +19,8 @@ pub enum PartitionCreationStrategy {
 // returns false to abort (existing partition is up to date or there is a problem)
 #[allow(clippy::too_many_arguments)]
 async fn verify_overlapping_partitions(
-    existing_partitions: &PartitionCache,
-    begin_insert: DateTime<Utc>,
-    end_insert: DateTime<Utc>,
+    existing_partitions_all_views: &PartitionCache,
+    insert_range: TimeRange,
     view_set_name: &str,
     view_instance_id: &str,
     file_schema_hash: &[u8],
@@ -30,19 +29,18 @@ async fn verify_overlapping_partitions(
 ) -> Result<PartitionCreationStrategy> {
     let desc = format!(
         "[{}, {}] {view_set_name} {view_instance_id}",
-        begin_insert.to_rfc3339(),
-        end_insert.to_rfc3339()
+        insert_range.begin.to_rfc3339(),
+        insert_range.end.to_rfc3339()
     );
     if source_data_hash.len() != std::mem::size_of::<i64>() {
         anyhow::bail!("Source data hash should be a i64");
     }
     let nb_source_events = hash_to_object_count(source_data_hash)?;
-    let filtered = existing_partitions.filter(
+    let filtered = existing_partitions_all_views.filter(
         view_set_name,
         view_instance_id,
         file_schema_hash,
-        begin_insert,
-        end_insert,
+        insert_range,
     );
     if filtered.partitions.is_empty() {
         logger
@@ -55,7 +53,7 @@ async fn verify_overlapping_partitions(
     for part in &filtered.partitions {
         let begin = part.begin_insert_time;
         let end = part.end_insert_time;
-        if begin < begin_insert || end > end_insert {
+        if begin < insert_range.begin || end > insert_range.end {
             logger
                 .write_log_entry(format!(
                     "{desc}: found overlapping partition [{}, {}], aborting the update",
@@ -100,11 +98,10 @@ async fn verify_overlapping_partitions(
 }
 
 async fn materialize_partition(
-    existing_partitions: Arc<PartitionCache>,
+    existing_partitions_all_views: Arc<PartitionCache>,
     runtime: Arc<RuntimeEnv>,
     lake: Arc<DataLakeConnection>,
-    begin_insert: DateTime<Utc>,
-    end_insert: DateTime<Utc>,
+    insert_range: TimeRange,
     view: Arc<dyn View>,
     logger: Arc<dyn Logger>,
 ) -> Result<()> {
@@ -113,9 +110,8 @@ async fn materialize_partition(
         .make_batch_partition_spec(
             runtime.clone(),
             lake.clone(),
-            existing_partitions.clone(),
-            begin_insert,
-            end_insert,
+            existing_partitions_all_views.clone(),
+            insert_range,
         )
         .await
         .with_context(|| "make_batch_partition_spec")?;
@@ -124,9 +120,8 @@ async fn materialize_partition(
     }
     let view_instance_id = view.get_view_instance_id();
     let strategy = verify_overlapping_partitions(
-        &existing_partitions,
-        begin_insert,
-        end_insert,
+        &existing_partitions_all_views,
+        insert_range,
         &view_set_name,
         &view_instance_id,
         &view.get_file_schema_hash(),
@@ -140,7 +135,7 @@ async fn materialize_partition(
     }
 
     let new_delta = view.get_max_partition_time_delta(&strategy);
-    if new_delta < (end_insert - begin_insert) {
+    if new_delta < (insert_range.end - insert_range.begin) {
         if let PartitionCreationStrategy::MergeExisting(partition_cache) = &strategy {
             if partition_cache
                 .partitions
@@ -149,8 +144,8 @@ async fn materialize_partition(
             {
                 let desc = format!(
                     "[{}, {}] {view_set_name} {view_instance_id}",
-                    begin_insert.to_rfc3339(),
-                    end_insert.to_rfc3339()
+                    insert_range.begin.to_rfc3339(),
+                    insert_range.end.to_rfc3339()
                 );
                 logger
                     .write_log_entry(format!("{desc}: subpartitions already present",))
@@ -160,12 +155,11 @@ async fn materialize_partition(
         }
 
         return Box::pin(materialize_partition_range(
-            existing_partitions,
+            existing_partitions_all_views,
             runtime,
             lake,
             view,
-            begin_insert,
-            end_insert,
+            insert_range,
             new_delta,
             logger,
         ))
@@ -180,14 +174,14 @@ async fn materialize_partition(
                 .await
                 .with_context(|| "writing partition")?;
         }
-        PartitionCreationStrategy::MergeExisting(partitions) => {
+        PartitionCreationStrategy::MergeExisting(partitions_to_merge) => {
             create_merged_partition(
-                partitions,
+                partitions_to_merge,
+                existing_partitions_all_views,
                 runtime,
                 lake,
                 view,
-                begin_insert,
-                end_insert,
+                insert_range,
                 logger,
             )
             .await
@@ -201,24 +195,25 @@ async fn materialize_partition(
 
 #[allow(clippy::too_many_arguments)]
 pub async fn materialize_partition_range(
-    existing_partitions: Arc<PartitionCache>,
+    existing_partitions_all_views: Arc<PartitionCache>,
     runtime: Arc<RuntimeEnv>,
     lake: Arc<DataLakeConnection>,
     view: Arc<dyn View>,
-    begin_range: DateTime<Utc>,
-    end_range: DateTime<Utc>,
+    insert_range: TimeRange,
     partition_time_delta: TimeDelta,
     logger: Arc<dyn Logger>,
 ) -> Result<()> {
-    let mut begin_part = begin_range;
+    let mut begin_part = insert_range.begin;
     let mut end_part = begin_part + partition_time_delta;
-    while end_part <= end_range {
+    while end_part <= insert_range.end {
+        let partition_insert_range = TimeRange::new(begin_part, end_part);
+        let insert_time_filtered =
+            Arc::new(existing_partitions_all_views.filter_insert_range(partition_insert_range));
         materialize_partition(
-            existing_partitions.clone(),
+            insert_time_filtered,
             runtime.clone(),
             lake.clone(),
-            begin_part,
-            end_part,
+            partition_insert_range,
             view.clone(),
             logger.clone(),
         )
