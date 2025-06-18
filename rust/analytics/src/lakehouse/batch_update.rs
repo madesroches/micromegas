@@ -174,10 +174,18 @@ async fn materialize_partition(
                 .await
                 .with_context(|| "writing partition")?;
         }
-        PartitionCreationStrategy::MergeExisting(partitions) => {
-            create_merged_partition(partitions, runtime, lake, view, insert_range, logger)
-                .await
-                .with_context(|| "create_merged_partition")?;
+        PartitionCreationStrategy::MergeExisting(partitions_to_merge) => {
+            create_merged_partition(
+                partitions_to_merge,
+                existing_partitions_all_views,
+                runtime,
+                lake,
+                view,
+                insert_range,
+                logger,
+            )
+            .await
+            .with_context(|| "create_merged_partition")?;
         }
         PartitionCreationStrategy::Abort => {}
     }

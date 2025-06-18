@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use chrono::{DateTime, DurationRound};
+use chrono::DurationRound;
 use chrono::{TimeDelta, Utc};
 use datafusion::arrow::array::{DictionaryArray, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Int16Type, Schema, TimeUnit};
@@ -114,6 +114,7 @@ impl PartitionMerger for LogSummaryMerger {
         &self,
         lake: Arc<DataLakeConnection>,
         partitions: Arc<Vec<Partition>>,
+        _partitions_all_views: Arc<PartitionCache>,
     ) -> Result<SendableRecordBatchStream> {
         let processes_df = query_partitions(
             self.runtime.clone(),
@@ -265,8 +266,7 @@ pub async fn materialize_range(
     lake: Arc<DataLakeConnection>,
     view_factory: Arc<ViewFactory>,
     log_summary_view: Arc<dyn View>,
-    begin_range: DateTime<Utc>,
-    end_range: DateTime<Utc>,
+    insert_range: TimeRange,
     partition_time_delta: TimeDelta,
     logger: Arc<dyn Logger>,
 ) -> Result<()> {
@@ -276,8 +276,7 @@ pub async fn materialize_range(
             &lake.db_pool,
             blocks_view.get_view_set_name(),
             blocks_view.get_view_instance_id(),
-            begin_range,
-            end_range,
+            insert_range,
         )
         .await?,
     );
@@ -286,15 +285,13 @@ pub async fn materialize_range(
         runtime.clone(),
         lake.clone(),
         blocks_view,
-        begin_range,
-        end_range,
+        insert_range,
         partition_time_delta,
         logger.clone(),
     )
     .await?;
     partitions = Arc::new(
-        PartitionCache::fetch_overlapping_insert_range(&lake.db_pool, begin_range, end_range)
-            .await?,
+        PartitionCache::fetch_overlapping_insert_range(&lake.db_pool, insert_range).await?,
     );
     let log_entries_view = view_factory.make_view("log_entries", "global")?;
     materialize_partition_range(
@@ -302,23 +299,20 @@ pub async fn materialize_range(
         runtime.clone(),
         lake.clone(),
         log_entries_view,
-        begin_range,
-        end_range,
+        insert_range,
         partition_time_delta,
         logger.clone(),
     )
     .await?;
     partitions = Arc::new(
-        PartitionCache::fetch_overlapping_insert_range(&lake.db_pool, begin_range, end_range)
-            .await?,
+        PartitionCache::fetch_overlapping_insert_range(&lake.db_pool, insert_range).await?,
     );
     materialize_partition_range(
         partitions.clone(),
         runtime.clone(),
         lake.clone(),
         log_summary_view.clone(),
-        begin_range,
-        end_range,
+        insert_range,
         partition_time_delta / 2, // this validates that the source rows are not read twice
         logger.clone(),
     )
@@ -395,13 +389,13 @@ async fn test_log_summary_view(
     assert_eq!(log_summary_view.get_file_schema_hash(), ref_schema_hash);
     let end_range = Utc::now().duration_trunc(TimeDelta::minutes(1))?;
     let begin_range = end_range - (TimeDelta::minutes(3));
+    let insert_range = TimeRange::new(begin_range, end_range);
     materialize_range(
         runtime.clone(),
         lake.clone(),
         view_factory.clone(),
         log_summary_view.clone(),
-        begin_range,
-        end_range,
+        insert_range,
         TimeDelta::seconds(10),
         null_response_writer.clone(),
     )
@@ -411,8 +405,7 @@ async fn test_log_summary_view(
         lake.clone(),
         view_factory.clone(),
         log_summary_view.clone(),
-        begin_range,
-        end_range,
+        insert_range,
         TimeDelta::minutes(1),
         null_response_writer.clone(),
     )

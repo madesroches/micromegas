@@ -92,11 +92,14 @@ pub trait View: std::fmt::Debug + Send + Sync {
         &self,
         runtime: Arc<RuntimeEnv>,
         lake: Arc<DataLakeConnection>,
-        partitions: Arc<Vec<Partition>>,
+        partitions_to_merge: Arc<Vec<Partition>>,
+        partitions_all_views: Arc<PartitionCache>,
     ) -> Result<SendableRecordBatchStream> {
         let merge_query = Arc::new(String::from("SELECT * FROM source;"));
         let merger = QueryMerger::new(runtime, self.get_file_schema(), merge_query);
-        merger.execute_merge_query(lake, partitions).await
+        merger
+            .execute_merge_query(lake, partitions_to_merge, partitions_all_views)
+            .await
     }
 
     /// tells the daemon which view should be materialized and in what order

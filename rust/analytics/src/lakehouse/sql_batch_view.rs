@@ -231,9 +231,13 @@ impl View for SqlBatchView {
         &self,
         _runtime: Arc<RuntimeEnv>,
         lake: Arc<DataLakeConnection>,
-        partitions: Arc<Vec<Partition>>,
+        partitions_to_merge: Arc<Vec<Partition>>,
+        partitions_all_views: Arc<PartitionCache>,
     ) -> Result<SendableRecordBatchStream> {
-        let res = self.merger.execute_merge_query(lake, partitions).await;
+        let res = self
+            .merger
+            .execute_merge_query(lake, partitions_to_merge, partitions_all_views)
+            .await;
         if let Err(e) = &res {
             error!("{e:?}");
         }

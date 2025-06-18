@@ -31,6 +31,14 @@ impl fmt::Display for PartitionCache {
 }
 
 impl PartitionCache {
+    pub fn len(&self) -> usize {
+        self.partitions.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.partitions.is_empty()
+    }
+
     pub async fn fetch_overlapping_insert_range(
         pool: &sqlx::PgPool,
         insert_range: TimeRange,

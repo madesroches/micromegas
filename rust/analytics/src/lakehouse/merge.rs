@@ -18,7 +18,7 @@ use datafusion::{
 };
 use futures::stream::StreamExt;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
-use micromegas_tracing::error;
+use micromegas_tracing::{error, warn};
 use std::fmt::Debug;
 use std::sync::Arc;
 use xxhash_rust::xxh32::xxh32;
@@ -28,7 +28,8 @@ pub trait PartitionMerger: Send + Sync + Debug {
     async fn execute_merge_query(
         &self,
         lake: Arc<DataLakeConnection>,
-        partitions: Arc<Vec<Partition>>,
+        partitions_to_merge: Arc<Vec<Partition>>,
+        partitions_all_views: Arc<PartitionCache>,
     ) -> Result<SendableRecordBatchStream>;
 }
 
@@ -54,13 +55,14 @@ impl PartitionMerger for QueryMerger {
     async fn execute_merge_query(
         &self,
         lake: Arc<DataLakeConnection>,
-        partitions: Arc<Vec<Partition>>,
+        partitions_to_merge: Arc<Vec<Partition>>,
+        _partitions_all_views: Arc<PartitionCache>,
     ) -> Result<SendableRecordBatchStream> {
         let merged_df = query_partitions(
             self.runtime.clone(),
             lake.clone(),
             self.file_schema.clone(),
-            partitions,
+            partitions_to_merge,
             &self.query,
         )
         .await?;
@@ -102,7 +104,8 @@ fn partition_set_stats(
 }
 
 pub async fn create_merged_partition(
-    existing_partitions: Arc<PartitionCache>,
+    partitions_to_merge: Arc<PartitionCache>,
+    partitions_all_views: Arc<PartitionCache>,
     runtime: Arc<RuntimeEnv>,
     lake: Arc<DataLakeConnection>,
     view: Arc<dyn View>,
@@ -118,9 +121,12 @@ pub async fn create_merged_partition(
     );
     // we are not looking for intersecting partitions, but only those that fit completely in the range
     // otherwise we'd get duplicated records
-    let mut filtered_partitions = existing_partitions
+    let mut filtered_partitions = partitions_to_merge
         .filter_inside_range(view_set_name, view_instance_id, insert_range)
         .partitions;
+    if filtered_partitions.len() != partitions_to_merge.len() {
+        warn!("partitions_to_merge was not filtered properly");
+    }
     if filtered_partitions.len() < 2 {
         logger
             .write_log_entry(format!("{desc}: not enough partitions to merge"))
@@ -139,7 +145,12 @@ pub async fn create_merged_partition(
         .with_context(|| "write_log_entry")?;
     filtered_partitions.sort_by_key(|p| p.begin_insert_time);
     let mut merged_stream = view
-        .merge_partitions(runtime.clone(), lake.clone(), Arc::new(filtered_partitions))
+        .merge_partitions(
+            runtime.clone(),
+            lake.clone(),
+            Arc::new(filtered_partitions),
+            partitions_all_views,
+        )
         .await
         .with_context(|| "view.merge_partitions")?;
     let (tx, rx) = tokio::sync::mpsc::channel(1);
@@ -149,7 +160,7 @@ pub async fn create_merged_partition(
             lake.clone(),
             view_copy.get_meta(),
             view_copy.get_file_schema(),
-	    insert_range,
+            insert_range,
             source_hash.to_le_bytes().to_vec(),
             rx,
             logger.clone(),
