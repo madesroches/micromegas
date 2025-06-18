@@ -8,10 +8,9 @@ use crate::dfext::log_stream_table_provider::LogStreamTableProvider;
 use crate::dfext::task_log_exec_plan::TaskLogExecPlan;
 use crate::response_writer::LogSender;
 use crate::response_writer::Logger;
+use crate::time::TimeRange;
 use anyhow::Context;
-use chrono::DateTime;
 use chrono::TimeDelta;
-use chrono::Utc;
 use datafusion::catalog::TableFunctionImpl;
 use datafusion::catalog::TableProvider;
 use datafusion::common::plan_err;
@@ -48,8 +47,7 @@ async fn materialize_partitions_impl(
     lake: Arc<DataLakeConnection>,
     view_factory: Arc<ViewFactory>,
     view_name: &str,
-    begin: DateTime<Utc>,
-    end: DateTime<Utc>,
+    insert_range: TimeRange,
     partition_time_delta: TimeDelta,
     logger: Arc<dyn Logger>,
 ) -> anyhow::Result<()> {
@@ -57,16 +55,16 @@ async fn materialize_partitions_impl(
         .get_global_view(view_name)
         .with_context(|| format!("can't find view {view_name}"))?;
 
-    let existing_partitions =
-        Arc::new(PartitionCache::fetch_overlapping_insert_range(&lake.db_pool, begin, end).await?);
+    let existing_partitions_all_views = Arc::new(
+        PartitionCache::fetch_overlapping_insert_range(&lake.db_pool, insert_range).await?,
+    );
 
     materialize_partition_range(
-        existing_partitions,
+        existing_partitions_all_views,
         runtime,
         lake,
         view,
-        begin,
-        end,
+        insert_range,
         partition_time_delta,
         logger,
     )
@@ -103,8 +101,7 @@ impl TableFunctionImpl for MaterializePartitionsTableFunction {
                     lake,
                     view_factory,
                     &view_set_name,
-                    begin,
-                    end,
+                    TimeRange::new(begin, end),
                     TimeDelta::seconds(delta),
                     logger.clone(),
                 )

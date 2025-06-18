@@ -6,10 +6,11 @@ use super::{
     view::View,
     write_partition::{write_partition_from_rows, PartitionRowSet},
 };
-use crate::{dfext::min_max_time_df::min_max_time_dataframe, response_writer::Logger};
+use crate::{
+    dfext::min_max_time_df::min_max_time_dataframe, response_writer::Logger, time::TimeRange,
+};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 use datafusion::{
     arrow::datatypes::Schema,
     execution::{runtime_env::RuntimeEnv, SendableRecordBatchStream},
@@ -105,21 +106,20 @@ pub async fn create_merged_partition(
     runtime: Arc<RuntimeEnv>,
     lake: Arc<DataLakeConnection>,
     view: Arc<dyn View>,
-    begin_insert: DateTime<Utc>,
-    end_insert: DateTime<Utc>,
+    insert_range: TimeRange,
     logger: Arc<dyn Logger>,
 ) -> Result<()> {
     let view_set_name = &view.get_view_set_name();
     let view_instance_id = &view.get_view_instance_id();
     let desc = format!(
         "[{}, {}] {view_set_name} {view_instance_id}",
-        begin_insert.to_rfc3339(),
-        end_insert.to_rfc3339()
+        insert_range.begin.to_rfc3339(),
+        insert_range.end.to_rfc3339()
     );
     // we are not looking for intersecting partitions, but only those that fit completely in the range
     // otherwise we'd get duplicated records
     let mut filtered_partitions = existing_partitions
-        .filter_inside_range(view_set_name, view_instance_id, begin_insert, end_insert)
+        .filter_inside_range(view_set_name, view_instance_id, insert_range)
         .partitions;
     if filtered_partitions.len() < 2 {
         logger
@@ -149,8 +149,7 @@ pub async fn create_merged_partition(
             lake.clone(),
             view_copy.get_meta(),
             view_copy.get_file_schema(),
-            begin_insert,
-            end_insert,
+	    insert_range,
             source_hash.to_le_bytes().to_vec(),
             rx,
             logger.clone(),

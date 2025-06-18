@@ -49,8 +49,7 @@ pub trait View: std::fmt::Debug + Send + Sync {
         runtime: Arc<RuntimeEnv>,
         lake: Arc<DataLakeConnection>,
         existing_partitions: Arc<PartitionCache>,
-        begin_insert: DateTime<Utc>,
-        end_insert: DateTime<Utc>,
+        insert_range: TimeRange,
     ) -> Result<Arc<dyn PartitionSpec>>;
 
     /// get_file_schema_hash returns a hash (can be a version number, version string, etc.) that allows

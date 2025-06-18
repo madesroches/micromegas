@@ -96,12 +96,12 @@ async fn main() -> Result<()> {
         } => {
             let delta = TimeDelta::try_seconds(partition_delta_seconds)
                 .with_context(|| "making time delta")?;
-            let existing_partitions = Arc::new(
+            let existing_partitions_all_views = Arc::new(
                 PartitionCache::fetch_overlapping_insert_range(&data_lake.db_pool, begin, end)
                     .await?,
             );
             materialize_partition_range(
-                existing_partitions,
+                existing_partitions_all_views,
                 runtime.clone(),
                 data_lake,
                 view_factory.make_view(&view_set_name, &view_instance_id)?,

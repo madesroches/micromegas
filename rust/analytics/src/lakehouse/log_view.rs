@@ -78,23 +78,15 @@ impl View for LogView {
         runtime: Arc<RuntimeEnv>,
         lake: Arc<DataLakeConnection>,
         existing_partitions: Arc<PartitionCache>,
-        begin_insert: DateTime<Utc>,
-        end_insert: DateTime<Utc>,
+        insert_range: TimeRange,
     ) -> Result<Arc<dyn PartitionSpec>> {
         if *self.view_instance_id != "global" {
             anyhow::bail!("not supported for jit queries... should it?");
         }
         let source_data = Arc::new(
-            fetch_partition_source_data(
-                runtime,
-                lake,
-                existing_partitions,
-                begin_insert,
-                end_insert,
-                "log",
-            )
-            .await
-            .with_context(|| "fetch_partition_source_data")?,
+            fetch_partition_source_data(runtime, lake, existing_partitions, insert_range, "log")
+                .await
+                .with_context(|| "fetch_partition_source_data")?,
         );
         Ok(Arc::new(BlockPartitionSpec {
             view_metadata: ViewMetadata {
@@ -103,8 +95,7 @@ impl View for LogView {
                 file_schema_hash: self.get_file_schema_hash(),
             },
             schema: self.get_file_schema(),
-            begin_insert,
-            end_insert,
+            insert_range,
             source_data,
             block_processor: Arc::new(LogBlockProcessor {}),
         }))

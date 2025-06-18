@@ -130,16 +130,14 @@ impl View for SqlBatchView {
         _runtime: Arc<RuntimeEnv>,
         lake: Arc<DataLakeConnection>,
         existing_partitions: Arc<PartitionCache>,
-        begin_insert: DateTime<Utc>,
-        end_insert: DateTime<Utc>,
+        insert_range: TimeRange,
     ) -> Result<Arc<dyn PartitionSpec>> {
         let view_meta = ViewMetadata {
             view_set_name: self.get_view_set_name(),
             view_instance_id: self.get_view_instance_id(),
             file_schema_hash: self.get_file_schema_hash(),
         };
-        let partitions_in_range =
-            Arc::new(existing_partitions.filter_insert_range(begin_insert, end_insert));
+        let partitions_in_range = Arc::new(existing_partitions.filter_insert_range(insert_range));
         let ctx = make_session_context(
             self.runtime.clone(),
             lake.clone(),
@@ -152,13 +150,13 @@ impl View for SqlBatchView {
 
         let count_src_sql = self
             .count_src_query
-            .replace("{begin}", &begin_insert.to_rfc3339())
-            .replace("{end}", &end_insert.to_rfc3339());
+            .replace("{begin}", &insert_range.begin.to_rfc3339())
+            .replace("{end}", &insert_range.end.to_rfc3339());
 
         let transform_sql = self
             .transform_query
-            .replace("{begin}", &begin_insert.to_rfc3339())
-            .replace("{end}", &end_insert.to_rfc3339());
+            .replace("{begin}", &insert_range.begin.to_rfc3339())
+            .replace("{end}", &insert_range.end.to_rfc3339());
 
         Ok(Arc::new(
             fetch_sql_partition_spec(
@@ -168,8 +166,7 @@ impl View for SqlBatchView {
                 self.min_event_time_column.clone(),
                 self.max_event_time_column.clone(),
                 view_meta,
-                begin_insert,
-                end_insert,
+                insert_range,
             )
             .await
             .with_context(|| "fetch_sql_partition_spec")?,

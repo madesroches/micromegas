@@ -261,8 +261,7 @@ pub async fn write_partition_from_blocks(
     let block_spec = BlockPartitionSpec {
         view_metadata,
         schema,
-        begin_insert: min_insert_time,
-        end_insert: max_insert_time,
+        insert_range: TimeRange::new(min_insert_time, max_insert_time),
         source_data: Arc::new(source_data),
         block_processor,
     };

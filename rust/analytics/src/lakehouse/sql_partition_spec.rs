@@ -6,10 +6,10 @@ use crate::{
     dfext::{min_max_time_df::min_max_time_dataframe, typed_column::typed_column_by_name},
     lakehouse::write_partition::PartitionRowSet,
     response_writer::Logger,
+    time::TimeRange,
 };
 use anyhow::Result;
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 use datafusion::{
     arrow::array::{Int64Array, RecordBatch},
     prelude::*,
@@ -25,8 +25,7 @@ pub struct SqlPartitionSpec {
     min_event_time_column: Arc<String>,
     max_event_time_column: Arc<String>,
     view_metadata: ViewMetadata,
-    begin_insert: DateTime<Utc>,
-    end_insert: DateTime<Utc>,
+    insert_range: TimeRange,
     record_count: i64,
 }
 
@@ -38,8 +37,7 @@ impl SqlPartitionSpec {
         min_event_time_column: Arc<String>,
         max_event_time_column: Arc<String>,
         view_metadata: ViewMetadata,
-        begin_insert: DateTime<Utc>,
-        end_insert: DateTime<Utc>,
+        insert_range: TimeRange,
         record_count: i64,
     ) -> Self {
         Self {
@@ -48,8 +46,7 @@ impl SqlPartitionSpec {
             min_event_time_column,
             max_event_time_column,
             view_metadata,
-            begin_insert,
-            end_insert,
+            insert_range,
             record_count,
         }
     }
@@ -79,8 +76,8 @@ impl PartitionSpec for SqlPartitionSpec {
             "[{}, {}] {} {}",
             self.view_metadata.view_set_name,
             self.view_metadata.view_instance_id,
-            self.begin_insert.to_rfc3339(),
-            self.end_insert.to_rfc3339()
+            self.insert_range.begin.to_rfc3339(),
+            self.insert_range.end.to_rfc3339()
         );
         logger.write_log_entry(format!("writing {desc}")).await?;
         let df = self.ctx.sql(&self.transform_query).await?;
@@ -92,8 +89,7 @@ impl PartitionSpec for SqlPartitionSpec {
             lake.clone(),
             self.view_metadata.clone(),
             schema,
-            self.begin_insert,
-            self.end_insert,
+            self.insert_range,
             self.get_source_data_hash(),
             rx,
             logger.clone(),
@@ -128,8 +124,7 @@ pub async fn fetch_sql_partition_spec(
     min_event_time_column: Arc<String>,
     max_event_time_column: Arc<String>,
     view_metadata: ViewMetadata,
-    begin_insert: DateTime<Utc>,
-    end_insert: DateTime<Utc>,
+    insert_range: TimeRange,
 ) -> Result<SqlPartitionSpec> {
     let df = ctx.sql(&count_src_sql).await?;
     let batches: Vec<RecordBatch> = df.collect().await?;
@@ -154,8 +149,7 @@ pub async fn fetch_sql_partition_spec(
         min_event_time_column,
         max_event_time_column,
         view_metadata,
-        begin_insert,
-        end_insert,
+        insert_range,
         count,
     ))
 }

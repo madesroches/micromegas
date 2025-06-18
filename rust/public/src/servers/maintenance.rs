@@ -10,6 +10,7 @@ use micromegas_analytics::lakehouse::temp::delete_expired_temporary_files;
 use micromegas_analytics::lakehouse::view::View;
 use micromegas_analytics::lakehouse::view_factory::ViewFactory;
 use micromegas_analytics::response_writer::ResponseWriter;
+use micromegas_analytics::time::TimeRange;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_tracing::prelude::*;
 use std::sync::Arc;
@@ -23,37 +24,33 @@ pub async fn materialize_all_views(
     runtime: Arc<RuntimeEnv>,
     lake: Arc<DataLakeConnection>,
     views: Views,
-    begin_range: DateTime<Utc>,
-    end_range: DateTime<Utc>,
+    insert_range: TimeRange,
     partition_time_delta: TimeDelta,
 ) -> Result<()> {
     let mut last_group = views.first().unwrap().get_update_group();
-    let mut partitions = Arc::new(
-        PartitionCache::fetch_overlapping_insert_range(&lake.db_pool, begin_range, end_range)
-            .await?,
+    let mut partitions_all_views = Arc::new(
+        PartitionCache::fetch_overlapping_insert_range(&lake.db_pool, insert_range).await?,
     );
     let null_response_writer = Arc::new(ResponseWriter::new(None));
     for view in &*views {
         if view.get_update_group() != last_group {
             // views in the same group should have no inter-dependencies
             last_group = view.get_update_group();
-            partitions = Arc::new(
+            partitions_all_views = Arc::new(
                 PartitionCache::fetch_overlapping_insert_range(
                     // we are fetching more partitions than we need, could be optimized
                     &lake.db_pool,
-                    begin_range,
-                    end_range,
+                    insert_range,
                 )
                 .await?,
             );
         }
         materialize_partition_range(
-            partitions.clone(),
+            partitions_all_views.clone(),
             runtime.clone(),
             lake.clone(),
             view.clone(),
-            begin_range,
-            end_range,
+            insert_range,
             partition_time_delta,
             null_response_writer.clone(),
         )
@@ -79,8 +76,7 @@ impl TaskCallback for EveryDayTask {
             self.runtime.clone(),
             self.lake.clone(),
             self.views.clone(),
-            begin_range,
-            end_range,
+            TimeRange::new(begin_range, end_range),
             partition_time_delta,
         )
         .await
@@ -107,8 +103,7 @@ impl TaskCallback for EveryHourTask {
             self.runtime.clone(),
             self.lake.clone(),
             self.views.clone(),
-            begin_range,
-            end_range,
+            TimeRange::new(begin_range, end_range),
             partition_time_delta,
         )
         .await
@@ -133,8 +128,7 @@ impl TaskCallback for EveryMinuteTask {
             self.runtime.clone(),
             self.lake.clone(),
             self.views.clone(),
-            begin_range,
-            end_range,
+            TimeRange::new(begin_range, end_range),
             partition_time_delta,
         )
         .await
@@ -165,8 +159,7 @@ impl TaskCallback for EverySecondTask {
             self.runtime.clone(),
             self.lake.clone(),
             self.views.clone(),
-            begin_range,
-            end_range,
+            TimeRange::new(begin_range, end_range),
             partition_time_delta,
         )
         .await

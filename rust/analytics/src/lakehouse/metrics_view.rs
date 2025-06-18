@@ -80,8 +80,7 @@ impl View for MetricsView {
         runtime: Arc<RuntimeEnv>,
         lake: Arc<DataLakeConnection>,
         existing_partitions: Arc<PartitionCache>,
-        begin_insert: DateTime<Utc>,
-        end_insert: DateTime<Utc>,
+        insert_range: TimeRange,
     ) -> Result<Arc<dyn PartitionSpec>> {
         if *self.view_instance_id != "global" {
             anyhow::bail!("not supported for jit queries... should it?");
@@ -91,8 +90,7 @@ impl View for MetricsView {
                 runtime,
                 lake,
                 existing_partitions,
-                begin_insert,
-                end_insert,
+                insert_range,
                 "metrics",
             )
             .await
@@ -105,8 +103,7 @@ impl View for MetricsView {
                 file_schema_hash: self.get_file_schema_hash(),
             },
             schema: self.get_file_schema(),
-            begin_insert,
-            end_insert,
+            insert_range,
             source_data,
             block_processor: Arc::new(MetricsBlockProcessor {}),
         }))

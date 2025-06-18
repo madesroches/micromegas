@@ -71,8 +71,7 @@ impl View for BlocksView {
         _runtime: Arc<RuntimeEnv>,
         lake: Arc<DataLakeConnection>,
         _existing_partitions: Arc<PartitionCache>,
-        begin_insert: DateTime<Utc>,
-        end_insert: DateTime<Utc>,
+        insert_range: TimeRange,
     ) -> Result<Arc<dyn PartitionSpec>> {
         let view_meta = ViewMetadata {
             view_set_name: self.get_view_set_name(),
@@ -95,8 +94,7 @@ impl View for BlocksView {
                 self.data_sql.clone(),
                 view_meta,
                 self.get_file_schema(),
-                begin_insert,
-                end_insert,
+                insert_range,
             )
             .await
             .with_context(|| "fetch_metadata_partition_spec")?,
