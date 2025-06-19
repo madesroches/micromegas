@@ -4,6 +4,7 @@ use super::{
     merge::{PartitionMerger, QueryMerger},
     partition::Partition,
     partition_cache::PartitionCache,
+    view_factory::ViewFactory,
 };
 use crate::{response_writer::Logger, time::TimeRange};
 use anyhow::Result;
@@ -96,7 +97,13 @@ pub trait View: std::fmt::Debug + Send + Sync {
         partitions_all_views: Arc<PartitionCache>,
     ) -> Result<SendableRecordBatchStream> {
         let merge_query = Arc::new(String::from("SELECT * FROM source;"));
-        let merger = QueryMerger::new(runtime, self.get_file_schema(), merge_query);
+        let empty_view_factory = Arc::new(ViewFactory::new(vec![]));
+        let merger = QueryMerger::new(
+            runtime,
+            empty_view_factory,
+            self.get_file_schema(),
+            merge_query,
+        );
         merger
             .execute_merge_query(lake, partitions_to_merge, partitions_all_views)
             .await
