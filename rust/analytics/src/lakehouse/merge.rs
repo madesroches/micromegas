@@ -2,8 +2,10 @@ use super::{
     partition::Partition,
     partition_cache::PartitionCache,
     partition_source_data::hash_to_object_count,
-    query::query_partitions,
+    partitioned_table_provider::PartitionedTableProvider,
+    query::make_session_context,
     view::View,
+    view_factory::ViewFactory,
     write_partition::{write_partition_from_rows, PartitionRowSet},
 };
 use crate::{
@@ -15,6 +17,7 @@ use datafusion::{
     arrow::datatypes::Schema,
     execution::{runtime_env::RuntimeEnv, SendableRecordBatchStream},
     prelude::*,
+    sql::TableReference,
 };
 use futures::stream::StreamExt;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
@@ -36,14 +39,21 @@ pub trait PartitionMerger: Send + Sync + Debug {
 #[derive(Debug)]
 pub struct QueryMerger {
     runtime: Arc<RuntimeEnv>,
+    view_factory: Arc<ViewFactory>,
     file_schema: Arc<Schema>,
     query: Arc<String>,
 }
 
 impl QueryMerger {
-    pub fn new(runtime: Arc<RuntimeEnv>, file_schema: Arc<Schema>, query: Arc<String>) -> Self {
+    pub fn new(
+        runtime: Arc<RuntimeEnv>,
+        view_factory: Arc<ViewFactory>,
+        file_schema: Arc<Schema>,
+        query: Arc<String>,
+    ) -> Self {
         Self {
             runtime,
+            view_factory,
             file_schema,
             query,
         }
@@ -56,17 +66,30 @@ impl PartitionMerger for QueryMerger {
         &self,
         lake: Arc<DataLakeConnection>,
         partitions_to_merge: Arc<Vec<Partition>>,
-        _partitions_all_views: Arc<PartitionCache>,
+        partitions_all_views: Arc<PartitionCache>,
     ) -> Result<SendableRecordBatchStream> {
-        let merged_df = query_partitions(
+        let ctx = make_session_context(
             self.runtime.clone(),
             lake.clone(),
-            self.file_schema.clone(),
-            partitions_to_merge,
-            &self.query,
+            partitions_all_views,
+            None,
+            self.view_factory.clone(),
         )
         .await?;
-        merged_df
+        let src_table = PartitionedTableProvider::new(
+            self.file_schema.clone(),
+            lake.blob_storage.inner(),
+            partitions_to_merge,
+        );
+        ctx.register_table(
+            TableReference::Bare {
+                table: "source".into(),
+            },
+            Arc::new(src_table),
+        )?;
+
+        ctx.sql(&self.query)
+            .await?
             .execute_stream()
             .await
             .with_context(|| "merged_df.execute_stream")

@@ -93,7 +93,12 @@ impl SqlBatchView {
         let schema = transformed_df.schema().inner().clone();
         let merger = merger_maker.unwrap_or(&|runtime, schema| {
             let merge_query = Arc::new(merge_partitions_query.replace("{source}", "source"));
-            Arc::new(QueryMerger::new(runtime, schema, merge_query))
+            Arc::new(QueryMerger::new(
+                runtime,
+                view_factory.clone(),
+                schema,
+                merge_query,
+            ))
         })(runtime.clone(), schema.clone());
 
         Ok(Self {
