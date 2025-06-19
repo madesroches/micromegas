@@ -60,6 +60,8 @@ pub struct BatchPartitionMerger {
     view_factory: Arc<ViewFactory>,
     /// merge_batch_query: merge query with begin & end placeholders
     merge_batch_query: String,
+    /// batch size to aim for
+    approx_nb_rows_per_batch: i64,
 }
 
 impl BatchPartitionMerger {
@@ -68,12 +70,14 @@ impl BatchPartitionMerger {
         file_schema: Arc<Schema>,
         view_factory: Arc<ViewFactory>,
         merge_batch_query: String,
+        approx_nb_rows_per_batch: i64,
     ) -> Self {
         Self {
             runtime,
             file_schema,
             view_factory,
             merge_batch_query,
+            approx_nb_rows_per_batch,
         }
     }
 }
@@ -88,8 +92,7 @@ impl PartitionMerger for BatchPartitionMerger {
     ) -> Result<SendableRecordBatchStream> {
         info!("execute_merge_query");
         let stats = compute_partition_stats(partitions_to_merge.as_ref())?;
-        let nb_rows_per_batch = 100 * 1024;
-        let nb_batches = ((stats.num_rows / nb_rows_per_batch) + 1) as i32;
+        let nb_batches = ((stats.num_rows / self.approx_nb_rows_per_batch) + 1) as i32;
         let batch_time_delta = ((stats.max_event_time - stats.min_event_time) / nb_batches)
             + TimeDelta::nanoseconds(1);
 
