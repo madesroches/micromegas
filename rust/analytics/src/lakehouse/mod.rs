@@ -2,6 +2,9 @@
 pub mod answer;
 /// Write parquet in object store
 pub mod async_parquet_writer;
+/// BatchPartitionMerger merges multiple partitions by splitting the work in batches to use less memory.
+/// The batches are based on event times.
+pub mod batch_partition_merger;
 /// Materialize views on a schedule based on the time data was received from the ingestion service
 pub mod batch_update;
 /// Specification for a view partition backed by a set of telemetry blocks which can be processed out of order
