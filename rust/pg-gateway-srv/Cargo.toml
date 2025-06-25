@@ -1,0 +1,25 @@
+[package]
+name = "pg-gateway-srv"
+description = "Gateway server to translate from postgresql's wire protocol to Micromegas's FlightSQL"
+keywords.workspace = true
+version.workspace = true
+edition.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+micromegas.workspace = true
+
+anyhow.workspace = true
+async-trait.workspace = true
+clap.workspace = true
+futures.workspace = true
+pgwire.workspace = true
+tokio.workspace = true
+tower.workspace = true
+
+[[bin]]
+name = "pg-gateway-srv"
+path = "src/pg_gateway_srv.rs"
