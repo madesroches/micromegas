@@ -41,7 +41,9 @@ impl ExtendedQueryHandler for NullExtendedQueryHandler {
         PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
     {
         info!("do_describe_statement");
-        Err(PgWireError::ApiError(anyhow!("not implemented").into()))
+        Err(PgWireError::ApiError(
+            anyhow!("ExtendedQueryHandler not implemented").into(),
+        ))
     }
 
     async fn do_describe_portal<C>(
@@ -56,7 +58,9 @@ impl ExtendedQueryHandler for NullExtendedQueryHandler {
         PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
     {
         info!("do_describe_portal");
-        Err(PgWireError::ApiError(anyhow!("not implemented").into()))
+        Err(PgWireError::ApiError(
+            anyhow!("ExtendedQueryHandler not implemented").into(),
+        ))
     }
 
     async fn do_query<'a, C>(
@@ -72,6 +76,8 @@ impl ExtendedQueryHandler for NullExtendedQueryHandler {
         PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
     {
         info!("do_query");
-        Err(PgWireError::ApiError(anyhow!("not implemented").into()))
+        Err(PgWireError::ApiError(
+            anyhow!("ExtendedQueryHandler not implemented").into(),
+        ))
     }
 }
