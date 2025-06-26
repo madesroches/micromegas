@@ -1,11 +1,12 @@
 mod extended;
 mod factory;
+mod simple;
 use clap::Parser;
 use micromegas::{
     telemetry_sink::TelemetryGuardBuilder,
     tracing::{debug, error, info, levels::LevelFilter},
 };
-use pgwire::tokio::process_socket;
+use pgwire::tokio::{process_socket, tokio_rustls::rustls};
 use std::net::SocketAddr;
 use std::{fmt::Debug, sync::Arc};
 use tokio::net::TcpListener;
@@ -24,14 +25,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_ctrlc_handling()
         .with_local_sink_max_level(LevelFilter::Debug)
         .build();
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     let args = Cli::parse();
     let listener = TcpListener::bind(args.listen_endpoint_tcp).await?;
     info!("Listening to {}", args.listen_endpoint_tcp);
-    let factory = Arc::new(factory::HandlerFactory {});
     loop {
         let incoming_socket = listener.accept().await?;
         debug!("incoming_socket = {incoming_socket:?}");
-        let factory = factory.clone();
+        let factory = Arc::new(factory::ConnectionResources::new());
         tokio::spawn(async move {
             if let Err(e) = process_socket(incoming_socket.0, None, factory).await {
                 error!("process_socket: {e:?}");

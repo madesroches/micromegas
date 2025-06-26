@@ -3417,6 +3417,7 @@ name = "pg-gateway-srv"
 version = "0.10.1"
 dependencies = [
  "anyhow",
+ "async-stream",
  "async-trait",
  "clap",
  "futures",

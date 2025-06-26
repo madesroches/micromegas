@@ -38,6 +38,19 @@ impl Client {
         sql: String,
         query_range: Option<TimeRange>,
     ) -> Result<Vec<RecordBatch>> {
+        let mut record_batch_stream = self.query_stream(sql, query_range).await?;
+        let mut batches = vec![];
+        while let Some(batch_res) = record_batch_stream.next().await {
+            batches.push(batch_res?);
+        }
+        Ok(batches)
+    }
+
+    pub async fn query_stream(
+        &mut self,
+        sql: String,
+        query_range: Option<TimeRange>,
+    ) -> Result<FlightRecordBatchStream> {
         self.set_query_range(query_range);
         let info = self.inner.execute(sql, None).await?;
         let ticket = info.endpoint[0]
@@ -45,11 +58,6 @@ impl Client {
             .clone()
             .with_context(|| "reading ticket from endpoint")?;
         let flight_data_stream = self.inner.do_get(ticket).await?.into_inner();
-        let mut record_batch_stream = FlightRecordBatchStream::new(flight_data_stream);
-        let mut batches = vec![];
-        while let Some(batch_res) = record_batch_stream.next().await {
-            batches.push(batch_res?);
-        }
-        Ok(batches)
+        Ok(FlightRecordBatchStream::new(flight_data_stream))
     }
 }

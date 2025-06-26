@@ -1,12 +1,15 @@
 use crate::extended::NullExtendedQueryHandler;
+use crate::simple::SimpleQueryH;
 use async_trait::async_trait;
 use futures::sink::{Sink, SinkExt};
-use micromegas::tracing::{debug, info};
+use micromegas::{
+    client::flightsql_client_factory::{DefaultFlightSQLClientFactory, FlightSQLClientFactory},
+    tracing::{debug, info},
+};
 use pgwire::{
     api::{
-        auth::StartupHandler, copy::NoopCopyHandler, query::SimpleQueryHandler, results::Response,
-        ClientInfo, ClientPortalStore, NoopErrorHandler, PgWireConnectionState,
-        PgWireServerHandlers,
+        auth::StartupHandler, copy::NoopCopyHandler, ClientInfo, NoopErrorHandler,
+        PgWireConnectionState, PgWireServerHandlers,
     },
     error::{PgWireError, PgWireResult},
     messages::{
@@ -46,25 +49,20 @@ impl StartupHandler for StartupH {
     }
 }
 
-pub struct SimpleQueryH {}
+pub struct ConnectionResources {
+    flight_client_factory: Arc<dyn FlightSQLClientFactory>,
+}
 
-#[async_trait]
-impl SimpleQueryHandler for SimpleQueryH {
-    /// Provide your query implementation using the incoming query string.
-    async fn do_query<'a, C>(&self, _client: &mut C, query: &str) -> PgWireResult<Vec<Response<'a>>>
-    where
-        C: ClientInfo + ClientPortalStore + Sink<PgWireBackendMessage> + Unpin + Send + Sync,
-        C::Error: Debug,
-        PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
-    {
-        info!("query={query}");
-        Ok(vec![])
+impl ConnectionResources {
+    pub fn new() -> Self {
+        let flight_client_factory = Arc::new(DefaultFlightSQLClientFactory::new());
+        Self {
+            flight_client_factory,
+        }
     }
 }
 
-pub struct HandlerFactory {}
-
-impl PgWireServerHandlers for HandlerFactory {
+impl PgWireServerHandlers for ConnectionResources {
     type StartupHandler = StartupH;
     type SimpleQueryHandler = SimpleQueryH;
     type ExtendedQueryHandler = NullExtendedQueryHandler;
@@ -73,7 +71,7 @@ impl PgWireServerHandlers for HandlerFactory {
 
     fn simple_query_handler(&self) -> Arc<Self::SimpleQueryHandler> {
         debug!("making simple_query_handler");
-        Arc::new(SimpleQueryH {})
+        Arc::new(SimpleQueryH::new(self.flight_client_factory.clone()))
     }
 
     fn extended_query_handler(&self) -> Arc<Self::ExtendedQueryHandler> {
