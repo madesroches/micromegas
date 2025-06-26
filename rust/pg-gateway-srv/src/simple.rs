@@ -1,6 +1,12 @@
+use anyhow::Context;
+use async_stream::try_stream;
 use async_trait::async_trait;
 use futures::stream::StreamExt;
 use futures::Sink;
+use micromegas::chrono::DateTime;
+use micromegas::datafusion::arrow::array::{
+    ArrayRef, Int64Array, StringArray, TimestampNanosecondArray,
+};
 use micromegas::{
     client::flightsql_client_factory::FlightSQLClientFactory, datafusion::arrow, tracing::info,
 };
@@ -45,7 +51,7 @@ fn arrow_to_pg_type(arrow_type: &arrow::datatypes::DataType) -> anyhow::Result<T
         arrow::datatypes::DataType::Float16 => todo!(),
         arrow::datatypes::DataType::Float32 => todo!(),
         arrow::datatypes::DataType::Float64 => todo!(),
-        arrow::datatypes::DataType::Timestamp(_time_unit, _) => todo!(),
+        arrow::datatypes::DataType::Timestamp(_time_unit, _opt_time_zone) => Ok(Type::TIMESTAMP),
         arrow::datatypes::DataType::Date32 => todo!(),
         arrow::datatypes::DataType::Date64 => todo!(),
         arrow::datatypes::DataType::Time32(_time_unit) => todo!(),
@@ -77,9 +83,8 @@ fn arrow_to_pg_type(arrow_type: &arrow::datatypes::DataType) -> anyhow::Result<T
 fn arrow_to_pg_schema(
     arrow_schema: &arrow::datatypes::Schema,
 ) -> anyhow::Result<Arc<Vec<FieldInfo>>> {
-    let mut fields_it = arrow_schema.fields().iter();
     let mut res = vec![];
-    while let Some(f) = fields_it.next() {
+    for f in arrow_schema.fields().iter() {
         res.push(FieldInfo::new(
             f.name().to_string(),
             None,
@@ -89,6 +94,72 @@ fn arrow_to_pg_schema(
         ));
     }
     Ok(Arc::new(res))
+}
+
+fn encode_value(
+    encoder: &mut DataRowEncoder,
+    value_index: usize,
+    column: &ArrayRef,
+) -> anyhow::Result<()> {
+    match column.data_type() {
+        arrow::datatypes::DataType::Null => todo!(),
+        arrow::datatypes::DataType::Boolean => todo!(),
+        arrow::datatypes::DataType::Int8 => todo!(),
+        arrow::datatypes::DataType::Int16 => todo!(),
+        arrow::datatypes::DataType::Int32 => todo!(),
+        arrow::datatypes::DataType::Int64 => {
+            let column = column
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .with_context(|| "casting to Int64Array")?;
+            encoder.encode_field(&column.value(value_index))?;
+        }
+        arrow::datatypes::DataType::UInt8 => {}
+        arrow::datatypes::DataType::UInt16 => todo!(),
+        arrow::datatypes::DataType::UInt32 => todo!(),
+        arrow::datatypes::DataType::UInt64 => todo!(),
+        arrow::datatypes::DataType::Float16 => todo!(),
+        arrow::datatypes::DataType::Float32 => todo!(),
+        arrow::datatypes::DataType::Float64 => todo!(),
+        arrow::datatypes::DataType::Timestamp(_time_unit, _opt_time_zone) => {
+            let column = column
+                .as_any()
+                .downcast_ref::<TimestampNanosecondArray>()
+                .with_context(|| "casting to TimestampNanosecondArray")?;
+            encoder.encode_field(&DateTime::from_timestamp_nanos(column.value(value_index)))?;
+        }
+        arrow::datatypes::DataType::Date32 => todo!(),
+        arrow::datatypes::DataType::Date64 => todo!(),
+        arrow::datatypes::DataType::Time32(_time_unit) => todo!(),
+        arrow::datatypes::DataType::Time64(_time_unit) => todo!(),
+        arrow::datatypes::DataType::Duration(_time_unit) => todo!(),
+        arrow::datatypes::DataType::Interval(_interval_unit) => todo!(),
+        arrow::datatypes::DataType::Binary => todo!(),
+        arrow::datatypes::DataType::FixedSizeBinary(_) => todo!(),
+        arrow::datatypes::DataType::LargeBinary => todo!(),
+        arrow::datatypes::DataType::BinaryView => todo!(),
+        arrow::datatypes::DataType::Utf8 | arrow::datatypes::DataType::LargeUtf8 => {
+            let column = column
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .with_context(|| "casting to StringArray")?;
+            encoder.encode_field(&column.value(value_index))?;
+        }
+        arrow::datatypes::DataType::Utf8View => todo!(),
+        arrow::datatypes::DataType::List(_field) => todo!(),
+        arrow::datatypes::DataType::ListView(_field) => todo!(),
+        arrow::datatypes::DataType::FixedSizeList(_field, _) => todo!(),
+        arrow::datatypes::DataType::LargeList(_field) => todo!(),
+        arrow::datatypes::DataType::LargeListView(_field) => todo!(),
+        arrow::datatypes::DataType::Struct(_fields) => todo!(),
+        arrow::datatypes::DataType::Union(_union_fields, _union_mode) => todo!(),
+        arrow::datatypes::DataType::Dictionary(_data_type, _data_type1) => todo!(),
+        arrow::datatypes::DataType::Decimal128(_, _) => todo!(),
+        arrow::datatypes::DataType::Decimal256(_, _) => todo!(),
+        arrow::datatypes::DataType::Map(_field, _) => todo!(),
+        arrow::datatypes::DataType::RunEndEncoded(_field, _field1) => todo!(),
+    }
+    Ok(())
 }
 
 #[async_trait]
@@ -140,28 +211,28 @@ impl SimpleQueryHandler for SimpleQueryH {
         //     encoder.finish()
         // });
 
-        let data_row_stream = async_stream::try_stream! {
-            loop{
-		for _row_index in 0..record_batch.num_rows() {
+        let data_row_stream = Box::pin(try_stream! {
+            loop {
+        for row_index in 0..record_batch.num_rows() {
                     let mut encoder = DataRowEncoder::new(schema.clone());
-                    for _column in record_batch.columns() {
-			let value = Some(0);
-			encoder.encode_field(&value).map_err(|e| PgWireError::ApiError(e.into()))?;
+                    for column in record_batch.columns() {
+            encode_value(&mut encoder, row_index, column).map_err(|e| PgWireError::ApiError(e.into()))?;
                     }
-                    yield encoder.finish().map_err(|e| PgWireError::ApiError(e.into()))?;
-		}
-		if let Some(rb_res) = record_batch_stream.next().await{
-		    record_batch = rb_res.map_err(|e| PgWireError::ApiError(e.into()))?;
-		}
-		else{
-		    break;
-		}
+            let row = encoder.finish().map_err(|e| PgWireError::ApiError(e.into()))?;
+            yield (row);
+        }
+        if let Some(rb_res) = record_batch_stream.next().await{
+            record_batch = rb_res.map_err(|e| PgWireError::ApiError(e.into()))?;
+        }
+        else{
+            break;
+        }
             }
-        };
+        });
 
         Ok(vec![Response::Query(QueryResponse::new(
             schema_copy,
-            Box::pin(data_row_stream),
+            data_row_stream,
         ))])
     }
 }
