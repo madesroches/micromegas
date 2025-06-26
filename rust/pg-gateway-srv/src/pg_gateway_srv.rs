@@ -23,7 +23,7 @@ struct Cli {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _telemetry_guard = TelemetryGuardBuilder::default()
         .with_ctrlc_handling()
-        .with_local_sink_max_level(LevelFilter::Debug)
+        .with_local_sink_max_level(LevelFilter::Info)
         .build();
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     let args = Cli::parse();

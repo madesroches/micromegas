@@ -1,17 +1,21 @@
 use anyhow::{bail, Context};
 use async_stream::try_stream;
 use async_trait::async_trait;
+use bytes::BufMut;
 use futures::stream::StreamExt;
 use futures::Sink;
 use micromegas::chrono::DateTime;
 use micromegas::datafusion::arrow::array::{
     ArrayRef, Int64Array, StringArray, TimestampNanosecondArray,
 };
+use micromegas::datafusion::arrow::json::writer::make_encoder;
+use micromegas::datafusion::arrow::json::EncoderOptions;
 use micromegas::{
     client::flightsql_client_factory::FlightSQLClientFactory, datafusion::arrow, tracing::info,
 };
 use pgwire::api::results::QueryResponse;
 use pgwire::api::Type;
+use pgwire::types::ToSqlText;
 use pgwire::{
     api::{
         query::SimpleQueryHandler,
@@ -21,6 +25,7 @@ use pgwire::{
     error::{PgWireError, PgWireResult},
     messages::PgWireBackendMessage,
 };
+use postgres_types::ToSql;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -77,7 +82,7 @@ fn arrow_to_pg_type(arrow_type: &arrow::datatypes::DataType) -> anyhow::Result<T
         arrow::datatypes::DataType::Utf8 => Ok(Type::TEXT),
         arrow::datatypes::DataType::LargeUtf8 => Ok(Type::TEXT),
         arrow::datatypes::DataType::Utf8View => Ok(Type::TEXT),
-        arrow::datatypes::DataType::List(_field) => bail!("DataType::List not yet implemented"),
+        arrow::datatypes::DataType::List(_field) => Ok(Type::JSON_ARRAY),
         arrow::datatypes::DataType::ListView(_field) => {
             bail!("DataType::ListView not yet implemented")
         }
@@ -126,6 +131,53 @@ fn arrow_to_pg_schema(
         ));
     }
     Ok(Arc::new(res))
+}
+
+#[derive(Debug)]
+struct ValueEncodedAsText {
+    pub inner: String,
+}
+
+impl ToSql for ValueEncodedAsText {
+    fn to_sql(
+        &self,
+        _ty: &Type,
+        _out: &mut bytes::BytesMut,
+    ) -> Result<postgres_types::IsNull, Box<dyn std::error::Error + Sync + Send>>
+    where
+        Self: Sized,
+    {
+        Err("ValueEncodedAsText::to_sql not implemented".into())
+    }
+
+    fn accepts(_ty: &Type) -> bool
+    where
+        Self: Sized,
+    {
+        false
+    }
+
+    fn to_sql_checked(
+        &self,
+        _ty: &Type,
+        _out: &mut bytes::BytesMut,
+    ) -> Result<postgres_types::IsNull, Box<dyn std::error::Error + Sync + Send>> {
+        Err("ValueEncodedAsText::to_sql_checked not implemented".into())
+    }
+}
+
+impl ToSqlText for ValueEncodedAsText {
+    fn to_sql_text(
+        &self,
+        _ty: &Type,
+        w: &mut micromegas::prost::bytes::BytesMut,
+    ) -> Result<postgres_types::IsNull, Box<dyn std::error::Error + Sync + Send>>
+    where
+        Self: Sized,
+    {
+        w.put_slice(self.inner.as_bytes());
+        Ok(postgres_types::IsNull::No)
+    }
 }
 
 fn encode_value(
@@ -190,7 +242,16 @@ fn encode_value(
             encoder.encode_field(&column.value(value_index))?;
         }
         arrow::datatypes::DataType::Utf8View => bail!("DataType::Utf8View not yet implemented"),
-        arrow::datatypes::DataType::List(_field) => bail!("DataType::List not yet implemented"),
+        arrow::datatypes::DataType::List(field) => {
+            let options = EncoderOptions::default();
+            let mut json_encoder = make_encoder(field, &column, &options)?;
+            let mut buffer = Vec::with_capacity(1024);
+            json_encoder.encode(value_index, &mut buffer);
+            let value = ValueEncodedAsText {
+                inner: String::from_utf8_lossy(&buffer).into(),
+            };
+            encoder.encode_field(&value)?;
+        }
         arrow::datatypes::DataType::ListView(_field) => {
             bail!("DataType::ListView not yet implemented")
         }
