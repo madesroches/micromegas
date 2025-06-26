@@ -44,43 +44,71 @@ fn arrow_to_pg_type(arrow_type: &arrow::datatypes::DataType) -> anyhow::Result<T
         arrow::datatypes::DataType::Int16 => Ok(Type::INT2),
         arrow::datatypes::DataType::Int32 => Ok(Type::INT4),
         arrow::datatypes::DataType::Int64 => Ok(Type::INT8),
-        arrow::datatypes::DataType::UInt8 => bail!("not yet implemented"),
-        arrow::datatypes::DataType::UInt16 => bail!("not yet implemented"),
-        arrow::datatypes::DataType::UInt32 => bail!("not yet implemented"),
-        arrow::datatypes::DataType::UInt64 => bail!("not yet implemented"),
-        arrow::datatypes::DataType::Float16 => bail!("not yet implemented"),
-        arrow::datatypes::DataType::Float32 => bail!("not yet implemented"),
-        arrow::datatypes::DataType::Float64 => bail!("not yet implemented"),
+        arrow::datatypes::DataType::UInt8 => bail!("DataType::UInt8 not yet implemented"),
+        arrow::datatypes::DataType::UInt16 => bail!("DataType::UInt16 not yet implemented"),
+        arrow::datatypes::DataType::UInt32 => bail!("DataType::UInt32 not yet implemented"),
+        arrow::datatypes::DataType::UInt64 => bail!("DataType::UInt64 not yet implemented"),
+        arrow::datatypes::DataType::Float16 => bail!("DataType::Float16 not yet implemented"),
+        arrow::datatypes::DataType::Float32 => bail!("DataType::Float32 not yet implemented"),
+        arrow::datatypes::DataType::Float64 => bail!("DataType::Float64 not yet implemented"),
         arrow::datatypes::DataType::Timestamp(_time_unit, _opt_time_zone) => Ok(Type::TIMESTAMP),
-        arrow::datatypes::DataType::Date32 => bail!("not yet implemented"),
-        arrow::datatypes::DataType::Date64 => bail!("not yet implemented"),
-        arrow::datatypes::DataType::Time32(_time_unit) => bail!("not yet implemented"),
-        arrow::datatypes::DataType::Time64(_time_unit) => bail!("not yet implemented"),
-        arrow::datatypes::DataType::Duration(_time_unit) => bail!("not yet implemented"),
-        arrow::datatypes::DataType::Interval(_interval_unit) => bail!("not yet implemented"),
-        arrow::datatypes::DataType::Binary => bail!("not yet implemented"),
-        arrow::datatypes::DataType::FixedSizeBinary(_) => bail!("not yet implemented"),
-        arrow::datatypes::DataType::LargeBinary => bail!("not yet implemented"),
-        arrow::datatypes::DataType::BinaryView => bail!("not yet implemented"),
+        arrow::datatypes::DataType::Date32 => bail!("DataType::Date32 not yet implemented"),
+        arrow::datatypes::DataType::Date64 => bail!("DataType::Date64 not yet implemented"),
+        arrow::datatypes::DataType::Time32(_time_unit) => {
+            bail!("DataType::Time32 not yet implemented")
+        }
+        arrow::datatypes::DataType::Time64(_time_unit) => {
+            bail!("DataType::Time64 not yet implemented")
+        }
+        arrow::datatypes::DataType::Duration(_time_unit) => {
+            bail!("DataType::Duration not yet implemented")
+        }
+        arrow::datatypes::DataType::Interval(_interval_unit) => {
+            bail!("DataType::Interval not yet implemented")
+        }
+        arrow::datatypes::DataType::Binary => bail!("DataType::Binary not yet implemented"),
+        arrow::datatypes::DataType::FixedSizeBinary(_) => {
+            bail!("DataType::FixedSizeBinary not yet implemented")
+        }
+        arrow::datatypes::DataType::LargeBinary => {
+            bail!("DataType::LargeBinary not yet implemented")
+        }
+        arrow::datatypes::DataType::BinaryView => bail!("DataType::BinaryView not yet implemented"),
         arrow::datatypes::DataType::Utf8 => Ok(Type::TEXT),
         arrow::datatypes::DataType::LargeUtf8 => Ok(Type::TEXT),
         arrow::datatypes::DataType::Utf8View => Ok(Type::TEXT),
-        arrow::datatypes::DataType::List(_field) => bail!("not yet implemented"),
-        arrow::datatypes::DataType::ListView(_field) => bail!("not yet implemented"),
-        arrow::datatypes::DataType::FixedSizeList(_field, _) => bail!("not yet implemented"),
-        arrow::datatypes::DataType::LargeList(_field) => bail!("not yet implemented"),
-        arrow::datatypes::DataType::LargeListView(_field) => bail!("not yet implemented"),
-        arrow::datatypes::DataType::Struct(_fields) => bail!("not yet implemented"),
+        arrow::datatypes::DataType::List(_field) => bail!("DataType::List not yet implemented"),
+        arrow::datatypes::DataType::ListView(_field) => {
+            bail!("DataType::ListView not yet implemented")
+        }
+        arrow::datatypes::DataType::FixedSizeList(_field, _) => {
+            bail!("DataType::FixedSizeList not yet implemented")
+        }
+        arrow::datatypes::DataType::LargeList(_field) => {
+            bail!("DataType::LargeList not yet implemented")
+        }
+        arrow::datatypes::DataType::LargeListView(_field) => {
+            bail!("DataType::LargeListView not yet implemented")
+        }
+        arrow::datatypes::DataType::Struct(_fields) => {
+            bail!("DataType::Struct not yet implemented")
+        }
         arrow::datatypes::DataType::Union(_union_fields, _union_mode) => {
-            bail!("not yet implemented")
+            bail!("DataType::Union not yet implemented")
         }
         arrow::datatypes::DataType::Dictionary(_data_type, _data_type1) => {
-            bail!("not yet implemented")
+            bail!("DataType::Dictionary not yet implemented")
         }
-        arrow::datatypes::DataType::Decimal128(_, _) => bail!("not yet implemented"),
-        arrow::datatypes::DataType::Decimal256(_, _) => bail!("not yet implemented"),
-        arrow::datatypes::DataType::Map(_field, _) => bail!("not yet implemented"),
-        arrow::datatypes::DataType::RunEndEncoded(_field, _field1) => bail!("not yet implemented"),
+        arrow::datatypes::DataType::Decimal128(_, _) => {
+            bail!("DataType::Decimal128 not yet implemented")
+        }
+        arrow::datatypes::DataType::Decimal256(_, _) => {
+            bail!("DataType::Decimal256 not yet implemented")
+        }
+        arrow::datatypes::DataType::Map(_field, _) => bail!("DataType::Map not yet implemented"),
+        arrow::datatypes::DataType::RunEndEncoded(_field, _field1) => {
+            bail!("DataType::RunEndEncoded not yet implemented")
+        }
     }
 }
 
@@ -107,10 +135,10 @@ fn encode_value(
 ) -> anyhow::Result<()> {
     match column.data_type() {
         arrow::datatypes::DataType::Null => encoder.encode_field(&Option::<bool>::None)?,
-        arrow::datatypes::DataType::Boolean => bail!("not yet implemented"),
-        arrow::datatypes::DataType::Int8 => bail!("not yet implemented"),
-        arrow::datatypes::DataType::Int16 => bail!("not yet implemented"),
-        arrow::datatypes::DataType::Int32 => bail!("not yet implemented"),
+        arrow::datatypes::DataType::Boolean => bail!("DataType::Boolean not yet implemented"),
+        arrow::datatypes::DataType::Int8 => bail!("DataType::Int8 not yet implemented"),
+        arrow::datatypes::DataType::Int16 => bail!("DataType::Int16 not yet implemented"),
+        arrow::datatypes::DataType::Int32 => bail!("DataType::Int32 not yet implemented"),
         arrow::datatypes::DataType::Int64 => {
             let column = column
                 .as_any()
@@ -118,13 +146,13 @@ fn encode_value(
                 .with_context(|| "casting to Int64Array")?;
             encoder.encode_field(&column.value(value_index))?;
         }
-        arrow::datatypes::DataType::UInt8 => {}
-        arrow::datatypes::DataType::UInt16 => bail!("not yet implemented"),
-        arrow::datatypes::DataType::UInt32 => bail!("not yet implemented"),
-        arrow::datatypes::DataType::UInt64 => bail!("not yet implemented"),
-        arrow::datatypes::DataType::Float16 => bail!("not yet implemented"),
-        arrow::datatypes::DataType::Float32 => bail!("not yet implemented"),
-        arrow::datatypes::DataType::Float64 => bail!("not yet implemented"),
+        arrow::datatypes::DataType::UInt8 => bail!("DataType::UInt8 not yet implemented"),
+        arrow::datatypes::DataType::UInt16 => bail!("DataType::UInt16 not yet implemented"),
+        arrow::datatypes::DataType::UInt32 => bail!("DataType::UInt32 not yet implemented"),
+        arrow::datatypes::DataType::UInt64 => bail!("DataType::UInt64 not yet implemented"),
+        arrow::datatypes::DataType::Float16 => bail!("DataType::Float16 not yet implemented"),
+        arrow::datatypes::DataType::Float32 => bail!("DataType::Float32 not yet implemented"),
+        arrow::datatypes::DataType::Float64 => bail!("DataType::Float64 not yet implemented"),
         arrow::datatypes::DataType::Timestamp(_time_unit, _opt_time_zone) => {
             let column = column
                 .as_any()
@@ -132,16 +160,28 @@ fn encode_value(
                 .with_context(|| "casting to TimestampNanosecondArray")?;
             encoder.encode_field(&DateTime::from_timestamp_nanos(column.value(value_index)))?;
         }
-        arrow::datatypes::DataType::Date32 => bail!("not yet implemented"),
-        arrow::datatypes::DataType::Date64 => bail!("not yet implemented"),
-        arrow::datatypes::DataType::Time32(_time_unit) => bail!("not yet implemented"),
-        arrow::datatypes::DataType::Time64(_time_unit) => bail!("not yet implemented"),
-        arrow::datatypes::DataType::Duration(_time_unit) => bail!("not yet implemented"),
-        arrow::datatypes::DataType::Interval(_interval_unit) => bail!("not yet implemented"),
-        arrow::datatypes::DataType::Binary => bail!("not yet implemented"),
-        arrow::datatypes::DataType::FixedSizeBinary(_) => bail!("not yet implemented"),
-        arrow::datatypes::DataType::LargeBinary => bail!("not yet implemented"),
-        arrow::datatypes::DataType::BinaryView => bail!("not yet implemented"),
+        arrow::datatypes::DataType::Date32 => bail!("DataType::Date32 not yet implemented"),
+        arrow::datatypes::DataType::Date64 => bail!("DataType::Date64 not yet implemented"),
+        arrow::datatypes::DataType::Time32(_time_unit) => {
+            bail!("DataType::Time32 not yet implemented")
+        }
+        arrow::datatypes::DataType::Time64(_time_unit) => {
+            bail!("DataType::Time64 not yet implemented")
+        }
+        arrow::datatypes::DataType::Duration(_time_unit) => {
+            bail!("DataType::Duration not yet implemented")
+        }
+        arrow::datatypes::DataType::Interval(_interval_unit) => {
+            bail!("DataType::Interval not yet implemented")
+        }
+        arrow::datatypes::DataType::Binary => bail!("DataType::Binary not yet implemented"),
+        arrow::datatypes::DataType::FixedSizeBinary(_) => {
+            bail!("DataType::FixedSizeBinary not yet implemented")
+        }
+        arrow::datatypes::DataType::LargeBinary => {
+            bail!("DataType::LargeBinary not yet implemented")
+        }
+        arrow::datatypes::DataType::BinaryView => bail!("DataType::BinaryView not yet implemented"),
         arrow::datatypes::DataType::Utf8 | arrow::datatypes::DataType::LargeUtf8 => {
             let column = column
                 .as_any()
@@ -149,23 +189,39 @@ fn encode_value(
                 .with_context(|| "casting to StringArray")?;
             encoder.encode_field(&column.value(value_index))?;
         }
-        arrow::datatypes::DataType::Utf8View => bail!("not yet implemented"),
-        arrow::datatypes::DataType::List(_field) => bail!("not yet implemented"),
-        arrow::datatypes::DataType::ListView(_field) => bail!("not yet implemented"),
-        arrow::datatypes::DataType::FixedSizeList(_field, _) => bail!("not yet implemented"),
-        arrow::datatypes::DataType::LargeList(_field) => bail!("not yet implemented"),
-        arrow::datatypes::DataType::LargeListView(_field) => bail!("not yet implemented"),
-        arrow::datatypes::DataType::Struct(_fields) => bail!("not yet implemented"),
+        arrow::datatypes::DataType::Utf8View => bail!("DataType::Utf8View not yet implemented"),
+        arrow::datatypes::DataType::List(_field) => bail!("DataType::List not yet implemented"),
+        arrow::datatypes::DataType::ListView(_field) => {
+            bail!("DataType::ListView not yet implemented")
+        }
+        arrow::datatypes::DataType::FixedSizeList(_field, _) => {
+            bail!("DataType::FixedSizeList not yet implemented")
+        }
+        arrow::datatypes::DataType::LargeList(_field) => {
+            bail!("DataType::LargeList not yet implemented")
+        }
+        arrow::datatypes::DataType::LargeListView(_field) => {
+            bail!("DataType::LargeListView not yet implemented")
+        }
+        arrow::datatypes::DataType::Struct(_fields) => {
+            bail!("DataType::Struct not yet implemented")
+        }
         arrow::datatypes::DataType::Union(_union_fields, _union_mode) => {
-            bail!("not yet implemented")
+            bail!("DataType::Union not yet implemented")
         }
         arrow::datatypes::DataType::Dictionary(_data_type, _data_type1) => {
-            bail!("not yet implemented")
+            bail!("DataType::Dictionary not yet implemented")
         }
-        arrow::datatypes::DataType::Decimal128(_, _) => bail!("not yet implemented"),
-        arrow::datatypes::DataType::Decimal256(_, _) => bail!("not yet implemented"),
-        arrow::datatypes::DataType::Map(_field, _) => bail!("not yet implemented"),
-        arrow::datatypes::DataType::RunEndEncoded(_field, _field1) => bail!("not yet implemented"),
+        arrow::datatypes::DataType::Decimal128(_, _) => {
+            bail!("DataType::Decimal128 not yet implemented")
+        }
+        arrow::datatypes::DataType::Decimal256(_, _) => {
+            bail!("DataType::Decimal256 not yet implemented")
+        }
+        arrow::datatypes::DataType::Map(_field, _) => bail!("DataType::Map not yet implemented"),
+        arrow::datatypes::DataType::RunEndEncoded(_field, _field1) => {
+            bail!("DataType::RunEndEncoded not yet implemented")
+        }
     }
     Ok(())
 }
