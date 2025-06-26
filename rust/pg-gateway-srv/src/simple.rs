@@ -1,4 +1,4 @@
-use anyhow::Context;
+use anyhow::{bail, Context};
 use async_stream::try_stream;
 use async_trait::async_trait;
 use futures::stream::StreamExt;
@@ -38,45 +38,49 @@ impl SimpleQueryH {
 
 fn arrow_to_pg_type(arrow_type: &arrow::datatypes::DataType) -> anyhow::Result<Type> {
     match arrow_type {
-        arrow::datatypes::DataType::Null => todo!(),
-        arrow::datatypes::DataType::Boolean => todo!(),
-        arrow::datatypes::DataType::Int8 => todo!(),
-        arrow::datatypes::DataType::Int16 => todo!(),
-        arrow::datatypes::DataType::Int32 => todo!(),
+        arrow::datatypes::DataType::Null => Ok(Type::UNKNOWN),
+        arrow::datatypes::DataType::Boolean => Ok(Type::BOOL),
+        arrow::datatypes::DataType::Int8 => Ok(Type::INT2),
+        arrow::datatypes::DataType::Int16 => Ok(Type::INT2),
+        arrow::datatypes::DataType::Int32 => Ok(Type::INT4),
         arrow::datatypes::DataType::Int64 => Ok(Type::INT8),
-        arrow::datatypes::DataType::UInt8 => todo!(),
-        arrow::datatypes::DataType::UInt16 => todo!(),
-        arrow::datatypes::DataType::UInt32 => todo!(),
-        arrow::datatypes::DataType::UInt64 => todo!(),
-        arrow::datatypes::DataType::Float16 => todo!(),
-        arrow::datatypes::DataType::Float32 => todo!(),
-        arrow::datatypes::DataType::Float64 => todo!(),
+        arrow::datatypes::DataType::UInt8 => bail!("not yet implemented"),
+        arrow::datatypes::DataType::UInt16 => bail!("not yet implemented"),
+        arrow::datatypes::DataType::UInt32 => bail!("not yet implemented"),
+        arrow::datatypes::DataType::UInt64 => bail!("not yet implemented"),
+        arrow::datatypes::DataType::Float16 => bail!("not yet implemented"),
+        arrow::datatypes::DataType::Float32 => bail!("not yet implemented"),
+        arrow::datatypes::DataType::Float64 => bail!("not yet implemented"),
         arrow::datatypes::DataType::Timestamp(_time_unit, _opt_time_zone) => Ok(Type::TIMESTAMP),
-        arrow::datatypes::DataType::Date32 => todo!(),
-        arrow::datatypes::DataType::Date64 => todo!(),
-        arrow::datatypes::DataType::Time32(_time_unit) => todo!(),
-        arrow::datatypes::DataType::Time64(_time_unit) => todo!(),
-        arrow::datatypes::DataType::Duration(_time_unit) => todo!(),
-        arrow::datatypes::DataType::Interval(_interval_unit) => todo!(),
-        arrow::datatypes::DataType::Binary => todo!(),
-        arrow::datatypes::DataType::FixedSizeBinary(_) => todo!(),
-        arrow::datatypes::DataType::LargeBinary => todo!(),
-        arrow::datatypes::DataType::BinaryView => todo!(),
+        arrow::datatypes::DataType::Date32 => bail!("not yet implemented"),
+        arrow::datatypes::DataType::Date64 => bail!("not yet implemented"),
+        arrow::datatypes::DataType::Time32(_time_unit) => bail!("not yet implemented"),
+        arrow::datatypes::DataType::Time64(_time_unit) => bail!("not yet implemented"),
+        arrow::datatypes::DataType::Duration(_time_unit) => bail!("not yet implemented"),
+        arrow::datatypes::DataType::Interval(_interval_unit) => bail!("not yet implemented"),
+        arrow::datatypes::DataType::Binary => bail!("not yet implemented"),
+        arrow::datatypes::DataType::FixedSizeBinary(_) => bail!("not yet implemented"),
+        arrow::datatypes::DataType::LargeBinary => bail!("not yet implemented"),
+        arrow::datatypes::DataType::BinaryView => bail!("not yet implemented"),
         arrow::datatypes::DataType::Utf8 => Ok(Type::TEXT),
         arrow::datatypes::DataType::LargeUtf8 => Ok(Type::TEXT),
         arrow::datatypes::DataType::Utf8View => Ok(Type::TEXT),
-        arrow::datatypes::DataType::List(_field) => todo!(),
-        arrow::datatypes::DataType::ListView(_field) => todo!(),
-        arrow::datatypes::DataType::FixedSizeList(_field, _) => todo!(),
-        arrow::datatypes::DataType::LargeList(_field) => todo!(),
-        arrow::datatypes::DataType::LargeListView(_field) => todo!(),
-        arrow::datatypes::DataType::Struct(_fields) => todo!(),
-        arrow::datatypes::DataType::Union(_union_fields, _union_mode) => todo!(),
-        arrow::datatypes::DataType::Dictionary(_data_type, _data_type1) => todo!(),
-        arrow::datatypes::DataType::Decimal128(_, _) => todo!(),
-        arrow::datatypes::DataType::Decimal256(_, _) => todo!(),
-        arrow::datatypes::DataType::Map(_field, _) => todo!(),
-        arrow::datatypes::DataType::RunEndEncoded(_field, _field1) => todo!(),
+        arrow::datatypes::DataType::List(_field) => bail!("not yet implemented"),
+        arrow::datatypes::DataType::ListView(_field) => bail!("not yet implemented"),
+        arrow::datatypes::DataType::FixedSizeList(_field, _) => bail!("not yet implemented"),
+        arrow::datatypes::DataType::LargeList(_field) => bail!("not yet implemented"),
+        arrow::datatypes::DataType::LargeListView(_field) => bail!("not yet implemented"),
+        arrow::datatypes::DataType::Struct(_fields) => bail!("not yet implemented"),
+        arrow::datatypes::DataType::Union(_union_fields, _union_mode) => {
+            bail!("not yet implemented")
+        }
+        arrow::datatypes::DataType::Dictionary(_data_type, _data_type1) => {
+            bail!("not yet implemented")
+        }
+        arrow::datatypes::DataType::Decimal128(_, _) => bail!("not yet implemented"),
+        arrow::datatypes::DataType::Decimal256(_, _) => bail!("not yet implemented"),
+        arrow::datatypes::DataType::Map(_field, _) => bail!("not yet implemented"),
+        arrow::datatypes::DataType::RunEndEncoded(_field, _field1) => bail!("not yet implemented"),
     }
 }
 
@@ -102,11 +106,11 @@ fn encode_value(
     column: &ArrayRef,
 ) -> anyhow::Result<()> {
     match column.data_type() {
-        arrow::datatypes::DataType::Null => todo!(),
-        arrow::datatypes::DataType::Boolean => todo!(),
-        arrow::datatypes::DataType::Int8 => todo!(),
-        arrow::datatypes::DataType::Int16 => todo!(),
-        arrow::datatypes::DataType::Int32 => todo!(),
+        arrow::datatypes::DataType::Null => encoder.encode_field(&Option::<bool>::None)?,
+        arrow::datatypes::DataType::Boolean => bail!("not yet implemented"),
+        arrow::datatypes::DataType::Int8 => bail!("not yet implemented"),
+        arrow::datatypes::DataType::Int16 => bail!("not yet implemented"),
+        arrow::datatypes::DataType::Int32 => bail!("not yet implemented"),
         arrow::datatypes::DataType::Int64 => {
             let column = column
                 .as_any()
@@ -115,12 +119,12 @@ fn encode_value(
             encoder.encode_field(&column.value(value_index))?;
         }
         arrow::datatypes::DataType::UInt8 => {}
-        arrow::datatypes::DataType::UInt16 => todo!(),
-        arrow::datatypes::DataType::UInt32 => todo!(),
-        arrow::datatypes::DataType::UInt64 => todo!(),
-        arrow::datatypes::DataType::Float16 => todo!(),
-        arrow::datatypes::DataType::Float32 => todo!(),
-        arrow::datatypes::DataType::Float64 => todo!(),
+        arrow::datatypes::DataType::UInt16 => bail!("not yet implemented"),
+        arrow::datatypes::DataType::UInt32 => bail!("not yet implemented"),
+        arrow::datatypes::DataType::UInt64 => bail!("not yet implemented"),
+        arrow::datatypes::DataType::Float16 => bail!("not yet implemented"),
+        arrow::datatypes::DataType::Float32 => bail!("not yet implemented"),
+        arrow::datatypes::DataType::Float64 => bail!("not yet implemented"),
         arrow::datatypes::DataType::Timestamp(_time_unit, _opt_time_zone) => {
             let column = column
                 .as_any()
@@ -128,16 +132,16 @@ fn encode_value(
                 .with_context(|| "casting to TimestampNanosecondArray")?;
             encoder.encode_field(&DateTime::from_timestamp_nanos(column.value(value_index)))?;
         }
-        arrow::datatypes::DataType::Date32 => todo!(),
-        arrow::datatypes::DataType::Date64 => todo!(),
-        arrow::datatypes::DataType::Time32(_time_unit) => todo!(),
-        arrow::datatypes::DataType::Time64(_time_unit) => todo!(),
-        arrow::datatypes::DataType::Duration(_time_unit) => todo!(),
-        arrow::datatypes::DataType::Interval(_interval_unit) => todo!(),
-        arrow::datatypes::DataType::Binary => todo!(),
-        arrow::datatypes::DataType::FixedSizeBinary(_) => todo!(),
-        arrow::datatypes::DataType::LargeBinary => todo!(),
-        arrow::datatypes::DataType::BinaryView => todo!(),
+        arrow::datatypes::DataType::Date32 => bail!("not yet implemented"),
+        arrow::datatypes::DataType::Date64 => bail!("not yet implemented"),
+        arrow::datatypes::DataType::Time32(_time_unit) => bail!("not yet implemented"),
+        arrow::datatypes::DataType::Time64(_time_unit) => bail!("not yet implemented"),
+        arrow::datatypes::DataType::Duration(_time_unit) => bail!("not yet implemented"),
+        arrow::datatypes::DataType::Interval(_interval_unit) => bail!("not yet implemented"),
+        arrow::datatypes::DataType::Binary => bail!("not yet implemented"),
+        arrow::datatypes::DataType::FixedSizeBinary(_) => bail!("not yet implemented"),
+        arrow::datatypes::DataType::LargeBinary => bail!("not yet implemented"),
+        arrow::datatypes::DataType::BinaryView => bail!("not yet implemented"),
         arrow::datatypes::DataType::Utf8 | arrow::datatypes::DataType::LargeUtf8 => {
             let column = column
                 .as_any()
@@ -145,19 +149,23 @@ fn encode_value(
                 .with_context(|| "casting to StringArray")?;
             encoder.encode_field(&column.value(value_index))?;
         }
-        arrow::datatypes::DataType::Utf8View => todo!(),
-        arrow::datatypes::DataType::List(_field) => todo!(),
-        arrow::datatypes::DataType::ListView(_field) => todo!(),
-        arrow::datatypes::DataType::FixedSizeList(_field, _) => todo!(),
-        arrow::datatypes::DataType::LargeList(_field) => todo!(),
-        arrow::datatypes::DataType::LargeListView(_field) => todo!(),
-        arrow::datatypes::DataType::Struct(_fields) => todo!(),
-        arrow::datatypes::DataType::Union(_union_fields, _union_mode) => todo!(),
-        arrow::datatypes::DataType::Dictionary(_data_type, _data_type1) => todo!(),
-        arrow::datatypes::DataType::Decimal128(_, _) => todo!(),
-        arrow::datatypes::DataType::Decimal256(_, _) => todo!(),
-        arrow::datatypes::DataType::Map(_field, _) => todo!(),
-        arrow::datatypes::DataType::RunEndEncoded(_field, _field1) => todo!(),
+        arrow::datatypes::DataType::Utf8View => bail!("not yet implemented"),
+        arrow::datatypes::DataType::List(_field) => bail!("not yet implemented"),
+        arrow::datatypes::DataType::ListView(_field) => bail!("not yet implemented"),
+        arrow::datatypes::DataType::FixedSizeList(_field, _) => bail!("not yet implemented"),
+        arrow::datatypes::DataType::LargeList(_field) => bail!("not yet implemented"),
+        arrow::datatypes::DataType::LargeListView(_field) => bail!("not yet implemented"),
+        arrow::datatypes::DataType::Struct(_fields) => bail!("not yet implemented"),
+        arrow::datatypes::DataType::Union(_union_fields, _union_mode) => {
+            bail!("not yet implemented")
+        }
+        arrow::datatypes::DataType::Dictionary(_data_type, _data_type1) => {
+            bail!("not yet implemented")
+        }
+        arrow::datatypes::DataType::Decimal128(_, _) => bail!("not yet implemented"),
+        arrow::datatypes::DataType::Decimal256(_, _) => bail!("not yet implemented"),
+        arrow::datatypes::DataType::Map(_field, _) => bail!("not yet implemented"),
+        arrow::datatypes::DataType::RunEndEncoded(_field, _field1) => bail!("not yet implemented"),
     }
     Ok(())
 }
@@ -191,26 +199,8 @@ impl SimpleQueryHandler for SimpleQueryH {
         let schema = arrow_to_pg_schema(record_batch.schema_ref())
             .map_err(|e| PgWireError::ApiError(e.into()))?;
         let schema_copy = schema.clone();
-        // while let Some(batch_res) = record_batch_stream.next().await {
-        //     let batch = batch_res.map_err(|e| PgWireError::ApiError(e.into()))?;
-        // }
 
-        // Ok(vec![])
-
-        // let data = vec![
-        //     (Some(0), Some("Tom")),
-        //     (Some(1), Some("Jerry")),
-        //     (Some(2), None),
-        // ];
-        // let schema_ref = schema.clone();
-        // let data_row_stream = stream::iter(data.into_iter()).map(move |r| {
-        //     let mut encoder = DataRowEncoder::new(schema_ref.clone());
-        //     encoder.encode_field(&r.0)?;
-        //     encoder.encode_field(&r.1)?;
-
-        //     encoder.finish()
-        // });
-
+        // don't know why rustfmt does not behave here..
         let data_row_stream = Box::pin(try_stream! {
             loop {
         for row_index in 0..record_batch.num_rows() {
@@ -218,8 +208,7 @@ impl SimpleQueryHandler for SimpleQueryH {
                     for column in record_batch.columns() {
             encode_value(&mut encoder, row_index, column).map_err(|e| PgWireError::ApiError(e.into()))?;
                     }
-            let row = encoder.finish().map_err(|e| PgWireError::ApiError(e.into()))?;
-            yield (row);
+            yield encoder.finish().map_err(|e| PgWireError::ApiError(e.into()))?;
         }
         if let Some(rb_res) = record_batch_stream.next().await{
             record_batch = rb_res.map_err(|e| PgWireError::ApiError(e.into()))?;
