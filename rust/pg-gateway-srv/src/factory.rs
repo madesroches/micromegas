@@ -1,11 +1,10 @@
-use crate::extended::NullExtendedQueryHandler;
 use crate::simple::SimpleQueryH;
+use crate::state::ConnectionState;
+use crate::{extended::NullExtendedQueryHandler, state::SharedState};
 use async_trait::async_trait;
 use futures::sink::{Sink, SinkExt};
-use micromegas::{
-    client::flightsql_client_factory::{DefaultFlightSQLClientFactory, FlightSQLClientFactory},
-    tracing::{debug, info},
-};
+use micromegas::client::flightsql_client_factory::BearerFlightSQLClientFactory;
+use micromegas::tracing::info;
 use pgwire::{
     api::{
         auth::StartupHandler, copy::NoopCopyHandler, ClientInfo, NoopErrorHandler,
@@ -19,8 +18,17 @@ use pgwire::{
     },
 };
 use std::{fmt::Debug, sync::Arc};
+use tokio::sync::Mutex;
 
-pub struct StartupH {}
+pub struct StartupH {
+    state: SharedState,
+}
+
+impl StartupH {
+    pub fn new(state: SharedState) -> Self {
+        Self { state }
+    }
+}
 
 #[async_trait]
 impl StartupHandler for StartupH {
@@ -36,6 +44,10 @@ impl StartupHandler for StartupH {
         PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
     {
         info!("on_startup message={message:?}");
+        self.state
+            .lock()
+            .await
+            .set_factory(Arc::new(BearerFlightSQLClientFactory::new("".into())));
         client.set_state(PgWireConnectionState::ReadyForQuery);
         client
             .send(PgWireBackendMessage::Authentication(Authentication::Ok))
@@ -49,20 +61,19 @@ impl StartupHandler for StartupH {
     }
 }
 
-pub struct ConnectionResources {
-    flight_client_factory: Arc<dyn FlightSQLClientFactory>,
+pub struct HandlerFactory {
+    state: SharedState,
 }
 
-impl ConnectionResources {
+impl HandlerFactory {
     pub fn new() -> Self {
-        let flight_client_factory = Arc::new(DefaultFlightSQLClientFactory::new());
         Self {
-            flight_client_factory,
+            state: Arc::new(Mutex::new(ConnectionState::new())),
         }
     }
 }
 
-impl PgWireServerHandlers for ConnectionResources {
+impl PgWireServerHandlers for HandlerFactory {
     type StartupHandler = StartupH;
     type SimpleQueryHandler = SimpleQueryH;
     type ExtendedQueryHandler = NullExtendedQueryHandler;
@@ -70,27 +81,22 @@ impl PgWireServerHandlers for ConnectionResources {
     type ErrorHandler = NoopErrorHandler;
 
     fn simple_query_handler(&self) -> Arc<Self::SimpleQueryHandler> {
-        debug!("making simple_query_handler");
-        Arc::new(SimpleQueryH::new(self.flight_client_factory.clone()))
+        Arc::new(SimpleQueryH::new(self.state.clone()))
     }
 
     fn extended_query_handler(&self) -> Arc<Self::ExtendedQueryHandler> {
-        debug!("making extended_query_handler");
         Arc::new(NullExtendedQueryHandler {})
     }
 
     fn startup_handler(&self) -> Arc<Self::StartupHandler> {
-        debug!("making startup_handler");
-        Arc::new(StartupH {})
+        Arc::new(StartupH::new(self.state.clone()))
     }
 
     fn copy_handler(&self) -> Arc<Self::CopyHandler> {
-        debug!("making copy_handler");
         Arc::new(NoopCopyHandler {})
     }
 
     fn error_handler(&self) -> Arc<Self::ErrorHandler> {
-        debug!("making error_handler");
         Arc::new(NoopErrorHandler {})
     }
 }

@@ -1,6 +1,7 @@
 mod extended;
 mod factory;
 mod simple;
+mod state;
 use clap::Parser;
 use micromegas::{
     telemetry_sink::TelemetryGuardBuilder,
@@ -32,7 +33,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     loop {
         let incoming_socket = listener.accept().await?;
         debug!("incoming_socket = {incoming_socket:?}");
-        let factory = Arc::new(factory::ConnectionResources::new());
+        let factory = Arc::new(factory::HandlerFactory::new());
         tokio::spawn(async move {
             if let Err(e) = process_socket(incoming_socket.0, None, factory).await {
                 error!("process_socket: {e:?}");

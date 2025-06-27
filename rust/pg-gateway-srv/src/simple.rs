@@ -6,13 +6,13 @@ use futures::stream::StreamExt;
 use futures::Sink;
 use micromegas::chrono::DateTime;
 use micromegas::datafusion::arrow::array::{
-    ArrayRef, Float16Array, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, StringArray, TimestampNanosecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array
+    ArrayRef, Float16Array, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
+    Int8Array, StringArray, TimestampNanosecondArray, UInt16Array, UInt32Array, UInt64Array,
+    UInt8Array,
 };
 use micromegas::datafusion::arrow::json::writer::make_encoder;
 use micromegas::datafusion::arrow::json::EncoderOptions;
-use micromegas::{
-    client::flightsql_client_factory::FlightSQLClientFactory, datafusion::arrow, tracing::info,
-};
+use micromegas::{datafusion::arrow, tracing::info};
 use pgwire::api::results::QueryResponse;
 use pgwire::api::Type;
 use pgwire::types::ToSqlText;
@@ -29,15 +29,15 @@ use postgres_types::ToSql;
 use std::fmt::Debug;
 use std::sync::Arc;
 
+use crate::state::SharedState;
+
 pub struct SimpleQueryH {
-    flight_client_factory: Arc<dyn FlightSQLClientFactory>,
+    state: SharedState,
 }
 
 impl SimpleQueryH {
-    pub fn new(flight_client_factory: Arc<dyn FlightSQLClientFactory>) -> Self {
-        Self {
-            flight_client_factory,
-        }
+    pub fn new(state: SharedState) -> Self {
+        Self { state }
     }
 }
 
@@ -357,8 +357,13 @@ impl SimpleQueryHandler for SimpleQueryH {
         PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
     {
         info!("sql={sql}");
-        let mut flight_client = self
-            .flight_client_factory
+        let client_factory = self
+            .state
+            .lock()
+            .await
+            .flight_client_factory()
+            .map_err(|e| PgWireError::ApiError(e.into()))?;
+        let mut flight_client = client_factory
             .make_client()
             .await
             .map_err(|e| PgWireError::ApiError(e.into()))?;

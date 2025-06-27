@@ -9,16 +9,18 @@ pub trait FlightSQLClientFactory: Send + Sync {
     async fn make_client(&self) -> Result<Client>;
 }
 
-pub struct DefaultFlightSQLClientFactory {}
+pub struct BearerFlightSQLClientFactory {
+    token: String,
+}
 
-impl DefaultFlightSQLClientFactory {
-    pub const fn new() -> Self {
-        Self {}
+impl BearerFlightSQLClientFactory {
+    pub const fn new(token: String) -> Self {
+        Self { token }
     }
 }
 
 #[async_trait]
-impl FlightSQLClientFactory for DefaultFlightSQLClientFactory {
+impl FlightSQLClientFactory for BearerFlightSQLClientFactory {
     async fn make_client(&self) -> Result<Client> {
         let flight_url = std::env::var("MICROMEGAS_FLIGHTSQL_URL")
             .with_context(|| "error reading MICROMEGAS_FLIGHTSQL_URL environment variable")?
@@ -31,11 +33,10 @@ impl FlightSQLClientFactory for DefaultFlightSQLClientFactory {
             .connect()
             .await
             .with_context(|| "connecting grpc channel")?;
-        let client = Client::new(channel);
-        // client.inner_mut().set_header(
-        //     http::header::AUTHORIZATION.as_str(),
-        //     token,
-        // );
+        let mut client = Client::new(channel);
+        client
+            .inner_mut()
+            .set_header(http::header::AUTHORIZATION.as_str(), self.token.clone());
 
         Ok(client)
     }
