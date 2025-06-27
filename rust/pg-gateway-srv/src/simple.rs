@@ -6,7 +6,7 @@ use futures::stream::StreamExt;
 use futures::Sink;
 use micromegas::chrono::DateTime;
 use micromegas::datafusion::arrow::array::{
-    ArrayRef, Int64Array, StringArray, TimestampNanosecondArray,
+    ArrayRef, Float16Array, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, StringArray, TimestampNanosecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array
 };
 use micromegas::datafusion::arrow::json::writer::make_encoder;
 use micromegas::datafusion::arrow::json::EncoderOptions;
@@ -49,13 +49,13 @@ fn arrow_to_pg_type(arrow_type: &arrow::datatypes::DataType) -> anyhow::Result<T
         arrow::datatypes::DataType::Int16 => Ok(Type::INT2),
         arrow::datatypes::DataType::Int32 => Ok(Type::INT4),
         arrow::datatypes::DataType::Int64 => Ok(Type::INT8),
-        arrow::datatypes::DataType::UInt8 => bail!("DataType::UInt8 not yet implemented"),
-        arrow::datatypes::DataType::UInt16 => bail!("DataType::UInt16 not yet implemented"),
-        arrow::datatypes::DataType::UInt32 => bail!("DataType::UInt32 not yet implemented"),
-        arrow::datatypes::DataType::UInt64 => bail!("DataType::UInt64 not yet implemented"),
-        arrow::datatypes::DataType::Float16 => bail!("DataType::Float16 not yet implemented"),
-        arrow::datatypes::DataType::Float32 => bail!("DataType::Float32 not yet implemented"),
-        arrow::datatypes::DataType::Float64 => bail!("DataType::Float64 not yet implemented"),
+        arrow::datatypes::DataType::UInt8 => Ok(Type::INT2),
+        arrow::datatypes::DataType::UInt16 => Ok(Type::INT2),
+        arrow::datatypes::DataType::UInt32 => Ok(Type::INT4),
+        arrow::datatypes::DataType::UInt64 => Ok(Type::INT8),
+        arrow::datatypes::DataType::Float16 => Ok(Type::FLOAT4),
+        arrow::datatypes::DataType::Float32 => Ok(Type::FLOAT4),
+        arrow::datatypes::DataType::Float64 => Ok(Type::FLOAT8),
         arrow::datatypes::DataType::Timestamp(_time_unit, _opt_time_zone) => Ok(Type::TIMESTAMP),
         arrow::datatypes::DataType::Date32 => bail!("DataType::Date32 not yet implemented"),
         arrow::datatypes::DataType::Date64 => bail!("DataType::Date64 not yet implemented"),
@@ -188,9 +188,27 @@ fn encode_value(
     match column.data_type() {
         arrow::datatypes::DataType::Null => encoder.encode_field(&Option::<bool>::None)?,
         arrow::datatypes::DataType::Boolean => bail!("DataType::Boolean not yet implemented"),
-        arrow::datatypes::DataType::Int8 => bail!("DataType::Int8 not yet implemented"),
-        arrow::datatypes::DataType::Int16 => bail!("DataType::Int16 not yet implemented"),
-        arrow::datatypes::DataType::Int32 => bail!("DataType::Int32 not yet implemented"),
+        arrow::datatypes::DataType::Int8 => {
+            let column = column
+                .as_any()
+                .downcast_ref::<Int8Array>()
+                .with_context(|| "casting to Int8Array")?;
+            encoder.encode_field(&column.value(value_index))?;
+        }
+        arrow::datatypes::DataType::Int16 => {
+            let column = column
+                .as_any()
+                .downcast_ref::<Int16Array>()
+                .with_context(|| "casting to Int16Array")?;
+            encoder.encode_field(&column.value(value_index))?;
+        }
+        arrow::datatypes::DataType::Int32 => {
+            let column = column
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .with_context(|| "casting to Int32Array")?;
+            encoder.encode_field(&column.value(value_index))?;
+        }
         arrow::datatypes::DataType::Int64 => {
             let column = column
                 .as_any()
@@ -198,13 +216,55 @@ fn encode_value(
                 .with_context(|| "casting to Int64Array")?;
             encoder.encode_field(&column.value(value_index))?;
         }
-        arrow::datatypes::DataType::UInt8 => bail!("DataType::UInt8 not yet implemented"),
-        arrow::datatypes::DataType::UInt16 => bail!("DataType::UInt16 not yet implemented"),
-        arrow::datatypes::DataType::UInt32 => bail!("DataType::UInt32 not yet implemented"),
-        arrow::datatypes::DataType::UInt64 => bail!("DataType::UInt64 not yet implemented"),
-        arrow::datatypes::DataType::Float16 => bail!("DataType::Float16 not yet implemented"),
-        arrow::datatypes::DataType::Float32 => bail!("DataType::Float32 not yet implemented"),
-        arrow::datatypes::DataType::Float64 => bail!("DataType::Float64 not yet implemented"),
+        arrow::datatypes::DataType::UInt8 => {
+            let column = column
+                .as_any()
+                .downcast_ref::<UInt8Array>()
+                .with_context(|| "casting to UInt8Array")?;
+            encoder.encode_field(&(column.value(value_index) as i16))?;
+        }
+        arrow::datatypes::DataType::UInt16 => {
+            let column = column
+                .as_any()
+                .downcast_ref::<UInt16Array>()
+                .with_context(|| "casting to UInt16Array")?;
+            encoder.encode_field(&(column.value(value_index) as i32))?;
+        }
+        arrow::datatypes::DataType::UInt32 => {
+            let column = column
+                .as_any()
+                .downcast_ref::<UInt32Array>()
+                .with_context(|| "casting to UInt32Array")?;
+            encoder.encode_field(&column.value(value_index))?;
+        }
+        arrow::datatypes::DataType::UInt64 => {
+            let column = column
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .with_context(|| "casting to UInt64Array")?;
+            encoder.encode_field(&(column.value(value_index) as i64))?;
+        }
+        arrow::datatypes::DataType::Float16 => {
+            let column = column
+                .as_any()
+                .downcast_ref::<Float16Array>()
+                .with_context(|| "casting to Float16Array")?;
+            encoder.encode_field(&f32::from(column.value(value_index)))?;
+        }
+        arrow::datatypes::DataType::Float32 => {
+            let column = column
+                .as_any()
+                .downcast_ref::<Float32Array>()
+                .with_context(|| "casting to Float32")?;
+            encoder.encode_field(&column.value(value_index))?;
+        }
+        arrow::datatypes::DataType::Float64 => {
+            let column = column
+                .as_any()
+                .downcast_ref::<Float64Array>()
+                .with_context(|| "casting to Float64")?;
+            encoder.encode_field(&column.value(value_index))?;
+        }
         arrow::datatypes::DataType::Timestamp(_time_unit, _opt_time_zone) => {
             let column = column
                 .as_any()
