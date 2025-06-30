@@ -21,7 +21,6 @@ futures.workspace = true
 pgwire.workspace = true
 postgres-types.workspace = true
 tokio.workspace = true
-tower.workspace = true
 
 [[bin]]
 name = "pg-gateway-srv"
