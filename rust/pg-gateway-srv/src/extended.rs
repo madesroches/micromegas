@@ -49,7 +49,7 @@ impl ExtendedQueryHandler for NullExtendedQueryHandler {
     async fn do_describe_portal<C>(
         &self,
         _client: &mut C,
-        _target: &Portal<Self::Statement>,
+        target: &Portal<Self::Statement>,
     ) -> PgWireResult<DescribePortalResponse>
     where
         C: ClientInfo + ClientPortalStore + Sink<PgWireBackendMessage> + Unpin + Send + Sync,
@@ -57,7 +57,10 @@ impl ExtendedQueryHandler for NullExtendedQueryHandler {
         C::Error: Debug,
         PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
     {
-        info!("do_describe_portal");
+        info!(
+            "do_describe_portal name={} statement={}",
+            target.name, target.statement.statement
+        );
         Err(PgWireError::ApiError(
             anyhow!("ExtendedQueryHandler not implemented").into(),
         ))

@@ -1,6 +1,7 @@
 mod extended;
 mod factory;
 mod simple;
+mod startup;
 mod state;
 use clap::Parser;
 use micromegas::{
