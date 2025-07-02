@@ -542,10 +542,34 @@ impl FlightSqlService for FlightSqlServiceImpl {
 
     async fn do_action_create_prepared_statement(
         &self,
-        _query: ActionCreatePreparedStatementRequest,
+        query: ActionCreatePreparedStatementRequest,
         _request: Request<Action>,
     ) -> Result<ActionCreatePreparedStatementResult, Status> {
-        api_entry_not_implemented!()
+        info!("do_action_create_prepared_statement query={}", &query.query);
+
+        let ctx = make_session_context(
+            self.runtime.clone(),
+            self.lake.clone(),
+            self.part_provider.clone(),
+            None,
+            self.view_factory.clone(),
+        )
+        .await
+        .map_err(|e| status!("error in make_session_context", e))?;
+        let df = ctx
+            .sql(&query.query)
+            .await
+            .map_err(|e| status!("error building dataframe", e))?;
+        let schema = df.schema().as_arrow();
+        // here we could serialize the logical plan and return that as the prepared statement, but we would
+        // need to register LogicalExtensionCodec for user-defined functions
+        // instead, we are sending back the sql as we received it
+        let result = ActionCreatePreparedStatementResult {
+            prepared_statement_handle: query.query.into(),
+            dataset_schema: schema.to_string().into(),
+            parameter_schema: "".into(),
+        };
+        Ok(result)
     }
 
     async fn do_action_close_prepared_statement(

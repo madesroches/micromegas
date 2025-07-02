@@ -6,6 +6,7 @@ import sys
 from google.protobuf import any_pb2
 from . import FlightSql_pb2
 from . import time
+import json
 
 
 class MicromegasMiddleware(flight.ClientMiddleware):
@@ -30,7 +31,8 @@ class MicromegasMiddlewareFactory(flight.ClientMiddlewareFactory):
     def start_call(self, info):
         return MicromegasMiddleware(self.headers)
 
-def make_call_headers( begin, end ):
+
+def make_call_headers(begin, end):
     call_headers = []
     if begin is not None:
         call_headers.append(
@@ -48,6 +50,15 @@ def make_call_headers( begin, end ):
         )
     return call_headers
 
+
+def make_prepared_statement_action(sql):
+    request = FlightSql_pb2.ActionCreatePreparedStatementRequest(query=sql)
+    any = any_pb2.Any()
+    any.Pack(request)
+    action_type = "CreatePreparedStatement"
+    return flight.Action(action_type, any.SerializeToString())
+
+
 def make_query_ticket(sql):
     ticket_statement_query = FlightSql_pb2.TicketStatementQuery(
         statement_handle=sql.encode("utf8")
@@ -57,15 +68,20 @@ def make_query_ticket(sql):
     ticket = flight.Ticket(any.SerializeToString())
     return ticket
 
+
 def make_arrow_flight_descriptor(command: Any) -> flight.FlightDescriptor:
     any = any_pb2.Any()
     any.Pack(command)
     return flight.FlightDescriptor.for_command(any.SerializeToString())
 
+
 def make_ingest_flight_desc(table_name):
-    ingest_statement = FlightSql_pb2.CommandStatementIngest(table=table_name, temporary=False)
+    ingest_statement = FlightSql_pb2.CommandStatementIngest(
+        table=table_name, temporary=False
+    )
     desc = make_arrow_flight_descriptor(ingest_statement)
     return desc
+
 
 class FlightSQLClient:
     def __init__(self, uri, headers=None):
@@ -96,6 +112,16 @@ class FlightSQLClient:
         record_batches = []
         for chunk in reader:
             yield chunk.data
+
+    def prepare_statement(self, sql):
+        action = make_prepared_statement_action(sql)
+        results = self.__flight_client.do_action(action)
+        for result in list(results):
+            any = any_pb2.Any()
+            any.ParseFromString(result.body.to_pybytes())
+            res = FlightSql_pb2.ActionCreatePreparedStatementResult()
+            any.Unpack(res)
+            return res
 
     def bulk_ingest(self, table_name, df):
         desc = make_ingest_flight_desc(table_name)
