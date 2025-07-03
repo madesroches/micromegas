@@ -23,7 +23,7 @@ impl Visit for FieldFormatVisitor<'_> {
     }
     fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
         if field.name() == "message" {
-            write!(self.buffer, "{:?} ", value).unwrap();
+            write!(self.buffer, "{value:?} ").unwrap();
         } else {
             write!(self.buffer, "{}={:?} ", field.name(), value).unwrap();
         }

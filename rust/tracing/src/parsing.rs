@@ -29,7 +29,7 @@ fn parse_log_string_event(
     let msg = String::from_utf8(object_window.to_vec()).with_context(|| "parsing legacy string")?;
     let desc = dependencies
         .get(&desc_id)
-        .with_context(|| format!("desc member {} of LogStringEvent not found", desc_id))?;
+        .with_context(|| format!("desc member {desc_id} of LogStringEvent not found"))?;
     let members = vec![
         (TIME.clone(), Value::I64(time)),
         (MSG.clone(), Value::String(Arc::new(msg))),
@@ -52,7 +52,7 @@ fn parse_log_string_event_v2(
     let msg = read_advance_string(&mut object_window).with_context(|| "parsing string")?;
     let desc: Value = dependencies
         .get(&desc_id)
-        .with_context(|| format!("desc member {} of LogStringEvent not found", desc_id))?
+        .with_context(|| format!("desc member {desc_id} of LogStringEvent not found"))?
         .clone();
     let members = vec![
         (TIME.clone(), Value::I64(time)),

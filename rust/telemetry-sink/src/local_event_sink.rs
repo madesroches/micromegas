@@ -97,13 +97,13 @@ impl EventSink for LocalEventSink {
             ""
         };
 
-        let message = format!("{}{:<5} [{}] {}", timestamp, level_string, target, args);
+        let message = format!("{timestamp}{level_string:<5} [{target}] {args}");
 
         #[cfg(not(feature = "stderr"))]
-        println!("{}", message);
+        println!("{message}");
 
         #[cfg(feature = "stderr")]
-        eprintln!("{}", message);
+        eprintln!("{message}");
     }
 
     fn on_init_log_stream(&self, _: &LogStream) {}

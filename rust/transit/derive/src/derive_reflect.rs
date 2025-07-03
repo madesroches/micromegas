@@ -21,7 +21,7 @@ fn metadata_from_type(t: &syn::Type) -> (QuoteRes, bool) {
         syn::Type::Tuple(_) => panic!("Tuple field type not supported"),
         syn::Type::Verbatim(_) => panic!("Verbatim field type not supported"),
         unknown_field_type => {
-            panic!("Unexpected field type: {:?}", unknown_field_type)
+            panic!("Unexpected field type: {unknown_field_type:?}")
         }
     }
 }
