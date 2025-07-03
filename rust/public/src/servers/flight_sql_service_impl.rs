@@ -28,6 +28,7 @@ use arrow_flight::{
 };
 use core::str;
 use datafusion::arrow::datatypes::Schema;
+use datafusion::arrow::ipc::writer::StreamWriter;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use futures::StreamExt;
 use futures::{Stream, TryStreamExt};
@@ -561,12 +562,18 @@ impl FlightSqlService for FlightSqlServiceImpl {
             .await
             .map_err(|e| status!("error building dataframe", e))?;
         let schema = df.schema().as_arrow();
+        let mut schema_buffer = Vec::new();
+        let mut writer = StreamWriter::try_new(&mut schema_buffer, schema)
+            .map_err(|e| status!("error writing schema to in-memory buffer", e))?;
+        writer
+            .finish()
+            .map_err(|e| status!("error closing arrow ipc stream writer", e))?;
         // here we could serialize the logical plan and return that as the prepared statement, but we would
         // need to register LogicalExtensionCodec for user-defined functions
         // instead, we are sending back the sql as we received it
         let result = ActionCreatePreparedStatementResult {
             prepared_statement_handle: query.query.into(),
-            dataset_schema: schema.to_string().into(),
+            dataset_schema: schema_buffer.into(),
             parameter_schema: "".into(),
         };
         Ok(result)

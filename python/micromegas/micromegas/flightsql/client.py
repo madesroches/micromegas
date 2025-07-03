@@ -1,12 +1,11 @@
-import certifi
-import pyarrow
-from pyarrow import flight
-from typing import Any
-import sys
-from google.protobuf import any_pb2
 from . import FlightSql_pb2
 from . import time
-import json
+from google.protobuf import any_pb2
+from pyarrow import flight
+from typing import Any
+import certifi
+import pyarrow
+import sys
 
 
 class MicromegasMiddleware(flight.ClientMiddleware):
@@ -82,6 +81,12 @@ def make_ingest_flight_desc(table_name):
     desc = make_arrow_flight_descriptor(ingest_statement)
     return desc
 
+class PreparedStatement:
+    def __init__(self, prepared_statement_result ):
+        self.query = prepared_statement_result.prepared_statement_handle
+        reader = pyarrow.ipc.open_stream(prepared_statement_result.dataset_schema)
+        self.dataset_schema = reader.schema
+        reader.close()
 
 class FlightSQLClient:
     def __init__(self, uri, headers=None):
@@ -121,7 +126,7 @@ class FlightSQLClient:
             any.ParseFromString(result.body.to_pybytes())
             res = FlightSql_pb2.ActionCreatePreparedStatementResult()
             any.Unpack(res)
-            return res
+            return PreparedStatement(res)
 
     def bulk_ingest(self, table_name, df):
         desc = make_ingest_flight_desc(table_name)
