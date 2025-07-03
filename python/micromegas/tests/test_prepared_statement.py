@@ -1,3 +1,4 @@
+import pyarrow
 from .test_utils import *
 
 
@@ -8,4 +9,6 @@ def test_prepared_statement():
     print(
         type(prepared_statement.dataset_schema), prepared_statement.dataset_schema
     )  # <class 'pyarrow.lib.Schema'> count(*): int64 not null
-    # todo: execute prepared statement
+    batches = client.prepared_statement_stream(prepared_statement)
+    table = pyarrow.Table.from_batches(batches)
+    print(table.to_pandas())

@@ -83,7 +83,7 @@ def make_ingest_flight_desc(table_name):
 
 class PreparedStatement:
     def __init__(self, prepared_statement_result ):
-        self.query = prepared_statement_result.prepared_statement_handle
+        self.query = prepared_statement_result.prepared_statement_handle.decode('utf8')
         reader = pyarrow.ipc.open_stream(prepared_statement_result.dataset_schema)
         self.dataset_schema = reader.schema
         reader.close()
@@ -127,6 +127,10 @@ class FlightSQLClient:
             res = FlightSql_pb2.ActionCreatePreparedStatementResult()
             any.Unpack(res)
             return PreparedStatement(res)
+
+    def prepared_statement_stream(self, statement):
+        # because we are not serializing the logical plan in the prepared statement, we can just execute the query normally
+        return self.query_stream( statement.query )
 
     def bulk_ingest(self, table_name, df):
         desc = make_ingest_flight_desc(table_name)
