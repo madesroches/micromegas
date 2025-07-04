@@ -17,6 +17,7 @@ use micromegas::chrono::DateTime;
 use micromegas::chrono::TimeDelta;
 use micromegas::chrono::Utc;
 use micromegas::ingestion::data_lake_connection::connect_to_data_lake;
+use micromegas::servers::maintenance::get_global_views_with_update_group;
 use micromegas::telemetry_sink::TelemetryGuardBuilder;
 use micromegas::tracing::levels::LevelFilter;
 use std::sync::Arc;
@@ -133,8 +134,8 @@ async fn main() -> Result<()> {
         }
 
         Commands::CronDaemon => {
-            micromegas::servers::maintenance::daemon(runtime, data_lake, Arc::new(view_factory))
-                .await?
+            let views_to_update = get_global_views_with_update_group(&view_factory);
+            micromegas::servers::maintenance::daemon(runtime, data_lake, views_to_update).await?
         }
     }
     Ok(())

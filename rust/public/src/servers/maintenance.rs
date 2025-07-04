@@ -204,17 +204,20 @@ pub async fn run_tasks_forever(mut tasks: Vec<CronTask>, max_parallelism: usize)
     }
 }
 
-pub async fn daemon(
-    runtime: Arc<RuntimeEnv>,
-    lake: Arc<DataLakeConnection>,
-    view_factory: Arc<ViewFactory>,
-) -> Result<()> {
-    let mut views_to_update: Vec<Arc<dyn View>> = view_factory
+pub fn get_global_views_with_update_group(view_factory: &ViewFactory) -> Vec<Arc<dyn View>> {
+    view_factory
         .get_global_views()
         .iter()
         .filter(|v| v.get_update_group().is_some())
         .cloned()
-        .collect();
+        .collect()
+}
+
+pub async fn daemon(
+    runtime: Arc<RuntimeEnv>,
+    lake: Arc<DataLakeConnection>,
+    mut views_to_update: Vec<Arc<dyn View>>,
+) -> Result<()> {
     views_to_update.sort_by_key(|v| v.get_update_group().unwrap_or(i32::MAX));
     let views = Arc::new(views_to_update);
 
