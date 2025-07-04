@@ -26,7 +26,7 @@ pub struct PartitionCache {
 
 impl fmt::Display for PartitionCache {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:?}", self)
+        write!(f, "{self:?}")
     }
 }
 
@@ -266,7 +266,7 @@ pub struct LivePartitionProvider {
 
 impl fmt::Display for LivePartitionProvider {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:?}", self)
+        write!(f, "{self:?}")
     }
 }
 
@@ -375,7 +375,7 @@ pub struct NullPartitionProvider {}
 
 impl fmt::Display for NullPartitionProvider {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:?}", self)
+        write!(f, "{self:?}")
     }
 }
 
