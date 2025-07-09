@@ -29,6 +29,48 @@ impl SimpleQueryH {
     }
 }
 
+pub async fn execute_query<'a>(state: &SharedState, sql: &str) -> PgWireResult<Response<'a>> {
+    info!("sql={sql}");
+    let client_factory = state
+        .lock()
+        .await
+        .flight_client_factory()
+        .map_err(|e| PgWireError::ApiError(e.into()))?;
+    let mut flight_client = client_factory
+        .make_client()
+        .await
+        .map_err(|e| PgWireError::ApiError(e.into()))?;
+    let mut record_batch_stream = flight_client
+        .query_stream(sql.into(), None)
+        .await
+        .map_err(|e| PgWireError::ApiError(e.into()))?;
+    // we fetch the first record batch to make sure the schema is accessible in the stream
+    let mut opt_record_batch = record_batch_stream.next().await;
+    let arrow_schema = record_batch_stream
+        .schema()
+        .ok_or_else(|| PgWireError::ApiError("no schema in record batch stream".into()))?;
+    let schema = Arc::new(
+        arrow_schema_to_pg_fields(arrow_schema, &Format::UnifiedText)
+            .map_err(|e| PgWireError::ApiError(e.into()))?,
+    );
+    let schema_copy = schema.clone();
+    let pg_row_stream = Box::pin(try_stream!({
+        while let Some(record_batch_res) = opt_record_batch {
+            for row in encode_recordbatch(
+                schema.clone(),
+                record_batch_res.map_err(|e| PgWireError::ApiError(e.into()))?,
+            ) {
+                yield row?;
+            }
+            opt_record_batch = record_batch_stream.next().await;
+        }
+    }));
+    Ok(Response::Query(QueryResponse::new(
+        schema_copy,
+        pg_row_stream,
+    )))
+}
+
 #[async_trait]
 impl SimpleQueryHandler for SimpleQueryH {
     async fn do_query<'a, C>(&self, _client: &mut C, sql: &str) -> PgWireResult<Vec<Response<'a>>>
@@ -37,45 +79,6 @@ impl SimpleQueryHandler for SimpleQueryH {
         C::Error: Debug,
         PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
     {
-        info!("sql={sql}");
-        let client_factory = self
-            .state
-            .lock()
-            .await
-            .flight_client_factory()
-            .map_err(|e| PgWireError::ApiError(e.into()))?;
-        let mut flight_client = client_factory
-            .make_client()
-            .await
-            .map_err(|e| PgWireError::ApiError(e.into()))?;
-        let mut record_batch_stream = flight_client
-            .query_stream(sql.into(), None)
-            .await
-            .map_err(|e| PgWireError::ApiError(e.into()))?;
-        // we fetch the first record batch to make sure the schema is accessible in the stream
-        let mut opt_record_batch = record_batch_stream.next().await;
-        let arrow_schema = record_batch_stream
-            .schema()
-            .ok_or_else(|| PgWireError::ApiError("no schema in record batch stream".into()))?;
-        let schema = Arc::new(
-            arrow_schema_to_pg_fields(arrow_schema, &Format::UnifiedText)
-                .map_err(|e| PgWireError::ApiError(e.into()))?,
-        );
-        let schema_copy = schema.clone();
-        let pg_row_stream = Box::pin(try_stream!({
-            while let Some(record_batch_res) = opt_record_batch {
-                for row in encode_recordbatch(
-                    schema.clone(),
-                    record_batch_res.map_err(|e| PgWireError::ApiError(e.into()))?,
-                ) {
-                    yield row?;
-                }
-                opt_record_batch = record_batch_stream.next().await;
-            }
-        }));
-        Ok(vec![Response::Query(QueryResponse::new(
-            schema_copy,
-            pg_row_stream,
-        ))])
+        Ok(vec![execute_query(&self.state, sql).await?])
     }
 }
