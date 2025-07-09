@@ -1,7 +1,7 @@
 use anyhow::anyhow;
 use async_trait::async_trait;
 use futures::Sink;
-use micromegas::tracing::info;
+use micromegas::{datafusion_postgres::pgwire, tracing::info};
 use pgwire::{
     api::{
         portal::Portal,
