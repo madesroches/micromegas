@@ -1,9 +1,17 @@
+use std::sync::Arc;
+
 use anyhow::{Context, Result};
 use arrow_flight::{decode::FlightRecordBatchStream, sql::client::FlightSqlServiceClient};
-use datafusion::arrow::array::RecordBatch;
+use datafusion::arrow::{array::RecordBatch, datatypes::SchemaRef};
 use futures::stream::StreamExt;
 use micromegas_analytics::time::TimeRange;
 use tonic::transport::Channel;
+
+#[derive(Debug)]
+pub struct PreparedStatement {
+    pub schema: SchemaRef,
+    pub query: String,
+}
 
 /// Micromegas FlightSQL client
 pub struct Client {
@@ -59,5 +67,14 @@ impl Client {
             .with_context(|| "reading ticket from endpoint")?;
         let flight_data_stream = self.inner.do_get(ticket).await?.into_inner();
         Ok(FlightRecordBatchStream::new(flight_data_stream))
+    }
+
+    pub async fn prepare_statement(&mut self, sql: String) -> Result<PreparedStatement> {
+        self.set_query_range(None);
+        let prepared = self.inner.prepare(sql.clone(), None).await?;
+        Ok(PreparedStatement {
+            schema: Arc::new(prepared.dataset_schema()?.clone()),
+            query: sql,
+        })
     }
 }
