@@ -1,7 +1,7 @@
 use crate::simple::SimpleQueryH;
 use crate::startup::StartupH;
 use crate::state::ConnectionState;
-use crate::{extended::NullExtendedQueryHandler, state::SharedState};
+use crate::{extended::ExtendedQueryH, state::SharedState};
 use micromegas::datafusion_postgres::pgwire;
 use micromegas::datafusion_postgres::pgwire::api::auth::StartupHandler;
 use micromegas::datafusion_postgres::pgwire::api::query::{
@@ -29,7 +29,7 @@ impl PgWireServerHandlers for HandlerFactory {
     }
 
     fn extended_query_handler(&self) -> Arc<impl ExtendedQueryHandler> {
-        Arc::new(NullExtendedQueryHandler {})
+        Arc::new(ExtendedQueryH::new(self.state.clone()))
     }
 
     fn startup_handler(&self) -> Arc<impl StartupHandler> {
