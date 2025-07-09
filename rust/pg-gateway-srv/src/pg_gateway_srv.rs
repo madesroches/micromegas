@@ -5,6 +5,7 @@ mod startup;
 mod state;
 use clap::Parser;
 use micromegas::{
+    datafusion_postgres::pgwire,
     telemetry_sink::TelemetryGuardBuilder,
     tracing::{debug, error, info, levels::LevelFilter},
 };

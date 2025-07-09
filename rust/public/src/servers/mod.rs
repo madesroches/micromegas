@@ -24,5 +24,8 @@ pub mod key_ring;
 /// log uris of http requests
 pub mod log_uri_service;
 
+/// pg_ tables expected when connecting using pg-gateway-srv
+pub mod pg_catalog;
+
 /// authentication for the gRPC stack
 pub mod tonic_auth_interceptor;

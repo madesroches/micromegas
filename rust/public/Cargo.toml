@@ -26,6 +26,7 @@ axum.workspace = true
 bytes.workspace = true
 chrono.workspace = true
 datafusion.workspace = true
+datafusion-postgres.workspace = true
 futures.workspace = true
 http.workspace = true
 object_store.workspace = true

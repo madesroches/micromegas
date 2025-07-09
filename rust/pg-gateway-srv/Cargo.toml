@@ -13,13 +13,13 @@ authors.workspace = true
 micromegas.workspace = true
 
 anyhow.workspace = true
-async-trait.workspace = true
 async-stream.workspace = true
+async-trait.workspace = true
 bytes.workspace = true
 clap.workspace = true
 futures.workspace = true
-pgwire.workspace = true
 postgres-types.workspace = true
+rustls.workspace = true
 tokio.workspace = true
 
 [[bin]]

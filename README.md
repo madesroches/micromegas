@@ -52,7 +52,7 @@ Up to 100000 events / second for a single instrumented process.
 Scalable backend can accept data from millions of concurrent instrumented processes.
 
   * Data stored in S3
-  * Metadata stored in https://www.postgresql.org/
+  * Metadata stored in [PostgreSQL](https://www.postgresql.org/)
 
 ### Tail sampling & ETL on demand
 
@@ -60,9 +60,15 @@ In order to keep costs down, most payloads will remain unprocessed until they ex
 
 ### Query using SQL
 
- * Analytics built on https://arrow.apache.org/datafusion/
+ * Query engine powered by [DataFusion](https://arrow.apache.org/datafusion/)
+ * Python and Rust clients built on [FlightSQL](https://arrow.apache.org/blog/2022/02/16/introducing-arrow-flight-sql/)
+ * PostgreSQL-compatible gateway using [DataFusion-postgres](https://github.com/datafusion-contrib/datafusion-postgres) and [pgwire](https://github.com/sunng87/pgwire)
+
 
 ## Status
+
+### July 2025
+ * [pg-gateway-srv](https://github.com/madesroches/micromegas/tree/main/rust/pg-gateway-srv) for query federation
 
 ### June 2025
  * Released [version 0.10.0](https://crates.io/crates/micromegas)
@@ -81,7 +87,7 @@ In order to keep costs down, most payloads will remain unprocessed until they ex
 ### April 2025
  * Released [version 0.7.0](https://crates.io/crates/micromegas)
  * Perfetto trace server
- * Datafusion memory budget
+ * DataFusion memory budget
  * Memory optimizations
  * Fixed interning of property sets
  * More flexible trace macros
@@ -137,7 +143,7 @@ Released [version 0.1.7](https://crates.io/crates/micromegas)
 
  * New global materialized views for logs & metrics of all processes
  * New daemon service to keep the views updated as data is ingested
- * New analytics API based on SQL powered by Apache Datafusion
+ * New analytics API based on SQL powered by Apache DataFusion
 
 ### July 2024
 Released [version 0.1.5](https://crates.io/crates/micromegas)

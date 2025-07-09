@@ -2,7 +2,12 @@ use crate::simple::SimpleQueryH;
 use crate::startup::StartupH;
 use crate::state::ConnectionState;
 use crate::{extended::NullExtendedQueryHandler, state::SharedState};
-use pgwire::api::{copy::NoopCopyHandler, NoopErrorHandler, PgWireServerHandlers};
+use micromegas::datafusion_postgres::pgwire;
+use micromegas::datafusion_postgres::pgwire::api::auth::StartupHandler;
+use micromegas::datafusion_postgres::pgwire::api::query::{
+    ExtendedQueryHandler, SimpleQueryHandler,
+};
+use pgwire::api::PgWireServerHandlers;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -19,29 +24,15 @@ impl HandlerFactory {
 }
 
 impl PgWireServerHandlers for HandlerFactory {
-    type StartupHandler = StartupH;
-    type SimpleQueryHandler = SimpleQueryH;
-    type ExtendedQueryHandler = NullExtendedQueryHandler;
-    type CopyHandler = NoopCopyHandler;
-    type ErrorHandler = NoopErrorHandler;
-
-    fn simple_query_handler(&self) -> Arc<Self::SimpleQueryHandler> {
+    fn simple_query_handler(&self) -> Arc<impl SimpleQueryHandler> {
         Arc::new(SimpleQueryH::new(self.state.clone()))
     }
 
-    fn extended_query_handler(&self) -> Arc<Self::ExtendedQueryHandler> {
+    fn extended_query_handler(&self) -> Arc<impl ExtendedQueryHandler> {
         Arc::new(NullExtendedQueryHandler {})
     }
 
-    fn startup_handler(&self) -> Arc<Self::StartupHandler> {
+    fn startup_handler(&self) -> Arc<impl StartupHandler> {
         Arc::new(StartupH::new(self.state.clone()))
-    }
-
-    fn copy_handler(&self) -> Arc<Self::CopyHandler> {
-        Arc::new(NoopCopyHandler {})
-    }
-
-    fn error_handler(&self) -> Arc<Self::ErrorHandler> {
-        Arc::new(NoopErrorHandler {})
     }
 }

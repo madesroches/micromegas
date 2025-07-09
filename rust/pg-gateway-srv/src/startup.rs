@@ -1,6 +1,7 @@
 use crate::state::SharedState;
 use async_trait::async_trait;
 use futures::Sink;
+use micromegas::datafusion_postgres::pgwire;
 use micromegas::{client::flightsql_client_factory::BearerFlightSQLClientFactory, tracing::info};
 use pgwire::api::auth::{finish_authentication, DefaultServerParameterProvider};
 use pgwire::{
