@@ -1,3 +1,4 @@
+#[cfg(feature = "pg_catalog")]
 use crate::servers::pg_catalog::setup_pg_catalog;
 
 use super::sqlinfo::{
@@ -159,6 +160,7 @@ impl FlightSqlServiceImpl {
         .await
         .map_err(|e| status!("error in make_session_context", e))?;
 
+        #[cfg(feature = "pg_catalog")]
         setup_pg_catalog(&ctx)
             .await
             .map_err(|e| status!("setup_pg_catalog", e))?;
@@ -564,9 +566,12 @@ impl FlightSqlService for FlightSqlServiceImpl {
         )
         .await
         .map_err(|e| status!("error in make_session_context", e))?;
+
+        #[cfg(feature = "pg_catalog")]
         setup_pg_catalog(&ctx)
             .await
             .map_err(|e| status!("setup_pg_catalog", e))?;
+
         let df = ctx
             .sql(&query.query)
             .await
