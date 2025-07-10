@@ -25,6 +25,7 @@ pub mod key_ring;
 pub mod log_uri_service;
 
 /// pg_ tables expected when connecting using pg-gateway-srv
+#[cfg(feature = "pg_catalog")]
 pub mod pg_catalog;
 
 /// authentication for the gRPC stack
