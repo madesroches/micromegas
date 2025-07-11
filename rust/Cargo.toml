@@ -43,7 +43,7 @@ colored = { version = "2" }
 ctrlc = "3.2.0"
 datafusion = "48"
 #datafusion-postgres = "0.7"
-datafusion-postgres = { git="https://github.com/datafusion-contrib/datafusion-postgres", rev="12a6d2e" }
+datafusion-postgres = { git="https://github.com/datafusion-contrib/datafusion-postgres", rev="c2d26363a55a2537fbe2c42a2308bfa52305499c" }
 futures = "0.3"
 http= "1.1"
 lazy_static = "1.4"
