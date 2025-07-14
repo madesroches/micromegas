@@ -22,6 +22,7 @@ where
     }
 
     fn call(&mut self, request: http::Request<Body>) -> Self::Future {
+        /// Logs the URI of the incoming request and then calls the inner service.
         info!("uri={:?}", request.uri());
         self.service.call(request)
     }

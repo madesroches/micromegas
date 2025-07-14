@@ -6,6 +6,9 @@ use micromegas_tracing::prelude::*;
 use std::sync::Arc;
 
 /// Handles requests to insert process information.
+///
+/// This asynchronous function extracts the `WebIngestionService` from the Axum `Extension`
+/// and calls its `insert_process` method with the request body.
 pub async fn insert_process_request(
     Extension(service): Extension<Arc<WebIngestionService>>,
     body: bytes::Bytes,
@@ -16,6 +19,9 @@ pub async fn insert_process_request(
 }
 
 /// Handles requests to insert stream information.
+///
+/// This asynchronous function extracts the `WebIngestionService` from the Axum `Extension`
+/// and calls its `insert_stream` method with the request body.
 pub async fn insert_stream_request(
     Extension(service): Extension<Arc<WebIngestionService>>,
     body: bytes::Bytes,
@@ -26,6 +32,9 @@ pub async fn insert_stream_request(
 }
 
 /// Handles requests to insert block information.
+///
+/// This asynchronous function extracts the `WebIngestionService` from the Axum `Extension`
+/// and calls its `insert_block` method with the request body.
 pub async fn insert_block_request(
     Extension(service): Extension<Arc<WebIngestionService>>,
     body: bytes::Bytes,
@@ -40,6 +49,9 @@ pub async fn insert_block_request(
 }
 
 /// Registers the ingestion routes with the given Axum `Router`.
+///
+/// This function adds routes for `/ingestion/insert_process`,
+/// `/ingestion/insert_stream`, and `/ingestion/insert_block`.
 pub fn register_routes(router: Router) -> Router {
     router
         .route("/ingestion/insert_process", post(insert_process_request))

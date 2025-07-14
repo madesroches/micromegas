@@ -9,6 +9,9 @@ use micromegas_tracing::{
 use std::{fmt, sync::Arc};
 
 /// An `EventSink` that dispatches events to multiple other `EventSink`s.
+///
+/// This allows for fanning out telemetry events to different sinks, each with its own
+/// filtering and processing logic.
 pub struct CompositeSink {
     sinks: Vec<(LevelFilter, BoxedEventSink)>,
     target_level_filters: Vec<(String, LevelFilter)>,

@@ -1,6 +1,11 @@
 use micromegas_tracing::{fmetric, imetric};
 use sysinfo::{CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
 
+/// Continuously sends system-wide CPU and memory usage metrics.
+///
+/// This function runs in a loop, refreshing system information at regular intervals
+/// and emitting `imetric!` and `fmetric!` events for total memory, used memory,
+/// free memory, and global CPU usage.
 pub fn send_system_metrics_forever() {
     let what_to_refresh = RefreshKind::nothing()
         .with_cpu(CpuRefreshKind::nothing().with_cpu_usage())
@@ -16,6 +21,9 @@ pub fn send_system_metrics_forever() {
     }
 }
 
+/// Spawns a new thread to run the `send_system_metrics_forever` function.
+///
+/// This allows system metrics to be collected and reported in the background.
 pub fn spawn_system_monitor() {
     std::thread::spawn(send_system_metrics_forever);
 }

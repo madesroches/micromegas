@@ -23,6 +23,8 @@ pub struct CronTask {
 
 impl CronTask {
     /// Creates a new `CronTask`.
+    ///
+    /// The `next_run` time is calculated based on the current time, period, and offset.
     pub fn new(
         name: String,
         period: TimeDelta,
@@ -40,11 +42,16 @@ impl CronTask {
     }
 
     /// Returns the next scheduled run time for the task.
+    ///
+    /// This value is updated after each successful `spawn` operation.
     pub fn get_next_run(&self) -> DateTime<Utc> {
         self.next_run
     }
 
     /// Spawns the task to run in the background.
+    ///
+    /// This function calculates the next scheduled run time, records metrics about task delay,
+    /// and then spawns an asynchronous task to execute the `TaskCallback`.
     pub async fn spawn(&mut self) -> BoxFuture<'static, Result<Result<()>, JoinError>> {
         let now = Utc::now();
         info!("running scheduled task name={}", &self.name);

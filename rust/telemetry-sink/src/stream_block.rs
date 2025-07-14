@@ -10,6 +10,14 @@ use micromegas_tracing::{
 use micromegas_transit::HeterogeneousQueue;
 
 pub trait StreamBlock {
+    /// Encodes the stream block into a binary format.
+    ///
+    /// This function serializes the block data, compresses it, and then encodes it
+    /// into the wire format for transmission.
+    ///
+    /// # Arguments
+    ///
+    /// * `process_info` - Information about the current process, used for time calibration.
     fn encode_bin(&self, process_info: &ProcessInfo) -> Result<Vec<u8>>;
 }
 

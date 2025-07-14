@@ -78,6 +78,14 @@ where
     }
 }
 
+/// Installs a `tracing` layer that forwards events to the Micromegas tracing system.
+///
+/// This allows applications using the `tracing` crate to integrate with Micromegas telemetry.
+///
+/// # Arguments
+///
+/// * `interop_max_level_override` - An optional `LevelFilter` to override the maximum level
+///   for the `tracing` layer. If `None`, the global Micromegas max level is used.
 pub fn install_tracing_interop(interop_max_level_override: Option<LevelFilter>) {
     let max_level = interop_max_level_override.unwrap_or(micromegas_tracing::levels::max_level());
 

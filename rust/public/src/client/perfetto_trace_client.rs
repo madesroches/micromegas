@@ -31,6 +31,9 @@ async fn get_process_exe(
 }
 
 /// Formats a Perfetto trace from the telemetry data.
+///
+/// This function queries the FlightSQL server for process, thread, and span information
+/// and formats it into a Perfetto trace protobuf.
 pub async fn format_perfetto_trace(
     client: &mut Client,
     process_id: &str,
@@ -96,6 +99,9 @@ pub async fn format_perfetto_trace(
 }
 
 /// Writes a Perfetto trace to a file.
+///
+/// This function calls `format_perfetto_trace` to generate the trace data
+/// and then writes it to the specified output file.
 pub async fn write_perfetto_trace(
     client: &mut Client,
     process_id: &str,

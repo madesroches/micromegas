@@ -3,6 +3,9 @@ use micromegas_tracing::prelude::*;
 use tonic::{Request, Status};
 
 /// Checks the authentication of a Tonic request using a `KeyRing`.
+///
+/// This function checks for a `Bearer` token in the `Authorization` header
+/// and validates it against the provided `KeyRing`.
 #[expect(clippy::result_large_err)]
 pub fn check_auth(req: Request<()>, keyring: &KeyRing) -> Result<Request<()>, Status> {
     let metadata = req.metadata();

@@ -16,6 +16,11 @@ pub struct BearerFlightSQLClientFactory {
 }
 
 impl BearerFlightSQLClientFactory {
+    /// Creates a new `BearerFlightSQLClientFactory`.
+    ///
+    /// # Arguments
+    ///
+    /// * `token` - The bearer token to use for authentication.
     pub const fn new(token: String) -> Self {
         Self { token }
     }

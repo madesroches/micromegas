@@ -21,12 +21,18 @@ pub struct Client {
 
 impl Client {
     /// Creates a new client from a grpc channel
-    pub fn new(channel: Channel) -> Self {
+    ///
+    /// # Arguments
+    ///
+    /// * `channel` - The gRPC channel to use for communication.
+pub fn new(channel: Channel) -> Self {
         let inner = FlightSqlServiceClient::new(channel);
         Self { inner }
     }
 
     /// Returns a mutable reference to the inner `FlightSqlServiceClient`.
+    ///
+    /// This allows direct access to the underlying FlightSQL client for advanced operations.
     pub fn inner_mut(&mut self) -> &mut FlightSqlServiceClient<Channel> {
         &mut self.inner
     }
@@ -43,6 +49,11 @@ impl Client {
     }
 
     /// Executes a SQL query and returns the results as a vector of `RecordBatch`.
+    ///
+    /// # Arguments
+    ///
+    /// * `sql` - The SQL query string to execute.
+    /// * `query_range` - An optional `TimeRange` to filter the query results by time.
     pub async fn query(
         &mut self,
         sql: String,
@@ -57,6 +68,13 @@ impl Client {
     }
 
     /// Executes a SQL query and returns the results as a `FlightRecordBatchStream`.
+    ///
+    /// This function is useful for processing large query results incrementally.
+    ///
+    /// # Arguments
+    ///
+    /// * `sql` - The SQL query string to execute.
+    /// * `query_range` - An optional `TimeRange` to filter the query results by time.
     pub async fn query_stream(
         &mut self,
         sql: String,
@@ -73,6 +91,12 @@ impl Client {
     }
 
     /// Prepares a SQL statement and returns a `PreparedStatement`.
+    ///
+    /// This allows for executing the same query multiple times with different parameters efficiently.
+    ///
+    /// # Arguments
+    ///
+    /// * `sql` - The SQL query string to prepare.
     pub async fn prepare_statement(&mut self, sql: String) -> Result<PreparedStatement> {
         self.set_query_range(None);
         let prepared = self.inner.prepare(sql.clone(), None).await?;

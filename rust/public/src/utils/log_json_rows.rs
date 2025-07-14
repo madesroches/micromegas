@@ -12,6 +12,8 @@ use micromegas_tracing::property_set::{Property, PropertySet};
 use std::{str::from_utf8, sync::Arc};
 
 /// Logs rows from a `RecordBatch` as JSON, with specified columns converted to properties.
+///
+/// This function is useful for logging structured data from a `RecordBatch` in a human-readable format.
 pub async fn log_json_rows(
     target: &'static str,
     rbs: &[RecordBatch],

@@ -211,17 +211,7 @@ pub mod trace_stats {
         #[prost(uint64, repeated, packed = "false", tag = "20")]
         pub bytes_discarded_per_buffer: ::prost::alloc::vec::Vec<u64>,
     }
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum FinalFlushOutcome {
         FinalFlushUnspecified = 0,
@@ -316,7 +306,11 @@ pub struct AndroidGameInterventionListConfig {
 pub struct AndroidInputEventConfig {
     /// The tracing mode to use. If unspecified, it will default to
     /// TRACE_MODE_USE_RULES.
-    #[prost(enumeration = "android_input_event_config::TraceMode", optional, tag = "1")]
+    #[prost(
+        enumeration = "android_input_event_config::TraceMode",
+        optional,
+        tag = "1"
+    )]
     pub mode: ::core::option::Option<i32>,
     /// The list of rules to use to determine the trace level of events.
     /// Each event will be traced using the TraceLevel of the first rule that it
@@ -397,17 +391,7 @@ pub mod android_input_event_config {
         pub match_ime_connection_active: ::core::option::Option<bool>,
     }
     /// Trace modes are tracing presets that are included in the system.
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum TraceMode {
         /// Preset mode for maximal tracing.
@@ -443,17 +427,7 @@ pub mod android_input_event_config {
         }
     }
     /// The level of tracing that should be applied to an event.
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum TraceLevel {
         /// Do not trace the input event.
@@ -675,9 +649,7 @@ pub struct AndroidSdkSyspropGuardConfig {
     /// If non-empty, hwui_skia_track_events applies to only the packages listed.
     /// Otherwise, hwui_skia_track_events applies globally to all HWUI apps.
     #[prost(string, repeated, tag = "3")]
-    pub hwui_package_name_filter: ::prost::alloc::vec::Vec<
-        ::prost::alloc::string::String,
-    >,
+    pub hwui_package_name_filter: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
 /// Network tracing data source that records details on all packets sent or
 /// received by the network.
@@ -741,17 +713,7 @@ pub struct PixelModemConfig {
 /// Nested message and enum types in `PixelModemConfig`.
 pub mod pixel_modem_config {
     /// Event group to record, as defined by the modem.
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum EventGroup {
         Unknown = 0,
@@ -839,17 +801,7 @@ pub struct ProtoLogConfig {
 }
 /// Nested message and enum types in `ProtoLogConfig`.
 pub mod proto_log_config {
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum TracingMode {
         /// When using the DEFAULT tracing mode, only log groups and levels specified
@@ -898,7 +850,11 @@ pub struct ProtoLogGroup {
 /// Custom configuration for the "android.surfaceflinger.layers" data source.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SurfaceFlingerLayersConfig {
-    #[prost(enumeration = "surface_flinger_layers_config::Mode", optional, tag = "1")]
+    #[prost(
+        enumeration = "surface_flinger_layers_config::Mode",
+        optional,
+        tag = "1"
+    )]
     pub mode: ::core::option::Option<i32>,
     #[prost(
         enumeration = "surface_flinger_layers_config::TraceFlag",
@@ -910,17 +866,7 @@ pub struct SurfaceFlingerLayersConfig {
 }
 /// Nested message and enum types in `SurfaceFlingerLayersConfig`.
 pub mod surface_flinger_layers_config {
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum Mode {
         Unspecified = 0,
@@ -964,17 +910,7 @@ pub mod surface_flinger_layers_config {
             }
         }
     }
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum TraceFlag {
         Unspecified = 0,
@@ -1033,17 +969,7 @@ pub struct SurfaceFlingerTransactionsConfig {
 }
 /// Nested message and enum types in `SurfaceFlingerTransactionsConfig`.
 pub mod surface_flinger_transactions_config {
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum Mode {
         Unspecified = 0,
@@ -1106,17 +1032,7 @@ pub mod chrome_config {
     /// Priority of the tracing session client. A higher priority session may
     /// preempt a lower priority one in configurations where concurrent sessions
     /// aren't supported.
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum ClientPriority {
         Unknown = 0,
@@ -1181,17 +1097,7 @@ pub struct EtwConfig {
 pub mod etw_config {
     /// The KernelFlag represent list of kernel flags that we are intrested in.
     /// To get a more extensive list run 'xperf -providers k'.
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum KernelFlag {
         Cswitch = 0,
@@ -1426,7 +1332,7 @@ pub mod ftrace_config {
         /// Nested message and enum types in `Rule`.
         pub mod rule {
             /// Matches an atrace message of the form:
-            /// <type>|pid|<prefix>...
+            /// `type`|`pid`|`prefix`...
             #[derive(Clone, PartialEq, ::prost::Message)]
             pub struct AtraceMessage {
                 #[prost(string, optional, tag = "1")]
@@ -1455,17 +1361,7 @@ pub mod ftrace_config {
     ///   KSYMS_RETAIN: pay a fixed ~1.2 MB cost after the first trace.
     ///   KSYMS_CLEANUP_ON_STOP: pay a ~300-500ms cost when starting each trace.
     /// Default behavior: KSYMS_CLEANUP_ON_STOP.
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum KsymsMemPolicy {
         KsymsUnspecified = 0,
@@ -1541,9 +1437,7 @@ pub struct InodeFileConfig {
     /// When encountering an inode belonging to a block device corresponding
     /// to one of the mount points in this map, scan its scan_roots instead.
     #[prost(message, repeated, tag = "6")]
-    pub mount_point_mapping: ::prost::alloc::vec::Vec<
-        inode_file_config::MountPointMappingEntry,
-    >,
+    pub mount_point_mapping: ::prost::alloc::vec::Vec<inode_file_config::MountPointMappingEntry>,
 }
 /// Nested message and enum types in `InodeFileConfig`.
 pub mod inode_file_config {
@@ -1564,17 +1458,7 @@ pub struct ConsoleConfig {
 }
 /// Nested message and enum types in `ConsoleConfig`.
 pub mod console_config {
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum Output {
         Unspecified = 0,
@@ -1640,17 +1524,7 @@ pub struct AndroidPowerConfig {
 }
 /// Nested message and enum types in `AndroidPowerConfig`.
 pub mod android_power_config {
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum BatteryCounters {
         BatteryCounterUnspecified = 0,
@@ -1685,9 +1559,7 @@ pub mod android_power_config {
             match value {
                 "BATTERY_COUNTER_UNSPECIFIED" => Some(Self::BatteryCounterUnspecified),
                 "BATTERY_COUNTER_CHARGE" => Some(Self::BatteryCounterCharge),
-                "BATTERY_COUNTER_CAPACITY_PERCENT" => {
-                    Some(Self::BatteryCounterCapacityPercent)
-                }
+                "BATTERY_COUNTER_CAPACITY_PERCENT" => Some(Self::BatteryCounterCapacityPercent),
                 "BATTERY_COUNTER_CURRENT" => Some(Self::BatteryCounterCurrent),
                 "BATTERY_COUNTER_CURRENT_AVG" => Some(Self::BatteryCounterCurrentAvg),
                 "BATTERY_COUNTER_VOLTAGE" => Some(Self::BatteryCounterVoltage),
@@ -2603,12 +2475,8 @@ impl AtomId {
             Self::AtomScheduledJobStateChanged => "ATOM_SCHEDULED_JOB_STATE_CHANGED",
             Self::AtomScreenBrightnessChanged => "ATOM_SCREEN_BRIGHTNESS_CHANGED",
             Self::AtomWakelockStateChanged => "ATOM_WAKELOCK_STATE_CHANGED",
-            Self::AtomLongPartialWakelockStateChanged => {
-                "ATOM_LONG_PARTIAL_WAKELOCK_STATE_CHANGED"
-            }
-            Self::AtomMobileRadioPowerStateChanged => {
-                "ATOM_MOBILE_RADIO_POWER_STATE_CHANGED"
-            }
+            Self::AtomLongPartialWakelockStateChanged => "ATOM_LONG_PARTIAL_WAKELOCK_STATE_CHANGED",
+            Self::AtomMobileRadioPowerStateChanged => "ATOM_MOBILE_RADIO_POWER_STATE_CHANGED",
             Self::AtomWifiRadioPowerStateChanged => "ATOM_WIFI_RADIO_POWER_STATE_CHANGED",
             Self::AtomActivityManagerSleepStateChanged => {
                 "ATOM_ACTIVITY_MANAGER_SLEEP_STATE_CHANGED"
@@ -2618,21 +2486,15 @@ impl AtomId {
             Self::AtomCachedKillReported => "ATOM_CACHED_KILL_REPORTED",
             Self::AtomProcessMemoryStatReported => "ATOM_PROCESS_MEMORY_STAT_REPORTED",
             Self::AtomLauncherEvent => "ATOM_LAUNCHER_EVENT",
-            Self::AtomBatterySaverModeStateChanged => {
-                "ATOM_BATTERY_SAVER_MODE_STATE_CHANGED"
-            }
+            Self::AtomBatterySaverModeStateChanged => "ATOM_BATTERY_SAVER_MODE_STATE_CHANGED",
             Self::AtomDeviceIdleModeStateChanged => "ATOM_DEVICE_IDLE_MODE_STATE_CHANGED",
-            Self::AtomDeviceIdlingModeStateChanged => {
-                "ATOM_DEVICE_IDLING_MODE_STATE_CHANGED"
-            }
+            Self::AtomDeviceIdlingModeStateChanged => "ATOM_DEVICE_IDLING_MODE_STATE_CHANGED",
             Self::AtomAudioStateChanged => "ATOM_AUDIO_STATE_CHANGED",
             Self::AtomMediaCodecStateChanged => "ATOM_MEDIA_CODEC_STATE_CHANGED",
             Self::AtomCameraStateChanged => "ATOM_CAMERA_STATE_CHANGED",
             Self::AtomFlashlightStateChanged => "ATOM_FLASHLIGHT_STATE_CHANGED",
             Self::AtomUidProcessStateChanged => "ATOM_UID_PROCESS_STATE_CHANGED",
-            Self::AtomProcessLifeCycleStateChanged => {
-                "ATOM_PROCESS_LIFE_CYCLE_STATE_CHANGED"
-            }
+            Self::AtomProcessLifeCycleStateChanged => "ATOM_PROCESS_LIFE_CYCLE_STATE_CHANGED",
             Self::AtomScreenStateChanged => "ATOM_SCREEN_STATE_CHANGED",
             Self::AtomBatteryLevelChanged => "ATOM_BATTERY_LEVEL_CHANGED",
             Self::AtomChargingStateChanged => "ATOM_CHARGING_STATE_CHANGED",
@@ -2646,9 +2508,7 @@ impl AtomId {
             Self::AtomWifiScanStateChanged => "ATOM_WIFI_SCAN_STATE_CHANGED",
             Self::AtomPhoneSignalStrengthChanged => "ATOM_PHONE_SIGNAL_STRENGTH_CHANGED",
             Self::AtomSettingChanged => "ATOM_SETTING_CHANGED",
-            Self::AtomActivityForegroundStateChanged => {
-                "ATOM_ACTIVITY_FOREGROUND_STATE_CHANGED"
-            }
+            Self::AtomActivityForegroundStateChanged => "ATOM_ACTIVITY_FOREGROUND_STATE_CHANGED",
             Self::AtomIsolatedUidChanged => "ATOM_ISOLATED_UID_CHANGED",
             Self::AtomPacketWakeupOccurred => "ATOM_PACKET_WAKEUP_OCCURRED",
             Self::AtomWallClockTimeShifted => "ATOM_WALL_CLOCK_TIME_SHIFTED",
@@ -2658,53 +2518,31 @@ impl AtomId {
             Self::AtomAppStartCanceled => "ATOM_APP_START_CANCELED",
             Self::AtomAppStartFullyDrawn => "ATOM_APP_START_FULLY_DRAWN",
             Self::AtomLmkKillOccurred => "ATOM_LMK_KILL_OCCURRED",
-            Self::AtomPictureInPictureStateChanged => {
-                "ATOM_PICTURE_IN_PICTURE_STATE_CHANGED"
-            }
-            Self::AtomWifiMulticastLockStateChanged => {
-                "ATOM_WIFI_MULTICAST_LOCK_STATE_CHANGED"
-            }
+            Self::AtomPictureInPictureStateChanged => "ATOM_PICTURE_IN_PICTURE_STATE_CHANGED",
+            Self::AtomWifiMulticastLockStateChanged => "ATOM_WIFI_MULTICAST_LOCK_STATE_CHANGED",
             Self::AtomLmkStateChanged => "ATOM_LMK_STATE_CHANGED",
-            Self::AtomAppStartMemoryStateCaptured => {
-                "ATOM_APP_START_MEMORY_STATE_CAPTURED"
-            }
+            Self::AtomAppStartMemoryStateCaptured => "ATOM_APP_START_MEMORY_STATE_CAPTURED",
             Self::AtomShutdownSequenceReported => "ATOM_SHUTDOWN_SEQUENCE_REPORTED",
             Self::AtomBootSequenceReported => "ATOM_BOOT_SEQUENCE_REPORTED",
             Self::AtomDaveyOccurred => "ATOM_DAVEY_OCCURRED",
             Self::AtomOverlayStateChanged => "ATOM_OVERLAY_STATE_CHANGED",
-            Self::AtomForegroundServiceStateChanged => {
-                "ATOM_FOREGROUND_SERVICE_STATE_CHANGED"
-            }
+            Self::AtomForegroundServiceStateChanged => "ATOM_FOREGROUND_SERVICE_STATE_CHANGED",
             Self::AtomCallStateChanged => "ATOM_CALL_STATE_CHANGED",
             Self::AtomKeyguardStateChanged => "ATOM_KEYGUARD_STATE_CHANGED",
-            Self::AtomKeyguardBouncerStateChanged => {
-                "ATOM_KEYGUARD_BOUNCER_STATE_CHANGED"
-            }
-            Self::AtomKeyguardBouncerPasswordEntered => {
-                "ATOM_KEYGUARD_BOUNCER_PASSWORD_ENTERED"
-            }
+            Self::AtomKeyguardBouncerStateChanged => "ATOM_KEYGUARD_BOUNCER_STATE_CHANGED",
+            Self::AtomKeyguardBouncerPasswordEntered => "ATOM_KEYGUARD_BOUNCER_PASSWORD_ENTERED",
             Self::AtomAppDied => "ATOM_APP_DIED",
-            Self::AtomResourceConfigurationChanged => {
-                "ATOM_RESOURCE_CONFIGURATION_CHANGED"
-            }
-            Self::AtomBluetoothEnabledStateChanged => {
-                "ATOM_BLUETOOTH_ENABLED_STATE_CHANGED"
-            }
-            Self::AtomBluetoothConnectionStateChanged => {
-                "ATOM_BLUETOOTH_CONNECTION_STATE_CHANGED"
-            }
+            Self::AtomResourceConfigurationChanged => "ATOM_RESOURCE_CONFIGURATION_CHANGED",
+            Self::AtomBluetoothEnabledStateChanged => "ATOM_BLUETOOTH_ENABLED_STATE_CHANGED",
+            Self::AtomBluetoothConnectionStateChanged => "ATOM_BLUETOOTH_CONNECTION_STATE_CHANGED",
             Self::AtomGpsSignalQualityChanged => "ATOM_GPS_SIGNAL_QUALITY_CHANGED",
             Self::AtomUsbConnectorStateChanged => "ATOM_USB_CONNECTOR_STATE_CHANGED",
             Self::AtomSpeakerImpedanceReported => "ATOM_SPEAKER_IMPEDANCE_REPORTED",
             Self::AtomHardwareFailed => "ATOM_HARDWARE_FAILED",
             Self::AtomPhysicalDropDetected => "ATOM_PHYSICAL_DROP_DETECTED",
             Self::AtomChargeCyclesReported => "ATOM_CHARGE_CYCLES_REPORTED",
-            Self::AtomMobileConnectionStateChanged => {
-                "ATOM_MOBILE_CONNECTION_STATE_CHANGED"
-            }
-            Self::AtomMobileRadioTechnologyChanged => {
-                "ATOM_MOBILE_RADIO_TECHNOLOGY_CHANGED"
-            }
+            Self::AtomMobileConnectionStateChanged => "ATOM_MOBILE_CONNECTION_STATE_CHANGED",
+            Self::AtomMobileRadioTechnologyChanged => "ATOM_MOBILE_RADIO_TECHNOLOGY_CHANGED",
             Self::AtomUsbDeviceAttached => "ATOM_USB_DEVICE_ATTACHED",
             Self::AtomAppCrashOccurred => "ATOM_APP_CRASH_OCCURRED",
             Self::AtomAnrOccurred => "ATOM_ANR_OCCURRED",
@@ -2768,17 +2606,11 @@ impl AtomId {
                 "ATOM_BLUETOOTH_SCO_CONNECTION_STATE_CHANGED"
             }
             Self::AtomAppDowngraded => "ATOM_APP_DOWNGRADED",
-            Self::AtomAppOptimizedAfterDowngraded => {
-                "ATOM_APP_OPTIMIZED_AFTER_DOWNGRADED"
-            }
+            Self::AtomAppOptimizedAfterDowngraded => "ATOM_APP_OPTIMIZED_AFTER_DOWNGRADED",
             Self::AtomLowStorageStateChanged => "ATOM_LOW_STORAGE_STATE_CHANGED",
-            Self::AtomGnssNfwNotificationReported => {
-                "ATOM_GNSS_NFW_NOTIFICATION_REPORTED"
-            }
+            Self::AtomGnssNfwNotificationReported => "ATOM_GNSS_NFW_NOTIFICATION_REPORTED",
             Self::AtomGnssConfigurationReported => "ATOM_GNSS_CONFIGURATION_REPORTED",
-            Self::AtomUsbPortOverheatEventReported => {
-                "ATOM_USB_PORT_OVERHEAT_EVENT_REPORTED"
-            }
+            Self::AtomUsbPortOverheatEventReported => "ATOM_USB_PORT_OVERHEAT_EVENT_REPORTED",
             Self::AtomNfcErrorOccurred => "ATOM_NFC_ERROR_OCCURRED",
             Self::AtomNfcStateChanged => "ATOM_NFC_STATE_CHANGED",
             Self::AtomNfcBeamOccurred => "ATOM_NFC_BEAM_OCCURRED",
@@ -2801,18 +2633,12 @@ impl AtomId {
                 "ATOM_BIOMETRIC_SYSTEM_HEALTH_ISSUE_DETECTED"
             }
             Self::AtomBubbleUiChanged => "ATOM_BUBBLE_UI_CHANGED",
-            Self::AtomScheduledJobConstraintChanged => {
-                "ATOM_SCHEDULED_JOB_CONSTRAINT_CHANGED"
-            }
-            Self::AtomBluetoothActiveDeviceChanged => {
-                "ATOM_BLUETOOTH_ACTIVE_DEVICE_CHANGED"
-            }
+            Self::AtomScheduledJobConstraintChanged => "ATOM_SCHEDULED_JOB_CONSTRAINT_CHANGED",
+            Self::AtomBluetoothActiveDeviceChanged => "ATOM_BLUETOOTH_ACTIVE_DEVICE_CHANGED",
             Self::AtomBluetoothA2dpPlaybackStateChanged => {
                 "ATOM_BLUETOOTH_A2DP_PLAYBACK_STATE_CHANGED"
             }
-            Self::AtomBluetoothA2dpCodecConfigChanged => {
-                "ATOM_BLUETOOTH_A2DP_CODEC_CONFIG_CHANGED"
-            }
+            Self::AtomBluetoothA2dpCodecConfigChanged => "ATOM_BLUETOOTH_A2DP_CODEC_CONFIG_CHANGED",
             Self::AtomBluetoothA2dpCodecCapabilityChanged => {
                 "ATOM_BLUETOOTH_A2DP_CODEC_CAPABILITY_CHANGED"
             }
@@ -2822,30 +2648,20 @@ impl AtomId {
             Self::AtomBluetoothA2dpAudioOverrunReported => {
                 "ATOM_BLUETOOTH_A2DP_AUDIO_OVERRUN_REPORTED"
             }
-            Self::AtomBluetoothDeviceRssiReported => {
-                "ATOM_BLUETOOTH_DEVICE_RSSI_REPORTED"
-            }
+            Self::AtomBluetoothDeviceRssiReported => "ATOM_BLUETOOTH_DEVICE_RSSI_REPORTED",
             Self::AtomBluetoothDeviceFailedContactCounterReported => {
                 "ATOM_BLUETOOTH_DEVICE_FAILED_CONTACT_COUNTER_REPORTED"
             }
             Self::AtomBluetoothDeviceTxPowerLevelReported => {
                 "ATOM_BLUETOOTH_DEVICE_TX_POWER_LEVEL_REPORTED"
             }
-            Self::AtomBluetoothHciTimeoutReported => {
-                "ATOM_BLUETOOTH_HCI_TIMEOUT_REPORTED"
-            }
-            Self::AtomBluetoothQualityReportReported => {
-                "ATOM_BLUETOOTH_QUALITY_REPORT_REPORTED"
-            }
-            Self::AtomBluetoothDeviceInfoReported => {
-                "ATOM_BLUETOOTH_DEVICE_INFO_REPORTED"
-            }
+            Self::AtomBluetoothHciTimeoutReported => "ATOM_BLUETOOTH_HCI_TIMEOUT_REPORTED",
+            Self::AtomBluetoothQualityReportReported => "ATOM_BLUETOOTH_QUALITY_REPORT_REPORTED",
+            Self::AtomBluetoothDeviceInfoReported => "ATOM_BLUETOOTH_DEVICE_INFO_REPORTED",
             Self::AtomBluetoothRemoteVersionInfoReported => {
                 "ATOM_BLUETOOTH_REMOTE_VERSION_INFO_REPORTED"
             }
-            Self::AtomBluetoothSdpAttributeReported => {
-                "ATOM_BLUETOOTH_SDP_ATTRIBUTE_REPORTED"
-            }
+            Self::AtomBluetoothSdpAttributeReported => "ATOM_BLUETOOTH_SDP_ATTRIBUTE_REPORTED",
             Self::AtomBluetoothBondStateChanged => "ATOM_BLUETOOTH_BOND_STATE_CHANGED",
             Self::AtomBluetoothClassicPairingEventReported => {
                 "ATOM_BLUETOOTH_CLASSIC_PAIRING_EVENT_REPORTED"
@@ -2853,9 +2669,7 @@ impl AtomId {
             Self::AtomBluetoothSmpPairingEventReported => {
                 "ATOM_BLUETOOTH_SMP_PAIRING_EVENT_REPORTED"
             }
-            Self::AtomScreenTimeoutExtensionReported => {
-                "ATOM_SCREEN_TIMEOUT_EXTENSION_REPORTED"
-            }
+            Self::AtomScreenTimeoutExtensionReported => "ATOM_SCREEN_TIMEOUT_EXTENSION_REPORTED",
             Self::AtomProcessStartTime => "ATOM_PROCESS_START_TIME",
             Self::AtomPermissionGrantRequestResultReported => {
                 "ATOM_PERMISSION_GRANT_REQUEST_RESULT_REPORTED"
@@ -2863,19 +2677,11 @@ impl AtomId {
             Self::AtomBluetoothSocketConnectionStateChanged => {
                 "ATOM_BLUETOOTH_SOCKET_CONNECTION_STATE_CHANGED"
             }
-            Self::AtomDeviceIdentifierAccessDenied => {
-                "ATOM_DEVICE_IDENTIFIER_ACCESS_DENIED"
-            }
-            Self::AtomBubbleDeveloperErrorReported => {
-                "ATOM_BUBBLE_DEVELOPER_ERROR_REPORTED"
-            }
+            Self::AtomDeviceIdentifierAccessDenied => "ATOM_DEVICE_IDENTIFIER_ACCESS_DENIED",
+            Self::AtomBubbleDeveloperErrorReported => "ATOM_BUBBLE_DEVELOPER_ERROR_REPORTED",
             Self::AtomAssistGestureStageReported => "ATOM_ASSIST_GESTURE_STAGE_REPORTED",
-            Self::AtomAssistGestureFeedbackReported => {
-                "ATOM_ASSIST_GESTURE_FEEDBACK_REPORTED"
-            }
-            Self::AtomAssistGestureProgressReported => {
-                "ATOM_ASSIST_GESTURE_PROGRESS_REPORTED"
-            }
+            Self::AtomAssistGestureFeedbackReported => "ATOM_ASSIST_GESTURE_FEEDBACK_REPORTED",
+            Self::AtomAssistGestureProgressReported => "ATOM_ASSIST_GESTURE_PROGRESS_REPORTED",
             Self::AtomTouchGestureClassified => "ATOM_TOUCH_GESTURE_CLASSIFIED",
             Self::AtomHiddenApiUsed => "ATOM_HIDDEN_API_USED",
             Self::AtomStyleUiChanged => "ATOM_STYLE_UI_CHANGED",
@@ -2886,71 +2692,39 @@ impl AtomId {
             Self::AtomNetworkStackReported => "ATOM_NETWORK_STACK_REPORTED",
             Self::AtomAppMovedStorageReported => "ATOM_APP_MOVED_STORAGE_REPORTED",
             Self::AtomBiometricEnrolled => "ATOM_BIOMETRIC_ENROLLED",
-            Self::AtomSystemServerWatchdogOccurred => {
-                "ATOM_SYSTEM_SERVER_WATCHDOG_OCCURRED"
-            }
+            Self::AtomSystemServerWatchdogOccurred => "ATOM_SYSTEM_SERVER_WATCHDOG_OCCURRED",
             Self::AtomTombStoneOccurred => "ATOM_TOMB_STONE_OCCURRED",
-            Self::AtomBluetoothClassOfDeviceReported => {
-                "ATOM_BLUETOOTH_CLASS_OF_DEVICE_REPORTED"
-            }
+            Self::AtomBluetoothClassOfDeviceReported => "ATOM_BLUETOOTH_CLASS_OF_DEVICE_REPORTED",
             Self::AtomIntelligenceEventReported => "ATOM_INTELLIGENCE_EVENT_REPORTED",
             Self::AtomThermalThrottlingSeverityStateChanged => {
                 "ATOM_THERMAL_THROTTLING_SEVERITY_STATE_CHANGED"
             }
             Self::AtomRoleRequestResultReported => "ATOM_ROLE_REQUEST_RESULT_REPORTED",
-            Self::AtomMediametricsAudiopolicyReported => {
-                "ATOM_MEDIAMETRICS_AUDIOPOLICY_REPORTED"
-            }
-            Self::AtomMediametricsAudiorecordReported => {
-                "ATOM_MEDIAMETRICS_AUDIORECORD_REPORTED"
-            }
-            Self::AtomMediametricsAudiothreadReported => {
-                "ATOM_MEDIAMETRICS_AUDIOTHREAD_REPORTED"
-            }
-            Self::AtomMediametricsAudiotrackReported => {
-                "ATOM_MEDIAMETRICS_AUDIOTRACK_REPORTED"
-            }
+            Self::AtomMediametricsAudiopolicyReported => "ATOM_MEDIAMETRICS_AUDIOPOLICY_REPORTED",
+            Self::AtomMediametricsAudiorecordReported => "ATOM_MEDIAMETRICS_AUDIORECORD_REPORTED",
+            Self::AtomMediametricsAudiothreadReported => "ATOM_MEDIAMETRICS_AUDIOTHREAD_REPORTED",
+            Self::AtomMediametricsAudiotrackReported => "ATOM_MEDIAMETRICS_AUDIOTRACK_REPORTED",
             Self::AtomMediametricsCodecReported => "ATOM_MEDIAMETRICS_CODEC_REPORTED",
-            Self::AtomMediametricsDrmWidevineReported => {
-                "ATOM_MEDIAMETRICS_DRM_WIDEVINE_REPORTED"
-            }
-            Self::AtomMediametricsExtractorReported => {
-                "ATOM_MEDIAMETRICS_EXTRACTOR_REPORTED"
-            }
-            Self::AtomMediametricsMediadrmReported => {
-                "ATOM_MEDIAMETRICS_MEDIADRM_REPORTED"
-            }
-            Self::AtomMediametricsNuplayerReported => {
-                "ATOM_MEDIAMETRICS_NUPLAYER_REPORTED"
-            }
-            Self::AtomMediametricsRecorderReported => {
-                "ATOM_MEDIAMETRICS_RECORDER_REPORTED"
-            }
-            Self::AtomMediametricsDrmmanagerReported => {
-                "ATOM_MEDIAMETRICS_DRMMANAGER_REPORTED"
-            }
+            Self::AtomMediametricsDrmWidevineReported => "ATOM_MEDIAMETRICS_DRM_WIDEVINE_REPORTED",
+            Self::AtomMediametricsExtractorReported => "ATOM_MEDIAMETRICS_EXTRACTOR_REPORTED",
+            Self::AtomMediametricsMediadrmReported => "ATOM_MEDIAMETRICS_MEDIADRM_REPORTED",
+            Self::AtomMediametricsNuplayerReported => "ATOM_MEDIAMETRICS_NUPLAYER_REPORTED",
+            Self::AtomMediametricsRecorderReported => "ATOM_MEDIAMETRICS_RECORDER_REPORTED",
+            Self::AtomMediametricsDrmmanagerReported => "ATOM_MEDIAMETRICS_DRMMANAGER_REPORTED",
             Self::AtomCarPowerStateChanged => "ATOM_CAR_POWER_STATE_CHANGED",
             Self::AtomGarageModeInfo => "ATOM_GARAGE_MODE_INFO",
             Self::AtomTestAtomReported => "ATOM_TEST_ATOM_REPORTED",
             Self::AtomContentCaptureCallerMismatchReported => {
                 "ATOM_CONTENT_CAPTURE_CALLER_MISMATCH_REPORTED"
             }
-            Self::AtomContentCaptureServiceEvents => {
-                "ATOM_CONTENT_CAPTURE_SERVICE_EVENTS"
-            }
-            Self::AtomContentCaptureSessionEvents => {
-                "ATOM_CONTENT_CAPTURE_SESSION_EVENTS"
-            }
+            Self::AtomContentCaptureServiceEvents => "ATOM_CONTENT_CAPTURE_SERVICE_EVENTS",
+            Self::AtomContentCaptureSessionEvents => "ATOM_CONTENT_CAPTURE_SESSION_EVENTS",
             Self::AtomContentCaptureFlushed => "ATOM_CONTENT_CAPTURE_FLUSHED",
-            Self::AtomLocationManagerApiUsageReported => {
-                "ATOM_LOCATION_MANAGER_API_USAGE_REPORTED"
-            }
+            Self::AtomLocationManagerApiUsageReported => "ATOM_LOCATION_MANAGER_API_USAGE_REPORTED",
             Self::AtomReviewPermissionsFragmentResultReported => {
                 "ATOM_REVIEW_PERMISSIONS_FRAGMENT_RESULT_REPORTED"
             }
-            Self::AtomRuntimePermissionsUpgradeResult => {
-                "ATOM_RUNTIME_PERMISSIONS_UPGRADE_RESULT"
-            }
+            Self::AtomRuntimePermissionsUpgradeResult => "ATOM_RUNTIME_PERMISSIONS_UPGRADE_RESULT",
             Self::AtomGrantPermissionsActivityButtonActions => {
                 "ATOM_GRANT_PERMISSIONS_ACTIVITY_BUTTON_ACTIONS"
             }
@@ -2960,23 +2734,15 @@ impl AtomId {
             Self::AtomAppPermissionFragmentActionReported => {
                 "ATOM_APP_PERMISSION_FRAGMENT_ACTION_REPORTED"
             }
-            Self::AtomAppPermissionFragmentViewed => {
-                "ATOM_APP_PERMISSION_FRAGMENT_VIEWED"
-            }
-            Self::AtomAppPermissionsFragmentViewed => {
-                "ATOM_APP_PERMISSIONS_FRAGMENT_VIEWED"
-            }
-            Self::AtomPermissionAppsFragmentViewed => {
-                "ATOM_PERMISSION_APPS_FRAGMENT_VIEWED"
-            }
+            Self::AtomAppPermissionFragmentViewed => "ATOM_APP_PERMISSION_FRAGMENT_VIEWED",
+            Self::AtomAppPermissionsFragmentViewed => "ATOM_APP_PERMISSIONS_FRAGMENT_VIEWED",
+            Self::AtomPermissionAppsFragmentViewed => "ATOM_PERMISSION_APPS_FRAGMENT_VIEWED",
             Self::AtomTextSelectionEvent => "ATOM_TEXT_SELECTION_EVENT",
             Self::AtomTextLinkifyEvent => "ATOM_TEXT_LINKIFY_EVENT",
             Self::AtomConversationActionsEvent => "ATOM_CONVERSATION_ACTIONS_EVENT",
             Self::AtomLanguageDetectionEvent => "ATOM_LANGUAGE_DETECTION_EVENT",
             Self::AtomExclusionRectStateChanged => "ATOM_EXCLUSION_RECT_STATE_CHANGED",
-            Self::AtomBackGestureReportedReported => {
-                "ATOM_BACK_GESTURE_REPORTED_REPORTED"
-            }
+            Self::AtomBackGestureReportedReported => "ATOM_BACK_GESTURE_REPORTED_REPORTED",
             Self::AtomUpdateEngineUpdateAttemptReported => {
                 "ATOM_UPDATE_ENGINE_UPDATE_ATTEMPT_REPORTED"
             }
@@ -2984,13 +2750,9 @@ impl AtomId {
                 "ATOM_UPDATE_ENGINE_SUCCESSFUL_UPDATE_REPORTED"
             }
             Self::AtomCameraActionEvent => "ATOM_CAMERA_ACTION_EVENT",
-            Self::AtomAppCompatibilityChangeReported => {
-                "ATOM_APP_COMPATIBILITY_CHANGE_REPORTED"
-            }
+            Self::AtomAppCompatibilityChangeReported => "ATOM_APP_COMPATIBILITY_CHANGE_REPORTED",
             Self::AtomPerfettoUploaded => "ATOM_PERFETTO_UPLOADED",
-            Self::AtomVmsClientConnectionStateChanged => {
-                "ATOM_VMS_CLIENT_CONNECTION_STATE_CHANGED"
-            }
+            Self::AtomVmsClientConnectionStateChanged => "ATOM_VMS_CLIENT_CONNECTION_STATE_CHANGED",
             Self::AtomMediaProviderScanOccurred => "ATOM_MEDIA_PROVIDER_SCAN_OCCURRED",
             Self::AtomMediaContentDeleted => "ATOM_MEDIA_CONTENT_DELETED",
             Self::AtomMediaProviderPermissionRequested => {
@@ -3000,36 +2762,24 @@ impl AtomId {
             Self::AtomMediaProviderIdleMaintenanceFinished => {
                 "ATOM_MEDIA_PROVIDER_IDLE_MAINTENANCE_FINISHED"
             }
-            Self::AtomRebootEscrowRecoveryReported => {
-                "ATOM_REBOOT_ESCROW_RECOVERY_REPORTED"
-            }
-            Self::AtomBootTimeEventDurationReported => {
-                "ATOM_BOOT_TIME_EVENT_DURATION_REPORTED"
-            }
+            Self::AtomRebootEscrowRecoveryReported => "ATOM_REBOOT_ESCROW_RECOVERY_REPORTED",
+            Self::AtomBootTimeEventDurationReported => "ATOM_BOOT_TIME_EVENT_DURATION_REPORTED",
             Self::AtomBootTimeEventElapsedTimeReported => {
                 "ATOM_BOOT_TIME_EVENT_ELAPSED_TIME_REPORTED"
             }
-            Self::AtomBootTimeEventUtcTimeReported => {
-                "ATOM_BOOT_TIME_EVENT_UTC_TIME_REPORTED"
-            }
-            Self::AtomBootTimeEventErrorCodeReported => {
-                "ATOM_BOOT_TIME_EVENT_ERROR_CODE_REPORTED"
-            }
+            Self::AtomBootTimeEventUtcTimeReported => "ATOM_BOOT_TIME_EVENT_UTC_TIME_REPORTED",
+            Self::AtomBootTimeEventErrorCodeReported => "ATOM_BOOT_TIME_EVENT_ERROR_CODE_REPORTED",
             Self::AtomUserspaceRebootReported => "ATOM_USERSPACE_REBOOT_REPORTED",
             Self::AtomNotificationReported => "ATOM_NOTIFICATION_REPORTED",
             Self::AtomNotificationPanelReported => "ATOM_NOTIFICATION_PANEL_REPORTED",
             Self::AtomNotificationChannelModified => "ATOM_NOTIFICATION_CHANNEL_MODIFIED",
-            Self::AtomIntegrityCheckResultReported => {
-                "ATOM_INTEGRITY_CHECK_RESULT_REPORTED"
-            }
+            Self::AtomIntegrityCheckResultReported => "ATOM_INTEGRITY_CHECK_RESULT_REPORTED",
             Self::AtomIntegrityRulesPushed => "ATOM_INTEGRITY_RULES_PUSHED",
             Self::AtomCbMessageReported => "ATOM_CB_MESSAGE_REPORTED",
             Self::AtomCbMessageError => "ATOM_CB_MESSAGE_ERROR",
             Self::AtomWifiHealthStatReported => "ATOM_WIFI_HEALTH_STAT_REPORTED",
             Self::AtomWifiFailureStatReported => "ATOM_WIFI_FAILURE_STAT_REPORTED",
-            Self::AtomWifiConnectionResultReported => {
-                "ATOM_WIFI_CONNECTION_RESULT_REPORTED"
-            }
+            Self::AtomWifiConnectionResultReported => "ATOM_WIFI_CONNECTION_RESULT_REPORTED",
             Self::AtomAppFreezeChanged => "ATOM_APP_FREEZE_CHANGED",
             Self::AtomSnapshotMergeReported => "ATOM_SNAPSHOT_MERGE_REPORTED",
             Self::AtomForegroundServiceAppOpSessionEnded => {
@@ -3042,36 +2792,22 @@ impl AtomId {
             Self::AtomTvsettingsUiInteracted => "ATOM_TVSETTINGS_UI_INTERACTED",
             Self::AtomLauncherSnapshot => "ATOM_LAUNCHER_SNAPSHOT",
             Self::AtomPackageInstallerV2Reported => "ATOM_PACKAGE_INSTALLER_V2_REPORTED",
-            Self::AtomUserLifecycleJourneyReported => {
-                "ATOM_USER_LIFECYCLE_JOURNEY_REPORTED"
-            }
+            Self::AtomUserLifecycleJourneyReported => "ATOM_USER_LIFECYCLE_JOURNEY_REPORTED",
             Self::AtomUserLifecycleEventOccurred => "ATOM_USER_LIFECYCLE_EVENT_OCCURRED",
-            Self::AtomAccessibilityShortcutReported => {
-                "ATOM_ACCESSIBILITY_SHORTCUT_REPORTED"
-            }
-            Self::AtomAccessibilityServiceReported => {
-                "ATOM_ACCESSIBILITY_SERVICE_REPORTED"
-            }
+            Self::AtomAccessibilityShortcutReported => "ATOM_ACCESSIBILITY_SHORTCUT_REPORTED",
+            Self::AtomAccessibilityServiceReported => "ATOM_ACCESSIBILITY_SERVICE_REPORTED",
             Self::AtomDocsUiDragAndDropReported => "ATOM_DOCS_UI_DRAG_AND_DROP_REPORTED",
             Self::AtomAppUsageEventOccurred => "ATOM_APP_USAGE_EVENT_OCCURRED",
-            Self::AtomAutoRevokeNotificationClicked => {
-                "ATOM_AUTO_REVOKE_NOTIFICATION_CLICKED"
-            }
-            Self::AtomAutoRevokeFragmentAppViewed => {
-                "ATOM_AUTO_REVOKE_FRAGMENT_APP_VIEWED"
-            }
+            Self::AtomAutoRevokeNotificationClicked => "ATOM_AUTO_REVOKE_NOTIFICATION_CLICKED",
+            Self::AtomAutoRevokeFragmentAppViewed => "ATOM_AUTO_REVOKE_FRAGMENT_APP_VIEWED",
             Self::AtomAutoRevokedAppInteraction => "ATOM_AUTO_REVOKED_APP_INTERACTION",
             Self::AtomAppPermissionGroupsFragmentAutoRevokeAction => {
                 "ATOM_APP_PERMISSION_GROUPS_FRAGMENT_AUTO_REVOKE_ACTION"
             }
             Self::AtomEvsUsageStatsReported => "ATOM_EVS_USAGE_STATS_REPORTED",
-            Self::AtomAudioPowerUsageDataReported => {
-                "ATOM_AUDIO_POWER_USAGE_DATA_REPORTED"
-            }
+            Self::AtomAudioPowerUsageDataReported => "ATOM_AUDIO_POWER_USAGE_DATA_REPORTED",
             Self::AtomTvTunerStateChanged => "ATOM_TV_TUNER_STATE_CHANGED",
-            Self::AtomMediaoutputOpSwitchReported => {
-                "ATOM_MEDIAOUTPUT_OP_SWITCH_REPORTED"
-            }
+            Self::AtomMediaoutputOpSwitchReported => "ATOM_MEDIAOUTPUT_OP_SWITCH_REPORTED",
             Self::AtomCbMessageFiltered => "ATOM_CB_MESSAGE_FILTERED",
             Self::AtomTvTunerDvrStatus => "ATOM_TV_TUNER_DVR_STATUS",
             Self::AtomTvCasSessionOpenStatus => "ATOM_TV_CAS_SESSION_OPEN_STATUS",
@@ -3098,9 +2834,7 @@ impl AtomId {
             Self::AtomCarUserHalSetUserAssociationResponseReported => {
                 "ATOM_CAR_USER_HAL_SET_USER_ASSOCIATION_RESPONSE_REPORTED"
             }
-            Self::AtomNetworkIpProvisioningReported => {
-                "ATOM_NETWORK_IP_PROVISIONING_REPORTED"
-            }
+            Self::AtomNetworkIpProvisioningReported => "ATOM_NETWORK_IP_PROVISIONING_REPORTED",
             Self::AtomNetworkDhcpRenewReported => "ATOM_NETWORK_DHCP_RENEW_REPORTED",
             Self::AtomNetworkValidationReported => "ATOM_NETWORK_VALIDATION_REPORTED",
             Self::AtomNetworkStackQuirkReported => "ATOM_NETWORK_STACK_QUIRK_REPORTED",
@@ -3119,15 +2853,11 @@ impl AtomId {
             Self::AtomBlobCommitted => "ATOM_BLOB_COMMITTED",
             Self::AtomBlobLeased => "ATOM_BLOB_LEASED",
             Self::AtomBlobOpened => "ATOM_BLOB_OPENED",
-            Self::AtomContactsProviderStatusReported => {
-                "ATOM_CONTACTS_PROVIDER_STATUS_REPORTED"
-            }
+            Self::AtomContactsProviderStatusReported => "ATOM_CONTACTS_PROVIDER_STATUS_REPORTED",
             Self::AtomKeystoreKeyEventReported => "ATOM_KEYSTORE_KEY_EVENT_REPORTED",
             Self::AtomNetworkTetheringReported => "ATOM_NETWORK_TETHERING_REPORTED",
             Self::AtomImeTouchReported => "ATOM_IME_TOUCH_REPORTED",
-            Self::AtomUiInteractionFrameInfoReported => {
-                "ATOM_UI_INTERACTION_FRAME_INFO_REPORTED"
-            }
+            Self::AtomUiInteractionFrameInfoReported => "ATOM_UI_INTERACTION_FRAME_INFO_REPORTED",
             Self::AtomUiActionLatencyReported => "ATOM_UI_ACTION_LATENCY_REPORTED",
             Self::AtomWifiDisconnectReported => "ATOM_WIFI_DISCONNECT_REPORTED",
             Self::AtomWifiConnectionStateChanged => "ATOM_WIFI_CONNECTION_STATE_CHANGED",
@@ -3138,19 +2868,11 @@ impl AtomId {
             Self::AtomCarrierIdMismatchReported => "ATOM_CARRIER_ID_MISMATCH_REPORTED",
             Self::AtomCarrierIdTableUpdated => "ATOM_CARRIER_ID_TABLE_UPDATED",
             Self::AtomDataStallRecoveryReported => "ATOM_DATA_STALL_RECOVERY_REPORTED",
-            Self::AtomMediametricsMediaparserReported => {
-                "ATOM_MEDIAMETRICS_MEDIAPARSER_REPORTED"
-            }
+            Self::AtomMediametricsMediaparserReported => "ATOM_MEDIAMETRICS_MEDIAPARSER_REPORTED",
             Self::AtomTlsHandshakeReported => "ATOM_TLS_HANDSHAKE_REPORTED",
-            Self::AtomTextClassifierApiUsageReported => {
-                "ATOM_TEXT_CLASSIFIER_API_USAGE_REPORTED"
-            }
-            Self::AtomCarWatchdogKillStatsReported => {
-                "ATOM_CAR_WATCHDOG_KILL_STATS_REPORTED"
-            }
-            Self::AtomMediametricsPlaybackReported => {
-                "ATOM_MEDIAMETRICS_PLAYBACK_REPORTED"
-            }
+            Self::AtomTextClassifierApiUsageReported => "ATOM_TEXT_CLASSIFIER_API_USAGE_REPORTED",
+            Self::AtomCarWatchdogKillStatsReported => "ATOM_CAR_WATCHDOG_KILL_STATS_REPORTED",
+            Self::AtomMediametricsPlaybackReported => "ATOM_MEDIAMETRICS_PLAYBACK_REPORTED",
             Self::AtomMediaNetworkInfoChanged => "ATOM_MEDIA_NETWORK_INFO_CHANGED",
             Self::AtomMediaPlaybackStateChanged => "ATOM_MEDIA_PLAYBACK_STATE_CHANGED",
             Self::AtomMediaPlaybackErrorReported => "ATOM_MEDIA_PLAYBACK_ERROR_REPORTED",
@@ -3161,35 +2883,19 @@ impl AtomId {
             Self::AtomAutoRotateReported => "ATOM_AUTO_ROTATE_REPORTED",
             Self::AtomPerfettoTrigger => "ATOM_PERFETTO_TRIGGER",
             Self::AtomTranscodingData => "ATOM_TRANSCODING_DATA",
-            Self::AtomImsServiceEntitlementUpdated => {
-                "ATOM_IMS_SERVICE_ENTITLEMENT_UPDATED"
-            }
+            Self::AtomImsServiceEntitlementUpdated => "ATOM_IMS_SERVICE_ENTITLEMENT_UPDATED",
             Self::AtomDeviceRotated => "ATOM_DEVICE_ROTATED",
-            Self::AtomSimSpecificSettingsRestored => {
-                "ATOM_SIM_SPECIFIC_SETTINGS_RESTORED"
-            }
-            Self::AtomTextClassifierDownloadReported => {
-                "ATOM_TEXT_CLASSIFIER_DOWNLOAD_REPORTED"
-            }
+            Self::AtomSimSpecificSettingsRestored => "ATOM_SIM_SPECIFIC_SETTINGS_RESTORED",
+            Self::AtomTextClassifierDownloadReported => "ATOM_TEXT_CLASSIFIER_DOWNLOAD_REPORTED",
             Self::AtomPinStorageEvent => "ATOM_PIN_STORAGE_EVENT",
             Self::AtomFaceDownReported => "ATOM_FACE_DOWN_REPORTED",
-            Self::AtomBluetoothHalCrashReasonReported => {
-                "ATOM_BLUETOOTH_HAL_CRASH_REASON_REPORTED"
-            }
-            Self::AtomRebootEscrowPreparationReported => {
-                "ATOM_REBOOT_ESCROW_PREPARATION_REPORTED"
-            }
-            Self::AtomRebootEscrowLskfCaptureReported => {
-                "ATOM_REBOOT_ESCROW_LSKF_CAPTURE_REPORTED"
-            }
+            Self::AtomBluetoothHalCrashReasonReported => "ATOM_BLUETOOTH_HAL_CRASH_REASON_REPORTED",
+            Self::AtomRebootEscrowPreparationReported => "ATOM_REBOOT_ESCROW_PREPARATION_REPORTED",
+            Self::AtomRebootEscrowLskfCaptureReported => "ATOM_REBOOT_ESCROW_LSKF_CAPTURE_REPORTED",
             Self::AtomRebootEscrowRebootReported => "ATOM_REBOOT_ESCROW_REBOOT_REPORTED",
             Self::AtomBinderLatencyReported => "ATOM_BINDER_LATENCY_REPORTED",
-            Self::AtomMediametricsAaudiostreamReported => {
-                "ATOM_MEDIAMETRICS_AAUDIOSTREAM_REPORTED"
-            }
-            Self::AtomMediaTranscodingSessionEnded => {
-                "ATOM_MEDIA_TRANSCODING_SESSION_ENDED"
-            }
+            Self::AtomMediametricsAaudiostreamReported => "ATOM_MEDIAMETRICS_AAUDIOSTREAM_REPORTED",
+            Self::AtomMediaTranscodingSessionEnded => "ATOM_MEDIA_TRANSCODING_SESSION_ENDED",
             Self::AtomMagnificationUsageReported => "ATOM_MAGNIFICATION_USAGE_REPORTED",
             Self::AtomMagnificationModeWithImeOnReported => {
                 "ATOM_MAGNIFICATION_MODE_WITH_IME_ON_REPORTED"
@@ -3202,9 +2908,7 @@ impl AtomId {
             Self::AtomDeviceStateChanged => "ATOM_DEVICE_STATE_CHANGED",
             Self::AtomInputdeviceRegistered => "ATOM_INPUTDEVICE_REGISTERED",
             Self::AtomSmartspaceCardReported => "ATOM_SMARTSPACE_CARD_REPORTED",
-            Self::AtomAuthPromptAuthenticateInvoked => {
-                "ATOM_AUTH_PROMPT_AUTHENTICATE_INVOKED"
-            }
+            Self::AtomAuthPromptAuthenticateInvoked => "ATOM_AUTH_PROMPT_AUTHENTICATE_INVOKED",
             Self::AtomAuthManagerCanAuthenticateInvoked => {
                 "ATOM_AUTH_MANAGER_CAN_AUTHENTICATE_INVOKED"
             }
@@ -3216,9 +2920,7 @@ impl AtomId {
                 "ATOM_LOCATION_TIME_ZONE_PROVIDER_STATE_CHANGED"
             }
             Self::AtomFdtrackEventOccurred => "ATOM_FDTRACK_EVENT_OCCURRED",
-            Self::AtomTimeoutAutoExtendedReported => {
-                "ATOM_TIMEOUT_AUTO_EXTENDED_REPORTED"
-            }
+            Self::AtomTimeoutAutoExtendedReported => "ATOM_TIMEOUT_AUTO_EXTENDED_REPORTED",
             Self::AtomAlarmBatchDelivered => "ATOM_ALARM_BATCH_DELIVERED",
             Self::AtomAlarmScheduled => "ATOM_ALARM_SCHEDULED",
             Self::AtomCarWatchdogIoOveruseStatsReported => {
@@ -3230,36 +2932,22 @@ impl AtomId {
             Self::AtomAppSearchInitializeStatsReported => {
                 "ATOM_APP_SEARCH_INITIALIZE_STATS_REPORTED"
             }
-            Self::AtomAppSearchQueryStatsReported => {
-                "ATOM_APP_SEARCH_QUERY_STATS_REPORTED"
-            }
+            Self::AtomAppSearchQueryStatsReported => "ATOM_APP_SEARCH_QUERY_STATS_REPORTED",
             Self::AtomAppProcessDied => "ATOM_APP_PROCESS_DIED",
             Self::AtomNetworkIpReachabilityMonitorReported => {
                 "ATOM_NETWORK_IP_REACHABILITY_MONITOR_REPORTED"
             }
             Self::AtomSlowInputEventReported => "ATOM_SLOW_INPUT_EVENT_REPORTED",
-            Self::AtomAnrOccurredProcessingStarted => {
-                "ATOM_ANR_OCCURRED_PROCESSING_STARTED"
-            }
-            Self::AtomAppSearchRemoveStatsReported => {
-                "ATOM_APP_SEARCH_REMOVE_STATS_REPORTED"
-            }
+            Self::AtomAnrOccurredProcessingStarted => "ATOM_ANR_OCCURRED_PROCESSING_STARTED",
+            Self::AtomAppSearchRemoveStatsReported => "ATOM_APP_SEARCH_REMOVE_STATS_REPORTED",
             Self::AtomMediaCodecReported => "ATOM_MEDIA_CODEC_REPORTED",
             Self::AtomPermissionUsageFragmentInteraction => {
                 "ATOM_PERMISSION_USAGE_FRAGMENT_INTERACTION"
             }
-            Self::AtomPermissionDetailsInteraction => {
-                "ATOM_PERMISSION_DETAILS_INTERACTION"
-            }
-            Self::AtomPrivacySensorToggleInteraction => {
-                "ATOM_PRIVACY_SENSOR_TOGGLE_INTERACTION"
-            }
-            Self::AtomPrivacyToggleDialogInteraction => {
-                "ATOM_PRIVACY_TOGGLE_DIALOG_INTERACTION"
-            }
-            Self::AtomAppSearchOptimizeStatsReported => {
-                "ATOM_APP_SEARCH_OPTIMIZE_STATS_REPORTED"
-            }
+            Self::AtomPermissionDetailsInteraction => "ATOM_PERMISSION_DETAILS_INTERACTION",
+            Self::AtomPrivacySensorToggleInteraction => "ATOM_PRIVACY_SENSOR_TOGGLE_INTERACTION",
+            Self::AtomPrivacyToggleDialogInteraction => "ATOM_PRIVACY_TOGGLE_DIALOG_INTERACTION",
+            Self::AtomAppSearchOptimizeStatsReported => "ATOM_APP_SEARCH_OPTIMIZE_STATS_REPORTED",
             Self::AtomNonA11yToolServiceWarningReport => {
                 "ATOM_NON_A11Y_TOOL_SERVICE_WARNING_REPORT"
             }
@@ -3271,9 +2959,7 @@ impl AtomId {
                 "ATOM_SIZE_COMPAT_RESTART_BUTTON_EVENT_REPORTED"
             }
             Self::AtomSplitscreenUiChanged => "ATOM_SPLITSCREEN_UI_CHANGED",
-            Self::AtomNetworkDnsHandshakeReported => {
-                "ATOM_NETWORK_DNS_HANDSHAKE_REPORTED"
-            }
+            Self::AtomNetworkDnsHandshakeReported => "ATOM_NETWORK_DNS_HANDSHAKE_REPORTED",
             Self::AtomBluetoothCodePathCounter => "ATOM_BLUETOOTH_CODE_PATH_COUNTER",
             Self::AtomBluetoothLeBatchScanReportDelay => {
                 "ATOM_BLUETOOTH_LE_BATCH_SCAN_REPORT_DELAY"
@@ -3284,15 +2970,9 @@ impl AtomId {
             Self::AtomNeuralnetworksCompilationCompleted => {
                 "ATOM_NEURALNETWORKS_COMPILATION_COMPLETED"
             }
-            Self::AtomNeuralnetworksExecutionCompleted => {
-                "ATOM_NEURALNETWORKS_EXECUTION_COMPLETED"
-            }
-            Self::AtomNeuralnetworksCompilationFailed => {
-                "ATOM_NEURALNETWORKS_COMPILATION_FAILED"
-            }
-            Self::AtomNeuralnetworksExecutionFailed => {
-                "ATOM_NEURALNETWORKS_EXECUTION_FAILED"
-            }
+            Self::AtomNeuralnetworksExecutionCompleted => "ATOM_NEURALNETWORKS_EXECUTION_COMPLETED",
+            Self::AtomNeuralnetworksCompilationFailed => "ATOM_NEURALNETWORKS_COMPILATION_FAILED",
+            Self::AtomNeuralnetworksExecutionFailed => "ATOM_NEURALNETWORKS_EXECUTION_FAILED",
             Self::AtomContextHubBooted => "ATOM_CONTEXT_HUB_BOOTED",
             Self::AtomContextHubRestarted => "ATOM_CONTEXT_HUB_RESTARTED",
             Self::AtomContextHubLoadedNanoappSnapshotReported => {
@@ -3302,9 +2982,7 @@ impl AtomId {
             Self::AtomUwbSessionInited => "ATOM_UWB_SESSION_INITED",
             Self::AtomUwbSessionClosed => "ATOM_UWB_SESSION_CLOSED",
             Self::AtomUwbFirstRangingReceived => "ATOM_UWB_FIRST_RANGING_RECEIVED",
-            Self::AtomUwbRangingMeasurementReceived => {
-                "ATOM_UWB_RANGING_MEASUREMENT_RECEIVED"
-            }
+            Self::AtomUwbRangingMeasurementReceived => "ATOM_UWB_RANGING_MEASUREMENT_RECEIVED",
             Self::AtomTextClassifierDownloadWorkScheduled => {
                 "ATOM_TEXT_CLASSIFIER_DOWNLOAD_WORK_SCHEDULED"
             }
@@ -3313,9 +2991,7 @@ impl AtomId {
             }
             Self::AtomClipboardCleared => "ATOM_CLIPBOARD_CLEARED",
             Self::AtomVmCreationRequested => "ATOM_VM_CREATION_REQUESTED",
-            Self::AtomNearbyDeviceScanStateChanged => {
-                "ATOM_NEARBY_DEVICE_SCAN_STATE_CHANGED"
-            }
+            Self::AtomNearbyDeviceScanStateChanged => "ATOM_NEARBY_DEVICE_SCAN_STATE_CHANGED",
             Self::AtomCameraCompatControlEventReported => {
                 "ATOM_CAMERA_COMPAT_CONTROL_EVENT_REPORTED"
             }
@@ -3328,12 +3004,8 @@ impl AtomId {
                 "ATOM_LOCATION_TIME_ZONE_PROVIDER_CONTROLLER_STATE_CHANGED"
             }
             Self::AtomDisplayHbmStateChanged => "ATOM_DISPLAY_HBM_STATE_CHANGED",
-            Self::AtomDisplayHbmBrightnessChanged => {
-                "ATOM_DISPLAY_HBM_BRIGHTNESS_CHANGED"
-            }
-            Self::AtomPersistentUriPermissionsFlushed => {
-                "ATOM_PERSISTENT_URI_PERMISSIONS_FLUSHED"
-            }
+            Self::AtomDisplayHbmBrightnessChanged => "ATOM_DISPLAY_HBM_BRIGHTNESS_CHANGED",
+            Self::AtomPersistentUriPermissionsFlushed => "ATOM_PERSISTENT_URI_PERMISSIONS_FLUSHED",
             Self::AtomEarlyBootCompOsArtifactsCheckReported => {
                 "ATOM_EARLY_BOOT_COMP_OS_ARTIFACTS_CHECK_REPORTED"
             }
@@ -3349,9 +3021,7 @@ impl AtomId {
             Self::AtomDropboxEntryDropped => "ATOM_DROPBOX_ENTRY_DROPPED",
             Self::AtomWifiP2pConnectionReported => "ATOM_WIFI_P2P_CONNECTION_REPORTED",
             Self::AtomGameStateChanged => "ATOM_GAME_STATE_CHANGED",
-            Self::AtomHotwordDetectorCreateRequested => {
-                "ATOM_HOTWORD_DETECTOR_CREATE_REQUESTED"
-            }
+            Self::AtomHotwordDetectorCreateRequested => "ATOM_HOTWORD_DETECTOR_CREATE_REQUESTED",
             Self::AtomHotwordDetectionServiceInitResultReported => {
                 "ATOM_HOTWORD_DETECTION_SERVICE_INIT_RESULT_REPORTED"
             }
@@ -3372,9 +3042,7 @@ impl AtomId {
             Self::AtomContactsIndexerUpdateStatsReported => {
                 "ATOM_CONTACTS_INDEXER_UPDATE_STATS_REPORTED"
             }
-            Self::AtomAppBackgroundRestrictionsInfo => {
-                "ATOM_APP_BACKGROUND_RESTRICTIONS_INFO"
-            }
+            Self::AtomAppBackgroundRestrictionsInfo => "ATOM_APP_BACKGROUND_RESTRICTIONS_INFO",
             Self::AtomMmsSmsProviderGetThreadIdFailed => {
                 "ATOM_MMS_SMS_PROVIDER_GET_THREAD_ID_FAILED"
             }
@@ -3391,9 +3059,7 @@ impl AtomId {
             Self::AtomLeAudioConnectionSessionReported => {
                 "ATOM_LE_AUDIO_CONNECTION_SESSION_REPORTED"
             }
-            Self::AtomLeAudioBroadcastSessionReported => {
-                "ATOM_LE_AUDIO_BROADCAST_SESSION_REPORTED"
-            }
+            Self::AtomLeAudioBroadcastSessionReported => "ATOM_LE_AUDIO_BROADCAST_SESSION_REPORTED",
             Self::AtomDreamUiEventReported => "ATOM_DREAM_UI_EVENT_REPORTED",
             Self::AtomTaskManagerEventReported => "ATOM_TASK_MANAGER_EVENT_REPORTED",
             Self::AtomCdmAssociationAction => "ATOM_CDM_ASSOCIATION_ACTION",
@@ -3406,68 +3072,42 @@ impl AtomId {
             Self::AtomAccessibilityTextReadingOptionsChanged => {
                 "ATOM_ACCESSIBILITY_TEXT_READING_OPTIONS_CHANGED"
             }
-            Self::AtomWifiSetupFailureCrashReported => {
-                "ATOM_WIFI_SETUP_FAILURE_CRASH_REPORTED"
-            }
+            Self::AtomWifiSetupFailureCrashReported => "ATOM_WIFI_SETUP_FAILURE_CRASH_REPORTED",
             Self::AtomUwbDeviceErrorReported => "ATOM_UWB_DEVICE_ERROR_REPORTED",
-            Self::AtomIsolatedCompilationScheduled => {
-                "ATOM_ISOLATED_COMPILATION_SCHEDULED"
-            }
+            Self::AtomIsolatedCompilationScheduled => "ATOM_ISOLATED_COMPILATION_SCHEDULED",
             Self::AtomIsolatedCompilationEnded => "ATOM_ISOLATED_COMPILATION_ENDED",
             Self::AtomOnsOpportunisticEsimProvisioningComplete => {
                 "ATOM_ONS_OPPORTUNISTIC_ESIM_PROVISIONING_COMPLETE"
             }
-            Self::AtomSystemServerPreWatchdogOccurred => {
-                "ATOM_SYSTEM_SERVER_PRE_WATCHDOG_OCCURRED"
-            }
+            Self::AtomSystemServerPreWatchdogOccurred => "ATOM_SYSTEM_SERVER_PRE_WATCHDOG_OCCURRED",
             Self::AtomTelephonyAnomalyDetected => "ATOM_TELEPHONY_ANOMALY_DETECTED",
             Self::AtomLetterboxPositionChanged => "ATOM_LETTERBOX_POSITION_CHANGED",
-            Self::AtomRemoteKeyProvisioningAttempt => {
-                "ATOM_REMOTE_KEY_PROVISIONING_ATTEMPT"
-            }
+            Self::AtomRemoteKeyProvisioningAttempt => "ATOM_REMOTE_KEY_PROVISIONING_ATTEMPT",
             Self::AtomRemoteKeyProvisioningNetworkInfo => {
                 "ATOM_REMOTE_KEY_PROVISIONING_NETWORK_INFO"
             }
-            Self::AtomRemoteKeyProvisioningTiming => {
-                "ATOM_REMOTE_KEY_PROVISIONING_TIMING"
-            }
-            Self::AtomMediaoutputOpInteractionReport => {
-                "ATOM_MEDIAOUTPUT_OP_INTERACTION_REPORT"
-            }
+            Self::AtomRemoteKeyProvisioningTiming => "ATOM_REMOTE_KEY_PROVISIONING_TIMING",
+            Self::AtomMediaoutputOpInteractionReport => "ATOM_MEDIAOUTPUT_OP_INTERACTION_REPORT",
             Self::AtomSyncExemptionOccurred => "ATOM_SYNC_EXEMPTION_OCCURRED",
             Self::AtomAutofillPresentationEventReported => {
                 "ATOM_AUTOFILL_PRESENTATION_EVENT_REPORTED"
             }
             Self::AtomDockStateChanged => "ATOM_DOCK_STATE_CHANGED",
             Self::AtomSafetySourceStateCollected => "ATOM_SAFETY_SOURCE_STATE_COLLECTED",
-            Self::AtomSafetyCenterSystemEventReported => {
-                "ATOM_SAFETY_CENTER_SYSTEM_EVENT_REPORTED"
-            }
-            Self::AtomSafetyCenterInteractionReported => {
-                "ATOM_SAFETY_CENTER_INTERACTION_REPORTED"
-            }
-            Self::AtomSettingsProviderSettingChanged => {
-                "ATOM_SETTINGS_PROVIDER_SETTING_CHANGED"
-            }
-            Self::AtomBroadcastDeliveryEventReported => {
-                "ATOM_BROADCAST_DELIVERY_EVENT_REPORTED"
-            }
-            Self::AtomServiceRequestEventReported => {
-                "ATOM_SERVICE_REQUEST_EVENT_REPORTED"
-            }
+            Self::AtomSafetyCenterSystemEventReported => "ATOM_SAFETY_CENTER_SYSTEM_EVENT_REPORTED",
+            Self::AtomSafetyCenterInteractionReported => "ATOM_SAFETY_CENTER_INTERACTION_REPORTED",
+            Self::AtomSettingsProviderSettingChanged => "ATOM_SETTINGS_PROVIDER_SETTING_CHANGED",
+            Self::AtomBroadcastDeliveryEventReported => "ATOM_BROADCAST_DELIVERY_EVENT_REPORTED",
+            Self::AtomServiceRequestEventReported => "ATOM_SERVICE_REQUEST_EVENT_REPORTED",
             Self::AtomProviderAcquisitionEventReported => {
                 "ATOM_PROVIDER_ACQUISITION_EVENT_REPORTED"
             }
-            Self::AtomBluetoothDeviceNameReported => {
-                "ATOM_BLUETOOTH_DEVICE_NAME_REPORTED"
-            }
+            Self::AtomBluetoothDeviceNameReported => "ATOM_BLUETOOTH_DEVICE_NAME_REPORTED",
             Self::AtomCbConfigUpdated => "ATOM_CB_CONFIG_UPDATED",
             Self::AtomCbModuleErrorReported => "ATOM_CB_MODULE_ERROR_REPORTED",
             Self::AtomCbServiceFeatureChanged => "ATOM_CB_SERVICE_FEATURE_CHANGED",
             Self::AtomCbReceiverFeatureChanged => "ATOM_CB_RECEIVER_FEATURE_CHANGED",
-            Self::AtomJsscriptengineLatencyReported => {
-                "ATOM_JSSCRIPTENGINE_LATENCY_REPORTED"
-            }
+            Self::AtomJsscriptengineLatencyReported => "ATOM_JSSCRIPTENGINE_LATENCY_REPORTED",
             Self::AtomPrivacySignalNotificationInteraction => {
                 "ATOM_PRIVACY_SIGNAL_NOTIFICATION_INTERACTION"
             }
@@ -3481,26 +3121,16 @@ impl AtomId {
                 "ATOM_MOBILE_DATA_DOWNLOAD_FILE_GROUP_STATUS_REPORTED"
             }
             Self::AtomAppCompactedV2 => "ATOM_APP_COMPACTED_V2",
-            Self::AtomAdServicesSettingsUsageReported => {
-                "ATOM_AD_SERVICES_SETTINGS_USAGE_REPORTED"
-            }
+            Self::AtomAdServicesSettingsUsageReported => "ATOM_AD_SERVICES_SETTINGS_USAGE_REPORTED",
             Self::AtomDisplayBrightnessChanged => "ATOM_DISPLAY_BRIGHTNESS_CHANGED",
             Self::AtomActivityActionBlocked => "ATOM_ACTIVITY_ACTION_BLOCKED",
-            Self::AtomBackgroundFetchProcessReported => {
-                "ATOM_BACKGROUND_FETCH_PROCESS_REPORTED"
-            }
+            Self::AtomBackgroundFetchProcessReported => "ATOM_BACKGROUND_FETCH_PROCESS_REPORTED",
             Self::AtomUpdateCustomAudienceProcessReported => {
                 "ATOM_UPDATE_CUSTOM_AUDIENCE_PROCESS_REPORTED"
             }
-            Self::AtomRunAdBiddingProcessReported => {
-                "ATOM_RUN_AD_BIDDING_PROCESS_REPORTED"
-            }
-            Self::AtomRunAdScoringProcessReported => {
-                "ATOM_RUN_AD_SCORING_PROCESS_REPORTED"
-            }
-            Self::AtomRunAdSelectionProcessReported => {
-                "ATOM_RUN_AD_SELECTION_PROCESS_REPORTED"
-            }
+            Self::AtomRunAdBiddingProcessReported => "ATOM_RUN_AD_BIDDING_PROCESS_REPORTED",
+            Self::AtomRunAdScoringProcessReported => "ATOM_RUN_AD_SCORING_PROCESS_REPORTED",
+            Self::AtomRunAdSelectionProcessReported => "ATOM_RUN_AD_SELECTION_PROCESS_REPORTED",
             Self::AtomRunAdBiddingPerCaProcessReported => {
                 "ATOM_RUN_AD_BIDDING_PER_CA_PROCESS_REPORTED"
             }
@@ -3510,14 +3140,10 @@ impl AtomId {
             Self::AtomMobileDataDownloadFileGroupStorageStatsReported => {
                 "ATOM_MOBILE_DATA_DOWNLOAD_FILE_GROUP_STORAGE_STATS_REPORTED"
             }
-            Self::AtomNetworkDnsServerSupportReported => {
-                "ATOM_NETWORK_DNS_SERVER_SUPPORT_REPORTED"
-            }
+            Self::AtomNetworkDnsServerSupportReported => "ATOM_NETWORK_DNS_SERVER_SUPPORT_REPORTED",
             Self::AtomVmBooted => "ATOM_VM_BOOTED",
             Self::AtomVmExited => "ATOM_VM_EXITED",
-            Self::AtomAmbientBrightnessStatsReported => {
-                "ATOM_AMBIENT_BRIGHTNESS_STATS_REPORTED"
-            }
+            Self::AtomAmbientBrightnessStatsReported => "ATOM_AMBIENT_BRIGHTNESS_STATS_REPORTED",
             Self::AtomMediametricsSpatializercapabilitiesReported => {
                 "ATOM_MEDIAMETRICS_SPATIALIZERCAPABILITIES_REPORTED"
             }
@@ -3534,24 +3160,18 @@ impl AtomId {
                 "ATOM_AD_SERVICES_MEASUREMENT_REGISTRATIONS"
             }
             Self::AtomHearingAidInfoReported => "ATOM_HEARING_AID_INFO_REPORTED",
-            Self::AtomDeviceWideJobConstraintChanged => {
-                "ATOM_DEVICE_WIDE_JOB_CONSTRAINT_CHANGED"
-            }
+            Self::AtomDeviceWideJobConstraintChanged => "ATOM_DEVICE_WIDE_JOB_CONSTRAINT_CHANGED",
             Self::AtomAmbientModeChanged => "ATOM_AMBIENT_MODE_CHANGED",
             Self::AtomAnrLatencyReported => "ATOM_ANR_LATENCY_REPORTED",
             Self::AtomResourceApiInfo => "ATOM_RESOURCE_API_INFO",
-            Self::AtomSystemDefaultNetworkChanged => {
-                "ATOM_SYSTEM_DEFAULT_NETWORK_CHANGED"
-            }
+            Self::AtomSystemDefaultNetworkChanged => "ATOM_SYSTEM_DEFAULT_NETWORK_CHANGED",
             Self::AtomIwlanSetupDataCallResultReported => {
                 "ATOM_IWLAN_SETUP_DATA_CALL_RESULT_REPORTED"
             }
             Self::AtomIwlanPdnDisconnectedReasonReported => {
                 "ATOM_IWLAN_PDN_DISCONNECTED_REASON_REPORTED"
             }
-            Self::AtomAirplaneModeSessionReported => {
-                "ATOM_AIRPLANE_MODE_SESSION_REPORTED"
-            }
+            Self::AtomAirplaneModeSessionReported => "ATOM_AIRPLANE_MODE_SESSION_REPORTED",
             Self::AtomVmCpuStatusReported => "ATOM_VM_CPU_STATUS_REPORTED",
             Self::AtomVmMemStatusReported => "ATOM_VM_MEM_STATUS_REPORTED",
             Self::AtomPackageInstallationSessionReported => {
@@ -3563,9 +3183,7 @@ impl AtomId {
             Self::AtomBluetoothDisconnectionReasonReported => {
                 "ATOM_BLUETOOTH_DISCONNECTION_REASON_REPORTED"
             }
-            Self::AtomBluetoothLocalVersionsReported => {
-                "ATOM_BLUETOOTH_LOCAL_VERSIONS_REPORTED"
-            }
+            Self::AtomBluetoothLocalVersionsReported => "ATOM_BLUETOOTH_LOCAL_VERSIONS_REPORTED",
             Self::AtomBluetoothRemoteSupportedFeaturesReported => {
                 "ATOM_BLUETOOTH_REMOTE_SUPPORTED_FEATURES_REPORTED"
             }
@@ -3573,24 +3191,16 @@ impl AtomId {
                 "ATOM_BLUETOOTH_LOCAL_SUPPORTED_FEATURES_REPORTED"
             }
             Self::AtomBluetoothGattAppInfo => "ATOM_BLUETOOTH_GATT_APP_INFO",
-            Self::AtomBrightnessConfigurationUpdated => {
-                "ATOM_BRIGHTNESS_CONFIGURATION_UPDATED"
-            }
-            Self::AtomAdServicesGetTopicsReported => {
-                "ATOM_AD_SERVICES_GET_TOPICS_REPORTED"
-            }
+            Self::AtomBrightnessConfigurationUpdated => "ATOM_BRIGHTNESS_CONFIGURATION_UPDATED",
+            Self::AtomAdServicesGetTopicsReported => "ATOM_AD_SERVICES_GET_TOPICS_REPORTED",
             Self::AtomAdServicesEpochComputationGetTopTopicsReported => {
                 "ATOM_AD_SERVICES_EPOCH_COMPUTATION_GET_TOP_TOPICS_REPORTED"
             }
             Self::AtomAdServicesEpochComputationClassifierReported => {
                 "ATOM_AD_SERVICES_EPOCH_COMPUTATION_CLASSIFIER_REPORTED"
             }
-            Self::AtomWearMediaOutputSwitcherLaunched => {
-                "ATOM_WEAR_MEDIA_OUTPUT_SWITCHER_LAUNCHED"
-            }
-            Self::AtomWearMediaOutputSwitcherFinished => {
-                "ATOM_WEAR_MEDIA_OUTPUT_SWITCHER_FINISHED"
-            }
+            Self::AtomWearMediaOutputSwitcherLaunched => "ATOM_WEAR_MEDIA_OUTPUT_SWITCHER_LAUNCHED",
+            Self::AtomWearMediaOutputSwitcherFinished => "ATOM_WEAR_MEDIA_OUTPUT_SWITCHER_FINISHED",
             Self::AtomWearMediaOutputSwitcherConnectionReported => {
                 "ATOM_WEAR_MEDIA_OUTPUT_SWITCHER_CONNECTION_REPORTED"
             }
@@ -3603,9 +3213,7 @@ impl AtomId {
             Self::AtomWearMediaOutputSwitcherConnectDeviceLatency => {
                 "ATOM_WEAR_MEDIA_OUTPUT_SWITCHER_CONNECT_DEVICE_LATENCY"
             }
-            Self::AtomPackageManagerSnapshotReported => {
-                "ATOM_PACKAGE_MANAGER_SNAPSHOT_REPORTED"
-            }
+            Self::AtomPackageManagerSnapshotReported => "ATOM_PACKAGE_MANAGER_SNAPSHOT_REPORTED",
             Self::AtomPackageManagerAppsFilterCacheBuildReported => {
                 "ATOM_PACKAGE_MANAGER_APPS_FILTER_CACHE_BUILD_REPORTED"
             }
@@ -3620,16 +3228,10 @@ impl AtomId {
             Self::AtomWsWatchFaceFavoriteActionReported => {
                 "ATOM_WS_WATCH_FACE_FAVORITE_ACTION_REPORTED"
             }
-            Self::AtomWsWatchFaceSetActionReported => {
-                "ATOM_WS_WATCH_FACE_SET_ACTION_REPORTED"
-            }
-            Self::AtomPackageUninstallationReported => {
-                "ATOM_PACKAGE_UNINSTALLATION_REPORTED"
-            }
+            Self::AtomWsWatchFaceSetActionReported => "ATOM_WS_WATCH_FACE_SET_ACTION_REPORTED",
+            Self::AtomPackageUninstallationReported => "ATOM_PACKAGE_UNINSTALLATION_REPORTED",
             Self::AtomGameModeChanged => "ATOM_GAME_MODE_CHANGED",
-            Self::AtomGameModeConfigurationChanged => {
-                "ATOM_GAME_MODE_CONFIGURATION_CHANGED"
-            }
+            Self::AtomGameModeConfigurationChanged => "ATOM_GAME_MODE_CONFIGURATION_CHANGED",
             Self::AtomBedtimeModeStateChanged => "ATOM_BEDTIME_MODE_STATE_CHANGED",
             Self::AtomNetworkSliceSessionEnded => "ATOM_NETWORK_SLICE_SESSION_ENDED",
             Self::AtomNetworkSliceDailyDataUsageReported => {
@@ -3642,9 +3244,7 @@ impl AtomId {
             Self::AtomGetTypeAccessedWithoutPermission => {
                 "ATOM_GET_TYPE_ACCESSED_WITHOUT_PERMISSION"
             }
-            Self::AtomMobileBundledAppInfoGathered => {
-                "ATOM_MOBILE_BUNDLED_APP_INFO_GATHERED"
-            }
+            Self::AtomMobileBundledAppInfoGathered => "ATOM_MOBILE_BUNDLED_APP_INFO_GATHERED",
             Self::AtomWsWatchFaceComplicationSetChanged => {
                 "ATOM_WS_WATCH_FACE_COMPLICATION_SET_CHANGED"
             }
@@ -3654,43 +3254,29 @@ impl AtomId {
             Self::AtomMediaDrmSessionClosed => "ATOM_MEDIA_DRM_SESSION_CLOSED",
             Self::AtomUserSelectedResolution => "ATOM_USER_SELECTED_RESOLUTION",
             Self::AtomUnsafeIntentEventReported => "ATOM_UNSAFE_INTENT_EVENT_REPORTED",
-            Self::AtomPerformanceHintSessionReported => {
-                "ATOM_PERFORMANCE_HINT_SESSION_REPORTED"
-            }
+            Self::AtomPerformanceHintSessionReported => "ATOM_PERFORMANCE_HINT_SESSION_REPORTED",
             Self::AtomMediametricsMidiDeviceCloseReported => {
                 "ATOM_MEDIAMETRICS_MIDI_DEVICE_CLOSE_REPORTED"
             }
             Self::AtomBiometricTouchReported => "ATOM_BIOMETRIC_TOUCH_REPORTED",
-            Self::AtomHotwordAudioEgressEventReported => {
-                "ATOM_HOTWORD_AUDIO_EGRESS_EVENT_REPORTED"
-            }
+            Self::AtomHotwordAudioEgressEventReported => "ATOM_HOTWORD_AUDIO_EGRESS_EVENT_REPORTED",
             Self::AtomAppSearchSchemaMigrationStatsReported => {
                 "ATOM_APP_SEARCH_SCHEMA_MIGRATION_STATS_REPORTED"
             }
-            Self::AtomLocationEnabledStateChanged => {
-                "ATOM_LOCATION_ENABLED_STATE_CHANGED"
-            }
+            Self::AtomLocationEnabledStateChanged => "ATOM_LOCATION_ENABLED_STATE_CHANGED",
             Self::AtomImeRequestFinished => "ATOM_IME_REQUEST_FINISHED",
-            Self::AtomUsbComplianceWarningsReported => {
-                "ATOM_USB_COMPLIANCE_WARNINGS_REPORTED"
-            }
+            Self::AtomUsbComplianceWarningsReported => "ATOM_USB_COMPLIANCE_WARNINGS_REPORTED",
             Self::AtomAppSupportedLocalesChanged => "ATOM_APP_SUPPORTED_LOCALES_CHANGED",
-            Self::AtomGrammaticalInflectionChanged => {
-                "ATOM_GRAMMATICAL_INFLECTION_CHANGED"
-            }
+            Self::AtomGrammaticalInflectionChanged => "ATOM_GRAMMATICAL_INFLECTION_CHANGED",
             Self::AtomMediaProviderVolumeRecoveryReported => {
                 "ATOM_MEDIA_PROVIDER_VOLUME_RECOVERY_REPORTED"
             }
-            Self::AtomBiometricPropertiesCollected => {
-                "ATOM_BIOMETRIC_PROPERTIES_COLLECTED"
-            }
+            Self::AtomBiometricPropertiesCollected => "ATOM_BIOMETRIC_PROPERTIES_COLLECTED",
             Self::AtomKernelWakeupAttributed => "ATOM_KERNEL_WAKEUP_ATTRIBUTED",
             Self::AtomScreenStateChangedV2 => "ATOM_SCREEN_STATE_CHANGED_V2",
             Self::AtomWsBackupActionReported => "ATOM_WS_BACKUP_ACTION_REPORTED",
             Self::AtomWsRestoreActionReported => "ATOM_WS_RESTORE_ACTION_REPORTED",
-            Self::AtomDeviceLogAccessEventReported => {
-                "ATOM_DEVICE_LOG_ACCESS_EVENT_REPORTED"
-            }
+            Self::AtomDeviceLogAccessEventReported => "ATOM_DEVICE_LOG_ACCESS_EVENT_REPORTED",
             Self::AtomMediaSessionUpdated => "ATOM_MEDIA_SESSION_UPDATED",
             Self::AtomWearOobeStateChanged => "ATOM_WEAR_OOBE_STATE_CHANGED",
             Self::AtomWsNotificationUpdated => "ATOM_WS_NOTIFICATION_UPDATED",
@@ -3757,24 +3343,16 @@ impl AtomId {
             Self::AtomCoolingDevice => "ATOM_COOLING_DEVICE",
             Self::AtomAppOps => "ATOM_APP_OPS",
             Self::AtomProcessSystemIonHeapSize => "ATOM_PROCESS_SYSTEM_ION_HEAP_SIZE",
-            Self::AtomSurfaceflingerStatsGlobalInfo => {
-                "ATOM_SURFACEFLINGER_STATS_GLOBAL_INFO"
-            }
-            Self::AtomSurfaceflingerStatsLayerInfo => {
-                "ATOM_SURFACEFLINGER_STATS_LAYER_INFO"
-            }
+            Self::AtomSurfaceflingerStatsGlobalInfo => "ATOM_SURFACEFLINGER_STATS_GLOBAL_INFO",
+            Self::AtomSurfaceflingerStatsLayerInfo => "ATOM_SURFACEFLINGER_STATS_LAYER_INFO",
             Self::AtomProcessMemorySnapshot => "ATOM_PROCESS_MEMORY_SNAPSHOT",
             Self::AtomVmsClientStats => "ATOM_VMS_CLIENT_STATS",
             Self::AtomNotificationRemoteViews => "ATOM_NOTIFICATION_REMOTE_VIEWS",
-            Self::AtomDangerousPermissionStateSampled => {
-                "ATOM_DANGEROUS_PERMISSION_STATE_SAMPLED"
-            }
+            Self::AtomDangerousPermissionStateSampled => "ATOM_DANGEROUS_PERMISSION_STATE_SAMPLED",
             Self::AtomGraphicsStats => "ATOM_GRAPHICS_STATS",
             Self::AtomRuntimeAppOpAccess => "ATOM_RUNTIME_APP_OP_ACCESS",
             Self::AtomIonHeapSize => "ATOM_ION_HEAP_SIZE",
-            Self::AtomPackageNotificationPreferences => {
-                "ATOM_PACKAGE_NOTIFICATION_PREFERENCES"
-            }
+            Self::AtomPackageNotificationPreferences => "ATOM_PACKAGE_NOTIFICATION_PREFERENCES",
             Self::AtomPackageNotificationChannelPreferences => {
                 "ATOM_PACKAGE_NOTIFICATION_CHANNEL_PREFERENCES"
             }
@@ -3790,9 +3368,7 @@ impl AtomId {
             Self::AtomSettingSnapshot => "ATOM_SETTING_SNAPSHOT",
             Self::AtomBlobInfo => "ATOM_BLOB_INFO",
             Self::AtomDataUsageBytesTransfer => "ATOM_DATA_USAGE_BYTES_TRANSFER",
-            Self::AtomBytesTransferByTagAndMetered => {
-                "ATOM_BYTES_TRANSFER_BY_TAG_AND_METERED"
-            }
+            Self::AtomBytesTransferByTagAndMetered => "ATOM_BYTES_TRANSFER_BY_TAG_AND_METERED",
             Self::AtomDndModeRule => "ATOM_DND_MODE_RULE",
             Self::AtomGeneralExternalStorageAccessStats => {
                 "ATOM_GENERAL_EXTERNAL_STORAGE_ACCESS_STATS"
@@ -3809,9 +3385,7 @@ impl AtomId {
             Self::AtomCpuTimePerClusterFreq => "ATOM_CPU_TIME_PER_CLUSTER_FREQ",
             Self::AtomCpuCyclesPerUidCluster => "ATOM_CPU_CYCLES_PER_UID_CLUSTER",
             Self::AtomDeviceRotatedData => "ATOM_DEVICE_ROTATED_DATA",
-            Self::AtomCpuCyclesPerThreadGroupCluster => {
-                "ATOM_CPU_CYCLES_PER_THREAD_GROUP_CLUSTER"
-            }
+            Self::AtomCpuCyclesPerThreadGroupCluster => "ATOM_CPU_CYCLES_PER_THREAD_GROUP_CLUSTER",
             Self::AtomMediaDrmActivityInfo => "ATOM_MEDIA_DRM_ACTIVITY_INFO",
             Self::AtomOemManagedBytesTransfer => "ATOM_OEM_MANAGED_BYTES_TRANSFER",
             Self::AtomGnssPowerStats => "ATOM_GNSS_POWER_STATS",
@@ -3824,12 +3398,8 @@ impl AtomId {
             Self::AtomLauncherLayoutSnapshot => "ATOM_LAUNCHER_LAYOUT_SNAPSHOT",
             Self::AtomGlobalHibernatedApps => "ATOM_GLOBAL_HIBERNATED_APPS",
             Self::AtomInputEventLatencySketch => "ATOM_INPUT_EVENT_LATENCY_SKETCH",
-            Self::AtomBatteryUsageStatsBeforeReset => {
-                "ATOM_BATTERY_USAGE_STATS_BEFORE_RESET"
-            }
-            Self::AtomBatteryUsageStatsSinceReset => {
-                "ATOM_BATTERY_USAGE_STATS_SINCE_RESET"
-            }
+            Self::AtomBatteryUsageStatsBeforeReset => "ATOM_BATTERY_USAGE_STATS_BEFORE_RESET",
+            Self::AtomBatteryUsageStatsSinceReset => "ATOM_BATTERY_USAGE_STATS_SINCE_RESET",
             Self::AtomBatteryUsageStatsSinceResetUsingPowerProfileModel => {
                 "ATOM_BATTERY_USAGE_STATS_SINCE_RESET_USING_POWER_PROFILE_MODEL"
             }
@@ -3857,35 +3427,23 @@ impl AtomId {
             Self::AtomKeystore2CrashStats => "ATOM_KEYSTORE2_CRASH_STATS",
             Self::AtomVendorApexInfo => "ATOM_VENDOR_APEX_INFO",
             Self::AtomAccessibilityShortcutStats => "ATOM_ACCESSIBILITY_SHORTCUT_STATS",
-            Self::AtomAccessibilityFloatingMenuStats => {
-                "ATOM_ACCESSIBILITY_FLOATING_MENU_STATS"
-            }
+            Self::AtomAccessibilityFloatingMenuStats => "ATOM_ACCESSIBILITY_FLOATING_MENU_STATS",
             Self::AtomDataUsageBytesTransferV2 => "ATOM_DATA_USAGE_BYTES_TRANSFER_V2",
             Self::AtomMediaCapabilities => "ATOM_MEDIA_CAPABILITIES",
             Self::AtomCarWatchdogSystemIoUsageSummary => {
                 "ATOM_CAR_WATCHDOG_SYSTEM_IO_USAGE_SUMMARY"
             }
-            Self::AtomCarWatchdogUidIoUsageSummary => {
-                "ATOM_CAR_WATCHDOG_UID_IO_USAGE_SUMMARY"
-            }
-            Self::AtomImsRegistrationFeatureTagStats => {
-                "ATOM_IMS_REGISTRATION_FEATURE_TAG_STATS"
-            }
+            Self::AtomCarWatchdogUidIoUsageSummary => "ATOM_CAR_WATCHDOG_UID_IO_USAGE_SUMMARY",
+            Self::AtomImsRegistrationFeatureTagStats => "ATOM_IMS_REGISTRATION_FEATURE_TAG_STATS",
             Self::AtomRcsClientProvisioningStats => "ATOM_RCS_CLIENT_PROVISIONING_STATS",
             Self::AtomRcsAcsProvisioningStats => "ATOM_RCS_ACS_PROVISIONING_STATS",
             Self::AtomSipDelegateStats => "ATOM_SIP_DELEGATE_STATS",
-            Self::AtomSipTransportFeatureTagStats => {
-                "ATOM_SIP_TRANSPORT_FEATURE_TAG_STATS"
-            }
+            Self::AtomSipTransportFeatureTagStats => "ATOM_SIP_TRANSPORT_FEATURE_TAG_STATS",
             Self::AtomSipMessageResponse => "ATOM_SIP_MESSAGE_RESPONSE",
             Self::AtomSipTransportSession => "ATOM_SIP_TRANSPORT_SESSION",
-            Self::AtomImsDedicatedBearerListenerEvent => {
-                "ATOM_IMS_DEDICATED_BEARER_LISTENER_EVENT"
-            }
+            Self::AtomImsDedicatedBearerListenerEvent => "ATOM_IMS_DEDICATED_BEARER_LISTENER_EVENT",
             Self::AtomImsDedicatedBearerEvent => "ATOM_IMS_DEDICATED_BEARER_EVENT",
-            Self::AtomImsRegistrationServiceDescStats => {
-                "ATOM_IMS_REGISTRATION_SERVICE_DESC_STATS"
-            }
+            Self::AtomImsRegistrationServiceDescStats => "ATOM_IMS_REGISTRATION_SERVICE_DESC_STATS",
             Self::AtomUceEventStats => "ATOM_UCE_EVENT_STATS",
             Self::AtomPresenceNotifyEvent => "ATOM_PRESENCE_NOTIFY_EVENT",
             Self::AtomGbaEvent => "ATOM_GBA_EVENT",
@@ -3937,13 +3495,9 @@ impl AtomId {
             Self::AtomWifiLockReleased => "ATOM_WIFI_LOCK_RELEASED",
             Self::AtomWifiLockDeactivated => "ATOM_WIFI_LOCK_DEACTIVATED",
             Self::AtomWifiConfigSaved => "ATOM_WIFI_CONFIG_SAVED",
-            Self::AtomWifiAwareResourceUsingChanged => {
-                "ATOM_WIFI_AWARE_RESOURCE_USING_CHANGED"
-            }
+            Self::AtomWifiAwareResourceUsingChanged => "ATOM_WIFI_AWARE_RESOURCE_USING_CHANGED",
             Self::AtomWifiAwareHalApiCalled => "ATOM_WIFI_AWARE_HAL_API_CALLED",
-            Self::AtomWifiLocalOnlyRequestReceived => {
-                "ATOM_WIFI_LOCAL_ONLY_REQUEST_RECEIVED"
-            }
+            Self::AtomWifiLocalOnlyRequestReceived => "ATOM_WIFI_LOCAL_ONLY_REQUEST_RECEIVED",
             Self::AtomWifiLocalOnlyRequestScanTriggered => {
                 "ATOM_WIFI_LOCAL_ONLY_REQUEST_SCAN_TRIGGERED"
             }
@@ -3953,16 +3507,12 @@ impl AtomId {
             Self::AtomWifiModuleInfo => "ATOM_WIFI_MODULE_INFO",
             Self::AtomSettingsSpaReported => "ATOM_SETTINGS_SPA_REPORTED",
             Self::AtomExpressEventReported => "ATOM_EXPRESS_EVENT_REPORTED",
-            Self::AtomExpressHistogramSampleReported => {
-                "ATOM_EXPRESS_HISTOGRAM_SAMPLE_REPORTED"
-            }
+            Self::AtomExpressHistogramSampleReported => "ATOM_EXPRESS_HISTOGRAM_SAMPLE_REPORTED",
             Self::AtomExpressUidEventReported => "ATOM_EXPRESS_UID_EVENT_REPORTED",
             Self::AtomExpressUidHistogramSampleReported => {
                 "ATOM_EXPRESS_UID_HISTOGRAM_SAMPLE_REPORTED"
             }
-            Self::AtomPermissionRationaleDialogViewed => {
-                "ATOM_PERMISSION_RATIONALE_DIALOG_VIEWED"
-            }
+            Self::AtomPermissionRationaleDialogViewed => "ATOM_PERMISSION_RATIONALE_DIALOG_VIEWED",
             Self::AtomPermissionRationaleDialogActionReported => {
                 "ATOM_PERMISSION_RATIONALE_DIALOG_ACTION_REPORTED"
             }
@@ -3975,12 +3525,8 @@ impl AtomId {
             Self::AtomAppDataSharingUpdatesFragmentActionReported => {
                 "ATOM_APP_DATA_SHARING_UPDATES_FRAGMENT_ACTION_REPORTED"
             }
-            Self::AtomWsIncomingCallActionReported => {
-                "ATOM_WS_INCOMING_CALL_ACTION_REPORTED"
-            }
-            Self::AtomWsCallDisconnectionReported => {
-                "ATOM_WS_CALL_DISCONNECTION_REPORTED"
-            }
+            Self::AtomWsIncomingCallActionReported => "ATOM_WS_INCOMING_CALL_ACTION_REPORTED",
+            Self::AtomWsCallDisconnectionReported => "ATOM_WS_CALL_DISCONNECTION_REPORTED",
             Self::AtomWsCallDurationReported => "ATOM_WS_CALL_DURATION_REPORTED",
             Self::AtomWsCallUserExperienceLatencyReported => {
                 "ATOM_WS_CALL_USER_EXPERIENCE_LATENCY_REPORTED"
@@ -4014,9 +3560,7 @@ impl AtomId {
             Self::AtomAdServicesBackCompatEpochComputationClassifierReported => {
                 "ATOM_AD_SERVICES_BACK_COMPAT_EPOCH_COMPUTATION_CLASSIFIER_REPORTED"
             }
-            Self::AtomAdServicesMeasurementDebugKeys => {
-                "ATOM_AD_SERVICES_MEASUREMENT_DEBUG_KEYS"
-            }
+            Self::AtomAdServicesMeasurementDebugKeys => "ATOM_AD_SERVICES_MEASUREMENT_DEBUG_KEYS",
             Self::AtomAdServicesErrorReported => "ATOM_AD_SERVICES_ERROR_REPORTED",
             Self::AtomAdServicesBackgroundJobsExecutionReported => {
                 "ATOM_AD_SERVICES_BACKGROUND_JOBS_EXECUTION_REPORTED"
@@ -4028,19 +3572,13 @@ impl AtomId {
                 "ATOM_AD_SERVICES_MEASUREMENT_ATTRIBUTION"
             }
             Self::AtomAdServicesMeasurementJobs => "ATOM_AD_SERVICES_MEASUREMENT_JOBS",
-            Self::AtomAdServicesMeasurementWipeout => {
-                "ATOM_AD_SERVICES_MEASUREMENT_WIPEOUT"
-            }
+            Self::AtomAdServicesMeasurementWipeout => "ATOM_AD_SERVICES_MEASUREMENT_WIPEOUT",
             Self::AtomAdServicesConsentMigrated => "ATOM_AD_SERVICES_CONSENT_MIGRATED",
             Self::AtomRkpdPoolStats => "ATOM_RKPD_POOL_STATS",
             Self::AtomRkpdClientOperation => "ATOM_RKPD_CLIENT_OPERATION",
             Self::AtomAutofillUiEventReported => "ATOM_AUTOFILL_UI_EVENT_REPORTED",
-            Self::AtomAutofillFillRequestReported => {
-                "ATOM_AUTOFILL_FILL_REQUEST_REPORTED"
-            }
-            Self::AtomAutofillFillResponseReported => {
-                "ATOM_AUTOFILL_FILL_RESPONSE_REPORTED"
-            }
+            Self::AtomAutofillFillRequestReported => "ATOM_AUTOFILL_FILL_REQUEST_REPORTED",
+            Self::AtomAutofillFillResponseReported => "ATOM_AUTOFILL_FILL_RESPONSE_REPORTED",
             Self::AtomAutofillSaveEventReported => "ATOM_AUTOFILL_SAVE_EVENT_REPORTED",
             Self::AtomAutofillSessionCommitted => "ATOM_AUTOFILL_SESSION_COMMITTED",
             Self::AtomAutofillFieldClassificationEventReported => {
@@ -4056,12 +3594,8 @@ impl AtomId {
             Self::AtomEmergencyNumbersInfo => "ATOM_EMERGENCY_NUMBERS_INFO",
             Self::AtomQualifiedRatListChanged => "ATOM_QUALIFIED_RAT_LIST_CHANGED",
             Self::AtomQnsImsCallDropStats => "ATOM_QNS_IMS_CALL_DROP_STATS",
-            Self::AtomQnsFallbackRestrictionChanged => {
-                "ATOM_QNS_FALLBACK_RESTRICTION_CHANGED"
-            }
-            Self::AtomQnsRatPreferenceMismatchInfo => {
-                "ATOM_QNS_RAT_PREFERENCE_MISMATCH_INFO"
-            }
+            Self::AtomQnsFallbackRestrictionChanged => "ATOM_QNS_FALLBACK_RESTRICTION_CHANGED",
+            Self::AtomQnsRatPreferenceMismatchInfo => "ATOM_QNS_RAT_PREFERENCE_MISMATCH_INFO",
             Self::AtomQnsHandoverTimeMillis => "ATOM_QNS_HANDOVER_TIME_MILLIS",
             Self::AtomQnsHandoverPingpong => "ATOM_QNS_HANDOVER_PINGPONG",
             Self::AtomSatelliteController => "ATOM_SATELLITE_CONTROLLER",
@@ -4069,9 +3603,7 @@ impl AtomId {
             Self::AtomSatelliteIncomingDatagram => "ATOM_SATELLITE_INCOMING_DATAGRAM",
             Self::AtomSatelliteOutgoingDatagram => "ATOM_SATELLITE_OUTGOING_DATAGRAM",
             Self::AtomSatelliteProvision => "ATOM_SATELLITE_PROVISION",
-            Self::AtomSatelliteSosMessageRecommender => {
-                "ATOM_SATELLITE_SOS_MESSAGE_RECOMMENDER"
-            }
+            Self::AtomSatelliteSosMessageRecommender => "ATOM_SATELLITE_SOS_MESSAGE_RECOMMENDER",
             Self::AtomIkeSessionTerminated => "ATOM_IKE_SESSION_TERMINATED",
             Self::AtomIkeLivenessCheckSessionValidated => {
                 "ATOM_IKE_LIVENESS_CHECK_SESSION_VALIDATED"
@@ -4085,9 +3617,7 @@ impl AtomId {
             Self::AtomBluetoothL2capCocServerConnection => {
                 "ATOM_BLUETOOTH_L2CAP_COC_SERVER_CONNECTION"
             }
-            Self::AtomBluetoothLeSessionConnected => {
-                "ATOM_BLUETOOTH_LE_SESSION_CONNECTED"
-            }
+            Self::AtomBluetoothLeSessionConnected => "ATOM_BLUETOOTH_LE_SESSION_CONNECTED",
             Self::AtomRestrictedBluetoothDeviceNameReported => {
                 "ATOM_RESTRICTED_BLUETOOTH_DEVICE_NAME_REPORTED"
             }
@@ -4096,9 +3626,7 @@ impl AtomId {
             }
             Self::AtomHealthConnectUiImpression => "ATOM_HEALTH_CONNECT_UI_IMPRESSION",
             Self::AtomHealthConnectUiInteraction => "ATOM_HEALTH_CONNECT_UI_INTERACTION",
-            Self::AtomHealthConnectAppOpenedReported => {
-                "ATOM_HEALTH_CONNECT_APP_OPENED_REPORTED"
-            }
+            Self::AtomHealthConnectAppOpenedReported => "ATOM_HEALTH_CONNECT_APP_OPENED_REPORTED",
             Self::AtomHealthConnectApiCalled => "ATOM_HEALTH_CONNECT_API_CALLED",
             Self::AtomHealthConnectUsageStats => "ATOM_HEALTH_CONNECT_USAGE_STATS",
             Self::AtomHealthConnectStorageStats => "ATOM_HEALTH_CONNECT_STORAGE_STATS",
@@ -4109,23 +3637,15 @@ impl AtomId {
             Self::AtomThreadnetworkTelemetryDataReported => {
                 "ATOM_THREADNETWORK_TELEMETRY_DATA_REPORTED"
             }
-            Self::AtomThreadnetworkTopoEntryRepeated => {
-                "ATOM_THREADNETWORK_TOPO_ENTRY_REPEATED"
-            }
-            Self::AtomThreadnetworkDeviceInfoReported => {
-                "ATOM_THREADNETWORK_DEVICE_INFO_REPORTED"
-            }
+            Self::AtomThreadnetworkTopoEntryRepeated => "ATOM_THREADNETWORK_TOPO_ENTRY_REPEATED",
+            Self::AtomThreadnetworkDeviceInfoReported => "ATOM_THREADNETWORK_DEVICE_INFO_REPORTED",
             Self::AtomEmergencyNumberDialed => "ATOM_EMERGENCY_NUMBER_DIALED",
             Self::AtomSandboxApiCalled => "ATOM_SANDBOX_API_CALLED",
-            Self::AtomSandboxActivityEventOccurred => {
-                "ATOM_SANDBOX_ACTIVITY_EVENT_OCCURRED"
-            }
+            Self::AtomSandboxActivityEventOccurred => "ATOM_SANDBOX_ACTIVITY_EVENT_OCCURRED",
             Self::AtomSandboxSdkStorage => "ATOM_SANDBOX_SDK_STORAGE",
             Self::AtomCronetEngineCreated => "ATOM_CRONET_ENGINE_CREATED",
             Self::AtomCronetTrafficReported => "ATOM_CRONET_TRAFFIC_REPORTED",
-            Self::AtomCronetEngineBuilderInitialized => {
-                "ATOM_CRONET_ENGINE_BUILDER_INITIALIZED"
-            }
+            Self::AtomCronetEngineBuilderInitialized => "ATOM_CRONET_ENGINE_BUILDER_INITIALIZED",
             Self::AtomCronetHttpFlagsInitialized => "ATOM_CRONET_HTTP_FLAGS_INITIALIZED",
             Self::AtomCronetInitialized => "ATOM_CRONET_INITIALIZED",
             Self::AtomDailyKeepaliveInfoReported => "ATOM_DAILY_KEEPALIVE_INFO_REPORTED",
@@ -4141,21 +3661,15 @@ impl AtomId {
             Self::AtomCredentialManagerFinalPhaseReported => {
                 "ATOM_CREDENTIAL_MANAGER_FINAL_PHASE_REPORTED"
             }
-            Self::AtomCredentialManagerTotalReported => {
-                "ATOM_CREDENTIAL_MANAGER_TOTAL_REPORTED"
-            }
+            Self::AtomCredentialManagerTotalReported => "ATOM_CREDENTIAL_MANAGER_TOTAL_REPORTED",
             Self::AtomCredentialManagerFinalnouidReported => {
                 "ATOM_CREDENTIAL_MANAGER_FINALNOUID_REPORTED"
             }
-            Self::AtomCredentialManagerGetReported => {
-                "ATOM_CREDENTIAL_MANAGER_GET_REPORTED"
-            }
+            Self::AtomCredentialManagerGetReported => "ATOM_CREDENTIAL_MANAGER_GET_REPORTED",
             Self::AtomCredentialManagerAuthClickReported => {
                 "ATOM_CREDENTIAL_MANAGER_AUTH_CLICK_REPORTED"
             }
-            Self::AtomCredentialManagerApiv2Called => {
-                "ATOM_CREDENTIAL_MANAGER_APIV2_CALLED"
-            }
+            Self::AtomCredentialManagerApiv2Called => "ATOM_CREDENTIAL_MANAGER_APIV2_CALLED",
             Self::AtomUwbActivityInfo => "ATOM_UWB_ACTIVITY_INFO",
             Self::AtomMediaActionReported => "ATOM_MEDIA_ACTION_REPORTED",
             Self::AtomMediaControlsLaunched => "ATOM_MEDIA_CONTROLS_LAUNCHED",
@@ -4177,51 +3691,31 @@ impl AtomId {
             "ATOM_SENSOR_STATE_CHANGED" => Some(Self::AtomSensorStateChanged),
             "ATOM_GPS_SCAN_STATE_CHANGED" => Some(Self::AtomGpsScanStateChanged),
             "ATOM_SYNC_STATE_CHANGED" => Some(Self::AtomSyncStateChanged),
-            "ATOM_SCHEDULED_JOB_STATE_CHANGED" => {
-                Some(Self::AtomScheduledJobStateChanged)
-            }
+            "ATOM_SCHEDULED_JOB_STATE_CHANGED" => Some(Self::AtomScheduledJobStateChanged),
             "ATOM_SCREEN_BRIGHTNESS_CHANGED" => Some(Self::AtomScreenBrightnessChanged),
             "ATOM_WAKELOCK_STATE_CHANGED" => Some(Self::AtomWakelockStateChanged),
             "ATOM_LONG_PARTIAL_WAKELOCK_STATE_CHANGED" => {
                 Some(Self::AtomLongPartialWakelockStateChanged)
             }
-            "ATOM_MOBILE_RADIO_POWER_STATE_CHANGED" => {
-                Some(Self::AtomMobileRadioPowerStateChanged)
-            }
-            "ATOM_WIFI_RADIO_POWER_STATE_CHANGED" => {
-                Some(Self::AtomWifiRadioPowerStateChanged)
-            }
+            "ATOM_MOBILE_RADIO_POWER_STATE_CHANGED" => Some(Self::AtomMobileRadioPowerStateChanged),
+            "ATOM_WIFI_RADIO_POWER_STATE_CHANGED" => Some(Self::AtomWifiRadioPowerStateChanged),
             "ATOM_ACTIVITY_MANAGER_SLEEP_STATE_CHANGED" => {
                 Some(Self::AtomActivityManagerSleepStateChanged)
             }
-            "ATOM_MEMORY_FACTOR_STATE_CHANGED" => {
-                Some(Self::AtomMemoryFactorStateChanged)
-            }
-            "ATOM_EXCESSIVE_CPU_USAGE_REPORTED" => {
-                Some(Self::AtomExcessiveCpuUsageReported)
-            }
+            "ATOM_MEMORY_FACTOR_STATE_CHANGED" => Some(Self::AtomMemoryFactorStateChanged),
+            "ATOM_EXCESSIVE_CPU_USAGE_REPORTED" => Some(Self::AtomExcessiveCpuUsageReported),
             "ATOM_CACHED_KILL_REPORTED" => Some(Self::AtomCachedKillReported),
-            "ATOM_PROCESS_MEMORY_STAT_REPORTED" => {
-                Some(Self::AtomProcessMemoryStatReported)
-            }
+            "ATOM_PROCESS_MEMORY_STAT_REPORTED" => Some(Self::AtomProcessMemoryStatReported),
             "ATOM_LAUNCHER_EVENT" => Some(Self::AtomLauncherEvent),
-            "ATOM_BATTERY_SAVER_MODE_STATE_CHANGED" => {
-                Some(Self::AtomBatterySaverModeStateChanged)
-            }
-            "ATOM_DEVICE_IDLE_MODE_STATE_CHANGED" => {
-                Some(Self::AtomDeviceIdleModeStateChanged)
-            }
-            "ATOM_DEVICE_IDLING_MODE_STATE_CHANGED" => {
-                Some(Self::AtomDeviceIdlingModeStateChanged)
-            }
+            "ATOM_BATTERY_SAVER_MODE_STATE_CHANGED" => Some(Self::AtomBatterySaverModeStateChanged),
+            "ATOM_DEVICE_IDLE_MODE_STATE_CHANGED" => Some(Self::AtomDeviceIdleModeStateChanged),
+            "ATOM_DEVICE_IDLING_MODE_STATE_CHANGED" => Some(Self::AtomDeviceIdlingModeStateChanged),
             "ATOM_AUDIO_STATE_CHANGED" => Some(Self::AtomAudioStateChanged),
             "ATOM_MEDIA_CODEC_STATE_CHANGED" => Some(Self::AtomMediaCodecStateChanged),
             "ATOM_CAMERA_STATE_CHANGED" => Some(Self::AtomCameraStateChanged),
             "ATOM_FLASHLIGHT_STATE_CHANGED" => Some(Self::AtomFlashlightStateChanged),
             "ATOM_UID_PROCESS_STATE_CHANGED" => Some(Self::AtomUidProcessStateChanged),
-            "ATOM_PROCESS_LIFE_CYCLE_STATE_CHANGED" => {
-                Some(Self::AtomProcessLifeCycleStateChanged)
-            }
+            "ATOM_PROCESS_LIFE_CYCLE_STATE_CHANGED" => Some(Self::AtomProcessLifeCycleStateChanged),
             "ATOM_SCREEN_STATE_CHANGED" => Some(Self::AtomScreenStateChanged),
             "ATOM_BATTERY_LEVEL_CHANGED" => Some(Self::AtomBatteryLevelChanged),
             "ATOM_CHARGING_STATE_CHANGED" => Some(Self::AtomChargingStateChanged),
@@ -4231,13 +3725,9 @@ impl AtomId {
             "ATOM_WAKEUP_ALARM_OCCURRED" => Some(Self::AtomWakeupAlarmOccurred),
             "ATOM_KERNEL_WAKEUP_REPORTED" => Some(Self::AtomKernelWakeupReported),
             "ATOM_WIFI_LOCK_STATE_CHANGED" => Some(Self::AtomWifiLockStateChanged),
-            "ATOM_WIFI_SIGNAL_STRENGTH_CHANGED" => {
-                Some(Self::AtomWifiSignalStrengthChanged)
-            }
+            "ATOM_WIFI_SIGNAL_STRENGTH_CHANGED" => Some(Self::AtomWifiSignalStrengthChanged),
             "ATOM_WIFI_SCAN_STATE_CHANGED" => Some(Self::AtomWifiScanStateChanged),
-            "ATOM_PHONE_SIGNAL_STRENGTH_CHANGED" => {
-                Some(Self::AtomPhoneSignalStrengthChanged)
-            }
+            "ATOM_PHONE_SIGNAL_STRENGTH_CHANGED" => Some(Self::AtomPhoneSignalStrengthChanged),
             "ATOM_SETTING_CHANGED" => Some(Self::AtomSettingChanged),
             "ATOM_ACTIVITY_FOREGROUND_STATE_CHANGED" => {
                 Some(Self::AtomActivityForegroundStateChanged)
@@ -4251,16 +3741,12 @@ impl AtomId {
             "ATOM_APP_START_CANCELED" => Some(Self::AtomAppStartCanceled),
             "ATOM_APP_START_FULLY_DRAWN" => Some(Self::AtomAppStartFullyDrawn),
             "ATOM_LMK_KILL_OCCURRED" => Some(Self::AtomLmkKillOccurred),
-            "ATOM_PICTURE_IN_PICTURE_STATE_CHANGED" => {
-                Some(Self::AtomPictureInPictureStateChanged)
-            }
+            "ATOM_PICTURE_IN_PICTURE_STATE_CHANGED" => Some(Self::AtomPictureInPictureStateChanged),
             "ATOM_WIFI_MULTICAST_LOCK_STATE_CHANGED" => {
                 Some(Self::AtomWifiMulticastLockStateChanged)
             }
             "ATOM_LMK_STATE_CHANGED" => Some(Self::AtomLmkStateChanged),
-            "ATOM_APP_START_MEMORY_STATE_CAPTURED" => {
-                Some(Self::AtomAppStartMemoryStateCaptured)
-            }
+            "ATOM_APP_START_MEMORY_STATE_CAPTURED" => Some(Self::AtomAppStartMemoryStateCaptured),
             "ATOM_SHUTDOWN_SEQUENCE_REPORTED" => Some(Self::AtomShutdownSequenceReported),
             "ATOM_BOOT_SEQUENCE_REPORTED" => Some(Self::AtomBootSequenceReported),
             "ATOM_DAVEY_OCCURRED" => Some(Self::AtomDaveyOccurred),
@@ -4270,36 +3756,24 @@ impl AtomId {
             }
             "ATOM_CALL_STATE_CHANGED" => Some(Self::AtomCallStateChanged),
             "ATOM_KEYGUARD_STATE_CHANGED" => Some(Self::AtomKeyguardStateChanged),
-            "ATOM_KEYGUARD_BOUNCER_STATE_CHANGED" => {
-                Some(Self::AtomKeyguardBouncerStateChanged)
-            }
+            "ATOM_KEYGUARD_BOUNCER_STATE_CHANGED" => Some(Self::AtomKeyguardBouncerStateChanged),
             "ATOM_KEYGUARD_BOUNCER_PASSWORD_ENTERED" => {
                 Some(Self::AtomKeyguardBouncerPasswordEntered)
             }
             "ATOM_APP_DIED" => Some(Self::AtomAppDied),
-            "ATOM_RESOURCE_CONFIGURATION_CHANGED" => {
-                Some(Self::AtomResourceConfigurationChanged)
-            }
-            "ATOM_BLUETOOTH_ENABLED_STATE_CHANGED" => {
-                Some(Self::AtomBluetoothEnabledStateChanged)
-            }
+            "ATOM_RESOURCE_CONFIGURATION_CHANGED" => Some(Self::AtomResourceConfigurationChanged),
+            "ATOM_BLUETOOTH_ENABLED_STATE_CHANGED" => Some(Self::AtomBluetoothEnabledStateChanged),
             "ATOM_BLUETOOTH_CONNECTION_STATE_CHANGED" => {
                 Some(Self::AtomBluetoothConnectionStateChanged)
             }
             "ATOM_GPS_SIGNAL_QUALITY_CHANGED" => Some(Self::AtomGpsSignalQualityChanged),
-            "ATOM_USB_CONNECTOR_STATE_CHANGED" => {
-                Some(Self::AtomUsbConnectorStateChanged)
-            }
+            "ATOM_USB_CONNECTOR_STATE_CHANGED" => Some(Self::AtomUsbConnectorStateChanged),
             "ATOM_SPEAKER_IMPEDANCE_REPORTED" => Some(Self::AtomSpeakerImpedanceReported),
             "ATOM_HARDWARE_FAILED" => Some(Self::AtomHardwareFailed),
             "ATOM_PHYSICAL_DROP_DETECTED" => Some(Self::AtomPhysicalDropDetected),
             "ATOM_CHARGE_CYCLES_REPORTED" => Some(Self::AtomChargeCyclesReported),
-            "ATOM_MOBILE_CONNECTION_STATE_CHANGED" => {
-                Some(Self::AtomMobileConnectionStateChanged)
-            }
-            "ATOM_MOBILE_RADIO_TECHNOLOGY_CHANGED" => {
-                Some(Self::AtomMobileRadioTechnologyChanged)
-            }
+            "ATOM_MOBILE_CONNECTION_STATE_CHANGED" => Some(Self::AtomMobileConnectionStateChanged),
+            "ATOM_MOBILE_RADIO_TECHNOLOGY_CHANGED" => Some(Self::AtomMobileRadioTechnologyChanged),
             "ATOM_USB_DEVICE_ATTACHED" => Some(Self::AtomUsbDeviceAttached),
             "ATOM_APP_CRASH_OCCURRED" => Some(Self::AtomAppCrashOccurred),
             "ATOM_ANR_OCCURRED" => Some(Self::AtomAnrOccurred),
@@ -4307,9 +3781,7 @@ impl AtomId {
             "ATOM_LOW_MEM_REPORTED" => Some(Self::AtomLowMemReported),
             "ATOM_GENERIC_ATOM" => Some(Self::AtomGenericAtom),
             "ATOM_VIBRATOR_STATE_CHANGED" => Some(Self::AtomVibratorStateChanged),
-            "ATOM_DEFERRED_JOB_STATS_REPORTED" => {
-                Some(Self::AtomDeferredJobStatsReported)
-            }
+            "ATOM_DEFERRED_JOB_STATS_REPORTED" => Some(Self::AtomDeferredJobStatsReported),
             "ATOM_THERMAL_THROTTLING" => Some(Self::AtomThermalThrottling),
             "ATOM_BIOMETRIC_ACQUIRED" => Some(Self::AtomBiometricAcquired),
             "ATOM_BIOMETRIC_AUTHENTICATED" => Some(Self::AtomBiometricAuthenticated),
@@ -4318,9 +3790,7 @@ impl AtomId {
             "ATOM_BATTERY_HEALTH_SNAPSHOT" => Some(Self::AtomBatteryHealthSnapshot),
             "ATOM_SLOW_IO" => Some(Self::AtomSlowIo),
             "ATOM_BATTERY_CAUSED_SHUTDOWN" => Some(Self::AtomBatteryCausedShutdown),
-            "ATOM_PHONE_SERVICE_STATE_CHANGED" => {
-                Some(Self::AtomPhoneServiceStateChanged)
-            }
+            "ATOM_PHONE_SERVICE_STATE_CHANGED" => Some(Self::AtomPhoneServiceStateChanged),
             "ATOM_PHONE_STATE_CHANGED" => Some(Self::AtomPhoneStateChanged),
             "ATOM_USER_RESTRICTION_CHANGED" => Some(Self::AtomUserRestrictionChanged),
             "ATOM_SETTINGS_UI_CHANGED" => Some(Self::AtomSettingsUiChanged),
@@ -4342,9 +3812,7 @@ impl AtomId {
             "ATOM_DOCS_UI_LAUNCH_REPORTED" => Some(Self::AtomDocsUiLaunchReported),
             "ATOM_DOCS_UI_ROOT_VISITED" => Some(Self::AtomDocsUiRootVisited),
             "ATOM_DOCS_UI_STARTUP_MS" => Some(Self::AtomDocsUiStartupMs),
-            "ATOM_DOCS_UI_USER_ACTION_REPORTED" => {
-                Some(Self::AtomDocsUiUserActionReported)
-            }
+            "ATOM_DOCS_UI_USER_ACTION_REPORTED" => Some(Self::AtomDocsUiUserActionReported),
             "ATOM_WIFI_ENABLED_STATE_CHANGED" => Some(Self::AtomWifiEnabledStateChanged),
             "ATOM_WIFI_RUNNING_STATE_CHANGED" => Some(Self::AtomWifiRunningStateChanged),
             "ATOM_APP_COMPACTED" => Some(Self::AtomAppCompacted),
@@ -4352,19 +3820,11 @@ impl AtomId {
             "ATOM_DOCS_UI_PICKER_LAUNCHED_FROM_REPORTED" => {
                 Some(Self::AtomDocsUiPickerLaunchedFromReported)
             }
-            "ATOM_DOCS_UI_PICK_RESULT_REPORTED" => {
-                Some(Self::AtomDocsUiPickResultReported)
-            }
-            "ATOM_DOCS_UI_SEARCH_MODE_REPORTED" => {
-                Some(Self::AtomDocsUiSearchModeReported)
-            }
-            "ATOM_DOCS_UI_SEARCH_TYPE_REPORTED" => {
-                Some(Self::AtomDocsUiSearchTypeReported)
-            }
+            "ATOM_DOCS_UI_PICK_RESULT_REPORTED" => Some(Self::AtomDocsUiPickResultReported),
+            "ATOM_DOCS_UI_SEARCH_MODE_REPORTED" => Some(Self::AtomDocsUiSearchModeReported),
+            "ATOM_DOCS_UI_SEARCH_TYPE_REPORTED" => Some(Self::AtomDocsUiSearchTypeReported),
             "ATOM_DATA_STALL_EVENT" => Some(Self::AtomDataStallEvent),
-            "ATOM_RESCUE_PARTY_RESET_REPORTED" => {
-                Some(Self::AtomRescuePartyResetReported)
-            }
+            "ATOM_RESCUE_PARTY_RESET_REPORTED" => Some(Self::AtomRescuePartyResetReported),
             "ATOM_SIGNED_CONFIG_REPORTED" => Some(Self::AtomSignedConfigReported),
             "ATOM_GNSS_NI_EVENT_REPORTED" => Some(Self::AtomGnssNiEventReported),
             "ATOM_BLUETOOTH_LINK_LAYER_CONNECTION_EVENT" => {
@@ -4377,27 +3837,17 @@ impl AtomId {
                 Some(Self::AtomBluetoothScoConnectionStateChanged)
             }
             "ATOM_APP_DOWNGRADED" => Some(Self::AtomAppDowngraded),
-            "ATOM_APP_OPTIMIZED_AFTER_DOWNGRADED" => {
-                Some(Self::AtomAppOptimizedAfterDowngraded)
-            }
+            "ATOM_APP_OPTIMIZED_AFTER_DOWNGRADED" => Some(Self::AtomAppOptimizedAfterDowngraded),
             "ATOM_LOW_STORAGE_STATE_CHANGED" => Some(Self::AtomLowStorageStateChanged),
-            "ATOM_GNSS_NFW_NOTIFICATION_REPORTED" => {
-                Some(Self::AtomGnssNfwNotificationReported)
-            }
-            "ATOM_GNSS_CONFIGURATION_REPORTED" => {
-                Some(Self::AtomGnssConfigurationReported)
-            }
-            "ATOM_USB_PORT_OVERHEAT_EVENT_REPORTED" => {
-                Some(Self::AtomUsbPortOverheatEventReported)
-            }
+            "ATOM_GNSS_NFW_NOTIFICATION_REPORTED" => Some(Self::AtomGnssNfwNotificationReported),
+            "ATOM_GNSS_CONFIGURATION_REPORTED" => Some(Self::AtomGnssConfigurationReported),
+            "ATOM_USB_PORT_OVERHEAT_EVENT_REPORTED" => Some(Self::AtomUsbPortOverheatEventReported),
             "ATOM_NFC_ERROR_OCCURRED" => Some(Self::AtomNfcErrorOccurred),
             "ATOM_NFC_STATE_CHANGED" => Some(Self::AtomNfcStateChanged),
             "ATOM_NFC_BEAM_OCCURRED" => Some(Self::AtomNfcBeamOccurred),
             "ATOM_NFC_CARDEMULATION_OCCURRED" => Some(Self::AtomNfcCardemulationOccurred),
             "ATOM_NFC_TAG_OCCURRED" => Some(Self::AtomNfcTagOccurred),
-            "ATOM_NFC_HCE_TRANSACTION_OCCURRED" => {
-                Some(Self::AtomNfcHceTransactionOccurred)
-            }
+            "ATOM_NFC_HCE_TRANSACTION_OCCURRED" => Some(Self::AtomNfcHceTransactionOccurred),
             "ATOM_SE_STATE_CHANGED" => Some(Self::AtomSeStateChanged),
             "ATOM_SE_OMAPI_REPORTED" => Some(Self::AtomSeOmapiReported),
             "ATOM_BROADCAST_DISPATCH_LATENCY_REPORTED" => {
@@ -4417,9 +3867,7 @@ impl AtomId {
             "ATOM_SCHEDULED_JOB_CONSTRAINT_CHANGED" => {
                 Some(Self::AtomScheduledJobConstraintChanged)
             }
-            "ATOM_BLUETOOTH_ACTIVE_DEVICE_CHANGED" => {
-                Some(Self::AtomBluetoothActiveDeviceChanged)
-            }
+            "ATOM_BLUETOOTH_ACTIVE_DEVICE_CHANGED" => Some(Self::AtomBluetoothActiveDeviceChanged),
             "ATOM_BLUETOOTH_A2DP_PLAYBACK_STATE_CHANGED" => {
                 Some(Self::AtomBluetoothA2dpPlaybackStateChanged)
             }
@@ -4435,33 +3883,25 @@ impl AtomId {
             "ATOM_BLUETOOTH_A2DP_AUDIO_OVERRUN_REPORTED" => {
                 Some(Self::AtomBluetoothA2dpAudioOverrunReported)
             }
-            "ATOM_BLUETOOTH_DEVICE_RSSI_REPORTED" => {
-                Some(Self::AtomBluetoothDeviceRssiReported)
-            }
+            "ATOM_BLUETOOTH_DEVICE_RSSI_REPORTED" => Some(Self::AtomBluetoothDeviceRssiReported),
             "ATOM_BLUETOOTH_DEVICE_FAILED_CONTACT_COUNTER_REPORTED" => {
                 Some(Self::AtomBluetoothDeviceFailedContactCounterReported)
             }
             "ATOM_BLUETOOTH_DEVICE_TX_POWER_LEVEL_REPORTED" => {
                 Some(Self::AtomBluetoothDeviceTxPowerLevelReported)
             }
-            "ATOM_BLUETOOTH_HCI_TIMEOUT_REPORTED" => {
-                Some(Self::AtomBluetoothHciTimeoutReported)
-            }
+            "ATOM_BLUETOOTH_HCI_TIMEOUT_REPORTED" => Some(Self::AtomBluetoothHciTimeoutReported),
             "ATOM_BLUETOOTH_QUALITY_REPORT_REPORTED" => {
                 Some(Self::AtomBluetoothQualityReportReported)
             }
-            "ATOM_BLUETOOTH_DEVICE_INFO_REPORTED" => {
-                Some(Self::AtomBluetoothDeviceInfoReported)
-            }
+            "ATOM_BLUETOOTH_DEVICE_INFO_REPORTED" => Some(Self::AtomBluetoothDeviceInfoReported),
             "ATOM_BLUETOOTH_REMOTE_VERSION_INFO_REPORTED" => {
                 Some(Self::AtomBluetoothRemoteVersionInfoReported)
             }
             "ATOM_BLUETOOTH_SDP_ATTRIBUTE_REPORTED" => {
                 Some(Self::AtomBluetoothSdpAttributeReported)
             }
-            "ATOM_BLUETOOTH_BOND_STATE_CHANGED" => {
-                Some(Self::AtomBluetoothBondStateChanged)
-            }
+            "ATOM_BLUETOOTH_BOND_STATE_CHANGED" => Some(Self::AtomBluetoothBondStateChanged),
             "ATOM_BLUETOOTH_CLASSIC_PAIRING_EVENT_REPORTED" => {
                 Some(Self::AtomBluetoothClassicPairingEventReported)
             }
@@ -4478,15 +3918,9 @@ impl AtomId {
             "ATOM_BLUETOOTH_SOCKET_CONNECTION_STATE_CHANGED" => {
                 Some(Self::AtomBluetoothSocketConnectionStateChanged)
             }
-            "ATOM_DEVICE_IDENTIFIER_ACCESS_DENIED" => {
-                Some(Self::AtomDeviceIdentifierAccessDenied)
-            }
-            "ATOM_BUBBLE_DEVELOPER_ERROR_REPORTED" => {
-                Some(Self::AtomBubbleDeveloperErrorReported)
-            }
-            "ATOM_ASSIST_GESTURE_STAGE_REPORTED" => {
-                Some(Self::AtomAssistGestureStageReported)
-            }
+            "ATOM_DEVICE_IDENTIFIER_ACCESS_DENIED" => Some(Self::AtomDeviceIdentifierAccessDenied),
+            "ATOM_BUBBLE_DEVELOPER_ERROR_REPORTED" => Some(Self::AtomBubbleDeveloperErrorReported),
+            "ATOM_ASSIST_GESTURE_STAGE_REPORTED" => Some(Self::AtomAssistGestureStageReported),
             "ATOM_ASSIST_GESTURE_FEEDBACK_REPORTED" => {
                 Some(Self::AtomAssistGestureFeedbackReported)
             }
@@ -4496,31 +3930,23 @@ impl AtomId {
             "ATOM_TOUCH_GESTURE_CLASSIFIED" => Some(Self::AtomTouchGestureClassified),
             "ATOM_HIDDEN_API_USED" => Some(Self::AtomHiddenApiUsed),
             "ATOM_STYLE_UI_CHANGED" => Some(Self::AtomStyleUiChanged),
-            "ATOM_PRIVACY_INDICATORS_INTERACTED" => {
-                Some(Self::AtomPrivacyIndicatorsInteracted)
-            }
+            "ATOM_PRIVACY_INDICATORS_INTERACTED" => Some(Self::AtomPrivacyIndicatorsInteracted),
             "ATOM_APP_INSTALL_ON_EXTERNAL_STORAGE_REPORTED" => {
                 Some(Self::AtomAppInstallOnExternalStorageReported)
             }
             "ATOM_NETWORK_STACK_REPORTED" => Some(Self::AtomNetworkStackReported),
             "ATOM_APP_MOVED_STORAGE_REPORTED" => Some(Self::AtomAppMovedStorageReported),
             "ATOM_BIOMETRIC_ENROLLED" => Some(Self::AtomBiometricEnrolled),
-            "ATOM_SYSTEM_SERVER_WATCHDOG_OCCURRED" => {
-                Some(Self::AtomSystemServerWatchdogOccurred)
-            }
+            "ATOM_SYSTEM_SERVER_WATCHDOG_OCCURRED" => Some(Self::AtomSystemServerWatchdogOccurred),
             "ATOM_TOMB_STONE_OCCURRED" => Some(Self::AtomTombStoneOccurred),
             "ATOM_BLUETOOTH_CLASS_OF_DEVICE_REPORTED" => {
                 Some(Self::AtomBluetoothClassOfDeviceReported)
             }
-            "ATOM_INTELLIGENCE_EVENT_REPORTED" => {
-                Some(Self::AtomIntelligenceEventReported)
-            }
+            "ATOM_INTELLIGENCE_EVENT_REPORTED" => Some(Self::AtomIntelligenceEventReported),
             "ATOM_THERMAL_THROTTLING_SEVERITY_STATE_CHANGED" => {
                 Some(Self::AtomThermalThrottlingSeverityStateChanged)
             }
-            "ATOM_ROLE_REQUEST_RESULT_REPORTED" => {
-                Some(Self::AtomRoleRequestResultReported)
-            }
+            "ATOM_ROLE_REQUEST_RESULT_REPORTED" => Some(Self::AtomRoleRequestResultReported),
             "ATOM_MEDIAMETRICS_AUDIOPOLICY_REPORTED" => {
                 Some(Self::AtomMediametricsAudiopolicyReported)
             }
@@ -4533,24 +3959,14 @@ impl AtomId {
             "ATOM_MEDIAMETRICS_AUDIOTRACK_REPORTED" => {
                 Some(Self::AtomMediametricsAudiotrackReported)
             }
-            "ATOM_MEDIAMETRICS_CODEC_REPORTED" => {
-                Some(Self::AtomMediametricsCodecReported)
-            }
+            "ATOM_MEDIAMETRICS_CODEC_REPORTED" => Some(Self::AtomMediametricsCodecReported),
             "ATOM_MEDIAMETRICS_DRM_WIDEVINE_REPORTED" => {
                 Some(Self::AtomMediametricsDrmWidevineReported)
             }
-            "ATOM_MEDIAMETRICS_EXTRACTOR_REPORTED" => {
-                Some(Self::AtomMediametricsExtractorReported)
-            }
-            "ATOM_MEDIAMETRICS_MEDIADRM_REPORTED" => {
-                Some(Self::AtomMediametricsMediadrmReported)
-            }
-            "ATOM_MEDIAMETRICS_NUPLAYER_REPORTED" => {
-                Some(Self::AtomMediametricsNuplayerReported)
-            }
-            "ATOM_MEDIAMETRICS_RECORDER_REPORTED" => {
-                Some(Self::AtomMediametricsRecorderReported)
-            }
+            "ATOM_MEDIAMETRICS_EXTRACTOR_REPORTED" => Some(Self::AtomMediametricsExtractorReported),
+            "ATOM_MEDIAMETRICS_MEDIADRM_REPORTED" => Some(Self::AtomMediametricsMediadrmReported),
+            "ATOM_MEDIAMETRICS_NUPLAYER_REPORTED" => Some(Self::AtomMediametricsNuplayerReported),
+            "ATOM_MEDIAMETRICS_RECORDER_REPORTED" => Some(Self::AtomMediametricsRecorderReported),
             "ATOM_MEDIAMETRICS_DRMMANAGER_REPORTED" => {
                 Some(Self::AtomMediametricsDrmmanagerReported)
             }
@@ -4560,12 +3976,8 @@ impl AtomId {
             "ATOM_CONTENT_CAPTURE_CALLER_MISMATCH_REPORTED" => {
                 Some(Self::AtomContentCaptureCallerMismatchReported)
             }
-            "ATOM_CONTENT_CAPTURE_SERVICE_EVENTS" => {
-                Some(Self::AtomContentCaptureServiceEvents)
-            }
-            "ATOM_CONTENT_CAPTURE_SESSION_EVENTS" => {
-                Some(Self::AtomContentCaptureSessionEvents)
-            }
+            "ATOM_CONTENT_CAPTURE_SERVICE_EVENTS" => Some(Self::AtomContentCaptureServiceEvents),
+            "ATOM_CONTENT_CAPTURE_SESSION_EVENTS" => Some(Self::AtomContentCaptureSessionEvents),
             "ATOM_CONTENT_CAPTURE_FLUSHED" => Some(Self::AtomContentCaptureFlushed),
             "ATOM_LOCATION_MANAGER_API_USAGE_REPORTED" => {
                 Some(Self::AtomLocationManagerApiUsageReported)
@@ -4585,25 +3997,15 @@ impl AtomId {
             "ATOM_APP_PERMISSION_FRAGMENT_ACTION_REPORTED" => {
                 Some(Self::AtomAppPermissionFragmentActionReported)
             }
-            "ATOM_APP_PERMISSION_FRAGMENT_VIEWED" => {
-                Some(Self::AtomAppPermissionFragmentViewed)
-            }
-            "ATOM_APP_PERMISSIONS_FRAGMENT_VIEWED" => {
-                Some(Self::AtomAppPermissionsFragmentViewed)
-            }
-            "ATOM_PERMISSION_APPS_FRAGMENT_VIEWED" => {
-                Some(Self::AtomPermissionAppsFragmentViewed)
-            }
+            "ATOM_APP_PERMISSION_FRAGMENT_VIEWED" => Some(Self::AtomAppPermissionFragmentViewed),
+            "ATOM_APP_PERMISSIONS_FRAGMENT_VIEWED" => Some(Self::AtomAppPermissionsFragmentViewed),
+            "ATOM_PERMISSION_APPS_FRAGMENT_VIEWED" => Some(Self::AtomPermissionAppsFragmentViewed),
             "ATOM_TEXT_SELECTION_EVENT" => Some(Self::AtomTextSelectionEvent),
             "ATOM_TEXT_LINKIFY_EVENT" => Some(Self::AtomTextLinkifyEvent),
             "ATOM_CONVERSATION_ACTIONS_EVENT" => Some(Self::AtomConversationActionsEvent),
             "ATOM_LANGUAGE_DETECTION_EVENT" => Some(Self::AtomLanguageDetectionEvent),
-            "ATOM_EXCLUSION_RECT_STATE_CHANGED" => {
-                Some(Self::AtomExclusionRectStateChanged)
-            }
-            "ATOM_BACK_GESTURE_REPORTED_REPORTED" => {
-                Some(Self::AtomBackGestureReportedReported)
-            }
+            "ATOM_EXCLUSION_RECT_STATE_CHANGED" => Some(Self::AtomExclusionRectStateChanged),
+            "ATOM_BACK_GESTURE_REPORTED_REPORTED" => Some(Self::AtomBackGestureReportedReported),
             "ATOM_UPDATE_ENGINE_UPDATE_ATTEMPT_REPORTED" => {
                 Some(Self::AtomUpdateEngineUpdateAttemptReported)
             }
@@ -4618,22 +4020,16 @@ impl AtomId {
             "ATOM_VMS_CLIENT_CONNECTION_STATE_CHANGED" => {
                 Some(Self::AtomVmsClientConnectionStateChanged)
             }
-            "ATOM_MEDIA_PROVIDER_SCAN_OCCURRED" => {
-                Some(Self::AtomMediaProviderScanOccurred)
-            }
+            "ATOM_MEDIA_PROVIDER_SCAN_OCCURRED" => Some(Self::AtomMediaProviderScanOccurred),
             "ATOM_MEDIA_CONTENT_DELETED" => Some(Self::AtomMediaContentDeleted),
             "ATOM_MEDIA_PROVIDER_PERMISSION_REQUESTED" => {
                 Some(Self::AtomMediaProviderPermissionRequested)
             }
-            "ATOM_MEDIA_PROVIDER_SCHEMA_CHANGED" => {
-                Some(Self::AtomMediaProviderSchemaChanged)
-            }
+            "ATOM_MEDIA_PROVIDER_SCHEMA_CHANGED" => Some(Self::AtomMediaProviderSchemaChanged),
             "ATOM_MEDIA_PROVIDER_IDLE_MAINTENANCE_FINISHED" => {
                 Some(Self::AtomMediaProviderIdleMaintenanceFinished)
             }
-            "ATOM_REBOOT_ESCROW_RECOVERY_REPORTED" => {
-                Some(Self::AtomRebootEscrowRecoveryReported)
-            }
+            "ATOM_REBOOT_ESCROW_RECOVERY_REPORTED" => Some(Self::AtomRebootEscrowRecoveryReported),
             "ATOM_BOOT_TIME_EVENT_DURATION_REPORTED" => {
                 Some(Self::AtomBootTimeEventDurationReported)
             }
@@ -4648,23 +4044,15 @@ impl AtomId {
             }
             "ATOM_USERSPACE_REBOOT_REPORTED" => Some(Self::AtomUserspaceRebootReported),
             "ATOM_NOTIFICATION_REPORTED" => Some(Self::AtomNotificationReported),
-            "ATOM_NOTIFICATION_PANEL_REPORTED" => {
-                Some(Self::AtomNotificationPanelReported)
-            }
-            "ATOM_NOTIFICATION_CHANNEL_MODIFIED" => {
-                Some(Self::AtomNotificationChannelModified)
-            }
-            "ATOM_INTEGRITY_CHECK_RESULT_REPORTED" => {
-                Some(Self::AtomIntegrityCheckResultReported)
-            }
+            "ATOM_NOTIFICATION_PANEL_REPORTED" => Some(Self::AtomNotificationPanelReported),
+            "ATOM_NOTIFICATION_CHANNEL_MODIFIED" => Some(Self::AtomNotificationChannelModified),
+            "ATOM_INTEGRITY_CHECK_RESULT_REPORTED" => Some(Self::AtomIntegrityCheckResultReported),
             "ATOM_INTEGRITY_RULES_PUSHED" => Some(Self::AtomIntegrityRulesPushed),
             "ATOM_CB_MESSAGE_REPORTED" => Some(Self::AtomCbMessageReported),
             "ATOM_CB_MESSAGE_ERROR" => Some(Self::AtomCbMessageError),
             "ATOM_WIFI_HEALTH_STAT_REPORTED" => Some(Self::AtomWifiHealthStatReported),
             "ATOM_WIFI_FAILURE_STAT_REPORTED" => Some(Self::AtomWifiFailureStatReported),
-            "ATOM_WIFI_CONNECTION_RESULT_REPORTED" => {
-                Some(Self::AtomWifiConnectionResultReported)
-            }
+            "ATOM_WIFI_CONNECTION_RESULT_REPORTED" => Some(Self::AtomWifiConnectionResultReported),
             "ATOM_APP_FREEZE_CHANGED" => Some(Self::AtomAppFreezeChanged),
             "ATOM_SNAPSHOT_MERGE_REPORTED" => Some(Self::AtomSnapshotMergeReported),
             "ATOM_FOREGROUND_SERVICE_APP_OP_SESSION_ENDED" => {
@@ -4676,51 +4064,29 @@ impl AtomId {
             "ATOM_RANKING_SELECTED" => Some(Self::AtomRankingSelected),
             "ATOM_TVSETTINGS_UI_INTERACTED" => Some(Self::AtomTvsettingsUiInteracted),
             "ATOM_LAUNCHER_SNAPSHOT" => Some(Self::AtomLauncherSnapshot),
-            "ATOM_PACKAGE_INSTALLER_V2_REPORTED" => {
-                Some(Self::AtomPackageInstallerV2Reported)
-            }
-            "ATOM_USER_LIFECYCLE_JOURNEY_REPORTED" => {
-                Some(Self::AtomUserLifecycleJourneyReported)
-            }
-            "ATOM_USER_LIFECYCLE_EVENT_OCCURRED" => {
-                Some(Self::AtomUserLifecycleEventOccurred)
-            }
-            "ATOM_ACCESSIBILITY_SHORTCUT_REPORTED" => {
-                Some(Self::AtomAccessibilityShortcutReported)
-            }
-            "ATOM_ACCESSIBILITY_SERVICE_REPORTED" => {
-                Some(Self::AtomAccessibilityServiceReported)
-            }
-            "ATOM_DOCS_UI_DRAG_AND_DROP_REPORTED" => {
-                Some(Self::AtomDocsUiDragAndDropReported)
-            }
+            "ATOM_PACKAGE_INSTALLER_V2_REPORTED" => Some(Self::AtomPackageInstallerV2Reported),
+            "ATOM_USER_LIFECYCLE_JOURNEY_REPORTED" => Some(Self::AtomUserLifecycleJourneyReported),
+            "ATOM_USER_LIFECYCLE_EVENT_OCCURRED" => Some(Self::AtomUserLifecycleEventOccurred),
+            "ATOM_ACCESSIBILITY_SHORTCUT_REPORTED" => Some(Self::AtomAccessibilityShortcutReported),
+            "ATOM_ACCESSIBILITY_SERVICE_REPORTED" => Some(Self::AtomAccessibilityServiceReported),
+            "ATOM_DOCS_UI_DRAG_AND_DROP_REPORTED" => Some(Self::AtomDocsUiDragAndDropReported),
             "ATOM_APP_USAGE_EVENT_OCCURRED" => Some(Self::AtomAppUsageEventOccurred),
             "ATOM_AUTO_REVOKE_NOTIFICATION_CLICKED" => {
                 Some(Self::AtomAutoRevokeNotificationClicked)
             }
-            "ATOM_AUTO_REVOKE_FRAGMENT_APP_VIEWED" => {
-                Some(Self::AtomAutoRevokeFragmentAppViewed)
-            }
-            "ATOM_AUTO_REVOKED_APP_INTERACTION" => {
-                Some(Self::AtomAutoRevokedAppInteraction)
-            }
+            "ATOM_AUTO_REVOKE_FRAGMENT_APP_VIEWED" => Some(Self::AtomAutoRevokeFragmentAppViewed),
+            "ATOM_AUTO_REVOKED_APP_INTERACTION" => Some(Self::AtomAutoRevokedAppInteraction),
             "ATOM_APP_PERMISSION_GROUPS_FRAGMENT_AUTO_REVOKE_ACTION" => {
                 Some(Self::AtomAppPermissionGroupsFragmentAutoRevokeAction)
             }
             "ATOM_EVS_USAGE_STATS_REPORTED" => Some(Self::AtomEvsUsageStatsReported),
-            "ATOM_AUDIO_POWER_USAGE_DATA_REPORTED" => {
-                Some(Self::AtomAudioPowerUsageDataReported)
-            }
+            "ATOM_AUDIO_POWER_USAGE_DATA_REPORTED" => Some(Self::AtomAudioPowerUsageDataReported),
             "ATOM_TV_TUNER_STATE_CHANGED" => Some(Self::AtomTvTunerStateChanged),
-            "ATOM_MEDIAOUTPUT_OP_SWITCH_REPORTED" => {
-                Some(Self::AtomMediaoutputOpSwitchReported)
-            }
+            "ATOM_MEDIAOUTPUT_OP_SWITCH_REPORTED" => Some(Self::AtomMediaoutputOpSwitchReported),
             "ATOM_CB_MESSAGE_FILTERED" => Some(Self::AtomCbMessageFiltered),
             "ATOM_TV_TUNER_DVR_STATUS" => Some(Self::AtomTvTunerDvrStatus),
             "ATOM_TV_CAS_SESSION_OPEN_STATUS" => Some(Self::AtomTvCasSessionOpenStatus),
-            "ATOM_ASSISTANT_INVOCATION_REPORTED" => {
-                Some(Self::AtomAssistantInvocationReported)
-            }
+            "ATOM_ASSISTANT_INVOCATION_REPORTED" => Some(Self::AtomAssistantInvocationReported),
             "ATOM_DISPLAY_WAKE_REPORTED" => Some(Self::AtomDisplayWakeReported),
             "ATOM_CAR_USER_HAL_MODIFY_USER_REQUEST_REPORTED" => {
                 Some(Self::AtomCarUserHalModifyUserRequestReported)
@@ -4746,15 +4112,9 @@ impl AtomId {
             "ATOM_NETWORK_IP_PROVISIONING_REPORTED" => {
                 Some(Self::AtomNetworkIpProvisioningReported)
             }
-            "ATOM_NETWORK_DHCP_RENEW_REPORTED" => {
-                Some(Self::AtomNetworkDhcpRenewReported)
-            }
-            "ATOM_NETWORK_VALIDATION_REPORTED" => {
-                Some(Self::AtomNetworkValidationReported)
-            }
-            "ATOM_NETWORK_STACK_QUIRK_REPORTED" => {
-                Some(Self::AtomNetworkStackQuirkReported)
-            }
+            "ATOM_NETWORK_DHCP_RENEW_REPORTED" => Some(Self::AtomNetworkDhcpRenewReported),
+            "ATOM_NETWORK_VALIDATION_REPORTED" => Some(Self::AtomNetworkValidationReported),
+            "ATOM_NETWORK_STACK_QUIRK_REPORTED" => Some(Self::AtomNetworkStackQuirkReported),
             "ATOM_MEDIAMETRICS_AUDIORECORDDEVICEUSAGE_REPORTED" => {
                 Some(Self::AtomMediametricsAudiorecorddeviceusageReported)
             }
@@ -4773,9 +4133,7 @@ impl AtomId {
             "ATOM_CONTACTS_PROVIDER_STATUS_REPORTED" => {
                 Some(Self::AtomContactsProviderStatusReported)
             }
-            "ATOM_KEYSTORE_KEY_EVENT_REPORTED" => {
-                Some(Self::AtomKeystoreKeyEventReported)
-            }
+            "ATOM_KEYSTORE_KEY_EVENT_REPORTED" => Some(Self::AtomKeystoreKeyEventReported),
             "ATOM_NETWORK_TETHERING_REPORTED" => Some(Self::AtomNetworkTetheringReported),
             "ATOM_IME_TOUCH_REPORTED" => Some(Self::AtomImeTouchReported),
             "ATOM_UI_INTERACTION_FRAME_INFO_REPORTED" => {
@@ -4783,22 +4141,14 @@ impl AtomId {
             }
             "ATOM_UI_ACTION_LATENCY_REPORTED" => Some(Self::AtomUiActionLatencyReported),
             "ATOM_WIFI_DISCONNECT_REPORTED" => Some(Self::AtomWifiDisconnectReported),
-            "ATOM_WIFI_CONNECTION_STATE_CHANGED" => {
-                Some(Self::AtomWifiConnectionStateChanged)
-            }
-            "ATOM_HDMI_CEC_ACTIVE_SOURCE_CHANGED" => {
-                Some(Self::AtomHdmiCecActiveSourceChanged)
-            }
+            "ATOM_WIFI_CONNECTION_STATE_CHANGED" => Some(Self::AtomWifiConnectionStateChanged),
+            "ATOM_HDMI_CEC_ACTIVE_SOURCE_CHANGED" => Some(Self::AtomHdmiCecActiveSourceChanged),
             "ATOM_HDMI_CEC_MESSAGE_REPORTED" => Some(Self::AtomHdmiCecMessageReported),
             "ATOM_AIRPLANE_MODE" => Some(Self::AtomAirplaneMode),
             "ATOM_MODEM_RESTART" => Some(Self::AtomModemRestart),
-            "ATOM_CARRIER_ID_MISMATCH_REPORTED" => {
-                Some(Self::AtomCarrierIdMismatchReported)
-            }
+            "ATOM_CARRIER_ID_MISMATCH_REPORTED" => Some(Self::AtomCarrierIdMismatchReported),
             "ATOM_CARRIER_ID_TABLE_UPDATED" => Some(Self::AtomCarrierIdTableUpdated),
-            "ATOM_DATA_STALL_RECOVERY_REPORTED" => {
-                Some(Self::AtomDataStallRecoveryReported)
-            }
+            "ATOM_DATA_STALL_RECOVERY_REPORTED" => Some(Self::AtomDataStallRecoveryReported),
             "ATOM_MEDIAMETRICS_MEDIAPARSER_REPORTED" => {
                 Some(Self::AtomMediametricsMediaparserReported)
             }
@@ -4806,35 +4156,21 @@ impl AtomId {
             "ATOM_TEXT_CLASSIFIER_API_USAGE_REPORTED" => {
                 Some(Self::AtomTextClassifierApiUsageReported)
             }
-            "ATOM_CAR_WATCHDOG_KILL_STATS_REPORTED" => {
-                Some(Self::AtomCarWatchdogKillStatsReported)
-            }
-            "ATOM_MEDIAMETRICS_PLAYBACK_REPORTED" => {
-                Some(Self::AtomMediametricsPlaybackReported)
-            }
+            "ATOM_CAR_WATCHDOG_KILL_STATS_REPORTED" => Some(Self::AtomCarWatchdogKillStatsReported),
+            "ATOM_MEDIAMETRICS_PLAYBACK_REPORTED" => Some(Self::AtomMediametricsPlaybackReported),
             "ATOM_MEDIA_NETWORK_INFO_CHANGED" => Some(Self::AtomMediaNetworkInfoChanged),
-            "ATOM_MEDIA_PLAYBACK_STATE_CHANGED" => {
-                Some(Self::AtomMediaPlaybackStateChanged)
-            }
-            "ATOM_MEDIA_PLAYBACK_ERROR_REPORTED" => {
-                Some(Self::AtomMediaPlaybackErrorReported)
-            }
-            "ATOM_MEDIA_PLAYBACK_TRACK_CHANGED" => {
-                Some(Self::AtomMediaPlaybackTrackChanged)
-            }
+            "ATOM_MEDIA_PLAYBACK_STATE_CHANGED" => Some(Self::AtomMediaPlaybackStateChanged),
+            "ATOM_MEDIA_PLAYBACK_ERROR_REPORTED" => Some(Self::AtomMediaPlaybackErrorReported),
+            "ATOM_MEDIA_PLAYBACK_TRACK_CHANGED" => Some(Self::AtomMediaPlaybackTrackChanged),
             "ATOM_WIFI_SCAN_REPORTED" => Some(Self::AtomWifiScanReported),
             "ATOM_WIFI_PNO_SCAN_REPORTED" => Some(Self::AtomWifiPnoScanReported),
             "ATOM_TIF_TUNE_CHANGED" => Some(Self::AtomTifTuneChanged),
             "ATOM_AUTO_ROTATE_REPORTED" => Some(Self::AtomAutoRotateReported),
             "ATOM_PERFETTO_TRIGGER" => Some(Self::AtomPerfettoTrigger),
             "ATOM_TRANSCODING_DATA" => Some(Self::AtomTranscodingData),
-            "ATOM_IMS_SERVICE_ENTITLEMENT_UPDATED" => {
-                Some(Self::AtomImsServiceEntitlementUpdated)
-            }
+            "ATOM_IMS_SERVICE_ENTITLEMENT_UPDATED" => Some(Self::AtomImsServiceEntitlementUpdated),
             "ATOM_DEVICE_ROTATED" => Some(Self::AtomDeviceRotated),
-            "ATOM_SIM_SPECIFIC_SETTINGS_RESTORED" => {
-                Some(Self::AtomSimSpecificSettingsRestored)
-            }
+            "ATOM_SIM_SPECIFIC_SETTINGS_RESTORED" => Some(Self::AtomSimSpecificSettingsRestored),
             "ATOM_TEXT_CLASSIFIER_DOWNLOAD_REPORTED" => {
                 Some(Self::AtomTextClassifierDownloadReported)
             }
@@ -4849,25 +4185,17 @@ impl AtomId {
             "ATOM_REBOOT_ESCROW_LSKF_CAPTURE_REPORTED" => {
                 Some(Self::AtomRebootEscrowLskfCaptureReported)
             }
-            "ATOM_REBOOT_ESCROW_REBOOT_REPORTED" => {
-                Some(Self::AtomRebootEscrowRebootReported)
-            }
+            "ATOM_REBOOT_ESCROW_REBOOT_REPORTED" => Some(Self::AtomRebootEscrowRebootReported),
             "ATOM_BINDER_LATENCY_REPORTED" => Some(Self::AtomBinderLatencyReported),
             "ATOM_MEDIAMETRICS_AAUDIOSTREAM_REPORTED" => {
                 Some(Self::AtomMediametricsAaudiostreamReported)
             }
-            "ATOM_MEDIA_TRANSCODING_SESSION_ENDED" => {
-                Some(Self::AtomMediaTranscodingSessionEnded)
-            }
-            "ATOM_MAGNIFICATION_USAGE_REPORTED" => {
-                Some(Self::AtomMagnificationUsageReported)
-            }
+            "ATOM_MEDIA_TRANSCODING_SESSION_ENDED" => Some(Self::AtomMediaTranscodingSessionEnded),
+            "ATOM_MAGNIFICATION_USAGE_REPORTED" => Some(Self::AtomMagnificationUsageReported),
             "ATOM_MAGNIFICATION_MODE_WITH_IME_ON_REPORTED" => {
                 Some(Self::AtomMagnificationModeWithImeOnReported)
             }
-            "ATOM_APP_SEARCH_CALL_STATS_REPORTED" => {
-                Some(Self::AtomAppSearchCallStatsReported)
-            }
+            "ATOM_APP_SEARCH_CALL_STATS_REPORTED" => Some(Self::AtomAppSearchCallStatsReported),
             "ATOM_APP_SEARCH_PUT_DOCUMENT_STATS_REPORTED" => {
                 Some(Self::AtomAppSearchPutDocumentStatsReported)
             }
@@ -4884,16 +4212,12 @@ impl AtomId {
             "ATOM_AUTH_ENROLL_ACTION_INVOKED" => Some(Self::AtomAuthEnrollActionInvoked),
             "ATOM_AUTH_DEPRECATED_API_USED" => Some(Self::AtomAuthDeprecatedApiUsed),
             "ATOM_UNATTENDED_REBOOT_OCCURRED" => Some(Self::AtomUnattendedRebootOccurred),
-            "ATOM_LONG_REBOOT_BLOCKING_REPORTED" => {
-                Some(Self::AtomLongRebootBlockingReported)
-            }
+            "ATOM_LONG_REBOOT_BLOCKING_REPORTED" => Some(Self::AtomLongRebootBlockingReported),
             "ATOM_LOCATION_TIME_ZONE_PROVIDER_STATE_CHANGED" => {
                 Some(Self::AtomLocationTimeZoneProviderStateChanged)
             }
             "ATOM_FDTRACK_EVENT_OCCURRED" => Some(Self::AtomFdtrackEventOccurred),
-            "ATOM_TIMEOUT_AUTO_EXTENDED_REPORTED" => {
-                Some(Self::AtomTimeoutAutoExtendedReported)
-            }
+            "ATOM_TIMEOUT_AUTO_EXTENDED_REPORTED" => Some(Self::AtomTimeoutAutoExtendedReported),
             "ATOM_ALARM_BATCH_DELIVERED" => Some(Self::AtomAlarmBatchDelivered),
             "ATOM_ALARM_SCHEDULED" => Some(Self::AtomAlarmScheduled),
             "ATOM_CAR_WATCHDOG_IO_OVERUSE_STATS_REPORTED" => {
@@ -4905,27 +4229,19 @@ impl AtomId {
             "ATOM_APP_SEARCH_INITIALIZE_STATS_REPORTED" => {
                 Some(Self::AtomAppSearchInitializeStatsReported)
             }
-            "ATOM_APP_SEARCH_QUERY_STATS_REPORTED" => {
-                Some(Self::AtomAppSearchQueryStatsReported)
-            }
+            "ATOM_APP_SEARCH_QUERY_STATS_REPORTED" => Some(Self::AtomAppSearchQueryStatsReported),
             "ATOM_APP_PROCESS_DIED" => Some(Self::AtomAppProcessDied),
             "ATOM_NETWORK_IP_REACHABILITY_MONITOR_REPORTED" => {
                 Some(Self::AtomNetworkIpReachabilityMonitorReported)
             }
             "ATOM_SLOW_INPUT_EVENT_REPORTED" => Some(Self::AtomSlowInputEventReported),
-            "ATOM_ANR_OCCURRED_PROCESSING_STARTED" => {
-                Some(Self::AtomAnrOccurredProcessingStarted)
-            }
-            "ATOM_APP_SEARCH_REMOVE_STATS_REPORTED" => {
-                Some(Self::AtomAppSearchRemoveStatsReported)
-            }
+            "ATOM_ANR_OCCURRED_PROCESSING_STARTED" => Some(Self::AtomAnrOccurredProcessingStarted),
+            "ATOM_APP_SEARCH_REMOVE_STATS_REPORTED" => Some(Self::AtomAppSearchRemoveStatsReported),
             "ATOM_MEDIA_CODEC_REPORTED" => Some(Self::AtomMediaCodecReported),
             "ATOM_PERMISSION_USAGE_FRAGMENT_INTERACTION" => {
                 Some(Self::AtomPermissionUsageFragmentInteraction)
             }
-            "ATOM_PERMISSION_DETAILS_INTERACTION" => {
-                Some(Self::AtomPermissionDetailsInteraction)
-            }
+            "ATOM_PERMISSION_DETAILS_INTERACTION" => Some(Self::AtomPermissionDetailsInteraction),
             "ATOM_PRIVACY_SENSOR_TOGGLE_INTERACTION" => {
                 Some(Self::AtomPrivacySensorToggleInteraction)
             }
@@ -4946,12 +4262,8 @@ impl AtomId {
                 Some(Self::AtomSizeCompatRestartButtonEventReported)
             }
             "ATOM_SPLITSCREEN_UI_CHANGED" => Some(Self::AtomSplitscreenUiChanged),
-            "ATOM_NETWORK_DNS_HANDSHAKE_REPORTED" => {
-                Some(Self::AtomNetworkDnsHandshakeReported)
-            }
-            "ATOM_BLUETOOTH_CODE_PATH_COUNTER" => {
-                Some(Self::AtomBluetoothCodePathCounter)
-            }
+            "ATOM_NETWORK_DNS_HANDSHAKE_REPORTED" => Some(Self::AtomNetworkDnsHandshakeReported),
+            "ATOM_BLUETOOTH_CODE_PATH_COUNTER" => Some(Self::AtomBluetoothCodePathCounter),
             "ATOM_BLUETOOTH_LE_BATCH_SCAN_REPORT_DELAY" => {
                 Some(Self::AtomBluetoothLeBatchScanReportDelay)
             }
@@ -4967,17 +4279,13 @@ impl AtomId {
             "ATOM_NEURALNETWORKS_COMPILATION_FAILED" => {
                 Some(Self::AtomNeuralnetworksCompilationFailed)
             }
-            "ATOM_NEURALNETWORKS_EXECUTION_FAILED" => {
-                Some(Self::AtomNeuralnetworksExecutionFailed)
-            }
+            "ATOM_NEURALNETWORKS_EXECUTION_FAILED" => Some(Self::AtomNeuralnetworksExecutionFailed),
             "ATOM_CONTEXT_HUB_BOOTED" => Some(Self::AtomContextHubBooted),
             "ATOM_CONTEXT_HUB_RESTARTED" => Some(Self::AtomContextHubRestarted),
             "ATOM_CONTEXT_HUB_LOADED_NANOAPP_SNAPSHOT_REPORTED" => {
                 Some(Self::AtomContextHubLoadedNanoappSnapshotReported)
             }
-            "ATOM_CHRE_CODE_DOWNLOAD_TRANSACTED" => {
-                Some(Self::AtomChreCodeDownloadTransacted)
-            }
+            "ATOM_CHRE_CODE_DOWNLOAD_TRANSACTED" => Some(Self::AtomChreCodeDownloadTransacted),
             "ATOM_UWB_SESSION_INITED" => Some(Self::AtomUwbSessionInited),
             "ATOM_UWB_SESSION_CLOSED" => Some(Self::AtomUwbSessionClosed),
             "ATOM_UWB_FIRST_RANGING_RECEIVED" => Some(Self::AtomUwbFirstRangingReceived),
@@ -4992,28 +4300,20 @@ impl AtomId {
             }
             "ATOM_CLIPBOARD_CLEARED" => Some(Self::AtomClipboardCleared),
             "ATOM_VM_CREATION_REQUESTED" => Some(Self::AtomVmCreationRequested),
-            "ATOM_NEARBY_DEVICE_SCAN_STATE_CHANGED" => {
-                Some(Self::AtomNearbyDeviceScanStateChanged)
-            }
+            "ATOM_NEARBY_DEVICE_SCAN_STATE_CHANGED" => Some(Self::AtomNearbyDeviceScanStateChanged),
             "ATOM_CAMERA_COMPAT_CONTROL_EVENT_REPORTED" => {
                 Some(Self::AtomCameraCompatControlEventReported)
             }
-            "ATOM_APPLICATION_LOCALES_CHANGED" => {
-                Some(Self::AtomApplicationLocalesChanged)
-            }
+            "ATOM_APPLICATION_LOCALES_CHANGED" => Some(Self::AtomApplicationLocalesChanged),
             "ATOM_MEDIAMETRICS_AUDIOTRACKSTATUS_REPORTED" => {
                 Some(Self::AtomMediametricsAudiotrackstatusReported)
             }
-            "ATOM_FOLD_STATE_DURATION_REPORTED" => {
-                Some(Self::AtomFoldStateDurationReported)
-            }
+            "ATOM_FOLD_STATE_DURATION_REPORTED" => Some(Self::AtomFoldStateDurationReported),
             "ATOM_LOCATION_TIME_ZONE_PROVIDER_CONTROLLER_STATE_CHANGED" => {
                 Some(Self::AtomLocationTimeZoneProviderControllerStateChanged)
             }
             "ATOM_DISPLAY_HBM_STATE_CHANGED" => Some(Self::AtomDisplayHbmStateChanged),
-            "ATOM_DISPLAY_HBM_BRIGHTNESS_CHANGED" => {
-                Some(Self::AtomDisplayHbmBrightnessChanged)
-            }
+            "ATOM_DISPLAY_HBM_BRIGHTNESS_CHANGED" => Some(Self::AtomDisplayHbmBrightnessChanged),
             "ATOM_PERSISTENT_URI_PERMISSIONS_FLUSHED" => {
                 Some(Self::AtomPersistentUriPermissionsFlushed)
             }
@@ -5023,20 +4323,14 @@ impl AtomId {
             "ATOM_VBMETA_DIGEST_REPORTED" => Some(Self::AtomVbmetaDigestReported),
             "ATOM_APEX_INFO_GATHERED" => Some(Self::AtomApexInfoGathered),
             "ATOM_PVM_INFO_GATHERED" => Some(Self::AtomPvmInfoGathered),
-            "ATOM_WEAR_SETTINGS_UI_INTERACTED" => {
-                Some(Self::AtomWearSettingsUiInteracted)
-            }
-            "ATOM_TRACING_SERVICE_REPORT_EVENT" => {
-                Some(Self::AtomTracingServiceReportEvent)
-            }
+            "ATOM_WEAR_SETTINGS_UI_INTERACTED" => Some(Self::AtomWearSettingsUiInteracted),
+            "ATOM_TRACING_SERVICE_REPORT_EVENT" => Some(Self::AtomTracingServiceReportEvent),
             "ATOM_MEDIAMETRICS_AUDIORECORDSTATUS_REPORTED" => {
                 Some(Self::AtomMediametricsAudiorecordstatusReported)
             }
             "ATOM_LAUNCHER_LATENCY" => Some(Self::AtomLauncherLatency),
             "ATOM_DROPBOX_ENTRY_DROPPED" => Some(Self::AtomDropboxEntryDropped),
-            "ATOM_WIFI_P2P_CONNECTION_REPORTED" => {
-                Some(Self::AtomWifiP2pConnectionReported)
-            }
+            "ATOM_WIFI_P2P_CONNECTION_REPORTED" => Some(Self::AtomWifiP2pConnectionReported),
             "ATOM_GAME_STATE_CHANGED" => Some(Self::AtomGameStateChanged),
             "ATOM_HOTWORD_DETECTOR_CREATE_REQUESTED" => {
                 Some(Self::AtomHotwordDetectorCreateRequested)
@@ -5076,9 +4370,7 @@ impl AtomId {
             "ATOM_RECENT_PERMISSION_DECISIONS_INTERACTED" => {
                 Some(Self::AtomRecentPermissionDecisionsInteracted)
             }
-            "ATOM_GNSS_PSDS_DOWNLOAD_REPORTED" => {
-                Some(Self::AtomGnssPsdsDownloadReported)
-            }
+            "ATOM_GNSS_PSDS_DOWNLOAD_REPORTED" => Some(Self::AtomGnssPsdsDownloadReported),
             "ATOM_LE_AUDIO_CONNECTION_SESSION_REPORTED" => {
                 Some(Self::AtomLeAudioConnectionSessionReported)
             }
@@ -5086,9 +4378,7 @@ impl AtomId {
                 Some(Self::AtomLeAudioBroadcastSessionReported)
             }
             "ATOM_DREAM_UI_EVENT_REPORTED" => Some(Self::AtomDreamUiEventReported),
-            "ATOM_TASK_MANAGER_EVENT_REPORTED" => {
-                Some(Self::AtomTaskManagerEventReported)
-            }
+            "ATOM_TASK_MANAGER_EVENT_REPORTED" => Some(Self::AtomTaskManagerEventReported),
             "ATOM_CDM_ASSOCIATION_ACTION" => Some(Self::AtomCdmAssociationAction),
             "ATOM_MAGNIFICATION_TRIPLE_TAP_AND_HOLD_ACTIVATED_SESSION_REPORTED" => {
                 Some(Self::AtomMagnificationTripleTapAndHoldActivatedSessionReported)
@@ -5103,9 +4393,7 @@ impl AtomId {
                 Some(Self::AtomWifiSetupFailureCrashReported)
             }
             "ATOM_UWB_DEVICE_ERROR_REPORTED" => Some(Self::AtomUwbDeviceErrorReported),
-            "ATOM_ISOLATED_COMPILATION_SCHEDULED" => {
-                Some(Self::AtomIsolatedCompilationScheduled)
-            }
+            "ATOM_ISOLATED_COMPILATION_SCHEDULED" => Some(Self::AtomIsolatedCompilationScheduled),
             "ATOM_ISOLATED_COMPILATION_ENDED" => Some(Self::AtomIsolatedCompilationEnded),
             "ATOM_ONS_OPPORTUNISTIC_ESIM_PROVISIONING_COMPLETE" => {
                 Some(Self::AtomOnsOpportunisticEsimProvisioningComplete)
@@ -5115,15 +4403,11 @@ impl AtomId {
             }
             "ATOM_TELEPHONY_ANOMALY_DETECTED" => Some(Self::AtomTelephonyAnomalyDetected),
             "ATOM_LETTERBOX_POSITION_CHANGED" => Some(Self::AtomLetterboxPositionChanged),
-            "ATOM_REMOTE_KEY_PROVISIONING_ATTEMPT" => {
-                Some(Self::AtomRemoteKeyProvisioningAttempt)
-            }
+            "ATOM_REMOTE_KEY_PROVISIONING_ATTEMPT" => Some(Self::AtomRemoteKeyProvisioningAttempt),
             "ATOM_REMOTE_KEY_PROVISIONING_NETWORK_INFO" => {
                 Some(Self::AtomRemoteKeyProvisioningNetworkInfo)
             }
-            "ATOM_REMOTE_KEY_PROVISIONING_TIMING" => {
-                Some(Self::AtomRemoteKeyProvisioningTiming)
-            }
+            "ATOM_REMOTE_KEY_PROVISIONING_TIMING" => Some(Self::AtomRemoteKeyProvisioningTiming),
             "ATOM_MEDIAOUTPUT_OP_INTERACTION_REPORT" => {
                 Some(Self::AtomMediaoutputOpInteractionReport)
             }
@@ -5132,9 +4416,7 @@ impl AtomId {
                 Some(Self::AtomAutofillPresentationEventReported)
             }
             "ATOM_DOCK_STATE_CHANGED" => Some(Self::AtomDockStateChanged),
-            "ATOM_SAFETY_SOURCE_STATE_COLLECTED" => {
-                Some(Self::AtomSafetySourceStateCollected)
-            }
+            "ATOM_SAFETY_SOURCE_STATE_COLLECTED" => Some(Self::AtomSafetySourceStateCollected),
             "ATOM_SAFETY_CENTER_SYSTEM_EVENT_REPORTED" => {
                 Some(Self::AtomSafetyCenterSystemEventReported)
             }
@@ -5147,33 +4429,23 @@ impl AtomId {
             "ATOM_BROADCAST_DELIVERY_EVENT_REPORTED" => {
                 Some(Self::AtomBroadcastDeliveryEventReported)
             }
-            "ATOM_SERVICE_REQUEST_EVENT_REPORTED" => {
-                Some(Self::AtomServiceRequestEventReported)
-            }
+            "ATOM_SERVICE_REQUEST_EVENT_REPORTED" => Some(Self::AtomServiceRequestEventReported),
             "ATOM_PROVIDER_ACQUISITION_EVENT_REPORTED" => {
                 Some(Self::AtomProviderAcquisitionEventReported)
             }
-            "ATOM_BLUETOOTH_DEVICE_NAME_REPORTED" => {
-                Some(Self::AtomBluetoothDeviceNameReported)
-            }
+            "ATOM_BLUETOOTH_DEVICE_NAME_REPORTED" => Some(Self::AtomBluetoothDeviceNameReported),
             "ATOM_CB_CONFIG_UPDATED" => Some(Self::AtomCbConfigUpdated),
             "ATOM_CB_MODULE_ERROR_REPORTED" => Some(Self::AtomCbModuleErrorReported),
             "ATOM_CB_SERVICE_FEATURE_CHANGED" => Some(Self::AtomCbServiceFeatureChanged),
-            "ATOM_CB_RECEIVER_FEATURE_CHANGED" => {
-                Some(Self::AtomCbReceiverFeatureChanged)
-            }
-            "ATOM_JSSCRIPTENGINE_LATENCY_REPORTED" => {
-                Some(Self::AtomJsscriptengineLatencyReported)
-            }
+            "ATOM_CB_RECEIVER_FEATURE_CHANGED" => Some(Self::AtomCbReceiverFeatureChanged),
+            "ATOM_JSSCRIPTENGINE_LATENCY_REPORTED" => Some(Self::AtomJsscriptengineLatencyReported),
             "ATOM_PRIVACY_SIGNAL_NOTIFICATION_INTERACTION" => {
                 Some(Self::AtomPrivacySignalNotificationInteraction)
             }
             "ATOM_PRIVACY_SIGNAL_ISSUE_CARD_INTERACTION" => {
                 Some(Self::AtomPrivacySignalIssueCardInteraction)
             }
-            "ATOM_PRIVACY_SIGNALS_JOB_FAILURE" => {
-                Some(Self::AtomPrivacySignalsJobFailure)
-            }
+            "ATOM_PRIVACY_SIGNALS_JOB_FAILURE" => Some(Self::AtomPrivacySignalsJobFailure),
             "ATOM_VIBRATION_REPORTED" => Some(Self::AtomVibrationReported),
             "ATOM_UWB_RANGING_START" => Some(Self::AtomUwbRangingStart),
             "ATOM_MOBILE_DATA_DOWNLOAD_FILE_GROUP_STATUS_REPORTED" => {
@@ -5191,12 +4463,8 @@ impl AtomId {
             "ATOM_UPDATE_CUSTOM_AUDIENCE_PROCESS_REPORTED" => {
                 Some(Self::AtomUpdateCustomAudienceProcessReported)
             }
-            "ATOM_RUN_AD_BIDDING_PROCESS_REPORTED" => {
-                Some(Self::AtomRunAdBiddingProcessReported)
-            }
-            "ATOM_RUN_AD_SCORING_PROCESS_REPORTED" => {
-                Some(Self::AtomRunAdScoringProcessReported)
-            }
+            "ATOM_RUN_AD_BIDDING_PROCESS_REPORTED" => Some(Self::AtomRunAdBiddingProcessReported),
+            "ATOM_RUN_AD_SCORING_PROCESS_REPORTED" => Some(Self::AtomRunAdScoringProcessReported),
             "ATOM_RUN_AD_SELECTION_PROCESS_REPORTED" => {
                 Some(Self::AtomRunAdSelectionProcessReported)
             }
@@ -5239,29 +4507,21 @@ impl AtomId {
             "ATOM_AMBIENT_MODE_CHANGED" => Some(Self::AtomAmbientModeChanged),
             "ATOM_ANR_LATENCY_REPORTED" => Some(Self::AtomAnrLatencyReported),
             "ATOM_RESOURCE_API_INFO" => Some(Self::AtomResourceApiInfo),
-            "ATOM_SYSTEM_DEFAULT_NETWORK_CHANGED" => {
-                Some(Self::AtomSystemDefaultNetworkChanged)
-            }
+            "ATOM_SYSTEM_DEFAULT_NETWORK_CHANGED" => Some(Self::AtomSystemDefaultNetworkChanged),
             "ATOM_IWLAN_SETUP_DATA_CALL_RESULT_REPORTED" => {
                 Some(Self::AtomIwlanSetupDataCallResultReported)
             }
             "ATOM_IWLAN_PDN_DISCONNECTED_REASON_REPORTED" => {
                 Some(Self::AtomIwlanPdnDisconnectedReasonReported)
             }
-            "ATOM_AIRPLANE_MODE_SESSION_REPORTED" => {
-                Some(Self::AtomAirplaneModeSessionReported)
-            }
+            "ATOM_AIRPLANE_MODE_SESSION_REPORTED" => Some(Self::AtomAirplaneModeSessionReported),
             "ATOM_VM_CPU_STATUS_REPORTED" => Some(Self::AtomVmCpuStatusReported),
             "ATOM_VM_MEM_STATUS_REPORTED" => Some(Self::AtomVmMemStatusReported),
             "ATOM_PACKAGE_INSTALLATION_SESSION_REPORTED" => {
                 Some(Self::AtomPackageInstallationSessionReported)
             }
-            "ATOM_DEFAULT_NETWORK_REMATCH_INFO" => {
-                Some(Self::AtomDefaultNetworkRematchInfo)
-            }
-            "ATOM_NETWORK_SELECTION_PERFORMANCE" => {
-                Some(Self::AtomNetworkSelectionPerformance)
-            }
+            "ATOM_DEFAULT_NETWORK_REMATCH_INFO" => Some(Self::AtomDefaultNetworkRematchInfo),
+            "ATOM_NETWORK_SELECTION_PERFORMANCE" => Some(Self::AtomNetworkSelectionPerformance),
             "ATOM_NETWORK_NSD_REPORTED" => Some(Self::AtomNetworkNsdReported),
             "ATOM_BLUETOOTH_DISCONNECTION_REASON_REPORTED" => {
                 Some(Self::AtomBluetoothDisconnectionReasonReported)
@@ -5279,9 +4539,7 @@ impl AtomId {
             "ATOM_BRIGHTNESS_CONFIGURATION_UPDATED" => {
                 Some(Self::AtomBrightnessConfigurationUpdated)
             }
-            "ATOM_AD_SERVICES_GET_TOPICS_REPORTED" => {
-                Some(Self::AtomAdServicesGetTopicsReported)
-            }
+            "ATOM_AD_SERVICES_GET_TOPICS_REPORTED" => Some(Self::AtomAdServicesGetTopicsReported),
             "ATOM_AD_SERVICES_EPOCH_COMPUTATION_GET_TOP_TOPICS_REPORTED" => {
                 Some(Self::AtomAdServicesEpochComputationGetTopTopicsReported)
             }
@@ -5326,32 +4584,22 @@ impl AtomId {
             "ATOM_WS_WATCH_FACE_SET_ACTION_REPORTED" => {
                 Some(Self::AtomWsWatchFaceSetActionReported)
             }
-            "ATOM_PACKAGE_UNINSTALLATION_REPORTED" => {
-                Some(Self::AtomPackageUninstallationReported)
-            }
+            "ATOM_PACKAGE_UNINSTALLATION_REPORTED" => Some(Self::AtomPackageUninstallationReported),
             "ATOM_GAME_MODE_CHANGED" => Some(Self::AtomGameModeChanged),
-            "ATOM_GAME_MODE_CONFIGURATION_CHANGED" => {
-                Some(Self::AtomGameModeConfigurationChanged)
-            }
+            "ATOM_GAME_MODE_CONFIGURATION_CHANGED" => Some(Self::AtomGameModeConfigurationChanged),
             "ATOM_BEDTIME_MODE_STATE_CHANGED" => Some(Self::AtomBedtimeModeStateChanged),
-            "ATOM_NETWORK_SLICE_SESSION_ENDED" => {
-                Some(Self::AtomNetworkSliceSessionEnded)
-            }
+            "ATOM_NETWORK_SLICE_SESSION_ENDED" => Some(Self::AtomNetworkSliceSessionEnded),
             "ATOM_NETWORK_SLICE_DAILY_DATA_USAGE_REPORTED" => {
                 Some(Self::AtomNetworkSliceDailyDataUsageReported)
             }
             "ATOM_NFC_TAG_TYPE_OCCURRED" => Some(Self::AtomNfcTagTypeOccurred),
             "ATOM_NFC_AID_CONFLICT_OCCURRED" => Some(Self::AtomNfcAidConflictOccurred),
-            "ATOM_NFC_READER_CONFLICT_OCCURRED" => {
-                Some(Self::AtomNfcReaderConflictOccurred)
-            }
+            "ATOM_NFC_READER_CONFLICT_OCCURRED" => Some(Self::AtomNfcReaderConflictOccurred),
             "ATOM_WS_TILE_LIST_CHANGED" => Some(Self::AtomWsTileListChanged),
             "ATOM_GET_TYPE_ACCESSED_WITHOUT_PERMISSION" => {
                 Some(Self::AtomGetTypeAccessedWithoutPermission)
             }
-            "ATOM_MOBILE_BUNDLED_APP_INFO_GATHERED" => {
-                Some(Self::AtomMobileBundledAppInfoGathered)
-            }
+            "ATOM_MOBILE_BUNDLED_APP_INFO_GATHERED" => Some(Self::AtomMobileBundledAppInfoGathered),
             "ATOM_WS_WATCH_FACE_COMPLICATION_SET_CHANGED" => {
                 Some(Self::AtomWsWatchFaceComplicationSetChanged)
             }
@@ -5360,9 +4608,7 @@ impl AtomId {
             "ATOM_MEDIA_DRM_SESSION_OPENED" => Some(Self::AtomMediaDrmSessionOpened),
             "ATOM_MEDIA_DRM_SESSION_CLOSED" => Some(Self::AtomMediaDrmSessionClosed),
             "ATOM_USER_SELECTED_RESOLUTION" => Some(Self::AtomUserSelectedResolution),
-            "ATOM_UNSAFE_INTENT_EVENT_REPORTED" => {
-                Some(Self::AtomUnsafeIntentEventReported)
-            }
+            "ATOM_UNSAFE_INTENT_EVENT_REPORTED" => Some(Self::AtomUnsafeIntentEventReported),
             "ATOM_PERFORMANCE_HINT_SESSION_REPORTED" => {
                 Some(Self::AtomPerformanceHintSessionReported)
             }
@@ -5376,32 +4622,22 @@ impl AtomId {
             "ATOM_APP_SEARCH_SCHEMA_MIGRATION_STATS_REPORTED" => {
                 Some(Self::AtomAppSearchSchemaMigrationStatsReported)
             }
-            "ATOM_LOCATION_ENABLED_STATE_CHANGED" => {
-                Some(Self::AtomLocationEnabledStateChanged)
-            }
+            "ATOM_LOCATION_ENABLED_STATE_CHANGED" => Some(Self::AtomLocationEnabledStateChanged),
             "ATOM_IME_REQUEST_FINISHED" => Some(Self::AtomImeRequestFinished),
             "ATOM_USB_COMPLIANCE_WARNINGS_REPORTED" => {
                 Some(Self::AtomUsbComplianceWarningsReported)
             }
-            "ATOM_APP_SUPPORTED_LOCALES_CHANGED" => {
-                Some(Self::AtomAppSupportedLocalesChanged)
-            }
-            "ATOM_GRAMMATICAL_INFLECTION_CHANGED" => {
-                Some(Self::AtomGrammaticalInflectionChanged)
-            }
+            "ATOM_APP_SUPPORTED_LOCALES_CHANGED" => Some(Self::AtomAppSupportedLocalesChanged),
+            "ATOM_GRAMMATICAL_INFLECTION_CHANGED" => Some(Self::AtomGrammaticalInflectionChanged),
             "ATOM_MEDIA_PROVIDER_VOLUME_RECOVERY_REPORTED" => {
                 Some(Self::AtomMediaProviderVolumeRecoveryReported)
             }
-            "ATOM_BIOMETRIC_PROPERTIES_COLLECTED" => {
-                Some(Self::AtomBiometricPropertiesCollected)
-            }
+            "ATOM_BIOMETRIC_PROPERTIES_COLLECTED" => Some(Self::AtomBiometricPropertiesCollected),
             "ATOM_KERNEL_WAKEUP_ATTRIBUTED" => Some(Self::AtomKernelWakeupAttributed),
             "ATOM_SCREEN_STATE_CHANGED_V2" => Some(Self::AtomScreenStateChangedV2),
             "ATOM_WS_BACKUP_ACTION_REPORTED" => Some(Self::AtomWsBackupActionReported),
             "ATOM_WS_RESTORE_ACTION_REPORTED" => Some(Self::AtomWsRestoreActionReported),
-            "ATOM_DEVICE_LOG_ACCESS_EVENT_REPORTED" => {
-                Some(Self::AtomDeviceLogAccessEventReported)
-            }
+            "ATOM_DEVICE_LOG_ACCESS_EVENT_REPORTED" => Some(Self::AtomDeviceLogAccessEventReported),
             "ATOM_MEDIA_SESSION_UPDATED" => Some(Self::AtomMediaSessionUpdated),
             "ATOM_WEAR_OOBE_STATE_CHANGED" => Some(Self::AtomWearOobeStateChanged),
             "ATOM_WS_NOTIFICATION_UPDATED" => Some(Self::AtomWsNotificationUpdated),
@@ -5411,13 +4647,9 @@ impl AtomId {
             "ATOM_WS_COMPLICATION_TAPPED" => Some(Self::AtomWsComplicationTapped),
             "ATOM_WS_WEAR_TIME_SESSION" => Some(Self::AtomWsWearTimeSession),
             "ATOM_WIFI_BYTES_TRANSFER" => Some(Self::AtomWifiBytesTransfer),
-            "ATOM_WIFI_BYTES_TRANSFER_BY_FG_BG" => {
-                Some(Self::AtomWifiBytesTransferByFgBg)
-            }
+            "ATOM_WIFI_BYTES_TRANSFER_BY_FG_BG" => Some(Self::AtomWifiBytesTransferByFgBg),
             "ATOM_MOBILE_BYTES_TRANSFER" => Some(Self::AtomMobileBytesTransfer),
-            "ATOM_MOBILE_BYTES_TRANSFER_BY_FG_BG" => {
-                Some(Self::AtomMobileBytesTransferByFgBg)
-            }
+            "ATOM_MOBILE_BYTES_TRANSFER_BY_FG_BG" => Some(Self::AtomMobileBytesTransferByFgBg),
             "ATOM_BLUETOOTH_BYTES_TRANSFER" => Some(Self::AtomBluetoothBytesTransfer),
             "ATOM_KERNEL_WAKELOCK" => Some(Self::AtomKernelWakelock),
             "ATOM_SUBSYSTEM_SLEEP_STATE" => Some(Self::AtomSubsystemSleepState),
@@ -5450,22 +4682,14 @@ impl AtomId {
             "ATOM_PROC_STATS_PKG_PROC" => Some(Self::AtomProcStatsPkgProc),
             "ATOM_PROCESS_CPU_TIME" => Some(Self::AtomProcessCpuTime),
             "ATOM_CPU_TIME_PER_THREAD_FREQ" => Some(Self::AtomCpuTimePerThreadFreq),
-            "ATOM_ON_DEVICE_POWER_MEASUREMENT" => {
-                Some(Self::AtomOnDevicePowerMeasurement)
-            }
-            "ATOM_DEVICE_CALCULATED_POWER_USE" => {
-                Some(Self::AtomDeviceCalculatedPowerUse)
-            }
-            "ATOM_PROCESS_MEMORY_HIGH_WATER_MARK" => {
-                Some(Self::AtomProcessMemoryHighWaterMark)
-            }
+            "ATOM_ON_DEVICE_POWER_MEASUREMENT" => Some(Self::AtomOnDevicePowerMeasurement),
+            "ATOM_DEVICE_CALCULATED_POWER_USE" => Some(Self::AtomDeviceCalculatedPowerUse),
+            "ATOM_PROCESS_MEMORY_HIGH_WATER_MARK" => Some(Self::AtomProcessMemoryHighWaterMark),
             "ATOM_BATTERY_LEVEL" => Some(Self::AtomBatteryLevel),
             "ATOM_BUILD_INFORMATION" => Some(Self::AtomBuildInformation),
             "ATOM_BATTERY_CYCLE_COUNT" => Some(Self::AtomBatteryCycleCount),
             "ATOM_DEBUG_ELAPSED_CLOCK" => Some(Self::AtomDebugElapsedClock),
-            "ATOM_DEBUG_FAILING_ELAPSED_CLOCK" => {
-                Some(Self::AtomDebugFailingElapsedClock)
-            }
+            "ATOM_DEBUG_FAILING_ELAPSED_CLOCK" => Some(Self::AtomDebugFailingElapsedClock),
             "ATOM_NUM_FACES_ENROLLED" => Some(Self::AtomNumFacesEnrolled),
             "ATOM_ROLE_HOLDER" => Some(Self::AtomRoleHolder),
             "ATOM_DANGEROUS_PERMISSION_STATE" => Some(Self::AtomDangerousPermissionState),
@@ -5475,21 +4699,15 @@ impl AtomId {
             "ATOM_GPU_STATS_GLOBAL_INFO" => Some(Self::AtomGpuStatsGlobalInfo),
             "ATOM_GPU_STATS_APP_INFO" => Some(Self::AtomGpuStatsAppInfo),
             "ATOM_SYSTEM_ION_HEAP_SIZE" => Some(Self::AtomSystemIonHeapSize),
-            "ATOM_APPS_ON_EXTERNAL_STORAGE_INFO" => {
-                Some(Self::AtomAppsOnExternalStorageInfo)
-            }
+            "ATOM_APPS_ON_EXTERNAL_STORAGE_INFO" => Some(Self::AtomAppsOnExternalStorageInfo),
             "ATOM_FACE_SETTINGS" => Some(Self::AtomFaceSettings),
             "ATOM_COOLING_DEVICE" => Some(Self::AtomCoolingDevice),
             "ATOM_APP_OPS" => Some(Self::AtomAppOps),
-            "ATOM_PROCESS_SYSTEM_ION_HEAP_SIZE" => {
-                Some(Self::AtomProcessSystemIonHeapSize)
-            }
+            "ATOM_PROCESS_SYSTEM_ION_HEAP_SIZE" => Some(Self::AtomProcessSystemIonHeapSize),
             "ATOM_SURFACEFLINGER_STATS_GLOBAL_INFO" => {
                 Some(Self::AtomSurfaceflingerStatsGlobalInfo)
             }
-            "ATOM_SURFACEFLINGER_STATS_LAYER_INFO" => {
-                Some(Self::AtomSurfaceflingerStatsLayerInfo)
-            }
+            "ATOM_SURFACEFLINGER_STATS_LAYER_INFO" => Some(Self::AtomSurfaceflingerStatsLayerInfo),
             "ATOM_PROCESS_MEMORY_SNAPSHOT" => Some(Self::AtomProcessMemorySnapshot),
             "ATOM_VMS_CLIENT_STATS" => Some(Self::AtomVmsClientStats),
             "ATOM_NOTIFICATION_REMOTE_VIEWS" => Some(Self::AtomNotificationRemoteViews),
@@ -5513,9 +4731,7 @@ impl AtomId {
             "ATOM_VOICE_CALL_SESSION" => Some(Self::AtomVoiceCallSession),
             "ATOM_VOICE_CALL_RAT_USAGE" => Some(Self::AtomVoiceCallRatUsage),
             "ATOM_SIM_SLOT_STATE" => Some(Self::AtomSimSlotState),
-            "ATOM_SUPPORTED_RADIO_ACCESS_FAMILY" => {
-                Some(Self::AtomSupportedRadioAccessFamily)
-            }
+            "ATOM_SUPPORTED_RADIO_ACCESS_FAMILY" => Some(Self::AtomSupportedRadioAccessFamily),
             "ATOM_SETTING_SNAPSHOT" => Some(Self::AtomSettingSnapshot),
             "ATOM_BLOB_INFO" => Some(Self::AtomBlobInfo),
             "ATOM_DATA_USAGE_BYTES_TRANSFER" => Some(Self::AtomDataUsageBytesTransfer),
@@ -5531,13 +4747,9 @@ impl AtomId {
             "ATOM_CARRIER_ID_TABLE_VERSION" => Some(Self::AtomCarrierIdTableVersion),
             "ATOM_DATA_CALL_SESSION" => Some(Self::AtomDataCallSession),
             "ATOM_CELLULAR_SERVICE_STATE" => Some(Self::AtomCellularServiceState),
-            "ATOM_CELLULAR_DATA_SERVICE_SWITCH" => {
-                Some(Self::AtomCellularDataServiceSwitch)
-            }
+            "ATOM_CELLULAR_DATA_SERVICE_SWITCH" => Some(Self::AtomCellularDataServiceSwitch),
             "ATOM_SYSTEM_MEMORY" => Some(Self::AtomSystemMemory),
-            "ATOM_IMS_REGISTRATION_TERMINATION" => {
-                Some(Self::AtomImsRegistrationTermination)
-            }
+            "ATOM_IMS_REGISTRATION_TERMINATION" => Some(Self::AtomImsRegistrationTermination),
             "ATOM_IMS_REGISTRATION_STATS" => Some(Self::AtomImsRegistrationStats),
             "ATOM_CPU_TIME_PER_CLUSTER_FREQ" => Some(Self::AtomCpuTimePerClusterFreq),
             "ATOM_CPU_CYCLES_PER_UID_CLUSTER" => Some(Self::AtomCpuCyclesPerUidCluster),
@@ -5557,18 +4769,12 @@ impl AtomId {
             "ATOM_LAUNCHER_LAYOUT_SNAPSHOT" => Some(Self::AtomLauncherLayoutSnapshot),
             "ATOM_GLOBAL_HIBERNATED_APPS" => Some(Self::AtomGlobalHibernatedApps),
             "ATOM_INPUT_EVENT_LATENCY_SKETCH" => Some(Self::AtomInputEventLatencySketch),
-            "ATOM_BATTERY_USAGE_STATS_BEFORE_RESET" => {
-                Some(Self::AtomBatteryUsageStatsBeforeReset)
-            }
-            "ATOM_BATTERY_USAGE_STATS_SINCE_RESET" => {
-                Some(Self::AtomBatteryUsageStatsSinceReset)
-            }
+            "ATOM_BATTERY_USAGE_STATS_BEFORE_RESET" => Some(Self::AtomBatteryUsageStatsBeforeReset),
+            "ATOM_BATTERY_USAGE_STATS_SINCE_RESET" => Some(Self::AtomBatteryUsageStatsSinceReset),
             "ATOM_BATTERY_USAGE_STATS_SINCE_RESET_USING_POWER_PROFILE_MODEL" => {
                 Some(Self::AtomBatteryUsageStatsSinceResetUsingPowerProfileModel)
             }
-            "ATOM_INSTALLED_INCREMENTAL_PACKAGE" => {
-                Some(Self::AtomInstalledIncrementalPackage)
-            }
+            "ATOM_INSTALLED_INCREMENTAL_PACKAGE" => Some(Self::AtomInstalledIncrementalPackage),
             "ATOM_TELEPHONY_NETWORK_REQUESTS" => Some(Self::AtomTelephonyNetworkRequests),
             "ATOM_APP_SEARCH_STORAGE_INFO" => Some(Self::AtomAppSearchStorageInfo),
             "ATOM_VMSTAT" => Some(Self::AtomVmstat),
@@ -5581,9 +4787,7 @@ impl AtomId {
             "ATOM_KEYSTORE2_KEY_CREATION_WITH_PURPOSE_AND_MODES_INFO" => {
                 Some(Self::AtomKeystore2KeyCreationWithPurposeAndModesInfo)
             }
-            "ATOM_KEYSTORE2_ATOM_WITH_OVERFLOW" => {
-                Some(Self::AtomKeystore2AtomWithOverflow)
-            }
+            "ATOM_KEYSTORE2_ATOM_WITH_OVERFLOW" => Some(Self::AtomKeystore2AtomWithOverflow),
             "ATOM_KEYSTORE2_KEY_OPERATION_WITH_PURPOSE_AND_MODES_INFO" => {
                 Some(Self::AtomKeystore2KeyOperationWithPurposeAndModesInfo)
             }
@@ -5593,15 +4797,11 @@ impl AtomId {
             "ATOM_RKP_ERROR_STATS" => Some(Self::AtomRkpErrorStats),
             "ATOM_KEYSTORE2_CRASH_STATS" => Some(Self::AtomKeystore2CrashStats),
             "ATOM_VENDOR_APEX_INFO" => Some(Self::AtomVendorApexInfo),
-            "ATOM_ACCESSIBILITY_SHORTCUT_STATS" => {
-                Some(Self::AtomAccessibilityShortcutStats)
-            }
+            "ATOM_ACCESSIBILITY_SHORTCUT_STATS" => Some(Self::AtomAccessibilityShortcutStats),
             "ATOM_ACCESSIBILITY_FLOATING_MENU_STATS" => {
                 Some(Self::AtomAccessibilityFloatingMenuStats)
             }
-            "ATOM_DATA_USAGE_BYTES_TRANSFER_V2" => {
-                Some(Self::AtomDataUsageBytesTransferV2)
-            }
+            "ATOM_DATA_USAGE_BYTES_TRANSFER_V2" => Some(Self::AtomDataUsageBytesTransferV2),
             "ATOM_MEDIA_CAPABILITIES" => Some(Self::AtomMediaCapabilities),
             "ATOM_CAR_WATCHDOG_SYSTEM_IO_USAGE_SUMMARY" => {
                 Some(Self::AtomCarWatchdogSystemIoUsageSummary)
@@ -5612,14 +4812,10 @@ impl AtomId {
             "ATOM_IMS_REGISTRATION_FEATURE_TAG_STATS" => {
                 Some(Self::AtomImsRegistrationFeatureTagStats)
             }
-            "ATOM_RCS_CLIENT_PROVISIONING_STATS" => {
-                Some(Self::AtomRcsClientProvisioningStats)
-            }
+            "ATOM_RCS_CLIENT_PROVISIONING_STATS" => Some(Self::AtomRcsClientProvisioningStats),
             "ATOM_RCS_ACS_PROVISIONING_STATS" => Some(Self::AtomRcsAcsProvisioningStats),
             "ATOM_SIP_DELEGATE_STATS" => Some(Self::AtomSipDelegateStats),
-            "ATOM_SIP_TRANSPORT_FEATURE_TAG_STATS" => {
-                Some(Self::AtomSipTransportFeatureTagStats)
-            }
+            "ATOM_SIP_TRANSPORT_FEATURE_TAG_STATS" => Some(Self::AtomSipTransportFeatureTagStats),
             "ATOM_SIP_MESSAGE_RESPONSE" => Some(Self::AtomSipMessageResponse),
             "ATOM_SIP_TRANSPORT_SESSION" => Some(Self::AtomSipTransportSession),
             "ATOM_IMS_DEDICATED_BEARER_LISTENER_EVENT" => {
@@ -5638,19 +4834,11 @@ impl AtomId {
                 Some(Self::AtomPersistentUriPermissionsAmountPerPackage)
             }
             "ATOM_SIGNED_PARTITION_INFO" => Some(Self::AtomSignedPartitionInfo),
-            "ATOM_PINNED_FILE_SIZES_PER_PACKAGE" => {
-                Some(Self::AtomPinnedFileSizesPerPackage)
-            }
-            "ATOM_PENDING_INTENTS_PER_PACKAGE" => {
-                Some(Self::AtomPendingIntentsPerPackage)
-            }
+            "ATOM_PINNED_FILE_SIZES_PER_PACKAGE" => Some(Self::AtomPinnedFileSizesPerPackage),
+            "ATOM_PENDING_INTENTS_PER_PACKAGE" => Some(Self::AtomPendingIntentsPerPackage),
             "ATOM_USER_INFO" => Some(Self::AtomUserInfo),
-            "ATOM_TELEPHONY_NETWORK_REQUESTS_V2" => {
-                Some(Self::AtomTelephonyNetworkRequestsV2)
-            }
-            "ATOM_DEVICE_TELEPHONY_PROPERTIES" => {
-                Some(Self::AtomDeviceTelephonyProperties)
-            }
+            "ATOM_TELEPHONY_NETWORK_REQUESTS_V2" => Some(Self::AtomTelephonyNetworkRequestsV2),
+            "ATOM_DEVICE_TELEPHONY_PROPERTIES" => Some(Self::AtomDeviceTelephonyProperties),
             "ATOM_REMOTE_KEY_PROVISIONING_ERROR_COUNTS" => {
                 Some(Self::AtomRemoteKeyProvisioningErrorCounts)
             }
@@ -5667,9 +4855,7 @@ impl AtomId {
             "ATOM_GAME_MODE_INFO" => Some(Self::AtomGameModeInfo),
             "ATOM_GAME_MODE_CONFIGURATION" => Some(Self::AtomGameModeConfiguration),
             "ATOM_GAME_MODE_LISTENER" => Some(Self::AtomGameModeListener),
-            "ATOM_NETWORK_SLICE_REQUEST_COUNT" => {
-                Some(Self::AtomNetworkSliceRequestCount)
-            }
+            "ATOM_NETWORK_SLICE_REQUEST_COUNT" => Some(Self::AtomNetworkSliceRequestCount),
             "ATOM_WS_TILE_SNAPSHOT" => Some(Self::AtomWsTileSnapshot),
             "ATOM_WS_ACTIVE_WATCH_FACE_COMPLICATION_SET_SNAPSHOT" => {
                 Some(Self::AtomWsActiveWatchFaceComplicationSetSnapshot)
@@ -5684,9 +4870,7 @@ impl AtomId {
             }
             "ATOM_WIFI_AWARE_NDP_REPORTED" => Some(Self::AtomWifiAwareNdpReported),
             "ATOM_WIFI_AWARE_ATTACH_REPORTED" => Some(Self::AtomWifiAwareAttachReported),
-            "ATOM_WIFI_SELF_RECOVERY_TRIGGERED" => {
-                Some(Self::AtomWifiSelfRecoveryTriggered)
-            }
+            "ATOM_WIFI_SELF_RECOVERY_TRIGGERED" => Some(Self::AtomWifiSelfRecoveryTriggered),
             "ATOM_SOFT_AP_STARTED" => Some(Self::AtomSoftApStarted),
             "ATOM_SOFT_AP_STOPPED" => Some(Self::AtomSoftApStopped),
             "ATOM_WIFI_LOCK_RELEASED" => Some(Self::AtomWifiLockReleased),
@@ -5696,9 +4880,7 @@ impl AtomId {
                 Some(Self::AtomWifiAwareResourceUsingChanged)
             }
             "ATOM_WIFI_AWARE_HAL_API_CALLED" => Some(Self::AtomWifiAwareHalApiCalled),
-            "ATOM_WIFI_LOCAL_ONLY_REQUEST_RECEIVED" => {
-                Some(Self::AtomWifiLocalOnlyRequestReceived)
-            }
+            "ATOM_WIFI_LOCAL_ONLY_REQUEST_RECEIVED" => Some(Self::AtomWifiLocalOnlyRequestReceived),
             "ATOM_WIFI_LOCAL_ONLY_REQUEST_SCAN_TRIGGERED" => {
                 Some(Self::AtomWifiLocalOnlyRequestScanTriggered)
             }
@@ -5730,22 +4912,14 @@ impl AtomId {
             "ATOM_APP_DATA_SHARING_UPDATES_FRAGMENT_ACTION_REPORTED" => {
                 Some(Self::AtomAppDataSharingUpdatesFragmentActionReported)
             }
-            "ATOM_WS_INCOMING_CALL_ACTION_REPORTED" => {
-                Some(Self::AtomWsIncomingCallActionReported)
-            }
-            "ATOM_WS_CALL_DISCONNECTION_REPORTED" => {
-                Some(Self::AtomWsCallDisconnectionReported)
-            }
+            "ATOM_WS_INCOMING_CALL_ACTION_REPORTED" => Some(Self::AtomWsIncomingCallActionReported),
+            "ATOM_WS_CALL_DISCONNECTION_REPORTED" => Some(Self::AtomWsCallDisconnectionReported),
             "ATOM_WS_CALL_DURATION_REPORTED" => Some(Self::AtomWsCallDurationReported),
             "ATOM_WS_CALL_USER_EXPERIENCE_LATENCY_REPORTED" => {
                 Some(Self::AtomWsCallUserExperienceLatencyReported)
             }
-            "ATOM_WS_CALL_INTERACTION_REPORTED" => {
-                Some(Self::AtomWsCallInteractionReported)
-            }
-            "ATOM_FULL_SCREEN_INTENT_LAUNCHED" => {
-                Some(Self::AtomFullScreenIntentLaunched)
-            }
+            "ATOM_WS_CALL_INTERACTION_REPORTED" => Some(Self::AtomWsCallInteractionReported),
+            "ATOM_FULL_SCREEN_INTENT_LAUNCHED" => Some(Self::AtomFullScreenIntentLaunched),
             "ATOM_BAL_ALLOWED" => Some(Self::AtomBalAllowed),
             "ATOM_IN_TASK_ACTIVITY_STARTED" => Some(Self::AtomInTaskActivityStarted),
             "ATOM_CACHED_APPS_HIGH_WATERMARK" => Some(Self::AtomCachedAppsHighWatermark),
@@ -5754,9 +4928,7 @@ impl AtomId {
             "ATOM_ART_DATUM_REPORTED" => Some(Self::AtomArtDatumReported),
             "ATOM_ART_DEVICE_DATUM_REPORTED" => Some(Self::AtomArtDeviceDatumReported),
             "ATOM_ART_DATUM_DELTA_REPORTED" => Some(Self::AtomArtDatumDeltaReported),
-            "ATOM_BACKGROUND_DEXOPT_JOB_ENDED" => {
-                Some(Self::AtomBackgroundDexoptJobEnded)
-            }
+            "ATOM_BACKGROUND_DEXOPT_JOB_ENDED" => Some(Self::AtomBackgroundDexoptJobEnded),
             "ATOM_WEAR_ADAPTIVE_SUSPEND_STATS_REPORTED" => {
                 Some(Self::AtomWearAdaptiveSuspendStatsReported)
             }
@@ -5788,65 +4960,39 @@ impl AtomId {
             "ATOM_AD_SERVICES_MEASUREMENT_ATTRIBUTION" => {
                 Some(Self::AtomAdServicesMeasurementAttribution)
             }
-            "ATOM_AD_SERVICES_MEASUREMENT_JOBS" => {
-                Some(Self::AtomAdServicesMeasurementJobs)
-            }
-            "ATOM_AD_SERVICES_MEASUREMENT_WIPEOUT" => {
-                Some(Self::AtomAdServicesMeasurementWipeout)
-            }
-            "ATOM_AD_SERVICES_CONSENT_MIGRATED" => {
-                Some(Self::AtomAdServicesConsentMigrated)
-            }
+            "ATOM_AD_SERVICES_MEASUREMENT_JOBS" => Some(Self::AtomAdServicesMeasurementJobs),
+            "ATOM_AD_SERVICES_MEASUREMENT_WIPEOUT" => Some(Self::AtomAdServicesMeasurementWipeout),
+            "ATOM_AD_SERVICES_CONSENT_MIGRATED" => Some(Self::AtomAdServicesConsentMigrated),
             "ATOM_RKPD_POOL_STATS" => Some(Self::AtomRkpdPoolStats),
             "ATOM_RKPD_CLIENT_OPERATION" => Some(Self::AtomRkpdClientOperation),
             "ATOM_AUTOFILL_UI_EVENT_REPORTED" => Some(Self::AtomAutofillUiEventReported),
-            "ATOM_AUTOFILL_FILL_REQUEST_REPORTED" => {
-                Some(Self::AtomAutofillFillRequestReported)
-            }
-            "ATOM_AUTOFILL_FILL_RESPONSE_REPORTED" => {
-                Some(Self::AtomAutofillFillResponseReported)
-            }
-            "ATOM_AUTOFILL_SAVE_EVENT_REPORTED" => {
-                Some(Self::AtomAutofillSaveEventReported)
-            }
+            "ATOM_AUTOFILL_FILL_REQUEST_REPORTED" => Some(Self::AtomAutofillFillRequestReported),
+            "ATOM_AUTOFILL_FILL_RESPONSE_REPORTED" => Some(Self::AtomAutofillFillResponseReported),
+            "ATOM_AUTOFILL_SAVE_EVENT_REPORTED" => Some(Self::AtomAutofillSaveEventReported),
             "ATOM_AUTOFILL_SESSION_COMMITTED" => Some(Self::AtomAutofillSessionCommitted),
             "ATOM_AUTOFILL_FIELD_CLASSIFICATION_EVENT_REPORTED" => {
                 Some(Self::AtomAutofillFieldClassificationEventReported)
             }
-            "ATOM_TEST_EXTENSION_ATOM_REPORTED" => {
-                Some(Self::AtomTestExtensionAtomReported)
-            }
-            "ATOM_TEST_RESTRICTED_ATOM_REPORTED" => {
-                Some(Self::AtomTestRestrictedAtomReported)
-            }
+            "ATOM_TEST_EXTENSION_ATOM_REPORTED" => Some(Self::AtomTestExtensionAtomReported),
+            "ATOM_TEST_RESTRICTED_ATOM_REPORTED" => Some(Self::AtomTestRestrictedAtomReported),
             "ATOM_STATS_SOCKET_LOSS_REPORTED" => Some(Self::AtomStatsSocketLossReported),
             "ATOM_PLUGIN_INITIALIZED" => Some(Self::AtomPluginInitialized),
             "ATOM_TV_LOW_POWER_STANDBY_POLICY" => Some(Self::AtomTvLowPowerStandbyPolicy),
-            "ATOM_LOCKSCREEN_SHORTCUT_SELECTED" => {
-                Some(Self::AtomLockscreenShortcutSelected)
-            }
-            "ATOM_LOCKSCREEN_SHORTCUT_TRIGGERED" => {
-                Some(Self::AtomLockscreenShortcutTriggered)
-            }
+            "ATOM_LOCKSCREEN_SHORTCUT_SELECTED" => Some(Self::AtomLockscreenShortcutSelected),
+            "ATOM_LOCKSCREEN_SHORTCUT_TRIGGERED" => Some(Self::AtomLockscreenShortcutTriggered),
             "ATOM_EMERGENCY_NUMBERS_INFO" => Some(Self::AtomEmergencyNumbersInfo),
             "ATOM_QUALIFIED_RAT_LIST_CHANGED" => Some(Self::AtomQualifiedRatListChanged),
             "ATOM_QNS_IMS_CALL_DROP_STATS" => Some(Self::AtomQnsImsCallDropStats),
             "ATOM_QNS_FALLBACK_RESTRICTION_CHANGED" => {
                 Some(Self::AtomQnsFallbackRestrictionChanged)
             }
-            "ATOM_QNS_RAT_PREFERENCE_MISMATCH_INFO" => {
-                Some(Self::AtomQnsRatPreferenceMismatchInfo)
-            }
+            "ATOM_QNS_RAT_PREFERENCE_MISMATCH_INFO" => Some(Self::AtomQnsRatPreferenceMismatchInfo),
             "ATOM_QNS_HANDOVER_TIME_MILLIS" => Some(Self::AtomQnsHandoverTimeMillis),
             "ATOM_QNS_HANDOVER_PINGPONG" => Some(Self::AtomQnsHandoverPingpong),
             "ATOM_SATELLITE_CONTROLLER" => Some(Self::AtomSatelliteController),
             "ATOM_SATELLITE_SESSION" => Some(Self::AtomSatelliteSession),
-            "ATOM_SATELLITE_INCOMING_DATAGRAM" => {
-                Some(Self::AtomSatelliteIncomingDatagram)
-            }
-            "ATOM_SATELLITE_OUTGOING_DATAGRAM" => {
-                Some(Self::AtomSatelliteOutgoingDatagram)
-            }
+            "ATOM_SATELLITE_INCOMING_DATAGRAM" => Some(Self::AtomSatelliteIncomingDatagram),
+            "ATOM_SATELLITE_OUTGOING_DATAGRAM" => Some(Self::AtomSatelliteOutgoingDatagram),
             "ATOM_SATELLITE_PROVISION" => Some(Self::AtomSatelliteProvision),
             "ATOM_SATELLITE_SOS_MESSAGE_RECOMMENDER" => {
                 Some(Self::AtomSatelliteSosMessageRecommender)
@@ -5864,29 +5010,21 @@ impl AtomId {
             "ATOM_BLUETOOTH_L2CAP_COC_SERVER_CONNECTION" => {
                 Some(Self::AtomBluetoothL2capCocServerConnection)
             }
-            "ATOM_BLUETOOTH_LE_SESSION_CONNECTED" => {
-                Some(Self::AtomBluetoothLeSessionConnected)
-            }
+            "ATOM_BLUETOOTH_LE_SESSION_CONNECTED" => Some(Self::AtomBluetoothLeSessionConnected),
             "ATOM_RESTRICTED_BLUETOOTH_DEVICE_NAME_REPORTED" => {
                 Some(Self::AtomRestrictedBluetoothDeviceNameReported)
             }
             "ATOM_BLUETOOTH_PROFILE_CONNECTION_ATTEMPTED" => {
                 Some(Self::AtomBluetoothProfileConnectionAttempted)
             }
-            "ATOM_HEALTH_CONNECT_UI_IMPRESSION" => {
-                Some(Self::AtomHealthConnectUiImpression)
-            }
-            "ATOM_HEALTH_CONNECT_UI_INTERACTION" => {
-                Some(Self::AtomHealthConnectUiInteraction)
-            }
+            "ATOM_HEALTH_CONNECT_UI_IMPRESSION" => Some(Self::AtomHealthConnectUiImpression),
+            "ATOM_HEALTH_CONNECT_UI_INTERACTION" => Some(Self::AtomHealthConnectUiInteraction),
             "ATOM_HEALTH_CONNECT_APP_OPENED_REPORTED" => {
                 Some(Self::AtomHealthConnectAppOpenedReported)
             }
             "ATOM_HEALTH_CONNECT_API_CALLED" => Some(Self::AtomHealthConnectApiCalled),
             "ATOM_HEALTH_CONNECT_USAGE_STATS" => Some(Self::AtomHealthConnectUsageStats),
-            "ATOM_HEALTH_CONNECT_STORAGE_STATS" => {
-                Some(Self::AtomHealthConnectStorageStats)
-            }
+            "ATOM_HEALTH_CONNECT_STORAGE_STATS" => Some(Self::AtomHealthConnectStorageStats),
             "ATOM_HEALTH_CONNECT_API_INVOKED" => Some(Self::AtomHealthConnectApiInvoked),
             "ATOM_EXERCISE_ROUTE_API_CALLED" => Some(Self::AtomExerciseRouteApiCalled),
             "ATOM_ATOM_9999" => Some(Self::AtomAtom9999),
@@ -5902,27 +5040,19 @@ impl AtomId {
             }
             "ATOM_EMERGENCY_NUMBER_DIALED" => Some(Self::AtomEmergencyNumberDialed),
             "ATOM_SANDBOX_API_CALLED" => Some(Self::AtomSandboxApiCalled),
-            "ATOM_SANDBOX_ACTIVITY_EVENT_OCCURRED" => {
-                Some(Self::AtomSandboxActivityEventOccurred)
-            }
+            "ATOM_SANDBOX_ACTIVITY_EVENT_OCCURRED" => Some(Self::AtomSandboxActivityEventOccurred),
             "ATOM_SANDBOX_SDK_STORAGE" => Some(Self::AtomSandboxSdkStorage),
             "ATOM_CRONET_ENGINE_CREATED" => Some(Self::AtomCronetEngineCreated),
             "ATOM_CRONET_TRAFFIC_REPORTED" => Some(Self::AtomCronetTrafficReported),
             "ATOM_CRONET_ENGINE_BUILDER_INITIALIZED" => {
                 Some(Self::AtomCronetEngineBuilderInitialized)
             }
-            "ATOM_CRONET_HTTP_FLAGS_INITIALIZED" => {
-                Some(Self::AtomCronetHttpFlagsInitialized)
-            }
+            "ATOM_CRONET_HTTP_FLAGS_INITIALIZED" => Some(Self::AtomCronetHttpFlagsInitialized),
             "ATOM_CRONET_INITIALIZED" => Some(Self::AtomCronetInitialized),
-            "ATOM_DAILY_KEEPALIVE_INFO_REPORTED" => {
-                Some(Self::AtomDailyKeepaliveInfoReported)
-            }
+            "ATOM_DAILY_KEEPALIVE_INFO_REPORTED" => Some(Self::AtomDailyKeepaliveInfoReported),
             "ATOM_IP_CLIENT_RA_INFO_REPORTED" => Some(Self::AtomIpClientRaInfoReported),
             "ATOM_APF_SESSION_INFO_REPORTED" => Some(Self::AtomApfSessionInfoReported),
-            "ATOM_CREDENTIAL_MANAGER_API_CALLED" => {
-                Some(Self::AtomCredentialManagerApiCalled)
-            }
+            "ATOM_CREDENTIAL_MANAGER_API_CALLED" => Some(Self::AtomCredentialManagerApiCalled),
             "ATOM_CREDENTIAL_MANAGER_INIT_PHASE_REPORTED" => {
                 Some(Self::AtomCredentialManagerInitPhaseReported)
             }
@@ -5938,15 +5068,11 @@ impl AtomId {
             "ATOM_CREDENTIAL_MANAGER_FINALNOUID_REPORTED" => {
                 Some(Self::AtomCredentialManagerFinalnouidReported)
             }
-            "ATOM_CREDENTIAL_MANAGER_GET_REPORTED" => {
-                Some(Self::AtomCredentialManagerGetReported)
-            }
+            "ATOM_CREDENTIAL_MANAGER_GET_REPORTED" => Some(Self::AtomCredentialManagerGetReported),
             "ATOM_CREDENTIAL_MANAGER_AUTH_CLICK_REPORTED" => {
                 Some(Self::AtomCredentialManagerAuthClickReported)
             }
-            "ATOM_CREDENTIAL_MANAGER_APIV2_CALLED" => {
-                Some(Self::AtomCredentialManagerApiv2Called)
-            }
+            "ATOM_CREDENTIAL_MANAGER_APIV2_CALLED" => Some(Self::AtomCredentialManagerApiv2Called),
             "ATOM_UWB_ACTIVITY_INFO" => Some(Self::AtomUwbActivityInfo),
             "ATOM_MEDIA_ACTION_REPORTED" => Some(Self::AtomMediaActionReported),
             "ATOM_MEDIA_CONTROLS_LAUNCHED" => Some(Self::AtomMediaControlsLaunched),
@@ -6039,17 +5165,7 @@ pub struct ProcessStatsConfig {
 }
 /// Nested message and enum types in `ProcessStatsConfig`.
 pub mod process_stats_config {
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum Quirks {
         Unspecified = 0,
@@ -6201,9 +5317,7 @@ pub struct HeapprofdConfig {
     pub skip_symbol_prefix: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     /// Dump at a predefined interval.
     #[prost(message, optional, tag = "6")]
-    pub continuous_dump_config: ::core::option::Option<
-        heapprofd_config::ContinuousDumpConfig,
-    >,
+    pub continuous_dump_config: ::core::option::Option<heapprofd_config::ContinuousDumpConfig>,
     /// Size of the shared memory buffer between the profiled processes and
     /// heapprofd. Defaults to 8 MiB. If larger than 500 MiB, truncated to 500
     /// MiB.
@@ -6272,7 +5386,7 @@ pub mod heapprofd_config {
 /// Configuration for managed app heap graph snapshots.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct JavaHprofConfig {
-    /// Command line allowlist, matched against the /proc/<pid>/cmdline (not the
+    /// Command line allowlist, matched against the /proc/pid/cmdline (not the
     /// comm string). The semantics of this field were changed since its original
     /// introduction.
     ///
@@ -6308,9 +5422,7 @@ pub struct JavaHprofConfig {
     pub target_installed_by: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     /// Dump at a predefined interval.
     #[prost(message, optional, tag = "3")]
-    pub continuous_dump_config: ::core::option::Option<
-        java_hprof_config::ContinuousDumpConfig,
-    >,
+    pub continuous_dump_config: ::core::option::Option<java_hprof_config::ContinuousDumpConfig>,
     /// Do not profile processes whose anon RSS + swap < given value.
     #[prost(uint32, optional, tag = "4")]
     pub min_anonymous_memory_kb: ::core::option::Option<u32>,
@@ -6452,17 +5564,7 @@ pub mod perf_events {
     /// finite), and generally make this list as extensive as possible. Excluding
     /// things like dynamic PMUs since those don't fit into a static enum.
     /// Next id: 21
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum Counter {
         UnknownCounter = 0,
@@ -6568,17 +5670,7 @@ pub mod perf_events {
     /// Subset of clocks that is supported by perf timestamping.
     /// CLOCK_TAI is excluded since it's not expected to be used in practice, but
     /// would require additions to the trace clock synchronisation logic.
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum PerfClock {
         UnknownPerfClock = 0,
@@ -6661,7 +5753,7 @@ pub struct PerfEventConfig {
     /// footprint exceeds this value.
     #[prost(uint32, optional, tag = "13")]
     pub max_daemon_memory_kb: ::core::option::Option<u32>,
-    /// Timeout for the remote /proc/<pid>/{maps,mem} file descriptors for a
+    /// Timeout for the remote /proc/pid/{maps,mem} file descriptors for a
     /// sampled process. This is primarily for Android, where this lookup is
     /// asynchronous. As long as the producer is waiting, the associated samples
     /// will be kept enqueued (putting pressure on the capacity of the shared
@@ -6736,7 +5828,7 @@ pub mod perf_event_config {
         /// process.
         #[prost(int32, repeated, packed = "false", tag = "1")]
         pub target_pid: ::prost::alloc::vec::Vec<i32>,
-        /// Command line allowlist, matched against the /proc/<pid>/cmdline (not the
+        /// Command line allowlist, matched against the /proc/pid/cmdline (not the
         /// comm string). The semantics of this field were changed since its original
         /// introduction.
         ///
@@ -6789,17 +5881,7 @@ pub mod perf_event_config {
     }
     /// Userspace unwinding mode. A possible future addition is kernel-unwound
     /// callchains for frame pointer based systems.
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum UnwindMode {
         UnwindUnknown = 0,
@@ -7188,15 +6270,11 @@ impl VmstatCounters {
             Self::VmstatWorkingsetRefault => "VMSTAT_WORKINGSET_REFAULT",
             Self::VmstatWorkingsetActivate => "VMSTAT_WORKINGSET_ACTIVATE",
             Self::VmstatWorkingsetNodereclaim => "VMSTAT_WORKINGSET_NODERECLAIM",
-            Self::VmstatNrAnonTransparentHugepages => {
-                "VMSTAT_NR_ANON_TRANSPARENT_HUGEPAGES"
-            }
+            Self::VmstatNrAnonTransparentHugepages => "VMSTAT_NR_ANON_TRANSPARENT_HUGEPAGES",
             Self::VmstatNrFreeCma => "VMSTAT_NR_FREE_CMA",
             Self::VmstatNrSwapcache => "VMSTAT_NR_SWAPCACHE",
             Self::VmstatNrDirtyThreshold => "VMSTAT_NR_DIRTY_THRESHOLD",
-            Self::VmstatNrDirtyBackgroundThreshold => {
-                "VMSTAT_NR_DIRTY_BACKGROUND_THRESHOLD"
-            }
+            Self::VmstatNrDirtyBackgroundThreshold => "VMSTAT_NR_DIRTY_BACKGROUND_THRESHOLD",
             Self::VmstatPgpgin => "VMSTAT_PGPGIN",
             Self::VmstatPgpgout => "VMSTAT_PGPGOUT",
             Self::VmstatPgpgoutclean => "VMSTAT_PGPGOUTCLEAN",
@@ -7230,9 +6308,7 @@ impl VmstatCounters {
             Self::VmstatSlabsScanned => "VMSTAT_SLABS_SCANNED",
             Self::VmstatKswapdInodesteal => "VMSTAT_KSWAPD_INODESTEAL",
             Self::VmstatKswapdLowWmarkHitQuickly => "VMSTAT_KSWAPD_LOW_WMARK_HIT_QUICKLY",
-            Self::VmstatKswapdHighWmarkHitQuickly => {
-                "VMSTAT_KSWAPD_HIGH_WMARK_HIT_QUICKLY"
-            }
+            Self::VmstatKswapdHighWmarkHitQuickly => "VMSTAT_KSWAPD_HIGH_WMARK_HIT_QUICKLY",
             Self::VmstatPageoutrun => "VMSTAT_PAGEOUTRUN",
             Self::VmstatAllocstall => "VMSTAT_ALLOCSTALL",
             Self::VmstatPgrotated => "VMSTAT_PGROTATED",
@@ -7261,9 +6337,7 @@ impl VmstatCounters {
             Self::VmstatAllocstallMovable => "VMSTAT_ALLOCSTALL_MOVABLE",
             Self::VmstatAllocstallNormal => "VMSTAT_ALLOCSTALL_NORMAL",
             Self::VmstatCompactDaemonFreeScanned => "VMSTAT_COMPACT_DAEMON_FREE_SCANNED",
-            Self::VmstatCompactDaemonMigrateScanned => {
-                "VMSTAT_COMPACT_DAEMON_MIGRATE_SCANNED"
-            }
+            Self::VmstatCompactDaemonMigrateScanned => "VMSTAT_COMPACT_DAEMON_MIGRATE_SCANNED",
             Self::VmstatNrFastrpc => "VMSTAT_NR_FASTRPC",
             Self::VmstatNrIndirectlyReclaimable => "VMSTAT_NR_INDIRECTLY_RECLAIMABLE",
             Self::VmstatNrIonHeapPool => "VMSTAT_NR_ION_HEAP_POOL",
@@ -7379,9 +6453,7 @@ impl VmstatCounters {
             "VMSTAT_NR_UNSTABLE" => Some(Self::VmstatNrUnstable),
             "VMSTAT_NR_BOUNCE" => Some(Self::VmstatNrBounce),
             "VMSTAT_NR_VMSCAN_WRITE" => Some(Self::VmstatNrVmscanWrite),
-            "VMSTAT_NR_VMSCAN_IMMEDIATE_RECLAIM" => {
-                Some(Self::VmstatNrVmscanImmediateReclaim)
-            }
+            "VMSTAT_NR_VMSCAN_IMMEDIATE_RECLAIM" => Some(Self::VmstatNrVmscanImmediateReclaim),
             "VMSTAT_NR_WRITEBACK_TEMP" => Some(Self::VmstatNrWritebackTemp),
             "VMSTAT_NR_ISOLATED_ANON" => Some(Self::VmstatNrIsolatedAnon),
             "VMSTAT_NR_ISOLATED_FILE" => Some(Self::VmstatNrIsolatedFile),
@@ -7392,15 +6464,11 @@ impl VmstatCounters {
             "VMSTAT_WORKINGSET_REFAULT" => Some(Self::VmstatWorkingsetRefault),
             "VMSTAT_WORKINGSET_ACTIVATE" => Some(Self::VmstatWorkingsetActivate),
             "VMSTAT_WORKINGSET_NODERECLAIM" => Some(Self::VmstatWorkingsetNodereclaim),
-            "VMSTAT_NR_ANON_TRANSPARENT_HUGEPAGES" => {
-                Some(Self::VmstatNrAnonTransparentHugepages)
-            }
+            "VMSTAT_NR_ANON_TRANSPARENT_HUGEPAGES" => Some(Self::VmstatNrAnonTransparentHugepages),
             "VMSTAT_NR_FREE_CMA" => Some(Self::VmstatNrFreeCma),
             "VMSTAT_NR_SWAPCACHE" => Some(Self::VmstatNrSwapcache),
             "VMSTAT_NR_DIRTY_THRESHOLD" => Some(Self::VmstatNrDirtyThreshold),
-            "VMSTAT_NR_DIRTY_BACKGROUND_THRESHOLD" => {
-                Some(Self::VmstatNrDirtyBackgroundThreshold)
-            }
+            "VMSTAT_NR_DIRTY_BACKGROUND_THRESHOLD" => Some(Self::VmstatNrDirtyBackgroundThreshold),
             "VMSTAT_PGPGIN" => Some(Self::VmstatPgpgin),
             "VMSTAT_PGPGOUT" => Some(Self::VmstatPgpgout),
             "VMSTAT_PGPGOUTCLEAN" => Some(Self::VmstatPgpgoutclean),
@@ -7433,12 +6501,8 @@ impl VmstatCounters {
             "VMSTAT_PGINODESTEAL" => Some(Self::VmstatPginodesteal),
             "VMSTAT_SLABS_SCANNED" => Some(Self::VmstatSlabsScanned),
             "VMSTAT_KSWAPD_INODESTEAL" => Some(Self::VmstatKswapdInodesteal),
-            "VMSTAT_KSWAPD_LOW_WMARK_HIT_QUICKLY" => {
-                Some(Self::VmstatKswapdLowWmarkHitQuickly)
-            }
-            "VMSTAT_KSWAPD_HIGH_WMARK_HIT_QUICKLY" => {
-                Some(Self::VmstatKswapdHighWmarkHitQuickly)
-            }
+            "VMSTAT_KSWAPD_LOW_WMARK_HIT_QUICKLY" => Some(Self::VmstatKswapdLowWmarkHitQuickly),
+            "VMSTAT_KSWAPD_HIGH_WMARK_HIT_QUICKLY" => Some(Self::VmstatKswapdHighWmarkHitQuickly),
             "VMSTAT_PAGEOUTRUN" => Some(Self::VmstatPageoutrun),
             "VMSTAT_ALLOCSTALL" => Some(Self::VmstatAllocstall),
             "VMSTAT_PGROTATED" => Some(Self::VmstatPgrotated),
@@ -7457,9 +6521,7 @@ impl VmstatCounters {
             "VMSTAT_UNEVICTABLE_PGS_SCANNED" => Some(Self::VmstatUnevictablePgsScanned),
             "VMSTAT_UNEVICTABLE_PGS_RESCUED" => Some(Self::VmstatUnevictablePgsRescued),
             "VMSTAT_UNEVICTABLE_PGS_MLOCKED" => Some(Self::VmstatUnevictablePgsMlocked),
-            "VMSTAT_UNEVICTABLE_PGS_MUNLOCKED" => {
-                Some(Self::VmstatUnevictablePgsMunlocked)
-            }
+            "VMSTAT_UNEVICTABLE_PGS_MUNLOCKED" => Some(Self::VmstatUnevictablePgsMunlocked),
             "VMSTAT_UNEVICTABLE_PGS_CLEARED" => Some(Self::VmstatUnevictablePgsCleared),
             "VMSTAT_UNEVICTABLE_PGS_STRANDED" => Some(Self::VmstatUnevictablePgsStranded),
             "VMSTAT_NR_ZSPAGES" => Some(Self::VmstatNrZspages),
@@ -7468,23 +6530,15 @@ impl VmstatCounters {
             "VMSTAT_ALLOCSTALL_DMA" => Some(Self::VmstatAllocstallDma),
             "VMSTAT_ALLOCSTALL_MOVABLE" => Some(Self::VmstatAllocstallMovable),
             "VMSTAT_ALLOCSTALL_NORMAL" => Some(Self::VmstatAllocstallNormal),
-            "VMSTAT_COMPACT_DAEMON_FREE_SCANNED" => {
-                Some(Self::VmstatCompactDaemonFreeScanned)
-            }
+            "VMSTAT_COMPACT_DAEMON_FREE_SCANNED" => Some(Self::VmstatCompactDaemonFreeScanned),
             "VMSTAT_COMPACT_DAEMON_MIGRATE_SCANNED" => {
                 Some(Self::VmstatCompactDaemonMigrateScanned)
             }
             "VMSTAT_NR_FASTRPC" => Some(Self::VmstatNrFastrpc),
-            "VMSTAT_NR_INDIRECTLY_RECLAIMABLE" => {
-                Some(Self::VmstatNrIndirectlyReclaimable)
-            }
+            "VMSTAT_NR_INDIRECTLY_RECLAIMABLE" => Some(Self::VmstatNrIndirectlyReclaimable),
             "VMSTAT_NR_ION_HEAP_POOL" => Some(Self::VmstatNrIonHeapPool),
-            "VMSTAT_NR_KERNEL_MISC_RECLAIMABLE" => {
-                Some(Self::VmstatNrKernelMiscReclaimable)
-            }
-            "VMSTAT_NR_SHADOW_CALL_STACK_BYTES" => {
-                Some(Self::VmstatNrShadowCallStackBytes)
-            }
+            "VMSTAT_NR_KERNEL_MISC_RECLAIMABLE" => Some(Self::VmstatNrKernelMiscReclaimable),
+            "VMSTAT_NR_SHADOW_CALL_STACK_BYTES" => Some(Self::VmstatNrShadowCallStackBytes),
             "VMSTAT_NR_SHMEM_HUGEPAGES" => Some(Self::VmstatNrShmemHugepages),
             "VMSTAT_NR_SHMEM_PMDMAPPED" => Some(Self::VmstatNrShmemPmdmapped),
             "VMSTAT_NR_UNRECLAIMABLE_PAGES" => Some(Self::VmstatNrUnreclaimablePages),
@@ -7535,15 +6589,11 @@ impl VmstatCounters {
             "VMSTAT_PGSTEAL_ANON" => Some(Self::VmstatPgstealAnon),
             "VMSTAT_PGSTEAL_FILE" => Some(Self::VmstatPgstealFile),
             "VMSTAT_THP_COLLAPSE_ALLOC" => Some(Self::VmstatThpCollapseAlloc),
-            "VMSTAT_THP_COLLAPSE_ALLOC_FAILED" => {
-                Some(Self::VmstatThpCollapseAllocFailed)
-            }
+            "VMSTAT_THP_COLLAPSE_ALLOC_FAILED" => Some(Self::VmstatThpCollapseAllocFailed),
             "VMSTAT_THP_DEFERRED_SPLIT_PAGE" => Some(Self::VmstatThpDeferredSplitPage),
             "VMSTAT_THP_FAULT_ALLOC" => Some(Self::VmstatThpFaultAlloc),
             "VMSTAT_THP_FAULT_FALLBACK" => Some(Self::VmstatThpFaultFallback),
-            "VMSTAT_THP_FAULT_FALLBACK_CHARGE" => {
-                Some(Self::VmstatThpFaultFallbackCharge)
-            }
+            "VMSTAT_THP_FAULT_FALLBACK_CHARGE" => Some(Self::VmstatThpFaultFallbackCharge),
             "VMSTAT_THP_FILE_ALLOC" => Some(Self::VmstatThpFileAlloc),
             "VMSTAT_THP_FILE_FALLBACK" => Some(Self::VmstatThpFileFallback),
             "VMSTAT_THP_FILE_FALLBACK_CHARGE" => Some(Self::VmstatThpFileFallbackCharge),
@@ -7560,9 +6610,7 @@ impl VmstatCounters {
             "VMSTAT_THP_SWPOUT" => Some(Self::VmstatThpSwpout),
             "VMSTAT_THP_SWPOUT_FALLBACK" => Some(Self::VmstatThpSwpoutFallback),
             "VMSTAT_THP_ZERO_PAGE_ALLOC" => Some(Self::VmstatThpZeroPageAlloc),
-            "VMSTAT_THP_ZERO_PAGE_ALLOC_FAILED" => {
-                Some(Self::VmstatThpZeroPageAllocFailed)
-            }
+            "VMSTAT_THP_ZERO_PAGE_ALLOC_FAILED" => Some(Self::VmstatThpZeroPageAllocFailed),
             "VMSTAT_VMA_LOCK_ABORT" => Some(Self::VmstatVmaLockAbort),
             "VMSTAT_VMA_LOCK_MISS" => Some(Self::VmstatVmaLockMiss),
             "VMSTAT_VMA_LOCK_RETRY" => Some(Self::VmstatVmaLockRetry),
@@ -7642,17 +6690,7 @@ pub struct SysStatsConfig {
 }
 /// Nested message and enum types in `SysStatsConfig`.
 pub mod sys_stats_config {
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum StatCounters {
         StatUnspecified = 0,
@@ -7877,7 +6915,11 @@ pub struct DataSourceConfig {
     pub enable_extra_guardrails: ::core::option::Option<bool>,
     /// Set by the service to indicate which user initiated this trace.
     /// DO NOT SET in consumer as this will be overridden by the service.
-    #[prost(enumeration = "data_source_config::SessionInitiator", optional, tag = "8")]
+    #[prost(
+        enumeration = "data_source_config::SessionInitiator",
+        optional,
+        tag = "8"
+    )]
     pub session_initiator: ::core::option::Option<i32>,
     /// Set by the service to indicate which tracing session the data source
     /// belongs to. The intended use case for this is checking if two data sources,
@@ -7918,9 +6960,8 @@ pub struct DataSourceConfig {
     pub gpu_counter_config: ::core::option::Option<GpuCounterConfig>,
     /// Data source name: android.game_interventions
     #[prost(message, optional, tag = "116")]
-    pub android_game_intervention_list_config: ::core::option::Option<
-        AndroidGameInterventionListConfig,
-    >,
+    pub android_game_intervention_list_config:
+        ::core::option::Option<AndroidGameInterventionListConfig>,
     /// Data source name: android.packages_list
     #[prost(message, optional, tag = "109")]
     pub packages_list_config: ::core::option::Option<PackagesListConfig>,
@@ -7938,9 +6979,7 @@ pub struct DataSourceConfig {
     pub android_polled_state_config: ::core::option::Option<AndroidPolledStateConfig>,
     /// Data source name: android.system_property
     #[prost(message, optional, tag = "118")]
-    pub android_system_property_config: ::core::option::Option<
-        AndroidSystemPropertyConfig,
-    >,
+    pub android_system_property_config: ::core::option::Option<AndroidSystemPropertyConfig>,
     /// Data source name: android.statsd
     #[prost(message, optional, tag = "117")]
     pub statsd_tracing_config: ::core::option::Option<StatsdTracingConfig>,
@@ -7975,15 +7014,12 @@ pub struct DataSourceConfig {
     pub surfaceflinger_layers_config: ::core::option::Option<SurfaceFlingerLayersConfig>,
     /// Data source name: android.surfaceflinger.transactions
     #[prost(message, optional, tag = "123")]
-    pub surfaceflinger_transactions_config: ::core::option::Option<
-        SurfaceFlingerTransactionsConfig,
-    >,
+    pub surfaceflinger_transactions_config:
+        ::core::option::Option<SurfaceFlingerTransactionsConfig>,
     /// Data source name: android.sdk_sysprop_guard
     /// Introduced in Android 14 (U) QPR1.
     #[prost(message, optional, tag = "124")]
-    pub android_sdk_sysprop_guard_config: ::core::option::Option<
-        AndroidSdkSyspropGuardConfig,
-    >,
+    pub android_sdk_sysprop_guard_config: ::core::option::Option<AndroidSdkSyspropGuardConfig>,
     /// Data source name: windows.etw
     #[prost(message, optional, tag = "125")]
     pub etw_config: ::core::option::Option<EtwConfig>,
@@ -8011,17 +7047,7 @@ pub struct DataSourceConfig {
 }
 /// Nested message and enum types in `DataSourceConfig`.
 pub mod data_source_config {
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum SessionInitiator {
         Unspecified = 0,
@@ -8090,7 +7116,11 @@ pub struct TraceConfig {
     pub enable_extra_guardrails: ::core::option::Option<bool>,
     /// Reject producers that are not running under the same UID as the tracing
     /// service.
-    #[prost(enumeration = "trace_config::LockdownModeOperation", optional, tag = "5")]
+    #[prost(
+        enumeration = "trace_config::LockdownModeOperation",
+        optional,
+        tag = "5"
+    )]
     pub lockdown_mode: ::core::option::Option<i32>,
     #[prost(message, repeated, tag = "6")]
     pub producers: ::prost::alloc::vec::Vec<trace_config::ProducerConfig>,
@@ -8179,9 +7209,7 @@ pub struct TraceConfig {
     #[prost(string, repeated, tag = "18")]
     pub activate_triggers: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     #[prost(message, optional, tag = "21")]
-    pub incremental_state_config: ::core::option::Option<
-        trace_config::IncrementalStateConfig,
-    >,
+    pub incremental_state_config: ::core::option::Option<trace_config::IncrementalStateConfig>,
     /// Additional guardrail used by the Perfetto command line client.
     /// On user builds when --dropbox is set perfetto will refuse to trace unless
     /// this is also set.
@@ -8195,9 +7223,7 @@ pub struct TraceConfig {
     #[prost(enumeration = "trace_config::CompressionType", optional, tag = "24")]
     pub compression_type: ::core::option::Option<i32>,
     #[prost(message, optional, tag = "25")]
-    pub incident_report_config: ::core::option::Option<
-        trace_config::IncidentReportConfig,
-    >,
+    pub incident_report_config: ::core::option::Option<trace_config::IncidentReportConfig>,
     /// Android-only. Not for general use. If specified, sets the logging to statsd
     /// of guardrails and checkpoints in the tracing service. perfetto_cmd sets
     /// this to enabled (if not explicitly set in the config) when specifying
@@ -8251,15 +7277,7 @@ pub mod trace_config {
     /// Nested message and enum types in `BufferConfig`.
     pub mod buffer_config {
         #[derive(
-            Clone,
-            Copy,
-            Debug,
-            PartialEq,
-            Eq,
-            Hash,
-            PartialOrd,
-            Ord,
-            ::prost::Enumeration
+            Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
         )]
         #[repr(i32)]
         pub enum FillPolicy {
@@ -8314,13 +7332,9 @@ pub mod trace_config {
         /// The "repeated" fields have OR semantics: specifying a filter ["foo",
         /// "bar"] will enable data sources on both "foo" and "bar" (if they exist).
         #[prost(string, repeated, tag = "2")]
-        pub producer_name_filter: ::prost::alloc::vec::Vec<
-            ::prost::alloc::string::String,
-        >,
+        pub producer_name_filter: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
         #[prost(string, repeated, tag = "3")]
-        pub producer_name_regex_filter: ::prost::alloc::vec::Vec<
-            ::prost::alloc::string::String,
-        >,
+        pub producer_name_regex_filter: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     }
     /// Config for disabling builtin data sources in the tracing service.
     #[derive(Clone, Copy, PartialEq, ::prost::Message)]
@@ -8467,9 +7481,7 @@ pub mod trace_config {
             /// trigger. This is optional. If unset any producers can activate this
             /// trigger.
             #[prost(string, optional, tag = "2")]
-            pub producer_name_regex: ::core::option::Option<
-                ::prost::alloc::string::String,
-            >,
+            pub producer_name_regex: ::core::option::Option<::prost::alloc::string::String>,
             /// After a trigger is received either in START_TRACING or STOP_TRACING
             /// mode then the trace will end |stop_delay_ms| after triggering.
             /// In CLONE_SNAPSHOT mode, this is the delay between the trigger and the
@@ -8498,15 +7510,7 @@ pub mod trace_config {
             pub skip_probability: ::core::option::Option<f64>,
         }
         #[derive(
-            Clone,
-            Copy,
-            Debug,
-            PartialEq,
-            Eq,
-            Hash,
-            PartialOrd,
-            Ord,
-            ::prost::Enumeration
+            Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
         )]
         #[repr(i32)]
         pub enum TriggerMode {
@@ -8664,9 +7668,7 @@ pub mod trace_config {
             /// The string which should appear after the tgid in atrace tracepoint
             /// strings.
             #[prost(string, optional, tag = "3")]
-            pub atrace_payload_starts_with: ::core::option::Option<
-                ::prost::alloc::string::String,
-            >,
+            pub atrace_payload_starts_with: ::core::option::Option<::prost::alloc::string::String>,
         }
         /// A chain is a list of rules which string will be sequentially checked
         /// against.
@@ -8678,15 +7680,7 @@ pub mod trace_config {
         /// A policy specifies which algorithm should be used for filtering the
         /// string.
         #[derive(
-            Clone,
-            Copy,
-            Debug,
-            PartialEq,
-            Eq,
-            Hash,
-            PartialOrd,
-            Ord,
-            ::prost::Enumeration
+            Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
         )]
         #[repr(i32)]
         pub enum StringFilterPolicy {
@@ -8760,9 +7754,7 @@ pub mod trace_config {
                 match value {
                     "SFP_UNSPECIFIED" => Some(Self::SfpUnspecified),
                     "SFP_MATCH_REDACT_GROUPS" => Some(Self::SfpMatchRedactGroups),
-                    "SFP_ATRACE_MATCH_REDACT_GROUPS" => {
-                        Some(Self::SfpAtraceMatchRedactGroups)
-                    }
+                    "SFP_ATRACE_MATCH_REDACT_GROUPS" => Some(Self::SfpAtraceMatchRedactGroups),
                     "SFP_MATCH_BREAK" => Some(Self::SfpMatchBreak),
                     "SFP_ATRACE_MATCH_BREAK" => Some(Self::SfpAtraceMatchBreak),
                     "SFP_ATRACE_REPEATED_SEARCH_REDACT_GROUPS" => {
@@ -8784,13 +7776,9 @@ pub mod trace_config {
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct AndroidReportConfig {
         #[prost(string, optional, tag = "1")]
-        pub reporter_service_package: ::core::option::Option<
-            ::prost::alloc::string::String,
-        >,
+        pub reporter_service_package: ::core::option::Option<::prost::alloc::string::String>,
         #[prost(string, optional, tag = "2")]
-        pub reporter_service_class: ::core::option::Option<
-            ::prost::alloc::string::String,
-        >,
+        pub reporter_service_class: ::core::option::Option<::prost::alloc::string::String>,
         /// If true, then skips reporting the trace to Android framework.
         ///
         /// This flag is useful in testing (e.g. Perfetto-statsd integration tests)
@@ -8884,17 +7872,7 @@ pub mod trace_config {
         #[prost(uint64, optional, tag = "2")]
         pub max_other_session_count: ::core::option::Option<u64>,
     }
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum LockdownModeOperation {
         LockdownUnchanged = 0,
@@ -8924,17 +7902,7 @@ pub mod trace_config {
         }
     }
     /// Compress trace with the given method. Best effort.
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum CompressionType {
         Unspecified = 0,
@@ -8960,17 +7928,7 @@ pub mod trace_config {
             }
         }
     }
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum StatsdLogging {
         Unspecified = 0,
@@ -9164,17 +8122,7 @@ pub struct FieldDescriptorProto {
 }
 /// Nested message and enum types in `FieldDescriptorProto`.
 pub mod field_descriptor_proto {
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum Type {
         /// 0 is reserved for errors.
@@ -9262,17 +8210,7 @@ pub mod field_descriptor_proto {
             }
         }
     }
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum Label {
         /// 0 is reserved for errors
@@ -9345,9 +8283,7 @@ pub struct ExtensionDescriptor {
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AndroidGameInterventionList {
     #[prost(message, repeated, tag = "1")]
-    pub game_packages: ::prost::alloc::vec::Vec<
-        android_game_intervention_list::GamePackageInfo,
-    >,
+    pub game_packages: ::prost::alloc::vec::Vec<android_game_intervention_list::GamePackageInfo>,
     /// True when at least one error occurred when parsing
     /// game_mode_intervention.list
     #[prost(bool, optional, tag = "2")]
@@ -9541,9 +8477,8 @@ pub struct AndroidCameraFrameEvent {
     #[prost(int32, optional, tag = "13")]
     pub num_streams: ::core::option::Option<i32>,
     #[prost(message, repeated, tag = "14")]
-    pub node_processing_details: ::prost::alloc::vec::Vec<
-        android_camera_frame_event::CameraNodeProcessingDetails,
-    >,
+    pub node_processing_details:
+        ::prost::alloc::vec::Vec<android_camera_frame_event::CameraNodeProcessingDetails>,
     /// These fields capture vendor-specific additions to this proto message. In
     /// practice `vendor_data` typically contains a serialized message of the
     /// vendor's design, and `vendor_data_version` is incremented each time there
@@ -9577,17 +8512,7 @@ pub mod android_camera_frame_event {
     /// The error status, if any, reported to the camera framework. Any status
     /// other than STATUS_OK indicates a dropped frame.
     /// Next Enum: 6
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum CaptureResultStatus {
         StatusUnspecified = 0,
@@ -9850,17 +8775,7 @@ pub mod frame_timeline_event {
     }
     /// Specifies the reason(s) most likely to have caused the jank.
     /// Used as a bitmask.
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum JankType {
         JankUnspecified = 0,
@@ -9917,17 +8832,7 @@ pub mod frame_timeline_event {
         }
     }
     /// Specifies the severity of a jank.
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum JankSeverityType {
         SeverityUnknown = 0,
@@ -9961,17 +8866,7 @@ pub mod frame_timeline_event {
     }
     /// Specifies how a frame was presented on screen w.r.t. timing.
     /// Can be different for SurfaceFrame and DisplayFrame.
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum PresentType {
         PresentUnspecified = 0,
@@ -10011,17 +8906,7 @@ pub mod frame_timeline_event {
     }
     /// Specifies if the predictions for the frame are still valid, expired or
     /// unknown.
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum PredictionType {
         PredictionUnspecified = 0,
@@ -10100,17 +8985,7 @@ pub mod graphics_frame_event {
         #[prost(uint32, optional, tag = "5")]
         pub buffer_id: ::core::option::Option<u32>,
     }
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum BufferEventType {
         Unspecified = 0,
@@ -10682,17 +9557,7 @@ pub mod layers_trace_file_proto {
     /// constant; MAGIC_NUMBER = (long) MAGIC_NUMBER_H << 32 |
     /// MagicNumber.MAGIC_NUMBER_L (this is needed because enums have to be 32 bits
     /// and there's no nice way to put 64bit constants into .proto files.
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum MagicNumber {
         Invalid = 0,
@@ -11069,17 +9934,7 @@ pub mod transaction_trace_file {
     /// constant; MAGIC_NUMBER = (long) MAGIC_NUMBER_H << 32 |
     /// MagicNumber.MAGIC_NUMBER_L (this is needed because enums have to be 32 bits
     /// and there's no nice way to put 64bit constants into .proto files.
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum MagicNumber {
         Invalid = 0,
@@ -11349,15 +10204,7 @@ pub mod layer_state {
     /// Nested message and enum types in `BufferData`.
     pub mod buffer_data {
         #[derive(
-            Clone,
-            Copy,
-            Debug,
-            PartialEq,
-            Eq,
-            Hash,
-            PartialOrd,
-            Ord,
-            ::prost::Enumeration
+            Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
         )]
         #[repr(i32)]
         pub enum BufferDataChange {
@@ -11391,15 +10238,7 @@ pub mod layer_state {
             }
         }
         #[derive(
-            Clone,
-            Copy,
-            Debug,
-            PartialEq,
-            Eq,
-            Hash,
-            PartialOrd,
-            Ord,
-            ::prost::Enumeration
+            Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
         )]
         #[repr(i32)]
         pub enum PixelFormat {
@@ -11499,17 +10338,7 @@ pub mod layer_state {
     /// ChangesLsb and the next 32 bits are in ChangesMsb. This is needed because
     /// enums have to be 32 bits and there's no nice way to put 64bit constants
     /// into .proto files.
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum ChangesLsb {
         EChangesLsbNone = 0,
@@ -11565,9 +10394,7 @@ pub mod layer_state {
                 Self::EReparent => "eReparent",
                 Self::EColorChanged => "eColorChanged",
                 Self::EBufferTransformChanged => "eBufferTransformChanged",
-                Self::ETransformToDisplayInverseChanged => {
-                    "eTransformToDisplayInverseChanged"
-                }
+                Self::ETransformToDisplayInverseChanged => "eTransformToDisplayInverseChanged",
                 Self::ECropChanged => "eCropChanged",
                 Self::EBufferChanged => "eBufferChanged",
                 Self::EAcquireFenceChanged => "eAcquireFenceChanged",
@@ -11593,9 +10420,7 @@ pub mod layer_state {
                 "eTransparentRegionChanged" => Some(Self::ETransparentRegionChanged),
                 "eFlagsChanged" => Some(Self::EFlagsChanged),
                 "eLayerStackChanged" => Some(Self::ELayerStackChanged),
-                "eReleaseBufferListenerChanged" => {
-                    Some(Self::EReleaseBufferListenerChanged)
-                }
+                "eReleaseBufferListenerChanged" => Some(Self::EReleaseBufferListenerChanged),
                 "eShadowRadiusChanged" => Some(Self::EShadowRadiusChanged),
                 "eBufferCropChanged" => Some(Self::EBufferCropChanged),
                 "eRelativeLayerChanged" => Some(Self::ERelativeLayerChanged),
@@ -11614,26 +10439,14 @@ pub mod layer_state {
                 "eApiChanged" => Some(Self::EApiChanged),
                 "eSidebandStreamChanged" => Some(Self::ESidebandStreamChanged),
                 "eColorTransformChanged" => Some(Self::EColorTransformChanged),
-                "eHasListenerCallbacksChanged" => {
-                    Some(Self::EHasListenerCallbacksChanged)
-                }
+                "eHasListenerCallbacksChanged" => Some(Self::EHasListenerCallbacksChanged),
                 "eInputInfoChanged" => Some(Self::EInputInfoChanged),
                 "eCornerRadiusChanged" => Some(Self::ECornerRadiusChanged),
                 _ => None,
             }
         }
     }
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum ChangesMsb {
         EChangesMsbNone = 0,
@@ -11691,9 +10504,7 @@ pub mod layer_state {
                 "eColorSpaceAgnosticChanged" => Some(Self::EColorSpaceAgnosticChanged),
                 "eFrameRateSelectionPriority" => Some(Self::EFrameRateSelectionPriority),
                 "eFrameRateChanged" => Some(Self::EFrameRateChanged),
-                "eBackgroundBlurRadiusChanged" => {
-                    Some(Self::EBackgroundBlurRadiusChanged)
-                }
+                "eBackgroundBlurRadiusChanged" => Some(Self::EBackgroundBlurRadiusChanged),
                 "eProducerDisconnect" => Some(Self::EProducerDisconnect),
                 "eFixedTransformHintChanged" => Some(Self::EFixedTransformHintChanged),
                 "eFrameNumberChanged" => Some(Self::EFrameNumberChanged),
@@ -11706,17 +10517,7 @@ pub mod layer_state {
             }
         }
     }
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum Flags {
         EFlagsNone = 0,
@@ -11757,17 +10558,7 @@ pub mod layer_state {
             }
         }
     }
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum DropInputMode {
         None = 0,
@@ -11820,17 +10611,7 @@ pub struct DisplayState {
 }
 /// Nested message and enum types in `DisplayState`.
 pub mod display_state {
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum Changes {
         EChangesNone = 0,
@@ -11988,15 +10769,7 @@ pub mod background_tracing_metadata {
         /// Nested message and enum types in `NamedRule`.
         pub mod named_rule {
             #[derive(
-                Clone,
-                Copy,
-                Debug,
-                PartialEq,
-                Eq,
-                Hash,
-                PartialOrd,
-                Ord,
-                ::prost::Enumeration
+                Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
             )]
             #[repr(i32)]
             pub enum EventType {
@@ -12040,15 +10813,7 @@ pub mod background_tracing_metadata {
             }
         }
         #[derive(
-            Clone,
-            Copy,
-            Debug,
-            PartialEq,
-            Eq,
-            Hash,
-            PartialOrd,
-            Ord,
-            ::prost::Enumeration
+            Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
         )]
         #[repr(i32)]
         pub enum TriggerType {
@@ -12070,9 +10835,7 @@ pub mod background_tracing_metadata {
                     Self::MonitorAndDumpWhenSpecificHistogramAndValue => {
                         "MONITOR_AND_DUMP_WHEN_SPECIFIC_HISTOGRAM_AND_VALUE"
                     }
-                    Self::MonitorAndDumpWhenTriggerNamed => {
-                        "MONITOR_AND_DUMP_WHEN_TRIGGER_NAMED"
-                    }
+                    Self::MonitorAndDumpWhenTriggerNamed => "MONITOR_AND_DUMP_WHEN_TRIGGER_NAMED",
                 }
             }
             /// Creates an enum from field names used in the ProtoBuf definition.
@@ -12112,17 +10875,7 @@ pub struct ChromeTracedValue {
 }
 /// Nested message and enum types in `ChromeTracedValue`.
 pub mod chrome_traced_value {
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum NestedType {
         Dict = 0,
@@ -12259,24 +11012,18 @@ pub mod chrome_metadata {
 /// TODO(eseckler): Update these agents to become perfetto producers.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ChromeLegacyJsonTrace {
-    #[prost(enumeration = "chrome_legacy_json_trace::TraceType", optional, tag = "1")]
+    #[prost(
+        enumeration = "chrome_legacy_json_trace::TraceType",
+        optional,
+        tag = "1"
+    )]
     pub r#type: ::core::option::Option<i32>,
     #[prost(string, optional, tag = "2")]
     pub data: ::core::option::Option<::prost::alloc::string::String>,
 }
 /// Nested message and enum types in `ChromeLegacyJsonTrace`.
 pub mod chrome_legacy_json_trace {
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum TraceType {
         UserTrace = 0,
@@ -12415,17 +11162,7 @@ pub struct InternedV8JsScript {
 }
 /// Nested message and enum types in `InternedV8JsScript`.
 pub mod interned_v8_js_script {
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum Type {
         Unknown = 0,
@@ -12496,17 +11233,7 @@ pub struct InternedV8JsFunction {
 }
 /// Nested message and enum types in `InternedV8JsFunction`.
 pub mod interned_v8_js_function {
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum Kind {
         Unknown = 0,
@@ -12562,26 +11289,18 @@ pub mod interned_v8_js_function {
                 Self::AsyncFunction => "KIND_ASYNC_FUNCTION",
                 Self::AsyncConciseMethod => "KIND_ASYNC_CONCISE_METHOD",
                 Self::StaticAsyncConciseMethod => "KIND_STATIC_ASYNC_CONCISE_METHOD",
-                Self::AsyncConciseGeneratorMethod => {
-                    "KIND_ASYNC_CONCISE_GENERATOR_METHOD"
-                }
+                Self::AsyncConciseGeneratorMethod => "KIND_ASYNC_CONCISE_GENERATOR_METHOD",
                 Self::StaticAsyncConciseGeneratorMethod => {
                     "KIND_STATIC_ASYNC_CONCISE_GENERATOR_METHOD"
                 }
                 Self::AsyncGeneratorFunction => "KIND_ASYNC_GENERATOR_FUNCTION",
                 Self::GeneratorFunction => "KIND_GENERATOR_FUNCTION",
                 Self::ConciseGeneratorMethod => "KIND_CONCISE_GENERATOR_METHOD",
-                Self::StaticConciseGeneratorMethod => {
-                    "KIND_STATIC_CONCISE_GENERATOR_METHOD"
-                }
+                Self::StaticConciseGeneratorMethod => "KIND_STATIC_CONCISE_GENERATOR_METHOD",
                 Self::ConciseMethod => "KIND_CONCISE_METHOD",
                 Self::StaticConciseMethod => "KIND_STATIC_CONCISE_METHOD",
-                Self::ClassMembersInitializerFunction => {
-                    "KIND_CLASS_MEMBERS_INITIALIZER_FUNCTION"
-                }
-                Self::ClassStaticInitializerFunction => {
-                    "KIND_CLASS_STATIC_INITIALIZER_FUNCTION"
-                }
+                Self::ClassMembersInitializerFunction => "KIND_CLASS_MEMBERS_INITIALIZER_FUNCTION",
+                Self::ClassStaticInitializerFunction => "KIND_CLASS_STATIC_INITIALIZER_FUNCTION",
                 Self::Invalid => "KIND_INVALID",
             }
         }
@@ -12594,9 +11313,7 @@ pub mod interned_v8_js_function {
                 "KIND_ASYNC_MODULE" => Some(Self::AsyncModule),
                 "KIND_BASE_CONSTRUCTOR" => Some(Self::BaseConstructor),
                 "KIND_DEFAULT_BASE_CONSTRUCTOR" => Some(Self::DefaultBaseConstructor),
-                "KIND_DEFAULT_DERIVED_CONSTRUCTOR" => {
-                    Some(Self::DefaultDerivedConstructor)
-                }
+                "KIND_DEFAULT_DERIVED_CONSTRUCTOR" => Some(Self::DefaultDerivedConstructor),
                 "KIND_DERIVED_CONSTRUCTOR" => Some(Self::DerivedConstructor),
                 "KIND_GETTER_FUNCTION" => Some(Self::GetterFunction),
                 "KIND_STATIC_GETTER_FUNCTION" => Some(Self::StaticGetterFunction),
@@ -12606,21 +11323,15 @@ pub mod interned_v8_js_function {
                 "KIND_ASYNC_ARROW_FUNCTION" => Some(Self::AsyncArrowFunction),
                 "KIND_ASYNC_FUNCTION" => Some(Self::AsyncFunction),
                 "KIND_ASYNC_CONCISE_METHOD" => Some(Self::AsyncConciseMethod),
-                "KIND_STATIC_ASYNC_CONCISE_METHOD" => {
-                    Some(Self::StaticAsyncConciseMethod)
-                }
-                "KIND_ASYNC_CONCISE_GENERATOR_METHOD" => {
-                    Some(Self::AsyncConciseGeneratorMethod)
-                }
+                "KIND_STATIC_ASYNC_CONCISE_METHOD" => Some(Self::StaticAsyncConciseMethod),
+                "KIND_ASYNC_CONCISE_GENERATOR_METHOD" => Some(Self::AsyncConciseGeneratorMethod),
                 "KIND_STATIC_ASYNC_CONCISE_GENERATOR_METHOD" => {
                     Some(Self::StaticAsyncConciseGeneratorMethod)
                 }
                 "KIND_ASYNC_GENERATOR_FUNCTION" => Some(Self::AsyncGeneratorFunction),
                 "KIND_GENERATOR_FUNCTION" => Some(Self::GeneratorFunction),
                 "KIND_CONCISE_GENERATOR_METHOD" => Some(Self::ConciseGeneratorMethod),
-                "KIND_STATIC_CONCISE_GENERATOR_METHOD" => {
-                    Some(Self::StaticConciseGeneratorMethod)
-                }
+                "KIND_STATIC_CONCISE_GENERATOR_METHOD" => Some(Self::StaticConciseGeneratorMethod),
                 "KIND_CONCISE_METHOD" => Some(Self::ConciseMethod),
                 "KIND_STATIC_CONCISE_METHOD" => Some(Self::StaticConciseMethod),
                 "KIND_CLASS_MEMBERS_INITIALIZER_FUNCTION" => {
@@ -12696,17 +11407,7 @@ pub struct V8JsCode {
 }
 /// Nested message and enum types in `V8JsCode`.
 pub mod v8_js_code {
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum Tier {
         Unknown = 0,
@@ -12773,17 +11474,7 @@ pub struct V8InternalCode {
 }
 /// Nested message and enum types in `V8InternalCode`.
 pub mod v8_internal_code {
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum Type {
         Unknown = 0,
@@ -12857,17 +11548,7 @@ pub struct V8WasmCode {
 }
 /// Nested message and enum types in `V8WasmCode`.
 pub mod v8_wasm_code {
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum Tier {
         Unknown = 0,
@@ -12994,15 +11675,7 @@ pub mod clock_snapshot {
     pub mod clock {
         /// DEPRECATED. This enum has moved to ../common/builtin_clock.proto.
         #[derive(
-            Clone,
-            Copy,
-            Debug,
-            PartialEq,
-            Eq,
-            Hash,
-            PartialOrd,
-            Ord,
-            ::prost::Enumeration
+            Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
         )]
         #[repr(i32)]
         pub enum BuiltinClocks {
@@ -13076,9 +11749,17 @@ pub struct CSwitchEtwEvent {
         tag = "6"
     )]
     pub old_thread_wait_reason: ::core::option::Option<i32>,
-    #[prost(enumeration = "c_switch_etw_event::OldThreadWaitMode", optional, tag = "7")]
+    #[prost(
+        enumeration = "c_switch_etw_event::OldThreadWaitMode",
+        optional,
+        tag = "7"
+    )]
     pub old_thread_wait_mode: ::core::option::Option<i32>,
-    #[prost(enumeration = "c_switch_etw_event::OldThreadState", optional, tag = "8")]
+    #[prost(
+        enumeration = "c_switch_etw_event::OldThreadState",
+        optional,
+        tag = "8"
+    )]
     pub old_thread_state: ::core::option::Option<i32>,
     /// Ideal wait time of the previous thread.
     #[prost(sint32, optional, tag = "9")]
@@ -13092,17 +11773,7 @@ pub mod c_switch_etw_event {
     /// Wait reason for the previous thread. The ordering is important as based on
     /// the OldThreadWaitReason definition from the link above. The following are
     /// the possible values:
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum OldThreadWaitReason {
         Executive = 0,
@@ -13239,17 +11910,7 @@ pub mod c_switch_etw_event {
     /// Wait mode for the previous thread. The ordering is important as based on
     /// the OldThreadWaitMode definition from the link above. The following are the
     /// possible values:
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum OldThreadWaitMode {
         KernelMode = 0,
@@ -13278,17 +11939,7 @@ pub mod c_switch_etw_event {
     /// State of the previous thread. The ordering is important as based on the
     /// OldThreadState definition from the link above. The following are the
     /// possible state values:
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum OldThreadState {
         Initialized = 0,
@@ -13340,7 +11991,11 @@ pub struct ReadyThreadEtwEvent {
     /// The thread identifier of the thread being readied for execution.
     #[prost(uint32, optional, tag = "1")]
     pub t_thread_id: ::core::option::Option<u32>,
-    #[prost(enumeration = "ready_thread_etw_event::AdjustReason", optional, tag = "2")]
+    #[prost(
+        enumeration = "ready_thread_etw_event::AdjustReason",
+        optional,
+        tag = "2"
+    )]
     pub adjust_reason: ::core::option::Option<i32>,
     ///   The value by which the priority is being adjusted.
     #[prost(sint32, optional, tag = "3")]
@@ -13352,17 +12007,7 @@ pub struct ReadyThreadEtwEvent {
 pub mod ready_thread_etw_event {
     /// The reason for the priority boost. The ordering is important as based on
     /// the AdjustReason definition from the link above.
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum AdjustReason {
         IgnoreTheIncrement = 0,
@@ -13395,17 +12040,7 @@ pub mod ready_thread_etw_event {
             }
         }
     }
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum TraceFlag {
         Unspecified = 0,
@@ -13501,15 +12136,7 @@ pub mod inode_file_map {
     pub mod entry {
         /// The file type
         #[derive(
-            Clone,
-            Copy,
-            Debug,
-            PartialEq,
-            Eq,
-            Hash,
-            PartialOrd,
-            Ord,
-            ::prost::Enumeration
+            Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
         )]
         #[repr(i32)]
         pub enum Type {
@@ -19802,9 +18429,7 @@ pub mod ftrace_event {
         #[prost(message, tag = "105")]
         MmCompactionIsolateFreepages(super::MmCompactionIsolateFreepagesFtraceEvent),
         #[prost(message, tag = "106")]
-        MmCompactionIsolateMigratepages(
-            super::MmCompactionIsolateMigratepagesFtraceEvent,
-        ),
+        MmCompactionIsolateMigratepages(super::MmCompactionIsolateMigratepagesFtraceEvent),
         #[prost(message, tag = "107")]
         MmCompactionKcompactdSleep(super::MmCompactionKcompactdSleepFtraceEvent),
         #[prost(message, tag = "108")]
@@ -19891,13 +18516,9 @@ pub mod ftrace_event {
         #[prost(message, tag = "149")]
         Ext4EsCacheExtent(super::Ext4EsCacheExtentFtraceEvent),
         #[prost(message, tag = "150")]
-        Ext4EsFindDelayedExtentRangeEnter(
-            super::Ext4EsFindDelayedExtentRangeEnterFtraceEvent,
-        ),
+        Ext4EsFindDelayedExtentRangeEnter(super::Ext4EsFindDelayedExtentRangeEnterFtraceEvent),
         #[prost(message, tag = "151")]
-        Ext4EsFindDelayedExtentRangeExit(
-            super::Ext4EsFindDelayedExtentRangeExitFtraceEvent,
-        ),
+        Ext4EsFindDelayedExtentRangeExit(super::Ext4EsFindDelayedExtentRangeExitFtraceEvent),
         #[prost(message, tag = "152")]
         Ext4EsInsertExtent(super::Ext4EsInsertExtentFtraceEvent),
         #[prost(message, tag = "153")]
@@ -19917,13 +18538,9 @@ pub mod ftrace_event {
         #[prost(message, tag = "160")]
         Ext4EvictInode(super::Ext4EvictInodeFtraceEvent),
         #[prost(message, tag = "161")]
-        Ext4ExtConvertToInitializedEnter(
-            super::Ext4ExtConvertToInitializedEnterFtraceEvent,
-        ),
+        Ext4ExtConvertToInitializedEnter(super::Ext4ExtConvertToInitializedEnterFtraceEvent),
         #[prost(message, tag = "162")]
-        Ext4ExtConvertToInitializedFastpath(
-            super::Ext4ExtConvertToInitializedFastpathFtraceEvent,
-        ),
+        Ext4ExtConvertToInitializedFastpath(super::Ext4ExtConvertToInitializedFastpathFtraceEvent),
         #[prost(message, tag = "163")]
         Ext4ExtHandleUnwrittenExtents(super::Ext4ExtHandleUnwrittenExtentsFtraceEvent),
         #[prost(message, tag = "164")]
@@ -20611,29 +19228,19 @@ pub mod ftrace_event {
             super::MaliMaliPmmcuhctlcoresdownscalenotifypendFtraceEvent,
         ),
         #[prost(message, tag = "511")]
-        MaliMaliPmMcuHctlCoresNotifyPend(
-            super::MaliMaliPmmcuhctlcoresnotifypendFtraceEvent,
-        ),
+        MaliMaliPmMcuHctlCoresNotifyPend(super::MaliMaliPmmcuhctlcoresnotifypendFtraceEvent),
         #[prost(message, tag = "512")]
-        MaliMaliPmMcuHctlCoreInactivePend(
-            super::MaliMaliPmmcuhctlcoreinactivependFtraceEvent,
-        ),
+        MaliMaliPmMcuHctlCoreInactivePend(super::MaliMaliPmmcuhctlcoreinactivependFtraceEvent),
         #[prost(message, tag = "513")]
         MaliMaliPmMcuHctlMcuOnRecheck(super::MaliMaliPmmcuhctlmcuonrecheckFtraceEvent),
         #[prost(message, tag = "514")]
-        MaliMaliPmMcuHctlShadersCoreOffPend(
-            super::MaliMaliPmmcuhctlshaderscoreoffpendFtraceEvent,
-        ),
+        MaliMaliPmMcuHctlShadersCoreOffPend(super::MaliMaliPmmcuhctlshaderscoreoffpendFtraceEvent),
         #[prost(message, tag = "515")]
-        MaliMaliPmMcuHctlShadersPendOff(
-            super::MaliMaliPmmcuhctlshaderspendoffFtraceEvent,
-        ),
+        MaliMaliPmMcuHctlShadersPendOff(super::MaliMaliPmmcuhctlshaderspendoffFtraceEvent),
         #[prost(message, tag = "516")]
         MaliMaliPmMcuHctlShadersPendOn(super::MaliMaliPmmcuhctlshaderspendonFtraceEvent),
         #[prost(message, tag = "517")]
-        MaliMaliPmMcuHctlShadersReadyOff(
-            super::MaliMaliPmmcuhctlshadersreadyoffFtraceEvent,
-        ),
+        MaliMaliPmMcuHctlShadersReadyOff(super::MaliMaliPmmcuhctlshadersreadyoffFtraceEvent),
         #[prost(message, tag = "518")]
         MaliMaliPmMcuInSleep(super::MaliMaliPmmcuinsleepFtraceEvent),
         #[prost(message, tag = "519")]
@@ -20641,9 +19248,7 @@ pub mod ftrace_event {
         #[prost(message, tag = "520")]
         MaliMaliPmMcuOn(super::MaliMaliPmmcuonFtraceEvent),
         #[prost(message, tag = "521")]
-        MaliMaliPmMcuOnCoreAttrUpdatePend(
-            super::MaliMaliPmmcuoncoreattrupdatependFtraceEvent,
-        ),
+        MaliMaliPmMcuOnCoreAttrUpdatePend(super::MaliMaliPmmcuoncoreattrupdatependFtraceEvent),
         #[prost(message, tag = "522")]
         MaliMaliPmMcuOnGlbReinitPend(super::MaliMaliPmmcuonglbreinitpendFtraceEvent),
         #[prost(message, tag = "523")]
@@ -20757,22 +19362,17 @@ pub struct FtraceStats {
     /// affected FtraceEventBundles with a timestamp.
     /// Any traces with entries in this field should be investigated, as they
     /// indicate a bug in perfetto or the kernel.
-    #[prost(enumeration = "FtraceParseStatus", repeated, packed = "false", tag = "9")]
+    #[prost(
+        enumeration = "FtraceParseStatus",
+        repeated,
+        packed = "false",
+        tag = "9"
+    )]
     pub ftrace_parse_errors: ::prost::alloc::vec::Vec<i32>,
 }
 /// Nested message and enum types in `FtraceStats`.
 pub mod ftrace_stats {
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum Phase {
         Unspecified = 0,
@@ -20837,30 +19437,18 @@ impl FtraceParseStatus {
         match self {
             Self::FtraceStatusUnspecified => "FTRACE_STATUS_UNSPECIFIED",
             Self::FtraceStatusOk => "FTRACE_STATUS_OK",
-            Self::FtraceStatusUnexpectedReadError => {
-                "FTRACE_STATUS_UNEXPECTED_READ_ERROR"
-            }
+            Self::FtraceStatusUnexpectedReadError => "FTRACE_STATUS_UNEXPECTED_READ_ERROR",
             Self::FtraceStatusPartialPageRead => "FTRACE_STATUS_PARTIAL_PAGE_READ",
-            Self::FtraceStatusAbiInvalidPageHeader => {
-                "FTRACE_STATUS_ABI_INVALID_PAGE_HEADER"
-            }
-            Self::FtraceStatusAbiShortEventHeader => {
-                "FTRACE_STATUS_ABI_SHORT_EVENT_HEADER"
-            }
+            Self::FtraceStatusAbiInvalidPageHeader => "FTRACE_STATUS_ABI_INVALID_PAGE_HEADER",
+            Self::FtraceStatusAbiShortEventHeader => "FTRACE_STATUS_ABI_SHORT_EVENT_HEADER",
             Self::FtraceStatusAbiNullPadding => "FTRACE_STATUS_ABI_NULL_PADDING",
-            Self::FtraceStatusAbiShortPaddingLength => {
-                "FTRACE_STATUS_ABI_SHORT_PADDING_LENGTH"
-            }
-            Self::FtraceStatusAbiInvalidPaddingLength => {
-                "FTRACE_STATUS_ABI_INVALID_PADDING_LENGTH"
-            }
+            Self::FtraceStatusAbiShortPaddingLength => "FTRACE_STATUS_ABI_SHORT_PADDING_LENGTH",
+            Self::FtraceStatusAbiInvalidPaddingLength => "FTRACE_STATUS_ABI_INVALID_PADDING_LENGTH",
             Self::FtraceStatusAbiShortTimeExtend => "FTRACE_STATUS_ABI_SHORT_TIME_EXTEND",
             Self::FtraceStatusAbiShortTimeStamp => "FTRACE_STATUS_ABI_SHORT_TIME_STAMP",
             Self::FtraceStatusAbiShortDataLength => "FTRACE_STATUS_ABI_SHORT_DATA_LENGTH",
             Self::FtraceStatusAbiZeroDataLength => "FTRACE_STATUS_ABI_ZERO_DATA_LENGTH",
-            Self::FtraceStatusAbiInvalidDataLength => {
-                "FTRACE_STATUS_ABI_INVALID_DATA_LENGTH"
-            }
+            Self::FtraceStatusAbiInvalidDataLength => "FTRACE_STATUS_ABI_INVALID_DATA_LENGTH",
             Self::FtraceStatusAbiShortEventId => "FTRACE_STATUS_ABI_SHORT_EVENT_ID",
             Self::FtraceStatusAbiEndOverflow => "FTRACE_STATUS_ABI_END_OVERFLOW",
             Self::FtraceStatusShortCompactEvent => "FTRACE_STATUS_SHORT_COMPACT_EVENT",
@@ -20872,16 +19460,10 @@ impl FtraceParseStatus {
         match value {
             "FTRACE_STATUS_UNSPECIFIED" => Some(Self::FtraceStatusUnspecified),
             "FTRACE_STATUS_OK" => Some(Self::FtraceStatusOk),
-            "FTRACE_STATUS_UNEXPECTED_READ_ERROR" => {
-                Some(Self::FtraceStatusUnexpectedReadError)
-            }
+            "FTRACE_STATUS_UNEXPECTED_READ_ERROR" => Some(Self::FtraceStatusUnexpectedReadError),
             "FTRACE_STATUS_PARTIAL_PAGE_READ" => Some(Self::FtraceStatusPartialPageRead),
-            "FTRACE_STATUS_ABI_INVALID_PAGE_HEADER" => {
-                Some(Self::FtraceStatusAbiInvalidPageHeader)
-            }
-            "FTRACE_STATUS_ABI_SHORT_EVENT_HEADER" => {
-                Some(Self::FtraceStatusAbiShortEventHeader)
-            }
+            "FTRACE_STATUS_ABI_INVALID_PAGE_HEADER" => Some(Self::FtraceStatusAbiInvalidPageHeader),
+            "FTRACE_STATUS_ABI_SHORT_EVENT_HEADER" => Some(Self::FtraceStatusAbiShortEventHeader),
             "FTRACE_STATUS_ABI_NULL_PADDING" => Some(Self::FtraceStatusAbiNullPadding),
             "FTRACE_STATUS_ABI_SHORT_PADDING_LENGTH" => {
                 Some(Self::FtraceStatusAbiShortPaddingLength)
@@ -20889,26 +19471,14 @@ impl FtraceParseStatus {
             "FTRACE_STATUS_ABI_INVALID_PADDING_LENGTH" => {
                 Some(Self::FtraceStatusAbiInvalidPaddingLength)
             }
-            "FTRACE_STATUS_ABI_SHORT_TIME_EXTEND" => {
-                Some(Self::FtraceStatusAbiShortTimeExtend)
-            }
-            "FTRACE_STATUS_ABI_SHORT_TIME_STAMP" => {
-                Some(Self::FtraceStatusAbiShortTimeStamp)
-            }
-            "FTRACE_STATUS_ABI_SHORT_DATA_LENGTH" => {
-                Some(Self::FtraceStatusAbiShortDataLength)
-            }
-            "FTRACE_STATUS_ABI_ZERO_DATA_LENGTH" => {
-                Some(Self::FtraceStatusAbiZeroDataLength)
-            }
-            "FTRACE_STATUS_ABI_INVALID_DATA_LENGTH" => {
-                Some(Self::FtraceStatusAbiInvalidDataLength)
-            }
+            "FTRACE_STATUS_ABI_SHORT_TIME_EXTEND" => Some(Self::FtraceStatusAbiShortTimeExtend),
+            "FTRACE_STATUS_ABI_SHORT_TIME_STAMP" => Some(Self::FtraceStatusAbiShortTimeStamp),
+            "FTRACE_STATUS_ABI_SHORT_DATA_LENGTH" => Some(Self::FtraceStatusAbiShortDataLength),
+            "FTRACE_STATUS_ABI_ZERO_DATA_LENGTH" => Some(Self::FtraceStatusAbiZeroDataLength),
+            "FTRACE_STATUS_ABI_INVALID_DATA_LENGTH" => Some(Self::FtraceStatusAbiInvalidDataLength),
             "FTRACE_STATUS_ABI_SHORT_EVENT_ID" => Some(Self::FtraceStatusAbiShortEventId),
             "FTRACE_STATUS_ABI_END_OVERFLOW" => Some(Self::FtraceStatusAbiEndOverflow),
-            "FTRACE_STATUS_SHORT_COMPACT_EVENT" => {
-                Some(Self::FtraceStatusShortCompactEvent)
-            }
+            "FTRACE_STATUS_SHORT_COMPACT_EVENT" => Some(Self::FtraceStatusShortCompactEvent),
             "FTRACE_STATUS_INVALID_EVENT" => Some(Self::FtraceStatusInvalidEvent),
             _ => None,
         }
@@ -21111,7 +19681,12 @@ pub mod gpu_counter_descriptor {
         pub denominator_units: ::prost::alloc::vec::Vec<i32>,
         #[prost(bool, optional, tag = "9")]
         pub select_by_default: ::core::option::Option<bool>,
-        #[prost(enumeration = "GpuCounterGroup", repeated, packed = "false", tag = "10")]
+        #[prost(
+            enumeration = "GpuCounterGroup",
+            repeated,
+            packed = "false",
+            tag = "10"
+        )]
         pub groups: ::prost::alloc::vec::Vec<i32>,
         #[prost(oneof = "gpu_counter_spec::PeakValue", tags = "5, 6")]
         pub peak_value: ::core::option::Option<gpu_counter_spec::PeakValue>,
@@ -21149,17 +19724,7 @@ pub mod gpu_counter_descriptor {
     }
     /// Logical groups for a counter.  This is used in the UI to present the
     /// related counters together.
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum GpuCounterGroup {
         Unclassified = 0,
@@ -21202,17 +19767,7 @@ pub mod gpu_counter_descriptor {
         }
     }
     /// next id: 41
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum MeasureUnit {
         None = 0,
@@ -21403,17 +19958,7 @@ pub struct GpuLog {
 }
 /// Nested message and enum types in `GpuLog`.
 pub mod gpu_log {
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum Severity {
         LogSeverityUnspecified = 0,
@@ -21576,17 +20121,7 @@ pub struct InternedGraphicsContext {
 }
 /// Nested message and enum types in `InternedGraphicsContext`.
 pub mod interned_graphics_context {
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum Api {
         Undefined = 0,
@@ -21636,17 +20171,7 @@ pub struct InternedGpuRenderStageSpecification {
 }
 /// Nested message and enum types in `InternedGpuRenderStageSpecification`.
 pub mod interned_gpu_render_stage_specification {
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum RenderStageCategory {
         Other = 0,
@@ -21729,7 +20254,11 @@ pub struct VulkanMemoryEvent {
     /// protos/perfetto/trace/interned_data/interned_data.proto.
     #[prost(uint64, optional, tag = "7")]
     pub caller_iid: ::core::option::Option<u64>,
-    #[prost(enumeration = "vulkan_memory_event::AllocationScope", optional, tag = "8")]
+    #[prost(
+        enumeration = "vulkan_memory_event::AllocationScope",
+        optional,
+        tag = "8"
+    )]
     pub allocation_scope: ::core::option::Option<i32>,
     /// Extra related information, e.g., create configs, etc.
     #[prost(message, repeated, tag = "9")]
@@ -21748,17 +20277,7 @@ pub struct VulkanMemoryEvent {
 }
 /// Nested message and enum types in `VulkanMemoryEvent`.
 pub mod vulkan_memory_event {
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum Source {
         Unspecified = 0,
@@ -21796,17 +20315,7 @@ pub mod vulkan_memory_event {
             }
         }
     }
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum Operation {
         OpUnspecified = 0,
@@ -21849,17 +20358,7 @@ pub mod vulkan_memory_event {
             }
         }
     }
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum AllocationScope {
         ScopeUnspecified = 0,
@@ -22032,9 +20531,7 @@ pub struct DebugAnnotation {
     /// .perfetto.protos.DebugAnnotation) and |proto_value| contains the serialised
     /// proto messages. See |TracedValue::WriteProto| for more details.
     #[prost(oneof = "debug_annotation::ProtoTypeDescriptor", tags = "16, 13")]
-    pub proto_type_descriptor: ::core::option::Option<
-        debug_annotation::ProtoTypeDescriptor,
-    >,
+    pub proto_type_descriptor: ::core::option::Option<debug_annotation::ProtoTypeDescriptor>,
 }
 /// Nested message and enum types in `DebugAnnotation`.
 pub mod debug_annotation {
@@ -22063,15 +20560,7 @@ pub mod debug_annotation {
     /// Nested message and enum types in `NestedValue`.
     pub mod nested_value {
         #[derive(
-            Clone,
-            Copy,
-            Debug,
-            PartialEq,
-            Eq,
-            Hash,
-            PartialOrd,
-            Ord,
-            ::prost::Enumeration
+            Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
         )]
         #[repr(i32)]
         pub enum NestedType {
@@ -22183,17 +20672,7 @@ pub struct LogMessage {
 }
 /// Nested message and enum types in `LogMessage`.
 pub mod log_message {
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum Priority {
         PrioUnspecified = 0,
@@ -22273,17 +20752,7 @@ pub struct ChromeApplicationStateInfo {
 pub mod chrome_application_state_info {
     /// Enum definition taken from:
     /// <https://source.chromium.org/chromium/chromium/src/+/master:base/android/application_status_listener.h>
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum ChromeApplicationState {
         ApplicationStateUnknown = 0,
@@ -22401,17 +20870,7 @@ pub struct ChromeCompositorSchedulerState {
 }
 /// Nested message and enum types in `ChromeCompositorSchedulerState`.
 pub mod chrome_compositor_scheduler_state {
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum BeginImplFrameDeadlineMode {
         DeadlineModeUnspecified = 0,
@@ -22490,15 +20949,7 @@ pub mod chrome_compositor_state_machine {
     /// Nested message and enum types in `MajorState`.
     pub mod major_state {
         #[derive(
-            Clone,
-            Copy,
-            Debug,
-            PartialEq,
-            Eq,
-            Hash,
-            PartialOrd,
-            Ord,
-            ::prost::Enumeration
+            Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
         )]
         #[repr(i32)]
         pub enum BeginImplFrameState {
@@ -22516,41 +20967,25 @@ pub mod chrome_compositor_state_machine {
                 match self {
                     Self::BeginImplFrameUnspecified => "BEGIN_IMPL_FRAME_UNSPECIFIED",
                     Self::BeginImplFrameIdle => "BEGIN_IMPL_FRAME_IDLE",
-                    Self::BeginImplFrameInsideBeginFrame => {
-                        "BEGIN_IMPL_FRAME_INSIDE_BEGIN_FRAME"
-                    }
-                    Self::BeginImplFrameInsideDeadline => {
-                        "BEGIN_IMPL_FRAME_INSIDE_DEADLINE"
-                    }
+                    Self::BeginImplFrameInsideBeginFrame => "BEGIN_IMPL_FRAME_INSIDE_BEGIN_FRAME",
+                    Self::BeginImplFrameInsideDeadline => "BEGIN_IMPL_FRAME_INSIDE_DEADLINE",
                 }
             }
             /// Creates an enum from field names used in the ProtoBuf definition.
             pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
                 match value {
-                    "BEGIN_IMPL_FRAME_UNSPECIFIED" => {
-                        Some(Self::BeginImplFrameUnspecified)
-                    }
+                    "BEGIN_IMPL_FRAME_UNSPECIFIED" => Some(Self::BeginImplFrameUnspecified),
                     "BEGIN_IMPL_FRAME_IDLE" => Some(Self::BeginImplFrameIdle),
                     "BEGIN_IMPL_FRAME_INSIDE_BEGIN_FRAME" => {
                         Some(Self::BeginImplFrameInsideBeginFrame)
                     }
-                    "BEGIN_IMPL_FRAME_INSIDE_DEADLINE" => {
-                        Some(Self::BeginImplFrameInsideDeadline)
-                    }
+                    "BEGIN_IMPL_FRAME_INSIDE_DEADLINE" => Some(Self::BeginImplFrameInsideDeadline),
                     _ => None,
                 }
             }
         }
         #[derive(
-            Clone,
-            Copy,
-            Debug,
-            PartialEq,
-            Eq,
-            Hash,
-            PartialOrd,
-            Ord,
-            ::prost::Enumeration
+            Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
         )]
         #[repr(i32)]
         pub enum BeginMainFrameState {
@@ -22569,36 +21004,22 @@ pub mod chrome_compositor_state_machine {
                     Self::BeginMainFrameUnspecified => "BEGIN_MAIN_FRAME_UNSPECIFIED",
                     Self::BeginMainFrameIdle => "BEGIN_MAIN_FRAME_IDLE",
                     Self::BeginMainFrameSent => "BEGIN_MAIN_FRAME_SENT",
-                    Self::BeginMainFrameReadyToCommit => {
-                        "BEGIN_MAIN_FRAME_READY_TO_COMMIT"
-                    }
+                    Self::BeginMainFrameReadyToCommit => "BEGIN_MAIN_FRAME_READY_TO_COMMIT",
                 }
             }
             /// Creates an enum from field names used in the ProtoBuf definition.
             pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
                 match value {
-                    "BEGIN_MAIN_FRAME_UNSPECIFIED" => {
-                        Some(Self::BeginMainFrameUnspecified)
-                    }
+                    "BEGIN_MAIN_FRAME_UNSPECIFIED" => Some(Self::BeginMainFrameUnspecified),
                     "BEGIN_MAIN_FRAME_IDLE" => Some(Self::BeginMainFrameIdle),
                     "BEGIN_MAIN_FRAME_SENT" => Some(Self::BeginMainFrameSent),
-                    "BEGIN_MAIN_FRAME_READY_TO_COMMIT" => {
-                        Some(Self::BeginMainFrameReadyToCommit)
-                    }
+                    "BEGIN_MAIN_FRAME_READY_TO_COMMIT" => Some(Self::BeginMainFrameReadyToCommit),
                     _ => None,
                 }
             }
         }
         #[derive(
-            Clone,
-            Copy,
-            Debug,
-            PartialEq,
-            Eq,
-            Hash,
-            PartialOrd,
-            Ord,
-            ::prost::Enumeration
+            Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
         )]
         #[repr(i32)]
         pub enum LayerTreeFrameSinkState {
@@ -22631,9 +21052,7 @@ pub mod chrome_compositor_state_machine {
             /// Creates an enum from field names used in the ProtoBuf definition.
             pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
                 match value {
-                    "LAYER_TREE_FRAME_UNSPECIFIED" => {
-                        Some(Self::LayerTreeFrameUnspecified)
-                    }
+                    "LAYER_TREE_FRAME_UNSPECIFIED" => Some(Self::LayerTreeFrameUnspecified),
                     "LAYER_TREE_FRAME_NONE" => Some(Self::LayerTreeFrameNone),
                     "LAYER_TREE_FRAME_ACTIVE" => Some(Self::LayerTreeFrameActive),
                     "LAYER_TREE_FRAME_CREATING" => Some(Self::LayerTreeFrameCreating),
@@ -22648,15 +21067,7 @@ pub mod chrome_compositor_state_machine {
             }
         }
         #[derive(
-            Clone,
-            Copy,
-            Debug,
-            PartialEq,
-            Eq,
-            Hash,
-            PartialOrd,
-            Ord,
-            ::prost::Enumeration
+            Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
         )]
         #[repr(i32)]
         pub enum ForcedRedrawOnTimeoutState {
@@ -22675,9 +21086,7 @@ pub mod chrome_compositor_state_machine {
                 match self {
                     Self::ForcedRedrawUnspecified => "FORCED_REDRAW_UNSPECIFIED",
                     Self::ForcedRedrawIdle => "FORCED_REDRAW_IDLE",
-                    Self::ForcedRedrawWaitingForCommit => {
-                        "FORCED_REDRAW_WAITING_FOR_COMMIT"
-                    }
+                    Self::ForcedRedrawWaitingForCommit => "FORCED_REDRAW_WAITING_FOR_COMMIT",
                     Self::ForcedRedrawWaitingForActivation => {
                         "FORCED_REDRAW_WAITING_FOR_ACTIVATION"
                     }
@@ -22689,15 +21098,11 @@ pub mod chrome_compositor_state_machine {
                 match value {
                     "FORCED_REDRAW_UNSPECIFIED" => Some(Self::ForcedRedrawUnspecified),
                     "FORCED_REDRAW_IDLE" => Some(Self::ForcedRedrawIdle),
-                    "FORCED_REDRAW_WAITING_FOR_COMMIT" => {
-                        Some(Self::ForcedRedrawWaitingForCommit)
-                    }
+                    "FORCED_REDRAW_WAITING_FOR_COMMIT" => Some(Self::ForcedRedrawWaitingForCommit),
                     "FORCED_REDRAW_WAITING_FOR_ACTIVATION" => {
                         Some(Self::ForcedRedrawWaitingForActivation)
                     }
-                    "FORCED_REDRAW_WAITING_FOR_DRAW" => {
-                        Some(Self::ForcedRedrawWaitingForDraw)
-                    }
+                    "FORCED_REDRAW_WAITING_FOR_DRAW" => Some(Self::ForcedRedrawWaitingForDraw),
                     _ => None,
                 }
             }
@@ -22739,9 +21144,7 @@ pub mod chrome_compositor_state_machine {
         #[prost(int32, optional, tag = "16")]
         pub pending_submit_frames: ::core::option::Option<i32>,
         #[prost(int32, optional, tag = "17")]
-        pub submit_frames_with_current_layer_tree_frame_sink: ::core::option::Option<
-            i32,
-        >,
+        pub submit_frames_with_current_layer_tree_frame_sink: ::core::option::Option<i32>,
         #[prost(bool, optional, tag = "18")]
         pub needs_redraw: ::core::option::Option<bool>,
         #[prost(bool, optional, tag = "19")]
@@ -22767,9 +21170,7 @@ pub mod chrome_compositor_state_machine {
         #[prost(bool, optional, tag = "29")]
         pub active_tree_is_ready_to_draw: ::core::option::Option<bool>,
         #[prost(bool, optional, tag = "30")]
-        pub did_create_and_initialize_first_layer_tree_frame_sink: ::core::option::Option<
-            bool,
-        >,
+        pub did_create_and_initialize_first_layer_tree_frame_sink: ::core::option::Option<bool>,
         #[prost(enumeration = "minor_state::TreePriority", optional, tag = "31")]
         pub tree_priority: ::core::option::Option<i32>,
         #[prost(enumeration = "minor_state::ScrollHandlerState", optional, tag = "32")]
@@ -22804,15 +21205,7 @@ pub mod chrome_compositor_state_machine {
     /// Nested message and enum types in `MinorState`.
     pub mod minor_state {
         #[derive(
-            Clone,
-            Copy,
-            Debug,
-            PartialEq,
-            Eq,
-            Hash,
-            PartialOrd,
-            Ord,
-            ::prost::Enumeration
+            Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
         )]
         #[repr(i32)]
         pub enum TreePriority {
@@ -22829,15 +21222,9 @@ pub mod chrome_compositor_state_machine {
             pub fn as_str_name(&self) -> &'static str {
                 match self {
                     Self::Unspecified => "TREE_PRIORITY_UNSPECIFIED",
-                    Self::SamePriorityForBothTrees => {
-                        "TREE_PRIORITY_SAME_PRIORITY_FOR_BOTH_TREES"
-                    }
-                    Self::SmoothnessTakesPriority => {
-                        "TREE_PRIORITY_SMOOTHNESS_TAKES_PRIORITY"
-                    }
-                    Self::NewContentTakesPriority => {
-                        "TREE_PRIORITY_NEW_CONTENT_TAKES_PRIORITY"
-                    }
+                    Self::SamePriorityForBothTrees => "TREE_PRIORITY_SAME_PRIORITY_FOR_BOTH_TREES",
+                    Self::SmoothnessTakesPriority => "TREE_PRIORITY_SMOOTHNESS_TAKES_PRIORITY",
+                    Self::NewContentTakesPriority => "TREE_PRIORITY_NEW_CONTENT_TAKES_PRIORITY",
                 }
             }
             /// Creates an enum from field names used in the ProtoBuf definition.
@@ -22858,15 +21245,7 @@ pub mod chrome_compositor_state_machine {
             }
         }
         #[derive(
-            Clone,
-            Copy,
-            Debug,
-            PartialEq,
-            Eq,
-            Hash,
-            PartialOrd,
-            Ord,
-            ::prost::Enumeration
+            Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
         )]
         #[repr(i32)]
         pub enum ScrollHandlerState {
@@ -22892,9 +21271,7 @@ pub mod chrome_compositor_state_machine {
             pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
                 match value {
                     "SCROLL_HANDLER_UNSPECIFIED" => Some(Self::ScrollHandlerUnspecified),
-                    "SCROLL_AFFECTS_SCROLL_HANDLER" => {
-                        Some(Self::ScrollAffectsScrollHandler)
-                    }
+                    "SCROLL_AFFECTS_SCROLL_HANDLER" => Some(Self::ScrollAffectsScrollHandler),
                     "SCROLL_DOES_NOT_AFFECT_SCROLL_HANDLER" => {
                         Some(Self::ScrollDoesNotAffectScrollHandler)
                     }
@@ -22907,7 +21284,11 @@ pub mod chrome_compositor_state_machine {
 /// Next id: 13
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BeginFrameArgs {
-    #[prost(enumeration = "begin_frame_args::BeginFrameArgsType", optional, tag = "1")]
+    #[prost(
+        enumeration = "begin_frame_args::BeginFrameArgsType",
+        optional,
+        tag = "1"
+    )]
     pub r#type: ::core::option::Option<i32>,
     #[prost(uint64, optional, tag = "2")]
     pub source_id: ::core::option::Option<u64>,
@@ -22933,17 +21314,7 @@ pub mod begin_frame_args {
     /// JSON format has a "type" field that was always just "BeginFrameArgs" we
     /// drop this in the proto representation, and instead make the JSON format
     /// "subtype" field become the type field.
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum BeginFrameArgsType {
         Unspecified = 0,
@@ -23022,17 +21393,7 @@ pub mod begin_impl_frame_args {
         #[prost(int64, optional, tag = "7")]
         pub deadline: ::core::option::Option<i64>,
     }
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum State {
         BeginFrameFinished = 0,
@@ -23091,13 +21452,9 @@ pub struct CompositorTimingHistory {
     #[prost(int64, optional, tag = "1")]
     pub begin_main_frame_queue_critical_estimate_delta_us: ::core::option::Option<i64>,
     #[prost(int64, optional, tag = "2")]
-    pub begin_main_frame_queue_not_critical_estimate_delta_us: ::core::option::Option<
-        i64,
-    >,
+    pub begin_main_frame_queue_not_critical_estimate_delta_us: ::core::option::Option<i64>,
     #[prost(int64, optional, tag = "3")]
-    pub begin_main_frame_start_to_ready_to_commit_estimate_delta_us: ::core::option::Option<
-        i64,
-    >,
+    pub begin_main_frame_start_to_ready_to_commit_estimate_delta_us: ::core::option::Option<i64>,
     #[prost(int64, optional, tag = "4")]
     pub commit_to_ready_to_activate_estimate_delta_us: ::core::option::Option<i64>,
     #[prost(int64, optional, tag = "5")]
@@ -23138,12 +21495,8 @@ impl ChromeCompositorSchedulerAction {
                 "CC_SCHEDULER_ACTION_SEND_BEGIN_MAIN_FRAME"
             }
             Self::CcSchedulerActionCommit => "CC_SCHEDULER_ACTION_COMMIT",
-            Self::CcSchedulerActionActivateSyncTree => {
-                "CC_SCHEDULER_ACTION_ACTIVATE_SYNC_TREE"
-            }
-            Self::CcSchedulerActionDrawIfPossible => {
-                "CC_SCHEDULER_ACTION_DRAW_IF_POSSIBLE"
-            }
+            Self::CcSchedulerActionActivateSyncTree => "CC_SCHEDULER_ACTION_ACTIVATE_SYNC_TREE",
+            Self::CcSchedulerActionDrawIfPossible => "CC_SCHEDULER_ACTION_DRAW_IF_POSSIBLE",
             Self::CcSchedulerActionDrawForced => "CC_SCHEDULER_ACTION_DRAW_FORCED",
             Self::CcSchedulerActionDrawAbort => "CC_SCHEDULER_ACTION_DRAW_ABORT",
             Self::CcSchedulerActionBeginLayerTreeFrameSinkCreation => {
@@ -23176,17 +21529,13 @@ impl ChromeCompositorSchedulerAction {
             "CC_SCHEDULER_ACTION_ACTIVATE_SYNC_TREE" => {
                 Some(Self::CcSchedulerActionActivateSyncTree)
             }
-            "CC_SCHEDULER_ACTION_DRAW_IF_POSSIBLE" => {
-                Some(Self::CcSchedulerActionDrawIfPossible)
-            }
+            "CC_SCHEDULER_ACTION_DRAW_IF_POSSIBLE" => Some(Self::CcSchedulerActionDrawIfPossible),
             "CC_SCHEDULER_ACTION_DRAW_FORCED" => Some(Self::CcSchedulerActionDrawForced),
             "CC_SCHEDULER_ACTION_DRAW_ABORT" => Some(Self::CcSchedulerActionDrawAbort),
             "CC_SCHEDULER_ACTION_BEGIN_LAYER_TREE_FRAME_SINK_CREATION" => {
                 Some(Self::CcSchedulerActionBeginLayerTreeFrameSinkCreation)
             }
-            "CC_SCHEDULER_ACTION_PREPARE_TILES" => {
-                Some(Self::CcSchedulerActionPrepareTiles)
-            }
+            "CC_SCHEDULER_ACTION_PREPARE_TILES" => Some(Self::CcSchedulerActionPrepareTiles),
             "CC_SCHEDULER_ACTION_INVALIDATE_LAYER_TREE_FRAME_SINK" => {
                 Some(Self::CcSchedulerActionInvalidateLayerTreeFrameSink)
             }
@@ -23217,7 +21566,11 @@ pub struct ChromeFrameReporter {
     #[prost(enumeration = "chrome_frame_reporter::State", optional, tag = "1")]
     pub state: ::core::option::Option<i32>,
     /// The reason is set only if |state| is not |STATE_UPDATED_ALL|.
-    #[prost(enumeration = "chrome_frame_reporter::FrameDropReason", optional, tag = "2")]
+    #[prost(
+        enumeration = "chrome_frame_reporter::FrameDropReason",
+        optional,
+        tag = "2"
+    )]
     pub reason: ::core::option::Option<i32>,
     #[prost(uint64, optional, tag = "3")]
     pub frame_source: ::core::option::Option<u64>,
@@ -23229,7 +21582,11 @@ pub struct ChromeFrameReporter {
     #[prost(bool, optional, tag = "5")]
     pub affects_smoothness: ::core::option::Option<bool>,
     /// The type of active scroll.
-    #[prost(enumeration = "chrome_frame_reporter::ScrollState", optional, tag = "6")]
+    #[prost(
+        enumeration = "chrome_frame_reporter::ScrollState",
+        optional,
+        tag = "6"
+    )]
     pub scroll_state: ::core::option::Option<i32>,
     /// If any main thread animation is active during this frame.
     #[prost(bool, optional, tag = "7")]
@@ -23258,23 +21615,11 @@ pub struct ChromeFrameReporter {
     /// The breakdown stage of PipelineReporter that is most likely accountable for
     /// high latency.
     #[prost(string, repeated, tag = "14")]
-    pub high_latency_contribution_stage: ::prost::alloc::vec::Vec<
-        ::prost::alloc::string::String,
-    >,
+    pub high_latency_contribution_stage: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
 /// Nested message and enum types in `ChromeFrameReporter`.
 pub mod chrome_frame_reporter {
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum State {
         /// The frame did not have any updates to present.
@@ -23314,17 +21659,7 @@ pub mod chrome_frame_reporter {
             }
         }
     }
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum FrameDropReason {
         ReasonUnspecified = 0,
@@ -23365,17 +21700,7 @@ pub mod chrome_frame_reporter {
             }
         }
     }
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum ScrollState {
         ScrollNone = 0,
@@ -23408,17 +21733,7 @@ pub mod chrome_frame_reporter {
             }
         }
     }
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum FrameType {
         Forked = 0,
@@ -23484,17 +21799,7 @@ pub mod chrome_latency_info {
     /// All step are optional but the enum is ordered (not by number) below in the
     /// order we expect them to appear if they are emitted in trace in a blocking
     /// fashion.
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum Step {
         Unspecified = 0,
@@ -23531,15 +21836,11 @@ pub mod chrome_latency_info {
                 Self::Unspecified => "STEP_UNSPECIFIED",
                 Self::SendInputEventUi => "STEP_SEND_INPUT_EVENT_UI",
                 Self::HandleInputEventImpl => "STEP_HANDLE_INPUT_EVENT_IMPL",
-                Self::DidHandleInputAndOverscroll => {
-                    "STEP_DID_HANDLE_INPUT_AND_OVERSCROLL"
-                }
+                Self::DidHandleInputAndOverscroll => "STEP_DID_HANDLE_INPUT_AND_OVERSCROLL",
                 Self::HandleInputEventMain => "STEP_HANDLE_INPUT_EVENT_MAIN",
                 Self::MainThreadScrollUpdate => "STEP_MAIN_THREAD_SCROLL_UPDATE",
                 Self::HandleInputEventMainCommit => "STEP_HANDLE_INPUT_EVENT_MAIN_COMMIT",
-                Self::HandledInputEventMainOrImpl => {
-                    "STEP_HANDLED_INPUT_EVENT_MAIN_OR_IMPL"
-                }
+                Self::HandledInputEventMainOrImpl => "STEP_HANDLED_INPUT_EVENT_MAIN_OR_IMPL",
                 Self::HandledInputEventImpl => "STEP_HANDLED_INPUT_EVENT_IMPL",
                 Self::SwapBuffers => "STEP_SWAP_BUFFERS",
                 Self::DrawAndSwap => "STEP_DRAW_AND_SWAP",
@@ -23552,17 +21853,11 @@ pub mod chrome_latency_info {
                 "STEP_UNSPECIFIED" => Some(Self::Unspecified),
                 "STEP_SEND_INPUT_EVENT_UI" => Some(Self::SendInputEventUi),
                 "STEP_HANDLE_INPUT_EVENT_IMPL" => Some(Self::HandleInputEventImpl),
-                "STEP_DID_HANDLE_INPUT_AND_OVERSCROLL" => {
-                    Some(Self::DidHandleInputAndOverscroll)
-                }
+                "STEP_DID_HANDLE_INPUT_AND_OVERSCROLL" => Some(Self::DidHandleInputAndOverscroll),
                 "STEP_HANDLE_INPUT_EVENT_MAIN" => Some(Self::HandleInputEventMain),
                 "STEP_MAIN_THREAD_SCROLL_UPDATE" => Some(Self::MainThreadScrollUpdate),
-                "STEP_HANDLE_INPUT_EVENT_MAIN_COMMIT" => {
-                    Some(Self::HandleInputEventMainCommit)
-                }
-                "STEP_HANDLED_INPUT_EVENT_MAIN_OR_IMPL" => {
-                    Some(Self::HandledInputEventMainOrImpl)
-                }
+                "STEP_HANDLE_INPUT_EVENT_MAIN_COMMIT" => Some(Self::HandleInputEventMainCommit),
+                "STEP_HANDLED_INPUT_EVENT_MAIN_OR_IMPL" => Some(Self::HandledInputEventMainOrImpl),
                 "STEP_HANDLED_INPUT_EVENT_IMPL" => Some(Self::HandledInputEventImpl),
                 "STEP_SWAP_BUFFERS" => Some(Self::SwapBuffers),
                 "STEP_DRAW_AND_SWAP" => Some(Self::DrawAndSwap),
@@ -23574,17 +21869,7 @@ pub mod chrome_latency_info {
     /// This enum is a copy of LatencyComponentType enum in Chrome, located in
     /// ui/latency/latency_info.h, modulo added UNKNOWN value per protobuf
     /// practices.
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum LatencyComponentType {
         ComponentUnspecified = 0,
@@ -23636,18 +21921,14 @@ pub mod chrome_latency_info {
                 Self::ComponentInputEventLatencyScrollUpdateLastEvent => {
                     "COMPONENT_INPUT_EVENT_LATENCY_SCROLL_UPDATE_LAST_EVENT"
                 }
-                Self::ComponentInputEventLatencyAckRwh => {
-                    "COMPONENT_INPUT_EVENT_LATENCY_ACK_RWH"
-                }
+                Self::ComponentInputEventLatencyAckRwh => "COMPONENT_INPUT_EVENT_LATENCY_ACK_RWH",
                 Self::ComponentInputEventLatencyRendererSwap => {
                     "COMPONENT_INPUT_EVENT_LATENCY_RENDERER_SWAP"
                 }
                 Self::ComponentDisplayCompositorReceivedFrame => {
                     "COMPONENT_DISPLAY_COMPOSITOR_RECEIVED_FRAME"
                 }
-                Self::ComponentInputEventGpuSwapBuffer => {
-                    "COMPONENT_INPUT_EVENT_GPU_SWAP_BUFFER"
-                }
+                Self::ComponentInputEventGpuSwapBuffer => "COMPONENT_INPUT_EVENT_GPU_SWAP_BUFFER",
                 Self::ComponentInputEventLatencyFrameSwap => {
                     "COMPONENT_INPUT_EVENT_LATENCY_FRAME_SWAP"
                 }
@@ -23669,9 +21950,7 @@ pub mod chrome_latency_info {
                 "COMPONENT_INPUT_EVENT_LATENCY_ORIGINAL" => {
                     Some(Self::ComponentInputEventLatencyOriginal)
                 }
-                "COMPONENT_INPUT_EVENT_LATENCY_UI" => {
-                    Some(Self::ComponentInputEventLatencyUi)
-                }
+                "COMPONENT_INPUT_EVENT_LATENCY_UI" => Some(Self::ComponentInputEventLatencyUi),
                 "COMPONENT_INPUT_EVENT_LATENCY_RENDERER_MAIN" => {
                     Some(Self::ComponentInputEventLatencyRendererMain)
                 }
@@ -23719,17 +21998,7 @@ pub struct ChromeLegacyIpc {
 }
 /// Nested message and enum types in `ChromeLegacyIpc`.
 pub mod chrome_legacy_ipc {
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum MessageClass {
         ClassUnspecified = 0,
@@ -23884,9 +22153,7 @@ pub struct ChromeMojoEventInfo {
     /// handle watcher, recorded when an event if notified to the watcher. The code
     /// that runs within the track event belongs to the interface.
     #[prost(string, optional, tag = "1")]
-    pub watcher_notify_interface_tag: ::core::option::Option<
-        ::prost::alloc::string::String,
-    >,
+    pub watcher_notify_interface_tag: ::core::option::Option<::prost::alloc::string::String>,
     /// The hash of the IPC message that is being handled.
     #[prost(uint32, optional, tag = "2")]
     pub ipc_hash: ::core::option::Option<u32>,
@@ -24160,21 +22427,13 @@ pub struct TrackEvent {
     #[prost(message, optional, tag = "32")]
     pub chrome_frame_reporter: ::core::option::Option<ChromeFrameReporter>,
     #[prost(message, optional, tag = "39")]
-    pub chrome_application_state_info: ::core::option::Option<
-        ChromeApplicationStateInfo,
-    >,
+    pub chrome_application_state_info: ::core::option::Option<ChromeApplicationStateInfo>,
     #[prost(message, optional, tag = "40")]
-    pub chrome_renderer_scheduler_state: ::core::option::Option<
-        ChromeRendererSchedulerState,
-    >,
+    pub chrome_renderer_scheduler_state: ::core::option::Option<ChromeRendererSchedulerState>,
     #[prost(message, optional, tag = "41")]
-    pub chrome_window_handle_event_info: ::core::option::Option<
-        ChromeWindowHandleEventInfo,
-    >,
+    pub chrome_window_handle_event_info: ::core::option::Option<ChromeWindowHandleEventInfo>,
     #[prost(message, optional, tag = "43")]
-    pub chrome_content_settings_event_info: ::core::option::Option<
-        ChromeContentSettingsEventInfo,
-    >,
+    pub chrome_content_settings_event_info: ::core::option::Option<ChromeContentSettingsEventInfo>,
     #[prost(message, optional, tag = "49")]
     pub chrome_active_processes: ::core::option::Option<ChromeActiveProcesses>,
     #[prost(message, optional, tag = "50")]
@@ -24225,9 +22484,7 @@ pub struct TrackEvent {
     ///
     /// Value of the instruction counter for the current thread.
     #[prost(oneof = "track_event::ThreadInstructionCount", tags = "8, 20")]
-    pub thread_instruction_count: ::core::option::Option<
-        track_event::ThreadInstructionCount,
-    >,
+    pub thread_instruction_count: ::core::option::Option<track_event::ThreadInstructionCount>,
 }
 /// Nested message and enum types in `TrackEvent`.
 pub mod track_event {
@@ -24285,15 +22542,7 @@ pub mod track_event {
     /// Nested message and enum types in `LegacyEvent`.
     pub mod legacy_event {
         #[derive(
-            Clone,
-            Copy,
-            Debug,
-            PartialEq,
-            Eq,
-            Hash,
-            PartialOrd,
-            Ord,
-            ::prost::Enumeration
+            Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
         )]
         #[repr(i32)]
         pub enum FlowDirection {
@@ -24327,15 +22576,7 @@ pub mod track_event {
             }
         }
         #[derive(
-            Clone,
-            Copy,
-            Debug,
-            PartialEq,
-            Eq,
-            Hash,
-            PartialOrd,
-            Ord,
-            ::prost::Enumeration
+            Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
         )]
         #[repr(i32)]
         pub enum InstantEventScope {
@@ -24379,17 +22620,7 @@ pub mod track_event {
         }
     }
     /// Type of the TrackEvent (required if |phase| in LegacyEvent is not set).
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum Type {
         Unspecified = 0,
@@ -24612,8 +22843,8 @@ pub struct AddressSymbols {
     ///
     /// These are repeated because when inlining happens, multiple functions'
     /// frames can be at a single address. Imagine function Foo calling the
-    /// std::vector<int> constructor, which gets inlined at 0xf00. We then get
-    /// both Foo and the std::vector<int> constructor when we symbolize the
+    /// `std::vector<int>` constructor, which gets inlined at 0xf00. We then get
+    /// both Foo and the `std::vector<int>` constructor when we symbolize the
     /// address.
     #[prost(message, repeated, tag = "2")]
     pub lines: ::prost::alloc::vec::Vec<Line>,
@@ -24705,15 +22936,11 @@ pub struct InternedData {
     #[prost(message, repeated, tag = "3")]
     pub debug_annotation_names: ::prost::alloc::vec::Vec<DebugAnnotationName>,
     #[prost(message, repeated, tag = "27")]
-    pub debug_annotation_value_type_names: ::prost::alloc::vec::Vec<
-        DebugAnnotationValueTypeName,
-    >,
+    pub debug_annotation_value_type_names: ::prost::alloc::vec::Vec<DebugAnnotationValueTypeName>,
     #[prost(message, repeated, tag = "4")]
     pub source_locations: ::prost::alloc::vec::Vec<SourceLocation>,
     #[prost(message, repeated, tag = "28")]
-    pub unsymbolized_source_locations: ::prost::alloc::vec::Vec<
-        UnsymbolizedSourceLocation,
-    >,
+    pub unsymbolized_source_locations: ::prost::alloc::vec::Vec<UnsymbolizedSourceLocation>,
     #[prost(message, repeated, tag = "20")]
     pub log_message_body: ::prost::alloc::vec::Vec<LogMessageBody>,
     #[prost(message, repeated, tag = "25")]
@@ -24751,9 +22978,7 @@ pub struct InternedData {
     pub graphics_contexts: ::prost::alloc::vec::Vec<InternedGraphicsContext>,
     /// Description of a GPU hardware queue or render stage.
     #[prost(message, repeated, tag = "24")]
-    pub gpu_specifications: ::prost::alloc::vec::Vec<
-        InternedGpuRenderStageSpecification,
-    >,
+    pub gpu_specifications: ::prost::alloc::vec::Vec<InternedGpuRenderStageSpecification>,
     /// This is set when FtraceConfig.symbolize_ksyms = true.
     /// The id of each symbol the number that will be reported in ftrace events
     /// like sched_block_reason.caller and is obtained from a monotonic counter.
@@ -24808,12 +23033,14 @@ pub struct MemoryTrackerSnapshot {
     /// Unique ID that represents the global memory dump.
     #[prost(uint64, optional, tag = "1")]
     pub global_dump_id: ::core::option::Option<u64>,
-    #[prost(enumeration = "memory_tracker_snapshot::LevelOfDetail", optional, tag = "2")]
+    #[prost(
+        enumeration = "memory_tracker_snapshot::LevelOfDetail",
+        optional,
+        tag = "2"
+    )]
     pub level_of_detail: ::core::option::Option<i32>,
     #[prost(message, repeated, tag = "3")]
-    pub process_memory_dumps: ::prost::alloc::vec::Vec<
-        memory_tracker_snapshot::ProcessSnapshot,
-    >,
+    pub process_memory_dumps: ::prost::alloc::vec::Vec<memory_tracker_snapshot::ProcessSnapshot>,
 }
 /// Nested message and enum types in `MemoryTrackerSnapshot`.
 pub mod memory_tracker_snapshot {
@@ -24889,15 +23116,7 @@ pub mod memory_tracker_snapshot {
             /// Nested message and enum types in `MemoryNodeEntry`.
             pub mod memory_node_entry {
                 #[derive(
-                    Clone,
-                    Copy,
-                    Debug,
-                    PartialEq,
-                    Eq,
-                    Hash,
-                    PartialOrd,
-                    Ord,
-                    ::prost::Enumeration
+                    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
                 )]
                 #[repr(i32)]
                 pub enum Units {
@@ -24949,17 +23168,7 @@ pub mod memory_tracker_snapshot {
             pub overridable: ::core::option::Option<bool>,
         }
     }
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum LevelOfDetail {
         DetailFull = 0,
@@ -25158,9 +23367,7 @@ pub struct AndroidEnergyEstimationBreakdown {
     /// The first trace packet of each session should include a energy consumer
     /// descriptor.
     #[prost(message, optional, tag = "1")]
-    pub energy_consumer_descriptor: ::core::option::Option<
-        AndroidEnergyConsumerDescriptor,
-    >,
+    pub energy_consumer_descriptor: ::core::option::Option<AndroidEnergyConsumerDescriptor>,
     /// ID of the AndroidEnergyConsumer associated with this result.  Matches
     /// the energy_consumer_id in the AndroidEnergyConsumerDescriptor that
     /// should be sent at the beginning of a trace.
@@ -25173,9 +23380,8 @@ pub struct AndroidEnergyEstimationBreakdown {
     /// EnergyConsumer. Sum total of attributed energy must be less than or equal
     /// to total accumulated energy.
     #[prost(message, repeated, tag = "4")]
-    pub per_uid_breakdown: ::prost::alloc::vec::Vec<
-        android_energy_estimation_breakdown::EnergyUidBreakdown,
-    >,
+    pub per_uid_breakdown:
+        ::prost::alloc::vec::Vec<android_energy_estimation_breakdown::EnergyUidBreakdown>,
 }
 /// Nested message and enum types in `AndroidEnergyEstimationBreakdown`.
 pub mod android_energy_estimation_breakdown {
@@ -25193,9 +23399,7 @@ pub mod android_energy_estimation_breakdown {
 pub struct EntityStateResidency {
     /// This is only emitted at the beginning of the trace.
     #[prost(message, repeated, tag = "1")]
-    pub power_entity_state: ::prost::alloc::vec::Vec<
-        entity_state_residency::PowerEntityState,
-    >,
+    pub power_entity_state: ::prost::alloc::vec::Vec<entity_state_residency::PowerEntityState>,
     #[prost(message, repeated, tag = "2")]
     pub residency: ::prost::alloc::vec::Vec<entity_state_residency::StateResidency>,
 }
@@ -25369,17 +23573,7 @@ pub struct HeapGraphRoot {
 }
 /// Nested message and enum types in `HeapGraphRoot`.
 pub mod heap_graph_root {
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum Type {
         RootUnknown = 0,
@@ -25474,17 +23668,7 @@ pub struct HeapGraphType {
 }
 /// Nested message and enum types in `HeapGraphType`.
 pub mod heap_graph_type {
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum Kind {
         Unknown = 0,
@@ -25761,7 +23945,11 @@ pub mod profile_packet {
         /// on new S builds.
         #[prost(bool, optional, tag = "7")]
         pub buffer_overran: ::core::option::Option<bool>,
-        #[prost(enumeration = "process_heap_samples::ClientError", optional, tag = "14")]
+        #[prost(
+            enumeration = "process_heap_samples::ClientError",
+            optional,
+            tag = "14"
+        )]
         pub client_error: ::core::option::Option<i32>,
         /// If disconnected, this disconnected was caused by the shared memory
         /// buffer being corrupted. THIS IS ALWAYS A BUG IN HEAPPROFD OR CLIENT
@@ -25799,15 +23987,7 @@ pub mod profile_packet {
     /// Nested message and enum types in `ProcessHeapSamples`.
     pub mod process_heap_samples {
         #[derive(
-            Clone,
-            Copy,
-            Debug,
-            PartialEq,
-            Eq,
-            Hash,
-            PartialOrd,
-            Ord,
-            ::prost::Enumeration
+            Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
         )]
         #[repr(i32)]
         pub enum ClientError {
@@ -25889,17 +24069,7 @@ pub struct StreamingProfilePacket {
 pub struct Profiling {}
 /// Nested message and enum types in `Profiling`.
 pub mod profiling {
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum CpuMode {
         ModeUnknown = 0,
@@ -25940,17 +24110,7 @@ pub mod profiling {
     }
     /// Enumeration of libunwindstack's error codes.
     /// NB: the integral representations of the two enums are different.
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum StackUnwindError {
         UnwindErrorUnknown = 0,
@@ -25988,9 +24148,7 @@ pub mod profiling {
                 Self::UnwindErrorInvalidElf => "UNWIND_ERROR_INVALID_ELF",
                 Self::UnwindErrorSystemCall => "UNWIND_ERROR_SYSTEM_CALL",
                 Self::UnwindErrorThreadTimeout => "UNWIND_ERROR_THREAD_TIMEOUT",
-                Self::UnwindErrorThreadDoesNotExist => {
-                    "UNWIND_ERROR_THREAD_DOES_NOT_EXIST"
-                }
+                Self::UnwindErrorThreadDoesNotExist => "UNWIND_ERROR_THREAD_DOES_NOT_EXIST",
                 Self::UnwindErrorBadArch => "UNWIND_ERROR_BAD_ARCH",
                 Self::UnwindErrorMapsParse => "UNWIND_ERROR_MAPS_PARSE",
                 Self::UnwindErrorInvalidParameter => "UNWIND_ERROR_INVALID_PARAMETER",
@@ -26006,21 +24164,15 @@ pub mod profiling {
                 "UNWIND_ERROR_UNWIND_INFO" => Some(Self::UnwindErrorUnwindInfo),
                 "UNWIND_ERROR_UNSUPPORTED" => Some(Self::UnwindErrorUnsupported),
                 "UNWIND_ERROR_INVALID_MAP" => Some(Self::UnwindErrorInvalidMap),
-                "UNWIND_ERROR_MAX_FRAMES_EXCEEDED" => {
-                    Some(Self::UnwindErrorMaxFramesExceeded)
-                }
+                "UNWIND_ERROR_MAX_FRAMES_EXCEEDED" => Some(Self::UnwindErrorMaxFramesExceeded),
                 "UNWIND_ERROR_REPEATED_FRAME" => Some(Self::UnwindErrorRepeatedFrame),
                 "UNWIND_ERROR_INVALID_ELF" => Some(Self::UnwindErrorInvalidElf),
                 "UNWIND_ERROR_SYSTEM_CALL" => Some(Self::UnwindErrorSystemCall),
                 "UNWIND_ERROR_THREAD_TIMEOUT" => Some(Self::UnwindErrorThreadTimeout),
-                "UNWIND_ERROR_THREAD_DOES_NOT_EXIST" => {
-                    Some(Self::UnwindErrorThreadDoesNotExist)
-                }
+                "UNWIND_ERROR_THREAD_DOES_NOT_EXIST" => Some(Self::UnwindErrorThreadDoesNotExist),
                 "UNWIND_ERROR_BAD_ARCH" => Some(Self::UnwindErrorBadArch),
                 "UNWIND_ERROR_MAPS_PARSE" => Some(Self::UnwindErrorMapsParse),
-                "UNWIND_ERROR_INVALID_PARAMETER" => {
-                    Some(Self::UnwindErrorInvalidParameter)
-                }
+                "UNWIND_ERROR_INVALID_PARAMETER" => Some(Self::UnwindErrorInvalidParameter),
                 "UNWIND_ERROR_PTRACE_CALL" => Some(Self::UnwindErrorPtraceCall),
                 _ => None,
             }
@@ -26080,9 +24232,8 @@ pub struct PerfSample {
     #[prost(oneof = "perf_sample::OptionalUnwindError", tags = "16")]
     pub optional_unwind_error: ::core::option::Option<perf_sample::OptionalUnwindError>,
     #[prost(oneof = "perf_sample::OptionalSampleSkippedReason", tags = "18")]
-    pub optional_sample_skipped_reason: ::core::option::Option<
-        perf_sample::OptionalSampleSkippedReason,
-    >,
+    pub optional_sample_skipped_reason:
+        ::core::option::Option<perf_sample::OptionalSampleSkippedReason>,
 }
 /// Nested message and enum types in `PerfSample`.
 pub mod perf_sample {
@@ -26090,22 +24241,13 @@ pub mod perf_sample {
     #[derive(Clone, Copy, PartialEq, ::prost::Message)]
     pub struct ProducerEvent {
         #[prost(oneof = "producer_event::OptionalSourceStopReason", tags = "1")]
-        pub optional_source_stop_reason: ::core::option::Option<
-            producer_event::OptionalSourceStopReason,
-        >,
+        pub optional_source_stop_reason:
+            ::core::option::Option<producer_event::OptionalSourceStopReason>,
     }
     /// Nested message and enum types in `ProducerEvent`.
     pub mod producer_event {
         #[derive(
-            Clone,
-            Copy,
-            Debug,
-            PartialEq,
-            Eq,
-            Hash,
-            PartialOrd,
-            Ord,
-            ::prost::Enumeration
+            Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
         )]
         #[repr(i32)]
         pub enum DataSourceStopReason {
@@ -26140,17 +24282,7 @@ pub mod perf_sample {
     }
     /// If set, indicates that the profiler encountered a sample that was relevant,
     /// but was skipped.
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum SampleSkipReason {
         ProfilerSkipUnknown = 0,
@@ -26389,7 +24521,7 @@ pub mod process_tree {
         #[prost(string, optional, tag = "2")]
         pub name: ::core::option::Option<::prost::alloc::string::String>,
         /// The non-root-level thread IDs if the thread runs in a PID namespace. Read
-        /// from the NSpid entry of /proc/<tid>/status, with the first element (root-
+        /// from the NSpid entry of /proc/tid/status, with the first element (root-
         /// level thread ID) omitted.
         #[prost(int32, repeated, packed = "false", tag = "4")]
         pub nstid: ::prost::alloc::vec::Vec<i32>,
@@ -26413,7 +24545,7 @@ pub mod process_tree {
         #[prost(int32, optional, tag = "5")]
         pub uid: ::core::option::Option<i32>,
         /// The non-root-level process IDs if the process runs in a PID namespace.
-        /// Read from the NSpid entry of /proc/<pid>/status, with the first element
+        /// Read from the NSpid entry of /proc/pid/status, with the first element
         /// (root-level process ID) omitted.
         #[prost(int32, repeated, packed = "false", tag = "6")]
         pub nspid: ::prost::alloc::vec::Vec<i32>,
@@ -26603,15 +24735,7 @@ pub mod sys_stats {
         ///     * _SOME indicates some resource tasks stalled.
         ///     * _FULL indicates all non-idle resource tasks stalled simultaneously.
         #[derive(
-            Clone,
-            Copy,
-            Debug,
-            PartialEq,
-            Eq,
-            Hash,
-            PartialOrd,
-            Ord,
-            ::prost::Enumeration
+            Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
         )]
         #[repr(i32)]
         pub enum PsiResource {
@@ -26671,9 +24795,7 @@ pub struct SystemInfo {
     #[prost(message, optional, tag = "1")]
     pub utsname: ::core::option::Option<Utsname>,
     #[prost(string, optional, tag = "2")]
-    pub android_build_fingerprint: ::core::option::Option<
-        ::prost::alloc::string::String,
-    >,
+    pub android_build_fingerprint: ::core::option::Option<::prost::alloc::string::String>,
     /// The SoC model from which trace is collected
     #[prost(string, optional, tag = "9")]
     pub android_soc_model: ::core::option::Option<::prost::alloc::string::String>,
@@ -26768,7 +24890,11 @@ pub struct ProcessDescriptor {
     /// provided in TracePacket are not supported.
     #[prost(int64, optional, tag = "7")]
     pub start_timestamp_ns: ::core::option::Option<i64>,
-    #[prost(enumeration = "process_descriptor::ChromeProcessType", optional, tag = "4")]
+    #[prost(
+        enumeration = "process_descriptor::ChromeProcessType",
+        optional,
+        tag = "4"
+    )]
     pub chrome_process_type: ::core::option::Option<i32>,
     /// To support old UI. New UI should determine default sorting by process_type.
     #[prost(int32, optional, tag = "3")]
@@ -26782,17 +24908,7 @@ pub struct ProcessDescriptor {
 /// Nested message and enum types in `ProcessDescriptor`.
 pub mod process_descriptor {
     /// See chromium's content::ProcessType.
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum ChromeProcessType {
         ProcessUnspecified = 0,
@@ -26860,7 +24976,11 @@ pub struct ThreadDescriptor {
     pub tid: ::core::option::Option<i32>,
     #[prost(string, optional, tag = "5")]
     pub thread_name: ::core::option::Option<::prost::alloc::string::String>,
-    #[prost(enumeration = "thread_descriptor::ChromeThreadType", optional, tag = "4")]
+    #[prost(
+        enumeration = "thread_descriptor::ChromeThreadType",
+        optional,
+        tag = "4"
+    )]
     pub chrome_thread_type: ::core::option::Option<i32>,
     /// Deprecated. Use ClockSnapshot in combination with TracePacket's timestamp
     /// and timestamp_clock_id fields instead.
@@ -26880,17 +25000,7 @@ pub struct ThreadDescriptor {
 }
 /// Nested message and enum types in `ThreadDescriptor`.
 pub mod thread_descriptor {
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum ChromeThreadType {
         ChromeThreadUnspecified = 0,
@@ -26943,23 +25053,15 @@ pub mod thread_descriptor {
                 "CHROME_THREAD_IO" => Some(Self::ChromeThreadIo),
                 "CHROME_THREAD_POOL_BG_WORKER" => Some(Self::ChromeThreadPoolBgWorker),
                 "CHROME_THREAD_POOL_FG_WORKER" => Some(Self::ChromeThreadPoolFgWorker),
-                "CHROME_THREAD_POOL_FB_BLOCKING" => {
-                    Some(Self::ChromeThreadPoolFbBlocking)
-                }
-                "CHROME_THREAD_POOL_BG_BLOCKING" => {
-                    Some(Self::ChromeThreadPoolBgBlocking)
-                }
+                "CHROME_THREAD_POOL_FB_BLOCKING" => Some(Self::ChromeThreadPoolFbBlocking),
+                "CHROME_THREAD_POOL_BG_BLOCKING" => Some(Self::ChromeThreadPoolBgBlocking),
                 "CHROME_THREAD_POOL_SERVICE" => Some(Self::ChromeThreadPoolService),
                 "CHROME_THREAD_COMPOSITOR" => Some(Self::ChromeThreadCompositor),
                 "CHROME_THREAD_VIZ_COMPOSITOR" => Some(Self::ChromeThreadVizCompositor),
-                "CHROME_THREAD_COMPOSITOR_WORKER" => {
-                    Some(Self::ChromeThreadCompositorWorker)
-                }
+                "CHROME_THREAD_COMPOSITOR_WORKER" => Some(Self::ChromeThreadCompositorWorker),
                 "CHROME_THREAD_SERVICE_WORKER" => Some(Self::ChromeThreadServiceWorker),
                 "CHROME_THREAD_MEMORY_INFRA" => Some(Self::ChromeThreadMemoryInfra),
-                "CHROME_THREAD_SAMPLING_PROFILER" => {
-                    Some(Self::ChromeThreadSamplingProfiler)
-                }
+                "CHROME_THREAD_SAMPLING_PROFILER" => Some(Self::ChromeThreadSamplingProfiler),
                 _ => None,
             }
         }
@@ -26971,7 +25073,11 @@ pub mod thread_descriptor {
 /// Next id: 6.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ChromeProcessDescriptor {
-    #[prost(enumeration = "chrome_process_descriptor::ProcessType", optional, tag = "1")]
+    #[prost(
+        enumeration = "chrome_process_descriptor::ProcessType",
+        optional,
+        tag = "1"
+    )]
     pub process_type: ::core::option::Option<i32>,
     #[prost(int32, optional, tag = "2")]
     pub process_priority: ::core::option::Option<i32>,
@@ -26999,17 +25105,7 @@ pub struct ChromeProcessDescriptor {
 /// Nested message and enum types in `ChromeProcessDescriptor`.
 pub mod chrome_process_descriptor {
     /// See chromium's content::ProcessType.
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum ProcessType {
         ProcessUnspecified = 0,
@@ -27093,14 +25189,10 @@ pub mod chrome_process_descriptor {
                 Self::ProcessServiceFileutil => "PROCESS_SERVICE_FILEUTIL",
                 Self::ProcessServicePrintcompositor => "PROCESS_SERVICE_PRINTCOMPOSITOR",
                 Self::ProcessServicePaintpreview => "PROCESS_SERVICE_PAINTPREVIEW",
-                Self::ProcessServiceSpeechrecognition => {
-                    "PROCESS_SERVICE_SPEECHRECOGNITION"
-                }
+                Self::ProcessServiceSpeechrecognition => "PROCESS_SERVICE_SPEECHRECOGNITION",
                 Self::ProcessServiceXrdevice => "PROCESS_SERVICE_XRDEVICE",
                 Self::ProcessServiceReadicon => "PROCESS_SERVICE_READICON",
-                Self::ProcessServiceLanguagedetection => {
-                    "PROCESS_SERVICE_LANGUAGEDETECTION"
-                }
+                Self::ProcessServiceLanguagedetection => "PROCESS_SERVICE_LANGUAGEDETECTION",
                 Self::ProcessServiceSharing => "PROCESS_SERVICE_SHARING",
                 Self::ProcessServiceMediaparser => "PROCESS_SERVICE_MEDIAPARSER",
                 Self::ProcessServiceQrcodegenerator => "PROCESS_SERVICE_QRCODEGENERATOR",
@@ -27130,9 +25222,7 @@ pub mod chrome_process_descriptor {
                 "PROCESS_SERVICE_AUDIO" => Some(Self::ProcessServiceAudio),
                 "PROCESS_SERVICE_DATA_DECODER" => Some(Self::ProcessServiceDataDecoder),
                 "PROCESS_SERVICE_UTIL_WIN" => Some(Self::ProcessServiceUtilWin),
-                "PROCESS_SERVICE_PROXY_RESOLVER" => {
-                    Some(Self::ProcessServiceProxyResolver)
-                }
+                "PROCESS_SERVICE_PROXY_RESOLVER" => Some(Self::ProcessServiceProxyResolver),
                 "PROCESS_SERVICE_CDM" => Some(Self::ProcessServiceCdm),
                 "PROCESS_SERVICE_VIDEO_CAPTURE" => Some(Self::ProcessServiceVideoCapture),
                 "PROCESS_SERVICE_UNZIPPER" => Some(Self::ProcessServiceUnzipper),
@@ -27141,42 +25231,26 @@ pub mod chrome_process_descriptor {
                 "PROCESS_SERVICE_TTS" => Some(Self::ProcessServiceTts),
                 "PROCESS_SERVICE_PRINTING" => Some(Self::ProcessServicePrinting),
                 "PROCESS_SERVICE_QUARANTINE" => Some(Self::ProcessServiceQuarantine),
-                "PROCESS_SERVICE_CROS_LOCALSEARCH" => {
-                    Some(Self::ProcessServiceCrosLocalsearch)
-                }
+                "PROCESS_SERVICE_CROS_LOCALSEARCH" => Some(Self::ProcessServiceCrosLocalsearch),
                 "PROCESS_SERVICE_CROS_ASSISTANT_AUDIO_DECODER" => {
                     Some(Self::ProcessServiceCrosAssistantAudioDecoder)
                 }
                 "PROCESS_SERVICE_FILEUTIL" => Some(Self::ProcessServiceFileutil),
-                "PROCESS_SERVICE_PRINTCOMPOSITOR" => {
-                    Some(Self::ProcessServicePrintcompositor)
-                }
+                "PROCESS_SERVICE_PRINTCOMPOSITOR" => Some(Self::ProcessServicePrintcompositor),
                 "PROCESS_SERVICE_PAINTPREVIEW" => Some(Self::ProcessServicePaintpreview),
-                "PROCESS_SERVICE_SPEECHRECOGNITION" => {
-                    Some(Self::ProcessServiceSpeechrecognition)
-                }
+                "PROCESS_SERVICE_SPEECHRECOGNITION" => Some(Self::ProcessServiceSpeechrecognition),
                 "PROCESS_SERVICE_XRDEVICE" => Some(Self::ProcessServiceXrdevice),
                 "PROCESS_SERVICE_READICON" => Some(Self::ProcessServiceReadicon),
-                "PROCESS_SERVICE_LANGUAGEDETECTION" => {
-                    Some(Self::ProcessServiceLanguagedetection)
-                }
+                "PROCESS_SERVICE_LANGUAGEDETECTION" => Some(Self::ProcessServiceLanguagedetection),
                 "PROCESS_SERVICE_SHARING" => Some(Self::ProcessServiceSharing),
                 "PROCESS_SERVICE_MEDIAPARSER" => Some(Self::ProcessServiceMediaparser),
-                "PROCESS_SERVICE_QRCODEGENERATOR" => {
-                    Some(Self::ProcessServiceQrcodegenerator)
-                }
-                "PROCESS_SERVICE_PROFILEIMPORT" => {
-                    Some(Self::ProcessServiceProfileimport)
-                }
+                "PROCESS_SERVICE_QRCODEGENERATOR" => Some(Self::ProcessServiceQrcodegenerator),
+                "PROCESS_SERVICE_PROFILEIMPORT" => Some(Self::ProcessServiceProfileimport),
                 "PROCESS_SERVICE_IME" => Some(Self::ProcessServiceIme),
                 "PROCESS_SERVICE_RECORDING" => Some(Self::ProcessServiceRecording),
-                "PROCESS_SERVICE_SHAPEDETECTION" => {
-                    Some(Self::ProcessServiceShapedetection)
-                }
+                "PROCESS_SERVICE_SHAPEDETECTION" => Some(Self::ProcessServiceShapedetection),
                 "PROCESS_RENDERER_EXTENSION" => Some(Self::ProcessRendererExtension),
-                "PROCESS_SERVICE_MEDIA_FOUNDATION" => {
-                    Some(Self::ProcessServiceMediaFoundation)
-                }
+                "PROCESS_SERVICE_MEDIA_FOUNDATION" => Some(Self::ProcessServiceMediaFoundation),
                 _ => None,
             }
         }
@@ -27189,7 +25263,11 @@ pub mod chrome_process_descriptor {
 /// Next id: 3.
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct ChromeThreadDescriptor {
-    #[prost(enumeration = "chrome_thread_descriptor::ThreadType", optional, tag = "1")]
+    #[prost(
+        enumeration = "chrome_thread_descriptor::ThreadType",
+        optional,
+        tag = "1"
+    )]
     pub thread_type: ::core::option::Option<i32>,
     /// To support old UI. New UI should determine default sorting by thread_type.
     #[prost(int32, optional, tag = "2")]
@@ -27197,17 +25275,7 @@ pub struct ChromeThreadDescriptor {
 }
 /// Nested message and enum types in `ChromeThreadDescriptor`.
 pub mod chrome_thread_descriptor {
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum ThreadType {
         ThreadUnspecified = 0,
@@ -27379,7 +25447,11 @@ pub struct CounterDescriptor {
     /// For built-in counters (e.g. thread time). Custom user-specified counters
     /// (e.g. those emitted by TRACE_COUNTER macros of the client library)
     /// shouldn't set this, and instead provide a counter name via TrackDescriptor.
-    #[prost(enumeration = "counter_descriptor::BuiltinCounterType", optional, tag = "1")]
+    #[prost(
+        enumeration = "counter_descriptor::BuiltinCounterType",
+        optional,
+        tag = "1"
+    )]
     pub r#type: ::core::option::Option<i32>,
     /// Names of categories of the counter (usually for user-specified counters).
     /// In the client library, categories are a way to turn groups of individual
@@ -27413,17 +25485,7 @@ pub mod counter_descriptor {
     /// Built-in counters, usually with special meaning in the client library,
     /// trace processor, legacy JSON format, or UI. Trace processor will infer a
     /// track name from the enum value if none is provided in TrackDescriptor.
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum BuiltinCounterType {
         CounterUnspecified = 0,
@@ -27449,26 +25511,14 @@ pub mod counter_descriptor {
             match value {
                 "COUNTER_UNSPECIFIED" => Some(Self::CounterUnspecified),
                 "COUNTER_THREAD_TIME_NS" => Some(Self::CounterThreadTimeNs),
-                "COUNTER_THREAD_INSTRUCTION_COUNT" => {
-                    Some(Self::CounterThreadInstructionCount)
-                }
+                "COUNTER_THREAD_INSTRUCTION_COUNT" => Some(Self::CounterThreadInstructionCount),
                 _ => None,
             }
         }
     }
     /// Type of the values for the counters - to supply lower granularity units,
     /// see also |unit_multiplier|.
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum Unit {
         Unspecified = 0,
@@ -27572,9 +25622,7 @@ pub struct TrackDescriptor {
     /// process/thread name (process/thread tracks), the first event's name (async
     /// tracks), or counter name (counter tracks).
     #[prost(oneof = "track_descriptor::StaticOrDynamicName", tags = "2, 10")]
-    pub static_or_dynamic_name: ::core::option::Option<
-        track_descriptor::StaticOrDynamicName,
-    >,
+    pub static_or_dynamic_name: ::core::option::Option<track_descriptor::StaticOrDynamicName>,
 }
 /// Nested message and enum types in `TrackDescriptor`.
 pub mod track_descriptor {
@@ -27624,42 +25672,29 @@ pub struct ChromeHistorgramTranslationTable {
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ChromeUserEventTranslationTable {
     #[prost(map = "uint64, string", tag = "1")]
-    pub action_hash_to_name: ::std::collections::HashMap<
-        u64,
-        ::prost::alloc::string::String,
-    >,
+    pub action_hash_to_name: ::std::collections::HashMap<u64, ::prost::alloc::string::String>,
 }
 /// Chrome performance mark translation rules.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ChromePerformanceMarkTranslationTable {
     #[prost(map = "uint32, string", tag = "1")]
-    pub site_hash_to_name: ::std::collections::HashMap<
-        u32,
-        ::prost::alloc::string::String,
-    >,
+    pub site_hash_to_name: ::std::collections::HashMap<u32, ::prost::alloc::string::String>,
     #[prost(map = "uint32, string", tag = "2")]
-    pub mark_hash_to_name: ::std::collections::HashMap<
-        u32,
-        ::prost::alloc::string::String,
-    >,
+    pub mark_hash_to_name: ::std::collections::HashMap<u32, ::prost::alloc::string::String>,
 }
 /// Raw -> deobfuscated slice name translation rules.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SliceNameTranslationTable {
     #[prost(map = "string, string", tag = "1")]
-    pub raw_to_deobfuscated_name: ::std::collections::HashMap<
-        ::prost::alloc::string::String,
-        ::prost::alloc::string::String,
-    >,
+    pub raw_to_deobfuscated_name:
+        ::std::collections::HashMap<::prost::alloc::string::String, ::prost::alloc::string::String>,
 }
 /// Raw -> deobfuscated process track name translation rules.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ProcessTrackNameTranslationTable {
     #[prost(map = "string, string", tag = "1")]
-    pub raw_to_deobfuscated_name: ::std::collections::HashMap<
-        ::prost::alloc::string::String,
-        ::prost::alloc::string::String,
-    >,
+    pub raw_to_deobfuscated_name:
+        ::std::collections::HashMap<::prost::alloc::string::String, ::prost::alloc::string::String>,
 }
 /// A random unique ID that identifies the trace.
 /// This message has been introduced in v32. Prior to that, the UUID was
@@ -27893,23 +25928,12 @@ pub struct TracePacket {
     /// value of zero denotes an invalid ID. Keep in sync with
     /// TrustedPacket.trusted_packet_sequence_id.
     #[prost(oneof = "trace_packet::OptionalTrustedPacketSequenceId", tags = "10")]
-    pub optional_trusted_packet_sequence_id: ::core::option::Option<
-        trace_packet::OptionalTrustedPacketSequenceId,
-    >,
+    pub optional_trusted_packet_sequence_id:
+        ::core::option::Option<trace_packet::OptionalTrustedPacketSequenceId>,
 }
 /// Nested message and enum types in `TracePacket`.
 pub mod trace_packet {
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum SequenceFlags {
         SeqUnspecified = 0,

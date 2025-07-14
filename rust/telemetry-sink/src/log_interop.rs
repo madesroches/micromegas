@@ -42,6 +42,14 @@ impl log::Log for LogDispatch {
 }
 
 pub fn install_log_interop(interop_max_level_override: Option<LevelFilter>) {
+    /// Installs a `log` crate dispatcher that forwards log records to the Micromegas tracing system.
+    ///
+    /// This allows applications using the `log` crate to integrate with Micromegas telemetry.
+    ///
+    /// # Arguments
+    ///
+    /// * `interop_max_level_override` - An optional `LevelFilter` to override the maximum log level
+    ///   for the `log` crate dispatcher. If `None`, the global Micromegas max level is used.
     static LOG_DISPATCHER: LogDispatch = LogDispatch;
     let interop_max_level = mm_tracing_level_filter_to_log_level_filter(
         interop_max_level_override.unwrap_or(micromegas_tracing::levels::max_level()),

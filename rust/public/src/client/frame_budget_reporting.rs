@@ -40,6 +40,8 @@ pub enum GroupBy {
 }
 
 /// Converts a map of span names to budget categories into a `ScalarValue` representing a list of properties.
+///
+/// This function is used to pass the budget mapping to DataFusion as a scalar value.
 pub fn budget_map_to_properties(
     span_name_to_budget: &HashMap<String, String>,
 ) -> Result<ScalarValue> {
@@ -73,6 +75,8 @@ pub fn budget_map_to_properties(
 }
 
 /// Retrieves the time range (min begin, max end) from a `RecordBatch`.
+///
+/// This function assumes the `RecordBatch` contains "begin" and "end" columns of type `TimestampNanosecondType`.
 pub fn get_record_batch_time_range(rb: &RecordBatch) -> Result<Option<TimeRange>> {
     if rb.num_rows() == 0 {
         return Ok(None);
@@ -89,6 +93,9 @@ pub fn get_record_batch_time_range(rb: &RecordBatch) -> Result<Option<TimeRange>
 }
 
 /// Fetches spans for a given stream and frames, grouped by the specified configuration.
+///
+/// This function queries the FlightSQL server for spans within the time range of the provided frames
+/// and groups them according to the `group_by_config`.
 pub async fn fetch_spans_batch(
     client: &mut Client,
     stream_id: &str,
@@ -143,6 +150,9 @@ pub async fn fetch_spans_batch(
 }
 
 /// Extracts top offenders from the frame statistics.
+///
+/// This function queries the `frame_stats` table (which is expected to be registered in the `SessionContext`)
+/// and returns the top 100 offenders by `duration_in_frame` for each budget.
 pub async fn extract_top_offenders(ctx: &SessionContext) -> Result<Vec<RecordBatch>> {
     let budgets_rbs = ctx
         .sql("SELECT DISTINCT budget FROM frame_stats ORDER BY budget")
@@ -188,6 +198,9 @@ pub async fn extract_top_offenders(ctx: &SessionContext) -> Result<Vec<RecordBat
 }
 
 /// Computes frame statistics for a batch of frames.
+///
+/// This function queries the `spans` table (which is expected to be registered in the `SessionContext`)
+/// and computes statistics (count, sum of duration) for each budget within the given frame.
 pub async fn compute_frame_stats_for_batch(
     ctx: &SessionContext,
     frames_rb: RecordBatch,
@@ -252,6 +265,9 @@ pub async fn compute_frame_stats_for_batch(
 }
 
 /// Merges top offenders from multiple record batches.
+///
+/// This function takes a vector of `RecordBatch`es, combines them into a single table,
+/// and then calls `extract_top_offenders` to re-extract the top offenders from the merged data.
 pub async fn merge_top_offenders(top_offenders: Vec<RecordBatch>) -> Result<Vec<RecordBatch>> {
     if top_offenders.is_empty() {
         return Ok(top_offenders);
@@ -264,6 +280,9 @@ pub async fn merge_top_offenders(top_offenders: Vec<RecordBatch>) -> Result<Vec<
 }
 
 /// Processes a batch of frames, computing frame statistics and extracting top offenders.
+///
+/// This function first computes frame statistics using `compute_frame_stats_for_batch`,
+/// then aggregates these statistics, and finally extracts top offenders.
 pub async fn process_frame_batch(
     ctx: &SessionContext,
     frames_rb: RecordBatch,
@@ -293,6 +312,8 @@ pub async fn process_frame_batch(
 }
 
 /// Retrieves the start time of a process.
+///
+/// This function queries the `processes` table to get the start time for a given `process_id`.
 pub async fn get_process_start_time(
     client: &mut Client,
     process_id: &str,
@@ -309,6 +330,9 @@ pub async fn get_process_start_time(
 }
 
 /// Retrieves the stream ID of the main thread for a given process.
+///
+/// This function queries the `blocks` table to find the `stream_id` associated with the main thread
+/// of a given process within a specified time range.
 pub async fn get_main_thread_stream_id(
     client: &mut Client,
     process_id: &str,
@@ -327,6 +351,9 @@ pub async fn get_main_thread_stream_id(
 }
 
 /// Retrieves the time range of a stream.
+///
+/// This function queries the `blocks` table to find the minimum `begin_time` and maximum `end_time`
+/// for a given `stream_id`.
 pub async fn get_stream_time_range(client: &mut Client, stream_id: &str) -> Result<TimeRange> {
     let sql = format!(
         "SELECT min(begin_time) as min_begin_time, max(end_time) as max_end_time
@@ -344,6 +371,9 @@ pub async fn get_stream_time_range(client: &mut Client, stream_id: &str) -> Resu
 }
 
 /// Retrieves frames for a given stream within a time range and top-level span name.
+///
+/// This function queries the `thread_spans` view to get the `begin` and `end` times
+/// of spans that match the `top_level_span_name` within the specified `time_range`.
 pub async fn get_frames(
     client: &mut Client,
     stream_id: &str,
@@ -364,6 +394,9 @@ pub async fn get_frames(
 }
 
 /// Generates a stream of record batches from a vector of record batches.
+///
+/// This function takes a `Vec<RecordBatch>` and converts it into a `BoxStream`,
+/// optionally slicing large record batches into smaller ones.
 pub fn gen_frame_batches(
     frames_record_batches: Vec<RecordBatch>,
 ) -> BoxStream<'static, Result<RecordBatch>> {

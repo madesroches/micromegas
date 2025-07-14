@@ -8,6 +8,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Reads a list of properties from an Arrow array.
+///
+/// The array is expected to be a `StructArray` with "key" and "value" fields.
 pub fn read_property_list(value: ArrayRef) -> Result<Vec<Property>> {
     if value.is_empty() {
         return Ok(vec![]);
@@ -32,7 +34,9 @@ pub fn read_property_list(value: ArrayRef) -> Result<Vec<Property>> {
     Ok(properties_vec)
 }
 
-/// Adds a set of properties to an Arrow list builder.
+/// Adds a set of properties from a `HashMap` to an Arrow list builder.
+///
+/// The properties are added as a new entry in the list builder.
 pub fn add_properties_to_builder(
     properties: &HashMap<String, String>,
     property_list_builder: &mut ListBuilder<StructBuilder>,
@@ -53,7 +57,9 @@ pub fn add_properties_to_builder(
     Ok(())
 }
 
-/// Adds a set of properties to an Arrow list builder.
+/// Adds a set of properties from a `PropertySet` to an Arrow list builder.
+///
+/// The properties are added as a new entry in the list builder.
 pub fn add_property_set_to_builder(
     properties: &PropertySet,
     property_list_builder: &mut ListBuilder<StructBuilder>,

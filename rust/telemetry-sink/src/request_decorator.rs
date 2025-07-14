@@ -51,6 +51,14 @@ pub type Result<T> = std::result::Result<T, RequestDecoratorError>;
 
 #[async_trait] // otherwise we get: cannot be made into an object
 pub trait RequestDecorator: Send {
+    /// Decorates the given `reqwest::Request`.
+    ///
+    /// This function can modify the request (e.g., add headers, sign the request)
+    /// before it is sent.
+    ///
+    /// # Arguments
+    ///
+    /// * `request` - A mutable reference to the `reqwest::Request` to decorate.
     async fn decorate(&self, request: &mut reqwest::Request) -> Result<()>;
 }
 
