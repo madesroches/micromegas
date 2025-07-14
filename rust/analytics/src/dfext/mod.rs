@@ -4,6 +4,8 @@ pub mod async_log_stream;
 pub mod expressions;
 /// Compute histograms from SQL
 pub mod histogram;
+/// JSONB support
+pub mod jsonb;
 /// Stream a function's log as a table
 pub mod log_stream_table_provider;
 /// Get min & max from the time column
