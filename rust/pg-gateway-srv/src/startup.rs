@@ -14,6 +14,7 @@ use pgwire::{
 };
 use std::{fmt::Debug, sync::Arc};
 
+/// Handles the startup phase of a PostgreSQL connection.
 pub struct StartupH {
     state: crate::state::SharedState,
 }

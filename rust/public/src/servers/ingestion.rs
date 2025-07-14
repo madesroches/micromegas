@@ -5,6 +5,7 @@ use micromegas_ingestion::web_ingestion_service::WebIngestionService;
 use micromegas_tracing::prelude::*;
 use std::sync::Arc;
 
+/// Handles requests to insert process information.
 pub async fn insert_process_request(
     Extension(service): Extension<Arc<WebIngestionService>>,
     body: bytes::Bytes,
@@ -14,6 +15,7 @@ pub async fn insert_process_request(
     }
 }
 
+/// Handles requests to insert stream information.
 pub async fn insert_stream_request(
     Extension(service): Extension<Arc<WebIngestionService>>,
     body: bytes::Bytes,
@@ -23,6 +25,7 @@ pub async fn insert_stream_request(
     }
 }
 
+/// Handles requests to insert block information.
 pub async fn insert_block_request(
     Extension(service): Extension<Arc<WebIngestionService>>,
     body: bytes::Bytes,
@@ -36,6 +39,7 @@ pub async fn insert_block_request(
     }
 }
 
+/// Registers the ingestion routes with the given Axum `Router`.
 pub fn register_routes(router: Router) -> Router {
     router
         .route("/ingestion/insert_process", post(insert_process_request))

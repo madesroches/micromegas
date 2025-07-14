@@ -7,6 +7,7 @@ use futures::stream::StreamExt;
 use micromegas_analytics::time::TimeRange;
 use tonic::transport::Channel;
 
+/// Represents a prepared statement with its schema and query string.
 #[derive(Debug)]
 pub struct PreparedStatement {
     pub schema: SchemaRef,
@@ -25,6 +26,7 @@ impl Client {
         Self { inner }
     }
 
+    /// Returns a mutable reference to the inner `FlightSqlServiceClient`.
     pub fn inner_mut(&mut self) -> &mut FlightSqlServiceClient<Channel> {
         &mut self.inner
     }
@@ -40,7 +42,7 @@ impl Client {
         );
     }
 
-    /// Execute SQL query
+    /// Executes a SQL query and returns the results as a vector of `RecordBatch`.
     pub async fn query(
         &mut self,
         sql: String,
@@ -54,6 +56,7 @@ impl Client {
         Ok(batches)
     }
 
+    /// Executes a SQL query and returns the results as a `FlightRecordBatchStream`.
     pub async fn query_stream(
         &mut self,
         sql: String,
@@ -69,6 +72,7 @@ impl Client {
         Ok(FlightRecordBatchStream::new(flight_data_stream))
     }
 
+    /// Prepares a SQL statement and returns a `PreparedStatement`.
     pub async fn prepare_statement(&mut self, sql: String) -> Result<PreparedStatement> {
         self.set_query_range(None);
         let prepared = self.inner.prepare(sql.clone(), None).await?;

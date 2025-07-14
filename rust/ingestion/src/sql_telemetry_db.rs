@@ -90,6 +90,7 @@ async fn create_blocks_table(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> 
     Ok(())
 }
 
+/// Creates the tables for the telemetry database.
 pub async fn create_tables(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Result<()> {
     create_property_type(tr).await?;
     create_processes_table(tr).await?;

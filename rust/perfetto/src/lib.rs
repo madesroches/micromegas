@@ -1,7 +1,7 @@
 //! Library to write Perfetto traces, part of Micromegas.
 #![allow(missing_docs, clippy::missing_errors_doc)]
 
-/// Protobufs
+/// Protobufs (generated code)
 #[allow(
     clippy::doc_lazy_continuation,
     clippy::len_without_is_empty,

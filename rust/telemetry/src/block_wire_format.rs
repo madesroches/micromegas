@@ -1,14 +1,14 @@
 // block wire format
 use serde::{Deserialize, Serialize};
 
-/// payload sent by instrumented processes
+/// Payload sent by instrumented processes, containing serialized dependencies and objects.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BlockPayload {
     pub dependencies: Vec<u8>,
     pub objects: Vec<u8>,
 }
 
-/// block metadata sent by instrumented processes
+/// Block metadata sent by instrumented processes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Block {
     #[serde(

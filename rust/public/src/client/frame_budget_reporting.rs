@@ -30,12 +30,16 @@ use micromegas_analytics::{
 };
 use std::{collections::HashMap, sync::Arc};
 
+/// Defines how to group frame budgets.
 #[derive(Clone)]
 pub enum GroupBy {
+    /// Group by a specific budget, mapping span names to budget categories.
     Budget(HashMap<String, String>),
+    /// Group by the span name itself.
     SpanName,
 }
 
+/// Converts a map of span names to budget categories into a `ScalarValue` representing a list of properties.
 pub fn budget_map_to_properties(
     span_name_to_budget: &HashMap<String, String>,
 ) -> Result<ScalarValue> {
@@ -68,6 +72,7 @@ pub fn budget_map_to_properties(
     Ok(ScalarValue::List(Arc::new(array)))
 }
 
+/// Retrieves the time range (min begin, max end) from a `RecordBatch`.
 pub fn get_record_batch_time_range(rb: &RecordBatch) -> Result<Option<TimeRange>> {
     if rb.num_rows() == 0 {
         return Ok(None);
@@ -83,6 +88,7 @@ pub fn get_record_batch_time_range(rb: &RecordBatch) -> Result<Option<TimeRange>
     Ok(Some(TimeRange::new(min_begin, max_end)))
 }
 
+/// Fetches spans for a given stream and frames, grouped by the specified configuration.
 pub async fn fetch_spans_batch(
     client: &mut Client,
     stream_id: &str,
@@ -136,6 +142,7 @@ pub async fn fetch_spans_batch(
     }
 }
 
+/// Extracts top offenders from the frame statistics.
 pub async fn extract_top_offenders(ctx: &SessionContext) -> Result<Vec<RecordBatch>> {
     let budgets_rbs = ctx
         .sql("SELECT DISTINCT budget FROM frame_stats ORDER BY budget")
@@ -180,6 +187,7 @@ pub async fn extract_top_offenders(ctx: &SessionContext) -> Result<Vec<RecordBat
     Ok(top_offenders_rbs)
 }
 
+/// Computes frame statistics for a batch of frames.
 pub async fn compute_frame_stats_for_batch(
     ctx: &SessionContext,
     frames_rb: RecordBatch,
@@ -243,6 +251,7 @@ pub async fn compute_frame_stats_for_batch(
     Ok(frame_stats_rbs)
 }
 
+/// Merges top offenders from multiple record batches.
 pub async fn merge_top_offenders(top_offenders: Vec<RecordBatch>) -> Result<Vec<RecordBatch>> {
     if top_offenders.is_empty() {
         return Ok(top_offenders);
@@ -254,6 +263,7 @@ pub async fn merge_top_offenders(top_offenders: Vec<RecordBatch>) -> Result<Vec<
     extract_top_offenders(&ctx).await
 }
 
+/// Processes a batch of frames, computing frame statistics and extracting top offenders.
 pub async fn process_frame_batch(
     ctx: &SessionContext,
     frames_rb: RecordBatch,
@@ -282,6 +292,7 @@ pub async fn process_frame_batch(
     Ok((agg_rbs, top_offenders_rbs))
 }
 
+/// Retrieves the start time of a process.
 pub async fn get_process_start_time(
     client: &mut Client,
     process_id: &str,
@@ -297,6 +308,7 @@ pub async fn get_process_start_time(
     Ok(start_time)
 }
 
+/// Retrieves the stream ID of the main thread for a given process.
 pub async fn get_main_thread_stream_id(
     client: &mut Client,
     process_id: &str,
@@ -314,6 +326,7 @@ pub async fn get_main_thread_stream_id(
     get_only_string_value(&rbs)
 }
 
+/// Retrieves the time range of a stream.
 pub async fn get_stream_time_range(client: &mut Client, stream_id: &str) -> Result<TimeRange> {
     let sql = format!(
         "SELECT min(begin_time) as min_begin_time, max(end_time) as max_end_time
@@ -330,6 +343,7 @@ pub async fn get_stream_time_range(client: &mut Client, stream_id: &str) -> Resu
     Ok(TimeRange::new(begin, end))
 }
 
+/// Retrieves frames for a given stream within a time range and top-level span name.
 pub async fn get_frames(
     client: &mut Client,
     stream_id: &str,
@@ -349,6 +363,7 @@ pub async fn get_frames(
     client.query(sql, Some(time_range)).await
 }
 
+/// Generates a stream of record batches from a vector of record batches.
 pub fn gen_frame_batches(
     frames_record_batches: Vec<RecordBatch>,
 ) -> BoxStream<'static, Result<RecordBatch>> {
@@ -375,6 +390,7 @@ pub fn gen_frame_batches(
     })
 }
 
+/// Generates and sends span batches to a channel.
 pub async fn gen_span_batches(
     sender: tokio::sync::mpsc::Sender<(RecordBatch, Vec<RecordBatch>, String)>,
     client: &mut Client,

@@ -13,6 +13,7 @@ use datafusion::arrow::{
 };
 use std::sync::Arc;
 
+/// Returns the schema for the metrics table.
 pub fn metrics_table_schema() -> Schema {
     Schema::new(vec![
         Field::new(
@@ -98,6 +99,7 @@ pub fn metrics_table_schema() -> Schema {
     ])
 }
 
+/// A builder for creating a `RecordBatch` of metrics.
 pub struct MetricsRecordBuilder {
     pub process_ids: StringDictionaryBuilder<Int16Type>,
     pub stream_ids: StringDictionaryBuilder<Int16Type>,

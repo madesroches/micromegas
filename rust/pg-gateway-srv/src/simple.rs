@@ -19,6 +19,7 @@ use std::sync::Arc;
 
 use crate::state::SharedState;
 
+/// Handles simple queries from PostgreSQL clients.
 pub struct SimpleQueryH {
     state: SharedState,
 }
@@ -29,6 +30,7 @@ impl SimpleQueryH {
     }
 }
 
+/// Executes a SQL query against the FlightSQL server.
 pub async fn execute_query<'a>(state: &SharedState, sql: &str) -> PgWireResult<Response<'a>> {
     info!("sql={sql}");
     let client_factory = state

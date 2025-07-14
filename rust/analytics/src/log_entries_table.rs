@@ -23,6 +23,7 @@ use crate::arrow_properties::add_properties_to_builder;
 use crate::arrow_properties::add_property_set_to_builder;
 use crate::log_entry::LogEntry;
 
+/// Returns the schema for the log entries table.
 pub fn log_table_schema() -> Schema {
     Schema::new(vec![
         Field::new(
@@ -99,6 +100,7 @@ pub fn log_table_schema() -> Schema {
     ])
 }
 
+/// A builder for creating a `RecordBatch` of log entries.
 pub struct LogEntriesRecordBuilder {
     pub process_ids: StringDictionaryBuilder<Int16Type>,
     pub stream_ids: StringDictionaryBuilder<Int16Type>,

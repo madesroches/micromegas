@@ -124,6 +124,7 @@ pub fn new_track_event() -> TrackEvent {
     }
 }
 
+/// A writer for Perfetto traces.
 pub struct Writer {
     trace: Trace,
     pid: i32,          // derived from micromegas's process_id using a hash function
@@ -135,6 +136,7 @@ pub struct Writer {
 }
 
 impl Writer {
+    /// Creates a new `Writer` instance.
     pub fn new(micromegas_process_id: &str) -> Self {
         let trace = Trace { packet: vec![] };
         let process_uuid = xxh64(micromegas_process_id.as_bytes(), 0);
@@ -150,6 +152,7 @@ impl Writer {
         }
     }
 
+    /// Appends a process descriptor to the trace.
     pub fn append_process_descriptor(&mut self, exe: &str) {
         let mut process_track = new_track_descriptor(self.process_uuid);
         process_track.process = Some(ProcessDescriptor {
@@ -169,6 +172,7 @@ impl Writer {
         self.trace.packet.push(packet);
     }
 
+    /// Appends a thread descriptor to the trace.
     pub fn append_thread_descriptor(&mut self, stream_id: &str, thread_id: i32, thread_name: &str) {
         let mut packet = new_trace_packet();
         let thread_uuid = xxh64(stream_id.as_bytes(), 0);
@@ -281,6 +285,7 @@ impl Writer {
         packet.data = Some(Data::TrackEvent(track_event));
     }
 
+    /// Appends a span event to the trace.
     pub fn append_span(
         &mut self,
         begin_ns: u64,
@@ -305,6 +310,7 @@ impl Writer {
         self.trace.packet.push(packet);
     }
 
+    /// Converts the `Writer` into a `Trace`.
     pub fn into_trace(self) -> Trace {
         self.trace
     }

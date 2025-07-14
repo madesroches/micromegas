@@ -8,12 +8,14 @@ use micromegas_tracing::{
 };
 use std::{fmt, sync::Arc};
 
+/// An `EventSink` that dispatches events to multiple other `EventSink`s.
 pub struct CompositeSink {
     sinks: Vec<(LevelFilter, BoxedEventSink)>,
     target_level_filters: Vec<(String, LevelFilter)>,
 }
 
 impl CompositeSink {
+    /// Creates a new `CompositeSink`.
     pub fn new(
         sinks: Vec<(LevelFilter, BoxedEventSink)>,
         target_max_level: Vec<(String, LevelFilter)>,

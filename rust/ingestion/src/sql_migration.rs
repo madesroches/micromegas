@@ -4,8 +4,10 @@ use micromegas_tracing::prelude::*;
 use sqlx::Executor;
 use sqlx::Row;
 
+/// The latest schema version for the data lake.
 pub const LATEST_DATA_LAKE_SCHEMA_VERSION: i32 = 2;
 
+/// Reads the current schema version from the database.
 pub async fn read_data_lake_schema_version(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> i32 {
     match sqlx::query(
         "SELECT version
@@ -25,6 +27,7 @@ pub async fn read_data_lake_schema_version(tr: &mut sqlx::Transaction<'_, sqlx::
     }
 }
 
+/// Upgrades the data lake schema to version 2.
 pub async fn upgrade_data_lake_schema_v2(
     tr: &mut sqlx::Transaction<'_, sqlx::Postgres>,
 ) -> Result<()> {
@@ -52,6 +55,7 @@ pub async fn upgrade_data_lake_schema_v2(
     Ok(())
 }
 
+/// Executes the database migration.
 pub async fn execute_migration(pool: sqlx::Pool<sqlx::Postgres>) -> Result<()> {
     let mut current_version = read_data_lake_schema_version(&mut pool.begin().await?).await;
     if 0 == current_version {

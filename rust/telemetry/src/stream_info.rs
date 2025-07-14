@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
 
+/// Contains information about a telemetry stream.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct StreamInfo {
     #[serde(
@@ -22,6 +23,7 @@ pub struct StreamInfo {
 }
 
 impl StreamInfo {
+    /// Returns the thread name associated with the stream, if available.
     // only makes sense if the stream is associated with a thread
     pub fn get_thread_name(&self) -> String {
         const THREAD_NAME_KEY: &str = "thread-name";

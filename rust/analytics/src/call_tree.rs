@@ -9,6 +9,7 @@ use micromegas_telemetry::types::block::BlockMetadata;
 use micromegas_tracing::prelude::*;
 use std::sync::Arc;
 
+/// A node in a call tree, representing a single scope instance.
 #[derive(Debug)]
 pub struct CallTreeNode {
     pub id: Option<i64>,
@@ -18,6 +19,7 @@ pub struct CallTreeNode {
     pub children: Vec<CallTreeNode>,
 }
 
+/// A call tree, representing the execution of a single thread.
 #[derive(Debug)]
 pub struct CallTree {
     pub scopes: ScopeHashMap,
@@ -25,6 +27,7 @@ pub struct CallTree {
     pub call_tree_root: Option<CallTreeNode>,
 }
 
+/// A builder for creating a `CallTree` from a stream of thread events.
 pub struct CallTreeBuilder {
     begin_range_ns: i64,
     end_range_ns: i64,
@@ -187,6 +190,7 @@ impl ThreadBlockProcessor for CallTreeBuilder {
     }
 }
 
+/// Creates a call tree from a set of thread event blocks.
 #[allow(clippy::cast_precision_loss)]
 #[span_fn]
 pub async fn make_call_tree(

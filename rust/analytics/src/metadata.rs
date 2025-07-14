@@ -6,6 +6,7 @@ use micromegas_tracing::prelude::*;
 use micromegas_transit::UserDefinedType;
 use sqlx::Row;
 
+/// Creates a `StreamInfo` from a database row.
 pub fn stream_from_row(row: &sqlx::postgres::PgRow) -> Result<StreamInfo> {
     let dependencies_metadata_buffer: Vec<u8> = row.try_get("dependencies_metadata")?;
     let dependencies_metadata: Vec<UserDefinedType> =
@@ -27,6 +28,7 @@ pub fn stream_from_row(row: &sqlx::postgres::PgRow) -> Result<StreamInfo> {
     })
 }
 
+/// Finds a stream by its ID.
 #[span_fn]
 pub async fn find_stream(
     pool: &sqlx::Pool<sqlx::Postgres>,
@@ -45,6 +47,7 @@ pub async fn find_stream(
     stream_from_row(&row)
 }
 
+/// Lists all streams for a given process that are tagged with a specific tag.
 pub async fn list_process_streams_tagged(
     pool: &sqlx::Pool<sqlx::Postgres>,
     process_id: sqlx::types::Uuid,
@@ -70,6 +73,7 @@ pub async fn list_process_streams_tagged(
     Ok(streams)
 }
 
+/// Creates a `ProcessInfo` from a database row.
 #[span_fn]
 pub fn process_from_row(row: &sqlx::postgres::PgRow) -> Result<ProcessInfo> {
     let properties: Vec<Property> = row.try_get("process_properties")?;
@@ -89,6 +93,7 @@ pub fn process_from_row(row: &sqlx::postgres::PgRow) -> Result<ProcessInfo> {
     })
 }
 
+/// Finds a process by its ID.
 #[span_fn]
 pub async fn find_process(
     pool: &sqlx::Pool<sqlx::Postgres>,
@@ -117,6 +122,7 @@ pub async fn find_process(
     process_from_row(&row)
 }
 
+/// Creates a `BlockMetadata` from a database row.
 #[span_fn]
 pub fn block_from_row(row: &sqlx::postgres::PgRow) -> Result<BlockMetadata> {
     Ok(BlockMetadata {
@@ -134,6 +140,7 @@ pub fn block_from_row(row: &sqlx::postgres::PgRow) -> Result<BlockMetadata> {
     })
 }
 
+/// Finds all blocks for a given stream within a given time range.
 #[span_fn]
 pub async fn find_stream_blocks_in_range(
     connection: &mut sqlx::PgConnection,

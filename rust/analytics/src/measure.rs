@@ -11,6 +11,7 @@ use micromegas_tracing::prelude::*;
 use micromegas_transit::value::{Object, Value};
 use std::sync::Arc;
 
+/// Represents a single metric measurement.
 pub struct Measure {
     pub process: Arc<ProcessInfo>,
     pub stream_id: Arc<String>,
@@ -24,6 +25,7 @@ pub struct Measure {
     pub properties: PropertySet,
 }
 
+/// Creates a `Measure` from a `Value`.
 pub fn measure_from_value(
     process: Arc<ProcessInfo>,
     stream_id: Arc<String>,
@@ -247,6 +249,7 @@ pub fn measure_from_value(
     }
 }
 
+/// Iterates over each metric measurement in a block.
 #[span_fn]
 pub async fn for_each_measure_in_block<Predicate: FnMut(Measure) -> Result<bool>>(
     blob_storage: Arc<BlobStorage>,

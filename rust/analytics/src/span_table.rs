@@ -16,6 +16,7 @@ use datafusion::arrow::datatypes::TimestampNanosecondType;
 use datafusion::arrow::datatypes::UInt32Type;
 use datafusion::arrow::record_batch::RecordBatch;
 
+/// A single span in a call tree.
 #[derive(Debug)]
 pub struct SpanRow {
     pub id: i64,
@@ -30,6 +31,7 @@ pub struct SpanRow {
     pub line: u32,
 }
 
+/// A builder for creating a `RecordBatch` of spans.
 pub struct SpanRecordBuilder {
     pub ids: PrimitiveBuilder<Int64Type>,
     pub parents: PrimitiveBuilder<Int64Type>,
@@ -44,6 +46,7 @@ pub struct SpanRecordBuilder {
     pub lines: PrimitiveBuilder<UInt32Type>,
 }
 
+/// Returns the schema for the spans table.
 pub fn get_spans_schema() -> Schema {
     Schema::new(vec![
         Field::new("id", DataType::Int64, false),

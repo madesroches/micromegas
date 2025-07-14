@@ -1,5 +1,6 @@
 // from https://github.com/influxdata/influxdb3_core/blob/main/flightsql/src/sql_info/
 
+/// SQL keywords supported by the FlightSQL server.
 pub const SQL_INFO_SQL_KEYWORDS: &[&str] = &[
     // SQL-92 Reserved Words
     "absolute",
@@ -231,11 +232,13 @@ pub const SQL_INFO_SQL_KEYWORDS: &[&str] = &[
     "zone",
 ];
 
+/// Numeric functions supported by the FlightSQL server.
 pub const SQL_INFO_NUMERIC_FUNCTIONS: &[&str] = &[
     "abs", "acos", "asin", "atan", "atan2", "ceil", "cos", "exp", "floor", "ln", "log", "log10",
     "log2", "pow", "power", "round", "signum", "sin", "sqrt", "tan", "trunc",
 ];
 
+/// Date and time functions supported by the FlightSQL server.
 pub const SQL_INFO_DATE_TIME_FUNCTIONS: &[&str] = &[
     "current_date",
     "current_time",
@@ -252,8 +255,10 @@ pub const SQL_INFO_DATE_TIME_FUNCTIONS: &[&str] = &[
     "to_timestamp_seconds",
 ];
 
+/// System functions supported by the FlightSQL server.
 pub const SQL_INFO_SYSTEM_FUNCTIONS: &[&str] = &["array", "arrow_typeof", "struct"];
 
+/// String functions supported by the FlightSQL server.
 pub const SQL_INFO_STRING_FUNCTIONS: &[&str] = &[
     "arrow_typeof",
     "ascii",

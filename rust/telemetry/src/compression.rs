@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use std::io::Read;
 use std::io::Write;
 
+/// Compresses a byte slice using LZ4.
 pub fn compress(src: &[u8]) -> Result<Vec<u8>> {
     let mut compressed = Vec::new();
     let mut encoder = lz4::EncoderBuilder::new()
@@ -16,6 +17,7 @@ pub fn compress(src: &[u8]) -> Result<Vec<u8>> {
     Ok(compressed)
 }
 
+/// Decompresses a LZ4-compressed byte slice.
 pub fn decompress(compressed: &[u8]) -> Result<Vec<u8>> {
     let mut decompressed = Vec::new();
     let mut decoder = lz4::Decoder::new(compressed).with_context(|| "allocating lz4 decoder")?;

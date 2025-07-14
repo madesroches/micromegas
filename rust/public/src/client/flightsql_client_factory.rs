@@ -4,11 +4,13 @@ use async_trait::async_trait;
 use http::Uri;
 use tonic::transport::{Channel, ClientTlsConfig};
 
+/// A trait for creating FlightSQL clients.
 #[async_trait]
 pub trait FlightSQLClientFactory: Send + Sync {
     async fn make_client(&self) -> Result<Client>;
 }
 
+/// A FlightSQL client factory that uses a bearer token for authentication.
 pub struct BearerFlightSQLClientFactory {
     token: String,
 }

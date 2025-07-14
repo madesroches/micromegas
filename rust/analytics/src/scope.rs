@@ -2,6 +2,7 @@ use datafusion::parquet::data_type::AsBytes;
 use std::sync::Arc;
 use xxhash_rust::xxh32::xxh32;
 
+/// A description of a scope, including its name, location, and hash.
 #[derive(Debug)]
 pub struct ScopeDesc {
     pub name: Arc<String>,
@@ -11,6 +12,7 @@ pub struct ScopeDesc {
     pub hash: u32,
 }
 
+/// A hash map of scope descriptions, keyed by their hash.
 pub type ScopeHashMap = std::collections::HashMap<u32, ScopeDesc>;
 
 impl ScopeDesc {
@@ -26,6 +28,7 @@ impl ScopeDesc {
     }
 }
 
+/// Computes the hash of a scope.
 pub fn compute_scope_hash(name: &str, filename: &str, target: &str, line: u32) -> u32 {
     let hash_name = xxh32(name.as_bytes(), 0);
     let hash_with_filename = xxh32(filename.as_bytes(), hash_name);

@@ -7,6 +7,7 @@ use micromegas_analytics::time::TimeRange;
 use serde::Deserialize;
 use std::sync::Arc;
 
+/// Parameters for fetching a Perfetto trace.
 #[derive(Debug, Deserialize)]
 pub struct FetchTraceParams {
     pub process_id: String,
@@ -14,16 +15,19 @@ pub struct FetchTraceParams {
     pub end: DateTime<Utc>,
 }
 
+/// A server for serving Perfetto traces.
 pub struct PerfettoTraceServer {
     pub client_factory: Arc<dyn FlightSQLClientFactory>,
 }
 
 impl PerfettoTraceServer {
+    /// Creates a new `PerfettoTraceServer`.
     pub fn new(client_factory: Arc<dyn FlightSQLClientFactory>) -> Self {
         Self { client_factory }
     }
 }
 
+/// Shows a Perfetto trace in a web browser.
 pub async fn show_trace(caller: &str, params: FetchTraceParams) -> Result<String> {
     let process_id = params.process_id;
     let begin = params.begin.to_rfc3339();
@@ -38,6 +42,7 @@ pub async fn show_trace(caller: &str, params: FetchTraceParams) -> Result<String
     Ok(content)
 }
 
+/// Fetches a Perfetto trace.
 pub async fn fetch_trace(
     server: Arc<PerfettoTraceServer>,
     _caller: &str,

@@ -11,6 +11,7 @@ use micromegas_tracing::prelude::*;
 use micromegas_transit::value::{Object, Value};
 use std::sync::Arc;
 
+/// A single log entry.
 #[derive(Debug)]
 pub struct LogEntry {
     pub process: Arc<ProcessInfo>,
@@ -24,6 +25,7 @@ pub struct LogEntry {
     pub properties: PropertySet,
 }
 
+/// Creates a `LogEntry` from a `Value`.
 #[span_fn]
 pub fn log_entry_from_value(
     convert_ticks: &ConvertTicks,
@@ -199,6 +201,7 @@ pub fn log_entry_from_value(
     }
 }
 
+/// Iterates over all log entries in a block.
 #[span_fn]
 pub async fn for_each_log_entry_in_block<Predicate: FnMut(LogEntry) -> Result<bool>>(
     blob_storage: Arc<BlobStorage>,

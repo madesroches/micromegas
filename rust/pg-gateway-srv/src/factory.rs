@@ -11,6 +11,7 @@ use pgwire::api::PgWireServerHandlers;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+/// A factory for creating PostgreSQL protocol handlers.
 pub struct HandlerFactory {
     state: SharedState,
 }
