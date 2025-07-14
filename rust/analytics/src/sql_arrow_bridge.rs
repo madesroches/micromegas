@@ -23,6 +23,7 @@ use std::sync::Arc;
 
 use crate::arrow_utils::make_empty_record_batch;
 
+/// A trait for reading a column from a database row and writing it to an Arrow `StructBuilder`.
 pub trait ColumnReader {
     fn extract_column_from_row(
         &self,
@@ -32,6 +33,7 @@ pub trait ColumnReader {
     fn field(&self) -> Field;
 }
 
+/// A `ColumnReader` for string columns.
 pub struct StringColumnReader {
     pub field: Field,
     pub column_ordinal: usize,
@@ -58,6 +60,7 @@ impl ColumnReader for StringColumnReader {
     }
 }
 
+/// A `ColumnReader` for UUID columns.
 pub struct UuidColumnReader {
     pub field: Field,
     pub column_ordinal: usize,
@@ -91,6 +94,7 @@ impl ColumnReader for UuidColumnReader {
     }
 }
 
+/// A `ColumnReader` for `i64` columns.
 pub struct Int64ColumnReader {
     pub field: Field,
     pub column_ordinal: usize,
@@ -116,6 +120,7 @@ impl ColumnReader for Int64ColumnReader {
     }
 }
 
+/// A `ColumnReader` for `i32` columns.
 pub struct Int32ColumnReader {
     pub field: Field,
     pub column_ordinal: usize,
@@ -141,6 +146,7 @@ impl ColumnReader for Int32ColumnReader {
     }
 }
 
+/// A `ColumnReader` for timestamp columns.
 pub struct TimestampColumnReader {
     pub field: Field,
     pub column_ordinal: usize,
@@ -168,6 +174,7 @@ impl ColumnReader for TimestampColumnReader {
     }
 }
 
+/// A `ColumnReader` for string array columns.
 pub struct StringArrayColumnReader {
     pub field: Field,
     pub column_ordinal: usize,
@@ -202,6 +209,7 @@ impl ColumnReader for StringArrayColumnReader {
     }
 }
 
+/// A `ColumnReader` for blob columns.
 pub struct BlobColumnReader {
     pub field: Field,
     pub column_ordinal: usize,
@@ -228,6 +236,7 @@ impl ColumnReader for BlobColumnReader {
     }
 }
 
+/// A `ColumnReader` for properties columns.
 pub struct PropertiesColumnReader {
     pub field: Field,
     pub column_ordinal: usize,
@@ -267,6 +276,7 @@ impl ColumnReader for PropertiesColumnReader {
     }
 }
 
+/// Creates a `ColumnReader` for a given database column.
 pub fn make_column_reader(column: &PgColumn) -> Result<Arc<dyn ColumnReader>> {
     match column.type_info().name() {
         "VARCHAR" => Ok(Arc::new(StringColumnReader {
@@ -324,6 +334,7 @@ pub fn make_column_reader(column: &PgColumn) -> Result<Arc<dyn ColumnReader>> {
     }
 }
 
+/// Converts a slice of database rows to an Arrow `RecordBatch`.
 pub fn rows_to_record_batch(rows: &[PgRow]) -> Result<RecordBatch> {
     if rows.is_empty() {
         return Ok(make_empty_record_batch());

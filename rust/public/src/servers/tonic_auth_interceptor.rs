@@ -2,6 +2,7 @@ use crate::servers::key_ring::KeyRing;
 use micromegas_tracing::prelude::*;
 use tonic::{Request, Status};
 
+/// Checks the authentication of a Tonic request using a `KeyRing`.
 #[expect(clippy::result_large_err)]
 pub fn check_auth(req: Request<()>, keyring: &KeyRing) -> Result<Request<()>, Status> {
     let metadata = req.metadata();

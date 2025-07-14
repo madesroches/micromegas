@@ -3,12 +3,14 @@ use micromegas_tracing::prelude::*;
 use serde::Deserialize;
 use std::{collections::HashMap, fmt::Display};
 
+/// Represents a key in the keyring.
 #[derive(Hash, Eq, PartialEq)]
 pub struct Key {
     pub value: String,
 }
 
 impl Key {
+    /// Creates a new `Key` from a string value.
     pub fn new(value: String) -> Self {
         Self { value }
     }
@@ -26,6 +28,7 @@ impl Display for Key {
     }
 }
 
+/// Deserializes a string into a `Key`.
 pub fn key_from_string<'de, D>(deserializer: D) -> Result<Key, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -34,6 +37,7 @@ where
     Ok(Key::new(s))
 }
 
+/// Represents an entry in the keyring, mapping a key to a name.
 #[derive(Deserialize)]
 pub struct KeyRingEntry {
     pub name: String,
@@ -41,8 +45,10 @@ pub struct KeyRingEntry {
     pub key: Key,
 }
 
+/// A map from `Key` to `String` (name).
 pub type KeyRing = HashMap<Key, String>; // key -> name
 
+/// Parses a JSON string into a `KeyRing`.
 pub fn parse_key_ring(json: &str) -> Result<KeyRing> {
     let entries: Vec<KeyRingEntry> = serde_json::from_str(json)?;
     let mut ring = KeyRing::new();

@@ -30,6 +30,7 @@ async fn get_process_exe(
     Ok(exes.value(0).to_owned())
 }
 
+/// Formats a Perfetto trace from the telemetry data.
 pub async fn format_perfetto_trace(
     client: &mut Client,
     process_id: &str,
@@ -94,6 +95,7 @@ pub async fn format_perfetto_trace(
     Ok(writer.into_trace().encode_to_vec())
 }
 
+/// Writes a Perfetto trace to a file.
 pub async fn write_perfetto_trace(
     client: &mut Client,
     process_id: &str,

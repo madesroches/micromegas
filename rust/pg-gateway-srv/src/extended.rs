@@ -24,6 +24,7 @@ use pgwire::{
 use std::fmt::Debug;
 use std::sync::Arc;
 
+/// Handles extended queries from PostgreSQL clients.
 pub struct ExtendedQueryH {
     state: SharedState,
 }

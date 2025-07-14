@@ -4,6 +4,7 @@ use micromegas_tracing::info;
 use sqlx::PgPool;
 use std::sync::Arc;
 
+/// A connection to the data lake, including a database pool and a blob storage client.
 #[derive(Debug, Clone)]
 pub struct DataLakeConnection {
     pub db_pool: PgPool,
@@ -19,6 +20,7 @@ impl DataLakeConnection {
     }
 }
 
+/// Connects to the data lake.
 pub async fn connect_to_data_lake(
     db_uri: &str,
     object_store_url: &str,

@@ -6,6 +6,7 @@ use micromegas_tracing::{parsing::make_custom_readers, prelude::*};
 use micromegas_transit::{parse_object_buffer, read_dependencies, value::Value};
 use std::sync::Arc;
 
+/// Fetches the payload of a block from blob storage.
 #[span_fn]
 pub async fn fetch_block_payload(
     blob_storage: Arc<BlobStorage>,
@@ -28,6 +29,7 @@ pub async fn fetch_block_payload(
     }
 }
 
+/// Parses a block of telemetry data, calling a function for each object in the block.
 // parse_block calls fun for each object in the block until fun returns `false`
 #[span_fn]
 pub fn parse_block<F>(

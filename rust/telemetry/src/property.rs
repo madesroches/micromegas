@@ -1,6 +1,7 @@
 use sqlx::postgres::{PgHasArrayType, PgTypeInfo};
 use std::{collections::HashMap, sync::Arc};
 
+/// Represents a key-value property.
 #[derive(Debug)]
 pub struct Property {
     key: Arc<String>,
@@ -8,14 +9,17 @@ pub struct Property {
 }
 
 impl Property {
+    /// Creates a new `Property`.
     pub fn new(key: Arc<String>, value: Arc<String>) -> Self {
         Self { key, value }
     }
 
+    /// Returns the key of the property as a string slice.
     pub fn key_str(&self) -> &str {
         self.key.as_str()
     }
 
+    /// Returns the value of the property as a string slice.
     pub fn value_str(&self) -> &str {
         self.value.as_str()
     }
@@ -71,12 +75,14 @@ impl PgHasArrayType for Property {
     }
 }
 
+/// Converts a `HashMap<String, String>` to a `Vec<Property>`.
 pub fn make_properties(map: &HashMap<String, String>) -> Vec<Property> {
     map.iter()
         .map(|(k, v)| Property::new(Arc::new(k.clone()), Arc::new(v.clone())))
         .collect()
 }
 
+/// Converts a `Vec<Property>` to a `HashMap<String, String>`.
 pub fn into_hashmap(properties: Vec<Property>) -> HashMap<String, String> {
     let mut hashmap = HashMap::new();
     for property in properties {

@@ -5,11 +5,13 @@ use micromegas_telemetry::wire_format::encode_cbor;
 use micromegas_tracing::prelude::*;
 use tokio::sync::mpsc::Sender;
 
+/// A trait for writing log entries.
 #[async_trait]
 pub trait Logger: Send + Sync {
     async fn write_log_entry(&self, msg: String) -> Result<()>;
 }
 
+/// A writer for sending responses to a client.
 pub struct ResponseWriter {
     sender: Option<Sender<Bytes>>,
 }
@@ -46,6 +48,7 @@ impl Logger for ResponseWriter {
     }
 }
 
+/// A sender for sending log entries to a channel.
 pub struct LogSender {
     sender: Sender<(chrono::DateTime<chrono::Utc>, String)>,
 }

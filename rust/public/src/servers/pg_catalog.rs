@@ -5,6 +5,7 @@ use datafusion_postgres::pg_catalog::{
     create_pg_get_userbyid_udf, create_version_udf, PgCatalogSchemaProvider,
 };
 
+/// Sets up the PostgreSQL catalog functions and tables in the DataFusion session context.
 pub async fn setup_pg_catalog(ctx: &SessionContext) -> Result<(), Box<DataFusionError>> {
     let pg_catalog_schema = PgCatalogSchemaProvider::new(ctx.state().catalog_list().clone());
 

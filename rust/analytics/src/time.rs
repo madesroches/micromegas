@@ -9,6 +9,7 @@ use sqlx::Row;
 
 const NANOS_PER_SEC: f64 = 1000.0 * 1000.0 * 1000.0;
 
+/// A time range, with a beginning and an end.
 #[derive(Clone, Copy, Debug)]
 pub struct TimeRange {
     pub begin: DateTime<Utc>,
@@ -21,6 +22,7 @@ impl TimeRange {
     }
 }
 
+/// Creates a `ConvertTicks` from a database connection.
 pub async fn make_time_converter_from_db(
     pool: &sqlx::Pool<sqlx::Postgres>,
     process: &ProcessInfo,
@@ -57,6 +59,7 @@ pub async fn make_time_converter_from_db(
     )
 }
 
+/// Creates a `ConvertTicks` from a block's metadata.
 pub fn make_time_converter_from_block_meta(
     process: &ProcessInfo,
     block: &BlockMetadata,
@@ -142,16 +145,19 @@ impl ConvertTicks {
     }
 }
 
+/// Returns the inverse of the TSC frequency in milliseconds.
 #[allow(clippy::cast_precision_loss)]
 pub fn get_tsc_frequency_inverse_ms(tsc_frequency: i64) -> f64 {
     1000.0 / tsc_frequency as f64
 }
 
+/// Returns the inverse of the TSC frequency in nanoseconds.
 #[allow(clippy::cast_precision_loss)]
 pub fn get_tsc_frequency_inverse_ns(tsc_frequency: i64) -> f64 {
     NANOS_PER_SEC / tsc_frequency as f64
 }
 
+/// Converts a `DateTime<Utc>` to a `ScalarValue`.
 pub fn datetime_to_scalar(v: DateTime<Utc>) -> ScalarValue {
     lazy_static::lazy_static! {
         static ref UTC_OFFSET: Arc<str> = Arc::from("+00:00");

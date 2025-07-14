@@ -201,6 +201,7 @@ async fn ingest_blocks(
     Ok(nb_rows)
 }
 
+/// Ingests data from a FlightRecordBatchStream into the specified table.
 pub async fn bulk_ingest(
     lake: Arc<DataLakeConnection>,
     table_name: &str,

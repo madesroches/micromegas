@@ -3,6 +3,7 @@ use micromegas_telemetry::property::Property;
 use micromegas_transit::value::{Object, Value};
 use std::sync::Arc;
 
+/// A set of properties, backed by a `transit` object.
 #[derive(Debug, Clone)]
 pub struct PropertySet {
     obj: Arc<Object>,
@@ -21,6 +22,7 @@ impl PropertySet {
         EMPTY_SET.clone()
     }
 
+    /// Iterates over the properties in the set.
     pub fn for_each_property<Fun: FnMut(Property) -> Result<()>>(
         &self,
         mut fun: Fun,

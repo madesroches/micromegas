@@ -6,11 +6,14 @@ use micromegas_tracing::prelude::*;
 use std::sync::Arc;
 use tokio::task::JoinError;
 
+/// Trait for a task that can be run periodically by the cron service.
 #[async_trait]
 pub trait TaskCallback: Send + Sync {
+    /// Runs the task at the scheduled time.
     async fn run(&self, task_scheduled_time: DateTime<Utc>) -> Result<()>;
 }
 
+/// Represents a task scheduled to run periodically.
 pub struct CronTask {
     name: String,
     period: TimeDelta,
@@ -19,6 +22,7 @@ pub struct CronTask {
 }
 
 impl CronTask {
+    /// Creates a new `CronTask`.
     pub fn new(
         name: String,
         period: TimeDelta,
@@ -35,10 +39,12 @@ impl CronTask {
         })
     }
 
+    /// Returns the next scheduled run time for the task.
     pub fn get_next_run(&self) -> DateTime<Utc> {
         self.next_run
     }
 
+    /// Spawns the task to run in the background.
     pub async fn spawn(&mut self) -> BoxFuture<'static, Result<Result<()>, JoinError>> {
         let now = Utc::now();
         info!("running scheduled task name={}", &self.name);

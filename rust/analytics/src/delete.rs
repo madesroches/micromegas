@@ -7,7 +7,8 @@ use uuid::Uuid;
 
 use crate::lakehouse::write_partition::retire_expired_partitions;
 
-// returns true if there is more data to delete
+/// Deletes a batch of expired blocks from the data lake.
+/// Returns `true` if there are more blocks to delete, `false` otherwise.
 pub async fn delete_expired_blocks_batch(
     lake: &DataLakeConnection,
     expiration: DateTime<Utc>,
@@ -42,6 +43,7 @@ pub async fn delete_expired_blocks_batch(
     Ok(paths.len() == batch_size as usize)
 }
 
+/// Deletes all expired blocks from the data lake.
 pub async fn delete_expired_blocks(
     lake: &DataLakeConnection,
     expiration: DateTime<Utc>,
@@ -50,6 +52,8 @@ pub async fn delete_expired_blocks(
     Ok(())
 }
 
+/// Deletes a batch of empty streams from the data lake.
+/// Returns `true` if there are more streams to delete, `false` otherwise.
 pub async fn delete_empty_streams_batch(
     lake: &DataLakeConnection,
     expiration: DateTime<Utc>,
@@ -89,6 +93,7 @@ pub async fn delete_empty_streams_batch(
     Ok(stream_ids.len() == batch_size as usize)
 }
 
+/// Deletes all empty streams from the data lake.
 pub async fn delete_empty_streams(
     lake: &DataLakeConnection,
     expiration: DateTime<Utc>,
@@ -97,6 +102,8 @@ pub async fn delete_empty_streams(
     Ok(())
 }
 
+/// Deletes a batch of empty processes from the data lake.
+/// Returns `true` if there are more processes to delete, `false` otherwise.
 pub async fn delete_empty_processes_batch(
     lake: &DataLakeConnection,
     expiration: DateTime<Utc>,
@@ -132,6 +139,7 @@ pub async fn delete_empty_processes_batch(
     Ok(process_ids.len() == batch_size as usize)
 }
 
+/// Deletes all empty processes from the data lake.
 pub async fn delete_empty_processes(
     lake: &DataLakeConnection,
     expiration: DateTime<Utc>,
@@ -140,6 +148,7 @@ pub async fn delete_empty_processes(
     Ok(())
 }
 
+/// Deletes all data older than a specified number of days from the data lake.
 pub async fn delete_old_data(lake: &DataLakeConnection, min_days_old: i32) -> Result<()> {
     let now = Utc::now();
     let expiration = now

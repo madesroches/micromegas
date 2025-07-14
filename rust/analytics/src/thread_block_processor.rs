@@ -9,6 +9,7 @@ use micromegas_tracing::warn;
 use micromegas_transit::value::{Object, Value};
 use std::sync::Arc;
 
+/// A trait for processing thread event blocks.
 pub trait ThreadBlockProcessor {
     // return true to continue
     fn on_begin_thread_scope(
@@ -46,6 +47,7 @@ where
     fun(scope, name, tick)
 }
 
+/// Parses a thread event block from a payload.
 #[span_fn]
 pub fn parse_thread_block_payload<Proc: ThreadBlockProcessor>(
     block_id: &str,
@@ -105,6 +107,7 @@ pub fn parse_thread_block_payload<Proc: ThreadBlockProcessor>(
     })
 }
 
+/// Parses a thread event block.
 #[span_fn]
 pub async fn parse_thread_block<Proc: ThreadBlockProcessor>(
     blob_storage: Arc<BlobStorage>,

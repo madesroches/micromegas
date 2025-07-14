@@ -11,6 +11,7 @@ use micromegas_tracing::intern_string::intern_string;
 use micromegas_tracing::property_set::{Property, PropertySet};
 use std::{str::from_utf8, sync::Arc};
 
+/// Logs rows from a `RecordBatch` as JSON, with specified columns converted to properties.
 pub async fn log_json_rows(
     target: &'static str,
     rbs: &[RecordBatch],

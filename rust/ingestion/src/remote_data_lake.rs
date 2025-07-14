@@ -7,6 +7,7 @@ use micromegas_telemetry::blob_storage::BlobStorage;
 use micromegas_tracing::prelude::*;
 use std::sync::Arc;
 
+/// Acquires a lock on the database to prevent concurrent migrations.
 pub async fn acquire_lock(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>, key: i64) -> Result<()> {
     sqlx::query("SELECT pg_advisory_xact_lock($1)")
         .bind(key)
@@ -15,6 +16,7 @@ pub async fn acquire_lock(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>, key: i
     Ok(())
 }
 
+/// Migrates the database to the latest schema version.
 pub async fn migrate_db(pool: sqlx::Pool<sqlx::Postgres>) -> Result<()> {
     let mut tr = pool.begin().await?;
     let mut current_version = read_data_lake_schema_version(&mut tr).await;
@@ -37,6 +39,7 @@ pub async fn migrate_db(pool: sqlx::Pool<sqlx::Postgres>) -> Result<()> {
     Ok(())
 }
 
+/// Connects to the remote data lake, migrating the database if necessary.
 pub async fn connect_to_remote_data_lake(
     db_uri: &str,
     object_store_url: &str,
