@@ -37,3 +37,11 @@ def test_jsonb_cast_string():
     res = client.query(sql)
     value = res.iloc[0]["value"]
     assert value == "value"
+
+def test_jsonb_cast_f64():
+    sql = """
+      SELECT jsonb_as_f64( jsonb_get( jsonb_parse('{ "name" : 2.3 }'), 'name' ) ) as value
+    """
+    res = client.query(sql)
+    value = res.iloc[0]["value"]
+    assert value == 2.3
