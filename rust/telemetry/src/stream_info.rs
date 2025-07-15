@@ -4,6 +4,10 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 /// Contains information about a telemetry stream.
+///
+/// This struct is sent once at the beginning of a stream and provides
+/// metadata about the stream, such as the process and stream IDs,
+/// dependencies, and other properties.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct StreamInfo {
     #[serde(

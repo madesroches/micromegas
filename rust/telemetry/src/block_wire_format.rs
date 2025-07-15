@@ -2,6 +2,9 @@
 use serde::{Deserialize, Serialize};
 
 /// Payload sent by instrumented processes, containing serialized dependencies and objects.
+///
+/// The `dependencies` field contains the serialized data for all the
+/// `UserDefinedType` that are required to deserialize the `objects`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BlockPayload {
     pub dependencies: Vec<u8>,
@@ -9,6 +12,10 @@ pub struct BlockPayload {
 }
 
 /// Block metadata sent by instrumented processes.
+///
+/// A block represents a chunk of telemetry data from a single stream.
+/// It contains timing information, references to the process and stream,
+/// and the actual payload of telemetry events.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Block {
     #[serde(

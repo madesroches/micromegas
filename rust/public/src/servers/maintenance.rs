@@ -20,6 +20,10 @@ use super::cron_task::{CronTask, TaskCallback};
 
 type Views = Arc<Vec<Arc<dyn View>>>;
 
+/// Materializes all views within a given time range.
+///
+/// This function iterates through the provided views, materializing partitions
+/// for each view within the specified `insert_range` and `partition_time_delta`.
 pub async fn materialize_all_views(
     runtime: Arc<RuntimeEnv>,
     lake: Arc<DataLakeConnection>,
@@ -166,6 +170,10 @@ impl TaskCallback for EverySecondTask {
     }
 }
 
+/// Runs a collection of `CronTask`s indefinitely.
+///
+/// This function continuously checks for tasks that are due to run, spawns them,
+/// and manages their execution, ensuring that `max_parallelism` is not exceeded.
 pub async fn run_tasks_forever(mut tasks: Vec<CronTask>, max_parallelism: usize) {
     let mut task_set = JoinSet::new();
     loop {
@@ -204,6 +212,10 @@ pub async fn run_tasks_forever(mut tasks: Vec<CronTask>, max_parallelism: usize)
     }
 }
 
+/// Retrieves a list of global views that have an associated update group.
+///
+/// This function filters the global views provided by the `view_factory`,
+/// returning only those that are part of an update group.
 pub fn get_global_views_with_update_group(view_factory: &ViewFactory) -> Vec<Arc<dyn View>> {
     view_factory
         .get_global_views()
@@ -213,6 +225,16 @@ pub fn get_global_views_with_update_group(view_factory: &ViewFactory) -> Vec<Arc
         .collect()
 }
 
+/// Starts the maintenance daemon, which runs various scheduled tasks.
+///
+/// This function initializes and spawns several `CronTask`s for daily, hourly, minute,
+/// and second-based maintenance operations, such as data materialization and cleanup.
+///
+/// # Arguments
+///
+/// * `runtime` - The DataFusion `RuntimeEnv` to use for query execution.
+/// * `lake` - The connection to the data lake.
+/// * `views_to_update` - A vector of views that need to be updated by the daemon.
 pub async fn daemon(
     runtime: Arc<RuntimeEnv>,
     lake: Arc<DataLakeConnection>,

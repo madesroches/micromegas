@@ -32,6 +32,9 @@ struct Cli {
     listen_endpoint_http: SocketAddr,
 }
 
+/// Serves the HTTP ingestion service.
+///
+/// This function sets up the Axum router, applies middleware, and starts the HTTP server.
 async fn serve_http(
     args: &Cli,
     lake: DataLakeConnection,

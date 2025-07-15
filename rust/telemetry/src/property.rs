@@ -2,6 +2,9 @@ use sqlx::postgres::{PgHasArrayType, PgTypeInfo};
 use std::{collections::HashMap, sync::Arc};
 
 /// Represents a key-value property.
+///
+/// Properties are used to add context to telemetry events.
+/// Both key and value are stored as `Arc<String>` for efficient sharing.
 #[derive(Debug)]
 pub struct Property {
     key: Arc<String>,
@@ -76,6 +79,8 @@ impl PgHasArrayType for Property {
 }
 
 /// Converts a `HashMap<String, String>` to a `Vec<Property>`.
+///
+/// This is a convenience function for creating a list of properties from a map.
 pub fn make_properties(map: &HashMap<String, String>) -> Vec<Property> {
     map.iter()
         .map(|(k, v)| Property::new(Arc::new(k.clone()), Arc::new(v.clone())))
@@ -83,6 +88,8 @@ pub fn make_properties(map: &HashMap<String, String>) -> Vec<Property> {
 }
 
 /// Converts a `Vec<Property>` to a `HashMap<String, String>`.
+///
+/// This is a convenience function for converting a list of properties back to a map.
 pub fn into_hashmap(properties: Vec<Property>) -> HashMap<String, String> {
     let mut hashmap = HashMap::new();
     for property in properties {

@@ -51,6 +51,18 @@ impl Drop for HttpEventSink {
 }
 
 impl HttpEventSink {
+    /// Creates a new `HttpEventSink`.
+    ///
+    /// This function spawns a new thread that handles sending telemetry data
+    /// to the specified HTTP server.
+    ///
+    /// # Arguments
+    ///
+    /// * `addr_server` - The address of the HTTP server to send data to.
+    /// * `max_queue_size` - The maximum number of events to queue before dropping them.
+    /// * `metadata_retry` - The retry strategy for sending metadata (process info, stream info).
+    /// * `blocks_retry` - The retry strategy for sending blocks (log, metrics, thread).
+    /// * `make_decorator` - A closure that returns a `RequestDecorator` for modifying HTTP requests.
     pub fn new(
         addr_server: &str,
         max_queue_size: isize,

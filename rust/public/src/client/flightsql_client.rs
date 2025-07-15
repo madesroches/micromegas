@@ -1,10 +1,9 @@
-use std::sync::Arc;
-
 use anyhow::{Context, Result};
 use arrow_flight::{decode::FlightRecordBatchStream, sql::client::FlightSqlServiceClient};
 use datafusion::arrow::{array::RecordBatch, datatypes::SchemaRef};
 use futures::stream::StreamExt;
 use micromegas_analytics::time::TimeRange;
+use std::sync::Arc;
 use tonic::transport::Channel;
 
 /// Represents a prepared statement with its schema and query string.
@@ -21,12 +20,18 @@ pub struct Client {
 
 impl Client {
     /// Creates a new client from a grpc channel
+    ///
+    /// # Arguments
+    ///
+    /// * `channel` - The gRPC channel to use for communication.
     pub fn new(channel: Channel) -> Self {
         let inner = FlightSqlServiceClient::new(channel);
         Self { inner }
     }
 
     /// Returns a mutable reference to the inner `FlightSqlServiceClient`.
+    ///
+    /// This allows direct access to the underlying FlightSQL client for advanced operations.
     pub fn inner_mut(&mut self) -> &mut FlightSqlServiceClient<Channel> {
         &mut self.inner
     }
@@ -43,6 +48,11 @@ impl Client {
     }
 
     /// Executes a SQL query and returns the results as a vector of `RecordBatch`.
+    ///
+    /// # Arguments
+    ///
+    /// * `sql` - The SQL query string to execute.
+    /// * `query_range` - An optional `TimeRange` to filter the query results by time.
     pub async fn query(
         &mut self,
         sql: String,
@@ -57,6 +67,13 @@ impl Client {
     }
 
     /// Executes a SQL query and returns the results as a `FlightRecordBatchStream`.
+    ///
+    /// This function is useful for processing large query results incrementally.
+    ///
+    /// # Arguments
+    ///
+    /// * `sql` - The SQL query string to execute.
+    /// * `query_range` - An optional `TimeRange` to filter the query results by time.
     pub async fn query_stream(
         &mut self,
         sql: String,
@@ -73,6 +90,12 @@ impl Client {
     }
 
     /// Prepares a SQL statement and returns a `PreparedStatement`.
+    ///
+    /// This function allows to compute the schema of a query without actually executing it.
+    ///
+    /// # Arguments
+    ///
+    /// * `sql` - The SQL query string to prepare.
     pub async fn prepare_statement(&mut self, sql: String) -> Result<PreparedStatement> {
         self.set_query_range(None);
         let prepared = self.inner.prepare(sql.clone(), None).await?;

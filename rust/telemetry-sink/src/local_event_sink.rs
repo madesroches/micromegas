@@ -27,6 +27,9 @@ pub struct LocalEventSink {
 }
 
 impl LocalEventSink {
+    /// Creates a new `LocalEventSink`.
+    ///
+    /// Initializes the sink with default settings for timestamps and colors.
     pub fn new() -> Self {
         Self {
             #[cfg(feature = "timestamps")]

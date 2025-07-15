@@ -14,6 +14,8 @@ pub struct ProcessQueryBuilder {
 
 impl ProcessQueryBuilder {
     /// Creates a new `ProcessQueryBuilder`.
+    ///
+    /// Initializes an empty query builder with no filters.
     pub fn new() -> Self {
         Self {
             filters: vec![],

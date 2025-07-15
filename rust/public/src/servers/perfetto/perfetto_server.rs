@@ -22,12 +22,24 @@ pub struct PerfettoTraceServer {
 
 impl PerfettoTraceServer {
     /// Creates a new `PerfettoTraceServer`.
+    ///
+    /// # Arguments
+    ///
+    /// * `client_factory` - A factory for creating FlightSQL clients.
     pub fn new(client_factory: Arc<dyn FlightSQLClientFactory>) -> Self {
         Self { client_factory }
     }
 }
 
 /// Shows a Perfetto trace in a web browser.
+///
+/// This function generates an HTML page that embeds the Perfetto UI
+/// and loads the trace data from the `/fetch_trace` endpoint.
+///
+/// # Arguments
+///
+/// * `caller` - The name of the caller, used for display in the HTML.
+/// * `params` - Parameters for fetching the trace, including process ID and time range.
 pub async fn show_trace(caller: &str, params: FetchTraceParams) -> Result<String> {
     let process_id = params.process_id;
     let begin = params.begin.to_rfc3339();
@@ -43,6 +55,15 @@ pub async fn show_trace(caller: &str, params: FetchTraceParams) -> Result<String
 }
 
 /// Fetches a Perfetto trace.
+///
+/// This function retrieves the trace data from the FlightSQL server
+/// and returns it as a `bytes::Bytes` object.
+///
+/// # Arguments
+///
+/// * `server` - The `PerfettoTraceServer` instance.
+/// * `_caller` - The name of the caller (unused in this function).
+/// * `params` - Parameters for fetching the trace, including process ID and time range.
 pub async fn fetch_trace(
     server: Arc<PerfettoTraceServer>,
     _caller: &str,

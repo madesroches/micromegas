@@ -6,6 +6,9 @@ use object_store::{path::Path, ObjectStore};
 use std::sync::Arc;
 
 /// A client for interacting with blob storage.
+///
+/// This struct wraps an `ObjectStore` and prefixes all paths with a root path,
+/// providing a convenient way to interact with a specific "folder" within the blob storage.
 #[derive(Debug)]
 pub struct BlobStorage {
     blob_store: Arc<dyn ObjectStore>,

@@ -27,6 +27,10 @@ fn flatten_metadata(udts: Vec<UserDefinedType>) -> Vec<UserDefinedType> {
     result
 }
 
+/// Creates a `StreamInfo` object from an `EventStream`.
+///
+/// This function extracts metadata about the stream, including its process and stream IDs,
+/// and the serialized metadata for its dependencies and objects.
 pub fn make_stream_info<Block>(stream: &EventStream<Block>) -> StreamInfo
 where
     Block: TracingBlock,
