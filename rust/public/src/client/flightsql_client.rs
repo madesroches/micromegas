@@ -1,10 +1,9 @@
-use std::sync::Arc;
-
 use anyhow::{Context, Result};
 use arrow_flight::{decode::FlightRecordBatchStream, sql::client::FlightSqlServiceClient};
 use datafusion::arrow::{array::RecordBatch, datatypes::SchemaRef};
 use futures::stream::StreamExt;
 use micromegas_analytics::time::TimeRange;
+use std::sync::Arc;
 use tonic::transport::Channel;
 
 /// Represents a prepared statement with its schema and query string.
@@ -25,7 +24,7 @@ impl Client {
     /// # Arguments
     ///
     /// * `channel` - The gRPC channel to use for communication.
-pub fn new(channel: Channel) -> Self {
+    pub fn new(channel: Channel) -> Self {
         let inner = FlightSqlServiceClient::new(channel);
         Self { inner }
     }
