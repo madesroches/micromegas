@@ -92,7 +92,7 @@ pub fn new(channel: Channel) -> Self {
 
     /// Prepares a SQL statement and returns a `PreparedStatement`.
     ///
-    /// This allows for executing the same query multiple times with different parameters efficiently.
+    /// This function allows to compute the schema of a query without actually executing it.
     ///
     /// # Arguments
     ///
