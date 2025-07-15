@@ -20,7 +20,7 @@ use datafusion::{
     execution::runtime_env::RuntimeEnv,
     prelude::*,
 };
-use futures::{stream::BoxStream, StreamExt};
+use futures::{StreamExt, stream::BoxStream};
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_telemetry::{stream_info::StreamInfo, types::block::BlockMetadata};
 use micromegas_tracing::prelude::*;

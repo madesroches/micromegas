@@ -11,12 +11,12 @@ use micromegas::{
 };
 use pgwire::{
     api::{
+        ClientInfo, ClientPortalStore,
         portal::Portal,
         query::ExtendedQueryHandler,
         results::{DescribePortalResponse, DescribeStatementResponse, Response},
         stmt::{NoopQueryParser, StoredStatement},
         store::PortalStore,
-        ClientInfo, ClientPortalStore,
     },
     error::{PgWireError, PgWireResult},
     messages::PgWireBackendMessage,

@@ -2,7 +2,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use micromegas_analytics::payload::parse_block;
 use micromegas_telemetry_sink::{
-    stream_block::StreamBlock, stream_info::make_stream_info, TelemetryGuard,
+    TelemetryGuard, stream_block::StreamBlock, stream_info::make_stream_info,
 };
 use micromegas_tracing::{
     dispatch::make_process_info,

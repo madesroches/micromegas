@@ -1,7 +1,7 @@
 use micromegas_tracing::{
     dispatch::log_interop,
     levels::LevelFilter,
-    logs::{LogMetadata, FILTER_LEVEL_UNSET_VALUE},
+    logs::{FILTER_LEVEL_UNSET_VALUE, LogMetadata},
 };
 use std::sync::atomic::AtomicU32;
 use tracing_subscriber::{layer::Context, prelude::*};

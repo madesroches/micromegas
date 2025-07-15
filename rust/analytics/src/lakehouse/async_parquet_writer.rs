@@ -4,8 +4,8 @@ use futures::future::BoxFuture;
 use object_store::buffered::BufWriter;
 use parquet::arrow::async_writer::AsyncFileWriter;
 use std::sync::{
-    atomic::{AtomicI64, Ordering},
     Arc,
+    atomic::{AtomicI64, Ordering},
 };
 use tokio::io::AsyncWriteExt;
 

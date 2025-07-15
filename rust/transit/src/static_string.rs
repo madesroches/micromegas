@@ -1,6 +1,6 @@
 use crate::{
-    read_consume_pod, string_codec::StringCodec, write_any, InProcSerialize, InProcSize, Reflect,
-    UserDefinedType,
+    InProcSerialize, InProcSize, Reflect, UserDefinedType, read_consume_pod,
+    string_codec::StringCodec, write_any,
 };
 use lazy_static::lazy_static;
 use std::sync::Arc;

@@ -1,6 +1,6 @@
 use crate::{
-    advance_window, read_consume_pod, string_codec::StringCodec, write_any, InProcSerialize,
-    InProcSize,
+    InProcSerialize, InProcSize, advance_window, read_consume_pod, string_codec::StringCodec,
+    write_any,
 };
 use anyhow::Result;
 

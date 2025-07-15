@@ -1,7 +1,7 @@
 use super::{
     partition_source_data::{PartitionBlocksSource, PartitionSourceBlock},
     view::{PartitionSpec, ViewMetadata},
-    write_partition::{write_partition_from_rows, PartitionRowSet},
+    write_partition::{PartitionRowSet, write_partition_from_rows},
 };
 use crate::{response_writer::Logger, time::TimeRange};
 use anyhow::{Context, Result};

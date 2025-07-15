@@ -4,7 +4,7 @@ use bytes::{Bytes, BytesMut};
 use datafusion::parquet::file::metadata::ParquetMetaDataReader;
 use datafusion::{
     arrow::{
-        array::{as_struct_array, ListBuilder, StructBuilder},
+        array::{ListBuilder, StructBuilder, as_struct_array},
         record_batch::RecordBatch,
     },
     parquet::file::metadata::ParquetMetaData,

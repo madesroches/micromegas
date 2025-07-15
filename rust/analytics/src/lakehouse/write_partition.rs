@@ -20,7 +20,7 @@ use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_tracing::prelude::*;
 use object_store::buffered::BufWriter;
 use sqlx::Row;
-use std::sync::{atomic::AtomicI64, Arc};
+use std::sync::{Arc, atomic::AtomicI64};
 use tokio::sync::mpsc::Receiver;
 
 use super::{partition::Partition, view::ViewMetadata};

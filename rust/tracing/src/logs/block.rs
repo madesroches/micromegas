@@ -6,7 +6,7 @@ use crate::{
     event::{EventBlock, EventStream, ExtractDeps},
     property_set::{PropertySet, PropertySetDependency},
 };
-use micromegas_transit::{prelude::*, StaticStringDependency, Utf8StaticStringDependency};
+use micromegas_transit::{StaticStringDependency, Utf8StaticStringDependency, prelude::*};
 use std::collections::HashSet;
 
 declare_queue_struct!(

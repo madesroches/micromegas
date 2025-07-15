@@ -18,8 +18,8 @@ use datafusion::{
     prelude::*,
     scalar::ScalarValue,
 };
-use futures::stream::BoxStream;
 use futures::StreamExt;
+use futures::stream::BoxStream;
 use micromegas_analytics::{
     dfext::typed_column::{
         get_only_primitive_value, get_only_string_value, get_single_row_primitive_value_by_name,

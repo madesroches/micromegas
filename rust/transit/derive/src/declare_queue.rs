@@ -1,6 +1,6 @@
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
-use syn::{parse, DeriveInput, GenericParam};
+use syn::{DeriveInput, GenericParam, parse};
 
 fn gen_read_method(
     type_args: &[syn::Ident],

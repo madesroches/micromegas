@@ -3,7 +3,7 @@ use datafusion::arrow::array::{Array, StringBuilder};
 use datafusion::arrow::array::{ArrayRef, GenericListArray, StringArray};
 use datafusion::arrow::array::{AsArray, StructArray};
 use datafusion::arrow::datatypes::{Field, Fields};
-use datafusion::common::{internal_err, Result};
+use datafusion::common::{Result, internal_err};
 use datafusion::error::DataFusionError;
 use datafusion::logical_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Volatility};
 use datafusion::{arrow::datatypes::DataType, logical_expr::Signature};

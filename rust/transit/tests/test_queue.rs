@@ -1,4 +1,4 @@
-use micromegas_transit::{prelude::*, InProcSerialize};
+use micromegas_transit::{InProcSerialize, prelude::*};
 
 #[derive(Debug, TransitReflect)]
 pub struct MyTestEvent {

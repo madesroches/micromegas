@@ -3,11 +3,11 @@ use async_trait::async_trait;
 use futures::Sink;
 use micromegas::datafusion_postgres::pgwire;
 use micromegas::{client::flightsql_client_factory::BearerFlightSQLClientFactory, tracing::info};
-use pgwire::api::auth::{finish_authentication, DefaultServerParameterProvider};
+use pgwire::api::auth::{DefaultServerParameterProvider, finish_authentication};
 use pgwire::{
     api::{
-        auth::{save_startup_parameters_to_metadata, StartupHandler},
         ClientInfo,
+        auth::{StartupHandler, save_startup_parameters_to_metadata},
     },
     error::{PgWireError, PgWireResult},
     messages::{PgWireBackendMessage, PgWireFrontendMessage},

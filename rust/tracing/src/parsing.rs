@@ -1,9 +1,9 @@
 //! Manual parsing of dynamically sized events
 use anyhow::{Context, Result};
 use micromegas_transit::{
-    advance_window, parse_pod_instance, read_advance_string, read_consume_pod,
+    CustomReaderMap, InProcSerialize, LegacyDynString, UserDefinedType, advance_window,
+    parse_pod_instance, read_advance_string, read_consume_pod,
     value::{Object, Value},
-    CustomReaderMap, InProcSerialize, LegacyDynString, UserDefinedType,
 };
 use std::{collections::HashMap, sync::Arc};
 
@@ -74,9 +74,9 @@ fn parse_log_string_interop_event_v3(
     let string_ref_metadata = udts
         .iter()
         .find(|t| *t.name == "StaticStringRef")
-        .with_context(|| {
-            "Can't parse log string interop event with no metadata for StaticStringRef"
-        })?;
+        .with_context(
+            || "Can't parse log string interop event with no metadata for StaticStringRef",
+        )?;
     let time: i64 = read_consume_pod(&mut object_window);
     let level: u8 = read_consume_pod(&mut object_window);
     let target = parse_pod_instance(
@@ -109,9 +109,9 @@ fn parse_tagged_log_interop_event(
     let string_ref_metadata = udts
         .iter()
         .find(|t| *t.name == "StaticStringRef")
-        .with_context(|| {
-            "Can't parse log string interop event with no metadata for StaticStringRef"
-        })?;
+        .with_context(
+            || "Can't parse log string interop event with no metadata for StaticStringRef",
+        )?;
     let time: i64 = read_consume_pod(&mut object_window);
     let level: u8 = read_consume_pod(&mut object_window);
     let target = parse_pod_instance(

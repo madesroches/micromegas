@@ -2,7 +2,7 @@ use super::{partition::Partition, reader_factory::ReaderFactory};
 use crate::dfext::predicate::filters_to_predicate;
 use datafusion::{
     arrow::datatypes::SchemaRef,
-    catalog::{memory::DataSourceExec, Session},
+    catalog::{Session, memory::DataSourceExec},
     datasource::{
         listing::PartitionedFile,
         physical_plan::{FileScanConfigBuilder, ParquetSource},

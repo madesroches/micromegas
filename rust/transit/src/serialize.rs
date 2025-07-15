@@ -16,7 +16,7 @@ pub fn write_any<T>(buffer: &mut Vec<u8>, value: &T) {
 /// of T or higher.
 #[inline(always)]
 pub unsafe fn read_any<T>(ptr: *const u8) -> T {
-    std::ptr::read_unaligned(ptr.cast::<T>())
+    unsafe { std::ptr::read_unaligned(ptr.cast::<T>()) }
 }
 
 pub fn advance_window(window: &[u8], offset: usize) -> &[u8] {

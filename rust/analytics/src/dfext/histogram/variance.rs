@@ -1,4 +1,4 @@
-use super::histogram_udaf::{make_histogram_arrow_type, HistogramArray};
+use super::histogram_udaf::{HistogramArray, make_histogram_arrow_type};
 use datafusion::{
     arrow::{array::Float64Builder, datatypes::DataType},
     error::DataFusionError,

@@ -2,11 +2,11 @@ use crate::{
     prelude::*, property_set::PropertySet, static_string_ref::StaticStringRef, string_id::StringId,
 };
 use micromegas_transit::{
-    prelude::*, read_advance_string, read_consume_pod, DynString, UserDefinedType,
+    DynString, UserDefinedType, prelude::*, read_advance_string, read_consume_pod,
 };
 use std::sync::{
-    atomic::{AtomicU32, Ordering},
     Arc,
+    atomic::{AtomicU32, Ordering},
 };
 
 #[derive(Debug)]
@@ -129,7 +129,7 @@ impl InProcSerialize for LogStringEvent {
     unsafe fn read_value(mut window: &[u8]) -> Self {
         // it does no good to parse this object when looking for dependencies, we should skip this code
         let desc_id: usize = read_consume_pod(&mut window);
-        let desc = &*(desc_id as *const LogMetadata);
+        let desc = unsafe { &*(desc_id as *const LogMetadata) };
         let time: i64 = read_consume_pod(&mut window);
         let msg = DynString(read_advance_string(&mut window).unwrap());
         assert_eq!(window.len(), 0);
@@ -283,8 +283,8 @@ impl InProcSerialize for TaggedLogString {
         let time: i64 = read_consume_pod(&mut window);
         let msg = DynString(read_advance_string(&mut window).unwrap());
         Self {
-            desc: std::mem::transmute::<u64, &LogMetadata<'static>>(desc_id),
-            properties: std::mem::transmute::<u64, &PropertySet>(properties_id),
+            desc: unsafe { std::mem::transmute::<u64, &LogMetadata<'static>>(desc_id) },
+            properties: unsafe { std::mem::transmute::<u64, &PropertySet>(properties_id) },
             time,
             msg,
         }
@@ -295,8 +295,8 @@ impl InProcSerialize for TaggedLogString {
 #[cfg(test)]
 mod test {
     use crate::logs::{
+        FILTER_LEVEL_UNSET_VALUE, FilterState, LogMetadata,
         events::{Level, LevelFilter},
-        FilterState, LogMetadata, FILTER_LEVEL_UNSET_VALUE,
     };
     use std::thread;
 

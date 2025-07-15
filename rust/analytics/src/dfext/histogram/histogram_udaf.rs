@@ -5,7 +5,7 @@ use datafusion::{
     },
     error::DataFusionError,
     logical_expr::{
-        function::AccumulatorArgs, Accumulator, AggregateUDF, ColumnarValue, Volatility,
+        Accumulator, AggregateUDF, ColumnarValue, Volatility, function::AccumulatorArgs,
     },
     physical_plan::expressions::Literal,
     prelude::*,
@@ -13,7 +13,7 @@ use datafusion::{
 };
 use std::sync::Arc;
 
-use super::accumulator::{state_arrow_fields, HistogramAccumulator};
+use super::accumulator::{HistogramAccumulator, state_arrow_fields};
 
 #[derive(Debug)]
 pub struct HistogramArray {

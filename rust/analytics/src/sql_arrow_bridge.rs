@@ -15,10 +15,10 @@ use datafusion::arrow::datatypes::TimestampNanosecondType;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::cast::as_struct_array;
 use micromegas_telemetry::property::Property;
-use sqlx::postgres::{PgColumn, PgRow};
 use sqlx::Column;
 use sqlx::Row;
 use sqlx::TypeInfo;
+use sqlx::postgres::{PgColumn, PgRow};
 use std::sync::Arc;
 
 use crate::arrow_utils::make_empty_record_batch;

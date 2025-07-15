@@ -9,25 +9,25 @@ use anyhow::Result;
 use arrow_flight::decode::FlightRecordBatchStream;
 use arrow_flight::encode::FlightDataEncoderBuilder;
 use arrow_flight::error::FlightError;
+use arrow_flight::sql::DoPutPreparedStatementResult;
 use arrow_flight::sql::metadata::{SqlInfoData, SqlInfoDataBuilder};
 use arrow_flight::sql::server::PeekableFlightDataStream;
-use arrow_flight::sql::DoPutPreparedStatementResult;
 use arrow_flight::sql::{
-    server::FlightSqlService, ActionBeginSavepointRequest, ActionBeginSavepointResult,
-    ActionBeginTransactionRequest, ActionBeginTransactionResult, ActionCancelQueryRequest,
-    ActionCancelQueryResult, ActionClosePreparedStatementRequest,
-    ActionCreatePreparedStatementRequest, ActionCreatePreparedStatementResult,
-    ActionCreatePreparedSubstraitPlanRequest, ActionEndSavepointRequest,
-    ActionEndTransactionRequest, Any, CommandGetCatalogs, CommandGetCrossReference,
-    CommandGetDbSchemas, CommandGetExportedKeys, CommandGetImportedKeys, CommandGetPrimaryKeys,
-    CommandGetSqlInfo, CommandGetTableTypes, CommandGetTables, CommandGetXdbcTypeInfo,
-    CommandPreparedStatementQuery, CommandPreparedStatementUpdate, CommandStatementIngest,
-    CommandStatementQuery, CommandStatementSubstraitPlan, CommandStatementUpdate, ProstMessageExt,
-    SqlInfo, TicketStatementQuery,
+    ActionBeginSavepointRequest, ActionBeginSavepointResult, ActionBeginTransactionRequest,
+    ActionBeginTransactionResult, ActionCancelQueryRequest, ActionCancelQueryResult,
+    ActionClosePreparedStatementRequest, ActionCreatePreparedStatementRequest,
+    ActionCreatePreparedStatementResult, ActionCreatePreparedSubstraitPlanRequest,
+    ActionEndSavepointRequest, ActionEndTransactionRequest, Any, CommandGetCatalogs,
+    CommandGetCrossReference, CommandGetDbSchemas, CommandGetExportedKeys, CommandGetImportedKeys,
+    CommandGetPrimaryKeys, CommandGetSqlInfo, CommandGetTableTypes, CommandGetTables,
+    CommandGetXdbcTypeInfo, CommandPreparedStatementQuery, CommandPreparedStatementUpdate,
+    CommandStatementIngest, CommandStatementQuery, CommandStatementSubstraitPlan,
+    CommandStatementUpdate, ProstMessageExt, SqlInfo, TicketStatementQuery,
+    server::FlightSqlService,
 };
 use arrow_flight::{
-    flight_service_server::FlightService, Action, FlightDescriptor, FlightEndpoint, FlightInfo,
-    HandshakeRequest, HandshakeResponse, Ticket,
+    Action, FlightDescriptor, FlightEndpoint, FlightInfo, HandshakeRequest, HandshakeResponse,
+    Ticket, flight_service_server::FlightService,
 };
 use core::str;
 use datafusion::arrow::datatypes::Schema;

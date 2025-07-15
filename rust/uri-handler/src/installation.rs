@@ -1,11 +1,11 @@
 use anyhow::{Context, Result};
 use std::{ffi::OsString, os::windows::ffi::OsStrExt};
 use windows::{
-    core::{w, PCWSTR},
     Win32::System::Registry::{
-        RegCreateKeyExW, RegSetValueExW, HKEY, HKEY_CURRENT_USER, KEY_WRITE,
-        REG_OPTION_NON_VOLATILE, REG_SZ,
+        HKEY, HKEY_CURRENT_USER, KEY_WRITE, REG_OPTION_NON_VOLATILE, REG_SZ, RegCreateKeyExW,
+        RegSetValueExW,
     },
+    core::{PCWSTR, w},
 };
 
 #[derive(Debug)]

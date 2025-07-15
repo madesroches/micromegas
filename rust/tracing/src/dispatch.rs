@@ -399,10 +399,12 @@ impl Dispatch {
             }
         }
 
-        std::env::set_var(
-            "MICROMEGAS_TELEMETRY_PARENT_PROCESS",
-            self.process_id.to_string(),
-        );
+        unsafe {
+            std::env::set_var(
+                "MICROMEGAS_TELEMETRY_PARENT_PROCESS",
+                self.process_id.to_string(),
+            );
+        }
 
         let process_info = Arc::new(make_process_info(
             self.process_id,

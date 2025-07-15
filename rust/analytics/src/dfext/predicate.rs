@@ -3,7 +3,7 @@ use datafusion::{
     catalog::Session,
     common::DFSchema,
     logical_expr::utils::conjunction,
-    physical_plan::{expressions, PhysicalExpr},
+    physical_plan::{PhysicalExpr, expressions},
     prelude::*,
 };
 use std::sync::Arc;

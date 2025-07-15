@@ -9,8 +9,9 @@
 use proc_macro2::Literal;
 use quote::quote;
 use syn::{
+    ItemFn,
     parse::{Parse, ParseStream, Result},
-    parse_macro_input, parse_quote, ItemFn,
+    parse_macro_input, parse_quote,
 };
 
 struct TraceArgs {

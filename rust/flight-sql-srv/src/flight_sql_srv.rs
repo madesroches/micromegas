@@ -7,7 +7,7 @@ use micromegas::analytics::lakehouse::view_factory::default_view_factory;
 use micromegas::arrow_flight::flight_service_server::FlightServiceServer;
 use micromegas::ingestion::data_lake_connection::connect_to_data_lake;
 use micromegas::servers::flight_sql_service_impl::FlightSqlServiceImpl;
-use micromegas::servers::key_ring::{parse_key_ring, KeyRing};
+use micromegas::servers::key_ring::{KeyRing, parse_key_ring};
 use micromegas::servers::log_uri_service::LogUriService;
 use micromegas::servers::tonic_auth_interceptor::check_auth;
 use micromegas::telemetry_sink::TelemetryGuardBuilder;
@@ -15,8 +15,8 @@ use micromegas::tonic::service::interceptor;
 use micromegas::tonic::transport::Server;
 use micromegas::tracing::prelude::*;
 use std::sync::Arc;
-use tower::layer::layer_fn;
 use tower::ServiceBuilder;
+use tower::layer::layer_fn;
 
 #[derive(Parser, Debug)]
 #[clap(name = "Micromegas FlightSQL server")]

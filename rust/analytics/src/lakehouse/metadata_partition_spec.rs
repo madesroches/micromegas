@@ -1,6 +1,6 @@
 use super::view::{PartitionSpec, ViewMetadata};
 use crate::{
-    lakehouse::write_partition::{write_partition_from_rows, PartitionRowSet},
+    lakehouse::write_partition::{PartitionRowSet, write_partition_from_rows},
     response_writer::Logger,
     sql_arrow_bridge::rows_to_record_batch,
     time::TimeRange,

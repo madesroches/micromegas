@@ -3,7 +3,7 @@ use micromegas_tracing::{
     logs::{LogBlock, LogMetadata, LogStream},
     metrics::{MetricsBlock, MetricsStream},
     prelude::*,
-    property_set::{property_get, Property},
+    property_set::{Property, property_get},
     spans::{ThreadBlock, ThreadStream},
 };
 use std::{fmt, sync::Arc};

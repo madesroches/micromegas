@@ -1,8 +1,8 @@
 use anyhow::Result;
-use futures::stream;
 use futures::StreamExt;
+use futures::stream;
 use object_store::prefix::PrefixStore;
-use object_store::{path::Path, ObjectStore};
+use object_store::{ObjectStore, path::Path};
 use std::sync::Arc;
 
 /// A client for interacting with blob storage.

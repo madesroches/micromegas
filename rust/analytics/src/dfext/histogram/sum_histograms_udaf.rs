@@ -1,7 +1,7 @@
 use super::{accumulator::HistogramAccumulator, histogram_udaf::make_histogram_arrow_type};
 use datafusion::{
     error::DataFusionError,
-    logical_expr::{function::AccumulatorArgs, Accumulator, AggregateUDF, Volatility},
+    logical_expr::{Accumulator, AggregateUDF, Volatility, function::AccumulatorArgs},
     prelude::*,
 };
 use std::sync::Arc;
