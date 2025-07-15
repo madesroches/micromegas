@@ -8,10 +8,10 @@ use datafusion::{
 use jsonb::RawJsonb;
 use std::sync::Arc;
 
-fn jsonb_to_string(values: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionError> {
+fn jsonb_format_json(values: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionError> {
     if values.len() != 1 {
         return Err(DataFusionError::Execution(
-            "wrong number of arguments to jsonb_parse".into(),
+            "wrong number of arguments to jsonb_format_json".into(),
         ));
     }
     let src_arrays = ColumnarValue::values_to_arrays(values)?;
@@ -28,12 +28,12 @@ fn jsonb_to_string(values: &[ColumnarValue]) -> Result<ColumnarValue, DataFusion
     Ok(ColumnarValue::Array(Arc::new(builder.finish())))
 }
 
-pub fn make_jsonb_to_string_udf() -> ScalarUDF {
+pub fn make_jsonb_format_json_udf() -> ScalarUDF {
     create_udf(
-        "jsonb_to_string",
+        "jsonb_format_json",
         vec![DataType::Binary],
         DataType::Utf8,
         Volatility::Immutable,
-        Arc::new(&jsonb_to_string),
+        Arc::new(&jsonb_format_json),
     )
 }

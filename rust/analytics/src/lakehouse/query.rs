@@ -16,7 +16,10 @@ use crate::{
             sum_histograms_udaf::sum_histograms_udaf,
             variance::make_variance_from_histogram_udf,
         },
-        jsonb::{parse::make_jsonb_parse_udf, to_string::make_jsonb_to_string_udf},
+        jsonb::{
+            cast::make_jsonb_as_string_udf, format_json::make_jsonb_format_json_udf,
+            get::make_jsonb_get_udf, parse::make_jsonb_parse_udf,
+        },
     },
     lakehouse::{
         materialized_view::MaterializedView, table_scan_rewrite::TableScanRewrite,
@@ -133,7 +136,9 @@ pub fn register_extension_functions(ctx: &SessionContext) {
     ctx.register_udf(make_sum_from_histogram_udf());
 
     ctx.register_udf(make_jsonb_parse_udf());
-    ctx.register_udf(make_jsonb_to_string_udf());
+    ctx.register_udf(make_jsonb_format_json_udf());
+    ctx.register_udf(make_jsonb_get_udf());
+    ctx.register_udf(make_jsonb_as_string_udf());
 }
 
 pub fn register_functions(
