@@ -20,6 +20,10 @@ use super::cron_task::{CronTask, TaskCallback};
 
 type Views = Arc<Vec<Arc<dyn View>>>;
 
+/// Materializes all views within a given time range.
+///
+/// This function iterates through the provided views, materializing partitions
+/// for each view within the specified `insert_range` and `partition_time_delta`.
 pub async fn materialize_all_views(
     runtime: Arc<RuntimeEnv>,
     lake: Arc<DataLakeConnection>,
@@ -27,10 +31,6 @@ pub async fn materialize_all_views(
     insert_range: TimeRange,
     partition_time_delta: TimeDelta,
 ) -> Result<()> {
-    /// Materializes all views within a given time range.
-    ///
-    /// This function iterates through the provided views, materializing partitions
-    /// for each view within the specified `insert_range` and `partition_time_delta`.
     let mut last_group = views.first().unwrap().get_update_group();
     let mut partitions_all_views = Arc::new(
         PartitionCache::fetch_overlapping_insert_range(&lake.db_pool, insert_range).await?,
@@ -170,11 +170,11 @@ impl TaskCallback for EverySecondTask {
     }
 }
 
+/// Runs a collection of `CronTask`s indefinitely.
+///
+/// This function continuously checks for tasks that are due to run, spawns them,
+/// and manages their execution, ensuring that `max_parallelism` is not exceeded.
 pub async fn run_tasks_forever(mut tasks: Vec<CronTask>, max_parallelism: usize) {
-    /// Runs a collection of `CronTask`s indefinitely.
-    ///
-    /// This function continuously checks for tasks that are due to run, spawns them,
-    /// and manages their execution, ensuring that `max_parallelism` is not exceeded.
     let mut task_set = JoinSet::new();
     loop {
         let mut next_task_run = Utc::now() + TimeDelta::days(2);
@@ -212,11 +212,11 @@ pub async fn run_tasks_forever(mut tasks: Vec<CronTask>, max_parallelism: usize)
     }
 }
 
+/// Retrieves a list of global views that have an associated update group.
+///
+/// This function filters the global views provided by the `view_factory`,
+/// returning only those that are part of an update group.
 pub fn get_global_views_with_update_group(view_factory: &ViewFactory) -> Vec<Arc<dyn View>> {
-    /// Retrieves a list of global views that have an associated update group.
-    ///
-    /// This function filters the global views provided by the `view_factory`,
-    /// returning only those that are part of an update group.
     view_factory
         .get_global_views()
         .iter()

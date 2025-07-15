@@ -36,16 +36,16 @@ pub fn make_body_from_channel_receiver(mut rx: Receiver<bytes::Bytes>) -> axum::
     axum::body::Body::from_stream(read_stream)
 }
 
+/// Streams a response by executing a callback that writes to a `ResponseWriter`.
+///
+/// This function creates a channel and a `ResponseWriter` that writes to this channel.
+/// The `callback` is then executed in a separate Tokio task, allowing it to stream data
+/// back to the client as it becomes available.
 pub fn stream_request<F, Fut>(callback: F) -> Response
 where
     F: FnOnce(Arc<ResponseWriter>) -> Fut + 'static + Send,
     Fut: std::future::Future<Output = Result<()>> + Send,
 {
-    /// Streams a response by executing a callback that writes to a `ResponseWriter`.
-    ///
-    /// This function creates a channel and a `ResponseWriter` that writes to this channel.
-    /// The `callback` is then executed in a separate Tokio task, allowing it to stream data
-    /// back to the client as it becomes available.
     let (tx, rx) = tokio::sync::mpsc::channel(10);
     let writer = Arc::new(ResponseWriter::new(Some(tx)));
     let response_body = make_body_from_channel_receiver(rx);
