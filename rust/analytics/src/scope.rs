@@ -33,6 +33,5 @@ pub fn compute_scope_hash(name: &str, filename: &str, target: &str, line: u32) -
     let hash_name = xxh32(name.as_bytes(), 0);
     let hash_with_filename = xxh32(filename.as_bytes(), hash_name);
     let hash_with_target = xxh32(target.as_bytes(), hash_with_filename);
-    let hash_with_line = xxh32(line.as_bytes(), hash_with_target);
-    hash_with_line
+    xxh32(line.as_bytes(), hash_with_target)
 }
