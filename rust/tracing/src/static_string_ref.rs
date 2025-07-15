@@ -2,7 +2,7 @@
 //! Necessary for unreal instrumentation where ansi and wide strings can coexist.
 //! In cases where the event format does not have to be compatible with unreal, StringId can be used.
 use micromegas_transit::{
-    prelude::*, string_codec::StringCodec, Member, StaticStringDependency, UserDefinedType,
+    Member, StaticStringDependency, UserDefinedType, prelude::*, string_codec::StringCodec,
 };
 use std::{
     hash::{Hash, Hasher},

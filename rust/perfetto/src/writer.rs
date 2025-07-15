@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 
 use crate::protos::{
-    trace_packet::{Data, OptionalTrustedPacketSequenceId},
-    track_event::{self, NameField, SourceLocationField},
     EventCategory, EventName, InternedData, ProcessDescriptor, SourceLocation, ThreadDescriptor,
     Trace, TracePacket, TrackDescriptor, TrackEvent,
+    trace_packet::{Data, OptionalTrustedPacketSequenceId},
+    track_event::{self, NameField, SourceLocationField},
 };
 use xxhash_rust::xxh64::xxh64;
 

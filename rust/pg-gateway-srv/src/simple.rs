@@ -1,7 +1,7 @@
 use async_stream::try_stream;
 use async_trait::async_trait;
-use futures::stream::StreamExt;
 use futures::Sink;
+use futures::stream::StreamExt;
 use micromegas::datafusion_postgres::arrow_pg::datatypes::{
     arrow_schema_to_pg_fields, encode_recordbatch,
 };
@@ -10,7 +10,7 @@ use micromegas::datafusion_postgres::pgwire::api::portal::Format;
 use micromegas::tracing::info;
 use pgwire::api::results::QueryResponse;
 use pgwire::{
-    api::{query::SimpleQueryHandler, results::Response, ClientInfo, ClientPortalStore},
+    api::{ClientInfo, ClientPortalStore, query::SimpleQueryHandler, results::Response},
     error::{PgWireError, PgWireResult},
     messages::PgWireBackendMessage,
 };

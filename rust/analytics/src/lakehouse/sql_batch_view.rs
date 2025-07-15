@@ -9,13 +9,13 @@ use super::{
     view::{PartitionSpec, View, ViewMetadata},
     view_factory::ViewFactory,
 };
-use crate::time::{datetime_to_scalar, TimeRange};
+use crate::time::{TimeRange, datetime_to_scalar};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, TimeDelta, Utc};
 use datafusion::{
     arrow::datatypes::Schema,
-    execution::{runtime_env::RuntimeEnv, SendableRecordBatchStream},
+    execution::{SendableRecordBatchStream, runtime_env::RuntimeEnv},
     prelude::*,
     sql::TableReference,
 };

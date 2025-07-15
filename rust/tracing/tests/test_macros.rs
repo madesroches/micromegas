@@ -7,7 +7,7 @@ use micromegas_tracing::dispatch::{
     flush_log_buffer, flush_metrics_buffer, flush_thread_buffer, init_event_dispatch,
     init_thread_stream, process_id,
 };
-use micromegas_tracing::levels::{set_max_level, Level, LevelFilter};
+use micromegas_tracing::levels::{Level, LevelFilter, set_max_level};
 use micromegas_tracing::log;
 use micromegas_tracing::property_set::{Property, PropertySet};
 use micromegas_tracing::time::frequency;

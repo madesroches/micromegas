@@ -3,7 +3,7 @@ use datafusion::arrow::array::StringArray;
 use datafusion::arrow::{
     array::{RecordBatch, StructArray},
     datatypes::Field,
-    json::{writer::make_encoder, EncoderOptions},
+    json::{EncoderOptions, writer::make_encoder},
 };
 use micromegas_analytics::dfext::typed_column::typed_column_by_name;
 use micromegas_tracing::info;

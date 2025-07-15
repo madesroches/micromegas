@@ -1,9 +1,8 @@
 use crate::{
-    advance_window, read_advance_string, read_any, read_consume_pod,
+    UserDefinedType, advance_window, read_advance_string, read_any, read_consume_pod,
     value::{Object, Value},
-    UserDefinedType,
 };
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use std::{collections::HashMap, sync::Arc};
 
 pub type CustomReader =

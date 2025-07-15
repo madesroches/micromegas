@@ -10,13 +10,13 @@ use micromegas_analytics::{
         runtime::make_runtime_env,
         sql_batch_view::SqlBatchView,
         view::View,
-        view_factory::{default_view_factory, ViewFactory},
+        view_factory::{ViewFactory, default_view_factory},
         write_partition::retire_partitions,
     },
     response_writer::{Logger, ResponseWriter},
     time::TimeRange,
 };
-use micromegas_ingestion::data_lake_connection::{connect_to_data_lake, DataLakeConnection};
+use micromegas_ingestion::data_lake_connection::{DataLakeConnection, connect_to_data_lake};
 use micromegas_telemetry_sink::TelemetryGuardBuilder;
 use micromegas_tracing::levels::LevelFilter;
 use std::sync::Arc;

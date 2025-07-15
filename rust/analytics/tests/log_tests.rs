@@ -1,9 +1,9 @@
 use micromegas_analytics::log_entry::log_entry_from_value;
 use micromegas_analytics::payload::parse_block;
 use micromegas_analytics::time::ConvertTicks;
+use micromegas_telemetry_sink::TelemetryGuardBuilder;
 use micromegas_telemetry_sink::stream_block::StreamBlock;
 use micromegas_telemetry_sink::stream_info::make_stream_info;
-use micromegas_telemetry_sink::TelemetryGuardBuilder;
 use micromegas_tracing::dispatch::make_process_info;
 use micromegas_tracing::event::TracingBlock;
 use micromegas_tracing::levels::Level;
@@ -16,8 +16,8 @@ use micromegas_tracing::logs::LogStringInteropEvent;
 use micromegas_tracing::logs::TaggedLogString;
 use micromegas_tracing::property_set::Property;
 use micromegas_tracing::property_set::PropertySet;
-use micromegas_transit::value::{Object, Value};
 use micromegas_transit::DynString;
+use micromegas_transit::value::{Object, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
 

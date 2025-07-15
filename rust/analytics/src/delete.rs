@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Days, Utc};
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_tracing::prelude::*;
-use sqlx::{query, Row};
+use sqlx::{Row, query};
 use uuid::Uuid;
 
 use crate::lakehouse::write_partition::retire_expired_partitions;

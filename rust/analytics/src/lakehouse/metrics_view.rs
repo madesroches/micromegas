@@ -1,15 +1,15 @@
 use crate::{
     metadata::{find_process, list_process_streams_tagged},
     metrics_table::metrics_table_schema,
-    time::{datetime_to_scalar, make_time_converter_from_db, TimeRange},
+    time::{TimeRange, datetime_to_scalar, make_time_converter_from_db},
 };
 
 use super::{
     batch_update::PartitionCreationStrategy,
     block_partition_spec::BlockPartitionSpec,
     jit_partitions::{
-        generate_jit_partitions, is_jit_partition_up_to_date, write_partition_from_blocks,
-        JitPartitionConfig,
+        JitPartitionConfig, generate_jit_partitions, is_jit_partition_up_to_date,
+        write_partition_from_blocks,
     },
     metrics_block_processor::MetricsBlockProcessor,
     partition_cache::PartitionCache,
@@ -23,7 +23,7 @@ use chrono::{DateTime, TimeDelta, Utc};
 use datafusion::{
     arrow::datatypes::Schema,
     execution::runtime_env::RuntimeEnv,
-    logical_expr::{col, Between, Expr},
+    logical_expr::{Between, Expr, col},
 };
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use std::sync::Arc;

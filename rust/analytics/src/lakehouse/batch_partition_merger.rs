@@ -14,12 +14,12 @@ use chrono::{DateTime, TimeDelta, Utc};
 use datafusion::{
     arrow::datatypes::Schema,
     error::DataFusionError,
-    execution::{runtime_env::RuntimeEnv, SendableRecordBatchStream},
+    execution::{SendableRecordBatchStream, runtime_env::RuntimeEnv},
     physical_plan::stream::RecordBatchReceiverStreamBuilder,
     sql::TableReference,
 };
 use futures::TryStreamExt;
-use futures::{stream, StreamExt};
+use futures::{StreamExt, stream};
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_tracing::{debug, error, info};
 use std::sync::Arc;

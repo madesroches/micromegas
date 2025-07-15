@@ -1,4 +1,4 @@
-use micromegas_transit::{prelude::*, Reflect};
+use micromegas_transit::{Reflect, prelude::*};
 
 #[derive(TransitReflect)]
 #[allow(dead_code)]

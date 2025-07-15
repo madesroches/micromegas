@@ -1,7 +1,7 @@
 use crate::data_lake_connection::DataLakeConnection;
+use crate::sql_migration::LATEST_DATA_LAKE_SCHEMA_VERSION;
 use crate::sql_migration::execute_migration;
 use crate::sql_migration::read_data_lake_schema_version;
-use crate::sql_migration::LATEST_DATA_LAKE_SCHEMA_VERSION;
 use anyhow::{Context, Result};
 use micromegas_telemetry::blob_storage::BlobStorage;
 use micromegas_tracing::prelude::*;

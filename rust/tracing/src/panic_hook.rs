@@ -1,6 +1,6 @@
 //! Reports panics as fatal log entries and shuts down the telemetry system
 use std::io::Write;
-use std::panic::{take_hook, PanicHookInfo};
+use std::panic::{PanicHookInfo, take_hook};
 use std::sync::Mutex;
 
 use crate::fatal;

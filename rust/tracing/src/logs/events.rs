@@ -2,11 +2,11 @@ use crate::{
     prelude::*, property_set::PropertySet, static_string_ref::StaticStringRef, string_id::StringId,
 };
 use micromegas_transit::{
-    prelude::*, read_advance_string, read_consume_pod, DynString, UserDefinedType,
+    DynString, UserDefinedType, prelude::*, read_advance_string, read_consume_pod,
 };
 use std::sync::{
-    atomic::{AtomicU32, Ordering},
     Arc,
+    atomic::{AtomicU32, Ordering},
 };
 
 #[derive(Debug)]
@@ -295,8 +295,8 @@ impl InProcSerialize for TaggedLogString {
 #[cfg(test)]
 mod test {
     use crate::logs::{
+        FILTER_LEVEL_UNSET_VALUE, FilterState, LogMetadata,
         events::{Level, LevelFilter},
-        FilterState, LogMetadata, FILTER_LEVEL_UNSET_VALUE,
     };
     use std::thread;
 

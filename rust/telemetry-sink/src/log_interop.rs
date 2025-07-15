@@ -2,7 +2,7 @@ use micromegas_tracing::{
     dispatch::{flush_log_buffer, log_enabled, log_interop},
     error,
     levels::{Level, LevelFilter},
-    logs::{LogMetadata, FILTER_LEVEL_UNSET_VALUE},
+    logs::{FILTER_LEVEL_UNSET_VALUE, LogMetadata},
 };
 use std::sync::atomic::AtomicU32;
 

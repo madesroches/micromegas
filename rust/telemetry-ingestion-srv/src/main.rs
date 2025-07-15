@@ -8,10 +8,10 @@
 //!  - `MICROMEGAS_OBJECT_STORE_URI` : to write the payloads
 
 use anyhow::{Context, Result};
-use axum::extract::DefaultBodyLimit;
-use axum::middleware;
 use axum::Extension;
 use axum::Router;
+use axum::extract::DefaultBodyLimit;
+use axum::middleware;
 use clap::Parser;
 use micromegas::ingestion::data_lake_connection::DataLakeConnection;
 use micromegas::ingestion::remote_data_lake::connect_to_remote_data_lake;

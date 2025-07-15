@@ -1,7 +1,7 @@
 use crate::scope::ScopeDesc;
 use crate::scope::ScopeHashMap;
-use crate::thread_block_processor::parse_thread_block;
 use crate::thread_block_processor::ThreadBlockProcessor;
+use crate::thread_block_processor::parse_thread_block;
 use crate::time::ConvertTicks;
 use anyhow::Result;
 use micromegas_telemetry::blob_storage::BlobStorage;

@@ -1,4 +1,4 @@
-use micromegas_transit::{prelude::*, Utf8StaticStringDependency};
+use micromegas_transit::{Utf8StaticStringDependency, prelude::*};
 
 #[derive(Debug, TransitReflect)]
 pub struct LogMsgEvent {

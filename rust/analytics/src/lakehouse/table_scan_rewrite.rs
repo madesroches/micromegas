@@ -1,7 +1,7 @@
 use crate::{lakehouse::materialized_view::MaterializedView, time::TimeRange};
 use datafusion::error::DataFusionError;
-use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::Filter;
+use datafusion::logical_expr::utils::conjunction;
 use datafusion::{
     common::tree_node::Transformed, config::ConfigOptions, datasource::DefaultTableSource,
     logical_expr::LogicalPlan, optimizer::AnalyzerRule,

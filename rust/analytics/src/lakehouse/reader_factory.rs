@@ -12,8 +12,8 @@ use datafusion::{
     },
     physical_plan::metrics::ExecutionPlanMetricsSet,
 };
-use futures::future::BoxFuture;
 use futures::FutureExt;
+use futures::future::BoxFuture;
 // use micromegas_tracing::debug;
 use object_store::ObjectStore;
 use std::ops::Range;

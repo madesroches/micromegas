@@ -1,6 +1,6 @@
-use axum::routing::post;
 use axum::Extension;
 use axum::Router;
+use axum::routing::post;
 use micromegas_ingestion::web_ingestion_service::WebIngestionService;
 use micromegas_tracing::prelude::*;
 use std::sync::Arc;

@@ -61,7 +61,8 @@ impl TableFunctionImpl for ViewInstanceTableFunction {
         let arg2 = exprs.get(1).map(exp_to_string);
         let Some(Ok(view_instance_id)) = arg2 else {
             return plan_err!(
-                "Second argument to view_instance must be a string (the view instance id), given {:?}",arg2
+                "Second argument to view_instance must be a string (the view instance id), given {:?}",
+                arg2
             );
         };
 

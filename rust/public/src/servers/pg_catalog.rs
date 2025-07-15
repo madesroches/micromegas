@@ -1,8 +1,8 @@
 use datafusion::catalog::SchemaProvider;
 use datafusion::{error::DataFusionError, prelude::*, sql::TableReference};
 use datafusion_postgres::pg_catalog::{
-    create_current_schema_udf, create_current_schemas_udf, create_has_table_privilege_2param_udf,
-    create_pg_get_userbyid_udf, create_version_udf, PgCatalogSchemaProvider,
+    PgCatalogSchemaProvider, create_current_schema_udf, create_current_schemas_udf,
+    create_has_table_privilege_2param_udf, create_pg_get_userbyid_udf, create_version_udf,
 };
 
 /// Sets up the PostgreSQL catalog functions and tables in the DataFusion session context.

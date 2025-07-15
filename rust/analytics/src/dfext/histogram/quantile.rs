@@ -10,7 +10,7 @@ use datafusion::{
 };
 use std::sync::Arc;
 
-use super::histogram_udaf::{make_histogram_arrow_type, HistogramArray};
+use super::histogram_udaf::{HistogramArray, make_histogram_arrow_type};
 
 fn estimate_quantile(
     ratio: f64,

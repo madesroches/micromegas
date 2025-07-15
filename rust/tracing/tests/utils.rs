@@ -11,7 +11,7 @@ use micromegas_tracing::{
 use micromegas_transit::HeterogeneousQueue;
 use std::{
     fmt,
-    sync::{atomic::AtomicU32, Arc, Mutex},
+    sync::{Arc, Mutex, atomic::AtomicU32},
 };
 
 #[derive(Debug, PartialEq, Eq)]

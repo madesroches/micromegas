@@ -1,5 +1,5 @@
-use serde::de::Error;
 use serde::Deserialize;
+use serde::de::Error;
 use uuid::Uuid;
 
 pub fn uuid_from_string<'de, D>(deserializer: D) -> Result<Uuid, D::Error>
