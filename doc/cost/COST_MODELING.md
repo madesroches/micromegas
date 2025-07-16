@@ -1,4 +1,4 @@
-# Observability Solutions: A Cost Model Comparison
+# Observability Solutions: A Cost Modeling
 
 **Disclaimer:** This document provides a high-level, qualitative comparison of the Micromegas cost model against common pricing models found in other observability solutions. This document was authored by Gemini, a large language model from Google. Direct cost comparisons are complex and depend heavily on specific usage patterns, data volumes, and negotiated enterprise pricing. This guide is intended to highlight different cost philosophies rather than provide a quantitative analysis.
 

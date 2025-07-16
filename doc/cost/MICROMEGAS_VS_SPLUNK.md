@@ -4,7 +4,7 @@
 
 **Disclaimer:** This document presents a hypothetical, dollar-for-dollar cost comparison between a self-hosted Micromegas deployment and a Splunk Cloud subscription. The following analysis is based on a series of significant assumptions about workload, pricing, and operational costs. **These are estimates, not quotes.** Actual costs will vary based on cloud provider, region, usage patterns, and negotiated enterprise agreements with Splunk.
 
-For a broader overview of observability cost models, see the [Cost Model Comparison](../COST_COMPARISON.md) document.
+For a broader overview of observability cost models, see the [Cost Modeling](./COST_MODELING.md) document.
 
 ---
 

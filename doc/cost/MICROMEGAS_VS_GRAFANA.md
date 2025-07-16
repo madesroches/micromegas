@@ -4,7 +4,7 @@
 
 **Disclaimer:** This document presents a hypothetical, dollar-for-dollar cost comparison between a self-hosted Micromegas deployment and the Grafana Cloud observability platform (Loki, Mimir, Tempo). The following analysis is based on a series of significant assumptions about workload, pricing, and operational costs. **These are estimates, not quotes.** Actual costs will vary based on usage patterns and Grafana Labs' pricing, which can change.
 
-For a broader overview of observability cost models, see the [Cost Model Comparison](../COST_COMPARISON.md) document.
+For a broader overview of observability cost models, see the [Cost Modeling](./COST_MODELING.md) document.
 
 ---
 
