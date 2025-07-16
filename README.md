@@ -63,6 +63,35 @@ In order to keep costs down, most payloads will remain unprocessed until they ex
  * Query engine powered by [DataFusion](https://arrow.apache.org/datafusion/)
  * Python and Rust clients built on [FlightSQL](https://arrow.apache.org/blog/2022/02/16/introducing-arrow-flight-sql/)
  * PostgreSQL-compatible gateway using [DataFusion-postgres](https://github.com/datafusion-contrib/datafusion-postgres) and [pgwire](https://github.com/sunng87/pgwire)
+ 
+## Cost
+
+Infra cost will vary depending on the use case. Here is an example.
+
+### CPU
+
+ingestion: 2 pods, each with 1 vcpu and 2 gb of ram
+  those pods are mostly idle, but will occasionnaly peak when lots of cpu traces are uploaded
+  
+analytics (flight-sql-srv): 1 pod with 4 vcpu and 8 gb of ram
+  again, mostly idle. Peaks when people are running queries and using the dashboards.
+  
+daemon (telemetry-admin): 1 pod with 4 vcpu and 8 gb of ram
+  typically below 20%, peaks hourly
+
+### Storage
+
+With a retention of 90 days, total S3 storage is 8.5 tb in 118M objects. This includes the payloads sent by intrumented applications and the materialized views in parquet format.
+
+number of log entries: 9 billion
+number of measures: 275 billion
+number of trace events: 165 billion
+
+### Aurora PostgreSQL serverless
+
+Volume size: 44 gb
+
+### Load balancer
 
 
 ## Status
