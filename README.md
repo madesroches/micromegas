@@ -46,11 +46,9 @@ Micromegas consists of several key components:
 
 ## Cost-Effectiveness
 
-The infrastructure cost for Micromegas is designed to be flexible and scale with your usage. The primary cost drivers are the cloud services you use for ingestion, analytics, storage, and metadata.
+Unlike traditional observability platforms with opaque and often escalating costs, Micromegas offers a transparent and **orders of magnitude more efficient** solution. With Micromegas, you can afford to record billions of events without relying heavily on sampling, gaining a complete and accurate picture of your systems. By leveraging your own cloud infrastructure and a highly optimized data model, Micromegas drastically reduces your observability spend, especially at scale.
 
-By leveraging on-demand processing, you can significantly reduce costs compared to traditional observability solutions. For example, a deployment handling **9 billion log entries** and **440 billion metric/trace events** per month can run for approximately **$1,000 / month**.
-
-For a more detailed breakdown, see the [Cost Comparison](./doc/cost/COST_COMPARISON.md) document.
+Discover how Micromegas achieves this unparalleled cost efficiency and compare it with traditional solutions in our detailed [Cost Effectiveness](./doc/COST_EFFECTIVENESS.md) document.
 
 ## Getting Started
 

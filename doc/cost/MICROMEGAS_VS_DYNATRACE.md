@@ -4,7 +4,7 @@
 
 **Disclaimer:** This document presents a hypothetical, dollar-for-dollar cost comparison between a self-hosted Micromegas deployment and the Dynatrace SaaS platform. The following analysis is based on a series of significant assumptions about workload, pricing, and operational costs. **These are estimates, not quotes.** Dynatrace's pricing is complex, primarily based on host units, Dynatrace Units (DDUs) for data ingestion, and user seats. Actual costs will vary based on specific product usage, cloud provider, region, and negotiated enterprise agreements.
 
-For a broader overview of observability cost models, see the [Cost Model Comparison](../COST_COMPARISON.md) document.
+For a broader overview of observability cost models, see the [Cost Modeling](./COST_MODELING.md) document.
 
 ---
 
