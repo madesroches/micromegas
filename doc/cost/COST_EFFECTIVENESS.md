@@ -1,6 +1,6 @@
 ## Cost-Effectiveness
 
-The infrastructure cost for Micromegas will vary depending on your specific usage patterns, data volume, and retention policies. The system is designed to be scalable, allowing you to start small and grow as your needs evolve. For a qualitative comparison of this cost model with other observability solutions, see the [Cost Modeling](./doc/cost/COST_MODELING.md) document.
+The infrastructure cost for Micromegas will vary depending on your specific usage patterns, data volume, and retention policies. The system is designed to be scalable, allowing you to start small and grow as your needs evolve. For a qualitative comparison of this cost model with other observability solutions, see the [Cost Modeling](./COST_MODELING.md) document.
 
 The primary cost drivers are the cloud services required to run the backend:
 
