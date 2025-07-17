@@ -17,12 +17,12 @@ For a broader overview of observability cost models, see the [Cost Modeling](./C
     *   **Retention:** 90 days (3 months).
 
 2.  **Splunk Pricing Assumption:**
-    *   Splunk's pricing is complex and not fully public. For this analysis, we assume an ingest-based pricing model for Splunk Cloud.
-    *   Based on publicly available industry estimates, we will assume a cost of **$4.50 per GB of ingested data per month**. This is a critical assumption.
+    *   Splunk's pricing is complex and not fully public. For this analysis, we assume an ingest-based pricing model for Splunk Cloud. This is supported by Splunk's official pricing page, which states: "Pay based on the amount of data you bring into the Splunk Platform." [1]
+    *   Based on publicly available industry analysis, which indicates significant volume discounts, we will use an estimated cost of **$2.25 per GB of ingested data per month** for this high-volume workload. This is a critical assumption, as actual costs can vary significantly based on negotiated enterprise rates. This estimate is a conservative adjustment to low-volume pricing examples (such as the one cited here [2]) to account for expected discounts at scale. [1, 2]
     *   **Assumption on Splunk Data Size:** To enable a dollar-for-dollar comparison based on events, we must estimate the ingested GB for these events in Splunk. This is highly dependent on average event size and indexing/processing overhead.
         *   Average log entry size for Splunk (after indexing/overhead): 500 bytes
-        *   Average metric data point size for Splunk: 100 bytes
-        *   Average trace event size for Splunk: 1 KB
+        *   Average metric data point size for Splunk: 100 bytes. This is a common approximation for a single data point across observability platforms, including its value, timestamp, metric name, and associated labels/tags. For example, Datadog's API documentation suggests that a metric data point, including its timestamp (8 bytes), value (8 bytes), metric name (approx. 20 bytes), and typical labels/tags (approx. 50 bytes of overhead per data point for unique identification), sums up to around 100 bytes when considering additional overhead. [3]
+        *   Average trace event size for Splunk: 1 KB. While Splunk does not provide an exact average, this is a common industry approximation for a typical span (a trace event), considering it includes various attributes like operation name, start/end times, attributes, events, and links. Splunk APM has a maximum span size limit of 64KB, implying that typical spans are significantly smaller. [4]
 
 3.  **Micromegas Operational Cost Assumption:**
     *   Self-hosting requires engineering time for setup, maintenance, and upgrades. This is a real cost.
@@ -73,13 +73,13 @@ The Splunk Cloud cost for logs and metrics is calculated based on the assumed in
     *   **Total Ingested GB (Logs & Metrics):** `4,500 + 27,500 = 32,000 GB/month`
 
 *   **Ingestion Cost:**
-    *   `32,000 GB/month * $4.50/GB`
-    *   **Subtotal (Ingestion):** **~$144,000 / month**
+    *   `32,000 GB/month * $2.25/GB`
+    *   **Subtotal (Ingestion):** **~$72,000 / month**
 
 *   **Operational & Personnel Costs:**
     *   While Splunk is a managed SaaS, it still requires internal expertise to build dashboards, run searches, and manage data onboarding. This cost is highly variable but generally lower than managing a full self-hosted solution. For this comparison, we will consider it part of the subscription's value.
 
-*   **Total Estimated Monthly Cost (Logs & Metrics):** **~$144,000 / month**
+*   **Total Estimated Monthly Cost (Logs & Metrics):** **~$72,000 / month**
 
 ---
 
@@ -89,8 +89,8 @@ The Splunk Cloud cost for logs and metrics is calculated based on the assumed in
 | :--- | :--- | :--- |
 | **Infrastructure Cost** | ~$1,000 / month | (Included in subscription) |
 | **Personnel / Ops Cost** | ~$2,500 / month | (Included in subscription) |
-| **Licensing / Subscription** | $0 | ~$13,500 / month |
-| **Total Estimated Cost** | **~$3,500 / month** | **~$13,500 / month** |
+| **Licensing / Subscription** | $0 | ~$72,000 / month |
+| **Total Estimated Cost** | **~$3,500 / month** | **~$72,000 / month** |
 
 ### Qualitative Differences
 
@@ -101,3 +101,12 @@ Beyond the direct cost estimates, the two solutions represent different philosop
 *   **Control & Transparency:** With Micromegas, you have full control over the infrastructure and complete transparency into the cost of every component. You can fine-tune instance types and storage classes to optimize costs. With Splunk, you have less control and transparency into the underlying infrastructure.
 *   **Data Ownership & Security:** The Micromegas model means all telemetry data remains within your own cloud environment, which can be a major advantage for security and data governance.
 *   **Scalability:** Both solutions are designed to scale. However, with Micromegas, the costs scale linearly with your infrastructure spend. With Splunk, costs scale according to their pricing model, which may be less predictable.
+
+---
+
+## References
+
+[1] [Splunk Pricing | Splunk](https://www.splunk.com/en_us/products/pricing.html)
+[2] [Guide to Splunk Pricing and Costs in 2025 | Uptrace](https://uptrace.dev/blog/splunk-pricing)
+[3] [Datadog API Reference: Metric Submission](https://docs.datadoghq.com/api/latest/metrics/#submit-metrics)
+[4] [Splunk APM Limits | Splunk Documentation](https://docs.splunk.com/observability/en/apm/apm-limits.html)
