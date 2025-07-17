@@ -18,11 +18,11 @@ For a broader overview of observability cost models, see the [Cost Modeling](./C
     *   **Retention:** 90 days for logs and traces (requires extended retention plans).
 
 2.  **Datadog Pricing Assumption:**
-    *   We will use the publicly available pricing for the **Datadog Pro** and **Enterprise** plans as of mid-2025, as different products are required.
+    *   We will use the publicly available pricing for the **Datadog Pro** and **Enterprise** plans as of mid-2025, as different products are required. Datadog's pricing is highly modular, with costs varying based on specific product usage and consumption. [1, 2]
     *   Datadog's pricing is highly modular. We will estimate the cost by combining the necessary components.
     *   **Assumption on Datadog Data Size:** To enable a dollar-for-dollar comparison based on events, we must estimate the billable units for Datadog.
-        *   Average log entry size for Datadog (after processing): 500 bytes
-        *   Average trace event size for Datadog (after processing): 1 KB
+        *   Average log entry size for Datadog (after processing): 500 bytes. This is a common approximation for a typical, well-structured log entry after processing, including the message, timestamp, and various attributes/tags. Datadog's API supports log entries up to 1MB, implying that typical entries are significantly smaller. [3]
+        *   Average trace event size for Datadog (after processing): 1 KB. This is a common industry approximation for a typical span (a trace event), considering it includes various attributes like operation name, start/end times, attributes, events, and links.
 
 3.  **Micromegas TCO Assumption:**
     *   The Total Cost of Ownership (TCO) for a self-hosted solution must include both direct infrastructure spend and the cost of personnel to manage the system.
@@ -106,3 +106,11 @@ This comparison highlights the dramatic cost difference for high-volume telemetr
 *   **Control & Data Ownership:** This remains a primary differentiator. Micromegas offers full data ownership and control within your own cloud environment, which is a critical requirement for many organizations.
 
 *   **Cost at Extreme Scale:** The cost dynamics are heavily skewed towards Micromegas at extreme scale due to its superior data compactness. In a real-world scenario, to manage these costs, a Datadog deployment handling such high volumes would rely heavily on aggressive sampling of logs and traces, potentially sacrificing data completeness for cost efficiency.
+
+---
+
+## References
+
+[1] [Datadog Pricing: A Comprehensive Guide | Middleware](https://middleware.io/blog/datadog-pricing)
+[2] [Datadog Pricing Main Caveats Explained [Updated for 2025] | SigNoz](https://signoz.io/blog/datadog-pricing)
+[3] [Datadog API Reference: Log Submission](https://docs.datadoghq.com/api/latest/logs/#send-logs)
