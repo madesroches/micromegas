@@ -33,7 +33,6 @@ Before starting, set the following environment variables:
     ```bash
     cd local_test_env/db
     ./run.py
-    cd ../../
     ```
 
 3.  **Start the Ingestion Server:**
@@ -43,7 +42,6 @@ Before starting, set the following environment variables:
     ```bash
     cd rust
     cargo run -p telemetry-ingestion-srv -- --listen-endpoint-http 127.0.0.1:9000
-    cd ../
     ```
 
 4.  **Start the FlightSQL Server:**
@@ -53,7 +51,6 @@ Before starting, set the following environment variables:
     ```bash
     cd rust
     cargo run -p flight-sql-srv -- --disable-auth
-    cd ../
     ```
 
 5.  **Start the Daemon:**
@@ -63,7 +60,6 @@ Before starting, set the following environment variables:
     ```bash
     cd rust
     cargo run -p telemetry-admin -- crond
-    cd ../
     ```
 
 6.  **Query the Analytics Service (Python Example):**
@@ -89,5 +85,3 @@ Before starting, set the following environment variables:
     df = client.query(sql, begin, end)
     print(df) # Dataframe containing the result of the query
     ```
-
-*(This section is a work in progress. We welcome contributions to improve our documentation!)*
