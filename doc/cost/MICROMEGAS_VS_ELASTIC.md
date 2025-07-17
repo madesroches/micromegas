@@ -15,11 +15,12 @@
     *   **Retention:** 90 days (3 months)
 
 2.  **Elastic Cloud Pricing Assumption:**
-    *   Elastic Cloud uses resource-based pricing (RAM, vCPU, Storage). We need to estimate the cluster size required to handle the *event volume* and *retention*.
+    *   Elastic Cloud uses resource-based pricing (RAM, Storage). This is explicitly stated on their pricing page: "Elastic Cloud pricing is based on the total capacity consumed, which includes virtual storage, RAM." [1]
+    *   We need to estimate the cluster size required to handle the *event volume* and *retention*.
     *   **Assumption on Elastic Data Size:** To enable a dollar-for-dollar comparison based on events, we must estimate the storage consumed by these events in Elastic. This is highly dependent on average event size, indexing overhead, and compression.
-        *   Average log entry size in Elastic (after indexing/overhead): 500 bytes
-        *   Average metric data point size in Elastic: 100 bytes
-        *   Average trace span size in Elastic: 1 KB
+        *   Average log entry size in Elastic (after indexing/overhead): 500 bytes. This is a common approximation for a typical, well-structured log entry after indexing and overhead, considering it includes the message, timestamp, and various attributes/tags.
+        *   Average metric data point size in Elastic: 100 bytes. This is a common approximation for a single data point across observability platforms, including its value, timestamp, metric name, and associated labels/tags.
+        *   Average trace span size in Elastic: 1 KB. This is a common industry approximation for a typical span (a trace event), considering it includes various attributes like operation name, start/end times, attributes, events, and links.
     *   **Calculated Storage Needed for Elastic:**
         *   Logs: 9 billion * 500 bytes = 4.5 TB
         *   Metrics: 275 billion * 100 bytes = 27.5 TB
@@ -97,3 +98,9 @@ This comparison highlights the significant impact of data compactness on overall
 *   **Control & Data Ownership:** Micromegas provides full data ownership within your own cloud account, offering a higher degree of control and simplifying data governance.
 
 *   **Cost Model:** The cost models are fundamentally different. Micromegas's cost is a direct reflection of your cloud bill, heavily influenced by its storage efficiency. Elastic Cloud's cost is based on the resources you provision, which offers predictability but may not fully reflect the underlying data volume in a compact way.
+
+---
+
+## References
+
+[1] [Official Elastic Cloud pricing — compare serverless and hosted ... | Elastic](https://www.elastic.co/cloud/pricing)
