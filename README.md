@@ -25,6 +25,12 @@
 
 Micromegas is an observability system designed to provide unified insights into complex applications. It allows you to collect and analyze logs, metrics, and traces in a single, scalable database. Our goal is to help you spend less time reproducing bugs and more time understanding and improving your software's quality and performance.
 
+## Objectives
+
+*   Empower developers with comprehensive insights, eliminating time-consuming bug reproduction.
+*   Quantify issue frequency and severity to allow better priority management.
+*   Provide detailed traces based on high-frequency telemetry to enable a deep understanding of every issue.
+
 ## Key Features
 
 *   **🚀 Unified Observability:** Store and query logs, metrics, and traces together to get a complete picture of your application's behavior.
