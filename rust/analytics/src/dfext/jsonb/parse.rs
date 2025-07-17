@@ -9,6 +9,7 @@ use datafusion::{
     prelude::*,
 };
 use jsonb::parse_value;
+use micromegas_tracing::warn;
 use std::sync::Arc;
 
 fn parse_json_into_jsonb(values: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionError> {
@@ -26,11 +27,17 @@ fn parse_json_into_jsonb(values: &[ColumnarValue]) -> Result<ColumnarValue, Data
     let mut buffer = vec![];
     for index in 0..string_array.len() {
         let src_value = string_array.value(index);
-        let parsed =
-            parse_value(src_value.as_bytes()).map_err(|e| DataFusionError::External(e.into()))?;
-        buffer.clear();
-        parsed.write_to_vec(&mut buffer);
-        builder.append_value(&buffer);
+        match parse_value(src_value.as_bytes()) {
+            Ok(parsed) => {
+                buffer.clear();
+                parsed.write_to_vec(&mut buffer);
+                builder.append_value(&buffer);
+            }
+            Err(e) => {
+                warn!("error parsing json={src_value} error={e:?}");
+                builder.append_null();
+            }
+        }
     }
     Ok(ColumnarValue::Array(Arc::new(builder.finish())))
 }
