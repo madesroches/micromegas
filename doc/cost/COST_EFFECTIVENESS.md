@@ -14,7 +14,7 @@ The primary cost drivers are the cloud services required to run the backend:
 
 *   **Daemon (`telemetry-admin-cli`):** Runs background tasks like data rollup, expiration, and view materialization.
     *   **Cost Factors:** Amount of data being processed for rollups and maintenance.
-    *   **Notes:** CPU usage is typically low but will peak periodically (e.g., hourly) when maintenance tasks run.
+        *   **Notes:** CPU usage is typically low but will peak periodically (e.g., hourly) when maintenance tasks run.
 
 *   **Database (PostgreSQL):** Stores metadata about processes, streams, and data blocks.
     *   **Cost Factors:** Size of the event batches, number of instrumented processes, and the total amount of data stored.
@@ -61,3 +61,16 @@ Micromegas includes features designed to help control costs:
 
 *   **On-Demand Processing (tail sampling):** Raw telemetry data, especially detailed traces, can be stored unprocessed in low-cost object storage. This data is materialized for analysis on-demand using a SQL extension, which significantly reduces processing costs, as you only pay for what you query.
 *   **Data Retention:** You can configure the retention period for both raw data and materialized views to balance cost and analysis needs.
+
+---
+
+### Detailed Cost Comparisons
+
+For a more in-depth, hypothetical dollar-for-dollar comparison of Micromegas against specific commercial observability platforms, refer to the following documents:
+
+*   [Micromegas vs. Datadog](./MICROMEGAS_VS_DATADOG.md)
+*   [Micromegas vs. Dynatrace](./MICROMEGAS_VS_DYNATRACE.md)
+*   [Micromegas vs. Elastic Observability](./MICROMEGAS_VS_ELASTIC.md)
+*   [Micromegas vs. Grafana Cloud Stack](./MICROMEGAS_VS_GRAFANA.md)
+*   [Micromegas vs. New Relic](./MICROMEGAS_VS_NEWRELIC.md)
+*   [Micromegas vs. Splunk](./MICROMEGAS_VS_SPLUNK.md)
