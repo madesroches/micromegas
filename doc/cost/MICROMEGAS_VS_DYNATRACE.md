@@ -12,9 +12,14 @@ For a broader overview of observability cost models, see the [Cost Modeling](./C
 
 1.  **Workload Definition (based on Micromegas Example Deployment):**
     *   **Infrastructure:** 20 hosts/nodes to monitor.
-    *   **Logs:** 9 billion log entries per month
-    *   **Metrics:** 275 billion metric data points per month
-    *   **Traces:** 165 billion trace events per month
+    *   **Total Events (over 90-day retention):**
+        *   **Logs:** 9 billion log entries
+        *   **Metrics:** 275 billion metric data points
+        *   **Traces:** 165 billion trace events
+    *   **Monthly Ingestion Rate (for pricing comparison):**
+        *   **Logs:** 3 billion log entries / month (9 billion / 3 months)
+        *   **Metrics:** ~92 billion metric data points / month (275 billion / 3 months)
+        *   **Traces:** 55 billion trace events / month (165 billion / 3 months)
     *   **Retention:** 90 days (3 months).
     *   **Users:** 5 active users.
 
@@ -37,7 +42,7 @@ For a broader overview of observability cost models, see the [Cost Modeling](./C
 
 ### The Challenge of Traces: Why Direct Comparison is Impractical
 
-Micromegas is designed to ingest and store a very high volume of raw trace events (165 billion per month in our example) and process them on-demand. This is feasible due to its highly compact data representation and columnar storage, which keeps the underlying infrastructure costs manageable (~$500/month for 8.5 TB of total data, including traces).
+Micromegas is designed to ingest and store a very high volume of raw trace events (165 billion total, or 55 billion per month in our example) and process them on-demand. This is feasible due to its highly compact data representation and columnar storage, which keeps the underlying infrastructure costs manageable (~$500/month for 8.5 TB of total data, including traces).
 
 Commercial SaaS tracing solutions like Dynatrace, Grafana Tempo, Datadog APM, or Elastic APM are typically priced based on ingested GB, spans, or DDUs, and their underlying architectures are optimized for real-time analysis and high-cardinality indexing. While powerful, this often comes at a significantly higher cost per unit, especially for long retention periods.
 
@@ -72,21 +77,21 @@ The Dynatrace cost is calculated by summing the costs for Host Units and DDU con
     *   **Subtotal (Host Units):** **~$1,380 / month**
 
 *   **Logs (DDUs):**
-    *   `9 billion log entries * 0.0005 DDUs/log event = 4,500,000 DDUs/month`
-    *   `4,500,000 DDUs * ~$0.001/DDU = ~$4,500 / month`
-    *   **Subtotal (Logs DDUs):** **~$4,500 / month**
+    *   `3 billion log entries/month * 0.0005 DDUs/log event = 1,500,000 DDUs/month`
+    *   `1,500,000 DDUs * ~$0.001/DDU = ~$1,500 / month`
+    *   **Subtotal (Logs DDUs):** **~$1,500 / month**
 
 *   **Metrics (DDUs - for custom metrics beyond standard host metrics):**
-    *   `275 billion metric data points * 0.000001 DDUs/metric = 275,000 DDUs/month`
-    *   `275,000 DDUs * ~$0.001/DDU = ~$275 / month`
-    *   **Subtotal (Metrics DDUs):** **~$275 / month**
+    *   `~92 billion metric data points/month * 0.000001 DDUs/metric = ~92,000 DDUs/month`
+    *   `~92,000 DDUs * ~$0.001/DDU = ~$92 / month`
+    *   **Subtotal (Metrics DDUs):** **~$92 / month**
 
-*   **Total Estimated Monthly Cost (Logs & Metrics):** **~$6,155 / month**
+*   **Total Estimated Monthly Cost (Logs & Metrics):** **~$2,972 / month**
 
 *   **Operational & Personnel Costs:**
     *   Dynatrace is a highly automated SaaS platform, but it still requires internal expertise for configuration, custom dashboards, and leveraging its advanced AI capabilities. This cost is considered part of the subscription's value.
 
-*   **Total Estimated Monthly Cost:** **~$6,155 / month**
+*   **Total Estimated Monthly Cost:** **~$2,972 / month**
 
 ---
 
@@ -96,8 +101,8 @@ The Dynatrace cost is calculated by summing the costs for Host Units and DDU con
 | :--- | :--- | :--- |
 | **Infrastructure Cost** | ~$1,000 / month | (Included in subscription) |
 | **Personnel / Ops Cost** | ~$2,500 / month | (Included in subscription) |
-| **Licensing / Subscription** | $0 | ~$6,155 / month |
-| **Total Estimated Cost** | **~$3,500 / month** | **~$6,155 / month** |
+| **Licensing / Subscription** | $0 | ~$2,972 / month |
+| **Total Estimated Cost** | **~$3,500 / month** | **~$2,972 / month** |
 
 ### Qualitative Differences
 

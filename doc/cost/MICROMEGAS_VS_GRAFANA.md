@@ -1,19 +1,14 @@
-# Cost Comparison: Micromegas vs. Grafana Cloud Stack
-
-**Author:** Gemini, a large language model from Google.
-
-**Disclaimer:** This document presents a hypothetical, dollar-for-dollar cost comparison between a self-hosted Micromegas deployment and the Grafana Cloud observability platform (Loki, Mimir, Tempo). The following analysis is based on a series of significant assumptions about workload, pricing, and operational costs. **These are estimates, not quotes.** Actual costs will vary based on usage patterns and Grafana Labs' pricing, which can change.
-
-For a broader overview of observability cost models, see the [Cost Modeling](./COST_MODELING.md) document.
-
----
-
 ## Core Assumptions for this Comparison
 
 1.  **Workload Definition (based on Micromegas Example Deployment):**
-    *   **Logs:** 9 billion log entries per month
-    *   **Metrics:** 275 billion metric data points per month (equivalent to 1,000,000 active series for pricing)
-    *   **Traces:** 165 billion trace events per month
+    *   **Total Events (over 90-day retention):**
+        *   **Logs:** 9 billion log entries
+        *   **Metrics:** 275 billion metric data points (equivalent to 1,000,000 active series for pricing)
+        *   **Traces:** 165 billion trace events
+    *   **Monthly Ingestion Rate (for pricing comparison):**
+        *   **Logs:** 3 billion log entries / month (9 billion / 3 months)
+        *   **Metrics:** ~92 billion metric data points / month (275 billion / 3 months)
+        *   **Traces:** 55 billion trace events / month (165 billion / 3 months)
     *   **Retention:** 90 days (3 months)
     *   **Users:** 5 active users.
 
@@ -33,7 +28,7 @@ For a broader overview of observability cost models, see the [Cost Modeling](./C
 
 ### The Challenge of Traces: Why Direct Comparison is Impractical
 
-Micromegas is designed to ingest and store a very high volume of raw trace events (165 billion per month in our example) and process them on-demand. This is feasible due to its highly compact data representation and columnar storage, which keeps the underlying infrastructure costs manageable (~$500/month for 8.5 TB of total data, including traces).
+Micromegas is designed to ingest and store a very high volume of raw trace events (165 billion total, or 55 billion per month in our example) and process them on-demand. This is feasible due to its highly compact data representation and columnar storage, which keeps the underlying infrastructure costs manageable (~$500/month for 8.5 TB of total data, including traces).
 
 Commercial SaaS tracing solutions like Grafana Tempo, Datadog APM, or Elastic APM are typically priced based on ingested GB or spans, and their underlying architectures are optimized for real-time analysis and high-cardinality indexing. While powerful, this often comes at a significantly higher cost per GB or per span, especially for long retention periods.
 
@@ -64,10 +59,10 @@ The estimated Total Cost of Ownership (TCO) for a self-hosted Micromegas instanc
 The Grafana Cloud cost for logs and metrics is calculated by summing the costs for its individual components based on the defined workload and assumed data sizes, including the cost of extended retention.
 
 *   **Logs (Loki):**
-    *   Ingestion Volume: `9 billion log entries * 500 bytes/entry = 4,500 GB/month`
-    *   Ingestion Cost: `4,500 GB/month * ~$0.50/GB = ~$2,250 / month`
-    *   Retention Cost (90 days): Storing 4,500 GB for an additional 60 days is estimated to cost `~$0.30/GB`. `4,500 GB * $0.30/GB * 2 months` = `~$2,700 / month`
-    *   **Subtotal (Logs):** **~$4,950 / month**
+    *   Ingestion Volume: `3 billion log entries/month * 500 bytes/entry = 1,500 GB/month`
+    *   Ingestion Cost: `1,500 GB/month * ~$0.50/GB = ~$750 / month`
+    *   Retention Cost (90 days): Storing 1,500 GB for an additional 60 days is estimated to cost `~$0.30/GB`. `1,500 GB * $0.30/GB * 2 months` = `~$900 / month`
+    *   **Subtotal (Logs):** **~$1,650 / month**
 
 *   **Metrics (Mimir):**
     *   `1,000,000 active series` (retention is typically longer for metrics and included)
@@ -77,11 +72,22 @@ The Grafana Cloud cost for logs and metrics is calculated by summing the costs f
     *   `5 users`
     *   **Subtotal (Users):** **~$100 / month**
 
-*   **Subtotal (Platform):** **~$6,050 / month**
+*   **Subtotal (Platform):** **~$2,750 / month**
 
 *   **Operational & Personnel Costs:**
     *   Grafana Cloud is a managed service, but it still requires internal expertise to build dashboards, run searches, and manage data onboarding. This cost is considered part of the subscription's value.
 
-*   **Total Estimated Monthly Cost (Logs & Metrics):** **~$6,050 / month**
+*   **Total Estimated Monthly Cost (Logs & Metrics):** **~$2,750 / month**
 
 Therefore, for this comparison, we will focus on the costs of logs and metrics, acknowledging that the trace handling philosophies and associated costs are fundamentally different and not directly comparable on a per-event basis without considering sampling strategies.
+
+---
+
+## Dollar-for-Dollar Comparison Summary
+
+| Category | Micromegas (Self-Hosted) | Grafana Cloud (SaaS) |
+| :--- | :--- | :--- |
+| **Infrastructure Cost** | ~$1,000 / month | (Included in subscription) |
+| **Personnel / Ops Cost** | ~$2,500 / month | (Included in subscription) |
+| **Licensing / Subscription** | $0 | ~$2,750 / month |
+| **Total Estimated Cost** | **~$3,500 / month** | **~$2,750 / month** |

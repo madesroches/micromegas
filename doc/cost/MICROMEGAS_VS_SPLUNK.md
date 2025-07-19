@@ -11,9 +11,14 @@ For a broader overview of observability cost models, see the [Cost Modeling](./C
 ## Core Assumptions for this Comparison
 
 1.  **Workload Definition (based on Micromegas Example Deployment):**
-    *   **Logs:** 9 billion log entries per month
-    *   **Metrics:** 275 billion metric data points per month
-    *   **Traces:** 165 billion trace events per month
+    *   **Total Events (over 90-day retention):**
+        *   **Logs:** 9 billion log entries
+        *   **Metrics:** 275 billion metric data points
+        *   **Traces:** 165 billion trace events
+    *   **Monthly Ingestion Rate (for pricing comparison):**
+        *   **Logs:** 3 billion log entries / month (9 billion / 3 months)
+        *   **Metrics:** ~92 billion metric data points / month (275 billion / 3 months)
+        *   **Traces:** 55 billion trace events / month (165 billion / 3 months)
     *   **Retention:** 90 days (3 months).
 
 2.  **Splunk Pricing Assumption:**
@@ -33,7 +38,7 @@ For a broader overview of observability cost models, see the [Cost Modeling](./C
 
 ### The Challenge of Traces: Why Direct Comparison is Impractical
 
-Micromegas is designed to ingest and store a very high volume of raw trace events (165 billion per month in our example) and process them on-demand. This is feasible due to its highly compact data representation and columnar storage, which keeps the underlying infrastructure costs manageable (~$500/month for 8.5 TB of total data, including traces).
+Micromegas is designed to ingest and store a very high volume of raw trace events (165 billion total, or 55 billion per month in our example) and process them on-demand. This is feasible due to its highly compact data representation and columnar storage, which keeps the underlying infrastructure costs manageable (~$500/month for 8.5 TB of total data, including traces).
 
 Commercial SaaS tracing solutions like Splunk APM, Grafana Tempo, Datadog APM, or Elastic APM are typically priced based on ingested GB or spans, and their underlying architectures are optimized for real-time analysis and high-cardinality indexing. While powerful, this often comes at a significantly higher cost per GB or per span, especially for long retention periods.
 
@@ -68,18 +73,18 @@ The Micromegas cost is broken down into direct infrastructure spend and the oper
 The Splunk Cloud cost for logs and metrics is calculated based on the assumed ingest-based pricing model and the estimated ingested GB from the event volume.
 
 *   **Calculated Ingested GB for Splunk (Logs & Metrics):**
-    *   Logs: `9 billion log entries * 500 bytes/entry = 4,500 GB/month`
-    *   Metrics: `275 billion metric data points * 100 bytes/point = 27,500 GB/month`
-    *   **Total Ingested GB (Logs & Metrics):** `4,500 + 27,500 = 32,000 GB/month`
+    *   Logs: `3 billion log entries/month * 500 bytes/entry = 1,500 GB/month`
+    *   Metrics: `~92 billion metric data points/month * 100 bytes/point = ~9,200 GB/month`
+    *   **Total Ingested GB (Logs & Metrics):** `1,500 + 9,200 = 10,700 GB/month`
 
 *   **Ingestion Cost:**
-    *   `32,000 GB/month * $2.25/GB`
-    *   **Subtotal (Ingestion):** **~$72,000 / month**
+    *   `10,700 GB/month * $2.25/GB`
+    *   **Subtotal (Ingestion):** **~$24,075 / month**
 
 *   **Operational & Personnel Costs:**
     *   While Splunk is a managed SaaS, it still requires internal expertise to build dashboards, run searches, and manage data onboarding. This cost is highly variable but generally lower than managing a full self-hosted solution. For this comparison, we will consider it part of the subscription's value.
 
-*   **Total Estimated Monthly Cost (Logs & Metrics):** **~$72,000 / month**
+*   **Total Estimated Monthly Cost (Logs & Metrics):** **~$24,075 / month**
 
 ---
 
@@ -89,8 +94,8 @@ The Splunk Cloud cost for logs and metrics is calculated based on the assumed in
 | :--- | :--- | :--- |
 | **Infrastructure Cost** | ~$1,000 / month | (Included in subscription) |
 | **Personnel / Ops Cost** | ~$2,500 / month | (Included in subscription) |
-| **Licensing / Subscription** | $0 | ~$72,000 / month |
-| **Total Estimated Cost** | **~$3,500 / month** | **~$72,000 / month** |
+| **Licensing / Subscription** | $0 | ~$24,075 / month |
+| **Total Estimated Cost** | **~$3,500 / month** | **~$24,075 / month** |
 
 ### Qualitative Differences
 
