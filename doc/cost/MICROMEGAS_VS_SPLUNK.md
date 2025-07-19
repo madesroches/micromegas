@@ -114,4 +114,4 @@ Beyond the direct cost estimates, the two solutions represent different philosop
 [1] [Splunk Pricing | Splunk](https://www.splunk.com/en_us/products/pricing.html)
 [2] [Guide to Splunk Pricing and Costs in 2025 | Uptrace](https://uptrace.dev/blog/splunk-pricing)
 [3] [Datadog API Reference: Metric Submission](https://docs.datadoghq.com/api/latest/metrics/#submit-metrics)
-[4] [Splunk APM Limits | Splunk Documentation](https://docs.splunk.com/observability/en/apm/apm-limits.html)
+
