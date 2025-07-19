@@ -12,9 +12,14 @@ For a broader overview of observability cost models, see the [Cost Modeling](./C
 
 1.  **Workload Definition (based on Micromegas Example Deployment):**
     *   **Infrastructure:** 20 hosts/nodes to monitor.
-    *   **Logs:** 9 billion log entries per month
-    *   **Metrics:** 275 billion metric data points per month
-    *   **Traces:** 165 billion trace events per month
+    *   **Total Events (over 90-day retention):**
+        *   **Logs:** 9 billion log entries
+        *   **Metrics:** 275 billion metric data points
+        *   **Traces:** 165 billion trace events
+    *   **Monthly Ingestion Rate (for pricing comparison):**
+        *   **Logs:** 3 billion log entries / month (9 billion / 3 months)
+        *   **Metrics:** ~92 billion metric data points / month (275 billion / 3 months)
+        *   **Traces:** 55 billion trace events / month (165 billion / 3 months)
     *   **Retention:** 90 days for logs and traces (requires extended retention plans).
 
 2.  **Datadog Pricing Assumption:**
@@ -33,7 +38,7 @@ For a broader overview of observability cost models, see the [Cost Modeling](./C
 
 ### The Challenge of Traces: Why Direct Comparison is Impractical
 
-Micromegas is designed to ingest and store a very high volume of raw trace events (165 billion per month in our example) and process them on-demand. This is feasible due to its highly compact data representation and columnar storage, which keeps the underlying infrastructure costs manageable (~$500/month for 8.5 TB of total data, including traces).
+Micromegas is designed to ingest and store a very high volume of raw trace events (165 billion total, or 55 billion per month in our example) and process them on-demand. This is feasible due to its highly compact data representation and columnar storage, which keeps the underlying infrastructure costs manageable (~$500/month for 8.5 TB of total data, including traces).
 
 Commercial SaaS tracing solutions like Datadog APM, Grafana Tempo, or Elastic APM are typically priced based on ingested GB or spans, and their underlying architectures are optimized for real-time analysis and high-cardinality indexing. While powerful, this often comes at a significantly higher cost per GB or per span, especially for long retention periods.
 
@@ -68,17 +73,18 @@ The Datadog cost is calculated by summing the costs for its individual products 
     *   *Estimated Cost: ~$460 / month*
 
 *   **Log Management:**
-    *   Ingestion Volume: `9 billion log entries * 500 bytes/entry = 4,500 GB/month`
-    *   Ingestion Cost: `4,500 GB/month * ~$0.10/GB = ~$450 / month`
-    *   Retention Cost (90 days): Datadog charges for log retention beyond 15 days. For 90 days, this would be significant. Assuming `~$2.50 per million log events` for 60 extra days, this is a rough estimate.
-    *   *Estimated Cost (including retention): ~$22,500 / month*
+    *   Ingestion Volume: `3 billion log entries/month * 500 bytes/entry = 1,500 GB/month`
+    *   Ingestion Cost: `1,500 GB/month * ~$0.10/GB = ~$150 / month`
+    *   Retention Cost (90 days): Datadog charges for log retention beyond 15 days. Assuming `~$2.50 per million log events` for 60 extra days, this is a rough estimate.
+    *   `3,000 million log events/month * ~$2.50/million = ~$7,500 / month`
+    *   *Estimated Cost (including retention): ~$7,650 / month*
 
-*   **Subtotal (Platform):** **~$22,960 / month**
+*   **Subtotal (Platform):** **~$8,110 / month**
 
 *   **Operational & Personnel Costs:**
     *   Datadog is a feature-rich but complex platform that requires significant internal expertise to manage effectively. This cost is not zero but is considered part of the value of the SaaS subscription for this comparison.
 
-*   **Total Estimated Monthly Cost (Logs & Metrics):** **~$22,960 / month**
+*   **Total Estimated Monthly Cost (Logs & Metrics):** **~$8,110 / month**
 
 ---
 
@@ -88,8 +94,8 @@ The Datadog cost is calculated by summing the costs for its individual products 
 | :--- | :--- | :--- |
 | **Infrastructure Cost** | ~$1,000 / month | (Included in subscription) |
 | **Personnel / Ops Cost** | ~$2,500 / month | (Included in subscription) |
-| **Licensing / Subscription** | $0 | ~$303,460 / month |
-| **Total Estimated Cost** | **~$3,500 / month** | **~$303,460 / month** |
+| **Licensing / Subscription** | $0 | ~$8,110 / month |
+| **Total Estimated Cost** | **~$3,500 / month** | **~$8,110 / month** |
 
 ### Qualitative Differences
 

@@ -9,9 +9,14 @@
 ## Core Assumptions for this Comparison
 
 1.  **Workload Definition (based on Micromegas Example Deployment):**
-    *   **Logs:** 9 billion log entries per month
-    *   **Metrics:** 275 billion metric data points per month
-    *   **Traces:** 165 billion trace events per month (equivalent to 82.5 billion spans)
+    *   **Total Events (over 90-day retention):**
+        *   **Logs:** 9 billion log entries
+        *   **Metrics:** 275 billion metric data points
+        *   **Traces:** 165 billion trace events (equivalent to 82.5 billion spans)
+    *   **Monthly Ingestion Rate (for pricing comparison):**
+        *   **Logs:** 3 billion log entries / month (9 billion / 3 months)
+        *   **Metrics:** ~92 billion metric data points / month (275 billion / 3 months)
+        *   **Traces:** 55 billion trace events / month (165 billion / 3 months)
     *   **Retention:** 90 days (3 months)
 
 2.  **Elastic Cloud Pricing Assumption:**
@@ -54,19 +59,19 @@ The estimated Total Cost of Ownership (TCO) for a self-hosted Micromegas instanc
 
 The Elastic Cloud cost is calculated based on the resources required for a cluster capable of handling the specified event volume and retention.
 
-*   **Cluster Configuration:** To handle ~197 TB of raw data (which translates to ~400 TB provisioned storage with replication and overhead) and the associated query load, a substantial cluster is required.
-    *   We will estimate a cluster with **400 TB of storage** and corresponding compute (e.g., 12,800 GB RAM).
+*   **Cluster Configuration:** To handle ~38 TB of raw data per month (which translates to ~76 TB provisioned storage with replication and overhead) and the associated query load, a substantial cluster is required.
+    *   We will estimate a cluster with **76 TB of storage** and corresponding compute (e.g., 2,400 GB RAM).
 
 *   **Estimated Monthly Cost:**
     *   Based on public pricing for I/O Optimized instances:
-        *   RAM cost: `12,800 GB * ~$0.50/GB/month = ~$6,400 / month`
-        *   Storage cost: `400,000 GB * ~$0.10/GB/month = ~$40,000 / month`
-    *   **Subtotal (Platform):** **~$46,400 / month**
+        *   RAM cost: `2,400 GB * ~$0.50/GB/month = ~$1,200 / month`
+        *   Storage cost: `76,000 GB * ~$0.10/GB/month = ~$7,600 / month`
+    *   **Subtotal (Platform):** **~$8,800 / month**
 
 *   **Operational & Personnel Costs:**
     *   Elastic Cloud is a managed service, but it still requires significant expertise to manage data schemas (index templates), build visualizations in Kibana, and optimize queries. This cost is considered part of the value of the SaaS subscription for this comparison.
 
-*   **Total Estimated Monthly Cost:** **~$46,400 / month**
+*   **Total Estimated Monthly Cost:** **~$8,800 / month**
 
 ---
 
@@ -76,8 +81,8 @@ The Elastic Cloud cost is calculated based on the resources required for a clust
 | :--- | :--- | :--- |
 | **Infrastructure Cost** | ~$1,000 / month | (Included in subscription) |
 | **Personnel / Ops Cost** | ~$2,500 / month | (Included in subscription) |
-| **Licensing / Subscription** | $0 | ~$46,400 / month |
-| **Total Estimated Cost** | **~$3,500 / month** | **~$46,400 / month** |
+| **Licensing / Subscription** | $0 | ~$8,800 / month |
+| **Total Estimated Cost** | **~$3,500 / month** | **~$8,800 / month** |
 
 ### Qualitative Differences
 

@@ -11,9 +11,14 @@ For a broader overview of observability cost models, see the [Cost Modeling](./C
 ## Core Assumptions for this Comparison
 
 1.  **Workload Definition (based on Micromegas Example Deployment):**
-    *   **Logs:** 9 billion log entries per month
-    *   **Metrics:** 275 billion metric data points per month
-    *   **Traces:** 165 billion trace events per month
+    *   **Total Events (over 90-day retention):**
+        *   **Logs:** 9 billion log entries
+        *   **Metrics:** 275 billion metric data points
+        *   **Traces:** 165 billion trace events
+    *   **Monthly Ingestion Rate (for pricing comparison):**
+        *   **Logs:** 3 billion log entries / month (9 billion / 3 months)
+        *   **Metrics:** ~92 billion metric data points / month (275 billion / 3 months)
+        *   **Traces:** 55 billion trace events / month (165 billion / 3 months)
     *   **Retention:** 90 days (3 months).
     *   **Users:** 5 Full Users (access to all data and features).
 
@@ -36,7 +41,7 @@ For a broader overview of observability cost models, see the [Cost Modeling](./C
 
 ### The Challenge of Traces: Why Direct Comparison is Impractical
 
-Micromegas is designed to ingest and store a very high volume of raw trace events (165 billion per month in our example) and process them on-demand. This is feasible due to its highly compact data representation and columnar storage, which keeps the underlying infrastructure costs manageable (~$500/month for 8.5 TB of total data, including traces).
+Micromegas is designed to ingest and store a very high volume of raw trace events (165 billion total, or 55 billion per month in our example) and process them on-demand. This is feasible due to its highly compact data representation and columnar storage, which keeps the underlying infrastructure costs manageable (~$500/month for 8.5 TB of total data, including traces).
 
 Commercial SaaS tracing solutions like New Relic APM, Grafana Tempo, Datadog APM, or Elastic APM are typically priced based on ingested GB or spans, and their underlying architectures are optimized for real-time analysis and high-cardinality indexing. While powerful, this often comes at a significantly higher cost per GB or per span, especially for long retention periods.
 
@@ -67,13 +72,13 @@ The estimated Total Cost of Ownership (TCO) for a self-hosted Micromegas instanc
 The New Relic cost is calculated by summing the costs for data ingested and user seats.
 
 *   **Calculated Ingested GB for New Relic (Logs & Metrics):**
-    *   Logs: `9 billion log entries * 500 bytes/entry = 4,500 GB/month`
-    *   Metrics: `275 billion metric data points * 100 bytes/point = 27,500 GB/month`
-    *   **Total Ingested GB (Logs & Metrics):** `4,500 + 27,500 = 32,000 GB/month`
+    *   Logs: `3 billion log entries/month * 500 bytes/entry = 1,500 GB/month`
+    *   Metrics: `~92 billion metric data points/month * 100 bytes/point = ~9,200 GB/month`
+    *   **Total Ingested GB (Logs & Metrics):** `1,500 + 9,200 = 10,700 GB/month`
 
 *   **Data Ingest Cost:**
-    *   `32,000 GB/month * $0.30/GB`
-    *   **Subtotal (Data Ingest):** **~$9,600 / month**
+    *   `10,700 GB/month * $0.30/GB`
+    *   **Subtotal (Data Ingest):** **~$3,210 / month**
 
 *   **User Seats:**
     *   `5 Full Users * ~$99/user/month`
@@ -82,7 +87,7 @@ The New Relic cost is calculated by summing the costs for data ingested and user
 *   **Operational & Personnel Costs:**
     *   New Relic is a managed SaaS, but it still requires internal expertise to configure agents, build dashboards, and optimize queries. This cost is considered part of the subscription's value.
 
-*   **Total Estimated Monthly Cost (Logs & Metrics):** **~$10,095 / month**
+*   **Total Estimated Monthly Cost (Logs & Metrics):** **~$3,705 / month**
 
 ---
 
@@ -92,8 +97,8 @@ The New Relic cost is calculated by summing the costs for data ingested and user
 | :--- | :--- | :--- |
 | **Infrastructure Cost** | ~$1,000 / month | (Included in subscription) |
 | **Personnel / Ops Cost** | ~$2,500 / month | (Included in subscription) |
-| **Licensing / Subscription** | $0 | ~$10,095 / month |
-| **Total Estimated Cost** | **~$3,500 / month** | **~$10,095 / month** |
+| **Licensing / Subscription** | $0 | ~$3,705 / month |
+| **Total Estimated Cost** | **~$3,500 / month** | **~$3,705 / month** |
 
 ### Qualitative Differences
 
