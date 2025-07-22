@@ -6,6 +6,7 @@ use super::{
 };
 use crate::{
     lakehouse::{sql_partition_spec::fetch_sql_partition_spec, view::ViewMetadata},
+    record_batch_transformer::RecordBatchTransformer,
     time::{TimeRange, datetime_to_scalar},
 };
 use anyhow::{Context, Result};
@@ -28,6 +29,7 @@ pub struct ExportLogView {
     time_column_name: Arc<String>,
     count_src_query: Arc<String>,
     extract_query: Arc<String>,
+    exporter: Arc<dyn RecordBatchTransformer>,
     log_schema: Arc<Schema>,
     view_factory: Arc<ViewFactory>,
     update_group: Option<i32>,
@@ -52,6 +54,7 @@ impl ExportLogView {
         view_set_name: Arc<String>,
         count_src_query: Arc<String>,
         extract_query: Arc<String>,
+        exporter: Arc<dyn RecordBatchTransformer>,
         lake: Arc<DataLakeConnection>,
         view_factory: Arc<ViewFactory>,
         update_group: Option<i32>,
@@ -78,6 +81,7 @@ impl ExportLogView {
             time_column_name: Arc::new(String::from("time")),
             count_src_query,
             extract_query,
+            exporter,
             log_schema: make_log_schema(),
             view_factory,
             update_group,
@@ -128,6 +132,8 @@ impl View for ExportLogView {
         Ok(Arc::new(
             fetch_sql_partition_spec(
                 ctx,
+                self.exporter.clone(),
+                self.log_schema.clone(),
                 count_src_sql,
                 extract_sql,
                 self.time_column_name.clone(),

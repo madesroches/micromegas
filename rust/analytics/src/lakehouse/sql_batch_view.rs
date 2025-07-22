@@ -9,7 +9,10 @@ use super::{
     view::{PartitionSpec, View, ViewMetadata},
     view_factory::ViewFactory,
 };
-use crate::time::{TimeRange, datetime_to_scalar};
+use crate::{
+    record_batch_transformer::TrivialRecordBatchTransformer,
+    time::{TimeRange, datetime_to_scalar},
+};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, TimeDelta, Utc};
@@ -166,6 +169,8 @@ impl View for SqlBatchView {
         Ok(Arc::new(
             fetch_sql_partition_spec(
                 ctx,
+                Arc::new(TrivialRecordBatchTransformer {}),
+                self.schema.clone(),
                 count_src_sql,
                 extract_sql,
                 self.min_event_time_column.clone(),

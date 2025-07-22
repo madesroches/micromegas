@@ -35,6 +35,7 @@ pub mod metrics_table;
 pub mod payload;
 /// Reference-counted set of properties in transit format
 pub mod property_set;
+pub mod record_batch_transformer;
 /// bulk metadata & payload ingestion using Arrow
 pub mod replication;
 /// Streams response for long requests
