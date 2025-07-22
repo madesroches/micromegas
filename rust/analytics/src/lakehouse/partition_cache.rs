@@ -39,6 +39,9 @@ impl PartitionCache {
         self.partitions.is_empty()
     }
 
+    /// fetches the partitions of all views matching the specified insert range
+    //todo: this should be limited to global instances
+    //todo: ask for a list of view sets (which would be provided by the views using a get_dependencies() api entry)
     pub async fn fetch_overlapping_insert_range(
         pool: &sqlx::PgPool,
         insert_range: TimeRange,
@@ -95,6 +98,7 @@ impl PartitionCache {
         })
     }
 
+    /// fetches the partitions of a single view instance matching the specified insert range
     pub async fn fetch_overlapping_insert_range_for_view(
         pool: &sqlx::PgPool,
         view_set_name: Arc<String>,

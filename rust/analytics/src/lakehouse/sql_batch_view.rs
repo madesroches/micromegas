@@ -47,7 +47,7 @@ pub struct SqlBatchView {
 }
 
 impl SqlBatchView {
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     /// # Arguments
     ///
     /// * `runtime` - datafusion runtime

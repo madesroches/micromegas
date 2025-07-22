@@ -69,3 +69,14 @@ impl Logger for LogSender {
             .with_context(|| "LogSender::write_log_entry")
     }
 }
+
+/// Tracing logger
+pub struct TracingLogger {}
+
+#[async_trait]
+impl Logger for TracingLogger {
+    async fn write_log_entry(&self, msg: String) -> Result<()> {
+        info!("{msg}");
+        Ok(())
+    }
+}
