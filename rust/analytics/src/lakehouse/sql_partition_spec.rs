@@ -5,13 +5,17 @@ use super::{
 use crate::{
     dfext::{min_max_time_df::min_max_time_dataframe, typed_column::typed_column_by_name},
     lakehouse::write_partition::PartitionRowSet,
+    record_batch_transformer::RecordBatchTransformer,
     response_writer::Logger,
     time::TimeRange,
 };
 use anyhow::Result;
 use async_trait::async_trait;
 use datafusion::{
-    arrow::array::{Int64Array, RecordBatch},
+    arrow::{
+        array::{Int64Array, RecordBatch},
+        datatypes::Schema,
+    },
     prelude::*,
 };
 use futures::StreamExt;
@@ -21,7 +25,9 @@ use std::sync::Arc;
 
 pub struct SqlPartitionSpec {
     ctx: SessionContext,
-    transform_query: String,
+    transformer: Arc<dyn RecordBatchTransformer>,
+    schema: Arc<Schema>,
+    extract_query: String,
     min_event_time_column: Arc<String>,
     max_event_time_column: Arc<String>,
     view_metadata: ViewMetadata,
@@ -33,7 +39,9 @@ impl SqlPartitionSpec {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         ctx: SessionContext,
-        transform_query: String,
+        transformer: Arc<dyn RecordBatchTransformer>,
+        schema: Arc<Schema>,
+        extract_query: String,
         min_event_time_column: Arc<String>,
         max_event_time_column: Arc<String>,
         view_metadata: ViewMetadata,
@@ -42,7 +50,9 @@ impl SqlPartitionSpec {
     ) -> Self {
         Self {
             ctx,
-            transform_query,
+            transformer,
+            schema,
+            extract_query,
             min_event_time_column,
             max_event_time_column,
             view_metadata,
@@ -80,15 +90,14 @@ impl PartitionSpec for SqlPartitionSpec {
             self.insert_range.end.to_rfc3339()
         );
         logger.write_log_entry(format!("writing {desc}")).await?;
-        let df = self.ctx.sql(&self.transform_query).await?;
-        let schema = df.schema().inner().clone();
+        let df = self.ctx.sql(&self.extract_query).await?;
         let mut stream = df.execute_stream().await?;
 
         let (tx, rx) = tokio::sync::mpsc::channel(1);
         let join_handle = tokio::spawn(write_partition_from_rows(
             lake.clone(),
             self.view_metadata.clone(),
-            schema,
+            self.schema.clone(),
             self.insert_range,
             self.get_source_data_hash(),
             rx,
@@ -96,7 +105,7 @@ impl PartitionSpec for SqlPartitionSpec {
         ));
 
         while let Some(rb_res) = stream.next().await {
-            let rb = rb_res?;
+            let rb = self.transformer.transform(rb_res?).await?;
             let (mintime, maxtime) = min_max_time_dataframe(
                 self.ctx.read_batch(rb.clone())?,
                 &self.min_event_time_column,
@@ -119,8 +128,10 @@ impl PartitionSpec for SqlPartitionSpec {
 #[allow(clippy::too_many_arguments)]
 pub async fn fetch_sql_partition_spec(
     ctx: SessionContext,
+    transformer: Arc<dyn RecordBatchTransformer>,
+    schema: Arc<Schema>,
     count_src_sql: String,
-    transform_query: String,
+    extract_query: String,
     min_event_time_column: Arc<String>,
     max_event_time_column: Arc<String>,
     view_metadata: ViewMetadata,
@@ -145,7 +156,9 @@ pub async fn fetch_sql_partition_spec(
     }
     Ok(SqlPartitionSpec::new(
         ctx,
-        transform_query,
+        transformer,
+        schema,
+        extract_query,
         min_event_time_column,
         max_event_time_column,
         view_metadata,

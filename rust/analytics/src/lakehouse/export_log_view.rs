@@ -1,82 +1,109 @@
 use super::{
     batch_update::PartitionCreationStrategy,
-    materialized_view::MaterializedView,
-    merge::{PartitionMerger, QueryMerger},
-    partition::Partition,
     partition_cache::{NullPartitionProvider, PartitionCache},
     query::make_session_context,
-    sql_partition_spec::fetch_sql_partition_spec,
-    view::{PartitionSpec, View, ViewMetadata},
+    view::{PartitionSpec, View},
     view_factory::ViewFactory,
 };
 use crate::{
-    record_batch_transformer::TrivialRecordBatchTransformer,
+    lakehouse::{sql_partition_spec::fetch_sql_partition_spec, view::ViewMetadata},
+    record_batch_transformer::RecordBatchTransformer,
     time::{TimeRange, datetime_to_scalar},
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, TimeDelta, Utc};
 use datafusion::{
-    arrow::datatypes::Schema,
-    execution::{SendableRecordBatchStream, runtime_env::RuntimeEnv},
+    arrow::{
+        array::{PrimitiveBuilder, RecordBatch, StringBuilder},
+        datatypes::{DataType, Field, Int32Type, Schema, TimeUnit, TimestampNanosecondType},
+    },
+    execution::runtime_env::RuntimeEnv,
     prelude::*,
-    sql::TableReference,
 };
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
-use micromegas_tracing::error;
+use micromegas_tracing::levels::Level;
 use std::hash::Hash;
 use std::hash::Hasher;
 use std::{hash::DefaultHasher, sync::Arc};
 
-pub type MergerMaker = dyn Fn(Arc<RuntimeEnv>, Arc<Schema>) -> Arc<dyn PartitionMerger>;
+pub struct ExportLogBuilder {
+    times: PrimitiveBuilder<TimestampNanosecondType>,
+    levels: PrimitiveBuilder<Int32Type>,
+    msgs: StringBuilder,
+}
 
-/// SQL-defined view updated in batch
+impl ExportLogBuilder {
+    #[expect(clippy::new_without_default)]
+    pub fn new() -> Self {
+        Self {
+            times: PrimitiveBuilder::new(),
+            levels: PrimitiveBuilder::new(),
+            msgs: StringBuilder::new(),
+        }
+    }
+
+    pub fn append(&mut self, level: Level, msg: &str) {
+        let now = Utc::now();
+        self.times
+            .append_value(now.timestamp_nanos_opt().unwrap_or_default());
+        self.levels.append_value(level as i32);
+        self.msgs.append_value(msg);
+    }
+
+    pub fn finish(mut self) -> Result<RecordBatch> {
+        RecordBatch::try_new(
+            make_export_log_schema(),
+            vec![
+                Arc::new(self.times.finish().with_timezone_utc()),
+                Arc::new(self.levels.finish()),
+                Arc::new(self.msgs.finish()),
+            ],
+        )
+        .with_context(|| "building record batch")
+    }
+}
+
 #[derive(Debug)]
-pub struct SqlBatchView {
-    runtime: Arc<RuntimeEnv>,
+pub struct ExportLogView {
     view_set_name: Arc<String>,
     view_instance_id: Arc<String>,
-    min_event_time_column: Arc<String>,
-    max_event_time_column: Arc<String>,
+    time_column_name: Arc<String>,
     count_src_query: Arc<String>,
     extract_query: Arc<String>,
-    merge_partitions_query: Arc<String>,
-    schema: Arc<Schema>,
-    merger: Arc<dyn PartitionMerger>,
+    exporter: Arc<dyn RecordBatchTransformer>,
+    log_schema: Arc<Schema>,
     view_factory: Arc<ViewFactory>,
     update_group: Option<i32>,
     max_partition_delta_from_source: TimeDelta,
     max_partition_delta_from_merge: TimeDelta,
 }
 
-impl SqlBatchView {
+fn make_export_log_schema() -> Arc<Schema> {
+    Arc::new(Schema::new(vec![
+        Field::new(
+            "time",
+            DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into())),
+            false,
+        ),
+        Field::new("level", DataType::Int32, false),
+        Field::new("msg", DataType::Utf8, false),
+    ]))
+}
+
+impl ExportLogView {
     #[expect(clippy::too_many_arguments)]
-    /// # Arguments
-    ///
-    /// * `runtime` - datafusion runtime
-    /// * `view_set_name` - name of the table
-    /// * `min_event_time_column` - min(column) should result in the first timestamp in a dataframe
-    /// * `max_event_time_column` - max(column) should result in the last timestamp in a dataframe
-    /// * `count_src_query` - used to count the rows of the underlying data to know if a cached partition is up to date
-    /// * `extract_query` - used to extract the source data into a cached partition
-    /// * `merge_partitions_query` - used to merge multiple partitions into a single one (and user queries which are one multiple partitions by default)
-    /// * `lake` - data lake
-    /// * `view_factory` - all views accessible to the `count_src_query`
-    /// * `update_group` - tells the daemon which view should be materialized and in what order
     pub async fn new(
         runtime: Arc<RuntimeEnv>,
         view_set_name: Arc<String>,
-        min_event_time_column: Arc<String>,
-        max_event_time_column: Arc<String>,
         count_src_query: Arc<String>,
         extract_query: Arc<String>,
-        merge_partitions_query: Arc<String>,
+        exporter: Arc<dyn RecordBatchTransformer>,
         lake: Arc<DataLakeConnection>,
         view_factory: Arc<ViewFactory>,
         update_group: Option<i32>,
         max_partition_delta_from_source: TimeDelta,
         max_partition_delta_from_merge: TimeDelta,
-        merger_maker: Option<&MergerMaker>,
     ) -> Result<Self> {
         let null_part_provider = Arc::new(NullPartitionProvider {});
         let ctx = make_session_context(
@@ -92,29 +119,15 @@ impl SqlBatchView {
         let sql = extract_query
             .replace("{begin}", &now_str)
             .replace("{end}", &now_str);
-        let extracted_df = ctx.sql(&sql).await?;
-        let schema = extracted_df.schema().inner().clone();
-        let merger = merger_maker.unwrap_or(&|runtime, schema| {
-            let merge_query = Arc::new(merge_partitions_query.replace("{source}", "source"));
-            Arc::new(QueryMerger::new(
-                runtime,
-                view_factory.clone(),
-                schema,
-                merge_query,
-            ))
-        })(runtime.clone(), schema.clone());
-
+        let _extracted_df = ctx.sql(&sql).await?;
         Ok(Self {
-            runtime,
             view_set_name,
             view_instance_id: Arc::new(String::from("global")),
-            min_event_time_column,
-            max_event_time_column,
+            time_column_name: Arc::new(String::from("time")),
             count_src_query,
             extract_query,
-            merge_partitions_query,
-            schema,
-            merger,
+            exporter,
+            log_schema: make_export_log_schema(),
             view_factory,
             update_group,
             max_partition_delta_from_source,
@@ -124,7 +137,7 @@ impl SqlBatchView {
 }
 
 #[async_trait]
-impl View for SqlBatchView {
+impl View for ExportLogView {
     fn get_view_set_name(&self) -> Arc<String> {
         self.view_set_name.clone()
     }
@@ -135,7 +148,7 @@ impl View for SqlBatchView {
 
     async fn make_batch_partition_spec(
         &self,
-        _runtime: Arc<RuntimeEnv>,
+        runtime: Arc<RuntimeEnv>,
         lake: Arc<DataLakeConnection>,
         existing_partitions: Arc<PartitionCache>,
         insert_range: TimeRange,
@@ -147,7 +160,7 @@ impl View for SqlBatchView {
         };
         let partitions_in_range = Arc::new(existing_partitions.filter_insert_range(insert_range));
         let ctx = make_session_context(
-            self.runtime.clone(),
+            runtime.clone(),
             lake.clone(),
             partitions_in_range.clone(),
             None,
@@ -155,26 +168,23 @@ impl View for SqlBatchView {
         )
         .await
         .with_context(|| "make_session_context")?;
-
         let count_src_sql = self
             .count_src_query
             .replace("{begin}", &insert_range.begin.to_rfc3339())
             .replace("{end}", &insert_range.end.to_rfc3339());
-
         let extract_sql = self
             .extract_query
             .replace("{begin}", &insert_range.begin.to_rfc3339())
             .replace("{end}", &insert_range.end.to_rfc3339());
-
         Ok(Arc::new(
             fetch_sql_partition_spec(
                 ctx,
-                Arc::new(TrivialRecordBatchTransformer {}),
-                self.schema.clone(),
+                self.exporter.clone(),
+                self.log_schema.clone(),
                 count_src_sql,
                 extract_sql,
-                self.min_event_time_column.clone(),
-                self.max_event_time_column.clone(),
+                self.time_column_name.clone(),
+                self.time_column_name.clone(),
                 view_meta,
                 insert_range,
             )
@@ -185,12 +195,12 @@ impl View for SqlBatchView {
 
     fn get_file_schema_hash(&self) -> Vec<u8> {
         let mut hasher = DefaultHasher::new();
-        self.schema.hash(&mut hasher);
+        self.log_schema.hash(&mut hasher);
         hasher.finish().to_le_bytes().to_vec()
     }
 
     fn get_file_schema(&self) -> Arc<Schema> {
-        self.schema.clone()
+        self.log_schema.clone()
     }
 
     async fn jit_update(
@@ -203,59 +213,17 @@ impl View for SqlBatchView {
 
     fn make_time_filter(&self, begin: DateTime<Utc>, end: DateTime<Utc>) -> Result<Vec<Expr>> {
         Ok(vec![
-            col(&*self.min_event_time_column).lt_eq(lit(datetime_to_scalar(end))),
-            col(&*self.max_event_time_column).gt_eq(lit(datetime_to_scalar(begin))),
+            col(&**self.time_column_name).lt_eq(lit(datetime_to_scalar(end))),
+            col(&**self.time_column_name).gt_eq(lit(datetime_to_scalar(begin))),
         ])
     }
 
     fn get_min_event_time_column_name(&self) -> Arc<String> {
-        self.min_event_time_column.clone()
+        self.time_column_name.clone()
     }
 
     fn get_max_event_time_column_name(&self) -> Arc<String> {
-        self.max_event_time_column.clone()
-    }
-
-    async fn register_table(&self, ctx: &SessionContext, table: MaterializedView) -> Result<()> {
-        let view_name = self.get_view_set_name().to_string();
-        let partitions_table_name = format!("__{view_name}__partitions");
-        ctx.register_table(
-            TableReference::Bare {
-                table: partitions_table_name.clone().into(),
-            },
-            Arc::new(table),
-        )?;
-        let df = ctx
-            .sql(
-                &self
-                    .merge_partitions_query
-                    .replace("{source}", &partitions_table_name),
-            )
-            .await?;
-        ctx.register_table(
-            TableReference::Bare {
-                table: view_name.into(),
-            },
-            df.into_view(),
-        )?;
-        Ok(())
-    }
-
-    async fn merge_partitions(
-        &self,
-        _runtime: Arc<RuntimeEnv>,
-        lake: Arc<DataLakeConnection>,
-        partitions_to_merge: Arc<Vec<Partition>>,
-        partitions_all_views: Arc<PartitionCache>,
-    ) -> Result<SendableRecordBatchStream> {
-        let res = self
-            .merger
-            .execute_merge_query(lake, partitions_to_merge, partitions_all_views)
-            .await;
-        if let Err(e) = &res {
-            error!("{e:?}");
-        }
-        res
+        self.time_column_name.clone()
     }
 
     fn get_update_group(&self) -> Option<i32> {
