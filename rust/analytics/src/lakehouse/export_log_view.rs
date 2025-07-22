@@ -1,4 +1,5 @@
 use super::{
+    batch_update::PartitionCreationStrategy,
     partition_cache::{NullPartitionProvider, PartitionCache},
     query::make_session_context,
     view::{PartitionSpec, View},
@@ -74,6 +75,8 @@ pub struct ExportLogView {
     log_schema: Arc<Schema>,
     view_factory: Arc<ViewFactory>,
     update_group: Option<i32>,
+    max_partition_delta_from_source: TimeDelta,
+    max_partition_delta_from_merge: TimeDelta,
 }
 
 fn make_export_log_schema() -> Arc<Schema> {
@@ -99,7 +102,8 @@ impl ExportLogView {
         lake: Arc<DataLakeConnection>,
         view_factory: Arc<ViewFactory>,
         update_group: Option<i32>,
-        _max_partition_delta_from_source: TimeDelta,
+        max_partition_delta_from_source: TimeDelta,
+        max_partition_delta_from_merge: TimeDelta,
     ) -> Result<Self> {
         let null_part_provider = Arc::new(NullPartitionProvider {});
         let ctx = make_session_context(
@@ -126,6 +130,8 @@ impl ExportLogView {
             log_schema: make_export_log_schema(),
             view_factory,
             update_group,
+            max_partition_delta_from_source,
+            max_partition_delta_from_merge,
         })
     }
 }
@@ -222,5 +228,16 @@ impl View for ExportLogView {
 
     fn get_update_group(&self) -> Option<i32> {
         self.update_group
+    }
+
+    fn get_max_partition_time_delta(&self, strategy: &PartitionCreationStrategy) -> TimeDelta {
+        match strategy {
+            PartitionCreationStrategy::Abort | PartitionCreationStrategy::CreateFromSource => {
+                self.max_partition_delta_from_source
+            }
+            PartitionCreationStrategy::MergeExisting(_partitions) => {
+                self.max_partition_delta_from_merge
+            }
+        }
     }
 }
