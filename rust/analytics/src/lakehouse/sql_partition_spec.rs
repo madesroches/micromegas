@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 pub struct SqlPartitionSpec {
     ctx: SessionContext,
-    transform_query: String,
+    extract_query: String,
     min_event_time_column: Arc<String>,
     max_event_time_column: Arc<String>,
     view_metadata: ViewMetadata,
@@ -33,7 +33,7 @@ impl SqlPartitionSpec {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         ctx: SessionContext,
-        transform_query: String,
+        extract_query: String,
         min_event_time_column: Arc<String>,
         max_event_time_column: Arc<String>,
         view_metadata: ViewMetadata,
@@ -42,7 +42,7 @@ impl SqlPartitionSpec {
     ) -> Self {
         Self {
             ctx,
-            transform_query,
+            extract_query,
             min_event_time_column,
             max_event_time_column,
             view_metadata,
@@ -80,7 +80,7 @@ impl PartitionSpec for SqlPartitionSpec {
             self.insert_range.end.to_rfc3339()
         );
         logger.write_log_entry(format!("writing {desc}")).await?;
-        let df = self.ctx.sql(&self.transform_query).await?;
+        let df = self.ctx.sql(&self.extract_query).await?;
         let schema = df.schema().inner().clone();
         let mut stream = df.execute_stream().await?;
 
@@ -120,7 +120,7 @@ impl PartitionSpec for SqlPartitionSpec {
 pub async fn fetch_sql_partition_spec(
     ctx: SessionContext,
     count_src_sql: String,
-    transform_query: String,
+    extract_query: String,
     min_event_time_column: Arc<String>,
     max_event_time_column: Arc<String>,
     view_metadata: ViewMetadata,
@@ -145,7 +145,7 @@ pub async fn fetch_sql_partition_spec(
     }
     Ok(SqlPartitionSpec::new(
         ctx,
-        transform_query,
+        extract_query,
         min_event_time_column,
         max_event_time_column,
         view_metadata,

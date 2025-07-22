@@ -36,7 +36,7 @@ pub struct SqlBatchView {
     min_event_time_column: Arc<String>,
     max_event_time_column: Arc<String>,
     count_src_query: Arc<String>,
-    transform_query: Arc<String>,
+    extract_query: Arc<String>,
     merge_partitions_query: Arc<String>,
     schema: Arc<Schema>,
     merger: Arc<dyn PartitionMerger>,
@@ -55,7 +55,7 @@ impl SqlBatchView {
     /// * `min_event_time_column` - min(column) should result in the first timestamp in a dataframe
     /// * `max_event_time_column` - max(column) should result in the last timestamp in a dataframe
     /// * `count_src_query` - used to count the rows of the underlying data to know if a cached partition is up to date
-    /// * `transform_query` - used to transform the source data into a cached partition
+    /// * `extract_query` - used to extract the source data into a cached partition
     /// * `merge_partitions_query` - used to merge multiple partitions into a single one (and user queries which are one multiple partitions by default)
     /// * `lake` - data lake
     /// * `view_factory` - all views accessible to the `count_src_query`
@@ -66,7 +66,7 @@ impl SqlBatchView {
         min_event_time_column: Arc<String>,
         max_event_time_column: Arc<String>,
         count_src_query: Arc<String>,
-        transform_query: Arc<String>,
+        extract_query: Arc<String>,
         merge_partitions_query: Arc<String>,
         lake: Arc<DataLakeConnection>,
         view_factory: Arc<ViewFactory>,
@@ -86,11 +86,11 @@ impl SqlBatchView {
         .await
         .with_context(|| "make_session_context")?;
         let now_str = Utc::now().to_rfc3339();
-        let sql = transform_query
+        let sql = extract_query
             .replace("{begin}", &now_str)
             .replace("{end}", &now_str);
-        let transformed_df = ctx.sql(&sql).await?;
-        let schema = transformed_df.schema().inner().clone();
+        let extracted_df = ctx.sql(&sql).await?;
+        let schema = extracted_df.schema().inner().clone();
         let merger = merger_maker.unwrap_or(&|runtime, schema| {
             let merge_query = Arc::new(merge_partitions_query.replace("{source}", "source"));
             Arc::new(QueryMerger::new(
@@ -108,7 +108,7 @@ impl SqlBatchView {
             min_event_time_column,
             max_event_time_column,
             count_src_query,
-            transform_query,
+            extract_query,
             merge_partitions_query,
             schema,
             merger,
@@ -158,8 +158,8 @@ impl View for SqlBatchView {
             .replace("{begin}", &insert_range.begin.to_rfc3339())
             .replace("{end}", &insert_range.end.to_rfc3339());
 
-        let transform_sql = self
-            .transform_query
+        let extract_sql = self
+            .extract_query
             .replace("{begin}", &insert_range.begin.to_rfc3339())
             .replace("{end}", &insert_range.end.to_rfc3339());
 
@@ -167,7 +167,7 @@ impl View for SqlBatchView {
             fetch_sql_partition_spec(
                 ctx,
                 count_src_sql,
-                transform_sql,
+                extract_sql,
                 self.min_event_time_column.clone(),
                 self.max_event_time_column.clone(),
                 view_meta,
@@ -177,14 +177,17 @@ impl View for SqlBatchView {
             .with_context(|| "fetch_sql_partition_spec")?,
         ))
     }
+
     fn get_file_schema_hash(&self) -> Vec<u8> {
         let mut hasher = DefaultHasher::new();
         self.schema.hash(&mut hasher);
         hasher.finish().to_le_bytes().to_vec()
     }
+
     fn get_file_schema(&self) -> Arc<Schema> {
         self.schema.clone()
     }
+
     async fn jit_update(
         &self,
         _lake: Arc<DataLakeConnection>,
@@ -192,6 +195,7 @@ impl View for SqlBatchView {
     ) -> Result<()> {
         Ok(())
     }
+
     fn make_time_filter(&self, begin: DateTime<Utc>, end: DateTime<Utc>) -> Result<Vec<Expr>> {
         Ok(vec![
             col(&*self.min_event_time_column).lt_eq(lit(datetime_to_scalar(end))),

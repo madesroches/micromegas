@@ -65,7 +65,10 @@ To get started with Micromegas, please refer to the [GETTING_STARTED.md](./doc/G
 
 Our current focus is on delivering a robust and feature-rich query federation experience.
 
-*   **July 2025:** Developing `pg-gateway-srv` to provide a PostgreSQL-compatible gateway for query federation, allowing you to use a wide range of standard SQL tools.
+*   **July 2025** 
+
+  * Developing `pg-gateway-srv` to provide a PostgreSQL-compatible gateway for query federation, allowing you to use a wide range of standard SQL tools.
+  * Add export mechanism to view materialization to send data out as it is ingested
 
 For a detailed history of changes, please see the [CHANGELOG.md](./CHANGELOG.md) file.
 
