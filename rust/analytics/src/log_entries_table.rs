@@ -102,19 +102,19 @@ pub fn log_table_schema() -> Schema {
 
 /// A builder for creating a `RecordBatch` of log entries.
 pub struct LogEntriesRecordBuilder {
-    pub process_ids: StringDictionaryBuilder<Int16Type>,
-    pub stream_ids: StringDictionaryBuilder<Int16Type>,
-    pub block_ids: StringDictionaryBuilder<Int16Type>,
-    pub insert_times: PrimitiveBuilder<TimestampNanosecondType>,
-    pub exes: StringDictionaryBuilder<Int16Type>,
-    pub usernames: StringDictionaryBuilder<Int16Type>,
-    pub computers: StringDictionaryBuilder<Int16Type>,
-    pub times: PrimitiveBuilder<TimestampNanosecondType>,
-    pub targets: StringDictionaryBuilder<Int16Type>,
-    pub levels: PrimitiveBuilder<Int32Type>,
-    pub msgs: StringBuilder,
-    pub properties: ListBuilder<StructBuilder>,
-    pub process_properties: ListBuilder<StructBuilder>,
+    process_ids: StringDictionaryBuilder<Int16Type>,
+    stream_ids: StringDictionaryBuilder<Int16Type>,
+    block_ids: StringDictionaryBuilder<Int16Type>,
+    insert_times: PrimitiveBuilder<TimestampNanosecondType>,
+    exes: StringDictionaryBuilder<Int16Type>,
+    usernames: StringDictionaryBuilder<Int16Type>,
+    computers: StringDictionaryBuilder<Int16Type>,
+    times: PrimitiveBuilder<TimestampNanosecondType>,
+    targets: StringDictionaryBuilder<Int16Type>,
+    levels: PrimitiveBuilder<Int32Type>,
+    msgs: StringBuilder,
+    properties: ListBuilder<StructBuilder>,
+    process_properties: ListBuilder<StructBuilder>,
 }
 
 impl LogEntriesRecordBuilder {

@@ -13,14 +13,55 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, TimeDelta, Utc};
 use datafusion::{
-    arrow::datatypes::{DataType, Field, Schema, TimeUnit},
+    arrow::{
+        array::{PrimitiveBuilder, RecordBatch, StringBuilder},
+        datatypes::{DataType, Field, Int32Type, Schema, TimeUnit, TimestampNanosecondType},
+    },
     execution::runtime_env::RuntimeEnv,
     prelude::*,
 };
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
+use micromegas_tracing::levels::Level;
 use std::hash::Hash;
 use std::hash::Hasher;
 use std::{hash::DefaultHasher, sync::Arc};
+
+pub struct ExportLogBuilder {
+    times: PrimitiveBuilder<TimestampNanosecondType>,
+    levels: PrimitiveBuilder<Int32Type>,
+    msgs: StringBuilder,
+}
+
+impl ExportLogBuilder {
+    #[expect(clippy::new_without_default)]
+    pub fn new() -> Self {
+        Self {
+            times: PrimitiveBuilder::new(),
+            levels: PrimitiveBuilder::new(),
+            msgs: StringBuilder::new(),
+        }
+    }
+
+    pub fn append(&mut self, level: Level, msg: &str) {
+        let now = Utc::now();
+        self.times
+            .append_value(now.timestamp_nanos_opt().unwrap_or_default());
+        self.levels.append_value(level as i32);
+        self.msgs.append_value(msg);
+    }
+
+    pub fn finish(mut self) -> Result<RecordBatch> {
+        RecordBatch::try_new(
+            make_export_log_schema(),
+            vec![
+                Arc::new(self.times.finish().with_timezone_utc()),
+                Arc::new(self.levels.finish()),
+                Arc::new(self.msgs.finish()),
+            ],
+        )
+        .with_context(|| "building record batch")
+    }
+}
 
 #[derive(Debug)]
 pub struct ExportLogView {
@@ -35,7 +76,7 @@ pub struct ExportLogView {
     update_group: Option<i32>,
 }
 
-fn make_log_schema() -> Arc<Schema> {
+fn make_export_log_schema() -> Arc<Schema> {
     Arc::new(Schema::new(vec![
         Field::new(
             "time",
@@ -82,7 +123,7 @@ impl ExportLogView {
             count_src_query,
             extract_query,
             exporter,
-            log_schema: make_log_schema(),
+            log_schema: make_export_log_schema(),
             view_factory,
             update_group,
         })
