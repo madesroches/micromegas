@@ -5,6 +5,7 @@ pub mod expressions;
 /// Compute histograms from SQL
 pub mod histogram;
 /// JSONB support
+#[cfg(feature = "jsonb")]
 pub mod jsonb;
 /// Stream a function's log as a table
 pub mod log_stream_table_provider;

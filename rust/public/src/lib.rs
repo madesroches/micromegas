@@ -102,12 +102,14 @@ pub use arrow_flight;
 pub use axum;
 pub use chrono;
 pub use datafusion;
-pub use datafusion_postgres;
 pub use object_store;
 pub use prost;
 pub use sqlx;
 pub use tonic;
 pub use uuid;
+
+#[cfg(feature = "pg_catalog")]
+pub use datafusion_postgres;
 
 /// telemetry protocol
 pub mod telemetry {

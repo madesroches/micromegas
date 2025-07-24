@@ -43,10 +43,9 @@ colored = { version = "2" }
 ctrlc = "3.2.0"
 datafusion = "48"
 #datafusion-postgres = "0.7"
-datafusion-postgres = { git="https://github.com/datafusion-contrib/datafusion-postgres", rev="c2d26363a55a2537fbe2c42a2308bfa52305499c" }
+#datafusion-postgres = { git="https://github.com/datafusion-contrib/datafusion-postgres", rev="c2d26363a55a2537fbe2c42a2308bfa52305499c"  }
 futures = "0.3"
 http = "1.1"
-jsonb = { git="https://github.com/madesroches/jsonb", rev = "542b9fd", default-features = false, features = ["databend", "preserve_order"] }
 lazy_static = "1.4"
 log = { version = "0.4", features = ["std"] }
 lz4 = "1.23"
