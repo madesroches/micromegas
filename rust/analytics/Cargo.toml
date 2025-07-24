@@ -9,8 +9,8 @@ repository.workspace = true
 license.workspace = true
 authors.workspace = true
 
-[features]
-jsonb = ["dep:jsonb"]
+# [features]
+# jsonb = ["dep:jsonb"]
 
 [dependencies]
 micromegas-telemetry.workspace = true
@@ -18,7 +18,7 @@ micromegas-tracing.workspace = true
 micromegas-transit.workspace = true
 micromegas-ingestion.workspace = true
 
-jsonb = { git="https://github.com/madesroches/jsonb", rev = "542b9fd", default-features = false, features = ["databend", "preserve_order"], optional = true }
+# jsonb = { git="https://github.com/madesroches/jsonb", rev = "542b9fd", default-features = false, features = ["databend", "preserve_order"], optional = true }
 
 
 anyhow.workspace = true

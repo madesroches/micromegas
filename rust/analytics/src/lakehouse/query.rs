@@ -7,13 +7,13 @@ use super::{
     retire_partitions_table_function::RetirePartitionsTableFunction, view::View,
     view_factory::ViewFactory,
 };
-#[cfg(feature = "jsonb")]
-use crate::dfext::jsonb::{
-    cast::{make_jsonb_as_f64_udf, make_jsonb_as_i64_udf, make_jsonb_as_string_udf},
-    format_json::make_jsonb_format_json_udf,
-    get::make_jsonb_get_udf,
-    parse::make_jsonb_parse_udf,
-};
+// #[cfg(feature = "jsonb")]
+// use crate::dfext::jsonb::{
+//     cast::{make_jsonb_as_f64_udf, make_jsonb_as_i64_udf, make_jsonb_as_string_udf},
+//     format_json::make_jsonb_format_json_udf,
+//     get::make_jsonb_get_udf,
+//     parse::make_jsonb_parse_udf,
+// };
 use crate::{
     dfext::histogram::{
         accessors::{make_count_from_histogram_udf, make_sum_from_histogram_udf},
@@ -137,15 +137,15 @@ pub fn register_extension_functions(ctx: &SessionContext) {
     ctx.register_udf(make_count_from_histogram_udf());
     ctx.register_udf(make_sum_from_histogram_udf());
 
-    #[cfg(feature = "jsonb")]
-    {
-        ctx.register_udf(make_jsonb_parse_udf());
-        ctx.register_udf(make_jsonb_format_json_udf());
-        ctx.register_udf(make_jsonb_get_udf());
-        ctx.register_udf(make_jsonb_as_string_udf());
-        ctx.register_udf(make_jsonb_as_f64_udf());
-        ctx.register_udf(make_jsonb_as_i64_udf());
-    }
+    // #[cfg(feature = "jsonb")]
+    // {
+    //     ctx.register_udf(make_jsonb_parse_udf());
+    //     ctx.register_udf(make_jsonb_format_json_udf());
+    //     ctx.register_udf(make_jsonb_get_udf());
+    //     ctx.register_udf(make_jsonb_as_string_udf());
+    //     ctx.register_udf(make_jsonb_as_f64_udf());
+    //     ctx.register_udf(make_jsonb_as_i64_udf());
+    // }
 }
 
 pub fn register_functions(
