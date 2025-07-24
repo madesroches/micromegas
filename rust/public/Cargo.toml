@@ -10,8 +10,8 @@ repository.workspace = true
 license.workspace = true
 authors.workspace = true
 
-[features]
-pg_catalog = ["dep:datafusion-postgres"]
+# [features]
+# pg_catalog = ["dep:datafusion-postgres"]
 
 [dependencies]
 micromegas-analytics.workspace = true
@@ -21,7 +21,7 @@ micromegas-telemetry.workspace = true
 micromegas-tracing.workspace = true
 micromegas-perfetto.workspace = true
 
-datafusion-postgres = { git="https://github.com/datafusion-contrib/datafusion-postgres", rev="c2d26363a55a2537fbe2c42a2308bfa52305499c"  , optional = true}
+# datafusion-postgres = { git="https://github.com/datafusion-contrib/datafusion-postgres", rev="c2d26363a55a2537fbe2c42a2308bfa52305499c"  , optional = true}
 
 anyhow.workspace = true
 arrow-flight.workspace = true

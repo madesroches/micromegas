@@ -108,8 +108,8 @@ pub use sqlx;
 pub use tonic;
 pub use uuid;
 
-#[cfg(feature = "pg_catalog")]
-pub use datafusion_postgres;
+// #[cfg(feature = "pg_catalog")]
+// pub use datafusion_postgres;
 
 /// telemetry protocol
 pub mod telemetry {
