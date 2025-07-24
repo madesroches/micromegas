@@ -67,6 +67,7 @@ Our current focus is on delivering a robust and feature-rich query federation ex
 
 *   **July 2025** 
 
+  * Released [version 0.11.0](https://crates.io/crates/micromegas)
   * Developing `pg-gateway-srv` to provide a PostgreSQL-compatible gateway for query federation, allowing you to use a wide range of standard SQL tools.
   * Add export mechanism to view materialization to send data out as it is ingested
 
