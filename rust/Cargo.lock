@@ -2001,7 +2001,7 @@ dependencies = [
 
 [[package]]
 name = "flight-sql-srv"
-version = "0.10.1"
+version = "0.11.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -3014,7 +3014,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas"
-version = "0.10.1"
+version = "0.11.0"
 dependencies = [
  "anyhow",
  "arrow-flight",
@@ -3047,7 +3047,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-analytics"
-version = "0.10.1"
+version = "0.11.0"
 dependencies = [
  "anyhow",
  "arrow-flight",
@@ -3074,7 +3074,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-derive-transit"
-version = "0.10.1"
+version = "0.11.0"
 dependencies = [
  "quote",
  "syn 1.0.109",
@@ -3082,7 +3082,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-ingestion"
-version = "0.10.1"
+version = "0.11.0"
 dependencies = [
  "anyhow",
  "bytes",
@@ -3094,7 +3094,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-perfetto"
-version = "0.10.1"
+version = "0.11.0"
 dependencies = [
  "anyhow",
  "prost",
@@ -3104,7 +3104,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-telemetry"
-version = "0.10.1"
+version = "0.11.0"
 dependencies = [
  "anyhow",
  "bytes",
@@ -3122,7 +3122,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-telemetry-sink"
-version = "0.10.1"
+version = "0.11.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3147,7 +3147,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-tracing"
-version = "0.10.1"
+version = "0.11.0"
 dependencies = [
  "anyhow",
  "cfg-if",
@@ -3168,7 +3168,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-tracing-proc-macros"
-version = "0.10.1"
+version = "0.11.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3177,7 +3177,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-transit"
-version = "0.10.1"
+version = "0.11.0"
 dependencies = [
  "anyhow",
  "lazy_static",
@@ -3583,7 +3583,7 @@ dependencies = [
 
 [[package]]
 name = "pg-gateway-srv"
-version = "0.10.1"
+version = "0.11.0"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -4993,7 +4993,7 @@ checksum = "55937e1799185b12863d447f42597ed69d9928686b8d88a1df17376a097d8369"
 
 [[package]]
 name = "telemetry-admin"
-version = "0.10.1"
+version = "0.11.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -5003,7 +5003,7 @@ dependencies = [
 
 [[package]]
 name = "telemetry-ingestion-srv"
-version = "0.10.1"
+version = "0.11.0"
 dependencies = [
  "anyhow",
  "axum 0.8.4",
@@ -5460,7 +5460,7 @@ checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
 name = "uri-handler"
-version = "0.10.1"
+version = "0.11.0"
 dependencies = [
  "anyhow",
  "micromegas",
