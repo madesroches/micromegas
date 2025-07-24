@@ -26,3 +26,4 @@ unreal/GTAGS
 docker/telemetry-ingestion-srv
 docker/flight-sql-srv
 docker/telemetry-admin
+docker/pg-gateway-srv
