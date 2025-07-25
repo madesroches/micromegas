@@ -6,7 +6,7 @@ import shutil
 
 
 def main():
-    rust_command.run_command("cargo build --release")
+    rust_command.run_command("cargo build --release --features \"pg_catalog\"")
     target_dir = os.environ["CARGO_TARGET_DIR"]
     shutil.copyfile(
         os.path.join(target_dir, "release", "telemetry-ingestion-srv"),
