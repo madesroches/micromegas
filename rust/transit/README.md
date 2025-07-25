@@ -1,5 +1,5 @@
 # Micromegas Transit Crate
 
-This crate provides low overhead serialization and is part of the Micromegas observability platform.
+This crate provides fast binary serialization for Plain Old Data structures.
 
 For more information, please see the main repository at [https://github.com/madesroches/micromegas](https://github.com/madesroches/micromegas).
