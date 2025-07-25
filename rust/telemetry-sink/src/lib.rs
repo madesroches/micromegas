@@ -1,4 +1,4 @@
-//! Telemetry Grpc sink library
+//! Telemetry HTTP sink library
 //!
 //! Provides logging, metrics, memory and performance profiling
 
