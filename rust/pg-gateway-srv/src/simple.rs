@@ -17,6 +17,7 @@ use pgwire::{
 use std::fmt::Debug;
 use std::sync::Arc;
 
+use crate::api_error;
 use crate::state::SharedState;
 
 /// Handles simple queries from PostgreSQL clients.
@@ -37,31 +38,24 @@ pub async fn execute_query<'a>(state: &SharedState, sql: &str) -> PgWireResult<R
         .lock()
         .await
         .flight_client_factory()
-        .map_err(|e| PgWireError::ApiError(e.into()))?;
-    let mut flight_client = client_factory
-        .make_client()
-        .await
-        .map_err(|e| PgWireError::ApiError(e.into()))?;
+        .map_err(api_error!())?;
+    let mut flight_client = client_factory.make_client().await.map_err(api_error!())?;
     let mut record_batch_stream = flight_client
         .query_stream(sql.into(), None)
         .await
-        .map_err(|e| PgWireError::ApiError(e.into()))?;
+        .map_err(api_error!())?;
     // we fetch the first record batch to make sure the schema is accessible in the stream
     let mut opt_record_batch = record_batch_stream.next().await;
     let arrow_schema = record_batch_stream
         .schema()
-        .ok_or_else(|| PgWireError::ApiError("no schema in record batch stream".into()))?;
+        .ok_or_else(|| api_error!("no schema in record batch stream"))?;
     let schema = Arc::new(
-        arrow_schema_to_pg_fields(arrow_schema, &Format::UnifiedText)
-            .map_err(|e| PgWireError::ApiError(e.into()))?,
+        arrow_schema_to_pg_fields(arrow_schema, &Format::UnifiedText).map_err(api_error!())?,
     );
     let schema_copy = schema.clone();
     let pg_row_stream = Box::pin(try_stream!({
         while let Some(record_batch_res) = opt_record_batch {
-            for row in encode_recordbatch(
-                schema.clone(),
-                record_batch_res.map_err(|e| PgWireError::ApiError(e.into()))?,
-            ) {
+            for row in encode_recordbatch(schema.clone(), record_batch_res.map_err(api_error!())?) {
                 yield row?;
             }
             opt_record_batch = record_batch_stream.next().await;

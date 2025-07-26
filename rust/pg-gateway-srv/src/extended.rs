@@ -1,5 +1,4 @@
-use crate::{simple::execute_query, state::SharedState};
-use anyhow::anyhow;
+use crate::{api_error, simple::execute_query, state::SharedState};
 use async_trait::async_trait;
 use futures::Sink;
 use micromegas::{
@@ -57,8 +56,8 @@ impl ExtendedQueryHandler for ExtendedQueryH {
         PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
     {
         info!("do_describe_statement");
-        Err(PgWireError::ApiError(
-            anyhow!("ExtendedQueryHandler::do_describe_statement not implemented").into(),
+        Err(api_error!(
+            "ExtendedQueryHandler::do_describe_statement not implemented"
         ))
     }
 
@@ -82,17 +81,14 @@ impl ExtendedQueryHandler for ExtendedQueryH {
             .lock()
             .await
             .flight_client_factory()
-            .map_err(|e| PgWireError::ApiError(e.into()))?;
-        let mut flight_client = client_factory
-            .make_client()
-            .await
-            .map_err(|e| PgWireError::ApiError(e.into()))?;
+            .map_err(api_error!())?;
+        let mut flight_client = client_factory.make_client().await.map_err(api_error!())?;
         let prepared = flight_client
             .prepare_statement(target.statement.statement.clone())
             .await
-            .map_err(|e| PgWireError::ApiError(e.into()))?;
+            .map_err(api_error!())?;
         let fields = arrow_schema_to_pg_fields(&prepared.schema, &Format::UnifiedText)
-            .map_err(|e| PgWireError::ApiError(e.into()))?;
+            .map_err(api_error!())?;
         Ok(DescribePortalResponse::new(fields))
     }
 
