@@ -1,3 +1,4 @@
+mod api_error;
 mod extended;
 mod factory;
 mod simple;
