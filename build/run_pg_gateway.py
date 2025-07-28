@@ -1,3 +1,4 @@
+#!/bin/python3
 import docker_command
 import os
 
