@@ -34,6 +34,9 @@ impl SimpleQueryH {
 /// Executes a SQL query against the FlightSQL server.
 pub async fn execute_query<'a>(state: &SharedState, sql: &str) -> PgWireResult<Response<'a>> {
     info!("sql={sql}");
+    if !sql.to_lowercase().trim().starts_with("select") {
+        return Ok(Response::EmptyQuery);
+    }
     let client_factory = state
         .lock()
         .await
