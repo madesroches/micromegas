@@ -1,8 +1,8 @@
 use datafusion::catalog::SchemaProvider;
 use datafusion::{error::DataFusionError, prelude::*, sql::TableReference};
 use datafusion_postgres::pg_catalog::{
-    create_current_schema_udf, create_current_schemas_udf, create_has_table_privilege_2param_udf,
-    create_pg_get_userbyid_udf, create_version_udf, PgCatalogSchemaProvider,
+    PgCatalogSchemaProvider, create_current_schema_udf, create_current_schemas_udf,
+    create_has_table_privilege_2param_udf, create_pg_get_userbyid_udf, create_version_udf,
 };
 use std::sync::Arc;
 
@@ -30,6 +30,7 @@ pub async fn setup_pg_catalog(ctx: &SessionContext) -> Result<(), Box<DataFusion
         })?
         .register_schema("pg_catalog", Arc::new(pg_catalog_schema))?;
 
+    //todo: use with_aliases to avoid "Invalid function 'pg_catalog.current_schemas'"
     ctx.register_udf(create_current_schema_udf());
     ctx.register_udf(create_current_schemas_udf());
     ctx.register_udf(create_version_udf());

@@ -10,6 +10,7 @@ license.workspace = true
 authors.workspace = true
 
 [features]
+default = ["pg_catalog"]
 pg_catalog = ["micromegas/pg_catalog"]
 
 [dependencies]
