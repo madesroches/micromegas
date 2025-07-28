@@ -1,9 +1,10 @@
 use datafusion::catalog::SchemaProvider;
 use datafusion::{error::DataFusionError, prelude::*, sql::TableReference};
 use datafusion_postgres::pg_catalog::{
-    PgCatalogSchemaProvider, create_current_schema_udf, create_current_schemas_udf,
-    create_has_table_privilege_2param_udf, create_pg_get_userbyid_udf, create_version_udf,
+    create_current_schema_udf, create_current_schemas_udf, create_has_table_privilege_2param_udf,
+    create_pg_get_userbyid_udf, create_version_udf, PgCatalogSchemaProvider,
 };
+use std::sync::Arc;
 
 /// Sets up the PostgreSQL catalog functions and tables in the DataFusion session context.
 pub async fn setup_pg_catalog(ctx: &SessionContext) -> Result<(), Box<DataFusionError>> {
@@ -19,6 +20,15 @@ pub async fn setup_pg_catalog(ctx: &SessionContext) -> Result<(), Box<DataFusion
             )?;
         }
     }
+
+    let catalog_name = "datafusion";
+    ctx.catalog(catalog_name)
+        .ok_or_else(|| {
+            DataFusionError::Configuration(format!(
+                "Catalog not found when registering pg_catalog: {catalog_name}"
+            ))
+        })?
+        .register_schema("pg_catalog", Arc::new(pg_catalog_schema))?;
 
     ctx.register_udf(create_current_schema_udf());
     ctx.register_udf(create_current_schemas_udf());
