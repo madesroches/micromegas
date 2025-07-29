@@ -10,9 +10,6 @@ repository.workspace = true
 license.workspace = true
 authors.workspace = true
 
-[features]
-pg_catalog = []
-
 [dependencies]
 micromegas-analytics.workspace = true
 micromegas-ingestion.workspace = true
@@ -29,7 +26,6 @@ axum.workspace = true
 bytes.workspace = true
 chrono.workspace = true
 datafusion.workspace = true
-datafusion-postgres.workspace = true
 futures.workspace = true
 http.workspace = true
 object_store.workspace = true
