@@ -37,8 +37,6 @@ clap = { version = "4", features = ["derive"] }
 colored = { version = "2" }
 ctrlc = "3.2.0"
 datafusion = "49"
-#datafusion-postgres = "0.7"
-datafusion-postgres = { git="https://github.com/datafusion-contrib/datafusion-postgres", rev="2f2d6d4" }
 futures = "0.3"
 http = "1.1"
 internment = "0.8"

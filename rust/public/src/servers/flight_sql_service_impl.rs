@@ -1,6 +1,3 @@
-#[cfg(feature = "pg_catalog")]
-use crate::servers::pg_catalog::setup_pg_catalog;
-
 use super::sqlinfo::{
     SQL_INFO_DATE_TIME_FUNCTIONS, SQL_INFO_NUMERIC_FUNCTIONS, SQL_INFO_SQL_KEYWORDS,
     SQL_INFO_STRING_FUNCTIONS, SQL_INFO_SYSTEM_FUNCTIONS,
@@ -159,11 +156,6 @@ impl FlightSqlServiceImpl {
         )
         .await
         .map_err(|e| status!("error in make_session_context", e))?;
-
-        #[cfg(feature = "pg_catalog")]
-        setup_pg_catalog(&ctx)
-            .await
-            .map_err(|e| status!("setup_pg_catalog", e))?;
 
         let mut df = ctx
             .sql(sql)
@@ -566,11 +558,6 @@ impl FlightSqlService for FlightSqlServiceImpl {
         )
         .await
         .map_err(|e| status!("error in make_session_context", e))?;
-
-        #[cfg(feature = "pg_catalog")]
-        setup_pg_catalog(&ctx)
-            .await
-            .map_err(|e| status!("setup_pg_catalog", e))?;
 
         let df = ctx
             .sql(&query.query)
