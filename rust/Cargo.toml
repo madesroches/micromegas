@@ -41,9 +41,9 @@ ciborium = "0.2.2"
 clap = { version = "4", features = ["derive"] }
 colored = { version = "2" }
 ctrlc = "3.2.0"
-datafusion = "48"
+datafusion = "49"
 #datafusion-postgres = "0.7"
-datafusion-postgres = { git="https://github.com/datafusion-contrib/datafusion-postgres", rev="c2d26363a55a2537fbe2c42a2308bfa52305499c" }
+datafusion-postgres = { git="https://github.com/datafusion-contrib/datafusion-postgres", rev="2f2d6d4" }
 futures = "0.3"
 http = "1.1"
 jsonb = { git="https://github.com/madesroches/jsonb", rev = "542b9fd", default-features = false, features = ["databend", "preserve_order"] }
@@ -67,7 +67,7 @@ syn = { version = "1.0", features = ["extra-traits", "full"] }
 sysinfo = "0.33"
 thiserror = "1.0"
 thread-id = "4.0"
-tokio = { version = "1.33", features = ["macros","rt-multi-thread","tracing"]}
+tokio = { version = "1.47", features = ["macros","rt-multi-thread","tracing"]}
 tokio-retry2 = "0.5.7"
 tonic = { version = "0.12", features = ["server", "tls", "tls-native-roots"] }
 tower = { version = "0.5" }
