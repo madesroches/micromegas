@@ -2637,6 +2637,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8bb03732005da905c88227371639bf1ad885cc712789c011c31c5fb3ab3ccf02"
 
 [[package]]
+name = "internment"
+version = "0.8.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "636d4b0f6a39fd684effe2a73f5310df16a3fa7954c26d36833e98f44d1977a2"
+dependencies = [
+ "hashbrown 0.15.4",
+]
+
+[[package]]
 name = "io-uring"
 version = "0.7.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3184,6 +3193,7 @@ dependencies = [
  "anyhow",
  "cfg-if",
  "chrono",
+ "internment",
  "lazy_static",
  "log",
  "memoffset",
@@ -3612,11 +3622,9 @@ dependencies = [
  "anyhow",
  "async-stream",
  "async-trait",
- "bytes",
  "clap",
  "futures",
  "micromegas",
- "postgres-types",
  "rustls",
  "tokio",
 ]

@@ -46,6 +46,7 @@ datafusion = "49"
 datafusion-postgres = { git="https://github.com/datafusion-contrib/datafusion-postgres", rev="2f2d6d4" }
 futures = "0.3"
 http = "1.1"
+internment = "0.8"
 jsonb = { git="https://github.com/madesroches/jsonb", rev = "542b9fd", default-features = false, features = ["databend", "preserve_order"] }
 lazy_static = "1.4"
 log = { version = "0.4", features = ["std"] }
@@ -53,7 +54,6 @@ lz4 = "1.23"
 memoffset = "0.6"
 object_store = { version = "0.12", features = ["aws"] }
 once_cell = "1.7.2"
-postgres-types = "0.2"
 proc-macro2 = "1.0"
 prost = { version = "0.13" }
 quote = "1.0"

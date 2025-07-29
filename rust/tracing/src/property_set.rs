@@ -1,12 +1,9 @@
 //! Interned collection of PropertySet instances. Each PropertySet contains properties where the names and the values are statically allocated.
 //! The user is expected to manage the cardinality.
 use crate::static_string_ref::StaticStringRef;
+use internment::Intern;
 use micromegas_transit::{UserDefinedType, prelude::*};
-use std::{
-    collections::HashSet,
-    hash::Hash,
-    sync::{Arc, Mutex},
-};
+use std::{hash::Hash, sync::Arc};
 
 lazy_static::lazy_static! {
     pub static ref PROPERTY_SET_DEP_TYPE_NAME: Arc<String> = Arc::new("PropertySetDependency".into());
@@ -37,13 +34,9 @@ pub fn property_get<'a>(properties: &'a [Property], name: &str) -> Option<&'a st
     })
 }
 
-#[derive(Debug, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct PropertySet {
     properties: Vec<Property>,
-}
-
-lazy_static! {
-    static ref STORE: Mutex<HashSet<Arc<PropertySet>>> = Mutex::new(HashSet::new());
 }
 
 impl PropertySet {
@@ -51,16 +44,7 @@ impl PropertySet {
         // sort properties by name to get the same hash
         properties.sort_by(|a, b| b.name.as_str().cmp(a.name.as_str()));
         let set = PropertySet { properties };
-        let mut guard = STORE.lock().unwrap();
-        if let Some(found) = guard.get(&set) {
-            let set_ref: &PropertySet = found.as_ref();
-            unsafe { std::mem::transmute::<&PropertySet, &PropertySet>(set_ref) }
-        } else {
-            let new_set = Arc::new(set);
-            guard.insert(new_set.clone());
-            let set_ref: &PropertySet = new_set.as_ref();
-            unsafe { std::mem::transmute::<&PropertySet, &PropertySet>(set_ref) }
-        }
+        Intern::<PropertySet>::new(set).as_ref()
     }
 
     pub fn get_properties(&self) -> &[Property] {
