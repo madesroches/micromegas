@@ -69,7 +69,7 @@ impl Stream for AsyncLogStream {
                 Arc::new(msgs.finish()),
             ],
         )
-        .map_err(|e| DataFusionError::ArrowError(e, None));
+        .map_err(|e| DataFusionError::ArrowError(e.into(), None));
         Poll::Ready(Some(rb_res))
     }
 
