@@ -13,5 +13,5 @@ RUN chmod +x /flight-sql-srv
 COPY telemetry-admin .
 RUN chmod +x /telemetry-admin
 
-COPY pg-gateway-srv .
-RUN chmod +x /pg-gateway-srv
+COPY http-gateway-srv .
+RUN chmod +x /http-gateway-srv
