@@ -1,0 +1,23 @@
+[package]
+name = "http-gateway"
+description = "Server accepting json over http requests and forwarding them to a Micromegas analytics server."
+keywords.workspace = true
+version.workspace = true
+edition.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "http-gateway-srv"
+path = "src/http_gateway_srv.rs"
+
+[dependencies]
+micromegas.workspace = true
+
+anyhow.workspace = true
+clap.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
