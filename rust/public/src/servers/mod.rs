@@ -24,5 +24,8 @@ pub mod key_ring;
 /// log uris of http requests
 pub mod log_uri_service;
 
+/// http server that redirects queries to the analytics server translating the response into json
+pub mod http_gateway;
+
 /// authentication for the gRPC stack
 pub mod tonic_auth_interceptor;
