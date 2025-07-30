@@ -66,10 +66,9 @@ To get started with Micromegas, please refer to the [GETTING_STARTED.md](./doc/G
 Our current focus is on delivering a robust and feature-rich query federation experience.
 
 *   **July 2025** 
-
- * Released [version 0.11.0](https://crates.io/crates/micromegas)
- * Working on http gateway for easier interoperability
- * Add export mechanism to view materialization to send data out as it is ingested
+  * Released [version 0.11.0](https://crates.io/crates/micromegas)
+  * Working on http gateway for easier interoperability
+  * Add export mechanism to view materialization to send data out as it is ingested
 
 For a detailed history of changes, please see the [CHANGELOG.md](./CHANGELOG.md) file.
 
