@@ -28,4 +28,4 @@ jobs:
         github_token: ${{ secrets.GITHUB_TOKEN }}
         publish_dir: rust/target/doc/micromegas/
         publish_branch: gh-pages
-        force_orphan: true # Overwrite existing gh-pages branch content
+        destination_dir: rustdoc
