@@ -42,6 +42,7 @@ fn parse_json_into_jsonb(values: &[ColumnarValue]) -> Result<ColumnarValue, Data
     Ok(ColumnarValue::Array(Arc::new(builder.finish())))
 }
 
+/// Creates a user-defined function to parse a JSON string into a JSONB value.
 pub fn make_jsonb_parse_udf() -> ScalarUDF {
     create_udf(
         "jsonb_parse",

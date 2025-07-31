@@ -9,6 +9,7 @@ use datafusion::{
 use std::sync::Arc;
 
 // from datafusion/datafusion-examples/examples/advanced_parquet_index.rs
+/// Converts a list of DataFusion `Expr` filters into a single `PhysicalExpr` predicate.
 pub fn filters_to_predicate(
     schema: SchemaRef,
     state: &dyn Session,

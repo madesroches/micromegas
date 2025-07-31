@@ -19,6 +19,7 @@ use micromegas_tracing::process_info::ProcessInfo;
 use sqlx::Row;
 use std::sync::Arc;
 
+/// Configuration for Just-In-Time (JIT) partition generation.
 pub struct JitPartitionConfig {
     pub max_nb_objects: i64,
     pub max_insert_time_slice: TimeDelta,
@@ -62,6 +63,7 @@ async fn get_insert_time_range(
     )))
 }
 
+/// Generates a segment of JIT partitions.
 pub async fn generate_jit_partitions_segment(
     config: &JitPartitionConfig,
     pool: &sqlx::Pool<sqlx::Postgres>,
@@ -127,6 +129,7 @@ pub async fn generate_jit_partitions_segment(
 
 /// generate_jit_partitions lists the partitiions that are needed to cover a time span
 /// these partitions may not exist or they could be out of date
+/// Generates JIT partitions for a given time range.
 pub async fn generate_jit_partitions(
     config: &JitPartitionConfig,
     pool: &sqlx::Pool<sqlx::Postgres>,
@@ -172,6 +175,7 @@ pub async fn generate_jit_partitions(
 }
 
 /// is_jit_partition_up_to_date compares a partition spec with the partitions that exist to know if it should be recreated
+/// Checks if a JIT partition is up to date.
 pub async fn is_jit_partition_up_to_date(
     pool: &sqlx::PgPool,
     view_meta: ViewMetadata,
@@ -227,6 +231,7 @@ pub async fn is_jit_partition_up_to_date(
 }
 
 /// get_event_time_range returns the time range covered by a partition spec
+/// Returns the event time range covered by a partition spec.
 fn get_event_time_range(
     convert_ticks: &ConvertTicks,
     spec: &SourceDataBlocksInMemory,
@@ -243,6 +248,7 @@ fn get_event_time_range(
     ))
 }
 
+/// Writes a partition from a set of blocks.
 pub async fn write_partition_from_blocks(
     lake: Arc<DataLakeConnection>,
     view_metadata: ViewMetadata,

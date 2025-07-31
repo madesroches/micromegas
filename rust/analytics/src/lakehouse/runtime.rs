@@ -5,6 +5,7 @@ use datafusion::execution::{
 };
 use std::{num::NonZeroUsize, sync::Arc};
 
+/// Creates a new DataFusion `RuntimeEnv` with a configurable memory pool.
 pub fn make_runtime_env() -> Result<RuntimeEnv> {
     let nb_top_consumers = NonZeroUsize::new(5).unwrap();
     let pool: Arc<dyn MemoryPool> = match std::env::var("MICROMEGAS_DATAFUSION_MEMORY_BUDGET_MB") {

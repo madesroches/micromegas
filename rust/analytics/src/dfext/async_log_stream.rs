@@ -14,6 +14,7 @@ use std::{
 };
 use tokio::sync::mpsc;
 
+/// A stream of log messages that can be converted into a `RecordBatchStream`.
 pub struct AsyncLogStream {
     schema: SchemaRef,
     rx: mpsc::Receiver<(chrono::DateTime<chrono::Utc>, String)>,

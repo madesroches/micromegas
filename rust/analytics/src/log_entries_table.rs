@@ -101,6 +101,7 @@ pub fn log_table_schema() -> Schema {
 }
 
 /// A builder for creating a `RecordBatch` of log entries.
+/// A builder for creating a `RecordBatch` of log entries.
 pub struct LogEntriesRecordBuilder {
     process_ids: StringDictionaryBuilder<Int16Type>,
     stream_ids: StringDictionaryBuilder<Int16Type>,

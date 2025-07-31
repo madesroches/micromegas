@@ -22,9 +22,11 @@ use tokio::sync::mpsc;
 
 use super::async_log_stream::AsyncLogStream;
 
+/// A type alias for a function that spawns a log message receiver.
 pub type TaskSpawner =
     dyn FnOnce() -> mpsc::Receiver<(chrono::DateTime<chrono::Utc>, String)> + Sync + Send;
 
+/// An `ExecutionPlan` that provides a stream of log messages.
 pub struct TaskLogExecPlan {
     schema: SchemaRef,
     cache: PlanProperties,

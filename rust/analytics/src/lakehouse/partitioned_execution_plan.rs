@@ -14,6 +14,7 @@ use datafusion::{
 use object_store::ObjectStore;
 use std::sync::Arc;
 
+/// Creates a partitioned execution plan for scanning Parquet files.
 pub fn make_partitioned_execution_plan(
     schema: SchemaRef,
     object_store: Arc<dyn ObjectStore>,

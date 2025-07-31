@@ -25,6 +25,7 @@ async fn read_lakehouse_schema_version(tr: &mut sqlx::Transaction<'_, sqlx::Post
     }
 }
 
+/// Migrates the lakehouse schema to the latest version.
 pub async fn migrate_lakehouse(pool: sqlx::Pool<sqlx::Postgres>) -> Result<()> {
     let mut tr = pool.begin().await?;
     let mut current_version = read_lakehouse_schema_version(&mut tr).await;
@@ -47,6 +48,7 @@ pub async fn migrate_lakehouse(pool: sqlx::Pool<sqlx::Postgres>) -> Result<()> {
     Ok(())
 }
 
+/// Executes the lakehouse migration steps.
 async fn execute_lakehouse_migration(pool: sqlx::Pool<sqlx::Postgres>) -> Result<()> {
     let mut current_version = read_lakehouse_schema_version(&mut pool.begin().await?).await;
     if 0 == current_version {

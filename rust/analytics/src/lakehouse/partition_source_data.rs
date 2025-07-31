@@ -28,6 +28,7 @@ use std::fmt::Debug;
 use std::sync::Arc;
 use uuid::Uuid;
 
+/// Represents a single block of source data for a partition.
 #[derive(Debug)]
 pub struct PartitionSourceBlock {
     pub block: BlockMetadata,
@@ -35,15 +36,22 @@ pub struct PartitionSourceBlock {
     pub process: Arc<ProcessInfo>,
 }
 
+/// A trait for providing blocks of source data for partitions.
 #[async_trait]
 pub trait PartitionBlocksSource: Sync + Send + Debug {
+    /// Returns true if there are no blocks in the source.
     fn is_empty(&self) -> bool;
+    /// Returns the number of blocks in the source.
     fn get_nb_blocks(&self) -> i64;
+    /// Returns the maximum payload size of the blocks in the source.
     fn get_max_payload_size(&self) -> i64;
+    /// Returns a hash of the source data.
     fn get_source_data_hash(&self) -> Vec<u8>;
+    /// Returns a stream of the source blocks.
     async fn get_blocks_stream(&self) -> BoxStream<'static, Result<Arc<PartitionSourceBlock>>>;
 }
 
+/// A `PartitionBlocksSource` implementation that stores blocks in memory.
 #[derive(Debug)]
 pub struct SourceDataBlocksInMemory {
     pub blocks: Vec<Arc<PartitionSourceBlock>>,
@@ -78,6 +86,7 @@ impl PartitionBlocksSource for SourceDataBlocksInMemory {
     }
 }
 
+/// A `PartitionBlocksSource` implementation that fetches blocks from a DataFusion DataFrame.
 #[derive(Debug)]
 pub struct SourceDataBlocks {
     pub blocks_dataframe: DataFrame,
@@ -219,12 +228,14 @@ impl PartitionBlocksSource for SourceDataBlocks {
     }
 }
 
+/// Converts a hash (expected to be an i64 as bytes) to an object count.
 pub fn hash_to_object_count(hash: &[u8]) -> Result<i64> {
     Ok(i64::from_le_bytes(
         hash.try_into().with_context(|| "hash_to_object_count")?,
     ))
 }
 
+/// Fetches partition source data from the data lake.
 pub async fn fetch_partition_source_data(
     runtime: Arc<RuntimeEnv>,
     lake: Arc<DataLakeConnection>,

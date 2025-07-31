@@ -26,6 +26,7 @@ fn sum_from_histogram(values: &[ColumnarValue]) -> Result<ColumnarValue, DataFus
     Ok(ColumnarValue::Array(Arc::new(result_builder.finish())))
 }
 
+/// Creates a user-defined function to extract the sum from a histogram.
 pub fn make_sum_from_histogram_udf() -> ScalarUDF {
     create_udf(
         "sum_from_histogram",
@@ -52,6 +53,7 @@ fn count_from_histogram(values: &[ColumnarValue]) -> Result<ColumnarValue, DataF
     Ok(ColumnarValue::Array(Arc::new(result_builder.finish())))
 }
 
+/// Creates a user-defined function to extract the count from a histogram.
 pub fn make_count_from_histogram_udf() -> ScalarUDF {
     create_udf(
         "count_from_histogram",

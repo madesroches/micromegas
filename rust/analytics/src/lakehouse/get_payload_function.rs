@@ -10,6 +10,7 @@ use datafusion::{
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use std::sync::Arc;
 
+/// A scalar UDF that retrieves the payload of a block from the data lake.
 #[derive(Debug)]
 pub struct GetPayload {
     signature: Signature,

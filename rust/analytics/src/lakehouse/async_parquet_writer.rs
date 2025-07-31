@@ -9,8 +9,7 @@ use std::sync::{
 };
 use tokio::io::AsyncWriteExt;
 
-// Based on parquet's `ParquetObjectWriter` - added byte counter because it's
-// not part of the file metadata returned
+/// A Parquet writer that writes to an `object_store::buffered::BufWriter` and counts bytes written.
 #[derive(Debug)]
 pub struct AsyncParquetWriter {
     w: BufWriter,

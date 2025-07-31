@@ -10,6 +10,7 @@ use datafusion::{arrow::datatypes::DataType, logical_expr::Signature};
 use std::any::Any;
 use std::sync::Arc;
 
+/// A scalar UDF that retrieves a property from a list of properties.
 #[derive(Debug)]
 pub struct PropertyGet {
     signature: Signature,

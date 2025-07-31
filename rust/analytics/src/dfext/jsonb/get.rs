@@ -39,6 +39,7 @@ fn jsonb_get(values: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionError>
     Ok(ColumnarValue::Array(Arc::new(builder.finish())))
 }
 
+/// Creates a user-defined function to get a value from a JSONB object by name.
 pub fn make_jsonb_get_udf() -> ScalarUDF {
     create_udf(
         "jsonb_get",

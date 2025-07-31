@@ -21,13 +21,18 @@ use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use std::fmt::Debug;
 use std::sync::Arc;
 
+/// A trait for defining a partition specification.
 #[async_trait]
 pub trait PartitionSpec: Send + Sync + Debug {
+    /// Returns true if the partition is empty.
     fn is_empty(&self) -> bool;
+    /// Returns a hash of the source data.
     fn get_source_data_hash(&self) -> Vec<u8>;
+    /// Writes the partition to the data lake.
     async fn write(&self, lake: Arc<DataLakeConnection>, logger: Arc<dyn Logger>) -> Result<()>;
 }
 
+/// Metadata about a view.
 #[derive(Debug, Clone)]
 pub struct ViewMetadata {
     pub view_set_name: Arc<String>,
@@ -35,6 +40,7 @@ pub struct ViewMetadata {
     pub file_schema_hash: Vec<u8>,
 }
 
+/// A trait for defining a view.
 #[async_trait]
 pub trait View: std::fmt::Debug + Send + Sync {
     /// name of the table from the user's perspective

@@ -23,6 +23,7 @@ use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_tracing::trace;
 use std::sync::Arc;
 
+/// A `PartitionSpec` implementation for SQL-defined partitions.
 pub struct SqlPartitionSpec {
     ctx: SessionContext,
     transformer: Arc<dyn RecordBatchTransformer>,
@@ -125,6 +126,7 @@ impl PartitionSpec for SqlPartitionSpec {
     }
 }
 
+/// Fetches a `SqlPartitionSpec` by executing a count query and an extract query.
 #[allow(clippy::too_many_arguments)]
 pub async fn fetch_sql_partition_spec(
     ctx: SessionContext,

@@ -10,6 +10,7 @@ fn make_empty_accumulator(_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>
     Ok(Box::new(HistogramAccumulator::new_non_configured()))
 }
 
+/// Creates a user-defined aggregate function to sum histograms.
 pub fn sum_histograms_udaf() -> AggregateUDF {
     create_udaf(
         "sum_histograms",

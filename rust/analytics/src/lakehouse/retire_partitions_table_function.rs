@@ -18,6 +18,7 @@ use crate::response_writer::Logger;
 
 use super::write_partition::retire_partitions;
 
+/// A DataFusion `TableFunctionImpl` for retiring lakehouse partitions.
 #[derive(Debug)]
 pub struct RetirePartitionsTableFunction {
     lake: Arc<DataLakeConnection>,

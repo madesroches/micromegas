@@ -20,6 +20,7 @@ use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_tracing::error;
 use std::sync::Arc;
 
+/// A DataFusion `TableFunctionImpl` for materializing lakehouse partitions.
 #[derive(Debug)]
 pub struct MaterializePartitionsTableFunction {
     runtime: Arc<RuntimeEnv>,

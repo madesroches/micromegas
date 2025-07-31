@@ -149,10 +149,13 @@ use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use std::fmt::Debug;
 use std::{collections::HashMap, sync::Arc};
 
+/// A trait for creating views.
 pub trait ViewMaker: Send + Sync + Debug {
+    /// Creates a new view with the given instance ID.
     fn make_view(&self, view_instance_id: &str) -> Result<Arc<dyn View>>;
 }
 
+/// A factory for creating and managing views.
 #[derive(Debug, Clone)]
 pub struct ViewFactory {
     view_sets: HashMap<String, Arc<dyn ViewMaker>>,
@@ -195,6 +198,7 @@ impl ViewFactory {
     }
 }
 
+/// Creates the default `ViewFactory` with all built-in views.
 pub async fn default_view_factory(
     runtime: Arc<RuntimeEnv>,
     lake: Arc<DataLakeConnection>,

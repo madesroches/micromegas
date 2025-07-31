@@ -3,7 +3,9 @@ use std::sync::Arc;
 
 /// Record batches + schema
 pub struct Answer {
+    /// The schema of the record batches.
     pub schema: Arc<Schema>,
+    /// The record batches.
     pub record_batches: Vec<RecordBatch>,
 }
 

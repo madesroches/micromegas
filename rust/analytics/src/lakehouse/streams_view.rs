@@ -5,6 +5,7 @@ use datafusion::execution::runtime_env::RuntimeEnv;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use std::sync::Arc;
 
+/// Creates a new `SqlBatchView` for streams.
 pub async fn make_streams_view(
     runtime: Arc<RuntimeEnv>,
     lake: Arc<DataLakeConnection>,
@@ -65,3 +66,4 @@ GROUP BY stream_id
     )
     .await
 }
+

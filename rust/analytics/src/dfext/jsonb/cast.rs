@@ -37,6 +37,7 @@ fn jsonb_as_string(values: &[ColumnarValue]) -> Result<ColumnarValue, DataFusion
     Ok(ColumnarValue::Array(Arc::new(builder.finish())))
 }
 
+/// Creates a user-defined function to cast a JSONB value to a string.
 pub fn make_jsonb_as_string_udf() -> ScalarUDF {
     create_udf(
         "jsonb_as_string",
@@ -74,6 +75,7 @@ fn jsonb_as_f64(values: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionErr
     Ok(ColumnarValue::Array(Arc::new(builder.finish())))
 }
 
+/// Creates a user-defined function to cast a JSONB value to a f64.
 pub fn make_jsonb_as_f64_udf() -> ScalarUDF {
     create_udf(
         "jsonb_as_f64",
@@ -111,6 +113,7 @@ fn jsonb_as_i64(values: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionErr
     Ok(ColumnarValue::Array(Arc::new(builder.finish())))
 }
 
+/// Creates a user-defined function to cast a JSONB value to an i64.
 pub fn make_jsonb_as_i64_udf() -> ScalarUDF {
     create_udf(
         "jsonb_as_i64",
