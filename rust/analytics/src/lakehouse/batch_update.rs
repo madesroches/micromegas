@@ -211,8 +211,7 @@ pub async fn materialize_partition_range(
     let mut begin_part = insert_range.begin;
     let mut end_part = begin_part + partition_time_delta;
     while end_part <= insert_range.end {
-        let partition_insert_range =
-            TimeRange::new(begin_part, end_part);
+        let partition_insert_range = TimeRange::new(begin_part, end_part);
         let insert_time_filtered =
             Arc::new(existing_partitions_all_views.filter_insert_range(partition_insert_range));
         materialize_partition(

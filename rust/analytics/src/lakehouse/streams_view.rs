@@ -66,4 +66,3 @@ GROUP BY stream_id
     )
     .await
 }
-
