@@ -1,0 +1,31 @@
+name: Publish Rust Docs
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build-and-deploy-docs:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        toolchain: stable
+
+    - name: Build Rust documentation
+      run: cargo doc -p micromegas --no-deps
+      working-directory: rust/
+
+    - name: Deploy to GitHub Pages
+      uses: peaceiris/actions-gh-pages@v4
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        publish_dir: rust/target/doc/micromegas/
+        publish_branch: gh-pages
+        force_orphan: true # Overwrite existing gh-pages branch content
