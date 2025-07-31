@@ -1,12 +1,18 @@
+use async_trait::async_trait;
 use datafusion::{
     arrow::{
-        array::{Array, BinaryBuilder, StringArray},
+        array::{Array, ArrayRef, BinaryBuilder, StringArray},
         datatypes::DataType,
     },
-    common::internal_err,
+    common::{internal_err, not_impl_err},
+    config::ConfigOptions,
     error::DataFusionError,
-    logical_expr::{ColumnarValue, ScalarUDFImpl, Signature, Volatility},
+    logical_expr::{
+        ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+        async_udf::AsyncScalarUDFImpl,
+    },
 };
+use futures::stream::StreamExt;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use std::sync::Arc;
 
@@ -48,8 +54,19 @@ impl ScalarUDFImpl for GetPayload {
 
     fn invoke_with_args(
         &self,
-        args: datafusion::logical_expr::ScalarFunctionArgs,
+        _args: datafusion::logical_expr::ScalarFunctionArgs,
     ) -> datafusion::error::Result<ColumnarValue> {
+        not_impl_err!("GetPayload can only be called from async contexts")
+    }
+}
+
+#[async_trait]
+impl AsyncScalarUDFImpl for GetPayload {
+    async fn invoke_async_with_args(
+        &self,
+        args: ScalarFunctionArgs,
+        _option: &ConfigOptions,
+    ) -> datafusion::error::Result<ArrayRef> {
         let args = ColumnarValue::values_to_arrays(&args.args)?;
         if args.len() != 3 {
             return internal_err!("wrong number of arguments to get_payload()");
@@ -76,42 +93,27 @@ impl ScalarUDFImpl for GetPayload {
             })?
             .clone();
         let lake = self.lake.clone();
-        std::thread::spawn(|| {
-            // hack until DataFusion supports async user defined scalar functions
-            // https://github.com/apache/datafusion/pull/14837
-            let rt =
-                tokio::runtime::Runtime::new().map_err(|e| DataFusionError::External(e.into()))?;
-            rt.block_on(fetch_blocks(lake, process_ids, stream_ids, block_ids))
-        })
-        .join()
-        .expect("Thread panicked")
+        let mut stream = futures::stream::iter(0..process_ids.len())
+            .map(|i| {
+                let process_id = process_ids.value(i);
+                let stream_id = stream_ids.value(i);
+                let block_id = block_ids.value(i);
+                let obj_path = format!("blobs/{process_id}/{stream_id}/{block_id}");
+                let lake = lake.clone();
+                tokio::spawn(async move { lake.blob_storage.read_blob(&obj_path).await })
+            })
+            .buffered(10);
+        let mut result_builder = BinaryBuilder::with_capacity(block_ids.len(), 1024 * 1024);
+        while let Some(res) = stream.next().await {
+            result_builder.append_value(
+                res.map_err(|e| {
+                    DataFusionError::Execution(format!("error downloading payload: {e:?}"))
+                })?
+                .map_err(|e| {
+                    DataFusionError::Execution(format!("error downloading payload: {e:?}"))
+                })?,
+            );
+        }
+        Ok(Arc::new(result_builder.finish()))
     }
-}
-
-async fn fetch_blocks(
-    lake: Arc<DataLakeConnection>,
-    process_ids: StringArray,
-    stream_ids: StringArray,
-    block_ids: StringArray,
-) -> datafusion::error::Result<ColumnarValue> {
-    let mut result_builder = BinaryBuilder::with_capacity(block_ids.len(), 1024 * 1024);
-    let mut futures = vec![];
-    for i in 0..process_ids.len() {
-        let process_id = process_ids.value(i);
-        let stream_id = stream_ids.value(i);
-        let block_id = block_ids.value(i);
-        let obj_path = format!("blobs/{process_id}/{stream_id}/{block_id}");
-        let lake = lake.clone();
-        futures.push(tokio::spawn(async move {
-            lake.blob_storage.read_blob(&obj_path).await
-        }));
-    }
-    for f in futures {
-        let buffer = f
-            .await
-            .map_err(|e| DataFusionError::External(e.into()))?
-            .map_err(|e| DataFusionError::External(e.into()))?;
-        result_builder.append_value(buffer);
-    }
-    Ok(ColumnarValue::Array(Arc::new(result_builder.finish())))
 }

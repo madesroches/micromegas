@@ -33,7 +33,7 @@ use anyhow::{Context, Result};
 use datafusion::{
     arrow::{array::RecordBatch, datatypes::SchemaRef},
     execution::{context::SessionContext, object_store::ObjectStoreUrl, runtime_env::RuntimeEnv},
-    logical_expr::ScalarUDF,
+    logical_expr::{ScalarUDF, async_udf::AsyncScalarUDF},
     prelude::*,
     sql::TableReference,
 };
@@ -124,7 +124,7 @@ pub fn register_lakehouse_functions(
             view_factory.clone(),
         )),
     );
-    ctx.register_udf(ScalarUDF::from(GetPayload::new(lake)));
+    ctx.register_udf(AsyncScalarUDF::new(Arc::new(GetPayload::new(lake))).into_scalar_udf());
 }
 
 /// register functions that are not depended on the lakehouse architecture
