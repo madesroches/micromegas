@@ -31,6 +31,7 @@ lazy_static::lazy_static! {
     static ref TIME_COLUMN: Arc<String> = Arc::new( String::from("time"));
 }
 
+/// A `ViewMaker` for creating `LogView` instances.
 #[derive(Debug)]
 pub struct LogViewMaker {}
 
@@ -40,6 +41,7 @@ impl ViewMaker for LogViewMaker {
     }
 }
 
+/// A view of log entries.
 #[derive(Debug)]
 pub struct LogView {
     view_set_name: Arc<String>,

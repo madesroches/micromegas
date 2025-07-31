@@ -32,6 +32,7 @@ lazy_static::lazy_static! {
     static ref MAX_TIME_COLUMN: Arc<String> = Arc::new( String::from("end"));
 }
 
+/// A `ViewMaker` for creating `ThreadSpansView` instances.
 #[derive(Debug)]
 pub struct ThreadSpansViewMaker {}
 
@@ -41,6 +42,7 @@ impl ViewMaker for ThreadSpansViewMaker {
     }
 }
 
+/// A view of thread spans.
 #[derive(Debug)]
 pub struct ThreadSpansView {
     view_set_name: Arc<String>,
@@ -86,6 +88,7 @@ async fn append_call_tree(
     Ok(())
 }
 
+/// Writes a partition from a set of blocks.
 async fn write_partition(
     lake: Arc<DataLakeConnection>,
     view_meta: ViewMetadata,
@@ -162,7 +165,7 @@ async fn write_partition(
     join_handle.await??;
     Ok(())
 }
-/// rebuild the partition if it's missing or out of date
+/// Rebuilds the partition if it's missing or out of date.
 async fn update_partition(
     lake: Arc<DataLakeConnection>,
     view_meta: ViewMetadata,

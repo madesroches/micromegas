@@ -11,7 +11,7 @@ use datafusion::{
 use object_store::ObjectStore;
 use std::{any::Any, sync::Arc};
 
-// unlike MaterializedView, the partition list is fixed at construction
+/// A DataFusion `TableProvider` for a set of pre-defined partitions.
 #[derive(Debug)]
 pub struct PartitionedTableProvider {
     schema: SchemaRef,

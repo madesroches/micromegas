@@ -9,8 +9,10 @@ use datafusion::prelude::Expr;
 use std::any::Any;
 use std::sync::Arc;
 
+/// A DataFusion `TableProvider` for a log stream.
 #[derive(Debug)]
 pub struct LogStreamTableProvider {
+    /// The underlying log stream execution plan.
     pub log_stream: Arc<TaskLogExecPlan>,
 }
 

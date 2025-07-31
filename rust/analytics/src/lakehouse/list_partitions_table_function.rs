@@ -17,6 +17,7 @@ use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use std::any::Any;
 use std::sync::Arc;
 
+/// A DataFusion `TableFunctionImpl` for listing lakehouse partitions.
 #[derive(Debug)]
 pub struct ListPartitionsTableFunction {
     lake: Arc<DataLakeConnection>,
@@ -39,6 +40,7 @@ impl TableFunctionImpl for ListPartitionsTableFunction {
     }
 }
 
+/// A DataFusion `TableProvider` for listing lakehouse partitions.
 #[derive(Debug)]
 pub struct ListPartitionsTableProvider {
     pub lake: Arc<DataLakeConnection>,

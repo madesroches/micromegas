@@ -63,6 +63,7 @@ pub async fn materialize_all_views(
     Ok(())
 }
 
+/// task running once a day to materialize older partitions
 pub struct EveryDayTask {
     pub runtime: Arc<RuntimeEnv>,
     pub lake: Arc<DataLakeConnection>,
@@ -87,6 +88,7 @@ impl TaskCallback for EveryDayTask {
     }
 }
 
+/// task running once an hour to materialize recent partitions
 pub struct EveryHourTask {
     pub runtime: Arc<RuntimeEnv>,
     pub lake: Arc<DataLakeConnection>,
@@ -114,6 +116,7 @@ impl TaskCallback for EveryHourTask {
     }
 }
 
+/// task running once a minute to materialize recent partitions
 pub struct EveryMinuteTask {
     pub runtime: Arc<RuntimeEnv>,
     pub lake: Arc<DataLakeConnection>,
@@ -139,6 +142,7 @@ impl TaskCallback for EveryMinuteTask {
     }
 }
 
+/// task running once a second to materialize newest partitions
 pub struct EverySecondTask {
     pub runtime: Arc<RuntimeEnv>,
     pub lake: Arc<DataLakeConnection>,

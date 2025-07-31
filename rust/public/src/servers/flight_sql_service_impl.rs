@@ -80,6 +80,7 @@ static INSTANCE_SQL_DATA: Lazy<SqlInfoData> = Lazy::new(|| {
     builder.build().unwrap()
 });
 
+/// Implementation of the Flight SQL service.
 #[derive(Clone)]
 pub struct FlightSqlServiceImpl {
     runtime: Arc<RuntimeEnv>,

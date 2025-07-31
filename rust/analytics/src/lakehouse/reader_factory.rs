@@ -71,8 +71,7 @@ impl ParquetFileReaderFactory for ReaderFactory {
     }
 }
 
-/// wrapper around a ParquetObjectReader that caches metadata
-// (from datafusion-examples/examples/advanced_parquet_index.rs)
+/// A wrapper around a `ParquetObjectReader` that caches metadata.
 pub struct ParquetReader {
     pub filename: String,
     pub metadata: Arc<ParquetMetaData>,

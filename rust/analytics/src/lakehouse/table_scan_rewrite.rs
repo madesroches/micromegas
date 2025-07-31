@@ -8,6 +8,7 @@ use datafusion::{
 };
 use std::sync::Arc;
 
+/// An analyzer rule that rewrites table scans to include time-based filters.
 #[derive(Debug)]
 pub struct TableScanRewrite {
     query_range: TimeRange,

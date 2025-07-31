@@ -6,8 +6,10 @@ use async_trait::async_trait;
 use sqlx::{PgPool, Row};
 use std::{fmt, sync::Arc};
 
+/// A trait for providing queryable partitions.
 #[async_trait]
 pub trait QueryPartitionProvider: std::fmt::Display + Send + Sync + std::fmt::Debug {
+    /// Fetches partitions based on the provided criteria.
     async fn fetch(
         &self,
         view_set_name: &str,
@@ -263,6 +265,7 @@ impl QueryPartitionProvider for PartitionCache {
     }
 }
 
+/// A `QueryPartitionProvider` that fetches partitions directly from the database.
 #[derive(Debug)]
 pub struct LivePartitionProvider {
     db_pool: PgPool,
@@ -374,6 +377,7 @@ impl QueryPartitionProvider for LivePartitionProvider {
     }
 }
 
+/// A `QueryPartitionProvider` that always returns an empty list of partitions.
 #[derive(Debug)]
 pub struct NullPartitionProvider {}
 

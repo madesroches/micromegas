@@ -23,6 +23,7 @@ lazy_static::lazy_static! {
     static ref INSERT_TIME_COLUMN: Arc<String> = Arc::new( String::from("insert_time"));
 }
 
+/// A view of the `blocks` table, providing access to telemetry block metadata.
 #[derive(Debug)]
 pub struct BlocksView {
     view_set_name: Arc<String>,
@@ -150,6 +151,7 @@ impl View for BlocksView {
     }
 }
 
+/// Returns the Arrow schema for the blocks view.
 pub fn blocks_view_schema() -> Schema {
     Schema::new(vec![
         Field::new("block_id", DataType::Utf8, false),
@@ -233,6 +235,7 @@ pub fn blocks_view_schema() -> Schema {
     ])
 }
 
+/// Returns the file schema hash for the blocks view.
 pub fn blocks_file_schema_hash() -> Vec<u8> {
     vec![1]
 }

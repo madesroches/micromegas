@@ -24,6 +24,7 @@ use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_tracing::{debug, error, info};
 use std::sync::Arc;
 
+/// Statistics about a set of partitions.
 struct PartitionStats {
     pub num_rows: i64,
     pub min_event_time: DateTime<Utc>,
@@ -50,6 +51,8 @@ fn compute_partition_stats(partitions: &[Partition]) -> Result<PartitionStats> {
         }))
 }
 
+/// Merges multiple partitions by splitting the work in batches to use less memory.
+/// The batches are based on event times.
 #[derive(Debug)]
 pub struct BatchPartitionMerger {
     /// runtime: datafusion runtime

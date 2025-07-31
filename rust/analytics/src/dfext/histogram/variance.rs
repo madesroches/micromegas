@@ -31,6 +31,7 @@ fn variance_from_histogram(values: &[ColumnarValue]) -> Result<ColumnarValue, Da
 
     Ok(ColumnarValue::Array(Arc::new(result_builder.finish())))
 }
+/// Creates a user-defined function to compute the variance from a histogram.
 pub fn make_variance_from_histogram_udf() -> ScalarUDF {
     create_udf(
         "variance_from_histogram",

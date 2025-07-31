@@ -17,6 +17,7 @@ use micromegas_tracing::trace;
 use object_store::ObjectStore;
 use std::{any::Any, sync::Arc};
 
+/// A DataFusion `TableProvider` for materialized views.
 #[derive(Debug)]
 pub struct MaterializedView {
     lake: Arc<DataLakeConnection>,

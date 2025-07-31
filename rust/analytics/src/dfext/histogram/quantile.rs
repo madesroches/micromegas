@@ -80,6 +80,7 @@ fn quantile_from_histogram(values: &[ColumnarValue]) -> Result<ColumnarValue, Da
     Ok(ColumnarValue::Array(Arc::new(result_builder.finish())))
 }
 
+/// Creates a user-defined function to estimate quantiles from a histogram.
 pub fn make_quantile_from_histogram_udf() -> ScalarUDF {
     create_udf(
         "quantile_from_histogram",

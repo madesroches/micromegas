@@ -12,17 +12,24 @@ use std::sync::Arc;
 /// A node in a call tree, representing a single scope instance.
 #[derive(Debug)]
 pub struct CallTreeNode {
+    /// The unique identifier of the scope instance.
     pub id: Option<i64>,
+    /// The hash of the scope description.
     pub hash: u32,
+    /// The start time of the scope instance in nanoseconds.
     pub begin: i64, //absolute nanoseconds
+    /// The end time of the scope instance in nanoseconds.
     pub end: i64,
+    /// The children of this node in the call tree.
     pub children: Vec<CallTreeNode>,
 }
 
 /// A call tree, representing the execution of a single thread.
 #[derive(Debug)]
 pub struct CallTree {
+    /// A map from scope hash to scope description.
     pub scopes: ScopeHashMap,
+    /// The root node of the call tree.
     // the root node corresponds to the thread and has a span equal to the query range
     pub call_tree_root: Option<CallTreeNode>,
 }

@@ -25,14 +25,14 @@ use tokio::sync::mpsc::Receiver;
 
 use super::{partition::Partition, view::ViewMetadata};
 
-/// RecordBatch + time range associated with the events
+/// A set of rows for a partition, along with their time range.
 pub struct PartitionRowSet {
     pub min_time_row: DateTime<Utc>,
     pub max_time_row: DateTime<Utc>,
     pub rows: RecordBatch,
 }
 
-/// retire_expired_partitions moves old partitions to the temporary_files table
+/// Retires partitions that have exceeded their expiration time.
 pub async fn retire_expired_partitions(
     lake: &DataLakeConnection,
     expiration: DateTime<Utc>,
@@ -77,7 +77,7 @@ pub async fn retire_expired_partitions(
     Ok(())
 }
 
-/// retire_partitions removes out of date partitions from the active set.
+/// Retires partitions from the active set.
 /// Overlap is determined by the insert_time of the telemetry.
 pub async fn retire_partitions(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
@@ -191,7 +191,7 @@ async fn write_partition_metadata(
     Ok(())
 }
 
-/// write_partition_from_rows creates parquet file from a stream of [PartitionRowSet]
+/// Writes a partition to a Parquet file from a stream of `PartitionRowSet`s.
 #[allow(clippy::too_many_arguments)]
 pub async fn write_partition_from_rows(
     lake: Arc<DataLakeConnection>,

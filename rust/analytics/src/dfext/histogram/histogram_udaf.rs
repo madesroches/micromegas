@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 use super::accumulator::{HistogramAccumulator, state_arrow_fields};
 
+/// An array of histograms.
 #[derive(Debug)]
 pub struct HistogramArray {
     inner: Arc<StructArray>,
@@ -226,6 +227,7 @@ pub fn make_histogram_arrow_type() -> DataType {
     DataType::Struct(Fields::from(state_arrow_fields()))
 }
 
+/// Creates a user-defined aggregate function to compute histograms.
 pub fn make_histo_udaf() -> AggregateUDF {
     create_udaf(
         "make_histogram",

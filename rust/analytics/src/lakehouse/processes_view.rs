@@ -5,6 +5,7 @@ use datafusion::execution::runtime_env::RuntimeEnv;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use std::sync::Arc;
 
+/// Creates a new `SqlBatchView` for processes.
 pub async fn make_processes_view(
     runtime: Arc<RuntimeEnv>,
     lake: Arc<DataLakeConnection>,

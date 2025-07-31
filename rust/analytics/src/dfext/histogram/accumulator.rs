@@ -15,6 +15,7 @@ use datafusion::{
 
 use super::histogram_udaf::HistogramArray;
 
+/// An accumulator for computing histograms.
 #[derive(Debug)]
 pub struct HistogramAccumulator {
     start: Option<f64>,
@@ -251,6 +252,7 @@ impl Accumulator for HistogramAccumulator {
     }
 }
 
+/// Returns the Arrow fields for the histogram state.
 pub fn state_arrow_fields() -> Vec<Field> {
     vec![
         Field::new("start", DataType::Float64, false),

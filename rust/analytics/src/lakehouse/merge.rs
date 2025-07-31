@@ -26,8 +26,10 @@ use std::fmt::Debug;
 use std::sync::Arc;
 use xxhash_rust::xxh32::xxh32;
 
+/// A trait for merging partitions.
 #[async_trait]
 pub trait PartitionMerger: Send + Sync + Debug {
+    /// Executes the merge query.
     async fn execute_merge_query(
         &self,
         lake: Arc<DataLakeConnection>,
@@ -36,6 +38,7 @@ pub trait PartitionMerger: Send + Sync + Debug {
     ) -> Result<SendableRecordBatchStream>;
 }
 
+/// A `PartitionMerger` that executes a SQL query to merge partitions.
 #[derive(Debug)]
 pub struct QueryMerger {
     runtime: Arc<RuntimeEnv>,
@@ -126,6 +129,7 @@ fn partition_set_stats(
     Ok((sum_size, source_hash))
 }
 
+/// Creates a merged partition from a set of existing partitions.
 pub async fn create_merged_partition(
     partitions_to_merge: Arc<PartitionCache>,
     partitions_all_views: Arc<PartitionCache>,

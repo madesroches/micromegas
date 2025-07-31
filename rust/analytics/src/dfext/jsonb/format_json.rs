@@ -28,6 +28,7 @@ fn jsonb_format_json(values: &[ColumnarValue]) -> Result<ColumnarValue, DataFusi
     Ok(ColumnarValue::Array(Arc::new(builder.finish())))
 }
 
+/// Creates a user-defined function to format a JSONB value as a JSON string.
 pub fn make_jsonb_format_json_udf() -> ScalarUDF {
     create_udf(
         "jsonb_format_json",

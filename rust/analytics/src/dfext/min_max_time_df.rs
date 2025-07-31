@@ -8,6 +8,7 @@ use datafusion::{
 
 use super::typed_column::typed_column;
 
+/// Computes the minimum and maximum timestamps from a DataFrame.
 pub async fn min_max_time_dataframe(
     df: DataFrame,
     min_time_column_name: &str,

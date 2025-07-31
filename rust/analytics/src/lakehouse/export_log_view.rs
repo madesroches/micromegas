@@ -27,6 +27,7 @@ use std::hash::Hash;
 use std::hash::Hasher;
 use std::{hash::DefaultHasher, sync::Arc};
 
+/// A builder for creating log entries for export.
 pub struct ExportLogBuilder {
     times: PrimitiveBuilder<TimestampNanosecondType>,
     levels: PrimitiveBuilder<Int32Type>,
@@ -64,6 +65,7 @@ impl ExportLogBuilder {
     }
 }
 
+/// A view for exporting log data.
 #[derive(Debug)]
 pub struct ExportLogView {
     view_set_name: Arc<String>,
@@ -79,7 +81,8 @@ pub struct ExportLogView {
     max_partition_delta_from_merge: TimeDelta,
 }
 
-fn make_export_log_schema() -> Arc<Schema> {
+/// Creates the Arrow schema for the export log.
+pub fn make_export_log_schema() -> Arc<Schema> {
     Arc::new(Schema::new(vec![
         Field::new(
             "time",

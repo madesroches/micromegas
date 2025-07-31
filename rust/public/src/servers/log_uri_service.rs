@@ -6,6 +6,7 @@ use tower::Service;
 /// A Tower service that logs the URI of incoming requests.
 #[derive(Clone)]
 pub struct LogUriService<S> {
+    /// The inner service to which requests will be forwarded.
     pub service: S,
 }
 

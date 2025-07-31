@@ -17,6 +17,7 @@ use std::sync::Arc;
 /// BlockProcessor transforms a single block of telemetry into a set of rows
 #[async_trait]
 pub trait BlockProcessor: Send + Sync + Debug {
+    /// Processes a single block of telemetry.
     async fn process(
         &self,
         blob_storage: Arc<BlobStorage>,

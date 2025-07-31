@@ -9,9 +9,13 @@ use datafusion::execution::runtime_env::RuntimeEnv;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use std::sync::Arc;
 
+/// Defines the strategy for creating a new partition.
 pub enum PartitionCreationStrategy {
+    /// Create the partition from the source data.
     CreateFromSource,
+    /// Merge existing partitions.
     MergeExisting(Arc<PartitionCache>),
+    /// Abort the partition creation.
     Abort,
 }
 
@@ -193,6 +197,7 @@ async fn materialize_partition(
     Ok(())
 }
 
+/// Materializes partitions within a given time range.
 #[allow(clippy::too_many_arguments)]
 pub async fn materialize_partition_range(
     existing_partitions_all_views: Arc<PartitionCache>,

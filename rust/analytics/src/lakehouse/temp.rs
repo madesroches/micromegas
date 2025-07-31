@@ -5,6 +5,7 @@ use micromegas_tracing::prelude::*;
 use sqlx::Row;
 use std::sync::Arc;
 
+/// Deletes expired temporary files from the data lake.
 pub async fn delete_expired_temporary_files(lake: Arc<DataLakeConnection>) -> Result<()> {
     let mut tr = lake.db_pool.begin().await?;
     let now = Utc::now();
