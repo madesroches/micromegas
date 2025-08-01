@@ -1,4 +1,4 @@
-#[cfg(any(windows, doc))]
+#[cfg(windows)]
 mod installation;
 
 use anyhow::{Context, Result};

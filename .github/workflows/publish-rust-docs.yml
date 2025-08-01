@@ -21,7 +21,7 @@ jobs:
         toolchain: stable
 
     - name: Build Rust documentation
-      run: cargo doc -p micromegas --no-deps
+      run: cargo doc --workspace --no-deps
       working-directory: rust/
 
     - name: Prepare staging directory
