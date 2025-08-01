@@ -31,6 +31,8 @@ jobs:
         mkdir -p public_docs/rust
         cp -r rust/target/doc/* public_docs/rust/
         cp -r doc public_docs/
+        echo '<meta http-equiv="refresh" content="0; url=micromegas/index.html">
+' > public_docs/rust/index.html
 
     - name: Deploy to GitHub Pages
       uses: peaceiris/actions-gh-pages@v4
