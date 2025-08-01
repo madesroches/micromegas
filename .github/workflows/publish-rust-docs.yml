@@ -23,12 +23,14 @@ jobs:
     - name: Build Rust documentation
       run: cargo doc -p micromegas --no-deps
       working-directory: rust/
+      env:
+        RUSTDOCFLAGS: --html-in-header '<base href="/micromegas/rust/">'
 
     - name: Prepare staging directory
       run: |
         mkdir -p public_docs/rust
         cp -r rust/target/doc/micromegas/* public_docs/rust/
-        cp -r doc/* public_docs/
+        cp -r doc public_docs/
 
     - name: Deploy to GitHub Pages
       uses: peaceiris/actions-gh-pages@v4

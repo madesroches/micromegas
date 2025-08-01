@@ -109,3 +109,10 @@ After implementing the workflow and configuring GitHub Pages:
 *   **Staging Directory:** A staging directory (`public_docs`) is used to combine the outputs from different sources before deploying.
 *   **`force_orphan: true`:** This option in `peaceiris/actions-gh-pages` ensures that the `gh-pages` branch is completely overwritten with the new documentation, preventing stale files from previous builds.
 *   **GitHub Token Permissions:** The default `GITHUB_TOKEN` usually has sufficient permissions to push to the `gh-pages` branch. If not, repository settings might need adjustment.
+
+## Known Issues
+
+*   **404 Errors for `doc` folder content:** The initial implementation caused 404 errors for files from the `doc` directory because the `doc` directory itself was not being copied into the deployment root.
+    *   **Resolution:** The `cp` command in the workflow has been updated from `cp -r doc/* public_docs/` to `cp -r doc public_docs/` to ensure the correct path structure is maintained in the deployed pages.
+*   **Broken Styling in Rust Documentation:** The generated Rustdoc pages do not render correctly (missing CSS and JS) when hosted in a subdirectory on GitHub Pages. This is because the HTML files use relative paths that break when the site is not at the root of the domain.
+    *   **Resolution:** We will use `RUSTDOCFLAGS` to inject a `<base>` HTML tag into the generated documentation. This tag will specify the correct base URL for all relative paths, ensuring that the CSS, JavaScript, and other assets are loaded correctly. The base path will be set to `/micromegas/rust/`.
