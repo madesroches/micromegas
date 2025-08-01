@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <a href="https://docs.rs/micromegas/latest/micromegas/">Rust API Docs</a> •
+  <a href="https://madesroches.github.io/micromegas/rustdoc/micromegas/">Rust API Docs</a> •
   <a href="https://pypi.org/project/micromegas/">Python API</a> •
   <a href="https://github.com/madesroches/grafana-micromegas-datasource/">Grafana Plugin</a> •
   <a href="https://madesroches.github.io/micromegas/doc/design-presentation/design.html">Design Presentation</a> •

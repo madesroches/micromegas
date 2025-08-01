@@ -3,7 +3,7 @@ name: Publish Docs
 on:
   push:
     branches:
-      - doc
+      - main
 
 jobs:
   build-and-deploy-docs:
@@ -23,15 +23,11 @@ jobs:
     - name: Build Rust documentation
       run: cargo doc -p micromegas --no-deps
       working-directory: rust/
-    #   env:
-    #     RUSTDOCFLAGS: --html-in-header ../.github/doc-header.html
 
     - name: Prepare staging directory
       run: |
         mkdir -p public_docs/rustdoc
         cp -r rust/target/doc/* public_docs/rustdoc/
-        # rsync -av --exclude='micromegas/' rust/target/doc/ public_docs/rust/
-        mkdir -p public_docs
         cp -r doc public_docs/
 
     - name: Deploy to GitHub Pages
