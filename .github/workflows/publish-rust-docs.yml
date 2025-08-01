@@ -28,8 +28,8 @@ jobs:
 
     - name: Prepare staging directory
       run: |
-        mkdir -p public_docs
-        cp -r rust/target/doc public_docs/rust
+        mkdir -p public_docs/rust
+        cp -r rust/target/doc/* public_docs/rust/
         cp -r doc public_docs/
 
     - name: Deploy to GitHub Pages
