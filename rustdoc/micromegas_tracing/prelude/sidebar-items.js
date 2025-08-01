@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"attr":["log_fn","span_fn"],"macro":["async_span_scope","debug","error","fatal","fmetric","imetric","info","log","log_enabled","span_scope","trace","warn"]};

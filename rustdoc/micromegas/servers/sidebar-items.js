@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"mod":["axum_utils","cron_task","flight_sql_service_impl","http_gateway","ingestion","key_ring","log_uri_service","maintenance","perfetto","sqlinfo","tonic_auth_interceptor"]};

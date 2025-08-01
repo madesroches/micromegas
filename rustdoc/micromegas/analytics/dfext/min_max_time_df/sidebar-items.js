@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["min_max_time_dataframe"]};
