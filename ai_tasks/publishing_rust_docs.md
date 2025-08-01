@@ -120,3 +120,5 @@ After implementing the workflow and configuring GitHub Pages:
     *   **Resolution:** The `<base>` tag is now stored in a separate file (`.github/doc-header.html`) and passed to `cargo doc` using the `--html-in-header` flag. This avoids any shell parsing issues.
 *   **Missing Rustdoc Assets:** The workflow was only copying the HTML files for the Rust documentation, resulting in broken styling because the CSS and JavaScript assets were missing.
     *   **Resolution:** The `cp` command in the workflow has been updated to copy the entire contents of the `rust/target/doc` directory, ensuring all necessary assets are included in the deployment.
+*   **Incorrect Rustdoc Asset Path:** Even after copying all the Rustdoc assets, the styling was still broken because the files were not being copied into the correct subdirectory (`rust`) in the final deployment.
+    *   **Resolution:** The `cp` command in the workflow has been updated to `cp -r rust/target/doc public_docs/rust`, which correctly places all the Rustdoc files and assets in the `rust` subdirectory.
