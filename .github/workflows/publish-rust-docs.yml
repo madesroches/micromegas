@@ -3,7 +3,7 @@ name: Publish Docs
 on:
   push:
     branches:
-      - '**'
+      - main
 
 jobs:
   build-and-deploy-docs:
