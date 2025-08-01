@@ -118,3 +118,5 @@ After implementing the workflow and configuring GitHub Pages:
     *   **Resolution:** We will use `RUSTDOCFLAGS` to inject a `<base>` HTML tag into the generated documentation. This tag will specify the correct base URL for all relative paths, ensuring that the CSS, JavaScript, and other assets are loaded correctly. The base path will be set to `/micromegas/rust/`.
 *   **Shell Parsing Errors with `RUSTDOCFLAGS`:** Passing the `<base>` tag directly in the workflow file can lead to shell parsing errors ("too many file operands").
     *   **Resolution:** The `<base>` tag is now stored in a separate file (`.github/doc-header.html`) and passed to `cargo doc` using the `--html-in-header` flag. This avoids any shell parsing issues.
+*   **Missing Rustdoc Assets:** The workflow was only copying the HTML files for the Rust documentation, resulting in broken styling because the CSS and JavaScript assets were missing.
+    *   **Resolution:** The `cp` command in the workflow has been updated to copy the entire contents of the `rust/target/doc` directory, ensuring all necessary assets are included in the deployment.
