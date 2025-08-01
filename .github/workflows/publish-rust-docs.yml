@@ -24,7 +24,7 @@ jobs:
       run: cargo doc -p micromegas --no-deps
       working-directory: rust/
       env:
-        RUSTDOCFLAGS: --html-in-header '<base href="/micromegas/rust/">'
+        RUSTDOCFLAGS: --html-in-header ../.github/doc-header.html
 
     - name: Prepare staging directory
       run: |
