@@ -1,18 +1,13 @@
-name: Publish Rust Docs
+name: Publish Docs
 
-# on:
-#   push:
-#     branches:
-#       - main
+on:
+  push:
+    branches:
+      - '**'
 
 jobs:
   build-and-deploy-docs:
-    environment:
-      name: github-pages
     runs-on: ubuntu-latest
-    permissions:
-      pages: write
-      id-token: write
 
     steps:
     - name: Checkout code
@@ -27,10 +22,16 @@ jobs:
       run: cargo doc -p micromegas --no-deps
       working-directory: rust/
 
-    - name: Upload artifact
-      uses: actions/upload-pages-artifact@v3
-      with:
-        path: rust/target/doc/micromegas/
+    - name: Prepare staging directory
+      run: |
+        mkdir -p public_docs/rust
+        cp -r rust/target/doc/micromegas/* public_docs/rust/
+        cp -r doc/* public_docs/
 
     - name: Deploy to GitHub Pages
-      uses: actions/deploy-pages@v4
+      uses: peaceiris/actions-gh-pages@v4
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        publish_dir: ./public_docs
+        publish_branch: gh-pages
+        force_orphan: true
