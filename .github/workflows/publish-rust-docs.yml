@@ -28,7 +28,7 @@ jobs:
 
     - name: Prepare staging directory
       run: |
-        mkdir -p public_docs/rust
+        mkdir -p public_docs/rustdoc
         cp -r rust/target/doc/* public_docs/rustdoc/
         # rsync -av --exclude='micromegas/' rust/target/doc/ public_docs/rust/
         mkdir -p public_docs
