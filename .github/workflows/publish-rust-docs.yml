@@ -3,8 +3,7 @@ name: Publish Docs
 on:
   push:
     branches:
-      # - main
-      - *
+      - doc
 
 jobs:
   build-and-deploy-docs:
