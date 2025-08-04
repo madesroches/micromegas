@@ -12,7 +12,7 @@ use crate::{
     lakehouse::jit_partitions::{generate_jit_partitions, is_jit_partition_up_to_date},
     log_entries_table::log_table_schema,
     metadata::{find_process, list_process_streams_tagged},
-    time::{TimeRange, datetime_to_scalar, make_time_converter_from_db},
+    time::{TimeRange, datetime_to_scalar},
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -136,7 +136,6 @@ impl View for LogView {
         let streams = list_process_streams_tagged(&lake.db_pool, process.process_id, "log")
             .await
             .with_context(|| "list_process_streams_tagged")?;
-        let convert_ticks = make_time_converter_from_db(&lake.db_pool, &process).await?;
         let mut all_partitions = vec![];
         for stream in streams {
             let mut partitions = generate_jit_partitions(
@@ -145,7 +144,6 @@ impl View for LogView {
                 &query_range,
                 Arc::new(stream),
                 process.clone(),
-                &convert_ticks,
             )
             .await
             .with_context(|| "generate_jit_partitions")?;
@@ -158,9 +156,7 @@ impl View for LogView {
         };
 
         for part in all_partitions {
-            if !is_jit_partition_up_to_date(&lake.db_pool, view_meta.clone(), &convert_ticks, &part)
-                .await?
-            {
+            if !is_jit_partition_up_to_date(&lake.db_pool, view_meta.clone(), &part).await? {
                 write_partition_from_blocks(
                     lake.clone(),
                     view_meta.clone(),

@@ -173,7 +173,7 @@ async fn update_partition(
     convert_ticks: &ConvertTicks,
     spec: &SourceDataBlocksInMemory,
 ) -> Result<()> {
-    if is_jit_partition_up_to_date(&lake.db_pool, view_meta.clone(), convert_ticks, spec).await? {
+    if is_jit_partition_up_to_date(&lake.db_pool, view_meta.clone(), spec).await? {
         return Ok(());
     }
     write_partition(lake, view_meta, schema, convert_ticks, spec)
@@ -237,7 +237,6 @@ impl View for ThreadSpansView {
             &query_range,
             stream.clone(),
             process.clone(),
-            &convert_ticks,
         )
         .await
         .with_context(|| "generate_jit_partitions")?;

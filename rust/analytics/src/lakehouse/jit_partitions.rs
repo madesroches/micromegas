@@ -5,7 +5,7 @@ use super::{
 };
 use crate::{
     lakehouse::partition_source_data::hash_to_object_count, metadata::block_from_row,
-    response_writer::ResponseWriter, time::ConvertTicks,
+    response_writer::ResponseWriter,
 };
 use crate::{lakehouse::view::PartitionSpec, time::TimeRange};
 use anyhow::{Context, Result};
@@ -67,39 +67,32 @@ async fn get_insert_time_range(
 pub async fn generate_jit_partitions_segment(
     config: &JitPartitionConfig,
     pool: &sqlx::Pool<sqlx::Postgres>,
-    query_time_range: &TimeRange,
     insert_time_range: &TimeRange,
     stream: Arc<StreamInfo>,
     process: Arc<ProcessInfo>,
-    convert_ticks: &ConvertTicks,
 ) -> Result<Vec<SourceDataBlocksInMemory>> {
-    let relative_begin_ticks = convert_ticks.time_to_delta_ticks(query_time_range.begin);
-    let relative_end_ticks = convert_ticks.time_to_delta_ticks(query_time_range.end);
+    info!("listing blocks");
     let rows = sqlx::query(
             "SELECT block_id, stream_id, process_id, begin_time, end_time, begin_ticks, end_ticks, nb_objects, object_offset, payload_size, insert_time as block_insert_time
              FROM blocks
              WHERE stream_id = $1
-             AND begin_ticks <= $2
-             AND insert_time >= $3
-             AND insert_time < $4
-             ORDER BY begin_ticks;",
+             AND insert_time >= $2
+             AND insert_time < $3
+             ORDER BY insert_time;",
         )
         .bind(stream.stream_id)
-        .bind(relative_end_ticks)
         .bind(insert_time_range.begin)
         .bind(insert_time_range.end)
         .fetch_all(pool)
         .await
         .with_context(|| "listing blocks")?;
-
+    info!("assembling segments");
     let mut partitions = vec![];
     let mut partition_blocks = vec![];
     let mut partition_nb_objects: i64 = 0;
-    let mut last_block_end_ticks: i64 = 0;
     // we could do a smarter search using object_offset
     for r in rows {
         let block = block_from_row(&r)?;
-        last_block_end_ticks = block.end_ticks;
         partition_nb_objects += block.nb_objects as i64;
         partition_blocks.push(Arc::new(PartitionSourceBlock {
             block,
@@ -108,17 +101,15 @@ pub async fn generate_jit_partitions_segment(
         }));
 
         if partition_nb_objects > config.max_nb_objects {
-            if last_block_end_ticks > relative_begin_ticks {
-                partitions.push(SourceDataBlocksInMemory {
-                    blocks: partition_blocks,
-                    block_ids_hash: partition_nb_objects.to_le_bytes().to_vec(),
-                });
-            }
+            partitions.push(SourceDataBlocksInMemory {
+                blocks: partition_blocks,
+                block_ids_hash: partition_nb_objects.to_le_bytes().to_vec(),
+            });
             partition_blocks = vec![];
             partition_nb_objects = 0;
         }
     }
-    if partition_nb_objects != 0 && last_block_end_ticks > relative_begin_ticks {
+    if partition_nb_objects != 0 {
         partitions.push(SourceDataBlocksInMemory {
             blocks: partition_blocks,
             block_ids_hash: partition_nb_objects.to_le_bytes().to_vec(),
@@ -136,8 +127,8 @@ pub async fn generate_jit_partitions(
     query_time_range: &TimeRange,
     stream: Arc<StreamInfo>,
     process: Arc<ProcessInfo>,
-    convert_ticks: &ConvertTicks,
 ) -> Result<Vec<SourceDataBlocksInMemory>> {
+    info!("get_insert_time_range");
     let insert_time_range = get_insert_time_range(pool, query_time_range, stream.clone()).await?;
     if insert_time_range.is_none() {
         return Ok(vec![]);
@@ -152,6 +143,7 @@ pub async fn generate_jit_partitions(
             .duration_trunc(config.max_insert_time_slice)?
             + config.max_insert_time_slice,
     );
+    info!("generating segments");
     let mut begin_segment = insert_time_range.begin;
     let mut end_segment = begin_segment + config.max_insert_time_slice;
     let mut partitions = vec![];
@@ -160,11 +152,9 @@ pub async fn generate_jit_partitions(
         let mut segment_partitions = generate_jit_partitions_segment(
             config,
             pool,
-            query_time_range,
             &insert_time_range,
             stream.clone(),
             process.clone(),
-            convert_ticks,
         )
         .await?;
         partitions.append(&mut segment_partitions);
@@ -179,15 +169,14 @@ pub async fn generate_jit_partitions(
 pub async fn is_jit_partition_up_to_date(
     pool: &sqlx::PgPool,
     view_meta: ViewMetadata,
-    convert_ticks: &ConvertTicks,
     spec: &SourceDataBlocksInMemory,
 ) -> Result<bool> {
-    let (min_event_time, max_event_time) =
-        get_event_time_range(convert_ticks, spec).with_context(|| "get_event_time_range")?;
+    let (min_insert_time, max_insert_time) =
+        get_part_insert_time_range(spec).with_context(|| "get_event_time_range")?;
     let desc = format!(
         "[{}, {}] {} {}",
-        min_event_time.to_rfc3339(),
-        max_event_time.to_rfc3339(),
+        min_insert_time.to_rfc3339(),
+        max_insert_time.to_rfc3339(),
         &*view_meta.view_set_name,
         &*view_meta.view_instance_id,
     );
@@ -197,20 +186,21 @@ pub async fn is_jit_partition_up_to_date(
          FROM lakehouse_partitions
          WHERE view_set_name = $1
          AND view_instance_id = $2
-         AND min_event_time < $3
-         AND max_event_time > $4
+         AND begin_insert_time < $3
+         AND end_insert_time > $4
          AND file_metadata IS NOT NULL
          ;",
     )
     .bind(&*view_meta.view_set_name)
     .bind(&*view_meta.view_instance_id)
-    .bind(max_event_time)
-    .bind(min_event_time)
+    .bind(max_insert_time)
+    .bind(min_insert_time)
     .fetch_all(pool)
     .await
     .with_context(|| "fetching matching partitions")?;
     if rows.len() != 1 {
         info!("{desc}: found {} partitions", rows.len());
+        dbg!(rows);
         return Ok(false);
     }
     let r = &rows[0];
@@ -232,20 +222,16 @@ pub async fn is_jit_partition_up_to_date(
 
 /// get_event_time_range returns the time range covered by a partition spec
 /// Returns the event time range covered by a partition spec.
-fn get_event_time_range(
-    convert_ticks: &ConvertTicks,
+fn get_part_insert_time_range(
     spec: &SourceDataBlocksInMemory,
 ) -> Result<(DateTime<Utc>, DateTime<Utc>)> {
     if spec.blocks.is_empty() {
         anyhow::bail!("empty partition should not exist");
     }
     // blocks need to be sorted by (event & insert) time
-    let min_rel_ticks = spec.blocks[0].block.begin_ticks;
-    let max_rel_ticks = spec.blocks[spec.blocks.len() - 1].block.end_ticks;
-    Ok((
-        convert_ticks.delta_ticks_to_time(min_rel_ticks),
-        convert_ticks.delta_ticks_to_time(max_rel_ticks),
-    ))
+    let min_insert_time = spec.blocks[0].block.insert_time;
+    let max_insert_time = spec.blocks[spec.blocks.len() - 1].block.insert_time;
+    Ok((min_insert_time, max_insert_time))
 }
 
 /// Writes a partition from a set of blocks.

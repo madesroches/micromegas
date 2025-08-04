@@ -1,15 +1,15 @@
 use crate::{
     metadata::{find_process, list_process_streams_tagged},
     metrics_table::metrics_table_schema,
-    time::{TimeRange, datetime_to_scalar, make_time_converter_from_db},
+    time::{datetime_to_scalar, TimeRange},
 };
 
 use super::{
     batch_update::PartitionCreationStrategy,
     block_partition_spec::BlockPartitionSpec,
     jit_partitions::{
-        JitPartitionConfig, generate_jit_partitions, is_jit_partition_up_to_date,
-        write_partition_from_blocks,
+        generate_jit_partitions, is_jit_partition_up_to_date, write_partition_from_blocks,
+        JitPartitionConfig,
     },
     metrics_block_processor::MetricsBlockProcessor,
     partition_cache::PartitionCache,
@@ -23,9 +23,10 @@ use chrono::{DateTime, TimeDelta, Utc};
 use datafusion::{
     arrow::datatypes::Schema,
     execution::runtime_env::RuntimeEnv,
-    logical_expr::{Between, Expr, col},
+    logical_expr::{col, Between, Expr},
 };
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
+use micromegas_tracing::info;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -126,6 +127,7 @@ impl View for MetricsView {
             // this view instance is updated using the deamon
             return Ok(());
         }
+        info!("find_process");
         let process = Arc::new(
             find_process(
                 &lake.db_pool,
@@ -137,13 +139,14 @@ impl View for MetricsView {
             .with_context(|| "find_process")?,
         );
 
+        //todo: use last_update_time in process
         let query_range =
             query_range.unwrap_or_else(|| TimeRange::new(process.start_time, chrono::Utc::now()));
 
+        info!("list_process_streams_tagged");
         let streams = list_process_streams_tagged(&lake.db_pool, process.process_id, "metrics")
             .await
             .with_context(|| "list_process_streams_tagged")?;
-        let convert_ticks = make_time_converter_from_db(&lake.db_pool, &process).await?;
         let mut all_partitions = vec![];
         for stream in streams {
             let mut partitions = generate_jit_partitions(
@@ -152,7 +155,6 @@ impl View for MetricsView {
                 &query_range,
                 Arc::new(stream),
                 process.clone(),
-                &convert_ticks,
             )
             .await
             .with_context(|| "generate_jit_partitions")?;
@@ -165,9 +167,7 @@ impl View for MetricsView {
         };
 
         for part in all_partitions {
-            if !is_jit_partition_up_to_date(&lake.db_pool, view_meta.clone(), &convert_ticks, &part)
-                .await?
-            {
+            if !is_jit_partition_up_to_date(&lake.db_pool, view_meta.clone(), &part).await? {
                 write_partition_from_blocks(
                     lake.clone(),
                     view_meta.clone(),
