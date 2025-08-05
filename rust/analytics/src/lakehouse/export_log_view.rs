@@ -1,5 +1,6 @@
 use super::{
     batch_update::PartitionCreationStrategy,
+    dataframe_time_bounds::{DataFrameTimeBounds, NamedColumnsTimeBounds},
     partition_cache::{NullPartitionProvider, PartitionCache},
     query::make_session_context,
     view::{PartitionSpec, View},
@@ -220,12 +221,11 @@ impl View for ExportLogView {
         ])
     }
 
-    fn get_min_event_time_column_name(&self) -> Arc<String> {
-        self.time_column_name.clone()
-    }
-
-    fn get_max_event_time_column_name(&self) -> Arc<String> {
-        self.time_column_name.clone()
+    fn get_time_bounds(&self) -> Arc<dyn DataFrameTimeBounds> {
+        Arc::new(NamedColumnsTimeBounds::new(
+            self.time_column_name.clone(),
+            self.time_column_name.clone(),
+        ))
     }
 
     fn get_update_group(&self) -> Option<i32> {

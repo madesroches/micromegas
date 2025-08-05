@@ -73,7 +73,7 @@ pub async fn generate_jit_partitions_segment(
 ) -> Result<Vec<SourceDataBlocksInMemory>> {
     info!("listing blocks");
     let rows = sqlx::query(
-            "SELECT block_id, stream_id, process_id, begin_time, end_time, begin_ticks, end_ticks, nb_objects, object_offset, payload_size, insert_time as block_insert_time
+            "SELECT block_id, stream_id, process_id, begin_time, end_time, begin_ticks, end_ticks, nb_objects, object_offset, payload_size, insert_time
              FROM blocks
              WHERE stream_id = $1
              AND insert_time >= $2
@@ -92,7 +92,7 @@ pub async fn generate_jit_partitions_segment(
     let mut partition_nb_objects: i64 = 0;
     // we could do a smarter search using object_offset
     for r in rows {
-        let block = block_from_row(&r)?;
+        let block = block_from_row(&r).with_context(|| "block_from_row")?;
         partition_nb_objects += block.nb_objects as i64;
         partition_blocks.push(Arc::new(PartitionSourceBlock {
             block,
@@ -200,7 +200,6 @@ pub async fn is_jit_partition_up_to_date(
     .with_context(|| "fetching matching partitions")?;
     if rows.len() != 1 {
         info!("{desc}: found {} partitions", rows.len());
-        dbg!(rows);
         return Ok(false);
     }
     let r = &rows[0];

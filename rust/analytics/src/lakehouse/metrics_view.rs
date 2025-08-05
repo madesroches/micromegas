@@ -7,6 +7,7 @@ use crate::{
 use super::{
     batch_update::PartitionCreationStrategy,
     block_partition_spec::BlockPartitionSpec,
+    dataframe_time_bounds::{DataFrameTimeBounds, NamedColumnsTimeBounds},
     jit_partitions::{
         generate_jit_partitions, is_jit_partition_up_to_date, write_partition_from_blocks,
         JitPartitionConfig,
@@ -191,12 +192,11 @@ impl View for MetricsView {
         ))])
     }
 
-    fn get_min_event_time_column_name(&self) -> Arc<String> {
-        TIME_COLUMN.clone()
-    }
-
-    fn get_max_event_time_column_name(&self) -> Arc<String> {
-        TIME_COLUMN.clone()
+    fn get_time_bounds(&self) -> Arc<dyn DataFrameTimeBounds> {
+        Arc::new(NamedColumnsTimeBounds::new(
+            TIME_COLUMN.clone(),
+            TIME_COLUMN.clone(),
+        ))
     }
 
     fn get_update_group(&self) -> Option<i32> {

@@ -1,7 +1,8 @@
 use super::{
     batch_update::PartitionCreationStrategy,
     block_partition_spec::BlockPartitionSpec,
-    jit_partitions::{JitPartitionConfig, write_partition_from_blocks},
+    dataframe_time_bounds::{DataFrameTimeBounds, NamedColumnsTimeBounds},
+    jit_partitions::{write_partition_from_blocks, JitPartitionConfig},
     log_block_processor::LogBlockProcessor,
     partition_cache::PartitionCache,
     partition_source_data::fetch_partition_source_data,
@@ -12,7 +13,7 @@ use crate::{
     lakehouse::jit_partitions::{generate_jit_partitions, is_jit_partition_up_to_date},
     log_entries_table::log_table_schema,
     metadata::{find_process, list_process_streams_tagged},
-    time::{TimeRange, datetime_to_scalar},
+    time::{datetime_to_scalar, TimeRange},
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -20,7 +21,7 @@ use chrono::{DateTime, TimeDelta, Utc};
 use datafusion::{
     arrow::datatypes::Schema,
     execution::runtime_env::RuntimeEnv,
-    logical_expr::{Between, Expr, col},
+    logical_expr::{col, Between, Expr},
 };
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use std::sync::Arc;
@@ -180,12 +181,11 @@ impl View for LogView {
         ))])
     }
 
-    fn get_min_event_time_column_name(&self) -> Arc<String> {
-        TIME_COLUMN.clone()
-    }
-
-    fn get_max_event_time_column_name(&self) -> Arc<String> {
-        TIME_COLUMN.clone()
+    fn get_time_bounds(&self) -> Arc<dyn DataFrameTimeBounds> {
+        Arc::new(NamedColumnsTimeBounds::new(
+            TIME_COLUMN.clone(),
+            TIME_COLUMN.clone(),
+        ))
     }
 
     fn get_update_group(&self) -> Option<i32> {

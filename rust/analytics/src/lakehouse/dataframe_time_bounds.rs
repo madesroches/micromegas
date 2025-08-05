@@ -8,13 +8,15 @@ use datafusion::{
     arrow::array::TimestampNanosecondArray,
     functions_aggregate::min_max::{max, min},
 };
+use std::fmt::Debug;
 use std::sync::Arc;
 
 #[async_trait]
-pub trait DataFrameTimeBounds: Send + Sync {
+pub trait DataFrameTimeBounds: Send + Sync + Debug {
     async fn get_time_bounds(&self, df: DataFrame) -> Result<TimeRange>;
 }
 
+#[derive(Debug)]
 pub struct NamedColumnsTimeBounds {
     min_column_name: Arc<String>,
     max_column_name: Arc<String>,

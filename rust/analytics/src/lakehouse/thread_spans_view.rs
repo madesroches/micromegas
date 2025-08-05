@@ -1,4 +1,5 @@
 use super::{
+    dataframe_time_bounds::{DataFrameTimeBounds, NamedColumnsTimeBounds},
     jit_partitions::{generate_jit_partitions, is_jit_partition_up_to_date, JitPartitionConfig},
     partition_cache::PartitionCache,
     partition_source_data::{hash_to_object_count, SourceDataBlocksInMemory},
@@ -272,12 +273,11 @@ impl View for ThreadSpansView {
         ])
     }
 
-    fn get_min_event_time_column_name(&self) -> Arc<String> {
-        MIN_TIME_COLUMN.clone()
-    }
-
-    fn get_max_event_time_column_name(&self) -> Arc<String> {
-        MAX_TIME_COLUMN.clone()
+    fn get_time_bounds(&self) -> Arc<dyn DataFrameTimeBounds> {
+        Arc::new(NamedColumnsTimeBounds::new(
+            MIN_TIME_COLUMN.clone(),
+            MAX_TIME_COLUMN.clone(),
+        ))
     }
 
     fn get_update_group(&self) -> Option<i32> {
