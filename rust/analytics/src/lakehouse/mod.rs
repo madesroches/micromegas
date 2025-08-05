@@ -11,6 +11,7 @@ pub mod batch_update;
 pub mod block_partition_spec;
 /// Replicated view of the `blocks` table of the postgresql metadata database.
 pub mod blocks_view;
+pub mod dataframe_time_bounds;
 /// Export mechanism that doubles as audit trail
 pub mod export_log_view;
 /// Fetch payload from the object store using SQL

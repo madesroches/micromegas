@@ -200,7 +200,7 @@ async fn write_partition_metadata(
 }
 
 /// Writes a partition to a Parquet file from a stream of `PartitionRowSet`s.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub async fn write_partition_from_rows(
     lake: Arc<DataLakeConnection>,
     view_metadata: ViewMetadata,

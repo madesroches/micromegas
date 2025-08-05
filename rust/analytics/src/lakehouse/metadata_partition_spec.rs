@@ -23,7 +23,7 @@ pub struct MetadataPartitionSpec {
     pub event_time_column: Arc<String>,
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub async fn fetch_metadata_partition_spec(
     pool: &sqlx::PgPool,
     source_count_query: &str,

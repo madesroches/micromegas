@@ -8,7 +8,7 @@ use super::{
 use crate::{
     lakehouse::{sql_partition_spec::fetch_sql_partition_spec, view::ViewMetadata},
     record_batch_transformer::RecordBatchTransformer,
-    time::{TimeRange, datetime_to_scalar},
+    time::{datetime_to_scalar, TimeRange},
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -183,11 +183,10 @@ impl View for ExportLogView {
             fetch_sql_partition_spec(
                 ctx,
                 self.exporter.clone(),
+                self.get_time_bounds(),
                 self.log_schema.clone(),
                 count_src_sql,
                 extract_sql,
-                self.time_column_name.clone(),
-                self.time_column_name.clone(),
                 view_meta,
                 insert_range,
             )

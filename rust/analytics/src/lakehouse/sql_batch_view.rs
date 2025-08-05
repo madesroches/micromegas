@@ -11,14 +11,14 @@ use super::{
 };
 use crate::{
     record_batch_transformer::TrivialRecordBatchTransformer,
-    time::{TimeRange, datetime_to_scalar},
+    time::{datetime_to_scalar, TimeRange},
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, TimeDelta, Utc};
 use datafusion::{
     arrow::datatypes::Schema,
-    execution::{SendableRecordBatchStream, runtime_env::RuntimeEnv},
+    execution::{runtime_env::RuntimeEnv, SendableRecordBatchStream},
     prelude::*,
     sql::TableReference,
 };
@@ -171,11 +171,10 @@ impl View for SqlBatchView {
             fetch_sql_partition_spec(
                 ctx,
                 Arc::new(TrivialRecordBatchTransformer {}),
+                self.get_time_bounds(),
                 self.schema.clone(),
                 count_src_sql,
                 extract_sql,
-                self.min_event_time_column.clone(),
-                self.max_event_time_column.clone(),
                 view_meta,
                 insert_range,
             )

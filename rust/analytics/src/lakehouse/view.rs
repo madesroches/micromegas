@@ -1,5 +1,6 @@
 use super::{
     batch_update::PartitionCreationStrategy,
+    dataframe_time_bounds::{DataFrameTimeBounds, NamedColumnsTimeBounds},
     materialized_view::MaterializedView,
     merge::{PartitionMerger, QueryMerger},
     partition::Partition,
@@ -12,7 +13,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, TimeDelta, Utc};
 use datafusion::{
     arrow::datatypes::Schema,
-    execution::{SendableRecordBatchStream, runtime_env::RuntimeEnv},
+    execution::{runtime_env::RuntimeEnv, SendableRecordBatchStream},
     logical_expr::Expr,
     prelude::*,
     sql::TableReference,
@@ -82,6 +83,13 @@ pub trait View: std::fmt::Debug + Send + Sync {
 
     /// name of the column to take the max() of to get the last event timestamp in a dataframe
     fn get_max_event_time_column_name(&self) -> Arc<String>;
+
+    fn get_time_bounds(&self) -> Arc<dyn DataFrameTimeBounds> {
+        Arc::new(NamedColumnsTimeBounds::new(
+            self.get_min_event_time_column_name(),
+            self.get_max_event_time_column_name(),
+        ))
+    }
 
     /// register the table in the SessionContext
     async fn register_table(&self, ctx: &SessionContext, table: MaterializedView) -> Result<()> {
