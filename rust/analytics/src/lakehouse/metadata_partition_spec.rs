@@ -1,6 +1,6 @@
 use super::view::{PartitionSpec, ViewMetadata};
 use crate::{
-    lakehouse::write_partition::{PartitionRowSet, write_partition_from_rows},
+    lakehouse::write_partition::{write_partition_from_rows, PartitionRowSet},
     response_writer::Logger,
     sql_arrow_bridge::rows_to_record_batch,
     time::TimeRange,
@@ -103,11 +103,10 @@ impl PartitionSpec for MetadataPartitionSpec {
             rx,
             logger.clone(),
         ));
-        tx.send(PartitionRowSet {
-            min_time_row: min_event_time,
-            max_time_row: max_event_time,
-            rows: record_batch,
-        })
+        tx.send(PartitionRowSet::new(
+            TimeRange::new(min_event_time, max_event_time),
+            record_batch,
+        ))
         .await?;
         drop(tx);
         join_handle.await??;

@@ -43,11 +43,7 @@ impl BlockProcessor for MetricsBlockProcessor {
 
         if let Some(time_range) = record_builder.get_time_range() {
             let record_batch = record_builder.finish()?;
-            Ok(Some(PartitionRowSet {
-                min_time_row: time_range.0,
-                max_time_row: time_range.1,
-                rows: record_batch,
-            }))
+            Ok(Some(PartitionRowSet::new(time_range, record_batch)))
         } else {
             Ok(None)
         }

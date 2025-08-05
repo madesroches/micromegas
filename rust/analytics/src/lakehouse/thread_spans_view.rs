@@ -1,17 +1,17 @@
 use super::{
-    jit_partitions::{JitPartitionConfig, generate_jit_partitions, is_jit_partition_up_to_date},
+    jit_partitions::{generate_jit_partitions, is_jit_partition_up_to_date, JitPartitionConfig},
     partition_cache::PartitionCache,
-    partition_source_data::{SourceDataBlocksInMemory, hash_to_object_count},
+    partition_source_data::{hash_to_object_count, SourceDataBlocksInMemory},
     view::{PartitionSpec, View, ViewMetadata},
     view_factory::ViewMaker,
 };
 use crate::{
     call_tree::make_call_tree,
-    lakehouse::write_partition::{PartitionRowSet, write_partition_from_rows},
+    lakehouse::write_partition::{write_partition_from_rows, PartitionRowSet},
     metadata::{find_process, find_stream},
     response_writer::ResponseWriter,
-    span_table::{SpanRecordBuilder, get_spans_schema},
-    time::{ConvertTicks, TimeRange, datetime_to_scalar, make_time_converter_from_db},
+    span_table::{get_spans_schema, SpanRecordBuilder},
+    time::{datetime_to_scalar, make_time_converter_from_db, ConvertTicks, TimeRange},
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -156,8 +156,7 @@ async fn write_partition(
         .with_context(|| "record_builder.finish()")?;
     info!("writing {} rows", rows.num_rows());
     tx.send(PartitionRowSet {
-        min_time_row,
-        max_time_row,
+        rows_time_range: TimeRange::new(min_time_row, max_time_row),
         rows,
     })
     .await?;

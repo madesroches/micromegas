@@ -128,7 +128,7 @@ pub async fn generate_jit_partitions(
     stream: Arc<StreamInfo>,
     process: Arc<ProcessInfo>,
 ) -> Result<Vec<SourceDataBlocksInMemory>> {
-    info!("get_insert_time_range");
+    info!("get_insert_time_range {query_time_range:?}");
     let insert_time_range = get_insert_time_range(pool, query_time_range, stream.clone()).await?;
     if insert_time_range.is_none() {
         return Ok(vec![]);

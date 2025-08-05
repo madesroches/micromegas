@@ -6,7 +6,7 @@ use super::{
     query::make_session_context,
     view::View,
     view_factory::ViewFactory,
-    write_partition::{PartitionRowSet, write_partition_from_rows},
+    write_partition::{write_partition_from_rows, PartitionRowSet},
 };
 use crate::{
     dfext::min_max_time_df::min_max_time_dataframe, response_writer::Logger, time::TimeRange,
@@ -15,7 +15,7 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use datafusion::{
     arrow::datatypes::Schema,
-    execution::{SendableRecordBatchStream, runtime_env::RuntimeEnv},
+    execution::{runtime_env::RuntimeEnv, SendableRecordBatchStream},
     prelude::*,
     sql::TableReference,
 };
@@ -209,8 +209,7 @@ pub async fn create_merged_partition(
         .await
         .with_context(|| "min_max_time_dataframe")?;
         tx.send(PartitionRowSet {
-            min_time_row: mintime,
-            max_time_row: maxtime,
+            rows_time_range: TimeRange::new(mintime, maxtime),
             rows: rb,
         })
         .await

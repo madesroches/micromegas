@@ -20,16 +20,24 @@ use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_tracing::prelude::*;
 use object_store::buffered::BufWriter;
 use sqlx::Row;
-use std::sync::{Arc, atomic::AtomicI64};
+use std::sync::{atomic::AtomicI64, Arc};
 use tokio::sync::mpsc::Receiver;
 
 use super::{partition::Partition, view::ViewMetadata};
 
 /// A set of rows for a partition, along with their time range.
 pub struct PartitionRowSet {
-    pub min_time_row: DateTime<Utc>,
-    pub max_time_row: DateTime<Utc>,
+    pub rows_time_range: TimeRange,
     pub rows: RecordBatch,
+}
+
+impl PartitionRowSet {
+    pub fn new(rows_time_range: TimeRange, rows: RecordBatch) -> Self {
+        Self {
+            rows_time_range,
+            rows,
+        }
+    }
 }
 
 /// Retires partitions that have exceeded their expiration time.
@@ -242,13 +250,13 @@ pub async fn write_partition_from_rows(
     while let Some(row_set) = rb_stream.recv().await {
         min_event_time = Some(
             min_event_time
-                .unwrap_or(row_set.min_time_row)
-                .min(row_set.min_time_row),
+                .unwrap_or(row_set.rows_time_range.begin)
+                .min(row_set.rows_time_range.begin),
         );
         max_event_time = Some(
             max_event_time
-                .unwrap_or(row_set.max_time_row)
-                .max(row_set.max_time_row),
+                .unwrap_or(row_set.rows_time_range.end)
+                .max(row_set.rows_time_range.end),
         );
         arrow_writer
             .write(&row_set.rows)

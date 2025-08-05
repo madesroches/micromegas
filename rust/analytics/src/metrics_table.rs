@@ -1,9 +1,10 @@
 use crate::{
     arrow_properties::{add_properties_to_builder, add_property_set_to_builder},
     measure::Measure,
+    time::TimeRange,
 };
 use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
+use chrono::DateTime;
 use datafusion::arrow::{
     array::{ArrayBuilder, ListBuilder, PrimitiveBuilder, StringDictionaryBuilder, StructBuilder},
     datatypes::{
@@ -162,13 +163,13 @@ impl MetricsRecordBuilder {
         self.times.len() == 0
     }
 
-    pub fn get_time_range(&self) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
+    pub fn get_time_range(&self) -> Option<TimeRange> {
         if self.is_empty() {
             return None;
         }
         // assuming that the events are in order
         let slice = self.times.values_slice();
-        Some((
+        Some(TimeRange::new(
             DateTime::from_timestamp_nanos(slice[0]),
             DateTime::from_timestamp_nanos(slice[slice.len() - 1]),
         ))

@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use chrono::DateTime;
-use chrono::Utc;
 use datafusion::arrow::array::ArrayBuilder;
 use datafusion::arrow::array::ListBuilder;
 use datafusion::arrow::array::PrimitiveBuilder;
@@ -22,6 +21,7 @@ use datafusion::arrow::record_batch::RecordBatch;
 use crate::arrow_properties::add_properties_to_builder;
 use crate::arrow_properties::add_property_set_to_builder;
 use crate::log_entry::LogEntry;
+use crate::time::TimeRange;
 
 /// Returns the schema for the log entries table.
 pub fn log_table_schema() -> Schema {
@@ -154,13 +154,13 @@ impl LogEntriesRecordBuilder {
         }
     }
 
-    pub fn get_time_range(&self) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
+    pub fn get_time_range(&self) -> Option<TimeRange> {
         if self.is_empty() {
             return None;
         }
         // assuming that the events are in order
         let slice = self.times.values_slice();
-        Some((
+        Some(TimeRange::new(
             DateTime::from_timestamp_nanos(slice[0]),
             DateTime::from_timestamp_nanos(slice[slice.len() - 1]),
         ))

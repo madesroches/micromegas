@@ -113,12 +113,8 @@ impl PartitionSpec for SqlPartitionSpec {
                 &self.max_event_time_column,
             )
             .await?;
-            tx.send(PartitionRowSet {
-                min_time_row: mintime,
-                max_time_row: maxtime,
-                rows: rb,
-            })
-            .await?;
+            tx.send(PartitionRowSet::new(TimeRange::new(mintime, maxtime), rb))
+                .await?;
         }
         drop(tx);
         join_handle.await??;
