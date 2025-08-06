@@ -1,17 +1,26 @@
 use super::{
     block_partition_spec::{BlockPartitionSpec, BlockProcessor},
+    blocks_view::BlocksView,
+    partition_cache::{LivePartitionProvider, QueryPartitionProvider},
     partition_source_data::{PartitionSourceBlock, SourceDataBlocksInMemory},
-    view::ViewMetadata,
+    view::{View, ViewMetadata},
 };
 use crate::{
-    lakehouse::partition_source_data::hash_to_object_count, metadata::block_from_row,
+    dfext::typed_column::get_single_row_primitive_value, lakehouse::view::PartitionSpec,
+    time::TimeRange,
+};
+use crate::{
+    lakehouse::{partition_source_data::hash_to_object_count, query::query_partitions},
+    metadata::block_from_row,
     response_writer::ResponseWriter,
 };
-use crate::{lakehouse::view::PartitionSpec, time::TimeRange};
 use anyhow::{Context, Result};
 use chrono::DurationRound;
 use chrono::{DateTime, TimeDelta, Utc};
-use datafusion::arrow::datatypes::Schema;
+use datafusion::{
+    arrow::datatypes::{Schema, TimestampNanosecondType},
+    execution::runtime_env::RuntimeEnv,
+};
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_telemetry::stream_info::StreamInfo;
 use micromegas_tracing::prelude::*;
@@ -35,31 +44,52 @@ impl Default for JitPartitionConfig {
 }
 
 async fn get_insert_time_range(
-    pool: &sqlx::Pool<sqlx::Postgres>,
+    runtime: Arc<RuntimeEnv>,
+    lake: Arc<DataLakeConnection>,
+    blocks_view: &BlocksView,
     query_time_range: &TimeRange,
     stream: Arc<StreamInfo>,
 ) -> Result<Option<TimeRange>> {
-    let row = sqlx::query(
+    let part_provider = LivePartitionProvider::new(lake.db_pool.clone());
+    let partitions = part_provider
+        .fetch(
+            &blocks_view.get_view_set_name(),
+            &blocks_view.get_view_instance_id(),
+            Some(*query_time_range),
+            blocks_view.get_file_schema_hash(),
+        )
+        .await?;
+    let stream_id = &stream.stream_id;
+    let begin_range_iso = query_time_range.begin.to_rfc3339();
+    let end_range_iso = query_time_range.end.to_rfc3339();
+    let sql = format!(
         "SELECT MIN(insert_time) as min_insert_time, MAX(insert_time) as max_insert_time
-        FROM BLOCKS
-        WHERE stream_id = $1
-        AND begin_time <= $2
-        AND end_time >= $3;",
+        FROM source
+        WHERE stream_id = '{stream_id}'
+        AND begin_time <= '{end_range_iso}'
+        AND end_time >= '{begin_range_iso}';"
+    );
+    let rbs = query_partitions(
+        runtime,
+        lake,
+        blocks_view.get_file_schema(),
+        Arc::new(partitions),
+        &sql,
     )
-    .bind(stream.stream_id)
-    .bind(query_time_range.end)
-    .bind(query_time_range.begin)
-    .fetch_one(pool)
-    .await
-    .with_context(|| "get_insert_time_range")?;
-    let begin_insert_range: Option<DateTime<Utc>> = row.try_get("min_insert_time")?;
-    let end_insert_range: Option<DateTime<Utc>> = row.try_get("max_insert_time")?;
-    if begin_insert_range.is_none() {
+    .await?
+    .collect()
+    .await?;
+    if rbs.is_empty() {
         return Ok(None);
     }
+    if rbs[0].num_rows() == 0 {
+        return Ok(None);
+    }
+    let min_insert_time = get_single_row_primitive_value::<TimestampNanosecondType>(&rbs, 0)?;
+    let max_insert_time = get_single_row_primitive_value::<TimestampNanosecondType>(&rbs, 1)?;
     Ok(Some(TimeRange::new(
-        begin_insert_range.with_context(|| "missing begin_insert_range")?,
-        end_insert_range.with_context(|| "missing end_insert_range")?,
+        DateTime::from_timestamp_nanos(min_insert_time),
+        DateTime::from_timestamp_nanos(max_insert_time),
     )))
 }
 
@@ -123,13 +153,22 @@ pub async fn generate_jit_partitions_segment(
 /// Generates JIT partitions for a given time range.
 pub async fn generate_jit_partitions(
     config: &JitPartitionConfig,
-    pool: &sqlx::Pool<sqlx::Postgres>,
+    runtime: Arc<RuntimeEnv>,
+    lake: Arc<DataLakeConnection>,
+    blocks_view: &BlocksView,
     query_time_range: &TimeRange,
     stream: Arc<StreamInfo>,
     process: Arc<ProcessInfo>,
 ) -> Result<Vec<SourceDataBlocksInMemory>> {
     info!("get_insert_time_range {query_time_range:?}");
-    let insert_time_range = get_insert_time_range(pool, query_time_range, stream.clone()).await?;
+    let insert_time_range = get_insert_time_range(
+        runtime,
+        lake.clone(),
+        blocks_view,
+        query_time_range,
+        stream.clone(),
+    )
+    .await?;
     if insert_time_range.is_none() {
         return Ok(vec![]);
     }
@@ -151,7 +190,7 @@ pub async fn generate_jit_partitions(
         let insert_time_range = TimeRange::new(begin_segment, end_segment);
         let mut segment_partitions = generate_jit_partitions_segment(
             config,
-            pool,
+            &lake.db_pool,
             &insert_time_range,
             stream.clone(),
             process.clone(),

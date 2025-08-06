@@ -110,6 +110,7 @@ impl View for BlocksView {
 
     async fn jit_update(
         &self,
+	_runtime: Arc<RuntimeEnv>,
         _lake: Arc<DataLakeConnection>,
         _query_range: Option<TimeRange>,
     ) -> Result<()> {

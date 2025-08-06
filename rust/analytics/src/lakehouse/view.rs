@@ -70,6 +70,7 @@ pub trait View: std::fmt::Debug + Send + Sync {
     /// jit_update creates or updates process-specific partitions before a query
     async fn jit_update(
         &self,
+	runtime: Arc<RuntimeEnv>,
         lake: Arc<DataLakeConnection>,
         query_range: Option<TimeRange>,
     ) -> Result<()>;

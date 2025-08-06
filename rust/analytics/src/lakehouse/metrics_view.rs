@@ -1,4 +1,5 @@
 use crate::{
+    lakehouse::blocks_view::BlocksView,
     metadata::{find_process, list_process_streams_tagged},
     metrics_table::metrics_table_schema,
     time::{datetime_to_scalar, TimeRange},
@@ -121,6 +122,7 @@ impl View for MetricsView {
 
     async fn jit_update(
         &self,
+	runtime: Arc<RuntimeEnv>,
         lake: Arc<DataLakeConnection>,
         query_range: Option<TimeRange>,
     ) -> Result<()> {
@@ -149,10 +151,13 @@ impl View for MetricsView {
             .await
             .with_context(|| "list_process_streams_tagged")?;
         let mut all_partitions = vec![];
+        let blocks_view = BlocksView::new()?;
         for stream in streams {
             let mut partitions = generate_jit_partitions(
                 &JitPartitionConfig::default(),
-                &lake.db_pool,
+		runtime.clone(),
+		lake.clone(),
+                &blocks_view,
                 &query_range,
                 Arc::new(stream),
                 process.clone(),

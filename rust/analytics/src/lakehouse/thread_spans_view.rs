@@ -1,4 +1,5 @@
 use super::{
+    blocks_view::BlocksView,
     dataframe_time_bounds::{DataFrameTimeBounds, NamedColumnsTimeBounds},
     jit_partitions::{generate_jit_partitions, is_jit_partition_up_to_date, JitPartitionConfig},
     partition_cache::PartitionCache,
@@ -213,6 +214,7 @@ impl View for ThreadSpansView {
 
     async fn jit_update(
         &self,
+        runtime: Arc<RuntimeEnv>,
         lake: Arc<DataLakeConnection>,
         query_range: Option<TimeRange>,
     ) -> Result<()> {
@@ -231,9 +233,12 @@ impl View for ThreadSpansView {
                 .with_context(|| "find_process")?,
         );
         let convert_ticks = make_time_converter_from_db(&lake.db_pool, &process).await?;
+        let blocks_view = BlocksView::new()?;
         let partitions = generate_jit_partitions(
             &JitPartitionConfig::default(),
-            &lake.db_pool,
+            runtime,
+            lake.clone(),
+            &blocks_view,
             &query_range,
             stream.clone(),
             process.clone(),

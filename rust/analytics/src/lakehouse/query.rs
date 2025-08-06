@@ -33,7 +33,7 @@ use anyhow::{Context, Result};
 use datafusion::{
     arrow::{array::RecordBatch, datatypes::SchemaRef},
     execution::{context::SessionContext, object_store::ObjectStoreUrl, runtime_env::RuntimeEnv},
-    logical_expr::{ScalarUDF, async_udf::AsyncScalarUDF},
+    logical_expr::{async_udf::AsyncScalarUDF, ScalarUDF},
     prelude::*,
     sql::TableReference,
 };
@@ -43,6 +43,7 @@ use object_store::ObjectStore;
 use std::sync::Arc;
 
 async fn register_table(
+    runtime: Arc<RuntimeEnv>,
     lake: Arc<DataLakeConnection>,
     part_provider: Arc<dyn QueryPartitionProvider>,
     query_range: Option<TimeRange>,
@@ -50,7 +51,14 @@ async fn register_table(
     object_store: Arc<dyn ObjectStore>,
     view: Arc<dyn View>,
 ) -> Result<()> {
-    let table = MaterializedView::new(lake, object_store, view.clone(), part_provider, query_range);
+    let table = MaterializedView::new(
+        runtime,
+        lake,
+        object_store,
+        view.clone(),
+        part_provider,
+        query_range,
+    );
     view.register_table(ctx, table).await
 }
 
@@ -101,6 +109,7 @@ pub fn register_lakehouse_functions(
     ctx.register_udtf(
         "view_instance",
         Arc::new(ViewInstanceTableFunction::new(
+            runtime.clone(),
             lake.clone(),
             object_store,
             view_factory.clone(),
@@ -182,7 +191,7 @@ pub async fn make_session_context(
     ctx.register_object_store(object_store_url.as_ref(), object_store.clone());
     register_functions(
         &ctx,
-        runtime,
+        runtime.clone(),
         lake.clone(),
         part_provider.clone(),
         query_range,
@@ -191,6 +200,7 @@ pub async fn make_session_context(
     );
     for view in view_factory.get_global_views() {
         register_table(
+            runtime.clone(),
             lake.clone(),
             part_provider.clone(),
             query_range,
