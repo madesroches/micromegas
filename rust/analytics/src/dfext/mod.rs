@@ -8,8 +8,6 @@ pub mod histogram;
 pub mod jsonb;
 /// Stream a function's log as a table
 pub mod log_stream_table_provider;
-/// Get min & max from the time column
-pub mod min_max_time_df;
 /// Convert a filtering expression to a physical predicate
 pub mod predicate;
 /// Execution plan interface for an async task

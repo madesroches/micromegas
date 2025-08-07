@@ -9,6 +9,7 @@ use datafusion::{
     catalog::{Session, TableProvider},
     datasource::TableType,
     error::DataFusionError,
+    execution::runtime_env::RuntimeEnv,
     logical_expr::{Expr, TableProviderFilterPushDown},
     physical_plan::ExecutionPlan,
 };
@@ -20,6 +21,7 @@ use std::{any::Any, sync::Arc};
 /// A DataFusion `TableProvider` for materialized views.
 #[derive(Debug)]
 pub struct MaterializedView {
+    runtime: Arc<RuntimeEnv>,
     lake: Arc<DataLakeConnection>,
     object_store: Arc<dyn ObjectStore>,
     view: Arc<dyn View>,
@@ -29,6 +31,7 @@ pub struct MaterializedView {
 
 impl MaterializedView {
     pub fn new(
+        runtime: Arc<RuntimeEnv>,
         lake: Arc<DataLakeConnection>,
         object_store: Arc<dyn ObjectStore>,
         view: Arc<dyn View>,
@@ -36,6 +39,7 @@ impl MaterializedView {
         query_range: Option<TimeRange>,
     ) -> Self {
         Self {
+            runtime,
             lake,
             object_store,
             view,
@@ -71,7 +75,7 @@ impl TableProvider for MaterializedView {
         limit: Option<usize>,
     ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
         self.view
-            .jit_update(self.lake.clone(), self.query_range)
+            .jit_update(self.runtime.clone(), self.lake.clone(), self.query_range)
             .await
             .map_err(|e| DataFusionError::External(e.into()))?;
 

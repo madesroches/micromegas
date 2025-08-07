@@ -1,5 +1,6 @@
 use super::{
     batch_update::PartitionCreationStrategy,
+    dataframe_time_bounds::{DataFrameTimeBounds, NamedColumnsTimeBounds},
     materialized_view::MaterializedView,
     merge::{PartitionMerger, QueryMerger},
     partition::Partition,
@@ -171,11 +172,10 @@ impl View for SqlBatchView {
             fetch_sql_partition_spec(
                 ctx,
                 Arc::new(TrivialRecordBatchTransformer {}),
+                self.get_time_bounds(),
                 self.schema.clone(),
                 count_src_sql,
                 extract_sql,
-                self.min_event_time_column.clone(),
-                self.max_event_time_column.clone(),
                 view_meta,
                 insert_range,
             )
@@ -196,6 +196,7 @@ impl View for SqlBatchView {
 
     async fn jit_update(
         &self,
+        _runtime: Arc<RuntimeEnv>,
         _lake: Arc<DataLakeConnection>,
         _query_range: Option<TimeRange>,
     ) -> Result<()> {
@@ -209,12 +210,11 @@ impl View for SqlBatchView {
         ])
     }
 
-    fn get_min_event_time_column_name(&self) -> Arc<String> {
-        self.min_event_time_column.clone()
-    }
-
-    fn get_max_event_time_column_name(&self) -> Arc<String> {
-        self.max_event_time_column.clone()
+    fn get_time_bounds(&self) -> Arc<dyn DataFrameTimeBounds> {
+        Arc::new(NamedColumnsTimeBounds::new(
+            self.min_event_time_column.clone(),
+            self.max_event_time_column.clone(),
+        ))
     }
 
     async fn register_table(&self, ctx: &SessionContext, table: MaterializedView) -> Result<()> {

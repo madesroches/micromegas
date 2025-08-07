@@ -21,7 +21,6 @@ pub enum PartitionCreationStrategy {
 
 // verify_overlapping_partitions returns true to continue and make a new partition,
 // returns false to abort (existing partition is up to date or there is a problem)
-#[allow(clippy::too_many_arguments)]
 async fn verify_overlapping_partitions(
     existing_partitions_all_views: &PartitionCache,
     insert_range: TimeRange,
@@ -198,7 +197,6 @@ async fn materialize_partition(
 }
 
 /// Materializes partitions within a given time range.
-#[allow(clippy::too_many_arguments)]
 pub async fn materialize_partition_range(
     existing_partitions_all_views: Arc<PartitionCache>,
     runtime: Arc<RuntimeEnv>,

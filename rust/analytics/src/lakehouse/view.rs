@@ -1,5 +1,6 @@
 use super::{
     batch_update::PartitionCreationStrategy,
+    dataframe_time_bounds::DataFrameTimeBounds,
     materialized_view::MaterializedView,
     merge::{PartitionMerger, QueryMerger},
     partition::Partition,
@@ -69,6 +70,7 @@ pub trait View: std::fmt::Debug + Send + Sync {
     /// jit_update creates or updates process-specific partitions before a query
     async fn jit_update(
         &self,
+        runtime: Arc<RuntimeEnv>,
         lake: Arc<DataLakeConnection>,
         query_range: Option<TimeRange>,
     ) -> Result<()>;
@@ -77,11 +79,8 @@ pub trait View: std::fmt::Debug + Send + Sync {
     /// outside the time range requested.
     fn make_time_filter(&self, _begin: DateTime<Utc>, _end: DateTime<Utc>) -> Result<Vec<Expr>>;
 
-    /// name of the column to take the min() of to get the first event timestamp in a dataframe
-    fn get_min_event_time_column_name(&self) -> Arc<String>;
-
-    /// name of the column to take the max() of to get the last event timestamp in a dataframe
-    fn get_max_event_time_column_name(&self) -> Arc<String>;
+    // a view must provide a way to compute the time bounds of a DataFrame corresponding to its schema
+    fn get_time_bounds(&self) -> Arc<dyn DataFrameTimeBounds>;
 
     /// register the table in the SessionContext
     async fn register_table(&self, ctx: &SessionContext, table: MaterializedView) -> Result<()> {

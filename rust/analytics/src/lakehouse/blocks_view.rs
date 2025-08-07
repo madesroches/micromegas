@@ -1,5 +1,6 @@
 use super::{
     batch_update::PartitionCreationStrategy,
+    dataframe_time_bounds::{DataFrameTimeBounds, NamedColumnsTimeBounds},
     metadata_partition_spec::fetch_metadata_partition_spec,
     partition_cache::PartitionCache,
     view::{PartitionSpec, View, ViewMetadata},
@@ -20,6 +21,7 @@ use std::sync::Arc;
 const VIEW_SET_NAME: &str = "blocks";
 const VIEW_INSTANCE_ID: &str = "global";
 lazy_static::lazy_static! {
+    static ref BEGIN_TIME_COLUMN: Arc<String> = Arc::new( String::from("begin_time"));
     static ref INSERT_TIME_COLUMN: Arc<String> = Arc::new( String::from("insert_time"));
 }
 
@@ -29,14 +31,13 @@ pub struct BlocksView {
     view_set_name: Arc<String>,
     view_instance_id: Arc<String>,
     data_sql: Arc<String>,
-    event_time_column: Arc<String>,
 }
 
 impl BlocksView {
     pub fn new() -> Result<Self> {
         let data_sql = Arc::new(String::from(
-        "SELECT block_id, streams.stream_id, processes.process_id, blocks.begin_time, blocks.begin_ticks, blocks.end_time, blocks.end_ticks, blocks.nb_objects, blocks.object_offset, blocks.payload_size, blocks.insert_time as block_insert_time,
-           streams.dependencies_metadata, streams.objects_metadata, streams.tags, streams.properties, streams.insert_time,
+            r#"SELECT block_id, streams.stream_id, processes.process_id, blocks.begin_time, blocks.begin_ticks, blocks.end_time, blocks.end_ticks, blocks.nb_objects, blocks.object_offset, blocks.payload_size, blocks.insert_time,
+           streams.dependencies_metadata, streams.objects_metadata, streams.tags, streams.properties, streams.insert_time as stream_insert_time,
            processes.start_time, processes.start_ticks, processes.tsc_frequency, processes.exe, processes.username, processes.realname, processes.computer, processes.distro, processes.cpu_brand, processes.insert_time as process_insert_time, processes.parent_process_id, processes.properties as process_properties
          FROM blocks, streams, processes
          WHERE blocks.stream_id = streams.stream_id
@@ -44,15 +45,12 @@ impl BlocksView {
          AND blocks.insert_time >= $1
          AND blocks.insert_time < $2
          ORDER BY blocks.insert_time, blocks.block_id
-         ;",
+         ;"#,
         ));
-        let event_time_column = Arc::new(String::from("block_insert_time"));
-
         Ok(Self {
             view_set_name: Arc::new(String::from(VIEW_SET_NAME)),
             view_instance_id: Arc::new(String::from(VIEW_INSTANCE_ID)),
             data_sql,
-            event_time_column,
         })
     }
 }
@@ -91,11 +89,11 @@ impl View for BlocksView {
             fetch_metadata_partition_spec(
                 &lake.db_pool,
                 source_count_query,
-                self.event_time_column.clone(),
                 self.data_sql.clone(),
                 view_meta,
                 self.get_file_schema(),
                 insert_range,
+                self.get_time_bounds(),
             )
             .await
             .with_context(|| "fetch_metadata_partition_spec")?,
@@ -112,6 +110,7 @@ impl View for BlocksView {
 
     async fn jit_update(
         &self,
+        _runtime: Arc<RuntimeEnv>,
         _lake: Arc<DataLakeConnection>,
         _query_range: Option<TimeRange>,
     ) -> Result<()> {
@@ -125,16 +124,16 @@ impl View for BlocksView {
     fn make_time_filter(&self, begin: DateTime<Utc>, end: DateTime<Utc>) -> Result<Vec<Expr>> {
         Ok(vec![
             col("begin_time").lt_eq(lit(datetime_to_scalar(end))),
-            col("end_time").gt_eq(lit(datetime_to_scalar(begin))),
+            col("insert_time").gt_eq(lit(datetime_to_scalar(begin))),
         ])
     }
 
-    fn get_min_event_time_column_name(&self) -> Arc<String> {
-        INSERT_TIME_COLUMN.clone()
-    }
-
-    fn get_max_event_time_column_name(&self) -> Arc<String> {
-        INSERT_TIME_COLUMN.clone()
+    fn get_time_bounds(&self) -> Arc<dyn DataFrameTimeBounds> {
+        //todo: make more robust, by changing to [ min(begin, insert), max(end, insert) ]
+        Arc::new(NamedColumnsTimeBounds::new(
+            BEGIN_TIME_COLUMN.clone(),
+            INSERT_TIME_COLUMN.clone(),
+        ))
     }
 
     fn get_update_group(&self) -> Option<i32> {

@@ -1,4 +1,6 @@
 use super::{
+    blocks_view::BlocksView,
+    dataframe_time_bounds::{DataFrameTimeBounds, NamedColumnsTimeBounds},
     jit_partitions::{JitPartitionConfig, generate_jit_partitions, is_jit_partition_up_to_date},
     partition_cache::PartitionCache,
     partition_source_data::{SourceDataBlocksInMemory, hash_to_object_count},
@@ -156,8 +158,7 @@ async fn write_partition(
         .with_context(|| "record_builder.finish()")?;
     info!("writing {} rows", rows.num_rows());
     tx.send(PartitionRowSet {
-        min_time_row,
-        max_time_row,
+        rows_time_range: TimeRange::new(min_time_row, max_time_row),
         rows,
     })
     .await?;
@@ -173,7 +174,7 @@ async fn update_partition(
     convert_ticks: &ConvertTicks,
     spec: &SourceDataBlocksInMemory,
 ) -> Result<()> {
-    if is_jit_partition_up_to_date(&lake.db_pool, view_meta.clone(), convert_ticks, spec).await? {
+    if is_jit_partition_up_to_date(&lake.db_pool, view_meta.clone(), spec).await? {
         return Ok(());
     }
     write_partition(lake, view_meta, schema, convert_ticks, spec)
@@ -213,6 +214,7 @@ impl View for ThreadSpansView {
 
     async fn jit_update(
         &self,
+        runtime: Arc<RuntimeEnv>,
         lake: Arc<DataLakeConnection>,
         query_range: Option<TimeRange>,
     ) -> Result<()> {
@@ -231,13 +233,15 @@ impl View for ThreadSpansView {
                 .with_context(|| "find_process")?,
         );
         let convert_ticks = make_time_converter_from_db(&lake.db_pool, &process).await?;
+        let blocks_view = BlocksView::new()?;
         let partitions = generate_jit_partitions(
             &JitPartitionConfig::default(),
-            &lake.db_pool,
+            runtime,
+            lake.clone(),
+            &blocks_view,
             &query_range,
             stream.clone(),
             process.clone(),
-            &convert_ticks,
         )
         .await
         .with_context(|| "generate_jit_partitions")?;
@@ -274,12 +278,11 @@ impl View for ThreadSpansView {
         ])
     }
 
-    fn get_min_event_time_column_name(&self) -> Arc<String> {
-        MIN_TIME_COLUMN.clone()
-    }
-
-    fn get_max_event_time_column_name(&self) -> Arc<String> {
-        MAX_TIME_COLUMN.clone()
+    fn get_time_bounds(&self) -> Arc<dyn DataFrameTimeBounds> {
+        Arc::new(NamedColumnsTimeBounds::new(
+            MIN_TIME_COLUMN.clone(),
+            MAX_TIME_COLUMN.clone(),
+        ))
     }
 
     fn get_update_group(&self) -> Option<i32> {

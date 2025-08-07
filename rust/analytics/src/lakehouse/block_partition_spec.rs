@@ -87,7 +87,7 @@ impl PartitionSpec for BlockPartitionSpec {
             .get_blocks_stream()
             .await
             .map(|src_block_res| async {
-                let src_block = src_block_res?;
+                let src_block = src_block_res.with_context(|| "get_blocks_stream")?;
                 let block_processor = self.block_processor.clone();
                 let blob_storage = lake.blob_storage.clone();
                 let handle = tokio::spawn(async move {

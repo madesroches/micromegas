@@ -8,9 +8,7 @@ use super::{
     view_factory::ViewFactory,
     write_partition::{PartitionRowSet, write_partition_from_rows},
 };
-use crate::{
-    dfext::min_max_time_df::min_max_time_dataframe, response_writer::Logger, time::TimeRange,
-};
+use crate::{response_writer::Logger, time::TimeRange};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use datafusion::{
@@ -198,23 +196,16 @@ pub async fn create_merged_partition(
         }
         res
     });
+    let compute_time_bounds = view.get_time_bounds();
     let ctx = SessionContext::new_with_config_rt(SessionConfig::default(), runtime);
     while let Some(rb_res) = merged_stream.next().await {
         let rb = rb_res.with_context(|| "receiving record_batch from stream")?;
-        let (mintime, maxtime) = min_max_time_dataframe(
-            ctx.read_batch(rb.clone()).with_context(|| "read_batch")?,
-            &view.get_min_event_time_column_name(),
-            &view.get_max_event_time_column_name(),
-        )
-        .await
-        .with_context(|| "min_max_time_dataframe")?;
-        tx.send(PartitionRowSet {
-            min_time_row: mintime,
-            max_time_row: maxtime,
-            rows: rb,
-        })
-        .await
-        .with_context(|| "sending partition row set")?;
+        let event_time_range = compute_time_bounds
+            .get_time_bounds(ctx.read_batch(rb.clone()).with_context(|| "read_batch")?)
+            .await?;
+        tx.send(PartitionRowSet::new(event_time_range, rb))
+            .await
+            .with_context(|| "sending partition row set")?;
     }
     drop(tx);
     join_handle.await??;

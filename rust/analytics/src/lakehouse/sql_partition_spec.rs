@@ -1,13 +1,11 @@
 use super::{
+    dataframe_time_bounds::DataFrameTimeBounds,
     view::{PartitionSpec, ViewMetadata},
     write_partition::write_partition_from_rows,
 };
 use crate::{
-    dfext::{min_max_time_df::min_max_time_dataframe, typed_column::typed_column_by_name},
-    lakehouse::write_partition::PartitionRowSet,
-    record_batch_transformer::RecordBatchTransformer,
-    response_writer::Logger,
-    time::TimeRange,
+    dfext::typed_column::typed_column_by_name, lakehouse::write_partition::PartitionRowSet,
+    record_batch_transformer::RecordBatchTransformer, response_writer::Logger, time::TimeRange,
 };
 use anyhow::Result;
 use async_trait::async_trait;
@@ -27,24 +25,22 @@ use std::sync::Arc;
 pub struct SqlPartitionSpec {
     ctx: SessionContext,
     transformer: Arc<dyn RecordBatchTransformer>,
+    compute_time_bounds: Arc<dyn DataFrameTimeBounds>,
     schema: Arc<Schema>,
     extract_query: String,
-    min_event_time_column: Arc<String>,
-    max_event_time_column: Arc<String>,
     view_metadata: ViewMetadata,
     insert_range: TimeRange,
     record_count: i64,
 }
 
 impl SqlPartitionSpec {
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     pub fn new(
         ctx: SessionContext,
         transformer: Arc<dyn RecordBatchTransformer>,
+        compute_time_bounds: Arc<dyn DataFrameTimeBounds>,
         schema: Arc<Schema>,
         extract_query: String,
-        min_event_time_column: Arc<String>,
-        max_event_time_column: Arc<String>,
         view_metadata: ViewMetadata,
         insert_range: TimeRange,
         record_count: i64,
@@ -52,10 +48,9 @@ impl SqlPartitionSpec {
         Self {
             ctx,
             transformer,
+            compute_time_bounds,
             schema,
             extract_query,
-            min_event_time_column,
-            max_event_time_column,
             view_metadata,
             insert_range,
             record_count,
@@ -107,18 +102,11 @@ impl PartitionSpec for SqlPartitionSpec {
 
         while let Some(rb_res) = stream.next().await {
             let rb = self.transformer.transform(rb_res?).await?;
-            let (mintime, maxtime) = min_max_time_dataframe(
-                self.ctx.read_batch(rb.clone())?,
-                &self.min_event_time_column,
-                &self.max_event_time_column,
-            )
-            .await?;
-            tx.send(PartitionRowSet {
-                min_time_row: mintime,
-                max_time_row: maxtime,
-                rows: rb,
-            })
-            .await?;
+            let event_time_range = self
+                .compute_time_bounds
+                .get_time_bounds(self.ctx.read_batch(rb.clone())?)
+                .await?;
+            tx.send(PartitionRowSet::new(event_time_range, rb)).await?;
         }
         drop(tx);
         join_handle.await??;
@@ -127,15 +115,14 @@ impl PartitionSpec for SqlPartitionSpec {
 }
 
 /// Fetches a `SqlPartitionSpec` by executing a count query and an extract query.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 pub async fn fetch_sql_partition_spec(
     ctx: SessionContext,
     transformer: Arc<dyn RecordBatchTransformer>,
+    compute_time_bounds: Arc<dyn DataFrameTimeBounds>,
     schema: Arc<Schema>,
     count_src_sql: String,
     extract_query: String,
-    min_event_time_column: Arc<String>,
-    max_event_time_column: Arc<String>,
     view_metadata: ViewMetadata,
     insert_range: TimeRange,
 ) -> Result<SqlPartitionSpec> {
@@ -159,10 +146,9 @@ pub async fn fetch_sql_partition_spec(
     Ok(SqlPartitionSpec::new(
         ctx,
         transformer,
+        compute_time_bounds,
         schema,
         extract_query,
-        min_event_time_column,
-        max_event_time_column,
         view_metadata,
         insert_range,
         count,

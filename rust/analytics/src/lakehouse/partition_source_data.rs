@@ -130,7 +130,7 @@ impl PartitionBlocksSource for SourceDataBlocks {
                 let object_offset_column: &Int64Array = typed_column_by_name(&b, "object_offset")?;
                 let payload_size_column: &Int64Array = typed_column_by_name(&b, "payload_size")?;
                 let block_insert_time_column: &TimestampNanosecondArray =
-                    typed_column_by_name(&b, "block_insert_time")?;
+                    typed_column_by_name(&b, "insert_time")?;
                 let dependencies_metadata_column: &BinaryArray =
                     typed_column_by_name(&b, "streams.dependencies_metadata")?;
                 let objects_metadata_column: &BinaryArray =
@@ -248,7 +248,7 @@ pub async fn fetch_partition_source_data(
     let sql = format!(
         r#"
           SELECT block_id, stream_id, process_id, begin_time, begin_ticks, end_time, end_ticks, nb_objects,
-              object_offset, payload_size, insert_time as block_insert_time,
+              object_offset, payload_size, insert_time,
               "streams.dependencies_metadata", "streams.objects_metadata", "streams.tags", "streams.properties",
               "processes.start_time", "processes.start_ticks", "processes.tsc_frequency", "processes.exe",
               "processes.username", "processes.realname", "processes.computer", "processes.distro", "processes.cpu_brand",

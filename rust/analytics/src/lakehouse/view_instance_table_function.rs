@@ -4,7 +4,10 @@ use super::{
 };
 use crate::{dfext::expressions::exp_to_string, time::TimeRange};
 use datafusion::{
-    catalog::TableFunctionImpl, catalog::TableProvider, common::plan_err, error::DataFusionError,
+    catalog::{TableFunctionImpl, TableProvider},
+    common::plan_err,
+    error::DataFusionError,
+    execution::runtime_env::RuntimeEnv,
     logical_expr::Expr,
 };
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
@@ -24,6 +27,7 @@ use std::sync::Arc;
 ///
 #[derive(Debug)]
 pub struct ViewInstanceTableFunction {
+    runtime: Arc<RuntimeEnv>,
     lake: Arc<DataLakeConnection>,
     object_store: Arc<dyn ObjectStore>,
     view_factory: Arc<ViewFactory>,
@@ -33,6 +37,7 @@ pub struct ViewInstanceTableFunction {
 
 impl ViewInstanceTableFunction {
     pub fn new(
+        runtime: Arc<RuntimeEnv>,
         lake: Arc<DataLakeConnection>,
         object_store: Arc<dyn ObjectStore>,
         view_factory: Arc<ViewFactory>,
@@ -40,6 +45,7 @@ impl ViewInstanceTableFunction {
         query_range: Option<TimeRange>,
     ) -> Self {
         Self {
+            runtime,
             lake,
             object_store,
             view_factory,
@@ -72,6 +78,7 @@ impl TableFunctionImpl for ViewInstanceTableFunction {
             .map_err(|e| DataFusionError::Plan(format!("error making view {e:?}")))?;
 
         Ok(Arc::new(MaterializedView::new(
+            self.runtime.clone(),
             self.lake.clone(),
             self.object_store.clone(),
             view,

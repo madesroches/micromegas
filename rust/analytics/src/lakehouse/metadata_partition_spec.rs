@@ -1,4 +1,7 @@
-use super::view::{PartitionSpec, ViewMetadata};
+use super::{
+    dataframe_time_bounds::DataFrameTimeBounds,
+    view::{PartitionSpec, ViewMetadata},
+};
 use crate::{
     lakehouse::write_partition::{PartitionRowSet, write_partition_from_rows},
     response_writer::Logger,
@@ -7,8 +10,7 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
-use datafusion::arrow::datatypes::Schema;
+use datafusion::{arrow::datatypes::Schema, prelude::*};
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use sqlx::Row;
 use std::sync::Arc;
@@ -20,18 +22,17 @@ pub struct MetadataPartitionSpec {
     pub insert_range: TimeRange,
     pub record_count: i64,
     pub data_sql: Arc<String>,
-    pub event_time_column: Arc<String>,
+    pub compute_time_bounds: Arc<dyn DataFrameTimeBounds>,
 }
 
-#[allow(clippy::too_many_arguments)]
 pub async fn fetch_metadata_partition_spec(
     pool: &sqlx::PgPool,
     source_count_query: &str,
-    event_time_column: Arc<String>,
     data_sql: Arc<String>,
     view_metadata: ViewMetadata,
     schema: Arc<Schema>,
     insert_range: TimeRange,
+    compute_time_bounds: Arc<dyn DataFrameTimeBounds>,
 ) -> Result<MetadataPartitionSpec> {
     //todo: extract this query to allow join (instead of source_table)
     let row = sqlx::query(source_count_query)
@@ -46,7 +47,7 @@ pub async fn fetch_metadata_partition_spec(
         insert_range,
         record_count: row.try_get("count").with_context(|| "reading count")?,
         data_sql,
-        event_time_column,
+        compute_time_bounds,
     })
 }
 
@@ -82,16 +83,14 @@ impl PartitionSpec for MetadataPartitionSpec {
         if row_count == 0 {
             return Ok(());
         }
-        let min_event_time: DateTime<Utc> = rows[0].try_get(&**self.event_time_column)?;
-        assert!(min_event_time >= self.insert_range.begin);
-        assert!(min_event_time <= self.insert_range.end);
-        let max_event_time: DateTime<Utc> =
-            rows[rows.len() - 1].try_get(&**self.event_time_column)?;
-        assert!(max_event_time >= self.insert_range.begin);
-        assert!(max_event_time <= self.insert_range.end);
         let record_batch =
             rows_to_record_batch(&rows).with_context(|| "converting rows to record batch")?;
         drop(rows);
+        let ctx = SessionContext::new();
+        let event_time_range = self
+            .compute_time_bounds
+            .get_time_bounds(ctx.read_batch(record_batch.clone())?)
+            .await?;
 
         let (tx, rx) = tokio::sync::mpsc::channel(1);
         let join_handle = tokio::spawn(write_partition_from_rows(
@@ -103,12 +102,8 @@ impl PartitionSpec for MetadataPartitionSpec {
             rx,
             logger.clone(),
         ));
-        tx.send(PartitionRowSet {
-            min_time_row: min_event_time,
-            max_time_row: max_event_time,
-            rows: record_batch,
-        })
-        .await?;
+        tx.send(PartitionRowSet::new(event_time_range, record_batch))
+            .await?;
         drop(tx);
         join_handle.await??;
         Ok(())
