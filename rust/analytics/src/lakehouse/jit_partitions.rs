@@ -105,7 +105,7 @@ pub async fn generate_jit_partitions_segment(
     stream: Arc<StreamInfo>,
     process: Arc<ProcessInfo>,
 ) -> Result<Vec<SourceDataBlocksInMemory>> {
-    info!("listing blocks");
+    debug!("listing blocks");
     let cache = PartitionCache::fetch_overlapping_insert_range_for_view(
         &lake.db_pool,
         blocks_view.get_view_set_name(),
@@ -134,7 +134,7 @@ pub async fn generate_jit_partitions_segment(
     .await?
     .collect()
     .await?;
-    info!("assembling segments");
+    debug!("assembling segments");
     let mut partitions = vec![];
     let mut partition_blocks = vec![];
     let mut partition_nb_objects: i64 = 0;
@@ -179,7 +179,7 @@ pub async fn generate_jit_partitions(
     stream: Arc<StreamInfo>,
     process: Arc<ProcessInfo>,
 ) -> Result<Vec<SourceDataBlocksInMemory>> {
-    info!("get_insert_time_range {query_time_range:?}");
+    debug!("get_insert_time_range {query_time_range:?}");
     let insert_time_range = get_insert_time_range(
         runtime.clone(),
         lake.clone(),
@@ -201,7 +201,7 @@ pub async fn generate_jit_partitions(
             .duration_trunc(config.max_insert_time_slice)?
             + config.max_insert_time_slice,
     );
-    info!("generating segments");
+    debug!("generating segments");
     let mut begin_segment = insert_time_range.begin;
     let mut end_segment = begin_segment + config.max_insert_time_slice;
     let mut partitions = vec![];
