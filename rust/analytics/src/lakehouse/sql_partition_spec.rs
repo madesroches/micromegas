@@ -146,7 +146,7 @@ pub async fn fetch_sql_partition_spec(
     Ok(SqlPartitionSpec::new(
         ctx,
         transformer,
-	compute_time_bounds,
+        compute_time_bounds,
         schema,
         extract_query,
         view_metadata,

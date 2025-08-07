@@ -3,7 +3,7 @@ use super::{
     view::{PartitionSpec, ViewMetadata},
 };
 use crate::{
-    lakehouse::write_partition::{write_partition_from_rows, PartitionRowSet},
+    lakehouse::write_partition::{PartitionRowSet, write_partition_from_rows},
     response_writer::Logger,
     sql_arrow_bridge::rows_to_record_batch,
     time::TimeRange,
@@ -25,7 +25,6 @@ pub struct MetadataPartitionSpec {
     pub compute_time_bounds: Arc<dyn DataFrameTimeBounds>,
 }
 
-#[expect(clippy::too_many_arguments)]
 pub async fn fetch_metadata_partition_spec(
     pool: &sqlx::PgPool,
     source_count_query: &str,

@@ -33,7 +33,7 @@ use anyhow::{Context, Result};
 use datafusion::{
     arrow::{array::RecordBatch, datatypes::SchemaRef},
     execution::{context::SessionContext, object_store::ObjectStoreUrl, runtime_env::RuntimeEnv},
-    logical_expr::{async_udf::AsyncScalarUDF, ScalarUDF},
+    logical_expr::{ScalarUDF, async_udf::AsyncScalarUDF},
     prelude::*,
     sql::TableReference,
 };

@@ -9,7 +9,7 @@ use super::{
 use crate::{
     lakehouse::{sql_partition_spec::fetch_sql_partition_spec, view::ViewMetadata},
     record_batch_transformer::RecordBatchTransformer,
-    time::{datetime_to_scalar, TimeRange},
+    time::{TimeRange, datetime_to_scalar},
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -208,7 +208,7 @@ impl View for ExportLogView {
 
     async fn jit_update(
         &self,
-	_runtime: Arc<RuntimeEnv>,
+        _runtime: Arc<RuntimeEnv>,
         _lake: Arc<DataLakeConnection>,
         _query_range: Option<TimeRange>,
     ) -> Result<()> {

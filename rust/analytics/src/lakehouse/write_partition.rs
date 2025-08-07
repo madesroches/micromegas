@@ -20,7 +20,7 @@ use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_tracing::prelude::*;
 use object_store::buffered::BufWriter;
 use sqlx::Row;
-use std::sync::{atomic::AtomicI64, Arc};
+use std::sync::{Arc, atomic::AtomicI64};
 use tokio::sync::mpsc::Receiver;
 
 use super::{partition::Partition, view::ViewMetadata};
@@ -200,7 +200,6 @@ async fn write_partition_metadata(
 }
 
 /// Writes a partition to a Parquet file from a stream of `PartitionRowSet`s.
-#[expect(clippy::too_many_arguments)]
 pub async fn write_partition_from_rows(
     lake: Arc<DataLakeConnection>,
     view_metadata: ViewMetadata,

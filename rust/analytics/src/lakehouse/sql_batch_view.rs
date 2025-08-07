@@ -12,14 +12,14 @@ use super::{
 };
 use crate::{
     record_batch_transformer::TrivialRecordBatchTransformer,
-    time::{datetime_to_scalar, TimeRange},
+    time::{TimeRange, datetime_to_scalar},
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, TimeDelta, Utc};
 use datafusion::{
     arrow::datatypes::Schema,
-    execution::{runtime_env::RuntimeEnv, SendableRecordBatchStream},
+    execution::{SendableRecordBatchStream, runtime_env::RuntimeEnv},
     prelude::*,
     sql::TableReference,
 };
@@ -196,7 +196,7 @@ impl View for SqlBatchView {
 
     async fn jit_update(
         &self,
-	_runtime: Arc<RuntimeEnv>,
+        _runtime: Arc<RuntimeEnv>,
         _lake: Arc<DataLakeConnection>,
         _query_range: Option<TimeRange>,
     ) -> Result<()> {

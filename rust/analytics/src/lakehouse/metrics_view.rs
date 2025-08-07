@@ -2,7 +2,7 @@ use crate::{
     lakehouse::blocks_view::BlocksView,
     metadata::{find_process, list_process_streams_tagged},
     metrics_table::metrics_table_schema,
-    time::{datetime_to_scalar, TimeRange},
+    time::{TimeRange, datetime_to_scalar},
 };
 
 use super::{
@@ -10,8 +10,8 @@ use super::{
     block_partition_spec::BlockPartitionSpec,
     dataframe_time_bounds::{DataFrameTimeBounds, NamedColumnsTimeBounds},
     jit_partitions::{
-        generate_jit_partitions, is_jit_partition_up_to_date, write_partition_from_blocks,
-        JitPartitionConfig,
+        JitPartitionConfig, generate_jit_partitions, is_jit_partition_up_to_date,
+        write_partition_from_blocks,
     },
     metrics_block_processor::MetricsBlockProcessor,
     partition_cache::PartitionCache,
@@ -25,7 +25,7 @@ use chrono::{DateTime, TimeDelta, Utc};
 use datafusion::{
     arrow::datatypes::Schema,
     execution::runtime_env::RuntimeEnv,
-    logical_expr::{col, Between, Expr},
+    logical_expr::{Between, Expr, col},
 };
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_tracing::info;
@@ -122,7 +122,7 @@ impl View for MetricsView {
 
     async fn jit_update(
         &self,
-	runtime: Arc<RuntimeEnv>,
+        runtime: Arc<RuntimeEnv>,
         lake: Arc<DataLakeConnection>,
         query_range: Option<TimeRange>,
     ) -> Result<()> {
@@ -155,8 +155,8 @@ impl View for MetricsView {
         for stream in streams {
             let mut partitions = generate_jit_partitions(
                 &JitPartitionConfig::default(),
-		runtime.clone(),
-		lake.clone(),
+                runtime.clone(),
+                lake.clone(),
                 &blocks_view,
                 &query_range,
                 Arc::new(stream),

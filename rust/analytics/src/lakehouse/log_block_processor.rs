@@ -44,7 +44,7 @@ impl BlockProcessor for LogBlockProcessor {
         if let Some(time_range) = record_builder.get_time_range() {
             let record_batch = record_builder.finish()?;
             Ok(Some(PartitionRowSet {
-                rows_time_range: time_range.into(),
+                rows_time_range: time_range,
                 rows: record_batch,
             }))
         } else {

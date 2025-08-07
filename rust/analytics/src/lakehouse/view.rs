@@ -13,7 +13,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, TimeDelta, Utc};
 use datafusion::{
     arrow::datatypes::Schema,
-    execution::{runtime_env::RuntimeEnv, SendableRecordBatchStream},
+    execution::{SendableRecordBatchStream, runtime_env::RuntimeEnv},
     logical_expr::Expr,
     prelude::*,
     sql::TableReference,
@@ -70,7 +70,7 @@ pub trait View: std::fmt::Debug + Send + Sync {
     /// jit_update creates or updates process-specific partitions before a query
     async fn jit_update(
         &self,
-	runtime: Arc<RuntimeEnv>,
+        runtime: Arc<RuntimeEnv>,
         lake: Arc<DataLakeConnection>,
         query_range: Option<TimeRange>,
     ) -> Result<()>;

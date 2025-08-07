@@ -6,12 +6,13 @@ use super::{
     view::{View, ViewMetadata},
 };
 use crate::{
-    dfext::typed_column::get_single_row_primitive_value, lakehouse::view::PartitionSpec,
+    dfext::typed_column::get_single_row_primitive_value,
+    lakehouse::{partition_cache::PartitionCache, view::PartitionSpec},
+    metadata::block_from_batch_row,
     time::TimeRange,
 };
 use crate::{
     lakehouse::{partition_source_data::hash_to_object_count, query::query_partitions},
-    metadata::block_from_row,
     response_writer::ResponseWriter,
 };
 use anyhow::{Context, Result};
@@ -50,6 +51,7 @@ async fn get_insert_time_range(
     query_time_range: &TimeRange,
     stream: Arc<StreamInfo>,
 ) -> Result<Option<TimeRange>> {
+    // we would need a PartitionCache built from event time range and then filtered for insert time range
     let part_provider = LivePartitionProvider::new(lake.db_pool.clone());
     let partitions = part_provider
         .fetch(
@@ -96,47 +98,64 @@ async fn get_insert_time_range(
 /// Generates a segment of JIT partitions.
 pub async fn generate_jit_partitions_segment(
     config: &JitPartitionConfig,
-    pool: &sqlx::Pool<sqlx::Postgres>,
+    runtime: Arc<RuntimeEnv>,
+    lake: Arc<DataLakeConnection>,
+    blocks_view: &BlocksView,
     insert_time_range: &TimeRange,
     stream: Arc<StreamInfo>,
     process: Arc<ProcessInfo>,
 ) -> Result<Vec<SourceDataBlocksInMemory>> {
     info!("listing blocks");
-    let rows = sqlx::query(
-            "SELECT block_id, stream_id, process_id, begin_time, end_time, begin_ticks, end_ticks, nb_objects, object_offset, payload_size, insert_time
-             FROM blocks
-             WHERE stream_id = $1
-             AND insert_time >= $2
-             AND insert_time < $3
-             ORDER BY insert_time;",
-        )
-        .bind(stream.stream_id)
-        .bind(insert_time_range.begin)
-        .bind(insert_time_range.end)
-        .fetch_all(pool)
-        .await
-        .with_context(|| "listing blocks")?;
+    let cache = PartitionCache::fetch_overlapping_insert_range_for_view(
+        &lake.db_pool,
+        blocks_view.get_view_set_name(),
+        blocks_view.get_view_instance_id(),
+        *insert_time_range,
+    )
+    .await?;
+    let partitions = cache.partitions;
+
+    let stream_id = &stream.stream_id;
+    let begin_range_iso = insert_time_range.begin.to_rfc3339();
+    let end_range_iso = insert_time_range.end.to_rfc3339();
+    let sql = format!("SELECT block_id, stream_id, process_id, begin_time, end_time, begin_ticks, end_ticks, nb_objects, object_offset, payload_size, insert_time
+             FROM source
+             WHERE stream_id = '{stream_id}'
+             AND insert_time >= '{begin_range_iso}'
+             AND insert_time < '{end_range_iso}'
+             ORDER BY insert_time;");
+    let rbs = query_partitions(
+        runtime,
+        lake,
+        blocks_view.get_file_schema(),
+        Arc::new(partitions),
+        &sql,
+    )
+    .await?
+    .collect()
+    .await?;
     info!("assembling segments");
     let mut partitions = vec![];
     let mut partition_blocks = vec![];
     let mut partition_nb_objects: i64 = 0;
-    // we could do a smarter search using object_offset
-    for r in rows {
-        let block = block_from_row(&r).with_context(|| "block_from_row")?;
-        partition_nb_objects += block.nb_objects as i64;
-        partition_blocks.push(Arc::new(PartitionSourceBlock {
-            block,
-            stream: stream.clone(),
-            process: process.clone(),
-        }));
+    for rb in rbs {
+        for ir in 0..rb.num_rows() {
+            let block = block_from_batch_row(&rb, ir).with_context(|| "block_from_batch_row")?;
+            partition_nb_objects += block.nb_objects as i64;
+            partition_blocks.push(Arc::new(PartitionSourceBlock {
+                block,
+                stream: stream.clone(),
+                process: process.clone(),
+            }));
 
-        if partition_nb_objects > config.max_nb_objects {
-            partitions.push(SourceDataBlocksInMemory {
-                blocks: partition_blocks,
-                block_ids_hash: partition_nb_objects.to_le_bytes().to_vec(),
-            });
-            partition_blocks = vec![];
-            partition_nb_objects = 0;
+            if partition_nb_objects > config.max_nb_objects {
+                partitions.push(SourceDataBlocksInMemory {
+                    blocks: partition_blocks,
+                    block_ids_hash: partition_nb_objects.to_le_bytes().to_vec(),
+                });
+                partition_blocks = vec![];
+                partition_nb_objects = 0;
+            }
         }
     }
     if partition_nb_objects != 0 {
@@ -162,7 +181,7 @@ pub async fn generate_jit_partitions(
 ) -> Result<Vec<SourceDataBlocksInMemory>> {
     info!("get_insert_time_range {query_time_range:?}");
     let insert_time_range = get_insert_time_range(
-        runtime,
+        runtime.clone(),
         lake.clone(),
         blocks_view,
         query_time_range,
@@ -190,7 +209,9 @@ pub async fn generate_jit_partitions(
         let insert_time_range = TimeRange::new(begin_segment, end_segment);
         let mut segment_partitions = generate_jit_partitions_segment(
             config,
-            &lake.db_pool,
+            runtime.clone(),
+            lake.clone(),
+            blocks_view,
             &insert_time_range,
             stream.clone(),
             process.clone(),

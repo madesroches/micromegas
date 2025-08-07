@@ -3,7 +3,7 @@ use super::{
     block_partition_spec::BlockPartitionSpec,
     blocks_view::BlocksView,
     dataframe_time_bounds::{DataFrameTimeBounds, NamedColumnsTimeBounds},
-    jit_partitions::{write_partition_from_blocks, JitPartitionConfig},
+    jit_partitions::{JitPartitionConfig, write_partition_from_blocks},
     log_block_processor::LogBlockProcessor,
     partition_cache::PartitionCache,
     partition_source_data::fetch_partition_source_data,
@@ -14,7 +14,7 @@ use crate::{
     lakehouse::jit_partitions::{generate_jit_partitions, is_jit_partition_up_to_date},
     log_entries_table::log_table_schema,
     metadata::{find_process, list_process_streams_tagged},
-    time::{datetime_to_scalar, TimeRange},
+    time::{TimeRange, datetime_to_scalar},
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -22,7 +22,7 @@ use chrono::{DateTime, TimeDelta, Utc};
 use datafusion::{
     arrow::datatypes::Schema,
     execution::runtime_env::RuntimeEnv,
-    logical_expr::{col, Between, Expr},
+    logical_expr::{Between, Expr, col},
 };
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use std::sync::Arc;
@@ -144,8 +144,8 @@ impl View for LogView {
         for stream in streams {
             let mut partitions = generate_jit_partitions(
                 &JitPartitionConfig::default(),
-		runtime.clone(),
-		lake.clone(),
+                runtime.clone(),
+                lake.clone(),
                 &blocks_view,
                 &query_range,
                 Arc::new(stream),

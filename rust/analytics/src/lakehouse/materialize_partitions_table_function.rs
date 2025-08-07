@@ -42,7 +42,6 @@ impl MaterializePartitionsTableFunction {
     }
 }
 
-#[expect(clippy::too_many_arguments)]
 async fn materialize_partitions_impl(
     runtime: Arc<RuntimeEnv>,
     lake: Arc<DataLakeConnection>,

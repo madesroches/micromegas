@@ -6,14 +6,14 @@ use super::{
     query::make_session_context,
     view::View,
     view_factory::ViewFactory,
-    write_partition::{write_partition_from_rows, PartitionRowSet},
+    write_partition::{PartitionRowSet, write_partition_from_rows},
 };
 use crate::{response_writer::Logger, time::TimeRange};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use datafusion::{
     arrow::datatypes::Schema,
-    execution::{runtime_env::RuntimeEnv, SendableRecordBatchStream},
+    execution::{SendableRecordBatchStream, runtime_env::RuntimeEnv},
     prelude::*,
     sql::TableReference,
 };
