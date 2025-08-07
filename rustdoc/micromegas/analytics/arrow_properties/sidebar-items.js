@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["add_properties_to_builder","add_property_set_to_builder","read_property_list"]};
