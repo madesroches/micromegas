@@ -2815,6 +2815,7 @@ dependencies = [
  "micromegas-tracing",
  "micromegas-transit",
  "object_store",
+ "pin-project",
  "rand 0.8.5",
  "sqlx",
  "tokio",

@@ -1,3 +1,4 @@
+use pin_project::pin_project;
 use rand::Rng;
 use std::time::Duration;
 use tokio::time::sleep;
@@ -13,7 +14,9 @@ trait InstrumentFuture: Future + Sized {
 
 impl<F: Future> InstrumentFuture for F {}
 
+#[pin_project]
 struct InstrumentedFuture<F> {
+    #[pin]
     future: F,
     name: String,
     started: bool,
@@ -36,15 +39,14 @@ where
     type Output = F::Output;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let this = unsafe { self.get_unchecked_mut() };
+        let this = self.project();
         
-        if !this.started {
+        if !*this.started {
             eprintln!("Starting future: {}", this.name);
-            this.started = true;
+            *this.started = true;
         }
 
-        let future = unsafe { Pin::new_unchecked(&mut this.future) };
-        match future.poll(cx) {
+        match this.future.poll(cx) {
             Poll::Ready(output) => {
                 eprintln!("Finished future: {}", this.name);
                 Poll::Ready(output)
