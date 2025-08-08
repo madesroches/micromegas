@@ -1,10 +1,10 @@
 use pin_project::pin_project;
 use rand::Rng;
-use std::time::Duration;
-use tokio::time::sleep;
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use std::time::Duration;
+use tokio::time::sleep;
 
 trait InstrumentFuture: Future + Sized {
     fn instrument(self, name: &str) -> InstrumentedFuture<Self> {
@@ -40,7 +40,7 @@ where
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
-        
+
         if !*this.started {
             eprintln!("Starting future: {}", this.name);
             *this.started = true;

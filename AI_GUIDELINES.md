@@ -6,6 +6,7 @@
 - **Dependencies**: Always maintain alphabetical order within dependency blocks in Cargo.toml files
 - **Error Handling**: Use `expect()` with descriptive messages instead of `unwrap()`
 - **Testing**: Use `cargo test -- --nocapture` to see println! output during tests
+- **Formatting**: Always run `cargo fmt` before any commit to ensure consistent code formatting
 
 ### General
 - Follow existing code conventions and patterns in the codebase
