@@ -1,6 +1,7 @@
 //! `log_fn` and `span_fn` procedural macros
 //!
 //! Injects instrumentation into sync and async functions.
+//! `span_fn` now supports both sync and async functions automatically.
 //!     async trait functions not supported
 
 // crate-specific lint exceptions:
@@ -32,33 +33,38 @@ impl Parse for TraceArgs {
     }
 }
 
-/// span_fn: trace the execution of a function
+/// span_fn: trace the execution of a sync or async function
 #[proc_macro_attribute]
 pub fn span_fn(
     args: proc_macro::TokenStream,
     input: proc_macro::TokenStream,
 ) -> proc_macro::TokenStream {
-    let mut function = parse_macro_input!(input as ItemFn);
-
-    if function.sig.asyncness.is_some() {
-        // NOOP For now
-        return proc_macro::TokenStream::from(quote! {
-            #function
-        });
-    };
-
     let args = parse_macro_input!(args as TraceArgs);
+    let mut function = parse_macro_input!(input as ItemFn);
 
     let function_name = args
         .alternative_name
         .map_or(function.sig.ident.to_string(), |n| n.to_string());
 
-    function.block.stmts.insert(
-        0,
-        parse_quote! {
-            micromegas_tracing::span_scope!(_METADATA_FUNC, concat!(module_path!(), "::", #function_name));
-        },
-    );
+    if function.sig.asyncness.is_some() {
+        // Handle async functions
+        let original_block = &function.block;
+
+        function.block = parse_quote! {
+            {
+                micromegas_tracing::async_span_scope!(_METADATA_FUNC, concat!(module_path!(), "::", #function_name));
+                #original_block
+            }
+        };
+    } else {
+        // Handle sync functions
+        function.block.stmts.insert(
+            0,
+            parse_quote! {
+                micromegas_tracing::span_scope!(_METADATA_FUNC, concat!(module_path!(), "::", #function_name));
+            },
+        );
+    }
 
     proc_macro::TokenStream::from(quote! {
         #function

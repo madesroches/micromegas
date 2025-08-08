@@ -7,6 +7,8 @@
 - **Error Handling**: Use `expect()` with descriptive messages instead of `unwrap()`
 - **Testing**: Use `cargo test -- --nocapture` to see println! output during tests
 - **Formatting**: Always run `cargo fmt` before any commit to ensure consistent code formatting
+- **Proc Macros**: Use proc macros through their parent crate (e.g., `micromegas_tracing::prelude::*`) rather than importing proc macro crates directly
+- **Prelude Imports**: Always use `prelude::*` when importing from a prelude module
 
 ### General
 - Follow existing code conventions and patterns in the codebase
