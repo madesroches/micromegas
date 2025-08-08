@@ -40,12 +40,10 @@ where
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
-
         if !*this.started {
             eprintln!("Starting future: {}", this.name);
             *this.started = true;
         }
-
         match this.future.poll(cx) {
             Poll::Ready(output) => {
                 eprintln!("Finished future: {}", this.name);
@@ -56,23 +54,22 @@ where
     }
 }
 
-async fn inner() {
+async fn manual_inner() {
     let ms = rand::thread_rng().gen_range(0..=1000);
     eprintln!("wainting for {ms} ms");
     sleep(Duration::from_millis(ms)).await;
 }
 
-async fn outer() {
-    inner().instrument("inner_1").await;
-    inner().instrument("inner_2").await;
+async fn manual_outer() {
+    manual_inner().instrument("manual_inner_1").await;
+    manual_inner().instrument("manual_inner_2").await;
 }
 
 #[test]
-fn async_span_smoke() {
+fn async_span_manual_instrumentation() {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .expect("failed to build tokio runtime");
-
-    runtime.block_on(outer());
+    runtime.block_on(manual_outer().instrument("manual_outer"));
 }
