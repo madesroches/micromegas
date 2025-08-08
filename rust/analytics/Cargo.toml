@@ -34,3 +34,4 @@ xxhash-rust.workspace = true
 
 [dev-dependencies]
 micromegas-telemetry-sink.workspace = true
+rand.workspace = true
