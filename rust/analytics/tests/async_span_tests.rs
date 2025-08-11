@@ -1,4 +1,5 @@
-use micromegas_tracing::prelude::*;
+use micromegas_tracing::spans::SpanMetadata;
+use micromegas_tracing::{prelude::*, static_span_desc};
 use pin_project::pin_project;
 use rand::Rng;
 use std::future::Future;
@@ -8,8 +9,8 @@ use std::time::Duration;
 use tokio::time::sleep;
 
 trait InstrumentFuture: Future + Sized {
-    fn instrument(self, name: &str) -> InstrumentedFuture<Self> {
-        InstrumentedFuture::new(self, name)
+    fn instrument(self, span_desc: &'static SpanMetadata) -> InstrumentedFuture<Self> {
+        InstrumentedFuture::new(self, span_desc)
     }
 }
 
@@ -19,15 +20,15 @@ impl<F: Future> InstrumentFuture for F {}
 struct InstrumentedFuture<F> {
     #[pin]
     future: F,
-    name: String,
+    desc: &'static SpanMetadata,
     started: bool,
 }
 
 impl<F> InstrumentedFuture<F> {
-    fn new(future: F, name: &str) -> Self {
+    fn new(future: F, desc: &'static SpanMetadata) -> Self {
         Self {
             future,
-            name: name.to_string(),
+            desc,
             started: false,
         }
     }
@@ -42,12 +43,12 @@ where
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
         if !*this.started {
-            eprintln!("Starting future: {}", this.name);
+            eprintln!("Starting future: {:?}", this.desc);
             *this.started = true;
         }
         match this.future.poll(cx) {
             Poll::Ready(output) => {
-                eprintln!("Finished future: {}", this.name);
+                eprintln!("Finished future: {:?}", this.desc);
                 Poll::Ready(output)
             }
             Poll::Pending => Poll::Pending,
@@ -62,8 +63,10 @@ async fn manual_inner() {
 }
 
 async fn manual_outer() {
-    manual_inner().instrument("manual_inner_1").await;
-    manual_inner().instrument("manual_inner_2").await;
+    static_span_desc!(INNER1_DESC, "manual_inner_1");
+    manual_inner().instrument(&INNER1_DESC).await;
+    static_span_desc!(INNER2_DESC, "manual_inner_2");
+    manual_inner().instrument(&INNER2_DESC).await;
 }
 
 #[test]
@@ -72,7 +75,8 @@ fn async_span_manual_instrumentation() {
         .enable_all()
         .build()
         .expect("failed to build tokio runtime");
-    runtime.block_on(manual_outer().instrument("manual_outer"));
+    static_span_desc!(OUTER_DESC, "manual_outer");
+    runtime.block_on(manual_outer().instrument(&OUTER_DESC));
 }
 
 #[span_fn]
