@@ -2,6 +2,7 @@ use micromegas_tracing::dispatch::{
     flush_thread_buffer, force_uninit, init_event_dispatch, init_thread_stream, shutdown_dispatch,
 };
 use micromegas_tracing::event::EventSink;
+use micromegas_tracing::event::TracingBlock;
 use micromegas_tracing::event::in_memory_sink::InMemorySink;
 use micromegas_tracing::spans::SpanMetadata;
 use micromegas_tracing::{prelude::*, static_span_desc};
@@ -139,5 +140,21 @@ fn sync_span_macro() {
     instrumented_sync_function();
     flush_thread_buffer();
     shutdown_dispatch();
+
+    // Check that the correct number of events were recorded
+    let state = sink.state.lock().expect("Failed to lock sink state");
+    let total_events: usize = state
+        .thread_blocks
+        .iter()
+        .map(|block| block.nb_objects())
+        .sum();
+
+    // instrumented_sync_function should generate 2 events: begin span and end span
+    assert_eq!(
+        total_events, 2,
+        "Expected 2 events (begin + end span) but found {}",
+        total_events
+    );
+
     unsafe { force_uninit() };
 }
