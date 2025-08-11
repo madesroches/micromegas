@@ -15,6 +15,8 @@ pub struct MemSinkState {
     pub process_info: Option<Arc<ProcessInfo>>,
     pub log_stream_desc: Option<Arc<StreamDesc>>,
     pub metrics_stream_desc: Option<Arc<StreamDesc>>,
+    pub thread_stream_descs: Vec<Arc<StreamDesc>>,
+    pub thread_blocks: Vec<Arc<ThreadBlock>>,
 }
 
 /// for tests where we want to inspect the collected data
@@ -28,6 +30,8 @@ impl InMemorySink {
             process_info: None,
             log_stream_desc: None,
             metrics_stream_desc: None,
+            thread_stream_descs: vec![],
+            thread_blocks: vec![],
         };
         Self {
             state: Mutex::new(state),
@@ -46,9 +50,7 @@ impl EventSink for InMemorySink {
         self.state.lock().unwrap().process_info = Some(process_info);
     }
 
-    fn on_shutdown(&self) {
-        todo!()
-    }
+    fn on_shutdown(&self) {}
 
     fn on_log_enabled(&self, _metadata: &LogMetadata) -> bool {
         todo!()
@@ -80,12 +82,16 @@ impl EventSink for InMemorySink {
         todo!()
     }
 
-    fn on_init_thread_stream(&self, _thread_stream: &ThreadStream) {
-        todo!()
+    fn on_init_thread_stream(&self, thread_stream: &ThreadStream) {
+        self.state
+            .lock()
+            .unwrap()
+            .thread_stream_descs
+            .push(thread_stream.desc());
     }
 
-    fn on_process_thread_block(&self, _thread_block: Arc<ThreadBlock>) {
-        todo!()
+    fn on_process_thread_block(&self, thread_block: Arc<ThreadBlock>) {
+        self.state.lock().unwrap().thread_blocks.push(thread_block);
     }
 
     fn is_busy(&self) -> bool {

@@ -1,4 +1,7 @@
-use micromegas_tracing::dispatch::{force_uninit, init_event_dispatch};
+use micromegas_tracing::dispatch::{
+    flush_thread_buffer, force_uninit, init_event_dispatch, init_thread_stream, shutdown_dispatch,
+};
+use micromegas_tracing::event::EventSink;
 use micromegas_tracing::event::in_memory_sink::InMemorySink;
 use micromegas_tracing::spans::SpanMetadata;
 use micromegas_tracing::{prelude::*, static_span_desc};
@@ -93,41 +96,48 @@ fn instrumented_sync_function() {
     std::thread::sleep(Duration::from_millis(100));
 }
 
-fn init_in_mem_tracing() {
-    let sink = Arc::new(InMemorySink::new());
+fn init_in_mem_tracing(sink: Arc<dyn EventSink>) {
     init_event_dispatch(1024, 1024, 1024, sink, HashMap::new()).unwrap();
 }
 
 #[test]
 #[serial]
 fn test_async_span_manual_instrumentation() {
-    init_in_mem_tracing();
+    let sink = Arc::new(InMemorySink::new());
+    init_in_mem_tracing(sink.clone());
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .expect("failed to build tokio runtime");
     static_span_desc!(OUTER_DESC, "manual_outer");
     runtime.block_on(manual_outer().instrument(&OUTER_DESC));
+    shutdown_dispatch();
     unsafe { force_uninit() };
 }
 
 #[test]
 #[serial]
 fn test_async_span_macro() {
-    init_in_mem_tracing();
+    let sink = Arc::new(InMemorySink::new());
+    init_in_mem_tracing(sink.clone());
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .expect("failed to build tokio runtime");
 
     runtime.block_on(macro_outer());
+    shutdown_dispatch();
     unsafe { force_uninit() };
 }
 
 #[test]
 #[serial]
 fn sync_span_macro() {
-    init_in_mem_tracing();
+    let sink = Arc::new(InMemorySink::new());
+    init_in_mem_tracing(sink.clone());
+    init_thread_stream();
     instrumented_sync_function();
+    flush_thread_buffer();
+    shutdown_dispatch();
     unsafe { force_uninit() };
 }
