@@ -1,9 +1,10 @@
 use micromegas_tracing::dispatch::{
-    flush_thread_buffer, force_uninit, init_event_dispatch, init_thread_stream, shutdown_dispatch,
+    flush_thread_buffer, force_uninit, init_event_dispatch, init_thread_stream,
+    on_begin_async_scope, on_end_async_scope, shutdown_dispatch,
 };
-use micromegas_tracing::event::in_memory_sink::InMemorySink;
 use micromegas_tracing::event::EventSink;
 use micromegas_tracing::event::TracingBlock;
+use micromegas_tracing::event::in_memory_sink::InMemorySink;
 use micromegas_tracing::spans::SpanMetadata;
 use micromegas_tracing::{prelude::*, static_span_desc};
 use pin_project::pin_project;
@@ -30,7 +31,7 @@ struct InstrumentedFuture<F> {
     #[pin]
     future: F,
     desc: &'static SpanMetadata,
-    started: bool,
+    span_id: Option<u64>,
 }
 
 impl<F> InstrumentedFuture<F> {
@@ -38,7 +39,7 @@ impl<F> InstrumentedFuture<F> {
         Self {
             future,
             desc,
-            started: false,
+            span_id: None,
         }
     }
 }
@@ -51,13 +52,17 @@ where
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
-        if !*this.started {
-            eprintln!("Starting future: {:?}", this.desc);
-            *this.started = true;
+        if this.span_id.is_none() {
+            // Begin the async span and store the span ID
+            let span_id = on_begin_async_scope(this.desc);
+            *this.span_id = Some(span_id);
         }
         match this.future.poll(cx) {
             Poll::Ready(output) => {
-                eprintln!("Finished future: {:?}", this.desc);
+                // End the async span when the future completes
+                if let Some(span_id) = *this.span_id {
+                    on_end_async_scope(span_id, this.desc);
+                }
                 Poll::Ready(output)
             }
             Poll::Pending => Poll::Pending,
@@ -108,11 +113,46 @@ fn test_async_span_manual_instrumentation() {
     init_in_mem_tracing(sink.clone());
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
+        .thread_name("tracing-test")
+        .on_thread_start(|| {
+            init_thread_stream();
+        })
+        .on_thread_stop(|| {
+            flush_thread_buffer();
+        })
         .build()
         .expect("failed to build tokio runtime");
     static_span_desc!(OUTER_DESC, "manual_outer");
-    runtime.block_on(manual_outer().instrument(&OUTER_DESC));
+    runtime.block_on(async {
+        let result = tokio::task::spawn(async {
+            let output = manual_outer().instrument(&OUTER_DESC).await;
+            flush_thread_buffer();
+            output
+        })
+        .await
+        .expect("Task failed");
+        result
+    });
+
+    // Drop the runtime to properly shut down worker threads
+    drop(runtime);
     shutdown_dispatch();
+
+    // Check that the correct number of events were recorded from manual instrumentation
+    let state = sink.state.lock().expect("Failed to lock sink state");
+    let total_events: usize = state
+        .thread_blocks
+        .iter()
+        .map(|block| block.nb_objects())
+        .sum();
+
+    // manual_outer wrapper (2 events) + 2 calls to manual_inner with wrappers (2 events each) = 6 events total
+    assert_eq!(
+        total_events, 6,
+        "Expected 6 events from manual instrumentation (outer: 2 + inner: 2×2) but found {}",
+        total_events
+    );
+
     unsafe { force_uninit() };
 }
 
