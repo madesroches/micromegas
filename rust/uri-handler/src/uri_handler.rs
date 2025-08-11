@@ -70,11 +70,11 @@ async fn execute_command(args: &[String]) -> Result<()> {
         return write_perfetto_trace(&mut client, process_id, begin, end, out_filename).await;
     }
     let uri_start = "micromegas:";
-    if args[0].starts_with(uri_start) {
-        if let Err(e) = execute_uri_command(&args[0]).await {
-            println!("{e:?}");
-            pause();
-        }
+    if args[0].starts_with(uri_start)
+        && let Err(e) = execute_uri_command(&args[0]).await
+    {
+        println!("{e:?}");
+        pause();
     }
 
     println!("unrecognized command {}", args[0]);

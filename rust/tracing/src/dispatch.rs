@@ -393,10 +393,10 @@ impl Dispatch {
     fn startup(&self, process_properties: HashMap<String, String>) {
         let mut parent_process = None;
 
-        if let Ok(parent_process_guid) = std::env::var("MICROMEGAS_TELEMETRY_PARENT_PROCESS") {
-            if let Ok(parent_process_id) = uuid::Uuid::try_parse(&parent_process_guid) {
-                parent_process = Some(parent_process_id);
-            }
+        if let Ok(parent_process_guid) = std::env::var("MICROMEGAS_TELEMETRY_PARENT_PROCESS")
+            && let Ok(parent_process_id) = uuid::Uuid::try_parse(&parent_process_guid)
+        {
+            parent_process = Some(parent_process_id);
         }
 
         unsafe {

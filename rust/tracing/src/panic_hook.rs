@@ -19,11 +19,11 @@ pub fn init_panic_hook() {
     std::panic::set_hook(Box::new(|panic_info| {
         fatal!("panic: {:?}", panic_info);
         shutdown_telemetry();
-        if let Ok(guard) = PREVIOUS_HOOK.lock() {
-            if let Some(hook) = guard.as_ref() {
-                std::io::stdout().flush().unwrap();
-                hook(panic_info);
-            }
+        if let Ok(guard) = PREVIOUS_HOOK.lock()
+            && let Some(hook) = guard.as_ref()
+        {
+            std::io::stdout().flush().unwrap();
+            hook(panic_info);
         }
     }));
 }

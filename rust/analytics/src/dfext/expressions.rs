@@ -53,10 +53,10 @@ pub fn exp_to_timestamp(expr: &Expr) -> datafusion::error::Result<DateTime<Utc>>
             Ok(ts.into())
         }
         Expr::Literal(ScalarValue::TimestampNanosecond(Some(ns), timezone), _metadata) => {
-            if let Some(tz) = timezone {
-                if *tz != *"+00:00" {
-                    return plan_err!("Timestamp should be in UTC");
-                }
+            if let Some(tz) = timezone
+                && *tz != *"+00:00"
+            {
+                return plan_err!("Timestamp should be in UTC");
             }
             Ok(DateTime::from_timestamp_nanos(ns))
         }

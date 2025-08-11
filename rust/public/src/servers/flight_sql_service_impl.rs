@@ -114,16 +114,16 @@ impl FlightSqlServiceImpl {
             .map_err(|e| status!("Unable to parse query", e))?;
 
         let mut begin = metadata.get("query_range_begin");
-        if let Some(s) = &begin {
-            if s.is_empty() {
-                begin = None;
-            }
+        if let Some(s) = &begin
+            && s.is_empty()
+        {
+            begin = None;
         }
         let mut end = metadata.get("query_range_end");
-        if let Some(s) = &end {
-            if s.is_empty() {
-                end = None;
-            }
+        if let Some(s) = &end
+            && s.is_empty()
+        {
+            end = None;
         }
         let query_range = if begin.is_some() && end.is_some() {
             let begin_datetime = chrono::DateTime::parse_from_rfc3339(
