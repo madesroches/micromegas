@@ -25,6 +25,7 @@ use crate::{
 };
 use chrono::Utc;
 use std::cell::OnceCell;
+use std::cell::UnsafeCell;
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::RwLock;
@@ -45,19 +46,21 @@ pub fn init_event_dispatch(
     }
     let _guard = INIT_MUTEX.lock().unwrap();
     let dispatch_ref = &G_DISPATCH.inner;
-    if dispatch_ref.get().is_none() {
-        dispatch_ref
-            .set(Dispatch::new(
-                logs_buffer_size,
-                metrics_buffer_size,
-                threads_buffer_size,
-                sink,
-                process_properties,
-            ))
-            .map_err(|_| Error::AlreadyInitialized())
-    } else {
-        info!("event dispatch already initialized");
-        Err(Error::AlreadyInitialized())
+    unsafe {
+        if (*dispatch_ref.get()).get().is_none() {
+            (*dispatch_ref.get())
+                .set(Dispatch::new(
+                    logs_buffer_size,
+                    metrics_buffer_size,
+                    threads_buffer_size,
+                    sink,
+                    process_properties,
+                ))
+                .map_err(|_| Error::AlreadyInitialized())
+        } else {
+            info!("event dispatch already initialized");
+            Err(Error::AlreadyInitialized())
+        }
     }
 }
 
@@ -280,18 +283,23 @@ pub fn on_end_async_named_scope(
 }
 
 pub struct DispatchCell {
-    inner: OnceCell<Dispatch>,
+    // unsafecell is only necessary for force_uninit()
+    inner: UnsafeCell<OnceCell<Dispatch>>,
 }
 
 impl DispatchCell {
     const fn new() -> Self {
         Self {
-            inner: OnceCell::new(),
+            inner: UnsafeCell::new(OnceCell::new()),
         }
     }
 
     fn get(&self) -> Option<&Dispatch> {
-        self.inner.get()
+        unsafe { (*self.inner.get()).get() }
+    }
+
+    unsafe fn take(&self) -> Option<Dispatch> {
+        unsafe { (*self.inner.get()).take() }
     }
 }
 
@@ -301,6 +309,15 @@ unsafe impl Sync for DispatchCell {}
 static G_DISPATCH: DispatchCell = DispatchCell::new();
 static G_ASYNC_SPAN_COUNTER: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
+
+/// # Safety
+/// very unsafe! make sure there is no thread running that could be sending events
+/// normally that global state should not be destroyed
+pub unsafe fn force_uninit() {
+    unsafe {
+        G_DISPATCH.take();
+    }
+}
 
 thread_local! {
     static LOCAL_THREAD_STREAM: Cell<Option<ThreadStream>> = const { Cell::new(None) };

@@ -1,9 +1,14 @@
+use micromegas_tracing::dispatch::{force_uninit, init_event_dispatch};
+use micromegas_tracing::event::in_memory_sink::InMemorySink;
 use micromegas_tracing::spans::SpanMetadata;
 use micromegas_tracing::{prelude::*, static_span_desc};
 use pin_project::pin_project;
 use rand::Rng;
+use serial_test::serial;
+use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 use tokio::time::sleep;
@@ -69,16 +74,6 @@ async fn manual_outer() {
     manual_inner().instrument(&INNER2_DESC).await;
 }
 
-#[test]
-fn async_span_manual_instrumentation() {
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .expect("failed to build tokio runtime");
-    static_span_desc!(OUTER_DESC, "manual_outer");
-    runtime.block_on(manual_outer().instrument(&OUTER_DESC));
-}
-
 #[span_fn]
 async fn macro_inner() {
     let ms = rand::thread_rng().gen_range(0..=1000);
@@ -93,22 +88,46 @@ async fn macro_outer() {
 }
 
 #[span_fn]
-fn sync_function() {
+fn instrumented_sync_function() {
     eprintln!("This is a sync function");
     std::thread::sleep(Duration::from_millis(100));
 }
 
+fn init_in_mem_tracing() {
+    let sink = Arc::new(InMemorySink::new());
+    init_event_dispatch(1024, 1024, 1024, sink, HashMap::new()).unwrap();
+}
+
 #[test]
-fn async_span_macro() {
+#[serial]
+fn test_async_span_manual_instrumentation() {
+    init_in_mem_tracing();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("failed to build tokio runtime");
+    static_span_desc!(OUTER_DESC, "manual_outer");
+    runtime.block_on(manual_outer().instrument(&OUTER_DESC));
+    unsafe { force_uninit() };
+}
+
+#[test]
+#[serial]
+fn test_async_span_macro() {
+    init_in_mem_tracing();
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .expect("failed to build tokio runtime");
 
     runtime.block_on(macro_outer());
+    unsafe { force_uninit() };
 }
 
 #[test]
+#[serial]
 fn sync_span_macro() {
-    sync_function();
+    init_in_mem_tracing();
+    instrumented_sync_function();
+    unsafe { force_uninit() };
 }

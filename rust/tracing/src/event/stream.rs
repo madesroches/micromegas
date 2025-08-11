@@ -63,6 +63,10 @@ where
         }
     }
 
+    pub fn desc(&self) -> Arc<StreamDesc> {
+        self.stream_desc.clone()
+    }
+
     pub fn stream_id(&self) -> uuid::Uuid {
         self.stream_desc.stream_id
     }

@@ -36,3 +36,4 @@ xxhash-rust.workspace = true
 micromegas-telemetry-sink.workspace = true
 pin-project.workspace = true
 rand.workspace = true
+serial_test = "3.2"
