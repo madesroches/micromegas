@@ -35,7 +35,7 @@ pub trait EventSink {
     fn is_busy(&self) -> bool; // sink is busy writing to disk or network, avoid extra flushing
 }
 
-/// for tests
+/// for tests where the data can be dropped
 pub struct NullEventSink {}
 
 impl EventSink for NullEventSink {

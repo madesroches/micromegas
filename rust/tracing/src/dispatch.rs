@@ -25,6 +25,7 @@ use crate::{
 };
 use chrono::Utc;
 use std::cell::OnceCell;
+use std::cell::UnsafeCell;
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::RwLock;
@@ -45,19 +46,21 @@ pub fn init_event_dispatch(
     }
     let _guard = INIT_MUTEX.lock().unwrap();
     let dispatch_ref = &G_DISPATCH.inner;
-    if dispatch_ref.get().is_none() {
-        dispatch_ref
-            .set(Dispatch::new(
-                logs_buffer_size,
-                metrics_buffer_size,
-                threads_buffer_size,
-                sink,
-                process_properties,
-            ))
-            .map_err(|_| Error::AlreadyInitialized())
-    } else {
-        info!("event dispatch already initialized");
-        Err(Error::AlreadyInitialized())
+    unsafe {
+        if (*dispatch_ref.get()).get().is_none() {
+            (*dispatch_ref.get())
+                .set(Dispatch::new(
+                    logs_buffer_size,
+                    metrics_buffer_size,
+                    threads_buffer_size,
+                    sink,
+                    process_properties,
+                ))
+                .map_err(|_| Error::AlreadyInitialized())
+        } else {
+            info!("event dispatch already initialized");
+            Err(Error::AlreadyInitialized())
+        }
     }
 }
 
@@ -199,6 +202,32 @@ pub fn flush_thread_buffer() {
     });
 }
 
+/// Unregisters the current thread's stream from the global dispatch to prevent
+/// dangling pointers when the thread is destroyed.
+#[inline(always)]
+pub fn unregister_thread_stream() {
+    LOCAL_THREAD_STREAM.with(|cell| unsafe {
+        let opt_stream = &mut *cell.as_ptr();
+        if let Some(stream) = opt_stream {
+            #[allow(static_mut_refs)]
+            match G_DISPATCH.get() {
+                Some(d) => {
+                    // Flush any remaining events before unregistering
+                    d.flush_thread_buffer(stream);
+                    // Unregister the thread stream
+                    d.unregister_thread_stream(stream);
+                    // Clear the local thread stream
+                    *opt_stream = None;
+                }
+                None => {
+                    // If dispatch is already shut down, just clear the local stream
+                    *opt_stream = None;
+                }
+            }
+        }
+    });
+}
+
 #[inline(always)]
 pub fn on_begin_scope(scope: &'static SpanMetadata) {
     on_thread_event(BeginThreadSpanEvent {
@@ -280,18 +309,23 @@ pub fn on_end_async_named_scope(
 }
 
 pub struct DispatchCell {
-    inner: OnceCell<Dispatch>,
+    // unsafecell is only necessary for force_uninit()
+    inner: UnsafeCell<OnceCell<Dispatch>>,
 }
 
 impl DispatchCell {
     const fn new() -> Self {
         Self {
-            inner: OnceCell::new(),
+            inner: UnsafeCell::new(OnceCell::new()),
         }
     }
 
     fn get(&self) -> Option<&Dispatch> {
-        self.inner.get()
+        unsafe { (*self.inner.get()).get() }
+    }
+
+    unsafe fn take(&self) -> Option<Dispatch> {
+        unsafe { (*self.inner.get()).take() }
     }
 }
 
@@ -301,6 +335,15 @@ unsafe impl Sync for DispatchCell {}
 static G_DISPATCH: DispatchCell = DispatchCell::new();
 static G_ASYNC_SPAN_COUNTER: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
+
+/// # Safety
+/// very unsafe! make sure there is no thread running that could be sending events
+/// normally that global state should not be destroyed
+pub unsafe fn force_uninit() {
+    unsafe {
+        G_DISPATCH.take();
+    }
+}
 
 thread_local! {
     static LOCAL_THREAD_STREAM: Cell<Option<ThreadStream>> = const { Cell::new(None) };
@@ -393,10 +436,10 @@ impl Dispatch {
     fn startup(&self, process_properties: HashMap<String, String>) {
         let mut parent_process = None;
 
-        if let Ok(parent_process_guid) = std::env::var("MICROMEGAS_TELEMETRY_PARENT_PROCESS") {
-            if let Ok(parent_process_id) = uuid::Uuid::try_parse(&parent_process_guid) {
-                parent_process = Some(parent_process_id);
-            }
+        if let Ok(parent_process_guid) = std::env::var("MICROMEGAS_TELEMETRY_PARENT_PROCESS")
+            && let Ok(parent_process_id) = uuid::Uuid::try_parse(&parent_process_guid)
+        {
+            parent_process = Some(parent_process_id);
         }
 
         unsafe {
@@ -450,6 +493,16 @@ impl Dispatch {
         let mut vec_guard = self.thread_streams.lock().unwrap();
         for stream in &mut *vec_guard {
             fun(*stream);
+        }
+    }
+
+    fn unregister_thread_stream(&self, stream_to_remove: &mut ThreadStream) {
+        let mut vec_guard = self.thread_streams.lock().unwrap();
+        let stream_ptr = stream_to_remove as *mut ThreadStream;
+
+        // Find and remove the thread stream pointer from the vector
+        if let Some(pos) = vec_guard.iter().position(|&ptr| ptr == stream_ptr) {
+            vec_guard.remove(pos);
         }
     }
 

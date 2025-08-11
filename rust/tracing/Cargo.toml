@@ -19,6 +19,7 @@ chrono.workspace = true
 internment.workspace = true
 lazy_static.workspace = true
 memoffset.workspace = true
+pin-project.workspace = true
 raw-cpuid.workspace = true
 serde.workspace = true
 thiserror.workspace = true
@@ -26,14 +27,25 @@ thread-id.workspace = true
 uuid.workspace = true
 whoami.workspace = true
 
+# Optional dependencies for runtime integration
+tokio = { workspace = true, optional = true }
+
 [target.'cfg(windows)'.dependencies]
 winapi.workspace = true
 
 [dev-dependencies]
 # to tests interop
 log.workspace = true
+# for async and concurrent testing
+tokio = { workspace = true, features = ["time"] }
+serial_test = "3.2"
 
 [features]
+# Runtime integration features
+default = ["tokio"]
+tokio = ["dep:tokio"]
+
+# Logging level features
 max_level_off = []
 max_level_error = []
 max_level_warn = []

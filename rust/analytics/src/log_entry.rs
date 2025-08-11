@@ -231,10 +231,9 @@ pub async fn for_each_log_entry_in_block<Predicate: FnMut(LogEntry) -> Result<bo
             &val,
         )
         .with_context(|| "log_entry_from_value")?
+            && !fun(log_entry)?
         {
-            if !fun(log_entry)? {
-                return Ok(false); //do not continue
-            }
+            return Ok(false); //do not continue
         }
         Ok(true) //continue
     })

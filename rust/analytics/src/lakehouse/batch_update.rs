@@ -139,22 +139,21 @@ async fn materialize_partition(
 
     let new_delta = view.get_max_partition_time_delta(&strategy);
     if new_delta < (insert_range.end - insert_range.begin) {
-        if let PartitionCreationStrategy::MergeExisting(partition_cache) = &strategy {
-            if partition_cache
+        if let PartitionCreationStrategy::MergeExisting(partition_cache) = &strategy
+            && partition_cache
                 .partitions
                 .iter()
                 .all(|p| (p.end_insert_time - p.begin_insert_time) == new_delta)
-            {
-                let desc = format!(
-                    "[{}, {}] {view_set_name} {view_instance_id}",
-                    insert_range.begin.to_rfc3339(),
-                    insert_range.end.to_rfc3339()
-                );
-                logger
-                    .write_log_entry(format!("{desc}: subpartitions already present",))
-                    .await?;
-                return Ok(());
-            }
+        {
+            let desc = format!(
+                "[{}, {}] {view_set_name} {view_instance_id}",
+                insert_range.begin.to_rfc3339(),
+                insert_range.end.to_rfc3339()
+            );
+            logger
+                .write_log_entry(format!("{desc}: subpartitions already present",))
+                .await?;
+            return Ok(());
         }
 
         return Box::pin(materialize_partition_range(

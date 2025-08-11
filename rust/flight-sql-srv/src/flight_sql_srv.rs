@@ -6,11 +6,11 @@ use micromegas::analytics::lakehouse::runtime::make_runtime_env;
 use micromegas::analytics::lakehouse::view_factory::default_view_factory;
 use micromegas::arrow_flight::flight_service_server::FlightServiceServer;
 use micromegas::ingestion::data_lake_connection::connect_to_data_lake;
+use micromegas::micromegas_main;
 use micromegas::servers::flight_sql_service_impl::FlightSqlServiceImpl;
 use micromegas::servers::key_ring::{KeyRing, parse_key_ring};
 use micromegas::servers::log_uri_service::LogUriService;
 use micromegas::servers::tonic_auth_interceptor::check_auth;
-use micromegas::telemetry_sink::TelemetryGuardBuilder;
 use micromegas::tonic::service::interceptor;
 use micromegas::tonic::transport::Server;
 use micromegas::tracing::prelude::*;
@@ -26,12 +26,8 @@ struct Cli {
     disable_auth: bool,
 }
 
-#[tokio::main]
+#[micromegas_main(max_level_override = "debug", interop_max_level = "info")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let _telemetry_guard = TelemetryGuardBuilder::default()
-        .with_ctrlc_handling()
-        .with_local_sink_max_level(LevelFilter::Info)
-        .build();
     let args = Cli::parse();
     let connection_string = std::env::var("MICROMEGAS_SQL_CONNECTION_STRING")
         .with_context(|| "reading MICROMEGAS_SQL_CONNECTION_STRING")?;

@@ -185,18 +185,18 @@ pub async fn run_tasks_forever(mut tasks: Vec<CronTask>, max_parallelism: usize)
         for task in &mut tasks {
             if task.get_next_run() < Utc::now() {
                 task_set.spawn(task.spawn().await);
-                if task_set.len() >= max_parallelism {
-                    if let Some(res) = task_set.join_next().await {
-                        match res {
+                if task_set.len() >= max_parallelism
+                    && let Some(res) = task_set.join_next().await
+                {
+                    match res {
+                        Ok(res) => match res {
                             Ok(res) => match res {
-                                Ok(res) => match res {
-                                    Ok(()) => {}
-                                    Err(e) => error!("{e:?}"),
-                                },
+                                Ok(()) => {}
                                 Err(e) => error!("{e:?}"),
                             },
                             Err(e) => error!("{e:?}"),
-                        }
+                        },
+                        Err(e) => error!("{e:?}"),
                     }
                 }
             }

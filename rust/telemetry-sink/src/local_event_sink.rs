@@ -12,6 +12,7 @@ use std::{fmt, sync::Arc};
 #[cfg(feature = "colored")]
 use colored::Colorize;
 
+/// Prints log entries to the console
 pub struct LocalEventSink {
     /// Control how timestamps are displayed.
     ///

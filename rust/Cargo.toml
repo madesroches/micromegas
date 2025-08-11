@@ -17,6 +17,7 @@ keywords = ["observability", "telemetry", "analytics"]
 [workspace.dependencies]
 micromegas-analytics = { path = "analytics", version = "0.12.0" }
 micromegas-ingestion = { path = "ingestion", version = "0.12.0" }
+micromegas-proc-macros = { path = "micromegas-proc-macros", version = "0.12.0" }
 micromegas-telemetry = { path = "telemetry", version = "0.12.0" }
 micromegas-telemetry-sink = { path = "telemetry-sink", version = "0.12.0" }
 micromegas-tracing = { path = "tracing", version = "0.12.0" }
@@ -47,8 +48,10 @@ lz4 = "1.23"
 memoffset = "0.6"
 object_store = { version = "0.12", features = ["aws"] }
 once_cell = "1.7.2"
+pin-project = "1.1"
 proc-macro2 = "1.0"
 prost = { version = "0.13" }
+rand = "0.8"
 quote = "1.0"
 raw-cpuid = "11.3.0"
 reqwest = { version = "0.12.4", default-features = false, features = ["charset", "http2", "macos-system-configuration", "rustls-tls"] }

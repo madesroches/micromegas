@@ -17,9 +17,8 @@ use micromegas::chrono::DateTime;
 use micromegas::chrono::TimeDelta;
 use micromegas::chrono::Utc;
 use micromegas::ingestion::data_lake_connection::connect_to_data_lake;
+use micromegas::micromegas_main;
 use micromegas::servers::maintenance::get_global_views_with_update_group;
-use micromegas::telemetry_sink::TelemetryGuardBuilder;
-use micromegas::tracing::levels::LevelFilter;
 use std::sync::Arc;
 
 #[derive(Parser, Debug)]
@@ -61,14 +60,8 @@ enum Commands {
     CronDaemon,
 }
 
-#[tokio::main]
+#[micromegas_main(interop_max_level = "info")]
 async fn main() -> Result<()> {
-    let _telemetry_guard = TelemetryGuardBuilder::default()
-        .with_ctrlc_handling()
-        .with_local_sink_max_level(LevelFilter::Debug)
-        .with_interop_max_level_override(LevelFilter::Info)
-        .build();
-
     let args = Cli::parse();
 
     let connection_string = std::env::var("MICROMEGAS_SQL_CONNECTION_STRING")

@@ -2778,6 +2778,7 @@ dependencies = [
  "micromegas-analytics",
  "micromegas-ingestion",
  "micromegas-perfetto",
+ "micromegas-proc-macros",
  "micromegas-telemetry",
  "micromegas-telemetry-sink",
  "micromegas-tracing",
@@ -2815,6 +2816,9 @@ dependencies = [
  "micromegas-tracing",
  "micromegas-transit",
  "object_store",
+ "pin-project",
+ "rand 0.8.5",
+ "serial_test",
  "sqlx",
  "tokio",
  "uuid",
@@ -2849,6 +2853,15 @@ dependencies = [
  "prost",
  "prost-build",
  "xxhash-rust",
+]
+
+[[package]]
+name = "micromegas-proc-macros"
+version = "0.12.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
 ]
 
 [[package]]
@@ -2907,10 +2920,13 @@ dependencies = [
  "memoffset",
  "micromegas-tracing-proc-macros",
  "micromegas-transit",
+ "pin-project",
  "raw-cpuid",
  "serde",
+ "serial_test",
  "thiserror 1.0.69",
  "thread-id",
+ "tokio",
  "uuid",
  "whoami",
  "winapi",
@@ -3905,6 +3921,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "scc"
+version = "2.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22b2d775fb28f245817589471dd49c5edf64237f4a19d10ce9a92ff4651a27f4"
+dependencies = [
+ "sdd",
+]
+
+[[package]]
 name = "schannel"
 version = "0.1.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3918,6 +3943,12 @@ name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
+
+[[package]]
+name = "sdd"
+version = "3.0.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "490dcfcbfef26be6800d11870ff2df8774fa6e86d047e3e8c8a76b25655e41ca"
 
 [[package]]
 name = "security-framework"
@@ -4007,6 +4038,31 @@ dependencies = [
  "itoa",
  "ryu",
  "serde",
+]
+
+[[package]]
+name = "serial_test"
+version = "3.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1b258109f244e1d6891bf1053a55d63a5cd4f8f4c30cf9a1280989f80e7a1fa9"
+dependencies = [
+ "futures",
+ "log",
+ "once_cell",
+ "parking_lot",
+ "scc",
+ "serial_test_derive",
+]
+
+[[package]]
+name = "serial_test_derive"
+version = "3.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5d69265a08751de7844521fd15003ae0a888e035773ba05695c5c759a6f89eef"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.104",
 ]
 
 [[package]]

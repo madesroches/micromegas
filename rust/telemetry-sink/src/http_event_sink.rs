@@ -102,6 +102,7 @@ impl HttpEventSink {
         }
     }
 
+    #[span_fn]
     async fn push_process(
         client: &mut reqwest::Client,
         root_path: &str,
@@ -142,6 +143,7 @@ impl HttpEventSink {
         Ok(())
     }
 
+    #[span_fn]
     async fn push_stream(
         client: &mut reqwest::Client,
         root_path: &str,
@@ -174,7 +176,8 @@ impl HttpEventSink {
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[span_fn]
+    #[expect(clippy::too_many_arguments)]
     async fn push_block(
         client: &mut reqwest::Client,
         root_path: &str,

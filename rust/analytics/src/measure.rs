@@ -279,10 +279,9 @@ pub async fn for_each_measure_in_block<Predicate: FnMut(Measure) -> Result<bool>
             &val,
         )
         .with_context(|| "measure_from_value")?
+            && !fun(measure)?
         {
-            if !fun(measure)? {
-                return Ok(false); //do not continue
-            }
+            return Ok(false); //do not continue
         }
         Ok(true) //continue
     })

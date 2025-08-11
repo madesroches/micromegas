@@ -138,6 +138,9 @@ pub mod perfetto {
     pub use micromegas_perfetto::*;
 }
 
+// Re-export proc macros at the top level for easy access
+pub use micromegas_proc_macros::*;
+
 /// Embedable ingestion, analytics and maintenance services.
 /// The user is expected to provide their own authentication.
 pub mod servers;
