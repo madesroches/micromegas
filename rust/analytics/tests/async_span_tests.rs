@@ -126,8 +126,28 @@ fn test_async_span_macro() {
         .build()
         .expect("failed to build tokio runtime");
 
-    runtime.block_on(macro_outer());
+    runtime.block_on(async {
+        init_thread_stream();
+        macro_outer().await;
+        flush_thread_buffer();
+    });
     shutdown_dispatch();
+
+    // Check that the correct number of events were recorded
+    let state = sink.state.lock().expect("Failed to lock sink state");
+    let total_events: usize = state
+        .thread_blocks
+        .iter()
+        .map(|block| block.nb_objects())
+        .sum();
+
+    // macro_outer (2 events) + 2 calls to macro_inner (2 events each) = 6 events total
+    assert_eq!(
+        total_events, 6,
+        "Expected 6 events (macro_outer: 2 + macro_inner: 2×2) but found {}",
+        total_events
+    );
+
     unsafe { force_uninit() };
 }
 
