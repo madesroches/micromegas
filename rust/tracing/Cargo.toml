@@ -27,6 +27,9 @@ thread-id.workspace = true
 uuid.workspace = true
 whoami.workspace = true
 
+# Optional dependencies for runtime integration
+tokio = { workspace = true, optional = true }
+
 [target.'cfg(windows)'.dependencies]
 winapi.workspace = true
 
@@ -38,6 +41,11 @@ tokio = { workspace = true, features = ["time"] }
 serial_test = "3.2"
 
 [features]
+# Runtime integration features
+default = ["tokio"]
+tokio = ["dep:tokio"]
+
+# Logging level features
 max_level_off = []
 max_level_error = []
 max_level_warn = []

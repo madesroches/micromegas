@@ -11,7 +11,7 @@ authors.workspace = true
 
 [dependencies]
 micromegas-telemetry.workspace = true
-micromegas-tracing.workspace = true
+micromegas-tracing = { workspace = true, features = ["tokio"] }
 micromegas-transit.workspace = true
 micromegas-ingestion.workspace = true
 

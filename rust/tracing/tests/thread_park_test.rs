@@ -1,7 +1,4 @@
-use micromegas_tracing::dispatch::{
-    flush_thread_buffer, force_uninit, init_event_dispatch, init_thread_stream, shutdown_dispatch,
-    unregister_thread_stream,
-};
+use micromegas_tracing::dispatch::{force_uninit, init_event_dispatch, shutdown_dispatch};
 use micromegas_tracing::event::EventSink;
 use micromegas_tracing::event::TracingBlock;
 use micromegas_tracing::event::in_memory_sink::InMemorySink;
@@ -42,17 +39,8 @@ fn test_thread_park_flush() {
         .enable_all()
         .thread_name("park-test")
         .worker_threads(2) // Use just 2 threads to make parking more predictable
-        .on_thread_start(|| {
+        .with_tracing_callbacks_and_custom_start(|| {
             eprintln!("Thread started - initializing stream");
-            init_thread_stream();
-        })
-        .on_thread_park(|| {
-            eprintln!("Thread parking - flushing buffer");
-            flush_thread_buffer();
-        })
-        .on_thread_stop(|| {
-            eprintln!("Thread stopping - unregistering stream");
-            unregister_thread_stream();
         })
         .build()
         .expect("failed to build tokio runtime");

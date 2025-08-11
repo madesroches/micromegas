@@ -1,11 +1,10 @@
 use micromegas_tracing::dispatch::{
     flush_thread_buffer, force_uninit, init_event_dispatch, init_thread_stream, shutdown_dispatch,
-    unregister_thread_stream,
 };
 use micromegas_tracing::event::EventSink;
 use micromegas_tracing::event::TracingBlock;
 use micromegas_tracing::event::in_memory_sink::InMemorySink;
-use micromegas_tracing::{prelude::*, static_span_desc};
+use micromegas_tracing::prelude::*;
 use rand::Rng;
 use serial_test::serial;
 use std::collections::HashMap;
@@ -57,15 +56,7 @@ fn test_async_span_manual_instrumentation() {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .thread_name("tracing-test")
-        .on_thread_start(|| {
-            init_thread_stream();
-        })
-        .on_thread_park(|| {
-            flush_thread_buffer();
-        })
-        .on_thread_stop(|| {
-            unregister_thread_stream();
-        })
+        .with_tracing_callbacks()
         .build()
         .expect("failed to build tokio runtime");
     static_span_desc!(OUTER_DESC, "manual_outer");
@@ -110,15 +101,7 @@ fn test_async_span_macro() {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .thread_name("tracing-test")
-        .on_thread_start(|| {
-            init_thread_stream();
-        })
-        .on_thread_park(|| {
-            flush_thread_buffer();
-        })
-        .on_thread_stop(|| {
-            unregister_thread_stream();
-        })
+        .with_tracing_callbacks()
         .build()
         .expect("failed to build tokio runtime");
 

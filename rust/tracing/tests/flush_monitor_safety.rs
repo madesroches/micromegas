@@ -5,8 +5,7 @@
 //! accessing dangling pointers or causing data races.
 
 use micromegas_tracing::dispatch::{
-    flush_thread_buffer, for_each_thread_stream, force_uninit, init_event_dispatch,
-    init_thread_stream, shutdown_dispatch, unregister_thread_stream,
+    for_each_thread_stream, force_uninit, init_event_dispatch, shutdown_dispatch,
 };
 use micromegas_tracing::event::EventSink;
 use micromegas_tracing::event::TracingBlock;
@@ -64,18 +63,9 @@ fn test_flush_monitor_concurrent_thread_safety() {
         .enable_all()
         .thread_name("flush-safety-test")
         .worker_threads(4) // Multiple threads to increase race opportunities
-        .on_thread_start(move || {
+        .with_tracing_callbacks_and_custom_start(move || {
             let id = counter_clone.fetch_add(1, Ordering::Relaxed);
             eprintln!("Worker thread {} starting - initializing stream", id);
-            init_thread_stream();
-        })
-        .on_thread_park(|| {
-            // Flush events when thread parks (during awaits)
-            flush_thread_buffer();
-        })
-        .on_thread_stop(|| {
-            eprintln!("Worker thread stopping - unregistering stream");
-            unregister_thread_stream();
         })
         .build()
         .expect("Failed to build tokio runtime");

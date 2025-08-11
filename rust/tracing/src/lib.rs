@@ -65,6 +65,8 @@ pub mod panic_hook;
 pub mod parsing;
 pub mod process_info;
 pub mod property_set;
+#[cfg(feature = "tokio")]
+pub mod runtime;
 pub mod spans;
 pub mod static_string_ref;
 pub mod string_id;
@@ -80,11 +82,13 @@ pub mod intern_string;
 pub mod prelude {
     pub use crate::levels::*;
     pub use crate::process_info::*;
+    #[cfg(feature = "tokio")]
+    pub use crate::runtime::TracingRuntimeExt;
     pub use crate::spans::{InstrumentFuture, InstrumentedFuture};
     pub use crate::time::*;
     pub use crate::{
         async_span_scope, debug, error, fatal, fmetric, imetric, info, log, log_enabled,
-        span_scope, trace, warn,
+        span_scope, static_span_desc, trace, warn,
     };
     pub use micromegas_tracing_proc_macros::*;
 }
