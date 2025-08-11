@@ -16,9 +16,9 @@ use clap::Parser;
 use micromegas::ingestion::data_lake_connection::DataLakeConnection;
 use micromegas::ingestion::remote_data_lake::connect_to_remote_data_lake;
 use micromegas::ingestion::web_ingestion_service::WebIngestionService;
+use micromegas::micromegas_main;
 use micromegas::servers;
 use micromegas::servers::axum_utils::observability_middleware;
-use micromegas::telemetry_sink::TelemetryGuardBuilder;
 use micromegas::tracing::prelude::*;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -55,12 +55,8 @@ async fn serve_http(
     Ok(())
 }
 
-#[tokio::main]
+#[micromegas_main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let _telemetry_guard = TelemetryGuardBuilder::default()
-        .with_ctrlc_handling()
-        .with_local_sink_max_level(LevelFilter::Debug)
-        .build();
     let args = Cli::parse();
     let connection_string = std::env::var("MICROMEGAS_SQL_CONNECTION_STRING")
         .with_context(|| "reading MICROMEGAS_SQL_CONNECTION_STRING")?;

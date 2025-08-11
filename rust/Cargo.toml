@@ -17,6 +17,7 @@ keywords = ["observability", "telemetry", "analytics"]
 [workspace.dependencies]
 micromegas-analytics = { path = "analytics", version = "0.12.0" }
 micromegas-ingestion = { path = "ingestion", version = "0.12.0" }
+micromegas-proc-macros = { path = "micromegas-proc-macros", version = "0.12.0" }
 micromegas-telemetry = { path = "telemetry", version = "0.12.0" }
 micromegas-telemetry-sink = { path = "telemetry-sink", version = "0.12.0" }
 micromegas-tracing = { path = "tracing", version = "0.12.0" }

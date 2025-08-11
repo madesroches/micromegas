@@ -2778,6 +2778,7 @@ dependencies = [
  "micromegas-analytics",
  "micromegas-ingestion",
  "micromegas-perfetto",
+ "micromegas-proc-macros",
  "micromegas-telemetry",
  "micromegas-telemetry-sink",
  "micromegas-tracing",
@@ -2852,6 +2853,15 @@ dependencies = [
  "prost",
  "prost-build",
  "xxhash-rust",
+]
+
+[[package]]
+name = "micromegas-proc-macros"
+version = "0.12.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
 ]
 
 [[package]]
