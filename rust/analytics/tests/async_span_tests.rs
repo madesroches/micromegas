@@ -1,5 +1,6 @@
 use micromegas_tracing::dispatch::{
     flush_thread_buffer, force_uninit, init_event_dispatch, init_thread_stream, shutdown_dispatch,
+    unregister_thread_stream,
 };
 use micromegas_tracing::event::EventSink;
 use micromegas_tracing::event::TracingBlock;
@@ -59,8 +60,11 @@ fn test_async_span_manual_instrumentation() {
         .on_thread_start(|| {
             init_thread_stream();
         })
-        .on_thread_stop(|| {
+        .on_thread_park(|| {
             flush_thread_buffer();
+        })
+        .on_thread_stop(|| {
+            unregister_thread_stream();
         })
         .build()
         .expect("failed to build tokio runtime");
@@ -109,8 +113,11 @@ fn test_async_span_macro() {
         .on_thread_start(|| {
             init_thread_stream();
         })
-        .on_thread_stop(|| {
+        .on_thread_park(|| {
             flush_thread_buffer();
+        })
+        .on_thread_stop(|| {
+            unregister_thread_stream();
         })
         .build()
         .expect("failed to build tokio runtime");

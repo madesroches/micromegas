@@ -202,6 +202,32 @@ pub fn flush_thread_buffer() {
     });
 }
 
+/// Unregisters the current thread's stream from the global dispatch to prevent
+/// dangling pointers when the thread is destroyed.
+#[inline(always)]
+pub fn unregister_thread_stream() {
+    LOCAL_THREAD_STREAM.with(|cell| unsafe {
+        let opt_stream = &mut *cell.as_ptr();
+        if let Some(stream) = opt_stream {
+            #[allow(static_mut_refs)]
+            match G_DISPATCH.get() {
+                Some(d) => {
+                    // Flush any remaining events before unregistering
+                    d.flush_thread_buffer(stream);
+                    // Unregister the thread stream
+                    d.unregister_thread_stream(stream);
+                    // Clear the local thread stream
+                    *opt_stream = None;
+                }
+                None => {
+                    // If dispatch is already shut down, just clear the local stream
+                    *opt_stream = None;
+                }
+            }
+        }
+    });
+}
+
 #[inline(always)]
 pub fn on_begin_scope(scope: &'static SpanMetadata) {
     on_thread_event(BeginThreadSpanEvent {
@@ -467,6 +493,16 @@ impl Dispatch {
         let mut vec_guard = self.thread_streams.lock().unwrap();
         for stream in &mut *vec_guard {
             fun(*stream);
+        }
+    }
+
+    fn unregister_thread_stream(&self, stream_to_remove: &mut ThreadStream) {
+        let mut vec_guard = self.thread_streams.lock().unwrap();
+        let stream_ptr = stream_to_remove as *mut ThreadStream;
+
+        // Find and remove the thread stream pointer from the vector
+        if let Some(pos) = vec_guard.iter().position(|&ptr| ptr == stream_ptr) {
+            vec_guard.remove(pos);
         }
     }
 

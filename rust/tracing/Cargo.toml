@@ -33,6 +33,9 @@ winapi.workspace = true
 [dev-dependencies]
 # to tests interop
 log.workspace = true
+# for async and concurrent testing
+tokio = { workspace = true, features = ["time"] }
+serial_test = "3.2"
 
 [features]
 max_level_off = []
