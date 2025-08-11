@@ -64,7 +64,8 @@
     },
     "gulp-header-comment": {
       "moment": "2.30.1"
-    }
+    },
+    "tmp": "0.2.4"
   },
   "browserslist": "> 2%, not dead",
   "eslintConfig": {
