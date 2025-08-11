@@ -63,12 +63,14 @@ To get started with Micromegas, please refer to the [GETTING_STARTED.md](./doc/G
 
 ## Current Status & Roadmap
 
-Our current focus is on delivering a robust and feature-rich query federation experience.
+Our current focus is on **async span tracing** - delivering comprehensive observability for asynchronous Rust applications.
 
-*   **July 2025** 
-  * Released [version 0.11.0](https://crates.io/crates/micromegas)
-  * Working on http gateway for easier interoperability
-  * Add export mechanism to view materialization to send data out as it is ingested
+*   **August 2025** 
+  * **Async Span Tracing Infrastructure**: Complete async tracing support with automatic future instrumentation
+  * **`micromegas_main` Proc Macro**: Drop-in replacement for `tokio::main` with automatic telemetry setup
+  * **`#[span_fn]` Macro Enhancement**: Now supports both sync and async functions with unified instrumentation
+  * **Manual Async Instrumentation**: `InstrumentedFuture` wrapper for fine-grained control over async span tracking
+  * **Thread-Safe Runtime Integration**: Seamless tokio runtime integration with automatic thread lifecycle management
 
 For a detailed history of changes, please see the [CHANGELOG.md](./CHANGELOG.md) file.
 

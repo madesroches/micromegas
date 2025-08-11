@@ -2,6 +2,11 @@
 
 This file documents the historical progress of the Micromegas project. For current focus, please see the main [README.md](./README.md).
 
+## July 2025
+ * Released [version 0.11.0](https://crates.io/crates/micromegas)
+ * Working on http gateway for easier interoperability
+ * Add export mechanism to view materialization to send data out as it is ingested
+
 ## June 2025
  * Released [version 0.10.0](https://crates.io/crates/micromegas)
  * Process properties in measures and log_entries
