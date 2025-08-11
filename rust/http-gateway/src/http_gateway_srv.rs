@@ -3,9 +3,8 @@ use std::net::SocketAddr;
 use anyhow::Result;
 use axum::Router;
 use clap::Parser;
+use micromegas::micromegas_main;
 use micromegas::servers;
-use micromegas::telemetry_sink::TelemetryGuardBuilder;
-use micromegas::tracing::levels::LevelFilter;
 use micromegas::{axum, tracing::info};
 
 #[derive(Parser, Debug)]
@@ -16,13 +15,8 @@ struct Cli {
     listen_endpoint_http: SocketAddr,
 }
 
-#[tokio::main]
+#[micromegas_main]
 async fn main() -> Result<()> {
-    let _telemetry_guard = TelemetryGuardBuilder::default()
-        .with_ctrlc_handling()
-        .with_local_sink_max_level(LevelFilter::Debug)
-        .with_interop_max_level_override(LevelFilter::Info)
-        .build();
     let args = Cli::parse();
     let app = servers::http_gateway::register_routes(Router::new());
     let listener = tokio::net::TcpListener::bind(args.listen_endpoint_http).await?;

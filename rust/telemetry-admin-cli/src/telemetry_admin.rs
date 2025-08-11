@@ -17,9 +17,8 @@ use micromegas::chrono::DateTime;
 use micromegas::chrono::TimeDelta;
 use micromegas::chrono::Utc;
 use micromegas::ingestion::data_lake_connection::connect_to_data_lake;
+use micromegas::micromegas_main;
 use micromegas::servers::maintenance::get_global_views_with_update_group;
-use micromegas::telemetry_sink::TelemetryGuardBuilder;
-use micromegas::tracing::levels::LevelFilter;
 use std::sync::Arc;
 
 #[derive(Parser, Debug)]
