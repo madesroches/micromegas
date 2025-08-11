@@ -1,9 +1,9 @@
 use micromegas_tracing::dispatch::{
     flush_thread_buffer, force_uninit, init_event_dispatch, init_thread_stream, shutdown_dispatch,
 };
+use micromegas_tracing::event::in_memory_sink::InMemorySink;
 use micromegas_tracing::event::EventSink;
 use micromegas_tracing::event::TracingBlock;
-use micromegas_tracing::event::in_memory_sink::InMemorySink;
 use micromegas_tracing::spans::SpanMetadata;
 use micromegas_tracing::{prelude::*, static_span_desc};
 use pin_project::pin_project;
@@ -123,14 +123,30 @@ fn test_async_span_macro() {
     init_in_mem_tracing(sink.clone());
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
+        .thread_name("tracing-test")
+        .on_thread_start(|| {
+            init_thread_stream();
+        })
+        .on_thread_stop(|| {
+            flush_thread_buffer();
+        })
         .build()
         .expect("failed to build tokio runtime");
 
+    // Spawn macro_outer on a worker thread instead of running on main thread
     runtime.block_on(async {
-        init_thread_stream();
-        macro_outer().await;
-        flush_thread_buffer();
+        let result = tokio::task::spawn(async {
+            let output = macro_outer().await;
+            flush_thread_buffer();
+            output
+        })
+        .await
+        .expect("Task failed");
+        result
     });
+
+    // Drop the runtime to properly shut down worker threads
+    drop(runtime);
     shutdown_dispatch();
 
     // Check that the correct number of events were recorded
