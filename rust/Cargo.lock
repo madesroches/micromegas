@@ -2910,6 +2910,7 @@ dependencies = [
  "memoffset",
  "micromegas-tracing-proc-macros",
  "micromegas-transit",
+ "pin-project",
  "raw-cpuid",
  "serde",
  "thiserror 1.0.69",

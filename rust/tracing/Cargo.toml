@@ -19,6 +19,7 @@ chrono.workspace = true
 internment.workspace = true
 lazy_static.workspace = true
 memoffset.workspace = true
+pin-project.workspace = true
 raw-cpuid.workspace = true
 serde.workspace = true
 thiserror.workspace = true

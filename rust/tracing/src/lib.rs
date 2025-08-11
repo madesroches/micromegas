@@ -80,6 +80,7 @@ pub mod intern_string;
 pub mod prelude {
     pub use crate::levels::*;
     pub use crate::process_info::*;
+    pub use crate::spans::{InstrumentFuture, InstrumentedFuture};
     pub use crate::time::*;
     pub use crate::{
         async_span_scope, debug, error, fatal, fmetric, imetric, info, log, log_enabled,
