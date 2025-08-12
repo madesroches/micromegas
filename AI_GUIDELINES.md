@@ -45,7 +45,7 @@ Micromegas is a unified observability platform with these core components:
 ### Core Rust Crates (rust/)
 - **`tracing/`**: High-performance instrumentation library (20ns overhead per event)
   - Supports logs, metrics, spans with async futures instrumentation
-  - Uses proc macros: `#[micromegas_main]`, `#[span_fn]`, `#[instrument_async]`
+  - Uses proc macros: `#[micromegas_main]`, `#[span_fn]`
   - Thread-local storage for minimal performance impact
 - **`analytics/`**: DataFusion-powered analytics engine for the data lake
   - Lakehouse module for materialized views and partitioned storage

@@ -25,14 +25,14 @@ async fn manual_outer() {
     manual_inner().instrument(&INNER2_DESC).await;
 }
 
-#[instrument_async]
+#[span_fn]
 async fn macro_inner() {
     let ms = rand::thread_rng().gen_range(0..=1000);
     eprintln!("waiting for {ms} ms");
     sleep(Duration::from_millis(ms)).await;
 }
 
-#[instrument_async]
+#[span_fn]
 async fn macro_outer() {
     macro_inner().await;
     macro_inner().await;

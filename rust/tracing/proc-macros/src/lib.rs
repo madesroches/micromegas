@@ -34,32 +34,6 @@ impl Parse for TraceArgs {
     }
 }
 
-#[proc_macro_attribute]
-pub fn instrument_async(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(item as ItemFn);
-    let vis = &input.vis;
-    let sig = &input.sig;
-    let attrs = &input.attrs;
-    let block = &input.block;
-    let ident = &sig.ident;
-    let inputs = &sig.inputs;
-    let generics = &sig.generics;
-    let span_name = ident.to_string();
-    let output_type = match &sig.output {
-        syn::ReturnType::Type(_, ty) => quote! { #ty },
-        syn::ReturnType::Default => quote! { () },
-    };
-    let wrapped = quote! {
-        #(#attrs)*
-        #vis fn #ident #generics(#inputs) -> impl std::future::Future<Output=#output_type> {
-            static_span_desc!(SCOPE_DESC, #span_name);
-            let fut = async #block;
-            InstrumentedFuture::new(fut, &SCOPE_DESC)
-        }
-    };
-    wrapped.into()
-}
-
 /// span_fn: trace the execution of a sync or async function
 #[proc_macro_attribute]
 pub fn span_fn(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -71,13 +45,21 @@ pub fn span_fn(args: TokenStream, input: TokenStream) -> TokenStream {
         .map_or(function.sig.ident.to_string(), |n| n.to_string());
 
     if function.sig.asyncness.is_some() {
-        // Handle async functions
+        // Handle async functions using InstrumentedFuture approach
         let original_block = &function.block;
+        let output_type = match &function.sig.output {
+            syn::ReturnType::Type(_, ty) => quote! { #ty },
+            syn::ReturnType::Default => quote! { () },
+        };
 
+        // Remove async and change return type to impl Future
+        function.sig.asyncness = None;
+        function.sig.output = parse_quote! { -> impl std::future::Future<Output = #output_type> };
         function.block = parse_quote! {
             {
-                micromegas_tracing::async_span_scope!(_METADATA_FUNC, concat!(module_path!(), "::", #function_name));
-                #original_block
+                micromegas_tracing::static_span_desc!(_SCOPE_DESC, concat!(module_path!(), "::", #function_name));
+                let fut = async move #original_block;
+                micromegas_tracing::spans::InstrumentedFuture::new(fut, &_SCOPE_DESC)
             }
         };
     } else {
