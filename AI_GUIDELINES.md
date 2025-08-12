@@ -16,6 +16,7 @@
 - Maintain security best practices - never expose secrets or keys
 - Use existing utilities and patterns found in neighboring files
 - Keep commit messages short
+- **Commit Messages**: NEVER include AI-generated credits or co-author tags in commit messages
 
 ## Project Structure
 - Main Cargo.toml is located at `rust/Cargo.toml`
