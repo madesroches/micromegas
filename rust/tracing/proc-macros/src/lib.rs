@@ -7,6 +7,7 @@
 // crate-specific lint exceptions:
 //#![allow()]
 
+use proc_macro::TokenStream;
 use proc_macro2::Literal;
 use quote::quote;
 use syn::{
@@ -33,12 +34,35 @@ impl Parse for TraceArgs {
     }
 }
 
+#[proc_macro_attribute]
+pub fn instrument_async(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(item as ItemFn);
+    let vis = &input.vis;
+    let sig = &input.sig;
+    let attrs = &input.attrs;
+    let block = &input.block;
+    let ident = &sig.ident;
+    let inputs = &sig.inputs;
+    let generics = &sig.generics;
+    let span_name = ident.to_string();
+    let output_type = match &sig.output {
+        syn::ReturnType::Type(_, ty) => quote! { #ty },
+        syn::ReturnType::Default => quote! { () },
+    };
+    let wrapped = quote! {
+        #(#attrs)*
+        #vis fn #ident #generics(#inputs) -> impl std::future::Future<Output=#output_type> {
+            static_span_desc!(SCOPE_DESC, #span_name);
+            let fut = async #block;
+            InstrumentedFuture::new(fut, &SCOPE_DESC)
+        }
+    };
+    wrapped.into()
+}
+
 /// span_fn: trace the execution of a sync or async function
 #[proc_macro_attribute]
-pub fn span_fn(
-    args: proc_macro::TokenStream,
-    input: proc_macro::TokenStream,
-) -> proc_macro::TokenStream {
+pub fn span_fn(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = parse_macro_input!(args as TraceArgs);
     let mut function = parse_macro_input!(input as ItemFn);
 
@@ -66,17 +90,14 @@ pub fn span_fn(
         );
     }
 
-    proc_macro::TokenStream::from(quote! {
+    TokenStream::from(quote! {
         #function
     })
 }
 
 /// log_fn: log the execution of a function
 #[proc_macro_attribute]
-pub fn log_fn(
-    args: proc_macro::TokenStream,
-    input: proc_macro::TokenStream,
-) -> proc_macro::TokenStream {
+pub fn log_fn(args: TokenStream, input: TokenStream) -> TokenStream {
     assert!(args.is_empty());
     let mut function = parse_macro_input!(input as ItemFn);
     let function_name = function.sig.ident.to_string();
@@ -87,7 +108,7 @@ pub fn log_fn(
             micromegas_tracing::trace!(#function_name);
         },
     );
-    proc_macro::TokenStream::from(quote! {
+    TokenStream::from(quote! {
         #function
     })
 }

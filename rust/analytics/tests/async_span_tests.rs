@@ -1,9 +1,9 @@
 use micromegas_tracing::dispatch::{
     flush_thread_buffer, force_uninit, init_event_dispatch, init_thread_stream, shutdown_dispatch,
 };
-use micromegas_tracing::event::in_memory_sink::InMemorySink;
 use micromegas_tracing::event::EventSink;
 use micromegas_tracing::event::TracingBlock;
+use micromegas_tracing::event::in_memory_sink::InMemorySink;
 use micromegas_tracing::prelude::*;
 use rand::Rng;
 use serial_test::serial;
@@ -25,14 +25,14 @@ async fn manual_outer() {
     manual_inner().instrument(&INNER2_DESC).await;
 }
 
-#[span_fn]
+#[instrument_async]
 async fn macro_inner() {
     let ms = rand::thread_rng().gen_range(0..=1000);
     eprintln!("waiting for {ms} ms");
     sleep(Duration::from_millis(ms)).await;
 }
 
-#[span_fn]
+#[instrument_async]
 async fn macro_outer() {
     macro_inner().await;
     macro_inner().await;
