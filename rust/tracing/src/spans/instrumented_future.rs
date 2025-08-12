@@ -3,9 +3,14 @@
 use crate::dispatch::{on_begin_async_scope, on_end_async_scope};
 use crate::spans::SpanMetadata;
 use pin_project::pin_project;
+use std::cell::UnsafeCell;
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
+
+thread_local! {
+    static ASYNC_CALL_STACK: UnsafeCell<Vec<u64>> = UnsafeCell ::new(vec![0]);
+}
 
 /// Trait for adding instrumentation to futures
 pub trait InstrumentFuture: Future + Sized {
@@ -45,20 +50,33 @@ where
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
-        if this.span_id.is_none() {
-            // Begin the async span and store the span ID
-            let span_id = on_begin_async_scope(this.desc);
-            *this.span_id = Some(span_id);
-        }
-        match this.future.poll(cx) {
-            Poll::Ready(output) => {
-                // End the async span when the future completes
-                if let Some(span_id) = *this.span_id {
-                    on_end_async_scope(span_id, this.desc);
+        ASYNC_CALL_STACK.with(|stack_cell| {
+            let stack = unsafe { &mut *stack_cell.get() };
+            assert!(!stack.is_empty());
+            let parent = stack[stack.len() - 1];
+            match this.span_id {
+                Some(span_id) => {
+                    stack.push(*span_id);
                 }
-                Poll::Ready(output)
+                None => {
+                    // Begin the async span and store the span ID
+                    let span_id = on_begin_async_scope(this.desc, parent);
+                    stack.push(span_id);
+                    *this.span_id = Some(span_id);
+                }
             }
-            Poll::Pending => Poll::Pending,
-        }
+            let res = match this.future.poll(cx) {
+                Poll::Ready(output) => {
+                    // End the async span when the future completes
+                    if let Some(span_id) = *this.span_id {
+                        on_end_async_scope(span_id, parent, this.desc);
+                    }
+                    Poll::Ready(output)
+                }
+                Poll::Pending => Poll::Pending,
+            };
+            stack.pop();
+            res
+        })
     }
 }

@@ -139,7 +139,7 @@ impl Drop for ThreadNamedSpanGuard {
     }
 }
 
-// async scope guard
+// async scope guard : to be removed
 pub struct AsyncSpanGuard {
     span_desc: &'static SpanMetadata,
     span_id: u64,
@@ -147,14 +147,14 @@ pub struct AsyncSpanGuard {
 
 impl AsyncSpanGuard {
     pub fn new(span_desc: &'static SpanMetadata) -> Self {
-        let span_id = on_begin_async_scope(span_desc);
+        let span_id = on_begin_async_scope(span_desc, 0);
         Self { span_desc, span_id }
     }
 }
 
 impl Drop for AsyncSpanGuard {
     fn drop(&mut self) {
-        on_end_async_scope(self.span_id, self.span_desc);
+        on_end_async_scope(self.span_id, 0, self.span_desc);
     }
 }
 
@@ -166,7 +166,7 @@ pub struct AsyncNamedSpanGuard {
 
 impl AsyncNamedSpanGuard {
     pub fn new(span_location: &'static SpanLocation, name: &'static str) -> Self {
-        let span_id = on_begin_async_named_scope(span_location, name);
+        let span_id = on_begin_async_named_scope(span_location, name, 0);
         Self {
             span_location,
             name,
@@ -177,6 +177,6 @@ impl AsyncNamedSpanGuard {
 
 impl Drop for AsyncNamedSpanGuard {
     fn drop(&mut self) {
-        on_end_async_named_scope(self.span_id, self.span_location, self.name);
+        on_end_async_named_scope(self.span_id, 0, self.span_location, self.name);
     }
 }

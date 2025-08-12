@@ -86,6 +86,7 @@ impl InProcSerialize for EndThreadNamedSpanEvent {}
 pub struct BeginAsyncSpanEvent {
     pub span_desc: &'static SpanMetadata,
     pub span_id: u64,
+    pub parent_span_id: u64, // parent span when first polled
     pub time: i64,
 }
 
@@ -95,6 +96,7 @@ impl InProcSerialize for BeginAsyncSpanEvent {}
 pub struct EndAsyncSpanEvent {
     pub span_desc: &'static SpanMetadata,
     pub span_id: u64,
+    pub parent_span_id: u64, // parent span when completed
     pub time: i64,
 }
 
@@ -104,6 +106,7 @@ pub struct BeginAsyncNamedSpanEvent {
     pub span_location: &'static SpanLocation,
     pub name: StringId,
     pub span_id: u64,
+    pub parent_span_id: u64, // parent span when first polled
     pub time: i64,
 }
 
@@ -114,6 +117,7 @@ pub struct EndAsyncNamedSpanEvent {
     pub span_location: &'static SpanLocation,
     pub name: StringId,
     pub span_id: u64,
+    pub parent_span_id: u64, // parent span when completed
     pub time: i64,
 }
 
