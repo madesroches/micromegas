@@ -94,6 +94,13 @@ pub fn parse_thread_block_payload<Proc: ThreadBlockProcessor>(
                     processor.on_end_thread_scope(block_id, event_id, scope_desc, ts)
                 })
                 .with_context(|| "reading EndThreadNamedSpanEvent"),
+                "BeginAsyncSpanEvent"
+                | "EndAsyncSpanEvent"
+                | "BeginAsyncNamedSpanEvent"
+                | "EndAsyncNamedSpanEvent" => {
+                    // Ignore async span events as they are not relevant for thread spans view
+                    Ok(true)
+                }
                 event_type => {
                     warn!("unknown event type {}", event_type);
                     Ok(true)
