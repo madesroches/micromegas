@@ -15,6 +15,7 @@
 - Check for existing libraries/frameworks before assuming availability
 - Maintain security best practices - never expose secrets or keys
 - Use existing utilities and patterns found in neighboring files
+- Keep commit messages short
 
 ## Project Structure
 - Main Cargo.toml is located at `rust/Cargo.toml`
