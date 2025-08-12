@@ -11,7 +11,7 @@ use micromegas_tracing::levels::{Level, LevelFilter, set_max_level};
 use micromegas_tracing::log;
 use micromegas_tracing::property_set::{Property, PropertySet};
 use micromegas_tracing::time::frequency;
-use micromegas_tracing::{fmetric, imetric, info, span_scope};
+use micromegas_tracing::{fmetric, imetric, info, span_scope, trace};
 use micromegas_tracing_proc_macros::{log_fn, span_fn};
 use utils::{DebugEventSink, LogDispatch, SharedState, State};
 

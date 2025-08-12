@@ -57,9 +57,9 @@ pub fn span_fn(args: TokenStream, input: TokenStream) -> TokenStream {
         function.sig.output = parse_quote! { -> impl std::future::Future<Output = #output_type> };
         function.block = parse_quote! {
             {
-                micromegas_tracing::static_span_desc!(_SCOPE_DESC, concat!(module_path!(), "::", #function_name));
+                static_span_desc!(_SCOPE_DESC, concat!(module_path!(), "::", #function_name));
                 let fut = async move #original_block;
-                micromegas_tracing::spans::InstrumentedFuture::new(fut, &_SCOPE_DESC)
+                InstrumentedFuture::new(fut, &_SCOPE_DESC)
             }
         };
     } else {
@@ -67,7 +67,7 @@ pub fn span_fn(args: TokenStream, input: TokenStream) -> TokenStream {
         function.block.stmts.insert(
             0,
             parse_quote! {
-                micromegas_tracing::span_scope!(_METADATA_FUNC, concat!(module_path!(), "::", #function_name));
+                span_scope!(_METADATA_FUNC, concat!(module_path!(), "::", #function_name));
             },
         );
     }
@@ -87,7 +87,7 @@ pub fn log_fn(args: TokenStream, input: TokenStream) -> TokenStream {
     function.block.stmts.insert(
         0,
         parse_quote! {
-            micromegas_tracing::trace!(#function_name);
+            trace!(#function_name);
         },
     );
     TokenStream::from(quote! {

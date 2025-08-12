@@ -7,6 +7,7 @@
 - **Error Handling**: Use `expect()` with descriptive messages instead of `unwrap()`
 - **Testing**: Use `cargo test -- --nocapture` to see println! output during tests
 - **Formatting**: Always run `cargo fmt` before any commit to ensure consistent code formatting
+- **Format Strings**: Use inline format arguments `format!("value: {variable}")` instead of `format!("value: {}", variable)`
 - **Proc Macros**: Use proc macros through their parent crate (e.g., `micromegas_tracing::prelude::*`) rather than importing proc macro crates directly
 - **Prelude Imports**: Always use `prelude::*` when importing from a prelude module
 
@@ -16,6 +17,8 @@
 - Maintain security best practices - never expose secrets or keys
 - Use existing utilities and patterns found in neighboring files
 - Keep commit messages short
+- **Commit Messages**: NEVER include AI-generated credits or co-author tags in commit messages
+- **Pull Requests**: Always run `git log --oneline main..HEAD` before creating PRs to list all commits in the branch
 
 ## Project Structure
 - Main Cargo.toml is located at `rust/Cargo.toml`
