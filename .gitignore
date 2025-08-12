@@ -15,6 +15,10 @@ target/
 # python
 __pycache__/
 
+# coverage reports
+rust/cobertura.xml
+rust/tarpaulin-report.html
+
 python/micromegas/dist
 
 # gtags
