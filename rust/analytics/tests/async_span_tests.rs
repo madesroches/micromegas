@@ -1,9 +1,9 @@
 use micromegas_tracing::dispatch::{
     flush_thread_buffer, force_uninit, init_event_dispatch, init_thread_stream, shutdown_dispatch,
 };
+use micromegas_tracing::event::in_memory_sink::InMemorySink;
 use micromegas_tracing::event::EventSink;
 use micromegas_tracing::event::TracingBlock;
-use micromegas_tracing::event::in_memory_sink::InMemorySink;
 use micromegas_tracing::prelude::*;
 use rand::Rng;
 use serial_test::serial;
@@ -61,14 +61,13 @@ fn test_async_span_manual_instrumentation() {
         .expect("failed to build tokio runtime");
     static_span_desc!(OUTER_DESC, "manual_outer");
     runtime.block_on(async {
-        let result = tokio::task::spawn(async {
+        tokio::task::spawn(async {
             let output = manual_outer().instrument(&OUTER_DESC).await;
             flush_thread_buffer();
             output
         })
         .await
-        .expect("Task failed");
-        result
+        .expect("Task failed")
     });
 
     // Drop the runtime to properly shut down worker threads
@@ -107,14 +106,13 @@ fn test_async_span_macro() {
 
     // Spawn macro_outer on a worker thread instead of running on main thread
     runtime.block_on(async {
-        let result = tokio::task::spawn(async {
+        tokio::task::spawn(async {
             let output = macro_outer().await;
             flush_thread_buffer();
             output
         })
         .await
-        .expect("Task failed");
-        result
+        .expect("Task failed")
     });
 
     // Drop the runtime to properly shut down worker threads
