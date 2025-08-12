@@ -8,7 +8,7 @@ use tokio::time::sleep;
 // Sync span function example
 #[span_fn]
 fn sync_operation(value: i32) -> i32 {
-    info!("performing sync operation with value: {}", value);
+    info!("performing sync operation with value: {value}");
     std::thread::sleep(Duration::from_millis(50));
     value * 2
 }
@@ -16,19 +16,19 @@ fn sync_operation(value: i32) -> i32 {
 // Async span function example
 #[span_fn]
 async fn async_operation(delay_ms: u64) -> String {
-    info!("starting async operation with {}ms delay", delay_ms);
+    info!("starting async operation with {delay_ms}ms delay");
     sleep(Duration::from_millis(delay_ms)).await;
-    format!("completed after {}ms", delay_ms)
+    format!("completed after {delay_ms}ms")
 }
 
 // Nested async function
 #[span_fn]
 async fn nested_async_operation() {
     let result1 = async_operation(100).await;
-    info!("first async result: {}", result1);
+    info!("first async result: {result1}");
 
     let result2 = async_operation(150).await;
-    info!("second async result: {}", result2);
+    info!("second async result: {result2}");
 }
 
 // Manual span instrumentation example
@@ -56,11 +56,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Generate sync span events
     let sync_result = sync_operation(42);
-    info!("sync operation result: {}", sync_result);
+    info!("sync operation result: {sync_result}");
 
     // Generate async span events
     let async_result = async_operation(200).await;
-    info!("async operation result: {}", async_result);
+    info!("async operation result: {async_result}");
 
     // Generate nested async spans
     nested_async_operation().await;
