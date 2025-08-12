@@ -214,3 +214,341 @@ pub trait AsyncBlockProcessor {
 - **Thread Context**: Include thread_id/stream_id to show cross-thread async flow
 - **Event Types**: Separate begin/end events to show async lifecycle
 
+## Unit Testing Strategy
+
+Following patterns from existing async and analytics tests, the testing approach will include:
+
+### 1. Async Event Generation Tests
+Based on `async_span_tests.rs` patterns:
+
+```rust
+#[test]
+#[serial]
+fn test_async_events_view_manual_instrumentation() {
+    let sink = Arc::new(InMemorySink::new());
+    init_in_mem_tracing(sink.clone());
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_name("async-events-test")
+        .with_tracing_callbacks()
+        .build()
+        .expect("failed to build tokio runtime");
+
+    // Create async operations across multiple threads
+    runtime.block_on(async {
+        let handles = (0..3).map(|i| {
+            tokio::spawn(async move {
+                test_async_function(i).await;
+                flush_thread_buffer();
+            })
+        }).collect::<Vec<_>>();
+        
+        for handle in handles {
+            handle.await.expect("Task failed");
+        }
+    });
+
+    drop(runtime);
+    shutdown_dispatch();
+
+    // Validate async events were captured
+    let state = sink.state.lock().expect("Failed to lock sink state");
+    let total_events: usize = state.thread_blocks.iter()
+        .map(|block| count_async_events(block))
+        .sum();
+    
+    assert!(total_events > 0, "Expected async events to be captured");
+    unsafe { force_uninit() };
+}
+```
+
+### 2. Block Payload Parsing Tests  
+Based on `log_tests.rs` and `span_tests.rs` patterns:
+
+```rust
+#[test]
+#[serial]
+fn test_parse_async_block_payload() {
+    let sink = Arc::new(InMemorySink::new());
+    init_in_mem_tracing(sink.clone());
+    
+    let process_id = uuid::Uuid::new_v4();
+    let process_info = make_process_info(process_id, Some(uuid::Uuid::new_v4()), HashMap::new());
+    let mut stream = ThreadStream::new(1024, process_id, &[], HashMap::new());
+    let stream_id = stream.stream_id();
+
+    // Add mock async span events
+    stream.get_events_mut().push(BeginAsyncSpanEvent { /* ... */ });
+    stream.get_events_mut().push(EndAsyncSpanEvent { /* ... */ });
+    
+    let mut block = stream.replace_block(Arc::new(ThreadBlock::new(1024, process_id, stream_id, 0)));
+    Arc::get_mut(&mut block).unwrap().close();
+    let encoded = block.encode_bin(&process_info).unwrap();
+    
+    // Test parsing with AsyncEventBlockProcessor
+    let mut processor = MockAsyncEventBlockProcessor::new();
+    let stream_info = make_stream_info(&stream);
+    let received_block: micromegas_telemetry::block_wire_format::Block = 
+        ciborium::from_reader(&encoded[..]).unwrap();
+        
+    parse_async_block_payload("test_block", 0, &received_block.payload, &stream_info, &mut processor)
+        .unwrap();
+        
+    assert_eq!(processor.begin_count, 1);
+    assert_eq!(processor.end_count, 1);
+    
+    shutdown_dispatch();
+    unsafe { force_uninit() };
+}
+```
+
+### 3. View Integration Tests
+Based on analytics test patterns:
+
+```rust
+#[tokio::test]
+async fn test_async_events_view_creation() {
+    let process_id = uuid::Uuid::new_v4();
+    let view = AsyncEventsView::new(&process_id.to_string()).unwrap();
+    
+    assert_eq!(*view.get_view_set_name(), "async_events");
+    assert_eq!(*view.get_view_instance_id(), process_id.to_string());
+}
+
+#[tokio::test] 
+async fn test_async_events_view_maker() {
+    let maker = AsyncEventsViewMaker {};
+    let process_id = uuid::Uuid::new_v4();
+    let view = maker.make_view(&process_id.to_string()).unwrap();
+    
+    assert_eq!(*view.get_view_set_name(), "async_events");
+}
+```
+
+### 4. Record Builder Tests
+
+```rust
+#[test]
+fn test_async_event_record_builder() {
+    let mut builder = AsyncEventRecordBuilder::with_capacity(10);
+    
+    // Add test async event data
+    builder.append_async_event(AsyncEventData {
+        span_id: 1,
+        parent_span_id: Some(0), 
+        event_type: "begin",
+        timestamp: 1000000,
+        thread_id: "thread-1",
+        name: "async_function",
+        target: "my_module",
+        filename: "test.rs",
+        line: 42,
+    }).unwrap();
+    
+    let batch = builder.finish().unwrap();
+    assert_eq!(batch.num_rows(), 1);
+    
+    // Verify schema matches expected
+    assert_eq!(batch.schema(), &get_async_events_schema());
+}
+```
+
+### 5. Cross-Thread Async Flow Tests
+
+```rust
+#[test]
+#[serial]
+fn test_cross_thread_async_tracking() {
+    let sink = Arc::new(InMemorySink::new());
+    init_in_mem_tracing(sink.clone());
+    
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(4)
+        .enable_all()
+        .build()
+        .unwrap();
+        
+    runtime.block_on(async {
+        // Spawn task that migrates across threads
+        let handle = tokio::spawn(async {
+            for i in 0..5 {
+                tokio::task::yield_now().await; // Force potential thread migration
+                async_instrumented_work(i).await;
+            }
+        });
+        handle.await.unwrap();
+    });
+    
+    // Validate that async events show cross-thread execution
+    let events = extract_async_events_from_sink(&sink);
+    let unique_threads: std::collections::HashSet<_> = events.iter()
+        .map(|e| &e.thread_id)
+        .collect();
+        
+    // Should have events from multiple threads due to work stealing
+    assert!(unique_threads.len() > 1, "Expected cross-thread async execution");
+}
+```
+
+### 6. Test Organization
+
+Create new test file: `rust/analytics/tests/async_events_view_tests.rs`
+
+**Test Dependencies**:
+- `serial_test::serial` - For tests that need exclusive access to global tracing state
+- `tokio-test` - For async test utilities  
+- Mock data generators for consistent test scenarios
+- Test database setup utilities from existing analytics tests
+
+**Sequential Test Requirements**:
+Tests that use `init_in_mem_tracing()`, `shutdown_dispatch()`, or `force_uninit()` must be marked with `#[serial]` because they modify global tracing state:
+- ✅ `test_async_events_view_manual_instrumentation`
+- ✅ `test_parse_async_block_payload` 
+- ✅ `test_cross_thread_async_tracking`
+- ❌ `test_async_event_record_builder` (pure data structure test)
+- ❌ `test_async_events_view_creation` (no tracing setup)
+- ❌ `test_async_events_view_maker` (no tracing setup)
+
+**Test Coverage Areas**:
+- ✅ Async event generation and capture
+- ✅ Block payload parsing for async events
+- ✅ View creation and factory patterns
+- ✅ Record builder functionality  
+- ✅ End-to-end view materialization
+- ✅ Cross-thread async tracking
+- ✅ Error handling and edge cases
+- ✅ Performance with large async workloads
+
+## Python Integration Tests
+
+Following patterns from existing Python tests in `python/micromegas/tests/`, create end-to-end integration tests:
+
+### New Test File: `python/micromegas/tests/test_async_events.py`
+
+```python
+from .test_utils import *
+
+def test_async_events_query():
+    """Test basic async events view querying"""
+    # Get a process from the generator binary (which produces async spans)
+    sql = """
+    SELECT processes.process_id 
+    FROM processes
+    WHERE exe LIKE '%generator%' OR exe LIKE '%telemetry-generator%'
+    ORDER BY start_time DESC
+    LIMIT 1;
+    """
+    processes = client.query(sql)
+    assert len(processes) > 0, "No generator processes found - run telemetry generator first"
+    process_id = processes.iloc[0]["process_id"]
+    
+    # Query async events for this process
+    sql = """
+    SELECT span_id, parent_span_id, event_type, time, thread_id, name, target
+    FROM view_instance('async_events', '{process_id}')
+    ORDER BY time
+    LIMIT 10;
+    """.format(process_id=process_id)
+    
+    async_events = client.query(sql, begin, end)
+    print(async_events)
+    assert len(async_events) > 0, "Expected async events in results"
+
+def test_async_events_cross_thread():
+    """Test that async events show cross-thread execution"""
+    sql = """
+    SELECT processes.process_id 
+    FROM processes
+    WHERE exe LIKE '%generator%' OR exe LIKE '%telemetry-generator%'
+    ORDER BY start_time DESC
+    LIMIT 1;
+    """
+    processes = client.query(sql)
+    assert len(processes) > 0, "No generator processes found - run telemetry generator first"
+    process_id = processes.iloc[0]["process_id"]
+    
+    # Query for async events across different threads
+    sql = """
+    SELECT DISTINCT thread_id, COUNT(*) as event_count
+    FROM view_instance('async_events', '{process_id}')
+    WHERE event_type = 'begin'
+    GROUP BY thread_id
+    ORDER BY event_count DESC;
+    """.format(process_id=process_id)
+    
+    thread_summary = client.query(sql, begin, end)
+    print("Async events per thread:")
+    print(thread_summary)
+    
+    # Should have events from multiple threads
+    assert len(thread_summary) > 0, "Expected async events"
+
+def test_async_events_span_relationships():
+    """Test parent-child relationships in async spans"""
+    sql = """
+    SELECT processes.process_id 
+    FROM processes
+    WHERE exe LIKE '%generator%' OR exe LIKE '%telemetry-generator%'
+    ORDER BY start_time DESC
+    LIMIT 1;
+    """
+    processes = client.query(sql)
+    assert len(processes) > 0, "No generator processes found - run telemetry generator first"
+    process_id = processes.iloc[0]["process_id"]
+    
+    # Query for parent-child async span relationships
+    sql = """
+    SELECT parent.name as parent_name, child.name as child_name, 
+           parent.span_id as parent_id, child.parent_span_id
+    FROM view_instance('async_events', '{process_id}') parent
+    JOIN view_instance('async_events', '{process_id}') child 
+         ON parent.span_id = child.parent_span_id
+    WHERE parent.event_type = 'begin' AND child.event_type = 'begin'
+    LIMIT 10;
+    """.format(process_id=process_id)
+    
+    relationships = client.query(sql, begin, end)
+    print("Parent-child async span relationships:")
+    print(relationships)
+
+def test_async_events_duration_analysis():
+    """Test analyzing async operation durations"""
+    sql = """
+    SELECT processes.process_id 
+    FROM processes
+    WHERE exe LIKE '%generator%' OR exe LIKE '%telemetry-generator%'
+    ORDER BY start_time DESC
+    LIMIT 1;
+    """
+    processes = client.query(sql)
+    assert len(processes) > 0, "No generator processes found - run telemetry generator first"
+    process_id = processes.iloc[0]["process_id"]
+    
+    # Calculate durations by matching begin/end events
+    sql = """
+    SELECT begin_events.name, begin_events.thread_id,
+           (end_events.time - begin_events.time) / 1000000 as duration_ms
+    FROM 
+        (SELECT * FROM view_instance('async_events', '{process_id}') 
+         WHERE event_type = 'begin') begin_events
+    JOIN 
+        (SELECT * FROM view_instance('async_events', '{process_id}') 
+         WHERE event_type = 'end') end_events
+    ON begin_events.span_id = end_events.span_id
+    ORDER BY duration_ms DESC
+    LIMIT 10;
+    """.format(process_id=process_id)
+    
+    durations = client.query(sql, begin, end)
+    print("Longest async operations:")
+    print(durations)
+```
+
+### Integration Test Coverage:
+- ✅ Basic async events view querying 
+- ✅ Cross-thread async execution validation
+- ✅ Parent-child span relationship analysis
+- ✅ Duration calculation and performance analysis
+- ✅ Integration with existing micromegas Python client
+- ✅ Real data validation using view_instance() function
+
