@@ -263,32 +263,39 @@ pub fn on_end_named_scope(thread_span_location: &'static SpanLocation, name: &'s
 }
 
 #[inline(always)]
-pub fn on_begin_async_scope(scope: &'static SpanMetadata) -> u64 {
+pub fn on_begin_async_scope(scope: &'static SpanMetadata, parent_span_id: u64) -> u64 {
     let id = G_ASYNC_SPAN_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     on_thread_event(BeginAsyncSpanEvent {
         span_desc: scope,
         span_id: id as u64,
+        parent_span_id,
         time: now(),
     });
     id as u64
 }
 
 #[inline(always)]
-pub fn on_end_async_scope(span_id: u64, scope: &'static SpanMetadata) {
+pub fn on_end_async_scope(span_id: u64, parent_span_id: u64, scope: &'static SpanMetadata) {
     on_thread_event(EndAsyncSpanEvent {
         span_desc: scope,
         span_id,
+        parent_span_id,
         time: now(),
     });
 }
 
 #[inline(always)]
-pub fn on_begin_async_named_scope(span_location: &'static SpanLocation, name: &'static str) -> u64 {
+pub fn on_begin_async_named_scope(
+    span_location: &'static SpanLocation,
+    name: &'static str,
+    parent_span_id: u64,
+) -> u64 {
     let id = G_ASYNC_SPAN_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     on_thread_event(BeginAsyncNamedSpanEvent {
         span_location,
         name: name.into(),
         span_id: id as u64,
+        parent_span_id,
         time: now(),
     });
     id as u64
@@ -297,6 +304,7 @@ pub fn on_begin_async_named_scope(span_location: &'static SpanLocation, name: &'
 #[inline(always)]
 pub fn on_end_async_named_scope(
     span_id: u64,
+    parent_span_id: u64,
     span_location: &'static SpanLocation,
     name: &'static str,
 ) {
@@ -304,6 +312,7 @@ pub fn on_end_async_named_scope(
         span_location,
         name: name.into(),
         span_id,
+        parent_span_id,
         time: now(),
     });
 }
@@ -334,7 +343,7 @@ unsafe impl Sync for DispatchCell {}
 
 static G_DISPATCH: DispatchCell = DispatchCell::new();
 static G_ASYNC_SPAN_COUNTER: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
+    std::sync::atomic::AtomicUsize::new(1);
 
 /// # Safety
 /// very unsafe! make sure there is no thread running that could be sending events
