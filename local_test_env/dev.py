@@ -106,11 +106,6 @@ def start_services():
         run_command(f"tmux send-keys -t {pane_num} '{command}' C-m")
         time.sleep(1)  # Small delay between service starts
 
-def create_dev_window(build_mode):
-    """Create additional development window"""
-    run_command(f"tmux new-window -t {SESSION} -n dev")
-    run_command(f"tmux send-keys -t {SESSION}:dev 'cd ../rust && echo \"Development window - build mode: {build_mode}\"' C-m")
-
 def attach_session():
     """Attach to tmux session"""
     run_command(f"tmux attach-session -t {SESSION}")
@@ -129,7 +124,6 @@ def main():
         build_rust_services(build_mode)
         create_tmux_session()
         start_services()
-        create_dev_window(build_mode)
         attach_session()
         
     except subprocess.CalledProcessError as e:
