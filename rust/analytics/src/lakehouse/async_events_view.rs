@@ -115,7 +115,7 @@ impl View for AsyncEventsView {
             query_range.unwrap_or_else(|| TimeRange::new(process.start_time, chrono::Utc::now()));
 
         // Use all thread streams since async events are recorded in thread streams
-        let streams = list_process_streams_tagged(&lake.db_pool, process.process_id, "thread")
+        let streams = list_process_streams_tagged(&lake.db_pool, process.process_id, "cpu")
             .await
             .with_context(|| "list_process_streams_tagged")?;
         let mut all_partitions = vec![];

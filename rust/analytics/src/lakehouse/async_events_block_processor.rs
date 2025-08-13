@@ -7,7 +7,6 @@ use crate::{
     payload::fetch_block_payload,
     scope::ScopeDesc,
     thread_block_processor::{AsyncBlockProcessor, parse_async_block_payload},
-    time::make_time_converter_from_block_meta,
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -115,10 +114,7 @@ impl BlockProcessor for AsyncEventsBlockProcessor {
         blob_storage: Arc<BlobStorage>,
         src_block: Arc<PartitionSourceBlock>,
     ) -> Result<Option<PartitionRowSet>> {
-        let _convert_ticks =
-            make_time_converter_from_block_meta(&src_block.process, &src_block.block)?;
         let nb_async_events = src_block.block.nb_objects;
-
         let mut collector = AsyncEventCollector::new(
             nb_async_events as usize,
             src_block.process.clone(),
@@ -130,7 +126,6 @@ impl BlockProcessor for AsyncEventsBlockProcessor {
                 .timestamp_nanos_opt()
                 .unwrap_or_default(),
         );
-
         let payload = fetch_block_payload(
             blob_storage,
             src_block.process.process_id,
@@ -139,14 +134,12 @@ impl BlockProcessor for AsyncEventsBlockProcessor {
         )
         .await
         .with_context(|| "fetch_block_payload")?;
-
         let block_id_str = src_block
             .block
             .block_id
             .hyphenated()
             .encode_lower(&mut sqlx::types::uuid::Uuid::encode_buffer())
             .to_owned();
-
         parse_async_block_payload(
             &block_id_str,
             0,
@@ -155,7 +148,6 @@ impl BlockProcessor for AsyncEventsBlockProcessor {
             &mut collector,
         )
         .with_context(|| "parse_async_block_payload")?;
-
         if let Some(time_range) = collector.record_builder.get_time_range() {
             let record_batch = collector.record_builder.finish()?;
             Ok(Some(PartitionRowSet {
