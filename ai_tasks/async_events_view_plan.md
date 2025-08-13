@@ -138,7 +138,7 @@ pub struct AsyncEventRecordBuilder {
     pub parent_span_ids: PrimitiveBuilder<Int64Type>,
     pub event_types: StringDictionaryBuilder<Int16Type>, // "begin" | "end"
     pub timestamps: PrimitiveBuilder<TimestampNanosecondType>,
-    pub thread_ids: StringDictionaryBuilder<Int16Type>, // stream_id as string
+    pub stream_ids: StringDictionaryBuilder<Int16Type>, // stream_id as string
     pub names: StringDictionaryBuilder<Int16Type>,
     pub targets: StringDictionaryBuilder<Int16Type>,
     pub filenames: StringDictionaryBuilder<Int16Type>,
@@ -155,7 +155,7 @@ pub fn get_async_events_schema() -> Schema {
         Field::new("parent_span_id", DataType::Int64, true), // nullable for root spans
         Field::new("event_type", DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)), false),
         Field::new("time", DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into())), false),
-        Field::new("thread_id", DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)), false),
+        Field::new("stream_id", DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)), false),
         Field::new("name", DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)), false),
         Field::new("target", DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)), false),
         Field::new("filename", DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)), false),
@@ -181,6 +181,31 @@ Create a new function `parse_async_block_payload()` for async events:
 - Use similar pattern but with async-specific processor trait
 
 ```rust
+/// Helper function to extract async event fields (non-named)
+fn on_async_event<F>(obj: &Object, mut fun: F) -> Result<bool>
+where
+    F: FnMut(Arc<Object>, u64, u64, i64) -> Result<bool>,
+{
+    let span_id = obj.get::<u64>("span_id")?;
+    let parent_span_id = obj.get::<u64>("parent_span_id")?;
+    let time = obj.get::<i64>("time")?;
+    let span_desc = obj.get::<Arc<Object>>("span_desc")?;
+    fun(span_desc, span_id, parent_span_id, time)
+}
+
+/// Helper function to extract async named event fields  
+fn on_async_named_event<F>(obj: &Object, mut fun: F) -> Result<bool>
+where
+    F: FnMut(Arc<Object>, Arc<String>, u64, u64, i64) -> Result<bool>,
+{
+    let span_id = obj.get::<u64>("span_id")?;
+    let parent_span_id = obj.get::<u64>("parent_span_id")?; 
+    let time = obj.get::<i64>("time")?;
+    let span_location = obj.get::<Arc<Object>>("span_location")?;
+    let name = obj.get::<Arc<String>>("name")?;
+    fun(span_location, name, span_id, parent_span_id, time)
+}
+
 /// Parses async span events from a thread event block payload.
 #[span_fn]
 pub fn parse_async_block_payload<Proc: AsyncBlockProcessor>(
@@ -190,13 +215,68 @@ pub fn parse_async_block_payload<Proc: AsyncBlockProcessor>(
     stream: &micromegas_telemetry::stream_info::StreamInfo,
     processor: &mut Proc,
 ) -> Result<bool> {
-    // Process only async span events, ignore sync thread events
+    let mut event_id = object_offset;
+    parse_block(stream, payload, |val| {
+        let res = if let Value::Object(obj) = val {
+            match obj.type_name.as_str() {
+                "BeginAsyncSpanEvent" => on_async_event(&obj, |span_desc, span_id, parent_span_id, ts| {
+                    let name = span_desc.get::<Arc<String>>("name")?;
+                    let filename = span_desc.get::<Arc<String>>("file")?;
+                    let target = span_desc.get::<Arc<String>>("target")?;
+                    let line = span_desc.get::<u32>("line")?;
+                    let scope_desc = ScopeDesc::new(name, filename, target, line);
+                    processor.on_begin_async_scope(block_id, event_id, scope_desc, ts, span_id as i64, parent_span_id as i64)
+                })
+                .with_context(|| "reading BeginAsyncSpanEvent"),
+                "EndAsyncSpanEvent" => on_async_event(&obj, |span_desc, span_id, parent_span_id, ts| {
+                    let name = span_desc.get::<Arc<String>>("name")?;
+                    let filename = span_desc.get::<Arc<String>>("file")?;
+                    let target = span_desc.get::<Arc<String>>("target")?;
+                    let line = span_desc.get::<u32>("line")?;
+                    let scope_desc = ScopeDesc::new(name, filename, target, line);
+                    processor.on_end_async_scope(block_id, event_id, scope_desc, ts, span_id as i64, parent_span_id as i64)
+                })
+                .with_context(|| "reading EndAsyncSpanEvent"),
+                "BeginAsyncNamedSpanEvent" => on_async_named_event(&obj, |span_location, name, span_id, parent_span_id, ts| {
+                    let filename = span_location.get::<Arc<String>>("file")?;
+                    let target = span_location.get::<Arc<String>>("target")?;
+                    let line = span_location.get::<u32>("line")?;
+                    let scope_desc = ScopeDesc::new(name, filename, target, line);
+                    processor.on_begin_async_scope(block_id, event_id, scope_desc, ts, span_id as i64, parent_span_id as i64)
+                })
+                .with_context(|| "reading BeginAsyncNamedSpanEvent"),
+                "EndAsyncNamedSpanEvent" => on_async_named_event(&obj, |span_location, name, span_id, parent_span_id, ts| {
+                    let filename = span_location.get::<Arc<String>>("file")?;
+                    let target = span_location.get::<Arc<String>>("target")?;
+                    let line = span_location.get::<u32>("line")?;
+                    let scope_desc = ScopeDesc::new(name, filename, target, line);
+                    processor.on_end_async_scope(block_id, event_id, scope_desc, ts, span_id as i64, parent_span_id as i64)
+                })
+                .with_context(|| "reading EndAsyncNamedSpanEvent"),
+                "BeginThreadSpanEvent"
+                | "EndThreadSpanEvent" 
+                | "BeginThreadNamedSpanEvent"
+                | "EndThreadNamedSpanEvent" => {
+                    // Ignore thread span events as they are not relevant for async events view
+                    Ok(true)
+                }
+                event_type => {
+                    warn!("unknown event type {}", event_type);
+                    Ok(true)
+                }
+            }
+        } else {
+            Ok(true) // continue
+        };
+        event_id += 1;
+        res
+    })
 }
 
 /// Trait for processing async event blocks.
 pub trait AsyncBlockProcessor {
-    fn on_begin_async_scope(&mut self, block_id: &str, event_id: i64, scope: ScopeDesc, ts: i64, parent_span_id: i64) -> Result<bool>;
-    fn on_end_async_scope(&mut self, block_id: &str, event_id: i64, scope: ScopeDesc, ts: i64, span_id: i64) -> Result<bool>;
+    fn on_begin_async_scope(&mut self, block_id: &str, event_id: i64, scope: ScopeDesc, ts: i64, span_id: i64, parent_span_id: i64) -> Result<bool>;
+    fn on_end_async_scope(&mut self, block_id: &str, event_id: i64, scope: ScopeDesc, ts: i64, span_id: i64, parent_span_id: i64) -> Result<bool>;
 }
 ```
 
@@ -338,7 +418,7 @@ fn test_async_event_record_builder() {
         parent_span_id: Some(0), 
         event_type: "begin",
         timestamp: 1000000,
-        thread_id: "thread-1",
+        stream_id: "stream-1",
         name: "async_function",
         target: "my_module",
         filename: "test.rs",
@@ -381,12 +461,12 @@ fn test_cross_thread_async_tracking() {
     
     // Validate that async events show cross-thread execution
     let events = extract_async_events_from_sink(&sink);
-    let unique_threads: std::collections::HashSet<_> = events.iter()
-        .map(|e| &e.thread_id)
+    let unique_streams: std::collections::HashSet<_> = events.iter()
+        .map(|e| &e.stream_id)
         .collect();
         
-    // Should have events from multiple threads due to work stealing
-    assert!(unique_threads.len() > 1, "Expected cross-thread async execution");
+    // Should have events from multiple threads (streams) due to work stealing
+    assert!(unique_streams.len() > 1, "Expected cross-thread async execution");
 }
 ```
 
@@ -444,7 +524,7 @@ def test_async_events_query():
     
     # Query async events for this process
     sql = """
-    SELECT span_id, parent_span_id, event_type, time, thread_id, name, target
+    SELECT span_id, parent_span_id, event_type, time, stream_id, name, target
     FROM view_instance('async_events', '{process_id}')
     ORDER BY time
     LIMIT 10;
@@ -467,21 +547,21 @@ def test_async_events_cross_thread():
     assert len(processes) > 0, "No generator processes found - run telemetry generator first"
     process_id = processes.iloc[0]["process_id"]
     
-    # Query for async events across different threads
+    # Query for async events across different streams
     sql = """
-    SELECT DISTINCT thread_id, COUNT(*) as event_count
+    SELECT DISTINCT stream_id, COUNT(*) as event_count
     FROM view_instance('async_events', '{process_id}')
     WHERE event_type = 'begin'
-    GROUP BY thread_id
+    GROUP BY stream_id
     ORDER BY event_count DESC;
     """.format(process_id=process_id)
     
-    thread_summary = client.query(sql, begin, end)
-    print("Async events per thread:")
-    print(thread_summary)
+    stream_summary = client.query(sql, begin, end)
+    print("Async events per stream:")
+    print(stream_summary)
     
-    # Should have events from multiple threads
-    assert len(thread_summary) > 0, "Expected async events"
+    # Should have events from multiple streams
+    assert len(stream_summary) > 0, "Expected async events"
 
 def test_async_events_span_relationships():
     """Test parent-child relationships in async spans"""
@@ -526,7 +606,7 @@ def test_async_events_duration_analysis():
     
     # Calculate durations by matching begin/end events
     sql = """
-    SELECT begin_events.name, begin_events.thread_id,
+    SELECT begin_events.name, begin_events.stream_id,
            (end_events.time - begin_events.time) / 1000000 as duration_ms
     FROM 
         (SELECT * FROM view_instance('async_events', '{process_id}') 
@@ -551,4 +631,58 @@ def test_async_events_duration_analysis():
 - ✅ Duration calculation and performance analysis
 - ✅ Integration with existing micromegas Python client
 - ✅ Real data validation using view_instance() function
+
+## Plan Review: Inconsistencies and Missing Items
+
+### Inconsistencies Found
+
+1. **Global View Support Error**: The AsyncEventsView should reject "global" view_instance_id like ThreadSpansView does, not support it like LogView. Should return UUID parsing error for non-UUID strings.
+   - **✅ ADDRESSED**: Confirmed - AsyncEventsView should follow ThreadSpansView pattern exactly, rejecting global views and requiring explicit `view_instance('async_events', process_id)` calls.
+
+2. **Schema Mismatch**: The plan shows `thread_id` as a string field, but actual async span events don't contain explicit thread information - the thread context comes from which stream/thread emitted the event.
+   - **✅ ADDRESSED**: Confirmed - `thread_id` should be renamed to `stream_id` and is available from the block's metadata (which thread/stream emitted the async event).
+
+3. **Missing Parent Span ID Context**: The actual `BeginAsyncSpanEvent`/`EndAsyncSpanEvent` structures include `parent_span_id` fields, but the plan doesn't show how these will be parsed from the event objects.
+   - **✅ ADDRESSED**: Confirmed - all event fields including `parent_span_id` will be accessible to the processor for extraction.
+
+4. **Event Parsing Function Design**: The plan suggests creating `parse_async_block_payload()` but `parse_thread_block_payload()` already handles async events (ignores them). Should extend existing function rather than duplicate.
+   - **✅ ADDRESSED**: Confirmed - `parse_async_block_payload` will be a separate function that ignores thread events (like `parse_thread_block_payload` ignores async events). This maintains separation of concerns.
+
+### Missing Items Found
+
+1. **Missing Import Statements**: Plan doesn't specify imports needed for new structs (Arc, Result, ViewMaker trait, etc.)
+   - **✅ ADDRESSED**: Confirmed - compiling will surface import errors that can be fixed incrementally during implementation.
+
+2. **Missing Error Handling**: No mention of UUID parsing error handling in `AsyncEventsView::new()`
+   - **✅ ADDRESSED**: Confirmed - will rely on anyhow for error reporting by default, following existing codebase patterns.
+
+3. **Missing Integration Points**: 
+   - No mention of adding async events to view_factory.rs documentation
+   - Missing module declarations (`mod async_events_view;`)
+   - No pub use statements for exposing new types
+   - **✅ ADDRESSED**: 
+     - All documentation should be updated during implementation
+     - Module declarations will be added to the plan
+     - Most structs should be public by default since we're building an extensible library
+
+4. **Missing Async Event Parsing Logic**: Plan shows trait signatures but not actual parsing logic for extracting span_id, parent_span_id from event objects
+   - **✅ ADDRESSED**: Will add detailed parsing logic implementation to the plan showing how to extract all fields from async event objects.
+
+5. **Missing Test Dependencies**: Plan doesn't mention test utilities needed (`make_process_info`, `make_stream_info` functions)
+   - **✅ ADDRESSED**: Will handle test dependencies as needed during implementation - any utility we need we may add along the way.
+
+6. **Missing View Implementation**: Plan shows struct but not actual `View` trait implementation with `get_schema()`, `get_record_batches()`, etc.
+
+7. **Missing JIT Partition Logic**: No mention of how view will use JIT partitioning system like other views
+
+8. **Missing Stream Filtering**: Plan doesn't address filtering streams that contain async events vs other stream types
+
+### Corrections Needed Before Implementation
+
+- Follow ThreadSpansView pattern exactly for UUID-only parsing
+- Extend `parse_thread_block_payload` instead of creating separate function  
+- Add proper View trait implementation following existing patterns
+- Include all necessary imports and module declarations
+- Show actual async event object parsing logic
+- Address stream filtering and JIT partition integration
 
