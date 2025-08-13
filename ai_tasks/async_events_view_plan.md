@@ -120,8 +120,8 @@ where
 
 /// Trait for processing async event blocks.
 pub trait AsyncBlockProcessor {
-    fn on_begin_async_scope(&mut self, scope: ScopeDesc, ts: i64, span_id: i64, parent_span_id: i64) -> Result<bool>;
-    fn on_end_async_scope(&mut self, scope: ScopeDesc, ts: i64, span_id: i64, parent_span_id: i64) -> Result<bool>;
+    fn on_begin_async_scope(&mut self, block_id: &str, scope: ScopeDesc, ts: i64, span_id: i64, parent_span_id: i64) -> Result<bool>;
+    fn on_end_async_scope(&mut self, block_id: &str, scope: ScopeDesc, ts: i64, span_id: i64, parent_span_id: i64) -> Result<bool>;
 }
 
 /// Parses async span events from a thread event block payload.
@@ -142,7 +142,7 @@ pub fn parse_async_block_payload<Proc: AsyncBlockProcessor>(
                     let target = span_desc.get::<Arc<String>>("target")?;
                     let line = span_desc.get::<u32>("line")?;
                     let scope_desc = ScopeDesc::new(name, filename, target, line);
-                    processor.on_begin_async_scope(scope_desc, ts, span_id as i64, parent_span_id as i64)
+                    processor.on_begin_async_scope(block_id, scope_desc, ts, span_id as i64, parent_span_id as i64)
                 })
                 .with_context(|| "reading BeginAsyncSpanEvent"),
                 "EndAsyncSpanEvent" => on_async_event(&obj, |span_desc, span_id, parent_span_id, ts| {
@@ -151,7 +151,7 @@ pub fn parse_async_block_payload<Proc: AsyncBlockProcessor>(
                     let target = span_desc.get::<Arc<String>>("target")?;
                     let line = span_desc.get::<u32>("line")?;
                     let scope_desc = ScopeDesc::new(name, filename, target, line);
-                    processor.on_end_async_scope(scope_desc, ts, span_id as i64, parent_span_id as i64)
+                    processor.on_end_async_scope(block_id, scope_desc, ts, span_id as i64, parent_span_id as i64)
                 })
                 .with_context(|| "reading EndAsyncSpanEvent"),
                 "BeginAsyncNamedSpanEvent" => on_async_named_event(&obj, |span_location, name, span_id, parent_span_id, ts| {
@@ -159,7 +159,7 @@ pub fn parse_async_block_payload<Proc: AsyncBlockProcessor>(
                     let target = span_location.get::<Arc<String>>("target")?;
                     let line = span_location.get::<u32>("line")?;
                     let scope_desc = ScopeDesc::new(name, filename, target, line);
-                    processor.on_begin_async_scope(scope_desc, ts, span_id as i64, parent_span_id as i64)
+                    processor.on_begin_async_scope(block_id, scope_desc, ts, span_id as i64, parent_span_id as i64)
                 })
                 .with_context(|| "reading BeginAsyncNamedSpanEvent"),
                 "EndAsyncNamedSpanEvent" => on_async_named_event(&obj, |span_location, name, span_id, parent_span_id, ts| {
@@ -167,7 +167,7 @@ pub fn parse_async_block_payload<Proc: AsyncBlockProcessor>(
                     let target = span_location.get::<Arc<String>>("target")?;
                     let line = span_location.get::<u32>("line")?;
                     let scope_desc = ScopeDesc::new(name, filename, target, line);
-                    processor.on_end_async_scope(scope_desc, ts, span_id as i64, parent_span_id as i64)
+                    processor.on_end_async_scope(block_id, scope_desc, ts, span_id as i64, parent_span_id as i64)
                 })
                 .with_context(|| "reading EndAsyncNamedSpanEvent"),
                 "BeginThreadSpanEvent"
@@ -212,6 +212,7 @@ pub fn get_async_events_schema() -> Schema {
         Field::new("event_type", DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)), false),
         Field::new("time", DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into())), false),
         Field::new("stream_id", DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)), false),
+        Field::new("block_id", DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)), false),
         Field::new("name", DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)), false),
         Field::new("target", DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)), false),
         Field::new("filename", DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)), false),
@@ -698,6 +699,7 @@ pub fn get_async_events_schema() -> Schema {
         Field::new("event_type", DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)), false),
         Field::new("time", DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into())), false),
         Field::new("stream_id", DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)), false),
+        Field::new("block_id", DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)), false),
         Field::new("name", DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)), false),
         Field::new("target", DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)), false),
         Field::new("filename", DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)), false),
@@ -803,7 +805,7 @@ pub fn parse_async_block_payload<Proc: AsyncBlockProcessor>(
                     let target = span_desc.get::<Arc<String>>("target")?;
                     let line = span_desc.get::<u32>("line")?;
                     let scope_desc = ScopeDesc::new(name, filename, target, line);
-                    processor.on_begin_async_scope(scope_desc, ts, span_id as i64, parent_span_id as i64)
+                    processor.on_begin_async_scope(block_id, scope_desc, ts, span_id as i64, parent_span_id as i64)
                 })
                 .with_context(|| "reading BeginAsyncSpanEvent"),
                 "EndAsyncSpanEvent" => on_async_event(&obj, |span_desc, span_id, parent_span_id, ts| {
@@ -812,7 +814,7 @@ pub fn parse_async_block_payload<Proc: AsyncBlockProcessor>(
                     let target = span_desc.get::<Arc<String>>("target")?;
                     let line = span_desc.get::<u32>("line")?;
                     let scope_desc = ScopeDesc::new(name, filename, target, line);
-                    processor.on_end_async_scope(scope_desc, ts, span_id as i64, parent_span_id as i64)
+                    processor.on_end_async_scope(block_id, scope_desc, ts, span_id as i64, parent_span_id as i64)
                 })
                 .with_context(|| "reading EndAsyncSpanEvent"),
                 "BeginAsyncNamedSpanEvent" => on_async_named_event(&obj, |span_location, name, span_id, parent_span_id, ts| {
@@ -820,7 +822,7 @@ pub fn parse_async_block_payload<Proc: AsyncBlockProcessor>(
                     let target = span_location.get::<Arc<String>>("target")?;
                     let line = span_location.get::<u32>("line")?;
                     let scope_desc = ScopeDesc::new(name, filename, target, line);
-                    processor.on_begin_async_scope(scope_desc, ts, span_id as i64, parent_span_id as i64)
+                    processor.on_begin_async_scope(block_id, scope_desc, ts, span_id as i64, parent_span_id as i64)
                 })
                 .with_context(|| "reading BeginAsyncNamedSpanEvent"),
                 "EndAsyncNamedSpanEvent" => on_async_named_event(&obj, |span_location, name, span_id, parent_span_id, ts| {
@@ -828,7 +830,7 @@ pub fn parse_async_block_payload<Proc: AsyncBlockProcessor>(
                     let target = span_location.get::<Arc<String>>("target")?;
                     let line = span_location.get::<u32>("line")?;
                     let scope_desc = ScopeDesc::new(name, filename, target, line);
-                    processor.on_end_async_scope(scope_desc, ts, span_id as i64, parent_span_id as i64)
+                    processor.on_end_async_scope(block_id, scope_desc, ts, span_id as i64, parent_span_id as i64)
                 })
                 .with_context(|| "reading EndAsyncNamedSpanEvent"),
                 "BeginThreadSpanEvent"
@@ -851,8 +853,8 @@ pub fn parse_async_block_payload<Proc: AsyncBlockProcessor>(
 
 /// Trait for processing async event blocks.
 pub trait AsyncBlockProcessor {
-    fn on_begin_async_scope(&mut self, scope: ScopeDesc, ts: i64, span_id: i64, parent_span_id: i64) -> Result<bool>;
-    fn on_end_async_scope(&mut self, scope: ScopeDesc, ts: i64, span_id: i64, parent_span_id: i64) -> Result<bool>;
+    fn on_begin_async_scope(&mut self, block_id: &str, scope: ScopeDesc, ts: i64, span_id: i64, parent_span_id: i64) -> Result<bool>;
+    fn on_end_async_scope(&mut self, block_id: &str, scope: ScopeDesc, ts: i64, span_id: i64, parent_span_id: i64) -> Result<bool>;
 }
 ```
 

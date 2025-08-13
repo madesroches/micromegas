@@ -1,10 +1,10 @@
+use anyhow::Result;
 use micromegas_analytics::{
     async_events_table::{AsyncEventRecord, AsyncEventRecordBuilder, async_events_table_schema},
     lakehouse::{async_events_view::AsyncEventsView, view::View},
     scope::ScopeDesc,
     thread_block_processor::AsyncBlockProcessor,
 };
-use anyhow::Result;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -81,10 +81,10 @@ impl AsyncBlockProcessor for TestAsyncProcessor {
 #[test]
 fn test_async_events_table_schema() {
     let schema = async_events_table_schema();
-    
+
     // Verify all expected fields are present
     let field_names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
-    
+
     assert!(field_names.contains(&"process_id"));
     assert!(field_names.contains(&"stream_id"));
     assert!(field_names.contains(&"block_id"));
@@ -101,7 +101,7 @@ fn test_async_events_table_schema() {
     assert!(field_names.contains(&"target"));
     assert!(field_names.contains(&"line"));
     assert!(field_names.contains(&"process_properties"));
-    
+
     // Verify we have the expected number of fields
     assert_eq!(field_names.len(), 16);
 }
@@ -109,12 +109,12 @@ fn test_async_events_table_schema() {
 #[test]
 fn test_async_event_record_builder() {
     let mut builder = AsyncEventRecordBuilder::with_capacity(2);
-    
+
     let process_id = uuid::Uuid::new_v4();
     let mut properties = HashMap::new();
     properties.insert("key1".to_string(), "value1".to_string());
     properties.insert("key2".to_string(), "value2".to_string());
-    
+
     let record1 = AsyncEventRecord {
         process_id,
         stream_id: Arc::new("stream1".to_string()),
@@ -133,7 +133,7 @@ fn test_async_event_record_builder() {
         line: 42,
         process_properties: properties.clone(),
     };
-    
+
     let record2 = AsyncEventRecord {
         process_id,
         stream_id: Arc::new("stream1".to_string()),
@@ -152,31 +152,31 @@ fn test_async_event_record_builder() {
         line: 42,
         process_properties: properties,
     };
-    
+
     // Test appending records
     builder.append(&record1).expect("Failed to append record1");
     builder.append(&record2).expect("Failed to append record2");
-    
+
     // Test record count
     assert_eq!(builder.len(), 2);
     assert!(!builder.is_empty());
-    
+
     // Test time range
     let time_range = builder.get_time_range().expect("Should have time range");
     assert_eq!(time_range.begin.timestamp_nanos_opt().unwrap(), 2000000000);
     assert_eq!(time_range.end.timestamp_nanos_opt().unwrap(), 3000000000);
-    
+
     // Test building the record batch
     let batch = builder.finish().expect("Failed to build record batch");
     assert_eq!(batch.num_rows(), 2);
     assert_eq!(batch.num_columns(), 16);
 }
 
-#[test] 
+#[test]
 fn test_async_events_view_creation() {
     let process_id = uuid::Uuid::new_v4();
     let view = AsyncEventsView::new(&process_id.to_string()).expect("Failed to create view");
-    
+
     assert_eq!(*view.get_view_set_name(), "async_events");
     assert_eq!(*view.get_view_instance_id(), process_id.to_string());
 }
@@ -185,7 +185,12 @@ fn test_async_events_view_creation() {
 fn test_async_events_view_global_rejection() {
     let result = AsyncEventsView::new("global");
     assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("does not support global view access"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("does not support global view access")
+    );
 }
 
 #[test]
@@ -197,33 +202,49 @@ fn test_async_events_view_invalid_uuid() {
 #[test]
 fn test_async_block_processor_trait() {
     let mut processor = TestAsyncProcessor::new();
-    
+
     let _scope = ScopeDesc::new(
         Arc::new("test_function".to_string()),
         Arc::new("test.rs".to_string()),
         Arc::new("test_target".to_string()),
         42,
     );
-    
-    // Test begin event  
-    processor.on_begin_async_scope("block123", ScopeDesc::new(
-        Arc::new("test_function".to_string()),
-        Arc::new("test.rs".to_string()),
-        Arc::new("test_target".to_string()),
-        42,
-    ), 1000, 1, 0).expect("Failed to process begin event");
-        
+
+    // Test begin event
+    processor
+        .on_begin_async_scope(
+            "block123",
+            ScopeDesc::new(
+                Arc::new("test_function".to_string()),
+                Arc::new("test.rs".to_string()),
+                Arc::new("test_target".to_string()),
+                42,
+            ),
+            1000,
+            1,
+            0,
+        )
+        .expect("Failed to process begin event");
+
     // Test end event
-    processor.on_end_async_scope("block123", ScopeDesc::new(
-        Arc::new("test_function".to_string()),
-        Arc::new("test.rs".to_string()),
-        Arc::new("test_target".to_string()),
-        42,
-    ), 2000, 1, 0).expect("Failed to process end event");
-    
+    processor
+        .on_end_async_scope(
+            "block123",
+            ScopeDesc::new(
+                Arc::new("test_function".to_string()),
+                Arc::new("test.rs".to_string()),
+                Arc::new("test_target".to_string()),
+                42,
+            ),
+            2000,
+            1,
+            0,
+        )
+        .expect("Failed to process end event");
+
     // Verify events were recorded
     assert_eq!(processor.events.len(), 2);
-    
+
     let begin_event = &processor.events[0];
     assert_eq!(begin_event.event_type, "begin");
     assert_eq!(begin_event.scope_name, "test_function");
@@ -234,7 +255,7 @@ fn test_async_block_processor_trait() {
     assert_eq!(begin_event.span_id, 1);
     assert_eq!(begin_event.parent_span_id, 0);
     assert_eq!(begin_event.block_id, "block123");
-    
+
     let end_event = &processor.events[1];
     assert_eq!(end_event.event_type, "end");
     assert_eq!(end_event.span_id, 1);
@@ -244,11 +265,11 @@ fn test_async_block_processor_trait() {
 #[test]
 fn test_empty_record_builder() {
     let builder = AsyncEventRecordBuilder::with_capacity(0);
-    
+
     assert_eq!(builder.len(), 0);
     assert!(builder.is_empty());
     assert!(builder.get_time_range().is_none());
-    
+
     let batch = builder.finish().expect("Failed to build empty batch");
     assert_eq!(batch.num_rows(), 0);
     assert_eq!(batch.num_columns(), 16);
@@ -258,14 +279,18 @@ fn test_empty_record_builder() {
 fn test_async_events_view_schema_consistency() {
     let process_id = uuid::Uuid::new_v4();
     let view = AsyncEventsView::new(&process_id.to_string()).expect("Failed to create view");
-    
+
     let view_schema = view.get_file_schema();
     let table_schema = Arc::new(async_events_table_schema());
-    
+
     // Schemas should be identical
     assert_eq!(view_schema.fields().len(), table_schema.fields().len());
-    
-    for (view_field, table_field) in view_schema.fields().iter().zip(table_schema.fields().iter()) {
+
+    for (view_field, table_field) in view_schema
+        .fields()
+        .iter()
+        .zip(table_schema.fields().iter())
+    {
         assert_eq!(view_field.name(), table_field.name());
         assert_eq!(view_field.data_type(), table_field.data_type());
         assert_eq!(view_field.is_nullable(), table_field.is_nullable());
@@ -280,7 +305,7 @@ fn test_scope_desc_creation() {
         Arc::new("module::target".to_string()),
         123,
     );
-    
+
     assert_eq!(*scope.name, "function_name");
     assert_eq!(*scope.filename, "file.rs");
     assert_eq!(*scope.target, "module::target");
