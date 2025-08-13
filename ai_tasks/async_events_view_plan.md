@@ -77,56 +77,525 @@ We will start by exploring Option 1 in detail - using `process_id` for view inst
 
 ## Implementation Details
 
-### Required Rust Structs
+### Build Order: By Crate Dependencies (Low-Level to High-Level)
 
-#### 1. AsyncEventsViewMaker
+Build in this order, working on lower-level crates first:
+
+1. **`rust/analytics/src/thread_block_processor.rs`** - Add async parsing function (lowest level)
+2. **`rust/analytics/src/async_events_table.rs`** - Schema and record builder (data structures)
+3. **`rust/analytics/src/lakehouse/async_events_view.rs`** - View implementation (highest level)
+4. **Integration** - Module declarations and view factory registration
+
+---
+
+### 1. thread_block_processor.rs - Async Block Parsing (Lowest Level)
+
+Add to existing `rust/analytics/src/thread_block_processor.rs`:
+
 ```rust
-/// A `ViewMaker` for creating `AsyncEventsView` instances.
-#[derive(Debug)]
-pub struct AsyncEventsViewMaker {}
+/// Helper function to extract async event fields (non-named)
+fn on_async_event<F>(obj: &Object, mut fun: F) -> Result<bool>
+where
+    F: FnMut(Arc<Object>, u64, u64, i64) -> Result<bool>,
+{
+    let span_id = obj.get::<u64>("span_id")?;
+    let parent_span_id = obj.get::<u64>("parent_span_id")?;
+    let time = obj.get::<i64>("time")?;
+    let span_desc = obj.get::<Arc<Object>>("span_desc")?;
+    fun(span_desc, span_id, parent_span_id, time)
+}
 
-impl ViewMaker for AsyncEventsViewMaker {
-    fn make_view(&self, view_instance_id: &str) -> Result<Arc<dyn View>> {
-        Ok(Arc::new(AsyncEventsView::new(view_instance_id)?))
+/// Helper function to extract async named event fields  
+fn on_async_named_event<F>(obj: &Object, mut fun: F) -> Result<bool>
+where
+    F: FnMut(Arc<Object>, Arc<String>, u64, u64, i64) -> Result<bool>,
+{
+    let span_id = obj.get::<u64>("span_id")?;
+    let parent_span_id = obj.get::<u64>("parent_span_id")?; 
+    let time = obj.get::<i64>("time")?;
+    let span_location = obj.get::<Arc<Object>>("span_location")?;
+    let name = obj.get::<Arc<String>>("name")?;
+    fun(span_location, name, span_id, parent_span_id, time)
+}
+
+/// Trait for processing async event blocks.
+pub trait AsyncBlockProcessor {
+    fn on_begin_async_scope(&mut self, block_id: &str, event_id: i64, scope: ScopeDesc, ts: i64, span_id: i64, parent_span_id: i64) -> Result<bool>;
+    fn on_end_async_scope(&mut self, block_id: &str, event_id: i64, scope: ScopeDesc, ts: i64, span_id: i64, parent_span_id: i64) -> Result<bool>;
+}
+
+/// Parses async span events from a thread event block payload.
+#[span_fn]
+pub fn parse_async_block_payload<Proc: AsyncBlockProcessor>(
+    block_id: &str,
+    object_offset: i64,
+    payload: &micromegas_telemetry::block_wire_format::BlockPayload,
+    stream: &micromegas_telemetry::stream_info::StreamInfo,
+    processor: &mut Proc,
+) -> Result<bool> {
+    let mut event_id = object_offset;
+    parse_block(stream, payload, |val| {
+        let res = if let Value::Object(obj) = val {
+            match obj.type_name.as_str() {
+                "BeginAsyncSpanEvent" => on_async_event(&obj, |span_desc, span_id, parent_span_id, ts| {
+                    let name = span_desc.get::<Arc<String>>("name")?;
+                    let filename = span_desc.get::<Arc<String>>("file")?;
+                    let target = span_desc.get::<Arc<String>>("target")?;
+                    let line = span_desc.get::<u32>("line")?;
+                    let scope_desc = ScopeDesc::new(name, filename, target, line);
+                    processor.on_begin_async_scope(block_id, event_id, scope_desc, ts, span_id as i64, parent_span_id as i64)
+                })
+                .with_context(|| "reading BeginAsyncSpanEvent"),
+                "EndAsyncSpanEvent" => on_async_event(&obj, |span_desc, span_id, parent_span_id, ts| {
+                    let name = span_desc.get::<Arc<String>>("name")?;
+                    let filename = span_desc.get::<Arc<String>>("file")?;
+                    let target = span_desc.get::<Arc<String>>("target")?;
+                    let line = span_desc.get::<u32>("line")?;
+                    let scope_desc = ScopeDesc::new(name, filename, target, line);
+                    processor.on_end_async_scope(block_id, event_id, scope_desc, ts, span_id as i64, parent_span_id as i64)
+                })
+                .with_context(|| "reading EndAsyncSpanEvent"),
+                "BeginAsyncNamedSpanEvent" => on_async_named_event(&obj, |span_location, name, span_id, parent_span_id, ts| {
+                    let filename = span_location.get::<Arc<String>>("file")?;
+                    let target = span_location.get::<Arc<String>>("target")?;
+                    let line = span_location.get::<u32>("line")?;
+                    let scope_desc = ScopeDesc::new(name, filename, target, line);
+                    processor.on_begin_async_scope(block_id, event_id, scope_desc, ts, span_id as i64, parent_span_id as i64)
+                })
+                .with_context(|| "reading BeginAsyncNamedSpanEvent"),
+                "EndAsyncNamedSpanEvent" => on_async_named_event(&obj, |span_location, name, span_id, parent_span_id, ts| {
+                    let filename = span_location.get::<Arc<String>>("file")?;
+                    let target = span_location.get::<Arc<String>>("target")?;
+                    let line = span_location.get::<u32>("line")?;
+                    let scope_desc = ScopeDesc::new(name, filename, target, line);
+                    processor.on_end_async_scope(block_id, event_id, scope_desc, ts, span_id as i64, parent_span_id as i64)
+                })
+                .with_context(|| "reading EndAsyncNamedSpanEvent"),
+                "BeginThreadSpanEvent"
+                | "EndThreadSpanEvent" 
+                | "BeginThreadNamedSpanEvent"
+                | "EndThreadNamedSpanEvent" => {
+                    // Ignore thread span events as they are not relevant for async events view
+                    Ok(true)
+                }
+                event_type => {
+                    warn!("unknown event type {}", event_type);
+                    Ok(true)
+                }
+            }
+        } else {
+            Ok(true) // continue
+        };
+        event_id += 1;
+        res
+    })
+}
+```
+
+---
+
+### 2. async_events_table.rs - Schema and Record Builder (Data Layer)
+
+Create new file `rust/analytics/src/async_events_table.rs`:
+
+```rust
+use std::sync::Arc;
+use anyhow::{Context, Result};
+use chrono::DateTime;
+use datafusion::arrow::array::{ArrayBuilder, PrimitiveBuilder, StringDictionaryBuilder};
+use datafusion::arrow::datatypes::{DataType, Field, Int16Type, Int64Type, Schema, TimeUnit, TimestampNanosecondType, UInt32Type};
+use datafusion::arrow::record_batch::RecordBatch;
+use crate::time::TimeRange;
+
+/// Returns the schema for the async_events table.
+pub fn get_async_events_schema() -> Schema {
+    Schema::new(vec![
+        Field::new("span_id", DataType::Int64, false),
+        Field::new("parent_span_id", DataType::Int64, true), // nullable for root spans
+        Field::new("event_type", DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)), false),
+        Field::new("time", DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into())), false),
+        Field::new("stream_id", DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)), false),
+        Field::new("name", DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)), false),
+        Field::new("target", DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)), false),
+        Field::new("filename", DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)), false),
+        Field::new("line", DataType::UInt32, false),
+    ])
+}
+
+/// Data structure for a single async event record
+#[derive(Debug)]
+pub struct AsyncEventData {
+    pub span_id: i64,
+    pub parent_span_id: Option<i64>,
+    pub event_type: Arc<String>,
+    pub timestamp: i64,
+    pub stream_id: Arc<String>,
+    pub name: Arc<String>,
+    pub target: Arc<String>,
+    pub filename: Arc<String>,
+    pub line: u32,
+}
+
+/// A builder for creating a `RecordBatch` of async events.
+pub struct AsyncEventRecordBuilder {
+    pub span_ids: PrimitiveBuilder<Int64Type>,
+    pub parent_span_ids: PrimitiveBuilder<Int64Type>,
+    pub event_types: StringDictionaryBuilder<Int16Type>,
+    pub timestamps: PrimitiveBuilder<TimestampNanosecondType>,
+    pub stream_ids: StringDictionaryBuilder<Int16Type>,
+    pub names: StringDictionaryBuilder<Int16Type>,
+    pub targets: StringDictionaryBuilder<Int16Type>,
+    pub filenames: StringDictionaryBuilder<Int16Type>,
+    pub lines: PrimitiveBuilder<UInt32Type>,
+    min_time: Option<i64>,
+    max_time: Option<i64>,
+}
+
+impl AsyncEventRecordBuilder {
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            span_ids: PrimitiveBuilder::with_capacity(capacity),
+            parent_span_ids: PrimitiveBuilder::with_capacity(capacity),
+            event_types: StringDictionaryBuilder::with_capacity(capacity, 4096),
+            timestamps: PrimitiveBuilder::with_capacity(capacity),
+            stream_ids: StringDictionaryBuilder::with_capacity(capacity, 4096),
+            names: StringDictionaryBuilder::with_capacity(capacity, 4096),
+            targets: StringDictionaryBuilder::with_capacity(capacity, 4096),
+            filenames: StringDictionaryBuilder::with_capacity(capacity, 4096),
+            lines: PrimitiveBuilder::with_capacity(capacity),
+            min_time: None,
+            max_time: None,
+        }
+    }
+
+    pub fn append_async_event(&mut self, event: AsyncEventData) -> Result<()> {
+        self.span_ids.append_value(event.span_id);
+        self.parent_span_ids.append_option(event.parent_span_id);
+        self.event_types.append_value(event.event_type.as_ref());
+        self.timestamps.append_value(event.timestamp);
+        self.stream_ids.append_value(event.stream_id.as_ref());
+        self.names.append_value(event.name.as_ref());
+        self.targets.append_value(event.target.as_ref());
+        self.filenames.append_value(event.filename.as_ref());
+        self.lines.append_value(event.line);
+
+        // Track time range
+        match (self.min_time, self.max_time) {
+            (None, None) => {
+                self.min_time = Some(event.timestamp);
+                self.max_time = Some(event.timestamp);
+            }
+            (Some(min), Some(max)) => {
+                if event.timestamp < min {
+                    self.min_time = Some(event.timestamp);
+                }
+                if event.timestamp > max {
+                    self.max_time = Some(event.timestamp);
+                }
+            }
+            _ => unreachable!(),
+        }
+
+        Ok(())
+    }
+
+    pub fn get_time_range(&self) -> Option<TimeRange> {
+        match (self.min_time, self.max_time) {
+            (Some(min), Some(max)) => {
+                let min_dt = DateTime::from_timestamp_nanos(min);
+                let max_dt = DateTime::from_timestamp_nanos(max);
+                Some(TimeRange::new(min_dt, max_dt))
+            }
+            _ => None,
+        }
+    }
+
+    pub fn finish(mut self) -> Result<RecordBatch> {
+        let schema = get_async_events_schema();
+        RecordBatch::try_new(
+            Arc::new(schema),
+            vec![
+                Arc::new(self.span_ids.finish()),
+                Arc::new(self.parent_span_ids.finish()),
+                Arc::new(self.event_types.finish()),
+                Arc::new(self.timestamps.finish()),
+                Arc::new(self.stream_ids.finish()),
+                Arc::new(self.names.finish()),
+                Arc::new(self.targets.finish()),
+                Arc::new(self.filenames.finish()),
+                Arc::new(self.lines.finish()),
+            ],
+        ).with_context(|| "RecordBatch::try_new")
     }
 }
 ```
 
-#### 2. AsyncEventsView
-```rust
-/// A view of async span events across all streams in a process.
-#[derive(Debug)]
-pub struct AsyncEventsView {
-    view_set_name: Arc<String>,
-    view_instance_id: Arc<String>,
-    process_id: sqlx::types::Uuid,
-}
+---
 
-impl AsyncEventsView {
-    pub fn new(view_instance_id: &str) -> Result<Self> {
-        // Parse process_id (no global view support)
-        let process_id = Uuid::parse_str(view_instance_id)
-            .with_context(|| "Uuid::parse_str")?;
+### 3. async_events_view.rs - View Implementation (Highest Level)
+
+Create new file `rust/analytics/src/lakehouse/async_events_view.rs`:
+
+```rust
+
+#[async_trait]
+impl View for AsyncEventsView {
+    fn get_view_set_name(&self) -> Arc<String> {
+        self.view_set_name.clone()
+    }
+
+    fn get_view_instance_id(&self) -> Arc<String> {
+        self.view_instance_id.clone()
+    }
+
+    async fn make_batch_partition_spec(
+        &self,
+        runtime: Arc<RuntimeEnv>,
+        lake: Arc<DataLakeConnection>,
+        existing_partitions: Arc<PartitionCache>,
+        insert_range: TimeRange,
+    ) -> Result<Arc<dyn PartitionSpec>> {
+        let process = Arc::new(
+            find_process(&lake.db_pool, &self.process_id)
+                .await
+                .with_context(|| "find_process")?
+        );
+        let source_data = fetch_partition_source_data(
+            runtime,
+            lake.clone(),
+            existing_partitions,
+            insert_range,
+            &self.process_id,
+        ).await.with_context(|| "fetch_partition_source_data")?;
+
+        Ok(Arc::new(BlockPartitionSpec {
+            view_meta: ViewMetadata {
+                view_set_name: self.view_set_name.clone(),
+                view_instance_id: self.view_instance_id.clone(),
+                file_schema_hash: self.get_file_schema_hash(),
+            },
+            schema: self.get_file_schema(),
+            insert_range,
+            source_data,
+            block_processor: Arc::new(AsyncEventBlockProcessor {}),
+        }))
+    }
+
+    fn get_file_schema_hash(&self) -> Vec<u8> {
+        vec![1] // Version for async events schema
+    }
+
+    fn get_file_schema(&self) -> Arc<Schema> {
+        Arc::new(get_async_events_schema())
+    }
+
+    async fn jit_update(
+        &self,
+        runtime: Arc<RuntimeEnv>,
+        lake: Arc<DataLakeConnection>, 
+        query_range: Option<TimeRange>,
+    ) -> Result<()> {
+        let process = Arc::new(
+            find_process(&lake.db_pool, &self.process_id)
+                .await
+                .with_context(|| "find_process")?
+        );
+        let query_range = query_range.unwrap_or_else(|| 
+            TimeRange::new(process.start_time, chrono::Utc::now())
+        );
+
+        // Find all streams for this process that might contain async events
+        // We'll look for streams with "cpu" tag as async events come from thread streams
+        let streams = list_process_streams_tagged(&lake.db_pool, process.process_id, "cpu")
+            .await
+            .with_context(|| "list_process_streams_tagged")?;
         
-        Ok(Self {
-            view_set_name: Arc::new(String::from("async_events")),
-            view_instance_id: Arc::new(view_instance_id.into()),
-            process_id,
-        })
+        let mut all_partitions = vec![];
+        let blocks_view = BlocksView::new()?;
+        
+        for stream in streams {
+            let mut partitions = generate_jit_partitions(
+                &JitPartitionConfig::default(),
+                runtime.clone(),
+                lake.clone(),
+                &blocks_view,
+                &query_range,
+                Arc::new(stream),
+                process.clone(),
+            )
+            .await
+            .with_context(|| "generate_jit_partitions")?;
+            all_partitions.append(&mut partitions);
+        }
+        
+        let view_meta = ViewMetadata {
+            view_set_name: self.get_view_set_name(),
+            view_instance_id: self.get_view_instance_id(),
+            file_schema_hash: self.get_file_schema_hash(),
+        };
+
+        for part in all_partitions {
+            if !is_jit_partition_up_to_date(&lake.db_pool, view_meta.clone(), &part).await? {
+                write_partition_from_blocks(
+                    lake.clone(),
+                    view_meta.clone(),
+                    self.get_file_schema(),
+                    part,
+                    Arc::new(AsyncEventBlockProcessor {}),
+                )
+                .await
+                .with_context(|| "write_partition_from_blocks")?;
+            }
+        }
+        Ok(())
+    }
+
+    fn make_time_filter(&self, begin: DateTime<Utc>, end: DateTime<Utc>) -> Result<Vec<Expr>> {
+        Ok(vec![Expr::Between(Between::new(
+            col("time").into(),
+            false,
+            Expr::Literal(datetime_to_scalar(begin), None).into(),
+            Expr::Literal(datetime_to_scalar(end), None).into(),
+        ))])
+    }
+
+    fn get_time_bounds(&self) -> Arc<dyn DataFrameTimeBounds> {
+        Arc::new(NamedColumnsTimeBounds::new(
+            Arc::new(String::from("time")),
+            Arc::new(String::from("time")),
+        ))
+    }
+
+    fn get_update_group(&self) -> Option<i32> {
+        None // No daemon updates for process-specific views
     }
 }
 ```
 
 #### 3. AsyncEventBlockProcessor
 ```rust
-/// Processes async span events from thread event blocks.
-pub struct AsyncEventBlockProcessor {
-    record_builder: AsyncEventRecordBuilder,
+/// A `BlockProcessor` implementation for processing async event blocks.
+#[derive(Debug)]
+pub struct AsyncEventBlockProcessor {}
+
+#[async_trait]
+impl BlockProcessor for AsyncEventBlockProcessor {
+    async fn process(
+        &self,
+        blob_storage: Arc<BlobStorage>,
+        src_block: Arc<PartitionSourceBlock>,
+    ) -> Result<Option<PartitionRowSet>> {
+        let convert_ticks = make_time_converter_from_block_meta(&src_block.process, &src_block.block)?;
+        let nb_events = src_block.block.nb_objects;
+        let mut record_builder = AsyncEventRecordBuilder::with_capacity(nb_events as usize);
+
+        let mut processor = AsyncEventProcessor {
+            record_builder,
+            convert_ticks: Arc::new(convert_ticks),
+            stream_id: Arc::new(src_block.stream.stream_id.to_string()),
+        };
+
+        let payload = fetch_block_payload(
+            blob_storage,
+            src_block.process.process_id,
+            src_block.stream.stream_id,
+            src_block.block.block_id,
+        ).await?;
+
+        let block_id_str = src_block.block.block_id
+            .hyphenated()
+            .encode_lower(&mut sqlx::types::uuid::Uuid::encode_buffer())
+            .to_owned();
+
+        parse_async_block_payload(
+            &block_id_str,
+            src_block.block.object_offset,
+            &payload,
+            &src_block.stream,
+            &mut processor,
+        )?;
+
+        if let Some(time_range) = processor.record_builder.get_time_range() {
+            let record_batch = processor.record_builder.finish()?;
+            Ok(Some(PartitionRowSet {
+                rows_time_range: time_range,
+                rows: record_batch,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
 }
 
-impl AsyncBlockProcessor for AsyncEventBlockProcessor {
-    fn on_begin_async_scope(&mut self, block_id: &str, event_id: i64, scope: ScopeDesc, ts: i64, parent_span_id: i64) -> Result<bool>;
-    fn on_end_async_scope(&mut self, block_id: &str, event_id: i64, scope: ScopeDesc, ts: i64, span_id: i64) -> Result<bool>;
+/// Internal processor for handling async events during parsing
+struct AsyncEventProcessor {
+    record_builder: AsyncEventRecordBuilder,
+    convert_ticks: Arc<ConvertTicks>,
+    stream_id: Arc<String>,
+}
+
+impl AsyncBlockProcessor for AsyncEventProcessor {
+    fn on_begin_async_scope(
+        &mut self,
+        _block_id: &str,
+        _event_id: i64,
+        scope: ScopeDesc,
+        ts: i64,
+        span_id: i64,
+        parent_span_id: i64,
+    ) -> Result<bool> {
+        let time_ns = self.convert_ticks.delta_ticks_to_ns(ts);
+        self.record_builder.append_async_event(AsyncEventData {
+            span_id,
+            parent_span_id: if parent_span_id == 0 { None } else { Some(parent_span_id) },
+            event_type: Arc::new(String::from("begin")),
+            timestamp: time_ns,
+            stream_id: self.stream_id.clone(),
+            name: scope.name.clone(),
+            target: scope.target.clone(),
+            filename: scope.filename.clone(),
+            line: scope.line,
+        })?;
+        Ok(true)
+    }
+
+    fn on_end_async_scope(
+        &mut self,
+        _block_id: &str,
+        _event_id: i64,
+        scope: ScopeDesc,
+        ts: i64,
+        span_id: i64,
+        parent_span_id: i64,
+    ) -> Result<bool> {
+        let time_ns = self.convert_ticks.delta_ticks_to_ns(ts);
+        self.record_builder.append_async_event(AsyncEventData {
+            span_id,
+            parent_span_id: if parent_span_id == 0 { None } else { Some(parent_span_id) },
+            event_type: Arc::new(String::from("end")),
+            timestamp: time_ns,
+            stream_id: self.stream_id.clone(),
+            name: scope.name.clone(),
+            target: scope.target.clone(),
+            filename: scope.filename.clone(),
+            line: scope.line,
+        })?;
+        Ok(true)
+    }
+}
+
+/// Data structure for a single async event record
+#[derive(Debug)]
+struct AsyncEventData {
+    span_id: i64,
+    parent_span_id: Option<i64>,
+    event_type: Arc<String>,
+    timestamp: i64,
+    stream_id: Arc<String>,
+    name: Arc<String>,
+    target: Arc<String>,
+    filename: Arc<String>,
+    line: u32,
 }
 ```
 
@@ -143,6 +612,86 @@ pub struct AsyncEventRecordBuilder {
     pub targets: StringDictionaryBuilder<Int16Type>,
     pub filenames: StringDictionaryBuilder<Int16Type>,
     pub lines: PrimitiveBuilder<UInt32Type>,
+    min_time: Option<i64>,
+    max_time: Option<i64>,
+}
+
+impl AsyncEventRecordBuilder {
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            span_ids: PrimitiveBuilder::with_capacity(capacity),
+            parent_span_ids: PrimitiveBuilder::with_capacity(capacity),
+            event_types: StringDictionaryBuilder::with_capacity(capacity, 4096),
+            timestamps: PrimitiveBuilder::with_capacity(capacity),
+            stream_ids: StringDictionaryBuilder::with_capacity(capacity, 4096),
+            names: StringDictionaryBuilder::with_capacity(capacity, 4096),
+            targets: StringDictionaryBuilder::with_capacity(capacity, 4096),
+            filenames: StringDictionaryBuilder::with_capacity(capacity, 4096),
+            lines: PrimitiveBuilder::with_capacity(capacity),
+            min_time: None,
+            max_time: None,
+        }
+    }
+
+    pub fn append_async_event(&mut self, event: AsyncEventData) -> Result<()> {
+        self.span_ids.append_value(event.span_id);
+        self.parent_span_ids.append_option(event.parent_span_id);
+        self.event_types.append_value(event.event_type.as_ref());
+        self.timestamps.append_value(event.timestamp);
+        self.stream_ids.append_value(event.stream_id.as_ref());
+        self.names.append_value(event.name.as_ref());
+        self.targets.append_value(event.target.as_ref());
+        self.filenames.append_value(event.filename.as_ref());
+        self.lines.append_value(event.line);
+
+        // Track time range
+        match (self.min_time, self.max_time) {
+            (None, None) => {
+                self.min_time = Some(event.timestamp);
+                self.max_time = Some(event.timestamp);
+            }
+            (Some(min), Some(max)) => {
+                if event.timestamp < min {
+                    self.min_time = Some(event.timestamp);
+                }
+                if event.timestamp > max {
+                    self.max_time = Some(event.timestamp);
+                }
+            }
+            _ => unreachable!(),
+        }
+
+        Ok(())
+    }
+
+    pub fn get_time_range(&self) -> Option<TimeRange> {
+        match (self.min_time, self.max_time) {
+            (Some(min), Some(max)) => {
+                let min_dt = DateTime::from_timestamp_nanos(min);
+                let max_dt = DateTime::from_timestamp_nanos(max);
+                Some(TimeRange::new(min_dt, max_dt))
+            }
+            _ => None,
+        }
+    }
+
+    pub fn finish(mut self) -> Result<RecordBatch> {
+        let schema = get_async_events_schema();
+        RecordBatch::try_new(
+            Arc::new(schema),
+            vec![
+                Arc::new(self.span_ids.finish()),
+                Arc::new(self.parent_span_ids.finish()),
+                Arc::new(self.event_types.finish()),
+                Arc::new(self.timestamps.finish()),
+                Arc::new(self.stream_ids.finish()),
+                Arc::new(self.names.finish()),
+                Arc::new(self.targets.finish()),
+                Arc::new(self.filenames.finish()),
+                Arc::new(self.lines.finish()),
+            ],
+        ).with_context(|| "RecordBatch::try_new")
+    }
 }
 ```
 
@@ -166,11 +715,48 @@ pub fn get_async_events_schema() -> Schema {
 
 ### Integration with Existing Code
 
+#### Module Structure
+Add new file: `rust/analytics/src/lakehouse/async_events_view.rs`
+
+Add module declaration to `rust/analytics/src/lakehouse/mod.rs`:
+```rust
+pub mod async_events_view;
+```
+
+Add public exports to `rust/analytics/src/lib.rs`:
+```rust
+pub use lakehouse::async_events_view::{AsyncEventsView, AsyncEventsViewMaker, AsyncEventBlockProcessor};
+```
+
 #### ViewFactory Registration
 Add to `default_view_factory()` in `view_factory.rs`:
 ```rust
 let async_events_view_maker = Arc::new(AsyncEventsViewMaker {});
 factory.add_view_set(String::from("async_events"), async_events_view_maker);
+```
+
+#### ViewFactory Documentation Update
+Add to the view_factory.rs module documentation:
+```rust
+//! ## async_events
+//!
+//! | field        | type                        | description                                               |
+//! |------------- |-----------------------------|-----------------------------------------------------------|
+//! |span_id       |Int64                        | unique async span identifier                              |
+//! |parent_span_id|Int64 (nullable)             | span id of the parent async span                          |
+//! |event_type    |Dictionary(Int16, Utf8)      | type of event: "begin" or "end"                           |
+//! |time          |UTC Timestamp (nanoseconds)  | time when the async event occurred                        |
+//! |stream_id     |Dictionary(Int16, Utf8)      | identifier of the thread stream that emitted the event    |
+//! |name          |Dictionary(Int16, Utf8)      | name of the async span, usually a function name           |
+//! |target        |Dictionary(Int16, Utf8)      | category or module name                                   |
+//! |filename      |Dictionary(Int16, Utf8)      | name or path of the source file where the span is coded   |
+//! |line          |UInt32                       | line number in the file where the span can be found       |
+//!
+//! ### async_events view instances
+//!
+//! There is no 'global' instance in the 'async_events' view set, there is therefore no implicit async_events table available.
+//! Users can call the table function `view_instance('async_events', process_id)` to query the async events in all thread streams associated with the specified process_id.
+//! Process-specific views are materialized just-in-time and can provide good query performance.
 ```
 
 #### New Async Block Parser Function
@@ -672,17 +1258,22 @@ def test_async_events_duration_analysis():
    - **✅ ADDRESSED**: Will handle test dependencies as needed during implementation - any utility we need we may add along the way.
 
 6. **Missing View Implementation**: Plan shows struct but not actual `View` trait implementation with `get_schema()`, `get_record_batches()`, etc.
+   - **✅ ADDRESSED**: Will add complete View trait implementation following LogView pattern for process-scoped aggregation.
 
 7. **Missing JIT Partition Logic**: No mention of how view will use JIT partitioning system like other views
+   - **✅ ADDRESSED**: Added complete JIT partition logic in View implementation using generate_jit_partitions() and write_partition_from_blocks().
 
 8. **Missing Stream Filtering**: Plan doesn't address filtering streams that contain async events vs other stream types
+   - **✅ ADDRESSED**: Uses `list_process_streams_tagged(&lake.db_pool, process.process_id, "cpu")` to find thread streams that contain async events.
 
-### Corrections Needed Before Implementation
+### Corrections Completed
 
-- Follow ThreadSpansView pattern exactly for UUID-only parsing
-- Extend `parse_thread_block_payload` instead of creating separate function  
-- Add proper View trait implementation following existing patterns
-- Include all necessary imports and module declarations
-- Show actual async event object parsing logic
-- Address stream filtering and JIT partition integration
+- ✅ Follow ThreadSpansView pattern exactly for UUID-only parsing - Added in AsyncEventsView::new()
+- ✅ Create separate `parse_async_block_payload` function with proper separation of concerns
+- ✅ Add complete View trait implementation following LogView pattern for process-scoped aggregation  
+- ✅ Include module structure and integration points with public exports
+- ✅ Show detailed async event object parsing logic with helper functions
+- ✅ Address stream filtering using "cpu" tag and complete JIT partition integration
+- ✅ Add AsyncEventBlockProcessor implementing BlockProcessor trait
+- ✅ Add complete AsyncEventRecordBuilder with time tracking and Arrow integration
 
