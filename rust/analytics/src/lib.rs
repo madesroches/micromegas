@@ -7,6 +7,8 @@
 pub mod arrow_properties;
 /// Misc arrow utilities
 pub mod arrow_utils;
+/// In-memory async events in arrow format
+pub mod async_events_table;
 /// Transforms thread events into call trees
 pub mod call_tree;
 /// Removal of old data

@@ -140,8 +140,8 @@ use super::blocks_view::BlocksView;
 use super::processes_view::make_processes_view;
 use super::streams_view::make_streams_view;
 use super::{
-    log_view::LogViewMaker, metrics_view::MetricsViewMaker,
-    thread_spans_view::ThreadSpansViewMaker, view::View,
+    async_events_view::AsyncEventsViewMaker, log_view::LogViewMaker,
+    metrics_view::MetricsViewMaker, thread_spans_view::ThreadSpansViewMaker, view::View,
 };
 use anyhow::Result;
 use datafusion::execution::runtime_env::RuntimeEnv;
@@ -235,6 +235,10 @@ pub async fn default_view_factory(
     factory.add_view_set(
         String::from("thread_spans"),
         Arc::new(ThreadSpansViewMaker {}),
+    );
+    factory.add_view_set(
+        String::from("async_events"),
+        Arc::new(AsyncEventsViewMaker {}),
     );
     Ok(factory)
 }
