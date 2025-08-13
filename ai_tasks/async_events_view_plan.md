@@ -3,6 +3,40 @@
 ## Overview
 Plan for implementing a view to visualize and analyze async events in the micromegas telemetry system.
 
+## Current Status
+✅ **IMPLEMENTATION COMPLETE** - Core functionality has been implemented:
+- `async_events_table.rs` - Schema and record builder
+- `lakehouse/async_events_view.rs` - View implementation following process-scoped pattern
+- `lakehouse/async_events_block_processor.rs` - Block processor for parsing async events
+- `thread_block_processor.rs` - Extended with async event parsing functions
+- View factory registration - AsyncEventsViewMaker added to default_view_factory
+
+## Remaining Tasks
+
+### 🎯 Next Steps (In Priority Order)
+
+1. **📝 Add Documentation** - Add async_events view documentation to `rust/analytics/src/lakehouse/view_factory.rs`
+   - Add schema documentation table following existing pattern
+   - Document view instance usage with `view_instance('async_events', process_id)`
+   - Add to module comments
+
+2. **🧪 Create Test Suite** - Following patterns from existing tests:
+   - Unit tests for `AsyncEventRecordBuilder` in `async_events_table.rs`
+   - Integration tests for view creation and block processing
+   - Cross-thread async flow validation tests
+   - Mock data generation for consistent test scenarios
+
+3. **🐍 Python Integration Tests** - Add to `python/micromegas/tests/`:
+   - End-to-end async events querying tests 
+   - Cross-thread async execution validation
+   - Parent-child span relationship analysis
+   - Duration calculation and performance analysis
+
+4. **🔧 Validation** - Ensure implementation works correctly:
+   - Format check: `cargo fmt` (required before commit)
+   - Build validation: `cargo build` from rust/ directory  
+   - Test validation: `cargo test` with async events tests
+
 ## Goals
 - Provide visibility into async operation lifecycles
 - Track async call stacks and execution flow
@@ -63,28 +97,30 @@ Modern async runtimes (tokio, async-std) commonly:
 
 This suggests **process_id** might provide more valuable insights for async debugging and analysis.
 
-## Current Direction: Exploring Option 1 (process_id)
+## ✅ COMPLETED: Option 1 Implementation (process_id)
 
-We will start by exploring Option 1 in detail - using `process_id` for view instance keying. This approach aligns with the cross-process nature of async operations and provides a comprehensive view of async execution flow within a process boundary.
+**IMPLEMENTED** - Using `process_id` for view instance keying following LogView/MetricsView pattern:
+- Process-scoped async event aggregation across all thread streams ✅
+- Proper UUID parsing with global view rejection ✅ 
+- Integration with JIT partitioning system ✅
+- Uses `list_process_streams_tagged()` to find CPU streams ✅
 
-### Next Steps for Option 1 Implementation:
-1. Design async events view following LogView/MetricsView pattern (process-scoped keying)
-2. Implement process-scoped async event aggregation across all thread streams
-3. Evaluate performance and usability
-4. Compare results with Option 2 if needed
+**Implementation Details**:
+- Follows ThreadSpansView pattern for UUID parsing but LogView pattern for cross-stream aggregation
+- Aggregates data from **all thread streams** within a process (like LogView/MetricsView) 
+- Provides complete async execution flow across the entire process
 
-**Note**: The implementation will also be similar to ThreadSpansView since async span events are collected in the same thread streams. The key difference is aggregating data from **all thread streams** within a process (like LogView/MetricsView) rather than filtering to a single stream (like ThreadSpansView).
+## ✅ COMPLETED Implementation
 
-## Implementation Details
+### ✅ Build Order Completed
 
-### Build Order: By Crate Dependencies (Low-Level to High-Level)
+All implementation files have been created and integrated:
 
-Build in this order, working on lower-level crates first:
-
-1. **`rust/analytics/src/thread_block_processor.rs`** - Add async parsing function (lowest level)
-2. **`rust/analytics/src/async_events_table.rs`** - Schema and record builder (data structures)
-3. **`rust/analytics/src/lakehouse/async_events_view.rs`** - View implementation (highest level)
-4. **Integration** - Module declarations and view factory registration
+1. ✅ **`rust/analytics/src/thread_block_processor.rs`** - Async parsing functions added
+2. ✅ **`rust/analytics/src/async_events_table.rs`** - Schema and record builder implemented
+3. ✅ **`rust/analytics/src/lakehouse/async_events_block_processor.rs`** - Block processor implemented
+4. ✅ **`rust/analytics/src/lakehouse/async_events_view.rs`** - View implementation completed
+5. ✅ **Integration** - Module declarations and view factory registration completed
 
 ---
 
