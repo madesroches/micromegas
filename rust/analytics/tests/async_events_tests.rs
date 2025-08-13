@@ -5,7 +5,6 @@ use micromegas_analytics::{
     scope::ScopeDesc,
     thread_block_processor::AsyncBlockProcessor,
 };
-use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Test implementation of AsyncBlockProcessor for testing
@@ -82,16 +81,11 @@ impl AsyncBlockProcessor for TestAsyncProcessor {
 fn test_async_events_table_schema() {
     let schema = async_events_table_schema();
 
-    // Verify all expected fields are present
+    // Verify all expected fields are present in optimized schema
     let field_names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
 
-    assert!(field_names.contains(&"process_id"));
     assert!(field_names.contains(&"stream_id"));
     assert!(field_names.contains(&"block_id"));
-    assert!(field_names.contains(&"insert_time"));
-    assert!(field_names.contains(&"exe"));
-    assert!(field_names.contains(&"username"));
-    assert!(field_names.contains(&"computer"));
     assert!(field_names.contains(&"time"));
     assert!(field_names.contains(&"event_type"));
     assert!(field_names.contains(&"span_id"));
@@ -100,29 +94,19 @@ fn test_async_events_table_schema() {
     assert!(field_names.contains(&"filename"));
     assert!(field_names.contains(&"target"));
     assert!(field_names.contains(&"line"));
-    assert!(field_names.contains(&"process_properties"));
 
-    // Verify we have the expected number of fields
-    assert_eq!(field_names.len(), 16);
+    // Verify we have the expected number of fields (optimized for high-frequency data)
+    assert_eq!(field_names.len(), 10);
 }
 
 #[test]
 fn test_async_event_record_builder() {
     let mut builder = AsyncEventRecordBuilder::with_capacity(2);
 
-    let process_id = uuid::Uuid::new_v4();
-    let mut properties = HashMap::new();
-    properties.insert("key1".to_string(), "value1".to_string());
-    properties.insert("key2".to_string(), "value2".to_string());
-
+    // Create optimized async event records (no process fields)
     let record1 = AsyncEventRecord {
-        process_id,
         stream_id: Arc::new("stream1".to_string()),
         block_id: Arc::new("block1".to_string()),
-        insert_time: 1000000000,
-        exe: Arc::new("test_exe".to_string()),
-        username: Arc::new("test_user".to_string()),
-        computer: Arc::new("test_computer".to_string()),
         time: 2000000000,
         event_type: Arc::new("begin".to_string()),
         span_id: 1,
@@ -131,17 +115,11 @@ fn test_async_event_record_builder() {
         filename: Arc::new("test.rs".to_string()),
         target: Arc::new("test_target".to_string()),
         line: 42,
-        process_properties: properties.clone(),
     };
 
     let record2 = AsyncEventRecord {
-        process_id,
         stream_id: Arc::new("stream1".to_string()),
         block_id: Arc::new("block1".to_string()),
-        insert_time: 1000000000,
-        exe: Arc::new("test_exe".to_string()),
-        username: Arc::new("test_user".to_string()),
-        computer: Arc::new("test_computer".to_string()),
         time: 3000000000,
         event_type: Arc::new("end".to_string()),
         span_id: 1,
@@ -150,7 +128,6 @@ fn test_async_event_record_builder() {
         filename: Arc::new("test.rs".to_string()),
         target: Arc::new("test_target".to_string()),
         line: 42,
-        process_properties: properties,
     };
 
     // Test appending records
@@ -166,10 +143,10 @@ fn test_async_event_record_builder() {
     assert_eq!(time_range.begin.timestamp_nanos_opt().unwrap(), 2000000000);
     assert_eq!(time_range.end.timestamp_nanos_opt().unwrap(), 3000000000);
 
-    // Test building the record batch
+    // Test building the record batch (optimized schema has 10 columns)
     let batch = builder.finish().expect("Failed to build record batch");
     assert_eq!(batch.num_rows(), 2);
-    assert_eq!(batch.num_columns(), 16);
+    assert_eq!(batch.num_columns(), 10);
 }
 
 #[test]
@@ -272,7 +249,7 @@ fn test_empty_record_builder() {
 
     let batch = builder.finish().expect("Failed to build empty batch");
     assert_eq!(batch.num_rows(), 0);
-    assert_eq!(batch.num_columns(), 16);
+    assert_eq!(batch.num_columns(), 10);
 }
 
 #[test]

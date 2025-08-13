@@ -4,12 +4,37 @@
 Plan for implementing a view to visualize and analyze async events in the micromegas telemetry system.
 
 ## Current Status
-✅ **IMPLEMENTATION COMPLETE** - Core functionality has been implemented:
-- `async_events_table.rs` - Schema and record builder
+✅ **IMPLEMENTATION COMPLETE** - Core functionality has been implemented and optimized:
+- `async_events_table.rs` - Minimal schema and record builder optimized for high-frequency data
 - `lakehouse/async_events_view.rs` - View implementation following process-scoped pattern
 - `lakehouse/async_events_block_processor.rs` - Block processor for parsing async events
 - `thread_block_processor.rs` - Extended with async event parsing functions
 - View factory registration - AsyncEventsViewMaker added to default_view_factory
+
+**🚀 High-Frequency Optimization Applied**: Removed redundant process fields (exe, username, computer, process_properties, insert_time, process_id) from records to minimize storage overhead. Process information can be joined via streams -> processes when needed for queries.
+
+### Optimized Schema
+The final async events schema contains only essential high-frequency data:
+
+```sql
+-- Core async event data (minimal storage)
+stream_id       | Dictionary(Int16, Utf8) | Thread stream identifier
+block_id        | Dictionary(Int16, Utf8) | Block identifier  
+time            | Timestamp(Nanosecond)   | Event timestamp
+event_type      | Dictionary(Int16, Utf8) | "begin" or "end"
+span_id         | Int64                   | Async span identifier
+parent_span_id  | Int64                   | Parent span identifier
+name            | Dictionary(Int16, Utf8) | Span name (function)
+filename        | Dictionary(Int16, Utf8) | Source file
+target          | Dictionary(Int16, Utf8) | Module/target
+line            | UInt32                  | Line number
+
+-- Process info available via JOIN:
+-- SELECT ae.*, p.exe, p.username, p.computer 
+-- FROM view_instance('async_events', process_id) ae
+-- JOIN streams s ON ae.stream_id = s.stream_id  
+-- JOIN processes p ON s.process_id = p.process_id
+```
 
 ## Remaining Tasks
 

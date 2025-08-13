@@ -1,6 +1,6 @@
 [workspace]
 members = ["*"]
-exclude = ["target"]
+exclude = ["target", ".claude", ".*"]
 resolver = "2"
 
 
