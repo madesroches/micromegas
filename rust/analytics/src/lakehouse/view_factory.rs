@@ -69,6 +69,35 @@
 //! There is no 'global' instance in the 'thread_spans' view set, there is therefore no implicit thread_spans table availble.
 //! Users can call the table function `view_instance('thread_spans', stream_id)` to query the spans in the thread associated with the specified stream_id.
 //!
+//! ## async_events
+//!
+//! | field        | type                        | description                                               |
+//! |------------- |-----------------------------|-----------------------------------------------------------|
+//! |stream_id     |Dictionary(Int16, Utf8)      | identifier of the thread stream that emitted the event   |
+//! |block_id      |Dictionary(Int16, Utf8)      | unique identifier of the event block                     |
+//! |time          |UTC Timestamp (nanoseconds)  | time when the async event occurred                       |
+//! |event_type    |Dictionary(Int16, Utf8)      | type of event: "begin" or "end"                          |
+//! |span_id       |Int64                        | unique async span identifier                             |
+//! |parent_span_id|Int64                        | span id of the parent async span                         |
+//! |name          |Dictionary(Int16, Utf8)      | name of the async span, usually a function name          |
+//! |filename      |Dictionary(Int16, Utf8)      | name or path of the source file where the span is coded  |
+//! |target        |Dictionary(Int16, Utf8)      | category or module name                                   |
+//! |line          |UInt32                       | line number in the file where the span can be found      |
+//!
+//! ### async_events view instances
+//!
+//! There is no 'global' instance in the 'async_events' view set, there is therefore no implicit async_events table available.
+//! Users can call the table function `view_instance('async_events', process_id)` to query the async events in all thread streams associated with the specified process_id.
+//! Process-specific views are materialized just-in-time and can provide good query performance.
+//!
+//! The schema is optimized for high-frequency data. Process information (exe, username, computer, etc.) can be joined when needed:
+//! ```sql
+//! SELECT ae.*, p.exe, p.username, p.computer
+//! FROM view_instance('async_events', process_id) ae
+//! JOIN streams s ON ae.stream_id = s.stream_id  
+//! JOIN processes p ON s.process_id = p.process_id
+//! ```
+//!
 //! ## processes
 //!
 //! | field        | type                        | description                                                |

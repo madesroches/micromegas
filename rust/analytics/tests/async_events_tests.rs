@@ -288,3 +288,145 @@ fn test_scope_desc_creation() {
     assert_eq!(*scope.target, "module::target");
     assert_eq!(scope.line, 123);
 }
+
+#[test]
+fn test_async_events_high_frequency_performance() {
+    // Test with high-frequency async events to validate performance optimization
+    let mut builder = AsyncEventRecordBuilder::with_capacity(10000);
+
+    // Generate many records to test performance
+    for i in 0..1000 {
+        let record = AsyncEventRecord {
+            stream_id: Arc::new(format!("stream_{}", i % 10)),
+            block_id: Arc::new(format!("block_{}", i / 100)),
+            time: 1000000000 + i,
+            event_type: Arc::new(if i % 2 == 0 {
+                "begin".to_string()
+            } else {
+                "end".to_string()
+            }),
+            span_id: (i / 2) as i64,
+            parent_span_id: if i > 0 { (i / 4) as i64 } else { 0 },
+            name: Arc::new(format!("async_fn_{}", i % 5)),
+            filename: Arc::new(format!("src/lib_{}.rs", i % 3)),
+            target: Arc::new(format!("module_{}", i % 7)),
+            line: (i % 1000) as u32 + 1,
+        };
+        builder
+            .append(&record)
+            .expect(&format!("Failed to append record {}", i));
+    }
+
+    // Verify all records were added
+    assert_eq!(builder.len(), 1000);
+    assert!(!builder.is_empty());
+
+    // Test time range calculation
+    let time_range = builder.get_time_range().expect("Should have time range");
+    assert_eq!(time_range.begin.timestamp_nanos_opt().unwrap(), 1000000000);
+    assert_eq!(time_range.end.timestamp_nanos_opt().unwrap(), 1000000999);
+
+    // Test batch creation with many records
+    let batch = builder.finish().expect("Failed to build large batch");
+    assert_eq!(batch.num_rows(), 1000);
+    assert_eq!(batch.num_columns(), 10);
+}
+
+#[test]
+fn test_async_events_cross_stream_scenarios() {
+    // Test scenarios where async operations span multiple streams (threads)
+    let mut builder = AsyncEventRecordBuilder::with_capacity(6);
+
+    // Simulate async task that moves between threads
+    let records = vec![
+        // Task starts on stream 1
+        AsyncEventRecord {
+            stream_id: Arc::new("stream_001".to_string()),
+            block_id: Arc::new("block_a".to_string()),
+            time: 1000,
+            event_type: Arc::new("begin".to_string()),
+            span_id: 100,
+            parent_span_id: 0,
+            name: Arc::new("async_task".to_string()),
+            filename: Arc::new("worker.rs".to_string()),
+            target: Arc::new("worker".to_string()),
+            line: 42,
+        },
+        // Subtask starts on stream 2 (work stealing)
+        AsyncEventRecord {
+            stream_id: Arc::new("stream_002".to_string()),
+            block_id: Arc::new("block_b".to_string()),
+            time: 1100,
+            event_type: Arc::new("begin".to_string()),
+            span_id: 101,
+            parent_span_id: 100,
+            name: Arc::new("subtask".to_string()),
+            filename: Arc::new("worker.rs".to_string()),
+            target: Arc::new("worker".to_string()),
+            line: 55,
+        },
+        // Subtask ends on stream 2
+        AsyncEventRecord {
+            stream_id: Arc::new("stream_002".to_string()),
+            block_id: Arc::new("block_c".to_string()),
+            time: 1200,
+            event_type: Arc::new("end".to_string()),
+            span_id: 101,
+            parent_span_id: 100,
+            name: Arc::new("subtask".to_string()),
+            filename: Arc::new("worker.rs".to_string()),
+            target: Arc::new("worker".to_string()),
+            line: 55,
+        },
+        // Main task continues on stream 1
+        AsyncEventRecord {
+            stream_id: Arc::new("stream_001".to_string()),
+            block_id: Arc::new("block_d".to_string()),
+            time: 1300,
+            event_type: Arc::new("end".to_string()),
+            span_id: 100,
+            parent_span_id: 0,
+            name: Arc::new("async_task".to_string()),
+            filename: Arc::new("worker.rs".to_string()),
+            target: Arc::new("worker".to_string()),
+            line: 42,
+        },
+    ];
+
+    for record in &records {
+        builder.append(record).expect("Failed to append record");
+    }
+
+    let batch = builder
+        .finish()
+        .expect("Failed to build cross-stream batch");
+    assert_eq!(batch.num_rows(), 4);
+
+    // This demonstrates how cross-stream async flows are captured
+    // in the process-scoped view, which is critical for async debugging
+}
+
+#[test]
+fn test_async_events_view_maker_integration() {
+    use micromegas_analytics::lakehouse::{
+        async_events_view::AsyncEventsViewMaker, view_factory::ViewMaker,
+    };
+
+    let maker = AsyncEventsViewMaker {};
+    let process_id = uuid::Uuid::new_v4();
+
+    // Test valid process ID
+    let view = maker
+        .make_view(&process_id.to_string())
+        .expect("Failed to create view with valid process ID");
+    assert_eq!(*view.get_view_set_name(), "async_events");
+    assert_eq!(*view.get_view_instance_id(), process_id.to_string());
+
+    // Test global rejection
+    let global_result = maker.make_view("global");
+    assert!(global_result.is_err());
+
+    // Test invalid UUID rejection
+    let invalid_result = maker.make_view("not-a-uuid");
+    assert!(invalid_result.is_err());
+}
