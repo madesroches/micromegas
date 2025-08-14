@@ -64,6 +64,7 @@ If additional work is ever needed:
 3. **Migration Guide:** Detailed guide for users moving from PyPI docs
 4. **Advanced Analytics:** More complex aggregation and windowing examples
 5. **Performance Benchmarks:** Quantified performance comparisons
+6. **Move HTML build scripts:** Move any scripts that build documentation into HTML into the repository next to the documentation itself (currently in GitHub Actions workflow)
 
 ### 🏁 **Conclusion**
 The documentation project is **COMPLETE** and successfully delivers:
