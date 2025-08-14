@@ -33,7 +33,10 @@ jobs:
         mkdir -p public_docs/rustdoc
         cp -r rust/target/doc/* public_docs/rustdoc/
         
-        # Copy markdown files and convert to HTML
+        # Copy all documentation files first
+        cp -r doc public_docs/
+        
+        # Then create HTML version of SQL documentation
         mkdir -p public_docs/how_to_query
         
         # Convert main SQL documentation to HTML using Python
