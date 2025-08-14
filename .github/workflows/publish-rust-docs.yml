@@ -25,30 +25,29 @@ jobs:
       run: cargo doc --workspace --no-deps
       working-directory: rust/
 
-    - name: Install Python markdown converter
-      run: pip install markdown
+    - name: Install MkDocs and dependencies
+      run: pip install -r docs-requirements.txt
       
     - name: Prepare staging directory
       run: |
         mkdir -p public_docs/rustdoc
         cp -r rust/target/doc/* public_docs/rustdoc/
         
-        # Copy all documentation files first
-        cp -r doc public_docs/
+        # Build MkDocs documentation
+        mkdocs build --site-dir public_docs/docs
         
-        # Build HTML documentation using repository script
-        cd doc && python build-html.py && cd ..
+        # Copy legacy doc files for existing links
+        mkdir -p public_docs/doc
+        cp -r doc/* public_docs/doc/
         
-        # Copy generated HTML to publishing directory
-        cp -r doc/how_to_query/html/* public_docs/how_to_query/
-        
-        # Create main index
+        # Create main index that redirects to MkDocs
         cat > public_docs/index.html << 'EOF'
         <!DOCTYPE html>
         <html>
         <head>
             <meta charset="UTF-8">
             <title>Micromegas Documentation</title>
+            <meta http-equiv="refresh" content="0; url=docs/">
             <style>
                 body { 
                     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -73,14 +72,19 @@ jobs:
         </head>
         <body>
             <h1>Micromegas Documentation</h1>
-            <p>Choose the documentation you want to view:</p>
-            <a href="how_to_query/" class="docs-link">
-                <h3>📊 SQL Query Documentation</h3>
-                <p>Complete guide to querying telemetry data</p>
+            <p>Redirecting to documentation...</p>
+            <p>If you're not redirected, choose:</p>
+            <a href="docs/" class="docs-link">
+                <h3>📚 User Documentation</h3>
+                <p>Complete guides and references</p>
             </a>
             <a href="rustdoc/" class="docs-link">
                 <h3>🦀 Rust API Documentation</h3>
                 <p>Generated API documentation for Rust crates</p>
+            </a>
+            <a href="doc/" class="docs-link">
+                <h3>📄 Legacy Documentation</h3>
+                <p>Original documentation files</p>
             </a>
         </body>
         </html>
