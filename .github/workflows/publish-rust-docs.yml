@@ -30,6 +30,26 @@ jobs:
         mkdir -p public_docs/rustdoc
         cp -r rust/target/doc/* public_docs/rustdoc/
         cp -r doc public_docs/
+        
+        # Create index.html that redirects to SQL docs
+        cat > public_docs/index.html << 'EOF'
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <title>Micromegas Documentation</title>
+            <meta http-equiv="refresh" content="0; url=how_to_query/">
+        </head>
+        <body>
+            <h1>Micromegas Documentation</h1>
+            <p><a href="how_to_query/">SQL Query Documentation</a></p>
+            <p><a href="rustdoc/">Rust API Documentation</a></p>
+        </body>
+        </html>
+        EOF
+        
+        # Enable Jekyll rendering for markdown files
+        touch public_docs/_config.yml
 
     - name: Deploy to GitHub Pages
       uses: peaceiris/actions-gh-pages@v4
