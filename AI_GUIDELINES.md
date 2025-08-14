@@ -19,6 +19,7 @@
 - Keep commit messages short
 - **Commit Messages**: NEVER include AI-generated credits or co-author tags in commit messages
 - **Pull Requests**: Always run `git log --oneline main..HEAD` before creating PRs to list all commits in the branch
+- **Line Endings**: Always use Unix line endings (LF) in all files
 
 ## Project Structure
 - Main Cargo.toml is located at `rust/Cargo.toml`

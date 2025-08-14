@@ -42,9 +42,10 @@ print(f"Result type: {type(logs)}")  # pandas.DataFrame
 ```
 
 **Key points:**
-- Always specify a time range (`begin`, `end`) for performance
+- **⚡ Important**: Always specify time range via API parameters (`begin`, `end`) for best performance
 - Results are returned as pandas DataFrames
 - `level <= 4` filters to show errors and warnings (see [log levels](#log-levels))
+- Use API time parameters instead of SQL time filters for partition elimination
 
 ## Understanding Return Types
 

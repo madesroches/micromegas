@@ -50,24 +50,37 @@ Execute a SQL query and return results as a pandas DataFrame.
 
 **Parameters:**
 - `sql` (str): SQL query string
-- `begin` (datetime, optional): Start time for query range
-- `end` (datetime, optional): End time for query range
+- `begin` (datetime, optional): **⚡ Recommended** - Start time for partition elimination
+- `end` (datetime, optional): **⚡ Recommended** - End time for partition elimination
 
 **Returns:**
 - `pandas.DataFrame`: Query results
 
+**Performance Note:**
+Using `begin` and `end` parameters instead of SQL time filters allows the analytics server to eliminate entire partitions before query execution, providing significant performance improvements.
+
 **Example:**
 ```python
-# Query with time range (recommended)
+# ✅ EFFICIENT: API time range enables partition elimination
 df = client.query("""
     SELECT time, process_id, level, msg
     FROM log_entries
     WHERE level <= 3
     ORDER BY time DESC
     LIMIT 100;
-""", begin, end)
+""", begin, end)  # ⭐ Time range in API parameters
 
-# Query without time range (use carefully)
+# ❌ INEFFICIENT: SQL time filter scans all partitions
+df = client.query("""
+    SELECT time, process_id, level, msg
+    FROM log_entries
+    WHERE time >= NOW() - INTERVAL '1 hour'  -- Server scans ALL partitions
+      AND level <= 3
+    ORDER BY time DESC
+    LIMIT 100;
+""")  # Missing API time parameters!
+
+# ✅ OK: Query without time range (for metadata queries)
 processes = client.query("SELECT process_id, exe FROM processes LIMIT 10;")
 ```
 
@@ -77,8 +90,8 @@ Execute a SQL query and return results as a stream of Apache Arrow RecordBatch o
 
 **Parameters:**
 - `sql` (str): SQL query string  
-- `begin` (datetime, optional): Start time for query range
-- `end` (datetime, optional): End time for query range
+- `begin` (datetime, optional): **⚡ Recommended** - Start time for partition elimination
+- `end` (datetime, optional): **⚡ Recommended** - End time for partition elimination
 
 **Returns:**
 - Iterator of `pyarrow.RecordBatch`: Stream of result batches

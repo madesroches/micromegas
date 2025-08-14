@@ -4,20 +4,42 @@ Guidelines for writing efficient Micromegas SQL queries and avoiding common perf
 
 ## Critical Performance Rules
 
-### 1. Always Use Time Ranges
+### 1. Always Use Time Ranges (via Python API)
 
-**❌ Avoid:**
-```sql
--- Queries entire dataset - can be slow and memory-intensive
-SELECT COUNT(*) FROM log_entries;
+**⚡ Performance Tip:** Always specify time ranges through the Python API parameters, not in SQL WHERE clauses.
+
+**❌ Inefficient - SQL time filter:**
+```python
+# Analytics server scans ALL partitions, then filters in SQL
+sql = """
+    SELECT COUNT(*) FROM log_entries 
+    WHERE time >= NOW() - INTERVAL '1 hour';
+"""
+result = client.query(sql)  # No time range parameters!
 ```
 
-**✅ Good:**
-```sql
--- Queries specific time window - fast and memory-efficient
-SELECT COUNT(*) FROM log_entries
-WHERE time >= NOW() - INTERVAL '1 hour';
+**✅ Efficient - API time range:**
+```python
+import datetime
+
+# Analytics server eliminates irrelevant partitions BEFORE query execution
+now = datetime.datetime.now(datetime.timezone.utc)
+begin = now - datetime.timedelta(hours=1)
+end = now
+
+sql = "SELECT COUNT(*) FROM log_entries;"
+result = client.query(sql, begin, end)  # ⭐ Time range in API
 ```
+
+**Why API time ranges are faster:**
+- **Partition Elimination**: Analytics server removes entire partitions from consideration before SQL execution
+- **Metadata Optimization**: Uses partition metadata to skip irrelevant data files  
+- **Memory Efficiency**: Only loads relevant data into query engine memory
+- **Network Efficiency**: Transfers only relevant data over FlightSQL
+
+**Performance Impact:**
+- API time range: Query considers only 1-2 partitions
+- SQL time filter: Query scans all partitions, then filters millions of rows
 
 ### 2. Use Process-Scoped Views
 
