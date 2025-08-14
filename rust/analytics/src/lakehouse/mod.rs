@@ -1,5 +1,9 @@
 /// Record batches + schema
 pub mod answer;
+/// Implementation of `BlockProcessor` for async events
+pub mod async_events_block_processor;
+/// Materializable view of async span events accessible through datafusion
+pub mod async_events_view;
 /// Write parquet in object store
 pub mod async_parquet_writer;
 /// BatchPartitionMerger merges multiple partitions by splitting the work in batches to use less memory.

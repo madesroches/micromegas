@@ -35,7 +35,9 @@ def build_rust_services(build_mode):
     print(f"🔧 Building Rust services in {build_mode} mode...")
     
     os.chdir(str(RUST_DIR))
-    run_command(f"cargo build {build_flags}")
+    run_command(f"cargo build {build_flags} -p telemetry-ingestion-srv")
+    run_command(f"cargo build {build_flags} -p telemetry-admin")
+    run_command(f"cargo build {build_flags} -p flight-sql-srv")
     os.chdir(str(SCRIPT_DIR))
 
 def create_tmux_session():
@@ -55,7 +57,7 @@ def create_tmux_session():
         (0, "PostgreSQL"),
         (1, "Ingestion"),
         (2, "Analytics"),
-        (3, "Admin")
+        (3, "Daemon")
     ]
     
     for pane_num, label in pane_labels:
@@ -98,18 +100,13 @@ def start_services():
     # Start remaining services
     remaining_services = [
         (2, 'echo "📊 Starting Analytics Server..."; cd ../rust && cargo run -p flight-sql-srv -- --disable-auth'),
-        (3, 'echo "⚙️  Starting Admin Daemon..."; cd ../rust && cargo run -p telemetry-admin -- crond')
+        (3, 'echo "😈 Starting Daemon..."; cd ../rust && cargo run -p telemetry-admin -- crond')
     ]
     
     for pane_num, command in remaining_services:
         print(f"Starting service in pane {pane_num}...")
         run_command(f"tmux send-keys -t {pane_num} '{command}' C-m")
         time.sleep(1)  # Small delay between service starts
-
-def create_dev_window(build_mode):
-    """Create additional development window"""
-    run_command(f"tmux new-window -t {SESSION} -n dev")
-    run_command(f"tmux send-keys -t {SESSION}:dev 'cd ../rust && echo \"Development window - build mode: {build_mode}\"' C-m")
 
 def attach_session():
     """Attach to tmux session"""
@@ -129,7 +126,6 @@ def main():
         build_rust_services(build_mode)
         create_tmux_session()
         start_services()
-        create_dev_window(build_mode)
         attach_session()
         
     except subprocess.CalledProcessError as e:
