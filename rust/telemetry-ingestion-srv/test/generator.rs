@@ -65,7 +65,7 @@ async fn manual_async_work() {
 // Multi-threaded async function that creates spans across different threads
 #[span_fn]
 async fn multi_threaded_async_work(task_id: usize) -> String {
-    info!("starting multi-threaded task {}", task_id);
+    info!("starting multi-threaded task {task_id}");
 
     // Create nested async work that may be scheduled on different threads
     let subtask1 = async_subtask(task_id, "validation").await;
@@ -74,33 +74,33 @@ async fn multi_threaded_async_work(task_id: usize) -> String {
     // Simulate some async I/O that can cause thread migration
     sleep(Duration::from_millis(30 + (task_id as u64 * 10))).await;
 
-    info!("multi-threaded task {} completed", task_id);
-    format!("task_{}_result: {} + {}", task_id, subtask1, subtask2)
+    info!("multi-threaded task {task_id} completed");
+    format!("task_{task_id}_result: {subtask1} + {subtask2}")
 }
 
 // Async subtask that can be scheduled on any thread
 #[span_fn]
 async fn async_subtask(task_id: usize, operation: &str) -> String {
-    info!("executing subtask {} for task {}", operation, task_id);
+    info!("executing subtask {operation} for task {task_id}");
 
     // Variable delay to create different scheduling patterns
     let delay = 20 + (task_id as u64 * 5);
     sleep(Duration::from_millis(delay)).await;
 
-    format!("{}_{}", operation, task_id)
+    format!("{operation}_{task_id}")
 }
 
 // Concurrent async task with potential for work stealing
 #[span_fn]
 async fn concurrent_async_task(operation: &str, base_delay: u64) -> String {
-    info!("starting concurrent operation: {}", operation);
+    info!("starting concurrent operation: {operation}");
 
     // Create parent-child async span relationship
     let preparation = prepare_async_operation(operation).await;
     let execution = execute_async_operation(operation, base_delay).await;
     let cleanup = cleanup_async_operation(operation).await;
 
-    info!("concurrent operation {} completed", operation);
+    info!("concurrent operation {operation} completed");
     format!(
         "{}: {} -> {} -> {}",
         operation, preparation, execution, cleanup
@@ -109,23 +109,23 @@ async fn concurrent_async_task(operation: &str, base_delay: u64) -> String {
 
 #[span_fn]
 async fn prepare_async_operation(operation: &str) -> String {
-    info!("preparing {}", operation);
+    info!("preparing {operation}");
     sleep(Duration::from_millis(15)).await;
-    format!("prepared_{}", operation)
+    format!("prepared_{operation}")
 }
 
 #[span_fn]
 async fn execute_async_operation(operation: &str, delay: u64) -> String {
-    info!("executing {} with {}ms delay", operation, delay);
+    info!("executing {operation} with {delay}ms delay");
     sleep(Duration::from_millis(delay)).await;
-    format!("executed_{}", operation)
+    format!("executed_{operation}")
 }
 
 #[span_fn]
 async fn cleanup_async_operation(operation: &str) -> String {
-    info!("cleaning up {}", operation);
+    info!("cleaning up {operation}");
     sleep(Duration::from_millis(10)).await;
-    format!("cleaned_{}", operation)
+    format!("cleaned_{operation}")
 }
 
 #[micromegas_main]
@@ -133,8 +133,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
     info!(
-        "hello from generator - creating multi-threaded async spans (duration={}s, async_tasks={}, threads={})",
-        args.duration, args.async_tasks, args.threads
+        "hello from generator - creating multi-threaded async spans (duration={duration}s, async_tasks={async_tasks}, threads={threads})",
+        duration = args.duration,
+        async_tasks = args.async_tasks,
+        threads = args.threads
     );
 
     // Generate metrics
@@ -188,20 +190,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Wait for all tasks to complete
     for handle in handles {
         if let Ok(result) = handle.await {
-            info!("multi-threaded task completed: {}", result);
+            info!("multi-threaded task completed: {result}");
         }
     }
 
     for task in concurrent_tasks {
         if let Ok(result) = task.await {
-            info!("concurrent task result: {}", result);
+            info!("concurrent task result: {result}");
         }
     }
 
     // Run for the specified duration
     info!(
-        "running for {} seconds to generate continuous telemetry",
-        args.duration
+        "running for {duration} seconds to generate continuous telemetry",
+        duration = args.duration
     );
     tokio::time::sleep(Duration::from_secs(args.duration)).await;
 
