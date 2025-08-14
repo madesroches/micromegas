@@ -101,10 +101,7 @@ async fn concurrent_async_task(operation: &str, base_delay: u64) -> String {
     let cleanup = cleanup_async_operation(operation).await;
 
     info!("concurrent operation {operation} completed");
-    format!(
-        "{}: {} -> {} -> {}",
-        operation, preparation, execution, cleanup
-    )
+    format!("{operation}: {preparation} -> {execution} -> {cleanup}")
 }
 
 #[span_fn]
