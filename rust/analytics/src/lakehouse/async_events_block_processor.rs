@@ -27,7 +27,12 @@ struct AsyncEventCollector {
 }
 
 impl AsyncEventCollector {
-    fn new(capacity: usize, stream_id: Arc<String>, block_id: Arc<String>, convert_ticks: Arc<ConvertTicks>) -> Self {
+    fn new(
+        capacity: usize,
+        stream_id: Arc<String>,
+        block_id: Arc<String>,
+        convert_ticks: Arc<ConvertTicks>,
+    ) -> Self {
         Self {
             record_builder: AsyncEventRecordBuilder::with_capacity(capacity),
             stream_id,
@@ -96,7 +101,8 @@ impl BlockProcessor for AsyncEventsBlockProcessor {
         blob_storage: Arc<BlobStorage>,
         src_block: Arc<PartitionSourceBlock>,
     ) -> Result<Option<PartitionRowSet>> {
-        let convert_ticks = make_time_converter_from_block_meta(&src_block.process, &src_block.block)?;
+        let convert_ticks =
+            make_time_converter_from_block_meta(&src_block.process, &src_block.block)?;
         let nb_async_events = src_block.block.nb_objects;
         let mut collector = AsyncEventCollector::new(
             nb_async_events as usize,
