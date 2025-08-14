@@ -22,19 +22,47 @@ jobs:
         toolchain: stable
 
     - name: Build Rust documentation
-      run: cargo doc --workspace --no-deps
+      run: |
+        echo "🦀 Building Rust documentation..."
+        cargo doc --workspace --no-deps --verbose
+        echo "📁 Checking generated documentation..."
+        ls -la target/doc/ | head -10
+        echo "📝 Documentation index:"
+        find target/doc -name "index.html" | head -5
       working-directory: rust/
 
     - name: Install MkDocs and dependencies
-      run: pip install -r docs-requirements.txt
+      run: pip install -r docs/docs-requirements.txt
       
     - name: Prepare staging directory
       run: |
         mkdir -p public_docs/rustdoc
-        cp -r rust/target/doc/* public_docs/rustdoc/
+        
+        # Check if Rust docs were built
+        if [ -d "rust/target/doc" ]; then
+          echo "✅ Rust documentation found"
+          cp -r rust/target/doc/* public_docs/rustdoc/
+          ls -la public_docs/rustdoc/ | head -10
+        else
+          echo "❌ Rust documentation not found"
+          echo "Creating placeholder index for rustdoc"
+          cat > public_docs/rustdoc/index.html << 'RUSTDOC_EOF'
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Rust Documentation</title>
+        </head>
+        <body>
+            <h1>Rust Documentation Build Failed</h1>
+            <p>The Rust documentation failed to build. Please check the build logs.</p>
+            <p><a href="../">← Back to main documentation</a></p>
+        </body>
+        </html>
+        RUSTDOC_EOF
+        fi
         
         # Build MkDocs documentation
-        mkdocs build --site-dir public_docs/docs
+        mkdocs build --config-file docs/mkdocs.yml --site-dir public_docs/docs
         
         # Copy legacy doc files for existing links
         mkdir -p public_docs/doc

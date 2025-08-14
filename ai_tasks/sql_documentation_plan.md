@@ -65,6 +65,7 @@ If additional work is ever needed:
 4. **Advanced Analytics:** More complex aggregation and windowing examples
 5. **Performance Benchmarks:** Quantified performance comparisons
 6. ✅ **Move HTML build scripts:** Moved HTML build script from GitHub Actions to `doc/build-html.py` with DataFusion-style navigation
+7. 🚧 **MkDocs Migration:** Migration to MkDocs Material theme in progress - see `MKDOCS_MIGRATION.md` for status
 
 ### 🏁 **Conclusion**
 The documentation project is **COMPLETE** and successfully delivers:

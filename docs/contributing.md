@@ -30,7 +30,7 @@ By participating in this project, you agree to maintain a respectful and inclusi
    poetry install
    
    # Documentation
-   pip install -r docs-requirements.txt
+   pip install -r docs/docs-requirements.txt
    ```
 
 ## Contributing Code
@@ -117,7 +117,7 @@ The main documentation uses MkDocs with Material theme:
 
 3. **Build documentation**:
    ```bash
-   python build-docs.py
+   python docs/build-docs.py
    ```
 
 ### Documentation Guidelines

@@ -105,10 +105,10 @@ black --check .
 
 ```bash
 # Install MkDocs and theme
-pip install -r docs-requirements.txt
+pip install -r docs/docs-requirements.txt
 
 # Or use the build script
-python build-docs.py
+python docs/build-docs.py
 ```
 
 ### 2. Development Server

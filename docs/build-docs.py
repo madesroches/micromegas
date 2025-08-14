@@ -19,16 +19,17 @@ def run_command(cmd, cwd=None):
     return result.returncode == 0
 
 def main():
-    # Get the script directory (should be project root)
+    # Get the script directory (docs/) and project root
     script_dir = Path(__file__).parent
-    docs_dir = script_dir / "docs"
+    project_root = script_dir.parent
+    docs_dir = script_dir
     
     print("🏗️  Building Micromegas Documentation with MkDocs")
-    print(f"Project root: {script_dir}")
+    print(f"Project root: {project_root}")
     print(f"Docs directory: {docs_dir}")
     
     # Check if virtual environment exists
-    venv_dir = script_dir / "docs-venv"
+    venv_dir = project_root / "docs-venv"
     if not venv_dir.exists():
         print("📦 Creating virtual environment for docs...")
         if not run_command([sys.executable, "-m", "venv", str(venv_dir)]):
@@ -61,11 +62,11 @@ def main():
     mkdocs_path = venv_dir / ("Scripts" if os.name == 'nt' else "bin") / "mkdocs"
     
     print("🔨 Building MkDocs site...")
-    if not run_command([str(mkdocs_path), "build"], cwd=script_dir):
+    if not run_command([str(mkdocs_path), "build", "--config-file", str(script_dir / "mkdocs.yml")], cwd=project_root):
         print("❌ Failed to build documentation")
         return 1
     
-    site_dir = script_dir / "site"
+    site_dir = project_root / "site"
     print(f"✅ Documentation built successfully!")
     print(f"📁 Site files: {site_dir}")
     print(f"🌐 Open {site_dir / 'index.html'} in your browser")
