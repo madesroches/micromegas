@@ -4,6 +4,9 @@ site_url: https://micromegas.dev
 repo_url: https://github.com/madesroches/micromegas
 repo_name: madesroches/micromegas
 
+# Specify docs directory since config is in docs/ subdirectory
+docs_dir: .
+
 theme:
   name: material
   palette:
