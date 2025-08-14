@@ -62,7 +62,7 @@ jobs:
         fi
         
         # Build MkDocs documentation
-        mkdocs build --config-file mkdocs/mkdocs.yml --site-dir public_docs/docs
+        mkdocs build --config-file mkdocs/mkdocs.yml --site-dir $PWD/public_docs/docs
         
         # Copy legacy doc files for existing links
         mkdir -p public_docs/doc
