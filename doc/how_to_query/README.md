@@ -47,15 +47,7 @@ print(process_logs)
 
 ### Query without time range (uses all available data)
 
-⚠️ **Performance Warning**: Queries without time ranges scan all available data, which can cause:
-- **Long query times** - Processing months or years of data
-- **High memory usage** - Query engine loads large datasets into memory
-- **Potential instability** - Memory exhaustion may cause query failures or system instability
-
-Always use time ranges for production queries. Only omit time ranges for:
-- Small datasets during development
-- System metadata queries (processes, streams)
-- Quick counts with LIMIT clauses
+For system metadata and development only. See [Query Performance](#query-performance) section for detailed performance guidance.
 
 ```python
 # Count total log entries (use with caution on large datasets)
@@ -232,9 +224,14 @@ The same SQL capabilities are available through the [Grafana plugin](https://git
 
 ### [Query Patterns](#query-patterns)
 - [Common Queries](#common-queries)
-- [Performance Tips](#performance-tips)
-- [JOIN Strategies](#join-strategies)
 - [Troubleshooting](#troubleshooting)
+
+### [Query Performance](#query-performance)
+- [Performance Overview](#performance-overview)
+- [Critical Performance Rules](#critical-performance-rules)
+- [View Selection Performance](#view-selection-performance)
+- [Query Optimization Patterns](#query-optimization-patterns)
+- [Performance Best Practices](#performance-best-practices)
 
 ### [Advanced Features](#advanced-features)
 - [View Materialization](#view-materialization)
@@ -383,7 +380,7 @@ Text-based log entries with levels and structured data.
 | `computer` | `Dictionary(Int16, Utf8)` | Computer/hostname |
 | `time` | `Timestamp(Nanosecond)` | Log entry timestamp |
 | `target` | `Dictionary(Int16, Utf8)` | Module/target |
-| `level` | `Int32` | Log level (lower = more severe) |
+| `level` | `Int32` | Log level: 1=Fatal, 2=Error, 3=Warn, 4=Info, 5=Debug, 6=Trace (lower = more severe) |
 | `msg` | `Utf8` | Log message |
 | `properties` | `List<Struct>` | Log-specific properties |
 | `process_properties` | `List<Struct>` | Process-specific properties |
@@ -821,68 +818,267 @@ sql = """
 events = client.query(sql, begin, end)
 ```
 
-### Performance Tips
+## Query Performance
 
-1. **Use time filters early**: Always filter on time ranges to limit data scanned
-2. **Leverage dictionary compression**: String comparisons are efficient due to dictionary encoding
-3. **Use view_instance()**: Scope queries to specific processes when possible
-4. **Consider materialized views**: For frequently-run queries, use pre-materialized views
+Micromegas' unique architecture provides multiple optimization strategies for different query patterns. Understanding these patterns is crucial for optimal performance.
 
-### JOIN Strategies
+### Performance Overview
 
-#### Basic Log Joins
+**Key Performance Factors:**
+- **Time Range Scoping** - Most critical performance factor
+- **View Selection** - Global vs process-scoped views
+- **Query Complexity** - ORDER BY, JOINs, and GROUP BY operations
+- **Data Freshness** - Live vs JIT processing trade-offs
+
+### Critical Performance Rules
+
+#### 1. ⚠️ Always Use Time Ranges
+
+Queries without time ranges scan all available data, which can cause:
+- **Long query times** - Processing months or years of data
+- **High memory usage** - Query engine loads large datasets into memory  
+- **Potential instability** - Memory exhaustion may cause query failures or system instability
+
 ```python
-# Get logs with process information (simple join)
+# ❌ DANGEROUS: No time filter (scans all data)
+sql = "SELECT * FROM log_entries WHERE level <= 3;"
+
+# ✅ SAFE: Time-bounded query
 sql = """
-    SELECT l.time, l.level, l.target, l.msg, p.exe
+    SELECT * FROM log_entries 
+    WHERE level <= 3 
+    AND time >= NOW() - INTERVAL '1 hour';
+"""
+```
+
+#### 2. ⚠️ Avoid ORDER BY on Large Datasets
+
+`ORDER BY` requires loading and sorting the entire result set, which can be expensive:
+
+```python
+# ❌ EXPENSIVE: ORDER BY without LIMIT on large time range
+sql = """
+    SELECT time, level, target, msg
+    FROM log_entries
+    WHERE time >= NOW() - INTERVAL '7 days'
+    ORDER BY time DESC;  -- Sorts potentially millions of rows
+"""
+
+# ✅ EFFICIENT: ORDER BY with LIMIT
+sql = """
+    SELECT time, level, target, msg
+    FROM log_entries
+    WHERE time >= NOW() - INTERVAL '1 hour'
+    ORDER BY time DESC
+    LIMIT 100;  -- Only sorts top results
+"""
+
+# ✅ EFFICIENT: No ORDER BY for aggregations
+sql = """
+    SELECT target, COUNT(*) as count
+    FROM log_entries
+    WHERE time >= NOW() - INTERVAL '6 hours'
+    GROUP BY target;  -- No sorting needed
+"""
+```
+
+**ORDER BY Performance Impact:**
+- Forces the entire query result to be loaded into server memory before any results are returned
+- Prevents streaming - no record batches can be sent until full dataset is sorted
+- Adds significant latency as clients must wait for complete dataset processing
+- Can cause server memory pressure on large datasets
+
+**ORDER BY Alternatives:**
+- **Client-side sorting:** Fetch unsorted data and sort in your application
+- **Time-based natural ordering:** Often `time` fields are naturally ordered in storage
+- **Eliminate sorting:** Question if sorting is actually necessary for your analysis
+
+#### 3. ⚠️ Use JOINs Carefully
+
+JOINs can be expensive, especially cross-process JOINs on global views:
+
+```python
+# ❌ EXPENSIVE: Cross-process JOINs on global views
+sql = """
+    SELECT l.time, l.msg, p.exe, s.tags
     FROM log_entries l
-    JOIN processes p ON l.process_id = p.process_id
-    WHERE l.level <= 3
-    ORDER BY l.time DESC
-    LIMIT 20;
+    JOIN processes p ON l.process_id = p.process_id  
+    JOIN streams s ON l.stream_id = s.stream_id
+    WHERE l.time >= NOW() - INTERVAL '1 day';  -- Large dataset + complex JOIN
 """
-logs_with_process = client.query(sql, begin, end)
+
+# ✅ EFFICIENT: Process-scoped JOINs
+sql = """
+    SELECT ae.time, ae.name, s.tags
+    FROM view_instance('async_events', '{process_id}') ae
+    JOIN streams s ON ae.stream_id = s.stream_id
+    WHERE ae.time >= NOW() - INTERVAL '1 hour';  -- Smaller dataset, co-located data
+"""
+
+# ✅ EFFICIENT: Simple process lookup
+sql = """
+    SELECT time, level, target, msg
+    FROM view_instance('log_entries', '{process_id}')
+    WHERE time >= NOW() - INTERVAL '1 hour';
+    -- Get process info separately if needed
+"""
 ```
 
-#### Advanced: Process Context Joins
+**JOIN Performance Tips:**
+- Prefer process-scoped views for JOINs when analyzing single processes
+- Keep JOIN datasets small with tight time filters
+- Consider if you really need the JOIN or can fetch related data separately
+- Use `LIMIT` with JOINs to prevent runaway queries
+
+#### 4. ⚠️ GROUP BY Prevents Streaming
+
+`GROUP BY` operations require processing the entire dataset before returning results, which prevents query streaming:
+
 ```python
-# Get async events with process information
+# ❌ NO STREAMING: GROUP BY requires full dataset processing
 sql = """
-    SELECT ae.time, ae.name, ae.event_type, p.exe, p.process_id
-    FROM view_instance('async_events', 'your_process_id_here') ae
-    JOIN processes p ON ae.process_id = p.process_id
-    ORDER BY ae.time
-    LIMIT 10;
+    SELECT target, COUNT(*) as count
+    FROM log_entries
+    WHERE time >= NOW() - INTERVAL '6 hours'
+    GROUP BY target;  -- Must process all data before streaming results
 """
-events_with_process = client.query(sql, begin, end)
+
+# ✅ STREAMING FRIENDLY: No aggregations
+sql = """
+    SELECT time, level, target, msg
+    FROM log_entries
+    WHERE time >= NOW() - INTERVAL '6 hours'
+    ORDER BY time DESC;  -- Can stream results as they're processed
+"""
 ```
 
-#### Advanced: Stream Analysis
+**GROUP BY Streaming Impact:**
+- `client.query()` works normally with GROUP BY
+- `client.query_stream()` will return results only after full aggregation
+- For large datasets, GROUP BY may cause memory pressure
+- Use smaller time ranges with GROUP BY operations
+
+### View Selection Performance
+
+#### Global Views vs Process-Scoped Views
+
+**Global Views** (`log_entries`, `measures`):
+- ✅ **Fast for recent data** - Live ETL keeps recent data readily available
+- ✅ **Cross-process analysis** - Perfect for dashboards and trends
+- ❌ **Slower for large time ranges** - Scanning across all processes
+- ❌ **ORDER BY expensive** - Sorting across all processes
+
+**Process-Scoped Views** (`view_instance('table', process_id)`):
+- ✅ **Dramatically faster** for single-process analysis
+- ✅ **Efficient JOINs** - All data is co-located
+- ✅ **Better ORDER BY performance** - Smaller datasets
+- ✅ **JIT optimization** - Materialized specifically for your query
+
+### Query Optimization Patterns
+
+#### Efficient Query Patterns
+
 ```python
-# Join thread spans with stream information
+# ✅ FASTEST: Process-scoped + time filter + limit
 sql = """
-    SELECT ts.thread_id, s.name as stream_name, 
-           json_extract(s.properties, '$.thread-name') as thread_name,
-           COUNT(*) as span_count
-    FROM view_instance('thread_spans', 'your_process_id_here') ts
-    JOIN streams s ON ts.stream_id = s.stream_id
-    GROUP BY ts.thread_id, s.name, thread_name
-    ORDER BY span_count DESC;
+    SELECT time, level, target, msg
+    FROM view_instance('log_entries', '{process_id}')
+    WHERE time >= NOW() - INTERVAL '1 hour'
+    AND level <= 3
+    ORDER BY time DESC
+    LIMIT 100;
 """
-stream_info = client.query(sql, begin, end)
+
+# ✅ FAST: Aggregations without ORDER BY
+sql = """
+    SELECT 
+        date_trunc('minute', time) as minute,
+        AVG(value) as avg_value,
+        COUNT(*) as count
+    FROM view_instance('measures', '{process_id}')
+    WHERE time >= NOW() - INTERVAL '2 hours'
+    GROUP BY minute;
+"""
+
+# ✅ FAST: Recent global data with limits
+sql = """
+    SELECT time, process_id, level, msg
+    FROM log_entries
+    WHERE time >= NOW() - INTERVAL '10 minutes'
+    AND level <= 3
+    ORDER BY time DESC
+    LIMIT 50;
+"""
 ```
+
+#### Less Efficient Query Patterns
+
+```python
+# ⚠️ SLOWER: Large time range with ORDER BY
+sql = """
+    SELECT time, level, target, msg
+    FROM log_entries
+    WHERE time >= NOW() - INTERVAL '7 days'  -- Large time range
+    ORDER BY time DESC;  -- No LIMIT = expensive sort
+"""
+
+# ⚠️ SLOWER: Global cross-process JOINs
+sql = """
+    SELECT l.time, l.msg, p.exe, s.tags
+    FROM log_entries l
+    JOIN processes p ON l.process_id = p.process_id  
+    JOIN streams s ON l.stream_id = s.stream_id
+    WHERE l.time >= NOW() - INTERVAL '1 day'
+    ORDER BY l.time DESC;  -- Complex JOIN + sort
+"""
+```
+
+### Performance Best Practices
+
+1. **Time filters first** - Always filter on time ranges to limit data scanned
+2. **Use view_instance()** - Scope queries to specific processes when possible  
+3. **Avoid ORDER BY when possible** - Prevents streaming and forces full dataset into memory
+4. **Leverage dictionary compression** - String comparisons are efficient due to dictionary encoding
+5. **Consider aggregate views** - Summarized data is much more efficient to query than raw events
+6. **Use query streaming** - For large result sets, use `client.query_stream()`
+7. **Optimize predicate pushdown** - Place WHERE conditions early to reduce data scanned. See [DataFusion Parquet Pruning](https://datafusion.apache.org/blog/2025/03/20/parquet-pruning/) for details
+
+### Performance Monitoring
+
+```python
+# Monitor query execution time in notebooks
+%%time
+result = client.query(sql, begin, end)
+print(f"Returned {len(result)} rows")
+
+# Alternative: Manual timing in scripts
+import time
+start_time = time.time()
+result = client.query(sql, begin, end)
+execution_time = time.time() - start_time
+print(f"Query executed in {execution_time:.2f} seconds")
+```
+
 
 ### Troubleshooting
 
-#### Query Performance Issues
-- Check if time filters are applied early in the query
-- Verify view_instance() is used with appropriate process scoping
-- Consider if the query can benefit from materialized views
+#### Performance Issues
+See the dedicated [Query Performance](#query-performance) section for comprehensive optimization guidance.
 
 #### Data Not Found
 - Verify the process_id exists in the processes table
 - Check time ranges match when data was actually collected
-- Ensure view names are correct ('thread_events', 'async_events', etc.)
+- Ensure view names are correct ('log_entries', 'async_events', etc.)
+
+#### Connection Issues  
+- Verify analytics service is running (`flight-sql-srv`)
+- Check network connectivity to FlightSQL port (default 50051)
+- Confirm authentication if enabled
+
+#### Query Errors
+- Check SQL syntax against DataFusion documentation
+- Verify table and column names match schema
+- Ensure time ranges are properly formatted
 
 ---
 
@@ -890,25 +1086,111 @@ stream_info = client.query(sql, begin, end)
 
 ### View Materialization
 
-Micromegas uses two types of view materialization:
+Micromegas uses a sophisticated **Just-In-Time (JIT) ETL system** combined with **live processing** for optimal query performance across different data access patterns.
 
-#### Global Views
-Maintained by the maintenance service for commonly accessed data patterns. These are automatically refreshed and provide fast access to frequently queried aggregations.
+#### Live ETL for Global Views
+The maintenance daemon continuously materializes commonly-accessed data:
 
-#### JIT View Instances
-Created on-demand when you call `view_instance()`. These are materialized just-in-time for your specific query and cached temporarily for performance.
+**Real-time Processing:**
+- **Every second:** Log and metrics blocks are processed into global `log_entries` and `measures` views
+- **Every minute:** Second partitions are merged into minute partitions  
+- **Every hour:** Minute partitions are merged into hour partitions
+
+**Benefits:**
+- ✅ Simple queries on recent data (small time windows) are extremely fast
+- ✅ Global trends and dashboards get real-time updates
+- ❌ Large time window queries with JOINs may be slower on global views
+
+#### JIT View Instances (Process-Scoped)
+Created on-demand when you call `view_instance(view_name, process_id)`:
+
+**JIT ETL Process:**
+1. **Query Analysis:** flight-sql-srv receives your SQL query
+2. **Block Fetching:** Fetch relevant blocks (e.g., blocks tagged 'log' from specific process)  
+3. **Decompression & Parsing:** Decompress LZ4-compressed payloads, parse binary events
+4. **Parquet Generation:** Transform parsed events into Apache Parquet files (columnar format)
+5. **DataFusion Execution:** Let Apache DataFusion SQL engine run on generated parquet files
+6. **Result Streaming:** Return Apache Arrow record batches to client
+
+**Performance Characteristics:**
+- ✅ **Process-scoped queries** get dramatically better performance vs global views
+- ✅ **Complex JOINs** within a process are efficiently handled
+- ✅ **Time-based filtering** leverages parquet columnar optimizations
+- ✅ **Caching:** Generated parquet files are cached temporarily for repeated queries
+
+#### Query Optimization Examples
+
+**Optimal Query Patterns:**
+```python
+# ✅ FAST: Process-scoped with time filter
+sql = """
+    SELECT time, level, target, msg
+    FROM view_instance('log_entries', '{process_id}')
+    WHERE time >= NOW() - INTERVAL '1 hour'
+    AND level <= 3
+    ORDER BY time DESC
+    LIMIT 100;
+"""
+
+# ✅ FAST: Global view with small time window  
+sql = """
+    SELECT COUNT(*) as error_count
+    FROM log_entries
+    WHERE time >= NOW() - INTERVAL '10 minutes'
+    AND level <= 3;
+"""
+
+# ⚠️ SLOWER: Global view with large time window
+sql = """
+    SELECT process_id, COUNT(*) 
+    FROM log_entries
+    WHERE time >= NOW() - INTERVAL '7 days'  -- Large time range
+    GROUP BY process_id;
+"""
+```
+
+#### Incremental Data Reduction
+
+For long-term trend analysis, Micromegas supports **SQL-defined incremental views**:
+
+**Transform Queries:** Executed every second/minute/hour to create aggregated partitions:
+```sql
+-- Example: Log entries per process per minute
+SELECT date_bin('1 minute', time) as time_bin,
+       min(time) as min_time,
+       max(time) as max_time,
+       process_id,
+       sum(fatal) as nb_fatal,
+       sum(err) as nb_err,
+       sum(warn) as nb_warn
+FROM log_entries
+WHERE insert_time >= '{begin}' AND insert_time < '{end}'
+GROUP BY process_id, time_bin;
+```
+
+**Merge Queries:** Combine smaller partitions into larger time windows:
+```sql
+-- Merge minute partitions into hour partitions
+SELECT time_bin,
+       min(min_time) as min_time,
+       max(max_time) as max_time,
+       process_id,
+       sum(nb_fatal) as nb_fatal,
+       sum(nb_err) as nb_err
+FROM {source_partitions}
+GROUP BY process_id, time_bin;
+```
 
 #### Using Materialized Views
 ```python
-# This creates a JIT materialized view for the specified process
+# JIT processing for process-specific analysis
 import datetime
 
-# Set up time range
 now = datetime.datetime.now(datetime.timezone.utc)
 begin = now - datetime.timedelta(days=1)
 end = now
 
-# Query view instance with time range
+# This triggers JIT ETL: fetch blocks → parse → generate parquet → query
 sql = """
     SELECT stream_id, time, event_type, span_id, name
     FROM view_instance('async_events', '{process_id}')
@@ -922,6 +1204,18 @@ sql = """
 )
 events = client.query(sql, begin, end)
 ```
+
+#### Architecture Benefits
+
+**Datalake → Lakehouse → Query:**
+- **Datalake (S3):** Custom binary format, cheap storage, fast writes
+- **Lakehouse (Parquet):** Columnar format, fast analytics, industry standard  
+- **Query Engine (DataFusion):** SQL engine optimized for analytical workloads
+
+**Tail Sampling Support:**
+- Heavy data streams remain unprocessed until queried
+- Cheap to store in S3, cheap to delete unused data
+- Use low-frequency streams (logs, metrics) to decide sampling of high-frequency streams (spans)
 
 ### Custom Views
 
