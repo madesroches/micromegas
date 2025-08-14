@@ -32,7 +32,7 @@ jobs:
       working-directory: rust/
 
     - name: Install MkDocs and dependencies
-      run: pip install -r docs/docs-requirements.txt
+      run: pip install -r mkdocs/docs-requirements.txt
       
     - name: Prepare staging directory
       run: |
@@ -62,7 +62,7 @@ jobs:
         fi
         
         # Build MkDocs documentation
-        mkdocs build --config-file docs/mkdocs.yml --site-dir public_docs/docs
+        mkdocs build --config-file mkdocs/mkdocs.yml --site-dir public_docs/docs
         
         # Copy legacy doc files for existing links
         mkdir -p public_docs/doc
