@@ -2,9 +2,9 @@ from .test_utils import *
 
 def test_async_events_basic_query():
     """Test basic async events view querying"""
-    # Get a process that might have async events
+    # Get a process that might have async events with its time range
     sql = """
-    SELECT processes.process_id 
+    SELECT processes.process_id, processes.start_time
     FROM processes
     WHERE exe LIKE '%generator%' OR exe LIKE '%telemetry-generator%'
     ORDER BY start_time DESC
@@ -17,6 +17,12 @@ def test_async_events_basic_query():
         return
         
     process_id = processes.iloc[0]["process_id"]
+    process_start = processes.iloc[0]["start_time"]
+    
+    # Use tight time range around the process lifetime
+    import datetime
+    process_begin = process_start - datetime.timedelta(seconds=1)
+    process_end = process_start + datetime.timedelta(minutes=2)
     
     # Query async events for this process using the optimized schema
     sql = """
@@ -27,7 +33,7 @@ def test_async_events_basic_query():
     LIMIT 10;
     """.format(process_id=process_id)
     
-    async_events = client.query(sql)
+    async_events = client.query(sql, process_begin, process_end)
     print("Async events found:")
     print(async_events)
     
@@ -50,7 +56,7 @@ def test_async_events_with_process_join():
     """Test joining async events with process information"""
     # Find a process with async events
     sql = """
-    SELECT processes.process_id 
+    SELECT processes.process_id, processes.start_time
     FROM processes
     WHERE exe LIKE '%generator%' OR exe LIKE '%telemetry-generator%'
     ORDER BY start_time DESC
@@ -63,6 +69,12 @@ def test_async_events_with_process_join():
         return
         
     process_id = processes.iloc[0]["process_id"]
+    process_start = processes.iloc[0]["start_time"]
+    
+    # Use tight time range around the process lifetime
+    import datetime
+    process_begin = process_start - datetime.timedelta(seconds=1)
+    process_end = process_start + datetime.timedelta(minutes=2)
     
     # Query async events with process info via JOIN
     sql = """
@@ -75,7 +87,7 @@ def test_async_events_with_process_join():
     LIMIT 5;
     """.format(process_id=process_id)
     
-    results = client.query(sql)
+    results = client.query(sql, process_begin, process_end)
     print("Async events with process info:")
     print(results)
     
@@ -93,7 +105,7 @@ def test_async_events_parent_child_relationships():
     """Test analyzing parent-child relationships in async spans"""
     # Find a process with async events
     sql = """
-    SELECT processes.process_id 
+    SELECT processes.process_id, processes.start_time
     FROM processes
     WHERE exe LIKE '%generator%' OR exe LIKE '%telemetry-generator%'
     ORDER BY start_time DESC
@@ -106,6 +118,12 @@ def test_async_events_parent_child_relationships():
         return
         
     process_id = processes.iloc[0]["process_id"]
+    process_start = processes.iloc[0]["start_time"]
+    
+    # Use tight time range around the process lifetime
+    import datetime
+    process_begin = process_start - datetime.timedelta(seconds=1)
+    process_end = process_start + datetime.timedelta(minutes=2)
     
     # Query for parent-child async span relationships
     sql = """
@@ -119,7 +137,7 @@ def test_async_events_parent_child_relationships():
     LIMIT 5;
     """.format(process_id=process_id)
     
-    relationships = client.query(sql)
+    relationships = client.query(sql, process_begin, process_end)
     print("Parent-child async span relationships:")
     print(relationships)
     
@@ -131,7 +149,7 @@ def test_async_events_duration_analysis():
     """Test calculating async operation durations"""
     # Find a process with async events
     sql = """
-    SELECT processes.process_id 
+    SELECT processes.process_id, processes.start_time
     FROM processes
     WHERE exe LIKE '%generator%' OR exe LIKE '%telemetry-generator%'
     ORDER BY start_time DESC
@@ -144,6 +162,12 @@ def test_async_events_duration_analysis():
         return
         
     process_id = processes.iloc[0]["process_id"]
+    process_start = processes.iloc[0]["start_time"]
+    
+    # Use tight time range around the process lifetime
+    import datetime
+    process_begin = process_start - datetime.timedelta(seconds=1)
+    process_end = process_start + datetime.timedelta(minutes=2)
     
     # Calculate durations by matching begin/end events
     sql = """
@@ -160,7 +184,7 @@ def test_async_events_duration_analysis():
     LIMIT 10;
     """.format(process_id=process_id)
     
-    durations = client.query(sql)
+    durations = client.query(sql, process_begin, process_end)
     print("Async operation durations:")
     print(durations)
     
@@ -176,7 +200,7 @@ def test_async_events_cross_stream_analysis():
     """Test analyzing async events across multiple streams (threads)"""
     # Find a process with async events
     sql = """
-    SELECT processes.process_id 
+    SELECT processes.process_id, processes.start_time
     FROM processes
     WHERE exe LIKE '%generator%' OR exe LIKE '%telemetry-generator%'
     ORDER BY start_time DESC
@@ -189,6 +213,12 @@ def test_async_events_cross_stream_analysis():
         return
         
     process_id = processes.iloc[0]["process_id"]
+    process_start = processes.iloc[0]["start_time"]
+    
+    # Use tight time range around the process lifetime
+    import datetime
+    process_begin = process_start - datetime.timedelta(seconds=1)
+    process_end = process_start + datetime.timedelta(minutes=2)
     
     # Query for async events across different streams
     sql = """
@@ -199,7 +229,7 @@ def test_async_events_cross_stream_analysis():
     ORDER BY event_count DESC;
     """.format(process_id=process_id)
     
-    stream_summary = client.query(sql)
+    stream_summary = client.query(sql, process_begin, process_end)
     print("Async events per stream (thread):")
     print(stream_summary)
     
@@ -218,10 +248,16 @@ def test_async_events_cross_stream_analysis():
 
 def test_async_events_global_rejection():
     """Test that global async_events queries are properly rejected"""
+    # Use a minimal time range for the rejection test
+    import datetime
+    now = datetime.datetime.now(datetime.timezone.utc)
+    test_begin = now - datetime.timedelta(minutes=1)
+    test_end = now
+    
     try:
         # This should fail since async_events doesn't support global view
         sql = "SELECT COUNT(*) FROM async_events;"
-        client.query(sql)
+        client.query(sql, test_begin, test_end)
         assert False, "Global async_events query should have been rejected"
     except Exception as e:
         print(f"✅ Global async_events query correctly rejected: {e}")

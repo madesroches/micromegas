@@ -7,6 +7,7 @@ use crate::{
     payload::fetch_block_payload,
     scope::ScopeDesc,
     thread_block_processor::{AsyncBlockProcessor, parse_async_block_payload},
+    time::{ConvertTicks, make_time_converter_from_block_meta},
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -22,14 +23,16 @@ struct AsyncEventCollector {
     record_builder: AsyncEventRecordBuilder,
     stream_id: Arc<String>,
     block_id: Arc<String>,
+    convert_ticks: Arc<ConvertTicks>,
 }
 
 impl AsyncEventCollector {
-    fn new(capacity: usize, stream_id: Arc<String>, block_id: Arc<String>) -> Self {
+    fn new(capacity: usize, stream_id: Arc<String>, block_id: Arc<String>, convert_ticks: Arc<ConvertTicks>) -> Self {
         Self {
             record_builder: AsyncEventRecordBuilder::with_capacity(capacity),
             stream_id,
             block_id,
+            convert_ticks,
         }
     }
 }
@@ -43,10 +46,11 @@ impl AsyncBlockProcessor for AsyncEventCollector {
         span_id: i64,
         parent_span_id: i64,
     ) -> Result<bool> {
+        let time_ns = self.convert_ticks.ticks_to_nanoseconds(ts);
         let record = AsyncEventRecord {
             stream_id: self.stream_id.clone(),
             block_id: self.block_id.clone(),
-            time: ts,
+            time: time_ns,
             event_type: Arc::new("begin".to_string()),
             span_id,
             parent_span_id,
@@ -67,10 +71,11 @@ impl AsyncBlockProcessor for AsyncEventCollector {
         span_id: i64,
         parent_span_id: i64,
     ) -> Result<bool> {
+        let time_ns = self.convert_ticks.ticks_to_nanoseconds(ts);
         let record = AsyncEventRecord {
             stream_id: self.stream_id.clone(),
             block_id: self.block_id.clone(),
-            time: ts,
+            time: time_ns,
             event_type: Arc::new("end".to_string()),
             span_id,
             parent_span_id,
@@ -91,11 +96,13 @@ impl BlockProcessor for AsyncEventsBlockProcessor {
         blob_storage: Arc<BlobStorage>,
         src_block: Arc<PartitionSourceBlock>,
     ) -> Result<Option<PartitionRowSet>> {
+        let convert_ticks = make_time_converter_from_block_meta(&src_block.process, &src_block.block)?;
         let nb_async_events = src_block.block.nb_objects;
         let mut collector = AsyncEventCollector::new(
             nb_async_events as usize,
             Arc::new(format!("{}", src_block.stream.stream_id)),
             Arc::new(format!("{}", src_block.block.block_id)),
+            Arc::new(convert_ticks),
         );
         let payload = fetch_block_payload(
             blob_storage,
