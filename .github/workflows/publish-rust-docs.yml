@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - doc  # Temporary: Enable on doc branch for testing
 
 jobs:
   build-and-deploy-docs:
