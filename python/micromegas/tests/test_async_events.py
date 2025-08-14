@@ -6,7 +6,7 @@ def test_async_events_basic_query():
     sql = """
     SELECT processes.process_id, processes.start_time
     FROM processes
-    WHERE exe LIKE '%generator%' OR exe LIKE '%telemetry-generator%'
+    WHERE exe LIKE '%generator%'
     ORDER BY start_time DESC
     LIMIT 1;
     """
@@ -58,7 +58,7 @@ def test_async_events_with_process_join():
     sql = """
     SELECT processes.process_id, processes.start_time
     FROM processes
-    WHERE exe LIKE '%generator%' OR exe LIKE '%telemetry-generator%'
+    WHERE exe LIKE '%generator%'
     ORDER BY start_time DESC
     LIMIT 1;
     """
@@ -107,7 +107,7 @@ def test_async_events_parent_child_relationships():
     sql = """
     SELECT processes.process_id, processes.start_time
     FROM processes
-    WHERE exe LIKE '%generator%' OR exe LIKE '%telemetry-generator%'
+    WHERE exe LIKE '%generator%'
     ORDER BY start_time DESC
     LIMIT 1;
     """
@@ -151,7 +151,7 @@ def test_async_events_duration_analysis():
     sql = """
     SELECT processes.process_id, processes.start_time
     FROM processes
-    WHERE exe LIKE '%generator%' OR exe LIKE '%telemetry-generator%'
+    WHERE exe LIKE '%generator%'
     ORDER BY start_time DESC
     LIMIT 1;
     """
@@ -202,7 +202,7 @@ def test_async_events_cross_stream_analysis():
     sql = """
     SELECT processes.process_id, processes.start_time
     FROM processes
-    WHERE exe LIKE '%generator%' OR exe LIKE '%telemetry-generator%'
+    WHERE exe LIKE '%generator%'
     ORDER BY start_time DESC
     LIMIT 1;
     """
