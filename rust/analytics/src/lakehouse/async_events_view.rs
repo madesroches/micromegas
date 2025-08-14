@@ -88,7 +88,7 @@ impl View for AsyncEventsView {
     }
 
     fn get_file_schema_hash(&self) -> Vec<u8> {
-        vec![5] // Different from log view to distinguish schemas
+        vec![0]
     }
 
     fn get_file_schema(&self) -> Arc<Schema> {

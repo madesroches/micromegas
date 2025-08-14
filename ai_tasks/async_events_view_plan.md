@@ -38,6 +38,21 @@ line            | UInt32                  | Line number
 
 ## Remaining Tasks
 
+### apply code review comments
+
+  - rust/analytics/src/lakehouse/async_events_block_processor.rs: on_begin_async_scope & on_end_async_scope: don't allocate "begin"/end string every time. use lazy static
+  - let nb_async_events = src_block.block.nb_objects; that's not true, there can be thread events in there
+  
+rust/analytics/src/lakehouse/async_events_view.rs
+  - get_file_schema_hash we can start with version 0
+
+rust/analytics/src/thread_block_processor.rs
+ - move async event logic in new file
+ 
+rust/telemetry-ingestion-srv/test/generator.rs
+ - info has too many arguments (they are implicit in the format string)
+
+
 ### 🎯 Next Steps (In Priority Order)
 
 1. ✅ **📝 Add Documentation** - Add async_events view documentation to `rust/analytics/src/lakehouse/view_factory.rs` **COMPLETED**

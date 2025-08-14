@@ -1,9 +1,9 @@
 use anyhow::Result;
 use micromegas_analytics::{
+    async_block_processing::AsyncBlockProcessor,
     async_events_table::{AsyncEventRecord, AsyncEventRecordBuilder, async_events_table_schema},
     lakehouse::{async_events_view::AsyncEventsView, view::View},
     scope::ScopeDesc,
-    thread_block_processor::AsyncBlockProcessor,
 };
 use std::sync::Arc;
 

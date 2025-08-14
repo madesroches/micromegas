@@ -3,16 +3,21 @@ use super::{
     write_partition::PartitionRowSet,
 };
 use crate::{
+    async_block_processing::{AsyncBlockProcessor, parse_async_block_payload},
     async_events_table::{AsyncEventRecord, AsyncEventRecordBuilder},
     payload::fetch_block_payload,
     scope::ScopeDesc,
-    thread_block_processor::{AsyncBlockProcessor, parse_async_block_payload},
     time::{ConvertTicks, make_time_converter_from_block_meta},
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use micromegas_telemetry::blob_storage::BlobStorage;
 use std::sync::Arc;
+
+lazy_static::lazy_static! {
+    static ref BEGIN_EVENT_TYPE: Arc<String> = Arc::new("begin".to_string());
+    static ref END_EVENT_TYPE: Arc<String> = Arc::new("end".to_string());
+}
 
 /// A `BlockProcessor` implementation for processing async event blocks.
 #[derive(Debug)]
@@ -56,7 +61,7 @@ impl AsyncBlockProcessor for AsyncEventCollector {
             stream_id: self.stream_id.clone(),
             block_id: self.block_id.clone(),
             time: time_ns,
-            event_type: Arc::new("begin".to_string()),
+            event_type: BEGIN_EVENT_TYPE.clone(),
             span_id,
             parent_span_id,
             name: scope.name,
@@ -81,7 +86,7 @@ impl AsyncBlockProcessor for AsyncEventCollector {
             stream_id: self.stream_id.clone(),
             block_id: self.block_id.clone(),
             time: time_ns,
-            event_type: Arc::new("end".to_string()),
+            event_type: END_EVENT_TYPE.clone(),
             span_id,
             parent_span_id,
             name: scope.name,
@@ -103,9 +108,10 @@ impl BlockProcessor for AsyncEventsBlockProcessor {
     ) -> Result<Option<PartitionRowSet>> {
         let convert_ticks =
             make_time_converter_from_block_meta(&src_block.process, &src_block.block)?;
-        let nb_async_events = src_block.block.nb_objects;
+        // Use nb_objects as initial capacity estimate (may contain non-async events)
+        let estimated_capacity = src_block.block.nb_objects;
         let mut collector = AsyncEventCollector::new(
-            nb_async_events as usize,
+            estimated_capacity as usize,
             Arc::new(format!("{}", src_block.stream.stream_id)),
             Arc::new(format!("{}", src_block.block.block_id)),
             Arc::new(convert_ticks),

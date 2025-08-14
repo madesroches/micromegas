@@ -130,10 +130,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
     info!(
-        "hello from generator - creating multi-threaded async spans (duration={duration}s, async_tasks={async_tasks}, threads={threads})",
-        duration = args.duration,
-        async_tasks = args.async_tasks,
-        threads = args.threads
+        "hello from generator - creating multi-threaded async spans (duration={}s, async_tasks={}, threads={})",
+        args.duration, args.async_tasks, args.threads
     );
 
     // Generate metrics
@@ -199,8 +197,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Run for the specified duration
     info!(
-        "running for {duration} seconds to generate continuous telemetry",
-        duration = args.duration
+        "running for {} seconds to generate continuous telemetry",
+        args.duration
     );
     tokio::time::sleep(Duration::from_secs(args.duration)).await;
 
