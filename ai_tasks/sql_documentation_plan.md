@@ -12,6 +12,8 @@ Plan for creating comprehensive documentation of Micromegas's SQL capabilities, 
 - Clarify that Micromegas SQL is an extension of DataFusion's SQL
 - Link to DataFusion SQL documentation
 - Document the Python API for SQL query execution
+- Document return types (pandas DataFrame)
+- Document query streaming capabilities and when to use them
 - SQL query execution and response format
 - Supported SQL features and limitations
 - Mention Grafana plugin SQL capabilities
@@ -45,35 +47,54 @@ Plan for creating comprehensive documentation of Micromegas's SQL capabilities, 
 ## Tasks
 
 ### Phase 1: Core Documentation Structure
-- [ ] Choose framework & style for documentation
-- [ ] Create main SQL documentation file
-- [ ] Establish early that Micromegas SQL extends DataFusion SQL
-- [ ] Link to DataFusion SQL documentation
-- [ ] Document Python API for SQL queries
-- [ ] Document basic schema overview
-- [ ] Add query examples using Python API
-- [ ] Mention Grafana plugin SQL usage
+- [x] Choose framework & style for documentation (Hierarchical Reference Structure)
+- [x] Create main SQL documentation file following DataFusion's style
+- [x] Establish early that Micromegas SQL extends DataFusion SQL
+- [x] Link to DataFusion SQL documentation
+- [x] Document Python API for SQL queries
+- [x] Document return types (pandas DataFrame)
+- [ ] Document query streaming capabilities and usage patterns
+- [x] Create hierarchical table of contents with deep links
+- [x] Document basic schema overview
+- [x] Add query examples using Python API
+- [x] Mention Grafana plugin SQL usage
 
 ### Phase 2: Schema Deep Dive
-- [ ] Document all core views with field descriptions
-- [ ] Document all available views
+- [ ] Document all core views with field descriptions (hierarchical format)
+- [ ] Create alphabetical function lists at section tops
+- [ ] Document all available views with standardized format
 - [ ] Explain dictionary compression and optimization strategies
 - [ ] Document data flow from ingestion to query
+- [ ] Add cross-references between related views
 
 ### Phase 3: Data Structures and Functions
-- [ ] Document custom data types used in Micromegas
-- [ ] List and explain observability-specific SQL functions
-- [ ] Document time-based functions and operations
-- [ ] Document aggregation functions for telemetry data
+- [ ] Document custom data types using DataFusion-style format
+- [ ] List observability-specific SQL functions alphabetically
+- [ ] Use consistent function signature format in code blocks
+- [ ] Document time-based functions with executable examples
+- [ ] Document aggregation functions with expected output
 - [ ] Explain extensions beyond standard DataFusion functions
+- [ ] Add cross-references between related functions
 
 ### Phase 4: Query Examples and Patterns
-- [ ] Create query cookbook with common patterns
-- [ ] Document JOIN strategies between views
-- [ ] Add performance optimization guidelines
-- [ ] Include troubleshooting section
+- [ ] Create searchable query cookbook with consistent format
+- [ ] Document JOIN strategies with executable examples
+- [ ] Add performance optimization guidelines with explanations
+- [ ] Include troubleshooting section with common issues
+- [ ] Use DataFusion-style argument descriptions format
+- [ ] Add brief, clear descriptions for each pattern
 
-### Phase 5: Advanced Features
+### Phase 5: Performance Pitfalls and Optimization
+- [ ] Document performance pitfalls with specific examples
+- [ ] Queries without time ranges - memory usage and query time impacts
+- [ ] ORDER BY performance implications on large datasets
+- [ ] JOIN performance considerations and optimization strategies
+- [ ] GROUP BY performance patterns and memory allocation issues
+- [ ] Resource consumption patterns and system stability concerns
+- [ ] Best practices for avoiding performance bottlenecks
+- [ ] Query planning and execution optimization tips
+
+### Phase 6: Advanced Features
 - [ ] Document view materialization strategies
 - [ ] Explain global views and maintenance service
 - [ ] Document JIT view instances and when they're used
@@ -85,5 +106,15 @@ Plan for creating comprehensive documentation of Micromegas's SQL capabilities, 
 - Contributors to the Micromegas project
 
 ## Documentation Location
-- Primary location: `doc/how_to_query/`
+- Single location: `doc/how_to_query/` (hierarchical reference structure)
+
+## Style Guidelines (DataFusion-inspired)
+- **Function signatures** in code blocks
+- **Consistent argument descriptions** with type information
+- **Executable examples** with expected output
+- **Cross-references** between related functions and views
+- **Alphabetical organization** within categories
+- **Brief, clear descriptions** for immediate understanding
+- **Deep linking** for easy navigation
+- **Searchable structure** with clear hierarchies
 
