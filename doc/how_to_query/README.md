@@ -87,6 +87,58 @@ print(filtered.head())
 
 For more information on working with DataFrames, see the [pandas documentation](https://pandas.pydata.org/docs/).
 
+## Working with Metrics
+
+Measures capture numeric metrics and performance data from your applications. Here are common patterns for querying measure data:
+
+```python
+import micromegas
+
+client = micromegas.connect()
+
+# Get recent measures from a specific process
+process_id = "your_process_id_here"  # Replace with actual process ID
+recent_measures = client.query(f"""
+    SELECT time, name, value, unit
+    FROM view_instance('measures', '{process_id}')
+    WHERE time >= NOW() - INTERVAL '1 hour'
+    ORDER BY time DESC
+    LIMIT 100;
+""")
+print(recent_measures)
+
+# Find measures by name pattern (e.g., all CPU-related metrics)
+cpu_measures = client.query(f"""
+    SELECT time, name, value, unit
+    FROM view_instance('measures', '{process_id}')
+    WHERE name LIKE '%cpu%'
+      AND time >= NOW() - INTERVAL '2 hours'
+    ORDER BY time DESC;
+""")
+print(cpu_measures)
+
+# Aggregate measures over time windows
+memory_stats = client.query(f"""
+    SELECT 
+        date_trunc('minute', time) as minute,
+        AVG(value) as avg_memory,
+        MAX(value) as max_memory,
+        MIN(value) as min_memory
+    FROM view_instance('measures', '{process_id}')
+    WHERE name = 'memory_usage'
+      AND time >= NOW() - INTERVAL '6 hours'
+    GROUP BY date_trunc('minute', time)
+    ORDER BY minute;
+""")
+print(memory_stats)
+```
+
+**Common measure query patterns:**
+- **Filter by measure name** - Use `WHERE name = 'specific_measure'` or `LIKE '%pattern%'`
+- **Time-based aggregation** - Use `date_trunc()` with `GROUP BY` for time windows
+- **Statistical analysis** - Use `AVG()`, `MAX()`, `MIN()`, `COUNT()` for summaries
+- **Performance monitoring** - Query specific time ranges during incidents or deployments
+
 ### Query Streaming
 
 For large result sets, Micromegas supports query streaming to handle data efficiently:
@@ -230,6 +282,40 @@ Contains information about data streams within processes.
 | `insert_time` | `Timestamp(Nanosecond)` | When the stream data was first inserted |
 | `last_update_time` | `Timestamp(Nanosecond)` | When the stream data was last updated |
 
+#### `blocks`
+Core table containing telemetry block metadata with joined process and stream information.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `block_id` | `Utf8` | Unique identifier for the block |
+| `stream_id` | `Utf8` | Stream identifier |
+| `process_id` | `Utf8` | Process identifier |
+| `begin_time` | `Timestamp(Nanosecond)` | Block start time |
+| `begin_ticks` | `Int64` | Block start time in ticks |
+| `end_time` | `Timestamp(Nanosecond)` | Block end time |
+| `end_ticks` | `Int64` | Block end time in ticks |
+| `nb_objects` | `Int32` | Number of objects in block |
+| `object_offset` | `Int64` | Offset to objects in storage |
+| `payload_size` | `Int64` | Size of block payload |
+| `insert_time` | `Timestamp(Nanosecond)` | When block was inserted |
+| `streams.dependencies_metadata` | `Binary` | Stream dependency metadata |
+| `streams.objects_metadata` | `Binary` | Stream object metadata |
+| `streams.tags` | `List<Utf8>` | Stream tags |
+| `streams.properties` | `List<Struct>` | Stream properties |
+| `streams.insert_time` | `Timestamp(Nanosecond)` | Stream insertion time |
+| `processes.start_time` | `Timestamp(Nanosecond)` | Process start time |
+| `processes.start_ticks` | `Int64` | Process start ticks |
+| `processes.tsc_frequency` | `Int64` | Time stamp counter frequency |
+| `processes.exe` | `Utf8` | Executable name |
+| `processes.username` | `Utf8` | User who ran the process |
+| `processes.realname` | `Utf8` | Real name of the user |
+| `processes.computer` | `Utf8` | Computer/hostname |
+| `processes.distro` | `Utf8` | Operating system distribution |
+| `processes.cpu_brand` | `Utf8` | CPU brand information |
+| `processes.insert_time` | `Timestamp(Nanosecond)` | Process insertion time |
+| `processes.parent_process_id` | `Utf8` | Parent process identifier |
+| `processes.properties` | `List<Struct>` | Process properties |
+
 #### `async_events`
 Asynchronous span events for tracking async operations.
 
@@ -348,7 +434,7 @@ Views can be joined to get complete information:
 ```sql
 -- Join streams with processes to get process info
 SELECT ae.*, p.exe, p.username, p.computer 
-FROM view_instance('async_events', 'process_id') ae
+FROM view_instance('async_events', 'your_process_id_here') ae
 JOIN streams s ON ae.stream_id = s.stream_id  
 JOIN processes p ON s.process_id = p.process_id
 ```
@@ -701,9 +787,9 @@ app_logs = client.query(sql, begin, end)
 ```python
 # Get processes and their basic info
 sql = """
-    SELECT process_id, exe, start_time
+    SELECT process_id, exe, insert_time
     FROM processes
-    ORDER BY start_time DESC
+    ORDER BY insert_time DESC
     LIMIT 10;
 """
 processes = client.query(sql)
@@ -711,24 +797,16 @@ print(processes)
 ```
 
 #### Advanced: Finding Slow Operations
-```sql
--- Find streams with CPU profiling data first
-SELECT stream_id, property_get("streams.properties", 'thread-name') as thread_name
-FROM blocks
-WHERE array_has("streams.tags", 'cpu')
-GROUP BY stream_id, thread_name
-LIMIT 5;
-```
-
 ```python
-# Then query spans for specific stream
+# Query spans for a specific stream to find slow operations
 sql = """
     SELECT target, name, duration, begin, end
     FROM view_instance('thread_spans', '{stream_id}')
     ORDER BY duration DESC
     LIMIT 10;
-""".format(stream_id=stream_id)
+""".format(stream_id="your_stream_id_here")
 spans = client.query(sql, begin, end)
+print(spans)
 ```
 
 #### Advanced: Async Event Analysis
@@ -771,29 +849,27 @@ logs_with_process = client.query(sql, begin, end)
 # Get async events with process information
 sql = """
     SELECT ae.time, ae.name, ae.event_type, p.exe, p.process_id
-    FROM view_instance('async_events', '{process_id}') ae
+    FROM view_instance('async_events', 'your_process_id_here') ae
     JOIN processes p ON ae.process_id = p.process_id
     ORDER BY ae.time
     LIMIT 10;
-""".format(process_id=process_id)
+"""
 events_with_process = client.query(sql, begin, end)
 ```
 
-#### Advanced: Stream Relationships
+#### Advanced: Stream Analysis
 ```python
-# Join blocks data with stream properties
+# Join thread spans with stream information
 sql = """
-    SELECT stream_id, 
-           property_get("streams.properties", 'thread-name') as thread_name,
-           property_get("streams.properties", 'thread-id') as thread_id,
-           nb_objects
-    FROM blocks
-    WHERE process_id = '{process_id}'
-    AND array_has("streams.tags", 'cpu')
-    GROUP BY stream_id, thread_name, thread_id, nb_objects
-    ORDER BY nb_objects DESC;
-""".format(process_id=process_id)
-stream_info = client.query(sql)
+    SELECT ts.thread_id, s.name as stream_name, 
+           json_extract(s.properties, '$.thread-name') as thread_name,
+           COUNT(*) as span_count
+    FROM view_instance('thread_spans', 'your_process_id_here') ts
+    JOIN streams s ON ts.stream_id = s.stream_id
+    GROUP BY ts.thread_id, s.name, thread_name
+    ORDER BY span_count DESC;
+"""
+stream_info = client.query(sql, begin, end)
 ```
 
 ### Troubleshooting
