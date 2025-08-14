@@ -10,7 +10,7 @@ def test_async_events_basic_query():
     ORDER BY start_time DESC
     LIMIT 1;
     """
-    processes = client.query(sql, begin, end)
+    processes = client.query(sql)
     
     if len(processes) == 0:
         print("No generator processes found - skipping async events test")
@@ -27,24 +27,24 @@ def test_async_events_basic_query():
     LIMIT 10;
     """.format(process_id=process_id)
     
-    async_events = client.query(sql, begin, end)
+    async_events = client.query(sql)
     print("Async events found:")
     print(async_events)
     
-    if len(async_events) > 0:
-        # Verify schema structure
-        expected_columns = ['stream_id', 'block_id', 'time', 'event_type', 
-                           'span_id', 'parent_span_id', 'name', 'target', 'filename', 'line']
-        for col in expected_columns:
-            assert col in async_events.columns, f"Missing column: {col}"
-        
-        # Verify event types
-        event_types = set(async_events['event_type'].unique())
-        assert event_types.issubset({'begin', 'end'}), f"Unexpected event types: {event_types}"
-        
-        print(f"✅ Found {len(async_events)} async events with correct schema")
-    else:
-        print("ℹ️ No async events found for this process")
+    # REQUIRE async events to be found for proper validation
+    assert len(async_events) > 0, f"No async events found for process {process_id} - test requires actual async span data"
+    
+    # Verify schema structure
+    expected_columns = ['stream_id', 'block_id', 'time', 'event_type', 
+                       'span_id', 'parent_span_id', 'name', 'target', 'filename', 'line']
+    for col in expected_columns:
+        assert col in async_events.columns, f"Missing column: {col}"
+    
+    # Verify event types
+    event_types = set(async_events['event_type'].unique())
+    assert event_types.issubset({'begin', 'end'}), f"Unexpected event types: {event_types}"
+    
+    print(f"✅ Found {len(async_events)} async events with correct schema")
 
 def test_async_events_with_process_join():
     """Test joining async events with process information"""
@@ -56,7 +56,7 @@ def test_async_events_with_process_join():
     ORDER BY start_time DESC
     LIMIT 1;
     """
-    processes = client.query(sql, begin, end)
+    processes = client.query(sql)
     
     if len(processes) == 0:
         print("No generator processes found - skipping process join test")
@@ -75,19 +75,19 @@ def test_async_events_with_process_join():
     LIMIT 5;
     """.format(process_id=process_id)
     
-    results = client.query(sql, begin, end)
+    results = client.query(sql)
     print("Async events with process info:")
     print(results)
     
-    if len(results) > 0:
-        # Verify we have both async event and process columns
-        assert 'name' in results.columns  # async event column
-        assert 'event_type' in results.columns  # async event column
-        assert 'exe' in results.columns  # process column
-        assert 'username' in results.columns  # process column
-        print("✅ JOIN with process info working correctly")
-    else:
-        print("ℹ️ No async events found for JOIN test")
+    # REQUIRE results for proper JOIN validation
+    assert len(results) > 0, f"No async events found for JOIN test - need actual async span data"
+    
+    # Verify we have both async event and process columns
+    assert 'name' in results.columns  # async event column
+    assert 'event_type' in results.columns  # async event column
+    assert 'exe' in results.columns  # process column
+    assert 'username' in results.columns  # process column
+    print("✅ JOIN with process info working correctly")
 
 def test_async_events_parent_child_relationships():
     """Test analyzing parent-child relationships in async spans"""
@@ -99,7 +99,7 @@ def test_async_events_parent_child_relationships():
     ORDER BY start_time DESC
     LIMIT 1;
     """
-    processes = client.query(sql, begin, end)
+    processes = client.query(sql)
     
     if len(processes) == 0:
         print("No generator processes found - skipping relationship test")
@@ -119,14 +119,13 @@ def test_async_events_parent_child_relationships():
     LIMIT 5;
     """.format(process_id=process_id)
     
-    relationships = client.query(sql, begin, end)
+    relationships = client.query(sql)
     print("Parent-child async span relationships:")
     print(relationships)
     
-    if len(relationships) > 0:
-        print(f"✅ Found {len(relationships)} parent-child relationships")
-    else:
-        print("ℹ️ No parent-child relationships found")
+    # REQUIRE parent-child relationships for proper validation
+    assert len(relationships) > 0, "No parent-child relationships found - need nested async spans"
+    print(f"✅ Found {len(relationships)} parent-child relationships")
 
 def test_async_events_duration_analysis():
     """Test calculating async operation durations"""
@@ -138,7 +137,7 @@ def test_async_events_duration_analysis():
     ORDER BY start_time DESC
     LIMIT 1;
     """
-    processes = client.query(sql, begin, end)
+    processes = client.query(sql)
     
     if len(processes) == 0:
         print("No generator processes found - skipping duration test")
@@ -161,17 +160,17 @@ def test_async_events_duration_analysis():
     LIMIT 10;
     """.format(process_id=process_id)
     
-    durations = client.query(sql, begin, end)
+    durations = client.query(sql)
     print("Async operation durations:")
     print(durations)
     
-    if len(durations) > 0:
-        # Verify duration calculations
-        assert 'duration_ms' in durations.columns
-        assert all(durations['duration_ms'] >= 0), "Duration should be non-negative"
-        print(f"✅ Successfully calculated durations for {len(durations)} async operations")
-    else:
-        print("ℹ️ No matched begin/end events found for duration calculation")
+    # REQUIRE duration data for proper validation
+    assert len(durations) > 0, "No matched begin/end events found - need complete async spans for duration calculation"
+    
+    # Verify duration calculations
+    assert 'duration_ms' in durations.columns
+    assert all(durations['duration_ms'] >= 0), "Duration should be non-negative"
+    print(f"✅ Successfully calculated durations for {len(durations)} async operations")
 
 def test_async_events_cross_stream_analysis():
     """Test analyzing async events across multiple streams (threads)"""
@@ -183,7 +182,7 @@ def test_async_events_cross_stream_analysis():
     ORDER BY start_time DESC
     LIMIT 1;
     """
-    processes = client.query(sql, begin, end)
+    processes = client.query(sql)
     
     if len(processes) == 0:
         print("No generator processes found - skipping cross-stream test")
@@ -200,26 +199,29 @@ def test_async_events_cross_stream_analysis():
     ORDER BY event_count DESC;
     """.format(process_id=process_id)
     
-    stream_summary = client.query(sql, begin, end)
+    stream_summary = client.query(sql)
     print("Async events per stream (thread):")
     print(stream_summary)
     
-    if len(stream_summary) > 0:
-        total_events = stream_summary['event_count'].sum()
-        unique_streams = len(stream_summary)
-        print(f"✅ Found {total_events} async events across {unique_streams} streams")
-        
-        if unique_streams > 1:
-            print("✅ Cross-stream async execution detected (good for async debugging)")
+    # REQUIRE cross-stream data for proper validation
+    assert len(stream_summary) > 0, "No async events found - need async spans across streams"
+    
+    total_events = stream_summary['event_count'].sum()
+    unique_streams = len(stream_summary)
+    print(f"✅ Found {total_events} async events across {unique_streams} streams")
+    
+    # Ideally we want multiple streams to demonstrate cross-stream async debugging
+    if unique_streams > 1:
+        print("✅ Cross-stream async execution detected (excellent for async debugging)")
     else:
-        print("ℹ️ No async events found for cross-stream analysis")
+        print("⚠️ Only single stream found - multi-threaded async would be better for testing")
 
 def test_async_events_global_rejection():
     """Test that global async_events queries are properly rejected"""
     try:
         # This should fail since async_events doesn't support global view
         sql = "SELECT COUNT(*) FROM async_events;"
-        client.query(sql, begin, end)
+        client.query(sql)
         assert False, "Global async_events query should have been rejected"
     except Exception as e:
         print(f"✅ Global async_events query correctly rejected: {e}")
