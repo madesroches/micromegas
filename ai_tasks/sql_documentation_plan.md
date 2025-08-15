@@ -66,6 +66,7 @@ If additional work is ever needed:
 5. **Performance Benchmarks:** Quantified performance comparisons
 6. ✅ **Move HTML build scripts:** Moved HTML build script from GitHub Actions to `doc/build-html.py` with DataFusion-style navigation
 7. 🚧 **MkDocs Migration:** Migration to MkDocs Material theme in progress - see `MKDOCS_MIGRATION.md` for status
+8. 📊 **Grafana Integration Guide:** Comprehensive section covering Grafana plugin setup, dashboard creation, query patterns specific to Grafana, and visualization best practices
 
 ### 🏁 **Conclusion**
 The documentation project is **COMPLETE** and successfully delivers:

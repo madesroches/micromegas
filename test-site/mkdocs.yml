@@ -1,0 +1,81 @@
+site_name: Micromegas Documentation
+site_description: Unified observability platform with high-performance telemetry collection and analytics
+site_url: https://micromegas.dev
+repo_url: https://github.com/madesroches/micromegas
+repo_name: madesroches/micromegas
+
+# Specify docs directory since config is in docs/ subdirectory
+docs_dir: .
+
+theme:
+  name: material
+  palette:
+    # Palette toggle for light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: blue
+      accent: blue
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    # Palette toggle for dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: blue
+      accent: blue
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.path
+    - navigation.top
+    - search.highlight
+    - search.suggest
+    - toc.follow
+    - content.code.copy
+    - content.code.annotate
+
+plugins:
+  - search
+  - mkdocstrings
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.tabbed:
+      alternate_style: true
+  - tables
+  - attr_list
+  - md_in_html
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Getting Started: getting-started.md
+  - Query Guide:
+    - Overview: query-guide/index.md
+    - Quick Start: query-guide/quick-start.md
+    - Python API: query-guide/python-api.md
+    - Schema Reference: query-guide/schema-reference.md
+    - Functions Reference: query-guide/functions-reference.md
+    - Query Patterns: query-guide/query-patterns.md
+    - Performance: query-guide/performance.md
+    - Advanced Features: query-guide/advanced-features.md
+  - Architecture:
+    - Overview: architecture/index.md
+    - Core Components: architecture/components.md
+    - Data Flow: architecture/data-flow.md
+  - Development:
+    - Contributing: contributing.md
+    - Build Guide: development/build.md
