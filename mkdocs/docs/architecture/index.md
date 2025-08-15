@@ -99,7 +99,7 @@ graph TD
 - **Lakehouse**: Materialized Parquet views created on-demand for fast analytics
 
 #### Analytics Engine
-- **DataFusion**: SQL query engine with vectorized execution and Parquet optimization
+- **DataFusion**: SQL query engine with vectorized execution optimized for Parquet (columnar format)
 - **FlightSQL**: High-performance query protocol using Apache Arrow for data transfer
 - **Maintenance Daemon**: Background processing for view materialization and data lifecycle
 
@@ -206,7 +206,7 @@ flowchart TD
 - Fetches relevant blocks, decompresses, and converts to Parquet
 - Optimized for deep-dive analysis and debugging
 
-#### 3. Lakehouse Optimization
+#### 3. Lakehouse Analytics Optimization
 - Parquet columnar format enables efficient scanning and filtering
 - Dictionary compression reduces storage and improves query performance  
 - Predicate pushdown leverages Parquet metadata for fast data pruning
