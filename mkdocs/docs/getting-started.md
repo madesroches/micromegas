@@ -142,7 +142,7 @@ Now that you have Micromegas running locally, you can:
 : This is normal for a fresh installation. You'll need to instrument an application to start collecting telemetry data.
 
 **Build errors**
-: Ensure you have the latest Rust toolchain installed and try `cargo update` in the `rust/` directory.
+: Ensure you have the latest Rust toolchain installed.
 
 ### Getting Help
 

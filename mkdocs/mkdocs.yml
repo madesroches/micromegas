@@ -45,7 +45,11 @@ plugins:
 markdown_extensions:
   - admonition
   - pymdownx.details
-  - pymdownx.superfences
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.highlight:
       anchor_linenums: true
       line_spans: __span
@@ -59,6 +63,12 @@ markdown_extensions:
   - md_in_html
   - toc:
       permalink: true
+
+extra_javascript:
+  - https://unpkg.com/mermaid@10.6.1/dist/mermaid.min.js
+
+extra_css:
+  - assets/stylesheets/extra.css
 
 nav:
   - Home: index.md
@@ -76,6 +86,15 @@ nav:
     - Overview: architecture/index.md
     - Core Components: architecture/components.md
     - Data Flow: architecture/data-flow.md
+  - Cost Effectiveness:
+    - Overview: cost-effectiveness.md
+    - Cost Modeling: cost-comparisons/cost-modeling.md
+    - vs. Datadog: cost-comparisons/datadog.md
+    - vs. Dynatrace: cost-comparisons/dynatrace.md
+    - vs. Elastic: cost-comparisons/elastic.md
+    - vs. Grafana Cloud: cost-comparisons/grafana.md
+    - vs. New Relic: cost-comparisons/newrelic.md
+    - vs. Splunk: cost-comparisons/splunk.md
   - Development:
     - Contributing: contributing.md
     - Build Guide: development/build.md

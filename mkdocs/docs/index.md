@@ -32,7 +32,7 @@ Micromegas is a comprehensive observability solution that provides:
 ### 🏗️ Modern Architecture
 - Apache Arrow FlightSQL for efficient data transfer
 - DataFusion-powered analytics engine
-- Lakehouse architecture with Parquet optimization
+- Lakehouse architecture based on Parquet (columnar format optimized for analytics workloads)
 
 ## Quick Start
 
