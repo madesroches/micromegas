@@ -190,6 +190,9 @@ impl FlightSqlServiceImpl {
             "execute_query range={query_range:?} sql={sql:?} limit={:?}",
             metadata.get("limit")
         );
+
+        // Session context creation phase
+        let session_begin = now();
         let ctx = make_session_context(
             self.runtime.clone(),
             self.lake.clone(),
@@ -199,11 +202,15 @@ impl FlightSqlServiceImpl {
         )
         .await
         .map_err(|e| status!("error in make_session_context", e))?;
+        let context_init_duration = now() - session_begin;
 
+        // Query planning phase
+        let planning_begin = now();
         let mut df = ctx
             .sql(sql)
             .await
             .map_err(|e| status!("error building dataframe", e))?;
+        let planning_duration = now() - planning_begin;
 
         if let Some(limit_str) = metadata.get("limit") {
             let limit: usize = usize::from_str(
@@ -216,18 +223,35 @@ impl FlightSqlServiceImpl {
                 .limit(0, Some(limit))
                 .map_err(|e| status!("error building dataframe with limit", e))?;
         }
+
+        // Query execution phase
+        let execution_begin = now();
         let schema = Arc::new(df.schema().as_arrow().clone());
         let stream = df
             .execute_stream()
             .await
             .map_err(|e| Status::internal(format!("Error executing plan: {e:?}")))?
             .map_err(|e| FlightError::ExternalError(Box::new(e)));
-        let builder = FlightDataEncoderBuilder::new().with_schema(schema);
+        let builder = FlightDataEncoderBuilder::new().with_schema(schema.clone());
         let flight_data_stream = builder.build(stream);
+        let execution_duration = now() - execution_begin;
 
-        // Track query setup time (current behavior)
-        let setup_duration = now() - begin_request;
-        imetric!("query_setup_duration", "ticks", setup_duration as u64);
+        // Calculate total setup time and record detailed metrics
+        let total_setup_duration = now() - begin_request;
+
+        // Record detailed timing metrics
+        imetric!(
+            "context_init_duration",
+            "ticks",
+            context_init_duration as u64
+        );
+        imetric!("query_planning_duration", "ticks", planning_duration as u64);
+        imetric!(
+            "query_execution_duration",
+            "ticks",
+            execution_duration as u64
+        );
+        imetric!("query_setup_duration", "ticks", total_setup_duration as u64);
 
         // Create instrumented stream that tracks completion
         let instrumented_stream = flight_data_stream
