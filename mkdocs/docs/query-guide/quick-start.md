@@ -42,6 +42,7 @@ print(f"Result type: {type(logs)}")  # pandas.DataFrame
 ```
 
 **Key points:**
+
 - **⚡ Important**: Always specify time range via API parameters (`begin`, `end`) for best performance
 - Results are returned as pandas DataFrames
 - `level <= 4` filters to show errors and warnings (see [log levels](#log-levels))
@@ -144,6 +145,7 @@ Micromegas uses numeric log levels for efficient filtering:
 | 6     | Trace   | Very detailed tracing information |
 
 **Common filters:**
+
 - `level <= 2` - Only fatal and error messages
 - `level <= 3` - Fatal, error, and warning messages
 - `level <= 4` - All messages except debug and trace

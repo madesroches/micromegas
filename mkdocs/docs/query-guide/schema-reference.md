@@ -100,6 +100,7 @@ Core table containing telemetry block metadata with joined process and stream in
 | `insert_time` | `Timestamp(Nanosecond)` | When block was inserted |
 
 **Joined Process Fields:**
+
 | Field | Type | Description |
 |-------|------|-------------|
 | `processes.start_time` | `Timestamp(Nanosecond)` | Process start time |
@@ -306,6 +307,7 @@ List<Struct<
 ```
 
 **Common properties fields:**
+
 - `properties` - Event-specific metadata (log properties, metric properties)
 - `process_properties` - Process-wide metadata shared across all events from a process
 
@@ -356,6 +358,7 @@ WHERE m.name = 'cpu_usage';
 ### Dictionary Fields
 
 Dictionary-compressed fields are optimized for:
+
 - Equality comparisons (`field = 'value'`)
 - IN clauses (`field IN ('val1', 'val2')`)
 - LIKE patterns on repeated values

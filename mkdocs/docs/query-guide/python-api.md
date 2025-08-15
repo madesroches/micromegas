@@ -24,7 +24,7 @@ client = micromegas.connect()
 client = micromegas.connect(endpoint="http://your-server:8080")
 ```
 
-The `connect()` function automatically discovers your Micromegas FlightSQL endpoint or uses the provided endpoint URL.
+The `connect()` function automatically discovers your Micromegas server or uses the provided endpoint URL.
 
 ### Simple Queries
 
@@ -49,11 +49,13 @@ print(df)
 Execute a SQL query and return results as a pandas DataFrame.
 
 **Parameters:**
+
 - `sql` (str): SQL query string
-- `begin` (datetime, optional): **⚡ Recommended** - Start time for partition elimination
-- `end` (datetime, optional): **⚡ Recommended** - End time for partition elimination
+- `begin` (datetime or str, optional): **⚡ Recommended** - Start time for partition elimination. Can be a `datetime` object or RFC3339 string (e.g., `"2024-01-01T00:00:00Z"`)
+- `end` (datetime or str, optional): **⚡ Recommended** - End time for partition elimination. Can be a `datetime` object or RFC3339 string (e.g., `"2024-01-01T23:59:59Z"`)
 
 **Returns:**
+
 - `pandas.DataFrame`: Query results
 
 **Performance Note:**
@@ -80,6 +82,15 @@ df = client.query("""
     LIMIT 100;
 """)  # Missing API time parameters!
 
+# ✅ Using RFC3339 strings for time ranges
+df = client.query("""
+    SELECT time, process_id, level, msg
+    FROM log_entries
+    WHERE level <= 3
+    ORDER BY time DESC
+    LIMIT 100;
+""", "2024-01-01T00:00:00Z", "2024-01-01T23:59:59Z")  # ⭐ RFC3339 strings
+
 # ✅ OK: Query without time range (for metadata queries)
 processes = client.query("SELECT process_id, exe FROM processes LIMIT 10;")
 ```
@@ -89,11 +100,13 @@ processes = client.query("SELECT process_id, exe FROM processes LIMIT 10;")
 Execute a SQL query and return results as a stream of Apache Arrow RecordBatch objects. Use this for large datasets to avoid memory issues.
 
 **Parameters:**
+
 - `sql` (str): SQL query string  
-- `begin` (datetime, optional): **⚡ Recommended** - Start time for partition elimination
-- `end` (datetime, optional): **⚡ Recommended** - End time for partition elimination
+- `begin` (datetime or str, optional): **⚡ Recommended** - Start time for partition elimination. Can be a `datetime` object or RFC3339 string (e.g., `"2024-01-01T00:00:00Z"`)
+- `end` (datetime or str, optional): **⚡ Recommended** - End time for partition elimination. Can be a `datetime` object or RFC3339 string (e.g., `"2024-01-01T23:59:59Z"`)
 
 **Returns:**
+
 - Iterator of `pyarrow.RecordBatch`: Stream of result batches
 
 **Example:**

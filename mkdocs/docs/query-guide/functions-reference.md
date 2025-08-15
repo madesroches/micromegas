@@ -121,197 +121,7 @@ WHERE name = 'handle_request';
 
 ## Standard SQL Functions
 
-Micromegas supports all standard DataFusion SQL functions. Here are the most commonly used categories:
-
-### Time Functions
-
-#### `NOW()`
-Returns the current timestamp.
-
-```sql
-SELECT NOW() as current_time;
-```
-
-#### `date_trunc(precision, timestamp)`
-Truncates timestamp to specified precision.
-
-**Precisions:** `year`, `month`, `day`, `hour`, `minute`, `second`
-
-```sql
--- Group by hour
-SELECT date_trunc('hour', time) as hour, COUNT(*) as log_count
-FROM log_entries
-GROUP BY date_trunc('hour', time);
-```
-
-#### `INTERVAL`
-Creates time intervals for date arithmetic.
-
-```sql
--- Last 24 hours
-WHERE time >= NOW() - INTERVAL '24 hours'
-
--- Last week
-WHERE time >= NOW() - INTERVAL '7 days'
-
--- Custom intervals
-WHERE time >= NOW() - INTERVAL '30 minutes'
-```
-
-### Aggregation Functions
-
-#### `COUNT(*)`
-Counts all rows.
-
-```sql
-SELECT COUNT(*) as total_logs FROM log_entries;
-```
-
-#### `COUNT(column)`
-Counts non-null values in a column.
-
-```sql
-SELECT COUNT(msg) as non_null_messages FROM log_entries;
-```
-
-#### `SUM(column)`
-Sums numeric values.
-
-```sql
-SELECT SUM(value) as total_memory FROM measures WHERE name = 'memory_usage';
-```
-
-#### `AVG(column)`
-Calculates average of numeric values.
-
-```sql
-SELECT AVG(duration) as avg_duration FROM view_instance('thread_spans', 'process_123');
-```
-
-#### `MIN(column)` / `MAX(column)`
-Finds minimum and maximum values.
-
-```sql
-SELECT MIN(time) as earliest, MAX(time) as latest FROM log_entries;
-```
-
-#### `STDDEV(column)`
-Calculates standard deviation.
-
-```sql
-SELECT STDDEV(value) as memory_variance FROM measures WHERE name = 'memory_usage';
-```
-
-### String Functions
-
-#### `LIKE` / `ILIKE`
-Pattern matching (ILIKE is case-insensitive).
-
-```sql
--- Case sensitive
-SELECT * FROM log_entries WHERE msg LIKE '%error%';
-
--- Case insensitive
-SELECT * FROM log_entries WHERE msg ILIKE '%ERROR%';
-```
-
-#### `REGEXP_MATCH(string, pattern)`
-Regular expression matching.
-
-```sql
-SELECT * FROM log_entries 
-WHERE REGEXP_MATCH(msg, '^ERROR: [0-9]+');
-```
-
-#### `LENGTH(string)`
-Returns string length.
-
-```sql
-SELECT msg, LENGTH(msg) as msg_length FROM log_entries;
-```
-
-#### `SUBSTRING(string, start, length)`
-Extracts substring.
-
-```sql
-SELECT SUBSTRING(msg, 1, 50) as short_msg FROM log_entries;
-```
-
-### Conditional Functions
-
-#### `CASE WHEN`
-Conditional logic.
-
-```sql
-SELECT 
-    level,
-    CASE 
-        WHEN level <= 2 THEN 'Critical'
-        WHEN level = 3 THEN 'Warning'
-        ELSE 'Info'
-    END as severity
-FROM log_entries;
-```
-
-#### `COALESCE(value1, value2, ...)`
-Returns first non-null value.
-
-```sql
-SELECT COALESCE(property_get(properties, 'thread'), 'unknown') as thread_name
-FROM log_entries;
-```
-
-### Window Functions
-
-#### `ROW_NUMBER()`
-Assigns row numbers within partitions.
-
-```sql
-SELECT 
-    time, msg,
-    ROW_NUMBER() OVER (PARTITION BY process_id ORDER BY time) as row_num
-FROM log_entries;
-```
-
-#### `RANK()` / `DENSE_RANK()`
-Ranks values within partitions.
-
-```sql
-SELECT 
-    name, duration,
-    RANK() OVER (ORDER BY duration DESC) as performance_rank
-FROM view_instance('thread_spans', 'process_123');
-```
-
-#### `LAG()` / `LEAD()`
-Access previous/next row values.
-
-```sql
-SELECT 
-    time, value,
-    LAG(value) OVER (ORDER BY time) as previous_value
-FROM measures
-WHERE name = 'cpu_usage';
-```
-
-### Array Functions
-
-#### `ARRAY_AGG(column)`
-Aggregates values into an array.
-
-```sql
-SELECT process_id, ARRAY_AGG(DISTINCT target) as targets
-FROM log_entries
-GROUP BY process_id;
-```
-
-#### `UNNEST(array)`
-Expands array into rows.
-
-```sql
-SELECT UNNEST(['error', 'warn', 'info']) as log_level;
-```
-
+Micromegas supports all standard DataFusion SQL functions including math, string, date/time, conditional, and array functions. For a complete list with examples, see the [DataFusion Scalar Functions documentation](https://datafusion.apache.org/user-guide/sql/scalar_functions.html).
 ## Advanced Query Patterns
 
 ### Histogram Analysis
@@ -348,7 +158,7 @@ GROUP BY date_trunc('hour', time)
 ORDER BY hour;
 ```
 
-### Performance Analysis
+### Performance Trace Analysis
 
 ```sql
 -- Top 10 slowest functions with statistics
@@ -367,7 +177,7 @@ LIMIT 10;
 
 ## DataFusion Reference
 
-For complete documentation of all standard SQL functions, see the [Apache DataFusion SQL Reference](https://datafusion.apache.org/user-guide/sql/).
+Micromegas supports all standard DataFusion SQL syntax, functions, and operators. For complete documentation including functions, operators, data types, and SQL syntax, see the [Apache DataFusion SQL Reference](https://datafusion.apache.org/user-guide/sql/).
 
 ## Next Steps
 

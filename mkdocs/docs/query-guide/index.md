@@ -18,13 +18,10 @@ Micromegas uses **Apache DataFusion** as its SQL engine, which means you get:
 - **Views** provide logical organization of telemetry data
 - **On-demand ETL** processes data only when queried
 
-### Return Format
-All queries return **[pandas DataFrames](https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.html)**, making it easy to work with results using the pandas ecosystem.
-
 ## Available Interfaces
 
 ### Python API
-The primary interface for querying Micromegas data programmatically:
+The primary interface for querying Micromegas data programmatically. All queries return **[pandas DataFrames](https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.html)**, making it easy to work with results using the pandas ecosystem:
 
 ```python
 import micromegas
@@ -34,9 +31,6 @@ df = client.query("SELECT * FROM log_entries LIMIT 10;")
 
 ### Grafana Plugin
 Use the same SQL capabilities in Grafana dashboards through the [Micromegas Grafana plugin](https://github.com/madesroches/micromegas-grafana).
-
-### Direct FlightSQL
-Advanced users can connect directly to the FlightSQL endpoint using Apache Arrow clients.
 
 ## Data Views
 

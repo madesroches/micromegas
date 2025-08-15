@@ -32,12 +32,14 @@ result = client.query(sql, begin, end)  # ⭐ Time range in API
 ```
 
 **Why API time ranges are faster:**
+
 - **Partition Elimination**: Analytics server removes entire partitions from consideration before SQL execution
 - **Metadata Optimization**: Uses partition metadata to skip irrelevant data files  
 - **Memory Efficiency**: Only loads relevant data into query engine memory
 - **Network Efficiency**: Transfers only relevant data over FlightSQL
 
 **Performance Impact:**
+
 - API time range: Query considers only 1-2 partitions
 - SQL time filter: Query scans all partitions, then filters millions of rows
 
