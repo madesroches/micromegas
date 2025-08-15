@@ -1,0 +1,30 @@
+/* Custom styles for Micromegas documentation */
+
+/* Make Mermaid diagrams larger */
+.mermaid {
+    width: 100% !important;
+    max-width: none !important;
+    height: auto !important;
+    min-height: 600px !important;
+}
+
+/* Increase font size in Mermaid diagrams */
+.mermaid .node text,
+.mermaid .edgeLabel text,
+.mermaid .cluster text {
+    font-size: 14px !important;
+}
+
+/* Make node boxes larger */
+.mermaid .node rect,
+.mermaid .node circle,
+.mermaid .node ellipse,
+.mermaid .node polygon {
+    stroke-width: 2px !important;
+}
+
+/* Improve spacing between nodes */
+.mermaid svg {
+    width: 100% !important;
+    height: auto !important;
+}
