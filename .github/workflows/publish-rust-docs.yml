@@ -21,14 +21,104 @@ jobs:
         toolchain: stable
 
     - name: Build Rust documentation
-      run: cargo doc --workspace --no-deps
+      run: |
+        echo "🦀 Building Rust documentation..."
+        cargo doc --workspace --no-deps --verbose
+        echo "📁 Checking generated documentation..."
+        ls -la target/doc/ | head -10
+        echo "📝 Documentation index:"
+        find target/doc -name "index.html" | head -5
       working-directory: rust/
 
+    - name: Install MkDocs and dependencies
+      run: pip install -r mkdocs/docs-requirements.txt
+      
     - name: Prepare staging directory
       run: |
         mkdir -p public_docs/rustdoc
-        cp -r rust/target/doc/* public_docs/rustdoc/
-        cp -r doc public_docs/
+        
+        # Check if Rust docs were built
+        if [ -d "rust/target/doc" ]; then
+          echo "✅ Rust documentation found"
+          cp -r rust/target/doc/* public_docs/rustdoc/
+          ls -la public_docs/rustdoc/ | head -10
+        else
+          echo "❌ Rust documentation not found"
+          echo "Creating placeholder index for rustdoc"
+          cat > public_docs/rustdoc/index.html << 'RUSTDOC_EOF'
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Rust Documentation</title>
+        </head>
+        <body>
+            <h1>Rust Documentation Build Failed</h1>
+            <p>The Rust documentation failed to build. Please check the build logs.</p>
+            <p><a href="../">← Back to main documentation</a></p>
+        </body>
+        </html>
+        RUSTDOC_EOF
+        fi
+        
+        # Build MkDocs documentation
+        mkdocs build --config-file mkdocs/mkdocs.yml --site-dir $PWD/public_docs/docs
+        
+        # Copy legacy doc files for existing links
+        mkdir -p public_docs/doc
+        cp -r doc/* public_docs/doc/
+        
+        # Create main index that redirects to MkDocs
+        cat > public_docs/index.html << 'EOF'
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <title>Micromegas Documentation</title>
+            <meta http-equiv="refresh" content="0; url=docs/">
+            <style>
+                body { 
+                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                    max-width: 800px;
+                    margin: 50px auto;
+                    padding: 20px;
+                    text-align: center;
+                }
+                .docs-link {
+                    display: inline-block;
+                    margin: 20px;
+                    padding: 20px 30px;
+                    background: #f6f8fa;
+                    border-radius: 6px;
+                    text-decoration: none;
+                    color: #24292e;
+                    border: 1px solid #e1e4e8;
+                    transition: background 0.2s;
+                }
+                .docs-link:hover { background: #e1e4e8; }
+            </style>
+        </head>
+        <body>
+            <h1>Micromegas Documentation</h1>
+            <p>Redirecting to documentation...</p>
+            <p>If you're not redirected, choose:</p>
+            <a href="docs/" class="docs-link">
+                <h3>📚 User Documentation</h3>
+                <p>Complete guides and references</p>
+            </a>
+            <a href="rustdoc/" class="docs-link">
+                <h3>🦀 Rust API Documentation</h3>
+                <p>Generated API documentation for Rust crates</p>
+            </a>
+            <a href="doc/" class="docs-link">
+                <h3>📄 Legacy Documentation</h3>
+                <p>Original documentation files</p>
+            </a>
+        </body>
+        </html>
+        EOF
+        
+        # Disable Jekyll
+        touch public_docs/.nojekyll
 
     - name: Deploy to GitHub Pages
       uses: peaceiris/actions-gh-pages@v4
