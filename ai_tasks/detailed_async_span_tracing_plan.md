@@ -245,4 +245,165 @@ pub fn find_parquet_metadata(filename: &str, domain: &[Partition]) -> Result<Arc
 3. **Phase 3**: I/O and storage operations
 4. **Phase 4**: Analysis and span pruning based on collected data
 
+## Development Workflow
+
+### Service Management
+**Start Services** (from project root):
+```bash
+python3 local_test_env/ai_scripts/start_services.py
+```
+- Starts PostgreSQL, telemetry-ingestion-srv (port 9000), flight-sql-srv (port 32010), and telemetry-admin
+- Services run in background with logs in `/tmp/`
+- PIDs saved to `/tmp/micromegas_pids.txt`
+
+**Stop Services**:
+```bash
+python3 local_test_env/ai_scripts/stop_services.py
+```
+- Stops all services and cleans up log files
+
+**Monitor Service Logs**:
+```bash
+# Ingestion server logs
+tail -f /tmp/ingestion.log
+
+# Analytics server (FlightSQL) logs  
+tail -f /tmp/analytics.log
+
+# Admin daemon logs
+tail -f /tmp/admin.log
+```
+
+### Testing and Validation
+
+**Run Python Queries** (from project root):
+```bash
+cd python/micromegas && source test_venv/bin/activate
+
+# Query CPU blocks to verify async spans are working
+python3 -c "
+import micromegas
+client = micromegas.connect()
+
+# Check for FlightSQL CPU blocks
+sql = \"SELECT COUNT(*) as cpu_block_count FROM blocks WHERE array_has(\\\"streams.tags\\\", 'cpu') AND \\\"processes.exe\\\" LIKE '%flight-sql-srv%';\"
+result = client.query(sql)
+print(f'FlightSQL CPU blocks: {result.iloc[0][\"cpu_block_count\"]}')
+
+# Check async events for latest FlightSQL process
+sql = \"SELECT process_id FROM blocks WHERE \\\"processes.exe\\\" LIKE '%flight-sql-srv%' ORDER BY insert_time DESC LIMIT 1;\"
+processes = client.query(sql)
+if len(processes) > 0:
+    process_id = processes.iloc[0]['process_id']
+    sql = f\"SELECT COUNT(*) as event_count FROM view_instance('async_events', '{process_id}');\"
+    events = client.query(sql)
+    print(f'Async events: {events.iloc[0][\"event_count\"]}')
+"
+```
+
+**Test Slow Query for Span Analysis**:
+```bash
+# Execute a complex query to generate slow spans
+python3 -c "
+import micromegas
+client = micromegas.connect()
+
+# Complex query that should generate multiple spans
+sql = \"\"\"
+SELECT processes.exe, COUNT(*) as block_count, AVG(nb_objects) as avg_objects
+FROM blocks 
+WHERE insert_time >= NOW() - INTERVAL '1 hour'
+GROUP BY processes.exe
+ORDER BY block_count DESC;
+\"\"\"
+result = client.query(sql)
+print('Query executed - check async_events for new spans')
+print(result)
+"
+```
+
+**Analyze Async Span Call Trees**:
+```bash
+# Generate call tree visualization
+python3 -c "
+import micromegas
+import pandas as pd
+
+client = micromegas.connect()
+
+# Get latest FlightSQL process
+sql = \"SELECT process_id FROM blocks WHERE \\\"processes.exe\\\" LIKE '%flight-sql-srv%' ORDER BY insert_time DESC LIMIT 1;\"
+processes = client.query(sql)
+process_id = processes.iloc[0]['process_id']
+
+# Get async spans with durations
+sql = f\"\"\"
+SELECT 
+    begin_events.span_id,
+    begin_events.parent_span_id,
+    begin_events.name,
+    begin_events.target,
+    begin_events.time as begin_time,
+    end_events.time as end_time,
+    CAST((end_events.time - begin_events.time) AS BIGINT) / 1000000 as duration_ms
+FROM 
+    (SELECT * FROM view_instance('async_events', '{process_id}') WHERE event_type = 'begin') begin_events
+LEFT JOIN 
+    (SELECT * FROM view_instance('async_events', '{process_id}') WHERE event_type = 'end') end_events
+ON begin_events.span_id = end_events.span_id
+ORDER BY begin_events.time DESC
+LIMIT 20;
+\"\"\"
+
+spans = client.query(sql)
+print(f'Found {len(spans)} async spans for analysis')
+print(spans[['name', 'duration_ms', 'target']])
+"
+```
+
+### Development Cycle
+
+1. **Add Instrumentation**: Add `#[span_fn]` to target functions
+2. **Rebuild**: `cd rust && cargo build`
+3. **Restart Services**: `python3 local_test_env/ai_scripts/stop_services.py && python3 local_test_env/ai_scripts/start_services.py`
+4. **Test Queries**: Run slow queries using Python client
+5. **Analyze Results**: Query `async_events` to see new spans
+6. **Iterate**: Remove spans that prove insignificant, add more where needed
+
+## TODO: Comprehensive Test Suite
+
+Design and implement a comprehensive test suite that exercises all instrumented code paths to ensure complete performance visibility:
+
+1. **Validate Async Trait Instrumentation**:
+   - Verify that `#[span_fn]` works correctly on async trait methods
+   - Test that spans are properly created for trait implementations like `BlockProcessor::process`
+   - Ensure parent-child span relationships work across trait boundaries
+   - Validate that async trait methods in `QueryPartitionProvider` generate correct spans
+
+2. **BlockProcessor Implementations**:
+   - Test `LogBlockProcessor::process` with various log block scenarios
+   - Test `MetricsBlockProcessor::process` with metrics data
+   - Test `AsyncEventsBlockProcessor::process` with async event streams
+   
+3. **Partition Operations**:
+   - Test `BatchPartitionMerger::execute_merge_query` with different merge scenarios
+   - Exercise all partition cache paths including edge cases
+   
+4. **Query Execution Paths**:
+   - Test queries that trigger `MaterializedView::scan`
+   - Test queries using `ViewInstanceTableFunction::call`
+   - Exercise `make_session_context` with various session configurations
+   
+5. **Data Lake Operations**:
+   - Test scenarios that exercise reader factory operations
+   - Test partitioned execution plan creation
+   
+6. **Performance Scenarios**:
+   - Create queries that generate deep call stacks
+   - Test concurrent query execution
+   - Test cache miss scenarios
+   - Test large dataset processing
+
+The test suite should generate comprehensive async event data covering all instrumented functions to validate performance characteristics and identify optimization opportunities.
+
 This plan will provide comprehensive observability for all queries initially, then use actual performance data to optimize instrumentation by removing spans that don't provide significant value.
