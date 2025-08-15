@@ -91,7 +91,7 @@ graph TD
 #### Data Collection
 - **Tracing Library**: Ultra-low overhead (20ns per event) instrumentation embedded in applications
 - **Telemetry Sink**: Batches events and handles transmission to ingestion service
-- **HTTP Gateway**: REST API endpoint for receiving telemetry data
+- **Ingestion Service**: HTTP endpoint for receiving telemetry data from sinks
 
 #### Data Storage
 - **PostgreSQL**: Stores metadata, process information, and stream definitions
@@ -101,6 +101,7 @@ graph TD
 #### Analytics Engine
 - **DataFusion**: SQL query engine with vectorized execution optimized for Parquet (columnar format)
 - **FlightSQL**: High-performance query protocol using Apache Arrow for data transfer
+- **HTTP Gateway**: REST API gateway for accessing FlightSQL analytics service
 - **Maintenance Daemon**: Background processing for view materialization and data lifecycle
 
 ## Data Flow
