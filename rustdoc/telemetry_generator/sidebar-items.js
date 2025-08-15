@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["async_operation","async_subtask","cleanup_async_operation","concurrent_async_task","execute_async_operation","main","manual_async_work","multi_threaded_async_work","nested_async_operation","prepare_async_operation","sync_operation"],"struct":["Args"]};
