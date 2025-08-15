@@ -16,6 +16,7 @@ target/
 __pycache__/
 **/jupyter_env/
 **/.ipynb_checkpoints/
+**/test_venv/
 
 # coverage reports
 rust/cobertura.xml

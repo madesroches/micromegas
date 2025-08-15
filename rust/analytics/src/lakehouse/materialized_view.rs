@@ -14,7 +14,7 @@ use datafusion::{
     physical_plan::ExecutionPlan,
 };
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
-use micromegas_tracing::trace;
+use micromegas_tracing::prelude::*;
 use object_store::ObjectStore;
 use std::{any::Any, sync::Arc};
 
@@ -67,6 +67,7 @@ impl TableProvider for MaterializedView {
         TableType::Base
     }
 
+    #[span_fn]
     async fn scan(
         &self,
         state: &dyn Session,

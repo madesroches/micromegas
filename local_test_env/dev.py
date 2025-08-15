@@ -83,15 +83,17 @@ def wait_for_service(url, service_name, timeout=60, check_interval=2):
     print(f"❌ Timeout waiting for {service_name} after {timeout}s")
     return False
 
-def start_services():
+def start_services(build_mode):
     """Start all services in tmux panes with proper sequencing"""
+    run_flags = "--release" if build_mode == "release" else ""
+    
     # Start PostgreSQL first
     print("🐘 Starting PostgreSQL...")
     run_command(f"tmux send-keys -t 0 'echo \"🐘 Starting PostgreSQL...\"; cd db && python3 run.py' C-m")
     
     # Start Ingestion Server and wait for it to be ready
     print("📥 Starting Ingestion Server...")
-    run_command(f"tmux send-keys -t 1 'echo \"📥 Starting Ingestion Server...\"; cd ../rust && cargo run -p telemetry-ingestion-srv -- --listen-endpoint-http 127.0.0.1:9000' C-m")
+    run_command(f"tmux send-keys -t 1 'echo \"📥 Starting Ingestion Server...\"; cd ../rust && cargo run {run_flags} -p telemetry-ingestion-srv -- --listen-endpoint-http 127.0.0.1:9000' C-m")
     
     # Wait for ingestion service to be ready
     if not wait_for_service("http://127.0.0.1:9000/health", "Ingestion Server"):
@@ -99,8 +101,8 @@ def start_services():
     
     # Start remaining services
     remaining_services = [
-        (2, 'echo "📊 Starting Analytics Server..."; cd ../rust && cargo run -p flight-sql-srv -- --disable-auth'),
-        (3, 'echo "😈 Starting Daemon..."; cd ../rust && cargo run -p telemetry-admin -- crond')
+        (2, f'echo "📊 Starting Analytics Server..."; cd ../rust && cargo run {run_flags} -p flight-sql-srv -- --disable-auth'),
+        (3, f'echo "😈 Starting Daemon..."; cd ../rust && cargo run {run_flags} -p telemetry-admin -- crond')
     ]
     
     for pane_num, command in remaining_services:
@@ -125,7 +127,7 @@ def main():
         kill_existing_session()
         build_rust_services(build_mode)
         create_tmux_session()
-        start_services()
+        start_services(build_mode)
         attach_session()
         
     except subprocess.CalledProcessError as e:

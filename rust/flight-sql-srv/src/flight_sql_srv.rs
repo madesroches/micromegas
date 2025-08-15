@@ -26,7 +26,7 @@ struct Cli {
     disable_auth: bool,
 }
 
-#[micromegas_main(max_level_override = "debug", interop_max_level = "info")]
+#[micromegas_main(max_level_override = "debug")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Cli::parse();
     let connection_string = std::env::var("MICROMEGAS_SQL_CONNECTION_STRING")

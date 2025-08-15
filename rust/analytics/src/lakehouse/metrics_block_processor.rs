@@ -10,6 +10,7 @@ use super::{
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use micromegas_telemetry::blob_storage::BlobStorage;
+use micromegas_tracing::prelude::*;
 use std::sync::Arc;
 
 #[derive(Debug)]
@@ -17,6 +18,7 @@ pub struct MetricsBlockProcessor {}
 
 #[async_trait]
 impl BlockProcessor for MetricsBlockProcessor {
+    #[span_fn]
     async fn process(
         &self,
         blob_storage: Arc<BlobStorage>,

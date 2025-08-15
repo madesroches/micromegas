@@ -175,6 +175,7 @@ pub fn register_functions(
     register_extension_functions(ctx);
 }
 
+#[span_fn]
 pub async fn make_session_context(
     runtime: Arc<RuntimeEnv>,
     lake: Arc<DataLakeConnection>,

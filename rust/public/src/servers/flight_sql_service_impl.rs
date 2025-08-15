@@ -44,6 +44,7 @@ use prost::Message;
 use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use tonic::metadata::MetadataMap;
 use tonic::{Request, Response, Status, Streaming};
 
@@ -63,6 +64,47 @@ macro_rules! api_entry_not_implemented {
             line!()
         )))
     }};
+}
+
+/// Stream wrapper that tracks when the stream is fully consumed
+struct CompletionTrackedStream<S> {
+    inner: S,
+    start_time: i64,
+    completed: bool,
+}
+
+impl<S> CompletionTrackedStream<S> {
+    fn new(inner: S, start_time: i64) -> Self {
+        Self {
+            inner,
+            start_time,
+            completed: false,
+        }
+    }
+}
+
+impl<S> Stream for CompletionTrackedStream<S>
+where
+    S: Stream<Item = Result<arrow_flight::FlightData, Status>> + Unpin,
+{
+    type Item = Result<arrow_flight::FlightData, Status>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        match Pin::new(&mut self.inner).poll_next(cx) {
+            Poll::Ready(Some(result)) => Poll::Ready(Some(result)),
+            Poll::Ready(None) => {
+                // Stream completed successfully
+                if !self.completed {
+                    let total_duration = now() - self.start_time;
+                    imetric!("query_duration_total", "ticks", total_duration as u64);
+                    imetric!("query_completed_successfully", "count", 1);
+                    self.completed = true;
+                }
+                Poll::Ready(None)
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
 }
 
 static INSTANCE_SQL_DATA: Lazy<SqlInfoData> = Lazy::new(|| {
@@ -148,6 +190,9 @@ impl FlightSqlServiceImpl {
             "execute_query range={query_range:?} sql={sql:?} limit={:?}",
             metadata.get("limit")
         );
+
+        // Session context creation phase
+        let session_begin = now();
         let ctx = make_session_context(
             self.runtime.clone(),
             self.lake.clone(),
@@ -157,11 +202,15 @@ impl FlightSqlServiceImpl {
         )
         .await
         .map_err(|e| status!("error in make_session_context", e))?;
+        let context_init_duration = now() - session_begin;
 
+        // Query planning phase
+        let planning_begin = now();
         let mut df = ctx
             .sql(sql)
             .await
             .map_err(|e| status!("error building dataframe", e))?;
+        let planning_duration = now() - planning_begin;
 
         if let Some(limit_str) = metadata.get("limit") {
             let limit: usize = usize::from_str(
@@ -174,20 +223,53 @@ impl FlightSqlServiceImpl {
                 .limit(0, Some(limit))
                 .map_err(|e| status!("error building dataframe with limit", e))?;
         }
+
+        // Query execution phase
+        let execution_begin = now();
         let schema = Arc::new(df.schema().as_arrow().clone());
         let stream = df
             .execute_stream()
             .await
             .map_err(|e| Status::internal(format!("Error executing plan: {e:?}")))?
             .map_err(|e| FlightError::ExternalError(Box::new(e)));
-        let builder = FlightDataEncoderBuilder::new().with_schema(schema);
+        let builder = FlightDataEncoderBuilder::new().with_schema(schema.clone());
         let flight_data_stream = builder.build(stream);
-        let boxed_flight_stream = flight_data_stream
+        let execution_duration = now() - execution_begin;
+
+        // Calculate total setup time and record detailed metrics
+        let total_setup_duration = now() - begin_request;
+
+        // Record detailed timing metrics
+        imetric!(
+            "context_init_duration",
+            "ticks",
+            context_init_duration as u64
+        );
+        imetric!("query_planning_duration", "ticks", planning_duration as u64);
+        imetric!(
+            "query_execution_duration",
+            "ticks",
+            execution_duration as u64
+        );
+        imetric!("query_setup_duration", "ticks", total_setup_duration as u64);
+
+        // Create instrumented stream that tracks completion
+        let instrumented_stream = flight_data_stream
             .map_err(|e| status!("error building data stream", e))
-            .boxed();
-        let duration = now() - begin_request;
-        imetric!("request_duration", "ticks", duration as u64);
-        Ok(Response::new(boxed_flight_stream))
+            .map({
+                let start_time = begin_request;
+                move |result| {
+                    // On stream completion or error, record total duration
+                    if result.is_err() {
+                        let total_duration = now() - start_time;
+                        imetric!("query_duration_with_error", "ticks", total_duration as u64);
+                    }
+                    result
+                }
+            });
+        let completion_tracked_stream =
+            CompletionTrackedStream::new(instrumented_stream.boxed(), begin_request);
+        Ok(Response::new(Box::pin(completion_tracked_stream)))
     }
 }
 

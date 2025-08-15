@@ -9,6 +9,7 @@ use crate::{
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use micromegas_telemetry::blob_storage::BlobStorage;
+use micromegas_tracing::prelude::*;
 use std::sync::Arc;
 
 /// A `BlockProcessor` implementation for processing log blocks.
@@ -17,6 +18,7 @@ pub struct LogBlockProcessor {}
 
 #[async_trait]
 impl BlockProcessor for LogBlockProcessor {
+    #[span_fn]
     async fn process(
         &self,
         blob_storage: Arc<BlobStorage>,

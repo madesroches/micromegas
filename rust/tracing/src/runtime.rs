@@ -78,9 +78,6 @@ impl TracingRuntimeExt for tokio::runtime::Builder {
         self.on_thread_start(|| {
             init_thread_stream();
         })
-        .on_thread_park(|| {
-            flush_thread_buffer();
-        })
         .on_thread_stop(|| {
             unregister_thread_stream();
         })
@@ -94,10 +91,8 @@ impl TracingRuntimeExt for tokio::runtime::Builder {
             init_thread_stream();
             on_start();
         })
-        .on_thread_park(|| {
-            flush_thread_buffer();
-        })
         .on_thread_stop(|| {
+            flush_thread_buffer();
             unregister_thread_stream();
         })
     }

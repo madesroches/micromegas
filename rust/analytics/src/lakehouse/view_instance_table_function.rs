@@ -11,6 +11,7 @@ use datafusion::{
     logical_expr::Expr,
 };
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
+use micromegas_tracing::prelude::*;
 use object_store::ObjectStore;
 use std::sync::Arc;
 
@@ -56,6 +57,7 @@ impl ViewInstanceTableFunction {
 }
 
 impl TableFunctionImpl for ViewInstanceTableFunction {
+    #[span_fn]
     fn call(&self, exprs: &[Expr]) -> datafusion::error::Result<Arc<dyn TableProvider>> {
         let arg1 = exprs.first().map(exp_to_string);
         let Some(Ok(view_set_name)) = arg1 else {
