@@ -68,9 +68,9 @@ In summary, while commercial platforms offer convenience and managed simplicity,
 
 For a more in-depth, hypothetical dollar-for-dollar comparison, refer to the following documents:
 
-*   [Micromegas vs. Splunk](./MICROMEGAS_VS_SPLUNK.md)
-*   [Micromegas vs. Grafana Cloud Stack](./MICROMEGAS_VS_GRAFANA.md)
-*   [Micromegas vs. Datadog](./MICROMEGAS_VS_DATADOG.md)
-*   [Micromegas vs. Elastic Observability](./MICROMEGAS_VS_ELASTIC.md)
-*   [Micromegas vs. New Relic](./MICROMEGAS_VS_NEWRELIC.md)
-*   [Micromegas vs. Dynatrace](./MICROMEGAS_VS_DYNATRACE.md)
+*   [Micromegas vs. Splunk](./splunk.md)
+*   [Micromegas vs. Grafana Cloud Stack](./grafana.md)
+*   [Micromegas vs. Datadog](./datadog.md)
+*   [Micromegas vs. Elastic Observability](./elastic.md)
+*   [Micromegas vs. New Relic](./newrelic.md)
+*   [Micromegas vs. Dynatrace](./dynatrace.md)

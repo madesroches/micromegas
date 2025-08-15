@@ -34,3 +34,7 @@ docker/flight-sql-srv
 docker/telemetry-admin
 docker/pg-gateway-srv
 docker/http-gateway-srv
+
+# mkdocs
+mkdocs/site/
+docs-venv/

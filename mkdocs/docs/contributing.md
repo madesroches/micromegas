@@ -50,7 +50,7 @@ By participating in this project, you agree to maintain a respectful and inclusi
    git checkout -b bugfix/issue-description
    ```
 
-2. **Follow coding standards** (see [AI Guidelines](AI_GUIDELINES.md)):
+2. **Follow coding standards** (see [AI Guidelines](https://github.com/madesroches/micromegas/blob/main/AI_GUIDELINES.md)):
    - **Rust**: Run `cargo fmt` before any commit
    - **Python**: Use `black` for formatting
    - **Dependencies**: Keep alphabetical order in Cargo.toml
