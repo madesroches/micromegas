@@ -16,14 +16,19 @@ Enhance the FlightSQL service with comprehensive query latency tracking using bo
   - SQL planning (DataFusion logical plan creation)
   - Query execution (physical plan execution)
 
-## 2. Async Span Integration  
-- **Status**: ⚠️ **BLOCKED** - `async_span_scope!` macro is deprecated
-- **Alternative Approach**: Need to investigate current async tracing patterns in the codebase
-- **Planned Spans**: Create spans for major phases:
-  - Main span for entire `execute_query` method
-  - Child spans for session context creation, query planning, and execution
-- **Correlation**: Ensure spans correlate with metrics through consistent timing and metadata
-- **Action Required**: Research current async tracing implementation in micromegas
+## 2. Async Span Integration ✅ COMPLETED
+- **✅ Modern Implementation**: Used `.instrument()` method pattern replacing deprecated `async_span_scope!`
+- **✅ Comprehensive Spans**: Implemented hierarchical span structure:
+  - `flight_sql_execute_query` - Top-level span for entire query execution
+  - `make_session_context` - Session context creation span (proc macro auto-instrumented)
+  - `flight_sql_query_planning` - SQL planning phase span  
+  - `flight_sql_query_execution` - Query execution span
+- **✅ Correlation**: Spans correlate with metrics through consistent timing and span naming
+- **✅ Implementation Details**:
+  - Refactored `execute_query` to use `execute_query_impl` for proper instrumentation
+  - Added `#[span_fn]` proc macro to `make_session_context` for automatic instrumentation
+  - Manual instrumentation only where needed (SQL planning and execution phases)
+  - Maintains backwards compatibility for external callers
 
 ## 3. Enhanced Metrics Implementation ✅ COMPLETED
 - **Granular Timing Metrics**: Break down `request_duration` into phases:
@@ -90,15 +95,55 @@ Enhance the FlightSQL service with comprehensive query latency tracking using bo
   - `query_duration_total` - End-to-end completion timing
 - ✅ **Accurate stream completion tracking**: Fixed critical timing bug with `CompletionTrackedStream`
 - ✅ **Success and error monitoring**: Implemented completion and error timing tracking
-- ⚠️ **Async tracing correlation**: Blocked due to deprecated `async_span_scope!` - requires future research
-- ✅ **Foundation for optimization**: Comprehensive metrics provide performance visibility for future optimization
+- ✅ **Async tracing correlation**: Implemented hierarchical async spans using modern `.instrument()` pattern
+- ✅ **Foundation for optimization**: Comprehensive metrics and distributed tracing provide complete observability
 
 ## Final Implementation Summary
 This plan has been successfully implemented with the following key achievements:
 1. **Critical Bug Fix**: Fixed incorrect `request_duration` timing that only measured setup, not stream completion
 2. **Comprehensive Metrics**: Added detailed timing breakdown for all query execution phases
 3. **Stream Tracking**: Implemented proper end-to-end timing with completion tracking
-4. **Code Quality**: All code passes lint/format checks and maintains API compatibility
-5. **User Feedback Integration**: Simplified implementation by removing property-based metrics per user requirements
+4. **Async Span Tracing**: Implemented hierarchical distributed tracing with modern `.instrument()` pattern
+5. **Code Quality**: All code passes lint/format checks and maintains API compatibility
+6. **User Feedback Integration**: Simplified implementation by removing property-based metrics per user requirements
 
-**Status**: ✅ **COMPLETED** - Core query latency tracking implementation is complete and functional
+**Status**: ✅ **COMPLETE** - Both metrics and async spans fully working
+
+## Final Resolution - CPU Trace Fix ✅ COMPLETED
+### 🐛 **Root Cause Identified and Fixed:**
+- **Timing Issue**: `#[micromegas_main]` macro initialized tokio runtime before dispatch
+- **Problem**: Worker threads tried to create thread streams before global dispatch was available
+- **Error**: `"Dispatch not initialized! Events will be lost for this thread"`
+- **Result**: All async span events silently dropped
+
+### 🔧 **Solution Implemented:**
+- **Fixed `micromegas-proc-macros/src/lib.rs`**: Moved telemetry guard initialization before tokio runtime creation
+- **Order Fixed**: 
+  1. Initialize dispatch via telemetry guard
+  2. Create tokio runtime with tracing callbacks  
+  3. Worker threads can now access initialized dispatch
+- **File Modified**: `/home/mad/micromegas/rust/micromegas-proc-macros/src/lib.rs:127-145`
+
+### ✅ **Validation Results:**
+- **CPU Blocks Found**: 10 FlightSQL server CPU blocks successfully created
+- **Async Events Found**: 10 async span events with complete hierarchy:
+  ```
+  🌟 flight_sql_execute_query (134ms)
+  ├── 📄 flight_sql_query_execution (128ms)
+  ├── 📄 flight_sql_query_planning (0ms) 
+  └── 📄 make_session_context (5ms)
+  ```
+- **Cross-Thread Events**: Async spans across multiple worker threads (span correlation working)
+- **Performance Tracking**: Complete end-to-end timing from telemetry data
+
+### 🧹 **Cleanup Completed:**
+- **Debug Prints Removed**: Cleaned up temporary debug output from investigation
+- **Code Quality**: All formatting and linting standards maintained
+
+## Final Implementation Summary  
+- **✅ Detailed Metrics**: 5 comprehensive timing metrics covering all query phases - **COMPLETE**
+- **✅ Async Tracing**: 4 hierarchical spans with full CPU stream integration - **COMPLETE**  
+- **✅ Stream Accuracy**: Fixed critical timing bug with proper completion tracking - **COMPLETE**
+- **✅ Observability**: Complete metrics + distributed tracing observability - **COMPLETE**
+- **✅ Performance**: Minimal overhead with accurate measurement - **COMPLETE**
+- **✅ Bug Fix**: Resolved dispatch timing issue affecting all async instrumentation - **COMPLETE**

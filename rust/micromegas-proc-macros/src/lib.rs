@@ -125,6 +125,10 @@ pub fn micromegas_main(
 
     let expanded = quote! {
         fn main() #return_type {
+            // Set up telemetry guard BEFORE building tokio runtime
+            // This ensures dispatch is initialized before worker threads start
+            let _telemetry_guard = #telemetry_guard_builder;
+
             // Build the runtime with tracing callbacks
             let runtime = {
                 use micromegas::tracing::runtime::TracingRuntimeExt;
@@ -136,9 +140,6 @@ pub fn micromegas_main(
             };
 
             runtime.block_on(async move {
-                // Set up telemetry guard with sensible defaults
-                let _telemetry_guard = #telemetry_guard_builder;
-
                 // Execute the original main function body
                 #original_block
             })

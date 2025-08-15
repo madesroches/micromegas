@@ -60,3 +60,4 @@ Micromegas: unified observability platform for logs, metrics, and traces.
 **Core crates**: `tracing/` (instrumentation), `analytics/` (DataFusion queries), `public/` (user-facing)
 **Services**: `telemetry-ingestion-srv/` (HTTP ingestion), `flight-sql-srv/` (SQL queries)
 **Flow**: Apps → HTTP ingestion → PostgreSQL metadata + object storage → FlightSQL queries
+- there should be a venv available to run python code
