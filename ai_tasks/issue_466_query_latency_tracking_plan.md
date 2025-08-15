@@ -69,6 +69,15 @@ Enhance the FlightSQL service with comprehensive query latency tracking using bo
 - **Stream Completion Issue**: Fix incorrect `request_duration` metric timing
   - **Problem**: Current `imetric!("request_duration", "ticks", duration as u64)` at line 198 measures only query setup time, not actual data streaming completion
   - **Impact**: Metric reports query as "complete" when stream is just created, not when data transfer finishes
+  - **Implementation Completed**:
+    - Created `CompletionTrackedStream` wrapper that tracks stream consumption
+    - Renamed current metric to `query_setup_duration` for accuracy
+    - Added new metrics:
+      - `query_duration_total` - Actual end-to-end time including data transfer
+      - `query_completed_successfully` - Success completion counter
+      - `query_duration_with_error` - Duration when errors occur
+    - Maintained `request_duration` for backwards compatibility
+    - Code compiles successfully
   - **Solution Options**:
     1. Rename current metric to `query_setup_duration` to reflect actual measurement
     2. Implement stream wrapper to track actual completion time
