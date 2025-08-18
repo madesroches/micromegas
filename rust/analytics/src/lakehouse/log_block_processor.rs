@@ -18,7 +18,7 @@ pub struct LogBlockProcessor {}
 
 #[async_trait]
 impl BlockProcessor for LogBlockProcessor {
-    #[span_fn]
+    // #[span_fn]  // Temporarily disabled to test
     async fn process(
         &self,
         blob_storage: Arc<BlobStorage>,

@@ -87,7 +87,7 @@ impl BatchPartitionMerger {
 
 #[async_trait]
 impl PartitionMerger for BatchPartitionMerger {
-    #[span_fn]
+    // #[span_fn]  // Temporarily disabled to test
     async fn execute_merge_query(
         &self,
         lake: Arc<DataLakeConnection>,

@@ -11,7 +11,7 @@ use proc_macro::TokenStream;
 use proc_macro2::Literal;
 use quote::quote;
 use syn::{
-    ItemFn, Type, TypeImplTrait, TypePath,
+    ItemFn, Type, TypePath, ReturnType,
     parse::{Parse, ParseStream, Result},
     parse_macro_input, parse_quote,
 };
@@ -32,6 +32,103 @@ impl Parse for TraceArgs {
             })
         }
     }
+}
+
+/// Check if the function returns a Future (indicating it's an async trait method)
+fn returns_future(function: &ItemFn) -> bool {
+    match &function.sig.output {
+        ReturnType::Type(_, ty) => is_future_type(ty),
+        ReturnType::Default => false,
+    }
+}
+
+/// Check if a type is a Future type (Pin<Box<dyn Future>> or impl Future)
+fn is_future_type(ty: &Type) -> bool {
+    match ty {
+        // Check for Pin<Box<dyn Future<...>>>
+        Type::Path(TypePath { path, .. }) => {
+            if let Some(last_segment) = path.segments.last() {
+                if last_segment.ident == "Pin" {
+                    // This is the pattern async-trait generates
+                    return true;
+                }
+            }
+            false
+        }
+        // Check for impl Future<...>
+        Type::ImplTrait(impl_trait) => {
+            impl_trait.bounds.iter().any(|bound| {
+                if let syn::TypeParamBound::Trait(trait_bound) = bound {
+                    if let Some(segment) = trait_bound.path.segments.last() {
+                        return segment.ident == "Future";
+                    }
+                }
+                false
+            })
+        }
+        _ => false,
+    }
+}
+
+/// span_async_trait: trace the execution of an async trait method
+/// This macro is applied BEFORE #[async_trait] transforms the method
+#[proc_macro_attribute]
+pub fn span_async_trait(args: TokenStream, input: TokenStream) -> TokenStream {
+    let args = parse_macro_input!(args as TraceArgs);
+    let mut function = parse_macro_input!(input as ItemFn);
+
+    let function_name = args
+        .alternative_name
+        .map_or(function.sig.ident.to_string(), |n| n.to_string());
+
+    // This macro expects to run BEFORE async-trait transformation
+    // So we should see an async method here
+    if function.sig.asyncness.is_some() {
+        let stmts = &function.block.stmts;
+        
+        // Keep the function signature unchanged for async-trait to process
+        // but wrap the body with instrumentation that will work after transformation
+        function.block = parse_quote! {
+            {
+                use micromegas_tracing::dispatch::{on_begin_async_scope, on_end_async_scope};
+                static_span_desc!(_SCOPE_DESC, concat!(module_path!(), "::", #function_name));
+                
+                println!("🟢 SPAN_ASYNC_TRAIT: Processing {}", #function_name);
+                
+                // Create an instrumented async block that async-trait will then box
+                async move {
+                    let span_id = on_begin_async_scope(&_SCOPE_DESC, 0);
+                    let result = {
+                        #(#stmts)*
+                    };
+                    on_end_async_scope(span_id, 0, &_SCOPE_DESC);
+                    result
+                }
+            }
+        };
+    } else {
+        // async-trait has already transformed this method
+        // It now returns Pin<Box<dyn Future>> and has no async keyword
+        println!("🔄 SPAN_ASYNC_TRAIT: Handling transformed method {}", function_name);
+        
+        if returns_future(&function) {
+            // Insert instrumentation at the beginning of the function body
+            // Let async-trait handle the boxing, we just add span events
+            function.block.stmts.insert(
+                0,
+                parse_quote! {
+                    static_span_desc!(_SCOPE_DESC, concat!(module_path!(), "::", #function_name));
+                    let _span_guard = micromegas_tracing::spans::guards::AsyncSpanGuard::new(&_SCOPE_DESC);
+                },
+            );
+        } else {
+            println!("❌ SPAN_ASYNC_TRAIT: Method {} doesn't return Future", function_name);
+        }
+    }
+
+    TokenStream::from(quote! {
+        #function
+    })
 }
 
 /// span_fn: trace the execution of a sync or async function

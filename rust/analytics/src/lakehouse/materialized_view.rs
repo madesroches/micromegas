@@ -67,7 +67,7 @@ impl TableProvider for MaterializedView {
         TableType::Base
     }
 
-    #[span_fn]
+    // #[span_fn]  // Temporarily disabled to test
     async fn scan(
         &self,
         state: &dyn Session,

@@ -102,7 +102,7 @@ impl AsyncBlockProcessor for AsyncEventCollector {
 
 #[async_trait]
 impl BlockProcessor for AsyncEventsBlockProcessor {
-    #[span_fn]
+    // #[span_fn]  // Temporarily disabled to test
     async fn process(
         &self,
         blob_storage: Arc<BlobStorage>,
