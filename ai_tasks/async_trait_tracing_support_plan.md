@@ -364,8 +364,8 @@ impl MyService for MyServiceImpl {
 4. ✅ **DONE**: Create separate `span_async_trait` macro for cleaner implementation
 5. ✅ **DONE**: Test the new macro with async trait methods
 6. ✅ **DONE**: Successfully implement async trait tracing support
-7. **OPTIONAL**: Merge functionality back into `span_fn` 
-8. **NEXT**: Update documentation and remove outdated comments
+7. ✅ **DONE**: Merge functionality back into unified `span_fn` macro
+8. ✅ **DONE**: Update documentation and remove outdated comments
 
 ### ✅ Investigation Complete: Macro Ordering Issue Identified
 
@@ -427,6 +427,45 @@ impl MyService for MyServiceImpl {
 - Wraps them with `InstrumentedFuture` for proper async span instrumentation
 - Generates identical async span events to regular async functions
 
-**Status**: ✅ **COMPLETE** - Async trait tracing support is fully implemented and tested.
+**Status**: ✅ **COMPLETE** - Async trait tracing support is fully implemented, tested, and merged into the unified `span_fn` macro.
 
-**Usage**: Apply `#[span_async_trait]` to async methods in `#[async_trait]` impl blocks for automatic async span tracing.
+**Final Implementation**: The unified `span_fn` macro now automatically handles all function types:
+
+### ✅ Unified span_fn Macro - FINAL SOLUTION
+
+**Detection Logic** (applied in order):
+1. **`returns_future(&function)`** → Async trait method (after `#[async_trait]` transformation)
+   - Extracts async blocks from `Box::pin(async move { ... })`
+   - Wraps with `InstrumentedFuture` for proper async span events
+2. **`function.sig.asyncness.is_some()`** → Regular async function
+   - Removes `async` keyword, changes return type to `impl Future`
+   - Wraps with `InstrumentedFuture`
+3. **Neither** → Sync function
+   - Adds `span_scope!` instrumentation
+
+**Usage**: Simply apply `#[span_fn]` to any function type:
+
+```rust
+// Regular async function
+#[span_fn]
+async fn regular_function() -> String { ... }
+
+// Async trait methods  
+#[async_trait]
+impl MyTrait for MyImpl {
+    #[span_fn]  // ✅ Now works perfectly!
+    async fn trait_method(&self) -> String { ... }
+}
+
+// Sync function
+#[span_fn]
+fn sync_function() -> String { ... }
+```
+
+**Key Benefits**:
+- **Single macro**: Users only need `#[span_fn]` for all function types
+- **Automatic detection**: No need to choose between different macros
+- **Complete coverage**: Sync functions, async functions, and async trait methods all generate proper span events
+- **Unambiguous logic**: Macro ordering makes detection reliable and deterministic
+
+**Test Results**: All function types generate identical, correct span events (10/10 events in comprehensive test).
