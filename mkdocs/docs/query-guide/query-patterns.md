@@ -58,5 +58,3 @@ WHERE name IN ('cpu_usage', 'memory_usage')
 GROUP BY minute, name, unit
 ORDER BY minute, name;
 ```
-
-More patterns coming soon...
