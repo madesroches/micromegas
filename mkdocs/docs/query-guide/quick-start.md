@@ -220,7 +220,7 @@ Now that you can run basic queries:
 ### Key Functions
 - `view_instance('view_name', 'process_id')` - Process-scoped views
 - `property_get(properties, 'key')` - Extract property values
-- `make_histogram(values, bins)` - Create histograms
+- `make_histogram(start, end, bins, values)` - Create histograms with specified range
 
 ### Time Functions
 - `NOW()` - Current timestamp

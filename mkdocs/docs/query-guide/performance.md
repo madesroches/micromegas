@@ -83,5 +83,3 @@ SELECT * FROM log_entries LIMIT 1000;
 for batch in client.query_stream(sql, begin, end):
     process_batch(batch.to_pandas())
 ```
-
-More performance guidance coming soon...

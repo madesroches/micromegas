@@ -58,5 +58,3 @@ View instances are optimal for:
 - Heavy data streams remain unprocessed until queried
 - Cheap to store in S3, cheap to delete unused data
 - Use low-frequency streams (logs, metrics) to decide sampling of high-frequency streams (spans)
-
-More advanced features documentation coming soon...
