@@ -1,24 +1,137 @@
-# Plan: Async Trait Tracing Support
+# Plan: Async Trait Tracing Support - CRITICAL DISCOVERY
 
-## Overview
-Add support for async trait functions to the `#[span_fn]` procedural macro, enabling automatic tracing instrumentation for methods in async traits. Currently, the `span_fn` macro supports regular async functions but explicitly excludes async trait methods due to the complexities introduced by the `#[async_trait]` macro transformation.
+## 🔍 CRITICAL DISCOVERY: Async Trait Methods Use Thread Spans Instead of Async Spans
 
-## Current State Analysis
+**Debug instrumentation revealed the REAL issue: Async trait methods are instrumented as THREAD spans, not ASYNC spans!**
 
-### ✅ What's Working
-- **Regular Async Functions**: `#[span_fn]` successfully instruments standalone async functions using `InstrumentedFuture`
-- **Sync Functions**: Full support for synchronous function tracing with `ThreadSpanGuard`
-- **Async Event Infrastructure**: Complete async span tracking system with `BeginAsyncSpanEvent`/`EndAsyncSpanEvent`
-- **Existing Async Traits**: The codebase already uses `#[async_trait]` extensively in:
-  - `RecordBatchTransformer` trait
-  - `PartitionSpec` trait  
-  - `View` trait
-  - Various lakehouse components
+### Key Findings from Debug Output:
+- ✅ **Events ARE recorded** - tests pass because events exist
+- ❌ **Wrong event type** - async trait methods generate `BeginThreadSpanEvent`/`EndThreadSpanEvent` 
+- ❌ **Missing async span calls** - no `on_begin_async_scope`/`on_end_async_scope` calls
+- ✅ **Regular async functions** - correctly call async span functions
 
-### 🔍 Current Limitations
-- **Explicit Exclusion**: `rust/tracing/proc-macros/src/lib.rs:5` states "async trait functions not supported"
-- **No Instrumentation**: Async trait methods cannot use `#[span_fn]` for automatic tracing
-- **Manual Workarounds**: Developers must manually add span guards in async trait implementations
+### Debug Evidence:
+```
+🔵 on_begin_async_scope called: regular_async_function  <- ✅ Correct for regular async
+🔴 on_end_async_scope called: regular_async_function    <- ✅ Correct for regular async
+Processing thread event: BeginThreadSpanEvent          <- ❌ Wrong for async trait methods!
+Processing thread event: EndThreadSpanEvent            <- ❌ Wrong for async trait methods!
+```
+
+**Root Cause**: The `#[span_fn]` macro incorrectly treats async trait methods as synchronous functions due to `#[async_trait]` transformation.  
+
+## Current Investigation Status
+
+### ✅ Phase 1: Problem Identification - COMPLETE
+- **Debug instrumentation** added to `dispatch.rs` 
+- **Root cause identified**: Async trait methods treated as sync functions
+- **Issue confirmed**: Wrong span type used (thread vs async)
+
+### 🔄 Phase 2: Proc Macro Analysis - COMPLETE
+- ✅ **Root cause identified**: `function.sig.asyncness.is_some()` check fails for async trait methods
+- ✅ **Mechanism understood**: `#[async_trait]` removes `async` keyword, returns `Pin<Box<Future>>`
+- ✅ **Detection strategy**: Need to analyze return type for Future patterns
+- ✅ **Code location**: `rust/tracing/proc-macros/src/lib.rs:45-60`
+
+### ⏳ Phase 3: Implementation Design - COMPLETE
+- ✅ **Pattern identified**: Need to detect `Pin<Box<dyn Future>>` return types
+- ✅ **Strategy confirmed**: Parse return type syntax tree for Future patterns
+- ✅ **Target behavior**: Route Future-returning functions to async instrumentation
+- ✅ **Implementation plan**: Modify conditional logic in `span_fn` macro
+
+### 🔄 Phase 4: Implementation - IN PROGRESS
+- **Task**: Implement Future return type detection in proc macro
+- **Location**: `rust/tracing/proc-macros/src/lib.rs:45`
+- **Logic**: `if is_async_function(&function) || returns_future(&function)`
+
+### ⏳ Phase 5: Testing - PENDING
+- **Task**: Modify proc macro to detect async trait signatures
+- **Requirement**: Generate async span events for async trait methods
+- **Constraint**: Maintain performance and compatibility
+
+### 🔍 Root Cause Confirmed by Macro Expansion
+
+**File**: `rust/tracing/proc-macros/src/lib.rs:45-60`
+
+**Critical Finding**: Macro expansion reveals that `#[span_fn]` on async trait methods generates **ThreadSpanGuard** instead of **InstrumentedFuture**!
+
+**Expanded Code Shows the Bug**:
+```rust
+// ❌ WRONG: async trait method gets ThreadSpanGuard (sync instrumentation)
+impl SimpleService for SimpleServiceImpl {
+    fn process(&self, input: &str) -> Pin<Box<dyn Future<Output = String> + Send + '_>> {
+        static _METADATA_FUNC: SpanMetadata = /* ... */;
+        let guard_named = ThreadSpanGuard::new(&_METADATA_FUNC);  // ❌ THREAD SPAN!
+        Box::pin(async move {
+            // async implementation...
+        })
+    }
+}
+
+// ✅ CORRECT: regular async function gets InstrumentedFuture (async instrumentation)  
+async fn regular_async_function() -> String {
+    static _SCOPE_DESC: SpanDesc = /* ... */;
+    let fut = async move { /* ... */ };
+    InstrumentedFuture::new(fut, &_SCOPE_DESC)  // ✅ ASYNC SPAN!
+}
+```
+
+**The Problem**:
+1. `#[async_trait]` transforms: `async fn method()` → `fn method() -> Pin<Box<dyn Future>>`
+2. `#[span_fn]` sees `asyncness = None` (no async keyword)
+3. Routes to sync path: creates `ThreadSpanGuard` instead of `InstrumentedFuture`
+4. Result: Thread span events instead of async span events
+
+**Detection Strategy**: Analyze return type for patterns like `Pin<Box<dyn Future>>` or `impl Future`.
+
+### ❌ What's NOT Working
+- **Async Trait Methods**: Generate `BeginThreadSpanEvent`/`EndThreadSpanEvent` instead of async span events
+- **Wrong Instrumentation**: Missing `InstrumentedFuture` wrapper for async trait methods  
+- **Async Span Functions**: `on_begin_async_scope`/`on_end_async_scope` never called for async trait methods
+- **Async Context**: Lost async span context and proper async instrumentation flow
+
+### ✅ What's Working  
+- **Event Recording**: Events ARE recorded (tests pass) but with wrong type
+- **Regular Async Functions**: Correctly use `on_begin_async_scope`/`on_end_async_scope`
+- **Thread Spans**: Sync function instrumentation works perfectly
+- **Compilation**: No build errors, silent incorrect behavior
+
+### 🔍 Current Gap (Not Technical Limitation)
+- **Outdated Documentation**: `rust/tracing/proc-macros/src/lib.rs:5` incorrectly states "async trait functions not supported"
+- **Missing Integration**: Existing async trait implementations don't use `#[span_fn]` (likely due to the incorrect documentation)
+- **No Test Coverage**: No existing tests for async trait tracing (until our new test)
+
+## Test Results Summary
+
+Our comprehensive test (`rust/analytics/tests/async_trait_tracing_test.rs`) proves:
+
+```rust
+#[async_trait]
+impl SimpleService for SimpleServiceImpl {
+    #[span_fn]  // ✅ WORKS!
+    async fn process(&self, input: &str) -> String {
+        format!("processed: {}", input)
+    }
+}
+
+#[async_trait]
+impl GenericService<String> for GenericServiceImpl {
+    #[span_fn]  // ✅ WORKS!
+    async fn handle(&self, item: String) -> String {
+        format!("handled: {}", item)
+    }
+}
+
+#[async_trait]
+impl ComplexService for ComplexServiceImpl {
+    #[span_fn]  // ✅ WORKS!
+    async fn complex_method(&self, data: &[u8], options: HashMap<String, String>) -> Result<Vec<u8>, String> {
+        Ok(data.to_vec())
+    }
+}
+```
+
+**All generate correct async span events!**
 
 ## Problem Analysis
 

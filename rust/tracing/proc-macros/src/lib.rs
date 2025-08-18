@@ -11,7 +11,7 @@ use proc_macro::TokenStream;
 use proc_macro2::Literal;
 use quote::quote;
 use syn::{
-    ItemFn,
+    ItemFn, Type, TypeImplTrait, TypePath,
     parse::{Parse, ParseStream, Result},
     parse_macro_input, parse_quote,
 };
