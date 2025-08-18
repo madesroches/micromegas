@@ -264,38 +264,24 @@ pub fn on_end_named_scope(thread_span_location: &'static SpanLocation, name: &'s
 
 #[inline(always)]
 pub fn on_begin_async_scope(scope: &'static SpanMetadata, parent_span_id: u64) -> u64 {
-    println!(
-        "🔵 DEBUG: on_begin_async_scope called for function: {}",
-        scope.name
-    );
     let id = G_ASYNC_SPAN_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    println!(
-        "🔵 DEBUG: Generated span_id: {}, parent_span_id: {}",
-        id, parent_span_id
-    );
     on_thread_event(BeginAsyncSpanEvent {
         span_desc: scope,
         span_id: id as u64,
         parent_span_id,
         time: now(),
     });
-    println!("🔵 DEBUG: BeginAsyncSpanEvent sent to thread event queue");
     id as u64
 }
 
 #[inline(always)]
 pub fn on_end_async_scope(span_id: u64, parent_span_id: u64, scope: &'static SpanMetadata) {
-    println!(
-        "🔴 DEBUG: on_end_async_scope called for function: {}, span_id: {}",
-        scope.name, span_id
-    );
     on_thread_event(EndAsyncSpanEvent {
         span_desc: scope,
         span_id,
         parent_span_id,
         time: now(),
     });
-    println!("🔴 DEBUG: EndAsyncSpanEvent sent to thread event queue");
 }
 
 #[inline(always)]
@@ -377,21 +363,13 @@ fn on_thread_event<T>(event: T)
 where
     T: micromegas_transit::InProcSerialize + ThreadEventQueueTypeIndex,
 {
-    println!(
-        "📨 DEBUG: on_thread_event called with type_id: {}",
-        std::any::type_name::<T>()
-    );
     LOCAL_THREAD_STREAM.with(|cell| unsafe {
         let opt_stream = &mut *cell.as_ptr();
         if let Some(stream) = opt_stream {
-            println!("📨 DEBUG: Adding event to thread stream");
             stream.get_events_mut().push(event);
             if stream.is_full() {
-                println!("📨 DEBUG: Thread buffer is full, flushing");
                 flush_thread_buffer();
             }
-        } else {
-            println!("⚠️  DEBUG: No thread stream available! Event will be dropped!");
         }
     });
 }
