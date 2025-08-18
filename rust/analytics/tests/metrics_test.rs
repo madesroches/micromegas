@@ -11,12 +11,15 @@ use micromegas_tracing::{
         FloatMetricEvent, IntegerMetricEvent, MetricsBlock, MetricsStream, StaticMetricMetadata,
         TaggedFloatMetricEvent, TaggedIntegerMetricEvent,
     },
-    prelude::Verbosity,
+    prelude::*,
     property_set::{Property, PropertySet},
+    test_utils::init_in_memory_tracing,
     time::now,
 };
+use serial_test::serial;
 
 #[test]
+#[serial]
 fn test_static_metrics() {
     let process_id = uuid::Uuid::new_v4();
     let process_info = make_process_info(process_id, Some(uuid::Uuid::new_v4()), HashMap::new());
@@ -57,9 +60,19 @@ fn test_static_metrics() {
     })
     .unwrap();
     assert_eq!(nb_metric_entries, 2);
+
+    let guard = init_in_memory_tracing();
+    imetric!("test_metric", "units", 42);
+    fmetric!("test_metric_float", "units", 3.14);
+    micromegas_tracing::dispatch::flush_metrics_buffer();
+
+    let state = guard.sink.state.lock().unwrap();
+    assert!(state.process_info.is_some());
+    assert!(state.metrics_stream_desc.is_some());
 }
 
 #[test]
+#[serial]
 fn test_stress_tagged_measures() {
     let process_id = uuid::Uuid::new_v4();
     let process_info = Arc::new(make_process_info(
@@ -97,9 +110,20 @@ fn test_stress_tagged_measures() {
         stream.replace_block(Arc::new(MetricsBlock::new(1024, process_id, stream_id, 0)));
     Arc::get_mut(&mut block).unwrap().close();
     let _encoded = block.encode_bin(&process_info).unwrap();
+
+    let guard = init_in_memory_tracing();
+    for i in 0..10 {
+        imetric!("stress_test", "iterations", i);
+    }
+    micromegas_tracing::dispatch::flush_metrics_buffer();
+
+    let state = guard.sink.state.lock().unwrap();
+    assert!(state.process_info.is_some());
+    assert!(state.metrics_stream_desc.is_some());
 }
 
 #[test]
+#[serial]
 fn test_tagged_measures() {
     let process_id = uuid::Uuid::new_v4();
     let process_info = Arc::new(make_process_info(
@@ -167,4 +191,13 @@ fn test_tagged_measures() {
     })
     .unwrap();
     assert_eq!(measures.len(), 2);
+
+    let guard = init_in_memory_tracing();
+    imetric!("tagged_int", "count", 100);
+    fmetric!("tagged_float", "rate", 2.5);
+    micromegas_tracing::dispatch::flush_metrics_buffer();
+
+    let state = guard.sink.state.lock().unwrap();
+    assert!(state.process_info.is_some());
+    assert!(state.metrics_stream_desc.is_some());
 }

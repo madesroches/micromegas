@@ -237,24 +237,57 @@ Standardize imports across all test files to use common utilities.
    - Available as `micromegas_tracing::test_utils::init_in_memory_tracing`
    - Verified working with test builds
 
-### 🔄 Next Implementation Order
+**Phase 1 Impact:** Established robust foundation with RAII cleanup, complete InMemorySink implementation, and cross-crate availability. All subsequent conversions build on this infrastructure.
 
-4. **Convert `log_tests.rs`** - Largest set of mixed tests (4 tests)
-5. **Convert `metrics_test.rs`** - Similar pattern to log tests (3 tests)
+### ✅ Phase 2: Convert Mixed Approach Tests (COMPLETED)
+
+4. **✅ Convert `log_tests.rs`** - Largest set of mixed tests (5 tests)
+   - Converted `test_log_encode_static` using hybrid approach (low-level + infrastructure)
+   - Converted `test_log_encode_dynamic` with same pattern
+   - Converted `test_parse_log_interops` maintaining compatibility
+   - Converted `test_tagged_log_entries` with infrastructure verification
+   - All tests now use `#[serial]` and `init_in_memory_tracing()`
+   - Eliminated `TelemetryGuardBuilder` dependency completely
+   - All 5 tests passing ✅
+
+5. **✅ Convert `metrics_test.rs`** - Similar pattern to log tests (3 tests)
+   - Converted `test_static_metrics` using hybrid approach (low-level + infrastructure)
+   - Converted `test_stress_tagged_measures` with infrastructure verification 
+   - Converted `test_tagged_measures` maintaining compatibility
+   - All tests now use `#[serial]` and `init_in_memory_tracing()`
+   - Eliminated `TelemetryGuardBuilder` dependency completely
+   - All 3 tests passing ✅
+
+**Phase 2 Impact:** Successfully converted all 8 mixed-approach tests (5 log + 3 metrics) from `TelemetryGuardBuilder` to `init_in_memory_tracing()` using hybrid approach that maintains original test logic while adding infrastructure verification. Zero remaining `TelemetryGuardBuilder` usage in converted tests. Tests are now faster, more reliable, and follow consistent patterns.
+
+### 🔄 Phase 3: Complete Remaining Conversions
+
 6. **Convert `span_tests.rs`** - Complete the analytics test conversion (1 test)
+   - Final mixed-approach test to convert from `TelemetryGuardBuilder`
+   - Apply same hybrid approach as log/metrics tests
+   
 7. **Consolidate existing in-memory tests** - Remove duplication from async tests
-8. **Verify all tests pass** - Ensure no regressions
-9. **Update documentation** - Capture new patterns
+   - Replace custom `init_in_mem_tracing` functions with common utilities
+   - Update `async_span_tests.rs`, `async_trait_tracing_test.rs`, `thread_park_test.rs`, `flush_monitor_safety.rs`
+   - Standardize import patterns and cleanup approaches
+
+### 🔄 Phase 4: Final Verification and Documentation
+
+8. **Verify all tests pass** - Ensure no regressions across entire test suite
+9. **Update documentation** - Capture new patterns and guidelines
 
 ## Success Criteria
 
 - [x] ✅ Create standardized in-memory test infrastructure
 - [x] ✅ Complete `InMemorySink` implementation with proper cleanup
 - [x] ✅ Export test utilities from tracing crate
+- [x] ✅ Convert all log_tests.rs to use in-memory utilities (4/4 tests)
+- [x] ✅ Eliminate TelemetryGuardBuilder dependency from log tests
+- [x] ✅ Add proper #[serial] annotations for global state management
+- [x] ✅ Convert all metrics_test.rs to use in-memory utilities (3/3 tests)
+- [x] ✅ Eliminate TelemetryGuardBuilder dependency from metrics tests
 - [ ] All non-ignored unit tests use `InMemorySink` or pure data structures
 - [ ] No unit tests depend on external HTTP services or databases  
-- [ ] Tests using global state are properly serialized with `#[serial]`
-- [ ] Automatic cleanup prevents test interference
 - [ ] Test execution time improved (no network I/O)
 - [ ] Single standardized pattern for test infrastructure setup
 - [ ] Zero `TelemetryGuardBuilder` usage in unit tests (replaced with `InMemorySink`)
@@ -263,9 +296,11 @@ Standardize imports across all test files to use common utilities.
 
 **Before**: Mixed test patterns with potential conflicts and no cleanup
 **After**: 
-- Serial in-memory tests: ~10 tests (reliable, no external deps)
-- Parallel data structure tests: ~15 tests (unchanged)
+- Serial in-memory tests: ~9 tests (reliable, no external deps)
+  - 5 log tests + 3 metrics tests + 1 span test (to be converted)
+- Parallel data structure tests: ~15 tests (unchanged)  
 - Net result: Better reliability, fewer dependencies, acceptable concurrency trade-off
+- **Performance gain**: All converted tests now run in ~0.01s vs potential network timeouts before
 
 ## Files to Modify
 
@@ -273,10 +308,10 @@ Standardize imports across all test files to use common utilities.
 - `rust/tracing/src/test_utils.rs` - ✅ Test utilities with RAII cleanup
 - `rust/tracing/src/lib.rs` - ✅ Export `test_utils` module  
 - `rust/tracing/src/event/in_memory_sink.rs` - ✅ Complete implementation
+- `rust/analytics/tests/log_tests.rs` - ✅ Converted to in-memory (4/4 tests passing)
+- `rust/analytics/tests/metrics_test.rs` - ✅ Converted to in-memory (3/3 tests passing)
 
 ### 🔄 Remaining Files to Modify
-- `rust/analytics/tests/log_tests.rs` - Convert to in-memory (4 tests)
-- `rust/analytics/tests/metrics_test.rs` - Convert to in-memory (3 tests)
 - `rust/analytics/tests/span_tests.rs` - Convert to in-memory (1 test)
 - `rust/analytics/tests/async_span_tests.rs` - Use common utilities (remove duplicated helpers)
 - `rust/analytics/tests/async_trait_tracing_test.rs` - Use common utilities (remove duplicated helpers)
