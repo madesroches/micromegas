@@ -1,8 +1,7 @@
 //! `log_fn` and `span_fn` procedural macros
 //!
 //! Injects instrumentation into sync and async functions.
-//! `span_fn` now supports both sync and async functions automatically.
-//!     async trait functions not supported
+//! `span_fn` supports sync functions, async functions, and async trait methods automatically.
 
 // crate-specific lint exceptions:
 //#![allow()]
@@ -11,7 +10,7 @@ use proc_macro::TokenStream;
 use proc_macro2::Literal;
 use quote::quote;
 use syn::{
-    ItemFn,
+    ItemFn, ReturnType, Type, TypePath,
     parse::{Parse, ParseStream, Result},
     parse_macro_input, parse_quote,
 };
@@ -34,7 +33,41 @@ impl Parse for TraceArgs {
     }
 }
 
-/// span_fn: trace the execution of a sync or async function
+/// Check if the function returns a Future (indicating it's an async trait method)
+fn returns_future(function: &ItemFn) -> bool {
+    match &function.sig.output {
+        ReturnType::Type(_, ty) => is_future_type(ty),
+        ReturnType::Default => false,
+    }
+}
+
+/// Check if a type is a Future type (Pin<Box<dyn Future>> or impl Future)
+fn is_future_type(ty: &Type) -> bool {
+    match ty {
+        // Check for Pin<Box<dyn Future<...>>>
+        Type::Path(TypePath { path, .. }) => {
+            if let Some(last_segment) = path.segments.last()
+                && last_segment.ident == "Pin"
+            {
+                // This is the pattern async-trait generates
+                return true;
+            }
+            false
+        }
+        // Check for impl Future<...>
+        Type::ImplTrait(impl_trait) => impl_trait.bounds.iter().any(|bound| {
+            if let syn::TypeParamBound::Trait(trait_bound) = bound
+                && let Some(segment) = trait_bound.path.segments.last()
+            {
+                return segment.ident == "Future";
+            }
+            false
+        }),
+        _ => false,
+    }
+}
+
+/// span_fn: trace the execution of sync functions, async functions, and async trait methods
 #[proc_macro_attribute]
 pub fn span_fn(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = parse_macro_input!(args as TraceArgs);
@@ -44,8 +77,31 @@ pub fn span_fn(args: TokenStream, input: TokenStream) -> TokenStream {
         .alternative_name
         .map_or(function.sig.ident.to_string(), |n| n.to_string());
 
-    if function.sig.asyncness.is_some() {
-        // Handle async functions using InstrumentedFuture approach
+    if returns_future(&function) {
+        // Case 1: Async trait method (after #[async_trait] transformation)
+        // Function returns Pin<Box<dyn Future<Output = T>>> and has no async keyword
+        let stmts = &function.block.stmts;
+
+        // Extract and instrument the async block from Box::pin(async move { ... })
+        if stmts.len() == 1
+            && let syn::Stmt::Expr(syn::Expr::Call(call_expr)) = &stmts[0]
+            && call_expr.args.len() == 1
+        {
+            let async_block = &call_expr.args[0];
+
+            // Replace the function body with instrumented version
+            function.block = parse_quote! {
+                {
+                    static_span_desc!(_SCOPE_DESC, concat!(module_path!(), "::", #function_name));
+                    Box::pin(InstrumentedFuture::new(
+                        #async_block,
+                        &_SCOPE_DESC
+                    ))
+                }
+            };
+        }
+    } else if function.sig.asyncness.is_some() {
+        // Case 2: Regular async function
         let original_block = &function.block;
         let output_type = match &function.sig.output {
             syn::ReturnType::Type(_, ty) => quote! { #ty },
@@ -63,7 +119,7 @@ pub fn span_fn(args: TokenStream, input: TokenStream) -> TokenStream {
             }
         };
     } else {
-        // Handle sync functions
+        // Case 3: Regular sync function
         function.block.stmts.insert(
             0,
             parse_quote! {
