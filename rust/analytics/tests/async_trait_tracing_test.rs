@@ -38,12 +38,12 @@ struct SimpleServiceImpl;
 
 #[async_trait]
 impl SimpleService for SimpleServiceImpl {
-    #[span_async_trait]
+    #[span_fn]
     async fn process(&self, input: &str) -> String {
         format!("processed: {}", input)
     }
 
-    #[span_async_trait]
+    #[span_fn]
     async fn transform(&self, mut data: Vec<u8>) -> Vec<u8> {
         data.reverse();
         data
@@ -55,7 +55,7 @@ struct GenericServiceImpl;
 
 #[async_trait]
 impl GenericService<String> for GenericServiceImpl {
-    #[span_async_trait]
+    #[span_fn]
     async fn handle(&self, item: String) -> String {
         format!("handled: {}", item)
     }
@@ -66,7 +66,7 @@ struct ComplexServiceImpl;
 
 #[async_trait]
 impl ComplexService for ComplexServiceImpl {
-    #[span_async_trait]
+    #[span_fn]
     async fn complex_method(
         &self,
         data: &[u8],

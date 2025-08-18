@@ -1,8 +1,7 @@
 //! `log_fn` and `span_fn` procedural macros
 //!
 //! Injects instrumentation into sync and async functions.
-//! `span_fn` supports both sync and async functions automatically.
-//! `span_async_trait` supports async trait methods.
+//! `span_fn` supports sync functions, async functions, and async trait methods automatically.
 
 // crate-specific lint exceptions:
 //#![allow()]
@@ -68,10 +67,10 @@ fn is_future_type(ty: &Type) -> bool {
     }
 }
 
-/// span_async_trait: trace the execution of an async trait method
-/// This macro is applied BEFORE #[async_trait] transforms the method
+
+/// span_fn: trace the execution of sync functions, async functions, and async trait methods
 #[proc_macro_attribute]
-pub fn span_async_trait(args: TokenStream, input: TokenStream) -> TokenStream {
+pub fn span_fn(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = parse_macro_input!(args as TraceArgs);
     let mut function = parse_macro_input!(input as ItemFn);
 
@@ -79,47 +78,17 @@ pub fn span_async_trait(args: TokenStream, input: TokenStream) -> TokenStream {
         .alternative_name
         .map_or(function.sig.ident.to_string(), |n| n.to_string());
 
-    // This macro expects to run BEFORE async-trait transformation
-    // So we should see an async method here
-    if function.sig.asyncness.is_some() {
+    if returns_future(&function) {
+        // Case 1: Async trait method (after #[async_trait] transformation)
+        // Function returns Pin<Box<dyn Future<Output = T>>> and has no async keyword
         let stmts = &function.block.stmts;
-
-        // Keep the function signature unchanged for async-trait to process
-        // but wrap the body with instrumentation that will work after transformation
-        function.block = parse_quote! {
-            {
-                use micromegas_tracing::dispatch::{on_begin_async_scope, on_end_async_scope};
-                static_span_desc!(_SCOPE_DESC, concat!(module_path!(), "::", #function_name));
-
-                // Create an instrumented async block that async-trait will then box
-                async move {
-                    let span_id = on_begin_async_scope(&_SCOPE_DESC, 0);
-                    let result = {
-                        #(#stmts)*
-                    };
-                    on_end_async_scope(span_id, 0, &_SCOPE_DESC);
-                    result
-                }
-            }
-        };
-    } else {
-        // async-trait has already transformed this method
-        // It now returns Pin<Box<dyn Future>> and has no async keyword
-        // Handle transformed async trait method
-
-        if returns_future(&function) {
-            let stmts = &function.block.stmts;
-            // Extract and instrument the async block from Box::pin(async move { ... })
-
-            if stmts.len() == 1 {
-                let stmt = &stmts[0];
-
-                if let syn::Stmt::Expr(expr) = stmt
-                    && let syn::Expr::Call(call_expr) = expr
-                    && call_expr.args.len() == 1
-                {
+        
+        // Extract and instrument the async block from Box::pin(async move { ... })
+        if stmts.len() == 1 {
+            if let syn::Stmt::Expr(syn::Expr::Call(call_expr)) = &stmts[0] {
+                if call_expr.args.len() == 1 {
                     let async_block = &call_expr.args[0];
-
+                    
                     // Replace the function body with instrumented version
                     function.block = parse_quote! {
                         {
@@ -133,25 +102,8 @@ pub fn span_async_trait(args: TokenStream, input: TokenStream) -> TokenStream {
                 }
             }
         }
-    }
-
-    TokenStream::from(quote! {
-        #function
-    })
-}
-
-/// span_fn: trace the execution of a sync or async function
-#[proc_macro_attribute]
-pub fn span_fn(args: TokenStream, input: TokenStream) -> TokenStream {
-    let args = parse_macro_input!(args as TraceArgs);
-    let mut function = parse_macro_input!(input as ItemFn);
-
-    let function_name = args
-        .alternative_name
-        .map_or(function.sig.ident.to_string(), |n| n.to_string());
-
-    if function.sig.asyncness.is_some() {
-        // Handle async functions using InstrumentedFuture approach
+    } else if function.sig.asyncness.is_some() {
+        // Case 2: Regular async function
         let original_block = &function.block;
         let output_type = match &function.sig.output {
             syn::ReturnType::Type(_, ty) => quote! { #ty },
@@ -169,7 +121,7 @@ pub fn span_fn(args: TokenStream, input: TokenStream) -> TokenStream {
             }
         };
     } else {
-        // Handle sync functions
+        // Case 3: Regular sync function
         function.block.stmts.insert(
             0,
             parse_quote! {
