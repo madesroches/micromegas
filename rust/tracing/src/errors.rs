@@ -1,3 +1,5 @@
+//! Error types and handling for tracing operations
+
 use thiserror::Error;
 
 #[derive(Error, Debug)]

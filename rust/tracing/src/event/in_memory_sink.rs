@@ -1,4 +1,4 @@
-use super::{EventSink, StreamDesc};
+use super::{EventSink, StreamDesc, TracingBlock};
 use crate::{
     logs::{LogBlock, LogMetadata, LogStream},
     metrics::{MetricsBlock, MetricsStream},
@@ -17,6 +17,8 @@ pub struct MemSinkState {
     pub metrics_stream_desc: Option<Arc<StreamDesc>>,
     pub thread_stream_descs: Vec<Arc<StreamDesc>>,
     pub thread_blocks: Vec<Arc<ThreadBlock>>,
+    pub log_blocks: Vec<Arc<LogBlock>>,
+    pub metrics_blocks: Vec<Arc<MetricsBlock>>,
 }
 
 /// for tests where we want to inspect the collected data
@@ -32,6 +34,8 @@ impl InMemorySink {
             metrics_stream_desc: None,
             thread_stream_descs: vec![],
             thread_blocks: vec![],
+            log_blocks: vec![],
+            metrics_blocks: vec![],
         };
         Self {
             state: Mutex::new(state),
@@ -53,7 +57,7 @@ impl EventSink for InMemorySink {
     fn on_shutdown(&self) {}
 
     fn on_log_enabled(&self, _metadata: &LogMetadata) -> bool {
-        todo!()
+        true // Enable all log events for testing
     }
 
     fn on_log(
@@ -63,23 +67,28 @@ impl EventSink for InMemorySink {
         _time: i64,
         _args: fmt::Arguments<'_>,
     ) {
-        todo!()
+        // For testing, we primarily collect events through blocks
+        // Individual log events are handled via on_process_log_block
     }
 
     fn on_init_log_stream(&self, log_stream: &LogStream) {
         self.state.lock().unwrap().log_stream_desc = Some(log_stream.desc());
     }
 
-    fn on_process_log_block(&self, _log_block: Arc<LogBlock>) {
-        todo!()
+    fn on_process_log_block(&self, log_block: Arc<LogBlock>) {
+        self.state.lock().unwrap().log_blocks.push(log_block);
     }
 
     fn on_init_metrics_stream(&self, metrics_stream: &MetricsStream) {
         self.state.lock().unwrap().metrics_stream_desc = Some(metrics_stream.desc());
     }
 
-    fn on_process_metrics_block(&self, _metrics_block: Arc<MetricsBlock>) {
-        todo!()
+    fn on_process_metrics_block(&self, metrics_block: Arc<MetricsBlock>) {
+        self.state
+            .lock()
+            .unwrap()
+            .metrics_blocks
+            .push(metrics_block);
     }
 
     fn on_init_thread_stream(&self, thread_stream: &ThreadStream) {
@@ -95,6 +104,56 @@ impl EventSink for InMemorySink {
     }
 
     fn is_busy(&self) -> bool {
-        todo!()
+        false // For testing, never report as busy
+    }
+}
+
+impl InMemorySink {
+    /// Get the total number of thread blocks collected
+    pub fn thread_block_count(&self) -> usize {
+        self.state.lock().unwrap().thread_blocks.len()
+    }
+
+    /// Get the total number of log blocks collected
+    pub fn log_block_count(&self) -> usize {
+        self.state.lock().unwrap().log_blocks.len()
+    }
+
+    /// Get the total number of metrics blocks collected
+    pub fn metrics_block_count(&self) -> usize {
+        self.state.lock().unwrap().metrics_blocks.len()
+    }
+
+    /// Get the total number of events across all thread blocks
+    pub fn total_thread_events(&self) -> usize {
+        self.state
+            .lock()
+            .unwrap()
+            .thread_blocks
+            .iter()
+            .map(|block| block.nb_objects())
+            .sum()
+    }
+
+    /// Get the total number of events across all log blocks
+    pub fn total_log_events(&self) -> usize {
+        self.state
+            .lock()
+            .unwrap()
+            .log_blocks
+            .iter()
+            .map(|block| block.nb_objects())
+            .sum()
+    }
+
+    /// Get the total number of events across all metrics blocks
+    pub fn total_metrics_events(&self) -> usize {
+        self.state
+            .lock()
+            .unwrap()
+            .metrics_blocks
+            .iter()
+            .map(|block| block.nb_objects())
+            .sum()
     }
 }

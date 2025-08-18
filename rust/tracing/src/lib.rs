@@ -70,6 +70,7 @@ pub mod runtime;
 pub mod spans;
 pub mod static_string_ref;
 pub mod string_id;
+pub mod test_utils;
 pub mod time;
 
 #[macro_use]
@@ -79,6 +80,7 @@ extern crate lazy_static;
 mod macros;
 pub mod intern_string;
 
+/// Commonly used items for convenient importing - includes macros, types, and traits
 pub mod prelude {
     pub use crate::levels::*;
     pub use crate::process_info::*;

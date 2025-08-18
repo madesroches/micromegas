@@ -1,20 +1,19 @@
 use std::{collections::HashMap, sync::Arc};
 
 use micromegas_analytics::payload::parse_block;
-use micromegas_telemetry_sink::{
-    TelemetryGuard, stream_block::StreamBlock, stream_info::make_stream_info,
-};
+use micromegas_telemetry_sink::{stream_block::StreamBlock, stream_info::make_stream_info};
 use micromegas_tracing::{
     dispatch::make_process_info,
     event::TracingBlock,
-    prelude::Verbosity,
+    prelude::*,
     spans::{BeginThreadNamedSpanEvent, SpanLocation, ThreadBlock, ThreadStream},
+    test_utils::init_in_memory_tracing,
 };
+use serial_test::serial;
 
 #[test]
+#[serial]
 fn test_parse_span_interops() {
-    let _telemetry_guard = TelemetryGuard::new();
-
     let process_id = uuid::Uuid::new_v4();
     let process_info = make_process_info(process_id, Some(uuid::Uuid::new_v4()), HashMap::new());
     let mut stream = ThreadStream::new(1024, process_id, &[], HashMap::new());
@@ -60,4 +59,13 @@ fn test_parse_span_interops() {
     })
     .unwrap();
     assert_eq!(nb_span_entries, 2);
+
+    let guard = init_in_memory_tracing();
+    micromegas_tracing::dispatch::init_thread_stream();
+    span_scope!("test_span");
+    micromegas_tracing::dispatch::flush_thread_buffer();
+
+    let state = guard.sink.state.lock().unwrap();
+    assert!(state.process_info.is_some());
+    assert!(state.thread_blocks.len() > 0);
 }
