@@ -55,7 +55,7 @@ async fn serve_http(
     Ok(())
 }
 
-#[micromegas_main]
+#[micromegas_main(interop_max_level = "info")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Cli::parse();
     let connection_string = std::env::var("MICROMEGAS_SQL_CONNECTION_STRING")
