@@ -1,9 +1,8 @@
 use micromegas_tracing::dispatch::{
     flush_thread_buffer, force_uninit, init_event_dispatch, init_thread_stream, shutdown_dispatch,
 };
-use micromegas_tracing::event::EventSink;
-use micromegas_tracing::event::TracingBlock;
 use micromegas_tracing::event::in_memory_sink::InMemorySink;
+use micromegas_tracing::event::{EventSink, TracingBlock};
 use micromegas_tracing::prelude::*;
 use rand::Rng;
 use serial_test::serial;
@@ -140,15 +139,13 @@ fn test_async_span_macro() {
 #[test]
 #[serial]
 fn sync_span_macro() {
-    let sink = Arc::new(InMemorySink::new());
-    init_in_mem_tracing(sink.clone());
+    let guard = micromegas_tracing::test_utils::init_in_memory_tracing();
     init_thread_stream();
     instrumented_sync_function();
     flush_thread_buffer();
-    shutdown_dispatch();
 
     // Check that the correct number of events were recorded
-    let state = sink.state.lock().expect("Failed to lock sink state");
+    let state = guard.sink.state.lock().expect("Failed to lock sink state");
     let total_events: usize = state
         .thread_blocks
         .iter()
@@ -161,6 +158,4 @@ fn sync_span_macro() {
         "Expected 2 events (begin + end span) but found {}",
         total_events
     );
-
-    unsafe { force_uninit() };
 }
