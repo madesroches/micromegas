@@ -1,3 +1,5 @@
+//! Internal macros for tracing functionality (logging, spans, metrics)
+
 #[macro_export]
 macro_rules! static_span_desc {
     ($var_name:ident, $name:expr) => {

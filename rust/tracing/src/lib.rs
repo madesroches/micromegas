@@ -80,6 +80,7 @@ extern crate lazy_static;
 mod macros;
 pub mod intern_string;
 
+/// Commonly used items for convenient importing - includes macros, types, and traits
 pub mod prelude {
     pub use crate::levels::*;
     pub use crate::process_info::*;

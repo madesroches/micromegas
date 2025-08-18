@@ -1,7 +1,7 @@
+//! Test utilities for in-memory tracing in unit tests
+
 use crate::dispatch::{force_uninit, init_event_dispatch, shutdown_dispatch};
 use crate::event::in_memory_sink::InMemorySink;
-#[cfg(feature = "tokio")]
-use crate::runtime::TracingRuntimeExt;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -62,41 +62,4 @@ impl Drop for InMemoryTracingGuard {
 /// ```
 pub fn init_in_memory_tracing() -> InMemoryTracingGuard {
     InMemoryTracingGuard::new()
-}
-
-/// Initialize in-memory tracing with tokio runtime for async tests
-///
-/// # Important  
-/// Tests using this function MUST be marked with #[serial] since they
-/// share global state through init_event_dispatch.
-///
-/// # Example
-/// ```rust
-/// use micromegas_tracing::test_utils::init_in_memory_tracing_with_tokio;
-/// use serial_test::serial;
-///
-/// // In your test file:
-/// // #[test]
-/// // #[serial]
-/// fn test_async_example() {
-///     let (runtime, guard) = init_in_memory_tracing_with_tokio();
-///     runtime.block_on(async {
-///         // Use async tracing macros
-///         // Verify results in guard.sink.state
-///     });
-///     // Automatic cleanup when guard is dropped
-/// }
-/// ```
-#[cfg(feature = "tokio")]
-pub fn init_in_memory_tracing_with_tokio() -> (tokio::runtime::Runtime, InMemoryTracingGuard) {
-    let guard = InMemoryTracingGuard::new();
-
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .thread_name("test-runtime")
-        .with_tracing_callbacks()
-        .build()
-        .expect("Failed to build tokio runtime");
-
-    (runtime, guard)
 }
