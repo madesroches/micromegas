@@ -14,7 +14,6 @@ use datafusion::{
 };
 use futures::FutureExt;
 use futures::future::BoxFuture;
-use micromegas_tracing::prelude::*;
 use object_store::ObjectStore;
 use std::ops::Range;
 use std::sync::Arc;

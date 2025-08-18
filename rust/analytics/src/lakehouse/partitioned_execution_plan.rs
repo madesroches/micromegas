@@ -11,7 +11,6 @@ use datafusion::{
     physical_plan::ExecutionPlan,
     prelude::*,
 };
-use micromegas_tracing::prelude::*;
 use object_store::ObjectStore;
 use std::sync::Arc;
 
