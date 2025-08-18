@@ -288,7 +288,7 @@ impl LivePartitionProvider {
 
 #[async_trait]
 impl QueryPartitionProvider for LivePartitionProvider {
-    // #[span_fn]  // Temporarily disabled to test
+    #[span_fn]
     async fn fetch(
         &self,
         view_set_name: &str,
