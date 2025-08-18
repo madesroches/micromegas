@@ -61,3 +61,4 @@ Micromegas: unified observability platform for logs, metrics, and traces.
 **Services**: `telemetry-ingestion-srv/` (HTTP ingestion), `flight-sql-srv/` (SQL queries)
 **Flow**: Apps → HTTP ingestion → PostgreSQL metadata + object storage → FlightSQL queries
 - there should be a venv available to run python code
+- follow @AI_GUIDELINES.md

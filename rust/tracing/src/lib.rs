@@ -70,6 +70,7 @@ pub mod runtime;
 pub mod spans;
 pub mod static_string_ref;
 pub mod string_id;
+pub mod test_utils;
 pub mod time;
 
 #[macro_use]

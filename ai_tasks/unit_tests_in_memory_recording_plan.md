@@ -217,21 +217,42 @@ Standardize imports across all test files to use common utilities.
 - Never use `TelemetryGuardBuilder` in unit tests
 ```
 
-## Implementation Order
+## Implementation Status
 
-1. **Create common test utilities** - Foundation for all other changes
-2. **Complete `InMemorySink` implementation** - Required for utilities to work
-3. **Convert `log_tests.rs`** - Largest set of mixed tests
-4. **Convert `metrics_test.rs`** - Similar pattern to log tests
-5. **Convert `span_tests.rs`** - Complete the analytics test conversion
-6. **Consolidate existing in-memory tests** - Remove duplication
-7. **Verify all tests pass** - Ensure no regressions
-8. **Update documentation** - Capture new patterns
+### ✅ Phase 1: Standardize In-Memory Test Infrastructure (COMPLETED)
+
+1. **✅ Create common test utilities** - Foundation for all other changes
+   - Created `rust/tracing/src/test_utils.rs` with `InMemoryTracingGuard` RAII pattern
+   - Provides `init_in_memory_tracing()` and `init_in_memory_tracing_with_tokio()`
+   - Automatic cleanup via Drop trait (`shutdown_dispatch()` + `unsafe { force_uninit() }`)
+   
+2. **✅ Complete `InMemorySink` implementation** - Required for utilities to work
+   - Filled in all `todo!()` methods in `rust/tracing/src/event/in_memory_sink.rs`
+   - Added storage for log_blocks and metrics_blocks
+   - Added helper methods: `thread_block_count()`, `total_thread_events()`, etc.
+   - Fixed trait imports for `TracingBlock`
+   
+3. **✅ Export test_utils module** - Make utilities available across crates
+   - Added to `rust/tracing/src/lib.rs`
+   - Available as `micromegas_tracing::test_utils::init_in_memory_tracing`
+   - Verified working with test builds
+
+### 🔄 Next Implementation Order
+
+4. **Convert `log_tests.rs`** - Largest set of mixed tests (4 tests)
+5. **Convert `metrics_test.rs`** - Similar pattern to log tests (3 tests)
+6. **Convert `span_tests.rs`** - Complete the analytics test conversion (1 test)
+7. **Consolidate existing in-memory tests** - Remove duplication from async tests
+8. **Verify all tests pass** - Ensure no regressions
+9. **Update documentation** - Capture new patterns
 
 ## Success Criteria
 
+- [x] ✅ Create standardized in-memory test infrastructure
+- [x] ✅ Complete `InMemorySink` implementation with proper cleanup
+- [x] ✅ Export test utilities from tracing crate
 - [ ] All non-ignored unit tests use `InMemorySink` or pure data structures
-- [ ] No unit tests depend on external HTTP services or databases
+- [ ] No unit tests depend on external HTTP services or databases  
 - [ ] Tests using global state are properly serialized with `#[serial]`
 - [ ] Automatic cleanup prevents test interference
 - [ ] Test execution time improved (no network I/O)
@@ -248,18 +269,18 @@ Standardize imports across all test files to use common utilities.
 
 ## Files to Modify
 
-### New Files
-- `rust/tracing/src/test_utils.rs` - Test utilities
+### ✅ Completed Files
+- `rust/tracing/src/test_utils.rs` - ✅ Test utilities with RAII cleanup
+- `rust/tracing/src/lib.rs` - ✅ Export `test_utils` module  
+- `rust/tracing/src/event/in_memory_sink.rs` - ✅ Complete implementation
 
-### Modified Files  
-- `rust/tracing/src/lib.rs` - Export `test_utils` module
-- `rust/tracing/src/event/in_memory_sink.rs` - Complete implementation
-- `rust/analytics/tests/log_tests.rs` - Convert to in-memory
-- `rust/analytics/tests/metrics_test.rs` - Convert to in-memory  
-- `rust/analytics/tests/span_tests.rs` - Convert to in-memory
-- `rust/analytics/tests/async_span_tests.rs` - Use common utilities
-- `rust/analytics/tests/async_trait_tracing_test.rs` - Use common utilities
-- `rust/tracing/tests/thread_park_test.rs` - Use common utilities
-- `rust/tracing/tests/flush_monitor_safety.rs` - Use common utilities
+### 🔄 Remaining Files to Modify
+- `rust/analytics/tests/log_tests.rs` - Convert to in-memory (4 tests)
+- `rust/analytics/tests/metrics_test.rs` - Convert to in-memory (3 tests)
+- `rust/analytics/tests/span_tests.rs` - Convert to in-memory (1 test)
+- `rust/analytics/tests/async_span_tests.rs` - Use common utilities (remove duplicated helpers)
+- `rust/analytics/tests/async_trait_tracing_test.rs` - Use common utilities (remove duplicated helpers)
+- `rust/tracing/tests/thread_park_test.rs` - Use common utilities (remove duplicated helpers)
+- `rust/tracing/tests/flush_monitor_safety.rs` - Use common utilities (remove duplicated helpers)
 
 This plan ensures all unit tests record data in memory while maintaining test coverage and improving reliability.
