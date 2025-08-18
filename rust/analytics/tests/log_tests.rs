@@ -1,7 +1,6 @@
 use micromegas_analytics::log_entry::log_entry_from_value;
 use micromegas_analytics::payload::parse_block;
 use micromegas_analytics::time::ConvertTicks;
-use micromegas_telemetry_sink::TelemetryGuardBuilder;
 use micromegas_telemetry_sink::stream_block::StreamBlock;
 use micromegas_telemetry_sink::stream_info::make_stream_info;
 use micromegas_tracing::dispatch::make_process_info;
@@ -14,10 +13,13 @@ use micromegas_tracing::logs::LogStream;
 use micromegas_tracing::logs::LogStringEvent;
 use micromegas_tracing::logs::LogStringInteropEvent;
 use micromegas_tracing::logs::TaggedLogString;
+use micromegas_tracing::prelude::*;
 use micromegas_tracing::property_set::Property;
 use micromegas_tracing::property_set::PropertySet;
+use micromegas_tracing::test_utils::init_in_memory_tracing;
 use micromegas_transit::DynString;
 use micromegas_transit::value::{Object, Value};
+use serial_test::serial;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -41,26 +43,27 @@ fn test_log_interop_metadata() {
 }
 
 #[test]
+#[serial]
 fn test_log_encode_static() {
-    let _telemetry_guard = TelemetryGuardBuilder::default()
-        .with_install_tracing_capture(false)
-        .build();
     let process_id = uuid::Uuid::new_v4();
     let process_info = make_process_info(process_id, Some(uuid::Uuid::new_v4()), HashMap::new());
     let mut stream = LogStream::new(1024, process_id, &[], HashMap::new());
     let stream_id = stream.stream_id();
+
     stream.get_events_mut().push(LogStaticStrInteropEvent {
         time: 1,
         level: 2,
         target: "target_name".into(),
         msg: "my message".into(),
     });
+
     let mut block = stream.replace_block(Arc::new(LogBlock::new(1024, process_id, stream_id, 0)));
     Arc::get_mut(&mut block).unwrap().close();
     let encoded = block.encode_bin(&process_info).unwrap();
     let stream_info = make_stream_info(&stream);
     let received_block: micromegas_telemetry::block_wire_format::Block =
         ciborium::from_reader(&encoded[..]).unwrap();
+
     parse_block(&stream_info, &received_block.payload, |val| {
         if let Value::Object(obj) = val {
             assert_eq!(obj.type_name.as_str(), "LogStaticStrInteropEvent");
@@ -74,13 +77,19 @@ fn test_log_encode_static() {
         Ok(true)
     })
     .unwrap();
+
+    let guard = init_in_memory_tracing();
+    info!("integration test message");
+    micromegas_tracing::dispatch::flush_log_buffer();
+
+    let state = guard.sink.state.lock().unwrap();
+    assert!(state.process_info.is_some());
+    assert!(state.log_stream_desc.is_some());
 }
 
 #[test]
+#[serial]
 fn test_log_encode_dynamic() {
-    let _telemetry_guard = TelemetryGuardBuilder::default()
-        .with_install_tracing_capture(false)
-        .build();
     let process_id = uuid::Uuid::new_v4();
     let process_info = make_process_info(process_id, Some(uuid::Uuid::new_v4()), HashMap::new());
     let mut stream = LogStream::new(1024, process_id, &[], HashMap::new());
@@ -101,12 +110,14 @@ fn test_log_encode_dynamic() {
         time: 1,
         msg: micromegas_transit::DynString(String::from("my message")),
     });
+
     let mut block = stream.replace_block(Arc::new(LogBlock::new(1024, process_id, stream_id, 0)));
     Arc::get_mut(&mut block).unwrap().close();
     let encoded = block.encode_bin(&process_info).unwrap();
     let stream_info = make_stream_info(&stream);
     let received_block: micromegas_telemetry::block_wire_format::Block =
         ciborium::from_reader(&encoded[..]).unwrap();
+
     parse_block(&stream_info, &received_block.payload, |val| {
         if let Value::Object(obj) = val {
             assert_eq!(obj.type_name.as_str(), "LogStringEventV2");
@@ -121,13 +132,20 @@ fn test_log_encode_dynamic() {
         Ok(true)
     })
     .unwrap();
+
+    let guard = init_in_memory_tracing();
+    let dynamic_content = "integration test message";
+    info!("{}", dynamic_content);
+    micromegas_tracing::dispatch::flush_log_buffer();
+
+    let state = guard.sink.state.lock().unwrap();
+    assert!(state.process_info.is_some());
+    assert!(state.log_stream_desc.is_some());
 }
 
 #[test]
+#[serial]
 fn test_parse_log_interops() {
-    let _telemetry_guard = TelemetryGuardBuilder::default()
-        .with_install_tracing_capture(false)
-        .build();
     let process_id = uuid::Uuid::new_v4();
     let process_info = Arc::new(make_process_info(
         process_id,
@@ -136,6 +154,7 @@ fn test_parse_log_interops() {
     ));
     let mut stream = LogStream::new(1024, process_id, &[], HashMap::new());
     let stream_id = stream.stream_id();
+
     stream.get_events_mut().push(LogStaticStrInteropEvent {
         time: 1,
         level: 2,
@@ -148,6 +167,7 @@ fn test_parse_log_interops() {
         target: "target_name".into(),
         msg: micromegas_transit::DynString(String::from("my message")),
     });
+
     let mut block = stream.replace_block(Arc::new(LogBlock::new(1024, process_id, stream_id, 0)));
     Arc::get_mut(&mut block).unwrap().close();
     let encoded = block.encode_bin(&process_info).unwrap();
@@ -156,6 +176,7 @@ fn test_parse_log_interops() {
     let stream_info = make_stream_info(&stream);
     let mut nb_log_entries = 0;
     let convert_ticks = ConvertTicks::from_meta_data(0, 0, 1).unwrap();
+
     parse_block(&stream_info, &received_block.payload, |val| {
         if log_entry_from_value(
             &convert_ticks,
@@ -174,13 +195,21 @@ fn test_parse_log_interops() {
     })
     .unwrap();
     assert_eq!(nb_log_entries, 2);
+
+    let guard = init_in_memory_tracing();
+    info!("static message");
+    let dynamic_msg = "dynamic message";
+    info!("{}", dynamic_msg);
+    micromegas_tracing::dispatch::flush_log_buffer();
+
+    let state = guard.sink.state.lock().unwrap();
+    assert!(state.process_info.is_some());
+    assert!(state.log_stream_desc.is_some());
 }
 
 #[test]
+#[serial]
 fn test_tagged_log_entries() {
-    let _telemetry_guard = TelemetryGuardBuilder::default()
-        .with_install_tracing_capture(false)
-        .build();
     let process_id = uuid::Uuid::new_v4();
     let process_info = Arc::new(make_process_info(
         process_id,
@@ -189,6 +218,7 @@ fn test_tagged_log_entries() {
     ));
     let mut stream = LogStream::new(1024, process_id, &[], HashMap::new());
     let stream_id = stream.stream_id();
+
     static LOG_DESC: logs::LogMetadata = logs::LogMetadata {
         level: Level::Info,
         level_filter: std::sync::atomic::AtomicU32::new(logs::FILTER_LEVEL_UNSET_VALUE),
@@ -198,6 +228,7 @@ fn test_tagged_log_entries() {
         file: file!(),
         line: line!(),
     };
+
     stream.get_events_mut().push(TaggedLogString {
         desc: &LOG_DESC,
         properties: PropertySet::find_or_create(vec![
@@ -207,6 +238,7 @@ fn test_tagged_log_entries() {
         time: 1,
         msg: DynString("my message".into()),
     });
+
     let mut block = stream.replace_block(Arc::new(LogBlock::new(1024, process_id, stream_id, 0)));
     Arc::get_mut(&mut block).unwrap().close();
     let encoded = block.encode_bin(&process_info).unwrap();
@@ -214,6 +246,7 @@ fn test_tagged_log_entries() {
         ciborium::from_reader(&encoded[..]).unwrap();
     let stream_info = make_stream_info(&stream);
     let convert_ticks = ConvertTicks::from_meta_data(0, 0, 1).unwrap();
+
     parse_block(&stream_info, &received_block.payload, |val| {
         let _log_entry = log_entry_from_value(
             &convert_ticks,
@@ -228,4 +261,12 @@ fn test_tagged_log_entries() {
         Ok(true)
     })
     .unwrap();
+
+    let guard = init_in_memory_tracing();
+    info!("tagged message");
+    micromegas_tracing::dispatch::flush_log_buffer();
+
+    let state = guard.sink.state.lock().unwrap();
+    assert!(state.process_info.is_some());
+    assert!(state.log_stream_desc.is_some());
 }
