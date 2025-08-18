@@ -67,7 +67,6 @@ fn is_future_type(ty: &Type) -> bool {
     }
 }
 
-
 /// span_fn: trace the execution of sync functions, async functions, and async trait methods
 #[proc_macro_attribute]
 pub fn span_fn(args: TokenStream, input: TokenStream) -> TokenStream {
@@ -82,25 +81,24 @@ pub fn span_fn(args: TokenStream, input: TokenStream) -> TokenStream {
         // Case 1: Async trait method (after #[async_trait] transformation)
         // Function returns Pin<Box<dyn Future<Output = T>>> and has no async keyword
         let stmts = &function.block.stmts;
-        
+
         // Extract and instrument the async block from Box::pin(async move { ... })
-        if stmts.len() == 1 {
-            if let syn::Stmt::Expr(syn::Expr::Call(call_expr)) = &stmts[0] {
-                if call_expr.args.len() == 1 {
-                    let async_block = &call_expr.args[0];
-                    
-                    // Replace the function body with instrumented version
-                    function.block = parse_quote! {
-                        {
-                            static_span_desc!(_SCOPE_DESC, concat!(module_path!(), "::", #function_name));
-                            Box::pin(InstrumentedFuture::new(
-                                #async_block,
-                                &_SCOPE_DESC
-                            ))
-                        }
-                    };
+        if stmts.len() == 1
+            && let syn::Stmt::Expr(syn::Expr::Call(call_expr)) = &stmts[0]
+            && call_expr.args.len() == 1
+        {
+            let async_block = &call_expr.args[0];
+
+            // Replace the function body with instrumented version
+            function.block = parse_quote! {
+                {
+                    static_span_desc!(_SCOPE_DESC, concat!(module_path!(), "::", #function_name));
+                    Box::pin(InstrumentedFuture::new(
+                        #async_block,
+                        &_SCOPE_DESC
+                    ))
                 }
-            }
+            };
         }
     } else if function.sig.asyncness.is_some() {
         // Case 2: Regular async function
