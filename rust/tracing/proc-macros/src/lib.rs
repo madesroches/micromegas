@@ -1,8 +1,8 @@
 //! `log_fn` and `span_fn` procedural macros
 //!
 //! Injects instrumentation into sync and async functions.
-//! `span_fn` now supports both sync and async functions automatically.
-//!     async trait functions not supported
+//! `span_fn` supports both sync and async functions automatically.
+//! `span_async_trait` supports async trait methods.
 
 // crate-specific lint exceptions:
 //#![allow()]
@@ -11,7 +11,7 @@ use proc_macro::TokenStream;
 use proc_macro2::Literal;
 use quote::quote;
 use syn::{
-    ItemFn, Type, TypePath, ReturnType,
+    ItemFn, ReturnType, Type, TypePath,
     parse::{Parse, ParseStream, Result},
     parse_macro_input, parse_quote,
 };
@@ -47,25 +47,23 @@ fn is_future_type(ty: &Type) -> bool {
     match ty {
         // Check for Pin<Box<dyn Future<...>>>
         Type::Path(TypePath { path, .. }) => {
-            if let Some(last_segment) = path.segments.last() {
-                if last_segment.ident == "Pin" {
-                    // This is the pattern async-trait generates
-                    return true;
-                }
+            if let Some(last_segment) = path.segments.last()
+                && last_segment.ident == "Pin"
+            {
+                // This is the pattern async-trait generates
+                return true;
             }
             false
         }
         // Check for impl Future<...>
-        Type::ImplTrait(impl_trait) => {
-            impl_trait.bounds.iter().any(|bound| {
-                if let syn::TypeParamBound::Trait(trait_bound) = bound {
-                    if let Some(segment) = trait_bound.path.segments.last() {
-                        return segment.ident == "Future";
-                    }
-                }
-                false
-            })
-        }
+        Type::ImplTrait(impl_trait) => impl_trait.bounds.iter().any(|bound| {
+            if let syn::TypeParamBound::Trait(trait_bound) = bound
+                && let Some(segment) = trait_bound.path.segments.last()
+            {
+                return segment.ident == "Future";
+            }
+            false
+        }),
         _ => false,
     }
 }
@@ -85,16 +83,14 @@ pub fn span_async_trait(args: TokenStream, input: TokenStream) -> TokenStream {
     // So we should see an async method here
     if function.sig.asyncness.is_some() {
         let stmts = &function.block.stmts;
-        
+
         // Keep the function signature unchanged for async-trait to process
         // but wrap the body with instrumentation that will work after transformation
         function.block = parse_quote! {
             {
                 use micromegas_tracing::dispatch::{on_begin_async_scope, on_end_async_scope};
                 static_span_desc!(_SCOPE_DESC, concat!(module_path!(), "::", #function_name));
-                
-                println!("🟢 SPAN_ASYNC_TRAIT: Processing {}", #function_name);
-                
+
                 // Create an instrumented async block that async-trait will then box
                 async move {
                     let span_id = on_begin_async_scope(&_SCOPE_DESC, 0);
@@ -109,20 +105,33 @@ pub fn span_async_trait(args: TokenStream, input: TokenStream) -> TokenStream {
     } else {
         // async-trait has already transformed this method
         // It now returns Pin<Box<dyn Future>> and has no async keyword
-        println!("🔄 SPAN_ASYNC_TRAIT: Handling transformed method {}", function_name);
-        
+        // Handle transformed async trait method
+
         if returns_future(&function) {
-            // Insert instrumentation at the beginning of the function body
-            // Let async-trait handle the boxing, we just add span events
-            function.block.stmts.insert(
-                0,
-                parse_quote! {
-                    static_span_desc!(_SCOPE_DESC, concat!(module_path!(), "::", #function_name));
-                    let _span_guard = micromegas_tracing::spans::guards::AsyncSpanGuard::new(&_SCOPE_DESC);
-                },
-            );
-        } else {
-            println!("❌ SPAN_ASYNC_TRAIT: Method {} doesn't return Future", function_name);
+            let stmts = &function.block.stmts;
+            // Extract and instrument the async block from Box::pin(async move { ... })
+
+            if stmts.len() == 1 {
+                let stmt = &stmts[0];
+
+                if let syn::Stmt::Expr(expr) = stmt
+                    && let syn::Expr::Call(call_expr) = expr
+                    && call_expr.args.len() == 1
+                {
+                    let async_block = &call_expr.args[0];
+
+                    // Replace the function body with instrumented version
+                    function.block = parse_quote! {
+                        {
+                            static_span_desc!(_SCOPE_DESC, concat!(module_path!(), "::", #function_name));
+                            Box::pin(InstrumentedFuture::new(
+                                #async_block,
+                                &_SCOPE_DESC
+                            ))
+                        }
+                    };
+                }
+            }
         }
     }
 
