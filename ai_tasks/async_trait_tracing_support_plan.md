@@ -366,6 +366,9 @@ impl MyService for MyServiceImpl {
 6. ✅ **DONE**: Successfully implement async trait tracing support
 7. ✅ **DONE**: Merge functionality back into unified `span_fn` macro
 8. ✅ **DONE**: Update documentation and remove outdated comments
+9. ✅ **DONE**: Re-enable async trait instrumentation in lakehouse processors
+10. ✅ **DONE**: Enhance test suite with `HeterogeneousQueue` event type validation
+11. ✅ **DONE**: Simplify and consolidate redundant tests for maintainability
 
 ### ✅ Investigation Complete: Macro Ordering Issue Identified
 
@@ -468,4 +471,26 @@ fn sync_function() -> String { ... }
 - **Complete coverage**: Sync functions, async functions, and async trait methods all generate proper span events
 - **Unambiguous logic**: Macro ordering makes detection reliable and deterministic
 
-**Test Results**: All function types generate identical, correct span events (10/10 events in comprehensive test).
+**Test Results**: All function types generate identical, correct span events with robust event type validation.
+
+### ✅ Final Test Suite - SIMPLIFIED AND ENHANCED
+
+**Removed Redundancy**: Consolidated 8 overlapping tests into 2 focused, robust tests that provide superior validation:
+
+#### Test 1: `test_async_trait_comprehensive` 
+- **Coverage**: All async trait variations (simple, generic, complex) + sync/async controls
+- **Validation**: 12 total events (2 sync thread events + 10 async span events) 
+- **Technology**: Uses `HeterogeneousQueue::iter()` + pattern matching on `ThreadEventQueueAny` variants
+- **Purpose**: Comprehensive functionality + event type validation in one test
+
+#### Test 2: `test_async_trait_equivalence`
+- **Coverage**: Direct comparison between async trait methods and regular async functions
+- **Validation**: 4 async span events, 0 sync thread events
+- **Purpose**: Proves async trait methods behave identically to regular async functions
+
+**Key Enhancement**: Event type inspection using the `HeterogeneousQueue` interface to definitively validate that:
+- Sync functions generate `BeginThreadSpanEvent`/`EndThreadSpanEvent` 
+- Async trait methods generate `BeginAsyncSpanEvent`/`EndAsyncSpanEvent` (not sync events)
+- Regular async functions generate `BeginAsyncSpanEvent`/`EndAsyncSpanEvent`
+
+This provides **proof** that the unified `span_fn` macro correctly distinguishes between function types and generates appropriate event types.
