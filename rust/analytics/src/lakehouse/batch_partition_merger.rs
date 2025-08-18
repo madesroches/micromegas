@@ -21,7 +21,7 @@ use datafusion::{
 use futures::TryStreamExt;
 use futures::{StreamExt, stream};
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
-use micromegas_tracing::{debug, error, info};
+use micromegas_tracing::prelude::*;
 use std::sync::Arc;
 
 /// Statistics about a set of partitions.
@@ -87,6 +87,7 @@ impl BatchPartitionMerger {
 
 #[async_trait]
 impl PartitionMerger for BatchPartitionMerger {
+    #[span_fn]
     async fn execute_merge_query(
         &self,
         lake: Arc<DataLakeConnection>,

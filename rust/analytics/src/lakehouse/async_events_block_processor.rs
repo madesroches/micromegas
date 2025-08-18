@@ -12,6 +12,7 @@ use crate::{
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use micromegas_telemetry::blob_storage::BlobStorage;
+use micromegas_tracing::prelude::*;
 use std::sync::Arc;
 
 lazy_static::lazy_static! {
@@ -101,6 +102,7 @@ impl AsyncBlockProcessor for AsyncEventCollector {
 
 #[async_trait]
 impl BlockProcessor for AsyncEventsBlockProcessor {
+    #[span_fn]
     async fn process(
         &self,
         blob_storage: Arc<BlobStorage>,

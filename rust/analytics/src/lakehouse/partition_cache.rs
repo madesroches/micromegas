@@ -3,6 +3,7 @@ use crate::{arrow_utils::parse_parquet_metadata, time::TimeRange};
 use super::{partition::Partition, view::ViewMetadata};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
+use micromegas_tracing::prelude::*;
 use sqlx::{PgPool, Row};
 use std::{fmt, sync::Arc};
 
@@ -44,6 +45,7 @@ impl PartitionCache {
     /// fetches the partitions of all views matching the specified insert range
     //todo: this should be limited to global instances
     //todo: ask for a list of view sets (which would be provided by the views using a get_dependencies() api entry)
+    #[span_fn]
     pub async fn fetch_overlapping_insert_range(
         pool: &sqlx::PgPool,
         insert_range: TimeRange,
@@ -101,6 +103,7 @@ impl PartitionCache {
     }
 
     /// fetches the partitions of a single view instance matching the specified insert range
+    #[span_fn]
     pub async fn fetch_overlapping_insert_range_for_view(
         pool: &sqlx::PgPool,
         view_set_name: Arc<String>,
@@ -285,6 +288,7 @@ impl LivePartitionProvider {
 
 #[async_trait]
 impl QueryPartitionProvider for LivePartitionProvider {
+    #[span_fn]
     async fn fetch(
         &self,
         view_set_name: &str,
