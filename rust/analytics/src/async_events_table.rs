@@ -27,6 +27,7 @@ pub struct AsyncEventRecord {
     pub event_type: Arc<String>,
     pub span_id: i64,
     pub parent_span_id: i64,
+    pub depth: u32,
     pub name: Arc<String>,
     pub filename: Arc<String>,
     pub target: Arc<String>,
@@ -59,6 +60,7 @@ pub fn async_events_table_schema() -> Schema {
         ),
         Field::new("span_id", DataType::Int64, false),
         Field::new("parent_span_id", DataType::Int64, false),
+        Field::new("depth", DataType::UInt32, false),
         Field::new(
             "name",
             DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
@@ -86,6 +88,7 @@ pub struct AsyncEventRecordBuilder {
     event_types: StringDictionaryBuilder<Int16Type>,
     span_ids: PrimitiveBuilder<Int64Type>,
     parent_span_ids: PrimitiveBuilder<Int64Type>,
+    depths: PrimitiveBuilder<UInt32Type>,
     names: StringDictionaryBuilder<Int16Type>,
     filenames: StringDictionaryBuilder<Int16Type>,
     targets: StringDictionaryBuilder<Int16Type>,
@@ -101,6 +104,7 @@ impl AsyncEventRecordBuilder {
             event_types: StringDictionaryBuilder::new(),
             span_ids: PrimitiveBuilder::with_capacity(capacity),
             parent_span_ids: PrimitiveBuilder::with_capacity(capacity),
+            depths: PrimitiveBuilder::with_capacity(capacity),
             names: StringDictionaryBuilder::new(),
             filenames: StringDictionaryBuilder::new(),
             targets: StringDictionaryBuilder::new(),
@@ -135,6 +139,7 @@ impl AsyncEventRecordBuilder {
         self.event_types.append_value(&*record.event_type);
         self.span_ids.append_value(record.span_id);
         self.parent_span_ids.append_value(record.parent_span_id);
+        self.depths.append_value(record.depth);
         self.names.append_value(&*record.name);
         self.filenames.append_value(&*record.filename);
         self.targets.append_value(&*record.target);
@@ -152,6 +157,7 @@ impl AsyncEventRecordBuilder {
                 Arc::new(self.event_types.finish()),
                 Arc::new(self.span_ids.finish()),
                 Arc::new(self.parent_span_ids.finish()),
+                Arc::new(self.depths.finish()),
                 Arc::new(self.names.finish()),
                 Arc::new(self.filenames.finish()),
                 Arc::new(self.targets.finish()),

@@ -39,6 +39,7 @@ impl AsyncBlockProcessor for TestAsyncProcessor {
         ts: i64,
         span_id: i64,
         parent_span_id: i64,
+        _depth: u32,
     ) -> Result<bool> {
         self.events.push(TestAsyncEvent {
             event_type: "begin".to_string(),
@@ -61,6 +62,7 @@ impl AsyncBlockProcessor for TestAsyncProcessor {
         ts: i64,
         span_id: i64,
         parent_span_id: i64,
+        _depth: u32,
     ) -> Result<bool> {
         self.events.push(TestAsyncEvent {
             event_type: "end".to_string(),
@@ -94,9 +96,10 @@ fn test_async_events_table_schema() {
     assert!(field_names.contains(&"filename"));
     assert!(field_names.contains(&"target"));
     assert!(field_names.contains(&"line"));
+    assert!(field_names.contains(&"depth"));
 
     // Verify we have the expected number of fields (optimized for high-frequency data)
-    assert_eq!(field_names.len(), 10);
+    assert_eq!(field_names.len(), 11);
 }
 
 #[test]
@@ -111,6 +114,7 @@ fn test_async_event_record_builder() {
         event_type: Arc::new("begin".to_string()),
         span_id: 1,
         parent_span_id: 0,
+        depth: 0,
         name: Arc::new("test_function".to_string()),
         filename: Arc::new("test.rs".to_string()),
         target: Arc::new("test_target".to_string()),
@@ -124,6 +128,7 @@ fn test_async_event_record_builder() {
         event_type: Arc::new("end".to_string()),
         span_id: 1,
         parent_span_id: 0,
+        depth: 0,
         name: Arc::new("test_function".to_string()),
         filename: Arc::new("test.rs".to_string()),
         target: Arc::new("test_target".to_string()),
@@ -143,10 +148,10 @@ fn test_async_event_record_builder() {
     assert_eq!(time_range.begin.timestamp_nanos_opt().unwrap(), 2000000000);
     assert_eq!(time_range.end.timestamp_nanos_opt().unwrap(), 3000000000);
 
-    // Test building the record batch (optimized schema has 10 columns)
+    // Test building the record batch (optimized schema has 11 columns including depth)
     let batch = builder.finish().expect("Failed to build record batch");
     assert_eq!(batch.num_rows(), 2);
-    assert_eq!(batch.num_columns(), 10);
+    assert_eq!(batch.num_columns(), 11);
 }
 
 #[test]
@@ -200,6 +205,7 @@ fn test_async_block_processor_trait() {
             1000,
             1,
             0,
+            0, // depth
         )
         .expect("Failed to process begin event");
 
@@ -216,6 +222,7 @@ fn test_async_block_processor_trait() {
             2000,
             1,
             0,
+            0, // depth
         )
         .expect("Failed to process end event");
 
@@ -249,7 +256,7 @@ fn test_empty_record_builder() {
 
     let batch = builder.finish().expect("Failed to build empty batch");
     assert_eq!(batch.num_rows(), 0);
-    assert_eq!(batch.num_columns(), 10);
+    assert_eq!(batch.num_columns(), 11);
 }
 
 #[test]
@@ -307,6 +314,7 @@ fn test_async_events_high_frequency_performance() {
             }),
             span_id: (i / 2) as i64,
             parent_span_id: if i > 0 { (i / 4) as i64 } else { 0 },
+            depth: (i % 5) as u32, // Test different depth levels
             name: Arc::new(format!("async_fn_{}", i % 5)),
             filename: Arc::new(format!("src/lib_{}.rs", i % 3)),
             target: Arc::new(format!("module_{}", i % 7)),
@@ -329,7 +337,7 @@ fn test_async_events_high_frequency_performance() {
     // Test batch creation with many records
     let batch = builder.finish().expect("Failed to build large batch");
     assert_eq!(batch.num_rows(), 1000);
-    assert_eq!(batch.num_columns(), 10);
+    assert_eq!(batch.num_columns(), 11);
 }
 
 #[test]
@@ -347,6 +355,7 @@ fn test_async_events_cross_stream_scenarios() {
             event_type: Arc::new("begin".to_string()),
             span_id: 100,
             parent_span_id: 0,
+            depth: 0,
             name: Arc::new("async_task".to_string()),
             filename: Arc::new("worker.rs".to_string()),
             target: Arc::new("worker".to_string()),
@@ -360,6 +369,7 @@ fn test_async_events_cross_stream_scenarios() {
             event_type: Arc::new("begin".to_string()),
             span_id: 101,
             parent_span_id: 100,
+            depth: 1,
             name: Arc::new("subtask".to_string()),
             filename: Arc::new("worker.rs".to_string()),
             target: Arc::new("worker".to_string()),
@@ -373,6 +383,7 @@ fn test_async_events_cross_stream_scenarios() {
             event_type: Arc::new("end".to_string()),
             span_id: 101,
             parent_span_id: 100,
+            depth: 1,
             name: Arc::new("subtask".to_string()),
             filename: Arc::new("worker.rs".to_string()),
             target: Arc::new("worker".to_string()),
@@ -386,6 +397,7 @@ fn test_async_events_cross_stream_scenarios() {
             event_type: Arc::new("end".to_string()),
             span_id: 100,
             parent_span_id: 0,
+            depth: 0,
             name: Arc::new("async_task".to_string()),
             filename: Arc::new("worker.rs".to_string()),
             target: Arc::new("worker".to_string()),
