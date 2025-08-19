@@ -138,12 +138,42 @@ pub fn on_end_async_scope(span_id: u64, parent_span_id: u64, scope: &'static Spa
 #### 1.3 Update InstrumentedFuture
 **Location**: `rust/tracing/src/spans/instrumented_future.rs`
 
-Ensure depth calculation works correctly with the existing async call stack tracking:
+Calculate depth from the async call stack and pass it to dispatch functions:
 ```rust
-// The existing ASYNC_CALL_STACK tracking in InstrumentedFuture::poll()
-// already maintains the correct stack depth. We just need to ensure
-// depth is calculated consistently in both begin and end events.
+fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+    let this = self.project();
+    ASYNC_CALL_STACK.with(|stack_cell| {
+        let stack = unsafe { &mut *stack_cell.get() };
+        assert!(!stack.is_empty());
+        let parent = stack[stack.len() - 1];
+        // Calculate depth: stack length - 1 (since stack[0] is root with depth 0)
+        let depth = (stack.len().saturating_sub(1)) as u32;
+        // ... use depth in on_begin_async_scope and on_end_async_scope calls
+    })
+}
 ```
+
+#### 1.4 Remove Deprecated Guards
+**Location**: `rust/tracing/src/guards.rs`
+
+The simple `AsyncSpanGuard` and `AsyncNamedSpanGuard` pass `depth: 0` and don't have access to proper depth context. These should be deprecated and eventually removed in favor of:
+
+1. **`InstrumentedFuture`**: For proper async span instrumentation with accurate depth tracking
+2. **Proc macros**: `#[span_fn]` and `.instrument()` extension methods that use `InstrumentedFuture` internally
+
+**Deprecation Strategy**:
+```rust
+#[deprecated(note = "Use InstrumentedFuture or proc macros for proper async depth tracking")]
+pub struct AsyncSpanGuard { ... }
+
+#[deprecated(note = "Use InstrumentedFuture or proc macros for proper async depth tracking")]
+pub struct AsyncNamedSpanGuard { ... }
+```
+
+**Migration Path**:
+- Replace `AsyncSpanGuard::new(span_desc)` with `future.instrument(span_desc)`
+- Replace manual guard usage with `#[span_fn]` proc macro for async functions
+- Update documentation to recommend proper async instrumentation patterns
 
 ### Phase 2: Update Async Events View
 
@@ -289,6 +319,7 @@ Add examples showing how to use depth for:
 1. **Advanced Query Examples**: Documentation with depth-based queries
 2. **Performance Optimization**: Ensure depth calculation doesn't impact performance
 3. **Integration Testing**: Comprehensive test suite validation
+4. **Deprecate Legacy Guards**: Mark `AsyncSpanGuard` and `AsyncNamedSpanGuard` as deprecated
 
 ### Low Priority (Future Enhancements)
 1. **Visualization Support**: Tools for rendering async call hierarchies

@@ -87,6 +87,7 @@ pub struct BeginAsyncSpanEvent {
     pub span_desc: &'static SpanMetadata,
     pub span_id: u64,
     pub parent_span_id: u64, // parent span when first polled
+    pub depth: u32,          // nesting depth in async call hierarchy
     pub time: i64,
 }
 
@@ -97,6 +98,7 @@ pub struct EndAsyncSpanEvent {
     pub span_desc: &'static SpanMetadata,
     pub span_id: u64,
     pub parent_span_id: u64, // parent span when completed
+    pub depth: u32,          // nesting depth in async call hierarchy
     pub time: i64,
 }
 
@@ -107,6 +109,7 @@ pub struct BeginAsyncNamedSpanEvent {
     pub name: StringId,
     pub span_id: u64,
     pub parent_span_id: u64, // parent span when first polled
+    pub depth: u32,          // nesting depth in async call hierarchy
     pub time: i64,
 }
 
@@ -118,6 +121,7 @@ pub struct EndAsyncNamedSpanEvent {
     pub name: StringId,
     pub span_id: u64,
     pub parent_span_id: u64, // parent span when completed
+    pub depth: u32,          // nesting depth in async call hierarchy
     pub time: i64,
 }
 

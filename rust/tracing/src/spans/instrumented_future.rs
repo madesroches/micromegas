@@ -54,13 +54,14 @@ where
             let stack = unsafe { &mut *stack_cell.get() };
             assert!(!stack.is_empty());
             let parent = stack[stack.len() - 1];
+            let depth = (stack.len().saturating_sub(1)) as u32;
             match this.span_id {
                 Some(span_id) => {
                     stack.push(*span_id);
                 }
                 None => {
                     // Begin the async span and store the span ID
-                    let span_id = on_begin_async_scope(this.desc, parent);
+                    let span_id = on_begin_async_scope(this.desc, parent, depth);
                     stack.push(span_id);
                     *this.span_id = Some(span_id);
                 }
@@ -69,7 +70,7 @@ where
                 Poll::Ready(output) => {
                     // End the async span when the future completes
                     if let Some(span_id) = *this.span_id {
-                        on_end_async_scope(span_id, parent, this.desc);
+                        on_end_async_scope(span_id, parent, this.desc, depth);
                     }
                     Poll::Ready(output)
                 }
