@@ -86,11 +86,12 @@ pub mod prelude {
     pub use crate::process_info::*;
     #[cfg(feature = "tokio")]
     pub use crate::runtime::TracingRuntimeExt;
-    pub use crate::spans::{InstrumentFuture, InstrumentedFuture};
+    pub use crate::spans::{InstrumentFuture, InstrumentedFuture, InstrumentedNamedFuture};
     pub use crate::time::*;
     pub use crate::{
-        debug, error, fatal, fmetric, imetric, info, log, log_enabled, span_scope,
-        static_span_desc, trace, warn,
+        debug, error, fatal, fmetric, imetric, info, instrument_named, log, log_enabled,
+        span_async_named, span_scope, span_scope_named, static_span_desc, static_span_location,
+        trace, warn,
     };
     pub use micromegas_tracing_proc_macros::*;
 }

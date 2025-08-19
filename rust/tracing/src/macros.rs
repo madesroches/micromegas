@@ -71,6 +71,82 @@ macro_rules! span_scope_named {
     };
 }
 
+/// Creates a static SpanLocation for use with named async spans.
+/// This is an internal implementation detail - users should use `instrument_named!` instead.
+///
+/// # Examples
+///
+/// ```
+/// use micromegas_tracing::prelude::*;
+///
+/// # #[tokio::main]
+/// # async fn main() {
+/// // Don't use this directly - use instrument_named! instead
+/// static_span_location!(LOCATION);
+/// // Users should prefer: instrument_named!(future, "name")
+/// # }
+/// ```
+#[macro_export]
+macro_rules! static_span_location {
+    ($var_name:ident) => {
+        static $var_name: $crate::spans::SpanLocation = $crate::spans::SpanLocation {
+            lod: $crate::levels::Verbosity::Max,
+            target: module_path!(),
+            module_path: module_path!(),
+            file: file!(),
+            line: line!(),
+        };
+    };
+}
+
+/// Instruments an async block with a named span using a static string.
+/// This creates both the SpanLocation and instruments the future in one macro call.
+///
+/// # Examples
+///
+/// ```
+/// use micromegas_tracing::prelude::*;
+///
+/// # #[tokio::main]
+/// # async fn main() {
+/// let result = span_async_named!("database_query", async {
+///     // async work here
+///     42
+/// }).await;
+/// # }
+/// ```
+#[macro_export]
+macro_rules! span_async_named {
+    ($name:expr, $async_block:expr) => {{
+        use $crate::spans::InstrumentFuture as _;
+        $crate::static_span_location!(_ASYNC_LOCATION);
+        $async_block.__instrument_named_internal(&_ASYNC_LOCATION, $name)
+    }};
+}
+
+/// Instruments a future with a named span.
+/// Usage: `instrument_named!(future, "span_name")`
+///
+/// # Examples
+///
+/// ```
+/// use micromegas_tracing::prelude::*;
+///
+/// # #[tokio::main]
+/// # async fn main() {
+/// let future = async { 42 };
+/// let result = instrument_named!(future, "operation_name").await;
+/// # }
+/// ```
+#[macro_export]
+macro_rules! instrument_named {
+    ($future:expr, $name:expr) => {{
+        use $crate::spans::InstrumentFuture as _;
+        $crate::static_span_location!(_INSTRUMENT_LOCATION);
+        $future.__instrument_named_internal(&_INSTRUMENT_LOCATION, $name)
+    }};
+}
+
 /// Records a integer metric.
 ///
 /// # Examples

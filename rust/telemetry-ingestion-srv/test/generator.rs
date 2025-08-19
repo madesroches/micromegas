@@ -62,6 +62,83 @@ async fn manual_async_work() {
     .await;
 }
 
+// Named async span examples - using the new API
+async fn named_async_work_examples(task_id: usize) {
+    // Example 1: Database operations with different names
+    span_async_named!("database_migration", async {
+        info!("performing database migration for task {task_id}");
+        sleep(Duration::from_millis(80)).await;
+        info!("database migration completed for task {task_id}");
+    })
+    .await;
+
+    // Example 2: Cache operations
+    span_async_named!("cache_warmup", async {
+        info!("warming up cache for task {task_id}");
+        sleep(Duration::from_millis(60)).await;
+        info!("cache warmup completed for task {task_id}");
+    })
+    .await;
+
+    // Example 3: Data processing operations
+    span_async_named!("data_processing", async {
+        info!("processing data batch for task {task_id}");
+        sleep(Duration::from_millis(90)).await;
+        info!("data processing completed for task {task_id}");
+    })
+    .await;
+
+    // Example 4: Nested named async spans
+    span_async_named!("user_workflow", async {
+        info!("starting user workflow for task {task_id}");
+
+        // Nested named spans within a parent named span
+        span_async_named!("user_validation", async {
+            info!("validating user data for task {task_id}");
+            sleep(Duration::from_millis(30)).await;
+        })
+        .await;
+
+        span_async_named!("user_processing", async {
+            info!("processing user request for task {task_id}");
+            sleep(Duration::from_millis(40)).await;
+        })
+        .await;
+
+        info!("user workflow completed for task {task_id}");
+    })
+    .await;
+}
+
+// Lower-level named async span API example
+async fn advanced_named_async_work(operation_type: &str, task_id: usize) {
+    let operation_name = match operation_type {
+        "batch" => "batch_processing_operation",
+        "stream" => "stream_processing_operation",
+        "real_time" => "real_time_processing_operation",
+        _ => "unknown_processing_operation",
+    };
+
+    instrument_named!(
+        async {
+            info!("starting {operation_type} processing operation for task {task_id}");
+
+            // Simulate some processing work
+            let delay = match operation_type {
+                "batch" => 100,
+                "stream" => 70,
+                "real_time" => 40,
+                _ => 50,
+            };
+            sleep(Duration::from_millis(delay)).await;
+
+            info!("{operation_type} processing operation completed for task {task_id}");
+        },
+        operation_name
+    )
+    .await
+}
+
 // Multi-threaded async function that creates spans across different threads
 #[span_fn]
 async fn multi_threaded_async_work(task_id: usize) -> String {
@@ -154,6 +231,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Generate manual instrumentation spans
     manual_async_work().await;
 
+    // Generate named async spans
+    info!("starting named async span examples");
+    named_async_work_examples(0).await;
+
+    // Generate advanced named async spans with different operation types
+    info!("starting advanced named async span examples");
+    let operation_types = ["batch", "stream", "real_time"];
+    for (i, op_type) in operation_types.iter().enumerate() {
+        advanced_named_async_work(op_type, i).await;
+    }
+
     // Generate multi-threaded async spans to create cross-stream async events
     info!("starting multi-threaded async operations");
 
@@ -161,7 +249,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create multiple async tasks that run on different threads (using args.async_tasks)
     for i in 0..args.async_tasks {
-        let handle = tokio::spawn(async move { multi_threaded_async_work(i).await });
+        let handle = tokio::spawn(async move {
+            // Mix regular and named async spans in concurrent tasks
+            let result = multi_threaded_async_work(i).await;
+
+            // Add named async spans to each concurrent task
+            named_async_work_examples(i).await;
+
+            result
+        });
         handles.push(handle);
     }
 

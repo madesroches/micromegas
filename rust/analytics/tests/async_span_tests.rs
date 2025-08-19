@@ -3,6 +3,7 @@ use micromegas_tracing::dispatch::{
 };
 use micromegas_tracing::event::in_memory_sink::InMemorySink;
 use micromegas_tracing::event::{EventSink, TracingBlock};
+use micromegas_tracing::intern_string::intern_string;
 use micromegas_tracing::prelude::*;
 use rand::Rng;
 use serial_test::serial;
@@ -158,4 +159,74 @@ fn sync_span_macro() {
         "Expected 2 events (begin + end span) but found {}",
         total_events
     );
+}
+
+async fn named_inner_work(operation: &'static str) {
+    let ms = rand::thread_rng().gen_range(0..=500);
+    eprintln!("doing {} for {} ms", operation, ms);
+    sleep(Duration::from_millis(ms)).await;
+}
+
+async fn test_named_spans() {
+    // Test named spans in a loop with interned strings containing iteration numbers
+    for i in 0..5 {
+        let span_name = intern_string(&format!("iteration_{}", i));
+        span_async_named!(span_name, async {
+            named_inner_work("loop work").await;
+        })
+        .await;
+    }
+
+    // Test the lower-level API with interned strings in a loop
+    for i in 0..3 {
+        let operation_name = intern_string(&format!("background_operation_{}", i));
+        instrument_named!(named_inner_work("background task"), operation_name).await;
+    }
+}
+
+#[test]
+#[serial]
+fn test_async_named_span_instrumentation() {
+    let sink = Arc::new(InMemorySink::new());
+    init_in_mem_tracing(sink.clone());
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_name("tracing-test")
+        .with_tracing_callbacks()
+        .build()
+        .expect("failed to build tokio runtime");
+
+    runtime.block_on(async {
+        tokio::task::spawn(async {
+            let output = test_named_spans().await;
+            flush_thread_buffer();
+            output
+        })
+        .await
+        .expect("Task failed")
+    });
+
+    // Drop the runtime to properly shut down worker threads
+    drop(runtime);
+    shutdown_dispatch();
+
+    // Check that the correct number of events were recorded
+    let state = sink.state.lock().expect("Failed to lock sink state");
+    let total_events: usize = state
+        .thread_blocks
+        .iter()
+        .map(|block| block.nb_objects())
+        .sum();
+
+    // We should have:
+    // - 5 spans from first loop (iteration_0 through iteration_4) = 10 events (begin + end each)
+    // - 3 spans from second loop (background_operation_0 through background_operation_2) = 6 events
+    // Total = 16 events
+    assert_eq!(
+        total_events, 16,
+        "Expected 16 events from named async spans (5 + 3 named spans, 2 events each) but found {}",
+        total_events
+    );
+
+    unsafe { force_uninit() };
 }
