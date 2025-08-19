@@ -88,7 +88,7 @@ impl View for AsyncEventsView {
     }
 
     fn get_file_schema_hash(&self) -> Vec<u8> {
-        vec![0]
+        vec![1] // Updated to version 1 to include depth field
     }
 
     fn get_file_schema(&self) -> Arc<Schema> {
