@@ -71,6 +71,58 @@ macro_rules! span_scope_named {
     };
 }
 
+/// Creates a static SpanLocation for use with named async spans.
+///
+/// # Examples
+///
+/// ```
+/// use micromegas_tracing::prelude::*;
+///
+/// # #[tokio::main]
+/// # async fn main() {
+/// static_span_location!(LOCATION);
+/// let future = async { 42 };
+/// let instrumented = future.instrument_named(&LOCATION, "specific_operation");
+/// let result = instrumented.await;
+/// # }
+/// ```
+#[macro_export]
+macro_rules! static_span_location {
+    ($var_name:ident) => {
+        static $var_name: $crate::spans::SpanLocation = $crate::spans::SpanLocation {
+            lod: $crate::levels::Verbosity::Max,
+            target: module_path!(),
+            module_path: module_path!(),
+            file: file!(),
+            line: line!(),
+        };
+    };
+}
+
+/// Instruments an async block with a named span using a static string.
+/// This creates both the SpanLocation and instruments the future in one macro call.
+///
+/// # Examples
+///
+/// ```
+/// use micromegas_tracing::prelude::*;
+///
+/// # #[tokio::main]
+/// # async fn main() {
+/// let result = span_async_named!("database_query", async {
+///     // async work here
+///     42
+/// }).await;
+/// # }
+/// ```
+#[macro_export]
+macro_rules! span_async_named {
+    ($name:expr, $async_block:expr) => {{
+        $crate::static_span_location!(_ASYNC_LOCATION);
+        $crate::spans::InstrumentFuture::instrument_named($async_block, &_ASYNC_LOCATION, $name)
+    }};
+}
+
 /// Records a integer metric.
 ///
 /// # Examples
