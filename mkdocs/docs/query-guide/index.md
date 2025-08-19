@@ -74,8 +74,9 @@ Micromegas organizes telemetry data into several queryable views:
 3. **[Schema Reference](schema-reference.md)** - Detailed view and field documentation
 4. **[Functions Reference](functions-reference.md)** - Available SQL functions
 5. **[Query Patterns](query-patterns.md)** - Common observability query patterns
-6. **[Performance Guide](performance.md)** - Optimize your queries for best performance
-7. **[Advanced Features](advanced-features.md)** - View materialization and custom views
+6. **[Async Performance Analysis](async-performance-analysis.md)** - Comprehensive async operation analysis with depth tracking
+7. **[Performance Guide](performance.md)** - Optimize your queries for best performance
+8. **[Advanced Features](advanced-features.md)** - View materialization and custom views
 
 ## Best Practices
 
@@ -101,7 +102,7 @@ SELECT * FROM log_entries LIMIT 10;
 SELECT * FROM log_entries WHERE level <= 3 LIMIT 10;
 
 -- Then add time range
-SELECT * FROM log_entries 
+SELECT * FROM log_entries
 WHERE level <= 3 AND time >= NOW() - INTERVAL '1 hour'
 LIMIT 10;
 ```
