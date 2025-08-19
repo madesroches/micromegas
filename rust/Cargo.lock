@@ -2925,6 +2925,7 @@ dependencies = [
  "anyhow",
  "cfg-if",
  "chrono",
+ "futures",
  "internment",
  "lazy_static",
  "log",

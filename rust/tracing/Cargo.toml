@@ -38,6 +38,7 @@ winapi.workspace = true
 log.workspace = true
 # for async and concurrent testing
 tokio = { workspace = true, features = ["time"] }
+futures = "0.3"
 serial_test = "3.2"
 
 [features]

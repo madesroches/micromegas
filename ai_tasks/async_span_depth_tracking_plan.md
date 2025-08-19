@@ -20,7 +20,7 @@ Add depth tracking to async span events to enable call hierarchy analysis for as
 ### 🔍 What's Missing (Remaining Tasks)
 
 - **Basic Testing**: Unit tests specifically for depth tracking functionality
-- **Integration Testing**: End-to-end validation of depth tracking in real scenarios  
+- **Integration Testing**: End-to-end validation of depth tracking in real scenarios
 - **Documentation Updates**: Schema documentation and query examples with depth usage
 - **Performance Validation**: Ensure minimal performance impact of depth tracking
 
@@ -70,7 +70,7 @@ ORDER BY nested_count DESC;
 **Location**: `rust/tracing/src/spans/events.rs`
 
 **Status**: ✅ COMPLETED - Added `depth: u32` field to all async span events:
-- `BeginAsyncSpanEvent` 
+- `BeginAsyncSpanEvent`
 - `EndAsyncSpanEvent`
 - `BeginAsyncNamedSpanEvent`
 - `EndAsyncNamedSpanEvent`
@@ -79,7 +79,7 @@ ORDER BY nested_count DESC;
 **Location**: `rust/tracing/src/dispatch.rs`
 
 **Status**: ✅ COMPLETED - All async scope functions now accept depth as a parameter:
-- `on_begin_async_scope(scope, parent_span_id, depth)` 
+- `on_begin_async_scope(scope, parent_span_id, depth)`
 - `on_end_async_scope(span_id, parent_span_id, scope, depth)`
 - `on_begin_async_named_scope(span_location, name, parent_span_id, depth)`
 - `on_end_async_named_scope(span_id, parent_span_id, span_location, name, depth)`
@@ -90,7 +90,7 @@ ORDER BY nested_count DESC;
 **Status**: ✅ COMPLETED - Proper depth calculation from async call stack:
 ```rust
 // Calculate depth: stack.len() - 1 gives us the depth of the new span
-// (stack[0] is root, so first real span at stack.len()=1 has depth=0)  
+// (stack[0] is root, so first real span at stack.len()=1 has depth=0)
 let depth = (stack.len().saturating_sub(1)) as u32;
 ```
 
@@ -124,45 +124,34 @@ let depth = (stack.len().saturating_sub(1)) as u32;
 - Extended `AsyncBlockProcessor` trait with depth parameter
 - Updated helper functions to extract depth from serialized events
 - Updated `AsyncEventCollector` to store depth in lakehouse records
-- All tests updated to handle new schema and depth values### Phase 3: Testing and Validation
+- All tests updated to handle new schema and depth values### 🔄 Phase 3: Testing and Validation (IN PROGRESS)
 
-#### 3.1 Unit Tests
-**Location**: `rust/analytics/tests/`
+#### ✅ 3.1 Basic Instrumentation Tests (COMPLETED)
+**Location**: `rust/tracing/tests/async_depth_tracking_tests.rs`
 
-Create comprehensive tests for depth tracking:
-```rust
-#[test]
-fn test_async_depth_tracking() {
-    // Test nested async operations generate correct depths
-    // Test parallel async operations have correct depths
-    // Test depth consistency between begin/end events
-}
+**Status**: ✅ COMPLETED - Validates basic async instrumentation works:
+- ✅ `test_basic_async_instrumentation` - Basic async operations with depth tracking
+- ✅ `test_nested_async_instrumentation` - Nested async operations
+- ✅ `test_parallel_async_operations` - Parallel async tasks
+- ✅ `test_deeply_nested_async` - Multi-level nesting validation
+- ✅ `test_error_handling_with_instrumentation` - Error handling doesn't break depth tracking
 
-#[test]
-fn test_async_events_view_with_depth() {
-    // Test async events view includes depth field
-    // Test SQL queries filtering by depth work correctly
-    // Test depth values match expected hierarchy
-}
-```
+#### 📋 3.2 Python Integration Tests (TODO)
+**Location**: `python/micromegas/tests/test_async_events_depth.py`
 
-#### 3.2 Integration Tests
-**Location**: `python/micromegas/tests/test_async_events.py`
+**Status**: 📋 TODO - End-to-end validation via Python client:
+- 📋 Generate nested async operations with micromegas-tracing
+- 📋 Query async_events view via FlightSQL
+- 📋 Validate depth values in query results match expected hierarchy
+- 📋 Test depth-based filtering and aggregation queries
+- 📋 Verify performance with realistic async workloads
 
-Update existing async events tests to validate depth:
-```python
-def test_async_events_depth_hierarchy():
-    """Test depth tracking in nested async operations"""
-    # Generate nested async operations
-    # Query async events with depth information
-    # Validate depth values match expected hierarchy
-
-def test_async_events_depth_queries():
-    """Test SQL queries using depth field"""
-    # Test filtering by depth level
-    # Test aggregating by depth
-    # Test depth-based performance analysis
-```
+#### 🔄 3.3 End-to-End Validation (IN PROGRESS)
+**Current Status**: Basic tests implemented and passing, need comprehensive validation:
+- ✅ Event generation with depth field
+- ✅ Event storage in analytics layer
+- ✅ Schema consistency (11 columns)
+- ⏳ query async event depth using sql in python
 
 ### Phase 4: Documentation Updates
 
@@ -254,8 +243,8 @@ Add examples showing how to use depth for:
 
 ### 🔄 Testing Requirements - IN PROGRESS
 - ✅ Updated existing tests to handle depth field
-- ⏳ 100% test coverage for depth tracking functionality
-- ⏳ Integration tests validate end-to-end depth tracking
+- ✅ Basic Rust-level instrumentation tests completed
+- 📋 Python integration tests to validate end-to-end depth tracking via FlightSQL
 - ⏳ Performance tests confirm overhead requirements
 
 ## Future Enhancements
@@ -285,7 +274,7 @@ Integration with visualization tools to render async operation flame graphs and 
 
 ### 🔄 Current Status
 - **Phases 1 & 2**: ✅ COMPLETED
-- **Phase 3**: 🔄 Testing and Validation (ready to start)
+- **Phase 3**: 🔄 Testing and Validation (basic Rust tests completed, Python integration tests needed)
 - **Phase 4**: 📋 Documentation Updates (ready to start)
 
 ### ✅ Commits Made
