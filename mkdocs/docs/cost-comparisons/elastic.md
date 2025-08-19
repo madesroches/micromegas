@@ -20,7 +20,7 @@
     *   **Retention:** 90 days (3 months)
 
 2.  **Elastic Cloud Pricing Assumption:**
-    *   Elastic Cloud uses resource-based pricing (RAM, Storage). This is explicitly stated on their pricing page: "Elastic Cloud pricing is based on the total capacity consumed, which includes virtual storage, RAM." [1]
+    *   Elastic Cloud uses resource-based pricing (RAM, Storage). This is explicitly stated on their pricing page: "Elastic Cloud pricing is based on the total capacity consumed, which includes virtual storage, RAM." (see reference 1)
     *   We need to estimate the cluster size required to handle the *event volume* and *retention*.
     *   **Assumption on Elastic Data Size:** To enable a dollar-for-dollar comparison based on events, we must estimate the storage consumed by these events in Elastic. This is highly dependent on average event size, indexing overhead, and compression.
         *   Average log entry size in Elastic (after indexing/overhead): 500 bytes. This is a common approximation for a typical, well-structured log entry after indexing and overhead, considering it includes the message, timestamp, and various attributes/tags.
@@ -108,4 +108,4 @@ This comparison highlights the significant impact of data compactness on overall
 
 ## References
 
-[1] [Official Elastic Cloud pricing — compare serverless and hosted ... | Elastic](https://www.elastic.co/cloud/pricing)
+1. [Official Elastic Cloud pricing - compare serverless and hosted](https://www.elastic.co/cloud/pricing)

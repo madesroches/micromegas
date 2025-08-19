@@ -84,8 +84,6 @@ nav:
     - Advanced Features: query-guide/advanced-features.md
   - Architecture:
     - Overview: architecture/index.md
-    - Core Components: architecture/components.md
-    - Data Flow: architecture/data-flow.md
   - Cost Effectiveness:
     - Overview: cost-effectiveness.md
     - Cost Modeling: cost-comparisons/cost-modeling.md

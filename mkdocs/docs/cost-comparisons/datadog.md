@@ -23,10 +23,10 @@ For a broader overview of observability cost models, see the [Cost Modeling](cos
     *   **Retention:** 90 days for logs and traces (requires extended retention plans).
 
 2.  **Datadog Pricing Assumption:**
-    *   We will use the publicly available pricing for the **Datadog Pro** and **Enterprise** plans as of mid-2025, as different products are required. Datadog's pricing is highly modular, with costs varying based on specific product usage and consumption. [1, 2]
+    *   We will use the publicly available pricing for the **Datadog Pro** and **Enterprise** plans as of mid-2025, as different products are required. Datadog's pricing is highly modular, with costs varying based on specific product usage and consumption. (see references 1, 2)
     *   Datadog's pricing is highly modular. We will estimate the cost by combining the necessary components.
     *   **Assumption on Datadog Data Size:** To enable a dollar-for-dollar comparison based on events, we must estimate the billable units for Datadog.
-        *   Average log entry size for Datadog (after processing): 500 bytes. This is a common approximation for a typical, well-structured log entry after processing, including the message, timestamp, and various attributes/tags. Datadog's API supports log entries up to 1MB, implying that typical entries are significantly smaller. [3]
+        *   Average log entry size for Datadog (after processing): 500 bytes. This is a common approximation for a typical, well-structured log entry after processing, including the message, timestamp, and various attributes/tags. Datadog's API supports log entries up to 1MB, implying that typical entries are significantly smaller. (see reference 3)
         *   Average trace event size for Datadog (after processing): 1 KB. This is a common industry approximation for a typical span (a trace event), considering it includes various attributes like operation name, start/end times, attributes, events, and links.
 
 3.  **Micromegas TCO Assumption:**
@@ -117,6 +117,6 @@ This comparison highlights the dramatic cost difference for high-volume telemetr
 
 ## References
 
-[1] [Datadog Pricing: A Comprehensive Guide | Middleware](https://middleware.io/blog/datadog-pricing)
-[2] [Datadog Pricing Main Caveats Explained [Updated for 2025] | SigNoz](https://signoz.io/blog/datadog-pricing)
-[3] [Datadog API Reference: Log Submission](https://docs.datadoghq.com/api/latest/logs/#send-logs)
+1. [Datadog Pricing: A Comprehensive Guide - Middleware](https://middleware.io/blog/datadog-pricing)
+2. [Datadog Pricing Main Caveats Explained (Updated for 2025) - SigNoz](https://signoz.io/blog/datadog-pricing)
+3. [Datadog API Reference - Log Submission](https://docs.datadoghq.com/api/latest/logs/#send-logs)

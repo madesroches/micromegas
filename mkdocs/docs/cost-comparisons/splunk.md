@@ -22,12 +22,12 @@ For a broader overview of observability cost models, see the [Cost Modeling](cos
     *   **Retention:** 90 days (3 months).
 
 2.  **Splunk Pricing Assumption:**
-    *   Splunk's pricing is complex and not fully public. For this analysis, we assume an ingest-based pricing model for Splunk Cloud. This is supported by Splunk's official pricing page, which states: "Pay based on the amount of data you bring into the Splunk Platform." [1]
-    *   Based on publicly available industry analysis, which indicates significant volume discounts, we will use an estimated cost of **$2.25 per GB of ingested data per month** for this high-volume workload. This is a critical assumption, as actual costs can vary significantly based on negotiated enterprise rates. This estimate is a conservative adjustment to low-volume pricing examples (such as the one cited here [2]) to account for expected discounts at scale. [1, 2]
+    *   Splunk's pricing is complex and not fully public. For this analysis, we assume an ingest-based pricing model for Splunk Cloud. This is supported by Splunk's official pricing page, which states: "Pay based on the amount of data you bring into the Splunk Platform." (see reference 1)
+    *   Based on publicly available industry analysis, which indicates significant volume discounts, we will use an estimated cost of **$2.25 per GB of ingested data per month** for this high-volume workload. This is a critical assumption, as actual costs can vary significantly based on negotiated enterprise rates. This estimate is a conservative adjustment to low-volume pricing examples (such as the one cited in reference 2) to account for expected discounts at scale. (see references 1, 2)
     *   **Assumption on Splunk Data Size:** To enable a dollar-for-dollar comparison based on events, we must estimate the ingested GB for these events in Splunk. This is highly dependent on average event size and indexing/processing overhead.
         *   Average log entry size for Splunk (after indexing/overhead): 500 bytes
-        *   Average metric data point size for Splunk: 100 bytes. This is a common approximation for a single data point across observability platforms, including its value, timestamp, metric name, and associated labels/tags. For example, Datadog's API documentation suggests that a metric data point, including its timestamp (8 bytes), value (8 bytes), metric name (approx. 20 bytes), and typical labels/tags (approx. 50 bytes of overhead per data point for unique identification), sums up to around 100 bytes when considering additional overhead. [3]
-        *   Average trace event size for Splunk: 1 KB. While Splunk does not provide an exact average, this is a common industry approximation for a typical span (a trace event), considering it includes various attributes like operation name, start/end times, attributes, events, and links. Splunk APM has a maximum span size limit of 64KB, implying that typical spans are significantly smaller. [4]
+        *   Average metric data point size for Splunk: 100 bytes. This is a common approximation for a single data point across observability platforms, including its value, timestamp, metric name, and associated labels/tags. For example, Datadog's API documentation suggests that a metric data point, including its timestamp (8 bytes), value (8 bytes), metric name (approx. 20 bytes), and typical labels/tags (approx. 50 bytes of overhead per data point for unique identification), sums up to around 100 bytes when considering additional overhead. (see reference 3)
+        *   Average trace event size for Splunk: 1 KB. While Splunk does not provide an exact average, this is a common industry approximation for a typical span (a trace event), considering it includes various attributes like operation name, start/end times, attributes, events, and links. Splunk APM has a maximum span size limit of 64KB, implying that typical spans are significantly smaller.
 
 3.  **Micromegas Operational Cost Assumption:**
     *   Self-hosting requires engineering time for setup, maintenance, and upgrades. This is a real cost.
@@ -111,7 +111,7 @@ Beyond the direct cost estimates, the two solutions represent different philosop
 
 ## References
 
-[1] [Splunk Pricing | Splunk](https://www.splunk.com/en_us/products/pricing.html)
-[2] [Guide to Splunk Pricing and Costs in 2025 | Uptrace](https://uptrace.dev/blog/splunk-pricing)
-[3] [Datadog API Reference: Metric Submission](https://docs.datadoghq.com/api/latest/metrics/#submit-metrics)
+1. [Splunk Pricing - Splunk](https://www.splunk.com/en_us/products/pricing.html)
+2. [Guide to Splunk Pricing and Costs in 2025 - Uptrace](https://uptrace.dev/blog/splunk-pricing)
+3. [Datadog API Reference - Metric Submission](https://docs.datadoghq.com/api/latest/metrics/#submit-metrics)
 
