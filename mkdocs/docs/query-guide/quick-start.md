@@ -14,7 +14,7 @@ import micromegas
 client = micromegas.connect()
 ```
 
-The `connect()` function automatically discovers your local Micromegas instance or connects to a configured remote endpoint.
+The `connect()` function connects to the analytics service at `grpc://localhost:50051`.
 
 ## Your First Query
 

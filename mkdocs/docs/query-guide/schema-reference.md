@@ -11,10 +11,10 @@ Micromegas organizes telemetry data into several views that can be queried using
 | [`processes`](#processes) | Process metadata and system information | System overview, process tracking |
 | [`streams`](#streams) | Data stream information within processes | Stream debugging, data flow analysis |
 | [`blocks`](#blocks) | Core telemetry block metadata | Low-level data inspection |
-| [`log_entries`](#log-entries) | Application log messages with levels | Error tracking, debugging, monitoring |
+| [`log_entries`](#log_entries) | Application log messages with levels | Error tracking, debugging, monitoring |
 | [`measures`](#measures) | Numeric metrics and performance data | Performance monitoring, alerting |
-| [`thread_spans`](#thread-spans) | Synchronous execution spans and timing | Performance profiling, call tracing |
-| [`async_events`](#async-events) | Asynchronous event lifecycle tracking | Async operation monitoring |
+| [`thread_spans`](#thread_spans) | Synchronous execution spans and timing | Performance profiling, call tracing |
+| [`async_events`](#async_events) | Asynchronous event lifecycle tracking | Async operation monitoring |
 
 ## Core Views
 

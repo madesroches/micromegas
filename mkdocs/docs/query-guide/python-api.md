@@ -17,14 +17,11 @@ pip install micromegas
 ```python
 import micromegas
 
-# Connect to local Micromegas instance (default)
+# Connect to local Micromegas instance
 client = micromegas.connect()
-
-# Connect to remote instance
-client = micromegas.connect(endpoint="http://your-server:8080")
 ```
 
-The `connect()` function automatically discovers your Micromegas server or uses the provided endpoint URL.
+The `connect()` function connects to the analytics service at `grpc://localhost:50051`.
 
 ### Simple Queries
 
@@ -229,17 +226,12 @@ Micromegas uses Apache Arrow FlightSQL for optimal performance:
 ### Connection Configuration
 
 ```python
-# Default connection (auto-discovery)
+# Connect to local server (default)
 client = micromegas.connect()
 
-# Explicit endpoint
-client = micromegas.connect(endpoint="http://analytics.mycompany.com:8080")
-
-# Connection with timeout
-client = micromegas.connect(
-    endpoint="http://remote-server:8080",
-    timeout=30.0
-)
+# Connect to a custom endpoint using FlightSQLClient directly
+from micromegas.flightsql.client import FlightSQLClient
+client = FlightSQLClient("grpc://remote-server:50051")
 ```
 
 ## Error Handling
