@@ -76,18 +76,41 @@ Generate Perfetto trace files from a process's async span events by extending th
    - Process async events in batches to avoid loading all events in memory
    - Use streaming approach for large processes with many async events
 
-### Phase 4: Testing and Validation
+### Phase 4: Python Client Refactoring
+
+**Objective**: Eliminate duplicate Perfetto generation logic
+
+**Tasks**:
+1. **Refactor Python CLI**:
+   - Modify `python/micromegas/cli/write_perfetto.py` to use micromegas Python client (FlightSQL-based) 
+   - Add Perfetto generation endpoint/service that Python client can call
+   - Remove duplicate Perfetto generation logic from `python/micromegas/micromegas/perfetto.py`
+
+2. **Ensure feature parity**:
+   - Python CLI automatically gets async spans support through Rust implementation
+   - Maintain same command-line interface for backward compatibility
+   - Add span type selection flags: `--spans=[thread|async|both]` (default: both)
+
+3. **Integration testing**:
+   - Verify Python CLI produces identical output to direct Rust calls
+   - Test error handling and edge cases
+   - Performance comparison between old and new approaches
+
+### Phase 5: Testing and Validation
 
 **Objective**: Ensure generated traces are valid and useful
 
 **Tasks**:
-1. **Unit tests**:
+1. **Unit tests** (following `async_events_tests.rs` pattern):
+   - Mock FlightSQL client responses with known async events data
    - Test async track creation with various span hierarchies
-   - Test event matching (enter/exit pairs)
+   - Test event matching ("begin"/"end" pairs)
    - Test handling of incomplete spans
+   - Verify Perfetto protobuf structure and interning
 
-2. **Integration tests**:
-   - Generate traces from test processes with async spans
+2. **Integration tests** (using existing `telemetry-generator`):
+   - Use `rust/telemetry-ingestion-srv/test/generator.rs` which already generates async spans
+   - Generate real telemetry data and call `format_perfetto_trace()`
    - Validate traces open correctly in Perfetto UI (ui.perfetto.dev)
    - Verify async spans appear as separate tracks under threads
 
@@ -154,8 +177,9 @@ ORDER BY time ASC
 ## Migration Strategy
 
 - **Backward compatible**: Existing thread-only trace generation continues to work
-- **Opt-in async events**: Add flag/parameter to include async events in traces
+- **Flexible span selection**: Users can choose thread spans only, async spans only, or both
 - **Gradual rollout**: Test with small processes before enabling for large-scale traces
+- **Python client migration**: Phase 4 eliminates code duplication by having Python CLI call Rust implementation
 
 ## Dependencies
 
@@ -163,3 +187,5 @@ ORDER BY time ASC
 - Existing `AsyncEventsView` and async events data pipeline
 - Existing `perfetto_trace_client.rs` query infrastructure
 - No new external dependencies required
+
+**Note**: The Python CLI script (`python/micromegas/cli/write_perfetto.py`) completely duplicates functionality that already exists in the Rust Perfetto client (`rust/public/src/client/perfetto_trace_client.rs`). Both query the analytics service and generate Perfetto traces with identical logic. The Python CLI should be refactored to call the existing Rust client instead of maintaining a duplicate implementation. This would eliminate the need to implement async spans in multiple places and ensure consistent behavior.
