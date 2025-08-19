@@ -56,6 +56,7 @@ impl AsyncBlockProcessor for AsyncEventCollector {
         ts: i64,
         span_id: i64,
         parent_span_id: i64,
+        depth: u32,
     ) -> Result<bool> {
         let time_ns = self.convert_ticks.ticks_to_nanoseconds(ts);
         let record = AsyncEventRecord {
@@ -65,6 +66,7 @@ impl AsyncBlockProcessor for AsyncEventCollector {
             event_type: BEGIN_EVENT_TYPE.clone(),
             span_id,
             parent_span_id,
+            depth,
             name: scope.name,
             filename: scope.filename,
             target: scope.target,
@@ -81,6 +83,7 @@ impl AsyncBlockProcessor for AsyncEventCollector {
         ts: i64,
         span_id: i64,
         parent_span_id: i64,
+        depth: u32,
     ) -> Result<bool> {
         let time_ns = self.convert_ticks.ticks_to_nanoseconds(ts);
         let record = AsyncEventRecord {
@@ -90,6 +93,7 @@ impl AsyncBlockProcessor for AsyncEventCollector {
             event_type: END_EVENT_TYPE.clone(),
             span_id,
             parent_span_id,
+            depth,
             name: scope.name,
             filename: scope.filename,
             target: scope.target,

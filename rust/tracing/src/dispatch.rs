@@ -263,23 +263,30 @@ pub fn on_end_named_scope(thread_span_location: &'static SpanLocation, name: &'s
 }
 
 #[inline(always)]
-pub fn on_begin_async_scope(scope: &'static SpanMetadata, parent_span_id: u64) -> u64 {
+pub fn on_begin_async_scope(scope: &'static SpanMetadata, parent_span_id: u64, depth: u32) -> u64 {
     let id = G_ASYNC_SPAN_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     on_thread_event(BeginAsyncSpanEvent {
         span_desc: scope,
         span_id: id as u64,
         parent_span_id,
+        depth,
         time: now(),
     });
     id as u64
 }
 
 #[inline(always)]
-pub fn on_end_async_scope(span_id: u64, parent_span_id: u64, scope: &'static SpanMetadata) {
+pub fn on_end_async_scope(
+    span_id: u64,
+    parent_span_id: u64,
+    scope: &'static SpanMetadata,
+    depth: u32,
+) {
     on_thread_event(EndAsyncSpanEvent {
         span_desc: scope,
         span_id,
         parent_span_id,
+        depth,
         time: now(),
     });
 }
@@ -289,6 +296,7 @@ pub fn on_begin_async_named_scope(
     span_location: &'static SpanLocation,
     name: &'static str,
     parent_span_id: u64,
+    depth: u32,
 ) -> u64 {
     let id = G_ASYNC_SPAN_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     on_thread_event(BeginAsyncNamedSpanEvent {
@@ -296,6 +304,7 @@ pub fn on_begin_async_named_scope(
         name: name.into(),
         span_id: id as u64,
         parent_span_id,
+        depth,
         time: now(),
     });
     id as u64
@@ -307,12 +316,14 @@ pub fn on_end_async_named_scope(
     parent_span_id: u64,
     span_location: &'static SpanLocation,
     name: &'static str,
+    depth: u32,
 ) {
     on_thread_event(EndAsyncNamedSpanEvent {
         span_location,
         name: name.into(),
         span_id,
         parent_span_id,
+        depth,
         time: now(),
     });
 }

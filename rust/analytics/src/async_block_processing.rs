@@ -5,29 +5,31 @@ use micromegas_tracing::prelude::*;
 use micromegas_transit::value::{Object, Value};
 use std::sync::Arc;
 
-/// Helper function to extract async event fields (non-named)
+/// Helper function to extract async event fields
 fn on_async_event<F>(obj: &Object, mut fun: F) -> Result<bool>
 where
-    F: FnMut(Arc<Object>, u64, u64, i64) -> Result<bool>,
+    F: FnMut(Arc<Object>, u64, u64, u32, i64) -> Result<bool>,
 {
     let span_id = obj.get::<u64>("span_id")?;
     let parent_span_id = obj.get::<u64>("parent_span_id")?;
+    let depth = obj.get::<u32>("depth")?;
     let time = obj.get::<i64>("time")?;
     let span_desc = obj.get::<Arc<Object>>("span_desc")?;
-    fun(span_desc, span_id, parent_span_id, time)
+    fun(span_desc, span_id, parent_span_id, depth, time)
 }
 
-/// Helper function to extract async named event fields  
+/// Helper function to extract async named event fields
 fn on_async_named_event<F>(obj: &Object, mut fun: F) -> Result<bool>
 where
-    F: FnMut(Arc<Object>, Arc<String>, u64, u64, i64) -> Result<bool>,
+    F: FnMut(Arc<Object>, Arc<String>, u64, u64, u32, i64) -> Result<bool>,
 {
     let span_id = obj.get::<u64>("span_id")?;
     let parent_span_id = obj.get::<u64>("parent_span_id")?;
+    let depth = obj.get::<u32>("depth")?;
     let time = obj.get::<i64>("time")?;
     let span_location = obj.get::<Arc<Object>>("span_location")?;
     let name = obj.get::<Arc<String>>("name")?;
-    fun(span_location, name, span_id, parent_span_id, time)
+    fun(span_location, name, span_id, parent_span_id, depth, time)
 }
 
 /// Trait for processing async event blocks.
@@ -39,6 +41,7 @@ pub trait AsyncBlockProcessor {
         ts: i64,
         span_id: i64,
         parent_span_id: i64,
+        depth: u32,
     ) -> Result<bool>;
     fn on_end_async_scope(
         &mut self,
@@ -47,6 +50,7 @@ pub trait AsyncBlockProcessor {
         ts: i64,
         span_id: i64,
         parent_span_id: i64,
+        depth: u32,
     ) -> Result<bool>;
 }
 
@@ -63,7 +67,7 @@ pub fn parse_async_block_payload<Proc: AsyncBlockProcessor>(
         if let Value::Object(obj) = val {
             match obj.type_name.as_str() {
                 "BeginAsyncSpanEvent" => {
-                    on_async_event(&obj, |span_desc, span_id, parent_span_id, ts| {
+                    on_async_event(&obj, |span_desc, span_id, parent_span_id, depth, ts| {
                         let name = span_desc.get::<Arc<String>>("name")?;
                         let filename = span_desc.get::<Arc<String>>("file")?;
                         let target = span_desc.get::<Arc<String>>("target")?;
@@ -75,12 +79,13 @@ pub fn parse_async_block_payload<Proc: AsyncBlockProcessor>(
                             ts,
                             span_id as i64,
                             parent_span_id as i64,
+                            depth,
                         )
                     })
                     .with_context(|| "reading BeginAsyncSpanEvent")
                 }
                 "EndAsyncSpanEvent" => {
-                    on_async_event(&obj, |span_desc, span_id, parent_span_id, ts| {
+                    on_async_event(&obj, |span_desc, span_id, parent_span_id, depth, ts| {
                         let name = span_desc.get::<Arc<String>>("name")?;
                         let filename = span_desc.get::<Arc<String>>("file")?;
                         let target = span_desc.get::<Arc<String>>("target")?;
@@ -92,13 +97,14 @@ pub fn parse_async_block_payload<Proc: AsyncBlockProcessor>(
                             ts,
                             span_id as i64,
                             parent_span_id as i64,
+                            depth,
                         )
                     })
                     .with_context(|| "reading EndAsyncSpanEvent")
                 }
                 "BeginAsyncNamedSpanEvent" => on_async_named_event(
                     &obj,
-                    |span_location, name, span_id, parent_span_id, ts| {
+                    |span_location, name, span_id, parent_span_id, depth, ts| {
                         let filename = span_location.get::<Arc<String>>("file")?;
                         let target = span_location.get::<Arc<String>>("target")?;
                         let line = span_location.get::<u32>("line")?;
@@ -109,13 +115,14 @@ pub fn parse_async_block_payload<Proc: AsyncBlockProcessor>(
                             ts,
                             span_id as i64,
                             parent_span_id as i64,
+                            depth,
                         )
                     },
                 )
                 .with_context(|| "reading BeginAsyncNamedSpanEvent"),
                 "EndAsyncNamedSpanEvent" => on_async_named_event(
                     &obj,
-                    |span_location, name, span_id, parent_span_id, ts| {
+                    |span_location, name, span_id, parent_span_id, depth, ts| {
                         let filename = span_location.get::<Arc<String>>("file")?;
                         let target = span_location.get::<Arc<String>>("target")?;
                         let line = span_location.get::<u32>("line")?;
@@ -126,6 +133,7 @@ pub fn parse_async_block_payload<Proc: AsyncBlockProcessor>(
                             ts,
                             span_id as i64,
                             parent_span_id as i64,
+                            depth,
                         )
                     },
                 )

@@ -12,6 +12,9 @@ target/
 # emacs
 *~
 
+# vscode
+.vscode/
+
 # python
 __pycache__/
 **/jupyter_env/

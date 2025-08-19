@@ -116,7 +116,7 @@ Core table containing telemetry block metadata with joined process and stream in
 **Example Queries:**
 ```sql
 -- Analyze block sizes and object counts
-SELECT 
+SELECT
     process_id,
     AVG(payload_size) as avg_block_size,
     AVG(nb_objects) as avg_objects_per_block,
@@ -209,7 +209,7 @@ WHERE name = 'cpu_usage'
 ORDER BY time;
 
 -- Aggregate memory usage by process
-SELECT 
+SELECT
     process_id,
     AVG(value) as avg_memory,
     MAX(value) as peak_memory,
@@ -257,7 +257,7 @@ ORDER BY begin;
 
 ### `async_events`
 
-Asynchronous span events for tracking async operations.
+Asynchronous span events for tracking async operations with call hierarchy depth information.
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -267,26 +267,98 @@ Asynchronous span events for tracking async operations.
 | `event_type` | `Dictionary(Int16, Utf8)` | "begin" or "end" |
 | `span_id` | `Int64` | Async span identifier |
 | `parent_span_id` | `Int64` | Parent span identifier |
+| `depth` | `UInt32` | Nesting depth in async call hierarchy |
 | `name` | `Dictionary(Int16, Utf8)` | Span name (function) |
 | `filename` | `Dictionary(Int16, Utf8)` | Source file |
 | `target` | `Dictionary(Int16, Utf8)` | Module/target |
 | `line` | `UInt32` | Line number |
 
 **Example Queries:**
-```sql
--- Find async operations that took longest
-SELECT 
-    span_id,
-    name,
-    MAX(time) - MIN(time) as duration_ns
-FROM view_instance('async_events', 'my_process_123')
-GROUP BY span_id, name
-HAVING COUNT(*) = 2  -- Both begin and end events
-ORDER BY duration_ns DESC
-LIMIT 10;
 
--- Track async operation lifecycle
-SELECT time, event_type, name, span_id, parent_span_id
+```sql
+-- Find top-level async operations (depth = 0) with performance metrics
+SELECT
+    name,
+    depth,
+    AVG(duration_ms) as avg_duration,
+    COUNT(*) as operation_count
+FROM (
+    SELECT
+        begin_events.name,
+        begin_events.depth,
+        CAST((end_events.time - begin_events.time) AS BIGINT) / 1000000 as duration_ms
+    FROM
+        (SELECT * FROM view_instance('async_events', 'my_process_123') WHERE event_type = 'begin') begin_events
+    LEFT JOIN
+        (SELECT * FROM view_instance('async_events', 'my_process_123') WHERE event_type = 'end') end_events
+        ON begin_events.span_id = end_events.span_id
+    WHERE end_events.span_id IS NOT NULL AND begin_events.depth = 0
+)
+GROUP BY name, depth
+ORDER BY avg_duration DESC;
+
+-- Compare performance by call depth
+SELECT
+    depth,
+    COUNT(*) as span_count,
+    AVG(duration_ms) as avg_duration,
+    MIN(duration_ms) as min_duration,
+    MAX(duration_ms) as max_duration
+FROM (
+    SELECT
+        begin_events.depth,
+        CAST((end_events.time - begin_events.time) AS BIGINT) / 1000000 as duration_ms
+    FROM
+        (SELECT * FROM view_instance('async_events', 'my_process_123') WHERE event_type = 'begin') begin_events
+    LEFT JOIN
+        (SELECT * FROM view_instance('async_events', 'my_process_123') WHERE event_type = 'end') end_events
+        ON begin_events.span_id = end_events.span_id
+    WHERE end_events.span_id IS NOT NULL
+)
+GROUP BY depth
+ORDER BY depth;
+
+-- Find operations that spawn many nested async calls
+SELECT
+    name,
+    depth,
+    COUNT(*) as nested_count
+FROM view_instance('async_events', 'my_process_123')
+WHERE depth > 0 AND event_type = 'begin'
+GROUP BY name, depth
+HAVING COUNT(*) > 5  -- Functions that create multiple nested async operations
+ORDER BY nested_count DESC, depth DESC;
+
+-- Analyze async call hierarchy and parent-child relationships
+SELECT
+    parent.name as parent_operation,
+    parent.depth as parent_depth,
+    child.name as child_operation,
+    child.depth as child_depth,
+    COUNT(*) as relationship_count
+FROM view_instance('async_events', 'my_process_123') parent
+JOIN view_instance('async_events', 'my_process_123') child
+     ON parent.span_id = child.parent_span_id
+WHERE parent.event_type = 'begin' AND child.event_type = 'begin'
+GROUP BY parent.name, parent.depth, child.name, child.depth
+ORDER BY relationship_count DESC;
+
+-- Filter async operations by depth level for focused analysis
+-- Shallow operations only (depth <= 2)
+SELECT name, event_type, time, depth, span_id
+FROM view_instance('async_events', 'my_process_123')
+WHERE depth <= 2
+ORDER BY time;
+
+-- Deep nested operations only (depth >= 3)
+SELECT name, depth, COUNT(*) as deep_operation_count
+FROM view_instance('async_events', 'my_process_123')
+WHERE depth >= 3 AND event_type = 'begin'
+GROUP BY name, depth
+ORDER BY depth DESC, deep_operation_count DESC;
+
+-- Track async operation lifecycle with depth context
+SELECT time, event_type, name, span_id, parent_span_id, depth
 FROM view_instance('async_events', 'my_process_123')
 WHERE span_id = 12345
 ORDER BY time;

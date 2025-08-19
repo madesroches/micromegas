@@ -71,34 +71,6 @@ macro_rules! span_scope_named {
     };
 }
 
-#[macro_export]
-macro_rules! async_span_scope {
-    ($static_var_name:ident, $name:expr) => {
-        $crate::static_span_desc!($static_var_name, $name);
-        let guard_named = $crate::guards::AsyncSpanGuard::new(&$static_var_name);
-    };
-    ($name:expr) => {
-        $crate::async_span_scope!(_METADATA_NAMED, $name);
-    };
-}
-
-#[macro_export]
-macro_rules! async_span_scope_named {
-    ($static_var_name:ident, $name:expr) => {
-        static $static_var_name: $crate::spans::SpanLocation = $crate::spans::SpanLocation {
-            lod: $crate::levels::Verbosity::Max,
-            target: module_path!(),
-            module_path: module_path!(),
-            file: file!(),
-            line: line!(),
-        };
-        let guard_named = $crate::guards::AsyncNamedSpanGuard::new(&$static_var_name, $name);
-    };
-    ($name:expr) => {
-        $crate::async_span_scope_named!(_METADATA_NAMED, $name);
-    };
-}
-
 /// Records a integer metric.
 ///
 /// # Examples
