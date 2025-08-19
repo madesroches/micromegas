@@ -119,3 +119,36 @@ All planned functionality has been successfully implemented and tested:
 - ✅ Existing code unchanged and compatible
 - ✅ Follows established patterns (thread named spans)
 - ✅ Code formatted and ready for production
+
+## Design Decisions
+
+### API Ergonomics - Method-like Syntax Consideration
+
+**Decision**: Use `instrument_named!(future, name)` macro syntax instead of method-like `.instrument_named!(name)` syntax.
+
+**Alternatives Considered**:
+1. **Current approach**: `instrument_named!(future, name)` ✅ **CHOSEN**
+2. Manual span location: `future.instrument_named(&LOCATION, name)` (requires `static_span_location!()`)
+3. Extension trait method: `future.instrument_named(name)` (loses automatic span location)
+4. Procedural macro approaches:
+   - Function-level attribute: `#[instrument_named_calls]`
+   - Block-level syntax: `instrument_named_block! { ... }`
+   - Import-based transformation: `use instrument_named_syntax::*;`
+
+**Rationale**: 
+- Rust doesn't support postfix macros (`.macro!()` syntax)
+- Procedural macro solutions would be very complex (8/10 difficulty) with significant drawbacks:
+  - Poor IDE integration (red squiggles, no autocomplete)
+  - Debugging complexity (generated code in stack traces)
+  - Increased compilation time
+  - Non-standard Rust patterns
+  - High maintenance burden
+
+**Benefits of Chosen Approach**:
+- ✅ Clean, readable syntax
+- ✅ Perfect IDE support (autocomplete, error checking)
+- ✅ Simple implementation and maintenance
+- ✅ Follows standard Rust macro conventions
+- ✅ Easy debugging - no code generation magic
+- ✅ Fast compilation
+- ✅ Automatic span location generation (file, line, module)

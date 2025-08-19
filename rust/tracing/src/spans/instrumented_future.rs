@@ -21,8 +21,10 @@ pub trait InstrumentFuture: Future + Sized {
         InstrumentedFuture::new(self, span_desc)
     }
 
-    /// Instrument this future with a named span using a static string
-    fn instrument_named(
+    /// Internal method for named instrumentation - do not use directly.
+    /// Use the `instrument_named!` macro for method-like syntax instead.
+    #[doc(hidden)]
+    fn __instrument_named_internal(
         self,
         span_location: &'static SpanLocation,
         name: &'static str,

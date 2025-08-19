@@ -50,11 +50,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await;
     println!("Query returned {} results", count);
 
-    // Example 4: Using the lower-level API with static SpanLocation
-    static_span_location!(BACKGROUND_LOCATION);
-    let result4 = process_user(789)
-        .instrument_named(&BACKGROUND_LOCATION, "background_user_sync")
-        .await;
+    // Example 4: Using the lower-level instrument_named! macro
+    let result4 = instrument_named!(process_user(789), "background_user_sync").await;
     println!("Result 4: {}", result4);
 
     // Example 5: Using interned strings for dynamic span names in a loop

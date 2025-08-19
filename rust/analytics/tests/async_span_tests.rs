@@ -178,12 +178,9 @@ async fn test_named_spans() {
     }
 
     // Test the lower-level API with interned strings in a loop
-    static_span_location!(LOCATION);
     for i in 0..3 {
         let operation_name = intern_string(&format!("background_operation_{}", i));
-        named_inner_work("background task")
-            .instrument_named(&LOCATION, operation_name)
-            .await;
+        instrument_named!(named_inner_work("background task"), operation_name).await;
     }
 }
 
