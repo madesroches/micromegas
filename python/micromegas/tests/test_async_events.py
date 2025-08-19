@@ -246,6 +246,89 @@ def test_async_events_cross_stream_analysis():
     else:
         print("⚠️ Only single stream found - multi-threaded async would be better for testing")
 
+def test_async_events_named_spans():
+    """Test that named async spans appear with correct names"""
+    # Find a process with async events (should include named spans from generator)
+    sql = """
+    SELECT processes.process_id, processes.start_time
+    FROM processes
+    WHERE exe LIKE '%generator%'
+    ORDER BY start_time DESC
+    LIMIT 1;
+    """
+    processes = client.query(sql)
+
+    if len(processes) == 0:
+        print("No generator processes found - skipping named async spans test")
+        return
+
+    process_id = processes.iloc[0]["process_id"]
+    process_start = processes.iloc[0]["start_time"]
+
+    # Use tight time range around the process lifetime
+    import datetime
+    process_begin = process_start - datetime.timedelta(seconds=1)
+    process_end = process_start + datetime.timedelta(minutes=2)
+
+    # Query specifically for named async spans with their names
+    sql = """
+    SELECT name, event_type, span_id, time, stream_id
+    FROM view_instance('async_events', '{process_id}')
+    WHERE name IN (
+        'database_migration', 
+        'cache_warmup', 
+        'data_processing', 
+        'user_workflow',
+        'user_validation',
+        'user_processing',
+        'batch_processing_operation',
+        'stream_processing_operation',
+        'real_time_processing_operation'
+    )
+    ORDER BY time, name
+    """.format(process_id=process_id)
+
+    named_spans = client.query(sql, process_begin, process_end)
+    print("Named async spans found:")
+    print(named_spans)
+
+    # REQUIRE named async spans to be found for proper validation
+    assert len(named_spans) > 0, f"No named async spans found for process {process_id} - generator should create named spans"
+
+    # Verify we have the expected named span names
+    expected_names = {
+        'database_migration', 'cache_warmup', 'data_processing', 
+        'user_workflow', 'user_validation', 'user_processing',
+        'batch_processing_operation', 'stream_processing_operation', 
+        'real_time_processing_operation'
+    }
+    found_names = set(named_spans['name'].unique())
+    
+    # Check that we found at least some of the expected names
+    assert len(found_names.intersection(expected_names)) > 0, f"No expected named spans found. Found: {found_names}, Expected some of: {expected_names}"
+    
+    print(f"✅ Found named async spans: {sorted(found_names)}")
+
+    # Verify event structure - should have both begin and end events
+    event_types = set(named_spans['event_type'].unique())
+    assert 'begin' in event_types, "Named spans should have 'begin' events"
+    assert 'end' in event_types, "Named spans should have 'end' events"
+
+    # Count begin/end pairs for each named span
+    name_counts = named_spans.groupby(['name', 'event_type']).size().unstack(fill_value=0)
+    print("Begin/End event counts per named span:")
+    print(name_counts)
+    
+    # Verify each named span has both begin and end events
+    for name in name_counts.index:
+        begin_count = name_counts.loc[name, 'begin'] if 'begin' in name_counts.columns else 0
+        end_count = name_counts.loc[name, 'end'] if 'end' in name_counts.columns else 0
+        assert begin_count > 0, f"Named span '{name}' missing begin events"
+        assert end_count > 0, f"Named span '{name}' missing end events"
+        print(f"✅ Named span '{name}' has {begin_count} begin and {end_count} end events")
+
+    print(f"✅ All {len(found_names)} named async spans have proper begin/end events")
+
 def test_async_events_global_rejection():
     """Test that global async_events queries are properly rejected"""
     # Use a minimal time range for the rejection test
@@ -268,5 +351,6 @@ if __name__ == "__main__":
     test_async_events_parent_child_relationships()
     test_async_events_duration_analysis()
     test_async_events_cross_stream_analysis()
+    test_async_events_named_spans()
     test_async_events_global_rejection()
     print("🎉 All Python async events integration tests completed!")
