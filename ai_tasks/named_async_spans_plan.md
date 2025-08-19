@@ -23,7 +23,7 @@ When manually instrumenting async code (not using `#[span_fn]`), users currently
    - Understand how manual instrumentation currently works
    
 2. **Create named async span API**
-   - `span_async_named(name: &str, async_block)` - for manual named spans
+   - `span_async_named(name: &'static str, async_block)` - for manual named spans with static strings
    - Use existing `on_begin_async_named_scope()` and `on_end_async_named_scope()` functions
    - Create convenience wrapper similar to thread named spans
 
@@ -49,16 +49,16 @@ When manually instrumenting async code (not using `#[span_fn]`), users currently
 - **String Management**: Use `StringId` for efficient string handling
 
 ## Success Criteria  
-- [ ] Manual API: `span_async_named(name, async_block)` works for manual instrumentation
+- [ ] Manual API: `span_async_named(name: &'static str, async_block)` works for manual instrumentation
 - [ ] Async spans show unique names per invocation in analytics
 - [ ] No performance regression for existing static spans or `#[span_fn]` 
 - [ ] Clean, consistent API following existing thread named span patterns
 
 ## Example Usage (Target API)
 ```rust
-// Manual named async instrumentation - new API
-span_async_named("process_user_123", async {
-    // async work with dynamic name
+// Manual named async instrumentation - new API (static strings only)
+span_async_named("process_user_batch", async {
+    // async work with static name
 });
 
 // Static function spans continue to work unchanged (no changes needed)
@@ -67,12 +67,14 @@ async fn process_user(user_id: &str) {
     // span name is "process_user" (static function name)
 }
 
-// Use case: dynamic names for different operations
-for user_id in user_ids {
-    span_async_named(&format!("process_user_{}", user_id), async move {
-        // each user gets uniquely named span
-    }).await;
-}
+// Use case: different static operation names
+span_async_named("database_migration", async {
+    // migration work
+}).await;
+
+span_async_named("cache_warmup", async {
+    // cache warming work  
+}).await;
 ```
 
 ## Existing Infrastructure to Leverage
@@ -84,7 +86,7 @@ for user_id in user_ids {
 
 ## Risks & Mitigations
 - **Risk**: String lifetime management in async contexts
-  - **Mitigation**: Use `StringId` pattern like thread spans, ensure strings live long enough
+  - **Mitigation**: Like thread named spans, only support static string references (`&'static str`)
   
 - **Risk**: Macro complexity increases  
   - **Mitigation**: Start with manual API, add macro features incrementally
