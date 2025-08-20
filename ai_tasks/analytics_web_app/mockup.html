@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Micromegas Analytics Web App - UI Mockup</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background-color: #f8fafc;
+            color: #334155;
+            line-height: 1.6;
+        }
+
+        .header {
+            background: white;
+            border-bottom: 1px solid #e2e8f0;
+            padding: 1rem 2rem;
+            box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1);
+        }
+
+        .header h1 {
+            color: #1e293b;
+            font-size: 1.5rem;
+            font-weight: 600;
+        }
+
+        .header p {
+            color: #64748b;
+            font-size: 0.875rem;
+            margin-top: 0.25rem;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        .controls {
+            background: white;
+            border-radius: 0.5rem;
+            border: 1px solid #e2e8f0;
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+            box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1);
+        }
+
+        .controls h2 {
+            font-size: 1.125rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+            color: #1e293b;
+        }
+
+        .search-bar {
+            width: 100%;
+            padding: 0.75rem;
+            border: 1px solid #d1d5db;
+            border-radius: 0.375rem;
+            font-size: 0.875rem;
+            margin-bottom: 1rem;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+
+        .search-bar:focus {
+            outline: none;
+            border-color: #3b82f6;
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+        }
+
+        .filters {
+            display: flex;
+            gap: 1rem;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        .filter-group {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .filter-group label {
+            font-size: 0.875rem;
+            font-weight: 500;
+            color: #374151;
+        }
+
+        select {
+            padding: 0.5rem;
+            border: 1px solid #d1d5db;
+            border-radius: 0.375rem;
+            font-size: 0.875rem;
+            background: white;
+        }
+
+        .refresh-btn {
+            background: #3b82f6;
+            color: white;
+            border: none;
+            padding: 0.5rem 1rem;
+            border-radius: 0.375rem;
+            font-size: 0.875rem;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+
+        .refresh-btn:hover {
+            background: #2563eb;
+        }
+
+        .process-table {
+            background: white;
+            border-radius: 0.5rem;
+            border: 1px solid #e2e8f0;
+            box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1);
+            margin-bottom: 2rem;
+            overflow: hidden;
+        }
+
+        .table-container {
+            overflow-x: auto;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.875rem;
+        }
+
+        th {
+            background: #f8fafc;
+            padding: 0.75rem 1rem;
+            text-align: left;
+            font-weight: 600;
+            color: #374151;
+            border-bottom: 1px solid #e2e8f0;
+            white-space: nowrap;
+        }
+
+        td {
+            padding: 0.75rem 1rem;
+            border-bottom: 1px solid #f1f5f9;
+            vertical-align: middle;
+        }
+
+        tr:hover {
+            background: #f8fafc;
+        }
+
+        tr:last-child td {
+            border-bottom: none;
+        }
+
+        .process-link {
+            font-weight: 600;
+            color: #3b82f6;
+            text-decoration: none;
+        }
+
+        .process-link:hover {
+            color: #2563eb;
+            text-decoration: underline;
+        }
+
+        .process-exe {
+            font-size: 0.75rem;
+            color: #64748b;
+            margin-top: 0.125rem;
+        }
+
+
+
+        .time-value {
+            color: #374151;
+            font-weight: 500;
+            font-size: 0.875rem;
+        }
+
+        .time-subtitle {
+            color: #64748b;
+            font-size: 0.75rem;
+        }
+
+
+        .tab-navigation {
+            display: flex;
+            border-bottom: 1px solid #e2e8f0;
+            margin-bottom: 2rem;
+        }
+
+        .tab {
+            padding: 0.75rem 1.5rem;
+            border: none;
+            background: none;
+            color: #64748b;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            font-size: 0.875rem;
+            font-weight: 500;
+        }
+
+        .tab.active {
+            color: #3b82f6;
+            border-bottom-color: #3b82f6;
+        }
+
+        .tab:hover {
+            color: #374151;
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                padding: 1rem;
+            }
+
+            .process-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .filters {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+
+            .process-meta {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Micromegas Analytics</h1>
+        <p>Generate and download Perfetto traces from telemetry data</p>
+    </div>
+
+    <div class="container">
+        <div class="tab-navigation">
+            <button class="tab active">Process Explorer</button>
+        </div>
+
+        <div class="controls">
+            <h2>Process Filters</h2>
+            <input type="text" class="search-bar" placeholder="Search processes by name, process_id, or command...">
+            
+            <div class="filters">
+                <div class="filter-group">
+                    <label>Time Range:</label>
+                    <select>
+                        <option>Last Hour</option>
+                        <option>Last 6 Hours</option>
+                        <option selected>Last 24 Hours</option>
+                        <option>Last Week</option>
+                        <option>Custom Range</option>
+                    </select>
+                </div>
+                
+                <button class="refresh-btn">🔄 Refresh</button>
+            </div>
+        </div>
+
+        <div class="process-table">
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Process</th>
+                            <th>Start Time</th>
+                            <th>Last Update</th>
+                            <th>Username</th>
+                            <th>Computer</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>
+                                <a href="#" class="process-link">web-server</a>
+                                <div class="process-exe">web-server.exe</div>
+                            </td>
+                            <td>
+                                <div class="time-value">10:15 AM</div>
+                                <div class="time-subtitle">Aug 20</div>
+                            </td>
+                            <td>
+                                <div class="time-value">12:46 PM</div>
+                                <div class="time-subtitle">2h 31m ago</div>
+                            </td>
+                            <td>developer</td>
+                            <td>web-server-01</td>
+                        </tr>
+                        <tr>
+                            <td>
+                                <a href="#" class="process-link">data-processor</a>
+                                <div class="process-exe">data-processor</div>
+                            </td>
+                            <td>
+                                <div class="time-value">11:01 AM</div>
+                                <div class="time-subtitle">Aug 20</div>
+                            </td>
+                            <td>
+                                <div class="time-value">12:44 PM</div>
+                                <div class="time-subtitle">45m ago</div>
+                            </td>
+                            <td>system</td>
+                            <td>data-server-02</td>
+                        </tr>
+                        <tr>
+                            <td>
+                                <a href="#" class="process-link">background-worker</a>
+                                <div class="process-exe">worker.exe</div>
+                            </td>
+                            <td>
+                                <div class="time-value">12:31 PM</div>
+                                <div class="time-subtitle">Aug 20</div>
+                            </td>
+                            <td>
+                                <div class="time-value">12:43 PM</div>
+                                <div class="time-subtitle">15m ago</div>
+                            </td>
+                            <td>scheduler</td>
+                            <td>worker-node-03</td>
+                        </tr>
+                        <tr>
+                            <td>
+                                <a href="#" class="process-link">api-gateway</a>
+                                <div class="process-exe">gateway.jar</div>
+                            </td>
+                            <td>
+                                <div class="time-value">9:34 AM</div>
+                                <div class="time-subtitle">Aug 20</div>
+                            </td>
+                            <td>
+                                <div class="time-value">12:42 PM</div>
+                                <div class="time-subtitle">3h 8m ago</div>
+                            </td>
+                            <td>appuser</td>
+                            <td>api-server-01</td>
+                        </tr>
+                        <tr>
+                            <td>
+                                <a href="#" class="process-link">database-sync</a>
+                                <div class="process-exe">dbsync</div>
+                            </td>
+                            <td>
+                                <div class="time-value">11:23 AM</div>
+                                <div class="time-subtitle">Aug 20</div>
+                            </td>
+                            <td>
+                                <div class="time-value">12:41 PM</div>
+                                <div class="time-subtitle">1h 18m ago</div>
+                            </td>
+                            <td>postgres</td>
+                            <td>db-server-01</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+    </div>
+</body>
+</html>

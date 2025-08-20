@@ -4,6 +4,10 @@
 
 Create a modern, production-ready analytics web application for generating and downloading Perfetto traces from micromegas telemetry data. This serves as the foundation for testing async span implementation and provides immediate value as a standalone analytics tool.
 
+**UI Design References**: Visual mockups are available in this directory:
+- `mockup.html` - Main interface with process selection and trace generation
+- `process_detail_mockup.html` - Detailed process view with advanced options
+
 ## Architecture Decision
 
 **Hybrid architecture combining Rust backend (Axum) with modern frontend framework**
@@ -70,7 +74,7 @@ axum = { version = "0.8", features = ["json", "query"] }
 
 ## Detailed Implementation Tasks
 
-### 1. Backend API Server (`rust/perfetto-web-srv/`)
+### 1. Analytics Web Server (`rust/analytics-web-srv/`)
 
 **REST API Endpoints**:
 - `GET /api/processes` - List available processes with metadata
@@ -82,7 +86,7 @@ axum = { version = "0.8", features = ["json", "query"] }
 - `POST /api/perfetto/{process_id}/generate` - Generate trace with streaming progress + binary data
 - Stream format: 
   - Progress chunks: `{"type": "progress", "percentage": 25, "message": "Processing spans..."}`
-  - Final binary chunk: Raw perfetto trace bytes (application/octet-stream)
+  - Binary chunks: Raw perfetto trace bytes (application/octet-stream) sent as they are computed
 - Single request handles both progress updates and final trace delivery
 
 **Static File Serving**:
@@ -204,7 +208,7 @@ const generateTrace = async (processId: string, options: GenerateOptions) => {
 cd frontend && npm run dev  # Next.js dev server with Fast Refresh
 
 # Backend development  
-cd rust && cargo watch -x "run --bin perfetto-web-srv"
+cd rust && cargo watch -x "run --bin analytics-web-srv"
 
 # Full stack development
 npm run dev:full-stack  # Runs both with proper proxy
