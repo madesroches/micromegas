@@ -18,9 +18,53 @@ Generate Perfetto trace files from a process's async span events by extending th
 
 ## Implementation Plan
 
-### Phase 1: Extend Perfetto Writer for Async Events
+### Phase 1: Test Web App with Current Client
 
-**Objective**: Add async track support to the existing Perfetto writer
+**Objective**: Create a simple web app using existing `perfetto_trace_client.rs` for immediate testing capability
+
+**Tasks**:
+1. **Create test web application**:
+   - Add simple HTTP server endpoint (e.g., `GET /perfetto/{process_id}`)
+   - Use existing `format_perfetto_trace()` implementation
+   - Serve reconstructed binary as `application/octet-stream` download
+   - Handle query parameters: `begin_time`, `end_time`
+
+2. **Integration with existing server structure**:
+   - Add to existing server infrastructure (possibly extend existing perfetto server)
+   - Use existing FlightSQL client connections from perfetto_trace_client.rs
+   - Support current thread-only trace generation
+
+3. **Testing and validation endpoints**:
+   - `/perfetto/{process_id}` - Download complete trace file
+   - `/perfetto/{process_id}/info` - JSON metadata (size, generation time)
+   - `/perfetto/{process_id}/validate` - Validate trace opens correctly in Perfetto UI
+
+4. **Benefits of starting with web app**:
+   - Immediate working interface for testing
+   - Establishes user workflow and validation process
+   - Foundation for testing all subsequent improvements
+   - Clear success criteria for each phase
+
+### Phase 2: Perfetto Writer Streaming Support
+
+**Objective**: Make Perfetto Writer capable of streaming generation (foundation for SQL approach)
+
+**Tasks**:
+1. **Add streaming interface to Writer**:
+   - Modify `Writer::into_trace()` to return iterator/stream instead of complete Vec<u8>
+   - Add `Writer::flush_chunk()` method to emit data when chunk size reached
+   - Add `Writer::write_chunk_callback()` for streaming emission
+   - Maintain backward compatibility with existing `into_trace()` for non-streaming use
+
+2. **Unit tests for streaming Writer**:
+   - Test chunk emission at size boundaries
+   - Test complete trace reconstruction from chunks
+   - Test protobuf validity of chunked output
+   - Compare streaming vs non-streaming output for identical traces
+
+### Phase 3: Async Event Support in Perfetto Writer
+
+**Objective**: Add async track support to the Perfetto writer (independent of streaming)
 
 **Tasks**:
 1. **Add async track creation** in `rust/perfetto/src/writer.rs`:
@@ -38,26 +82,90 @@ Generate Perfetto trace files from a process's async span events by extending th
    - Use `parent_span_id` to establish track hierarchy in Perfetto
    - Leverage existing `depth` field for visual organization
 
-### Phase 2: Extend Client Integration
+4. **Unit tests for async events** (following existing Writer test patterns):
+   - Test async track creation with various span hierarchies
+   - Test async span event generation (begin/end pairs)
+   - Test UUID generation and track parenting
+   - Verify Perfetto protobuf structure and interning
 
-**Objective**: Update `perfetto_trace_client.rs` to include async events
+5. **Test via web app**:
+   - Use Phase 1 web app to validate async track generation
+   - Compare traces with/without async events
+   - Verify Perfetto UI displays async tracks correctly
+
+### Phase 4: FlightSQL Streaming Table Function
+
+**Objective**: Implement FlightSQL chunked binary streaming infrastructure
 
 **Tasks**:
-1. **Add async events query** to `format_perfetto_trace()`:
-   - Query `view_instance('async_events', '{process_id}')` for async span events
-   - Filter events within query time range
-   - Group by `stream_id` to match with threads
+1. **Implement `perfetto_trace_chunks` table function**:
+   - Add `PerfettoTraceTableFunction` implementing `TableFunctionImpl`
+   - Register in `default_view_factory()` alongside existing `view_instance` function
+   - SQL interface: `SELECT chunk_id, chunk_data FROM perfetto_trace_chunks('process_id', 'begin_time', 'end_time', 'both') ORDER BY chunk_id`
 
-2. **Create async tracks per span**:
-   - For each unique `span_id`, create an async track descriptor
-   - Parent the async track to the appropriate thread track via `stream_id`
+2. **Streaming execution plan**:
+   - `PerfettoTraceProvider` implementing `TableProvider`
+   - `PerfettoTraceExecutionPlan` implementing `ExecutionPlan`
+   - Stream Perfetto trace data as it's generated, not after completion
+   - Use streaming Writer from Phase 1 for incremental chunk emission
+   - Yield record batches with schema: `chunk_id: Int32, chunk_data: Binary` as data becomes available
 
-3. **Generate async span events**:
+3. **Unit tests for table function**:
+   - Mock FlightSQL client with known process data
+   - Test chunk generation and ordering
+   - Test binary reconstruction from chunks
+   - Test error handling for invalid parameters
+
+### Phase 5: Server-Side Perfetto Generation
+
+**Objective**: Move trace generation logic from client to server via SQL table function
+
+**Tasks**:
+1. **Implement server-side trace generation** in `PerfettoTraceExecutionPlan`:
+   - Integrate Phase 1 streaming Writer with Phase 2 async event support
+   - Query `view_instance('async_events', '{process_id}')` for async span events  
+   - Query thread spans and process metadata within FlightSQL server context
+   - Generate complete Perfetto trace server-side using streaming emission
+
+2. **Handle async events in server generation**:
    - Match "begin" and "end" events by `span_id`
-   - Create SliceBegin/SliceEnd events on the appropriate async track
+   - Create async tracks per span using Phase 2 methods
+   - Parent async tracks to appropriate thread tracks via `stream_id`
    - Handle orphaned events (begin without end, end without begin)
 
-### Phase 3: Data Processing Optimization
+3. **Streaming chunk emission**:
+   - Stream process descriptors, thread descriptors, then span events as data becomes available
+   - Each query result batch triggers chunk emission via Phase 1 streaming Writer
+   - Natural backpressure from DataFusion prevents memory bloat
+
+### Phase 6: Refactor Client to Use SQL Generation
+
+**Objective**: Convert `perfetto_trace_client.rs` to use `perfetto_trace_chunks` SQL function
+
+**Tasks**:
+1. **Simplify client implementation**:
+   - Replace `format_perfetto_trace()` logic with SQL query to `perfetto_trace_chunks`
+   - Remove duplicate process/thread/span querying from client
+   - Remove Perfetto Writer usage from client code
+
+2. **Implement chunk reconstruction**:
+   - Query `SELECT chunk_id, chunk_data FROM perfetto_trace_chunks(...) ORDER BY chunk_id`
+   - Collect all chunks from FlightSQL stream
+   - Reassemble binary data in chunk_id order
+   - Return complete trace as Vec<u8>
+
+3. **Maintain API compatibility**:
+   - Keep existing `format_perfetto_trace()` and `write_perfetto_trace()` signatures
+   - Span type selection via SQL function parameters
+   - Preserve error handling and edge case behavior
+
+4. **Validation against baseline**:
+   - Use Phase 5 web app to compare before/after trace generation
+   - Ensure identical binary output for thread-only traces
+   - Verify async spans work correctly in refactored version
+   - Performance comparison between approaches
+
+### Phase 7: Data Processing Optimization
 
 **Objective**: Ensure efficient async event processing for large traces
 
@@ -76,15 +184,15 @@ Generate Perfetto trace files from a process's async span events by extending th
    - Process async events in batches to avoid loading all events in memory
    - Use streaming approach for large processes with many async events
 
-### Phase 4: Python Client Refactoring
+### Phase 8: Python Client Refactoring
 
 **Objective**: Eliminate duplicate Perfetto generation logic
 
 **Tasks**:
 1. **Refactor Python CLI**:
-   - Modify `python/micromegas/cli/write_perfetto.py` to use micromegas Python client (FlightSQL-based) 
-   - Add Perfetto generation endpoint/service that Python client can call
+   - Modify `python/micromegas/cli/write_perfetto.py` to use `perfetto_trace_chunks` table function
    - Remove duplicate Perfetto generation logic from `python/micromegas/micromegas/perfetto.py`
+   - Implement chunked binary reconstruction in Python client
 
 2. **Ensure feature parity**:
    - Python CLI automatically gets async spans support through Rust implementation
@@ -96,7 +204,7 @@ Generate Perfetto trace files from a process's async span events by extending th
    - Test error handling and edge cases
    - Performance comparison between old and new approaches
 
-### Phase 5: Testing and Validation
+### Phase 9: Integration Testing and Validation
 
 **Objective**: Ensure generated traces are valid and useful
 
