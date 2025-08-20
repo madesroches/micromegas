@@ -1,6 +1,6 @@
 import { ProcessInfo, TraceMetadata, GenerateTraceRequest, HealthCheck, ProgressUpdate, BinaryStartMarker, LogEntry } from '@/types'
 
-const API_BASE = process.env.NODE_ENV === 'development' ? 'http://localhost:8001/api' : '/api'
+const API_BASE = process.env.NODE_ENV === 'development' ? 'http://localhost:8000/api' : '/api'
 
 export async function fetchProcesses(): Promise<ProcessInfo[]> {
   const response = await fetch(`${API_BASE}/processes`)

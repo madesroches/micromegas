@@ -2,6 +2,7 @@
 
 import { useState, useMemo } from 'react'
 import { ProcessInfo } from '@/types'
+import { CopyableProcessId } from '@/components/CopyableProcessId'
 import { formatRelativeTime } from '@/lib/utils'
 import Link from 'next/link'
 
@@ -91,6 +92,7 @@ export function ProcessTable({ processes, onGenerateTrace, isGenerating, onRefre
             <thead>
               <tr className="bg-gray-50 border-b border-gray-200">
                 <th className="px-4 py-3 text-left font-semibold text-gray-700 whitespace-nowrap">Process</th>
+                <th className="px-4 py-3 text-left font-semibold text-gray-700 whitespace-nowrap">Process ID</th>
                 <th className="px-4 py-3 text-left font-semibold text-gray-700 whitespace-nowrap">Start Time</th>
                 <th className="px-4 py-3 text-left font-semibold text-gray-700 whitespace-nowrap">Last Update</th>
                 <th className="px-4 py-3 text-left font-semibold text-gray-700 whitespace-nowrap">Username</th>
@@ -112,6 +114,9 @@ export function ProcessTable({ processes, onGenerateTrace, isGenerating, onRefre
                         {process.exe}
                       </Link>
                       <div className="text-xs text-gray-500 mt-0.5">{process.exe}</div>
+                    </td>
+                    <td className="px-4 py-3">
+                      <CopyableProcessId processId={process.process_id} truncate={true} className="text-sm" />
                     </td>
                     <td className="px-4 py-3">
                       <div className="font-medium text-gray-700">

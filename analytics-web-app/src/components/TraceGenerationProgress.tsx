@@ -5,6 +5,7 @@ import { ProgressUpdate } from '@/types'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Progress } from '@/components/ui/progress'
 import { Button } from '@/components/ui/button'
+import { CopyableProcessId } from '@/components/CopyableProcessId'
 import { Download, AlertCircle, CheckCircle2, X } from 'lucide-react'
 
 interface TraceGenerationProgressProps {
@@ -88,7 +89,7 @@ export function TraceGenerationProgress({
         </CardTitle>
         {processId && (
           <p className="text-sm text-muted-foreground">
-            Process: {processId.substring(0, 12)}...
+            Process: <CopyableProcessId processId={processId} className="text-sm" showIcon={false} />
           </p>
         )}
       </CardHeader>

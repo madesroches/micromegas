@@ -6,6 +6,7 @@ import { useParams } from 'next/navigation'
 import { ProcessInfo, ProgressUpdate, GenerateTraceRequest, LogEntry } from '@/types'
 import { fetchProcesses, generateTrace, fetchProcessLogEntries } from '@/lib/api'
 import { TraceGenerationProgress } from '@/components/TraceGenerationProgress'
+import { CopyableProcessId } from '@/components/CopyableProcessId'
 import { formatRelativeTime } from '@/lib/utils'
 import Link from 'next/link'
 import { ArrowLeft, Play, RefreshCw, Filter } from 'lucide-react'
@@ -89,8 +90,10 @@ export default function ProcessDetailPage() {
         <div className="px-8 py-4">
           <div className="max-w-7xl mx-auto flex items-center gap-4">
             <div className="flex-1">
-              <h1 className="text-2xl font-semibold text-gray-800">{process.exe} ({process.process_id.substring(0, 11)})</h1>
-              <p className="text-sm text-gray-600 mt-1">Generate and configure Perfetto traces for this process</p>
+              <h1 className="text-2xl font-semibold text-gray-800">Process Details</h1>
+              <p className="text-sm text-gray-600 mt-1">
+                {process.exe} (<CopyableProcessId processId={process.process_id} className="text-sm" />)
+              </p>
             </div>
           </div>
         </div>
@@ -193,7 +196,9 @@ export default function ProcessDetailPage() {
               <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
                 <div className="bg-gray-50 rounded p-4">
                   <div className="text-xs text-gray-600 uppercase font-medium mb-1">Process ID</div>
-                  <div className="text-xl font-bold text-gray-800">{process.process_id.substring(0, 11)}</div>
+                  <div className="text-xl font-bold text-gray-800">
+                    <CopyableProcessId processId={process.process_id} className="text-xl font-bold" />
+                  </div>
                   <div className="text-sm text-gray-600">Unique process identifier</div>
                 </div>
                 <div className="bg-gray-50 rounded p-4">
