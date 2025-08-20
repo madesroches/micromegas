@@ -24,8 +24,8 @@
 - ✅ **RESOLVED**: Real Trace Generation - Fixed timestamp conversion and thread ID parsing issues, now generates valid Perfetto protobuf traces from real database spans
 - ✅ **RESOLVED**: Real Perfetto Info - Replaced hardcoded values with database-driven estimates (thread count, span estimates, file size, generation time)
 - ✅ **RESOLVED**: Real Process Properties - Process details page now displays actual properties from database instead of hardcoded values (distro, duration)
-- **Enhance Trace Generation UI**: Make time range precise to nanosecond accuracy with default values from process start to last update time
-- **Enhance Process Info Tab**: Display precise nanosecond timestamps and exact duration calculations
+- ✅ **RESOLVED**: Enhanced Trace Generation UI - Nanosecond-precise RFC3339 time ranges with process-based defaults and field name corrections
+- ✅ **RESOLVED**: Enhanced Process Info Tab - Nanosecond-precise timestamps, exact duration calculations, timezone support, and copy functionality
 - Frontend needs testing with more diverse real data
 - UI/UX needs polish and refinement  
 - Additional export formats need implementation
@@ -154,6 +154,40 @@
 - **Type Conversion**: `Vec<Property>` → `HashMap<String, String>` → JSON API → React frontend
 - **Real Data Examples**: analytics-web-srv shows `{"version": "0.12.0"}` instead of fake hardcoded values
 - **Code Locations**: `/rust/analytics-web-srv/src/main.rs`, `/analytics-web-app/src/types/index.ts`, `/analytics-web-app/src/app/process/[id]/page.tsx`
+
+### ✅ **COMPLETED**: Enhanced Trace Generation UI Implementation  
+- **✅ Nanosecond-Precise Time Inputs**: Replaced datetime-local inputs with RFC3339 text inputs supporting full nanosecond precision
+- **✅ Auto-Default Time Ranges**: Automatically populate start/end times from process.start_time to process.last_update_time
+- **✅ RFC3339 Validation**: Real-time validation with visual feedback (red borders) and human-readable display format
+- **✅ Reset Functionality**: One-click buttons to restore process default time ranges
+- **✅ Backend Integration**: Send time_range parameter to existing backend API endpoint
+- **✅ Field Name Corrections**: Renamed misleading "begin"/"end" fields to accurate "start_time"/"last_update_time"
+- **✅ SQL Query Updates**: Removed confusing aliases and used actual database field names
+
+**Implementation Details**:
+- **Time Range Format**: Full RFC3339 with nanoseconds (e.g., `2025-08-20T15:26:02.479554123Z`)
+- **Field Corrections**: `begin` → `start_time`, `end` → `last_update_time` (accurately reflects last telemetry data received)
+- **Validation**: Real-time RFC3339 format validation prevents invalid trace generation requests
+- **User Experience**: Monospace font inputs with human-readable display format below each input
+- **Backend Support**: time_range parameter was already supported - UI enhancement enables precise trace windows
+- **Code Locations**: `/rust/analytics-web-srv/src/main.rs`, `/rust/public/src/client/query_processes.rs`, `/analytics-web-app/src/app/process/[id]/page.tsx`, `/analytics-web-app/src/types/index.ts`
+
+### ✅ **COMPLETED**: Enhanced Process Info Tab Implementation
+- **✅ PreciseTimestamp Component**: Created reusable component with nanosecond precision display, timezone support, and copy functionality
+- **✅ Nanosecond Duration Calculations**: Implemented exact process duration calculations with microsecond precision display  
+- **✅ Interactive RFC3339 Display**: Toggle to show/hide full RFC3339 timestamps with single-click copy
+- **✅ Enhanced Layout**: Four-panel layout with Start Time, Last Update, Process Duration, and Active Threads
+- **✅ Log View Precision**: Enhanced log timestamps to show microseconds (HH:MM:SS.mmm.μμμ format)
+- **✅ Copy Functionality**: One-click copy for all timestamp formats with visual feedback
+- **✅ Clean UI**: Streamlined "Show RFC3339" toggle with minimal, focused display
+
+**Implementation Details**:
+- **PreciseTimestamp Component**: `/analytics-web-app/src/components/PreciseTimestamp.tsx` - Reusable component with RFC3339 parsing and multiple format support
+- **Duration Algorithm**: Nanosecond-precise calculation extracting fractional seconds from RFC3339 strings with smart unit formatting
+- **Log Timestamps**: Enhanced precision showing `14:52:24.650.174` format extracted from RFC3339 strings
+- **User Experience**: Clean toggle interface, monospace fonts for technical precision, hover states and visual feedback
+- **Layout Improvements**: Responsive grid with proper spacing, consistent styling, and intuitive interactions
+- **Code Locations**: `/analytics-web-app/src/components/PreciseTimestamp.tsx`, `/analytics-web-app/src/app/process/[id]/page.tsx`
 
 ### Process Info Tab Enhancements
 - **Precise Timestamps**: Display full nanosecond precision for start/end times

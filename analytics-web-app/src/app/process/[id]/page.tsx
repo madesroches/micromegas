@@ -7,6 +7,7 @@ import { ProcessInfo, ProgressUpdate, GenerateTraceRequest, LogEntry, TraceMetad
 import { fetchProcesses, generateTrace, fetchProcessLogEntries, fetchProcessStatistics, fetchTraceMetadata } from '@/lib/api'
 import { TraceGenerationProgress } from '@/components/TraceGenerationProgress'
 import { CopyableProcessId } from '@/components/CopyableProcessId'
+import { PreciseTimestamp } from '@/components/PreciseTimestamp'
 import { formatRelativeTime } from '@/lib/utils'
 import Link from 'next/link'
 import { ArrowLeft, Play, RefreshCw, Filter } from 'lucide-react'
@@ -150,6 +151,55 @@ export default function ProcessDetailPage() {
   const lastUpdateTime = new Date(process.last_update_time)
   const duration = Math.round((lastUpdateTime.getTime() - startTime.getTime()) / 1000)
 
+  // Format precise duration with nanosecond accuracy
+  const formatPreciseDuration = (startTime: string, endTime: string): string => {
+    try {
+      const start = new Date(startTime)
+      const end = new Date(endTime)
+      const diffMs = end.getTime() - start.getTime()
+
+      if (diffMs < 0) return "Invalid"
+
+      // Extract nanosecond precision from RFC3339 strings
+      const extractNanos = (timestamp: string): number => {
+        const match = timestamp.match(/\.(\d+)Z?$/)
+        if (!match) return 0
+        const fractionalSeconds = match[1].padEnd(9, '0').slice(0, 9)
+        return parseInt(fractionalSeconds)
+      }
+
+      const startNanos = extractNanos(startTime)
+      const endNanos = extractNanos(endTime)
+      const nanosDiff = endNanos - startNanos
+      const totalMs = diffMs + (nanosDiff / 1000000)
+
+      // Convert to appropriate units
+      const totalSeconds = Math.floor(totalMs / 1000)
+      const remainingMs = Math.floor(totalMs % 1000)
+      const remainingMicros = Math.floor((nanosDiff % 1000000) / 1000)
+      const remainingNanos = nanosDiff % 1000
+
+      const minutes = Math.floor(totalSeconds / 60)
+      const seconds = totalSeconds % 60
+      const hours = Math.floor(minutes / 60)
+      const mins = minutes % 60
+      const days = Math.floor(hours / 24)
+      const hrs = hours % 24
+
+      if (days > 0) {
+        return `${days}d ${hrs}h ${mins}m`
+      } else if (hours > 0) {
+        return `${hours}h ${mins}m ${seconds}s`
+      } else if (minutes > 0) {
+        return `${minutes}m ${seconds}.${remainingMs.toString().padStart(3, '0')}s`
+      } else {
+        return `${seconds}.${remainingMs.toString().padStart(3, '0')}.${remainingMicros.toString().padStart(3, '0')}s`
+      }
+    } catch {
+      return "Invalid"
+    }
+  }
+
   return (
     <div className="min-h-screen" style={{ backgroundColor: '#f8fafc' }}>
       {/* Header */}
@@ -211,37 +261,30 @@ export default function ProcessDetailPage() {
               <h2 className="text-lg font-semibold text-gray-800 mb-6">Process Information</h2>
               
               {/* Overview Grid */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-6">
                 <div className="bg-gray-50 rounded p-4">
-                  <div className="text-xs text-gray-600 uppercase font-medium mb-1">Start Time</div>
-                  <div className="text-2xl font-bold text-gray-800">
-                    {startTime.toLocaleTimeString('en-US', { 
-                      hour: 'numeric', 
-                      minute: '2-digit', 
-                      hour12: true 
-                    })}
-                  </div>
-                  <div className="text-sm text-gray-600">
-                    {startTime.toLocaleDateString('en-US', { 
-                      month: 'short', 
-                      day: 'numeric',
-                      year: 'numeric'
-                    })}
-                  </div>
+                  <PreciseTimestamp 
+                    timestamp={process.start_time} 
+                    label="Start Time" 
+                    showDuration={false}
+                    className="" 
+                  />
                 </div>
                 <div className="bg-gray-50 rounded p-4">
-                  <div className="text-xs text-gray-600 uppercase font-medium mb-1">Last Update</div>
-                  <div className="text-2xl font-bold text-gray-800">
-                    {lastUpdateTime.toLocaleTimeString('en-US', { 
-                      hour: 'numeric', 
-                      minute: '2-digit', 
-                      hour12: true 
-                    })}
-                  </div>
-                  <div className="text-sm text-gray-600">{formatRelativeTime(process.last_update_time)}</div>
+                  <PreciseTimestamp 
+                    timestamp={process.last_update_time} 
+                    label="Last Update" 
+                    showDuration={true}
+                    durationStart={process.start_time}
+                    className="" 
+                  />
                 </div>
                 <div className="bg-gray-50 rounded p-4">
-                  <div className="text-xs text-gray-600 uppercase font-medium mb-1">Threads</div>
+                  <div className="text-xs text-gray-600 uppercase font-medium mb-1">Process Duration</div>
+                  <div className="text-2xl font-bold text-gray-800">{formatPreciseDuration(process.start_time, process.last_update_time)}</div>
+                </div>
+                <div className="bg-gray-50 rounded p-4">
+                  <div className="text-xs text-gray-600 uppercase font-medium mb-1">Active Threads</div>
                   <div className="text-2xl font-bold text-gray-800">{statistics?.thread_count || 0}</div>
                   <div className="text-sm text-gray-600">Number of thread streams</div>
                 </div>
@@ -490,8 +533,20 @@ export default function ProcessDetailPage() {
                       hour12: false,
                       hour: '2-digit',
                       minute: '2-digit',
-                      second: '2-digit'
+                      second: '2-digit',
+                      fractionalSecondDigits: 3
                     })
+                    
+                    // Extract additional precision from RFC3339 string
+                    const extractMicroseconds = (timestamp: string): string => {
+                      const match = timestamp.match(/\.(\d+)Z?$/)
+                      if (!match) return ''
+                      const fractional = match[1].padEnd(6, '0').slice(0, 6) // Get microseconds
+                      return fractional.slice(3) // Return the microsecond part (after milliseconds)
+                    }
+                    
+                    const microseconds = extractMicroseconds(log.time)
+                    const preciseTimeStr = microseconds ? `${timeStr}.${microseconds}` : timeStr
                     
                     const levelColor = {
                       'FATAL': 'text-red-600',
@@ -504,7 +559,7 @@ export default function ProcessDetailPage() {
                     
                     return (
                       <div key={index} className="flex gap-3 mb-2 py-1 hover:bg-gray-800 hover:bg-opacity-50 rounded px-1">
-                        <div className="text-gray-500 flex-shrink-0 font-medium">{timeStr}</div>
+                        <div className="text-gray-500 flex-shrink-0 font-medium font-mono text-xs" style={{minWidth: '120px'}}>{preciseTimeStr}</div>
                         <div className={`flex-shrink-0 font-semibold w-14 ${levelColor}`}>{log.level}</div>
                         <div className="text-gray-400 flex-shrink-0 w-32 text-xs font-medium truncate" title={log.target}>
                           {log.target}
