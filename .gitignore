@@ -41,4 +41,5 @@ docker/http-gateway-srv
 
 # mkdocs
 mkdocs/site/
+mkdocs/venv/
 docs-venv/
