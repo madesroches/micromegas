@@ -62,3 +62,4 @@ Micromegas: unified observability platform for logs, metrics, and traces.
 **Flow**: Apps → HTTP ingestion → PostgreSQL metadata + object storage → FlightSQL queries
 - there should be a venv available to run python code
 - follow @AI_GUIDELINES.md
+- prefer to script using python over shell scripts
