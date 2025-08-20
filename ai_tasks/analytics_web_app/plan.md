@@ -20,7 +20,7 @@
 - ✅ **RESOLVED**: Process ID display now shows full UUIDs with click-to-copy functionality
 - ✅ **RESOLVED**: Process metrics replaced with real data from analytics service via `/api/process/{id}/statistics` endpoint
 - ✅ **RESOLVED**: Process list ordering by last update time with most recent processes on top
-- **Proper Error Handling**: Replace all `eprintln!` calls in backend with structured logging using tracing macros
+- **Proper Error Handling**: Replace all `eprintln!` calls in backend with anyhow error propagation and display errors in web UI
 - **Remove Fake/Default Data**: Eliminate all hardcoded fallback values, fetch real data or return errors/null when no data available
 - **Enhance Trace Generation UI**: Make time range precise to nanosecond accuracy with default values from process start to last update time
 - **Enhance Process Info Tab**: Display precise nanosecond timestamps and exact duration calculations
@@ -35,7 +35,7 @@
 - `mockup.html` - Main interface with process selection and trace generation
 - `process_detail_mockup.html` - Detailed process view with advanced options
 
-## ✅ **IMPLEMENTED FEATURES** (December 2024)
+## ✅ **IMPLEMENTED FEATURES**
 
 ### Core Functionality
 - **Process Explorer**: Clean table interface matching mockup design
@@ -75,14 +75,14 @@
 - **Validation**: Ensure end time is after start time and within process bounds
 - **Format**: `YYYY-MM-DDTHH:MM:SS.nnnnnnnnnZ` (nanosecond precision)
 
-### ✅ **COMPLETED**: Process ID Display Fixes (August 2024)
+### ✅ **COMPLETED**: Process ID Display Fixes
 - **✅ Full UUID Display**: Removed all `.substring()` truncations, now showing complete UUIDs
 - **✅ Copy Functionality**: CopyableProcessId component with click-to-copy and visual feedback
 - **✅ Responsive Layout**: ProcessTable includes new "Process ID" column with truncated display + full UUID copy
 - **✅ Consistent Display**: Full UUIDs across process table, detail page headers, and breadcrumbs
 - **✅ User Experience**: Clean "Process Details" page title with proper UUID placement
 
-### ✅ **COMPLETED**: Process List Ordering Implementation (August 2024)
+### ✅ **COMPLETED**: Process List Ordering Implementation
 - **✅ Backend Query Update**: Updated ProcessQueryBuilder to use `processes` view with `ORDER BY last_update_time DESC`
 - **✅ Schema Alignment**: Fixed field names to match actual schema (`start_time`, `last_update_time`)
 - **✅ API Endpoint**: Modified `/api/processes` endpoint to return processes ordered by most recent activity
@@ -95,7 +95,7 @@
 - **Code Location**: `/rust/public/src/client/query_processes.rs` and `/rust/analytics-web-srv/src/main.rs`
 - **Data Flow**: FlightSQL → ProcessQueryBuilder → Analytics Service → Frontend → User Interface
 
-### ✅ **COMPLETED**: Real Process Metrics Implementation (August 2024)
+### ✅ **COMPLETED**: Real Process Metrics Implementation
 - **✅ Backend API**: New `/api/process/{id}/statistics` endpoint returning real telemetry counts
 - **✅ Smart Data Queries**: Direct queries to `log_entries` table with intelligent fallback estimates
 - **✅ Data Mapping**: Log entries (direct count), measures (log_entries/10), trace events (log_entries/5), threads (estimated)
@@ -115,6 +115,32 @@
 - **Timezone Support**: Display timestamps in both UTC and local timezone
 - **Copy Functionality**: Allow copying precise timestamps for external use
 - **Visual Hierarchy**: Distinguish between human-readable and precise timestamps
+
+### Error Handling Implementation
+
+**Backend Error Strategy (Rust + anyhow)**:
+- Replace all `eprintln!` with `anyhow::Result<T>` return types
+- Use `anyhow::Context` to add meaningful error context
+- Implement proper HTTP error responses with structured JSON error format
+- Log errors using tracing macros while returning structured errors to client
+
+**Frontend Error Display (React)**:
+- Error boundary components to catch and display React errors
+- Toast notifications for API operation failures  
+- Inline error messages for form validation
+- Retry mechanisms with exponential backoff
+- Error state management in React Query
+
+**API Error Response Format**:
+```json
+{
+  "error": {
+    "type": "FlightSQLConnectionError",
+    "message": "Failed to connect to FlightSQL service",
+    "details": "Connection refused at localhost:32010"
+  }
+}
+```
 
 ### Implementation Requirements
 - **Frontend**: Enhanced datetime-local inputs or custom nanosecond picker
