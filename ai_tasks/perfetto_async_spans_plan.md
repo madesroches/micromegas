@@ -18,32 +18,25 @@ Generate Perfetto trace files from a process's async span events by extending th
 
 ## Implementation Plan
 
-### Phase 1: Test Web App with Current Client
+### Phase 1: Production-Ready Analytics Web App with Current Client
 
-**Objective**: Create a simple web app using existing `perfetto_trace_client.rs` for immediate testing capability
+**Objective**: Create a modern, production-ready analytics web application using existing `perfetto_trace_client.rs` for immediate testing capability and future scalability
 
-**Tasks**:
-1. **Create test web application**:
-   - Add simple HTTP server endpoint (e.g., `GET /perfetto/{process_id}`)
-   - Use existing `format_perfetto_trace()` implementation
-   - Serve reconstructed binary as `application/octet-stream` download
-   - Handle query parameters: `begin_time`, `end_time`
+**Detailed Implementation**: See [analytics_web_app_plan.md](./analytics_web_app_plan.md) for complete Phase 1 specifications including:
+- Architecture decisions (Next.js + React + Axum)
+- Technology stack and dependencies
+- Detailed API design with HTTP streaming
+- React component architecture
+- Production-ready features (observability, security, deployment)
+- Development experience and testing strategy
+- WebAssembly decision analysis
+- HTTP streaming implementation patterns
 
-2. **Integration with existing server structure**:
-   - Add to existing server infrastructure (possibly extend existing perfetto server)
-   - Use existing FlightSQL client connections from perfetto_trace_client.rs
-   - Support current thread-only trace generation
-
-3. **Testing and validation endpoints**:
-   - `/perfetto/{process_id}` - Download complete trace file
-   - `/perfetto/{process_id}/info` - JSON metadata (size, generation time)
-   - `/perfetto/{process_id}/validate` - Validate trace opens correctly in Perfetto UI
-
-4. **Benefits of starting with web app**:
-   - Immediate working interface for testing
-   - Establishes user workflow and validation process
-   - Foundation for testing all subsequent improvements
-   - Clear success criteria for each phase
+**Key Features**:
+- **HTTP Streaming**: Real-time progress updates with single-request trace delivery
+- **Modern UI**: React components with TypeScript, Tailwind CSS, Radix UI
+- **Production Ready**: Observability, security, scalability considerations
+- **Testing Foundation**: Platform for validating all subsequent async span phases
 
 ### Phase 2: Perfetto Writer Streaming Support
 
