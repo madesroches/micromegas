@@ -17,6 +17,10 @@
 - ✅ **RESOLVED**: Implementation now follows the UI guidelines in the mockups
 - ✅ **RESOLVED**: Real log entries display with proper level mapping and filtering
 - ✅ **RESOLVED**: Log level color coding (FATAL=red, ERROR=red, WARN=yellow, INFO=blue, DEBUG=gray, TRACE=light gray)
+- **Fix Process ID Display**: Remove truncation of process IDs, show full UUIDs with copy functionality
+- **Fix Process Metrics**: Replace hardcoded statistics with real data from blocks view (log entries, measures, trace events, thread count)
+- **Enhance Trace Generation UI**: Make time range precise to nanosecond accuracy with default values from process start to last update time
+- **Enhance Process Info Tab**: Display precise nanosecond timestamps and exact duration calculations
 - Frontend needs testing with more diverse real data
 - UI/UX needs polish and refinement  
 - Error handling needs improvement
@@ -57,6 +61,56 @@
 - **SQL Filtering**: Efficient database queries with level-specific WHERE clauses
 - **UI Color Coding**: Visual distinction between log severity levels
 - **Real-time Updates**: Refresh button for latest log entries
+
+## 🎯 **NEXT PRIORITY**: Enhanced Trace Generation UI
+
+### Nanosecond-Precise Time Range Selection
+- **Default Time Range**: Automatically populate with process.begin → process.end timestamps
+- **Nanosecond Precision**: Support full timestamp precision (ISO 8601 with nanoseconds)
+- **Smart Defaults**: Pre-fill time inputs with exact process lifecycle timestamps
+- **Validation**: Ensure end time is after start time and within process bounds
+- **Format**: `YYYY-MM-DDTHH:MM:SS.nnnnnnnnnZ` (nanosecond precision)
+
+### Process ID Display Fixes
+- **Full UUID Display**: Remove `.substring(0, 8)` and `.substring(0, 11)` truncations
+- **Copy Functionality**: Click-to-copy full process IDs 
+- **Responsive Layout**: Ensure full UUIDs fit in table cells without overflow
+- **Tooltip Support**: Show full UUID on hover if space constrained
+- **Consistent Display**: Use full UUIDs across process table, detail page, and breadcrumbs
+
+### Process Metrics from Real Data
+- **Replace Hardcoded Values**: Remove all mock statistics across frontend and backend
+- **Query Blocks View**: Use FlightSQL to get actual counts from micromegas blocks/streams tables
+- **Dynamic Counts**: Show real log entry counts, measure counts, span/event counts per process
+- **Thread Discovery**: Query actual thread count from process streams or span data
+- **Performance**: Cache expensive count queries or use pre-computed aggregations
+- **API Enhancement**: Add `/api/process/{id}/statistics` endpoint for real metrics
+
+### Mock Data Locations Found:
+**Frontend** (`/src/app/process/[id]/page.tsx`):
+- Line 168: `<div className="text-2xl font-bold text-gray-800">8</div>` (hardcoded threads)
+- Line 177: `<div className="text-2xl font-bold text-gray-800">12,456</div>` (hardcoded log entries)
+- Line 182: `<div className="text-2xl font-bold text-gray-800">834</div>` (hardcoded measures)
+- Line 187: `<div className="text-2xl font-bold text-gray-800">5,137</div>` (hardcoded trace events)
+- Line 251: `<div className="text-xs text-gray-600 font-medium">1,245</div>` (hardcoded thread events)
+- Line 266: `<div className="text-xs text-gray-600 font-medium">3,892</div>` (hardcoded async events)
+
+**Backend** (`/rust/analytics-web-srv/src/main.rs`):
+- Lines 245-247: `thread_spans: 1000, async_spans: 500, total: 1500` (hardcoded span counts)
+
+### Process Info Tab Enhancements
+- **Precise Timestamps**: Display full nanosecond precision for start/end times
+- **Duration Calculation**: Show exact process duration with nanosecond accuracy
+- **Timezone Support**: Display timestamps in both UTC and local timezone
+- **Copy Functionality**: Allow copying precise timestamps for external use
+- **Visual Hierarchy**: Distinguish between human-readable and precise timestamps
+
+### Implementation Requirements
+- **Frontend**: Enhanced datetime-local inputs or custom nanosecond picker
+- **Backend**: Accept and validate nanosecond-precise TimeRange parameters  
+- **API**: Update GenerateTraceRequest to handle precise timestamp boundaries
+- **Process Info UI**: Display both human-readable and precise timestamp formats
+- **UX**: Show process duration and allow fine-tuned trace window selection
 
 ## Architecture Decision
 
