@@ -19,6 +19,7 @@
 - ✅ **RESOLVED**: Log level color coding (FATAL=red, ERROR=red, WARN=yellow, INFO=blue, DEBUG=gray, TRACE=light gray)
 - ✅ **RESOLVED**: Process ID display now shows full UUIDs with click-to-copy functionality
 - ✅ **RESOLVED**: Process metrics replaced with real data from analytics service via `/api/process/{id}/statistics` endpoint
+- ✅ **RESOLVED**: Process list ordering by last update time with most recent processes on top
 - **Enhance Trace Generation UI**: Make time range precise to nanosecond accuracy with default values from process start to last update time
 - **Enhance Process Info Tab**: Display precise nanosecond timestamps and exact duration calculations
 - Frontend needs testing with more diverse real data
@@ -78,6 +79,19 @@
 - **✅ Responsive Layout**: ProcessTable includes new "Process ID" column with truncated display + full UUID copy
 - **✅ Consistent Display**: Full UUIDs across process table, detail page headers, and breadcrumbs
 - **✅ User Experience**: Clean "Process Details" page title with proper UUID placement
+
+### ✅ **COMPLETED**: Process List Ordering Implementation (August 2024)
+- **✅ Backend Query Update**: Updated ProcessQueryBuilder to use `processes` view with `ORDER BY last_update_time DESC`
+- **✅ Schema Alignment**: Fixed field names to match actual schema (`start_time`, `last_update_time`)
+- **✅ API Endpoint**: Modified `/api/processes` endpoint to return processes ordered by most recent activity
+- **✅ Frontend Integration**: ProcessTable component automatically displays processes in correct order from API
+- **✅ User Experience**: Most recently active processes now appear at the top for immediate access
+- **✅ Data Validation**: Confirmed ordering works correctly with real telemetry data
+
+**Implementation Details**:
+- **SQL Query**: `SELECT ... FROM processes ORDER BY last_update_time DESC`
+- **Code Location**: `/rust/public/src/client/query_processes.rs` and `/rust/analytics-web-srv/src/main.rs`
+- **Data Flow**: FlightSQL → ProcessQueryBuilder → Analytics Service → Frontend → User Interface
 
 ### ✅ **COMPLETED**: Real Process Metrics Implementation (August 2024)
 - **✅ Backend API**: New `/api/process/{id}/statistics` endpoint returning real telemetry counts

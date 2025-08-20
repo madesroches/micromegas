@@ -13,6 +13,8 @@ use futures::{Stream, StreamExt};
 use http::header;
 use micromegas::analytics::{dfext::typed_column::typed_column_by_name, time::TimeRange};
 use micromegas::client::{flightsql_client_factory::{FlightSQLClientFactory, BearerFlightSQLClientFactory}, perfetto_trace_client, query_processes::ProcessQueryBuilder};
+use micromegas::tracing::prelude::*;
+use micromegas::micromegas_main;
 use datafusion::arrow::array::{Int32Array, StringArray, TimestampNanosecondArray, UInt64Array};
 use serde::{Deserialize, Serialize};
 use std::{pin::Pin, time::Duration};
@@ -125,10 +127,8 @@ struct AppState {
 type ProgressStream = Pin<Box<dyn Stream<Item = Result<Bytes, axum::Error>> + Send>>;
 
 
-#[tokio::main]
+#[micromegas_main(interop_max_level = "info")]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt::init();
-
     let args = Args::parse();
     
     let auth_token = std::env::var("MICROMEGAS_AUTH_TOKEN")
@@ -168,6 +168,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+#[span_fn]
 async fn health_check(State(state): State<AppState>) -> impl IntoResponse {
     let mut flightsql_connected = false;
     
@@ -185,6 +186,7 @@ async fn health_check(State(state): State<AppState>) -> impl IntoResponse {
     Json(health)
 }
 
+#[span_fn]
 async fn list_processes(State(state): State<AppState>) -> impl IntoResponse {
     let client_factory = BearerFlightSQLClientFactory::new(state.auth_token);
     match get_processes_internal(&client_factory).await {
@@ -199,11 +201,11 @@ async fn list_processes(State(state): State<AppState>) -> impl IntoResponse {
     }
 }
 
+#[span_fn]
 async fn get_processes_internal(client_factory: &BearerFlightSQLClientFactory) -> Result<Vec<ProcessInfo>> {
     let mut client = client_factory.make_client().await?;
     
-    let query_builder = ProcessQueryBuilder::new()
-        .with_cpu_blocks();
+    let query_builder = ProcessQueryBuilder::new();
     
     let batches = query_builder.query(&mut client).await?;
     
@@ -273,6 +275,7 @@ async fn validate_trace(
     }))
 }
 
+#[span_fn]
 async fn generate_trace(
     Path(process_id): Path<String>,
     State(state): State<AppState>,
@@ -287,6 +290,7 @@ async fn generate_trace(
         .unwrap()
 }
 
+#[span_fn]
 async fn get_process_log_entries(
     Path(process_id): Path<String>,
     State(state): State<AppState>,
@@ -382,6 +386,7 @@ async fn get_process_log_entries(
     Json(logs)
 }
 
+#[span_fn]
 async fn get_process_statistics(
     Path(process_id): Path<String>,
     State(state): State<AppState>,
@@ -539,6 +544,7 @@ fn generate_trace_stream(
     })
 }
 
+#[span_fn]
 async fn generate_perfetto_trace_internal(
     client_factory: &BearerFlightSQLClientFactory, 
     process_id: &str,

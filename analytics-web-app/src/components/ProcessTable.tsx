@@ -67,10 +67,10 @@ export function ProcessTable({ processes, onGenerateTrace, isGenerating, onRefre
           <div className="flex items-center gap-4">
             <div className="flex items-center gap-2">
               <label className="text-sm font-medium text-gray-700">Time Range:</label>
-              <select className="px-2 py-1 border border-gray-300 rounded text-sm bg-white">
+              <select className="px-2 py-1 border border-gray-300 rounded text-sm bg-white" defaultValue="Last 24 Hours">
                 <option>Last Hour</option>
                 <option>Last 6 Hours</option>
-                <option selected>Last 24 Hours</option>
+                <option>Last 24 Hours</option>
                 <option>Last Week</option>
                 <option>Custom Range</option>
               </select>
