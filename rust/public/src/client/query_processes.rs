@@ -32,8 +32,7 @@ impl ProcessQueryBuilder {
 
     /// Adds a filter by username.
     pub fn with_username(mut self, username: &str) -> Self {
-        self.filters
-            .push(format!(r#"(username='{username}')"#));
+        self.filters.push(format!(r#"(username='{username}')"#));
         self
     }
 
@@ -46,7 +45,8 @@ impl ProcessQueryBuilder {
     /// Sets the start time for the query.
     pub fn since(mut self, begin: DateTime<Utc>) -> Self {
         let iso = begin.to_rfc3339();
-        self.filters.push(format!(r#"(last_update_time >= '{iso}')"#));
+        self.filters
+            .push(format!(r#"(last_update_time >= '{iso}')"#));
         self.begin = Some(begin);
         self
     }

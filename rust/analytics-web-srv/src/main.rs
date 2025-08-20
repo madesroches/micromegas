@@ -612,24 +612,36 @@ async fn get_process_statistics(
         if batch.num_rows() > 0 {
             log_entries = typed_column_by_name::<UInt64Array>(&batch, "log_entries")
                 .map(|arr| arr.value(0))
-                .or_else(|_| typed_column_by_name::<Int64Array>(&batch, "log_entries").map(|arr| arr.value(0) as u64))
+                .or_else(|_| {
+                    typed_column_by_name::<Int64Array>(&batch, "log_entries")
+                        .map(|arr| arr.value(0) as u64)
+                })
                 .context("Failed to find log_entries column")?;
-            
+
             measures = typed_column_by_name::<UInt64Array>(&batch, "measures")
                 .map(|arr| arr.value(0))
-                .or_else(|_| typed_column_by_name::<Int64Array>(&batch, "measures").map(|arr| arr.value(0) as u64))
+                .or_else(|_| {
+                    typed_column_by_name::<Int64Array>(&batch, "measures")
+                        .map(|arr| arr.value(0) as u64)
+                })
                 .context("Failed to find measures column")?;
-            
+
             trace_events = typed_column_by_name::<UInt64Array>(&batch, "trace_events")
                 .map(|arr| arr.value(0))
-                .or_else(|_| typed_column_by_name::<Int64Array>(&batch, "trace_events").map(|arr| arr.value(0) as u64))
+                .or_else(|_| {
+                    typed_column_by_name::<Int64Array>(&batch, "trace_events")
+                        .map(|arr| arr.value(0) as u64)
+                })
                 .context("Failed to find trace_events column")?;
-            
+
             thread_count = typed_column_by_name::<UInt64Array>(&batch, "thread_count")
                 .map(|arr| arr.value(0))
-                .or_else(|_| typed_column_by_name::<Int64Array>(&batch, "thread_count").map(|arr| arr.value(0) as u64))
+                .or_else(|_| {
+                    typed_column_by_name::<Int64Array>(&batch, "thread_count")
+                        .map(|arr| arr.value(0) as u64)
+                })
                 .context("Failed to find thread_count column")?;
-            
+
             break; // Single row result, no need to continue
         }
     }

@@ -95,21 +95,27 @@ pub async fn format_perfetto_trace(
                 for row in 0..b.num_rows() {
                     let begin_ns = begins.value(row);
                     let end_ns = ends.value(row);
-                    
+
                     // These timestamps are absolute UTC nanosecond timestamps as i64
                     // Convert to u64 by treating negative values as errors
                     let begin_u64: u64 = if begin_ns < 0 {
-                        anyhow::bail!("Negative begin timestamp: {} - this indicates a data issue", begin_ns);
+                        anyhow::bail!(
+                            "Negative begin timestamp: {} - this indicates a data issue",
+                            begin_ns
+                        );
                     } else {
                         begin_ns as u64
                     };
-                    
+
                     let end_u64: u64 = if end_ns < 0 {
-                        anyhow::bail!("Negative end timestamp: {} - this indicates a data issue", end_ns);
+                        anyhow::bail!(
+                            "Negative end timestamp: {} - this indicates a data issue",
+                            end_ns
+                        );
                     } else {
                         end_ns as u64
                     };
-                    
+
                     writer.append_span(
                         begin_u64,
                         end_u64,
