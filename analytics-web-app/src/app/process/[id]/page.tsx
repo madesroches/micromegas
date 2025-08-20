@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useParams } from 'next/navigation'
 import { ProcessInfo, ProgressUpdate, GenerateTraceRequest, LogEntry, TraceMetadata } from '@/types'
@@ -22,6 +22,8 @@ export default function ProcessDetailPage() {
   const [includeAsyncSpans, setIncludeAsyncSpans] = useState(true)
   const [logLevel, setLogLevel] = useState<string>('all')
   const [logLimit, setLogLimit] = useState<number>(50)
+  const [traceStartTime, setTraceStartTime] = useState<string>('')
+  const [traceEndTime, setTraceEndTime] = useState<string>('')
 
   // Fetch processes to find the specific process
   const { 
@@ -33,6 +35,44 @@ export default function ProcessDetailPage() {
   })
 
   const process = processes.find(p => p.process_id === processId)
+
+  // Set default time range values when process is loaded (use full RFC3339 strings)
+  useEffect(() => {
+    if (process && !traceStartTime && !traceEndTime) {
+      setTraceStartTime(process.start_time) // Keep full RFC3339 format with nanoseconds
+      setTraceEndTime(process.last_update_time)
+    }
+  }, [process, traceStartTime, traceEndTime])
+
+  // Helper to format RFC3339 string for display
+  const formatDisplayTime = (rfc3339: string): string => {
+    try {
+      const date = new Date(rfc3339)
+      if (isNaN(date.getTime())) return "Invalid timestamp"
+      return date.toLocaleString('en-US', {
+        year: 'numeric',
+        month: '2-digit', 
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        fractionalSecondDigits: 3, // Show milliseconds in display
+        hour12: false
+      }) + ` (${rfc3339.split('T')[1]})`
+    } catch {
+      return "Invalid timestamp format"
+    }
+  }
+
+  // Validate RFC3339 timestamp
+  const isValidRFC3339 = (timestamp: string): boolean => {
+    try {
+      const date = new Date(timestamp)
+      return !isNaN(date.getTime()) && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/.test(timestamp)
+    } catch {
+      return false
+    }
+  }
 
   // Fetch log entries
   const { 
@@ -64,6 +104,10 @@ export default function ProcessDetailPage() {
     const request: GenerateTraceRequest = {
       include_async_spans: includeAsyncSpans,
       include_thread_spans: includeThreadSpans,
+      time_range: traceStartTime && traceEndTime ? {
+        begin: traceStartTime, // Already RFC3339 format
+        end: traceEndTime
+      } : undefined,
     }
 
     try {
@@ -102,9 +146,9 @@ export default function ProcessDetailPage() {
     )
   }
 
-  const startTime = new Date(process.begin)
-  const endTime = new Date(process.end)
-  const duration = Math.round((endTime.getTime() - startTime.getTime()) / 1000)
+  const startTime = new Date(process.start_time)
+  const lastUpdateTime = new Date(process.last_update_time)
+  const duration = Math.round((lastUpdateTime.getTime() - startTime.getTime()) / 1000)
 
   return (
     <div className="min-h-screen" style={{ backgroundColor: '#f8fafc' }}>
@@ -188,13 +232,13 @@ export default function ProcessDetailPage() {
                 <div className="bg-gray-50 rounded p-4">
                   <div className="text-xs text-gray-600 uppercase font-medium mb-1">Last Update</div>
                   <div className="text-2xl font-bold text-gray-800">
-                    {endTime.toLocaleTimeString('en-US', { 
+                    {lastUpdateTime.toLocaleTimeString('en-US', { 
                       hour: 'numeric', 
                       minute: '2-digit', 
                       hour12: true 
                     })}
                   </div>
-                  <div className="text-sm text-gray-600">{formatRelativeTime(process.end)}</div>
+                  <div className="text-sm text-gray-600">{formatRelativeTime(process.last_update_time)}</div>
                 </div>
                 <div className="bg-gray-50 rounded p-4">
                   <div className="text-xs text-gray-600 uppercase font-medium mb-1">Threads</div>
@@ -302,18 +346,67 @@ export default function ProcessDetailPage() {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Time Range</label>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <input 
-                      type="datetime-local" 
-                      className="px-3 py-2 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" 
-                      defaultValue={startTime.toISOString().slice(0, 16)}
-                    />
-                    <input 
-                      type="datetime-local" 
-                      className="px-3 py-2 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" 
-                      defaultValue={endTime.toISOString().slice(0, 16)}
-                    />
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Time Range (RFC3339 format with nanosecond precision)
+                  </label>
+                  <div className="space-y-3">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1">Start Time</label>
+                      <div className="flex items-center gap-2">
+                        <input 
+                          type="text"
+                          value={traceStartTime}
+                          onChange={(e) => setTraceStartTime(e.target.value)}
+                          placeholder="2025-08-20T15:26:02.479554123Z"
+                          className={`flex-1 px-3 py-2 border rounded text-sm font-mono focus:outline-none focus:ring-2 ${
+                            traceStartTime && !isValidRFC3339(traceStartTime) 
+                              ? 'border-red-300 focus:ring-red-500' 
+                              : 'border-gray-300 focus:ring-blue-500'
+                          }`} 
+                        />
+                        <button
+                          type="button"
+                          onClick={() => process && setTraceStartTime(process.start_time)}
+                          className="px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded text-xs transition-colors"
+                        >
+                          Reset
+                        </button>
+                      </div>
+                      {traceStartTime && (
+                        <div className="mt-1 text-xs text-gray-500">
+                          Display: {formatDisplayTime(traceStartTime)}
+                        </div>
+                      )}
+                    </div>
+                    
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1">End Time</label>
+                      <div className="flex items-center gap-2">
+                        <input 
+                          type="text"
+                          value={traceEndTime}
+                          onChange={(e) => setTraceEndTime(e.target.value)}
+                          placeholder="2025-08-20T19:47:04.538264789Z"
+                          className={`flex-1 px-3 py-2 border rounded text-sm font-mono focus:outline-none focus:ring-2 ${
+                            traceEndTime && !isValidRFC3339(traceEndTime) 
+                              ? 'border-red-300 focus:ring-red-500' 
+                              : 'border-gray-300 focus:ring-blue-500'
+                          }`} 
+                        />
+                        <button
+                          type="button"
+                          onClick={() => process && setTraceEndTime(process.last_update_time)}
+                          className="px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded text-xs transition-colors"
+                        >
+                          Reset
+                        </button>
+                      </div>
+                      {traceEndTime && (
+                        <div className="mt-1 text-xs text-gray-500">
+                          Display: {formatDisplayTime(traceEndTime)}
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
 
@@ -330,7 +423,7 @@ export default function ProcessDetailPage() {
                 <div>
                   <button 
                     onClick={handleGenerateTrace}
-                    disabled={isGenerating}
+                    disabled={isGenerating || (traceStartTime && !isValidRFC3339(traceStartTime)) || (traceEndTime && !isValidRFC3339(traceEndTime))}
                     className="w-full flex items-center justify-center gap-2 px-6 py-3 bg-green-600 text-white rounded font-medium hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
                   >
                     <Play className="w-4 h-4" />

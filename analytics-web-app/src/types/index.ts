@@ -1,8 +1,8 @@
 export interface ProcessInfo {
   process_id: string;
   exe: string;
-  begin: string;
-  end: string;
+  start_time: string;
+  last_update_time: string;
   computer: string;
   username: string;
   cpu_brand: string;

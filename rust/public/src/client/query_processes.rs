@@ -88,8 +88,8 @@ impl ProcessQueryBuilder {
         let sql_where = self.into_where();
         let sql = format!(
             r#"SELECT process_id,
-                      start_time as begin,
-                      last_update_time as end,
+                      start_time,
+                      last_update_time,
                       exe,
                       computer,
                       username,

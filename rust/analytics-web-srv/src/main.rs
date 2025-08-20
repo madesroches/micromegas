@@ -42,8 +42,8 @@ struct Args {
 struct ProcessInfo {
     process_id: String,
     exe: String,
-    begin: DateTime<Utc>,
-    end: DateTime<Utc>,
+    start_time: DateTime<Utc>,
+    last_update_time: DateTime<Utc>,
     computer: String,
     username: String,
     cpu_brand: String,
@@ -274,10 +274,10 @@ async fn get_processes_internal(client_factory: &BearerFlightSQLClientFactory) -
             typed_column_by_name(&batch, "process_id")?;
         let exes: &StringArray = 
             typed_column_by_name(&batch, "exe")?;
-        let begins: &TimestampNanosecondArray = 
-            typed_column_by_name(&batch, "begin")?;
-        let ends: &TimestampNanosecondArray = 
-            typed_column_by_name(&batch, "end")?;
+        let start_times: &TimestampNanosecondArray = 
+            typed_column_by_name(&batch, "start_time")?;
+        let last_update_times: &TimestampNanosecondArray = 
+            typed_column_by_name(&batch, "last_update_time")?;
         let computers: &StringArray = 
             typed_column_by_name(&batch, "computer")?;
         let usernames: &StringArray = 
@@ -296,8 +296,8 @@ async fn get_processes_internal(client_factory: &BearerFlightSQLClientFactory) -
             processes.push(ProcessInfo {
                 process_id: process_ids.value(row).to_string(),
                 exe: exes.value(row).to_string(),
-                begin: DateTime::from_timestamp_nanos(begins.value(row)),
-                end: DateTime::from_timestamp_nanos(ends.value(row)),
+                start_time: DateTime::from_timestamp_nanos(start_times.value(row)),
+                last_update_time: DateTime::from_timestamp_nanos(last_update_times.value(row)),
                 computer: computers.value(row).to_string(),
                 username: usernames.value(row).to_string(),
                 cpu_brand: cpu_brands.value(row).to_string(),
@@ -695,7 +695,7 @@ async fn generate_perfetto_trace_internal(
         let process = processes.iter()
             .find(|p| p.process_id == process_id)
             .ok_or_else(|| anyhow::anyhow!("Process not found"))?;
-        TimeRange::new(process.begin, process.end)
+        TimeRange::new(process.start_time, process.last_update_time)
     };
     
     let trace_data = perfetto_trace_client::format_perfetto_trace(
