@@ -1,4 +1,4 @@
-import { ProcessInfo, TraceMetadata, GenerateTraceRequest, HealthCheck, ProgressUpdate, BinaryStartMarker, LogEntry } from '@/types'
+import { ProcessInfo, TraceMetadata, GenerateTraceRequest, HealthCheck, ProgressUpdate, BinaryStartMarker, LogEntry, ProcessStatistics } from '@/types'
 
 const API_BASE = process.env.NODE_ENV === 'development' ? 'http://localhost:8000/api' : '/api'
 
@@ -129,6 +129,14 @@ export async function fetchProcessLogEntries(
   const response = await fetch(`${API_BASE}/process/${processId}/log-entries?${params}`)
   if (!response.ok) {
     throw new Error('Failed to fetch log entries')
+  }
+  return response.json()
+}
+
+export async function fetchProcessStatistics(processId: string): Promise<ProcessStatistics> {
+  const response = await fetch(`${API_BASE}/process/${processId}/statistics`)
+  if (!response.ok) {
+    throw new Error('Failed to fetch process statistics')
   }
   return response.json()
 }

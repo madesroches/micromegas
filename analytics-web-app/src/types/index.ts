@@ -47,6 +47,14 @@ export interface HealthCheck {
   flightsql_connected: boolean;
 }
 
+export interface ProcessStatistics {
+  process_id: string;
+  log_entries: number;
+  measures: number;
+  trace_events: number;
+  thread_count: number;
+}
+
 export interface LogEntry {
   time: string;
   level: string;

@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useParams } from 'next/navigation'
 import { ProcessInfo, ProgressUpdate, GenerateTraceRequest, LogEntry } from '@/types'
-import { fetchProcesses, generateTrace, fetchProcessLogEntries } from '@/lib/api'
+import { fetchProcesses, generateTrace, fetchProcessLogEntries, fetchProcessStatistics } from '@/lib/api'
 import { TraceGenerationProgress } from '@/components/TraceGenerationProgress'
 import { CopyableProcessId } from '@/components/CopyableProcessId'
 import { formatRelativeTime } from '@/lib/utils'
@@ -40,6 +40,13 @@ export default function ProcessDetailPage() {
     queryKey: ['logs', processId, logLevel, logLimit],
     queryFn: () => fetchProcessLogEntries(processId, logLevel, logLimit),
     enabled: activeTab === 'logs' && !!process,
+  })
+
+  // Fetch process statistics
+  const { data: statistics } = useQuery({
+    queryKey: ['statistics', processId],
+    queryFn: () => fetchProcessStatistics(processId),
+    enabled: !!process,
   })
 
   const handleGenerateTrace = async () => {
@@ -168,7 +175,7 @@ export default function ProcessDetailPage() {
                 </div>
                 <div className="bg-gray-50 rounded p-4">
                   <div className="text-xs text-gray-600 uppercase font-medium mb-1">Threads</div>
-                  <div className="text-2xl font-bold text-gray-800">8</div>
+                  <div className="text-2xl font-bold text-gray-800">{statistics?.thread_count || 0}</div>
                   <div className="text-sm text-gray-600">Number of thread streams</div>
                 </div>
               </div>
@@ -177,17 +184,17 @@ export default function ProcessDetailPage() {
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
                 <div className="bg-gray-50 rounded p-4">
                   <div className="text-xs text-gray-600 uppercase font-medium mb-1">Log Entries</div>
-                  <div className="text-2xl font-bold text-gray-800">12,456</div>
+                  <div className="text-2xl font-bold text-gray-800">{statistics?.log_entries?.toLocaleString() || 0}</div>
                   <div className="text-sm text-gray-600">Number of log entries</div>
                 </div>
                 <div className="bg-gray-50 rounded p-4">
                   <div className="text-xs text-gray-600 uppercase font-medium mb-1">Measures</div>
-                  <div className="text-2xl font-bold text-gray-800">834</div>
+                  <div className="text-2xl font-bold text-gray-800">{statistics?.measures?.toLocaleString() || 0}</div>
                   <div className="text-sm text-gray-600">Number of measures</div>
                 </div>
                 <div className="bg-gray-50 rounded p-4">
                   <div className="text-xs text-gray-600 uppercase font-medium mb-1">Trace Events</div>
-                  <div className="text-2xl font-bold text-gray-800">5,137</div>
+                  <div className="text-2xl font-bold text-gray-800">{statistics?.trace_events?.toLocaleString() || 0}</div>
                   <div className="text-sm text-gray-600">Number of trace events</div>
                 </div>
               </div>
