@@ -10,6 +10,9 @@ Before you begin, ensure you have the following installed:
 - **[Python 3.8+](https://www.python.org/downloads/)** - For the client API and setup scripts
 - **[Rust](https://www.rust-lang.org/tools/install)** - For building Micromegas services
 
+Optional:
+- **[tmux](https://github.com/tmux/tmux/wiki)** - For managing multiple services in a single terminal (Linux/macOS)
+
 ## Environment Setup
 
 Set the following environment variables for local development:
@@ -39,46 +42,68 @@ git clone https://github.com/madesroches/micromegas.git
 cd micromegas
 ```
 
-### 2. Start PostgreSQL Database
+### 2. Start All Services
 
-Start a local PostgreSQL instance using Docker:
+#### Option A: Using tmux (Linux/macOS)
 
+The easiest way to start all required services is using the development script with tmux:
+
+```bash
+# Start all services in a tmux session (debug mode)
+python3 local_test_env/dev.py
+
+# Or in release mode for better performance
+python3 local_test_env/dev.py release
+```
+
+This will automatically:
+
+- Build all Rust services
+- Start PostgreSQL database
+- Start telemetry-ingestion-srv on port 9000
+- Start flight-sql-srv on port 32010
+- Start telemetry-admin service
+- Open a tmux session with all services running in separate panes
+
+!!! tip "Managing Services with tmux"
+    - To switch between service panes: `Ctrl+B` then arrow keys
+    - To detach from tmux (leave services running): `Ctrl+B` then `D`
+    - To reattach to tmux: `tmux attach -t micromegas`
+    - To stop all services: `python3 local_test_env/stop-dev.py`
+
+#### Option B: Manual Startup (Windows or without tmux)
+
+If you're on Windows or prefer not to use tmux, start each service in a separate terminal:
+
+**Terminal 1: PostgreSQL Database**
 ```bash
 cd local_test_env/db
 python run.py
 ```
 
-This will:
-- Pull the PostgreSQL Docker image
-- Start the database container
-- Set up the initial schema
-
-### 3. Start Core Services
-
-You'll need to start three services in separate terminals:
-
-#### Terminal 1: Ingestion Server
+**Terminal 2: Ingestion Server**
 ```bash
 cd rust
 cargo run -p telemetry-ingestion-srv -- --listen-endpoint-http 127.0.0.1:9000
 ```
 
-#### Terminal 2: FlightSQL Server
+**Terminal 3: FlightSQL Server**
 ```bash
 cd rust
 cargo run -p flight-sql-srv -- --disable-auth
 ```
 
-#### Terminal 3: Maintenance Daemon
+**Terminal 4: Admin Service**
 ```bash
 cd rust
 cargo run -p telemetry-admin -- crond
 ```
 
 !!! info "Service Roles"
-    - **Ingestion Server**: Receives telemetry data from applications
-    - **FlightSQL Server**: Provides SQL query interface for analytics
-    - **Maintenance Daemon**: Handles background processing and view materialization
+    - **PostgreSQL**: Stores metadata and service configuration
+    - **Ingestion Server**: Receives telemetry data from applications (port 9000)
+    - **FlightSQL Server**: Provides SQL query interface for analytics (port 32010)
+    - **Admin Service**: Handles background processing and global view materialization
 
 ## Verify Installation
 

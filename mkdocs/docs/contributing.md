@@ -28,9 +28,6 @@ By participating in this project, you agree to maintain a respectful and inclusi
    # Python development
    cd python/micromegas
    poetry install
-   
-   # Documentation
-   pip install -r docs/docs-requirements.txt
    ```
 
 ## Contributing Code
@@ -56,7 +53,36 @@ By participating in this project, you agree to maintain a respectful and inclusi
    - **Dependencies**: Keep alphabetical order in Cargo.toml
    - **Error handling**: Use `expect()` with descriptive messages instead of `unwrap()`
 
-3. **Write tests**:
+3. **Start development services**:
+   
+   For testing and development, you can start all required services (PostgreSQL, telemetry-ingestion-srv, flight-sql-srv, and telemetry-admin) using the dev.py script:
+   
+   ```bash
+   # Start all services in a tmux session (debug mode)
+   python3 local_test_env/dev.py
+   
+   # Or in release mode for better performance
+   python3 local_test_env/dev.py release
+   ```
+   
+   This will:
+   - Build the Rust services
+   - Start PostgreSQL database
+   - Start telemetry-ingestion-srv on port 9000
+   - Start flight-sql-srv on port 32010  
+   - Start telemetry-admin service
+   - Open a tmux session with all services running in separate panes
+   
+   To stop all services:
+   ```bash
+   # Use the stop script
+   python3 local_test_env/stop-dev.py
+   
+   # Or manually kill the tmux session
+   tmux kill-session -t micromegas
+   ```
+
+4. **Write tests**:
    ```bash
    # Rust tests
    cd rust
@@ -67,29 +93,19 @@ By participating in this project, you agree to maintain a respectful and inclusi
    pytest
    ```
 
-4. **Run CI pipeline locally**:
+5. **Run CI pipeline locally**:
    ```bash
    cd rust
    python3 ../build/rust_ci.py
    ```
 
-5. **Commit with clear messages**:
+6. **Commit with clear messages**:
    ```bash
    git commit -m "Add histogram generation for span duration analysis"
    ```
-   
-   **Note**: Never include AI-generated credits or co-author tags in commit messages.
 
-6. **Push and create Pull Request**:
-   ```bash
-   git push origin feature/your-feature-name
-   ```
-   
-   Before creating a PR, run:
-   ```bash
-   git log --oneline main..HEAD
-   ```
-   to list all commits in your branch.
+7. **Create Pull Request**:
+   Once your changes are ready, create a pull request on GitHub.
 
 ### Code Review Process
 
@@ -100,24 +116,53 @@ By participating in this project, you agree to maintain a respectful and inclusi
 
 ## Contributing Documentation
 
+### Setup
+
+1. **Install documentation dependencies**:
+   ```bash
+   # Create and activate virtual environment (recommended)
+   python3 -m venv docs-venv
+   source docs-venv/bin/activate  # On Windows: docs-venv\Scripts\activate
+   
+   # Install dependencies
+   pip install -r docs/docs-requirements.txt
+   ```
+
 ### MkDocs Documentation
 
 The main documentation uses MkDocs with Material theme:
 
 1. **Edit documentation**:
-   - Files are in `docs/` directory
+   - Files are in `mkdocs/docs/` directory
+   - Configuration in `mkdocs/mkdocs.yml`
    - Use Markdown format
    - Follow existing structure and style
 
 2. **Preview changes**:
    ```bash
+   cd mkdocs
+   
+   # Using the virtual environment
+   /home/mad/micromegas/docs-venv/bin/mkdocs serve --dev-addr=0.0.0.0:8000
+   
+   # Or if mkdocs is in your PATH
    mkdocs serve
+   
    # Visit http://localhost:8000
    ```
 
 3. **Build documentation**:
    ```bash
-   python docs/build-docs.py
+   cd mkdocs
+   /home/mad/micromegas/docs-venv/bin/mkdocs build
+   
+   # Output will be in mkdocs/site/
+   ```
+
+4. **Deploy documentation**:
+   ```bash
+   # Documentation is automatically deployed via GitHub Actions
+   # when changes are pushed to the main branch
    ```
 
 ### Documentation Guidelines
