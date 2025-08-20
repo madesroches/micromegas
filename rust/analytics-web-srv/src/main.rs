@@ -296,20 +296,76 @@ async fn get_processes_internal(client_factory: &BearerFlightSQLClientFactory) -
 
 async fn get_trace_info(
     Path(process_id): Path<String>, 
-    State(_state): State<AppState>
-) -> impl IntoResponse {
+    State(state): State<AppState>
+) -> Result<Json<TraceMetadata>, ApiError> {
+    let client_factory = BearerFlightSQLClientFactory::new(state.auth_token.clone());
+    let mut client = client_factory.make_client().await
+        .map_err(|e| ApiError::with_details(
+            "FlightSQLConnectionError", 
+            "Failed to create FlightSQL client", 
+            &e.to_string()
+        ))?;
+
+    // Get thread span count by counting streams with cpu tag
+    let sql_streams = format!(
+        r#"
+        SELECT COUNT(DISTINCT stream_id) as thread_count
+        FROM blocks
+        WHERE process_id = '{}' 
+        AND array_has("streams.tags", 'cpu')
+        "#, process_id
+    );
+    
+    let mut thread_span_count = 0u64;
+    let stream_batches = client.query(sql_streams, None).await
+        .map_err(|e| ApiError::with_details(
+            "DatabaseQueryError", 
+            "Failed to query thread streams", 
+            &e.to_string()
+        ))?;
+
+    for batch in stream_batches {
+        if batch.num_rows() > 0 {
+            let counts: &Int64Array = typed_column_by_name(&batch, "thread_count")
+                .map_err(|e| ApiError::with_details(
+                    "DataParsingError", 
+                    "Failed to parse thread count", 
+                    &e.to_string()
+                ))?;
+            thread_span_count = counts.value(0) as u64;
+        }
+    }
+
+    // Estimate span counts (actual counting would be expensive)
+    let estimated_spans_per_thread = 100;
+    let total_thread_spans = thread_span_count * estimated_spans_per_thread;
+    let total_async_spans = total_thread_spans / 4; // Rough estimate
+    let total_spans = total_thread_spans + total_async_spans;
+    
+    // Estimate size (roughly 100 bytes per span)
+    let estimated_size_bytes = Some(total_spans * 100);
+    
+    // Estimate generation time based on span count
+    let generation_time_estimate = if total_spans < 1000 {
+        Duration::from_secs(2)
+    } else if total_spans < 10000 {
+        Duration::from_secs(5) 
+    } else {
+        Duration::from_secs(15)
+    };
+
     let metadata = TraceMetadata {
         process_id: process_id.clone(),
-        estimated_size_bytes: Some(1024 * 1024),
+        estimated_size_bytes,
         span_counts: SpanCounts {
-            thread_spans: 1000,
-            async_spans: 500,
-            total: 1500,
+            thread_spans: total_thread_spans,
+            async_spans: total_async_spans,
+            total: total_spans,
         },
-        generation_time_estimate: Duration::from_secs(10),
+        generation_time_estimate,
     };
     
-    Json(metadata)
+    Ok(Json(metadata))
 }
 
 async fn validate_trace(
