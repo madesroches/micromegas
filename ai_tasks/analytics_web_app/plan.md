@@ -20,6 +20,8 @@
 - ✅ **RESOLVED**: Process ID display now shows full UUIDs with click-to-copy functionality
 - ✅ **RESOLVED**: Process metrics replaced with real data from analytics service via `/api/process/{id}/statistics` endpoint
 - ✅ **RESOLVED**: Process list ordering by last update time with most recent processes on top
+- **Proper Error Handling**: Replace all `eprintln!` calls in backend with structured logging using tracing macros
+- **Remove Fake/Default Data**: Eliminate all hardcoded fallback values, fetch real data or return errors/null when no data available
 - **Enhance Trace Generation UI**: Make time range precise to nanosecond accuracy with default values from process start to last update time
 - **Enhance Process Info Tab**: Display precise nanosecond timestamps and exact duration calculations
 - Frontend needs testing with more diverse real data

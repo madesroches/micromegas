@@ -2,6 +2,7 @@ use anyhow::Result;
 use axum::{
     extract::{Path, State},
     http::StatusCode,
+    middleware,
     response::{IntoResponse, Response},
     routing::{get, get_service, post},
     Json, Router,
@@ -13,9 +14,10 @@ use futures::{Stream, StreamExt};
 use http::header;
 use micromegas::analytics::{dfext::typed_column::typed_column_by_name, time::TimeRange};
 use micromegas::client::{flightsql_client_factory::{FlightSQLClientFactory, BearerFlightSQLClientFactory}, perfetto_trace_client, query_processes::ProcessQueryBuilder};
+use micromegas::servers::axum_utils::observability_middleware;
 use micromegas::tracing::prelude::*;
 use micromegas::micromegas_main;
-use datafusion::arrow::array::{Int32Array, StringArray, TimestampNanosecondArray, UInt64Array};
+use datafusion::arrow::array::{Int32Array, Int64Array, StringArray, TimestampNanosecondArray, UInt64Array};
 use serde::{Deserialize, Serialize};
 use std::{pin::Pin, time::Duration};
 use tower_http::{
@@ -137,19 +139,24 @@ async fn main() -> Result<()> {
     let state = AppState {
         auth_token,
     };
-    let api_routes = Router::new()
+    let health_routes = Router::new()
         .route("/api/health", get(health_check))
+        .with_state(state.clone());
+        
+    let api_routes = Router::new()
         .route("/api/processes", get(list_processes))
         .route("/api/perfetto/{process_id}/info", get(get_trace_info))
         .route("/api/perfetto/{process_id}/validate", post(validate_trace))
         .route("/api/perfetto/{process_id}/generate", post(generate_trace))
         .route("/api/process/{process_id}/log-entries", get(get_process_log_entries))
         .route("/api/process/{process_id}/statistics", get(get_process_statistics))
+        .layer(middleware::from_fn(observability_middleware))
         .with_state(state);
     let serve_dir = ServeDir::new(&args.frontend_dir)
         .not_found_service(ServeFile::new(format!("{}/index.html", args.frontend_dir)));
     
     let app = Router::new()
+        .merge(health_routes)
         .merge(api_routes)
         .fallback_service(get_service(serve_dir))
         .layer(
@@ -422,13 +429,26 @@ async fn get_process_statistics(
             while let Some(batch) = stream.next().await {
                 match batch {
                     Ok(batch) => {
-                        let log_count: &UInt64Array = match typed_column_by_name(&batch, "log_count") {
-                            Ok(arr) => arr,
-                            Err(_) => continue,
-                        };
-                        
-                        for row in 0..batch.num_rows() {
-                            log_entries = log_count.value(row);
+                        // Try different possible column names and types that COUNT(*) might return
+                        if let Ok(log_count) = typed_column_by_name::<UInt64Array>(&batch, "log_count") {
+                            for row in 0..batch.num_rows() {
+                                log_entries = log_count.value(row);
+                            }
+                        } else if let Ok(log_count) = typed_column_by_name::<Int64Array>(&batch, "log_count") {
+                            for row in 0..batch.num_rows() {
+                                log_entries = log_count.value(row) as u64;
+                            }
+                        } else if let Ok(count) = typed_column_by_name::<UInt64Array>(&batch, "COUNT(*)") {
+                            for row in 0..batch.num_rows() {
+                                log_entries = count.value(row);
+                            }
+                        } else if let Ok(count) = typed_column_by_name::<Int64Array>(&batch, "COUNT(*)") {
+                            for row in 0..batch.num_rows() {
+                                log_entries = count.value(row) as u64;
+                            }
+                        } else {
+                            eprintln!("Could not find count column in batch. Available columns: {:?}", 
+                                batch.schema().fields().iter().map(|f| (f.name(), f.data_type())).collect::<Vec<_>>());
                         }
                     }
                     Err(e) => {
