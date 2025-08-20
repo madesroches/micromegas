@@ -68,7 +68,7 @@ export default function HomePage() {
       <div className="bg-white border-b border-gray-200 shadow-sm">
         <div className="px-8 py-4">
           <h1 className="text-2xl font-semibold text-gray-800">Micromegas Analytics</h1>
-          <p className="text-sm text-gray-600 mt-1">Generate and download Perfetto traces from telemetry data</p>
+          <p className="text-sm text-gray-600 mt-1">Explore processes, analyze logs, and export trace data</p>
         </div>
       </div>
 
