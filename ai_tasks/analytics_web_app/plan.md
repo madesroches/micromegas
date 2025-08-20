@@ -23,6 +23,7 @@
 - ✅ **RESOLVED**: Proper Error Handling - Replaced all `eprintln!` calls with anyhow error propagation and added toast notifications for errors in web UI
 - ✅ **RESOLVED**: Real Trace Generation - Fixed timestamp conversion and thread ID parsing issues, now generates valid Perfetto protobuf traces from real database spans
 - ✅ **RESOLVED**: Real Perfetto Info - Replaced hardcoded values with database-driven estimates (thread count, span estimates, file size, generation time)
+- ✅ **RESOLVED**: Real Process Properties - Process details page now displays actual properties from database instead of hardcoded values (distro, duration)
 - **Enhance Trace Generation UI**: Make time range precise to nanosecond accuracy with default values from process start to last update time
 - **Enhance Process Info Tab**: Display precise nanosecond timestamps and exact duration calculations
 - Frontend needs testing with more diverse real data
@@ -137,6 +138,22 @@
 - **Real Data Flow**: FlightSQL → `thread_spans` view → Perfetto protobuf → HTTP streaming → Frontend download
 - **Span Count Estimation**: Queries `blocks` table for thread streams, estimates spans based on database statistics
 - **File Size Calculation**: Dynamic estimation based on actual span counts (spans × 100 bytes average)
+
+### ✅ **COMPLETED**: Real Process Properties Implementation
+- **✅ Backend API Enhancement**: Added `properties` column to ProcessQueryBuilder SQL query in `/rust/public/src/client/query_processes.rs`
+- **✅ Data Structure Update**: Extended ProcessInfo struct to include `properties: HashMap<String, String>` field
+- **✅ Arrow Properties Integration**: Used existing `read_property_list()` function following established codebase patterns
+- **✅ Public Crate Usage**: Properly accessed `Property` type through `micromegas::telemetry::property::Property` (public crate only)
+- **✅ Frontend Type System**: Updated TypeScript ProcessInfo interface to include `properties: Record<string, string>`
+- **✅ Dynamic UI Rendering**: Replaced hardcoded Properties section with real database-driven key-value pairs
+- **✅ Graceful Fallbacks**: Added "No properties available" message for processes without properties
+
+**Implementation Details**:
+- **SQL Query**: Added `properties` column to ProcessQueryBuilder SELECT statement
+- **Data Parsing**: `extract_properties_list` → `read_property_list` → `convert_properties_to_map` pipeline
+- **Type Conversion**: `Vec<Property>` → `HashMap<String, String>` → JSON API → React frontend
+- **Real Data Examples**: analytics-web-srv shows `{"version": "0.12.0"}` instead of fake hardcoded values
+- **Code Locations**: `/rust/analytics-web-srv/src/main.rs`, `/analytics-web-app/src/types/index.ts`, `/analytics-web-app/src/app/process/[id]/page.tsx`
 
 ### Process Info Tab Enhancements
 - **Precise Timestamps**: Display full nanosecond precision for start/end times

@@ -94,7 +94,8 @@ impl ProcessQueryBuilder {
                       computer,
                       username,
                       cpu_brand,
-                      distro
+                      distro,
+                      properties
             FROM processes
             {sql_where}
             ORDER BY last_update_time DESC;"#

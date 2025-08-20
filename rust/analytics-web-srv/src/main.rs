@@ -12,14 +12,15 @@ use chrono::{DateTime, Utc};
 use clap::Parser;
 use futures::{Stream, StreamExt};
 use http::header;
-use micromegas::analytics::{dfext::typed_column::typed_column_by_name, time::TimeRange};
+use micromegas::analytics::{arrow_properties::read_property_list, dfext::typed_column::typed_column_by_name, time::TimeRange};
+use micromegas::telemetry::property::Property;
 use micromegas::client::{flightsql_client_factory::{FlightSQLClientFactory, BearerFlightSQLClientFactory}, perfetto_trace_client, query_processes::ProcessQueryBuilder};
 use micromegas::servers::axum_utils::observability_middleware;
 use micromegas::tracing::prelude::*;
 use micromegas::micromegas_main;
-use datafusion::arrow::array::{Int32Array, Int64Array, StringArray, TimestampNanosecondArray, UInt64Array};
+use datafusion::arrow::array::{Int32Array, Int64Array, ListArray, StringArray, TimestampNanosecondArray, UInt64Array};
 use serde::{Deserialize, Serialize};
-use std::{pin::Pin, time::Duration};
+use std::{collections::HashMap, pin::Pin, time::Duration};
 use tower_http::{
     cors::{Any, CorsLayer},
     services::{ServeDir, ServeFile},
@@ -47,6 +48,7 @@ struct ProcessInfo {
     username: String,
     cpu_brand: String,
     distro: String,
+    properties: HashMap<String, String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -249,6 +251,14 @@ async fn list_processes(State(state): State<AppState>) -> impl IntoResponse {
     }
 }
 
+fn convert_properties_to_map(properties: Vec<Property>) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    for prop in properties {
+        map.insert(prop.key_str().to_string(), prop.value_str().to_string());
+    }
+    map
+}
+
 #[span_fn]
 async fn get_processes_internal(client_factory: &BearerFlightSQLClientFactory) -> Result<Vec<ProcessInfo>> {
     let mut client = client_factory.make_client().await?;
@@ -276,8 +286,13 @@ async fn get_processes_internal(client_factory: &BearerFlightSQLClientFactory) -
             typed_column_by_name(&batch, "cpu_brand")?;
         let distros: &StringArray = 
             typed_column_by_name(&batch, "distro")?;
+        let properties_array: &ListArray = 
+            typed_column_by_name(&batch, "properties")?;
             
         for row in 0..batch.num_rows() {
+            let properties_vec = read_property_list(properties_array.value(row))?;
+            let properties = convert_properties_to_map(properties_vec);
+            
             processes.push(ProcessInfo {
                 process_id: process_ids.value(row).to_string(),
                 exe: exes.value(row).to_string(),
@@ -287,6 +302,7 @@ async fn get_processes_internal(client_factory: &BearerFlightSQLClientFactory) -
                 username: usernames.value(row).to_string(),
                 cpu_brand: cpu_brands.value(row).to_string(),
                 distro: distros.value(row).to_string(),
+                properties,
             });
         }
     }

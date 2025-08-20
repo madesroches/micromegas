@@ -3,8 +3,8 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useParams } from 'next/navigation'
-import { ProcessInfo, ProgressUpdate, GenerateTraceRequest, LogEntry } from '@/types'
-import { fetchProcesses, generateTrace, fetchProcessLogEntries, fetchProcessStatistics } from '@/lib/api'
+import { ProcessInfo, ProgressUpdate, GenerateTraceRequest, LogEntry, TraceMetadata } from '@/types'
+import { fetchProcesses, generateTrace, fetchProcessLogEntries, fetchProcessStatistics, fetchTraceMetadata } from '@/lib/api'
 import { TraceGenerationProgress } from '@/components/TraceGenerationProgress'
 import { CopyableProcessId } from '@/components/CopyableProcessId'
 import { formatRelativeTime } from '@/lib/utils'
@@ -244,18 +244,16 @@ export default function ProcessDetailPage() {
                 <div className="bg-gray-50 rounded p-4">
                   <div className="text-xs text-gray-600 uppercase font-medium mb-1">Properties</div>
                   <div className="text-xs space-y-1">
-                    <div className="flex justify-between">
-                      <span className="text-gray-600">distro:</span>
-                      <span className="text-gray-800 font-semibold">{process.distro}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-gray-600">duration:</span>
-                      <span className="text-gray-800 font-semibold">
-                        {duration < 60 ? `${duration}s` : 
-                         duration < 3600 ? `${Math.floor(duration / 60)}m` :
-                         `${Math.floor(duration / 3600)}h`}
-                      </span>
-                    </div>
+                    {Object.entries(process.properties).length > 0 ? (
+                      Object.entries(process.properties).map(([key, value]) => (
+                        <div key={key} className="flex justify-between">
+                          <span className="text-gray-600">{key}:</span>
+                          <span className="text-gray-800 font-semibold">{value}</span>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="text-gray-500 italic">No properties available</div>
+                    )}
                   </div>
                 </div>
               </div>

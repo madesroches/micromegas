@@ -7,6 +7,7 @@ export interface ProcessInfo {
   username: string;
   cpu_brand: string;
   distro: string;
+  properties: Record<string, string>;
 }
 
 export interface SpanCounts {
