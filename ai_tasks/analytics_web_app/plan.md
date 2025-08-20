@@ -29,6 +29,7 @@
 - ✅ **RESOLVED**: Frontend tested with diverse real data - Process list, logs, statistics, and trace generation all working with real telemetry data
 - ✅ **RESOLVED**: API path migration from `/api/` to `/analyticsweb/` - Backend routes and frontend API calls updated for better namespace organization
 - ✅ **RESOLVED**: Security improvements - Environment variable-based CORS configuration and comprehensive security documentation
+- ✅ **RESOLVED**: Real statistics from block data - Query actual log entries, measures, trace events, and thread count from proper stream types in blocks view
 
 ## 🔄 **REMAINING IMPLEMENTATION TASKS**
 
