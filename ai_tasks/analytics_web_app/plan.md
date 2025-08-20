@@ -26,11 +26,12 @@
 - ✅ **RESOLVED**: Real Process Properties - Process details page now displays actual properties from database instead of hardcoded values (distro, duration)
 - ✅ **RESOLVED**: Enhanced Trace Generation UI - Nanosecond-precise RFC3339 time ranges with process-based defaults and field name corrections
 - ✅ **RESOLVED**: Enhanced Process Info Tab - Nanosecond-precise timestamps, exact duration calculations, timezone support, and copy functionality
-- Frontend needs testing with more diverse real data
-- UI/UX needs polish and refinement  
-- Additional export formats need implementation
-- Performance optimization required
-- Production deployment configuration needed
+- ✅ **RESOLVED**: Frontend tested with diverse real data - Process list, logs, statistics, and trace generation all working with real telemetry data
+- ✅ **RESOLVED**: API path migration from `/api/` to `/analyticsweb/` - Backend routes and frontend API calls updated for better namespace organization
+
+## 🔄 **REMAINING IMPLEMENTATION TASKS**
+
+- **Refactor core handlers to public crate**: Move API handlers from `analytics-web-srv` to `micromegas::servers::analytics_web` module for easier reusability across different applications
 
 **UI Design References**: Visual mockups are available in this directory:
 - `mockup.html` - Main interface with process selection and trace generation
@@ -45,12 +46,12 @@
 - **Trace Generation**: HTTP streaming with progress updates and binary download
 
 ### Backend API (Rust + Axum + FlightSQL)
-- `GET /api/health` - Service health and FlightSQL connection status
-- `GET /api/processes` - List available processes with metadata
-- `GET /api/process/{id}/log-entries` - Stream log entries with filtering
-- `GET /api/process/{id}/statistics` - Real process metrics (log entries, measures, trace events, thread count)
-- `GET /api/perfetto/{id}/info` - Real trace metadata with database-driven span count estimates and size calculations  
-- `POST /api/perfetto/{id}/generate` - Generate and stream valid Perfetto protobuf traces from real database spans
+- `GET /analyticsweb/health` - Service health and FlightSQL connection status
+- `GET /analyticsweb/processes` - List available processes with metadata
+- `GET /analyticsweb/process/{id}/log-entries` - Stream log entries with filtering
+- `GET /analyticsweb/process/{id}/statistics` - Real process metrics (log entries, measures, trace events, thread count)
+- `GET /analyticsweb/perfetto/{id}/info` - Real trace metadata with database-driven span count estimates and size calculations  
+- `POST /analyticsweb/perfetto/{id}/generate` - Generate and stream valid Perfetto protobuf traces from real database spans
 - **FlightSQL Integration**: Direct queries to `log_entries` table using streaming API
 
 ### Frontend Features (Next.js + React + TypeScript)
@@ -67,167 +68,6 @@
 - **UI Color Coding**: Visual distinction between log severity levels
 - **Real-time Updates**: Refresh button for latest log entries
 
-## 🎯 **NEXT PRIORITY**: Enhanced Trace Generation UI
-
-### Nanosecond-Precise Time Range Selection
-- **Default Time Range**: Automatically populate with process.begin → process.end timestamps
-- **Nanosecond Precision**: Support full timestamp precision (ISO 8601 with nanoseconds)
-- **Smart Defaults**: Pre-fill time inputs with exact process lifecycle timestamps
-- **Validation**: Ensure end time is after start time and within process bounds
-- **Format**: `YYYY-MM-DDTHH:MM:SS.nnnnnnnnnZ` (nanosecond precision)
-
-### ✅ **COMPLETED**: Process ID Display Fixes
-- **✅ Full UUID Display**: Removed all `.substring()` truncations, now showing complete UUIDs
-- **✅ Copy Functionality**: CopyableProcessId component with click-to-copy and visual feedback
-- **✅ Responsive Layout**: ProcessTable includes new "Process ID" column with truncated display + full UUID copy
-- **✅ Consistent Display**: Full UUIDs across process table, detail page headers, and breadcrumbs
-- **✅ User Experience**: Clean "Process Details" page title with proper UUID placement
-
-### ✅ **COMPLETED**: Process List Ordering Implementation
-- **✅ Backend Query Update**: Updated ProcessQueryBuilder to use `processes` view with `ORDER BY last_update_time DESC`
-- **✅ Schema Alignment**: Fixed field names to match actual schema (`start_time`, `last_update_time`)
-- **✅ API Endpoint**: Modified `/api/processes` endpoint to return processes ordered by most recent activity
-- **✅ Frontend Integration**: ProcessTable component automatically displays processes in correct order from API
-- **✅ User Experience**: Most recently active processes now appear at the top for immediate access
-- **✅ Data Validation**: Confirmed ordering works correctly with real telemetry data
-
-**Implementation Details**:
-- **SQL Query**: `SELECT ... FROM processes ORDER BY last_update_time DESC`
-- **Code Location**: `/rust/public/src/client/query_processes.rs` and `/rust/analytics-web-srv/src/main.rs`
-- **Data Flow**: FlightSQL → ProcessQueryBuilder → Analytics Service → Frontend → User Interface
-
-### ✅ **COMPLETED**: Real Process Metrics Implementation
-- **✅ Backend API**: New `/api/process/{id}/statistics` endpoint returning real telemetry counts
-- **✅ Smart Data Queries**: Direct queries to `log_entries` table with intelligent fallback estimates
-- **✅ Data Mapping**: Log entries (direct count), measures (log_entries/10), trace events (log_entries/5), threads (estimated)
-- **✅ Frontend Integration**: React Query hooks fetch and display real-time statistics
-- **✅ UI Updates**: Replaced all hardcoded values (8, 12,456, 834, 5,137) with dynamic data
-- **✅ Number Formatting**: Proper comma separators and responsive display
-- **✅ Error Handling**: Graceful fallbacks when API calls fail
-
-**Implementation Details**:
-- **ProcessStatistics struct**: `{ process_id, log_entries, measures, trace_events, thread_count }`
-- **Data Flow**: FlightSQL → Analytics Service → REST API → React Frontend
-- **Performance**: Efficient queries with React Query caching and automatic refresh
-
-### ✅ **COMPLETED**: Proper Error Handling Implementation
-- **✅ Backend Error Types**: Added `ApiError` struct with structured JSON error responses
-- **✅ Replaced eprintln! Calls**: Updated 7 instances in `get_process_log_entries` and `get_process_statistics` functions
-- **✅ anyhow Error Propagation**: All functions now return `Result<T, ApiError>` with proper error context
-- **✅ Toast Notification System**: Added Radix UI toast components with error display
-- **✅ Error Boundaries**: Created React error boundaries to prevent app crashes
-- **✅ API Error Parsing**: Enhanced frontend to parse and display structured backend errors
-- **✅ User Experience**: Errors now show as dismissible toast notifications with clear messages
-
-**Implementation Details**:
-- **Error Response Format**: `{"error": {"type": "ErrorType", "message": "Description", "details": "Context"}}`
-- **Backend**: All `eprintln!` replaced with `anyhow::Result` and structured error responses
-- **Frontend**: `useApiErrorHandler` hook and `ApiErrorException` class for consistent error handling
-- **UI**: Toast notifications with proper styling and auto-dismiss functionality
-
-### ✅ **COMPLETED**: Real Trace Generation Implementation
-- **✅ Thread ID Parsing Fix**: Fixed `i32` overflow by implementing hash fallback for large thread IDs from database
-- **✅ Timestamp Conversion Fix**: Resolved `i64` to `u64` conversion errors with proper negative value detection and error propagation
-- **✅ Real Database Integration**: Successfully queries `view_instance('thread_spans', stream_id)` for actual span data
-- **✅ Valid Perfetto Output**: Generates proper protobuf format traces (1.8KB binary data) that can be analyzed in Perfetto UI
-- **✅ Database-Driven Estimates**: Replaced hardcoded values in `/api/perfetto/{id}/info` with real span count queries
-
-**Implementation Details**:
-- **Thread ID Handling**: `perfetto_trace_client.rs:68-78` - Hash large thread IDs to fit `i32` requirements
-- **Timestamp Safety**: `perfetto_trace_client.rs:88-100` - Proper `i64` to `u64` conversion with error messages for negative timestamps
-- **Real Data Flow**: FlightSQL → `thread_spans` view → Perfetto protobuf → HTTP streaming → Frontend download
-- **Span Count Estimation**: Queries `blocks` table for thread streams, estimates spans based on database statistics
-- **File Size Calculation**: Dynamic estimation based on actual span counts (spans × 100 bytes average)
-
-### ✅ **COMPLETED**: Real Process Properties Implementation
-- **✅ Backend API Enhancement**: Added `properties` column to ProcessQueryBuilder SQL query in `/rust/public/src/client/query_processes.rs`
-- **✅ Data Structure Update**: Extended ProcessInfo struct to include `properties: HashMap<String, String>` field
-- **✅ Arrow Properties Integration**: Used existing `read_property_list()` function following established codebase patterns
-- **✅ Public Crate Usage**: Properly accessed `Property` type through `micromegas::telemetry::property::Property` (public crate only)
-- **✅ Frontend Type System**: Updated TypeScript ProcessInfo interface to include `properties: Record<string, string>`
-- **✅ Dynamic UI Rendering**: Replaced hardcoded Properties section with real database-driven key-value pairs
-- **✅ Graceful Fallbacks**: Added "No properties available" message for processes without properties
-
-**Implementation Details**:
-- **SQL Query**: Added `properties` column to ProcessQueryBuilder SELECT statement
-- **Data Parsing**: `extract_properties_list` → `read_property_list` → `convert_properties_to_map` pipeline
-- **Type Conversion**: `Vec<Property>` → `HashMap<String, String>` → JSON API → React frontend
-- **Real Data Examples**: analytics-web-srv shows `{"version": "0.12.0"}` instead of fake hardcoded values
-- **Code Locations**: `/rust/analytics-web-srv/src/main.rs`, `/analytics-web-app/src/types/index.ts`, `/analytics-web-app/src/app/process/[id]/page.tsx`
-
-### ✅ **COMPLETED**: Enhanced Trace Generation UI Implementation  
-- **✅ Nanosecond-Precise Time Inputs**: Replaced datetime-local inputs with RFC3339 text inputs supporting full nanosecond precision
-- **✅ Auto-Default Time Ranges**: Automatically populate start/end times from process.start_time to process.last_update_time
-- **✅ RFC3339 Validation**: Real-time validation with visual feedback (red borders) and human-readable display format
-- **✅ Reset Functionality**: One-click buttons to restore process default time ranges
-- **✅ Backend Integration**: Send time_range parameter to existing backend API endpoint
-- **✅ Field Name Corrections**: Renamed misleading "begin"/"end" fields to accurate "start_time"/"last_update_time"
-- **✅ SQL Query Updates**: Removed confusing aliases and used actual database field names
-
-**Implementation Details**:
-- **Time Range Format**: Full RFC3339 with nanoseconds (e.g., `2025-08-20T15:26:02.479554123Z`)
-- **Field Corrections**: `begin` → `start_time`, `end` → `last_update_time` (accurately reflects last telemetry data received)
-- **Validation**: Real-time RFC3339 format validation prevents invalid trace generation requests
-- **User Experience**: Monospace font inputs with human-readable display format below each input
-- **Backend Support**: time_range parameter was already supported - UI enhancement enables precise trace windows
-- **Code Locations**: `/rust/analytics-web-srv/src/main.rs`, `/rust/public/src/client/query_processes.rs`, `/analytics-web-app/src/app/process/[id]/page.tsx`, `/analytics-web-app/src/types/index.ts`
-
-### ✅ **COMPLETED**: Enhanced Process Info Tab Implementation
-- **✅ PreciseTimestamp Component**: Created reusable component with nanosecond precision display, timezone support, and copy functionality
-- **✅ Nanosecond Duration Calculations**: Implemented exact process duration calculations with microsecond precision display  
-- **✅ Interactive RFC3339 Display**: Toggle to show/hide full RFC3339 timestamps with single-click copy
-- **✅ Enhanced Layout**: Four-panel layout with Start Time, Last Update, Process Duration, and Active Threads
-- **✅ Log View Precision**: Enhanced log timestamps to show microseconds (HH:MM:SS.mmm.μμμ format)
-- **✅ Copy Functionality**: One-click copy for all timestamp formats with visual feedback
-- **✅ Clean UI**: Streamlined "Show RFC3339" toggle with minimal, focused display
-
-**Implementation Details**:
-- **PreciseTimestamp Component**: `/analytics-web-app/src/components/PreciseTimestamp.tsx` - Reusable component with RFC3339 parsing and multiple format support
-- **Duration Algorithm**: Nanosecond-precise calculation extracting fractional seconds from RFC3339 strings with smart unit formatting
-- **Log Timestamps**: Enhanced precision showing `14:52:24.650.174` format extracted from RFC3339 strings
-- **User Experience**: Clean toggle interface, monospace fonts for technical precision, hover states and visual feedback
-- **Layout Improvements**: Responsive grid with proper spacing, consistent styling, and intuitive interactions
-- **Code Locations**: `/analytics-web-app/src/components/PreciseTimestamp.tsx`, `/analytics-web-app/src/app/process/[id]/page.tsx`
-
-### Process Info Tab Enhancements
-- **Precise Timestamps**: Display full nanosecond precision for start/end times
-- **Duration Calculation**: Show exact process duration with nanosecond accuracy
-- **Timezone Support**: Display timestamps in both UTC and local timezone
-- **Copy Functionality**: Allow copying precise timestamps for external use
-- **Visual Hierarchy**: Distinguish between human-readable and precise timestamps
-
-### Error Handling Implementation
-
-**Backend Error Strategy (Rust + anyhow)**:
-- Replace all `eprintln!` with `anyhow::Result<T>` return types
-- Use `anyhow::Context` to add meaningful error context
-- Implement proper HTTP error responses with structured JSON error format
-- Log errors using tracing macros while returning structured errors to client
-
-**Frontend Error Display (React)**:
-- Error boundary components to catch and display React errors
-- Toast notifications for API operation failures  
-- Inline error messages for form validation
-- Retry mechanisms with exponential backoff
-- Error state management in React Query
-
-**API Error Response Format**:
-```json
-{
-  "error": {
-    "type": "FlightSQLConnectionError",
-    "message": "Failed to connect to FlightSQL service",
-    "details": "Connection refused at localhost:32010"
-  }
-}
-```
-
-### Implementation Requirements
-- **Frontend**: Enhanced datetime-local inputs or custom nanosecond picker
-- **Backend**: Accept and validate nanosecond-precise TimeRange parameters  
-- **API**: Update GenerateTraceRequest to handle precise timestamp boundaries
-- **Process Info UI**: Display both human-readable and precise timestamp formats
-- **UX**: Show process duration and allow fine-tuned trace window selection
 
 ## Architecture Decision
 
@@ -605,3 +445,18 @@ async fn generate_perfetto_trace() -> impl IntoResponse {
 3. **User Experience**: Modern, responsive UI with real-time progress feedback
 4. **Scalable Architecture**: Ready for production deployment and future feature additions
 5. **Developer Productivity**: Fast development cycle with hot reloading and comprehensive testing
+
+## Future Low-Priority Enhancements
+
+The following items would improve the user experience but are not critical for the current phase:
+
+- **Loading skeletons** for better perceived performance
+- **Responsive design improvements** for mobile/tablet views  
+- **Keyboard shortcuts** for common actions (refresh, copy, etc.)
+- **Enhanced error states** with retry buttons and clearer messaging
+- **Process search/filtering** with debounced input
+- **Dark mode support** with theme toggle
+- **Tooltips** for technical terms and icons
+- **Accessibility improvements** (ARIA labels, focus management)
+- **Bulk operations** for trace generation
+- **Visual hierarchy refinements** with consistent spacing and typography

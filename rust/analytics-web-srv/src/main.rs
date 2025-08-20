@@ -183,16 +183,16 @@ async fn main() -> Result<()> {
         auth_token,
     };
     let health_routes = Router::new()
-        .route("/api/health", get(health_check))
+        .route("/analyticsweb/health", get(health_check))
         .with_state(state.clone());
         
     let api_routes = Router::new()
-        .route("/api/processes", get(list_processes))
-        .route("/api/perfetto/{process_id}/info", get(get_trace_info))
-        .route("/api/perfetto/{process_id}/validate", post(validate_trace))
-        .route("/api/perfetto/{process_id}/generate", post(generate_trace))
-        .route("/api/process/{process_id}/log-entries", get(get_process_log_entries))
-        .route("/api/process/{process_id}/statistics", get(get_process_statistics))
+        .route("/analyticsweb/processes", get(list_processes))
+        .route("/analyticsweb/perfetto/{process_id}/info", get(get_trace_info))
+        .route("/analyticsweb/perfetto/{process_id}/validate", post(validate_trace))
+        .route("/analyticsweb/perfetto/{process_id}/generate", post(generate_trace))
+        .route("/analyticsweb/process/{process_id}/log-entries", get(get_process_log_entries))
+        .route("/analyticsweb/process/{process_id}/statistics", get(get_process_statistics))
         .layer(middleware::from_fn(observability_middleware))
         .with_state(state);
     let serve_dir = ServeDir::new(&args.frontend_dir)

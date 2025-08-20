@@ -1,6 +1,6 @@
 import { ProcessInfo, TraceMetadata, GenerateTraceRequest, HealthCheck, ProgressUpdate, BinaryStartMarker, LogEntry, ProcessStatistics } from '@/types'
 
-const API_BASE = process.env.NODE_ENV === 'development' ? 'http://localhost:8000/api' : '/api'
+const API_BASE = process.env.NODE_ENV === 'development' ? 'http://localhost:8000/analyticsweb' : '/analyticsweb'
 
 export interface ApiError {
   type: string
