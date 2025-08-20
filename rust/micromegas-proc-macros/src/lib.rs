@@ -105,6 +105,7 @@ pub fn micromegas_main(
     let mut builder_calls = vec![
         quote! { .with_ctrlc_handling() },
         quote! { .with_local_sink_max_level(micromegas::tracing::levels::LevelFilter::Debug) },
+        quote! { .with_process_property("version".to_string(), env!("CARGO_PKG_VERSION").to_string()) },
     ];
 
     if let Some(level) = max_level_override {
