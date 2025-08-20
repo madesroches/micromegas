@@ -54,11 +54,11 @@ Micromegas consists of several key components:
 
 Unlike traditional observability platforms with opaque and often escalating costs, Micromegas offers a transparent and **orders of magnitude more efficient** solution. With Micromegas, you can afford to record billions of events without relying heavily on sampling, gaining a complete and accurate picture of your systems. By leveraging your own cloud infrastructure, Micromegas drastically reduces your observability spend, especially at scale.
 
-Discover how Micromegas achieves this unparalleled cost efficiency and compare it with traditional solutions in our detailed [Cost Effectiveness](./doc/cost/COST_EFFECTIVENESS.md) document.
+Discover how Micromegas achieves this unparalleled cost efficiency and compare it with traditional solutions in our detailed [Cost Effectiveness](https://madesroches.github.io/micromegas/docs/cost-effectiveness/) document.
 
 ## Getting Started
 
-To get started with Micromegas, please refer to the [GETTING_STARTED.md](./doc/GETTING_STARTED.md) guide.
+To get started with Micromegas, please refer to the [Getting Started](https://madesroches.github.io/micromegas/docs/getting-started/) guide.
 
 
 ## Current Status & Roadmap
@@ -76,7 +76,7 @@ For a detailed history of changes, please see the [CHANGELOG.md](./CHANGELOG.md)
 
 ## Contributing
 
-We welcome contributions from the community! If you're interested in helping improve Micromegas, please see our [Contribution Guidelines](CONTRIBUTING.md) for more details on how to get involved.
+We welcome contributions from the community! If you're interested in helping improve Micromegas, please see our [Contribution Guidelines](https://madesroches.github.io/micromegas/docs/contributing/) for more details on how to get involved.
 
 Whether it's bug reports, feature requests, or code contributions, your input is valuable.
 

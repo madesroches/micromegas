@@ -2,6 +2,9 @@
 
 Welcome to Micromegas, a unified observability platform designed for high-performance telemetry collection and analytics.
 
+[**→ Source Code on GitHub**](https://github.com/madesroches/micromegas){ .md-button .md-button--primary }
+[**→ Get Started**](getting-started.md){ .md-button }
+
 ## What is Micromegas?
 
 Micromegas is a comprehensive observability solution that provides:
