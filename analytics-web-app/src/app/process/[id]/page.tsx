@@ -17,14 +17,17 @@ export default function ProcessDetailPage() {
   
   const [isGenerating, setIsGenerating] = useState(false)
   const [progress, setProgress] = useState<ProgressUpdate | null>(null)
-  const [activeTab, setActiveTab] = useState<'info' | 'trace' | 'logs'>('info')
+  const [activeTab, setActiveTab] = useState<'info' | 'trace' | 'log'>('info')
   const [includeThreadSpans, setIncludeThreadSpans] = useState(true)
   const [includeAsyncSpans, setIncludeAsyncSpans] = useState(true)
   const [logLevel, setLogLevel] = useState<string>('all')
   const [logLimit, setLogLimit] = useState<number>(50)
 
   // Fetch processes to find the specific process
-  const { data: processes = [] } = useQuery({
+  const { 
+    data: processes = [], 
+    refetch: refetchProcesses 
+  } = useQuery({
     queryKey: ['processes'],
     queryFn: fetchProcesses,
   })
@@ -39,14 +42,19 @@ export default function ProcessDetailPage() {
   } = useQuery({
     queryKey: ['logs', processId, logLevel, logLimit],
     queryFn: () => fetchProcessLogEntries(processId, logLevel, logLimit),
-    enabled: activeTab === 'logs' && !!process,
+    enabled: activeTab === 'log' && !!process,
+    staleTime: 0, // Always consider data stale so it refetches when tab is activated
   })
 
   // Fetch process statistics
-  const { data: statistics } = useQuery({
+  const { 
+    data: statistics, 
+    refetch: refetchStatistics 
+  } = useQuery({
     queryKey: ['statistics', processId],
     queryFn: () => fetchProcessStatistics(processId),
     enabled: !!process,
+    staleTime: 0, // Always consider data stale so it refetches on refresh
   })
 
   const handleGenerateTrace = async () => {
@@ -67,6 +75,14 @@ export default function ProcessDetailPage() {
     } finally {
       setIsGenerating(false)
       setProgress(null)
+    }
+  }
+
+  const handleRefresh = () => {
+    refetchProcesses()
+    refetchStatistics()
+    if (activeTab === 'log') {
+      refetchLogs()
     }
   }
 
@@ -102,6 +118,13 @@ export default function ProcessDetailPage() {
                 {process.exe} (<CopyableProcessId processId={process.process_id} className="text-sm" />)
               </p>
             </div>
+            <button
+              onClick={handleRefresh}
+              className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors text-sm"
+            >
+              <RefreshCw className="w-4 h-4" />
+              Refresh
+            </button>
           </div>
         </div>
       </div>
@@ -121,7 +144,7 @@ export default function ProcessDetailPage() {
           {[
             { id: 'info' as const, label: 'Process Info' },
             { id: 'trace' as const, label: 'Generate Trace' },
-            { id: 'logs' as const, label: 'Recent Logs' },
+            { id: 'log' as const, label: 'Recent Log' },
           ].map((tab) => (
             <button
               key={tab.id}
@@ -331,7 +354,7 @@ export default function ProcessDetailPage() {
             </div>
           )}
 
-          {activeTab === 'logs' && (
+          {activeTab === 'log' && (
             <div>
               <h2 className="text-lg font-semibold text-gray-800 mb-6">Recent Log Entries</h2>
               
@@ -359,12 +382,6 @@ export default function ProcessDetailPage() {
                   <option value={200}>Last 200</option>
                   <option value={500}>Last 500</option>
                 </select>
-                <button 
-                  className="px-3 py-1 text-xs bg-gray-100 border border-gray-300 rounded hover:bg-gray-200 transition-colors"
-                  onClick={() => refetchLogs()}
-                >
-                  Refresh
-                </button>
                 <span className="ml-auto text-xs text-gray-600">
                   {logsLoading ? 'Loading...' : `Showing ${logEntries.length} entries`}
                 </span>

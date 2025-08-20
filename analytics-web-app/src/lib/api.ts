@@ -2,38 +2,57 @@ import { ProcessInfo, TraceMetadata, GenerateTraceRequest, HealthCheck, Progress
 
 const API_BASE = process.env.NODE_ENV === 'development' ? 'http://localhost:8000/api' : '/api'
 
-export async function fetchProcesses(): Promise<ProcessInfo[]> {
-  const response = await fetch(`${API_BASE}/processes`)
+export interface ApiError {
+  type: string
+  message: string
+  details?: string
+}
+
+export class ApiErrorException extends Error {
+  constructor(public apiError: ApiError) {
+    super(apiError.message)
+    this.name = 'ApiErrorException'
+  }
+}
+
+async function handleResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
-    throw new Error('Failed to fetch processes')
+    try {
+      const errorData = await response.json()
+      if (errorData.error) {
+        throw new ApiErrorException(errorData.error as ApiError)
+      }
+    } catch (parseError) {
+      // If we can't parse the error response, fall back to generic error
+      if (parseError instanceof ApiErrorException) {
+        throw parseError
+      }
+    }
+    throw new Error(`HTTP ${response.status}: ${response.statusText}`)
   }
   return response.json()
 }
 
+export async function fetchProcesses(): Promise<ProcessInfo[]> {
+  const response = await fetch(`${API_BASE}/processes`)
+  return handleResponse<ProcessInfo[]>(response)
+}
+
 export async function fetchTraceMetadata(processId: string): Promise<TraceMetadata> {
   const response = await fetch(`${API_BASE}/perfetto/${processId}/info`)
-  if (!response.ok) {
-    throw new Error('Failed to fetch trace metadata')
-  }
-  return response.json()
+  return handleResponse<TraceMetadata>(response)
 }
 
 export async function validateTrace(processId: string): Promise<any> {
   const response = await fetch(`${API_BASE}/perfetto/${processId}/validate`, {
     method: 'POST'
   })
-  if (!response.ok) {
-    throw new Error('Failed to validate trace')
-  }
-  return response.json()
+  return handleResponse<any>(response)
 }
 
 export async function fetchHealthCheck(): Promise<HealthCheck> {
   const response = await fetch(`${API_BASE}/health`)
-  if (!response.ok) {
-    throw new Error('Failed to fetch health status')
-  }
-  return response.json()
+  return handleResponse<HealthCheck>(response)
 }
 
 export async function generateTrace(
@@ -50,7 +69,17 @@ export async function generateTrace(
   })
   
   if (!response.ok) {
-    throw new Error('Failed to generate trace')
+    try {
+      const errorData = await response.json()
+      if (errorData.error) {
+        throw new ApiErrorException(errorData.error as ApiError)
+      }
+    } catch (parseError) {
+      if (parseError instanceof ApiErrorException) {
+        throw parseError
+      }
+    }
+    throw new Error(`Failed to generate trace: HTTP ${response.status}`)
   }
   
   if (!response.body) {
@@ -127,16 +156,10 @@ export async function fetchProcessLogEntries(
   params.append('limit', limit.toString())
   
   const response = await fetch(`${API_BASE}/process/${processId}/log-entries?${params}`)
-  if (!response.ok) {
-    throw new Error('Failed to fetch log entries')
-  }
-  return response.json()
+  return handleResponse<LogEntry[]>(response)
 }
 
 export async function fetchProcessStatistics(processId: string): Promise<ProcessStatistics> {
   const response = await fetch(`${API_BASE}/process/${processId}/statistics`)
-  if (!response.ok) {
-    throw new Error('Failed to fetch process statistics')
-  }
-  return response.json()
+  return handleResponse<ProcessStatistics>(response)
 }

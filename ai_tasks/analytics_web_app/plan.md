@@ -20,7 +20,7 @@
 - ✅ **RESOLVED**: Process ID display now shows full UUIDs with click-to-copy functionality
 - ✅ **RESOLVED**: Process metrics replaced with real data from analytics service via `/api/process/{id}/statistics` endpoint
 - ✅ **RESOLVED**: Process list ordering by last update time with most recent processes on top
-- **Proper Error Handling**: Replace all `eprintln!` calls in backend with anyhow error propagation and display errors in web UI
+- ✅ **RESOLVED**: Proper Error Handling - Replaced all `eprintln!` calls with anyhow error propagation and added toast notifications for errors in web UI
 - **Remove Fake/Default Data**: Eliminate all hardcoded fallback values, fetch real data or return errors/null when no data available
 - **Enhance Trace Generation UI**: Make time range precise to nanosecond accuracy with default values from process start to last update time
 - **Enhance Process Info Tab**: Display precise nanosecond timestamps and exact duration calculations
@@ -108,6 +108,21 @@
 - **ProcessStatistics struct**: `{ process_id, log_entries, measures, trace_events, thread_count }`
 - **Data Flow**: FlightSQL → Analytics Service → REST API → React Frontend
 - **Performance**: Efficient queries with React Query caching and automatic refresh
+
+### ✅ **COMPLETED**: Proper Error Handling Implementation
+- **✅ Backend Error Types**: Added `ApiError` struct with structured JSON error responses
+- **✅ Replaced eprintln! Calls**: Updated 7 instances in `get_process_log_entries` and `get_process_statistics` functions
+- **✅ anyhow Error Propagation**: All functions now return `Result<T, ApiError>` with proper error context
+- **✅ Toast Notification System**: Added Radix UI toast components with error display
+- **✅ Error Boundaries**: Created React error boundaries to prevent app crashes
+- **✅ API Error Parsing**: Enhanced frontend to parse and display structured backend errors
+- **✅ User Experience**: Errors now show as dismissible toast notifications with clear messages
+
+**Implementation Details**:
+- **Error Response Format**: `{"error": {"type": "ErrorType", "message": "Description", "details": "Context"}}`
+- **Backend**: All `eprintln!` replaced with `anyhow::Result` and structured error responses
+- **Frontend**: `useApiErrorHandler` hook and `ApiErrorException` class for consistent error handling
+- **UI**: Toast notifications with proper styling and auto-dismiss functionality
 
 ### Process Info Tab Enhancements
 - **Precise Timestamps**: Display full nanosecond precision for start/end times

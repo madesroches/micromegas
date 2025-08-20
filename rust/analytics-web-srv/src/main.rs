@@ -126,6 +126,47 @@ struct AppState {
     auth_token: String,
 }
 
+#[derive(Debug, Serialize)]
+struct ApiError {
+    #[serde(rename = "type")]
+    error_type: String,
+    message: String,
+    details: Option<String>,
+}
+
+impl ApiError {
+    fn new(error_type: &str, message: &str) -> Self {
+        Self {
+            error_type: error_type.to_string(),
+            message: message.to_string(),
+            details: None,
+        }
+    }
+
+    fn with_details(error_type: &str, message: &str, details: &str) -> Self {
+        Self {
+            error_type: error_type.to_string(),
+            message: message.to_string(),
+            details: Some(details.to_string()),
+        }
+    }
+}
+
+impl IntoResponse for ApiError {
+    fn into_response(self) -> Response {
+        let body = Json(serde_json::json!({
+            "error": self
+        }));
+        (StatusCode::INTERNAL_SERVER_ERROR, body).into_response()
+    }
+}
+
+impl From<anyhow::Error> for ApiError {
+    fn from(err: anyhow::Error) -> Self {
+        ApiError::new("InternalError", &err.to_string())
+    }
+}
+
 type ProgressStream = Pin<Box<dyn Stream<Item = Result<Bytes, axum::Error>> + Send>>;
 
 
@@ -302,18 +343,17 @@ async fn get_process_log_entries(
     Path(process_id): Path<String>,
     State(state): State<AppState>,
     axum::extract::Query(query): axum::extract::Query<LogsQuery>,
-) -> impl IntoResponse {
+) -> Result<Json<Vec<LogEntry>>, ApiError> {
     let limit = query.limit.unwrap_or(50);
     let level_filter = query.level.unwrap_or_else(|| "all".to_string());
     
     let client_factory = BearerFlightSQLClientFactory::new(state.auth_token.clone());
-    let mut client = match client_factory.make_client().await {
-        Ok(client) => client,
-        Err(e) => {
-            eprintln!("Failed to create FlightSQL client: {}", e);
-            return Json(Vec::<LogEntry>::new());
-        }
-    };
+    let mut client = client_factory.make_client().await
+        .map_err(|e| ApiError::with_details(
+            "FlightSQLConnectionError", 
+            "Failed to create FlightSQL client", 
+            &e.to_string()
+        ))?;
     
     // Build SQL query
     let level_condition = match level_filter.as_str() {
@@ -337,81 +377,81 @@ async fn get_process_log_entries(
     
     let mut logs = Vec::new();
     
-    match client.query_stream(sql, None).await {
-        Ok(mut stream) => {
-            while let Some(batch) = stream.next().await {
-                match batch {
-                    Ok(batch) => {
-                        let times: &TimestampNanosecondArray = match typed_column_by_name(&batch, "time") {
-                            Ok(arr) => arr,
-                            Err(_) => continue,
-                        };
-                        let levels: &Int32Array = match typed_column_by_name(&batch, "level") {
-                            Ok(arr) => arr,
-                            Err(_) => continue,
-                        };
-                        let targets: &StringArray = match typed_column_by_name(&batch, "target") {
-                            Ok(arr) => arr,
-                            Err(_) => continue,
-                        };
-                        let msgs: &StringArray = match typed_column_by_name(&batch, "msg") {
-                            Ok(arr) => arr,
-                            Err(_) => continue,
-                        };
-                        
-                        for row in 0..batch.num_rows() {
-                            let level_value = levels.value(row);
-                            let level_str = match level_value {
-                                1 => "FATAL",
-                                2 => "ERROR",
-                                3 => "WARN",
-                                4 => "INFO",
-                                5 => "DEBUG",
-                                6 => "TRACE",
-                                _ => "UNKNOWN",
-                            }.to_string();
-                            
-                            logs.push(LogEntry {
-                                time: DateTime::from_timestamp_nanos(times.value(row)),
-                                level: level_str,
-                                target: targets.value(row).to_string(),
-                                msg: msgs.value(row).to_string(),
-                            });
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("Error processing batch: {}", e);
-                    }
-                }
-            }
-        }
-        Err(e) => {
-            eprintln!("Failed to query logs: {}", e);
+    let mut stream = client.query_stream(sql, None).await
+        .map_err(|e| ApiError::with_details(
+            "DatabaseQueryError", 
+            "Failed to query log entries", 
+            &e.to_string()
+        ))?;
+
+    while let Some(batch) = stream.next().await {
+        let batch = batch.map_err(|e| ApiError::with_details(
+            "StreamProcessingError", 
+            "Error processing query result batch", 
+            &e.to_string()
+        ))?;
+
+        let times: &TimestampNanosecondArray = typed_column_by_name(&batch, "time")
+            .map_err(|e| ApiError::with_details(
+                "DataParsingError", 
+                "Failed to parse time column", 
+                &e.to_string()
+            ))?;
+        let levels: &Int32Array = typed_column_by_name(&batch, "level")
+            .map_err(|e| ApiError::with_details(
+                "DataParsingError", 
+                "Failed to parse level column", 
+                &e.to_string()
+            ))?;
+        let targets: &StringArray = typed_column_by_name(&batch, "target")
+            .map_err(|e| ApiError::with_details(
+                "DataParsingError", 
+                "Failed to parse target column", 
+                &e.to_string()
+            ))?;
+        let msgs: &StringArray = typed_column_by_name(&batch, "msg")
+            .map_err(|e| ApiError::with_details(
+                "DataParsingError", 
+                "Failed to parse msg column", 
+                &e.to_string()
+            ))?;
+        
+        for row in 0..batch.num_rows() {
+            let level_value = levels.value(row);
+            let level_str = match level_value {
+                1 => "FATAL",
+                2 => "ERROR",
+                3 => "WARN",
+                4 => "INFO",
+                5 => "DEBUG",
+                6 => "TRACE",
+                _ => "UNKNOWN",
+            }.to_string();
+            
+            logs.push(LogEntry {
+                time: DateTime::from_timestamp_nanos(times.value(row)),
+                level: level_str,
+                target: targets.value(row).to_string(),
+                msg: msgs.value(row).to_string(),
+            });
         }
     }
     
-    Json(logs)
+    Ok(Json(logs))
 }
 
 #[span_fn]
 async fn get_process_statistics(
     Path(process_id): Path<String>,
     State(state): State<AppState>,
-) -> impl IntoResponse {
+) -> Result<Json<ProcessStatistics>, ApiError> {
     let client_factory = BearerFlightSQLClientFactory::new(state.auth_token.clone());
-    let mut client = match client_factory.make_client().await {
-        Ok(client) => client,
-        Err(e) => {
-            eprintln!("Failed to create FlightSQL client: {}", e);
-            return Json(ProcessStatistics {
-                process_id: process_id.clone(),
-                log_entries: 0,
-                measures: 0,
-                trace_events: 0,
-                thread_count: 0,
-            });
-        }
-    };
+    let mut client = client_factory.make_client().await
+        .map_err(|e| ApiError::with_details(
+            "FlightSQLConnectionError", 
+            "Failed to create FlightSQL client", 
+            &e.to_string()
+        ))?;
     
     // Try to get real log count, with fallback to reasonable estimates
     let sql = format!(
@@ -424,41 +464,44 @@ async fn get_process_statistics(
     let mut trace_events = 0u64;
     let mut thread_count = 0u64;
     
-    match client.query_stream(sql, None).await {
-        Ok(mut stream) => {
-            while let Some(batch) = stream.next().await {
-                match batch {
-                    Ok(batch) => {
-                        // Try different possible column names and types that COUNT(*) might return
-                        if let Ok(log_count) = typed_column_by_name::<UInt64Array>(&batch, "log_count") {
-                            for row in 0..batch.num_rows() {
-                                log_entries = log_count.value(row);
-                            }
-                        } else if let Ok(log_count) = typed_column_by_name::<Int64Array>(&batch, "log_count") {
-                            for row in 0..batch.num_rows() {
-                                log_entries = log_count.value(row) as u64;
-                            }
-                        } else if let Ok(count) = typed_column_by_name::<UInt64Array>(&batch, "COUNT(*)") {
-                            for row in 0..batch.num_rows() {
-                                log_entries = count.value(row);
-                            }
-                        } else if let Ok(count) = typed_column_by_name::<Int64Array>(&batch, "COUNT(*)") {
-                            for row in 0..batch.num_rows() {
-                                log_entries = count.value(row) as u64;
-                            }
-                        } else {
-                            eprintln!("Could not find count column in batch. Available columns: {:?}", 
-                                batch.schema().fields().iter().map(|f| (f.name(), f.data_type())).collect::<Vec<_>>());
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("Error processing batch: {}", e);
-                    }
-                }
+    let mut stream = client.query_stream(sql, None).await
+        .map_err(|e| ApiError::with_details(
+            "DatabaseQueryError", 
+            "Failed to query process statistics", 
+            &e.to_string()
+        ))?;
+
+    while let Some(batch) = stream.next().await {
+        let batch = batch.map_err(|e| ApiError::with_details(
+            "StreamProcessingError", 
+            "Error processing statistics query result batch", 
+            &e.to_string()
+        ))?;
+
+        // Try different possible column names and types that COUNT(*) might return
+        if let Ok(log_count) = typed_column_by_name::<UInt64Array>(&batch, "log_count") {
+            for row in 0..batch.num_rows() {
+                log_entries = log_count.value(row);
             }
-        }
-        Err(e) => {
-            eprintln!("Failed to query process statistics: {}", e);
+        } else if let Ok(log_count) = typed_column_by_name::<Int64Array>(&batch, "log_count") {
+            for row in 0..batch.num_rows() {
+                log_entries = log_count.value(row) as u64;
+            }
+        } else if let Ok(count) = typed_column_by_name::<UInt64Array>(&batch, "COUNT(*)") {
+            for row in 0..batch.num_rows() {
+                log_entries = count.value(row);
+            }
+        } else if let Ok(count) = typed_column_by_name::<Int64Array>(&batch, "COUNT(*)") {
+            for row in 0..batch.num_rows() {
+                log_entries = count.value(row) as u64;
+            }
+        } else {
+            return Err(ApiError::with_details(
+                "DataParsingError", 
+                "Could not find count column in query result", 
+                &format!("Available columns: {:?}", 
+                    batch.schema().fields().iter().map(|f| (f.name(), f.data_type())).collect::<Vec<_>>())
+            ));
         }
     }
     
@@ -487,14 +530,15 @@ async fn get_process_statistics(
         thread_count = (log_entries / 50).max(1).min(16);
     }
     
-    Json(ProcessStatistics {
+    Ok(Json(ProcessStatistics {
         process_id,
         log_entries,
         measures,
         trace_events,
         thread_count,
-    })
+    }))
 }
+
 
 fn generate_trace_stream(
     process_id: String, 

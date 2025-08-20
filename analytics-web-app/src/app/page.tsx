@@ -6,12 +6,14 @@ import { ProcessInfo, ProgressUpdate, GenerateTraceRequest } from '@/types'
 import { fetchProcesses, fetchHealthCheck, generateTrace } from '@/lib/api'
 import { ProcessTable } from '@/components/ProcessTable'
 import { TraceGenerationProgress } from '@/components/TraceGenerationProgress'
+import { useApiErrorHandler } from '@/components/ErrorBoundary'
 import { AlertCircle } from 'lucide-react'
 
 export default function HomePage() {
   const [isGenerating, setIsGenerating] = useState(false)
   const [progress, setProgress] = useState<ProgressUpdate | null>(null)
   const [currentProcessId, setCurrentProcessId] = useState<string | null>(null)
+  const handleApiError = useApiErrorHandler()
 
   // Fetch health status
   const { data: health, isLoading: healthLoading } = useQuery({
@@ -47,8 +49,7 @@ export default function HomePage() {
         setProgress(update)
       })
     } catch (error) {
-      console.error('Failed to generate trace:', error)
-      // TODO: Show error notification
+      handleApiError(error)
     } finally {
       setIsGenerating(false)
       setCurrentProcessId(null)
@@ -59,6 +60,7 @@ export default function HomePage() {
   const handleRefresh = () => {
     refetchProcesses()
   }
+
 
   return (
     <div className="min-h-screen" style={{ backgroundColor: '#f8fafc' }}>
