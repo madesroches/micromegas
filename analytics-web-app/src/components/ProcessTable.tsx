@@ -2,18 +2,17 @@
 
 import { useState, useMemo } from 'react'
 import { ProcessInfo } from '@/types'
-import { formatDateTime, formatRelativeTime, cn } from '@/lib/utils'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Button } from '@/components/ui/button'
-import { Play, Search, Filter } from 'lucide-react'
+import { formatRelativeTime } from '@/lib/utils'
+import Link from 'next/link'
 
 interface ProcessTableProps {
   processes: ProcessInfo[]
   onGenerateTrace: (processId: string) => void
   isGenerating: boolean
+  onRefresh?: () => void
 }
 
-export function ProcessTable({ processes, onGenerateTrace, isGenerating }: ProcessTableProps) {
+export function ProcessTable({ processes, onGenerateTrace, isGenerating, onRefresh }: ProcessTableProps) {
   const [searchTerm, setSearchTerm] = useState('')
   const [sortField, setSortField] = useState<keyof ProcessInfo>('begin')
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc')
@@ -51,163 +50,109 @@ export function ProcessTable({ processes, onGenerateTrace, isGenerating }: Proce
   }
 
   return (
-    <div className="space-y-4">
-      {/* Search and Filter */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Search className="w-5 h-5" />
-            Search & Filter
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="flex gap-4">
-            <div className="flex-1">
-              <input
-                type="text"
-                placeholder="Search by executable, computer, username, or process ID..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full px-3 py-2 border border-input rounded-md bg-background"
-              />
+    <div className="space-y-8">
+      {/* Process Filters */}
+      <div className="bg-white rounded-lg border border-gray-200 shadow-sm p-6">
+        <h2 className="text-lg font-semibold text-gray-800 mb-4">Process Filters</h2>
+        <input
+          type="text"
+          placeholder="Search processes by name, process_id, or command..."
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+          className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm mb-4 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
+        />
+        
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2">
+              <label className="text-sm font-medium text-gray-700">Time Range:</label>
+              <select className="px-2 py-1 border border-gray-300 rounded text-sm bg-white">
+                <option>Last Hour</option>
+                <option>Last 6 Hours</option>
+                <option selected>Last 24 Hours</option>
+                <option>Last Week</option>
+                <option>Custom Range</option>
+              </select>
             </div>
-            <Button variant="outline" size="sm">
-              <Filter className="w-4 h-4 mr-2" />
-              Filters
-            </Button>
           </div>
-        </CardContent>
-      </Card>
+          <button 
+            onClick={onRefresh}
+            className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded text-sm font-medium hover:bg-blue-700 transition-colors"
+          >
+            🔄 Refresh
+          </button>
+        </div>
+      </div>
 
       {/* Process Table */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Available Processes ({filteredAndSortedProcesses.length})</CardTitle>
-        </CardHeader>
-        <CardContent className="p-0">
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead>
-                <tr className="border-b bg-muted/50">
-                  <th className="p-3 text-left">
-                    <Button 
-                      variant="ghost" 
-                      size="sm"
-                      onClick={() => handleSort('exe')}
-                      className="font-semibold"
-                    >
-                      Executable
-                      {sortField === 'exe' && (
-                        <span className="ml-1">{sortDirection === 'asc' ? '↑' : '↓'}</span>
-                      )}
-                    </Button>
-                  </th>
-                  <th className="p-3 text-left">
-                    <Button 
-                      variant="ghost" 
-                      size="sm"
-                      onClick={() => handleSort('computer')}
-                      className="font-semibold"
-                    >
-                      Computer
-                      {sortField === 'computer' && (
-                        <span className="ml-1">{sortDirection === 'asc' ? '↑' : '↓'}</span>
-                      )}
-                    </Button>
-                  </th>
-                  <th className="p-3 text-left">
-                    <Button 
-                      variant="ghost" 
-                      size="sm"
-                      onClick={() => handleSort('username')}
-                      className="font-semibold"
-                    >
-                      User
-                      {sortField === 'username' && (
-                        <span className="ml-1">{sortDirection === 'asc' ? '↑' : '↓'}</span>
-                      )}
-                    </Button>
-                  </th>
-                  <th className="p-3 text-left">
-                    <Button 
-                      variant="ghost" 
-                      size="sm"
-                      onClick={() => handleSort('begin')}
-                      className="font-semibold"
-                    >
-                      Start Time
-                      {sortField === 'begin' && (
-                        <span className="ml-1">{sortDirection === 'asc' ? '↑' : '↓'}</span>
-                      )}
-                    </Button>
-                  </th>
-                  <th className="p-3 text-left">Duration</th>
-                  <th className="p-3 text-left">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredAndSortedProcesses.map((process) => {
-                  const startTime = new Date(process.begin)
-                  const endTime = new Date(process.end)
-                  const duration = Math.round((endTime.getTime() - startTime.getTime()) / 1000)
-                  
-                  return (
-                    <tr key={process.process_id} className="border-b hover:bg-muted/50">
-                      <td className="p-3">
-                        <div>
-                          <div className="font-medium">{process.exe}</div>
-                          <div className="text-sm text-muted-foreground">
-                            {process.process_id.substring(0, 8)}...
-                          </div>
-                        </div>
-                      </td>
-                      <td className="p-3">
-                        <div>
-                          <div className="font-medium">{process.computer}</div>
-                          <div className="text-sm text-muted-foreground">{process.distro}</div>
-                        </div>
-                      </td>
-                      <td className="p-3">{process.username}</td>
-                      <td className="p-3">
-                        <div>
-                          <div className="font-medium">{formatRelativeTime(process.begin)}</div>
-                          <div className="text-sm text-muted-foreground">
-                            {formatDateTime(process.begin)}
-                          </div>
-                        </div>
-                      </td>
-                      <td className="p-3">
-                        <div className="text-sm">
-                          {duration < 60 ? `${duration}s` : 
-                           duration < 3600 ? `${Math.floor(duration / 60)}m ${duration % 60}s` :
-                           `${Math.floor(duration / 3600)}h ${Math.floor((duration % 3600) / 60)}m`}
-                        </div>
-                      </td>
-                      <td className="p-3">
-                        <Button
-                          size="sm"
-                          onClick={() => onGenerateTrace(process.process_id)}
-                          disabled={isGenerating}
-                          className="flex items-center gap-2"
-                        >
-                          <Play className="w-4 h-4" />
-                          Analyze
-                        </Button>
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
+      <div className="bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-gray-50 border-b border-gray-200">
+                <th className="px-4 py-3 text-left font-semibold text-gray-700 whitespace-nowrap">Process</th>
+                <th className="px-4 py-3 text-left font-semibold text-gray-700 whitespace-nowrap">Start Time</th>
+                <th className="px-4 py-3 text-left font-semibold text-gray-700 whitespace-nowrap">Last Update</th>
+                <th className="px-4 py-3 text-left font-semibold text-gray-700 whitespace-nowrap">Username</th>
+                <th className="px-4 py-3 text-left font-semibold text-gray-700 whitespace-nowrap">Computer</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredAndSortedProcesses.map((process) => {
+                const startTime = new Date(process.begin)
+                const endTime = new Date(process.end)
+                
+                return (
+                  <tr key={process.process_id} className="border-b border-gray-100 hover:bg-gray-50">
+                    <td className="px-4 py-3">
+                      <Link 
+                        href={`/process/${process.process_id}`}
+                        className="text-blue-600 hover:text-blue-800 hover:underline font-semibold"
+                      >
+                        {process.exe}
+                      </Link>
+                      <div className="text-xs text-gray-500 mt-0.5">{process.exe}</div>
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="font-medium text-gray-700">
+                        {startTime.toLocaleTimeString('en-US', { 
+                          hour: 'numeric', 
+                          minute: '2-digit', 
+                          hour12: true 
+                        })}
+                      </div>
+                      <div className="text-xs text-gray-500">
+                        {startTime.toLocaleDateString('en-US', { 
+                          month: 'short', 
+                          day: 'numeric' 
+                        })}
+                      </div>
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="font-medium text-gray-700">
+                        {endTime.toLocaleTimeString('en-US', { 
+                          hour: 'numeric', 
+                          minute: '2-digit', 
+                          hour12: true 
+                        })}
+                      </div>
+                      <div className="text-xs text-gray-500">{formatRelativeTime(process.end)}</div>
+                    </td>
+                    <td className="px-4 py-3 text-gray-700">{process.username}</td>
+                    <td className="px-4 py-3 text-gray-700">{process.computer}</td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+        
+        {filteredAndSortedProcesses.length === 0 && (
+          <div className="px-4 py-8 text-center text-gray-500">
+            {searchTerm ? 'No processes match your search criteria.' : 'No processes available.'}
           </div>
-          
-          {filteredAndSortedProcesses.length === 0 && (
-            <div className="p-8 text-center text-muted-foreground">
-              {searchTerm ? 'No processes match your search criteria.' : 'No processes available.'}
-            </div>
-          )}
-        </CardContent>
-      </Card>
+        )}
+      </div>
     </div>
   )
 }

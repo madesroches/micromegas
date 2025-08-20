@@ -46,3 +46,10 @@ export interface HealthCheck {
   timestamp: string;
   flightsql_connected: boolean;
 }
+
+export interface LogEntry {
+  time: string;
+  level: string;
+  target: string;
+  msg: string;
+}

@@ -9,11 +9,11 @@ use axum::{
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use clap::Parser;
-use futures::Stream;
+use futures::{Stream, StreamExt};
 use http::header;
 use micromegas::analytics::{dfext::typed_column::typed_column_by_name, time::TimeRange};
 use micromegas::client::{flightsql_client_factory::{FlightSQLClientFactory, BearerFlightSQLClientFactory}, perfetto_trace_client, query_processes::ProcessQueryBuilder};
-use datafusion::arrow::array::{StringArray, TimestampNanosecondArray};
+use datafusion::arrow::array::{Int32Array, StringArray, TimestampNanosecondArray};
 use serde::{Deserialize, Serialize};
 use std::{pin::Pin, time::Duration};
 use tower_http::{
@@ -94,6 +94,20 @@ struct HealthCheck {
     flightsql_connected: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LogEntry {
+    time: DateTime<Utc>,
+    level: String,
+    target: String,
+    msg: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct LogsQuery {
+    limit: Option<usize>,
+    level: Option<String>,
+}
+
 #[derive(Clone)]
 struct AppState {
     auth_token: String,
@@ -120,6 +134,7 @@ async fn main() -> Result<()> {
         .route("/api/perfetto/{process_id}/info", get(get_trace_info))
         .route("/api/perfetto/{process_id}/validate", post(validate_trace))
         .route("/api/perfetto/{process_id}/generate", post(generate_trace))
+        .route("/api/process/{process_id}/log-entries", get(get_process_log_entries))
         .with_state(state);
     let serve_dir = ServeDir::new(&args.frontend_dir)
         .not_found_service(ServeFile::new(format!("{}/index.html", args.frontend_dir)));
@@ -260,6 +275,101 @@ async fn generate_trace(
         .header(header::TRANSFER_ENCODING, "chunked")
         .body(axum::body::Body::from_stream(stream))
         .unwrap()
+}
+
+async fn get_process_log_entries(
+    Path(process_id): Path<String>,
+    State(state): State<AppState>,
+    axum::extract::Query(query): axum::extract::Query<LogsQuery>,
+) -> impl IntoResponse {
+    let limit = query.limit.unwrap_or(50);
+    let level_filter = query.level.unwrap_or_else(|| "all".to_string());
+    
+    let client_factory = BearerFlightSQLClientFactory::new(state.auth_token.clone());
+    let mut client = match client_factory.make_client().await {
+        Ok(client) => client,
+        Err(e) => {
+            eprintln!("Failed to create FlightSQL client: {}", e);
+            return Json(Vec::<LogEntry>::new());
+        }
+    };
+    
+    // Build SQL query
+    let level_condition = match level_filter.as_str() {
+        "fatal" => "AND level = 1",    // FATAL level
+        "error" => "AND level = 2",    // ERROR level
+        "warn" => "AND level = 3",     // WARN level
+        "info" => "AND level = 4",     // INFO level
+        "debug" => "AND level = 5",    // DEBUG level
+        "trace" => "AND level = 6",    // TRACE level
+        _ => "",  // No filter
+    };
+    
+    let sql = format!(
+        "SELECT time, level, target, msg 
+         FROM log_entries 
+         WHERE process_id = '{}' {} 
+         ORDER BY time DESC 
+         LIMIT {}",
+        process_id, level_condition, limit
+    );
+    
+    let mut logs = Vec::new();
+    
+    match client.query_stream(sql, None).await {
+        Ok(mut stream) => {
+            while let Some(batch) = stream.next().await {
+                match batch {
+                    Ok(batch) => {
+                        let times: &TimestampNanosecondArray = match typed_column_by_name(&batch, "time") {
+                            Ok(arr) => arr,
+                            Err(_) => continue,
+                        };
+                        let levels: &Int32Array = match typed_column_by_name(&batch, "level") {
+                            Ok(arr) => arr,
+                            Err(_) => continue,
+                        };
+                        let targets: &StringArray = match typed_column_by_name(&batch, "target") {
+                            Ok(arr) => arr,
+                            Err(_) => continue,
+                        };
+                        let msgs: &StringArray = match typed_column_by_name(&batch, "msg") {
+                            Ok(arr) => arr,
+                            Err(_) => continue,
+                        };
+                        
+                        for row in 0..batch.num_rows() {
+                            let level_value = levels.value(row);
+                            let level_str = match level_value {
+                                1 => "FATAL",
+                                2 => "ERROR",
+                                3 => "WARN",
+                                4 => "INFO",
+                                5 => "DEBUG",
+                                6 => "TRACE",
+                                _ => "UNKNOWN",
+                            }.to_string();
+                            
+                            logs.push(LogEntry {
+                                time: DateTime::from_timestamp_nanos(times.value(row)),
+                                level: level_str,
+                                target: targets.value(row).to_string(),
+                                msg: msgs.value(row).to_string(),
+                            });
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Error processing batch: {}", e);
+                    }
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("Failed to query logs: {}", e);
+        }
+    }
+    
+    Json(logs)
 }
 
 fn generate_trace_stream(

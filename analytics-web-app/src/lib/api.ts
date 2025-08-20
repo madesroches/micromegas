@@ -1,6 +1,6 @@
-import { ProcessInfo, TraceMetadata, GenerateTraceRequest, HealthCheck, ProgressUpdate, BinaryStartMarker } from '@/types'
+import { ProcessInfo, TraceMetadata, GenerateTraceRequest, HealthCheck, ProgressUpdate, BinaryStartMarker, LogEntry } from '@/types'
 
-const API_BASE = process.env.NODE_ENV === 'development' ? 'http://localhost:8000/api' : '/api'
+const API_BASE = process.env.NODE_ENV === 'development' ? 'http://localhost:8001/api' : '/api'
 
 export async function fetchProcesses(): Promise<ProcessInfo[]> {
   const response = await fetch(`${API_BASE}/processes`)
@@ -113,4 +113,22 @@ export async function generateTrace(
   a.click()
   document.body.removeChild(a)
   URL.revokeObjectURL(url)
+}
+
+export async function fetchProcessLogEntries(
+  processId: string, 
+  level?: string, 
+  limit: number = 50
+): Promise<LogEntry[]> {
+  const params = new URLSearchParams()
+  if (level && level !== 'all') {
+    params.append('level', level.toLowerCase())
+  }
+  params.append('limit', limit.toString())
+  
+  const response = await fetch(`${API_BASE}/process/${processId}/log-entries?${params}`)
+  if (!response.ok) {
+    throw new Error('Failed to fetch log entries')
+  }
+  return response.json()
 }
