@@ -2,7 +2,24 @@
 
 ## Overview
 
-Create a modern, production-ready analytics web application for generating and downloading Perfetto traces from micromegas telemetry data. This serves as the foundation for testing async span implementation and provides immediate value as a standalone analytics tool.
+🚧 **FIRST DRAFT IMPLEMENTED**: Basic analytics web application for exploring micromegas telemetry data. This is a working foundation that needs refinement and additional features.
+
+**Current Implementation Status**: 🚧 **INITIAL VERSION** - Working but needs improvements
+
+**Code Locations**:
+- **Backend**: `/rust/analytics-web-srv/` - Basic Rust + Axum web server with HTTP streaming
+- **Frontend**: `/analytics-web-app/` - Initial Next.js + React + TypeScript application  
+- **Development**: `/analytics-web-app/start_analytics_web.py` - Python development script
+- **Commit**: `b9fbc430` - First working version (9,742+ lines added)
+
+**Known Issues & Next Steps**:
+- **Critical**: Implementation did not follow the UI guidelines in the mockups
+- Frontend needs testing with real data
+- UI/UX needs polish and refinement  
+- Error handling needs improvement
+- Additional export formats need implementation
+- Performance optimization required
+- Production deployment configuration needed
 
 **UI Design References**: Visual mockups are available in this directory:
 - `mockup.html` - Main interface with process selection and trace generation
