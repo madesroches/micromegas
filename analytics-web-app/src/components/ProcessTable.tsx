@@ -15,7 +15,7 @@ interface ProcessTableProps {
 
 export function ProcessTable({ processes, onGenerateTrace, isGenerating, onRefresh }: ProcessTableProps) {
   const [searchTerm, setSearchTerm] = useState('')
-  const [sortField, setSortField] = useState<keyof ProcessInfo>('begin')
+  const [sortField, setSortField] = useState<keyof ProcessInfo>('last_update_time')
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc')
 
   const filteredAndSortedProcesses = useMemo(() => {
@@ -30,7 +30,7 @@ export function ProcessTable({ processes, onGenerateTrace, isGenerating, onRefre
       const aVal = a[sortField]
       const bVal = b[sortField]
       
-      if (sortField === 'begin' || sortField === 'end') {
+      if (sortField === 'start_time' || sortField === 'last_update_time') {
         const aDate = new Date(aVal as string).getTime()
         const bDate = new Date(bVal as string).getTime()
         return sortDirection === 'asc' ? aDate - bDate : bDate - aDate
@@ -101,8 +101,8 @@ export function ProcessTable({ processes, onGenerateTrace, isGenerating, onRefre
             </thead>
             <tbody>
               {filteredAndSortedProcesses.map((process) => {
-                const startTime = new Date(process.begin)
-                const endTime = new Date(process.end)
+                const startTime = new Date(process.start_time)
+                const lastUpdateTime = new Date(process.last_update_time)
                 
                 return (
                   <tr key={process.process_id} className="border-b border-gray-100 hover:bg-gray-50">
@@ -135,13 +135,13 @@ export function ProcessTable({ processes, onGenerateTrace, isGenerating, onRefre
                     </td>
                     <td className="px-4 py-3">
                       <div className="font-medium text-gray-700">
-                        {endTime.toLocaleTimeString('en-US', { 
+                        {lastUpdateTime.toLocaleTimeString('en-US', { 
                           hour: 'numeric', 
                           minute: '2-digit', 
                           hour12: true 
                         })}
                       </div>
-                      <div className="text-xs text-gray-500">{formatRelativeTime(process.end)}</div>
+                      <div className="text-xs text-gray-500">{formatRelativeTime(process.last_update_time)}</div>
                     </td>
                     <td className="px-4 py-3 text-gray-700">{process.username}</td>
                     <td className="px-4 py-3 text-gray-700">{process.computer}</td>
