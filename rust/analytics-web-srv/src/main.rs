@@ -11,7 +11,7 @@ use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use clap::Parser;
 use futures::{Stream, StreamExt};
-use http::header;
+use http::{header, HeaderValue, Method};
 use micromegas::analytics::{arrow_properties::read_property_list, dfext::typed_column::typed_column_by_name, time::TimeRange};
 use micromegas::telemetry::property::Property;
 use micromegas::client::{flightsql_client_factory::{FlightSQLClientFactory, BearerFlightSQLClientFactory}, perfetto_trace_client, query_processes::ProcessQueryBuilder};
@@ -179,6 +179,10 @@ async fn main() -> Result<()> {
     let auth_token = std::env::var("MICROMEGAS_AUTH_TOKEN")
         .unwrap_or_else(|_| "".to_string());
     
+    // Configure CORS based on environment variable
+    let cors_origin = std::env::var("ANALYTICS_WEB_CORS_ORIGIN")
+        .unwrap_or_else(|_| "http://localhost:3000".to_string());
+    
     let state = AppState {
         auth_token,
     };
@@ -198,19 +202,32 @@ async fn main() -> Result<()> {
     let serve_dir = ServeDir::new(&args.frontend_dir)
         .not_found_service(ServeFile::new(format!("{}/index.html", args.frontend_dir)));
     
+    // Configure CORS layer
+    let cors_layer = if cors_origin == "*" {
+        // Development mode - allow any origin
+        CorsLayer::new()
+            .allow_origin(Any)
+            .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+            .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION])
+    } else {
+        // Production mode - restrict to specific origin
+        let origin = cors_origin.parse::<HeaderValue>()
+            .expect("Invalid CORS origin format");
+        CorsLayer::new()
+            .allow_origin(origin)
+            .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+            .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION])
+    };
+
     let app = Router::new()
         .merge(health_routes)
         .merge(api_routes)
         .fallback_service(get_service(serve_dir))
-        .layer(
-            CorsLayer::new()
-                .allow_origin(Any)
-                .allow_methods(Any)
-                .allow_headers(Any)
-        );
+        .layer(cors_layer);
 
     let addr = format!("0.0.0.0:{}", args.port);
     println!("Analytics web server starting on {}", addr);
+    println!("CORS origin configured for: {}", cors_origin);
     
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     axum::serve(listener, app).await?;
