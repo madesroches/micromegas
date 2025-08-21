@@ -11,7 +11,8 @@ use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use clap::Parser;
 use datafusion::arrow::array::{
-    Int32Array, Int64Array, ListArray, StringArray, TimestampNanosecondArray, UInt64Array,
+    Int32Array, Int64Array, ListArray, RecordBatch, StringArray, TimestampNanosecondArray,
+    UInt64Array,
 };
 use futures::{Stream, StreamExt};
 use http::{HeaderValue, Method, header};
@@ -20,9 +21,9 @@ use micromegas::analytics::{
     time::TimeRange,
 };
 use micromegas::client::{
+    flightsql_client::Client,
     flightsql_client_factory::{BearerFlightSQLClientFactory, FlightSQLClientFactory},
     perfetto_trace_client,
-    query_processes::ProcessQueryBuilder,
 };
 use micromegas::micromegas_main;
 use micromegas::servers::axum_utils::observability_middleware;
@@ -306,14 +307,28 @@ fn convert_properties_to_map(properties: Vec<Property>) -> HashMap<String, Strin
 }
 
 #[span_fn]
+async fn query_all_processes(client: &mut Client) -> Result<Vec<RecordBatch>> {
+    let sql = r#"SELECT process_id,
+                        start_time,
+                        last_update_time,
+                        exe,
+                        computer,
+                        username,
+                        cpu_brand,
+                        distro,
+                        properties
+              FROM processes
+              ORDER BY last_update_time DESC;"#;
+    client.query(sql.to_owned(), None).await
+}
+
+#[span_fn]
 async fn get_processes_internal(
     client_factory: &BearerFlightSQLClientFactory,
 ) -> Result<Vec<ProcessInfo>> {
     let mut client = client_factory.make_client().await?;
 
-    let query_builder = ProcessQueryBuilder::new();
-
-    let batches = query_builder.query(&mut client).await?;
+    let batches = query_all_processes(&mut client).await?;
 
     let mut processes = Vec::new();
 
@@ -368,7 +383,7 @@ async fn get_trace_info(
         r#"
         SELECT COUNT(DISTINCT stream_id) as thread_count
         FROM blocks
-        WHERE process_id = '{}' 
+        WHERE process_id = '{}'
         AND array_has("streams.tags", 'cpu')
         "#,
         process_id
@@ -485,10 +500,10 @@ async fn get_process_log_entries(
     };
 
     let sql = format!(
-        "SELECT time, level, target, msg 
-         FROM log_entries 
-         WHERE process_id = '{}' {} 
-         ORDER BY time DESC 
+        "SELECT time, level, target, msg
+         FROM log_entries
+         WHERE process_id = '{}' {}
+         ORDER BY time DESC
          LIMIT {}",
         process_id, level_condition, limit
     );
@@ -584,12 +599,12 @@ async fn get_process_statistics(
     // Query actual statistics from different stream types
     let sql = format!(
         r#"
-        SELECT 
+        SELECT
             SUM(CASE WHEN array_has("streams.tags", 'log') THEN nb_objects ELSE 0 END) as log_entries,
             SUM(CASE WHEN array_has("streams.tags", 'metrics') THEN nb_objects ELSE 0 END) as measures,
             SUM(CASE WHEN array_has("streams.tags", 'cpu') THEN nb_objects ELSE 0 END) as trace_events,
             COUNT(DISTINCT CASE WHEN array_has("streams.tags", 'cpu') THEN stream_id ELSE NULL END) as thread_count
-        FROM blocks 
+        FROM blocks
         WHERE process_id = '{}'
         "#,
         process_id
