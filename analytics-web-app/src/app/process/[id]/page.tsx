@@ -56,7 +56,6 @@ export default function ProcessDetailPage() {
         hour: '2-digit',
         minute: '2-digit',
         second: '2-digit',
-        fractionalSecondDigits: 3, // Show milliseconds in display
         hour12: false
       }) + ` (${rfc3339.split('T')[1]})`
     } catch {
@@ -459,7 +458,7 @@ export default function ProcessDetailPage() {
                 <div>
                   <button 
                     onClick={handleGenerateTrace}
-                    disabled={isGenerating || (traceStartTime && !isValidRFC3339(traceStartTime)) || (traceEndTime && !isValidRFC3339(traceEndTime))}
+                    disabled={isGenerating || (!!traceStartTime && !isValidRFC3339(traceStartTime)) || (!!traceEndTime && !isValidRFC3339(traceEndTime))}
                     className="w-full flex items-center justify-center gap-2 px-6 py-3 bg-green-600 text-white rounded font-medium hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
                   >
                     <Play className="w-4 h-4" />
@@ -526,8 +525,7 @@ export default function ProcessDetailPage() {
                       hour12: false,
                       hour: '2-digit',
                       minute: '2-digit',
-                      second: '2-digit',
-                      fractionalSecondDigits: 3
+                      second: '2-digit'
                     })
                     
                     // Extract additional precision from RFC3339 string
