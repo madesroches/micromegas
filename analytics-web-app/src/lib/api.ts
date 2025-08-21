@@ -43,20 +43,13 @@ export async function fetchTraceMetadata(processId: string): Promise<TraceMetada
   return handleResponse<TraceMetadata>(response)
 }
 
-export async function validateTrace(processId: string): Promise<any> {
-  const response = await fetch(`${API_BASE}/perfetto/${processId}/validate`, {
-    method: 'POST'
-  })
-  return handleResponse<any>(response)
-}
-
 export async function fetchHealthCheck(): Promise<HealthCheck> {
   const response = await fetch(`${API_BASE}/health`)
   return handleResponse<HealthCheck>(response)
 }
 
 export async function generateTrace(
-  processId: string, 
+  processId: string,
   request: GenerateTraceRequest,
   onProgress?: (update: ProgressUpdate) => void
 ): Promise<void> {
@@ -67,7 +60,7 @@ export async function generateTrace(
     },
     body: JSON.stringify(request)
   })
-  
+
   if (!response.ok) {
     try {
       const errorData = await response.json()
@@ -81,29 +74,29 @@ export async function generateTrace(
     }
     throw new Error(`Failed to generate trace: HTTP ${response.status}`)
   }
-  
+
   if (!response.body) {
     throw new Error('No response body')
   }
-  
+
   const reader = response.body.getReader()
   const chunks: Uint8Array[] = []
   let progressComplete = false
-  
+
   while (true) {
     const { done, value } = await reader.read()
     if (done) break
-    
+
     if (!progressComplete) {
       // Try to parse as JSON progress update
       try {
         const chunk = new TextDecoder().decode(value)
         const lines = chunk.split('\n').filter(line => line.trim())
-        
+
         for (const line of lines) {
           try {
             const update = JSON.parse(line) as ProgressUpdate | BinaryStartMarker
-            
+
             if (update.type === 'progress' && onProgress) {
               onProgress(update as ProgressUpdate)
               continue
@@ -118,20 +111,20 @@ export async function generateTrace(
             break
           }
         }
-        
+
         if (progressComplete && chunks.length === 0) continue
       } catch {
         // Not JSON, must be binary data
         progressComplete = true
       }
     }
-    
+
     if (progressComplete) {
       // Collect binary chunks
       chunks.push(value)
     }
   }
-  
+
   // Create blob and download
   const blob = new Blob(chunks, { type: 'application/octet-stream' })
   const url = URL.createObjectURL(blob)
@@ -145,8 +138,8 @@ export async function generateTrace(
 }
 
 export async function fetchProcessLogEntries(
-  processId: string, 
-  level?: string, 
+  processId: string,
+  level?: string,
   limit: number = 50
 ): Promise<LogEntry[]> {
   const params = new URLSearchParams()
@@ -154,7 +147,7 @@ export async function fetchProcessLogEntries(
     params.append('level', level.toLowerCase())
   }
   params.append('limit', limit.toString())
-  
+
   const response = await fetch(`${API_BASE}/process/${processId}/log-entries?${params}`)
   return handleResponse<LogEntry[]>(response)
 }

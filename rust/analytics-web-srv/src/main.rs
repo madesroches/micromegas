@@ -1,3 +1,5 @@
+mod queries;
+
 use anyhow::{Context, Result};
 use axum::{
     Json, Router,
@@ -11,8 +13,7 @@ use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use clap::Parser;
 use datafusion::arrow::array::{
-    Int32Array, Int64Array, ListArray, RecordBatch, StringArray, TimestampNanosecondArray,
-    UInt64Array,
+    Int32Array, Int64Array, ListArray, StringArray, TimestampNanosecondArray, UInt64Array,
 };
 use futures::{Stream, StreamExt};
 use http::{HeaderValue, Method, header};
@@ -21,7 +22,6 @@ use micromegas::analytics::{
     time::TimeRange,
 };
 use micromegas::client::{
-    flightsql_client::Client,
     flightsql_client_factory::{BearerFlightSQLClientFactory, FlightSQLClientFactory},
     perfetto_trace_client,
 };
@@ -29,6 +29,9 @@ use micromegas::micromegas_main;
 use micromegas::servers::axum_utils::observability_middleware;
 use micromegas::telemetry::property::Property;
 use micromegas::tracing::prelude::*;
+use queries::{
+    query_all_processes, query_log_entries, query_nb_trace_events, query_process_statistics,
+};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, pin::Pin, time::Duration};
 use tower_http::{
@@ -203,10 +206,6 @@ async fn main() -> Result<()> {
             get(get_trace_info),
         )
         .route(
-            "/analyticsweb/perfetto/{process_id}/validate",
-            post(validate_trace),
-        )
-        .route(
             "/analyticsweb/perfetto/{process_id}/generate",
             post(generate_trace),
         )
@@ -307,22 +306,6 @@ fn convert_properties_to_map(properties: Vec<Property>) -> HashMap<String, Strin
 }
 
 #[span_fn]
-async fn query_all_processes(client: &mut Client) -> Result<Vec<RecordBatch>> {
-    let sql = r#"SELECT process_id,
-                        start_time,
-                        last_update_time,
-                        exe,
-                        computer,
-                        username,
-                        cpu_brand,
-                        distro,
-                        properties
-              FROM processes
-              ORDER BY last_update_time DESC;"#;
-    client.query(sql.to_owned(), None).await
-}
-
-#[span_fn]
 async fn get_processes_internal(
     client_factory: &BearerFlightSQLClientFactory,
 ) -> Result<Vec<ProcessInfo>> {
@@ -378,53 +361,40 @@ async fn get_trace_info(
         )
     })?;
 
-    // Get thread span count by counting streams with cpu tag
-    let sql_streams = format!(
-        r#"
-        SELECT COUNT(DISTINCT stream_id) as thread_count
-        FROM blocks
-        WHERE process_id = '{}'
-        AND array_has("streams.tags", 'cpu')
-        "#,
-        process_id
-    );
+    // Get actual trace event counts from the database
+    let mut trace_events = 0u64;
 
-    let mut thread_span_count = 0u64;
-    let stream_batches = client.query(sql_streams, None).await.map_err(|e| {
-        ApiError::with_details(
-            "DatabaseQueryError",
-            "Failed to query thread streams",
-            &e.to_string(),
-        )
-    })?;
+    let span_batches = query_nb_trace_events(&mut client, &process_id)
+        .await
+        .map_err(|e| {
+            ApiError::with_details(
+                "DatabaseQueryError",
+                "Failed to query trace event counts",
+                &e.to_string(),
+            )
+        })?;
 
-    for batch in stream_batches {
+    for batch in span_batches {
         if batch.num_rows() > 0 {
-            let counts: &Int64Array =
-                typed_column_by_name(&batch, "thread_count").map_err(|e| {
-                    ApiError::with_details(
-                        "DataParsingError",
-                        "Failed to parse thread count",
-                        &e.to_string(),
-                    )
-                })?;
-            thread_span_count = counts.value(0) as u64;
+            trace_events = typed_column_by_name::<UInt64Array>(&batch, "trace_events")
+                .map(|arr| arr.value(0))
+                .or_else(|_| {
+                    typed_column_by_name::<Int64Array>(&batch, "trace_events")
+                        .map(|arr| arr.value(0) as u64)
+                })
+                .unwrap_or(0);
+
+            break; // Single row result
         }
     }
 
-    // Estimate span counts (actual counting would be expensive)
-    let estimated_spans_per_thread = 100;
-    let total_thread_spans = thread_span_count * estimated_spans_per_thread;
-    let total_async_spans = total_thread_spans / 4; // Rough estimate
-    let total_spans = total_thread_spans + total_async_spans;
+    // Calculate realistic size estimate based on actual trace event count
+    let estimated_size_bytes = Some(trace_events * 100);
 
-    // Estimate size (roughly 100 bytes per span)
-    let estimated_size_bytes = Some(total_spans * 100);
-
-    // Estimate generation time based on span count
-    let generation_time_estimate = if total_spans < 1000 {
+    // Estimate generation time based on actual trace event count
+    let generation_time_estimate = if trace_events < 1000 {
         Duration::from_secs(2)
-    } else if total_spans < 10000 {
+    } else if trace_events < 10000 {
         Duration::from_secs(5)
     } else {
         Duration::from_secs(15)
@@ -434,25 +404,14 @@ async fn get_trace_info(
         process_id: process_id.clone(),
         estimated_size_bytes,
         span_counts: SpanCounts {
-            thread_spans: total_thread_spans,
-            async_spans: total_async_spans,
-            total: total_spans,
+            thread_spans: trace_events, // All trace events are from CPU (thread) spans for now
+            async_spans: 0,             // No async span distinction yet
+            total: trace_events,
         },
         generation_time_estimate,
     };
 
     Ok(Json(metadata))
-}
-
-async fn validate_trace(
-    Path(process_id): Path<String>,
-    State(_state): State<AppState>,
-) -> impl IntoResponse {
-    Json(serde_json::json!({
-        "valid": true,
-        "process_id": process_id,
-        "message": "Trace structure is valid"
-    }))
 }
 
 #[span_fn]
@@ -477,7 +436,7 @@ async fn get_process_log_entries(
     axum::extract::Query(query): axum::extract::Query<LogsQuery>,
 ) -> Result<Json<Vec<LogEntry>>, ApiError> {
     let limit = query.limit.unwrap_or(50);
-    let level_filter = query.level.unwrap_or_else(|| "all".to_string());
+    let level_filter = query.level.as_deref().filter(|&level| level != "all");
 
     let client_factory = BearerFlightSQLClientFactory::new(state.auth_token.clone());
     let mut client = client_factory.make_client().await.map_err(|e| {
@@ -488,35 +447,17 @@ async fn get_process_log_entries(
         )
     })?;
 
-    // Build SQL query
-    let level_condition = match level_filter.as_str() {
-        "fatal" => "AND level = 1", // FATAL level
-        "error" => "AND level = 2", // ERROR level
-        "warn" => "AND level = 3",  // WARN level
-        "info" => "AND level = 4",  // INFO level
-        "debug" => "AND level = 5", // DEBUG level
-        "trace" => "AND level = 6", // TRACE level
-        _ => "",                    // No filter
-    };
-
-    let sql = format!(
-        "SELECT time, level, target, msg
-         FROM log_entries
-         WHERE process_id = '{}' {}
-         ORDER BY time DESC
-         LIMIT {}",
-        process_id, level_condition, limit
-    );
-
     let mut logs = Vec::new();
 
-    let mut stream = client.query_stream(sql, None).await.map_err(|e| {
-        ApiError::with_details(
-            "DatabaseQueryError",
-            "Failed to query log entries",
-            &e.to_string(),
-        )
-    })?;
+    let mut stream = query_log_entries(&mut client, &process_id, level_filter, limit)
+        .await
+        .map_err(|e| {
+            ApiError::with_details(
+                "DatabaseQueryError",
+                "Failed to query log entries",
+                &e.to_string(),
+            )
+        })?;
 
     while let Some(batch) = stream.next().await {
         let batch = batch.map_err(|e| {
@@ -597,31 +538,20 @@ async fn get_process_statistics(
     })?;
 
     // Query actual statistics from different stream types
-    let sql = format!(
-        r#"
-        SELECT
-            SUM(CASE WHEN array_has("streams.tags", 'log') THEN nb_objects ELSE 0 END) as log_entries,
-            SUM(CASE WHEN array_has("streams.tags", 'metrics') THEN nb_objects ELSE 0 END) as measures,
-            SUM(CASE WHEN array_has("streams.tags", 'cpu') THEN nb_objects ELSE 0 END) as trace_events,
-            COUNT(DISTINCT CASE WHEN array_has("streams.tags", 'cpu') THEN stream_id ELSE NULL END) as thread_count
-        FROM blocks
-        WHERE process_id = '{}'
-        "#,
-        process_id
-    );
-
     let mut log_entries = 0u64;
     let mut measures = 0u64;
     let mut trace_events = 0u64;
     let mut thread_count = 0u64;
 
-    let batches = client.query(sql, None).await.map_err(|e| {
-        ApiError::with_details(
-            "DatabaseQueryError",
-            "Failed to query process statistics",
-            &e.to_string(),
-        )
-    })?;
+    let batches = query_process_statistics(&mut client, &process_id)
+        .await
+        .map_err(|e| {
+            ApiError::with_details(
+                "DatabaseQueryError",
+                "Failed to query process statistics",
+                &e.to_string(),
+            )
+        })?;
 
     for batch in batches {
         if batch.num_rows() > 0 {
