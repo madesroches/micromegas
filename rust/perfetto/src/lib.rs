@@ -16,3 +16,13 @@ pub mod protos {
 /// Trace Writer
 #[cfg(not(feature = "protogen"))]
 pub mod writer;
+
+/// Streaming Trace Writer
+#[cfg(not(feature = "protogen"))]
+pub mod streaming_writer;
+
+#[cfg(not(feature = "protogen"))]
+pub use writer::Writer;
+
+#[cfg(not(feature = "protogen"))]
+pub use streaming_writer::StreamingPerfettoWriter;
