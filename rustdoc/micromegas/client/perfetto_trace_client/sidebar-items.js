@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["format_perfetto_trace","write_perfetto_trace"]};
