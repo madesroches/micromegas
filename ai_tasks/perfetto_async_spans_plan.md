@@ -4,45 +4,69 @@
 
 Generate Perfetto trace files from a process's async span events by extending the existing Perfetto trace generation functionality to include async span events alongside the current thread-based spans.
 
-## Current State Analysis
+## Current State Analysis (Updated 2025-08-21)
+
+### ✅ PHASE 1 COMPLETED: Analytics Web App Development Tool
+- **Analytics Web App**: Fully implemented with Next.js frontend and Rust Axum backend
+  - Modern React UI with Tailwind CSS and Radix UI components
+  - Process discovery and filtering (`/analyticsweb/processes`)
+  - Real-time Perfetto trace generation with HTTP streaming (`/analyticsweb/perfetto/{process_id}/generate`)
+  - Process statistics and log entries endpoints
+  - Health monitoring and CORS configuration
+  - Production-ready deployment capability
+- **Testing Foundation**: Platform for validating trace generation is operational
 
 ### Existing Perfetto Infrastructure
 - **Rust Perfetto crate** (`rust/perfetto/`): Complete protobuf-based Perfetto trace writer
 - **Writer API**: Supports process descriptors, thread descriptors, and span events
 - **Client integration**: `perfetto_trace_client.rs` generates traces from thread spans using `view_instance('thread_spans', '{stream_id}')`
 
-### Existing Async Events Infrastructure  
+### ✅ Existing Async Events Infrastructure (Completed)
 - **AsyncEventRecord structure**: Contains `stream_id`, `block_id`, `time`, `event_type`, `span_id`, `parent_span_id`, `depth`, `name`, `filename`, `target`, `line`
-- **Async Events View**: `AsyncEventsView` provides materialized view access to async span events
+- **Async Events View**: `AsyncEventsView` provides materialized view access to async span events via `view_instance('async_events', '{process_id}')`
 - **Event Types**: "begin" and "end" events mark async span boundaries
+- **Depth tracking**: Async spans include depth information for hierarchical visualization
 
 ## Implementation Plan
 
-### Phase 1: Analytics Web App Development Tool with Current Client
+### ✅ Phase 1: Analytics Web App Development Tool with Current Client (COMPLETED)
 
-**Objective**: Create a modern analytics web development tool using existing `perfetto_trace_client.rs` for immediate testing capability and async span validation
+**Status**: ✅ **COMPLETED** - Fully operational analytics web application
 
-**Detailed Implementation**: See [analytics_web_app_plan.md](./analytics_web_app_plan.md) for complete Phase 1 specifications including:
-- Architecture decisions (Next.js + React + Axum)
-- Technology stack and dependencies
-- Detailed API design with HTTP streaming
-- React component architecture
-- Production-ready features (observability, security, deployment)
-- Development experience and testing strategy
-- WebAssembly decision analysis
-- HTTP streaming implementation patterns
+**Implemented Features**:
+- **Analytics Web Server** (`rust/analytics-web-srv/`): Axum-based REST API server
+  - Health check endpoints with FlightSQL connectivity status
+  - Process listing and metadata retrieval
+  - Real-time Perfetto trace generation with HTTP streaming progress updates
+  - Process statistics and log entries retrieval
+  - Environment variable-based CORS configuration
+- **Frontend Application** (`analytics-web-app/`): Next.js 15 + React 18 + TypeScript
+  - Modern UI with Tailwind CSS and Radix UI components
+  - Process discovery table with search and filtering
+  - Real-time trace generation with progress visualization
+  - Responsive design and error handling
+- **Development Tooling**: Fully configured development and production environments
+  - Hot reloading for frontend development
+  - Integrated backend/frontend development workflow
+  - Production build pipeline and static file serving
 
-**Key Features**:
-- **HTTP Streaming**: Real-time progress updates with single-request trace delivery
-- **Modern UI**: React components with TypeScript, Tailwind CSS, Radix UI
-- **Development Tool**: Debug interface for exploring telemetry data and generating traces
-- **Testing Foundation**: Platform for validating all subsequent async span phases
+**Testing Capability**: 
+- ✅ Platform ready for testing async span implementation phases
+- ✅ Real-time trace generation and validation interface available
+- ✅ HTTP streaming infrastructure operational for progress reporting
 
 ### Phase 2: Perfetto Writer Streaming Support
+
+**Status**: 🔄 **PENDING** - Not yet implemented
 
 **Objective**: Make Perfetto Writer capable of streaming generation (foundation for SQL approach)
 
 **Key Insight**: Perfetto binary format uses varint length-prefixed TracePackets that can be written incrementally without holding the complete Trace in memory.
+
+**Current Writer Limitations**:
+- Current `Writer` struct only supports in-memory `Trace` accumulation 
+- Must hold entire trace in memory before calling `trace.encode_to_vec()`
+- No support for incremental packet emission during generation
 
 **Tasks**:
 1. **Create StreamingPerfettoWriter**:
@@ -71,7 +95,14 @@ Generate Perfetto trace files from a process's async span events by extending th
 
 ### Phase 3: Async Event Support in Perfetto Writer
 
+**Status**: 🔄 **PENDING** - Not yet implemented
+
 **Objective**: Add async track support to the Perfetto writer (independent of streaming)
+
+**Current Writer Limitations**:
+- Current `Writer` struct only supports thread-based spans via `append_span()`
+- No support for async tracks or async span events
+- Cannot generate Perfetto traces that include async operations alongside thread execution
 
 **Tasks**:
 1. **Add async track creation** in `rust/perfetto/src/writer.rs`:
@@ -102,7 +133,14 @@ Generate Perfetto trace files from a process's async span events by extending th
 
 ### Phase 4: FlightSQL Streaming Table Function
 
+**Status**: 🔄 **PENDING** - Not yet implemented
+
 **Objective**: Implement FlightSQL chunked binary streaming infrastructure
+
+**Current Limitations**:
+- No server-side Perfetto trace generation capability
+- All trace generation happens client-side in `perfetto_trace_client.rs`
+- No SQL interface for generating traces with different span types
 
 **Tasks**:
 1. **Implement `perfetto_trace_chunks` table function**:
@@ -125,7 +163,11 @@ Generate Perfetto trace files from a process's async span events by extending th
 
 ### Phase 5: Server-Side Perfetto Generation
 
+**Status**: 🔄 **PENDING** - Not yet implemented
+
 **Objective**: Move trace generation logic from client to server via SQL table function
+
+**Current Approach**: All trace generation happens in client-side `perfetto_trace_client.rs`
 
 **Tasks**:
 1. **Implement server-side trace generation** in `PerfettoTraceExecutionPlan`:
@@ -289,12 +331,43 @@ ORDER BY time ASC
 4. **Temporal correlation** between thread activity and async operations
 5. **Improved debugging** of async performance issues and concurrency patterns
 
+## Current Implementation Status Summary
+
+### ✅ Completed
+- **Phase 1**: Analytics Web App - Fully operational testing and development platform
+- **Async Events Infrastructure**: Complete async span data collection and view system
+
+### 🔄 Pending Implementation (In Priority Order)
+1. **Phase 2**: Perfetto Writer Streaming Support (Next Priority)
+   - Foundation for all subsequent phases requiring server-side generation
+   - Enables incremental trace generation without memory bloat
+   - Required for Phase 4's FlightSQL streaming table function
+   - Critical infrastructure for scalable trace generation
+
+2. **Phase 3**: Async Event Support in Perfetto Writer (High Priority)
+   - Extends both regular and streaming writers with async track support
+   - Essential for generating traces with async spans
+   - Builds on Phase 2's streaming infrastructure
+   - Provides immediate value for async span visualization
+
+3. **Phase 4-6**: Server-Side Generation (Medium Priority)
+   - Eliminates code duplication
+   - Enables advanced features like real-time streaming
+   - Depends on Phases 2 & 3 infrastructure
+   - Can be implemented once streaming and async support are proven
+
+### Next Recommended Steps
+1. **Immediate**: Implement Phase 2 (Streaming Writer) as foundation infrastructure
+2. **Short-term**: Implement Phase 3 (Async Support) building on streaming capability
+3. **Medium-term**: Test async span generation through the analytics web app
+4. **Long-term**: Implement server-side generation for advanced streaming use cases
+
 ## Migration Strategy
 
 - **Backward compatible**: Existing thread-only trace generation continues to work
 - **Flexible span selection**: Users can choose thread spans only, async spans only, or both
 - **Gradual rollout**: Test with small processes before enabling for large-scale traces
-- **Python client migration**: Phase 4 eliminates code duplication by having Python CLI call Rust implementation
+- **Python client migration**: Future phases eliminate code duplication by having Python CLI call Rust implementation
 
 ## Dependencies
 
