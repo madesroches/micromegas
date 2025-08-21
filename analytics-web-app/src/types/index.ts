@@ -10,18 +10,6 @@ export interface ProcessInfo {
   properties: Record<string, string>;
 }
 
-export interface SpanCounts {
-  thread_spans: number;
-  async_spans: number;
-  total: number;
-}
-
-export interface TraceMetadata {
-  process_id: string;
-  estimated_size_bytes?: number;
-  span_counts: SpanCounts;
-  generation_time_estimate: number; // seconds
-}
 
 export interface GenerateTraceRequest {
   time_range?: {

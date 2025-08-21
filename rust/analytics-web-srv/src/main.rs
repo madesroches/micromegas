@@ -1,6 +1,6 @@
 mod queries;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use axum::{
     Json, Router,
     extract::{Path, State},
@@ -141,44 +141,25 @@ struct AppState {
     auth_token: String,
 }
 
-#[derive(Debug, Serialize)]
-struct ApiError {
-    #[serde(rename = "type")]
-    error_type: String,
-    message: String,
-    details: Option<String>,
-}
+type ApiResult<T> = Result<T, ApiError>;
 
-impl ApiError {
-    fn new(error_type: &str, message: &str) -> Self {
-        Self {
-            error_type: error_type.to_string(),
-            message: message.to_string(),
-            details: None,
-        }
-    }
+struct ApiError(anyhow::Error);
 
-    fn with_details(error_type: &str, message: &str, details: &str) -> Self {
-        Self {
-            error_type: error_type.to_string(),
-            message: message.to_string(),
-            details: Some(details.to_string()),
-        }
+impl From<anyhow::Error> for ApiError {
+    fn from(err: anyhow::Error) -> Self {
+        ApiError(err)
     }
 }
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        let body = Json(serde_json::json!({
-            "error": self
-        }));
-        (StatusCode::INTERNAL_SERVER_ERROR, body).into_response()
-    }
-}
-
-impl From<anyhow::Error> for ApiError {
-    fn from(err: anyhow::Error) -> Self {
-        ApiError::new("InternalError", &err.to_string())
+        tracing::error!("API error: {}", self.0);
+        let message = self.0.to_string();
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": message })),
+        )
+            .into_response()
     }
 }
 
@@ -279,22 +260,10 @@ async fn health_check(State(state): State<AppState>) -> impl IntoResponse {
 }
 
 #[span_fn]
-async fn list_processes(State(state): State<AppState>) -> impl IntoResponse {
+async fn list_processes(State(state): State<AppState>) -> ApiResult<Json<Vec<ProcessInfo>>> {
     let client_factory = BearerFlightSQLClientFactory::new(state.auth_token);
-    match get_processes_internal(&client_factory).await {
-        Ok(processes) => (StatusCode::OK, Json(processes)).into_response(),
-        Err(e) => {
-            tracing::error!("Failed to list processes: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({
-                    "error": "Failed to list processes",
-                    "details": e.to_string()
-                })),
-            )
-                .into_response()
-        }
-    }
+    let processes = get_processes_internal(&client_factory).await?;
+    Ok(Json(processes))
 }
 
 fn convert_properties_to_map(properties: Vec<Property>) -> HashMap<String, String> {
@@ -351,28 +320,14 @@ async fn get_processes_internal(
 async fn get_trace_info(
     Path(process_id): Path<String>,
     State(state): State<AppState>,
-) -> Result<Json<TraceMetadata>, ApiError> {
+) -> ApiResult<Json<TraceMetadata>> {
     let client_factory = BearerFlightSQLClientFactory::new(state.auth_token.clone());
-    let mut client = client_factory.make_client().await.map_err(|e| {
-        ApiError::with_details(
-            "FlightSQLConnectionError",
-            "Failed to create FlightSQL client",
-            &e.to_string(),
-        )
-    })?;
+    let mut client = client_factory.make_client().await?;
 
     // Get actual trace event counts from the database
     let mut trace_events = 0u64;
 
-    let span_batches = query_nb_trace_events(&mut client, &process_id)
-        .await
-        .map_err(|e| {
-            ApiError::with_details(
-                "DatabaseQueryError",
-                "Failed to query trace event counts",
-                &e.to_string(),
-            )
-        })?;
+    let span_batches = query_nb_trace_events(&mut client, &process_id).await?;
 
     for batch in span_batches {
         if batch.num_rows() > 0 {
@@ -381,8 +336,7 @@ async fn get_trace_info(
                 .or_else(|_| {
                     typed_column_by_name::<Int64Array>(&batch, "trace_events")
                         .map(|arr| arr.value(0) as u64)
-                })
-                .unwrap_or(0);
+                })?;
 
             break; // Single row result
         }
@@ -434,69 +388,23 @@ async fn get_process_log_entries(
     Path(process_id): Path<String>,
     State(state): State<AppState>,
     axum::extract::Query(query): axum::extract::Query<LogsQuery>,
-) -> Result<Json<Vec<LogEntry>>, ApiError> {
+) -> ApiResult<Json<Vec<LogEntry>>> {
     let limit = query.limit.unwrap_or(50);
     let level_filter = query.level.as_deref().filter(|&level| level != "all");
 
     let client_factory = BearerFlightSQLClientFactory::new(state.auth_token.clone());
-    let mut client = client_factory.make_client().await.map_err(|e| {
-        ApiError::with_details(
-            "FlightSQLConnectionError",
-            "Failed to create FlightSQL client",
-            &e.to_string(),
-        )
-    })?;
+    let mut client = client_factory.make_client().await?;
 
     let mut logs = Vec::new();
-
-    let mut stream = query_log_entries(&mut client, &process_id, level_filter, limit)
-        .await
-        .map_err(|e| {
-            ApiError::with_details(
-                "DatabaseQueryError",
-                "Failed to query log entries",
-                &e.to_string(),
-            )
-        })?;
+    let mut stream = query_log_entries(&mut client, &process_id, level_filter, limit).await?;
 
     while let Some(batch) = stream.next().await {
-        let batch = batch.map_err(|e| {
-            ApiError::with_details(
-                "StreamProcessingError",
-                "Error processing query result batch",
-                &e.to_string(),
-            )
-        })?;
+        let batch = batch.map_err(anyhow::Error::from)?;
 
-        let times: &TimestampNanosecondArray =
-            typed_column_by_name(&batch, "time").map_err(|e| {
-                ApiError::with_details(
-                    "DataParsingError",
-                    "Failed to parse time column",
-                    &e.to_string(),
-                )
-            })?;
-        let levels: &Int32Array = typed_column_by_name(&batch, "level").map_err(|e| {
-            ApiError::with_details(
-                "DataParsingError",
-                "Failed to parse level column",
-                &e.to_string(),
-            )
-        })?;
-        let targets: &StringArray = typed_column_by_name(&batch, "target").map_err(|e| {
-            ApiError::with_details(
-                "DataParsingError",
-                "Failed to parse target column",
-                &e.to_string(),
-            )
-        })?;
-        let msgs: &StringArray = typed_column_by_name(&batch, "msg").map_err(|e| {
-            ApiError::with_details(
-                "DataParsingError",
-                "Failed to parse msg column",
-                &e.to_string(),
-            )
-        })?;
+        let times: &TimestampNanosecondArray = typed_column_by_name(&batch, "time")?;
+        let levels: &Int32Array = typed_column_by_name(&batch, "level")?;
+        let targets: &StringArray = typed_column_by_name(&batch, "target")?;
+        let msgs: &StringArray = typed_column_by_name(&batch, "msg")?;
 
         for row in 0..batch.num_rows() {
             let level_value = levels.value(row);
@@ -527,15 +435,9 @@ async fn get_process_log_entries(
 async fn get_process_statistics(
     Path(process_id): Path<String>,
     State(state): State<AppState>,
-) -> Result<Json<ProcessStatistics>, ApiError> {
+) -> ApiResult<Json<ProcessStatistics>> {
     let client_factory = BearerFlightSQLClientFactory::new(state.auth_token.clone());
-    let mut client = client_factory.make_client().await.map_err(|e| {
-        ApiError::with_details(
-            "FlightSQLConnectionError",
-            "Failed to create FlightSQL client",
-            &e.to_string(),
-        )
-    })?;
+    let mut client = client_factory.make_client().await?;
 
     // Query actual statistics from different stream types
     let mut log_entries = 0u64;
@@ -543,15 +445,7 @@ async fn get_process_statistics(
     let mut trace_events = 0u64;
     let mut thread_count = 0u64;
 
-    let batches = query_process_statistics(&mut client, &process_id)
-        .await
-        .map_err(|e| {
-            ApiError::with_details(
-                "DatabaseQueryError",
-                "Failed to query process statistics",
-                &e.to_string(),
-            )
-        })?;
+    let batches = query_process_statistics(&mut client, &process_id).await?;
 
     for batch in batches {
         if batch.num_rows() > 0 {
@@ -560,32 +454,28 @@ async fn get_process_statistics(
                 .or_else(|_| {
                     typed_column_by_name::<Int64Array>(&batch, "log_entries")
                         .map(|arr| arr.value(0) as u64)
-                })
-                .context("Failed to find log_entries column")?;
+                })?;
 
             measures = typed_column_by_name::<UInt64Array>(&batch, "measures")
                 .map(|arr| arr.value(0))
                 .or_else(|_| {
                     typed_column_by_name::<Int64Array>(&batch, "measures")
                         .map(|arr| arr.value(0) as u64)
-                })
-                .context("Failed to find measures column")?;
+                })?;
 
             trace_events = typed_column_by_name::<UInt64Array>(&batch, "trace_events")
                 .map(|arr| arr.value(0))
                 .or_else(|_| {
                     typed_column_by_name::<Int64Array>(&batch, "trace_events")
                         .map(|arr| arr.value(0) as u64)
-                })
-                .context("Failed to find trace_events column")?;
+                })?;
 
             thread_count = typed_column_by_name::<UInt64Array>(&batch, "thread_count")
                 .map(|arr| arr.value(0))
                 .or_else(|_| {
                     typed_column_by_name::<Int64Array>(&batch, "thread_count")
                         .map(|arr| arr.value(0) as u64)
-                })
-                .context("Failed to find thread_count column")?;
+                })?;
 
             break; // Single row result, no need to continue
         }

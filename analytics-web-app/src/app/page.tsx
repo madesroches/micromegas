@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { ProcessInfo, ProgressUpdate, GenerateTraceRequest } from '@/types'
+import { ProgressUpdate, GenerateTraceRequest } from '@/types'
 import { fetchProcesses, fetchHealthCheck, generateTrace } from '@/lib/api'
 import { ProcessTable } from '@/components/ProcessTable'
 import { TraceGenerationProgress } from '@/components/TraceGenerationProgress'
@@ -16,7 +16,7 @@ export default function HomePage() {
   const handleApiError = useApiErrorHandler()
 
   // Fetch health status
-  const { data: health, isLoading: healthLoading } = useQuery({
+  const { data: health } = useQuery({
     queryKey: ['health'],
     queryFn: fetchHealthCheck,
     refetchInterval: 30000, // Refetch every 30 seconds

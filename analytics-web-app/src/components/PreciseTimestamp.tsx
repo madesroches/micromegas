@@ -60,22 +60,8 @@ export function PreciseTimestamp({
     return <span className={`text-red-500 ${className}`}>Invalid timestamp</span>
   }
 
-  const { date, nanoseconds, fullTimestamp } = parsed
+  const { date, fullTimestamp } = parsed
 
-  // Format timestamps
-  const humanReadable = date.toLocaleString('en-US', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    fractionalSecondDigits: 3,
-    hour12: false
-  })
-
-  const utcFormat = date.toISOString().replace('T', ' ').replace('Z', ' UTC')
-  const preciseFormat = `${fullTimestamp} (${nanoseconds.slice(0, 3)}.${nanoseconds.slice(3, 6)}.${nanoseconds.slice(6, 9)} ns)`
 
   // Calculate duration if provided
   const duration = showDuration && durationStart ? calculateDuration(durationStart, timestamp) : null
@@ -191,22 +177,3 @@ function calculateDuration(startTime: string, endTime: string): string {
   }
 }
 
-// Helper function to get unix nanoseconds
-function getUnixNanos(timestamp: string): string {
-  try {
-    const date = new Date(timestamp)
-    const unixMs = date.getTime()
-    
-    // Extract fractional seconds and convert to nanoseconds
-    const match = timestamp.match(/\.(\d+)Z?$/)
-    const fractionalSeconds = match ? match[1] : '0'
-    const nanoseconds = fractionalSeconds.padEnd(9, '0').slice(0, 9)
-    
-    // Convert milliseconds to nanoseconds and add fractional part
-    const unixNanos = (unixMs * 1000000).toString() + nanoseconds.slice(3)
-    
-    return unixNanos
-  } catch {
-    return "Invalid"
-  }
-}

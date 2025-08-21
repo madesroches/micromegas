@@ -1,4 +1,4 @@
-import { ProcessInfo, TraceMetadata, GenerateTraceRequest, HealthCheck, ProgressUpdate, BinaryStartMarker, LogEntry, ProcessStatistics } from '@/types'
+import { ProcessInfo, GenerateTraceRequest, HealthCheck, ProgressUpdate, BinaryStartMarker, LogEntry, ProcessStatistics } from '@/types'
 
 const API_BASE = process.env.NODE_ENV === 'development' ? 'http://localhost:8000/analyticsweb' : '/analyticsweb'
 
@@ -38,10 +38,6 @@ export async function fetchProcesses(): Promise<ProcessInfo[]> {
   return handleResponse<ProcessInfo[]>(response)
 }
 
-export async function fetchTraceMetadata(processId: string): Promise<TraceMetadata> {
-  const response = await fetch(`${API_BASE}/perfetto/${processId}/info`)
-  return handleResponse<TraceMetadata>(response)
-}
 
 export async function fetchHealthCheck(): Promise<HealthCheck> {
   const response = await fetch(`${API_BASE}/health`)

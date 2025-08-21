@@ -13,10 +13,10 @@ interface ProcessTableProps {
   onRefresh?: () => void
 }
 
-export function ProcessTable({ processes, onGenerateTrace, isGenerating, onRefresh }: ProcessTableProps) {
+export function ProcessTable({ processes, onRefresh }: ProcessTableProps) {
   const [searchTerm, setSearchTerm] = useState('')
-  const [sortField, setSortField] = useState<keyof ProcessInfo>('last_update_time')
-  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc')
+  const [sortField] = useState<keyof ProcessInfo>('last_update_time')
+  const [sortDirection] = useState<'asc' | 'desc'>('desc')
 
   const filteredAndSortedProcesses = useMemo(() => {
     const filtered = processes.filter(process => 
@@ -41,14 +41,6 @@ export function ProcessTable({ processes, onGenerateTrace, isGenerating, onRefre
     })
   }, [processes, searchTerm, sortField, sortDirection])
 
-  const handleSort = (field: keyof ProcessInfo) => {
-    if (field === sortField) {
-      setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc')
-    } else {
-      setSortField(field)
-      setSortDirection('desc')
-    }
-  }
 
   return (
     <div className="space-y-8">

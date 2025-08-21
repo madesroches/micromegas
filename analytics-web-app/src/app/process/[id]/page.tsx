@@ -3,14 +3,13 @@
 import { useState, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useParams } from 'next/navigation'
-import { ProcessInfo, ProgressUpdate, GenerateTraceRequest, LogEntry, TraceMetadata } from '@/types'
-import { fetchProcesses, generateTrace, fetchProcessLogEntries, fetchProcessStatistics, fetchTraceMetadata } from '@/lib/api'
+import { ProgressUpdate, GenerateTraceRequest } from '@/types'
+import { fetchProcesses, generateTrace, fetchProcessLogEntries, fetchProcessStatistics } from '@/lib/api'
 import { TraceGenerationProgress } from '@/components/TraceGenerationProgress'
 import { CopyableProcessId } from '@/components/CopyableProcessId'
 import { PreciseTimestamp } from '@/components/PreciseTimestamp'
-import { formatRelativeTime } from '@/lib/utils'
 import Link from 'next/link'
-import { ArrowLeft, Play, RefreshCw, Filter } from 'lucide-react'
+import { Play, RefreshCw } from 'lucide-react'
 
 export default function ProcessDetailPage() {
   const params = useParams()
@@ -147,9 +146,6 @@ export default function ProcessDetailPage() {
     )
   }
 
-  const startTime = new Date(process.start_time)
-  const lastUpdateTime = new Date(process.last_update_time)
-  const duration = Math.round((lastUpdateTime.getTime() - startTime.getTime()) / 1000)
 
   // Format precise duration with nanosecond accuracy
   const formatPreciseDuration = (startTime: string, endTime: string): string => {
@@ -177,7 +173,6 @@ export default function ProcessDetailPage() {
       const totalSeconds = Math.floor(totalMs / 1000)
       const remainingMs = Math.floor(totalMs % 1000)
       const remainingMicros = Math.floor((nanosDiff % 1000000) / 1000)
-      const remainingNanos = nanosDiff % 1000
 
       const minutes = Math.floor(totalSeconds / 60)
       const seconds = totalSeconds % 60
@@ -226,9 +221,7 @@ export default function ProcessDetailPage() {
       <div className="max-w-7xl mx-auto px-8 py-8">
         {/* Breadcrumb */}
         <div className="flex items-center gap-2 mb-4 text-sm">
-          <Link href="/" className="text-blue-600 hover:underline">Analytics</Link>
-          <span className="text-gray-400">›</span>
-          <Link href="/" className="text-blue-600 hover:underline">Processes</Link>
+          <Link href="/" className="text-blue-600 hover:underline">Process Explorer</Link>
           <span className="text-gray-400">›</span>
           <span className="text-gray-600">{process.exe}</span>
         </div>

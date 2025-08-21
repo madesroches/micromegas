@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Progress } from '@/components/ui/progress'
 import { Button } from '@/components/ui/button'
 import { CopyableProcessId } from '@/components/CopyableProcessId'
-import { Download, AlertCircle, CheckCircle2, X } from 'lucide-react'
+import { Download, CheckCircle2, X } from 'lucide-react'
 
 interface TraceGenerationProgressProps {
   isGenerating: boolean
