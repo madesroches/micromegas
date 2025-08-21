@@ -28,6 +28,7 @@ pub struct StreamingPerfettoWriter<W: Write> {
     pid: i32,          // derived from micromegas's process_id using a hash function
     process_uuid: u64, // derived from micromegas's process_id using a hash function
     current_thread_uuid: Option<u64>,
+    async_track_uuid: Option<u64>, // Single async track UUID for all async spans
     names: HashMap<String, u64>,
     categories: HashMap<String, u64>,
     source_locations: HashMap<(String, u32), u64>,
@@ -43,6 +44,7 @@ impl<W: Write> StreamingPerfettoWriter<W> {
             pid,
             process_uuid,
             current_thread_uuid: None,
+            async_track_uuid: None,
             names: HashMap::new(),
             categories: HashMap::new(),
             source_locations: HashMap::new(),
@@ -114,6 +116,29 @@ impl<W: Write> StreamingPerfettoWriter<W> {
         });
         let mut packet = new_trace_packet();
         packet.data = Some(Data::TrackDescriptor(thread_track));
+        self.write_packet(packet)
+    }
+
+    /// Emits an async track descriptor packet to the stream.
+    /// Creates a single async track for all async spans in this process.
+    /// This should be called once per process before emitting async span events.
+    pub fn emit_async_track_descriptor(&mut self) -> anyhow::Result<()> {
+        if self.async_track_uuid.is_some() {
+            return Ok(()); // Already created
+        }
+
+        let async_track_uuid = xxh64("async_track".as_bytes(), self.process_uuid);
+        self.async_track_uuid = Some(async_track_uuid);
+
+        let mut async_track = new_track_descriptor(async_track_uuid);
+        async_track.parent_uuid = Some(self.process_uuid);
+        async_track.static_or_dynamic_name =
+            Some(crate::protos::track_descriptor::StaticOrDynamicName::Name(
+                "Async Operations".to_owned(),
+            ));
+
+        let mut packet = new_trace_packet();
+        packet.data = Some(Data::TrackDescriptor(async_track));
         self.write_packet(packet)
     }
 
@@ -209,6 +234,27 @@ impl<W: Write> StreamingPerfettoWriter<W> {
         packet.data = Some(Data::TrackEvent(track_event));
     }
 
+    fn init_async_span_event(
+        &mut self,
+        name: &str,
+        target: &str,
+        filename: &str,
+        line: u32,
+        packet: &mut TracePacket,
+        mut track_event: TrackEvent,
+    ) {
+        assert!(
+            self.async_track_uuid.is_some(),
+            "Must call emit_async_track_descriptor() before emitting async span events"
+        );
+
+        track_event.track_uuid = self.async_track_uuid;
+        self.set_name(name, packet, &mut track_event);
+        self.set_category(target, packet, &mut track_event);
+        self.set_source_location(filename, line, packet, &mut track_event);
+        packet.data = Some(Data::TrackEvent(track_event));
+    }
+
     /// Emits a span event to the stream.
     pub fn emit_span(
         &mut self,
@@ -236,6 +282,40 @@ impl<W: Write> StreamingPerfettoWriter<W> {
         self.write_packet(packet)?;
 
         Ok(())
+    }
+
+    /// Emits an async span begin event to the stream.
+    pub fn emit_async_span_begin(
+        &mut self,
+        timestamp_ns: u64,
+        name: &str,
+        target: &str,
+        filename: &str,
+        line: u32,
+    ) -> anyhow::Result<()> {
+        let mut packet = new_trace_packet();
+        packet.timestamp = Some(timestamp_ns);
+        let mut track_event = new_track_event();
+        track_event.r#type = Some(track_event::Type::SliceBegin.into());
+        self.init_async_span_event(name, target, filename, line, &mut packet, track_event);
+        self.write_packet(packet)
+    }
+
+    /// Emits an async span end event to the stream.
+    pub fn emit_async_span_end(
+        &mut self,
+        timestamp_ns: u64,
+        name: &str,
+        target: &str,
+        filename: &str,
+        line: u32,
+    ) -> anyhow::Result<()> {
+        let mut packet = new_trace_packet();
+        packet.timestamp = Some(timestamp_ns);
+        let mut track_event = new_track_event();
+        track_event.r#type = Some(track_event::Type::SliceEnd.into());
+        self.init_async_span_event(name, target, filename, line, &mut packet, track_event);
+        self.write_packet(packet)
     }
 
     /// Flushes any buffered data to the output stream.

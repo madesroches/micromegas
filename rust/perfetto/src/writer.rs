@@ -130,6 +130,7 @@ pub struct Writer {
     pid: i32,          // derived from micromegas's process_id using a hash function
     process_uuid: u64, // derived from micromegas's process_id using a hash function
     current_thread_uuid: Option<u64>,
+    async_track_uuid: Option<u64>, // Single async track UUID for all async spans
     names: HashMap<String, u64>,
     categories: HashMap<String, u64>,
     source_locations: HashMap<(String, u32), u64>,
@@ -146,6 +147,7 @@ impl Writer {
             pid,
             process_uuid,
             current_thread_uuid: None,
+            async_track_uuid: None,
             names: HashMap::new(),
             categories: HashMap::new(),
             source_locations: HashMap::new(),
@@ -190,6 +192,29 @@ impl Writer {
             legacy_sort_index: None,
         });
         packet.data = Some(Data::TrackDescriptor(thread_track));
+        self.trace.packet.push(packet);
+    }
+
+    /// Appends an async track descriptor to the trace.
+    /// Creates a single async track for all async spans in this process.
+    /// This should be called once per process before emitting async span events.
+    pub fn append_async_track_descriptor(&mut self) {
+        if self.async_track_uuid.is_some() {
+            return; // Already created
+        }
+
+        let async_track_uuid = xxh64("async_track".as_bytes(), self.process_uuid);
+        self.async_track_uuid = Some(async_track_uuid);
+
+        let mut async_track = new_track_descriptor(async_track_uuid);
+        async_track.parent_uuid = Some(self.process_uuid);
+        async_track.static_or_dynamic_name =
+            Some(crate::protos::track_descriptor::StaticOrDynamicName::Name(
+                "Async Operations".to_owned(),
+            ));
+
+        let mut packet = new_trace_packet();
+        packet.data = Some(Data::TrackDescriptor(async_track));
         self.trace.packet.push(packet);
     }
 
@@ -285,6 +310,27 @@ impl Writer {
         packet.data = Some(Data::TrackEvent(track_event));
     }
 
+    fn init_async_span_event(
+        &mut self,
+        name: &str,
+        target: &str,
+        filename: &str,
+        line: u32,
+        packet: &mut TracePacket,
+        mut track_event: TrackEvent,
+    ) {
+        assert!(
+            self.async_track_uuid.is_some(),
+            "Must call append_async_track_descriptor() before emitting async span events"
+        );
+
+        track_event.track_uuid = self.async_track_uuid;
+        self.set_name(name, packet, &mut track_event);
+        self.set_category(target, packet, &mut track_event);
+        self.set_source_location(filename, line, packet, &mut track_event);
+        packet.data = Some(Data::TrackEvent(track_event));
+    }
+
     /// Appends a span event to the trace.
     pub fn append_span(
         &mut self,
@@ -307,6 +353,40 @@ impl Writer {
         let mut track_event = new_track_event();
         track_event.r#type = Some(track_event::Type::SliceEnd.into());
         self.init_span_event(name, target, filename, line, &mut packet, track_event);
+        self.trace.packet.push(packet);
+    }
+
+    /// Appends an async span begin event to the trace.
+    pub fn append_async_span_begin(
+        &mut self,
+        timestamp_ns: u64,
+        name: &str,
+        target: &str,
+        filename: &str,
+        line: u32,
+    ) {
+        let mut packet = new_trace_packet();
+        packet.timestamp = Some(timestamp_ns);
+        let mut track_event = new_track_event();
+        track_event.r#type = Some(track_event::Type::SliceBegin.into());
+        self.init_async_span_event(name, target, filename, line, &mut packet, track_event);
+        self.trace.packet.push(packet);
+    }
+
+    /// Appends an async span end event to the trace.
+    pub fn append_async_span_end(
+        &mut self,
+        timestamp_ns: u64,
+        name: &str,
+        target: &str,
+        filename: &str,
+        line: u32,
+    ) {
+        let mut packet = new_trace_packet();
+        packet.timestamp = Some(timestamp_ns);
+        let mut track_event = new_track_event();
+        track_event.r#type = Some(track_event::Type::SliceEnd.into());
+        self.init_async_span_event(name, target, filename, line, &mut packet, track_event);
         self.trace.packet.push(packet);
     }
 
