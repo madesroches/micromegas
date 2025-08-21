@@ -38,12 +38,14 @@ graph TD
         DataFusion[DataFusion Engine]
         Parquet[(Parquet Files<br/>Columnar Views)]
         FlightSQL[flight-sql-srv<br/>:50051 FlightSQL]
+        WebApp[analytics-web-srv<br/>:8000 HTTP]
     end
     
     subgraph "Client Layer"
         PyClient[Python Client]
         Grafana[Grafana Plugin]
         Custom[Custom Clients]
+        Browser[Web Browser<br/>Analytics UI]
     end
     
     App1 --> Lib1
@@ -72,6 +74,8 @@ graph TD
     FlightSQL --> PyClient
     FlightSQL --> Grafana
     FlightSQL --> Custom
+    FlightSQL --> WebApp
+    WebApp --> Browser
     
     classDef app fill:#e8f5e8
     classDef tracing fill:#fff3e0
@@ -81,9 +85,9 @@ graph TD
     
     class App1,App2,App3 app
     class Lib1,Lib2,Lib3,Sink1,Sink2,Sink3 tracing
-    class Ingestion,FlightSQL,DataFusion,Admin service
+    class Ingestion,FlightSQL,DataFusion,Admin,WebApp service
     class PG,S3,Parquet storage
-    class PyClient,Grafana,Custom client
+    class PyClient,Grafana,Custom,Browser client
 ```
 
 ### Component Responsibilities
@@ -102,6 +106,7 @@ graph TD
 - **DataFusion**: SQL query engine with vectorized execution optimized for Parquet (columnar format)
 - **FlightSQL**: High-performance query protocol using Apache Arrow for data transfer
 - **HTTP Gateway**: REST API gateway for accessing FlightSQL analytics service
+- **Analytics Web App**: Web interface for exploring data, generating Perfetto traces, and monitoring processes
 - **Maintenance Daemon**: Background processing for view materialization and data lifecycle
 
 ## Data Flow
@@ -211,6 +216,24 @@ flowchart TD
 - Parquet columnar format enables efficient scanning and filtering
 - Dictionary compression reduces storage and improves query performance  
 - Predicate pushdown leverages Parquet metadata for fast data pruning
+
+## Analytics Web Application
+
+The analytics web app provides a modern web interface for exploring telemetry data. It consists of:
+
+- **Backend**: Rust-based web server (`analytics-web-srv`) using Axum framework
+- **Frontend**: Next.js React application with TypeScript  
+- **Integration**: Direct FlightSQL connection to analytics service
+
+### Key Features
+
+- **Process Explorer**: View active processes with real-time metadata
+- **Log Viewer**: Stream log entries with level filtering and color coding
+- **Trace Generation**: Generate and download Perfetto traces from process data
+- **Process Statistics**: Detailed process metrics and monitoring
+
+!!! warning "Development Stage"
+    The Analytics Web Application is in early development and only suitable for local testing. Not recommended for production use.
 
 ## Design Principles
 
