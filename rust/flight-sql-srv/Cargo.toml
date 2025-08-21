@@ -17,6 +17,9 @@ clap.workspace = true
 tokio.workspace = true
 tower.workspace = true
 
+[package.metadata.cargo-machete]
+ignored = ["tokio"]  # Required by micromegas_main macro
+
 [[bin]]
 name = "flight-sql-srv"
 path = "src/flight_sql_srv.rs"

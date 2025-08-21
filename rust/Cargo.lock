@@ -76,15 +76,11 @@ dependencies = [
  "futures",
  "http",
  "micromegas",
- "micromegas-analytics",
  "serde",
  "serde_json",
  "tokio",
- "tower 0.5.2",
  "tower-http 0.5.2",
  "tracing",
- "tracing-subscriber",
- "uuid",
 ]
 
 [[package]]
@@ -2151,8 +2147,6 @@ dependencies = [
  "anyhow",
  "clap",
  "micromegas",
- "serde",
- "thiserror 1.0.69",
  "tokio",
 ]
 
