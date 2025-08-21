@@ -1,0 +1,30 @@
+[package]
+name = "trace-gen-util"
+description = "Utility to generate Perfetto traces from analytics service"
+version.workspace = true
+edition.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "trace-gen"
+path = "src/main.rs"
+
+[[bin]]
+name = "validate-trace"
+path = "src/validate_trace.rs"
+
+[dependencies]
+micromegas.path = "../public"
+micromegas-analytics.workspace = true
+micromegas-perfetto.workspace = true
+
+anyhow.workspace = true
+chrono.workspace = true
+clap = { version = "4.0", features = ["derive"] }
+datafusion.workspace = true
+tokio.workspace = true
+tonic.workspace = true
+prost.workspace = true
