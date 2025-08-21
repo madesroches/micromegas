@@ -2,9 +2,9 @@
 
 ## Overview
 
-🚧 **FIRST DRAFT IMPLEMENTED**: Basic analytics web application for exploring micromegas telemetry data. This is a working foundation that needs refinement and additional features.
+🚧 **DEVELOPMENT TOOL IMPLEMENTED**: Analytics web development tool for exploring micromegas telemetry data. This is a functional debug interface for internal use and testing.
 
-**Current Implementation Status**: ✅ **FUNCTIONAL VERSION** - Core features working with real data integration
+**Current Implementation Status**: ✅ **FUNCTIONAL DEVELOPMENT TOOL** - Core features working with real data integration
 
 **Code Locations**:
 - **Backend**: `/rust/analytics-web-srv/` - Rust + Axum web server with FlightSQL integration
@@ -73,7 +73,7 @@
 
 ## Architecture Decision
 
-**Hybrid architecture combining Rust backend (Axum) with modern frontend framework**
+**Development tool architecture combining Rust backend (Axum) with modern frontend framework for internal debugging and testing**
 
 ### Backend: Rust + Axum (Existing Infrastructure)
 - **Framework**: Axum 0.8 (already in use across micromegas services)
@@ -330,7 +330,7 @@ interface ProcessInfo {
 - **TypeScript Excellence**: Superior React + TypeScript patterns and tooling
 - **Server Components**: Optimal performance for process metadata rendering
 - **Streaming Support**: Built-in streaming ideal for large trace file downloads
-- **Production Ready**: Battle-tested stack deployed at scale everywhere
+- **Development Ready**: Battle-tested stack suitable for internal tools and prototypes
 - **Developer Productivity**: Faster development with established patterns
 - **Component Reusability**: Modular components for future feature expansion
 - **Testing Maturity**: Comprehensive testing ecosystem and best practices
@@ -442,10 +442,10 @@ async fn generate_perfetto_trace() -> impl IntoResponse {
 
 ## Expected Outcomes
 
-1. **Production-Ready Web Interface**: Immediately usable tool for generating Perfetto traces
+1. **Development Web Interface**: Immediately usable internal tool for generating Perfetto traces
 2. **Testing Foundation**: Platform for validating all subsequent async span implementation phases
 3. **User Experience**: Modern, responsive UI with real-time progress feedback
-4. **Scalable Architecture**: Ready for production deployment and future feature additions
+4. **Maintainable Architecture**: Ready for internal use and future feature additions
 5. **Developer Productivity**: Fast development cycle with hot reloading and comprehensive testing
 
 ## Future Low-Priority Enhancements
