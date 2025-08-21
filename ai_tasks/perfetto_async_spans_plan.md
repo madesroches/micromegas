@@ -18,9 +18,9 @@ Generate Perfetto trace files from a process's async span events by extending th
 
 ## Implementation Plan
 
-### Phase 1: Production-Ready Analytics Web App with Current Client
+### Phase 1: Analytics Web App Development Tool with Current Client
 
-**Objective**: Create a modern, production-ready analytics web application using existing `perfetto_trace_client.rs` for immediate testing capability and future scalability
+**Objective**: Create a modern analytics web development tool using existing `perfetto_trace_client.rs` for immediate testing capability and async span validation
 
 **Detailed Implementation**: See [analytics_web_app_plan.md](./analytics_web_app_plan.md) for complete Phase 1 specifications including:
 - Architecture decisions (Next.js + React + Axum)
@@ -35,7 +35,7 @@ Generate Perfetto trace files from a process's async span events by extending th
 **Key Features**:
 - **HTTP Streaming**: Real-time progress updates with single-request trace delivery
 - **Modern UI**: React components with TypeScript, Tailwind CSS, Radix UI
-- **Production Ready**: Observability, security, scalability considerations
+- **Development Tool**: Debug interface for exploring telemetry data and generating traces
 - **Testing Foundation**: Platform for validating all subsequent async span phases
 
 ### Phase 2: Perfetto Writer Streaming Support
