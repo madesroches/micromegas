@@ -42,18 +42,32 @@ Generate Perfetto trace files from a process's async span events by extending th
 
 **Objective**: Make Perfetto Writer capable of streaming generation (foundation for SQL approach)
 
-**Tasks**:
-1. **Add streaming interface to Writer**:
-   - Modify `Writer::into_trace()` to return iterator/stream instead of complete Vec<u8>
-   - Add `Writer::flush_chunk()` method to emit data when chunk size reached
-   - Add `Writer::write_chunk_callback()` for streaming emission
-   - Maintain backward compatibility with existing `into_trace()` for non-streaming use
+**Key Insight**: Perfetto binary format uses varint length-prefixed TracePackets that can be written incrementally without holding the complete Trace in memory.
 
-2. **Unit tests for streaming Writer**:
-   - Test chunk emission at size boundaries
-   - Test complete trace reconstruction from chunks
-   - Test protobuf validity of chunked output
+**Tasks**:
+1. **Create StreamingPerfettoWriter**:
+   - New `StreamingPerfettoWriter<W: Write>` struct for direct file writing
+   - Implement `write_packet()` method that writes individual TracePackets with proper protobuf framing
+   - Handle varint length encoding for each packet (field tag 0x0A + length + packet bytes)
+   - Maintain interning state (names, categories, source_locations) for efficient string handling
+
+2. **Two-phase streaming approach**:
+   - **Phase 1**: Lightweight pre-pass to collect all unique strings and assign stable IDs
+   - **Phase 2**: Stream packets directly to file as they're generated
+   - Emit setup packets (process descriptor, interned data) before span events
+   - Stream span events incrementally as DataFusion produces them
+
+3. **Client-side streaming assembly** (alternative to file writing):
+   - Server streams individual TracePackets via FlightSQL chunks
+   - Client uses `StreamingTraceBuilder` to collect packets into final Trace
+   - Enables real-time progress updates and backpressure
+
+4. **Unit tests for streaming Writer**:
+   - Test direct file writing produces identical binary output to `Trace.encode_to_vec()`
+   - Test varint encoding correctness for various packet sizes
+   - Test interning state management across streaming operations
    - Compare streaming vs non-streaming output for identical traces
+   - Test memory usage remains constant regardless of trace size
 
 ### Phase 3: Async Event Support in Perfetto Writer
 
@@ -100,7 +114,7 @@ Generate Perfetto trace files from a process's async span events by extending th
    - `PerfettoTraceProvider` implementing `TableProvider`
    - `PerfettoTraceExecutionPlan` implementing `ExecutionPlan`
    - Stream Perfetto trace data as it's generated, not after completion
-   - Use streaming Writer from Phase 1 for incremental chunk emission
+   - Use streaming Writer from Phase 2 for incremental chunk emission
    - Yield record batches with schema: `chunk_id: Int32, chunk_data: Binary` as data becomes available
 
 3. **Unit tests for table function**:
@@ -115,7 +129,7 @@ Generate Perfetto trace files from a process's async span events by extending th
 
 **Tasks**:
 1. **Implement server-side trace generation** in `PerfettoTraceExecutionPlan`:
-   - Integrate Phase 1 streaming Writer with Phase 2 async event support
+   - Integrate Phase 2 streaming Writer with Phase 3 async event support
    - Query `view_instance('async_events', '{process_id}')` for async span events  
    - Query thread spans and process metadata within FlightSQL server context
    - Generate complete Perfetto trace server-side using streaming emission
@@ -128,7 +142,7 @@ Generate Perfetto trace files from a process's async span events by extending th
 
 3. **Streaming chunk emission**:
    - Stream process descriptors, thread descriptors, then span events as data becomes available
-   - Each query result batch triggers chunk emission via Phase 1 streaming Writer
+   - Each query result batch triggers chunk emission via Phase 2 streaming Writer
    - Natural backpressure from DataFusion prevents memory bloat
 
 ### Phase 6: Refactor Client to Use SQL Generation
@@ -290,3 +304,67 @@ ORDER BY time ASC
 - No new external dependencies required
 
 **Note**: The Python CLI script (`python/micromegas/cli/write_perfetto.py`) completely duplicates functionality that already exists in the Rust Perfetto client (`rust/public/src/client/perfetto_trace_client.rs`). Both query the analytics service and generate Perfetto traces with identical logic. The Python CLI should be refactored to call the existing Rust client instead of maintaining a duplicate implementation. This would eliminate the need to implement async spans in multiple places and ensure consistent behavior.
+
+## Annex: StreamingPerfettoWriter Implementation Details
+
+### API-Based Protobuf Encoding
+
+Instead of hardcoding protobuf field tags and varint encoding, use prost's internal encoding functions for reliability:
+
+```rust
+use std::io::Write;
+use prost::{Message, encoding::{encode_key, encode_varint, WireType}};
+
+pub struct StreamingPerfettoWriter<W: Write> {
+    writer: W,
+    // Interning state (same as regular Writer)
+    names: HashMap<String, u64>,
+    categories: HashMap<String, u64>,
+    source_locations: HashMap<(String, u32), u64>,
+}
+
+impl<W: Write> StreamingPerfettoWriter<W> {
+    pub fn new(writer: W) -> Self {
+        Self {
+            writer,
+            names: HashMap::new(),
+            categories: HashMap::new(),
+            source_locations: HashMap::new(),
+        }
+    }
+    
+    pub fn write_packet(&mut self, packet: TracePacket) -> anyhow::Result<()> {
+        let mut buf = Vec::new();
+        
+        // Encode the packet to get its bytes
+        packet.encode(&mut buf)?;
+        
+        // Write the field key for repeated TracePacket (field 1, wire type 2)  
+        encode_key(1, WireType::LengthDelimited, &mut self.writer)?;
+        
+        // Write the varint length
+        encode_varint(buf.len() as u64, &mut self.writer)?;
+        
+        // Write the packet data
+        self.writer.write_all(&buf)?;
+        
+        Ok(())
+    }
+    
+    // Same pattern for other methods: emit_setup(), emit_span(), etc.
+}
+```
+
+### Key Benefits of API-Based Approach
+
+1. **No hardcoded constants**: Uses prost's `encode_key()` and `encode_varint()` functions
+2. **Forward compatibility**: Protobuf changes handled by prost library updates  
+3. **Type safety**: `WireType::LengthDelimited` instead of magic numbers
+4. **Consistency**: Same encoding logic as `Trace.encode_to_vec()`
+5. **Maintainability**: Leverages existing prost dependency
+
+### Dependencies Required
+
+- `prost` crate (already used)
+- `prost::encoding` module for low-level encoding functions
+- No additional external dependencies needed
