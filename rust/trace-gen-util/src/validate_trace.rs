@@ -10,21 +10,21 @@ fn main() -> Result<()> {
         eprintln!("Usage: {} <trace-file>", args[0]);
         std::process::exit(1);
     }
-    
+
     let trace_file = &args[1];
     println!("Validating Perfetto trace: {}", trace_file);
-    
+
     let data = fs::read(trace_file)?;
     println!("Trace file size: {} bytes", data.len());
-    
+
     let trace = Trace::decode(&data[..])?;
     println!("Trace packets: {}", trace.packet.len());
-    
+
     let mut process_descriptors = 0;
     let mut thread_descriptors = 0;
     let mut async_track_descriptors = 0;
     let mut track_events = 0;
-    
+
     for packet in &trace.packet {
         if let Some(data) = &packet.data {
             match data {
@@ -44,13 +44,13 @@ fn main() -> Result<()> {
             }
         }
     }
-    
+
     println!("Process descriptors: {}", process_descriptors);
     println!("Thread descriptors: {}", thread_descriptors);
     println!("Async track descriptors: {}", async_track_descriptors);
     println!("Track events: {}", track_events);
-    
+
     println!("✅ Trace validation successful!");
-    
+
     Ok(())
 }
