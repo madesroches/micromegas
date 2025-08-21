@@ -1,0 +1,812 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Process Detail - web-server (abc-123-def) - Micromegas Analytics</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background-color: #f8fafc;
+            color: #334155;
+            line-height: 1.6;
+        }
+
+        .header {
+            background: white;
+            border-bottom: 1px solid #e2e8f0;
+            padding: 1rem 2rem;
+            box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1);
+        }
+
+        .header-content {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+
+        .header-info h1 {
+            color: #1e293b;
+            font-size: 1.5rem;
+            font-weight: 600;
+        }
+
+        .header-info p {
+            color: #64748b;
+            font-size: 0.875rem;
+            margin-top: 0.25rem;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 2rem;
+        }
+
+        .panel {
+            background: white;
+            border-radius: 0.5rem;
+            border: 1px solid #e2e8f0;
+            padding: 1.5rem;
+            box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1);
+        }
+
+        .panel h2 {
+            font-size: 1.125rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+            color: #1e293b;
+        }
+
+        .process-overview {
+            grid-column: 1 / -1;
+        }
+
+        .tab-content {
+            background: white;
+            border-radius: 0 0.5rem 0.5rem 0.5rem;
+            border: 1px solid #e2e8f0;
+            border-top: none;
+            padding: 1.5rem;
+            box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1);
+        }
+
+        .tab-content.hidden {
+            display: none;
+        }
+
+        .tab-navigation {
+            display: flex;
+            margin-top: 2rem;
+        }
+
+        .tab {
+            padding: 0.75rem 1.5rem;
+            border: 1px solid #e2e8f0;
+            border-bottom: none;
+            background: #f8fafc;
+            color: #64748b;
+            cursor: pointer;
+            font-size: 0.875rem;
+            font-weight: 500;
+            border-radius: 0.5rem 0.5rem 0 0;
+            margin-right: 0.25rem;
+            transition: all 0.2s;
+        }
+
+        .tab.active {
+            background: white;
+            color: #3b82f6;
+            border-bottom: 1px solid white;
+            margin-bottom: -1px;
+            position: relative;
+            z-index: 1;
+        }
+
+        .tab:hover:not(.active) {
+            background: #f1f5f9;
+            color: #374151;
+        }
+
+        .overview-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 1.5rem;
+            margin-top: 1rem;
+        }
+
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 1.5rem;
+            margin-top: 1.5rem;
+        }
+
+        .properties-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 1.5rem;
+            margin-top: 1.5rem;
+        }
+
+        .stat-card {
+            background: #f8fafc;
+            border-radius: 0.375rem;
+            padding: 1rem;
+        }
+
+        .stat-label {
+            font-size: 0.75rem;
+            color: #64748b;
+            text-transform: uppercase;
+            font-weight: 500;
+            margin-bottom: 0.25rem;
+        }
+
+        .stat-value {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: #1e293b;
+        }
+
+        .stat-subtitle {
+            font-size: 0.875rem;
+            color: #64748b;
+            margin-top: 0.25rem;
+        }
+
+        .properties-list {
+            font-size: 0.75rem;
+            line-height: 1.4;
+        }
+
+        .property-item {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 0.25rem;
+            padding: 0.125rem 0;
+        }
+
+        .property-key {
+            color: #64748b;
+            font-weight: 500;
+        }
+
+        .property-value {
+            color: #374151;
+            font-weight: 600;
+        }
+
+        .status-active {
+            color: #059669;
+        }
+
+        .status-completed {
+            color: #dc2626;
+        }
+
+        .form-group {
+            margin-bottom: 1.5rem;
+        }
+
+        .form-label {
+            display: block;
+            font-size: 0.875rem;
+            font-weight: 500;
+            color: #374151;
+            margin-bottom: 0.5rem;
+        }
+
+        .form-input {
+            width: 100%;
+            padding: 0.75rem;
+            border: 1px solid #d1d5db;
+            border-radius: 0.375rem;
+            font-size: 0.875rem;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+
+        .form-input:focus {
+            outline: none;
+            border-color: #3b82f6;
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+        }
+
+        .checkbox-group {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 0.75rem;
+            margin-top: 0.5rem;
+        }
+
+        .checkbox-item {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.75rem;
+            border: 1px solid #e2e8f0;
+            border-radius: 0.375rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .checkbox-item:hover {
+            background: #f8fafc;
+            border-color: #d1d5db;
+        }
+
+        .checkbox-item.checked {
+            background: #dbeafe;
+            border-color: #3b82f6;
+        }
+
+        .checkbox {
+            width: 1rem;
+            height: 1rem;
+        }
+
+        .checkbox-label {
+            font-size: 0.875rem;
+            color: #374151;
+            flex: 1;
+        }
+
+        .checkbox-count {
+            font-size: 0.75rem;
+            color: #64748b;
+            font-weight: 500;
+        }
+
+        .time-range-inputs {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1rem;
+        }
+
+        .btn-primary {
+            background: #059669;
+            color: white;
+            border: none;
+            padding: 0.75rem 1.5rem;
+            border-radius: 0.375rem;
+            font-size: 0.875rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background-color 0.2s;
+            width: 100%;
+        }
+
+        .btn-primary:hover {
+            background: #047857;
+        }
+
+        .btn-primary:disabled {
+            background: #9ca3af;
+            cursor: not-allowed;
+        }
+
+        .btn-secondary {
+            background: #f8fafc;
+            color: #374151;
+            border: 1px solid #d1d5db;
+            padding: 0.75rem 1.5rem;
+            border-radius: 0.375rem;
+            font-size: 0.875rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+            width: 100%;
+        }
+
+        .btn-secondary:hover {
+            background: #f1f5f9;
+            border-color: #9ca3af;
+        }
+
+        .progress-section {
+            margin-top: 2rem;
+        }
+
+        .progress-item {
+            border: 1px solid #e2e8f0;
+            border-radius: 0.375rem;
+            padding: 1rem;
+            margin-bottom: 1rem;
+        }
+
+        .progress-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.75rem;
+        }
+
+        .progress-title {
+            font-weight: 500;
+            color: #374151;
+        }
+
+        .progress-status {
+            font-size: 0.75rem;
+            padding: 0.25rem 0.5rem;
+            border-radius: 0.25rem;
+            font-weight: 500;
+        }
+
+        .status-generating {
+            background: #dbeafe;
+            color: #1e40af;
+        }
+
+        .status-complete {
+            background: #dcfce7;
+            color: #166534;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 0.5rem;
+            background: #f3f4f6;
+            border-radius: 0.25rem;
+            overflow: hidden;
+            margin-bottom: 0.5rem;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: #3b82f6;
+            transition: width 0.3s ease;
+        }
+
+        .progress-text {
+            font-size: 0.75rem;
+            color: #64748b;
+            margin-bottom: 0.5rem;
+        }
+
+        .progress-actions {
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        .btn-small {
+            padding: 0.375rem 0.75rem;
+            font-size: 0.75rem;
+            border-radius: 0.25rem;
+        }
+
+        .btn-download {
+            background: #059669;
+            color: white;
+            border: none;
+        }
+
+        .btn-download:hover {
+            background: #047857;
+        }
+
+        .btn-cancel {
+            background: #dc2626;
+            color: white;
+            border: none;
+        }
+
+        .btn-cancel:hover {
+            background: #b91c1c;
+        }
+
+        .logs-section {
+            grid-column: 1 / -1;
+        }
+
+        .log-entries {
+            background: #1e293b;
+            border-radius: 0.375rem;
+            padding: 1rem;
+            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+            font-size: 0.875rem;
+            line-height: 1.6;
+            color: #e2e8f0;
+            max-height: 300px;
+            overflow-y: auto;
+            margin-top: 1rem;
+        }
+
+        .log-entry {
+            display: flex;
+            gap: 0.75rem;
+            margin-bottom: 0.5rem;
+            padding: 0.25rem 0;
+        }
+
+        .log-entry:last-child {
+            margin-bottom: 0;
+        }
+
+        .log-timestamp {
+            color: #64748b;
+            flex-shrink: 0;
+            font-weight: 500;
+        }
+
+        .log-level {
+            flex-shrink: 0;
+            font-weight: 600;
+            width: 5rem;
+        }
+
+        .log-target {
+            flex-shrink: 0;
+            font-weight: 500;
+            width: 8rem;
+            color: #94a3b8;
+            font-size: 0.8125rem;
+        }
+
+        .log-level-info {
+            color: #3b82f6;
+        }
+
+        .log-level-warn {
+            color: #f59e0b;
+        }
+
+        .log-level-error {
+            color: #ef4444;
+        }
+
+        .log-level-debug {
+            color: #6b7280;
+        }
+
+        .log-message {
+            color: #e2e8f0;
+            flex: 1;
+        }
+
+        .log-controls {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 1rem;
+            align-items: center;
+        }
+
+        .log-filter {
+            padding: 0.375rem 0.5rem;
+            border: 1px solid #d1d5db;
+            border-radius: 0.25rem;
+            font-size: 0.75rem;
+            background: white;
+        }
+
+
+        .breadcrumb {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-bottom: 1rem;
+            font-size: 0.875rem;
+        }
+
+        .breadcrumb a {
+            color: #3b82f6;
+            text-decoration: none;
+        }
+
+        .breadcrumb a:hover {
+            text-decoration: underline;
+        }
+
+        .breadcrumb span {
+            color: #64748b;
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                padding: 1rem;
+            }
+
+            .grid {
+                grid-template-columns: 1fr;
+                gap: 1rem;
+            }
+
+            .overview-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .metrics-grid {
+                grid-template-columns: 1fr 1fr;
+            }
+
+            .properties-grid {
+                grid-template-columns: 1fr 1fr;
+            }
+
+            .time-range-inputs {
+                grid-template-columns: 1fr;
+            }
+
+            .header-content {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-content">
+            <div class="header-info">
+                <h1>web-server (abc-123-def)</h1>
+                <p>Generate and configure Perfetto traces for this process</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="container">
+        <div class="breadcrumb">
+            <a href="#">Analytics</a>
+            <span>›</span>
+            <a href="#">Processes</a>
+            <span>›</span>
+            <span>web-server</span>
+        </div>
+
+        <div class="tab-navigation">
+            <button class="tab active">Process Info</button>
+            <button class="tab">Generate Trace</button>
+            <button class="tab">Recent Logs</button>
+        </div>
+
+        <div class="tab-content" id="info-tab">
+            <h2>Process Information</h2>
+            <div class="overview-grid">
+                <div class="stat-card">
+                    <div class="stat-label">Start Time</div>
+                    <div class="stat-value">10:15 AM</div>
+                    <div class="stat-subtitle">Aug 20, 2024</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Last Update</div>
+                    <div class="stat-value">12:46 PM</div>
+                    <div class="stat-subtitle">2h 31m ago</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Threads</div>
+                    <div class="stat-value">8</div>
+                    <div class="stat-subtitle">Number of thread streams</div>
+                </div>
+            </div>
+
+            <div class="metrics-grid">
+                <div class="stat-card">
+                    <div class="stat-label">Log Entries</div>
+                    <div class="stat-value">12,456</div>
+                    <div class="stat-subtitle">Number of log entries</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Measures</div>
+                    <div class="stat-value">834</div>
+                    <div class="stat-subtitle">Number of measures</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Trace Events</div>
+                    <div class="stat-value">5,137</div>
+                    <div class="stat-subtitle">Number of trace events</div>
+                </div>
+            </div>
+            
+            <div class="properties-grid">
+                <div class="stat-card">
+                    <div class="stat-label">Process ID</div>
+                    <div class="stat-value">abc-123-def</div>
+                    <div class="stat-subtitle">Unique process identifier</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Username</div>
+                    <div class="stat-value">developer</div>
+                    <div class="stat-subtitle">Process owner</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Computer</div>
+                    <div class="stat-value">web-server-01</div>
+                    <div class="stat-subtitle">Host machine</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Properties</div>
+                    <div class="properties-list">
+                        <div class="property-item">
+                            <span class="property-key">service:</span>
+                            <span class="property-value">web-server</span>
+                        </div>
+                        <div class="property-item">
+                            <span class="property-key">version:</span>
+                            <span class="property-value">1.2.3</span>
+                        </div>
+                        <div class="property-item">
+                            <span class="property-key">env:</span>
+                            <span class="property-value">production</span>
+                        </div>
+                        <div class="property-item">
+                            <span class="property-key">region:</span>
+                            <span class="property-value">us-east-1</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="tab-content hidden" id="trace-tab">
+            <h2>Generate Perfetto Trace</h2>
+            
+            <div class="form-group">
+                <label class="form-label">Span Types to Include</label>
+                <div class="checkbox-group">
+                    <div class="checkbox-item checked">
+                        <input type="checkbox" class="checkbox" checked>
+                        <div class="checkbox-label">Thread Events</div>
+                        <div class="checkbox-count">1,245</div>
+                    </div>
+                    <div class="checkbox-item checked">
+                        <input type="checkbox" class="checkbox" checked>
+                        <div class="checkbox-label">Async Span Events</div>
+                        <div class="checkbox-count">3,892</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label">Time Range</label>
+                <div class="time-range-inputs">
+                    <input type="datetime-local" class="form-input" value="2024-08-20T10:15">
+                    <input type="datetime-local" class="form-input" value="2024-08-20T12:46">
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label">Trace Name</label>
+                <input type="text" class="form-input" value="web-server-trace-20240820" placeholder="Enter trace name">
+            </div>
+
+            <div class="form-group">
+                <button class="btn-primary">Generate Perfetto Trace</button>
+            </div>
+
+            <div class="progress-section">
+                <div class="progress-item">
+                    <div class="progress-header">
+                        <div class="progress-title">Full Trace (All Spans)</div>
+                        <div class="progress-status status-generating">Generating</div>
+                    </div>
+                    <div class="progress-bar">
+                        <div class="progress-fill" style="width: 73%;"></div>
+                    </div>
+                    <div class="progress-text">Processing async spans... (73%)</div>
+                    <div class="progress-text">Estimated completion: 2 minutes</div>
+                    <div class="progress-actions">
+                        <button class="btn-small btn-cancel">Cancel</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="tab-content hidden" id="logs-tab">
+            <h2>Recent Log Entries</h2>
+            <div class="log-controls">
+                <select class="log-filter">
+                    <option>All Levels</option>
+                    <option>Error</option>
+                    <option>Warn</option>
+                    <option>Info</option>
+                    <option>Debug</option>
+                </select>
+                <button class="btn-small btn-secondary">Refresh</button>
+                <span style="font-size: 0.75rem; color: #64748b; margin-left: auto;">Showing last 50 entries</span>
+            </div>
+            <div class="log-entries">
+                <div class="log-entry">
+                    <div class="log-timestamp">12:46:18</div>
+                    <div class="log-level log-level-info">INFO</div>
+                    <div class="log-target">http::handler</div>
+                    <div class="log-message">Request completed successfully: GET /api/users/123 (45.2ms)</div>
+                </div>
+                <div class="log-entry">
+                    <div class="log-timestamp">12:46:15</div>
+                    <div class="log-level log-level-debug">DEBUG</div>
+                    <div class="log-target">cache::redis</div>
+                    <div class="log-message">Cache hit for key: user:123 (2.1ms)</div>
+                </div>
+                <div class="log-entry">
+                    <div class="log-timestamp">12:46:12</div>
+                    <div class="log-level log-level-info">INFO</div>
+                    <div class="log-target">db::postgres</div>
+                    <div class="log-message">Database query executed: SELECT * FROM users WHERE id = $1 (12.7ms)</div>
+                </div>
+                <div class="log-entry">
+                    <div class="log-timestamp">12:46:08</div>
+                    <div class="log-level log-level-warn">WARN</div>
+                    <div class="log-target">http::client</div>
+                    <div class="log-message">Slow external API response: payment-service (156.8ms > 100ms threshold)</div>
+                </div>
+                <div class="log-entry">
+                    <div class="log-timestamp">12:46:05</div>
+                    <div class="log-level log-level-info">INFO</div>
+                    <div class="log-target">worker::stats</div>
+                    <div class="log-message">Background task completed: user-stats-aggregation (2.3s)</div>
+                </div>
+                <div class="log-entry">
+                    <div class="log-timestamp">12:46:02</div>
+                    <div class="log-level log-level-debug">DEBUG</div>
+                    <div class="log-target">db::pool</div>
+                    <div class="log-message">Connection pool status: 8/20 active connections</div>
+                </div>
+                <div class="log-entry">
+                    <div class="log-timestamp">12:45:58</div>
+                    <div class="log-level log-level-error">ERROR</div>
+                    <div class="log-target">cache::redis</div>
+                    <div class="log-message">Failed to connect to redis cache: connection timeout after 5s</div>
+                </div>
+                <div class="log-entry">
+                    <div class="log-timestamp">12:45:55</div>
+                    <div class="log-level log-level-info">INFO</div>
+                    <div class="log-target">http::handler</div>
+                    <div class="log-message">Request completed successfully: POST /api/orders (67.1ms)</div>
+                </div>
+                <div class="log-entry">
+                    <div class="log-timestamp">12:45:52</div>
+                    <div class="log-level log-level-debug">DEBUG</div>
+                    <div class="log-target">async::io</div>
+                    <div class="log-message">Async I/O operation completed: file-upload-validation (8.9ms)</div>
+                </div>
+                <div class="log-entry">
+                    <div class="log-timestamp">12:45:48</div>
+                    <div class="log-level log-level-info">INFO</div>
+                    <div class="log-target">metrics::pub</div>
+                    <div class="log-message">Metrics published to monitoring service: cpu=12.5%, memory=247MB</div>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const tabs = document.querySelectorAll('.tab');
+    const tabContents = document.querySelectorAll('.tab-content');
+
+    tabs.forEach((tab, index) => {
+        tab.addEventListener('click', function() {
+            // Remove active class from all tabs
+            tabs.forEach(t => t.classList.remove('active'));
+            
+            // Hide all tab contents
+            tabContents.forEach(content => content.classList.add('hidden'));
+            
+            // Add active class to clicked tab
+            this.classList.add('active');
+            
+            // Show corresponding tab content
+            tabContents[index].classList.remove('hidden');
+        });
+    });
+});
+</script>
+
+</body>
+</html>

@@ -63,9 +63,20 @@ pub async fn format_perfetto_trace(
         for row in 0..b.num_rows() {
             let stream_id = stream_id_column.value(row);
             let thread_name = thread_name_column.value(row);
-            eprintln!("stream_id={stream_id} thread_name={thread_name}");
-            let thread_id = thread_id_column.value(row);
-            writer.append_thread_descriptor(stream_id, thread_id.parse::<i32>()?, thread_name);
+            let thread_id_str = thread_id_column.value(row);
+            // Thread IDs from the database might be too large for i32
+            // Use a hash or truncate to fit in i32 range
+            let thread_id: i32 = if let Ok(id) = thread_id_str.parse::<i32>() {
+                id
+            } else {
+                // If parsing fails, use a hash of the thread_id string
+                use std::collections::hash_map::DefaultHasher;
+                use std::hash::{Hash, Hasher};
+                let mut hasher = DefaultHasher::new();
+                thread_id_str.hash(&mut hasher);
+                hasher.finish() as i32
+            };
+            writer.append_thread_descriptor(stream_id, thread_id, thread_name);
 
             let sql_spans = format!(
                 r#"
@@ -82,9 +93,32 @@ pub async fn format_perfetto_trace(
                 let filenames: &StringArray = typed_column_by_name(&b, "filename")?;
                 let lines: &UInt32Array = typed_column_by_name(&b, "line")?;
                 for row in 0..b.num_rows() {
+                    let begin_ns = begins.value(row);
+                    let end_ns = ends.value(row);
+
+                    // These timestamps are absolute UTC nanosecond timestamps as i64
+                    // Convert to u64 by treating negative values as errors
+                    let begin_u64: u64 = if begin_ns < 0 {
+                        anyhow::bail!(
+                            "Negative begin timestamp: {} - this indicates a data issue",
+                            begin_ns
+                        );
+                    } else {
+                        begin_ns as u64
+                    };
+
+                    let end_u64: u64 = if end_ns < 0 {
+                        anyhow::bail!(
+                            "Negative end timestamp: {} - this indicates a data issue",
+                            end_ns
+                        );
+                    } else {
+                        end_ns as u64
+                    };
+
                     writer.append_span(
-                        begins.value(row) as u64,
-                        ends.value(row) as u64,
+                        begin_u64,
+                        end_u64,
                         names.value(row),
                         targets.value(row),
                         filenames.value(row),

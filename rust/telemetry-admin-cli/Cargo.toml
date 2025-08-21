@@ -19,3 +19,6 @@ micromegas.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 tokio.workspace = true
+
+[package.metadata.cargo-machete]
+ignored = ["tokio"]  # Required by micromegas_main macro

@@ -18,6 +18,4 @@ micromegas.workspace = true
 
 anyhow.workspace = true
 clap.workspace = true
-serde.workspace = true
-thiserror.workspace = true
 tokio.workspace = true
