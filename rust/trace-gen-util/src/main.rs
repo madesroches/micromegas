@@ -24,7 +24,7 @@ struct Args {
     output: String,
 
     /// FlightSQL server URL
-    #[arg(long, default_value = "http://127.0.0.1:32010")]
+    #[arg(long, default_value = "http://127.0.0.1:50051")]
     flightsql_url: String,
 
     /// Start time for trace (RFC 3339 format, optional)
