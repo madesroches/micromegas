@@ -86,9 +86,9 @@ Generate Perfetto trace files from a process's async span events by extending th
 - Updated `lib.rs` exports: separate imports for `Writer` and `StreamingPerfettoWriter`
 - Well-documented protobuf field number constant with schema reference
 
-### ✅ Phase 3: Async Event Support in Perfetto Writer (COMPLETED)
+### 🔄 Phase 3: Async Event Support in Perfetto Writer (IN PROGRESS)
 
-**Status**: ✅ **COMPLETED** - Full async span support implemented and tested
+**Status**: 🔄 **IN PROGRESS** - Full async span support implemented but timestamp reliability issues discovered
 
 **Objective**: Add async track support to the Perfetto writer (independent of streaming)
 
@@ -128,6 +128,15 @@ Generate Perfetto trace files from a process's async span events by extending th
 - **Process-level parenting** for async track (not thread-level) for cleaner hierarchy
 - **Safety-first design** with assertions ensuring proper usage patterns
 - **Full streaming support** for memory-efficient large trace generation
+
+**🔧 Outstanding Issues**:
+- **⚠️ Timestamp reliability problems**: Negative span durations observed (end_time < begin_time)
+- **Root cause**: TSC (Time Stamp Counter) timing issues when TSC is not available or unreliable
+- **Current mitigation**: Skip invalid spans with descriptive warning messages
+- **Next steps**: Investigate timing infrastructure in `rust/tracing/src/time.rs` and TSC frequency calibration
+  - **Critical**: Always use latest available TSC frequency data, not just block-level info
+  - TSC should be monotonic - investigate why we're seeing time reversals
+  - Need to ensure proper TSC frequency calibration using most recent timing data available
 
 ### Phase 4: FlightSQL Streaming Table Function
 
@@ -230,6 +239,7 @@ Generate Perfetto trace files from a process's async span events by extending th
 3. **Memory optimization**:
    - Process async events in batches to avoid loading all events in memory
    - Use streaming approach for large processes with many async events
+
 
 ### Phase 8: Python Client Refactoring
 
@@ -334,9 +344,11 @@ ORDER BY time ASC
 ### ✅ Completed
 - **Phase 1**: Analytics Web App - Fully operational testing and development platform
 - **Phase 2**: Perfetto Writer Streaming Support - Complete streaming infrastructure with identical output compatibility
-- **Phase 3**: Async Event Support in Perfetto Writer - Full async span support with comprehensive testing
 - **Async Events Infrastructure**: Complete async span data collection and view system
 - **Trace Generation Utility**: End-to-end testing tool for validating async span implementation
+
+### 🔄 In Progress
+- **Phase 3**: Async Event Support in Perfetto Writer - Core implementation complete but timestamp reliability issues need resolution
 
 ### ✅ Phase 3 Achievement Highlights
 - **Full API Implementation**: Both regular and streaming writers support async spans

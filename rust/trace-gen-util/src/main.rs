@@ -3,6 +3,8 @@ use chrono::{DateTime, Utc};
 use clap::Parser;
 use datafusion::arrow::array::{Int64Array, StringArray, TimestampNanosecondArray, UInt32Array};
 use micromegas::client::flightsql_client::Client;
+use micromegas::micromegas_main;
+use micromegas::tracing::prelude::*;
 use micromegas_analytics::dfext::typed_column::typed_column_by_name;
 use micromegas_analytics::time::TimeRange;
 use micromegas_perfetto::StreamingPerfettoWriter;
@@ -36,7 +38,7 @@ struct Args {
     end_time: Option<DateTime<Utc>>,
 }
 
-#[tokio::main]
+#[micromegas_main]
 async fn main() -> Result<()> {
     let args = Args::parse();
 
@@ -257,11 +259,33 @@ async fn generate_async_spans<W: Write>(
 ) -> Result<()> {
     let sql = format!(
         r#"
-        SELECT stream_id, time, event_type, span_id, parent_span_id, depth, name, filename, target, line
-        FROM view_instance('async_events', '{}')
-        WHERE time >= '{}' AND time <= '{}'
-        ORDER BY time
+        WITH begin_events AS (
+            SELECT span_id, time as begin_time, name, filename, target, line
+            FROM view_instance('async_events', '{}')
+            WHERE time >= '{}' AND time <= '{}'
+              AND event_type = 'begin'
+        ),
+        end_events AS (
+            SELECT span_id, time as end_time
+            FROM view_instance('async_events', '{}')
+            WHERE time >= '{}' AND time <= '{}'
+              AND event_type = 'end'
+        )
+        SELECT 
+            b.span_id,
+            b.begin_time,
+            e.end_time,
+            b.name,
+            b.filename,
+            b.target,
+            b.line
+        FROM begin_events b
+        INNER JOIN end_events e ON b.span_id = e.span_id
+        ORDER BY b.begin_time
         "#,
+        process_id,
+        time_range.begin.to_rfc3339(),
+        time_range.end.to_rfc3339(),
         process_id,
         time_range.begin.to_rfc3339(),
         time_range.end.to_rfc3339()
@@ -269,36 +293,32 @@ async fn generate_async_spans<W: Write>(
 
     let batches = client.query(sql, Some(time_range)).await?;
 
+    // Process spans directly - each row represents a complete span with begin/end times
     for batch in batches {
-        let _stream_ids: &StringArray = typed_column_by_name(&batch, "stream_id")?;
-        let times: &TimestampNanosecondArray = typed_column_by_name(&batch, "time")?;
-        let event_types: &StringArray = typed_column_by_name(&batch, "event_type")?;
         let _span_ids: &Int64Array = typed_column_by_name(&batch, "span_id")?;
-        let _parent_span_ids: &Int64Array = typed_column_by_name(&batch, "parent_span_id")?;
-        let _depths: &UInt32Array = typed_column_by_name(&batch, "depth")?;
+        let begin_times: &TimestampNanosecondArray = typed_column_by_name(&batch, "begin_time")?;
+        let end_times: &TimestampNanosecondArray = typed_column_by_name(&batch, "end_time")?;
         let names: &StringArray = typed_column_by_name(&batch, "name")?;
         let filenames: &StringArray = typed_column_by_name(&batch, "filename")?;
         let targets: &StringArray = typed_column_by_name(&batch, "target")?;
         let lines: &UInt32Array = typed_column_by_name(&batch, "line")?;
 
         for i in 0..batch.num_rows() {
-            let time_ns = times.value(i) as u64;
-            let event_type = event_types.value(i);
+            let begin_ns = begin_times.value(i) as u64;
+            let end_ns = end_times.value(i) as u64;
             let name = names.value(i);
             let filename = filenames.value(i);
             let target = targets.value(i);
             let line = lines.value(i);
 
-            match event_type {
-                "begin" => {
-                    writer.emit_async_span_begin(time_ns, name, target, filename, line)?;
-                }
-                "end" => {
-                    writer.emit_async_span_end(time_ns, name, target, filename, line)?;
-                }
-                _ => {
-                    println!("Warning: Unknown async event type: {}", event_type);
-                }
+            if end_ns >= begin_ns {
+                // Emit begin and end events consecutively for each span
+                writer.emit_async_span_begin(begin_ns, name, target, filename, line)?;
+                writer.emit_async_span_end(end_ns, name, target, filename, line)?;
+            } else {
+                let negative_duration_ns = begin_ns - end_ns;
+                let negative_duration_ms = negative_duration_ns as f64 / 1_000_000.0;
+                warn!("invalid span duration '{name}': {negative_duration_ms:.3}ms");
             }
         }
     }
