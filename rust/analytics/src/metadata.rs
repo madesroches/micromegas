@@ -1,27 +1,28 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use datafusion::arrow::array::{
-    Int32Array, Int64Array, RecordBatch, StringArray, TimestampNanosecondArray,
+    Array, Int32Array, Int64Array, ListArray, RecordBatch, StringArray, TimestampNanosecondArray,
 };
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_telemetry::{
     property::Property, stream_info::StreamInfo, types::block::BlockMetadata,
 };
 use micromegas_tracing::{prelude::*, process_info::ProcessInfo};
-use micromegas_transit::UserDefinedType;
+use micromegas_transit::{UserDefinedType, uuid_utils::parse_optional_uuid};
 use sqlx::Row;
 use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::{
+    arrow_properties::read_property_list,
     dfext::typed_column::typed_column_by_name,
     lakehouse::{
-        partition_cache::NullPartitionProvider, query::make_session_context,
+        partition_cache::LivePartitionProvider, query::make_session_context,
         view_factory::ViewFactory,
     },
+    time::TimeRange,
 };
-use datafusion::{arrow::array::UInt64Array, execution::runtime_env::RuntimeEnv};
-use sqlx::types::Uuid as SqlxUuid;
+use datafusion::execution::runtime_env::RuntimeEnv;
 
 /// Creates a `StreamInfo` from a database row.
 pub fn stream_from_row(row: &sqlx::postgres::PgRow) -> Result<StreamInfo> {
@@ -146,13 +147,16 @@ pub async fn find_process_with_latest_timing(
     runtime: Arc<RuntimeEnv>,
     lake: Arc<DataLakeConnection>,
     view_factory: Arc<ViewFactory>,
-    process_id: &SqlxUuid,
+    process_id: &Uuid,
+    query_range: Option<TimeRange>,
 ) -> Result<(ProcessInfo, i64, DateTime<Utc>)> {
+    let partition_provider = Arc::new(LivePartitionProvider::new(lake.db_pool.clone()));
+
     let ctx = make_session_context(
         runtime,
-        lake,
-        Arc::new(NullPartitionProvider {}),
-        None,
+        lake.clone(),
+        partition_provider,
+        query_range,
         view_factory,
     )
     .await
@@ -160,19 +164,18 @@ pub async fn find_process_with_latest_timing(
 
     let sql = format!(
         "SELECT process_id, exe, username, realname, computer, distro, cpu_brand,
-                tsc_frequency, start_time, start_ticks, last_block_end_ticks, last_block_end_time
+                tsc_frequency, start_time, start_ticks, parent_process_id, properties,
+                last_block_end_ticks, last_block_end_time
          FROM processes
          WHERE process_id = '{}'",
         process_id
     );
 
-    let df = ctx
-        .sql(&sql)
+    let df = instrument_named!(ctx.sql(&sql), "datafusion_sql_query")
         .await
         .with_context(|| "executing DataFusion query for process with latest timing")?;
 
-    let batches = df
-        .collect()
+    let batches = instrument_named!(df.collect(), "datafusion_collect")
         .await
         .with_context(|| "collecting DataFusion query results")?;
 
@@ -190,27 +193,43 @@ pub async fn find_process_with_latest_timing(
     let computer_column: &StringArray = typed_column_by_name(batch, "computer")?;
     let distro_column: &StringArray = typed_column_by_name(batch, "distro")?;
     let cpu_brand_column: &StringArray = typed_column_by_name(batch, "cpu_brand")?;
-    let tsc_frequency_column: &UInt64Array = typed_column_by_name(batch, "tsc_frequency")?;
+    let tsc_frequency_column: &Int64Array = typed_column_by_name(batch, "tsc_frequency")?;
     let start_time_column: &TimestampNanosecondArray = typed_column_by_name(batch, "start_time")?;
-    let start_ticks_column: &UInt64Array = typed_column_by_name(batch, "start_ticks")?;
+    let start_ticks_column: &Int64Array = typed_column_by_name(batch, "start_ticks")?;
     let last_block_end_ticks_column: &Int64Array =
         typed_column_by_name(batch, "last_block_end_ticks")?;
     let last_block_end_time_column: &TimestampNanosecondArray =
         typed_column_by_name(batch, "last_block_end_time")?;
+    let parent_process_id_column: &StringArray = typed_column_by_name(batch, "parent_process_id")?;
+    let properties_column: &ListArray = typed_column_by_name(batch, "properties")?;
+
+    let parent_process_id = if parent_process_id_column.is_null(0) {
+        None
+    } else {
+        parse_optional_uuid(parent_process_id_column.value(0))?
+    };
+
+    let properties = if properties_column.is_null(0) {
+        Default::default()
+    } else {
+        let properties_list = read_property_list(properties_column.value(0))?;
+        micromegas_telemetry::property::into_hashmap(properties_list)
+    };
 
     let process_info = ProcessInfo {
-        process_id: Uuid::parse_str(process_id_column.value(0))?,
+        process_id: parse_optional_uuid(process_id_column.value(0))?
+            .ok_or_else(|| anyhow::anyhow!("process_id cannot be empty"))?,
         exe: exe_column.value(0).to_string(),
         username: username_column.value(0).to_string(),
         realname: realname_column.value(0).to_string(),
         computer: computer_column.value(0).to_string(),
         distro: distro_column.value(0).to_string(),
         cpu_brand: cpu_brand_column.value(0).to_string(),
-        tsc_frequency: tsc_frequency_column.value(0) as i64,
+        tsc_frequency: tsc_frequency_column.value(0),
         start_time: DateTime::from_timestamp_nanos(start_time_column.value(0)),
-        start_ticks: start_ticks_column.value(0) as i64,
-        parent_process_id: None, // TODO: Add parent_process_id to query if needed
-        properties: Default::default(), // TODO: Add properties to query if needed
+        start_ticks: start_ticks_column.value(0),
+        parent_process_id,
+        properties,
     };
 
     let last_block_end_ticks = last_block_end_ticks_column.value(0);

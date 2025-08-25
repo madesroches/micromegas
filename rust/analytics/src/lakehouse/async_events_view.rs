@@ -22,6 +22,7 @@ use datafusion::{
     logical_expr::{Between, Expr, col},
 };
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
+use micromegas_tracing::prelude::*;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -34,11 +35,22 @@ lazy_static::lazy_static! {
 
 /// A `ViewMaker` for creating `AsyncEventsView` instances.
 #[derive(Debug)]
-pub struct AsyncEventsViewMaker {}
+pub struct AsyncEventsViewMaker {
+    view_factory: Arc<ViewFactory>,
+}
+
+impl AsyncEventsViewMaker {
+    pub fn new(view_factory: Arc<ViewFactory>) -> Self {
+        Self { view_factory }
+    }
+}
 
 impl ViewMaker for AsyncEventsViewMaker {
     fn make_view(&self, view_instance_id: &str) -> Result<Arc<dyn View>> {
-        Ok(Arc::new(AsyncEventsView::new(view_instance_id)?))
+        Ok(Arc::new(AsyncEventsView::new(
+            view_instance_id,
+            self.view_factory.clone(),
+        )?))
     }
 }
 
@@ -48,10 +60,11 @@ pub struct AsyncEventsView {
     view_set_name: Arc<String>,
     view_instance_id: Arc<String>,
     process_id: Option<sqlx::types::Uuid>,
+    view_factory: Arc<ViewFactory>,
 }
 
 impl AsyncEventsView {
-    pub fn new(view_instance_id: &str) -> Result<Self> {
+    pub fn new(view_instance_id: &str, view_factory: Arc<ViewFactory>) -> Result<Self> {
         if view_instance_id == "global" {
             anyhow::bail!("AsyncEventsView does not support global view access");
         }
@@ -63,6 +76,7 @@ impl AsyncEventsView {
             view_set_name: Arc::new(String::from(VIEW_SET_NAME)),
             view_instance_id: Arc::new(view_instance_id.into()),
             process_id,
+            view_factory,
         })
     }
 }
@@ -95,30 +109,28 @@ impl View for AsyncEventsView {
         Arc::new(async_events_table_schema())
     }
 
+    #[span_fn]
     async fn jit_update(
         &self,
         runtime: Arc<RuntimeEnv>,
         lake: Arc<DataLakeConnection>,
         query_range: Option<TimeRange>,
     ) -> Result<()> {
-        // Create a minimal view factory with just the blocks view needed for processes view
-        let blocks_view = Arc::new(BlocksView::new()?);
-        let minimal_view_factory = Arc::new(ViewFactory::new(vec![blocks_view]));
-
         let (process, last_block_end_ticks, last_block_end_time) = find_process_with_latest_timing(
             runtime.clone(),
             lake.clone(),
-            minimal_view_factory,
+            self.view_factory.clone(),
             &self
                 .process_id
                 .with_context(|| "getting a view's process_id")?,
+            query_range,
         )
         .await
         .with_context(|| "find_process_with_latest_timing")?;
 
         let process = Arc::new(process);
         let query_range =
-            query_range.unwrap_or_else(|| TimeRange::new(process.start_time, chrono::Utc::now()));
+            query_range.unwrap_or_else(|| TimeRange::new(process.start_time, last_block_end_time));
 
         // Create a consistent ConvertTicks using the latest timing information
         let convert_ticks = Arc::new(

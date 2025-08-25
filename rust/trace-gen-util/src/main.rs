@@ -38,7 +38,7 @@ struct Args {
     end_time: Option<DateTime<Utc>>,
 }
 
-#[micromegas_main]
+#[micromegas_main(interop_max_level = "info")]
 async fn main() -> Result<()> {
     let args = Args::parse();
 
@@ -173,8 +173,9 @@ async fn get_thread_info(
     let sql = format!(
         r#"
         SELECT DISTINCT stream_id
-        FROM blocks
+        FROM streams
         WHERE process_id = '{}'
+        AND array_has(tags, 'cpu')
         ORDER BY stream_id
         "#,
         process_id

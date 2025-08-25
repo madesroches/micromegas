@@ -2,10 +2,15 @@ use anyhow::Result;
 use micromegas_analytics::{
     async_block_processing::AsyncBlockProcessor,
     async_events_table::{AsyncEventRecord, AsyncEventRecordBuilder, async_events_table_schema},
-    lakehouse::{async_events_view::AsyncEventsView, view::View},
+    lakehouse::{async_events_view::AsyncEventsView, view::View, view_factory::ViewFactory},
     scope::ScopeDesc,
 };
 use std::sync::Arc;
+
+/// Create a dummy ViewFactory for testing
+fn create_test_view_factory() -> Arc<ViewFactory> {
+    Arc::new(ViewFactory::new(vec![]))
+}
 
 /// Test implementation of AsyncBlockProcessor for testing
 struct TestAsyncProcessor {
@@ -157,7 +162,8 @@ fn test_async_event_record_builder() {
 #[test]
 fn test_async_events_view_creation() {
     let process_id = uuid::Uuid::new_v4();
-    let view = AsyncEventsView::new(&process_id.to_string()).expect("Failed to create view");
+    let view = AsyncEventsView::new(&process_id.to_string(), create_test_view_factory())
+        .expect("Failed to create view");
 
     assert_eq!(*view.get_view_set_name(), "async_events");
     assert_eq!(*view.get_view_instance_id(), process_id.to_string());
@@ -165,7 +171,7 @@ fn test_async_events_view_creation() {
 
 #[test]
 fn test_async_events_view_global_rejection() {
-    let result = AsyncEventsView::new("global");
+    let result = AsyncEventsView::new("global", create_test_view_factory());
     assert!(result.is_err());
     assert!(
         result
@@ -177,7 +183,7 @@ fn test_async_events_view_global_rejection() {
 
 #[test]
 fn test_async_events_view_invalid_uuid() {
-    let result = AsyncEventsView::new("invalid-uuid");
+    let result = AsyncEventsView::new("invalid-uuid", create_test_view_factory());
     assert!(result.is_err());
 }
 
@@ -262,7 +268,8 @@ fn test_empty_record_builder() {
 #[test]
 fn test_async_events_view_schema_consistency() {
     let process_id = uuid::Uuid::new_v4();
-    let view = AsyncEventsView::new(&process_id.to_string()).expect("Failed to create view");
+    let view = AsyncEventsView::new(&process_id.to_string(), create_test_view_factory())
+        .expect("Failed to create view");
 
     let view_schema = view.get_file_schema();
     let table_schema = Arc::new(async_events_table_schema());
@@ -424,7 +431,7 @@ fn test_async_events_view_maker_integration() {
         async_events_view::AsyncEventsViewMaker, view_factory::ViewMaker,
     };
 
-    let maker = AsyncEventsViewMaker {};
+    let maker = AsyncEventsViewMaker::new(create_test_view_factory());
     let process_id = uuid::Uuid::new_v4();
 
     // Test valid process ID
