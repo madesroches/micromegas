@@ -5,13 +5,13 @@ use super::{
     jit_partitions::{JitPartitionConfig, write_partition_from_blocks},
     partition_cache::PartitionCache,
     view::{PartitionSpec, View, ViewMetadata},
-    view_factory::ViewMaker,
+    view_factory::{ViewFactory, ViewMaker},
 };
 use crate::{
     async_events_table::async_events_table_schema,
     lakehouse::jit_partitions::{generate_jit_partitions, is_jit_partition_up_to_date},
-    metadata::{find_process, list_process_streams_tagged},
-    time::{TimeRange, datetime_to_scalar},
+    metadata::{find_process_with_latest_timing, list_process_streams_tagged},
+    time::{TimeRange, datetime_to_scalar, make_time_converter_from_latest_timing},
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -22,6 +22,7 @@ use datafusion::{
     logical_expr::{Between, Expr, col},
 };
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
+use micromegas_tracing::prelude::*;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -34,11 +35,22 @@ lazy_static::lazy_static! {
 
 /// A `ViewMaker` for creating `AsyncEventsView` instances.
 #[derive(Debug)]
-pub struct AsyncEventsViewMaker {}
+pub struct AsyncEventsViewMaker {
+    view_factory: Arc<ViewFactory>,
+}
+
+impl AsyncEventsViewMaker {
+    pub fn new(view_factory: Arc<ViewFactory>) -> Self {
+        Self { view_factory }
+    }
+}
 
 impl ViewMaker for AsyncEventsViewMaker {
     fn make_view(&self, view_instance_id: &str) -> Result<Arc<dyn View>> {
-        Ok(Arc::new(AsyncEventsView::new(view_instance_id)?))
+        Ok(Arc::new(AsyncEventsView::new(
+            view_instance_id,
+            self.view_factory.clone(),
+        )?))
     }
 }
 
@@ -48,10 +60,11 @@ pub struct AsyncEventsView {
     view_set_name: Arc<String>,
     view_instance_id: Arc<String>,
     process_id: Option<sqlx::types::Uuid>,
+    view_factory: Arc<ViewFactory>,
 }
 
 impl AsyncEventsView {
-    pub fn new(view_instance_id: &str) -> Result<Self> {
+    pub fn new(view_instance_id: &str, view_factory: Arc<ViewFactory>) -> Result<Self> {
         if view_instance_id == "global" {
             anyhow::bail!("AsyncEventsView does not support global view access");
         }
@@ -63,6 +76,7 @@ impl AsyncEventsView {
             view_set_name: Arc::new(String::from(VIEW_SET_NAME)),
             view_instance_id: Arc::new(view_instance_id.into()),
             process_id,
+            view_factory,
         })
     }
 }
@@ -95,24 +109,38 @@ impl View for AsyncEventsView {
         Arc::new(async_events_table_schema())
     }
 
+    #[span_fn]
     async fn jit_update(
         &self,
         runtime: Arc<RuntimeEnv>,
         lake: Arc<DataLakeConnection>,
         query_range: Option<TimeRange>,
     ) -> Result<()> {
-        let process = Arc::new(
-            find_process(
-                &lake.db_pool,
-                &self
-                    .process_id
-                    .with_context(|| "getting a view's process_id")?,
-            )
-            .await
-            .with_context(|| "find_process")?,
-        );
+        let (process, last_block_end_ticks, last_block_end_time) = find_process_with_latest_timing(
+            runtime.clone(),
+            lake.clone(),
+            self.view_factory.clone(),
+            &self
+                .process_id
+                .with_context(|| "getting a view's process_id")?,
+            query_range,
+        )
+        .await
+        .with_context(|| "find_process_with_latest_timing")?;
+
+        let process = Arc::new(process);
         let query_range =
-            query_range.unwrap_or_else(|| TimeRange::new(process.start_time, chrono::Utc::now()));
+            query_range.unwrap_or_else(|| TimeRange::new(process.start_time, last_block_end_time));
+
+        // Create a consistent ConvertTicks using the latest timing information
+        let convert_ticks = Arc::new(
+            make_time_converter_from_latest_timing(
+                &process,
+                last_block_end_ticks,
+                last_block_end_time,
+            )
+            .with_context(|| "make_time_converter_from_latest_timing")?,
+        );
 
         // Use all thread streams since async events are recorded in thread streams
         let streams = list_process_streams_tagged(&lake.db_pool, process.process_id, "cpu")
@@ -147,7 +175,7 @@ impl View for AsyncEventsView {
                     view_meta.clone(),
                     self.get_file_schema(),
                     part,
-                    Arc::new(AsyncEventsBlockProcessor {}),
+                    Arc::new(AsyncEventsBlockProcessor::new(convert_ticks.clone())),
                 )
                 .await
                 .with_context(|| "write_partition_from_blocks")?;

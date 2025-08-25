@@ -265,9 +265,13 @@ pub async fn default_view_factory(
         String::from("thread_spans"),
         Arc::new(ThreadSpansViewMaker {}),
     );
-    factory.add_view_set(
+
+    // Create the factory as Arc to pass to AsyncEventsViewMaker
+    let factory_arc = Arc::new(factory);
+    let mut final_factory = (*factory_arc).clone();
+    final_factory.add_view_set(
         String::from("async_events"),
-        Arc::new(AsyncEventsViewMaker {}),
+        Arc::new(AsyncEventsViewMaker::new(factory_arc)),
     );
-    Ok(factory)
+    Ok(final_factory)
 }

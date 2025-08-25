@@ -1,132 +1,30 @@
 use std::collections::HashMap;
+use std::io::Write;
 
 use crate::protos::{
-    EventCategory, EventName, InternedData, ProcessDescriptor, SourceLocation, ThreadDescriptor,
-    Trace, TracePacket, TrackDescriptor, TrackEvent,
-    trace_packet::{Data, OptionalTrustedPacketSequenceId},
+    EventCategory, EventName, ProcessDescriptor, SourceLocation, ThreadDescriptor, TracePacket,
+    TrackEvent,
+    trace_packet::Data,
     track_event::{self, NameField, SourceLocationField},
+};
+use crate::writer::{new_interned_data, new_trace_packet, new_track_descriptor, new_track_event};
+use prost::{
+    Message,
+    encoding::{WireType, encode_key, encode_varint},
 };
 use xxhash_rust::xxh64::xxh64;
 
-pub fn new_interned_data() -> InternedData {
-    InternedData {
-        event_categories: vec![],
-        event_names: vec![],
-        debug_annotation_names: vec![],
-        debug_annotation_value_type_names: vec![],
-        source_locations: vec![],
-        unsymbolized_source_locations: vec![],
-        log_message_body: vec![],
-        histogram_names: vec![],
-        build_ids: vec![],
-        mapping_paths: vec![],
-        source_paths: vec![],
-        function_names: vec![],
-        profiled_frame_symbols: vec![],
-        mappings: vec![],
-        frames: vec![],
-        callstacks: vec![],
-        vulkan_memory_keys: vec![],
-        graphics_contexts: vec![],
-        gpu_specifications: vec![],
-        kernel_symbols: vec![],
-        debug_annotation_string_values: vec![],
-        packet_context: vec![],
-        v8_js_function_name: vec![],
-        v8_js_function: vec![],
-        v8_js_script: vec![],
-        v8_wasm_script: vec![],
-        v8_isolate: vec![],
-        protolog_string_args: vec![],
-        protolog_stacktrace: vec![],
-        viewcapture_package_name: vec![],
-        viewcapture_window_name: vec![],
-        viewcapture_view_id: vec![],
-        viewcapture_class_name: vec![],
-    }
-}
+// Protobuf field numbers for Trace message
+// Note: This corresponds to the "packet" field in the Trace message:
+//   #[prost(message, repeated, tag = "1")]
+//   pub packet: ::prost::alloc::vec::Vec<TracePacket>,
+// Prost doesn't generate field number constants by default, so we define it manually.
+// This is unlikely to change as it would break protobuf compatibility.
+const TRACE_PACKET_FIELD_NUMBER: u32 = 1;
 
-pub fn new_trace_packet() -> TracePacket {
-    TracePacket {
-        timestamp: None,
-        timestamp_clock_id: None,
-        trusted_pid: None,
-        interned_data: None,
-        sequence_flags: Some(2),
-        incremental_state_cleared: None,
-        trace_packet_defaults: None,
-        previous_packet_dropped: None,
-        first_packet_on_sequence: None,
-        machine_id: None,
-        data: None,
-        optional_trusted_uid: None,
-        optional_trusted_packet_sequence_id: Some(
-            OptionalTrustedPacketSequenceId::TrustedPacketSequenceId(1),
-        ),
-    }
-}
-
-pub fn new_track_descriptor(uuid: u64) -> TrackDescriptor {
-    TrackDescriptor {
-        uuid: Some(uuid),
-        parent_uuid: None,
-        process: None,
-        chrome_process: None,
-        thread: None,
-        chrome_thread: None,
-        counter: None,
-        disallow_merging_with_system_tracks: None,
-        static_or_dynamic_name: None,
-    }
-}
-
-#[allow(deprecated)]
-pub fn new_track_event() -> TrackEvent {
-    TrackEvent {
-        category_iids: vec![],
-        categories: vec![],
-        r#type: None,
-        track_uuid: None,
-        extra_counter_track_uuids: vec![],
-        extra_counter_values: vec![],
-        extra_double_counter_track_uuids: vec![],
-        extra_double_counter_values: vec![],
-        flow_ids_old: vec![],
-        flow_ids: vec![],
-        terminating_flow_ids_old: vec![],
-        terminating_flow_ids: vec![],
-        debug_annotations: vec![],
-        task_execution: None,
-        log_message: None,
-        cc_scheduler_state: None,
-        chrome_user_event: None,
-        chrome_keyed_service: None,
-        chrome_legacy_ipc: None,
-        chrome_histogram_sample: None,
-        chrome_latency_info: None,
-        chrome_frame_reporter: None,
-        chrome_application_state_info: None,
-        chrome_renderer_scheduler_state: None,
-        chrome_window_handle_event_info: None,
-        chrome_content_settings_event_info: None,
-        chrome_active_processes: None,
-        screenshot: None,
-        pixel_modem_event_insight: None,
-        chrome_message_pump: None,
-        chrome_mojo_event_info: None,
-        legacy_event: None,
-        name_field: None,
-        counter_value_field: None,
-        source_location_field: None,
-        timestamp: None,
-        thread_time: None,
-        thread_instruction_count: None,
-    }
-}
-
-/// A writer for Perfetto traces.
-pub struct Writer {
-    trace: Trace,
+/// A streaming writer for Perfetto traces that writes packets directly to an output stream.
+pub struct StreamingPerfettoWriter<W: Write> {
+    writer: W,
     pid: i32,          // derived from micromegas's process_id using a hash function
     process_uuid: u64, // derived from micromegas's process_id using a hash function
     current_thread_uuid: Option<u64>,
@@ -136,14 +34,13 @@ pub struct Writer {
     source_locations: HashMap<(String, u32), u64>,
 }
 
-impl Writer {
-    /// Creates a new `Writer` instance.
-    pub fn new(micromegas_process_id: &str) -> Self {
-        let trace = Trace { packet: vec![] };
+impl<W: Write> StreamingPerfettoWriter<W> {
+    /// Creates a new `StreamingPerfettoWriter` instance.
+    pub fn new(writer: W, micromegas_process_id: &str) -> Self {
         let process_uuid = xxh64(micromegas_process_id.as_bytes(), 0);
         let pid = process_uuid as i32;
         Self {
-            trace,
+            writer,
             pid,
             process_uuid,
             current_thread_uuid: None,
@@ -154,8 +51,30 @@ impl Writer {
         }
     }
 
-    /// Appends a process descriptor to the trace.
-    pub fn append_process_descriptor(&mut self, exe: &str) {
+    /// Writes a single TracePacket to the output stream with proper protobuf framing.
+    pub fn write_packet(&mut self, packet: TracePacket) -> anyhow::Result<()> {
+        let mut packet_buf = Vec::new();
+        // Encode the packet to get its bytes
+        packet.encode(&mut packet_buf)?;
+
+        let mut framing_buf = Vec::new();
+        // Use prost's encoding functions to write the field tag and length
+        encode_key(
+            TRACE_PACKET_FIELD_NUMBER,
+            WireType::LengthDelimited,
+            &mut framing_buf,
+        );
+        encode_varint(packet_buf.len() as u64, &mut framing_buf);
+
+        // Write the framing and packet data to the output stream
+        self.writer.write_all(&framing_buf)?;
+        self.writer.write_all(&packet_buf)?;
+
+        Ok(())
+    }
+
+    /// Emits a process descriptor packet to the stream.
+    pub fn emit_process_descriptor(&mut self, exe: &str) -> anyhow::Result<()> {
         let mut process_track = new_track_descriptor(self.process_uuid);
         process_track.process = Some(ProcessDescriptor {
             pid: Some(self.pid),
@@ -171,12 +90,16 @@ impl Writer {
         packet.data = Some(Data::TrackDescriptor(process_track));
         packet.first_packet_on_sequence = Some(true);
         packet.sequence_flags = Some(3);
-        self.trace.packet.push(packet);
+        self.write_packet(packet)
     }
 
-    /// Appends a thread descriptor to the trace.
-    pub fn append_thread_descriptor(&mut self, stream_id: &str, thread_id: i32, thread_name: &str) {
-        let mut packet = new_trace_packet();
+    /// Emits a thread descriptor packet to the stream.
+    pub fn emit_thread_descriptor(
+        &mut self,
+        stream_id: &str,
+        thread_id: i32,
+        thread_name: &str,
+    ) -> anyhow::Result<()> {
         let thread_uuid = xxh64(stream_id.as_bytes(), 0);
         self.current_thread_uuid = Some(thread_uuid);
         let mut thread_track = new_track_descriptor(thread_uuid);
@@ -191,16 +114,17 @@ impl Writer {
             reference_thread_instruction_count: None,
             legacy_sort_index: None,
         });
+        let mut packet = new_trace_packet();
         packet.data = Some(Data::TrackDescriptor(thread_track));
-        self.trace.packet.push(packet);
+        self.write_packet(packet)
     }
 
-    /// Appends an async track descriptor to the trace.
+    /// Emits an async track descriptor packet to the stream.
     /// Creates a single async track for all async spans in this process.
     /// This should be called once per process before emitting async span events.
-    pub fn append_async_track_descriptor(&mut self) {
+    pub fn emit_async_track_descriptor(&mut self) -> anyhow::Result<()> {
         if self.async_track_uuid.is_some() {
-            return; // Already created
+            return Ok(()); // Already created
         }
 
         let async_track_uuid = xxh64("async_track".as_bytes(), self.process_uuid);
@@ -215,7 +139,7 @@ impl Writer {
 
         let mut packet = new_trace_packet();
         packet.data = Some(Data::TrackDescriptor(async_track));
-        self.trace.packet.push(packet);
+        self.write_packet(packet)
     }
 
     fn set_name(&mut self, name: &str, packet: &mut TracePacket, event: &mut TrackEvent) {
@@ -321,7 +245,7 @@ impl Writer {
     ) {
         assert!(
             self.async_track_uuid.is_some(),
-            "Must call append_async_track_descriptor() before emitting async span events"
+            "Must call emit_async_track_descriptor() before emitting async span events"
         );
 
         track_event.track_uuid = self.async_track_uuid;
@@ -331,8 +255,8 @@ impl Writer {
         packet.data = Some(Data::TrackEvent(track_event));
     }
 
-    /// Appends a span event to the trace.
-    pub fn append_span(
+    /// Emits a span event to the stream.
+    pub fn emit_span(
         &mut self,
         begin_ns: u64,
         end_ns: u64,
@@ -340,58 +264,68 @@ impl Writer {
         target: &str,
         filename: &str,
         line: u32,
-    ) {
+    ) -> anyhow::Result<()> {
+        // Emit begin event
         let mut packet = new_trace_packet();
         packet.timestamp = Some(begin_ns);
         let mut track_event = new_track_event();
         track_event.r#type = Some(track_event::Type::SliceBegin.into());
         self.init_span_event(name, target, filename, line, &mut packet, track_event);
-        self.trace.packet.push(packet);
+        self.write_packet(packet)?;
 
+        // Emit end event
         let mut packet = new_trace_packet();
         packet.timestamp = Some(end_ns);
         let mut track_event = new_track_event();
         track_event.r#type = Some(track_event::Type::SliceEnd.into());
         self.init_span_event(name, target, filename, line, &mut packet, track_event);
-        self.trace.packet.push(packet);
+        self.write_packet(packet)?;
+
+        Ok(())
     }
 
-    /// Appends an async span begin event to the trace.
-    pub fn append_async_span_begin(
+    /// Emits an async span begin event to the stream.
+    pub fn emit_async_span_begin(
         &mut self,
         timestamp_ns: u64,
         name: &str,
         target: &str,
         filename: &str,
         line: u32,
-    ) {
+    ) -> anyhow::Result<()> {
         let mut packet = new_trace_packet();
         packet.timestamp = Some(timestamp_ns);
         let mut track_event = new_track_event();
         track_event.r#type = Some(track_event::Type::SliceBegin.into());
         self.init_async_span_event(name, target, filename, line, &mut packet, track_event);
-        self.trace.packet.push(packet);
+        self.write_packet(packet)
     }
 
-    /// Appends an async span end event to the trace.
-    pub fn append_async_span_end(
+    /// Emits an async span end event to the stream.
+    pub fn emit_async_span_end(
         &mut self,
         timestamp_ns: u64,
         name: &str,
         target: &str,
         filename: &str,
         line: u32,
-    ) {
+    ) -> anyhow::Result<()> {
         let mut packet = new_trace_packet();
         packet.timestamp = Some(timestamp_ns);
         let mut track_event = new_track_event();
         track_event.r#type = Some(track_event::Type::SliceEnd.into());
         self.init_async_span_event(name, target, filename, line, &mut packet, track_event);
-        self.trace.packet.push(packet);
+        self.write_packet(packet)
     }
 
-    /// Converts the `Writer` into a `Trace`.
-    pub fn into_trace(self) -> Trace {
-        self.trace
+    /// Flushes any buffered data to the output stream.
+    pub fn flush(&mut self) -> anyhow::Result<()> {
+        self.writer.flush()?;
+        Ok(())
+    }
+
+    /// Consumes the writer and returns the underlying output stream.
+    pub fn into_inner(self) -> W {
+        self.writer
     }
 }

@@ -63,3 +63,4 @@ Micromegas: unified observability platform for logs, metrics, and traces.
 - there should be a venv available to run python code
 - follow @AI_GUIDELINES.md
 - prefer to script using python over shell scripts
+- never commit if I did not ask explicitly

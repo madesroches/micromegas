@@ -7,7 +7,7 @@ use crate::{
     async_events_table::{AsyncEventRecord, AsyncEventRecordBuilder},
     payload::fetch_block_payload,
     scope::ScopeDesc,
-    time::{ConvertTicks, make_time_converter_from_block_meta},
+    time::ConvertTicks,
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -22,7 +22,15 @@ lazy_static::lazy_static! {
 
 /// A `BlockProcessor` implementation for processing async event blocks.
 #[derive(Debug)]
-pub struct AsyncEventsBlockProcessor {}
+pub struct AsyncEventsBlockProcessor {
+    convert_ticks: Arc<ConvertTicks>,
+}
+
+impl AsyncEventsBlockProcessor {
+    pub fn new(convert_ticks: Arc<ConvertTicks>) -> Self {
+        Self { convert_ticks }
+    }
+}
 
 /// Helper struct to collect async events during processing.
 struct AsyncEventCollector {
@@ -112,15 +120,15 @@ impl BlockProcessor for AsyncEventsBlockProcessor {
         blob_storage: Arc<BlobStorage>,
         src_block: Arc<PartitionSourceBlock>,
     ) -> Result<Option<PartitionRowSet>> {
-        let convert_ticks =
-            make_time_converter_from_block_meta(&src_block.process, &src_block.block)?;
+        // Use the shared ConvertTicks instance instead of creating a new one per block
+        let convert_ticks = self.convert_ticks.clone();
         // Use nb_objects as initial capacity estimate (may contain non-async events)
         let estimated_capacity = src_block.block.nb_objects;
         let mut collector = AsyncEventCollector::new(
             estimated_capacity as usize,
             Arc::new(format!("{}", src_block.stream.stream_id)),
             Arc::new(format!("{}", src_block.block.block_id)),
-            Arc::new(convert_ticks),
+            convert_ticks,
         );
         let payload = fetch_block_payload(
             blob_storage,

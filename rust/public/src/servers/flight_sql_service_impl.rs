@@ -48,6 +48,9 @@ use std::task::{Context, Poll};
 use tonic::metadata::MetadataMap;
 use tonic::{Request, Response, Status, Streaming};
 
+type FlightDataStream =
+    Pin<Box<dyn Stream<Item = Result<arrow_flight::FlightData, Status>> + Send>>;
+
 macro_rules! status {
     ($desc:expr, $err:expr) => {
         Status::internal(format!("{}: {} at {}:{}", $desc, $err, file!(), line!()))
@@ -85,7 +88,7 @@ impl<S> CompletionTrackedStream<S> {
 
 impl<S> Stream for CompletionTrackedStream<S>
 where
-    S: Stream<Item = Result<arrow_flight::FlightData, Status>> + Unpin,
+    S: Stream<Item = Result<arrow_flight::FlightData, Status>> + Unpin + Send,
 {
     type Item = Result<arrow_flight::FlightData, Status>;
 
@@ -146,11 +149,12 @@ impl FlightSqlServiceImpl {
         })
     }
 
+    #[span_fn]
     async fn execute_query(
         &self,
         ticket_stmt: TicketStatementQuery,
         metadata: &MetadataMap,
-    ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
+    ) -> Result<Response<FlightDataStream>, Status> {
         let begin_request = now();
         let sql = std::str::from_utf8(&ticket_stmt.statement_handle)
             .map_err(|e| status!("Unable to parse query", e))?;
@@ -269,7 +273,9 @@ impl FlightSqlServiceImpl {
             });
         let completion_tracked_stream =
             CompletionTrackedStream::new(instrumented_stream.boxed(), begin_request);
-        Ok(Response::new(Box::pin(completion_tracked_stream)))
+        Ok(Response::new(
+            Box::pin(completion_tracked_stream) as FlightDataStream
+        ))
     }
 }
 
@@ -287,6 +293,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         api_entry_not_implemented!()
     }
 
+    #[span_fn]
     async fn do_get_fallback(
         &self,
         request: Request<Ticket>,
@@ -297,6 +304,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         self.execute_query(ticket_stmt, request.metadata()).await
     }
 
+    #[span_fn]
     async fn get_flight_info_statement(
         &self,
         query: CommandStatementQuery,
@@ -356,6 +364,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         api_entry_not_implemented!()
     }
 
+    #[span_fn]
     async fn get_flight_info_tables(
         &self,
         query: CommandGetTables,
@@ -386,6 +395,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         api_entry_not_implemented!()
     }
 
+    #[span_fn]
     async fn get_flight_info_sql_info(
         &self,
         query: CommandGetSqlInfo,
@@ -478,6 +488,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         api_entry_not_implemented!()
     }
 
+    #[span_fn]
     async fn do_get_tables(
         &self,
         query: CommandGetTables,
@@ -518,6 +529,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         api_entry_not_implemented!()
     }
 
+    #[span_fn]
     async fn do_get_sql_info(
         &self,
         query: CommandGetSqlInfo,
@@ -582,6 +594,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         api_entry_not_implemented!()
     }
 
+    #[span_fn]
     async fn do_put_statement_ingest(
         &self,
         command: CommandStatementIngest,
@@ -625,6 +638,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         api_entry_not_implemented!()
     }
 
+    #[span_fn]
     async fn do_action_create_prepared_statement(
         &self,
         query: ActionCreatePreparedStatementRequest,

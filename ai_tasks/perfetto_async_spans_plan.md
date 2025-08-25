@@ -4,105 +4,150 @@
 
 Generate Perfetto trace files from a process's async span events by extending the existing Perfetto trace generation functionality to include async span events alongside the current thread-based spans.
 
-## Current State Analysis
+## Current State Analysis (Updated 2025-08-21)
+
+### ✅ PHASE 1 COMPLETED: Analytics Web App Development Tool
+- **Analytics Web App**: Fully implemented with Next.js frontend and Rust Axum backend
+  - Modern React UI with Tailwind CSS and Radix UI components
+  - Process discovery and filtering (`/analyticsweb/processes`)
+  - Real-time Perfetto trace generation with HTTP streaming (`/analyticsweb/perfetto/{process_id}/generate`)
+  - Process statistics and log entries endpoints
+  - Health monitoring and CORS configuration
+  - Production-ready deployment capability
+- **Testing Foundation**: Platform for validating trace generation is operational
 
 ### Existing Perfetto Infrastructure
 - **Rust Perfetto crate** (`rust/perfetto/`): Complete protobuf-based Perfetto trace writer
 - **Writer API**: Supports process descriptors, thread descriptors, and span events
 - **Client integration**: `perfetto_trace_client.rs` generates traces from thread spans using `view_instance('thread_spans', '{stream_id}')`
 
-### Existing Async Events Infrastructure  
+### ✅ Existing Async Events Infrastructure (Completed)
 - **AsyncEventRecord structure**: Contains `stream_id`, `block_id`, `time`, `event_type`, `span_id`, `parent_span_id`, `depth`, `name`, `filename`, `target`, `line`
-- **Async Events View**: `AsyncEventsView` provides materialized view access to async span events
+- **Async Events View**: `AsyncEventsView` provides materialized view access to async span events via `view_instance('async_events', '{process_id}')`
 - **Event Types**: "begin" and "end" events mark async span boundaries
+- **Depth tracking**: Async spans include depth information for hierarchical visualization
 
 ## Implementation Plan
 
-### Phase 1: Analytics Web App Development Tool with Current Client
+### ✅ Phase 1: Analytics Web App Development Tool with Current Client (COMPLETED)
 
-**Objective**: Create a modern analytics web development tool using existing `perfetto_trace_client.rs` for immediate testing capability and async span validation
+**Status**: ✅ **COMPLETED** - Fully operational analytics web application
 
-**Detailed Implementation**: See [analytics_web_app_plan.md](./analytics_web_app_plan.md) for complete Phase 1 specifications including:
-- Architecture decisions (Next.js + React + Axum)
-- Technology stack and dependencies
-- Detailed API design with HTTP streaming
-- React component architecture
-- Production-ready features (observability, security, deployment)
-- Development experience and testing strategy
-- WebAssembly decision analysis
-- HTTP streaming implementation patterns
+**Implemented Features**:
+- **Analytics Web Server** (`rust/analytics-web-srv/`): Axum-based REST API server
+  - Health check endpoints with FlightSQL connectivity status
+  - Process listing and metadata retrieval
+  - Real-time Perfetto trace generation with HTTP streaming progress updates
+  - Process statistics and log entries retrieval
+  - Environment variable-based CORS configuration
+- **Frontend Application** (`analytics-web-app/`): Next.js 15 + React 18 + TypeScript
+  - Modern UI with Tailwind CSS and Radix UI components
+  - Process discovery table with search and filtering
+  - Real-time trace generation with progress visualization
+  - Responsive design and error handling
+- **Development Tooling**: Fully configured development and production environments
+  - Hot reloading for frontend development
+  - Integrated backend/frontend development workflow
+  - Production build pipeline and static file serving
 
-**Key Features**:
-- **HTTP Streaming**: Real-time progress updates with single-request trace delivery
-- **Modern UI**: React components with TypeScript, Tailwind CSS, Radix UI
-- **Development Tool**: Debug interface for exploring telemetry data and generating traces
-- **Testing Foundation**: Platform for validating all subsequent async span phases
+**Testing Capability**:
+- ✅ Platform ready for testing async span implementation phases
+- ✅ Real-time trace generation and validation interface available
+- ✅ HTTP streaming infrastructure operational for progress reporting
 
-### Phase 2: Perfetto Writer Streaming Support
+### ✅ Phase 2: Perfetto Writer Streaming Support (COMPLETED)
+
+**Status**: ✅ **COMPLETED** - Full streaming writer implementation
 
 **Objective**: Make Perfetto Writer capable of streaming generation (foundation for SQL approach)
 
-**Key Insight**: Perfetto binary format uses varint length-prefixed TracePackets that can be written incrementally without holding the complete Trace in memory.
+**Implemented Features**:
+- **StreamingPerfettoWriter<W: Write>**: Streams TracePackets directly to output without memory accumulation
+- **Proper protobuf framing**: Uses prost's `encode_key()` and `encode_varint()` for reliable encoding
+- **Two-buffer approach**: Separate buffers for packet data and protobuf framing
+- **Interning state management**: Maintains string interning (names, categories, source_locations) across streaming
+- **Identical API**: `emit_process_descriptor()`, `emit_thread_descriptor()`, `emit_span()` methods match regular Writer
+- **Full binary compatibility**: Produces identical output to regular Writer (verified: 470 bytes, 9 packets)
 
-**Tasks**:
-1. **Create StreamingPerfettoWriter**:
-   - New `StreamingPerfettoWriter<W: Write>` struct for direct file writing
-   - Implement `write_packet()` method that writes individual TracePackets with proper protobuf framing
-   - Handle varint length encoding for each packet (field tag 0x0A + length + packet bytes)
-   - Maintain interning state (names, categories, source_locations) for efficient string handling
+**Implementation Details**:
+- **streaming_writer.rs**: Dedicated module for streaming functionality
+- **Constant memory usage**: Memory usage independent of trace size (tested with 1000 spans)
+- **Error handling**: Proper error propagation for Write failures
+- **Clean separation**: No changes to existing Writer implementation
 
-2. **Two-phase streaming approach**:
-   - **Phase 1**: Lightweight pre-pass to collect all unique strings and assign stable IDs
-   - **Phase 2**: Stream packets directly to file as they're generated
-   - Emit setup packets (process descriptor, interned data) before span events
-   - Stream span events incrementally as DataFusion produces them
+**Testing**:
+- **6 comprehensive tests**: Basic usage, compatibility, packet framing, interning, memory usage, error handling
+- **External test file**: `tests/streaming_writer_tests.rs` following project conventions
+- **Compatibility example**: `streaming_comparison.rs` demonstrates identical output
+- **All tests passing**: Both regular and streaming writers produce identical results
 
-3. **Client-side streaming assembly** (alternative to file writing):
-   - Server streams individual TracePackets via FlightSQL chunks
-   - Client uses `StreamingTraceBuilder` to collect packets into final Trace
-   - Enables real-time progress updates and backpressure
+**Code Organization**:
+- StreamingPerfettoWriter in dedicated `src/streaming_writer.rs` module
+- Updated `lib.rs` exports: separate imports for `Writer` and `StreamingPerfettoWriter`
+- Well-documented protobuf field number constant with schema reference
 
-4. **Unit tests for streaming Writer**:
-   - Test direct file writing produces identical binary output to `Trace.encode_to_vec()`
-   - Test varint encoding correctness for various packet sizes
-   - Test interning state management across streaming operations
-   - Compare streaming vs non-streaming output for identical traces
-   - Test memory usage remains constant regardless of trace size
+### ✅ Phase 3: Async Event Support in Perfetto Writer (COMPLETED)
 
-### Phase 3: Async Event Support in Perfetto Writer
+**Status**: ✅ **COMPLETED** - Full async span support implemented with timestamp reliability issues resolved
 
 **Objective**: Add async track support to the Perfetto writer (independent of streaming)
 
-**Tasks**:
-1. **Add async track creation** in `rust/perfetto/src/writer.rs`:
-   - Create `append_async_track_descriptor()` method for async event tracks
-   - Async tracks use different UUIDs from thread tracks (hash span_id + stream_id)
-   - Parent async tracks to their originating thread track
+**✅ Implemented Features**:
+- **Single async track approach**: All async spans appear on unified "Async Operations" track
+- **Regular Writer support** (`rust/perfetto/src/writer.rs`):
+  - `append_async_track_descriptor()` - creates single async track parented to process
+  - `append_async_span_begin()` / `append_async_span_end()` - emit async span events
+  - Safety assertions prevent misuse (track must exist before span events)
+- **Streaming Writer support** (`rust/perfetto/src/streaming_writer.rs`):
+  - `emit_async_track_descriptor()` - streaming async track creation
+  - `emit_async_span_begin()` / `emit_async_span_end()` - streaming async span events
+  - API parity with regular writer for consistent behavior
 
-2. **Add async span event methods**:
-   - `append_async_span_begin()` - for "begin" events
-   - `append_async_span_end()` - for "end" events
-   - Use `track_event::Type::SliceBegin` and `track_event::Type::SliceEnd`
+**✅ Testing & Validation**:
+- **Comprehensive unit tests** (13 tests total, all passing):
+  - Async track creation for both regular and streaming writers
+  - Async span event generation with proper track UUID assignment
+  - Error handling for missing track descriptors (panic tests)
+  - Idempotent track creation verification
+  - Compatibility with existing streaming writer functionality
+- **End-to-end testing** via trace generation utility:
+  - Real telemetry data from `telemetry-generator` (process: `34d7c06d-3163-4111-863e-c5fc09d22d51`)
+  - Generated valid 8,356-byte Perfetto trace with 166 packets
+  - 1 process descriptor, 10 thread descriptors, 1 async track, 154 track events
+  - Trace validated and ready for Perfetto UI visualization
 
-3. **Handle nested async spans**:
-   - Each unique `span_id` gets its own track
-   - Use `parent_span_id` to establish track hierarchy in Perfetto
-   - Leverage existing `depth` field for visual organization
+**✅ Implementation Details**:
+- **Track hierarchy**: Process → Thread tracks + Single async track
+- **UUID generation**: `xxh64("async_track".as_bytes(), process_uuid)` for consistent async track IDs
+- **Event processing**: Handles both "begin" and "end" async events with proper timestamps
+- **Memory efficiency**: Streaming writer maintains constant memory usage
+- **API consistency**: Both writers use identical method signatures and behavior
 
-4. **Unit tests for async events** (following existing Writer test patterns):
-   - Test async track creation with various span hierarchies
-   - Test async span event generation (begin/end pairs)
-   - Test UUID generation and track parenting
-   - Verify Perfetto protobuf structure and interning
+**✅ Key Design Decisions**:
+- **Single async track per process** instead of per-span tracks for better visualization
+- **Process-level parenting** for async track (not thread-level) for cleaner hierarchy
+- **Safety-first design** with assertions ensuring proper usage patterns
+- **Full streaming support** for memory-efficient large trace generation
 
-5. **Test via web app**:
-   - Use Phase 1 web app to validate async track generation
-   - Compare traces with/without async events
-   - Verify Perfetto UI displays async tracks correctly
+**✅ Resolved Issues**:
+- **✅ Timestamp reliability fixed**: Replaced `NullPartitionProvider` with `LivePartitionProvider` in `find_process_with_latest_timing`
+- **✅ Stream filtering implemented**: Trace generation now only processes CPU streams using `array_has(streams.tags, 'cpu')`
+- **✅ DataFusion Query Issue resolved**: AsyncEventsView now includes proper view_factory with processes view access
+- **✅ UUID parsing fixed**: Added `parse_optional_uuid()` function to handle empty UUID strings gracefully
+- **✅ Schema compatibility**: Fixed `tsc_frequency` casting from UInt64 to Int64 in DataFusion queries
+- **✅ Test compilation**: Updated async_events_tests.rs to work with new AsyncEventsView constructor
+- **✅ Query range optimization**: Pass query_range to limit partition search and reduce database load
 
 ### Phase 4: FlightSQL Streaming Table Function
 
+**Status**: 🔄 **PENDING** - Not yet implemented
+
 **Objective**: Implement FlightSQL chunked binary streaming infrastructure
+
+**Current Limitations**:
+- No server-side Perfetto trace generation capability
+- All trace generation happens client-side in `perfetto_trace_client.rs`
+- No SQL interface for generating traces with different span types
 
 **Tasks**:
 1. **Implement `perfetto_trace_chunks` table function**:
@@ -125,12 +170,16 @@ Generate Perfetto trace files from a process's async span events by extending th
 
 ### Phase 5: Server-Side Perfetto Generation
 
+**Status**: 🔄 **PENDING** - Not yet implemented
+
 **Objective**: Move trace generation logic from client to server via SQL table function
+
+**Current Approach**: All trace generation happens in client-side `perfetto_trace_client.rs`
 
 **Tasks**:
 1. **Implement server-side trace generation** in `PerfettoTraceExecutionPlan`:
    - Integrate Phase 2 streaming Writer with Phase 3 async event support
-   - Query `view_instance('async_events', '{process_id}')` for async span events  
+   - Query `view_instance('async_events', '{process_id}')` for async span events
    - Query thread spans and process metadata within FlightSQL server context
    - Generate complete Perfetto trace server-side using streaming emission
 
@@ -190,6 +239,7 @@ Generate Perfetto trace files from a process's async span events by extending th
 3. **Memory optimization**:
    - Process async events in batches to avoid loading all events in memory
    - Use streaming approach for large processes with many async events
+
 
 ### Phase 8: Python Client Refactoring
 
@@ -266,7 +316,7 @@ Process Track (process_uuid)
 2. Group by `span_id` to create event pairs
 3. For each span_id:
    - Find "begin" event → SliceBegin
-   - Find "end" event → SliceEnd  
+   - Find "end" event → SliceEnd
    - Create async track if not exists
    - Generate begin/end events on async track
 
@@ -274,7 +324,7 @@ Process Track (process_uuid)
 
 ### SQL Query for Async Events
 ```sql
-SELECT stream_id, time, event_type, span_id, parent_span_id, depth, 
+SELECT stream_id, time, event_type, span_id, parent_span_id, depth,
        name, filename, target, line
 FROM view_instance('async_events', '{process_id}')
 WHERE time >= {begin_time} AND time <= {end_time}
@@ -284,17 +334,52 @@ ORDER BY time ASC
 ## Expected Outcomes
 
 1. **Enhanced Perfetto traces** showing both thread execution and async operations
-2. **Async span visualization** as separate tracks in Perfetto UI  
+2. **Async span visualization** as separate tracks in Perfetto UI
 3. **Hierarchical async spans** with proper parent-child relationships
 4. **Temporal correlation** between thread activity and async operations
 5. **Improved debugging** of async performance issues and concurrency patterns
+
+## Current Implementation Status Summary
+
+### ✅ Completed
+- **Phase 1**: Analytics Web App - Fully operational testing and development platform
+- **Phase 2**: Perfetto Writer Streaming Support - Complete streaming infrastructure with identical output compatibility
+- **Phase 3**: Async Event Support in Perfetto Writer - Complete async span implementation with all reliability issues resolved
+- **Async Events Infrastructure**: Complete async span data collection and view system
+- **Trace Generation Utility**: End-to-end testing tool for validating async span implementation with proper stream filtering
+
+### ✅ Phase 3 Achievement Highlights
+- **Full API Implementation**: Both regular and streaming writers support async spans
+- **Production Testing**: Successfully generated 8,356-byte trace with real telemetry data
+- **Comprehensive Validation**: 13 unit tests + end-to-end trace validation
+- **Performance Verified**: Streaming writer maintains constant memory usage
+- **UI Compatible**: Generated traces ready for Perfetto UI visualization
+- **Reliability Resolved**: Fixed timestamp issues, stream filtering, and DataFusion query problems
+
+### 🔄 Pending Implementation (In Priority Order)
+1. **Phase 4-6**: Server-Side Generation (Next Priority)
+   - Eliminates code duplication between client implementations
+   - Enables advanced features like real-time streaming via FlightSQL
+   - Can leverage completed Phase 2 & 3 infrastructure
+   - Focus on FlightSQL table function for `perfetto_trace_chunks`
+
+2. **Python Client Refactoring** (Medium Priority)
+   - Remove duplicate Perfetto generation logic
+   - Use server-side generation via FlightSQL queries
+   - Maintain CLI compatibility with async span support
+
+### Next Recommended Steps
+1. **Immediate**: Phase 3 provides complete async span visualization capability
+2. **Short-term**: Consider implementing server-side generation for code consolidation
+3. **Medium-term**: Refactor Python CLI to use server-side generation
+4. **Long-term**: Advanced features like real-time trace streaming
 
 ## Migration Strategy
 
 - **Backward compatible**: Existing thread-only trace generation continues to work
 - **Flexible span selection**: Users can choose thread spans only, async spans only, or both
 - **Gradual rollout**: Test with small processes before enabling for large-scale traces
-- **Python client migration**: Phase 4 eliminates code duplication by having Python CLI call Rust implementation
+- **Python client migration**: Future phases eliminate code duplication by having Python CLI call Rust implementation
 
 ## Dependencies
 
@@ -304,6 +389,32 @@ ORDER BY time ASC
 - No new external dependencies required
 
 **Note**: The Python CLI script (`python/micromegas/cli/write_perfetto.py`) completely duplicates functionality that already exists in the Rust Perfetto client (`rust/public/src/client/perfetto_trace_client.rs`). Both query the analytics service and generate Perfetto traces with identical logic. The Python CLI should be refactored to call the existing Rust client instead of maintaining a duplicate implementation. This would eliminate the need to implement async spans in multiple places and ensure consistent behavior.
+
+## Trace Generation Utility
+
+### ✅ Implementation Complete (`rust/trace-gen-util/`)
+
+A standalone command-line utility for generating Perfetto traces directly from the analytics service:
+
+**Key Features**:
+- **FlightSQL Integration**: Connects to analytics service and queries trace data
+- **Thread + Async Spans**: Generates traces with both thread spans and async operations
+- **CLI Interface**: Flexible command-line options for process ID, output file, time ranges
+- **Real-time Validation**: Built-in trace validation using Perfetto protobuf library
+- **Memory Efficient**: Uses streaming Perfetto writer for large traces
+
+**Usage**:
+```bash
+cargo run --bin trace-gen -- --process-id "<process-id>" --output "trace.perfetto"
+```
+
+**Validation Results** (with `telemetry-generator` data):
+- **Process ID**: `34d7c06d-3163-4111-863e-c5fc09d22d51`
+- **Generated trace**: 8,356 bytes, 166 packets
+- **Track structure**: 1 process, 10 threads, 1 async track, 154 track events
+- **Status**: ✅ Valid Perfetto trace ready for UI visualization
+
+This utility demonstrates the end-to-end async span implementation and provides a practical tool for generating Perfetto traces from any process in the analytics system.
 
 ## Annex: StreamingPerfettoWriter Implementation Details
 
@@ -332,25 +443,25 @@ impl<W: Write> StreamingPerfettoWriter<W> {
             source_locations: HashMap::new(),
         }
     }
-    
+
     pub fn write_packet(&mut self, packet: TracePacket) -> anyhow::Result<()> {
         let mut buf = Vec::new();
-        
+
         // Encode the packet to get its bytes
         packet.encode(&mut buf)?;
-        
-        // Write the field key for repeated TracePacket (field 1, wire type 2)  
+
+        // Write the field key for repeated TracePacket (field 1, wire type 2)
         encode_key(1, WireType::LengthDelimited, &mut self.writer)?;
-        
+
         // Write the varint length
         encode_varint(buf.len() as u64, &mut self.writer)?;
-        
+
         // Write the packet data
         self.writer.write_all(&buf)?;
-        
+
         Ok(())
     }
-    
+
     // Same pattern for other methods: emit_setup(), emit_span(), etc.
 }
 ```
@@ -358,7 +469,7 @@ impl<W: Write> StreamingPerfettoWriter<W> {
 ### Key Benefits of API-Based Approach
 
 1. **No hardcoded constants**: Uses prost's `encode_key()` and `encode_varint()` functions
-2. **Forward compatibility**: Protobuf changes handled by prost library updates  
+2. **Forward compatibility**: Protobuf changes handled by prost library updates
 3. **Type safety**: `WireType::LengthDelimited` instead of magic numbers
 4. **Consistency**: Same encoding logic as `Trace.encode_to_vec()`
 5. **Maintainability**: Leverages existing prost dependency

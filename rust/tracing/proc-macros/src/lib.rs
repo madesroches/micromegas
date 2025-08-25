@@ -99,6 +99,19 @@ pub fn span_fn(args: TokenStream, input: TokenStream) -> TokenStream {
                     ))
                 }
             };
+        } else {
+            // For complex async functions that don't match the simple Box::pin pattern,
+            // wrap the entire body in an async block and instrument it
+            let original_block = &function.block;
+            function.block = parse_quote! {
+                {
+                    static_span_desc!(_SCOPE_DESC, concat!(module_path!(), "::", #function_name));
+                    Box::pin(InstrumentedFuture::new(
+                        async move #original_block,
+                        &_SCOPE_DESC
+                    ))
+                }
+            };
         }
     } else if function.sig.asyncness.is_some() {
         // Case 2: Regular async function

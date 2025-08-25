@@ -38,6 +38,8 @@ Contains metadata about processes that have sent telemetry data.
 | `parent_process_id` | `Dictionary(Int16, Utf8)` | Parent process identifier |
 | `properties` | `Map` | Additional process metadata |
 | `last_update_time` | `Timestamp(Nanosecond)` | When the process data was last updated |
+| `last_block_end_ticks` | `Int64` | Tick count when the last block ended |
+| `last_block_end_time` | `Timestamp(Nanosecond)` | Timestamp when the last block ended |
 
 **Example Queries:**
 ```sql
