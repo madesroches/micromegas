@@ -5,13 +5,13 @@ use super::{
     jit_partitions::{JitPartitionConfig, write_partition_from_blocks},
     partition_cache::PartitionCache,
     view::{PartitionSpec, View, ViewMetadata},
-    view_factory::ViewMaker,
+    view_factory::{ViewFactory, ViewMaker},
 };
 use crate::{
     async_events_table::async_events_table_schema,
     lakehouse::jit_partitions::{generate_jit_partitions, is_jit_partition_up_to_date},
-    metadata::{find_process, list_process_streams_tagged},
-    time::{TimeRange, datetime_to_scalar},
+    metadata::{find_process_with_latest_timing, list_process_streams_tagged},
+    time::{TimeRange, datetime_to_scalar, make_time_converter_from_latest_timing},
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -101,18 +101,34 @@ impl View for AsyncEventsView {
         lake: Arc<DataLakeConnection>,
         query_range: Option<TimeRange>,
     ) -> Result<()> {
-        let process = Arc::new(
-            find_process(
-                &lake.db_pool,
-                &self
-                    .process_id
-                    .with_context(|| "getting a view's process_id")?,
-            )
-            .await
-            .with_context(|| "find_process")?,
-        );
+        // Create a minimal view factory with just the blocks view needed for processes view
+        let blocks_view = Arc::new(BlocksView::new()?);
+        let minimal_view_factory = Arc::new(ViewFactory::new(vec![blocks_view]));
+
+        let (process, last_block_end_ticks, last_block_end_time) = find_process_with_latest_timing(
+            runtime.clone(),
+            lake.clone(),
+            minimal_view_factory,
+            &self
+                .process_id
+                .with_context(|| "getting a view's process_id")?,
+        )
+        .await
+        .with_context(|| "find_process_with_latest_timing")?;
+
+        let process = Arc::new(process);
         let query_range =
             query_range.unwrap_or_else(|| TimeRange::new(process.start_time, chrono::Utc::now()));
+
+        // Create a consistent ConvertTicks using the latest timing information
+        let convert_ticks = Arc::new(
+            make_time_converter_from_latest_timing(
+                &process,
+                last_block_end_ticks,
+                last_block_end_time,
+            )
+            .with_context(|| "make_time_converter_from_latest_timing")?,
+        );
 
         // Use all thread streams since async events are recorded in thread streams
         let streams = list_process_streams_tagged(&lake.db_pool, process.process_id, "cpu")
@@ -147,7 +163,7 @@ impl View for AsyncEventsView {
                     view_meta.clone(),
                     self.get_file_schema(),
                     part,
-                    Arc::new(AsyncEventsBlockProcessor {}),
+                    Arc::new(AsyncEventsBlockProcessor::new(convert_ticks.clone())),
                 )
                 .await
                 .with_context(|| "write_partition_from_blocks")?;

@@ -50,7 +50,7 @@ Generate Perfetto trace files from a process's async span events by extending th
   - Integrated backend/frontend development workflow
   - Production build pipeline and static file serving
 
-**Testing Capability**: 
+**Testing Capability**:
 - ✅ Platform ready for testing async span implementation phases
 - ✅ Real-time trace generation and validation interface available
 - ✅ HTTP streaming infrastructure operational for progress reporting
@@ -70,7 +70,7 @@ Generate Perfetto trace files from a process's async span events by extending th
 - **Full binary compatibility**: Produces identical output to regular Writer (verified: 470 bytes, 9 packets)
 
 **Implementation Details**:
-- **streaming_writer.rs**: Dedicated module for streaming functionality  
+- **streaming_writer.rs**: Dedicated module for streaming functionality
 - **Constant memory usage**: Memory usage independent of trace size (tested with 1000 spans)
 - **Error handling**: Proper error propagation for Write failures
 - **Clean separation**: No changes to existing Writer implementation
@@ -133,6 +133,12 @@ Generate Perfetto trace files from a process's async span events by extending th
 - **⚠️ Timestamp reliability problems**: Negative span durations observed (end_time < begin_time)
 - **Root cause**: TSC (Time Stamp Counter) timing issues when TSC is not available or unreliable
 - **Current mitigation**: Skip invalid spans with descriptive warning messages
+- **❌ DataFusion Query Issue in find_process_with_latest_timing**: The implementation using DataFusion with `NullPartitionProvider` won't work because:
+  - `NullPartitionProvider` returns empty partitions/results
+  - The `processes` view is a materialized view that depends on actual partition data
+  - During JIT update, we need process timing info **before** partitions are created
+  - This creates a circular dependency: need timing info to process blocks, but timing info comes from processed blocks
+  - **Resolution Needed**: specify the right partition provider
 - **Next steps**: Investigate timing infrastructure in `rust/tracing/src/time.rs` and TSC frequency calibration
   - **Critical**: Always use latest available TSC frequency data, not just block-level info
   - TSC should be monotonic - investigate why we're seeing time reversals
@@ -179,7 +185,7 @@ Generate Perfetto trace files from a process's async span events by extending th
 **Tasks**:
 1. **Implement server-side trace generation** in `PerfettoTraceExecutionPlan`:
    - Integrate Phase 2 streaming Writer with Phase 3 async event support
-   - Query `view_instance('async_events', '{process_id}')` for async span events  
+   - Query `view_instance('async_events', '{process_id}')` for async span events
    - Query thread spans and process metadata within FlightSQL server context
    - Generate complete Perfetto trace server-side using streaming emission
 
@@ -316,7 +322,7 @@ Process Track (process_uuid)
 2. Group by `span_id` to create event pairs
 3. For each span_id:
    - Find "begin" event → SliceBegin
-   - Find "end" event → SliceEnd  
+   - Find "end" event → SliceEnd
    - Create async track if not exists
    - Generate begin/end events on async track
 
@@ -324,7 +330,7 @@ Process Track (process_uuid)
 
 ### SQL Query for Async Events
 ```sql
-SELECT stream_id, time, event_type, span_id, parent_span_id, depth, 
+SELECT stream_id, time, event_type, span_id, parent_span_id, depth,
        name, filename, target, line
 FROM view_instance('async_events', '{process_id}')
 WHERE time >= {begin_time} AND time <= {end_time}
@@ -334,7 +340,7 @@ ORDER BY time ASC
 ## Expected Outcomes
 
 1. **Enhanced Perfetto traces** showing both thread execution and async operations
-2. **Async span visualization** as separate tracks in Perfetto UI  
+2. **Async span visualization** as separate tracks in Perfetto UI
 3. **Hierarchical async spans** with proper parent-child relationships
 4. **Temporal correlation** between thread activity and async operations
 5. **Improved debugging** of async performance issues and concurrency patterns
@@ -399,7 +405,7 @@ A standalone command-line utility for generating Perfetto traces directly from t
 
 **Key Features**:
 - **FlightSQL Integration**: Connects to analytics service and queries trace data
-- **Thread + Async Spans**: Generates traces with both thread spans and async operations  
+- **Thread + Async Spans**: Generates traces with both thread spans and async operations
 - **CLI Interface**: Flexible command-line options for process ID, output file, time ranges
 - **Real-time Validation**: Built-in trace validation using Perfetto protobuf library
 - **Memory Efficient**: Uses streaming Perfetto writer for large traces
@@ -411,7 +417,7 @@ cargo run --bin trace-gen -- --process-id "<process-id>" --output "trace.perfett
 
 **Validation Results** (with `telemetry-generator` data):
 - **Process ID**: `34d7c06d-3163-4111-863e-c5fc09d22d51`
-- **Generated trace**: 8,356 bytes, 166 packets  
+- **Generated trace**: 8,356 bytes, 166 packets
 - **Track structure**: 1 process, 10 threads, 1 async track, 154 track events
 - **Status**: ✅ Valid Perfetto trace ready for UI visualization
 
@@ -444,25 +450,25 @@ impl<W: Write> StreamingPerfettoWriter<W> {
             source_locations: HashMap::new(),
         }
     }
-    
+
     pub fn write_packet(&mut self, packet: TracePacket) -> anyhow::Result<()> {
         let mut buf = Vec::new();
-        
+
         // Encode the packet to get its bytes
         packet.encode(&mut buf)?;
-        
-        // Write the field key for repeated TracePacket (field 1, wire type 2)  
+
+        // Write the field key for repeated TracePacket (field 1, wire type 2)
         encode_key(1, WireType::LengthDelimited, &mut self.writer)?;
-        
+
         // Write the varint length
         encode_varint(buf.len() as u64, &mut self.writer)?;
-        
+
         // Write the packet data
         self.writer.write_all(&buf)?;
-        
+
         Ok(())
     }
-    
+
     // Same pattern for other methods: emit_setup(), emit_span(), etc.
 }
 ```
@@ -470,7 +476,7 @@ impl<W: Write> StreamingPerfettoWriter<W> {
 ### Key Benefits of API-Based Approach
 
 1. **No hardcoded constants**: Uses prost's `encode_key()` and `encode_varint()` functions
-2. **Forward compatibility**: Protobuf changes handled by prost library updates  
+2. **Forward compatibility**: Protobuf changes handled by prost library updates
 3. **Type safety**: `WireType::LengthDelimited` instead of magic numbers
 4. **Consistency**: Same encoding logic as `Trace.encode_to_vec()`
 5. **Maintainability**: Leverages existing prost dependency

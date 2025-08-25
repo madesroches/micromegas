@@ -82,6 +82,33 @@ pub fn make_time_converter_from_block_meta(
     )
 }
 
+/// Creates a `ConvertTicks` using the latest timing information from the process.
+/// This should be used instead of per-block timing to ensure consistent tick conversion
+/// across all blocks from the same process.
+pub fn make_time_converter_from_latest_timing(
+    process: &ProcessInfo,
+    last_block_end_ticks: i64,
+    last_block_end_time: chrono::DateTime<chrono::Utc>,
+) -> Result<ConvertTicks> {
+    if process.tsc_frequency > 0 {
+        // we have a good tsc freq provided
+        return ConvertTicks::from_meta_data(
+            process.start_ticks,
+            process.start_time.timestamp_nanos_opt().unwrap_or_default(),
+            process.tsc_frequency,
+        );
+    }
+    // Calculate frequency using the latest timing data from the process
+    let delta_time = last_block_end_time - process.start_time;
+    let nb_seconds = delta_time.num_nanoseconds().unwrap_or_default() as f64 / 1_000_000_000.0;
+    let ticks_per_second = last_block_end_ticks as f64 / nb_seconds;
+    ConvertTicks::from_meta_data(
+        process.start_ticks,
+        process.start_time.timestamp_nanos_opt().unwrap_or_default(),
+        ticks_per_second.round() as i64,
+    )
+}
+
 /// ConvertTicks helps converting between a process's tick count and more convenient date/time representations
 #[derive(Debug, Clone)]
 pub struct ConvertTicks {
@@ -104,6 +131,11 @@ impl ConvertTicks {
             inv_tsc_frequency_ns: get_tsc_frequency_inverse_ns(frequency),
             inv_tsc_frequency_ms: get_tsc_frequency_inverse_ms(frequency),
         })
+    }
+
+    /// Get the frequency used for tick conversion
+    pub fn get_frequency(&self) -> i64 {
+        self.frequency
     }
 
     /// from relative time to relative tick count
