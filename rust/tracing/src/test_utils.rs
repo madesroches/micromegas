@@ -11,7 +11,7 @@ use std::sync::Arc;
 /// when dropped, ensuring proper cleanup between tests.
 ///
 /// # Important
-/// Tests using this guard MUST be marked with #[serial] since they
+/// Tests using this guard MUST be marked with `#[serial]` since they
 /// share global state through init_event_dispatch.
 pub struct InMemoryTracingGuard {
     pub sink: Arc<InMemorySink>,
@@ -42,7 +42,7 @@ impl Drop for InMemoryTracingGuard {
 /// Initialize in-memory tracing for unit tests
 ///
 /// # Important
-/// Tests using this function MUST be marked with #[serial] since they
+/// Tests using this function MUST be marked with `#[serial]` since they
 /// share global state through init_event_dispatch.
 ///
 /// # Example

@@ -48,7 +48,8 @@ use std::task::{Context, Poll};
 use tonic::metadata::MetadataMap;
 use tonic::{Request, Response, Status, Streaming};
 
-type FlightDataStream = Pin<Box<dyn Stream<Item = Result<arrow_flight::FlightData, Status>> + Send>>;
+type FlightDataStream =
+    Pin<Box<dyn Stream<Item = Result<arrow_flight::FlightData, Status>> + Send>>;
 
 macro_rules! status {
     ($desc:expr, $err:expr) => {
@@ -272,7 +273,9 @@ impl FlightSqlServiceImpl {
             });
         let completion_tracked_stream =
             CompletionTrackedStream::new(instrumented_stream.boxed(), begin_request);
-        Ok(Response::new(Box::pin(completion_tracked_stream) as FlightDataStream))
+        Ok(Response::new(
+            Box::pin(completion_tracked_stream) as FlightDataStream
+        ))
     }
 }
 
