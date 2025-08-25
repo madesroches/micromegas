@@ -86,9 +86,9 @@ Generate Perfetto trace files from a process's async span events by extending th
 - Updated `lib.rs` exports: separate imports for `Writer` and `StreamingPerfettoWriter`
 - Well-documented protobuf field number constant with schema reference
 
-### 🔄 Phase 3: Async Event Support in Perfetto Writer (IN PROGRESS)
+### ✅ Phase 3: Async Event Support in Perfetto Writer (COMPLETED)
 
-**Status**: 🔄 **IN PROGRESS** - Full async span support implemented but timestamp reliability issues discovered
+**Status**: ✅ **COMPLETED** - Full async span support implemented with timestamp reliability issues resolved
 
 **Objective**: Add async track support to the Perfetto writer (independent of streaming)
 
@@ -129,20 +129,14 @@ Generate Perfetto trace files from a process's async span events by extending th
 - **Safety-first design** with assertions ensuring proper usage patterns
 - **Full streaming support** for memory-efficient large trace generation
 
-**🔧 Outstanding Issues**:
-- **⚠️ Timestamp reliability problems**: Negative span durations observed (end_time < begin_time)
-- **Root cause**: TSC (Time Stamp Counter) timing issues when TSC is not available or unreliable
-- **Current mitigation**: Skip invalid spans with descriptive warning messages
-- **❌ DataFusion Query Issue in find_process_with_latest_timing**: The implementation using DataFusion with `NullPartitionProvider` won't work because:
-  - `NullPartitionProvider` returns empty partitions/results
-  - The `processes` view is a materialized view that depends on actual partition data
-  - During JIT update, we need process timing info **before** partitions are created
-  - This creates a circular dependency: need timing info to process blocks, but timing info comes from processed blocks
-  - **Resolution Needed**: specify the right partition provider
-- **Next steps**: Investigate timing infrastructure in `rust/tracing/src/time.rs` and TSC frequency calibration
-  - **Critical**: Always use latest available TSC frequency data, not just block-level info
-  - TSC should be monotonic - investigate why we're seeing time reversals
-  - Need to ensure proper TSC frequency calibration using most recent timing data available
+**✅ Resolved Issues**:
+- **✅ Timestamp reliability fixed**: Replaced `NullPartitionProvider` with `LivePartitionProvider` in `find_process_with_latest_timing`
+- **✅ Stream filtering implemented**: Trace generation now only processes CPU streams using `array_has(streams.tags, 'cpu')`
+- **✅ DataFusion Query Issue resolved**: AsyncEventsView now includes proper view_factory with processes view access
+- **✅ UUID parsing fixed**: Added `parse_optional_uuid()` function to handle empty UUID strings gracefully
+- **✅ Schema compatibility**: Fixed `tsc_frequency` casting from UInt64 to Int64 in DataFusion queries
+- **✅ Test compilation**: Updated async_events_tests.rs to work with new AsyncEventsView constructor
+- **✅ Query range optimization**: Pass query_range to limit partition search and reduce database load
 
 ### Phase 4: FlightSQL Streaming Table Function
 
@@ -350,11 +344,9 @@ ORDER BY time ASC
 ### ✅ Completed
 - **Phase 1**: Analytics Web App - Fully operational testing and development platform
 - **Phase 2**: Perfetto Writer Streaming Support - Complete streaming infrastructure with identical output compatibility
+- **Phase 3**: Async Event Support in Perfetto Writer - Complete async span implementation with all reliability issues resolved
 - **Async Events Infrastructure**: Complete async span data collection and view system
-- **Trace Generation Utility**: End-to-end testing tool for validating async span implementation
-
-### 🔄 In Progress
-- **Phase 3**: Async Event Support in Perfetto Writer - Core implementation complete but timestamp reliability issues need resolution
+- **Trace Generation Utility**: End-to-end testing tool for validating async span implementation with proper stream filtering
 
 ### ✅ Phase 3 Achievement Highlights
 - **Full API Implementation**: Both regular and streaming writers support async spans
@@ -362,6 +354,7 @@ ORDER BY time ASC
 - **Comprehensive Validation**: 13 unit tests + end-to-end trace validation
 - **Performance Verified**: Streaming writer maintains constant memory usage
 - **UI Compatible**: Generated traces ready for Perfetto UI visualization
+- **Reliability Resolved**: Fixed timestamp issues, stream filtering, and DataFusion query problems
 
 ### 🔄 Pending Implementation (In Priority Order)
 1. **Phase 4-6**: Server-Side Generation (Next Priority)
