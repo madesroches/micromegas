@@ -138,7 +138,32 @@ Generate Perfetto trace files from a process's async span events by extending th
 - **✅ Test compilation**: Updated async_events_tests.rs to work with new AsyncEventsView constructor
 - **✅ Query range optimization**: Pass query_range to limit partition search and reduce database load
 
-### Phase 4: FlightSQL Streaming Table Function
+### Phase 4: CPU Tracing Control
+
+**Status**: 🔄 **PENDING** - Not yet implemented
+
+**Objective**: Add configurable CPU tracing control with environment variable
+
+**Current State**: CPU tracing is always enabled, which may not be desired for all use cases
+
+**Tasks**:
+1. **Add CPU tracing toggle**:
+   - Environment variable `MICROMEGAS_ENABLE_CPU_TRACING` (default: false)
+   - Disable CPU stream processing by default in trace generation
+   - Only process CPU streams when explicitly enabled
+   - Update existing CPU stream filtering logic in trace generation utilities
+
+2. **Update stream filtering logic**:
+   - Modify `find_process_with_latest_timing` to respect CPU tracing setting
+   - Update AsyncEventsView and related queries to conditionally include CPU streams
+   - Ensure non-CPU streams are processed regardless of CPU tracing setting
+
+3. **Documentation and configuration**:
+   - Update service startup scripts to include environment variable option
+   - Document CPU tracing control in relevant configuration files
+   - Add logging to indicate when CPU tracing is enabled/disabled
+
+### Phase 5: FlightSQL Streaming Table Function
 
 **Status**: 🔄 **PENDING** - Not yet implemented
 
@@ -168,7 +193,7 @@ Generate Perfetto trace files from a process's async span events by extending th
    - Test binary reconstruction from chunks
    - Test error handling for invalid parameters
 
-### Phase 5: Server-Side Perfetto Generation
+### Phase 6: Server-Side Perfetto Generation
 
 **Status**: 🔄 **PENDING** - Not yet implemented
 
@@ -194,7 +219,7 @@ Generate Perfetto trace files from a process's async span events by extending th
    - Each query result batch triggers chunk emission via Phase 2 streaming Writer
    - Natural backpressure from DataFusion prevents memory bloat
 
-### Phase 6: Refactor Client to Use SQL Generation
+### Phase 7: Refactor Client to Use SQL Generation
 
 **Objective**: Convert `perfetto_trace_client.rs` to use `perfetto_trace_chunks` SQL function
 
@@ -221,7 +246,7 @@ Generate Perfetto trace files from a process's async span events by extending th
    - Verify async spans work correctly in refactored version
    - Performance comparison between approaches
 
-### Phase 7: Data Processing Optimization
+### Phase 8: Data Processing Optimization
 
 **Objective**: Ensure efficient async event processing for large traces
 
@@ -241,7 +266,7 @@ Generate Perfetto trace files from a process's async span events by extending th
    - Use streaming approach for large processes with many async events
 
 
-### Phase 8: Python Client Refactoring
+### Phase 9: Python Client Refactoring
 
 **Objective**: Eliminate duplicate Perfetto generation logic
 
@@ -261,7 +286,7 @@ Generate Perfetto trace files from a process's async span events by extending th
    - Test error handling and edge cases
    - Performance comparison between old and new approaches
 
-### Phase 9: Integration Testing and Validation
+### Phase 10: Integration Testing and Validation
 
 **Objective**: Ensure generated traces are valid and useful
 
@@ -357,21 +382,26 @@ ORDER BY time ASC
 - **Reliability Resolved**: Fixed timestamp issues, stream filtering, and DataFusion query problems
 
 ### 🔄 Pending Implementation (In Priority Order)
-1. **Phase 4-6**: Server-Side Generation (Next Priority)
+1. **Phase 4**: CPU Tracing Control (Next Priority)
+   - Add configurable CPU tracing with environment variable control
+   - Disabled by default to reduce trace size and processing overhead
+   - Essential for production deployments where CPU tracing may not be needed
+
+2. **Phase 5-7**: Server-Side Generation (Medium Priority)
    - Eliminates code duplication between client implementations
    - Enables advanced features like real-time streaming via FlightSQL
    - Can leverage completed Phase 2 & 3 infrastructure
    - Focus on FlightSQL table function for `perfetto_trace_chunks`
 
-2. **Python Client Refactoring** (Medium Priority)
+3. **Python Client Refactoring** (Lower Priority)
    - Remove duplicate Perfetto generation logic
    - Use server-side generation via FlightSQL queries
    - Maintain CLI compatibility with async span support
 
 ### Next Recommended Steps
 1. **Immediate**: Phase 3 provides complete async span visualization capability
-2. **Short-term**: Consider implementing server-side generation for code consolidation
-3. **Medium-term**: Refactor Python CLI to use server-side generation
+2. **Short-term**: Implement CPU tracing control (Phase 4) - essential for production usage
+3. **Medium-term**: Consider implementing server-side generation for code consolidation
 4. **Long-term**: Advanced features like real-time trace streaming
 
 ## Migration Strategy
