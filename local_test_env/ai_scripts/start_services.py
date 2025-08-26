@@ -118,7 +118,8 @@ def main():
             "cargo", "run", "-p", "telemetry-admin", "--", "crond"
         ], stdout=log_file, stderr=subprocess.STDOUT, env=os.environ.copy())
     admin_pid = admin_process.pid
-    print(f"Admin Daemon PID: {admin_pid}")    print()
+    print(f"Admin Daemon PID: {admin_pid}")
+    print()
     print("🎉 All services started!")
     print("📥 Ingestion Server: http://127.0.0.1:9000")
     print("📊 Analytics Server: port 32010")

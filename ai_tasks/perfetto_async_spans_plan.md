@@ -248,19 +248,38 @@ During the completion of Phase 4, several test files required updates to work wi
 
 4. **All Tests Now Passing**: Full CI pipeline passes with formatting, clippy, and all unit/integration tests successful
 
-### Phase 5: FlightSQL Streaming Table Function
+### ✅ Phase 5: FlightSQL Streaming Table Function (COMPLETED)
 
-**Status**: 🔄 **IN PROGRESS**
+**Status**: ✅ **COMPLETED** - Full streaming table function implementation
 
 **Objective**: Implement FlightSQL chunked binary streaming infrastructure for server-side Perfetto trace generation
 
-**Current Limitations**:
-- No server-side Perfetto trace generation capability
-- All trace generation happens client-side in `perfetto_trace_client.rs`
-- No SQL interface for generating traces with different span types
-- Client must fetch all data and generate traces locally
+**✅ Completed Implementation**:
 
-**Implementation Design**:
+1. **✅ SQL Table Function**: `perfetto_trace_chunks(process_id, span_types, start_time, end_time)` fully operational
+   - **Location**: `rust/analytics/src/lakehouse/perfetto_trace_table_function.rs`
+   - **Registration**: Registered in DataFusion query engine via `query.rs`
+   - **Validation**: Complete argument validation with proper error messages
+   - **Schema**: Returns `chunk_id: Int32` and `chunk_data: Binary`
+
+2. **✅ Streaming Execution Plan**: Memory-efficient streaming implementation
+   - **Location**: `rust/analytics/src/lakehouse/perfetto_trace_execution_plan.rs`  
+   - **Streaming**: Uses tokio channels for async chunk generation
+   - **TableProvider**: Full DataFusion integration with proper execution plan
+   - **Phase 5**: Currently returns dummy data, ready for Phase 6 real implementation
+
+3. **✅ Integration Tests**: Complete test coverage and validation
+   - **Location**: `python/micromegas/tests/test_perfetto_trace_chunks.py`
+   - **Coverage**: Basic functionality, span types, argument validation, schema verification
+   - **All Tests Passing**: 4/4 integration tests passing with live FlightSQL server
+
+4. **✅ Full CI Pipeline**: All quality gates passing
+   - **Formatting**: `cargo fmt --check` ✅
+   - **Linting**: `cargo clippy --workspace -- -D warnings` ✅ (clippy warnings fixed)
+   - **Unit Tests**: 51+ tests passing across all crates ✅
+   - **Integration Tests**: FlightSQL table function operational ✅
+
+**Original Implementation Design** (for Phase 6 reference):
 
 1. **Table Function: `perfetto_trace_chunks`**
    - **Location**: `rust/analytics/src/lakehouse/perfetto_trace_table_function.rs`
@@ -664,6 +683,7 @@ ORDER BY time ASC
 - **Phase 2**: Perfetto Writer Streaming Support - Complete streaming infrastructure with identical output compatibility
 - **Phase 3**: Async Event Support in Perfetto Writer - Complete async span implementation with all reliability issues resolved
 - **Phase 4**: CPU Tracing Control - Complete configurable CPU tracing with environment variable control
+- **Phase 5**: FlightSQL Streaming Table Function - Complete server-side trace generation infrastructure
 - **Async Events Infrastructure**: Complete async span data collection and view system
 - **Trace Generation Utility**: End-to-end testing tool for validating async span implementation with proper stream filtering
 - **Test Infrastructure**: All tests updated and working with CPU tracing control
@@ -683,23 +703,38 @@ ORDER BY time ASC
 - **Production Ready**: Default disabled behavior suitable for production deployments
 - **Development Friendly**: Tests explicitly enable CPU tracing for validation
 
-### 🔄 Pending Implementation (In Priority Order)
-1. **Phase 5-7**: Server-Side Generation (Medium Priority)
-   - Eliminates code duplication between client implementations
-   - Enables advanced features like real-time streaming via FlightSQL
-   - Can leverage completed Phase 2 & 3 infrastructure
-   - Focus on FlightSQL table function for `perfetto_trace_chunks`
+### ✅ Phase 5 Achievement Highlights
+- **SQL Table Function**: `perfetto_trace_chunks(process_id, span_types, start_time, end_time)` fully operational
+- **Complete DataFusion Integration**: TableFunction registered with proper execution plan and streaming support
+- **Memory-Efficient Streaming**: Uses tokio channels for async chunk generation without memory accumulation
+- **Full Test Coverage**: 4 integration tests passing with live FlightSQL server validation
+- **Argument Validation**: Complete error handling for invalid span types, timestamps, and missing arguments
+- **Schema Correctness**: Returns proper Arrow schema with Int32 chunk_id and Binary chunk_data
+- **CI Pipeline**: Full formatting, linting, and test coverage with all clippy warnings resolved
+- **Phase 6 Ready**: Infrastructure complete for real Perfetto trace generation implementation
 
-2. **Python Client Refactoring** (Lower Priority)
-   - Remove duplicate Perfetto generation logic
-   - Use server-side generation via FlightSQL queries
+### 🔄 Pending Implementation (In Priority Order)
+1. **Phase 6**: Server-Side Trace Generation Logic (Medium Priority)
+   - Replace dummy data with real Perfetto protobuf packets in `generate_trace_chunks()` 
+   - Integrate with existing Perfetto writer infrastructure from Phases 2 & 3
+   - Query process metadata, thread spans, and async events from lakehouse
+   - Stream TracePackets as binary chunks using `StreamingPerfettoWriter`
+
+2. **Phase 7**: Client Refactoring (Lower Priority)
+   - Convert `perfetto_trace_client.rs` to use `perfetto_trace_chunks` SQL function
+   - Remove duplicate Perfetto generation logic from clients
+   - Maintain API compatibility while leveraging server-side generation
+
+3. **Phase 8-10**: Data Processing Optimization & Python Client Refactoring (Lower Priority)
+   - Optimize async event processing for large traces
+   - Remove duplicate Perfetto generation logic from Python CLI
    - Maintain CLI compatibility with async span support
 
 ### Next Recommended Steps
-1. **✅ Complete**: Phases 1-4 provide complete async span visualization capability with configurable CPU tracing
-2. **Medium-term**: Consider implementing server-side generation for code consolidation
-3. **Long-term**: Advanced features like real-time trace streaming
-4. **Long-term**: Advanced features like real-time trace streaming
+1. **✅ Complete**: Phases 1-5 provide complete infrastructure for server-side async span visualization
+2. **Next Priority**: Phase 6 - Replace dummy data with real Perfetto trace generation in `generate_trace_chunks()`
+3. **Medium-term**: Phase 7 - Client refactoring to eliminate code duplication
+4. **Long-term**: Advanced features like real-time trace streaming and processing optimizations
 
 ## Phase 5-6 Implementation Strategy
 

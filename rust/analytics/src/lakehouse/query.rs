@@ -3,7 +3,8 @@ use super::{
     list_partitions_table_function::ListPartitionsTableFunction,
     materialize_partitions_table_function::MaterializePartitionsTableFunction,
     partition::Partition, partition_cache::QueryPartitionProvider,
-    partitioned_table_provider::PartitionedTableProvider, property_get_function::PropertyGet,
+    partitioned_table_provider::PartitionedTableProvider,
+    perfetto_trace_table_function::PerfettoTraceTableFunction, property_get_function::PropertyGet,
     retire_partitions_table_function::RetirePartitionsTableFunction, view::View,
     view_factory::ViewFactory,
 };
@@ -111,7 +112,7 @@ pub fn register_lakehouse_functions(
         Arc::new(ViewInstanceTableFunction::new(
             runtime.clone(),
             lake.clone(),
-            object_store,
+            object_store.clone(),
             view_factory.clone(),
             part_provider.clone(),
             query_range,
@@ -124,6 +125,17 @@ pub fn register_lakehouse_functions(
     ctx.register_udtf(
         "retire_partitions",
         Arc::new(RetirePartitionsTableFunction::new(lake.clone())),
+    );
+    ctx.register_udtf(
+        "perfetto_trace_chunks",
+        Arc::new(PerfettoTraceTableFunction::new(
+            runtime.clone(),
+            lake.clone(),
+            object_store.clone(),
+            view_factory.clone(),
+            part_provider.clone(),
+            query_range,
+        )),
     );
     ctx.register_udtf(
         "materialize_partitions",

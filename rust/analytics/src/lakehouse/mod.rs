@@ -52,6 +52,10 @@ pub mod partition_source_data;
 pub mod partitioned_execution_plan;
 /// TableProvider based on a set of parquet files
 pub mod partitioned_table_provider;
+/// ExecutionPlan for generating Perfetto trace chunks
+pub mod perfetto_trace_execution_plan;
+/// Table function for generating Perfetto trace chunks
+pub mod perfetto_trace_table_function;
 /// Replicated view of the `processes` table of the postgresql metadata database.
 pub mod processes_view;
 /// property_get function support from SQL
