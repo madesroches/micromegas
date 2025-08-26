@@ -146,22 +146,183 @@ Generate Perfetto trace files from a process's async span events by extending th
 
 **Current State**: CPU tracing is always enabled, which may not be desired for all use cases
 
-**Tasks**:
-1. **Add CPU tracing toggle**:
-   - Environment variable `MICROMEGAS_ENABLE_CPU_TRACING` (default: false)
-   - Disable CPU stream processing by default in trace generation
-   - Only process CPU streams when explicitly enabled
-   - Update existing CPU stream filtering logic in trace generation utilities
+**Design Principles**:
+- **Process-lifetime constant**: Environment variable is read once at startup and never changes
+- **Zero overhead when disabled**: No tokio runtime callbacks registered if CPU tracing is disabled
+- **No thread stream initialization**: Thread streams should not be created when CPU tracing is disabled
+- **Minimal overhead by default**: Default value is disabled (false) for optimal production performance
 
-2. **Update stream filtering logic**:
-   - Modify `find_process_with_latest_timing` to respect CPU tracing setting
-   - Update AsyncEventsView and related queries to conditionally include CPU streams
-   - Ensure non-CPU streams are processed regardless of CPU tracing setting
+**Implementation Tasks**:
 
-3. **Documentation and configuration**:
-   - Update service startup scripts to include environment variable option
-   - Document CPU tracing control in relevant configuration files
-   - Add logging to indicate when CPU tracing is enabled/disabled
+#### 4.1 Environment Variable Infrastructure
+1. **Add CPU tracing flag to Dispatch struct** in `rust/tracing/src/dispatch.rs`:
+   - Add `cpu_tracing_enabled: bool` field to `struct Dispatch`
+   - Add `cpu_tracing_enabled: bool` parameter to `Dispatch::new()` constructor
+   - Store the passed value as an instance field for efficient access
+   - Do NOT read environment variables in tracing library
+
+2. **Update sink libraries** to read environment variable:
+   - **`rust/telemetry-sink/`**: Read `MICROMEGAS_ENABLE_CPU_TRACING` environment variable (default: false)
+   - **`rust/telemetry-ingestion-srv/`**: Read environment variable and pass to dispatch (default: false)
+   - **`rust/flight-sql-srv/`**: Read environment variable and pass to dispatch (default: false)
+
+3. **Update `init_event_dispatch()` function**:
+   - Add `cpu_tracing_enabled: bool` parameter to function signature
+   - Pass CPU tracing setting when creating new Dispatch instance
+   - Callers (sink libraries) responsible for reading environment variable
+   - Log clearly when CPU tracing is enabled/disabled at dispatch creation
+
+#### 4.2 Thread Stream Conditional Initialization
+1. **Modify `init_thread_stream()` function** in `rust/tracing/src/dispatch.rs`:
+   - Check `G_DISPATCH.get().map_or(false, |d| d.cpu_tracing_enabled)` before proceeding
+   - Early return if CPU tracing is disabled
+   - Do not allocate ThreadStream when CPU tracing is disabled
+   - Do not call sink.on_init_thread_stream() when disabled
+
+2. **Update `Dispatch::init_thread_stream()` method**:
+   - Check `self.cpu_tracing_enabled` flag before creating ThreadStream
+   - When disabled, do not add "cpu" tag to stream tags array
+   - When disabled, do not register thread stream in `self.thread_streams` vector
+
+#### 4.3 Tokio Runtime Integration Changes
+**⚠️ Critical Initialization Order Issue**: Tokio callbacks are registered before dispatch exists, but need to know CPU tracing setting.
+
+1. **Add environment variable reading to runtime extension** in `rust/tracing/src/runtime.rs`:
+   - Read `MICROMEGAS_ENABLE_CPU_TRACING` directly in `with_tracing_callbacks()`
+   - This happens at runtime creation time (before dispatch initialization)
+   - Store the setting for callback decision making
+   - Default to `false` (disabled by default for minimal overhead)
+
+2. **Conditional callback registration**:
+   ```rust
+   fn with_tracing_callbacks(&mut self) -> &mut Self {
+       let cpu_tracing_enabled = std::env::var("MICROMEGAS_ENABLE_CPU_TRACING")
+           .map(|v| v == "true")
+           .unwrap_or(false); // Default to disabled for minimal overhead
+
+       if !cpu_tracing_enabled {
+           // No callbacks registered when CPU tracing disabled
+           return self;
+       }
+
+       self.on_thread_start(|| {
+           init_thread_stream();
+       })
+       .on_thread_stop(|| {
+           unregister_thread_stream();
+       })
+   }
+   ```
+
+3. **Update proc macro integration** in `rust/micromegas-proc-macros/src/lib.rs`:
+   - `#[micromegas_main]` macro must check CPU tracing before enabling runtime callbacks
+   - Read environment variable before creating tokio runtime
+   - Only call `.with_tracing_callbacks()` if CPU tracing is enabled
+   - Ensure consistent behavior between manual runtime setup and proc macro
+
+#### 4.4 Event Recording Path Changes
+1. **Update all `on_thread_event<T>()` calls**:
+   - **No additional checks needed** - if CPU tracing is disabled, thread streams are never initialized
+   - `LOCAL_THREAD_STREAM` remains `None` when CPU tracing is disabled
+   - Existing event recording functions naturally become no-ops when stream is `None`
+   - Current implementation already handles the case where no thread stream exists
+
+2. **Update thread-local stream access**:
+   - `on_begin_scope()`, `on_end_scope()`, `on_begin_named_scope()`, `on_end_named_scope()`
+   - **No additional checks needed** - these functions already handle missing thread streams gracefully
+   - When CPU tracing is disabled, these become natural no-ops due to uninitialized streams
+
+#### 4.5 Proc Macro Integration Updates
+**Critical**: The `#[micromegas_main]` macro must handle CPU tracing initialization order correctly.
+
+1. **Update `#[micromegas_main]` macro** in `rust/micromegas-proc-macros/src/lib.rs`:
+   - Read `MICROMEGAS_ENABLE_CPU_TRACING` environment variable before creating runtime
+   - Only enable tokio callbacks if CPU tracing is enabled
+   - Ensure telemetry guard initialization happens with correct CPU tracing setting
+
+2. **Example macro expansion pattern**:
+   ```rust
+   // Generated code should look like:
+   fn main() {
+       let cpu_tracing_enabled = std::env::var("MICROMEGAS_ENABLE_CPU_TRACING")
+           .map(|v| v == "true")
+           .unwrap_or(false); // Default to disabled for minimal overhead
+
+       let _guard = micromegas_telemetry_sink::TelemetryGuard::new();
+
+       let mut runtime_builder = tokio::runtime::Builder::new_multi_thread()
+           .enable_all();
+
+       if cpu_tracing_enabled {
+           runtime_builder = runtime_builder.with_tracing_callbacks();
+       }
+
+       let runtime = runtime_builder.build().expect("Failed to create Tokio runtime");
+       // ... rest of generated code
+   }
+   ```
+
+3. **Consistency with manual runtime setup**:
+   - Both proc macro and manual setup should read environment variable at same point
+   - Both should make same decision about registering tokio callbacks
+   - Document the correct manual setup pattern for applications not using proc macro
+
+#### 4.6 Service Configuration
+1. **Update service startup scripts**:
+   - `local_test_env/ai_scripts/start_services.py` should set environment variable to `true` for development
+   - `build/docker_command.py` should pass through environment variable
+   - Explicitly enable for development/testing environments
+
+2. **Update sink library initialization** in services:
+   - **`rust/telemetry-ingestion-srv/src/main.rs`**: Read `MICROMEGAS_ENABLE_CPU_TRACING` and pass to dispatch
+   - **`rust/flight-sql-srv/src/main.rs`**: Read environment variable and pass to dispatch
+   - **Test utilities**: Update to pass CPU tracing parameter when creating dispatch (default to `true` for tests)
+   - **Example pattern**: `init_event_dispatch(logs_size, metrics_size, threads_size, sink, properties, cpu_tracing_enabled)`
+
+3. **Add logging and observability**:
+   - Log CPU tracing state at service startup (in sink libraries)
+   - Include CPU tracing status in health checks
+   - Document performance implications of enabling/disabling
+
+#### 4.7 Testing Strategy
+1. **Unit tests for conditional behavior**:
+   - Test that thread streams are not created when disabled
+   - Test that tokio callbacks are not registered when disabled
+   - Test that span events become no-ops when disabled
+   - Test proc macro behavior with CPU tracing disabled/enabled
+   - Test manual runtime setup with CPU tracing disabled/enabled
+
+2. **Integration tests**:
+   - Test trace generation with CPU tracing disabled (should have no thread tracks)
+   - Test trace generation with CPU tracing enabled (current behavior)
+   - Test that async spans still work regardless of CPU tracing setting
+   - Test services startup with different CPU tracing environment variable values
+
+3. **Initialization order tests**:
+   - Verify that environment variable is read before tokio runtime creation
+   - Verify that dispatch receives correct CPU tracing setting
+   - Test that proc macro and manual setup produce identical behavior
+
+#### 4.8 Documentation Updates
+1. **Configuration documentation**:
+   - Update relevant README files with environment variable
+   - Document performance implications and use cases
+   - Add examples of when to disable CPU tracing
+   - Document proc macro behavior changes
+
+2. **Migration guide**:
+   - Explain default behavior change (if changing default to disabled)
+   - Instructions for services that need CPU tracing
+   - Performance benchmarks showing overhead reduction
+   - Update examples showing both proc macro and manual runtime setup
+
+**Expected Outcomes**:
+- **Zero runtime overhead** when CPU tracing is disabled
+- **No thread stream allocation** when CPU tracing is disabled
+- **No tokio callback registration** when CPU tracing is disabled
+- **Configurable via environment variable** at process startup
+- **Minimal overhead by default** for optimal production performance
+- **Clear logging** of CPU tracing state for debugging
 
 ### Phase 5: FlightSQL Streaming Table Function
 
