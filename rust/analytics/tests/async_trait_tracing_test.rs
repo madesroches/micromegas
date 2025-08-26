@@ -90,9 +90,6 @@ fn sync_function(input: &str) -> String {
 #[test]
 #[serial]
 fn test_async_trait_comprehensive() {
-    unsafe {
-        std::env::set_var("MICROMEGAS_ENABLE_CPU_TRACING", "true");
-    }
     let guard = init_in_memory_tracing();
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -206,9 +203,6 @@ fn test_async_trait_comprehensive() {
 #[test]
 #[serial]
 fn test_async_trait_equivalence() {
-    unsafe {
-        std::env::set_var("MICROMEGAS_ENABLE_CPU_TRACING", "true");
-    }
     let guard = init_in_memory_tracing();
 
     let runtime = tokio::runtime::Builder::new_multi_thread()

@@ -24,9 +24,6 @@ async fn park_inducing_function() {
 #[test]
 #[serial]
 fn test_thread_park_flush() {
-    unsafe {
-        std::env::set_var("MICROMEGAS_ENABLE_CPU_TRACING", "true");
-    }
     let guard = init_in_memory_tracing();
 
     let runtime = tokio::runtime::Builder::new_multi_thread()

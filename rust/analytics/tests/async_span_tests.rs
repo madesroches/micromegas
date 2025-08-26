@@ -43,9 +43,6 @@ fn instrumented_sync_function() {
 #[test]
 #[serial]
 fn test_async_span_manual_instrumentation() {
-    unsafe {
-        std::env::set_var("MICROMEGAS_ENABLE_CPU_TRACING", "true");
-    }
     let guard = init_in_memory_tracing();
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -86,9 +83,6 @@ fn test_async_span_manual_instrumentation() {
 #[test]
 #[serial]
 fn test_async_span_macro() {
-    unsafe {
-        std::env::set_var("MICROMEGAS_ENABLE_CPU_TRACING", "true");
-    }
     let guard = init_in_memory_tracing();
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -177,9 +171,6 @@ async fn test_named_spans() {
 #[test]
 #[serial]
 fn test_async_named_span_instrumentation() {
-    unsafe {
-        std::env::set_var("MICROMEGAS_ENABLE_CPU_TRACING", "true");
-    }
     let guard = init_in_memory_tracing();
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
