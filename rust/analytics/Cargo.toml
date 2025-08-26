@@ -14,6 +14,7 @@ micromegas-telemetry.workspace = true
 micromegas-tracing = { workspace = true, features = ["tokio"] }
 micromegas-transit.workspace = true
 micromegas-ingestion.workspace = true
+micromegas-perfetto.workspace = true
 
 anyhow.workspace = true
 arrow-flight.workspace = true

@@ -422,11 +422,30 @@ During the completion of Phase 4, several test files required updates to work wi
 
 ### Phase 6: Server-Side Perfetto Generation
 
-**Status**: 🔄 **PENDING** - Depends on Phase 5
+**Status**: 🔄 **IN PROGRESS** - Major progress with critical issues to resolve
 
 **Objective**: Implement the actual trace generation logic within the execution plan from Phase 5
 
 **Note**: Phase 5 creates the infrastructure (table function, execution plan, chunking), while Phase 6 implements the actual Perfetto generation logic inside that infrastructure.
+
+**✅ Major Progress Achieved**:
+1. **✅ Real Perfetto Integration**: Replaced dummy data with actual `StreamingPerfettoWriter` usage
+2. **✅ Lakehouse Data Queries**: Implemented process metadata, thread info, thread spans, and async events querying
+3. **✅ Single Writer Instance**: Fixed string interning by using single `StreamingPerfettoWriter` throughout trace generation
+4. **✅ Track Descriptor Management**: Process, thread, and async track descriptors emitted correctly without duplicates
+5. **✅ Code Quality**: All compilation and clippy errors resolved
+
+**🚨 Critical Issues Remaining**:
+1. **Blocking I/O in Write Trait**: Current `ChunkWriter` uses `tokio::runtime::Handle::current().block_on()` in `std::io::Write::flush()` method, which is blocking and can cause performance issues or deadlocks
+2. **Memory-Inefficient Query Pattern**: Using `.collect().await?` pattern loads all query results into memory at once, defeating the purpose of streaming
+3. **Not Truly Streaming**: Due to blocking send and collect pattern, the implementation doesn't leverage async streaming benefits
+4. **Untested with Real Data**: Implementation needs validation with actual telemetry data to ensure it works end-to-end
+
+**🔄 Immediate Next Steps**:
+1. **Replace .collect().await Pattern**: Use DataFusion's streaming API (`while let Some(batch) = stream.next().await`) instead of collecting all results
+2. **Remove Blocking Send**: Restructure `ChunkWriter` to avoid `std::io::Write` trait and use proper async streaming
+3. **Implement True Async Streaming**: Make packet generation truly asynchronous without blocking calls, processing query results as they arrive
+4. **End-to-End Testing**: Validate implementation with real telemetry data through FlightSQL interface
 
 **Implementation Details**:
 
@@ -714,11 +733,13 @@ ORDER BY time ASC
 - **Phase 6 Ready**: Infrastructure complete for real Perfetto trace generation implementation
 
 ### 🔄 Pending Implementation (In Priority Order)
-1. **Phase 6**: Server-Side Trace Generation Logic (Medium Priority)
-   - Replace dummy data with real Perfetto protobuf packets in `generate_trace_chunks()` 
-   - Integrate with existing Perfetto writer infrastructure from Phases 2 & 3
-   - Query process metadata, thread spans, and async events from lakehouse
-   - Stream TracePackets as binary chunks using `StreamingPerfettoWriter`
+1. **Phase 6 - Critical Issues** (High Priority - In Progress)
+   - 🚨 **Replace .collect().await pattern**: Use DataFusion streaming API (`df.execute_stream().await?`) instead of memory-loading `.collect().await?`
+   - 🚨 **Remove blocking send from ChunkWriter**: Replace `std::io::Write` implementation with proper async streaming
+   - 🚨 **Fix async streaming architecture**: Restructure to avoid `tokio::runtime::Handle::current().block_on()` calls  
+   - 🚨 **Implement true streaming**: Process query results as they arrive using `while let Some(batch) = stream.next().await`
+   - 🚨 **End-to-end testing**: Validate real Perfetto trace generation with telemetry data through FlightSQL interface
+   - ✅ **Basic implementation complete**: Real Perfetto integration, lakehouse queries, and string interning working
 
 2. **Phase 7**: Client Refactoring (Lower Priority)
    - Convert `perfetto_trace_client.rs` to use `perfetto_trace_chunks` SQL function
