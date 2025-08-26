@@ -4,8 +4,8 @@ use std::thread;
 
 mod utils;
 use micromegas_tracing::dispatch::{
-    flush_log_buffer, flush_metrics_buffer, flush_thread_buffer, init_event_dispatch,
-    init_thread_stream, process_id,
+    cpu_tracing_enabled, flush_log_buffer, flush_metrics_buffer, flush_thread_buffer,
+    init_event_dispatch, init_thread_stream, process_id,
 };
 use micromegas_tracing::levels::{Level, LevelFilter, set_max_level};
 use micromegas_tracing::log;
@@ -136,11 +136,13 @@ fn test_log() {
         64 * 1024,
         Arc::new(DebugEventSink::new(state.clone())),
         HashMap::new(),
+        true, // Enable CPU tracing for tests
     )
     .unwrap();
     set_max_level(LevelFilter::Trace);
     log::set_max_level(log::LevelFilter::Trace);
     assert!(process_id().is_some());
+    assert_eq!(cpu_tracing_enabled(), Some(true));
     test_log_str(&state);
     test_log_properties(&state);
     test_log_interop_str(&state);

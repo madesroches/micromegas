@@ -23,6 +23,7 @@ impl TracingSystemGuard {
         threads_buffer_size: usize,
         sink: Arc<dyn EventSink>,
         process_properties: HashMap<String, String>,
+        cpu_tracing_enabled: bool,
     ) -> Result<Self> {
         init_telemetry(
             logs_buffer_size,
@@ -30,6 +31,7 @@ impl TracingSystemGuard {
             threads_buffer_size,
             sink,
             process_properties,
+            cpu_tracing_enabled,
         )?;
         Ok(Self {})
     }
@@ -47,6 +49,7 @@ pub fn init_telemetry(
     threads_buffer_size: usize,
     sink: Arc<dyn EventSink>,
     process_properties: HashMap<String, String>,
+    cpu_tracing_enabled: bool,
 ) -> Result<()> {
     init_event_dispatch(
         logs_buffer_size,
@@ -54,6 +57,7 @@ pub fn init_telemetry(
         threads_buffer_size,
         sink,
         process_properties,
+        cpu_tracing_enabled,
     )?;
     init_panic_hook();
     Ok(())

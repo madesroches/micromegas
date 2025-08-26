@@ -25,6 +25,7 @@
 //!     16 * 1024 * 1024,
 //!     std::sync::Arc::new(event::NullEventSink {}),
 //!     std::collections::HashMap::new(),
+//!     true, // Enable CPU tracing
 //! );
 //! let _thread_guard = guards::TracingThreadGuard::new();
 //!

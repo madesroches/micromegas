@@ -1,11 +1,7 @@
-use micromegas_tracing::dispatch::{force_uninit, init_event_dispatch, shutdown_dispatch};
-use micromegas_tracing::event::EventSink;
 use micromegas_tracing::event::TracingBlock;
-use micromegas_tracing::event::in_memory_sink::InMemorySink;
 use micromegas_tracing::prelude::*;
+use micromegas_tracing::test_utils::init_in_memory_tracing;
 use serial_test::serial;
-use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::sleep;
 
@@ -22,18 +18,13 @@ async fn park_inducing_function() {
     eprintln!("Finished async work");
 }
 
-fn init_in_mem_tracing(sink: Arc<dyn EventSink>) {
-    init_event_dispatch(1024, 1024, 1024, sink, HashMap::new()).unwrap();
-}
-
 /// Tests that the tokio runtime's on_thread_park callback properly flushes
 /// tracing events when threads become idle. This ensures low-latency event
 /// processing by not waiting for thread destruction to flush buffers.
 #[test]
 #[serial]
 fn test_thread_park_flush() {
-    let sink = Arc::new(InMemorySink::new());
-    init_in_mem_tracing(sink.clone());
+    let guard = init_in_memory_tracing();
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -68,10 +59,9 @@ fn test_thread_park_flush() {
 
     // Drop the runtime to properly shut down worker threads
     drop(runtime);
-    shutdown_dispatch();
 
     // Check that events were recorded
-    let state = sink.state.lock().expect("Failed to lock sink state");
+    let state = guard.sink.state.lock().expect("Failed to lock sink state");
     let total_events: usize = state
         .thread_blocks
         .iter()
@@ -87,6 +77,4 @@ fn test_thread_park_flush() {
         "Expected at least 8 events from 4 function calls but found {}",
         total_events
     );
-
-    unsafe { force_uninit() };
 }

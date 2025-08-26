@@ -1,15 +1,11 @@
 use async_trait::async_trait;
-use micromegas_tracing::dispatch::{
-    flush_thread_buffer, force_uninit, init_event_dispatch, shutdown_dispatch,
-};
-use micromegas_tracing::event::EventSink;
-use micromegas_tracing::event::in_memory_sink::InMemorySink;
+use micromegas_tracing::dispatch::flush_thread_buffer;
 use micromegas_tracing::prelude::*;
 use micromegas_tracing::spans::ThreadEventQueueAny;
+use micromegas_tracing::test_utils::init_in_memory_tracing;
 use micromegas_transit::HeterogeneousQueue;
 use serial_test::serial;
 use std::collections::HashMap;
-use std::sync::Arc;
 
 /// Simple async trait for testing span_fn macro support
 #[async_trait]
@@ -89,17 +85,12 @@ fn sync_function(input: &str) -> String {
     format!("sync: {}", input)
 }
 
-fn init_in_mem_tracing(sink: Arc<dyn EventSink>) {
-    init_event_dispatch(1024, 1024, 1024, sink, HashMap::new()).unwrap();
-}
-
 /// Comprehensive test: validates all async trait variations generate correct event types
 /// This test covers functionality + event type validation in one robust test
 #[test]
 #[serial]
 fn test_async_trait_comprehensive() {
-    let sink = Arc::new(InMemorySink::new());
-    init_in_mem_tracing(sink.clone());
+    let guard = init_in_memory_tracing();
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -148,10 +139,9 @@ fn test_async_trait_comprehensive() {
     });
 
     drop(runtime);
-    shutdown_dispatch();
 
     // Validate event types using HeterogeneousQueue inspection
-    let state = sink.state.lock().expect("Failed to lock sink state");
+    let state = guard.sink.state.lock().expect("Failed to lock sink state");
     let mut sync_span_events = 0;
     let mut async_span_events = 0;
     let mut total_events = 0;
@@ -207,16 +197,13 @@ fn test_async_trait_comprehensive() {
     println!("✅ ASYNC TRAIT METHODS: Generate async span events (not sync)");
     println!("✅ REGULAR ASYNC FUNCTIONS: Generate async span events");
     println!("✅ COVERAGE: Simple, generic, and complex async trait variations");
-
-    unsafe { force_uninit() };
 }
 
 /// Focused test: validates that async trait methods work identically to regular async functions
 #[test]
 #[serial]
 fn test_async_trait_equivalence() {
-    let sink = Arc::new(InMemorySink::new());
-    init_in_mem_tracing(sink.clone());
+    let guard = init_in_memory_tracing();
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -243,10 +230,9 @@ fn test_async_trait_equivalence() {
     });
 
     drop(runtime);
-    shutdown_dispatch();
 
     // Validate both generate async span events (not sync events)
-    let state = sink.state.lock().expect("Failed to lock sink state");
+    let state = guard.sink.state.lock().expect("Failed to lock sink state");
     let mut async_events = 0;
     let mut sync_events = 0;
 
@@ -272,6 +258,4 @@ fn test_async_trait_equivalence() {
     );
 
     println!("✅ EQUIVALENCE: Async trait methods behave identically to regular async functions");
-
-    unsafe { force_uninit() };
 }

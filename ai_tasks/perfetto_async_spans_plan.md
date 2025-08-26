@@ -138,7 +138,115 @@ Generate Perfetto trace files from a process's async span events by extending th
 - **✅ Test compilation**: Updated async_events_tests.rs to work with new AsyncEventsView constructor
 - **✅ Query range optimization**: Pass query_range to limit partition search and reduce database load
 
-### Phase 4: FlightSQL Streaming Table Function
+### ✅ Phase 4: CPU Tracing Control (COMPLETED)
+
+**Status**: ✅ **COMPLETED** - Full CPU tracing control implementation
+
+**Objective**: Add configurable CPU tracing control with environment variable
+
+**✅ Implemented Features**:
+- **Environment variable control**: `MICROMEGAS_ENABLE_CPU_TRACING` environment variable (defaults to `false`)
+- **Process-lifetime constant**: Environment variable is read once at startup and never changes
+- **Zero overhead when disabled**: No tokio runtime callbacks registered if CPU tracing is disabled
+- **Conditional thread stream initialization**: Thread streams are not created when CPU tracing is disabled
+- **Minimal overhead by default**: Default value is disabled (false) for optimal production performance
+
+**✅ Implementation Complete**:
+
+#### ✅ 4.1 Environment Variable Infrastructure
+- **✅ Dispatch struct updated**: Added `cpu_tracing_enabled: bool` field to `struct Dispatch`
+- **✅ Constructor updated**: Added `cpu_tracing_enabled: bool` parameter to `Dispatch::new()` constructor
+- **✅ Function signature updated**: `init_event_dispatch()` now requires `cpu_tracing_enabled: bool` parameter
+- **✅ Sink libraries updated**: All sink libraries read `MICROMEGAS_ENABLE_CPU_TRACING` environment variable
+- **✅ Service integration**: Services pass CPU tracing setting when creating dispatch
+
+#### ✅ 4.2 Thread Stream Conditional Initialization
+- **✅ Conditional initialization**: `init_thread_stream()` checks CPU tracing flag before proceeding
+- **✅ Early return**: Function returns early if CPU tracing is disabled
+- **✅ No allocation when disabled**: ThreadStream not allocated when CPU tracing is disabled
+- **✅ Stream tags conditional**: "cpu" tag not added to stream tags when disabled
+
+#### ✅ 4.3 Tokio Runtime Integration
+- **✅ Runtime extension updated**: `TracingRuntimeExt::with_tracing_callbacks()` reads environment variable
+- **✅ Conditional callback registration**: No callbacks registered when CPU tracing disabled
+- **✅ Default to disabled**: Defaults to `false` for minimal overhead
+- **✅ Both variants implemented**: Both `with_tracing_callbacks()` and `with_tracing_callbacks_and_custom_start()` support conditional behavior
+
+#### ✅ 4.4 Event Recording Path
+- **✅ Natural no-ops**: Event recording functions become no-ops when thread streams are uninitialized
+- **✅ Graceful handling**: All span functions handle missing thread streams gracefully
+- **✅ Zero overhead**: No additional runtime checks needed in hot paths
+
+#### ✅ 4.5 Test Infrastructure Updates
+- **✅ Test utilities updated**: `InMemoryTracingGuard` enables CPU tracing for tests by default
+- **✅ Environment variable support**: Tests can override CPU tracing with `MICROMEGAS_ENABLE_CPU_TRACING=true`
+- **✅ Proper test isolation**: Tests use proper test utilities with automatic cleanup
+
+#### ✅ 4.6 Service and Development Configuration
+- **✅ Development environment**: Tests explicitly enable CPU tracing via environment variable
+- **✅ Production ready**: Default disabled behavior suitable for production deployments
+- **✅ Configurable services**: Services can enable/disable CPU tracing via environment variable
+
+**✅ Testing and Validation**:
+- **✅ Unit tests**: All existing tests updated to work with CPU tracing control
+- **✅ Integration tests**: Tests verify conditional behavior works correctly
+- **✅ Async span compatibility**: Async spans work regardless of CPU tracing setting
+- **✅ Zero regression**: All existing functionality preserved when CPU tracing is enabled
+
+**✅ Key Implementation Details**:
+```rust
+// Runtime extension conditionally registers callbacks
+impl TracingRuntimeExt for tokio::runtime::Builder {
+    fn with_tracing_callbacks(&mut self) -> &mut Self {
+        let cpu_tracing_enabled = std::env::var("MICROMEGAS_ENABLE_CPU_TRACING")
+            .map(|v| v == "true")
+            .unwrap_or(false); // Default to disabled
+
+        if !cpu_tracing_enabled {
+            return self; // No callbacks when disabled
+        }
+
+        self.on_thread_start(|| init_thread_stream())
+            .on_thread_stop(|| unregister_thread_stream())
+    }
+}
+
+// Tests enable CPU tracing explicitly
+#[test]
+#[serial]
+fn test_async_spans() {
+    unsafe { std::env::set_var("MICROMEGAS_ENABLE_CPU_TRACING", "true"); }
+    let guard = init_in_memory_tracing();
+    // ... test logic
+}
+```
+
+**✅ Expected Outcomes Achieved**:
+- **✅ Zero runtime overhead** when CPU tracing is disabled
+- **✅ No thread stream allocation** when CPU tracing is disabled
+- **✅ No tokio callback registration** when CPU tracing is disabled
+- **✅ Configurable via environment variable** at process startup
+- **✅ Minimal overhead by default** for optimal production performance
+- **✅ All tests working** with proper CPU tracing configuration
+
+**✅ Test Infrastructure Updates (August 26, 2025)**:
+During the completion of Phase 4, several test files required updates to work with the new CPU tracing control:
+
+1. **Fixed Test Files**:
+   - `rust/analytics/tests/async_span_tests.rs` - All 4 async span tests now passing
+   - `rust/analytics/tests/async_trait_tracing_test.rs` - All 2 async trait tests now passing
+   - `rust/tracing/tests/thread_park_test.rs` - Thread park test now passing
+
+2. **Root Cause Identified**: Tests were failing because CPU tracing was disabled by default, causing tokio runtime callbacks to not be registered and async spans to not be recorded (0 events instead of expected counts).
+
+3. **Solution Applied**:
+   - Added `unsafe { std::env::set_var("MICROMEGAS_ENABLE_CPU_TRACING", "true"); }` to enable CPU tracing in tests
+   - Updated imports to use proper test utilities (`micromegas_tracing::test_utils::init_in_memory_tracing`)
+   - Added missing `TracingBlock` trait import for `nb_objects()` method
+   - Replaced deprecated manual initialization with `InMemoryTracingGuard` for automatic cleanup
+   - Updated function signatures to match new `init_event_dispatch(cpu_tracing_enabled: bool)` parameter
+
+4. **All Tests Now Passing**: Full CI pipeline passes with formatting, clippy, and all unit/integration tests successful### Phase 5: FlightSQL Streaming Table Function
 
 **Status**: 🔄 **PENDING** - Not yet implemented
 
@@ -168,7 +276,7 @@ Generate Perfetto trace files from a process's async span events by extending th
    - Test binary reconstruction from chunks
    - Test error handling for invalid parameters
 
-### Phase 5: Server-Side Perfetto Generation
+### Phase 6: Server-Side Perfetto Generation
 
 **Status**: 🔄 **PENDING** - Not yet implemented
 
@@ -194,7 +302,7 @@ Generate Perfetto trace files from a process's async span events by extending th
    - Each query result batch triggers chunk emission via Phase 2 streaming Writer
    - Natural backpressure from DataFusion prevents memory bloat
 
-### Phase 6: Refactor Client to Use SQL Generation
+### Phase 7: Refactor Client to Use SQL Generation
 
 **Objective**: Convert `perfetto_trace_client.rs` to use `perfetto_trace_chunks` SQL function
 
@@ -221,7 +329,7 @@ Generate Perfetto trace files from a process's async span events by extending th
    - Verify async spans work correctly in refactored version
    - Performance comparison between approaches
 
-### Phase 7: Data Processing Optimization
+### Phase 8: Data Processing Optimization
 
 **Objective**: Ensure efficient async event processing for large traces
 
@@ -241,7 +349,7 @@ Generate Perfetto trace files from a process's async span events by extending th
    - Use streaming approach for large processes with many async events
 
 
-### Phase 8: Python Client Refactoring
+### Phase 9: Python Client Refactoring
 
 **Objective**: Eliminate duplicate Perfetto generation logic
 
@@ -261,7 +369,7 @@ Generate Perfetto trace files from a process's async span events by extending th
    - Test error handling and edge cases
    - Performance comparison between old and new approaches
 
-### Phase 9: Integration Testing and Validation
+### Phase 10: Integration Testing and Validation
 
 **Objective**: Ensure generated traces are valid and useful
 
@@ -345,8 +453,10 @@ ORDER BY time ASC
 - **Phase 1**: Analytics Web App - Fully operational testing and development platform
 - **Phase 2**: Perfetto Writer Streaming Support - Complete streaming infrastructure with identical output compatibility
 - **Phase 3**: Async Event Support in Perfetto Writer - Complete async span implementation with all reliability issues resolved
+- **Phase 4**: CPU Tracing Control - Complete configurable CPU tracing with environment variable control
 - **Async Events Infrastructure**: Complete async span data collection and view system
 - **Trace Generation Utility**: End-to-end testing tool for validating async span implementation with proper stream filtering
+- **Test Infrastructure**: All tests updated and working with CPU tracing control
 
 ### ✅ Phase 3 Achievement Highlights
 - **Full API Implementation**: Both regular and streaming writers support async spans
@@ -356,22 +466,29 @@ ORDER BY time ASC
 - **UI Compatible**: Generated traces ready for Perfetto UI visualization
 - **Reliability Resolved**: Fixed timestamp issues, stream filtering, and DataFusion query problems
 
+### ✅ Phase 4 Achievement Highlights
+- **Environment Variable Control**: `MICROMEGAS_ENABLE_CPU_TRACING` with default disabled for minimal overhead
+- **Zero Overhead When Disabled**: No tokio callbacks or thread streams when CPU tracing is disabled
+- **Full Test Suite Working**: All async span tests updated and passing with proper CPU tracing configuration
+- **Production Ready**: Default disabled behavior suitable for production deployments
+- **Development Friendly**: Tests explicitly enable CPU tracing for validation
+
 ### 🔄 Pending Implementation (In Priority Order)
-1. **Phase 4-6**: Server-Side Generation (Next Priority)
+1. **Phase 5-7**: Server-Side Generation (Medium Priority)
    - Eliminates code duplication between client implementations
    - Enables advanced features like real-time streaming via FlightSQL
    - Can leverage completed Phase 2 & 3 infrastructure
    - Focus on FlightSQL table function for `perfetto_trace_chunks`
 
-2. **Python Client Refactoring** (Medium Priority)
+2. **Python Client Refactoring** (Lower Priority)
    - Remove duplicate Perfetto generation logic
    - Use server-side generation via FlightSQL queries
    - Maintain CLI compatibility with async span support
 
 ### Next Recommended Steps
-1. **Immediate**: Phase 3 provides complete async span visualization capability
-2. **Short-term**: Consider implementing server-side generation for code consolidation
-3. **Medium-term**: Refactor Python CLI to use server-side generation
+1. **✅ Complete**: Phases 1-4 provide complete async span visualization capability with configurable CPU tracing
+2. **Medium-term**: Consider implementing server-side generation for code consolidation
+3. **Long-term**: Advanced features like real-time trace streaming
 4. **Long-term**: Advanced features like real-time trace streaming
 
 ## Migration Strategy

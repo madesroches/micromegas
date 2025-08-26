@@ -1,14 +1,10 @@
-use micromegas_tracing::dispatch::{
-    flush_thread_buffer, force_uninit, init_event_dispatch, init_thread_stream, shutdown_dispatch,
-};
-use micromegas_tracing::event::in_memory_sink::InMemorySink;
-use micromegas_tracing::event::{EventSink, TracingBlock};
+use micromegas_tracing::dispatch::{flush_thread_buffer, init_thread_stream};
+use micromegas_tracing::event::TracingBlock;
 use micromegas_tracing::intern_string::intern_string;
 use micromegas_tracing::prelude::*;
+use micromegas_tracing::test_utils::init_in_memory_tracing;
 use rand::Rng;
 use serial_test::serial;
-use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::sleep;
 
@@ -44,15 +40,10 @@ fn instrumented_sync_function() {
     std::thread::sleep(Duration::from_millis(100));
 }
 
-fn init_in_mem_tracing(sink: Arc<dyn EventSink>) {
-    init_event_dispatch(1024, 1024, 1024, sink, HashMap::new()).unwrap();
-}
-
 #[test]
 #[serial]
 fn test_async_span_manual_instrumentation() {
-    let sink = Arc::new(InMemorySink::new());
-    init_in_mem_tracing(sink.clone());
+    let guard = init_in_memory_tracing();
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .thread_name("tracing-test")
@@ -72,10 +63,9 @@ fn test_async_span_manual_instrumentation() {
 
     // Drop the runtime to properly shut down worker threads
     drop(runtime);
-    shutdown_dispatch();
 
     // Check that the correct number of events were recorded from manual instrumentation
-    let state = sink.state.lock().expect("Failed to lock sink state");
+    let state = guard.sink.state.lock().expect("Failed to lock sink state");
     let total_events: usize = state
         .thread_blocks
         .iter()
@@ -88,15 +78,12 @@ fn test_async_span_manual_instrumentation() {
         "Expected 6 events from manual instrumentation (outer: 2 + inner: 2×2) but found {}",
         total_events
     );
-
-    unsafe { force_uninit() };
 }
 
 #[test]
 #[serial]
 fn test_async_span_macro() {
-    let sink = Arc::new(InMemorySink::new());
-    init_in_mem_tracing(sink.clone());
+    let guard = init_in_memory_tracing();
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .thread_name("tracing-test")
@@ -117,10 +104,9 @@ fn test_async_span_macro() {
 
     // Drop the runtime to properly shut down worker threads
     drop(runtime);
-    shutdown_dispatch();
 
     // Check that the correct number of events were recorded
-    let state = sink.state.lock().expect("Failed to lock sink state");
+    let state = guard.sink.state.lock().expect("Failed to lock sink state");
     let total_events: usize = state
         .thread_blocks
         .iter()
@@ -133,14 +119,12 @@ fn test_async_span_macro() {
         "Expected 6 events (macro_outer: 2 + macro_inner: 2×2) but found {}",
         total_events
     );
-
-    unsafe { force_uninit() };
 }
 
 #[test]
 #[serial]
 fn sync_span_macro() {
-    let guard = micromegas_tracing::test_utils::init_in_memory_tracing();
+    let guard = init_in_memory_tracing();
     init_thread_stream();
     instrumented_sync_function();
     flush_thread_buffer();
@@ -187,8 +171,7 @@ async fn test_named_spans() {
 #[test]
 #[serial]
 fn test_async_named_span_instrumentation() {
-    let sink = Arc::new(InMemorySink::new());
-    init_in_mem_tracing(sink.clone());
+    let guard = init_in_memory_tracing();
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .thread_name("tracing-test")
@@ -208,10 +191,9 @@ fn test_async_named_span_instrumentation() {
 
     // Drop the runtime to properly shut down worker threads
     drop(runtime);
-    shutdown_dispatch();
 
     // Check that the correct number of events were recorded
-    let state = sink.state.lock().expect("Failed to lock sink state");
+    let state = guard.sink.state.lock().expect("Failed to lock sink state");
     let total_events: usize = state
         .thread_blocks
         .iter()
@@ -227,6 +209,4 @@ fn test_async_named_span_instrumentation() {
         "Expected 16 events from named async spans (5 + 3 named spans, 2 events each) but found {}",
         total_events
     );
-
-    unsafe { force_uninit() };
 }

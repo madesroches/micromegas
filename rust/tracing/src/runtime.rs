@@ -79,6 +79,7 @@ impl TracingRuntimeExt for tokio::runtime::Builder {
             init_thread_stream();
         })
         .on_thread_stop(|| {
+            flush_thread_buffer();
             unregister_thread_stream();
         })
     }

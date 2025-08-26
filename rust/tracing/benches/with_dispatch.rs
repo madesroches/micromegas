@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use micromegas_tracing::{
@@ -14,6 +14,8 @@ pub fn criterion_benchmark(c: &mut Criterion) {
         1024 * 1024,
         10 * 1024 * 1024,
         Arc::new(NullEventSink {}),
+        HashMap::new(),
+        true, // Enable CPU tracing for benchmark
     );
     let _thread_guard = TracingThreadGuard::new();
 
