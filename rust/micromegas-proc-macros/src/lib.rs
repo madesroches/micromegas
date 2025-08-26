@@ -9,7 +9,7 @@ use syn::{AttributeArgs, ItemFn, Lit, Meta, NestedMeta, parse_macro_input};
 /// micromegas_main: Creates a tokio runtime with proper micromegas tracing callbacks and telemetry setup
 ///
 /// This is a drop-in replacement for `#[tokio::main]` that automatically configures:
-/// - Tokio runtime with proper micromegas tracing thread lifecycle callbacks  
+/// - Tokio runtime with proper micromegas tracing thread lifecycle callbacks
 /// - Telemetry guard with sensible defaults (ctrl-c handling, debug level)
 ///
 /// # Parameters
@@ -126,18 +126,25 @@ pub fn micromegas_main(
 
     let expanded = quote! {
         fn main() #return_type {
+            // Check CPU tracing setting before building runtime
+            let cpu_tracing_enabled = std::env::var("MICROMEGAS_ENABLE_CPU_TRACING")
+                .map(|v| v == "true")
+                .unwrap_or(false); // Default to disabled for minimal overhead
+
             // Set up telemetry guard BEFORE building tokio runtime
             // This ensures dispatch is initialized before worker threads start
             let _telemetry_guard = #telemetry_guard_builder;
 
-            // Build the runtime with tracing callbacks
+            // Build the runtime with conditional tracing callbacks
             let runtime = {
                 use micromegas::tracing::runtime::TracingRuntimeExt;
                 let mut builder = tokio::runtime::Builder::new_multi_thread();
                 builder.enable_all();
                 builder.thread_name(env!("CARGO_PKG_NAME"));
-                builder.with_tracing_callbacks();
-                builder.build().expect("Failed to build tokio runtime with tracing callbacks")
+                if cpu_tracing_enabled {
+                    builder.with_tracing_callbacks();
+                }
+                builder.build().expect("Failed to build tokio runtime")
             };
 
             runtime.block_on(async move {

@@ -301,6 +301,9 @@ impl TelemetryGuardBuilder {
                     self.threads_buffer_size,
                     sink.into(),
                     self.process_properties,
+                    std::env::var("MICROMEGAS_ENABLE_CPU_TRACING")
+                        .map(|v| v == "true")
+                        .unwrap_or(false), // Default to disabled for minimal overhead
                 )?);
 
                 if self.system_metrics_enabled {

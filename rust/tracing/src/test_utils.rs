@@ -26,7 +26,7 @@ impl Default for InMemoryTracingGuard {
 impl InMemoryTracingGuard {
     pub fn new() -> Self {
         let sink = Arc::new(InMemorySink::new());
-        init_event_dispatch(1024, 1024, 1024, sink.clone(), HashMap::new())
+        init_event_dispatch(1024, 1024, 1024, sink.clone(), HashMap::new(), true) // Enable CPU tracing for tests
             .expect("Failed to initialize event dispatch");
         Self { sink }
     }

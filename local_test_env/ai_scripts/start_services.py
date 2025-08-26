@@ -48,7 +48,7 @@ def wait_for_service(url, max_attempts=30, service_name="Service"):
                 return True
         except:
             pass
-        
+
         if i == max_attempts:
             print(f"❌ {service_name} failed to start")
             return False
@@ -58,16 +58,20 @@ def wait_for_service(url, max_attempts=30, service_name="Service"):
 def main():
     script_dir = Path(__file__).parent.absolute()
     rust_dir = script_dir.parent.parent / "rust"
-    
+
+    # Set environment variable for CPU tracing in development
+    os.environ["MICROMEGAS_ENABLE_CPU_TRACING"] = "true"
+    print("🔧 CPU tracing enabled for development")
+
     print("🔧 Building services...")
     os.chdir(rust_dir)
     run_command("cargo build")
-    
+
     print("🚀 Starting services...")
-    
+
     # Kill any existing services
     kill_services()
-    
+
     # Start PostgreSQL if not running
     print("🐘 Checking PostgreSQL...")
     postgres_pid = None
@@ -81,42 +85,40 @@ def main():
         time.sleep(5)
     else:
         print("PostgreSQL already running")
-    
+
     os.chdir(rust_dir)
-    
+
     # Start Ingestion Server
     print("📥 Starting Ingestion Server...")
     with open("/tmp/ingestion.log", "w") as log_file:
         ingestion_process = subprocess.Popen([
-            "cargo", "run", "-p", "telemetry-ingestion-srv", "--", 
+            "cargo", "run", "-p", "telemetry-ingestion-srv", "--",
             "--listen-endpoint-http", "127.0.0.1:9000"
-        ], stdout=log_file, stderr=subprocess.STDOUT)
+        ], stdout=log_file, stderr=subprocess.STDOUT, env=os.environ.copy())
     ingestion_pid = ingestion_process.pid
     print(f"Ingestion Server PID: {ingestion_pid}")
-    
+
     # Wait for ingestion server to be ready
     if not wait_for_service("http://127.0.0.1:9000/health", service_name="Ingestion Server"):
         sys.exit(1)
-    
+
     # Start Analytics Server
     print("📊 Starting Analytics Server...")
     with open("/tmp/analytics.log", "w") as log_file:
         analytics_process = subprocess.Popen([
             "cargo", "run", "-p", "flight-sql-srv", "--", "--disable-auth"
-        ], stdout=log_file, stderr=subprocess.STDOUT)
+        ], stdout=log_file, stderr=subprocess.STDOUT, env=os.environ.copy())
     analytics_pid = analytics_process.pid
     print(f"Analytics Server PID: {analytics_pid}")
-    
+
     # Start Admin Daemon
     print("⚙️ Starting Admin Daemon...")
     with open("/tmp/admin.log", "w") as log_file:
         admin_process = subprocess.Popen([
             "cargo", "run", "-p", "telemetry-admin", "--", "crond"
-        ], stdout=log_file, stderr=subprocess.STDOUT)
+        ], stdout=log_file, stderr=subprocess.STDOUT, env=os.environ.copy())
     admin_pid = admin_process.pid
-    print(f"Admin Daemon PID: {admin_pid}")
-    
-    print()
+    print(f"Admin Daemon PID: {admin_pid}")    print()
     print("🎉 All services started!")
     print("📥 Ingestion Server: http://127.0.0.1:9000")
     print("📊 Analytics Server: port 32010")
@@ -133,15 +135,15 @@ def main():
     print("  tail -f /tmp/analytics.log")
     print("  tail -f /tmp/admin.log")
     print()
-    
+
     # Save PIDs for cleanup script
     pids = [str(ingestion_pid), str(analytics_pid), str(admin_pid)]
     if postgres_pid:
         pids.append(str(postgres_pid))
-    
+
     with open("/tmp/micromegas_pids.txt", "w") as f:
         f.write(" ".join(pids))
-    
+
     print(f"To stop services: kill {' '.join(pids)}")
     print()
     print("⏳ Waiting a moment for services to fully start...")

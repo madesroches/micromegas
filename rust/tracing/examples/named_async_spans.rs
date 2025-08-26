@@ -31,6 +31,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         1024 * 1024,
         Arc::new(NullEventSink {}),
         HashMap::new(),
+        true, // Enable CPU tracing for example
     )?;
 
     println!("Starting named async spans example...");

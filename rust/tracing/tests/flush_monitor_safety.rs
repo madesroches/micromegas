@@ -30,7 +30,7 @@ async fn work_with_parking() {
 }
 
 fn init_tracing_with_sink(sink: Arc<dyn EventSink>) {
-    init_event_dispatch(1024, 1024, 1024, sink, HashMap::new())
+    init_event_dispatch(1024, 1024, 1024, sink, HashMap::new(), true) // Enable CPU tracing for tests
         .expect("Failed to initialize event dispatch");
 }
 
@@ -40,7 +40,7 @@ fn init_tracing_with_sink(sink: Arc<dyn EventSink>) {
 ///
 /// This test creates a high-concurrency scenario with:
 /// - Multiple worker threads starting and stopping
-/// - Thread parking during async operations  
+/// - Thread parking during async operations
 /// - Concurrent FlushMonitor ticks accessing thread streams
 /// - Thread unregistration during runtime shutdown
 ///
@@ -51,10 +51,13 @@ fn init_tracing_with_sink(sink: Arc<dyn EventSink>) {
 #[test]
 #[serial]
 fn test_flush_monitor_concurrent_thread_safety() {
-    let sink = Arc::new(InMemorySink::new());
-    init_tracing_with_sink(sink.clone());
+    // Enable CPU tracing for this test
+    unsafe {
+        std::env::set_var("MICROMEGAS_ENABLE_CPU_TRACING", "true");
+    }
 
-    // Track thread creation for debugging
+    let sink = Arc::new(InMemorySink::new());
+    init_tracing_with_sink(sink.clone()); // Track thread creation for debugging
     let thread_counter = Arc::new(AtomicUsize::new(0));
     let counter_clone = thread_counter.clone();
 

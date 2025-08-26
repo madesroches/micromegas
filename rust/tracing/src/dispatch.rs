@@ -40,6 +40,7 @@ pub fn init_event_dispatch(
     threads_buffer_size: usize,
     sink: Arc<dyn EventSink>,
     process_properties: HashMap<String, String>,
+    cpu_tracing_enabled: bool,
 ) -> Result<()> {
     lazy_static::lazy_static! {
         static ref INIT_MUTEX: Mutex<()> = Mutex::new(());
@@ -55,6 +56,7 @@ pub fn init_event_dispatch(
                     threads_buffer_size,
                     sink,
                     process_properties,
+                    cpu_tracing_enabled,
                 ))
                 .map_err(|_| Error::AlreadyInitialized())
         } else {
@@ -171,6 +173,10 @@ pub fn init_thread_stream() {
         }
         #[allow(static_mut_refs)]
         if let Some(d) = G_DISPATCH.get() {
+            // Check if CPU tracing is enabled before creating thread stream
+            if !d.cpu_tracing_enabled {
+                return;
+            }
             d.init_thread_stream(cell);
         } else {
             warn!("dispatch not initialized, cannot init thread stream, events will be lost for this thread");
@@ -390,6 +396,7 @@ struct Dispatch {
     logs_buffer_size: usize,
     metrics_buffer_size: usize,
     threads_buffer_size: usize,
+    cpu_tracing_enabled: bool,
     log_stream: Mutex<LogStream>,
     metrics_stream: Mutex<MetricsStream>,
     thread_streams: Mutex<Vec<*mut ThreadStream>>, // very very unsafe - threads would need to be unregistered before they are destroyed
@@ -403,6 +410,7 @@ impl Dispatch {
         threads_buffer_size: usize,
         sink: Arc<dyn EventSink>,
         process_properties: HashMap<String, String>,
+        cpu_tracing_enabled: bool,
     ) -> Self {
         let process_id = uuid::Uuid::new_v4();
         let obj = Self {
@@ -410,6 +418,7 @@ impl Dispatch {
             logs_buffer_size,
             metrics_buffer_size,
             threads_buffer_size,
+            cpu_tracing_enabled,
             log_stream: Mutex::new(LogStream::new(
                 logs_buffer_size,
                 process_id,
@@ -489,6 +498,11 @@ impl Dispatch {
     }
 
     fn init_thread_stream(&self, cell: &Cell<Option<ThreadStream>>) {
+        // Early return if CPU tracing is disabled
+        if !self.cpu_tracing_enabled {
+            return;
+        }
+
         let mut properties = HashMap::new();
         properties.insert(String::from("thread-id"), thread_id::get().to_string());
         if let Some(name) = std::thread::current().name() {

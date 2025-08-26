@@ -136,6 +136,7 @@ fn test_log() {
         64 * 1024,
         Arc::new(DebugEventSink::new(state.clone())),
         HashMap::new(),
+        true, // Enable CPU tracing for tests
     )
     .unwrap();
     set_max_level(LevelFilter::Trace);

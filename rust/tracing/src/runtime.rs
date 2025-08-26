@@ -75,6 +75,15 @@ pub trait TracingRuntimeExt {
 #[cfg(feature = "tokio")]
 impl TracingRuntimeExt for tokio::runtime::Builder {
     fn with_tracing_callbacks(&mut self) -> &mut Self {
+        let cpu_tracing_enabled = std::env::var("MICROMEGAS_ENABLE_CPU_TRACING")
+            .map(|v| v == "true")
+            .unwrap_or(false); // Default to disabled for minimal overhead
+
+        if !cpu_tracing_enabled {
+            // No callbacks registered when CPU tracing disabled
+            return self;
+        }
+
         self.on_thread_start(|| {
             init_thread_stream();
         })
@@ -87,6 +96,15 @@ impl TracingRuntimeExt for tokio::runtime::Builder {
     where
         F: Fn() + Send + Sync + 'static,
     {
+        let cpu_tracing_enabled = std::env::var("MICROMEGAS_ENABLE_CPU_TRACING")
+            .map(|v| v == "true")
+            .unwrap_or(false); // Default to disabled for minimal overhead
+
+        if !cpu_tracing_enabled {
+            // No callbacks registered when CPU tracing disabled
+            return self;
+        }
+
         self.on_thread_start(move || {
             init_thread_stream();
             on_start();
