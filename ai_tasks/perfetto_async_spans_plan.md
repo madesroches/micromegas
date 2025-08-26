@@ -246,61 +246,271 @@ During the completion of Phase 4, several test files required updates to work wi
    - Replaced deprecated manual initialization with `InMemoryTracingGuard` for automatic cleanup
    - Updated function signatures to match new `init_event_dispatch(cpu_tracing_enabled: bool)` parameter
 
-4. **All Tests Now Passing**: Full CI pipeline passes with formatting, clippy, and all unit/integration tests successful### Phase 5: FlightSQL Streaming Table Function
+4. **All Tests Now Passing**: Full CI pipeline passes with formatting, clippy, and all unit/integration tests successful
 
-**Status**: 🔄 **PENDING** - Not yet implemented
+### Phase 5: FlightSQL Streaming Table Function
 
-**Objective**: Implement FlightSQL chunked binary streaming infrastructure
+**Status**: 🔄 **IN PROGRESS**
+
+**Objective**: Implement FlightSQL chunked binary streaming infrastructure for server-side Perfetto trace generation
 
 **Current Limitations**:
 - No server-side Perfetto trace generation capability
 - All trace generation happens client-side in `perfetto_trace_client.rs`
 - No SQL interface for generating traces with different span types
+- Client must fetch all data and generate traces locally
 
-**Tasks**:
-1. **Implement `perfetto_trace_chunks` table function**:
-   - Add `PerfettoTraceTableFunction` implementing `TableFunctionImpl`
-   - Register in `default_view_factory()` alongside existing `view_instance` function
-   - SQL interface: `SELECT chunk_id, chunk_data FROM perfetto_trace_chunks('process_id', 'begin_time', 'end_time', 'both') ORDER BY chunk_id`
+**Implementation Design**:
 
-2. **Streaming execution plan**:
-   - `PerfettoTraceProvider` implementing `TableProvider`
-   - `PerfettoTraceExecutionPlan` implementing `ExecutionPlan`
-   - Stream Perfetto trace data as it's generated, not after completion
-   - Use streaming Writer from Phase 2 for incremental chunk emission
-   - Yield record batches with schema: `chunk_id: Int32, chunk_data: Binary` as data becomes available
+1. **Table Function: `perfetto_trace_chunks`**
+   - **Location**: `rust/analytics/src/lakehouse/perfetto_trace_table_function.rs`
+   - **SQL Interface**: 
+     ```sql
+     SELECT chunk_id, chunk_data 
+     FROM perfetto_trace_chunks(
+       'process_id',                              -- Process UUID (required)
+       'span_types',                              -- 'thread', 'async', or 'both' (required)
+       TIMESTAMP '2024-01-01T00:00:00Z',          -- Start time as UTC timestamp (required)
+       TIMESTAMP '2024-01-01T01:00:00Z'           -- End time as UTC timestamp (required)
+     ) ORDER BY chunk_id
+     ```
+   - **Implementation**: `PerfettoTraceTableFunction` implementing `TableFunctionImpl`
+   - **Registration**: Add to `register_table_functions()` in `query.rs`
+   - **Dependencies**: Needs access to ViewFactory, DataLakeConnection, ObjectStore
+   - **All arguments mandatory**: Simplifies implementation, defaults can be set by callers
 
-3. **Unit tests for table function**:
-   - Mock FlightSQL client with known process data
-   - Test chunk generation and ordering
-   - Test binary reconstruction from chunks
-   - Test error handling for invalid parameters
+2. **Custom Execution Plan**:
+   - **Location**: `rust/analytics/src/lakehouse/perfetto_trace_execution_plan.rs`
+   - **Key Components**:
+     ```rust
+     pub struct PerfettoTraceExecutionPlan {
+         schema: SchemaRef,           // chunk_id: Int32, chunk_data: Binary
+         process_id: String,
+         span_types: SpanTypes,       // enum: Thread, Async, Both
+         time_range: TimeRange,       // Required time range
+         view_factory: Arc<ViewFactory>,
+         // ... other dependencies
+     }
+     ```
+   - **Execution Flow**:
+     1. Query process metadata from `processes` table filtered by process_id
+     2. Query thread metadata from `streams` table filtered by process_id
+     3. Query thread spans if needed via `view_instance('thread_spans', stream_id)` for each stream
+     4. Query async events if needed via `view_instance('async_events', process_id)`
+     5. Stream chunks as data becomes available using `SendableRecordBatchStream`
+   - **Streaming Strategy**:
+     - Stream each TracePacket as a separate chunk immediately when ready
+     - No buffering or aggregation - simpler implementation
+     - Each row in output = one TracePacket (natural boundaries)
+
+3. **Perfetto Writer Integration**:
+   - **Writer Setup**:
+     ```rust
+     let (packet_sender, packet_receiver) = mpsc::channel(16);
+     let packet_writer = PacketWriter::new(packet_sender);
+     let mut writer = StreamingPerfettoWriter::new(packet_writer);
+     ```
+   - **Packet-Based Chunk Generation**:
+     - Process descriptor → Packet 0 → Chunk 0
+     - Each thread descriptor → Own packet → Own chunk
+     - Async track descriptor → Own packet → Own chunk  
+     - Each span event → Own packet → Own chunk
+     - Natural 1:1 mapping between TracePackets and output rows
+   - **Memory Management**: 
+     - Never accumulate full trace in memory
+     - Stream directly from DataFusion query results to output
+     - Each TracePacket immediately becomes a chunk (no buffering)
+
+4. **Testing Strategy**:
+
+   **Why Integration Tests Over Unit Tests**:
+   - Unit testing challenges:
+     - Table functions require full DataFusion SessionContext
+     - Need to mock ViewFactory, DataLakeConnection, ObjectStore
+     - Complex mock setup for view_instance queries
+     - Limited value in testing with mocked data
+   
+   **Integration Test Approach**:
+   - **Location**: `python/micromegas/tests/test_perfetto_trace_chunks.py`
+   - **Test Infrastructure**:
+     ```python
+     from .test_utils import *
+     import micromegas
+     
+     def test_perfetto_trace_chunks_basic():
+         """Test basic perfetto trace chunk generation"""
+         # 1. Find recent telemetry-generator process
+         sql = """
+         SELECT process_id, start_time
+         FROM processes  
+         WHERE exe LIKE '%generator%'
+         ORDER BY start_time DESC
+         LIMIT 1;
+         """
+         processes = client.query(sql)
+         
+         # 2. Query chunks using new table function (all args mandatory)
+         sql = """
+         SELECT chunk_id, chunk_data
+         FROM perfetto_trace_chunks(
+             '{process_id}', 
+             'both',
+             TIMESTAMP '{begin_ts}',
+             TIMESTAMP '{end_ts}'
+         )
+         ORDER BY chunk_id;
+         """.format(
+             process_id=process_id,
+             begin_ts=process_begin.isoformat(),
+             end_ts=process_end.isoformat()
+         )
+         chunks = client.query(sql)
+         
+         # 3. Reassemble chunks into complete trace
+         trace_bytes = b''.join(chunks['chunk_data'])
+         
+         # 4. Validate trace structure
+         assert len(trace_bytes) > 0
+         # Could also write to file and validate with protobuf library
+     ```
+   - **Test Cases**:
+     1. Thread-only trace generation (`'thread'` parameter)
+     2. Async-only trace generation (`'async'` parameter)
+     3. Combined thread + async traces (`'both'` parameter)
+     4. Verify packet streaming (each chunk is valid protobuf)
+     5. Time range filtering with optional parameters
+   
+   **End-to-End Validation**:
+   - Compare with existing `perfetto_trace_client` output for thread-only traces
+   - Write trace to file and manually validate in Perfetto UI
+   - Verify packet-based streaming (each chunk is a complete TracePacket)
+
+5. **Implementation Order**:
+   1. Create basic table function that returns empty chunks
+   2. Implement custom execution plan with schema
+   3. Add process metadata query and packet generation
+   4. Add thread span querying and streaming (one packet per span)
+   5. Add async event querying and streaming (one packet per event pair)
+   6. Integration testing with real data
+
+**Key Design Decisions**:
+- **Packet-Based Chunking**: Each TracePacket becomes its own chunk for simplicity
+- **No Buffering**: Packets stream immediately without aggregation
+- **No Caching**: Each query generates fresh trace (stateless)
+- **Streaming First**: Never accumulate full trace in memory
+- **SQL-Native**: Leverages DataFusion's query optimization
+- **Reusable**: Can be called from any FlightSQL client
 
 ### Phase 6: Server-Side Perfetto Generation
 
-**Status**: 🔄 **PENDING** - Not yet implemented
+**Status**: 🔄 **PENDING** - Depends on Phase 5
 
-**Objective**: Move trace generation logic from client to server via SQL table function
+**Objective**: Implement the actual trace generation logic within the execution plan from Phase 5
 
-**Current Approach**: All trace generation happens in client-side `perfetto_trace_client.rs`
+**Note**: Phase 5 creates the infrastructure (table function, execution plan, chunking), while Phase 6 implements the actual Perfetto generation logic inside that infrastructure.
 
-**Tasks**:
-1. **Implement server-side trace generation** in `PerfettoTraceExecutionPlan`:
-   - Integrate Phase 2 streaming Writer with Phase 3 async event support
-   - Query `view_instance('async_events', '{process_id}')` for async span events
-   - Query thread spans and process metadata within FlightSQL server context
-   - Generate complete Perfetto trace server-side using streaming emission
+**Implementation Details**:
 
-2. **Handle async events in server generation**:
-   - Match "begin" and "end" events by `span_id`
-   - Create async tracks per span using Phase 2 methods
-   - Parent async tracks to appropriate thread tracks via `stream_id`
-   - Handle orphaned events (begin without end, end without begin)
+1. **PacketWriter Implementation**:
+   ```rust
+   pub struct PacketWriter {
+       sender: mpsc::Sender<RecordBatch>,
+       chunk_id: i32,
+   }
+   
+   impl PacketWriter {
+       // Called by StreamingPerfettoWriter after each packet
+       pub fn send_packet(&mut self, packet_bytes: Vec<u8>) -> Result<()> {
+           let batch = create_chunk_batch(self.chunk_id, packet_bytes);
+           self.sender.send(batch).await?;
+           self.chunk_id += 1;
+           Ok(())
+       }
+   }
+   ```
 
-3. **Streaming chunk emission**:
-   - Stream process descriptors, thread descriptors, then span events as data becomes available
-   - Each query result batch triggers chunk emission via Phase 2 streaming Writer
-   - Natural backpressure from DataFusion prevents memory bloat
+2. **PerfettoTraceStream Implementation**:
+   ```rust
+   impl Stream for PerfettoTraceStream {
+       type Item = Result<RecordBatch>;
+       
+       fn poll_next(...) -> Poll<Option<Self::Item>> {
+           // 1. Poll queries for new data
+           // 2. Feed data to StreamingPerfettoWriter
+           // 3. Return chunks as RecordBatches
+       }
+   }
+   ```
+
+3. **Query Integration in ExecutionPlan**:
+   - **Process Metadata** (using processes table):
+     ```sql
+     SELECT process_id, exe, username, computer, tsc_frequency, start_time
+     FROM processes
+     WHERE process_id = '{process_id}'
+     LIMIT 1
+     ```
+   - **Thread Metadata** (using streams table):
+     ```sql
+     -- Get thread stream metadata
+     SELECT stream_id, 
+            property_get(properties, 'thread-name') as thread_name,
+            property_get(properties, 'thread-id') as thread_id
+     FROM streams
+     WHERE process_id = '{process_id}'
+       AND array_has(tags, 'cpu')
+     ```
+   - **Thread Spans** (if span_types includes threads):
+     ```sql
+     -- For each stream_id from above, get spans
+     SELECT id, parent, depth, hash, begin, end, duration, name, target, filename, line
+     FROM view_instance('thread_spans', '{stream_id}')
+     WHERE begin >= ? AND end <= ?
+     ```
+   - **Async Events** (if span_types includes async):
+     ```sql
+     SELECT stream_id, time, event_type, span_id, parent_span_id, 
+            depth, name, filename, target, line
+     FROM view_instance('async_events', '{process_id}')
+     WHERE time >= ? AND time <= ?
+     ORDER BY time
+     ```
+
+4. **Async Event Processing**:
+   ```rust
+   struct AsyncSpanTracker {
+       pending_spans: HashMap<i64, AsyncSpanInfo>,
+       async_track_uuid: u64,  // Single track for all async spans
+   }
+   
+   impl AsyncSpanTracker {
+       fn process_event(&mut self, event: AsyncEvent, writer: &mut StreamingPerfettoWriter) {
+           match event.event_type.as_str() {
+               "begin" => {
+                   writer.emit_async_span_begin(...);
+                   self.pending_spans.insert(event.span_id, ...);
+               }
+               "end" => {
+                   if let Some(begin_info) = self.pending_spans.remove(&event.span_id) {
+                       writer.emit_async_span_end(...);
+                   }
+               }
+           }
+       }
+   }
+   ```
+
+5. **Memory-Efficient Streaming**:
+   - Process events in batches from DataFusion queries
+   - Never load all events into memory at once
+   - Use DataFusion's natural backpressure to control memory usage
+   - Stream chunks immediately as they're generated
+
+6. **Error Handling**:
+   - Handle incomplete async spans (begin without end)
+   - Log warnings for orphaned events
+   - Continue processing on non-fatal errors
+   - Return partial traces rather than failing completely
 
 ### Phase 7: Refactor Client to Use SQL Generation
 
@@ -490,6 +700,45 @@ ORDER BY time ASC
 2. **Medium-term**: Consider implementing server-side generation for code consolidation
 3. **Long-term**: Advanced features like real-time trace streaming
 4. **Long-term**: Advanced features like real-time trace streaming
+
+## Phase 5-6 Implementation Strategy
+
+### Why Split Phase 5 and 6?
+
+**Phase 5** focuses on the **infrastructure**:
+- Table function registration and SQL interface
+- ExecutionPlan skeleton with proper schema
+- Chunking mechanism and streaming framework
+- Basic integration with DataFusion query engine
+
+**Phase 6** focuses on the **trace generation logic**:
+- Actual queries to fetch process/thread/async data
+- StreamingPerfettoWriter integration
+- Event processing and async span matching
+- Memory-efficient streaming implementation
+
+This split allows us to:
+1. Test the infrastructure independently (Phase 5 can return dummy chunks)
+2. Iterate on the chunking mechanism without complex trace logic
+3. Validate the SQL interface before implementing generation
+4. Parallelize development if needed
+
+### Testing Philosophy
+
+**Integration Tests Over Unit Tests**:
+- Table functions are deeply integrated with DataFusion's execution engine
+- Mocking the entire context (ViewFactory, DataLakeConnection, ObjectStore) provides minimal value
+- Real data validation is more important than mock validation
+- Integration tests can verify end-to-end correctness including:
+  - SQL parsing and planning
+  - Query execution and data fetching
+  - Chunk generation and streaming
+  - Binary trace validity
+
+**Test Data Strategy**:
+- Use `telemetry-generator` which already produces async spans
+- Compare output with existing `perfetto_trace_client.rs` for validation
+- Ensure backward compatibility for thread-only traces
 
 ## Migration Strategy
 
