@@ -71,6 +71,11 @@ pub fn process_id() -> Option<uuid::Uuid> {
     G_DISPATCH.get().map(Dispatch::get_process_id)
 }
 
+#[inline]
+pub fn cpu_tracing_enabled() -> Option<bool> {
+    G_DISPATCH.get().map(Dispatch::get_cpu_tracing_enabled)
+}
+
 pub fn get_sink() -> Option<Arc<dyn EventSink>> {
     G_DISPATCH.get().map(Dispatch::get_sink)
 }
@@ -442,6 +447,10 @@ impl Dispatch {
 
     pub fn get_process_id(&self) -> uuid::Uuid {
         self.process_id
+    }
+
+    pub fn get_cpu_tracing_enabled(&self) -> bool {
+        self.cpu_tracing_enabled
     }
 
     pub fn get_sink(&self) -> Arc<dyn EventSink> {

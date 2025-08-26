@@ -251,7 +251,9 @@ impl HttpEventSink {
         let mut client = client_res.unwrap();
         // eagerly connect, a new process message is sure to follow if it's not already in queue
         if let Some(process_id) = micromegas_tracing::dispatch::process_id() {
-            info!("process_id={process_id}");
+            let cpu_tracing_enabled =
+                micromegas_tracing::dispatch::cpu_tracing_enabled().unwrap_or(false);
+            info!("process_id={process_id}, cpu_tracing_enabled={cpu_tracing_enabled}");
         }
         let flusher = FlushMonitor::default();
         loop {
