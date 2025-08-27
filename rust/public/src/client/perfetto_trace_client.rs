@@ -33,7 +33,7 @@ pub async fn format_perfetto_trace(
     process_id: &str,
     query_range: TimeRange,
 ) -> Result<Vec<u8>> {
-    format_perfetto_trace_with_spans(client, process_id, query_range, SpanTypes::Both).await
+    format_perfetto_trace_with_spans(client, process_id, query_range, SpanTypes::Thread).await
 }
 
 /// Formats a Perfetto trace with configurable span types.

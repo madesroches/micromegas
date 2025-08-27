@@ -23,7 +23,7 @@ use micromegas::analytics::{
 };
 use micromegas::client::{
     flightsql_client_factory::{BearerFlightSQLClientFactory, FlightSQLClientFactory},
-    perfetto_trace_client,
+    perfetto_trace_client, SpanTypes,
 };
 use micromegas::micromegas_main;
 use micromegas::servers::axum_utils::observability_middleware;
@@ -577,8 +577,24 @@ async fn generate_perfetto_trace_internal(
         TimeRange::new(process.start_time, process.last_update_time)
     };
 
-    let trace_data =
-        perfetto_trace_client::format_perfetto_trace(&mut client, process_id, time_range).await?;
+    // Determine span types based on user selection
+    let span_types = match (request.include_thread_spans, request.include_async_spans) {
+        (true, true) => SpanTypes::Both,
+        (true, false) => SpanTypes::Thread,
+        (false, true) => SpanTypes::Async,
+        (false, false) => {
+            // Default to thread spans if neither is selected
+            SpanTypes::Thread
+        }
+    };
+
+    let trace_data = perfetto_trace_client::format_perfetto_trace_with_spans(
+        &mut client,
+        process_id,
+        time_range,
+        span_types,
+    )
+    .await?;
 
     Ok(trace_data)
 }
