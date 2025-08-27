@@ -1,9 +1,3 @@
-# Refactored to use server-side perfetto_trace_chunks table function
-# This eliminates ~150 lines of duplicate Perfetto generation logic
-
-from tqdm import tqdm
-
-
 def write_process_trace_from_chunks(client, process_id, begin, end, span_types, trace_filepath):
     """
     Generate Perfetto trace using server-side perfetto_trace_chunks table function.
