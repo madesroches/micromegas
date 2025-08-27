@@ -9,6 +9,7 @@ pub mod frame_budget_reporting;
 
 /// Fetch cpu traces and transform them into perfetto format
 pub mod perfetto_trace_client;
+pub use perfetto_trace_client::SpanTypes;
 
 /// Process query builder for finding processes with various filters
 pub mod query_processes;
