@@ -1,6 +1,6 @@
 use super::{partition_cache::QueryPartitionProvider, view_factory::ViewFactory};
 use crate::dfext::typed_column::typed_column_by_name;
-use crate::time::TimeRange as QueryTimeRange;
+use crate::time::TimeRange;
 use datafusion::{
     arrow::{
         array::{
@@ -11,13 +11,13 @@ use datafusion::{
     },
     catalog::{Session, TableProvider},
     common::Result as DFResult,
-    execution::{SendableRecordBatchStream, TaskContext, runtime_env::RuntimeEnv},
+    execution::{runtime_env::RuntimeEnv, SendableRecordBatchStream, TaskContext},
     logical_expr::{Expr, TableType},
     physical_expr::EquivalenceProperties,
     physical_plan::{
-        DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
         execution_plan::{Boundedness, EmissionType},
         stream::RecordBatchStreamAdapter,
+        DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
     },
 };
 use futures::stream;
@@ -41,13 +41,6 @@ pub enum SpanTypes {
     Both,
 }
 
-/// Time range for the trace
-#[derive(Debug, Clone)]
-pub struct TimeRange {
-    pub start: chrono::DateTime<chrono::Utc>,
-    pub end: chrono::DateTime<chrono::Utc>,
-}
-
 /// Execution plan that generates Perfetto trace chunks
 pub struct PerfettoTraceExecutionPlan {
     schema: SchemaRef,
@@ -59,7 +52,6 @@ pub struct PerfettoTraceExecutionPlan {
     object_store: Arc<dyn ObjectStore>,
     view_factory: Arc<ViewFactory>,
     part_provider: Arc<dyn QueryPartitionProvider>,
-    query_range: Option<QueryTimeRange>,
     properties: PlanProperties,
 }
 
@@ -75,7 +67,6 @@ impl PerfettoTraceExecutionPlan {
         object_store: Arc<dyn ObjectStore>,
         view_factory: Arc<ViewFactory>,
         part_provider: Arc<dyn QueryPartitionProvider>,
-        query_range: Option<QueryTimeRange>,
     ) -> Self {
         let properties = PlanProperties::new(
             EquivalenceProperties::new(schema.clone()),
@@ -94,7 +85,6 @@ impl PerfettoTraceExecutionPlan {
             object_store,
             view_factory,
             part_provider,
-            query_range,
             properties,
         }
     }
@@ -115,7 +105,7 @@ impl DisplayAs for PerfettoTraceExecutionPlan {
         write!(
             f,
             "PerfettoTraceExecutionPlan: process_id={}, span_types={:?}, time_range={}..{}",
-            self.process_id, self.span_types, self.time_range.start, self.time_range.end
+            self.process_id, self.span_types, self.time_range.begin, self.time_range.end
         )
     }
 }
@@ -162,7 +152,6 @@ impl ExecutionPlan for PerfettoTraceExecutionPlan {
         let object_store = self.object_store.clone();
         let view_factory = self.view_factory.clone();
         let part_provider = self.part_provider.clone();
-        let query_range = self.query_range;
 
         // Create a channel for streaming chunks
         let (chunk_sender, chunk_receiver) = mpsc::channel::<DFResult<RecordBatch>>(16);
@@ -178,7 +167,6 @@ impl ExecutionPlan for PerfettoTraceExecutionPlan {
                 object_store,
                 view_factory,
                 part_provider,
-                query_range,
                 chunk_sender.clone(),
             )
             .await;
@@ -323,15 +311,13 @@ async fn get_thread_info(
     process_id: &str,
     ctx: &datafusion::execution::context::SessionContext,
 ) -> anyhow::Result<HashMap<String, (i32, String)>> {
+    // Query blocks table to get streams, then filter by checking if thread spans exist
     let sql = format!(
         r#"
-        SELECT DISTINCT arrow_cast(stream_id, 'Utf8') as stream_id,
-               arrow_cast(property_get(properties, 'thread-name'), 'Utf8') as thread_name,
-               arrow_cast(property_get(properties, 'thread-id'), 'Utf8') as thread_id
-        FROM streams
-        WHERE process_id = '{}'
-        AND array_has(tags, 'cpu')
-        ORDER BY stream_id
+        SELECT DISTINCT arrow_cast(b.stream_id, 'Utf8') as stream_id
+        FROM blocks b
+        WHERE b.process_id = '{}'
+        AND array_has(b."streams.tags", 'cpu')
         "#,
         process_id
     );
@@ -342,25 +328,20 @@ async fn get_thread_info(
 
     for batch in batches {
         let stream_ids: &StringArray = typed_column_by_name(&batch, "stream_id")?;
-        let thread_names: &StringArray = typed_column_by_name(&batch, "thread_name")?;
-        let thread_ids: &StringArray = typed_column_by_name(&batch, "thread_id")?;
 
         for i in 0..batch.num_rows() {
             let stream_id = stream_ids.value(i).to_owned();
-            let thread_name = thread_names.value(i).to_owned();
-            let thread_id_str = thread_ids.value(i);
 
-            // Parse thread ID or use hash if parsing fails
-            let thread_id: i32 = if let Ok(id) = thread_id_str.parse::<i32>() {
-                id
-            } else {
-                // Use a hash of the stream_id as the thread ID
-                (stream_id
-                    .as_bytes()
-                    .iter()
-                    .fold(0u32, |acc, &b| acc.wrapping_mul(31).wrapping_add(b as u32))
-                    % 65536) as i32
-            };
+            // Use a hash of the stream_id as the thread ID
+            let thread_id: i32 = (stream_id
+                .as_bytes()
+                .iter()
+                .fold(0u32, |acc, &b| acc.wrapping_mul(31).wrapping_add(b as u32))
+                % 65536) as i32;
+
+            // Use a simplified thread name based on stream_id
+            let thread_name = format!("thread-{}", &stream_id[..8]);
+
 
             threads.insert(stream_id, (thread_id, thread_name));
         }
@@ -386,13 +367,13 @@ async fn generate_thread_spans_with_writer<W: tokio::io::AsyncWrite + Unpin>(
                    arrow_cast(target, 'Utf8') as target,
                    line
             FROM view_instance('thread_spans', '{}')
-            WHERE begin >= TIMESTAMP '{}'
-              AND end <= TIMESTAMP '{}'
+            WHERE begin <= TIMESTAMP '{}'
+              AND end >= TIMESTAMP '{}'
             ORDER BY begin
             "#,
             stream_id,
-            time_range.start.to_rfc3339(),
-            time_range.end.to_rfc3339()
+            time_range.end.to_rfc3339(),
+            time_range.begin.to_rfc3339()
         );
 
         let df = ctx.sql(&sql).await?;
@@ -471,10 +452,10 @@ async fn generate_async_spans_with_writer<W: tokio::io::AsyncWrite + Unpin>(
         ORDER BY b.begin_time
         "#,
         process_id,
-        time_range.start.to_rfc3339(),
+        time_range.begin.to_rfc3339(),
         time_range.end.to_rfc3339(),
         process_id,
-        time_range.start.to_rfc3339(),
+        time_range.begin.to_rfc3339(),
         time_range.end.to_rfc3339(),
     );
 
@@ -535,18 +516,25 @@ async fn generate_trace_chunks(
     _object_store: Arc<dyn ObjectStore>,
     view_factory: Arc<ViewFactory>,
     part_provider: Arc<dyn QueryPartitionProvider>,
-    query_range: Option<QueryTimeRange>,
     chunk_sender: mpsc::Sender<DFResult<RecordBatch>>,
 ) -> anyhow::Result<()> {
     info!(
         "Generating Perfetto trace chunks for process {} with span types {:?} from {} to {}",
-        process_id, span_types, time_range.start, time_range.end
+        process_id, span_types, time_range.begin, time_range.end
     );
 
-    // Create a context for making queries using the query_range from the execution plan
-    let ctx =
-        super::query::make_session_context(runtime, lake, part_provider, query_range, view_factory)
-            .await?;
+    // Create a context for making queries using the time_range from the Perfetto request
+    let ctx = super::query::make_session_context(
+        runtime,
+        lake,
+        part_provider,
+        Some(TimeRange {
+            begin: time_range.begin,
+            end: time_range.end,
+        }),
+        view_factory,
+    )
+    .await?;
 
     // Phase 6: Use a single AsyncStreamingPerfettoWriter with PacketCapturingWriter
     // This maintains string interning throughout the entire trace generation

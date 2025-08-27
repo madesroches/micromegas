@@ -134,7 +134,6 @@ pub fn register_lakehouse_functions(
             object_store.clone(),
             view_factory.clone(),
             part_provider.clone(),
-            query_range,
         )),
     );
     ctx.register_udtf(

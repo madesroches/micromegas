@@ -4576,6 +4576,7 @@ dependencies = [
  "axum 0.8.4",
  "clap",
  "micromegas",
+ "rand 0.8.5",
  "tokio",
  "tower-http 0.5.2",
 ]

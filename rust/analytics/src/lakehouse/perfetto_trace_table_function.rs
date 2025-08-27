@@ -1,7 +1,7 @@
 use super::{partition_cache::QueryPartitionProvider, view_factory::ViewFactory};
 use crate::{
     dfext::expressions::{exp_to_string, exp_to_timestamp},
-    time::TimeRange as QueryTimeRange,
+    time::TimeRange,
 };
 use datafusion::{
     arrow::datatypes::{DataType, Field, Schema},
@@ -39,7 +39,6 @@ pub struct PerfettoTraceTableFunction {
     object_store: Arc<dyn ObjectStore>,
     view_factory: Arc<ViewFactory>,
     part_provider: Arc<dyn QueryPartitionProvider>,
-    query_range: Option<QueryTimeRange>,
 }
 
 impl PerfettoTraceTableFunction {
@@ -49,7 +48,6 @@ impl PerfettoTraceTableFunction {
         object_store: Arc<dyn ObjectStore>,
         view_factory: Arc<ViewFactory>,
         part_provider: Arc<dyn QueryPartitionProvider>,
-        query_range: Option<QueryTimeRange>,
     ) -> Self {
         Self {
             runtime,
@@ -57,7 +55,6 @@ impl PerfettoTraceTableFunction {
             object_store,
             view_factory,
             part_provider,
-            query_range,
         }
     }
 
@@ -123,7 +120,7 @@ impl TableFunctionImpl for PerfettoTraceTableFunction {
 
         // Create time range from parsed timestamps
         let time_range = TimeRange {
-            start: start_time,
+            begin: start_time,
             end: end_time,
         };
 
@@ -132,13 +129,12 @@ impl TableFunctionImpl for PerfettoTraceTableFunction {
             Self::output_schema(),
             process_id,
             span_types,
-            time_range.into(),
+            time_range,
             self.runtime.clone(),
             self.lake.clone(),
             self.object_store.clone(),
             self.view_factory.clone(),
             self.part_provider.clone(),
-            self.query_range,
         ));
 
         // Wrap it in a TableProvider
@@ -148,21 +144,5 @@ impl TableFunctionImpl for PerfettoTraceTableFunction {
 
 // Import the execution plan
 use super::perfetto_trace_execution_plan::{
-    PerfettoTraceExecutionPlan, PerfettoTraceTableProvider, SpanTypes, TimeRange as ExecTimeRange,
+    PerfettoTraceExecutionPlan, PerfettoTraceTableProvider, SpanTypes,
 };
-
-#[derive(Debug)]
-struct TimeRange {
-    start: chrono::DateTime<chrono::Utc>,
-    end: chrono::DateTime<chrono::Utc>,
-}
-
-// Convert our TimeRange to the execution plan's TimeRange
-impl From<TimeRange> for ExecTimeRange {
-    fn from(range: TimeRange) -> Self {
-        ExecTimeRange {
-            start: range.start,
-            end: range.end,
-        }
-    }
-}

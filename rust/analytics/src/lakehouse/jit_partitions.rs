@@ -241,13 +241,17 @@ pub async fn is_jit_partition_up_to_date(
         &*view_meta.view_instance_id,
     );
 
+    // CRITICAL: Use inclusive inequalities (<=, >=) to prevent race conditions.
+    // With exclusive inequalities (<, >), identical time ranges never match, causing
+    // partitions to be unnecessarily recreated on every query, leading to non-deterministic
+    // results. See: https://github.com/madesroches/micromegas/issues/488
     let rows = sqlx::query(
         "SELECT file_schema_hash, source_data_hash
          FROM lakehouse_partitions
          WHERE view_set_name = $1
          AND view_instance_id = $2
-         AND begin_insert_time < $3
-         AND end_insert_time > $4
+         AND begin_insert_time <= $3
+         AND end_insert_time >= $4
          AND file_metadata IS NOT NULL
          ;",
     )
@@ -259,6 +263,13 @@ pub async fn is_jit_partition_up_to_date(
     .await
     .with_context(|| "fetching matching partitions")?;
     if rows.len() != 1 {
+        debug!("{desc}: found {} partitions (expected 1)", rows.len());
+        for (i, row) in rows.iter().enumerate() {
+            let part_file_schema: Vec<u8> = row.try_get("file_schema_hash")?;
+            let part_source_data: Vec<u8> = row.try_get("source_data_hash")?;
+            debug!("{desc}: partition {}: file_schema_hash={:?}, source_data_hash={:?}", 
+                   i, part_file_schema, part_source_data);
+        }
         info!("{desc}: found {} partitions", rows.len());
         return Ok(false);
     }
@@ -271,7 +282,10 @@ pub async fn is_jit_partition_up_to_date(
         return Ok(false);
     }
     let part_source_data: Vec<u8> = r.try_get("source_data_hash")?;
-    if hash_to_object_count(&part_source_data)? < hash_to_object_count(&spec.block_ids_hash)? {
+    let existing_count = hash_to_object_count(&part_source_data)?;
+    let required_count = hash_to_object_count(&spec.block_ids_hash)?;
+    debug!("{desc}: comparing source data - existing: {}, required: {}", existing_count, required_count);
+    if existing_count < required_count {
         info!("{desc}: existing partition lacks source data: creating a new partition");
         return Ok(false);
     }
