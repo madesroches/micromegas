@@ -669,31 +669,18 @@ During the completion of Phase 4, several test files required updates to work wi
 
 **✅ Benefits Achieved**:
 - **50% code reduction**: Eliminated duplicate logic across client and server
-- **Automatic async spans**: All clients now get async span support without changes
+- **Configurable async spans**: Clients can now select thread, async, or both span types
 - **Better maintainability**: Single implementation in server-side table function
 - **Improved performance**: Reduced network traffic and query overhead
+- **User preference support**: Web app correctly respects user's span type selections
 
-### Phase 8: Data Processing Optimization
+**✅ Recent Fixes Applied**:
+- **Backward compatibility restored**: `format_perfetto_trace()` defaults to thread-only (original behavior)
+- **User preference integration**: Analytics web server now uses `include_thread_spans`/`include_async_spans` from request
+- **Proper span type mapping**: Web app checkboxes correctly control generated trace content
+- **Safe defaults**: Sensible fallback when no span types are selected
 
-**Objective**: Ensure efficient async event processing for large traces
-
-**Tasks**:
-1. **Optimize async events query**:
-   - Add time-range filtering to async events view query
-   - Sort by `time` for efficient processing
-   - Consider stream-by-stream processing for memory efficiency
-
-2. **Handle async span completion**:
-   - Create synthetic end events for incomplete async spans
-   - Use process termination time as fallback end time
-   - Log warnings for incomplete spans
-
-3. **Memory optimization**:
-   - Process async events in batches to avoid loading all events in memory
-   - Use streaming approach for large processes with many async events
-
-
-### Phase 9: Python Client Refactoring
+### Phase 8: Python Client Refactoring
 
 **Objective**: Eliminate duplicate Perfetto generation logic
 
@@ -713,7 +700,7 @@ During the completion of Phase 4, several test files required updates to work wi
    - Test error handling and edge cases
    - Performance comparison between old and new approaches
 
-### Phase 10: Integration Testing and Validation
+### Phase 9: Integration Testing and Validation
 
 **Objective**: Ensure generated traces are valid and useful
 
@@ -735,6 +722,48 @@ During the completion of Phase 4, several test files required updates to work wi
    - Test with processes containing thousands of async spans
    - Measure memory usage and processing time
    - Compare with thread-only trace generation
+
+### Phase 10: Data Processing Optimization (OPTIONAL)
+
+**Status**: 📋 **OPTIONAL** - Core optimizations already complete in Phase 6
+
+**Prerequisites**: Phase 6 completion with all span types working and memory-efficient streaming
+
+**Objective**: Advanced performance tuning for extreme workloads and edge cases
+
+**Note**: Most core memory and streaming optimizations were already implemented in Phase 6, including constant memory usage with streaming chunking every 10 spans, proper time range filtering, and DataFusion's natural backpressure.
+
+**Tasks**:
+1. **Chunking Strategy Optimization**:
+   - Analyze optimal chunk size (currently 10 spans) for different trace sizes
+   - Implement adaptive chunking based on span complexity/size
+   - Add metrics for chunk generation performance
+
+2. **Query Performance Tuning**:
+   - Add query result caching for frequently accessed processes
+   - Optimize async events query with compound indexes if needed
+   - Implement query plan analysis for large async event datasets
+
+3. **Memory Pressure Handling**:
+   - Add backpressure mechanisms for extremely large traces (>100k spans)
+   - Implement graceful degradation when memory limits approached
+   - Add memory usage monitoring and alerting
+
+4. **Edge Case Robustness**:
+   - Handle incomplete async spans (orphaned begin/end events) more gracefully
+   - Add timeout mechanisms for long-running trace generation
+   - Improve error recovery for partial trace generation failures
+
+5. **Performance Benchmarking**:
+   - Create synthetic workloads with varying async span densities
+   - Benchmark memory usage with traces containing 10k+ async spans
+   - Compare performance against baseline thread-only generation
+
+**Success Criteria**:
+- Handle traces with 100k+ async spans without memory issues
+- Maintain <5GB memory usage regardless of trace size
+- Generate traces for 24-hour processes within 60 seconds
+- Gracefully handle 95% of malformed async event scenarios
 
 ## Technical Design Details
 
@@ -830,35 +859,46 @@ ORDER BY time ASC
 
 ### 📋 Next Implementation Phases (Optional Enhancements)
 
-1. **Phase 8**: Data Processing Optimization (Lower Priority)
-   - Optimize async event processing for large traces
-   - Handle async span completion edge cases
-   - Memory optimization for very large processes
-
-2. **Phase 9**: Python Client Refactoring (Lower Priority)
+1. **Phase 8**: Python Client Refactoring (Lower Priority)
    - Remove duplicate Perfetto generation logic from Python CLI
    - Maintain CLI compatibility with async span support
    - Leverage server-side `perfetto_trace_chunks` function
 
-3. **Phase 10**: Integration Testing and Validation (Lower Priority)
+2. **Phase 9**: Integration Testing and Validation (Lower Priority)
    - Comprehensive unit and integration tests
    - Performance testing with large traces
    - Perfetto UI validation
 
+3. **Phase 10**: Data Processing Optimization (Lower Priority)
+   - Advanced performance tuning for extreme workloads
+   - Edge case robustness and memory pressure handling
+   - Note: Core optimizations already complete in Phase 6
+
 ### Implementation Status Summary
-1. **✅ COMPLETED**: Phases 1-7 - Complete async span visualization implementation
+1. **✅ COMPLETED**: Phases 1-7 - Complete async span visualization implementation with user preferences
    - **Phase 1**: Analytics Web App development platform ✅
    - **Phase 2**: Perfetto Writer streaming support ✅ 
    - **Phase 3**: Async event support in Perfetto Writer ✅
    - **Phase 4**: CPU tracing control ✅
    - **Phase 5**: FlightSQL streaming table function ✅
    - **Phase 6**: Server-side Perfetto generation ✅
-   - **Phase 7**: Client refactoring to use server-side generation ✅
+   - **Phase 7**: Client refactoring with configurable span types and user preference support ✅
 
 2. **📋 OPTIONAL**: Phases 8-10 - Enhancement and optimization phases
-   - Advanced optimization and Python client updates
-   - Comprehensive testing and performance validation
+   - Python client refactoring and comprehensive testing
+   - Advanced performance tuning for extreme workloads
    - These are optional improvements, core functionality is complete
+
+### ✅ Final Implementation Features
+**Complete Async Span Visualization System**:
+- **✅ Thread Spans**: Traditional CPU thread execution traces
+- **✅ Async Spans**: Async operation visualization with begin/end events  
+- **✅ Combined Traces**: Both thread and async spans in single trace
+- **✅ User Selection**: Web UI checkboxes control span types included
+- **✅ Server-Side Generation**: Memory-efficient streaming trace generation
+- **✅ Client Compatibility**: All existing code works unchanged with optional async support
+- **✅ API Flexibility**: New functions support configurable span types
+- **✅ Performance Optimized**: Reduced network traffic and query overhead
 
 ### Phase 6 Completion Criteria
 **Phase 6 implementation is complete but awaiting final validation:**
