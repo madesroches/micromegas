@@ -11,13 +11,13 @@ use datafusion::{
     },
     catalog::{Session, TableProvider},
     common::Result as DFResult,
-    execution::{runtime_env::RuntimeEnv, SendableRecordBatchStream, TaskContext},
+    execution::{SendableRecordBatchStream, TaskContext, runtime_env::RuntimeEnv},
     logical_expr::{Expr, TableType},
     physical_expr::EquivalenceProperties,
     physical_plan::{
+        DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
         execution_plan::{Boundedness, EmissionType},
         stream::RecordBatchStreamAdapter,
-        DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
     },
 };
 use futures::stream;
@@ -341,7 +341,6 @@ async fn get_thread_info(
 
             // Use a simplified thread name based on stream_id
             let thread_name = format!("thread-{}", &stream_id[..8]);
-
 
             threads.insert(stream_id, (thread_id, thread_name));
         }

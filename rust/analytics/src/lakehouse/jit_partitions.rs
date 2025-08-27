@@ -267,8 +267,10 @@ pub async fn is_jit_partition_up_to_date(
         for (i, row) in rows.iter().enumerate() {
             let part_file_schema: Vec<u8> = row.try_get("file_schema_hash")?;
             let part_source_data: Vec<u8> = row.try_get("source_data_hash")?;
-            debug!("{desc}: partition {}: file_schema_hash={:?}, source_data_hash={:?}", 
-                   i, part_file_schema, part_source_data);
+            debug!(
+                "{desc}: partition {}: file_schema_hash={:?}, source_data_hash={:?}",
+                i, part_file_schema, part_source_data
+            );
         }
         info!("{desc}: found {} partitions", rows.len());
         return Ok(false);
@@ -284,7 +286,10 @@ pub async fn is_jit_partition_up_to_date(
     let part_source_data: Vec<u8> = r.try_get("source_data_hash")?;
     let existing_count = hash_to_object_count(&part_source_data)?;
     let required_count = hash_to_object_count(&spec.block_ids_hash)?;
-    debug!("{desc}: comparing source data - existing: {}, required: {}", existing_count, required_count);
+    debug!(
+        "{desc}: comparing source data - existing: {}, required: {}",
+        existing_count, required_count
+    );
     if existing_count < required_count {
         info!("{desc}: existing partition lacks source data: creating a new partition");
         return Ok(false);

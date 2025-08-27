@@ -9,23 +9,22 @@ except ImportError:
 
 
 def get_process_time_range(client, process_id):
-    """Get the time range for a process from the database."""
-    sql = f"SELECT start_time, last_block_end_time FROM processes WHERE process_id = '{process_id}'"
+    """Get the time range for a process from the blocks table."""
+    sql = f"SELECT MIN(begin_time) as start_time, MAX(end_time) as end_time FROM blocks WHERE process_id = '{process_id}'"
     result = client.query(sql)
     
     if result.empty:
         raise ValueError(f"Process {process_id} not found")
     
     row = result.iloc[0]
+    
+    # Check if we got any blocks for this process
+    if row['start_time'] is None or row['end_time'] is None:
+        raise ValueError(f"No blocks found for process {process_id}")
+    
     # Convert pandas Timestamps to Python datetime objects
     start_time = row['start_time'].to_pydatetime()
-    
-    # Handle case where last_block_end_time might be None
-    if row['last_block_end_time'] is not None:
-        end_time = row['last_block_end_time'].to_pydatetime()
-    else:
-        # Use current time if no end time recorded
-        end_time = datetime.datetime.now(datetime.timezone.utc)
+    end_time = row['end_time'].to_pydatetime()
     
     return start_time, end_time
 

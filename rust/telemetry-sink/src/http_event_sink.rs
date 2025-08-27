@@ -378,7 +378,9 @@ impl HttpEventSink {
             match receiver.recv_timeout(Duration::from_secs(timeout as u64)) {
                 Ok(message) => match message {
                     SinkEvent::Shutdown => {
-                        eprintln!("HttpEventSink thread: received shutdown signal, flushing remaining data");
+                        eprintln!(
+                            "HttpEventSink thread: received shutdown signal, flushing remaining data"
+                        );
                         debug!("received shutdown signal, flushing remaining data");
                         // Process any remaining messages in the queue before shutting down
                         let mut count = 0;
@@ -408,7 +410,10 @@ impl HttpEventSink {
                                 }
                             }
                         }
-                        eprintln!("HttpEventSink thread: processed {} remaining messages, signaling shutdown complete", count);
+                        eprintln!(
+                            "HttpEventSink thread: processed {} remaining messages, signaling shutdown complete",
+                            count
+                        );
                         debug!("telemetry thread shutdown complete");
                         // Signal that shutdown is complete
                         let (lock, cvar) = &*shutdown_complete;
@@ -485,7 +490,7 @@ impl EventSink for HttpEventSink {
         eprintln!("HttpEventSink::on_shutdown() called - sending shutdown event");
         // Send shutdown event to trigger flushing of remaining data
         self.send(SinkEvent::Shutdown);
-        
+
         eprintln!("HttpEventSink::on_shutdown() - waiting for background thread to complete flush");
         // Wait for the background thread to signal that shutdown is complete
         let (lock, cvar) = &*self.shutdown_complete;
