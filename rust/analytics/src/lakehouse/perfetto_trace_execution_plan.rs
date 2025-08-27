@@ -1,9 +1,12 @@
 use super::{partition_cache::QueryPartitionProvider, view_factory::ViewFactory};
-use crate::dfext::typed_column::{string_column_by_name, typed_column_by_name};
+use crate::dfext::typed_column::typed_column_by_name;
 use crate::time::TimeRange as QueryTimeRange;
 use datafusion::{
     arrow::{
-        array::{BinaryArray, Int32Array, RecordBatch, TimestampNanosecondArray, UInt32Array},
+        array::{
+            BinaryArray, Int32Array, RecordBatch, StringArray, TimestampNanosecondArray,
+            UInt32Array,
+        },
         datatypes::SchemaRef,
     },
     catalog::{Session, TableProvider},
@@ -200,7 +203,6 @@ impl ExecutionPlan for PerfettoTraceExecutionPlan {
     }
 }
 
-
 /// A writer that captures Perfetto packets and sends them as chunks
 struct PacketCapturingWriter {
     sender: mpsc::Sender<DFResult<RecordBatch>>,
@@ -216,7 +218,6 @@ impl PacketCapturingWriter {
             buffer: Vec::new(),
         }
     }
-
 }
 
 impl tokio::io::AsyncWrite for PacketCapturingWriter {
@@ -298,7 +299,7 @@ async fn get_process_exe(
 ) -> anyhow::Result<String> {
     let sql = format!(
         r#"
-        SELECT exe
+        SELECT arrow_cast(exe, 'Utf8') as exe
         FROM processes
         WHERE process_id = '{}'
         LIMIT 1
@@ -313,7 +314,7 @@ async fn get_process_exe(
         anyhow::bail!("Process {} not found", process_id);
     }
 
-    let exes = string_column_by_name(&batches[0], "exe")?;
+    let exes: &StringArray = typed_column_by_name(&batches[0], "exe")?;
     Ok(exes.value(0).to_owned())
 }
 
@@ -324,9 +325,9 @@ async fn get_thread_info(
 ) -> anyhow::Result<HashMap<String, (i32, String)>> {
     let sql = format!(
         r#"
-        SELECT DISTINCT stream_id,
-               property_get(properties, 'thread-name') as thread_name,
-               property_get(properties, 'thread-id') as thread_id
+        SELECT DISTINCT arrow_cast(stream_id, 'Utf8') as stream_id,
+               arrow_cast(property_get(properties, 'thread-name'), 'Utf8') as thread_name,
+               arrow_cast(property_get(properties, 'thread-id'), 'Utf8') as thread_id
         FROM streams
         WHERE process_id = '{}'
         AND array_has(tags, 'cpu')
@@ -340,9 +341,9 @@ async fn get_thread_info(
     let mut threads = HashMap::new();
 
     for batch in batches {
-        let stream_ids = string_column_by_name(&batch, "stream_id")?;
-        let thread_names = string_column_by_name(&batch, "thread_name")?;
-        let thread_ids = string_column_by_name(&batch, "thread_id")?;
+        let stream_ids: &StringArray = typed_column_by_name(&batch, "stream_id")?;
+        let thread_names: &StringArray = typed_column_by_name(&batch, "thread_name")?;
+        let thread_ids: &StringArray = typed_column_by_name(&batch, "thread_id")?;
 
         for i in 0..batch.num_rows() {
             let stream_id = stream_ids.value(i).to_owned();
@@ -368,7 +369,6 @@ async fn get_thread_info(
     Ok(threads)
 }
 
-
 /// Generate thread spans using the provided AsyncStreamingPerfettoWriter
 async fn generate_thread_spans_with_writer<W: tokio::io::AsyncWrite + Unpin>(
     writer: &mut AsyncStreamingPerfettoWriter<W>,
@@ -380,7 +380,11 @@ async fn generate_thread_spans_with_writer<W: tokio::io::AsyncWrite + Unpin>(
     for stream_id in threads.keys() {
         let sql = format!(
             r#"
-            SELECT begin, end, name, filename, target, line
+            SELECT begin, end, 
+                   arrow_cast(name, 'Utf8') as name,
+                   arrow_cast(filename, 'Utf8') as filename,
+                   arrow_cast(target, 'Utf8') as target,
+                   line
             FROM view_instance('thread_spans', '{}')
             WHERE begin >= TIMESTAMP '{}'
               AND end <= TIMESTAMP '{}'
@@ -397,9 +401,9 @@ async fn generate_thread_spans_with_writer<W: tokio::io::AsyncWrite + Unpin>(
         for batch in batches {
             let begin_times: &TimestampNanosecondArray = typed_column_by_name(&batch, "begin")?;
             let end_times: &TimestampNanosecondArray = typed_column_by_name(&batch, "end")?;
-            let names = string_column_by_name(&batch, "name")?;
-            let filenames = string_column_by_name(&batch, "filename")?;
-            let targets = string_column_by_name(&batch, "target")?;
+            let names: &StringArray = typed_column_by_name(&batch, "name")?;
+            let filenames: &StringArray = typed_column_by_name(&batch, "filename")?;
+            let targets: &StringArray = typed_column_by_name(&batch, "target")?;
             let lines: &UInt32Array = typed_column_by_name(&batch, "line")?;
 
             let mut span_count = 0;
@@ -437,7 +441,11 @@ async fn generate_async_spans_with_writer<W: tokio::io::AsyncWrite + Unpin>(
     let sql = format!(
         r#"
         WITH begin_events AS (
-            SELECT span_id, time as begin_time, name, filename, target, line
+            SELECT span_id, time as begin_time, 
+                   arrow_cast(name, 'Utf8') as name, 
+                   arrow_cast(filename, 'Utf8') as filename, 
+                   arrow_cast(target, 'Utf8') as target, 
+                   line
             FROM view_instance('async_events', '{}')
             WHERE time >= TIMESTAMP '{}'
               AND time <= TIMESTAMP '{}'
@@ -478,9 +486,9 @@ async fn generate_async_spans_with_writer<W: tokio::io::AsyncWrite + Unpin>(
             typed_column_by_name(&batch, "span_id")?;
         let begin_times: &TimestampNanosecondArray = typed_column_by_name(&batch, "begin_time")?;
         let end_times: &TimestampNanosecondArray = typed_column_by_name(&batch, "end_time")?;
-        let names = string_column_by_name(&batch, "name")?;
-        let filenames = string_column_by_name(&batch, "filename")?;
-        let targets = string_column_by_name(&batch, "target")?;
+        let names: &StringArray = typed_column_by_name(&batch, "name")?;
+        let filenames: &StringArray = typed_column_by_name(&batch, "filename")?;
+        let targets: &StringArray = typed_column_by_name(&batch, "target")?;
         let lines: &UInt32Array = typed_column_by_name(&batch, "line")?;
 
         let mut span_count = 0;

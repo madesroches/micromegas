@@ -438,7 +438,7 @@ During the completion of Phase 4, several test files required updates to work wi
 7. **✅ String Interning Preservation**: Single writer maintains consistent protobuf string references
 
 **✅ Critical Implementation Fixes Applied**:
-1. **✅ Dictionary String Handling**: Added `string_column_by_name()` function in `dfext/typed_column.rs` to handle Dictionary-encoded strings from lakehouse queries
+1. **✅ Dictionary String Handling**: Replaced `string_column_by_name()` function with direct SQL UTF-8 casting using `arrow_cast(column, 'Utf8')` in all queries
 2. **✅ Streaming Architecture Fix**: Added explicit flush points after process descriptor, thread descriptors, async track, and every 10 spans
 3. **✅ Binary Data Handling**: Updated `PacketCapturingWriter` to properly accumulate and flush binary protobuf data
 4. **✅ SQL Function Compatibility**: Identified that `LENGTH()` function doesn't support Binary types (DataFusion limitation, not our issue)
@@ -851,7 +851,7 @@ ORDER BY time ASC
 8. ✅ **Memory efficiency** (DONE - Constant memory usage with streaming chunking)
 
 **All Technical Blockers RESOLVED (August 27, 2025)**:
-- ✅ **Dictionary casting error**: Fixed with string_column_by_name() helper function
+- ✅ **Dictionary casting error**: Fixed by using `arrow_cast(column, 'Utf8')` directly in SQL queries, eliminating runtime casting
 - ✅ **UTF-8 binary data validation**: Identified as DataFusion SQL function limitation, core binary handling works
 - ✅ **Thread spans query range**: Working correctly with proper query range propagation
 - ✅ **Complete span type matrix**: All combinations (thread, async, both) generate valid multi-chunk traces
