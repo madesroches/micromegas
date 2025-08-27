@@ -24,29 +24,21 @@ impl SpanTypes {
     }
 }
 
-/// Formats a Perfetto trace from the telemetry data using the server-side perfetto_trace_chunks function.
+/// Formats a Perfetto trace with configurable span types using server-side perfetto_trace_chunks function.
 ///
 /// This function queries the FlightSQL server using the perfetto_trace_chunks table function
 /// which generates Perfetto trace data server-side and streams it back as binary chunks.
-pub async fn format_perfetto_trace(
-    client: &mut Client,
-    process_id: &str,
-    query_range: TimeRange,
-) -> Result<Vec<u8>> {
-    format_perfetto_trace_with_spans(client, process_id, query_range, SpanTypes::Thread).await
-}
-
-/// Formats a Perfetto trace with configurable span types.
 ///
-/// This function uses the server-side perfetto_trace_chunks table function to generate
-/// Perfetto traces with thread spans, async spans, or both.
-pub async fn format_perfetto_trace_with_spans(
+/// # Arguments
+/// * `span_types` - Types of spans to include: Thread, Async, or Both
+pub async fn format_perfetto_trace(
     client: &mut Client,
     process_id: &str,
     query_range: TimeRange,
     span_types: SpanTypes,
 ) -> Result<Vec<u8>> {
     // Use the perfetto_trace_chunks table function to get binary chunks
+    // Note: ORDER BY not needed since chunks are naturally produced in order (0, 1, 2, ...)
     let sql = format!(
         r#"
         SELECT chunk_id, chunk_data
@@ -56,7 +48,6 @@ pub async fn format_perfetto_trace_with_spans(
             TIMESTAMP '{}',
             TIMESTAMP '{}'
         )
-        ORDER BY chunk_id
         "#,
         process_id,
         span_types.as_str(),
@@ -71,7 +62,7 @@ pub async fn format_perfetto_trace_with_spans(
     for batch in batches {
         let chunk_data: &BinaryArray = typed_column_by_name(&batch, "chunk_data")?;
 
-        // Chunks are already ordered by the ORDER BY clause in the SQL query
+        // Chunks are already in order from server-side generation
         for i in 0..batch.num_rows() {
             let chunk = chunk_data.value(i);
             trace_data.extend_from_slice(chunk);
@@ -85,27 +76,13 @@ pub async fn format_perfetto_trace_with_spans(
     Ok(trace_data)
 }
 
-/// Writes a Perfetto trace to a file.
-///
-/// This function calls `format_perfetto_trace` to generate the trace data
-/// and then writes it to the specified output file.
-pub async fn write_perfetto_trace(
-    client: &mut Client,
-    process_id: &str,
-    begin: DateTime<Utc>,
-    end: DateTime<Utc>,
-    out_filename: &str,
-) -> Result<()> {
-    let buf = format_perfetto_trace(client, process_id, TimeRange::new(begin, end)).await?;
-    let mut file = File::create(out_filename).await?;
-    file.write_all(&buf).await?;
-    Ok(())
-}
-
 /// Writes a Perfetto trace to a file with configurable span types.
 ///
 /// This function generates traces with thread spans, async spans, or both.
-pub async fn write_perfetto_trace_with_spans(
+///
+/// # Arguments
+/// * `span_types` - Types of spans to include: Thread, Async, or Both
+pub async fn write_perfetto_trace(
     client: &mut Client,
     process_id: &str,
     begin: DateTime<Utc>,
@@ -113,13 +90,8 @@ pub async fn write_perfetto_trace_with_spans(
     out_filename: &str,
     span_types: SpanTypes,
 ) -> Result<()> {
-    let buf = format_perfetto_trace_with_spans(
-        client,
-        process_id,
-        TimeRange::new(begin, end),
-        span_types,
-    )
-    .await?;
+    let buf =
+        format_perfetto_trace(client, process_id, TimeRange::new(begin, end), span_types).await?;
     let mut file = File::create(out_filename).await?;
     file.write_all(&buf).await?;
     Ok(())

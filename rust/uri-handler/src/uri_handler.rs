@@ -3,6 +3,7 @@ mod installation;
 
 use anyhow::{Context, Result};
 use micromegas::chrono::DateTime;
+use micromegas::client::SpanTypes;
 use micromegas::client::flightsql_client::Client;
 use micromegas::client::perfetto_trace_client::write_perfetto_trace;
 use micromegas::tonic::transport::{Channel, Uri};
@@ -67,7 +68,15 @@ async fn execute_command(args: &[String]) -> Result<()> {
             .parse::<Uri>()?;
         let channel = Channel::builder(flight_url).connect().await?;
         let mut client = Client::new(channel);
-        return write_perfetto_trace(&mut client, process_id, begin, end, out_filename).await;
+        return write_perfetto_trace(
+            &mut client,
+            process_id,
+            begin,
+            end,
+            out_filename,
+            SpanTypes::Both,
+        )
+        .await;
     }
     let uri_start = "micromegas:";
     if args[0].starts_with(uri_start)

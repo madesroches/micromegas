@@ -22,8 +22,9 @@ use micromegas::analytics::{
     time::TimeRange,
 };
 use micromegas::client::{
+    SpanTypes,
     flightsql_client_factory::{BearerFlightSQLClientFactory, FlightSQLClientFactory},
-    perfetto_trace_client, SpanTypes,
+    perfetto_trace_client,
 };
 use micromegas::micromegas_main;
 use micromegas::servers::axum_utils::observability_middleware;
@@ -588,7 +589,7 @@ async fn generate_perfetto_trace_internal(
         }
     };
 
-    let trace_data = perfetto_trace_client::format_perfetto_trace_with_spans(
+    let trace_data = perfetto_trace_client::format_perfetto_trace(
         &mut client,
         process_id,
         time_range,
