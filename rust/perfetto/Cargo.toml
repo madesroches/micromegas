@@ -13,6 +13,7 @@ authors.workspace = true
 anyhow.workspace = true
 prost.workspace = true
 prost-build = { version = "0.13", optional=true }
+tokio.workspace = true
 xxhash-rust.workspace = true
 
 [features]

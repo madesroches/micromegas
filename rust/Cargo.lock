@@ -2830,6 +2830,7 @@ dependencies = [
  "jsonb",
  "lazy_static",
  "micromegas-ingestion",
+ "micromegas-perfetto",
  "micromegas-telemetry",
  "micromegas-telemetry-sink",
  "micromegas-tracing",
@@ -2871,6 +2872,7 @@ dependencies = [
  "anyhow",
  "prost",
  "prost-build",
+ "tokio",
  "xxhash-rust",
 ]
 

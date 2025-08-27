@@ -62,7 +62,7 @@ syn = { version = "1.0", features = ["extra-traits", "full"] }
 sysinfo = "0.37"
 thiserror = "1.0"
 thread-id = "4.0"
-tokio = { version = "1.47", features = ["macros","rt-multi-thread","tracing"]}
+tokio = { version = "1.47", features = ["macros","rt-multi-thread","tracing","io-util"]}
 tokio-retry2 = "0.5.7"
 tonic = { version = "0.12", features = ["server", "tls", "tls-native-roots"] }
 tower = { version = "0.5" }

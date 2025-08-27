@@ -122,7 +122,7 @@ def main():
     print()
     print("🎉 All services started!")
     print("📥 Ingestion Server: http://127.0.0.1:9000")
-    print("📊 Analytics Server: port 32010")
+    print("📊 Analytics Server: port 50051")
     print()
     print("PIDs:")
     print(f"  Ingestion: {ingestion_pid}")

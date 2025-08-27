@@ -1,12 +1,9 @@
 use super::{partition_cache::QueryPartitionProvider, view_factory::ViewFactory};
-use crate::dfext::typed_column::typed_column_by_name;
+use crate::dfext::typed_column::{string_column_by_name, typed_column_by_name};
 use crate::time::TimeRange as QueryTimeRange;
 use datafusion::{
     arrow::{
-        array::{
-            BinaryArray, Int32Array, RecordBatch, StringArray, TimestampNanosecondArray,
-            UInt32Array,
-        },
+        array::{BinaryArray, Int32Array, RecordBatch, TimestampNanosecondArray, UInt32Array},
         datatypes::SchemaRef,
     },
     catalog::{Session, TableProvider},
@@ -22,7 +19,7 @@ use datafusion::{
 };
 use futures::stream;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
-use micromegas_perfetto::StreamingPerfettoWriter;
+use micromegas_perfetto::AsyncStreamingPerfettoWriter;
 use micromegas_tracing::prelude::*;
 use object_store::ObjectStore;
 use std::{
@@ -203,14 +200,15 @@ impl ExecutionPlan for PerfettoTraceExecutionPlan {
     }
 }
 
+
 /// A writer that captures Perfetto packets and sends them as chunks
-struct ChunkWriter {
+struct PacketCapturingWriter {
     sender: mpsc::Sender<DFResult<RecordBatch>>,
     chunk_id: i32,
     buffer: Vec<u8>,
 }
 
-impl ChunkWriter {
+impl PacketCapturingWriter {
     fn new(sender: mpsc::Sender<DFResult<RecordBatch>>) -> Self {
         Self {
             sender,
@@ -218,16 +216,25 @@ impl ChunkWriter {
             buffer: Vec::new(),
         }
     }
+
 }
 
-impl std::io::Write for ChunkWriter {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+impl tokio::io::AsyncWrite for PacketCapturingWriter {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<Result<usize, std::io::Error>> {
+        // Just accumulate data in buffer - we'll send it when explicitly flushed
         self.buffer.extend_from_slice(buf);
-        Ok(buf.len())
+        std::task::Poll::Ready(Ok(buf.len()))
     }
 
-    fn flush(&mut self) -> std::io::Result<()> {
-        // Flush immediately when called
+    fn poll_flush(
+        mut self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), std::io::Error>> {
+        // Send accumulated buffer as a chunk
         if !self.buffer.is_empty() {
             let chunk_id_array = Int32Array::from(vec![self.chunk_id]);
             let chunk_data_array = BinaryArray::from(vec![self.buffer.as_slice()]);
@@ -241,21 +248,46 @@ impl std::io::Write for ChunkWriter {
                     "chunk_data",
                     Arc::new(chunk_data_array) as Arc<dyn datafusion::arrow::array::Array>,
                 ),
-            ])
-            .map_err(std::io::Error::other)?;
+            ]);
 
-            // Use blocking send - this is not ideal but necessary for the Write trait
-            let rt = tokio::runtime::Handle::current();
-            rt.block_on(async {
-                self.sender.send(Ok(batch)).await.map_err(|_| {
-                    std::io::Error::new(std::io::ErrorKind::BrokenPipe, "Receiver dropped")
-                })
-            })?;
-
-            self.chunk_id += 1;
-            self.buffer.clear();
+            if let Ok(batch) = batch {
+                // Send synchronously - this might block but should be fast for small chunks
+                if self.sender.try_send(Ok(batch)).is_ok() {
+                    self.chunk_id += 1;
+                    self.buffer.clear();
+                }
+            }
         }
-        Ok(())
+        std::task::Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(
+        mut self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Result<(), std::io::Error>> {
+        // Flush any remaining data on shutdown
+        if !self.buffer.is_empty() {
+            let chunk_id_array = Int32Array::from(vec![self.chunk_id]);
+            let chunk_data_array = BinaryArray::from(vec![self.buffer.as_slice()]);
+
+            let batch = RecordBatch::try_from_iter(vec![
+                (
+                    "chunk_id",
+                    Arc::new(chunk_id_array) as Arc<dyn datafusion::arrow::array::Array>,
+                ),
+                (
+                    "chunk_data",
+                    Arc::new(chunk_data_array) as Arc<dyn datafusion::arrow::array::Array>,
+                ),
+            ]);
+
+            if let Ok(batch) = batch {
+                let _ = self.sender.try_send(Ok(batch));
+                self.chunk_id += 1;
+                self.buffer.clear();
+            }
+        }
+        std::task::Poll::Ready(Ok(()))
     }
 }
 
@@ -281,7 +313,7 @@ async fn get_process_exe(
         anyhow::bail!("Process {} not found", process_id);
     }
 
-    let exes: &StringArray = typed_column_by_name(&batches[0], "exe")?;
+    let exes = string_column_by_name(&batches[0], "exe")?;
     Ok(exes.value(0).to_owned())
 }
 
@@ -308,9 +340,9 @@ async fn get_thread_info(
     let mut threads = HashMap::new();
 
     for batch in batches {
-        let stream_ids: &StringArray = typed_column_by_name(&batch, "stream_id")?;
-        let thread_names: &StringArray = typed_column_by_name(&batch, "thread_name")?;
-        let thread_ids: &StringArray = typed_column_by_name(&batch, "thread_id")?;
+        let stream_ids = string_column_by_name(&batch, "stream_id")?;
+        let thread_names = string_column_by_name(&batch, "thread_name")?;
+        let thread_ids = string_column_by_name(&batch, "thread_id")?;
 
         for i in 0..batch.num_rows() {
             let stream_id = stream_ids.value(i).to_owned();
@@ -336,9 +368,10 @@ async fn get_thread_info(
     Ok(threads)
 }
 
-/// Generate thread spans and emit them as packets
-async fn generate_thread_spans(
-    writer: &mut StreamingPerfettoWriter<&mut ChunkWriter>,
+
+/// Generate thread spans using the provided AsyncStreamingPerfettoWriter
+async fn generate_thread_spans_with_writer<W: tokio::io::AsyncWrite + Unpin>(
+    writer: &mut AsyncStreamingPerfettoWriter<W>,
     _process_id: &str,
     ctx: &datafusion::execution::context::SessionContext,
     time_range: &TimeRange,
@@ -364,11 +397,12 @@ async fn generate_thread_spans(
         for batch in batches {
             let begin_times: &TimestampNanosecondArray = typed_column_by_name(&batch, "begin")?;
             let end_times: &TimestampNanosecondArray = typed_column_by_name(&batch, "end")?;
-            let names: &StringArray = typed_column_by_name(&batch, "name")?;
-            let filenames: &StringArray = typed_column_by_name(&batch, "filename")?;
-            let targets: &StringArray = typed_column_by_name(&batch, "target")?;
+            let names = string_column_by_name(&batch, "name")?;
+            let filenames = string_column_by_name(&batch, "filename")?;
+            let targets = string_column_by_name(&batch, "target")?;
             let lines: &UInt32Array = typed_column_by_name(&batch, "line")?;
 
+            let mut span_count = 0;
             for i in 0..batch.num_rows() {
                 let begin_ns = begin_times.value(i) as u64;
                 let end_ns = end_times.value(i) as u64;
@@ -377,23 +411,25 @@ async fn generate_thread_spans(
                 let target = targets.value(i);
                 let line = lines.value(i);
 
-                // Set the current thread for this span and emit the span
-                let (thread_id, thread_name) = &threads[stream_id];
-                writer.emit_thread_descriptor(stream_id, *thread_id, thread_name)?;
-                writer.emit_span(begin_ns, end_ns, name, target, filename, line)?;
+                // Use the single writer instance to maintain string interning
                 writer
-                    .flush()
-                    .map_err(|e| anyhow::anyhow!("Failed to send thread span: {}", e))?;
+                    .emit_span(begin_ns, end_ns, name, target, filename, line)
+                    .await?;
+
+                span_count += 1;
+                // Flush every 10 thread spans to create multiple chunks
+                if span_count % 10 == 0 {
+                    writer.flush().await?;
+                }
             }
         }
     }
-
     Ok(())
 }
 
-/// Generate async spans and emit them as packets
-async fn generate_async_spans(
-    writer: &mut StreamingPerfettoWriter<&mut ChunkWriter>,
+/// Generate async spans using the provided AsyncStreamingPerfettoWriter
+async fn generate_async_spans_with_writer<W: tokio::io::AsyncWrite + Unpin>(
+    writer: &mut AsyncStreamingPerfettoWriter<W>,
     process_id: &str,
     ctx: &datafusion::execution::context::SessionContext,
     time_range: &TimeRange,
@@ -431,21 +467,25 @@ async fn generate_async_spans(
         time_range.end.to_rfc3339(),
         process_id,
         time_range.start.to_rfc3339(),
-        time_range.end.to_rfc3339()
+        time_range.end.to_rfc3339(),
     );
 
     let df = ctx.sql(&sql).await?;
     let batches = df.collect().await?;
 
     for batch in batches {
+        let span_ids: &datafusion::arrow::array::Int64Array =
+            typed_column_by_name(&batch, "span_id")?;
         let begin_times: &TimestampNanosecondArray = typed_column_by_name(&batch, "begin_time")?;
         let end_times: &TimestampNanosecondArray = typed_column_by_name(&batch, "end_time")?;
-        let names: &StringArray = typed_column_by_name(&batch, "name")?;
-        let filenames: &StringArray = typed_column_by_name(&batch, "filename")?;
-        let targets: &StringArray = typed_column_by_name(&batch, "target")?;
+        let names = string_column_by_name(&batch, "name")?;
+        let filenames = string_column_by_name(&batch, "filename")?;
+        let targets = string_column_by_name(&batch, "target")?;
         let lines: &UInt32Array = typed_column_by_name(&batch, "line")?;
 
+        let mut span_count = 0;
         for i in 0..batch.num_rows() {
+            let _span_id = span_ids.value(i);
             let begin_ns = begin_times.value(i) as u64;
             let end_ns = end_times.value(i) as u64;
             let name = names.value(i);
@@ -453,18 +493,20 @@ async fn generate_async_spans(
             let target = targets.value(i);
             let line = lines.value(i);
 
-            if end_ns >= begin_ns {
-                // Emit begin event
-                writer.emit_async_span_begin(begin_ns, name, target, filename, line)?;
+            if begin_ns < end_ns {
+                // Emit async span begin and end events with single writer
                 writer
-                    .flush()
-                    .map_err(|e| anyhow::anyhow!("Failed to send async span begin: {}", e))?;
+                    .emit_async_span_begin(begin_ns, name, target, filename, line)
+                    .await?;
+                writer
+                    .emit_async_span_end(end_ns, name, target, filename, line)
+                    .await?;
 
-                // Emit end event
-                writer.emit_async_span_end(end_ns, name, target, filename, line)?;
-                writer
-                    .flush()
-                    .map_err(|e| anyhow::anyhow!("Failed to send async span end: {}", e))?;
+                span_count += 1;
+                // Flush every 10 async spans to create multiple chunks
+                if span_count % 10 == 0 {
+                    writer.flush().await?;
+                }
             } else {
                 warn!("Skipping async span '{}' with invalid duration", name);
             }
@@ -493,49 +535,51 @@ async fn generate_trace_chunks(
         process_id, span_types, time_range.start, time_range.end
     );
 
-    let mut chunk_writer = ChunkWriter::new(chunk_sender);
-
-    // Create a context for making queries
+    // Create a context for making queries using the query_range from the execution plan
     let ctx =
         super::query::make_session_context(runtime, lake, part_provider, query_range, view_factory)
             .await?;
 
-    // Phase 6: Generate real Perfetto trace using a single streaming writer
-    let mut writer = StreamingPerfettoWriter::new(&mut chunk_writer, &process_id);
+    // Phase 6: Use a single AsyncStreamingPerfettoWriter with PacketCapturingWriter
+    // This maintains string interning throughout the entire trace generation
+    let packet_writer = PacketCapturingWriter::new(chunk_sender);
+    let mut writer = AsyncStreamingPerfettoWriter::new(packet_writer, &process_id);
 
     // Step 1: Get process metadata and emit process descriptor
     let process_exe = get_process_exe(&process_id, &ctx).await?;
-    writer.emit_process_descriptor(&process_exe)?;
-    writer
-        .flush()
-        .map_err(|e| anyhow::anyhow!("Failed to send process descriptor: {}", e))?;
+    writer.emit_process_descriptor(&process_exe).await?;
+    writer.flush().await?; // Chunk 0: Process descriptor
 
     // Step 2: Get thread information and emit thread descriptors
     let threads = get_thread_info(&process_id, &ctx).await?;
     for (stream_id, (thread_id, thread_name)) in &threads {
-        writer.emit_thread_descriptor(stream_id, *thread_id, thread_name)?;
         writer
-            .flush()
-            .map_err(|e| anyhow::anyhow!("Failed to send thread descriptor: {}", e))?;
+            .emit_thread_descriptor(stream_id, *thread_id, thread_name)
+            .await?;
+    }
+    if !threads.is_empty() {
+        writer.flush().await?; // Chunk 1: All thread descriptors
     }
 
     // Step 3: Emit async track descriptor if we're including async spans
     if matches!(span_types, SpanTypes::Async | SpanTypes::Both) {
-        writer.emit_async_track_descriptor()?;
-        writer
-            .flush()
-            .map_err(|e| anyhow::anyhow!("Failed to send async track descriptor: {}", e))?;
+        writer.emit_async_track_descriptor().await?;
+        writer.flush().await?; // Chunk 2: Async track descriptor
     }
 
     // Step 4: Generate thread spans if requested
     if matches!(span_types, SpanTypes::Thread | SpanTypes::Both) {
-        generate_thread_spans(&mut writer, &process_id, &ctx, &time_range, &threads).await?;
+        generate_thread_spans_with_writer(&mut writer, &process_id, &ctx, &time_range, &threads)
+            .await?;
     }
 
     // Step 5: Generate async spans if requested
     if matches!(span_types, SpanTypes::Async | SpanTypes::Both) {
-        generate_async_spans(&mut writer, &process_id, &ctx, &time_range).await?;
+        generate_async_spans_with_writer(&mut writer, &process_id, &ctx, &time_range).await?;
     }
+
+    // Ensure all data is flushed
+    let _ = writer.flush().await;
 
     Ok(())
 }

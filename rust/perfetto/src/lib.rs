@@ -25,4 +25,4 @@ pub mod streaming_writer;
 pub use writer::Writer;
 
 #[cfg(not(feature = "protogen"))]
-pub use streaming_writer::StreamingPerfettoWriter;
+pub use streaming_writer::{AsyncStreamingPerfettoWriter, StreamingPerfettoWriter};
