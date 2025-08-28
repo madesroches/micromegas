@@ -20,7 +20,7 @@ use datafusion::{
         stream::RecordBatchStreamAdapter,
     },
 };
-use futures::stream;
+use futures::{StreamExt, stream};
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_perfetto::AsyncStreamingPerfettoWriter;
 use micromegas_tracing::prelude::*;
@@ -307,7 +307,7 @@ async fn get_process_exe(
 }
 
 /// Get thread information from the streams table
-async fn get_thread_info(
+async fn get_process_thread_list(
     process_id: &str,
     ctx: &datafusion::execution::context::SessionContext,
 ) -> anyhow::Result<HashMap<String, (i32, String)>> {
@@ -376,9 +376,11 @@ async fn generate_thread_spans_with_writer<W: tokio::io::AsyncWrite + Unpin>(
         );
 
         let df = ctx.sql(&sql).await?;
-        let batches = df.collect().await?;
+        let mut stream = df.execute_stream().await?;
 
-        for batch in batches {
+        let mut span_count = 0;
+        while let Some(batch_result) = stream.next().await {
+            let batch = batch_result?;
             let begin_times: &TimestampNanosecondArray = typed_column_by_name(&batch, "begin")?;
             let end_times: &TimestampNanosecondArray = typed_column_by_name(&batch, "end")?;
             let names: &StringArray = typed_column_by_name(&batch, "name")?;
@@ -386,7 +388,6 @@ async fn generate_thread_spans_with_writer<W: tokio::io::AsyncWrite + Unpin>(
             let targets: &StringArray = typed_column_by_name(&batch, "target")?;
             let lines: &UInt32Array = typed_column_by_name(&batch, "line")?;
 
-            let mut span_count = 0;
             for i in 0..batch.num_rows() {
                 let begin_ns = begin_times.value(i) as u64;
                 let end_ns = end_times.value(i) as u64;
@@ -459,9 +460,11 @@ async fn generate_async_spans_with_writer<W: tokio::io::AsyncWrite + Unpin>(
     );
 
     let df = ctx.sql(&sql).await?;
-    let batches = df.collect().await?;
+    let mut stream = df.execute_stream().await?;
 
-    for batch in batches {
+    let mut span_count = 0;
+    while let Some(batch_result) = stream.next().await {
+        let batch = batch_result?;
         let span_ids: &datafusion::arrow::array::Int64Array =
             typed_column_by_name(&batch, "span_id")?;
         let begin_times: &TimestampNanosecondArray = typed_column_by_name(&batch, "begin_time")?;
@@ -471,7 +474,6 @@ async fn generate_async_spans_with_writer<W: tokio::io::AsyncWrite + Unpin>(
         let targets: &StringArray = typed_column_by_name(&batch, "target")?;
         let lines: &UInt32Array = typed_column_by_name(&batch, "line")?;
 
-        let mut span_count = 0;
         for i in 0..batch.num_rows() {
             let _span_id = span_ids.value(i);
             let begin_ns = begin_times.value(i) as u64;
@@ -535,40 +537,40 @@ async fn generate_trace_chunks(
     )
     .await?;
 
-    // Phase 6: Use a single AsyncStreamingPerfettoWriter with PacketCapturingWriter
-    // This maintains string interning throughout the entire trace generation
+    // Use a single AsyncStreamingPerfettoWriter with PacketCapturingWriter
+    // to maintain string interning throughout the entire trace generation
     let packet_writer = PacketCapturingWriter::new(chunk_sender);
     let mut writer = AsyncStreamingPerfettoWriter::new(packet_writer, &process_id);
 
-    // Step 1: Get process metadata and emit process descriptor
+    // Get process metadata and emit process descriptor
     let process_exe = get_process_exe(&process_id, &ctx).await?;
     writer.emit_process_descriptor(&process_exe).await?;
-    writer.flush().await?; // Chunk 0: Process descriptor
+    writer.flush().await?;
 
-    // Step 2: Get thread information and emit thread descriptors
-    let threads = get_thread_info(&process_id, &ctx).await?;
+    // Get thread information and emit thread descriptors
+    let threads = get_process_thread_list(&process_id, &ctx).await?;
     for (stream_id, (thread_id, thread_name)) in &threads {
         writer
             .emit_thread_descriptor(stream_id, *thread_id, thread_name)
             .await?;
     }
     if !threads.is_empty() {
-        writer.flush().await?; // Chunk 1: All thread descriptors
+        writer.flush().await?;
     }
 
-    // Step 3: Emit async track descriptor if we're including async spans
+    // Emit async track descriptor if we're including async spans
     if matches!(span_types, SpanTypes::Async | SpanTypes::Both) {
         writer.emit_async_track_descriptor().await?;
-        writer.flush().await?; // Chunk 2: Async track descriptor
+        writer.flush().await?;
     }
 
-    // Step 4: Generate thread spans if requested
+    // Generate thread spans if requested
     if matches!(span_types, SpanTypes::Thread | SpanTypes::Both) {
         generate_thread_spans_with_writer(&mut writer, &process_id, &ctx, &time_range, &threads)
             .await?;
     }
 
-    // Step 5: Generate async spans if requested
+    // Generate async spans if requested
     if matches!(span_types, SpanTypes::Async | SpanTypes::Both) {
         generate_async_spans_with_writer(&mut writer, &process_id, &ctx, &time_range).await?;
     }
