@@ -44,25 +44,21 @@ pub struct HttpEventSink {
 
 impl Drop for HttpEventSink {
     fn drop(&mut self) {
-        eprintln!("HttpEventSink::drop() called");
         // Send shutdown signal to thread
         {
             let sender_guard = self.sender.lock().unwrap();
             if let Some(sender) = sender_guard.as_ref() {
-                eprintln!("HttpEventSink::drop() sending shutdown event");
                 let _ = sender.send(SinkEvent::Shutdown);
             }
         }
 
         // Now wait for the thread to finish
-        eprintln!("HttpEventSink::drop() waiting for thread to join");
         if let Some(handle) = self.thread.take()
             && let Err(e) = handle.join()
         {
             // Don't panic on join failure, just log it
             eprintln!("Warning: telemetry thread join failed: {:?}", e);
         }
-        eprintln!("HttpEventSink::drop() complete");
     }
 }
 
@@ -379,9 +375,6 @@ impl HttpEventSink {
             match receiver.recv_timeout(Duration::from_secs(timeout as u64)) {
                 Ok(message) => match message {
                     SinkEvent::Shutdown => {
-                        eprintln!(
-                            "HttpEventSink thread: received shutdown signal, flushing remaining data"
-                        );
                         debug!("received shutdown signal, flushing remaining data");
                         // Process any remaining messages in the queue before shutting down
                         let mut count = 0;
@@ -411,17 +404,12 @@ impl HttpEventSink {
                                 }
                             }
                         }
-                        eprintln!(
-                            "HttpEventSink thread: processed {} remaining messages, signaling shutdown complete",
-                            count
-                        );
-                        debug!("telemetry thread shutdown complete");
+                        debug!("telemetry thread shutdown complete, processed {} remaining messages", count);
                         // Signal that shutdown is complete
                         let (lock, cvar) = &*shutdown_complete;
                         let mut completed = lock.lock().unwrap();
                         *completed = true;
                         cvar.notify_all();
-                        eprintln!("HttpEventSink thread: shutdown signal sent, exiting");
                         return;
                     }
                     other_message => {
@@ -490,17 +478,14 @@ impl EventSink for HttpEventSink {
     }
 
     fn on_shutdown(&self) {
-        eprintln!("HttpEventSink::on_shutdown() called - sending shutdown event");
         // Send shutdown event to trigger flushing of remaining data
         self.send(SinkEvent::Shutdown);
 
-        eprintln!("HttpEventSink::on_shutdown() - waiting for background thread to complete flush");
         // Wait for the background thread to signal that shutdown is complete
         let (lock, cvar) = &*self.shutdown_complete;
         let completed = lock.lock().unwrap();
         let timeout = std::time::Duration::from_secs(5);
-        let result = cvar.wait_timeout_while(completed, timeout, |&mut c| !c);
-        eprintln!("HttpEventSink::on_shutdown() - wait result: {:?}", result);
+        let _result = cvar.wait_timeout_while(completed, timeout, |&mut c| !c);
     }
 
     fn on_log_enabled(&self, _metadata: &LogMetadata) -> bool {
