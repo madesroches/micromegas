@@ -146,7 +146,7 @@ impl ExecutionPlan for PerfettoTraceExecutionPlan {
         let schema = self.schema.clone();
         let process_id = self.process_id.clone();
         let span_types = self.span_types;
-        let time_range = self.time_range.clone();
+        let time_range = self.time_range;
         let runtime = self.runtime.clone();
         let lake = self.lake.clone();
         let object_store = self.object_store.clone();

@@ -347,6 +347,7 @@ impl HttpEventSink {
         Ok(())
     }
 
+    #[expect(clippy::too_many_arguments)]
     async fn thread_proc_impl(
         addr: String,
         receiver: std::sync::mpsc::Receiver<SinkEvent>,
@@ -454,7 +455,9 @@ impl HttpEventSink {
         }
     }
 
-    #[allow(clippy::needless_pass_by_value)] // we don't want to leave the receiver in the calling thread
+    #[allow(clippy::needless_pass_by_value,// we don't want to leave the receiver in the calling thread
+	    clippy::too_many_arguments
+    )]
     fn thread_proc(
         addr: String,
         receiver: std::sync::mpsc::Receiver<SinkEvent>,
