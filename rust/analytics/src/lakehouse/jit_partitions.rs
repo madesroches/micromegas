@@ -281,7 +281,6 @@ pub async fn generate_process_jit_partitions_segment(
     .collect()
     .await?;
 
-    let total_blocks: usize = rbs.iter().map(|rb| rb.num_rows()).sum();
     let mut partitions = vec![];
     let mut partition_blocks = vec![];
     let mut partition_nb_objects: i64 = 0;

@@ -13,13 +13,13 @@ use datafusion::{
     },
     catalog::{Session, TableProvider},
     common::Result as DFResult,
-    execution::{runtime_env::RuntimeEnv, SendableRecordBatchStream, TaskContext},
+    execution::{SendableRecordBatchStream, TaskContext, runtime_env::RuntimeEnv},
     logical_expr::{Expr, TableType},
     physical_expr::EquivalenceProperties,
     physical_plan::{
+        DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
         execution_plan::{Boundedness, EmissionType},
         stream::RecordBatchStreamAdapter,
-        DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
     },
 };
 use futures::StreamExt;
@@ -352,8 +352,7 @@ async fn get_process_thread_list(
             let thread_id_str = thread_ids.value(i);
             let thread_id = thread_id_str
                 .parse::<i64>()
-                .context("Failed to parse thread_id as i64")?
-                as i32;
+                .context("Failed to parse thread_id as i64")? as i32;
             threads.push((stream_id, thread_id, thread_name.to_owned()));
         }
     }
