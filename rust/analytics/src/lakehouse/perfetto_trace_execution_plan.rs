@@ -1,6 +1,7 @@
 use super::{partition_cache::QueryPartitionProvider, view_factory::ViewFactory};
 use crate::dfext::typed_column::typed_column_by_name;
 use crate::time::TimeRange;
+use anyhow::Context;
 use async_stream::stream;
 use datafusion::{
     arrow::{
@@ -12,13 +13,13 @@ use datafusion::{
     },
     catalog::{Session, TableProvider},
     common::Result as DFResult,
-    execution::{SendableRecordBatchStream, TaskContext, runtime_env::RuntimeEnv},
+    execution::{runtime_env::RuntimeEnv, SendableRecordBatchStream, TaskContext},
     logical_expr::{Expr, TableType},
     physical_expr::EquivalenceProperties,
     physical_plan::{
-        DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
         execution_plan::{Boundedness, EmissionType},
         stream::RecordBatchStreamAdapter,
+        DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
     },
 };
 use futures::StreamExt;
@@ -28,7 +29,6 @@ use micromegas_tracing::prelude::*;
 use object_store::ObjectStore;
 use std::{
     any::Any,
-    collections::HashMap,
     fmt::{self, Debug, Formatter},
     sync::Arc,
 };
@@ -256,18 +256,15 @@ async fn generate_complete_perfetto_trace(
     )
     .await?;
 
-    // Use Vec<u8> as the writer - this is much simpler than AsyncWrite
-    let mut trace_buffer = Vec::new();
+    let mut trace_buffer = Vec::new(); // it's insane to keep this in memory - we need to send the chunks as they are computed
     let mut writer = AsyncStreamingPerfettoWriter::new(&mut trace_buffer, &process_id);
 
-    // Get process metadata and emit process descriptor
     let process_exe = get_process_exe(&process_id, &ctx).await?;
     writer.emit_process_descriptor(&process_exe).await?;
     writer.flush().await?;
 
-    // Get thread information and emit thread descriptors
     let threads = get_process_thread_list(&process_id, &ctx).await?;
-    for (stream_id, (thread_id, thread_name)) in &threads {
+    for (stream_id, thread_id, thread_name) in &threads {
         writer
             .emit_thread_descriptor(stream_id, *thread_id, thread_name)
             .await?;
@@ -276,26 +273,21 @@ async fn generate_complete_perfetto_trace(
         writer.flush().await?;
     }
 
-    // Emit async track descriptor if we're including async spans
     if matches!(span_types, SpanTypes::Async | SpanTypes::Both) {
         writer.emit_async_track_descriptor().await?;
         writer.flush().await?;
     }
 
-    // Generate thread spans if requested
     if matches!(span_types, SpanTypes::Thread | SpanTypes::Both) {
         generate_thread_spans_with_writer(&mut writer, &process_id, &ctx, &time_range, &threads)
             .await?;
     }
 
-    // Generate async spans if requested
     if matches!(span_types, SpanTypes::Async | SpanTypes::Both) {
         generate_async_spans_with_writer(&mut writer, &process_id, &ctx, &time_range).await?;
     }
 
-    // Final flush to ensure all data is written
     writer.flush().await?;
-
     Ok(trace_buffer)
 }
 
@@ -329,39 +321,40 @@ async fn get_process_exe(
 async fn get_process_thread_list(
     process_id: &str,
     ctx: &datafusion::execution::context::SessionContext,
-) -> anyhow::Result<HashMap<String, (i32, String)>> {
+) -> anyhow::Result<Vec<(String, i32, String)>> {
     // Query blocks table to get streams, then filter by checking if thread spans exist
     let sql = format!(
         r#"
-        SELECT DISTINCT arrow_cast(b.stream_id, 'Utf8') as stream_id
+        SELECT arrow_cast(b.stream_id, 'Utf8') as stream_id,
+               property_get("streams.properties", 'thread-name') as thread_name,
+               property_get("streams.properties", 'thread-id') as thread_id
         FROM blocks b
         WHERE b.process_id = '{}'
         AND array_has(b."streams.tags", 'cpu')
+        GROUP BY stream_id, thread_name, thread_id
+        ORDER BY stream_id
         "#,
         process_id
     );
 
     let df = ctx.sql(&sql).await?;
     let batches = df.collect().await?;
-    let mut threads = HashMap::new();
+    let mut threads = Vec::new();
 
     for batch in batches {
         let stream_ids: &StringArray = typed_column_by_name(&batch, "stream_id")?;
+        let thread_names: &StringArray = typed_column_by_name(&batch, "thread_name")?;
+        let thread_ids: &StringArray = typed_column_by_name(&batch, "thread_id")?;
 
         for i in 0..batch.num_rows() {
             let stream_id = stream_ids.value(i).to_owned();
-
-            // Use a hash of the stream_id as the thread ID
-            let thread_id: i32 = (stream_id
-                .as_bytes()
-                .iter()
-                .fold(0u32, |acc, &b| acc.wrapping_mul(31).wrapping_add(b as u32))
-                % 65536) as i32;
-
-            // Use a simplified thread name based on stream_id
-            let thread_name = format!("thread-{}", &stream_id[..8]);
-
-            threads.insert(stream_id, (thread_id, thread_name));
+            let thread_name = thread_names.value(i);
+            let thread_id_str = thread_ids.value(i);
+            let thread_id = thread_id_str
+                .parse::<i64>()
+                .context("Failed to parse thread_id as i64")?
+                as i32;
+            threads.push((stream_id, thread_id, thread_name.to_owned()));
         }
     }
 
@@ -374,9 +367,9 @@ async fn generate_thread_spans_with_writer<W: tokio::io::AsyncWrite + Unpin>(
     _process_id: &str,
     ctx: &datafusion::execution::context::SessionContext,
     time_range: &TimeRange,
-    threads: &HashMap<String, (i32, String)>,
+    threads: &Vec<(String, i32, String)>,
 ) -> anyhow::Result<()> {
-    for stream_id in threads.keys() {
+    for (stream_id, _, _) in threads {
         let sql = format!(
             r#"
             SELECT begin, end, 
@@ -492,8 +485,6 @@ async fn generate_async_spans_with_writer<W: tokio::io::AsyncWrite + Unpin>(
         let filenames: &StringArray = typed_column_by_name(&batch, "filename")?;
         let targets: &StringArray = typed_column_by_name(&batch, "target")?;
         let lines: &UInt32Array = typed_column_by_name(&batch, "line")?;
-        debug!("span {span_count}");
-
         for i in 0..batch.num_rows() {
             let _span_id = span_ids.value(i);
             let begin_ns = begin_times.value(i) as u64;

@@ -105,7 +105,6 @@ pub async fn generate_stream_jit_partitions_segment(
     stream: Arc<StreamInfo>,
     process: Arc<ProcessInfo>,
 ) -> Result<Vec<SourceDataBlocksInMemory>> {
-    debug!("listing blocks");
     let cache = PartitionCache::fetch_overlapping_insert_range_for_view(
         &lake.db_pool,
         blocks_view.get_view_set_name(),
@@ -127,11 +126,6 @@ pub async fn generate_stream_jit_partitions_segment(
              ORDER BY insert_time, block_id;"#
     );
 
-    debug!(
-        "[BLOCK_DISCOVERY_START] stream_id={} time_range=[{}, {})",
-        stream_id, begin_range_iso, end_range_iso
-    );
-
     let rbs = query_partitions(
         runtime,
         lake,
@@ -143,12 +137,6 @@ pub async fn generate_stream_jit_partitions_segment(
     .collect()
     .await?;
 
-    let total_blocks: usize = rbs.iter().map(|rb| rb.num_rows()).sum();
-    debug!(
-        "[BLOCK_DISCOVERY_RESULT] stream_id={} discovered_blocks={}",
-        stream_id, total_blocks
-    );
-    debug!("assembling segments");
     let mut partitions = vec![];
     let mut partition_blocks = vec![];
     let mut partition_nb_objects: i64 = 0;
@@ -191,13 +179,6 @@ pub async fn generate_stream_jit_partitions_segment(
         });
     }
 
-    debug!(
-        "[PARTITION_ASSEMBLY_RESULT] stream_id={} created_partitions={} total_objects={}",
-        stream_id,
-        partitions.len(),
-        partitions.iter().map(|p| p.blocks.len()).sum::<usize>()
-    );
-
     Ok(partitions)
 }
 
@@ -213,7 +194,6 @@ pub async fn generate_stream_jit_partitions(
     stream: Arc<StreamInfo>,
     process: Arc<ProcessInfo>,
 ) -> Result<Vec<SourceDataBlocksInMemory>> {
-    debug!("get_insert_time_range {query_time_range:?}");
     let insert_time_range = get_insert_time_range(
         runtime.clone(),
         lake.clone(),
@@ -235,7 +215,6 @@ pub async fn generate_stream_jit_partitions(
             .duration_trunc(config.max_insert_time_slice)?
             + config.max_insert_time_slice,
     );
-    debug!("generating segments for time range {insert_time_range:?}");
     let mut begin_segment = insert_time_range.begin;
     let mut end_segment = begin_segment + config.max_insert_time_slice;
     let mut partitions = vec![];
@@ -268,7 +247,6 @@ pub async fn generate_process_jit_partitions_segment(
     process: Arc<ProcessInfo>,
     stream_tag: &str,
 ) -> Result<Vec<SourceDataBlocksInMemory>> {
-    debug!("listing blocks for process");
     let cache = PartitionCache::fetch_overlapping_insert_range_for_view(
         &lake.db_pool,
         blocks_view.get_view_set_name(),
@@ -292,11 +270,6 @@ pub async fn generate_process_jit_partitions_segment(
              ORDER BY insert_time, block_id;"#
     );
 
-    debug!(
-        "[BLOCK_DISCOVERY_START] process_id={} time_range=[{}, {})",
-        process_id, begin_range_iso, end_range_iso
-    );
-
     let rbs = query_partitions(
         runtime.clone(),
         lake.clone(),
@@ -309,12 +282,6 @@ pub async fn generate_process_jit_partitions_segment(
     .await?;
 
     let total_blocks: usize = rbs.iter().map(|rb| rb.num_rows()).sum();
-    debug!(
-        "[BLOCK_DISCOVERY_RESULT] process_id={} discovered_blocks={}",
-        process_id, total_blocks
-    );
-
-    debug!("assembling segments");
     let mut partitions = vec![];
     let mut partition_blocks = vec![];
     let mut partition_nb_objects: i64 = 0;
@@ -403,14 +370,6 @@ pub async fn generate_process_jit_partitions_segment(
             block_ids_hash: partition_nb_objects.to_le_bytes().to_vec(),
         });
     }
-
-    debug!(
-        "[PARTITION_ASSEMBLY_RESULT] process_id={} created_partitions={} total_objects={}",
-        process_id,
-        partitions.len(),
-        partitions.iter().map(|p| p.blocks.len()).sum::<usize>()
-    );
-
     Ok(partitions)
 }
 
@@ -426,8 +385,6 @@ pub async fn generate_process_jit_partitions(
     process: Arc<ProcessInfo>,
     stream_tag: &str,
 ) -> Result<Vec<SourceDataBlocksInMemory>> {
-    debug!("get_insert_time_range for process {query_time_range:?}");
-
     // Get insert time range for all blocks in this process
     let part_provider = LivePartitionProvider::new(lake.db_pool.clone());
     let partitions = part_provider
@@ -481,7 +438,6 @@ pub async fn generate_process_jit_partitions(
             + config.max_insert_time_slice,
     );
 
-    debug!("generating segments for time range {insert_time_range:?}");
     let mut begin_segment = insert_time_range.begin;
     let mut end_segment = begin_segment + config.max_insert_time_slice;
     let mut partitions = vec![];
@@ -588,10 +544,6 @@ pub async fn is_jit_partition_up_to_date(
     let part_source_data: Vec<u8> = r.try_get("source_data_hash")?;
     let existing_count = hash_to_object_count(&part_source_data)?;
     let required_count = hash_to_object_count(&spec.block_ids_hash)?;
-    debug!(
-        "{desc}: comparing source data - existing: {}, required: {}",
-        existing_count, required_count
-    );
     if existing_count < required_count {
         info!("{desc}: existing partition lacks source data: creating a new partition");
         return Ok(false);
