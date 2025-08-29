@@ -9,8 +9,8 @@ use super::{
 };
 use crate::{
     async_events_table::async_events_table_schema,
-    lakehouse::jit_partitions::{generate_jit_partitions, is_jit_partition_up_to_date},
-    metadata::{find_process_with_latest_timing, list_process_streams_tagged},
+    lakehouse::jit_partitions::{generate_process_jit_partitions, is_jit_partition_up_to_date},
+    metadata::find_process_with_latest_timing,
     time::{TimeRange, datetime_to_scalar, make_time_converter_from_latest_timing},
 };
 use anyhow::{Context, Result};
@@ -142,26 +142,19 @@ impl View for AsyncEventsView {
             .with_context(|| "make_time_converter_from_latest_timing")?,
         );
 
-        // Use all thread streams since async events are recorded in thread streams
-        let streams = list_process_streams_tagged(&lake.db_pool, process.process_id, "cpu")
-            .await
-            .with_context(|| "list_process_streams_tagged")?;
-        let mut all_partitions = vec![];
+        // Use process-based partition generation to get all streams for this process
         let blocks_view = BlocksView::new()?;
-        for stream in streams {
-            let mut partitions = generate_jit_partitions(
-                &JitPartitionConfig::default(),
-                runtime.clone(),
-                lake.clone(),
-                &blocks_view,
-                &query_range,
-                Arc::new(stream),
-                process.clone(),
-            )
-            .await
-            .with_context(|| "generate_jit_partitions")?;
-            all_partitions.append(&mut partitions);
-        }
+        let all_partitions = generate_process_jit_partitions(
+            &JitPartitionConfig::default(),
+            runtime.clone(),
+            lake.clone(),
+            &blocks_view,
+            &query_range,
+            process.clone(),
+            "cpu",
+        )
+        .await
+        .with_context(|| "generate_process_jit_partitions")?;
         let view_meta = ViewMetadata {
             view_set_name: self.get_view_set_name(),
             view_instance_id: self.get_view_instance_id(),

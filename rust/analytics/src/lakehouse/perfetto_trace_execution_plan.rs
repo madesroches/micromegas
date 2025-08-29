@@ -173,12 +173,19 @@ impl ExecutionPlan for PerfettoTraceExecutionPlan {
 
             // Send error if generation failed
             if let Err(e) = result {
-                let _ = chunk_sender
+                error!("{e:?}");
+                if let Err(send_err) = chunk_sender
                     .send(Err(datafusion::error::DataFusionError::Execution(format!(
                         "Trace generation failed: {}",
                         e
                     ))))
-                    .await;
+                    .await
+                {
+                    error!(
+                        "Failed to send error message to chunk receiver: {:?}",
+                        send_err
+                    );
+                }
             }
         });
 
@@ -239,11 +246,18 @@ impl tokio::io::AsyncWrite for PacketCapturingWriter {
                 ),
             ]);
 
-            if let Ok(batch) = batch {
-                // Send synchronously - this might block but should be fast for small chunks
-                if self.sender.try_send(Ok(batch)).is_ok() {
-                    self.chunk_id += 1;
-                    self.buffer.clear();
+            match batch {
+                Ok(batch) => {
+                    // Send synchronously - this might block but should be fast for small chunks
+                    if let Err(e) = self.sender.try_send(Ok(batch)) {
+                        error!("Failed to send trace chunk: {:?}", e);
+                    } else {
+                        self.chunk_id += 1;
+                        self.buffer.clear();
+                    }
+                }
+                Err(e) => {
+                    error!("Failed to create trace chunk batch: {:?}", e);
                 }
             }
         }
@@ -270,10 +284,18 @@ impl tokio::io::AsyncWrite for PacketCapturingWriter {
                 ),
             ]);
 
-            if let Ok(batch) = batch {
-                let _ = self.sender.try_send(Ok(batch));
-                self.chunk_id += 1;
-                self.buffer.clear();
+            match batch {
+                Ok(batch) => {
+                    if let Err(e) = self.sender.try_send(Ok(batch)) {
+                        error!("Failed to send trace chunk on shutdown: {:?}", e);
+                    } else {
+                        self.chunk_id += 1;
+                        self.buffer.clear();
+                    }
+                }
+                Err(e) => {
+                    error!("Failed to create trace chunk batch on shutdown: {:?}", e);
+                }
             }
         }
         std::task::Poll::Ready(Ok(()))
@@ -576,7 +598,10 @@ async fn generate_trace_chunks(
     }
 
     // Ensure all data is flushed
-    let _ = writer.flush().await;
+    if let Err(e) = writer.flush().await {
+        error!("Failed to flush Perfetto writer: {:?}", e);
+        return Err(e);
+    }
 
     Ok(())
 }

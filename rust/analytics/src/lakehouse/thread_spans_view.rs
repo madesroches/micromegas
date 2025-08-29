@@ -1,7 +1,9 @@
 use super::{
     blocks_view::BlocksView,
     dataframe_time_bounds::{DataFrameTimeBounds, NamedColumnsTimeBounds},
-    jit_partitions::{JitPartitionConfig, generate_jit_partitions, is_jit_partition_up_to_date},
+    jit_partitions::{
+        JitPartitionConfig, generate_stream_jit_partitions, is_jit_partition_up_to_date,
+    },
     partition_cache::PartitionCache,
     partition_source_data::{SourceDataBlocksInMemory, hash_to_object_count},
     view::{PartitionSpec, View, ViewMetadata},
@@ -234,7 +236,7 @@ impl View for ThreadSpansView {
         );
         let convert_ticks = make_time_converter_from_db(&lake.db_pool, &process).await?;
         let blocks_view = BlocksView::new()?;
-        let partitions = generate_jit_partitions(
+        let partitions = generate_stream_jit_partitions(
             &JitPartitionConfig::default(),
             runtime,
             lake.clone(),
@@ -244,7 +246,7 @@ impl View for ThreadSpansView {
             process.clone(),
         )
         .await
-        .with_context(|| "generate_jit_partitions")?;
+        .with_context(|| "generate_stream_jit_partitions")?;
         for part in &partitions {
             update_partition(
                 lake.clone(),
