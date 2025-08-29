@@ -404,7 +404,10 @@ impl HttpEventSink {
                                 }
                             }
                         }
-                        debug!("telemetry thread shutdown complete, processed {} remaining messages", count);
+                        debug!(
+                            "telemetry thread shutdown complete, processed {} remaining messages",
+                            count
+                        );
                         // Signal that shutdown is complete
                         let (lock, cvar) = &*shutdown_complete;
                         let mut completed = lock.lock().unwrap();
