@@ -1,5 +1,5 @@
 use datafusion::arrow::array::{BinaryArray, Int32Array};
-use micromegas_perfetto::ChunkSender;
+use micromegas_perfetto::chunk_sender::ChunkSender;
 use tokio::sync::mpsc;
 
 #[tokio::test]

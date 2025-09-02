@@ -1,4 +1,4 @@
-use micromegas_perfetto::{AsyncWriter, PerfettoWriter};
+use micromegas_perfetto::{async_writer::AsyncWriter, streaming_writer::PerfettoWriter};
 use prost::Message;
 use std::io::Cursor;
 use std::sync::{Arc, Mutex};
