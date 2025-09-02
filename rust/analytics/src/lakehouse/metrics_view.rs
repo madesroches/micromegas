@@ -10,7 +10,7 @@ use super::{
     block_partition_spec::BlockPartitionSpec,
     dataframe_time_bounds::{DataFrameTimeBounds, NamedColumnsTimeBounds},
     jit_partitions::{
-        JitPartitionConfig, generate_jit_partitions, is_jit_partition_up_to_date,
+        JitPartitionConfig, generate_stream_jit_partitions, is_jit_partition_up_to_date,
         write_partition_from_blocks,
     },
     metrics_block_processor::MetricsBlockProcessor,
@@ -153,7 +153,7 @@ impl View for MetricsView {
         let mut all_partitions = vec![];
         let blocks_view = BlocksView::new()?;
         for stream in streams {
-            let mut partitions = generate_jit_partitions(
+            let mut partitions = generate_stream_jit_partitions(
                 &JitPartitionConfig::default(),
                 runtime.clone(),
                 lake.clone(),
@@ -163,7 +163,7 @@ impl View for MetricsView {
                 process.clone(),
             )
             .await
-            .with_context(|| "generate_jit_partitions")?;
+            .with_context(|| "generate_stream_jit_partitions")?;
             all_partitions.append(&mut partitions);
         }
         let view_meta = ViewMetadata {

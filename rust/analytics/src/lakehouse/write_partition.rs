@@ -20,6 +20,8 @@ use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_tracing::prelude::*;
 use object_store::buffered::BufWriter;
 use sqlx::Row;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::sync::{Arc, atomic::AtomicI64};
 use tokio::sync::mpsc::Receiver;
 
@@ -100,22 +102,54 @@ pub async fn retire_partitions(
     // its gets tricky in the jit case where a partition can have only one block and begin_insert == end_insert
 
     //todo: use DELETE+RETURNING
-    let old_partitions = sqlx::query(
-        "SELECT file_path, file_size
-         FROM lakehouse_partitions
-         WHERE view_set_name = $1
-         AND view_instance_id = $2
-         AND begin_insert_time >= $3
-         AND end_insert_time <= $4
-         ;",
-    )
-    .bind(view_set_name)
-    .bind(view_instance_id)
-    .bind(begin_insert_time)
-    .bind(end_insert_time)
-    .fetch_all(&mut **transaction)
-    .await
-    .with_context(|| "listing old partitions")?;
+    let old_partitions = if begin_insert_time == end_insert_time {
+        // For identical timestamps, look for exact matches to handle single-block partitions
+        sqlx::query(
+            "SELECT file_path, file_size
+             FROM lakehouse_partitions
+             WHERE view_set_name = $1
+             AND view_instance_id = $2
+             AND begin_insert_time = $3
+             AND end_insert_time = $3
+             ;",
+        )
+        .bind(view_set_name)
+        .bind(view_instance_id)
+        .bind(begin_insert_time)
+        .fetch_all(&mut **transaction)
+        .await
+        .with_context(|| "listing old partitions (exact match)")?
+    } else {
+        // For time ranges, use inclusive inequalities
+        sqlx::query(
+            "SELECT file_path, file_size
+             FROM lakehouse_partitions
+             WHERE view_set_name = $1
+             AND view_instance_id = $2
+             AND begin_insert_time >= $3
+             AND end_insert_time <= $4
+             ;",
+        )
+        .bind(view_set_name)
+        .bind(view_instance_id)
+        .bind(begin_insert_time)
+        .bind(end_insert_time)
+        .fetch_all(&mut **transaction)
+        .await
+        .with_context(|| "listing old partitions (range)")?
+    };
+
+    // LOG: Found partitions for retirement
+    logger
+        .write_log_entry(format!(
+            "[RETIRE_FOUND] view={}/{} time_range=[{}, {}] found_partitions={}",
+            view_set_name,
+            view_instance_id,
+            begin_insert_time,
+            end_insert_time,
+            old_partitions.len()
+        ))
+        .await?;
     for old_part in old_partitions {
         let file_path: String = old_part.try_get("file_path")?;
         let file_size: i64 = old_part.try_get("file_size")?;
@@ -134,25 +168,59 @@ pub async fn retire_partitions(
             .with_context(|| "adding old partition to temporary files to be deleted")?;
     }
 
-    sqlx::query(
-        "DELETE from lakehouse_partitions
-         WHERE view_set_name = $1
-         AND view_instance_id = $2
-         AND begin_insert_time >= $3
-         AND end_insert_time <= $4
-         ;",
-    )
-    .bind(view_set_name)
-    .bind(view_instance_id)
-    .bind(begin_insert_time)
-    .bind(end_insert_time)
-    .execute(&mut **transaction)
-    .await
-    .with_context(|| "deleting out of date partitions")?;
+    if begin_insert_time == end_insert_time {
+        // For identical timestamps, delete exact matches to handle single-block partitions
+        sqlx::query(
+            "DELETE from lakehouse_partitions
+             WHERE view_set_name = $1
+             AND view_instance_id = $2
+             AND begin_insert_time = $3
+             AND end_insert_time = $3
+             ;",
+        )
+        .bind(view_set_name)
+        .bind(view_instance_id)
+        .bind(begin_insert_time)
+        .execute(&mut **transaction)
+        .await
+        .with_context(|| "deleting out of date partitions (exact match)")?
+    } else {
+        // For time ranges, use inclusive inequalities
+        sqlx::query(
+            "DELETE from lakehouse_partitions
+             WHERE view_set_name = $1
+             AND view_instance_id = $2
+             AND begin_insert_time >= $3
+             AND end_insert_time <= $4
+             ;",
+        )
+        .bind(view_set_name)
+        .bind(view_instance_id)
+        .bind(begin_insert_time)
+        .bind(end_insert_time)
+        .execute(&mut **transaction)
+        .await
+        .with_context(|| "deleting out of date partitions (range)")?
+    };
     Ok(())
 }
 
-async fn write_partition_metadata(
+/// Generate a deterministic advisory lock key for a partition
+fn generate_partition_lock_key(
+    view_set_name: &str,
+    view_instance_id: &str,
+    begin_insert_time: DateTime<Utc>,
+    end_insert_time: DateTime<Utc>,
+) -> i64 {
+    let mut hasher = DefaultHasher::new();
+    view_set_name.hash(&mut hasher);
+    view_instance_id.hash(&mut hasher);
+    begin_insert_time.hash(&mut hasher);
+    end_insert_time.hash(&mut hasher);
+    hasher.finish() as i64
+}
+
+async fn write_partition_metadata_attempt(
     lake: &DataLakeConnection,
     partition: &Partition,
     logger: Arc<dyn Logger>,
@@ -161,22 +229,76 @@ async fn write_partition_metadata(
         .with_context(|| "serialize_parquet_metadata")?
         .into();
 
-    let mut tr = lake.db_pool.begin().await?;
-
-    // for jit partitions, we assume that the blocks were registered in order
-    // since they are built based on begin_ticks, not insert_time
-    retire_partitions(
-        &mut tr,
+    // Generate deterministic lock key for this partition
+    let lock_key = generate_partition_lock_key(
         &partition.view_metadata.view_set_name,
         &partition.view_metadata.view_instance_id,
         partition.begin_insert_time,
         partition.end_insert_time,
-        logger,
+    );
+
+    let mut transaction = lake.db_pool.begin().await?;
+
+    // LOG: Acquiring advisory lock
+    logger
+        .write_log_entry(format!(
+            "[PARTITION_LOCK] view={}/{} time_range=[{}, {}] lock_key={} - acquiring advisory lock",
+            &partition.view_metadata.view_set_name,
+            &partition.view_metadata.view_instance_id,
+            partition.begin_insert_time,
+            partition.end_insert_time,
+            lock_key
+        ))
+        .await?;
+
+    // Acquire advisory lock - this will block until we can proceed
+    // pg_advisory_xact_lock automatically releases when transaction ends
+    sqlx::query("SELECT pg_advisory_xact_lock($1);")
+        .bind(lock_key)
+        .execute(&mut *transaction)
+        .await
+        .with_context(|| "acquiring advisory lock")?;
+
+    // LOG: Lock acquired, starting partition write
+    logger
+        .write_log_entry(format!(
+            "[PARTITION_WRITE_START] view={}/{} time_range=[{}, {}] source_hash={:?} - lock acquired",
+            &partition.view_metadata.view_set_name,
+            &partition.view_metadata.view_instance_id,
+            partition.begin_insert_time,
+            partition.end_insert_time,
+            partition.source_data_hash
+        ))
+        .await?;
+
+    // for jit partitions, we assume that the blocks were registered in order
+    // since they are built based on begin_ticks, not insert_time
+    retire_partitions(
+        &mut transaction,
+        &partition.view_metadata.view_set_name,
+        &partition.view_metadata.view_instance_id,
+        partition.begin_insert_time,
+        partition.end_insert_time,
+        logger.clone(),
     )
     .await
     .with_context(|| "retire_partitions")?;
 
-    sqlx::query(
+    // LOG: About to insert partition
+    logger
+        .write_log_entry(format!(
+            "[PARTITION_INSERT_ATTEMPT] view={}/{} time_range=[{}, {}] source_hash={:?} file_path={}",
+            &partition.view_metadata.view_set_name,
+            &partition.view_metadata.view_instance_id,
+            partition.begin_insert_time,
+            partition.end_insert_time,
+            partition.source_data_hash,
+            partition.file_path
+        ))
+        .await?;
+
+    // Insert the new partition
+    let insert_result = sqlx::query(
         "INSERT INTO lakehouse_partitions VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12);",
     )
     .bind(&*partition.view_metadata.view_set_name)
@@ -191,12 +313,63 @@ async fn write_partition_metadata(
     .bind(&partition.view_metadata.file_schema_hash)
 	.bind(&partition.source_data_hash)
 	.bind(file_metadata_buffer)
-    .execute(&mut *tr)
-    .await
-    .with_context(|| "inserting into lakehouse_partitions")?;
+    .execute(&mut *transaction)
+    .await;
 
-    tr.commit().await.with_context(|| "commit")?;
+    match insert_result {
+        Ok(_) => {
+            logger
+                .write_log_entry(format!(
+                    "[PARTITION_INSERT_SUCCESS] view={}/{} time_range=[{}, {}] source_hash={:?}",
+                    &partition.view_metadata.view_set_name,
+                    &partition.view_metadata.view_instance_id,
+                    partition.begin_insert_time,
+                    partition.end_insert_time,
+                    partition.source_data_hash
+                ))
+                .await?;
+        }
+        Err(ref e) => {
+            logger
+                .write_log_entry(format!(
+                    "[PARTITION_INSERT_ERROR] view={}/{} time_range=[{}, {}] source_hash={:?} error={}",
+                    &partition.view_metadata.view_set_name,
+                    &partition.view_metadata.view_instance_id,
+                    partition.begin_insert_time,
+                    partition.end_insert_time,
+                    partition.source_data_hash,
+                    e
+                ))
+                .await?;
+            return Err(insert_result.unwrap_err().into());
+        }
+    };
+
+    // Commit the transaction (this also releases the advisory lock)
+    transaction.commit().await.with_context(|| "commit")?;
+
+    // LOG: Transaction committed
+    logger
+        .write_log_entry(format!(
+            "[PARTITION_WRITE_COMMIT] view={}/{} time_range=[{}, {}] file_path={} - lock released",
+            &partition.view_metadata.view_set_name,
+            &partition.view_metadata.view_instance_id,
+            partition.begin_insert_time,
+            partition.end_insert_time,
+            partition.file_path
+        ))
+        .await?;
+
     Ok(())
+}
+
+// Keep old function name for compatibility
+async fn write_partition_metadata(
+    lake: &DataLakeConnection,
+    partition: &Partition,
+    logger: Arc<dyn Logger>,
+) -> Result<()> {
+    write_partition_metadata_attempt(lake, partition, logger).await
 }
 
 /// Writes a partition to a Parquet file from a stream of `PartitionRowSet`s.

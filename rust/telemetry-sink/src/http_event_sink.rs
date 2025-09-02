@@ -31,6 +31,7 @@ enum SinkEvent {
     ProcessLogBlock(Arc<LogBlock>),
     ProcessMetricsBlock(Arc<MetricsBlock>),
     ProcessThreadBlock(Arc<ThreadBlock>),
+    Shutdown,
 }
 
 pub struct HttpEventSink {
@@ -38,14 +39,25 @@ pub struct HttpEventSink {
     // TODO: simplify this?
     sender: Mutex<Option<std::sync::mpsc::Sender<SinkEvent>>>,
     queue_size: Arc<AtomicIsize>,
+    shutdown_complete: Arc<(Mutex<bool>, std::sync::Condvar)>,
 }
 
 impl Drop for HttpEventSink {
     fn drop(&mut self) {
-        let mut sender_guard = self.sender.lock().unwrap();
-        *sender_guard = None;
-        if let Some(handle) = self.thread.take() {
-            handle.join().expect("Error joining telemetry thread");
+        // Send shutdown signal to thread
+        {
+            let sender_guard = self.sender.lock().unwrap();
+            if let Some(sender) = sender_guard.as_ref() {
+                let _ = sender.send(SinkEvent::Shutdown);
+            }
+        }
+
+        // Now wait for the thread to finish
+        if let Some(handle) = self.thread.take()
+            && let Err(e) = handle.join()
+        {
+            // Don't panic on join failure, just log it
+            eprintln!("Warning: telemetry thread join failed: {:?}", e);
         }
     }
 }
@@ -74,6 +86,8 @@ impl HttpEventSink {
         let (sender, receiver) = std::sync::mpsc::channel::<SinkEvent>();
         let queue_size = Arc::new(AtomicIsize::new(0));
         let thread_queue_size = queue_size.clone();
+        let shutdown_complete = Arc::new((Mutex::new(false), std::sync::Condvar::new()));
+        let thread_shutdown_complete = shutdown_complete.clone();
         Self {
             thread: Some(std::thread::spawn(move || {
                 Self::thread_proc(
@@ -84,10 +98,12 @@ impl HttpEventSink {
                     metadata_retry,
                     blocks_retry,
                     make_decorator,
+                    thread_shutdown_complete,
                 );
             })),
             sender: Mutex::new(Some(sender)),
             queue_size,
+            shutdown_complete,
         }
     }
 
@@ -231,6 +247,103 @@ impl HttpEventSink {
         Ok(())
     }
 
+    #[expect(clippy::too_many_arguments)]
+    async fn handle_sink_event(
+        message: SinkEvent,
+        client: &mut reqwest::Client,
+        addr: &str,
+        opt_process_info: &mut Option<Arc<ProcessInfo>>,
+        queue_size: &Arc<AtomicIsize>,
+        max_queue_size: isize,
+        metadata_retry: core::iter::Take<tokio_retry2::strategy::ExponentialBackoff>,
+        blocks_retry: core::iter::Take<tokio_retry2::strategy::ExponentialBackoff>,
+        decorator: &dyn RequestDecorator,
+    ) -> Result<()> {
+        match message {
+            SinkEvent::Shutdown => {
+                // This should not happen in this function, but handle it gracefully
+                return Ok(());
+            }
+            SinkEvent::Startup(process_info) => {
+                *opt_process_info = Some(process_info.clone());
+                if let Err(e) =
+                    Self::push_process(client, addr, process_info, metadata_retry, decorator).await
+                {
+                    error!("error sending process: {e:?}");
+                }
+            }
+            SinkEvent::InitStream(stream_info) => {
+                if let Err(e) =
+                    Self::push_stream(client, addr, stream_info, metadata_retry, decorator).await
+                {
+                    error!("error sending stream: {e:?}");
+                }
+            }
+            SinkEvent::ProcessLogBlock(buffer) => {
+                if let Some(process_info) = opt_process_info {
+                    if let Err(e) = Self::push_block(
+                        client,
+                        addr,
+                        &*buffer,
+                        queue_size,
+                        max_queue_size,
+                        blocks_retry,
+                        decorator,
+                        process_info,
+                    )
+                    .await
+                    {
+                        error!("error sending log block: {e:?}");
+                    }
+                } else {
+                    error!("trying to send blocks before Startup message");
+                }
+            }
+            SinkEvent::ProcessMetricsBlock(buffer) => {
+                if let Some(process_info) = opt_process_info {
+                    if let Err(e) = Self::push_block(
+                        client,
+                        addr,
+                        &*buffer,
+                        queue_size,
+                        max_queue_size,
+                        blocks_retry,
+                        decorator,
+                        process_info,
+                    )
+                    .await
+                    {
+                        error!("error sending metrics block: {e:?}");
+                    }
+                } else {
+                    error!("trying to send blocks before Startup message");
+                }
+            }
+            SinkEvent::ProcessThreadBlock(buffer) => {
+                if let Some(process_info) = opt_process_info {
+                    if let Err(e) = Self::push_block(
+                        client,
+                        addr,
+                        &*buffer,
+                        queue_size,
+                        max_queue_size,
+                        blocks_retry,
+                        decorator,
+                        process_info,
+                    )
+                    .await
+                    {
+                        error!("error sending thread block: {e:?}");
+                    }
+                } else {
+                    error!("trying to send blocks before Startup message");
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[expect(clippy::too_many_arguments)]
     async fn thread_proc_impl(
         addr: String,
         receiver: std::sync::mpsc::Receiver<SinkEvent>,
@@ -239,6 +352,7 @@ impl HttpEventSink {
         metadata_retry: core::iter::Take<tokio_retry2::strategy::ExponentialBackoff>,
         blocks_retry: core::iter::Take<tokio_retry2::strategy::ExponentialBackoff>,
         decorator: &dyn RequestDecorator,
+        shutdown_complete: Arc<(Mutex<bool>, std::sync::Condvar)>,
     ) {
         let mut opt_process_info = None;
         let client_res = reqwest::Client::builder()
@@ -260,91 +374,62 @@ impl HttpEventSink {
             let timeout = max(0, flusher.time_to_flush_seconds());
             match receiver.recv_timeout(Duration::from_secs(timeout as u64)) {
                 Ok(message) => match message {
-                    SinkEvent::Startup(process_info) => {
-                        opt_process_info = Some(process_info.clone());
-                        if let Err(e) = Self::push_process(
+                    SinkEvent::Shutdown => {
+                        debug!("received shutdown signal, flushing remaining data");
+                        // Process any remaining messages in the queue before shutting down
+                        let mut count = 0;
+                        while let Ok(remaining_message) = receiver.try_recv() {
+                            count += 1;
+                            match remaining_message {
+                                SinkEvent::Shutdown => break, // Don't process multiple shutdowns
+                                remaining_msg => {
+                                    // Process the remaining message using the same logic as the main loop
+                                    if let Err(e) = Self::handle_sink_event(
+                                        remaining_msg,
+                                        &mut client,
+                                        &addr,
+                                        &mut opt_process_info,
+                                        &queue_size,
+                                        max_queue_size,
+                                        metadata_retry.clone(),
+                                        blocks_retry.clone(),
+                                        decorator,
+                                    )
+                                    .await
+                                    {
+                                        error!(
+                                            "error processing remaining message during shutdown: {e:?}"
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                        debug!(
+                            "telemetry thread shutdown complete, processed {} remaining messages",
+                            count
+                        );
+                        // Signal that shutdown is complete
+                        let (lock, cvar) = &*shutdown_complete;
+                        let mut completed = lock.lock().unwrap();
+                        *completed = true;
+                        cvar.notify_all();
+                        return;
+                    }
+                    other_message => {
+                        if let Err(e) = Self::handle_sink_event(
+                            other_message,
                             &mut client,
                             &addr,
-                            process_info,
+                            &mut opt_process_info,
+                            &queue_size,
+                            max_queue_size,
                             metadata_retry.clone(),
+                            blocks_retry.clone(),
                             decorator,
                         )
                         .await
                         {
-                            error!("error sending process: {e:?}");
-                        }
-                    }
-                    SinkEvent::InitStream(stream_info) => {
-                        if let Err(e) = Self::push_stream(
-                            &mut client,
-                            &addr,
-                            stream_info,
-                            metadata_retry.clone(),
-                            decorator,
-                        )
-                        .await
-                        {
-                            error!("error sending stream: {e:?}");
-                        }
-                    }
-                    SinkEvent::ProcessLogBlock(buffer) => {
-                        if let Some(process_info) = &opt_process_info {
-                            if let Err(e) = Self::push_block(
-                                &mut client,
-                                &addr,
-                                &*buffer,
-                                &queue_size,
-                                max_queue_size,
-                                blocks_retry.clone(),
-                                decorator,
-                                process_info,
-                            )
-                            .await
-                            {
-                                error!("error sending log block: {e:?}");
-                            }
-                        } else {
-                            error!("trying to send blocks before Startup message");
-                        }
-                    }
-                    SinkEvent::ProcessMetricsBlock(buffer) => {
-                        if let Some(process_info) = &opt_process_info {
-                            if let Err(e) = Self::push_block(
-                                &mut client,
-                                &addr,
-                                &*buffer,
-                                &queue_size,
-                                max_queue_size,
-                                blocks_retry.clone(),
-                                decorator,
-                                process_info,
-                            )
-                            .await
-                            {
-                                error!("error sending metrics block: {e:?}");
-                            }
-                        } else {
-                            error!("trying to send blocks before Startup message");
-                        }
-                    }
-                    SinkEvent::ProcessThreadBlock(buffer) => {
-                        if let Some(process_info) = &opt_process_info {
-                            if let Err(e) = Self::push_block(
-                                &mut client,
-                                &addr,
-                                &*buffer,
-                                &queue_size,
-                                max_queue_size,
-                                blocks_retry.clone(),
-                                decorator,
-                                process_info,
-                            )
-                            .await
-                            {
-                                error!("error sending thread block: {e:?}");
-                            }
-                        } else {
-                            error!("trying to send blocks before Startup message");
+                            error!("error handling sink event: {e:?}");
                         }
                     }
                 },
@@ -361,7 +446,9 @@ impl HttpEventSink {
         }
     }
 
-    #[allow(clippy::needless_pass_by_value)] // we don't want to leave the receiver in the calling thread
+    #[allow(clippy::needless_pass_by_value,// we don't want to leave the receiver in the calling thread
+	    clippy::too_many_arguments
+    )]
     fn thread_proc(
         addr: String,
         receiver: std::sync::mpsc::Receiver<SinkEvent>,
@@ -370,6 +457,7 @@ impl HttpEventSink {
         metadata_retry: core::iter::Take<tokio_retry2::strategy::ExponentialBackoff>,
         blocks_retry: core::iter::Take<tokio_retry2::strategy::ExponentialBackoff>,
         make_decorator: Box<dyn FnOnce() -> Arc<dyn RequestDecorator> + Send>,
+        shutdown_complete: Arc<(Mutex<bool>, std::sync::Condvar)>,
     ) {
         // TODO: add runtime as configuration option (or create one only if global don't exist)
         let tokio_runtime = tokio::runtime::Runtime::new().unwrap();
@@ -382,6 +470,7 @@ impl HttpEventSink {
             metadata_retry,
             blocks_retry,
             decorator.as_ref(),
+            shutdown_complete,
         ));
     }
 }
@@ -392,7 +481,14 @@ impl EventSink for HttpEventSink {
     }
 
     fn on_shutdown(&self) {
-        // nothing to do
+        // Send shutdown event to trigger flushing of remaining data
+        self.send(SinkEvent::Shutdown);
+
+        // Wait for the background thread to signal that shutdown is complete
+        let (lock, cvar) = &*self.shutdown_complete;
+        let completed = lock.lock().unwrap();
+        let timeout = std::time::Duration::from_secs(5);
+        let _result = cvar.wait_timeout_while(completed, timeout, |&mut c| !c);
     }
 
     fn on_log_enabled(&self, _metadata: &LogMetadata) -> bool {

@@ -34,15 +34,15 @@ impl TableScanRewrite {
                         "error casting table source as DefaultTableSource",
                     ))
                 })?;
-            let mat_view = table_source
+            // Only rewrite MaterializedView tables, skip others (like table functions)
+            let Some(mat_view) = table_source
                 .table_provider
                 .as_any()
                 .downcast_ref::<MaterializedView>()
-                .ok_or_else(|| {
-                    DataFusionError::Execution(String::from(
-                        "error casting table provider as MaterializedView",
-                    ))
-                })?;
+            else {
+                // This is not a MaterializedView (e.g., a table function), skip rewriting
+                return Ok(Transformed::no(plan));
+            };
             let view = mat_view.get_view();
             let filters = view
                 .make_time_filter(self.query_range.begin, self.query_range.end)

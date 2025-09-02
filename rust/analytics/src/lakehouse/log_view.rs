@@ -11,7 +11,7 @@ use super::{
     view_factory::ViewMaker,
 };
 use crate::{
-    lakehouse::jit_partitions::{generate_jit_partitions, is_jit_partition_up_to_date},
+    lakehouse::jit_partitions::{generate_stream_jit_partitions, is_jit_partition_up_to_date},
     log_entries_table::log_table_schema,
     metadata::{find_process, list_process_streams_tagged},
     time::{TimeRange, datetime_to_scalar},
@@ -142,7 +142,7 @@ impl View for LogView {
         let mut all_partitions = vec![];
         let blocks_view = BlocksView::new()?;
         for stream in streams {
-            let mut partitions = generate_jit_partitions(
+            let mut partitions = generate_stream_jit_partitions(
                 &JitPartitionConfig::default(),
                 runtime.clone(),
                 lake.clone(),
@@ -152,7 +152,7 @@ impl View for LogView {
                 process.clone(),
             )
             .await
-            .with_context(|| "generate_jit_partitions")?;
+            .with_context(|| "generate_stream_jit_partitions")?;
             all_partitions.append(&mut partitions);
         }
         let view_meta = ViewMetadata {

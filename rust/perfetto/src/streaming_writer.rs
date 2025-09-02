@@ -1,13 +1,14 @@
 use std::collections::HashMap;
-use std::io::Write;
 
+use crate::async_writer::AsyncWriter;
 use crate::protos::{
     EventCategory, EventName, ProcessDescriptor, SourceLocation, ThreadDescriptor, TracePacket,
     TrackEvent,
     trace_packet::Data,
     track_event::{self, NameField, SourceLocationField},
 };
-use crate::writer::{new_interned_data, new_trace_packet, new_track_descriptor, new_track_event};
+
+use crate::utils::{new_interned_data, new_trace_packet, new_track_descriptor, new_track_event};
 use prost::{
     Message,
     encoding::{WireType, encode_key, encode_varint},
@@ -22,9 +23,10 @@ use xxhash_rust::xxh64::xxh64;
 // This is unlikely to change as it would break protobuf compatibility.
 const TRACE_PACKET_FIELD_NUMBER: u32 = 1;
 
-/// A streaming writer for Perfetto traces that writes packets directly to an output stream.
-pub struct StreamingPerfettoWriter<W: Write> {
-    writer: W,
+/// A writer for Perfetto traces that writes packets through an AsyncWriter.
+/// Uses the AsyncWriter trait to abstract the underlying data sink.
+pub struct PerfettoWriter {
+    writer: Box<dyn AsyncWriter + Send>,
     pid: i32,          // derived from micromegas's process_id using a hash function
     process_uuid: u64, // derived from micromegas's process_id using a hash function
     current_thread_uuid: Option<u64>,
@@ -34,9 +36,9 @@ pub struct StreamingPerfettoWriter<W: Write> {
     source_locations: HashMap<(String, u32), u64>,
 }
 
-impl<W: Write> StreamingPerfettoWriter<W> {
-    /// Creates a new `StreamingPerfettoWriter` instance.
-    pub fn new(writer: W, micromegas_process_id: &str) -> Self {
+impl PerfettoWriter {
+    /// Creates a new `PerfettoWriter` instance.
+    pub fn new(writer: Box<dyn AsyncWriter + Send>, micromegas_process_id: &str) -> Self {
         let process_uuid = xxh64(micromegas_process_id.as_bytes(), 0);
         let pid = process_uuid as i32;
         Self {
@@ -51,8 +53,8 @@ impl<W: Write> StreamingPerfettoWriter<W> {
         }
     }
 
-    /// Writes a single TracePacket to the output stream with proper protobuf framing.
-    pub fn write_packet(&mut self, packet: TracePacket) -> anyhow::Result<()> {
+    /// Writes a single TracePacket to the chunk sender with proper protobuf framing.
+    pub async fn write_packet(&mut self, packet: TracePacket) -> anyhow::Result<()> {
         let mut packet_buf = Vec::new();
         // Encode the packet to get its bytes
         packet.encode(&mut packet_buf)?;
@@ -66,80 +68,11 @@ impl<W: Write> StreamingPerfettoWriter<W> {
         );
         encode_varint(packet_buf.len() as u64, &mut framing_buf);
 
-        // Write the framing and packet data to the output stream
-        self.writer.write_all(&framing_buf)?;
-        self.writer.write_all(&packet_buf)?;
+        // Write the framing and packet data to the writer
+        self.writer.write(&framing_buf).await?;
+        self.writer.write(&packet_buf).await?;
 
         Ok(())
-    }
-
-    /// Emits a process descriptor packet to the stream.
-    pub fn emit_process_descriptor(&mut self, exe: &str) -> anyhow::Result<()> {
-        let mut process_track = new_track_descriptor(self.process_uuid);
-        process_track.process = Some(ProcessDescriptor {
-            pid: Some(self.pid),
-            cmdline: vec![],
-            process_name: Some(exe.into()),
-            process_priority: None,
-            start_timestamp_ns: None,
-            chrome_process_type: None,
-            legacy_sort_index: None,
-            process_labels: vec![],
-        });
-        let mut packet = new_trace_packet();
-        packet.data = Some(Data::TrackDescriptor(process_track));
-        packet.first_packet_on_sequence = Some(true);
-        packet.sequence_flags = Some(3);
-        self.write_packet(packet)
-    }
-
-    /// Emits a thread descriptor packet to the stream.
-    pub fn emit_thread_descriptor(
-        &mut self,
-        stream_id: &str,
-        thread_id: i32,
-        thread_name: &str,
-    ) -> anyhow::Result<()> {
-        let thread_uuid = xxh64(stream_id.as_bytes(), 0);
-        self.current_thread_uuid = Some(thread_uuid);
-        let mut thread_track = new_track_descriptor(thread_uuid);
-        thread_track.parent_uuid = Some(self.process_uuid);
-        thread_track.thread = Some(ThreadDescriptor {
-            pid: Some(self.pid),
-            tid: Some(thread_id),
-            thread_name: Some(thread_name.into()),
-            chrome_thread_type: None,
-            reference_timestamp_us: None,
-            reference_thread_time_us: None,
-            reference_thread_instruction_count: None,
-            legacy_sort_index: None,
-        });
-        let mut packet = new_trace_packet();
-        packet.data = Some(Data::TrackDescriptor(thread_track));
-        self.write_packet(packet)
-    }
-
-    /// Emits an async track descriptor packet to the stream.
-    /// Creates a single async track for all async spans in this process.
-    /// This should be called once per process before emitting async span events.
-    pub fn emit_async_track_descriptor(&mut self) -> anyhow::Result<()> {
-        if self.async_track_uuid.is_some() {
-            return Ok(()); // Already created
-        }
-
-        let async_track_uuid = xxh64("async_track".as_bytes(), self.process_uuid);
-        self.async_track_uuid = Some(async_track_uuid);
-
-        let mut async_track = new_track_descriptor(async_track_uuid);
-        async_track.parent_uuid = Some(self.process_uuid);
-        async_track.static_or_dynamic_name =
-            Some(crate::protos::track_descriptor::StaticOrDynamicName::Name(
-                "Async Operations".to_owned(),
-            ));
-
-        let mut packet = new_trace_packet();
-        packet.data = Some(Data::TrackDescriptor(async_track));
-        self.write_packet(packet)
     }
 
     fn set_name(&mut self, name: &str, packet: &mut TracePacket, event: &mut TrackEvent) {
@@ -188,17 +121,17 @@ impl<W: Write> StreamingPerfettoWriter<W> {
 
     fn set_source_location(
         &mut self,
-        filename: &str,
+        file: &str,
         line: u32,
         packet: &mut TracePacket,
         event: &mut TrackEvent,
     ) {
-        if let Some(id) = self.source_locations.get(&(filename.to_owned(), line)) {
+        let key = (file.to_string(), line);
+        if let Some(id) = self.source_locations.get(&key) {
             event.source_location_field = Some(SourceLocationField::SourceLocationIid(*id));
         } else {
             let id = self.source_locations.len() as u64 + 1;
-            self.source_locations
-                .insert((filename.to_owned(), line), id);
+            self.source_locations.insert(key, id);
             event.source_location_field = Some(SourceLocationField::SourceLocationIid(id));
             if packet.interned_data.is_none() {
                 packet.interned_data = Some(new_interned_data());
@@ -210,13 +143,81 @@ impl<W: Write> StreamingPerfettoWriter<W> {
                 .source_locations
                 .push(SourceLocation {
                     iid: Some(id),
-                    file_name: Some(filename.to_owned()),
-                    function_name: None,
+                    file_name: Some(file.to_owned()),
                     line_number: Some(line),
+                    function_name: None,
                 });
         }
     }
 
+    /// Emits a process descriptor packet to the stream.
+    pub async fn emit_process_descriptor(&mut self, exe: &str) -> anyhow::Result<()> {
+        let mut process_track = new_track_descriptor(self.process_uuid);
+        process_track.process = Some(ProcessDescriptor {
+            pid: Some(self.pid),
+            cmdline: vec![],
+            process_name: Some(exe.into()),
+            process_priority: None,
+            start_timestamp_ns: None,
+            chrome_process_type: None,
+            legacy_sort_index: None,
+            process_labels: vec![],
+        });
+        let mut packet = new_trace_packet();
+        packet.data = Some(Data::TrackDescriptor(process_track));
+        packet.first_packet_on_sequence = Some(true);
+        packet.sequence_flags = Some(3);
+        self.write_packet(packet).await
+    }
+
+    /// Emits a thread descriptor packet to the stream.
+    pub async fn emit_thread_descriptor(
+        &mut self,
+        stream_id: &str,
+        thread_id: i32,
+        thread_name: &str,
+    ) -> anyhow::Result<()> {
+        let thread_uuid = xxh64(stream_id.as_bytes(), 0);
+        self.current_thread_uuid = Some(thread_uuid);
+        let mut thread_track = new_track_descriptor(thread_uuid);
+        thread_track.parent_uuid = Some(self.process_uuid);
+        thread_track.thread = Some(ThreadDescriptor {
+            pid: Some(self.pid),
+            tid: Some(thread_id),
+            thread_name: Some(thread_name.into()),
+            chrome_thread_type: None,
+            reference_timestamp_us: None,
+            reference_thread_time_us: None,
+            reference_thread_instruction_count: None,
+            legacy_sort_index: None,
+        });
+        let mut packet = new_trace_packet();
+        packet.data = Some(Data::TrackDescriptor(thread_track));
+        self.write_packet(packet).await
+    }
+
+    /// Emits an async track descriptor packet to the stream (single track for all async spans).
+    pub async fn emit_async_track_descriptor(&mut self) -> anyhow::Result<()> {
+        if self.async_track_uuid.is_some() {
+            return Ok(()); // Already created
+        }
+
+        let async_track_uuid = xxh64("async_track".as_bytes(), self.process_uuid);
+        self.async_track_uuid = Some(async_track_uuid);
+
+        let mut async_track = new_track_descriptor(async_track_uuid);
+        async_track.parent_uuid = Some(self.process_uuid);
+        async_track.static_or_dynamic_name =
+            Some(crate::protos::track_descriptor::StaticOrDynamicName::Name(
+                "Async Operations".to_owned(),
+            ));
+
+        let mut packet = new_trace_packet();
+        packet.data = Some(Data::TrackDescriptor(async_track));
+        self.write_packet(packet).await
+    }
+
+    /// Initialize span event fields for thread spans
     fn init_span_event(
         &mut self,
         name: &str,
@@ -226,7 +227,6 @@ impl<W: Write> StreamingPerfettoWriter<W> {
         packet: &mut TracePacket,
         mut track_event: TrackEvent,
     ) {
-        assert!(self.current_thread_uuid.is_some());
         track_event.track_uuid = self.current_thread_uuid;
         self.set_name(name, packet, &mut track_event);
         self.set_category(target, packet, &mut track_event);
@@ -234,6 +234,7 @@ impl<W: Write> StreamingPerfettoWriter<W> {
         packet.data = Some(Data::TrackEvent(track_event));
     }
 
+    /// Initialize async span event fields
     fn init_async_span_event(
         &mut self,
         name: &str,
@@ -256,7 +257,7 @@ impl<W: Write> StreamingPerfettoWriter<W> {
     }
 
     /// Emits a span event to the stream.
-    pub fn emit_span(
+    pub async fn emit_span(
         &mut self,
         begin_ns: u64,
         end_ns: u64,
@@ -271,7 +272,7 @@ impl<W: Write> StreamingPerfettoWriter<W> {
         let mut track_event = new_track_event();
         track_event.r#type = Some(track_event::Type::SliceBegin.into());
         self.init_span_event(name, target, filename, line, &mut packet, track_event);
-        self.write_packet(packet)?;
+        self.write_packet(packet).await?;
 
         // Emit end event
         let mut packet = new_trace_packet();
@@ -279,13 +280,13 @@ impl<W: Write> StreamingPerfettoWriter<W> {
         let mut track_event = new_track_event();
         track_event.r#type = Some(track_event::Type::SliceEnd.into());
         self.init_span_event(name, target, filename, line, &mut packet, track_event);
-        self.write_packet(packet)?;
+        self.write_packet(packet).await?;
 
         Ok(())
     }
 
     /// Emits an async span begin event to the stream.
-    pub fn emit_async_span_begin(
+    pub async fn emit_async_span_begin(
         &mut self,
         timestamp_ns: u64,
         name: &str,
@@ -298,11 +299,11 @@ impl<W: Write> StreamingPerfettoWriter<W> {
         let mut track_event = new_track_event();
         track_event.r#type = Some(track_event::Type::SliceBegin.into());
         self.init_async_span_event(name, target, filename, line, &mut packet, track_event);
-        self.write_packet(packet)
+        self.write_packet(packet).await
     }
 
     /// Emits an async span end event to the stream.
-    pub fn emit_async_span_end(
+    pub async fn emit_async_span_end(
         &mut self,
         timestamp_ns: u64,
         name: &str,
@@ -315,17 +316,17 @@ impl<W: Write> StreamingPerfettoWriter<W> {
         let mut track_event = new_track_event();
         track_event.r#type = Some(track_event::Type::SliceEnd.into());
         self.init_async_span_event(name, target, filename, line, &mut packet, track_event);
-        self.write_packet(packet)
+        self.write_packet(packet).await
     }
 
-    /// Flushes any buffered data to the output stream.
-    pub fn flush(&mut self) -> anyhow::Result<()> {
-        self.writer.flush()?;
-        Ok(())
+    /// Flushes any buffered data in the writer.
+    pub async fn flush(&mut self) -> anyhow::Result<()> {
+        self.writer.flush().await
     }
 
-    /// Consumes the writer and returns the underlying output stream.
-    pub fn into_inner(self) -> W {
+    /// Consumes the writer and returns the underlying AsyncWriter.
+    /// This is useful for testing to extract the written data.
+    pub fn into_inner(self) -> Box<dyn AsyncWriter + Send> {
         self.writer
     }
 }

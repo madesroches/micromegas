@@ -77,8 +77,13 @@ pub async fn fetch_trace(
         .make_client()
         .await
         .with_context(|| "make_client")?;
-    let buffer = format_perfetto_trace(&mut client, &process_id, TimeRange::new(begin, end))
-        .await
-        .with_context(|| "format_perfetto_trace")?;
+    let buffer = format_perfetto_trace(
+        &mut client,
+        &process_id,
+        TimeRange::new(begin, end),
+        crate::client::SpanTypes::Both,
+    )
+    .await
+    .with_context(|| "format_perfetto_trace")?;
     Ok(buffer.into())
 }

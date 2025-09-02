@@ -2830,6 +2830,7 @@ dependencies = [
  "jsonb",
  "lazy_static",
  "micromegas-ingestion",
+ "micromegas-perfetto",
  "micromegas-telemetry",
  "micromegas-telemetry-sink",
  "micromegas-tracing",
@@ -2869,8 +2870,11 @@ name = "micromegas-perfetto"
 version = "0.12.0"
 dependencies = [
  "anyhow",
+ "async-trait",
+ "datafusion",
  "prost",
  "prost-build",
+ "tokio",
  "xxhash-rust",
 ]
 
@@ -4574,6 +4578,7 @@ dependencies = [
  "axum 0.8.4",
  "clap",
  "micromegas",
+ "rand 0.8.5",
  "tokio",
  "tower-http 0.5.2",
 ]
@@ -4892,22 +4897,6 @@ name = "tower-service"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8df9b6e13f2d32c91b9bd719c00d1958837bc7dec474d94952798cc8e69eeec3"
-
-[[package]]
-name = "trace-gen-util"
-version = "0.12.0"
-dependencies = [
- "anyhow",
- "chrono",
- "clap",
- "datafusion",
- "micromegas",
- "micromegas-analytics",
- "micromegas-perfetto",
- "prost",
- "tokio",
- "tonic",
-]
 
 [[package]]
 name = "tracing"
@@ -5721,6 +5710,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6f42320e61fe2cfd34354ecb597f86f413484a798ba44a8ca1165c58d42da6c1"
 dependencies = [
  "bitflags",
+]
+
+[[package]]
+name = "write-perfetto"
+version = "0.12.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "clap",
+ "datafusion",
+ "futures",
+ "micromegas",
+ "micromegas-analytics",
+ "micromegas-perfetto",
+ "prost",
+ "tokio",
+ "tonic",
 ]
 
 [[package]]

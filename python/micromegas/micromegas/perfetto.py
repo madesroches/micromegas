@@ -1,198 +1,105 @@
-import crc
-import pyarrow
-from tqdm import tqdm
-
-
-# hack to allow perfetto proto imports
-# you can then import the protos like this: from protos.perfetto.trace import trace_pb2
-def load_perfetto_protos():
-    import sys
-    import pathlib
-
-    perfetto_folder = pathlib.Path(__file__).parent.absolute() / "thirdparty/perfetto"
-    sys.path.append(str(perfetto_folder))
-
-
-def crc64_str(s):
-    calculator = crc.Calculator(crc.Crc64.CRC64)
-    return calculator.checksum(str.encode(s))
-
-
-class Writer:
+def write_process_trace_from_chunks(client, process_id, begin, end, span_types, trace_filepath):
     """
-    Fetches thread events from the analytics server and formats them in the perfetto format.
-    Traces can be viewed using https://ui.perfetto.dev/
+    Generate Perfetto trace using server-side perfetto_trace_chunks table function.
+    This replaces the old duplicate Python implementation with server-side generation.
+    
+    Args:
+        client: FlightSQL client
+        process_id: Process UUID
+        begin: Start time (datetime)
+        end: End time (datetime)  
+        span_types: 'thread', 'async', or 'both'
+        trace_filepath: Output file path
     """
-
-    def __init__(self, client, process_id, begin, end, exe):
-        load_perfetto_protos()
-        from protos.perfetto.trace import trace_pb2, trace_packet_pb2
-
-        self.names = {}
-        self.categories = {}
-        self.source_locations = {}
-        self.first = True
-        self.client = client
-        self.trace = trace_pb2.Trace()
-        self.packets = self.trace.packet
-        self.process_uuid = crc64_str(process_id)
-        self.begin = begin
-        self.end = end
-
-        packet = trace_packet_pb2.TracePacket()
-        packet.track_descriptor.uuid = self.process_uuid
-        packet.track_descriptor.process.pid = 1
-        packet.track_descriptor.process.process_name = exe
-        self.packets.append(packet)
-
-    def get_name_iid(self, name):
-        iid = self.names.get(name)
-        is_new = False
-        if iid is None:
-            is_new = True
-            iid = len(self.names) + 1
-            self.names[name] = iid
-        return iid, is_new
-
-    def get_category_iid(self, cat):
-        iid = self.categories.get(cat)
-        is_new = False
-        if iid is None:
-            is_new = True
-            iid = len(self.categories) + 1
-            self.categories[cat] = iid
-        return iid, is_new
-
-    def get_location_iid(self, loc):
-        iid = self.source_locations.get(loc)
-        is_new = False
-        if iid is None:
-            is_new = True
-            iid = len(self.source_locations) + 1
-            self.source_locations[loc] = iid
-        return iid, is_new
-
-    def append_thread(self, stream_id, thread_name, thread_id):
-        from protos.perfetto.trace import trace_pb2, trace_packet_pb2, track_event
-
-        packet = trace_packet_pb2.TracePacket()
-        thread_uuid = crc64_str(stream_id)
-        packet.track_descriptor.uuid = thread_uuid
-        packet.track_descriptor.parent_uuid = self.process_uuid
-        packet.track_descriptor.thread.pid = 1
-        packet.track_descriptor.thread.tid = thread_id
-        packet.track_descriptor.thread.thread_name = thread_name
-        self.packets.append(packet)
-        trusted_packet_sequence_id = 1
-
-        sql = """
-          SELECT *
-          FROM view_instance('thread_spans', '{stream_id}');
-        """.format(
-            stream_id=stream_id
-        )
-
-        for rb_spans in self.client.query_stream(sql, self.begin, self.end):
-            df_spans = pyarrow.Table.from_batches([rb_spans]).to_pandas()
-            begin_ns = df_spans["begin"].astype("int64")
-            end_ns = df_spans["end"].astype("int64")
-            for index, span in df_spans.iterrows():
-                packet = trace_packet_pb2.TracePacket()
-                packet.timestamp = begin_ns[index]
-                packet.track_event.type = (
-                    track_event.track_event_pb2.TrackEvent.Type.TYPE_SLICE_BEGIN
-                )
-                packet.track_event.track_uuid = thread_uuid
-                span_name = span["name"]
-                name_iid, new_name = self.get_name_iid(span_name)
-                packet.track_event.name_iid = name_iid
-                category_iid, new_category = self.get_category_iid(span["target"])
-                packet.track_event.category_iids.append(category_iid)
-
-                source_location = (span["filename"], span["line"])
-                source_location_iid, new_source_location = self.get_location_iid(
-                    source_location
-                )
-                packet.track_event.source_location_iid = source_location_iid
-                if self.first:
-                    # this is necessary for interning to work
-                    self.first = False
-                    packet.first_packet_on_sequence = True
-                    packet.sequence_flags = 3
-                else:
-                    packet.sequence_flags = 2
-
-                if new_name:
-                    event_name = packet.interned_data.event_names.add()
-                    event_name.iid = name_iid
-                    event_name.name = span_name
-                if new_category:
-                    cat_name = packet.interned_data.event_categories.add()
-                    cat_name.iid = category_iid
-                    cat_name.name = span["target"]
-                if new_source_location:
-                    loc = packet.interned_data.source_locations.add()
-                    loc.iid = source_location_iid
-                    loc.file_name = source_location[0]
-                    loc.line_number = source_location[1]
-
-                packet.trusted_packet_sequence_id = trusted_packet_sequence_id
-                self.packets.append(packet)
-
-                packet = trace_packet_pb2.TracePacket()
-                packet.timestamp = end_ns[index]
-                packet.track_event.type = (
-                    track_event.track_event_pb2.TrackEvent.Type.TYPE_SLICE_END
-                )
-                packet.track_event.track_uuid = thread_uuid
-                packet.track_event.name_iid = name_iid
-                packet.track_event.category_iids.append(category_iid)
-                packet.track_event.source_location_iid = source_location_iid
-                packet.sequence_flags = 2
-                packet.trusted_packet_sequence_id = trusted_packet_sequence_id
-
-                self.packets.append(packet)
-
-    def write_file(self, filename):
-        with open(filename, "wb") as f:
-            f.write(self.trace.SerializeToString())
-
-
-def get_process_cpu_streams(client, process_id, begin, end):
-    sql = """
-      SELECT stream_id,
-             property_get("streams.properties", 'thread-name') as thread_name,
-             property_get("streams.properties", 'thread-id') as thread_id
-      FROM blocks
-      WHERE process_id = '{process_id}'
-      AND array_has("streams.tags", 'cpu')
-      GROUP BY stream_id, thread_name, thread_id
-    """.format(
-        process_id=process_id
+    # Convert datetime objects to ISO format strings for SQL
+    begin_str = begin.isoformat()
+    end_str = end.isoformat()
+    
+    # Query chunks using the server-side table function
+    # Note: ORDER BY not needed since chunks are naturally produced in order (0, 1, 2, ...)
+    sql = f"""
+    SELECT chunk_id, chunk_data
+    FROM perfetto_trace_chunks(
+        '{process_id}',
+        '{span_types}',
+        TIMESTAMP '{begin_str}',
+        TIMESTAMP '{end_str}'
     )
-    df_streams = client.query(sql)
-    return df_streams
+    """
+    
+    print(f"Generating {span_types} spans for process {process_id}...")
+    
+    # Use streaming interface to process chunks as they arrive
+    from tqdm import tqdm
+    
+    trace_chunks = []
+    expected_chunk_id = 0
+    chunk_count = 0
+    
+    # We don't know the total number of chunks upfront, so use indeterminate progress
+    pbar = tqdm(desc="Processing chunks", unit=" chunks")
+    
+    try:
+        for record_batch in client.query_stream(sql, begin, end):
+            # Convert to pandas for easier access
+            df = record_batch.to_pandas()
+            
+            # Process each row in the batch
+            for _, row in df.iterrows():
+                chunk_id = row['chunk_id']
+                chunk_data = row['chunk_data']
+                
+                # Verify chunk ID is the expected sequential value
+                if chunk_id != expected_chunk_id:
+                    pbar.close()
+                    print(f"ERROR: Chunk {chunk_id} received, expected {expected_chunk_id}")
+                    print(f"Chunks may be out of order or missing!")
+                    return
+                
+                trace_chunks.append(chunk_data)
+                expected_chunk_id += 1
+                chunk_count += 1
+                pbar.update(1)
+        
+        pbar.close()
+        
+        if chunk_count == 0:
+            print(f"No trace data found for process {process_id}")
+            return
+    except KeyboardInterrupt:
+        pbar.close()
+        print(f"\nTrace generation interrupted by user after {chunk_count} chunks")
+        return
+    except Exception as e:
+        pbar.close()
+        raise
+    
+    # Reassemble binary chunks into complete trace
+    print(f"Assembling {chunk_count} chunks into trace...")
+    trace_bytes = b''.join(trace_chunks)
+    
+    print(f"Generated trace with {chunk_count} chunks ({len(trace_bytes)} bytes)")
+    
+    # Write to file
+    with open(trace_filepath, 'wb') as f:
+        f.write(trace_bytes)
+    
+    print(f"Trace written to {trace_filepath}")
 
 
-def get_exe(client, process_id, begin, end):
-    sql = """
-      SELECT "processes.exe" as exe
-      FROM blocks
-      WHERE process_id='{process_id}'
-      LIMIT 1;""".format(
-        process_id=process_id
-    )
-    return client.query(sql, begin, end).iloc[0]["exe"]
+# Main API function with span type selection
+def write_process_trace(client, process_id, begin, end, trace_filepath, span_types='both'):
+    """
+    Generate Perfetto trace with configurable span types.
+    
+    Args:
+        client: FlightSQL client
+        process_id: Process UUID
+        begin: Start time (datetime)
+        end: End time (datetime)
+        trace_filepath: Output file path
+        span_types: 'thread', 'async', or 'both' (default: 'both')
+    """
+    write_process_trace_from_chunks(client, process_id, begin, end, span_types, trace_filepath)
 
 
-def write_process_trace(client, process_id, begin, end, trace_filepath):
-    exe = get_exe(client, process_id, begin, end)
-    print(exe)
-    streams = get_process_cpu_streams(client, process_id, begin, end)
-    writer = Writer(client, process_id, begin, end, exe)
-    progress_bar = tqdm(list(streams.iterrows()), unit="threads")
-    for index, stream in progress_bar:
-        progress_bar.set_description(stream["thread_name"])
-        stream_id = int(stream["thread_id"])
-        writer.append_thread(stream["stream_id"], stream["thread_name"], stream_id)
-    writer.write_file(trace_filepath)
