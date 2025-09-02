@@ -1,4 +1,4 @@
-use micromegas_perfetto::{PerfettoWriter, AsyncWriter};
+use micromegas_perfetto::{AsyncWriter, PerfettoWriter};
 use prost::Message;
 use std::io::Cursor;
 use std::sync::{Arc, Mutex};
@@ -45,8 +45,7 @@ impl AsyncWriter for MockAsyncWriter {
 async fn test_async_streaming_writer_basic_usage() -> anyhow::Result<()> {
     let buffer = Arc::new(Mutex::new(Vec::new()));
     let shared_writer = SharedBufferAsyncWriter::new(buffer.clone());
-    let mut streaming_writer =
-        PerfettoWriter::new(Box::new(shared_writer), "test_process");
+    let mut streaming_writer = PerfettoWriter::new(Box::new(shared_writer), "test_process");
 
     // Emit process descriptor
     streaming_writer.emit_process_descriptor("test.exe").await?;
@@ -85,8 +84,7 @@ async fn test_async_streaming_writer_basic_usage() -> anyhow::Result<()> {
 async fn test_async_streaming_writer_packet_framing() -> anyhow::Result<()> {
     let buffer = Arc::new(Mutex::new(Vec::new()));
     let shared_writer = SharedBufferAsyncWriter::new(buffer.clone());
-    let mut streaming_writer =
-        PerfettoWriter::new(Box::new(shared_writer), "test_process");
+    let mut streaming_writer = PerfettoWriter::new(Box::new(shared_writer), "test_process");
 
     // Emit a simple process descriptor
     streaming_writer.emit_process_descriptor("test.exe").await?;
@@ -141,8 +139,7 @@ impl AsyncWriter for SharedBufferAsyncWriter {
 #[tokio::test]
 async fn test_async_streaming_writer_async_track_creation() -> anyhow::Result<()> {
     let mock_writer = MockAsyncWriter::new();
-    let mut streaming_writer =
-        PerfettoWriter::new(Box::new(mock_writer), "test_process");
+    let mut streaming_writer = PerfettoWriter::new(Box::new(mock_writer), "test_process");
 
     // Should be able to call emit_async_track_descriptor multiple times idempotently
     streaming_writer.emit_async_track_descriptor().await?;
@@ -156,8 +153,7 @@ async fn test_async_streaming_writer_async_track_creation() -> anyhow::Result<()
 async fn test_async_streaming_writer_async_span_events() -> anyhow::Result<()> {
     let buffer = Arc::new(Mutex::new(Vec::new()));
     let shared_writer = SharedBufferAsyncWriter::new(buffer.clone());
-    let mut streaming_writer =
-        PerfettoWriter::new(Box::new(shared_writer), "test_process");
+    let mut streaming_writer = PerfettoWriter::new(Box::new(shared_writer), "test_process");
 
     // Setup required descriptors
     streaming_writer.emit_process_descriptor("test.exe").await?;
@@ -220,8 +216,7 @@ async fn test_async_streaming_writer_async_span_events() -> anyhow::Result<()> {
 async fn test_async_streaming_writer_error_handling() -> anyhow::Result<()> {
     // Test with a writer that fails
     let failing_writer = FailingAsyncWriter::new();
-    let mut streaming_writer =
-        PerfettoWriter::new(Box::new(failing_writer), "test_process");
+    let mut streaming_writer = PerfettoWriter::new(Box::new(failing_writer), "test_process");
 
     // Should propagate the error
     let result = streaming_writer.emit_process_descriptor("test.exe").await;
@@ -254,8 +249,7 @@ impl AsyncWriter for FailingAsyncWriter {
 #[should_panic(expected = "Must call emit_async_track_descriptor")]
 async fn test_async_streaming_writer_async_span_without_track() {
     let mock_writer = MockAsyncWriter::new();
-    let mut streaming_writer =
-        PerfettoWriter::new(Box::new(mock_writer), "test_process");
+    let mut streaming_writer = PerfettoWriter::new(Box::new(mock_writer), "test_process");
 
     // Should panic when trying to emit async span without creating async track first
     streaming_writer
@@ -268,8 +262,7 @@ async fn test_async_streaming_writer_async_span_without_track() {
 async fn test_async_track_creation_idempotent() -> anyhow::Result<()> {
     let buffer = Arc::new(Mutex::new(Vec::new()));
     let shared_writer = SharedBufferAsyncWriter::new(buffer.clone());
-    let mut streaming_writer =
-        PerfettoWriter::new(Box::new(shared_writer), "test_process");
+    let mut streaming_writer = PerfettoWriter::new(Box::new(shared_writer), "test_process");
 
     // Multiple calls should not create multiple tracks
     streaming_writer.emit_async_track_descriptor().await?;
@@ -295,8 +288,7 @@ async fn test_async_track_creation_idempotent() -> anyhow::Result<()> {
 async fn test_async_streaming_writer_interning() -> anyhow::Result<()> {
     let buffer = Arc::new(Mutex::new(Vec::new()));
     let shared_writer = SharedBufferAsyncWriter::new(buffer.clone());
-    let mut streaming_writer =
-        PerfettoWriter::new(Box::new(shared_writer), "test_process");
+    let mut streaming_writer = PerfettoWriter::new(Box::new(shared_writer), "test_process");
 
     // Setup descriptors
     streaming_writer.emit_process_descriptor("test.exe").await?;
@@ -380,8 +372,7 @@ async fn test_async_streaming_writer_interning() -> anyhow::Result<()> {
 async fn test_async_streaming_writer_memory_usage() -> anyhow::Result<()> {
     let buffer = Arc::new(Mutex::new(Vec::new()));
     let shared_writer = SharedBufferAsyncWriter::new(buffer.clone());
-    let mut streaming_writer =
-        PerfettoWriter::new(Box::new(shared_writer), "test_process");
+    let mut streaming_writer = PerfettoWriter::new(Box::new(shared_writer), "test_process");
 
     // Setup descriptors
     streaming_writer.emit_process_descriptor("test.exe").await?;
@@ -428,8 +419,7 @@ async fn test_async_streaming_writer_memory_usage() -> anyhow::Result<()> {
 async fn test_async_streaming_writer_into_inner() -> anyhow::Result<()> {
     let buffer = Arc::new(Mutex::new(Vec::new()));
     let shared_writer = SharedBufferAsyncWriter::new(buffer.clone());
-    let mut streaming_writer =
-        PerfettoWriter::new(Box::new(shared_writer), "test_process");
+    let mut streaming_writer = PerfettoWriter::new(Box::new(shared_writer), "test_process");
 
     // Write some data
     streaming_writer.emit_process_descriptor("test.exe").await?;

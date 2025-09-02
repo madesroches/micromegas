@@ -7,7 +7,7 @@ use micromegas::micromegas_main;
 use micromegas::tracing::prelude::*;
 use micromegas_analytics::dfext::typed_column::typed_column_by_name;
 use micromegas_analytics::time::TimeRange;
-use micromegas_perfetto::{PerfettoWriter, AsyncWriter};
+use micromegas_perfetto::{AsyncWriter, PerfettoWriter};
 use std::collections::HashMap;
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
