@@ -369,9 +369,9 @@ async fn get_process_thread_list(
     Ok(threads)
 }
 
-/// Generate thread spans using the provided AsyncStreamingPerfettoWriter
+/// Generate thread spans using the provided PerfettoWriter
 async fn generate_thread_spans_with_writer(
-    writer: &mut AsyncStreamingPerfettoWriter,
+    writer: &mut PerfettoWriter,
     _process_id: &str,
     ctx: &datafusion::execution::context::SessionContext,
     time_range: &TimeRange,
@@ -432,9 +432,9 @@ async fn generate_thread_spans_with_writer(
     Ok(())
 }
 
-/// Generate async spans using the provided AsyncStreamingPerfettoWriter
+/// Generate async spans using the provided PerfettoWriter
 async fn generate_async_spans_with_writer(
-    writer: &mut AsyncStreamingPerfettoWriter,
+    writer: &mut PerfettoWriter,
     process_id: &str,
     ctx: &datafusion::execution::context::SessionContext,
     time_range: &TimeRange,
