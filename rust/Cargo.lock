@@ -4907,6 +4907,7 @@ dependencies = [
  "chrono",
  "clap",
  "datafusion",
+ "futures",
  "micromegas",
  "micromegas-analytics",
  "micromegas-perfetto",

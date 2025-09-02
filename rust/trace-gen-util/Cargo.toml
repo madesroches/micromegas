@@ -26,6 +26,7 @@ async-trait.workspace = true
 chrono.workspace = true
 clap = { version = "4.0", features = ["derive"] }
 datafusion.workspace = true
+futures.workspace = true
 tokio.workspace = true
 tonic.workspace = true
 prost.workspace = true

@@ -1,41 +1,16 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use clap::Parser;
-use datafusion::arrow::array::{Int64Array, StringArray, TimestampNanosecondArray, UInt32Array};
+use datafusion::arrow::array::{BinaryArray, Int32Array};
+use futures::stream::StreamExt;
 use micromegas::client::flightsql_client::Client;
+use micromegas::client::query_processes::ProcessQueryBuilder;
 use micromegas::micromegas_main;
-use micromegas::tracing::prelude::*;
 use micromegas_analytics::dfext::typed_column::typed_column_by_name;
 use micromegas_analytics::time::TimeRange;
-use micromegas_perfetto::{AsyncWriter, PerfettoWriter};
-use std::collections::HashMap;
-use tokio::fs::File;
-use tokio::io::AsyncWriteExt;
+use std::fs::File;
+use std::io::Write;
 use tonic::transport::Channel;
-
-/// AsyncWriter implementation that writes to a tokio File
-struct FileAsyncWriter {
-    file: File,
-}
-
-impl FileAsyncWriter {
-    fn new(file: File) -> Self {
-        Self { file }
-    }
-}
-
-#[async_trait::async_trait]
-impl AsyncWriter for FileAsyncWriter {
-    async fn write(&mut self, buf: &[u8]) -> anyhow::Result<()> {
-        self.file.write_all(buf).await?;
-        Ok(())
-    }
-
-    async fn flush(&mut self) -> anyhow::Result<()> {
-        self.file.flush().await?;
-        Ok(())
-    }
-}
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -59,11 +34,23 @@ struct Args {
     /// End time for trace (RFC 3339 format, optional)
     #[arg(long)]
     end_time: Option<DateTime<Utc>>,
+
+    /// Types of spans to include: 'thread', 'async', or 'both'
+    #[arg(long, default_value = "both")]
+    span_types: String,
 }
 
 #[micromegas_main(interop_max_level = "info")]
 async fn main() -> Result<()> {
     let args = Args::parse();
+
+    // Validate span_types argument
+    if !["thread", "async", "both"].contains(&args.span_types.as_str()) {
+        anyhow::bail!(
+            "Invalid span_types '{}'. Must be 'thread', 'async', or 'both'",
+            args.span_types
+        );
+    }
 
     println!(
         "Connecting to FlightSQL server at {}...",
@@ -77,274 +64,133 @@ async fn main() -> Result<()> {
         (Some(start), Some(end)) => TimeRange::new(start, end),
         _ => {
             println!("No time range specified, using process lifetime...");
-            get_process_time_range(&args.process_id, &mut client).await?
+            let batches = ProcessQueryBuilder::new()
+                .with_process_id(&args.process_id)
+                .query(&mut client)
+                .await?;
+            if batches.is_empty() || batches[0].num_rows() == 0 {
+                anyhow::bail!("Process {} not found", args.process_id);
+            }
+            let begin_times: &datafusion::arrow::array::TimestampNanosecondArray =
+                typed_column_by_name(&batches[0], "begin")?;
+            let end_times: &datafusion::arrow::array::TimestampNanosecondArray =
+                typed_column_by_name(&batches[0], "end")?;
+            let min_time = DateTime::from_timestamp_nanos(begin_times.value(0));
+            let max_time = DateTime::from_timestamp_nanos(end_times.value(0));
+            TimeRange::new(min_time, max_time)
         }
     };
 
     println!(
-        "Generating trace for process {} in time range {} to {}",
-        args.process_id, time_range.begin, time_range.end
+        "Generating {} spans for process {} in time range {} to {}",
+        args.span_types, args.process_id, time_range.begin, time_range.end
     );
 
-    // Create output file and async writer
-    let output_file = File::create(&args.output).await?;
-    let file_writer = FileAsyncWriter::new(output_file);
-    let mut writer = PerfettoWriter::new(Box::new(file_writer), &args.process_id);
-
-    // Generate the trace
-    generate_trace(&mut writer, &args.process_id, &mut client, time_range).await?;
-
-    writer.flush().await?;
+    // Generate trace using perfetto_trace_chunks table function
+    generate_trace_from_chunks(
+        &mut client,
+        &args.process_id,
+        &args.span_types,
+        time_range,
+        &args.output,
+    )
+    .await?;
 
     println!("Trace generated successfully: {}", args.output);
 
     Ok(())
 }
 
-async fn get_process_time_range(process_id: &str, client: &mut Client) -> Result<TimeRange> {
-    let sql = format!(
-        r#"
-        SELECT MIN(begin_time) as min_time, MAX(end_time) as max_time
-        FROM blocks
-        WHERE process_id = '{}'
-        "#,
-        process_id
-    );
-
-    let batches = client.query(sql, None).await?;
-    if batches.is_empty() || batches[0].num_rows() == 0 {
-        anyhow::bail!("Process {} not found", process_id);
-    }
-
-    let min_times: &TimestampNanosecondArray = typed_column_by_name(&batches[0], "min_time")?;
-    let max_times: &TimestampNanosecondArray = typed_column_by_name(&batches[0], "max_time")?;
-
-    let min_time = DateTime::from_timestamp_nanos(min_times.value(0));
-    let max_time = DateTime::from_timestamp_nanos(max_times.value(0));
-
-    Ok(TimeRange::new(min_time, max_time))
-}
-
-async fn get_process_exe(
-    process_id: &str,
+/// Generate trace using the perfetto_trace_chunks table function with streaming API
+async fn generate_trace_from_chunks(
     client: &mut Client,
-    time_range: TimeRange,
-) -> Result<String> {
-    let sql = format!(
-        r#"
-        SELECT "processes.exe" as exe
-        FROM blocks
-        WHERE process_id = '{}'
-        LIMIT 1
-        "#,
-        process_id
-    );
-
-    let batches = client.query(sql, Some(time_range)).await?;
-    if batches.is_empty() || batches[0].num_rows() == 0 {
-        anyhow::bail!("Process {} not found", process_id);
-    }
-
-    let exes: &StringArray = typed_column_by_name(&batches[0], "exe")?;
-    Ok(exes.value(0).to_owned())
-}
-
-async fn generate_trace(
-    writer: &mut PerfettoWriter,
     process_id: &str,
-    client: &mut Client,
+    span_types: &str,
     time_range: TimeRange,
+    output_path: &str,
 ) -> Result<()> {
-    // Get process info and emit process descriptor
-    let exe = get_process_exe(process_id, client, time_range).await?;
-    writer.emit_process_descriptor(&exe).await?;
-
-    // Get thread information and emit thread descriptors
-    let threads = get_thread_info(process_id, client, time_range).await?;
-    for (stream_id, (thread_id, thread_name)) in &threads {
-        writer
-            .emit_thread_descriptor(stream_id, *thread_id, thread_name)
-            .await?;
-    }
-
-    // Emit async track descriptor for async spans
-    writer.emit_async_track_descriptor().await?;
-
-    // Generate thread spans
-    generate_thread_spans(writer, process_id, client, time_range, &threads).await?;
-
-    // Generate async spans
-    generate_async_spans(writer, process_id, client, time_range).await?;
-
-    Ok(())
-}
-
-async fn get_thread_info(
-    process_id: &str,
-    client: &mut Client,
-    time_range: TimeRange,
-) -> Result<HashMap<String, (i32, String)>> {
+    // Build SQL query to get trace chunks using the table function
+    // Note: ORDER BY chunk_id is not needed since chunks are naturally produced in order
     let sql = format!(
         r#"
-        SELECT DISTINCT stream_id
-        FROM streams
-        WHERE process_id = '{}'
-        AND array_has(tags, 'cpu')
-        ORDER BY stream_id
-        "#,
-        process_id
-    );
-
-    let batches = client.query(sql, Some(time_range)).await?;
-    let mut threads = HashMap::new();
-
-    for batch in batches {
-        let stream_ids: &StringArray = typed_column_by_name(&batch, "stream_id")?;
-
-        for i in 0..batch.num_rows() {
-            let stream_id = stream_ids.value(i).to_owned();
-            // Use a hash of the stream_id as the thread ID and a default name
-            let tid = (stream_id
-                .as_bytes()
-                .iter()
-                .fold(0u32, |acc, &b| acc.wrapping_mul(31).wrapping_add(b as u32))
-                % 65536) as i32;
-            let name = format!("Thread-{}", stream_id);
-            threads.insert(stream_id, (tid, name));
-        }
-    }
-
-    Ok(threads)
-}
-
-async fn generate_thread_spans(
-    writer: &mut PerfettoWriter,
-    _process_id: &str,
-    client: &mut Client,
-    time_range: TimeRange,
-    threads: &HashMap<String, (i32, String)>,
-) -> Result<()> {
-    for stream_id in threads.keys() {
-        // Set the current thread for this stream (needed before emitting spans)
-        writer
-            .emit_thread_descriptor(stream_id, threads[stream_id].0, &threads[stream_id].1)
-            .await?;
-
-        let sql = format!(
-            r#"
-            SELECT begin, end, name, filename, target, line
-            FROM view_instance('thread_spans', '{}')
-            WHERE begin >= '{}' AND end <= '{}'
-            ORDER BY begin
-            "#,
-            stream_id,
-            time_range.begin.to_rfc3339(),
-            time_range.end.to_rfc3339()
-        );
-
-        let batches = client.query(sql, Some(time_range)).await?;
-
-        for batch in batches {
-            let begin_times: &TimestampNanosecondArray = typed_column_by_name(&batch, "begin")?;
-            let end_times: &TimestampNanosecondArray = typed_column_by_name(&batch, "end")?;
-            let names: &StringArray = typed_column_by_name(&batch, "name")?;
-            let filenames: &StringArray = typed_column_by_name(&batch, "filename")?;
-            let targets: &StringArray = typed_column_by_name(&batch, "target")?;
-            let lines: &UInt32Array = typed_column_by_name(&batch, "line")?;
-
-            for i in 0..batch.num_rows() {
-                let begin_ns = begin_times.value(i) as u64;
-                let end_ns = end_times.value(i) as u64;
-                let name = names.value(i);
-                let filename = filenames.value(i);
-                let target = targets.value(i);
-                let line = lines.value(i);
-
-                writer
-                    .emit_span(begin_ns, end_ns, name, target, filename, line)
-                    .await?;
-            }
-        }
-    }
-
-    Ok(())
-}
-
-async fn generate_async_spans(
-    writer: &mut PerfettoWriter,
-    process_id: &str,
-    client: &mut Client,
-    time_range: TimeRange,
-) -> Result<()> {
-    let sql = format!(
-        r#"
-        WITH begin_events AS (
-            SELECT span_id, time as begin_time, name, filename, target, line
-            FROM view_instance('async_events', '{}')
-            WHERE time >= '{}' AND time <= '{}'
-              AND event_type = 'begin'
-        ),
-        end_events AS (
-            SELECT span_id, time as end_time
-            FROM view_instance('async_events', '{}')
-            WHERE time >= '{}' AND time <= '{}'
-              AND event_type = 'end'
+        SELECT chunk_id, chunk_data
+        FROM perfetto_trace_chunks(
+            '{}',
+            '{}',
+            TIMESTAMP '{}',
+            TIMESTAMP '{}'
         )
-        SELECT 
-            b.span_id,
-            b.begin_time,
-            e.end_time,
-            b.name,
-            b.filename,
-            b.target,
-            b.line
-        FROM begin_events b
-        INNER JOIN end_events e ON b.span_id = e.span_id
-        ORDER BY b.begin_time
         "#,
         process_id,
-        time_range.begin.to_rfc3339(),
-        time_range.end.to_rfc3339(),
-        process_id,
+        span_types,
         time_range.begin.to_rfc3339(),
         time_range.end.to_rfc3339()
     );
 
-    let batches = client.query(sql, Some(time_range)).await?;
+    println!("Streaming perfetto trace chunks...");
 
-    // Process spans directly - each row represents a complete span with begin/end times
-    for batch in batches {
-        let _span_ids: &Int64Array = typed_column_by_name(&batch, "span_id")?;
-        let begin_times: &TimestampNanosecondArray = typed_column_by_name(&batch, "begin_time")?;
-        let end_times: &TimestampNanosecondArray = typed_column_by_name(&batch, "end_time")?;
-        let names: &StringArray = typed_column_by_name(&batch, "name")?;
-        let filenames: &StringArray = typed_column_by_name(&batch, "filename")?;
-        let targets: &StringArray = typed_column_by_name(&batch, "target")?;
-        let lines: &UInt32Array = typed_column_by_name(&batch, "line")?;
+    // Create output file
+    let mut file = File::create(output_path)?;
 
-        for i in 0..batch.num_rows() {
-            let begin_ns = begin_times.value(i) as u64;
-            let end_ns = end_times.value(i) as u64;
-            let name = names.value(i);
-            let filename = filenames.value(i);
-            let target = targets.value(i);
-            let line = lines.value(i);
+    let mut total_chunks = 0;
+    let mut total_bytes = 0;
+    let mut expected_chunk_id = 0;
+    let mut has_chunks = false;
 
-            if end_ns >= begin_ns {
-                // Emit begin and end events consecutively for each span
-                writer
-                    .emit_async_span_begin(begin_ns, name, target, filename, line)
-                    .await?;
-                writer
-                    .emit_async_span_end(end_ns, name, target, filename, line)
-                    .await?;
-            } else {
-                let negative_duration_ns = begin_ns - end_ns;
-                let negative_duration_ms = negative_duration_ns as f64 / 1_000_000.0;
-                warn!("invalid span duration '{name}': {negative_duration_ms:.3}ms");
+    // Use streaming interface to process chunks as they arrive
+    let mut stream = client.query_stream(sql, Some(time_range)).await?;
+
+    // Process each record batch as it arrives
+    while let Some(record_batch_result) = stream.next().await {
+        let record_batch = record_batch_result?;
+        has_chunks = true;
+        let chunk_ids: &Int32Array = typed_column_by_name(&record_batch, "chunk_id")?;
+        let chunk_data: &BinaryArray = typed_column_by_name(&record_batch, "chunk_data")?;
+
+        // Process each chunk in the batch
+        for i in 0..record_batch.num_rows() {
+            let chunk_id = chunk_ids.value(i);
+            let data = chunk_data.value(i);
+
+            // Verify chunks are in order
+            if chunk_id != expected_chunk_id {
+                anyhow::bail!(
+                    "Chunk {} received, expected {}. Chunks may be out of order or missing!",
+                    chunk_id,
+                    expected_chunk_id
+                );
+            }
+
+            // Write chunk directly to file
+            file.write_all(data)?;
+
+            total_chunks += 1;
+            total_bytes += data.len();
+            expected_chunk_id += 1;
+
+            // Progress reporting
+            if total_chunks == 1 {
+                println!("  Writing chunks to {}...", output_path);
+            } else if total_chunks % 10 == 0 {
+                println!(
+                    "  Processed {} chunks ({} bytes)...",
+                    total_chunks, total_bytes
+                );
             }
         }
     }
+
+    if !has_chunks {
+        anyhow::bail!("No trace chunks found for process {}", process_id);
+    }
+
+    // Flush and close file
+    file.flush()?;
+
+    println!(
+        "Generated trace with {} chunks ({} bytes)",
+        total_chunks, total_bytes
+    );
 
     Ok(())
 }
