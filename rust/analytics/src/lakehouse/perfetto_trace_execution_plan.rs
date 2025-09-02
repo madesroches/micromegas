@@ -21,7 +21,7 @@ use datafusion::{
 };
 use futures::StreamExt;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
-use micromegas_perfetto::{ChunkSender, PerfettoWriter};
+use micromegas_perfetto::{chunk_sender::ChunkSender, streaming_writer::PerfettoWriter};
 use micromegas_tracing::prelude::*;
 use object_store::ObjectStore;
 use std::{

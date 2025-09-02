@@ -28,12 +28,3 @@ pub mod streaming_writer;
 /// Chunk sender for streaming traces
 #[cfg(not(feature = "protogen"))]
 pub mod chunk_sender;
-
-#[cfg(not(feature = "protogen"))]
-pub use streaming_writer::PerfettoWriter;
-
-#[cfg(not(feature = "protogen"))]
-pub use async_writer::AsyncWriter;
-
-#[cfg(not(feature = "protogen"))]
-pub use chunk_sender::ChunkSender;
