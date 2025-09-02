@@ -7,7 +7,7 @@ use micromegas::micromegas_main;
 use micromegas::tracing::prelude::*;
 use micromegas_analytics::dfext::typed_column::typed_column_by_name;
 use micromegas_analytics::time::TimeRange;
-use micromegas_perfetto::{AsyncStreamingPerfettoWriter, AsyncWriter};
+use micromegas_perfetto::{PerfettoWriter, AsyncWriter};
 use std::collections::HashMap;
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
@@ -89,7 +89,7 @@ async fn main() -> Result<()> {
     // Create output file and async writer
     let output_file = File::create(&args.output).await?;
     let file_writer = FileAsyncWriter::new(output_file);
-    let mut writer = AsyncStreamingPerfettoWriter::new(Box::new(file_writer), &args.process_id);
+    let mut writer = PerfettoWriter::new(Box::new(file_writer), &args.process_id);
 
     // Generate the trace
     generate_trace(&mut writer, &args.process_id, &mut client, time_range).await?;
@@ -150,7 +150,7 @@ async fn get_process_exe(
 }
 
 async fn generate_trace(
-    writer: &mut AsyncStreamingPerfettoWriter,
+    writer: &mut PerfettoWriter,
     process_id: &str,
     client: &mut Client,
     time_range: TimeRange,
@@ -218,7 +218,7 @@ async fn get_thread_info(
 }
 
 async fn generate_thread_spans(
-    writer: &mut AsyncStreamingPerfettoWriter,
+    writer: &mut PerfettoWriter,
     _process_id: &str,
     client: &mut Client,
     time_range: TimeRange,
@@ -271,7 +271,7 @@ async fn generate_thread_spans(
 }
 
 async fn generate_async_spans(
-    writer: &mut AsyncStreamingPerfettoWriter,
+    writer: &mut PerfettoWriter,
     process_id: &str,
     client: &mut Client,
     time_range: TimeRange,

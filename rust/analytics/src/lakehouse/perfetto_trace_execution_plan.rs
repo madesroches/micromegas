@@ -21,7 +21,7 @@ use datafusion::{
 };
 use futures::StreamExt;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
-use micromegas_perfetto::{AsyncStreamingPerfettoWriter, ChunkSender};
+use micromegas_perfetto::{PerfettoWriter, ChunkSender};
 use micromegas_tracing::prelude::*;
 use object_store::ObjectStore;
 use std::{
@@ -266,7 +266,7 @@ async fn generate_streaming_perfetto_trace(
     .await?;
 
     // Use ChunkSender directly as the writer destination
-    let mut writer = AsyncStreamingPerfettoWriter::new(Box::new(chunk_sender), &process_id);
+    let mut writer = PerfettoWriter::new(Box::new(chunk_sender), &process_id);
 
     let process_exe = get_process_exe(&process_id, &ctx).await?;
     writer.emit_process_descriptor(&process_exe).await?;

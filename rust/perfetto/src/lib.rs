@@ -30,7 +30,7 @@ pub mod streaming_writer;
 pub mod chunk_sender;
 
 #[cfg(not(feature = "protogen"))]
-pub use streaming_writer::AsyncStreamingPerfettoWriter;
+pub use streaming_writer::PerfettoWriter;
 
 #[cfg(not(feature = "protogen"))]
 pub use async_writer::AsyncWriter;

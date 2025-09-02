@@ -23,9 +23,9 @@ use xxhash_rust::xxh64::xxh64;
 // This is unlikely to change as it would break protobuf compatibility.
 const TRACE_PACKET_FIELD_NUMBER: u32 = 1;
 
-/// An async streaming writer for Perfetto traces that writes packets through an AsyncWriter.
-/// This version uses the AsyncWriter trait to abstract the underlying data sink.
-pub struct AsyncStreamingPerfettoWriter {
+/// A writer for Perfetto traces that writes packets through an AsyncWriter.
+/// Uses the AsyncWriter trait to abstract the underlying data sink.
+pub struct PerfettoWriter {
     writer: Box<dyn AsyncWriter + Send>,
     pid: i32,          // derived from micromegas's process_id using a hash function
     process_uuid: u64, // derived from micromegas's process_id using a hash function
@@ -36,8 +36,8 @@ pub struct AsyncStreamingPerfettoWriter {
     source_locations: HashMap<(String, u32), u64>,
 }
 
-impl AsyncStreamingPerfettoWriter {
-    /// Creates a new `AsyncStreamingPerfettoWriter` instance.
+impl PerfettoWriter {
+    /// Creates a new `PerfettoWriter` instance.
     pub fn new(writer: Box<dyn AsyncWriter + Send>, micromegas_process_id: &str) -> Self {
         let process_uuid = xxh64(micromegas_process_id.as_bytes(), 0);
         let pid = process_uuid as i32;
