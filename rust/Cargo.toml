@@ -1,6 +1,6 @@
 [workspace]
-members = ["*"]
-exclude = ["target", ".claude", ".*"]
+members = ["*", "examples/write-perfetto"]
+exclude = ["target", ".claude", ".*", "examples"]
 resolver = "2"
 
 

@@ -1,6 +1,6 @@
 [package]
-name = "trace-gen-util"
-description = "Utility to generate Perfetto traces from analytics service"
+name = "write-perfetto"
+description = "Utility to write Perfetto traces from analytics service"
 version.workspace = true
 edition.workspace = true
 homepage.workspace = true
@@ -9,15 +9,15 @@ license.workspace = true
 authors.workspace = true
 
 [[bin]]
-name = "trace-gen"
+name = "write-perfetto"
 path = "src/main.rs"
 
 [[bin]]
-name = "validate-trace"
+name = "validate-perfetto"
 path = "src/validate_trace.rs"
 
 [dependencies]
-micromegas.path = "../public"
+micromegas.workspace = true
 micromegas-analytics.workspace = true
 micromegas-perfetto.workspace = true
 

@@ -4899,24 +4899,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8df9b6e13f2d32c91b9bd719c00d1958837bc7dec474d94952798cc8e69eeec3"
 
 [[package]]
-name = "trace-gen-util"
-version = "0.12.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "chrono",
- "clap",
- "datafusion",
- "futures",
- "micromegas",
- "micromegas-analytics",
- "micromegas-perfetto",
- "prost",
- "tokio",
- "tonic",
-]
-
-[[package]]
 name = "tracing"
 version = "0.1.41"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5728,6 +5710,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6f42320e61fe2cfd34354ecb597f86f413484a798ba44a8ca1165c58d42da6c1"
 dependencies = [
  "bitflags",
+]
+
+[[package]]
+name = "write-perfetto"
+version = "0.12.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "clap",
+ "datafusion",
+ "futures",
+ "micromegas",
+ "micromegas-analytics",
+ "micromegas-perfetto",
+ "prost",
+ "tokio",
+ "tonic",
 ]
 
 [[package]]
