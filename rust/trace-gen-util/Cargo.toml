@@ -22,6 +22,7 @@ micromegas-analytics.workspace = true
 micromegas-perfetto.workspace = true
 
 anyhow.workspace = true
+async-trait.workspace = true
 chrono.workspace = true
 clap = { version = "4.0", features = ["derive"] }
 datafusion.workspace = true

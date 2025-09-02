@@ -13,9 +13,13 @@ pub mod protos {
     include!("perfetto.protos.rs");
 }
 
-/// Trace Writer
+/// Async writer trait
 #[cfg(not(feature = "protogen"))]
-pub mod writer;
+pub mod async_writer;
+
+/// Utility functions
+#[cfg(not(feature = "protogen"))]
+pub mod utils;
 
 /// Streaming Trace Writer
 #[cfg(not(feature = "protogen"))]
@@ -26,10 +30,10 @@ pub mod streaming_writer;
 pub mod chunk_sender;
 
 #[cfg(not(feature = "protogen"))]
-pub use writer::Writer;
+pub use streaming_writer::AsyncStreamingPerfettoWriter;
 
 #[cfg(not(feature = "protogen"))]
-pub use streaming_writer::{AsyncStreamingPerfettoWriter, StreamingPerfettoWriter};
+pub use async_writer::AsyncWriter;
 
 #[cfg(not(feature = "protogen"))]
 pub use chunk_sender::ChunkSender;

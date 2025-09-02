@@ -7,12 +7,35 @@ use micromegas::micromegas_main;
 use micromegas::tracing::prelude::*;
 use micromegas_analytics::dfext::typed_column::typed_column_by_name;
 use micromegas_analytics::time::TimeRange;
-use micromegas_perfetto::StreamingPerfettoWriter;
+use micromegas_perfetto::{AsyncStreamingPerfettoWriter, AsyncWriter};
 use std::collections::HashMap;
-use std::io::Write;
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
 use tonic::transport::Channel;
+
+/// AsyncWriter implementation that writes to a tokio File
+struct FileAsyncWriter {
+    file: File,
+}
+
+impl FileAsyncWriter {
+    fn new(file: File) -> Self {
+        Self { file }
+    }
+}
+
+#[async_trait::async_trait]
+impl AsyncWriter for FileAsyncWriter {
+    async fn write(&mut self, buf: &[u8]) -> anyhow::Result<()> {
+        self.file.write_all(buf).await?;
+        Ok(())
+    }
+
+    async fn flush(&mut self) -> anyhow::Result<()> {
+        self.file.flush().await?;
+        Ok(())
+    }
+}
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -63,28 +86,17 @@ async fn main() -> Result<()> {
         args.process_id, time_range.begin, time_range.end
     );
 
-    // Create output file
-    let mut output_file = File::create(&args.output).await?;
-    let mut buffer = Vec::new();
+    // Create output file and async writer
+    let output_file = File::create(&args.output).await?;
+    let file_writer = FileAsyncWriter::new(output_file);
+    let mut writer = AsyncStreamingPerfettoWriter::new(Box::new(file_writer), &args.process_id);
 
-    {
-        let mut writer = StreamingPerfettoWriter::new(&mut buffer, &args.process_id);
+    // Generate the trace
+    generate_trace(&mut writer, &args.process_id, &mut client, time_range).await?;
 
-        // Generate the trace
-        generate_trace(&mut writer, &args.process_id, &mut client, time_range).await?;
+    writer.flush().await?;
 
-        writer.flush()?;
-    }
-
-    // Write to file
-    output_file.write_all(&buffer).await?;
-    output_file.flush().await?;
-
-    println!(
-        "Trace generated successfully: {} ({} bytes)",
-        args.output,
-        buffer.len()
-    );
+    println!("Trace generated successfully: {}", args.output);
 
     Ok(())
 }
@@ -137,24 +149,26 @@ async fn get_process_exe(
     Ok(exes.value(0).to_owned())
 }
 
-async fn generate_trace<W: Write>(
-    writer: &mut StreamingPerfettoWriter<W>,
+async fn generate_trace(
+    writer: &mut AsyncStreamingPerfettoWriter,
     process_id: &str,
     client: &mut Client,
     time_range: TimeRange,
 ) -> Result<()> {
     // Get process info and emit process descriptor
     let exe = get_process_exe(process_id, client, time_range).await?;
-    writer.emit_process_descriptor(&exe)?;
+    writer.emit_process_descriptor(&exe).await?;
 
     // Get thread information and emit thread descriptors
     let threads = get_thread_info(process_id, client, time_range).await?;
     for (stream_id, (thread_id, thread_name)) in &threads {
-        writer.emit_thread_descriptor(stream_id, *thread_id, thread_name)?;
+        writer
+            .emit_thread_descriptor(stream_id, *thread_id, thread_name)
+            .await?;
     }
 
     // Emit async track descriptor for async spans
-    writer.emit_async_track_descriptor()?;
+    writer.emit_async_track_descriptor().await?;
 
     // Generate thread spans
     generate_thread_spans(writer, process_id, client, time_range, &threads).await?;
@@ -203,8 +217,8 @@ async fn get_thread_info(
     Ok(threads)
 }
 
-async fn generate_thread_spans<W: Write>(
-    writer: &mut StreamingPerfettoWriter<W>,
+async fn generate_thread_spans(
+    writer: &mut AsyncStreamingPerfettoWriter,
     _process_id: &str,
     client: &mut Client,
     time_range: TimeRange,
@@ -212,7 +226,9 @@ async fn generate_thread_spans<W: Write>(
 ) -> Result<()> {
     for stream_id in threads.keys() {
         // Set the current thread for this stream (needed before emitting spans)
-        writer.emit_thread_descriptor(stream_id, threads[stream_id].0, &threads[stream_id].1)?;
+        writer
+            .emit_thread_descriptor(stream_id, threads[stream_id].0, &threads[stream_id].1)
+            .await?;
 
         let sql = format!(
             r#"
@@ -244,7 +260,9 @@ async fn generate_thread_spans<W: Write>(
                 let target = targets.value(i);
                 let line = lines.value(i);
 
-                writer.emit_span(begin_ns, end_ns, name, target, filename, line)?;
+                writer
+                    .emit_span(begin_ns, end_ns, name, target, filename, line)
+                    .await?;
             }
         }
     }
@@ -252,8 +270,8 @@ async fn generate_thread_spans<W: Write>(
     Ok(())
 }
 
-async fn generate_async_spans<W: Write>(
-    writer: &mut StreamingPerfettoWriter<W>,
+async fn generate_async_spans(
+    writer: &mut AsyncStreamingPerfettoWriter,
     process_id: &str,
     client: &mut Client,
     time_range: TimeRange,
@@ -314,8 +332,12 @@ async fn generate_async_spans<W: Write>(
 
             if end_ns >= begin_ns {
                 // Emit begin and end events consecutively for each span
-                writer.emit_async_span_begin(begin_ns, name, target, filename, line)?;
-                writer.emit_async_span_end(end_ns, name, target, filename, line)?;
+                writer
+                    .emit_async_span_begin(begin_ns, name, target, filename, line)
+                    .await?;
+                writer
+                    .emit_async_span_end(end_ns, name, target, filename, line)
+                    .await?;
             } else {
                 let negative_duration_ns = begin_ns - end_ns;
                 let negative_duration_ms = negative_duration_ns as f64 / 1_000_000.0;

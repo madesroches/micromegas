@@ -266,7 +266,7 @@ async fn generate_streaming_perfetto_trace(
     .await?;
 
     // Use ChunkSender directly as the writer destination
-    let mut writer = AsyncStreamingPerfettoWriter::new(chunk_sender, &process_id);
+    let mut writer = AsyncStreamingPerfettoWriter::new(Box::new(chunk_sender), &process_id);
 
     let process_exe = get_process_exe(&process_id, &ctx).await?;
     writer.emit_process_descriptor(&process_exe).await?;

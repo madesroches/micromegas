@@ -2870,6 +2870,7 @@ name = "micromegas-perfetto"
 version = "0.12.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "datafusion",
  "prost",
  "prost-build",
@@ -4902,6 +4903,7 @@ name = "trace-gen-util"
 version = "0.12.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "chrono",
  "clap",
  "datafusion",

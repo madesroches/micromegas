@@ -2,6 +2,8 @@ use datafusion::arrow::array::{BinaryArray, Int32Array};
 use datafusion::arrow::record_batch::RecordBatch;
 use tokio::sync::mpsc;
 
+use crate::async_writer::AsyncWriter;
+
 /// ChunkSender sends data as RecordBatch chunks through a channel.
 /// It accumulates data until reaching a threshold size, then sends it as a chunk.
 pub struct ChunkSender {
@@ -26,7 +28,7 @@ impl ChunkSender {
     }
 
     /// Writes data to the chunk buffer, automatically flushing when threshold is reached
-    pub async fn write_all(&mut self, buf: &[u8]) -> anyhow::Result<()> {
+    pub async fn write(&mut self, buf: &[u8]) -> anyhow::Result<()> {
         self.current_chunk.extend_from_slice(buf);
 
         // If chunk exceeds threshold, flush it
@@ -67,5 +69,17 @@ impl ChunkSender {
         self.chunk_id += 1;
         self.current_chunk.clear();
         Ok(())
+    }
+}
+
+/// Implementation of AsyncWriter for ChunkSender
+#[async_trait::async_trait]
+impl AsyncWriter for ChunkSender {
+    async fn write(&mut self, buf: &[u8]) -> anyhow::Result<()> {
+        self.write(buf).await
+    }
+
+    async fn flush(&mut self) -> anyhow::Result<()> {
+        self.flush().await
     }
 }
