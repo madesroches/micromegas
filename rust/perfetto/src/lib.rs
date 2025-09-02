@@ -21,8 +21,15 @@ pub mod writer;
 #[cfg(not(feature = "protogen"))]
 pub mod streaming_writer;
 
+/// Chunk sender for streaming traces
+#[cfg(not(feature = "protogen"))]
+pub mod chunk_sender;
+
 #[cfg(not(feature = "protogen"))]
 pub use writer::Writer;
 
 #[cfg(not(feature = "protogen"))]
 pub use streaming_writer::{AsyncStreamingPerfettoWriter, StreamingPerfettoWriter};
+
+#[cfg(not(feature = "protogen"))]
+pub use chunk_sender::ChunkSender;

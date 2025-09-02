@@ -2870,6 +2870,7 @@ name = "micromegas-perfetto"
 version = "0.12.0"
 dependencies = [
  "anyhow",
+ "datafusion",
  "prost",
  "prost-build",
  "tokio",

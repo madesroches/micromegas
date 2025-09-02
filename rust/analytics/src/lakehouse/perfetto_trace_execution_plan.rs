@@ -5,10 +5,7 @@ use anyhow::Context;
 use async_stream::stream;
 use datafusion::{
     arrow::{
-        array::{
-            BinaryArray, Int32Array, RecordBatch, StringArray, TimestampNanosecondArray,
-            UInt32Array,
-        },
+        array::{RecordBatch, StringArray, TimestampNanosecondArray, UInt32Array},
         datatypes::SchemaRef,
     },
     catalog::{Session, TableProvider},
@@ -24,7 +21,7 @@ use datafusion::{
 };
 use futures::StreamExt;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
-use micromegas_perfetto::AsyncStreamingPerfettoWriter;
+use micromegas_perfetto::{AsyncStreamingPerfettoWriter, ChunkSender};
 use micromegas_tracing::prelude::*;
 use object_store::ObjectStore;
 use std::{
@@ -169,7 +166,7 @@ impl ExecutionPlan for PerfettoTraceExecutionPlan {
     }
 }
 
-/// Creates a stream of Perfetto trace chunks by generating the complete trace first
+/// Creates a stream of Perfetto trace chunks using streaming architecture
 #[expect(clippy::too_many_arguments)]
 fn generate_perfetto_trace_stream(
     process_id: String,
@@ -182,53 +179,65 @@ fn generate_perfetto_trace_stream(
     part_provider: Arc<dyn QueryPartitionProvider>,
 ) -> impl futures::Stream<Item = DFResult<RecordBatch>> {
     stream! {
-        // Generate the complete trace in memory first
-        match generate_complete_perfetto_trace(
-            process_id,
-            span_types,
-            time_range,
-            runtime,
-            lake,
-            object_store,
-            view_factory,
-            part_provider,
-        ).await {
-            Ok(trace_data) => {
-                // Split the trace data into chunks and yield each as a RecordBatch
-                const CHUNK_SIZE: usize = 64 * 1024; // 64KB chunks
+        // Create channel for streaming chunks
+        const CHUNK_SIZE: usize = 8 * 1024; // 8KB chunks
+        let (chunk_sender, mut chunk_receiver) = tokio::sync::mpsc::channel(16);
 
-                for (chunk_id, chunk) in trace_data.chunks(CHUNK_SIZE).enumerate() {
-                    let chunk_id_array = Int32Array::from(vec![chunk_id as i32]);
-                    let chunk_data_array = BinaryArray::from(vec![chunk]);
+        // Create ChunkSender that will stream data through the channel
+        let chunk_sender_writer = ChunkSender::new(chunk_sender, CHUNK_SIZE);
 
-                    match RecordBatch::try_from_iter(vec![
-                        ("chunk_id", Arc::new(chunk_id_array) as Arc<dyn datafusion::arrow::array::Array>),
-                        ("chunk_data", Arc::new(chunk_data_array) as Arc<dyn datafusion::arrow::array::Array>),
-                    ]) {
-                        Ok(batch) => yield Ok(batch),
-                        Err(e) => {
-                            error!("Failed to create chunk batch: {:?}", e);
-                            yield Err(datafusion::error::DataFusionError::Execution(
-                                format!("Failed to create batch: {}", e)
-                            ));
-                            return;
-                        }
-                    }
+        // Spawn background task to generate trace
+        let generation_task = tokio::spawn(async move {
+            generate_streaming_perfetto_trace(
+                chunk_sender_writer,
+                process_id,
+                span_types,
+                time_range,
+                runtime,
+                lake,
+                object_store,
+                view_factory,
+                part_provider,
+            ).await
+        });
+
+        // Stream chunks as they become available
+        while let Some(chunk_result) = chunk_receiver.recv().await {
+            match chunk_result {
+                Ok(batch) => yield Ok(batch),
+                Err(e) => {
+                    error!("Error in chunk generation: {:?}", e);
+                    yield Err(datafusion::error::DataFusionError::Execution(
+                        format!("Chunk generation failed: {}", e)
+                    ));
+                    return;
                 }
             }
-            Err(e) => {
-                error!("Failed to generate trace: {:?}", e);
+        }
+
+        // Wait for generation task to complete and check for errors
+        match generation_task.await {
+            Ok(Ok(())) => {}, // Success
+            Ok(Err(e)) => {
+                error!("Trace generation failed: {:?}", e);
                 yield Err(datafusion::error::DataFusionError::Execution(
                     format!("Trace generation failed: {}", e)
+                ));
+            }
+            Err(e) => {
+                error!("Task panicked: {:?}", e);
+                yield Err(datafusion::error::DataFusionError::Execution(
+                    format!("Task panicked: {}", e)
                 ));
             }
         }
     }
 }
 
-/// Generate the complete Perfetto trace in memory
+/// Generate Perfetto trace using streaming architecture
 #[expect(clippy::too_many_arguments)]
-async fn generate_complete_perfetto_trace(
+async fn generate_streaming_perfetto_trace(
+    chunk_sender: ChunkSender,
     process_id: String,
     span_types: SpanTypes,
     time_range: TimeRange,
@@ -237,9 +246,9 @@ async fn generate_complete_perfetto_trace(
     _object_store: Arc<dyn ObjectStore>,
     view_factory: Arc<ViewFactory>,
     part_provider: Arc<dyn QueryPartitionProvider>,
-) -> anyhow::Result<Vec<u8>> {
+) -> anyhow::Result<()> {
     info!(
-        "Generating Perfetto trace for process {} with span types {:?} from {} to {}",
+        "Generating streaming Perfetto trace for process {} with span types {:?} from {} to {}",
         process_id, span_types, time_range.begin, time_range.end
     );
 
@@ -256,12 +265,12 @@ async fn generate_complete_perfetto_trace(
     )
     .await?;
 
-    let mut trace_buffer = Vec::new(); // it's insane to keep this in memory - we need to send the chunks as they are computed
-    let mut writer = AsyncStreamingPerfettoWriter::new(&mut trace_buffer, &process_id);
+    // Use ChunkSender directly as the writer destination
+    let mut writer = AsyncStreamingPerfettoWriter::new(chunk_sender, &process_id);
 
     let process_exe = get_process_exe(&process_id, &ctx).await?;
     writer.emit_process_descriptor(&process_exe).await?;
-    writer.flush().await?;
+    writer.flush().await?; // Forces chunk emission
 
     let threads = get_process_thread_list(&process_id, &ctx).await?;
     for (stream_id, thread_id, thread_name) in &threads {
@@ -270,12 +279,12 @@ async fn generate_complete_perfetto_trace(
             .await?;
     }
     if !threads.is_empty() {
-        writer.flush().await?;
+        writer.flush().await?; // Forces chunk emission
     }
 
     if matches!(span_types, SpanTypes::Async | SpanTypes::Both) {
         writer.emit_async_track_descriptor().await?;
-        writer.flush().await?;
+        writer.flush().await?; // Forces chunk emission
     }
 
     if matches!(span_types, SpanTypes::Thread | SpanTypes::Both) {
@@ -287,8 +296,8 @@ async fn generate_complete_perfetto_trace(
         generate_async_spans_with_writer(&mut writer, &process_id, &ctx, &time_range).await?;
     }
 
-    writer.flush().await?;
-    Ok(trace_buffer)
+    writer.flush().await?; // Final chunk - this handles the chunk_sender.flush() internally
+    Ok(())
 }
 
 /// Get process executable name from the processes table
@@ -361,8 +370,8 @@ async fn get_process_thread_list(
 }
 
 /// Generate thread spans using the provided AsyncStreamingPerfettoWriter
-async fn generate_thread_spans_with_writer<W: tokio::io::AsyncWrite + Unpin>(
-    writer: &mut AsyncStreamingPerfettoWriter<W>,
+async fn generate_thread_spans_with_writer(
+    writer: &mut AsyncStreamingPerfettoWriter,
     _process_id: &str,
     ctx: &datafusion::execution::context::SessionContext,
     time_range: &TimeRange,
@@ -424,8 +433,8 @@ async fn generate_thread_spans_with_writer<W: tokio::io::AsyncWrite + Unpin>(
 }
 
 /// Generate async spans using the provided AsyncStreamingPerfettoWriter
-async fn generate_async_spans_with_writer<W: tokio::io::AsyncWrite + Unpin>(
-    writer: &mut AsyncStreamingPerfettoWriter<W>,
+async fn generate_async_spans_with_writer(
+    writer: &mut AsyncStreamingPerfettoWriter,
     process_id: &str,
     ctx: &datafusion::execution::context::SessionContext,
     time_range: &TimeRange,

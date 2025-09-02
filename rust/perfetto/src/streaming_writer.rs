@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::io::Write;
-use tokio::io::AsyncWrite;
+
+use crate::chunk_sender::ChunkSender;
 
 use crate::protos::{
     EventCategory, EventName, ProcessDescriptor, SourceLocation, ThreadDescriptor, TracePacket,
@@ -331,10 +332,10 @@ impl<W: Write> StreamingPerfettoWriter<W> {
     }
 }
 
-/// An async streaming writer for Perfetto traces that writes packets directly to an async output stream.
-/// This version uses tokio::io::AsyncWrite to avoid blocking calls in async contexts.
-pub struct AsyncStreamingPerfettoWriter<W: AsyncWrite + Unpin> {
-    writer: W,
+/// An async streaming writer for Perfetto traces that writes packets through a ChunkSender.
+/// This version uses the simplified ChunkSender interface without AsyncWrite complexity.
+pub struct AsyncStreamingPerfettoWriter {
+    chunk_sender: ChunkSender,
     pid: i32,          // derived from micromegas's process_id using a hash function
     process_uuid: u64, // derived from micromegas's process_id using a hash function
     current_thread_uuid: Option<u64>,
@@ -344,13 +345,13 @@ pub struct AsyncStreamingPerfettoWriter<W: AsyncWrite + Unpin> {
     source_locations: HashMap<(String, u32), u64>,
 }
 
-impl<W: AsyncWrite + Unpin> AsyncStreamingPerfettoWriter<W> {
+impl AsyncStreamingPerfettoWriter {
     /// Creates a new `AsyncStreamingPerfettoWriter` instance.
-    pub fn new(writer: W, micromegas_process_id: &str) -> Self {
+    pub fn new(chunk_sender: ChunkSender, micromegas_process_id: &str) -> Self {
         let process_uuid = xxh64(micromegas_process_id.as_bytes(), 0);
         let pid = process_uuid as i32;
         Self {
-            writer,
+            chunk_sender,
             pid,
             process_uuid,
             current_thread_uuid: None,
@@ -361,10 +362,8 @@ impl<W: AsyncWrite + Unpin> AsyncStreamingPerfettoWriter<W> {
         }
     }
 
-    /// Writes a single TracePacket to the output stream with proper protobuf framing.
+    /// Writes a single TracePacket to the chunk sender with proper protobuf framing.
     pub async fn write_packet(&mut self, packet: TracePacket) -> anyhow::Result<()> {
-        use tokio::io::AsyncWriteExt;
-
         let mut packet_buf = Vec::new();
         // Encode the packet to get its bytes
         packet.encode(&mut packet_buf)?;
@@ -378,9 +377,9 @@ impl<W: AsyncWrite + Unpin> AsyncStreamingPerfettoWriter<W> {
         );
         encode_varint(packet_buf.len() as u64, &mut framing_buf);
 
-        // Write the framing and packet data to the output stream asynchronously
-        self.writer.write_all(&framing_buf).await?;
-        self.writer.write_all(&packet_buf).await?;
+        // Write the framing and packet data to the chunk sender
+        self.chunk_sender.write_all(&framing_buf).await?;
+        self.chunk_sender.write_all(&packet_buf).await?;
 
         Ok(())
     }
@@ -624,15 +623,8 @@ impl<W: AsyncWrite + Unpin> AsyncStreamingPerfettoWriter<W> {
         self.write_packet(packet).await
     }
 
-    /// Flushes any buffered data to the output stream.
+    /// Flushes any buffered data in the chunk sender.
     pub async fn flush(&mut self) -> anyhow::Result<()> {
-        use tokio::io::AsyncWriteExt;
-        self.writer.flush().await?;
-        Ok(())
-    }
-
-    /// Consumes the writer and returns the underlying output stream.
-    pub fn into_inner(self) -> W {
-        self.writer
+        self.chunk_sender.flush().await
     }
 }

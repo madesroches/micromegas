@@ -11,6 +11,7 @@ authors.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+datafusion.workspace = true
 prost.workspace = true
 prost-build = { version = "0.13", optional=true }
 tokio.workspace = true
