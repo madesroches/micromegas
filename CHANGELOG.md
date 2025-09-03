@@ -2,6 +2,41 @@
 
 This file documents the historical progress of the Micromegas project. For current focus, please see the main [README.md](./README.md).
 
+## September 2025
+ * Released [version 0.12.0](https://crates.io/crates/micromegas)
+ * **Major Features:**
+   * Comprehensive async span tracing with `micromegas_main` proc macro (#451)
+   * Named async span event tracking with improved API ergonomics (#475)
+   * Async span depth tracking for performance analysis (#474)
+   * Async trait tracing support in `span_fn` macro (#469)
+   * Perfetto async spans support with trace generation (#485)
+   * HTTP gateway for easier interoperability (#433, #435, #436)
+   * JSONB support for flexible data structures (#409)
+ * **Infrastructure & Performance:**
+   * Consolidate Perfetto trace generation to use SQL-powered implementation (#489)
+   * Query latency tracking and async span instrumentation optimization (#468)
+   * Replace custom interning logic with `internment` crate (#430)
+   * Optimize view_instance metadata requests (#450)
+   * Convert all unit tests to in-memory recording (#472)
+ * **Documentation & Developer Experience:**
+   * Complete Python API documentation with comprehensive docstrings (#491)
+   * Complete SQL functions documentation with all missing UDFs/UDAFs/UDTFs (#470)
+   * Visual architecture diagrams in documentation (#462)
+   * Unreal instrumentation documentation (#492)
+   * Automated documentation publishing workflow (#444)
+ * **Security & Dependencies:**
+   * Fix CVE-2025-58160: Update tracing-subscriber to 0.3.20 (#490)
+   * Update DataFusion, tokio and other dependencies (#429, #476)
+   * Rust edition 2024 upgrade with unsafe operations fixes (#408)
+ * **Web UI & Export:**
+   * Export Perfetto traces from web UI (#482)
+   * Analytics web app build fixes and documentation updates (#483)
+ * **Cloud & Deployment:**
+   * Docker deployment scripts (#422)
+   * Amazon Linux setup script (#423)
+   * Cloud environment configuration support (#426)
+   * Configurable PostgreSQL port via MICROMEGAS_DB_PORT (#425)
+
 ## July 2025
  * Released [version 0.11.0](https://crates.io/crates/micromegas)
  * Working on http gateway for easier interoperability
