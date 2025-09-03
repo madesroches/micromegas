@@ -16,5 +16,7 @@ jobs:
 
     steps:
     - uses: actions/checkout@v3
+    - name: Install cargo-machete
+      run: cargo install cargo-machete
     - name: rust-ci
       run: ./build/rust_ci.py
