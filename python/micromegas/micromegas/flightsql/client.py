@@ -549,6 +549,7 @@ class FlightSQLClient:
             limit (int): Maximum number of streams to return.
             process_id (str, optional): Filter streams to a specific process.
             tag_filter (str, optional): Filter streams that contain a specific tag.
+                Valid stream tags: 'log', 'metrics', 'cpu'.
 
         Returns:
             pandas.DataFrame: DataFrame containing stream information with columns:
@@ -575,10 +576,10 @@ class FlightSQLClient:
             ... )
             >>>
             >>> # Query streams with a specific tag
-            >>> error_streams = client.query_streams(
+            >>> log_streams = client.query_streams(
             ...     begin, end,
             ...     limit=20,
-            ...     tag_filter='ERROR'
+            ...     tag_filter='log'
             ... )
         """
         conditions = []
@@ -668,7 +669,7 @@ class FlightSQLClient:
                 - name: Name of the operation or function
                 - begin_time: When the span started
                 - end_time: When the span completed
-                - duration_us: Duration in microseconds
+                - duration: Duration in nanoseconds
                 - thread_id: Thread that executed the span
                 - properties: Additional span attributes
 
@@ -677,9 +678,9 @@ class FlightSQLClient:
             >>> spans = client.query_spans(begin, end, 1000, stream_id)
             >>>
             >>> # Find slowest operations
-            >>> slow_spans = spans.nlargest(10, 'duration_us')
+            >>> slow_spans = spans.nlargest(10, 'duration')
             >>> for _, span in slow_spans.iterrows():
-            ...     print(f"{span['name']}: {span['duration_us']/1000:.2f}ms")
+            ...     print(f"{span['name']}: {span['duration']/1000000:.2f}ms")
             >>>
             >>> # Analyze span hierarchy
             >>> root_spans = spans[spans['parent_span_id'].isna()]
