@@ -63,14 +63,13 @@ SELECT file_metadata FROM lakehouse_partitions WHERE file_path = $1
 
 2. **Populate num_rows column in migration** - Process partitions one at a time to avoid loading all metadata at once:
 ```rust
-// In the migration function, process partitions individually
+// In the migration function, process partitions individually using streaming
 async fn populate_num_rows_column(pool: &PgPool) -> Result<()> {
-    // Get all partitions that have file_metadata but no num_rows
-    let partitions = sqlx::query("SELECT file_path, file_metadata FROM lakehouse_partitions WHERE file_metadata IS NOT NULL AND num_rows IS NULL")
-        .fetch_all(pool)
-        .await?;
+    // Stream partitions one by one to avoid loading all metadata into memory
+    let mut rows = sqlx::query("SELECT file_path, file_metadata FROM lakehouse_partitions WHERE file_metadata IS NOT NULL AND num_rows IS NULL")
+        .fetch(pool);
     
-    for row in partitions {
+    while let Some(row) = rows.try_next().await? {
         let file_path: String = row.try_get("file_path")?;
         let file_metadata_buffer: Vec<u8> = row.try_get("file_metadata")?;
         
