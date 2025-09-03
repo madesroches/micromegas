@@ -2,19 +2,18 @@
 
 Python analytics client for https://github.com/madesroches/micromegas/
 
+📖 **[Complete Python API Documentation](https://madesroches.github.io/micromegas/docs/query-guide/python-api/)** - Comprehensive guide with all methods, examples, and advanced patterns
+
 ## Example usage
 
 Query the 2 most recent log entries from the flightsql service
 
 ```python
 import datetime
-import pandas as pd
 import micromegas
-import grpc
 
-host_port = "localhost:50051"
-channel_cred = grpc.local_channel_credentials()
-client = micromegas.flightsql.client.FlightSQLClient(host_port, channel_cred)
+# Connect to local server
+client = micromegas.connect()
 sql = """
 SELECT time, process_id, level, target, msg
 FROM log_entries
@@ -27,7 +26,8 @@ LIMIT 2
 now = datetime.datetime.now(datetime.timezone.utc)
 begin = now - datetime.timedelta(minutes=2)
 end = now
-client.query(sql, begin, end)
+df = client.query(sql, begin, end)
+print(df)
 ```
 
 |    | time                                | process_id                           |   level | target                                 | msg                                         |
@@ -45,14 +45,29 @@ client.query(sql, begin, end)
 Query the 10 slowest top level spans in a trace within a specified time window
 
 ```python
-sql = """
-SELECT begin, end, duration, name
-FROM view_instance('thread_spans', '{stream_id}')
-WHERE depth=1
-ORDER BY duration DESC
-LIMIT 10
-;""".format(stream_id=stream_id)
-client.query(sql, begin_spans, end_spans)
+import datetime
+import micromegas
+
+client = micromegas.connect()
+
+# First find a stream ID
+end = datetime.datetime.now(datetime.timezone.utc)
+begin = end - datetime.timedelta(hours=1)
+streams = client.query_streams(begin, end, limit=1)
+
+if not streams.empty:
+    stream_id = streams['stream_id'].iloc[0]
+    
+    sql = """
+    SELECT begin, end, duration, name
+    FROM view_instance('thread_spans', '{}')
+    WHERE depth=1
+    ORDER BY duration DESC
+    LIMIT 10
+    """.format(stream_id)
+    
+    spans = client.query(sql, begin, end)
+    print(spans)
 ```
 
 |    | begin                               | end                                 |   duration | name              |
@@ -68,160 +83,15 @@ client.query(sql, begin_spans, end_spans)
 |  8 | 2024-10-03 18:00:58.630051300+00:00 | 2024-10-03 18:00:58.654871500+00:00 |   24820200 | FEngineLoop::Tick |
 |  9 | 2024-10-03 18:00:57.952279800+00:00 | 2024-10-03 18:00:57.977024+00:00    |   24744200 | FEngineLoop::Tick |
 
-## SQL reference
+## Quick Start
 
-The Micromegas analytics service is built on Apache DataFusion, please see [Apache DataFusion SQL Reference](https://datafusion.apache.org/user-guide/sql/index.html) for details.
+For a complete getting started guide, see the [Python API Documentation](https://madesroches.github.io/micromegas/docs/query-guide/python-api/).
 
-## View sets
+## Schema Reference
 
-All view instances in a set have the same schema. Some view instances are global (their view_instance_id is 'global').
-Global view instances are implicitly accessible to SQL queries. Non-global view instances are accessible using the table function `view_instance`.
+For complete schema information including all available tables, columns, and data types, see the [Schema Reference](https://madesroches.github.io/micromegas/docs/query-guide/schema-reference/).
 
-### log_entries
+## SQL Reference
 
-```python
-client.query("DESCRIBE log_entries")
-```
-|    | column_name   | data_type                             | is_nullable   |
-|---:|:--------------|:--------------------------------------|:--------------|
-|  0 | process_id    | Dictionary(Int16, Utf8)               | NO            |
-|  1 | exe           | Dictionary(Int16, Utf8)               | NO            |
-|  2 | username      | Dictionary(Int16, Utf8)               | NO            |
-|  3 | computer      | Dictionary(Int16, Utf8)               | NO            |
-|  4 | time          | Timestamp(Nanosecond, Some("+00:00")) | NO            |
-|  5 | target        | Dictionary(Int16, Utf8)               | NO            |
-|  6 | level         | Int32                                 | NO            |
-|  7 | msg           | Utf8                                  | NO            |
+The Micromegas analytics service is built on Apache DataFusion. For SQL syntax and functions, see the [Apache DataFusion SQL Reference](https://datafusion.apache.org/user-guide/sql/index.html).
 
-
-#### log_entries view instances
-The implicit use of the `log_entries` table corresponds to the 'global' instance, which contains the log entries of all the processes.
-
-Except the 'global' instance, the instance_id refers to any process_id. `view_instance('log_entries', process_id)` contains that process's log. Process-specific views are materialized just-in-time and can provide much better query performance compared to the global instance.
-
-### measures
-
-```python
-client.query("DESCRIBE measures")
-```
-|    | column_name   | data_type                             | is_nullable   |
-|---:|:--------------|:--------------------------------------|:--------------|
-|  0 | process_id    | Dictionary(Int16, Utf8)               | NO            |
-|  1 | exe           | Dictionary(Int16, Utf8)               | NO            |
-|  2 | username      | Dictionary(Int16, Utf8)               | NO            |
-|  3 | computer      | Dictionary(Int16, Utf8)               | NO            |
-|  4 | time          | Timestamp(Nanosecond, Some("+00:00")) | NO            |
-|  5 | target        | Dictionary(Int16, Utf8)               | NO            |
-|  6 | name          | Dictionary(Int16, Utf8)               | NO            |
-|  7 | unit          | Dictionary(Int16, Utf8)               | NO            |
-|  8 | value         | Float64                               | NO            |
-
-
-#### measures view instances
-
-The implicit use of the `measures` table corresponds to the 'global' instance, which contains the metrics of all the processes.
-
-Except the 'global' instance, the instance_id refers to any process_id. `view_instance('measures', process_id)` contains that process's metrics. Process-specific views are materialized just-in-time and can provide much better query performance compared to the 'global' instance.
-
-### thread_spans
-
-|    | column_name   | data_type                             | is_nullable   |
-|---:|:--------------|:--------------------------------------|:--------------|
-|  0 | id            | Int64                                 | NO            |
-|  1 | parent        | Int64                                 | NO            |
-|  2 | depth         | UInt32                                | NO            |
-|  3 | hash          | Uint32                                | NO            |
-|  4 | begin         | Timestamp(Nanosecond, Some("+00:00")) | NO            |
-|  5 | end           | Timestamp(Nanosecond, Some("+00:00")) | NO            |
-|  6 | duration      | Int64                                 | NO            |
-|  7 | name          | Dictionary(Int16, Utf8)               | NO            |
-|  8 | target        | Dictionary(Int16, Utf8)               | NO            |
-|  9 | filename      | Dictionary(Int16, Utf8)               | NO            |
-|  10| line          | UInt32                                | NO            |
-
-#### thread_spans view instances
-
-There is no 'global' instance in the 'thread_spans' view set, there is therefore no implicit thread_spans table availble.
-Users can call the table function `view_instance('thread_spans', stream_id)` to query the spans in the thread associated with the specified stream_id.
-
-
-### processes
-
-```python
-client.query("DESCRIBE processes")
-```
-|    | column_name       | data_type                                                                                                                                                                                                                                                                                                                                        | is_nullable   |
-|---:|:------------------|:-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|:--------------|
-|  0 | process_id        | Utf8                                                                                                                                                                                                                                                                                                                                             | NO            |
-|  1 | exe               | Utf8                                                                                                                                                                                                                                                                                                                                             | NO            |
-|  2 | username          | Utf8                                                                                                                                                                                                                                                                                                                                             | NO            |
-|  3 | realname          | Utf8                                                                                                                                                                                                                                                                                                                                             | NO            |
-|  4 | computer          | Utf8                                                                                                                                                                                                                                                                                                                                             | NO            |
-|  5 | distro            | Utf8                                                                                                                                                                                                                                                                                                                                             | NO            |
-|  6 | cpu_brand         | Utf8                                                                                                                                                                                                                                                                                                                                             | NO            |
-|  7 | tsc_frequency     | Int64                                                                                                                                                                                                                                                                                                                                            | NO            |
-|  8 | start_time        | Timestamp(Nanosecond, Some("+00:00"))                                                                                                                                                                                                                                                                                                            | NO            |
-|  9 | start_ticks       | Int64                                                                                                                                                                                                                                                                                                                                            | NO            |
-| 10 | insert_time       | Timestamp(Nanosecond, Some("+00:00"))                                                                                                                                                                                                                                                                                                            | NO            |
-| 11 | parent_process_id | Utf8                                                                                                                                                                                                                                                                                                                                             | NO            |
-| 12 | properties        | List(Field { name: "Property", data_type: Struct([Field { name: "key", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "value", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }) | NO            |
-
-
-There is only one instance in this view set and it is implicitly available.
-
-
-### streams
-
-```python
-client.query("DESCRIBE streams")
-```
-|    | column_name           | data_type                                                                                                                                                                                                                                                                                                                                        | is_nullable   |
-|---:|:----------------------|:-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|:--------------|
-|  0 | stream_id             | Utf8                                                                                                                                                                                                                                                                                                                                             | NO            |
-|  1 | process_id            | Utf8                                                                                                                                                                                                                                                                                                                                             | NO            |
-|  2 | dependencies_metadata | Binary                                                                                                                                                                                                                                                                                                                                           | NO            |
-|  3 | objects_metadata      | Binary                                                                                                                                                                                                                                                                                                                                           | NO            |
-|  4 | tags                  | List(Field { name: "tag", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} })                                                                                                                                                                                                                                  | YES           |
-|  5 | properties            | List(Field { name: "Property", data_type: Struct([Field { name: "key", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "value", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }) | NO            |
-|  6 | insert_time           | Timestamp(Nanosecond, Some("+00:00"))                                                                                                                                                                                                                                                                                                            | NO            |
-
-There is only one instance in this view set and it is implicitly available.
-
-### blocks
-
-
-```python
-client.query("DESCRIBE blocks")
-```
-
-|    | column_name                   | data_type                                                                                                                                                                                                                                                                                                                                        | is_nullable   |
-|---:|:------------------------------|:-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|:--------------|
-|  0 | block_id                      | Utf8                                                                                                                                                                                                                                                                                                                                             | NO            |
-|  1 | stream_id                     | Utf8                                                                                                                                                                                                                                                                                                                                             | NO            |
-|  2 | process_id                    | Utf8                                                                                                                                                                                                                                                                                                                                             | NO            |
-|  3 | begin_time                    | Timestamp(Nanosecond, Some("+00:00"))                                                                                                                                                                                                                                                                                                            | NO            |
-|  4 | begin_ticks                   | Int64                                                                                                                                                                                                                                                                                                                                            | NO            |
-|  5 | end_time                      | Timestamp(Nanosecond, Some("+00:00"))                                                                                                                                                                                                                                                                                                            | NO            |
-|  6 | end_ticks                     | Int64                                                                                                                                                                                                                                                                                                                                            | NO            |
-|  7 | nb_objects                    | Int32                                                                                                                                                                                                                                                                                                                                            | NO            |
-|  8 | object_offset                 | Int64                                                                                                                                                                                                                                                                                                                                            | NO            |
-|  9 | payload_size                  | Int64                                                                                                                                                                                                                                                                                                                                            | NO            |
-| 10 | insert_time                   | Timestamp(Nanosecond, Some("+00:00"))                                                                                                                                                                                                                                                                                                            | NO            |
-| 11 | streams.dependencies_metadata | Binary                                                                                                                                                                                                                                                                                                                                           | NO            |
-| 12 | streams.objects_metadata      | Binary                                                                                                                                                                                                                                                                                                                                           | NO            |
-| 13 | streams.tags                  | List(Field { name: "tag", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} })                                                                                                                                                                                                                                  | YES           |
-| 14 | streams.properties            | List(Field { name: "Property", data_type: Struct([Field { name: "key", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "value", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }) | NO            |
-| 15 | processes.start_time          | Timestamp(Nanosecond, Some("+00:00"))                                                                                                                                                                                                                                                                                                            | NO            |
-| 16 | processes.start_ticks         | Int64                                                                                                                                                                                                                                                                                                                                            | NO            |
-| 17 | processes.tsc_frequency       | Int64                                                                                                                                                                                                                                                                                                                                            | NO            |
-| 18 | processes.exe                 | Utf8                                                                                                                                                                                                                                                                                                                                             | NO            |
-| 19 | processes.username            | Utf8                                                                                                                                                                                                                                                                                                                                             | NO            |
-| 20 | processes.realname            | Utf8                                                                                                                                                                                                                                                                                                                                             | NO            |
-| 21 | processes.computer            | Utf8                                                                                                                                                                                                                                                                                                                                             | NO            |
-| 22 | processes.distro              | Utf8                                                                                                                                                                                                                                                                                                                                             | NO            |
-| 23 | processes.cpu_brand           | Utf8                                                                                                                                                                                                                                                                                                                                             | NO            |
-| 24 | processes.insert_time         | Timestamp(Nanosecond, Some("+00:00"))                                                                                                                                                                                                                                                                                                            | NO            |
-| 25 | processes.parent_process_id   | Utf8                                                                                                                                                                                                                                                                                                                                             | NO            |
-| 26 | processes.properties          | List(Field { name: "Property", data_type: Struct([Field { name: "key", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: "value", data_type: Utf8, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }]), nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }) | NO            |
-
-There is only one instance in this view set and it is implicitly available.
