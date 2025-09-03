@@ -63,7 +63,7 @@ checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
 name = "analytics-web-srv"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "anyhow",
  "arrow-flight",
@@ -1811,7 +1811,7 @@ dependencies = [
 
 [[package]]
 name = "flight-sql-srv"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -2142,7 +2142,7 @@ dependencies = [
 
 [[package]]
 name = "http-gateway"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -2782,7 +2782,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "anyhow",
  "arrow-flight",
@@ -2816,7 +2816,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-analytics"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "anyhow",
  "arrow-flight",
@@ -2847,7 +2847,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-derive-transit"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "quote",
  "syn 1.0.109",
@@ -2855,7 +2855,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-ingestion"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "anyhow",
  "bytes",
@@ -2867,7 +2867,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-perfetto"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2880,7 +2880,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-proc-macros"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2889,7 +2889,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-telemetry"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "anyhow",
  "bytes",
@@ -2907,7 +2907,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-telemetry-sink"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2932,7 +2932,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-tracing"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "anyhow",
  "cfg-if",
@@ -2958,7 +2958,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-tracing-proc-macros"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2967,7 +2967,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-transit"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "anyhow",
  "lazy_static",
@@ -4555,7 +4555,7 @@ dependencies = [
 
 [[package]]
 name = "telemetry-admin"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -4565,7 +4565,7 @@ dependencies = [
 
 [[package]]
 name = "telemetry-ingestion-srv"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "anyhow",
  "axum 0.8.4",
@@ -5020,7 +5020,7 @@ checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
 name = "uri-handler"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "anyhow",
  "micromegas",
@@ -5707,7 +5707,7 @@ dependencies = [
 
 [[package]]
 name = "write-perfetto"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "anyhow",
  "async-trait",
