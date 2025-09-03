@@ -42,10 +42,14 @@ Micromegas is a comprehensive observability solution that provides:
 Get started with Micromegas in just a few steps:
 
 1. **[Getting Started Guide](getting-started.md)** - Set up your first Micromegas installation
-2. **[Query Guide](query-guide/index.md)** - Learn how to query your observability data
-3. **[Architecture Overview](architecture/index.md)** - Understand the system design
+2. **[Unreal Engine Integration](unreal/index.md)** - Add observability to your Unreal Engine games
+3. **[Query Guide](query-guide/index.md)** - Learn how to query your observability data
+4. **[Architecture Overview](architecture/index.md)** - Understand the system design
 
 ## Use Cases
+
+### Game Development
+Monitor Unreal Engine games with integrated telemetry for performance, player behavior, and system health.
 
 ### Application Performance Monitoring
 Monitor your applications with detailed performance metrics, error tracking, and distributed tracing.
