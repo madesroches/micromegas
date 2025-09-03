@@ -183,6 +183,247 @@ for batch in client.query_stream(sql, begin, end):
     numpy_dict = batch.to_pydict()  # Dictionary of numpy arrays
 ```
 
+## Connection Configuration
+
+### `FlightSQLClient(uri, headers=None)`
+
+For advanced connection scenarios, use the `FlightSQLClient` class directly:
+
+```python
+from micromegas.flightsql.client import FlightSQLClient
+
+# Connect to remote server with authentication
+client = FlightSQLClient(
+    "grpc+tls://remote-server:50051",
+    headers={"authorization": "Bearer your-token"}
+)
+
+# Connect to local server (equivalent to micromegas.connect())
+client = FlightSQLClient("grpc://localhost:50051")
+```
+
+**Parameters:**
+- `uri` (str): FlightSQL server URI. Use `grpc://` for unencrypted or `grpc+tls://` for TLS connections
+- `headers` (dict, optional): Custom headers for authentication or metadata
+
+## Schema Discovery
+
+### `prepare_statement(sql)`
+
+Get query schema information without executing the query:
+
+```python
+# Prepare statement to discover schema
+stmt = client.prepare_statement(
+    "SELECT time, level, msg FROM log_entries WHERE level <= 3"
+)
+
+# Inspect the schema
+print("Query result schema:")
+for field in stmt.dataset_schema:
+    print(f"  {field.name}: {field.type}")
+
+# Output:
+#   time: timestamp[ns]
+#   level: int32  
+#   msg: string
+
+# The query is also available
+print(f"Query: {stmt.query}")
+```
+
+### `prepared_statement_stream(statement)`
+
+Execute a prepared statement (mainly useful after schema inspection):
+
+```python
+# Execute the prepared statement
+for batch in client.prepared_statement_stream(stmt):
+    df = batch.to_pandas()
+    print(f"Received {len(df)} rows")
+```
+
+**Note:** Prepared statements are primarily for schema discovery. Execution offers no performance benefit over `query_stream()`.
+
+## Process and Stream Discovery
+
+### `find_process(process_id)`
+
+Find detailed information about a specific process:
+
+```python
+# Find process by ID
+process_info = client.find_process('550e8400-e29b-41d4-a716-446655440000')
+
+if not process_info.empty:
+    print(f"Process: {process_info['exe'].iloc[0]}")
+    print(f"Started: {process_info['start_time'].iloc[0]}")
+    print(f"Computer: {process_info['computer'].iloc[0]}")
+else:
+    print("Process not found")
+```
+
+### `query_streams(begin, end, limit, process_id=None, tag_filter=None)`
+
+Query event streams with filtering:
+
+```python
+# Query all streams from the last hour
+end = datetime.datetime.now(datetime.timezone.utc)
+begin = end - datetime.timedelta(hours=1)
+streams = client.query_streams(begin, end, limit=100)
+
+# Filter by process
+process_streams = client.query_streams(
+    begin, end, 
+    limit=50,
+    process_id='550e8400-e29b-41d4-a716-446655440000'
+)
+
+# Filter by stream tag
+log_streams = client.query_streams(
+    begin, end,
+    limit=20, 
+    tag_filter='log'
+)
+
+print(f"Found {len(streams)} total streams")
+print(f"Stream types: {streams['stream_type'].value_counts()}")
+```
+
+### `query_blocks(begin, end, limit, stream_id)`
+
+Query data blocks within a stream (for low-level inspection):
+
+```python
+# First find a stream
+streams = client.query_streams(begin, end, limit=1)
+if not streams.empty:
+    stream_id = streams['stream_id'].iloc[0]
+    
+    # Query blocks in that stream
+    blocks = client.query_blocks(begin, end, 100, stream_id)
+    print(f"Found {len(blocks)} blocks")
+    print(f"Total events: {blocks['nb_events'].sum()}")
+    print(f"Total size: {blocks['payload_size'].sum()} bytes")
+```
+
+### `query_spans(begin, end, limit, stream_id)`
+
+Query execution spans for performance analysis:
+
+```python
+# Query spans for detailed performance analysis
+spans = client.query_spans(begin, end, 1000, stream_id)
+
+# Find slowest operations
+slow_spans = spans.nlargest(10, 'duration')
+print("Slowest operations:")
+for _, span in slow_spans.iterrows():
+    duration_ms = span['duration'] / 1000000  # Convert nanoseconds to milliseconds
+    print(f"  {span['name']}: {duration_ms:.2f}ms")
+
+# Analyze span hierarchy
+root_spans = spans[spans['parent_span_id'].isna()]
+print(f"Found {len(root_spans)} root operations")
+```
+
+## Data Management
+
+### `bulk_ingest(table_name, df)`
+
+Bulk ingest metadata for replication or administrative tasks:
+
+```python
+import pandas as pd
+
+# Example: Replicate process metadata
+processes_df = pd.DataFrame({
+    'process_id': ['550e8400-e29b-41d4-a716-446655440000'],
+    'exe': ['/usr/bin/myapp'],
+    'username': ['user'],
+    'realname': ['User Name'],
+    'computer': ['hostname'],
+    'distro': ['Ubuntu 22.04'],
+    'cpu_brand': ['Intel Core i7'],
+    'tsc_frequency': [2400000000],
+    'start_time': [datetime.datetime.now(datetime.timezone.utc)],
+    'start_ticks': [1234567890],
+    'insert_time': [datetime.datetime.now(datetime.timezone.utc)],
+    'parent_process_id': [''],
+    'properties': [[]]
+})
+
+# Ingest process metadata
+result = client.bulk_ingest('processes', processes_df)
+if result:
+    print(f"Ingested {result.record_count} process records")
+```
+
+**Supported tables:** `processes`, `streams`, `blocks`, `payloads`
+
+**Note:** This method is for metadata replication and administrative tasks. Use the telemetry ingestion service HTTP API for normal data ingestion.
+
+### `materialize_partitions(view_set_name, begin, end, partition_delta_seconds)`
+
+Create materialized partitions for performance optimization:
+
+```python
+# Materialize hourly partitions for the last 24 hours
+end = datetime.datetime.now(datetime.timezone.utc)
+begin = end - datetime.timedelta(days=1)
+
+client.materialize_partitions(
+    'log_entries',
+    begin,
+    end,
+    3600  # 1-hour partitions
+)
+# Prints progress messages for each materialized partition
+```
+
+### `retire_partitions(view_set_name, view_instance_id, begin, end)`
+
+Remove materialized partitions to free up storage:
+
+```python
+# Retire old partitions
+client.retire_partitions(
+    'log_entries',
+    'process-123-456', 
+    begin,
+    end
+)
+# Prints status messages as partitions are retired
+```
+
+**Warning:** This operation cannot be undone. Retired partitions must be re-materialized if needed.
+
+## Time Utilities
+
+### `format_datetime(value)` and `parse_time_delta(user_string)`
+
+Utility functions for time handling:
+
+```python
+from micromegas.time import format_datetime, parse_time_delta
+
+# Format datetime for queries
+dt = datetime.datetime.now(datetime.timezone.utc)
+formatted = format_datetime(dt)
+print(formatted)  # "2024-01-01T12:00:00+00:00"
+
+# Parse human-readable time deltas
+one_hour = parse_time_delta('1h')
+thirty_minutes = parse_time_delta('30m') 
+seven_days = parse_time_delta('7d')
+
+# Use in calculations
+recent_time = datetime.datetime.now(datetime.timezone.utc) - parse_time_delta('2h')
+```
+
+**Supported units:** `m` (minutes), `h` (hours), `d` (days)
+
 ## Advanced Features
 
 ### Query Streaming Benefits
@@ -326,7 +567,6 @@ def extract_metrics(process_id, hours=24):
     sql = f"""
         SELECT time, name, value, unit
         FROM view_instance('measures', '{process_id}')
-        WHERE time >= '{begin.isoformat()}'
         ORDER BY time;
     """
     
@@ -353,6 +593,7 @@ print(performance_summary)
 
 ## Next Steps
 
+- **[Python API Advanced](python-api-advanced.md)** - Advanced patterns, performance optimization, and specialized tooling
 - **[Schema Reference](schema-reference.md)** - Understand available views and fields
 - **[Functions Reference](functions-reference.md)** - Learn about SQL functions
 - **[Query Patterns](query-patterns.md)** - Common observability query patterns
