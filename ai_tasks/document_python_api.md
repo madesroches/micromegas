@@ -2,45 +2,44 @@
 
 ## Current Status
 - Documentation site: https://madesroches.github.io/micromegas/docs/query-guide/python-api/
-- Coverage: ~20% of available API methods
-- Missing: 13+ methods, advanced features, complete examples
+- **Phase 1 Complete**: All Python docstrings added (100% coverage of public API methods)
+- **Remaining**: Update documentation website with new methods and examples
 
-## Phase 1: Add Python Docstrings
+## Phase 1: Add Python Docstrings ✅ COMPLETED
 
 ### 1.1 FlightSQLClient Methods (`python/micromegas/micromegas/flightsql/client.py`)
 
 #### Core Methods
-- [ ] `__init__(uri, headers=None)` - Constructor with connection configuration
-- [ ] `query(sql, begin=None, end=None)` - Execute SQL and return pandas DataFrame
-- [ ] `query_stream(sql, begin=None, end=None)` - Stream results as Arrow RecordBatch
+- [x] `__init__(uri, headers=None)` - Constructor with connection configuration
+- [x] `query(sql, begin=None, end=None)` - Execute SQL and return pandas DataFrame
+- [x] `query_stream(sql, begin=None, end=None)` - Stream results as Arrow RecordBatch
 
 #### Prepared Statements
-- [ ] `prepare_statement(sql)` - Create prepared statement for repeated execution
-- [ ] `prepared_statement_stream(statement)` - Stream prepared statement results
+- [x] `prepare_statement(sql)` - Create prepared statement for repeated execution
+- [x] `prepared_statement_stream(statement)` - Stream prepared statement results
 
 #### Data Management
-- [ ] `bulk_ingest(table_name, df)` - Bulk ingest pandas DataFrame into table
-- [ ] `retire_partitions(view_set_name, view_instance_id, begin, end)` - Remove partitions
-- [ ] `materialize_partitions(view_set_name, begin, end, partition_delta_seconds)` - Create materialized views
+- [x] `bulk_ingest(table_name, df)` - Bulk ingest pandas DataFrame into table
+- [x] `retire_partitions(view_set_name, view_instance_id, begin, end)` - Remove partitions
+- [x] `materialize_partitions(view_set_name, begin, end, partition_delta_seconds)` - Create materialized views
 
 #### Specialized Queries
-- [ ] `find_process(process_id)` - Find process by ID
-- [ ] `query_streams(begin, end, limit, process_id=None, tag_filter=None)` - Query event streams
-- [ ] `query_blocks(begin, end, limit, stream_id)` - Query blocks within stream
-- [ ] `query_spans(begin, end, limit, stream_id)` - Query thread spans
+- [x] `find_process(process_id)` - Find process by ID
+- [x] `query_streams(begin, end, limit, process_id=None, tag_filter=None)` - Query event streams
+- [x] `query_blocks(begin, end, limit, stream_id)` - Query blocks within stream
+- [x] `query_spans(begin, end, limit, stream_id)` - Query thread spans
 
 ### 1.2 PreparedStatement Class (`python/micromegas/micromegas/flightsql/client.py`)
-- [ ] Class docstring
-- [ ] `query` property - SQL query string
-- [ ] `dataset_schema` property - PyArrow schema
+- [x] Class docstring
+- [x] `query` property - SQL query string (documented via class docstring)
+- [x] `dataset_schema` property - PyArrow schema (documented via class docstring)
 
 ### 1.3 Time Utilities (`python/micromegas/micromegas/time.py`)
-- [ ] `format_datetime(value)` - Format datetime for queries
-- [ ] `parse_time_delta(user_string)` - Parse time strings like "1h", "30m"
+- [x] `format_datetime(value)` - Format datetime for queries
+- [x] `parse_time_delta(user_string)` - Parse time strings like "1h", "30m"
 
 ### 1.4 Perfetto Integration (`python/micromegas/micromegas/perfetto.py`)
-- [ ] Enhance existing docstrings for `write_process_trace()`
-- [ ] Document span_types parameter options
+- [x] Existing docstrings already comprehensive (includes span_types parameter)
 
 ## Phase 2: Update Documentation Website
 
