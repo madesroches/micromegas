@@ -29,7 +29,9 @@ def main():
     FROM processes
     ORDER BY start_time
     LIMIT {limit}
-    ;""".format(limit=limit)
+    ;""".format(
+        limit=limit
+    )
     df_processes = client.query(sql, begin, end)
     if df_processes.empty:
         print("no data")

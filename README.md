@@ -63,14 +63,11 @@ To get started with Micromegas, please refer to the [Getting Started](https://ma
 
 ## Current Status & Roadmap
 
-Our current focus is on **async span tracing** - delivering comprehensive observability for asynchronous Rust applications.
+Our current focus is on **aggregate log views** - creating comprehensive monitoring capabilities to help track system stability and health.
 
-### August 2025
-* **Named Async Span Events**: Enhanced API for tracking named events within async spans with improved ergonomics
-* **Async Span Depth Tracking**: Performance analysis capabilities for measuring async execution depth and complexity
-* **Async Trait Support**: `#[span_fn]` macro now supports async trait methods for comprehensive async instrumentation
-* **Query Latency Optimization**: Improved async span instrumentation performance and query response times
-* **Documentation & Testing**: Complete SQL functions documentation, converted unit tests to in-memory recording, reduced service verbosity
+### September 2025
+* **Aggregate Log View**: Building a new materialized view that aggregates log events by severity, service, and time windows
+* **Stability Monitoring**: Enhanced dashboards and alerts for tracking error rates, warning trends, and system health metrics
 
 For a detailed history of changes, please see the [CHANGELOG.md](./CHANGELOG.md) file.
 

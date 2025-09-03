@@ -37,7 +37,7 @@ def main():
     if args.last is not None:
         sort_order = "DESC"
         limit = int(args.last)
-        
+
     sql = """
     SELECT *
     FROM view_instance('log_entries', '{process_id}')
@@ -52,7 +52,7 @@ def main():
         limit=limit,
         conditions="\n".join(conditions),
     )
-    df_log = client.query(sql).sort_values('time')
+    df_log = client.query(sql).sort_values("time")
     print(tabulate(df_log, headers="keys"))
 
 

@@ -18,6 +18,7 @@ import micromegas
 
 client = micromegas.connect()
 
+
 def test_async_events_depth_field_present():
     """Test that depth field is present in async events schema"""
     # Get a process that might have async events
@@ -30,7 +31,9 @@ def test_async_events_depth_field_present():
     """
     processes = client.query(sql)
 
-    assert len(processes) > 0, "No generator processes found - test requires generator process with async events"
+    assert (
+        len(processes) > 0
+    ), "No generator processes found - test requires generator process with async events"
 
     process_id = processes.iloc[0]["process_id"]
     process_start = processes.iloc[0]["start_time"]
@@ -45,22 +48,31 @@ def test_async_events_depth_field_present():
     FROM view_instance('async_events', '{process_id}')
     ORDER BY time
     LIMIT 5;
-    """.format(process_id=process_id)
+    """.format(
+        process_id=process_id
+    )
 
     async_events = client.query(sql, process_begin, process_end)
     print("Async events with depth field:")
     print(async_events)
 
     # REQUIRE async events to validate depth field
-    assert len(async_events) > 0, f"No async events found for process {process_id} - test requires actual async span data"
+    assert (
+        len(async_events) > 0
+    ), f"No async events found for process {process_id} - test requires actual async span data"
 
     # Verify depth field is present and has expected characteristics
-    assert 'depth' in async_events.columns, "Missing depth field in async events schema"
+    assert "depth" in async_events.columns, "Missing depth field in async events schema"
 
     # Verify depth values are non-negative integers
-    depths = async_events['depth']
-    assert all(depths >= 0), f"Depth values should be non-negative, found: {depths.tolist()}"
-    assert depths.dtype.name in ['uint32', 'int64'], f"Depth should be integer type, found: {depths.dtype}"
+    depths = async_events["depth"]
+    assert all(
+        depths >= 0
+    ), f"Depth values should be non-negative, found: {depths.tolist()}"
+    assert depths.dtype.name in [
+        "uint32",
+        "int64",
+    ], f"Depth should be integer type, found: {depths.dtype}"
 
     print(f"✅ Found depth field with values: {sorted(depths.unique())}")
 
@@ -77,7 +89,9 @@ def test_async_events_depth_hierarchy_validation():
     """
     processes = client.query(sql)
 
-    assert len(processes) > 0, "No generator processes found - test requires generator process with async events"
+    assert (
+        len(processes) > 0
+    ), "No generator processes found - test requires generator process with async events"
 
     process_id = processes.iloc[0]["process_id"]
     process_start = processes.iloc[0]["start_time"]
@@ -96,24 +110,29 @@ def test_async_events_depth_hierarchy_validation():
     WHERE parent.event_type = 'begin' AND child.event_type = 'begin'
     ORDER BY parent.depth, child.depth
     LIMIT 20;
-    """.format(process_id=process_id)
+    """.format(
+        process_id=process_id
+    )
 
     relationships = client.query(sql, process_begin, process_end)
     print("Parent-child depth relationships:")
     print(relationships)
 
-    assert len(relationships) > 0, "No parent-child relationships found - test requires nested async operations"
+    assert (
+        len(relationships) > 0
+    ), "No parent-child relationships found - test requires nested async operations"
 
     # Verify hierarchy constraint: child depth should be parent depth + 1
     for _, row in relationships.iterrows():
-        parent_depth = row['parent_depth']
-        child_depth = row['child_depth']
+        parent_depth = row["parent_depth"]
+        child_depth = row["child_depth"]
         expected_child_depth = parent_depth + 1
 
-        assert child_depth == expected_child_depth, \
-            f"Invalid depth hierarchy: parent {row['parent_name']} (depth {parent_depth}) " \
-            f"should have child {row['child_name']} at depth {expected_child_depth}, " \
+        assert child_depth == expected_child_depth, (
+            f"Invalid depth hierarchy: parent {row['parent_name']} (depth {parent_depth}) "
+            f"should have child {row['child_name']} at depth {expected_child_depth}, "
             f"but found depth {child_depth}"
+        )
 
     print(f"✅ Validated {len(relationships)} parent-child depth relationships")
 
@@ -130,7 +149,9 @@ def test_async_events_depth_based_filtering():
     """
     processes = client.query(sql)
 
-    assert len(processes) > 0, "No generator processes found - test requires generator process with async events"
+    assert (
+        len(processes) > 0
+    ), "No generator processes found - test requires generator process with async events"
 
     process_id = processes.iloc[0]["process_id"]
     process_start = processes.iloc[0]["start_time"]
@@ -147,7 +168,9 @@ def test_async_events_depth_based_filtering():
     WHERE event_type = 'begin' AND depth = 0
     GROUP BY name, depth
     ORDER BY count DESC;
-    """.format(process_id=process_id)
+    """.format(
+        process_id=process_id
+    )
 
     top_level = client.query(sql_top_level, process_begin, process_end)
     print("Top-level async operations (depth = 0):")
@@ -160,7 +183,9 @@ def test_async_events_depth_based_filtering():
     WHERE event_type = 'begin' AND depth <= 2
     GROUP BY depth
     ORDER BY depth;
-    """.format(process_id=process_id)
+    """.format(
+        process_id=process_id
+    )
 
     shallow = client.query(sql_shallow, process_begin, process_end)
     print("Shallow async operations (depth <= 2):")
@@ -174,7 +199,9 @@ def test_async_events_depth_based_filtering():
     GROUP BY name, depth
     ORDER BY depth DESC, count DESC
     LIMIT 10;
-    """.format(process_id=process_id)
+    """.format(
+        process_id=process_id
+    )
 
     deep = client.query(sql_deep, process_begin, process_end)
     print("Deep async operations (depth >= 3):")
@@ -182,12 +209,14 @@ def test_async_events_depth_based_filtering():
 
     # Verify filtering works correctly
     if len(shallow) > 0:
-        max_shallow_depth = shallow['depth'].max()
-        assert max_shallow_depth <= 2, f"Shallow filter failed: found depth {max_shallow_depth}"
+        max_shallow_depth = shallow["depth"].max()
+        assert (
+            max_shallow_depth <= 2
+        ), f"Shallow filter failed: found depth {max_shallow_depth}"
         print(f"✅ Shallow depth filtering working (max depth: {max_shallow_depth})")
 
     if len(deep) > 0:
-        min_deep_depth = deep['depth'].min()
+        min_deep_depth = deep["depth"].min()
         assert min_deep_depth >= 3, f"Deep filter failed: found depth {min_deep_depth}"
         print(f"✅ Deep depth filtering working (min depth: {min_deep_depth})")
 
@@ -206,7 +235,9 @@ def test_async_events_depth_performance_analysis():
     """
     processes = client.query(sql)
 
-    assert len(processes) > 0, "No generator processes found - test requires generator process with async events"
+    assert (
+        len(processes) > 0
+    ), "No generator processes found - test requires generator process with async events"
 
     process_id = processes.iloc[0]["process_id"]
     process_start = processes.iloc[0]["start_time"]
@@ -232,7 +263,9 @@ def test_async_events_depth_performance_analysis():
     WHERE depth < 3  -- Only shallow operations (top-level and immediate children)
     GROUP BY name, depth
     ORDER BY avg_duration DESC;
-    """.format(process_id=process_id)
+    """.format(
+        process_id=process_id
+    )
 
     performance_results = client.query(sql, process_begin, process_end)
     print("Performance analysis by depth (shallow operations):")
@@ -254,27 +287,36 @@ def test_async_events_depth_performance_analysis():
     )
     GROUP BY depth
     ORDER BY depth;
-    """.format(process_id=process_id)
+    """.format(
+        process_id=process_id
+    )
 
     depth_comparison = client.query(sql_depth_comparison, process_begin, process_end)
     print("Performance comparison by call depth:")
     print(depth_comparison)
 
     # REQUIRE some performance data for validation
-    assert len(performance_results) > 0 or len(depth_comparison) > 0, \
-        "No matched begin/end events found - performance analysis requires complete async spans"
+    assert (
+        len(performance_results) > 0 or len(depth_comparison) > 0
+    ), "No matched begin/end events found - performance analysis requires complete async spans"
 
     if len(performance_results) > 0:
-        assert 'avg_duration' in performance_results.columns
-        assert 'depth' in performance_results.columns
-        assert all(performance_results['avg_duration'] >= 0), "Duration should be non-negative"
-        print(f"✅ Performance analysis working for {len(performance_results)} operations")
+        assert "avg_duration" in performance_results.columns
+        assert "depth" in performance_results.columns
+        assert all(
+            performance_results["avg_duration"] >= 0
+        ), "Duration should be non-negative"
+        print(
+            f"✅ Performance analysis working for {len(performance_results)} operations"
+        )
 
     if len(depth_comparison) > 0:
-        assert 'depth' in depth_comparison.columns
-        assert 'span_count' in depth_comparison.columns
-        assert 'avg_duration' in depth_comparison.columns
-        print(f"✅ Depth performance comparison working across {len(depth_comparison)} depth levels")
+        assert "depth" in depth_comparison.columns
+        assert "span_count" in depth_comparison.columns
+        assert "avg_duration" in depth_comparison.columns
+        print(
+            f"✅ Depth performance comparison working across {len(depth_comparison)} depth levels"
+        )
 
 
 def test_async_events_depth_nested_operations():
@@ -289,7 +331,9 @@ def test_async_events_depth_nested_operations():
     """
     processes = client.query(sql)
 
-    assert len(processes) > 0, "No generator processes found - test requires generator process with async events"
+    assert (
+        len(processes) > 0
+    ), "No generator processes found - test requires generator process with async events"
 
     process_id = processes.iloc[0]["process_id"]
     process_start = processes.iloc[0]["start_time"]
@@ -306,7 +350,9 @@ def test_async_events_depth_nested_operations():
     HAVING COUNT(*) > 1  -- Functions that create multiple nested async operations
     ORDER BY nested_count DESC, depth DESC
     LIMIT 10;
-    """.format(process_id=process_id)
+    """.format(
+        process_id=process_id
+    )
 
     nested_operations = client.query(sql, process_begin, process_end)
     print("Operations with many nested async calls:")
@@ -319,28 +365,35 @@ def test_async_events_depth_nested_operations():
     WHERE event_type = 'begin'
     GROUP BY depth
     ORDER BY depth;
-    """.format(process_id=process_id)
+    """.format(
+        process_id=process_id
+    )
 
     depth_distribution = client.query(sql_distribution, process_begin, process_end)
     print("Async operation depth distribution:")
     print(depth_distribution)
 
     # Validation
-    assert len(nested_operations) > 0 or len(depth_distribution) > 0, \
-        "No async operations found - test requires async span data"
+    assert (
+        len(nested_operations) > 0 or len(depth_distribution) > 0
+    ), "No async operations found - test requires async span data"
 
     if len(nested_operations) > 0:
-        assert 'depth' in nested_operations.columns
-        assert 'nested_count' in nested_operations.columns
-        assert all(nested_operations['depth'] > 0), "Should only include nested operations (depth > 0)"
+        assert "depth" in nested_operations.columns
+        assert "nested_count" in nested_operations.columns
+        assert all(
+            nested_operations["depth"] > 0
+        ), "Should only include nested operations (depth > 0)"
         print(f"✅ Found {len(nested_operations)} types of nested async operations")
 
     if len(depth_distribution) > 0:
-        assert 'depth' in depth_distribution.columns
-        assert 'operation_count' in depth_distribution.columns
-        max_depth = depth_distribution['depth'].max()
-        total_operations = depth_distribution['operation_count'].sum()
-        print(f"✅ Depth distribution: {total_operations} operations with max depth {max_depth}")
+        assert "depth" in depth_distribution.columns
+        assert "operation_count" in depth_distribution.columns
+        max_depth = depth_distribution["depth"].max()
+        total_operations = depth_distribution["operation_count"].sum()
+        print(
+            f"✅ Depth distribution: {total_operations} operations with max depth {max_depth}"
+        )
 
 
 def test_async_events_depth_range_validation():
@@ -355,7 +408,9 @@ def test_async_events_depth_range_validation():
     """
     processes = client.query(sql)
 
-    assert len(processes) > 0, "No generator processes found - test requires generator process with async events"
+    assert (
+        len(processes) > 0
+    ), "No generator processes found - test requires generator process with async events"
 
     process_id = processes.iloc[0]["process_id"]
     process_start = processes.iloc[0]["start_time"]
@@ -369,20 +424,24 @@ def test_async_events_depth_range_validation():
            AVG(depth) as avg_depth, COUNT(DISTINCT depth) as unique_depths
     FROM view_instance('async_events', '{process_id}')
     WHERE event_type = 'begin';
-    """.format(process_id=process_id)
+    """.format(
+        process_id=process_id
+    )
 
     depth_stats = client.query(sql, process_begin, process_end)
     print("Depth value statistics:")
     print(depth_stats)
 
-    if len(depth_stats) > 0 and depth_stats.iloc[0]['min_depth'] is not None:
-        min_depth = depth_stats.iloc[0]['min_depth']
-        max_depth = depth_stats.iloc[0]['max_depth']
-        
+    if len(depth_stats) > 0 and depth_stats.iloc[0]["min_depth"] is not None:
+        min_depth = depth_stats.iloc[0]["min_depth"]
+        max_depth = depth_stats.iloc[0]["max_depth"]
+
         # Validate depth ranges
-        assert min_depth >= 0, f"Minimum depth should be non-negative, found: {min_depth}"
+        assert (
+            min_depth >= 0
+        ), f"Minimum depth should be non-negative, found: {min_depth}"
         assert max_depth < 1000, f"Maximum depth seems unreasonably high: {max_depth}"
-        
+
         print(f"✅ Depth values in valid range: {min_depth} to {max_depth}")
     else:
         print("⚠️ No depth statistics available")
