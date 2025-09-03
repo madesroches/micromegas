@@ -28,27 +28,27 @@ def find_test_process():
     ORDER BY MAX(b.end_time) DESC
     LIMIT 1
     """
-    
+
     result = client.query(sql)
     if result.empty:
         return None
-    
+
     row = result.iloc[0]
     return {
-        'process_id': row['process_id'],
-        'exe': row['exe'], 
-        'start_time': row['start_time'],
-        'end_time': row['end_time'],
-        'stream_count': row['stream_count'],
-        'block_count': row['block_count'],
-        'total_objects': row['total_objects']
+        "process_id": row["process_id"],
+        "exe": row["exe"],
+        "start_time": row["start_time"],
+        "end_time": row["end_time"],
+        "stream_count": row["stream_count"],
+        "block_count": row["block_count"],
+        "total_objects": row["total_objects"],
     }
 
 
 def check_process_data_availability(process_id, start_time, end_time):
     """Check what types of telemetry data are available for a process."""
     checks = {}
-    
+
     # Check for thread streams
     sql_thread_streams = f"""
     SELECT COUNT(*) as count
@@ -57,8 +57,10 @@ def check_process_data_availability(process_id, start_time, end_time):
       AND array_has(tags, 'cpu')
     """
     thread_streams = client.query(sql_thread_streams)
-    checks['thread_streams'] = thread_streams['count'].iloc[0] if not thread_streams.empty else 0
-    
+    checks["thread_streams"] = (
+        thread_streams["count"].iloc[0] if not thread_streams.empty else 0
+    )
+
     # Check for async events
     try:
         sql_async_events = f"""
@@ -66,8 +68,10 @@ def check_process_data_availability(process_id, start_time, end_time):
         FROM view_instance('async_events', '{process_id}')
         """
         async_events = client.query(sql_async_events, start_time, end_time)
-        checks['async_events'] = async_events['count'].iloc[0] if not async_events.empty else 0
+        checks["async_events"] = (
+            async_events["count"].iloc[0] if not async_events.empty else 0
+        )
     except Exception:
-        checks['async_events'] = 0
-    
+        checks["async_events"] = 0
+
     return checks

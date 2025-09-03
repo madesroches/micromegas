@@ -1,6 +1,7 @@
 import datetime
 import pandas
 
+
 def format_datetime(value):
     nonetype = type(None)
     value_type = type(value)
