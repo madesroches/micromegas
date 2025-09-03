@@ -2,6 +2,10 @@
 
 This file documents the historical progress of the Micromegas project. For current focus, please see the main [README.md](./README.md).
 
+## [Unreleased]
+ * Working on aggregate log views for enhanced stability monitoring
+ * Planning improvements to log aggregation and health reporting systems
+
 ## September 2025
  * Released [version 0.12.0](https://crates.io/crates/micromegas)
  * **Major Features:**
