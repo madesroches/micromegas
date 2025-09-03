@@ -1,6 +1,6 @@
 use crate::{
     lakehouse::blocks_view::BlocksView,
-    metadata::{find_process, list_process_streams_tagged},
+    metadata::find_process,
     metrics_table::metrics_table_schema,
     time::{TimeRange, datetime_to_scalar},
 };
@@ -10,7 +10,7 @@ use super::{
     block_partition_spec::BlockPartitionSpec,
     dataframe_time_bounds::{DataFrameTimeBounds, NamedColumnsTimeBounds},
     jit_partitions::{
-        JitPartitionConfig, generate_stream_jit_partitions, is_jit_partition_up_to_date,
+        JitPartitionConfig, generate_process_jit_partitions, is_jit_partition_up_to_date,
         write_partition_from_blocks,
     },
     metrics_block_processor::MetricsBlockProcessor,
@@ -146,26 +146,18 @@ impl View for MetricsView {
         let query_range =
             query_range.unwrap_or_else(|| TimeRange::new(process.start_time, chrono::Utc::now()));
 
-        info!("list_process_streams_tagged");
-        let streams = list_process_streams_tagged(&lake.db_pool, process.process_id, "metrics")
-            .await
-            .with_context(|| "list_process_streams_tagged")?;
-        let mut all_partitions = vec![];
         let blocks_view = BlocksView::new()?;
-        for stream in streams {
-            let mut partitions = generate_stream_jit_partitions(
-                &JitPartitionConfig::default(),
-                runtime.clone(),
-                lake.clone(),
-                &blocks_view,
-                &query_range,
-                Arc::new(stream),
-                process.clone(),
-            )
-            .await
-            .with_context(|| "generate_stream_jit_partitions")?;
-            all_partitions.append(&mut partitions);
-        }
+        let all_partitions = generate_process_jit_partitions(
+            &JitPartitionConfig::default(),
+            runtime.clone(),
+            lake.clone(),
+            &blocks_view,
+            &query_range,
+            process.clone(),
+            "metrics",
+        )
+        .await
+        .with_context(|| "generate_process_jit_partitions")?;
         let view_meta = ViewMetadata {
             view_set_name: self.get_view_set_name(),
             view_instance_id: self.get_view_instance_id(),

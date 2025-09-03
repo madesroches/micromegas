@@ -11,9 +11,9 @@ use super::{
     view_factory::ViewMaker,
 };
 use crate::{
-    lakehouse::jit_partitions::{generate_stream_jit_partitions, is_jit_partition_up_to_date},
+    lakehouse::jit_partitions::{generate_process_jit_partitions, is_jit_partition_up_to_date},
     log_entries_table::log_table_schema,
-    metadata::{find_process, list_process_streams_tagged},
+    metadata::find_process,
     time::{TimeRange, datetime_to_scalar},
 };
 use anyhow::{Context, Result};
@@ -136,25 +136,18 @@ impl View for LogView {
         let query_range =
             query_range.unwrap_or_else(|| TimeRange::new(process.start_time, chrono::Utc::now()));
 
-        let streams = list_process_streams_tagged(&lake.db_pool, process.process_id, "log")
-            .await
-            .with_context(|| "list_process_streams_tagged")?;
-        let mut all_partitions = vec![];
         let blocks_view = BlocksView::new()?;
-        for stream in streams {
-            let mut partitions = generate_stream_jit_partitions(
-                &JitPartitionConfig::default(),
-                runtime.clone(),
-                lake.clone(),
-                &blocks_view,
-                &query_range,
-                Arc::new(stream),
-                process.clone(),
-            )
-            .await
-            .with_context(|| "generate_stream_jit_partitions")?;
-            all_partitions.append(&mut partitions);
-        }
+        let all_partitions = generate_process_jit_partitions(
+            &JitPartitionConfig::default(),
+            runtime.clone(),
+            lake.clone(),
+            &blocks_view,
+            &query_range,
+            process.clone(),
+            "log",
+        )
+        .await
+        .with_context(|| "generate_process_jit_partitions")?;
         let view_meta = ViewMetadata {
             view_set_name: self.get_view_set_name(),
             view_instance_id: self.get_view_instance_id(),
