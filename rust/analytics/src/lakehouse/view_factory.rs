@@ -253,36 +253,38 @@ pub async fn default_view_factory(
     let log_view_maker = Arc::new(LogViewMaker {});
     let metrics_view_maker = Arc::new(MetricsViewMaker {});
 
-    // Create log_stats view that depends on log_entries
-    let base_factory = Arc::new(ViewFactory::new(vec![
-        blocks_view.clone(),
-        log_view_maker.make_view("global")?,
-    ]));
-    let log_stats_view =
-        Arc::new(make_log_stats_view(runtime.clone(), lake.clone(), base_factory).await?);
-
+    // Create base views first
     let global_views = vec![
         log_view_maker.make_view("global")?,
         metrics_view_maker.make_view("global")?,
         processes_view,
         streams_view,
         blocks_view,
-        log_stats_view,
     ];
     let mut factory = ViewFactory::new(global_views);
-    factory.add_view_set(String::from("log_entries"), log_view_maker);
+    factory.add_view_set(String::from("log_entries"), log_view_maker.clone());
     factory.add_view_set(String::from("measures"), metrics_view_maker);
     factory.add_view_set(
         String::from("thread_spans"),
         Arc::new(ThreadSpansViewMaker {}),
     );
 
-    // Create the factory as Arc to pass to AsyncEventsViewMaker
+    // Create the factory as Arc to pass to other view makers
     let factory_arc = Arc::new(factory);
-    let mut final_factory = (*factory_arc).clone();
-    final_factory.add_view_set(
+
+    // Create log_stats view with access to the complete factory (including log_entries)
+    let log_stats_view =
+        Arc::new(make_log_stats_view(runtime.clone(), lake.clone(), factory_arc.clone()).await?);
+
+    // Clone factory and add log_stats view
+    let mut updated_factory = (*factory_arc).clone();
+    updated_factory.add_global_view(log_stats_view);
+
+    // Add async_events view maker
+    updated_factory.add_view_set(
         String::from("async_events"),
-        Arc::new(AsyncEventsViewMaker::new(factory_arc)),
+        Arc::new(AsyncEventsViewMaker::new(Arc::new(updated_factory.clone()))),
     );
-    Ok(final_factory)
+
+    Ok(updated_factory)
 }
