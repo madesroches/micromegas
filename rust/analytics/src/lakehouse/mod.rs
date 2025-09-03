@@ -26,6 +26,8 @@ pub mod jit_partitions;
 pub mod list_partitions_table_function;
 /// Implementation of `BlockProcessor` for log entries
 pub mod log_block_processor;
+/// SQL-based view for log statistics aggregated by process, minute, level, and target
+pub mod log_stats_view;
 /// Materializable view of log entries accessible through datafusion
 pub mod log_view;
 /// Exposes materialize_partitions as a table function
