@@ -166,6 +166,7 @@
 //!
 //!
 use super::blocks_view::BlocksView;
+use super::log_stats_view::make_log_stats_view;
 use super::processes_view::make_processes_view;
 use super::streams_view::make_streams_view;
 use super::{
@@ -243,20 +244,30 @@ pub async fn default_view_factory(
     );
     let streams_view = Arc::new(
         make_streams_view(
-            runtime,
-            lake,
+            runtime.clone(),
+            lake.clone(),
             Arc::new(ViewFactory::new(vec![blocks_view.clone()])),
         )
         .await?,
     );
     let log_view_maker = Arc::new(LogViewMaker {});
     let metrics_view_maker = Arc::new(MetricsViewMaker {});
+
+    // Create log_stats view that depends on log_entries
+    let base_factory = Arc::new(ViewFactory::new(vec![
+        blocks_view.clone(),
+        log_view_maker.make_view("global")?,
+    ]));
+    let log_stats_view =
+        Arc::new(make_log_stats_view(runtime.clone(), lake.clone(), base_factory).await?);
+
     let global_views = vec![
         log_view_maker.make_view("global")?,
         metrics_view_maker.make_view("global")?,
         processes_view,
         streams_view,
         blocks_view,
+        log_stats_view,
     ];
     let mut factory = ViewFactory::new(global_views);
     factory.add_view_set(String::from("log_entries"), log_view_maker);
