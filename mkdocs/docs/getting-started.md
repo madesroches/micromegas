@@ -149,9 +149,10 @@ If you see a DataFrame with log entries (or an empty DataFrame if no data has be
 
 Now that you have Micromegas running locally, you can:
 
-1. **[Learn to Query Data](query-guide/index.md)** - Explore the SQL interface and available data
-2. **[Understand the Architecture](architecture/index.md)** - Learn how Micromegas components work together
-3. **[Instrument Your Application](query-guide/python-api.md)** - Start collecting telemetry from your own applications
+1. **[Unreal Engine Integration](unreal/index.md)** - Add observability to your Unreal Engine games
+2. **[Learn to Query Data](query-guide/index.md)** - Explore the SQL interface and available data
+3. **[Understand the Architecture](architecture/index.md)** - Learn how Micromegas components work together
+4. **[Instrument Your Application](query-guide/python-api.md)** - Start collecting telemetry from your own applications
 
 ## Troubleshooting
 

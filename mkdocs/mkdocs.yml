@@ -84,6 +84,11 @@ nav:
     - Async Performance Analysis: query-guide/async-performance-analysis.md
     - Performance: query-guide/performance.md
     - Advanced Features: query-guide/advanced-features.md
+  - Unreal Engine:
+    - Overview: unreal/index.md
+    - Installation: unreal/installation.md
+    - Instrumentation API: unreal/instrumentation-api.md
+    - Examples: unreal/examples.md
   - Architecture:
     - Overview: architecture/index.md
   - Cost Effectiveness:
