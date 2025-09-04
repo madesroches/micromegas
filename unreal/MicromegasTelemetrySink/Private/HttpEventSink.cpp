@@ -337,7 +337,7 @@ TSharedPtr<MicromegasTracing::EventSink, ESPMode::ThreadSafe> InitHttpEventSink(
 	}
 	if (Process->Exe.IsEmpty())
 	{
-  		Process->Exe = TEXT("UnrealEngine");
+		Process->Exe = TEXT("UnrealEngine");
 	}
 	Process->Username = FPlatformProcess::UserName(false);
 	Process->Computer = FPlatformProcess::ComputerName();
@@ -345,7 +345,7 @@ TSharedPtr<MicromegasTracing::EventSink, ESPMode::ThreadSafe> InitHttpEventSink(
 	Process->CpuBrand = *FPlatformMisc::GetCPUBrand();
 	Process->TscFrequency = GetTscFrequency();
 	Process->StartTime = StartTime;
-
+	
 	// Currently this data duplicates some of the data in the process info, but the goal is to move it here
 	// and leave the process info with only the minimum necessary
 	Process->Properties.Add(TEXT("platform-name"), FPlatformProperties::IniPlatformName());
@@ -366,7 +366,7 @@ TSharedPtr<MicromegasTracing::EventSink, ESPMode::ThreadSafe> InitHttpEventSink(
 	Process->Properties.Add(TEXT("cpu-logical-cores"), FString::FromInt(FPlatformMisc::NumberOfCoresIncludingHyperthreads()));
     // this is not a typo, _ was chosen to delimit the unit
 	Process->Properties.Add(TEXT("ram_mb"), FString::FromInt(static_cast<int32>(FPlatformMemory::GetStats().TotalPhysical / (1024 * 1024))));
-
+	
 	TSharedPtr<MicromegasTracing::EventSink, ESPMode::ThreadSafe> Sink = MakeShared<HttpEventSink>(BaseUrl, Process, Auth, Sampling, Flusher);
 	const size_t LOG_BUFFER_SIZE = 10 * 1024 * 1024;
 	const size_t METRICS_BUFFER_SIZE = 10 * 1024 * 1024;
