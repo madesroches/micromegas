@@ -19,9 +19,10 @@ def test_log_stats_basic_functionality():
     print("\n=== Log Stats Integration Test: Basic Functionality ===")
     
     # Calculate time range - avoid recent data to prevent daemon interference
+    # Use very large time window spanning months to ensure we find data
     now = datetime.datetime.now(datetime.timezone.utc)
-    end_time = now - datetime.timedelta(minutes=3)
-    start_time = end_time - datetime.timedelta(minutes=3)
+    end_time = now - datetime.timedelta(minutes=5)
+    start_time = end_time - datetime.timedelta(days=90)
     
     print(f"Testing time range: {start_time} to {end_time}")
     
@@ -32,7 +33,7 @@ def test_log_stats_basic_functionality():
     WHERE time_bin >= '{start_time.isoformat()}'
     AND time_bin < '{end_time.isoformat()}'
     ORDER BY time_bin DESC, count DESC
-    LIMIT 10
+    LIMIT 50
     """
     
     result = client.query(sql, start_time, end_time)
@@ -107,10 +108,10 @@ def test_log_stats_level_grouping():
     """Test level-based grouping functionality."""
     print("\n=== Testing Level-based Grouping ===")
     
-    # Calculate time range
+    # Calculate time range - use months of data
     now = datetime.datetime.now(datetime.timezone.utc)
-    end_time = now - datetime.timedelta(minutes=3)
-    start_time = end_time - datetime.timedelta(minutes=3)
+    end_time = now - datetime.timedelta(minutes=5)
+    start_time = end_time - datetime.timedelta(days=90)
     
     # Test level grouping
     level_query = f"""
@@ -120,6 +121,7 @@ def test_log_stats_level_grouping():
     AND time_bin < '{end_time.isoformat()}'
     GROUP BY level
     ORDER BY level
+    LIMIT 10
     """
     
     level_result = client.query(level_query, start_time, end_time)
@@ -145,10 +147,10 @@ def test_log_stats_process_filtering():
     """Test process and target filtering functionality."""
     print("\n=== Testing Process and Target Filtering ===")
     
-    # Calculate time range
+    # Calculate time range - use months of data
     now = datetime.datetime.now(datetime.timezone.utc)
-    end_time = now - datetime.timedelta(minutes=3)
-    start_time = end_time - datetime.timedelta(minutes=3)
+    end_time = now - datetime.timedelta(minutes=5)
+    start_time = end_time - datetime.timedelta(days=90)
     
     # First get some sample data
     sample_query = f"""
@@ -157,7 +159,7 @@ def test_log_stats_process_filtering():
     WHERE time_bin >= '{start_time.isoformat()}'
     AND time_bin < '{end_time.isoformat()}'
     ORDER BY count DESC
-    LIMIT 1
+    LIMIT 5
     """
     
     sample_result = client.query(sample_query, start_time, end_time)
@@ -177,6 +179,7 @@ def test_log_stats_process_filtering():
     AND process_id = '{sample_process}'
     AND target = '{sample_target}'
     ORDER BY time_bin
+    LIMIT 100
     """
     
     filter_result = client.query(filter_query, start_time, end_time)

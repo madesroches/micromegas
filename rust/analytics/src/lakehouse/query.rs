@@ -71,7 +71,12 @@ pub async fn query_partitions_context(
     partitions: Arc<Vec<Partition>>,
 ) -> Result<SessionContext> {
     let object_store = lake.blob_storage.inner();
-    let table = PartitionedTableProvider::new(schema, object_store.clone(), partitions);
+    let table = PartitionedTableProvider::new(
+        schema,
+        object_store.clone(),
+        partitions,
+        lake.db_pool.clone(),
+    );
     let object_store_url = ObjectStoreUrl::parse("obj://lakehouse/").unwrap();
     let ctx = SessionContext::new_with_config_rt(SessionConfig::default(), runtime);
     ctx.register_object_store(object_store_url.as_ref(), object_store.clone());

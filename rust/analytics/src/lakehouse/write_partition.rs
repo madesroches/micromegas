@@ -223,9 +223,10 @@ fn generate_partition_lock_key(
 async fn write_partition_metadata_attempt(
     lake: &DataLakeConnection,
     partition: &Partition,
+    file_metadata: &Arc<ParquetMetaData>,
     logger: Arc<dyn Logger>,
 ) -> Result<()> {
-    let file_metadata_buffer: Vec<u8> = serialize_parquet_metadata(&partition.file_metadata)
+    let file_metadata_buffer: Vec<u8> = serialize_parquet_metadata(file_metadata)
         .with_context(|| "serialize_parquet_metadata")?
         .into();
 
@@ -239,17 +240,14 @@ async fn write_partition_metadata_attempt(
 
     let mut transaction = lake.db_pool.begin().await?;
 
-    // LOG: Acquiring advisory lock
-    logger
-        .write_log_entry(format!(
-            "[PARTITION_LOCK] view={}/{} time_range=[{}, {}] lock_key={} - acquiring advisory lock",
-            &partition.view_metadata.view_set_name,
-            &partition.view_metadata.view_instance_id,
-            partition.begin_insert_time,
-            partition.end_insert_time,
-            lock_key
-        ))
-        .await?;
+    debug!(
+        "[PARTITION_LOCK] view={}/{} time_range=[{}, {}] lock_key={} - acquiring advisory lock",
+        &partition.view_metadata.view_set_name,
+        &partition.view_metadata.view_instance_id,
+        partition.begin_insert_time,
+        partition.end_insert_time,
+        lock_key
+    );
 
     // Acquire advisory lock - this will block until we can proceed
     // pg_advisory_xact_lock automatically releases when transaction ends
@@ -284,22 +282,19 @@ async fn write_partition_metadata_attempt(
     .await
     .with_context(|| "retire_partitions")?;
 
-    // LOG: About to insert partition
-    logger
-        .write_log_entry(format!(
-            "[PARTITION_INSERT_ATTEMPT] view={}/{} time_range=[{}, {}] source_hash={:?} file_path={}",
-            &partition.view_metadata.view_set_name,
-            &partition.view_metadata.view_instance_id,
-            partition.begin_insert_time,
-            partition.end_insert_time,
-            partition.source_data_hash,
-            partition.file_path
-        ))
-        .await?;
+    debug!(
+        "[PARTITION_INSERT_ATTEMPT] view={}/{} time_range=[{}, {}] source_hash={:?} file_path={}",
+        &partition.view_metadata.view_set_name,
+        &partition.view_metadata.view_instance_id,
+        partition.begin_insert_time,
+        partition.end_insert_time,
+        partition.source_data_hash,
+        partition.file_path
+    );
 
     // Insert the new partition
     let insert_result = sqlx::query(
-        "INSERT INTO lakehouse_partitions VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12);",
+        "INSERT INTO lakehouse_partitions VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13);",
     )
     .bind(&*partition.view_metadata.view_set_name)
     .bind(&*partition.view_metadata.view_instance_id)
@@ -313,21 +308,20 @@ async fn write_partition_metadata_attempt(
     .bind(&partition.view_metadata.file_schema_hash)
 	.bind(&partition.source_data_hash)
 	.bind(file_metadata_buffer)
+	.bind(partition.num_rows)
     .execute(&mut *transaction)
     .await;
 
     match insert_result {
         Ok(_) => {
-            logger
-                .write_log_entry(format!(
-                    "[PARTITION_INSERT_SUCCESS] view={}/{} time_range=[{}, {}] source_hash={:?}",
-                    &partition.view_metadata.view_set_name,
-                    &partition.view_metadata.view_instance_id,
-                    partition.begin_insert_time,
-                    partition.end_insert_time,
-                    partition.source_data_hash
-                ))
-                .await?;
+            debug!(
+                "[PARTITION_INSERT_SUCCESS] view={}/{} time_range=[{}, {}] source_hash={:?}",
+                &partition.view_metadata.view_set_name,
+                &partition.view_metadata.view_instance_id,
+                partition.begin_insert_time,
+                partition.end_insert_time,
+                partition.source_data_hash
+            );
         }
         Err(ref e) => {
             logger
@@ -348,18 +342,14 @@ async fn write_partition_metadata_attempt(
     // Commit the transaction (this also releases the advisory lock)
     transaction.commit().await.with_context(|| "commit")?;
 
-    // LOG: Transaction committed
-    logger
-        .write_log_entry(format!(
-            "[PARTITION_WRITE_COMMIT] view={}/{} time_range=[{}, {}] file_path={} - lock released",
-            &partition.view_metadata.view_set_name,
-            &partition.view_metadata.view_instance_id,
-            partition.begin_insert_time,
-            partition.end_insert_time,
-            partition.file_path
-        ))
-        .await?;
-
+    info!(
+        "[PARTITION_WRITE_COMMIT] view={}/{} time_range=[{}, {}] file_path={} - lock released",
+        &partition.view_metadata.view_set_name,
+        &partition.view_metadata.view_instance_id,
+        partition.begin_insert_time,
+        partition.end_insert_time,
+        partition.file_path
+    );
     Ok(())
 }
 
@@ -367,9 +357,10 @@ async fn write_partition_metadata_attempt(
 async fn write_partition_metadata(
     lake: &DataLakeConnection,
     partition: &Partition,
+    file_metadata: Arc<ParquetMetaData>,
     logger: Arc<dyn Logger>,
 ) -> Result<()> {
-    write_partition_metadata_attempt(lake, partition, logger).await
+    write_partition_metadata_attempt(lake, partition, &file_metadata, logger).await
 }
 
 /// Writes a partition to a Parquet file from a stream of `PartitionRowSet`s.
@@ -473,6 +464,12 @@ pub async fn write_partition_from_rows(
         thrift_file_meta.num_rows,
         byte_counter.load(std::sync::atomic::Ordering::Relaxed)
     );
+    let num_rows = thrift_file_meta.num_rows;
+    let file_metadata = Arc::new(
+        to_parquet_meta_data(&file_schema, thrift_file_meta)
+            .with_context(|| "to_parquet_meta_data")?,
+    );
+
     write_partition_metadata(
         &lake,
         &Partition {
@@ -485,11 +482,9 @@ pub async fn write_partition_from_rows(
             file_path,
             file_size: byte_counter.load(std::sync::atomic::Ordering::Relaxed),
             source_data_hash,
-            file_metadata: Arc::new(
-                to_parquet_meta_data(&file_schema, thrift_file_meta)
-                    .with_context(|| "to_parquet_meta_data")?,
-            ),
+            num_rows,
         },
+        file_metadata,
         logger,
     )
     .await

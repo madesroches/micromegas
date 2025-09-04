@@ -15,6 +15,7 @@ use object_store::ObjectStore;
 use std::sync::Arc;
 
 /// Creates a partitioned execution plan for scanning Parquet files.
+#[expect(clippy::too_many_arguments)]
 pub fn make_partitioned_execution_plan(
     schema: SchemaRef,
     object_store: Arc<dyn ObjectStore>,
@@ -23,6 +24,7 @@ pub fn make_partitioned_execution_plan(
     filters: &[Expr],
     limit: Option<usize>,
     partitions: Arc<Vec<Partition>>,
+    pool: sqlx::PgPool,
 ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
     let predicate = filters_to_predicate(schema.clone(), state, filters)?;
     let mut file_group = vec![];
@@ -31,7 +33,7 @@ pub fn make_partitioned_execution_plan(
     }
 
     let object_store_url = ObjectStoreUrl::parse("obj://lakehouse/").unwrap();
-    let reader_factory = Arc::new(ReaderFactory::new(object_store, partitions));
+    let reader_factory = Arc::new(ReaderFactory::new(object_store, pool));
     let source = Arc::new(
         ParquetSource::default()
             .with_predicate(predicate)

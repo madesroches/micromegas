@@ -49,23 +49,25 @@ def check_process_data_availability(process_id, start_time, end_time):
     """Check what types of telemetry data are available for a process."""
     checks = {}
 
-    # Check for thread streams
+    # Check for thread streams - LIMIT 1 for faster existence check
     sql_thread_streams = f"""
     SELECT COUNT(*) as count
     FROM streams
     WHERE process_id = '{process_id}'
       AND array_has(tags, 'cpu')
+    LIMIT 1
     """
     thread_streams = client.query(sql_thread_streams)
     checks["thread_streams"] = (
         thread_streams["count"].iloc[0] if not thread_streams.empty else 0
     )
 
-    # Check for async events
+    # Check for async events - use LIMIT for faster check
     try:
         sql_async_events = f"""
         SELECT COUNT(*) as count
         FROM view_instance('async_events', '{process_id}')
+        LIMIT 1
         """
         async_events = client.query(sql_async_events, start_time, end_time)
         checks["async_events"] = (
