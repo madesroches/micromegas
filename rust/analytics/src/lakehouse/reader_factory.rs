@@ -12,12 +12,13 @@ use datafusion::{
     },
     physical_plan::metrics::ExecutionPlanMetricsSet,
 };
-use futures::FutureExt;
 use futures::future::BoxFuture;
+use micromegas_tracing::prelude::*;
 use object_store::ObjectStore;
 use sqlx::PgPool;
 use std::ops::Range;
 use std::sync::Arc;
+use tokio::sync::Mutex;
 
 /// A custom [`ParquetFileReaderFactory`] that handles opening parquet files
 /// from object storage, and loads metadata on-demand.
@@ -61,31 +62,20 @@ impl ParquetFileReaderFactory for ReaderFactory {
             inner = inner.with_footer_size_hint(hint)
         };
 
-        // Load metadata on-demand
-        let pool = self.pool.clone();
-        let filename_clone = filename.clone();
-
-        // Since create_reader is not async, we need to block on the async operation
-        // todo: use real async api to handle this
-        let metadata = tokio::task::block_in_place(move || {
-            let runtime = tokio::runtime::Handle::current();
-            runtime.block_on(async move { load_parquet_metadata(&filename_clone, &pool).await })
-        })
-        .map_err(|e| datafusion::error::DataFusionError::External(e.into()))?;
-
-        // debug!("create_reader filename={filename}");
         Ok(Box::new(ParquetReader {
             filename,
-            metadata,
+            pool: self.pool.clone(),
+            metadata: Arc::new(Mutex::new(None)), // Load on-demand in get_metadata()
             inner,
         }))
     }
 }
 
-/// A wrapper around a `ParquetObjectReader` that caches metadata.
+/// A wrapper around a `ParquetObjectReader` that loads metadata on-demand.
 pub struct ParquetReader {
     pub filename: String,
-    pub metadata: Arc<ParquetMetaData>,
+    pub pool: PgPool,
+    pub metadata: Arc<Mutex<Option<Arc<ParquetMetaData>>>>, // Thread-safe cached metadata
     pub inner: ParquetObjectReader,
 }
 
@@ -110,7 +100,32 @@ impl AsyncFileReader for ParquetReader {
         &mut self,
         _options: Option<&ArrowReaderOptions>,
     ) -> BoxFuture<'_, datafusion::parquet::errors::Result<Arc<ParquetMetaData>>> {
-        let metadata = self.metadata.clone();
-        async move { Ok(metadata) }.boxed()
+        let metadata_cache = self.metadata.clone();
+        let pool = self.pool.clone();
+        let filename = self.filename.clone();
+
+        Box::pin(async move {
+            // Check if we already have metadata cached
+            {
+                let lock = metadata_cache.lock().await;
+                if let Some(metadata) = &*lock {
+                    debug!("reusing cached metadata");
+                    return Ok(metadata.clone());
+                }
+            }
+
+            // Load metadata from database
+            let metadata = load_parquet_metadata(&filename, &pool)
+                .await
+                .map_err(|e| datafusion::parquet::errors::ParquetError::External(e.into()))?;
+
+            // Cache the metadata for future calls
+            {
+                let mut lock = metadata_cache.lock().await;
+                *lock = Some(metadata.clone());
+            }
+
+            Ok(metadata)
+        })
     }
 }
