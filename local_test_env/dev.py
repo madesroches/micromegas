@@ -114,10 +114,10 @@ def start_postgres():
                 build.build()
                 os.chdir(str(SCRIPT_DIR))
             
-            # Get environment variables
-            username = os.environ.get("MICROMEGAS_DB_USERNAME", "postgres")
-            passwd = os.environ.get("MICROMEGAS_DB_PASSWD", "password")
-            port = os.environ.get("MICROMEGAS_DB_PORT", "5432")
+            # Get environment variables (no defaults to match original run.py behavior)
+            username = os.environ.get("MICROMEGAS_DB_USERNAME")
+            passwd = os.environ.get("MICROMEGAS_DB_PASSWD")
+            port = os.environ.get("MICROMEGAS_DB_PORT")
             
             # Create and start container
             container = client.containers.run(
@@ -145,10 +145,13 @@ def wait_for_postgres(timeout=15):
         client = docker.from_env()
         container = client.containers.get("teledb")
         
+        # Get the correct username from environment
+        username = os.environ.get("MICROMEGAS_DB_USERNAME", "postgres")
+        
         max_attempts = int(timeout * 2)  # 0.5s intervals
         for attempt in range(max_attempts):
             try:
-                exit_code, output = container.exec_run("pg_isready -U postgres")
+                exit_code, output = container.exec_run(f"pg_isready -U {username}")
                 if exit_code == 0:
                     print("✅ PostgreSQL is ready!")
                     return True
@@ -177,8 +180,8 @@ def start_services(build_mode):
         print("❌ PostgreSQL failed to become ready, exiting...")
         sys.exit(1)
     
-    # Send a simple command to show PostgreSQL is ready in the pane
-    run_command(f"tmux send-keys -t 0 'echo \"🐘 PostgreSQL is ready\"' C-m")
+    # Show live PostgreSQL logs in the first pane
+    run_command(f"tmux send-keys -t 0 'docker logs -f teledb' C-m")
     
     # Start Ingestion Server and wait for it to be ready
     print("📥 Starting Ingestion Server...")
