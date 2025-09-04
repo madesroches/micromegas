@@ -22,7 +22,7 @@ use object_store::buffered::BufWriter;
 use sqlx::Row;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::sync::{Arc, atomic::AtomicI64};
+use std::sync::{atomic::AtomicI64, Arc};
 use tokio::sync::mpsc::Receiver;
 
 use super::{partition::Partition, view::ViewMetadata};
@@ -240,17 +240,14 @@ async fn write_partition_metadata_attempt(
 
     let mut transaction = lake.db_pool.begin().await?;
 
-    // LOG: Acquiring advisory lock
-    logger
-        .write_log_entry(format!(
-            "[PARTITION_LOCK] view={}/{} time_range=[{}, {}] lock_key={} - acquiring advisory lock",
-            &partition.view_metadata.view_set_name,
-            &partition.view_metadata.view_instance_id,
-            partition.begin_insert_time,
-            partition.end_insert_time,
-            lock_key
-        ))
-        .await?;
+    debug!(
+        "[PARTITION_LOCK] view={}/{} time_range=[{}, {}] lock_key={} - acquiring advisory lock",
+        &partition.view_metadata.view_set_name,
+        &partition.view_metadata.view_instance_id,
+        partition.begin_insert_time,
+        partition.end_insert_time,
+        lock_key
+    );
 
     // Acquire advisory lock - this will block until we can proceed
     // pg_advisory_xact_lock automatically releases when transaction ends
@@ -285,18 +282,15 @@ async fn write_partition_metadata_attempt(
     .await
     .with_context(|| "retire_partitions")?;
 
-    // LOG: About to insert partition
-    logger
-        .write_log_entry(format!(
-            "[PARTITION_INSERT_ATTEMPT] view={}/{} time_range=[{}, {}] source_hash={:?} file_path={}",
-            &partition.view_metadata.view_set_name,
-            &partition.view_metadata.view_instance_id,
-            partition.begin_insert_time,
-            partition.end_insert_time,
-            partition.source_data_hash,
-            partition.file_path
-        ))
-        .await?;
+    debug!(
+        "[PARTITION_INSERT_ATTEMPT] view={}/{} time_range=[{}, {}] source_hash={:?} file_path={}",
+        &partition.view_metadata.view_set_name,
+        &partition.view_metadata.view_instance_id,
+        partition.begin_insert_time,
+        partition.end_insert_time,
+        partition.source_data_hash,
+        partition.file_path
+    );
 
     // Insert the new partition
     let insert_result = sqlx::query(
@@ -320,16 +314,14 @@ async fn write_partition_metadata_attempt(
 
     match insert_result {
         Ok(_) => {
-            logger
-                .write_log_entry(format!(
-                    "[PARTITION_INSERT_SUCCESS] view={}/{} time_range=[{}, {}] source_hash={:?}",
-                    &partition.view_metadata.view_set_name,
-                    &partition.view_metadata.view_instance_id,
-                    partition.begin_insert_time,
-                    partition.end_insert_time,
-                    partition.source_data_hash
-                ))
-                .await?;
+            debug!(
+                "[PARTITION_INSERT_SUCCESS] view={}/{} time_range=[{}, {}] source_hash={:?}",
+                &partition.view_metadata.view_set_name,
+                &partition.view_metadata.view_instance_id,
+                partition.begin_insert_time,
+                partition.end_insert_time,
+                partition.source_data_hash
+            );
         }
         Err(ref e) => {
             logger
@@ -350,18 +342,14 @@ async fn write_partition_metadata_attempt(
     // Commit the transaction (this also releases the advisory lock)
     transaction.commit().await.with_context(|| "commit")?;
 
-    // LOG: Transaction committed
-    logger
-        .write_log_entry(format!(
-            "[PARTITION_WRITE_COMMIT] view={}/{} time_range=[{}, {}] file_path={} - lock released",
-            &partition.view_metadata.view_set_name,
-            &partition.view_metadata.view_instance_id,
-            partition.begin_insert_time,
-            partition.end_insert_time,
-            partition.file_path
-        ))
-        .await?;
-
+    info!(
+        "[PARTITION_WRITE_COMMIT] view={}/{} time_range=[{}, {}] file_path={} - lock released",
+        &partition.view_metadata.view_set_name,
+        &partition.view_metadata.view_instance_id,
+        partition.begin_insert_time,
+        partition.end_insert_time,
+        partition.file_path
+    );
     Ok(())
 }
 
