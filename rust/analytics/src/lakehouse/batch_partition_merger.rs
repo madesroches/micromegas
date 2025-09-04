@@ -37,7 +37,7 @@ fn compute_partition_stats(partitions: &[Partition]) -> Result<PartitionStats> {
     }
     let first = partitions.first().unwrap();
     let state = PartitionStats {
-        num_rows: first.file_metadata.file_metadata().num_rows(),
+        num_rows: first.num_rows,
         min_event_time: first.min_event_time,
         max_event_time: first.max_event_time,
     };
@@ -45,7 +45,7 @@ fn compute_partition_stats(partitions: &[Partition]) -> Result<PartitionStats> {
         .iter()
         .skip(1)
         .fold(state, |state, part| PartitionStats {
-            num_rows: state.num_rows + part.file_metadata.file_metadata().num_rows(),
+            num_rows: state.num_rows + part.num_rows,
             min_event_time: state.min_event_time.min(part.min_event_time),
             max_event_time: state.max_event_time.max(part.max_event_time),
         }))

@@ -62,7 +62,8 @@ impl PartitionCache {
                     file_size,
                     file_schema_hash,
                     source_data_hash,
-                    file_metadata
+                    file_metadata,
+                    num_rows
              FROM lakehouse_partitions
              WHERE begin_insert_time < $1
              AND end_insert_time > $2
@@ -94,6 +95,7 @@ impl PartitionCache {
                 file_path: r.try_get("file_path")?,
                 file_size: r.try_get("file_size")?,
                 source_data_hash: r.try_get("source_data_hash")?,
+                num_rows: r.try_get("num_rows")?,
                 file_metadata,
             });
         }
@@ -121,7 +123,8 @@ impl PartitionCache {
                     file_size,
                     file_schema_hash,
                     source_data_hash,
-                    file_metadata
+                    file_metadata,
+                    num_rows
              FROM lakehouse_partitions
              WHERE begin_insert_time < $1
              AND end_insert_time > $2
@@ -157,6 +160,7 @@ impl PartitionCache {
                 file_path: r.try_get("file_path")?,
                 file_size: r.try_get("file_size")?,
                 source_data_hash: r.try_get("source_data_hash")?,
+                num_rows: r.try_get("num_rows")?,
                 file_metadata,
             });
         }
@@ -312,7 +316,8 @@ impl QueryPartitionProvider for LivePartitionProvider {
                     file_size,
                     file_schema_hash,
                     source_data_hash,
-                    file_metadata
+                    file_metadata,
+                    num_rows
              FROM lakehouse_partitions
              WHERE view_set_name = $1
              AND view_instance_id = $2
@@ -344,7 +349,8 @@ impl QueryPartitionProvider for LivePartitionProvider {
                     file_size,
                     file_schema_hash,
                     source_data_hash,
-                    file_metadata
+                    file_metadata,
+                    num_rows
              FROM lakehouse_partitions
              WHERE view_set_name = $1
              AND view_instance_id = $2
@@ -378,6 +384,7 @@ impl QueryPartitionProvider for LivePartitionProvider {
                 file_path: r.try_get("file_path")?,
                 file_size: r.try_get("file_size")?,
                 source_data_hash: r.try_get("source_data_hash")?,
+                num_rows: r.try_get("num_rows")?,
                 file_metadata,
             });
         }

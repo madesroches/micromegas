@@ -25,6 +25,8 @@ pub struct Partition {
     pub file_size: i64,
     /// A hash of the source data that generated this partition.
     pub source_data_hash: Vec<u8>,
+    /// The number of rows in this partition.
+    pub num_rows: i64,
     /// The Parquet file metadata.
     pub file_metadata: Arc<ParquetMetaData>,
 }

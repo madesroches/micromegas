@@ -1,10 +1,11 @@
+use crate::arrow_utils::parse_parquet_metadata;
 use anyhow::{Context, Result};
 use micromegas_ingestion::remote_data_lake::acquire_lock;
 use micromegas_tracing::prelude::*;
 use sqlx::Executor;
 use sqlx::Row;
 
-pub const LATEST_LAKEHOUSE_SCHEMA_VERSION: i32 = 2;
+pub const LATEST_LAKEHOUSE_SCHEMA_VERSION: i32 = 3;
 
 async fn read_lakehouse_schema_version(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> i32 {
     match sqlx::query(
@@ -62,6 +63,13 @@ async fn execute_lakehouse_migration(pool: sqlx::Pool<sqlx::Postgres>) -> Result
         info!("upgrade lakehouse schema to v2");
         let mut tr = pool.begin().await?;
         upgrade_v1_to_v2(&mut tr).await?;
+        current_version = read_lakehouse_schema_version(&mut tr).await;
+        tr.commit().await?;
+    }
+    if 2 == current_version {
+        info!("upgrade lakehouse schema to v3");
+        let mut tr = pool.begin().await?;
+        upgrade_v2_to_v3(&mut tr).await?;
         current_version = read_lakehouse_schema_version(&mut tr).await;
         tr.commit().await?;
     }
@@ -145,5 +153,110 @@ async fn upgrade_v1_to_v2(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Res
     tr.execute("UPDATE lakehouse_migration SET version=2;")
         .await
         .with_context(|| "Updating lakehouse schema version to 2")?;
+    Ok(())
+}
+
+async fn upgrade_v2_to_v3(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Result<()> {
+    // Add num_rows column to store row count separately from file_metadata
+    tr.execute("ALTER TABLE lakehouse_partitions ADD num_rows BIGINT;")
+        .await
+        .with_context(|| "adding column num_rows to lakehouse_partitions table")?;
+
+    // Add index on file_path for efficient on-demand metadata loading
+    tr.execute("CREATE INDEX lakehouse_partitions_file_path ON lakehouse_partitions(file_path);")
+        .await
+        .with_context(|| "creating index on file_path")?;
+
+    // Populate num_rows column for existing partitions
+    populate_num_rows_column(tr)
+        .await
+        .with_context(|| "populating num_rows column")?;
+
+    // Make num_rows NOT NULL after populating existing data
+    tr.execute("ALTER TABLE lakehouse_partitions ALTER COLUMN num_rows SET NOT NULL;")
+        .await
+        .with_context(|| "setting num_rows column to NOT NULL")?;
+
+    tr.execute("UPDATE lakehouse_migration SET version=3;")
+        .await
+        .with_context(|| "Updating lakehouse schema version to 3")?;
+    Ok(())
+}
+
+async fn populate_num_rows_column(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Result<()> {
+    info!("populating num_rows column for existing partitions");
+
+    let mut total_count = 0;
+    let batch_size = 1000;
+
+    loop {
+        // Fetch partitions in batches to avoid loading all metadata into memory
+        let rows = sqlx::query("SELECT file_path, file_metadata FROM lakehouse_partitions WHERE file_metadata IS NOT NULL AND num_rows IS NULL LIMIT $1")
+            .bind(batch_size)
+            .fetch_all(&mut **tr)
+            .await?;
+
+        if rows.is_empty() {
+            break;
+        }
+
+        let mut batch_count = 0;
+        for row in rows {
+            let file_path: String = row.try_get("file_path")?;
+            let file_metadata_buffer: Vec<u8> = row.try_get("file_metadata")?;
+
+            // Parse metadata only for this partition
+            match parse_parquet_metadata(&file_metadata_buffer.into()) {
+                Ok(file_metadata) => {
+                    let num_rows = file_metadata.file_metadata().num_rows();
+
+                    // Update just this partition
+                    if let Err(e) = sqlx::query(
+                        "UPDATE lakehouse_partitions SET num_rows = $1 WHERE file_path = $2",
+                    )
+                    .bind(num_rows)
+                    .bind(&file_path)
+                    .execute(&mut **tr)
+                    .await
+                    {
+                        error!(
+                            "failed to update num_rows for partition {}: {}",
+                            file_path, e
+                        );
+                        continue;
+                    }
+
+                    batch_count += 1;
+                }
+                Err(e) => {
+                    error!(
+                        "failed to parse metadata for partition {}: {}",
+                        file_path, e
+                    );
+                    // For partitions with unparseable metadata, set num_rows to 0 as a fallback
+                    if let Err(e2) = sqlx::query(
+                        "UPDATE lakehouse_partitions SET num_rows = 0 WHERE file_path = $1",
+                    )
+                    .bind(&file_path)
+                    .execute(&mut **tr)
+                    .await
+                    {
+                        error!(
+                            "failed to set fallback num_rows for partition {}: {}",
+                            file_path, e2
+                        );
+                    }
+                }
+            }
+        }
+
+        total_count += batch_count;
+        info!(
+            "populated num_rows for {} partitions (total: {})",
+            batch_count, total_count
+        );
+    }
+
+    info!("populated num_rows for {} total partitions", total_count);
     Ok(())
 }

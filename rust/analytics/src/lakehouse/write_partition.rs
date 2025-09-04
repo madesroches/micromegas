@@ -299,7 +299,7 @@ async fn write_partition_metadata_attempt(
 
     // Insert the new partition
     let insert_result = sqlx::query(
-        "INSERT INTO lakehouse_partitions VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12);",
+        "INSERT INTO lakehouse_partitions VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13);",
     )
     .bind(&*partition.view_metadata.view_set_name)
     .bind(&*partition.view_metadata.view_instance_id)
@@ -313,6 +313,7 @@ async fn write_partition_metadata_attempt(
     .bind(&partition.view_metadata.file_schema_hash)
 	.bind(&partition.source_data_hash)
 	.bind(file_metadata_buffer)
+	.bind(partition.num_rows)
     .execute(&mut *transaction)
     .await;
 
@@ -485,6 +486,7 @@ pub async fn write_partition_from_rows(
             file_path,
             file_size: byte_counter.load(std::sync::atomic::Ordering::Relaxed),
             source_data_hash,
+            num_rows: thrift_file_meta.num_rows,
             file_metadata: Arc::new(
                 to_parquet_meta_data(&file_schema, thrift_file_meta)
                     .with_context(|| "to_parquet_meta_data")?,

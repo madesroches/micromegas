@@ -43,86 +43,35 @@ The `lakehouse_partitions` table includes a `file_metadata` column containing se
 The `file_metadata` is primarily used when:
 - Creating Partition objects that need parquet schema information
 - Reading actual data from parquet files (reader_factory.rs:27)
-- Calculating partition statistics (batch_partition_merger.rs:37, 45)
+- Calculating partition statistics (batch_partition_merger.rs:37, 45) - **OPTIMIZED in Step 1**
 
-## Implementation Strategy
+## Implementation Status
 
-### Step 1: Add num_rows column to lakehouse_partitions table
-Since this involves a schema change, it should be done first. The `batch_partition_merger.rs` currently uses `partition.file_metadata.file_metadata().num_rows()` to get row counts for statistics.
+### ✅ Step 1: Add num_rows column to lakehouse_partitions table - **COMPLETED**
 
-1. **Add new migration** (bump LATEST_LAKEHOUSE_SCHEMA_VERSION to 3):
-```sql
-ALTER TABLE lakehouse_partitions ADD num_rows BIGINT;
-CREATE INDEX lakehouse_partitions_file_path ON lakehouse_partitions(file_path);
-```
+**Schema Migration (v2 → v3):**
+- ✅ Bumped `LATEST_LAKEHOUSE_SCHEMA_VERSION` to 3
+- ✅ Added `num_rows BIGINT NOT NULL` column to lakehouse_partitions table
+- ✅ Added index on `file_path` for efficient on-demand metadata loading
+- ✅ Robust migration logic to populate existing partitions with row counts
 
-The index on `file_path` will optimize the on-demand metadata loading queries:
-```sql
-SELECT file_metadata FROM lakehouse_partitions WHERE file_path = $1
-```
+**Code Changes:**
+- ✅ Updated `Partition` struct to include `num_rows: i64` field
+- ✅ Updated INSERT statement to include num_rows (13 parameters)
+- ✅ Updated `write_partition_from_rows` to extract and store row count from `thrift_file_meta.num_rows`
+- ✅ Updated all SELECT queries in `partition_cache.rs` to fetch `num_rows` column
+- ✅ Updated all Partition object constructions to include the `num_rows` field
+- ✅ **OPTIMIZED:** Updated `batch_partition_merger.rs` to use `partition.num_rows` instead of `partition.file_metadata.file_metadata().num_rows()`
 
-2. **Populate num_rows column in migration** - Process partitions one at a time to avoid loading all metadata at once:
-```rust
-// In the migration function, process partitions individually using streaming
-async fn populate_num_rows_column(pool: &PgPool) -> Result<()> {
-    // Stream partitions one by one to avoid loading all metadata into memory
-    let mut rows = sqlx::query("SELECT file_path, file_metadata FROM lakehouse_partitions WHERE file_metadata IS NOT NULL AND num_rows IS NULL")
-        .fetch(pool);
-    
-    while let Some(row) = rows.try_next().await? {
-        let file_path: String = row.try_get("file_path")?;
-        let file_metadata_buffer: Vec<u8> = row.try_get("file_metadata")?;
-        
-        // Parse metadata only for this partition
-        let file_metadata = parse_parquet_metadata(&file_metadata_buffer.into())?;
-        let num_rows = file_metadata.file_metadata().num_rows();
-        
-        // Update just this partition
-        sqlx::query("UPDATE lakehouse_partitions SET num_rows = $1 WHERE file_path = $2")
-            .bind(num_rows)
-            .bind(file_path)
-            .execute(pool)
-            .await?;
-    }
-    Ok(())
-}
-```
+**Benefits Achieved:**
+- ✅ **Immediate Performance Gain:** Statistics computation no longer requires parsing file_metadata
+- ✅ **Infrastructure Ready:** Index on `file_path` enables efficient on-demand metadata loading
+- ✅ **Backward Compatible:** All existing code continues to work without changes
 
-3. **Update write_partition.rs** to store row count when creating partitions:
-```rust
-// Extract num_rows from ParquetMetaData during partition creation
-let num_rows = partition.file_metadata.file_metadata().num_rows();
-// Store in database INSERT query
-```
+### 🟡 Step 2: Add separate metadata loading - **READY TO IMPLEMENT**
 
-4. **Add num_rows field to Partition struct**:
-```rust
-pub struct Partition {
-    // ... existing fields ...
-    pub num_rows: i64,  // Add this field
-}
-```
+Now that num_rows is available, create infrastructure for on-demand metadata loading:
 
-5. **Update all queries** to fetch num_rows column
-
-6. **Add num_rows field to Partition struct**:
-```rust
-pub struct Partition {
-    // ... existing fields ...
-    pub file_metadata: Arc<ParquetMetaData>,  // Keep this for now
-    pub num_rows: i64,  // Add this field
-}
-```
-
-7. **Update compute_partition_stats to use stored row count**:
-```rust
-// Instead of: partition.file_metadata.file_metadata().num_rows()
-// Use: partition.num_rows
-```
-
-This eliminates the dependency on file_metadata for basic statistics.
-
-### Step 2: Add separate metadata loading
 ```rust
 // New struct for when metadata is needed
 pub struct PartitionWithMetadata {
@@ -130,16 +79,16 @@ pub struct PartitionWithMetadata {
     pub file_metadata: Arc<ParquetMetaData>,
 }
 
-// Standalone metadata loading functions
+// Standalone metadata loading functions (using the file_path index from Step 1)
 pub async fn load_partition_file_metadata(
-    pool: &PgPool, 
+    pool: &PgPool,
     file_path: &str
 ) -> Result<Arc<ParquetMetaData>> {
     let row = sqlx::query("SELECT file_metadata FROM lakehouse_partitions WHERE file_path = $1")
         .bind(file_path)
         .fetch_one(pool)
         .await?;
-    
+
     let file_metadata_buffer: Vec<u8> = row.try_get("file_metadata")?;
     let file_metadata = Arc::new(parse_parquet_metadata(&file_metadata_buffer.into())?);
     Ok(file_metadata)
@@ -158,10 +107,11 @@ pub async fn partition_with_metadata(
 }
 ```
 
-### Step 3: Remove file_metadata from Partition struct and update queries
-Now that we have separate metadata loading and num_rows field, remove the heavy `file_metadata` field and update all queries:
+### 🔴 Step 3: Remove file_metadata from Partition struct and update queries - **PENDING STEP 2**
 
-1. **Update Partition struct**:
+This is the major breaking change. After Step 2 provides alternative access patterns:
+
+1. **Update Partition struct** to remove `file_metadata` field:
 ```rust
 pub struct Partition {
     pub view_metadata: ViewMetadata,
@@ -179,45 +129,43 @@ pub struct Partition {
 ```
 
 2. **Update all query methods** in `partition_cache.rs` to remove file_metadata from SELECT:
-   - **PartitionCache::fetch_overlapping_insert_range** - Remove file_metadata from SELECT, add num_rows
-   - **PartitionCache::fetch_overlapping_insert_range_for_view** - Remove file_metadata from SELECT, add num_rows  
-   - **LivePartitionProvider::fetch** - Remove file_metadata from SELECT, add num_rows
+   - **PartitionCache::fetch_overlapping_insert_range** - Remove file_metadata from SELECT
+   - **PartitionCache::fetch_overlapping_insert_range_for_view** - Remove file_metadata from SELECT
+   - **LivePartitionProvider::fetch** - Remove file_metadata from SELECT
 
-This is the primary breaking change that forces all consumers to handle metadata separately.
+### 🔴 Step 4: Update consumers that need metadata - **PENDING STEP 3**
 
-### Step 4: Update consumers that need metadata
-Files that use `partition.file_metadata` need to be updated:
+Files that currently use `partition.file_metadata` need updates:
 
-1. **reader_factory.rs:27** - Change to load metadata on-demand
-2. **batch_partition_merger.rs:37,45** - Remove dependency on file_metadata for stats
-
+1. **reader_factory.rs:27** - Change to load metadata on-demand using Step 2 functions
+2. **All other consumers** - Update to use on-demand loading pattern
 
 ## Expected Benefits
-- **Reduced I/O**: Skip reading large file_metadata blobs when not needed
-- **Lower Memory Usage**: Avoid deserializing ParquetMetaData unnecessarily  
-- **Faster Query Response**: Smaller result sets and less data transfer
-- **Better Scalability**: Performance improvement scales with partition count
+- **Reduced I/O**: Skip reading large file_metadata blobs when not needed (Step 3)
+- **Lower Memory Usage**: Avoid deserializing ParquetMetaData unnecessarily (Step 3)
+- **Faster Query Response**: Smaller result sets and less data transfer (Step 3)
+- **Better Scalability**: Performance improvement scales with partition count (Step 3)
+- **✅ Immediate Statistics Performance**: Row counts no longer require metadata parsing (Step 1 - ACHIEVED)
 
 ## Risk Mitigation
-- This is a breaking change that will require updating all consumers
-- Add comprehensive tests for new query patterns
-- Monitor performance metrics to validate improvements
+- ✅ **Step 1 Non-Breaking**: All existing code continues to work while gaining performance benefit
+- 🟡 **Step 2 Additive**: Only adds new functionality, no breaking changes
+- 🔴 **Step 3-4 Breaking**: Will require careful coordination and testing
 
-## Query Examples
-Instead of:
-```sql
-SELECT view_set_name, view_instance_id, ..., file_metadata 
-FROM lakehouse_partitions 
-WHERE ...
-```
+## Current Status Summary
 
-Use:
-```sql  
--- For lightweight partition info (default)
-SELECT view_set_name, view_instance_id, ..., source_data_hash 
-FROM lakehouse_partitions WHERE ...
+### ✅ **Ready for Production (Step 1)**
+- Schema v3 migration is complete and tested
+- Immediate performance benefit for statistics computation
+- No breaking changes, fully backward compatible
+- All code compiles and works correctly
 
--- For metadata when needed (separate query)
-SELECT file_metadata 
-FROM lakehouse_partitions WHERE file_path = $1
-```
+### 🟡 **Next Steps (Step 2)**
+- Implement on-demand metadata loading functions
+- Add `PartitionWithMetadata` struct
+- Test on-demand loading performance with the new file_path index
+
+### 🔴 **Future Steps (Step 3-4)**
+- Remove file_metadata from default Partition struct (breaking change)
+- Update all consumers to use on-demand loading
+- Comprehensive testing and performance validation
