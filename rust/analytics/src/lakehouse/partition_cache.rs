@@ -3,9 +3,50 @@ use crate::{arrow_utils::parse_parquet_metadata, time::TimeRange};
 use super::{partition::Partition, view::ViewMetadata};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
+use datafusion::parquet::file::metadata::ParquetMetaData;
 use micromegas_tracing::prelude::*;
 use sqlx::{PgPool, Row};
 use std::{fmt, sync::Arc};
+
+/// A partition with its file metadata loaded on-demand.
+/// This is used when you need both the partition data and its parquet metadata.
+#[derive(Clone, Debug)]
+pub struct PartitionWithMetadata {
+    pub partition: Partition,
+    pub file_metadata: Arc<ParquetMetaData>,
+}
+
+/// Loads file metadata for a specific partition by its file path.
+/// Uses the file_path index created in schema v3 for efficient lookup.
+#[span_fn]
+pub async fn load_partition_file_metadata(
+    pool: &PgPool,
+    file_path: &str,
+) -> Result<Arc<ParquetMetaData>> {
+    let row = sqlx::query("SELECT file_metadata FROM lakehouse_partitions WHERE file_path = $1")
+        .bind(file_path)
+        .fetch_one(pool)
+        .await
+        .with_context(|| format!("loading file_metadata for partition: {file_path}"))?;
+
+    let file_metadata_buffer: Vec<u8> = row.try_get("file_metadata")?;
+    let file_metadata = Arc::new(parse_parquet_metadata(&file_metadata_buffer.into())?);
+    Ok(file_metadata)
+}
+
+/// Convenience function to create a PartitionWithMetadata from an existing Partition.
+/// This loads the file metadata on-demand using the file_path.
+#[span_fn]
+pub async fn partition_with_metadata(
+    partition: Partition,
+    pool: &PgPool,
+) -> Result<PartitionWithMetadata> {
+    let file_metadata = load_partition_file_metadata(pool, &partition.file_path).await?;
+    Ok(PartitionWithMetadata {
+        partition,
+        file_metadata,
+    })
+}
 
 /// A trait for providing queryable partitions.
 #[async_trait]
