@@ -5,6 +5,7 @@
 #include "HAL/Platform.h"
 #include "Templates/SharedPointer.h"
 #include "Engine/EngineBaseTypes.h"
+#include "Runtime/Engine/Public/Scalability.h"
 #include "Engine/World.h"
 
 class UWorld;
@@ -22,7 +23,7 @@ private:
 
 	void OnWorldInit(UWorld* /*World*/, const UWorld::InitializationValues /*IVS*/);
 	void OnWorldTornDown(UWorld* World);
-	void EmitScalabilityMetrics(const Scalability::FQualityLevels& QualityLevels);
+	static void EmitScalabilityMetrics(const Scalability::FQualityLevels& NewLevels);
 
 	FName CurrentWorldName;
 };
