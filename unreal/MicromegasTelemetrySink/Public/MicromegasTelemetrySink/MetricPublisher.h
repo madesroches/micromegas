@@ -22,8 +22,9 @@ private:
 
 	void OnWorldInit(UWorld* /*World*/, const UWorld::InitializationValues /*IVS*/);
 	void OnWorldTornDown(UWorld* World);
+	void EmitScalabilityMetrics(const Scalability::FQualityLevels& QualityLevels);
 
-	FName CurrentWorld;
+	FName CurrentWorldName;
 };
 
 typedef TSharedPtr<MetricPublisher, ESPMode::ThreadSafe> SharedMetricPublisher;
