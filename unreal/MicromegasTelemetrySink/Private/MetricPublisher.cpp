@@ -5,7 +5,6 @@
 
 #include "Engine/World.h"
 #include "HAL/PlatformTime.h"
-#include "MicromegasTelemetrySink/Log.h"
 #include "MicromegasTracing/DefaultContext.h"
 #include "MicromegasTracing/Macros.h"
 #include "Misc/App.h"
@@ -18,7 +17,7 @@ MetricPublisher::MetricPublisher()
 	FWorldDelegates::OnPreWorldInitialization.AddRaw(this, &MetricPublisher::OnWorldInit);
 	FWorldDelegates::OnWorldBeginTearDown.AddRaw(this, &MetricPublisher::OnWorldTornDown);
 	FCoreDelegates::OnBeginFrame.AddRaw(this, &MetricPublisher::Tick);
-	Scalability::OnScalabilitySettingsChanged.AddRaw(this, &MetricPublisher::EmitScalabilityMetrics);
+	Scalability::OnScalabilitySettingsChanged.AddStatic(&MetricPublisher::EmitScalabilityMetrics);
 }
 
 MetricPublisher::~MetricPublisher()
@@ -87,7 +86,7 @@ void MetricPublisher::Tick()
 	MICROMEGAS_FMETRIC("Frame", MicromegasTracing::Verbosity::Med, TEXT("InputLatencyTime"), TEXT("seconds"), FPlatformTime::ToSeconds64(GInputLatencyTime));
 	MICROMEGAS_FMETRIC("Frame", MicromegasTracing::Verbosity::Med, TEXT("GPUTime"), TEXT("seconds"), FPlatformTime::ToSeconds64(RHIGetGPUFrameCycles(0)));
 
-	FPlatformMemoryStats MemStats = FPlatformMemory::GetStats();
+	const FPlatformMemoryStats MemStats = FPlatformMemory::GetStats();
 	MICROMEGAS_IMETRIC("Memory", MicromegasTracing::Verbosity::Med, TEXT("UsedPhysical"), TEXT("bytes"), MemStats.UsedPhysical);
 	MICROMEGAS_IMETRIC("Memory", MicromegasTracing::Verbosity::Med, TEXT("PeakUsedPhysical"), TEXT("bytes"), MemStats.PeakUsedPhysical);
 	MICROMEGAS_IMETRIC("Memory", MicromegasTracing::Verbosity::Med, TEXT("UsedVirtual"), TEXT("bytes"), MemStats.UsedVirtual);
