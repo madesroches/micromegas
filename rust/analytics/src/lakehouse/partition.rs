@@ -1,10 +1,8 @@
-use std::sync::Arc;
-
 use super::view::ViewMetadata;
 use chrono::{DateTime, Utc};
-use datafusion::parquet::file::metadata::ParquetMetaData;
 
-/// Partition metadata
+/// Partition metadata (without embedded file_metadata for performance)
+/// Use load_partition_file_metadata() to load metadata on-demand when needed
 #[derive(Clone, Debug)]
 pub struct Partition {
     /// Metadata about the view this partition belongs to.
@@ -27,6 +25,4 @@ pub struct Partition {
     pub source_data_hash: Vec<u8>,
     /// The number of rows in this partition.
     pub num_rows: i64,
-    /// The Parquet file metadata.
-    pub file_metadata: Arc<ParquetMetaData>,
 }

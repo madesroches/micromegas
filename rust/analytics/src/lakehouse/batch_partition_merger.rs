@@ -114,6 +114,7 @@ impl PartitionMerger for BatchPartitionMerger {
             file_schema,
             lake.blob_storage.inner(),
             partitions_to_merge,
+            lake.db_pool.clone(),
         );
         ctx.register_table(
             TableReference::Bare {

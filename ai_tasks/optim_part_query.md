@@ -161,9 +161,37 @@ pub struct Partition {
 }
 ```
 
-### 🔴 Step 4: Comprehensive testing and validation - **PENDING STEP 3**
+### ✅ Step 3: Remove file_metadata from Partition struct and update queries - **COMPLETED**
 
-After Step 3 removes all `partition.file_metadata` usage:
+Successfully removed `partition.file_metadata` from all code:
+
+**Phase 3a: Cataloged all uses** ✅
+- Found usage in `reader_factory.rs`, `write_partition.rs`, and partition construction in `partition_cache.rs`
+
+**Phase 3b: Updated consumers** ✅
+- **reader_factory.rs**: Now uses `load_partition_file_metadata()` for on-demand loading
+- **write_partition.rs**: Passes metadata separately to `write_partition_metadata()`
+- **Simplified ReaderFactory**: Removed redundant `partition_domain` field
+
+**Phase 3c: Updated queries** ✅
+- All SELECT statements in `partition_cache.rs` now exclude `file_metadata` column
+- Queries only fetch: view metadata, time ranges, file info, and `num_rows`
+
+**Phase 3d: Removed field from struct** ✅
+- Successfully removed `file_metadata` field from `Partition` struct
+- Updated all construction sites to not include the field
+
+**Additional improvements made:**
+- Simplified `load_parquet_metadata()` by removing redundant domain validation
+- Removed `partition_domain` from `ReaderFactory` since it wasn't needed
+- Added proper error context for metadata loading failures
+
+### 🟡 Step 4: Future improvements
+
+**Async API Enhancement (TODO from code):**
+- Current implementation in `reader_factory.rs:80` uses `tokio::task::block_in_place` to handle async metadata loading
+- This is a workaround because DataFusion's `ParquetFileReaderFactory::create_reader` is not async
+- Future enhancement: When DataFusion supports async reader creation, replace the blocking call with proper async/await
 
 **Performance Testing:**
 - Measure query performance before/after removing file_metadata from queries
@@ -193,18 +221,13 @@ After Step 3 removes all `partition.file_metadata` usage:
 
 ## Current Status Summary
 
-### ✅ **Ready for Production (Steps 1-2)**
-- Schema v3 migration is complete and tested
-- On-demand metadata loading infrastructure is implemented and tested
-- Immediate performance benefit for statistics computation
-- No breaking changes, fully backward compatible
-- All code compiles and works correctly
+### ✅ **Completed and Ready for Production (Steps 1-3)**
+- **Step 1**: Schema v3 migration with `num_rows` column - immediate performance benefit for statistics
+- **Step 2**: On-demand metadata loading infrastructure via `load_partition_file_metadata()`
+- **Step 3**: Removed `file_metadata` from Partition struct and all queries
+- All code compiles, tests pass, and is production-ready
 
-### 🟡 **Next Steps (Step 3)**
-- Remove file_metadata from default Partition struct queries (breaking change)
-- Update PartitionCache and LivePartitionProvider to not fetch file_metadata by default
-- Use on-demand loading where metadata is actually needed
-
-### 🔴 **Future Steps (Step 4)**
-- Update all consumers to use on-demand loading pattern
-- Comprehensive testing and performance validation
+### 🟡 **Future Enhancements (Step 4)**
+- Replace `tokio::task::block_in_place` workaround when DataFusion supports async reader creation
+- Performance benchmarking to quantify improvements
+- Monitor production metrics to validate expected benefits

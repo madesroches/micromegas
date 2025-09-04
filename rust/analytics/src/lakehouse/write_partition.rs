@@ -223,9 +223,10 @@ fn generate_partition_lock_key(
 async fn write_partition_metadata_attempt(
     lake: &DataLakeConnection,
     partition: &Partition,
+    file_metadata: &Arc<ParquetMetaData>,
     logger: Arc<dyn Logger>,
 ) -> Result<()> {
-    let file_metadata_buffer: Vec<u8> = serialize_parquet_metadata(&partition.file_metadata)
+    let file_metadata_buffer: Vec<u8> = serialize_parquet_metadata(file_metadata)
         .with_context(|| "serialize_parquet_metadata")?
         .into();
 
@@ -368,9 +369,10 @@ async fn write_partition_metadata_attempt(
 async fn write_partition_metadata(
     lake: &DataLakeConnection,
     partition: &Partition,
+    file_metadata: Arc<ParquetMetaData>,
     logger: Arc<dyn Logger>,
 ) -> Result<()> {
-    write_partition_metadata_attempt(lake, partition, logger).await
+    write_partition_metadata_attempt(lake, partition, &file_metadata, logger).await
 }
 
 /// Writes a partition to a Parquet file from a stream of `PartitionRowSet`s.
@@ -474,6 +476,12 @@ pub async fn write_partition_from_rows(
         thrift_file_meta.num_rows,
         byte_counter.load(std::sync::atomic::Ordering::Relaxed)
     );
+    let num_rows = thrift_file_meta.num_rows;
+    let file_metadata = Arc::new(
+        to_parquet_meta_data(&file_schema, thrift_file_meta)
+            .with_context(|| "to_parquet_meta_data")?,
+    );
+
     write_partition_metadata(
         &lake,
         &Partition {
@@ -486,12 +494,9 @@ pub async fn write_partition_from_rows(
             file_path,
             file_size: byte_counter.load(std::sync::atomic::Ordering::Relaxed),
             source_data_hash,
-            num_rows: thrift_file_meta.num_rows,
-            file_metadata: Arc::new(
-                to_parquet_meta_data(&file_schema, thrift_file_meta)
-                    .with_context(|| "to_parquet_meta_data")?,
-            ),
+            num_rows,
         },
+        file_metadata,
         logger,
     )
     .await

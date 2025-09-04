@@ -100,6 +100,7 @@ impl TableProvider for MaterializedView {
             filters,
             limit,
             Arc::new(partitions),
+            self.lake.db_pool.clone(),
         )
     }
 

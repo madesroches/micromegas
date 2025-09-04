@@ -103,7 +103,6 @@ impl PartitionCache {
                     file_size,
                     file_schema_hash,
                     source_data_hash,
-                    file_metadata,
                     num_rows
              FROM lakehouse_partitions
              WHERE begin_insert_time < $1
@@ -124,8 +123,7 @@ impl PartitionCache {
                 view_instance_id: Arc::new(r.try_get("view_instance_id")?),
                 file_schema_hash: r.try_get("file_schema_hash")?,
             };
-            let file_metadata_buffer: Vec<u8> = r.try_get("file_metadata")?;
-            let file_metadata = Arc::new(parse_parquet_metadata(&file_metadata_buffer.into())?);
+            // file_metadata will be loaded on-demand when needed
             partitions.push(Partition {
                 view_metadata,
                 begin_insert_time: r.try_get("begin_insert_time")?,
@@ -137,7 +135,6 @@ impl PartitionCache {
                 file_size: r.try_get("file_size")?,
                 source_data_hash: r.try_get("source_data_hash")?,
                 num_rows: r.try_get("num_rows")?,
-                file_metadata,
             });
         }
         Ok(Self {
@@ -164,7 +161,6 @@ impl PartitionCache {
                     file_size,
                     file_schema_hash,
                     source_data_hash,
-                    file_metadata,
                     num_rows
              FROM lakehouse_partitions
              WHERE begin_insert_time < $1
@@ -189,8 +185,7 @@ impl PartitionCache {
                 view_instance_id: view_instance_id.clone(),
                 file_schema_hash: r.try_get("file_schema_hash")?,
             };
-            let file_metadata_buffer: Vec<u8> = r.try_get("file_metadata")?;
-            let file_metadata = Arc::new(parse_parquet_metadata(&file_metadata_buffer.into())?);
+            // file_metadata will be loaded on-demand when needed
             partitions.push(Partition {
                 view_metadata,
                 begin_insert_time: r.try_get("begin_insert_time")?,
@@ -202,7 +197,6 @@ impl PartitionCache {
                 file_size: r.try_get("file_size")?,
                 source_data_hash: r.try_get("source_data_hash")?,
                 num_rows: r.try_get("num_rows")?,
-                file_metadata,
             });
         }
         Ok(Self {
@@ -357,7 +351,6 @@ impl QueryPartitionProvider for LivePartitionProvider {
                     file_size,
                     file_schema_hash,
                     source_data_hash,
-                    file_metadata,
                     num_rows
              FROM lakehouse_partitions
              WHERE view_set_name = $1
@@ -390,7 +383,6 @@ impl QueryPartitionProvider for LivePartitionProvider {
                     file_size,
                     file_schema_hash,
                     source_data_hash,
-                    file_metadata,
                     num_rows
              FROM lakehouse_partitions
              WHERE view_set_name = $1
@@ -413,8 +405,7 @@ impl QueryPartitionProvider for LivePartitionProvider {
                 view_instance_id: Arc::new(r.try_get("view_instance_id")?),
                 file_schema_hash: r.try_get("file_schema_hash")?,
             };
-            let file_metadata_buffer: Vec<u8> = r.try_get("file_metadata")?;
-            let file_metadata = Arc::new(parse_parquet_metadata(&file_metadata_buffer.into())?);
+            // file_metadata will be loaded on-demand when needed
             partitions.push(Partition {
                 view_metadata,
                 begin_insert_time: r.try_get("begin_insert_time")?,
@@ -426,7 +417,6 @@ impl QueryPartitionProvider for LivePartitionProvider {
                 file_size: r.try_get("file_size")?,
                 source_data_hash: r.try_get("source_data_hash")?,
                 num_rows: r.try_get("num_rows")?,
-                file_metadata,
             });
         }
         Ok(partitions)

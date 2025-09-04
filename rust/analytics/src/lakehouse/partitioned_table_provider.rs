@@ -9,14 +9,24 @@ use datafusion::{
     prelude::*,
 };
 use object_store::ObjectStore;
+use sqlx::PgPool;
 use std::{any::Any, sync::Arc};
 
 /// A DataFusion `TableProvider` for a set of pre-defined partitions.
-#[derive(Debug)]
 pub struct PartitionedTableProvider {
     schema: SchemaRef,
     object_store: Arc<dyn ObjectStore>,
     partitions: Arc<Vec<Partition>>,
+    pool: PgPool,
+}
+
+impl std::fmt::Debug for PartitionedTableProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PartitionedTableProvider")
+            .field("schema", &self.schema)
+            .field("partitions_count", &self.partitions.len())
+            .finish()
+    }
 }
 
 impl PartitionedTableProvider {
@@ -24,11 +34,13 @@ impl PartitionedTableProvider {
         schema: SchemaRef,
         object_store: Arc<dyn ObjectStore>,
         partitions: Arc<Vec<Partition>>,
+        pool: PgPool,
     ) -> Self {
         Self {
             schema,
             object_store,
             partitions,
+            pool,
         }
     }
 }
@@ -62,6 +74,7 @@ impl TableProvider for PartitionedTableProvider {
             filters,
             limit,
             self.partitions.clone(),
+            self.pool.clone(),
         )
     }
 
