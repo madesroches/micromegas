@@ -1,4 +1,4 @@
-use super::partition_cache::load_partition_file_metadata;
+use super::partition_metadata::load_partition_metadata;
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use datafusion::{
@@ -40,8 +40,8 @@ impl ReaderFactory {
 }
 
 async fn load_parquet_metadata(filename: &str, pool: &PgPool) -> Result<Arc<ParquetMetaData>> {
-    // Load metadata on-demand using the file_path index
-    load_partition_file_metadata(pool, filename)
+    // Load metadata on-demand using the dedicated metadata table
+    load_partition_metadata(pool, filename)
         .await
         .with_context(|| format!("[reader_factory] loading metadata for {filename}"))
 }
