@@ -1,0 +1,1 @@
+searchState.loadedDescShard("micromegas_derive_transit", 0, "derive-transit library provides procedural macros like #[…\ngenerate reflection code\ngenerate heterogenous queue")

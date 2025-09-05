@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["retire_expired_partitions","retire_partitions","write_partition_from_rows"],"struct":["PartitionRowSet"]};

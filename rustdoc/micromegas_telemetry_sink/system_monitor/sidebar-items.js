@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["send_system_metrics_forever","spawn_system_monitor"]};

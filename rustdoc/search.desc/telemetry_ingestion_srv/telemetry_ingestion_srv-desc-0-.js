@@ -1,0 +1,1 @@
+searchState.loadedDescShard("telemetry_ingestion_srv", 0, "Telemetry Ingestion Server\nReturns the argument unchanged.\nCalls <code>U::from(self)</code>.\nServes the HTTP ingestion service.")
