@@ -14,7 +14,6 @@ Currently, parquet metadata appears to be stored alongside partition data, causi
 ### 1. Create New Metadata Table
 Create a dedicated `partition_metadata` table with:
 - `file_path` (PRIMARY KEY) - Full path to the parquet file
-- `file_size` - Size in bytes
 - `metadata` - bytea
 - `insert_time` - Timestamp of metadata creation
 

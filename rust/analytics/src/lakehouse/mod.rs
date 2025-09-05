@@ -48,6 +48,8 @@ pub mod migration;
 pub mod partition;
 /// In-memory copy of a subnet of the list of the partitions in the db
 pub mod partition_cache;
+/// Operations on the dedicated partition_metadata table
+pub mod partition_metadata;
 /// Describes the event blocks backing a partition
 pub mod partition_source_data;
 /// ExecutionPlan based on a set of parquet files
