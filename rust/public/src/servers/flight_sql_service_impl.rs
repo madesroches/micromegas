@@ -94,7 +94,19 @@ where
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         match Pin::new(&mut self.inner).poll_next(cx) {
-            Poll::Ready(Some(result)) => Poll::Ready(Some(result)),
+            Poll::Ready(Some(result)) => {
+                // Check if this is an error result and log it
+                if let Err(ref err) = result {
+                    error!("stream error occurred: {err:?}");
+                    if !self.completed {
+                        let total_duration = now() - self.start_time;
+                        imetric!("query_duration_with_error", "ticks", total_duration as u64);
+                        imetric!("query_failed", "count", 1);
+                        self.completed = true;
+                    }
+                }
+                Poll::Ready(Some(result))
+            }
             Poll::Ready(None) => {
                 // Stream completed successfully
                 if !self.completed {
