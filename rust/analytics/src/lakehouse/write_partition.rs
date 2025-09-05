@@ -339,8 +339,8 @@ async fn insert_partition(
     .bind(&partition.file_path)
     .bind(partition.file_size)
     .bind(&partition.view_metadata.file_schema_hash)
-	.bind(&partition.source_data_hash)
-	.bind(partition.num_rows)
+    .bind(&partition.source_data_hash)
+    .bind(partition.num_rows)
     .execute(&mut *transaction)
     .await;
 
