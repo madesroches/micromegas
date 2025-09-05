@@ -93,7 +93,6 @@ impl PartitionCache {
              FROM lakehouse_partitions
              WHERE begin_insert_time < $1
              AND end_insert_time > $2
-             AND file_metadata IS NOT NULL
              ORDER BY begin_insert_time, file_path
              ;",
         )
@@ -153,7 +152,6 @@ impl PartitionCache {
              AND end_insert_time > $2
              AND view_set_name = $3
              AND view_instance_id = $4
-             AND file_metadata IS NOT NULL
              ORDER BY begin_insert_time, file_path
              ;",
         )
@@ -344,7 +342,6 @@ impl QueryPartitionProvider for LivePartitionProvider {
              AND min_event_time <= $3
              AND max_event_time >= $4
              AND file_schema_hash = $5
-             AND file_metadata IS NOT NULL
              ORDER BY begin_insert_time, file_path
              ;",
             )
@@ -374,7 +371,6 @@ impl QueryPartitionProvider for LivePartitionProvider {
              WHERE view_set_name = $1
              AND view_instance_id = $2
              AND file_schema_hash = $3
-             AND file_metadata IS NOT NULL
              ORDER BY begin_insert_time, file_path
              ;",
             )
