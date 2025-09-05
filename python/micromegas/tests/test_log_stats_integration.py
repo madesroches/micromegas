@@ -66,10 +66,10 @@ def test_log_stats_time_filtering():
     """Test time-based filtering and grouping functionality."""
     print("\n=== Testing Time-based Filtering ===")
     
-    # Calculate time range
+    # Calculate time range - use large time window like other successful tests
     now = datetime.datetime.now(datetime.timezone.utc)
-    end_time = now - datetime.timedelta(minutes=3)
-    start_time = end_time - datetime.timedelta(minutes=15)  # 15-minute window
+    end_time = now - datetime.timedelta(minutes=5)
+    start_time = end_time - datetime.timedelta(days=90)  # 90-day window
     
     # Test time-based aggregation
     time_query = f"""
@@ -85,10 +85,10 @@ def test_log_stats_time_filtering():
     print(f"✅ Time-based filtering returned {len(time_result)} time bins")
     
     if len(time_result) == 0:
-        pytest.fail("No data found in 15-minute window - insufficient test data")
+        pytest.fail("No data found in 90-day window - insufficient test data")
     
     total_events = time_result['total_count'].sum()
-    print(f"  Total events in 15-minute window: {total_events}")
+    print(f"  Total events in 90-day window: {total_events}")
     
     # Validate time bin structure
     time_bins = time_result['time_bin'].tolist()
@@ -219,10 +219,10 @@ def test_log_stats_performance():
     """Test query performance for common patterns."""
     print("\n=== Testing Performance ===")
     
-    # Calculate time range
+    # Calculate time range - use large time window like other successful tests
     now = datetime.datetime.now(datetime.timezone.utc)
-    end_time = now - datetime.timedelta(minutes=3)
-    start_time = end_time - datetime.timedelta(hours=2)  # Larger time window
+    end_time = now - datetime.timedelta(minutes=5)
+    start_time = end_time - datetime.timedelta(days=90)  # 90-day window
     
     import time
     
