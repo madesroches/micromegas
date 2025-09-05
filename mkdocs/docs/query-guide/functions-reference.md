@@ -58,6 +58,8 @@ SELECT * FROM list_partitions()
 | updated | Timestamp(Nanosecond) | Last update time |
 | file_path | Utf8 | Partition file path |
 | file_size | Int64 | File size in bytes |
+| file_schema_hash | Binary | Hash of the file schema |
+| source_data_hash | Binary | Hash of the source data |
 
 **Example:**
 ```sql
