@@ -2,7 +2,7 @@ use super::view::ViewMetadata;
 use chrono::{DateTime, Utc};
 
 /// Partition metadata (without embedded file_metadata for performance)
-/// Use load_partition_file_metadata() to load metadata on-demand when needed
+/// Use load_partition_metadata() to load metadata on-demand when needed
 #[derive(Clone, Debug)]
 pub struct Partition {
     /// Metadata about the view this partition belongs to.

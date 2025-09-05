@@ -1,6 +1,8 @@
-use crate::{arrow_utils::parse_parquet_metadata, time::TimeRange};
+use crate::time::TimeRange;
 
-use super::{partition::Partition, view::ViewMetadata};
+use super::{
+    partition::Partition, partition_metadata::load_partition_metadata, view::ViewMetadata,
+};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use datafusion::parquet::file::metadata::ParquetMetaData;
@@ -16,24 +18,6 @@ pub struct PartitionWithMetadata {
     pub file_metadata: Arc<ParquetMetaData>,
 }
 
-/// Loads file metadata for a specific partition by its file path.
-/// Uses the file_path index created in schema v3 for efficient lookup.
-#[span_fn]
-pub async fn load_partition_file_metadata(
-    pool: &PgPool,
-    file_path: &str,
-) -> Result<Arc<ParquetMetaData>> {
-    let row = sqlx::query("SELECT file_metadata FROM lakehouse_partitions WHERE file_path = $1")
-        .bind(file_path)
-        .fetch_one(pool)
-        .await
-        .with_context(|| format!("loading file_metadata for partition: {file_path}"))?;
-
-    let file_metadata_buffer: Vec<u8> = row.try_get("file_metadata")?;
-    let file_metadata = Arc::new(parse_parquet_metadata(&file_metadata_buffer.into())?);
-    Ok(file_metadata)
-}
-
 /// Convenience function to create a PartitionWithMetadata from an existing Partition.
 /// This loads the file metadata on-demand using the file_path.
 #[span_fn]
@@ -41,7 +25,9 @@ pub async fn partition_with_metadata(
     partition: Partition,
     pool: &PgPool,
 ) -> Result<PartitionWithMetadata> {
-    let file_metadata = load_partition_file_metadata(pool, &partition.file_path).await?;
+    let file_metadata = load_partition_metadata(pool, &partition.file_path)
+        .await
+        .with_context(|| format!("loading metadata for partition: {}", partition.file_path))?;
     Ok(PartitionWithMetadata {
         partition,
         file_metadata,
@@ -107,7 +93,6 @@ impl PartitionCache {
              FROM lakehouse_partitions
              WHERE begin_insert_time < $1
              AND end_insert_time > $2
-             AND file_metadata IS NOT NULL
              ORDER BY begin_insert_time, file_path
              ;",
         )
@@ -167,7 +152,6 @@ impl PartitionCache {
              AND end_insert_time > $2
              AND view_set_name = $3
              AND view_instance_id = $4
-             AND file_metadata IS NOT NULL
              ORDER BY begin_insert_time, file_path
              ;",
         )
@@ -358,7 +342,6 @@ impl QueryPartitionProvider for LivePartitionProvider {
              AND min_event_time <= $3
              AND max_event_time >= $4
              AND file_schema_hash = $5
-             AND file_metadata IS NOT NULL
              ORDER BY begin_insert_time, file_path
              ;",
             )
@@ -388,7 +371,6 @@ impl QueryPartitionProvider for LivePartitionProvider {
              WHERE view_set_name = $1
              AND view_instance_id = $2
              AND file_schema_hash = $3
-             AND file_metadata IS NOT NULL
              ORDER BY begin_insert_time, file_path
              ;",
             )

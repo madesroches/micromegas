@@ -25,7 +25,9 @@ use std::hash::{Hash, Hasher};
 use std::sync::{Arc, atomic::AtomicI64};
 use tokio::sync::mpsc::Receiver;
 
-use super::{partition::Partition, view::ViewMetadata};
+use super::{
+    partition::Partition, partition_metadata::delete_partition_metadata_batch, view::ViewMetadata,
+};
 
 /// A set of rows for a partition, along with their time range.
 pub struct PartitionRowSet {
@@ -59,19 +61,28 @@ pub async fn retire_expired_partitions(
     .await
     .with_context(|| "listing expired partitions")?;
 
-    for old_part in old_partitions {
+    let mut file_paths = Vec::new();
+    for old_part in &old_partitions {
         let file_path: String = old_part.try_get("file_path")?;
         let file_size: i64 = old_part.try_get("file_size")?;
         let temp_expiration =
             Utc::now() + TimeDelta::try_hours(1).with_context(|| "making one hour")?;
         info!("adding out of date partition {file_path} to temporary files to be deleted");
         sqlx::query("INSERT INTO temporary_files VALUES ($1, $2, $3);")
-            .bind(file_path)
+            .bind(&file_path)
             .bind(file_size)
             .bind(temp_expiration)
             .execute(&mut *transaction)
             .await
             .with_context(|| "adding old partition to temporary files to be deleted")?;
+        file_paths.push(file_path);
+    }
+
+    // Delete metadata for all expired partitions in batch
+    if !file_paths.is_empty() {
+        delete_partition_metadata_batch(&mut transaction, &file_paths)
+            .await
+            .with_context(|| "deleting partition metadata for expired partitions")?;
     }
 
     sqlx::query(
@@ -150,7 +161,9 @@ pub async fn retire_partitions(
             old_partitions.len()
         ))
         .await?;
-    for old_part in old_partitions {
+
+    let mut file_paths = Vec::new();
+    for old_part in &old_partitions {
         let file_path: String = old_part.try_get("file_path")?;
         let file_size: i64 = old_part.try_get("file_size")?;
         let expiration = Utc::now() + TimeDelta::try_hours(1).with_context(|| "making one hour")?;
@@ -160,12 +173,20 @@ pub async fn retire_partitions(
             ))
             .await?;
         sqlx::query("INSERT INTO temporary_files VALUES ($1, $2, $3);")
-            .bind(file_path)
+            .bind(&file_path)
             .bind(file_size)
             .bind(expiration)
             .execute(&mut **transaction)
             .await
             .with_context(|| "adding old partition to temporary files to be deleted")?;
+        file_paths.push(file_path);
+    }
+
+    // Delete metadata for all retired partitions in batch
+    if !file_paths.is_empty() {
+        delete_partition_metadata_batch(transaction, &file_paths)
+            .await
+            .with_context(|| "deleting partition metadata for retired partitions")?;
     }
 
     if begin_insert_time == end_insert_time {
@@ -220,16 +241,12 @@ fn generate_partition_lock_key(
     hasher.finish() as i64
 }
 
-async fn write_partition_metadata_attempt(
+async fn insert_partition(
     lake: &DataLakeConnection,
     partition: &Partition,
     file_metadata: &Arc<ParquetMetaData>,
     logger: Arc<dyn Logger>,
 ) -> Result<()> {
-    let file_metadata_buffer: Vec<u8> = serialize_parquet_metadata(file_metadata)
-        .with_context(|| "serialize_parquet_metadata")?
-        .into();
-
     // Generate deterministic lock key for this partition
     let lock_key = generate_partition_lock_key(
         &partition.view_metadata.view_set_name,
@@ -292,9 +309,25 @@ async fn write_partition_metadata_attempt(
         partition.file_path
     );
 
-    // Insert the new partition
+    // Insert the parquet metadata into the dedicated metadata table within the same transaction
+    let metadata_bytes = serialize_parquet_metadata(file_metadata)
+        .with_context(|| "serializing parquet metadata for dedicated table")?;
+    let insert_time = sqlx::types::chrono::Utc::now();
+
+    sqlx::query(
+        "INSERT INTO partition_metadata (file_path, metadata, insert_time) 
+         VALUES ($1, $2, $3)",
+    )
+    .bind(&partition.file_path)
+    .bind(metadata_bytes.as_ref())
+    .bind(insert_time)
+    .execute(&mut *transaction)
+    .await
+    .with_context(|| format!("inserting metadata for file: {}", partition.file_path))?;
+
+    // Insert the new partition (without metadata column)
     let insert_result = sqlx::query(
-        "INSERT INTO lakehouse_partitions VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13);",
+        "INSERT INTO lakehouse_partitions VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12);",
     )
     .bind(&*partition.view_metadata.view_set_name)
     .bind(&*partition.view_metadata.view_instance_id)
@@ -306,9 +339,8 @@ async fn write_partition_metadata_attempt(
     .bind(&partition.file_path)
     .bind(partition.file_size)
     .bind(&partition.view_metadata.file_schema_hash)
-	.bind(&partition.source_data_hash)
-	.bind(file_metadata_buffer)
-	.bind(partition.num_rows)
+    .bind(&partition.source_data_hash)
+    .bind(partition.num_rows)
     .execute(&mut *transaction)
     .await;
 
@@ -351,16 +383,6 @@ async fn write_partition_metadata_attempt(
         partition.file_path
     );
     Ok(())
-}
-
-// Keep old function name for compatibility
-async fn write_partition_metadata(
-    lake: &DataLakeConnection,
-    partition: &Partition,
-    file_metadata: Arc<ParquetMetaData>,
-    logger: Arc<dyn Logger>,
-) -> Result<()> {
-    write_partition_metadata_attempt(lake, partition, &file_metadata, logger).await
 }
 
 /// Writes a partition to a Parquet file from a stream of `PartitionRowSet`s.
@@ -470,7 +492,7 @@ pub async fn write_partition_from_rows(
             .with_context(|| "to_parquet_meta_data")?,
     );
 
-    write_partition_metadata(
+    insert_partition(
         &lake,
         &Partition {
             view_metadata,
@@ -484,11 +506,11 @@ pub async fn write_partition_from_rows(
             source_data_hash,
             num_rows,
         },
-        file_metadata,
+        &file_metadata,
         logger,
     )
     .await
-    .with_context(|| "write_partition_metadata")?;
+    .with_context(|| "insert_partition")?;
     Ok(())
 }
 // from parquet/src/file/footer.rs

@@ -5,7 +5,7 @@ use micromegas_tracing::prelude::*;
 use sqlx::Executor;
 use sqlx::Row;
 
-pub const LATEST_LAKEHOUSE_SCHEMA_VERSION: i32 = 3;
+pub const LATEST_LAKEHOUSE_SCHEMA_VERSION: i32 = 4;
 
 async fn read_lakehouse_schema_version(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> i32 {
     match sqlx::query(
@@ -70,6 +70,13 @@ async fn execute_lakehouse_migration(pool: sqlx::Pool<sqlx::Postgres>) -> Result
         info!("upgrade lakehouse schema to v3");
         let mut tr = pool.begin().await?;
         upgrade_v2_to_v3(&mut tr).await?;
+        current_version = read_lakehouse_schema_version(&mut tr).await;
+        tr.commit().await?;
+    }
+    if 3 == current_version {
+        info!("upgrade lakehouse schema to v4");
+        let mut tr = pool.begin().await?;
+        upgrade_v3_to_v4(&mut tr).await?;
         current_version = read_lakehouse_schema_version(&mut tr).await;
         tr.commit().await?;
     }
@@ -258,5 +265,114 @@ async fn populate_num_rows_column(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>
     }
 
     info!("populated num_rows for {} total partitions", total_count);
+    Ok(())
+}
+
+async fn upgrade_v3_to_v4(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Result<()> {
+    // Create dedicated partition_metadata table
+    tr.execute(
+        "CREATE TABLE partition_metadata(
+            file_path VARCHAR(2047) PRIMARY KEY,
+            metadata bytea NOT NULL,
+            insert_time TIMESTAMPTZ NOT NULL
+        );",
+    )
+    .await
+    .with_context(|| "creating partition_metadata table")?;
+
+    // Migrate existing metadata from lakehouse_partitions to partition_metadata
+    migrate_metadata_to_new_table(tr)
+        .await
+        .with_context(|| "migrating metadata to partition_metadata table")?;
+
+    // Drop the file_metadata column from lakehouse_partitions after successful migration
+    tr.execute("ALTER TABLE lakehouse_partitions DROP COLUMN file_metadata;")
+        .await
+        .with_context(|| "dropping file_metadata column from lakehouse_partitions")?;
+
+    tr.execute("UPDATE lakehouse_migration SET version=4;")
+        .await
+        .with_context(|| "Updating lakehouse schema version to 4")?;
+    Ok(())
+}
+
+async fn migrate_metadata_to_new_table(
+    tr: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+) -> Result<()> {
+    info!("migrating metadata to partition_metadata table");
+
+    // First, get all file paths that have metadata (small data)
+    let file_paths: Vec<String> = sqlx::query_scalar(
+        "SELECT file_path 
+         FROM lakehouse_partitions 
+         WHERE file_metadata IS NOT NULL
+         ORDER BY file_path",
+    )
+    .fetch_all(&mut **tr)
+    .await?;
+
+    let total_to_migrate = file_paths.len();
+    info!(
+        "found {} partitions with metadata to migrate",
+        total_to_migrate
+    );
+
+    let mut total_count = 0;
+    let batch_size = 10; // Small batch size since metadata can be large
+
+    // Process in batches to avoid loading too much metadata at once
+    for chunk in file_paths.chunks(batch_size) {
+        // Build a query to fetch just this batch
+        let placeholders: Vec<String> = (1..=chunk.len()).map(|i| format!("${}", i)).collect();
+        let query_str = format!(
+            "SELECT file_path, file_metadata, updated 
+             FROM lakehouse_partitions 
+             WHERE file_path IN ({})",
+            placeholders.join(", ")
+        );
+
+        let mut query = sqlx::query(&query_str);
+        for path in chunk {
+            query = query.bind(path);
+        }
+
+        let rows = query.fetch_all(&mut **tr).await?;
+
+        for row in rows {
+            let file_path: String = row.try_get("file_path")?;
+            let file_metadata: Vec<u8> = row.try_get("file_metadata")?;
+            let updated: chrono::DateTime<chrono::Utc> = row.try_get("updated")?;
+
+            // Insert into new partition_metadata table (with ON CONFLICT for migration safety)
+            if let Err(e) = sqlx::query(
+                "INSERT INTO partition_metadata (file_path, metadata, insert_time) 
+                 VALUES ($1, $2, $3)
+                 ON CONFLICT (file_path) DO NOTHING",
+            )
+            .bind(&file_path)
+            .bind(&file_metadata)
+            .bind(updated)
+            .execute(&mut **tr)
+            .await
+            {
+                error!(
+                    "failed to migrate metadata for partition {}: {}",
+                    file_path, e
+                );
+                continue;
+            }
+
+            total_count += 1;
+        }
+
+        if total_count % 100 == 0 || total_count == total_to_migrate {
+            info!(
+                "migrated {}/{} partition metadata entries",
+                total_count, total_to_migrate
+            );
+        }
+    }
+
+    info!("migrated metadata for {} total partitions", total_count);
     Ok(())
 }

@@ -5,6 +5,8 @@ use micromegas_tracing::prelude::*;
 use sqlx::Row;
 use std::sync::Arc;
 
+use super::partition_metadata::delete_partition_metadata_batch;
+
 /// Deletes expired temporary files from the data lake.
 pub async fn delete_expired_temporary_files(lake: Arc<DataLakeConnection>) -> Result<()> {
     let mut tr = lake.db_pool.begin().await?;
@@ -24,6 +26,14 @@ pub async fn delete_expired_temporary_files(lake: Arc<DataLakeConnection>) -> Re
         info!("deleting expired file {file_path}");
         to_delete.push(file_path);
     }
+
+    // Delete metadata for expired temporary files
+    if !to_delete.is_empty() {
+        delete_partition_metadata_batch(&mut tr, &to_delete)
+            .await
+            .with_context(|| "deleting partition metadata for expired temporary files")?;
+    }
+
     lake.blob_storage.delete_batch(&to_delete).await?;
     tr.commit().await?;
     Ok(())
