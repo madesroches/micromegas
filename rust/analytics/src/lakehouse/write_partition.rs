@@ -78,13 +78,6 @@ pub async fn retire_expired_partitions(
         file_paths.push(file_path);
     }
 
-    // Delete metadata for all expired partitions in batch
-    if !file_paths.is_empty() {
-        delete_partition_metadata_batch(&mut transaction, &file_paths)
-            .await
-            .with_context(|| "deleting partition metadata for expired partitions")?;
-    }
-
     sqlx::query(
         "DELETE from lakehouse_partitions
          WHERE end_insert_time < $1
@@ -180,13 +173,6 @@ pub async fn retire_partitions(
             .await
             .with_context(|| "adding old partition to temporary files to be deleted")?;
         file_paths.push(file_path);
-    }
-
-    // Delete metadata for all retired partitions in batch
-    if !file_paths.is_empty() {
-        delete_partition_metadata_batch(transaction, &file_paths)
-            .await
-            .with_context(|| "deleting partition metadata for retired partitions")?;
     }
 
     if begin_insert_time == end_insert_time {
