@@ -12,6 +12,7 @@ Micromegas organizes telemetry data into several views that can be queried using
 | [`streams`](#streams) | Data stream information within processes | Stream debugging, data flow analysis |
 | [`blocks`](#blocks) | Core telemetry block metadata | Low-level data inspection |
 | [`log_entries`](#log_entries) | Application log messages with levels | Error tracking, debugging, monitoring |
+| [`log_stats`](#log_stats) | Aggregated log statistics by process, level, and target | Log volume analysis, monitoring trends |
 | [`measures`](#measures) | Numeric metrics and performance data | Performance monitoring, alerting |
 | [`thread_spans`](#thread_spans) | Synchronous execution spans and timing | Performance profiling, call tracing |
 | [`async_events`](#async_events) | Asynchronous event lifecycle tracking | Async operation monitoring |
@@ -176,6 +177,69 @@ ORDER BY time DESC;
 SELECT level, COUNT(*) as count
 FROM view_instance('log_entries', 'my_process_123')
 WHERE time >= NOW() - INTERVAL '1 day'
+GROUP BY level
+ORDER BY level;
+```
+
+### `log_stats`
+
+Materialized view providing aggregated log statistics by process, minute, level, and target. This view is optimized for analyzing log volume trends and patterns over time.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `time_bin` | `Timestamp(Nanosecond)` | 1-minute time bucket for aggregation |
+| `process_id` | `Dictionary(Int16, Utf8)` | Process identifier |
+| `level` | `Int32` | Log level (see [Log Levels](#log-levels)) |
+| `target` | `Dictionary(Int16, Utf8)` | Module/target that generated the logs |
+| `count` | `Int64` | Number of log entries in this aggregation |
+
+**Key Features:**
+- Pre-aggregated by 1-minute intervals for efficient time-series queries
+- Materialized for fast query performance
+- Automatically updated as new log data arrives
+- Daily partitioning for efficient storage and querying
+
+**Example Queries:**
+```sql
+-- Analyze log volume trends over the last hour
+SELECT 
+    time_bin,
+    SUM(count) as total_logs,
+    SUM(CASE WHEN level <= 2 THEN count ELSE 0 END) as error_count
+FROM log_stats
+WHERE time_bin >= NOW() - INTERVAL '1 hour'
+GROUP BY time_bin
+ORDER BY time_bin;
+
+-- Find noisiest modules by log volume
+SELECT 
+    target,
+    SUM(count) as total_logs,
+    COUNT(DISTINCT time_bin) as active_minutes
+FROM log_stats
+WHERE time_bin >= NOW() - INTERVAL '1 day'
+GROUP BY target
+ORDER BY total_logs DESC
+LIMIT 20;
+
+-- Monitor error rate by process
+SELECT 
+    process_id,
+    time_bin,
+    SUM(CASE WHEN level <= 2 THEN count ELSE 0 END) * 100.0 / SUM(count) as error_percentage
+FROM log_stats
+WHERE time_bin >= NOW() - INTERVAL '6 hours'
+GROUP BY process_id, time_bin
+HAVING SUM(count) > 100  -- Filter out low-volume periods
+ORDER BY time_bin, error_percentage DESC;
+
+-- Compare log levels distribution
+SELECT 
+    level,
+    SUM(count) as total_count,
+    SUM(count) * 100.0 / (SELECT SUM(count) FROM log_stats WHERE time_bin >= NOW() - INTERVAL '1 day') as percentage
+FROM log_stats
+WHERE time_bin >= NOW() - INTERVAL '1 day'
 GROUP BY level
 ORDER BY level;
 ```
