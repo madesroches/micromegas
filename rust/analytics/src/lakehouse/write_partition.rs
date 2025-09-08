@@ -25,9 +25,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::{Arc, atomic::AtomicI64};
 use tokio::sync::mpsc::Receiver;
 
-use super::{
-    partition::Partition, partition_metadata::delete_partition_metadata_batch, view::ViewMetadata,
-};
+use super::{partition::Partition, view::ViewMetadata};
 
 /// A set of rows for a partition, along with their time range.
 pub struct PartitionRowSet {
@@ -76,13 +74,6 @@ pub async fn retire_expired_partitions(
             .await
             .with_context(|| "adding old partition to temporary files to be deleted")?;
         file_paths.push(file_path);
-    }
-
-    // Delete metadata for all expired partitions in batch
-    if !file_paths.is_empty() {
-        delete_partition_metadata_batch(&mut transaction, &file_paths)
-            .await
-            .with_context(|| "deleting partition metadata for expired partitions")?;
     }
 
     sqlx::query(
@@ -180,13 +171,6 @@ pub async fn retire_partitions(
             .await
             .with_context(|| "adding old partition to temporary files to be deleted")?;
         file_paths.push(file_path);
-    }
-
-    // Delete metadata for all retired partitions in batch
-    if !file_paths.is_empty() {
-        delete_partition_metadata_batch(transaction, &file_paths)
-            .await
-            .with_context(|| "deleting partition metadata for retired partitions")?;
     }
 
     if begin_insert_time == end_insert_time {
