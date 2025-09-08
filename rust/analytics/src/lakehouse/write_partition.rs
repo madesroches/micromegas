@@ -25,9 +25,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::{Arc, atomic::AtomicI64};
 use tokio::sync::mpsc::Receiver;
 
-use super::{
-    partition::Partition, partition_metadata::delete_partition_metadata_batch, view::ViewMetadata,
-};
+use super::{partition::Partition, view::ViewMetadata};
 
 /// A set of rows for a partition, along with their time range.
 pub struct PartitionRowSet {
