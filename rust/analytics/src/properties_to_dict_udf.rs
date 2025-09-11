@@ -279,3 +279,148 @@ impl ScalarUDFImpl for PropertiesToArray {
         }
     }
 }
+
+// UDF to get length of properties that works with both regular and dictionary arrays
+#[derive(Debug)]
+pub struct PropertiesLength {
+    signature: Signature,
+}
+
+impl PropertiesLength {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl Default for PropertiesLength {
+    fn default() -> Self {
+        Self {
+            signature: Signature::any(1, Volatility::Immutable),
+        }
+    }
+}
+
+impl ScalarUDFImpl for PropertiesLength {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "properties_length"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Int32)
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let args = args.args;
+        if args.len() != 1 {
+            return internal_err!("properties_length expects exactly one argument");
+        }
+
+        match &args[0] {
+            ColumnarValue::Array(array) => {
+                match array.data_type() {
+                    DataType::List(_) => {
+                        // Handle regular list array
+                        let list_array = array
+                            .as_any()
+                            .downcast_ref::<GenericListArray<i32>>()
+                            .ok_or_else(|| {
+                                DataFusionError::Internal(
+                                    "properties_length: failed to cast to list array".to_string(),
+                                )
+                            })?;
+
+                        let mut lengths = Vec::with_capacity(list_array.len());
+                        for i in 0..list_array.len() {
+                            if list_array.is_null(i) {
+                                lengths.push(None);
+                            } else {
+                                let start = list_array.value_offsets()[i] as usize;
+                                let end = list_array.value_offsets()[i + 1] as usize;
+                                lengths.push(Some((end - start) as i32));
+                            }
+                        }
+
+                        let length_array = Int32Array::from(lengths);
+                        Ok(ColumnarValue::Array(Arc::new(length_array)))
+                    }
+                    DataType::Dictionary(_, value_type) => {
+                        // Handle dictionary array
+                        match value_type.as_ref() {
+                            DataType::List(_) => {
+                                let dict_array = array
+                                    .as_any()
+                                    .downcast_ref::<DictionaryArray<Int32Type>>()
+                                    .ok_or_else(|| {
+                                        DataFusionError::Internal(
+                                            "properties_length: failed to cast to dictionary array"
+                                                .to_string(),
+                                        )
+                                    })?;
+
+                                let values = dict_array.values();
+                                let list_values = values
+                                    .as_any()
+                                    .downcast_ref::<GenericListArray<i32>>()
+                                    .ok_or_else(|| {
+                                        DataFusionError::Internal(
+                                            "properties_length: dictionary values are not a list array".to_string(),
+                                        )
+                                    })?;
+
+                                // Pre-compute lengths for each unique value in the dictionary
+                                let mut dict_lengths = Vec::with_capacity(list_values.len());
+                                for i in 0..list_values.len() {
+                                    if list_values.is_null(i) {
+                                        dict_lengths.push(None);
+                                    } else {
+                                        let start = list_values.value_offsets()[i] as usize;
+                                        let end = list_values.value_offsets()[i + 1] as usize;
+                                        dict_lengths.push(Some((end - start) as i32));
+                                    }
+                                }
+
+                                // Map dictionary keys to lengths
+                                let keys = dict_array.keys();
+                                let mut lengths = Vec::with_capacity(keys.len());
+                                for i in 0..keys.len() {
+                                    if keys.is_null(i) {
+                                        lengths.push(None);
+                                    } else {
+                                        let key_index = keys.value(i) as usize;
+                                        if key_index < dict_lengths.len() {
+                                            lengths.push(dict_lengths[key_index]);
+                                        } else {
+                                            return internal_err!(
+                                                "Dictionary key index out of bounds"
+                                            );
+                                        }
+                                    }
+                                }
+
+                                let length_array = Int32Array::from(lengths);
+                                Ok(ColumnarValue::Array(Arc::new(length_array)))
+                            }
+                            _ => internal_err!(
+                                "properties_length: unsupported dictionary value type"
+                            ),
+                        }
+                    }
+                    _ => internal_err!(
+                        "properties_length: unsupported input type, expected List or Dictionary<Int32, List>"
+                    ),
+                }
+            }
+            ColumnarValue::Scalar(_) => {
+                internal_err!("properties_length does not support scalar inputs")
+            }
+        }
+    }
+}

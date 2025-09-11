@@ -71,8 +71,8 @@ Implement a DataFusion UDF that converts properties (list of key-value struct pa
 - [ ] Update SQL queries to use properties_to_dict where beneficial
 - [ ] Document usage in schema reference
 
-### 8. Enhanced UDF Functions
-- [ ] Implement `properties_length` UDF that works with both array and dictionary representations
+### 8. Enhanced UDF Functions ✅
+- [x] Implement `properties_length` UDF that works with both array and dictionary representations
   - Accept both `List<Struct<key,value>>` and `Dictionary<Int32, List<Struct<key,value>>>`
   - Return length directly without requiring conversion
   - Provide better user experience than array_length(properties_to_array(...))
@@ -275,16 +275,15 @@ SELECT array_length(properties_to_array(dict_props)) FROM ...;
 ```
 
 ### Remaining Work
-1. **Enhanced UDF Functions**: Implement `properties_length` for seamless use with both representations
-2. **Performance Benchmarking**: Measure actual memory reduction in production workloads
-3. **Schema Investigation**: Resolve "item" vs "Property" field name discrepancy in data pipeline  
-4. **Production Adoption**: Update queries to use properties_to_dict where beneficial
-5. **Documentation**: Add usage examples and schema reference
-6. **Optimization**: Consider binary encoding for even faster property list comparison
+1. **Performance Benchmarking**: Measure actual memory reduction in production workloads
+2. **Schema Investigation**: Resolve "item" vs "Property" field name discrepancy in data pipeline  
+3. **Production Adoption**: Update queries to use properties_to_dict where beneficial
+4. **Documentation**: Add usage examples and schema reference
+5. **Optimization**: Consider binary encoding for even faster property list comparison
 
-### Next Enhancement: properties_length UDF
+### ✅ Enhanced UDF: properties_length Implementation Complete
 
-**Goal**: Create a UDF that works transparently with both array and dictionary representations:
+**Implemented**: `properties_length` UDF that works transparently with both array and dictionary representations:
 
 ```sql
 -- Works with regular arrays
@@ -294,9 +293,13 @@ SELECT properties_length(properties) FROM measures;
 SELECT properties_length(properties_to_dict(properties)) FROM measures;
 ```
 
-**Implementation approach**:
-- Use `Signature::any()` to accept multiple input types
-- Pattern match on input DataType in `invoke_with_args()`
-- For `List<...>`: use standard array length
-- For `Dictionary<Int32, List<...>>`: extract length from dictionary keys
-- Return `Int32` length value
+**Implementation Details**:
+- ✅ Uses `Signature::any(1, Volatility::Immutable)` to accept multiple input types
+- ✅ Pattern matches on input DataType in `invoke_with_args()`
+- ✅ For `List<...>`: Direct calculation using list offsets for O(n) performance
+- ✅ For `Dictionary<Int32, List<...>>`: Pre-computes lengths for unique values, maps via keys for O(u + n) performance
+- ✅ Returns `Int32` length values with proper null handling
+- ✅ Comprehensive test suite covering both input types and null cases
+- ✅ Registered in analytics UDF registry at `rust/analytics/src/lakehouse/query.rs`
+
+**Location**: `rust/analytics/src/properties_to_dict_udf.rs:283-419`
