@@ -9,28 +9,43 @@ Implement a DataFusion UDF that converts properties (list of key-value struct pa
 
 ## Implementation Steps
 
-### 1. Research Current Properties Structure
-- [ ] Examine existing properties columns in log_entries_table.rs
-- [ ] Understand current data format and usage patterns
-- [ ] Check if properties are already using any dictionary encoding
+### 1. Research Current Properties Structure ✅
+- [x] Examine existing properties columns in log_entries_table.rs
+- [x] Understand current data format and usage patterns
+- [x] Check if properties are already using any dictionary encoding
+
+**Findings:**
+- Properties stored as `List<Struct<key: Utf8, value: Utf8>>` in both `properties` and `process_properties` columns
+- No dictionary encoding currently applied - each row stores full property list
+- Properties built using `ListBuilder<StructBuilder>` with string fields
+- Properties sourced from `PropertySet` (transit Object) via `add_property_set_to_builder()`
+- High repetition expected: same property sets likely repeat across log entries from same process/context
+- `property_get` UDF performs linear search through property lists
 
 ### 2. Create UDF Module
-- [ ] Add new module `properties_dict_udf.rs` in `rust/analytics/src/`
-- [ ] Define the UDF signature and return type
-- [ ] Register with DataFusion's function registry
+- [ ] Add new module `properties_to_dict_udf.rs` in `rust/analytics/src/`
+- [ ] Define the UDF signature: accepts `List<Struct<key: Utf8, value: Utf8>>`
+- [ ] Return type: `Dictionary<Int32, List<Struct<key: Utf8, value: Utf8>>>`
+- [ ] Implement ScalarUDFImpl trait like PropertyGet does
 
 ### 3. Implement Dictionary Builder
-- [ ] Create custom builder similar to `ListStructDictionaryBuilder` from the reference
-- [ ] Track unique property lists using HashMap
-- [ ] Handle null values appropriately
-- [ ] Optimize hash computation for property lists
+- [ ] Create `PropertiesDictionaryBuilder` struct with:
+  - HashMap<Vec<(String, String)>, usize> for deduplication
+  - ListBuilder<StructBuilder> for storing unique property lists
+  - Vec<Option<i32>> for tracking dictionary indices per row
+- [ ] Implement `append_property_list()` method that:
+  - Converts StructArray to Vec<(String, String)> for hashing
+  - Checks HashMap for existing entry
+  - Reuses index or adds new unique list
+- [ ] Handle null/empty property lists
 
-### 4. Core UDF Logic
-- [ ] Process input ArrayRef (ListArray of StructArrays)
-- [ ] Extract property lists and deduplicate
-- [ ] Build dictionary keys array (Int32Array)
-- [ ] Build dictionary values array (unique property lists)
-- [ ] Return DictionaryArray<Int32Type>
+### 4. Core UDF Logic  
+- [ ] In `invoke_with_args()`:
+  - Cast input to GenericListArray<i32> 
+  - Iterate through each property list
+  - Build dictionary using PropertiesDictionaryBuilder
+  - Create DictionaryArray with Int32Type keys
+- [ ] Ensure compatibility with existing property_get UDF
 
 ### 5. Memory Optimization
 - [ ] Pre-allocate builders with estimated capacity
@@ -44,7 +59,9 @@ Implement a DataFusion UDF that converts properties (list of key-value struct pa
 - [ ] Benchmark memory usage reduction
 
 ### 7. Integration
-- [ ] Register UDF in analytics initialization
+- [ ] Register UDF in analytics initialization (likely in `lakehouse/mod.rs` or similar)
+- [ ] Add to UDF registry alongside property_get
+- [ ] Test with existing queries to ensure no breakage
 - [ ] Update SQL queries to use properties_to_dict where beneficial
 - [ ] Document usage in schema reference
 
@@ -97,27 +114,45 @@ For `properties_to_dict` handling `List<Struct<key,value>>`:
 - For properties with high repetition (>30%), dictionary encoding wins
 - The HashMap lookup cost is amortized across the memory savings
 
-## Code Structure
+## Code Structure (Updated based on research)
 
 ```rust
-// rust/analytics/src/properties_dict_udf.rs
+// rust/analytics/src/properties_to_dict_udf.rs
 
-use datafusion::prelude::*;
-use datafusion::arrow::{
-    array::*,
-    datatypes::*,
+use anyhow::Context;
+use datafusion::arrow::array::{
+    Array, ArrayRef, AsArray, DictionaryArray, GenericListArray, 
+    Int32Array, ListBuilder, StringBuilder, StructArray, StructBuilder
 };
+use datafusion::arrow::datatypes::{DataType, Field, Fields, Int32Type};
+use datafusion::common::{Result, internal_err};
+use datafusion::error::DataFusionError;
+use datafusion::logical_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Volatility};
+use datafusion::logical_expr::Signature;
+use std::any::Any;
 use std::collections::HashMap;
+use std::sync::Arc;
 
-pub struct PropertiesToDict;
+#[derive(Debug)]
+pub struct PropertiesToDict {
+    signature: Signature,
+}
 
 impl PropertiesToDict {
-    pub fn new() -> Self { ... }
-    
-    fn call(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
-        // 1. Validate input is List<Struct>
-        // 2. Build dictionary using custom builder
-        // 3. Return dictionary array
+    pub fn new() -> Self {
+        Self {
+            signature: Signature::exact(
+                vec![DataType::List(Arc::new(Field::new(
+                    "Property",
+                    DataType::Struct(Fields::from(vec![
+                        Field::new("key", DataType::Utf8, false),
+                        Field::new("value", DataType::Utf8, false),
+                    ])),
+                    false,
+                )))],
+                Volatility::Immutable,
+            ),
+        }
     }
 }
 
@@ -134,9 +169,28 @@ struct PropertiesDictionaryBuilder {
 }
 
 impl PropertiesDictionaryBuilder {
-    fn append_properties(&mut self, properties: Vec<(String, String)>) -> Result<()> {
+    fn new(capacity: usize) -> Self {
+        let prop_struct_fields = vec![
+            Field::new("key", DataType::Utf8, false),
+            Field::new("value", DataType::Utf8, false),
+        ];
+        let values_builder = ListBuilder::new(
+            StructBuilder::from_fields(prop_struct_fields, capacity)
+        );
+        
+        Self {
+            map: HashMap::new(),
+            values_builder,
+            keys: Vec::with_capacity(capacity),
+        }
+    }
+    
+    fn append_property_list(&mut self, properties: ArrayRef) -> Result<()> {
+        // Convert StructArray to Vec<(String, String)> for hashing
+        let prop_vec = extract_properties_as_vec(properties)?;
+        
         // Simple lookup - let HashMap handle the hashing
-        match self.map.get(&properties) {
+        match self.map.get(&prop_vec) {
             Some(&index) => {
                 // Reuse existing dictionary entry
                 self.keys.push(Some(index as i32));
@@ -144,12 +198,22 @@ impl PropertiesDictionaryBuilder {
             None => {
                 // Add new unique property list to dictionary
                 let new_index = self.map.len();
-                self.add_to_values(&properties)?;
-                self.map.insert(properties, new_index);
+                self.add_to_values(&prop_vec)?;
+                self.map.insert(prop_vec, new_index);
                 self.keys.push(Some(new_index as i32));
             }
         }
         Ok(())
+    }
+    
+    fn append_null(&mut self) {
+        self.keys.push(None);
+    }
+    
+    fn finish(mut self) -> Result<DictionaryArray<Int32Type>> {
+        let keys = Int32Array::from(self.keys);
+        let values = Arc::new(self.values_builder.finish());
+        Ok(DictionaryArray::try_new(keys, values)?)
     }
 }
 ```
