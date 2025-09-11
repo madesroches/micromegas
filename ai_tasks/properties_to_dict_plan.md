@@ -22,45 +22,49 @@ Implement a DataFusion UDF that converts properties (list of key-value struct pa
 - High repetition expected: same property sets likely repeat across log entries from same process/context
 - `property_get` UDF performs linear search through property lists
 
-### 2. Create UDF Module
-- [ ] Add new module `properties_to_dict_udf.rs` in `rust/analytics/src/`
-- [ ] Define the UDF signature: accepts `List<Struct<key: Utf8, value: Utf8>>`
-- [ ] Return type: `Dictionary<Int32, List<Struct<key: Utf8, value: Utf8>>>`
-- [ ] Implement ScalarUDFImpl trait like PropertyGet does
+### 2. Create UDF Module ✅
+- [x] Add new module `properties_to_dict_udf.rs` in `rust/analytics/src/`
+- [x] Define the UDF signature: accepts `List<Struct<key: Utf8, value: Utf8>>`
+- [x] Return type: `Dictionary<Int32, List<Struct<key: Utf8, value: Utf8>>>`
+- [x] Implement ScalarUDFImpl trait like PropertyGet does
+- [x] Add Default implementation for PropertiesToDict
 
-### 3. Implement Dictionary Builder
-- [ ] Create `PropertiesDictionaryBuilder` struct with:
+### 3. Implement Dictionary Builder ✅
+- [x] Create `PropertiesDictionaryBuilder` struct with:
   - HashMap<Vec<(String, String)>, usize> for deduplication
   - ListBuilder<StructBuilder> for storing unique property lists
   - Vec<Option<i32>> for tracking dictionary indices per row
-- [ ] Implement `append_property_list()` method that:
+- [x] Implement `append_property_list()` method that:
   - Converts StructArray to Vec<(String, String)> for hashing
   - Checks HashMap for existing entry
   - Reuses index or adds new unique list
-- [ ] Handle null/empty property lists
+- [x] Handle null/empty property lists
 
-### 4. Core UDF Logic  
-- [ ] In `invoke_with_args()`:
+### 4. Core UDF Logic ✅  
+- [x] In `invoke_with_args()`:
   - Cast input to GenericListArray<i32> 
   - Iterate through each property list
   - Build dictionary using PropertiesDictionaryBuilder
   - Create DictionaryArray with Int32Type keys
-- [ ] Ensure compatibility with existing property_get UDF
+- [x] Ensure compatibility with existing property_get UDF
+- [x] Use consistent "Property" field naming (simplified from dynamic schema handling)
 
 ### 5. Memory Optimization
-- [ ] Pre-allocate builders with estimated capacity
-- [ ] Use efficient hashing for property list comparison
-- [ ] Consider using binary encoding for faster comparison
+- [x] Pre-allocate builders with estimated capacity
+- [x] Use efficient hashing for property list comparison (Vec<(String, String)>)
+- [ ] Consider using binary encoding for faster comparison (future optimization)
 
-### 6. Testing
-- [ ] Unit tests with various property list patterns
-- [ ] Test with duplicate property lists (verify dictionary encoding works)
-- [ ] Test with empty lists and null values
+### 6. Testing ✅
+- [x] Unit tests with various property list patterns
+- [x] Test with duplicate property lists (verify dictionary encoding works)
+- [x] Test with empty lists and null values
+- [x] Move tests to external test file (tests/properties_to_dict_tests.rs)
 - [ ] Benchmark memory usage reduction
 
-### 7. Integration
-- [ ] Register UDF in analytics initialization (likely in `lakehouse/mod.rs` or similar)
-- [ ] Add to UDF registry alongside property_get
+### 7. Integration ✅
+- [x] Register UDF in analytics initialization (lakehouse/query.rs)
+- [x] Add to UDF registry alongside property_get
+- [x] Add module to analytics lib.rs
 - [ ] Test with existing queries to ensure no breakage
 - [ ] Update SQL queries to use properties_to_dict where beneficial
 - [ ] Document usage in schema reference
@@ -229,7 +233,25 @@ impl PropertiesDictionaryBuilder {
 - Need to handle schema evolution gracefully
 
 ## Success Criteria
-- [ ] UDF successfully converts properties to dictionary encoding
-- [ ] Memory usage reduced by at least 40% in typical workloads
-- [ ] No performance regression in query execution
-- [ ] All existing tests pass with new UDF
+- [x] UDF successfully converts properties to dictionary encoding
+- [ ] Memory usage reduced by at least 40% in typical workloads (needs benchmarking)
+- [ ] No performance regression in query execution (needs integration testing)
+- [x] All existing tests pass with new UDF
+
+## Implementation Status
+
+### Completed (Step 2)
+✅ **Core UDF implementation complete** - All major components implemented and tested:
+- `PropertiesToDict` UDF with ScalarUDFImpl trait
+- `PropertiesDictionaryBuilder` with HashMap-based deduplication
+- Dictionary encoding logic following Arrow's StringDictionaryBuilder pattern
+- Proper error handling and schema consistency
+- Comprehensive test suite with deduplication validation
+- Integration with DataFusion UDF registry
+
+### Next Steps
+1. **Integration Testing**: Test UDF with real data queries
+2. **Performance Benchmarking**: Measure memory reduction and query performance
+3. **Schema Investigation**: Resolve "item" vs "Property" field name discrepancy in data pipeline
+4. **Production Usage**: Update queries to use properties_to_dict where beneficial
+5. **Documentation**: Add usage examples and schema reference

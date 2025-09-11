@@ -107,8 +107,14 @@ impl PropertiesDictionaryBuilder {
             Field::new("key", DataType::Utf8, false),
             Field::new("value", DataType::Utf8, false),
         ];
-        let values_builder =
-            ListBuilder::new(StructBuilder::from_fields(prop_struct_fields, capacity));
+        let prop_field = Arc::new(Field::new(
+            "Property",
+            DataType::Struct(Fields::from(prop_struct_fields.clone())),
+            false,
+        ));
+        let values_builder = ListBuilder::new(
+            StructBuilder::from_fields(prop_struct_fields, capacity)
+        ).with_field(prop_field);
 
         Self {
             map: HashMap::new(),
