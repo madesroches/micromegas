@@ -52,7 +52,6 @@ Implement a DataFusion UDF that converts properties (list of key-value struct pa
 ### 5. Memory Optimization
 - [x] Pre-allocate builders with estimated capacity
 - [x] Use efficient hashing for property list comparison (Vec<(String, String)>)
-- [ ] Consider using binary encoding for faster comparison (future optimization)
 
 ### 6. Testing ✅
 - [x] Unit tests with various property list patterns
@@ -275,13 +274,15 @@ SELECT array_length(properties_to_array(dict_props)) FROM ...;
 ```
 
 ### Remaining Work
-1. **Performance Benchmarking**: Measure actual memory reduction in production workloads
-2. **Schema Investigation**: Resolve "item" vs "Property" field name discrepancy in data pipeline  
-3. **Production Adoption**: Update queries to use properties_to_dict where beneficial
-4. **Documentation**: Add usage examples and schema reference
-5. **Optimization**: Consider binary encoding for even faster property list comparison
+1. **FlightSQL Dictionary Preservation**: Configure FlightDataEncoderBuilder to preserve dictionary encoding across FlightSQL boundary
+2. **Performance Benchmarking**: Measure actual memory reduction in production workloads
+3. **Schema Investigation**: Resolve "item" vs "Property" field name discrepancy in data pipeline  
+4. **Production Adoption**: Update queries to use properties_to_dict where beneficial
+5. **Documentation**: Add usage examples and schema reference
 6. **Dictionary-Encoded Output Optimization**: Enhance `property_get` to return `Dictionary<Int32, Utf8>` instead of `Utf8`
-7. **FlightSQL Dictionary Preservation**: Configure FlightDataEncoderBuilder to preserve dictionary encoding across FlightSQL boundary
+
+### Future Optimizations (Low Priority)
+7. **Binary encoding for faster comparison**: Replace HashMap<Vec<(String, String)>, usize> with HashMap<u64, usize> using pre-computed hashes. Would require collision handling and additional complexity. Current implementation already benefits from Rust's efficient HashMap and the optimization gains may be minimal given hash collision handling overhead.
 
 ### ✅ Enhanced UDF: properties_length Implementation Complete
 
