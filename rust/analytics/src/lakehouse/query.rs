@@ -28,7 +28,7 @@ use crate::{
         materialized_view::MaterializedView, table_scan_rewrite::TableScanRewrite,
         view_instance_table_function::ViewInstanceTableFunction,
     },
-    properties_to_dict_udf::PropertiesToDict,
+    properties_to_dict_udf::{PropertiesToArray, PropertiesToDict},
     time::TimeRange,
 };
 use anyhow::{Context, Result};
@@ -157,6 +157,7 @@ pub fn register_lakehouse_functions(
 pub fn register_extension_functions(ctx: &SessionContext) {
     ctx.register_udf(ScalarUDF::from(PropertyGet::new()));
     ctx.register_udf(ScalarUDF::from(PropertiesToDict::new()));
+    ctx.register_udf(ScalarUDF::from(PropertiesToArray::new()));
     ctx.register_udaf(make_histo_udaf());
     ctx.register_udaf(sum_histograms_udaf());
     ctx.register_udf(make_quantile_from_histogram_udf());

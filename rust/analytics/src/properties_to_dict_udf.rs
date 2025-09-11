@@ -112,9 +112,9 @@ impl PropertiesDictionaryBuilder {
             DataType::Struct(Fields::from(prop_struct_fields.clone())),
             false,
         ));
-        let values_builder = ListBuilder::new(
-            StructBuilder::from_fields(prop_struct_fields, capacity)
-        ).with_field(prop_field);
+        let values_builder =
+            ListBuilder::new(StructBuilder::from_fields(prop_struct_fields, capacity))
+                .with_field(prop_field);
 
         Self {
             map: HashMap::new(),
@@ -203,4 +203,79 @@ pub fn build_dictionary_from_properties(
     }
 
     builder.finish()
+}
+
+// Helper UDF to extract properties array from dictionary for use with standard functions
+#[derive(Debug)]
+pub struct PropertiesToArray {
+    signature: Signature,
+}
+
+impl PropertiesToArray {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl Default for PropertiesToArray {
+    fn default() -> Self {
+        Self {
+            signature: Signature::any(1, Volatility::Immutable),
+        }
+    }
+}
+
+impl ScalarUDFImpl for PropertiesToArray {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn name(&self) -> &str {
+        "properties_to_array"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        match &arg_types[0] {
+            DataType::Dictionary(_, value_type) => Ok(value_type.as_ref().clone()),
+            _ => internal_err!("properties_to_array expects a Dictionary input type"),
+        }
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let args = args.args;
+        if args.len() != 1 {
+            return internal_err!("properties_to_array expects exactly one argument");
+        }
+
+        match &args[0] {
+            ColumnarValue::Array(array) => {
+                // Reconstruct the full array from dictionary
+                let dict_array = array
+                    .as_any()
+                    .downcast_ref::<DictionaryArray<Int32Type>>()
+                    .ok_or_else(|| {
+                        DataFusionError::Internal(
+                            "properties_to_array requires a dictionary array as input".to_string(),
+                        )
+                    })?;
+
+                // Use Arrow's take function to reconstruct the array
+                use datafusion::arrow::compute::take;
+                let indices = dict_array.keys();
+                let values = dict_array.values();
+
+                let reconstructed = take(values.as_ref(), indices, None)
+                    .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
+
+                Ok(ColumnarValue::Array(reconstructed))
+            }
+            ColumnarValue::Scalar(_) => {
+                internal_err!("properties_to_array does not support scalar inputs")
+            }
+        }
+    }
 }
