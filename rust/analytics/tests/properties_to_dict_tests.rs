@@ -1,11 +1,12 @@
 use datafusion::arrow::array::{
-    Array, GenericListArray, Int32Array, ListArray, StringBuilder, StructBuilder,
+    Array, GenericListArray, Int32Array, ListArray, StringArray, StringBuilder, StructBuilder,
 };
 use datafusion::arrow::buffer::OffsetBuffer;
 use datafusion::arrow::datatypes::{DataType, Field, Fields};
 use datafusion::logical_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
-use micromegas_analytics::properties_to_dict_udf::{
-    PropertiesLength, build_dictionary_from_properties,
+use micromegas_analytics::{
+    lakehouse::property_get_function::PropertyGet,
+    properties_to_dict_udf::{PropertiesLength, build_dictionary_from_properties},
 };
 use std::sync::Arc;
 
@@ -275,5 +276,254 @@ fn test_properties_length_with_nulls() {
             assert!(int_array.is_null(1)); // Second list is null
         }
         _ => panic!("Expected array result"),
+    }
+}
+
+fn create_scalar_function_args_multi(args: Vec<ColumnarValue>) -> ScalarFunctionArgs {
+    let num_rows = match &args[0] {
+        ColumnarValue::Array(array) => array.len(),
+        ColumnarValue::Scalar(_) => 1,
+    };
+
+    let arg_fields = args
+        .iter()
+        .enumerate()
+        .map(|(i, arg)| {
+            let data_type = match arg {
+                ColumnarValue::Array(array) => array.data_type().clone(),
+                ColumnarValue::Scalar(scalar) => scalar.data_type(),
+            };
+            Arc::new(Field::new(format!("arg_{}", i), data_type, true))
+        })
+        .collect();
+
+    let return_field = Arc::new(Field::new("result", DataType::Utf8, true));
+
+    ScalarFunctionArgs {
+        args,
+        arg_fields,
+        number_rows: num_rows,
+        return_field,
+    }
+}
+
+#[test]
+fn test_property_get_with_regular_array() {
+    let properties = create_test_properties();
+    let properties_array = Arc::new(properties);
+
+    // Create array of property keys to search for, same length as properties array
+    // properties array has 3 elements: [2 props, empty, 2 props]
+    let keys = StringArray::from(vec![Some("env"), Some("version"), Some("env")]);
+    let keys_array = Arc::new(keys);
+
+    let property_get = PropertyGet::new();
+    let args = create_scalar_function_args_multi(vec![
+        ColumnarValue::Array(properties_array),
+        ColumnarValue::Array(keys_array),
+    ]);
+
+    let result = property_get
+        .invoke_with_args(args)
+        .expect("Should get property values");
+
+    match result {
+        ColumnarValue::Array(array) => {
+            let string_array = array
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .expect("Result should be StringArray");
+
+            assert_eq!(string_array.len(), 3);
+            assert_eq!(string_array.value(0), "production"); // env found in first list
+            assert!(string_array.is_null(1)); // version not found in empty list
+            assert_eq!(string_array.value(2), "production"); // env found in third list
+        }
+        _ => panic!("Expected array result"),
+    }
+}
+
+#[test]
+fn test_property_get_case_insensitive() {
+    let properties = create_test_properties();
+    let properties_array = Arc::new(properties);
+
+    // Test case insensitive search - same length as properties array
+    let keys = StringArray::from(vec![Some("ENV"), Some("any"), Some("Version")]);
+    let keys_array = Arc::new(keys);
+
+    let property_get = PropertyGet::new();
+    let args = create_scalar_function_args_multi(vec![
+        ColumnarValue::Array(properties_array),
+        ColumnarValue::Array(keys_array),
+    ]);
+
+    let result = property_get
+        .invoke_with_args(args)
+        .expect("Should get property values");
+
+    match result {
+        ColumnarValue::Array(array) => {
+            let string_array = array
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .expect("Result should be StringArray");
+
+            assert_eq!(string_array.len(), 3);
+            assert_eq!(string_array.value(0), "production"); // ENV found (case insensitive)
+            assert!(string_array.is_null(1)); // any not found in empty list
+            assert_eq!(string_array.value(2), "1.0.0"); // Version found (case insensitive)
+        }
+        _ => panic!("Expected array result"),
+    }
+}
+
+#[test]
+fn test_property_get_with_missing_keys() {
+    let properties = create_test_properties();
+    let properties_array = Arc::new(properties);
+
+    // Search for keys that don't exist in any properties list
+    let keys = StringArray::from(vec![Some("missing"), Some("nonexistent"), Some("notfound")]);
+    let keys_array = Arc::new(keys);
+
+    let property_get = PropertyGet::new();
+    let args = create_scalar_function_args_multi(vec![
+        ColumnarValue::Array(properties_array),
+        ColumnarValue::Array(keys_array),
+    ]);
+
+    let result = property_get
+        .invoke_with_args(args)
+        .expect("Should handle missing keys");
+
+    match result {
+        ColumnarValue::Array(array) => {
+            let string_array = array
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .expect("Result should be StringArray");
+
+            // All should be null since keys don't exist
+            assert_eq!(string_array.len(), 3);
+            assert!(string_array.is_null(0)); // missing not found in first list
+            assert!(string_array.is_null(1)); // nonexistent not found in empty list
+            assert!(string_array.is_null(2)); // notfound not found in third list
+        }
+        _ => panic!("Expected array result"),
+    }
+}
+
+#[test]
+fn test_property_get_with_dictionary_array() {
+    let properties = create_test_properties();
+    let list_array = properties
+        .as_any()
+        .downcast_ref::<GenericListArray<i32>>()
+        .unwrap();
+
+    // First create dictionary from properties
+    let dict_array = build_dictionary_from_properties(list_array).expect("Should build dictionary");
+    let dict_array_ref = Arc::new(dict_array);
+
+    // Search for properties - same length as dictionary array (3 elements)
+    let keys = StringArray::from(vec![Some("env"), Some("version"), Some("env")]);
+    let keys_array = Arc::new(keys);
+
+    let property_get = PropertyGet::new();
+    let args = create_scalar_function_args_multi(vec![
+        ColumnarValue::Array(dict_array_ref),
+        ColumnarValue::Array(keys_array),
+    ]);
+
+    let result = property_get
+        .invoke_with_args(args)
+        .expect("Should get property values from dictionary");
+
+    match result {
+        ColumnarValue::Array(array) => {
+            let string_array = array
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .expect("Result should be StringArray");
+
+            // Should get same results as with regular array
+            assert_eq!(string_array.len(), 3);
+            assert_eq!(string_array.value(0), "production"); // env found in first list
+            assert!(string_array.is_null(1)); // version not found in empty list  
+            assert_eq!(string_array.value(2), "production"); // env found in third list
+        }
+        _ => panic!("Expected array result"),
+    }
+}
+
+#[test]
+fn test_property_get_dictionary_vs_regular_equivalence() {
+    let properties = create_test_properties();
+    let list_array = properties
+        .as_any()
+        .downcast_ref::<GenericListArray<i32>>()
+        .unwrap();
+
+    // Create dictionary array
+    let dict_array = build_dictionary_from_properties(list_array).expect("Should build dictionary");
+    let dict_array_ref = Arc::new(dict_array);
+    let regular_array_ref = Arc::new(properties);
+
+    // Test with multiple different keys
+    let keys = StringArray::from(vec![Some("env"), Some("missing"), Some("version")]);
+    let keys_array = Arc::new(keys);
+
+    let property_get = PropertyGet::new();
+
+    // Test with regular array
+    let regular_args = create_scalar_function_args_multi(vec![
+        ColumnarValue::Array(regular_array_ref),
+        ColumnarValue::Array(keys_array.clone()),
+    ]);
+    let regular_result = property_get
+        .invoke_with_args(regular_args)
+        .expect("Should work with regular array");
+
+    // Test with dictionary array
+    let dict_args = create_scalar_function_args_multi(vec![
+        ColumnarValue::Array(dict_array_ref),
+        ColumnarValue::Array(keys_array),
+    ]);
+    let dict_result = property_get
+        .invoke_with_args(dict_args)
+        .expect("Should work with dictionary array");
+
+    // Results should be identical
+    match (regular_result, dict_result) {
+        (ColumnarValue::Array(regular_array), ColumnarValue::Array(dict_array)) => {
+            let regular_strings = regular_array
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .expect("Regular result should be StringArray");
+            let dict_strings = dict_array
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .expect("Dict result should be StringArray");
+
+            assert_eq!(regular_strings.len(), dict_strings.len());
+            for i in 0..regular_strings.len() {
+                if regular_strings.is_null(i) {
+                    assert!(
+                        dict_strings.is_null(i),
+                        "Both should be null at index {}",
+                        i
+                    );
+                } else {
+                    assert_eq!(
+                        regular_strings.value(i),
+                        dict_strings.value(i),
+                        "Values should match at index {}",
+                        i
+                    );
+                }
+            }
+        }
+        _ => panic!("Both results should be arrays"),
     }
 }

@@ -280,6 +280,8 @@ SELECT array_length(properties_to_array(dict_props)) FROM ...;
 3. **Production Adoption**: Update queries to use properties_to_dict where beneficial
 4. **Documentation**: Add usage examples and schema reference
 5. **Optimization**: Consider binary encoding for even faster property list comparison
+6. **Dictionary-Encoded Output Optimization**: Enhance `property_get` to return `Dictionary<Int32, Utf8>` instead of `Utf8`
+7. **FlightSQL Dictionary Preservation**: Configure FlightDataEncoderBuilder to preserve dictionary encoding across FlightSQL boundary
 
 ### ✅ Enhanced UDF: properties_length Implementation Complete
 
@@ -303,3 +305,98 @@ SELECT properties_length(properties_to_dict(properties)) FROM measures;
 - ✅ Registered in analytics UDF registry at `rust/analytics/src/lakehouse/query.rs`
 
 **Location**: `rust/analytics/src/properties_to_dict_udf.rs:283-419`
+
+### Future Enhancement: Dictionary-Encoded Property Values
+
+**Observation**: Property values are highly repeated across the dataset (same values appearing thousands of times).
+
+**Current property_get behavior**:
+```sql
+SELECT property_get(properties, 'some_key') FROM measures;
+-- Returns: StringArray ["valueA", "valueA", "valueA", "valueB", "valueA", ...]  
+-- Memory: Each repeated string stored separately (high redundancy)
+```
+
+**Proposed optimization**:
+```sql  
+SELECT property_get(properties, 'some_key') FROM measures;
+-- Returns: Dictionary<Int32, StringArray> {0: "valueA", 1: "valueB"} with keys [0,0,0,1,0,...]
+-- Memory: Each unique value stored once, repetitions cost only int32 (50-80% reduction)
+```
+
+**Implementation approach**:
+1. Change `property_get` return type from `DataType::Utf8` to `DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8))`
+2. Use Arrow's `StringDictionaryBuilder<Int32Type>` internally to deduplicate property values
+3. Build dictionary incrementally: check HashMap for existing values, reuse indices for duplicates
+4. All existing SQL queries continue working (DataFusion handles dictionary arrays transparently)
+
+**Expected benefits**:
+- **Memory reduction**: 50-80% for datasets with repeated property values
+- **Query performance**: Faster string comparisons on dictionary keys instead of full strings  
+- **Cache efficiency**: Better CPU cache utilization with smaller memory footprint
+- **End-to-end optimization**: Combined with `properties_to_dict` input encoding creates fully optimized pipeline
+
+**Risk considerations**:
+- Dictionary building overhead for queries with mostly unique property values
+- Need to profile actual property value repetition patterns in production data
+- Ensure DataFusion dictionary array compatibility across all downstream operations
+
+**Success criteria**:
+- Memory usage reduced by at least 40% in typical property_get queries
+- No performance regression in query execution time  
+- Transparent compatibility with existing SQL queries
+
+## Critical Issue: FlightSQL Dictionary Flattening
+
+**Problem Discovered**: FlightSQL is flattening dictionary arrays during transmission, preventing client-side memory benefits.
+
+### Root Cause Analysis
+
+**Current behavior**:
+1. ✅ `properties_to_dict()` creates `Dictionary<Int32, List<Struct>>` in DataFusion
+2. ❌ FlightSQL converts dictionary back to regular `List<Struct>` during transmission
+3. ❌ Client receives regular arrays with full memory overhead (1.1GB for 9.3M rows)
+
+**Source of issue**: `rust/public/src/servers/flight_sql_service_impl.rs:251`
+```rust
+let builder = FlightDataEncoderBuilder::new().with_schema(schema.clone());
+```
+
+The `FlightDataEncoderBuilder` defaults to `DictionaryHandling::Hydrate`, which flattens dictionary arrays to their underlying types before transmission.
+
+### Solution: Preserve Dictionary Encoding
+
+**Required changes**:
+
+1. **Add import**:
+```rust
+use arrow_flight::encode::DictionaryHandling;
+```
+
+2. **Update FlightDataEncoderBuilder configuration**:
+```rust
+let builder = FlightDataEncoderBuilder::new()
+    .with_schema(schema.clone())
+    .with_dictionary_handling(DictionaryHandling::Resend);
+```
+
+3. **Update other FlightDataEncoderBuilder instances** (lines ~527, ~554) for consistency
+
+### Expected Impact
+
+**With DictionaryHandling::Resend**:
+- ✅ Dictionary encoding preserved end-to-end (server → FlightSQL → client)
+- ✅ Client-side memory savings realized in Python/Pandas  
+- ✅ Full optimization pipeline functional
+- ⚠️ Increased network overhead (dictionary metadata sent with each batch)
+
+**Client-side verification**:
+```python
+# After fix, this should show dictionary encoding preserved
+sql = "SELECT properties_to_dict(properties) FROM measures"
+rbs = list(client.query_stream(sql))
+table = pa.Table.from_batches(rbs)
+print(table.schema)  # Should show: dictionary<int32, list<...>>
+```
+
+**Priority**: HIGH - This change is critical for realizing the full memory optimization benefits of the dictionary encoding system.

@@ -1,12 +1,13 @@
 use anyhow::Context;
 use datafusion::arrow::array::{Array, StringBuilder};
-use datafusion::arrow::array::{ArrayRef, GenericListArray, StringArray};
+use datafusion::arrow::array::{ArrayRef, DictionaryArray, GenericListArray, StringArray};
 use datafusion::arrow::array::{AsArray, StructArray};
-use datafusion::arrow::datatypes::{Field, Fields};
+use datafusion::arrow::datatypes::{DataType, Int32Type};
 use datafusion::common::{Result, internal_err};
 use datafusion::error::DataFusionError;
-use datafusion::logical_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Volatility};
-use datafusion::{arrow::datatypes::DataType, logical_expr::Signature};
+use datafusion::logical_expr::{
+    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 use std::any::Any;
 use std::sync::Arc;
 
@@ -19,20 +20,7 @@ pub struct PropertyGet {
 impl PropertyGet {
     pub fn new() -> Self {
         Self {
-            signature: Signature::exact(
-                vec![
-                    DataType::List(Arc::new(Field::new(
-                        "Property",
-                        DataType::Struct(Fields::from(vec![
-                            Field::new("key", DataType::Utf8, false),
-                            Field::new("value", DataType::Utf8, false),
-                        ])),
-                        false,
-                    ))),
-                    DataType::Utf8,
-                ],
-                Volatility::Immutable,
-            ),
+            signature: Signature::any(2, Volatility::Immutable),
         }
     }
 }
@@ -81,29 +69,97 @@ impl ScalarUDFImpl for PropertyGet {
         if args.len() != 2 {
             return internal_err!("wrong number of arguments to property_get()");
         }
-        let prop_lists = args[0]
-            .as_any()
-            .downcast_ref::<GenericListArray<i32>>()
-            .ok_or_else(|| DataFusionError::Internal("error casting property list".into()))?;
+
         let names = args[1]
             .as_any()
             .downcast_ref::<StringArray>()
             .ok_or_else(|| DataFusionError::Execution("downcasting names in PropertyGet".into()))?;
-        if prop_lists.len() != names.len() {
-            return internal_err!("arrays of different lengths in property_get()");
-        }
-        let mut values = StringBuilder::new();
-        for i in 0..prop_lists.len() {
-            let name = names.value(i);
-            if let Some(value) = find_property_in_list(prop_lists.value(i), name)
-                .map_err(|e| DataFusionError::Internal(format!("{e:?}")))?
-            {
-                values.append_value(value);
-            } else {
-                values.append_null();
-            }
-        }
 
-        Ok(ColumnarValue::Array(Arc::new(values.finish())))
+        // Handle both regular arrays and dictionary arrays
+        match args[0].data_type() {
+            DataType::List(_) => {
+                // Handle regular list array
+                let prop_lists = args[0]
+                    .as_any()
+                    .downcast_ref::<GenericListArray<i32>>()
+                    .ok_or_else(|| {
+                        DataFusionError::Internal("error casting property list".into())
+                    })?;
+
+                if prop_lists.len() != names.len() {
+                    return internal_err!("arrays of different lengths in property_get()");
+                }
+
+                let mut values = StringBuilder::new();
+                for i in 0..prop_lists.len() {
+                    let name = names.value(i);
+                    if let Some(value) = find_property_in_list(prop_lists.value(i), name)
+                        .map_err(|e| DataFusionError::Internal(format!("{e:?}")))?
+                    {
+                        values.append_value(value);
+                    } else {
+                        values.append_null();
+                    }
+                }
+                Ok(ColumnarValue::Array(Arc::new(values.finish())))
+            }
+            DataType::Dictionary(_, value_type) => {
+                // Handle dictionary array
+                match value_type.as_ref() {
+                    DataType::List(_) => {
+                        let dict_array = args[0]
+                            .as_any()
+                            .downcast_ref::<DictionaryArray<Int32Type>>()
+                            .ok_or_else(|| {
+                                DataFusionError::Internal("error casting dictionary array".into())
+                            })?;
+
+                        if dict_array.len() != names.len() {
+                            return internal_err!("arrays of different lengths in property_get()");
+                        }
+
+                        let values_array = dict_array.values();
+                        let list_values = values_array
+                            .as_any()
+                            .downcast_ref::<GenericListArray<i32>>()
+                            .ok_or_else(|| {
+                                DataFusionError::Internal(
+                                    "dictionary values are not a list array".into(),
+                                )
+                            })?;
+
+                        let mut values = StringBuilder::new();
+                        for i in 0..dict_array.len() {
+                            let name = names.value(i);
+
+                            if dict_array.is_null(i) {
+                                values.append_null();
+                            } else {
+                                let key_index = dict_array.keys().value(i) as usize;
+                                if key_index < list_values.len() {
+                                    let property_list = list_values.value(key_index);
+                                    if let Some(value) = find_property_in_list(property_list, name)
+                                        .map_err(|e| DataFusionError::Internal(format!("{e:?}")))?
+                                    {
+                                        values.append_value(value);
+                                    } else {
+                                        values.append_null();
+                                    }
+                                } else {
+                                    return internal_err!(
+                                        "Dictionary key index out of bounds in property_get"
+                                    );
+                                }
+                            }
+                        }
+                        Ok(ColumnarValue::Array(Arc::new(values.finish())))
+                    }
+                    _ => internal_err!("property_get: unsupported dictionary value type"),
+                }
+            }
+            _ => internal_err!(
+                "property_get: unsupported input type, expected List or Dictionary<Int32, List>"
+            ),
+        }
     }
 }
