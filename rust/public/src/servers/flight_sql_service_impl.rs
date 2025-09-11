@@ -4,7 +4,7 @@ use super::sqlinfo::{
 };
 use anyhow::Result;
 use arrow_flight::decode::FlightRecordBatchStream;
-use arrow_flight::encode::FlightDataEncoderBuilder;
+use arrow_flight::encode::{DictionaryHandling, FlightDataEncoderBuilder};
 use arrow_flight::error::FlightError;
 use arrow_flight::sql::DoPutPreparedStatementResult;
 use arrow_flight::sql::metadata::{SqlInfoData, SqlInfoDataBuilder};
@@ -161,6 +161,14 @@ impl FlightSqlServiceImpl {
         })
     }
 
+    fn should_preserve_dictionary(metadata: &MetadataMap) -> bool {
+        metadata
+            .get("preserve_dictionary")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
+    }
+
     #[span_fn]
     async fn execute_query(
         &self,
@@ -248,7 +256,13 @@ impl FlightSqlServiceImpl {
             .await
             .map_err(|e| Status::internal(format!("Error executing plan: {e:?}")))?
             .map_err(|e| FlightError::ExternalError(Box::new(e)));
-        let builder = FlightDataEncoderBuilder::new().with_schema(schema.clone());
+        let builder = if Self::should_preserve_dictionary(metadata) {
+            FlightDataEncoderBuilder::new()
+                .with_schema(schema.clone())
+                .with_dictionary_handling(DictionaryHandling::Resend)
+        } else {
+            FlightDataEncoderBuilder::new().with_schema(schema.clone())
+        };
         let flight_data_stream = builder.build(stream);
         let execution_duration = now() - execution_begin;
 
