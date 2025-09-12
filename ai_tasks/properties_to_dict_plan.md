@@ -40,9 +40,9 @@ Implement a DataFusion UDF that converts properties (list of key-value struct pa
   - Reuses index or adds new unique list
 - [x] Handle null/empty property lists
 
-### 4. Core UDF Logic ✅  
+### 4. Core UDF Logic ✅
 - [x] In `invoke_with_args()`:
-  - Cast input to GenericListArray<i32> 
+  - Cast input to GenericListArray<i32>
   - Iterate through each property list
   - Build dictionary using PropertiesDictionaryBuilder
   - Create DictionaryArray with Int32Type keys
@@ -87,10 +87,10 @@ After analyzing Arrow's StringDictionaryBuilder, here's how it works internally 
 
 ### Core Algorithm
 ```
-append(value) → 
+append(value) →
   1. Check HashMap for existing value
   2. If exists: reuse index, append to keys_builder
-  3. If new: 
+  3. If new:
      - Add to values_builder
      - Insert (value → new_index) in HashMap
      - Append new_index to keys_builder
@@ -132,7 +132,7 @@ For `properties_to_dict` handling `List<Struct<key,value>>`:
 
 use anyhow::Context;
 use datafusion::arrow::array::{
-    Array, ArrayRef, AsArray, DictionaryArray, GenericListArray, 
+    Array, ArrayRef, AsArray, DictionaryArray, GenericListArray,
     Int32Array, ListBuilder, StringBuilder, StructArray, StructBuilder
 };
 use datafusion::arrow::datatypes::{DataType, Field, Fields, Int32Type};
@@ -171,10 +171,10 @@ impl PropertiesToDict {
 struct PropertiesDictionaryBuilder {
     // 1. HashMap for deduplication
     map: HashMap<Vec<(String, String)>, usize>,
-    
+
     // 2. Storage for unique property lists
     values_builder: ListBuilder<StructBuilder>,
-    
+
     // 3. Keys tracking which dictionary entry each row uses
     keys: Vec<Option<i32>>,
 }
@@ -188,18 +188,18 @@ impl PropertiesDictionaryBuilder {
         let values_builder = ListBuilder::new(
             StructBuilder::from_fields(prop_struct_fields, capacity)
         );
-        
+
         Self {
             map: HashMap::new(),
             values_builder,
             keys: Vec::with_capacity(capacity),
         }
     }
-    
+
     fn append_property_list(&mut self, properties: ArrayRef) -> Result<()> {
         // Convert StructArray to Vec<(String, String)> for hashing
         let prop_vec = extract_properties_as_vec(properties)?;
-        
+
         // Simple lookup - let HashMap handle the hashing
         match self.map.get(&prop_vec) {
             Some(&index) => {
@@ -216,11 +216,11 @@ impl PropertiesDictionaryBuilder {
         }
         Ok(())
     }
-    
+
     fn append_null(&mut self) {
         self.keys.push(None);
     }
-    
+
     fn finish(mut self) -> Result<DictionaryArray<Int32Type>> {
         let keys = Int32Array::from(self.keys);
         let values = Arc::new(self.values_builder.finish());
@@ -290,7 +290,7 @@ sql = "SELECT array_length(properties_to_array(properties_to_dict(properties))) 
 
 ### Future Optimizations (Optional)
 1. **Performance Benchmarking**: Measure actual memory reduction in production workloads at scale
-2. **Schema Investigation**: Resolve "item" vs "Property" field name discrepancy in data pipeline  
+2. **Schema Investigation**: Resolve "item" vs "Property" field name discrepancy in data pipeline
 3. **Production Adoption**: Update queries to use dictionary-encoded UDFs where beneficial
 4. **Dictionary-Encoded Output Optimization**: Enhance `property_get` to return `Dictionary<Int32, Utf8>` instead of `Utf8`
 
@@ -305,7 +305,7 @@ sql = "SELECT array_length(properties_to_array(properties_to_dict(properties))) 
 -- Works with regular arrays
 SELECT properties_length(properties) FROM measures;
 
--- Works with dictionary-encoded arrays  
+-- Works with dictionary-encoded arrays
 SELECT properties_length(properties_to_dict(properties)) FROM measures;
 ```
 
@@ -327,12 +327,12 @@ SELECT properties_length(properties_to_dict(properties)) FROM measures;
 **Current property_get behavior**:
 ```sql
 SELECT property_get(properties, 'some_key') FROM measures;
--- Returns: StringArray ["valueA", "valueA", "valueA", "valueB", "valueA", ...]  
+-- Returns: StringArray ["valueA", "valueA", "valueA", "valueB", "valueA", ...]
 -- Memory: Each repeated string stored separately (high redundancy)
 ```
 
 **Proposed optimization**:
-```sql  
+```sql
 SELECT property_get(properties, 'some_key') FROM measures;
 -- Returns: Dictionary<Int32, StringArray> {0: "valueA", 1: "valueB"} with keys [0,0,0,1,0,...]
 -- Memory: Each unique value stored once, repetitions cost only int32 (50-80% reduction)
@@ -346,7 +346,7 @@ SELECT property_get(properties, 'some_key') FROM measures;
 
 **Expected benefits**:
 - **Memory reduction**: 50-80% for datasets with repeated property values
-- **Query performance**: Faster string comparisons on dictionary keys instead of full strings  
+- **Query performance**: Faster string comparisons on dictionary keys instead of full strings
 - **Cache efficiency**: Better CPU cache utilization with smaller memory footprint
 - **End-to-end optimization**: Combined with `properties_to_dict` input encoding creates fully optimized pipeline
 
@@ -357,7 +357,7 @@ SELECT property_get(properties, 'some_key') FROM measures;
 
 **Success criteria**:
 - Memory usage reduced by at least 40% in typical property_get queries
-- No performance regression in query execution time  
+- No performance regression in query execution time
 - Transparent compatibility with existing SQL queries
 
 ## ✅ FlightSQL Dictionary Preservation Implementation Complete
@@ -438,7 +438,7 @@ def query_arrow(self, sql, begin=None, end=None):
 # Default behavior (backward compatible)
 client = micromegas.connect()  # preserve_dictionary=False
 
-# Dictionary preservation for memory efficiency  
+# Dictionary preservation for memory efficiency
 dict_client = micromegas.connect(preserve_dictionary=True)
 
 # Get pandas DataFrame (automatic conversion)
@@ -454,3 +454,84 @@ table = dict_client.query_arrow("SELECT dict_encoded_column FROM table")
 - ✅ Pandas compatibility via automatic conversion
 - ✅ Optional feature with full backward compatibility
 - ✅ Comprehensive error handling and documentation
+
+## ✅ Production Performance Analysis: Dictionary Encoding Effectiveness
+
+### Real-World Data Analysis
+
+**Dataset**: 100,000 measures from production environment for a single process
+
+#### Memory Usage Comparison
+
+**Without Dictionary Encoding** (standard properties):
+```sql
+SELECT name, value, properties
+FROM view_instance('measures', 'ee8654cd-4381-4e15-b2b5-b1b2aa285a48')
+LIMIT 100000
+```
+- **Memory Usage**: 51.11 MB
+- **Query Time**: 8.73 seconds
+- **Schema**: `properties: list<Property: struct<key: string not null, value: string not null> not null>`
+
+**With Dictionary Encoding** (`properties_to_dict()`):
+```sql
+SELECT name, value, properties_to_dict(properties) as properties
+FROM view_instance('measures', 'ee8654cd-4381-4e15-b2b5-b1b2aa285a48')
+LIMIT 100000
+```
+- **Memory Usage**: 1.36 MB
+- **Query Time**: 5.53 seconds
+- **Schema**: `properties: dictionary<values=list<Property: struct<key: string not null, value: string not null> not null>, indices=int32, ordered=0>`
+
+#### Performance Metrics
+
+| Metric | Standard Properties | Dictionary Encoded | Improvement |
+|--------|-------------------|-------------------|-------------|
+| **Memory Usage** | 51.11 MB | 1.36 MB | **97.3% reduction** |
+| **Query Time** | 8.73 seconds | 5.53 seconds | **36.7% faster** |
+| **Compression Ratio** | 1:1 | 37.6:1 | **37.6x smaller** |
+
+### Analysis: When Dictionary Encoding is Most Effective
+
+#### Optimal Scenarios for Dictionary Encoding
+
+**1. High Property Set Repetition (Our Case)**
+- Properties change seldom across log entries from the same process/context
+- Same property sets repeat across thousands of measurements
+- **Result**: Massive 97.3% memory reduction demonstrates extremely high repetition
+
+**2. Long-Running Processes with Stable Metadata**
+- Process properties remain constant throughout execution
+- Service configurations don't change frequently during operation
+- Application metadata stays consistent across telemetry events
+
+**3. Batch Processing with Common Attributes**
+- Similar operations share identical property sets
+- Bulk data processing with repeated categorization
+- Event streams from homogeneous sources
+
+#### Performance Characteristics
+
+**Memory Efficiency**: Dictionary encoding trades a small amount of CPU overhead (hash table lookups) for dramatic memory savings. In our analysis:
+- **97.3% memory reduction** far exceeds typical dictionary encoding results (50-80%)
+- This indicates extremely high property set repetition in production telemetry data
+- The **int32 indices** reference much larger property list structures stored only once
+
+**Query Performance**: The 36.7% query time improvement demonstrates that:
+- **Network bandwidth savings** outweigh dictionary lookup overhead
+- Dramatically smaller data transfers over the network (1.36 MB vs 51.11 MB)
+- Reduced serialization/deserialization overhead with more compact representation
+- CPU cache efficiency increases with smaller in-memory footprint
+
+#### Conclusion: Dictionary Encoding Highly Effective for Stable Properties
+
+For telemetry systems where **properties change seldom** (our primary use case):
+
+1. **Exceptional Memory Efficiency**: 97.3% reduction proves that property sets are highly repetitive in real-world observability data
+2. **Performance Benefits**: Query execution improves significantly due to reduced memory pressure
+3. **Production Ready**: The `properties_to_dict()` UDF delivers measurable value in production workloads
+4. **Scalability Impact**: Memory savings become more critical at high event volumes (100k+ events/second)
+
+**Recommendation**: Enable dictionary encoding by default for properties columns in observability workloads, as the repetitive nature of process/service metadata makes this optimization highly effective.
+
+````
