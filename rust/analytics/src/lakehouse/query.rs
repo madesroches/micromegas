@@ -4,7 +4,7 @@ use super::{
     materialize_partitions_table_function::MaterializePartitionsTableFunction,
     partition::Partition, partition_cache::QueryPartitionProvider,
     partitioned_table_provider::PartitionedTableProvider,
-    perfetto_trace_table_function::PerfettoTraceTableFunction, property_get_function::PropertyGet,
+    perfetto_trace_table_function::PerfettoTraceTableFunction,
     retire_partitions_table_function::RetirePartitionsTableFunction, view::View,
     view_factory::ViewFactory,
 };
@@ -28,7 +28,7 @@ use crate::{
         materialized_view::MaterializedView, table_scan_rewrite::TableScanRewrite,
         view_instance_table_function::ViewInstanceTableFunction,
     },
-    properties_to_dict_udf::{PropertiesLength, PropertiesToArray, PropertiesToDict},
+    properties::{PropertiesLength, PropertiesToArray, PropertiesToDict, PropertyGet},
     time::TimeRange,
 };
 use anyhow::{Context, Result};

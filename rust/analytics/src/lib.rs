@@ -38,7 +38,7 @@ pub mod metrics_table;
 /// Access to the raw binary telemetry payload
 pub mod payload;
 /// UDF to convert properties to dictionary-encoded arrays
-pub mod properties_to_dict_udf;
+pub mod properties;
 /// Reference-counted set of properties in transit format
 pub mod property_set;
 pub mod record_batch_transformer;
