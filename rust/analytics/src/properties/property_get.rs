@@ -1,5 +1,5 @@
 use anyhow::Context;
-use datafusion::arrow::array::{Array, StringBuilder};
+use datafusion::arrow::array::{Array, StringDictionaryBuilder};
 use datafusion::arrow::array::{ArrayRef, DictionaryArray, GenericListArray, StringArray};
 use datafusion::arrow::array::{AsArray, StructArray};
 use datafusion::arrow::datatypes::{DataType, Int32Type};
@@ -62,7 +62,10 @@ impl ScalarUDFImpl for PropertyGet {
         &self.signature
     }
     fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Utf8)
+        Ok(DataType::Dictionary(
+            Box::new(DataType::Int32),
+            Box::new(DataType::Utf8),
+        ))
     }
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let args = ColumnarValue::values_to_arrays(&args.args)?;
@@ -90,18 +93,18 @@ impl ScalarUDFImpl for PropertyGet {
                     return internal_err!("arrays of different lengths in property_get()");
                 }
 
-                let mut values = StringBuilder::new();
+                let mut dict_builder = StringDictionaryBuilder::<Int32Type>::new();
                 for i in 0..prop_lists.len() {
                     let name = names.value(i);
                     if let Some(value) = find_property_in_list(prop_lists.value(i), name)
                         .map_err(|e| DataFusionError::Internal(format!("{e:?}")))?
                     {
-                        values.append_value(value);
+                        dict_builder.append_value(value);
                     } else {
-                        values.append_null();
+                        dict_builder.append_null();
                     }
                 }
-                Ok(ColumnarValue::Array(Arc::new(values.finish())))
+                Ok(ColumnarValue::Array(Arc::new(dict_builder.finish())))
             }
             DataType::Dictionary(_, value_type) => {
                 // Handle dictionary array
@@ -128,12 +131,12 @@ impl ScalarUDFImpl for PropertyGet {
                                 )
                             })?;
 
-                        let mut values = StringBuilder::new();
+                        let mut dict_builder = StringDictionaryBuilder::<Int32Type>::new();
                         for i in 0..dict_array.len() {
                             let name = names.value(i);
 
                             if dict_array.is_null(i) {
-                                values.append_null();
+                                dict_builder.append_null();
                             } else {
                                 let key_index = dict_array.keys().value(i) as usize;
                                 if key_index < list_values.len() {
@@ -141,9 +144,9 @@ impl ScalarUDFImpl for PropertyGet {
                                     if let Some(value) = find_property_in_list(property_list, name)
                                         .map_err(|e| DataFusionError::Internal(format!("{e:?}")))?
                                     {
-                                        values.append_value(value);
+                                        dict_builder.append_value(value);
                                     } else {
-                                        values.append_null();
+                                        dict_builder.append_null();
                                     }
                                 } else {
                                     return internal_err!(
@@ -152,7 +155,7 @@ impl ScalarUDFImpl for PropertyGet {
                                 }
                             }
                         }
-                        Ok(ColumnarValue::Array(Arc::new(values.finish())))
+                        Ok(ColumnarValue::Array(Arc::new(dict_builder.finish())))
                     }
                     _ => internal_err!("property_get: unsupported dictionary value type"),
                 }
