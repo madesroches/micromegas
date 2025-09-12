@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"mod":["properties_to_dict_udf","property_get"]};

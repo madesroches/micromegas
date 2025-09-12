@@ -1,0 +1,1 @@
+searchState.loadedDescShard("telemetry_admin", 0, "Telemetry Admin CLI\nDelete blocks, streams and processes x days old or older\nReturns the argument unchanged.\nReturns the argument unchanged.\nCalls <code>U::from(self)</code>.\nCalls <code>U::from(self)</code>.")
