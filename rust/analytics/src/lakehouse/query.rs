@@ -28,7 +28,10 @@ use crate::{
         materialized_view::MaterializedView, table_scan_rewrite::TableScanRewrite,
         view_instance_table_function::ViewInstanceTableFunction,
     },
-    properties::{PropertiesLength, PropertiesToArray, PropertiesToDict, PropertyGet},
+    properties::{
+        properties_to_dict_udf::{PropertiesLength, PropertiesToArray, PropertiesToDict},
+        property_get::PropertyGet,
+    },
     time::TimeRange,
 };
 use anyhow::{Context, Result};

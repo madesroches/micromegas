@@ -25,7 +25,7 @@ use micromegas_analytics::{
         get_only_primitive_value, get_only_string_value, get_single_row_primitive_value_by_name,
         typed_column_by_name,
     },
-    properties::PropertyGet,
+    properties::property_get::PropertyGet,
     time::TimeRange,
 };
 use std::{collections::HashMap, sync::Arc};
