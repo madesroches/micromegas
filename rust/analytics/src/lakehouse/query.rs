@@ -4,7 +4,7 @@ use super::{
     materialize_partitions_table_function::MaterializePartitionsTableFunction,
     partition::Partition, partition_cache::QueryPartitionProvider,
     partitioned_table_provider::PartitionedTableProvider,
-    perfetto_trace_table_function::PerfettoTraceTableFunction, property_get_function::PropertyGet,
+    perfetto_trace_table_function::PerfettoTraceTableFunction,
     retire_partitions_table_function::RetirePartitionsTableFunction, view::View,
     view_factory::ViewFactory,
 };
@@ -27,6 +27,10 @@ use crate::{
     lakehouse::{
         materialized_view::MaterializedView, table_scan_rewrite::TableScanRewrite,
         view_instance_table_function::ViewInstanceTableFunction,
+    },
+    properties::{
+        properties_to_dict_udf::{PropertiesLength, PropertiesToArray, PropertiesToDict},
+        property_get::PropertyGet,
     },
     time::TimeRange,
 };
@@ -155,6 +159,9 @@ pub fn register_lakehouse_functions(
 /// register functions that are not depended on the lakehouse architecture
 pub fn register_extension_functions(ctx: &SessionContext) {
     ctx.register_udf(ScalarUDF::from(PropertyGet::new()));
+    ctx.register_udf(ScalarUDF::from(PropertiesToDict::new()));
+    ctx.register_udf(ScalarUDF::from(PropertiesToArray::new()));
+    ctx.register_udf(ScalarUDF::from(PropertiesLength::new()));
     ctx.register_udaf(make_histo_udaf());
     ctx.register_udaf(sum_histograms_udaf());
     ctx.register_udf(make_quantile_from_histogram_udf());

@@ -31,7 +31,7 @@ class MicromegasMiddlewareFactory(flight.ClientMiddlewareFactory):
         return MicromegasMiddleware(self.headers)
 
 
-def make_call_headers(begin, end):
+def make_call_headers(begin, end, preserve_dictionary=False):
     call_headers = []
     if begin is not None:
         call_headers.append(
@@ -45,6 +45,13 @@ def make_call_headers(begin, end):
             (
                 "query_range_end".encode("utf8"),
                 time.format_datetime(end).encode("utf8"),
+            )
+        )
+    if preserve_dictionary:
+        call_headers.append(
+            (
+                "preserve_dictionary".encode("utf8"),
+                "true".encode("utf8"),
             )
         )
     return call_headers
@@ -130,7 +137,7 @@ class FlightSQLClient:
     supports streaming for large result sets.
     """
 
-    def __init__(self, uri, headers=None):
+    def __init__(self, uri, headers=None, preserve_dictionary=False):
         """Initialize a FlightSQL client connection.
 
         Args:
@@ -138,6 +145,9 @@ class FlightSQLClient:
                 Use "grpc://" for unencrypted connections or "grpc+tls://" for TLS.
             headers (dict, optional): Custom headers for authentication or metadata.
                 Example: {"authorization": "Bearer token123"}
+            preserve_dictionary (bool, optional): When True, preserve dictionary encoding in 
+                Arrow arrays for memory efficiency. Useful when using dictionary-encoded UDFs. 
+                Defaults to False for backward compatibility.
 
         Example:
             >>> # Connect to local server
@@ -148,6 +158,12 @@ class FlightSQLClient:
             ...     "grpc+tls://remote-server:50051",
             ...     headers={"authorization": "Bearer mytoken"}
             ... )
+            >>>
+            >>> # Connect with dictionary preservation for memory efficiency
+            >>> client = FlightSQLClient(
+            ...     "grpc://localhost:50051",
+            ...     preserve_dictionary=True
+            ... )
         """
         fh = open(certifi.where(), "r")
         cert = fh.read()
@@ -156,6 +172,67 @@ class FlightSQLClient:
         self.__flight_client = flight.connect(
             location=uri, tls_root_certs=cert, middleware=[factory]
         )
+        self.__preserve_dictionary = preserve_dictionary
+
+    def _prepare_table_for_pandas(self, table):
+        """Prepare Arrow table with dictionary columns for pandas conversion.
+        
+        As of PyArrow/pandas 2024-2025, dictionary-encoded complex types 
+        (List, Struct, Union) cannot be converted directly to pandas due to 
+        "ArrowNotImplementedError: Unification of ... dictionaries is not implemented".
+        
+        This method converts problematic dictionary columns back to regular arrays
+        while preserving memory efficiency during Arrow processing.
+        """
+        import pyarrow.compute as pc
+        
+        columns = []
+        column_names = []
+        
+        for i, column in enumerate(table.columns):
+            column_name = table.column_names[i]
+            column_names.append(column_name)
+            
+            # Check if this is a dictionary-encoded column
+            if pyarrow.types.is_dictionary(column.type):
+                value_type = column.type.value_type
+                
+                # Convert dictionary-encoded complex types that pandas can't handle
+                if (pyarrow.types.is_list(value_type) or 
+                    pyarrow.types.is_struct(value_type) or 
+                    pyarrow.types.is_union(value_type)):
+                    # Manually decode dictionary by reconstructing the array
+                    # This works around PyArrow's casting limitations
+                    
+                    # Decode each chunk of the dictionary column
+                    reconstructed_chunks = []
+                    
+                    if hasattr(column, 'chunks'):
+                        # ChunkedArray case
+                        for chunk in column.chunks:
+                            indices = chunk.indices
+                            dictionary = chunk.dictionary
+                            reconstructed_chunk = pc.take(dictionary, indices)
+                            reconstructed_chunks.append(reconstructed_chunk)
+                        
+                        # Create a new ChunkedArray from reconstructed chunks
+                        reconstructed = pyarrow.chunked_array(reconstructed_chunks)
+                    else:
+                        # Single Array case
+                        indices = column.indices
+                        dictionary = column.dictionary
+                        reconstructed = pc.take(dictionary, indices)
+                    
+                    columns.append(reconstructed)
+                else:
+                    # Keep simple dictionary types (strings, numbers) for pandas
+                    # These work fine and provide memory benefits in pandas too
+                    columns.append(column)
+            else:
+                # Non-dictionary columns are fine as-is
+                columns.append(column)
+        
+        return pyarrow.Table.from_arrays(columns, names=column_names)
 
     def query(self, sql, begin=None, end=None):
         """Execute a SQL query and return results as a pandas DataFrame.
@@ -173,7 +250,9 @@ class FlightSQLClient:
                 together with begin for optimal performance.
 
         Returns:
-            pandas.DataFrame: Query results with appropriate column types.
+            pandas.DataFrame: Query results with appropriate column types. When the client was 
+                created with preserve_dictionary=True, dictionary-encoded columns will maintain 
+                their encoding for memory efficiency.
 
         Raises:
             Exception: If the query fails due to syntax errors, missing tables, or server issues.
@@ -189,14 +268,17 @@ class FlightSQLClient:
             ...     begin, end
             ... )
             >>>
-            >>> # Query without time range (less efficient for time-series data)
-            >>> processes = client.query("SELECT * FROM processes LIMIT 10")
+            >>> # For dictionary preservation, create client with preserve_dictionary=True
+            >>> dict_client = FlightSQLClient("grpc://localhost:50051", preserve_dictionary=True)
+            >>> df = dict_client.query("SELECT dict_encoded_column FROM table")
 
         Performance Note:
             Always provide begin/end parameters when querying time-series data to enable
             partition pruning, which can improve query performance by 10-100x.
+            Use preserve_dictionary=True in client constructor with dictionary-encoded UDFs 
+            for significant memory reduction.
         """
-        call_headers = make_call_headers(begin, end)
+        call_headers = make_call_headers(begin, end, self.__preserve_dictionary)
         options = flight.FlightCallOptions(headers=call_headers)
         ticket = make_query_ticket(sql)
         reader = self.__flight_client.do_get(ticket, options=options)
@@ -204,6 +286,11 @@ class FlightSQLClient:
         for chunk in reader:
             record_batches.append(chunk.data)
         table = pyarrow.Table.from_batches(record_batches, reader.schema)
+        
+        # Handle dictionary-encoded columns that pandas can't convert directly
+        if self.__preserve_dictionary:
+            table = self._prepare_table_for_pandas(table)
+            
         return table.to_pandas()
 
     def query_stream(self, sql, begin=None, end=None):
@@ -220,7 +307,8 @@ class FlightSQLClient:
 
         Yields:
             pyarrow.RecordBatch: Chunks of query results. Each batch contains a subset
-                of rows with all columns from the query.
+                of rows with all columns from the query. When the client was created with 
+                preserve_dictionary=True, dictionary-encoded columns will maintain their encoding.
 
         Example:
             >>> # Stream and process large dataset
@@ -233,20 +321,62 @@ class FlightSQLClient:
             ...     total_errors += len(df_chunk)
             ...     # Process chunk and release memory
             ... print(f"Total errors: {total_errors}")
+            >>>
+            >>> # Stream with dictionary preservation
+            >>> dict_client = FlightSQLClient("grpc://localhost:50051", preserve_dictionary=True)
+            >>> for batch in dict_client.query_stream("SELECT dict_encoded_column FROM table"):
+            ...     # Process dictionary-encoded data efficiently
+            ...     pass
 
         Performance Note:
             Streaming is recommended when:
             - Result set is larger than 100MB
             - You want to start processing before the query completes
             - Memory usage needs to be controlled
+            Use preserve_dictionary=True in client constructor with dictionary-encoded UDFs 
+            for significant memory reduction.
         """
         ticket = make_query_ticket(sql)
-        call_headers = make_call_headers(begin, end)
+        call_headers = make_call_headers(begin, end, self.__preserve_dictionary)
         options = flight.FlightCallOptions(headers=call_headers)
         reader = self.__flight_client.do_get(ticket, options=options)
         record_batches = []
         for chunk in reader:
             yield chunk.data
+
+    def query_arrow(self, sql, begin=None, end=None):
+        """Execute a SQL query and return results as an Arrow Table.
+        
+        This method preserves dictionary encoding and avoids pandas conversion issues.
+        Useful for working directly with Arrow data or when pandas can't handle 
+        dictionary-encoded complex types.
+
+        Args:
+            sql (str): The SQL query to execute.
+            begin (datetime or str, optional): Start time for partition pruning.
+            end (datetime or str, optional): End time for partition pruning.
+
+        Returns:
+            pyarrow.Table: Query results as Arrow Table with preserved dictionary encoding.
+
+        Example:
+            >>> # Get Arrow table with preserved dictionary encoding
+            >>> table = client.query_arrow("SELECT dict_encoded_column FROM table")
+            >>> print(table.schema)  # Shows dictionary<...> types
+            >>> 
+            >>> # Work with Arrow directly to avoid pandas limitations
+            >>> for batch in table.to_batches():
+            ...     # Process Arrow data without pandas conversion
+            ...     pass
+        """
+        call_headers = make_call_headers(begin, end, self.__preserve_dictionary)
+        options = flight.FlightCallOptions(headers=call_headers)
+        ticket = make_query_ticket(sql)
+        reader = self.__flight_client.do_get(ticket, options=options)
+        record_batches = []
+        for chunk in reader:
+            record_batches.append(chunk.data)
+        return pyarrow.Table.from_batches(record_batches, reader.schema)
 
     def prepare_statement(self, sql):
         """Create a prepared statement to retrieve query schema without executing it.

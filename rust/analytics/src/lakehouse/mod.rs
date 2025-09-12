@@ -63,7 +63,6 @@ pub mod perfetto_trace_table_function;
 /// Replicated view of the `processes` table of the postgresql metadata database.
 pub mod processes_view;
 /// property_get function support from SQL
-pub mod property_get_function;
 /// Datafusion integration
 pub mod query;
 /// Wrapper around ParquetObjectreader to provide ParquetMetaData without hitting the ObjectStore

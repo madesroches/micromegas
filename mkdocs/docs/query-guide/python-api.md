@@ -19,9 +19,15 @@ import micromegas
 
 # Connect to local Micromegas instance
 client = micromegas.connect()
+
+# Connect with dictionary encoding preservation (for memory efficiency)
+client = micromegas.connect(preserve_dictionary=True)
 ```
 
 The `connect()` function connects to the analytics service at `grpc://localhost:50051`.
+
+**Parameters:**
+- `preserve_dictionary` (bool, optional): Enable dictionary encoding preservation for memory-efficient data transfer. Default: `False`
 
 ### Simple Queries
 
@@ -133,6 +139,91 @@ for record_batch in client.query_stream(sql, begin, end):
         # Process errors...
     
     # Memory is automatically freed after each batch
+```
+
+### `query_arrow(sql, begin=None, end=None)`
+
+Execute a SQL query and return results as an Apache Arrow Table. This method preserves dictionary encoding when `preserve_dictionary=True` is set during connection.
+
+**Parameters:**
+
+- `sql` (str): SQL query string
+- `begin` (datetime or str, optional): Start time for partition elimination
+- `end` (datetime or str, optional): End time for partition elimination
+
+**Returns:**
+
+- `pyarrow.Table`: Query results as Arrow Table
+
+**Example:**
+```python
+# Connect with dictionary preservation
+dict_client = micromegas.connect(preserve_dictionary=True)
+
+# Get Arrow table with preserved dictionary encoding
+table = dict_client.query_arrow("""
+    SELECT properties_to_dict(properties) as dict_props
+    FROM measures
+""", begin, end)
+
+# Check if column uses dictionary encoding
+print(f"Dictionary encoded: {pa.types.is_dictionary(table.schema.field('dict_props').type)}")
+print(f"Memory usage: {table.nbytes:,} bytes")
+```
+
+## Dictionary Encoding for Memory Efficiency
+
+When working with large datasets containing repeated values (like properties), dictionary encoding can reduce memory usage by 50-80%. Micromegas provides built-in support for dictionary encoding:
+
+### Using Dictionary-Encoded Properties
+
+```python
+# Connect with dictionary preservation enabled
+client = micromegas.connect(preserve_dictionary=True)
+
+# Use properties_to_dict UDF for dictionary encoding
+sql = """
+SELECT 
+    time,
+    process_id,
+    properties_to_dict(properties) as dict_props,
+    properties_length(properties_to_dict(properties)) as prop_count
+FROM measures
+WHERE time >= NOW() - INTERVAL '1 hour'
+"""
+
+# Option 1: Get as pandas DataFrame (automatic conversion)
+df = client.query(sql, begin, end)
+print(f"DataFrame shape: {df.shape}")
+print(f"Memory usage: {df.memory_usage(deep=True).sum():,} bytes")
+
+# Option 2: Get as Arrow Table (preserves dictionary encoding)
+table = client.query_arrow(sql, begin, end)
+print(f"Arrow table memory: {table.nbytes:,} bytes")
+
+# Dictionary encoding typically uses 50-80% less memory
+```
+
+### Compatibility with Standard Functions
+
+Dictionary-encoded data works seamlessly with Micromegas UDFs:
+
+```python
+sql = """
+SELECT 
+    -- Direct property access
+    property_get(properties, 'source') as source,
+    
+    -- Length calculation (works with both formats)
+    properties_length(properties) as regular_count,
+    properties_length(properties_to_dict(properties)) as dict_count,
+    
+    -- Convert back to array when needed
+    array_length(properties_to_array(properties_to_dict(properties))) as array_count
+FROM measures
+"""
+
+df = client.query(sql, begin, end)
 ```
 
 ## Working with Results

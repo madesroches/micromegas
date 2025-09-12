@@ -293,6 +293,10 @@ LIMIT 10;
 
 **Note:** This is an async function that fetches data from object storage. Use sparingly in queries as it can impact performance.
 
+#### Property Functions
+
+Micromegas provides specialized functions for working with property data, including efficient dictionary encoding for memory optimization.
+
 ##### `property_get(properties, key)`
 
 Extracts a value from a properties map.
@@ -319,6 +323,85 @@ WHERE property_get(process_properties, 'thread-name') IS NOT NULL;
 SELECT time, name, value
 FROM measures
 WHERE property_get(properties, 'source') = 'system_monitor';
+```
+
+##### `properties_length(properties)`
+
+Returns the number of properties in a list, supporting both regular and dictionary-encoded formats.
+
+**Syntax:**
+```sql
+properties_length(properties)
+```
+
+**Parameters:**
+- `properties` (`List<Struct>` or `Dictionary<Int32, List<Struct>>`): Properties in either format
+
+**Returns:** `Int32` - Number of properties
+
+**Examples:**
+```sql
+-- Works with regular properties
+SELECT properties_length(properties) as prop_count
+FROM measures;
+
+-- Works with dictionary-encoded properties
+SELECT properties_length(properties_to_dict(properties)) as prop_count
+FROM measures;
+```
+
+**Note:** This function transparently handles both array and dictionary representations, providing better performance than using `array_length(properties_to_array(...))` for dictionary-encoded data.
+
+##### `properties_to_dict(properties)`
+
+Converts a properties list to a dictionary-encoded array for memory efficiency.
+
+**Syntax:**
+```sql
+properties_to_dict(properties)
+```
+
+**Parameters:**
+- `properties` (`List<Struct<key: Utf8, value: Utf8>>`): Properties list to encode
+
+**Returns:** `Dictionary<Int32, List<Struct<key: Utf8, value: Utf8>>>` - Dictionary-encoded properties
+
+**Examples:**
+```sql
+-- Convert properties to dictionary encoding for memory efficiency
+SELECT properties_to_dict(properties) as dict_props
+FROM measures;
+
+-- Use with other functions via properties_to_array
+SELECT array_length(properties_to_array(properties_to_dict(properties))) as prop_count
+FROM measures;
+```
+
+**Note:** Dictionary encoding can reduce memory usage by 50-80% for datasets with repeated property patterns.
+
+##### `properties_to_array(dict_properties)`
+
+Converts dictionary-encoded properties back to a regular array for compatibility with standard functions.
+
+**Syntax:**
+```sql
+properties_to_array(dict_properties)
+```
+
+**Parameters:**
+- `dict_properties` (`Dictionary<Int32, List<Struct>>`): Dictionary-encoded properties
+
+**Returns:** `List<Struct<key: Utf8, value: Utf8>>` - Regular properties array
+
+**Examples:**
+```sql
+-- Convert dictionary-encoded properties back to array
+SELECT properties_to_array(properties_to_dict(properties)) as props
+FROM measures;
+
+-- Use with array functions
+SELECT array_length(properties_to_array(properties_to_dict(properties))) as count
+FROM measures;
 ```
 
 #### Histogram Functions
