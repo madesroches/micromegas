@@ -3,6 +3,14 @@
 This file documents the historical progress of the Micromegas project. For current focus, please see the main [README.md](./README.md).
 
 ## [Unreleased]
+ * **Data Processing & Performance:**
+   * Dictionary encoding support with properties UDFs (`properties_to_dict`, `properties_to_array`, `properties_length`) (#506, #507, #508)
+   * Fixed parquet metadata race conditions with separation strategy (#502, #504)
+   * Optimized lakehouse partition queries by removing unnecessary file_metadata fetches (#499)
+   * Scalability improvements for high-volume environments (#497, #498)
+ * **Monitoring & Analytics:**
+   * Added `log_stats` SQL aggregation view for log analysis by severity and service (#495, #505)
+   * Refactored lakehouse views to use `generate_process_jit_partitions` (#493)
  * Working on aggregate log views for enhanced stability monitoring
  * Planning improvements to log aggregation and health reporting systems
 

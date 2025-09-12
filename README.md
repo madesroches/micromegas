@@ -63,11 +63,15 @@ To get started with Micromegas, please refer to the [Getting Started](https://ma
 
 ## Current Status & Roadmap
 
-Our current focus is on **aggregate log views** - creating comprehensive monitoring capabilities to help track system stability and health.
+We're currently working on **dictionary encoding** for properties to improve compression and query performance, alongside **aggregate log views** for comprehensive monitoring capabilities.
 
 ### September 2025
-* **Aggregate Log View**: Building a new materialized view that aggregates log events by severity, service, and time windows
-* **Stability Monitoring**: Enhanced dashboards and alerts for tracking error rates, warning trends, and system health metrics
+* **Dictionary Encoding Support**: Implemented properties UDFs (`properties_to_dict`, `properties_to_array`, `properties_length`) for enhanced data compression and query performance (#506, #507, #508)
+* **Performance Optimizations**: Optimized lakehouse partition queries by removing unnecessary file_metadata fetches (#499)
+* **Log Aggregation**: Added `log_stats` SQL view for aggregating log events by severity and service (#495, #505)
+* **Documentation**: 
+  - Comprehensive Python API documentation with advanced usage guide (#491)
+  - Unreal Engine instrumentation documentation (#492)
 
 For a detailed history of changes, please see the [CHANGELOG.md](./CHANGELOG.md) file.
 
