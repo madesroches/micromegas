@@ -292,12 +292,14 @@ pub async fn generate_process_jit_partitions_segment(
 
             // Build StreamInfo from the query results
             use crate::arrow_properties::read_property_list;
-            use crate::dfext::typed_column::typed_column_by_name;
+            use crate::dfext::{
+                string_column_accessor::string_column_by_name, typed_column::typed_column_by_name,
+            };
             use datafusion::arrow::array::{BinaryArray, GenericListArray, StringArray};
             use uuid::Uuid;
 
-            let stream_id_column: &StringArray = typed_column_by_name(&rb, "stream_id")?;
-            let stream_process_id_column: &StringArray = typed_column_by_name(&rb, "process_id")?;
+            let stream_id_column = string_column_by_name(&rb, "stream_id")?;
+            let stream_process_id_column = string_column_by_name(&rb, "process_id")?;
             let dependencies_metadata_column: &BinaryArray =
                 typed_column_by_name(&rb, "streams.dependencies_metadata")?;
             let objects_metadata_column: &BinaryArray =

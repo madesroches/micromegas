@@ -5,10 +5,7 @@ use chrono::{DateTime, Utc};
 use datafusion::{
     arrow::{
         self,
-        array::{
-            ListBuilder, RecordBatch, StringArray, StringBuilder, StructBuilder,
-            TimestampNanosecondArray,
-        },
+        array::{ListBuilder, RecordBatch, StringBuilder, StructBuilder, TimestampNanosecondArray},
         datatypes::{DataType, Field, Fields, TimestampNanosecondType},
     },
     catalog::MemTable,
@@ -21,9 +18,12 @@ use datafusion::{
 use futures::StreamExt;
 use futures::stream::BoxStream;
 use micromegas_analytics::{
-    dfext::typed_column::{
-        get_only_primitive_value, get_only_string_value, get_single_row_primitive_value_by_name,
-        typed_column_by_name,
+    dfext::{
+        string_column_accessor::string_column_by_name,
+        typed_column::{
+            get_only_primitive_value, get_only_string_value,
+            get_single_row_primitive_value_by_name, typed_column_by_name,
+        },
     },
     properties::property_get::PropertyGet,
     time::TimeRange,
@@ -172,7 +172,7 @@ pub async fn extract_top_offenders(ctx: &SessionContext) -> Result<Vec<RecordBat
     let mut builder =
         RecordBatchReceiverStreamBuilder::new(top_offenders_df.schema().inner().clone(), 100);
     for budgets_rb in budgets_rbs {
-        let budget_column: &StringArray = typed_column_by_name(&budgets_rb, "budget")?;
+        let budget_column = string_column_by_name(&budgets_rb, "budget")?;
         for budget_row in 0..budgets_rb.num_rows() {
             let budget = budget_column.value(budget_row);
             let df = top_offenders_df

@@ -10,6 +10,8 @@ pub mod jsonb;
 pub mod log_stream_table_provider;
 /// Convert a filtering expression to a physical predicate
 pub mod predicate;
+/// Unified string column accessor for Arrow arrays
+pub mod string_column_accessor;
 /// Execution plan interface for an async task
 pub mod task_log_exec_plan;
 /// Access to a RecordBatch's columns

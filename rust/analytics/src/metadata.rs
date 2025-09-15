@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use datafusion::arrow::array::{
-    Array, Int32Array, Int64Array, ListArray, RecordBatch, StringArray, TimestampNanosecondArray,
+    Array, Int32Array, Int64Array, ListArray, RecordBatch, TimestampNanosecondArray,
 };
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_telemetry::{
@@ -15,7 +15,7 @@ use uuid::Uuid;
 
 use crate::{
     arrow_properties::read_property_list,
-    dfext::typed_column::typed_column_by_name,
+    dfext::{string_column_accessor::string_column_by_name, typed_column::typed_column_by_name},
     lakehouse::{
         partition_cache::LivePartitionProvider, query::make_session_context,
         view_factory::ViewFactory,
@@ -186,13 +186,13 @@ pub async fn find_process_with_latest_timing(
     let batch = &batches[0];
 
     // Extract process fields
-    let process_id_column: &StringArray = typed_column_by_name(batch, "process_id")?;
-    let exe_column: &StringArray = typed_column_by_name(batch, "exe")?;
-    let username_column: &StringArray = typed_column_by_name(batch, "username")?;
-    let realname_column: &StringArray = typed_column_by_name(batch, "realname")?;
-    let computer_column: &StringArray = typed_column_by_name(batch, "computer")?;
-    let distro_column: &StringArray = typed_column_by_name(batch, "distro")?;
-    let cpu_brand_column: &StringArray = typed_column_by_name(batch, "cpu_brand")?;
+    let process_id_column = string_column_by_name(batch, "process_id")?;
+    let exe_column = string_column_by_name(batch, "exe")?;
+    let username_column = string_column_by_name(batch, "username")?;
+    let realname_column = string_column_by_name(batch, "realname")?;
+    let computer_column = string_column_by_name(batch, "computer")?;
+    let distro_column = string_column_by_name(batch, "distro")?;
+    let cpu_brand_column = string_column_by_name(batch, "cpu_brand")?;
     let tsc_frequency_column: &Int64Array = typed_column_by_name(batch, "tsc_frequency")?;
     let start_time_column: &TimestampNanosecondArray = typed_column_by_name(batch, "start_time")?;
     let start_ticks_column: &Int64Array = typed_column_by_name(batch, "start_ticks")?;
@@ -200,7 +200,7 @@ pub async fn find_process_with_latest_timing(
         typed_column_by_name(batch, "last_block_end_ticks")?;
     let last_block_end_time_column: &TimestampNanosecondArray =
         typed_column_by_name(batch, "last_block_end_time")?;
-    let parent_process_id_column: &StringArray = typed_column_by_name(batch, "parent_process_id")?;
+    let parent_process_id_column = string_column_by_name(batch, "parent_process_id")?;
     let properties_column: &ListArray = typed_column_by_name(batch, "properties")?;
 
     let parent_process_id = if parent_process_id_column.is_null(0) {
@@ -258,9 +258,9 @@ pub fn block_from_row(row: &sqlx::postgres::PgRow) -> Result<BlockMetadata> {
 /// Creates a `BlockMetadata` from a recordbatch row.
 #[span_fn]
 pub fn block_from_batch_row(rb: &RecordBatch, row: usize) -> Result<BlockMetadata> {
-    let block_id_column: &StringArray = typed_column_by_name(rb, "block_id")?;
-    let stream_id_column: &StringArray = typed_column_by_name(rb, "stream_id")?;
-    let process_id_column: &StringArray = typed_column_by_name(rb, "process_id")?;
+    let block_id_column = string_column_by_name(rb, "block_id")?;
+    let stream_id_column = string_column_by_name(rb, "stream_id")?;
+    let process_id_column = string_column_by_name(rb, "process_id")?;
     let begin_time_column: &TimestampNanosecondArray = typed_column_by_name(rb, "begin_time")?;
     let begin_ticks_column: &Int64Array = typed_column_by_name(rb, "begin_ticks")?;
     let end_time_column: &TimestampNanosecondArray = typed_column_by_name(rb, "end_time")?;

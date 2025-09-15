@@ -18,10 +18,8 @@ def test_log_stats_basic_functionality():
     """Test basic log_stats view functionality and schema."""
     print("\n=== Log Stats Integration Test: Basic Functionality ===")
     
-    # Calculate time range - avoid recent data to prevent daemon interference
-    # Use very large time window spanning months to ensure we find data
     now = datetime.datetime.now(datetime.timezone.utc)
-    end_time = now - datetime.timedelta(minutes=5)
+    end_time = now
     start_time = end_time - datetime.timedelta(days=90)
     
     print(f"Testing time range: {start_time} to {end_time}")
@@ -30,12 +28,9 @@ def test_log_stats_basic_functionality():
     sql = f"""
     SELECT time_bin, process_id, level, target, count
     FROM log_stats
-    WHERE time_bin >= '{start_time.isoformat()}'
-    AND time_bin < '{end_time.isoformat()}'
     ORDER BY time_bin DESC, count DESC
     LIMIT 50
     """
-    
     result = client.query(sql, start_time, end_time)
     
     # Schema validation
@@ -68,15 +63,13 @@ def test_log_stats_time_filtering():
     
     # Calculate time range - use large time window like other successful tests
     now = datetime.datetime.now(datetime.timezone.utc)
-    end_time = now - datetime.timedelta(minutes=5)
+    end_time = now
     start_time = end_time - datetime.timedelta(days=90)  # 90-day window
     
     # Test time-based aggregation
     time_query = f"""
     SELECT time_bin, sum(count) as total_count
     FROM log_stats
-    WHERE time_bin >= '{start_time.isoformat()}'
-    AND time_bin < '{end_time.isoformat()}'
     GROUP BY time_bin
     ORDER BY time_bin
     """
@@ -110,15 +103,13 @@ def test_log_stats_level_grouping():
     
     # Calculate time range - use months of data
     now = datetime.datetime.now(datetime.timezone.utc)
-    end_time = now - datetime.timedelta(minutes=5)
+    end_time = now
     start_time = end_time - datetime.timedelta(days=90)
     
     # Test level grouping
     level_query = f"""
     SELECT level, sum(count) as total_count
     FROM log_stats
-    WHERE time_bin >= '{start_time.isoformat()}'
-    AND time_bin < '{end_time.isoformat()}'
     GROUP BY level
     ORDER BY level
     LIMIT 10
@@ -149,15 +140,13 @@ def test_log_stats_process_filtering():
     
     # Calculate time range - use months of data
     now = datetime.datetime.now(datetime.timezone.utc)
-    end_time = now - datetime.timedelta(minutes=5)
+    end_time = now
     start_time = end_time - datetime.timedelta(days=90)
     
     # First get some sample data
     sample_query = f"""
     SELECT process_id, target, count
     FROM log_stats
-    WHERE time_bin >= '{start_time.isoformat()}'
-    AND time_bin < '{end_time.isoformat()}'
     ORDER BY count DESC
     LIMIT 5
     """
@@ -174,9 +163,7 @@ def test_log_stats_process_filtering():
     filter_query = f"""
     SELECT time_bin, level, count
     FROM log_stats
-    WHERE time_bin >= '{start_time.isoformat()}'
-    AND time_bin < '{end_time.isoformat()}'
-    AND process_id = '{sample_process}'
+    WHERE process_id = '{sample_process}'
     AND target = '{sample_target}'
     ORDER BY time_bin
     LIMIT 100
@@ -221,7 +208,7 @@ def test_log_stats_performance():
     
     # Calculate time range - use large time window like other successful tests
     now = datetime.datetime.now(datetime.timezone.utc)
-    end_time = now - datetime.timedelta(minutes=5)
+    end_time = now
     start_time = end_time - datetime.timedelta(days=90)  # 90-day window
     
     import time
@@ -231,8 +218,6 @@ def test_log_stats_performance():
     sql = f"""
     SELECT time_bin, level, sum(count) as total_count
     FROM log_stats
-    WHERE time_bin >= '{start_time.isoformat()}'
-    AND time_bin < '{end_time.isoformat()}'
     GROUP BY time_bin, level
     ORDER BY time_bin, level
     """
