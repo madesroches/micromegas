@@ -13,12 +13,13 @@ use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use clap::Parser;
 use datafusion::arrow::array::{
-    Int32Array, Int64Array, ListArray, StringArray, TimestampNanosecondArray, UInt64Array,
+    Int32Array, Int64Array, ListArray, TimestampNanosecondArray, UInt64Array,
 };
 use futures::{Stream, StreamExt};
 use http::{HeaderValue, Method, header};
 use micromegas::analytics::{
-    arrow_properties::read_property_list, dfext::typed_column::typed_column_by_name,
+    arrow_properties::read_property_list,
+    dfext::{string_column_accessor::string_column_by_name, typed_column::typed_column_by_name},
     time::TimeRange,
 };
 use micromegas::client::{
@@ -286,15 +287,15 @@ async fn get_processes_internal(
     let mut processes = Vec::new();
 
     for batch in batches {
-        let process_ids: &StringArray = typed_column_by_name(&batch, "process_id")?;
-        let exes: &StringArray = typed_column_by_name(&batch, "exe")?;
+        let process_ids = string_column_by_name(&batch, "process_id")?;
+        let exes = string_column_by_name(&batch, "exe")?;
         let start_times: &TimestampNanosecondArray = typed_column_by_name(&batch, "start_time")?;
         let last_update_times: &TimestampNanosecondArray =
             typed_column_by_name(&batch, "last_update_time")?;
-        let computers: &StringArray = typed_column_by_name(&batch, "computer")?;
-        let usernames: &StringArray = typed_column_by_name(&batch, "username")?;
-        let cpu_brands: &StringArray = typed_column_by_name(&batch, "cpu_brand")?;
-        let distros: &StringArray = typed_column_by_name(&batch, "distro")?;
+        let computers = string_column_by_name(&batch, "computer")?;
+        let usernames = string_column_by_name(&batch, "username")?;
+        let cpu_brands = string_column_by_name(&batch, "cpu_brand")?;
+        let distros = string_column_by_name(&batch, "distro")?;
         let properties_array: &ListArray = typed_column_by_name(&batch, "properties")?;
 
         for row in 0..batch.num_rows() {
@@ -404,8 +405,8 @@ async fn get_process_log_entries(
 
         let times: &TimestampNanosecondArray = typed_column_by_name(&batch, "time")?;
         let levels: &Int32Array = typed_column_by_name(&batch, "level")?;
-        let targets: &StringArray = typed_column_by_name(&batch, "target")?;
-        let msgs: &StringArray = typed_column_by_name(&batch, "msg")?;
+        let targets = string_column_by_name(&batch, "target")?;
+        let msgs = string_column_by_name(&batch, "msg")?;
 
         for row in 0..batch.num_rows() {
             let level_value = levels.value(row);

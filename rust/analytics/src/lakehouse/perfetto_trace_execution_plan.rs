@@ -1,11 +1,13 @@
 use super::{partition_cache::QueryPartitionProvider, view_factory::ViewFactory};
-use crate::dfext::typed_column::typed_column_by_name;
+use crate::dfext::{
+    string_column_accessor::string_column_by_name, typed_column::typed_column_by_name,
+};
 use crate::time::TimeRange;
 use anyhow::Context;
 use async_stream::stream;
 use datafusion::{
     arrow::{
-        array::{RecordBatch, StringArray, TimestampNanosecondArray, UInt32Array},
+        array::{RecordBatch, TimestampNanosecondArray, UInt32Array},
         datatypes::SchemaRef,
     },
     catalog::{Session, TableProvider},
@@ -322,7 +324,7 @@ async fn get_process_exe(
         anyhow::bail!("Process {} not found", process_id);
     }
 
-    let exes: &StringArray = typed_column_by_name(&batches[0], "exe")?;
+    let exes = string_column_by_name(&batches[0], "exe")?;
     Ok(exes.value(0).to_owned())
 }
 
@@ -351,9 +353,9 @@ async fn get_process_thread_list(
     let mut threads = Vec::new();
 
     for batch in batches {
-        let stream_ids: &StringArray = typed_column_by_name(&batch, "stream_id")?;
-        let thread_names: &StringArray = typed_column_by_name(&batch, "thread_name")?;
-        let thread_ids: &StringArray = typed_column_by_name(&batch, "thread_id")?;
+        let stream_ids = string_column_by_name(&batch, "stream_id")?;
+        let thread_names = string_column_by_name(&batch, "thread_name")?;
+        let thread_ids = string_column_by_name(&batch, "thread_id")?;
 
         for i in 0..batch.num_rows() {
             let stream_id = stream_ids.value(i).to_owned();
@@ -403,9 +405,9 @@ async fn generate_thread_spans_with_writer(
             let batch = batch_result?;
             let begin_times: &TimestampNanosecondArray = typed_column_by_name(&batch, "begin")?;
             let end_times: &TimestampNanosecondArray = typed_column_by_name(&batch, "end")?;
-            let names: &StringArray = typed_column_by_name(&batch, "name")?;
-            let filenames: &StringArray = typed_column_by_name(&batch, "filename")?;
-            let targets: &StringArray = typed_column_by_name(&batch, "target")?;
+            let names = string_column_by_name(&batch, "name")?;
+            let filenames = string_column_by_name(&batch, "filename")?;
+            let targets = string_column_by_name(&batch, "target")?;
             let lines: &UInt32Array = typed_column_by_name(&batch, "line")?;
 
             for i in 0..batch.num_rows() {
@@ -489,9 +491,9 @@ async fn generate_async_spans_with_writer(
             typed_column_by_name(&batch, "span_id")?;
         let begin_times: &TimestampNanosecondArray = typed_column_by_name(&batch, "begin_time")?;
         let end_times: &TimestampNanosecondArray = typed_column_by_name(&batch, "end_time")?;
-        let names: &StringArray = typed_column_by_name(&batch, "name")?;
-        let filenames: &StringArray = typed_column_by_name(&batch, "filename")?;
-        let targets: &StringArray = typed_column_by_name(&batch, "target")?;
+        let names = string_column_by_name(&batch, "name")?;
+        let filenames = string_column_by_name(&batch, "filename")?;
+        let targets = string_column_by_name(&batch, "target")?;
         let lines: &UInt32Array = typed_column_by_name(&batch, "line")?;
         for i in 0..batch.num_rows() {
             let _span_id = span_ids.value(i);
