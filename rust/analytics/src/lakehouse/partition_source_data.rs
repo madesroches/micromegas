@@ -1,7 +1,9 @@
 use super::blocks_view::blocks_file_schema_hash;
 use super::partition_cache::PartitionCache;
 use crate::arrow_properties::read_property_list;
-use crate::dfext::typed_column::typed_column_by_name;
+use crate::dfext::{
+    string_column_accessor::string_column_by_name, typed_column::typed_column_by_name,
+};
 use crate::time::TimeRange;
 use crate::{
     dfext::typed_column::typed_column,
@@ -119,9 +121,9 @@ impl PartitionBlocksSource for SourceDataBlocks {
             let mut stream = df.execute_stream().await?;
             while let Some(res) = stream.next().await {
                 let b = res.with_context(|| "fetching blocks query results")?;
-                let block_id_column: &StringArray = typed_column_by_name(&b, "block_id")?;
-                let stream_id_column: &StringArray = typed_column_by_name(&b, "stream_id")?;
-                let process_id_column: &StringArray = typed_column_by_name(&b, "process_id")?;
+                let block_id_column = string_column_by_name(&b, "block_id")?;
+                let stream_id_column = string_column_by_name(&b, "stream_id")?;
+                let process_id_column = string_column_by_name(&b, "process_id")?;
                 let begin_time_column: &TimestampNanosecondArray = typed_column_by_name(&b, "begin_time")?;
                 let begin_ticks_column: &Int64Array = typed_column_by_name(&b, "begin_ticks")?;
                 let end_time_column: &TimestampNanosecondArray = typed_column_by_name(&b, "end_time")?;
@@ -145,14 +147,13 @@ impl PartitionBlocksSource for SourceDataBlocks {
                     typed_column_by_name(&b, "processes.start_ticks")?;
                 let process_tsc_freq_column: &Int64Array =
                     typed_column_by_name(&b, "processes.tsc_frequency")?;
-                let process_exe_column: &StringArray = typed_column_by_name(&b, "processes.exe")?;
-                let process_username_column: &StringArray = typed_column_by_name(&b, "processes.username")?;
-                let process_realname_column: &StringArray = typed_column_by_name(&b, "processes.realname")?;
-                let process_computer_column: &StringArray = typed_column_by_name(&b, "processes.computer")?;
-                let process_distro_column: &StringArray = typed_column_by_name(&b, "processes.distro")?;
-                let process_cpu_column: &StringArray = typed_column_by_name(&b, "processes.cpu_brand")?;
-                let process_parent_column: &StringArray =
-                    typed_column_by_name(&b, "processes.parent_process_id")?;
+                let process_exe_column = string_column_by_name(&b, "processes.exe")?;
+                let process_username_column = string_column_by_name(&b, "processes.username")?;
+                let process_realname_column = string_column_by_name(&b, "processes.realname")?;
+                let process_computer_column = string_column_by_name(&b, "processes.computer")?;
+                let process_distro_column = string_column_by_name(&b, "processes.distro")?;
+                let process_cpu_column = string_column_by_name(&b, "processes.cpu_brand")?;
+                let process_parent_column = string_column_by_name(&b, "processes.parent_process_id")?;
                 let process_properties_column: &GenericListArray<i32> =
                     typed_column_by_name(&b, "processes.properties")?;
                 for ir in 0..b.num_rows() {

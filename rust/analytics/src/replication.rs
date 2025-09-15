@@ -10,7 +10,10 @@ use micromegas_tracing::info;
 use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::{arrow_properties::read_property_list, dfext::typed_column::typed_column_by_name};
+use crate::{
+    arrow_properties::read_property_list,
+    dfext::{string_column_accessor::string_column_by_name, typed_column::typed_column_by_name},
+};
 
 async fn ingest_streams(
     lake: Arc<DataLakeConnection>,
@@ -21,8 +24,8 @@ async fn ingest_streams(
     while let Some(res) = rb_stream.next().await {
         let b = res?;
         nb_rows += b.num_rows() as i64;
-        let stream_id_column: &StringArray = typed_column_by_name(&b, "stream_id")?;
-        let process_id_column: &StringArray = typed_column_by_name(&b, "process_id")?;
+        let stream_id_column = string_column_by_name(&b, "stream_id")?;
+        let process_id_column = string_column_by_name(&b, "process_id")?;
         let dependencies_metadata_column: &BinaryArray =
             typed_column_by_name(&b, "dependencies_metadata")?;
         let objects_metadata_column: &BinaryArray = typed_column_by_name(&b, "objects_metadata")?;
@@ -73,19 +76,19 @@ async fn ingest_processes(
     while let Some(res) = rb_stream.next().await {
         let b = res?;
         nb_rows += b.num_rows() as i64;
-        let process_id_column: &StringArray = typed_column_by_name(&b, "process_id")?;
-        let exe_column: &StringArray = typed_column_by_name(&b, "exe")?;
-        let username_column: &StringArray = typed_column_by_name(&b, "username")?;
-        let realname_column: &StringArray = typed_column_by_name(&b, "realname")?;
-        let computer_column: &StringArray = typed_column_by_name(&b, "computer")?;
-        let distro_column: &StringArray = typed_column_by_name(&b, "distro")?;
-        let cpu_brand_column: &StringArray = typed_column_by_name(&b, "cpu_brand")?;
+        let process_id_column = string_column_by_name(&b, "process_id")?;
+        let exe_column = string_column_by_name(&b, "exe")?;
+        let username_column = string_column_by_name(&b, "username")?;
+        let realname_column = string_column_by_name(&b, "realname")?;
+        let computer_column = string_column_by_name(&b, "computer")?;
+        let distro_column = string_column_by_name(&b, "distro")?;
+        let cpu_brand_column = string_column_by_name(&b, "cpu_brand")?;
         let process_tsc_freq_column: &Int64Array = typed_column_by_name(&b, "tsc_frequency")?;
         let start_time_column: &TimestampNanosecondArray = typed_column_by_name(&b, "start_time")?;
         let start_ticks_column: &Int64Array = typed_column_by_name(&b, "start_ticks")?;
         let insert_time_column: &TimestampNanosecondArray =
             typed_column_by_name(&b, "insert_time")?;
-        let parent_process_id_column: &StringArray = typed_column_by_name(&b, "parent_process_id")?;
+        let parent_process_id_column = string_column_by_name(&b, "parent_process_id")?;
         let properties_column: &GenericListArray<i32> = typed_column_by_name(&b, "properties")?;
         for row in 0..b.num_rows() {
             let process_id = Uuid::parse_str(process_id_column.value(row))?;
@@ -132,9 +135,9 @@ async fn ingest_payloads(
     while let Some(res) = rb_stream.next().await {
         let b = res?;
         nb_rows += b.num_rows() as i64;
-        let process_id_column: &StringArray = typed_column_by_name(&b, "process_id")?;
-        let stream_id_column: &StringArray = typed_column_by_name(&b, "stream_id")?;
-        let block_id_column: &StringArray = typed_column_by_name(&b, "block_id")?;
+        let process_id_column = string_column_by_name(&b, "process_id")?;
+        let stream_id_column = string_column_by_name(&b, "stream_id")?;
+        let block_id_column = string_column_by_name(&b, "block_id")?;
         let payload_column: &BinaryArray = typed_column_by_name(&b, "payload")?;
         for row in 0..b.num_rows() {
             let process_id = process_id_column.value(row);
@@ -161,9 +164,9 @@ async fn ingest_blocks(
     while let Some(res) = rb_stream.next().await {
         let b = res?;
         nb_rows += b.num_rows() as i64;
-        let block_id_column: &StringArray = typed_column_by_name(&b, "block_id")?;
-        let stream_id_column: &StringArray = typed_column_by_name(&b, "stream_id")?;
-        let process_id_column: &StringArray = typed_column_by_name(&b, "process_id")?;
+        let block_id_column = string_column_by_name(&b, "block_id")?;
+        let stream_id_column = string_column_by_name(&b, "stream_id")?;
+        let process_id_column = string_column_by_name(&b, "process_id")?;
         let begin_time_column: &TimestampNanosecondArray = typed_column_by_name(&b, "begin_time")?;
         let begin_ticks_column: &Int64Array = typed_column_by_name(&b, "begin_ticks")?;
         let end_time_column: &TimestampNanosecondArray = typed_column_by_name(&b, "end_time")?;
