@@ -4,6 +4,16 @@
 
 Add admin DataFusion User-Defined Table Functions (UDTFs) that allow easy identification and retirement of partitions with outdated schemas. These functions will be callable from the Python API and allow for schema evolution by cleaning up partitions that were created with older schema versions.
 
+## Definitions
+
+**Outdated Partitions**: Partitions that should be deleted due to lifecycle management policies, typically based on age, storage constraints, or business requirements. These partitions may have current schemas but are removed for operational reasons.
+
+**Incompatible Partitions**: Partitions that have a schema different from the latest/current schema version for their view set. These partitions cannot be queried correctly alongside current partitions due to schema mismatches and should be retired to enable schema evolution.
+
+**Schema Hash**: A version identifier (currently stored as arrays like `[4]`) that uniquely identifies the schema version used when a partition was created. Found in `lakehouse_partitions.file_schema_hash` column.
+
+**Retirement**: The process of removing partition metadata from the database and optionally deleting the associated data files from object storage. This is an irreversible operation.
+
 ## Current State Analysis
 
 ### Existing Infrastructure
@@ -61,110 +71,297 @@ Output columns:
 
 **Key Discovery**: Schema "hashes" are actually version numbers (e.g., `[4]`) not cryptographic hashes
 
-### Phase 2.5: Outdated Partition Discovery (📝 PLANNED)
+### Phase 3: Incompatible Partition Discovery (📝 PLANNED)
 
-**`list_outdated_partitions([view_set_name])`** - Identify partitions with outdated schemas
-```sql
-SELECT * FROM list_outdated_partitions();
-SELECT * FROM list_outdated_partitions('log_entries');
+**`micromegas.admin.list_incompatible_partitions(client, [view_set_name])`** - Function to identify partitions with incompatible schemas
+
+```python
+# Usage examples
+import micromegas
+import micromegas.admin
+
+client = micromegas.connect()
+
+# List all incompatible partitions across all view sets
+incompatible = micromegas.admin.list_incompatible_partitions(client)
+
+# List incompatible partitions for specific view set
+incompatible = micromegas.admin.list_incompatible_partitions(client, 'log_entries')
 ```
-Output columns:
+
+Returns pandas DataFrame with columns:
 - `view_set_name`: View set name
 - `view_instance_id`: Instance ID (e.g., process_id or 'global')
-- `outdated_schema_hash`: The old schema hash in the partition
+- `incompatible_schema_hash`: The old schema hash in the partition
 - `current_schema_hash`: The current schema hash from ViewFactory
-- `partition_count`: Number of outdated partitions
+- `partition_count`: Number of incompatible partitions with this schema
+- `total_size_bytes`: Total size in bytes of all incompatible partitions in this group
 
-**Implementation tasks:**
-- Create `list_outdated_partitions_table_function.rs`
-- Add method to catalog.rs to query lakehouse_partitions table
-- Compare stored schema versions with current ViewFactory versions
-- Register function in DataFusion
+**Implementation approach:**
+- Create new `micromegas/admin.py` module for administrative utilities
+- Function takes `FlightSQLClient` instance as first parameter
+- Uses SQL JOIN between `list_partitions()` and `list_view_sets()` UDTFs
+- Server-side filtering and aggregation for optimal performance
+- No Rust code required - leverages existing infrastructure
+- Optional view_set_name parameter for filtering
 
-### Phase 3: Automated Retirement (📝 PLANNED)
+### Phase 4: Automated Retirement (📝 PLANNED)
 
-**`retire_incompatible_partitions(view_set_name)`** - Retire partitions with incompatible schemas
-```sql
-SELECT * FROM retire_incompatible_partitions('log_entries');
-SELECT * FROM retire_incompatible_partitions('measures');
+**`micromegas.admin.retire_incompatible_partitions(client, [view_set_name])`** - Function to retire partitions with incompatible schemas
+
+```python
+# Usage examples
+import micromegas
+import micromegas.admin
+
+client = micromegas.connect()
+
+# Preview what would be retired (use list function)
+preview = micromegas.admin.list_incompatible_partitions(client)
+print(f"Would retire {preview['partition_count'].sum()} partitions")
+
+# Retire incompatible partitions for specific view set
+result = micromegas.admin.retire_incompatible_partitions(client, 'log_entries')
+
+# Retire all incompatible partitions (use with caution)
+result = micromegas.admin.retire_incompatible_partitions(client)
 ```
-Output columns:
+
+Returns pandas DataFrame with columns:
 - `view_set_name`: View set that was processed
 - `view_instance_id`: Instance ID of partitions retired
 - `partitions_retired`: Count of partitions retired
 - `storage_freed_bytes`: Total bytes freed
 
-**Implementation tasks:**
-- Create `retire_incompatible_partitions_table_function.rs`
-- Implement bulk retirement logic with transactions
-- Add comprehensive logging for audit trail
-- Integrate with existing `retire_partitions()` function
-- Add safety checks and validation
-- Register function in DataFusion
+**Implementation approach:**
+- Add `retire_incompatible_partitions()` function to `micromegas/admin.py` module
+- Function takes `FlightSQLClient` instance as first parameter
+- Function first calls `list_incompatible_partitions()` to identify targets
+- For each incompatible partition group, constructs time-based retirement calls
+- Uses existing `retire_partitions()` UDTF via SQL for actual retirement
+- Aggregates results and provides summary statistics
+- No new Rust code required - orchestrates existing functionality
 
 ## Technical Details
 
-### Database Query for Outdated Partitions
-```sql
-SELECT p.view_set_name, p.view_instance_id, p.file_schema_hash, COUNT(*) as partition_count
-FROM lakehouse_partitions p
-WHERE p.file_schema_hash != $1 -- current_schema_hash parameter
-GROUP BY p.view_set_name, p.view_instance_id, p.file_schema_hash
-ORDER BY p.view_set_name, p.view_instance_id;
-```
+### Python Implementation Logic
+
+The Python functions in `micromegas/admin.py` leverage existing UDTFs and perform data processing server-side using SQL:
+
+1. **`list_incompatible_partitions(client, view_set_name=None)` Flow:**
+   ```python
+   def list_incompatible_partitions(client, view_set_name=None):
+       # Build SQL query with join and aggregation
+       view_filter = ""
+       if view_set_name:
+           view_filter = f"AND p.view_set_name = '{view_set_name}'"
+       
+       sql = f"""
+       SELECT 
+           p.view_set_name,
+           p.view_instance_id, 
+           p.file_schema_hash as incompatible_schema_hash,
+           vs.current_schema_hash,
+           COUNT(*) as partition_count,
+           SUM(p.file_size) as total_size_bytes
+       FROM list_partitions() p
+       JOIN list_view_sets() vs ON p.view_set_name = vs.view_set_name
+       WHERE p.file_schema_hash != vs.current_schema_hash
+           {view_filter}
+       GROUP BY p.view_set_name, p.view_instance_id, p.file_schema_hash, vs.current_schema_hash
+       ORDER BY p.view_set_name, p.view_instance_id
+       """
+       
+       return client.query(sql)
+   ```
+
+2. **`retire_incompatible_partitions(client, view_set_name=None)` Flow:**
+   ```python
+   def retire_incompatible_partitions(client, view_set_name=None):
+       # First identify incompatible partitions
+       incompatible = list_incompatible_partitions(client, view_set_name)
+       
+       results = []
+       
+       # For each group, determine time range and call existing retire_partitions UDTF
+       for _, group in incompatible.iterrows():
+           # Query partition time ranges 
+           time_ranges = client.query(f"""
+               SELECT MIN(begin_insert_time) as min_time, MAX(end_insert_time) as max_time
+               FROM list_partitions()
+               WHERE view_set_name='{group.view_set_name}' 
+                 AND view_instance_id='{group.view_instance_id}'
+                 AND file_schema_hash='{group.incompatible_schema_hash}'
+           """)
+           
+           # Call existing retire_partitions UDTF
+           retirement_result = client.query(f"""
+               SELECT * FROM retire_partitions(
+                   '{group.view_set_name}', 
+                   '{group.view_instance_id}',
+                   '{time_ranges.min_time[0]}',
+                   '{time_ranges.max_time[0]}'
+               )
+           """)
+           
+           # Aggregate results
+           results.append({
+               'view_set_name': group.view_set_name,
+               'view_instance_id': group.view_instance_id,
+               'partitions_retired': group.partition_count,
+               'storage_freed_bytes': retirement_result.get('storage_freed_bytes', 0)
+           })
+       
+       return pd.DataFrame(results)
+   ```
 
 ### Safety Features
 
-1. **Transactional Operations**: All retirement operations use database transactions
-2. **Detailed Logging**: Log all retirement operations for audit trail
-3. **Parameter Validation**: Validate schema hashes and view names
-4. **Concurrent Safety**: Handle concurrent partition updates during retirement
+1. **Preview First**: Use `list_incompatible_partitions()` to preview what would be retired before calling retirement function
+2. **Existing UDTF Safety**: Leverages existing `retire_partitions()` UDTF which includes transaction safety
+3. **Parameter Validation**: Validate view set names and schema hash formats
+4. **Detailed Logging**: Python function logs all operations and provides summary statistics
+5. **Granular Control**: Optional view_set_name filtering prevents bulk operations across all views
+6. **Explicit Action**: No dry-run option forces deliberate decision to retire partitions
 
 ## Usage Examples
 
-### From Python API
+### Python API Usage
 ```python
 import micromegas
+import micromegas.admin
 
 # Connect to analytics service
-client = micromegas.AnalyticsClient('localhost:32010')
+client = micromegas.connect()
 
-# See current schema versions across all views
-schema_versions = client.sql("SELECT * FROM list_view_sets()")
+# See current schema versions across all views (existing UDTF)
+schema_versions = client.query("SELECT * FROM list_view_sets()")
+print(schema_versions)
 
-# Find outdated partitions for log_entries view
-outdated = client.sql("SELECT * FROM list_outdated_partitions('log_entries')")
+# Find incompatible partitions for log_entries view
+incompatible = micromegas.admin.list_incompatible_partitions(client, 'log_entries')
+print(f"Found {len(incompatible)} groups of incompatible partitions")
+print(f"Total incompatible partitions: {incompatible['partition_count'].sum()}")
+print(f"Total size to be freed: {incompatible['total_size_bytes'].sum() / (1024**3):.2f} GB")
 
-# Retire incompatible partitions for measures view
-result = client.sql("SELECT * FROM retire_incompatible_partitions('measures')")
+# Preview what would be retired
+print("Preview of partitions to be retired:")
+print(incompatible[['view_set_name', 'view_instance_id', 'partition_count', 'total_size_bytes']])
+
+# Actually retire incompatible partitions (after reviewing preview)
+if input("Proceed with retirement? (yes/no): ") == "yes":
+    result = micromegas.admin.retire_incompatible_partitions(client, 'log_entries')
+    print(f"Retired {result['partitions_retired'].sum()} partitions")
+    print(f"Freed {result['storage_freed_bytes'].sum()} bytes")
+
+# Find all incompatible partitions across all view sets
+all_incompatible = micromegas.admin.list_incompatible_partitions(client)
+for vs in all_incompatible['view_set_name'].unique():
+    vs_incompatible = all_incompatible[all_incompatible['view_set_name'] == vs]
+    total_partitions = vs_incompatible['partition_count'].sum()
+    total_size_gb = vs_incompatible['total_size_bytes'].sum() / (1024**3)
+    print(f"{vs}: {total_partitions} incompatible partitions ({total_size_gb:.2f} GB)")
 ```
 
-### Direct SQL Usage
+### Direct SQL Usage (for advanced users)
 ```sql
--- See current schema versions across all views
+-- See current schema versions across all views  
 SELECT * FROM list_view_sets();
 
--- Find outdated partitions for log_entries view
-SELECT * FROM list_outdated_partitions('log_entries');
+-- List all incompatible partitions with size information
+SELECT 
+    p.view_set_name,
+    p.view_instance_id, 
+    p.file_schema_hash as incompatible_schema_hash,
+    vs.current_schema_hash,
+    COUNT(*) as partition_count,
+    SUM(p.file_size) as total_size_bytes,
+    SUM(p.file_size) / (1024.0 * 1024.0 * 1024.0) as total_size_gb
+FROM list_partitions() p
+JOIN list_view_sets() vs ON p.view_set_name = vs.view_set_name
+WHERE p.file_schema_hash != vs.current_schema_hash
+GROUP BY p.view_set_name, p.view_instance_id, p.file_schema_hash, vs.current_schema_hash
+ORDER BY total_size_bytes DESC;
 
--- Retire incompatible partitions for measures view
-SELECT * FROM retire_incompatible_partitions('measures');
+-- List incompatible partitions for specific view set
+SELECT 
+    p.view_set_name,
+    p.view_instance_id, 
+    p.file_schema_hash as incompatible_schema_hash,
+    vs.current_schema_hash,
+    COUNT(*) as partition_count,
+    SUM(p.file_size) as total_size_bytes
+FROM list_partitions() p
+JOIN list_view_sets() vs ON p.view_set_name = vs.view_set_name
+WHERE p.file_schema_hash != vs.current_schema_hash
+    AND p.view_set_name = 'log_entries'
+GROUP BY p.view_set_name, p.view_instance_id, p.file_schema_hash, vs.current_schema_hash
+ORDER BY p.view_set_name, p.view_instance_id;
+
+-- Get time ranges for specific incompatible partition group (for manual retirement)
+SELECT 
+    MIN(begin_insert_time) as min_time, 
+    MAX(end_insert_time) as max_time
+FROM list_partitions()
+WHERE view_set_name = 'log_entries' 
+    AND view_instance_id = 'process-123'
+    AND file_schema_hash = '[3]';
+
+-- Manually retire specific incompatible partitions (use existing UDTF)
+SELECT * FROM retire_partitions('log_entries', 'process-123', '2024-01-01T00:00:00Z', '2024-01-02T00:00:00Z');
+
+-- Summary statistics of incompatible partitions by view set
+SELECT 
+    vs.view_set_name,
+    vs.current_schema_hash,
+    COUNT(DISTINCT p.file_schema_hash) as incompatible_schema_count,
+    SUM(CASE WHEN p.file_schema_hash != vs.current_schema_hash THEN 1 ELSE 0 END) as incompatible_partition_count,
+    SUM(CASE WHEN p.file_schema_hash != vs.current_schema_hash THEN p.file_size ELSE 0 END) as incompatible_size_bytes
+FROM list_view_sets() vs
+LEFT JOIN list_partitions() p ON vs.view_set_name = p.view_set_name
+GROUP BY vs.view_set_name, vs.current_schema_hash
+HAVING incompatible_partition_count > 0
+ORDER BY incompatible_size_bytes DESC;
 ```
 
 ## Benefits
 
-1. **API Integration**: Direct access from Python API for automation
-2. **SQL Flexibility**: Use standard SQL queries for complex analysis
-3. **Operational Efficiency**: Automate identification and cleanup of outdated partitions
-4. **Schema Evolution**: Enable safe schema changes by cleaning up old versions
-5. **Storage Optimization**: Remove partitions that can't be queried due to schema mismatches
-6. **Data Consistency**: Ensure all partitions use current schema versions
-7. **Observability**: Provide visibility into schema version distribution via SQL
+1. **Minimal Rust Development**: Only required Phase 1 catalog infrastructure, remaining phases use Python
+2. **Faster Implementation**: Leverages existing `list_partitions()` and completed `list_view_sets()` infrastructure
+3. **API Integration**: Direct access from Python API for automation scripts
+4. **Safety First**: Dry-run default prevents accidental data loss
+5. **Operational Efficiency**: Automate identification and cleanup of incompatible partitions
+6. **Schema Evolution**: Enable safe schema changes by cleaning up old versions  
+7. **Storage Optimization**: Remove partitions that can't be queried due to schema mismatches
+8. **Data Consistency**: Ensure all partitions use current schema versions
+9. **Flexible Filtering**: Optional view_set_name parameter for targeted cleanup
+10. **SQL Compatibility**: Advanced users can still use direct SQL with existing UDTFs
 
 ## Risks & Mitigations
 
-1. **Data Loss Risk**: Mitigated by transactional operations and comprehensive logging
-2. **Performance Impact**: Mitigated by efficient database queries and batched operations
-3. **Schema Detection Issues**: Mitigated by robust error handling and logging
-4. **Concurrent Operations**: Mitigated by proper transaction handling
-5. **Parameter Validation**: Mitigated by thorough input validation
+1. **Data Loss Risk**: Mitigated by dry-run default, existing UDTF transaction safety, and comprehensive logging
+2. **Performance Impact**: Mitigated by leveraging existing efficient UDTFs and optional view filtering
+3. **Schema Detection Issues**: Mitigated by using existing proven `list_view_sets()` infrastructure 
+4. **Concurrent Operations**: Mitigated by existing `retire_partitions()` UDTF transaction handling
+5. **Parameter Validation**: Mitigated by Python input validation and error handling
+6. **Server-Side Processing**: SQL JOIN and aggregation performed efficiently on the server
+
+## Summary of Revised Plan
+
+**Key Changes from Original:**
+- **Phase 3**: Changed from Rust UDTF to Python function using existing `list_partitions()` and `list_view_sets()`
+- **Phase 4**: Changed from Rust UDTF to Python function orchestrating existing `retire_partitions()` UDTF
+- **Minimal new Rust code**: Only Phase 1 catalog work required, remaining phases leverage existing infrastructure
+
+**Implementation Strategy:**
+1. ✅ **Phase 1 Complete**: `list_view_sets()` UDTF provides current schema versions
+2. ✅ **Phase 2 Complete**: Partition Analysis and Unit Tests added
+3. 📝 **Phase 3**: Add `micromegas.admin.list_incompatible_partitions()` function in Python
+4. 📝 **Phase 4**: Add `micromegas.admin.retire_incompatible_partitions()` function in Python
+
+**Benefits of Python Approach:**
+- Faster development for Phases 3-4 (no additional Rust compilation, testing, registration)
+- Leverages existing and Phase 1 UDTFs
+- More intuitive API for Python users
+- Easier to extend with additional logic and safety features
+- Maintains consistency with other client library methods
