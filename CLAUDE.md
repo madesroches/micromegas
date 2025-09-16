@@ -35,8 +35,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### Python (from `python/micromegas/` directory)
 - **Install**: `poetry install`
-- **Test**: `pytest`
-- **Format**: `black <file>` (REQUIRED before commit)
+- **Test**: `poetry run pytest`
+- **Format**: `poetry run black <file>` (REQUIRED before commit)
 
 ### Service Management (for testing and development)
 - **Start Services**: `python3 local_test_env/ai_scripts/start_services.py`

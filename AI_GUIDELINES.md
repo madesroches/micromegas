@@ -40,8 +40,8 @@
 
 ### Python Development (from `python/micromegas/` directory)
 - **Install dependencies**: `poetry install`
-- **Test**: `pytest`
-- **Format**: `black <file>` (REQUIRED before any commit)
+- **Test**: `poetry run pytest`
+- **Format**: `poetry run black <file>` (REQUIRED before any commit)
 
 ## Architecture Overview
 
