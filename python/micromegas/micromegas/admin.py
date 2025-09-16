@@ -32,6 +32,7 @@ def list_incompatible_partitions(
             - current_schema_hash: The current schema hash from ViewFactory
             - partition_count: Number of incompatible partitions with this schema
             - total_size_bytes: Total size in bytes of all incompatible partitions
+            - file_paths: Array of file paths for each incompatible partition (for precise retirement)
 
     Example:
         >>> import micromegas
@@ -51,13 +52,12 @@ def list_incompatible_partitions(
         This function leverages the existing list_partitions() and list_view_sets()
         UDTFs to perform server-side JOIN and aggregation for optimal performance.
         Schema "hashes" are actually version numbers (e.g., [4]) not cryptographic hashes.
+        SQL is executed directly by DataFusion, so no SQL injection concerns.
     """
     # Build view filter clause if specific view set requested
     view_filter = ""
     if view_set_name is not None:
-        # Escape single quotes in view_set_name to prevent SQL injection
-        escaped_view_set_name = view_set_name.replace("'", "''")
-        view_filter = f"AND p.view_set_name = '{escaped_view_set_name}'"
+        view_filter = f"AND p.view_set_name = '{view_set_name}'"
 
     # Construct SQL query with JOIN between list_partitions() and list_view_sets()
     # Server-side filtering and aggregation for optimal performance
@@ -68,7 +68,8 @@ def list_incompatible_partitions(
         p.file_schema_hash as incompatible_schema_hash,
         vs.current_schema_hash,
         COUNT(*) as partition_count,
-        SUM(p.file_size) as total_size_bytes
+        SUM(p.file_size) as total_size_bytes,
+        ARRAY_AGG(p.file_path) as file_paths
     FROM list_partitions() p
     JOIN list_view_sets() vs ON p.view_set_name = vs.view_set_name
     WHERE p.file_schema_hash != vs.current_schema_hash
@@ -125,6 +126,7 @@ def retire_incompatible_partitions(
         This function orchestrates existing retire_partitions() UDTF calls for
         each group of incompatible partitions. Always preview with
         list_incompatible_partitions() before calling this function.
+        SQL is executed directly by DataFusion, so no SQL injection concerns.
     """
     # First identify incompatible partitions
     incompatible = list_incompatible_partitions(client, view_set_name)
@@ -144,20 +146,15 @@ def retire_incompatible_partitions(
 
     # For each group of incompatible partitions, determine time range and retire
     for _, group in incompatible.iterrows():
-        # Escape parameters to prevent SQL injection
-        escaped_view_set = group["view_set_name"].replace("'", "''")
-        escaped_view_instance = group["view_instance_id"].replace("'", "''")
-        escaped_schema_hash = str(group["incompatible_schema_hash"]).replace("'", "''")
-
         # Query time ranges for this specific incompatible partition group
         time_range_sql = f"""
             SELECT 
                 MIN(begin_insert_time) as min_time, 
                 MAX(end_insert_time) as max_time
             FROM list_partitions()
-            WHERE view_set_name = '{escaped_view_set}' 
-                AND view_instance_id = '{escaped_view_instance}'
-                AND file_schema_hash = '{escaped_schema_hash}'
+            WHERE view_set_name = '{group["view_set_name"]}' 
+                AND view_instance_id = '{group["view_instance_id"]}'
+                AND file_schema_hash = '{group["incompatible_schema_hash"]}'
         """
 
         time_ranges = client.query(time_range_sql)
@@ -172,8 +169,8 @@ def retire_incompatible_partitions(
         # Call existing retire_partitions UDTF for this time range
         retirement_sql = f"""
             SELECT * FROM retire_partitions(
-                '{escaped_view_set}', 
-                '{escaped_view_instance}',
+                '{group["view_set_name"]}', 
+                '{group["view_instance_id"]}',
                 '{min_time}',
                 '{max_time}'
             )

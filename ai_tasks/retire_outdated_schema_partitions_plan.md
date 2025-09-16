@@ -96,6 +96,7 @@ Returns pandas DataFrame with columns:
 - `current_schema_hash`: The current schema hash from ViewFactory
 - `partition_count`: Number of incompatible partitions with this schema
 - `total_size_bytes`: Total size in bytes of all incompatible partitions in this group
+- `file_paths`: Array of file paths for each incompatible partition (for precise retirement)
 
 **Implementation approach:**
 - Create new `micromegas/admin.py` module for administrative utilities
@@ -130,8 +131,9 @@ result = micromegas.admin.retire_incompatible_partitions(client)
 Returns pandas DataFrame with columns:
 - `view_set_name`: View set that was processed
 - `view_instance_id`: Instance ID of partitions retired
-- `partitions_retired`: Count of partitions retired
-- `storage_freed_bytes`: Total bytes freed
+- `partitions_retired`: Count of partitions successfully retired
+- `storage_freed_bytes`: Total bytes freed from storage
+- `retirement_messages`: Array of detailed messages for each partition retirement attempt
 
 **Implementation approach:**
 - Add `retire_incompatible_partitions()` function to `micromegas/admin.py` module
@@ -268,7 +270,7 @@ for vs in all_incompatible['view_set_name'].unique():
 -- See current schema versions across all views  
 SELECT * FROM list_view_sets();
 
--- List all incompatible partitions with size information
+-- List all incompatible partitions with size information and file paths
 SELECT 
     p.view_set_name,
     p.view_instance_id, 
@@ -276,21 +278,23 @@ SELECT
     vs.current_schema_hash,
     COUNT(*) as partition_count,
     SUM(p.file_size) as total_size_bytes,
-    SUM(p.file_size) / (1024.0 * 1024.0 * 1024.0) as total_size_gb
+    SUM(p.file_size) / (1024.0 * 1024.0 * 1024.0) as total_size_gb,
+    ARRAY_AGG(p.file_path) as file_paths
 FROM list_partitions() p
 JOIN list_view_sets() vs ON p.view_set_name = vs.view_set_name
 WHERE p.file_schema_hash != vs.current_schema_hash
 GROUP BY p.view_set_name, p.view_instance_id, p.file_schema_hash, vs.current_schema_hash
 ORDER BY total_size_bytes DESC;
 
--- List incompatible partitions for specific view set
+-- List incompatible partitions for specific view set with file paths
 SELECT 
     p.view_set_name,
     p.view_instance_id, 
     p.file_schema_hash as incompatible_schema_hash,
     vs.current_schema_hash,
     COUNT(*) as partition_count,
-    SUM(p.file_size) as total_size_bytes
+    SUM(p.file_size) as total_size_bytes,
+    ARRAY_AGG(p.file_path) as file_paths
 FROM list_partitions() p
 JOIN list_view_sets() vs ON p.view_set_name = vs.view_set_name
 WHERE p.file_schema_hash != vs.current_schema_hash
@@ -345,6 +349,105 @@ ORDER BY incompatible_size_bytes DESC;
 4. **Concurrent Operations**: Mitigated by existing `retire_partitions()` UDTF transaction handling
 5. **Parameter Validation**: Mitigated by Python input validation and error handling
 6. **Server-Side Processing**: SQL JOIN and aggregation performed efficiently on the server
+7. **🚨 CRITICAL SAFETY ISSUE - Mixed Schema Retirement**: The current `retire_incompatible_partitions()` implementation has a serious bug where it retires ALL partitions in a time range, not just incompatible ones. This could accidentally delete compatible partitions that happen to exist in the same time range as incompatible partitions.
+
+### Critical Issue Details:
+**Problem**: The current Phase 4 implementation uses time-based retirement:
+```python
+# DANGEROUS: This retires ALL partitions in time range, not just incompatible ones
+retirement_sql = f"""
+    SELECT * FROM retire_partitions(
+        '{escaped_view_set}', 
+        '{escaped_view_instance}',
+        '{min_time}',
+        '{max_time}'
+    )
+"""
+```
+
+**Why this is dangerous**: 
+- Compatible partitions with current schemas may exist in the same time ranges
+- The `retire_partitions()` UDTF retires by time range, not by schema hash
+- This could cause data loss of perfectly valid, queryable partitions
+
+**Required Fix**: Need to implement partition-specific retirement that targets only the exact incompatible partitions, not time ranges. This requires either:
+
+**SELECTED SOLUTION - Option A**: Implement file-path-specific retirement UDF
+- Create new `retire_partition_by_file()` UDTF that retires a single partition by its file path
+- Modify `list_incompatible_partitions()` to return file paths for each incompatible partition  
+- Modify `retire_incompatible_partitions()` to retire partitions individually by file path
+- Ensures surgical precision - only exact incompatible partitions are retired, no risk of collateral damage
+
+### Implementation Plan for Option A:
+
+**Phase 4a: Enhance list_incompatible_partitions() to return file paths**
+```python
+# Updated return columns to include file_path for precise retirement
+return pd.DataFrame(columns=[
+    'view_set_name', 'view_instance_id', 'incompatible_schema_hash',
+    'current_schema_hash', 'partition_count', 'total_size_bytes',
+    'file_paths'  # NEW: Array of file paths for each incompatible partition
+])
+```
+
+**Phase 4b: Create retire_partition_by_file() Rust UDF**
+```rust
+// New UDF in rust/analytics/src/lakehouse/
+// Signature: retire_partition_by_file(file_path: String) -> String
+// Retires single partition by exact file path match
+// Returns descriptive message: "SUCCESS: Retired partition <file_path>" or "ERROR: Partition not found: <file_path>"
+```
+
+**Phase 4c: Update retire_incompatible_partitions() for safety**
+```python
+def retire_incompatible_partitions(client, view_set_name=None):
+    # Get incompatible partitions with their file paths
+    incompatible = list_incompatible_partitions(client, view_set_name)
+    
+    results = []
+    for _, group in incompatible.iterrows():
+        retired_count = 0
+        retirement_messages = []
+        
+        # Retire each individual file path
+        for file_path in group['file_paths']:
+            result = client.query(f"SELECT retire_partition_by_file('{file_path}') as message")
+            message = result['message'].iloc[0]
+            retirement_messages.append(message)
+            
+            if message.startswith("SUCCESS:"):
+                retired_count += 1
+            else:
+                print(f"Warning: {message}")  # Log errors but continue
+        
+        results.append({
+            'view_set_name': group['view_set_name'],
+            'view_instance_id': group['view_instance_id'], 
+            'partitions_retired': retired_count,
+            'storage_freed_bytes': group['total_size_bytes'] if retired_count == len(group['file_paths']) else 0,
+            'retirement_messages': retirement_messages  # Include all messages for debugging
+        })
+    
+    return pd.DataFrame(results)
+```
+
+**Benefits of Option A:**
+- **Surgical precision**: Only targets exact incompatible partitions
+- **Zero risk**: Impossible to accidentally retire compatible partitions  
+- **Performance**: Efficient individual partition retirement
+- **Detailed feedback**: Descriptive messages for each retirement operation (success/failure reasons)
+- **Auditability**: Clear one-to-one mapping of file path to retirement action with full message logs
+- **Error resilience**: Continues processing even if some partitions fail to retire
+- **Rollback friendly**: Could theoretically support undelete if needed
+
+**Status**: 🚧 **IMPLEMENTATION REQUIRED** 
+1. **First, verify `list_partitions()` schema**: Confirm the exact column name for file paths (likely `file_path`, `path`, or `partition_path`)
+2. **Modify `list_incompatible_partitions()` SQL**: Add file paths using `ARRAY_AGG(p.<file_path_column>)` (✅ DataFusion supports ARRAY_AGG)
+3. **Create `retire_partition_by_file()` Rust UDF**: Scalar function returning descriptive messages
+4. **Update `retire_incompatible_partitions()`**: Use file-path-based retirement
+5. **Update tests**: Validate new safe retirement approach
+
+**Note on ARRAY_AGG**: ✅ **DataFusion supports ARRAY_AGG** as confirmed by Apache DataFusion documentation. It can be used with ordering: `ARRAY_AGG(column ORDER BY other_column)` and supports complex data types as of DataFusion 34.0.0 (2024).
 
 ## Summary of Revised Plan
 
@@ -356,8 +459,12 @@ ORDER BY incompatible_size_bytes DESC;
 **Implementation Strategy:**
 1. ✅ **Phase 1 Complete**: `list_view_sets()` UDTF provides current schema versions
 2. ✅ **Phase 2 Complete**: Partition Analysis and Unit Tests added
-3. 📝 **Phase 3**: Add `micromegas.admin.list_incompatible_partitions()` function in Python
-4. 📝 **Phase 4**: Add `micromegas.admin.retire_incompatible_partitions()` function in Python
+3. ✅ **Phase 3 Complete**: `micromegas.admin.list_incompatible_partitions()` function implemented in Python
+4. 🚧 **Phase 4 NEEDS REWORK**: Current implementation unsafe - implementing file-path-based retirement:
+   - **Phase 4a**: 📝 Enhance `list_incompatible_partitions()` to return file paths using `ARRAY_AGG(p.file_path)`
+   - **Phase 4b**: 📝 Create `retire_partition_by_file()` Rust UDF (scalar function) for surgical partition retirement
+   - **Phase 4c**: 📝 Rewrite `retire_incompatible_partitions()` to use file-path-based retirement
+   - **Phase 4d**: 📝 Update tests to validate new safe retirement approach
 
 **Benefits of Python Approach:**
 - Faster development for Phases 3-4 (no additional Rust compilation, testing, registration)
