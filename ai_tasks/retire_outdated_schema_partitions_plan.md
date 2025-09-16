@@ -50,13 +50,18 @@ Output columns:
 - Added `get_view_sets()` to ViewFactory for catalog access
 - Registered in DataFusion query context
 
-### Phase 2: Partition Analysis (🔄 IN PROGRESS)
+### Phase 2: Partition Analysis (✅ COMPLETED)
 
-**Next Step: Unit Tests**
-- Add tests to existing analytics test suite in tests folder
-- Test `list_view_sets()` function with real ViewFactory
-- Verify schema hashes match expected values
-- Test UDTF execution through DataFusion SQL
+**Unit Tests Added** - `/home/mad/micromegas/rust/analytics/tests/catalog_tests.rs`
+- ✅ `test_list_view_sets_catalog()` - Tests basic functionality and column structure
+- ✅ `test_view_sets_schema_hash_consistency()` - Validates schema versions (version numbers like `[4]`, not SHA-256 hashes)
+- ✅ `test_view_sets_properties()` - Tests view set properties (global_instance_available, has_view_maker)
+- ✅ Tests work without database connection using minimal ViewFactory setup
+- ✅ Verified log_entries and measures view sets both have schema version `[4]` and are view-maker-only
+
+**Key Discovery**: Schema "hashes" are actually version numbers (e.g., `[4]`) not cryptographic hashes
+
+### Phase 2.5: Outdated Partition Discovery (📝 PLANNED)
 
 **`list_outdated_partitions([view_set_name])`** - Identify partitions with outdated schemas
 ```sql
@@ -73,7 +78,7 @@ Output columns:
 **Implementation tasks:**
 - Create `list_outdated_partitions_table_function.rs`
 - Add method to catalog.rs to query lakehouse_partitions table
-- Compare stored schema hashes with current ViewFactory hashes
+- Compare stored schema versions with current ViewFactory versions
 - Register function in DataFusion
 
 ### Phase 3: Automated Retirement (📝 PLANNED)
