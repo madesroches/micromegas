@@ -22,8 +22,7 @@ use super::write_partition::add_file_for_cleanup;
 
 /// A scalar UDF that retires a single partition by its file path.
 ///
-/// This function provides surgical precision for partition retirement,
-/// ensuring only the exact specified partition is removed from the lakehouse.
+/// This function retires only the exact specified partition from the lakehouse.
 #[derive(Debug)]
 pub struct RetirePartitionByFile {
     signature: Signature,
@@ -186,8 +185,7 @@ impl AsyncScalarUDFImpl for RetirePartitionByFile {
 
 /// Creates a user-defined function to retire a single partition by its file path.
 ///
-/// This function provides surgical precision for partition retirement, ensuring
-/// only the exact specified partition is removed from the lakehouse.
+/// This function ensures only the exact specified partition is removed from the lakehouse.
 ///
 /// # Usage
 /// ```sql
