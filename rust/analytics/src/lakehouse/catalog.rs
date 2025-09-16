@@ -18,16 +18,6 @@ pub struct ViewSetInfo {
     pub global_instance_available: bool,
 }
 
-/// Information about an outdated partition
-#[derive(Debug, Clone)]
-pub struct OutdatedPartitionInfo {
-    pub view_set_name: String,
-    pub view_instance_id: String,
-    pub outdated_schema_hash: Vec<u8>,
-    pub current_schema_hash: Vec<u8>,
-    pub partition_count: i64,
-}
-
 /// List all view sets with their current schema information from the ViewFactory.
 pub fn list_view_sets(view_factory: &ViewFactory) -> Result<Vec<ViewSetInfo>> {
     let mut schema_infos = Vec::new();
