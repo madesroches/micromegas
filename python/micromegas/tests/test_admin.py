@@ -32,25 +32,17 @@ class MockFlightSQLClient:
                     ]
                 )
 
-        # Check if this is a time range query for retirement
-        elif "MIN(begin_insert_time)" in sql and "MAX(end_insert_time)" in sql:
-            if "time_range_data" in self.mock_data:
-                return self.mock_data["time_range_data"]
+        # Check if this is a retire_partition_by_file call  
+        elif "retire_partition_by_file(" in sql:
+            if "retirement_file_result_data" in self.mock_data:
+                return self.mock_data["retirement_file_result_data"]
             else:
+                # Extract file path from SQL for realistic mock response
+                import re
+                match = re.search(r"retire_partition_by_file\('([^']+)'\)", sql)
+                file_path = match.group(1) if match else "unknown.parquet"
                 return pd.DataFrame(
-                    {
-                        "min_time": ["2024-01-01T00:00:00Z"],
-                        "max_time": ["2024-01-01T01:00:00Z"],
-                    }
-                )
-
-        # Check if this is a retire_partitions call
-        elif "retire_partitions(" in sql:
-            if "retirement_result_data" in self.mock_data:
-                return self.mock_data["retirement_result_data"]
-            else:
-                return pd.DataFrame(
-                    {"time": ["2024-01-01T00:00:00Z"], "msg": ["Retired 1 partition"]}
+                    {"message": [f"SUCCESS: Retired partition {file_path}"]}
                 )
 
         # Default empty response
@@ -146,13 +138,15 @@ def test_retire_incompatible_partitions_empty():
         "view_set_name",
         "view_instance_id",
         "partitions_retired",
+        "partitions_failed",
         "storage_freed_bytes",
+        "retirement_messages",
     ]
     assert list(result.columns) == expected_columns
 
 
 def test_retire_incompatible_partitions_with_data():
-    """Test retire_incompatible_partitions with mock incompatible partitions."""
+    """Test retire_incompatible_partitions with file-path-based retirement."""
     mock_data = {
         "incompatible_test_data": pd.DataFrame(
             {
@@ -160,19 +154,13 @@ def test_retire_incompatible_partitions_with_data():
                 "view_instance_id": ["process-123"],
                 "incompatible_schema_hash": ["[3]"],
                 "current_schema_hash": ["[4]"],
-                "partition_count": [5],
+                "partition_count": [2],
                 "total_size_bytes": [1024000],
                 "file_paths": [
                     ["/path/to/partition1.parquet", "/path/to/partition2.parquet"]
                 ],
             }
-        ),
-        "time_range_data": pd.DataFrame(
-            {"min_time": ["2024-01-01T00:00:00Z"], "max_time": ["2024-01-01T01:00:00Z"]}
-        ),
-        "retirement_result_data": pd.DataFrame(
-            {"time": ["2024-01-01T00:00:00Z"], "msg": ["Retired 5 partitions"]}
-        ),
+        )
     }
 
     client = MockFlightSQLClient(mock_data)
@@ -182,8 +170,77 @@ def test_retire_incompatible_partitions_with_data():
     assert len(result) == 1
     assert result["view_set_name"].iloc[0] == "log_entries"
     assert result["view_instance_id"].iloc[0] == "process-123"
-    assert result["partitions_retired"].iloc[0] == 5
-    assert result["storage_freed_bytes"].iloc[0] == 1024000
+    assert result["partitions_retired"].iloc[0] == 2  # Both partitions retired successfully
+    assert result["partitions_failed"].iloc[0] == 0   # No failures
+    assert result["storage_freed_bytes"].iloc[0] == 1024000  # All storage freed
+    
+    # Check retirement messages
+    messages = result["retirement_messages"].iloc[0]
+    assert len(messages) == 2  # Two retirement attempts
+    assert all(msg.startswith("SUCCESS:") for msg in messages)
+
+
+def test_retire_incompatible_partitions_with_failures():
+    """Test retire_incompatible_partitions handling partial failures."""
+    mock_data = {
+        "incompatible_test_data": pd.DataFrame(
+            {
+                "view_set_name": ["log_entries"],
+                "view_instance_id": ["process-456"],
+                "incompatible_schema_hash": ["[2]"],
+                "current_schema_hash": ["[4]"],
+                "partition_count": [3],
+                "total_size_bytes": [1536000],
+                "file_paths": [
+                    ["/path/to/good1.parquet", "/path/to/missing.parquet", "/path/to/good2.parquet"]
+                ],
+            }
+        ),
+        "retirement_file_result_data": pd.DataFrame({
+            "message": [
+                "SUCCESS: Retired partition /path/to/good1.parquet",
+                "ERROR: Partition not found: /path/to/missing.parquet", 
+                "SUCCESS: Retired partition /path/to/good2.parquet"
+            ]
+        })
+    }
+
+    client = MockFlightSQLClient(mock_data)
+    
+    # Override the query method to return different results for different file paths
+    original_query = client.query
+    def mock_query_with_failures(sql):
+        if "retire_partition_by_file('/path/to/missing.parquet')" in sql:
+            return pd.DataFrame({"message": ["ERROR: Partition not found: /path/to/missing.parquet"]})
+        elif "retire_partition_by_file(" in sql:
+            import re
+            match = re.search(r"retire_partition_by_file\('([^']+)'\)", sql)
+            file_path = match.group(1) if match else "unknown.parquet"
+            return pd.DataFrame({"message": [f"SUCCESS: Retired partition {file_path}"]})
+        else:
+            return original_query(sql)
+    
+    client.query = mock_query_with_failures
+    result = micromegas.admin.retire_incompatible_partitions(client)
+
+    assert isinstance(result, pd.DataFrame)
+    assert len(result) == 1
+    assert result["view_set_name"].iloc[0] == "log_entries"
+    assert result["view_instance_id"].iloc[0] == "process-456"
+    assert result["partitions_retired"].iloc[0] == 2  # 2 successful retirements
+    assert result["partitions_failed"].iloc[0] == 1   # 1 failure
+    
+    # Storage freed should be proportional to successful retirements (2/3 of total)
+    expected_freed = int(1536000 * (2 / 3))
+    assert result["storage_freed_bytes"].iloc[0] == expected_freed
+    
+    # Check retirement messages
+    messages = result["retirement_messages"].iloc[0]
+    assert len(messages) == 3  # Three retirement attempts
+    success_count = sum(1 for msg in messages if msg.startswith("SUCCESS:"))
+    error_count = sum(1 for msg in messages if msg.startswith("ERROR:"))
+    assert success_count == 2
+    assert error_count == 1
 
 
 def test_sql_injection_resilience():
@@ -209,10 +266,7 @@ def test_sql_injection_resilience():
                 "total_size_bytes": [1000],
                 "file_paths": [["/path/to/malicious'; DROP TABLE files; --.parquet"]],
             }
-        ),
-        "time_range_data": pd.DataFrame(
-            {"min_time": ["2024-01-01T00:00:00Z"], "max_time": ["2024-01-01T01:00:00Z"]}
-        ),
+        )
     }
 
     client_with_malicious = MockFlightSQLClient(mock_data)

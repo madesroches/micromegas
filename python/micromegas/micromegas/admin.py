@@ -90,6 +90,9 @@ def retire_incompatible_partitions(
     different from the current schema version for their view set. This enables
     safe schema evolution by cleaning up old schema versions.
 
+    **SAFETY**: This function retires only the exact incompatible partitions by
+    their file paths, ensuring no compatible partitions are accidentally retired.
+
     **WARNING**: This operation is irreversible. Retired partitions will be
     permanently deleted from metadata and their data files removed from object storage.
 
@@ -103,8 +106,10 @@ def retire_incompatible_partitions(
         pandas.DataFrame: DataFrame with retirement results containing:
             - view_set_name: View set that was processed
             - view_instance_id: Instance ID of partitions retired
-            - partitions_retired: Count of partitions retired
+            - partitions_retired: Count of partitions successfully retired
+            - partitions_failed: Count of partitions that failed to retire
             - storage_freed_bytes: Total bytes freed from storage
+            - retirement_messages: Array of detailed messages for each retirement attempt
 
     Example:
         >>> import micromegas
@@ -121,12 +126,13 @@ def retire_incompatible_partitions(
         >>> if input("Proceed with retirement? (yes/no): ") == "yes":
         ...     result = micromegas.admin.retire_incompatible_partitions(client, 'log_entries')
         ...     print(f"Retired {result['partitions_retired'].sum()} partitions")
+        ...     print(f"Failed {result['partitions_failed'].sum()} partitions")
 
     Note:
-        This function orchestrates existing retire_partitions() UDTF calls for
-        each group of incompatible partitions. Always preview with
-        list_incompatible_partitions() before calling this function.
-        SQL is executed directly by DataFusion, so no SQL injection concerns.
+        This function uses the retire_partition_by_file() UDF to retire each
+        partition individually by its exact file path. This provides surgical
+        precision and eliminates the risk of accidentally retiring compatible
+        partitions that happen to exist in the same time ranges.
     """
     # First identify incompatible partitions
     incompatible = list_incompatible_partitions(client, view_set_name)
@@ -136,76 +142,77 @@ def retire_incompatible_partitions(
         return pd.DataFrame(
             columns=[
                 "view_set_name",
-                "view_instance_id",
+                "view_instance_id", 
                 "partitions_retired",
+                "partitions_failed",
                 "storage_freed_bytes",
+                "retirement_messages",
             ]
         )
 
     results = []
 
-    # For each group of incompatible partitions, determine time range and retire
+    # For each group of incompatible partitions, retire by individual file paths
     for _, group in incompatible.iterrows():
-        # Query time ranges for this specific incompatible partition group
-        time_range_sql = f"""
-            SELECT 
-                MIN(begin_insert_time) as min_time, 
-                MAX(end_insert_time) as max_time
-            FROM list_partitions()
-            WHERE view_set_name = '{group["view_set_name"]}' 
-                AND view_instance_id = '{group["view_instance_id"]}'
-                AND file_schema_hash = '{group["incompatible_schema_hash"]}'
-        """
+        file_paths = group["file_paths"]
+        
+        # Convert file_paths to list if it's not already (handle different pandas array types)
+        if hasattr(file_paths, 'tolist'):
+            file_paths_list = file_paths.tolist()
+        elif isinstance(file_paths, str):
+            # Single file path case
+            file_paths_list = [file_paths]
+        else:
+            file_paths_list = list(file_paths)
 
-        time_ranges = client.query(time_range_sql)
+        retirement_messages = []
+        partitions_retired = 0
+        partitions_failed = 0
 
-        if time_ranges.empty or pd.isna(time_ranges["min_time"].iloc[0]):
-            # No valid time range found, skip this group
-            continue
+        # Retire each partition individually using the surgical UDF
+        for file_path in file_paths_list:
+            if not file_path or pd.isna(file_path):
+                continue
+                
+            try:
+                # Use the new retire_partition_by_file UDF
+                retirement_sql = f"SELECT retire_partition_by_file('{file_path}') as message"
+                retirement_result = client.query(retirement_sql)
+                
+                if not retirement_result.empty:
+                    message = retirement_result["message"].iloc[0]
+                    retirement_messages.append(message)
+                    
+                    if message.startswith("SUCCESS:"):
+                        partitions_retired += 1
+                    else:
+                        partitions_failed += 1
+                        print(f"Warning: Failed to retire {file_path}: {message}")
+                else:
+                    partitions_failed += 1
+                    retirement_messages.append(f"ERROR: No result returned for {file_path}")
+                    
+            except Exception as e:
+                partitions_failed += 1
+                error_msg = f"ERROR: Exception retiring {file_path}: {e}"
+                retirement_messages.append(error_msg)
+                print(f"Error retiring partition {file_path}: {e}")
 
-        min_time = time_ranges["min_time"].iloc[0]
-        max_time = time_ranges["max_time"].iloc[0]
-
-        # Call existing retire_partitions UDTF for this time range
-        retirement_sql = f"""
-            SELECT * FROM retire_partitions(
-                '{group["view_set_name"]}', 
-                '{group["view_instance_id"]}',
-                '{min_time}',
-                '{max_time}'
-            )
-        """
-
-        try:
-            retirement_result = client.query(retirement_sql)
-
-            # Extract storage freed information if available
-            # Note: The retire_partitions UDTF may not return this info directly
+        # Calculate storage freed (only count successful retirements)
+        if partitions_retired > 0 and group["partition_count"] > 0:
+            # Proportional calculation based on successful retirements
+            storage_freed = int(group["total_size_bytes"] * (partitions_retired / group["partition_count"]))
+        else:
             storage_freed = 0
-            if (
-                not retirement_result.empty
-                and "storage_freed_bytes" in retirement_result.columns
-            ):
-                storage_freed = retirement_result["storage_freed_bytes"].sum()
-            else:
-                # Estimate from the original group size
-                storage_freed = group["total_size_bytes"]
 
-            # Record successful retirement
-            results.append(
-                {
-                    "view_set_name": group["view_set_name"],
-                    "view_instance_id": group["view_instance_id"],
-                    "partitions_retired": group["partition_count"],
-                    "storage_freed_bytes": storage_freed,
-                }
-            )
-
-        except Exception as e:
-            # Log error but continue with other groups
-            print(
-                f"Error retiring partitions for {group['view_set_name']}/{group['view_instance_id']}: {e}"
-            )
-            continue
+        # Record retirement results for this group
+        results.append({
+            "view_set_name": group["view_set_name"],
+            "view_instance_id": group["view_instance_id"],
+            "partitions_retired": partitions_retired,
+            "partitions_failed": partitions_failed,
+            "storage_freed_bytes": storage_freed,
+            "retirement_messages": retirement_messages,
+        })
 
     return pd.DataFrame(results)
