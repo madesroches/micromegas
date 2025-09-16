@@ -16,8 +16,8 @@ def list_incompatible_partitions(
 
     This function identifies partitions that have schema versions different from
     the current schema version for their view set. These incompatible partitions
-    cannot be queried correctly alongside current partitions and should be
-    retired to enable schema evolution.
+    are ignored during queries but take up storage space and should be
+    retired to free storage and enable clean schema evolution.
 
     Args:
         client: FlightSQLClient instance for executing queries.
@@ -130,8 +130,8 @@ def retire_incompatible_partitions(
 
     Note:
         This function uses the retire_partition_by_file() UDF to retire each
-        partition individually by its exact file path. This provides surgical
-        precision and eliminates the risk of accidentally retiring compatible
+        partition individually by its exact file path. This ensures precise
+        targeting and eliminates the risk of accidentally retiring compatible
         partitions that happen to exist in the same time ranges.
     """
     # First identify incompatible partitions
@@ -169,7 +169,7 @@ def retire_incompatible_partitions(
         partitions_retired = 0
         partitions_failed = 0
 
-        # Retire each partition individually using the surgical UDF
+        # Retire each partition individually using the targeted UDF
         for file_path in file_paths_list:
             if not file_path or pd.isna(file_path):
                 continue
