@@ -31,6 +31,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 const VIEW_SET_NAME: &str = "thread_spans";
+const SCHEMA_VERSION: u8 = 0;
 lazy_static::lazy_static! {
     static ref MIN_TIME_COLUMN: Arc<String> = Arc::new( String::from("begin"));
     static ref MAX_TIME_COLUMN: Arc<String> = Arc::new( String::from("end"));
@@ -43,6 +44,14 @@ pub struct ThreadSpansViewMaker {}
 impl ViewMaker for ThreadSpansViewMaker {
     fn make_view(&self, stream_id: &str) -> Result<Arc<dyn View>> {
         Ok(Arc::new(ThreadSpansView::new(stream_id)?))
+    }
+
+    fn get_schema_hash(&self) -> Vec<u8> {
+        vec![SCHEMA_VERSION]
+    }
+
+    fn get_schema(&self) -> Arc<Schema> {
+        Arc::new(get_spans_schema())
     }
 }
 
@@ -207,7 +216,7 @@ impl View for ThreadSpansView {
     }
 
     fn get_file_schema_hash(&self) -> Vec<u8> {
-        vec![0]
+        vec![SCHEMA_VERSION]
     }
 
     fn get_file_schema(&self) -> Arc<Schema> {

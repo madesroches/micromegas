@@ -1,6 +1,7 @@
 use super::{
     answer::Answer, get_payload_function::GetPayload,
     list_partitions_table_function::ListPartitionsTableFunction,
+    list_view_sets_table_function::ListViewSetsTableFunction,
     materialize_partitions_table_function::MaterializePartitionsTableFunction,
     partition::Partition, partition_cache::QueryPartitionProvider,
     partitioned_table_provider::PartitionedTableProvider,
@@ -130,6 +131,10 @@ pub fn register_lakehouse_functions(
     ctx.register_udtf(
         "list_partitions",
         Arc::new(ListPartitionsTableFunction::new(lake.clone())),
+    );
+    ctx.register_udtf(
+        "list_view_sets",
+        Arc::new(ListViewSetsTableFunction::new(view_factory.clone())),
     );
     ctx.register_udtf(
         "retire_partitions",

@@ -282,6 +282,80 @@ pub fn register_lakehouse_functions(
 6. **Data Consistency**: Ensure all partitions use current schema versions
 7. **Observability**: Provide visibility into schema version distribution via SQL
 
+## Current Implementation Status
+
+### ✅ Phase 1 - Completed (list_view_sets)
+
+1. **`catalog.rs`** (COMPLETED - renamed from partition_management.rs)
+   - Location: `rust/analytics/src/lakehouse/catalog.rs`
+   - Provides `list_view_sets()` function (renamed from get_current_schema_versions)
+   - Defines `ViewSetInfo` struct (renamed from ViewSetSchemaInfo) with schema metadata
+   - Integrates with ViewFactory to discover available view sets and their schemas
+   - Now includes `schema` field showing full schema as string
+
+2. **`list_view_sets_table_function.rs`** (COMPLETED)
+   - Location: `rust/analytics/src/lakehouse/list_view_sets_table_function.rs`
+   - Implements `ListViewSetsTableFunction` UDTF
+   - Returns: view_set_name, current_schema_hash, schema, has_view_maker, global_instance_available
+   - Registered as `list_view_sets` table function in DataFusion
+
+3. **ViewMaker Trait Enhancement** (COMPLETED)
+   - Added `get_schema_hash()` and `get_schema()` methods to ViewMaker trait
+   - Avoids need to instantiate views just to get schema information
+   - All ViewMaker implementations updated:
+     - `LogViewMaker`: SCHEMA_VERSION = 4
+     - `MetricsViewMaker`: SCHEMA_VERSION = 4  
+     - `ThreadSpansViewMaker`: SCHEMA_VERSION = 0
+     - `AsyncEventsViewMaker`: SCHEMA_VERSION = 1
+   - Each view has centralized SCHEMA_VERSION constant
+
+4. **ViewFactory Enhancement** (COMPLETED)
+   - Added `get_view_sets()` method to provide public access to view makers
+   - Catalog functions can now get schema info without creating view instances
+
+5. **Registration in DataFusion** (COMPLETED)
+   - Updated `query.rs` to register the `list_view_sets` UDTF
+   - Updated `mod.rs` to export the new modules
+   - Successfully compiles and integrates with existing lakehouse functions
+
+### 🔄 Phase 2 - Next Steps
+
+**1. Unit Tests for Catalog** (IMMEDIATE NEXT STEP)
+- Add tests to existing analytics test suite in tests folder
+- Test `list_view_sets()` function with real ViewFactory
+- Test ViewSetInfo struct population for all view types
+- Verify schema hashes match expected values
+- Test UDTF execution through DataFusion SQL
+- Verify all view sets are discovered correctly
+- Test schema string formatting
+
+**2. Implementation of `list_outdated_partitions`:**
+- Implement `list_outdated_partitions_table_function.rs`
+- Add database queries to compare current vs stored schema hashes
+- Register the function in DataFusion
+- Write integration tests
+
+**3. Implementation of `retire_incompatible_partitions`:**
+- Implement `retire_incompatible_partitions_table_function.rs`
+- Add bulk retirement logic with proper error handling
+- Integrate with existing retirement infrastructure
+- Write integration tests with rollback capabilities
+
+### 📊 Usage
+
+The `list_view_sets()` function is now available in SQL:
+```sql
+-- See current schema versions across all view sets
+SELECT * FROM list_view_sets();
+```
+
+Expected output columns:
+- `view_set_name`: Name of the view set (e.g., "log_entries", "measures")  
+- `current_schema_hash`: Binary hash identifying current schema version
+- `schema`: Full schema as a formatted string
+- `has_view_maker`: Boolean indicating if view set supports non-global instances
+- `global_instance_available`: Boolean indicating if a global instance exists
+
 ## Risks & Mitigations
 
 1. **Data Loss Risk**: Mitigated by transactional operations and comprehensive logging

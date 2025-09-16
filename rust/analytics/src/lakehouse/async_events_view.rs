@@ -29,6 +29,7 @@ use uuid::Uuid;
 use super::async_events_block_processor::AsyncEventsBlockProcessor;
 
 const VIEW_SET_NAME: &str = "async_events";
+const SCHEMA_VERSION: u8 = 1; // Updated to version 1 to include depth field
 lazy_static::lazy_static! {
     static ref TIME_COLUMN: Arc<String> = Arc::new(String::from("time"));
 }
@@ -51,6 +52,14 @@ impl ViewMaker for AsyncEventsViewMaker {
             view_instance_id,
             self.view_factory.clone(),
         )?))
+    }
+
+    fn get_schema_hash(&self) -> Vec<u8> {
+        vec![SCHEMA_VERSION]
+    }
+
+    fn get_schema(&self) -> Arc<Schema> {
+        Arc::new(async_events_table_schema())
     }
 }
 
@@ -102,7 +111,7 @@ impl View for AsyncEventsView {
     }
 
     fn get_file_schema_hash(&self) -> Vec<u8> {
-        vec![1] // Updated to version 1 to include depth field
+        vec![SCHEMA_VERSION]
     }
 
     fn get_file_schema(&self) -> Arc<Schema> {
