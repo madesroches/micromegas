@@ -490,6 +490,87 @@ client.retire_partitions(
 
 **Warning:** This operation cannot be undone. Retired partitions must be re-materialized if needed.
 
+## Administrative Functions
+
+The `micromegas.admin` module provides administrative functions for schema evolution and partition lifecycle management. These functions are intended for system administrators and should be used with caution.
+
+### `list_incompatible_partitions(client, view_set_name=None)`
+
+Lists partitions with schemas incompatible with current view set schemas. These partitions cannot be queried correctly alongside current partitions and should be retired to enable schema evolution.
+
+```python
+import micromegas
+import micromegas.admin
+
+# Connect to analytics service
+client = micromegas.connect()
+
+# List all incompatible partitions across all view sets
+incompatible = micromegas.admin.list_incompatible_partitions(client)
+print(f"Found {len(incompatible)} groups of incompatible partitions")
+print(f"Total incompatible partitions: {incompatible['partition_count'].sum()}")
+print(f"Total size to be freed: {incompatible['total_size_bytes'].sum() / (1024**3):.2f} GB")
+
+# List incompatible partitions for specific view set
+log_incompatible = micromegas.admin.list_incompatible_partitions(client, 'log_entries')
+print(f"Log entries incompatible partitions: {log_incompatible['partition_count'].sum()}")
+```
+
+**Returns:**
+- `view_set_name`: Name of the view set
+- `view_instance_id`: Instance ID (e.g., process_id or 'global')
+- `incompatible_schema_hash`: The old schema hash in the partition
+- `current_schema_hash`: The current schema hash from ViewFactory
+- `partition_count`: Number of incompatible partitions with this schema
+- `total_size_bytes`: Total size in bytes of all incompatible partitions
+- `file_paths`: Array of file paths for each incompatible partition
+
+### `retire_incompatible_partitions(client, view_set_name=None)`
+
+Retires partitions with schemas incompatible with current view set schemas. This enables safe schema evolution by cleaning up old schema versions.
+
+```python
+import micromegas
+import micromegas.admin
+
+client = micromegas.connect()
+
+# Preview what would be retired (recommended first step)
+preview = micromegas.admin.list_incompatible_partitions(client, 'log_entries')
+print(f"Would retire {preview['partition_count'].sum()} partitions")
+print(f"Would free {preview['total_size_bytes'].sum() / (1024**3):.2f} GB")
+
+# Retire incompatible partitions for specific view set
+if input("Proceed with retirement? (yes/no): ") == "yes":
+    result = micromegas.admin.retire_incompatible_partitions(client, 'log_entries')
+    print(f"Retired {result['partitions_retired'].sum()} partitions")
+    print(f"Failed {result['partitions_failed'].sum()} partitions")
+    
+    # Check for any failures
+    for _, row in result.iterrows():
+        if row['partitions_failed'] > 0:
+            print(f"Failures in {row['view_set_name']}/{row['view_instance_id']}:")
+            for msg in row['retirement_messages']:
+                if msg.startswith("ERROR:"):
+                    print(f"  {msg}")
+```
+
+**Returns:**
+- `view_set_name`: View set that was processed
+- `view_instance_id`: Instance ID of partitions retired
+- `partitions_retired`: Count of partitions successfully retired
+- `partitions_failed`: Count of partitions that failed to retire
+- `storage_freed_bytes`: Total bytes freed from storage
+- `retirement_messages`: Array of detailed messages for each retirement attempt
+
+**Safety Features:**
+- Uses file-path-based retirement for precision targeting
+- Cannot accidentally retire compatible partitions
+- Provides detailed error reporting for failures
+- Allows view-specific filtering to prevent bulk operations
+
+**⚠️ DESTRUCTIVE OPERATION:** This operation is irreversible. Retired partitions will be permanently deleted from metadata and their data files removed from object storage. Always preview with `list_incompatible_partitions()` before calling this function.
+
 ## Time Utilities
 
 ### `format_datetime(value)` and `parse_time_delta(user_string)`

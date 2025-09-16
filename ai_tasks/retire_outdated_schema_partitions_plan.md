@@ -349,12 +349,12 @@ ORDER BY incompatible_size_bytes DESC;
 4. **Concurrent Operations**: Mitigated by existing `retire_partitions()` UDTF transaction handling
 5. **Parameter Validation**: Mitigated by Python input validation and error handling
 6. **Server-Side Processing**: SQL JOIN and aggregation performed efficiently on the server
-7. **🚨 CRITICAL SAFETY ISSUE - Mixed Schema Retirement**: The current `retire_incompatible_partitions()` implementation has a serious bug where it retires ALL partitions in a time range, not just incompatible ones. This could accidentally delete compatible partitions that happen to exist in the same time range as incompatible partitions.
+7. **✅ RESOLVED - Mixed Schema Retirement Safety**: Previously there was a critical safety issue where `retire_incompatible_partitions()` used time-based retirement that could accidentally delete compatible partitions. This has been **COMPLETELY RESOLVED** in Phase 4 with file-path-based surgical retirement.
 
-### Critical Issue Details:
-**Problem**: The current Phase 4 implementation uses time-based retirement:
+### Resolution Details:
+**Problem**: The original implementation used dangerous time-based retirement:
 ```python
-# DANGEROUS: This retires ALL partitions in time range, not just incompatible ones
+# DANGEROUS (OLD): This retired ALL partitions in time range, not just incompatible ones
 retirement_sql = f"""
     SELECT * FROM retire_partitions(
         '{escaped_view_set}', 
@@ -365,18 +365,17 @@ retirement_sql = f"""
 """
 ```
 
-**Why this is dangerous**: 
-- Compatible partitions with current schemas may exist in the same time ranges
-- The `retire_partitions()` UDTF retires by time range, not by schema hash
-- This could cause data loss of perfectly valid, queryable partitions
+**Solution Implemented**: File-path-specific surgical retirement:
+```python
+# SAFE (NEW): This retires only the exact incompatible partition
+retirement_sql = f"SELECT retire_partition_by_file('{file_path}') as message"
+```
 
-**Required Fix**: Need to implement partition-specific retirement that targets only the exact incompatible partitions, not time ranges. This requires either:
-
-**SELECTED SOLUTION - Option A**: Implement file-path-specific retirement UDF
-- Create new `retire_partition_by_file()` UDTF that retires a single partition by its file path
-- Modify `list_incompatible_partitions()` to return file paths for each incompatible partition  
-- Modify `retire_incompatible_partitions()` to retire partitions individually by file path
-- Ensures surgical precision - only exact incompatible partitions are retired, no risk of collateral damage
+**Why this is safe**: 
+- Uses `retire_partition_by_file()` UDF to target exact file paths
+- Impossible to accidentally retire compatible partitions 
+- Each partition retired individually with full error handling and rollback safety
+- Comprehensive test coverage validates the safe approach
 
 ### Implementation Plan for Option A:
 
@@ -440,12 +439,12 @@ def retire_incompatible_partitions(client, view_set_name=None):
 - **Error resilience**: Continues processing even if some partitions fail to retire
 - **Rollback friendly**: Could theoretically support undelete if needed
 
-**Status**: 🚧 **IMPLEMENTATION REQUIRED** 
-1. **First, verify `list_partitions()` schema**: Confirm the exact column name for file paths (likely `file_path`, `path`, or `partition_path`)
-2. **Modify `list_incompatible_partitions()` SQL**: Add file paths using `ARRAY_AGG(p.<file_path_column>)` (✅ DataFusion supports ARRAY_AGG)
-3. **Create `retire_partition_by_file()` Rust UDF**: Scalar function returning descriptive messages
-4. **Update `retire_incompatible_partitions()`**: Use file-path-based retirement
-5. **Update tests**: Validate new safe retirement approach
+**Status**: ✅ **IMPLEMENTATION COMPLETE** 
+1. ✅ **Verified `list_partitions()` schema**: Confirmed column name is `file_path` (found in list_partitions_table_function.rs:84)
+2. ✅ **Modified `list_incompatible_partitions()` SQL**: Added file paths using `ARRAY_AGG(p.file_path)` (✅ DataFusion supports ARRAY_AGG)
+3. ✅ **Create `retire_partition_by_file()` Rust UDF**: AsyncScalarUDF with single transaction batching
+4. ✅ **Update `retire_incompatible_partitions()`**: Complete rewrite to use file-path-based retirement with comprehensive error handling
+5. ✅ **Updated tests**: Full test coverage including success, failure, and edge case scenarios
 
 **Note on ARRAY_AGG**: ✅ **DataFusion supports ARRAY_AGG** as confirmed by Apache DataFusion documentation. It can be used with ordering: `ARRAY_AGG(column ORDER BY other_column)` and supports complex data types as of DataFusion 34.0.0 (2024).
 
@@ -460,11 +459,22 @@ def retire_incompatible_partitions(client, view_set_name=None):
 1. ✅ **Phase 1 Complete**: `list_view_sets()` UDTF provides current schema versions
 2. ✅ **Phase 2 Complete**: Partition Analysis and Unit Tests added
 3. ✅ **Phase 3 Complete**: `micromegas.admin.list_incompatible_partitions()` function implemented in Python
-4. 🚧 **Phase 4 NEEDS REWORK**: Current implementation unsafe - implementing file-path-based retirement:
-   - **Phase 4a**: 📝 Enhance `list_incompatible_partitions()` to return file paths using `ARRAY_AGG(p.file_path)`
-   - **Phase 4b**: 📝 Create `retire_partition_by_file()` Rust UDF (scalar function) for surgical partition retirement
-   - **Phase 4c**: 📝 Rewrite `retire_incompatible_partitions()` to use file-path-based retirement
-   - **Phase 4d**: 📝 Update tests to validate new safe retirement approach
+4. ✅ **Phase 4 Complete**: Safe file-path-based retirement implementation:
+   - **Phase 4a**: ✅ Enhance `list_incompatible_partitions()` to return file paths using `ARRAY_AGG(p.file_path)` - **COMPLETE**
+   - **Phase 4b**: ✅ Create `retire_partition_by_file()` Rust UDF (scalar function) for surgical partition retirement - **COMPLETE**
+   - **Phase 4c**: ✅ Rewrite `retire_incompatible_partitions()` to use file-path-based retirement - **COMPLETE**
+   - **Phase 4d**: ✅ Update tests to validate new safe retirement approach - **COMPLETE**
+5. **Phase 5**: ✅ **Documentation Update** - Update mkdocs documentation for all new features:
+   - ✅ Document `list_view_sets()` UDTF for schema discovery  
+   - ✅ Document `retire_partition_by_file()` UDF for partition retirement
+   - ✅ Document `micromegas.admin.list_incompatible_partitions()` Python API
+   - ✅ Document `micromegas.admin.retire_incompatible_partitions()` Python API
+   - ✅ Create comprehensive admin guide with examples and safety guidelines
+   - ✅ Update navigation to include admin guide
+   - ✅ Added bulk retirement of non-global partitions documentation
+   - ✅ Fixed incorrect description of incompatible partitions (they're ignored, not blocking)
+   - ✅ Removed inappropriate "emergency cleanup" sections
+   - ✅ Streamlined documentation for clarity and accuracy
 
 **Benefits of Python Approach:**
 - Faster development for Phases 3-4 (no additional Rust compilation, testing, registration)

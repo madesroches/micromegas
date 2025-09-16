@@ -131,6 +131,71 @@ SELECT * FROM materialize_partitions(
 
 **⚠️ Administrative Use Only:** This function is intended for system administrators and data engineers managing the lakehouse infrastructure. Regular users querying data should not need to call this function. It triggers background processing to create materialized partitions and can impact system performance.
 
+#### `list_view_sets()` 🔧
+
+**Administrative Function** - Lists all available view sets with their current schema information. Useful for schema discovery and management.
+
+**Syntax:**
+```sql
+SELECT * FROM list_view_sets()
+```
+
+**Returns:**
+
+| Column | Type | Description |
+|--------|------|-------------|
+| view_set_name | Utf8 | Name of the view set (e.g., 'log_entries', 'measures') |
+| current_schema_hash | Binary | Current schema version identifier |
+| schema | Utf8 | Full schema as formatted string |
+| has_view_maker | Boolean | Whether view set supports process-specific instances |
+| global_instance_available | Boolean | Whether a global instance exists |
+
+**Example:**
+```sql
+-- View all available view sets and their schemas
+SELECT view_set_name, current_schema_hash, has_view_maker
+FROM list_view_sets()
+ORDER BY view_set_name;
+
+-- Check schema for specific view set
+SELECT schema
+FROM list_view_sets()
+WHERE view_set_name = 'log_entries';
+```
+
+**ℹ️ Administrative Use:** This function provides schema discovery for administrators managing view compatibility and schema evolution. It shows the current schema versions and capabilities of each view set in the lakehouse.
+
+#### `retire_partition_by_file(file_path)` 🔧
+
+**Administrative Function** - Retires a single partition by its exact file path. Provides targeted partition removal for schema evolution and maintenance.
+
+**Syntax:**
+```sql
+SELECT retire_partition_by_file(file_path) as result
+```
+
+**Parameters:**
+- `file_path` (`Utf8`): Exact file path of the partition to retire
+
+**Returns:** `Utf8` - Result message indicating success or failure
+
+**Example:**
+```sql
+-- Retire a specific partition
+SELECT retire_partition_by_file('/lakehouse/log_entries/process-123/2024/01/01/partition.parquet') as result;
+
+-- Retire multiple partitions (use with list_partitions())
+SELECT retire_partition_by_file(file_path) as result
+FROM list_partitions()
+WHERE view_set_name = 'log_entries' 
+  AND file_schema_hash != '[4]'  -- Retire old schema versions
+LIMIT 10;
+```
+
+**⚠️ DESTRUCTIVE OPERATION:** This function permanently removes a single data partition from the lakehouse, making the contained data inaccessible. Unlike `retire_partitions()` which operates on time ranges, this function targets exact file paths for precise partition management. Ensure proper backups exist before retiring partitions.
+
+**✅ Safety Note:** This function only affects the specified partition file. It cannot accidentally retire other partitions, making it safer than time-range-based retirement for schema evolution tasks.
+
 ### Scalar Functions
 
 #### JSON/JSONB Functions
