@@ -6,6 +6,7 @@ use super::{
     partition::Partition, partition_cache::QueryPartitionProvider,
     partitioned_table_provider::PartitionedTableProvider,
     perfetto_trace_table_function::PerfettoTraceTableFunction,
+    retire_partition_by_file_udf::make_retire_partition_by_file_udf,
     retire_partitions_table_function::RetirePartitionsTableFunction, view::View,
     view_factory::ViewFactory,
 };
@@ -158,7 +159,10 @@ pub fn register_lakehouse_functions(
             view_factory.clone(),
         )),
     );
-    ctx.register_udf(AsyncScalarUDF::new(Arc::new(GetPayload::new(lake))).into_scalar_udf());
+    ctx.register_udf(
+        AsyncScalarUDF::new(Arc::new(GetPayload::new(lake.clone()))).into_scalar_udf(),
+    );
+    ctx.register_udf(make_retire_partition_by_file_udf(lake).into_scalar_udf());
 }
 
 /// register functions that are not depended on the lakehouse architecture
