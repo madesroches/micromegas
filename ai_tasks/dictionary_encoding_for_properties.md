@@ -12,12 +12,12 @@ Properties columns store key-value pairs as JSON strings. Dictionary encoding ca
 
 ## Implementation Plan
 
-### Phase 1: Analysis and Design
-1. **Analyze Current Implementation**
-   - Identify all tables with properties columns
-   - Document current storage format and access patterns
+### Phase 1: Analysis and Design ✓
+1. **Analyze Current Implementation** ✓
+   - Identified tables: `processes` and `streams` (both with `properties micromegas_property[]`)
+   - Documented in [properties_analysis.md](./properties_analysis.md)
 
-2. **Design Dictionary Schema**
+2. **Design Dictionary Schema** ✓
    - Define dictionary key type (String/Utf8)
    - Use Int32 as index type (supports up to 2B unique values)
    - Dictionary overflow will use normal error reporting (fail fast with clear error message)
@@ -25,9 +25,9 @@ Properties columns store key-value pairs as JSON strings. Dictionary encoding ca
 
 ### Phase 2: Core Implementation
 1. **Update Data Model**
-   - Modify Arrow schema builders to use DictionaryArray for properties
-   - Update batch creation in ingestion pipeline
-   - Implement dictionary builder utilities
+   - Modify Arrow schema from `List<Struct<key: Utf8, value: Utf8>>` to use dictionary encoding
+   - Update `ListBuilder<StructBuilder>` in `log_entries_table.rs` and `metrics_table.rs`
+   - Implement dictionary builder utilities for property keys and values
 
 2. **Migration Strategy**
    - Create conversion functions for existing data
@@ -35,9 +35,9 @@ Properties columns store key-value pairs as JSON strings. Dictionary encoding ca
    - Plan rollback procedure if needed
 
 3. **Query Processing Updates**
-   - Update DataFusion queries to handle dictionary arrays
-   - Modify property filtering logic
-   - Ensure UDFs work with dictionary encoding
+   - Update `PropertiesColumnReader` in `sql_arrow_bridge.rs` to output dictionary arrays
+   - Modify property filtering logic in lakehouse modules
+   - Ensure UDFs (`property_get`, `properties_to_dict`) work with dictionary encoding
 
 ### Phase 3: Testing and Validation
 1. **Unit Tests**
@@ -77,12 +77,24 @@ Properties columns store key-value pairs as JSON strings. Dictionary encoding ca
 - Integration with existing UDFs
 
 ## Files to Modify
-- `rust/analytics/src/lakehouse/` - Core lakehouse implementation
-- `rust/analytics/src/arrow_utils/` - Arrow utilities
-- `rust/analytics/src/sql_arrow_bridge.rs` - SQL to Arrow type conversions
-- `rust/ingestion/src/` - Ingestion pipeline
-- `rust/analytics/src/udfs/` - Update UDFs for dictionary support
-- Tests across the codebase
+
+### Primary Changes
+- `rust/analytics/src/sql_arrow_bridge.rs` - PropertiesColumnReader to output dictionary arrays
+- `rust/analytics/src/log_entries_table.rs` - Update properties/process_properties builders
+- `rust/analytics/src/metrics_table.rs` - Update properties/process_properties builders
+
+### Lakehouse & Processing
+- `rust/analytics/src/lakehouse/partition_source_data.rs` - Handle dictionary-encoded properties
+- `rust/analytics/src/lakehouse/jit_partitions.rs` - Process dictionary arrays in JIT
+
+### UDFs & Utilities
+- `rust/analytics/src/properties/property_get.rs` - Already supports dictionary input
+- `rust/analytics/src/properties/properties_to_dict_udf.rs` - Verify dictionary compatibility
+- `rust/analytics/src/arrow_properties.rs` - Add dictionary utilities
+
+### Tests
+- `rust/analytics/tests/property_get_tests.rs` - Extend for full dictionary coverage
+- Integration tests for end-to-end dictionary flow
 
 ## Success Criteria
 - All properties columns use dictionary encoding
