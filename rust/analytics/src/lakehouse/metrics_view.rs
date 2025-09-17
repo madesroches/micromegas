@@ -33,6 +33,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 const VIEW_SET_NAME: &str = "measures";
+const SCHEMA_VERSION: u8 = 4;
 lazy_static::lazy_static! {
     static ref TIME_COLUMN: Arc<String> = Arc::new( String::from("time"));
 }
@@ -43,6 +44,14 @@ pub struct MetricsViewMaker {}
 impl ViewMaker for MetricsViewMaker {
     fn make_view(&self, view_instance_id: &str) -> Result<Arc<dyn View>> {
         Ok(Arc::new(MetricsView::new(view_instance_id)?))
+    }
+
+    fn get_schema_hash(&self) -> Vec<u8> {
+        vec![SCHEMA_VERSION]
+    }
+
+    fn get_schema(&self) -> Arc<Schema> {
+        Arc::new(metrics_table_schema())
     }
 }
 
@@ -113,7 +122,7 @@ impl View for MetricsView {
     }
 
     fn get_file_schema_hash(&self) -> Vec<u8> {
-        vec![4]
+        vec![SCHEMA_VERSION]
     }
 
     fn get_file_schema(&self) -> Arc<Schema> {

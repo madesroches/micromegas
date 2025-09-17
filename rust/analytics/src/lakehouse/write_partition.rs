@@ -27,6 +27,30 @@ use tokio::sync::mpsc::Receiver;
 
 use super::{partition::Partition, view::ViewMetadata};
 
+/// Adds a file to the temporary_files table for cleanup.
+///
+/// Files added to temporary_files will be automatically deleted by the cleanup process
+/// after the expiration time. The default expiration is 1 hour from now.
+pub async fn add_file_for_cleanup(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    file_path: &str,
+    file_size: i64,
+) -> Result<()> {
+    let expiration = Utc::now()
+        + TimeDelta::try_hours(1)
+            .with_context(|| "calculating expiration time for temporary file")?;
+
+    sqlx::query("INSERT INTO temporary_files VALUES ($1, $2, $3)")
+        .bind(file_path)
+        .bind(file_size)
+        .bind(expiration)
+        .execute(&mut **transaction)
+        .await
+        .with_context(|| format!("adding file {file_path} to temporary files for cleanup"))?;
+
+    Ok(())
+}
+
 /// A set of rows for a partition, along with their time range.
 pub struct PartitionRowSet {
     pub rows_time_range: TimeRange,
@@ -63,16 +87,8 @@ pub async fn retire_expired_partitions(
     for old_part in &old_partitions {
         let file_path: String = old_part.try_get("file_path")?;
         let file_size: i64 = old_part.try_get("file_size")?;
-        let temp_expiration =
-            Utc::now() + TimeDelta::try_hours(1).with_context(|| "making one hour")?;
         info!("adding out of date partition {file_path} to temporary files to be deleted");
-        sqlx::query("INSERT INTO temporary_files VALUES ($1, $2, $3);")
-            .bind(&file_path)
-            .bind(file_size)
-            .bind(temp_expiration)
-            .execute(&mut *transaction)
-            .await
-            .with_context(|| "adding old partition to temporary files to be deleted")?;
+        add_file_for_cleanup(&mut transaction, &file_path, file_size).await?;
         file_paths.push(file_path);
     }
 
@@ -157,19 +173,12 @@ pub async fn retire_partitions(
     for old_part in &old_partitions {
         let file_path: String = old_part.try_get("file_path")?;
         let file_size: i64 = old_part.try_get("file_size")?;
-        let expiration = Utc::now() + TimeDelta::try_hours(1).with_context(|| "making one hour")?;
         logger
             .write_log_entry(format!(
                 "adding out of date partition {file_path} to temporary files to be deleted"
             ))
             .await?;
-        sqlx::query("INSERT INTO temporary_files VALUES ($1, $2, $3);")
-            .bind(&file_path)
-            .bind(file_size)
-            .bind(expiration)
-            .execute(&mut **transaction)
-            .await
-            .with_context(|| "adding old partition to temporary files to be deleted")?;
+        add_file_for_cleanup(transaction, &file_path, file_size).await?;
         file_paths.push(file_path);
     }
 

@@ -15,6 +15,8 @@ pub mod batch_update;
 pub mod block_partition_spec;
 /// Replicated view of the `blocks` table of the postgresql metadata database.
 pub mod blocks_view;
+/// Catalog utilities for discovering and managing view schemas
+pub mod catalog;
 pub mod dataframe_time_bounds;
 /// Export mechanism that doubles as audit trail
 pub mod export_log_view;
@@ -24,6 +26,8 @@ pub mod get_payload_function;
 pub mod jit_partitions;
 /// Read access to the list of lakehouse partitions
 pub mod list_partitions_table_function;
+/// Read access to view sets with their schema information
+pub mod list_view_sets_table_function;
 /// Implementation of `BlockProcessor` for log entries
 pub mod log_block_processor;
 /// SQL-based view for log statistics aggregated by process, minute, level, and target
@@ -67,6 +71,8 @@ pub mod processes_view;
 pub mod query;
 /// Wrapper around ParquetObjectreader to provide ParquetMetaData without hitting the ObjectStore
 pub mod reader_factory;
+/// Scalar UDF to retire a single partition by file path
+pub mod retire_partition_by_file_udf;
 /// Exposes retire_partitions as a table function
 pub mod retire_partitions_table_function;
 /// Runtime resources

@@ -1,10 +1,12 @@
 use super::{
     answer::Answer, get_payload_function::GetPayload,
     list_partitions_table_function::ListPartitionsTableFunction,
+    list_view_sets_table_function::ListViewSetsTableFunction,
     materialize_partitions_table_function::MaterializePartitionsTableFunction,
     partition::Partition, partition_cache::QueryPartitionProvider,
     partitioned_table_provider::PartitionedTableProvider,
     perfetto_trace_table_function::PerfettoTraceTableFunction,
+    retire_partition_by_file_udf::make_retire_partition_by_file_udf,
     retire_partitions_table_function::RetirePartitionsTableFunction, view::View,
     view_factory::ViewFactory,
 };
@@ -132,6 +134,10 @@ pub fn register_lakehouse_functions(
         Arc::new(ListPartitionsTableFunction::new(lake.clone())),
     );
     ctx.register_udtf(
+        "list_view_sets",
+        Arc::new(ListViewSetsTableFunction::new(view_factory.clone())),
+    );
+    ctx.register_udtf(
         "retire_partitions",
         Arc::new(RetirePartitionsTableFunction::new(lake.clone())),
     );
@@ -153,7 +159,10 @@ pub fn register_lakehouse_functions(
             view_factory.clone(),
         )),
     );
-    ctx.register_udf(AsyncScalarUDF::new(Arc::new(GetPayload::new(lake))).into_scalar_udf());
+    ctx.register_udf(
+        AsyncScalarUDF::new(Arc::new(GetPayload::new(lake.clone()))).into_scalar_udf(),
+    );
+    ctx.register_udf(make_retire_partition_by_file_udf(lake).into_scalar_udf());
 }
 
 /// register functions that are not depended on the lakehouse architecture

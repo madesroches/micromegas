@@ -2,6 +2,7 @@ import grpc
 from . import time
 from . import perfetto
 from . import flightsql
+from . import admin
 
 
 def connect(preserve_dictionary=False):

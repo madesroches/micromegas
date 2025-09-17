@@ -84,6 +84,8 @@ nav:
     - Async Performance Analysis: query-guide/async-performance-analysis.md
     - Performance: query-guide/performance.md
     - Advanced Features: query-guide/advanced-features.md
+  - Administration:
+    - Functions Reference: admin/functions-reference.md
   - Unreal Engine:
     - Overview: unreal/index.md
     - Installation: unreal/installation.md

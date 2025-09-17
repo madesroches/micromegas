@@ -174,6 +174,7 @@ use super::{
     metrics_view::MetricsViewMaker, thread_spans_view::ThreadSpansViewMaker, view::View,
 };
 use anyhow::Result;
+use datafusion::arrow::datatypes::Schema;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use std::fmt::Debug;
@@ -183,6 +184,12 @@ use std::{collections::HashMap, sync::Arc};
 pub trait ViewMaker: Send + Sync + Debug {
     /// Creates a new view with the given instance ID.
     fn make_view(&self, view_instance_id: &str) -> Result<Arc<dyn View>>;
+
+    /// Returns the schema hash for views created by this maker.
+    fn get_schema_hash(&self) -> Vec<u8>;
+
+    /// Returns the schema for views created by this maker.
+    fn get_schema(&self) -> Arc<Schema>;
 }
 
 /// A factory for creating and managing views.
@@ -217,6 +224,10 @@ impl ViewFactory {
 
     pub fn add_view_set(&mut self, view_set_name: String, maker: Arc<dyn ViewMaker>) {
         self.view_sets.insert(view_set_name, maker);
+    }
+
+    pub fn get_view_sets(&self) -> &HashMap<String, Arc<dyn ViewMaker>> {
+        &self.view_sets
     }
 
     pub fn make_view(&self, view_set_name: &str, view_instance_id: &str) -> Result<Arc<dyn View>> {
