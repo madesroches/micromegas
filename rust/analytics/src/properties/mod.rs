@@ -6,5 +6,6 @@
 //! - `PropertiesToArray`: Convert dictionary-encoded properties back to arrays
 //! - `PropertiesLength`: Get the length of properties (supports both formats)
 
+pub mod dictionary_builder;
 pub mod properties_to_dict_udf;
 pub mod property_get;

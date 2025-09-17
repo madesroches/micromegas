@@ -24,20 +24,33 @@ Properties columns store key-value pairs as JSON strings. Dictionary encoding ca
    - Follow existing builder patterns for dictionary management (per-batch dictionaries)
 
 ### Phase 2: Core Implementation
-1. **Update Data Model**
+1. **Extract PropertiesDictionaryBuilder** ✓
+   - Moved `PropertiesDictionaryBuilder` from `properties_to_dict_udf.rs` to the properties module
+   - Created new file `rust/analytics/src/properties/dictionary_builder.rs`
+   - Exported from `rust/analytics/src/properties/mod.rs`
+   - Made it reusable across multiple components
+   - Kept the `build_dictionary_from_properties_array` function with it (renamed for clarity)
+   - Updated `properties_to_dict_udf.rs` to import from the new location
+   - All tests pass
+
+2. **Update PropertiesColumnReader** (NEXT STEP)
+   - Modify `PropertiesColumnReader` in `sql_arrow_bridge.rs` to output dictionary-encoded arrays
+   - Use the extracted `PropertiesDictionaryBuilder`
+   - Update field schema to return `Dictionary<Int32, List<Struct>>`
+
+3. **Update Data Model**
    - Modify Arrow schema from `List<Struct<key: Utf8, value: Utf8>>` to use dictionary encoding
    - Update `ListBuilder<StructBuilder>` in `log_entries_table.rs` and `metrics_table.rs`
    - Implement dictionary builder utilities for property keys and values
 
-2. **Migration Strategy**
+4. **Migration Strategy**
    - Create conversion functions for existing data
    - Implement backward compatibility layer
    - Plan rollback procedure if needed
 
-3. **Query Processing Updates**
-   - Update `PropertiesColumnReader` in `sql_arrow_bridge.rs` to output dictionary arrays
+5. **Query Processing Updates**
    - Modify property filtering logic in lakehouse modules
-   - Ensure UDFs (`property_get`, `properties_to_dict`) work with dictionary encoding
+   - Ensure UDFs (`property_get`, `properties_to_dict`) work with dictionary encoding (they already support it!)
 
 ### Phase 3: Testing and Validation
 1. **Unit Tests**
