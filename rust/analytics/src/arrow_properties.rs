@@ -57,6 +57,16 @@ pub fn add_properties_to_builder(
     Ok(())
 }
 
+/// Adds properties from a HashMap<String, String> to a dictionary builder.
+pub fn add_properties_to_dict_builder(
+    properties: &HashMap<String, String>,
+    property_dict_builder: &mut crate::properties::dictionary_builder::PropertiesDictionaryBuilder,
+) -> Result<()> {
+    property_dict_builder
+        .append_properties_from_hashmap(properties)
+        .map_err(|e| anyhow::anyhow!("Failed to append properties to dictionary builder: {}", e))
+}
+
 /// Adds a set of properties from a `PropertySet` to an Arrow list builder.
 ///
 /// The properties are added as a new entry in the list builder.
@@ -79,4 +89,14 @@ pub fn add_property_set_to_builder(
     })?;
     property_list_builder.append(true);
     Ok(())
+}
+
+/// Adds a set of properties from a `PropertySet` to a dictionary builder.
+pub fn add_property_set_to_dict_builder(
+    properties: &PropertySet,
+    property_dict_builder: &mut crate::properties::dictionary_builder::PropertiesDictionaryBuilder,
+) -> Result<()> {
+    property_dict_builder
+        .append_properties_from_property_set(properties)
+        .map_err(|e| anyhow::anyhow!("Failed to append properties to dictionary builder: {}", e))
 }

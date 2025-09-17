@@ -5,12 +5,15 @@ use super::{
     partition_cache::PartitionCache,
     view::{PartitionSpec, View, ViewMetadata},
 };
-use crate::time::{TimeRange, datetime_to_scalar};
+use crate::{
+    properties::properties_field_schema,
+    time::{TimeRange, datetime_to_scalar},
+};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, TimeDelta, Utc};
 use datafusion::{
-    arrow::datatypes::{DataType, Field, Fields, Schema, TimeUnit},
+    arrow::datatypes::{DataType, Field, Schema, TimeUnit},
     execution::runtime_env::RuntimeEnv,
     logical_expr::{Expr, col},
     prelude::*,
@@ -183,18 +186,7 @@ pub fn blocks_view_schema() -> Schema {
             DataType::List(Arc::new(Field::new("tag", DataType::Utf8, false))),
             true,
         ),
-        Field::new(
-            "streams.properties",
-            DataType::List(Arc::new(Field::new(
-                "Property",
-                DataType::Struct(Fields::from(vec![
-                    Field::new("key", DataType::Utf8, false),
-                    Field::new("value", DataType::Utf8, false),
-                ])),
-                false,
-            ))),
-            false,
-        ),
+        properties_field_schema("streams.properties"),
         Field::new(
             "streams.insert_time",
             DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into())),
@@ -219,22 +211,11 @@ pub fn blocks_view_schema() -> Schema {
             false,
         ),
         Field::new("processes.parent_process_id", DataType::Utf8, false),
-        Field::new(
-            "processes.properties",
-            DataType::List(Arc::new(Field::new(
-                "Property",
-                DataType::Struct(Fields::from(vec![
-                    Field::new("key", DataType::Utf8, false),
-                    Field::new("value", DataType::Utf8, false),
-                ])),
-                false,
-            ))),
-            false,
-        ),
+        properties_field_schema("processes.properties"),
     ])
 }
 
 /// Returns the file schema hash for the blocks view.
 pub fn blocks_file_schema_hash() -> Vec<u8> {
-    vec![1]
+    vec![2] // Updated for dictionary encoding of properties
 }

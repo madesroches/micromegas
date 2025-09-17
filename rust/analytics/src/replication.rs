@@ -2,8 +2,10 @@ use anyhow::{Context, Result};
 use arrow_flight::decode::FlightRecordBatchStream;
 use chrono::DateTime;
 use datafusion::arrow::array::{
-    BinaryArray, GenericListArray, Int32Array, Int64Array, StringArray, TimestampNanosecondArray,
+    AsArray, BinaryArray, DictionaryArray, GenericListArray, Int32Array, Int64Array, StringArray,
+    TimestampNanosecondArray,
 };
+use datafusion::arrow::datatypes::Int32Type;
 use futures::StreamExt;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_tracing::info;
@@ -30,7 +32,8 @@ async fn ingest_streams(
             typed_column_by_name(&b, "dependencies_metadata")?;
         let objects_metadata_column: &BinaryArray = typed_column_by_name(&b, "objects_metadata")?;
         let tags_column: &GenericListArray<i32> = typed_column_by_name(&b, "tags")?;
-        let properties_column: &GenericListArray<i32> = typed_column_by_name(&b, "properties")?;
+        let properties_dict: &DictionaryArray<Int32Type> = typed_column_by_name(&b, "properties")?;
+        let properties_column = properties_dict.values().as_list::<i32>();
         let insert_time_column: &TimestampNanosecondArray =
             typed_column_by_name(&b, "insert_time")?;
 
@@ -89,7 +92,8 @@ async fn ingest_processes(
         let insert_time_column: &TimestampNanosecondArray =
             typed_column_by_name(&b, "insert_time")?;
         let parent_process_id_column = string_column_by_name(&b, "parent_process_id")?;
-        let properties_column: &GenericListArray<i32> = typed_column_by_name(&b, "properties")?;
+        let properties_dict: &DictionaryArray<Int32Type> = typed_column_by_name(&b, "properties")?;
+        let properties_column = properties_dict.values().as_list::<i32>();
         for row in 0..b.num_rows() {
             let process_id = Uuid::parse_str(process_id_column.value(row))?;
             let parent_process_str = parent_process_id_column.value(row);

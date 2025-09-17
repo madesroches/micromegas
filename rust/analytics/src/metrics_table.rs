@@ -1,14 +1,15 @@
 use crate::{
-    arrow_properties::{add_properties_to_builder, add_property_set_to_builder},
+    arrow_properties::{add_properties_to_dict_builder, add_property_set_to_dict_builder},
     measure::Measure,
+    properties::{dictionary_builder::PropertiesDictionaryBuilder, properties_field_schema},
     time::TimeRange,
 };
 use anyhow::{Context, Result};
 use chrono::DateTime;
 use datafusion::arrow::{
-    array::{ArrayBuilder, ListBuilder, PrimitiveBuilder, StringDictionaryBuilder, StructBuilder},
+    array::{ArrayBuilder, PrimitiveBuilder, StringDictionaryBuilder},
     datatypes::{
-        DataType, Field, Fields, Float64Type, Int16Type, Schema, TimeUnit, TimestampNanosecondType,
+        DataType, Field, Float64Type, Int16Type, Schema, TimeUnit, TimestampNanosecondType,
     },
     record_batch::RecordBatch,
 };
@@ -73,30 +74,8 @@ pub fn metrics_table_schema() -> Schema {
             false,
         ),
         Field::new("value", DataType::Float64, false),
-        Field::new(
-            "properties",
-            DataType::List(Arc::new(Field::new(
-                "Property",
-                DataType::Struct(Fields::from(vec![
-                    Field::new("key", DataType::Utf8, false),
-                    Field::new("value", DataType::Utf8, false),
-                ])),
-                false,
-            ))),
-            false,
-        ),
-        Field::new(
-            "process_properties",
-            DataType::List(Arc::new(Field::new(
-                "Property",
-                DataType::Struct(Fields::from(vec![
-                    Field::new("key", DataType::Utf8, false),
-                    Field::new("value", DataType::Utf8, false),
-                ])),
-                false,
-            ))),
-            false,
-        ),
+        properties_field_schema("properties"),
+        properties_field_schema("process_properties"),
     ])
 }
 
@@ -114,29 +93,12 @@ pub struct MetricsRecordBuilder {
     pub names: StringDictionaryBuilder<Int16Type>,
     pub units: StringDictionaryBuilder<Int16Type>,
     pub values: PrimitiveBuilder<Float64Type>,
-    pub properties: ListBuilder<StructBuilder>,
-    pub process_properties: ListBuilder<StructBuilder>,
+    pub properties: PropertiesDictionaryBuilder,
+    pub process_properties: PropertiesDictionaryBuilder,
 }
 
 impl MetricsRecordBuilder {
     pub fn with_capacity(capacity: usize) -> Self {
-        let prop_struct_fields = vec![
-            Field::new("key", DataType::Utf8, false),
-            Field::new("value", DataType::Utf8, false),
-        ];
-        let prop_field = Arc::new(Field::new(
-            "Property",
-            DataType::Struct(Fields::from(prop_struct_fields.clone())),
-            false,
-        ));
-        let props_builder = ListBuilder::new(StructBuilder::from_fields(
-            prop_struct_fields.clone(),
-            capacity,
-        ))
-        .with_field(prop_field.clone());
-        let process_props_builder =
-            ListBuilder::new(StructBuilder::from_fields(prop_struct_fields, capacity))
-                .with_field(prop_field);
         Self {
             process_ids: StringDictionaryBuilder::new(),
             stream_ids: StringDictionaryBuilder::new(),
@@ -150,8 +112,8 @@ impl MetricsRecordBuilder {
             names: StringDictionaryBuilder::new(),
             units: StringDictionaryBuilder::new(),
             values: PrimitiveBuilder::with_capacity(capacity),
-            properties: props_builder,
-            process_properties: process_props_builder,
+            properties: PropertiesDictionaryBuilder::new(capacity),
+            process_properties: PropertiesDictionaryBuilder::new(capacity),
         }
     }
 
@@ -189,8 +151,8 @@ impl MetricsRecordBuilder {
         self.names.append_value(&*row.name);
         self.units.append_value(&*row.unit);
         self.values.append_value(row.value);
-        add_property_set_to_builder(&row.properties, &mut self.properties)?;
-        add_properties_to_builder(&row.process.properties, &mut self.process_properties)?;
+        add_property_set_to_dict_builder(&row.properties, &mut self.properties)?;
+        add_properties_to_dict_builder(&row.process.properties, &mut self.process_properties)?;
         Ok(())
     }
 
@@ -210,8 +172,16 @@ impl MetricsRecordBuilder {
                 Arc::new(self.names.finish()),
                 Arc::new(self.units.finish()),
                 Arc::new(self.values.finish()),
-                Arc::new(self.properties.finish()),
-                Arc::new(self.process_properties.finish()),
+                Arc::new(
+                    self.properties
+                        .finish()
+                        .map_err(|e| anyhow::anyhow!("Failed to finish properties: {}", e))?,
+                ),
+                Arc::new(
+                    self.process_properties.finish().map_err(|e| {
+                        anyhow::anyhow!("Failed to finish process_properties: {}", e)
+                    })?,
+                ),
             ],
         )
         .with_context(|| "building record batch")

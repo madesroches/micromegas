@@ -16,9 +16,10 @@ use chrono::DateTime;
 use datafusion::functions_aggregate::{count::count_all, expr_fn::sum, min_max::max};
 use datafusion::{
     arrow::array::{
-        Array, BinaryArray, GenericListArray, Int32Array, Int64Array, StringArray,
-        TimestampNanosecondArray,
+        Array, AsArray, BinaryArray, DictionaryArray, GenericListArray, Int32Array, Int64Array,
+        StringArray, TimestampNanosecondArray,
     },
+    arrow::datatypes::Int32Type,
     execution::runtime_env::RuntimeEnv,
     prelude::*,
 };
@@ -138,8 +139,9 @@ impl PartitionBlocksSource for SourceDataBlocks {
                 let objects_metadata_column: &BinaryArray =
                     typed_column_by_name(&b, "streams.objects_metadata")?;
                 let stream_tags_column: &GenericListArray<i32> = typed_column_by_name(&b, "streams.tags")?;
-                let stream_properties_column: &GenericListArray<i32> =
+                let stream_properties_dict: &DictionaryArray<Int32Type> =
                     typed_column_by_name(&b, "streams.properties")?;
+                let stream_properties_column = stream_properties_dict.values().as_list::<i32>();
 
                 let process_start_time_column: &TimestampNanosecondArray =
                     typed_column_by_name(&b, "processes.start_time")?;
@@ -154,8 +156,9 @@ impl PartitionBlocksSource for SourceDataBlocks {
                 let process_distro_column = string_column_by_name(&b, "processes.distro")?;
                 let process_cpu_column = string_column_by_name(&b, "processes.cpu_brand")?;
                 let process_parent_column = string_column_by_name(&b, "processes.parent_process_id")?;
-                let process_properties_column: &GenericListArray<i32> =
+                let process_properties_dict: &DictionaryArray<Int32Type> =
                     typed_column_by_name(&b, "processes.properties")?;
+                let process_properties_column = process_properties_dict.values().as_list::<i32>();
                 for ir in 0..b.num_rows() {
                     let block_insert_time = block_insert_time_column.value(ir);
                     let stream_id = Uuid::parse_str(stream_id_column.value(ir))?;

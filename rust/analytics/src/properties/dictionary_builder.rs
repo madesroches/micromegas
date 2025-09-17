@@ -5,6 +5,7 @@ use datafusion::arrow::array::{
 use datafusion::arrow::datatypes::{DataType, Field, Fields, Int32Type};
 use datafusion::common::Result;
 use datafusion::error::DataFusionError;
+use micromegas_telemetry::property::Property;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -63,6 +64,27 @@ impl PropertiesDictionaryBuilder {
         self.keys.push(None);
     }
 
+    /// Append properties from a Vec<Property> (for direct use from database rows).
+    pub fn append_properties_from_vec(&mut self, properties: Vec<Property>) -> Result<()> {
+        let prop_vec: Vec<(String, String)> = properties
+            .into_iter()
+            .map(|p| (p.key_str().to_string(), p.value_str().to_string()))
+            .collect();
+
+        match self.map.get(&prop_vec) {
+            Some(&index) => {
+                self.keys.push(Some(index as i32));
+            }
+            None => {
+                let new_index = self.map.len();
+                self.add_to_values(&prop_vec)?;
+                self.map.insert(prop_vec, new_index);
+                self.keys.push(Some(new_index as i32));
+            }
+        }
+        Ok(())
+    }
+
     fn add_to_values(&mut self, properties: &[(String, String)]) -> Result<()> {
         let struct_builder = self.values_builder.values();
         for (key, value) in properties {
@@ -79,6 +101,57 @@ impl PropertiesDictionaryBuilder {
             struct_builder.append(true);
         }
         self.values_builder.append(true);
+        Ok(())
+    }
+
+    /// Append properties from a HashMap<String, String> (for direct use from HashMap).
+    pub fn append_properties_from_hashmap(
+        &mut self,
+        properties: &HashMap<String, String>,
+    ) -> Result<()> {
+        let prop_vec: Vec<(String, String)> = properties
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+
+        match self.map.get(&prop_vec) {
+            Some(&index) => {
+                self.keys.push(Some(index as i32));
+            }
+            None => {
+                let new_index = self.map.len();
+                self.add_to_values(&prop_vec)?;
+                self.map.insert(prop_vec, new_index);
+                self.keys.push(Some(new_index as i32));
+            }
+        }
+        Ok(())
+    }
+
+    /// Append properties from a PropertySet (for use from property_set module).
+    pub fn append_properties_from_property_set(
+        &mut self,
+        properties: &crate::property_set::PropertySet,
+    ) -> Result<()> {
+        let mut prop_vec = Vec::new();
+        properties
+            .for_each_property(|prop| {
+                prop_vec.push((prop.key_str().to_string(), prop.value_str().to_string()));
+                Ok(())
+            })
+            .map_err(|e| DataFusionError::External(format!("PropertySet error: {}", e).into()))?;
+
+        match self.map.get(&prop_vec) {
+            Some(&index) => {
+                self.keys.push(Some(index as i32));
+            }
+            None => {
+                let new_index = self.map.len();
+                self.add_to_values(&prop_vec)?;
+                self.map.insert(prop_vec, new_index);
+                self.keys.push(Some(new_index as i32));
+            }
+        }
         Ok(())
     }
 

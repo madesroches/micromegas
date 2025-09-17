@@ -1,8 +1,9 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use datafusion::arrow::array::{
-    Array, Int32Array, Int64Array, ListArray, RecordBatch, TimestampNanosecondArray,
+    Array, AsArray, DictionaryArray, Int32Array, Int64Array, RecordBatch, TimestampNanosecondArray,
 };
+use datafusion::arrow::datatypes::Int32Type;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_telemetry::{
     property::Property, stream_info::StreamInfo, types::block::BlockMetadata,
@@ -201,7 +202,8 @@ pub async fn find_process_with_latest_timing(
     let last_block_end_time_column: &TimestampNanosecondArray =
         typed_column_by_name(batch, "last_block_end_time")?;
     let parent_process_id_column = string_column_by_name(batch, "parent_process_id")?;
-    let properties_column: &ListArray = typed_column_by_name(batch, "properties")?;
+    let properties_dict: &DictionaryArray<Int32Type> = typed_column_by_name(batch, "properties")?;
+    let properties_column = properties_dict.values().as_list::<i32>();
 
     let parent_process_id = if parent_process_id_column.is_null(0) {
         None

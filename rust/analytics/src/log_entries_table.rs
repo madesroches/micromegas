@@ -3,23 +3,21 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use chrono::DateTime;
 use datafusion::arrow::array::ArrayBuilder;
-use datafusion::arrow::array::ListBuilder;
 use datafusion::arrow::array::PrimitiveBuilder;
 use datafusion::arrow::array::StringBuilder;
 use datafusion::arrow::array::StringDictionaryBuilder;
-use datafusion::arrow::array::StructBuilder;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::arrow::datatypes::Field;
-use datafusion::arrow::datatypes::Fields;
 use datafusion::arrow::datatypes::Int16Type;
 use datafusion::arrow::datatypes::Int32Type;
+
+use crate::properties::{dictionary_builder::PropertiesDictionaryBuilder, properties_field_schema};
 use datafusion::arrow::datatypes::Schema;
 use datafusion::arrow::datatypes::TimeUnit;
 use datafusion::arrow::datatypes::TimestampNanosecondType;
 use datafusion::arrow::record_batch::RecordBatch;
 
-use crate::arrow_properties::add_properties_to_builder;
-use crate::arrow_properties::add_property_set_to_builder;
+use crate::arrow_properties::{add_properties_to_dict_builder, add_property_set_to_dict_builder};
 use crate::log_entry::LogEntry;
 use crate::time::TimeRange;
 
@@ -73,30 +71,8 @@ pub fn log_table_schema() -> Schema {
         ),
         Field::new("level", DataType::Int32, false),
         Field::new("msg", DataType::Utf8, false),
-        Field::new(
-            "properties",
-            DataType::List(Arc::new(Field::new(
-                "Property",
-                DataType::Struct(Fields::from(vec![
-                    Field::new("key", DataType::Utf8, false),
-                    Field::new("value", DataType::Utf8, false),
-                ])),
-                false,
-            ))),
-            false,
-        ),
-        Field::new(
-            "process_properties",
-            DataType::List(Arc::new(Field::new(
-                "Property",
-                DataType::Struct(Fields::from(vec![
-                    Field::new("key", DataType::Utf8, false),
-                    Field::new("value", DataType::Utf8, false),
-                ])),
-                false,
-            ))),
-            false,
-        ),
+        properties_field_schema("properties"),
+        properties_field_schema("process_properties"),
     ])
 }
 
@@ -113,30 +89,12 @@ pub struct LogEntriesRecordBuilder {
     targets: StringDictionaryBuilder<Int16Type>,
     levels: PrimitiveBuilder<Int32Type>,
     msgs: StringBuilder,
-    properties: ListBuilder<StructBuilder>,
-    process_properties: ListBuilder<StructBuilder>,
+    properties: PropertiesDictionaryBuilder,
+    process_properties: PropertiesDictionaryBuilder,
 }
 
 impl LogEntriesRecordBuilder {
     pub fn with_capacity(capacity: usize) -> Self {
-        let prop_struct_fields = vec![
-            Field::new("key", DataType::Utf8, false),
-            Field::new("value", DataType::Utf8, false),
-        ];
-        let prop_field = Arc::new(Field::new(
-            "Property",
-            DataType::Struct(Fields::from(prop_struct_fields.clone())),
-            false,
-        ));
-        let props_builder = ListBuilder::new(StructBuilder::from_fields(
-            prop_struct_fields.clone(),
-            capacity,
-        ))
-        .with_field(prop_field.clone());
-        let process_props_builder =
-            ListBuilder::new(StructBuilder::from_fields(prop_struct_fields, capacity))
-                .with_field(prop_field);
-
         Self {
             process_ids: StringDictionaryBuilder::new(),
             stream_ids: StringDictionaryBuilder::new(),
@@ -149,8 +107,8 @@ impl LogEntriesRecordBuilder {
             targets: StringDictionaryBuilder::new(),
             levels: PrimitiveBuilder::with_capacity(capacity),
             msgs: StringBuilder::new(),
-            properties: props_builder,
-            process_properties: process_props_builder,
+            properties: PropertiesDictionaryBuilder::new(capacity),
+            process_properties: PropertiesDictionaryBuilder::new(capacity),
         }
     }
 
@@ -187,8 +145,8 @@ impl LogEntriesRecordBuilder {
         self.targets.append_value(&*row.target);
         self.levels.append_value(row.level);
         self.msgs.append_value(&*row.msg);
-        add_property_set_to_builder(&row.properties, &mut self.properties)?;
-        add_properties_to_builder(&row.process.properties, &mut self.process_properties)?;
+        add_property_set_to_dict_builder(&row.properties, &mut self.properties)?;
+        add_properties_to_dict_builder(&row.process.properties, &mut self.process_properties)?;
         Ok(())
     }
 
@@ -207,8 +165,16 @@ impl LogEntriesRecordBuilder {
                 Arc::new(self.targets.finish()),
                 Arc::new(self.levels.finish()),
                 Arc::new(self.msgs.finish()),
-                Arc::new(self.properties.finish()),
-                Arc::new(self.process_properties.finish()),
+                Arc::new(
+                    self.properties
+                        .finish()
+                        .map_err(|e| anyhow::anyhow!("Failed to finish properties: {}", e))?,
+                ),
+                Arc::new(
+                    self.process_properties.finish().map_err(|e| {
+                        anyhow::anyhow!("Failed to finish process_properties: {}", e)
+                    })?,
+                ),
             ],
         )
         .with_context(|| "building record batch")

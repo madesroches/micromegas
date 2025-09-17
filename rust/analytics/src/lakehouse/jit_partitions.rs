@@ -295,7 +295,10 @@ pub async fn generate_process_jit_partitions_segment(
             use crate::dfext::{
                 string_column_accessor::string_column_by_name, typed_column::typed_column_by_name,
             };
-            use datafusion::arrow::array::{BinaryArray, GenericListArray, StringArray};
+            use datafusion::arrow::array::{
+                AsArray, BinaryArray, DictionaryArray, GenericListArray, StringArray,
+            };
+            use datafusion::arrow::datatypes::Int32Type;
             use uuid::Uuid;
 
             let stream_id_column = string_column_by_name(&rb, "stream_id")?;
@@ -306,8 +309,9 @@ pub async fn generate_process_jit_partitions_segment(
                 typed_column_by_name(&rb, "streams.objects_metadata")?;
             let stream_tags_column: &GenericListArray<i32> =
                 typed_column_by_name(&rb, "streams.tags")?;
-            let stream_properties_column: &GenericListArray<i32> =
+            let stream_properties_dict: &DictionaryArray<Int32Type> =
                 typed_column_by_name(&rb, "streams.properties")?;
+            let stream_properties_column = stream_properties_dict.values().as_list::<i32>();
 
             let stream_id =
                 Uuid::parse_str(stream_id_column.value(ir)).with_context(|| "parsing stream_id")?;
