@@ -76,6 +76,7 @@ Micromegas is a unified observability platform with these core components:
 - **Cost-efficient storage**: Raw data in cheap object storage, metadata in PostgreSQL
 - **On-demand processing**: ETL only when querying data
 - **Unified observability**: Logs, metrics, and traces in single queryable format
+- **Open-closed principle**: Prefer traits to enums to allow extensibility
 
 ## Development Notes
 

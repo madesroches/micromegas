@@ -18,11 +18,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Always use `prelude::*` when importing from prelude modules
 
 ### General
+- Never commit unless explicitly requested
 - Follow existing code conventions and patterns
 - Check for existing libraries/frameworks before assuming availability
 - Never expose secrets or keys
 - Use Unix line endings (LF) in all files
 - Always run tests after making changes
+- **Open-closed principle**: Prefer traits to enums to allow extensibility
+- Follow @AI_GUIDELINES.md for detailed conventions
 
 ## Essential Commands
 
@@ -57,10 +60,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Micromegas: unified observability platform for logs, metrics, and traces.
 
-**Core crates**: `tracing/` (instrumentation), `analytics/` (DataFusion queries), `public/` (user-facing)
-**Services**: `telemetry-ingestion-srv/` (HTTP ingestion), `flight-sql-srv/` (SQL queries)
+**Core crates**: `tracing/` (instrumentation), `analytics/` (DataFusion queries), `public/` (user-facing)  
+**Services**: `telemetry-ingestion-srv/` (HTTP ingestion), `flight-sql-srv/` (SQL queries)  
 **Flow**: Apps → HTTP ingestion → PostgreSQL metadata + object storage → FlightSQL queries
-- there should be a venv available to run python code
-- follow @AI_GUIDELINES.md
-- prefer to script using python over shell scripts
-- never commit if I did not ask explicitly
+
+## Development Environment
+
+- Python venv available for running Python code
+- Prefer Python scripts over shell scripts
