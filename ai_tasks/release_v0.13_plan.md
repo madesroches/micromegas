@@ -46,8 +46,8 @@ Current versions should already be at 0.13.0:
   - [x] Search for any hardcoded version references in docs - **✅ Only historical references in changelogs**
   - [x] Update getting started guides if needed - **✅ NO UPDATES NEEDED**
 
-### 4. Git Preparation
-- [ ] Tag the release: `git tag v0.13.0`
+### 4. Git Preparation ✅ COMPLETED
+- [x] Tag the release: `git tag v0.13.0` - **✅ TAG CREATED**
 
 ## Release Process
 
