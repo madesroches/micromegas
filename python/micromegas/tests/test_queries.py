@@ -27,10 +27,10 @@ def test_spans():
     )
     stream_id = blocks.iloc[0]["stream_id"]
     sql = """
-    SELECT target, name, duration, begin, end
-    FROM view_instance('thread_spans', '{stream_id}')
-    ORDER by duration DESC
-    LIMIT 10;""".format(
+SELECT target, name, duration, begin, "end"
+FROM view_instance('thread_spans', '{stream_id}')
+ORDER by duration DESC
+LIMIT 10;""".format(
         stream_id=stream_id
     )
     df = client.query(sql, begin, end)

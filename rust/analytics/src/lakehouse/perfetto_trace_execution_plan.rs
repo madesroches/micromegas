@@ -382,10 +382,10 @@ async fn generate_thread_spans_with_writer(
     for (stream_id, _, _) in threads {
         let sql = format!(
             r#"
-            SELECT begin, end, 
-                   arrow_cast(name, 'Utf8') as name,
-                   arrow_cast(filename, 'Utf8') as filename,
-                   arrow_cast(target, 'Utf8') as target,
+            SELECT "begin", "end", 
+                   arrow_cast("name", 'Utf8') as name,
+                   arrow_cast("filename", 'Utf8') as filename,
+                   arrow_cast("target", 'Utf8') as target,
                    line
             FROM view_instance('thread_spans', '{}')
             WHERE begin <= TIMESTAMP '{}'
