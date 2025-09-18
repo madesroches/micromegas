@@ -12,7 +12,7 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct PropertiesToDict {
     signature: Signature,
 }
@@ -206,7 +206,7 @@ pub fn build_dictionary_from_properties(
 }
 
 // Helper UDF to extract properties array from dictionary for use with standard functions
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct PropertiesToArray {
     signature: Signature,
 }
@@ -281,7 +281,7 @@ impl ScalarUDFImpl for PropertiesToArray {
 }
 
 // UDF to get length of properties that works with both regular and dictionary arrays
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct PropertiesLength {
     signature: Signature,
 }

@@ -2,11 +2,10 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use datafusion::{
     arrow::{
-        array::{Array, ArrayRef, StringArray, StringBuilder},
+        array::{Array, StringArray, StringBuilder},
         datatypes::DataType,
     },
     common::internal_err,
-    config::ConfigOptions,
     error::DataFusionError,
     logical_expr::{
         ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
@@ -27,6 +26,20 @@ use super::write_partition::add_file_for_cleanup;
 pub struct RetirePartitionByFile {
     signature: Signature,
     lake: Arc<DataLakeConnection>,
+}
+
+impl PartialEq for RetirePartitionByFile {
+    fn eq(&self, other: &Self) -> bool {
+        self.signature == other.signature
+    }
+}
+
+impl Eq for RetirePartitionByFile {}
+
+impl std::hash::Hash for RetirePartitionByFile {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.signature.hash(state);
+    }
 }
 
 impl RetirePartitionByFile {
@@ -118,8 +131,7 @@ impl AsyncScalarUDFImpl for RetirePartitionByFile {
     async fn invoke_async_with_args(
         &self,
         args: ScalarFunctionArgs,
-        _config: &ConfigOptions,
-    ) -> datafusion::error::Result<ArrayRef> {
+    ) -> datafusion::error::Result<ColumnarValue> {
         let args = ColumnarValue::values_to_arrays(&args.args)?;
         if args.len() != 1 {
             return internal_err!("retire_partition_by_file expects exactly 1 argument: file_path");
@@ -179,7 +191,7 @@ impl AsyncScalarUDFImpl for RetirePartitionByFile {
             info!("Successfully retired {} partitions in batch", success_count);
         }
 
-        Ok(Arc::new(builder.finish()))
+        Ok(ColumnarValue::Array(Arc::new(builder.finish())))
     }
 }
 

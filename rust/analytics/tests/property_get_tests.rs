@@ -3,6 +3,7 @@ use datafusion::arrow::array::{
 };
 use datafusion::arrow::buffer::OffsetBuffer;
 use datafusion::arrow::datatypes::{DataType, Field, Int32Type};
+use datafusion::config::ConfigOptions;
 use datafusion::logical_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl};
 use datafusion::prelude::*;
 use micromegas_analytics::properties::property_get::PropertyGet;
@@ -74,6 +75,7 @@ fn test_property_get_returns_dictionary() {
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
             true,
         )),
+        config_options: Arc::new(ConfigOptions::default()),
     };
 
     // Invoke the function
@@ -205,6 +207,7 @@ fn test_property_get_with_repeated_values() {
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
             true,
         )),
+        config_options: Arc::new(ConfigOptions::default()),
     };
 
     let result = property_get
@@ -274,6 +277,7 @@ fn test_property_get_with_nulls() {
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
             true,
         )),
+        config_options: Arc::new(ConfigOptions::default()),
     };
 
     let result = property_get

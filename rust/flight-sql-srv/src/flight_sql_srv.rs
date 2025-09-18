@@ -11,7 +11,7 @@ use micromegas::servers::flight_sql_service_impl::FlightSqlServiceImpl;
 use micromegas::servers::key_ring::{KeyRing, parse_key_ring};
 use micromegas::servers::log_uri_service::LogUriService;
 use micromegas::servers::tonic_auth_interceptor::check_auth;
-use micromegas::tonic::service::interceptor;
+use micromegas::tonic::service::interceptor::InterceptorLayer;
 use micromegas::tonic::transport::Server;
 use micromegas::tracing::prelude::*;
 use std::sync::Arc;
@@ -57,7 +57,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let layer = ServiceBuilder::new()
         .layer(layer_fn(|service| LogUriService { service }))
-        .layer(interceptor(move |req| {
+        .layer(InterceptorLayer::new(move |req| {
             if auth_required {
                 check_auth(req, &keyring)
             } else {

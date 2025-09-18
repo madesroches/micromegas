@@ -26,7 +26,7 @@ micromegas-perfetto = { path = "perfetto", version = "0.14.0" }
 micromegas = { path = "public" }
 
 anyhow = "1.0"
-arrow-flight = { version = "55", features = ["flight-sql-experimental"] }
+arrow-flight = { version = "56.1", features = ["flight-sql-experimental"] }
 async-stream = "0.3"
 async-trait = "0.1"
 axum = "0.8"
@@ -37,7 +37,7 @@ ciborium = "0.2.2"
 clap = { version = "4", features = ["derive"] }
 colored = { version = "3" }
 ctrlc = "3.2.0"
-datafusion = "49"
+datafusion = "50.0"
 futures = "0.3"
 http = "1.1"
 internment = "0.8"
@@ -64,7 +64,7 @@ thiserror = "1.0"
 thread-id = "4.0"
 tokio = { version = "1.47", features = ["macros","rt-multi-thread","tracing","io-util"]}
 tokio-retry2 = "0.5.7"
-tonic = { version = "0.12", features = ["server", "tls", "tls-native-roots"] }
+tonic = { version = "0.13", features = ["server", "tls-ring", "tls-native-roots"] }
 tower = { version = "0.5" }
 tower-http = { version = "0.5.2", features = ["cors", "limit", "timeout"] }
 tracing = "0.1.40"

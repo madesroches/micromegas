@@ -1,11 +1,10 @@
 use async_trait::async_trait;
 use datafusion::{
     arrow::{
-        array::{Array, ArrayRef, BinaryBuilder, StringArray},
+        array::{Array, BinaryBuilder, StringArray},
         datatypes::DataType,
     },
     common::{internal_err, not_impl_err},
-    config::ConfigOptions,
     error::DataFusionError,
     logical_expr::{
         ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
@@ -21,6 +20,20 @@ use std::sync::Arc;
 pub struct GetPayload {
     signature: Signature,
     lake: Arc<DataLakeConnection>,
+}
+
+impl PartialEq for GetPayload {
+    fn eq(&self, other: &Self) -> bool {
+        self.signature == other.signature
+    }
+}
+
+impl Eq for GetPayload {}
+
+impl std::hash::Hash for GetPayload {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.signature.hash(state);
+    }
 }
 
 impl GetPayload {
@@ -65,8 +78,7 @@ impl AsyncScalarUDFImpl for GetPayload {
     async fn invoke_async_with_args(
         &self,
         args: ScalarFunctionArgs,
-        _option: &ConfigOptions,
-    ) -> datafusion::error::Result<ArrayRef> {
+    ) -> datafusion::error::Result<ColumnarValue> {
         let args = ColumnarValue::values_to_arrays(&args.args)?;
         if args.len() != 3 {
             return internal_err!("wrong number of arguments to get_payload()");
@@ -114,6 +126,6 @@ impl AsyncScalarUDFImpl for GetPayload {
                 })?,
             );
         }
-        Ok(Arc::new(result_builder.finish()))
+        Ok(ColumnarValue::Array(Arc::new(result_builder.finish())))
     }
 }
