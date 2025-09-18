@@ -3,6 +3,7 @@
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Critical Rules
+- **NEVER COMMIT UNLESS EXPLICITLY ASKED**
 - **Commit Messages**: NEVER include AI-generated credits or co-author tags
 - **Pull Requests**: Always run `git log --oneline main..HEAD` before creating PRs
 - **Project Structure**: Run cargo commands from `rust/` directory (main workspace at `rust/Cargo.toml`)
