@@ -444,6 +444,37 @@ FROM measures;
 
 **Note:** Dictionary encoding can reduce memory usage by 50-80% for datasets with repeated property patterns.
 
+##### `properties_to_jsonb(properties)`
+
+Converts a properties list to binary JSONB format for efficient storage and querying.
+
+**Syntax:**
+```sql
+properties_to_jsonb(properties)
+```
+
+**Parameters:**
+- `properties` (`List<Struct<key: Utf8, value: Utf8>>` or `Dictionary<Int32, List<Struct>>`): Properties list to convert
+
+**Returns:** `Binary` - JSONB object containing the properties as key-value pairs
+
+**Examples:**
+```sql
+-- Convert properties to JSONB format
+SELECT properties_to_jsonb(properties) as jsonb_props
+FROM log_entries;
+
+-- Use with JSONB functions to extract specific properties
+SELECT jsonb_get(properties_to_jsonb(properties), 'hostname') as hostname
+FROM log_entries;
+
+-- Convert dictionary-encoded properties to JSONB
+SELECT properties_to_jsonb(properties_to_dict(properties)) as jsonb_props
+FROM measures;
+```
+
+**Note:** This function handles both regular List and Dictionary-encoded properties transparently. Compatible with all JSONB functions for property extraction and manipulation.
+
 ##### `properties_to_array(dict_properties)`
 
 Converts dictionary-encoded properties back to a regular array for compatibility with standard functions.

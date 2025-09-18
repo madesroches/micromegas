@@ -28,3 +28,36 @@
     width: 100% !important;
     height: auto !important;
 }
+
+/* Make all headers more prominent, especially h5 function names */
+.md-typeset h5 {
+    font-size: 1.1em !important;
+    font-weight: 600 !important;
+    margin-top: 1.6rem !important;
+    margin-bottom: 0.8rem !important;
+    color: var(--md-primary-fg-color) !important;
+}
+
+.md-typeset h4 {
+    font-size: 1.25em !important;
+    font-weight: 700 !important;
+    margin-top: 2rem !important;
+    margin-bottom: 1rem !important;
+}
+
+.md-typeset h3 {
+    font-size: 1.4em !important;
+    font-weight: 700 !important;
+    margin-top: 2.4rem !important;
+    margin-bottom: 1.2rem !important;
+}
+
+/* Make function names in h5 stand out more with code styling */
+.md-typeset h5 code {
+    background-color: var(--md-code-bg-color) !important;
+    color: var(--md-code-fg-color) !important;
+    padding: 0.2em 0.4em !important;
+    border-radius: 0.3em !important;
+    font-size: 0.95em !important;
+    font-weight: 600 !important;
+}
