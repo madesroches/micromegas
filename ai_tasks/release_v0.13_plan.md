@@ -21,33 +21,32 @@ This document tracks the release of version 0.13 of Micromegas, including both R
 - [x] Python code formatting: `black .` (from `/python/micromegas` directory) - **✅ 7 files reformatted**
 - [x] Lint check: `cargo clippy --workspace -- -D warnings` (from `/rust` directory) - **✅ PASSED**
 
-### 2. Version Verification
+### 2. Version Verification ✅ COMPLETED
 Current versions should already be at 0.13.0:
-- [ ] Verify workspace version in `/rust/Cargo.toml`
-- [ ] Verify Python version in `/python/micromegas/pyproject.toml`
-- [ ] Check that all workspace dependencies reference 0.13.0
-- [ ] Verify web app version in `/analytics-web-app/package.json`
+- [x] Verify workspace version in `/rust/Cargo.toml` - **✅ Confirmed 0.13.0**
+- [x] Verify Python version in `/python/micromegas/pyproject.toml` - **✅ Confirmed 0.13.0**
+- [x] Check that all workspace dependencies reference 0.13.0 - **✅ All verified**
+- [x] Verify web app version in `/analytics-web-app/package.json` - **✅ Confirmed 0.13.0**
 
-### 3. Documentation Updates
-- [ ] **Update CHANGELOG.md** with v0.13 changes:
-  - [ ] Add new section for v0.13.0 with release date
-  - [ ] List all major features, bug fixes, and breaking changes since v0.12.0:
+### 3. Documentation Updates ✅ COMPLETED
+- [x] **Update CHANGELOG.md** with v0.13 changes: - **✅ UPDATED**
+  - [x] Add new section for v0.13.0 with release date - **✅ Added September 2025 section**
+  - [x] List all major features, bug fixes, and breaking changes since v0.12.0: - **✅ COMPREHENSIVE**
     - Dictionary encoding for properties columns (performance optimization)
     - Properties to JSONB UDF for efficient storage
     - Arrow string column accessor improvements
     - Schema evolution with incompatible partition retirement
     - Performance analysis and optimizations
-  - [ ] Include any performance improvements or API changes
-- [ ] **Update README files**:
-  - [ ] Verify installation instructions show correct versions
-  - [ ] Update any example code that references version numbers
-  - [ ] Check that feature lists are current
-- [ ] **Update documentation**:
-  - [ ] Search for any hardcoded version references in docs
-  - [ ] Update getting started guides if needed
+  - [x] Include any performance improvements or API changes - **✅ INCLUDED**
+- [x] **Update README files**: - **✅ VERIFIED**
+  - [x] Verify installation instructions show correct versions - **✅ Use dynamic badges/no hardcoded versions**
+  - [x] Update any example code that references version numbers - **✅ No hardcoded versions found**
+  - [x] Check that feature lists are current - **✅ CURRENT**
+- [x] **Update documentation**: - **✅ VERIFIED**
+  - [x] Search for any hardcoded version references in docs - **✅ Only historical references in changelogs**
+  - [x] Update getting started guides if needed - **✅ NO UPDATES NEEDED**
 
 ### 4. Git Preparation
-- [ ] Checkout main and create release branch: `git checkout main && git checkout -b release-v0.13.0`
 - [ ] Tag the release: `git tag v0.13.0`
 
 ## Release Process
