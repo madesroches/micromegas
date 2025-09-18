@@ -35,7 +35,7 @@ def test_processes_last_block_fields():
 def test_property_get_returns_dictionary():
     """Test that property_get returns dictionary-encoded data for memory efficiency."""
     cutoff_time = now - datetime.timedelta(seconds=10)
-    
+
     # Query using property_get to get build version
     sql = """
     SELECT 
@@ -45,20 +45,20 @@ def test_property_get_returns_dictionary():
     WHERE array_length(properties) > 0 
     LIMIT 10
     """
-    
+
     result = client.query(sql, begin, cutoff_time)
     print(f"Found {len(result)} processes with properties")
-    
+
     if len(result) > 0:
         # Check that the type is dictionary
-        version_type = result['version_type'].iloc[0]
+        version_type = result["version_type"].iloc[0]
         print(f"property_get return type: {version_type}")
-        
-        if 'Dictionary' in version_type:
+
+        if "Dictionary" in version_type:
             print("✅ property_get returns dictionary-encoded data")
-            
+
             # Test that we can still access the values normally
-            versions = result['version'].dropna()
+            versions = result["version"].dropna()
             if len(versions) > 0:
                 print(f"Sample version values: {versions.head(3).tolist()}")
                 print("✅ Dictionary values are accessible")
@@ -66,7 +66,7 @@ def test_property_get_returns_dictionary():
                 print("⚠ No non-null version values found")
         else:
             print(f"❌ Expected Dictionary type but got: {version_type}")
-            
+
         # Compare memory efficiency by testing with multiple property gets
         memory_test_sql = """
         SELECT 
@@ -77,7 +77,7 @@ def test_property_get_returns_dictionary():
         WHERE array_length(properties) > 0 
         LIMIT 100
         """
-        
+
         memory_result = client.query(memory_test_sql, begin, cutoff_time)
         if len(memory_result) > 0:
             print(f"✅ Multiple property_get calls work with dictionary encoding")

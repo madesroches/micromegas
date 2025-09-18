@@ -32,13 +32,14 @@ class MockFlightSQLClient:
                     ]
                 )
 
-        # Check if this is a retire_partition_by_file call  
+        # Check if this is a retire_partition_by_file call
         elif "retire_partition_by_file(" in sql:
             if "retirement_file_result_data" in self.mock_data:
                 return self.mock_data["retirement_file_result_data"]
             else:
                 # Extract file path from SQL for realistic mock response
                 import re
+
                 match = re.search(r"retire_partition_by_file\('([^']+)'\)", sql)
                 file_path = match.group(1) if match else "unknown.parquet"
                 return pd.DataFrame(
@@ -170,10 +171,12 @@ def test_retire_incompatible_partitions_with_data():
     assert len(result) == 1
     assert result["view_set_name"].iloc[0] == "log_entries"
     assert result["view_instance_id"].iloc[0] == "process-123"
-    assert result["partitions_retired"].iloc[0] == 2  # Both partitions retired successfully
-    assert result["partitions_failed"].iloc[0] == 0   # No failures
+    assert (
+        result["partitions_retired"].iloc[0] == 2
+    )  # Both partitions retired successfully
+    assert result["partitions_failed"].iloc[0] == 0  # No failures
     assert result["storage_freed_bytes"].iloc[0] == 1024000  # All storage freed
-    
+
     # Check retirement messages
     messages = result["retirement_messages"].iloc[0]
     assert len(messages) == 2  # Two retirement attempts
@@ -192,34 +195,46 @@ def test_retire_incompatible_partitions_with_failures():
                 "partition_count": [3],
                 "total_size_bytes": [1536000],
                 "file_paths": [
-                    ["/path/to/good1.parquet", "/path/to/missing.parquet", "/path/to/good2.parquet"]
+                    [
+                        "/path/to/good1.parquet",
+                        "/path/to/missing.parquet",
+                        "/path/to/good2.parquet",
+                    ]
                 ],
             }
         ),
-        "retirement_file_result_data": pd.DataFrame({
-            "message": [
-                "SUCCESS: Retired partition /path/to/good1.parquet",
-                "ERROR: Partition not found: /path/to/missing.parquet", 
-                "SUCCESS: Retired partition /path/to/good2.parquet"
-            ]
-        })
+        "retirement_file_result_data": pd.DataFrame(
+            {
+                "message": [
+                    "SUCCESS: Retired partition /path/to/good1.parquet",
+                    "ERROR: Partition not found: /path/to/missing.parquet",
+                    "SUCCESS: Retired partition /path/to/good2.parquet",
+                ]
+            }
+        ),
     }
 
     client = MockFlightSQLClient(mock_data)
-    
+
     # Override the query method to return different results for different file paths
     original_query = client.query
+
     def mock_query_with_failures(sql):
         if "retire_partition_by_file('/path/to/missing.parquet')" in sql:
-            return pd.DataFrame({"message": ["ERROR: Partition not found: /path/to/missing.parquet"]})
+            return pd.DataFrame(
+                {"message": ["ERROR: Partition not found: /path/to/missing.parquet"]}
+            )
         elif "retire_partition_by_file(" in sql:
             import re
+
             match = re.search(r"retire_partition_by_file\('([^']+)'\)", sql)
             file_path = match.group(1) if match else "unknown.parquet"
-            return pd.DataFrame({"message": [f"SUCCESS: Retired partition {file_path}"]})
+            return pd.DataFrame(
+                {"message": [f"SUCCESS: Retired partition {file_path}"]}
+            )
         else:
             return original_query(sql)
-    
+
     client.query = mock_query_with_failures
     result = micromegas.admin.retire_incompatible_partitions(client)
 
@@ -228,12 +243,12 @@ def test_retire_incompatible_partitions_with_failures():
     assert result["view_set_name"].iloc[0] == "log_entries"
     assert result["view_instance_id"].iloc[0] == "process-456"
     assert result["partitions_retired"].iloc[0] == 2  # 2 successful retirements
-    assert result["partitions_failed"].iloc[0] == 1   # 1 failure
-    
+    assert result["partitions_failed"].iloc[0] == 1  # 1 failure
+
     # Storage freed should be proportional to successful retirements (2/3 of total)
     expected_freed = int(1536000 * (2 / 3))
     assert result["storage_freed_bytes"].iloc[0] == expected_freed
-    
+
     # Check retirement messages
     messages = result["retirement_messages"].iloc[0]
     assert len(messages) == 3  # Three retirement attempts

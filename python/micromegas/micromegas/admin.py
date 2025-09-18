@@ -142,7 +142,7 @@ def retire_incompatible_partitions(
         return pd.DataFrame(
             columns=[
                 "view_set_name",
-                "view_instance_id", 
+                "view_instance_id",
                 "partitions_retired",
                 "partitions_failed",
                 "storage_freed_bytes",
@@ -155,9 +155,9 @@ def retire_incompatible_partitions(
     # For each group of incompatible partitions, retire by individual file paths
     for _, group in incompatible.iterrows():
         file_paths = group["file_paths"]
-        
+
         # Convert file_paths to list if it's not already (handle different pandas array types)
-        if hasattr(file_paths, 'tolist'):
+        if hasattr(file_paths, "tolist"):
             file_paths_list = file_paths.tolist()
         elif isinstance(file_paths, str):
             # Single file path case
@@ -173,16 +173,18 @@ def retire_incompatible_partitions(
         for file_path in file_paths_list:
             if not file_path or pd.isna(file_path):
                 continue
-                
+
             try:
                 # Use the new retire_partition_by_file UDF
-                retirement_sql = f"SELECT retire_partition_by_file('{file_path}') as message"
+                retirement_sql = (
+                    f"SELECT retire_partition_by_file('{file_path}') as message"
+                )
                 retirement_result = client.query(retirement_sql)
-                
+
                 if not retirement_result.empty:
                     message = retirement_result["message"].iloc[0]
                     retirement_messages.append(message)
-                    
+
                     if message.startswith("SUCCESS:"):
                         partitions_retired += 1
                     else:
@@ -190,8 +192,10 @@ def retire_incompatible_partitions(
                         print(f"Warning: Failed to retire {file_path}: {message}")
                 else:
                     partitions_failed += 1
-                    retirement_messages.append(f"ERROR: No result returned for {file_path}")
-                    
+                    retirement_messages.append(
+                        f"ERROR: No result returned for {file_path}"
+                    )
+
             except Exception as e:
                 partitions_failed += 1
                 error_msg = f"ERROR: Exception retiring {file_path}: {e}"
@@ -201,18 +205,23 @@ def retire_incompatible_partitions(
         # Calculate storage freed (only count successful retirements)
         if partitions_retired > 0 and group["partition_count"] > 0:
             # Proportional calculation based on successful retirements
-            storage_freed = int(group["total_size_bytes"] * (partitions_retired / group["partition_count"]))
+            storage_freed = int(
+                group["total_size_bytes"]
+                * (partitions_retired / group["partition_count"])
+            )
         else:
             storage_freed = 0
 
         # Record retirement results for this group
-        results.append({
-            "view_set_name": group["view_set_name"],
-            "view_instance_id": group["view_instance_id"],
-            "partitions_retired": partitions_retired,
-            "partitions_failed": partitions_failed,
-            "storage_freed_bytes": storage_freed,
-            "retirement_messages": retirement_messages,
-        })
+        results.append(
+            {
+                "view_set_name": group["view_set_name"],
+                "view_instance_id": group["view_instance_id"],
+                "partitions_retired": partitions_retired,
+                "partitions_failed": partitions_failed,
+                "storage_freed_bytes": storage_freed,
+                "retirement_messages": retirement_messages,
+            }
+        )
 
     return pd.DataFrame(results)
