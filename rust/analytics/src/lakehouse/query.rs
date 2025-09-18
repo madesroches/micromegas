@@ -32,6 +32,7 @@ use crate::{
     },
     properties::{
         properties_to_dict_udf::{PropertiesLength, PropertiesToArray, PropertiesToDict},
+        properties_to_jsonb_udf::PropertiesToJsonb,
         property_get::PropertyGet,
     },
     time::TimeRange,
@@ -170,6 +171,7 @@ pub fn register_extension_functions(ctx: &SessionContext) {
     ctx.register_udf(ScalarUDF::from(PropertyGet::new()));
     ctx.register_udf(ScalarUDF::from(PropertiesToDict::new()));
     ctx.register_udf(ScalarUDF::from(PropertiesToArray::new()));
+    ctx.register_udf(ScalarUDF::from(PropertiesToJsonb::new()));
     ctx.register_udf(ScalarUDF::from(PropertiesLength::new()));
     ctx.register_udaf(make_histo_udaf());
     ctx.register_udaf(sum_histograms_udaf());

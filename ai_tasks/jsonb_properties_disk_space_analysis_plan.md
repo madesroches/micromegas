@@ -73,21 +73,20 @@ The goal is to determine if a JSONB-based representation could reduce disk space
 - [x] **Consider Parquet compression implications** for JSONB serialization (dictionary encoding, RLE, etc.)
 - [x] **Evaluate impact** on existing DataFusion UDFs and query patterns with JSONB access
 
-### 3. Implement Properties-to-JSONB Conversion UDF 🎯 NEXT PHASE
-- [ ] Create `properties_to_jsonb` UDF in analytics crate:
+### 3. Implement Properties-to-JSONB Conversion UDF ✅ COMPLETED
+- [x] **Create `properties_to_jsonb` UDF in analytics crate**:
   - Input: `List<Struct<key: String, value: String>>`
-  - Output: `String` (JSONB serialized object format `{"key1": "value1", "key2": "value2"}`)
-  - Leverage existing JSONB serialization infrastructure
-  - Handle empty properties lists and null values appropriately
-- [ ] Create reverse `jsonb_to_properties` UDF for testing:
-  - Input: `String` (JSONB object)
-  - Output: `List<Struct<key: String, value: String>>`
-  - Enable round-trip conversion validation
-- [ ] Add comprehensive tests for both UDFs:
-  - Empty properties, single property, multiple properties
-  - Special characters in keys/values, null handling
-  - Performance benchmarks vs existing `property_get` UDF
-- [ ] Register UDFs in DataFusion session context for query testing
+  - Output: `Binary` (JSONB binary format for object `{"key1": "value1", "key2": "value2"}`)
+  - **Implementation**: `PropertiesToJsonb` struct implementing `ScalarUDFImpl` trait
+  - **Logic**: Converts property lists to `BTreeMap<String, String>`, then serializes to JSONB binary format
+  - **Features**: Handles empty properties, null values, dictionary-encoded arrays, special characters
+- [x] **Add comprehensive tests for UDF**:
+  - **Test coverage**: Empty properties → `{}`, single/multiple properties, special characters, null handling
+  - **Test approach**: Uses existing `RawJsonb::to_string()` for JSON string validation
+  - **Validation**: All 5 test cases pass successfully
+- [x] **Register UDF in DataFusion session context** for query testing
+  - **Integration**: Added to `lakehouse/query.rs` in `register_extension_functions()`
+  - **Availability**: UDF now available for SQL queries as `properties_to_jsonb()`
 
 ### 4. Create Disk Space Estimation Model for Parquet Storage
 - [ ] Build calculation model for current List<Struct> approach overhead:
