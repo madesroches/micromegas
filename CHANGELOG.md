@@ -3,16 +3,29 @@
 This file documents the historical progress of the Micromegas project. For current focus, please see the main [README.md](./README.md).
 
 ## [Unreleased]
- * **Data Processing & Performance:**
-   * Dictionary encoding support with properties UDFs (`properties_to_dict`, `properties_to_array`, `properties_length`) (#506, #507, #508)
+ * Working on aggregate log views for enhanced stability monitoring
+ * Planning improvements to log aggregation and health reporting systems
+
+## September 2025 - v0.13.0
+ * Released [version 0.13.0](https://crates.io/crates/micromegas)
+ * **Performance & Storage Optimizations:**
+   * Dictionary encoding for properties columns with comprehensive UDF support (#506, #507, #508, #510, #511)
+   * Properties to JSONB UDF for efficient storage and querying (#515)
+   * Arrow string column accessor with full dictionary encoding support (#511)
+   * Production performance analysis of dictionary encoding effectiveness (#508)
    * Fixed parquet metadata race conditions with separation strategy (#502, #504)
    * Optimized lakehouse partition queries by removing unnecessary file_metadata fetches (#499)
    * Scalability improvements for high-volume environments (#497, #498)
+ * **Schema Evolution & Admin Features:**
+   * Incompatible partition retirement feature for schema evolution (#512)
+   * Enhanced error logging in CompletionTrackedStream (#503)
+   * Improved PostgreSQL container management in development environment (#500)
  * **Monitoring & Analytics:**
    * Added `log_stats` SQL aggregation view for log analysis by severity and service (#495, #505)
-   * Refactored lakehouse views to use `generate_process_jit_partitions` (#493)
- * Working on aggregate log views for enhanced stability monitoring
- * Planning improvements to log aggregation and health reporting systems
+   * Enhanced documentation with log_stats view in schema reference
+ * **Code Quality & Development:**
+   * Organized project documentation and completed task archival (#513, #514, #517)
+   * Dictionary encoding analysis archived due to Parquet limitations (#516)
 
 ## September 2025
  * Released [version 0.12.0](https://crates.io/crates/micromegas)
