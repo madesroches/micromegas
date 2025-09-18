@@ -50,9 +50,15 @@ fn convert_properties_list_to_jsonb(properties: ArrayRef) -> anyhow::Result<Vec<
         .with_context(|| "getting value field")?;
 
     let mut map = BTreeMap::new();
+    let key_column = properties.column(key_index).as_string::<i32>();
+    let value_column = properties.column(value_index).as_string::<i32>();
+
     for i in 0..properties.len() {
-        let key = properties.column(key_index).as_string::<i32>().value(i);
-        let value = properties.column(value_index).as_string::<i32>().value(i);
+        if key_column.is_null(i) || value_column.is_null(i) {
+            continue; // Skip null entries
+        }
+        let key = key_column.value(i);
+        let value = value_column.value(i);
         map.insert(key.to_string(), Value::String(Cow::Borrowed(value)));
     }
 
