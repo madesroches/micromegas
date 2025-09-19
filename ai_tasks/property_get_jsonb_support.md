@@ -94,31 +94,88 @@ Currently, properties are stored as `List<Struct<key: String, value: String>>` a
 ## Migration Path
 
 This change enables a gradual migration:
-1. **Phase 1**: property_get supports both formats (this task)
+1. **Phase 1**: property_get supports both formats ✅ **COMPLETED**
    - List<Struct> (current format)
    - Dictionary<Int32, Binary> (new JSONB format)
+   - Dictionary<Int32, List<Struct>> (DataFusion dictionary-encoded current format)
+   - Binary (non-dictionary JSONB for completeness)
 2. **Phase 2**: New data written as Dictionary<Int32, Binary>, old data remains as List<Struct>
 3. **Phase 3**: Background migration of old data from List<Struct> to Dictionary<Int32, Binary>
 4. **Phase 4**: Deprecate List<Struct> format support
 
 ## Success Criteria
 
-1. property_get successfully extracts values from JSONB columns
-2. All existing tests pass (backward compatibility)
-3. New tests for JSONB functionality pass
-4. Performance is comparable or better than List<Struct> approach
-5. Dictionary encoding is preserved for efficient storage
+1. ✅ property_get successfully extracts values from JSONB columns
+2. ✅ All existing tests pass (backward compatibility)
+3. ✅ New tests for JSONB functionality pass
+4. ⏳ Performance is comparable or better than List<Struct> approach (benchmarks pending)
+5. ✅ Dictionary encoding is preserved for efficient storage
 
 ## Implementation Checklist
 
-- [ ] Extend property_get to detect Dictionary<Int32, Binary> input type
-- [ ] Implement JSONB value extraction logic using RawJsonb
-- [ ] Handle Dictionary<Int32, Binary> as primary format
-- [ ] Support non-dictionary Binary for completeness
-- [ ] Add comprehensive unit tests for all formats
-- [ ] Verify backward compatibility with existing formats
+- [x] Extend property_get to detect Dictionary<Int32, Binary> input type
+- [x] Implement JSONB value extraction logic using RawJsonb
+- [x] Handle Dictionary<Int32, Binary> as primary format
+- [x] Support non-dictionary Binary for completeness
+- [x] Add comprehensive unit tests for all formats
+- [x] Verify backward compatibility with existing formats
 - [ ] Run performance benchmarks comparing formats
 - [ ] Update documentation
+
+## Current Implementation Status ✅ COMPLETED
+
+**Commit:** `6b567892` - feat: enable property_get UDF to access JSONB columns
+
+### ✅ What Was Implemented:
+
+1. **JSONB Type Detection**: Extended `invoke_with_args()` to handle:
+   - `DataType::Binary` - non-dictionary JSONB arrays
+   - `DataType::Dictionary(_, DataType::Binary)` - dictionary-encoded JSONB (primary new format)
+   - Maintained existing support for List<Struct> formats
+
+2. **JSONB Extraction Function**: Created `extract_from_jsonb()` that:
+   - Uses `RawJsonb::get_by_name()` for property extraction
+   - Properly handles string unescaping via `as_str()` method
+   - Falls back to JSON representation for non-string values
+   - Returns `Option<String>` with proper NULL semantics
+
+3. **Dictionary Encoding Support**: Full support for `Dictionary<Int32, Binary>`:
+   - Extracts JSONB from dictionary values array
+   - Preserves dictionary encoding benefits in output
+   - Handles null dictionary entries correctly
+
+4. **Comprehensive Test Coverage** (10 tests total):
+   - **Binary JSONB**: Direct binary array access
+   - **Dictionary-encoded JSONB**: Dictionary<Int32, Binary> format
+   - **Missing properties**: Returns SQL NULL (not string "null")
+   - **Null JSONB**: Handles null binary entries
+   - **Escaped strings**: Validates proper unescaping of quotes, newlines, tabs, unicode
+   - **NULL vs "null"**: Distinguishes missing properties (SQL NULL) from JSON null values (string "null")
+   - **Backward compatibility**: All existing List<Struct> tests pass
+
+### ✅ Key Technical Achievements:
+
+- **Proper String Handling**: Fixed initial quote-stripping approach to use `RawJsonb.as_str()` for correct JSON string unescaping
+- **NULL Semantics**: Correctly handles distinction between missing properties and explicit JSON null values
+- **Performance**: Maintains dictionary encoding throughout the pipeline for memory efficiency
+- **Backward Compatibility**: 100% compatible with existing List<Struct> and Dictionary<Int32, List<Struct>> formats
+
+### ✅ Test Results:
+```
+running 10 tests
+test test_property_get_returns_dictionary ... ok
+test test_property_get_null_vs_missing_jsonb_properties ... ok
+test test_property_get_with_binary_jsonb ... ok
+test test_property_get_with_missing_jsonb_property ... ok
+test test_property_get_with_escaped_jsonb_strings ... ok
+test test_property_get_with_dictionary_encoded_jsonb ... ok
+test test_property_get_with_nulls ... ok
+test test_property_get_with_repeated_values ... ok
+test test_property_get_with_null_jsonb ... ok
+test test_property_get_return_type ... ok
+
+test result: ok. 10 passed; 0 failed
+```
 
 ## Notes
 
