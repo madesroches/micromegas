@@ -1,6 +1,6 @@
 use datafusion::arrow::array::{
-    Array, AsArray, DictionaryArray, GenericListArray, Int32Array, ListBuilder, StringBuilder,
-    StructArray, StructBuilder,
+    Array, AsArray, DictionaryArray, GenericBinaryArray, GenericListArray, Int32Array, ListBuilder,
+    StringBuilder, StructArray, StructBuilder,
 };
 use datafusion::arrow::datatypes::{DataType, Field, Fields, Int32Type};
 use datafusion::common::{Result, internal_err};
@@ -8,6 +8,7 @@ use datafusion::error::DataFusionError;
 use datafusion::logical_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
+use jsonb::RawJsonb;
 use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -205,6 +206,32 @@ pub fn build_dictionary_from_properties(
     builder.finish()
 }
 
+fn count_jsonb_properties(jsonb_bytes: &[u8]) -> Result<i32> {
+    let jsonb = RawJsonb::new(jsonb_bytes);
+
+    // Get object keys and count them using array_length
+    match jsonb.object_keys() {
+        Ok(Some(keys_array)) => {
+            // It's an object, get the array length of the keys
+            let keys_raw = keys_array.as_raw();
+            match keys_raw.array_length() {
+                Ok(Some(len)) => Ok(len as i32),
+                Ok(None) => Ok(0), // Empty array
+                Err(e) => Err(DataFusionError::Internal(format!(
+                    "Failed to get keys array length: {e:?}"
+                ))),
+            }
+        }
+        Ok(None) => {
+            // Not an object (array, scalar, null), return 0
+            Ok(0)
+        }
+        Err(e) => Err(DataFusionError::Internal(format!(
+            "Failed to count JSONB properties: {e:?}"
+        ))),
+    }
+}
+
 // Helper UDF to extract properties array from dictionary for use with standard functions
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct PropertiesToArray {
@@ -351,6 +378,33 @@ impl ScalarUDFImpl for PropertiesLength {
                         let length_array = Int32Array::from(lengths);
                         Ok(ColumnarValue::Array(Arc::new(length_array)))
                     }
+                    DataType::Binary => {
+                        // Handle JSONB binary array
+                        let binary_array = array
+                            .as_any()
+                            .downcast_ref::<GenericBinaryArray<i32>>()
+                            .ok_or_else(|| {
+                                DataFusionError::Internal(
+                                    "properties_length: failed to cast to binary array".to_string(),
+                                )
+                            })?;
+
+                        let mut lengths = Vec::with_capacity(binary_array.len());
+                        for i in 0..binary_array.len() {
+                            if binary_array.is_null(i) {
+                                lengths.push(None);
+                            } else {
+                                let jsonb_bytes = binary_array.value(i);
+                                match count_jsonb_properties(jsonb_bytes) {
+                                    Ok(len) => lengths.push(Some(len)),
+                                    Err(_) => lengths.push(None), // Error counting, treat as null
+                                }
+                            }
+                        }
+
+                        let length_array = Int32Array::from(lengths);
+                        Ok(ColumnarValue::Array(Arc::new(length_array)))
+                    }
                     DataType::Dictionary(_, value_type) => {
                         // Handle dictionary array
                         match value_type.as_ref() {
@@ -408,13 +462,70 @@ impl ScalarUDFImpl for PropertiesLength {
                                 let length_array = Int32Array::from(lengths);
                                 Ok(ColumnarValue::Array(Arc::new(length_array)))
                             }
+                            DataType::Binary => {
+                                // Handle dictionary-encoded JSONB (primary format)
+                                let dict_array = array
+                                    .as_any()
+                                    .downcast_ref::<DictionaryArray<Int32Type>>()
+                                    .ok_or_else(|| {
+                                        DataFusionError::Internal(
+                                            "properties_length: failed to cast to dictionary array"
+                                                .to_string(),
+                                        )
+                                    })?;
+
+                                let values = dict_array.values();
+                                let binary_values = values
+                                    .as_any()
+                                    .downcast_ref::<GenericBinaryArray<i32>>()
+                                    .ok_or_else(|| {
+                                        DataFusionError::Internal(
+                                            "properties_length: dictionary values are not a binary array".to_string(),
+                                        )
+                                    })?;
+
+                                // Pre-compute lengths for each unique JSONB value in the dictionary
+                                let mut dict_lengths = Vec::with_capacity(binary_values.len());
+                                for i in 0..binary_values.len() {
+                                    if binary_values.is_null(i) {
+                                        dict_lengths.push(None);
+                                    } else {
+                                        let jsonb_bytes = binary_values.value(i);
+                                        match count_jsonb_properties(jsonb_bytes) {
+                                            Ok(len) => dict_lengths.push(Some(len)),
+                                            Err(_) => dict_lengths.push(None), // Error counting, treat as null
+                                        }
+                                    }
+                                }
+
+                                // Map dictionary keys to lengths
+                                let keys = dict_array.keys();
+                                let mut lengths = Vec::with_capacity(keys.len());
+                                for i in 0..keys.len() {
+                                    if keys.is_null(i) {
+                                        lengths.push(None);
+                                    } else {
+                                        let key_index = keys.value(i) as usize;
+                                        if key_index < dict_lengths.len() {
+                                            lengths.push(dict_lengths[key_index]);
+                                        } else {
+                                            return internal_err!(
+                                                "Dictionary key index out of bounds"
+                                            );
+                                        }
+                                    }
+                                }
+
+                                let length_array = Int32Array::from(lengths);
+                                Ok(ColumnarValue::Array(Arc::new(length_array)))
+                            }
                             _ => internal_err!(
-                                "properties_length: unsupported dictionary value type"
+                                "properties_length: unsupported dictionary value type, expected List or Binary"
                             ),
                         }
                     }
                     _ => internal_err!(
-                        "properties_length: unsupported input type, expected List or Dictionary<Int32, List>"
+                        "properties_length: unsupported input type, expected List, Binary, Dictionary<Int32, List>, or Dictionary<Int32, Binary>"
                     ),
                 }
             }
