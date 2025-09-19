@@ -1,8 +1,10 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use datafusion::arrow::array::{
-    Array, Int32Array, Int64Array, ListArray, RecordBatch, TimestampNanosecondArray,
+    Array, DictionaryArray, Int32Array, Int64Array, ListArray, RecordBatch,
+    TimestampNanosecondArray,
 };
+use datafusion::arrow::datatypes::{DataType, Int32Type};
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_telemetry::{
     property::Property, stream_info::StreamInfo, types::block::BlockMetadata,
@@ -20,6 +22,7 @@ use crate::{
         partition_cache::LivePartitionProvider, query::make_session_context,
         view_factory::ViewFactory,
     },
+    properties::utils::extract_properties_from_dict_column,
     time::TimeRange,
 };
 use datafusion::execution::runtime_env::RuntimeEnv;
@@ -201,7 +204,6 @@ pub async fn find_process_with_latest_timing(
     let last_block_end_time_column: &TimestampNanosecondArray =
         typed_column_by_name(batch, "last_block_end_time")?;
     let parent_process_id_column = string_column_by_name(batch, "parent_process_id")?;
-    let properties_column: &ListArray = typed_column_by_name(batch, "properties")?;
 
     let parent_process_id = if parent_process_id_column.is_null(0) {
         None
@@ -209,11 +211,52 @@ pub async fn find_process_with_latest_timing(
         parse_optional_uuid(parent_process_id_column.value(0))?
     };
 
+    // Handle properties column based on its data type
+    let properties_column = batch
+        .column_by_name("properties")
+        .ok_or_else(|| anyhow::anyhow!("properties column not found"))?;
+
     let properties = if properties_column.is_null(0) {
         Default::default()
     } else {
-        let properties_list = read_property_list(properties_column.value(0))?;
-        micromegas_telemetry::property::into_hashmap(properties_list)
+        match properties_column.data_type() {
+            DataType::List(_) => {
+                // Legacy format: List<Struct<key, value>>
+                let list_column: &ListArray = properties_column
+                    .as_any()
+                    .downcast_ref::<ListArray>()
+                    .ok_or_else(|| anyhow::anyhow!("failed to cast properties as ListArray"))?;
+                let properties_list = read_property_list(list_column.value(0))?;
+                micromegas_telemetry::property::into_hashmap(properties_list)
+            }
+            DataType::Dictionary(_, value_type) => {
+                // New format: Dictionary<Int32, Binary> (JSONB)
+                match value_type.as_ref() {
+                    DataType::Binary => {
+                        let dict_array: &DictionaryArray<Int32Type> = properties_column
+                            .as_any()
+                            .downcast_ref::<DictionaryArray<Int32Type>>()
+                            .ok_or_else(|| {
+                                anyhow::anyhow!("failed to cast properties as DictionaryArray")
+                            })?;
+
+                        extract_properties_from_dict_column(dict_array, 0)?
+                    }
+                    _ => {
+                        anyhow::bail!(
+                            "unsupported dictionary value type for properties: {:?}",
+                            value_type
+                        );
+                    }
+                }
+            }
+            _ => {
+                anyhow::bail!(
+                    "unsupported properties column type: {:?}",
+                    properties_column.data_type()
+                );
+            }
+        }
     };
 
     let process_info = ProcessInfo {

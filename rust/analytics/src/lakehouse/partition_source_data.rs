@@ -3,7 +3,7 @@ use super::partition_cache::PartitionCache;
 use crate::dfext::{
     string_column_accessor::string_column_by_name, typed_column::typed_column_by_name,
 };
-use crate::properties::utils::jsonb_to_property_map;
+use crate::properties::utils::extract_properties_from_dict_column;
 use crate::time::TimeRange;
 use crate::{
     dfext::typed_column::typed_column,
@@ -16,8 +16,8 @@ use chrono::DateTime;
 use datafusion::functions_aggregate::{count::count_all, expr_fn::sum, min_max::max};
 use datafusion::{
     arrow::array::{
-        Array, AsArray, BinaryArray, DictionaryArray, GenericListArray, Int32Array, Int64Array,
-        StringArray, TimestampNanosecondArray,
+        Array, BinaryArray, DictionaryArray, GenericListArray, Int32Array, Int64Array, StringArray,
+        TimestampNanosecondArray,
     },
     execution::runtime_env::RuntimeEnv,
     prelude::*,
@@ -26,27 +26,9 @@ use futures::{StreamExt, stream::BoxStream};
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_telemetry::{stream_info::StreamInfo, types::block::BlockMetadata};
 use micromegas_tracing::process_info::ProcessInfo;
-use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 use uuid::Uuid;
-
-/// Extract properties from a dictionary-encoded JSONB column at the given row index.
-/// Returns an empty HashMap if the column value is null, otherwise deserializes the JSONB.
-fn extract_properties_from_dict_column(
-    column: &DictionaryArray<datafusion::arrow::datatypes::Int32Type>,
-    row_index: usize,
-) -> Result<HashMap<String, String>> {
-    if column.is_null(row_index) {
-        Ok(HashMap::new())
-    } else {
-        let key_index = column.keys().value(row_index) as usize;
-        let values_array = column.values();
-        let binary_array = values_array.as_binary::<i32>();
-        let jsonb_bytes = binary_array.value(key_index);
-        jsonb_to_property_map(jsonb_bytes)
-    }
-}
 
 /// Represents a single block of source data for a partition.
 #[derive(Debug)]
