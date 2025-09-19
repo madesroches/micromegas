@@ -18,6 +18,7 @@ view_instance(view_name, identifier)
 ```
 
 **Parameters:**
+
 - `view_name` (`Utf8`): Name of the view ('log_entries', 'measures', 'thread_spans', 'async_events')
 
 - `identifier` (`Utf8`): Process ID (for most views) or Stream ID (for thread_spans)
@@ -82,6 +83,7 @@ SELECT * FROM retire_partitions(view_set_name, view_instance_id, begin_insert_ti
 ```
 
 **Parameters:**
+
 - `view_set_name` (`Utf8`): Name of the view set
 
 - `view_instance_id` (`Utf8`): Instance identifier
@@ -115,6 +117,7 @@ SELECT * FROM materialize_partitions(view_name, begin_insert_time, end_insert_ti
 ```
 
 **Parameters:**
+
 - `view_name` (`Utf8`): Name of the view to materialize
 
 - `begin_insert_time` (`Timestamp(Nanosecond)`): Start time for materialization
@@ -182,6 +185,7 @@ SELECT retire_partition_by_file(file_path) as result
 ```
 
 **Parameters:**
+
 - `file_path` (`Utf8`): Exact file path of the partition to retire
 
 **Returns:** `Utf8` - Result message indicating success or failure
@@ -219,6 +223,7 @@ jsonb_parse(json_string)
 ```
 
 **Parameters:**
+
 - `json_string` (`Utf8`): JSON string to parse
 
 **Returns:** `Binary` - Parsed JSONB data
@@ -240,6 +245,7 @@ jsonb_get(jsonb, key)
 ```
 
 **Parameters:**
+
 - `jsonb` (`Binary`): JSONB object
 
 - `key` (`Utf8`): Key name to extract
@@ -263,6 +269,7 @@ jsonb_format_json(jsonb)
 ```
 
 **Parameters:**
+
 - `jsonb` (`Binary`): JSONB value to format
 
 **Returns:** `Utf8` - JSON string representation
@@ -284,6 +291,7 @@ jsonb_as_string(jsonb)
 ```
 
 **Parameters:**
+
 - `jsonb` (`Binary`): JSONB value to convert
 
 **Returns:** `Utf8` - String value or NULL if not a string
@@ -305,6 +313,7 @@ jsonb_as_f64(jsonb)
 ```
 
 **Parameters:**
+
 - `jsonb` (`Binary`): JSONB value to convert
 
 **Returns:** `Float64` - Numeric value or NULL if not a number
@@ -326,6 +335,7 @@ jsonb_as_i64(jsonb)
 ```
 
 **Parameters:**
+
 - `jsonb` (`Binary`): JSONB value to convert
 
 **Returns:** `Int64` - Integer value or NULL if not an integer
@@ -349,6 +359,7 @@ get_payload(process_id, stream_id, block_id)
 ```
 
 **Parameters:**
+
 - `process_id` (`Utf8`): Process identifier
 
 - `stream_id` (`Utf8`): Stream identifier
@@ -374,7 +385,7 @@ Micromegas provides specialized functions for working with property data, includ
 
 ##### `property_get(properties, key)`
 
-Extracts a value from a properties map with support for multiple storage formats. **High-performance** function optimized for JSONB property access.
+Extracts a value from a properties map with support for multiple storage formats.
 
 **Syntax:**
 ```sql
@@ -382,14 +393,15 @@ property_get(properties, key)
 ```
 
 **Parameters:**
-- `properties` (Multiple formats supported): Properties data in any of these formats:
 
-  - `List<Struct<key, value>>` - Legacy format
-  - `Dictionary<Int32, Binary>` - JSONB format (optimized)
-  - `Dictionary<Int32, List<Struct>>` - Dictionary-encoded legacy
-  - `Binary` - Non-dictionary JSONB
+ - `properties` (Multiple formats supported): Properties data in any of these formats:
 
-- `key` (`Utf8`): Property key to extract
+    * `List<Struct<key, value>>` - Legacy format
+    * `Dictionary<Int32, Binary>` - JSONB format (optimized)
+    * `Dictionary<Int32, List<Struct>>` - Dictionary-encoded legacy
+    * `Binary` - Non-dictionary JSONB
+   
+ - `key` (`Utf8`): Property key to extract
 
 **Returns:** `Dictionary<Int32, Utf8>` - Property value or NULL if not found
 
@@ -405,17 +417,15 @@ SELECT time, name, value
 FROM measures
 WHERE property_get(properties, 'source') = 'system_monitor';
 
--- High-performance JSONB property access
+-- JSONB property access
 SELECT time, msg, property_get(properties_to_jsonb(properties), 'service') as service
 FROM log_entries
 WHERE property_get(properties_to_jsonb(properties), 'env') = 'production';
 ```
 
-**Migration Note:** For optimal performance, use `properties_to_jsonb()` to convert legacy properties to the JSONB format. The function transparently handles all property formats with full backward compatibility.
-
 ##### `properties_length(properties)`
 
-Returns the number of properties in a list, supporting regular and dictionary-encoded List<Struct> formats.
+Returns the number of properties in a properties map with support for multiple storage formats.
 
 **Syntax:**
 ```sql
@@ -423,10 +433,13 @@ properties_length(properties)
 ```
 
 **Parameters:**
-- `properties` (List formats only): Properties in any of these formats:
 
-  - `List<Struct<key, value>>` - Regular properties
-  - `Dictionary<Int32, List<Struct>>` - Dictionary-encoded properties
+ - `properties` (Multiple formats supported): Properties data in any of these formats:
+
+    * `List<Struct<key, value>>` - Legacy format
+    * `Dictionary<Int32, Binary>` - JSONB format (optimized)
+    * `Dictionary<Int32, List<Struct>>` - Dictionary-encoded legacy
+    * `Binary` - Non-dictionary JSONB
 
 **Returns:** `Int32` - Number of properties
 
@@ -439,9 +452,12 @@ FROM measures;
 -- Works with dictionary-encoded properties
 SELECT properties_length(properties_to_dict(properties)) as prop_count
 FROM measures;
-```
 
-**Note:** This function only works with List<Struct> formats. For JSONB properties, first convert them using `properties_to_array()` or use JSON functions to determine object size.
+-- JSONB property counting
+SELECT properties_length(properties_to_jsonb(properties)) as prop_count
+FROM measures;
+
+```
 
 ##### `properties_to_dict(properties)`
 
@@ -453,6 +469,7 @@ properties_to_dict(properties)
 ```
 
 **Parameters:**
+
 - `properties` (`List<Struct<key: Utf8, value: Utf8>>`): Properties list to encode
 
 **Returns:** `Dictionary<Int32, List<Struct<key: Utf8, value: Utf8>>>` - Dictionary-encoded properties
@@ -472,7 +489,7 @@ FROM measures;
 
 ##### `properties_to_jsonb(properties)`
 
-Converts a properties list to binary JSONB format for efficient storage and querying.
+Converts a properties list to binary JSONB format with dictionary encoding for efficient storage and querying.
 
 **Syntax:**
 ```sql
@@ -480,12 +497,15 @@ properties_to_jsonb(properties)
 ```
 
 **Parameters:**
-- `properties` (Multiple formats supported): Properties in any of these formats:
 
-  - `List<Struct<key: Utf8, value: Utf8>>` - Regular properties list
-  - `Dictionary<Int32, List<Struct>>` - Dictionary-encoded properties
+ - `properties` (Multiple formats supported): Properties in any of these formats:
 
-**Returns:** `Binary` - JSONB object containing the properties as key-value pairs
+    * `List<Struct<key: Utf8, value: Utf8>>` - Regular properties list
+    * `Dictionary<Int32, List<Struct>>` - Dictionary-encoded properties
+    * `Binary` - Non-dictionary JSONB (converted to dictionary format)
+    * `Dictionary<Int32, Binary>` - JSONB format (pass-through)
+
+**Returns:** `Dictionary<Int32, Binary>` - Dictionary-encoded JSONB object containing the properties as key-value pairs
 
 **Examples:**
 ```sql
@@ -493,7 +513,7 @@ properties_to_jsonb(properties)
 SELECT properties_to_jsonb(properties) as jsonb_props
 FROM log_entries;
 
--- Use with JSONB functions to extract specific properties
+-- Use with other JSONB functions
 SELECT jsonb_get(properties_to_jsonb(properties), 'hostname') as hostname
 FROM log_entries;
 
@@ -502,7 +522,7 @@ SELECT properties_to_jsonb(properties_to_dict(properties)) as jsonb_props
 FROM measures;
 ```
 
-**Note:** This function handles both regular List and Dictionary-encoded properties transparently. Compatible with all JSONB functions for property extraction and manipulation.
+**Performance Note:** This function returns `Dictionary<Int32, Binary>` format for optimal memory usage with Arrow's built-in dictionary encoding.
 
 ##### `properties_to_array(dict_properties)`
 
@@ -514,6 +534,7 @@ properties_to_array(dict_properties)
 ```
 
 **Parameters:**
+
 - `dict_properties` (`Dictionary<Int32, List<Struct>>`): Dictionary-encoded properties
 
 **Returns:** `List<Struct<key: Utf8, value: Utf8>>` - Regular properties array
@@ -543,6 +564,7 @@ make_histogram(start, end, bins, values)
 ```
 
 **Parameters:**
+
 - `start` (`Float64`): Histogram minimum value
 
 - `end` (`Float64`): Histogram maximum value
@@ -571,6 +593,7 @@ sum_histograms(histogram_column)
 ```
 
 **Parameters:**
+
 - `histogram_column` (Histogram): Column containing histogram values
 
 **Returns:** Combined histogram with summed bins
@@ -593,6 +616,7 @@ quantile_from_histogram(histogram, quantile)
 ```
 
 **Parameters:**
+
 - `histogram` (Histogram): Histogram to analyze
 
 - `quantile` (`Float64`): Quantile to estimate (0.0 to 1.0)
@@ -620,6 +644,7 @@ variance_from_histogram(histogram)
 ```
 
 **Parameters:**
+
 - `histogram` (Histogram): Histogram to analyze
 
 **Returns:** `Float64` - Variance of the histogram data
@@ -641,6 +666,7 @@ count_from_histogram(histogram)
 ```
 
 **Parameters:**
+
 - `histogram` (Histogram): Histogram to analyze
 
 **Returns:** `UInt64` - Total number of values in the histogram
@@ -662,6 +688,7 @@ sum_from_histogram(histogram)
 ```
 
 **Parameters:**
+
 - `histogram` (Histogram): Histogram to analyze
 
 **Returns:** `Float64` - Sum of all values in the histogram
