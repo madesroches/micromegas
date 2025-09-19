@@ -3,6 +3,7 @@ use datafusion::arrow::array::{
     StructBuilder,
 };
 use datafusion::arrow::datatypes::{DataType, Field, Fields, Int32Type};
+use datafusion::config::ConfigOptions;
 use datafusion::logical_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
 use jsonb::RawJsonb;
 use micromegas_analytics::properties::properties_to_jsonb_udf::PropertiesToJsonb;
@@ -57,6 +58,7 @@ fn create_scalar_args(input: ArrayRef, num_rows: usize) -> ScalarFunctionArgs {
         ))],
         return_field: Arc::new(Field::new("result", DataType::Binary, true)),
         number_rows: num_rows,
+        config_options: Arc::new(ConfigOptions::default()),
     }
 }
 
@@ -123,6 +125,7 @@ fn test_multiple_properties() {
         arg_fields: vec![],
         return_field: Arc::new(Field::new("result", DataType::Binary, true)),
         number_rows: 2,
+        config_options: Arc::new(ConfigOptions::default()),
     };
 
     let result = udf.invoke_with_args(args).unwrap();
@@ -162,6 +165,7 @@ fn test_special_characters() {
         arg_fields: vec![],
         return_field: Arc::new(Field::new("result", DataType::Binary, true)),
         number_rows: 1,
+        config_options: Arc::new(ConfigOptions::default()),
     };
 
     let result = udf.invoke_with_args(args).unwrap();
@@ -226,6 +230,7 @@ fn test_null_properties_list() {
         arg_fields: vec![],
         return_field: Arc::new(Field::new("result", DataType::Binary, true)),
         number_rows: 2,
+        config_options: Arc::new(ConfigOptions::default()),
     };
 
     let result = udf.invoke_with_args(args).unwrap();
@@ -274,6 +279,7 @@ fn test_dictionary_encoded_properties() {
         arg_fields: vec![],
         return_field: Arc::new(Field::new("result", DataType::Binary, true)),
         number_rows: 4,
+        config_options: Arc::new(ConfigOptions::default()),
     };
 
     let result = udf.invoke_with_args(args).unwrap();
@@ -361,6 +367,7 @@ fn test_dictionary_with_nulls() {
         arg_fields: vec![],
         return_field: Arc::new(Field::new("result", DataType::Binary, true)),
         number_rows: 3,
+        config_options: Arc::new(ConfigOptions::default()),
     };
 
     let result = udf.invoke_with_args(args).unwrap();

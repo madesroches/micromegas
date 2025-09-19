@@ -19,7 +19,7 @@ use std::sync::Arc;
 ///
 /// Converts List<Struct<key: String, value: String>> to Binary (JSONB).
 /// The output is a JSONB object in binary format like {"key1": "value1", "key2": "value2"}
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct PropertiesToJsonb {
     signature: Signature,
 }

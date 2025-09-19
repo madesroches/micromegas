@@ -12,7 +12,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 /// A scalar UDF that retrieves a property from a list of properties.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct PropertyGet {
     signature: Signature,
 }
