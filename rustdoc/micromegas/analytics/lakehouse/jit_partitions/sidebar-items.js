@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["generate_process_jit_partitions","generate_process_jit_partitions_segment","generate_stream_jit_partitions","generate_stream_jit_partitions_segment","is_jit_partition_up_to_date","write_partition_from_blocks"],"struct":["JitPartitionConfig"]};

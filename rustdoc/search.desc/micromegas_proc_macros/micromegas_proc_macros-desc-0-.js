@@ -1,0 +1,1 @@
+searchState.loadedDescShard("micromegas_proc_macros", 0, "Top-level procedural macros for micromegas\nmicromegas_main: Creates a tokio runtime with proper …")

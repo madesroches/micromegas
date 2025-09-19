@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["blocks_file_schema_hash","blocks_view_schema"],"struct":["BlocksView"]};
