@@ -1,10 +1,14 @@
 use crate::property_set::PropertySet;
 use anyhow::{Context, Result};
 use datafusion::arrow::array::{
-    Array, ArrayRef, AsArray, ListBuilder, StringBuilder, StructArray, StructBuilder,
+    Array, ArrayRef, AsArray, BinaryDictionaryBuilder, ListBuilder, StringBuilder, StructArray,
+    StructBuilder,
 };
+use datafusion::arrow::datatypes::Int32Type;
+use jsonb::Value;
 use micromegas_telemetry::property::Property;
-use std::collections::HashMap;
+use std::borrow::Cow;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 /// Reads a list of properties from an Arrow array.
@@ -78,5 +82,51 @@ pub fn add_property_set_to_builder(
         Ok(())
     })?;
     property_list_builder.append(true);
+    Ok(())
+}
+
+/// Adds a set of properties from a `HashMap` to a dictionary-encoded JSONB builder.
+///
+/// The properties are converted to JSONB format and added as a new entry in the dictionary builder.
+pub fn add_properties_to_jsonb_builder(
+    properties: &HashMap<String, String>,
+    jsonb_builder: &mut BinaryDictionaryBuilder<Int32Type>,
+) -> Result<()> {
+    // Convert HashMap to BTreeMap for consistent ordering
+    let btree_map: BTreeMap<String, Value> = properties
+        .iter()
+        .map(|(k, v)| (k.clone(), Value::String(Cow::Borrowed(v))))
+        .collect();
+
+    let jsonb_value = Value::Object(btree_map);
+    let mut jsonb_bytes = Vec::new();
+    jsonb_value.write_to_vec(&mut jsonb_bytes);
+
+    jsonb_builder.append_value(&jsonb_bytes);
+    Ok(())
+}
+
+/// Adds a set of properties from a `PropertySet` to a dictionary-encoded JSONB builder.
+///
+/// The properties are converted to JSONB format and added as a new entry in the dictionary builder.
+pub fn add_property_set_to_jsonb_builder(
+    properties: &PropertySet,
+    jsonb_builder: &mut BinaryDictionaryBuilder<Int32Type>,
+) -> Result<()> {
+    let mut btree_map = BTreeMap::new();
+
+    properties.for_each_property(|prop| {
+        btree_map.insert(
+            prop.key_str().to_string(),
+            Value::String(Cow::Owned(prop.value_str().to_string())),
+        );
+        Ok(())
+    })?;
+
+    let jsonb_value = Value::Object(btree_map);
+    let mut jsonb_bytes = Vec::new();
+    jsonb_value.write_to_vec(&mut jsonb_bytes);
+
+    jsonb_builder.append_value(&jsonb_bytes);
     Ok(())
 }
