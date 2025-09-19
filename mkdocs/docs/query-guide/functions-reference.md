@@ -415,7 +415,7 @@ WHERE property_get(properties_to_jsonb(properties), 'env') = 'production';
 
 ##### `properties_length(properties)`
 
-Returns the number of properties in a list, supporting both regular and dictionary-encoded formats.
+Returns the number of properties in a list, supporting regular and dictionary-encoded List<Struct> formats.
 
 **Syntax:**
 ```sql
@@ -423,7 +423,7 @@ properties_length(properties)
 ```
 
 **Parameters:**
-- `properties` (Multiple formats supported): Properties in any of these formats:
+- `properties` (List formats only): Properties in any of these formats:
 
   - `List<Struct<key, value>>` - Regular properties
   - `Dictionary<Int32, List<Struct>>` - Dictionary-encoded properties
@@ -441,7 +441,7 @@ SELECT properties_length(properties_to_dict(properties)) as prop_count
 FROM measures;
 ```
 
-**Note:** This function transparently handles both array and dictionary representations, providing better performance than using `array_length(properties_to_array(...))` for dictionary-encoded data.
+**Note:** This function only works with List<Struct> formats. For JSONB properties, first convert them using `properties_to_array()` or use JSON functions to determine object size.
 
 ##### `properties_to_dict(properties)`
 
