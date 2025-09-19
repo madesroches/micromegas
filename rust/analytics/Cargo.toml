@@ -38,3 +38,8 @@ micromegas-telemetry-sink.workspace = true
 pin-project.workspace = true
 rand.workspace = true
 serial_test = "3.2"
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "property_get"
+harness = false

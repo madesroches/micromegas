@@ -1,6 +1,8 @@
 use anyhow::Context;
 use datafusion::arrow::array::{Array, StringDictionaryBuilder};
-use datafusion::arrow::array::{ArrayRef, DictionaryArray, GenericListArray, StringArray};
+use datafusion::arrow::array::{
+    ArrayRef, DictionaryArray, GenericBinaryArray, GenericListArray, StringArray,
+};
 use datafusion::arrow::array::{AsArray, StructArray};
 use datafusion::arrow::datatypes::{DataType, Int32Type};
 use datafusion::common::{Result, internal_err};
@@ -8,6 +10,7 @@ use datafusion::error::DataFusionError;
 use datafusion::logical_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
+use jsonb::RawJsonb;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -49,6 +52,30 @@ fn find_property_in_list(properties: ArrayRef, name: &str) -> anyhow::Result<Opt
         }
     }
     Ok(None)
+}
+
+fn extract_from_jsonb(jsonb_bytes: &[u8], name: &str) -> anyhow::Result<Option<String>> {
+    let jsonb = RawJsonb::new(jsonb_bytes);
+    if let Some(value_jsonb) = jsonb
+        .get_by_name(name, true)
+        .with_context(|| "getting JSONB property by name")?
+    {
+        // The value_jsonb is an OwnedJsonb, convert it to RawJsonb to access its value
+        let raw_value = value_jsonb.as_raw();
+
+        // Try to get the value as a string (handles unescaping properly)
+        if let Some(str_value) = raw_value
+            .as_str()
+            .with_context(|| "extracting string value from JSONB")?
+        {
+            Ok(Some(str_value.to_string()))
+        } else {
+            // If it's not a string, convert it to JSON representation
+            Ok(Some(raw_value.to_string()))
+        }
+    } else {
+        Ok(None)
+    }
 }
 
 impl ScalarUDFImpl for PropertyGet {
@@ -106,9 +133,92 @@ impl ScalarUDFImpl for PropertyGet {
                 }
                 Ok(ColumnarValue::Array(Arc::new(dict_builder.finish())))
             }
+            DataType::Binary => {
+                // Handle non-dictionary JSONB binary array
+                let binary_array = args[0]
+                    .as_any()
+                    .downcast_ref::<GenericBinaryArray<i32>>()
+                    .ok_or_else(|| {
+                        DataFusionError::Internal("error casting to binary array".into())
+                    })?;
+
+                if binary_array.len() != names.len() {
+                    return internal_err!("arrays of different lengths in property_get()");
+                }
+
+                let mut dict_builder = StringDictionaryBuilder::<Int32Type>::new();
+                for i in 0..binary_array.len() {
+                    if binary_array.is_null(i) {
+                        dict_builder.append_null();
+                    } else {
+                        let jsonb_bytes = binary_array.value(i);
+                        let name = names.value(i);
+                        if let Some(value) = extract_from_jsonb(jsonb_bytes, name).map_err(|e| {
+                            DataFusionError::Internal(format!("JSONB extraction error: {e:?}"))
+                        })? {
+                            dict_builder.append_value(value);
+                        } else {
+                            dict_builder.append_null();
+                        }
+                    }
+                }
+                Ok(ColumnarValue::Array(Arc::new(dict_builder.finish())))
+            }
             DataType::Dictionary(_, value_type) => {
                 // Handle dictionary array
                 match value_type.as_ref() {
+                    DataType::Binary => {
+                        // Handle dictionary-encoded JSONB (new primary format)
+                        let dict_array = args[0]
+                            .as_any()
+                            .downcast_ref::<DictionaryArray<Int32Type>>()
+                            .ok_or_else(|| {
+                                DataFusionError::Internal("error casting dictionary array".into())
+                            })?;
+
+                        if dict_array.len() != names.len() {
+                            return internal_err!("arrays of different lengths in property_get()");
+                        }
+
+                        let values_array = dict_array.values();
+                        let binary_values = values_array
+                            .as_any()
+                            .downcast_ref::<GenericBinaryArray<i32>>()
+                            .ok_or_else(|| {
+                                DataFusionError::Internal(
+                                    "dictionary values are not a binary array".into(),
+                                )
+                            })?;
+
+                        let mut dict_builder = StringDictionaryBuilder::<Int32Type>::new();
+                        for i in 0..dict_array.len() {
+                            if dict_array.is_null(i) {
+                                dict_builder.append_null();
+                            } else {
+                                let key_index = dict_array.keys().value(i) as usize;
+                                if key_index < binary_values.len() {
+                                    let jsonb_bytes = binary_values.value(key_index);
+                                    let name = names.value(i);
+                                    if let Some(value) = extract_from_jsonb(jsonb_bytes, name)
+                                        .map_err(|e| {
+                                            DataFusionError::Internal(format!(
+                                                "JSONB extraction error: {e:?}"
+                                            ))
+                                        })?
+                                    {
+                                        dict_builder.append_value(value);
+                                    } else {
+                                        dict_builder.append_null();
+                                    }
+                                } else {
+                                    return internal_err!(
+                                        "Dictionary key index out of bounds in property_get"
+                                    );
+                                }
+                            }
+                        }
+                        Ok(ColumnarValue::Array(Arc::new(dict_builder.finish())))
+                    }
                     DataType::List(_) => {
                         let dict_array = args[0]
                             .as_any()
@@ -157,11 +267,13 @@ impl ScalarUDFImpl for PropertyGet {
                         }
                         Ok(ColumnarValue::Array(Arc::new(dict_builder.finish())))
                     }
-                    _ => internal_err!("property_get: unsupported dictionary value type"),
+                    _ => internal_err!(
+                        "property_get: unsupported dictionary value type, expected List or Binary"
+                    ),
                 }
             }
             _ => internal_err!(
-                "property_get: unsupported input type, expected List or Dictionary<Int32, List>"
+                "property_get: unsupported input type, expected List, Binary, Dictionary<Int32, List>, or Dictionary<Int32, Binary>"
             ),
         }
     }
