@@ -34,7 +34,7 @@ impl ::sqlx::encode::Encode<'_, ::sqlx::Postgres> for Property {
         buf: &mut ::sqlx::postgres::PgArgumentBuffer,
     ) -> std::result::Result<
         sqlx::encode::IsNull,
-        std::boxed::Box<(dyn std::error::Error + std::marker::Send + std::marker::Sync + 'static)>,
+        std::boxed::Box<dyn std::error::Error + std::marker::Send + std::marker::Sync + 'static>,
     > {
         let mut encoder = ::sqlx::postgres::types::PgRecordEncoder::new(buf);
         encoder.encode(self.key.as_str())?;

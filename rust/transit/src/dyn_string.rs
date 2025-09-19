@@ -72,7 +72,7 @@ pub fn read_advance_string(window: &mut &[u8]) -> Result<String> {
             StringCodec::Wide => {
                 //wide
                 let ptr = string_buffer.as_ptr().cast::<u16>();
-                if string_len_bytes % 2 != 0 {
+                if !string_len_bytes.is_multiple_of(2) {
                     anyhow::bail!("wrong utf-16 buffer size");
                 }
                 let wide_slice = std::ptr::slice_from_raw_parts(ptr, string_len_bytes as usize / 2);
