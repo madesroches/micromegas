@@ -19,6 +19,7 @@ view_instance(view_name, identifier)
 
 **Parameters:**
 - `view_name` (`Utf8`): Name of the view ('log_entries', 'measures', 'thread_spans', 'async_events')
+
 - `identifier` (`Utf8`): Process ID (for most views) or Stream ID (for thread_spans)
 
 **Returns:** Schema depends on the view type (see [Schema Reference](schema-reference.md))
@@ -82,8 +83,11 @@ SELECT * FROM retire_partitions(view_set_name, view_instance_id, begin_insert_ti
 
 **Parameters:**
 - `view_set_name` (`Utf8`): Name of the view set
+
 - `view_instance_id` (`Utf8`): Instance identifier
+
 - `begin_insert_time` (`Timestamp(Nanosecond)`): Start time for partition retirement
+
 - `end_insert_time` (`Timestamp(Nanosecond)`): End time for partition retirement
 
 **Returns:** Log stream table with operation progress and messages
@@ -112,8 +116,11 @@ SELECT * FROM materialize_partitions(view_name, begin_insert_time, end_insert_ti
 
 **Parameters:**
 - `view_name` (`Utf8`): Name of the view to materialize
+
 - `begin_insert_time` (`Timestamp(Nanosecond)`): Start time for materialization
-- `end_insert_time` (`Timestamp(Nanosecond)`): End time for materialization  
+
+- `end_insert_time` (`Timestamp(Nanosecond)`): End time for materialization
+
 - `partition_delta_seconds` (`Int64`): Partition time delta in seconds
 
 **Returns:** Log stream table with operation progress and messages
@@ -234,6 +241,7 @@ jsonb_get(jsonb, key)
 
 **Parameters:**
 - `jsonb` (`Binary`): JSONB object
+
 - `key` (`Utf8`): Key name to extract
 
 **Returns:** `Binary` - JSONB value or NULL if key not found
@@ -342,7 +350,9 @@ get_payload(process_id, stream_id, block_id)
 
 **Parameters:**
 - `process_id` (`Utf8`): Process identifier
-- `stream_id` (`Utf8`): Stream identifier  
+
+- `stream_id` (`Utf8`): Stream identifier
+
 - `block_id` (`Utf8`): Block identifier
 
 **Returns:** `Binary` - Raw block payload data
@@ -364,7 +374,7 @@ Micromegas provides specialized functions for working with property data, includ
 
 ##### `property_get(properties, key)`
 
-Extracts a value from a properties map.
+Extracts a value from a properties map with support for multiple storage formats. **High-performance** function optimized for JSONB property access.
 
 **Syntax:**
 ```sql
@@ -372,14 +382,20 @@ property_get(properties, key)
 ```
 
 **Parameters:**
-- `properties` (`List<Struct>`): Properties map field
+- `properties` (Multiple formats supported): Properties data in any of these formats:
+
+  - `List<Struct<key, value>>` - Legacy format
+  - `Dictionary<Int32, Binary>` - JSONB format (optimized)
+  - `Dictionary<Int32, List<Struct>>` - Dictionary-encoded legacy
+  - `Binary` - Non-dictionary JSONB
+
 - `key` (`Utf8`): Property key to extract
 
-**Returns:** `Utf8` - Property value or NULL if not found
+**Returns:** `Dictionary<Int32, Utf8>` - Property value or NULL if not found
 
 **Examples:**
 ```sql
--- Get thread name from process properties
+-- Get thread name from process properties (works with all formats)
 SELECT time, msg, property_get(process_properties, 'thread-name') as thread
 FROM log_entries
 WHERE property_get(process_properties, 'thread-name') IS NOT NULL;
@@ -388,7 +404,14 @@ WHERE property_get(process_properties, 'thread-name') IS NOT NULL;
 SELECT time, name, value
 FROM measures
 WHERE property_get(properties, 'source') = 'system_monitor';
+
+-- High-performance JSONB property access
+SELECT time, msg, property_get(properties_to_jsonb(properties), 'service') as service
+FROM log_entries
+WHERE property_get(properties_to_jsonb(properties), 'env') = 'production';
 ```
+
+**Migration Note:** For optimal performance, use `properties_to_jsonb()` to convert legacy properties to the JSONB format. The function transparently handles all property formats with full backward compatibility.
 
 ##### `properties_length(properties)`
 
@@ -400,7 +423,10 @@ properties_length(properties)
 ```
 
 **Parameters:**
-- `properties` (`List<Struct>` or `Dictionary<Int32, List<Struct>>`): Properties in either format
+- `properties` (Multiple formats supported): Properties in any of these formats:
+
+  - `List<Struct<key, value>>` - Regular properties
+  - `Dictionary<Int32, List<Struct>>` - Dictionary-encoded properties
 
 **Returns:** `Int32` - Number of properties
 
@@ -454,7 +480,10 @@ properties_to_jsonb(properties)
 ```
 
 **Parameters:**
-- `properties` (`List<Struct<key: Utf8, value: Utf8>>` or `Dictionary<Int32, List<Struct>>`): Properties list to convert
+- `properties` (Multiple formats supported): Properties in any of these formats:
+
+  - `List<Struct<key: Utf8, value: Utf8>>` - Regular properties list
+  - `Dictionary<Int32, List<Struct>>` - Dictionary-encoded properties
 
 **Returns:** `Binary` - JSONB object containing the properties as key-value pairs
 
@@ -515,8 +544,11 @@ make_histogram(start, end, bins, values)
 
 **Parameters:**
 - `start` (`Float64`): Histogram minimum value
-- `end` (`Float64`): Histogram maximum value  
+
+- `end` (`Float64`): Histogram maximum value
+
 - `bins` (`Int64`): Number of histogram bins
+
 - `values` (`Float64`): Column of numeric values to histogram
 
 **Returns:** Histogram structure with buckets and counts
@@ -562,6 +594,7 @@ quantile_from_histogram(histogram, quantile)
 
 **Parameters:**
 - `histogram` (Histogram): Histogram to analyze
+
 - `quantile` (`Float64`): Quantile to estimate (0.0 to 1.0)
 
 **Returns:** `Float64` - Estimated quantile value
@@ -688,6 +721,57 @@ SELECT time, level, msg, property_get(process_properties, 'thread-name') as thre
 FROM log_entries
 WHERE property_get(process_properties, 'thread-name') LIKE '%worker%'
 ORDER BY time DESC;
+```
+
+### High-Performance JSONB Property Access
+
+```sql
+-- Convert properties to JSONB for better performance
+SELECT
+    time,
+    msg,
+    property_get(properties_to_jsonb(properties), 'service') as service,
+    property_get(properties_to_jsonb(properties), 'version') as version
+FROM log_entries
+WHERE property_get(properties_to_jsonb(properties), 'env') = 'production'
+  AND time >= NOW() - INTERVAL '1 hour'
+ORDER BY time DESC;
+```
+
+```sql
+-- Efficient property filtering with JSONB
+WITH jsonb_logs AS (
+    SELECT
+        time,
+        level,
+        msg,
+        properties_to_jsonb(properties) as jsonb_props
+    FROM log_entries
+    WHERE time >= NOW() - INTERVAL '1 day'
+)
+SELECT
+    time,
+    level,
+    msg,
+    property_get(jsonb_props, 'service') as service,
+    property_get(jsonb_props, 'request_id') as request_id
+FROM jsonb_logs
+WHERE property_get(jsonb_props, 'error_code') IS NOT NULL
+ORDER BY time DESC;
+```
+
+```sql
+-- Property aggregation with optimal performance
+SELECT
+    property_get(properties_to_jsonb(properties), 'service') as service,
+    property_get(properties_to_jsonb(properties), 'env') as environment,
+    COUNT(*) as event_count,
+    COUNT(CASE WHEN level <= 2 THEN 1 END) as error_count
+FROM log_entries
+WHERE time >= NOW() - INTERVAL '1 hour'
+  AND property_get(properties_to_jsonb(properties), 'service') IS NOT NULL
+GROUP BY service, environment
+ORDER BY error_count DESC;
 ```
 
 ### JSON Data Processing
