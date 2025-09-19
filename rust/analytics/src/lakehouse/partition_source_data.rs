@@ -1,9 +1,9 @@
 use super::blocks_view::blocks_file_schema_hash;
 use super::partition_cache::PartitionCache;
-use crate::arrow_properties::read_property_list;
 use crate::dfext::{
     string_column_accessor::string_column_by_name, typed_column::typed_column_by_name,
 };
+use crate::properties::utils::extract_properties_from_dict_column;
 use crate::time::TimeRange;
 use crate::{
     dfext::typed_column::typed_column,
@@ -16,7 +16,7 @@ use chrono::DateTime;
 use datafusion::functions_aggregate::{count::count_all, expr_fn::sum, min_max::max};
 use datafusion::{
     arrow::array::{
-        Array, BinaryArray, GenericListArray, Int32Array, Int64Array, StringArray,
+        Array, BinaryArray, DictionaryArray, GenericListArray, Int32Array, Int64Array, StringArray,
         TimestampNanosecondArray,
     },
     execution::runtime_env::RuntimeEnv,
@@ -25,7 +25,7 @@ use datafusion::{
 use futures::{StreamExt, stream::BoxStream};
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_telemetry::{stream_info::StreamInfo, types::block::BlockMetadata};
-use micromegas_tracing::prelude::*;
+use micromegas_tracing::process_info::ProcessInfo;
 use std::fmt::Debug;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -138,7 +138,7 @@ impl PartitionBlocksSource for SourceDataBlocks {
                 let objects_metadata_column: &BinaryArray =
                     typed_column_by_name(&b, "streams.objects_metadata")?;
                 let stream_tags_column: &GenericListArray<i32> = typed_column_by_name(&b, "streams.tags")?;
-                let stream_properties_column: &GenericListArray<i32> =
+                let stream_properties_column: &DictionaryArray<datafusion::arrow::datatypes::Int32Type> =
                     typed_column_by_name(&b, "streams.properties")?;
 
                 let process_start_time_column: &TimestampNanosecondArray =
@@ -154,7 +154,7 @@ impl PartitionBlocksSource for SourceDataBlocks {
                 let process_distro_column = string_column_by_name(&b, "processes.distro")?;
                 let process_cpu_column = string_column_by_name(&b, "processes.cpu_brand")?;
                 let process_parent_column = string_column_by_name(&b, "processes.parent_process_id")?;
-                let process_properties_column: &GenericListArray<i32> =
+                let process_properties_column: &DictionaryArray<datafusion::arrow::datatypes::Int32Type> =
                     typed_column_by_name(&b, "processes.properties")?;
                 for ir in 0..b.num_rows() {
                     let block_insert_time = block_insert_time_column.value(ir);
@@ -185,7 +185,7 @@ impl PartitionBlocksSource for SourceDataBlocks {
                         .map(|item| String::from(item.unwrap_or_default()))
                         .collect();
 
-                    let stream_properties = read_property_list(stream_properties_column.value(ir))?;
+                    let stream_properties = extract_properties_from_dict_column(stream_properties_column, ir)?;
                     let stream = StreamInfo {
                         process_id,
                         stream_id,
@@ -194,9 +194,9 @@ impl PartitionBlocksSource for SourceDataBlocks {
                         objects_metadata: ciborium::from_reader(objects_metadata)
                             .with_context(|| "decoding objects_metadata")?,
                         tags: stream_tags,
-                        properties: micromegas_telemetry::property::into_hashmap(stream_properties),
+                        properties: stream_properties,
                     };
-                    let process_properties = read_property_list(process_properties_column.value(ir))?;
+                    let process_properties = extract_properties_from_dict_column(process_properties_column, ir)?;
                     let parent_value = process_parent_column.value(ir);
                     let parent_process_id = if parent_value.is_empty() {
                         None
@@ -215,7 +215,7 @@ impl PartitionBlocksSource for SourceDataBlocks {
                         start_time: DateTime::from_timestamp_nanos(process_start_time_column.value(ir)),
                         start_ticks: process_start_ticks_column.value(ir),
                         parent_process_id,
-                        properties: micromegas_telemetry::property::into_hashmap(process_properties),
+                        properties: process_properties,
                     };
                     yield Arc::new(PartitionSourceBlock {
                         block,

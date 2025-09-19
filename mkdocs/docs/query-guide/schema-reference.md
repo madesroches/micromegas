@@ -37,7 +37,7 @@ Contains metadata about processes that have sent telemetry data.
 | `start_ticks` | `UInt64` | Process start time in ticks |
 | `insert_time` | `Timestamp(Nanosecond)` | When the process data was first inserted |
 | `parent_process_id` | `Dictionary(Int16, Utf8)` | Parent process identifier |
-| `properties` | `Map` | Additional process metadata |
+| `properties` | `Dictionary(Int32, Binary)` | Additional process metadata (JSONB format) |
 | `last_update_time` | `Timestamp(Nanosecond)` | When the process data was last updated |
 | `last_block_end_ticks` | `Int64` | Tick count when the last block ended |
 | `last_block_end_time` | `Timestamp(Nanosecond)` | Timestamp when the last block ended |
@@ -64,10 +64,10 @@ Contains information about data streams within processes.
 |-------|------|-------------|
 | `stream_id` | `Dictionary(Int16, Utf8)` | Unique identifier for the stream |
 | `process_id` | `Dictionary(Int16, Utf8)` | Reference to the parent process |
-| `dependencies_metadata` | Various | Stream dependency metadata |
-| `objects_metadata` | Various | Stream object metadata |
-| `tags` | Various | Stream tags |
-| `properties` | Various | Stream properties |
+| `dependencies_metadata` | `Binary` | Stream dependency metadata |
+| `objects_metadata` | `Binary` | Stream object metadata |
+| `tags` | `List<Utf8>` | Stream tags |
+| `properties` | `Dictionary(Int32, Binary)` | Stream properties (JSONB format) |
 | `insert_time` | `Timestamp(Nanosecond)` | When the stream data was first inserted |
 | `last_update_time` | `Timestamp(Nanosecond)` | When the stream data was last updated |
 
@@ -102,6 +102,16 @@ Core table containing telemetry block metadata with joined process and stream in
 | `payload_size` | `Int64` | Size of block payload |
 | `insert_time` | `Timestamp(Nanosecond)` | When block was inserted |
 
+**Joined Stream Fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `streams.dependencies_metadata` | `Binary` | Stream dependency metadata |
+| `streams.objects_metadata` | `Binary` | Stream object metadata |
+| `streams.tags` | `List<Utf8>` | Stream tags |
+| `streams.properties` | `Dictionary(Int32, Binary)` | Stream properties (JSONB format) |
+| `streams.insert_time` | `Timestamp(Nanosecond)` | When stream was inserted |
+
 **Joined Process Fields:**
 
 | Field | Type | Description |
@@ -115,6 +125,9 @@ Core table containing telemetry block metadata with joined process and stream in
 | `processes.computer` | `Utf8` | Computer/hostname |
 | `processes.distro` | `Utf8` | Operating system distribution |
 | `processes.cpu_brand` | `Utf8` | CPU brand information |
+| `processes.insert_time` | `Timestamp(Nanosecond)` | When process was inserted |
+| `processes.parent_process_id` | `Utf8` | Parent process identifier |
+| `processes.properties` | `Dictionary(Int32, Binary)` | Process properties (JSONB format) |
 
 **Example Queries:**
 ```sql
@@ -148,8 +161,8 @@ Text-based log entries with levels and structured data.
 | `target` | `Dictionary(Int16, Utf8)` | Module/target |
 | `level` | `Int32` | Log level (see [Log Levels](#log-levels)) |
 | `msg` | `Utf8` | Log message |
-| `properties` | `List<Struct>` | Log-specific properties |
-| `process_properties` | `List<Struct>` | Process-specific properties |
+| `properties` | `Dictionary(Int32, Binary)` | Log-specific properties (JSONB format) |
+| `process_properties` | `Dictionary(Int32, Binary)` | Process-specific properties (JSONB format) |
 
 #### Log Levels
 
@@ -262,8 +275,8 @@ Numerical measurements and counters.
 | `name` | `Dictionary(Int16, Utf8)` | Metric name |
 | `unit` | `Dictionary(Int16, Utf8)` | Measurement unit |
 | `value` | `Float64` | Metric value |
-| `properties` | `List<Struct>` | Metric-specific properties |
-| `process_properties` | `List<Struct>` | Process-specific properties |
+| `properties` | `Dictionary(Int32, Binary)` | Metric-specific properties (JSONB format) |
+| `process_properties` | `Dictionary(Int32, Binary)` | Process-specific properties (JSONB format) |
 
 **Example Queries:**
 ```sql
@@ -434,15 +447,17 @@ ORDER BY time;
 
 ### Properties
 
-Key-value pairs stored as `List<Struct>` with the following structure:
+Key-value pairs stored as dictionary-encoded JSONB with the following structure:
 
 ```sql
--- Properties structure
-List<Struct<
-    key: Utf8,
-    value: Utf8
->>
+-- Properties structure (optimized JSONB format)
+Dictionary(Int32, Binary)
 ```
+
+This format provides:
+- **Dictionary compression** - Repeated property sets stored once and referenced by index
+- **JSONB efficiency** - Native binary JSON format for fast property access
+- **Storage optimization** - Significant memory and storage savings over legacy formats
 
 **Common properties fields:**
 
@@ -451,11 +466,19 @@ List<Struct<
 
 **Querying properties:**
 ```sql
--- Access property values using property_get function
+-- Access property values using property_get function (works with all formats)
 SELECT property_get(process_properties, 'thread-name') as thread_name
 FROM log_entries
 WHERE property_get(process_properties, 'thread-name') IS NOT NULL;
+
+-- Count properties using properties_length
+SELECT properties_length(properties) as prop_count
+FROM log_entries
+WHERE properties_length(properties) > 0;
 ```
+
+**Legacy Support:**
+Micromegas maintains full backward compatibility. Existing queries using `property_get()` and `properties_length()` work unchanged with the new JSONB format.
 
 ### Dictionary Compression
 

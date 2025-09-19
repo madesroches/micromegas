@@ -12,7 +12,7 @@ def test_processes_query():
 def test_processes_properties_query():
     # Use a time range ending at least 10 seconds ago to avoid eventual consistency issues
     cutoff_time = now - datetime.timedelta(seconds=10)
-    sql = "select properties, property_get(properties, 'build-version') from processes WHERE array_length(properties) > 0 LIMIT 10;"
+    sql = "select properties, property_get(properties, 'build-version') from processes WHERE properties_length(properties) > 0 LIMIT 10;"
     processes = client.query(sql, begin, cutoff_time)
     print(processes)
 
@@ -38,11 +38,11 @@ def test_property_get_returns_dictionary():
 
     # Query using property_get to get build version
     sql = """
-    SELECT 
+    SELECT
         property_get(properties, 'build-version') as version,
         arrow_typeof(property_get(properties, 'build-version')) as version_type
-    FROM processes 
-    WHERE array_length(properties) > 0 
+    FROM processes
+    WHERE properties_length(properties) > 0
     LIMIT 10
     """
 
@@ -69,12 +69,12 @@ def test_property_get_returns_dictionary():
 
         # Compare memory efficiency by testing with multiple property gets
         memory_test_sql = """
-        SELECT 
+        SELECT
             property_get(properties, 'build-version') as version,
             property_get(properties, 'platform') as platform,
             property_get(properties, 'target') as target
-        FROM processes 
-        WHERE array_length(properties) > 0 
+        FROM processes
+        WHERE properties_length(properties) > 0
         LIMIT 100
         """
 

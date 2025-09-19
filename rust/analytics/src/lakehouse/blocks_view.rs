@@ -10,7 +10,7 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, TimeDelta, Utc};
 use datafusion::{
-    arrow::datatypes::{DataType, Field, Fields, Schema, TimeUnit},
+    arrow::datatypes::{DataType, Field, Schema, TimeUnit},
     execution::runtime_env::RuntimeEnv,
     logical_expr::{Expr, col},
     prelude::*,
@@ -185,14 +185,7 @@ pub fn blocks_view_schema() -> Schema {
         ),
         Field::new(
             "streams.properties",
-            DataType::List(Arc::new(Field::new(
-                "Property",
-                DataType::Struct(Fields::from(vec![
-                    Field::new("key", DataType::Utf8, false),
-                    Field::new("value", DataType::Utf8, false),
-                ])),
-                false,
-            ))),
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Binary)),
             false,
         ),
         Field::new(
@@ -221,14 +214,7 @@ pub fn blocks_view_schema() -> Schema {
         Field::new("processes.parent_process_id", DataType::Utf8, false),
         Field::new(
             "processes.properties",
-            DataType::List(Arc::new(Field::new(
-                "Property",
-                DataType::Struct(Fields::from(vec![
-                    Field::new("key", DataType::Utf8, false),
-                    Field::new("value", DataType::Utf8, false),
-                ])),
-                false,
-            ))),
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Binary)),
             false,
         ),
     ])
@@ -236,5 +222,5 @@ pub fn blocks_view_schema() -> Schema {
 
 /// Returns the file schema hash for the blocks view.
 pub fn blocks_file_schema_hash() -> Vec<u8> {
-    vec![1]
+    vec![2] // Bumped from vec![1] for JSONB migration
 }

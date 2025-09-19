@@ -291,11 +291,14 @@ pub async fn generate_process_jit_partitions_segment(
             let block_nb_objects = block.nb_objects as i64;
 
             // Build StreamInfo from the query results
-            use crate::arrow_properties::read_property_list;
             use crate::dfext::{
                 string_column_accessor::string_column_by_name, typed_column::typed_column_by_name,
             };
-            use datafusion::arrow::array::{BinaryArray, GenericListArray, StringArray};
+            use crate::properties::utils::extract_properties_from_dict_column;
+            use datafusion::arrow::array::{
+                BinaryArray, DictionaryArray, GenericListArray, StringArray,
+            };
+            use datafusion::arrow::datatypes::Int32Type;
             use uuid::Uuid;
 
             let stream_id_column = string_column_by_name(&rb, "stream_id")?;
@@ -306,7 +309,7 @@ pub async fn generate_process_jit_partitions_segment(
                 typed_column_by_name(&rb, "streams.objects_metadata")?;
             let stream_tags_column: &GenericListArray<i32> =
                 typed_column_by_name(&rb, "streams.tags")?;
-            let stream_properties_column: &GenericListArray<i32> =
+            let stream_properties_column: &DictionaryArray<Int32Type> =
                 typed_column_by_name(&rb, "streams.properties")?;
 
             let stream_id =
@@ -325,7 +328,8 @@ pub async fn generate_process_jit_partitions_segment(
                 .map(|item| String::from(item.unwrap_or_default()))
                 .collect();
 
-            let stream_properties = read_property_list(stream_properties_column.value(ir))?;
+            let stream_properties_map =
+                extract_properties_from_dict_column(stream_properties_column, ir)?;
 
             let stream = Arc::new(StreamInfo {
                 stream_id,
@@ -335,7 +339,7 @@ pub async fn generate_process_jit_partitions_segment(
                 objects_metadata: ciborium::from_reader(objects_metadata)
                     .with_context(|| "decoding objects_metadata")?,
                 tags: stream_tags,
-                properties: micromegas_telemetry::property::into_hashmap(stream_properties),
+                properties: stream_properties_map,
             });
 
             // Check if adding this block would exceed the limit

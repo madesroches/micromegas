@@ -385,7 +385,7 @@ Micromegas provides specialized functions for working with property data, includ
 
 ##### `property_get(properties, key)`
 
-Extracts a value from a properties map with support for multiple storage formats.
+Extracts a value from a properties map with automatic format detection and optimized performance for JSONB data.
 
 **Syntax:**
 ```sql
@@ -396,14 +396,16 @@ property_get(properties, key)
 
  - `properties` (Multiple formats supported): Properties data in any of these formats:
 
-    * `List<Struct<key, value>>` - Legacy format
-    * `Dictionary<Int32, Binary>` - JSONB format (optimized)
+    * `Dictionary<Int32, Binary>` - **JSONB format (default, optimized)**
+    * `List<Struct<key, value>>` - Legacy format (automatic conversion)
     * `Dictionary<Int32, List<Struct>>` - Dictionary-encoded legacy
     * `Binary` - Non-dictionary JSONB
-   
+
  - `key` (`Utf8`): Property key to extract
 
 **Returns:** `Dictionary<Int32, Utf8>` - Property value or NULL if not found
+
+**Performance:** Optimized for the new JSONB format. Legacy formats are automatically converted for backward compatibility.
 
 **Examples:**
 ```sql
@@ -417,10 +419,10 @@ SELECT time, name, value
 FROM measures
 WHERE property_get(properties, 'source') = 'system_monitor';
 
--- JSONB property access
-SELECT time, msg, property_get(properties_to_jsonb(properties), 'service') as service
+-- Direct JSONB property access (post-migration default)
+SELECT time, msg, property_get(properties, 'service') as service
 FROM log_entries
-WHERE property_get(properties_to_jsonb(properties), 'env') = 'production';
+WHERE property_get(properties, 'env') = 'production';
 ```
 
 ##### `properties_length(properties)`
@@ -502,8 +504,8 @@ properties_to_jsonb(properties)
 
     * `List<Struct<key: Utf8, value: Utf8>>` - Regular properties list
     * `Dictionary<Int32, List<Struct>>` - Dictionary-encoded properties
-    * `Binary` - Non-dictionary JSONB (converted to dictionary format)
-    * `Dictionary<Int32, Binary>` - JSONB format (pass-through)
+    * `Binary` - Non-dictionary JSONB
+    * `Dictionary<Int32, Binary>` - JSONB format
 
 **Returns:** `Dictionary<Int32, Binary>` - Dictionary-encoded JSONB object containing the properties as key-value pairs
 
@@ -522,7 +524,7 @@ SELECT properties_to_jsonb(properties_to_dict(properties)) as jsonb_props
 FROM measures;
 ```
 
-**Performance Note:** This function returns `Dictionary<Int32, Binary>` format for optimal memory usage with Arrow's built-in dictionary encoding.
+**Note:** This function returns `Dictionary<Int32, Binary>` format for optimal memory usage with Arrow's built-in dictionary encoding.
 
 ##### `properties_to_array(dict_properties)`
 

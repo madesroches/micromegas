@@ -1,24 +1,27 @@
 use anyhow::{Context, Result};
 use datafusion::arrow::array::ArrayBuilder;
 use datafusion::arrow::array::BinaryBuilder;
+use datafusion::arrow::array::BinaryDictionaryBuilder;
 use datafusion::arrow::array::ListBuilder;
 use datafusion::arrow::array::PrimitiveBuilder;
 use datafusion::arrow::array::StringBuilder;
 use datafusion::arrow::array::StructBuilder;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::arrow::datatypes::Field;
-use datafusion::arrow::datatypes::Fields;
 use datafusion::arrow::datatypes::Int32Type;
 use datafusion::arrow::datatypes::Int64Type;
 use datafusion::arrow::datatypes::TimeUnit;
 use datafusion::arrow::datatypes::TimestampNanosecondType;
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::cast::as_struct_array;
+use jsonb::Value;
 use micromegas_telemetry::property::Property;
 use sqlx::Column;
 use sqlx::Row;
 use sqlx::TypeInfo;
 use sqlx::postgres::{PgColumn, PgRow};
+use std::borrow::Cow;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use crate::arrow_utils::make_empty_record_batch;
@@ -251,23 +254,36 @@ impl ColumnReader for PropertiesColumnReader {
         let props: Vec<Property> = row
             .try_get(self.column_ordinal)
             .with_context(|| "try_get failed on row")?;
-        let list_builder = struct_builder
-            .field_builder::<ListBuilder<Box<dyn ArrayBuilder>>>(self.column_ordinal)
-            .with_context(|| "getting list field builder for property")?;
-        let property_builder = list_builder
-            .values()
-            .as_any_mut()
-            .downcast_mut::<StructBuilder>()
-            .unwrap();
-        for p in props {
-            // borrow checker insists on keeping the builder references in the loop
-            let key_builder = property_builder.field_builder::<StringBuilder>(0).unwrap();
-            key_builder.append_value(p.key_str());
-            let value_builder = property_builder.field_builder::<StringBuilder>(1).unwrap();
-            value_builder.append_value(p.value_str());
-            property_builder.append(true);
+
+        // Get the dictionary builder for JSONB format
+        let dict_builder = struct_builder
+            .field_builder::<BinaryDictionaryBuilder<Int32Type>>(self.column_ordinal)
+            .with_context(|| "getting dictionary field builder for properties")?;
+
+        // Convert properties to JSONB format
+        if props.is_empty() {
+            // For empty properties, append an empty JSONB object
+            let empty_map = Value::Object(BTreeMap::new());
+            let mut buffer = Vec::new();
+            empty_map.write_to_vec(&mut buffer);
+            dict_builder.append_value(&buffer);
+        } else {
+            // Build a BTreeMap from properties
+            let mut map = BTreeMap::new();
+            for p in props {
+                map.insert(
+                    p.key_str().to_string(),
+                    Value::String(Cow::Owned(p.value_str().to_string())),
+                );
+            }
+
+            // Convert to JSONB bytes
+            let jsonb_object = Value::Object(map);
+            let mut buffer = Vec::new();
+            jsonb_object.write_to_vec(&mut buffer);
+            dict_builder.append_value(&buffer);
         }
-        list_builder.append(true);
+
         Ok(())
     }
 
@@ -318,14 +334,7 @@ pub fn make_column_reader(column: &PgColumn) -> Result<Arc<dyn ColumnReader>> {
         "micromegas_property[]" => Ok(Arc::new(PropertiesColumnReader {
             field: Field::new(
                 column.name(),
-                DataType::List(Arc::new(Field::new(
-                    "Property",
-                    DataType::Struct(Fields::from(vec![
-                        Field::new("key", DataType::Utf8, false),
-                        Field::new("value", DataType::Utf8, false),
-                    ])),
-                    false,
-                ))),
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Binary)),
                 true,
             ),
             column_ordinal: column.ordinal(),

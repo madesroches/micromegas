@@ -3,14 +3,12 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use chrono::DateTime;
 use datafusion::arrow::array::ArrayBuilder;
-use datafusion::arrow::array::ListBuilder;
+use datafusion::arrow::array::BinaryDictionaryBuilder;
 use datafusion::arrow::array::PrimitiveBuilder;
 use datafusion::arrow::array::StringBuilder;
 use datafusion::arrow::array::StringDictionaryBuilder;
-use datafusion::arrow::array::StructBuilder;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::arrow::datatypes::Field;
-use datafusion::arrow::datatypes::Fields;
 use datafusion::arrow::datatypes::Int16Type;
 use datafusion::arrow::datatypes::Int32Type;
 use datafusion::arrow::datatypes::Schema;
@@ -18,8 +16,8 @@ use datafusion::arrow::datatypes::TimeUnit;
 use datafusion::arrow::datatypes::TimestampNanosecondType;
 use datafusion::arrow::record_batch::RecordBatch;
 
-use crate::arrow_properties::add_properties_to_builder;
-use crate::arrow_properties::add_property_set_to_builder;
+use crate::arrow_properties::add_properties_to_jsonb_builder;
+use crate::arrow_properties::add_property_set_to_jsonb_builder;
 use crate::log_entry::LogEntry;
 use crate::time::TimeRange;
 
@@ -75,26 +73,12 @@ pub fn log_table_schema() -> Schema {
         Field::new("msg", DataType::Utf8, false),
         Field::new(
             "properties",
-            DataType::List(Arc::new(Field::new(
-                "Property",
-                DataType::Struct(Fields::from(vec![
-                    Field::new("key", DataType::Utf8, false),
-                    Field::new("value", DataType::Utf8, false),
-                ])),
-                false,
-            ))),
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Binary)),
             false,
         ),
         Field::new(
             "process_properties",
-            DataType::List(Arc::new(Field::new(
-                "Property",
-                DataType::Struct(Fields::from(vec![
-                    Field::new("key", DataType::Utf8, false),
-                    Field::new("value", DataType::Utf8, false),
-                ])),
-                false,
-            ))),
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Binary)),
             false,
         ),
     ])
@@ -113,30 +97,12 @@ pub struct LogEntriesRecordBuilder {
     targets: StringDictionaryBuilder<Int16Type>,
     levels: PrimitiveBuilder<Int32Type>,
     msgs: StringBuilder,
-    properties: ListBuilder<StructBuilder>,
-    process_properties: ListBuilder<StructBuilder>,
+    properties: BinaryDictionaryBuilder<Int32Type>,
+    process_properties: BinaryDictionaryBuilder<Int32Type>,
 }
 
 impl LogEntriesRecordBuilder {
     pub fn with_capacity(capacity: usize) -> Self {
-        let prop_struct_fields = vec![
-            Field::new("key", DataType::Utf8, false),
-            Field::new("value", DataType::Utf8, false),
-        ];
-        let prop_field = Arc::new(Field::new(
-            "Property",
-            DataType::Struct(Fields::from(prop_struct_fields.clone())),
-            false,
-        ));
-        let props_builder = ListBuilder::new(StructBuilder::from_fields(
-            prop_struct_fields.clone(),
-            capacity,
-        ))
-        .with_field(prop_field.clone());
-        let process_props_builder =
-            ListBuilder::new(StructBuilder::from_fields(prop_struct_fields, capacity))
-                .with_field(prop_field);
-
         Self {
             process_ids: StringDictionaryBuilder::new(),
             stream_ids: StringDictionaryBuilder::new(),
@@ -149,8 +115,8 @@ impl LogEntriesRecordBuilder {
             targets: StringDictionaryBuilder::new(),
             levels: PrimitiveBuilder::with_capacity(capacity),
             msgs: StringBuilder::new(),
-            properties: props_builder,
-            process_properties: process_props_builder,
+            properties: BinaryDictionaryBuilder::new(),
+            process_properties: BinaryDictionaryBuilder::new(),
         }
     }
 
@@ -187,8 +153,8 @@ impl LogEntriesRecordBuilder {
         self.targets.append_value(&*row.target);
         self.levels.append_value(row.level);
         self.msgs.append_value(&*row.msg);
-        add_property_set_to_builder(&row.properties, &mut self.properties)?;
-        add_properties_to_builder(&row.process.properties, &mut self.process_properties)?;
+        add_property_set_to_jsonb_builder(&row.properties, &mut self.properties)?;
+        add_properties_to_jsonb_builder(&row.process.properties, &mut self.process_properties)?;
         Ok(())
     }
 
