@@ -13,7 +13,7 @@ use super::{
 use crate::{
     lakehouse::jit_partitions::{generate_process_jit_partitions, is_jit_partition_up_to_date},
     log_entries_table::log_table_schema,
-    metadata::find_process_optimized,
+    metadata::find_process,
     time::{TimeRange, datetime_to_scalar},
 };
 use anyhow::{Context, Result};
@@ -133,14 +133,14 @@ impl View for LogView {
             return Ok(());
         }
         let process = Arc::new(
-            find_process_optimized(
+            find_process(
                 &lake.db_pool,
                 &self
                     .process_id
                     .with_context(|| "getting a view's process_id")?,
             )
             .await
-            .with_context(|| "find_process_optimized")?,
+            .with_context(|| "find_process")?,
         );
         let query_range =
             query_range.unwrap_or_else(|| TimeRange::new(process.start_time, chrono::Utc::now()));

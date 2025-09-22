@@ -159,7 +159,7 @@ impl MetricsRecordBuilder {
         self.values.append_value(row.value);
         add_property_set_to_jsonb_builder(&row.properties, &mut self.properties)?;
         self.process_properties
-            .append_value(&row.process.properties);
+            .append_value(&*row.process.properties);
         Ok(())
     }
 
