@@ -16,8 +16,8 @@ use datafusion::arrow::datatypes::TimeUnit;
 use datafusion::arrow::datatypes::TimestampNanosecondType;
 use datafusion::arrow::record_batch::RecordBatch;
 
-use crate::arrow_properties::add_property_set_to_jsonb_builder;
 use crate::log_entry::LogEntry;
+use crate::property_set_jsonb_dictionary_builder::PropertySetJsonbDictionaryBuilder;
 use crate::time::TimeRange;
 
 /// Returns the schema for the log entries table.
@@ -96,7 +96,7 @@ pub struct LogEntriesRecordBuilder {
     targets: StringDictionaryBuilder<Int16Type>,
     levels: PrimitiveBuilder<Int32Type>,
     msgs: StringBuilder,
-    properties: BinaryDictionaryBuilder<Int32Type>,
+    properties: PropertySetJsonbDictionaryBuilder,
     process_properties: BinaryDictionaryBuilder<Int32Type>,
 }
 
@@ -114,7 +114,7 @@ impl LogEntriesRecordBuilder {
             targets: StringDictionaryBuilder::new(),
             levels: PrimitiveBuilder::with_capacity(capacity),
             msgs: StringBuilder::new(),
-            properties: BinaryDictionaryBuilder::new(),
+            properties: PropertySetJsonbDictionaryBuilder::new(capacity),
             process_properties: BinaryDictionaryBuilder::new(),
         }
     }
@@ -152,7 +152,7 @@ impl LogEntriesRecordBuilder {
         self.targets.append_value(&*row.target);
         self.levels.append_value(row.level);
         self.msgs.append_value(&*row.msg);
-        add_property_set_to_jsonb_builder(&row.properties, &mut self.properties)?;
+        self.properties.append_property_set(&row.properties)?;
         self.process_properties
             .append_value(&*row.process.properties);
         Ok(())
@@ -165,7 +165,7 @@ impl LogEntriesRecordBuilder {
         self.targets.append_value(&*row.target);
         self.levels.append_value(row.level);
         self.msgs.append_value(&*row.msg);
-        add_property_set_to_jsonb_builder(&row.properties, &mut self.properties)?;
+        self.properties.append_property_set(&row.properties)?;
         Ok(())
     }
 
@@ -211,7 +211,7 @@ impl LogEntriesRecordBuilder {
                 Arc::new(self.targets.finish()),
                 Arc::new(self.levels.finish()),
                 Arc::new(self.msgs.finish()),
-                Arc::new(self.properties.finish()),
+                Arc::new(self.properties.finish()?),
                 Arc::new(self.process_properties.finish()),
             ],
         )

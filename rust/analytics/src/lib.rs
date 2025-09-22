@@ -41,6 +41,8 @@ pub mod payload;
 pub mod properties;
 /// Reference-counted set of properties in transit format
 pub mod property_set;
+/// Custom dictionary builder for PropertySet with pointer-based deduplication
+pub mod property_set_jsonb_dictionary_builder;
 pub mod record_batch_transformer;
 /// bulk metadata & payload ingestion using Arrow
 pub mod replication;

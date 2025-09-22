@@ -1,5 +1,6 @@
 use crate::{
-    arrow_properties::add_property_set_to_jsonb_builder, measure::Measure, time::TimeRange,
+    measure::Measure, property_set_jsonb_dictionary_builder::PropertySetJsonbDictionaryBuilder,
+    time::TimeRange,
 };
 use anyhow::{Context, Result};
 use chrono::DateTime;
@@ -99,7 +100,7 @@ pub struct MetricsRecordBuilder {
     pub names: StringDictionaryBuilder<Int16Type>,
     pub units: StringDictionaryBuilder<Int16Type>,
     pub values: PrimitiveBuilder<Float64Type>,
-    pub properties: BinaryDictionaryBuilder<Int32Type>,
+    pub properties: PropertySetJsonbDictionaryBuilder,
     pub process_properties: BinaryDictionaryBuilder<Int32Type>,
 }
 
@@ -118,7 +119,7 @@ impl MetricsRecordBuilder {
             names: StringDictionaryBuilder::new(),
             units: StringDictionaryBuilder::new(),
             values: PrimitiveBuilder::with_capacity(capacity),
-            properties: BinaryDictionaryBuilder::new(),
+            properties: PropertySetJsonbDictionaryBuilder::new(capacity),
             process_properties: BinaryDictionaryBuilder::new(),
         }
     }
@@ -157,7 +158,7 @@ impl MetricsRecordBuilder {
         self.names.append_value(&*row.name);
         self.units.append_value(&*row.unit);
         self.values.append_value(row.value);
-        add_property_set_to_jsonb_builder(&row.properties, &mut self.properties)?;
+        self.properties.append_property_set(&row.properties)?;
         self.process_properties
             .append_value(&*row.process.properties);
         Ok(())
@@ -171,7 +172,7 @@ impl MetricsRecordBuilder {
         self.names.append_value(&*row.name);
         self.units.append_value(&*row.unit);
         self.values.append_value(row.value);
-        add_property_set_to_jsonb_builder(&row.properties, &mut self.properties)?;
+        self.properties.append_property_set(&row.properties)?;
         Ok(())
     }
 
@@ -221,7 +222,7 @@ impl MetricsRecordBuilder {
                 Arc::new(self.names.finish()),
                 Arc::new(self.units.finish()),
                 Arc::new(self.values.finish()),
-                Arc::new(self.properties.finish()),
+                Arc::new(self.properties.finish()?),
                 Arc::new(self.process_properties.finish()),
             ],
         )
