@@ -146,10 +146,23 @@ pub struct ProcessMetadata {
 3. ✅ Remove unnecessary helper functions
    - Eliminated `add_pre_serialized_jsonb_to_builder` - direct append is simpler and faster
 
-### Phase 5: Advanced Optimizations
-1. Implement bulk dictionary building
-2. Add cross-block property interning
-3. Zero-copy JSONB optimizations
+### Phase 5: Cleanup and Final Optimizations
+1. ✅ Remove legacy functions that are no longer needed
+   - ✅ Removed `find_process_with_latest_timing_legacy` (returns ProcessInfo)
+   - ✅ Cleaned up unused test variables
+   - ✅ Removed unused imports (ListArray, read_property_list, ProcessInfo)
+   - All code now uses the optimized ProcessMetadata version
+2. ✅ Remove duplicated `make_process_metadata` helper functions in test files
+   - ✅ Created shared test helper module to avoid code duplication
+   - ✅ Updated log_tests.rs and metrics_test.rs to use shared helper
+3. ✅ Remove unused conversion functions from metadata.rs
+   - ✅ Removed `process_from_row` (legacy ProcessInfo creation from DB)
+   - ✅ Removed `process_info_to_metadata` (conversion no longer needed)
+   - ✅ Removed `process_metadata_to_info` (backward compatibility no longer needed)
+   - Analytics layer now uses ProcessMetadata exclusively
+4. Implement bulk dictionary building
+5. Add cross-block property interning
+6. Zero-copy JSONB optimizations
 
 ## Current Implementation Status
 
