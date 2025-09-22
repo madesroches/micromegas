@@ -123,7 +123,7 @@ pub struct ProcessMetadata {
 ### Phase 3: Update Analytics Data Structures ✅ COMPLETED
 1. ✅ Replace `Arc<ProcessInfo>` with `Arc<ProcessMetadata>` in:
    - ✅ `LogEntry` struct - Updated to use `Arc<ProcessMetadata>`
-   - ✅ `MeasureRow` struct - Updated to use `Arc<ProcessMetadata>`  
+   - ✅ `MeasureRow` struct - Updated to use `Arc<ProcessMetadata>`
    - ✅ `PartitionSourceBlock` struct - Updated to use `Arc<ProcessMetadata>`
    - ✅ All analytics pipeline components - Updated JIT partitions, view processors, and record builders
 2. ✅ Updated time conversion functions to work with `ProcessMetadata`
@@ -195,7 +195,7 @@ pub struct ProcessMetadata {
 - Bulk dictionary building for unique property sets within blocks
 
 ## ✅ Compatibility Requirements Maintained
-- **Instrumentation layer**: Continues using `ProcessInfo` with `HashMap<String, String>` properties  
+- **Instrumentation layer**: Continues using `ProcessInfo` with `HashMap<String, String>` properties
 - **Analytics layer**: Uses optimized `ProcessMetadata` with pre-serialized JSONB properties
 - **Wire protocol**: HTTP/CBOR transmission uses original ProcessInfo format
 - **Database**: Stores properties as `micromegas_property[]`, converts to analytics format on read
@@ -204,7 +204,7 @@ pub struct ProcessMetadata {
 
 - **Expected 30-50% reduction in CPU cycles for property writing** (high-duplication scenarios)
   - ✅ Achieved through single serialization per process + direct JSONB append
-- **Expected 15-25% reduction in CPU usage for overall block processing**  
+- **Expected 15-25% reduction in CPU usage for overall block processing**
   - ✅ Achieved by eliminating HashMap→JSONB conversion overhead per row
 - **Expected 20-40% reduction in allocation overhead**
   - ✅ Achieved via Arc-shared pre-serialized JSONB across all entries for same process
