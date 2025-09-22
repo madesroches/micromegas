@@ -242,14 +242,170 @@ pub struct ProcessMetadata {
 - **Example impact**: 1000-entry block reduced from 8000 to 8 dictionary lookups
 
 ### Phase 8: PropertySet Pointer-Based Deduplication 🔄 FUTURE
-1. **PropertySet dictionary index caching for log entry properties**
-   - Use `Arc<Object>::as_ptr()` as cache key for PropertySet dictionary indices
-   - Cache dictionary indices per unique PropertySet pointer within block processing
-   - Expected 50-80% reduction in dictionary encoding for blocks with duplicate PropertySets
 
-2. **Update LogEntriesRecordBuilder with PropertySet caching**
-   - Add `property_cache: HashMap<*const Object, u32>` for PropertySet dictionary index caching
-   - Modify `append()` to check cache before calling `append_value()` for log entry properties
+**Objective**: Eliminate redundant JSONB serialization and dictionary hash lookups for duplicate PropertySets by implementing a custom dictionary builder that uses PropertySet pointer addresses as keys.
+
+**Current Problem Analysis**:
+- **Process properties**: ✅ Already optimized (pre-serialized JSONB in ProcessMetadata)
+- **Log entry properties**: ❌ `add_property_set_to_jsonb_builder()` calls `serialize_property_set_to_jsonb()` + `BinaryDictionaryBuilder.append_value()` for every log entry
+- **Root issue**: Arrow's `BinaryDictionaryBuilder` uses content-based hashing, requiring serialization before deduplication check
+
+#### 1. **Custom JSONB Dictionary Builder Design**
+
+**Inspired by existing `PropertiesDictionaryBuilder`** in `properties_to_dict_udf.rs`, but optimized for PropertySet pointer-based deduplication:
+
+```rust
+// Custom dictionary builder for PropertySet → JSONB encoding
+struct PropertySetJsonbDictionaryBuilder {
+    // Maps Arc<Object> pointer to dictionary index (avoids content hashing)
+    pointer_to_index: HashMap<*const Object, i32>,
+    // Pre-serialized JSONB values in dictionary
+    jsonb_values: Vec<Vec<u8>>,
+    // Dictionary keys (indices) for each appended entry - use i32 directly
+    keys: Vec<Option<i32>>,
+    // Keep PropertySet references alive for pointer safety
+    _property_refs: Vec<Arc<Object>>,
+}
+
+impl PropertySetJsonbDictionaryBuilder {
+    fn new(capacity: usize) -> Self { ... }
+
+    /// Append PropertySet using pointer-based deduplication
+    fn append_property_set(&mut self, property_set: &Arc<Object>) -> Result<()> {
+        let ptr = Arc::as_ptr(property_set);
+
+        match self.pointer_to_index.get(&ptr) {
+            Some(&index) => {
+                // Cache hit: reuse existing dictionary index (no serialization)
+                self.keys.push(Some(index));
+            }
+            None => {
+                // Cache miss: serialize once and store in dictionary
+                let jsonb_bytes = serialize_property_set_to_jsonb(property_set)?;
+                let new_index = self.jsonb_values.len() as i32;
+
+                self.jsonb_values.push(jsonb_bytes);
+                self.pointer_to_index.insert(ptr, new_index);
+                self.keys.push(Some(new_index));
+                self._property_refs.push(Arc::clone(property_set)); // Keep alive
+            }
+        }
+        Ok(())
+    }
+
+    fn append_null(&mut self) {
+        self.keys.push(None);
+    }
+
+    fn finish(self) -> Result<DictionaryArray<Int32Type>> {
+        // Direct conversion - no mapping needed since keys are already Vec<Option<i32>>
+        let keys = Int32Array::from(self.keys);
+        let values = Arc::new(BinaryArray::from_vec(self.jsonb_values));
+        DictionaryArray::try_new(keys, values)
+            .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))
+    }
+}
+```
+
+**Safety Considerations**:
+- Cache must hold `Arc<Object>` references in `_property_refs` to ensure pointers remain valid
+- Cache lifecycle strictly bounded to single block processing scope
+- Clear cache between blocks to prevent stale pointer references
+- Use `Arc::as_ptr()` only while holding the Arc reference
+
+**Memory Management**:
+- Cache size bounded by unique PropertySets per block (typically 10-1000 entries)
+- Automatic cleanup via `Drop` implementation
+- No cross-block persistence to avoid memory leaks
+
+#### 2. **Integration with LogEntriesRecordBuilder**
+
+**Current Flow** (per log entry with properties):
+```
+PropertySet → serialize_property_set_to_jsonb() → BinaryDictionaryBuilder.append_value() → content hash lookup + value storage
+```
+
+**Optimized Flow** (custom dictionary builder):
+```
+PropertySet → PropertySetJsonbDictionaryBuilder.append_property_set() →
+  - Pointer lookup: O(1) HashMap lookup using Arc::as_ptr()
+  - Cache hit: append existing dictionary index (no serialization, no content hashing)
+  - Cache miss: serialize once + store in dictionary + append index
+```
+
+**Implementation Strategy**:
+- Replace `BinaryDictionaryBuilder<Int32Type>` with `PropertySetJsonbDictionaryBuilder` in LogEntriesRecordBuilder
+- Modify field declaration:
+  ```rust
+  // Current:
+  properties: BinaryDictionaryBuilder<Int32Type>,
+
+  // Optimized:
+  properties: PropertySetJsonbDictionaryBuilder,
+  ```
+- Replace `add_property_set_to_jsonb_builder()` calls:
+  ```rust
+  // Current:
+  add_property_set_to_jsonb_builder(&row.properties, &mut self.properties)?;
+
+  // Optimized:
+  self.properties.append_property_set(&row.properties)?;
+  ```
+- Update `finish()` method to handle custom builder
+
+**Performance Advantages vs Arrow's BinaryDictionaryBuilder**:
+- **Eliminates content-based hashing**: Arrow's builder hashes JSONB bytes for deduplication
+- **Pointer-based deduplication**: O(1) pointer comparison vs O(n) content hash
+- **Serialization only when needed**: Only serialize PropertySet on first encounter
+- **Memory efficiency**: Shared PropertySet references, single JSONB copy per unique set
+
+**Compatibility**:
+- Output: Same `DictionaryArray<Int32Type>` with Binary values as Arrow's builder
+- Schema: Identical Arrow schema, no breaking changes
+- Query compatibility: Existing SQL queries work unchanged
+
+#### 3. **Performance Analysis**
+
+**Expected Scenarios**:
+- **High duplication** (web request logs): 50-80% pointer cache hit rate → 40-60% reduction in total property processing overhead
+- **Medium duplication** (application logs): 20-40% pointer cache hit rate → 15-30% reduction in property processing overhead
+- **Low duplication** (unique properties): 0-10% pointer cache hit rate → minimal overhead from pointer lookup
+
+**Performance Target Analysis**:
+- **Primary optimization**: Eliminate repeated PropertySet → JSONB serialization (CPU intensive BTreeMap construction + JSONB encoding)
+- **Secondary optimization**: Eliminate content-based hash computation on JSONB bytes (O(n) vs O(1) pointer lookup)
+- **Tertiary benefit**: Reduced memory allocation (single JSONB copy per unique PropertySet vs copy per log entry)
+
+**Comparison vs Arrow's BinaryDictionaryBuilder**:
+- **Arrow approach**: Serialize → Hash content → Dictionary lookup → Store
+- **Custom approach**: Pointer lookup → (if miss: Serialize → Store) → Append index
+- **Key difference**: Avoid serialization and content hashing for duplicates
+
+**Measurement Points**:
+- JSONB serialization cycles per block (major component)
+- Content hashing overhead elimination
+- Memory allocation patterns (reduced JSONB copies)
+- Pointer-based HashMap lookup performance
+- Overall block processing latency impact
+
+**Success Criteria**:
+- ≥40% reduction in property encoding cycles for high-duplication blocks
+- <3% overhead for low-duplication blocks (pointer lookup is cheaper than content hash)
+- Zero correctness regressions in generated Arrow data
+- No memory leaks over extended processing
+- Identical Arrow schema output (backward compatibility)
+
+#### 4. **Implementation Phases**
+
+**Phase 8.1: Custom Dictionary Builder Implementation**
+- Implement `PropertySetJsonbDictionaryBuilder` following existing `PropertiesDictionaryBuilder` pattern
+- Add pointer-based deduplication with proper Arc reference management
+
+**Phase 8.2: LogEntriesRecordBuilder Integration**
+- Replace `BinaryDictionaryBuilder<Int32Type>` with custom builder
+- Update `append_entry_only()` and `finish()` methods
+- Maintain identical Arrow schema output
+
 
 ### 🔄 Remaining Advanced Optimizations (Phase 9+)
 - Bulk dictionary building for unique property sets
