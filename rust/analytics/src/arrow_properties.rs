@@ -92,16 +92,7 @@ pub fn add_properties_to_jsonb_builder(
     properties: &HashMap<String, String>,
     jsonb_builder: &mut BinaryDictionaryBuilder<Int32Type>,
 ) -> Result<()> {
-    // Convert HashMap to BTreeMap for consistent ordering
-    let btree_map: BTreeMap<String, Value> = properties
-        .iter()
-        .map(|(k, v)| (k.clone(), Value::String(Cow::Borrowed(v))))
-        .collect();
-
-    let jsonb_value = Value::Object(btree_map);
-    let mut jsonb_bytes = Vec::new();
-    jsonb_value.write_to_vec(&mut jsonb_bytes);
-
+    let jsonb_bytes = serialize_properties_to_jsonb(properties)?;
     jsonb_builder.append_value(&jsonb_bytes);
     Ok(())
 }
@@ -113,6 +104,16 @@ pub fn add_property_set_to_jsonb_builder(
     properties: &PropertySet,
     jsonb_builder: &mut BinaryDictionaryBuilder<Int32Type>,
 ) -> Result<()> {
+    let jsonb_bytes = serialize_property_set_to_jsonb(properties)?;
+    jsonb_builder.append_value(&jsonb_bytes);
+    Ok(())
+}
+
+/// Serializes properties from a PropertySet to JSONB bytes.
+///
+/// This function converts a PropertySet to JSONB binary format
+/// using the same serialization approach as `add_property_set_to_jsonb_builder`.
+pub fn serialize_property_set_to_jsonb(properties: &PropertySet) -> Result<Vec<u8>> {
     let mut btree_map = BTreeMap::new();
 
     properties.for_each_property(|prop| {
@@ -127,6 +128,23 @@ pub fn add_property_set_to_jsonb_builder(
     let mut jsonb_bytes = Vec::new();
     jsonb_value.write_to_vec(&mut jsonb_bytes);
 
-    jsonb_builder.append_value(&jsonb_bytes);
-    Ok(())
+    Ok(jsonb_bytes)
+}
+
+/// Serializes properties from a HashMap to JSONB bytes.
+///
+/// This function converts a HashMap of string properties to JSONB binary format
+/// using the same serialization approach as `add_properties_to_jsonb_builder`.
+pub fn serialize_properties_to_jsonb(properties: &HashMap<String, String>) -> Result<Vec<u8>> {
+    // Convert HashMap to BTreeMap for consistent ordering (same as add_properties_to_jsonb_builder)
+    let btree_map: BTreeMap<String, Value> = properties
+        .iter()
+        .map(|(k, v)| (k.clone(), Value::String(Cow::Borrowed(v))))
+        .collect();
+
+    let jsonb_value = Value::Object(btree_map);
+    let mut jsonb_bytes = Vec::new();
+    jsonb_value.write_to_vec(&mut jsonb_bytes);
+
+    Ok(jsonb_bytes)
 }

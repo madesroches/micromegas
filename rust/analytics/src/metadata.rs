@@ -16,7 +16,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::{
-    arrow_properties::read_property_list,
+    arrow_properties::{read_property_list, serialize_properties_to_jsonb},
     dfext::{string_column_accessor::string_column_by_name, typed_column::typed_column_by_name},
     lakehouse::{
         partition_cache::LivePartitionProvider, query::make_session_context,
@@ -26,6 +26,33 @@ use crate::{
     time::TimeRange,
 };
 use datafusion::execution::runtime_env::RuntimeEnv;
+
+/// Type alias for shared, pre-serialized JSONB data.
+/// This represents JSONB properties that have been serialized once and can be reused.
+pub type SharedJsonbSerialized = Arc<Vec<u8>>;
+
+/// Analytics-optimized process metadata.
+///
+/// This struct is designed for analytics use cases where process properties need to be
+/// efficiently serialized to JSONB format multiple times. Unlike `ProcessInfo`, which
+/// uses `HashMap<String, String>` for properties, this struct stores pre-serialized
+/// JSONB data to eliminate redundant serialization overhead.
+#[derive(Debug, Clone)]
+pub struct ProcessMetadata {
+    // Core fields (same as ProcessInfo)
+    pub process_id: uuid::Uuid,
+    pub exe: String,
+    pub username: String,
+    pub realname: String,
+    pub computer: String,
+    pub distro: String,
+    pub cpu_brand: String,
+    pub tsc_frequency: i64,
+    pub start_time: chrono::DateTime<chrono::Utc>,
+    pub start_ticks: i64,
+    pub parent_process_id: Option<uuid::Uuid>,
+    pub properties: SharedJsonbSerialized,
+}
 
 /// Creates a `StreamInfo` from a database row.
 pub fn stream_from_row(row: &sqlx::postgres::PgRow) -> Result<StreamInfo> {
@@ -114,7 +141,119 @@ pub fn process_from_row(row: &sqlx::postgres::PgRow) -> Result<ProcessInfo> {
     })
 }
 
-/// Finds a process by its ID.
+/// Creates a `ProcessMetadata` from a database row with pre-serialized JSONB properties.
+///
+/// This is the preferred function for analytics use cases as it serializes the properties
+/// to JSONB once during database deserialization, avoiding repeated serialization overhead.
+#[span_fn]
+pub fn process_metadata_from_row(row: &sqlx::postgres::PgRow) -> Result<ProcessMetadata> {
+    let properties: Vec<Property> = row.try_get("process_properties")?;
+    let properties_map = micromegas_telemetry::property::into_hashmap(properties);
+    let serialized_properties = serialize_properties_to_jsonb(&properties_map)
+        .with_context(|| "serializing process properties to JSONB")?;
+
+    Ok(ProcessMetadata {
+        process_id: row.try_get("process_id")?,
+        exe: row.try_get("exe")?,
+        username: row.try_get("username")?,
+        realname: row.try_get("realname")?,
+        computer: row.try_get("computer")?,
+        distro: row.try_get("distro")?,
+        cpu_brand: row.try_get("cpu_brand")?,
+        tsc_frequency: row.try_get("tsc_frequency")?,
+        start_time: row.try_get("start_time")?,
+        start_ticks: row.try_get("start_ticks")?,
+        parent_process_id: row.try_get("parent_process_id")?,
+        properties: Arc::new(serialized_properties),
+    })
+}
+
+/// Converts a `ProcessInfo` to `ProcessMetadata` by serializing the properties to JSONB.
+///
+/// This function is provided for compatibility, but the preferred approach is to use
+/// `process_metadata_from_row()` directly to avoid the intermediate HashMap.
+pub fn process_info_to_metadata(process_info: &ProcessInfo) -> Result<ProcessMetadata> {
+    let serialized_properties = serialize_properties_to_jsonb(&process_info.properties)
+        .with_context(|| "serializing ProcessInfo properties to JSONB")?;
+
+    Ok(ProcessMetadata {
+        process_id: process_info.process_id,
+        exe: process_info.exe.clone(),
+        username: process_info.username.clone(),
+        realname: process_info.realname.clone(),
+        computer: process_info.computer.clone(),
+        distro: process_info.distro.clone(),
+        cpu_brand: process_info.cpu_brand.clone(),
+        tsc_frequency: process_info.tsc_frequency,
+        start_time: process_info.start_time,
+        start_ticks: process_info.start_ticks,
+        parent_process_id: process_info.parent_process_id,
+        properties: Arc::new(serialized_properties),
+    })
+}
+
+/// Converts a `ProcessMetadata` back to `ProcessInfo` for backward compatibility.
+///
+/// This function is provided for gradual migration. The JSONB properties are
+/// deserialized back to a HashMap, which eliminates the optimization benefits.
+/// New code should work directly with `ProcessMetadata` to avoid this overhead.
+pub fn process_metadata_to_info(metadata: &ProcessMetadata) -> Result<ProcessInfo> {
+    use crate::properties::utils::jsonb_to_property_map;
+
+    let properties = jsonb_to_property_map(&metadata.properties)
+        .with_context(|| "deserializing JSONB properties back to HashMap")?;
+
+    Ok(ProcessInfo {
+        process_id: metadata.process_id,
+        exe: metadata.exe.clone(),
+        username: metadata.username.clone(),
+        realname: metadata.realname.clone(),
+        computer: metadata.computer.clone(),
+        distro: metadata.distro.clone(),
+        cpu_brand: metadata.cpu_brand.clone(),
+        tsc_frequency: metadata.tsc_frequency,
+        start_time: metadata.start_time,
+        start_ticks: metadata.start_ticks,
+        parent_process_id: metadata.parent_process_id,
+        properties,
+    })
+}
+
+/// Finds a process by its ID and returns it as ProcessMetadata with pre-serialized JSONB properties.
+///
+/// This is the preferred function for analytics use cases as it avoids redundant property serialization.
+#[span_fn]
+pub async fn find_process_optimized(
+    pool: &sqlx::Pool<sqlx::Postgres>,
+    process_id: &sqlx::types::Uuid,
+) -> Result<ProcessMetadata> {
+    let row = sqlx::query(
+        "SELECT process_id,
+                exe,
+                username,
+                realname,
+                computer,
+                distro,
+                cpu_brand,
+                tsc_frequency,
+                start_time,
+                start_ticks,
+                parent_process_id,
+                properties as process_properties
+         FROM processes
+         WHERE process_id = $1;",
+    )
+    .bind(process_id)
+    .fetch_one(pool)
+    .await
+    .with_context(|| "select from processes")?;
+    process_metadata_from_row(&row)
+}
+
+/// Finds a process by its ID (backward compatibility version).
+///
+/// This version returns ProcessInfo for backward compatibility with existing code.
+/// New analytics code should use `find_process_optimized()` for better performance.
 #[span_fn]
 pub async fn find_process(
     pool: &sqlx::Pool<sqlx::Postgres>,
