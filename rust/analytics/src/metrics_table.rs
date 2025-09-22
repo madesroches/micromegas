@@ -1,7 +1,5 @@
 use crate::{
-    arrow_properties::{add_properties_to_jsonb_builder, add_property_set_to_jsonb_builder},
-    measure::Measure,
-    time::TimeRange,
+    arrow_properties::add_property_set_to_jsonb_builder, measure::Measure, time::TimeRange,
 };
 use anyhow::{Context, Result};
 use chrono::DateTime;
@@ -160,7 +158,8 @@ impl MetricsRecordBuilder {
         self.units.append_value(&*row.unit);
         self.values.append_value(row.value);
         add_property_set_to_jsonb_builder(&row.properties, &mut self.properties)?;
-        add_properties_to_jsonb_builder(&row.process.properties, &mut self.process_properties)?;
+        self.process_properties
+            .append_value(&*row.process.properties);
         Ok(())
     }
 

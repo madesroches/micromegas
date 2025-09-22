@@ -4,8 +4,9 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, TimeDelta, Utc};
 use datafusion::scalar::ScalarValue;
 use micromegas_telemetry::types::block::BlockMetadata;
-use micromegas_tracing::process_info::ProcessInfo;
 use sqlx::Row;
+
+use crate::metadata::ProcessMetadata;
 
 const NANOS_PER_SEC: f64 = 1000.0 * 1000.0 * 1000.0;
 
@@ -25,7 +26,7 @@ impl TimeRange {
 /// Creates a `ConvertTicks` from a database connection.
 pub async fn make_time_converter_from_db(
     pool: &sqlx::Pool<sqlx::Postgres>,
-    process: &ProcessInfo,
+    process: &ProcessMetadata,
 ) -> Result<ConvertTicks> {
     if process.tsc_frequency > 0 {
         // we have a good tsc freq provided
@@ -61,7 +62,7 @@ pub async fn make_time_converter_from_db(
 
 /// Creates a `ConvertTicks` from a block's metadata.
 pub fn make_time_converter_from_block_meta(
-    process: &ProcessInfo,
+    process: &ProcessMetadata,
     block: &BlockMetadata,
 ) -> Result<ConvertTicks> {
     if process.tsc_frequency > 0 {
@@ -86,7 +87,7 @@ pub fn make_time_converter_from_block_meta(
 /// This should be used instead of per-block timing to ensure consistent tick conversion
 /// across all blocks from the same process.
 pub fn make_time_converter_from_latest_timing(
-    process: &ProcessInfo,
+    process: &ProcessMetadata,
     last_block_end_ticks: i64,
     last_block_end_time: chrono::DateTime<chrono::Utc>,
 ) -> Result<ConvertTicks> {

@@ -16,7 +16,6 @@ use datafusion::arrow::datatypes::TimeUnit;
 use datafusion::arrow::datatypes::TimestampNanosecondType;
 use datafusion::arrow::record_batch::RecordBatch;
 
-use crate::arrow_properties::add_properties_to_jsonb_builder;
 use crate::arrow_properties::add_property_set_to_jsonb_builder;
 use crate::log_entry::LogEntry;
 use crate::time::TimeRange;
@@ -154,7 +153,8 @@ impl LogEntriesRecordBuilder {
         self.levels.append_value(row.level);
         self.msgs.append_value(&*row.msg);
         add_property_set_to_jsonb_builder(&row.properties, &mut self.properties)?;
-        add_properties_to_jsonb_builder(&row.process.properties, &mut self.process_properties)?;
+        self.process_properties
+            .append_value(&*row.process.properties);
         Ok(())
     }
 

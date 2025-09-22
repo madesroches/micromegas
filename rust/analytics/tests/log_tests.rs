@@ -23,6 +23,9 @@ use serial_test::serial;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+mod test_helpers;
+use test_helpers::make_process_metadata;
+
 #[test]
 fn test_log_interop_metadata() {
     let stream = LogStream::new(1024, uuid::Uuid::new_v4(), &[], HashMap::new());
@@ -46,7 +49,8 @@ fn test_log_interop_metadata() {
 #[serial]
 fn test_log_encode_static() {
     let process_id = uuid::Uuid::new_v4();
-    let process_info = make_process_info(process_id, Some(uuid::Uuid::new_v4()), HashMap::new());
+    let process_info_for_encode =
+        make_process_info(process_id, Some(uuid::Uuid::new_v4()), HashMap::new());
     let mut stream = LogStream::new(1024, process_id, &[], HashMap::new());
     let stream_id = stream.stream_id();
 
@@ -59,7 +63,7 @@ fn test_log_encode_static() {
 
     let mut block = stream.replace_block(Arc::new(LogBlock::new(1024, process_id, stream_id, 0)));
     Arc::get_mut(&mut block).unwrap().close();
-    let encoded = block.encode_bin(&process_info).unwrap();
+    let encoded = block.encode_bin(&process_info_for_encode).unwrap();
     let stream_info = make_stream_info(&stream);
     let received_block: micromegas_telemetry::block_wire_format::Block =
         ciborium::from_reader(&encoded[..]).unwrap();
@@ -91,7 +95,8 @@ fn test_log_encode_static() {
 #[serial]
 fn test_log_encode_dynamic() {
     let process_id = uuid::Uuid::new_v4();
-    let process_info = make_process_info(process_id, Some(uuid::Uuid::new_v4()), HashMap::new());
+    let process_info_for_encode =
+        make_process_info(process_id, Some(uuid::Uuid::new_v4()), HashMap::new());
     let mut stream = LogStream::new(1024, process_id, &[], HashMap::new());
     let stream_id = stream.stream_id();
 
@@ -113,7 +118,7 @@ fn test_log_encode_dynamic() {
 
     let mut block = stream.replace_block(Arc::new(LogBlock::new(1024, process_id, stream_id, 0)));
     Arc::get_mut(&mut block).unwrap().close();
-    let encoded = block.encode_bin(&process_info).unwrap();
+    let encoded = block.encode_bin(&process_info_for_encode).unwrap();
     let stream_info = make_stream_info(&stream);
     let received_block: micromegas_telemetry::block_wire_format::Block =
         ciborium::from_reader(&encoded[..]).unwrap();
@@ -147,7 +152,9 @@ fn test_log_encode_dynamic() {
 #[serial]
 fn test_parse_log_interops() {
     let process_id = uuid::Uuid::new_v4();
-    let process_info = Arc::new(make_process_info(
+    let process_info_for_encode =
+        make_process_info(process_id, Some(uuid::Uuid::new_v4()), HashMap::new());
+    let process_info = Arc::new(make_process_metadata(
         process_id,
         Some(uuid::Uuid::new_v4()),
         HashMap::new(),
@@ -170,7 +177,7 @@ fn test_parse_log_interops() {
 
     let mut block = stream.replace_block(Arc::new(LogBlock::new(1024, process_id, stream_id, 0)));
     Arc::get_mut(&mut block).unwrap().close();
-    let encoded = block.encode_bin(&process_info).unwrap();
+    let encoded = block.encode_bin(&process_info_for_encode).unwrap();
     let received_block: micromegas_telemetry::block_wire_format::Block =
         ciborium::from_reader(&encoded[..]).unwrap();
     let stream_info = make_stream_info(&stream);
@@ -211,7 +218,9 @@ fn test_parse_log_interops() {
 #[serial]
 fn test_tagged_log_entries() {
     let process_id = uuid::Uuid::new_v4();
-    let process_info = Arc::new(make_process_info(
+    let process_info_for_encode =
+        make_process_info(process_id, Some(uuid::Uuid::new_v4()), HashMap::new());
+    let process_info = Arc::new(make_process_metadata(
         process_id,
         Some(uuid::Uuid::new_v4()),
         HashMap::new(),
@@ -241,7 +250,7 @@ fn test_tagged_log_entries() {
 
     let mut block = stream.replace_block(Arc::new(LogBlock::new(1024, process_id, stream_id, 0)));
     Arc::get_mut(&mut block).unwrap().close();
-    let encoded = block.encode_bin(&process_info).unwrap();
+    let encoded = block.encode_bin(&process_info_for_encode).unwrap();
     let received_block: micromegas_telemetry::block_wire_format::Block =
         ciborium::from_reader(&encoded[..]).unwrap();
     let stream_info = make_stream_info(&stream);

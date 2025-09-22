@@ -1,11 +1,15 @@
 use chrono::DateTime;
+use micromegas_analytics::arrow_properties::serialize_properties_to_jsonb;
+use micromegas_analytics::metadata::ProcessMetadata;
 use micromegas_analytics::time::make_time_converter_from_latest_timing;
-use micromegas_tracing::process_info::ProcessInfo;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 #[test]
 fn test_make_time_converter_from_latest_timing() {
-    let process_info = ProcessInfo {
+    let properties = HashMap::new();
+    let properties_jsonb = serialize_properties_to_jsonb(&properties).unwrap();
+    let process_info = ProcessMetadata {
         process_id: uuid::Uuid::new_v4(),
         exe: "test".to_string(),
         username: "test".to_string(),
@@ -17,7 +21,7 @@ fn test_make_time_converter_from_latest_timing() {
         start_time: DateTime::from_timestamp_nanos(0),
         start_ticks: 0,
         parent_process_id: None,
-        properties: HashMap::new(),
+        properties: Arc::new(properties_jsonb),
     };
 
     let last_block_end_ticks = 1_000_000; // 1M ticks
@@ -46,7 +50,9 @@ fn test_make_time_converter_from_latest_timing() {
 
 #[test]
 fn test_make_time_converter_with_tsc_frequency() {
-    let process_info = ProcessInfo {
+    let properties = HashMap::new();
+    let properties_jsonb = serialize_properties_to_jsonb(&properties).unwrap();
+    let process_info = ProcessMetadata {
         process_id: uuid::Uuid::new_v4(),
         exe: "test".to_string(),
         username: "test".to_string(),
@@ -58,7 +64,7 @@ fn test_make_time_converter_with_tsc_frequency() {
         start_time: DateTime::from_timestamp_nanos(0),
         start_ticks: 0,
         parent_process_id: None,
-        properties: HashMap::new(),
+        properties: Arc::new(properties_jsonb),
     };
 
     // When TSC frequency is available, last_block timing should be ignored

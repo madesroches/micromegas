@@ -8,7 +8,7 @@ use super::{
 use crate::{
     dfext::typed_column::get_single_row_primitive_value,
     lakehouse::{partition_cache::PartitionCache, view::PartitionSpec},
-    metadata::block_from_batch_row,
+    metadata::{ProcessMetadata, block_from_batch_row},
     time::TimeRange,
 };
 use crate::{
@@ -25,7 +25,6 @@ use datafusion::{
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_telemetry::stream_info::StreamInfo;
 use micromegas_tracing::prelude::*;
-use micromegas_tracing::process_info::ProcessInfo;
 use sqlx::Row;
 use std::sync::Arc;
 
@@ -103,7 +102,7 @@ pub async fn generate_stream_jit_partitions_segment(
     blocks_view: &BlocksView,
     insert_time_range: &TimeRange,
     stream: Arc<StreamInfo>,
-    process: Arc<ProcessInfo>,
+    process: Arc<ProcessMetadata>,
 ) -> Result<Vec<SourceDataBlocksInMemory>> {
     let cache = PartitionCache::fetch_overlapping_insert_range_for_view(
         &lake.db_pool,
@@ -192,7 +191,7 @@ pub async fn generate_stream_jit_partitions(
     blocks_view: &BlocksView,
     query_time_range: &TimeRange,
     stream: Arc<StreamInfo>,
-    process: Arc<ProcessInfo>,
+    process: Arc<ProcessMetadata>,
 ) -> Result<Vec<SourceDataBlocksInMemory>> {
     let insert_time_range = get_insert_time_range(
         runtime.clone(),
@@ -244,7 +243,7 @@ pub async fn generate_process_jit_partitions_segment(
     lake: Arc<DataLakeConnection>,
     blocks_view: &BlocksView,
     insert_time_range: &TimeRange,
-    process: Arc<ProcessInfo>,
+    process: Arc<ProcessMetadata>,
     stream_tag: &str,
 ) -> Result<Vec<SourceDataBlocksInMemory>> {
     let cache = PartitionCache::fetch_overlapping_insert_range_for_view(
@@ -292,13 +291,11 @@ pub async fn generate_process_jit_partitions_segment(
 
             // Build StreamInfo from the query results
             use crate::dfext::{
+                binary_column_accessor::binary_column_by_name,
                 string_column_accessor::string_column_by_name, typed_column::typed_column_by_name,
             };
-            use crate::properties::utils::extract_properties_from_dict_column;
-            use datafusion::arrow::array::{
-                BinaryArray, DictionaryArray, GenericListArray, StringArray,
-            };
-            use datafusion::arrow::datatypes::Int32Type;
+            use crate::properties::utils::extract_properties_from_binary_column;
+            use datafusion::arrow::array::{BinaryArray, GenericListArray, StringArray};
             use uuid::Uuid;
 
             let stream_id_column = string_column_by_name(&rb, "stream_id")?;
@@ -309,8 +306,7 @@ pub async fn generate_process_jit_partitions_segment(
                 typed_column_by_name(&rb, "streams.objects_metadata")?;
             let stream_tags_column: &GenericListArray<i32> =
                 typed_column_by_name(&rb, "streams.tags")?;
-            let stream_properties_column: &DictionaryArray<Int32Type> =
-                typed_column_by_name(&rb, "streams.properties")?;
+            let stream_properties_accessor = binary_column_by_name(&rb, "streams.properties")?;
 
             let stream_id =
                 Uuid::parse_str(stream_id_column.value(ir)).with_context(|| "parsing stream_id")?;
@@ -329,7 +325,7 @@ pub async fn generate_process_jit_partitions_segment(
                 .collect();
 
             let stream_properties_map =
-                extract_properties_from_dict_column(stream_properties_column, ir)?;
+                extract_properties_from_binary_column(stream_properties_accessor.as_ref(), ir)?;
 
             let stream = Arc::new(StreamInfo {
                 stream_id,
@@ -387,7 +383,7 @@ pub async fn generate_process_jit_partitions(
     lake: Arc<DataLakeConnection>,
     blocks_view: &BlocksView,
     query_time_range: &TimeRange,
-    process: Arc<ProcessInfo>,
+    process: Arc<ProcessMetadata>,
     stream_tag: &str,
 ) -> Result<Vec<SourceDataBlocksInMemory>> {
     // Get insert time range for all blocks in this process

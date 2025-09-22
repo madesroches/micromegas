@@ -1,31 +1,57 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use datafusion::arrow::array::{
-    Array, DictionaryArray, Int32Array, Int64Array, ListArray, RecordBatch,
-    TimestampNanosecondArray,
-};
-use datafusion::arrow::datatypes::{DataType, Int32Type};
+use datafusion::arrow::array::{Int32Array, Int64Array, RecordBatch, TimestampNanosecondArray};
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_telemetry::{
     property::Property, stream_info::StreamInfo, types::block::BlockMetadata,
 };
-use micromegas_tracing::{prelude::*, process_info::ProcessInfo};
+use micromegas_tracing::prelude::*;
 use micromegas_transit::{UserDefinedType, uuid_utils::parse_optional_uuid};
 use sqlx::Row;
 use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::{
-    arrow_properties::read_property_list,
-    dfext::{string_column_accessor::string_column_by_name, typed_column::typed_column_by_name},
+    arrow_properties::serialize_properties_to_jsonb,
+    dfext::{
+        binary_column_accessor::binary_column_by_name,
+        string_column_accessor::string_column_by_name, typed_column::typed_column_by_name,
+    },
     lakehouse::{
         partition_cache::LivePartitionProvider, query::make_session_context,
         view_factory::ViewFactory,
     },
-    properties::utils::extract_properties_from_dict_column,
+    properties::utils::extract_properties_from_binary_column,
     time::TimeRange,
 };
 use datafusion::execution::runtime_env::RuntimeEnv;
+
+/// Type alias for shared, pre-serialized JSONB data.
+/// This represents JSONB properties that have been serialized once and can be reused.
+pub type SharedJsonbSerialized = Arc<Vec<u8>>;
+
+/// Analytics-optimized process metadata.
+///
+/// This struct is designed for analytics use cases where process properties need to be
+/// efficiently serialized to JSONB format multiple times. Unlike `ProcessInfo`, which
+/// uses `HashMap<String, String>` for properties, this struct stores pre-serialized
+/// JSONB data to eliminate redundant serialization overhead.
+#[derive(Debug, Clone)]
+pub struct ProcessMetadata {
+    // Core fields (same as ProcessInfo)
+    pub process_id: uuid::Uuid,
+    pub exe: String,
+    pub username: String,
+    pub realname: String,
+    pub computer: String,
+    pub distro: String,
+    pub cpu_brand: String,
+    pub tsc_frequency: i64,
+    pub start_time: chrono::DateTime<chrono::Utc>,
+    pub start_ticks: i64,
+    pub parent_process_id: Option<uuid::Uuid>,
+    pub properties: SharedJsonbSerialized,
+}
 
 /// Creates a `StreamInfo` from a database row.
 pub fn stream_from_row(row: &sqlx::postgres::PgRow) -> Result<StreamInfo> {
@@ -94,11 +120,15 @@ pub async fn list_process_streams_tagged(
     Ok(streams)
 }
 
-/// Creates a `ProcessInfo` from a database row.
+/// Creates a `ProcessMetadata` from a database row with pre-serialized JSONB properties.
 #[span_fn]
-pub fn process_from_row(row: &sqlx::postgres::PgRow) -> Result<ProcessInfo> {
+pub fn process_metadata_from_row(row: &sqlx::postgres::PgRow) -> Result<ProcessMetadata> {
     let properties: Vec<Property> = row.try_get("process_properties")?;
-    Ok(ProcessInfo {
+    let properties_map = micromegas_telemetry::property::into_hashmap(properties);
+    let serialized_properties = serialize_properties_to_jsonb(&properties_map)
+        .with_context(|| "serializing process properties to JSONB")?;
+
+    Ok(ProcessMetadata {
         process_id: row.try_get("process_id")?,
         exe: row.try_get("exe")?,
         username: row.try_get("username")?,
@@ -110,16 +140,16 @@ pub fn process_from_row(row: &sqlx::postgres::PgRow) -> Result<ProcessInfo> {
         start_time: row.try_get("start_time")?,
         start_ticks: row.try_get("start_ticks")?,
         parent_process_id: row.try_get("parent_process_id")?,
-        properties: micromegas_telemetry::property::into_hashmap(properties),
+        properties: Arc::new(serialized_properties),
     })
 }
 
-/// Finds a process by its ID.
+/// Finds a process by its ID and returns it as ProcessMetadata with pre-serialized JSONB properties.
 #[span_fn]
 pub async fn find_process(
     pool: &sqlx::Pool<sqlx::Postgres>,
     process_id: &sqlx::types::Uuid,
-) -> Result<ProcessInfo> {
+) -> Result<ProcessMetadata> {
     let row = sqlx::query(
         "SELECT process_id,
                 exe,
@@ -140,11 +170,11 @@ pub async fn find_process(
     .fetch_one(pool)
     .await
     .with_context(|| "select from processes")?;
-    process_from_row(&row)
+    process_metadata_from_row(&row)
 }
 
-/// Finds a process and its latest timing information using DataFusion.
-/// Returns (ProcessInfo, last_block_end_ticks, last_block_end_time)
+/// Finds a process and its latest timing information using DataFusion (optimized version).
+/// Returns (ProcessMetadata, last_block_end_ticks, last_block_end_time)
 #[span_fn]
 pub async fn find_process_with_latest_timing(
     runtime: Arc<RuntimeEnv>,
@@ -152,7 +182,7 @@ pub async fn find_process_with_latest_timing(
     view_factory: Arc<ViewFactory>,
     process_id: &Uuid,
     query_range: Option<TimeRange>,
-) -> Result<(ProcessInfo, i64, DateTime<Utc>)> {
+) -> Result<(ProcessMetadata, i64, DateTime<Utc>)> {
     let partition_provider = Arc::new(LivePartitionProvider::new(lake.db_pool.clone()));
 
     let ctx = make_session_context(
@@ -174,21 +204,23 @@ pub async fn find_process_with_latest_timing(
         process_id
     );
 
-    let df = instrument_named!(ctx.sql(&sql), "datafusion_sql_query")
+    let df = ctx
+        .sql(&sql)
         .await
-        .with_context(|| "executing DataFusion query for process with latest timing")?;
+        .with_context(|| "executing SQL query for process with timing")?;
 
-    let batches = instrument_named!(df.collect(), "datafusion_collect")
+    let results = df
+        .collect()
         .await
-        .with_context(|| "collecting DataFusion query results")?;
+        .with_context(|| "collecting results from DataFusion")?;
 
-    if batches.is_empty() || batches[0].num_rows() == 0 {
-        anyhow::bail!("Process not found: {}", process_id);
+    if results.is_empty() || results[0].num_rows() == 0 {
+        anyhow::bail!("Process not found");
     }
 
-    let batch = &batches[0];
+    let batch = &results[0];
 
-    // Extract process fields
+    // Extract all the required columns
     let process_id_column = string_column_by_name(batch, "process_id")?;
     let exe_column = string_column_by_name(batch, "exe")?;
     let username_column = string_column_by_name(batch, "username")?;
@@ -211,55 +243,17 @@ pub async fn find_process_with_latest_timing(
         parse_optional_uuid(parent_process_id_column.value(0))?
     };
 
-    // Handle properties column based on its data type
-    let properties_column = batch
-        .column_by_name("properties")
-        .ok_or_else(|| anyhow::anyhow!("properties column not found"))?;
+    // Handle properties column using BinaryColumnAccessor
+    let properties_accessor = binary_column_by_name(batch, "properties")
+        .with_context(|| "accessing properties column")?;
+    let properties = extract_properties_from_binary_column(properties_accessor.as_ref(), 0)
+        .with_context(|| "extracting properties from binary column")?;
 
-    let properties = if properties_column.is_null(0) {
-        Default::default()
-    } else {
-        match properties_column.data_type() {
-            DataType::List(_) => {
-                // Legacy format: List<Struct<key, value>>
-                let list_column: &ListArray = properties_column
-                    .as_any()
-                    .downcast_ref::<ListArray>()
-                    .ok_or_else(|| anyhow::anyhow!("failed to cast properties as ListArray"))?;
-                let properties_list = read_property_list(list_column.value(0))?;
-                micromegas_telemetry::property::into_hashmap(properties_list)
-            }
-            DataType::Dictionary(_, value_type) => {
-                // New format: Dictionary<Int32, Binary> (JSONB)
-                match value_type.as_ref() {
-                    DataType::Binary => {
-                        let dict_array: &DictionaryArray<Int32Type> = properties_column
-                            .as_any()
-                            .downcast_ref::<DictionaryArray<Int32Type>>()
-                            .ok_or_else(|| {
-                                anyhow::anyhow!("failed to cast properties as DictionaryArray")
-                            })?;
+    // Pre-serialize properties to JSONB for ProcessMetadata
+    let properties_jsonb = serialize_properties_to_jsonb(&properties)
+        .with_context(|| "serializing properties to JSONB for ProcessMetadata")?;
 
-                        extract_properties_from_dict_column(dict_array, 0)?
-                    }
-                    _ => {
-                        anyhow::bail!(
-                            "unsupported dictionary value type for properties: {:?}",
-                            value_type
-                        );
-                    }
-                }
-            }
-            _ => {
-                anyhow::bail!(
-                    "unsupported properties column type: {:?}",
-                    properties_column.data_type()
-                );
-            }
-        }
-    };
-
-    let process_info = ProcessInfo {
+    let process_metadata = ProcessMetadata {
         process_id: parse_optional_uuid(process_id_column.value(0))?
             .ok_or_else(|| anyhow::anyhow!("process_id cannot be empty"))?,
         exe: exe_column.value(0).to_string(),
@@ -272,13 +266,13 @@ pub async fn find_process_with_latest_timing(
         start_time: DateTime::from_timestamp_nanos(start_time_column.value(0)),
         start_ticks: start_ticks_column.value(0),
         parent_process_id,
-        properties,
+        properties: Arc::new(properties_jsonb),
     };
 
     let last_block_end_ticks = last_block_end_ticks_column.value(0);
     let last_block_end_time = DateTime::from_timestamp_nanos(last_block_end_time_column.value(0));
 
-    Ok((process_info, last_block_end_ticks, last_block_end_time))
+    Ok((process_metadata, last_block_end_ticks, last_block_end_time))
 }
 /// Creates a `BlockMetadata` from a database row.
 #[span_fn]

@@ -18,11 +18,15 @@ use micromegas_tracing::{
 };
 use serial_test::serial;
 
+mod test_helpers;
+use test_helpers::make_process_metadata;
+
 #[test]
 #[serial]
 fn test_static_metrics() {
     let process_id = uuid::Uuid::new_v4();
-    let process_info = make_process_info(process_id, Some(uuid::Uuid::new_v4()), HashMap::new());
+    let process_info_for_encode =
+        make_process_info(process_id, Some(uuid::Uuid::new_v4()), HashMap::new());
     let mut stream = MetricsStream::new(1024, process_id, &[], HashMap::new());
     let stream_id = stream.stream_id();
 
@@ -48,7 +52,7 @@ fn test_static_metrics() {
     let mut block =
         stream.replace_block(Arc::new(MetricsBlock::new(1024, process_id, stream_id, 0)));
     Arc::get_mut(&mut block).unwrap().close();
-    let encoded = block.encode_bin(&process_info).unwrap();
+    let encoded = block.encode_bin(&process_info_for_encode).unwrap();
     let received_block: micromegas_telemetry::block_wire_format::Block =
         ciborium::from_reader(&encoded[..]).unwrap();
 
@@ -75,11 +79,7 @@ fn test_static_metrics() {
 #[serial]
 fn test_stress_tagged_measures() {
     let process_id = uuid::Uuid::new_v4();
-    let process_info = Arc::new(make_process_info(
-        process_id,
-        Some(uuid::Uuid::new_v4()),
-        HashMap::new(),
-    ));
+    let process_info = make_process_info(process_id, Some(uuid::Uuid::new_v4()), HashMap::new());
     let mut stream = MetricsStream::new(1024, process_id, &[], HashMap::new());
     let stream_id = stream.stream_id();
 
@@ -126,7 +126,9 @@ fn test_stress_tagged_measures() {
 #[serial]
 fn test_tagged_measures() {
     let process_id = uuid::Uuid::new_v4();
-    let process_info = Arc::new(make_process_info(
+    let process_info_for_encode =
+        make_process_info(process_id, Some(uuid::Uuid::new_v4()), HashMap::new());
+    let process_info = Arc::new(make_process_metadata(
         process_id,
         Some(uuid::Uuid::new_v4()),
         HashMap::new(),
@@ -166,7 +168,7 @@ fn test_tagged_measures() {
     let mut block =
         stream.replace_block(Arc::new(MetricsBlock::new(1024, process_id, stream_id, 0)));
     Arc::get_mut(&mut block).unwrap().close();
-    let encoded = block.encode_bin(&process_info).unwrap();
+    let encoded = block.encode_bin(&process_info_for_encode).unwrap();
     let received_block: micromegas_telemetry::block_wire_format::Block =
         ciborium::from_reader(&encoded[..]).unwrap();
     let stream_info = make_stream_info(&stream);

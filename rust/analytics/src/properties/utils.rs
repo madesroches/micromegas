@@ -1,10 +1,10 @@
 //! Utility functions for converting between property formats
 
 use anyhow::{Context, Result};
-use datafusion::arrow::array::{Array, AsArray, DictionaryArray};
-use datafusion::arrow::datatypes::Int32Type;
 use jsonb::RawJsonb;
 use std::collections::HashMap;
+
+use crate::dfext::binary_column_accessor::BinaryColumnAccessor;
 
 /// Convert JSONB bytes to a property HashMap
 pub fn jsonb_to_property_map(jsonb_bytes: &[u8]) -> Result<HashMap<String, String>> {
@@ -33,19 +33,16 @@ pub fn jsonb_to_property_map(jsonb_bytes: &[u8]) -> Result<HashMap<String, Strin
     Ok(map)
 }
 
-/// Extract properties from a dictionary-encoded JSONB column at the given row index.
+/// Extract properties from a binary column accessor at the given row index.
 /// Returns an empty HashMap if the column value is null, otherwise deserializes the JSONB.
-pub fn extract_properties_from_dict_column(
-    column: &DictionaryArray<Int32Type>,
+pub fn extract_properties_from_binary_column(
+    column: &dyn BinaryColumnAccessor,
     row_index: usize,
 ) -> Result<HashMap<String, String>> {
     if column.is_null(row_index) {
         Ok(HashMap::new())
     } else {
-        let key_index = column.keys().value(row_index) as usize;
-        let values_array = column.values();
-        let binary_array = values_array.as_binary::<i32>();
-        let jsonb_bytes = binary_array.value(key_index);
+        let jsonb_bytes = column.value(row_index);
         jsonb_to_property_map(jsonb_bytes)
     }
 }
