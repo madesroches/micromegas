@@ -1,5 +1,7 @@
 /// Write log entries as a SendableRecordBatchStream
 pub mod async_log_stream;
+/// Unified binary column accessor for Arrow arrays
+pub mod binary_column_accessor;
 /// Utilities to help deal with df expressions
 pub mod expressions;
 /// Compute histograms from SQL

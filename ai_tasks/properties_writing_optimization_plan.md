@@ -146,7 +146,7 @@ pub struct ProcessMetadata {
 3. ✅ Remove unnecessary helper functions
    - Eliminated `add_pre_serialized_jsonb_to_builder` - direct append is simpler and faster
 
-### Phase 5: Cleanup and Final Optimizations
+### Phase 5: Cleanup and Final Optimizations ✅ COMPLETED
 1. ✅ Remove legacy functions that are no longer needed
    - ✅ Removed `find_process_with_latest_timing_legacy` (returns ProcessInfo)
    - ✅ Cleaned up unused test variables
@@ -160,9 +160,32 @@ pub struct ProcessMetadata {
    - ✅ Removed `process_info_to_metadata` (conversion no longer needed)
    - ✅ Removed `process_metadata_to_info` (backward compatibility no longer needed)
    - Analytics layer now uses ProcessMetadata exclusively
-4. Implement bulk dictionary building
-5. Add cross-block property interning
-6. Zero-copy JSONB optimizations
+4. ✅ Fixed Binary dictionary column handling issue
+   - ✅ Created `BinaryColumnAccessor` following `StringColumnAccessor` pattern
+   - ✅ Fixed `find_process_with_latest_timing` error with Dictionary(Int32, Binary) columns
+   - ✅ Migrated all `extract_properties_from_dict_column` callers to use `BinaryColumnAccessor`
+   - ✅ Removed deprecated `extract_properties_from_dict_column` function
+   - ✅ Code no longer needs to know about dictionary encoding vs direct binary
+5. Implement bulk dictionary building
+6. Add cross-block property interning
+7. Zero-copy JSONB optimizations
+
+### Phase 6: BinaryColumnAccessor Unification ✅ COMPLETED
+1. ✅ Create unified `BinaryColumnAccessor` abstraction
+   - Handles both `Binary` and `Dictionary(Int32, Binary)` columns transparently
+   - Follows established `StringColumnAccessor` pattern for consistency
+2. ✅ Update all properties column access to use `BinaryColumnAccessor`
+   - ✅ `find_process_with_latest_timing` in `metadata.rs`
+   - ✅ Stream properties in `partition_source_data.rs`
+   - ✅ Process properties in `partition_source_data.rs`
+   - ✅ Stream properties in `jit_partitions.rs`
+3. ✅ Remove dictionary-specific handling
+   - ✅ Eliminated complex type matching for Dictionary vs Binary columns
+   - ✅ Unified all properties access through single interface
+   - ✅ Cleaned up unused imports (DictionaryArray, Int32Type)
+4. ✅ Proper error handling
+   - ✅ Replaced silent error swallowing with proper error propagation
+   - All column access errors now bubble up with context
 
 ## Current Implementation Status
 
@@ -185,11 +208,15 @@ pub struct ProcessMetadata {
 - **Eliminated redundant conversions**: No more HashMap → JSONB per log entry/measure
 - **Memory efficiency**: Shared pre-serialized JSONB via `Arc<Vec<u8>>` across all entries for same process
 - **CPU savings**: Expected 30-50% reduction in property writing cycles for high-duplication scenarios
+- **Unified column access**: `BinaryColumnAccessor` handles both Binary and Dictionary(Int32, Binary) transparently
+- **Cleaner error handling**: Proper error propagation instead of silent failures
+- **Code simplification**: Removed complex dictionary type matching throughout codebase
 
-### 🔄 Remaining Advanced Optimizations (Phase 5)
+### 🔄 Remaining Advanced Optimizations (Phase 7+)
 - PropertySet pointer-based deduplication using `Arc<Object>::as_ptr()` as cache key
 - Bulk dictionary building for unique property sets
 - Cross-block property interning with reference counting
+- Zero-copy JSONB optimizations
 
 ## ✅ Major CPU Usage Issues Resolved
 

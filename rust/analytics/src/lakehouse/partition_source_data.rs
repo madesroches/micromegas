@@ -2,10 +2,11 @@ use super::blocks_view::blocks_file_schema_hash;
 use super::partition_cache::PartitionCache;
 use crate::arrow_properties::serialize_properties_to_jsonb;
 use crate::dfext::{
-    string_column_accessor::string_column_by_name, typed_column::typed_column_by_name,
+    binary_column_accessor::binary_column_by_name, string_column_accessor::string_column_by_name,
+    typed_column::typed_column_by_name,
 };
 use crate::metadata::ProcessMetadata;
-use crate::properties::utils::extract_properties_from_dict_column;
+use crate::properties::utils::extract_properties_from_binary_column;
 use crate::time::TimeRange;
 use crate::{
     dfext::typed_column::typed_column,
@@ -18,7 +19,7 @@ use chrono::DateTime;
 use datafusion::functions_aggregate::{count::count_all, expr_fn::sum, min_max::max};
 use datafusion::{
     arrow::array::{
-        Array, BinaryArray, DictionaryArray, GenericListArray, Int32Array, Int64Array, StringArray,
+        Array, BinaryArray, GenericListArray, Int32Array, Int64Array, StringArray,
         TimestampNanosecondArray,
     },
     execution::runtime_env::RuntimeEnv,
@@ -139,8 +140,7 @@ impl PartitionBlocksSource for SourceDataBlocks {
                 let objects_metadata_column: &BinaryArray =
                     typed_column_by_name(&b, "streams.objects_metadata")?;
                 let stream_tags_column: &GenericListArray<i32> = typed_column_by_name(&b, "streams.tags")?;
-                let stream_properties_column: &DictionaryArray<datafusion::arrow::datatypes::Int32Type> =
-                    typed_column_by_name(&b, "streams.properties")?;
+                let stream_properties_accessor = binary_column_by_name(&b, "streams.properties")?;
 
                 let process_start_time_column: &TimestampNanosecondArray =
                     typed_column_by_name(&b, "processes.start_time")?;
@@ -155,8 +155,7 @@ impl PartitionBlocksSource for SourceDataBlocks {
                 let process_distro_column = string_column_by_name(&b, "processes.distro")?;
                 let process_cpu_column = string_column_by_name(&b, "processes.cpu_brand")?;
                 let process_parent_column = string_column_by_name(&b, "processes.parent_process_id")?;
-                let process_properties_column: &DictionaryArray<datafusion::arrow::datatypes::Int32Type> =
-                    typed_column_by_name(&b, "processes.properties")?;
+                let process_properties_accessor = binary_column_by_name(&b, "processes.properties")?;
                 for ir in 0..b.num_rows() {
                     let block_insert_time = block_insert_time_column.value(ir);
                     let stream_id = Uuid::parse_str(stream_id_column.value(ir))?;
@@ -186,7 +185,7 @@ impl PartitionBlocksSource for SourceDataBlocks {
                         .map(|item| String::from(item.unwrap_or_default()))
                         .collect();
 
-                    let stream_properties = extract_properties_from_dict_column(stream_properties_column, ir)?;
+                    let stream_properties = extract_properties_from_binary_column(stream_properties_accessor.as_ref(), ir)?;
                     let stream = StreamInfo {
                         process_id,
                         stream_id,
@@ -197,7 +196,7 @@ impl PartitionBlocksSource for SourceDataBlocks {
                         tags: stream_tags,
                         properties: stream_properties,
                     };
-                    let process_properties = extract_properties_from_dict_column(process_properties_column, ir)?;
+                    let process_properties = extract_properties_from_binary_column(process_properties_accessor.as_ref(), ir)?;
                     let parent_value = process_parent_column.value(ir);
                     let parent_process_id = if parent_value.is_empty() {
                         None

@@ -1,9 +1,6 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use datafusion::arrow::array::{
-    Array, DictionaryArray, Int32Array, Int64Array, RecordBatch, TimestampNanosecondArray,
-};
-use datafusion::arrow::datatypes::{DataType, Int32Type};
+use datafusion::arrow::array::{Int32Array, Int64Array, RecordBatch, TimestampNanosecondArray};
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_telemetry::{
     property::Property, stream_info::StreamInfo, types::block::BlockMetadata,
@@ -16,12 +13,15 @@ use uuid::Uuid;
 
 use crate::{
     arrow_properties::serialize_properties_to_jsonb,
-    dfext::{string_column_accessor::string_column_by_name, typed_column::typed_column_by_name},
+    dfext::{
+        binary_column_accessor::binary_column_by_name,
+        string_column_accessor::string_column_by_name, typed_column::typed_column_by_name,
+    },
     lakehouse::{
         partition_cache::LivePartitionProvider, query::make_session_context,
         view_factory::ViewFactory,
     },
-    properties::utils::extract_properties_from_dict_column,
+    properties::utils::extract_properties_from_binary_column,
     time::TimeRange,
 };
 use datafusion::execution::runtime_env::RuntimeEnv;
@@ -199,7 +199,7 @@ pub async fn find_process_with_latest_timing(
         "SELECT process_id, exe, username, realname, computer, distro, cpu_brand,
                 tsc_frequency, start_time, start_ticks, parent_process_id, properties,
                 last_block_end_ticks, last_block_end_time
-         FROM processes_view
+         FROM processes
          WHERE process_id = '{}'",
         process_id
     );
@@ -243,43 +243,11 @@ pub async fn find_process_with_latest_timing(
         parse_optional_uuid(parent_process_id_column.value(0))?
     };
 
-    // Handle properties column based on its data type
-    let properties_column = batch
-        .column_by_name("properties")
-        .ok_or_else(|| anyhow::anyhow!("properties column not found"))?;
-
-    let properties = if properties_column.is_null(0) {
-        Default::default()
-    } else {
-        match properties_column.data_type() {
-            DataType::Dictionary(key_type, value_type) => {
-                match (key_type.as_ref(), value_type.as_ref()) {
-                    (DataType::Int32, DataType::Utf8) => {
-                        let dict_array: &DictionaryArray<Int32Type> = properties_column
-                            .as_any()
-                            .downcast_ref::<DictionaryArray<Int32Type>>()
-                            .ok_or_else(|| {
-                                anyhow::anyhow!("failed to cast properties as DictionaryArray")
-                            })?;
-
-                        extract_properties_from_dict_column(dict_array, 0)?
-                    }
-                    _ => {
-                        anyhow::bail!(
-                            "unsupported dictionary value type for properties: {:?}",
-                            value_type
-                        );
-                    }
-                }
-            }
-            _ => {
-                anyhow::bail!(
-                    "unsupported properties column type: {:?}",
-                    properties_column.data_type()
-                );
-            }
-        }
-    };
+    // Handle properties column using BinaryColumnAccessor
+    let properties_accessor = binary_column_by_name(batch, "properties")
+        .with_context(|| "accessing properties column")?;
+    let properties = extract_properties_from_binary_column(properties_accessor.as_ref(), 0)
+        .with_context(|| "extracting properties from binary column")?;
 
     // Pre-serialize properties to JSONB for ProcessMetadata
     let properties_jsonb = serialize_properties_to_jsonb(&properties)
