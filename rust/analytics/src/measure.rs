@@ -1,4 +1,5 @@
 use crate::{
+    metadata::ProcessMetadata,
     payload::{fetch_block_payload, parse_block},
     property_set::PropertySet,
     time::ConvertTicks,
@@ -13,7 +14,7 @@ use std::sync::Arc;
 
 /// Represents a single metric measurement.
 pub struct Measure {
-    pub process: Arc<ProcessInfo>,
+    pub process: Arc<ProcessMetadata>,
     pub stream_id: Arc<String>,
     pub block_id: Arc<String>,
     pub insert_time: i64, // nanoseconds
@@ -27,7 +28,7 @@ pub struct Measure {
 
 /// Creates a `Measure` from a `Value`.
 pub fn measure_from_value(
-    process: Arc<ProcessInfo>,
+    process: Arc<ProcessMetadata>,
     stream_id: Arc<String>,
     block_id: Arc<String>,
     block_insert_time_ns: i64,
@@ -254,7 +255,7 @@ pub fn measure_from_value(
 pub async fn for_each_measure_in_block<Predicate: FnMut(Measure) -> Result<bool>>(
     blob_storage: Arc<BlobStorage>,
     convert_ticks: &ConvertTicks,
-    process: Arc<ProcessInfo>,
+    process: Arc<ProcessMetadata>,
     stream: &StreamInfo,
     block: &BlockMetadata,
     mut fun: Predicate,

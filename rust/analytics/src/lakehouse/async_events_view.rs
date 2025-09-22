@@ -10,7 +10,7 @@ use super::{
 use crate::{
     async_events_table::async_events_table_schema,
     lakehouse::jit_partitions::{generate_process_jit_partitions, is_jit_partition_up_to_date},
-    metadata::find_process_with_latest_timing,
+    metadata::find_process_with_latest_timing_optimized,
     time::{TimeRange, datetime_to_scalar, make_time_converter_from_latest_timing},
 };
 use anyhow::{Context, Result};
@@ -125,17 +125,18 @@ impl View for AsyncEventsView {
         lake: Arc<DataLakeConnection>,
         query_range: Option<TimeRange>,
     ) -> Result<()> {
-        let (process, last_block_end_ticks, last_block_end_time) = find_process_with_latest_timing(
-            runtime.clone(),
-            lake.clone(),
-            self.view_factory.clone(),
-            &self
-                .process_id
-                .with_context(|| "getting a view's process_id")?,
-            query_range,
-        )
-        .await
-        .with_context(|| "find_process_with_latest_timing")?;
+        let (process, last_block_end_ticks, last_block_end_time) =
+            find_process_with_latest_timing_optimized(
+                runtime.clone(),
+                lake.clone(),
+                self.view_factory.clone(),
+                &self
+                    .process_id
+                    .with_context(|| "getting a view's process_id")?,
+                query_range,
+            )
+            .await
+            .with_context(|| "find_process_with_latest_timing_optimized")?;
 
         let process = Arc::new(process);
         let query_range =

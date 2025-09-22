@@ -1,4 +1,5 @@
 use crate::{
+    metadata::ProcessMetadata,
     payload::{fetch_block_payload, parse_block},
     property_set::PropertySet,
     time::ConvertTicks,
@@ -14,7 +15,7 @@ use std::sync::Arc;
 /// A single log entry.
 #[derive(Debug)]
 pub struct LogEntry {
-    pub process: Arc<ProcessInfo>,
+    pub process: Arc<ProcessMetadata>,
     pub stream_id: Arc<String>,
     pub block_id: Arc<String>,
     pub insert_time: i64,
@@ -29,7 +30,7 @@ pub struct LogEntry {
 #[span_fn]
 pub fn log_entry_from_value(
     convert_ticks: &ConvertTicks,
-    process: Arc<ProcessInfo>,
+    process: Arc<ProcessMetadata>,
     stream_id: Arc<String>,
     block_id: Arc<String>,
     block_insert_time_ns: i64,
@@ -206,7 +207,7 @@ pub fn log_entry_from_value(
 pub async fn for_each_log_entry_in_block<Predicate: FnMut(LogEntry) -> Result<bool>>(
     blob_storage: Arc<BlobStorage>,
     convert_ticks: &ConvertTicks,
-    process: Arc<ProcessInfo>,
+    process: Arc<ProcessMetadata>,
     stream: &StreamInfo,
     block: &BlockMetadata,
     mut fun: Predicate,

@@ -1,8 +1,10 @@
 use super::blocks_view::blocks_file_schema_hash;
 use super::partition_cache::PartitionCache;
+use crate::arrow_properties::serialize_properties_to_jsonb;
 use crate::dfext::{
     string_column_accessor::string_column_by_name, typed_column::typed_column_by_name,
 };
+use crate::metadata::ProcessMetadata;
 use crate::properties::utils::extract_properties_from_dict_column;
 use crate::time::TimeRange;
 use crate::{
@@ -25,7 +27,6 @@ use datafusion::{
 use futures::{StreamExt, stream::BoxStream};
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_telemetry::{stream_info::StreamInfo, types::block::BlockMetadata};
-use micromegas_tracing::process_info::ProcessInfo;
 use std::fmt::Debug;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -35,7 +36,7 @@ use uuid::Uuid;
 pub struct PartitionSourceBlock {
     pub block: BlockMetadata,
     pub stream: Arc<StreamInfo>,
-    pub process: Arc<ProcessInfo>,
+    pub process: Arc<ProcessMetadata>,
 }
 
 /// A trait for providing blocks of source data for partitions.
@@ -203,7 +204,12 @@ impl PartitionBlocksSource for SourceDataBlocks {
                     } else {
                         Some(Uuid::parse_str(parent_value).with_context(|| "parsing parent process_id")?)
                     };
-                    let process = ProcessInfo {
+
+                    // Pre-serialize properties to JSONB for ProcessMetadata
+                    let properties_jsonb = serialize_properties_to_jsonb(&process_properties)
+                        .with_context(|| "serializing properties to JSONB")?;
+
+                    let process = ProcessMetadata {
                         process_id,
                         exe: process_exe_column.value(ir).into(),
                         username: process_username_column.value(ir).into(),
@@ -215,12 +221,12 @@ impl PartitionBlocksSource for SourceDataBlocks {
                         start_time: DateTime::from_timestamp_nanos(process_start_time_column.value(ir)),
                         start_ticks: process_start_ticks_column.value(ir),
                         parent_process_id,
-                        properties: process_properties,
+                        properties: Arc::new(properties_jsonb),
                     };
                     yield Arc::new(PartitionSourceBlock {
                         block,
                         stream: stream.into(),
-                        process: process.into(),
+                        process: Arc::new(process),
                     });
                 }
             }

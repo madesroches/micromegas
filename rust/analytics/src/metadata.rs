@@ -419,6 +419,140 @@ pub async fn find_process_with_latest_timing(
 
     Ok((process_info, last_block_end_ticks, last_block_end_time))
 }
+
+/// Finds a process and its latest timing information using DataFusion (optimized version).
+/// Returns (ProcessMetadata, last_block_end_ticks, last_block_end_time)
+#[span_fn]
+pub async fn find_process_with_latest_timing_optimized(
+    runtime: Arc<RuntimeEnv>,
+    lake: Arc<DataLakeConnection>,
+    view_factory: Arc<ViewFactory>,
+    process_id: &Uuid,
+    query_range: Option<TimeRange>,
+) -> Result<(ProcessMetadata, i64, DateTime<Utc>)> {
+    let partition_provider = Arc::new(LivePartitionProvider::new(lake.db_pool.clone()));
+
+    let ctx = make_session_context(
+        runtime,
+        lake.clone(),
+        partition_provider,
+        query_range,
+        view_factory,
+    )
+    .await
+    .with_context(|| "creating DataFusion session context")?;
+
+    let sql = format!(
+        "SELECT process_id, exe, username, realname, computer, distro, cpu_brand,
+                tsc_frequency, start_time, start_ticks, parent_process_id, properties,
+                last_block_end_ticks, last_block_end_time
+         FROM processes_view
+         WHERE process_id = '{}'",
+        process_id
+    );
+
+    let df = ctx
+        .sql(&sql)
+        .await
+        .with_context(|| "executing SQL query for process with timing")?;
+
+    let results = df
+        .collect()
+        .await
+        .with_context(|| "collecting results from DataFusion")?;
+
+    if results.is_empty() || results[0].num_rows() == 0 {
+        anyhow::bail!("Process not found");
+    }
+
+    let batch = &results[0];
+
+    // Extract all the required columns
+    let process_id_column = string_column_by_name(batch, "process_id")?;
+    let exe_column = string_column_by_name(batch, "exe")?;
+    let username_column = string_column_by_name(batch, "username")?;
+    let realname_column = string_column_by_name(batch, "realname")?;
+    let computer_column = string_column_by_name(batch, "computer")?;
+    let distro_column = string_column_by_name(batch, "distro")?;
+    let cpu_brand_column = string_column_by_name(batch, "cpu_brand")?;
+    let tsc_frequency_column: &Int64Array = typed_column_by_name(batch, "tsc_frequency")?;
+    let start_time_column: &TimestampNanosecondArray = typed_column_by_name(batch, "start_time")?;
+    let start_ticks_column: &Int64Array = typed_column_by_name(batch, "start_ticks")?;
+    let last_block_end_ticks_column: &Int64Array =
+        typed_column_by_name(batch, "last_block_end_ticks")?;
+    let last_block_end_time_column: &TimestampNanosecondArray =
+        typed_column_by_name(batch, "last_block_end_time")?;
+    let parent_process_id_column = string_column_by_name(batch, "parent_process_id")?;
+
+    let parent_process_id = if parent_process_id_column.is_null(0) {
+        None
+    } else {
+        parse_optional_uuid(parent_process_id_column.value(0))?
+    };
+
+    // Handle properties column based on its data type
+    let properties_column = batch
+        .column_by_name("properties")
+        .ok_or_else(|| anyhow::anyhow!("properties column not found"))?;
+
+    let properties = if properties_column.is_null(0) {
+        Default::default()
+    } else {
+        match properties_column.data_type() {
+            DataType::Dictionary(key_type, value_type) => {
+                match (key_type.as_ref(), value_type.as_ref()) {
+                    (DataType::Int32, DataType::Utf8) => {
+                        let dict_array: &DictionaryArray<Int32Type> = properties_column
+                            .as_any()
+                            .downcast_ref::<DictionaryArray<Int32Type>>()
+                            .ok_or_else(|| {
+                                anyhow::anyhow!("failed to cast properties as DictionaryArray")
+                            })?;
+
+                        extract_properties_from_dict_column(dict_array, 0)?
+                    }
+                    _ => {
+                        anyhow::bail!(
+                            "unsupported dictionary value type for properties: {:?}",
+                            value_type
+                        );
+                    }
+                }
+            }
+            _ => {
+                anyhow::bail!(
+                    "unsupported properties column type: {:?}",
+                    properties_column.data_type()
+                );
+            }
+        }
+    };
+
+    // Pre-serialize properties to JSONB for ProcessMetadata
+    let properties_jsonb = serialize_properties_to_jsonb(&properties)
+        .with_context(|| "serializing properties to JSONB for ProcessMetadata")?;
+
+    let process_metadata = ProcessMetadata {
+        process_id: parse_optional_uuid(process_id_column.value(0))?
+            .ok_or_else(|| anyhow::anyhow!("process_id cannot be empty"))?,
+        exe: exe_column.value(0).to_string(),
+        username: username_column.value(0).to_string(),
+        realname: realname_column.value(0).to_string(),
+        computer: computer_column.value(0).to_string(),
+        distro: distro_column.value(0).to_string(),
+        cpu_brand: cpu_brand_column.value(0).to_string(),
+        tsc_frequency: tsc_frequency_column.value(0),
+        start_time: DateTime::from_timestamp_nanos(start_time_column.value(0)),
+        start_ticks: start_ticks_column.value(0),
+        parent_process_id,
+        properties: Arc::new(properties_jsonb),
+    };
+
+    let last_block_end_ticks = last_block_end_ticks_column.value(0);
+    let last_block_end_time = DateTime::from_timestamp_nanos(last_block_end_time_column.value(0));
+
+    Ok((process_metadata, last_block_end_ticks, last_block_end_time))
+}
 /// Creates a `BlockMetadata` from a database row.
 #[span_fn]
 pub fn block_from_row(row: &sqlx::postgres::PgRow) -> Result<BlockMetadata> {

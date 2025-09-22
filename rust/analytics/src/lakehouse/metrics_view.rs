@@ -1,6 +1,6 @@
 use crate::{
     lakehouse::blocks_view::BlocksView,
-    metadata::find_process,
+    metadata::find_process_optimized,
     metrics_table::metrics_table_schema,
     time::{TimeRange, datetime_to_scalar},
 };
@@ -139,16 +139,16 @@ impl View for MetricsView {
             // this view instance is updated using the deamon
             return Ok(());
         }
-        info!("find_process");
+        info!("find_process_optimized");
         let process = Arc::new(
-            find_process(
+            find_process_optimized(
                 &lake.db_pool,
                 &self
                     .process_id
                     .with_context(|| "getting a view's process_id")?,
             )
             .await
-            .with_context(|| "find_process")?,
+            .with_context(|| "find_process_optimized")?,
         );
 
         //todo: use last_update_time in process

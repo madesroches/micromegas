@@ -8,7 +8,7 @@ use super::{
 use crate::{
     dfext::typed_column::get_single_row_primitive_value,
     lakehouse::{partition_cache::PartitionCache, view::PartitionSpec},
-    metadata::block_from_batch_row,
+    metadata::{ProcessMetadata, block_from_batch_row},
     time::TimeRange,
 };
 use crate::{
@@ -25,7 +25,6 @@ use datafusion::{
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_telemetry::stream_info::StreamInfo;
 use micromegas_tracing::prelude::*;
-use micromegas_tracing::process_info::ProcessInfo;
 use sqlx::Row;
 use std::sync::Arc;
 
@@ -103,7 +102,7 @@ pub async fn generate_stream_jit_partitions_segment(
     blocks_view: &BlocksView,
     insert_time_range: &TimeRange,
     stream: Arc<StreamInfo>,
-    process: Arc<ProcessInfo>,
+    process: Arc<ProcessMetadata>,
 ) -> Result<Vec<SourceDataBlocksInMemory>> {
     let cache = PartitionCache::fetch_overlapping_insert_range_for_view(
         &lake.db_pool,
@@ -192,7 +191,7 @@ pub async fn generate_stream_jit_partitions(
     blocks_view: &BlocksView,
     query_time_range: &TimeRange,
     stream: Arc<StreamInfo>,
-    process: Arc<ProcessInfo>,
+    process: Arc<ProcessMetadata>,
 ) -> Result<Vec<SourceDataBlocksInMemory>> {
     let insert_time_range = get_insert_time_range(
         runtime.clone(),
@@ -244,7 +243,7 @@ pub async fn generate_process_jit_partitions_segment(
     lake: Arc<DataLakeConnection>,
     blocks_view: &BlocksView,
     insert_time_range: &TimeRange,
-    process: Arc<ProcessInfo>,
+    process: Arc<ProcessMetadata>,
     stream_tag: &str,
 ) -> Result<Vec<SourceDataBlocksInMemory>> {
     let cache = PartitionCache::fetch_overlapping_insert_range_for_view(
@@ -387,7 +386,7 @@ pub async fn generate_process_jit_partitions(
     lake: Arc<DataLakeConnection>,
     blocks_view: &BlocksView,
     query_time_range: &TimeRange,
-    process: Arc<ProcessInfo>,
+    process: Arc<ProcessMetadata>,
     stream_tag: &str,
 ) -> Result<Vec<SourceDataBlocksInMemory>> {
     // Get insert time range for all blocks in this process
