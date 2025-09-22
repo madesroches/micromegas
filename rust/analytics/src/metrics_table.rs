@@ -163,6 +163,48 @@ impl MetricsRecordBuilder {
         Ok(())
     }
 
+    /// Append only per-entry variable data (optimized for batch processing)
+    pub fn append_entry_only(&mut self, row: &Measure) -> Result<()> {
+        // Only append fields that truly vary per metrics entry
+        self.times.append_value(row.time);
+        self.targets.append_value(&*row.target);
+        self.names.append_value(&*row.name);
+        self.units.append_value(&*row.unit);
+        self.values.append_value(row.value);
+        add_property_set_to_jsonb_builder(&row.properties, &mut self.properties)?;
+        Ok(())
+    }
+
+    /// Batch fill all constant columns for all entries in block
+    pub fn fill_constant_columns(
+        &mut self,
+        process: &crate::metadata::ProcessMetadata,
+        stream_id: &str,
+        block_id: &str,
+        insert_time: i64,
+        entry_count: usize,
+    ) -> Result<()> {
+        let process_id_str = format!("{}", process.process_id);
+
+        // For PrimitiveBuilder (insert_times): use append_slice for better performance
+        let insert_times_slice = vec![insert_time; entry_count];
+        self.insert_times.append_slice(&insert_times_slice);
+
+        // For BinaryDictionaryBuilder (process_properties): use append_values for same value
+        self.process_properties
+            .append_values(&**process.properties, entry_count);
+
+        // For StringDictionaryBuilder: use append_values for same values (optimal for constant data)
+        self.process_ids.append_values(&process_id_str, entry_count);
+        self.stream_ids.append_values(stream_id, entry_count);
+        self.block_ids.append_values(block_id, entry_count);
+        self.exes.append_values(&process.exe, entry_count);
+        self.usernames.append_values(&process.username, entry_count);
+        self.computers.append_values(&process.computer, entry_count);
+
+        Ok(())
+    }
+
     pub fn finish(mut self) -> Result<RecordBatch> {
         RecordBatch::try_new(
             Arc::new(metrics_table_schema()),

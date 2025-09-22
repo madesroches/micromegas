@@ -158,6 +158,44 @@ impl LogEntriesRecordBuilder {
         Ok(())
     }
 
+    /// Append only per-entry variable data (optimized for batch processing)
+    pub fn append_entry_only(&mut self, row: &LogEntry) -> Result<()> {
+        // Only append fields that truly vary per log entry
+        self.times.append_value(row.time);
+        self.targets.append_value(&*row.target);
+        self.levels.append_value(row.level);
+        self.msgs.append_value(&*row.msg);
+        add_property_set_to_jsonb_builder(&row.properties, &mut self.properties)?;
+        Ok(())
+    }
+
+    /// Batch fill all constant columns for all entries in block
+    pub fn fill_constant_columns(
+        &mut self,
+        process: &crate::metadata::ProcessMetadata,
+        stream_id: &str,
+        block_id: &str,
+        insert_time: i64,
+        entry_count: usize,
+    ) -> Result<()> {
+        let process_id_str = format!("{}", process.process_id);
+
+        // For PrimitiveBuilder (insert_times): use append_slice for better performance
+        let insert_times_slice = vec![insert_time; entry_count];
+        self.insert_times.append_slice(&insert_times_slice);
+
+        self.process_ids.append_values(&process_id_str, entry_count);
+        self.stream_ids.append_values(stream_id, entry_count);
+        self.block_ids.append_values(block_id, entry_count);
+        self.exes.append_values(&process.exe, entry_count);
+        self.usernames.append_values(&process.username, entry_count);
+        self.computers.append_values(&process.computer, entry_count);
+        self.process_properties
+            .append_values(&**process.properties, entry_count);
+
+        Ok(())
+    }
+
     pub fn finish(mut self) -> Result<RecordBatch> {
         RecordBatch::try_new(
             Arc::new(log_table_schema()),
