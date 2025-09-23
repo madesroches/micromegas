@@ -11,10 +11,12 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::{
-    arrow_properties::read_property_list,
-    dfext::{string_column_accessor::string_column_by_name, typed_column::typed_column_by_name},
+    dfext::{
+        properties_column_accessor::properties_column_by_name,
+        string_column_accessor::string_column_by_name, typed_column::typed_column_by_name,
+    },
+    properties::utils::extract_properties_from_properties_column,
 };
-
 async fn ingest_streams(
     lake: Arc<DataLakeConnection>,
     mut rb_stream: FlightRecordBatchStream,
@@ -30,7 +32,7 @@ async fn ingest_streams(
             typed_column_by_name(&b, "dependencies_metadata")?;
         let objects_metadata_column: &BinaryArray = typed_column_by_name(&b, "objects_metadata")?;
         let tags_column: &GenericListArray<i32> = typed_column_by_name(&b, "tags")?;
-        let properties_column: &GenericListArray<i32> = typed_column_by_name(&b, "properties")?;
+        let properties_accessor = properties_column_by_name(&b, "properties")?;
         let insert_time_column: &TimestampNanosecondArray =
             typed_column_by_name(&b, "insert_time")?;
 
@@ -45,7 +47,9 @@ async fn ingest_streams(
                 .iter()
                 .map(|item| String::from(item.unwrap_or_default()))
                 .collect();
-            let properties = read_property_list(properties_column.value(row))?;
+            let properties_map =
+                extract_properties_from_properties_column(properties_accessor.as_ref(), row)?;
+            let properties = micromegas_telemetry::property::make_properties(&properties_map);
 
             sqlx::query("INSERT INTO streams VALUES($1,$2,$3,$4,$5,$6,$7);")
                 .bind(stream_id)
@@ -89,7 +93,7 @@ async fn ingest_processes(
         let insert_time_column: &TimestampNanosecondArray =
             typed_column_by_name(&b, "insert_time")?;
         let parent_process_id_column = string_column_by_name(&b, "parent_process_id")?;
-        let properties_column: &GenericListArray<i32> = typed_column_by_name(&b, "properties")?;
+        let properties_accessor = properties_column_by_name(&b, "properties")?;
         for row in 0..b.num_rows() {
             let process_id = Uuid::parse_str(process_id_column.value(row))?;
             let parent_process_str = parent_process_id_column.value(row);
@@ -98,7 +102,9 @@ async fn ingest_processes(
             } else {
                 Some(Uuid::parse_str(parent_process_str)?)
             };
-            let properties = read_property_list(properties_column.value(row))?;
+            let properties_map =
+                extract_properties_from_properties_column(properties_accessor.as_ref(), row)?;
+            let properties = micromegas_telemetry::property::make_properties(&properties_map);
             sqlx::query(
                 "INSERT INTO processes VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13);",
             )

@@ -14,18 +14,16 @@ use uuid::Uuid;
 use crate::{
     arrow_properties::serialize_properties_to_jsonb,
     dfext::{
-        binary_column_accessor::binary_column_by_name,
+        properties_column_accessor::properties_column_by_name,
         string_column_accessor::string_column_by_name, typed_column::typed_column_by_name,
     },
     lakehouse::{
         partition_cache::LivePartitionProvider, query::make_session_context,
         view_factory::ViewFactory,
     },
-    properties::utils::extract_properties_from_binary_column,
     time::TimeRange,
 };
 use datafusion::execution::runtime_env::RuntimeEnv;
-
 /// Type alias for shared, pre-serialized JSONB data.
 /// This represents JSONB properties that have been serialized once and can be reused.
 pub type SharedJsonbSerialized = Arc<Vec<u8>>;
@@ -243,15 +241,16 @@ pub async fn find_process_with_latest_timing(
         parse_optional_uuid(parent_process_id_column.value(0))?
     };
 
-    // Handle properties column using BinaryColumnAccessor
-    let properties_accessor = binary_column_by_name(batch, "properties")
+    // Handle properties column using PropertiesColumnAccessor
+    let properties_accessor = properties_column_by_name(batch, "properties")
         .with_context(|| "accessing properties column")?;
-    let properties = extract_properties_from_binary_column(properties_accessor.as_ref(), 0)
-        .with_context(|| "extracting properties from binary column")?;
 
-    // Pre-serialize properties to JSONB for ProcessMetadata
-    let properties_jsonb = serialize_properties_to_jsonb(&properties)
-        .with_context(|| "serializing properties to JSONB for ProcessMetadata")?;
+    // Get JSONB bytes directly from the properties column
+    let properties_jsonb = Arc::new(
+        properties_accessor
+            .jsonb_value(0)
+            .with_context(|| "extracting JSONB from properties column")?,
+    );
 
     let process_metadata = ProcessMetadata {
         process_id: parse_optional_uuid(process_id_column.value(0))?
@@ -266,7 +265,7 @@ pub async fn find_process_with_latest_timing(
         start_time: DateTime::from_timestamp_nanos(start_time_column.value(0)),
         start_ticks: start_ticks_column.value(0),
         parent_process_id,
-        properties: Arc::new(properties_jsonb),
+        properties: properties_jsonb,
     };
 
     let last_block_end_ticks = last_block_end_ticks_column.value(0);

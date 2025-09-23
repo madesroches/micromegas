@@ -291,10 +291,10 @@ pub async fn generate_process_jit_partitions_segment(
 
             // Build StreamInfo from the query results
             use crate::dfext::{
-                binary_column_accessor::binary_column_by_name,
+                properties_column_accessor::properties_column_by_name,
                 string_column_accessor::string_column_by_name, typed_column::typed_column_by_name,
             };
-            use crate::properties::utils::extract_properties_from_binary_column;
+            use crate::properties::utils::extract_properties_from_properties_column;
             use datafusion::arrow::array::{BinaryArray, GenericListArray, StringArray};
             use uuid::Uuid;
 
@@ -306,7 +306,7 @@ pub async fn generate_process_jit_partitions_segment(
                 typed_column_by_name(&rb, "streams.objects_metadata")?;
             let stream_tags_column: &GenericListArray<i32> =
                 typed_column_by_name(&rb, "streams.tags")?;
-            let stream_properties_accessor = binary_column_by_name(&rb, "streams.properties")?;
+            let stream_properties_accessor = properties_column_by_name(&rb, "streams.properties")?;
 
             let stream_id =
                 Uuid::parse_str(stream_id_column.value(ir)).with_context(|| "parsing stream_id")?;
@@ -325,7 +325,7 @@ pub async fn generate_process_jit_partitions_segment(
                 .collect();
 
             let stream_properties_map =
-                extract_properties_from_binary_column(stream_properties_accessor.as_ref(), ir)?;
+                extract_properties_from_properties_column(stream_properties_accessor.as_ref(), ir)?;
 
             let stream = Arc::new(StreamInfo {
                 stream_id,

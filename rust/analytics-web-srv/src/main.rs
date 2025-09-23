@@ -12,14 +12,15 @@ use axum::{
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use clap::Parser;
-use datafusion::arrow::array::{
-    Int32Array, Int64Array, ListArray, TimestampNanosecondArray, UInt64Array,
-};
+use datafusion::arrow::array::{Int32Array, Int64Array, TimestampNanosecondArray, UInt64Array};
 use futures::{Stream, StreamExt};
 use http::{HeaderValue, Method, header};
 use micromegas::analytics::{
-    arrow_properties::read_property_list,
-    dfext::{string_column_accessor::string_column_by_name, typed_column::typed_column_by_name},
+    dfext::{
+        properties_column_accessor::properties_column_by_name,
+        string_column_accessor::string_column_by_name, typed_column::typed_column_by_name,
+    },
+    properties::utils::extract_properties_from_properties_column,
     time::TimeRange,
 };
 use micromegas::client::{
@@ -29,7 +30,6 @@ use micromegas::client::{
 };
 use micromegas::micromegas_main;
 use micromegas::servers::axum_utils::observability_middleware;
-use micromegas::telemetry::property::Property;
 use micromegas::tracing::prelude::*;
 use queries::{
     query_all_processes, query_log_entries, query_nb_trace_events, query_process_statistics,
@@ -268,14 +268,6 @@ async fn list_processes(State(state): State<AppState>) -> ApiResult<Json<Vec<Pro
     Ok(Json(processes))
 }
 
-fn convert_properties_to_map(properties: Vec<Property>) -> HashMap<String, String> {
-    let mut map = HashMap::new();
-    for prop in properties {
-        map.insert(prop.key_str().to_string(), prop.value_str().to_string());
-    }
-    map
-}
-
 #[span_fn]
 async fn get_processes_internal(
     client_factory: &BearerFlightSQLClientFactory,
@@ -296,11 +288,11 @@ async fn get_processes_internal(
         let usernames = string_column_by_name(&batch, "username")?;
         let cpu_brands = string_column_by_name(&batch, "cpu_brand")?;
         let distros = string_column_by_name(&batch, "distro")?;
-        let properties_array: &ListArray = typed_column_by_name(&batch, "properties")?;
+        let properties_accessor = properties_column_by_name(&batch, "properties")?;
 
         for row in 0..batch.num_rows() {
-            let properties_vec = read_property_list(properties_array.value(row))?;
-            let properties = convert_properties_to_map(properties_vec);
+            let properties =
+                extract_properties_from_properties_column(properties_accessor.as_ref(), row)?;
 
             processes.push(ProcessInfo {
                 process_id: process_ids.value(row).to_string(),
