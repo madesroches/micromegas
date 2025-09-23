@@ -21,6 +21,7 @@ use crate::{
         partition_cache::LivePartitionProvider, query::make_session_context,
         view_factory::ViewFactory,
     },
+    properties::utils::jsonb_to_property_map,
     time::TimeRange,
 };
 use datafusion::execution::runtime_env::RuntimeEnv;
@@ -51,6 +52,70 @@ pub struct ProcessMetadata {
     pub properties: SharedJsonbSerialized,
 }
 
+/// Analytics-optimized stream metadata.
+///
+/// This struct is designed for analytics use cases where stream properties need to be
+/// efficiently serialized to JSONB format multiple times. Unlike `StreamInfo`, which
+/// uses `HashMap<String, String>` for properties, this struct stores pre-serialized
+/// JSONB data to eliminate redundant serialization overhead.
+#[derive(Debug, Clone)]
+pub struct StreamMetadata {
+    // Core fields (same as StreamInfo)
+    pub process_id: Uuid,
+    pub stream_id: Uuid,
+    pub dependencies_metadata: Vec<UserDefinedType>,
+    pub objects_metadata: Vec<UserDefinedType>,
+    pub tags: Vec<String>,
+    pub properties: SharedJsonbSerialized,
+}
+
+impl StreamMetadata {
+    /// Creates StreamMetadata from StreamInfo by converting properties to JSONB format.
+    pub fn from_stream_info(stream_info: &StreamInfo) -> Result<Self> {
+        let properties = serialize_properties_to_jsonb(&stream_info.properties)
+            .with_context(|| "serializing stream properties to JSONB")?;
+        Ok(Self {
+            process_id: stream_info.process_id,
+            stream_id: stream_info.stream_id,
+            dependencies_metadata: stream_info.dependencies_metadata.clone(),
+            objects_metadata: stream_info.objects_metadata.clone(),
+            tags: stream_info.tags.clone(),
+            properties: Arc::new(properties),
+        })
+    }
+}
+
+/// Returns the thread name associated with the stream, if available.
+/// This function is only meaningful for streams associated with CPU threads.
+pub fn get_thread_name_from_stream_metadata(stream: &StreamMetadata) -> Result<String> {
+    use jsonb::RawJsonb;
+
+    const THREAD_NAME_KEY: &str = "thread-name";
+    const THREAD_ID_KEY: &str = "thread-id";
+
+    if stream.properties.is_empty() {
+        return Ok(format!("{}", &stream.stream_id));
+    }
+
+    let jsonb = RawJsonb::new(&stream.properties);
+
+    // Try to get thread-name first
+    if let Ok(Some(thread_name_value)) = jsonb.get_by_name(THREAD_NAME_KEY, false)
+        && let Ok(Some(thread_name)) = thread_name_value.as_raw().as_str()
+    {
+        return Ok(thread_name.to_string());
+    }
+
+    // Fall back to thread-id
+    if let Ok(Some(thread_id_value)) = jsonb.get_by_name(THREAD_ID_KEY, false)
+        && let Ok(Some(thread_id)) = thread_id_value.as_raw().as_str()
+    {
+        return Ok(thread_id.to_string());
+    }
+
+    // If neither property exists, use stream_id
+    Ok(format!("{}", &stream.stream_id))
+}
 /// Creates a `StreamInfo` from a database row.
 pub fn stream_from_row(row: &sqlx::postgres::PgRow) -> Result<StreamInfo> {
     let dependencies_metadata_buffer: Vec<u8> = row.try_get("dependencies_metadata")?;
@@ -73,6 +138,47 @@ pub fn stream_from_row(row: &sqlx::postgres::PgRow) -> Result<StreamInfo> {
     })
 }
 
+/// Creates a `StreamMetadata` from a database row with pre-serialized JSONB properties.
+#[span_fn]
+pub fn stream_metadata_from_row(row: &sqlx::postgres::PgRow) -> Result<StreamMetadata> {
+    let dependencies_metadata_buffer: Vec<u8> = row.try_get("dependencies_metadata")?;
+    let dependencies_metadata: Vec<UserDefinedType> =
+        ciborium::from_reader(&dependencies_metadata_buffer[..])
+            .with_context(|| "decoding dependencies metadata")?;
+    let objects_metadata_buffer: Vec<u8> = row.try_get("objects_metadata")?;
+    let objects_metadata: Vec<UserDefinedType> =
+        ciborium::from_reader(&objects_metadata_buffer[..])
+            .with_context(|| "decoding objects metadata")?;
+    let tags: Vec<String> = row.try_get("tags")?;
+    let properties: Vec<Property> = row.try_get("properties")?;
+    let properties_map = micromegas_telemetry::property::into_hashmap(properties);
+    let serialized_properties = serialize_properties_to_jsonb(&properties_map)
+        .with_context(|| "serializing stream properties to JSONB")?;
+
+    Ok(StreamMetadata {
+        stream_id: row.try_get("stream_id")?,
+        process_id: row.try_get("process_id")?,
+        dependencies_metadata,
+        objects_metadata,
+        tags,
+        properties: Arc::new(serialized_properties),
+    })
+}
+
+/// Converts a `StreamMetadata` back to a `StreamInfo` by deserializing the JSONB properties.
+pub fn stream_metadata_to_info(stream_metadata: &StreamMetadata) -> Result<StreamInfo> {
+    let properties_map = jsonb_to_property_map(&stream_metadata.properties)
+        .with_context(|| "converting JSONB properties to property map")?;
+
+    Ok(StreamInfo {
+        process_id: stream_metadata.process_id,
+        stream_id: stream_metadata.stream_id,
+        dependencies_metadata: stream_metadata.dependencies_metadata.clone(),
+        objects_metadata: stream_metadata.objects_metadata.clone(),
+        tags: stream_metadata.tags.clone(),
+        properties: properties_map,
+    })
+}
 /// Finds a stream by its ID.
 #[span_fn]
 pub async fn find_stream(
@@ -90,6 +196,25 @@ pub async fn find_stream(
     .await
     .with_context(|| "select from streams")?;
     stream_from_row(&row)
+}
+
+/// Finds a stream by its ID and returns it as StreamMetadata with pre-serialized JSONB properties.
+#[span_fn]
+pub async fn find_stream_optimized(
+    pool: &sqlx::Pool<sqlx::Postgres>,
+    stream_id: sqlx::types::Uuid,
+) -> Result<StreamMetadata> {
+    let row = sqlx::query(
+        "SELECT stream_id, process_id, dependencies_metadata, objects_metadata, tags, properties
+         FROM streams
+         WHERE stream_id = $1
+         ;",
+    )
+    .bind(stream_id)
+    .fetch_one(pool)
+    .await
+    .with_context(|| "select from streams")?;
+    stream_metadata_from_row(&row)
 }
 
 /// Lists all streams for a given process that are tagged with a specific tag.

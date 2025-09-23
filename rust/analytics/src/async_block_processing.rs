@@ -1,6 +1,6 @@
-use crate::{payload::parse_block, scope::ScopeDesc};
+use crate::{metadata::StreamMetadata, payload::parse_block, scope::ScopeDesc};
 use anyhow::{Context, Result};
-use micromegas_telemetry::{block_wire_format::BlockPayload, stream_info::StreamInfo};
+use micromegas_telemetry::block_wire_format::BlockPayload;
 use micromegas_tracing::prelude::*;
 use micromegas_transit::value::{Object, Value};
 use std::sync::Arc;
@@ -60,7 +60,7 @@ pub fn parse_async_block_payload<Proc: AsyncBlockProcessor>(
     block_id: &str,
     _object_offset: i64,
     payload: &BlockPayload,
-    stream: &StreamInfo,
+    stream: &StreamMetadata,
     processor: &mut Proc,
 ) -> Result<bool> {
     parse_block(stream, payload, |val| {

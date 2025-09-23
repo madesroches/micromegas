@@ -1,7 +1,9 @@
 use std::{collections::HashMap, sync::Arc};
 
 use crate::intern_string::intern_string;
-use micromegas_analytics::{measure::measure_from_value, payload::parse_block, time::ConvertTicks};
+use micromegas_analytics::{
+    measure::measure_from_value, metadata::StreamMetadata, payload::parse_block, time::ConvertTicks,
+};
 use micromegas_telemetry_sink::{stream_block::StreamBlock, stream_info::make_stream_info};
 use micromegas_tracing::{
     dispatch::make_process_info,
@@ -57,8 +59,9 @@ fn test_static_metrics() {
         ciborium::from_reader(&encoded[..]).unwrap();
 
     let stream_info = make_stream_info(&stream);
+    let stream_metadata = StreamMetadata::from_stream_info(&stream_info).unwrap();
     let mut nb_metric_entries = 0;
-    parse_block(&stream_info, &received_block.payload, |_val| {
+    parse_block(&stream_metadata, &received_block.payload, |_val| {
         nb_metric_entries += 1;
         Ok(true)
     })
@@ -172,12 +175,13 @@ fn test_tagged_measures() {
     let received_block: micromegas_telemetry::block_wire_format::Block =
         ciborium::from_reader(&encoded[..]).unwrap();
     let stream_info = make_stream_info(&stream);
+    let stream_metadata = StreamMetadata::from_stream_info(&stream_info).unwrap();
     let convert_ticks = ConvertTicks::from_meta_data(0, 0, 1).unwrap();
     let mut measures = vec![];
-    parse_block(&stream_info, &received_block.payload, |val| {
+    parse_block(&stream_metadata, &received_block.payload, |val| {
         let measure = measure_from_value(
             process_info.clone(),
-            stream_info.stream_id.to_string().into(),
+            stream_metadata.stream_id.to_string().into(),
             received_block.block_id.to_string().into(),
             0,
             &convert_ticks,

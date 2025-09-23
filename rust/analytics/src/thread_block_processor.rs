@@ -1,9 +1,8 @@
-use crate::payload::fetch_block_payload;
-use crate::payload::parse_block;
+use crate::metadata::StreamMetadata;
+use crate::payload::{fetch_block_payload, parse_block};
 use crate::scope::ScopeDesc;
 use anyhow::{Context, Result};
 use micromegas_telemetry::blob_storage::BlobStorage;
-use micromegas_telemetry::stream_info::StreamInfo;
 use micromegas_tracing::prelude::*;
 use micromegas_tracing::warn;
 use micromegas_transit::value::{Object, Value};
@@ -53,7 +52,7 @@ pub fn parse_thread_block_payload<Proc: ThreadBlockProcessor>(
     block_id: &str,
     object_offset: i64,
     payload: &micromegas_telemetry::block_wire_format::BlockPayload,
-    stream: &micromegas_telemetry::stream_info::StreamInfo,
+    stream: &StreamMetadata,
     processor: &mut Proc,
 ) -> Result<bool> {
     let mut event_id = object_offset;
@@ -118,7 +117,7 @@ pub fn parse_thread_block_payload<Proc: ThreadBlockProcessor>(
 #[span_fn]
 pub async fn parse_thread_block<Proc: ThreadBlockProcessor>(
     blob_storage: Arc<BlobStorage>,
-    stream: &StreamInfo,
+    stream: &StreamMetadata,
     block_id: sqlx::types::Uuid,
     object_offset: i64,
     processor: &mut Proc,

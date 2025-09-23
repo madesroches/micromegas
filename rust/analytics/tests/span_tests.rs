@@ -1,5 +1,6 @@
 use std::{collections::HashMap, sync::Arc};
 
+use micromegas_analytics::metadata::StreamMetadata;
 use micromegas_analytics::payload::parse_block;
 use micromegas_telemetry_sink::{stream_block::StreamBlock, stream_info::make_stream_info};
 use micromegas_tracing::{
@@ -52,8 +53,9 @@ fn test_parse_span_interops() {
         ciborium::from_reader(&encoded[..]).unwrap();
 
     let stream_info = make_stream_info(&stream);
+    let stream_metadata = StreamMetadata::from_stream_info(&stream_info).unwrap();
     let mut nb_span_entries = 0;
-    parse_block(&stream_info, &received_block.payload, |_val| {
+    parse_block(&stream_metadata, &received_block.payload, |_val| {
         nb_span_entries += 1;
         Ok(true)
     })

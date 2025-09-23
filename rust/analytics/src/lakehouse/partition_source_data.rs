@@ -1,12 +1,10 @@
 use super::blocks_view::blocks_file_schema_hash;
 use super::partition_cache::PartitionCache;
-use crate::arrow_properties::serialize_properties_to_jsonb;
 use crate::dfext::{
     properties_column_accessor::properties_column_by_name,
     string_column_accessor::string_column_by_name, typed_column::typed_column_by_name,
 };
-use crate::metadata::ProcessMetadata;
-use crate::properties::utils::extract_properties_from_properties_column;
+use crate::metadata::{ProcessMetadata, StreamMetadata};
 use crate::time::TimeRange;
 use crate::{
     dfext::typed_column::typed_column,
@@ -27,7 +25,7 @@ use datafusion::{
 };
 use futures::{StreamExt, stream::BoxStream};
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
-use micromegas_telemetry::{stream_info::StreamInfo, types::block::BlockMetadata};
+use micromegas_telemetry::types::block::BlockMetadata;
 use std::fmt::Debug;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -36,7 +34,7 @@ use uuid::Uuid;
 #[derive(Debug)]
 pub struct PartitionSourceBlock {
     pub block: BlockMetadata,
-    pub stream: Arc<StreamInfo>,
+    pub stream: Arc<StreamMetadata>,
     pub process: Arc<ProcessMetadata>,
 }
 
@@ -185,8 +183,10 @@ impl PartitionBlocksSource for SourceDataBlocks {
                         .map(|item| String::from(item.unwrap_or_default()))
                         .collect();
 
-                    let stream_properties = extract_properties_from_properties_column(stream_properties_accessor.as_ref(), ir)?;
-                    let stream = StreamInfo {
+                    // Get pre-serialized JSONB properties directly from accessor
+                    let stream_properties_jsonb = stream_properties_accessor.jsonb_value(ir)?;
+
+                    let stream = StreamMetadata {
                         process_id,
                         stream_id,
                         dependencies_metadata: ciborium::from_reader(dependencies_metadata)
@@ -194,19 +194,18 @@ impl PartitionBlocksSource for SourceDataBlocks {
                         objects_metadata: ciborium::from_reader(objects_metadata)
                             .with_context(|| "decoding objects_metadata")?,
                         tags: stream_tags,
-                        properties: stream_properties,
+                        properties: Arc::new(stream_properties_jsonb),
                     };
-                    let process_properties = extract_properties_from_properties_column(process_properties_accessor.as_ref(), ir)?;
+
+                    // Get pre-serialized JSONB properties directly from accessor
+                    let process_properties_jsonb = process_properties_accessor.jsonb_value(ir)?;
+
                     let parent_value = process_parent_column.value(ir);
                     let parent_process_id = if parent_value.is_empty() {
                         None
                     } else {
                         Some(Uuid::parse_str(parent_value).with_context(|| "parsing parent process_id")?)
                     };
-
-                    // Pre-serialize properties to JSONB for ProcessMetadata
-                    let properties_jsonb = serialize_properties_to_jsonb(&process_properties)
-                        .with_context(|| "serializing properties to JSONB")?;
 
                     let process = ProcessMetadata {
                         process_id,
@@ -220,11 +219,11 @@ impl PartitionBlocksSource for SourceDataBlocks {
                         start_time: DateTime::from_timestamp_nanos(process_start_time_column.value(ir)),
                         start_ticks: process_start_ticks_column.value(ir),
                         parent_process_id,
-                        properties: Arc::new(properties_jsonb),
+                        properties: Arc::new(process_properties_jsonb),
                     };
                     yield Arc::new(PartitionSourceBlock {
                         block,
-                        stream: stream.into(),
+                        stream: Arc::new(stream),
                         process: Arc::new(process),
                     });
                 }

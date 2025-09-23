@@ -1,10 +1,10 @@
 use anyhow::{Context, Result};
-use micromegas_telemetry::{
-    blob_storage::BlobStorage, compression::decompress, stream_info::StreamInfo,
-};
+use micromegas_telemetry::{blob_storage::BlobStorage, compression::decompress};
 use micromegas_tracing::{parsing::make_custom_readers, prelude::*};
 use micromegas_transit::{parse_object_buffer, read_dependencies, value::Value};
 use std::sync::Arc;
+
+use crate::metadata::StreamMetadata;
 
 /// Fetches the payload of a block from blob storage.
 #[span_fn]
@@ -33,7 +33,7 @@ pub async fn fetch_block_payload(
 // parse_block calls fun for each object in the block until fun returns `false`
 #[span_fn]
 pub fn parse_block<F>(
-    stream: &StreamInfo,
+    stream: &StreamMetadata,
     payload: &micromegas_telemetry::block_wire_format::BlockPayload,
     fun: F,
 ) -> Result<bool>

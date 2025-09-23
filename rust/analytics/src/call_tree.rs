@@ -1,3 +1,4 @@
+use crate::metadata::{StreamMetadata, get_thread_name_from_stream_metadata};
 use crate::scope::ScopeDesc;
 use crate::scope::ScopeHashMap;
 use crate::thread_block_processor::ThreadBlockProcessor;
@@ -207,14 +208,14 @@ pub async fn make_call_tree(
     limit: Option<i64>,
     blob_storage: Arc<BlobStorage>,
     convert_ticks: ConvertTicks,
-    stream: &micromegas_telemetry::stream_info::StreamInfo,
+    stream: &StreamMetadata,
 ) -> Result<CallTree> {
     let mut builder = CallTreeBuilder::new(
         begin_range_ns,
         end_range_ns,
         limit,
         convert_ticks,
-        stream.get_thread_name(),
+        get_thread_name_from_stream_metadata(stream)?,
     );
     for block in blocks {
         parse_thread_block(

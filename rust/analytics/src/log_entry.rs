@@ -1,13 +1,11 @@
 use crate::{
-    metadata::ProcessMetadata,
+    metadata::{ProcessMetadata, StreamMetadata},
     payload::{fetch_block_payload, parse_block},
     property_set::PropertySet,
     time::ConvertTicks,
 };
 use anyhow::{Context, Result};
-use micromegas_telemetry::{
-    blob_storage::BlobStorage, stream_info::StreamInfo, types::block::BlockMetadata,
-};
+use micromegas_telemetry::{blob_storage::BlobStorage, types::block::BlockMetadata};
 use micromegas_tracing::prelude::*;
 use micromegas_transit::value::{Object, Value};
 use std::sync::Arc;
@@ -208,7 +206,7 @@ pub async fn for_each_log_entry_in_block<Predicate: FnMut(LogEntry) -> Result<bo
     blob_storage: Arc<BlobStorage>,
     convert_ticks: &ConvertTicks,
     process: Arc<ProcessMetadata>,
-    stream: &StreamInfo,
+    stream: &StreamMetadata,
     block: &BlockMetadata,
     mut fun: Predicate,
 ) -> Result<bool> {
