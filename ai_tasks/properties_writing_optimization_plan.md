@@ -177,7 +177,7 @@ pub struct StreamMetadata {
 - **Single JSONB serialization** per unique PropertySet instead of per log entry
 - **Memory efficiency**: Arc-shared PropertySet references with single JSONB copy per unique set
 
-### Phase 9: Properties Format Compatibility and StreamMetadata ❌ TODO
+### Phase 9: Properties Format Compatibility and StreamMetadata ✅ COMPLETED
 
 **Objective**: Create unified properties column accessor for format compatibility and migrate StreamInfo to use pre-serialized JSONB like ProcessMetadata.
 
@@ -197,8 +197,6 @@ pub struct StreamMetadata {
 - ✅ Provide consistent JSONB output regardless of underlying format
 - ✅ Enable seamless migration path without breaking existing data pipelines
 
-### Phase 9: Format Compatibility & PropertiesColumnAccessor 🟡 PARTIALLY COMPLETED
-
 #### Phase 9.1: Design PropertiesColumnAccessor ✅ COMPLETED
 - ✅ Create unified `PropertiesColumnAccessor` for both `Binary` and `Dictionary(Int32, Binary)` columns
 - ✅ Provide consistent JSONB output regardless of underlying Arrow column format
@@ -211,12 +209,17 @@ pub struct StreamMetadata {
 - ✅ Provide `jsonb_value(row_index) -> Result<Vec<u8>>` method for consistent JSONB access
 - ✅ Support `is_null(row_index)` for null checking
 
-#### Phase 9.3: StreamMetadata Optimization ❌ TODO
-- ❌ Create `StreamMetadata` struct following `ProcessMetadata` pattern
-- ❌ Add `properties: SharedJsonbSerialized` field for pre-serialized JSONB stream properties
-- ❌ Update `PartitionSourceBlock` to use `Arc<StreamMetadata>` instead of `Arc<StreamInfo>`
-- ❌ Add conversion functions: `stream_info_to_metadata()` and `stream_metadata_from_row()`
-- ❌ Maintain backward compatibility with existing `StreamInfo` in instrumentation layer
+#### Phase 9.3: StreamMetadata Optimization ✅ COMPLETED
+- ✅ Create `StreamMetadata` struct following `ProcessMetadata` pattern
+- ✅ Add `properties: SharedJsonbSerialized` field for pre-serialized JSONB stream properties
+- ✅ Update all analytics components to use `Arc<StreamMetadata>` instead of `Arc<StreamInfo>`
+- ✅ Add conversion functions: `StreamMetadata::from_stream_info()` and `stream_metadata_from_row()`
+- ✅ Maintain backward compatibility with existing `StreamInfo` in instrumentation layer
+- ✅ Remove StreamMetadataProvider trait and use direct StreamMetadata access
+- ✅ Update all analytics functions (call_tree, payload parsing, block processing) to use StreamMetadata
+- ✅ Eliminate dynamic dispatch overhead from trait usage
+- ✅ Consolidate database functions: `find_stream()` now returns `StreamMetadata` directly
+- ✅ Remove redundant functions: `find_stream_optimized()`, `stream_metadata_to_info()`
 
 #### Phase 9.4: Update All Callers to Use PropertiesColumnAccessor ✅ COMPLETED
 - ✅ Replace `binary_column_by_name` with `properties_column_by_name` for properties access
@@ -243,11 +246,12 @@ pub struct StreamMetadata {
 **Performance Benefits:**
 - **Unified access pattern**: Single PropertiesColumnAccessor handles both Binary and Dictionary formats transparently
 - **ProcessMetadata optimization**: Direct JSONB access eliminates serialize/deserialize roundtrip
-- **StreamMetadata optimization**: Pre-serialized JSONB stream properties (pending Phase 9.3)
+- **StreamMetadata optimization**: Pre-serialized JSONB stream properties with Arc-shared references
+- **Eliminated trait overhead**: Removed StreamMetadataProvider dynamic dispatch in favor of direct field access
 - **Backward compatibility**: Automatic conversion from struct array to JSONB for legacy data
 - **Performance optimization**: Zero conversion overhead for native JSONB data
 - **Code simplification**: Eliminates redundant conversion functions and inconsistent column access
-- **Legacy code cleanup**: Removed obsolete functions (`extract_properties_from_binary_column`)
+- **Legacy code cleanup**: Removed obsolete functions (`extract_properties_from_binary_column`, `find_stream_optimized`, `stream_metadata_to_info`)
 - **Consistency**: All properties access now uses unified PropertiesColumnAccessor pattern
 - **Future-proofing**: All consumers work with efficient JSONB access path
 
@@ -270,7 +274,7 @@ pub struct StreamMetadata {
 ## ✅ PropertySet Optimization Status
 - **Phase 7 - Process Properties**: ✅ COMPLETED - Implemented batch processing with `append_values()` (100% elimination of per-row hashing/searching)
 - **Phase 8 - Log Entry Properties**: ✅ COMPLETED - Implemented pointer-based deduplication with `PropertySetJsonbDictionaryBuilder`
-- **Phase 9 - Format Compatibility & StreamMetadata**: 🟡 PARTIALLY COMPLETED - `PropertiesColumnAccessor` completed, `StreamMetadata` optimization pending
+- **Phase 9 - Format Compatibility & StreamMetadata**: ✅ COMPLETED - `PropertiesColumnAccessor` and `StreamMetadata` optimization both completed
 - **Phase 7 Impact Achieved**: 20-40% reduction in dictionary encoding CPU cycles for process properties
 - **Phase 8 Impact Achieved**: 20-50% reduction for log entry properties with duplicates through pointer-based caching
 
@@ -280,26 +284,36 @@ pub struct StreamMetadata {
 - **Wire protocol**: HTTP/CBOR transmission uses original ProcessInfo/StreamInfo format
 - **Database**: Stores properties as `micromegas_property[]`, converts to analytics format on read
 
-## 📊 Current Status Summary (as of commit a0670016)
+## 📊 Current Status Summary (as of commit 99f740ee)
 
-### ✅ Major Optimizations Completed
+### ✅ All Major Optimizations Completed
 1. **Phases 1-6**: Complete infrastructure overhaul with ProcessMetadata and BinaryColumnAccessor
 2. **Phase 7**: Process properties batch processing (100% elimination of per-row dictionary operations)
 3. **Phase 8**: PropertySet pointer-based deduplication (20-50% reduction in log entry property processing)
-4. **Phase 9 (Partial)**: PropertiesColumnAccessor unification and ProcessMetadata direct JSONB optimization
+4. **Phase 9**: Complete properties format compatibility and StreamMetadata optimization
+   - PropertiesColumnAccessor unification with automatic format detection
+   - ProcessMetadata and StreamMetadata direct JSONB optimization
+   - Elimination of trait overhead and consolidation of database functions
 
 ### 🎯 Performance Gains Achieved
 - **30-50% reduction** in property writing CPU cycles for high-duplication scenarios
 - **15-25% reduction** in overall block processing CPU usage
 - **20-40% reduction** in memory allocation overhead
 - **Massive dictionary optimization**: 1000-entry blocks reduced from 8000 to 8 dictionary lookups
+- **Eliminated trait overhead**: Direct field access instead of dynamic dispatch for StreamMetadata
+- **Unified properties access**: Single accessor pattern for all property column formats
 
-### 🔄 Next Steps
-**Immediate**:
-1. **Phase 9.3**: Implement `StreamMetadata` optimization for stream properties (following ProcessMetadata pattern)
+### 🎉 Project Status: ALL CORE PHASES COMPLETED
 
-**Future Advanced Optimizations**:
-2. **Phase 10+**: Advanced optimizations (bulk dictionary building, cross-block interning, zero-copy)
+**All major performance optimization objectives have been achieved:**
+- Complete separation of instrumentation vs analytics concerns
+- Elimination of redundant property serialization overhead
+- Unified properties access pattern with format compatibility
+- Pre-serialized JSONB properties for both ProcessMetadata and StreamMetadata
+- Pointer-based deduplication for log entry properties
+- Batch processing for process-level properties
+
+**Future work is now optional advanced optimizations only.**
 
 ### ✅ Success Criteria Achieved
 
@@ -313,7 +327,8 @@ pub struct StreamMetadata {
   - ✅ Achieved through `PropertySetJsonbDictionaryBuilder` with pointer-based caching
 - **Format compatibility and code unification** (Phase 9)
   - ✅ Implemented `PropertiesColumnAccessor` with consistent JSONB output for all properties access
-  - ❌ TODO: `StreamMetadata` optimization (Phase 9.3 pending)
+  - ✅ Completed `StreamMetadata` optimization with pre-serialized JSONB properties
+  - ✅ Eliminated trait overhead and consolidated database access functions
 - **Zero data corruption, backward compatibility maintained**
   - ✅ All existing ProcessInfo APIs preserved, new optimized paths added
 - **Clean separation between instrumentation and analytics concerns**
@@ -321,6 +336,6 @@ pub struct StreamMetadata {
 
 ### ✅ Backward Compatibility Status
 - All existing ProcessInfo and StreamInfo APIs preserved
-- Analytics layer fully migrated to optimized ProcessMetadata (StreamMetadata pending)
+- Analytics layer fully migrated to optimized ProcessMetadata and StreamMetadata
 - Arrow schema output identical (no breaking changes)
 - Database storage format unchanged
