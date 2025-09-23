@@ -18,7 +18,7 @@ use datafusion::arrow::record_batch::RecordBatch;
 
 use crate::log_entry::LogEntry;
 use crate::metadata::ProcessMetadata;
-use crate::property_set_jsonb_dictionary_builder::PropertySetJsonbDictionaryBuilder;
+use crate::properties::property_set_jsonb_dictionary_builder::PropertySetJsonbDictionaryBuilder;
 use crate::time::TimeRange;
 
 /// Returns the schema for the log entries table.

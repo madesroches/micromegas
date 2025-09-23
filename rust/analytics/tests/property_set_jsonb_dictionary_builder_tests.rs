@@ -1,7 +1,7 @@
 use anyhow::Result;
 use datafusion::arrow::array::Array;
-use micromegas_analytics::property_set::PropertySet;
-use micromegas_analytics::property_set_jsonb_dictionary_builder::PropertySetJsonbDictionaryBuilder;
+use micromegas_analytics::properties::property_set::PropertySet;
+use micromegas_analytics::properties::property_set_jsonb_dictionary_builder::PropertySetJsonbDictionaryBuilder;
 use micromegas_transit::value::{Object, Value};
 use std::sync::Arc;
 

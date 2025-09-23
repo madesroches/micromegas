@@ -1,6 +1,7 @@
 use crate::{
     measure::Measure, metadata::ProcessMetadata,
-    property_set_jsonb_dictionary_builder::PropertySetJsonbDictionaryBuilder, time::TimeRange,
+    properties::property_set_jsonb_dictionary_builder::PropertySetJsonbDictionaryBuilder,
+    time::TimeRange,
 };
 use anyhow::{Context, Result};
 use chrono::DateTime;

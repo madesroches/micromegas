@@ -1,5 +1,5 @@
 use crate::arrow_properties::serialize_property_set_to_jsonb;
-use crate::property_set::PropertySet;
+use crate::properties::property_set::PropertySet;
 use anyhow::Result;
 use datafusion::arrow::array::{BinaryArray, DictionaryArray, Int32Array};
 use datafusion::arrow::datatypes::Int32Type;

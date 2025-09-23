@@ -1,4 +1,4 @@
-use crate::property_set::PropertySet;
+use crate::properties::property_set::PropertySet;
 use anyhow::{Context, Result};
 use datafusion::arrow::array::{
     Array, ArrayRef, AsArray, BinaryDictionaryBuilder, ListBuilder, StringBuilder, StructArray,

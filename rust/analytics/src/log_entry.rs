@@ -1,7 +1,7 @@
 use crate::{
     metadata::{ProcessMetadata, StreamMetadata},
     payload::{fetch_block_payload, parse_block},
-    property_set::PropertySet,
+    properties::property_set::PropertySet,
     time::ConvertTicks,
 };
 use anyhow::{Context, Result};
