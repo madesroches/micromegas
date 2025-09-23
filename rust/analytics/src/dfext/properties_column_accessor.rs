@@ -107,7 +107,8 @@ impl PropertiesColumnAccessor for StructArrayAccessor {
 /// Creates a properties column accessor that automatically detects the format.
 ///
 /// Supports:
-/// - JSONB format: `Dictionary(Int32, Binary)` - used by current analytics tables
+/// - JSONB dictionary format: `Dictionary(Int32, Binary)` - used by current analytics tables
+/// - Plain binary format: `Binary` - JSONB data without dictionary encoding
 /// - Struct array format: `GenericListArray<StructArray>` - legacy format from replication
 ///
 /// Returns a unified accessor that always provides JSONB bytes.

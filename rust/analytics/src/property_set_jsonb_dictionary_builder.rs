@@ -52,10 +52,10 @@ impl PropertySetJsonbDictionaryBuilder {
     /// Create a new builder with the specified capacity hint
     pub fn new(capacity: usize) -> Self {
         Self {
-            pointer_to_index: HashMap::new(),
-            jsonb_values: Vec::new(),
+            pointer_to_index: HashMap::with_capacity(capacity),
+            jsonb_values: Vec::with_capacity(capacity),
             keys: Vec::with_capacity(capacity),
-            _property_refs: Vec::new(),
+            _property_refs: Vec::with_capacity(capacity),
         }
     }
 
