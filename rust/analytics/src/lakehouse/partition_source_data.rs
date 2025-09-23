@@ -1,10 +1,10 @@
 use super::blocks_view::blocks_file_schema_hash;
 use super::partition_cache::PartitionCache;
 use crate::dfext::{
-    properties_column_accessor::properties_column_by_name,
     string_column_accessor::string_column_by_name, typed_column::typed_column_by_name,
 };
 use crate::metadata::{ProcessMetadata, StreamMetadata};
+use crate::properties::properties_column_accessor::properties_column_by_name;
 use crate::time::TimeRange;
 use crate::{
     dfext::typed_column::typed_column,

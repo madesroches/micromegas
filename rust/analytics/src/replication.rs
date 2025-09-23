@@ -11,11 +11,11 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::{
-    dfext::{
+    dfext::{string_column_accessor::string_column_by_name, typed_column::typed_column_by_name},
+    properties::{
         properties_column_accessor::properties_column_by_name,
-        string_column_accessor::string_column_by_name, typed_column::typed_column_by_name,
+        utils::extract_properties_from_properties_column,
     },
-    properties::utils::extract_properties_from_properties_column,
 };
 async fn ingest_streams(
     lake: Arc<DataLakeConnection>,

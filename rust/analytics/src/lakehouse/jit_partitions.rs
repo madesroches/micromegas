@@ -290,9 +290,9 @@ pub async fn generate_process_jit_partitions_segment(
 
             // Build StreamMetadata from the query results
             use crate::dfext::{
-                properties_column_accessor::properties_column_by_name,
                 string_column_accessor::string_column_by_name, typed_column::typed_column_by_name,
             };
+            use crate::properties::properties_column_accessor::properties_column_by_name;
             use datafusion::arrow::array::{BinaryArray, GenericListArray, StringArray};
             use uuid::Uuid;
 

@@ -12,8 +12,6 @@ pub mod jsonb;
 pub mod log_stream_table_provider;
 /// Convert a filtering expression to a physical predicate
 pub mod predicate;
-/// Unified properties column accessor for Arrow arrays
-pub mod properties_column_accessor;
 /// Unified string column accessor for Arrow arrays
 pub mod string_column_accessor;
 /// Execution plan interface for an async task

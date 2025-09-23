@@ -5,7 +5,7 @@ use datafusion::arrow::array::{
 use datafusion::arrow::datatypes::{DataType, Field, Fields, Int32Type, Schema};
 use datafusion::arrow::record_batch::RecordBatch;
 use micromegas_analytics::arrow_properties::serialize_properties_to_jsonb;
-use micromegas_analytics::dfext::properties_column_accessor::{
+use micromegas_analytics::properties::properties_column_accessor::{
     create_properties_accessor, properties_column_by_name,
 };
 use std::collections::HashMap;

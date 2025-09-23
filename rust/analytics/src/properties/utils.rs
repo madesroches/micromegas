@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use jsonb::RawJsonb;
 use std::collections::HashMap;
 
-use crate::dfext::properties_column_accessor::PropertiesColumnAccessor;
+use crate::properties::properties_column_accessor::PropertiesColumnAccessor;
 
 /// Convert JSONB bytes to a property HashMap
 pub fn jsonb_to_property_map(jsonb_bytes: &[u8]) -> Result<HashMap<String, String>> {

@@ -13,14 +13,12 @@ use uuid::Uuid;
 
 use crate::{
     arrow_properties::serialize_properties_to_jsonb,
-    dfext::{
-        properties_column_accessor::properties_column_by_name,
-        string_column_accessor::string_column_by_name, typed_column::typed_column_by_name,
-    },
+    dfext::{string_column_accessor::string_column_by_name, typed_column::typed_column_by_name},
     lakehouse::{
         partition_cache::LivePartitionProvider, query::make_session_context,
         view_factory::ViewFactory,
     },
+    properties::properties_column_accessor::properties_column_by_name,
     time::TimeRange,
 };
 use datafusion::execution::runtime_env::RuntimeEnv;
