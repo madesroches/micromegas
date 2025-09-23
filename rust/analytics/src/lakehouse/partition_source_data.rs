@@ -182,10 +182,7 @@ impl PartitionBlocksSource for SourceDataBlocks {
                         .iter()
                         .map(|item| String::from(item.unwrap_or_default()))
                         .collect();
-
-                    // Get pre-serialized JSONB properties directly from accessor
                     let stream_properties_jsonb = stream_properties_accessor.jsonb_value(ir)?;
-
                     let stream = StreamMetadata {
                         process_id,
                         stream_id,
@@ -196,10 +193,7 @@ impl PartitionBlocksSource for SourceDataBlocks {
                         tags: stream_tags,
                         properties: Arc::new(stream_properties_jsonb),
                     };
-
-                    // Get pre-serialized JSONB properties directly from accessor
                     let process_properties_jsonb = process_properties_accessor.jsonb_value(ir)?;
-
                     let parent_value = process_parent_column.value(ir);
                     let parent_process_id = if parent_value.is_empty() {
                         None

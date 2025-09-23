@@ -30,7 +30,6 @@ impl BlockProcessor for LogBlockProcessor {
         let mut record_builder = LogEntriesRecordBuilder::with_capacity(nb_log_entries as usize);
         let mut entry_count = 0;
 
-        // Phase 1: Process log entries, append only variable data
         for_each_log_entry_in_block(
             blob_storage,
             &convert_ticks,
@@ -46,7 +45,6 @@ impl BlockProcessor for LogBlockProcessor {
         .await
         .with_context(|| "for_each_log_entry_in_block")?;
 
-        // Phase 2: Batch fill all constant columns for all entries
         if entry_count > 0 {
             let stream_id_str = format!("{}", src_block.stream.stream_id);
             let block_id_str = format!("{}", src_block.block.block_id);

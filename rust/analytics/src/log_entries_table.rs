@@ -17,6 +17,7 @@ use datafusion::arrow::datatypes::TimestampNanosecondType;
 use datafusion::arrow::record_batch::RecordBatch;
 
 use crate::log_entry::LogEntry;
+use crate::metadata::ProcessMetadata;
 use crate::property_set_jsonb_dictionary_builder::PropertySetJsonbDictionaryBuilder;
 use crate::time::TimeRange;
 
@@ -172,7 +173,7 @@ impl LogEntriesRecordBuilder {
     /// Batch fill all constant columns for all entries in block
     pub fn fill_constant_columns(
         &mut self,
-        process: &crate::metadata::ProcessMetadata,
+        process: &ProcessMetadata,
         stream_id: &str,
         block_id: &str,
         insert_time: i64,

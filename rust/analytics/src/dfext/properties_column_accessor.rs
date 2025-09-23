@@ -33,18 +33,18 @@ pub trait PropertiesColumnAccessor: Send + std::fmt::Debug {
     }
 }
 
-/// Accessor for JSONB dictionary format: `Dictionary(Int32, Binary)`
-struct JsonbDictionaryAccessor {
+/// Accessor for JSONB format properties (both dictionary-encoded and plain binary)
+struct JsonbColumnAccessor {
     binary_accessor: Box<dyn BinaryColumnAccessor + Send>,
 }
 
-impl JsonbDictionaryAccessor {
+impl JsonbColumnAccessor {
     fn new(binary_accessor: Box<dyn BinaryColumnAccessor + Send>) -> Self {
         Self { binary_accessor }
     }
 }
 
-impl PropertiesColumnAccessor for JsonbDictionaryAccessor {
+impl PropertiesColumnAccessor for JsonbColumnAccessor {
     fn jsonb_value(&self, index: usize) -> Result<Vec<u8>> {
         // For JSONB format, return the raw bytes directly
         Ok(self.binary_accessor.value(index).to_vec())
@@ -59,9 +59,9 @@ impl PropertiesColumnAccessor for JsonbDictionaryAccessor {
     }
 }
 
-impl std::fmt::Debug for JsonbDictionaryAccessor {
+impl std::fmt::Debug for JsonbColumnAccessor {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("JsonbDictionaryAccessor")
+        f.debug_struct("JsonbColumnAccessor")
             .field("len", &self.binary_accessor.len())
             .finish()
     }
@@ -121,7 +121,7 @@ pub fn create_properties_accessor(
                 && matches!(value_type.as_ref(), DataType::Binary)
             {
                 let binary_accessor = create_binary_accessor(array)?;
-                Ok(Box::new(JsonbDictionaryAccessor::new(binary_accessor)))
+                Ok(Box::new(JsonbColumnAccessor::new(binary_accessor)))
             } else {
                 Err(anyhow!(
                     "Unsupported dictionary format for properties: key={:?}, value={:?}",
@@ -161,7 +161,7 @@ pub fn create_properties_accessor(
         // Direct binary format (less common, but possible)
         DataType::Binary => {
             let binary_accessor = create_binary_accessor(array)?;
-            Ok(Box::new(JsonbDictionaryAccessor::new(binary_accessor)))
+            Ok(Box::new(JsonbColumnAccessor::new(binary_accessor)))
         }
 
         _ => Err(anyhow!(

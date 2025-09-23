@@ -1,6 +1,6 @@
 use crate::{
-    measure::Measure, property_set_jsonb_dictionary_builder::PropertySetJsonbDictionaryBuilder,
-    time::TimeRange,
+    measure::Measure, metadata::ProcessMetadata,
+    property_set_jsonb_dictionary_builder::PropertySetJsonbDictionaryBuilder, time::TimeRange,
 };
 use anyhow::{Context, Result};
 use chrono::DateTime;
@@ -179,7 +179,7 @@ impl MetricsRecordBuilder {
     /// Batch fill all constant columns for all entries in block
     pub fn fill_constant_columns(
         &mut self,
-        process: &crate::metadata::ProcessMetadata,
+        process: &ProcessMetadata,
         stream_id: &str,
         block_id: &str,
         insert_time: i64,
