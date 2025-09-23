@@ -25,21 +25,3 @@ pub struct StreamInfo {
     pub tags: Vec<String>,
     pub properties: HashMap<String, String>,
 }
-
-impl StreamInfo {
-    /// Returns the thread name associated with the stream, if available.
-    // only makes sense if the stream is associated with a thread
-    pub fn get_thread_name(&self) -> String {
-        const THREAD_NAME_KEY: &str = "thread-name";
-        const THREAD_ID_KEY: &str = "thread-id";
-        let opt_name = self
-            .properties
-            .get(THREAD_NAME_KEY)
-            .or_else(|| self.properties.get(THREAD_ID_KEY));
-        if let Some(name) = opt_name {
-            name.to_owned()
-        } else {
-            format!("{}", &self.stream_id)
-        }
-    }
-}

@@ -13,19 +13,15 @@ use uuid::Uuid;
 
 use crate::{
     arrow_properties::serialize_properties_to_jsonb,
-    dfext::{
-        binary_column_accessor::binary_column_by_name,
-        string_column_accessor::string_column_by_name, typed_column::typed_column_by_name,
-    },
+    dfext::{string_column_accessor::string_column_by_name, typed_column::typed_column_by_name},
     lakehouse::{
         partition_cache::LivePartitionProvider, query::make_session_context,
         view_factory::ViewFactory,
     },
-    properties::utils::extract_properties_from_binary_column,
+    properties::properties_column_accessor::properties_column_by_name,
     time::TimeRange,
 };
 use datafusion::execution::runtime_env::RuntimeEnv;
-
 /// Type alias for shared, pre-serialized JSONB data.
 /// This represents JSONB properties that have been serialized once and can be reused.
 pub type SharedJsonbSerialized = Arc<Vec<u8>>;
@@ -53,8 +49,74 @@ pub struct ProcessMetadata {
     pub properties: SharedJsonbSerialized,
 }
 
-/// Creates a `StreamInfo` from a database row.
-pub fn stream_from_row(row: &sqlx::postgres::PgRow) -> Result<StreamInfo> {
+/// Analytics-optimized stream metadata.
+///
+/// This struct is designed for analytics use cases where stream properties need to be
+/// efficiently serialized to JSONB format multiple times. Unlike `StreamInfo`, which
+/// uses `HashMap<String, String>` for properties, this struct stores pre-serialized
+/// JSONB data to eliminate redundant serialization overhead.
+#[derive(Debug, Clone)]
+pub struct StreamMetadata {
+    // Core fields (same as StreamInfo)
+    pub process_id: Uuid,
+    pub stream_id: Uuid,
+    pub dependencies_metadata: Vec<UserDefinedType>,
+    pub objects_metadata: Vec<UserDefinedType>,
+    pub tags: Vec<String>,
+    pub properties: SharedJsonbSerialized,
+}
+
+impl StreamMetadata {
+    /// Creates StreamMetadata from StreamInfo by converting properties to JSONB format.
+    pub fn from_stream_info(stream_info: &StreamInfo) -> Result<Self> {
+        let properties = serialize_properties_to_jsonb(&stream_info.properties)
+            .with_context(|| "serializing stream properties to JSONB")?;
+        Ok(Self {
+            process_id: stream_info.process_id,
+            stream_id: stream_info.stream_id,
+            dependencies_metadata: stream_info.dependencies_metadata.clone(),
+            objects_metadata: stream_info.objects_metadata.clone(),
+            tags: stream_info.tags.clone(),
+            properties: Arc::new(properties),
+        })
+    }
+}
+
+/// Returns the thread name associated with the stream, if available.
+/// This function is only meaningful for streams associated with CPU threads.
+pub fn get_thread_name_from_stream_metadata(stream: &StreamMetadata) -> Result<String> {
+    use jsonb::RawJsonb;
+
+    const THREAD_NAME_KEY: &str = "thread-name";
+    const THREAD_ID_KEY: &str = "thread-id";
+
+    if stream.properties.is_empty() {
+        return Ok(format!("{}", &stream.stream_id));
+    }
+
+    let jsonb = RawJsonb::new(&stream.properties);
+
+    // Try to get thread-name first
+    if let Ok(Some(thread_name_value)) = jsonb.get_by_name(THREAD_NAME_KEY, false)
+        && let Ok(Some(thread_name)) = thread_name_value.as_raw().as_str()
+    {
+        return Ok(thread_name.to_string());
+    }
+
+    // Fall back to thread-id
+    if let Ok(Some(thread_id_value)) = jsonb.get_by_name(THREAD_ID_KEY, false)
+        && let Ok(Some(thread_id)) = thread_id_value.as_raw().as_str()
+    {
+        return Ok(thread_id.to_string());
+    }
+
+    // If neither property exists, use stream_id
+    Ok(format!("{}", &stream.stream_id))
+}
+
+/// Creates a `StreamMetadata` from a database row with pre-serialized JSONB properties.
+#[span_fn]
+pub fn stream_metadata_from_row(row: &sqlx::postgres::PgRow) -> Result<StreamMetadata> {
     let dependencies_metadata_buffer: Vec<u8> = row.try_get("dependencies_metadata")?;
     let dependencies_metadata: Vec<UserDefinedType> =
         ciborium::from_reader(&dependencies_metadata_buffer[..])
@@ -65,22 +127,26 @@ pub fn stream_from_row(row: &sqlx::postgres::PgRow) -> Result<StreamInfo> {
             .with_context(|| "decoding objects metadata")?;
     let tags: Vec<String> = row.try_get("tags")?;
     let properties: Vec<Property> = row.try_get("properties")?;
-    Ok(StreamInfo {
+    let properties_map = micromegas_telemetry::property::into_hashmap(properties);
+    let serialized_properties = serialize_properties_to_jsonb(&properties_map)
+        .with_context(|| "serializing stream properties to JSONB")?;
+
+    Ok(StreamMetadata {
         stream_id: row.try_get("stream_id")?,
         process_id: row.try_get("process_id")?,
         dependencies_metadata,
         objects_metadata,
         tags,
-        properties: micromegas_telemetry::property::into_hashmap(properties),
+        properties: Arc::new(serialized_properties),
     })
 }
 
-/// Finds a stream by its ID.
+/// Finds a stream by its ID and returns it as StreamMetadata.
 #[span_fn]
 pub async fn find_stream(
     pool: &sqlx::Pool<sqlx::Postgres>,
     stream_id: sqlx::types::Uuid,
-) -> Result<StreamInfo> {
+) -> Result<StreamMetadata> {
     let row = sqlx::query(
         "SELECT stream_id, process_id, dependencies_metadata, objects_metadata, tags, properties
          FROM streams
@@ -91,33 +157,7 @@ pub async fn find_stream(
     .fetch_one(pool)
     .await
     .with_context(|| "select from streams")?;
-    stream_from_row(&row)
-}
-
-/// Lists all streams for a given process that are tagged with a specific tag.
-pub async fn list_process_streams_tagged(
-    pool: &sqlx::Pool<sqlx::Postgres>,
-    process_id: sqlx::types::Uuid,
-    tag: &str,
-) -> Result<Vec<StreamInfo>> {
-    let stream_rows = sqlx::query(
-        "SELECT stream_id, process_id, dependencies_metadata, objects_metadata, tags, properties
-         FROM streams
-         WHERE process_id = $1
-         AND array_position(tags, $2) is not NULL
-         ;",
-    )
-    .bind(process_id)
-    .bind(tag)
-    .fetch_all(pool)
-    .await
-    .with_context(|| "fetching streams")?;
-    let mut streams = vec![];
-    for row in stream_rows {
-        let stream = stream_from_row(&row).with_context(|| "stream_from_row")?;
-        streams.push(stream);
-    }
-    Ok(streams)
+    stream_metadata_from_row(&row)
 }
 
 /// Creates a `ProcessMetadata` from a database row with pre-serialized JSONB properties.
@@ -243,15 +283,16 @@ pub async fn find_process_with_latest_timing(
         parse_optional_uuid(parent_process_id_column.value(0))?
     };
 
-    // Handle properties column using BinaryColumnAccessor
-    let properties_accessor = binary_column_by_name(batch, "properties")
+    // Handle properties column using PropertiesColumnAccessor
+    let properties_accessor = properties_column_by_name(batch, "properties")
         .with_context(|| "accessing properties column")?;
-    let properties = extract_properties_from_binary_column(properties_accessor.as_ref(), 0)
-        .with_context(|| "extracting properties from binary column")?;
 
-    // Pre-serialize properties to JSONB for ProcessMetadata
-    let properties_jsonb = serialize_properties_to_jsonb(&properties)
-        .with_context(|| "serializing properties to JSONB for ProcessMetadata")?;
+    // Get JSONB bytes directly from the properties column
+    let properties_jsonb = Arc::new(
+        properties_accessor
+            .jsonb_value(0)
+            .with_context(|| "extracting JSONB from properties column")?,
+    );
 
     let process_metadata = ProcessMetadata {
         process_id: parse_optional_uuid(process_id_column.value(0))?
@@ -266,7 +307,7 @@ pub async fn find_process_with_latest_timing(
         start_time: DateTime::from_timestamp_nanos(start_time_column.value(0)),
         start_ticks: start_ticks_column.value(0),
         parent_process_id,
-        properties: Arc::new(properties_jsonb),
+        properties: properties_jsonb,
     };
 
     let last_block_end_ticks = last_block_end_ticks_column.value(0);
@@ -274,24 +315,6 @@ pub async fn find_process_with_latest_timing(
 
     Ok((process_metadata, last_block_end_ticks, last_block_end_time))
 }
-/// Creates a `BlockMetadata` from a database row.
-#[span_fn]
-pub fn block_from_row(row: &sqlx::postgres::PgRow) -> Result<BlockMetadata> {
-    Ok(BlockMetadata {
-        block_id: row.try_get("block_id")?,
-        stream_id: row.try_get("stream_id")?,
-        process_id: row.try_get("process_id")?,
-        begin_time: row.try_get("begin_time")?,
-        end_time: row.try_get("end_time")?,
-        begin_ticks: row.try_get("begin_ticks")?,
-        end_ticks: row.try_get("end_ticks")?,
-        nb_objects: row.try_get("nb_objects")?,
-        object_offset: row.try_get("object_offset")?,
-        payload_size: row.try_get("payload_size")?,
-        insert_time: row.try_get("insert_time")?,
-    })
-}
-
 /// Creates a `BlockMetadata` from a recordbatch row.
 #[span_fn]
 pub fn block_from_batch_row(rb: &RecordBatch, row: usize) -> Result<BlockMetadata> {
@@ -319,33 +342,4 @@ pub fn block_from_batch_row(rb: &RecordBatch, row: usize) -> Result<BlockMetadat
         payload_size: payload_size_column.value(row),
         insert_time: DateTime::from_timestamp_nanos(insert_time_column.value(row)),
     })
-}
-
-/// Finds all blocks for a given stream within a given time range.
-#[span_fn]
-pub async fn find_stream_blocks_in_range(
-    connection: &mut sqlx::PgConnection,
-    stream_id: sqlx::types::Uuid,
-    begin_ticks: i64,
-    end_ticks: i64,
-) -> Result<Vec<BlockMetadata>> {
-    let rows = sqlx::query(
-        "SELECT block_id, stream_id, process_id, begin_time, begin_ticks, end_time, end_ticks, nb_objects, object_offset, payload_size, insert_time
-         FROM blocks
-         WHERE stream_id = $1
-         AND begin_ticks <= $2
-         AND end_ticks >= $3
-         ORDER BY begin_ticks;",
-    )
-    .bind(stream_id)
-    .bind(end_ticks)
-    .bind(begin_ticks)
-    .fetch_all(connection)
-    .await
-    .with_context(|| "find_stream_blocks")?;
-    let mut blocks = Vec::new();
-    for r in rows {
-        blocks.push(block_from_row(&r)?);
-    }
-    Ok(blocks)
 }

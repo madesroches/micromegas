@@ -82,7 +82,7 @@ async fn append_call_tree(
     convert_ticks: &ConvertTicks,
     blocks: &[BlockMetadata],
     blob_storage: Arc<BlobStorage>,
-    stream: &micromegas_telemetry::stream_info::StreamInfo,
+    stream: &crate::metadata::StreamMetadata,
 ) -> Result<()> {
     let call_tree = make_call_tree(
         blocks,

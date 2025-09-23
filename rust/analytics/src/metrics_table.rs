@@ -1,5 +1,7 @@
 use crate::{
-    arrow_properties::add_property_set_to_jsonb_builder, measure::Measure, time::TimeRange,
+    measure::Measure, metadata::ProcessMetadata,
+    properties::property_set_jsonb_dictionary_builder::PropertySetJsonbDictionaryBuilder,
+    time::TimeRange,
 };
 use anyhow::{Context, Result};
 use chrono::DateTime;
@@ -99,7 +101,7 @@ pub struct MetricsRecordBuilder {
     pub names: StringDictionaryBuilder<Int16Type>,
     pub units: StringDictionaryBuilder<Int16Type>,
     pub values: PrimitiveBuilder<Float64Type>,
-    pub properties: BinaryDictionaryBuilder<Int32Type>,
+    pub properties: PropertySetJsonbDictionaryBuilder,
     pub process_properties: BinaryDictionaryBuilder<Int32Type>,
 }
 
@@ -118,7 +120,7 @@ impl MetricsRecordBuilder {
             names: StringDictionaryBuilder::new(),
             units: StringDictionaryBuilder::new(),
             values: PrimitiveBuilder::with_capacity(capacity),
-            properties: BinaryDictionaryBuilder::new(),
+            properties: PropertySetJsonbDictionaryBuilder::new(capacity),
             process_properties: BinaryDictionaryBuilder::new(),
         }
     }
@@ -157,9 +159,51 @@ impl MetricsRecordBuilder {
         self.names.append_value(&*row.name);
         self.units.append_value(&*row.unit);
         self.values.append_value(row.value);
-        add_property_set_to_jsonb_builder(&row.properties, &mut self.properties)?;
+        self.properties.append_property_set(&row.properties)?;
         self.process_properties
             .append_value(&*row.process.properties);
+        Ok(())
+    }
+
+    /// Append only per-entry variable data (optimized for batch processing)
+    pub fn append_entry_only(&mut self, row: &Measure) -> Result<()> {
+        // Only append fields that truly vary per metrics entry
+        self.times.append_value(row.time);
+        self.targets.append_value(&*row.target);
+        self.names.append_value(&*row.name);
+        self.units.append_value(&*row.unit);
+        self.values.append_value(row.value);
+        self.properties.append_property_set(&row.properties)?;
+        Ok(())
+    }
+
+    /// Batch fill all constant columns for all entries in block
+    pub fn fill_constant_columns(
+        &mut self,
+        process: &ProcessMetadata,
+        stream_id: &str,
+        block_id: &str,
+        insert_time: i64,
+        entry_count: usize,
+    ) -> Result<()> {
+        let process_id_str = format!("{}", process.process_id);
+
+        // For PrimitiveBuilder (insert_times): use append_slice for better performance
+        let insert_times_slice = vec![insert_time; entry_count];
+        self.insert_times.append_slice(&insert_times_slice);
+
+        // For BinaryDictionaryBuilder (process_properties): use append_values for same value
+        self.process_properties
+            .append_values(&**process.properties, entry_count);
+
+        // For StringDictionaryBuilder: use append_values for same values (optimal for constant data)
+        self.process_ids.append_values(&process_id_str, entry_count);
+        self.stream_ids.append_values(stream_id, entry_count);
+        self.block_ids.append_values(block_id, entry_count);
+        self.exes.append_values(&process.exe, entry_count);
+        self.usernames.append_values(&process.username, entry_count);
+        self.computers.append_values(&process.computer, entry_count);
+
         Ok(())
     }
 
@@ -179,7 +223,7 @@ impl MetricsRecordBuilder {
                 Arc::new(self.names.finish()),
                 Arc::new(self.units.finish()),
                 Arc::new(self.values.finish()),
-                Arc::new(self.properties.finish()),
+                Arc::new(self.properties.finish()?),
                 Arc::new(self.process_properties.finish()),
             ],
         )

@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use jsonb::RawJsonb;
 use std::collections::HashMap;
 
-use crate::dfext::binary_column_accessor::BinaryColumnAccessor;
+use crate::properties::properties_column_accessor::PropertiesColumnAccessor;
 
 /// Convert JSONB bytes to a property HashMap
 pub fn jsonb_to_property_map(jsonb_bytes: &[u8]) -> Result<HashMap<String, String>> {
@@ -33,16 +33,16 @@ pub fn jsonb_to_property_map(jsonb_bytes: &[u8]) -> Result<HashMap<String, Strin
     Ok(map)
 }
 
-/// Extract properties from a binary column accessor at the given row index.
+/// Extract properties from a properties column accessor at the given row index.
 /// Returns an empty HashMap if the column value is null, otherwise deserializes the JSONB.
-pub fn extract_properties_from_binary_column(
-    column: &dyn BinaryColumnAccessor,
+pub fn extract_properties_from_properties_column(
+    column: &dyn PropertiesColumnAccessor,
     row_index: usize,
 ) -> Result<HashMap<String, String>> {
     if column.is_null(row_index) {
         Ok(HashMap::new())
     } else {
-        let jsonb_bytes = column.value(row_index);
-        jsonb_to_property_map(jsonb_bytes)
+        let jsonb_bytes = column.jsonb_value(row_index)?;
+        jsonb_to_property_map(&jsonb_bytes)
     }
 }

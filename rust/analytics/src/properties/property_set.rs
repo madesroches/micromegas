@@ -34,6 +34,14 @@ impl PropertySet {
         }
         Ok(())
     }
+
+    /// Get a reference to the underlying Arc<Object> for pointer-based operations.
+    ///
+    /// This is used by custom dictionary builders for efficient deduplication
+    /// based on Arc pointer addresses rather than content hashing.
+    pub fn as_arc_object(&self) -> &Arc<Object> {
+        &self.obj
+    }
 }
 
 impl From<Arc<Object>> for PropertySet {
