@@ -113,27 +113,6 @@ pub fn get_thread_name_from_stream_metadata(stream: &StreamMetadata) -> Result<S
     // If neither property exists, use stream_id
     Ok(format!("{}", &stream.stream_id))
 }
-/// Creates a `StreamInfo` from a database row.
-pub fn stream_from_row(row: &sqlx::postgres::PgRow) -> Result<StreamInfo> {
-    let dependencies_metadata_buffer: Vec<u8> = row.try_get("dependencies_metadata")?;
-    let dependencies_metadata: Vec<UserDefinedType> =
-        ciborium::from_reader(&dependencies_metadata_buffer[..])
-            .with_context(|| "decoding dependencies metadata")?;
-    let objects_metadata_buffer: Vec<u8> = row.try_get("objects_metadata")?;
-    let objects_metadata: Vec<UserDefinedType> =
-        ciborium::from_reader(&objects_metadata_buffer[..])
-            .with_context(|| "decoding objects metadata")?;
-    let tags: Vec<String> = row.try_get("tags")?;
-    let properties: Vec<Property> = row.try_get("properties")?;
-    Ok(StreamInfo {
-        stream_id: row.try_get("stream_id")?,
-        process_id: row.try_get("process_id")?,
-        dependencies_metadata,
-        objects_metadata,
-        tags,
-        properties: micromegas_telemetry::property::into_hashmap(properties),
-    })
-}
 
 /// Creates a `StreamMetadata` from a database row with pre-serialized JSONB properties.
 #[span_fn]
@@ -179,32 +158,6 @@ pub async fn find_stream(
     .await
     .with_context(|| "select from streams")?;
     stream_metadata_from_row(&row)
-}
-
-/// Lists all streams for a given process that are tagged with a specific tag.
-pub async fn list_process_streams_tagged(
-    pool: &sqlx::Pool<sqlx::Postgres>,
-    process_id: sqlx::types::Uuid,
-    tag: &str,
-) -> Result<Vec<StreamInfo>> {
-    let stream_rows = sqlx::query(
-        "SELECT stream_id, process_id, dependencies_metadata, objects_metadata, tags, properties
-         FROM streams
-         WHERE process_id = $1
-         AND array_position(tags, $2) is not NULL
-         ;",
-    )
-    .bind(process_id)
-    .bind(tag)
-    .fetch_all(pool)
-    .await
-    .with_context(|| "fetching streams")?;
-    let mut streams = vec![];
-    for row in stream_rows {
-        let stream = stream_from_row(&row).with_context(|| "stream_from_row")?;
-        streams.push(stream);
-    }
-    Ok(streams)
 }
 
 /// Creates a `ProcessMetadata` from a database row with pre-serialized JSONB properties.
@@ -362,24 +315,6 @@ pub async fn find_process_with_latest_timing(
 
     Ok((process_metadata, last_block_end_ticks, last_block_end_time))
 }
-/// Creates a `BlockMetadata` from a database row.
-#[span_fn]
-pub fn block_from_row(row: &sqlx::postgres::PgRow) -> Result<BlockMetadata> {
-    Ok(BlockMetadata {
-        block_id: row.try_get("block_id")?,
-        stream_id: row.try_get("stream_id")?,
-        process_id: row.try_get("process_id")?,
-        begin_time: row.try_get("begin_time")?,
-        end_time: row.try_get("end_time")?,
-        begin_ticks: row.try_get("begin_ticks")?,
-        end_ticks: row.try_get("end_ticks")?,
-        nb_objects: row.try_get("nb_objects")?,
-        object_offset: row.try_get("object_offset")?,
-        payload_size: row.try_get("payload_size")?,
-        insert_time: row.try_get("insert_time")?,
-    })
-}
-
 /// Creates a `BlockMetadata` from a recordbatch row.
 #[span_fn]
 pub fn block_from_batch_row(rb: &RecordBatch, row: usize) -> Result<BlockMetadata> {
@@ -407,33 +342,4 @@ pub fn block_from_batch_row(rb: &RecordBatch, row: usize) -> Result<BlockMetadat
         payload_size: payload_size_column.value(row),
         insert_time: DateTime::from_timestamp_nanos(insert_time_column.value(row)),
     })
-}
-
-/// Finds all blocks for a given stream within a given time range.
-#[span_fn]
-pub async fn find_stream_blocks_in_range(
-    connection: &mut sqlx::PgConnection,
-    stream_id: sqlx::types::Uuid,
-    begin_ticks: i64,
-    end_ticks: i64,
-) -> Result<Vec<BlockMetadata>> {
-    let rows = sqlx::query(
-        "SELECT block_id, stream_id, process_id, begin_time, begin_ticks, end_time, end_ticks, nb_objects, object_offset, payload_size, insert_time
-         FROM blocks
-         WHERE stream_id = $1
-         AND begin_ticks <= $2
-         AND end_ticks >= $3
-         ORDER BY begin_ticks;",
-    )
-    .bind(stream_id)
-    .bind(end_ticks)
-    .bind(begin_ticks)
-    .fetch_all(connection)
-    .await
-    .with_context(|| "find_stream_blocks")?;
-    let mut blocks = Vec::new();
-    for r in rows {
-        blocks.push(block_from_row(&r)?);
-    }
-    Ok(blocks)
 }
