@@ -1,0 +1,1 @@
+searchState.loadedDescShard("telemetry_generator", 0, "Generator test\nNumber of async tasks to spawn concurrently\nReturns the argument unchanged.\nCalls <code>U::from(self)</code>.\nNumber of tasks to generate (default: 50000 tasks, ~5 …\nNumber of threads for concurrent operations")
