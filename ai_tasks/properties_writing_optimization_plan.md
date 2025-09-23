@@ -197,51 +197,63 @@ pub struct StreamMetadata {
 - ✅ Provide consistent JSONB output regardless of underlying format
 - ✅ Enable seamless migration path without breaking existing data pipelines
 
-#### Phase 9.3: Create StreamMetadata (Analytics-Optimized StreamInfo) ❌ TODO
+### Phase 9: Format Compatibility & PropertiesColumnAccessor 🟡 PARTIALLY COMPLETED
+
+#### Phase 9.1: Design PropertiesColumnAccessor ✅ COMPLETED
+- ✅ Create unified `PropertiesColumnAccessor` for both `Binary` and `Dictionary(Int32, Binary)` columns
+- ✅ Provide consistent JSONB output regardless of underlying Arrow column format
+- ✅ Support both struct array (legacy) and JSONB binary formats transparently
+- ✅ Follow established pattern of `StringColumnAccessor` and `BinaryColumnAccessor`
+
+#### Phase 9.2: Implement PropertiesColumnAccessor ✅ COMPLETED
+- ✅ Create `properties_column_by_name()` factory function in `dfext` module
+- ✅ Handle automatic format detection and appropriate accessor creation
+- ✅ Provide `jsonb_value(row_index) -> Result<Vec<u8>>` method for consistent JSONB access
+- ✅ Support `is_null(row_index)` for null checking
+
+#### Phase 9.3: StreamMetadata Optimization ❌ TODO
 - ❌ Create `StreamMetadata` struct following `ProcessMetadata` pattern
 - ❌ Add `properties: SharedJsonbSerialized` field for pre-serialized JSONB stream properties
+- ❌ Update `PartitionSourceBlock` to use `Arc<StreamMetadata>` instead of `Arc<StreamInfo>`
 - ❌ Add conversion functions: `stream_info_to_metadata()` and `stream_metadata_from_row()`
 - ❌ Maintain backward compatibility with existing `StreamInfo` in instrumentation layer
 
-#### Phase 9.4: Direct JSONB to Property Array Conversion ❌ TODO
-- ❌ Implement direct `jsonb_to_properties(jsonb_bytes: &[u8]) -> Result<Vec<Property>>`
-- ❌ Parse JSONB directly to `Vec<Property>` without HashMap intermediate step
-- ❌ Handle null/empty JSONB cases appropriately
-- ❌ Replace all usage of `extract_properties_from_binary_column()` (returns HashMap)
+#### Phase 9.4: Update All Callers to Use PropertiesColumnAccessor ✅ COMPLETED
+- ✅ Replace `binary_column_by_name` with `properties_column_by_name` for properties access
+- ✅ Replace `extract_properties_from_binary_column()` with `extract_properties_from_properties_column()`
+- ✅ Update `replication.rs`: Use PropertiesColumnAccessor + convert to Vec<Property> for DB insertion
+- ✅ Update `jit_partitions.rs`: Use PropertiesColumnAccessor for consistent properties access
+- ✅ Update `partition_source_data.rs`: Use PropertiesColumnAccessor for stream and process properties
+- ✅ Update `metadata.rs`: Optimize ProcessMetadata creation with direct JSONB access
+- ✅ Update `analytics-web-srv`: Use PropertiesColumnAccessor for ProcessInfo properties
 
-#### Phase 9.5: Update Analytics Data Structures ❌ TODO
-- ❌ Update `PartitionSourceBlock` to use `Arc<StreamMetadata>` instead of `Arc<StreamInfo>`
-- ❌ Update `jit_partitions.rs` to create `StreamMetadata` with pre-serialized JSONB
-- ❌ Update `partition_source_data.rs` to use optimized `StreamMetadata`
-- ❌ Maintain backward compatibility with instrumentation layer using `StreamInfo`
+#### Phase 9.5: Optimize ProcessMetadata Creation ✅ COMPLETED
+- ✅ Eliminate serialize/deserialize roundtrip in `find_process_with_latest_timing`
+- ✅ Use direct JSONB access via `properties_accessor.jsonb_value(0)`
+- ✅ Avoid HashMap creation and re-serialization to JSONB
+- ✅ Significant performance improvement for analytics queries
 
-#### Phase 9.6: Update All Callers to Direct JSONB→Properties ❌ TODO
-- ❌ Update `replication.rs`: Replace `read_property_list()` → `PropertiesColumnAccessor` + `jsonb_to_properties()`
-- ❌ Update `jit_partitions.rs`: Replace `extract_properties_from_binary_column()` → direct JSONB access
-- ❌ Update `partition_source_data.rs`: Replace `extract_properties_from_binary_column()` → direct JSONB access
-- ❌ Update `metadata.rs`: Consider direct JSONB→Properties for DB conversion
-
-#### Phase 9.7: Legacy Code Cleanup ❌ TODO
-- ❌ Remove `jsonb_to_property_map()` - only used internally by `extract_properties_from_binary_column()`
-- ❌ Remove `extract_properties_from_binary_column()` - replaced by direct JSONB access + `jsonb_to_properties()`
-- ❌ Evaluate removing `into_hashmap()` - used in `metadata.rs` for DB→ProcessMetadata conversion
-- ✅ Keep `make_properties()` - still needed for HashMap→Vec<Property> in ingestion service
-- ❌ Keep `read_property_list()` for legacy data compatibility
-- ❌ Remove unused functions: `add_property_set_to_jsonb_builder()`, `add_properties_to_builder()`, `add_property_set_to_builder()`
+#### Phase 9.6: Legacy Code Cleanup ✅ COMPLETED
+- ✅ Remove `extract_properties_from_binary_column()` - replaced by PropertiesColumnAccessor
+- ✅ Remove unused `BinaryColumnAccessor` imports where no longer needed
+- ✅ Keep `extract_properties_from_properties_column()` - still needed for HashMap conversion
+- ✅ Keep `make_properties()` - still needed for HashMap→Vec<Property> in replication service
+- ✅ Maintain compatibility by converting between formats as needed
 
 **Performance Benefits:**
-- **Unified access pattern**: Single accessor handles both formats transparently
-- **Stream properties optimization**: `StreamMetadata` with pre-serialized JSONB like `ProcessMetadata`
+- **Unified access pattern**: Single PropertiesColumnAccessor handles both Binary and Dictionary formats transparently
+- **ProcessMetadata optimization**: Direct JSONB access eliminates serialize/deserialize roundtrip
+- **StreamMetadata optimization**: Pre-serialized JSONB stream properties (pending Phase 9.3)
 - **Backward compatibility**: Automatic conversion from struct array to JSONB for legacy data
-- **Performance optimization**: Zero conversion overhead for native JSONB data + direct JSONB→Properties parsing
-- **Code simplification**: Eliminates HashMap intermediate step and multiple conversion functions
-- **Legacy code cleanup**: Remove ~3 obsolete functions (`jsonb_to_property_map`, `extract_properties_from_binary_column`, potentially `into_hashmap`)
-- **Consistency**: Both process and stream properties use same optimized JSONB approach
-- **Future-proofing**: All consumers work with efficient JSONB→Properties path
+- **Performance optimization**: Zero conversion overhead for native JSONB data
+- **Code simplification**: Eliminates redundant conversion functions and inconsistent column access
+- **Legacy code cleanup**: Removed obsolete functions (`extract_properties_from_binary_column`)
+- **Consistency**: All properties access now uses unified PropertiesColumnAccessor pattern
+- **Future-proofing**: All consumers work with efficient JSONB access path
 
 ## 🔄 Future Advanced Optimizations (Phase 10+)
-- Bulk dictionary building for unique property sets
-- Cross-block property interning with reference counting
+- **Phase 10**: Bulk dictionary building for unique property sets
+- **Phase 11+**: Cross-block property interning with reference counting
 - Zero-copy JSONB optimizations
 
 ## ✅ Major CPU Usage Issues Resolved
@@ -258,22 +270,23 @@ pub struct StreamMetadata {
 ## ✅ PropertySet Optimization Status
 - **Phase 7 - Process Properties**: ✅ COMPLETED - Implemented batch processing with `append_values()` (100% elimination of per-row hashing/searching)
 - **Phase 8 - Log Entry Properties**: ✅ COMPLETED - Implemented pointer-based deduplication with `PropertySetJsonbDictionaryBuilder`
-- **Phase 9 - Format Compatibility & StreamMetadata**: ❌ TODO - `PropertiesColumnAccessor` design and implementation
+- **Phase 9 - Format Compatibility & StreamMetadata**: 🟡 PARTIALLY COMPLETED - `PropertiesColumnAccessor` completed, `StreamMetadata` optimization pending
 - **Phase 7 Impact Achieved**: 20-40% reduction in dictionary encoding CPU cycles for process properties
 - **Phase 8 Impact Achieved**: 20-50% reduction for log entry properties with duplicates through pointer-based caching
 
 ## ✅ Compatibility Requirements Maintained
 - **Instrumentation layer**: Continues using `ProcessInfo` and `StreamInfo` with `HashMap<String, String>` properties
-- **Analytics layer**: Uses optimized `ProcessMetadata` with pre-serialized JSONB properties (StreamMetadata pending)
+- **Analytics layer**: Uses optimized `ProcessMetadata` with pre-serialized JSONB properties (StreamMetadata pending in Phase 9.3)
 - **Wire protocol**: HTTP/CBOR transmission uses original ProcessInfo/StreamInfo format
 - **Database**: Stores properties as `micromegas_property[]`, converts to analytics format on read
 
-## 📊 Current Status Summary (as of commit 208811a2)
+## 📊 Current Status Summary (as of commit a0670016)
 
 ### ✅ Major Optimizations Completed
 1. **Phases 1-6**: Complete infrastructure overhaul with ProcessMetadata and BinaryColumnAccessor
 2. **Phase 7**: Process properties batch processing (100% elimination of per-row dictionary operations)
 3. **Phase 8**: PropertySet pointer-based deduplication (20-50% reduction in log entry property processing)
+4. **Phase 9 (Partial)**: PropertiesColumnAccessor unification and ProcessMetadata direct JSONB optimization
 
 ### 🎯 Performance Gains Achieved
 - **30-50% reduction** in property writing CPU cycles for high-duplication scenarios
@@ -283,7 +296,7 @@ pub struct StreamMetadata {
 
 ### 🔄 Next Steps
 **Immediate**:
-1. **Phase 9**: Implement `PropertiesColumnAccessor` for format compatibility and `StreamMetadata` for stream properties optimization
+1. **Phase 9.3**: Implement `StreamMetadata` optimization for stream properties (following ProcessMetadata pattern)
 
 **Future Advanced Optimizations**:
 2. **Phase 10+**: Advanced optimizations (bulk dictionary building, cross-block interning, zero-copy)
@@ -299,7 +312,8 @@ pub struct StreamMetadata {
 - **Additional 20-50% reduction for log entry properties with duplicates** (Phase 8)
   - ✅ Achieved through `PropertySetJsonbDictionaryBuilder` with pointer-based caching
 - **Format compatibility and code unification** (Phase 9)
-  - ❌ TODO: Implement `PropertiesColumnAccessor` with consistent JSONB output and `StreamMetadata` optimization
+  - ✅ Implemented `PropertiesColumnAccessor` with consistent JSONB output for all properties access
+  - ❌ TODO: `StreamMetadata` optimization (Phase 9.3 pending)
 - **Zero data corruption, backward compatibility maintained**
   - ✅ All existing ProcessInfo APIs preserved, new optimized paths added
 - **Clean separation between instrumentation and analytics concerns**
