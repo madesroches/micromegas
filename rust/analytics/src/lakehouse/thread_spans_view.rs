@@ -12,7 +12,7 @@ use super::{
 use crate::{
     call_tree::make_call_tree,
     lakehouse::write_partition::{PartitionRowSet, write_partition_from_rows},
-    metadata::{find_process, find_stream_optimized},
+    metadata::{find_process, find_stream},
     response_writer::ResponseWriter,
     span_table::{SpanRecordBuilder, get_spans_schema},
     time::{ConvertTicks, TimeRange, datetime_to_scalar, make_time_converter_from_db},
@@ -234,9 +234,9 @@ impl View for ThreadSpansView {
         }
         let query_range = query_range.unwrap();
         let stream = Arc::new(
-            find_stream_optimized(&lake.db_pool, self.stream_id)
+            find_stream(&lake.db_pool, self.stream_id)
                 .await
-                .with_context(|| "find_stream_optimized")?,
+                .with_context(|| "find_stream")?,
         );
         let process = Arc::new(
             find_process(&lake.db_pool, &stream.process_id)

@@ -21,7 +21,6 @@ use crate::{
         partition_cache::LivePartitionProvider, query::make_session_context,
         view_factory::ViewFactory,
     },
-    properties::utils::jsonb_to_property_map,
     time::TimeRange,
 };
 use datafusion::execution::runtime_env::RuntimeEnv;
@@ -165,42 +164,9 @@ pub fn stream_metadata_from_row(row: &sqlx::postgres::PgRow) -> Result<StreamMet
     })
 }
 
-/// Converts a `StreamMetadata` back to a `StreamInfo` by deserializing the JSONB properties.
-pub fn stream_metadata_to_info(stream_metadata: &StreamMetadata) -> Result<StreamInfo> {
-    let properties_map = jsonb_to_property_map(&stream_metadata.properties)
-        .with_context(|| "converting JSONB properties to property map")?;
-
-    Ok(StreamInfo {
-        process_id: stream_metadata.process_id,
-        stream_id: stream_metadata.stream_id,
-        dependencies_metadata: stream_metadata.dependencies_metadata.clone(),
-        objects_metadata: stream_metadata.objects_metadata.clone(),
-        tags: stream_metadata.tags.clone(),
-        properties: properties_map,
-    })
-}
-/// Finds a stream by its ID.
+/// Finds a stream by its ID and returns it as StreamMetadata.
 #[span_fn]
 pub async fn find_stream(
-    pool: &sqlx::Pool<sqlx::Postgres>,
-    stream_id: sqlx::types::Uuid,
-) -> Result<StreamInfo> {
-    let row = sqlx::query(
-        "SELECT stream_id, process_id, dependencies_metadata, objects_metadata, tags, properties
-         FROM streams
-         WHERE stream_id = $1
-         ;",
-    )
-    .bind(stream_id)
-    .fetch_one(pool)
-    .await
-    .with_context(|| "select from streams")?;
-    stream_from_row(&row)
-}
-
-/// Finds a stream by its ID and returns it as StreamMetadata with pre-serialized JSONB properties.
-#[span_fn]
-pub async fn find_stream_optimized(
     pool: &sqlx::Pool<sqlx::Postgres>,
     stream_id: sqlx::types::Uuid,
 ) -> Result<StreamMetadata> {
