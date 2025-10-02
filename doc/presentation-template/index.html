@@ -1,60 +1,24 @@
-<!doctype html>
-<html>
-	<head>
-		<meta charset="utf-8">
-		<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Technical Presentation Template</title>
+    <link rel="stylesheet" href="/node_modules/reveal.js/dist/reveal.css">
+    <link rel="stylesheet" href="/src/themes/ayu-dark.css">
+    <link rel="stylesheet" href="/node_modules/reveal.js/plugin/highlight/monokai.css">
+</head>
+<body>
+    <div class="reveal">
+        <div class="slides">
+            <!-- Slides will be loaded here -->
+            <section data-markdown="src/slides/presentation.md"
+                     data-separator="^\r?\n---\r?\n$"
+                     data-separator-vertical="^\r?\n--\r?\n$">
+            </section>
+        </div>
+    </div>
 
-		<title>Presentation</title>
-
-		<link rel="stylesheet" href="dist/reset.css">
-		<link rel="stylesheet" href="dist/reveal.css">
-		<link rel="stylesheet" href="dist/theme/black.css">
-
-		<!-- Theme used for syntax highlighted code -->
-		<link rel="stylesheet" href="plugin/highlight/monokai.css">
-	</head>
-	<body>
-		<div class="reveal">
-			<div class="slides">
-				
-				<section data-background-image="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyMCIgaGVpZ2h0PSIyMCI+PHJlY3Qgd2lkdGg9IjIwIiBoZWlnaHQ9IjIwIiBmaWxsPSIjMzQ0OTVlIi8+PHBhdGggZD0iTTAgMEwxMCAxMEwwIDIwIiBzdHJva2U9IiMyYzNlNTIiIHN0cm9rZS13aWR0aD0iMiIvPjxwYXRoIGQ9Ik0xMCAwTDIwIDEwTDEwIDIwIiBzdHJva2U9IiMyYzNlNTIiIHN0cm9rZS13aWR0aD0iMiIvPjwvc3ZnPg==">
-					<h2>Woven</h2>
-					<p>A woven-style pattern.</p>
-				</section>
-				<section data-background-image="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMiIgaGVpZ2h0PSIxMiI+PHJlY3Qgd2lkdGg9IjEyIiBoZWlnaHQ9IjEyIiBmaWxsPSIjMjIyIi8+PHBhdGggZD0iTTAgMEw2IDZMMCAxMloiIGZpbGw9IiMzMzMiLz48cGF0aCBkPSJNNiAwTDEyIDZMNiAxMloiIGZpbGw9IiM0NDQiLz48L3N2Zz4=">
-					<h2>Carbon Fiber</h2>
-					<p>A carbon fiber-style pattern.</p>
-				</section>
-				
-				<section data-background-image="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAiIGhlaWdodD0iMjIiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PHJlY3Qgd2lkdGg9IjIwIiBoZWlnaHQ9IjIyIiBmaWxsPSIjMjgyODI4Ii8+PHBhdGggZD0iTSAxMCAwIEwgMjAgNS41IEwgMjAgMTYuNSBMIDEwIDIyIEwgMCAxNi41IEwgMCA1LjUgWiIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjNDg0ODQ4IiBzdHJva2Utd2lkdGg9IjEiLz48L3N2Zz4=">
-					<h2>Hexagons</h2>
-					<p>A pattern of hexagons.</p>
-				</section>
-				<section data-background-image="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMjAiIGhlaWdodD0iMjAiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PHJlY3Qgd2lkdGg9IjIwIiBoZWlnaHQ9IjIwIiBmaWxsPSIjMzMzIiAvPjxwYXRoIGQ9Ik0gMCA1IEwgNSAxMCBMIDAgMTUgTSAxMCA1IEwgMTUgMTAgTCAxMCAxNSIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjNTU1IiBzdHJva2Utd2lkdGg9IjEiIC8+PC9zdmc+">
-					<h2>Chevrons</h2>
-					<p>A chevron pattern.</p>
-				</section>
-				
-				<section>
-					<h2>Slide 2</h2>
-				</section>
-			</div>
-		</div>
-
-		<script src="dist/reveal.js"></script>
-		<script src="plugin/markdown/markdown.js"></script>
-		<script src="plugin/notes/notes.js"></script>
-		<script src="plugin/highlight/highlight.js"></script>
-		<script>
-			// More info about initialization & config:
-			// - https://revealjs.com/initialization/
-			// - https://revealjs.com/config/
-			Reveal.initialize({
-				hash: true,
-
-				// Learn about plugins: https://revealjs.com/plugins/
-				plugins: [ RevealMarkdown, RevealHighlight, RevealNotes ]
-			});
-		</script>
-	</body>
+    <script type="module" src="/src/main.js"></script>
+</body>
 </html>
