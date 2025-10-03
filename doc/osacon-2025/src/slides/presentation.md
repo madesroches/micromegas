@@ -122,40 +122,44 @@ How?
 - Events can contain **references** to avoid repetition
 - **LZ4** has negative overhead
 
----
+--
 
-## Code Example: Rust
+## Code Example
+### Rust instrumentation
 
 ```rust
 use micromegas_tracing::prelude::*;
 
 #[span_fn]
-async fn process_frame(frame_id: u64) {
-    event!("frame_start", frame: frame_id);
-
-    // Your game logic here
-    render_scene().await;
-
-    metric!("frame_time_ms", 16.7);
+async fn process_request(user_id: u32) -> Result<Response> {
+    info!("request user_id={user_id}");
+    let begin_ticks = now();
+    let response = handle_request(user_id).await?;
+    let end_ticks = now();
+    let duration = end_ticks - begin_ticks;
+    imetric!("request_duration", "ticks", duration as u64);
+    info!("response status={}", response.status());
+    Ok(response)
 }
 ```
 
----
+--
 
-## Code Example: Unreal Engine
+## Code Example
+### Unreal instrumentation
 
 ```cpp
-#include "MicromegasTracing.h"
+#include "MicromegasTracing/Macros.h"
 
-void AMyActor::Tick(float DeltaTime)
+float AMyActor::TakeDamage(float Damage, ...)
 {
-    MICROMEGAS_SPAN("ActorTick");
-
-    MICROMEGAS_EVENT("tick_start",
-        ("actor", GetName()),
-        ("delta", DeltaTime));
-
-    // Actor logic
+    MICROMEGAS_SPAN_FUNCTION("Combat");
+    float ActualDamage = Super::TakeDamage(...);
+    MICROMEGAS_FMETRIC("Combat",
+        MicromegasTracing::Verbosity::High,
+        TEXT("DamageDealt"), TEXT("points"),
+        ActualDamage);
+    return ActualDamage;
 }
 ```
 

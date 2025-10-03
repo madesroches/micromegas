@@ -134,7 +134,7 @@
 .reveal strong,
 .reveal b {
   font-weight: 700;
-  color: var(--color-secondary);
+  color: var(--color-primary);
 }
 
 .reveal em {
