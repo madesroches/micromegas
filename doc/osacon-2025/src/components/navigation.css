@@ -1,0 +1,231 @@
+/*********************************************
+ * ENHANCED NAVIGATION COMPONENTS
+ *********************************************/
+
+/* Slide counter in bottom right */
+.reveal .slide-number {
+  position: fixed;
+  bottom: 12px;
+  right: 12px;
+  font-family: var(--font-mono);
+  font-size: 14px;
+  color: var(--color-text-secondary);
+  background: var(--color-bg-2);
+  padding: 4px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--color-border);
+  z-index: 31;
+}
+
+/* Breadcrumb navigation */
+.reveal .breadcrumb {
+  position: fixed;
+  top: 20px;
+  left: 20px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--color-text-muted);
+  z-index: 31;
+  opacity: 0.8;
+}
+
+.reveal .breadcrumb::before {
+  content: "$ ";
+  color: var(--color-primary);
+}
+
+/* Progress bar enhancements */
+.reveal .progress {
+  height: 4px;
+  background: var(--color-bg-2);
+}
+
+.reveal .progress span {
+  background: linear-gradient(90deg, var(--color-primary) 0%, var(--color-secondary) 100%);
+  height: 4px;
+  border-radius: 0 2px 2px 0;
+  position: relative;
+}
+
+.reveal .progress span::after {
+  content: "";
+  position: absolute;
+  right: -6px;
+  top: -2px;
+  width: 8px;
+  height: 8px;
+  background: var(--color-primary);
+  border-radius: 50%;
+  box-shadow: 0 0 10px rgba(89, 194, 255, 0.5);
+}
+
+/* Controls styling */
+.reveal .controls {
+  color: var(--color-primary);
+  right: 20px;
+  bottom: 20px;
+}
+
+.reveal .controls button {
+  color: var(--color-text-secondary);
+  background: var(--color-bg-2);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  padding: 8px;
+  transition: all 0.2s ease;
+}
+
+.reveal .controls button:hover {
+  color: var(--color-primary);
+  border-color: var(--color-primary);
+  box-shadow: 0 0 10px rgba(89, 194, 255, 0.2);
+}
+
+/* Overview mode styling */
+.reveal.overview .slides section {
+  background: var(--color-bg-2);
+  border: 2px solid var(--color-border);
+  border-radius: 4px;
+}
+
+.reveal.overview .slides section:hover {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 20px rgba(89, 194, 255, 0.3);
+}
+
+.reveal.overview .slides section.present {
+  border-color: var(--color-secondary);
+  box-shadow: 0 0 30px rgba(255, 180, 84, 0.4);
+}
+
+/* Speaker notes indicator */
+.reveal .speaker-notes-indicator {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  z-index: 31;
+}
+
+.reveal .has-notes .speaker-notes-indicator::after {
+  content: " 📝";
+}
+
+/* Search overlay styling */
+.reveal .search-overlay {
+  background: rgba(11, 14, 20, 0.95);
+  backdrop-filter: blur(10px);
+}
+
+.reveal .search-overlay input {
+  background: var(--color-bg-2);
+  border: 2px solid var(--color-border);
+  color: var(--color-text-primary);
+  font-family: var(--font-mono);
+  border-radius: 6px;
+  padding: 12px 16px;
+  font-size: 16px;
+}
+
+.reveal .search-overlay input:focus {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 20px rgba(89, 194, 255, 0.3);
+  outline: none;
+}
+
+.reveal .search-results {
+  background: var(--color-bg-2);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  margin-top: 10px;
+}
+
+.reveal .search-result {
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--color-border);
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+.reveal .search-result:hover {
+  background: var(--color-bg-3);
+}
+
+.reveal .search-result:last-child {
+  border-bottom: none;
+}
+
+/* Menu navigation (if using reveal.js-menu plugin) */
+.reveal .slide-menu-button {
+  position: fixed;
+  top: 20px;
+  left: 20px;
+  color: var(--color-primary);
+  background: var(--color-bg-2);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  padding: 8px 12px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  cursor: pointer;
+  z-index: 31;
+  transition: all 0.2s ease;
+}
+
+.reveal .slide-menu-button:hover {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 10px rgba(89, 194, 255, 0.2);
+}
+
+.reveal .slide-menu-button::before {
+  content: "☰ ";
+  margin-right: 4px;
+}
+
+/* Keyboard shortcuts help */
+.reveal .keyboard-shortcuts {
+  position: fixed;
+  bottom: 20px;
+  left: 20px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-text-muted);
+  opacity: 0.7;
+  z-index: 31;
+  line-height: 1.4;
+}
+
+.reveal .keyboard-shortcuts kbd {
+  background: var(--color-bg-3);
+  border: 1px solid var(--color-border);
+  border-radius: 3px;
+  padding: 1px 4px;
+  font-size: 10px;
+  color: var(--color-primary);
+}
+
+/* Mobile navigation improvements */
+@media screen and (max-width: 768px) {
+  .reveal .controls {
+    bottom: 40px;
+    right: 10px;
+  }
+  
+  .reveal .slide-number {
+    bottom: 10px;
+    right: 10px;
+    font-size: 12px;
+  }
+  
+  .reveal .breadcrumb {
+    top: 10px;
+    left: 10px;
+    font-size: 10px;
+  }
+  
+  .reveal .keyboard-shortcuts {
+    display: none;
+  }
+}

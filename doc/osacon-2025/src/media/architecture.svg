@@ -1,0 +1,95 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 400" width="900" height="400">
+  <defs>
+    <style>
+      .box { fill: #2d2d2d; stroke: #4a9eff; stroke-width: 2; }
+      .storage { fill: #2d2d2d; stroke: #4a9eff; stroke-width: 2; rx: 10; }
+      .text { fill: #e6e6e6; font-family: 'Courier New', monospace; font-size: 15px; text-anchor: middle; font-weight: bold; }
+      .small-text { fill: #a6a6a6; font-family: 'Courier New', monospace; font-size: 11px; text-anchor: middle; }
+      .arrow { stroke: #4a9eff; stroke-width: 2.5; fill: none; marker-end: url(#arrowhead); }
+      .label { fill: #e6e6e6; font-family: 'Courier New', monospace; font-size: 11px; text-anchor: middle; }
+    </style>
+    <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#4a9eff" />
+    </marker>
+  </defs>
+
+  <!-- App Layer (left) -->
+  <text x="90" y="50" class="small-text">Instrumented Applications</text>
+  <rect x="20" y="80" width="100" height="70" class="box" rx="5"/>
+  <text x="70" y="120" class="text">Rust</text>
+
+  <rect x="20" y="180" width="100" height="70" class="box" rx="5"/>
+  <text x="70" y="220" class="text">Unreal</text>
+
+  <!-- Arrows from apps to ingestion -->
+  <line x1="120" y1="115" x2="170" y2="185" class="arrow"/>
+  <text x="145" y="145" class="label">HTTPS</text>
+  <line x1="120" y1="215" x2="170" y2="200" class="arrow"/>
+  <text x="145" y="215" class="label">HTTPS</text>
+
+  <!-- Ingestion -->
+  <text x="220" y="50" class="small-text">Ingestion</text>
+  <rect x="170" y="160" width="100" height="70" class="box" rx="5"/>
+  <text x="220" y="200" class="text">ingestion</text>
+
+  <!-- Arrows from ingestion to storage -->
+  <line x1="270" y1="180" x2="320" y2="130" class="arrow"/>
+  <line x1="270" y1="210" x2="320" y2="260" class="arrow"/>
+
+  <!-- Storage Layer -->
+  <text x="380" y="50" class="small-text">Data Lake</text>
+
+  <!-- PostgreSQL -->
+  <ellipse cx="380" cy="120" rx="70" ry="50" class="storage"/>
+  <text x="380" y="118" class="text">PostgreSQL</text>
+  <text x="380" y="135" class="small-text">metadata</text>
+
+  <!-- S3 -->
+  <ellipse cx="380" cy="270" rx="70" ry="50" class="storage"/>
+  <text x="380" y="268" class="text">S3</text>
+  <text x="380" y="285" class="small-text">payloads</text>
+
+  <!-- Arrows from data lake to analytics -->
+  <line x1="450" y1="120" x2="500" y2="165" class="arrow"/>
+  <line x1="450" y1="270" x2="500" y2="210" class="arrow"/>
+
+  <!-- Analytics -->
+  <text x="550" y="50" class="small-text">Analytics</text>
+  <rect x="500" y="160" width="120" height="70" class="box" rx="5"/>
+  <text x="560" y="190" class="text">flight-sql</text>
+  <text x="560" y="210" class="small-text">DataFusion</text>
+
+  <!-- Arrows from analytics to lakehouse -->
+  <line x1="620" y1="180" x2="670" y2="130" class="arrow"/>
+  <line x1="620" y1="210" x2="670" y2="260" class="arrow"/>
+
+  <!-- Lakehouse (right) -->
+  <text x="720" y="50" class="small-text">Lakehouse</text>
+
+  <!-- Partitions in PostgreSQL -->
+  <ellipse cx="720" cy="120" rx="70" ry="50" class="storage"/>
+  <text x="720" y="118" class="text">Partitions</text>
+  <text x="720" y="135" class="small-text">PostgreSQL</text>
+
+  <!-- Parquet in S3 -->
+  <ellipse cx="720" cy="270" rx="70" ry="50" class="storage"/>
+  <text x="720" y="268" class="text">S3</text>
+  <text x="720" y="285" class="small-text">parquet</text>
+
+  <!-- Arrows from lakehouse to clients -->
+  <line x1="790" y1="120" x2="840" y2="105" class="arrow"/>
+  <line x1="790" y1="195" x2="840" y2="195" class="arrow"/>
+  <line x1="790" y1="270" x2="840" y2="285" class="arrow"/>
+
+  <!-- Clients (right) -->
+  <text x="880" y="50" class="small-text">Clients</text>
+
+  <rect x="840" y="80" width="80" height="50" class="box" rx="5"/>
+  <text x="880" y="110" class="text">Grafana</text>
+
+  <rect x="840" y="170" width="80" height="50" class="box" rx="5"/>
+  <text x="880" y="200" class="text">Python</text>
+
+  <rect x="840" y="260" width="80" height="50" class="box" rx="5"/>
+  <text x="880" y="290" class="text">Web UI</text>
+</svg>
