@@ -3,7 +3,7 @@
 
 **Event:** The Open Source Analytics Conference (OSACON)
 **Date:** November 5, 2025, 19:00-19:30 UTC (30 minutes)
-**Speaker:** Marc-Antoine Desroches
+**Speaker:** Marc-Antoine Desroches (madesroches@gmail.com)
 **Title:** "Micromegas - unified observability for video games"
 **Tagline:** "How we built an open source observability stack that can track every frame of our game"
 
@@ -32,52 +32,64 @@ Micromegas achieves this through multiple strategies:
 
 ## Presentation Structure (30 min)
 
-### 1. Hook & Problem Statement (3-4 min)
+### 1. Hook & Problem Statement (3 min)
 - Video game performance tracking challenge
 - Scale: 100k events/second per process at 60fps
-- Why traditional observability tools fail
-- Video/screenshots showing the problem
-
-### 2. Architecture Overview (3-4 min)
-- Data flow diagram: Instrumentation → Ingestion → Storage → Analytics
-- Four main stages to explore
+- Thousands of concurrent processes
 - Unified observability: logs, metrics, traces in one system
+- Problem: High-frequency tools are typically debugging tools, not analytics tools
+- This requires reproducing problems to investigate them
+- We refuse to choose between debugging at high frequency and recording at low frequency
 
-### 3. Stage 1: Low-Overhead Instrumentation (4-5 min)
+### 2. Architecture Overview (2 min)
+- Data flow diagram: Instrumentation → Ingestion (lake) → Analytics (lakehouse) → UI
+- Four main stages to explore
+
+### 3. Stage 1: Low-Overhead Instrumentation (4 min)
 - 20ns overhead per event
 - Thread-local storage for high-frequency streams (CPU traces)
 - Code examples (Rust, C++, Unreal Engine)
 - Transit protocol designed to work with in-memory buffer format
 
-### 4. Stage 2: Scalable Ingestion (1-2 min)
+### 4. Stage 2: Ingestion & Lake Storage (2 min)
 - HTTP service accepting compressed payloads
 - Metadata → PostgreSQL, payloads → S3/GCS
 - Simple, horizontally scalable design
-
-### 5. Stage 3: Lakehouse Storage (3-4 min)
 - Datalake: cheap writes (custom format, object storage)
-- Lakehouse: fast reads (Parquet, columnar)
-- Just-in-time ETL and tail sampling
 
-### 6. Stage 4: SQL Analytics (4-5 min)
-- Apache Arrow FlightSQL for queries
-- DataFusion SQL engine
-- Incremental data reduction with SQL-defined views
-- Cost comparison with traditional approaches
+### 5. Stage 3: SQL Analytics (5 min)
+- **Lakehouse architecture**: Bridge between lake (cheap writes) and warehouse (fast reads)
+  - Raw data stored in custom format for efficiency
+  - Transformed to Parquet (columnar) for analytics
+- **Tail sampling strategy by stream frequency**:
+  - Logs (low frequency): Process eagerly to Parquet
+  - Metrics (medium frequency): Process eagerly to Parquet
+  - CPU traces (very high frequency): Keep in raw format, process just-in-time when queried
+- **Query interface**: Apache Arrow FlightSQL with DataFusion SQL engine
+- **Incremental data reduction**: SQL-defined views that progressively aggregate data
 
-### 7. Examples & Results (4-5 min)
-- Screenshots/video of Perfetto trace viewer
+### 6. User Interface (4 min)
+- **Notebooks**: Jupyter integration for data exploration
+- **Grafana**: Dashboards and alerting via plugin (screenshot)
+- **Perfetto**: Trace viewer for detailed performance analysis
 - SQL query examples and results
-- Performance metrics from production use
-- Cost savings examples
 
-### 8. Open Source & Community (2-3 min)
-- GitHub project overview
-- Technology stack (Rust, DataFusion, Arrow, PostgreSQL)
-- Current integrations (Rust, Python, Unreal Engine)
-- Contribution opportunities
+### 7. Operating Costs (3 min)
+- **Real production example**: 449 billion events over 90 days for ~$1,000/month
+  - 8.5 TB storage, 9B logs, 275B metrics, 165B traces
+  - ~1,900 events/second average throughput
+- **Cost breakdown**: Compute (~$300), PostgreSQL (~$200), S3 (~$500)
+- **Tail sampling advantage**: Store everything cheaply, process on-demand
+- **Cost comparison**: Orders of magnitude cheaper than commercial SaaS at scale
 
-### 9. Q&A (2-3 min)
+### 8. Thank You & Open Source (2 min)
+- **Would not be possible without open source**:
+  - Apache Arrow, Parquet, FlightSQL, DataFusion
+  - PostgreSQL
+- **Micromegas is open source**: https://github.com/madesroches/micromegas
+  - Drop a star, always makes my day
+
+### 9. Q&A (5 min)
 - Open floor for questions
 - Backup slides ready for common questions
 
@@ -125,6 +137,7 @@ Micromegas achieves this through multiple strategies:
 
 4. **Demo Screenshots/Video**
    - Perfetto trace viewer
+   - Grafana dashboard
    - Query results
    - Live metrics
 
@@ -140,6 +153,7 @@ Micromegas achieves this through multiple strategies:
 - **Code examples**: Rust/C++ instrumentation snippets
 - **Architecture diagram**: Full data flow visualization
 - **Perfetto traces**: Pre-captured game performance analysis
+- **Grafana dashboard**: Monitoring and alerting example
 - **SQL queries**: Examples with results shown
 - **Cost comparison**: Visual chart of storage costs
 
