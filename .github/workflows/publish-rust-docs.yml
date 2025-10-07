@@ -80,6 +80,7 @@ jobs:
         cd ../..
         mkdir -p public_docs/osacon-2025
         cp doc/osacon-2025/dist/presentation-inline.html public_docs/osacon-2025/index.html
+        cp doc/osacon-2025/dist/*.png doc/osacon-2025/dist/*.svg public_docs/osacon-2025/ 2>/dev/null || true
         
         # Create main index that redirects to MkDocs
         cat > public_docs/index.html << 'EOF'
