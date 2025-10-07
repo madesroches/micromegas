@@ -41,7 +41,7 @@ ${presentationMd}
             </section>
         </div>
     </div>
-    <script>
+    <script type="module">
 ${mainJs}
     </script>
 </body>
