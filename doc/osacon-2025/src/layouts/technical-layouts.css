@@ -1,0 +1,428 @@
+/*********************************************
+ * TECHNICAL SLIDE LAYOUTS
+ *********************************************/
+
+/* Base layout classes */
+.reveal .slides section {
+  text-align: left;
+}
+
+.reveal .slides section.center {
+  text-align: center;
+}
+
+/*********************************************
+ * 1. TITLE SLIDE LAYOUT
+ *********************************************/
+.reveal section.title-slide {
+  text-align: center;
+  background: linear-gradient(135deg, var(--color-bg-0) 0%, var(--color-bg-1) 100%);
+  position: relative;
+}
+
+.reveal section.title-slide::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: 
+    radial-gradient(circle at 30% 70%, rgba(89, 194, 255, 0.1) 0%, transparent 50%),
+    radial-gradient(circle at 70% 30%, rgba(255, 180, 84, 0.08) 0%, transparent 50%);
+  pointer-events: none;
+}
+
+.reveal section.title-slide h1 {
+  font-size: 3.5em;
+  margin-bottom: 0.3em;
+  text-shadow: 0 0 40px rgba(89, 194, 255, 0.4);
+  font-weight: 700;
+}
+
+.reveal section.title-slide h2 {
+  font-size: 1.8em;
+  color: var(--color-secondary);
+  font-weight: 400;
+  margin: 0 0 2em 0;
+}
+
+.reveal section.title-slide .metadata {
+  font-family: var(--font-mono);
+  font-size: 0.8em;
+  color: var(--color-text-secondary);
+  margin-top: 3em;
+}
+
+.reveal section.title-slide .version::before {
+  content: "v";
+  color: var(--color-primary);
+}
+
+.reveal section.title-slide .commit::before {
+  content: "@ ";
+  color: var(--color-secondary);
+}
+
+/*********************************************
+ * 2. CODE WALKTHROUGH LAYOUT
+ *********************************************/
+.reveal section.code-walkthrough {
+  display: flex !important;
+  gap: 2em;
+  align-items: flex-start;
+}
+
+.reveal section.code-walkthrough .code-panel {
+  flex: 2;
+  min-width: 0;
+}
+
+.reveal section.code-walkthrough .explanation-panel {
+  flex: 1;
+  padding-left: 1em;
+}
+
+.reveal section.code-walkthrough pre {
+  margin: 0;
+  width: 100%;
+  max-height: 70vh;
+  overflow-y: auto;
+}
+
+.reveal section.code-walkthrough .line-highlight {
+  background: rgba(255, 180, 84, 0.2);
+  display: block;
+  margin: 0 -20px;
+  padding: 0 20px;
+  border-left: 3px solid var(--color-secondary);
+}
+
+.reveal section.code-walkthrough .explanation-panel ul {
+  margin: 0;
+  padding-left: 1.5em;
+}
+
+.reveal section.code-walkthrough .explanation-panel li {
+  margin-bottom: 1em;
+  line-height: 1.6;
+}
+
+/*********************************************
+ * 3. TERMINAL DEMO LAYOUT
+ *********************************************/
+.reveal section.terminal-demo .terminal-window {
+  background: #000;
+  border-radius: 8px;
+  box-shadow: 0 0 30px rgba(89, 194, 255, 0.2);
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: 0.8em;
+  margin: 1em 0;
+}
+
+.reveal section.terminal-demo .terminal-header {
+  background: #2d2d2d;
+  padding: 10px 15px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid #444;
+}
+
+.reveal section.terminal-demo .terminal-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+}
+
+.reveal section.terminal-demo .terminal-dot.red { background: #ff5f56; }
+.reveal section.terminal-demo .terminal-dot.yellow { background: #ffbd2e; }
+.reveal section.terminal-demo .terminal-dot.green { background: #27c93f; }
+
+.reveal section.terminal-demo .terminal-title {
+  margin-left: auto;
+  color: #8e8e93;
+  font-size: 0.9em;
+}
+
+.reveal section.terminal-demo .terminal-body {
+  padding: 20px;
+  min-height: 400px;
+  color: var(--color-primary);
+  line-height: 1.6;
+}
+
+.reveal section.terminal-demo .prompt::before {
+  content: "$ ";
+  color: var(--color-secondary);
+  font-weight: bold;
+}
+
+.reveal section.terminal-demo .output {
+  color: #e0e0e0;
+  margin: 0.5em 0;
+}
+
+.reveal section.terminal-demo .success {
+  color: #50fa7b;
+}
+
+.reveal section.terminal-demo .error {
+  color: #ff5555;
+}
+
+.reveal section.terminal-demo .warning {
+  color: #f1fa8c;
+}
+
+/*********************************************
+ * 4. SPLIT COMPARISON LAYOUT
+ *********************************************/
+.reveal section.split-comparison {
+  display: flex !important;
+  gap: 2em;
+}
+
+.reveal section.split-comparison .left-panel,
+.reveal section.split-comparison .right-panel {
+  flex: 1;
+}
+
+.reveal section.split-comparison .vs-divider {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 60px;
+  font-size: 2em;
+  color: var(--color-primary);
+  font-weight: bold;
+}
+
+.reveal section.split-comparison h3 {
+  text-align: center;
+  margin-bottom: 1em;
+  padding-bottom: 0.5em;
+  border-bottom: 2px solid var(--color-border);
+}
+
+.reveal section.split-comparison .left-panel h3 {
+  color: var(--color-tertiary);
+}
+
+.reveal section.split-comparison .right-panel h3 {
+  color: var(--color-primary);
+}
+
+/*********************************************
+ * 5. ARCHITECTURE DIAGRAM LAYOUT
+ *********************************************/
+.reveal section.architecture {
+  text-align: center;
+}
+
+.reveal section.architecture .diagram-container {
+  background: var(--color-bg-2);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 2em;
+  margin: 1em 0;
+  position: relative;
+}
+
+.reveal section.architecture .diagram-title {
+  position: absolute;
+  top: -12px;
+  left: 20px;
+  background: var(--color-bg-1);
+  padding: 0 10px;
+  color: var(--color-primary);
+  font-family: var(--font-mono);
+  font-size: 0.8em;
+}
+
+.reveal section.architecture .component {
+  background: var(--color-bg-3);
+  border: 2px solid var(--color-primary);
+  border-radius: 6px;
+  padding: 1em;
+  margin: 0.5em;
+  display: inline-block;
+  min-width: 120px;
+}
+
+.reveal section.architecture .arrow {
+  color: var(--color-secondary);
+  font-size: 2em;
+  margin: 0 1em;
+}
+
+/*********************************************
+ * 6. API DOCUMENTATION LAYOUT
+ *********************************************/
+.reveal section.api-docs .endpoint {
+  background: var(--color-bg-2);
+  border-left: 4px solid var(--color-primary);
+  padding: 1.5em;
+  margin: 1em 0;
+  border-radius: 0 6px 6px 0;
+}
+
+.reveal section.api-docs .method {
+  font-family: var(--font-mono);
+  font-weight: bold;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 0.8em;
+  margin-right: 1em;
+}
+
+.reveal section.api-docs .method.get {
+  background: rgba(80, 250, 123, 0.2);
+  color: #50fa7b;
+}
+
+.reveal section.api-docs .method.post {
+  background: rgba(255, 180, 84, 0.2);
+  color: var(--color-secondary);
+}
+
+.reveal section.api-docs .method.put {
+  background: rgba(89, 194, 255, 0.2);
+  color: var(--color-primary);
+}
+
+.reveal section.api-docs .method.delete {
+  background: rgba(255, 85, 85, 0.2);
+  color: #ff5555;
+}
+
+.reveal section.api-docs .endpoint-url {
+  font-family: var(--font-mono);
+  color: var(--color-text-primary);
+  font-size: 1.1em;
+}
+
+.reveal section.api-docs .response-example {
+  margin-top: 1em;
+}
+
+/*********************************************
+ * 7. PERFORMANCE METRICS LAYOUT
+ *********************************************/
+.reveal section.metrics .metric-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1.5em;
+  margin: 2em 0;
+}
+
+.reveal section.metrics .metric-card {
+  background: var(--color-bg-2);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 1.5em;
+  text-align: center;
+  transition: transform 0.2s ease;
+}
+
+.reveal section.metrics .metric-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--color-primary);
+  box-shadow: 0 5px 15px rgba(89, 194, 255, 0.2);
+}
+
+.reveal section.metrics .metric-value {
+  font-size: 2.5em;
+  font-weight: bold;
+  color: var(--color-primary);
+  font-family: var(--font-mono);
+  line-height: 1;
+  margin-bottom: 0.2em;
+}
+
+.reveal section.metrics .metric-label {
+  color: var(--color-text-secondary);
+  font-size: 0.9em;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+.reveal section.metrics .metric-trend {
+  margin-top: 0.5em;
+  font-size: 0.8em;
+}
+
+.reveal section.metrics .trend-up {
+  color: #50fa7b;
+}
+
+.reveal section.metrics .trend-down {
+  color: #ff5555;
+}
+
+/*********************************************
+ * 8. DOCUMENTATION LAYOUT
+ *********************************************/
+.reveal section.documentation {
+  text-align: left;
+}
+
+.reveal section.documentation .doc-header {
+  border-bottom: 2px solid var(--color-border);
+  padding-bottom: 1em;
+  margin-bottom: 2em;
+}
+
+.reveal section.documentation .doc-section {
+  margin: 2em 0;
+}
+
+.reveal section.documentation .doc-section h4 {
+  color: var(--color-primary);
+  font-family: var(--font-mono);
+  font-size: 1em;
+  margin-bottom: 1em;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+.reveal section.documentation .command {
+  background: var(--color-bg-3);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  padding: 0.5em 1em;
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  margin: 0.5em 0;
+  display: block;
+}
+
+.reveal section.documentation .command::before {
+  content: "$ ";
+  color: var(--color-primary);
+  font-weight: bold;
+}
+
+/* Responsive adjustments */
+@media screen and (max-width: 768px) {
+  .reveal section.code-walkthrough {
+    flex-direction: column;
+    gap: 1em;
+  }
+  
+  .reveal section.split-comparison {
+    flex-direction: column;
+    gap: 1em;
+  }
+  
+  .reveal section.split-comparison .vs-divider {
+    width: auto;
+    height: 40px;
+  }
+  
+  .reveal section.metrics .metric-grid {
+    grid-template-columns: 1fr;
+    gap: 1em;
+  }
+}
