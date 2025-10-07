@@ -20,6 +20,9 @@ const indexHtml = fs.readFileSync('./dist/index.html', 'utf-8');
 const mainCss = fs.readFileSync(path.join(assetsDir, cssFile), 'utf-8');
 const mainJs = fs.readFileSync(path.join(assetsDir, jsFile), 'utf-8');
 
+// Get build timestamp
+const buildTime = new Date().toISOString();
+
 // Create inline HTML with everything embedded
 const inlineHtml = `<!DOCTYPE html>
 <html lang="en">
@@ -42,6 +45,7 @@ ${presentationMd}
         </div>
     </div>
     <script type="module">
+console.log('Presentation built at: ${buildTime}');
 ${mainJs}
     </script>
 </body>
