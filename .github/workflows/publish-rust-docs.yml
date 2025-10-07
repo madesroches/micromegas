@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - pres
 
 jobs:
   build-and-deploy-docs:
@@ -66,6 +67,14 @@ jobs:
         # Copy legacy doc files for existing links
         mkdir -p public_docs/doc
         cp -r doc/* public_docs/doc/
+
+        # Build OSACON 2025 presentation
+        cd doc/osacon-2025
+        npm install
+        npm run build
+        cd ../..
+        mkdir -p public_docs/osacon-2025
+        cp -r doc/osacon-2025/dist/* public_docs/osacon-2025/
         
         # Create main index that redirects to MkDocs
         cat > public_docs/index.html << 'EOF'
@@ -112,6 +121,10 @@ jobs:
             <a href="doc/" class="docs-link">
                 <h3>📄 Legacy Documentation</h3>
                 <p>Original documentation files</p>
+            </a>
+            <a href="osacon-2025/" class="docs-link">
+                <h3>🎤 OSACON 2025 Presentation</h3>
+                <p>Unified Observability for Video Games</p>
             </a>
         </body>
         </html>
