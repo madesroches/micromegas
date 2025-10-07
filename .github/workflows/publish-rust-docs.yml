@@ -21,6 +21,11 @@ jobs:
       with:
         toolchain: stable
 
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+
     - name: Build Rust documentation
       run: |
         echo "🦀 Building Rust documentation..."
