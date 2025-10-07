@@ -265,7 +265,7 @@ Three main interfaces:
 
 ## Grafana Dashboard
 
-![Grafana Dashboard](../media/grafana-screenshot.png)
+![Grafana Dashboard](./grafana-screenshot.png)
 
 Real-time monitoring and alerting.
 
@@ -288,7 +288,7 @@ LIMIT 10;
 
 ## Perfetto Trace Viewer
 
-![Perfetto Traces](../media/perfetto-screenshot.png)
+![Perfetto Traces](./perfetto-screenshot.png)
 
 Detailed CPU trace analysis at microsecond resolution.
 
