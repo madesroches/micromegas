@@ -210,9 +210,9 @@ float AMyActor::TakeDamage(float Damage, ...)
 Bridge between datalake (cheap writes) and lakehouse (fast reads)
 
 <ul>
-<li class="fragment"><img src="../media/matrix-payload.svg" style="height:1em; vertical-align:middle;"> Payload data in custom format</li>
+<li class="fragment"><img src="./matrix-payload.svg" style="height:1em; vertical-align:middle;"> Payload data in custom format</li>
 <li class="fragment">🗄️ Transformed to Parquet (columnar, fast queries)</li>
-<li class="fragment">Let <img src="../media/datafusion-logo.png" style="height:1em; vertical-align:middle;"> loose on the parquet files</li>
+<li class="fragment">Let <img src="./datafusion-logo.png" style="height:1em; vertical-align:middle;"> loose on the parquet files</li>
 </ul>
 
 ---
@@ -325,11 +325,11 @@ Detailed CPU trace analysis at microsecond resolution.
 
 **Micromegas would not be possible without open source**
 
-<p><img src="../media/datafusion-logo.png" style="height:1.5em; vertical-align:middle;"> <img src="../media/arrow-logo.png" style="height:1.5em; vertical-align:middle;"> <img src="../media/parquet-logo.svg" style="height:1.5em; vertical-align:middle;"></p>
+<p><img src="./datafusion-logo.png" style="height:1.5em; vertical-align:middle;"> <img src="./arrow-logo.png" style="height:1.5em; vertical-align:middle;"> <img src="./parquet-logo.svg" style="height:1.5em; vertical-align:middle;"></p>
 
-<p><img src="../media/postgresql-logo.png" style="height:1.5em; vertical-align:middle;"></p>
+<p><img src="./postgresql-logo.png" style="height:1.5em; vertical-align:middle;"></p>
 
-<p><img src="../media/rust-crab.svg" style="height:1.5em; vertical-align:middle;"></p>
+<p><img src="./rust-crab.svg" style="height:1.5em; vertical-align:middle;"></p>
 
 ---
 
