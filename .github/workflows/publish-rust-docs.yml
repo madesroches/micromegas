@@ -20,6 +20,11 @@ jobs:
       with:
         toolchain: stable
 
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+
     - name: Build Rust documentation
       run: |
         echo "🦀 Building Rust documentation..."
@@ -66,6 +71,15 @@ jobs:
         # Copy legacy doc files for existing links
         mkdir -p public_docs/doc
         cp -r doc/* public_docs/doc/
+
+        # Build OSACON 2025 presentation
+        cd doc/osacon-2025
+        npm install
+        npm run build:standalone
+        cd ../..
+        mkdir -p public_docs/osacon-2025
+        cp doc/osacon-2025/dist/presentation-inline.html public_docs/osacon-2025/index.html
+        cp -r doc/osacon-2025/dist/*.{png,svg} public_docs/osacon-2025/ 2>/dev/null || echo "No media files to copy (already inlined)"
         
         # Create main index that redirects to MkDocs
         cat > public_docs/index.html << 'EOF'
@@ -112,6 +126,10 @@ jobs:
             <a href="doc/" class="docs-link">
                 <h3>📄 Legacy Documentation</h3>
                 <p>Original documentation files</p>
+            </a>
+            <a href="osacon-2025/" class="docs-link">
+                <h3>🎤 OSACON 2025 Presentation</h3>
+                <p>Unified Observability for Video Games</p>
             </a>
         </body>
         </html>

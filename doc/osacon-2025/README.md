@@ -2,6 +2,8 @@
 
 Micromegas presentation for OSACON 2025: "Unified Observability for Video Games"
 
+**Live version:** https://madesroches.github.io/micromegas/osacon-2025/
+
 Built with Reveal.js, Ayu Dark theme, and Mermaid diagrams.
 
 ## Features
