@@ -7,13 +7,25 @@
 
 ---
 
+## Disclaimer
+
+These are my personal opinions and experiences.
+
+I'm not speaking for my employer.
+
+---
+
 ## The Challenge
 
-Video games running at 60fps generate enormous amounts of telemetry:
+Video games at 60fps generate enormous telemetry volumes:
 
-- **100,000+ events/second** per process
-- **Thousands** of concurrent processes
-- **Logs, metrics, and traces** in one unified system
+<ul>
+<li class="fragment"><strong>~10s of log entries/sec</strong></li>
+<li class="fragment"><strong>~1k measures/sec</strong> - 10s/frame</li>
+<li class="fragment"><strong>~60k-200k CPU trace events/sec</strong> - 1000s/frame</li>
+<li class="fragment"><strong>Thousands</strong> of concurrent processes</li>
+<li class="fragment"><strong>Unified system</strong> for logs, metrics, and traces</li>
+</ul>
 
 ---
 
@@ -21,20 +33,30 @@ Video games running at 60fps generate enormous amounts of telemetry:
 
 Traditional tools force a choice:
 
-- 🔍 **High-frequency debugging tools** - great detail, but you need to reproduce the bug yourself
-- 📊 **Low-frequency analytics tools** - will report statistics, not detailed traces
+<ul>
+<li class="fragment">🔍 <strong>High-frequency debugging tools</strong> - great detail, but you need to reproduce the bug yourself</li>
+<li class="fragment">📊 <strong>Low-frequency analytics tools</strong> - will report statistics, not detailed traces</li>
+</ul>
 
-**We refuse to choose.**
+<p class="fragment"><strong>We refuse to choose.</strong></p>
+
+---
+
+## The Objective
+
+Quantify **how often** and **how bad** issues are, with enough context to **fix** them—no need to **reproduce**.
 
 ---
 
 ## Make recording data cheap
 
-1. **Low-overhead instrumentation** 20ns/event
-2. **Cheap ingestion** minimal processing of inbound data
-3. **Cheap storage** mostly S3
-4. Queries on **Aggregated metrics** to find the needle in the haystack
-5. **Tail sampling** of trace events - because it's the needle
+<ol>
+<li class="fragment"><strong>Low-overhead instrumentation</strong> 20ns/event</li>
+<li class="fragment"><strong>Cheap ingestion</strong> minimal processing of inbound data</li>
+<li class="fragment"><strong>Cheap storage</strong> mostly S3</li>
+<li class="fragment">Queries on <strong>Aggregated metrics</strong> to find the needle in the haystack</li>
+<li class="fragment"><strong>Tail sampling</strong> of trace events - because it's the needle</li>
+</ol>
 
 ---
 
@@ -117,10 +139,12 @@ graph LR
 **optimized instrumentation librarires**
 
 How?
-- **Thread-local** event queues for high-frequency streams
-- Serialization that's mostly **memcpy**
-- Events can contain **references** to avoid repetition
-- **LZ4** has negative overhead
+<ul>
+<li class="fragment"><strong>Thread-local</strong> event queues for high-frequency streams</li>
+<li class="fragment">Serialization that's mostly <strong>memcpy</strong></li>
+<li class="fragment">Events can contain <strong>references</strong> to avoid repetition</li>
+<li class="fragment">Some <strong>sampling</strong> at the source</li>
+</ul>
 
 --
 
@@ -169,11 +193,13 @@ float AMyActor::TakeDamage(float Damage, ...)
 
 **Simple, horizontally scalable design**
 
-- HTTP service accepts compressed payloads
-- Metadata → PostgreSQL (for fast lookups)
-- Payloads → S3/GCS (for cheap storage)
+<ul>
+<li class="fragment">HTTP service accepts LZ4-compressed payloads</li>
+<li class="fragment">Metadata → PostgreSQL (for fast lookups)</li>
+<li class="fragment">Payloads → S3 (for cheap storage)</li>
+</ul>
 
-**Datalake**: Optimized for cheap writes
+<p class="fragment"><strong>Datalake</strong>: Optimized for cheap writes</p>
 
 ---
 
@@ -181,10 +207,33 @@ float AMyActor::TakeDamage(float Damage, ...)
 
 **Lakehouse Architecture**
 
-Bridge between datalake (cheap writes) and warehouse (fast reads)
+Bridge between datalake (cheap writes) and lakehouse (fast reads)
 
-- Raw data in custom format (efficiency)
-- Transformed to Parquet (columnar, fast queries)
+<ul>
+<li class="fragment"><img src="../media/matrix-payload.svg" style="height:1em; vertical-align:middle;"> Payload data in custom format</li>
+<li class="fragment">🗄️ Transformed to Parquet (columnar, fast queries)</li>
+<li class="fragment">Let <img src="../media/datafusion-logo.png" style="height:1em; vertical-align:middle;"> loose on the parquet files</li>
+</ul>
+
+---
+
+## Incremental Data Reduction
+
+Example: SQL-defined **log_stats** view
+
+```sql
+SELECT date_bin('1 minute', time) as time_bin,
+       process_id,
+       level,
+       target,
+       count(*) as count
+FROM log_entries
+WHERE insert_time >= '{begin}'
+AND insert_time < '{end}'
+GROUP BY process_id, level, target, time_bin
+```
+
+**Query data over multiple days.**
 
 ---
 
@@ -192,47 +241,13 @@ Bridge between datalake (cheap writes) and warehouse (fast reads)
 
 Different streams, different strategies:
 
-- **Logs** (low frequency): Process eagerly → Parquet
-- **Metrics** (medium frequency): Process eagerly → Parquet
-- **CPU traces** (very high frequency): Keep raw, process just-in-time when queried
+<ul>
+<li class="fragment"><strong>Logs</strong> (low frequency): Process eagerly → Parquet</li>
+<li class="fragment"><strong>Metrics</strong> (medium frequency): Process eagerly → Parquet</li>
+<li class="fragment"><strong>CPU traces</strong> (very high frequency): Keep raw, process just-in-time when queried</li>
+</ul>
 
-**Process only what you need, when you need it.**
-
----
-
-## Query Interface
-
-**Apache Arrow FlightSQL + DataFusion**
-
-```sql
-SELECT
-  process_id,
-  AVG(frame_time_ms) as avg_frame_time,
-  MAX(frame_time_ms) as max_frame_time
-FROM metrics
-WHERE stream_type = 'performance'
-  AND timestamp > NOW() - INTERVAL '1 hour'
-GROUP BY process_id
-ORDER BY avg_frame_time DESC;
-```
-
----
-
-## Incremental Data Reduction
-
-SQL-defined views that progressively aggregate:
-
-```sql
-CREATE MATERIALIZED VIEW hourly_performance AS
-SELECT
-  DATE_TRUNC('hour', timestamp) as hour,
-  process_id,
-  AVG(frame_time_ms) as avg_frame_time
-FROM raw_metrics
-GROUP BY hour, process_id;
-```
-
-**Reduce storage, speed up queries.**
+<p class="fragment"><strong>Use lower frequency streams to tail-sample high-frequency ones</strong></p>
 
 ---
 
@@ -240,9 +255,11 @@ GROUP BY hour, process_id;
 
 Three main interfaces:
 
-1. **Notebooks** - Jupyter integration for data exploration
-2. **Grafana** - Dashboards and alerting
-3. **Perfetto** - Deep trace visualization
+<ol>
+<li class="fragment"><strong>Grafana</strong> - Dashboards and alerting</li>
+<li class="fragment"><strong>Jupyter Notebooks</strong> - Python API for data exploration</li>
+<li class="fragment"><strong>Perfetto</strong> - Deep trace visualization</li>
+</ol>
 
 ---
 
@@ -250,15 +267,7 @@ Three main interfaces:
 
 ![Grafana Dashboard](../media/grafana-screenshot.png)
 
-Real-time monitoring and alerting for your game metrics.
-
----
-
-## Perfetto Trace Viewer
-
-![Perfetto Traces](../media/perfetto-screenshot.png)
-
-Detailed CPU trace analysis at microsecond resolution.
+Real-time monitoring and alerting.
 
 ---
 
@@ -277,15 +286,25 @@ LIMIT 10;
 
 ---
 
+## Perfetto Trace Viewer
+
+![Perfetto Traces](../media/perfetto-screenshot.png)
+
+Detailed CPU trace analysis at microsecond resolution.
+
+---
+
 ## Operating Costs
 
-**Real production example:**
+**Data volume**
 
-- **449 billion events** over 90 days
-- **~$1,000/month** total cost
-  - 8.5 TB storage
-  - 9B logs, 275B metrics, 165B trace events
-  - ~1,900 events/second average
+<ul>
+<li class="fragment">Retention of 90 days</li>
+<li class="fragment">9B log entries</li>
+<li class="fragment">275B metrics</li> 
+<li class="fragment">165B trace events</li>
+<li class="fragment"><strong>449 billion events</strong></li>
+</ul>
 
 ---
 
@@ -302,26 +321,15 @@ LIMIT 10;
 
 ---
 
-## Why So Cheap?
-
-**Tail sampling advantage:**
-
-- Store everything in cheap object storage
-- Only process when you query
-- No continuous ETL overhead
-- Pay for storage, not compute
-
-**Orders of magnitude cheaper than commercial SaaS.**
-
----
-
 ## Thank You
 
-**Micromegas would not be possible without open source:**
+**Micromegas would not be possible without open source**
 
-- DataFusion, Arrow, Parquet, FlightSQL
-- PostgreSQL
-- Rust ecosystem
+<p><img src="../media/datafusion-logo.png" style="height:1.5em; vertical-align:middle;"> <img src="../media/arrow-logo.png" style="height:1.5em; vertical-align:middle;"> <img src="../media/parquet-logo.svg" style="height:1.5em; vertical-align:middle;"></p>
+
+<p><img src="../media/postgresql-logo.png" style="height:1.5em; vertical-align:middle;"></p>
+
+<p><img src="../media/rust-crab.svg" style="height:1.5em; vertical-align:middle;"></p>
 
 ---
 
@@ -329,9 +337,11 @@ LIMIT 10;
 
 🌟 **https://github.com/madesroches/micromegas**
 
-- Drop a star (always makes my day!)
-- Try it out or use it as a library
-- Share your use cases
+<ul>
+<li class="fragment">Drop a star (always makes my day!)</li>
+<li class="fragment">Try it out, use it as a library, copy the code</li>
+<li class="fragment">Share your use cases</li>
+</ul>
 
 ---
 
