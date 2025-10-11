@@ -2,7 +2,30 @@ import fs from 'fs';
 import path from 'path';
 
 // Read the presentation markdown
-const presentationMd = fs.readFileSync('./src/slides/presentation.md', 'utf-8');
+let presentationMd = fs.readFileSync('./src/slides/presentation.md', 'utf-8');
+
+// Convert images to data URLs
+const imageRegex = /(?:src=["']\.\/|!\[.*?\]\(\.\/)([\w-]+\.(png|jpg|jpeg|svg|gif))/g;
+const matches = [...presentationMd.matchAll(imageRegex)];
+
+for (const match of matches) {
+  const imagePath = match[1];
+  const fullPath = path.join('./dist', imagePath);
+
+  if (fs.existsSync(fullPath)) {
+    const imageBuffer = fs.readFileSync(fullPath);
+    const mimeType = imagePath.endsWith('.svg') ? 'image/svg+xml' :
+                     imagePath.endsWith('.png') ? 'image/png' :
+                     imagePath.endsWith('.jpg') || imagePath.endsWith('.jpeg') ? 'image/jpeg' : 'image/gif';
+    const base64 = imageBuffer.toString('base64');
+    const dataUrl = `data:${mimeType};base64,${base64}`;
+
+    // Replace in markdown
+    presentationMd = presentationMd.replace(new RegExp(`\\./${imagePath}`, 'g'), dataUrl);
+  } else {
+    console.warn(`⚠️  Image not found: ${fullPath}`);
+  }
+}
 
 // Find the built asset files dynamically
 const assetsDir = './dist/assets';
