@@ -265,32 +265,39 @@ Three main interfaces:
 
 ## Grafana Dashboard
 
-![Grafana Dashboard](./grafana-screenshot.png)
+<div style="display: flex; align-items: center; gap: 2rem;">
+<div style="flex: 1;">
 
 Real-time monitoring and alerting.
 
+</div>
+<div style="flex: 1;">
+<img src="./grafana_monitoring.png" style="max-height: 500px; width: auto;">
+</div>
+</div>
+
 ---
 
-## SQL Query Examples
+## Jupyter Notebooks
 
-```sql
--- Find slowest frames in the last hour
-SELECT timestamp, frame_time_ms, process_id
-FROM metrics
-WHERE timestamp > NOW() - INTERVAL '1 hour'
-  AND metric_name = 'frame_time_ms'
-  AND frame_time_ms > 33.0  -- Slower than 30fps
-ORDER BY frame_time_ms DESC
-LIMIT 10;
-```
+<div style="display: flex; align-items: center; gap: 2rem;">
+<div style="flex: 1;">
+
+**Python API** for flexible **data exploration** and custom analysis.
+
+</div>
+<div style="flex: 1;">
+<img src="./jupyter_blocks_query.png" style="max-height: 500px; width: auto;">
+</div>
+</div>
 
 ---
 
 ## Perfetto Trace Viewer
 
-![Perfetto Traces](./perfetto-screenshot.png)
+<img src="./perfetto_screenshot.png" style="max-width: 100%; height: auto;">
 
-Detailed CPU trace analysis at microsecond resolution.
+Detailed CPU trace analysis
 
 ---
 
