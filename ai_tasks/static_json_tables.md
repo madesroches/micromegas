@@ -81,10 +81,7 @@ use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTable
 ///
 /// # Returns
 /// Returns an `Arc<dyn TableProvider>` ready for registration
-pub async fn json_table_provider(
-    url: impl AsRef<str>,
-) -> Result<Arc<dyn TableProvider>> {
-    let url_str = url.as_ref();
+pub async fn json_table_provider(url: &str) -> Result<Arc<dyn TableProvider>> {
     let ctx = SessionContext::new();
 
     // Create listing options with JSON format
@@ -92,7 +89,7 @@ pub async fn json_table_provider(
     let listing_options = ListingOptions::new(file_format);
 
     // Parse the URL as a listing table URL
-    let table_url = ListingTableUrl::parse(url_str)?;
+    let table_url = ListingTableUrl::parse(url)?;
 
     // Create ListingTable configuration and infer schema
     let mut config = ListingTableConfig::new(table_url)
