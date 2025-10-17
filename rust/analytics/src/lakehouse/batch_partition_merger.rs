@@ -1,6 +1,6 @@
 use super::{
     merge::PartitionMerger, partition::Partition, partition_cache::PartitionCache,
-    view_factory::ViewFactory,
+    session_configurator::SessionConfigurator, view_factory::ViewFactory,
 };
 use crate::{
     lakehouse::{
@@ -61,6 +61,8 @@ pub struct BatchPartitionMerger {
     file_schema: Arc<Schema>,
     /// view_factory: allows joins in merge query
     view_factory: Arc<ViewFactory>,
+    /// session_configurator: allows custom tables in merge query
+    session_configurator: Arc<dyn SessionConfigurator>,
     /// merge_batch_query: merge query with begin & end placeholders
     merge_batch_query: String,
     /// batch size to aim for
@@ -72,6 +74,7 @@ impl BatchPartitionMerger {
         runtime: Arc<RuntimeEnv>,
         file_schema: Arc<Schema>,
         view_factory: Arc<ViewFactory>,
+        session_configurator: Arc<dyn SessionConfigurator>,
         merge_batch_query: String,
         approx_nb_rows_per_batch: i64,
     ) -> Self {
@@ -79,6 +82,7 @@ impl BatchPartitionMerger {
             runtime,
             file_schema,
             view_factory,
+            session_configurator,
             merge_batch_query,
             approx_nb_rows_per_batch,
         }
@@ -108,6 +112,7 @@ impl PartitionMerger for BatchPartitionMerger {
             partitions_all_views,
             None,
             self.view_factory.clone(),
+            self.session_configurator.clone(),
         )
         .await?;
         let src_table = PartitionedTableProvider::new(

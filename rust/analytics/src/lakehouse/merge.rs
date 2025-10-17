@@ -4,6 +4,7 @@ use super::{
     partition_source_data::hash_to_object_count,
     partitioned_table_provider::PartitionedTableProvider,
     query::make_session_context,
+    session_configurator::SessionConfigurator,
     view::View,
     view_factory::ViewFactory,
     write_partition::{PartitionRowSet, write_partition_from_rows},
@@ -41,6 +42,7 @@ pub trait PartitionMerger: Send + Sync + Debug {
 pub struct QueryMerger {
     runtime: Arc<RuntimeEnv>,
     view_factory: Arc<ViewFactory>,
+    session_configurator: Arc<dyn SessionConfigurator>,
     file_schema: Arc<Schema>,
     query: Arc<String>,
 }
@@ -49,12 +51,14 @@ impl QueryMerger {
     pub fn new(
         runtime: Arc<RuntimeEnv>,
         view_factory: Arc<ViewFactory>,
+        session_configurator: Arc<dyn SessionConfigurator>,
         file_schema: Arc<Schema>,
         query: Arc<String>,
     ) -> Self {
         Self {
             runtime,
             view_factory,
+            session_configurator,
             file_schema,
             query,
         }
@@ -75,6 +79,7 @@ impl PartitionMerger for QueryMerger {
             partitions_all_views,
             None,
             self.view_factory.clone(),
+            self.session_configurator.clone(),
         )
         .await?;
         let src_table = PartitionedTableProvider::new(

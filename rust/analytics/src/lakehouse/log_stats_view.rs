@@ -1,4 +1,7 @@
-use super::{sql_batch_view::SqlBatchView, view_factory::ViewFactory};
+use super::{
+    session_configurator::NoOpSessionConfigurator, sql_batch_view::SqlBatchView,
+    view_factory::ViewFactory,
+};
 use anyhow::Result;
 use chrono::TimeDelta;
 use datafusion::execution::runtime_env::RuntimeEnv;
@@ -62,6 +65,7 @@ pub async fn make_log_stats_view(
         merge_query,
         lake,
         view_factory,
+        Arc::new(NoOpSessionConfigurator),
         Some(3000),         // update_group
         TimeDelta::days(1), // source partition delta
         TimeDelta::days(1), // merge partition delta
