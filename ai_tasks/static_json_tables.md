@@ -61,13 +61,38 @@ This trait allows users to implement their own session configuration logic:
 - Register any DataFusion TableProvider
 - Configure session settings
 
-#### 2. JSON Table Provider (Optional)
-**File**: `rust/analytics/src/lakehouse/json_table_provider.rs`
+#### 2. JSON Helper Function
+**File**: `rust/analytics/src/lakehouse/session_configurator.rs` (same file as trait)
 
-A concrete implementation of `SessionConfigurator` for JSON files:
-- Pre-computes schema at initialization
-- Registers tables using `ListingTable` with cached schema
-- Example implementation for users to reference or use directly
+A utility function to create a DataFusion `TableProvider` from a JSON file:
+
+```rust
+/// Creates a ListingTable for a JSON file with pre-computed schema
+pub async fn json_table_provider(
+    path: impl AsRef<str>,
+) -> Result<Arc<dyn TableProvider>> {
+    // Create temporary context to infer schema
+    let temp_ctx = SessionContext::new();
+    let path_str = path.as_ref();
+    temp_ctx.register_json("temp", path_str, Default::default()).await?;
+    let schema = temp_ctx.table("temp").await?.schema().inner().clone();
+
+    // Create ListingTable with pre-computed schema
+    let format = JsonFormat::default();
+    let options = ListingOptions::new(Arc::new(format));
+
+    let listing_table_url = ListingTableUrl::parse(path_str)?;
+    let table = ListingTable::try_new(
+        listing_table_url,
+        options,
+        Some(schema),
+    ).await?;
+
+    Ok(Arc::new(table))
+}
+```
+
+Users can call this function to get a pre-configured table provider for their JSON files.
 
 ### Integration Points
 
@@ -112,10 +137,13 @@ let svc = FlightServiceServer::new(FlightSqlServiceImpl::new(
 
 ## Implementation Plan
 
-### Phase 1: Core Trait
-1. Create `session_configurator.rs` with the `SessionConfigurator` trait
+### Phase 1: Core Trait and Helper
+1. Create `session_configurator.rs` with:
+   - `SessionConfigurator` trait
+   - `NoOpSessionConfigurator` implementation
+   - `json_table_provider()` helper function
 2. Add the module to `lakehouse/mod.rs`
-3. Export the trait from `analytics/lib.rs`
+3. Export the trait and function from `analytics/lib.rs`
 
 ### Phase 2: Integration
 1. Modify `make_session_context()` to accept `Arc<dyn SessionConfigurator>`
@@ -125,9 +153,9 @@ let svc = FlightServiceServer::new(FlightSqlServiceImpl::new(
 5. Update `flight_sql_srv.rs` main function to pass `Arc::new(NoOpSessionConfigurator)` as default
 
 ### Phase 3: Testing & Documentation
-1. Create example JSON table provider in tests
+1. Create example `SessionConfigurator` implementation using `json_table_provider()` in tests
 2. Add integration test that queries custom JSON table
-3. Document the trait API in rustdoc
+3. Document the trait API and `json_table_provider()` function in rustdoc
 4. Update the design doc with final API
 
 ## Performance Considerations
@@ -159,67 +187,43 @@ DataFusion has built-in JSON support through:
 
 ### Implementation Details: Using ListingTable with Pre-computed Schema
 
-The key insight is to use `ListingTable` directly with a pre-computed schema, avoiding schema inference on every `SessionContext` allocation. Looking at `SessionContext::register_json`, it internally creates a `ListingTable`.
+The key insight is to use `ListingTable` directly with a pre-computed schema, avoiding schema inference on every `SessionContext` allocation.
 
-The trait implementation should:
-1. **At initialization time**: Infer schema once from JSON file(s)
-2. **At registration time**: Use `register_listing_table` with the pre-computed schema
+Users implement `SessionConfigurator` and use the provided `json_table_provider()` helper:
 
 ```rust
 use anyhow::Result;
 use datafusion::execution::context::SessionContext;
-use datafusion::datasource::listing::ListingOptions;
-use datafusion::datasource::file_format::json::JsonFormat;
-use datafusion::arrow::datatypes::SchemaRef;
-use std::sync::Arc;
+use micromegas::analytics::lakehouse::{SessionConfigurator, json_table_provider};
 
-struct JsonTableProvider {
-    table_name: String,
-    table_path: String,
-    schema: SchemaRef,  // Pre-computed schema
-    options: ListingOptions,
+struct MyConfigurator {
+    example_table: Arc<dyn TableProvider>,
 }
 
-impl JsonTableProvider {
+impl MyConfigurator {
     /// Initialize with schema inference (done once at startup)
-    pub async fn new(name: String, path: String) -> Result<Self> {
-        // Infer schema once during initialization
-        let format = JsonFormat::default();
-        let options = ListingOptions::new(Arc::new(format));
+    pub async fn new() -> Result<Self> {
+        // Infer schema once during initialization using helper
+        let example_table = json_table_provider("/path/to/data.json").await?;
 
-        // Use temporary context to infer schema
-        let temp_ctx = SessionContext::new();
-        let schema = temp_ctx
-            .register_json(&name, &path, Default::default())
-            .await?;
-        let schema = temp_ctx.table(&name).await?.schema().inner().clone();
-
-        Ok(Self {
-            table_name: name,
-            table_path: path,
-            schema,
-            options,
-        })
+        Ok(Self { example_table })
     }
 }
 
 #[async_trait::async_trait]
-impl SessionConfigurator for JsonTableProvider {
+impl SessionConfigurator for MyConfigurator {
     async fn configure(&self, ctx: &SessionContext) -> Result<()> {
-        // Register with pre-computed schema (fast, no inference)
-        ctx.register_listing_table(
-            &self.table_name,
-            &self.table_path,
-            self.options.clone(),
-            Some(self.schema.clone()),
-            None,
-        )
-        .await?;
-
+        // Register with pre-computed table (fast, no inference)
+        ctx.register_table("example", self.example_table.clone())?;
         Ok(())
     }
 }
 ```
+
+The `json_table_provider()` function:
+1. Infers schema once using a temporary context
+2. Creates a `ListingTable` with the pre-computed schema
+3. Returns an `Arc<dyn TableProvider>` ready for registration
 
 ## Benefits
 
