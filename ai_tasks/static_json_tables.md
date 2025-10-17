@@ -62,33 +62,38 @@ This trait allows users to implement their own session configuration logic:
 - Configure session settings
 
 #### 2. JSON Helper Function
-**File**: `rust/analytics/src/lakehouse/session_configurator.rs` (same file as trait)
+**File**: `rust/analytics/src/lakehouse/json_table_provider.rs`
 
-A utility function to create a DataFusion `TableProvider` from a JSON file:
+A standalone utility function to create a DataFusion `TableProvider` from a JSON file:
 
 ```rust
-/// Creates a ListingTable for a JSON file with pre-computed schema
+use datafusion::catalog::TableProvider;
+use datafusion::datasource::file_format::json::JsonFormat;
+use datafusion::datasource::listing::{ListingOptions, ListingTable, ListingTableUrl};
+
+/// Creates a TableProvider for a JSON file with pre-computed schema
+///
+/// This function infers the schema once and returns a TableProvider that can be
+/// registered in multiple SessionContexts without re-inferring the schema.
 pub async fn json_table_provider(
     path: impl AsRef<str>,
 ) -> Result<Arc<dyn TableProvider>> {
-    // Create temporary context to infer schema
-    let temp_ctx = SessionContext::new();
     let path_str = path.as_ref();
-    temp_ctx.register_json("temp", path_str, Default::default()).await?;
-    let schema = temp_ctx.table("temp").await?.schema().inner().clone();
 
-    // Create ListingTable with pre-computed schema
-    let format = JsonFormat::default();
-    let options = ListingOptions::new(Arc::new(format));
+    // Create listing options with JSON format
+    let file_format = Arc::new(JsonFormat::default());
+    let listing_options = ListingOptions::new(file_format)
+        .with_file_extension("json");
 
-    let listing_table_url = ListingTableUrl::parse(path_str)?;
-    let table = ListingTable::try_new(
-        listing_table_url,
-        options,
-        Some(schema),
-    ).await?;
+    // Parse the path as a listing table URL
+    let table_path = ListingTableUrl::parse(path_str)?;
 
-    Ok(Arc::new(table))
+    // Create ListingTable with schema inference
+    // Schema is inferred once here and cached in the ListingTable
+    let listing_table = ListingTable::try_new(table_path, listing_options)
+        .await?;
+
+    Ok(Arc::new(listing_table))
 }
 ```
 
@@ -141,9 +146,10 @@ let svc = FlightServiceServer::new(FlightSqlServiceImpl::new(
 1. Create `session_configurator.rs` with:
    - `SessionConfigurator` trait
    - `NoOpSessionConfigurator` implementation
+2. Create `json_table_provider.rs` with:
    - `json_table_provider()` helper function
-2. Add the module to `lakehouse/mod.rs`
-3. Export the trait and function from `analytics/lib.rs`
+3. Add both modules to `lakehouse/mod.rs`
+4. Export the trait and function from `analytics/lib.rs`
 
 ### Phase 2: Integration
 1. Modify `make_session_context()` to accept `Arc<dyn SessionConfigurator>`
@@ -162,13 +168,14 @@ let svc = FlightServiceServer::new(FlightSqlServiceImpl::new(
 
 **Schema Inference Cost**:
 - `register_json()` performs schema inference every time it's called
-- With many session contexts, this becomes expensive
-- Solution: Infer schema once at provider initialization, reuse in `register_listing_table()`
+- With many session contexts per query, this becomes expensive
+- Solution: Call `json_table_provider()` once at startup to infer schema
 
 **When to Infer**:
-- During provider construction (e.g., `JsonTableProvider::new()`)
-- At server startup, not per-query
-- Cache the `SchemaRef` and `ListingOptions`
+- During configurator construction at server startup
+- `ListingTable::try_new()` infers schema during construction
+- Cache the `Arc<dyn TableProvider>` with pre-computed schema
+- No temporary context needed - direct `ListingTable` creation
 
 **Registration Cost**:
 - `register_listing_table()` with pre-computed schema is fast
@@ -194,7 +201,8 @@ Users implement `SessionConfigurator` and use the provided `json_table_provider(
 ```rust
 use anyhow::Result;
 use datafusion::execution::context::SessionContext;
-use micromegas::analytics::lakehouse::{SessionConfigurator, json_table_provider};
+use micromegas::analytics::lakehouse::SessionConfigurator;
+use micromegas::analytics::lakehouse::json_table_provider::json_table_provider;
 
 struct MyConfigurator {
     example_table: Arc<dyn TableProvider>,
@@ -221,9 +229,16 @@ impl SessionConfigurator for MyConfigurator {
 ```
 
 The `json_table_provider()` function:
-1. Infers schema once using a temporary context
-2. Creates a `ListingTable` with the pre-computed schema
-3. Returns an `Arc<dyn TableProvider>` ready for registration
+1. Creates `ListingOptions` with `JsonFormat` (same as `register_json`)
+2. Parses the file path as `ListingTableUrl`
+3. Creates `ListingTable` which infers schema once during construction
+4. Returns an `Arc<dyn TableProvider>` ready for registration
+
+This replicates `register_json` behavior without the temporary context:
+- Direct creation of `ListingTable` with schema inference
+- Natural async flow with DataFusion's built-in I/O
+- Schema is inferred once and cached in the `ListingTable`
+- No temporary context needed
 
 ## Benefits
 
