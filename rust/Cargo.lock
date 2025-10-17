@@ -2848,6 +2848,7 @@ dependencies = [
  "rand 0.8.5",
  "serial_test",
  "sqlx",
+ "tempfile",
  "tokio",
  "uuid",
  "xxhash-rust",

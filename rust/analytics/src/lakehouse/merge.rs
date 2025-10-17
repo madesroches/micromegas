@@ -4,6 +4,7 @@ use super::{
     partition_source_data::hash_to_object_count,
     partitioned_table_provider::PartitionedTableProvider,
     query::make_session_context,
+    session_configurator::NoOpSessionConfigurator,
     view::View,
     view_factory::ViewFactory,
     write_partition::{PartitionRowSet, write_partition_from_rows},
@@ -75,6 +76,7 @@ impl PartitionMerger for QueryMerger {
             partitions_all_views,
             None,
             self.view_factory.clone(),
+            Arc::new(NoOpSessionConfigurator),
         )
         .await?;
         let src_table = PartitionedTableProvider::new(

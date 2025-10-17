@@ -16,7 +16,7 @@ use crate::{
     dfext::{string_column_accessor::string_column_by_name, typed_column::typed_column_by_name},
     lakehouse::{
         partition_cache::LivePartitionProvider, query::make_session_context,
-        view_factory::ViewFactory,
+        session_configurator::NoOpSessionConfigurator, view_factory::ViewFactory,
     },
     properties::properties_column_accessor::properties_column_by_name,
     time::TimeRange,
@@ -231,6 +231,7 @@ pub async fn find_process_with_latest_timing(
         partition_provider,
         query_range,
         view_factory,
+        Arc::new(NoOpSessionConfigurator),
     )
     .await
     .with_context(|| "creating DataFusion session context")?;

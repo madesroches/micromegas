@@ -16,6 +16,7 @@ use micromegas_analytics::lakehouse::partition::Partition;
 use micromegas_analytics::lakehouse::partition_cache::{LivePartitionProvider, PartitionCache};
 use micromegas_analytics::lakehouse::query::{query, query_partitions};
 use micromegas_analytics::lakehouse::runtime::make_runtime_env;
+use micromegas_analytics::lakehouse::session_configurator::NoOpSessionConfigurator;
 use micromegas_analytics::lakehouse::view::View;
 use micromegas_analytics::lakehouse::view_factory::default_view_factory;
 use micromegas_analytics::lakehouse::write_partition::retire_partitions;
@@ -94,6 +95,7 @@ async fn make_log_entries_levels_per_process_minute_view(
         merge_partitions_query,
         lake,
         view_factory,
+        Arc::new(NoOpSessionConfigurator),
         Some(4000),
         TimeDelta::days(1),
         TimeDelta::days(1),
@@ -252,6 +254,7 @@ async fn make_log_entries_levels_per_process_minute_view_with_custom_merge(
         merge_partitions_query,
         lake,
         view_factory,
+        Arc::new(NoOpSessionConfigurator),
         Some(4000),
         TimeDelta::days(1),
         TimeDelta::days(1),
@@ -429,6 +432,7 @@ async fn test_log_summary_view(
         FROM   log_entries_per_process_per_minute
         ORDER BY time_bin, process_id;",
         view_factory.clone(),
+        Arc::new(NoOpSessionConfigurator),
     )
     .await?;
     let pretty_results_view =
@@ -465,6 +469,7 @@ async fn test_log_summary_view(
         GROUP BY process_id, time_bin
         ORDER BY time_bin, process_id;",
         view_factory,
+        Arc::new(NoOpSessionConfigurator),
     )
     .await?;
     let pretty_results_ref =

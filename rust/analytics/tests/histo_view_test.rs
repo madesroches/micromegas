@@ -8,6 +8,7 @@ use micromegas_analytics::{
         partition_cache::{LivePartitionProvider, PartitionCache},
         query::query,
         runtime::make_runtime_env,
+        session_configurator::NoOpSessionConfigurator,
         sql_batch_view::SqlBatchView,
         view::View,
         view_factory::{ViewFactory, default_view_factory},
@@ -64,6 +65,7 @@ async fn make_cpu_usage_per_process_per_minute_view(
         merge_partitions_query,
         lake,
         view_factory,
+        Arc::new(NoOpSessionConfigurator),
         Some(4000),
         TimeDelta::days(1),
         TimeDelta::days(1),
@@ -208,6 +210,7 @@ async fn test_cpu_usage_view(
         FROM   cpu_usage_per_process_per_minute
         ORDER BY time_bin, process_id;",
         view_factory.clone(),
+        Arc::new(NoOpSessionConfigurator),
     )
     .await?;
     let pretty_results_view =

@@ -7,8 +7,8 @@ use super::{
     partitioned_table_provider::PartitionedTableProvider,
     perfetto_trace_table_function::PerfettoTraceTableFunction,
     retire_partition_by_file_udf::make_retire_partition_by_file_udf,
-    retire_partitions_table_function::RetirePartitionsTableFunction, view::View,
-    view_factory::ViewFactory,
+    retire_partitions_table_function::RetirePartitionsTableFunction,
+    session_configurator::SessionConfigurator, view::View, view_factory::ViewFactory,
 };
 use crate::{
     dfext::{
@@ -216,6 +216,7 @@ pub async fn make_session_context(
     part_provider: Arc<dyn QueryPartitionProvider>,
     query_range: Option<TimeRange>,
     view_factory: Arc<ViewFactory>,
+    configurator: Arc<dyn SessionConfigurator>,
 ) -> Result<SessionContext> {
     let ctx = SessionContext::new_with_config_rt(SessionConfig::default(), runtime.clone());
     if let Some(range) = &query_range {
@@ -245,6 +246,8 @@ pub async fn make_session_context(
         )
         .await?;
     }
+    // Apply custom configuration
+    configurator.configure(&ctx).await?;
     Ok(ctx)
 }
 
@@ -255,11 +258,19 @@ pub async fn query(
     query_range: Option<TimeRange>,
     sql: &str,
     view_factory: Arc<ViewFactory>,
+    configurator: Arc<dyn SessionConfigurator>,
 ) -> Result<Answer> {
     info!("query sql={sql}");
-    let ctx = make_session_context(runtime, lake, part_provider, query_range, view_factory)
-        .await
-        .with_context(|| "make_session_context")?;
+    let ctx = make_session_context(
+        runtime,
+        lake,
+        part_provider,
+        query_range,
+        view_factory,
+        configurator,
+    )
+    .await
+    .with_context(|| "make_session_context")?;
     let df = ctx.sql(sql).await?;
     let schema = df.schema().inner().clone();
     let batches: Vec<RecordBatch> = df.collect().await?;

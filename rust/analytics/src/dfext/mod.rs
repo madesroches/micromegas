@@ -6,6 +6,8 @@ pub mod binary_column_accessor;
 pub mod expressions;
 /// Compute histograms from SQL
 pub mod histogram;
+/// Helper to create JSON table providers
+pub mod json_table_provider;
 /// JSONB support
 pub mod jsonb;
 /// Stream a function's log as a table

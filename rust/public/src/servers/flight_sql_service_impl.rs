@@ -34,6 +34,7 @@ use futures::StreamExt;
 use futures::{Stream, TryStreamExt};
 use micromegas_analytics::lakehouse::partition_cache::QueryPartitionProvider;
 use micromegas_analytics::lakehouse::query::make_session_context;
+use micromegas_analytics::lakehouse::session_configurator::SessionConfigurator;
 use micromegas_analytics::lakehouse::view_factory::ViewFactory;
 use micromegas_analytics::replication::bulk_ingest;
 use micromegas_analytics::time::TimeRange;
@@ -144,6 +145,7 @@ pub struct FlightSqlServiceImpl {
     lake: Arc<DataLakeConnection>,
     part_provider: Arc<dyn QueryPartitionProvider>,
     view_factory: Arc<ViewFactory>,
+    session_configurator: Arc<dyn SessionConfigurator>,
 }
 
 impl FlightSqlServiceImpl {
@@ -152,12 +154,14 @@ impl FlightSqlServiceImpl {
         lake: Arc<DataLakeConnection>,
         part_provider: Arc<dyn QueryPartitionProvider>,
         view_factory: Arc<ViewFactory>,
+        session_configurator: Arc<dyn SessionConfigurator>,
     ) -> Result<Self> {
         Ok(Self {
             runtime,
             lake,
             part_provider,
             view_factory,
+            session_configurator,
         })
     }
 
@@ -223,6 +227,7 @@ impl FlightSqlServiceImpl {
             self.part_provider.clone(),
             query_range,
             self.view_factory.clone(),
+            self.session_configurator.clone(),
         )
         .await
         .map_err(|e| status!("error in make_session_context", e))?;
@@ -678,6 +683,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
             self.part_provider.clone(),
             None,
             self.view_factory.clone(),
+            self.session_configurator.clone(),
         )
         .await
         .map_err(|e| status!("error in make_session_context", e))?;

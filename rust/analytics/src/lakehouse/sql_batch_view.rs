@@ -6,6 +6,7 @@ use super::{
     partition::Partition,
     partition_cache::{NullPartitionProvider, PartitionCache},
     query::make_session_context,
+    session_configurator::SessionConfigurator,
     sql_partition_spec::fetch_sql_partition_spec,
     view::{PartitionSpec, View, ViewMetadata},
     view_factory::ViewFactory,
@@ -46,6 +47,7 @@ pub struct SqlBatchView {
     schema: Arc<Schema>,
     merger: Arc<dyn PartitionMerger>,
     view_factory: Arc<ViewFactory>,
+    session_configurator: Arc<dyn SessionConfigurator>,
     update_group: Option<i32>,
     max_partition_delta_from_source: TimeDelta,
     max_partition_delta_from_merge: TimeDelta,
@@ -64,6 +66,7 @@ impl SqlBatchView {
     /// * `merge_partitions_query` - used to merge multiple partitions into a single one (and user queries which are one multiple partitions by default)
     /// * `lake` - data lake
     /// * `view_factory` - all views accessible to the `count_src_query`
+    /// * `session_configurator` - configurator for registering custom tables (e.g., JSON files)
     /// * `update_group` - tells the daemon which view should be materialized and in what order
     pub async fn new(
         runtime: Arc<RuntimeEnv>,
@@ -75,6 +78,7 @@ impl SqlBatchView {
         merge_partitions_query: Arc<String>,
         lake: Arc<DataLakeConnection>,
         view_factory: Arc<ViewFactory>,
+        session_configurator: Arc<dyn SessionConfigurator>,
         update_group: Option<i32>,
         max_partition_delta_from_source: TimeDelta,
         max_partition_delta_from_merge: TimeDelta,
@@ -87,6 +91,7 @@ impl SqlBatchView {
             null_part_provider,
             None,
             view_factory.clone(),
+            session_configurator.clone(),
         )
         .await
         .with_context(|| "make_session_context")?;
@@ -118,6 +123,7 @@ impl SqlBatchView {
             schema,
             merger,
             view_factory,
+            session_configurator,
             update_group,
             max_partition_delta_from_source,
             max_partition_delta_from_merge,
@@ -154,6 +160,7 @@ impl View for SqlBatchView {
             partitions_in_range.clone(),
             None,
             self.view_factory.clone(),
+            self.session_configurator.clone(),
         )
         .await
         .with_context(|| "make_session_context")?;

@@ -1,6 +1,6 @@
 use super::{
     merge::PartitionMerger, partition::Partition, partition_cache::PartitionCache,
-    view_factory::ViewFactory,
+    session_configurator::NoOpSessionConfigurator, view_factory::ViewFactory,
 };
 use crate::{
     lakehouse::{
@@ -108,6 +108,7 @@ impl PartitionMerger for BatchPartitionMerger {
             partitions_all_views,
             None,
             self.view_factory.clone(),
+            Arc::new(NoOpSessionConfigurator),
         )
         .await?;
         let src_table = PartitionedTableProvider::new(

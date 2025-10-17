@@ -3,6 +3,7 @@ use super::{
     dataframe_time_bounds::{DataFrameTimeBounds, NamedColumnsTimeBounds},
     partition_cache::{NullPartitionProvider, PartitionCache},
     query::make_session_context,
+    session_configurator::SessionConfigurator,
     view::{PartitionSpec, View},
     view_factory::ViewFactory,
 };
@@ -77,6 +78,7 @@ pub struct ExportLogView {
     exporter: Arc<dyn RecordBatchTransformer>,
     log_schema: Arc<Schema>,
     view_factory: Arc<ViewFactory>,
+    session_configurator: Arc<dyn SessionConfigurator>,
     update_group: Option<i32>,
     max_partition_delta_from_source: TimeDelta,
     max_partition_delta_from_merge: TimeDelta,
@@ -105,6 +107,7 @@ impl ExportLogView {
         exporter: Arc<dyn RecordBatchTransformer>,
         lake: Arc<DataLakeConnection>,
         view_factory: Arc<ViewFactory>,
+        session_configurator: Arc<dyn SessionConfigurator>,
         update_group: Option<i32>,
         max_partition_delta_from_source: TimeDelta,
         max_partition_delta_from_merge: TimeDelta,
@@ -116,6 +119,7 @@ impl ExportLogView {
             null_part_provider,
             None,
             view_factory.clone(),
+            session_configurator.clone(),
         )
         .await
         .with_context(|| "make_session_context")?;
@@ -133,6 +137,7 @@ impl ExportLogView {
             exporter,
             log_schema: make_export_log_schema(),
             view_factory,
+            session_configurator,
             update_group,
             max_partition_delta_from_source,
             max_partition_delta_from_merge,
@@ -169,6 +174,7 @@ impl View for ExportLogView {
             partitions_in_range.clone(),
             None,
             self.view_factory.clone(),
+            self.session_configurator.clone(),
         )
         .await
         .with_context(|| "make_session_context")?;

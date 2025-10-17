@@ -1,4 +1,7 @@
-use super::{partition_cache::QueryPartitionProvider, view_factory::ViewFactory};
+use super::{
+    partition_cache::QueryPartitionProvider, session_configurator::NoOpSessionConfigurator,
+    view_factory::ViewFactory,
+};
 use crate::dfext::{
     string_column_accessor::string_column_by_name, typed_column::typed_column_by_name,
 };
@@ -264,6 +267,7 @@ async fn generate_streaming_perfetto_trace(
             end: time_range.end,
         }),
         view_factory,
+        Arc::new(NoOpSessionConfigurator),
     )
     .await?;
 

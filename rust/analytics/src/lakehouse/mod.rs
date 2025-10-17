@@ -77,6 +77,8 @@ pub mod retire_partition_by_file_udf;
 pub mod retire_partitions_table_function;
 /// Runtime resources
 pub mod runtime;
+/// SessionConfigurator trait for custom session context configuration
+pub mod session_configurator;
 /// Sql-defined view updated in batch
 pub mod sql_batch_view;
 /// Specification for a view partition backed by a SQL query on the lakehouse.
