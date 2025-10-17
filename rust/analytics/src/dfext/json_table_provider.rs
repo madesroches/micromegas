@@ -5,7 +5,42 @@ use datafusion::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
 };
 use datafusion::execution::context::SessionContext;
+use futures::StreamExt;
+use object_store::ObjectStore;
 use std::sync::Arc;
+
+/// Verifies that files exist at the specified URL
+///
+/// This function checks if files exist by first attempting to get metadata using
+/// `head()`, and if that fails (e.g., for directory patterns), it falls back to
+/// listing files at the prefix.
+///
+/// # Arguments
+///
+/// * `object_store` - The object store to query
+/// * `prefix` - The path/prefix to check for files
+/// * `url` - The original URL (used for error messages)
+///
+/// # Returns
+///
+/// Returns `Ok(())` if files exist, or an error if no files are found.
+async fn verify_files_exist(
+    object_store: &Arc<dyn ObjectStore>,
+    prefix: &object_store::path::Path,
+    url: &str,
+) -> Result<()> {
+    // Try to get metadata for the file to verify it exists
+    let head_result = object_store.head(prefix).await;
+    if head_result.is_err() {
+        // If head fails, try listing - could be a directory/prefix
+        let mut list_stream = object_store.list(Some(prefix));
+        let first_file = list_stream.next().await;
+        if first_file.is_none() {
+            anyhow::bail!("No files found at URL: {}", url);
+        }
+    }
+    Ok(())
+}
 
 /// Creates a TableProvider for a JSON file with pre-computed schema
 ///
@@ -54,6 +89,11 @@ pub async fn json_table_provider(url: &str) -> Result<Arc<dyn TableProvider>> {
     let file_format = Arc::new(JsonFormat::default());
     let listing_options = ListingOptions::new(file_format);
     let table_url = ListingTableUrl::parse(url)?;
+
+    // Verify that files exist at the specified URL
+    let object_store = ctx.state().runtime_env().object_store(&table_url)?;
+    verify_files_exist(&object_store, table_url.prefix(), url).await?;
+
     let mut config = ListingTableConfig::new(table_url).with_listing_options(listing_options);
     config = config.infer_schema(&ctx.state()).await?;
     let listing_table = ListingTable::try_new(config)?;

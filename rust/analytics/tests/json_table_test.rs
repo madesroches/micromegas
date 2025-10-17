@@ -175,3 +175,23 @@ async fn test_multiple_json_tables() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn test_json_table_provider_nonexistent_file() -> Result<()> {
+    let nonexistent_url = "file:///this/path/does/not/exist/data.json";
+
+    // This should fail when the file doesn't exist
+    let result = json_table_provider(nonexistent_url).await;
+
+    assert!(result.is_err(), "Expected error when file doesn't exist");
+
+    // Verify the error message is informative
+    let error_msg = result.unwrap_err().to_string();
+    assert!(
+        error_msg.contains("No files found"),
+        "Error message should mention no files found, got: {}",
+        error_msg
+    );
+
+    Ok(())
+}
