@@ -5,6 +5,7 @@ use super::{
     merge::{PartitionMerger, QueryMerger},
     partition::Partition,
     partition_cache::PartitionCache,
+    session_configurator::NoOpSessionConfigurator,
     view_factory::ViewFactory,
 };
 use crate::{response_writer::Logger, time::TimeRange};
@@ -106,6 +107,7 @@ pub trait View: std::fmt::Debug + Send + Sync {
         let merger = QueryMerger::new(
             runtime,
             empty_view_factory,
+            Arc::new(NoOpSessionConfigurator),
             self.get_file_schema(),
             merge_query,
         );

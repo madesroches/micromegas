@@ -101,11 +101,13 @@ impl SqlBatchView {
             .replace("{end}", &now_str);
         let extracted_df = ctx.sql(&sql).await?;
         let schema = extracted_df.schema().inner().clone();
+        let session_configurator_for_merger = session_configurator.clone();
         let merger = merger_maker.unwrap_or(&|runtime, schema| {
             let merge_query = Arc::new(merge_partitions_query.replace("{source}", "source"));
             Arc::new(QueryMerger::new(
                 runtime,
                 view_factory.clone(),
+                session_configurator_for_merger.clone(),
                 schema,
                 merge_query,
             ))
