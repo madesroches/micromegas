@@ -56,6 +56,14 @@ Unlike traditional observability platforms with opaque and often escalating cost
 
 Discover how Micromegas achieves this unparalleled cost efficiency and compare it with traditional solutions in our detailed [Cost Effectiveness](https://madesroches.github.io/micromegas/docs/cost-effectiveness/) document.
 
+## Presentations
+
+Learn more about Micromegas through our technical presentations:
+
+- **[High-Frequency Observability: Cost-Efficient Telemetry at Scale](https://madesroches.github.io/micromegas/high-frequency-observability/)** - How to record more data for less money with tail sampling and lakehouse architecture
+- **[Design Presentation](https://madesroches.github.io/micromegas/doc/design-presentation/design.html)** - Architecture and design principles
+- **[Unreal Engine Guide](https://madesroches.github.io/micromegas/doc/unreal-observability/unreal-observability.html)** - Integrating Micromegas with Unreal Engine
+
 ## Getting Started
 
 To get started with Micromegas, please refer to the [Getting Started](https://madesroches.github.io/micromegas/docs/getting-started/) guide.
