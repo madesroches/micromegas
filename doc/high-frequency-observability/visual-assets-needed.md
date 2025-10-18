@@ -1,4 +1,4 @@
-# Visual Assets Needed for OSACON 2025 Presentation
+# Visual Assets Needed for High-Frequency Observability Presentation
 
 ## Required Images/Screenshots
 
@@ -40,7 +40,7 @@
 
 ## Notes
 
-- All images should be placed in `doc/osacon-2025/src/media/`
+- All images should be placed in `doc/high-frequency-observability/src/media/`
 - Currently using placeholder paths - update when assets are available
 - Can test presentation without images, they'll show as broken links
 - Consider creating simple placeholder images for testing

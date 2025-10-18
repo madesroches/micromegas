@@ -1,8 +1,8 @@
-# OSACON 2025 Presentation
+# High-Frequency Observability
 
-Micromegas presentation for OSACON 2025: "Unified Observability for Video Games"
+Micromegas presentation: "Cost-Efficient Telemetry at Scale"
 
-**Live version:** https://madesroches.github.io/micromegas/osacon-2025/
+**Live version:** https://madesroches.github.io/micromegas/high-frequency-observability/
 
 Built with Reveal.js, Ayu Dark theme, and Mermaid diagrams.
 
@@ -55,17 +55,17 @@ This creates `dist/presentation-inline.html` - a single 1.2MB file containing ev
 ## File Structure
 
 ```
-osacon-2025/
+high-frequency-observability/
 ├── src/
 │   ├── slides/
-│   │   └── presentation.md      # OSACON 2025 presentation content
+│   │   └── presentation.md      # Presentation content
 │   ├── themes/
 │   │   └── ayu-dark.css        # Ayu Dark theme (bold text in blue)
 │   ├── media/                  # Screenshots (Grafana, Perfetto)
 │   └── main.js                 # Reveal.js + Mermaid plugin config
 ├── dist/                       # Build output (gitignored)
 ├── index.html                  # Development entry point
-├── presentation-plan.md        # Original presentation outline
+├── presentation-plan.md        # Presentation outline
 ├── package.json                # Dependencies (mermaid, reveal.js, etc)
 ├── vite.config.js             # Build configuration
 └── build-inline.js            # Standalone build script

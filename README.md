@@ -17,8 +17,7 @@
   <a href="https://madesroches.github.io/micromegas/docs/">Documentation</a> •
   <a href="https://madesroches.github.io/micromegas/rustdoc/micromegas/">Rust API Docs</a> •
   <a href="https://github.com/madesroches/grafana-micromegas-datasource/">Grafana Plugin</a> •
-  <a href="https://madesroches.github.io/micromegas/doc/design-presentation/design.html">Design Presentation</a> •
-  <a href="https://madesroches.github.io/micromegas/doc/unreal-observability/unreal-observability.html">Unreal Engine Guide</a>
+  <a href="#presentations">Presentations</a>
 </p>
 
 ---
@@ -55,6 +54,14 @@ Micromegas consists of several key components:
 Unlike traditional observability platforms with opaque and often escalating costs, Micromegas offers a transparent and **orders of magnitude more efficient** solution. With Micromegas, you can afford to record billions of events without relying heavily on sampling, gaining a complete and accurate picture of your systems. By leveraging your own cloud infrastructure, Micromegas drastically reduces your observability spend, especially at scale.
 
 Discover how Micromegas achieves this unparalleled cost efficiency and compare it with traditional solutions in our detailed [Cost Effectiveness](https://madesroches.github.io/micromegas/docs/cost-effectiveness/) document.
+
+## Presentations
+
+Learn more about Micromegas through our technical presentations:
+
+- **[High-Frequency Observability: Cost-Efficient Telemetry at Scale](https://madesroches.github.io/micromegas/high-frequency-observability/)** (October 2025) - How to record more data for less money with tail sampling and lakehouse architecture
+- **[Design Presentation](https://madesroches.github.io/micromegas/doc/design-presentation/design.html)** (February 2025) - Architecture and design principles
+- **[Unreal Engine Guide](https://madesroches.github.io/micromegas/doc/unreal-observability/unreal-observability.html)** (July 2024) - Integrating Micromegas with Unreal Engine
 
 ## Getting Started
 
