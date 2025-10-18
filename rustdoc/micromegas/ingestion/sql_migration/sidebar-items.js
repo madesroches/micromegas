@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["LATEST_DATA_LAKE_SCHEMA_VERSION"],"fn":["execute_migration","read_data_lake_schema_version","upgrade_data_lake_schema_v2"]};

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["GatewayError"],"fn":["handle_query","register_routes"],"struct":["QueryRequest"]};
