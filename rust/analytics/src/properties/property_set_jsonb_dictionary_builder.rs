@@ -30,7 +30,7 @@ impl ObjectPointer {
 /// Custom dictionary builder for PropertySet → JSONB encoding with pointer-based deduplication.
 ///
 /// This builder eliminates redundant JSONB serialization and dictionary hash lookups
-/// for duplicate PropertySets by using PropertySet's Arc<Object> pointer addresses as keys.
+/// for duplicate PropertySets by using PropertySet's `Arc<Object>` pointer addresses as keys.
 ///
 /// Performance benefits over Arrow's BinaryDictionaryBuilder:
 /// - Eliminates content-based hashing: Arrow's builder hashes JSONB bytes for deduplication
@@ -38,7 +38,7 @@ impl ObjectPointer {
 /// - Serialization only when needed: Only serialize PropertySet on first encounter
 /// - Memory efficiency: Shared PropertySet references, single JSONB copy per unique set
 pub struct PropertySetJsonbDictionaryBuilder {
-    /// Maps Arc<Object> pointer to dictionary index (avoids content hashing)
+    /// Maps `Arc<Object>` pointer to dictionary index (avoids content hashing)
     pointer_to_index: HashMap<ObjectPointer, i32>,
     /// Pre-serialized JSONB values in dictionary
     jsonb_values: Vec<Vec<u8>>,

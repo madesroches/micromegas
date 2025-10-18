@@ -208,7 +208,7 @@ impl AsyncScalarUDFImpl for RetirePartitionByFile {
 /// A string message indicating success or failure:
 /// - "SUCCESS: Retired partition <file_path>" on successful retirement
 /// - "ERROR: Partition not found: <file_path>" if the partition doesn't exist  
-/// - "ERROR: Database error: <details>" for any database-related failures
+/// - "ERROR: Database error: \<details\>" for any database-related failures
 pub fn make_retire_partition_by_file_udf(
     lake: Arc<DataLakeConnection>,
 ) -> datafusion::logical_expr::async_udf::AsyncScalarUDF {
