@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - pres
 
 jobs:
   build-and-deploy-docs:
