@@ -72,14 +72,14 @@ jobs:
         mkdir -p public_docs/doc
         cp -r doc/* public_docs/doc/
 
-        # Build OSACON 2025 presentation
-        cd doc/osacon-2025
+        # Build high-frequency observability presentation
+        cd doc/high-frequency-observability
         npm install
         npm run build:standalone
         cd ../..
-        mkdir -p public_docs/osacon-2025
-        cp doc/osacon-2025/dist/presentation-inline.html public_docs/osacon-2025/index.html
-        cp -r doc/osacon-2025/dist/*.{png,svg} public_docs/osacon-2025/ 2>/dev/null || echo "No media files to copy (already inlined)"
+        mkdir -p public_docs/high-frequency-observability
+        cp doc/high-frequency-observability/dist/presentation-inline.html public_docs/high-frequency-observability/index.html
+        cp -r doc/high-frequency-observability/dist/*.{png,svg} public_docs/high-frequency-observability/ 2>/dev/null || echo "No media files to copy (already inlined)"
         
         # Create main index that redirects to MkDocs
         cat > public_docs/index.html << 'EOF'
@@ -127,9 +127,9 @@ jobs:
                 <h3>📄 Legacy Documentation</h3>
                 <p>Original documentation files</p>
             </a>
-            <a href="osacon-2025/" class="docs-link">
-                <h3>🎤 OSACON 2025 Presentation</h3>
-                <p>Unified Observability for Video Games</p>
+            <a href="high-frequency-observability/" class="docs-link">
+                <h3>🎤 High-Frequency Observability</h3>
+                <p>Cost-Efficient Telemetry at Scale</p>
             </a>
         </body>
         </html>

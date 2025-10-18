@@ -1,11 +1,9 @@
-# OSACON 2025 Presentation Plan
-## Micromegas - Unified Observability for Video Games
+# High-Frequency Observability Presentation Plan
+## Micromegas - Cost-Efficient Telemetry at Scale
 
-**Event:** The Open Source Analytics Conference (OSACON)
-**Date:** November 5, 2025, 19:00-19:30 UTC (30 minutes)
 **Speaker:** Marc-Antoine Desroches (madesroches@gmail.com)
-**Title:** "Micromegas - unified observability for video games"
-**Tagline:** "How we built an open source observability stack that can track every frame of our game"
+**Title:** "High-Frequency Observability: Cost-Efficient Telemetry at Scale"
+**Tagline:** "How to record more data for less money with tail sampling and lakehouse architecture"
 
 ---
 
