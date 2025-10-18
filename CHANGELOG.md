@@ -3,8 +3,22 @@
 This file documents the historical progress of the Micromegas project. For current focus, please see the main [README.md](./README.md).
 
 ## [Unreleased]
- * Working on aggregate log views for enhanced stability monitoring
- * Planning improvements to log aggregation and health reporting systems
+ * **Performance & Storage Optimizations:**
+   * Complete properties to dictionary-encoded JSONB migration (#521)
+   * Properties writing optimization with ProcessMetadata and BinaryColumnAccessor (#522, #524)
+ * **Analytics & Query Features:**
+   * Add SessionConfigurator for custom table registration (#531)
+   * Add file existence validation to json_table_provider (#532)
+   * Enable property_get UDF to access JSONB columns (#520)
+ * **Documentation & Presentations:**
+   * Add High-Frequency Observability presentation (OSACON 2025) (#527, #528, #529, #533)
+   * Update presentation template to new Vite-based build (#525)
+ * **Security & Dependencies:**
+   * Update Vite to 7.1.8 to fix security vulnerabilities (#526)
+   * Update DataFusion and Arrow Flight dependencies (#519)
+   * cargo update (#530)
+ * **Code Quality:**
+   * Fix rustdoc HTML tag warnings in analytics crate (#534)
 
 ## September 2025 - v0.13.0
  * Released [version 0.13.0](https://crates.io/crates/micromegas)
