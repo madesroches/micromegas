@@ -7,6 +7,7 @@ This file documents the historical progress of the Micromegas project. For curre
    * Complete properties to dictionary-encoded JSONB migration (#521)
    * Properties writing optimization with ProcessMetadata and BinaryColumnAccessor (#522, #524)
  * **Analytics & Query Features:**
+   * Add Dictionary<Int32, Binary> support to jsonb_format_json UDF (#536)
    * Add SessionConfigurator for custom table registration (#531)
    * Add file existence validation to json_table_provider (#532)
    * Enable property_get UDF to access JSONB columns (#520)
