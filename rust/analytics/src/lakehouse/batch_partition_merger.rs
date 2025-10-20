@@ -36,7 +36,9 @@ fn compute_partition_stats(partitions: &[Partition]) -> Result<PartitionStats> {
     let non_empty: Vec<_> = partitions.iter().filter(|p| !p.is_empty()).collect();
 
     if non_empty.is_empty() {
-        anyhow::bail!("compute_partition_stats given only empty partitions");
+        anyhow::bail!(
+            "compute_partition_stats given only empty partitions (should be filtered at caller)"
+        );
     }
 
     let first = non_empty.first().unwrap();
@@ -113,6 +115,14 @@ impl PartitionMerger for BatchPartitionMerger {
         partitions_all_views: Arc<PartitionCache>,
     ) -> Result<SendableRecordBatchStream> {
         info!("execute_merge_query");
+
+        // If all partitions are empty, return empty stream immediately
+        if partitions_to_merge.iter().all(|p| p.is_empty()) {
+            debug!("all partitions are empty, returning empty stream");
+            let builder = RecordBatchReceiverStreamBuilder::new(self.file_schema.clone(), 1);
+            return Ok(builder.build());
+        }
+
         let stats = compute_partition_stats(partitions_to_merge.as_ref())?;
         let nb_batches = ((stats.num_rows / self.approx_nb_rows_per_batch) + 1) as i32;
         let batch_time_delta = ((stats.max_event_time - stats.min_event_time) / nb_batches)
