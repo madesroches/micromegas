@@ -42,10 +42,15 @@ pub fn make_partitioned_execution_plan(
         }
     }
 
-    // If all partitions are empty, return EmptyExec
+    // If all partitions are empty, return EmptyExec with projected schema
     if file_group.is_empty() {
         use datafusion::physical_plan::empty::EmptyExec;
-        return Ok(Arc::new(EmptyExec::new(schema)));
+        let projected_schema = if let Some(projection) = projection {
+            Arc::new(schema.project(projection)?)
+        } else {
+            schema
+        };
+        return Ok(Arc::new(EmptyExec::new(projected_schema)));
     }
 
     let object_store_url = ObjectStoreUrl::parse("obj://lakehouse/").unwrap();
