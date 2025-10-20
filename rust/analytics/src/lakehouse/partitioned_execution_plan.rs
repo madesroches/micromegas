@@ -27,9 +27,25 @@ pub fn make_partitioned_execution_plan(
     pool: sqlx::PgPool,
 ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
     let predicate = filters_to_predicate(schema.clone(), state, filters)?;
+
+    // Filter out empty partitions (num_rows = 0, file_path = None)
     let mut file_group = vec![];
     for part in &*partitions {
-        file_group.push(PartitionedFile::new(&part.file_path, part.file_size as u64));
+        if !part.is_empty() {
+            let file_path = part.file_path.as_ref().ok_or_else(|| {
+                datafusion::error::DataFusionError::Internal(format!(
+                    "non-empty partition has no file_path: num_rows={}",
+                    part.num_rows
+                ))
+            })?;
+            file_group.push(PartitionedFile::new(file_path, part.file_size as u64));
+        }
+    }
+
+    // If all partitions are empty, return EmptyExec
+    if file_group.is_empty() {
+        use datafusion::physical_plan::empty::EmptyExec;
+        return Ok(Arc::new(EmptyExec::new(schema)));
     }
 
     let object_store_url = ObjectStoreUrl::parse("obj://lakehouse/").unwrap();

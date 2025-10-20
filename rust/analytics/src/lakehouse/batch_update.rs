@@ -54,8 +54,8 @@ async fn verify_overlapping_partitions(
     let mut existing_source_hash: i64 = 0;
     let nb_existing_partitions = filtered.partitions.len();
     for part in &filtered.partitions {
-        let begin = part.begin_insert_time;
-        let end = part.end_insert_time;
+        let begin = part.begin_insert_time();
+        let end = part.end_insert_time();
         if begin < insert_range.begin || end > insert_range.end {
             logger
                 .write_log_entry(format!(
@@ -143,7 +143,7 @@ async fn materialize_partition(
             && partition_cache
                 .partitions
                 .iter()
-                .all(|p| (p.end_insert_time - p.begin_insert_time) == new_delta)
+                .all(|p| (p.end_insert_time() - p.begin_insert_time()) == new_delta)
         {
             let desc = format!(
                 "[{}, {}] {view_set_name} {view_instance_id}",

@@ -5,6 +5,7 @@ use super::{
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use datafusion::parquet::file::metadata::ParquetMetaData;
 use micromegas_tracing::prelude::*;
 use sqlx::{PgPool, Row};
@@ -25,9 +26,13 @@ pub async fn partition_with_metadata(
     partition: Partition,
     pool: &PgPool,
 ) -> Result<PartitionWithMetadata> {
-    let file_metadata = load_partition_metadata(pool, &partition.file_path)
+    let file_path = partition
+        .file_path
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("cannot load metadata for empty partition"))?;
+    let file_metadata = load_partition_metadata(pool, file_path)
         .await
-        .with_context(|| format!("loading metadata for partition: {}", partition.file_path))?;
+        .with_context(|| format!("loading metadata for partition: {}", file_path))?;
     Ok(PartitionWithMetadata {
         partition,
         file_metadata,
@@ -109,14 +114,23 @@ impl PartitionCache {
                 file_schema_hash: r.try_get("file_schema_hash")?,
             };
             // file_metadata will be loaded on-demand when needed
+            let insert_time_range = TimeRange {
+                begin: r.try_get("begin_insert_time")?,
+                end: r.try_get("end_insert_time")?,
+            };
+            let event_time_range = match (
+                r.try_get::<DateTime<Utc>, _>("min_event_time").ok(),
+                r.try_get::<DateTime<Utc>, _>("max_event_time").ok(),
+            ) {
+                (Some(begin), Some(end)) => Some(TimeRange { begin, end }),
+                _ => None, // If either is NULL, treat as empty partition
+            };
             partitions.push(Partition {
                 view_metadata,
-                begin_insert_time: r.try_get("begin_insert_time")?,
-                end_insert_time: r.try_get("end_insert_time")?,
-                min_event_time: r.try_get("min_event_time")?,
-                max_event_time: r.try_get("max_event_time")?,
+                insert_time_range,
+                event_time_range,
                 updated: r.try_get("updated")?,
-                file_path: r.try_get("file_path")?,
+                file_path: r.try_get::<String, _>("file_path").ok(),
                 file_size: r.try_get("file_size")?,
                 source_data_hash: r.try_get("source_data_hash")?,
                 num_rows: r.try_get("num_rows")?,
@@ -170,14 +184,23 @@ impl PartitionCache {
                 file_schema_hash: r.try_get("file_schema_hash")?,
             };
             // file_metadata will be loaded on-demand when needed
+            let insert_time_range = TimeRange {
+                begin: r.try_get("begin_insert_time")?,
+                end: r.try_get("end_insert_time")?,
+            };
+            let event_time_range = match (
+                r.try_get::<DateTime<Utc>, _>("min_event_time").ok(),
+                r.try_get::<DateTime<Utc>, _>("max_event_time").ok(),
+            ) {
+                (Some(begin), Some(end)) => Some(TimeRange { begin, end }),
+                _ => None, // If either is NULL, treat as empty partition
+            };
             partitions.push(Partition {
                 view_metadata,
-                begin_insert_time: r.try_get("begin_insert_time")?,
-                end_insert_time: r.try_get("end_insert_time")?,
-                min_event_time: r.try_get("min_event_time")?,
-                max_event_time: r.try_get("max_event_time")?,
+                insert_time_range,
+                event_time_range,
                 updated: r.try_get("updated")?,
-                file_path: r.try_get("file_path")?,
+                file_path: r.try_get::<String, _>("file_path").ok(),
                 file_size: r.try_get("file_size")?,
                 source_data_hash: r.try_get("source_data_hash")?,
                 num_rows: r.try_get("num_rows")?,
@@ -202,8 +225,8 @@ impl PartitionCache {
             if *part.view_metadata.view_set_name == view_set_name
                 && *part.view_metadata.view_instance_id == view_instance_id
                 && part.view_metadata.file_schema_hash == file_schema_hash
-                && part.begin_insert_time < insert_range.end
-                && part.end_insert_time > insert_range.begin
+                && part.begin_insert_time() < insert_range.end
+                && part.end_insert_time() > insert_range.begin
             {
                 partitions.push(part.clone());
             }
@@ -218,8 +241,8 @@ impl PartitionCache {
     pub fn filter_insert_range(&self, insert_range: TimeRange) -> Self {
         let mut partitions = vec![];
         for part in &self.partitions {
-            if part.begin_insert_time < insert_range.end
-                && part.end_insert_time > insert_range.begin
+            if part.begin_insert_time() < insert_range.end
+                && part.end_insert_time() > insert_range.begin
             {
                 partitions.push(part.clone());
             }
@@ -241,8 +264,8 @@ impl PartitionCache {
         for part in &self.partitions {
             if *part.view_metadata.view_set_name == view_set_name
                 && *part.view_metadata.view_instance_id == view_instance_id
-                && part.begin_insert_time >= insert_range.begin
-                && part.end_insert_time <= insert_range.end
+                && part.begin_insert_time() >= insert_range.begin
+                && part.end_insert_time() <= insert_range.end
             {
                 partitions.push(part.clone());
             }
@@ -272,8 +295,8 @@ impl QueryPartitionProvider for PartitionCache {
             for part in &self.partitions {
                 if *part.view_metadata.view_set_name == view_set_name
                     && *part.view_metadata.view_instance_id == view_instance_id
-                    && part.begin_insert_time < range.end
-                    && part.end_insert_time > range.begin
+                    && part.begin_insert_time() < range.end
+                    && part.end_insert_time() > range.begin
                     && part.view_metadata.file_schema_hash == file_schema_hash
                 {
                     partitions.push(part.clone());
@@ -388,14 +411,23 @@ impl QueryPartitionProvider for LivePartitionProvider {
                 file_schema_hash: r.try_get("file_schema_hash")?,
             };
             // file_metadata will be loaded on-demand when needed
+            let insert_time_range = TimeRange {
+                begin: r.try_get("begin_insert_time")?,
+                end: r.try_get("end_insert_time")?,
+            };
+            let event_time_range = match (
+                r.try_get::<DateTime<Utc>, _>("min_event_time").ok(),
+                r.try_get::<DateTime<Utc>, _>("max_event_time").ok(),
+            ) {
+                (Some(begin), Some(end)) => Some(TimeRange { begin, end }),
+                _ => None, // If either is NULL, treat as empty partition
+            };
             partitions.push(Partition {
                 view_metadata,
-                begin_insert_time: r.try_get("begin_insert_time")?,
-                end_insert_time: r.try_get("end_insert_time")?,
-                min_event_time: r.try_get("min_event_time")?,
-                max_event_time: r.try_get("max_event_time")?,
+                insert_time_range,
+                event_time_range,
                 updated: r.try_get("updated")?,
-                file_path: r.try_get("file_path")?,
+                file_path: r.try_get::<String, _>("file_path").ok(),
                 file_size: r.try_get("file_size")?,
                 source_data_hash: r.try_get("source_data_hash")?,
                 num_rows: r.try_get("num_rows")?,
