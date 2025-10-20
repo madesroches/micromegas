@@ -6,3 +6,6 @@ pub mod format_json;
 pub mod get;
 /// jsonb_parse
 pub mod parse;
+
+// Re-export for convenience in tests
+pub use format_json::JsonbFormatJson;

@@ -270,15 +270,27 @@ jsonb_format_json(jsonb)
 
 **Parameters:**
 
-- `jsonb` (`Binary`): JSONB value to format
+- `jsonb` (Multiple formats supported): JSONB value in any of these formats:
+
+   * `Dictionary<Int32, Binary>` - **Dictionary-encoded JSONB (default)**
+   * `Binary` - Non-dictionary JSONB
 
 **Returns:** `Utf8` - JSON string representation
 
-**Example:**
+**Examples:**
 ```sql
 -- Format JSONB back to JSON string
 SELECT jsonb_format_json(jsonb_parse('{"name": "web_server"}')) as json_string
 FROM processes;
+
+-- Works directly with dictionary-encoded properties
+SELECT jsonb_format_json(properties_to_jsonb(properties)) as json_props
+FROM log_entries;
+
+-- Format property values as JSON
+SELECT jsonb_format_json(properties) as json_string
+FROM processes
+WHERE properties IS NOT NULL;
 ```
 
 ##### `jsonb_as_string(jsonb)`
