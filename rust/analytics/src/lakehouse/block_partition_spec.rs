@@ -63,10 +63,8 @@ impl PartitionSpec for BlockPartitionSpec {
             ))
             .await?;
 
-        if self.source_data.is_empty() {
-            return Ok(());
-        }
-
+        // Allow empty source data - write_partition_from_rows will create
+        // an empty partition record if no data is sent through the channel
         let (tx, rx) = tokio::sync::mpsc::channel(1);
         let join_handle = tokio::spawn(write_partition_from_rows(
             lake.clone(),
@@ -77,6 +75,13 @@ impl PartitionSpec for BlockPartitionSpec {
             rx,
             logger.clone(),
         ));
+
+        // If source data is empty, just close the channel to create an empty partition
+        if self.source_data.is_empty() {
+            drop(tx);
+            join_handle.await??;
+            return Ok(());
+        }
 
         let max_size = self.source_data.get_max_payload_size() as usize;
         let mut nb_tasks = (100 * 1024 * 1024) / max_size; // try to download up to 100 MB of payloads

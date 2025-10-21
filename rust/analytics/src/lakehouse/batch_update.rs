@@ -118,9 +118,8 @@ async fn materialize_partition(
         )
         .await
         .with_context(|| "make_batch_partition_spec")?;
-    if partition_spec.is_empty() {
-        return Ok(());
-    }
+    // Allow empty partition specs to be written - write_partition_from_rows
+    // will create an empty partition record
     let view_instance_id = view.get_view_instance_id();
     let strategy = verify_overlapping_partitions(
         &existing_partitions_all_views,

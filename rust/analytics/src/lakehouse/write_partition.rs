@@ -25,7 +25,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::{Arc, atomic::AtomicI64};
 use tokio::sync::mpsc::Receiver;
 
-use super::{partition::Partition, view::ViewMetadata};
+use super::{partition::Partition, partition_source_data, view::ViewMetadata};
 
 /// Adds a file to the temporary_files table for cleanup.
 ///
@@ -157,17 +157,19 @@ pub async fn retire_partitions(
         .with_context(|| "listing old partitions (range)")?
     };
 
-    // LOG: Found partitions for retirement
-    logger
-        .write_log_entry(format!(
-            "[RETIRE_FOUND] view={}/{} time_range=[{}, {}] found_partitions={}",
-            view_set_name,
-            view_instance_id,
-            begin_insert_time,
-            end_insert_time,
-            old_partitions.len()
-        ))
-        .await?;
+    // LOG: Found partitions for retirement (only if any found)
+    if !old_partitions.is_empty() {
+        logger
+            .write_log_entry(format!(
+                "[RETIRE_FOUND] view={}/{} time_range=[{}, {}] found_partitions={}",
+                view_set_name,
+                view_instance_id,
+                begin_insert_time,
+                end_insert_time,
+                old_partitions.len()
+            ))
+            .await?;
+    }
 
     let mut file_paths = Vec::new();
     for old_part in &old_partitions {
@@ -292,13 +294,17 @@ async fn insert_partition(
     .await
     .with_context(|| "retire_partitions")?;
 
+    // Decode source_data_hash back to the row count (it's stored as i64 little-endian bytes)
+    let source_row_count = partition_source_data::hash_to_object_count(&partition.source_data_hash)
+        .with_context(|| "decoding source_data_hash to row count")?;
+
     debug!(
-        "[PARTITION_INSERT_ATTEMPT] view={}/{} time_range=[{}, {}] source_hash={:?} file_path={:?}",
+        "[PARTITION_INSERT_ATTEMPT] view={}/{} time_range=[{}, {}] source_rows={} file_path={:?}",
         &partition.view_metadata.view_set_name,
         &partition.view_metadata.view_instance_id,
         partition.begin_insert_time(),
         partition.end_insert_time(),
-        partition.source_data_hash,
+        source_row_count,
         partition.file_path
     );
 
@@ -343,23 +349,23 @@ async fn insert_partition(
     match insert_result {
         Ok(_) => {
             debug!(
-                "[PARTITION_INSERT_SUCCESS] view={}/{} time_range=[{}, {}] source_hash={:?}",
+                "[PARTITION_INSERT_SUCCESS] view={}/{} time_range=[{}, {}] source_rows={}",
                 &partition.view_metadata.view_set_name,
                 &partition.view_metadata.view_instance_id,
                 partition.begin_insert_time(),
                 partition.end_insert_time(),
-                partition.source_data_hash
+                source_row_count
             );
         }
         Err(ref e) => {
             logger
                 .write_log_entry(format!(
-                    "[PARTITION_INSERT_ERROR] view={}/{} time_range=[{}, {}] source_hash={:?} error={}",
+                    "[PARTITION_INSERT_ERROR] view={}/{} time_range=[{}, {}] source_rows={} error={}",
                     &partition.view_metadata.view_set_name,
                     &partition.view_metadata.view_instance_id,
                     partition.begin_insert_time(),
                     partition.end_insert_time(),
-                    partition.source_data_hash,
+                    source_row_count,
                     e
                 ))
                 .await?;
