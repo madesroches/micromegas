@@ -35,7 +35,7 @@ def test_jsonb_format_json_error():
     """
     res = client.query(sql)
     json_string = res.iloc[0]["json_string"]
-    assert json_string == "null"
+    assert json_string is None
 
 
 def test_jsonb_get():

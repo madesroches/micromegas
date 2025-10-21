@@ -32,23 +32,39 @@ struct PartitionStats {
 }
 
 fn compute_partition_stats(partitions: &[Partition]) -> Result<PartitionStats> {
-    if partitions.is_empty() {
-        anyhow::bail!("compute_partition_stats given empty partition set");
+    // Filter out empty partitions before computing stats
+    let non_empty: Vec<_> = partitions.iter().filter(|p| !p.is_empty()).collect();
+
+    if non_empty.is_empty() {
+        anyhow::bail!(
+            "compute_partition_stats given only empty partitions (should be filtered at caller)"
+        );
     }
-    let first = partitions.first().unwrap();
+
+    let first = non_empty.first().unwrap();
+    let first_event_range = first
+        .event_time_range
+        .ok_or_else(|| anyhow::anyhow!("non-empty partition has no event_time_range"))?;
+
     let state = PartitionStats {
         num_rows: first.num_rows,
-        min_event_time: first.min_event_time,
-        max_event_time: first.max_event_time,
+        min_event_time: first_event_range.begin,
+        max_event_time: first_event_range.end,
     };
-    Ok(partitions
+
+    non_empty
         .iter()
         .skip(1)
-        .fold(state, |state, part| PartitionStats {
-            num_rows: state.num_rows + part.num_rows,
-            min_event_time: state.min_event_time.min(part.min_event_time),
-            max_event_time: state.max_event_time.max(part.max_event_time),
-        }))
+        .try_fold(state, |state, part| -> Result<PartitionStats> {
+            let event_range = part
+                .event_time_range
+                .ok_or_else(|| anyhow::anyhow!("non-empty partition has no event_time_range"))?;
+            Ok(PartitionStats {
+                num_rows: state.num_rows + part.num_rows,
+                min_event_time: state.min_event_time.min(event_range.begin),
+                max_event_time: state.max_event_time.max(event_range.end),
+            })
+        })
 }
 
 /// Merges multiple partitions by splitting the work in batches to use less memory.
@@ -99,6 +115,14 @@ impl PartitionMerger for BatchPartitionMerger {
         partitions_all_views: Arc<PartitionCache>,
     ) -> Result<SendableRecordBatchStream> {
         info!("execute_merge_query");
+
+        // If all partitions are empty, return empty stream immediately
+        if partitions_to_merge.iter().all(|p| p.is_empty()) {
+            debug!("all partitions are empty, returning empty stream");
+            let builder = RecordBatchReceiverStreamBuilder::new(self.file_schema.clone(), 1);
+            return Ok(builder.build());
+        }
+
         let stats = compute_partition_stats(partitions_to_merge.as_ref())?;
         let nb_batches = ((stats.num_rows / self.approx_nb_rows_per_batch) + 1) as i32;
         let batch_time_delta = ((stats.max_event_time - stats.min_event_time) / nb_batches)

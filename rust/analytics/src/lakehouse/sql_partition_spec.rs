@@ -75,9 +75,8 @@ impl PartitionSpec for SqlPartitionSpec {
     }
 
     async fn write(&self, lake: Arc<DataLakeConnection>, logger: Arc<dyn Logger>) -> Result<()> {
-        if self.record_count == 0 {
-            return Ok(());
-        }
+        // Allow empty record_count - write_partition_from_rows will create
+        // an empty partition record if no data is sent through the channel
         let desc = format!(
             "[{}, {}] {} {}",
             self.view_metadata.view_set_name,

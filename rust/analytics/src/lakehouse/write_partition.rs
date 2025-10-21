@@ -25,7 +25,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::{Arc, atomic::AtomicI64};
 use tokio::sync::mpsc::Receiver;
 
-use super::{partition::Partition, view::ViewMetadata};
+use super::{partition::Partition, partition_source_data, view::ViewMetadata};
 
 /// Adds a file to the temporary_files table for cleanup.
 ///
@@ -157,17 +157,19 @@ pub async fn retire_partitions(
         .with_context(|| "listing old partitions (range)")?
     };
 
-    // LOG: Found partitions for retirement
-    logger
-        .write_log_entry(format!(
-            "[RETIRE_FOUND] view={}/{} time_range=[{}, {}] found_partitions={}",
-            view_set_name,
-            view_instance_id,
-            begin_insert_time,
-            end_insert_time,
-            old_partitions.len()
-        ))
-        .await?;
+    // LOG: Found partitions for retirement (only if any found)
+    if !old_partitions.is_empty() {
+        logger
+            .write_log_entry(format!(
+                "[RETIRE_FOUND] view={}/{} time_range=[{}, {}] found_partitions={}",
+                view_set_name,
+                view_instance_id,
+                begin_insert_time,
+                end_insert_time,
+                old_partitions.len()
+            ))
+            .await?;
+    }
 
     let mut file_paths = Vec::new();
     for old_part in &old_partitions {
@@ -237,15 +239,15 @@ fn generate_partition_lock_key(
 async fn insert_partition(
     lake: &DataLakeConnection,
     partition: &Partition,
-    file_metadata: &Arc<ParquetMetaData>,
+    file_metadata: Option<&Arc<ParquetMetaData>>,
     logger: Arc<dyn Logger>,
 ) -> Result<()> {
     // Generate deterministic lock key for this partition
     let lock_key = generate_partition_lock_key(
         &partition.view_metadata.view_set_name,
         &partition.view_metadata.view_instance_id,
-        partition.begin_insert_time,
-        partition.end_insert_time,
+        partition.begin_insert_time(),
+        partition.end_insert_time(),
     );
 
     let mut transaction = lake.db_pool.begin().await?;
@@ -254,8 +256,8 @@ async fn insert_partition(
         "[PARTITION_LOCK] view={}/{} time_range=[{}, {}] lock_key={} - acquiring advisory lock",
         &partition.view_metadata.view_set_name,
         &partition.view_metadata.view_instance_id,
-        partition.begin_insert_time,
-        partition.end_insert_time,
+        partition.begin_insert_time(),
+        partition.end_insert_time(),
         lock_key
     );
 
@@ -267,15 +269,19 @@ async fn insert_partition(
         .await
         .with_context(|| "acquiring advisory lock")?;
 
+    // Decode source_data_hash back to the row count (it's stored as i64 little-endian bytes)
+    let source_row_count = partition_source_data::hash_to_object_count(&partition.source_data_hash)
+        .with_context(|| "decoding source_data_hash to row count")?;
+
     // LOG: Lock acquired, starting partition write
     logger
         .write_log_entry(format!(
-            "[PARTITION_WRITE_START] view={}/{} time_range=[{}, {}] source_hash={:?} - lock acquired",
+            "[PARTITION_WRITE_START] view={}/{} time_range=[{}, {}] source_rows={} - lock acquired",
             &partition.view_metadata.view_set_name,
             &partition.view_metadata.view_instance_id,
-            partition.begin_insert_time,
-            partition.end_insert_time,
-            partition.source_data_hash
+            partition.begin_insert_time(),
+            partition.end_insert_time(),
+            source_row_count
         ))
         .await?;
 
@@ -285,38 +291,41 @@ async fn insert_partition(
         &mut transaction,
         &partition.view_metadata.view_set_name,
         &partition.view_metadata.view_instance_id,
-        partition.begin_insert_time,
-        partition.end_insert_time,
+        partition.begin_insert_time(),
+        partition.end_insert_time(),
         logger.clone(),
     )
     .await
     .with_context(|| "retire_partitions")?;
 
     debug!(
-        "[PARTITION_INSERT_ATTEMPT] view={}/{} time_range=[{}, {}] source_hash={:?} file_path={}",
+        "[PARTITION_INSERT_ATTEMPT] view={}/{} time_range=[{}, {}] source_rows={} file_path={:?}",
         &partition.view_metadata.view_set_name,
         &partition.view_metadata.view_instance_id,
-        partition.begin_insert_time,
-        partition.end_insert_time,
-        partition.source_data_hash,
+        partition.begin_insert_time(),
+        partition.end_insert_time(),
+        source_row_count,
         partition.file_path
     );
 
     // Insert the parquet metadata into the dedicated metadata table within the same transaction
-    let metadata_bytes = serialize_parquet_metadata(file_metadata)
-        .with_context(|| "serializing parquet metadata for dedicated table")?;
-    let insert_time = sqlx::types::chrono::Utc::now();
+    // Only insert metadata if partition has a file (not empty)
+    if let (Some(file_path), Some(metadata)) = (&partition.file_path, file_metadata) {
+        let metadata_bytes = serialize_parquet_metadata(metadata)
+            .with_context(|| "serializing parquet metadata for dedicated table")?;
+        let insert_time = sqlx::types::chrono::Utc::now();
 
-    sqlx::query(
-        "INSERT INTO partition_metadata (file_path, metadata, insert_time) 
-         VALUES ($1, $2, $3)",
-    )
-    .bind(&partition.file_path)
-    .bind(metadata_bytes.as_ref())
-    .bind(insert_time)
-    .execute(&mut *transaction)
-    .await
-    .with_context(|| format!("inserting metadata for file: {}", partition.file_path))?;
+        sqlx::query(
+            "INSERT INTO partition_metadata (file_path, metadata, insert_time)
+             VALUES ($1, $2, $3)",
+        )
+        .bind(file_path)
+        .bind(metadata_bytes.as_ref())
+        .bind(insert_time)
+        .execute(&mut *transaction)
+        .await
+        .with_context(|| format!("inserting metadata for file: {}", file_path))?;
+    }
 
     // Insert the new partition (without metadata column)
     let insert_result = sqlx::query(
@@ -324,10 +333,10 @@ async fn insert_partition(
     )
     .bind(&*partition.view_metadata.view_set_name)
     .bind(&*partition.view_metadata.view_instance_id)
-    .bind(partition.begin_insert_time)
-    .bind(partition.end_insert_time)
-    .bind(partition.min_event_time)
-    .bind(partition.max_event_time)
+    .bind(partition.begin_insert_time())
+    .bind(partition.end_insert_time())
+    .bind(partition.min_event_time())
+    .bind(partition.max_event_time())
     .bind(partition.updated)
     .bind(&partition.file_path)
     .bind(partition.file_size)
@@ -340,23 +349,23 @@ async fn insert_partition(
     match insert_result {
         Ok(_) => {
             debug!(
-                "[PARTITION_INSERT_SUCCESS] view={}/{} time_range=[{}, {}] source_hash={:?}",
+                "[PARTITION_INSERT_SUCCESS] view={}/{} time_range=[{}, {}] source_rows={}",
                 &partition.view_metadata.view_set_name,
                 &partition.view_metadata.view_instance_id,
-                partition.begin_insert_time,
-                partition.end_insert_time,
-                partition.source_data_hash
+                partition.begin_insert_time(),
+                partition.end_insert_time(),
+                source_row_count
             );
         }
         Err(ref e) => {
             logger
                 .write_log_entry(format!(
-                    "[PARTITION_INSERT_ERROR] view={}/{} time_range=[{}, {}] source_hash={:?} error={}",
+                    "[PARTITION_INSERT_ERROR] view={}/{} time_range=[{}, {}] source_rows={} error={}",
                     &partition.view_metadata.view_set_name,
                     &partition.view_metadata.view_instance_id,
-                    partition.begin_insert_time,
-                    partition.end_insert_time,
-                    partition.source_data_hash,
+                    partition.begin_insert_time(),
+                    partition.end_insert_time(),
+                    source_row_count,
                     e
                 ))
                 .await?;
@@ -368,14 +377,152 @@ async fn insert_partition(
     transaction.commit().await.with_context(|| "commit")?;
 
     info!(
-        "[PARTITION_WRITE_COMMIT] view={}/{} time_range=[{}, {}] file_path={} - lock released",
+        "[PARTITION_WRITE_COMMIT] view={}/{} time_range=[{}, {}] file_path={:?} - lock released",
         &partition.view_metadata.view_set_name,
         &partition.view_metadata.view_instance_id,
-        partition.begin_insert_time,
-        partition.end_insert_time,
+        partition.begin_insert_time(),
+        partition.end_insert_time(),
         partition.file_path
     );
     Ok(())
+}
+
+/// Result of writing rows to a partition file.
+struct PartitionWriteResult {
+    num_rows: i64,
+    file_metadata: Option<Arc<ParquetMetaData>>,
+    file_path: Option<String>,
+    file_size: i64,
+    event_time_range: Option<TimeRange>,
+}
+
+/// Writes rows from the stream and tracks event time ranges.
+async fn write_rows_and_track_times(
+    rb_stream: &mut Receiver<PartitionRowSet>,
+    arrow_writer: &mut AsyncArrowWriter<AsyncParquetWriter>,
+    logger: &Arc<dyn Logger>,
+    desc: &str,
+) -> Result<Option<TimeRange>> {
+    let mut min_event_time: Option<DateTime<Utc>> = None;
+    let mut max_event_time: Option<DateTime<Utc>> = None;
+    let mut write_progression = 0;
+
+    while let Some(row_set) = rb_stream.recv().await {
+        min_event_time = Some(
+            min_event_time
+                .unwrap_or(row_set.rows_time_range.begin)
+                .min(row_set.rows_time_range.begin),
+        );
+        max_event_time = Some(
+            max_event_time
+                .unwrap_or(row_set.rows_time_range.end)
+                .max(row_set.rows_time_range.end),
+        );
+        arrow_writer
+            .write(&row_set.rows)
+            .await
+            .with_context(|| "arrow_writer.write")?;
+        if arrow_writer.in_progress_size() > 100 * 1024 * 1024 {
+            arrow_writer
+                .flush()
+                .await
+                .with_context(|| "arrow_writer.flush")?;
+        }
+
+        // Log progress every 10MB to avoid spamming and prevent idle timeout
+        let progression = arrow_writer.bytes_written() / (10 * 1024 * 1024);
+        if progression != write_progression {
+            write_progression = progression;
+            let written = arrow_writer.bytes_written();
+            logger
+                .write_log_entry(format!("{desc}: written {written} bytes"))
+                .await
+                .with_context(|| "writing log entry")?;
+        }
+    }
+
+    Ok(match (min_event_time, max_event_time) {
+        (Some(begin), Some(end)) => Some(TimeRange { begin, end }),
+        _ => None,
+    })
+}
+
+/// Finalizes the partition write, closing the file and creating metadata.
+#[expect(clippy::too_many_arguments)]
+async fn finalize_partition_write(
+    event_time_range: Option<TimeRange>,
+    arrow_writer: AsyncArrowWriter<AsyncParquetWriter>,
+    file_schema: &Arc<Schema>,
+    file_path: String,
+    byte_counter: &Arc<AtomicI64>,
+    logger: &Arc<dyn Logger>,
+    desc: &str,
+    object_store: Arc<dyn object_store::ObjectStore>,
+) -> Result<PartitionWriteResult> {
+    if let Some(event_time_range) = event_time_range {
+        // Non-empty partition: close the file and get metadata
+        let close_result = arrow_writer.close().await;
+
+        match close_result {
+            Ok(thrift_file_meta) => {
+                debug!(
+                    "wrote nb_rows={} size={} path={file_path}",
+                    thrift_file_meta.num_rows,
+                    byte_counter.load(std::sync::atomic::Ordering::Relaxed)
+                );
+                let num_rows = thrift_file_meta.num_rows;
+                let file_metadata = Arc::new(
+                    to_parquet_meta_data(file_schema, thrift_file_meta)
+                        .with_context(|| "to_parquet_meta_data")?,
+                );
+                let file_size = byte_counter.load(std::sync::atomic::Ordering::Relaxed);
+                Ok(PartitionWriteResult {
+                    num_rows,
+                    file_metadata: Some(file_metadata),
+                    file_path: Some(file_path),
+                    file_size,
+                    event_time_range: Some(event_time_range),
+                })
+            }
+            Err(e) => {
+                // Close failed - try to delete any partial file that may have been written
+                warn!(
+                    "arrow_writer.close failed, attempting to delete partial file: {}",
+                    file_path
+                );
+                let path = object_store::path::Path::from(file_path.as_str());
+                if let Err(delete_err) = object_store.delete(&path).await {
+                    warn!(
+                        "failed to delete partial file {}: {}",
+                        file_path, delete_err
+                    );
+                }
+                Err(e).with_context(|| "arrow_writer.close")
+            }
+        }
+    } else {
+        // Empty partition: no data was written, but the arrow writer may have written
+        // a partial file header. Drop the writer and delete any partial file.
+        drop(arrow_writer);
+
+        logger
+            .write_log_entry(format!("creating empty partition record for {desc}"))
+            .await
+            .with_context(|| "writing log entry")?;
+
+        // Try to delete any partial file that may have been created
+        // (ignore errors - file may not exist if no header was written)
+        let path = object_store::path::Path::from(file_path.as_str());
+        let _ = object_store.delete(&path).await;
+
+        Ok(PartitionWriteResult {
+            num_rows: 0,
+            file_metadata: None,
+            file_path: None,
+            file_size: 0,
+            event_time_range: None,
+        })
+    }
 }
 
 /// Writes a partition to a Parquet file from a stream of `PartitionRowSet`s.
@@ -422,84 +569,36 @@ pub async fn write_partition_from_rows(
         insert_range.end.to_rfc3339()
     );
 
-    let mut min_event_time: Option<DateTime<Utc>> = None;
-    let mut max_event_time: Option<DateTime<Utc>> = None;
-    let mut write_progression = 0;
-    while let Some(row_set) = rb_stream.recv().await {
-        min_event_time = Some(
-            min_event_time
-                .unwrap_or(row_set.rows_time_range.begin)
-                .min(row_set.rows_time_range.begin),
-        );
-        max_event_time = Some(
-            max_event_time
-                .unwrap_or(row_set.rows_time_range.end)
-                .max(row_set.rows_time_range.end),
-        );
-        arrow_writer
-            .write(&row_set.rows)
-            .await
-            .with_context(|| "arrow_writer.write")?;
-        if arrow_writer.in_progress_size() > 100 * 1024 * 1024 {
-            arrow_writer
-                .flush()
-                .await
-                .with_context(|| "arrow_writer.flush")?;
-        }
+    // Write rows and track event time ranges
+    let event_time_range =
+        write_rows_and_track_times(&mut rb_stream, &mut arrow_writer, &logger, &desc).await?;
 
-        // we don't want to spam the connection with progress reports
-        // but we also don't want to trigger the idle timeout
-        let progression = arrow_writer.bytes_written() / (10 * 1024 * 1024);
-        if progression != write_progression {
-            write_progression = progression;
-            let written = arrow_writer.bytes_written();
-            logger
-                .write_log_entry(format!("{desc}: written {written} bytes"))
-                .await
-                .with_context(|| "writing log entry")?;
-        }
-    }
-
-    if min_event_time.is_none() || max_event_time.is_none() {
-        logger
-            .write_log_entry(format!(
-                "no data for {desc} partition, not writing the object"
-            ))
-            .await
-            .with_context(|| "writing log entry")?;
-        // should we check that there is no stale partition left behind?
-        return Ok(());
-    }
-    let thrift_file_meta = arrow_writer
-        .close()
-        .await
-        .with_context(|| "arrow_writer.close")?;
-    debug!(
-        "wrote nb_rows={} size={} path={file_path}",
-        thrift_file_meta.num_rows,
-        byte_counter.load(std::sync::atomic::Ordering::Relaxed)
-    );
-    let num_rows = thrift_file_meta.num_rows;
-    let file_metadata = Arc::new(
-        to_parquet_meta_data(&file_schema, thrift_file_meta)
-            .with_context(|| "to_parquet_meta_data")?,
-    );
+    // Finalize the write (close file or create empty metadata)
+    let result = finalize_partition_write(
+        event_time_range,
+        arrow_writer,
+        &file_schema,
+        file_path,
+        &byte_counter,
+        &logger,
+        &desc,
+        lake.blob_storage.inner(),
+    )
+    .await?;
 
     insert_partition(
         &lake,
         &Partition {
             view_metadata,
-            begin_insert_time: insert_range.begin,
-            end_insert_time: insert_range.end,
-            min_event_time: min_event_time.unwrap(),
-            max_event_time: max_event_time.unwrap(),
+            insert_time_range: insert_range,
+            event_time_range: result.event_time_range,
             updated: sqlx::types::chrono::Utc::now(),
-            file_path,
-            file_size: byte_counter.load(std::sync::atomic::Ordering::Relaxed),
+            file_path: result.file_path,
+            file_size: result.file_size,
             source_data_hash,
-            num_rows,
+            num_rows: result.num_rows,
         },
-        &file_metadata,
+        result.file_metadata.as_ref(),
         logger,
     )
     .await

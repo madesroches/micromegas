@@ -125,8 +125,8 @@ fn partition_set_stats(
         if p.view_metadata.file_schema_hash != latest_file_schema_hash {
             anyhow::bail!(
                 "incompatible file schema with [{},{}]",
-                p.begin_insert_time.to_rfc3339(),
-                p.end_insert_time.to_rfc3339()
+                p.begin_insert_time().to_rfc3339(),
+                p.end_insert_time().to_rfc3339()
             );
         }
     }
@@ -174,7 +174,7 @@ pub async fn create_merged_partition(
         ))
         .await
         .with_context(|| "write_log_entry")?;
-    filtered_partitions.sort_by_key(|p| p.begin_insert_time);
+    filtered_partitions.sort_by_key(|p| p.begin_insert_time());
     let mut merged_stream = view
         .merge_partitions(
             runtime.clone(),
