@@ -124,9 +124,13 @@ This plan implements **storing partition records for empty time ranges** (zero r
 
 | Location | Old Behavior | New Behavior | Status |
 |----------|--------------|--------------|--------|
-| `write_partition.rs:463-471` | Returns `Ok(())` silently, no record | Creates partition record with `event_time_range=None` | ✅ Resolved |
+| `write_partition.rs:497-505` | Returns `Ok(())` silently, no record | Creates partition record with `event_time_range=None` | ✅ Implemented |
 | `partitioned_execution_plan.rs:30-45` | Passes empty file_group to DataFusion | Filters empty partitions, returns EmptyExec | ✅ Addressed in Phase 4 |
-| `batch_update.rs:120-123` | Returns `Ok(())` when spec is empty | N/A - different issue (empty spec, not empty data) | ⚠️ Out of scope |
+| `batch_update.rs:121-123` | Returns `Ok(())` when spec is empty | Remove early return | ⏳ Phase 7 |
+| `block_partition_spec.rs:66-68` | Returns `Ok(())` when source_data is empty | Remove early return | ⏳ Phase 7 |
+| `metadata_partition_spec.rs:65-67` | Returns `Ok(())` when record_count == 0 | Remove early return | ⏳ Phase 7 |
+| `metadata_partition_spec.rs:83-85` | Returns `Ok(())` after fetching 0 rows | Remove early return | ⏳ Phase 7 |
+| `sql_partition_spec.rs:78-80` | Returns `Ok(())` when record_count == 0 | Remove early return | ⏳ Phase 7 |
 | `jit_partitions.rs:82-87` | Returns `Ok(None)` properly | No change needed | ✅ Already good |
 | `merge.rs:161-166` | Returns `Ok(())` when `< 2` partitions | Could add better logging | ⚠️ Nice to have |
 
@@ -162,8 +166,19 @@ if min_event_time.is_none() || max_event_time.is_none() {
 - Prevents redundant reprocessing of known-empty windows
 - **Enables safe merging**: Can confidently merge multiple partitions (e.g., 24 hourly → 1 daily) when some source partitions are empty, because you know they were processed and found empty rather than missing
 
+**Additional work needed (Phase 7):**
+
+The `write_partition.rs` implementation can create empty partition records (Phase 3 completed), but there are 5 early return statements that prevent this code from being reached:
+
+1. `batch_update.rs:121-123` - Checks `partition_spec.is_empty()` before calling `write()`
+2. `block_partition_spec.rs:66-68` - Returns early in `BlockPartitionSpec::write()`
+3. `metadata_partition_spec.rs:65-67` - Returns early in `MetadataPartitionSpec::write()`
+4. `metadata_partition_spec.rs:83-85` - Second check after fetching rows
+5. `sql_partition_spec.rs:78-80` - Returns early in `SqlPartitionSpec::write()`
+
+These need to be removed for empty partition creation to work.
+
 **Remaining silent operations** (not directly related to empty partitions):
-- `batch_update.rs:120-123` - Returns `Ok(())` when partition spec is empty (different issue - about empty source data specs)
 - `merge.rs:161-166` - Returns `Ok(())` when `< 2` partitions (merge operation skipped, could benefit from better logging)
 
 
@@ -519,6 +534,76 @@ if min_event_time.is_none() || max_event_time.is_none() {
 - `rust/analytics/tests/` - Add new test files
 - `rust/analytics/src/lakehouse/README.md` - Update docs (if exists)
 
+### Phase 7: Remove Early Returns That Prevent Empty Partition Creation
+**Objective**: Remove the 5 early return statements that prevent empty partition records from being created.
+
+**Background**: Phase 3 implemented empty partition creation in `write_partition.rs`, but early returns in calling code prevent this from being reached.
+
+1. **Remove early return in batch_update.rs:121-123**
+   ```rust
+   // OLD:
+   if partition_spec.is_empty() {
+       return Ok(());
+   }
+
+   // NEW: Remove this check entirely - let write() handle empty specs
+   // The write() method will create an empty partition record
+   ```
+
+2. **Remove early return in block_partition_spec.rs:66-68**
+   ```rust
+   // OLD:
+   if self.source_data.is_empty() {
+       return Ok(());
+   }
+
+   // NEW: Let write_partition_from_rows handle empty case
+   // It will create empty partition record with num_rows=0
+   ```
+
+3. **Remove early return in metadata_partition_spec.rs:65-67**
+   ```rust
+   // OLD:
+   if self.record_count == 0 {
+       return Ok(());
+   }
+
+   // NEW: Continue to write_partition_from_rows which creates empty partition
+   ```
+
+4. **Remove second early return in metadata_partition_spec.rs:83-85**
+   ```rust
+   // OLD:
+   if row_count == 0 {
+       return Ok(());
+   }
+
+   // NEW: Even with 0 rows, send to write_partition to create empty record
+   // Need to handle the case where we have no RecordBatch to send
+   ```
+
+5. **Remove early return in sql_partition_spec.rs:78-80**
+   ```rust
+   // OLD:
+   if self.record_count == 0 {
+       return Ok(());
+   }
+
+   // NEW: Continue to write_partition_from_rows which creates empty partition
+   ```
+
+**Files to modify**:
+- `rust/analytics/src/lakehouse/batch_update.rs`
+- `rust/analytics/src/lakehouse/block_partition_spec.rs`
+- `rust/analytics/src/lakehouse/metadata_partition_spec.rs` (2 locations)
+- `rust/analytics/src/lakehouse/sql_partition_spec.rs`
+
+**Testing requirements**:
+- Verify empty partition records are created when source data is empty
+- Test all three PartitionSpec implementations (Block, Metadata, SQL)
+- Verify write_partition_from_rows handles empty channel correctly
+- Check that empty partitions have correct fields (num_rows=0, file_path=None, event_time_range=None)
+
 ## Success Criteria
 
 - ✅ Partition struct supports Option<DateTime<Utc>> for min/max event times
@@ -578,25 +663,28 @@ if min_event_time.is_none() || max_event_time.is_none() {
 
 ## Timeline Estimate
 
-- **Phase 1** (Partition struct update): 1-2 hours (struct change + helper methods)
-- **Phase 2** (Database reads): 3-4 hours (update 3 read sites + SQL queries + testing)
-- **Phase 3** (Write operations): 2-3 hours (remove early return + update construction)
-- **Phase 4** (Execution plan + stats): 4-6 hours (filter logic + stats handling + merge)
-- **Phase 5** (Audit all construction sites): 3-5 hours (grep + fix all Partition{} sites)
-- **Phase 6** (Testing + documentation): 4-6 hours (comprehensive tests + docs)
+- **Phase 1** (Partition struct update): 1-2 hours (struct change + helper methods) ✅ DONE
+- **Phase 2** (Database reads): 3-4 hours (update 3 read sites + SQL queries + testing) ✅ DONE
+- **Phase 3** (Write operations): 2-3 hours (remove early return + update construction) ✅ DONE
+- **Phase 4** (Execution plan + stats): 4-6 hours (filter logic + stats handling + merge) ✅ DONE
+- **Phase 5** (Audit all construction sites): 3-5 hours (grep + fix all Partition{} sites) ✅ DONE
+- **Phase 6** (Testing + documentation): 4-6 hours (comprehensive tests + docs) ✅ DONE
+- **Phase 7** (Remove blocking early returns): 2-4 hours (5 locations + testing) ⚠️ **REQUIRED**
 
-**Total**: 17-26 hours
+**Original estimate**: 17-26 hours
+**With Phase 7**: 19-30 hours
 
-**Risk buffer**: Add 30-50% for unexpected issues = **22-39 hours total**
+**Risk buffer**: Add 30-50% for unexpected issues = **25-45 hours total**
 
 ## Next Steps
 
-1. **Review and approve plan** - Confirm this is the desired approach
-2. **Make design decisions** - Resolve the 4 decisions listed above
-3. **Phase 1: Update Partition struct** - Breaking change, start here
-4. **Comprehensive grep audit** - Find all `Partition {` construction sites
-5. **Incremental implementation** - One phase at a time with tests
-6. **Performance benchmarking** - Before/after comparison
+1. ~~Review and approve plan~~ ✅ Done
+2. ~~Make design decisions~~ ✅ Done
+3. ~~Phase 1: Update Partition struct~~ ✅ Done
+4. ~~Comprehensive grep audit~~ ✅ Done
+5. ~~Incremental implementation (Phases 2-6)~~ ✅ Done
+6. **Phase 7: Remove early returns** - In progress
+7. **Performance benchmarking** - After Phase 7 completion
 
 ## Important Notes
 
@@ -635,13 +723,14 @@ if min_event_time.is_none() || max_event_time.is_none() {
 
 ---
 
-## ✅ Implementation Status: COMPLETED
+## Implementation Status: In Progress
 
-**Date**: 2025-10-20
+**Date Started**: 2025-10-20
+**Last Updated**: 2025-10-21
 
 ### What Was Implemented
 
-All phases (1-6) have been successfully completed:
+Phases 1-6 have been successfully completed:
 
 1. ✅ **Phase 1**: Updated `Partition` struct in `partition.rs` with `Option<TimeRange>` for event times, added helper methods
 2. ✅ **Phase 2**: Updated all database read operations in `partition_cache.rs` to handle NULL values properly
@@ -684,6 +773,17 @@ Full workspace builds without errors in 59.71s.
 - Execution plan returns `EmptyExec` when all partitions are empty
 - Stats computation filters out empty partitions before calculating ranges
 - All helper methods provide backward compatibility for field access patterns
+
+### Outstanding Work
+
+**Phase 7 (Not Yet Implemented):**
+- Remove early return in `batch_update.rs:121-123`
+- Remove early return in `block_partition_spec.rs:66-68`
+- Remove early return in `metadata_partition_spec.rs:65-67`
+- Remove second early return in `metadata_partition_spec.rs:83-85`
+- Remove early return in `sql_partition_spec.rs:78-80`
+
+Without Phase 7, empty partition records are never created because the early returns prevent `write_partition.rs` from being called.
 
 ### Known Limitations
 
