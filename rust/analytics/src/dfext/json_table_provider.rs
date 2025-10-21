@@ -68,11 +68,11 @@ async fn verify_files_exist(
 ///
 /// #[tokio::main]
 /// async fn main() -> Result<()> {
+///     let ctx = SessionContext::new();
 ///     // Create table provider with pre-computed schema (done once at startup)
-///     let table = json_table_provider("file:///path/to/data.json").await?;
+///     let table = json_table_provider(&ctx, "file:///path/to/data.json").await?;
 ///
 ///     // Register in session context (fast, no schema inference)
-///     let ctx = SessionContext::new();
 ///     ctx.register_table("my_table", table)?;
 ///
 ///     Ok(())
@@ -84,8 +84,10 @@ async fn verify_files_exist(
 /// Schema inference happens once during this function call. The returned
 /// TableProvider caches the schema, making subsequent registrations in
 /// different SessionContexts very fast.
-pub async fn json_table_provider(url: &str) -> Result<Arc<dyn TableProvider>> {
-    let ctx = SessionContext::new();
+pub async fn json_table_provider(
+    ctx: &SessionContext,
+    url: &str,
+) -> Result<Arc<dyn TableProvider>> {
     let file_format = Arc::new(JsonFormat::default());
     let listing_options = ListingOptions::new(file_format);
     let table_url = ListingTableUrl::parse(url)?;

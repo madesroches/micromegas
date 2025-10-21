@@ -16,7 +16,8 @@ struct JsonTableConfigurator {
 
 impl JsonTableConfigurator {
     async fn new(json_url: &str) -> Result<Self> {
-        let table_provider = json_table_provider(json_url).await?;
+        let ctx = SessionContext::new();
+        let table_provider = json_table_provider(&ctx, json_url).await?;
         Ok(Self { table_provider })
     }
 }
@@ -53,11 +54,13 @@ async fn test_json_table_provider() -> Result<()> {
 
     let json_url = format!("file://{}", temp_file.path().display());
 
-    // Create table provider using the helper function
-    let table_provider = json_table_provider(&json_url).await?;
-
-    // Register it in a session context
+    // Create session context
     let ctx = SessionContext::new();
+
+    // Create table provider using the helper function
+    let table_provider = json_table_provider(&ctx, &json_url).await?;
+
+    // Register it in the session context
     ctx.register_table("people", table_provider)?;
 
     // Query the table
@@ -133,9 +136,12 @@ async fn test_multiple_json_tables() -> Result<()> {
     temp_file2.flush()?;
     let json_url2 = format!("file://{}", temp_file2.path().display());
 
+    // Create session context
+    let ctx = SessionContext::new();
+
     // Create table providers
-    let table1 = json_table_provider(&json_url1).await?;
-    let table2 = json_table_provider(&json_url2).await?;
+    let table1 = json_table_provider(&ctx, &json_url1).await?;
+    let table2 = json_table_provider(&ctx, &json_url2).await?;
 
     // Create a custom configurator that registers both tables
     #[derive(Debug)]
@@ -156,7 +162,6 @@ async fn test_multiple_json_tables() -> Result<()> {
     let configurator = MultiTableConfigurator { table1, table2 };
 
     // Apply configuration
-    let ctx = SessionContext::new();
     configurator.configure(&ctx).await?;
 
     // Join the two tables
@@ -181,7 +186,8 @@ async fn test_json_table_provider_nonexistent_file() -> Result<()> {
     let nonexistent_url = "file:///this/path/does/not/exist/data.json";
 
     // This should fail when the file doesn't exist
-    let result = json_table_provider(nonexistent_url).await;
+    let ctx = SessionContext::new();
+    let result = json_table_provider(&ctx, nonexistent_url).await;
 
     assert!(result.is_err(), "Expected error when file doesn't exist");
 
