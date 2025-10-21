@@ -269,15 +269,19 @@ async fn insert_partition(
         .await
         .with_context(|| "acquiring advisory lock")?;
 
+    // Decode source_data_hash back to the row count (it's stored as i64 little-endian bytes)
+    let source_row_count = partition_source_data::hash_to_object_count(&partition.source_data_hash)
+        .with_context(|| "decoding source_data_hash to row count")?;
+
     // LOG: Lock acquired, starting partition write
     logger
         .write_log_entry(format!(
-            "[PARTITION_WRITE_START] view={}/{} time_range=[{}, {}] source_hash={:?} - lock acquired",
+            "[PARTITION_WRITE_START] view={}/{} time_range=[{}, {}] source_rows={} - lock acquired",
             &partition.view_metadata.view_set_name,
             &partition.view_metadata.view_instance_id,
             partition.begin_insert_time(),
             partition.end_insert_time(),
-            partition.source_data_hash
+            source_row_count
         ))
         .await?;
 
@@ -293,10 +297,6 @@ async fn insert_partition(
     )
     .await
     .with_context(|| "retire_partitions")?;
-
-    // Decode source_data_hash back to the row count (it's stored as i64 little-endian bytes)
-    let source_row_count = partition_source_data::hash_to_object_count(&partition.source_data_hash)
-        .with_context(|| "decoding source_data_hash to row count")?;
 
     debug!(
         "[PARTITION_INSERT_ATTEMPT] view={}/{} time_range=[{}, {}] source_rows={} file_path={:?}",

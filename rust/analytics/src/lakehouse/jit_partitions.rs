@@ -522,9 +522,10 @@ pub async fn is_jit_partition_up_to_date(
         for (i, row) in rows.iter().enumerate() {
             let part_file_schema: Vec<u8> = row.try_get("file_schema_hash")?;
             let part_source_data: Vec<u8> = row.try_get("source_data_hash")?;
+            let source_row_count = hash_to_object_count(&part_source_data)?;
             debug!(
-                "{desc}: partition {}: file_schema_hash={:?}, source_data_hash={:?}",
-                i, part_file_schema, part_source_data
+                "{desc}: partition {}: file_schema_hash={:?}, source_rows={}",
+                i, part_file_schema, source_row_count
             );
         }
         info!("{desc}: found {} partitions", rows.len());
