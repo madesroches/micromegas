@@ -85,11 +85,13 @@ pub async fn retire_expired_partitions(
 
     let mut file_paths = Vec::new();
     for old_part in &old_partitions {
-        let file_path: String = old_part.try_get("file_path")?;
+        let file_path: Option<String> = old_part.try_get("file_path")?;
         let file_size: i64 = old_part.try_get("file_size")?;
-        info!("adding out of date partition {file_path} to temporary files to be deleted");
-        add_file_for_cleanup(&mut transaction, &file_path, file_size).await?;
-        file_paths.push(file_path);
+        if let Some(path) = file_path {
+            info!("adding out of date partition {path} to temporary files to be deleted");
+            add_file_for_cleanup(&mut transaction, &path, file_size).await?;
+            file_paths.push(path);
+        }
     }
 
     sqlx::query(
@@ -173,15 +175,17 @@ pub async fn retire_partitions(
 
     let mut file_paths = Vec::new();
     for old_part in &old_partitions {
-        let file_path: String = old_part.try_get("file_path")?;
+        let file_path: Option<String> = old_part.try_get("file_path")?;
         let file_size: i64 = old_part.try_get("file_size")?;
-        logger
-            .write_log_entry(format!(
-                "adding out of date partition {file_path} to temporary files to be deleted"
-            ))
-            .await?;
-        add_file_for_cleanup(transaction, &file_path, file_size).await?;
-        file_paths.push(file_path);
+        if let Some(path) = file_path {
+            logger
+                .write_log_entry(format!(
+                    "adding out of date partition {path} to temporary files to be deleted"
+                ))
+                .await?;
+            add_file_for_cleanup(transaction, &path, file_size).await?;
+            file_paths.push(path);
+        }
     }
 
     if begin_insert_time == end_insert_time {
