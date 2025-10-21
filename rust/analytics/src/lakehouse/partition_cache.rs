@@ -123,9 +123,14 @@ impl PartitionCache {
                 r.try_get::<DateTime<Utc>, _>("max_event_time").ok(),
             ) {
                 (Some(begin), Some(end)) => Some(TimeRange { begin, end }),
-                _ => None, // If either is NULL, treat as empty partition
+                (None, None) => None, // Empty partition - both NULL
+                (Some(_), None) | (None, Some(_)) => {
+                    anyhow::bail!(
+                        "Corrupt partition record: only one of min/max_event_time is NULL"
+                    );
+                }
             };
-            partitions.push(Partition {
+            let partition = Partition {
                 view_metadata,
                 insert_time_range,
                 event_time_range,
@@ -134,7 +139,11 @@ impl PartitionCache {
                 file_size: r.try_get("file_size")?,
                 source_data_hash: r.try_get("source_data_hash")?,
                 num_rows: r.try_get("num_rows")?,
-            });
+            };
+            partition
+                .validate()
+                .with_context(|| "validating partition from database")?;
+            partitions.push(partition);
         }
         Ok(Self {
             partitions,
@@ -193,9 +202,14 @@ impl PartitionCache {
                 r.try_get::<DateTime<Utc>, _>("max_event_time").ok(),
             ) {
                 (Some(begin), Some(end)) => Some(TimeRange { begin, end }),
-                _ => None, // If either is NULL, treat as empty partition
+                (None, None) => None, // Empty partition - both NULL
+                (Some(_), None) | (None, Some(_)) => {
+                    anyhow::bail!(
+                        "Corrupt partition record: only one of min/max_event_time is NULL"
+                    );
+                }
             };
-            partitions.push(Partition {
+            let partition = Partition {
                 view_metadata,
                 insert_time_range,
                 event_time_range,
@@ -204,7 +218,11 @@ impl PartitionCache {
                 file_size: r.try_get("file_size")?,
                 source_data_hash: r.try_get("source_data_hash")?,
                 num_rows: r.try_get("num_rows")?,
-            });
+            };
+            partition
+                .validate()
+                .with_context(|| "validating partition from database")?;
+            partitions.push(partition);
         }
         Ok(Self {
             partitions,
@@ -420,9 +438,14 @@ impl QueryPartitionProvider for LivePartitionProvider {
                 r.try_get::<DateTime<Utc>, _>("max_event_time").ok(),
             ) {
                 (Some(begin), Some(end)) => Some(TimeRange { begin, end }),
-                _ => None, // If either is NULL, treat as empty partition
+                (None, None) => None, // Empty partition - both NULL
+                (Some(_), None) | (None, Some(_)) => {
+                    anyhow::bail!(
+                        "Corrupt partition record: only one of min/max_event_time is NULL"
+                    );
+                }
             };
-            partitions.push(Partition {
+            let partition = Partition {
                 view_metadata,
                 insert_time_range,
                 event_time_range,
@@ -431,7 +454,11 @@ impl QueryPartitionProvider for LivePartitionProvider {
                 file_size: r.try_get("file_size")?,
                 source_data_hash: r.try_get("source_data_hash")?,
                 num_rows: r.try_get("num_rows")?,
-            });
+            };
+            partition
+                .validate()
+                .with_context(|| "validating partition from database")?;
+            partitions.push(partition);
         }
         Ok(partitions)
     }
