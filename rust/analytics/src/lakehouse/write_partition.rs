@@ -464,17 +464,45 @@ async fn finalize_partition_write(
     object_store: Arc<dyn object_store::ObjectStore>,
 ) -> Result<PartitionWriteResult> {
     if let Some(event_time_range) = event_time_range {
-        // Non-empty partition: close the file and get metadata
+        // Potentially non-empty partition: close the file and get metadata
         let close_result = arrow_writer.close().await;
 
         match close_result {
             Ok(thrift_file_meta) => {
+                let num_rows = thrift_file_meta.num_rows;
+
+                // Check if the file actually contains rows
+                // Even if we tracked event times, the file might be empty
+                if num_rows == 0 {
+                    // File contains no rows - treat as empty partition
+                    logger
+                        .write_log_entry(format!(
+                            "created 0-row file, treating as empty partition for {desc}"
+                        ))
+                        .await
+                        .with_context(|| "writing log entry")?;
+
+                    // Delete the empty file
+                    let path = object_store::path::Path::from(file_path.as_str());
+                    if let Err(delete_err) = object_store.delete(&path).await {
+                        warn!("failed to delete empty file {}: {}", file_path, delete_err);
+                    }
+
+                    return Ok(PartitionWriteResult {
+                        num_rows: 0,
+                        file_metadata: None,
+                        file_path: None,
+                        file_size: 0,
+                        event_time_range: None,
+                    });
+                }
+
+                // Non-empty file: keep it and return full metadata
                 debug!(
                     "wrote nb_rows={} size={} path={file_path}",
-                    thrift_file_meta.num_rows,
+                    num_rows,
                     byte_counter.load(std::sync::atomic::Ordering::Relaxed)
                 );
-                let num_rows = thrift_file_meta.num_rows;
                 let file_metadata = Arc::new(
                     to_parquet_meta_data(file_schema, thrift_file_meta)
                         .with_context(|| "to_parquet_meta_data")?,

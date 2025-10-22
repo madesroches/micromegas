@@ -48,13 +48,17 @@ impl ColumnReader for StringColumnReader {
         row: &PgRow,
         struct_builder: &mut StructBuilder,
     ) -> Result<()> {
-        let value: &str = row
+        let value: Option<&str> = row
             .try_get(self.column_ordinal)
             .with_context(|| "try_get failed on row")?;
         let field_builder = struct_builder
             .field_builder::<StringBuilder>(self.column_ordinal)
             .with_context(|| "getting field builder for string column")?;
-        field_builder.append_value(value);
+        if let Some(v) = value {
+            field_builder.append_value(v);
+        } else {
+            field_builder.append_null();
+        }
         Ok(())
     }
 
@@ -109,13 +113,17 @@ impl ColumnReader for Int64ColumnReader {
         row: &PgRow,
         struct_builder: &mut StructBuilder,
     ) -> Result<()> {
-        let value: i64 = row
+        let value: Option<i64> = row
             .try_get(self.column_ordinal)
             .with_context(|| "try_get failed on row")?;
         let field_builder = struct_builder
             .field_builder::<PrimitiveBuilder<Int64Type>>(self.column_ordinal)
             .with_context(|| "getting field builder for int64 column")?;
-        field_builder.append_value(value);
+        if let Some(v) = value {
+            field_builder.append_value(v);
+        } else {
+            field_builder.append_null();
+        }
         Ok(())
     }
     fn field(&self) -> Field {
@@ -135,13 +143,17 @@ impl ColumnReader for Int32ColumnReader {
         row: &PgRow,
         struct_builder: &mut StructBuilder,
     ) -> Result<()> {
-        let value: i32 = row
+        let value: Option<i32> = row
             .try_get(self.column_ordinal)
             .with_context(|| "try_get failed on row")?;
         let field_builder = struct_builder
             .field_builder::<PrimitiveBuilder<Int32Type>>(self.column_ordinal)
             .with_context(|| "getting field builder for int32 column")?;
-        field_builder.append_value(value);
+        if let Some(v) = value {
+            field_builder.append_value(v);
+        } else {
+            field_builder.append_null();
+        }
         Ok(())
     }
     fn field(&self) -> Field {
@@ -162,13 +174,17 @@ impl ColumnReader for TimestampColumnReader {
         struct_builder: &mut StructBuilder,
     ) -> Result<()> {
         use sqlx::types::chrono::{DateTime, Utc};
-        let value: DateTime<Utc> = row
+        let value: Option<DateTime<Utc>> = row
             .try_get(self.column_ordinal)
             .with_context(|| "try_get failed on row")?;
         let field_builder = struct_builder
             .field_builder::<PrimitiveBuilder<TimestampNanosecondType>>(self.column_ordinal)
             .with_context(|| "getting field builder for timestamp column")?;
-        field_builder.append_value(value.timestamp_nanos_opt().unwrap_or(0));
+        if let Some(timestamp) = value {
+            field_builder.append_value(timestamp.timestamp_nanos_opt().unwrap_or(0));
+        } else {
+            field_builder.append_null();
+        }
         Ok(())
     }
 
@@ -189,21 +205,25 @@ impl ColumnReader for StringArrayColumnReader {
         row: &PgRow,
         struct_builder: &mut StructBuilder,
     ) -> Result<()> {
-        let strings: Vec<String> = row
+        let strings: Option<Vec<String>> = row
             .try_get(self.column_ordinal)
             .with_context(|| "try_get failed on row")?;
         let list_builder = struct_builder
             .field_builder::<ListBuilder<Box<dyn ArrayBuilder>>>(self.column_ordinal)
             .with_context(|| "getting field builder for string array column")?;
-        let string_builder = list_builder
-            .values()
-            .as_any_mut()
-            .downcast_mut::<StringBuilder>()
-            .unwrap();
-        for v in strings {
-            string_builder.append_value(v);
+        if let Some(strings) = strings {
+            let string_builder = list_builder
+                .values()
+                .as_any_mut()
+                .downcast_mut::<StringBuilder>()
+                .unwrap();
+            for v in strings {
+                string_builder.append_value(v);
+            }
+            list_builder.append(true);
+        } else {
+            list_builder.append_null();
         }
-        list_builder.append(true);
         Ok(())
     }
 
@@ -224,13 +244,17 @@ impl ColumnReader for BlobColumnReader {
         row: &PgRow,
         struct_builder: &mut StructBuilder,
     ) -> Result<()> {
-        let value: Vec<u8> = row
+        let value: Option<Vec<u8>> = row
             .try_get(self.column_ordinal)
             .with_context(|| "try_get failed on row")?;
         let field_builder = struct_builder
             .field_builder::<BinaryBuilder>(self.column_ordinal)
             .with_context(|| "getting field builder for blob column")?;
-        field_builder.append_value(value);
+        if let Some(v) = value {
+            field_builder.append_value(v);
+        } else {
+            field_builder.append_null();
+        }
         Ok(())
     }
 
