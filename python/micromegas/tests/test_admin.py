@@ -291,5 +291,59 @@ def test_sql_injection_resilience():
     assert isinstance(result, pd.DataFrame)
 
 
+# Integration tests using real FlightSQL client
+
+
+def test_list_incompatible_partitions_integration():
+    """Integration test for list_incompatible_partitions using real FlightSQL client."""
+    from .test_utils import client
+
+    # Call with real client - should not fail
+    result = micromegas.admin.list_incompatible_partitions(client)
+
+    # Verify result is a DataFrame
+    assert isinstance(result, pd.DataFrame)
+
+    # Verify expected columns are present
+    expected_columns = [
+        "view_set_name",
+        "view_instance_id",
+        "incompatible_schema_hash",
+        "current_schema_hash",
+        "partition_count",
+        "total_size_bytes",
+        "file_paths",
+    ]
+    assert list(result.columns) == expected_columns
+
+    print(f"list_incompatible_partitions returned {len(result)} incompatible partition groups")
+    if len(result) > 0:
+        print(f"Sample data:\n{result.head()}")
+
+
+def test_list_incompatible_partitions_with_filter_integration():
+    """Integration test for list_incompatible_partitions with view_set_name filter."""
+    from .test_utils import client
+
+    # First get all incompatible partitions
+    all_results = micromegas.admin.list_incompatible_partitions(client)
+
+    if len(all_results) > 0:
+        # Test filtering by a specific view set
+        test_view_set = all_results["view_set_name"].iloc[0]
+        filtered_result = micromegas.admin.list_incompatible_partitions(client, test_view_set)
+
+        # Verify all results match the filter
+        assert isinstance(filtered_result, pd.DataFrame)
+        assert all(filtered_result["view_set_name"] == test_view_set)
+        print(f"Filtered to view_set '{test_view_set}': {len(filtered_result)} groups")
+    else:
+        # No incompatible partitions to filter - just verify it doesn't crash
+        result = micromegas.admin.list_incompatible_partitions(client, "nonexistent_view")
+        assert isinstance(result, pd.DataFrame)
+        assert len(result) == 0
+        print("No incompatible partitions found - filter test skipped")
+
+
 if __name__ == "__main__":
     pytest.main([__file__])
