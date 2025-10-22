@@ -69,22 +69,23 @@ impl TableProvider for ListPartitionsTableProvider {
             Field::new(
                 "min_event_time",
                 DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into())),
-                false,
+                true,
             ),
             Field::new(
                 "max_event_time",
                 DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into())),
-                false,
+                true,
             ),
             Field::new(
                 "updated",
                 DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into())),
                 false,
             ),
-            Field::new("file_path", DataType::Utf8, false),
+            Field::new("file_path", DataType::Utf8, true),
             Field::new("file_size", DataType::Int64, false),
             Field::new("file_schema_hash", DataType::Binary, false),
             Field::new("source_data_hash", DataType::Binary, false),
+            Field::new("num_rows", DataType::Int64, false),
         ]))
     }
 
@@ -106,10 +107,12 @@ impl TableProvider for ListPartitionsTableProvider {
 				    end_insert_time,
 				    min_event_time,
 				    max_event_time,
-				    updated, file_path,
+				    updated,
+				    file_path,
 				    file_size,
 				    file_schema_hash,
-				    source_data_hash
+				    source_data_hash,
+				    num_rows
 			 FROM lakehouse_partitions;",
         )
         .fetch_all(&self.lake.db_pool)
