@@ -17,7 +17,7 @@ echo "🔥 Generating flame graph data for process: $PROCESS_ID"
 
 # Generate flame graph data
 cd ../../python/micromegas
-poetry run python ../../ai_tasks/perf_report/async_events_analyzer.py "$PROCESS_ID" --flame-only
+poetry run python ../../tasks/perf_report/async_events_analyzer.py "$PROCESS_ID" --flame-only
 
 # Find the most recent .txt file
 FLAME_FILE=$(ls -t $FLAME_DIR/async_events_*.txt | head -1)
