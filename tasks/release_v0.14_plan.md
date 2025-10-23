@@ -13,26 +13,26 @@ This document tracks the release of version 0.14.0 of Micromegas, including both
 ## Pre-Release Checklist
 
 ### 1. Code Quality & Testing
-- [ ] Ensure main branch is up to date
-- [ ] Run full CI pipeline: `python3 build/rust_ci.py` (from `/rust` directory)
-- [ ] Ensure all tests pass: `cargo test` (from `/rust` directory)
-- [ ] Run Python tests: `pytest` (from `/python/micromegas` directory)
-- [ ] Code formatting check: `cargo fmt --check` (from `/rust` directory)
-- [ ] Python code formatting: `black .` (from `/python/micromegas` directory)
-- [ ] Lint check: `cargo clippy --workspace -- -D warnings` (from `/rust` directory)
+- [x] Ensure main branch is up to date
+- [x] Run full CI pipeline: `python3 build/rust_ci.py` (from `/rust` directory)
+- [x] Ensure all tests pass: `cargo test` (from `/rust` directory)
+- [x] Run Python tests: `pytest` (from `/python/micromegas` directory)
+- [x] Code formatting check: `cargo fmt --check` (from `/rust` directory)
+- [x] Python code formatting: `black .` (from `/python/micromegas` directory)
+- [x] Lint check: `cargo clippy --workspace -- -D warnings` (from `/rust` directory)
 
 ### 2. Version Verification
 Current versions should already be at 0.14.0:
-- [ ] Verify workspace version in `/rust/Cargo.toml`
-- [ ] Verify Python version in `/python/micromegas/pyproject.toml`
-- [ ] Check that all workspace dependencies reference 0.14.0
-- [ ] Verify web app version in `/analytics-web-app/package.json`
+- [x] Verify workspace version in `/rust/Cargo.toml`
+- [x] Verify Python version in `/python/micromegas/pyproject.toml`
+- [x] Check that all workspace dependencies reference 0.14.0
+- [x] Verify web app version in `/analytics-web-app/package.json`
 
 ### 3. Documentation Updates
-- [ ] **Update CHANGELOG.md** with v0.14.0 changes:
-  - [ ] Add new section for v0.14.0 with release date
-  - [ ] Move all items from `[Unreleased]` section to v0.14.0 section
-  - [ ] List all major features, bug fixes, and breaking changes since v0.13.0:
+- [x] **Update CHANGELOG.md** with v0.14.0 changes:
+  - [x] Add new section for v0.14.0 with release date
+  - [x] Move all items from `[Unreleased]` section to v0.14.0 section
+  - [x] List all major features, bug fixes, and breaking changes since v0.13.0:
     - Complete properties to dictionary-encoded JSONB migration
     - Properties writing optimization with ProcessMetadata and BinaryColumnAccessor
     - Dictionary<Int32, Binary> support in jsonb_format_json UDF
@@ -43,17 +43,12 @@ Current versions should already be at 0.14.0:
     - High-Frequency Observability presentation
     - Security updates (Vite vulnerability fixes)
     - Analytics Server Authentication Plan
-  - [ ] Include any performance improvements or API changes
-- [ ] **Update README files**:
-  - [ ] Verify installation instructions show correct versions
-  - [ ] Update any example code that references version numbers
-  - [ ] Check that feature lists are current
-- [ ] **Update documentation**:
-  - [ ] Search for any hardcoded version references in docs
-  - [ ] Update getting started guides if needed
+  - [x] Include any performance improvements or API changes
+- [x] **Update README files**: Skipped - not required for this release
+- [x] **Update documentation**: Skipped - not required for this release
 
 ### 4. Git Preparation
-- [ ] Tag the release: `git tag v0.14.0`
+- [x] Tag the release: `git tag v0.14.0`
 
 ## Release Process
 
@@ -64,30 +59,30 @@ python3 release.py
 ```
 
 **Crates to publish (in dependency order):**
-1. [ ] **micromegas-derive-transit** - Transit derive macros
-2. [ ] **micromegas-tracing-proc-macros** - Tracing procedural macros
-3. [ ] **micromegas-transit** - Data serialization framework
-4. [ ] **micromegas-tracing** - Core tracing library
-5. [ ] **micromegas-telemetry** - Telemetry data structures
-6. [ ] **micromegas-ingestion** - Data ingestion utilities
-7. [ ] **micromegas-telemetry-sink** - Telemetry data sinks
-8. [ ] **micromegas-perfetto** - Perfetto trace generation
-9. [ ] **micromegas-analytics** - Analytics and query engine
-10. [ ] **micromegas-proc-macros** - Top-level procedural macros
-11. [ ] **micromegas** - Main public crate
+1. [x] **micromegas-derive-transit** - Transit derive macros
+2. [x] **micromegas-tracing-proc-macros** - Tracing procedural macros
+3. [x] **micromegas-transit** - Data serialization framework
+4. [x] **micromegas-tracing** - Core tracing library
+5. [x] **micromegas-telemetry** - Telemetry data structures
+6. [x] **micromegas-ingestion** - Data ingestion utilities
+7. [x] **micromegas-telemetry-sink** - Telemetry data sinks
+8. [x] **micromegas-perfetto** - Perfetto trace generation
+9. [x] **micromegas-analytics** - Analytics and query engine
+10. [x] **micromegas-proc-macros** - Top-level procedural macros
+11. [x] **micromegas** - Main public crate
 
 **Verification:**
-- [ ] Verify all crates are published on crates.io at v0.14.0
+- [x] Verify all crates are published on crates.io at v0.14.0
 
 ### Phase 2: Python Library Release
 From `/python/micromegas` directory:
-- [ ] Build package: `poetry build`
-- [ ] Publish to PyPI: `poetry publish`
-- [ ] Verify package on PyPI: https://pypi.org/project/micromegas/
+- [x] Build package: `poetry build`
+- [x] Publish to PyPI: `poetry publish`
+- [x] Verify package on PyPI: https://pypi.org/project/micromegas/
 
 ### Phase 3: Git Release
-- [ ] Push release branch: `git push origin release`
-- [ ] Push tags: `git push origin v0.14.0`
+- [x] Push release branch: `git push origin release`
+- [x] Push tags: `git push origin v0.14.0`
 - [ ] **Create GitHub release**:
   - [ ] Use tag v0.14.0
   - [ ] Include comprehensive description with major features
@@ -202,17 +197,17 @@ The release script publishes crates in this specific order to respect dependenci
 ## Release Execution Log
 
 ### Pre-Release Phase
-- [ ] Started: [Date/Time]
-- [ ] Completed: [Date/Time]
+- [x] Started: October 23, 2025
+- [x] Completed: October 23, 2025
 
 ### Release Phase
-- [ ] Started: [Date/Time]
-- [ ] Completed: [Date/Time]
+- [x] Started: October 23, 2025
+- [ ] Completed: In progress (GitHub release pending)
 
 ### Post-Release Phase
-- [ ] Started: [Date/Time]
-- [ ] Completed: [Date/Time]
+- [ ] Started: Pending
+- [ ] Completed: Pending
 
 ---
 
-**Status**: Ready for execution
+**Status**: Release in progress - awaiting GitHub release creation and version bump to 0.15.0
