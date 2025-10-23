@@ -29,38 +29,38 @@ This directory contains tools and reports for analyzing async events performance
 Get a concise overview of performance bottlenecks:
 
 ```bash
-poetry run python ../../ai_tasks/perf_report/async_events_analyzer.py <process_id> --summary-only
+poetry run python ../../tasks/perf_report/async_events_analyzer.py <process_id> --summary-only
 ```
 
 **Example:**
 ```bash
-poetry run python ../../ai_tasks/perf_report/async_events_analyzer.py 1333745d-77e3-4399-b937-c2562d9f526f --summary-only
+poetry run python ../../tasks/perf_report/async_events_analyzer.py 1333745d-77e3-4399-b937-c2562d9f526f --summary-only
 ```
 
 #### Full Analysis
 Get detailed performance breakdown with all metrics including flame graphs:
 
 ```bash
-poetry run python ../../ai_tasks/perf_report/async_events_analyzer.py <process_id>
+poetry run python ../../tasks/perf_report/async_events_analyzer.py <process_id>
 ```
 
 **Example:**
 ```bash
-poetry run python ../../ai_tasks/perf_report/async_events_analyzer.py 1333745d-77e3-4399-b937-c2562d9f526f
+poetry run python ../../tasks/perf_report/async_events_analyzer.py 1333745d-77e3-4399-b937-c2562d9f526f
 ```
 
 #### Flame Graphs Only
 Generate only flame graph visualizations without console analysis:
 
 ```bash
-poetry run python ../../ai_tasks/perf_report/async_events_analyzer.py <process_id> --flame-only
+poetry run python ../../tasks/perf_report/async_events_analyzer.py <process_id> --flame-only
 ```
 
 #### Skip Flame Graphs
 Run analysis without generating flame graphs (faster):
 
 ```bash
-poetry run python ../../ai_tasks/perf_report/async_events_analyzer.py <process_id> --no-flame-graphs
+poetry run python ../../tasks/perf_report/async_events_analyzer.py <process_id> --no-flame-graphs
 ```
 
 ### Finding Process IDs
@@ -164,7 +164,7 @@ For traditional flame graph visualization, use the included helper script:
 **Manual generation:**
 ```bash
 # Generate data
-poetry run python ../../ai_tasks/perf_report/async_events_analyzer.py <process_id> --flame-only
+poetry run python ../../tasks/perf_report/async_events_analyzer.py <process_id> --flame-only
 
 # Create SVG
 cat flame_graphs/async_events_*.txt | flamegraph.pl --title "Async Events Performance" > flame.svg
@@ -201,7 +201,7 @@ Run the analyzer regularly to track performance trends:
 
 ```bash
 # Daily performance check
-poetry run python ../../ai_tasks/perf_report/async_events_analyzer.py $(latest_process_id) --summary-only >> daily_perf.log
+poetry run python ../../tasks/perf_report/async_events_analyzer.py $(latest_process_id) --summary-only >> daily_perf.log
 ```
 
 ### Integration with CI/CD
