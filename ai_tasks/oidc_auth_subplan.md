@@ -11,8 +11,8 @@ Implement OpenID Connect (OIDC) authentication for the flight-sql-srv analytics 
 ## Goals
 
 1. **Server-side:** Validate OIDC ID tokens from multiple identity providers
-2. **Python client:** Browser-based login with automatic token refresh
-3. **CLI:** Simple OIDC flow (browser popup on each invocation)
+2. **Python client:** Browser-based login with automatic token refresh and persistence
+3. **CLI:** Token persistence with browser login only when needed
 4. **Backward compatible:** Existing API key auth continues to work
 
 ## Current State
@@ -48,10 +48,11 @@ Implement OpenID Connect (OIDC) authentication for the flight-sql-srv analytics 
 6. Retry logic for 401 responses
 
 ### CLI
-1. Full OIDC flow on each invocation (no token storage)
-2. Browser popup for authentication
-3. Local callback server for OAuth redirect
-4. Simple user experience
+1. Token persistence to ~/.micromegas/tokens.json (same as Python client)
+2. Browser-based login on first use or when tokens expire
+3. Automatic token refresh using saved tokens
+4. `logout` command to clear saved tokens
+5. Simple user experience (browser only opens when needed)
 
 ## Architecture
 
@@ -554,40 +555,129 @@ client = FlightSQLClient(uri, auth_provider=auth)
 
 ### CLI Components
 
+The CLI tools use the existing `connection.connect()` pattern. Update `connection.py` to support OIDC:
+
 ```python
-# In CLI tool (e.g., micromegas/cli.py)
+# In cli/connection.py
 
-import click
-from micromegas.auth import OidcAuthProvider
-from micromegas.flightsql.client import FlightSQLClient
+import importlib
+import os
+from pathlib import Path
 
 
-@click.command()
-@click.option('--oidc-issuer', envvar='MICROMEGAS_OIDC_ISSUER',
-              help='OIDC issuer URL')
-@click.option('--oidc-client-id', envvar='MICROMEGAS_OIDC_CLIENT_ID',
-              help='OIDC client ID')
-@click.argument('sql')
-def query(sql, oidc_issuer, oidc_client_id):
-    """Execute SQL query with OIDC authentication."""
+def connect():
+    """Create FlightSQL client with authentication support.
 
-    # Simple flow: authenticate every time (no token storage in CLI)
+    Uses MICROMEGAS_PYTHON_MODULE_WRAPPER if set (corporate auth),
+    otherwise uses OIDC if configured, or falls back to simple connect().
+    """
+    # Corporate wrapper takes precedence
+    micromegas_module_name = os.environ.get("MICROMEGAS_PYTHON_MODULE_WRAPPER")
+    if micromegas_module_name:
+        micromegas_module = importlib.import_module(micromegas_module_name)
+        return micromegas_module.connect()
+
+    # Try OIDC authentication
+    oidc_issuer = os.environ.get("MICROMEGAS_OIDC_ISSUER")
+    oidc_client_id = os.environ.get("MICROMEGAS_OIDC_CLIENT_ID")
+
     if oidc_issuer and oidc_client_id:
-        print("Authenticating...")
-        auth = OidcAuthProvider.login(
-            issuer=oidc_issuer,
-            client_id=oidc_client_id,
-            token_file=None,  # Don't save tokens in CLI
-        )
-        client = FlightSQLClient(uri, auth_provider=auth)
-    else:
-        # No auth
-        client = FlightSQLClient(uri)
+        import micromegas
+        from micromegas.auth import OidcAuthProvider
+        from micromegas.flightsql.client import FlightSQLClient
 
-    # Execute query
-    df = client.query(sql)
-    print(df)
+        token_file = os.environ.get(
+            "MICROMEGAS_TOKEN_FILE",
+            str(Path.home() / ".micromegas" / "tokens.json")
+        )
+
+        # Try to load existing tokens
+        if Path(token_file).exists():
+            try:
+                auth = OidcAuthProvider.from_file(token_file)
+            except Exception as e:
+                # Token file corrupted or refresh failed - re-authenticate
+                print(f"Token refresh failed: {e}")
+                print("Re-authenticating...")
+                auth = OidcAuthProvider.login(
+                    issuer=oidc_issuer,
+                    client_id=oidc_client_id,
+                    token_file=token_file,
+                )
+        else:
+            # First time - login with browser
+            print("No saved tokens found. Opening browser for authentication...")
+            auth = OidcAuthProvider.login(
+                issuer=oidc_issuer,
+                client_id=oidc_client_id,
+                token_file=token_file,
+            )
+
+        uri = os.environ.get("MICROMEGAS_ANALYTICS_URI", "grpc://localhost:50051")
+        return FlightSQLClient(uri, auth_provider=auth)
+
+    # Fall back to simple connect (no auth)
+    import micromegas
+    return micromegas.connect()
 ```
+
+**Optional: Add logout tool**
+
+```python
+# In cli/logout.py
+
+import argparse
+import os
+from pathlib import Path
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        prog="micromegas_logout",
+        description="Clear saved OIDC authentication tokens",
+    )
+    args = parser.parse_args()
+
+    token_file = os.environ.get(
+        "MICROMEGAS_TOKEN_FILE",
+        str(Path.home() / ".micromegas" / "tokens.json")
+    )
+
+    if Path(token_file).exists():
+        Path(token_file).unlink()
+        print(f"Tokens cleared from {token_file}")
+    else:
+        print("No saved tokens found")
+
+
+if __name__ == "__main__":
+    main()
+```
+
+**CLI User Experience:**
+
+```bash
+# Set OIDC config
+export MICROMEGAS_OIDC_ISSUER="https://accounts.google.com"
+export MICROMEGAS_OIDC_CLIENT_ID="your-app-id.apps.googleusercontent.com"
+
+# First time - opens browser for authentication
+$ python -m micromegas.cli.query_processes
+No saved tokens found. Opening browser for authentication...
+# Browser opens, user authenticates
+# Tokens saved to ~/.micromegas/tokens.json
+# Query executes
+
+# Subsequent calls - uses saved tokens (no browser)
+$ python -m micromegas.cli.query_process_log <process-id>
+# Query executes immediately (tokens auto-refresh if needed)
+
+# Clear saved tokens (if logout.py is added)
+$ python -m micromegas.cli.logout
+Tokens cleared from ~/.micromegas/tokens.json
+```
+
+**No changes needed to existing CLI tools** - they already use `connection.connect()`, so OIDC support works automatically.
 
 ## Implementation Plan
 
@@ -683,16 +773,33 @@ def query(sql, oidc_issuer, oidc_client_id):
 - ✅ Integration tests pass
 
 ### Phase 3: CLI OIDC Support
-**Goal:** CLI tools support OIDC authentication
+**Goal:** CLI tools support OIDC authentication with token persistence
 
-1. Add OIDC options to CLI commands
-2. Implement simple flow (browser on each invocation)
+1. Update `cli/connection.py` to support OIDC:
+   - Check environment variables:
+     - `MICROMEGAS_OIDC_ISSUER`
+     - `MICROMEGAS_OIDC_CLIENT_ID`
+     - `MICROMEGAS_TOKEN_FILE` (optional, default: ~/.micromegas/tokens.json)
+   - Maintain backward compatibility with `MICROMEGAS_PYTHON_MODULE_WRAPPER`
+   - Implement token persistence flow:
+     - Check for existing token file
+     - Load and use saved tokens if available
+     - Browser login only on first use or token expiration
+     - Auto-refresh using saved tokens
+
+2. (Optional) Add `cli/logout.py` to clear saved tokens
+
 3. Add examples to documentation
 
+4. Test with existing CLI tools (query_processes, query_process_log, etc.)
+
 **Acceptance Criteria:**
-- ✅ CLI opens browser for auth
-- ✅ Query executes after successful auth
-- ✅ No token storage in CLI
+- ✅ First invocation opens browser and saves tokens
+- ✅ Subsequent invocations use saved tokens (no browser)
+- ✅ Tokens auto-refresh transparently
+- ✅ All existing CLI tools work without modification
+- ✅ Backward compatible with MICROMEGAS_PYTHON_MODULE_WRAPPER
+- ✅ Shares same token file format as Python client
 
 ### Phase 4: Documentation and Examples
 **Goal:** Users can easily set up OIDC authentication
@@ -776,8 +883,18 @@ client = FlightSQLClient(
 export MICROMEGAS_OIDC_ISSUER="https://accounts.google.com"
 export MICROMEGAS_OIDC_CLIENT_ID="your-app-id.apps.googleusercontent.com"
 
-# Run query (opens browser for auth)
-micromegas query "SELECT * FROM log_entries LIMIT 10"
+# First time - opens browser, saves tokens to ~/.micromegas/tokens.json
+python -m micromegas.cli.query_processes
+
+# Subsequent calls - uses saved tokens (no browser)
+python -m micromegas.cli.query_process_log <process-id>
+
+# Use custom token file location
+export MICROMEGAS_TOKEN_FILE="~/.config/micromegas/tokens.json"
+python -m micromegas.cli.query_processes
+
+# Clear saved tokens (if logout.py is added)
+python -m micromegas.cli.logout
 ```
 
 ## Testing Strategy
@@ -857,8 +974,9 @@ micromegas query "SELECT * FROM log_entries LIMIT 10"
 4. ✅ Cache hit rate >95% for repeated requests
 5. ✅ Support Google, Azure AD, and Okta providers
 6. ✅ Python client auto-refresh works for weeks without re-auth
-7. ✅ Zero token validation failures due to race conditions
-8. ✅ Complete documentation and examples
+7. ✅ CLI uses saved tokens - browser only opens on first use or expiration
+8. ✅ Zero token validation failures due to race conditions
+9. ✅ Complete documentation and examples
 
 ## Dependencies
 

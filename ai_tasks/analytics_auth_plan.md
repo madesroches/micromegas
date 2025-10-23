@@ -613,6 +613,53 @@ Note: `chrono` is likely already in use for timestamp handling throughout the co
    - Configure `MICROMEGAS_OIDC_ISSUERS`
    - Users login via standard OIDC flow
 
+### For Corporate Auth Wrapper Users (MICROMEGAS_PYTHON_MODULE_WRAPPER)
+
+**Current State:**
+- Python CLI uses `MICROMEGAS_PYTHON_MODULE_WRAPPER` environment variable
+- Points to custom Python module that wraps authentication
+- Each organization implements their own auth wrapper
+- Wrapper provides a `connect()` function that returns authenticated FlightSQL client
+
+**Migration Path:**
+Once OIDC support is implemented, corporate environments can migrate to standard OIDC:
+
+1. **Short term (backward compatible):**
+   - OIDC support added to `cli/connection.py`
+   - `MICROMEGAS_PYTHON_MODULE_WRAPPER` continues to work (takes precedence)
+   - Organizations can choose when to migrate
+
+2. **Migration process:**
+   ```python
+   # Old: Custom wrapper module
+   # my_company_auth.py
+   def connect():
+       # Custom auth logic...
+       return FlightSQLClient(uri, headers={"authorization": f"Bearer {token}"})
+
+   # New: Use standard OIDC
+   # No custom module needed - just set env vars:
+   export MICROMEGAS_OIDC_ISSUER="https://login.company.com/oauth2"
+   export MICROMEGAS_OIDC_CLIENT_ID="micromegas-analytics"
+   # CLI automatically uses OIDC with token persistence
+   ```
+
+3. **Benefits of migrating to OIDC:**
+   - No custom Python module to maintain
+   - Standard OIDC flow (works with any identity provider)
+   - Automatic token refresh built-in
+   - Token persistence across CLI invocations
+   - Same auth mechanism for CLI, Python client, and services
+
+4. **Deprecation timeline:**
+   - Phase 1: OIDC support added (wrapper still works)
+   - Phase 2: Deprecation warning when wrapper is used
+   - Phase 3: Documentation guides organizations to migrate
+   - Phase 4 (eventual): Remove wrapper support after sufficient migration period
+
+**Corporate Auth Wrapper → OIDC Migration:**
+Organizations should plan to migrate custom auth wrappers to standard OIDC flows, reducing maintenance burden and leveraging standard OAuth2/OIDC infrastructure.
+
 ## Impacted Components
 
 ### Grafana Plugin
