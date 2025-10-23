@@ -83,38 +83,38 @@ From `/python/micromegas` directory:
 ### Phase 3: Git Release
 - [x] Push release branch: `git push origin release`
 - [x] Push tags: `git push origin v0.14.0`
-- [ ] **Create GitHub release**:
-  - [ ] Use tag v0.14.0
-  - [ ] Include comprehensive description with major features
-  - [ ] List all published crates with links
-  - [ ] Add installation instructions
-  - [ ] Mark as latest release
+- [x] **Create GitHub release**:
+  - [x] Use tag v0.14.0
+  - [x] Include comprehensive description with major features
+  - [x] List all published crates with links
+  - [x] Add installation instructions
+  - [x] Mark as latest release
 
 ### Phase 4: Post-Release Version Bump to 0.15.0
 Update all versions for next development cycle:
 
 #### Rust Workspace Files:
-- [ ] **`/rust/Cargo.toml`**:
-  - [ ] Update `[workspace.package].version = "0.15.0"`
-  - [ ] Update all workspace dependencies versions to `"0.15.0"`
+- [x] **`/rust/Cargo.toml`**:
+  - [x] Update `[workspace.package].version = "0.15.0"`
+  - [x] Update all workspace dependencies versions to `"0.15.0"`
 
 #### Individual Crate Files:
-- [ ] **`/rust/tracing/Cargo.toml`**: Update proc-macros dependency to `^0.15`
-- [ ] **`/rust/transit/Cargo.toml`**: Update derive-transit dependency to `^0.15`
+- [x] **`/rust/tracing/Cargo.toml`**: Update proc-macros dependency to `^0.15`
+- [x] **`/rust/transit/Cargo.toml`**: Update derive-transit dependency to `^0.15`
 
 #### Python Package:
-- [ ] **`/python/micromegas/pyproject.toml`**: Update to `version = "0.15.0"`
+- [x] **`/python/micromegas/pyproject.toml`**: Update to `version = "0.15.0"`
 
 #### Web Application:
-- [ ] **`/analytics-web-app/package.json`**: Update to `"version": "0.15.0"`
+- [x] **`/analytics-web-app/package.json`**: Update to `"version": "0.15.0"`
 
 #### Lock Files:
-- [ ] Regenerate Rust lock file: `cargo update` (from `/rust` directory)
-- [ ] Regenerate Node.js lock file: `npm install` (from `/analytics-web-app` directory)
+- [x] Regenerate Rust lock file: `cargo update` (from `/rust` directory)
+- [x] Regenerate Node.js lock file: `npm install` (from `/analytics-web-app` directory)
 
 #### Commit Version Bump:
-- [ ] Version bump committed: `git commit -m "Bump version to 0.15.0 for next development cycle"`
-- [ ] Push to release branch if needed
+- [x] Version bump committed: `git commit -m "Bump version to 0.15.0 for next development cycle"`
+- [x] Push to release branch if needed
 
 ## Rollback Plan
 If issues are discovered after release:
@@ -202,12 +202,16 @@ The release script publishes crates in this specific order to respect dependenci
 
 ### Release Phase
 - [x] Started: October 23, 2025
-- [ ] Completed: In progress (GitHub release pending)
+- [x] Completed: October 23, 2025
 
 ### Post-Release Phase
-- [ ] Started: Pending
-- [ ] Completed: Pending
+- [x] Started: October 23, 2025
+- [x] Completed: October 23, 2025
 
 ---
 
-**Status**: Release in progress - awaiting GitHub release creation and version bump to 0.15.0
+**Status**: ✅ Release v0.14.0 completed successfully
+- All 11 Rust crates published to crates.io
+- Python package published to PyPI
+- GitHub release created: https://github.com/madesroches/micromegas/releases/tag/v0.14.0
+- Versions bumped to 0.15.0 for next development cycle
