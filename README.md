@@ -70,15 +70,23 @@ To get started with Micromegas, please refer to the [Getting Started](https://ma
 
 ## Current Status & Roadmap
 
-We're currently working on **dictionary encoding** for properties to improve compression and query performance, alongside **aggregate log views** for comprehensive monitoring capabilities.
+We're currently working on **analytics server authentication** to secure FlightSQL access with OIDC and service accounts.
 
-### September 2025
-* **Dictionary Encoding Support**: Implemented properties UDFs (`properties_to_dict`, `properties_to_array`, `properties_length`) for enhanced data compression and query performance (#506, #507, #508)
-* **Performance Optimizations**: Optimized lakehouse partition queries by removing unnecessary file_metadata fetches (#499)
-* **Log Aggregation**: Added `log_stats` SQL view for aggregating log events by severity and service (#495, #505)
-* **Documentation**: 
-  - Comprehensive Python API documentation with advanced usage guide (#491)
-  - Unreal Engine instrumentation documentation (#492)
+### October 2025 - v0.14.0
+* **Performance & Storage Optimizations**:
+  - Complete properties to dictionary-encoded JSONB migration (#521, #522, #524)
+  - Add Dictionary<Int32, Binary> support to jsonb_format_json UDF (#536)
+* **Analytics & Query Features**:
+  - SessionConfigurator for custom table registration (#531)
+  - Support for empty lakehouse partitions (#537)
+  - File existence validation in json_table_provider (#532)
+* **Bug Fixes & Reliability**:
+  - Fix NULL value handling in SQL-Arrow bridge with integration tests (#541)
+  - Fix null decoding errors in list_partitions and retire_partitions (#539, #540)
+* **Documentation**:
+  - [High-Frequency Observability presentation](https://madesroches.github.io/micromegas/high-frequency-observability/) (#527, #528)
+* **Security**:
+  - Update Vite to 7.1.11 to fix security vulnerabilities (#542)
 
 For a detailed history of changes, please see the [CHANGELOG.md](./CHANGELOG.md) file.
 
