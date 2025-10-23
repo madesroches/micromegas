@@ -316,7 +316,9 @@ def test_list_incompatible_partitions_integration():
     ]
     assert list(result.columns) == expected_columns
 
-    print(f"list_incompatible_partitions returned {len(result)} incompatible partition groups")
+    print(
+        f"list_incompatible_partitions returned {len(result)} incompatible partition groups"
+    )
     if len(result) > 0:
         print(f"Sample data:\n{result.head()}")
 
@@ -331,7 +333,9 @@ def test_list_incompatible_partitions_with_filter_integration():
     if len(all_results) > 0:
         # Test filtering by a specific view set
         test_view_set = all_results["view_set_name"].iloc[0]
-        filtered_result = micromegas.admin.list_incompatible_partitions(client, test_view_set)
+        filtered_result = micromegas.admin.list_incompatible_partitions(
+            client, test_view_set
+        )
 
         # Verify all results match the filter
         assert isinstance(filtered_result, pd.DataFrame)
@@ -339,7 +343,9 @@ def test_list_incompatible_partitions_with_filter_integration():
         print(f"Filtered to view_set '{test_view_set}': {len(filtered_result)} groups")
     else:
         # No incompatible partitions to filter - just verify it doesn't crash
-        result = micromegas.admin.list_incompatible_partitions(client, "nonexistent_view")
+        result = micromegas.admin.list_incompatible_partitions(
+            client, "nonexistent_view"
+        )
         assert isinstance(result, pd.DataFrame)
         assert len(result) == 0
         print("No incompatible partitions found - filter test skipped")

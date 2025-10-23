@@ -38,7 +38,9 @@ def test_blocks_properties_schema():
         if processes_type and "Dictionary" in str(processes_type):
             print("✓ Processes properties are dictionary-encoded")
         else:
-            print(f"⚠ Expected dictionary encoding for processes, got: {processes_type}")
+            print(
+                f"⚠ Expected dictionary encoding for processes, got: {processes_type}"
+            )
     else:
         print("⚠ No blocks with properties found")
 
