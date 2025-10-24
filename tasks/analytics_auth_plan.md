@@ -4,9 +4,25 @@
 
 Enhance the flight-sql-srv authentication to support both human users (via OIDC) and long-running services (via self-signed JWTs), using the `openidconnect` and `jsonwebtoken` crates.
 
-## Current State
+## Current State (Updated 2025-01-24)
 
-### Existing Implementation
+### Implementation Status
+
+**✅ Phase 1 Complete:** Auth crate created with clean architecture
+- Separate `micromegas-auth` crate at `rust/auth/`
+- AuthProvider trait, AuthContext struct, AuthType enum
+- ApiKeyAuthProvider (current API key system)
+- OidcAuthProvider (OIDC validation with JWKS caching)
+- Unit tests in `tests/` directory
+- All 10 tests + 2 doc tests passing
+
+**⏳ In Progress:** Integration with flight-sql-srv
+- Need to wire up AuthProvider in tonic_auth_interceptor.rs
+- Need to add flight-sql-srv configuration and initialization
+
+**🔜 Next:** Phase 2 (Service Accounts) and Python client/CLI support
+
+### Existing Implementation (Legacy)
 - Simple bearer token authentication via `check_auth` (tonic_auth_interceptor.rs:10)
 - API keys stored in `KeyRing` HashMap (key_ring.rs:51)
 - Keys loaded from `MICROMEGAS_API_KEYS` environment variable (JSON array format)
@@ -14,12 +30,12 @@ Enhance the flight-sql-srv authentication to support both human users (via OIDC)
 - No identity information beyond key name mapping
 - No token expiration or rotation
 
-### Limitations
-- No support for federated identity providers (Google, Azure AD, Okta, etc.)
-- Manual API key distribution and rotation
-- No fine-grained access control or user context
-- No audit trail of user identity
-- Requires out-of-band key management for services
+### Limitations (Being Addressed)
+- ✅ No support for federated identity providers → OIDC provider implemented
+- ⏳ Manual API key distribution and rotation → Service accounts planned (Phase 2)
+- ✅ No fine-grained access control → Admin RBAC implemented (is_admin flag)
+- ✅ No audit trail of user identity → AuthContext captures identity
+- ⏳ Requires out-of-band key management → Service account SQL UDFs planned
 
 ## Requirements
 
@@ -380,14 +396,16 @@ Note: `chrono` is likely already in use for timestamp handling throughout the co
 
 ## Implementation Phases
 
-### Phase 1: Refactor Current Auth
-- Extract AuthProvider trait
-- Create ApiKeyAuthProvider wrapping current KeyRing
-- Add AuthContext struct
-- Update check_auth to use AuthProvider
-- Add unified JWT validation utilities
-- Add unit tests for API key mode
-- **Goal**: No behavior change, cleaner architecture
+### Phase 1: Refactor Current Auth ✅ COMPLETED
+- ✅ Extract AuthProvider trait
+- ✅ Create ApiKeyAuthProvider wrapping current KeyRing
+- ✅ Add AuthContext struct
+- ✅ Create separate `micromegas-auth` crate (`rust/auth/`)
+- ✅ Add unified JWT validation utilities
+- ✅ Add unit tests for API key mode
+- ✅ Code style improvements (module-level imports, documented structs)
+- ✅ Tests moved to `tests/` directory (separate from source)
+- **Status**: Auth crate complete, needs integration with flight-sql-srv
 
 ### Phase 2: Add Service Account Support
 - Create service_accounts database table (with created_by field)
@@ -412,12 +430,14 @@ Note: `chrono` is likely already in use for timestamp handling throughout the co
 - **Goal**: Support service authentication + admin management via SQL
 
 ### Phase 3: Add OIDC Support
-**Server-side:**
-- Implement OidcAuthProvider using openidconnect crate
-- Add JWKS fetching and caching from remote endpoints
-- Add multi-issuer support (Google, Azure AD, Okta)
-- Add OIDC configuration parsing
-- Add integration tests with mock OIDC provider
+**Server-side:** ✅ COMPLETED
+- ✅ Implement OidcAuthProvider using openidconnect crate
+- ✅ Add JWKS fetching and caching from remote endpoints (with SSRF protection)
+- ✅ Add multi-issuer support (Google, Azure AD, Okta)
+- ✅ Add OIDC configuration parsing (from MICROMEGAS_OIDC_CONFIG)
+- ✅ Add admin users support (MICROMEGAS_ADMINS)
+- ⏳ Add wiremock tests with mock OIDC provider (future improvement)
+- ⏳ Wire up with flight-sql-srv
 
 **Python client:**
 - Implement OidcCredentials class

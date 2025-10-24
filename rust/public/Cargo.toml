@@ -12,6 +12,7 @@ authors.workspace = true
 
 [dependencies]
 micromegas-analytics.workspace = true
+micromegas-auth.workspace = true
 micromegas-ingestion.workspace = true
 micromegas-proc-macros.workspace = true
 micromegas-telemetry-sink.workspace = true
@@ -40,3 +41,9 @@ tokio.workspace = true
 tonic.workspace = true
 tower.workspace = true
 uuid.workspace = true
+
+[dev-dependencies]
+wiremock = "0.6"
+
+# Note: jsonwebtoken and rsa are also used in production code for OIDC token validation
+# They're in regular dependencies, not just dev-dependencies
