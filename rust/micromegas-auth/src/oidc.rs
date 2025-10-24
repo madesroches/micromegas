@@ -15,16 +15,15 @@ async fn fetch_jwks(issuer_url: &IssuerUrl) -> Result<Arc<CoreJsonWebKeySet>> {
     let http_client = reqwest::ClientBuilder::new()
         .redirect(reqwest::redirect::Policy::none())
         .build()
-        .map_err(|e| anyhow!("Failed to create HTTP client: {}", e))?;
+        .map_err(|e| anyhow!("Failed to create HTTP client: {e:?}"))?;
 
     // Use openidconnect's built-in OIDC discovery
     let metadata = CoreProviderMetadata::discover_async(issuer_url.clone(), &http_client)
         .await
         .map_err(|e| {
             anyhow!(
-                "Failed to discover OIDC metadata from {}: {}",
-                issuer_url,
-                e
+                "Failed to discover OIDC metadata from {}: {e:?}",
+                issuer_url
             )
         })?;
 
@@ -34,10 +33,10 @@ async fn fetch_jwks(issuer_url: &IssuerUrl) -> Result<Arc<CoreJsonWebKeySet>> {
         .get(jwks_uri.url().as_str())
         .send()
         .await
-        .map_err(|e| anyhow!("Failed to fetch JWKS from {}: {}", jwks_uri, e))?
+        .map_err(|e| anyhow!("Failed to fetch JWKS from {}: {e:?}", jwks_uri))?
         .json()
         .await
-        .map_err(|e| anyhow!("Failed to parse JWKS: {}", e))?;
+        .map_err(|e| anyhow!("Failed to parse JWKS: {e:?}"))?;
 
     Ok(Arc::new(jwks))
 }
@@ -69,7 +68,7 @@ impl JwksCache {
                 async move { fetch_jwks(&issuer_url).await },
             )
             .await
-            .map_err(|e| anyhow!("Failed to fetch JWKS: {}", e))
+            .map_err(|e| anyhow!("Failed to fetch JWKS: {e:?}"))
     }
 }
 
@@ -116,7 +115,7 @@ impl OidcConfig {
         let json = std::env::var("MICROMEGAS_OIDC_CONFIG")
             .map_err(|_| anyhow!("MICROMEGAS_OIDC_CONFIG environment variable not set"))?;
         let config: OidcConfig = serde_json::from_str(&json)
-            .map_err(|e| anyhow!("Failed to parse MICROMEGAS_OIDC_CONFIG: {}", e))?;
+            .map_err(|e| anyhow!("Failed to parse MICROMEGAS_OIDC_CONFIG: {e:?}"))?;
         Ok(config)
     }
 }
@@ -131,7 +130,7 @@ struct OidcIssuerClient {
 impl OidcIssuerClient {
     fn new(issuer: String, audience: String, jwks_ttl: Duration) -> Result<Self> {
         let issuer_url = IssuerUrl::new(issuer.clone())
-            .map_err(|e| anyhow!("Invalid issuer URL '{}': {}", issuer, e))?;
+            .map_err(|e| anyhow!("Invalid issuer URL '{}': {e:?}", issuer))?;
 
         Ok(Self {
             issuer,
@@ -155,7 +154,7 @@ fn jwk_to_decoding_key(
 ) -> Result<jsonwebtoken::DecodingKey> {
     // Serialize the JWK to JSON to extract parameters
     let jwk_json =
-        serde_json::to_value(jwk).map_err(|e| anyhow!("Failed to serialize JWK: {}", e))?;
+        serde_json::to_value(jwk).map_err(|e| anyhow!("Failed to serialize JWK: {e:?}"))?;
 
     // Extract n and e parameters
     let n = jwk_json
@@ -171,10 +170,10 @@ fn jwk_to_decoding_key(
     use base64::Engine;
     let n_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(n.as_bytes())
-        .map_err(|e| anyhow!("Failed to decode 'n': {}", e))?;
+        .map_err(|e| anyhow!("Failed to decode 'n': {e:?}"))?;
     let e_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(e.as_bytes())
-        .map_err(|e| anyhow!("Failed to decode 'e': {}", e))?;
+        .map_err(|e| anyhow!("Failed to decode 'e': {e:?}"))?;
 
     // Create RSA public key
     use rsa::pkcs1::EncodeRsaPublicKey;
@@ -184,16 +183,16 @@ fn jwk_to_decoding_key(
     let e_bigint = BigUint::from_bytes_be(&e_bytes);
 
     let public_key = RsaPublicKey::new(n_bigint, e_bigint)
-        .map_err(|e| anyhow!("Failed to create RSA public key: {}", e))?;
+        .map_err(|e| anyhow!("Failed to create RSA public key: {e:?}"))?;
 
     // Convert to PEM format
     let pem = public_key
         .to_pkcs1_pem(rsa::pkcs1::LineEnding::LF)
-        .map_err(|e| anyhow!("Failed to encode public key as PEM: {}", e))?;
+        .map_err(|e| anyhow!("Failed to encode public key as PEM: {e:?}"))?;
 
     // Create DecodingKey
     jsonwebtoken::DecodingKey::from_rsa_pem(pem.as_bytes())
-        .map_err(|e| anyhow!("Failed to create decoding key: {}", e))
+        .map_err(|e| anyhow!("Failed to create decoding key: {e:?}"))
 }
 
 /// OIDC authentication provider
