@@ -1,5 +1,5 @@
 use chrono::{Duration, Utc};
-use jsonwebtoken::{encode, decode, Header, Algorithm, EncodingKey, DecodingKey, Validation};
+use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use rsa::RsaPrivateKey;
 use rsa::pkcs1::{EncodeRsaPrivateKey, EncodeRsaPublicKey};
 use serde::{Deserialize, Serialize};
@@ -33,8 +33,8 @@ impl TestKeyPair {
     /// Generate a new RSA key pair for testing
     pub fn generate() -> Self {
         let mut rng = rand::thread_rng();
-        let private_key = RsaPrivateKey::new(&mut rng, 2048)
-            .expect("failed to generate RSA private key");
+        let private_key =
+            RsaPrivateKey::new(&mut rng, 2048).expect("failed to generate RSA private key");
         let public_key = private_key.to_public_key();
 
         let private_pem = private_key
@@ -171,7 +171,9 @@ mod tests {
             Some("user@example.com"),
         );
 
-        let claims = keypair.verify_token(&token).expect("failed to verify token");
+        let claims = keypair
+            .verify_token(&token)
+            .expect("failed to verify token");
         assert_eq!(claims.sub, "user123");
         assert_eq!(claims.iss, "https://test.example.com");
         assert_eq!(claims.aud, "test-audience");

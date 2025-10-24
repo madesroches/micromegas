@@ -1,9 +1,9 @@
 use crate::types::{AuthContext, AuthProvider, AuthType};
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use chrono::{DateTime, Utc};
 use moka::future::Cache;
-use openidconnect::core::{CoreJsonWebKeySet, CoreProviderMetadata};
 use openidconnect::IssuerUrl;
+use openidconnect::core::{CoreJsonWebKeySet, CoreProviderMetadata};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -21,14 +21,9 @@ struct JwksCache {
 impl JwksCache {
     /// Create a new JWKS cache
     fn new(issuer_url: IssuerUrl, ttl: Duration) -> Self {
-        let cache = Cache::builder()
-            .time_to_live(ttl)
-            .build();
+        let cache = Cache::builder().time_to_live(ttl).build();
 
-        Self {
-            issuer_url,
-            cache,
-        }
+        Self { issuer_url, cache }
     }
 
     /// Get the JWKS, fetching from the issuer if not cached
@@ -52,12 +47,15 @@ impl JwksCache {
             .map_err(|e| anyhow!("Failed to create HTTP client: {}", e))?;
 
         // Use openidconnect's built-in OIDC discovery
-        let metadata = CoreProviderMetadata::discover_async(
-            issuer_url.clone(),
-            &http_client,
-        )
-        .await
-        .map_err(|e| anyhow!("Failed to discover OIDC metadata from {}: {}", issuer_url, e))?;
+        let metadata = CoreProviderMetadata::discover_async(issuer_url.clone(), &http_client)
+            .await
+            .map_err(|e| {
+                anyhow!(
+                    "Failed to discover OIDC metadata from {}: {}",
+                    issuer_url,
+                    e
+                )
+            })?;
 
         // Fetch JWKS from jwks_uri
         let jwks_uri = metadata.jwks_uri();
@@ -209,15 +207,15 @@ impl OidcAuthProvider {
     }
 
     fn check_admin(&self, subject: &str, email: Option<&str>) -> bool {
-        self.admin_users.iter().any(|admin| {
-            admin == subject || email.map(|e| admin == e).unwrap_or(false)
-        })
+        self.admin_users
+            .iter()
+            .any(|admin| admin == subject || email.map(|e| admin == e).unwrap_or(false))
     }
 
     /// Validate an ID token and return authentication context
     async fn validate_id_token(&self, token: &str) -> Result<AuthContext> {
-        use jsonwebtoken::{decode, Validation, Algorithm};
-        use serde::{Serialize, Deserialize};
+        use jsonwebtoken::{Algorithm, Validation, decode};
+        use serde::{Deserialize, Serialize};
 
         #[derive(Debug, Serialize, Deserialize)]
         struct Claims {
@@ -291,16 +289,20 @@ impl OidcAuthProvider {
     }
 
     /// Convert a JWK to a DecodingKey for jsonwebtoken
-    fn jwk_to_decoding_key(jwk: &openidconnect::core::CoreJsonWebKey) -> Result<jsonwebtoken::DecodingKey> {
+    fn jwk_to_decoding_key(
+        jwk: &openidconnect::core::CoreJsonWebKey,
+    ) -> Result<jsonwebtoken::DecodingKey> {
         // Serialize the JWK to JSON to extract parameters
-        let jwk_json = serde_json::to_value(jwk)
-            .map_err(|e| anyhow!("Failed to serialize JWK: {}", e))?;
+        let jwk_json =
+            serde_json::to_value(jwk).map_err(|e| anyhow!("Failed to serialize JWK: {}", e))?;
 
         // Extract n and e parameters
-        let n = jwk_json.get("n")
+        let n = jwk_json
+            .get("n")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow!("JWK missing 'n' parameter"))?;
-        let e = jwk_json.get("e")
+        let e = jwk_json
+            .get("e")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow!("JWK missing 'e' parameter"))?;
 
@@ -314,8 +316,8 @@ impl OidcAuthProvider {
             .map_err(|e| anyhow!("Failed to decode 'e': {}", e))?;
 
         // Create RSA public key
-        use rsa::{RsaPublicKey, BigUint};
         use rsa::pkcs1::EncodeRsaPublicKey;
+        use rsa::{BigUint, RsaPublicKey};
 
         let n_bigint = BigUint::from_bytes_be(&n_bytes);
         let e_bigint = BigUint::from_bytes_be(&e_bytes);
@@ -429,6 +431,11 @@ mod tests {
 
         let provider = OidcAuthProvider::new(config).await;
         assert!(provider.is_err());
-        assert!(provider.unwrap_err().to_string().contains("At least one OIDC issuer"));
+        assert!(
+            provider
+                .unwrap_err()
+                .to_string()
+                .contains("At least one OIDC issuer")
+        );
     }
 }
