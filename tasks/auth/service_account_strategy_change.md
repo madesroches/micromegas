@@ -1,7 +1,7 @@
 # Service Account Authentication Strategy Change
 
 ## Date
-2025-01-24
+2025-10-24
 
 ## Decision
 After discussion with Julien, we're changing the service account authentication strategy from **self-signed JWTs with local JWKS** to **OAuth 2.0 client credentials flow**.

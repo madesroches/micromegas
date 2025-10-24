@@ -1,7 +1,7 @@
 # Proposal: Unified JWKS Architecture for Service Accounts
 
 > **STATUS: SUPERSEDED**
-> **Date:** 2025-01-24
+> **Date:** 2025-10-24
 > **Reason:** After further discussion, we decided to use OAuth 2.0 client credentials flow for service accounts instead of self-signed JWTs with local JWKS. This simplifies the architecture significantly.
 > **See:** [Service Account Strategy Change](service_account_strategy_change.md) for details.
 > **This document is kept for historical reference to document the decision-making process.**
