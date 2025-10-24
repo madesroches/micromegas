@@ -2,7 +2,7 @@
 
 ## Overview
 
-Enhance the flight-sql-srv authentication to support both human users (via OIDC) and long-running services (via self-signed JWTs), using the `openidconnect` and `jsonwebtoken` crates.
+Enhance the flight-sql-srv authentication to support both human users (via OIDC) and long-running services (via OAuth 2.0 client credentials), using the `openidconnect` crate.
 
 ## Current State (Updated 2025-01-24)
 
@@ -47,11 +47,12 @@ Enhance the flight-sql-srv authentication to support both human users (via OIDC)
 5. Token validation including signature verification
 
 ### Long-Running Services
-1. Self-signed JWT generation from service account credentials
-2. Short-lived tokens generated locally (no external calls)
-3. Service identity for audit logging
-4. Simple key rotation via credential updates
-5. Backward compatibility with existing API key approach (migration path)
+1. OAuth 2.0 client credentials flow for service accounts
+2. Service accounts managed in OIDC provider (Google, Azure AD, Okta)
+3. Standard client_id + client_secret authentication
+4. Tokens fetched from OIDC provider (cached for token lifetime ~1 hour)
+5. Service identity for audit logging
+6. Backward compatibility with existing API key approach (migration path)
 
 ### General
 1. Minimal performance overhead (gRPC interceptor must be fast)
@@ -64,21 +65,17 @@ Enhance the flight-sql-srv authentication to support both human users (via OIDC)
 
 ### Authentication Modes
 
-The system will support three authentication modes (configurable):
+The system will support two authentication modes (configurable):
 
-1. **OIDC Mode**: For human users
-   - Authorization code flow with PKCE
-   - JWT token validation with remote JWKS
+1. **OIDC Mode**: For both human users and service accounts
+   - **Human users**: Authorization code flow with PKCE
+   - **Service accounts**: Client credentials flow (client_id + client_secret)
+   - JWT token validation with remote JWKS from OIDC provider
    - Identity provider discovery
    - Support for multiple identity providers
+   - Single authentication path for all users
 
-2. **Service Account Mode**: For long-running services
-   - Self-signed JWT generation using private keys
-   - Local token generation (no external dependencies)
-   - Public key registry for validation
-   - Short-lived tokens (1 hour) generated on-demand
-
-3. **API Key Mode**: Legacy support (current implementation)
+2. **API Key Mode**: Legacy support (current implementation)
    - Simple bearer token validation
    - Backward compatibility
    - Migration support
@@ -95,16 +92,15 @@ trait AuthProvider {
 struct AuthContext {
     subject: String,                 // user/service ID (primary identity)
     email: Option<String>,           // for OIDC users (optional)
-    issuer: String,                  // token issuer (OIDC provider or service account ID)
+    issuer: String,                  // token issuer (OIDC provider)
     expires_at: DateTime<Utc>,       // token expiration (chrono for better ergonomics)
-    auth_type: AuthType,             // Oidc | ServiceAccount | ApiKey
-    is_admin: bool,                  // Simple RBAC - admin flag for service account management
+    auth_type: AuthType,             // Oidc | ApiKey
+    is_admin: bool,                  // Simple RBAC - admin flag for administrative operations
 }
 
 // Simple RBAC:
-// - is_admin=true allows service account management operations
+// - is_admin=true allows administrative operations (if needed in future)
 // - Determined from MICROMEGAS_ADMINS config (list of subjects/emails)
-// - Used by admin SQL UDFs to check permissions
 //
 // Using DateTime<Utc> instead of i64:
 // - More type-safe and self-documenting
@@ -114,25 +110,19 @@ struct AuthContext {
 ```
 
 Implementations:
-- `OidcAuthProvider` - OIDC/JWT validation with remote JWKS
-- `ServiceAccountAuthProvider` - Self-signed JWT validation with local public key registry
-- `ApiKeyAuthProvider` - Current key-ring approach
+- `OidcAuthProvider` - OIDC/JWT validation with remote JWKS (both human users and service accounts)
+- `ApiKeyAuthProvider` - Current key-ring approach (legacy)
 
 #### 2. JWT Validation
-Using `openidconnect` and `jsonwebtoken` crates:
+Using `openidconnect` crate:
 
-**For OIDC tokens:**
+**For all OIDC tokens (human users and service accounts):**
 - Fetch JWKS from identity provider's well-known endpoint
 - `IdTokenVerifier` for JWT signature validation
-- Nonce validation for replay prevention
+- Nonce validation for replay prevention (human users)
 - Claims extraction (sub, email, exp, aud, iss)
 - JWKS cache with TTL refresh
-
-**For service account tokens:**
-- Public key registry loaded from database
-- JWT signature validation using registered public keys
-- Claims extraction (sub, aud, iss, exp)
-- Support for multiple signing algorithms (RS256, etc.)
+- Same validation path for both authorization code and client credentials flows
 
 #### 3. Token Cache
 In-memory cache for validated tokens using `moka`:
@@ -176,100 +166,15 @@ fn validate_token(&self, token: &str) -> Result<AuthContext> {
 - High performance with concurrent readers
 - Production-proven (powers crates.io)
 
-#### 4. Service Account Registry
-Database-backed registry for service account public keys:
-```sql
-CREATE TABLE service_accounts (
-    id TEXT PRIMARY KEY,              -- service account ID
-    public_key TEXT NOT NULL,         -- PEM-encoded RSA public key
-    description TEXT,                 -- human-readable description
-    created_by TEXT NOT NULL,         -- admin user who created this service account
-    created_at TIMESTAMP NOT NULL,
-    updated_at TIMESTAMP NOT NULL,
-    disabled BOOLEAN DEFAULT false
-);
-```
-
-Features:
-- SQL UDFs to create/disable/enable service accounts
-- Single public key per service account
-- Load into memory at startup, reload on SIGHUP
-- Audit trail: track which admin created each service account
-- Small table (typically dozens of entries), no indexes needed beyond PK
-- **Key rotation**: Not supported - disable old service account and create new one
-
-#### 5. Enhanced Auth Interceptor
+#### 4. Enhanced Auth Interceptor
 Replace current `check_auth` with multi-mode interceptor:
 - Extract bearer token from Authorization header
-- Determine auth mode (OIDC vs service account vs API key)
+- Determine auth mode (OIDC vs API key)
 - Validate token using appropriate AuthProvider
-- Check if user is admin (MICROMEGAS_ADMINS list)
+- Check if user is admin (MICROMEGAS_ADMINS list, if needed)
 - Cache validation results
 - Inject AuthContext into request extensions
 - Emit audit logs with user/service identity
-
-#### 6. Admin SQL UDFs (User Defined Functions)
-Service account management via SQL functions in DataFusion:
-
-**Create service account:**
-```sql
-SELECT create_service_account(
-    'my-service',                              -- id
-    'Data pipeline for production'            -- description
-) AS credential_json;
-
--- Returns JSON credential file (contains private key)
--- Must be saved immediately - cannot be retrieved later
--- created_by is automatically set from authenticated user (AuthContext.subject or email)
--- Cannot be overridden - prevents admin impersonation
-```
-
-**List service accounts:**
-```sql
-SELECT * FROM list_service_accounts();
-
--- Returns table:
--- id | description | created_by | created_at | disabled
-```
-
-**Get service account details:**
-```sql
-SELECT * FROM get_service_account('my-service');
-```
-
-**Disable/enable service account:**
-```sql
-SELECT disable_service_account('my-service');
-SELECT enable_service_account('my-service');
-```
-
-**Handling compromised keys (no rotation, create new):**
-```sql
--- If a service account key is compromised:
-
--- 1. Immediately disable the compromised service account
-SELECT disable_service_account('my-service');
-
--- 2. Create a new service account with a fresh keypair
-SELECT create_service_account(
-    'my-service-v2',
-    'Replacement for compromised my-service'
-) AS credential_json;
-
--- 3. Deploy new credential file to services
--- 4. Update services to use new service account
--- 5. After migration complete, old service account remains disabled
-
--- Simple, clean break - no grace period complexity
-```
-
-**Implementation:**
-- Each UDF checks `auth_context.is_admin` before executing
-- Returns `PermissionDenied` error if not admin
-- UDFs are registered with DataFusion SessionContext
-- Access auth context from session state (injected by interceptor)
-- `created_by` always set from AuthContext (subject or email) - no override allowed
-- Prevents admin impersonation and ensures audit trail integrity
 
 ### Configuration
 
@@ -277,10 +182,10 @@ Environment variables:
 
 ```bash
 # General
-MICROMEGAS_AUTH_MODE=jwt|api_key|disabled
-# jwt mode supports both OIDC and service accounts automatically
+MICROMEGAS_AUTH_MODE=oidc|api_key|disabled
+# oidc mode supports both human users (authorization code) and service accounts (client credentials)
 
-# OIDC Configuration (for human users)
+# OIDC Configuration (for both human users and service accounts)
 MICROMEGAS_OIDC_ISSUERS='[
   {
     "issuer": "https://accounts.google.com",
@@ -294,12 +199,13 @@ MICROMEGAS_OIDC_ISSUERS='[
 MICROMEGAS_OIDC_JWKS_REFRESH_INTERVAL=3600  # seconds
 
 # Service Account Configuration (for services)
-# Public keys loaded from database via MICROMEGAS_SQL_CONNECTION_STRING
-# No additional config needed - service accounts are managed via SQL UDFs
+# Service accounts are created and managed in the OIDC provider (Google, Azure AD, Okta)
+# Services use client_id + client_secret to authenticate (OAuth 2.0 client credentials flow)
+# No micromegas-specific configuration needed
 
-# Admin Configuration (Simple RBAC)
-MICROMEGAS_ADMINS='["alice@example.com", "bob@example.com", "admin-service-account"]'
-# List of subjects/emails that have admin privileges (can manage service accounts)
+# Admin Configuration (Simple RBAC - optional)
+MICROMEGAS_ADMINS='["alice@example.com", "bob@example.com"]'
+# List of subjects/emails that have admin privileges (for future admin operations)
 # Matches against AuthContext.subject or AuthContext.email
 
 # API Key Configuration (legacy)
@@ -342,32 +248,30 @@ Modifications to `flight_sql_srv.rs`:
    - Store AuthContext in cache
 5. Request proceeds with AuthContext (identity available for audit logging)
 
-#### Service Account Flow (Services)
-1. Service loads credential file with private key (one-time setup)
-2. Service generates JWT locally:
-   - Claims: iss=service_account_id, sub=service_account_id, aud=micromegas-analytics, exp=now+1h
-   - Signs with private key using RS256
-3. Service sends request with `Authorization: Bearer <self_signed_jwt>`
-4. flight-sql-srv validates token:
-   - Decode JWT header to identify issuer (service_account_id)
+#### Service Account Flow (OAuth 2.0 Client Credentials)
+1. Admin creates service account in OIDC provider (Google Cloud, Azure AD, Okta)
+2. OIDC provider issues client_id + client_secret for the service account
+3. Service authenticates using client credentials flow:
+   - POST to token endpoint: `grant_type=client_credentials&client_id=...&client_secret=...`
+   - OIDC provider returns access token (standard OAuth JWT)
+   - Service caches token until expiration (~1 hour)
+4. Service sends request with `Authorization: Bearer <access_token>`
+5. flight-sql-srv validates token (same as human users):
+   - Decode JWT header to identify issuer
    - Check cache for previously validated token
-   - If not cached, lookup public key in service account registry
-   - Verify JWT signature using registered public key
-   - Validate audience, expiration, service account not disabled
-   - Extract claims (sub, aud, exp, iss) into AuthContext
-   - Convert JWT exp (i64) to DateTime:
-     ```rust
-     let expires_at = DateTime::from_timestamp(jwt_claims.exp, 0)
-         .ok_or("invalid expiration timestamp")?;
-     ```
+   - If not cached, fetch JWKS from identity provider
+   - Verify JWT signature using JWKS public keys
+   - Validate issuer, audience, expiration
+   - Extract claims (sub, email, exp, iss) into AuthContext
    - Store AuthContext in cache
-5. Request proceeds with AuthContext (service identity available for audit logging)
+6. Request proceeds with AuthContext (service identity available for audit logging)
 
 **Key advantages:**
-- No external calls for token generation or validation
-- Service can generate tokens offline
-- Short-lived tokens (1 hour) generated on-demand
-- Private key compromise limited to token duration
+- Standard OAuth 2.0 flow (well-understood, broadly supported)
+- Leverages mature OIDC provider infrastructure (key management, rotation, revocation)
+- Single authentication path for all users (simpler codebase)
+- No custom key management or database schema needed
+- Service accounts managed in OIDC provider (not in micromegas)
 
 #### API Key Flow (Legacy)
 1. Service sends request with `Authorization: Bearer <api_key>`
@@ -379,8 +283,7 @@ Modifications to `flight_sql_srv.rs`:
 
 Add to `rust/Cargo.toml` workspace dependencies:
 ```toml
-openidconnect = "4.0"
-jsonwebtoken = "9.3"  # For JWT parsing and validation
+openidconnect = "4.0"  # For OIDC/OAuth 2.0 authentication (human users and service accounts)
 moka = "0.12"          # For token cache with TTL and thread-safe concurrent access
 chrono = "0.4"         # For DateTime types (likely already a dependency)
 ```
@@ -393,6 +296,7 @@ chrono = "0.4"         # For DateTime types (likely already a dependency)
 - Combines LRU eviction with LFU admission policy for better hit rates
 
 Note: `chrono` is likely already in use for timestamp handling throughout the codebase.
+Note: `jsonwebtoken` is not needed - `openidconnect` crate handles all JWT validation.
 
 ## Implementation Phases
 
@@ -407,27 +311,24 @@ Note: `chrono` is likely already in use for timestamp handling throughout the co
 - ✅ Tests moved to `tests/` directory (separate from source)
 - **Status**: Auth crate complete, needs integration with flight-sql-srv
 
-### Phase 2: Add Service Account Support
-- Create service_accounts database table (with created_by field)
-- Implement ServiceAccountRegistry (load public keys from DB)
-- Implement ServiceAccountAuthProvider (JWT validation with local keys)
-- Add admin RBAC:
-  - Add is_admin field to AuthContext
-  - Parse MICROMEGAS_ADMINS config
-  - Check admin status during auth
-- Implement admin SQL UDFs in DataFusion:
-  - `create_service_account(id, description)` → credential JSON
-  - `list_service_accounts()` → table function
-  - `get_service_account(id)` → table function
-  - `disable_service_account(id)` → boolean
-  - `enable_service_account(id)` → boolean
-  - Each UDF checks auth_context.is_admin
-  - created_by automatically extracted from AuthContext (no parameter)
-- Add credential file format and generation (RSA keypair)
-- Python client: ServiceAccount class with JWT generation
-- Add integration tests with test keypairs
-- Create example service using self-signed JWTs
-- **Goal**: Support service authentication + admin management via SQL
+### Phase 2: Add Service Account Support (OAuth 2.0 Client Credentials)
+- Document how to create service accounts in OIDC providers:
+  - Google Cloud: Service accounts with OAuth 2.0 client credentials
+  - Azure AD: App registrations with client credentials
+  - Okta: OAuth 2.0 service applications
+- Python client: Add `OidcClientCredentialsProvider` class
+  - Takes issuer, client_id, client_secret
+  - Implements token fetch from OIDC provider token endpoint
+  - Caches token until expiration
+  - Automatic token refresh when expired
+- Rust client: Add equivalent client credentials support
+- Add integration tests with mock OIDC provider
+- Create example service using OAuth 2.0 client credentials
+- Admin RBAC (simple is_admin flag):
+  - Parse MICROMEGAS_ADMINS config (list of subjects/emails)
+  - Set is_admin flag in AuthContext during token validation
+  - Used to gate lakehouse partition management UDFs
+- **Goal**: Support service authentication via standard OAuth 2.0 flow
 
 ### Phase 3: Add OIDC Support
 **Server-side:** ✅ COMPLETED
@@ -455,25 +356,18 @@ Note: `chrono` is likely already in use for timestamp handling throughout the co
 
 **Goal**: Support human user authentication with transparent token refresh in Python client
 
-### Phase 4: Unified JWT Mode
-- Combine OIDC and ServiceAccount into unified JWT mode
-- Auto-detect token type based on issuer
-- Single configuration: MICROMEGAS_AUTH_MODE=jwt
-- Support both OIDC and service accounts simultaneously
-- **Goal**: Seamless support for both auth types
-
-### Phase 5: Add Token Caching
+### Phase 4: Add Token Caching
 - Implement LRU cache for validated tokens
 - Add cache configuration
 - Add cache metrics/monitoring
 - Add cache invalidation on config changes
 - **Goal**: Reduce validation overhead to <1ms
 
-### Phase 6: Audit and Security Hardening
+### Phase 5: Audit and Security Hardening
 - Add comprehensive audit logging with user/service identity
 - Add rate limiting per user/service
 - Add metrics for auth failures
-- Key rotation procedures and documentation
+- Document credential management in OIDC providers
 - Security review and penetration testing
 - Documentation and deployment guide
 - **Goal**: Production-ready authentication
@@ -481,31 +375,27 @@ Note: `chrono` is likely already in use for timestamp handling throughout the co
 ## Security Considerations
 
 1. **Token Storage**: Never log or store tokens, only validation results
-2. **Private Key Protection** (Service Accounts):
-   - Store credential files with restrictive permissions (0600)
-   - Use secret managers in production (not env vars or config files)
-   - Never commit credential files to git
-   - **Key rotation**: If compromised, disable service account and create a new one
-3. **Public Key Registry**: Load from database, cache in memory, single key per service account
-4. **JWKS Caching**: Refresh JWKS periodically to detect identity provider key rotation
-5. **Clock Skew**: Allow configurable clock skew (default 60s) for exp/nbf validation
-6. **TLS/HTTPS**: Handled by load balancer - all traffic encrypted in transit
-7. **Token Revocation**:
-   - Two caches affect revocation timing:
-     - **Service account registry cache** (5 min TTL): Public keys loaded from DB
-     - **Token validation cache** (5 min TTL): Recently validated tokens
-   - When service account disabled in database:
-     - Server reloads registry after 5 minutes (sees disabled flag)
-     - Server stops accepting NEW tokens from that service account
-     - However, EXISTING valid tokens remain in validation cache (5 min)
-     - AND existing tokens are valid until expiration (1 hour from creation)
+2. **Client Secret Protection** (Service Accounts):
+   - Store client secrets in secret managers (AWS Secrets Manager, GCP Secret Manager, Azure Key Vault)
+   - Never commit client secrets to git or config files
+   - Use environment variables or secret mounting for runtime access
+   - Rotate client secrets periodically in OIDC provider
+3. **JWKS Caching**: Refresh JWKS periodically to detect identity provider key rotation
+4. **Clock Skew**: Allow configurable clock skew (default 60s) for exp/nbf validation
+5. **TLS/HTTPS**: Handled by load balancer - all traffic encrypted in transit
+6. **Token Revocation**:
+   - Token validation cache (5 min TTL): Recently validated tokens cached in memory
+   - When service account disabled in OIDC provider:
+     - OIDC provider stops issuing NEW tokens immediately
+     - Server continues to accept EXISTING valid tokens until cache expiry (5 min) + token expiration (~1 hour)
    - **Worst case revocation delay**: ~65 minutes
-     - 5 min: cache refresh to see disabled service account
-     - 60 min: existing token valid until expiration
-   - **For immediate revocation**: Restart analytics server to clear all caches
-8. **Audience Validation**: Strictly validate token audience to prevent token substitution
-9. **Audit Logging**: Log all authentication attempts (success and failure) with identity information
-10. **Admin Impersonation Prevention**: `created_by` field always set from AuthContext, cannot be overridden by admin parameter - ensures audit trail integrity and prevents admins from impersonating other admins in service account creation records
+     - 5 min: validation cache expiry
+     - 60 min: token expiration
+   - **For immediate revocation**: Restart analytics server to clear validation cache
+   - **Better approach**: Use short-lived tokens (15-30 min) to reduce revocation window
+7. **Audience Validation**: Strictly validate token audience to prevent token substitution
+8. **Audit Logging**: Log all authentication attempts (success and failure) with identity information
+9. **OIDC Provider Security**: Rely on OIDC provider's security (Google, Azure AD, Okta have mature security practices)
 
 ## Testing Strategy
 
@@ -546,43 +436,44 @@ Note: `chrono` is likely already in use for timestamp handling throughout the co
 
 2. **Migration process:**
 
-   Admin (alice@example.com) authenticates with OIDC and runs SQL commands via FlightSQL:
+   Admin creates service account in OIDC provider:
 
-   ```sql
-   -- Admin creates service account via SQL UDF
-   -- created_by is automatically set to alice@example.com from AuthContext
-   SELECT create_service_account(
-       'my-service',
-       'Data pipeline production service'
-   ) AS credential_json;
+   **Google Cloud example:**
+   ```bash
+   # Create service account in Google Cloud
+   gcloud iam service-accounts create my-service \
+     --display-name="Data pipeline production service"
 
-   -- Returns:
-   -- {
-   --   "type": "service_account",
-   --   "service_account_id": "my-service",
-   --   "private_key": "-----BEGIN PRIVATE KEY-----\n...",
-   --   "token_uri": "https://analytics.example.com",
-   --   "audience": "micromegas-analytics"
-   -- }
+   # Create OAuth 2.0 client credentials
+   gcloud iam service-accounts keys create credentials.json \
+     --iam-account=my-service@project.iam.gserviceaccount.com
 
-   ⚠️  Save this JSON to a file - it cannot be recovered!
-
-   -- List service accounts (audit - see who created what)
-   SELECT * FROM list_service_accounts();
-
-   -- Returns table:
-   -- id           | description                    | created_by          | created_at          | disabled
-   -- my-service   | Data pipeline production...    | alice@example.com   | 2024-01-15 10:30    | false
-   -- data-pipeline| Legacy pipeline                | bob@example.com     | 2024-01-10 14:22    | false
+   # Note the client_id and download client_secret
    ```
 
-   Service uses credential file:
+   **Azure AD example:**
    ```bash
-   # Update service to use credential file
-   # Service loads my-service.json and generates JWTs
+   # Create app registration
+   az ad app create --display-name "my-service"
 
-   # Test in parallel - both API key and service account work
+   # Create client secret
+   az ad app credential reset --id <app-id>
 
+   # Note the client_id (application ID) and client_secret
+   ```
+
+   Service uses OAuth 2.0 client credentials:
+   ```python
+   from micromegas.auth import OidcClientCredentialsProvider
+
+   auth = OidcClientCredentialsProvider(
+       issuer="https://accounts.google.com",
+       client_id="my-service@project.iam.gserviceaccount.com",
+       client_secret=os.environ["CLIENT_SECRET"],
+   )
+   client = FlightSQLClient(uri, auth_provider=auth)
+
+   # Test in parallel - both API key and OAuth work
    # Remove API key when confident
    ```
 
@@ -604,34 +495,45 @@ Note: `chrono` is likely already in use for timestamp handling throughout the co
 ### For New Deployments
 1. Choose auth mode based on use case:
    - Human users → OIDC (set up identity provider)
-   - Services → Service accounts (generate credential files)
+   - Services → OAuth 2.0 client credentials (create service accounts in OIDC provider)
    - Development → Disabled (`--disable-auth`)
 
-2. Service account setup via SQL UDFs:
-   ```sql
-   -- Admin connects to flight-sql-srv with admin credentials (OIDC or admin service account)
-
-   -- Create service account
-   -- created_by automatically set from authenticated user
-   SELECT create_service_account(
-       'data-pipeline-prod',
-       'Production data pipeline'
-   ) AS credential_json;
-
-   -- Save the returned JSON to data-pipeline-prod.json
-   -- Distribute credential file to service
-   -- Service generates tokens locally, no OAuth server needed
-
-   -- Audit: See who created what
-   SELECT * FROM list_service_accounts();
-
-   SELECT * FROM get_service_account('data-pipeline-prod');
-   ```
-
-3. OIDC setup:
+2. OIDC setup:
    - Register app with identity provider (Google/Azure/Okta)
    - Configure `MICROMEGAS_OIDC_ISSUERS`
    - Users login via standard OIDC flow
+
+3. Service account setup in OIDC provider:
+   **Google Cloud:**
+   ```bash
+   # Create service account
+   gcloud iam service-accounts create data-pipeline-prod \
+     --display-name="Production data pipeline"
+
+   # Get credentials
+   gcloud iam service-accounts keys create credentials.json \
+     --iam-account=data-pipeline-prod@project.iam.gserviceaccount.com
+   ```
+
+   **Azure AD:**
+   ```bash
+   # Create app registration
+   az ad app create --display-name "data-pipeline-prod"
+
+   # Create client secret
+   az ad app credential reset --id <app-id>
+   ```
+
+   **Usage in Python:**
+   ```python
+   from micromegas.auth import OidcClientCredentialsProvider
+   auth = OidcClientCredentialsProvider(
+       issuer="https://accounts.google.com",
+       client_id="data-pipeline-prod@project.iam.gserviceaccount.com",
+       client_secret=os.environ["CLIENT_SECRET"],
+   )
+   client = FlightSQLClient(uri, auth_provider=auth)
+   ```
 
 ### For Corporate Auth Wrapper Users (MICROMEGAS_PYTHON_MODULE_WRAPPER)
 
@@ -687,22 +589,25 @@ Organizations should plan to migrate custom auth wrappers to standard OIDC flows
 **Required Changes** (Single bundled update):
 
 1. **Major version update bundling:**
-   - Auth migration: API keys → Service accounts
+   - Auth migration: API keys → OAuth 2.0 client credentials
    - Other planned improvements (TBD - what other features needed?)
    - Single release, clean break
 
-2. **Service account authentication:**
-   - Load credential file from Grafana configuration
-   - Generate self-signed JWTs before each query
-   - Token generation helper library (TypeScript/JavaScript)
-   - Credential file path in datasource config
+2. **Service account authentication (OAuth 2.0 client credentials):**
+   - Configure OIDC provider, client_id, and client_secret in datasource settings
+   - Fetch token from OIDC provider token endpoint before first query
+   - Cache token until expiration
+   - Automatic token refresh when expired
+   - TypeScript/JavaScript OAuth 2.0 client library (e.g., `openid-client`)
 
 3. **Updated datasource configuration UI:**
    ```
    Authentication Method:
-   ☑ Service Account Credential File
-   Path: /path/to/service-account.json
-   [Browse...]
+   ☑ OAuth 2.0 Client Credentials
+
+   OIDC Issuer: https://accounts.google.com
+   Client ID: my-service@project.iam.gserviceaccount.com
+   Client Secret: [••••••••••] (secured field)
 
    [ Test Connection ]
    ```
@@ -710,8 +615,9 @@ Organizations should plan to migrate custom auth wrappers to standard OIDC flows
 4. **Migration strategy:**
    - Major version bump
    - Clear migration guide in release notes
-   - Example: "Grafana plugin v2.0: Migrate from API keys to service accounts"
+   - Example: "Grafana plugin v2.0: Migrate from API keys to OAuth 2.0"
    - Breaking change, but one-time clean migration
+   - Document how to create service accounts in different OIDC providers
 
 ### Python Client Library
 **Current**:
@@ -750,13 +656,17 @@ Organizations should plan to migrate custom auth wrappers to standard OIDC flows
            ...
    ```
 
-2. **Service Account Support**
+2. **Service Account Support (OAuth 2.0 Client Credentials)**
    ```python
-   from micromegas.auth import ServiceAccountAuthProvider
+   from micromegas.auth import OidcClientCredentialsProvider
    from micromegas.flightsql.client import FlightSQLClient
 
-   # Create auth provider from credential file
-   auth = ServiceAccountAuthProvider.from_file("my-service.json")
+   # Create auth provider with service account credentials
+   auth = OidcClientCredentialsProvider(
+       issuer="https://accounts.google.com",
+       client_id="my-service@project.iam.gserviceaccount.com",
+       client_secret=os.environ["CLIENT_SECRET"],
+   )
 
    # Create client once with auth provider
    client = FlightSQLClient(
@@ -764,17 +674,18 @@ Organizations should plan to migrate custom auth wrappers to standard OIDC flows
        auth_provider=auth
    )
 
-   # Use client multiple times - tokens auto-generated before each query
+   # Use client multiple times - tokens auto-refreshed before each query
    df1 = client.query("SELECT * FROM logs WHERE time > now() - interval '1 hour'")
    df2 = client.query("SELECT * FROM metrics WHERE service = 'api'")
-   # Each query automatically calls auth.get_token() which generates fresh JWT if needed
+   # Each query automatically calls auth.get_token() which fetches/refreshes token
    ```
 
    **Implementation details**:
-   - `ServiceAccountAuthProvider` loads private key from credential file
-   - `get_token()` generates new 1-hour JWT on each call (cheap operation)
-   - Or optionally caches token until expiration (reuse for ~1 hour)
-   - JWT signed locally using `jsonwebtoken` library (no external calls)
+   - `OidcClientCredentialsProvider` uses OAuth 2.0 client credentials flow
+   - `get_token()` fetches token from OIDC provider token endpoint on first call
+   - Caches token until expiration (~1 hour)
+   - Automatically refreshes when expired (transparent to caller)
+   - Uses standard `requests` library for token endpoint calls
 
 3. **OIDC Support with Automatic Refresh**
    ```python
@@ -902,9 +813,12 @@ Organizations should plan to migrate custom auth wrappers to standard OIDC flows
 **Current**: Hardcoded API key or env var
 **Required Changes**:
 
-1. **Service Account Support**
+1. **Service Account Support (OAuth 2.0 Client Credentials)**
    ```bash
-   $ micromegas query "SELECT ..." --service-account-file=my-service.json
+   $ micromegas query "SELECT ..." \
+     --client-id=my-service@project.iam.gserviceaccount.com \
+     --client-secret=$CLIENT_SECRET \
+     --issuer=https://accounts.google.com
    ```
 
 2. **OIDC Support (Simple - Browser on Every Call)**
@@ -915,14 +829,14 @@ Organizations should plan to migrate custom auth wrappers to standard OIDC flows
    # User authenticates, command executes, done
 
    # For frequent CLI use, prefer service accounts instead:
-   $ micromegas query "SELECT ..." --service-account-file=my-service.json
+   $ micromegas query "SELECT ..." --client-id=... --client-secret=...
    ```
 
 3. **Design Rationale**:
    - CLI usage is infrequent, so browser popup is acceptable
    - No token storage = simpler code, better security (no credentials on disk)
    - No refresh logic needed in CLI
-   - For automation/frequent use → service accounts
+   - For automation/frequent use → service accounts with client credentials
    - For interactive/long-running → Python client (with auto-refresh)
 
 4. **Implementation**:
@@ -933,27 +847,27 @@ Organizations should plan to migrate custom auth wrappers to standard OIDC flows
 
 ### SDKs (Rust, others)
 **Required Changes**:
-1. Token generation helpers
-2. Credential file loading
+1. OAuth 2.0 client credentials flow implementation
+2. Token caching and automatic refresh
 3. Examples and documentation
 
 ### API Key Deprecation Timeline
 **Deprecation Plan - "Soon"**:
 
-- **Phase 1**: Release service account support
-  - Server: Service account auth working
-  - Python client: ServiceAccount class
-  - CLI: Service account support
+- **Phase 1**: Release OAuth 2.0 client credentials support
+  - Server: OIDC auth validates tokens from both human users and service accounts
+  - Python client: OidcClientCredentialsProvider class
+  - CLI: OAuth 2.0 client credentials support
   - **API keys still work** (backward compatibility maintained)
 
 - **Phase 2**: Grafana plugin major update
   - Bundle auth migration with other planned improvements
-  - Single release: service accounts + new features
+  - Single release: OAuth 2.0 client credentials + new features
   - Migration guide published
   - Deprecation warning in API key flow
 
-- **Phase 3**: Python client OIDC support
-  - OIDC support with auto-refresh
+- **Phase 3**: Python client OIDC support (for human users)
+  - OIDC authorization code flow with auto-refresh
   - Deprecation warnings for API key usage
   - Migration documentation
 
@@ -972,25 +886,25 @@ Organizations should plan to migrate custom auth wrappers to standard OIDC flows
 ## Documentation Needs
 
 1. **Admin Guide**:
-   - How to configure JWT auth mode
+   - How to configure OIDC auth mode
    - Identity provider setup (Google, Azure AD, Okta)
    - Admin configuration (MICROMEGAS_ADMINS list)
-   - Service account management via SQL UDFs:
-     - Creating service accounts
-     - Listing and auditing service accounts
-     - Disabling/enabling service accounts
-     - Handling compromised keys (disable + create new)
-   - Migration from API keys to service accounts
+   - Service account management in OIDC providers:
+     - Creating service accounts (Google Cloud, Azure AD, Okta)
+     - Generating client credentials (client_id + client_secret)
+     - Rotating client secrets in OIDC provider
+     - Disabling/revoking service accounts
+   - Migration from API keys to OAuth 2.0 client credentials
 
 2. **User Guide**:
    - How to obtain OIDC tokens for CLI/SDK access
-   - Service account credential file usage
-   - Token generation in services (code examples)
+   - Using OAuth 2.0 client credentials for services
+   - Storing client secrets securely (secret managers)
    - Troubleshooting auth failures
 
 3. **Developer Guide**:
    - AuthProvider trait implementation
-   - Service account integration examples (Rust, Python, etc.)
+   - OAuth 2.0 client credentials integration examples (Rust, Python, etc.)
    - OIDC auto-refresh implementation patterns
    - Testing auth changes
    - Security best practices
@@ -998,15 +912,15 @@ Organizations should plan to migrate custom auth wrappers to standard OIDC flows
 4. **Integration Guide**:
    - Grafana plugin v2.0: Migration guide for bundled update (auth + features)
    - Python client: Auth provider pattern implementation
-   - Python client: OidcAuthProvider with automatic token refresh
-   - Python client: ServiceAccountAuthProvider with JWT generation
+   - Python client: OidcAuthProvider with automatic token refresh (human users)
+   - Python client: OidcClientCredentialsProvider (service accounts)
    - CLI: Simple OIDC flow (browser on each call)
    - Other client SDK updates
 
 5. **Python Library Implementation Guide**:
    - Auth provider interface (Protocol)
-   - ServiceAccountAuthProvider: JWT generation with private keys
-   - OidcAuthProvider: Token storage format and refresh logic
+   - OidcClientCredentialsProvider: OAuth 2.0 client credentials flow
+   - OidcAuthProvider: Token storage format and refresh logic (authorization code flow)
    - Thread-safe token refresh for concurrent queries
    - Error handling (network failures, expired refresh tokens)
    - Browser-based auth flow integration
@@ -1017,27 +931,27 @@ Organizations should plan to migrate custom auth wrappers to standard OIDC flows
 1. Should we support multiple OIDC providers simultaneously? (e.g., Google + Azure AD)
    - **Answer: Yes** - Configuration already supports multiple issuers
 2. Do we need role-based access control (RBAC) or is identity sufficient?
-   - **Decision: Simple RBAC** - Single `is_admin` flag for service account management
+   - **Decision: Simple RBAC** - Single `is_admin` flag for lakehouse partition management UDFs
    - Admin determined by MICROMEGAS_ADMINS config (list of subjects/emails)
-   - Sufficient for service account administration via SQL UDFs
+   - Sufficient for administrative operations
 3. What's the token refresh strategy for long-running queries?
-   - **Services**: Generate new tokens on-demand (1 hour lifetime, no external calls)
+   - **Services**: OAuth 2.0 client credentials - fetch token from OIDC provider, cache until expiration (~1 hour)
    - **OIDC users**: Python client auto-refreshes tokens transparently using refresh tokens
    - **Long queries**: Token refresh happens mid-query if needed (Python client handles it)
 4. Do we need emergency token revocation support (JTI blacklist)?
-   - **Decision: No** - Use short token lifetime (1 hour) + service account disable instead
+   - **Decision: No** - Use short token lifetime (15-60 min) + service account disable in OIDC provider
 5. Timeline for API key deprecation?
    - **Decision: Soon** - Phased approach with backward compatibility
    - Grafana plugin will be updated in single release (auth + other improvements)
    - Final removal when migration complete (major version bump)
-6. Should Grafana plugin support both API keys and service accounts during transition?
+6. Should Grafana plugin support both API keys and OAuth during transition?
    - **Decision: No** - Single bundled update with breaking change
    - Clean major version bump, bundle with other improvements
    - Clear migration guide, but no dual-mode complexity
 7. Python client library: automatic token generation or manual?
    - **Decision: Automatic via auth provider pattern**
-   - Client takes auth_provider parameter (ServiceAccountAuthProvider or OidcAuthProvider)
-   - Auth provider handles token generation/refresh transparently before each query
+   - Client takes auth_provider parameter (OidcClientCredentialsProvider or OidcAuthProvider)
+   - Auth provider handles token fetch/refresh transparently before each query
    - Client allocated once and reused, no manual token management by users
 
 ## Success Metrics
@@ -1055,140 +969,105 @@ Organizations should plan to migrate custom auth wrappers to standard OIDC flows
 
 ## Design Decisions
 
-### No Key Rotation - Create New Instead
+### OAuth 2.0 Client Credentials Instead of Self-Signed JWTs
 
-**Decision**: No `rotate_service_account_key()` function. If compromised, disable and create new.
+**Decision**: Use OAuth 2.0 client credentials flow for service accounts instead of self-signed JWTs with local JWKS.
 
 **Rationale:**
 
-1. **Simplicity**
-   - No grace period logic (which keys are valid when?)
-   - No multiple active keys per service account
-   - Clear audit trail (old disabled, new created)
+1. **Simpler Architecture**
+   - Single authentication path for all users (human and service)
+   - No custom key management or database schema
+   - Leverages existing OIDC infrastructure
 
-2. **Rare Operation**
-   - Key compromise should be rare with proper security
-   - When it happens, immediate action is better than gradual rotation
-   - Clean break forces immediate remediation
+2. **Industry Standard**
+   - OAuth 2.0 is the de facto standard for service authentication
+   - Well-understood by developers and security teams
+   - Supported by all major identity providers
 
-3. **Clear Security Model**
-   - Disabled = immediately invalid (after cache TTL)
-   - No ambiguity about which key is active
-   - Service account ID changes (my-service → my-service-v2) makes migration explicit
+3. **Better Security**
+   - OIDC providers have mature key management, rotation, and revocation
+   - Professional security teams manage the OIDC infrastructure
+   - Reduced attack surface (no custom crypto code)
 
 4. **Less Code**
-   - No rotation UDF
-   - No grace period tracking in database
-   - No multiple-key validation logic
+   - ~40-50% less code than dual authentication paths
+   - No service account database tables
+   - No admin SQL UDFs for key management
+   - Single OidcAuthProvider handles everything
+
+5. **Easier Operations**
+   - Service accounts managed in OIDC provider (not in micromegas)
+   - Standard tools and workflows for credential management
+   - Built-in audit trails in OIDC provider
+
+**Trade-offs Accepted:**
+- Services need network access to fetch initial token (vs. offline JWT generation)
+  - Mitigated by: Token caching (~1 hour), services typically have network access
+- External dependency on OIDC provider
+  - Mitigated by: High availability of major providers, local caching
 
 **Handling Compromise:**
-```sql
--- Simple, explicit process:
-SELECT disable_service_account('compromised-service');
-SELECT create_service_account('compromised-service-v2', 'Replacement') AS new_creds;
--- Deploy new creds, done
+```bash
+# Disable service account in OIDC provider
+gcloud iam service-accounts disable compromised-service@project.iam.gserviceaccount.com
+
+# Create new service account
+gcloud iam service-accounts create my-service-v2 \
+  --display-name="Replacement for compromised service"
+
+# Generate new credentials
+gcloud iam service-accounts keys create credentials-v2.json \
+  --iam-account=my-service-v2@project.iam.gserviceaccount.com
+
+# Deploy new credentials, done
 ```
 
-**Alternative considered**: Rotation with grace period
-- More complex (track multiple keys, grace period expiry)
-- Benefits marginal (still need to deploy new creds)
-- Adds code and testing burden
+**Alternative considered**: Self-signed JWTs with local JWKS
+- More complex (two authentication paths, custom key management)
+- More code to write, test, and maintain
+- Custom database schema for public keys
+- Admin SQL UDFs needed for key management
+- Benefits (offline operation) not significant in practice
 
-### Why SQL UDFs Instead of HTTP Endpoints or CLI?
+### Why OIDC Provider for Service Account Management?
 
-**The Problem:**
-- Aurora PostgreSQL is VPC-internal (not publicly accessible)
-- CLI tools need database access
-- Can't give everyone (e.g., Grafana users) direct DB access
-- FlightSQL service is the public interface
+**Decision**: Service accounts managed in OIDC provider (Google, Azure AD, Okta) instead of custom database.
 
-**The Solution: Admin SQL UDFs**
-- Admins connect to flight-sql-srv (already exposed)
-- Service account management via SQL functions
-- Authentication/authorization already handled by auth interceptor
-- Simple RBAC: check `is_admin` flag before executing UDFs
+**Rationale:**
 
-**Benefits:**
+1. **Leverage Existing Infrastructure**
+   - Organizations already have OIDC providers
+   - No need to build custom service account management
+   - Standard IAM workflows
 
-1. **No additional infrastructure**
-   - No separate admin HTTP service
-   - No CLI tools requiring VPC access
-   - Reuses existing FlightSQL connection
+2. **Professional Security**
+   - OIDC providers have security teams and best practices
+   - Regular security audits and compliance certifications
+   - Automatic key rotation and secure storage
 
-2. **Natural interface for SQL service**
-   - FlightSQL service → SQL interface for admin operations
-   - Consistent with existing query workflow
-   - Admins already connect via FlightSQL
+3. **Standard Tooling**
+   - Use existing IAM tools (gcloud, az, okta CLI)
+   - Integrate with secret managers automatically
+   - Audit logs built-in
 
-3. **Security built-in**
-   - AuthContext already has user identity
-   - Simple is_admin check in each UDF
-   - Audit logging automatic (caller identity known)
-
-4. **Future extensibility**
-   - Python client can wrap SQL UDFs in nice API
-   - Web UI can call SQL UDFs via FlightSQL
-   - Any FlightSQL client can manage service accounts (if admin)
+4. **Consistency**
+   - Same place for human and service identities
+   - Unified access management
+   - Single source of truth for authentication
 
 **Example Admin Workflow:**
 ```bash
-# Admin (alice@example.com) connects with their OIDC credentials
-$ python
->>> from micromegas.auth import OidcAuthProvider
->>> from micromegas.flightsql.client import FlightSQLClient
->>>
->>> # Create auth provider (loads saved OIDC tokens)
->>> auth = OidcAuthProvider.from_file("~/.micromegas/tokens.json")
->>>
->>> # Create client with auth provider
->>> client = FlightSQLClient(
-...     "grpc+tls://analytics.example.com:50051",
-...     auth_provider=auth
-... )
+# Admin creates service account in OIDC provider (Google Cloud example)
+$ gcloud iam service-accounts create data-pipeline \
+    --display-name="Production data pipeline"
 
-# Run SQL to create service account
-# created_by is automatically set to alice@example.com from auth context
->>> result = client.query("""
-    SELECT create_service_account(
-        'data-pipeline',
-        'Production data pipeline'
-    ) AS credential_json
-""")
+# Generate credentials
+$ gcloud iam service-accounts keys create credentials.json \
+    --iam-account=data-pipeline@project.iam.gserviceaccount.com
 
-# Save credential file (result is a DataFrame)
->>> with open('data-pipeline.json', 'w') as f:
-...     f.write(result['credential_json'].iloc[0])
-
-# List service accounts - see who created what
->>> accounts = client.query("SELECT * FROM list_service_accounts()")
->>> print(accounts)
-# Shows alice@example.com as created_by for data-pipeline
+# Securely distribute credentials (e.g., via secret manager)
+$ gcloud secrets create data-pipeline-credentials \
+    --data-file=credentials.json
 ```
 
-**vs HTTP Endpoints:**
-- Would need separate admin service or add HTTP to flight-sql-srv
-- Mixed protocols (gRPC FlightSQL + HTTP admin) feels inconsistent
-- More complex routing and deployment
-
-**vs CLI Tool:**
-- Would need VPC access or call HTTP endpoints
-- If calling HTTP, why not just use SQL?
-- SQL UDFs give us both: direct DB access + high-level interface
-
-## References
-
-### Rust Crates
-- [openidconnect crate docs](https://docs.rs/openidconnect/latest/openidconnect/) - OpenID Connect client library for Rust
-- [jsonwebtoken crate docs](https://docs.rs/jsonwebtoken/latest/jsonwebtoken/) - JWT encoding/decoding and validation
-- [moka crate docs](https://docs.rs/moka/latest/moka/) - High-performance concurrent caching library with TTL support
-- [moka GitHub](https://github.com/moka-rs/moka) - Examples and architecture documentation
-
-### OAuth and OpenID Connect Standards
-- [OAuth 2.0 RFC 6749](https://datatracker.ietf.org/doc/html/rfc6749) - OAuth 2.0 Authorization Framework
-- [OIDC Core Spec](https://openid.net/specs/openid-connect-core-1_0.html) - OpenID Connect Core 1.0 specification
-- [PKCE RFC 7636](https://datatracker.ietf.org/doc/html/rfc7636) - Proof Key for Code Exchange by OAuth Public Clients
-- [JWT RFC 7519](https://datatracker.ietf.org/doc/html/rfc7519) - JSON Web Token (JWT) specification
-
-### DataFusion Documentation
-- [DataFusion UDF Guide](https://datafusion.apache.org/library-user-guide/functions/adding-udfs.html) - Adding User Defined Functions (Scalar/Window/Aggregate)
-- [ScalarUDF API](https://docs.rs/datafusion/latest/datafusion/logical_expr/struct.ScalarUDF.html) - DataFusion Rust API for scalar UDFs
