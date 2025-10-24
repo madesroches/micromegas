@@ -59,7 +59,7 @@ The system will support three authentication modes (configurable):
 2. **Service Account Mode**: For long-running services
    - Self-signed JWT generation using private keys
    - Local token generation (no external dependencies)
-   - Public key registry for validation
+   - **Uses OAuth-compatible JWT format with local JWKS**
    - Short-lived tokens (1 hour) generated on-demand
 
 3. **API Key Mode**: Legacy support (current implementation)
@@ -69,8 +69,17 @@ The system will support three authentication modes (configurable):
 
 ### Architecture Components
 
-#### 1. AuthProvider Trait
-Abstract authentication interface to support multiple auth strategies:
+#### 1. Unified JWKS-Based Authentication
+
+**Key Architectural Decision**: Service accounts use the **same OAuth/OIDC validation path** as human users, but with **local JWKS** instead of remote endpoints.
+
+**Rationale**:
+- OIDC infrastructure already required for human users
+- Reusing `openidconnect` crate validation eliminates code duplication
+- Same token cache, same validation logic, same error handling
+- Future-proofing: Easy migration to real OAuth server if needed
+- Standard OAuth tooling compatibility (token inspectors, debuggers)
+
 ```rust
 trait AuthProvider {
     async fn validate_token(&self, token: &str) -> Result<AuthContext>;
@@ -98,25 +107,102 @@ struct AuthContext {
 ```
 
 Implementations:
-- `OidcAuthProvider` - OIDC/JWT validation with remote JWKS
-- `ServiceAccountAuthProvider` - Self-signed JWT validation with local public key registry
-- `ApiKeyAuthProvider` - Current key-ring approach
+- `UnifiedJwtAuthProvider` - Single JWT validator with multiple JWKS sources:
+  - Remote JWKS for OIDC providers (humans)
+  - Local/hard-coded JWKS for service accounts (offline)
+- `ApiKeyAuthProvider` - Legacy key-ring approach (migration only)
 
-#### 2. JWT Validation
-Using `openidconnect` and `jsonwebtoken` crates:
+#### 2. Unified JWT Validation with Multiple JWKS Sources
 
-**For OIDC tokens:**
-- Fetch JWKS from identity provider's well-known endpoint
-- `IdTokenVerifier` for JWT signature validation
-- Nonce validation for replay prevention
-- Claims extraction (sub, email, exp, aud, iss)
-- JWKS cache with TTL refresh
+**Single validation path** using `openidconnect` and `jsonwebtoken` crates:
 
-**For service account tokens:**
-- Public key registry loaded from database
-- JWT signature validation using registered public keys
-- Claims extraction (sub, aud, iss, exp)
-- Support for multiple signing algorithms (RS256, etc.)
+```rust
+struct UnifiedJwtAuthProvider {
+    jwks_sources: Vec<JwksSource>,
+    token_cache: Cache<String, AuthContext>,
+}
+
+enum JwksSource {
+    Remote {
+        issuer: String,
+        jwks_url: Url,
+        // Cached JWKS with TTL refresh
+    },
+    Local {
+        issuer: String,
+        keys: JsonWebKeySet,  // Hard-coded or loaded from database
+    },
+}
+
+impl UnifiedJwtAuthProvider {
+    async fn validate_token(&self, token: &str) -> Result<AuthContext> {
+        // 1. Parse JWT header to determine issuer
+        let unverified_jwt = decode_header(token)?;
+        let issuer = extract_issuer_from_token(token)?;
+        
+        // 2. Find matching JWKS source (remote or local)
+        let jwks = self.find_jwks_for_issuer(&issuer)?;
+        
+        // 3. Validate using same code path regardless of source
+        let claims = validate_jwt_with_jwks(token, jwks)?;
+        
+        // 4. Build AuthContext from claims
+        Ok(AuthContext {
+            subject: claims.sub,
+            email: claims.email,
+            issuer: claims.iss,
+            expires_at: DateTime::from_timestamp(claims.exp, 0)?,
+            auth_type: determine_auth_type(&issuer),
+            is_admin: self.check_admin(&claims.sub, &claims.email),
+        })
+    }
+}
+```
+
+**Benefits of unified approach**:
+- **Same validation logic**: One code path for all JWT tokens
+- **Same cache**: One `moka` cache for all validated tokens
+- **Same error handling**: Consistent JWT validation errors
+- **Code reuse**: OIDC infrastructure serves both use cases
+- **Future-proofing**: Easy to add more JWKS sources (internal OAuth, etc.)
+- **Standard OAuth format**: Service account tokens are OAuth-compatible
+
+**JWKS sources configuration**:
+
+```rust
+// For human users - remote OIDC providers
+JwksSource::Remote {
+    issuer: "https://accounts.google.com".into(),
+    jwks_url: "https://www.googleapis.com/oauth2/v3/certs".parse()?,
+}
+
+// For service accounts - local/hard-coded JWKS
+JwksSource::Local {
+    issuer: "micromegas-service-accounts".into(),
+    keys: load_service_account_public_keys_from_db()?,
+}
+```
+
+**Service account token generation** (client-side):
+```rust
+// Services generate OAuth-compatible JWTs locally
+let claims = Claims {
+    iss: "micromegas-service-accounts",  // Matches local JWKS source
+    sub: "data-pipeline",                // Service account ID
+    aud: "analytics.example.com",
+    exp: (Utc::now() + Duration::hours(1)).timestamp(),
+    iat: Utc::now().timestamp(),
+};
+
+// Sign with service's private key
+let token = encode(&Header::new(Algorithm::RS256), &claims, &encoding_key)?;
+```
+
+**Key advantages over separate validation paths**:
+- Eliminate `ServiceAccountAuthProvider` - no longer needed
+- Single `UnifiedJwtAuthProvider` handles all JWT validation
+- Less code to maintain and test
+- Consistent behavior between OIDC and service account tokens
 
 #### 3. Token Cache
 In-memory cache for validated tokens using `moka`:
@@ -160,12 +246,80 @@ fn validate_token(&self, token: &str) -> Result<AuthContext> {
 - High performance with concurrent readers
 - Production-proven (powers crates.io)
 
+### Why Unified JWKS Architecture vs. Separate Service Account Validation?
+
+**Original plan**: Two separate validation implementations
+- `OidcAuthProvider` for humans (remote JWKS)
+- `ServiceAccountAuthProvider` for services (custom validation)
+
+**Unified approach**: Single JWT validator with multiple JWKS sources
+- `UnifiedJwtAuthProvider` handles both cases
+- JWKS sources can be remote OR local
+
+**Key advantages**:
+
+1. **Code Reuse**: OIDC infrastructure already required for humans
+   - JWT parsing, validation, claims extraction
+   - JWKS caching and refresh logic
+   - Error handling and logging
+   - Why duplicate this for service accounts?
+
+2. **Less Code to Maintain**:
+   - Eliminate entire `ServiceAccountAuthProvider` implementation
+   - One validation path instead of two
+   - One set of unit tests instead of two
+   - One error handling path instead of two
+
+3. **Consistent Behavior**:
+   - Same token format for all JWTs
+   - Same validation errors
+   - Same caching behavior
+   - Same audit logging
+
+4. **Future-Proofing**:
+   - Easy to add more JWKS sources (internal OAuth server, etc.)
+   - Migration path if requirements change
+   - Standard OAuth tooling works with service account tokens
+   - Can use OAuth token inspectors, debuggers
+
+5. **No Performance Cost**:
+   - Service accounts still generate tokens **offline** (no network calls)
+   - Local JWKS means validation is still **offline** (no network calls)
+   - Same token cache benefits both humans and services
+   - Zero additional latency
+
+6. **Still Meets Requirements**:
+   - ✅ Short-lived tokens generated locally (no external calls)
+   - ✅ Service can generate tokens offline
+   - ✅ No external dependencies for token generation
+   - ✅ Simple key rotation via credential updates
+   - ✅ Minimal performance overhead
+
+**What we're NOT doing**:
+- ❌ Calling external OAuth server for service account tokens
+- ❌ Network dependency for token generation/validation
+- ❌ Adding OAuth server to infrastructure
+- ❌ Sacrificing offline operation
+
+**What we ARE doing**:
+- ✅ Using OAuth-compatible JWT format
+- ✅ Reusing existing OIDC validation code
+- ✅ Supporting local JWKS alongside remote JWKS
+- ✅ Maintaining offline token generation/validation
+
+**Implementation effort**:
+- **Separate paths**: Implement OidcAuthProvider + ServiceAccountAuthProvider (~500-800 LOC)
+- **Unified path**: Implement UnifiedJwtAuthProvider + JWKS source abstraction (~300-400 LOC)
+- **Savings**: ~40-50% less code, same functionality
+
 #### 4. Service Account Registry
-Database-backed registry for service account public keys:
+
+Database-backed registry for service account public keys, **loaded into local JWKS**:
+
 ```sql
 CREATE TABLE service_accounts (
     id TEXT PRIMARY KEY,              -- service account ID
-    public_key TEXT NOT NULL,         -- PEM-encoded RSA public key
+    public_key TEXT NOT NULL,         -- PEM-encoded RSA public key (for JWKS)
     description TEXT,                 -- human-readable description
     created_by TEXT NOT NULL,         -- admin user who created this service account
     created_at TIMESTAMP NOT NULL,
@@ -177,17 +331,84 @@ CREATE TABLE service_accounts (
 Features:
 - SQL UDFs to create/disable/enable service accounts
 - Single public key per service account
-- Load into memory at startup, reload on SIGHUP
+- **Load into local JWKS at startup** - becomes `JwksSource::Local`
+- Reload on SIGHUP to update JWKS without restart
 - Audit trail: track which admin created each service account
 - Small table (typically dozens of entries), no indexes needed beyond PK
 - **Key rotation**: Not supported - disable old service account and create new one
 
+**Converting database keys to JWKS format**:
+```rust
+fn load_service_account_public_keys_from_db() -> Result<JsonWebKeySet> {
+    let accounts = db.query("SELECT id, public_key FROM service_accounts WHERE disabled = false")?;
+    
+    let keys = accounts.iter().map(|account| {
+        // Convert PEM to JWK format
+        let jwk = JsonWebKey {
+            kty: KeyType::RSA,
+            kid: Some(account.id.clone()),  // Service account ID as key ID
+            n: extract_rsa_modulus(&account.public_key)?,
+            e: extract_rsa_exponent(&account.public_key)?,
+            alg: Some(Algorithm::RS256),
+            // ... other JWK fields
+        };
+        Ok(jwk)
+    }).collect::<Result<Vec<_>>>()?;
+    
+    Ok(JsonWebKeySet { keys })
+}
+```
+
+**Integration with unified validator**:
+```rust
+// At startup, load service account keys into local JWKS
+let service_account_jwks = load_service_account_public_keys_from_db()?;
+
+let auth_provider = UnifiedJwtAuthProvider {
+    jwks_sources: vec![
+        // Remote OIDC providers
+        JwksSource::Remote {
+            issuer: "https://accounts.google.com".into(),
+            jwks_url: "https://www.googleapis.com/oauth2/v3/certs".parse()?,
+        },
+        // Local service accounts
+        JwksSource::Local {
+            issuer: "micromegas-service-accounts".into(),
+            keys: service_account_jwks,
+        },
+    ],
+    token_cache: build_token_cache(),
+};
+```
+
 #### 5. Enhanced Auth Interceptor
-Replace current `check_auth` with multi-mode interceptor:
+
+Replace current `check_auth` with unified JWT interceptor:
 - Extract bearer token from Authorization header
-- Determine auth mode (OIDC vs service account vs API key)
-- Validate token using appropriate AuthProvider
+- **Single validation path**: Call `UnifiedJwtAuthProvider.validate_token()`
+- Token cache automatically handles repeated requests
+- AuthContext populated with user/service identity
 - Check if user is admin (MICROMEGAS_ADMINS list)
+
+**Simplified interceptor code**:
+```rust
+async fn check_auth(&self, request: Request<()>) -> Result<Request<()>, Status> {
+    let token = extract_bearer_token(&request)?;
+    
+    // Unified validation - handles both OIDC and service accounts
+    let auth_context = self.auth_provider
+        .validate_token(token)
+        .await
+        .map_err(|e| Status::unauthenticated(e.to_string()))?;
+    
+    // Attach to request
+    let mut request = request;
+    request.extensions_mut().insert(auth_context);
+    Ok(request)
+}
+```
+
+**No auth type detection needed** - issuer claim determines which JWKS to use.
 - Cache validation results
 - Inject AuthContext into request extensions
 - Emit audit logs with user/service identity
@@ -327,31 +548,42 @@ Modifications to `flight_sql_srv.rs`:
 5. Request proceeds with AuthContext (identity available for audit logging)
 
 #### Service Account Flow (Services)
+
 1. Service loads credential file with private key (one-time setup)
-2. Service generates JWT locally:
-   - Claims: iss=service_account_id, sub=service_account_id, aud=micromegas-analytics, exp=now+1h
+2. Service generates **OAuth-compatible JWT** locally:
+   - Claims: iss=micromegas-service-accounts, sub=service_account_id, aud=micromegas-analytics, exp=now+1h
    - Signs with private key using RS256
-3. Service sends request with `Authorization: Bearer <self_signed_jwt>`
-4. flight-sql-srv validates token:
-   - Decode JWT header to identify issuer (service_account_id)
-   - Check cache for previously validated token
-   - If not cached, lookup public key in service account registry
-   - Verify JWT signature using registered public key
-   - Validate audience, expiration, service account not disabled
-   - Extract claims (sub, aud, exp, iss) into AuthContext
-   - Convert JWT exp (i64) to DateTime:
+   - **No network calls** - completely offline token generation
+3. Service sends request with `Authorization: Bearer <jwt>`
+4. flight-sql-srv validates token using **unified JWT validator**:
+   - Decode JWT header to extract issuer claim
+   - Issuer "micromegas-service-accounts" → use local JWKS source
+   - Check token cache (moka) for previously validated token
+   - If not cached:
+     - Validate JWT signature using **local JWKS** (loaded from database)
+     - Validate standard JWT claims (aud, exp, iss, sub)
+     - Check service account not disabled (via issuer check)
+   - Extract claims into AuthContext:
      ```rust
-     let expires_at = DateTime::from_timestamp(jwt_claims.exp, 0)
-         .ok_or("invalid expiration timestamp")?;
+     AuthContext {
+         subject: jwt_claims.sub,  // service account ID
+         email: None,               // services don't have email
+         issuer: "micromegas-service-accounts",
+         expires_at: DateTime::from_timestamp(jwt_claims.exp, 0)?,
+         auth_type: AuthType::ServiceAccount,
+         is_admin: false,           // services are never admin
+     }
      ```
-   - Store AuthContext in cache
+   - Store AuthContext in token cache
 5. Request proceeds with AuthContext (service identity available for audit logging)
 
-**Key advantages:**
-- No external calls for token generation or validation
-- Service can generate tokens offline
-- Short-lived tokens (1 hour) generated on-demand
-- Private key compromise limited to token duration
+**Key advantages maintained**:
+- ✅ No external calls for token generation or validation
+- ✅ Service can generate tokens offline
+- ✅ Short-lived tokens (1 hour) generated on-demand
+- ✅ Private key compromise limited to token duration
+- **NEW**: Standard OAuth JWT format (tooling compatibility)
+- **NEW**: Reuses OIDC validation infrastructure
 
 #### API Key Flow (Legacy)
 1. Service sends request with `Authorization: Bearer <api_key>`
@@ -385,14 +617,14 @@ Note: `chrono` is likely already in use for timestamp handling throughout the co
 - Create ApiKeyAuthProvider wrapping current KeyRing
 - Add AuthContext struct
 - Update check_auth to use AuthProvider
-- Add unified JWT validation utilities
-- Add unit tests for API key mode
-- **Goal**: No behavior change, cleaner architecture
+- **Implement UnifiedJwtAuthProvider with JWKS source abstraction**
+- Add unit tests for API key mode and JWT validation utilities
+- **Goal**: Foundation for unified OIDC + service account validation
 
 ### Phase 2: Add Service Account Support
 - Create service_accounts database table (with created_by field)
-- Implement ServiceAccountRegistry (load public keys from DB)
-- Implement ServiceAccountAuthProvider (JWT validation with local keys)
+- Implement ServiceAccountRegistry (load public keys from DB → **convert to local JWKS**)
+- Add service account JWKS as **`JwksSource::Local`** to UnifiedJwtAuthProvider
 - Add admin RBAC:
   - Add is_admin field to AuthContext
   - Parse MICROMEGAS_ADMINS config
@@ -406,18 +638,19 @@ Note: `chrono` is likely already in use for timestamp handling throughout the co
   - Each UDF checks auth_context.is_admin
   - created_by automatically extracted from AuthContext (no parameter)
 - Add credential file format and generation (RSA keypair)
-- Python client: ServiceAccount class with JWT generation
+- Python client: ServiceAccount class with **OAuth-compatible JWT generation**
 - Add integration tests with test keypairs
 - Create example service using self-signed JWTs
-- **Goal**: Support service authentication + admin management via SQL
+- **Goal**: Service authentication via unified JWT validator
 
 ### Phase 3: Add OIDC Support
 **Server-side:**
-- Implement OidcAuthProvider using openidconnect crate
+- Add OIDC providers as **`JwksSource::Remote`** to UnifiedJwtAuthProvider
 - Add JWKS fetching and caching from remote endpoints
 - Add multi-issuer support (Google, Azure AD, Okta)
 - Add OIDC configuration parsing
 - Add integration tests with mock OIDC provider
+- **No new AuthProvider needed** - UnifiedJwtAuthProvider handles both
 
 **Python client:**
 - Implement OidcCredentials class
