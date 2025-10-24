@@ -1,0 +1,1 @@
+searchState.loadedDescShard("micromegas_tracing_proc_macros", 0, "<code>log_fn</code> and <code>span_fn</code> procedural macros\nlog_fn: log the execution of a function\nspan_fn: trace the execution of sync functions, async …")

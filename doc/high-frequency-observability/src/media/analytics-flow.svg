@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 250" width="900" height="250">
+  <defs>
+    <style>
+      .box { fill: #2d2d2d; stroke: #4a9eff; stroke-width: 2; }
+      .storage { fill: #2d2d2d; stroke: #4a9eff; stroke-width: 2; }
+      .text { fill: #e6e6e6; font-family: 'Courier New', monospace; font-size: 16px; text-anchor: middle; font-weight: bold; }
+      .small-text { fill: #a6a6a6; font-family: 'Courier New', monospace; font-size: 12px; text-anchor: middle; }
+      .arrow { stroke: #4a9eff; stroke-width: 2.5; fill: none; marker-end: url(#arrowhead); }
+      .label { fill: #e6e6e6; font-family: 'Courier New', monospace; font-size: 11px; text-anchor: middle; }
+    </style>
+    <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+      <polygon points="0 0, 10 3, 0 6" fill="#4a9eff" />
+    </marker>
+  </defs>
+
+  <!-- Data Lake -->
+  <text x="100" y="70" class="small-text">Data Lake</text>
+
+  <!-- PostgreSQL -->
+  <ellipse cx="100" cy="110" rx="80" ry="50" class="storage"/>
+  <text x="100" y="108" class="text">PostgreSQL</text>
+  <text x="100" y="125" class="small-text">metadata</text>
+
+  <!-- S3 -->
+  <ellipse cx="100" cy="200" rx="80" ry="50" class="storage"/>
+  <text x="100" y="198" class="text">S3</text>
+  <text x="100" y="215" class="small-text">payloads</text>
+
+  <!-- Arrows to Analytics -->
+  <line x1="180" y1="110" x2="250" y2="135" class="arrow"/>
+  <line x1="180" y1="200" x2="250" y2="165" class="arrow"/>
+
+  <!-- Analytics -->
+  <text x="330" y="70" class="small-text">Analytics</text>
+  <rect x="250" y="120" width="160" height="60" class="box" rx="5"/>
+  <text x="330" y="145" class="text">flight-sql-srv</text>
+  <text x="330" y="165" class="small-text">DataFusion JIT ETL</text>
+
+  <!-- Arrows to Lakehouse -->
+  <line x1="410" y1="140" x2="480" y2="110" class="arrow"/>
+  <line x1="410" y1="160" x2="480" y2="200" class="arrow"/>
+
+  <!-- Lakehouse -->
+  <text x="570" y="70" class="small-text">Lakehouse</text>
+
+  <!-- PostgreSQL Partitions -->
+  <ellipse cx="570" cy="110" rx="80" ry="50" class="storage"/>
+  <text x="570" y="108" class="text">PostgreSQL</text>
+  <text x="570" y="125" class="small-text">partitions</text>
+
+  <!-- S3 Parquet -->
+  <ellipse cx="570" cy="200" rx="80" ry="50" class="storage"/>
+  <text x="570" y="198" class="text">S3</text>
+  <text x="570" y="215" class="small-text">parquet</text>
+
+  <!-- Arrows to Clients -->
+  <line x1="650" y1="110" x2="720" y2="95" class="arrow"/>
+  <line x1="650" y1="155" x2="720" y2="155" class="arrow"/>
+  <line x1="650" y1="200" x2="720" y2="215" class="arrow"/>
+
+  <!-- Clients -->
+  <text x="780" y="70" class="small-text">Clients</text>
+
+  <rect x="720" y="70" width="100" height="40" class="box" rx="5"/>
+  <text x="770" y="95" class="text">Grafana</text>
+
+  <rect x="720" y="135" width="100" height="40" class="box" rx="5"/>
+  <text x="770" y="160" class="text">Python</text>
+
+  <rect x="720" y="195" width="100" height="40" class="box" rx="5"/>
+  <text x="770" y="220" class="text">Web UI</text>
+</svg>
