@@ -1,10 +1,14 @@
 use crate::types::{AuthContext, AuthProvider, AuthType};
 use anyhow::{Result, anyhow};
+use base64::Engine;
 use chrono::{DateTime, Utc};
+use jsonwebtoken::{Algorithm, Validation, decode};
 use moka::future::Cache;
 use openidconnect::IssuerUrl;
 use openidconnect::core::{CoreJsonWebKeySet, CoreProviderMetadata};
-use serde::Deserialize;
+use rsa::pkcs1::EncodeRsaPublicKey;
+use rsa::{BigUint, RsaPublicKey};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -121,6 +125,23 @@ impl OidcConfig {
     }
 }
 
+/// JWT Claims from OIDC ID token
+#[derive(Debug, Serialize, Deserialize)]
+struct Claims {
+    /// Issuer - identifies the principal that issued the JWT
+    iss: String,
+    /// Subject - identifies the principal that is the subject of the JWT
+    sub: String,
+    /// Audience - identifies the recipients that the JWT is intended for
+    #[serde(default)]
+    aud: Vec<String>,
+    /// Expiration time - identifies the expiration time on or after which the JWT must not be accepted
+    exp: i64,
+    /// Email address of the user (optional, provider-specific)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    email: Option<String>,
+}
+
 /// OIDC issuer client for token validation
 struct OidcIssuerClient {
     issuer: String,
@@ -168,7 +189,6 @@ fn jwk_to_decoding_key(
         .ok_or_else(|| anyhow!("JWK missing 'e' parameter"))?;
 
     // Decode base64url encoded parameters
-    use base64::Engine;
     let n_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(n.as_bytes())
         .map_err(|e| anyhow!("Failed to decode 'n': {e:?}"))?;
@@ -177,9 +197,6 @@ fn jwk_to_decoding_key(
         .map_err(|e| anyhow!("Failed to decode 'e': {e:?}"))?;
 
     // Create RSA public key
-    use rsa::pkcs1::EncodeRsaPublicKey;
-    use rsa::{BigUint, RsaPublicKey};
-
     let n_bigint = BigUint::from_bytes_be(&n_bytes);
     let e_bigint = BigUint::from_bytes_be(&e_bytes);
 
@@ -263,20 +280,6 @@ impl OidcAuthProvider {
 
     /// Validate an ID token and return authentication context
     async fn validate_id_token(&self, token: &str) -> Result<AuthContext> {
-        use jsonwebtoken::{Algorithm, Validation, decode};
-        use serde::{Deserialize, Serialize};
-
-        #[derive(Debug, Serialize, Deserialize)]
-        struct Claims {
-            iss: String,
-            sub: String,
-            #[serde(default)]
-            aud: Vec<String>,
-            exp: i64,
-            #[serde(skip_serializing_if = "Option::is_none")]
-            email: Option<String>,
-        }
-
         // Try to decode with each configured issuer until one works
         // This is a simplified approach - in production we'd decode the payload first to get the issuer
         for client in self.clients.values() {
