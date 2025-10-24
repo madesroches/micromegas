@@ -1,4 +1,5 @@
-use micromegas_auth::{ApiKeyAuthProvider, AuthProvider, AuthType, Key, KeyRing, parse_key_ring};
+use micromegas_auth::api_key::{ApiKeyAuthProvider, Key, KeyRing, parse_key_ring};
+use micromegas_auth::types::{AuthProvider, AuthType};
 
 #[tokio::test]
 async fn test_valid_api_key() {

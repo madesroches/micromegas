@@ -9,7 +9,8 @@
 //! # Example: API Key Authentication
 //!
 //! ```rust
-//! use micromegas_auth::{ApiKeyAuthProvider, AuthProvider, parse_key_ring};
+//! use micromegas_auth::api_key::{ApiKeyAuthProvider, parse_key_ring};
+//! use micromegas_auth::types::AuthProvider;
 //!
 //! # async fn example() -> anyhow::Result<()> {
 //! let json = r#"[{"name": "user1", "key": "secret-key-123"}]"#;
@@ -25,7 +26,8 @@
 //! # Example: OIDC Authentication
 //!
 //! ```rust,no_run
-//! use micromegas_auth::{OidcAuthProvider, OidcConfig, OidcIssuer, AuthProvider};
+//! use micromegas_auth::oidc::{OidcAuthProvider, OidcConfig, OidcIssuer};
+//! use micromegas_auth::types::AuthProvider;
 //!
 //! # async fn example() -> anyhow::Result<()> {
 //! let config = OidcConfig {
@@ -57,8 +59,3 @@ pub mod oidc;
 /// Test utilities for generating test tokens
 #[cfg(test)]
 pub mod test_utils;
-
-// Re-export commonly used types
-pub use api_key::{ApiKeyAuthProvider, Key, KeyRing, parse_key_ring};
-pub use oidc::{OidcAuthProvider, OidcConfig, OidcIssuer};
-pub use types::{AuthContext, AuthProvider, AuthType};

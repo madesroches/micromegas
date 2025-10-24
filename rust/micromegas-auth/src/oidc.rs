@@ -230,7 +230,7 @@ impl OidcAuthProvider {
 
         // Try to decode with each configured issuer until one works
         // This is a simplified approach - in production we'd decode the payload first to get the issuer
-        for (_issuer_name, client) in &self.clients {
+        for client in self.clients.values() {
             // Get JWKS from cache or fetch
             let jwks = match client.jwks_cache.get().await {
                 Ok(jwks) => jwks,
@@ -331,8 +331,8 @@ impl OidcAuthProvider {
             .map_err(|e| anyhow!("Failed to encode public key as PEM: {}", e))?;
 
         // Create DecodingKey
-        Ok(jsonwebtoken::DecodingKey::from_rsa_pem(pem.as_bytes())
-            .map_err(|e| anyhow!("Failed to create decoding key: {}", e))?)
+        jsonwebtoken::DecodingKey::from_rsa_pem(pem.as_bytes())
+            .map_err(|e| anyhow!("Failed to create decoding key: {}", e))
     }
 }
 
