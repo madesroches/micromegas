@@ -81,32 +81,33 @@ pub struct OidcIssuer {
     pub audience: String,
 }
 
+const DEFAULT_JWKS_REFRESH_INTERVAL_SECS: u64 = 3600;
+const DEFAULT_TOKEN_CACHE_SIZE: u64 = 1000;
+const DEFAULT_TOKEN_CACHE_TTL_SECS: u64 = 300;
+
 /// OIDC configuration
 #[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
 pub struct OidcConfig {
     /// List of configured OIDC issuers
     pub issuers: Vec<OidcIssuer>,
     /// JWKS refresh interval in seconds (default: 3600 = 1 hour)
-    #[serde(default = "default_jwks_refresh_interval")]
     pub jwks_refresh_interval_secs: u64,
     /// Token cache size (default: 1000)
-    #[serde(default = "default_token_cache_size")]
     pub token_cache_size: u64,
     /// Token cache TTL in seconds (default: 300 = 5 min)
-    #[serde(default = "default_token_cache_ttl")]
     pub token_cache_ttl_secs: u64,
 }
 
-fn default_jwks_refresh_interval() -> u64 {
-    3600
-}
-
-fn default_token_cache_size() -> u64 {
-    1000
-}
-
-fn default_token_cache_ttl() -> u64 {
-    300
+impl Default for OidcConfig {
+    fn default() -> Self {
+        Self {
+            issuers: Vec::new(),
+            jwks_refresh_interval_secs: DEFAULT_JWKS_REFRESH_INTERVAL_SECS,
+            token_cache_size: DEFAULT_TOKEN_CACHE_SIZE,
+            token_cache_ttl_secs: DEFAULT_TOKEN_CACHE_TTL_SECS,
+        }
+    }
 }
 
 impl OidcConfig {
