@@ -717,7 +717,7 @@ Tokens cleared from ~/.micromegas/tokens.json
 - ✅ `OidcAuthProvider` with token validation and JWKS caching
 - ✅ **JWKS fetching uses openidconnect's built-in discovery** (with SSRF protection)
 - ✅ Test utilities for generating test tokens
-- ✅ **Tests moved to integration tests** (`tests/` directory)
+- ✅ **Tests moved to separate files** (`tests/` directory)
 - ✅ **Code style improvements:**
   - ✅ `use` statements moved to module level
   - ✅ `Claims` struct moved to module level with field documentation
@@ -738,8 +738,8 @@ rust/auth/
 │   ├── oidc.rs         # OidcAuthProvider (JWKS caching included)
 │   └── test_utils.rs   # Test token generation utilities
 └── tests/
-    ├── api_key_tests.rs  # API key integration tests
-    └── oidc_tests.rs     # OIDC integration tests
+    ├── api_key_tests.rs  # API key unit tests
+    └── oidc_tests.rs     # OIDC unit tests
 ```
 
 **✨ Key Improvements:**
@@ -748,7 +748,7 @@ rust/auth/
 - Clean separation: no dependency on micromegas-tracing
 - Faster builds: auth crate compiles independently
 - All dependencies properly scoped (no leaking to public crate)
-- Tests follow project pattern (integration tests in `tests/`, not inline)
+- Tests follow project pattern (unit tests in `tests/`, not inline)
 - Claims struct properly documented with JWT field descriptions
 
 **🔄 Next Steps:**

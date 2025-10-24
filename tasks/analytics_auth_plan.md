@@ -13,7 +13,7 @@ Enhance the flight-sql-srv authentication to support both human users (via OIDC)
 - AuthProvider trait, AuthContext struct, AuthType enum
 - ApiKeyAuthProvider (current API key system)
 - OidcAuthProvider (OIDC validation with JWKS caching)
-- Integration tests in `tests/` directory
+- Unit tests in `tests/` directory
 - All 10 tests + 2 doc tests passing
 
 **⏳ In Progress:** Integration with flight-sql-srv
@@ -402,9 +402,9 @@ Note: `chrono` is likely already in use for timestamp handling throughout the co
 - ✅ Add AuthContext struct
 - ✅ Create separate `micromegas-auth` crate (`rust/auth/`)
 - ✅ Add unified JWT validation utilities
-- ✅ Add integration tests for API key mode
+- ✅ Add unit tests for API key mode
 - ✅ Code style improvements (module-level imports, documented structs)
-- ✅ Tests moved to `tests/` directory (integration tests)
+- ✅ Tests moved to `tests/` directory (separate from source)
 - **Status**: Auth crate complete, needs integration with flight-sql-srv
 
 ### Phase 2: Add Service Account Support
@@ -436,7 +436,7 @@ Note: `chrono` is likely already in use for timestamp handling throughout the co
 - ✅ Add multi-issuer support (Google, Azure AD, Okta)
 - ✅ Add OIDC configuration parsing (from MICROMEGAS_OIDC_CONFIG)
 - ✅ Add admin users support (MICROMEGAS_ADMINS)
-- ⏳ Add integration tests with mock OIDC provider (wiremock)
+- ⏳ Add wiremock tests with mock OIDC provider (future improvement)
 - ⏳ Wire up with flight-sql-srv
 
 **Python client:**
