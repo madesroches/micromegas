@@ -213,7 +213,7 @@ impl std::fmt::Debug for OidcAuthProvider {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("OidcAuthProvider")
             .field("clients", &self.clients.keys())
-            .field("admin_users", &self.admin_users)
+            .field("admin_users", &"(not printed)")
             .finish()
     }
 }
@@ -255,7 +255,7 @@ impl OidcAuthProvider {
         })
     }
 
-    fn check_admin(&self, subject: &str, email: Option<&str>) -> bool {
+    fn is_admin(&self, subject: &str, email: Option<&str>) -> bool {
         self.admin_users
             .iter()
             .any(|admin| admin == subject || email.map(|e| admin == e).unwrap_or(false))
@@ -318,7 +318,7 @@ impl OidcAuthProvider {
                         }
 
                         // Check if user is admin
-                        let is_admin = self.check_admin(&claims.sub, claims.email.as_deref());
+                        let is_admin = self.is_admin(&claims.sub, claims.email.as_deref());
 
                         return Ok(AuthContext {
                             subject: claims.sub,
