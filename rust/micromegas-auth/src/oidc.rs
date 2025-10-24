@@ -9,6 +9,39 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+/// Fetch JWKS from the OIDC provider using openidconnect's built-in discovery
+async fn fetch_jwks(issuer_url: &IssuerUrl) -> Result<Arc<CoreJsonWebKeySet>> {
+    // Create HTTP client with SSRF protection (no redirects)
+    let http_client = reqwest::ClientBuilder::new()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|e| anyhow!("Failed to create HTTP client: {}", e))?;
+
+    // Use openidconnect's built-in OIDC discovery
+    let metadata = CoreProviderMetadata::discover_async(issuer_url.clone(), &http_client)
+        .await
+        .map_err(|e| {
+            anyhow!(
+                "Failed to discover OIDC metadata from {}: {}",
+                issuer_url,
+                e
+            )
+        })?;
+
+    // Fetch JWKS from jwks_uri
+    let jwks_uri = metadata.jwks_uri();
+    let jwks: CoreJsonWebKeySet = http_client
+        .get(jwks_uri.url().as_str())
+        .send()
+        .await
+        .map_err(|e| anyhow!("Failed to fetch JWKS from {}: {}", jwks_uri, e))?
+        .json()
+        .await
+        .map_err(|e| anyhow!("Failed to parse JWKS: {}", e))?;
+
+    Ok(Arc::new(jwks))
+}
+
 /// JWKS cache for an OIDC issuer
 ///
 /// Caches JSON Web Key Sets with automatic TTL expiration.
@@ -31,44 +64,12 @@ impl JwksCache {
         let issuer_url = self.issuer_url.clone();
 
         self.cache
-            .try_get_with("jwks".to_string(), async move {
-                Self::fetch_jwks(&issuer_url).await
-            })
+            .try_get_with(
+                "jwks".to_string(),
+                async move { fetch_jwks(&issuer_url).await },
+            )
             .await
             .map_err(|e| anyhow!("Failed to fetch JWKS: {}", e))
-    }
-
-    /// Fetch JWKS from the OIDC provider using openidconnect's built-in discovery
-    async fn fetch_jwks(issuer_url: &IssuerUrl) -> Result<Arc<CoreJsonWebKeySet>> {
-        // Create HTTP client with SSRF protection (no redirects)
-        let http_client = reqwest::ClientBuilder::new()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .map_err(|e| anyhow!("Failed to create HTTP client: {}", e))?;
-
-        // Use openidconnect's built-in OIDC discovery
-        let metadata = CoreProviderMetadata::discover_async(issuer_url.clone(), &http_client)
-            .await
-            .map_err(|e| {
-                anyhow!(
-                    "Failed to discover OIDC metadata from {}: {}",
-                    issuer_url,
-                    e
-                )
-            })?;
-
-        // Fetch JWKS from jwks_uri
-        let jwks_uri = metadata.jwks_uri();
-        let jwks: CoreJsonWebKeySet = http_client
-            .get(jwks_uri.url().as_str())
-            .send()
-            .await
-            .map_err(|e| anyhow!("Failed to fetch JWKS from {}: {}", jwks_uri, e))?
-            .json()
-            .await
-            .map_err(|e| anyhow!("Failed to parse JWKS: {}", e))?;
-
-        Ok(Arc::new(jwks))
     }
 }
 
@@ -140,6 +141,61 @@ impl OidcIssuerClient {
     }
 }
 
+/// Load admin users from environment variable
+fn load_admin_users() -> Vec<String> {
+    match std::env::var("MICROMEGAS_ADMINS") {
+        Ok(json) => serde_json::from_str::<Vec<String>>(&json).unwrap_or_default(),
+        Err(_) => vec![],
+    }
+}
+
+/// Convert a JWK to a DecodingKey for jsonwebtoken
+fn jwk_to_decoding_key(
+    jwk: &openidconnect::core::CoreJsonWebKey,
+) -> Result<jsonwebtoken::DecodingKey> {
+    // Serialize the JWK to JSON to extract parameters
+    let jwk_json =
+        serde_json::to_value(jwk).map_err(|e| anyhow!("Failed to serialize JWK: {}", e))?;
+
+    // Extract n and e parameters
+    let n = jwk_json
+        .get("n")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow!("JWK missing 'n' parameter"))?;
+    let e = jwk_json
+        .get("e")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow!("JWK missing 'e' parameter"))?;
+
+    // Decode base64url encoded parameters
+    use base64::Engine;
+    let n_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(n.as_bytes())
+        .map_err(|e| anyhow!("Failed to decode 'n': {}", e))?;
+    let e_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(e.as_bytes())
+        .map_err(|e| anyhow!("Failed to decode 'e': {}", e))?;
+
+    // Create RSA public key
+    use rsa::pkcs1::EncodeRsaPublicKey;
+    use rsa::{BigUint, RsaPublicKey};
+
+    let n_bigint = BigUint::from_bytes_be(&n_bytes);
+    let e_bigint = BigUint::from_bytes_be(&e_bytes);
+
+    let public_key = RsaPublicKey::new(n_bigint, e_bigint)
+        .map_err(|e| anyhow!("Failed to create RSA public key: {}", e))?;
+
+    // Convert to PEM format
+    let pem = public_key
+        .to_pkcs1_pem(rsa::pkcs1::LineEnding::LF)
+        .map_err(|e| anyhow!("Failed to encode public key as PEM: {}", e))?;
+
+    // Create DecodingKey
+    jsonwebtoken::DecodingKey::from_rsa_pem(pem.as_bytes())
+        .map_err(|e| anyhow!("Failed to create decoding key: {}", e))
+}
+
 /// OIDC authentication provider
 ///
 /// Validates ID tokens from configured OIDC providers.
@@ -190,20 +246,13 @@ impl OidcAuthProvider {
             .build();
 
         // Load admin users from environment
-        let admin_users = Self::load_admin_users();
+        let admin_users = load_admin_users();
 
         Ok(Self {
             clients,
             token_cache,
             admin_users,
         })
-    }
-
-    fn load_admin_users() -> Vec<String> {
-        match std::env::var("MICROMEGAS_ADMINS") {
-            Ok(json) => serde_json::from_str::<Vec<String>>(&json).unwrap_or_default(),
-            Err(_) => vec![],
-        }
     }
 
     fn check_admin(&self, subject: &str, email: Option<&str>) -> bool {
@@ -240,7 +289,7 @@ impl OidcAuthProvider {
             // Try each key in the JWKS
             for key in jwks.keys() {
                 // Convert JWK to DecodingKey
-                let decoding_key = match Self::jwk_to_decoding_key(key) {
+                let decoding_key = match jwk_to_decoding_key(key) {
                     Ok(key) => key,
                     Err(_) => continue, // Try next key
                 };
@@ -286,53 +335,6 @@ impl OidcAuthProvider {
         }
 
         Err(anyhow!("Failed to verify token with any configured issuer"))
-    }
-
-    /// Convert a JWK to a DecodingKey for jsonwebtoken
-    fn jwk_to_decoding_key(
-        jwk: &openidconnect::core::CoreJsonWebKey,
-    ) -> Result<jsonwebtoken::DecodingKey> {
-        // Serialize the JWK to JSON to extract parameters
-        let jwk_json =
-            serde_json::to_value(jwk).map_err(|e| anyhow!("Failed to serialize JWK: {}", e))?;
-
-        // Extract n and e parameters
-        let n = jwk_json
-            .get("n")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow!("JWK missing 'n' parameter"))?;
-        let e = jwk_json
-            .get("e")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow!("JWK missing 'e' parameter"))?;
-
-        // Decode base64url encoded parameters
-        use base64::Engine;
-        let n_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .decode(n.as_bytes())
-            .map_err(|e| anyhow!("Failed to decode 'n': {}", e))?;
-        let e_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .decode(e.as_bytes())
-            .map_err(|e| anyhow!("Failed to decode 'e': {}", e))?;
-
-        // Create RSA public key
-        use rsa::pkcs1::EncodeRsaPublicKey;
-        use rsa::{BigUint, RsaPublicKey};
-
-        let n_bigint = BigUint::from_bytes_be(&n_bytes);
-        let e_bigint = BigUint::from_bytes_be(&e_bytes);
-
-        let public_key = RsaPublicKey::new(n_bigint, e_bigint)
-            .map_err(|e| anyhow!("Failed to create RSA public key: {}", e))?;
-
-        // Convert to PEM format
-        let pem = public_key
-            .to_pkcs1_pem(rsa::pkcs1::LineEnding::LF)
-            .map_err(|e| anyhow!("Failed to encode public key as PEM: {}", e))?;
-
-        // Create DecodingKey
-        jsonwebtoken::DecodingKey::from_rsa_pem(pem.as_bytes())
-            .map_err(|e| anyhow!("Failed to create decoding key: {}", e))
     }
 }
 
