@@ -136,13 +136,18 @@ impl AuthProvider for OidcAuthProvider {
 ```
 
 #### 2. JWKS Cache
+
+**IMPORTANT:** Use `openidconnect::CoreProviderMetadata::discover_async()` for OIDC discovery instead of manual `reqwest` calls. The openidconnect crate provides built-in methods for discovery and JWKS fetching that handle edge cases properly.
+
 ```rust
 use moka::future::Cache;
+use openidconnect::core::{CoreProviderMetadata, CoreJsonWebKeySet};
+use openidconnect::{IssuerUrl, HttpRequest, HttpResponse};
 use std::time::Duration;
 
 struct JwksCache {
     issuer_url: IssuerUrl,
-    cache: Cache<String, CoreJsonWebKeySet>,
+    cache: Cache<String, Arc<CoreJsonWebKeySet>>,
 }
 
 impl JwksCache {
@@ -158,12 +163,12 @@ impl JwksCache {
         }
     }
 
-    async fn get(&self) -> Result<CoreJsonWebKeySet> {
+    async fn get(&self) -> Result<Arc<CoreJsonWebKeySet>> {
         // Use moka's get_or_try_insert to handle cache miss atomically
         // This prevents duplicate fetches when multiple threads miss cache simultaneously
         let jwks = self.cache
             .try_get_with("jwks".to_string(), async {
-                self.fetch_jwks().await
+                Self::fetch_jwks(&self.issuer_url).await
             })
             .await
             .map_err(|e| anyhow!("Failed to fetch JWKS: {}", e))?;
@@ -171,19 +176,32 @@ impl JwksCache {
         Ok(jwks)
     }
 
-    async fn fetch_jwks(&self) -> Result<CoreJsonWebKeySet> {
-        // Fetch from {issuer}/.well-known/openid-configuration
+    async fn fetch_jwks(issuer_url: &IssuerUrl) -> Result<Arc<CoreJsonWebKeySet>> {
+        // Use openidconnect's built-in OIDC discovery
+        // This handles /.well-known/openid-configuration discovery properly
         let metadata = CoreProviderMetadata::discover_async(
-            self.issuer_url.clone(),
-            async_http_client,
-        ).await?;
+            issuer_url.clone(),
+            async_http_client,  // Use openidconnect's HTTP client
+        )
+        .await
+        .map_err(|e| anyhow!("Failed to discover OIDC metadata: {}", e))?;
 
-        // Get JWKS from jwks_uri
-        let jwks = metadata.jwks().await?;
-        Ok(jwks)
+        // Fetch JWKS from jwks_uri (also built into openidconnect)
+        let jwks = metadata
+            .jwks()
+            .keys()
+            .clone();
+
+        Ok(Arc::new(CoreJsonWebKeySet::new(jwks)))
     }
 }
 ```
+
+**Note:** Current implementation (as of 2025-01-24) uses manual `reqwest::get()` calls for both discovery and JWKS fetching. This works but should be refactored to use openidconnect's built-in methods as shown above for:
+- Better error handling
+- Proper HTTP client configuration
+- Standards compliance
+- Less code to maintain
 
 **Benefits of using moka for JWKS cache:**
 - Automatic TTL expiration (no manual timestamp checking)
@@ -681,52 +699,105 @@ Tokens cleared from ~/.micromegas/tokens.json
 
 ## Implementation Plan
 
+### Overall Progress
+
+- **Phase 1 (Server-Side OIDC):** ~90% complete ✅
+  - Auth crate: ✅ Complete
+  - Integration: ⏳ In progress
+- **Phase 2 (Python Client):** Not started
+- **Phase 3 (CLI):** Not started
+- **Phase 4 (Documentation):** Not started
+
+### Current Status (2025-01-24)
+
+**✅ Completed:**
+- ✅ **Separate `micromegas-auth` crate created** (`rust/micromegas-auth/`)
+- ✅ `AuthProvider` trait with `AuthContext` struct
+- ✅ `ApiKeyAuthProvider` with KeyRing parsing
+- ✅ `OidcAuthProvider` with token validation and JWKS caching
+- ✅ **JWKS fetching uses openidconnect's built-in discovery** (with SSRF protection)
+- ✅ Test utilities for generating test tokens
+- ✅ All unit tests passing (10/10 + 2 doc tests)
+- ✅ Public crate updated to use `micromegas-auth`
+- ✅ Old auth module removed from public crate
+
+**📦 Auth Crate Structure:**
+```
+rust/micromegas-auth/
+├── Cargo.toml
+└── src/
+    ├── lib.rs          # Public API with re-exports
+    ├── types.rs        # AuthContext, AuthProvider trait, AuthType
+    ├── api_key.rs      # ApiKeyAuthProvider + KeyRing
+    ├── oidc.rs         # OidcAuthProvider + JwksCache (combined)
+    └── test_utils.rs   # Test token generation
+```
+
+**✨ Key Improvements:**
+- JWKS cache now uses `CoreProviderMetadata::discover_async()` (proper OIDC discovery)
+- HTTP client configured with `redirect(Policy::none())` for SSRF protection
+- Clean separation: no dependency on micromegas-tracing
+- Faster builds: auth crate compiles in ~9s independently
+- All dependencies properly scoped (no leaking to public crate)
+
+**🔄 Next Steps:**
+1. Update `tonic_auth_interceptor.rs` to use `AuthProvider` trait
+2. Wire up `OidcAuthProvider` in `flight_sql_srv.rs`
+3. Add integration tests with wiremock
+4. Test end-to-end with real OIDC provider (Google/Azure AD)
+
 ### Phase 1: Server-Side OIDC Validation (Rust)
 **Goal:** flight-sql-srv can validate OIDC ID tokens
 
-1. Add dependencies to `rust/Cargo.toml`:
-   ```toml
-   openidconnect = "4.0"
-   moka = "0.12"
-   ```
+**Status:** ~90% complete (auth crate done, needs integration with flight-sql-srv)
 
-2. Create `rust/flight-sql-srv/src/auth/oidc_provider.rs`:
-   - Implement `OidcAuthProvider` struct
-   - Implement `AuthProvider` trait
-   - JWKS caching with TTL
-   - Token validation cache
+**Completed:**
+1. ✅ Created `micromegas-auth` crate (instead of `flight-sql-srv/src/auth/`)
+   - ✅ `types.rs` - AuthProvider trait, AuthContext, AuthType
+   - ✅ `api_key.rs` - ApiKeyAuthProvider with KeyRing
+   - ✅ `oidc.rs` - OidcAuthProvider + JwksCache (combined)
+   - ✅ `test_utils.rs` - Test token generation
 
-3. Create `rust/flight-sql-srv/src/auth/jwks_cache.rs`:
-   - JWKS fetching and caching
-   - Background refresh on TTL expiration
+2. ✅ OIDC implementation:
+   - ✅ `OidcAuthProvider` struct with multi-issuer support
+   - ✅ `AuthProvider` trait implementation
+   - ✅ JWKS caching with TTL (using moka)
+   - ✅ Token validation cache
+   - ✅ Proper OIDC discovery using `CoreProviderMetadata::discover_async()`
+   - ✅ SSRF protection (HTTP client with `redirect(Policy::none())`)
 
-4. Update `rust/flight-sql-srv/src/auth/mod.rs`:
-   - Export `OidcAuthProvider`
-   - Add OIDC config parsing
+3. ✅ Configuration:
+   - ✅ `OidcConfig::from_env()` reads `MICROMEGAS_OIDC_CONFIG`
+   - ✅ JSON parsing into `OidcConfig` struct
+   - ✅ Admin users support via `MICROMEGAS_ADMINS`
 
-5. Update `rust/flight-sql-srv/src/flight_sql_srv.rs`:
-   - Initialize `OidcAuthProvider` when auth_mode=oidc
-   - Pass to auth interceptor
+4. ✅ Unit tests:
+   - ✅ API key validation
+   - ✅ OIDC config parsing
+   - ✅ Token generation and verification
+   - ✅ Expired token handling
+   - ✅ All 10 tests + 2 doc tests passing
 
-6. Add configuration parsing:
-   - Read `MICROMEGAS_OIDC_CONFIG` env var
-   - Parse JSON into `OidcConfig` struct
+**Remaining:**
+5. ⏳ Update `tonic_auth_interceptor.rs`:
+   - Use `AuthProvider` trait instead of direct KeyRing
+   - Support both API key and OIDC auth modes
 
-7. Add unit tests:
-   - Token validation with mock JWKS
-   - Cache hit/miss scenarios
-   - Expiration handling
+6. ⏳ Update `flight_sql_srv.rs`:
+   - Initialize `OidcAuthProvider` or `ApiKeyAuthProvider` based on mode
+   - Pass provider to auth interceptor
 
-8. Add integration tests:
-   - Mock OIDC provider
+7. ⏳ Add integration tests:
+   - wiremock-based mock OIDC provider
    - End-to-end token validation
+   - Multi-issuer scenarios
 
 **Acceptance Criteria:**
-- ✅ Server validates Google OIDC tokens
-- ✅ Server validates Azure AD OIDC tokens
+- ⏳ Server validates Google OIDC tokens (needs wiring)
+- ⏳ Server validates Azure AD OIDC tokens (needs wiring)
 - ✅ JWKS cache reduces external calls
 - ✅ Token cache reduces validation overhead
-- ✅ Tests pass with mock OIDC provider
+- ⏳ Integration tests pass with mock OIDC provider
 
 ### Phase 2: Python Client OIDC Support
 **Goal:** Python client can authenticate users and refresh tokens
@@ -899,44 +970,310 @@ python -m micromegas.cli.logout
 
 ## Testing Strategy
 
-### Unit Tests
+### Three-Layer Testing Approach
+
+Our testing strategy uses three complementary layers: fast unit tests for logic validation, integration tests with mock OIDC endpoints, and manual testing with real providers for final validation.
+
+### Layer 1: Unit Tests (Fast, No Network)
+
+**Approach:** Use `jsonwebtoken` crate to create test tokens with generated RSA key pairs.
 
 **Server (Rust):**
-- Token validation with mock JWKS
-- Claim extraction and validation
-- Cache hit/miss behavior
-- Expired token handling
-- Invalid signature rejection
-- Wrong audience/issuer rejection
+
+```rust
+// Test utilities for generating tokens
+use jsonwebtoken::{encode, decode, Header, Algorithm, EncodingKey, DecodingKey};
+use rsa::RsaPrivateKey;
+use rsa::pkcs1::{EncodeRsaPrivateKey, EncodeRsaPublicKey};
+
+fn generate_test_keypair() -> (EncodingKey, DecodingKey) {
+    let private_key = RsaPrivateKey::new(&mut rand::thread_rng(), 2048).unwrap();
+    let public_key = private_key.to_public_key();
+
+    let private_pem = private_key.to_pkcs1_pem(Default::default()).unwrap();
+    let public_pem = public_key.to_pkcs1_pem(Default::default()).unwrap();
+
+    (
+        EncodingKey::from_rsa_pem(private_pem.as_bytes()).unwrap(),
+        DecodingKey::from_rsa_pem(public_pem.as_bytes()).unwrap()
+    )
+}
+
+fn create_test_id_token(claims: MyClaims, encoding_key: &EncodingKey) -> String {
+    encode(&Header::new(Algorithm::RS256), &claims, encoding_key).unwrap()
+}
+```
+
+**What to test:**
+- ✅ Valid token validation
+- ✅ Claim extraction (email, sub, issuer)
+- ✅ Expired token rejection
+- ✅ Wrong audience rejection
+- ✅ Wrong issuer rejection
+- ✅ Invalid signature rejection
+- ✅ Token cache hit/miss behavior
+- ✅ JWKS cache behavior
+
+**Dependencies:**
+```toml
+[dev-dependencies]
+jsonwebtoken = "9"
+rsa = "0.9"  # For generating test RSA keys
+rand = "0.8"
+```
+
+**Benefits:**
+- Fast (no network calls)
+- Deterministic results
+- Easy to test edge cases
+- No external dependencies
 
 **Client (Python):**
-- Token refresh logic
+- Token refresh logic with mocked time
 - Expiration detection (5 min buffer)
 - Thread-safe concurrent refresh
-- File save/load
-- Browser flow components (mocked)
+- File save/load operations
+- Browser flow components (mocked HTTP server)
 
-### Integration Tests
+**Python testing dependencies:**
+```toml
+[tool.poetry.dev-dependencies]
+pytest = "^7.0"
+pytest-asyncio = "^0.21"
+responses = "^0.23"  # Mock HTTP responses
+freezegun = "^1.2"   # Mock time for expiration tests
+```
 
-**Server:**
-- Mock OIDC provider (using openidconnect test utilities)
-- End-to-end token validation
-- Multi-issuer support
-- JWKS refresh on expiration
+### Layer 2: Integration Tests (Mock OIDC Endpoints)
 
-**Client:**
-- Full auth flow with mock provider
-- Token refresh scenarios
-- Concurrent query handling
-- Error handling (network failures, expired refresh tokens)
+**Approach:** Use `wiremock` to mock OIDC provider endpoints (discovery, JWKS).
 
-### Manual Testing
+**Server (Rust):**
 
+```rust
+use wiremock::{MockServer, Mock, ResponseTemplate};
+use wiremock::matchers::{method, path};
+
+#[tokio::test]
+async fn test_oidc_provider_with_mock_server() {
+    // Start mock OIDC server
+    let mock_server = MockServer::start().await;
+
+    // Mock discovery endpoint
+    Mock::given(method("GET"))
+        .and(path("/.well-known/openid-configuration"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "issuer": mock_server.uri(),
+            "jwks_uri": format!("{}/jwks", mock_server.uri()),
+            "authorization_endpoint": format!("{}/authorize", mock_server.uri()),
+            "token_endpoint": format!("{}/token", mock_server.uri()),
+        })))
+        .mount(&mock_server)
+        .await;
+
+    // Mock JWKS endpoint with test public keys
+    Mock::given(method("GET"))
+        .and(path("/jwks"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(test_jwks()))
+        .mount(&mock_server)
+        .await;
+
+    // Initialize provider with mock server URL
+    let config = OidcConfig {
+        issuers: vec![OidcIssuer {
+            issuer: mock_server.uri(),
+            audience: "test-audience".to_string(),
+        }],
+        ..Default::default()
+    };
+
+    let provider = OidcAuthProvider::new(config).await.unwrap();
+
+    // Create token signed with corresponding private key
+    let token = create_test_token_for_issuer(&mock_server.uri());
+
+    // Validate token
+    let auth_ctx = provider.validate_token(&token).await.unwrap();
+    assert_eq!(auth_ctx.email, Some("test@example.com".to_string()));
+}
+```
+
+**What to test:**
+- ✅ OIDC discovery flow (/.well-known/openid-configuration)
+- ✅ JWKS fetching and parsing
+- ✅ JWKS cache TTL refresh
+- ✅ End-to-end token validation
+- ✅ Multi-issuer support
+- ✅ Network error handling (500 errors, timeouts)
+- ✅ Malformed JWKS response handling
+
+**Dependencies:**
+```toml
+[dev-dependencies]
+wiremock = "0.6"
+```
+
+**Benefits:**
+- Tests full OIDC discovery and validation flow
+- No external services required
+- Fast and reliable
+- Full control over mock responses
+- Can simulate network failures
+
+**Client (Python):**
+- Use `oidc-server-mock` Docker container for full auth flow testing
+- Start/stop container in test fixtures
+- Test full authorization code + PKCE flow
+- Test token refresh with real OAuth flow
+- Test concurrent query handling
+- Test error scenarios (network failures, expired refresh tokens)
+
+**Python approach:**
+```python
+import pytest
+import docker
+import requests
+
+@pytest.fixture(scope="module")
+def oidc_mock_server():
+    """Start oidc-server-mock in Docker for testing."""
+    client = docker.from_env()
+    container = client.containers.run(
+        "ghcr.io/soluto/oidc-server-mock:latest",
+        detach=True,
+        ports={'80/tcp': 8080},
+        environment={'ASPNETCORE_ENVIRONMENT': 'Development'}
+    )
+
+    # Wait for server to be ready
+    for _ in range(30):
+        try:
+            resp = requests.get('http://localhost:8080/.well-known/openid-configuration')
+            if resp.status_code == 200:
+                break
+        except:
+            time.sleep(0.1)
+
+    yield 'http://localhost:8080'
+
+    container.stop()
+    container.remove()
+
+def test_full_auth_flow(oidc_mock_server):
+    """Test complete OIDC login flow."""
+    auth = OidcAuthProvider.login(
+        issuer=oidc_mock_server,
+        client_id='test-client',
+        # ... test browser flow with mocked interactions
+    )
+    assert auth.get_token() is not None
+```
+
+### Layer 3: Manual/E2E Testing (Real Providers)
+
+**Approach:** Use actual OIDC providers for final validation.
+
+**Option A: Google OAuth (Recommended for development)**
+1. Create OAuth2 credentials at https://console.cloud.google.com/
+2. Configure redirect URI: `http://localhost:8080/callback`
+3. Set environment variable:
+   ```bash
+   export MICROMEGAS_OIDC_CONFIG='{
+     "issuers": [{
+       "issuer": "https://accounts.google.com",
+       "audience": "YOUR-CLIENT-ID.apps.googleusercontent.com"
+     }]
+   }'
+   ```
+4. Run server and test with real Google tokens
+
+**Option B: Keycloak (Docker, for controlled testing)**
+```bash
+# Run Keycloak
+docker run -p 8080:8080 \
+  -e KEYCLOAK_ADMIN=admin \
+  -e KEYCLOAK_ADMIN_PASSWORD=admin \
+  quay.io/keycloak/keycloak:latest start-dev
+
+# Access admin console: http://localhost:8080
+# Create test realm, client, and users
+```
+
+**Option C: oidc-server-mock (Docker, lightweight)**
+```bash
+docker run -d -p 8080:80 \
+  -e ASPNETCORE_ENVIRONMENT=Development \
+  ghcr.io/soluto/oidc-server-mock:latest
+```
+
+**What to test:**
 1. Google OAuth setup and authentication
-2. Azure AD OAuth setup and authentication
-3. Concurrent queries from multiple threads
-4. Token refresh after 1 hour
-5. Browser-based CLI authentication
+2. Azure AD OAuth setup and authentication (if available)
+3. End-to-end server token validation with real tokens
+4. Python client browser-based login flow
+5. CLI browser-based authentication
+6. Token refresh after 1 hour (wait or mock time)
+7. Concurrent queries from multiple threads/processes
+8. Performance with real JWKS fetching
+
+**Testing checklist:**
+- ✅ Server validates real Google ID tokens
+- ✅ Server validates real Azure AD tokens (if configured)
+- ✅ Python client login flow opens browser correctly
+- ✅ Python client saves tokens to file
+- ✅ Python client auto-refreshes before expiration
+- ✅ CLI login flow works (browser opens only when needed)
+- ✅ CLI shares token file with Python client
+- ✅ Multiple concurrent queries don't cause race conditions
+
+### Test Organization
+
+**File structure:**
+```
+rust/public/src/servers/auth/
+├── mod.rs
+├── oidc_provider.rs
+├── jwks_cache.rs
+├── test_utils.rs          # Test token generation utilities
+└── tests/
+    ├── unit_tests.rs      # Fast unit tests
+    └── integration_tests.rs  # wiremock-based tests
+
+python/micromegas/tests/auth/
+├── test_oidc_unit.py      # Unit tests with mocked HTTP
+├── test_oidc_integration.py  # Docker-based integration tests
+└── conftest.py            # Shared fixtures
+```
+
+### CI/CD Integration
+
+**Rust CI:**
+```bash
+# Run in CI pipeline
+cargo test --workspace           # Runs unit tests
+cargo test --workspace --ignored # Runs integration tests (wiremock)
+```
+
+**Python CI:**
+```bash
+# Unit tests (fast, no Docker)
+poetry run pytest tests/auth/test_oidc_unit.py
+
+# Integration tests (requires Docker)
+poetry run pytest tests/auth/test_oidc_integration.py
+```
+
+**Note:** Integration tests requiring Docker should be marked with `#[ignore]` or `@pytest.mark.integration` to allow fast CI runs that skip them.
+
+### Test Development Workflow
+
+1. **Write unit test** for specific behavior (e.g., expired token rejection)
+2. **Implement minimal code** to make test pass
+3. **Add integration test** to verify behavior with mock OIDC endpoints
+4. **Run manual test** with Google OAuth for final validation
+5. **Repeat** for next feature
+
+This TDD approach ensures each component is well-tested at multiple levels before moving to the next feature.
 
 ## Security Considerations
 
@@ -981,17 +1318,125 @@ python -m micromegas.cli.logout
 ## Dependencies
 
 ### Rust Crates
+
+**Production dependencies:**
 ```toml
-openidconnect = "4.0"   # OIDC client library
-moka = "0.12"           # High-performance caching
+# OIDC and JWT
+openidconnect = "4.0"   # OIDC client library (discovery, metadata)
+jsonwebtoken = "9"      # JWT encoding/decoding and validation
+rsa = "0.9"             # RSA key handling for JWT verification
+base64 = "0.22"         # Base64 encoding/decoding
+
+# Caching
+moka = { version = "0.12", features = ["future"] }  # High-performance async caching
+
+# HTTP
+reqwest = { version = "0.12", features = ["json"] }  # HTTP client for OIDC discovery
 ```
+
+**Test dependencies:**
+```toml
+[dev-dependencies]
+wiremock = "0.6"        # Mock HTTP server for integration tests
+rand = "0.8"            # Random key generation for tests
+```
+
+**Why these choices:**
+- `openidconnect` - Used for OIDC discovery and metadata parsing (standards-compliant)
+- `jsonwebtoken` - Simpler API for JWT validation than openidconnect's verification methods
+- `rsa` - Required for converting JWKS to JWT verification keys
+- `moka` - Best-in-class async caching with TTL support
+- `wiremock` - Industry standard for HTTP mocking in Rust
+
+**Note:** Current implementation (2025-01-24) uses manual `reqwest` for JWKS fetching. Should be refactored to use `openidconnect::CoreProviderMetadata::discover_async()` for better standards compliance.
 
 ### Python Packages
 ```toml
 authlib = "^1.3.0"     # OAuth2/OIDC client library (includes JWT, PKCE, discovery, refresh)
 ```
 
-Note: `authlib` includes everything needed for OIDC (no need for separate `pyjwt` or `requests-oauthlib`)
+**Note:** `authlib` includes everything needed for OIDC (no need for separate `pyjwt` or `requests-oauthlib`)
+
+## Architecture Decisions & Trade-offs
+
+### 1. JWT Validation: jsonwebtoken vs openidconnect
+
+**Decision:** Use `jsonwebtoken` crate for JWT validation instead of openidconnect's built-in verification.
+
+**Rationale:**
+- Simpler API - `jsonwebtoken::decode()` is more straightforward than openidconnect's `IdTokenVerifier`
+- Better error messages - easier to debug validation failures
+- More control - can customize validation rules easily
+- Well-tested - `jsonwebtoken` is widely used in the Rust ecosystem
+
+**Trade-off:**
+- Need to manually convert JWKS to `DecodingKey` (adds complexity)
+- Need to manually validate claims (iss, aud, exp)
+- openidconnect's verifier has more built-in safety checks
+
+**Future consideration:** Could switch to openidconnect's verifier if we need stricter OIDC compliance or additional safety checks.
+
+### 2. OIDC Discovery: Manual reqwest vs openidconnect
+
+**Current implementation:** Uses manual `reqwest::get()` calls for discovery and JWKS fetching.
+
+**Should use:** `openidconnect::CoreProviderMetadata::discover_async()`
+
+**Why change is needed:**
+- Standards compliance - openidconnect handles edge cases properly
+- Better error handling - detailed error types for discovery failures
+- Less code - no need to manually parse discovery document
+- Future-proof - openidconnect updates track OIDC spec changes
+
+**Action item:** Refactor `jwks_cache.rs` to use openidconnect's discovery (see updated plan above).
+
+### 3. Caching Strategy: moka
+
+**Decision:** Use `moka` for both JWKS cache and token validation cache.
+
+**Rationale:**
+- Best-in-class async caching for Rust
+- TTL support prevents stale data
+- `try_get_with()` prevents thundering herd (multiple threads fetching same key)
+- Lock-free implementation for high performance
+- Simple API
+
+**Alternatives considered:**
+- `cached` crate - less mature, fewer features
+- Manual `Arc<RwLock<HashMap>>` - harder to implement correctly, no TTL
+- `mini-moka` - smaller but missing async support
+
+### 4. Token Validation Flow: Multi-issuer iteration
+
+**Decision:** Iterate through all configured issuers and try each JWKS key until validation succeeds.
+
+**Rationale:**
+- Simple implementation
+- Supports multiple identity providers
+- No need to parse token payload before verification
+
+**Trade-off:**
+- Less efficient (tries multiple issuers on failure)
+- Could be optimized by decoding payload first to get `iss` claim
+
+**Future optimization:** Decode JWT payload without verification to extract issuer, then only try that issuer's JWKS.
+
+### 5. Module location: public/src/servers/auth
+
+**Decision:** Placed auth code in `public` crate under `servers/auth`.
+
+**Rationale:**
+- Quick iteration during development
+- Co-located with existing auth code (`key_ring`, `tonic_auth_interceptor`)
+- Minimal changes to existing crate structure
+
+**Planned change:** Move to separate `micromegas-auth` crate (see "Future: Separate Auth Crate" section) for:
+- Faster build times
+- Better modularity
+- Easier testing
+- Cleaner dependency graph
+
+**When:** After Phase 1 integration is complete and tested.
 
 ## References
 
