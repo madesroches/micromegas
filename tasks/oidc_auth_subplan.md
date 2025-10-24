@@ -711,34 +711,45 @@ Tokens cleared from ~/.micromegas/tokens.json
 ### Current Status (2025-01-24)
 
 **✅ Completed:**
-- ✅ **Separate `micromegas-auth` crate created** (`rust/micromegas-auth/`)
+- ✅ **Separate `micromegas-auth` crate created** (`rust/auth/`)
 - ✅ `AuthProvider` trait with `AuthContext` struct
 - ✅ `ApiKeyAuthProvider` with KeyRing parsing
 - ✅ `OidcAuthProvider` with token validation and JWKS caching
 - ✅ **JWKS fetching uses openidconnect's built-in discovery** (with SSRF protection)
 - ✅ Test utilities for generating test tokens
-- ✅ All unit tests passing (10/10 + 2 doc tests)
+- ✅ **Tests moved to integration tests** (`tests/` directory)
+- ✅ **Code style improvements:**
+  - ✅ `use` statements moved to module level
+  - ✅ `Claims` struct moved to module level with field documentation
+  - ✅ Renamed `check_admin` to `is_admin`
+  - ✅ Admin users hidden in Debug output for security
+- ✅ All tests passing (10 tests + 2 doc tests)
 - ✅ Public crate updated to use `micromegas-auth`
 - ✅ Old auth module removed from public crate
 
 **📦 Auth Crate Structure:**
 ```
-rust/micromegas-auth/
+rust/auth/
 ├── Cargo.toml
-└── src/
-    ├── lib.rs          # Public API with re-exports
-    ├── types.rs        # AuthContext, AuthProvider trait, AuthType
-    ├── api_key.rs      # ApiKeyAuthProvider + KeyRing
-    ├── oidc.rs         # OidcAuthProvider + JwksCache (combined)
-    └── test_utils.rs   # Test token generation
+├── src/
+│   ├── lib.rs          # Public API with re-exports
+│   ├── types.rs        # AuthContext, AuthProvider trait, AuthType
+│   ├── api_key.rs      # ApiKeyAuthProvider + KeyRing
+│   ├── oidc.rs         # OidcAuthProvider (JWKS caching included)
+│   └── test_utils.rs   # Test token generation utilities
+└── tests/
+    ├── api_key_tests.rs  # API key integration tests
+    └── oidc_tests.rs     # OIDC integration tests
 ```
 
 **✨ Key Improvements:**
-- JWKS cache now uses `CoreProviderMetadata::discover_async()` (proper OIDC discovery)
+- JWKS cache uses `CoreProviderMetadata::discover_async()` (proper OIDC discovery)
 - HTTP client configured with `redirect(Policy::none())` for SSRF protection
 - Clean separation: no dependency on micromegas-tracing
-- Faster builds: auth crate compiles in ~9s independently
+- Faster builds: auth crate compiles independently
 - All dependencies properly scoped (no leaking to public crate)
+- Tests follow project pattern (integration tests in `tests/`, not inline)
+- Claims struct properly documented with JWT field descriptions
 
 **🔄 Next Steps:**
 1. Update `tonic_auth_interceptor.rs` to use `AuthProvider` trait
