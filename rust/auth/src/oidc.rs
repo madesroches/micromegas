@@ -360,6 +360,3 @@ impl AuthProvider for OidcAuthProvider {
         Ok(auth_ctx)
     }
 }
-
-#[cfg(test)]
-mod tests;

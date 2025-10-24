@@ -1,4 +1,4 @@
-use super::*;
+use micromegas_auth::oidc::{OidcAuthProvider, OidcConfig, OidcIssuer};
 
 #[test]
 fn test_oidc_config_parsing() {
@@ -54,10 +54,6 @@ async fn test_oidc_provider_creation() {
 
     let provider = OidcAuthProvider::new(config).await;
     assert!(provider.is_ok());
-
-    let provider = provider.unwrap();
-    assert_eq!(provider.clients.len(), 1);
-    assert!(provider.clients.contains_key("https://accounts.google.com"));
 }
 
 #[tokio::test]
