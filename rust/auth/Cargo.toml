@@ -1,0 +1,28 @@
+[package]
+name = "micromegas-auth"
+description = "Authentication providers for Micromegas (API keys, OIDC)"
+keywords.workspace = true
+version.workspace = true
+edition.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+base64 = "0.22"
+chrono.workspace = true
+jsonwebtoken = "9"
+moka.workspace = true
+openidconnect.workspace = true
+rand.workspace = true
+reqwest.workspace = true
+rsa = "0.9"
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+wiremock = "0.6"
