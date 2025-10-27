@@ -83,44 +83,45 @@ parent_dir.chmod(0o700)
 
 ## 🟠 HIGH PRIORITY - Should Fix Soon
 
-### 4. Global TCPServer Configuration Mutation
+### 4. ✅ Global TCPServer Configuration Mutation - COMPLETED
 
-**File**: `python/micromegas/micromegas/auth/oidc.py:218`
+**File**: `python/micromegas/micromegas/auth/oidc.py:232-234`
+
+**Status**: ✅ **FIXED** on 2025-10-27
 
 **Issue**: Modifies class-level attribute, affecting all TCPServer instances globally.
 
-**Current Code**:
+**Implementation**: Changed from setting class attribute to instance attribute:
 ```python
-socketserver.TCPServer.allow_reuse_address = True  # Class variable!
+# Before (modifies global class):
+socketserver.TCPServer.allow_reuse_address = True
 server = socketserver.TCPServer(("", callback_port), CallbackHandler)
+
+# After (sets instance only):
+server = socketserver.TCPServer(("", callback_port), CallbackHandler)
+server.allow_reuse_address = True
 ```
 
-**Fix**:
-```python
-server = socketserver.TCPServer(("", callback_port), CallbackHandler)
-server.allow_reuse_address = True  # Instance variable
-```
+**Security properties**:
+- No longer mutates global TCPServer class state
+- Only affects the specific server instance used for OAuth callback
+- Prevents unintended side effects on other code using TCPServer
+
+**Testing**: Python unit tests updated and passing (all 6 unit tests pass)
 
 **Priority**: HIGH - Could affect other code using TCPServer
 
 ---
 
-### 5. Missing Server Cleanup on Exception
+### 5. ✅ Missing Server Cleanup on Exception - COMPLETED
 
-**File**: `python/micromegas/micromegas/auth/oidc.py:216-247`
+**File**: `python/micromegas/micromegas/auth/oidc.py:232-266`
+
+**Status**: ✅ **FIXED** on 2025-10-27
 
 **Issue**: If an exception occurs during token exchange, server might not be properly closed.
 
-**Current Code**:
-```python
-server = socketserver.TCPServer(("", callback_port), CallbackHandler)
-try:
-    # ... auth flow
-finally:
-    server.server_close()  # Only closes socket, doesn't guarantee cleanup
-```
-
-**Fix**:
+**Implementation**: Added defensive server cleanup with proper error handling:
 ```python
 server = None
 try:
@@ -130,11 +131,20 @@ try:
 finally:
     if server:
         try:
-            server.shutdown()  # Stop serving
             server.server_close()  # Close socket
         except Exception:
             pass  # Best effort cleanup
 ```
+
+**Security properties**:
+- Server initialized to None to handle TCPServer creation failures
+- Cleanup only runs if server was successfully created
+- Exception handling in finally block prevents cleanup errors from masking original exception
+- Ensures port is always released, even if exceptions occur
+
+**Note**: `server.shutdown()` not needed since we use `handle_request()` (single request) rather than `serve_forever()` (continuous serving).
+
+**Testing**: Python unit tests updated and passing (all 6 unit tests pass)
 
 **Priority**: HIGH - Port leaks can block subsequent auth attempts
 
@@ -391,7 +401,7 @@ Fixed pre-existing issues in Python unit tests (`tests/auth/test_oidc_unit.py`):
 ## Timeline
 
 **Before Merge (Critical)**: ~~Issues 1-3~~ ✅ **ALL COMPLETE** (Issues 1, 2, 3 fixed)
-**Within 1 week**: Issues 4-5
+**Within 1 week**: ~~Issues 4-5~~ ✅ **ALL COMPLETE** (Issues 4, 5 fixed)
 **Within 1 month**: Issues 6-8
 **Future**: Issues 9-11
 

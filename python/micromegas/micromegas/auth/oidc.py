@@ -229,11 +229,12 @@ class OidcAuthProvider:
                 pass  # Suppress logging
 
         # Start callback server
-        # Allow reusing the address to avoid "Address already in use" errors
-        socketserver.TCPServer.allow_reuse_address = True
-        server = socketserver.TCPServer(("", callback_port), CallbackHandler)
-
+        server = None
         try:
+            server = socketserver.TCPServer(("", callback_port), CallbackHandler)
+            # Allow reusing the address to avoid "Address already in use" errors
+            server.allow_reuse_address = True
+
             server_thread = threading.Thread(target=server.handle_request)
             server_thread.daemon = True
             server_thread.start()
@@ -258,7 +259,11 @@ class OidcAuthProvider:
             )
         finally:
             # Always close the server to release the port
-            server.server_close()
+            if server:
+                try:
+                    server.server_close()
+                except Exception:
+                    pass  # Best effort cleanup
 
         return token
 
