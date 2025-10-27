@@ -283,8 +283,18 @@ Modifications to `flight_sql_srv.rs`:
 
 Add to `rust/Cargo.toml` workspace dependencies:
 ```toml
-openidconnect = "4.0"  # For OIDC discovery, metadata, and JWT validation
+# OIDC discovery
+openidconnect = "4.0"  # For OIDC discovery and metadata
+
+# JWT validation
+jsonwebtoken = "9"     # For JWT validation (simpler API, battle-tested)
+rsa = "0.9"            # For RSA key handling in JWT verification
+base64 = "0.22"        # For base64 decoding in JWKS conversion
+
+# Caching
 moka = "0.12"          # For token cache with TTL and thread-safe concurrent access
+
+# DateTime
 chrono = "0.4"         # For DateTime types (likely already a dependency)
 ```
 
@@ -295,12 +305,12 @@ chrono = "0.4"         # For DateTime types (likely already a dependency)
 - Production-proven (powers crates.io)
 - Combines LRU eviction with LFU admission policy for better hit rates
 
-**Why openidconnect for JWT validation?**
-- Standards-compliant OIDC implementation
-- Built-in JWT verification with proper security checks
-- Handles JWKS conversion automatically
-- Well-maintained and actively developed
-- Reduces custom crypto code (smaller attack surface)
+**Why hybrid approach (openidconnect + jsonwebtoken)?**
+- openidconnect designed for OAuth clients, not server-side token validation
+- IdTokenVerifier API is internal/private, not accessible for our use case
+- jsonwebtoken provides simple, clear API for JWT validation
+- Using each library for what it does well: discovery vs. validation
+- Battle-tested combination in production use
 
 Note: `chrono` is likely already in use for timestamp handling throughout the codebase.
 

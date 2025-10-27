@@ -714,18 +714,20 @@ Tokens cleared from ~/.micromegas/tokens.json
 
 ### Current Status (2025-01-24)
 
-**✅ Completed (Auth Crate - needs refactoring):**
+**✅ Completed (Auth Crate):**
 - ✅ **Separate `micromegas-auth` crate created** (`rust/auth/`)
 - ✅ `AuthProvider` trait with `AuthContext` struct
 - ✅ `ApiKeyAuthProvider` with KeyRing parsing
 - ✅ `OidcAuthProvider` with token validation and JWKS caching
-- ⚠️ **JWKS fetching** (currently manual reqwest - needs refactoring to openidconnect)
-- ⚠️ **JWT validation** (currently jsonwebtoken - needs refactoring to openidconnect::IdTokenVerifier)
+- ✅ **OIDC discovery** using `openidconnect::CoreProviderMetadata::discover_async()`
+- ✅ **JWT validation** using `jsonwebtoken` (hybrid approach - pragmatic solution)
+- ✅ JWKS caching with TTL using moka
+- ✅ SSRF protection (HTTP client with `redirect(Policy::none())`)
 - ✅ Test utilities for generating test tokens
 - ✅ **Tests moved to separate files** (`tests/` directory)
 - ✅ **Code style improvements:**
   - ✅ `use` statements moved to module level
-  - ✅ `Claims` struct moved to module level with field documentation
+  - ✅ Claims struct properly documented
   - ✅ Renamed `check_admin` to `is_admin`
   - ✅ Admin users hidden in Debug output for security
 - ✅ All tests passing (10 tests + 2 doc tests)
@@ -733,7 +735,6 @@ Tokens cleared from ~/.micromegas/tokens.json
 **⏳ In Progress (Integration):**
 - ⏳ Wire up AuthProvider in tonic_auth_interceptor.rs
 - ⏳ Add flight-sql-srv configuration and initialization
-- ⏳ Refactor to use openidconnect for discovery AND validation (remove jsonwebtoken dependency)
 - ⏳ Add integration tests with wiremock
 - ⏳ Test end-to-end with real OIDC provider (Google/Azure AD)
 
@@ -1342,35 +1343,40 @@ This TDD approach ensures each component is well-tested at multiple levels befor
 
 **Production dependencies:**
 ```toml
-# OIDC and JWT - use openidconnect for everything
-openidconnect = "4.0"   # OIDC client library (discovery, metadata, JWT validation)
+# OIDC discovery
+openidconnect = "4.0"   # OIDC discovery (/.well-known/openid-configuration, JWKS fetching)
+
+# JWT validation
+jsonwebtoken = "9"      # JWT signature verification and claim extraction
+rsa = "0.9"             # RSA key handling for JWKS conversion
+base64 = "0.22"         # Base64 decoding for JWK parameters
 
 # Caching
 moka = { version = "0.12", features = ["future"] }  # High-performance async caching
+
+# HTTP
+reqwest = { version = "0.12", features = ["json"] }  # HTTP client (used by openidconnect)
 ```
 
 **Test dependencies:**
 ```toml
 [dev-dependencies]
 wiremock = "0.6"        # Mock HTTP server for integration tests
+rand = "0.8"            # Random key generation for tests
 ```
 
-**Why these choices:**
-- `openidconnect` - Standards-compliant OIDC implementation (discovery, JWKS, JWT validation)
+**Why this combination:**
+- `openidconnect` - Standards-compliant OIDC discovery
+- `jsonwebtoken` - Simple, clear API for JWT validation
+- `rsa` + `base64` - Required for JWKS to DecodingKey conversion
 - `moka` - Best-in-class async caching with TTL support
 - `wiremock` - Industry standard for HTTP mocking in Rust
 
-**Removed dependencies (after refactoring):**
-- ~~`jsonwebtoken`~~ - Replaced by openidconnect's IdTokenVerifier
-- ~~`rsa`~~ - Not needed, openidconnect handles JWKS conversion
-- ~~`base64`~~ - Not needed when using openidconnect
-- ~~`reqwest`~~ - openidconnect has built-in HTTP client
-
-**Benefits of using openidconnect:**
-- Fewer dependencies (smaller attack surface)
-- Standards-compliant implementation
-- Less custom code to maintain
-- Automatic security updates from openidconnect crate
+**Rationale for hybrid approach:**
+- openidconnect is designed for OAuth clients (browser flows), not server-side token validation
+- Its `IdTokenVerifier` API is internal and not suitable for validating third-party tokens
+- jsonwebtoken provides a battle-tested, simple API for JWT validation
+- Using each library for what it does well results in cleaner, more maintainable code
 
 ### Python Packages
 ```toml
@@ -1381,50 +1387,74 @@ authlib = "^1.3.0"     # OAuth2/OIDC client library (includes JWT, PKCE, discove
 
 ## Architecture Decisions & Trade-offs
 
-### 1. JWT Validation: Use openidconnect
+### 1. JWT Validation: Hybrid Approach (openidconnect + jsonwebtoken)
 
-**Decision:** Use `openidconnect` crate for both OIDC discovery and JWT validation.
+**Decision:** Use `openidconnect` for OIDC discovery and `jsonwebtoken` for JWT validation.
 
 **Rationale:**
-- **Standards compliance:** openidconnect implements OIDC spec correctly
-- **Security:** Built-in JWT verification with proper security checks (nonce, signature, claims)
-- **Less custom code:** No manual JWKS conversion or claim validation needed
-- **Smaller attack surface:** Avoid custom crypto code
-- **Well-maintained:** Actively developed with security updates
-- **Proper error handling:** Detailed error types for validation failures
+- **OIDC Discovery:** Use openidconnect's `CoreProviderMetadata::discover_async()` for standards-compliant discovery
+- **JWT Validation:** Use jsonwebtoken's simple API for actual token validation
+- **Why hybrid?** The openidconnect crate is designed for OAuth clients (browser-based flows), not for server-side validation of third-party tokens. Its `IdTokenVerifier` API is internal/private and not accessible for our use case.
+- **Simple and clear:** jsonwebtoken provides a straightforward API for JWT validation
+- **Well-tested:** Both crates are widely used in production
+
+**Implementation approach:**
+1. Use openidconnect to discover OIDC provider metadata (/.well-known/openid-configuration)
+2. Fetch JWKS using discovered jwks_uri
+3. Convert JWKS to jsonwebtoken's `DecodingKey` format
+4. Validate JWT using jsonwebtoken with proper claim validation
 
 **Benefits:**
-- Automatic JWKS conversion from discovery endpoint
-- Proper nonce validation for replay prevention
-- Built-in claim validation (iss, aud, exp, nbf)
-- Standards-compliant implementation reduces security risks
+- Uses each library for what it does well
+- Clean separation of concerns (discovery vs. validation)
+- Simple, maintainable code
+- Standards-compliant OIDC discovery
+
+**Trade-offs:**
+- Manual JWKS conversion needed (adds ~50 lines of code)
+- Two libraries instead of one (but both needed anyway)
+- Slightly more dependencies (jsonwebtoken, rsa, base64)
 
 **Implementation Status:**
-- ⚠️ Current implementation uses jsonwebtoken (needs refactoring)
-- ⏳ Refactor to use `openidconnect::IdTokenVerifier`
-- ⏳ Remove jsonwebtoken and rsa dependencies
+- ✅ Hybrid approach implemented and tested
+- ✅ All 10 tests + 2 doc tests passing
+- ✅ Clean code with proper error handling
 
-### 2. Implementation Approach: Use openidconnect Throughout
+### 2. Implementation Approach: Hybrid (openidconnect + jsonwebtoken)
 
-**Goal:** Maximize use of openidconnect crate, minimize custom implementation.
+**Approach:** Use openidconnect for discovery, jsonwebtoken for validation.
 
 **Use openidconnect for:**
 - ✅ OIDC discovery (`CoreProviderMetadata::discover_async()`)
-- ✅ JWT validation (`IdTokenVerifier`)
-- ✅ JWKS handling (automatic conversion from discovery)
-- ✅ Claim extraction (standard claims via `IdTokenClaims`)
-- ✅ Error handling (use openidconnect's error types)
+- ✅ JWKS fetching (from discovered jwks_uri)
+- ✅ Provider metadata parsing
 
-**Current implementation gaps:**
-- ⚠️ Uses manual `reqwest::get()` for discovery
-- ⚠️ Uses `jsonwebtoken` for validation
-- ⚠️ Manual JWKS to DecodingKey conversion
+**Use jsonwebtoken for:**
+- ✅ JWT signature verification
+- ✅ Claim extraction and validation
+- ✅ Token decoding
 
-**Action items:**
-1. Refactor OIDC discovery to use `CoreProviderMetadata::discover_async()`
-2. Replace jsonwebtoken validation with `IdTokenVerifier`
-3. Remove manual JWKS conversion code
-4. Remove jsonwebtoken and rsa dependencies
+**Implementation flow:**
+1. Discover OIDC provider metadata using openidconnect
+2. Fetch JWKS from discovered jwks_uri
+3. Cache JWKS with TTL using moka
+4. Convert JWK to jsonwebtoken DecodingKey
+5. Verify JWT signature and extract claims using jsonwebtoken
+6. Manually validate claims (issuer, audience, expiration)
+7. Cache validated tokens
+
+**Benefits:**
+- Clean separation: discovery vs. validation
+- Uses each library's strengths
+- Simple, maintainable code
+- Well-tested production libraries
+
+**Current status:**
+- ✅ Hybrid approach fully implemented
+- ✅ All tests passing
+- ✅ OIDC discovery using openidconnect
+- ✅ JWT validation using jsonwebtoken
+- ✅ Clean JWKS conversion code (~50 lines)
 
 ### 3. Caching Strategy: moka
 
