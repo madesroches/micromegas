@@ -6,16 +6,18 @@ use micromegas::analytics::lakehouse::runtime::make_runtime_env;
 use micromegas::analytics::lakehouse::session_configurator::NoOpSessionConfigurator;
 use micromegas::analytics::lakehouse::view_factory::default_view_factory;
 use micromegas::arrow_flight::flight_service_server::FlightServiceServer;
+use micromegas::auth::api_key::{ApiKeyAuthProvider, parse_key_ring};
+use micromegas::auth::multi::MultiAuthProvider;
+use micromegas::auth::oidc::{OidcAuthProvider, OidcConfig};
+use micromegas::auth::tower::AuthService;
+use micromegas::auth::types::AuthProvider;
 use micromegas::ingestion::data_lake_connection::connect_to_data_lake;
 use micromegas::micromegas_main;
 use micromegas::servers::flight_sql_service_impl::FlightSqlServiceImpl;
-use micromegas::servers::key_ring::{KeyRing, parse_key_ring};
 use micromegas::servers::log_uri_service::LogUriService;
-use micromegas::servers::tonic_auth_interceptor::check_auth;
-use micromegas::tonic::service::interceptor::InterceptorLayer;
-use micromegas::tonic::transport::Server;
 use micromegas::tracing::prelude::*;
 use std::sync::Arc;
+use tonic::transport::Server;
 use tower::ServiceBuilder;
 use tower::layer::layer_fn;
 
@@ -50,24 +52,55 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         session_configurator,
     )?)
     .max_decoding_message_size(100 * 1024 * 1024);
+
     let auth_required = !args.disable_auth;
-    let keyring = if auth_required {
-        Arc::new(parse_key_ring(
-            &std::env::var("MICROMEGAS_API_KEYS").with_context(|| "reading MICROMEGAS_API_KEYS")?,
-        )?)
+    let auth_provider: Option<Arc<dyn AuthProvider>> = if auth_required {
+        // Initialize API key provider if configured
+        let api_key_provider = match std::env::var("MICROMEGAS_API_KEYS") {
+            Ok(keys_json) => {
+                let keyring = parse_key_ring(&keys_json)?;
+                Some(Arc::new(ApiKeyAuthProvider::new(keyring)))
+            }
+            Err(_) => {
+                info!("MICROMEGAS_API_KEYS not set - API key auth disabled");
+                None
+            }
+        };
+
+        // Initialize OIDC provider if configured
+        let oidc_provider = match OidcConfig::from_env() {
+            Ok(config) => {
+                info!("Initializing OIDC authentication");
+                Some(Arc::new(OidcAuthProvider::new(config).await?))
+            }
+            Err(e) => {
+                info!("OIDC not configured ({e}) - OIDC auth disabled");
+                None
+            }
+        };
+
+        // Create multi-provider if either is configured
+        if api_key_provider.is_some() || oidc_provider.is_some() {
+            Some(Arc::new(MultiAuthProvider {
+                api_key_provider,
+                oidc_provider,
+            }) as Arc<dyn AuthProvider>)
+        } else {
+            return Err("Authentication required but no auth providers configured. Set MICROMEGAS_API_KEYS or MICROMEGAS_OIDC_CONFIG".into());
+        }
     } else {
-        Arc::new(KeyRing::new())
+        info!("Authentication disabled (--disable_auth)");
+        None
     };
+
     let layer = ServiceBuilder::new()
         .layer(layer_fn(|service| LogUriService { service }))
-        .layer(InterceptorLayer::new(move |req| {
-            if auth_required {
-                check_auth(req, &keyring)
-            } else {
-                Ok(req)
-            }
+        .layer(tower::layer::layer_fn(move |inner| AuthService {
+            inner,
+            auth_provider: auth_provider.clone(),
         }))
         .into_inner();
+
     let addr_str = "0.0.0.0:50051";
     let addr = addr_str.parse()?;
     info!("Listening on {:?}", addr);

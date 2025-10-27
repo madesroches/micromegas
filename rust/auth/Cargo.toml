@@ -14,7 +14,10 @@ anyhow.workspace = true
 async-trait.workspace = true
 base64 = "0.22"
 chrono.workspace = true
+futures.workspace = true
+http.workspace = true
 jsonwebtoken = "9"
+log = "0.4"
 moka.workspace = true
 openidconnect.workspace = true
 rand.workspace = true
@@ -22,6 +25,8 @@ reqwest.workspace = true
 rsa = "0.9"
 serde.workspace = true
 serde_json.workspace = true
+tonic.workspace = true
+tower.workspace = true
 
 [dev-dependencies]
 tokio.workspace = true
