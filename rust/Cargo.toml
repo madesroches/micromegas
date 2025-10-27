@@ -64,6 +64,7 @@ rsa = "0.9"
 serde = { version = "1.0", features = ["derive", "rc"]}
 serde_json = "1.0"
 sqlx = { version = "0.8.6", features = ["runtime-tokio", "postgres", "chrono", "uuid"] }
+subtle = "2.6"
 syn = { version = "1.0", features = ["extra-traits", "full"] }
 sysinfo = "0.37"
 thiserror = "2"

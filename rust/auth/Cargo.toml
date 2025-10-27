@@ -25,6 +25,7 @@ reqwest.workspace = true
 rsa.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+subtle.workspace = true
 tonic.workspace = true
 tower.workspace = true
 

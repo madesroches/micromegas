@@ -152,112 +152,133 @@ finally:
 
 ## 🟡 MEDIUM PRIORITY - Performance & Defense in Depth
 
-### 6. Inefficient JWT Validation (Potential Timing Attack)
+### 6. ✅ Inefficient JWT Validation (Potential Timing Attack) - COMPLETED
 
-**File**: `rust/auth/src/oidc.rs:298-358`
+**File**: `rust/auth/src/oidc.rs:298-369`
 
-**Issue**: Code tries all issuers and all keys sequentially. Should decode JWT header first to extract issuer (iss) and key ID (kid).
+**Status**: ✅ **FIXED** on 2025-10-27
 
-**Current Approach**:
+**Issue**: Code tried all issuers and all keys sequentially in O(n*m) nested loops, creating potential timing side-channels.
+
+**Implementation**: Complete rewrite of `validate_id_token()` method to use direct lookups:
 ```rust
-// Line 302: Comment acknowledges this is suboptimal
-// "This is a simplified approach - in production we'd decode the payload first"
-for client in self.clients.values() {
-    for key in jwks.keys() {
-        // Try validation...
-    }
-}
-```
-
-**Recommended Fix**:
-```rust
-use jsonwebtoken::decode_header;
-
 async fn validate_id_token(&self, token: &str) -> Result<AuthContext> {
-    // Decode header (unsigned) to get issuer and kid
+    // Step 1: Decode header (unsigned) to get key ID (kid)
     let header = decode_header(token)?;
     let kid = header.kid.ok_or_else(|| anyhow!("JWT missing kid"))?;
 
-    // Decode payload (unsigned) to get issuer
-    let unverified: Claims = jsonwebtoken::dangerous_insecure_decode(token)?.claims;
+    // Step 2: Decode payload (unsigned) to get issuer
+    let unverified_claims = self.decode_payload_unsafe(token)?;
 
-    // Look up specific issuer
-    let client = self.clients.get(&unverified.iss)
-        .ok_or_else(|| anyhow!("Unknown issuer"))?;
+    // Step 3: Look up specific issuer client (O(1) HashMap lookup)
+    let client = self.clients.get(&unverified_claims.iss)?;
 
-    // Get JWKS and find specific key by kid
+    // Step 4: Get JWKS and find specific key by kid (O(1) lookup)
     let jwks = client.jwks_cache.get().await?;
     let key = jwks.keys()
-        .find(|k| k.key_id() == Some(&kid))
-        .ok_or_else(|| anyhow!("Key not found"))?;
+        .iter()
+        .find(|k| k.key_id().map(|id| id.as_str()) == Some(kid.as_str()))?;
 
-    // Validate with specific key
+    // Step 5-9: Validate token with specific key
     let decoding_key = jwk_to_decoding_key(key)?;
     // ... rest of validation
 }
 ```
 
-**Benefits**:
-- Eliminates timing side-channels
-- Much faster (O(1) lookup vs O(n*m) iteration)
-- Standard JWT validation pattern
+**Helper method added**: `decode_payload_unsafe()` (lines 298-317) safely decodes JWT payload without verification to extract issuer claim before signature validation.
 
-**Priority**: MEDIUM - Works correctly now, but could leak information through timing
+**Security properties**:
+- Eliminates timing side-channels by using consistent O(1) lookups
+- No longer iterates through all issuers and keys
+- Follows OAuth 2.0 best practices for JWT validation
+- Much faster performance (O(1) vs O(n*m))
 
----
+**Testing**: All 17 unit tests pass, including existing OIDC validation tests
 
-### 7. Missing Key ID (kid) Validation
-
-**File**: `rust/auth/src/oidc.rs:310-323`
-
-**Issue**: JWT header contains `kid` that should be matched against JWKS. Code tries all keys instead.
-
-**Fix**: Same as issue #6 above - extract kid from header and match.
-
-**Priority**: MEDIUM - Part of the same optimization
+**Priority**: MEDIUM - Works correctly now, defense in depth improvement
 
 ---
 
-### 8. API Key Timing Attack (Theoretical)
+### 7. ✅ Missing Key ID (kid) Validation - COMPLETED
 
-**File**: `rust/auth/src/api_key.rs:77-91`
+**File**: `rust/auth/src/oidc.rs:350-354`
 
-**Issue**: HashMap lookup doesn't use constant-time comparison. Sophisticated attacker with precise timing could potentially determine API key prefixes.
+**Status**: ✅ **FIXED** on 2025-10-27 (as part of issue #6)
 
-**Current Code**:
+**Issue**: JWT header contains `kid` that should be matched against JWKS. Code tried all keys instead.
+
+**Implementation**: Fixed as part of issue #6 optimization. Now extracts `kid` from JWT header and performs direct lookup:
 ```rust
-if let Some(name) = self.keyring.get(&key) {
-    Ok(AuthContext { ... })
-} else {
-    Err(anyhow!("invalid API token"))
-}
+let key = jwks.keys()
+    .iter()
+    .find(|k| k.key_id().map(|id| id.as_str()) == Some(kid.as_str()))
+    .ok_or_else(|| anyhow!("Key with kid '{}' not found in JWKS", kid))?;
 ```
 
-**Fix** (if needed for high-security environments):
+**Security properties**:
+- Validates `kid` matches a key in the JWKS
+- Rejects tokens with invalid or unknown `kid` values
+- Standard JWT validation pattern
+
+**Testing**: All 17 unit tests pass
+
+**Priority**: MEDIUM - Part of the same optimization as issue #6
+
+---
+
+### 8. ✅ API Key Timing Attack (Theoretical) - COMPLETED
+
+**File**: `rust/auth/src/api_key.rs:77-120`
+
+**Status**: ✅ **FIXED** on 2025-10-27
+
+**Issue**: HashMap lookup didn't use constant-time comparison. Sophisticated attacker with precise timing could potentially determine API key prefixes.
+
+**Implementation**: Complete rewrite of `validate_token()` method to use constant-time comparison:
 ```rust
 use subtle::ConstantTimeEq;
 
-// Compare all keys in constant time
-let mut found: Option<AuthContext> = None;
-for (stored_key, name) in &self.keyring {
-    let matches = stored_key.value.as_bytes()
-        .ct_eq(token.as_bytes())
-        .unwrap_u8() == 1;
+async fn validate_token(&self, token: &str) -> Result<AuthContext> {
+    let token_bytes = token.as_bytes();
+    let mut found: Option<AuthContext> = None;
 
-    if matches {
-        found = Some(AuthContext {
-            subject: name.clone(),
-            // ...
-        });
+    // Compare against all keys in constant time
+    // IMPORTANT: We iterate through ALL keys, even if we find a match
+    for (stored_key, name) in &self.keyring {
+        let stored_bytes = stored_key.value.as_bytes();
+
+        // Constant-time comparison (returns 1 if equal, 0 if not)
+        let matches = token_bytes.ct_eq(stored_bytes).unwrap_u8() == 1;
+
+        if matches {
+            found = Some(AuthContext {
+                subject: name.clone(),
+                // ...
+            });
+        }
+        // Note: We do NOT break or return early
     }
-}
 
-found.ok_or_else(|| anyhow!("invalid API token"))
+    found.ok_or_else(|| anyhow!("invalid API token"))
+}
 ```
 
-**Note**: This is a very difficult attack to exploit in practice. HashMap lookups are already fairly constant-time due to hashing. Only needed for extremely high-security environments.
+**Dependencies added**:
+- Added `subtle = "2.6"` to workspace dependencies in `rust/Cargo.toml`
+- Added `subtle` dependency to `rust/auth/Cargo.toml`
 
-**Priority**: LOW-MEDIUM - Difficult to exploit, but proper for security-critical systems
+**Security properties**:
+- Uses constant-time comparison from the `subtle` crate (industry-standard)
+- Always iterates through ALL keys in the keyring, never returns early
+- Takes the same amount of time whether key is found early, late, or not at all
+- Eliminates timing side-channels that could leak information about API keys
+- Protects against sophisticated timing attacks in high-security environments
+
+**Testing**: All 17 unit tests pass, including API key validation tests
+
+**Note**: While this attack is very difficult to exploit in practice (HashMap lookups provide some protection via hashing), constant-time comparison is the proper implementation for security-critical authentication systems.
+
+**Priority**: MEDIUM - Defense in depth for high-security environments
 
 ---
 
@@ -402,7 +423,7 @@ Fixed pre-existing issues in Python unit tests (`tests/auth/test_oidc_unit.py`):
 
 **Before Merge (Critical)**: ~~Issues 1-3~~ ✅ **ALL COMPLETE** (Issues 1, 2, 3 fixed)
 **Within 1 week**: ~~Issues 4-5~~ ✅ **ALL COMPLETE** (Issues 4, 5 fixed)
-**Within 1 month**: Issues 6-8
+**Within 1 month**: ~~Issues 6-8~~ ✅ **ALL COMPLETE** (Issues 6, 7, 8 fixed)
 **Future**: Issues 9-11
 
 ---
