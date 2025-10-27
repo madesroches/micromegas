@@ -125,6 +125,23 @@ impl OidcConfig {
     }
 }
 
+/// Audience can be either a string or an array of strings in OIDC tokens
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+enum Audience {
+    Single(String),
+    Multiple(Vec<String>),
+}
+
+impl Audience {
+    fn contains(&self, aud: &str) -> bool {
+        match self {
+            Audience::Single(s) => s == aud,
+            Audience::Multiple(v) => v.iter().any(|a| a == aud),
+        }
+    }
+}
+
 /// JWT Claims from OIDC ID token
 #[derive(Debug, Serialize, Deserialize)]
 struct Claims {
@@ -133,8 +150,8 @@ struct Claims {
     /// Subject - identifies the principal that is the subject of the JWT
     sub: String,
     /// Audience - identifies the recipients that the JWT is intended for
-    #[serde(default)]
-    aud: Vec<String>,
+    /// Can be either a single string or an array of strings
+    aud: Audience,
     /// Expiration time - identifies the expiration time on or after which the JWT must not be accepted
     exp: i64,
     /// Email address of the user (optional, provider-specific)

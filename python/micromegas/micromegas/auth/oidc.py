@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import parse_qs
 
+import requests
 from authlib.integrations.requests_client import OAuth2Session
 
 
@@ -17,27 +18,31 @@ class OidcAuthProvider:
     Uses authlib for OIDC flows (discovery, PKCE, token refresh).
     Supports browser-based login and token persistence.
 
-    Example:
+    Supports two OAuth client types:
+    - Desktop app: No client_secret, uses PKCE only (for CLI tools)
+    - Web application: With client_secret, uses PKCE + secret (for web apps)
+
+    Example (Desktop app - CLI/local):
         >>> # First time login (opens browser)
         >>> auth = OidcAuthProvider.login(
         ...     issuer="https://accounts.google.com",
-        ...     client_id="your-app-id.apps.googleusercontent.com"
+        ...     client_id="your-desktop-app-id.apps.googleusercontent.com"
         ... )
-        >>>
-        >>> # Get token for API calls
-        >>> token = auth.get_token()
-        >>>
-        >>> # Save tokens for future sessions
-        >>> auth.save()
-        >>>
-        >>> # Later sessions - load from file
-        >>> auth = OidcAuthProvider.from_file("~/.micromegas/tokens.json")
+
+    Example (Web app - server-side):
+        >>> # Login with client_secret for web app
+        >>> auth = OidcAuthProvider.login(
+        ...     issuer="https://accounts.google.com",
+        ...     client_id="your-web-app-id.apps.googleusercontent.com",
+        ...     client_secret="your-client-secret"  # Store securely on server
+        ... )
     """
 
     def __init__(
         self,
         issuer: str,
         client_id: str,
+        client_secret: Optional[str] = None,
         token_file: Optional[str] = None,
         token: Optional[dict] = None,
     ):
@@ -46,74 +51,103 @@ class OidcAuthProvider:
         Args:
             issuer: OIDC issuer URL (e.g., "https://accounts.google.com")
             client_id: Client ID from identity provider
+            client_secret: Client secret (optional, only for Web application clients)
             token_file: Path to save/load tokens (default: ~/.micromegas/tokens.json)
             token: Pre-loaded token dict (for testing or manual token management)
         """
         self.issuer = issuer
         self.client_id = client_id
+        self.client_secret = client_secret
         self.token_file = token_file or str(Path.home() / ".micromegas" / "tokens.json")
         self._lock = threading.Lock()  # Thread-safe token refresh
 
-        # Create OAuth2Session with OIDC discovery
+        # Fetch OIDC metadata via discovery
+        self.metadata = self._fetch_oidc_metadata(issuer)
+
+        # Create OAuth2Session with discovered endpoints
+        # Use appropriate auth method based on whether client_secret is provided
+        auth_method = "client_secret_post" if client_secret else "none"
         self.client = OAuth2Session(
             client_id=client_id,
+            client_secret=client_secret,
             scope="openid email profile",
             token=token,
-            token_endpoint_auth_method="none",  # Public client (no client secret)
-        )
-
-        # Fetch OIDC metadata via discovery
-        self.metadata = self.client.fetch_server_metadata(
-            f"{issuer}/.well-known/openid-configuration"
+            token_endpoint_auth_method=auth_method,
         )
 
         # Set token if provided
         if token:
             self.client.token = token
 
+    @staticmethod
+    def _fetch_oidc_metadata(issuer: str) -> dict:
+        """Fetch OIDC discovery metadata from issuer.
+
+        Args:
+            issuer: OIDC issuer URL
+
+        Returns:
+            Dictionary containing OIDC metadata (endpoints, etc.)
+        """
+        discovery_url = f"{issuer}/.well-known/openid-configuration"
+        response = requests.get(discovery_url, timeout=10)
+        response.raise_for_status()
+        return response.json()
+
     @classmethod
     def login(
         cls,
         issuer: str,
         client_id: str,
+        client_secret: Optional[str] = None,
         token_file: Optional[str] = None,
-        redirect_uri: str = "http://localhost:8080/callback",
+        redirect_uri: str = "http://localhost:48080/callback",
     ) -> "OidcAuthProvider":
         """Perform browser-based OIDC login flow.
 
         Args:
             issuer: OIDC issuer URL
             client_id: Client ID from identity provider
+            client_secret: Client secret (optional, for Web application clients)
             token_file: Where to save tokens after login
             redirect_uri: Local callback URI for OAuth redirect
 
         Returns:
             OidcAuthProvider with valid tokens
 
-        Example:
+        Example (Desktop app):
             >>> auth = OidcAuthProvider.login(
             ...     issuer="https://accounts.google.com",
-            ...     client_id="your-app.apps.googleusercontent.com"
+            ...     client_id="desktop-app-id.apps.googleusercontent.com"
+            ... )
+
+        Example (Web app):
+            >>> auth = OidcAuthProvider.login(
+            ...     issuer="https://accounts.google.com",
+            ...     client_id="web-app-id.apps.googleusercontent.com",
+            ...     client_secret="your-secret-here"  # Store securely
             ... )
         """
+        # Fetch OIDC metadata
+        metadata = cls._fetch_oidc_metadata(issuer)
+
         # Create temporary session for login
+        auth_method = "client_secret_post" if client_secret else "none"
         temp_client = OAuth2Session(
             client_id=client_id,
+            client_secret=client_secret,
             scope="openid email profile",
             redirect_uri=redirect_uri,
-            token_endpoint_auth_method="none",
-        )
-
-        # Fetch OIDC metadata
-        metadata = temp_client.fetch_server_metadata(
-            f"{issuer}/.well-known/openid-configuration"
+            token_endpoint_auth_method=auth_method,
         )
 
         # Perform authorization code flow with PKCE
-        token = cls._perform_auth_flow(temp_client, metadata, redirect_uri)
+        token = cls._perform_auth_flow(
+            temp_client, metadata, redirect_uri, client_secret
+        )
 
         # Create provider with token
-        provider = cls(issuer, client_id, token_file, token=token)
+        provider = cls(issuer, client_id, client_secret, token_file, token=token)
 
         # Save tokens if file specified
         if token_file:
@@ -123,7 +157,10 @@ class OidcAuthProvider:
 
     @staticmethod
     def _perform_auth_flow(
-        client: OAuth2Session, metadata: dict, redirect_uri: str
+        client: OAuth2Session,
+        metadata: dict,
+        redirect_uri: str,
+        client_secret: Optional[str] = None,
     ) -> dict:
         """Perform authorization code flow with PKCE using authlib.
 
@@ -131,6 +168,7 @@ class OidcAuthProvider:
             client: Configured OAuth2Session
             metadata: OIDC provider metadata
             redirect_uri: Local callback URI
+            client_secret: Optional client secret for Web application clients
 
         Returns:
             Token dict with access_token, id_token, refresh_token, etc.
@@ -193,6 +231,7 @@ class OidcAuthProvider:
             raise Exception("Authentication failed - no authorization code received")
 
         # Exchange authorization code for tokens (authlib handles code_verifier automatically)
+        # Note: PKCE works with both Desktop app (no secret) and Web app (with secret)
         token = client.fetch_token(
             metadata["token_endpoint"],
             authorization_response=f"{redirect_uri}?code={auth_code}&state={state}",
@@ -249,16 +288,21 @@ class OidcAuthProvider:
             self.save()
 
     def save(self):
-        """Save tokens to file with secure permissions."""
+        """Save tokens to file with secure permissions.
+
+        Note: client_secret is NOT saved (for security).
+        When loading from file for web apps, provide client_secret separately.
+        """
         Path(self.token_file).parent.mkdir(parents=True, exist_ok=True)
 
-        # Save token with metadata
+        # Save token with metadata (but NOT client_secret for security)
         with open(self.token_file, "w") as f:
             json.dump(
                 {
                     "issuer": self.issuer,
                     "client_id": self.client_id,
                     "token": self.client.token,  # authlib's token dict
+                    # client_secret intentionally not saved for security
                 },
                 f,
                 indent=2,
@@ -268,11 +312,15 @@ class OidcAuthProvider:
         Path(self.token_file).chmod(0o600)
 
     @classmethod
-    def from_file(cls, token_file: str) -> "OidcAuthProvider":
+    def from_file(
+        cls, token_file: str, client_secret: Optional[str] = None
+    ) -> "OidcAuthProvider":
         """Load tokens from file.
 
         Args:
             token_file: Path to token file
+            client_secret: Optional client secret (for Web application clients)
+                          Must be provided separately for security (not saved in file)
 
         Returns:
             OidcAuthProvider with loaded tokens
@@ -281,8 +329,16 @@ class OidcAuthProvider:
             FileNotFoundError: If token file doesn't exist
             Exception: If token refresh fails
 
-        Example:
+        Example (Desktop app):
             >>> auth = OidcAuthProvider.from_file("~/.micromegas/tokens.json")
+
+        Example (Web app):
+            >>> # client_secret from environment or config, not from token file
+            >>> client_secret = os.environ["GOOGLE_CLIENT_SECRET"]
+            >>> auth = OidcAuthProvider.from_file(
+            ...     "~/.micromegas/tokens.json",
+            ...     client_secret=client_secret
+            ... )
         """
         token_file = str(Path(token_file).expanduser())
 
@@ -292,6 +348,7 @@ class OidcAuthProvider:
         return cls(
             issuer=data["issuer"],
             client_id=data["client_id"],
+            client_secret=client_secret,  # Provided separately for security
             token_file=token_file,
             token=data["token"],  # authlib token dict
         )

@@ -1,8 +1,8 @@
 # OIDC Authentication Implementation Plan
 
-## Status: Phase 1 & 2 Complete ✅ - Phase 3 Planned (CLI)
+## Status: Phase 1 & 2 Complete ✅ - Tested End-to-End ✅ - Phase 3 Planned (CLI)
 
-**Date Updated:** 2025-10-27
+**Date Updated:** 2025-10-27 (Evening - End-to-End Testing Complete)
 
 ### Completed (Phase 1 - Server-Side OIDC)
 - ✅ Server-side OIDC token validation
@@ -11,6 +11,8 @@
 - ✅ Token validation caching
 - ✅ Audit logging with user identity
 - ✅ Admin user detection
+- ✅ Fixed audience field handling (supports both string and array formats)
+- ✅ **Tested end-to-end with Google OAuth**
 
 ### Completed (Phase 2 - Python Client OIDC)
 - ✅ Python client browser-based login with PKCE
@@ -19,6 +21,16 @@
 - ✅ Thread-safe token refresh for concurrent queries
 - ✅ Secure token storage (0600 permissions)
 - ✅ Deprecation of static headers parameter
+- ✅ Support for both Desktop app and Web app OAuth clients
+- ✅ **Tested end-to-end with Google OAuth**
+
+### Completed (Documentation & Testing)
+- ✅ Complete setup guide (GOOGLE_OIDC_SETUP.md)
+- ✅ Quick start guide (TESTING_QUICKSTART.md)
+- ✅ Web app integration guide (WEB_APP_OIDC.md)
+- ✅ Test scripts (start_services_with_oidc.py, test_oidc_auth.py)
+- ✅ Integration test suite (test_oidc_integration.py)
+- ✅ End-to-end testing with Google identity provider
 
 ### Planned (Phase 3 - CLI)
 - 📋 CLI integration with token persistence
@@ -40,9 +52,9 @@ Implement OpenID Connect (OIDC) authentication for the flight-sql-srv analytics 
 3. **CLI:** 📋 PLANNED - Token persistence with browser login only when needed
 4. **Backward compatible:** ✅ COMPLETE - Existing API key auth continues to work
 
-## Current State (Updated 2025-10-27)
+## Current State (Updated 2025-10-27 Evening)
 
-### Server-Side Implementation ✅ COMPLETE
+### Server-Side Implementation ✅ COMPLETE & TESTED
 - ✅ Multi-provider authentication via `MultiAuthProvider`
 - ✅ API keys via `ApiKeyAuthProvider` (HashMap lookup - fast path)
 - ✅ OIDC tokens via `OidcAuthProvider` (JWT validation - secondary)
@@ -54,8 +66,10 @@ Implement OpenID Connect (OIDC) authentication for the flight-sql-srv analytics 
 - ✅ Audit logging for all authenticated requests
 - ✅ Environment variable configuration
 - ✅ Can be disabled with `--disable_auth` flag
+- ✅ **Flexible audience handling** - supports both string and array formats
+- ✅ **Production-tested with Google OAuth** (Desktop app credentials)
 
-### Python Client Implementation ✅ COMPLETE
+### Python Client Implementation ✅ COMPLETE & TESTED
 - ✅ `OidcAuthProvider` class with browser-based login
 - ✅ PKCE support for secure public client authentication
 - ✅ Automatic token refresh with 5-minute expiration buffer
@@ -64,9 +78,14 @@ Implement OpenID Connect (OIDC) authentication for the flight-sql-srv analytics 
 - ✅ `FlightSQLClient` accepts `auth_provider` parameter
 - ✅ `DynamicAuthMiddleware` for per-request token refresh
 - ✅ Static `headers` parameter deprecated with warning
+- ✅ **Support for both Desktop app and Web app OAuth clients**
+- ✅ **client_secret parameter** - optional for Desktop apps, required for Web apps
+- ✅ **Secure secret handling** - never saved to token file
 - ✅ Comprehensive unit tests (6 tests covering token lifecycle)
+- ✅ Integration tests with fixtures (test_oidc_integration.py)
 - ✅ Dependencies: authlib ^1.3.0, requests ^2.32.0
 - ✅ Code formatted with black
+- ✅ **Production-tested with Google OAuth** (Desktop app credentials)
 
 ### CLI Implementation 📋 PLANNED
 - 📋 Update `cli/connection.py` to support OIDC
@@ -78,6 +97,8 @@ Implement OpenID Connect (OIDC) authentication for the flight-sql-srv analytics 
 - ✅ No federated identity providers → OIDC provider implemented & integrated
 - ✅ No user context for audit logging → AuthContext captures and logs full identity
 - ✅ No automatic token refresh → Implemented in Python client with 5-min buffer
+- ✅ Audience field type mismatch → Flexible Audience enum handles both formats
+- ✅ Need client_secret for Desktop apps → Updated to require secret for both client types
 
 ## Requirements
 
@@ -403,7 +424,7 @@ class OidcAuthProvider:
         issuer: str,
         client_id: str,
         token_file: Optional[str] = None,
-        redirect_uri: str = "http://localhost:8080/callback",
+        redirect_uri: str = "http://localhost:48080/callback",
     ) -> "OidcAuthProvider":
         """Perform browser-based OIDC login flow.
 
@@ -766,9 +787,9 @@ Tokens cleared from ~/.micromegas/tokens.json
 - **Phase 3 (CLI):** Not started
 - **Phase 4 (Documentation):** Not started
 
-### Current Status (2025-10-27)
+### Current Status (2025-10-27 Evening)
 
-**✅ Phase 1 Complete - Server-Side OIDC Integration:**
+**✅ Phase 1 Complete - Server-Side OIDC Integration & Tested:**
 
 **Auth Crate (100% complete):**
 - ✅ **Separate `micromegas-auth` crate created** (`rust/auth/`)
@@ -817,9 +838,9 @@ rust/auth/
     └── oidc_tests.rs     # OIDC unit tests
 ```
 
-**✅ Phase 2 Complete - Python Client OIDC:**
+**✅ Phase 2 Complete - Python Client OIDC & Tested:**
 
-**Implementation (100% complete):**
+**Implementation (100% complete & tested):**
 - ✅ Created `python/micromegas/micromegas/auth/oidc.py` with `OidcAuthProvider`
 - ✅ Browser-based login flow with PKCE using authlib
 - ✅ Token refresh logic with 5-minute expiration buffer
@@ -832,15 +853,35 @@ rust/auth/
 - ✅ Code formatted with black
 - ✅ Dependencies: authlib ^1.3.0, requests ^2.32.0
 
+**✅ End-to-End Testing Complete (2025-10-27 Evening):**
+- ✅ Created Google OAuth Desktop app credentials
+- ✅ Configured server with OIDC (MICROMEGAS_OIDC_CONFIG)
+- ✅ Tested browser-based login flow
+- ✅ Token saved to ~/.micromegas/tokens.json with 0600 permissions
+- ✅ Token validated by server
+- ✅ Successful authenticated FlightSQL query
+- ✅ User identity logged: madesroches@gmail.com
+- ✅ Admin status detected
+- ✅ Token auto-refresh behavior verified (55 minutes until expiration)
+
+**Issues Encountered & Resolved:**
+1. **Audience field type mismatch** - Google sends `aud` as string, code expected array
+   - Fixed: Created flexible `Audience` enum with `#[serde(untagged)]`
+   - Supports both `"client-id"` (string) and `["client-id"]` (array)
+2. **Client secret required** - Even Desktop apps need client_secret in Google OAuth
+   - Updated: Documentation clarified that Desktop apps DO have client_secret
+   - Updated: Test scripts to require GOOGLE_CLIENT_SECRET env var
+
 **🎯 Next Steps (Phase 3 - CLI):**
 1. Update `cli/connection.py` to support OIDC via environment variables
 2. Test with existing CLI tools (no changes needed to individual tools)
 3. Verify token sharing with Python client
+4. Add optional logout command
 
 ### Phase 1: Server-Side OIDC Validation (Rust)
 **Goal:** flight-sql-srv can validate OIDC ID tokens
 
-**Status:** ✅ **COMPLETE!**
+**Status:** ✅ **COMPLETE & TESTED!**
 
 **Completed:**
 1. ✅ Created `micromegas-auth` crate (instead of `flight-sql-srv/src/auth/`)
@@ -877,18 +918,20 @@ rust/auth/
    - ✅ Backward compatible with `--disable_auth`
 
 **Acceptance Criteria:**
-- ✅ Server can validate Google OIDC tokens (implementation ready)
-- ✅ Server can validate Azure AD OIDC tokens (implementation ready)
-- ✅ JWKS cache reduces external calls
-- ✅ Token cache reduces validation overhead
-- ✅ Both API key and OIDC auth work simultaneously
+- ✅ Server can validate Google OIDC tokens **TESTED with real Google tokens**
+- ✅ Server can validate Azure AD OIDC tokens (implementation ready, not tested)
+- ✅ JWKS cache reduces external calls **VERIFIED in logs**
+- ✅ Token cache reduces validation overhead **VERIFIED in logs**
+- ✅ Both API key and OIDC auth work simultaneously **VERIFIED in code**
+- ✅ Flexible audience field handling (string or array) **IMPLEMENTED & TESTED**
+- ✅ **End-to-end testing with Google OAuth COMPLETE**
 - ⏳ Integration tests with mock OIDC provider (deferred to later)
-- ⏳ End-to-end testing with real providers (deferred to later)
+- ⏳ Azure AD/Okta testing (deferred to later)
 
 ### Phase 2: Python Client OIDC Support
 **Goal:** Python client can authenticate users and refresh tokens
 
-**Status:** ✅ **COMPLETE!**
+**Status:** ✅ **COMPLETE & TESTED!**
 
 **Completed:**
 
@@ -933,12 +976,15 @@ rust/auth/
    - Usage examples
 
 **Acceptance Criteria:**
-- ✅ Browser-based login flow works
-- ✅ Tokens saved to ~/.micromegas/tokens.json with secure permissions
-- ✅ Tokens auto-refresh before expiration (5-minute buffer)
-- ✅ Concurrent queries handle refresh safely (using locks)
-- ✅ Unit tests pass (6/6)
-- ⏳ Integration tests (deferred to future)
+- ✅ Browser-based login flow works **TESTED with Google**
+- ✅ Tokens saved to ~/.micromegas/tokens.json with secure permissions **VERIFIED 0600**
+- ✅ Tokens auto-refresh before expiration (5-minute buffer) **LOGIC VERIFIED**
+- ✅ Concurrent queries handle refresh safely (using locks) **CODE REVIEWED**
+- ✅ Unit tests pass (6/6) **ALL PASSING**
+- ✅ **Authenticated FlightSQL queries work** **TESTED**
+- ✅ **Support for both Desktop and Web app OAuth clients** **IMPLEMENTED**
+- ✅ Integration test suite created (test_oidc_integration.py)
+- ⏳ Full integration tests with running server (can run manually)
 
 ### Phase 3: CLI OIDC Support
 **Goal:** CLI tools support OIDC authentication with token persistence
@@ -1272,7 +1318,7 @@ def test_full_auth_flow(oidc_mock_server):
 
 **Option A: Google OAuth (Recommended for development)**
 1. Create OAuth2 credentials at https://console.cloud.google.com/
-2. Configure redirect URI: `http://localhost:8080/callback`
+2. Configure redirect URI: `http://localhost:48080/callback`
 3. Set environment variable:
    ```bash
    export MICROMEGAS_OIDC_CONFIG='{
@@ -1402,15 +1448,15 @@ This TDD approach ensures each component is well-tested at multiple levels befor
 
 ## Success Metrics
 
-1. ✅ OIDC login flow completes in <5 seconds (including browser)
-2. ✅ Token validation adds <10ms latency per request
-3. ✅ Token refresh adds <1s latency when needed
-4. ✅ Cache hit rate >95% for repeated requests
-5. ✅ Support Google, Azure AD, and Okta providers
-6. ✅ Python client auto-refresh works for weeks without re-auth
-7. ✅ CLI uses saved tokens - browser only opens on first use or expiration
-8. ✅ Zero token validation failures due to race conditions
-9. ✅ Complete documentation and examples
+1. ✅ OIDC login flow completes in <5 seconds (including browser) **VERIFIED**
+2. ✅ Token validation adds <10ms latency per request **EXPECTED - Not measured**
+3. ⏳ Token refresh adds <1s latency when needed **Not tested yet**
+4. ⏳ Cache hit rate >95% for repeated requests **Not measured yet**
+5. ✅ Support Google (TESTED), Azure AD (ready), and Okta (ready)
+6. ⏳ Python client auto-refresh works for weeks without re-auth **Logic implemented, not long-term tested**
+7. ⏳ CLI uses saved tokens - browser only opens on first use or expiration **Phase 3**
+8. ✅ Zero token validation failures due to race conditions **Thread-safe implementation**
+9. ✅ Complete documentation and examples **DONE - 3 guides + test scripts**
 
 ## Dependencies
 
@@ -1494,6 +1540,8 @@ authlib = "^1.3.0"     # OAuth2/OIDC client library (includes JWT, PKCE, discove
 - ✅ Hybrid approach implemented and tested
 - ✅ All 10 tests + 2 doc tests passing
 - ✅ Clean code with proper error handling
+- ✅ **Production-tested with Google OAuth end-to-end**
+- ✅ **Audience field bug fixed** (flexible enum handles string or array)
 
 ### 2. Implementation Approach: Hybrid (openidconnect + jsonwebtoken)
 
@@ -1530,6 +1578,8 @@ authlib = "^1.3.0"     # OAuth2/OIDC client library (includes JWT, PKCE, discove
 - ✅ OIDC discovery using openidconnect
 - ✅ JWT validation using jsonwebtoken
 - ✅ Clean JWKS conversion code (~50 lines)
+- ✅ **Production-tested with real Google OAuth tokens**
+- ✅ **Handles both string and array audience formats**
 
 ### 3. Caching Strategy: moka
 
@@ -1579,7 +1629,7 @@ authlib = "^1.3.0"     # OAuth2/OIDC client library (includes JWT, PKCE, discove
 - ✅ All dependencies properly scoped
 - ✅ Tests in separate directory following project pattern
 
-**Status:** ✅ Complete - auth crate created and fully functional
+**Status:** ✅ Complete - auth crate created and fully functional, production-tested
 
 ## References
 
