@@ -198,7 +198,10 @@ class OidcAuthProvider:
                 # Validate state parameter to prevent CSRF attacks
                 if received_state != state:
                     self.send_response(400)
-                    self.send_header("Content-type", "text/html")
+                    self.send_header("Content-type", "text/html; charset=utf-8")
+                    self.send_header("X-Content-Type-Options", "nosniff")
+                    self.send_header("X-Frame-Options", "DENY")
+                    self.send_header("Content-Security-Policy", "default-src 'none'")
                     self.end_headers()
                     self.wfile.write(
                         b"<html><body><h1>Invalid state parameter</h1>"
@@ -211,7 +214,10 @@ class OidcAuthProvider:
 
                 # Send response to browser
                 self.send_response(200)
-                self.send_header("Content-type", "text/html")
+                self.send_header("Content-type", "text/html; charset=utf-8")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.send_header("X-Frame-Options", "DENY")
+                self.send_header("Content-Security-Policy", "default-src 'none'")
                 self.end_headers()
 
                 if auth_code:

@@ -330,13 +330,15 @@ let layer = ServiceBuilder::new()
 
 ---
 
-### 11. Add Security Headers to OAuth Callback Response
+### 11. ✅ Add Security Headers to OAuth Callback Response - COMPLETED
 
-**File**: `python/micromegas/micromegas/auth/oidc.py:198-211`
+**File**: `python/micromegas/micromegas/auth/oidc.py:198-227`
 
-**Issue**: OAuth callback HTML response doesn't include security headers.
+**Status**: ✅ **FIXED** on 2025-10-27
 
-**Enhancement**:
+**Issue**: OAuth callback HTML response didn't include security headers, potentially allowing clickjacking or MIME-sniffing attacks.
+
+**Implementation**: Added security headers to both success and error responses in the OAuth callback handler:
 ```python
 def do_GET(self):
     # ... existing code ...
@@ -351,7 +353,18 @@ def do_GET(self):
     # ... rest of response
 ```
 
-**Priority**: LOW - Callback page is minimal and temporary
+**Security headers added**:
+- **X-Content-Type-Options: nosniff** - Prevents MIME-sniffing attacks by forcing the browser to respect the declared Content-Type
+- **X-Frame-Options: DENY** - Prevents clickjacking attacks by disallowing the page from being embedded in frames
+- **Content-Security-Policy: default-src 'none'** - Blocks all external resources (scripts, styles, images) for maximum security
+
+**Applied to both responses**:
+1. Success response (lines 216-221): Authentication successful callback
+2. Error response (lines 200-205): Invalid state parameter (CSRF protection)
+
+**Testing**: All 6 Python OIDC unit tests pass
+
+**Priority**: LOW - Callback page is minimal and temporary, but defense in depth
 
 ---
 
@@ -424,7 +437,7 @@ Fixed pre-existing issues in Python unit tests (`tests/auth/test_oidc_unit.py`):
 **Before Merge (Critical)**: ~~Issues 1-3~~ ✅ **ALL COMPLETE** (Issues 1, 2, 3 fixed)
 **Within 1 week**: ~~Issues 4-5~~ ✅ **ALL COMPLETE** (Issues 4, 5 fixed)
 **Within 1 month**: ~~Issues 6-8~~ ✅ **ALL COMPLETE** (Issues 6, 7, 8 fixed)
-**Future**: Issues 9-11
+**Future**: Issues 9-10 | ~~Issue 11~~ ✅ **COMPLETE** (Issue 11 fixed)
 
 ---
 
