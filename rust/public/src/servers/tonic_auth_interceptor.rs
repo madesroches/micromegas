@@ -1,18 +1,21 @@
-use crate::servers::key_ring::KeyRing;
+use micromegas_auth::types::AuthProvider;
 use micromegas_tracing::prelude::*;
+use std::sync::Arc;
 use tonic::{Request, Status};
 
-/// Checks the authentication of a Tonic request using a `KeyRing`.
+/// Checks the authentication of a Tonic request using an `AuthProvider`.
 ///
 /// This function checks for a `Bearer` token in the `Authorization` header
-/// and validates it against the provided `KeyRing`.
-#[expect(clippy::result_large_err)]
-pub fn check_auth(req: Request<()>, keyring: &KeyRing) -> Result<Request<()>, Status> {
+/// and validates it using the provided authentication provider.
+pub async fn check_auth(
+    req: Request<()>,
+    auth_provider: &Arc<dyn AuthProvider>,
+) -> Result<Request<()>, Status> {
     let metadata = req.metadata();
     let authorization = metadata
         .get(http::header::AUTHORIZATION.as_str())
         .ok_or_else(|| {
-            trace!("missing authorization header"); // expected for health check from load balancer
+            trace!("missing authorization header");
             Status::unauthenticated("missing authorization header")
         })?
         .to_str()
@@ -25,12 +28,19 @@ pub fn check_auth(req: Request<()>, keyring: &KeyRing) -> Result<Request<()>, St
         warn!("Invalid auth header");
         return Err(Status::unauthenticated("Invalid auth header"));
     }
-    let token = authorization[bearer.len()..].to_string();
-    if let Some(name) = keyring.get(&token.into()) {
-        info!("caller={name}");
-        Ok(req)
-    } else {
-        warn!("invalid API token");
-        Err(Status::unauthenticated("invalid API token"))
-    }
+    let token = &authorization[bearer.len()..];
+
+    let auth_ctx = auth_provider.validate_token(token).await.map_err(|e| {
+        warn!("authentication failed: {e}");
+        Status::unauthenticated("invalid token")
+    })?;
+
+    info!(
+        "authenticated: subject={} email={:?} issuer={} admin={}",
+        auth_ctx.subject, auth_ctx.email, auth_ctx.issuer, auth_ctx.is_admin
+    );
+
+    let mut req = req;
+    req.extensions_mut().insert(auth_ctx);
+    Ok(req)
 }

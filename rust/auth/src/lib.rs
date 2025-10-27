@@ -56,6 +56,12 @@ pub mod api_key;
 /// OIDC authentication with JWKS caching
 pub mod oidc;
 
+/// Multi-provider authentication (API key + OIDC)
+pub mod multi;
+
+/// Tower service layer for tonic/gRPC authentication
+pub mod tower;
+
 /// Test utilities for generating test tokens
 #[cfg(test)]
 pub mod test_utils;

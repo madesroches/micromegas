@@ -2,10 +2,11 @@ from . import FlightSql_pb2
 from . import time
 from google.protobuf import any_pb2
 from pyarrow import flight
-from typing import Any
+from typing import Any, Optional, Callable
 import certifi
 import pyarrow
 import sys
+import warnings
 
 
 class MicromegasMiddleware(flight.ClientMiddleware):
@@ -29,6 +30,35 @@ class MicromegasMiddlewareFactory(flight.ClientMiddlewareFactory):
 
     def start_call(self, info):
         return MicromegasMiddleware(self.headers)
+
+
+class DynamicAuthMiddleware(flight.ClientMiddleware):
+    """Middleware that dynamically fetches auth tokens for each request."""
+
+    def __init__(self, auth_provider):
+        self.auth_provider = auth_provider
+
+    def call_completed(self, exception):
+        if exception is not None:
+            print(exception, file=sys.stderr)
+
+    def received_headers(self, headers):
+        pass
+
+    def sending_headers(self):
+        """Get fresh auth token for each request."""
+        token = self.auth_provider.get_token()
+        return {"authorization": f"Bearer {token}".encode("utf8")}
+
+
+class DynamicAuthMiddlewareFactory(flight.ClientMiddlewareFactory):
+    """Factory for creating dynamic auth middleware."""
+
+    def __init__(self, auth_provider):
+        self.auth_provider = auth_provider
+
+    def start_call(self, info):
+        return DynamicAuthMiddleware(self.auth_provider)
 
 
 def make_call_headers(begin, end, preserve_dictionary=False):
@@ -137,26 +167,34 @@ class FlightSQLClient:
     supports streaming for large result sets.
     """
 
-    def __init__(self, uri, headers=None, preserve_dictionary=False):
+    def __init__(
+        self, uri, headers=None, preserve_dictionary=False, auth_provider=None
+    ):
         """Initialize a FlightSQL client connection.
 
         Args:
             uri (str): The FlightSQL server URI (e.g., "grpc://localhost:50051").
                 Use "grpc://" for unencrypted connections or "grpc+tls://" for TLS.
-            headers (dict, optional): Custom headers for authentication or metadata.
-                Example: {"authorization": "Bearer token123"}
+            headers (dict, optional): **Deprecated.** Use auth_provider instead.
+                Static headers for authentication. This parameter is deprecated because
+                it doesn't support automatic token refresh.
             preserve_dictionary (bool, optional): When True, preserve dictionary encoding in
                 Arrow arrays for memory efficiency. Useful when using dictionary-encoded UDFs.
                 Defaults to False for backward compatibility.
+            auth_provider (optional): Authentication provider that implements get_token() method.
+                When provided, tokens are automatically refreshed before each request.
+                Example: OidcAuthProvider. This is the recommended way to handle authentication.
 
         Example:
             >>> # Connect to local server
             >>> client = FlightSQLClient("grpc://localhost:50051")
             >>>
-            >>> # Connect with authentication
+            >>> # Connect with OIDC authentication (recommended - automatic token refresh)
+            >>> from micromegas.auth import OidcAuthProvider
+            >>> auth = OidcAuthProvider.from_file("~/.micromegas/tokens.json")
             >>> client = FlightSQLClient(
             ...     "grpc+tls://remote-server:50051",
-            ...     headers={"authorization": "Bearer mytoken"}
+            ...     auth_provider=auth
             ... )
             >>>
             >>> # Connect with dictionary preservation for memory efficiency
@@ -165,10 +203,25 @@ class FlightSQLClient:
             ...     preserve_dictionary=True
             ... )
         """
+        # Emit deprecation warning if headers is used
+        if headers is not None:
+            warnings.warn(
+                "The 'headers' parameter is deprecated and will be removed in a future version. "
+                "Use 'auth_provider' parameter instead for automatic token refresh support.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+
         fh = open(certifi.where(), "r")
         cert = fh.read()
         fh.close()
-        factory = MicromegasMiddlewareFactory(headers)
+
+        # Choose middleware based on auth_provider or static headers
+        if auth_provider is not None:
+            factory = DynamicAuthMiddlewareFactory(auth_provider)
+        else:
+            factory = MicromegasMiddlewareFactory(headers)
+
         self.__flight_client = flight.connect(
             location=uri, tls_root_certs=cert, middleware=[factory]
         )

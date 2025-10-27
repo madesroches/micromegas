@@ -102,12 +102,16 @@ pub use arrow_flight;
 pub use axum;
 pub use chrono;
 pub use datafusion;
-pub use micromegas_auth;
 pub use object_store;
 pub use prost;
 pub use sqlx;
 pub use tonic;
 pub use uuid;
+
+/// authentication providers
+pub mod auth {
+    pub use micromegas_auth::*;
+}
 
 /// telemetry protocol
 pub mod telemetry {

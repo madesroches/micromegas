@@ -2073,6 +2073,7 @@ dependencies = [
  "clap",
  "micromegas",
  "tokio",
+ "tonic",
  "tower",
 ]
 
@@ -3151,7 +3152,10 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "chrono",
+ "futures",
+ "http",
  "jsonwebtoken",
+ "micromegas-tracing",
  "moka",
  "openidconnect",
  "rand 0.8.5",
@@ -3159,7 +3163,10 @@ dependencies = [
  "rsa",
  "serde",
  "serde_json",
+ "subtle",
  "tokio",
+ "tonic",
+ "tower",
  "wiremock",
 ]
 

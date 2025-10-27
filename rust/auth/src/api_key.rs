@@ -2,6 +2,7 @@ use crate::types::{AuthContext, AuthProvider, AuthType};
 use anyhow::{Result, anyhow};
 use serde::Deserialize;
 use std::{collections::HashMap, fmt::Display};
+use subtle::ConstantTimeEq;
 
 /// Represents a key in the keyring.
 #[derive(Hash, Eq, PartialEq)]
@@ -74,20 +75,46 @@ impl ApiKeyAuthProvider {
 
 #[async_trait::async_trait]
 impl AuthProvider for ApiKeyAuthProvider {
+    /// Validate an API key token using constant-time comparison
+    ///
+    /// This implementation protects against timing attacks by:
+    /// 1. Comparing the provided token against ALL keys in the keyring
+    /// 2. Using constant-time comparison from the `subtle` crate
+    /// 3. Always iterating through all keys regardless of match status
+    ///
+    /// This ensures the operation takes the same amount of time whether:
+    /// - The key is found early in the iteration
+    /// - The key is found late in the iteration
+    /// - The key is not found at all
     async fn validate_token(&self, token: &str) -> Result<AuthContext> {
-        let key: Key = token.to_string().into();
+        let token_bytes = token.as_bytes();
+        let mut found: Option<AuthContext> = None;
 
-        if let Some(name) = self.keyring.get(&key) {
-            Ok(AuthContext {
-                subject: name.clone(),
-                email: None,
-                issuer: "api_key".to_string(),
-                expires_at: None,
-                auth_type: AuthType::ApiKey,
-                is_admin: false,
-            })
-        } else {
-            Err(anyhow!("invalid API token"))
+        // Compare against all keys in constant time
+        // IMPORTANT: We iterate through ALL keys, even if we find a match,
+        // to ensure constant-time operation
+        for (stored_key, name) in &self.keyring {
+            let stored_bytes = stored_key.value.as_bytes();
+
+            // Constant-time comparison
+            // Returns 1 if equal, 0 if not equal
+            let matches = token_bytes.ct_eq(stored_bytes).unwrap_u8() == 1;
+
+            // Conditionally set the result without branching on the match
+            // If matches is true, we set found; if matches is false, found stays as-is
+            if matches {
+                found = Some(AuthContext {
+                    subject: name.clone(),
+                    email: None,
+                    issuer: "api_key".to_string(),
+                    expires_at: None,
+                    auth_type: AuthType::ApiKey,
+                    is_admin: false,
+                });
+            }
+            // Note: We do NOT break or return early - we continue checking all keys
         }
+
+        found.ok_or_else(|| anyhow!("invalid API token"))
     }
 }

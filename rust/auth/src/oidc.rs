@@ -2,10 +2,10 @@ use crate::types::{AuthContext, AuthProvider, AuthType};
 use anyhow::{Result, anyhow};
 use base64::Engine;
 use chrono::{DateTime, Utc};
-use jsonwebtoken::{Algorithm, Validation, decode};
+use jsonwebtoken::{Algorithm, Validation, decode, decode_header};
 use moka::future::Cache;
-use openidconnect::IssuerUrl;
 use openidconnect::core::{CoreJsonWebKeySet, CoreProviderMetadata};
+use openidconnect::{IssuerUrl, JsonWebKey};
 use rsa::pkcs1::EncodeRsaPublicKey;
 use rsa::{BigUint, RsaPublicKey};
 use serde::{Deserialize, Serialize};
@@ -125,6 +125,23 @@ impl OidcConfig {
     }
 }
 
+/// Audience can be either a string or an array of strings in OIDC tokens
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+enum Audience {
+    Single(String),
+    Multiple(Vec<String>),
+}
+
+impl Audience {
+    fn contains(&self, aud: &str) -> bool {
+        match self {
+            Audience::Single(s) => s == aud,
+            Audience::Multiple(v) => v.iter().any(|a| a == aud),
+        }
+    }
+}
+
 /// JWT Claims from OIDC ID token
 #[derive(Debug, Serialize, Deserialize)]
 struct Claims {
@@ -133,8 +150,8 @@ struct Claims {
     /// Subject - identifies the principal that is the subject of the JWT
     sub: String,
     /// Audience - identifies the recipients that the JWT is intended for
-    #[serde(default)]
-    aud: Vec<String>,
+    /// Can be either a single string or an array of strings
+    aud: Audience,
     /// Expiration time - identifies the expiration time on or after which the JWT must not be accepted
     exp: i64,
     /// Email address of the user (optional, provider-specific)
@@ -278,66 +295,102 @@ impl OidcAuthProvider {
             .any(|admin| admin == subject || email.map(|e| admin == e).unwrap_or(false))
     }
 
-    /// Validate an ID token and return authentication context
-    async fn validate_id_token(&self, token: &str) -> Result<AuthContext> {
-        // Try to decode with each configured issuer until one works
-        // This is a simplified approach - in production we'd decode the payload first to get the issuer
-        for client in self.clients.values() {
-            // Get JWKS from cache or fetch
-            let jwks = match client.jwks_cache.get().await {
-                Ok(jwks) => jwks,
-                Err(_) => continue, // Try next issuer
-            };
-
-            // Try each key in the JWKS
-            for key in jwks.keys() {
-                // Convert JWK to DecodingKey
-                let decoding_key = match jwk_to_decoding_key(key) {
-                    Ok(key) => key,
-                    Err(_) => continue, // Try next key
-                };
-
-                // Try to validate with this key
-                let mut validation = Validation::new(Algorithm::RS256);
-                // Don't validate audience yet - we'll do it manually
-                validation.validate_aud = false;
-                validation.set_issuer(&[&client.issuer]);
-
-                match decode::<Claims>(token, &decoding_key, &validation) {
-                    Ok(token_data) => {
-                        let claims = token_data.claims;
-
-                        // Manually validate audience
-                        if !claims.aud.contains(&client.audience) {
-                            return Err(anyhow!("Invalid audience"));
-                        }
-
-                        // Convert expiration to DateTime
-                        let expires_at = DateTime::from_timestamp(claims.exp, 0)
-                            .ok_or_else(|| anyhow!("Invalid expiration timestamp"))?;
-
-                        if expires_at < Utc::now() {
-                            return Err(anyhow!("Token has expired"));
-                        }
-
-                        // Check if user is admin
-                        let is_admin = self.is_admin(&claims.sub, claims.email.as_deref());
-
-                        return Ok(AuthContext {
-                            subject: claims.sub,
-                            email: claims.email,
-                            issuer: claims.iss,
-                            expires_at: Some(expires_at),
-                            auth_type: AuthType::Oidc,
-                            is_admin,
-                        });
-                    }
-                    Err(_) => continue, // Try next key
-                }
-            }
+    /// Decode JWT payload without validation to extract issuer
+    ///
+    /// JWTs are structured as: header.payload.signature
+    /// Both header and payload are base64url-encoded JSON
+    fn decode_payload_unsafe(&self, token: &str) -> Result<Claims> {
+        let parts: Vec<&str> = token.split('.').collect();
+        if parts.len() != 3 {
+            return Err(anyhow!("Invalid JWT format"));
         }
 
-        Err(anyhow!("Failed to verify token with any configured issuer"))
+        // Decode the payload (second part)
+        let payload_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(parts[1].as_bytes())
+            .map_err(|e| anyhow!("Failed to decode JWT payload: {e:?}"))?;
+
+        let claims: Claims = serde_json::from_slice(&payload_bytes)
+            .map_err(|e| anyhow!("Failed to parse JWT claims: {e:?}"))?;
+
+        Ok(claims)
+    }
+
+    /// Validate an ID token and return authentication context
+    ///
+    /// This implementation follows OAuth 2.0 best practices by:
+    /// 1. Extracting kid from JWT header for direct key lookup
+    /// 2. Extracting issuer from JWT payload for direct client lookup
+    /// 3. Using O(1) lookups instead of O(n*m) iteration
+    /// 4. Eliminating timing side-channels
+    async fn validate_id_token(&self, token: &str) -> Result<AuthContext> {
+        // Step 1: Decode header (unsigned) to get key ID (kid)
+        let header = decode_header(token).map_err(|e| anyhow!("Invalid JWT header: {e:?}"))?;
+
+        let kid = header
+            .kid
+            .ok_or_else(|| anyhow!("JWT missing kid (key ID) in header"))?;
+
+        // Step 2: Decode payload (unsigned) to get issuer
+        let unverified_claims = self.decode_payload_unsafe(token)?;
+
+        // Step 3: Look up specific issuer client
+        let client = self
+            .clients
+            .get(&unverified_claims.iss)
+            .ok_or_else(|| anyhow!("Unknown issuer: {}", unverified_claims.iss))?;
+
+        // Step 4: Get JWKS and find specific key by kid
+        let jwks = client
+            .jwks_cache
+            .get()
+            .await
+            .map_err(|e| anyhow!("Failed to fetch JWKS: {e:?}"))?;
+
+        let key = jwks
+            .keys()
+            .iter()
+            .find(|k| k.key_id().map(|id| id.as_str()) == Some(kid.as_str()))
+            .ok_or_else(|| anyhow!("Key with kid '{}' not found in JWKS", kid))?;
+
+        // Step 5: Convert JWK to DecodingKey
+        let decoding_key = jwk_to_decoding_key(key)?;
+
+        // Step 6: Validate token with specific key and issuer
+        let mut validation = Validation::new(Algorithm::RS256);
+        // Don't validate audience yet - we'll do it manually
+        validation.validate_aud = false;
+        validation.set_issuer(&[&client.issuer]);
+
+        let token_data = decode::<Claims>(token, &decoding_key, &validation)
+            .map_err(|e| anyhow!("Token validation failed: {e:?}"))?;
+
+        let claims = token_data.claims;
+
+        // Step 7: Manually validate audience
+        if !claims.aud.contains(&client.audience) {
+            return Err(anyhow!("Invalid audience"));
+        }
+
+        // Step 8: Validate expiration
+        let expires_at = DateTime::from_timestamp(claims.exp, 0)
+            .ok_or_else(|| anyhow!("Invalid expiration timestamp"))?;
+
+        if expires_at < Utc::now() {
+            return Err(anyhow!("Token has expired"));
+        }
+
+        // Step 9: Check if user is admin
+        let is_admin = self.is_admin(&claims.sub, claims.email.as_deref());
+
+        Ok(AuthContext {
+            subject: claims.sub,
+            email: claims.email,
+            issuer: claims.iss,
+            expires_at: Some(expires_at),
+            auth_type: AuthType::Oidc,
+            is_admin,
+        })
     }
 }
 

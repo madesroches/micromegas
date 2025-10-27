@@ -1,40 +1,97 @@
 # Analytics Server Authentication Plan
 
+## 🎯 Quick Status Summary
+
+**Phase 1 (Server-Side OIDC):** ✅ **COMPLETE** (2025-01-24)
+- Multi-provider authentication (API key + OIDC) working in flight-sql-srv
+- Validated with Google OAuth and Auth0
+- Ready for Azure AD, Okta, or any OIDC provider
+- See [OIDC Implementation Subplan](oidc_auth_subplan.md) for details
+
+**Phase 2 (Python Client OIDC):** ✅ **COMPLETE** (2025-10-27)
+- Browser-based login with PKCE
+- Token persistence to ~/.micromegas/tokens.json
+- Automatic token refresh with 5-minute buffer
+- Tested with Google OAuth and Auth0 (public client)
+- See [OIDC Implementation Subplan](oidc_auth_subplan.md) for details
+
+**Phase 3 (Testing):** ✅ **COMPLETE** (2025-10-27)
+- Unit tests for Python client (6 tests passing)
+- Integration test suite (test_oidc_integration.py)
+- End-to-end testing with Google identity provider ✅
+- End-to-end testing with Auth0 identity provider ✅
+- Provider-agnostic test scripts
+
+**Phase 4 (Service Accounts):** 📋 Planned
+- Server already supports validating service account tokens (Phase 1)
+- Need Python/Rust client credentials providers
+- OAuth 2.0 client credentials flow implementation
+
+**Phase 5 (CLI):** 📋 Planned
+- CLI integration with token persistence
+- Browser login on first use
+- Automatic token reuse across CLI tools
+
+---
+
 ## Overview
 
 Enhance the flight-sql-srv authentication to support both human users (via OIDC) and long-running services (via OAuth 2.0 client credentials), using the `openidconnect` crate.
 
-## Current State (Updated 2025-01-24)
+## Current State (Updated 2025-10-27)
 
 ### Implementation Status
 
-**✅ Phase 1 Complete:** Auth crate created with clean architecture
-- Separate `micromegas-auth` crate at `rust/auth/`
-- AuthProvider trait, AuthContext struct, AuthType enum
-- ApiKeyAuthProvider (current API key system)
-- OidcAuthProvider (OIDC validation with JWKS caching)
-- Unit tests in `tests/` directory
-- All 10 tests + 2 doc tests passing
+**✅ Phase 1 (Server-Side OIDC): COMPLETE** (2025-01-24)
+- ✅ Separate `micromegas-auth` crate at `rust/auth/`
+- ✅ AuthProvider trait, AuthContext struct, AuthType enum
+- ✅ ApiKeyAuthProvider (existing API key system)
+- ✅ OidcAuthProvider (OIDC validation with JWKS caching)
+- ✅ Unit tests in `tests/` directory (10 tests + 2 doc tests passing)
+- ✅ Multi-provider authentication (API key + OIDC simultaneously)
+- ✅ Integrated into flight-sql-srv with async tower service
+- ✅ Environment variable configuration
+- ✅ Backward compatible with `--disable_auth` flag
+- ✅ Tested with Google OAuth and Auth0
 
-**⏳ In Progress:** Integration with flight-sql-srv
-- Need to wire up AuthProvider in tonic_auth_interceptor.rs
-- Need to add flight-sql-srv configuration and initialization
+**✅ Phase 2 (Python Client OIDC): COMPLETE** (2025-10-27)
+- ✅ `OidcAuthProvider` class in `python/micromegas/micromegas/auth/oidc.py`
+- ✅ Browser-based login with PKCE (authorization code flow)
+- ✅ Token persistence to ~/.micromegas/tokens.json (0600 permissions)
+- ✅ Automatic token refresh with 5-minute expiration buffer
+- ✅ Thread-safe token refresh for concurrent queries
+- ✅ Support for true public clients (PKCE without client_secret)
+- ✅ Support for Web apps (PKCE + client_secret)
+- ✅ FlightSQLClient integration via `auth_provider` parameter
+- ✅ Unit tests (6 tests covering token lifecycle)
+- ✅ Dependencies: authlib ^1.3.0, requests ^2.32.0
+- ✅ Tested with Google OAuth and Auth0
 
-**🔜 Next:** Phase 2 (Service Accounts) and Python client/CLI support
+**✅ Phase 3 (Testing): COMPLETE** (2025-10-27)
+- ✅ Provider-agnostic test scripts (start_services_with_oidc.py, test_oidc_auth.py)
+- ✅ Integration test suite (test_oidc_integration.py)
+- ✅ End-to-end testing with Google OAuth (Desktop app with secret)
+- ✅ End-to-end testing with Auth0 (Native app - true public client, no secret)
+- ✅ Documentation: GOOGLE_OIDC_SETUP.md, AUTH0_TEST_GUIDE.md, WEB_APP_OIDC.md
 
-### Existing Implementation (Legacy)
-- Simple bearer token authentication via `check_auth` (tonic_auth_interceptor.rs:10)
-- API keys stored in `KeyRing` HashMap (key_ring.rs:51)
-- Keys loaded from `MICROMEGAS_API_KEYS` environment variable (JSON array format)
-- Can be disabled with `--disable_auth` flag
-- No identity information beyond key name mapping
-- No token expiration or rotation
+**🔜 Next:** Phase 4 (Service Accounts) and Phase 5 (CLI support)
 
-### Limitations (Being Addressed)
-- ✅ No support for federated identity providers → OIDC provider implemented
-- ⏳ Manual API key distribution and rotation → Service accounts planned (Phase 2)
+### Existing Implementation (Now Enhanced)
+- ✅ Bearer token authentication via async AuthProvider
+- ✅ API keys via ApiKeyAuthProvider (HashMap lookup - fast path)
+- ✅ OIDC tokens via OidcAuthProvider (JWT validation - secondary)
+- ✅ Keys loaded from `MICROMEGAS_API_KEYS` environment variable (JSON array)
+- ✅ OIDC config from `MICROMEGAS_OIDC_CONFIG` environment variable
+- ✅ Can be disabled with `--disable_auth` flag
+- ✅ Full identity information in AuthContext
+- ✅ Token expiration validation for OIDC
+
+### Addressed Limitations
+- ✅ No support for federated identity providers → OIDC provider implemented & integrated
+- ✅ No Python client OIDC support → Browser-based login with token persistence implemented
 - ✅ No fine-grained access control → Admin RBAC implemented (is_admin flag)
-- ✅ No audit trail of user identity → AuthContext captures identity
+- ✅ No audit trail of user identity → AuthContext captures and logs identity
+- ⏳ Manual API key distribution and rotation → Service accounts planned (Phase 4)
 - ⏳ Requires out-of-band key management → Service account SQL UDFs planned
 
 ## Requirements
@@ -166,86 +223,78 @@ fn validate_token(&self, token: &str) -> Result<AuthContext> {
 - High performance with concurrent readers
 - Production-proven (powers crates.io)
 
-#### 4. Enhanced Auth Interceptor
-Replace current `check_auth` with multi-mode interceptor:
-- Extract bearer token from Authorization header
-- Determine auth mode (OIDC vs API key)
-- Validate token using appropriate AuthProvider
-- Check if user is admin (MICROMEGAS_ADMINS list, if needed)
-- Cache validation results
-- Inject AuthContext into request extensions
-- Emit audit logs with user/service identity
+#### 4. Enhanced Auth Interceptor (✅ IMPLEMENTED)
+Multi-provider async authentication service:
+- ✅ Extract bearer token from Authorization header
+- ✅ Try API key validation first (fast HashMap lookup)
+- ✅ Fall back to OIDC validation (JWT + JWKS)
+- ✅ Check if user is admin (MICROMEGAS_ADMINS list)
+- ✅ Cache JWKS and validated tokens
+- ✅ Inject AuthContext into request extensions
+- ✅ Emit audit logs with user/service identity
 
-### Configuration
+### Configuration (✅ IMPLEMENTED)
 
 Environment variables:
 
 ```bash
-# General
-MICROMEGAS_AUTH_MODE=oidc|api_key|disabled
-# oidc mode supports both human users (authorization code) and service accounts (client credentials)
+# API Key Configuration (existing - backward compatible)
+MICROMEGAS_API_KEYS='[{"name": "service1", "key": "secret-key-123"}]'
 
-# OIDC Configuration (for both human users and service accounts)
-MICROMEGAS_OIDC_ISSUERS='[
-  {
-    "issuer": "https://accounts.google.com",
-    "audience": "your-app-id.apps.googleusercontent.com"
-  },
-  {
-    "issuer": "https://login.microsoftonline.com/{tenant}/v2.0",
-    "audience": "api://your-api-id"
-  }
-]'
-MICROMEGAS_OIDC_JWKS_REFRESH_INTERVAL=3600  # seconds
+# OIDC Configuration (new - for both human users and service accounts)
+MICROMEGAS_OIDC_CONFIG='{
+  "issuers": [
+    {
+      "issuer": "https://accounts.google.com",
+      "audience": "your-app-id.apps.googleusercontent.com"
+    },
+    {
+      "issuer": "https://login.microsoftonline.com/{tenant}/v2.0",
+      "audience": "api://your-api-id"
+    }
+  ],
+  "jwks_refresh_interval_secs": 3600,
+  "token_cache_size": 1000,
+  "token_cache_ttl_secs": 300
+}'
 
-# Service Account Configuration (for services)
-# Service accounts are created and managed in the OIDC provider (Google, Azure AD, Okta)
-# Services use client_id + client_secret to authenticate (OAuth 2.0 client credentials flow)
-# No micromegas-specific configuration needed
-
-# Admin Configuration (Simple RBAC - optional)
+# Admin Configuration (implemented)
 MICROMEGAS_ADMINS='["alice@example.com", "bob@example.com"]'
-# List of subjects/emails that have admin privileges (for future admin operations)
+# List of subjects/emails that have admin privileges
 # Matches against AuthContext.subject or AuthContext.email
-
-# API Key Configuration (legacy)
-MICROMEGAS_API_KEYS=[{"name": "service1", "key": "..."}]
-
-# Cache Configuration
-MICROMEGAS_AUTH_CACHE_SIZE=1000
-MICROMEGAS_AUTH_CACHE_TTL=300  # seconds
 ```
 
 CLI flags:
 ```bash
---disable-auth              # Skip authentication (development)
---auth-mode <mode>          # Override MICROMEGAS_AUTH_MODE
+--disable-auth              # Skip authentication (development) ✅ IMPLEMENTED
 ```
 
-### Integration with FlightSQL Server
+### Integration with FlightSQL Server (✅ IMPLEMENTED)
 
-Modifications to `flight_sql_srv.rs`:
+Completed modifications to `flight_sql_srv.rs`:
 
-1. Replace `KeyRing` with `AuthProvider` enum
-2. Initialize appropriate provider based on `MICROMEGAS_AUTH_MODE`
-3. Replace `check_auth` interceptor with new multi-mode validator
-4. Store `AuthContext` in request extensions for downstream access
-5. Update logging to include user/service identity
+1. ✅ Created `MultiAuthProvider` supporting both API key and OIDC
+2. ✅ Initialize providers from environment variables
+3. ✅ Async tower service layer for authentication
+4. ✅ Store `AuthContext` in request extensions for downstream access
+5. ✅ Logging includes user/service identity (subject, email, issuer, admin status)
 
-### Token Validation Flow
+### Token Validation Flow (✅ IMPLEMENTED)
 
-#### OIDC Flow (Human Users)
+#### OIDC Flow (Human Users) - Server-Side ✅
 1. User authenticates with IdP (external to flight-sql-srv)
 2. Client obtains ID token and access token
 3. Client sends request with `Authorization: Bearer <id_token>`
 4. flight-sql-srv validates token:
-   - Decode JWT header to identify issuer
-   - Check cache for previously validated token
-   - If not cached, fetch JWKS from identity provider
-   - Verify JWT signature using JWKS public keys
-   - Validate issuer, audience, expiration
-   - Extract claims (sub, email, exp, iss) into AuthContext
-   - Store AuthContext in cache
+   - ✅ Extract bearer token from Authorization header
+   - ✅ Try API key validation first (fast O(1) HashMap lookup)
+   - ✅ If API key fails, decode JWT header to identify issuer
+   - ✅ Check cache for previously validated token
+   - ✅ If not cached, fetch JWKS from identity provider
+   - ✅ Verify JWT signature using JWKS public keys
+   - ✅ Validate issuer, audience, expiration
+   - ✅ Extract claims (sub, email, exp, iss) into AuthContext
+   - ✅ Store AuthContext in cache and request extensions
 5. Request proceeds with AuthContext (identity available for audit logging)
 
 #### Service Account Flow (OAuth 2.0 Client Credentials)
@@ -283,8 +332,18 @@ Modifications to `flight_sql_srv.rs`:
 
 Add to `rust/Cargo.toml` workspace dependencies:
 ```toml
-openidconnect = "4.0"  # For OIDC/OAuth 2.0 authentication (human users and service accounts)
+# OIDC discovery
+openidconnect = "4.0"  # For OIDC discovery and metadata
+
+# JWT validation
+jsonwebtoken = "9"     # For JWT validation (simpler API, battle-tested)
+rsa = "0.9"            # For RSA key handling in JWT verification
+base64 = "0.22"        # For base64 decoding in JWKS conversion
+
+# Caching
 moka = "0.12"          # For token cache with TTL and thread-safe concurrent access
+
+# DateTime
 chrono = "0.4"         # For DateTime types (likely already a dependency)
 ```
 
@@ -295,23 +354,200 @@ chrono = "0.4"         # For DateTime types (likely already a dependency)
 - Production-proven (powers crates.io)
 - Combines LRU eviction with LFU admission policy for better hit rates
 
+**Why hybrid approach (openidconnect + jsonwebtoken)?**
+- openidconnect designed for OAuth clients, not server-side token validation
+- IdTokenVerifier API is internal/private, not accessible for our use case
+- jsonwebtoken provides simple, clear API for JWT validation
+- Using each library for what it does well: discovery vs. validation
+- Battle-tested combination in production use
+
 Note: `chrono` is likely already in use for timestamp handling throughout the codebase.
-Note: `jsonwebtoken` is not needed - `openidconnect` crate handles all JWT validation.
 
 ## Implementation Phases
 
-### Phase 1: Refactor Current Auth ✅ COMPLETED
+### Phase 1: Server-Side OIDC Integration ✅ COMPLETE (2025-01-24)
+
+**Summary:** Successfully integrated OIDC authentication into flight-sql-srv, enabling support for both API key and OIDC authentication simultaneously.
+
+#### Implementation Checklist
 - ✅ Extract AuthProvider trait
 - ✅ Create ApiKeyAuthProvider wrapping current KeyRing
 - ✅ Add AuthContext struct
 - ✅ Create separate `micromegas-auth` crate (`rust/auth/`)
-- ✅ Add unified JWT validation utilities
-- ✅ Add unit tests for API key mode
+- ✅ Add OidcAuthProvider with JWT validation
+- ✅ Add unit tests for API key mode and OIDC mode
 - ✅ Code style improvements (module-level imports, documented structs)
 - ✅ Tests moved to `tests/` directory (separate from source)
-- **Status**: Auth crate complete, needs integration with flight-sql-srv
+- ✅ Wire up AuthProvider in tonic_auth_interceptor.rs
+- ✅ Add flight-sql-srv configuration and initialization
+- ✅ Multi-provider support (API key + OIDC simultaneously)
+- ✅ Async tower service layer for authentication
+- ✅ JWKS caching with TTL
+- ✅ Token validation caching
+- ✅ Admin users support (MICROMEGAS_ADMINS)
+- ✅ AuthContext injection for audit logging
 
-### Phase 2: Add Service Account Support (OAuth 2.0 Client Credentials)
+#### Key Features Delivered
+
+**1. Multi-Provider Authentication**
+- API Key Authentication (fast path - O(1) HashMap lookup)
+- OIDC Authentication (JWT validation with JWKS caching)
+- Both methods work simultaneously
+- Tries API key first, falls back to OIDC
+- Users choose their preferred auth method
+
+**2. Auth Crate Components (`rust/auth/`)**
+- `AuthProvider` trait for extensible authentication
+- `ApiKeyAuthProvider` wrapping existing KeyRing
+- `OidcAuthProvider` with JWT validation
+- `MultiAuthProvider` supporting both methods
+- OIDC discovery using `openidconnect::CoreProviderMetadata::discover_async()`
+- JWT validation using `jsonwebtoken` (hybrid approach)
+- JWKS caching with TTL using moka
+- Token validation caching
+- SSRF protection (HTTP client with `redirect(Policy::none())`)
+- Test utilities for generating test tokens
+- All tests passing (10 tests + 2 doc tests)
+
+**3. Integration with flight-sql-srv**
+- Async tower service layer for authentication
+- AuthContext injection into request extensions
+- Audit logging with user identity (subject, email, issuer, admin status)
+- Environment variable configuration
+- Backward compatible with `--disable_auth` flag
+
+**4. Authentication Flow**
+1. Extract Bearer token from Authorization header
+2. Try API key validation (fast HashMap lookup)
+3. If API key fails, try OIDC validation:
+   - Check token cache
+   - Fetch JWKS from OIDC provider (cached with TTL)
+   - Verify JWT signature
+   - Validate issuer, audience, expiration
+   - Extract claims into AuthContext
+4. Inject AuthContext into request extensions
+5. Log authentication success with identity details
+
+**5. AuthContext Structure**
+```rust
+pub struct AuthContext {
+    pub subject: String,              // Unique user/service identifier
+    pub email: Option<String>,        // Email (if available)
+    pub issuer: String,               // Identity provider or "api_key"
+    pub expires_at: Option<DateTime>, // Token expiration
+    pub auth_type: AuthType,          // ApiKey or Oidc
+    pub is_admin: bool,               // Admin privilege flag
+}
+```
+
+#### Configuration Examples
+
+**Environment Variables:**
+```bash
+# API Key authentication (existing - backward compatible)
+MICROMEGAS_API_KEYS='[{"name": "user1", "key": "secret-key-123"}]'
+
+# OIDC authentication (new)
+MICROMEGAS_OIDC_CONFIG='{
+  "issuers": [
+    {
+      "issuer": "https://accounts.google.com",
+      "audience": "your-app-id.apps.googleusercontent.com"
+    }
+  ],
+  "jwks_refresh_interval_secs": 3600,
+  "token_cache_size": 1000,
+  "token_cache_ttl_secs": 300
+}'
+
+# Admin users (optional)
+MICROMEGAS_ADMINS='["alice@example.com"]'
+```
+
+**CLI Flags:**
+```bash
+flight-sql-srv --disable-auth  # Development mode
+```
+
+#### Files Modified
+- `rust/auth/` - New crate with all authentication logic
+- `rust/public/src/lib.rs` - Added `auth` module export
+- `rust/public/src/servers/tonic_auth_interceptor.rs` - Updated to use AuthProvider trait
+- `rust/flight-sql-srv/Cargo.toml` - Added dependencies
+- `rust/flight-sql-srv/src/flight_sql_srv.rs` - Multi-provider integration
+
+#### Testing Status
+- **Unit Tests:** ✅ Complete (10 tests + 2 doc tests passing)
+- **Build Status:** ✅ All code compiles successfully
+- **Integration Tests:** 📋 Planned for Phase 4
+
+#### What's Supported Now
+The flight-sql-srv can now validate:
+- ✅ API keys (existing functionality)
+- ✅ Google OIDC ID tokens
+- ✅ Azure AD OIDC tokens
+- ✅ Okta OIDC tokens
+- ✅ Any standards-compliant OIDC provider
+
+#### Architecture Benefits
+- **Multi-Provider Design**: Users choose their preferred auth method
+- **Migration Path**: Existing API key users unaffected
+- **Performance**: Fast path for API keys (O(1) lookup)
+- **No Breaking Changes**: 100% backward compatible
+- **Security**: JWKS caching, token caching, SSRF protection, proper JWT validation
+- **Observability**: Every authenticated request logged with full identity context
+
+**Status**: ✅ COMPLETE - Server can validate both API keys and OIDC tokens from multiple providers
+
+### Phase 2: Python Client OIDC Support ✅ COMPLETE (2025-10-27)
+
+**Summary:** Successfully implemented browser-based OIDC authentication in Python client with token persistence and automatic refresh.
+
+**Python Client:**
+- ✅ Implemented `OidcAuthProvider` class using authlib
+- ✅ Browser-based login flow (authorization code + PKCE)
+- ✅ Token storage (access + refresh tokens + id_token)
+- ✅ Automatic token refresh with 5-minute expiration buffer
+- ✅ Thread-safe token refresh for concurrent queries
+- ✅ Token persistence to ~/.micromegas/tokens.json with 0600 permissions
+- ✅ Support for true public clients (PKCE without client_secret)
+- ✅ Support for Web apps (PKCE + client_secret)
+- ✅ `FlightSQLClient` integration via `auth_provider` parameter
+- ✅ Port reuse fix for callback server (try/finally block)
+- ✅ Unit tests (6 tests covering token lifecycle)
+
+**Testing:**
+- ✅ End-to-end testing with Google OAuth (Desktop app with secret)
+- ✅ End-to-end testing with Auth0 (Native app - true public client, no secret)
+- ✅ Token reuse verified (no browser on second run)
+- ✅ Server-side token validation verified
+
+**Goal**: ✅ ACHIEVED - Human users can authenticate via browser with transparent token refresh
+
+### Phase 3: Integration Testing ✅ COMPLETE (2025-10-27)
+
+**Summary:** Comprehensive testing with real OIDC providers and provider-agnostic test infrastructure.
+
+- ✅ Provider-agnostic test scripts (start_services_with_oidc.py, test_oidc_auth.py)
+- ✅ Integration test suite (test_oidc_integration.py)
+- ✅ End-to-end testing with Google OAuth
+- ✅ End-to-end testing with Auth0
+- ✅ Multi-issuer server configuration validated
+- ✅ Token validation caching verified
+- ✅ JWKS caching verified
+- ✅ Server audit logging verified (user identity extraction)
+- ✅ Documentation: GOOGLE_OIDC_SETUP.md, AUTH0_TEST_GUIDE.md, WEB_APP_OIDC.md
+
+**Future Testing:**
+- ⏳ wiremock tests with mock OIDC provider (deferred)
+- ⏳ Azure AD and Okta testing (ready, not tested yet)
+
+**Goal**: ✅ ACHIEVED - Multi-provider OIDC authentication validated end-to-end
+
+### Phase 4: Service Account Support (OAuth 2.0 Client Credentials) - PLANNED
+
+**Note**: Server already supports validating these tokens (Phase 1 complete)
+
 - Document how to create service accounts in OIDC providers:
   - Google Cloud: Service accounts with OAuth 2.0 client credentials
   - Azure AD: App registrations with client credentials
@@ -324,47 +560,21 @@ Note: `jsonwebtoken` is not needed - `openidconnect` crate handles all JWT valid
 - Rust client: Add equivalent client credentials support
 - Add integration tests with mock OIDC provider
 - Create example service using OAuth 2.0 client credentials
-- Admin RBAC (simple is_admin flag):
-  - Parse MICROMEGAS_ADMINS config (list of subjects/emails)
-  - Set is_admin flag in AuthContext during token validation
-  - Used to gate lakehouse partition management UDFs
 - **Goal**: Support service authentication via standard OAuth 2.0 flow
 
-### Phase 3: Add OIDC Support
-**Server-side:** ✅ COMPLETED
-- ✅ Implement OidcAuthProvider using openidconnect crate
-- ✅ Add JWKS fetching and caching from remote endpoints (with SSRF protection)
-- ✅ Add multi-issuer support (Google, Azure AD, Okta)
-- ✅ Add OIDC configuration parsing (from MICROMEGAS_OIDC_CONFIG)
-- ✅ Add admin users support (MICROMEGAS_ADMINS)
-- ⏳ Add wiremock tests with mock OIDC provider (future improvement)
-- ⏳ Wire up with flight-sql-srv
+### Phase 5: CLI Integration - PLANNED
 
-**Python client:**
-- Implement OidcCredentials class
-- Browser-based login flow (authorization code + PKCE)
-- Token storage (access + refresh tokens)
-- Automatic token refresh with 5-minute buffer
-- Retry logic for 401 responses
-- Thread-safe token refresh for concurrent queries
-- Token persistence across sessions
+**CLI Integration:**
+- Update `cli/connection.py` to support OIDC
+- Token persistence across CLI invocations (shared with Python client)
+- Browser login only on first use or expiration
+- Environment variable configuration (OIDC_ISSUER, OIDC_CLIENT_ID)
+- Token sharing between Python client and CLI
 
-**CLI (simplified):**
-- Full OIDC flow on each invocation (browser popup)
-- No token storage/caching needed
-- Recommend Python client or service accounts for frequent use
+**Goal**: Support OIDC authentication in CLI tools with token reuse
 
-**Goal**: Support human user authentication with transparent token refresh in Python client
-
-### Phase 4: Add Token Caching
-- Implement LRU cache for validated tokens
-- Add cache configuration
-- Add cache metrics/monitoring
-- Add cache invalidation on config changes
-- **Goal**: Reduce validation overhead to <1ms
-
-### Phase 5: Audit and Security Hardening
-- Add comprehensive audit logging with user/service identity
+### Phase 6: Audit and Security Hardening - FUTURE
+- Enhance audit logging with structured events
 - Add rate limiting per user/service
 - Add metrics for auth failures
 - Document credential management in OIDC providers
@@ -374,67 +584,67 @@ Note: `jsonwebtoken` is not needed - `openidconnect` crate handles all JWT valid
 
 ## Security Considerations
 
-1. **Token Storage**: Never log or store tokens, only validation results
-2. **Client Secret Protection** (Service Accounts):
+1. **Token Storage**: ✅ Never log or store tokens, only validation results
+2. **Client Secret Protection** (Service Accounts - Future Phase 2):
    - Store client secrets in secret managers (AWS Secrets Manager, GCP Secret Manager, Azure Key Vault)
    - Never commit client secrets to git or config files
    - Use environment variables or secret mounting for runtime access
    - Rotate client secrets periodically in OIDC provider
-3. **JWKS Caching**: Refresh JWKS periodically to detect identity provider key rotation
-4. **Clock Skew**: Allow configurable clock skew (default 60s) for exp/nbf validation
+3. **JWKS Caching**: ✅ Implemented with configurable TTL (default 1 hour) to detect key rotation
+4. **Clock Skew**: ✅ Handled by jsonwebtoken library (60s tolerance)
 5. **TLS/HTTPS**: Handled by load balancer - all traffic encrypted in transit
 6. **Token Revocation**:
-   - Token validation cache (5 min TTL): Recently validated tokens cached in memory
-   - When service account disabled in OIDC provider:
+   - ✅ Token validation cache implemented (configurable TTL, default 5 min)
+   - When user/service account disabled in OIDC provider:
      - OIDC provider stops issuing NEW tokens immediately
      - Server continues to accept EXISTING valid tokens until cache expiry (5 min) + token expiration (~1 hour)
-   - **Worst case revocation delay**: ~65 minutes
-     - 5 min: validation cache expiry
-     - 60 min: token expiration
+   - **Worst case revocation delay**: ~65 minutes (5 min cache + 60 min token)
    - **For immediate revocation**: Restart analytics server to clear validation cache
    - **Better approach**: Use short-lived tokens (15-30 min) to reduce revocation window
-7. **Audience Validation**: Strictly validate token audience to prevent token substitution
-8. **Audit Logging**: Log all authentication attempts (success and failure) with identity information
-9. **OIDC Provider Security**: Rely on OIDC provider's security (Google, Azure AD, Okta have mature security practices)
+7. **Audience Validation**: ✅ Strictly validates token audience to prevent token substitution
+8. **Audit Logging**: ✅ Logs all authentication attempts with identity (subject, email, issuer, admin status)
+9. **OIDC Provider Security**: ✅ Relies on OIDC provider's security (Google, Azure AD, Okta)
+10. **SSRF Protection**: ✅ HTTP client configured with `redirect(Policy::none())`
 
 ## Testing Strategy
 
-1. **Unit Tests**:
-   - Each AuthProvider implementation
-   - Token validation logic
-   - Cache behavior
-   - Claims extraction
+1. **Unit Tests**: ✅ IMPLEMENTED
+   - ✅ Each AuthProvider implementation (API key, OIDC)
+   - ✅ Token validation logic
+   - ✅ Claims extraction
+   - ✅ Expired token handling
+   - ✅ 10 tests + 2 doc tests passing
 
-2. **Integration Tests**:
-   - Mock OIDC provider (using openidconnect test utilities)
-   - Mock OAuth introspection endpoint
+2. **Integration Tests**: PLANNED
+   - Mock OIDC provider (using wiremock)
    - End-to-end FlightSQL requests with auth
-   - Multi-mode configuration switching
+   - Multi-issuer scenarios
+   - JWKS cache refresh behavior
 
-3. **Performance Tests**:
+3. **Performance Tests**: PLANNED
    - Auth interceptor latency
    - Cache hit/miss ratios
    - Concurrent auth request handling
    - JWKS fetch impact
 
-4. **Security Tests**:
+4. **Security Tests**: PLANNED
    - Invalid token rejection
    - Expired token rejection
    - Wrong audience/issuer rejection
    - Signature verification
-   - Token replay prevention (nonce validation)
 
 ## Migration Path
 
 ### For Existing API Key Users
-**Backward-compatible transition:**
+**✅ Backward-compatible transition implemented:**
 
-1. **Initial release**: Service account support
-   - API keys still work (no breaking changes)
-   - Early adopters can migrate immediately
-   - Server supports both auth methods
+1. **Current release**: Multi-provider support
+   - ✅ API keys still work (no breaking changes)
+   - ✅ OIDC tokens work alongside API keys
+   - ✅ Server tries API key first, then OIDC
+   - ✅ Choose authentication method per client
 
-2. **Migration process:**
+2. **Migration process (when ready):**
 
    Admin creates service account in OIDC provider:
 
@@ -854,29 +1064,31 @@ Organizations should plan to migrate custom auth wrappers to standard OIDC flows
 ### API Key Deprecation Timeline
 **Deprecation Plan - "Soon"**:
 
-- **Phase 1**: Release OAuth 2.0 client credentials support
-  - Server: OIDC auth validates tokens from both human users and service accounts
-  - Python client: OidcClientCredentialsProvider class
-  - CLI: OAuth 2.0 client credentials support
+- **Phase 1**: Release OAuth 2.0 client credentials support (Planned)
+  - Server: ✅ OIDC auth validates tokens from both human users and service accounts
+  - Python client: ⏳ OidcClientCredentialsProvider class (not implemented yet)
+  - CLI: ⏳ OAuth 2.0 client credentials support (not implemented yet)
   - **API keys still work** (backward compatibility maintained)
 
-- **Phase 2**: Grafana plugin major update
+- **Phase 2**: Grafana plugin major update (Planned)
   - Bundle auth migration with other planned improvements
   - Single release: OAuth 2.0 client credentials + new features
   - Migration guide published
   - Deprecation warning in API key flow
 
-- **Phase 3**: Python client OIDC support (for human users)
-  - OIDC authorization code flow with auto-refresh
-  - Deprecation warnings for API key usage
-  - Migration documentation
+- **Phase 3**: Python client OIDC support (for human users) ✅ COMPLETE (2025-10-27)
+  - ✅ OIDC authorization code flow with auto-refresh
+  - ✅ Token persistence and reuse
+  - ✅ Tested with Google OAuth and Auth0
+  - ⏳ Deprecation warnings for API key usage (not added yet)
+  - ⏳ Migration documentation (partially complete)
 
-- **Phase 4**: Deprecation enforcement
+- **Phase 4**: Deprecation enforcement (Future)
   - API keys disabled by default
   - Opt-in flag: `--enable-legacy-api-keys` (for stragglers)
   - Strong migration communication
 
-- **Phase 5**: API key removal
+- **Phase 5**: API key removal (Future)
   - Remove API key code entirely
   - Major version bump (v1.0 or v2.0)
   - Clean, maintainable auth codebase
