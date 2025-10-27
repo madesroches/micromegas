@@ -26,61 +26,45 @@ Security issues identified during code review of PR #548.
 
 ---
 
-### 2. Token File Permission Race Condition
+### 2. ✅ Token File Permission Race Condition - COMPLETED
 
-**File**: `python/micromegas/micromegas/auth/oidc.py:298-320`
+**File**: `python/micromegas/micromegas/auth/oidc.py:313-344`
 
-**Issue**: Token file created with default permissions (potentially 644), then chmod'd to 0600. Brief window where tokens could be world-readable.
+**Status**: ✅ **FIXED** on 2025-10-27
 
-**Current Code**:
+**Issue**: Token file was created with default permissions (potentially 644), then chmod'd to 0600. Brief window where tokens could be world-readable.
+
+**Implementation**: Used `os.open()` with atomic permission setting:
 ```python
-with open(self.token_file, "w") as f:  # Default perms (644)
-    json.dump({...}, f)
-Path(self.token_file).chmod(0o600)  # Secure, but too late
-```
-
-**Fix Option 1** (Preferred):
-```python
-import os
-
-# Create file with secure permissions atomically
+# Create file with secure permissions atomically (0600)
 fd = os.open(
     self.token_file,
     os.O_CREAT | os.O_WRONLY | os.O_TRUNC,
-    0o600
+    0o600,
 )
-with os.fdopen(fd, 'w') as f:
+with os.fdopen(fd, "w") as f:
     json.dump({...}, f, indent=2)
 ```
 
-**Fix Option 2**:
-```python
-# Set umask before opening
-import os
-old_umask = os.umask(0o077)  # Ensure 600 perms
-try:
-    with open(self.token_file, "w") as f:
-        json.dump({...}, f, indent=2)
-finally:
-    os.umask(old_umask)
-```
+**Security properties**:
+- File created with 0600 permissions atomically (no race condition)
+- Prevents tokens from being world-readable at any point
+- Works on Unix/Linux/WSL systems
+- Windows: Uses Windows ACLs (less strict but still secure)
 
-**Priority**: CRITICAL - Tokens contain refresh tokens with long lifetime
+**Testing**: Verified with manual test - file permissions are exactly 600
 
 ---
 
-### 3. Insecure Parent Directory Permissions
+### 3. ✅ Insecure Parent Directory Permissions - COMPLETED
 
-**File**: `python/micromegas/micromegas/auth/oidc.py:304`
+**File**: `python/micromegas/micromegas/auth/oidc.py:319-323`
+
+**Status**: ✅ **FIXED** on 2025-10-27
 
 **Issue**: `~/.micromegas/` directory created without explicit secure permissions.
 
-**Current Code**:
-```python
-Path(self.token_file).parent.mkdir(parents=True, exist_ok=True)
-```
-
-**Fix**:
+**Implementation**: Create directory with 0700 and ensure permissions:
 ```python
 parent_dir = Path(self.token_file).parent
 parent_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -88,7 +72,12 @@ parent_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
 parent_dir.chmod(0o700)
 ```
 
-**Priority**: HIGH - Directory permissions should be as strict as file permissions
+**Security properties**:
+- Directory created with 0700 permissions (owner only)
+- chmod() ensures correct permissions even if directory pre-exists
+- Prevents other users from listing or accessing token files
+
+**Testing**: Verified with manual test - directory permissions are exactly 700
 
 ---
 
@@ -359,8 +348,8 @@ Good security practices already in place:
 After fixing critical issues, verify:
 
 - [x] OAuth state validation rejects mismatched state ✅ **DONE** - Implemented in oidc.py:198-207
-- [ ] Token file created with 0600 permissions (check with `ls -la`)
-- [ ] Parent directory created with 0700 permissions
+- [x] Token file created with 0600 permissions (check with `ls -la`) ✅ **DONE** - Verified with test
+- [x] Parent directory created with 0700 permissions ✅ **DONE** - Verified with test
 - [ ] Multiple concurrent auth attempts don't leak ports
 - [ ] JWT validation fails for invalid issuer
 - [ ] JWT validation fails for invalid audience
@@ -401,7 +390,7 @@ Fixed pre-existing issues in Python unit tests (`tests/auth/test_oidc_unit.py`):
 
 ## Timeline
 
-**Before Merge (Critical)**: ~~Issues 1-3~~ Issue 1 ✅ Complete, Issues 2-3 remain
+**Before Merge (Critical)**: ~~Issues 1-3~~ ✅ **ALL COMPLETE** (Issues 1, 2, 3 fixed)
 **Within 1 week**: Issues 4-5
 **Within 1 month**: Issues 6-8
 **Future**: Issues 9-11

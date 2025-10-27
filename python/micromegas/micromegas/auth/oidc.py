@@ -1,6 +1,7 @@
 """OIDC authentication provider with automatic token refresh."""
 
 import json
+import os
 import threading
 import time
 import webbrowser
@@ -315,10 +316,22 @@ class OidcAuthProvider:
         Note: client_secret is NOT saved (for security).
         When loading from file for web apps, provide client_secret separately.
         """
-        Path(self.token_file).parent.mkdir(parents=True, exist_ok=True)
+        # Create parent directory with secure permissions (0700)
+        parent_dir = Path(self.token_file).parent
+        parent_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        # Ensure permissions even if directory already exists
+        parent_dir.chmod(0o700)
+
+        # Create file with secure permissions atomically (0600)
+        # This prevents race condition where file could be world-readable
+        fd = os.open(
+            self.token_file,
+            os.O_CREAT | os.O_WRONLY | os.O_TRUNC,
+            0o600,
+        )
 
         # Save token with metadata (but NOT client_secret for security)
-        with open(self.token_file, "w") as f:
+        with os.fdopen(fd, "w") as f:
             json.dump(
                 {
                     "issuer": self.issuer,
@@ -329,9 +342,6 @@ class OidcAuthProvider:
                 f,
                 indent=2,
             )
-
-        # Set secure permissions (0600 - owner read/write only)
-        Path(self.token_file).chmod(0o600)
 
     @classmethod
     def from_file(
