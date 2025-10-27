@@ -7,6 +7,7 @@
 use crate::types::AuthProvider;
 use futures::future::BoxFuture;
 use http::header::AUTHORIZATION;
+use micromegas_tracing::prelude::*;
 use std::sync::Arc;
 use tonic::Status;
 use tower::Service;
@@ -89,7 +90,7 @@ where
                     .and_then(|h| h.to_str().ok())
                     .and_then(|h| h.strip_prefix("Bearer "))
                     .ok_or_else(|| {
-                        log::trace!("missing or invalid authorization header");
+                        warn!("missing or invalid authorization header");
                         Box::new(Status::unauthenticated("missing authorization header"))
                             as Box<dyn std::error::Error + Send + Sync>
                     });
@@ -97,7 +98,7 @@ where
                 match authorization {
                     Ok(token) => match provider.validate_token(token).await {
                         Ok(auth_ctx) => {
-                            log::info!(
+                            info!(
                                 "authenticated: subject={} email={:?} issuer={} admin={}",
                                 auth_ctx.subject,
                                 auth_ctx.email,
@@ -109,7 +110,7 @@ where
                             inner.call(req).await.map_err(Into::into)
                         }
                         Err(e) => {
-                            log::warn!("authentication failed: {e}");
+                            warn!("authentication failed: {e}");
                             Err(Box::new(Status::unauthenticated("invalid token"))
                                 as Box<dyn std::error::Error + Send + Sync>)
                         }

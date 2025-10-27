@@ -3155,7 +3155,7 @@ dependencies = [
  "futures",
  "http",
  "jsonwebtoken",
- "log",
+ "micromegas-tracing",
  "moka",
  "openidconnect",
  "rand 0.8.5",
