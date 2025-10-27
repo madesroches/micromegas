@@ -8,7 +8,7 @@ Enhance the flight-sql-srv authentication to support both human users (via OIDC)
 
 ### Implementation Status
 
-**✅ Phase 1 Complete:** Auth crate created with clean architecture
+**✅ Phase 1 (Auth Crate): Complete**
 - Separate `micromegas-auth` crate at `rust/auth/`
 - AuthProvider trait, AuthContext struct, AuthType enum
 - ApiKeyAuthProvider (current API key system)
@@ -16,11 +16,11 @@ Enhance the flight-sql-srv authentication to support both human users (via OIDC)
 - Unit tests in `tests/` directory
 - All 10 tests + 2 doc tests passing
 
-**⏳ In Progress:** Integration with flight-sql-srv
+**⏳ Phase 1 (Integration): In Progress**
 - Need to wire up AuthProvider in tonic_auth_interceptor.rs
 - Need to add flight-sql-srv configuration and initialization
 
-**🔜 Next:** Phase 2 (Service Accounts) and Python client/CLI support
+**🔜 Next:** Phase 2 (Service Accounts) and Phase 3 (Python client/CLI support)
 
 ### Existing Implementation (Legacy)
 - Simple bearer token authentication via `check_auth` (tonic_auth_interceptor.rs:10)
@@ -283,7 +283,7 @@ Modifications to `flight_sql_srv.rs`:
 
 Add to `rust/Cargo.toml` workspace dependencies:
 ```toml
-openidconnect = "4.0"  # For OIDC/OAuth 2.0 authentication (human users and service accounts)
+openidconnect = "4.0"  # For OIDC discovery, metadata, and JWT validation
 moka = "0.12"          # For token cache with TTL and thread-safe concurrent access
 chrono = "0.4"         # For DateTime types (likely already a dependency)
 ```
@@ -295,21 +295,29 @@ chrono = "0.4"         # For DateTime types (likely already a dependency)
 - Production-proven (powers crates.io)
 - Combines LRU eviction with LFU admission policy for better hit rates
 
+**Why openidconnect for JWT validation?**
+- Standards-compliant OIDC implementation
+- Built-in JWT verification with proper security checks
+- Handles JWKS conversion automatically
+- Well-maintained and actively developed
+- Reduces custom crypto code (smaller attack surface)
+
 Note: `chrono` is likely already in use for timestamp handling throughout the codebase.
-Note: `jsonwebtoken` is not needed - `openidconnect` crate handles all JWT validation.
 
 ## Implementation Phases
 
-### Phase 1: Refactor Current Auth ✅ COMPLETED
+### Phase 1: Refactor Current Auth ✅ AUTH CRATE COMPLETE, ⏳ INTEGRATION IN PROGRESS
 - ✅ Extract AuthProvider trait
 - ✅ Create ApiKeyAuthProvider wrapping current KeyRing
 - ✅ Add AuthContext struct
 - ✅ Create separate `micromegas-auth` crate (`rust/auth/`)
-- ✅ Add unified JWT validation utilities
-- ✅ Add unit tests for API key mode
+- ✅ Add OIDC provider with JWT validation
+- ✅ Add unit tests for API key mode and OIDC mode
 - ✅ Code style improvements (module-level imports, documented structs)
 - ✅ Tests moved to `tests/` directory (separate from source)
-- **Status**: Auth crate complete, needs integration with flight-sql-srv
+- ⏳ Wire up AuthProvider in tonic_auth_interceptor.rs
+- ⏳ Add flight-sql-srv configuration and initialization
+- **Status**: Auth crate complete, integration with flight-sql-srv in progress
 
 ### Phase 2: Add Service Account Support (OAuth 2.0 Client Credentials)
 - Document how to create service accounts in OIDC providers:

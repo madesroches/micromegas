@@ -135,9 +135,14 @@ impl AuthProvider for OidcAuthProvider {
 }
 ```
 
-#### 2. JWKS Cache
+#### 2. JWKS Cache and JWT Validation
 
-**IMPORTANT:** Use `openidconnect::CoreProviderMetadata::discover_async()` for OIDC discovery instead of manual `reqwest` calls. The openidconnect crate provides built-in methods for discovery and JWKS fetching that handle edge cases properly.
+**IMPORTANT:** Use `openidconnect` for both OIDC discovery and JWT validation. The openidconnect crate provides built-in methods that handle edge cases properly and are standards-compliant.
+
+**Recommended Approach:**
+- Use `openidconnect::CoreProviderMetadata::discover_async()` for OIDC discovery
+- Use `openidconnect::IdTokenVerifier` for JWT validation (standards-compliant, secure)
+- Use `moka` for caching validated tokens with automatic TTL expiration
 
 ```rust
 use moka::future::Cache;
@@ -197,11 +202,10 @@ impl JwksCache {
 }
 ```
 
-**Note:** Current implementation (as of 2025-01-24) uses manual `reqwest::get()` calls for both discovery and JWKS fetching. This works but should be refactored to use openidconnect's built-in methods as shown above for:
-- Better error handling
-- Proper HTTP client configuration
-- Standards compliance
-- Less code to maintain
+**Note:** Current implementation needs refactoring to use `openidconnect` as much as possible:
+- Use `openidconnect::CoreProviderMetadata::discover_async()` for OIDC discovery
+- Use `openidconnect::IdTokenVerifier` for JWT validation
+- Benefits: Better error handling, standards compliance, proper security checks, less custom code
 
 **Benefits of using moka for JWKS cache:**
 - Automatic TTL expiration (no manual timestamp checking)
@@ -710,12 +714,13 @@ Tokens cleared from ~/.micromegas/tokens.json
 
 ### Current Status (2025-01-24)
 
-**✅ Completed:**
+**✅ Completed (Auth Crate - needs refactoring):**
 - ✅ **Separate `micromegas-auth` crate created** (`rust/auth/`)
 - ✅ `AuthProvider` trait with `AuthContext` struct
 - ✅ `ApiKeyAuthProvider` with KeyRing parsing
 - ✅ `OidcAuthProvider` with token validation and JWKS caching
-- ✅ **JWKS fetching uses openidconnect's built-in discovery** (with SSRF protection)
+- ⚠️ **JWKS fetching** (currently manual reqwest - needs refactoring to openidconnect)
+- ⚠️ **JWT validation** (currently jsonwebtoken - needs refactoring to openidconnect::IdTokenVerifier)
 - ✅ Test utilities for generating test tokens
 - ✅ **Tests moved to separate files** (`tests/` directory)
 - ✅ **Code style improvements:**
@@ -724,8 +729,13 @@ Tokens cleared from ~/.micromegas/tokens.json
   - ✅ Renamed `check_admin` to `is_admin`
   - ✅ Admin users hidden in Debug output for security
 - ✅ All tests passing (10 tests + 2 doc tests)
-- ✅ Public crate updated to use `micromegas-auth`
-- ✅ Old auth module removed from public crate
+
+**⏳ In Progress (Integration):**
+- ⏳ Wire up AuthProvider in tonic_auth_interceptor.rs
+- ⏳ Add flight-sql-srv configuration and initialization
+- ⏳ Refactor to use openidconnect for discovery AND validation (remove jsonwebtoken dependency)
+- ⏳ Add integration tests with wiremock
+- ⏳ Test end-to-end with real OIDC provider (Google/Azure AD)
 
 **📦 Auth Crate Structure:**
 ```
@@ -1332,34 +1342,35 @@ This TDD approach ensures each component is well-tested at multiple levels befor
 
 **Production dependencies:**
 ```toml
-# OIDC and JWT
-openidconnect = "4.0"   # OIDC client library (discovery, metadata)
-jsonwebtoken = "9"      # JWT encoding/decoding and validation
-rsa = "0.9"             # RSA key handling for JWT verification
-base64 = "0.22"         # Base64 encoding/decoding
+# OIDC and JWT - use openidconnect for everything
+openidconnect = "4.0"   # OIDC client library (discovery, metadata, JWT validation)
 
 # Caching
 moka = { version = "0.12", features = ["future"] }  # High-performance async caching
-
-# HTTP
-reqwest = { version = "0.12", features = ["json"] }  # HTTP client for OIDC discovery
 ```
 
 **Test dependencies:**
 ```toml
 [dev-dependencies]
 wiremock = "0.6"        # Mock HTTP server for integration tests
-rand = "0.8"            # Random key generation for tests
 ```
 
 **Why these choices:**
-- `openidconnect` - Used for OIDC discovery and metadata parsing (standards-compliant)
-- `jsonwebtoken` - Simpler API for JWT validation than openidconnect's verification methods
-- `rsa` - Required for converting JWKS to JWT verification keys
+- `openidconnect` - Standards-compliant OIDC implementation (discovery, JWKS, JWT validation)
 - `moka` - Best-in-class async caching with TTL support
 - `wiremock` - Industry standard for HTTP mocking in Rust
 
-**Note:** Current implementation (2025-01-24) uses manual `reqwest` for JWKS fetching. Should be refactored to use `openidconnect::CoreProviderMetadata::discover_async()` for better standards compliance.
+**Removed dependencies (after refactoring):**
+- ~~`jsonwebtoken`~~ - Replaced by openidconnect's IdTokenVerifier
+- ~~`rsa`~~ - Not needed, openidconnect handles JWKS conversion
+- ~~`base64`~~ - Not needed when using openidconnect
+- ~~`reqwest`~~ - openidconnect has built-in HTTP client
+
+**Benefits of using openidconnect:**
+- Fewer dependencies (smaller attack surface)
+- Standards-compliant implementation
+- Less custom code to maintain
+- Automatic security updates from openidconnect crate
 
 ### Python Packages
 ```toml
@@ -1370,36 +1381,50 @@ authlib = "^1.3.0"     # OAuth2/OIDC client library (includes JWT, PKCE, discove
 
 ## Architecture Decisions & Trade-offs
 
-### 1. JWT Validation: jsonwebtoken vs openidconnect
+### 1. JWT Validation: Use openidconnect
 
-**Decision:** Use `jsonwebtoken` crate for JWT validation instead of openidconnect's built-in verification.
+**Decision:** Use `openidconnect` crate for both OIDC discovery and JWT validation.
 
 **Rationale:**
-- Simpler API - `jsonwebtoken::decode()` is more straightforward than openidconnect's `IdTokenVerifier`
-- Better error messages - easier to debug validation failures
-- More control - can customize validation rules easily
-- Well-tested - `jsonwebtoken` is widely used in the Rust ecosystem
+- **Standards compliance:** openidconnect implements OIDC spec correctly
+- **Security:** Built-in JWT verification with proper security checks (nonce, signature, claims)
+- **Less custom code:** No manual JWKS conversion or claim validation needed
+- **Smaller attack surface:** Avoid custom crypto code
+- **Well-maintained:** Actively developed with security updates
+- **Proper error handling:** Detailed error types for validation failures
 
-**Trade-off:**
-- Need to manually convert JWKS to `DecodingKey` (adds complexity)
-- Need to manually validate claims (iss, aud, exp)
-- openidconnect's verifier has more built-in safety checks
+**Benefits:**
+- Automatic JWKS conversion from discovery endpoint
+- Proper nonce validation for replay prevention
+- Built-in claim validation (iss, aud, exp, nbf)
+- Standards-compliant implementation reduces security risks
 
-**Future consideration:** Could switch to openidconnect's verifier if we need stricter OIDC compliance or additional safety checks.
+**Implementation Status:**
+- ⚠️ Current implementation uses jsonwebtoken (needs refactoring)
+- ⏳ Refactor to use `openidconnect::IdTokenVerifier`
+- ⏳ Remove jsonwebtoken and rsa dependencies
 
-### 2. OIDC Discovery: Manual reqwest vs openidconnect
+### 2. Implementation Approach: Use openidconnect Throughout
 
-**Current implementation:** Uses manual `reqwest::get()` calls for discovery and JWKS fetching.
+**Goal:** Maximize use of openidconnect crate, minimize custom implementation.
 
-**Should use:** `openidconnect::CoreProviderMetadata::discover_async()`
+**Use openidconnect for:**
+- ✅ OIDC discovery (`CoreProviderMetadata::discover_async()`)
+- ✅ JWT validation (`IdTokenVerifier`)
+- ✅ JWKS handling (automatic conversion from discovery)
+- ✅ Claim extraction (standard claims via `IdTokenClaims`)
+- ✅ Error handling (use openidconnect's error types)
 
-**Why change is needed:**
-- Standards compliance - openidconnect handles edge cases properly
-- Better error handling - detailed error types for discovery failures
-- Less code - no need to manually parse discovery document
-- Future-proof - openidconnect updates track OIDC spec changes
+**Current implementation gaps:**
+- ⚠️ Uses manual `reqwest::get()` for discovery
+- ⚠️ Uses `jsonwebtoken` for validation
+- ⚠️ Manual JWKS to DecodingKey conversion
 
-**Action item:** Refactor `jwks_cache.rs` to use openidconnect's discovery (see updated plan above).
+**Action items:**
+1. Refactor OIDC discovery to use `CoreProviderMetadata::discover_async()`
+2. Replace jsonwebtoken validation with `IdTokenVerifier`
+3. Remove manual JWKS conversion code
+4. Remove jsonwebtoken and rsa dependencies
 
 ### 3. Caching Strategy: moka
 
@@ -1432,22 +1457,24 @@ authlib = "^1.3.0"     # OAuth2/OIDC client library (includes JWT, PKCE, discove
 
 **Future optimization:** Decode JWT payload without verification to extract issuer, then only try that issuer's JWKS.
 
-### 5. Module location: public/src/servers/auth
+### 5. Auth Crate Location
 
-**Decision:** Placed auth code in `public` crate under `servers/auth`.
+**Decision:** Created separate `micromegas-auth` crate at `rust/auth/`.
 
 **Rationale:**
-- Quick iteration during development
-- Co-located with existing auth code (`key_ring`, `tonic_auth_interceptor`)
-- Minimal changes to existing crate structure
-
-**Planned change:** Move to separate `micromegas-auth` crate (see "Future: Separate Auth Crate" section) for:
-- Faster build times
-- Better modularity
-- Easier testing
+- Better modularity and separation of concerns
+- Faster build times (auth code compiles independently)
+- Easier testing in isolation
 - Cleaner dependency graph
+- Can be reused by other services
 
-**When:** After Phase 1 integration is complete and tested.
+**Benefits realized:**
+- ✅ Auth crate compiles independently
+- ✅ No dependency on micromegas-tracing
+- ✅ All dependencies properly scoped
+- ✅ Tests in separate directory following project pattern
+
+**Status:** ✅ Complete - auth crate created and fully functional
 
 ## References
 
