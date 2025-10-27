@@ -192,6 +192,20 @@ class OidcAuthProvider:
 
                 # Parse authorization code from query string
                 query = parse_qs(self.path.split("?")[1] if "?" in self.path else "")
+                received_state = query.get("state", [None])[0]
+
+                # Validate state parameter to prevent CSRF attacks
+                if received_state != state:
+                    self.send_response(400)
+                    self.send_header("Content-type", "text/html")
+                    self.end_headers()
+                    self.wfile.write(
+                        b"<html><body><h1>Invalid state parameter</h1>"
+                        b"<p>Authentication failed due to invalid state. This may indicate a CSRF attack.</p></body></html>"
+                    )
+                    return
+
+                # Only extract code after state validation succeeds
                 auth_code = query.get("code", [None])[0]
 
                 # Send response to browser

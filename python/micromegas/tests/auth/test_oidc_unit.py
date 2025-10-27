@@ -29,7 +29,19 @@ def test_oidc_token_save_and_load():
         token_file = Path(tmpdir) / "tokens.json"
 
         # Mock the OAuth2Session and metadata fetching
-        with patch("micromegas.auth.oidc.OAuth2Session") as MockSession:
+        with patch("micromegas.auth.oidc.requests.get") as mock_get, patch(
+            "micromegas.auth.oidc.OAuth2Session"
+        ) as MockSession:
+            # Mock OIDC discovery response
+            mock_response = MagicMock()
+            mock_response.json.return_value = {
+                "authorization_endpoint": "https://test/auth",
+                "token_endpoint": "https://test/token",
+                "issuer": "https://test.com",
+            }
+            mock_response.raise_for_status.return_value = None
+            mock_get.return_value = mock_response
+
             mock_client = MagicMock()
             mock_client.token = {
                 "access_token": "test-access",
@@ -72,7 +84,19 @@ def test_oidc_get_token_valid():
     """Test getting a valid token without refresh."""
     from micromegas.auth import OidcAuthProvider
 
-    with patch("micromegas.auth.oidc.OAuth2Session") as MockSession:
+    with patch("micromegas.auth.oidc.requests.get") as mock_get, patch(
+        "micromegas.auth.oidc.OAuth2Session"
+    ) as MockSession:
+        # Mock OIDC discovery response
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "authorization_endpoint": "https://test/auth",
+            "token_endpoint": "https://test/token",
+            "issuer": "https://test.com",
+        }
+        mock_response.raise_for_status.return_value = None
+        mock_get.return_value = mock_response
+
         mock_client = MagicMock()
         # Token expires in 10 minutes (> 5 min buffer)
         mock_client.token = {
@@ -103,7 +127,19 @@ def test_oidc_get_token_needs_refresh():
     """Test getting token when refresh is needed."""
     from micromegas.auth import OidcAuthProvider
 
-    with patch("micromegas.auth.oidc.OAuth2Session") as MockSession:
+    with patch("micromegas.auth.oidc.requests.get") as mock_get, patch(
+        "micromegas.auth.oidc.OAuth2Session"
+    ) as MockSession:
+        # Mock OIDC discovery response
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "authorization_endpoint": "https://test/auth",
+            "token_endpoint": "https://test/token",
+            "issuer": "https://test.com",
+        }
+        mock_response.raise_for_status.return_value = None
+        mock_get.return_value = mock_response
+
         mock_client = MagicMock()
         initial_token = {
             "access_token": "test-access",
@@ -150,7 +186,19 @@ def test_oidc_get_token_no_token():
     """Test getting token when no tokens available."""
     from micromegas.auth import OidcAuthProvider
 
-    with patch("micromegas.auth.oidc.OAuth2Session") as MockSession:
+    with patch("micromegas.auth.oidc.requests.get") as mock_get, patch(
+        "micromegas.auth.oidc.OAuth2Session"
+    ) as MockSession:
+        # Mock OIDC discovery response
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "authorization_endpoint": "https://test/auth",
+            "token_endpoint": "https://test/token",
+            "issuer": "https://test.com",
+        }
+        mock_response.raise_for_status.return_value = None
+        mock_get.return_value = mock_response
+
         mock_client = MagicMock()
         mock_client.token = None
         mock_client.fetch_server_metadata.return_value = {
@@ -172,7 +220,19 @@ def test_oidc_thread_safety():
     from micromegas.auth import OidcAuthProvider
     import threading
 
-    with patch("micromegas.auth.oidc.OAuth2Session") as MockSession:
+    with patch("micromegas.auth.oidc.requests.get") as mock_get, patch(
+        "micromegas.auth.oidc.OAuth2Session"
+    ) as MockSession:
+        # Mock OIDC discovery response
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "authorization_endpoint": "https://test/auth",
+            "token_endpoint": "https://test/token",
+            "issuer": "https://test.com",
+        }
+        mock_response.raise_for_status.return_value = None
+        mock_get.return_value = mock_response
+
         mock_client = MagicMock()
         # Token expires soon
         mock_client.token = {
