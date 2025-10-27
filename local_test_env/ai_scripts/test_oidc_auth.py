@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 
 """
-Manual test script for OIDC authentication with Google
+Manual test script for OIDC authentication with any provider
 
 This is a simple interactive script to manually test OIDC authentication.
 For automated integration tests, use: pytest tests/auth/test_oidc_integration.py
 
 This script:
-1. Authenticates with Google (opens browser on first run)
+1. Authenticates with your OIDC provider (opens browser on first run)
 2. Saves tokens to ~/.micromegas/tokens.json
 3. Tests a simple FlightSQL query
 4. Shows token information
@@ -15,13 +15,23 @@ This script:
 Prerequisites:
 1. Analytics server running with OIDC enabled
    (run start_services_with_oidc.py first)
-2. GOOGLE_CLIENT_ID environment variable set
+2. Environment variables set:
+   - OIDC_ISSUER: Your OIDC provider URL
+   - OIDC_CLIENT_ID: Your client ID
+   - OIDC_CLIENT_SECRET: (optional) Only needed for Web apps
 
 Usage:
-    export GOOGLE_CLIENT_ID="your-client-id.apps.googleusercontent.com"
+    # Google example
+    export OIDC_ISSUER="https://accounts.google.com"
+    export OIDC_CLIENT_ID="your-client-id.apps.googleusercontent.com"
+
+    # Auth0 example
+    export OIDC_ISSUER="https://yourname.auth0.com/"
+    export OIDC_CLIENT_ID="your-client-id"
+
     python3 test_oidc_auth.py
 
-First run:  Opens browser for Google authentication
+First run:  Opens browser for authentication
 Second run: Uses saved tokens (no browser)
 """
 
@@ -82,7 +92,7 @@ def check_env():
 def test_oidc_login():
     """Test OIDC login flow"""
     print("=" * 70)
-    print("Testing OIDC Authentication with Google")
+    print("Testing OIDC Authentication")
     print("=" * 70)
     print()
 
@@ -158,8 +168,8 @@ def test_oidc_login():
     if auth is None:
         print()
         print("🌐 Starting browser-based authentication...")
-        print("   A browser window will open for Google login")
-        print("   Please sign in with your Google account")
+        print(f"   A browser window will open for {issuer}")
+        print("   Please sign in and authorize the application")
         print()
         input("Press Enter when ready to continue...")
         print()
@@ -259,7 +269,7 @@ def test_oidc_login():
     print("=" * 70)
     print()
     print("Summary:")
-    print("  ✅ OIDC authentication with Google")
+    print(f"  ✅ OIDC authentication with {issuer}")
     print("  ✅ Token persistence to file")
     print("  ✅ FlightSQL queries with OIDC auth")
     print("  ✅ Automatic token refresh (will happen when needed)")

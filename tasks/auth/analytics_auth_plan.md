@@ -4,20 +4,33 @@
 
 **Phase 1 (Server-Side OIDC):** ✅ **COMPLETE** (2025-01-24)
 - Multi-provider authentication (API key + OIDC) working in flight-sql-srv
-- Ready to validate tokens from Google, Azure AD, Okta, or any OIDC provider
+- Validated with Google OAuth and Auth0
+- Ready for Azure AD, Okta, or any OIDC provider
 - See [OIDC Implementation Subplan](oidc_auth_subplan.md) for details
 
-**Phase 2 (Service Accounts):** 📋 Planned - Client-side only
+**Phase 2 (Python Client OIDC):** ✅ **COMPLETE** (2025-10-27)
+- Browser-based login with PKCE
+- Token persistence to ~/.micromegas/tokens.json
+- Automatic token refresh with 5-minute buffer
+- Tested with Google OAuth and Auth0 (public client)
+- See [OIDC Implementation Subplan](oidc_auth_subplan.md) for details
+
+**Phase 3 (Testing):** ✅ **COMPLETE** (2025-10-27)
+- Unit tests for Python client (6 tests passing)
+- Integration test suite (test_oidc_integration.py)
+- End-to-end testing with Google identity provider ✅
+- End-to-end testing with Auth0 identity provider ✅
+- Provider-agnostic test scripts
+
+**Phase 4 (Service Accounts):** 📋 Planned
 - Server already supports validating service account tokens (Phase 1)
 - Need Python/Rust client credentials providers
+- OAuth 2.0 client credentials flow implementation
 
-**Phase 3 (Python Client):** 📋 Planned
-- Browser-based login with token persistence
-- Automatic token refresh
-
-**Phase 4 (Testing):** 📋 Planned
-- Integration tests with mock OIDC provider
-- End-to-end testing with real providers
+**Phase 5 (CLI):** 📋 Planned
+- CLI integration with token persistence
+- Browser login on first use
+- Automatic token reuse across CLI tools
 
 ---
 
@@ -25,11 +38,11 @@
 
 Enhance the flight-sql-srv authentication to support both human users (via OIDC) and long-running services (via OAuth 2.0 client credentials), using the `openidconnect` crate.
 
-## Current State (Updated 2025-01-24)
+## Current State (Updated 2025-10-27)
 
 ### Implementation Status
 
-**✅ Phase 1 (Server-Side OIDC): COMPLETE**
+**✅ Phase 1 (Server-Side OIDC): COMPLETE** (2025-01-24)
 - ✅ Separate `micromegas-auth` crate at `rust/auth/`
 - ✅ AuthProvider trait, AuthContext struct, AuthType enum
 - ✅ ApiKeyAuthProvider (existing API key system)
@@ -39,9 +52,29 @@ Enhance the flight-sql-srv authentication to support both human users (via OIDC)
 - ✅ Integrated into flight-sql-srv with async tower service
 - ✅ Environment variable configuration
 - ✅ Backward compatible with `--disable_auth` flag
-- ✅ Builds successfully
+- ✅ Tested with Google OAuth and Auth0
 
-**🔜 Next:** Phase 2 (Service Accounts) and Phase 3 (Python client/CLI support)
+**✅ Phase 2 (Python Client OIDC): COMPLETE** (2025-10-27)
+- ✅ `OidcAuthProvider` class in `python/micromegas/micromegas/auth/oidc.py`
+- ✅ Browser-based login with PKCE (authorization code flow)
+- ✅ Token persistence to ~/.micromegas/tokens.json (0600 permissions)
+- ✅ Automatic token refresh with 5-minute expiration buffer
+- ✅ Thread-safe token refresh for concurrent queries
+- ✅ Support for true public clients (PKCE without client_secret)
+- ✅ Support for Web apps (PKCE + client_secret)
+- ✅ FlightSQLClient integration via `auth_provider` parameter
+- ✅ Unit tests (6 tests covering token lifecycle)
+- ✅ Dependencies: authlib ^1.3.0, requests ^2.32.0
+- ✅ Tested with Google OAuth and Auth0
+
+**✅ Phase 3 (Testing): COMPLETE** (2025-10-27)
+- ✅ Provider-agnostic test scripts (start_services_with_oidc.py, test_oidc_auth.py)
+- ✅ Integration test suite (test_oidc_integration.py)
+- ✅ End-to-end testing with Google OAuth (Desktop app with secret)
+- ✅ End-to-end testing with Auth0 (Native app - true public client, no secret)
+- ✅ Documentation: GOOGLE_OIDC_SETUP.md, AUTH0_TEST_GUIDE.md, WEB_APP_OIDC.md
+
+**🔜 Next:** Phase 4 (Service Accounts) and Phase 5 (CLI support)
 
 ### Existing Implementation (Now Enhanced)
 - ✅ Bearer token authentication via async AuthProvider
@@ -55,9 +88,10 @@ Enhance the flight-sql-srv authentication to support both human users (via OIDC)
 
 ### Addressed Limitations
 - ✅ No support for federated identity providers → OIDC provider implemented & integrated
-- ⏳ Manual API key distribution and rotation → Service accounts planned (Phase 2)
+- ✅ No Python client OIDC support → Browser-based login with token persistence implemented
 - ✅ No fine-grained access control → Admin RBAC implemented (is_admin flag)
 - ✅ No audit trail of user identity → AuthContext captures and logs identity
+- ⏳ Manual API key distribution and rotation → Service accounts planned (Phase 4)
 - ⏳ Requires out-of-band key management → Service account SQL UDFs planned
 
 ## Requirements
@@ -465,7 +499,55 @@ The flight-sql-srv can now validate:
 
 **Status**: ✅ COMPLETE - Server can validate both API keys and OIDC tokens from multiple providers
 
-### Phase 2: Add Service Account Support (OAuth 2.0 Client Credentials) - PLANNED
+### Phase 2: Python Client OIDC Support ✅ COMPLETE (2025-10-27)
+
+**Summary:** Successfully implemented browser-based OIDC authentication in Python client with token persistence and automatic refresh.
+
+**Python Client:**
+- ✅ Implemented `OidcAuthProvider` class using authlib
+- ✅ Browser-based login flow (authorization code + PKCE)
+- ✅ Token storage (access + refresh tokens + id_token)
+- ✅ Automatic token refresh with 5-minute expiration buffer
+- ✅ Thread-safe token refresh for concurrent queries
+- ✅ Token persistence to ~/.micromegas/tokens.json with 0600 permissions
+- ✅ Support for true public clients (PKCE without client_secret)
+- ✅ Support for Web apps (PKCE + client_secret)
+- ✅ `FlightSQLClient` integration via `auth_provider` parameter
+- ✅ Port reuse fix for callback server (try/finally block)
+- ✅ Unit tests (6 tests covering token lifecycle)
+
+**Testing:**
+- ✅ End-to-end testing with Google OAuth (Desktop app with secret)
+- ✅ End-to-end testing with Auth0 (Native app - true public client, no secret)
+- ✅ Token reuse verified (no browser on second run)
+- ✅ Server-side token validation verified
+
+**Goal**: ✅ ACHIEVED - Human users can authenticate via browser with transparent token refresh
+
+### Phase 3: Integration Testing ✅ COMPLETE (2025-10-27)
+
+**Summary:** Comprehensive testing with real OIDC providers and provider-agnostic test infrastructure.
+
+- ✅ Provider-agnostic test scripts (start_services_with_oidc.py, test_oidc_auth.py)
+- ✅ Integration test suite (test_oidc_integration.py)
+- ✅ End-to-end testing with Google OAuth
+- ✅ End-to-end testing with Auth0
+- ✅ Multi-issuer server configuration validated
+- ✅ Token validation caching verified
+- ✅ JWKS caching verified
+- ✅ Server audit logging verified (user identity extraction)
+- ✅ Documentation: GOOGLE_OIDC_SETUP.md, AUTH0_TEST_GUIDE.md, WEB_APP_OIDC.md
+
+**Future Testing:**
+- ⏳ wiremock tests with mock OIDC provider (deferred)
+- ⏳ Azure AD and Okta testing (ready, not tested yet)
+
+**Goal**: ✅ ACHIEVED - Multi-provider OIDC authentication validated end-to-end
+
+### Phase 4: Service Account Support (OAuth 2.0 Client Credentials) - PLANNED
+
+**Note**: Server already supports validating these tokens (Phase 1 complete)
+
 - Document how to create service accounts in OIDC providers:
   - Google Cloud: Service accounts with OAuth 2.0 client credentials
   - Azure AD: App registrations with client credentials
@@ -479,35 +561,19 @@ The flight-sql-srv can now validate:
 - Add integration tests with mock OIDC provider
 - Create example service using OAuth 2.0 client credentials
 - **Goal**: Support service authentication via standard OAuth 2.0 flow
-- **Note**: Server already supports validating these tokens (Phase 1 complete)
 
-### Phase 3: Python Client OIDC Support - PLANNED
-**Python client:**
-- Implement OidcAuthProvider class using authlib
-- Browser-based login flow (authorization code + PKCE)
-- Token storage (access + refresh tokens)
-- Automatic token refresh with 5-minute buffer
-- Retry logic for 401 responses
-- Thread-safe token refresh for concurrent queries
-- Token persistence to ~/.micromegas/tokens.json
+### Phase 5: CLI Integration - PLANNED
 
 **CLI Integration:**
 - Update `cli/connection.py` to support OIDC
-- Token persistence across CLI invocations
+- Token persistence across CLI invocations (shared with Python client)
 - Browser login only on first use or expiration
+- Environment variable configuration (OIDC_ISSUER, OIDC_CLIENT_ID)
 - Token sharing between Python client and CLI
 
-**Goal**: Support human user authentication with transparent token refresh in Python client
+**Goal**: Support OIDC authentication in CLI tools with token reuse
 
-### Phase 4: Integration Testing - PLANNED
-- Add wiremock tests with mock OIDC provider
-- Test multi-issuer scenarios
-- Test token expiration and refresh
-- Test JWKS cache behavior
-- End-to-end testing with real OIDC providers (Google, Azure AD)
-- **Goal**: Comprehensive test coverage for all auth flows
-
-### Phase 5: Audit and Security Hardening - FUTURE
+### Phase 6: Audit and Security Hardening - FUTURE
 - Enhance audit logging with structured events
 - Add rate limiting per user/service
 - Add metrics for auth failures
@@ -998,29 +1064,31 @@ Organizations should plan to migrate custom auth wrappers to standard OIDC flows
 ### API Key Deprecation Timeline
 **Deprecation Plan - "Soon"**:
 
-- **Phase 1**: Release OAuth 2.0 client credentials support
-  - Server: OIDC auth validates tokens from both human users and service accounts
-  - Python client: OidcClientCredentialsProvider class
-  - CLI: OAuth 2.0 client credentials support
+- **Phase 1**: Release OAuth 2.0 client credentials support (Planned)
+  - Server: ✅ OIDC auth validates tokens from both human users and service accounts
+  - Python client: ⏳ OidcClientCredentialsProvider class (not implemented yet)
+  - CLI: ⏳ OAuth 2.0 client credentials support (not implemented yet)
   - **API keys still work** (backward compatibility maintained)
 
-- **Phase 2**: Grafana plugin major update
+- **Phase 2**: Grafana plugin major update (Planned)
   - Bundle auth migration with other planned improvements
   - Single release: OAuth 2.0 client credentials + new features
   - Migration guide published
   - Deprecation warning in API key flow
 
-- **Phase 3**: Python client OIDC support (for human users)
-  - OIDC authorization code flow with auto-refresh
-  - Deprecation warnings for API key usage
-  - Migration documentation
+- **Phase 3**: Python client OIDC support (for human users) ✅ COMPLETE (2025-10-27)
+  - ✅ OIDC authorization code flow with auto-refresh
+  - ✅ Token persistence and reuse
+  - ✅ Tested with Google OAuth and Auth0
+  - ⏳ Deprecation warnings for API key usage (not added yet)
+  - ⏳ Migration documentation (partially complete)
 
-- **Phase 4**: Deprecation enforcement
+- **Phase 4**: Deprecation enforcement (Future)
   - API keys disabled by default
   - Opt-in flag: `--enable-legacy-api-keys` (for stragglers)
   - Strong migration communication
 
-- **Phase 5**: API key removal
+- **Phase 5**: API key removal (Future)
   - Remove API key code entirely
   - Major version bump (v1.0 or v2.0)
   - Clean, maintainable auth codebase

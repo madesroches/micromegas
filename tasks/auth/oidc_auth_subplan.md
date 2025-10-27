@@ -2,7 +2,7 @@
 
 ## Status: Phase 1 & 2 Complete ✅ - Tested End-to-End ✅ - Phase 3 Planned (CLI)
 
-**Date Updated:** 2025-10-27 (Evening - End-to-End Testing Complete)
+**Date Updated:** 2025-10-27 (Evening - Multi-Provider Testing Complete)
 
 ### Completed (Phase 1 - Server-Side OIDC)
 - ✅ Server-side OIDC token validation
@@ -13,6 +13,7 @@
 - ✅ Admin user detection
 - ✅ Fixed audience field handling (supports both string and array formats)
 - ✅ **Tested end-to-end with Google OAuth**
+- ✅ **Tested end-to-end with Auth0 (true public client - no secret)**
 
 ### Completed (Phase 2 - Python Client OIDC)
 - ✅ Python client browser-based login with PKCE
@@ -22,15 +23,19 @@
 - ✅ Secure token storage (0600 permissions)
 - ✅ Deprecation of static headers parameter
 - ✅ Support for both Desktop app and Web app OAuth clients
+- ✅ Support for true public clients (PKCE without client_secret)
 - ✅ **Tested end-to-end with Google OAuth**
+- ✅ **Tested end-to-end with Auth0 (public client)**
 
 ### Completed (Documentation & Testing)
 - ✅ Complete setup guide (GOOGLE_OIDC_SETUP.md)
+- ✅ Auth0 testing guide (AUTH0_TEST_GUIDE.md)
 - ✅ Quick start guide (TESTING_QUICKSTART.md)
 - ✅ Web app integration guide (WEB_APP_OIDC.md)
-- ✅ Test scripts (start_services_with_oidc.py, test_oidc_auth.py)
+- ✅ Test scripts (start_services_with_oidc.py, test_oidc_auth.py) - provider-agnostic
 - ✅ Integration test suite (test_oidc_integration.py)
 - ✅ End-to-end testing with Google identity provider
+- ✅ End-to-end testing with Auth0 identity provider (true public client)
 
 ### Planned (Phase 3 - CLI)
 - 📋 CLI integration with token persistence
@@ -68,6 +73,7 @@ Implement OpenID Connect (OIDC) authentication for the flight-sql-srv analytics 
 - ✅ Can be disabled with `--disable_auth` flag
 - ✅ **Flexible audience handling** - supports both string and array formats
 - ✅ **Production-tested with Google OAuth** (Desktop app credentials)
+- ✅ **Production-tested with Auth0** (Native app - true public client, no secret)
 
 ### Python Client Implementation ✅ COMPLETE & TESTED
 - ✅ `OidcAuthProvider` class with browser-based login
@@ -79,13 +85,16 @@ Implement OpenID Connect (OIDC) authentication for the flight-sql-srv analytics 
 - ✅ `DynamicAuthMiddleware` for per-request token refresh
 - ✅ Static `headers` parameter deprecated with warning
 - ✅ **Support for both Desktop app and Web app OAuth clients**
-- ✅ **client_secret parameter** - optional for Desktop apps, required for Web apps
+- ✅ **Support for true public clients** (PKCE without client_secret)
+- ✅ **client_secret parameter** - optional for public clients, required for Web apps
 - ✅ **Secure secret handling** - never saved to token file
+- ✅ **Port reuse fix** - callback server properly releases port on errors
 - ✅ Comprehensive unit tests (6 tests covering token lifecycle)
 - ✅ Integration tests with fixtures (test_oidc_integration.py)
 - ✅ Dependencies: authlib ^1.3.0, requests ^2.32.0
 - ✅ Code formatted with black
 - ✅ **Production-tested with Google OAuth** (Desktop app credentials)
+- ✅ **Production-tested with Auth0** (Native app - true public client)
 
 ### CLI Implementation 📋 PLANNED
 - 📋 Update `cli/connection.py` to support OIDC

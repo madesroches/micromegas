@@ -214,28 +214,36 @@ class OidcAuthProvider:
                 pass  # Suppress logging
 
         # Start callback server
+        # Allow reusing the address to avoid "Address already in use" errors
+        socketserver.TCPServer.allow_reuse_address = True
         server = socketserver.TCPServer(("", callback_port), CallbackHandler)
-        server_thread = threading.Thread(target=server.handle_request)
-        server_thread.daemon = True
-        server_thread.start()
 
-        # Open browser for user authentication
-        print(f"Opening browser for authentication...")
-        webbrowser.open(auth_url)
+        try:
+            server_thread = threading.Thread(target=server.handle_request)
+            server_thread.daemon = True
+            server_thread.start()
 
-        # Wait for callback
-        server_thread.join(timeout=300)  # 5 minute timeout
-        server.server_close()
+            # Open browser for user authentication
+            print(f"Opening browser for authentication...")
+            webbrowser.open(auth_url)
 
-        if not auth_code:
-            raise Exception("Authentication failed - no authorization code received")
+            # Wait for callback
+            server_thread.join(timeout=300)  # 5 minute timeout
 
-        # Exchange authorization code for tokens (authlib handles code_verifier automatically)
-        # Note: PKCE works with both Desktop app (no secret) and Web app (with secret)
-        token = client.fetch_token(
-            metadata["token_endpoint"],
-            authorization_response=f"{redirect_uri}?code={auth_code}&state={state}",
-        )
+            if not auth_code:
+                raise Exception(
+                    "Authentication failed - no authorization code received"
+                )
+
+            # Exchange authorization code for tokens (authlib handles code_verifier automatically)
+            # Note: PKCE works with both Desktop app (no secret) and Web app (with secret)
+            token = client.fetch_token(
+                metadata["token_endpoint"],
+                authorization_response=f"{redirect_uri}?code={auth_code}&state={state}",
+            )
+        finally:
+            # Always close the server to release the port
+            server.server_close()
 
         return token
 

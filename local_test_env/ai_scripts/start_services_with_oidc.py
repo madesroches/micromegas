@@ -4,18 +4,25 @@
 Start micromegas services with OIDC authentication enabled
 
 This script starts the flight-sql-srv with OIDC authentication configured
-for Google identity provider.
+for any OIDC-compliant identity provider.
 
 Prerequisites:
-1. Set GOOGLE_CLIENT_ID environment variable
+1. Set OIDC_ISSUER and OIDC_CLIENT_ID environment variables
 2. Services must be built (cargo build in rust/ directory)
 
 Usage:
-    export GOOGLE_CLIENT_ID="your-client-id.apps.googleusercontent.com"
+    # Google example
+    export OIDC_ISSUER="https://accounts.google.com"
+    export OIDC_CLIENT_ID="your-client-id.apps.googleusercontent.com"
+
+    # Auth0 example
+    export OIDC_ISSUER="https://yourname.auth0.com/"
+    export OIDC_CLIENT_ID="your-client-id"
+
     python3 start_services_with_oidc.py
 
 Optional:
-    export MICROMEGAS_ADMINS='["your-email@gmail.com"]'
+    export MICROMEGAS_ADMINS='["your-email@example.com"]'
 """
 
 import os
@@ -39,10 +46,11 @@ def check_env_vars():
         print()
         print("Examples:")
         print('  Google: export OIDC_CLIENT_ID="123-abc.apps.googleusercontent.com"')
+        print('  Auth0:  export OIDC_CLIENT_ID="your-client-id"')
         print('  Azure:  export OIDC_CLIENT_ID="<your-application-id>"')
         print('  Okta:   export OIDC_CLIENT_ID="<your-client-id>"')
         print()
-        print("See tasks/auth/GOOGLE_OIDC_SETUP.md for setup instructions")
+        print("See tasks/auth/ for setup instructions (GOOGLE_OIDC_SETUP.md, AUTH0_TEST_GUIDE.md)")
         sys.exit(1)
 
     print("📝 Note: Server doesn't need OIDC_CLIENT_SECRET")
@@ -63,6 +71,7 @@ def create_oidc_config():
         print()
         print("Examples:")
         print('  Google: export OIDC_ISSUER="https://accounts.google.com"')
+        print('  Auth0:  export OIDC_ISSUER="https://yourname.auth0.com/"')
         print('  Azure:  export OIDC_ISSUER="https://login.microsoftonline.com/<tenant-id>/v2.0"')
         print('  Okta:   export OIDC_ISSUER="https://<your-domain>.okta.com"')
         sys.exit(1)
@@ -208,7 +217,7 @@ def main():
 
     # Start Analytics Server WITH OIDC AUTH
     print("📊 Starting Analytics Server (WITH OIDC AUTH)...")
-    print("   Using Google as identity provider")
+    print(f"   Using {os.environ['OIDC_ISSUER']} as identity provider")
     with open("/tmp/analytics.log", "w") as log_file:
         analytics_process = subprocess.Popen(
             ["cargo", "run", "-p", "flight-sql-srv"],
@@ -274,7 +283,7 @@ def main():
     print("=" * 70)
     print("Next steps:")
     print("  1. Run: python3 test_oidc_auth.py")
-    print("  2. Browser will open for Google authentication")
+    print("  2. Browser will open for OIDC authentication")
     print("  3. Tokens saved to ~/.micromegas/tokens.json")
     print("=" * 70)
 
