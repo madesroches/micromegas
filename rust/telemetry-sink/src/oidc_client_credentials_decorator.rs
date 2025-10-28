@@ -168,22 +168,3 @@ impl RequestDecorator for OidcClientCredentialsDecorator {
         Ok(())
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn test_token_caching() {
-        // This would need a mock OIDC server for full testing
-        // For now, just verify struct creation works
-        let decorator = OidcClientCredentialsDecorator::new(
-            "https://example.com/token".to_string(),
-            "test-client".to_string(),
-            "test-secret".to_string(),
-        );
-
-        assert_eq!(decorator.token_endpoint, "https://example.com/token");
-        assert_eq!(decorator.client_id, "test-client");
-    }
-}

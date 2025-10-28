@@ -259,9 +259,55 @@ telemetry-ingestion-srv --disable-auth
 
 ### Rust Client Authentication
 
-Rust applications sending telemetry can use either API keys or OIDC client credentials:
+Rust applications sending telemetry can use either API keys or OIDC client credentials.
 
-#### API Key Authentication (Simple)
+#### Automatic Configuration (Recommended)
+
+Applications using `#[micromegas_main]` automatically configure authentication from environment variables:
+
+```rust
+use micromegas::micromegas_main;
+use micromegas::tracing::prelude::*;
+
+#[micromegas_main(interop_max_level = "info")]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    info!("Application starting");
+    // Telemetry automatically authenticated based on environment variables
+    Ok(())
+}
+```
+
+**Environment Variables:**
+
+| Variable | Authentication Method | Required |
+|----------|----------------------|----------|
+| `MICROMEGAS_INGESTION_API_KEY` | API key (simple) | For API key auth |
+| `MICROMEGAS_OIDC_TOKEN_ENDPOINT` | OIDC client credentials | For OIDC auth |
+| `MICROMEGAS_OIDC_CLIENT_ID` | OIDC client credentials | For OIDC auth |
+| `MICROMEGAS_OIDC_CLIENT_SECRET` | OIDC client credentials | For OIDC auth |
+| `MICROMEGAS_TELEMETRY_URL` | Ingestion server URL | Yes (e.g., http://localhost:9000) |
+
+**Example (API Key):**
+```bash
+export MICROMEGAS_INGESTION_API_KEY=secret-key-123
+export MICROMEGAS_TELEMETRY_URL=http://localhost:9000
+cargo run
+```
+
+**Example (OIDC Client Credentials):**
+```bash
+export MICROMEGAS_OIDC_TOKEN_ENDPOINT=https://accounts.google.com/o/oauth2/token
+export MICROMEGAS_OIDC_CLIENT_ID=my-service@project.iam.gserviceaccount.com
+export MICROMEGAS_OIDC_CLIENT_SECRET=secret-from-secret-manager
+export MICROMEGAS_TELEMETRY_URL=http://localhost:9000
+cargo run
+```
+
+#### Manual Configuration
+
+For applications not using `#[micromegas_main]`, configure authentication manually:
+
+##### API Key Authentication (Simple)
 
 ```rust
 use micromegas_telemetry_sink::http_event_sink::HttpEventSink;
@@ -282,7 +328,7 @@ let sink = HttpEventSink::new(
 );
 ```
 
-#### OIDC Client Credentials (Production)
+##### OIDC Client Credentials (Production)
 
 ```rust
 use micromegas_telemetry_sink::http_event_sink::HttpEventSink;
@@ -307,15 +353,6 @@ let sink = HttpEventSink::new(
     Box::new(move || Arc::new(decorator.clone())),
 );
 ```
-
-**Environment Variables for Rust Clients:**
-
-| Variable | Description | Required |
-|----------|-------------|----------|
-| `MICROMEGAS_INGESTION_API_KEY` | API key for simple auth | For API key auth |
-| `MICROMEGAS_OIDC_TOKEN_ENDPOINT` | OAuth token endpoint URL | For OIDC auth |
-| `MICROMEGAS_OIDC_CLIENT_ID` | Service account client ID | For OIDC auth |
-| `MICROMEGAS_OIDC_CLIENT_SECRET` | Service account secret | For OIDC auth |
 
 **Authentication Methods Comparison:**
 

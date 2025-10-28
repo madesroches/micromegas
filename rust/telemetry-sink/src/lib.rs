@@ -193,6 +193,54 @@ impl TelemetryGuardBuilder {
         self
     }
 
+    /// Automatically configure authentication from environment variables.
+    ///
+    /// Checks for authentication configuration in this order:
+    /// 1. API key authentication via `MICROMEGAS_INGESTION_API_KEY`
+    /// 2. OIDC client credentials via `MICROMEGAS_OIDC_TOKEN_ENDPOINT`,
+    ///    `MICROMEGAS_OIDC_CLIENT_ID`, and `MICROMEGAS_OIDC_CLIENT_SECRET`
+    /// 3. Falls back to no authentication (TrivialRequestDecorator)
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use micromegas_telemetry_sink::TelemetryGuardBuilder;
+    ///
+    /// // Set environment variable
+    /// unsafe {
+    ///     std::env::set_var("MICROMEGAS_INGESTION_API_KEY", "secret-key-123");
+    /// }
+    ///
+    /// // Builder automatically configures API key authentication
+    /// let _guard = TelemetryGuardBuilder::default()
+    ///     .with_auth_from_env()
+    ///     .build()
+    ///     .expect("Failed to build telemetry guard");
+    /// ```
+    #[must_use]
+    pub fn with_auth_from_env(mut self) -> Self {
+        use crate::api_key_decorator::ApiKeyRequestDecorator;
+        use crate::oidc_client_credentials_decorator::OidcClientCredentialsDecorator;
+
+        // Try API key authentication first
+        if let Ok(decorator) = ApiKeyRequestDecorator::from_env() {
+            info!("Configured telemetry sink with API key authentication");
+            self.telemetry_make_request_decorator = Box::new(move || Arc::new(decorator));
+            return self;
+        }
+
+        // Try OIDC client credentials authentication
+        if let Ok(decorator) = OidcClientCredentialsDecorator::from_env() {
+            info!("Configured telemetry sink with OIDC client credentials authentication");
+            self.telemetry_make_request_decorator = Box::new(move || Arc::new(decorator));
+            return self;
+        }
+
+        // No authentication configured - use trivial decorator (no-op)
+        info!("Telemetry sink authentication not configured - sending unauthenticated requests");
+        self
+    }
+
     #[must_use]
     pub fn with_system_metrics_enabled(mut self, enabled: bool) -> Self {
         self.system_metrics_enabled = enabled;
