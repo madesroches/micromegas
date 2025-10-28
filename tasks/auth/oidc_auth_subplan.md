@@ -48,6 +48,30 @@
 - ✅ **Verified working with Azure AD** (2025-10-28)
 - ✅ **Fixed client_secret parameter handling** for token loading (2025-10-28)
 
+**Implementation Summary:**
+- ✅ Updated `cli/connection.py` with OIDC support via environment variables
+- ✅ Environment variables: `MICROMEGAS_OIDC_ISSUER`, `MICROMEGAS_OIDC_CLIENT_ID`, `MICROMEGAS_OIDC_CLIENT_SECRET` (optional), `MICROMEGAS_TOKEN_FILE` (optional)
+- ✅ Token persistence shared with Python client (~/.micromegas/tokens.json)
+- ✅ Browser opens only on first use or token expiration
+- ✅ Automatic token refresh with 5-minute buffer
+- ✅ Created `micromegas_logout` CLI command
+- ✅ All existing CLI tools work without modification (use `connection.connect()`)
+- ✅ Maintains backward compatibility with `MICROMEGAS_PYTHON_MODULE_WRAPPER`
+- ✅ Production-tested with Azure AD Desktop app credentials
+
+**Files Modified:**
+- `python/micromegas/cli/connection.py` - Added OIDC authentication support
+- `python/micromegas/cli/logout.py` - New logout command
+- `python/micromegas/cli/__init__.py` - Package marker
+- `python/micromegas/pyproject.toml` - Added logout script entry point
+- `python/micromegas/examples/cli_oidc_example.py` - Usage documentation
+
+**User Experience:**
+- First use: Browser opens for authentication, tokens saved
+- Subsequent use: No browser interaction, tokens auto-refresh
+- Logout: `micromegas_logout` command clears saved tokens
+- Corporate auth: `MICROMEGAS_PYTHON_MODULE_WRAPPER` takes precedence
+
 ## Overview
 
 Implement OpenID Connect (OIDC) authentication for the flight-sql-srv analytics server, enabling human users to authenticate via identity providers (Google, Azure AD, Okta, etc.) with automatic token refresh.
@@ -1025,36 +1049,87 @@ rust/auth/
 ### Phase 3: CLI OIDC Support
 **Goal:** CLI tools support OIDC authentication with token persistence
 
-**Status:** ✅ **COMPLETE!**
+**Status:** ✅ **COMPLETE!** (2025-10-28)
 
-**Completed:**
+**Implementation Details:**
 
 1. ✅ Updated `cli/connection.py` to support OIDC:
-   - ✅ Check environment variables:
-     - `MICROMEGAS_OIDC_ISSUER`
-     - `MICROMEGAS_OIDC_CLIENT_ID`
-     - `MICROMEGAS_OIDC_CLIENT_SECRET` (optional)
-     - `MICROMEGAS_TOKEN_FILE` (optional, default: ~/.micromegas/tokens.json)
+   - ✅ Environment variable configuration:
+     - `MICROMEGAS_OIDC_ISSUER` (required) - OIDC issuer URL
+     - `MICROMEGAS_OIDC_CLIENT_ID` (required) - OAuth client ID
+     - `MICROMEGAS_OIDC_CLIENT_SECRET` (optional) - For Web app clients only
+     - `MICROMEGAS_TOKEN_FILE` (optional) - Default: ~/.micromegas/tokens.json
+     - `MICROMEGAS_ANALYTICS_URI` (optional) - Default: grpc://localhost:50051
    - ✅ Maintain backward compatibility with `MICROMEGAS_PYTHON_MODULE_WRAPPER`
-   - ✅ Implement token persistence flow:
-     - Check for existing token file
-     - Load and use saved tokens if available
-     - Browser login only on first use or token expiration
-     - Auto-refresh using saved tokens
+   - ✅ Token persistence flow:
+     - Load saved tokens from file if available
+     - Refresh tokens automatically if expiring soon
+     - Browser login only on first use or token refresh failure
+     - Re-authenticate if token file corrupted
 
-2. ✅ Created `cli/logout.py` to clear saved tokens
+2. ✅ Created `cli/logout.py`:
+   - Clears saved OIDC tokens
+   - Respects `MICROMEGAS_TOKEN_FILE` environment variable
+   - Safe to run when no tokens exist
+   - Registered as `micromegas_logout` command
 
-3. ✅ Added script entry point in pyproject.toml (micromegas_logout)
+3. ✅ Created `cli/__init__.py`:
+   - Makes CLI directory a proper Python package
 
-4. ✅ All existing CLI tools work without modification (use connection.connect())
+4. ✅ Updated `pyproject.toml`:
+   - Added `[tool.poetry.scripts]` section
+   - Registered `micromegas_logout = "micromegas.cli.logout:main"`
 
-**Acceptance Criteria:**
+5. ✅ Created `examples/cli_oidc_example.py`:
+   - Complete usage documentation
+   - First-time authentication flow
+   - Token reuse examples
+   - Logout procedure
+   - Backward compatibility notes
+
+**Integration:**
+All existing CLI tools work without modification:
+- `query_processes.py`
+- `query_process_log.py`
+- `query_process_metrics.py`
+- `write_perfetto.py`
+
+They all use `connection.connect()`, which now supports:
+1. Corporate wrapper (via `MICROMEGAS_PYTHON_MODULE_WRAPPER`) - highest priority
+2. OIDC authentication (via `MICROMEGAS_OIDC_*` variables)
+3. Simple connection (fallback - no auth)
+
+**Acceptance Criteria - ALL MET:**
 - ✅ First invocation opens browser and saves tokens
 - ✅ Subsequent invocations use saved tokens (no browser)
-- ✅ Tokens auto-refresh transparently
+- ✅ Tokens auto-refresh transparently (5-minute buffer)
 - ✅ All existing CLI tools work without modification
 - ✅ Backward compatible with MICROMEGAS_PYTHON_MODULE_WRAPPER
 - ✅ Shares same token file format as Python client
+- ✅ Logout command available (`micromegas_logout`)
+- ✅ Clear user feedback for authentication state
+- ✅ Secure token storage (0600 permissions via OidcAuthProvider)
+- ✅ **Production-tested with Azure AD**
+
+**User Experience:**
+
+```bash
+# First time - browser authentication
+export MICROMEGAS_OIDC_ISSUER="https://accounts.google.com"
+export MICROMEGAS_OIDC_CLIENT_ID="123-abc.apps.googleusercontent.com"
+
+python -m micromegas.cli.query_processes --since 1h
+# Output: "No saved tokens found. Opening browser for authentication..."
+# Browser opens → user authenticates → tokens saved → query executes
+
+# Subsequent use - no browser
+python -m micromegas.cli.query_process_log <process-id>
+# Tokens loaded from file → auto-refreshed if needed → query executes
+
+# Logout
+micromegas_logout
+# Output: "Tokens cleared from ~/.micromegas/tokens.json"
+```
 
 ### Phase 4: Documentation and Examples
 **Goal:** Users can easily set up OIDC authentication
