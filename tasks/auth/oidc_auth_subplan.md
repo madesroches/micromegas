@@ -2,7 +2,7 @@
 
 ## Status: Phase 1 & 2 & 3 Complete ✅ - Tested End-to-End ✅ - Bug Fixes Applied ✅
 
-**Date Updated:** 2025-10-28 (PKCE Code Verifier Bug Fixed, CLI Setup Script Added)
+**Date Updated:** 2025-10-28 (Phase 4 Refocused on MkDocs Integration)
 
 ### Completed (Phase 1 - Server-Side OIDC)
 - ✅ Server-side OIDC token validation
@@ -64,7 +64,6 @@
 - `python/micromegas/cli/logout.py` - New logout command
 - `python/micromegas/cli/__init__.py` - Package marker
 - `python/micromegas/pyproject.toml` - Added logout script entry point
-- `python/micromegas/examples/cli_oidc_example.py` - Usage documentation
 
 **User Experience:**
 - First use: Browser opens for authentication, tokens saved
@@ -845,7 +844,7 @@ Tokens cleared from ~/.micromegas/tokens.json
   - connection.py updated: ✅ Complete
   - Logout command: ✅ Complete
   - Token persistence: ✅ Complete
-- **Phase 4 (Documentation):** Not started
+- **Phase 4 (MkDocs Integration):** Not started
 
 ### Current Status (2025-10-27 Evening)
 
@@ -1080,12 +1079,12 @@ rust/auth/
    - Added `[tool.poetry.scripts]` section
    - Registered `micromegas_logout = "micromegas.cli.logout:main"`
 
-5. ✅ Created `examples/cli_oidc_example.py`:
-   - Complete usage documentation
-   - First-time authentication flow
-   - Token reuse examples
-   - Logout procedure
-   - Backward compatibility notes
+5. ✅ Created comprehensive documentation guides:
+   - GOOGLE_OIDC_SETUP.md - Google OAuth setup
+   - AUTH0_TEST_GUIDE.md - Auth0 testing guide
+   - TESTING_QUICKSTART.md - Quick start guide
+   - WEB_APP_OIDC.md - Web app integration
+   - OTHER_PROVIDERS.md - Azure AD, Okta setup
 
 **Integration:**
 All existing CLI tools work without modification:
@@ -1131,28 +1130,28 @@ micromegas_logout
 # Output: "Tokens cleared from ~/.micromegas/tokens.json"
 ```
 
-### Phase 4: Documentation and Examples
-**Goal:** Users can easily set up OIDC authentication
+### Phase 4: MkDocs Integration
+**Goal:** Integrate OIDC authentication documentation into the main mkdocs site
 
-1. Write admin guide:
-   - How to register app with Google/Azure AD/Okta
-   - How to configure MICROMEGAS_OIDC_CONFIG
+1. Create mkdocs documentation structure:
+   - Add authentication section to mkdocs
+   - Integrate existing guides (GOOGLE_OIDC_SETUP.md, AUTH0_TEST_GUIDE.md, etc.)
+   - Add navigation entries
+
+2. Add conceptual documentation:
+   - Overview of authentication architecture
+   - When to use OIDC vs API keys
    - Security best practices
 
-2. Write user guide:
-   - How to use OidcAuthProvider in Python
-   - How to use OIDC with CLI
-   - Troubleshooting common issues
-
-3. Add examples:
-   - Google authentication example
-   - Azure AD authentication example
-   - Jupyter notebook example
+3. Add API reference:
+   - Python OidcAuthProvider API docs
+   - Rust auth crate documentation
+   - Environment variable reference
 
 **Deliverables:**
-- ✅ Admin setup guide
-- ✅ User authentication guide
-- ✅ Working examples for major providers
+- ⏳ Authentication section in mkdocs
+- ⏳ Integrated setup guides
+- ⏳ API reference documentation
 
 ## Configuration Reference
 
