@@ -1,8 +1,52 @@
 # Ingestion Service Authentication Plan
 
-## Status: 📋 Planned (Not Started)
+## Status: ✅ Implemented (Core Authentication Complete)
 
 **Date Created:** 2025-10-28
+**Date Completed:** 2025-10-28
+
+## Implementation Summary
+
+Authentication has been successfully added to the telemetry ingestion service. The implementation includes:
+
+### Completed Work
+- ✅ **Axum Authentication Middleware** - Created `rust/auth/src/axum.rs` with HTTP-compatible auth middleware
+- ✅ **Server Integration** - Integrated auth into `telemetry-ingestion-srv` with `--disable-auth` flag
+- ✅ **API Key Authentication** - Added `ApiKeyRequestDecorator` for simple Bearer token auth
+- ✅ **OIDC Client Credentials** - Added `OidcClientCredentialsDecorator` for OAuth 2.0 service auth
+- ✅ **Multi-Provider Support** - Both API key and OIDC work simultaneously via `MultiAuthProvider`
+- ✅ **Unit Tests** - Comprehensive tests for middleware and decorators
+- ✅ **Development Environment** - Updated startup scripts to use `--disable-auth` flag
+
+### Key Features
+- Same authentication infrastructure as analytics service (flight-sql-srv)
+- /health endpoint remains public for monitoring
+- Clear authentication error messages (HTTP 401)
+- Audit logging of authenticated requests
+- Environment variable configuration matching analytics service
+- Token caching for performance
+
+### Testing Status
+- Unit tests: ✅ Complete and passing
+- Integration tests: ⏳ Manual testing pending
+- End-to-end: ⏳ Ready for manual verification
+
+### Files Changed
+```
+rust/auth/src/axum.rs (new)
+rust/auth/tests/axum_tests.rs (new)
+rust/auth/Cargo.toml (modified)
+rust/auth/src/lib.rs (modified)
+rust/telemetry-ingestion-srv/src/main.rs (modified)
+rust/telemetry-ingestion-srv/Cargo.toml (modified)
+rust/telemetry-sink/src/api_key_decorator.rs (new)
+rust/telemetry-sink/src/oidc_client_credentials_decorator.rs (new)
+rust/telemetry-sink/src/lib.rs (modified)
+rust/telemetry-sink/Cargo.toml (modified)
+rust/Cargo.lock (modified)
+local_test_env/ai_scripts/start_services.py (modified)
+local_test_env/dev.py (modified)
+```
 
 ## Overview
 
@@ -177,9 +221,16 @@ telemetry-ingestion-srv
 
 ### Phase 1: Create Axum Authentication Middleware
 
-**Status:** 📋 Planned
+**Status:** ✅ Complete
 
 **Goal:** Create HTTP-compatible authentication middleware for Axum
+
+**Implementation Notes:**
+- Created `rust/auth/src/axum.rs` with `auth_middleware` function
+- Added axum dependency to auth crate (not feature-gated for simplicity)
+- Middleware extracts Bearer token, validates via AuthProvider, injects AuthContext
+- Returns proper HTTP 401 errors with clear messages
+- Added comprehensive unit tests in `rust/auth/tests/axum_tests.rs`
 
 #### Files to Create
 
@@ -352,9 +403,18 @@ Unit tests for the middleware:
 
 ### Phase 2: Integrate Auth into Ingestion Server
 
-**Status:** 📋 Planned
+**Status:** ✅ Complete
 
 **Goal:** Add authentication to telemetry-ingestion-srv using the new middleware
+
+**Implementation Notes:**
+- Added `--disable-auth` CLI flag for development mode
+- Integrated MultiAuthProvider with both API key and OIDC support
+- Applied auth middleware to all routes except /health endpoint
+- Health check remains public for monitoring/liveness probes
+- Clear logging of authentication status on startup
+- Same configuration pattern as flight-sql-srv (environment variables)
+- Server fails fast if auth required but no providers configured
 
 #### Files to Modify
 
@@ -542,9 +602,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ### Phase 3: Client Updates (Partial - Rust Only)
 
-**Status:** 📋 Planned (Partial Implementation)
+**Status:** ✅ Complete (API Key and OIDC Client Credentials)
 
 **Goal:** Add authentication support to Rust HttpEventSink for both API keys and OIDC client credentials
+
+**Implementation Notes:**
+- Created `ApiKeyRequestDecorator` for simple Bearer token authentication
+- Created `OidcClientCredentialsDecorator` for OAuth 2.0 client credentials flow
+- Both decorators implement `RequestDecorator` trait for use with HttpEventSink
+- OIDC decorator includes token caching with expiration handling
+- Both support environment variable configuration for easy setup
+- Added serde dependency for JSON token parsing
+- Unit tests included for both decorators
 
 **Note:** Supporting both authentication methods for services:
 - **API Keys:** Simple, immediate testing capability
@@ -1002,9 +1071,15 @@ let sink = HttpEventSink::new(
 
 ### Phase 4: Testing
 
-**Status:** 📋 Planned
+**Status:** 🔄 In Progress (Unit Tests Complete, Integration Testing Pending)
 
-**Note:** Testing scope adjusted based on Phase 3 partial implementation (Rust API key support only)
+**Note:** Unit tests complete, manual integration testing needed to verify end-to-end functionality
+
+**Completed Testing:**
+- ✅ Unit tests for Axum middleware (auth_tests.rs)
+- ✅ Unit tests for ApiKeyRequestDecorator
+- ✅ Unit tests for OidcClientCredentialsDecorator
+- ⏳ Manual integration testing pending (server + client E2E)
 
 #### Unit Tests
 
@@ -1167,7 +1242,9 @@ cargo run --bin telemetry-generator
 
 ### Phase 5: Documentation
 
-**Status:** 📋 Planned
+**Status:** ⏳ Pending
+
+**Note:** Implementation complete and documented in this plan. Full user-facing documentation updates deferred.
 
 #### Files to Create/Update
 
@@ -1566,12 +1643,13 @@ If issues arise:
 
 | Phase | Description | Time Estimate | Status |
 |-------|-------------|---------------|--------|
-| 1 | Axum middleware | 2-3 hours | 📋 Planned |
-| 2 | Integration | 2-3 hours | 📋 Planned |
-| 3 | Rust client auth (API key + client credentials) | 2-3 hours | 📋 Planned |
-| 4 | Testing | 2-3 hours | 📋 Planned |
-| 5 | Documentation | 2-3 hours | 📋 Planned |
-| **Total (Current)** | | **11-15 hours** | |
+| 1 | Axum middleware | 2-3 hours | ✅ Complete |
+| 2 | Integration | 2-3 hours | ✅ Complete |
+| 3 | Rust client auth (API key + client credentials) | 2-3 hours | ✅ Complete |
+| 4 | Testing (unit tests) | 2-3 hours | ✅ Complete |
+| 5 | Documentation | 2-3 hours | ⏳ Pending |
+| **Total (Implemented)** | | **~8 hours** | **✅ Core Complete** |
+| **Remaining (Integration Testing)** | | **1-2 hours** | ⏳ Pending |
 | **Future (C++/Unreal clients)** | | **1-2 hours** | ⏳ Deferred |
 
 **Notes:**
