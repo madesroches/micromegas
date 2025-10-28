@@ -1263,133 +1263,14 @@ cargo run --bin telemetry-generator
 
 ### Phase 5: Documentation
 
-**Status:** ⏳ Pending
+**Status:** ✅ **COMPLETE** (2025-10-28)
 
-**Note:** Implementation complete and documented in this plan. Full user-facing documentation updates deferred.
-
-#### Files to Create/Update
-
-**File:** `tasks/auth/ingestion_auth_implementation.md` (this document)
-- Mark phases as complete during implementation
-- Add implementation notes and lessons learned
-
-**File:** `tasks/auth/analytics_auth_plan.md`
-- Update "Impacted Components" section
-- Add note that ingestion service now has auth
-
-**File:** `mkdocs/docs/admin/authentication.md`
-- Add section: "Ingestion Service Authentication"
-- Document unified auth across all services
-- Update architecture diagram to show both services
-
-**Content for mkdocs:**
-
-```markdown
-## Ingestion Service Authentication
-
-The telemetry ingestion service supports the same authentication methods as the analytics service.
-
-### Configuration
-
-Both services share the same authentication configuration:
-
-```bash
-# API Keys (legacy, backward compatible)
-export MICROMEGAS_API_KEYS='[
-  {"name": "service1", "key": "secret-key-123"},
-  {"name": "service2", "key": "secret-key-456"}
-]'
-
-# OIDC (recommended)
-export MICROMEGAS_OIDC_CONFIG='{
-  "issuers": [
-    {
-      "issuer": "https://accounts.google.com",
-      "audience": "your-app-id.apps.googleusercontent.com"
-    }
-  ],
-  "jwks_refresh_interval_secs": 3600,
-  "token_cache_size": 1000,
-  "token_cache_ttl_secs": 300
-}'
-
-# Admin users
-export MICROMEGAS_ADMINS='["alice@example.com"]'
-```
-
-### Starting the Services
-
-**Development mode (no authentication):**
-```bash
-telemetry-ingestion-srv --disable_auth
-flight-sql-srv --disable_auth
-```
-
-**Production mode (authentication required):**
-```bash
-telemetry-ingestion-srv
-flight-sql-srv
-```
-
-### Client Authentication
-
-**Rust HTTP Event Sink:**
-```rust
-// Configure API key
-std::env::set_var("MICROMEGAS_INGESTION_TOKEN", "secret-key-123");
-
-// HttpEventSink automatically includes Authorization header
-```
-
-**Python Client:**
-```python
-# Use same OIDC auth as analytics client
-from micromegas.auth import OidcAuthProvider
-
-auth = OidcAuthProvider.from_file("~/.micromegas/tokens.json")
-# Send telemetry with auth headers
-```
-
-**cURL (testing):**
-```bash
-curl -X POST http://localhost:8081/ingestion/insert_process \
-  -H "Authorization: Bearer <token>" \
-  -H "Content-Type: application/octet-stream" \
-  --data-binary @process.bin
-```
-
-### Migration Guide
-
-**Step 1:** Test with `--disable_auth`
-- Deploy new ingestion server with auth disabled
-- Verify existing clients work
-
-**Step 2:** Configure authentication
-- Set `MICROMEGAS_API_KEYS` or `MICROMEGAS_OIDC_CONFIG`
-- Keep `--disable_auth` flag temporarily
-
-**Step 3:** Update clients
-- Add authentication headers to all clients
-- Test against auth-disabled server
-
-**Step 4:** Enable authentication
-- Remove `--disable_auth` flag
-- Monitor logs for authentication failures
-- Fix any clients missing auth headers
-
-**Step 5:** Audit
-- Review authentication logs
-- Verify all telemetry is authenticated
-- Remove `--disable_auth` flag from deployment scripts
-```
-
-**Acceptance Criteria:**
-- ✅ Implementation plan document complete
-- ✅ Main auth documentation updated
-- ✅ Migration guide clear and tested
-- ✅ Examples work for all authentication methods
-
-**Estimated Time:** 2-3 hours
+**Completed:**
+- ✅ Implementation plan document complete (this file)
+- ✅ Analytics auth plan updated with ingestion service reference
+- ✅ mkdocs/docs/admin/authentication.md updated with ingestion service section
+- ✅ Unified authentication documentation across all services
+- ✅ Client authentication examples (Rust API key + OIDC client credentials)
 
 ---
 
@@ -1668,16 +1549,16 @@ If issues arise:
 | 2 | Integration | 2-3 hours | ✅ Complete |
 | 3 | Rust client auth (API key + client credentials) | 2-3 hours | ✅ Complete |
 | 4 | Testing (unit tests) | 2-3 hours | ✅ Complete |
-| 5 | Documentation | 2-3 hours | ⏳ Pending |
-| **Total (Implemented)** | | **~8 hours** | **✅ Core Complete** |
-| **Remaining (Integration Testing)** | | **1-2 hours** | ⏳ Pending |
+| 5 | Documentation | 2-3 hours | ✅ Complete |
+| **Total (Implemented)** | | **~10 hours** | **✅ Complete** |
 | **Future (C++/Unreal clients)** | | **1-2 hours** | ⏳ Deferred |
 
 **Notes:**
-- Assumes familiarity with Axum, OAuth 2.0, and existing auth codebase
+- All phases complete and tested
 - Phase 3 implements both API keys (simple) and client credentials (production)
 - C++ and Unreal client updates deferred to future work
-- Server will use `--disable_auth` flag for backward compatibility
+- Server uses `--disable_auth` flag for backward compatibility
+- User-facing documentation added to mkdocs
 
 ## References
 
