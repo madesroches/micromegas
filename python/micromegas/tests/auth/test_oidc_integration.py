@@ -100,6 +100,7 @@ def authenticated_client(oidc_auth_provider):
 
     # Check if server is running
     import socket
+
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     result = sock.connect_ex(("127.0.0.1", 50051))
     sock.close()
@@ -134,13 +135,17 @@ def test_token_persistence(oidc_auth_provider, token_file):
 
     # Check file permissions (should be 0600)
     import stat
+
     mode = token_path.stat().st_mode
     permissions = stat.filemode(mode)
     # Should be -rw------- (owner read/write only)
-    assert permissions == "-rw-------", f"Token file permissions should be 0600, got {permissions}"
+    assert (
+        permissions == "-rw-------"
+    ), f"Token file permissions should be 0600, got {permissions}"
 
     # Verify file contents
     import json
+
     with open(token_file) as f:
         data = json.load(f)
 
@@ -184,7 +189,9 @@ def test_token_refresh_logic(oidc_auth_provider):
     print(f"\nℹ️  Token expires in {int(time_until_expiry)} seconds")
 
     # Token should have a refresh token for automatic refresh
-    assert "refresh_token" in token_info, "Token should have refresh_token for automatic renewal"
+    assert (
+        "refresh_token" in token_info
+    ), "Token should have refresh_token for automatic renewal"
 
     # Get token - should not refresh if more than 5 minutes until expiry
     if time_until_expiry > 300:  # 5 minutes
