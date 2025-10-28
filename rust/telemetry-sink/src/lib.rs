@@ -15,10 +15,12 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex, Weak};
 
+pub mod api_key_decorator;
 pub mod composite_event_sink;
 pub mod http_event_sink;
 pub mod local_event_sink;
 pub mod log_interop;
+pub mod oidc_client_credentials_decorator;
 pub mod request_decorator;
 pub mod stream_block;
 pub mod stream_info;

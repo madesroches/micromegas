@@ -12,6 +12,7 @@ default-run = "telemetry-ingestion-srv"
 
 [dependencies]
 micromegas.workspace = true
+micromegas-auth = { path = "../auth" }
 
 anyhow.workspace = true
 axum.workspace = true

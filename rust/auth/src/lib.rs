@@ -62,6 +62,9 @@ pub mod multi;
 /// Tower service layer for tonic/gRPC authentication
 pub mod tower;
 
+/// Axum middleware for HTTP authentication
+pub mod axum;
+
 /// Test utilities for generating test tokens
 #[cfg(test)]
 pub mod test_utils;
