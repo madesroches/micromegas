@@ -68,10 +68,11 @@ class OidcAuthProvider:
         # Create OAuth2Session with discovered endpoints
         # Use appropriate auth method based on whether client_secret is provided
         auth_method = "client_secret_post" if client_secret else "none"
+        # Include offline_access for Azure AD refresh tokens
         self.client = OAuth2Session(
             client_id=client_id,
             client_secret=client_secret,
-            scope="openid email profile",
+            scope="openid email profile offline_access",
             token=token,
             token_endpoint_auth_method=auth_method,
         )
@@ -134,10 +135,11 @@ class OidcAuthProvider:
 
         # Create temporary session for login
         auth_method = "client_secret_post" if client_secret else "none"
+        # Include offline_access for Azure AD refresh tokens
         temp_client = OAuth2Session(
             client_id=client_id,
             client_secret=client_secret,
-            scope="openid email profile",
+            scope="openid email profile offline_access",
             redirect_uri=redirect_uri,
             token_endpoint_auth_method=auth_method,
         )
@@ -177,10 +179,21 @@ class OidcAuthProvider:
         import http.server
         import socketserver
 
-        # Generate authorization URL with PKCE (authlib handles code_challenge automatically)
+        # Generate authorization URL with PKCE
+        # For Azure AD compatibility, we need to ensure PKCE parameters are always included
+        from authlib.common.security import generate_token
+        from authlib.oauth2.rfc7636 import create_s256_code_challenge
+
+        # Generate PKCE code_verifier (43-128 character random string)
+        code_verifier = generate_token(48)
+        code_challenge = create_s256_code_challenge(code_verifier)
+
+        # Create authorization URL with explicit PKCE parameters
         auth_url, state = client.create_authorization_url(
             metadata["authorization_endpoint"],
-            code_challenge_method="S256",  # Use PKCE with S256
+            code_verifier=code_verifier,
+            code_challenge=code_challenge,
+            code_challenge_method="S256",
         )
 
         # Start local callback server
@@ -257,11 +270,12 @@ class OidcAuthProvider:
                     "Authentication failed - no authorization code received"
                 )
 
-            # Exchange authorization code for tokens (authlib handles code_verifier automatically)
+            # Exchange authorization code for tokens with PKCE code_verifier
             # Note: PKCE works with both Desktop app (no secret) and Web app (with secret)
             token = client.fetch_token(
                 metadata["token_endpoint"],
                 authorization_response=f"{redirect_uri}?code={auth_code}&state={state}",
+                code_verifier=code_verifier,
             )
         finally:
             # Always close the server to release the port

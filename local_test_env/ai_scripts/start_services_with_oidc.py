@@ -106,7 +106,9 @@ def check_postgres_running():
     """Check if PostgreSQL is already running"""
     try:
         result = subprocess.run("pgrep -f postgres", shell=True, capture_output=True)
-        return result.returncode == 0
+        if result.returncode == 0 and result.stdout.strip():
+            return True
+        return False
     except:
         return False
 

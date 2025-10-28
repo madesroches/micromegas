@@ -1,8 +1,8 @@
 # OIDC Authentication Implementation Plan
 
-## Status: Phase 1 & 2 Complete ✅ - Tested End-to-End ✅ - Phase 3 Planned (CLI)
+## Status: Phase 1 & 2 & 3 Complete ✅ - Tested End-to-End ✅ - Bug Fixes Applied ✅
 
-**Date Updated:** 2025-10-27 (Evening - Multi-Provider Testing Complete)
+**Date Updated:** 2025-10-28 (PKCE Code Verifier Bug Fixed, CLI Setup Script Added)
 
 ### Completed (Phase 1 - Server-Side OIDC)
 - ✅ Server-side OIDC token validation
@@ -17,6 +17,7 @@
 
 ### Completed (Phase 2 - Python Client OIDC)
 - ✅ Python client browser-based login with PKCE
+- ✅ **PKCE bug fix**: code_verifier now properly passed to token exchange (2025-10-28)
 - ✅ Automatic token refresh (5-minute buffer)
 - ✅ Token persistence to ~/.micromegas/tokens.json
 - ✅ Thread-safe token refresh for concurrent queries
@@ -26,6 +27,7 @@
 - ✅ Support for true public clients (PKCE without client_secret)
 - ✅ **Tested end-to-end with Google OAuth**
 - ✅ **Tested end-to-end with Auth0 (public client)**
+- ✅ **Fixed Azure AD PKCE validation** (AADSTS50148 error resolved)
 
 ### Completed (Documentation & Testing)
 - ✅ Complete setup guide (GOOGLE_OIDC_SETUP.md)
@@ -37,10 +39,14 @@
 - ✅ End-to-end testing with Google identity provider
 - ✅ End-to-end testing with Auth0 identity provider (true public client)
 
-### Planned (Phase 3 - CLI)
-- 📋 CLI integration with token persistence
-- 📋 Browser login on first use
-- 📋 Automatic token reuse across CLI tools
+### Completed (Phase 3 - CLI)
+- ✅ CLI integration with token persistence
+- ✅ Browser login on first use
+- ✅ Automatic token reuse across CLI tools
+- ✅ Logout command to clear saved tokens
+- ✅ Backward compatible with MICROMEGAS_PYTHON_MODULE_WRAPPER
+- ✅ **Verified working with Azure AD** (2025-10-28)
+- ✅ **Fixed client_secret parameter handling** for token loading (2025-10-28)
 
 ## Overview
 
@@ -54,10 +60,10 @@ Implement OpenID Connect (OIDC) authentication for the flight-sql-srv analytics 
 
 1. **Server-side:** ✅ COMPLETE - Validate OIDC ID tokens from multiple identity providers
 2. **Python client:** ✅ COMPLETE - Browser-based login with automatic token refresh and persistence
-3. **CLI:** 📋 PLANNED - Token persistence with browser login only when needed
+3. **CLI:** ✅ COMPLETE - Token persistence with browser login only when needed
 4. **Backward compatible:** ✅ COMPLETE - Existing API key auth continues to work
 
-## Current State (Updated 2025-10-27 Evening)
+## Current State (Updated 2025-10-28)
 
 ### Server-Side Implementation ✅ COMPLETE & TESTED
 - ✅ Multi-provider authentication via `MultiAuthProvider`
@@ -74,10 +80,12 @@ Implement OpenID Connect (OIDC) authentication for the flight-sql-srv analytics 
 - ✅ **Flexible audience handling** - supports both string and array formats
 - ✅ **Production-tested with Google OAuth** (Desktop app credentials)
 - ✅ **Production-tested with Auth0** (Native app - true public client, no secret)
+- ✅ **Production-tested with Azure AD** (Desktop app credentials)
 
 ### Python Client Implementation ✅ COMPLETE & TESTED
 - ✅ `OidcAuthProvider` class with browser-based login
 - ✅ PKCE support for secure public client authentication
+- ✅ **PKCE bug fix** - code_verifier properly passed to fetch_token() (2025-10-28)
 - ✅ Automatic token refresh with 5-minute expiration buffer
 - ✅ Thread-safe token refresh using locks
 - ✅ Token persistence to ~/.micromegas/tokens.json with secure permissions (0600)
@@ -95,12 +103,27 @@ Implement OpenID Connect (OIDC) authentication for the flight-sql-srv analytics 
 - ✅ Code formatted with black
 - ✅ **Production-tested with Google OAuth** (Desktop app credentials)
 - ✅ **Production-tested with Auth0** (Native app - true public client)
+- ✅ **Production-tested with Azure AD** (Desktop app - PKCE bug fix verified)
 
-### CLI Implementation 📋 PLANNED
-- 📋 Update `cli/connection.py` to support OIDC
-- 📋 Environment variable configuration
-- 📋 Token persistence shared with Python client
-- 📋 Browser login only on first use or token expiration
+### CLI Implementation ✅ COMPLETE & TESTED
+- ✅ Updated `cli/connection.py` with OIDC support
+- ✅ Environment variable configuration (MICROMEGAS_OIDC_*)
+- ✅ Token persistence to ~/.micromegas/tokens.json
+- ✅ Browser login on first use or token expiration
+- ✅ Automatic token reuse across CLI tools
+- ✅ Logout command (micromegas_logout)
+- ✅ Backward compatible with MICROMEGAS_PYTHON_MODULE_WRAPPER
+- ✅ **Client secret handling fix** for from_file() (2025-10-28)
+- ✅ **Production-tested with Azure AD** (Desktop app credentials)
+
+### CLI Implementation ✅ COMPLETE
+- ✅ Update `cli/connection.py` to support OIDC
+- ✅ Environment variable configuration
+- ✅ Token persistence shared with Python client
+- ✅ Browser login only on first use or token expiration
+- ✅ Logout command (micromegas_logout)
+- ✅ **Fixed client_secret parameter handling** for token loading
+- ✅ **Production-tested with Azure AD**
 
 ### Addressed Limitations
 - ✅ No federated identity providers → OIDC provider implemented & integrated
@@ -108,6 +131,7 @@ Implement OpenID Connect (OIDC) authentication for the flight-sql-srv analytics 
 - ✅ No automatic token refresh → Implemented in Python client with 5-min buffer
 - ✅ Audience field type mismatch → Flexible Audience enum handles both formats
 - ✅ Need client_secret for Desktop apps → Updated to require secret for both client types
+- ✅ **PKCE code verifier bug** → Fixed: code_verifier now passed to fetch_token() (AADSTS50148 resolved)
 
 ## Requirements
 
@@ -793,7 +817,10 @@ Tokens cleared from ~/.micromegas/tokens.json
   - OidcAuthProvider: ✅ Complete
   - FlightSQLClient integration: ✅ Complete
   - Unit tests: ✅ Complete
-- **Phase 3 (CLI):** Not started
+- **Phase 3 (CLI):** ✅ **COMPLETE!**
+  - connection.py updated: ✅ Complete
+  - Logout command: ✅ Complete
+  - Token persistence: ✅ Complete
 - **Phase 4 (Documentation):** Not started
 
 ### Current Status (2025-10-27 Evening)
@@ -998,23 +1025,28 @@ rust/auth/
 ### Phase 3: CLI OIDC Support
 **Goal:** CLI tools support OIDC authentication with token persistence
 
-1. Update `cli/connection.py` to support OIDC:
-   - Check environment variables:
+**Status:** ✅ **COMPLETE!**
+
+**Completed:**
+
+1. ✅ Updated `cli/connection.py` to support OIDC:
+   - ✅ Check environment variables:
      - `MICROMEGAS_OIDC_ISSUER`
      - `MICROMEGAS_OIDC_CLIENT_ID`
+     - `MICROMEGAS_OIDC_CLIENT_SECRET` (optional)
      - `MICROMEGAS_TOKEN_FILE` (optional, default: ~/.micromegas/tokens.json)
-   - Maintain backward compatibility with `MICROMEGAS_PYTHON_MODULE_WRAPPER`
-   - Implement token persistence flow:
+   - ✅ Maintain backward compatibility with `MICROMEGAS_PYTHON_MODULE_WRAPPER`
+   - ✅ Implement token persistence flow:
      - Check for existing token file
      - Load and use saved tokens if available
      - Browser login only on first use or token expiration
      - Auto-refresh using saved tokens
 
-2. (Optional) Add `cli/logout.py` to clear saved tokens
+2. ✅ Created `cli/logout.py` to clear saved tokens
 
-3. Add examples to documentation
+3. ✅ Added script entry point in pyproject.toml (micromegas_logout)
 
-4. Test with existing CLI tools (query_processes, query_process_log, etc.)
+4. ✅ All existing CLI tools work without modification (use connection.connect())
 
 **Acceptance Criteria:**
 - ✅ First invocation opens browser and saves tokens
