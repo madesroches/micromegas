@@ -27,9 +27,9 @@ Authentication has been successfully added to the telemetry ingestion service. T
 - Token caching for performance
 
 ### Testing Status
-- Unit tests: ✅ Complete and passing
-- Integration tests: ⏳ Manual testing pending
-- End-to-end: ⏳ Ready for manual verification
+- Unit tests: ✅ Complete and passing (8 tests)
+- Integration tests: ✅ Complete (manual verification)
+- End-to-end: ✅ Verified with curl and API keys
 
 ### Files Changed
 ```
@@ -1071,15 +1071,36 @@ let sink = HttpEventSink::new(
 
 ### Phase 4: Testing
 
-**Status:** 🔄 In Progress (Unit Tests Complete, Integration Testing Pending)
+**Status:** ✅ Complete (Unit and Integration Tests)
 
-**Note:** Unit tests complete, manual integration testing needed to verify end-to-end functionality
+**Note:** All unit and integration tests complete and passing
 
 **Completed Testing:**
-- ✅ Unit tests for Axum middleware (auth_tests.rs)
-- ✅ Unit tests for ApiKeyRequestDecorator
-- ✅ Unit tests for OidcClientCredentialsDecorator
-- ⏳ Manual integration testing pending (server + client E2E)
+- ✅ Unit tests for Axum middleware (auth_tests.rs) - 4 tests passing
+- ✅ Unit tests for ApiKeyRequestDecorator - 3 tests passing
+- ✅ Unit tests for OidcClientCredentialsDecorator - 1 test passing
+- ✅ Integration testing complete (manual verification)
+
+**Integration Test Results (2025-10-28):**
+
+**Test 1: Server with --disable-auth**
+- ✅ Server starts successfully with authentication disabled
+- ✅ Health endpoint accessible (200 OK)
+- ✅ Clear warning logs: "Authentication disabled - development mode only!"
+
+**Test 2: Server with API Key Authentication**
+- ✅ Server starts with MICROMEGAS_API_KEYS configured
+- ✅ Logs show "API key authentication enabled"
+- ✅ Health endpoint remains accessible without auth (200 OK)
+- ✅ Protected endpoints reject requests without Authorization header (401 "Missing authorization header")
+- ✅ Protected endpoints reject invalid API keys (401 "Invalid token")
+- ✅ Protected endpoints accept valid API keys (200 OK)
+- ✅ Audit logging works: "authenticated: subject=test-key email=None issuer=api_key admin=false"
+
+**Test 3: Authentication Error Messages**
+- ✅ Missing header: "Missing authorization header"
+- ✅ Invalid token: "Invalid token"
+- ✅ All return HTTP 401 Unauthorized
 
 #### Unit Tests
 
