@@ -27,10 +27,12 @@
 - Need Python/Rust client credentials providers
 - OAuth 2.0 client credentials flow implementation
 
-**Phase 5 (CLI):** 📋 Planned
+**Phase 5 (CLI):** ✅ **COMPLETE** (2025-10-28)
 - CLI integration with token persistence
 - Browser login on first use
 - Automatic token reuse across CLI tools
+- Logout command (micromegas_logout)
+- Backward compatible with MICROMEGAS_PYTHON_MODULE_WRAPPER
 
 ---
 
@@ -74,7 +76,7 @@ Enhance the flight-sql-srv authentication to support both human users (via OIDC)
 - ✅ End-to-end testing with Auth0 (Native app - true public client, no secret)
 - ✅ Documentation: GOOGLE_OIDC_SETUP.md, AUTH0_TEST_GUIDE.md, WEB_APP_OIDC.md
 
-**🔜 Next:** Phase 4 (Service Accounts) and Phase 5 (CLI support)
+**🔜 Next:** Phase 4 (Service Accounts - OAuth 2.0 Client Credentials)
 
 ### Existing Implementation (Now Enhanced)
 - ✅ Bearer token authentication via async AuthProvider
@@ -562,16 +564,53 @@ The flight-sql-srv can now validate:
 - Create example service using OAuth 2.0 client credentials
 - **Goal**: Support service authentication via standard OAuth 2.0 flow
 
-### Phase 5: CLI Integration - PLANNED
+### Phase 5: CLI Integration ✅ COMPLETE (2025-10-28)
+
+**Summary:** CLI tools now support OIDC authentication with token persistence and automatic refresh.
 
 **CLI Integration:**
-- Update `cli/connection.py` to support OIDC
-- Token persistence across CLI invocations (shared with Python client)
-- Browser login only on first use or expiration
-- Environment variable configuration (OIDC_ISSUER, OIDC_CLIENT_ID)
-- Token sharing between Python client and CLI
+- ✅ Updated `cli/connection.py` to support OIDC
+- ✅ Token persistence across CLI invocations (shared with Python client at ~/.micromegas/tokens.json)
+- ✅ Browser login only on first use or expiration
+- ✅ Environment variable configuration (MICROMEGAS_OIDC_ISSUER, MICROMEGAS_OIDC_CLIENT_ID, MICROMEGAS_OIDC_CLIENT_SECRET)
+- ✅ Token sharing between Python client and CLI
+- ✅ Logout command: `micromegas_logout` to clear saved tokens
+- ✅ Backward compatible with MICROMEGAS_PYTHON_MODULE_WRAPPER (corporate auth wrapper)
 
-**Goal**: Support OIDC authentication in CLI tools with token reuse
+**Implementation Details:**
+- Updated `python/micromegas/cli/connection.py` with `_connect_with_oidc()` function
+- Uses `OidcAuthProvider.from_file()` when tokens exist, `OidcAuthProvider.login()` when not
+- Falls back to token re-authentication on refresh failure
+- Created `python/micromegas/cli/logout.py` with logout command
+- Added `micromegas_logout` script entry point to pyproject.toml
+- All existing CLI tools work without modification (query_processes.py, query_process_log.py, query_process_metrics.py)
+
+**User Experience:**
+```bash
+# Set environment variables
+export MICROMEGAS_OIDC_ISSUER="https://accounts.google.com"
+export MICROMEGAS_OIDC_CLIENT_ID="your-app-id.apps.googleusercontent.com"
+export MICROMEGAS_OIDC_CLIENT_SECRET="your-secret"  # Optional for some providers
+
+# First use: Opens browser for authentication
+python3 -m micromegas.cli.query_processes --since 1h
+
+# Subsequent uses: No browser interaction, tokens auto-refresh
+python3 -m micromegas.cli.query_process_log <process_id>
+
+# Clear saved tokens
+micromegas_logout
+```
+
+**Testing:**
+- ✅ Verified with Google OAuth (Desktop app)
+- ✅ Verified with Auth0 (Native app - public client)
+- ✅ Verified with Azure AD (Desktop app)
+- ✅ Token persistence works across all CLI tools
+- ✅ Automatic token refresh verified
+- ✅ Logout command clears tokens
+
+**Goal**: ✅ ACHIEVED - CLI tools support OIDC authentication with token reuse
 
 ### Phase 6: Audit and Security Hardening - FUTURE
 - Enhance audit logging with structured events
