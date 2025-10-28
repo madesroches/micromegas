@@ -1,13 +1,13 @@
 # Ingestion Service Authentication Plan
 
-## Status: ✅ Implemented (Core Authentication Complete)
+## Status: ✅ Fully Implemented (All Phases Complete)
 
 **Date Created:** 2025-10-28
 **Date Completed:** 2025-10-28
 
 ## Implementation Summary
 
-Authentication has been successfully added to the telemetry ingestion service. The implementation includes:
+Authentication has been successfully added to the telemetry ingestion service with complete server-side and client-side support. The implementation includes:
 
 ### Completed Work
 - ✅ **Axum Authentication Middleware** - Created `rust/auth/src/axum.rs` with HTTP-compatible auth middleware
@@ -15,8 +15,11 @@ Authentication has been successfully added to the telemetry ingestion service. T
 - ✅ **API Key Authentication** - Added `ApiKeyRequestDecorator` for simple Bearer token auth
 - ✅ **OIDC Client Credentials** - Added `OidcClientCredentialsDecorator` for OAuth 2.0 service auth
 - ✅ **Multi-Provider Support** - Both API key and OIDC work simultaneously via `MultiAuthProvider`
-- ✅ **Unit Tests** - Comprehensive tests for middleware and decorators
+- ✅ **Automatic Client Configuration** - `#[micromegas_main]` macro automatically configures auth from environment
+- ✅ **Unit Tests** - Comprehensive tests for middleware and decorators (8 tests total)
+- ✅ **Integration Tests** - Manual verification with curl and API keys
 - ✅ **Development Environment** - Updated startup scripts to use `--disable-auth` flag
+- ✅ **Documentation** - Complete user and admin documentation
 
 ### Key Features
 - Same authentication infrastructure as analytics service (flight-sql-srv)
@@ -33,19 +36,26 @@ Authentication has been successfully added to the telemetry ingestion service. T
 
 ### Files Changed
 ```
-rust/auth/src/axum.rs (new)
-rust/auth/tests/axum_tests.rs (new)
-rust/auth/Cargo.toml (modified)
-rust/auth/src/lib.rs (modified)
-rust/telemetry-ingestion-srv/src/main.rs (modified)
-rust/telemetry-ingestion-srv/Cargo.toml (modified)
-rust/telemetry-sink/src/api_key_decorator.rs (new)
-rust/telemetry-sink/src/oidc_client_credentials_decorator.rs (new)
-rust/telemetry-sink/src/lib.rs (modified)
-rust/telemetry-sink/Cargo.toml (modified)
+rust/auth/src/axum.rs (new - Phase 1)
+rust/auth/tests/axum_tests.rs (new - Phase 1)
+rust/auth/Cargo.toml (modified - Phase 1)
+rust/auth/src/lib.rs (modified - Phase 1)
+rust/telemetry-ingestion-srv/src/main.rs (modified - Phase 2)
+rust/telemetry-ingestion-srv/Cargo.toml (modified - Phase 2)
+rust/telemetry-sink/src/api_key_decorator.rs (new - Phase 3)
+rust/telemetry-sink/src/oidc_client_credentials_decorator.rs (new - Phase 3)
+rust/telemetry-sink/src/lib.rs (modified - Phase 3, Phase 6)
+rust/telemetry-sink/Cargo.toml (modified - Phase 3)
+rust/telemetry-sink/tests/api_key_decorator_tests.rs (new - Phase 6)
+rust/telemetry-sink/tests/oidc_client_credentials_decorator_tests.rs (new - Phase 6)
+rust/micromegas-proc-macros/src/lib.rs (modified - Phase 6)
+rust/public/examples/auth_test.rs (new - Phase 6)
 rust/Cargo.lock (modified)
-local_test_env/ai_scripts/start_services.py (modified)
-local_test_env/dev.py (modified)
+local_test_env/ai_scripts/start_services.py (modified - Phase 2)
+local_test_env/dev.py (modified - Phase 2)
+mkdocs/docs/admin/authentication.md (modified - Phase 5, Phase 6)
+tasks/auth/ingestion_auth_plan.md (this file - all phases)
+tasks/auth/analytics_auth_plan.md (modified - Phase 5)
 ```
 
 ## Overview
@@ -1274,6 +1284,132 @@ cargo run --bin telemetry-generator
 
 ---
 
+### Phase 6: Automatic Authentication in micromegas_main
+
+**Status:** ✅ **COMPLETE** (2025-10-28)
+
+**Goal:** Make authentication automatic for applications using the `#[micromegas_main]` macro
+
+**Implementation Summary:**
+
+Added automatic authentication configuration to the telemetry initialization process. Applications using `#[micromegas_main]` now automatically authenticate based on environment variables without requiring any code changes.
+
+**Key Features:**
+- **Automatic Configuration**: `TelemetryGuardBuilder::with_auth_from_env()` method
+  - Checks for `MICROMEGAS_INGESTION_API_KEY` → configures API key auth
+  - Checks for `MICROMEGAS_OIDC_*` env vars → configures client credentials auth
+  - Falls back to unauthenticated if no auth environment variables set
+- **Zero Code Changes**: Applications using `#[micromegas_main]` get auth automatically
+- **Example Application**: Created `rust/public/examples/auth_test.rs` demonstrating automatic auth
+- **Test Reorganization**: Moved unit tests to `tests/` directory for better organization
+
+**Files Modified:**
+```
+rust/micromegas-proc-macros/src/lib.rs (macro updated to call with_auth_from_env)
+rust/telemetry-sink/src/lib.rs (added with_auth_from_env method + 48 lines)
+rust/public/examples/auth_test.rs (new example - 47 lines)
+rust/telemetry-sink/tests/api_key_decorator_tests.rs (moved from src, 58 lines)
+rust/telemetry-sink/tests/oidc_client_credentials_decorator_tests.rs (moved from src, 12 lines)
+mkdocs/docs/admin/authentication.md (updated with automatic config section)
+```
+
+**How It Works:**
+
+1. **Macro Enhancement**: `micromegas_main` proc macro now generates code that calls `with_auth_from_env()`
+2. **Environment Detection**: `with_auth_from_env()` checks for authentication environment variables in order:
+   - First tries `MICROMEGAS_INGESTION_API_KEY` (simple API key)
+   - Then tries `MICROMEGAS_OIDC_TOKEN_ENDPOINT`, `MICROMEGAS_OIDC_CLIENT_ID`, `MICROMEGAS_OIDC_CLIENT_SECRET` (client credentials)
+   - Falls back to no authentication if neither configured
+3. **Transparent Integration**: No changes needed to application code
+
+**Usage Example:**
+
+**Before (Manual Auth - Phase 3):**
+```rust
+use micromegas::telemetry_sink::api_key_decorator::ApiKeyRequestDecorator;
+
+fn main() {
+    let decorator = ApiKeyRequestDecorator::from_env().unwrap();
+    let sink = HttpEventSink::new(
+        url,
+        max_queue,
+        metadata_retry,
+        blocks_retry,
+        Box::new(|| Arc::new(decorator)),
+    );
+    // ... rest of setup
+}
+```
+
+**After (Automatic Auth - Phase 6):**
+```rust
+#[micromegas_main]
+async fn main() {
+    // Authentication happens automatically based on env vars!
+    info!("Application starting");
+}
+```
+
+**Environment Variables:**
+
+Option 1 - API Key (Simple):
+```bash
+export MICROMEGAS_INGESTION_API_KEY="secret-key-123"
+cargo run
+```
+
+Option 2 - OIDC Client Credentials (Production):
+```bash
+export MICROMEGAS_OIDC_TOKEN_ENDPOINT="https://oauth2.googleapis.com/token"
+export MICROMEGAS_OIDC_CLIENT_ID="service@project.iam.gserviceaccount.com"
+export MICROMEGAS_OIDC_CLIENT_SECRET="secret-from-vault"
+cargo run
+```
+
+Option 3 - No Auth (Development):
+```bash
+# No auth env vars set, will connect to unauthenticated server
+cargo run
+```
+
+**Benefits:**
+- **Zero Friction**: Applications get authentication without code changes
+- **Environment-Driven**: Configuration via environment variables (12-factor app)
+- **Gradual Migration**: Apps can move from unauthenticated → API key → OIDC by just changing env vars
+- **Consistent**: Same pattern across all Micromegas applications
+- **Fallback**: Gracefully handles missing configuration (useful for development)
+
+**Documentation Updates:**
+- Added "Automatic Authentication Configuration" section to mkdocs authentication guide
+- Updated `micromegas_main` macro documentation with authentication details
+- Documented all authentication environment variables
+- Added example showing environment-driven authentication
+
+**Testing:**
+- ✅ `auth_test` example compiles and runs
+- ✅ API key decorator unit tests pass (3 tests)
+- ✅ OIDC client credentials decorator unit tests pass (1 test)
+- ✅ Automatic auth works with API keys (verified via example)
+- ✅ Automatic auth works with OIDC client credentials (verified via example)
+- ✅ Fallback to unauthenticated works (verified via example)
+
+**Acceptance Criteria:**
+- ✅ `with_auth_from_env()` method implemented
+- ✅ `micromegas_main` macro updated to use automatic auth
+- ✅ Example application demonstrates automatic auth
+- ✅ Unit tests moved to proper `tests/` directory
+- ✅ Documentation updated with automatic configuration
+- ✅ All tests pass
+- ✅ Works with both API key and OIDC client credentials
+- ✅ Gracefully handles missing configuration
+
+**Migration Impact:**
+- **Existing Applications**: Continue to work without changes (use manual auth or no auth)
+- **New Applications**: Get automatic auth by default when using `#[micromegas_main]`
+- **Migration Path**: Add environment variables to enable auth, no code changes needed
+
+---
+
 ## Configuration Reference
 
 ### Environment Variables
@@ -1550,15 +1686,18 @@ If issues arise:
 | 3 | Rust client auth (API key + client credentials) | 2-3 hours | ✅ Complete |
 | 4 | Testing (unit tests) | 2-3 hours | ✅ Complete |
 | 5 | Documentation | 2-3 hours | ✅ Complete |
-| **Total (Implemented)** | | **~10 hours** | **✅ Complete** |
+| 6 | Automatic auth in micromegas_main | 1-2 hours | ✅ Complete |
+| **Total (Implemented)** | | **~12 hours** | **✅ Complete** |
 | **Future (C++/Unreal clients)** | | **1-2 hours** | ⏳ Deferred |
 
 **Notes:**
-- All phases complete and tested
+- All 6 phases complete and tested
 - Phase 3 implements both API keys (simple) and client credentials (production)
+- Phase 6 makes authentication automatic for applications using `#[micromegas_main]`
 - C++ and Unreal client updates deferred to future work
 - Server uses `--disable_auth` flag for backward compatibility
 - User-facing documentation added to mkdocs
+- Zero-friction client authentication via environment variables
 
 ## References
 
