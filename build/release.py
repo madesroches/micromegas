@@ -16,24 +16,27 @@ run_command("cargo release -p micromegas-tracing-proc-macros -x --no-confirm")
 # Layer 2: Core serialization (depends on derive-transit)
 run_command("cargo release -p micromegas-transit -x --no-confirm")
 
-# Layer 3: Tracing (depends on transit, proc-macros)  
+# Layer 3: Tracing (depends on transit, proc-macros)
 run_command("cargo release -p micromegas-tracing -x --no-confirm")
 
-# Layer 4: Telemetry data structures (depends on tracing, transit)
+# Layer 4: Auth (depends on tracing)
+run_command("cargo release -p micromegas-auth -x --no-confirm")
+
+# Layer 5: Telemetry data structures (depends on tracing, transit)
 run_command("cargo release -p micromegas-telemetry -x --no-confirm")
 
-# Layer 5: Core services (depend on telemetry, tracing, transit)
+# Layer 6: Core services (depend on telemetry, tracing, transit)
 run_command("cargo release -p micromegas-ingestion -x --no-confirm")
 run_command("cargo release -p micromegas-telemetry-sink -x --no-confirm")
 
-# Layer 6: Perfetto (depends on tracing, transit)
+# Layer 7: Perfetto (depends on tracing, transit)
 run_command("cargo release -p micromegas-perfetto -x --no-confirm")
 
-# Layer 7: Analytics (depends on ingestion, telemetry, tracing, transit, perfetto)
+# Layer 8: Analytics (depends on ingestion, telemetry, tracing, transit, perfetto)
 run_command("cargo release -p micromegas-analytics -x --no-confirm")
 
-# Layer 8: Top-level proc macros (depends on tracing, analytics)
+# Layer 9: Top-level proc macros (depends on tracing, analytics)
 run_command("cargo release -p micromegas-proc-macros -x --no-confirm")
 
-# Layer 9: Main public crate (depends on all others)
+# Layer 10: Main public crate (depends on all others including auth)
 run_command("cargo release -p micromegas -x --no-confirm")
