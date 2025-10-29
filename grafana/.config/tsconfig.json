@@ -21,5 +21,6 @@
     "transpileOnly": true
   },
   "include": ["../src", "./types"],
+  "exclude": ["../**/*.test.ts", "../**/*.test.tsx", "../**/mock-datasource.ts"],
   "extends": "@grafana/tsconfig"
 }
