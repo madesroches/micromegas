@@ -1,0 +1,20 @@
+{
+  "name": "micromegas-monorepo",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "grafana",
+    "typescript/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces",
+    "test": "npm run test --workspaces",
+    "lint": "npm run lint --workspaces",
+    "format": "npm run format --workspaces"
+  },
+  "devDependencies": {
+    "typescript": "5.4.5",
+    "eslint": "latest",
+    "prettier": "latest"
+  }
+}
