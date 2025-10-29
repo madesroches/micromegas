@@ -3,9 +3,9 @@
   "version": "0.1.1",
   "description": "",
   "scripts": {
-    "build": "webpack -c ./.config/webpack/webpack.config.ts --env production",
+    "build": "webpack -c ./webpack.config.ts --env production",
     "build-plugin": "./build-plugin.sh",
-    "dev": "webpack -w -c ./.config/webpack/webpack.config.ts --env development",
+    "dev": "webpack -w -c ./webpack.config.ts --env development",
     "test": "jest --watch --onlyChanged",
     "test:ci": "jest --maxWorkers 4 --passWithNoTests",
     "typecheck": "tsc --noEmit",
@@ -67,7 +67,8 @@
     "typescript": "^5.2.0",
     "webpack": "^5.76.0",
     "webpack-cli": "^4.9.2",
-    "webpack-livereload-plugin": "^3.0.2"
+    "webpack-livereload-plugin": "^3.0.2",
+    "webpack-merge": "^6.0.1"
   },
   "engines": {
     "node": ">=16"
