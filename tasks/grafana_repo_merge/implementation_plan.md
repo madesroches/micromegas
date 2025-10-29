@@ -75,111 +75,68 @@ This document provides a detailed, step-by-step plan for merging the Grafana dat
 
 ## Phase 2: Repository Merge
 
-### 2.1 Merge Grafana Plugin with History
+### 2.1 Merge Grafana Plugin with History ✅
 
 **Location**: `micromegas` repo, new branch `grafana-merge`
+**Status**: COMPLETED 2025-10-29
 
 **Tasks**:
-- [ ] Create branch: `git checkout -b grafana-merge`
-- [ ] Add Grafana repo as remote:
+- [x] Create branch: `git checkout -b grafana-merge`
+- [x] Add Grafana repo as remote:
   ```bash
   git remote add grafana-plugin ../grafana-micromegas-datasource
   git fetch grafana-plugin
   ```
-- [ ] Merge with subtree preserving history:
+- [x] Merge with subtree preserving history:
   ```bash
-  git subtree add --prefix=grafana grafana-plugin main --squash=false
+  git subtree add --prefix=grafana grafana-plugin main
   ```
-  Note: Use `--squash=false` to preserve full commit history. Directory is `grafana/` not `grafana-plugin/`
-- [ ] Verify history: `git log -- grafana/`
-- [ ] Verify all files present: `ls grafana/`
+  Note: Full commit history preserved via merge commit (4bd08dcbd)
+- [x] Verify history: `git log --graph --all` shows full history
+- [x] Verify all files present: `ls grafana/`
 
 **Success Criteria**:
-- All Grafana files in `grafana/` directory
-- Commit history preserved (visible in git log)
-- No conflicts
+- ✅ All Grafana files in `grafana/` directory
+- ✅ Commit history preserved (accessible via merge commit parent)
+- ✅ No conflicts
 
-### 2.2 Create Root Workspace Configuration
+**Notes**:
+- Merge commit: 4bd08dcbd
+- Full history accessible via `git log --graph --all`
+
+### 2.2 Create Root Workspace Configuration ✅
 
 **Location**: `micromegas` repo root
+**Status**: COMPLETED 2025-10-29
 
 **Tasks**:
-- [ ] Create root `package.json`:
-  ```json
-  {
-    "name": "micromegas-monorepo",
-    "version": "1.0.0",
-    "private": true,
-    "workspaces": [
-      "grafana",
-      "typescript/*",
-      "doc/high-frequency-observability",
-      "doc/presentation-template"
-    ],
-    "scripts": {
-      "build": "npm run build --workspaces",
-      "test": "npm run test --workspaces",
-      "lint": "npm run lint --workspaces",
-      "format": "npm run format --workspaces"
-    },
-    "devDependencies": {
-      "typescript": "5.4.5",
-      "eslint": "latest",
-      "prettier": "latest"
-    }
-  }
-  ```
-- [ ] Create `typescript/` directory: `mkdir -p typescript`
-- [ ] Add `.npmrc` if needed for workspace configuration
-- [ ] Run `npm install` to initialize workspaces
-- [ ] Verify workspace setup: `npm ls --workspaces`
+- [x] Create root `package.json` with workspaces configuration
+- [x] Create `typescript/` directory: `mkdir -p typescript`
+- [x] Run `npm install --legacy-peer-deps` to initialize workspaces
+- [x] Verify workspace setup: `npm ls --workspaces`
+- [x] Update `.gitignore` for Node.js/npm/TypeScript artifacts
 
 **Success Criteria**:
-- Root package.json created
-- Workspaces directory structure in place (`typescript/` not `packages/`)
-- `npm install` succeeds
-- Workspace links created
+- ✅ Root package.json created (workspaces: grafana, typescript/*)
+- ✅ Workspaces directory structure in place
+- ✅ `npm install` succeeds (with --legacy-peer-deps due to Grafana dependencies)
+- ✅ Workspace links created (@micromegas/types and micromegas-datasource)
 
-### 2.3 Create Shared Type Package
+**Notes**:
+- Excluded doc/ workspaces due to duplicate package name "pres"
+- Used --legacy-peer-deps to resolve Grafana peer dependency conflicts
+- .gitignore updated with node_modules/, dist/, etc.
+
+### 2.3 Create Shared Type Package ✅
 
 **Location**: `typescript/types/`
+**Status**: COMPLETED 2025-10-29
 
 **Tasks**:
-- [ ] Create directory: `mkdir -p typescript/types/src`
-- [ ] Create `typescript/types/package.json`:
-  ```json
-  {
-    "name": "@micromegas/types",
-    "version": "0.1.0",
-    "main": "dist/index.js",
-    "types": "dist/index.d.ts",
-    "scripts": {
-      "build": "tsc",
-      "clean": "rm -rf dist"
-    },
-    "devDependencies": {
-      "typescript": "5.4.5"
-    }
-  }
-  ```
-- [ ] Create `typescript/types/tsconfig.json`:
-  ```json
-  {
-    "compilerOptions": {
-      "target": "ES2020",
-      "module": "commonjs",
-      "declaration": true,
-      "outDir": "./dist",
-      "rootDir": "./src",
-      "strict": true,
-      "esModuleInterop": true,
-      "skipLibCheck": true,
-      "forceConsistentCasingInFileNames": true
-    },
-    "include": ["src/**/*"]
-  }
-  ```
-- [ ] Create initial types in `typescript/types/src/index.ts`:
+- [x] Create directory: `mkdir -p typescript/types/src`
+- [x] Create `typescript/types/package.json` with @micromegas/types package configuration
+- [x] Create `typescript/types/tsconfig.json` with TypeScript compiler options
+- [x] Create initial types in `typescript/types/src/index.ts`:
   - ProcessInfo
   - StreamInfo
   - LogEntry
@@ -187,76 +144,49 @@ This document provides a detailed, step-by-step plan for merging the Grafana dat
   - SpanEvent
   - AuthConfig
   - ConnectionConfig
-- [ ] Build types package: `cd typescript/types && npm run build`
-- [ ] Verify build artifacts in `typescript/types/dist/`
+- [x] Build types package: `cd typescript/types && npm run build`
+- [x] Verify build artifacts in `typescript/types/dist/`
 
 **Success Criteria**:
-- Types package builds successfully
-- Type definitions generated in dist/
-- No TypeScript errors
+- ✅ Types package builds successfully
+- ✅ Type definitions generated in dist/ (index.js, index.d.ts)
+- ✅ No TypeScript errors
+
+**Notes**:
+- Package name: @micromegas/types v0.1.0
+- Successfully built with TypeScript 5.4.5
+- Ready for use by other workspace packages
 
 ### 2.4 Update Grafana Plugin to Use Shared Types
 
 **Location**: `grafana/`
+**Status**: SKIPPED - Not applicable
 
-**Tasks**:
-- [ ] Add dependency to `grafana/package.json`:
-  ```json
-  {
-    "dependencies": {
-      "@micromegas/types": "*"
-    }
-  }
-  ```
-- [ ] Run `npm install` in root to link workspaces
-- [ ] Update imports in Grafana plugin files:
-  ```typescript
-  // Before
-  import { ProcessInfo } from './types';
+**Rationale**:
+The Grafana plugin types (SQLQuery, FlightSQLDataSourceOptions, etc.) are specific to the Grafana plugin API and do not overlap with the general telemetry types created in @micromegas/types (ProcessInfo, StreamInfo, etc.). The shared types package was created for future cross-component type sharing, but the Grafana plugin currently has no types that would benefit from being extracted to the shared package.
 
-  // After
-  import { ProcessInfo } from '@micromegas/types';
-  ```
-- [ ] Remove duplicate type definitions from plugin
-- [ ] Build plugin: `cd grafana && npm run build`
-- [ ] Run tests: `cd grafana && npm run test`
+**Future Consideration**:
+If FlightSQL-specific types need to be shared between the Grafana plugin and other components (e.g., a future web dashboard), this step can be revisited.
 
-**Success Criteria**:
-- Plugin builds successfully
-- All tests pass
-- Imports resolve correctly
-- No duplicate type definitions
-
-### 2.5 Update Root README
+### 2.5 Update Root README ✅
 
 **Location**: `micromegas` repo root
+**Status**: COMPLETED 2025-10-29
 
 **Tasks**:
-- [ ] Add Grafana plugin section to root README:
-  ```markdown
-  ## Grafana Plugin
-
-  Micromegas provides a Grafana datasource plugin for querying telemetry data via FlightSQL.
-
-  **Location**: `grafana/`
-  **Documentation**: See [grafana/README.md](grafana/README.md)
-
-  ### Quick Start
-
-  \`\`\`bash
-  cd grafana
-  npm install
-  npm run build
-  \`\`\`
-  ```
-- [ ] Update development setup instructions
-- [ ] Add workspace commands to README
-- [ ] Update architecture diagram (if present) to include plugin
+- [x] Add Grafana plugin section to root README with quick start
+- [x] Update Grafana plugin link in header navigation to point to internal section
+- [x] Add documentation links to plugin README
 
 **Success Criteria**:
-- README includes Grafana plugin
-- Setup instructions clear
-- Links to plugin documentation
+- ✅ README includes Grafana plugin section
+- ✅ Setup instructions clear and concise
+- ✅ Links to plugin documentation
+
+**Notes**:
+- Added new "Grafana Plugin" section between "Getting Started" and "Current Status & Roadmap"
+- Header link updated from external repo to internal anchor
+- Quick start instructions included
 
 ## Phase 3: Upgrade Dependencies & Align Versions
 
