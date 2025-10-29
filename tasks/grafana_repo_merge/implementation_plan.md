@@ -26,9 +26,9 @@ This document provides a detailed, step-by-step plan for merging the Grafana dat
 
 ### Not Started
 - ❌ Repository merge (Phase 2)
-- ❌ No `grafana-plugin/` directory exists in micromegas repo yet
+- ❌ No `grafana/` directory exists in micromegas repo yet
 - ❌ No root `package.json` workspace configuration yet
-- ❌ No shared types package created yet
+- ❌ No `typescript/` directory with shared types package created yet
 - ❌ CI/CD updates (Phase 4)
 - ❌ Documentation updates (Phase 5)
 - ❌ Testing & validation (Phase 6)
@@ -85,14 +85,14 @@ This document provides a detailed, step-by-step plan for merging the Grafana dat
   ```
 - [ ] Merge with subtree preserving history:
   ```bash
-  git subtree add --prefix=grafana-plugin grafana-plugin main --squash=false
+  git subtree add --prefix=grafana grafana-plugin main --squash=false
   ```
-  Note: Use `--squash=false` to preserve full commit history
-- [ ] Verify history: `git log -- grafana-plugin/`
-- [ ] Verify all files present: `ls grafana-plugin/`
+  Note: Use `--squash=false` to preserve full commit history. Directory is `grafana/` not `grafana-plugin/`
+- [ ] Verify history: `git log -- grafana/`
+- [ ] Verify all files present: `ls grafana/`
 
 **Success Criteria**:
-- All Grafana files in `grafana-plugin/` directory
+- All Grafana files in `grafana/` directory
 - Commit history preserved (visible in git log)
 - No conflicts
 
@@ -108,8 +108,10 @@ This document provides a detailed, step-by-step plan for merging the Grafana dat
     "version": "1.0.0",
     "private": true,
     "workspaces": [
-      "grafana-plugin",
-      "packages/*"
+      "grafana",
+      "typescript/*",
+      "doc/high-frequency-observability",
+      "doc/presentation-template"
     ],
     "scripts": {
       "build": "npm run build --workspaces",
@@ -124,24 +126,24 @@ This document provides a detailed, step-by-step plan for merging the Grafana dat
     }
   }
   ```
-- [ ] Create `packages/` directory: `mkdir -p packages`
+- [ ] Create `typescript/` directory: `mkdir -p typescript`
 - [ ] Add `.npmrc` if needed for workspace configuration
 - [ ] Run `npm install` to initialize workspaces
 - [ ] Verify workspace setup: `npm ls --workspaces`
 
 **Success Criteria**:
 - Root package.json created
-- Workspaces directory structure in place
+- Workspaces directory structure in place (`typescript/` not `packages/`)
 - `npm install` succeeds
 - Workspace links created
 
 ### 2.3 Create Shared Type Package
 
-**Location**: `packages/types/`
+**Location**: `typescript/types/`
 
 **Tasks**:
-- [ ] Create directory: `mkdir -p packages/types/src`
-- [ ] Create `packages/types/package.json`:
+- [ ] Create directory: `mkdir -p typescript/types/src`
+- [ ] Create `typescript/types/package.json`:
   ```json
   {
     "name": "@micromegas/types",
@@ -157,7 +159,7 @@ This document provides a detailed, step-by-step plan for merging the Grafana dat
     }
   }
   ```
-- [ ] Create `packages/types/tsconfig.json`:
+- [ ] Create `typescript/types/tsconfig.json`:
   ```json
   {
     "compilerOptions": {
@@ -174,7 +176,7 @@ This document provides a detailed, step-by-step plan for merging the Grafana dat
     "include": ["src/**/*"]
   }
   ```
-- [ ] Create initial types in `packages/types/src/index.ts`:
+- [ ] Create initial types in `typescript/types/src/index.ts`:
   - ProcessInfo
   - StreamInfo
   - LogEntry
@@ -182,8 +184,8 @@ This document provides a detailed, step-by-step plan for merging the Grafana dat
   - SpanEvent
   - AuthConfig
   - ConnectionConfig
-- [ ] Build types package: `cd packages/types && npm run build`
-- [ ] Verify build artifacts in `packages/types/dist/`
+- [ ] Build types package: `cd typescript/types && npm run build`
+- [ ] Verify build artifacts in `typescript/types/dist/`
 
 **Success Criteria**:
 - Types package builds successfully
@@ -192,10 +194,10 @@ This document provides a detailed, step-by-step plan for merging the Grafana dat
 
 ### 2.4 Update Grafana Plugin to Use Shared Types
 
-**Location**: `grafana-plugin/`
+**Location**: `grafana/`
 
 **Tasks**:
-- [ ] Add dependency to `grafana-plugin/package.json`:
+- [ ] Add dependency to `grafana/package.json`:
   ```json
   {
     "dependencies": {
@@ -213,8 +215,8 @@ This document provides a detailed, step-by-step plan for merging the Grafana dat
   import { ProcessInfo } from '@micromegas/types';
   ```
 - [ ] Remove duplicate type definitions from plugin
-- [ ] Build plugin: `cd grafana-plugin && npm run build`
-- [ ] Run tests: `cd grafana-plugin && npm run test`
+- [ ] Build plugin: `cd grafana && npm run build`
+- [ ] Run tests: `cd grafana && npm run test`
 
 **Success Criteria**:
 - Plugin builds successfully
@@ -233,13 +235,13 @@ This document provides a detailed, step-by-step plan for merging the Grafana dat
 
   Micromegas provides a Grafana datasource plugin for querying telemetry data via FlightSQL.
 
-  **Location**: `grafana-plugin/`
-  **Documentation**: See [grafana-plugin/README.md](grafana-plugin/README.md)
+  **Location**: `grafana/`
+  **Documentation**: See [grafana/README.md](grafana/README.md)
 
   ### Quick Start
 
   \`\`\`bash
-  cd grafana-plugin
+  cd grafana
   npm install
   npm run build
   \`\`\`
@@ -257,12 +259,12 @@ This document provides a detailed, step-by-step plan for merging the Grafana dat
 
 ### 3.1 Upgrade Grafana Plugin TypeScript
 
-**Location**: `grafana-plugin/` in monorepo
+**Location**: `grafana/` in monorepo
 
 **Tasks**:
 - [ ] Update TypeScript to 5.4 to match analytics-web-app:
   ```bash
-  cd grafana-plugin
+  cd grafana
   npm install -D typescript@5.4
   ```
 - [ ] Fix any type errors introduced by upgrade
@@ -278,12 +280,12 @@ This document provides a detailed, step-by-step plan for merging the Grafana dat
 
 ### 3.2 Align Development Dependencies
 
-**Location**: `grafana-plugin/` in monorepo
+**Location**: `grafana/` in monorepo
 
 **Tasks**:
 - [ ] Update ESLint to match analytics-web-app version:
   ```bash
-  cd grafana-plugin
+  cd grafana
   npm install -D eslint@^8.57.0 @typescript-eslint/eslint-plugin@latest @typescript-eslint/parser@latest
   ```
 - [ ] Update Prettier (if used) to match analytics-web-app
@@ -310,13 +312,13 @@ This document provides a detailed, step-by-step plan for merging the Grafana dat
   on:
     push:
       paths:
-        - 'grafana-plugin/**'
-        - 'packages/types/**'
+        - 'grafana/**'
+        - 'typescript/types/**'
         - '.github/workflows/grafana-plugin.yml'
     pull_request:
       paths:
-        - 'grafana-plugin/**'
-        - 'packages/types/**'
+        - 'grafana/**'
+        - 'typescript/types/**'
 
   jobs:
     build:
@@ -332,16 +334,16 @@ This document provides a detailed, step-by-step plan for merging the Grafana dat
           run: npm ci
 
         - name: Build types
-          run: cd packages/types && npm run build
+          run: cd typescript/types && npm run build
 
         - name: Build plugin
-          run: cd grafana-plugin && npm run build
+          run: cd grafana && npm run build
 
         - name: Run tests
-          run: cd grafana-plugin && npm run test
+          run: cd grafana && npm run test
 
         - name: Lint
-          run: cd grafana-plugin && npm run lint
+          run: cd grafana && npm run lint
   ```
 - [ ] Update main CI workflow to skip plugin if not changed
 - [ ] Add path filters to existing workflows
@@ -377,7 +379,7 @@ This document provides a detailed, step-by-step plan for merging the Grafana dat
   #!/bin/bash
   # Check which components changed
 
-  if git diff --name-only HEAD~1 | grep -q "^grafana-plugin/"; then
+  if git diff --name-only HEAD~1 | grep -q "^grafana/"; then
     echo "grafana=true" >> $GITHUB_OUTPUT
   fi
 
@@ -385,8 +387,8 @@ This document provides a detailed, step-by-step plan for merging the Grafana dat
     echo "rust=true" >> $GITHUB_OUTPUT
   fi
 
-  if git diff --name-only HEAD~1 | grep -q "^packages/"; then
-    echo "shared=true" >> $GITHUB_OUTPUT
+  if git diff --name-only HEAD~1 | grep -q "^typescript/"; then
+    echo "typescript=true" >> $GITHUB_OUTPUT
   fi
   ```
 - [ ] Make executable: `chmod +x scripts/check-changes.sh`
@@ -450,10 +452,10 @@ This document provides a detailed, step-by-step plan for merging the Grafana dat
   - Authentication setup
   - Usage examples
   - Troubleshooting
-- [ ] Migrate content from grafana-plugin/README.md
+- [ ] Migrate content from grafana/README.md
 - [ ] Add cross-references to FlightSQL docs
 - [ ] Update mkdocs.yml navigation
-- [ ] Simplify grafana-plugin/README.md (link to full docs)
+- [ ] Simplify grafana/README.md (link to full docs)
 
 **Success Criteria**:
 - Comprehensive Grafana docs in MkDocs
@@ -483,7 +485,7 @@ This document provides a detailed, step-by-step plan for merging the Grafana dat
 
   # Build shared packages
   echo "Building shared packages..."
-  cd packages/types && npm run build && cd ../..
+  cd typescript/types && npm run build && cd ../..
 
   # Setup Rust
   echo "Setting up Rust workspace..."
@@ -561,7 +563,7 @@ This document provides a detailed, step-by-step plan for merging the Grafana dat
 
   This repository has been merged into the main Micromegas monorepo.
 
-  **New Location**: https://github.com/madesroches/micromegas/tree/main/grafana-plugin
+  **New Location**: https://github.com/madesroches/micromegas/tree/main/grafana
 
   Please open issues and PRs in the main repository.
 
