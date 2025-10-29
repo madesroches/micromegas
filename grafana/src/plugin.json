@@ -1,0 +1,57 @@
+{
+  "$schema": "https://raw.githubusercontent.com/grafana/grafana/master/docs/sources/developers/plugins/plugin.schema.json",
+  "type": "datasource",
+  "name": "Micromegas",
+  "id": "micromegas-datasource",
+  "logs": true,
+  "metrics": true,
+  "backend": true,
+  "alerting": true,
+  "executable": "gpx_flightsql_datasource",
+  "info": {
+    "description": "Query Micromegas.",
+    "author": {
+      "name": "Marc-Antoine Desroches",
+      "url": "https://github.com/madesroches/"
+    },
+    "keywords": ["datasource", "apache", "arrow", "flight", "flightsql", "micromegas"],
+    "logos": {
+      "small": "img/arrow-logo.png",
+      "large": "img/arrow-logo.png"
+    },
+    "links": [
+      {
+        "name": "Github",
+        "url": "https://github.com/madesroches/grafana-micromegas-datasource"
+      },
+      {
+        "name": "Docs",
+        "url": "https://github.com/madesroches/grafana-micromegas-datasource/blob/main/README.md#usage"
+      },
+      {
+        "name": "License",
+        "url": "https://github.com/madesroches/grafana-micromegas-datasource/blob/main/LICENSE"
+      }
+    ],
+    "screenshots": [
+      {
+        "name": "Config Data Source",
+        "path": "img/datasource-configuration.png"
+      },
+      {
+        "name": "Builder View Query",
+        "path": "img/builder-view-query.png"
+      },
+      {
+        "name": "Raw Editor Query",
+        "path": "img/raw-editor-query.png"
+      }
+    ],
+    "version": "%VERSION%",
+    "updated": "%TODAY%"
+  },
+  "dependencies": {
+    "grafanaDependency": ">=9.2.5",
+    "plugins": []
+  }
+}
