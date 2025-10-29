@@ -43,3 +43,18 @@ docker/http-gateway-srv
 mkdocs/site/
 mkdocs/venv/
 docs-venv/
+
+# Node.js / npm
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+
+# TypeScript
+*.tsbuildinfo
+typescript/*/dist/
+
+# Grafana plugin
+grafana/dist/
+grafana/coverage/

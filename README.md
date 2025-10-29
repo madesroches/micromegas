@@ -16,7 +16,7 @@
 <p align="center">
   <a href="https://madesroches.github.io/micromegas/docs/">Documentation</a> •
   <a href="https://madesroches.github.io/micromegas/rustdoc/micromegas/">Rust API Docs</a> •
-  <a href="https://github.com/madesroches/grafana-micromegas-datasource/">Grafana Plugin</a> •
+  <a href="#grafana-plugin">Grafana Plugin</a> •
   <a href="#presentations">Presentations</a>
 </p>
 
@@ -74,6 +74,22 @@ See the [Authentication Guide](https://madesroches.github.io/micromegas/docs/adm
 
 To get started with Micromegas, please refer to the [Getting Started](https://madesroches.github.io/micromegas/docs/getting-started/) guide.
 
+## Grafana Plugin
+
+Micromegas provides a Grafana datasource plugin for querying telemetry data via FlightSQL. This enables you to visualize your logs, metrics, and traces directly in Grafana dashboards.
+
+**Location**: `grafana/`
+**Documentation**: See [grafana/README.md](grafana/README.md)
+
+### Quick Start
+
+```bash
+cd grafana
+npm install
+npm run build
+```
+
+For detailed installation and configuration instructions, please refer to the [plugin documentation](grafana/README.md).
 
 ## Current Status & Roadmap
 
