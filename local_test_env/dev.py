@@ -185,11 +185,12 @@ def start_services(build_mode):
     
     # Start Ingestion Server and wait for it to be ready
     print("📥 Starting Ingestion Server...")
-    run_command(f"tmux send-keys -t 1 'echo \"📥 Starting Ingestion Server...\"; cd ../rust && cargo run {run_flags} -p telemetry-ingestion-srv -- --listen-endpoint-http 127.0.0.1:9000' C-m")
-    
+    run_command(f"tmux send-keys -t 1 'echo \"📥 Starting Ingestion Server...\"; cd ../rust && cargo run {run_flags} -p telemetry-ingestion-srv -- --listen-endpoint-http 127.0.0.1:9000 --disable-auth' C-m")
+
     # Wait for ingestion service to be ready
     if not wait_for_service("http://127.0.0.1:9000/health", "Ingestion Server"):
-        print("⚠️  Warning: Ingestion server may not be ready, continuing anyway...")
+        print("❌ Error: Ingestion server failed to start")
+        sys.exit(1)
     
     # Start remaining services
     remaining_services = [

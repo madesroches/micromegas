@@ -29,10 +29,15 @@ def kill_services():
     time.sleep(2)
 
 def check_postgres_running():
-    """Check if PostgreSQL is already running"""
+    """Check if PostgreSQL Docker container is running"""
     try:
-        result = subprocess.run("pgrep -f postgres", shell=True, capture_output=True)
-        return result.returncode == 0
+        result = subprocess.run(
+            "docker ps --filter name=teledb --filter status=running --format '{{.Names}}'",
+            shell=True,
+            capture_output=True,
+            text=True
+        )
+        return "teledb" in result.stdout
     except:
         return False
 
@@ -93,7 +98,8 @@ def main():
     with open("/tmp/ingestion.log", "w") as log_file:
         ingestion_process = subprocess.Popen([
             "cargo", "run", "-p", "telemetry-ingestion-srv", "--",
-            "--listen-endpoint-http", "127.0.0.1:9000"
+            "--listen-endpoint-http", "127.0.0.1:9000",
+            "--disable-auth"
         ], stdout=log_file, stderr=subprocess.STDOUT, env=os.environ.copy())
     ingestion_pid = ingestion_process.pid
     print(f"Ingestion Server PID: {ingestion_pid}")

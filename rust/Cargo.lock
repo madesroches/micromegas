@@ -3150,6 +3150,7 @@ version = "0.15.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "axum",
  "base64 0.22.1",
  "chrono",
  "futures",
@@ -3246,6 +3247,7 @@ dependencies = [
  "micromegas-tracing",
  "micromegas-transit",
  "reqwest",
+ "serde",
  "sysinfo",
  "tokio",
  "tokio-retry2",
@@ -5231,6 +5233,7 @@ dependencies = [
  "axum",
  "clap",
  "micromegas",
+ "micromegas-auth",
  "tokio",
  "tower-http 0.5.2",
 ]

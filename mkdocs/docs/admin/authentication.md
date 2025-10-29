@@ -1,10 +1,10 @@
 # Authentication
 
-Micromegas supports secure authentication for the analytics server (flight-sql-srv) using both API keys and OpenID Connect (OIDC).
+Micromegas supports unified authentication across all services using both API keys and OpenID Connect (OIDC).
 
 ## Overview
 
-The analytics server supports two authentication methods:
+Both the analytics server (flight-sql-srv) and ingestion server (telemetry-ingestion-srv) support two authentication methods:
 
 - **OIDC (OpenID Connect)** - For human users and service accounts via federated identity providers (Google, Azure AD, Okta, Auth0, etc.)
 - **API Keys** - Legacy support for simple bearer token authentication
@@ -113,7 +113,11 @@ export MICROMEGAS_API_KEYS='[
 For local development and testing, authentication can be disabled:
 
 ```bash
+# Analytics server
 flight-sql-srv --disable-auth
+
+# Ingestion server
+telemetry-ingestion-srv --disable-auth
 ```
 
 !!! danger "Security Warning"
@@ -234,6 +238,137 @@ df = client.query("SELECT * FROM processes LIMIT 10")
 
 !!! warning "Deprecated API"
     The `headers` parameter is deprecated. Use `auth_provider` with `OidcAuthProvider` instead.
+
+## Ingestion Service Authentication
+
+The telemetry ingestion service (telemetry-ingestion-srv) uses the same authentication infrastructure as the analytics service.
+
+### Server Configuration
+
+The ingestion server uses the same environment variables as the analytics server:
+
+```bash
+# Start ingestion server with authentication
+export MICROMEGAS_API_KEYS='[{"name": "service1", "key": "secret-key-123"}]'
+export MICROMEGAS_OIDC_CONFIG='{"issuers": [...]}'
+telemetry-ingestion-srv
+
+# Or disable auth for development
+telemetry-ingestion-srv --disable-auth
+```
+
+### Rust Client Authentication
+
+Rust applications sending telemetry can use either API keys or OIDC client credentials.
+
+#### Automatic Configuration (Recommended)
+
+Applications using `#[micromegas_main]` automatically configure authentication from environment variables:
+
+```rust
+use micromegas::micromegas_main;
+use micromegas::tracing::prelude::*;
+
+#[micromegas_main(interop_max_level = "info")]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    info!("Application starting");
+    // Telemetry automatically authenticated based on environment variables
+    Ok(())
+}
+```
+
+**Environment Variables:**
+
+| Variable | Authentication Method | Required |
+|----------|----------------------|----------|
+| `MICROMEGAS_INGESTION_API_KEY` | API key (simple) | For API key auth |
+| `MICROMEGAS_OIDC_TOKEN_ENDPOINT` | OIDC client credentials | For OIDC auth |
+| `MICROMEGAS_OIDC_CLIENT_ID` | OIDC client credentials | For OIDC auth |
+| `MICROMEGAS_OIDC_CLIENT_SECRET` | OIDC client credentials | For OIDC auth |
+| `MICROMEGAS_TELEMETRY_URL` | Ingestion server URL | Yes (e.g., http://localhost:9000) |
+
+**Example (API Key):**
+```bash
+export MICROMEGAS_INGESTION_API_KEY=secret-key-123
+export MICROMEGAS_TELEMETRY_URL=http://localhost:9000
+cargo run
+```
+
+**Example (OIDC Client Credentials):**
+```bash
+export MICROMEGAS_OIDC_TOKEN_ENDPOINT=https://accounts.google.com/o/oauth2/token
+export MICROMEGAS_OIDC_CLIENT_ID=my-service@project.iam.gserviceaccount.com
+export MICROMEGAS_OIDC_CLIENT_SECRET=secret-from-secret-manager
+export MICROMEGAS_TELEMETRY_URL=http://localhost:9000
+cargo run
+```
+
+#### Manual Configuration
+
+For applications not using `#[micromegas_main]`, configure authentication manually:
+
+##### API Key Authentication (Simple)
+
+```rust
+use micromegas_telemetry_sink::http_event_sink::HttpEventSink;
+use micromegas_telemetry_sink::api_key_decorator::ApiKeyRequestDecorator;
+use std::sync::Arc;
+
+// From environment variable
+std::env::set_var("MICROMEGAS_INGESTION_API_KEY", "secret-key-123");
+let decorator = ApiKeyRequestDecorator::from_env().unwrap();
+
+// Configure HttpEventSink with authentication
+let sink = HttpEventSink::new(
+    "http://localhost:9000",
+    max_queue_size,
+    metadata_retry,
+    blocks_retry,
+    Box::new(move || Arc::new(decorator.clone())),
+);
+```
+
+##### OIDC Client Credentials (Production)
+
+```rust
+use micromegas_telemetry_sink::http_event_sink::HttpEventSink;
+use micromegas_telemetry_sink::oidc_client_credentials_decorator::OidcClientCredentialsDecorator;
+use std::sync::Arc;
+
+// Configure OIDC client credentials
+std::env::set_var("MICROMEGAS_OIDC_TOKEN_ENDPOINT",
+    "https://accounts.google.com/o/oauth2/token");
+std::env::set_var("MICROMEGAS_OIDC_CLIENT_ID",
+    "my-service@project.iam.gserviceaccount.com");
+std::env::set_var("MICROMEGAS_OIDC_CLIENT_SECRET",
+    "secret-from-secret-manager");
+
+let decorator = OidcClientCredentialsDecorator::from_env().unwrap();
+
+let sink = HttpEventSink::new(
+    "http://localhost:9000",
+    max_queue_size,
+    metadata_retry,
+    blocks_retry,
+    Box::new(move || Arc::new(decorator.clone())),
+);
+```
+
+**Authentication Methods Comparison:**
+
+| Method | Use Case | Token Lifetime | Complexity |
+|--------|----------|----------------|------------|
+| API Key | Development, testing | No expiration | Low |
+| Client Credentials | Production services | ~1 hour (auto-refresh) | Medium |
+
+### Health Endpoint
+
+The `/health` endpoint remains public for monitoring and liveness checks, even when authentication is enabled.
+
+```bash
+# Health check always works without authentication
+curl http://localhost:9000/health
+```
 
 ## Setting Up OIDC Providers
 

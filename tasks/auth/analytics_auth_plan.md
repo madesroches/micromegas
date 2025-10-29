@@ -36,6 +36,18 @@
 
 ---
 
+## Related Services
+
+**Ingestion Service Authentication:** ✅ **COMPLETE** (2025-10-28)
+- HTTP authentication added to telemetry-ingestion-srv
+- Same authentication infrastructure as analytics service
+- Supports API keys and OIDC simultaneously
+- Development mode with `--disable-auth` flag
+- See [Ingestion Service Authentication Plan](ingestion_auth_plan.md) for details
+- PR: #551
+
+---
+
 ## Overview
 
 Enhance the flight-sql-srv authentication to support both human users (via OIDC) and long-running services (via OAuth 2.0 client credentials), using the `openidconnect` crate.

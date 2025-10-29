@@ -11,6 +11,15 @@ use syn::{AttributeArgs, ItemFn, Lit, Meta, NestedMeta, parse_macro_input};
 /// This is a drop-in replacement for `#[tokio::main]` that automatically configures:
 /// - Tokio runtime with proper micromegas tracing thread lifecycle callbacks
 /// - Telemetry guard with sensible defaults (ctrl-c handling, debug level)
+/// - Automatic authentication configuration from environment variables
+///
+/// # Authentication
+///
+/// The macro automatically configures telemetry authentication based on environment variables:
+///
+/// - **API Key:** Set `MICROMEGAS_INGESTION_API_KEY=your-key`
+/// - **OIDC Client Credentials:** Set `MICROMEGAS_OIDC_TOKEN_ENDPOINT`, `MICROMEGAS_OIDC_CLIENT_ID`, `MICROMEGAS_OIDC_CLIENT_SECRET`
+/// - **No auth:** If no env vars are set, telemetry is sent unauthenticated (requires `--disable-auth` on ingestion server)
 ///
 /// # Parameters
 ///
@@ -106,6 +115,7 @@ pub fn micromegas_main(
         quote! { .with_ctrlc_handling() },
         quote! { .with_local_sink_max_level(micromegas::tracing::levels::LevelFilter::Debug) },
         quote! { .with_process_property("version".to_string(), env!("CARGO_PKG_VERSION").to_string()) },
+        quote! { .with_auth_from_env() },
     ];
 
     if let Some(level) = max_level_override {
