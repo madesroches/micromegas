@@ -405,7 +405,199 @@ class OidcAuthProvider:
         return cls(
             issuer=data["issuer"],
             client_id=data["client_id"],
-            client_secret=client_secret,  # Provided separately for security
+            client_secret=client_secret,
             token_file=token_file,
-            token=data["token"],  # authlib token dict
+            token=data["token"],
         )
+
+
+class OidcClientCredentialsProvider:
+    """OAuth 2.0 Client Credentials authentication for service accounts.
+
+    Uses client_id + client_secret to fetch access tokens from OIDC provider.
+    Caches tokens until expiration and automatically refreshes when needed.
+
+    This is for automated services (batch jobs, daemons, etc.) that need
+    to authenticate without user interaction.
+
+    Example:
+        >>> # Create provider with service account credentials
+        >>> auth = OidcClientCredentialsProvider(
+        ...     issuer="https://accounts.google.com",
+        ...     client_id="service@project.iam.gserviceaccount.com",
+        ...     client_secret=os.environ["CLIENT_SECRET"]
+        ... )
+        >>>
+        >>> # Use with FlightSQL client
+        >>> from micromegas.flightsql.client import FlightSQLClient
+        >>> client = FlightSQLClient(
+        ...     "grpc+tls://analytics.example.com:50051",
+        ...     auth_provider=auth
+        ... )
+        >>>
+        >>> # Tokens fetched and refreshed automatically on each query
+        >>> df = client.query("SELECT * FROM logs")
+
+    Example (from environment variables):
+        >>> auth = OidcClientCredentialsProvider.from_env()
+        >>> client = FlightSQLClient(uri, auth_provider=auth)
+    """
+
+    def __init__(
+        self,
+        issuer: str,
+        client_id: str,
+        client_secret: str,
+        audience: Optional[str] = None,
+    ):
+        """Initialize OIDC client credentials provider.
+
+        Args:
+            issuer: OIDC issuer URL (e.g., "https://accounts.google.com")
+            client_id: Service account client ID
+            client_secret: Service account client secret (store securely!)
+            audience: Optional audience/resource for token (required by some providers like Auth0)
+
+        Raises:
+            Exception: If OIDC discovery fails
+        """
+        self.issuer = issuer
+        self.client_id = client_id
+        self.client_secret = client_secret
+        self.audience = audience
+        self._lock = threading.Lock()  # Thread-safe token refresh
+
+        # Fetch OIDC metadata via discovery
+        self.metadata = self._fetch_oidc_metadata(issuer)
+
+        # Cached token (access_token + expiration time)
+        self._cached_token: Optional[dict] = (
+            None  # {"access_token": str, "expires_at": float}
+        )
+
+    @staticmethod
+    def _fetch_oidc_metadata(issuer: str) -> dict:
+        """Fetch OIDC discovery metadata from issuer.
+
+        Args:
+            issuer: OIDC issuer URL
+
+        Returns:
+            Dictionary containing OIDC metadata (endpoints, etc.)
+
+        Raises:
+            Exception: If discovery request fails
+        """
+        discovery_url = f"{issuer}/.well-known/openid-configuration"
+        response = requests.get(discovery_url, timeout=10)
+        response.raise_for_status()
+        return response.json()
+
+    @classmethod
+    def from_env(cls) -> "OidcClientCredentialsProvider":
+        """Create provider from environment variables.
+
+        Reads:
+            MICROMEGAS_OIDC_ISSUER: OIDC issuer URL
+            MICROMEGAS_OIDC_CLIENT_ID: Service account client ID
+            MICROMEGAS_OIDC_CLIENT_SECRET: Service account client secret
+            MICROMEGAS_OIDC_AUDIENCE: (Optional) Token audience/resource (for Auth0, Azure AD, etc.)
+
+        Returns:
+            OidcClientCredentialsProvider configured from environment
+
+        Raises:
+            ValueError: If required environment variables are missing
+
+        Example:
+            >>> import os
+            >>> os.environ["MICROMEGAS_OIDC_ISSUER"] = "https://accounts.google.com"
+            >>> os.environ["MICROMEGAS_OIDC_CLIENT_ID"] = "service@project.iam.gserviceaccount.com"
+            >>> os.environ["MICROMEGAS_OIDC_CLIENT_SECRET"] = "secret"
+            >>> auth = OidcClientCredentialsProvider.from_env()
+        """
+        issuer = os.environ.get("MICROMEGAS_OIDC_ISSUER")
+        client_id = os.environ.get("MICROMEGAS_OIDC_CLIENT_ID")
+        client_secret = os.environ.get("MICROMEGAS_OIDC_CLIENT_SECRET")
+        audience = os.environ.get("MICROMEGAS_OIDC_AUDIENCE")  # Optional
+
+        if not issuer:
+            raise ValueError("MICROMEGAS_OIDC_ISSUER environment variable not set")
+        if not client_id:
+            raise ValueError("MICROMEGAS_OIDC_CLIENT_ID environment variable not set")
+        if not client_secret:
+            raise ValueError(
+                "MICROMEGAS_OIDC_CLIENT_SECRET environment variable not set"
+            )
+
+        return cls(
+            issuer=issuer,
+            client_id=client_id,
+            client_secret=client_secret,
+            audience=audience,
+        )
+
+    def _fetch_token(self) -> dict:
+        """Fetch new access token using client credentials flow.
+
+        Returns:
+            Token dict with access_token and expires_at
+
+        Raises:
+            Exception: If token request fails
+        """
+        token_endpoint = self.metadata["token_endpoint"]
+
+        # OAuth 2.0 client credentials request
+        data = {
+            "grant_type": "client_credentials",
+            "client_id": self.client_id,
+            "client_secret": self.client_secret,
+        }
+
+        # Add audience if specified (required by Auth0, Azure AD, etc.)
+        if self.audience:
+            data["audience"] = self.audience
+
+        response = requests.post(token_endpoint, data=data, timeout=10)
+        response.raise_for_status()
+
+        token_response = response.json()
+
+        # Calculate expiration time (with 5 minute buffer)
+        expires_in = token_response.get("expires_in", 3600)  # Default 1 hour
+        if expires_in > 300:
+            expires_in -= 300  # 5 minute buffer
+        expires_at = time.time() + expires_in
+
+        return {
+            "access_token": token_response["access_token"],
+            "expires_at": expires_at,
+        }
+
+    def get_token(self) -> str:
+        """Get valid access token, fetching new one if needed.
+
+        This method is called before each query by the FlightSQL client.
+        Thread-safe for concurrent queries.
+
+        Returns:
+            Valid access token for Authorization header
+
+        Raises:
+            Exception: If token fetch fails
+
+        Example:
+            >>> auth = OidcClientCredentialsProvider.from_env()
+            >>> token = auth.get_token()
+            >>> print(f"Bearer {token}")
+        """
+        with self._lock:
+            # Check if we have a cached token that's still valid
+            if self._cached_token:
+                if self._cached_token["expires_at"] > time.time():
+                    return self._cached_token["access_token"]
+
+            # Token expired or not cached - fetch new one
+            self._cached_token = self._fetch_token()
+            return self._cached_token["access_token"]

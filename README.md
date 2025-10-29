@@ -38,6 +38,7 @@ Micromegas is an observability system designed to provide unified insights into 
 *   **☁️ Scalable & Cloud-Native:** The backend is designed to scale horizontally, capable of ingesting data from millions of concurrent processes using object storage (S3) and PostgreSQL.
 *   **💰 Cost-Efficient by Design:** Keep costs low with tail sampling and on-demand ETL. Raw data is stored cheaply and only processed when you need to query it.
 *   **🔍 Powerful SQL Interface:** Query your data using a powerful and familiar SQL interface, powered by [Apache DataFusion](https://arrow.apache.org/datafusion/) and accessible via [Apache Arrow FlightSQL](https://arrow.apache.org/blog/2022/02/16/introducing-arrow-flight-sql/).
+*   **🔐 Enterprise Authentication:** Secure your data with OIDC authentication supporting both human users (browser-based login) and service accounts (OAuth 2.0 client credentials).
 
 ## How It Works
 
@@ -63,6 +64,12 @@ Learn more about Micromegas through our technical presentations:
 - **[Design Presentation](https://madesroches.github.io/micromegas/doc/design-presentation/design.html)** (February 2025) - Architecture and design principles
 - **[Unreal Engine Guide](https://madesroches.github.io/micromegas/doc/unreal-observability/unreal-observability.html)** (July 2024) - Integrating Micromegas with Unreal Engine
 
+## Authentication
+
+Micromegas supports OIDC authentication with browser-based login for human users and OAuth 2.0 client credentials for service accounts. Works with Google, Azure AD, Okta, and Auth0.
+
+See the [Authentication Guide](https://madesroches.github.io/micromegas/docs/admin-guide/#authentication) for setup instructions.
+
 ## Getting Started
 
 To get started with Micromegas, please refer to the [Getting Started](https://madesroches.github.io/micromegas/docs/getting-started/) guide.
@@ -70,7 +77,15 @@ To get started with Micromegas, please refer to the [Getting Started](https://ma
 
 ## Current Status & Roadmap
 
-We're currently working on **analytics server authentication** to secure FlightSQL access with OIDC and service accounts.
+### October 2025 - v0.15.0 (Upcoming)
+* **Authentication & Security**:
+  - ✅ OIDC authentication for analytics server (ingestion + FlightSQL) (#548)
+  - ✅ Browser-based login with token persistence for Python client (#549)
+  - ✅ HTTP authentication for ingestion service (#551)
+  - ✅ OAuth 2.0 client credentials for service accounts (Rust + Python)
+  - ✅ Multi-provider support (Google, Azure AD, Okta, Auth0)
+  - ✅ Comprehensive authentication documentation (#550)
+  - Zero-config authentication via `#[micromegas_main]` macro for Rust applications
 
 ### October 2025 - v0.14.0
 * **Performance & Storage Optimizations**:

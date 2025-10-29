@@ -22,10 +22,13 @@
 - End-to-end testing with Auth0 identity provider ✅
 - Provider-agnostic test scripts
 
-**Phase 4 (Service Accounts):** 📋 Planned
-- Server already supports validating service account tokens (Phase 1)
-- Need Python/Rust client credentials providers
-- OAuth 2.0 client credentials flow implementation
+**Phase 4 (Service Accounts):** ✅ **COMPLETE & VERIFIED** (2025-10-29)
+- ✅ Server supports validating service account tokens (Phase 1 complete)
+- ✅ Rust client credentials via `OidcClientCredentialsDecorator` (automatic via `#[micromegas_main]`)
+- ✅ Python client credentials provider (`OidcClientCredentialsProvider`) with unit tests
+- ✅ OAuth 2.0 client credentials flow implementation
+- ✅ End-to-end testing with Auth0 (real identity provider)
+- ✅ Verified: token fetch, caching, server validation, query execution
 
 **Phase 5 (CLI):** ✅ **COMPLETE** (2025-10-28)
 - CLI integration with token persistence
@@ -558,23 +561,102 @@ The flight-sql-srv can now validate:
 
 **Goal**: ✅ ACHIEVED - Multi-provider OIDC authentication validated end-to-end
 
-### Phase 4: Service Account Support (OAuth 2.0 Client Credentials) - PLANNED
+### Phase 4: Service Account Support (OAuth 2.0 Client Credentials) ✅ COMPLETE & VERIFIED (2025-10-29)
 
-**Note**: Server already supports validating these tokens (Phase 1 complete)
+**Summary:** Successfully implemented and verified OAuth 2.0 client credentials authentication for service accounts across all clients (Rust and Python) with real Auth0 identity provider.
 
-- Document how to create service accounts in OIDC providers:
-  - Google Cloud: Service accounts with OAuth 2.0 client credentials
-  - Azure AD: App registrations with client credentials
-  - Okta: OAuth 2.0 service applications
-- Python client: Add `OidcClientCredentialsProvider` class
-  - Takes issuer, client_id, client_secret
-  - Implements token fetch from OIDC provider token endpoint
-  - Caches token until expiration
-  - Automatic token refresh when expired
-- Rust client: Add equivalent client credentials support
-- Add integration tests with mock OIDC provider
-- Create example service using OAuth 2.0 client credentials
-- **Goal**: Support service authentication via standard OAuth 2.0 flow
+**Server Support:** ✅ Complete & Verified (Phase 1)
+- Server validates OIDC tokens from any source (human or service)
+- Uses `MultiAuthProvider` with `OidcAuthProvider`
+- JWT validation with JWKS from identity provider
+- Both ingestion and analytics servers support client credentials tokens
+- ✅ **Verified with Auth0**: RS256 signature verification, issuer/audience validation
+- ✅ **Audit logging**: Captures subject, issuer, admin status for every request
+
+**Rust Client Support:** ✅ Complete (Phase 6 - Ingestion Auth Plan)
+- `OidcClientCredentialsDecorator` in `rust/telemetry-sink/`
+- Automatically configured via `#[micromegas_main]` macro
+- Environment variables: `MICROMEGAS_OIDC_TOKEN_ENDPOINT`, `MICROMEGAS_OIDC_CLIENT_ID`, `MICROMEGAS_OIDC_CLIENT_SECRET`
+- Used by: telemetry-ingestion-srv, telemetry-admin-cli (daemon)
+- Token caching and automatic refresh
+- Thread-safe token refresh for concurrent requests
+
+**Python Client Support:** ✅ Complete & Verified (2025-10-29)
+- ✅ `OidcClientCredentialsProvider` class in `python/micromegas/micromegas/auth/oidc.py`
+- ✅ Takes issuer, client_id, client_secret, audience (from environment or parameters)
+- ✅ Implements token fetch from OIDC provider token endpoint
+- ✅ Caches token until expiration (~1 hour for Auth0, ~24 hours default)
+- ✅ Automatic token refresh when expired (5 minute buffer)
+- ✅ Thread-safe token refresh for concurrent queries
+- ✅ Same interface as `OidcAuthProvider` (both implement `get_token()`)
+- ✅ Unit tests (9 tests covering all functionality)
+- ✅ `from_env()` classmethod for easy configuration
+- ✅ **Auth0 support**: Added `audience` parameter for Auth0/Azure AD compatibility
+- ✅ **Verified working**: End-to-end test with Auth0 successful
+
+**Testing:** ✅ Complete & Verified
+- ✅ Unit tests for Python client credentials provider (9 tests passing)
+- ✅ Tests cover: init, from_env, token fetch, caching, refresh, thread safety
+- ✅ **End-to-end testing with Auth0 (2025-10-29)**:
+  - Auth0 tenant: `dev-j6u87zttwlcvonli.ca.auth0.com`
+  - Machine-to-Machine application configured
+  - API resource with audience: `https://api.micromegas.example.com`
+  - JWT Profile: RFC 9068 (modern standard)
+  - Signing: RS256 (asymmetric RSA)
+  - ✅ Token fetch from Auth0: **0.19s**
+  - ✅ Token caching: **0.0000s** (instant)
+  - ✅ Authenticated query execution: **0.89s** (first query)
+  - ✅ Subsequent queries: **0.44s** (cached token)
+  - ✅ Server-side JWT validation working
+  - ✅ Audit logging: `subject=GQrmlx4Cbsy1USsnAVyG3TsVtCgqBODI@clients`
+
+**Documentation:** ✅ Complete
+- ✅ Auth0 setup guide: `local_test_env/AUTH0_CLIENT_CREDENTIALS_SETUP.md`
+  - Step-by-step Auth0 configuration
+  - API creation (audience requirement)
+  - Machine-to-Machine application setup
+  - JWT profile selection (RFC 9068 vs Auth0 legacy)
+  - Signing algorithm explanation (RS256)
+  - Environment variable configuration
+  - Troubleshooting guide
+- ✅ Test scripts:
+  - `local_test_env/test_auth0_client_credentials.sh` - Quick validation
+  - `local_test_env/test_client_credentials.py` - Full integration test
+- ⏳ Google Cloud, Azure AD, Okta guides (planned for future)
+
+**Usage Example (Python with Auth0):**
+```python
+import os
+from micromegas.auth import OidcClientCredentialsProvider
+from micromegas.flightsql.client import FlightSQLClient
+
+# Option 1: Explicit configuration
+auth = OidcClientCredentialsProvider(
+    issuer="https://YOUR_TENANT.us.auth0.com/",  # Note: trailing slash!
+    client_id="YOUR_CLIENT_ID",
+    client_secret=os.environ["CLIENT_SECRET"],
+    audience="https://api.micromegas.example.com"  # Required for Auth0
+)
+
+# Option 2: From environment variables (recommended)
+# Set: MICROMEGAS_OIDC_ISSUER, MICROMEGAS_OIDC_CLIENT_ID,
+#      MICROMEGAS_OIDC_CLIENT_SECRET, MICROMEGAS_OIDC_AUDIENCE
+auth = OidcClientCredentialsProvider.from_env()
+
+# Use with FlightSQL client - tokens fetched/refreshed automatically
+client = FlightSQLClient("grpc://localhost:50051", auth_provider=auth)
+df = client.query("SELECT COUNT(*) as count FROM processes")
+print(f"Found {df.iloc[0]['count']} processes")
+```
+
+**Key Implementation Details:**
+- Removed `scope: "openid"` from token request (Auth0 doesn't allow it for client credentials)
+- Added optional `audience` parameter (required by Auth0, Azure AD, Okta)
+- Token request uses `application/x-www-form-urlencoded` (OAuth 2.0 standard)
+- Server validates via JWKS endpoint: `https://TENANT/.well-known/jwks.json`
+- Both client and server cache tokens (client: until expiration, server: 5 min TTL)
+
+**Goal**: ✅ ACHIEVED - Service authentication via standard OAuth 2.0 flow works across all clients and verified with real identity provider
 
 ### Phase 5: CLI Integration ✅ COMPLETE (2025-10-28)
 
@@ -936,8 +1018,8 @@ Organizations should plan to migrate custom auth wrappers to standard OIDC flows
    )
 
    # Use client multiple times - tokens auto-refreshed before each query
-   df1 = client.query("SELECT * FROM logs WHERE time > now() - interval '1 hour'")
-   df2 = client.query("SELECT * FROM metrics WHERE service = 'api'")
+   df1 = client.query("SELECT * FROM streams WHERE process_id = 'my-process'")
+   df2 = client.query("SELECT * FROM processes WHERE begin_time > now() - interval '1 hour'")
    # Each query automatically calls auth.get_token() which fetches/refreshes token
    ```
 
@@ -970,9 +1052,9 @@ Organizations should plan to migrate custom auth wrappers to standard OIDC flows
    )
 
    # Use client multiple times - tokens auto-refreshed before each query
-   df1 = client.query("SELECT * FROM logs")
+   df1 = client.query("SELECT * FROM streams WHERE process_id = 'my-process'")
    time.sleep(3600)  # 1 hour later...
-   df2 = client.query("SELECT * FROM metrics")  # Token automatically refreshed!
+   df2 = client.query("SELECT * FROM processes")  # Token automatically refreshed!
    ```
 
    **Implementation details**:
@@ -1085,7 +1167,7 @@ Organizations should plan to migrate custom auth wrappers to standard OIDC flows
 2. **OIDC Support (Simple - Browser on Every Call)**
    ```bash
    # Opens browser for each command (no token caching)
-   $ micromegas query "SELECT * FROM logs" --oidc
+   $ micromegas query "SELECT * FROM processes" --oidc
    Opening browser for authentication...
    # User authenticates, command executes, done
 
