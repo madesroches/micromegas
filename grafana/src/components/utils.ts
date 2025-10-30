@@ -164,7 +164,7 @@ export const onAuthTypeChange = (selectedAuthType: any, options: any, onOptionsC
 
 export const getSqlCompletionProvider: (args: any) => LanguageCompletionProvider =
   ({getTables, getColumns, sqlInfo, macros}) =>
-  (monaco, language) => {
+  (monaco: any, language: any) => {
     return {
       ...(language &&
         getStandardSQLCompletionProvider(monaco, {

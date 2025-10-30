@@ -36,7 +36,7 @@ export function QueryEditorRaw({onChange, query, editorLanguageDefinition}: any)
   const renderEditor = (standalone = false) => {
     return standalone ? (
       <AutoSizer>
-        {({width, height}) => {
+        {({width, height}: {width: number; height: number}) => {
           return renderQueryEditor(width, height)
         }}
       </AutoSizer>

@@ -62,7 +62,7 @@ async metricFindQuery(queryText: string, options?: any): Promise<MetricFindValue
     return value
   }
 
-  applyTemplateVariables(query: SQLQuery, scopedVars: ScopedVars): Record<string, any> {
+  applyTemplateVariables(query: SQLQuery, scopedVars: ScopedVars): SQLQuery {
     const interpolatedQuery: SQLQuery = {
       ...query,
       queryText: getTemplateSrv().replace(query.queryText, scopedVars, this.interpolateVariable),
