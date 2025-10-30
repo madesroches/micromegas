@@ -33,7 +33,7 @@ def main():
     
     # Linting
     print("\n=== Linting ===")
-    if run_cmd("ESLINT_USE_FLAT_CONFIG=false yarn workspace micromegas-datasource lint", repo_root) != 0:
+    if run_cmd("yarn workspace micromegas-datasource lint", repo_root) != 0:
         print("❌ Linting failed")
         return 1
     
