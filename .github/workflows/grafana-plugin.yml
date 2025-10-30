@@ -49,7 +49,7 @@ jobs:
         run: python3 build/grafana_ci.py
 
       - name: Install Playwright browsers
-        run: npx playwright install --with-deps chromium
+        run: yarn playwright install --with-deps chromium
         working-directory: grafana
 
       - name: Start grafana docker
