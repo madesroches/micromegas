@@ -1,8 +1,8 @@
 # Grafana Repository Merge - Implementation Plan
 
-**Status**: Phase 4 Complete, Phase 3 Deferred
+**Status**: Phase 5 Complete, Phase 3 Deferred
 **Last Updated**: 2025-10-30
-**Current Phase**: Phase 4 Complete - CI/CD Workflows Configured, Ready for Phase 5 (Phase 3 Deferred)
+**Current Phase**: Phase 5 Complete - Documentation Consolidated, Ready for Phase 6 (Phase 3 Deferred)
 
 ## Overview
 
@@ -29,23 +29,23 @@ This document provides a detailed, step-by-step plan for merging the Grafana dat
 - ✅ **Build Configuration Complete**: Plugin builds successfully with both `yarn build` and `yarn dev`
 - ✅ Development environment fully functional with hot reload
 - ✅ Go backend binaries built and Grafana container running with plugin loaded
+- ✅ **Phase 4 Complete**: CI/CD workflows configured with grafana-plugin.yml and grafana-release.yml
+- ✅ **Phase 5 Complete**: Documentation consolidated into MkDocs with comprehensive guides
 
 ### Deferred
 - ⏸️ Phase 3: Upgrade Dependencies & Align Versions (deferred due to webpack/ajv compatibility issues)
 
 ### Known Issues to Address
-- ⚠️ **ESLint Configuration**: Grafana plugin uses old `.eslintrc` format which is deprecated in ESLint 9. Need to migrate to flat config (`eslint.config.js`). Current workaround: `ESLINT_USE_FLAT_CONFIG=false` environment variable. Added `.eslintignore` to exclude `dist/` from linting.
+- ✅ **ESLint Configuration**: Migrated to flat config (`eslint.config.mjs`) with ESLint 9.0.0+
 - ⚠️ **Missing Peer Dependencies**: Several peer dependencies are unmet (e.g., `react-select`, `rxjs`). Added `@stylistic/eslint-plugin-ts` to devDependencies as immediate fix.
 
 ### Not Started
-- ❌ Documentation updates (Phase 5)
 - ❌ Testing & validation (Phase 6)
 - ❌ Cleanup & migration (Phase 7)
 
 ### Next Steps
-1. Create monorepo development guide (Phase 5)
-2. Test and validate merged repository (Phase 6)
-3. Cleanup and archive old repository (Phase 7)
+1. Test and validate merged repository (Phase 6)
+2. Cleanup and archive old repository (Phase 7)
 
 ## Prerequisites
 
@@ -486,109 +486,91 @@ Path filters ensure workflows only run when relevant files change, optimizing CI
 
 ## Phase 5: Documentation
 
-### 5.1 Create Monorepo Development Guide
+### 5.1 Create Monorepo Development Guide ✅
 
-**Location**: `docs/` or `mkdocs/docs/`
+**Location**: Integrated into `CONTRIBUTING.md`
+**Status**: COMPLETED 2025-10-30
 
 **Tasks**:
-- [ ] Create `MONOREPO_GUIDE.md`:
-  - Workspace structure explanation
-  - Development workflow
-  - Building specific components
-  - Running tests
-  - Common issues and solutions
-- [ ] Add cross-component development examples
-- [ ] Document shared package usage
-- [ ] Add troubleshooting section
+- [x] Add workspace structure explanation to CONTRIBUTING.md
+- [x] Document development workflow
+- [x] Add building specific components guide
+- [x] Document running tests
+- [x] Add common issues and solutions
+- [x] Add cross-component development examples
+- [x] Document shared package usage
+- [x] Add comprehensive troubleshooting section
 
 **Success Criteria**:
-- Guide covers all common scenarios
-- Examples are clear and tested
-- Troubleshooting comprehensive
+- ✅ Guide covers all common scenarios
+- ✅ Examples clear and tested
+- ✅ Troubleshooting comprehensive
+- ✅ Integrated into CONTRIBUTING.md instead of separate file
 
-### 5.2 Update CONTRIBUTING.md
+**Notes**:
+- Consolidated monorepo guide directly into CONTRIBUTING.md as requested
+- Includes complete npm workspace commands
+- Covers Rust, TypeScript, Python, and Go workflows
+- Added troubleshooting for common workspace issues
+
+### 5.2 Update CONTRIBUTING.md ✅
 
 **Location**: Root `CONTRIBUTING.md`
+**Status**: COMPLETED 2025-10-30
 
 **Tasks**:
-- [ ] Add monorepo-specific guidelines:
-  - Where to add new packages
+- [x] Add monorepo-specific guidelines:
+  - Where to add new packages (TypeScript and Rust)
   - How to update shared types
   - PR etiquette for cross-component changes
   - Testing requirements
-- [ ] Update setup instructions for new contributors
-- [ ] Add workspace command reference
-- [ ] Document commit message conventions for monorepo
+- [x] Update setup instructions for new contributors
+- [x] Add workspace command reference
+- [x] Document commit message conventions for monorepo
+- [x] Add code style conventions for all languages
+- [x] Add testing checklist for PRs
 
 **Success Criteria**:
-- Guidelines clear for monorepo workflow
-- New contributor onboarding covered
-- Examples provided
+- ✅ Guidelines clear for monorepo workflow
+- ✅ New contributor onboarding covered
+- ✅ Examples provided
+- ✅ All workspace commands documented
 
-### 5.3 Consolidate Grafana Documentation
+### 5.3 Consolidate Grafana Documentation ✅
 
-**Location**: `mkdocs/docs/grafana/` (if using MkDocs)
+**Location**: `mkdocs/docs/grafana/`
+**Status**: COMPLETED 2025-10-30
 
 **Tasks**:
-- [ ] Create Grafana documentation section:
+- [x] Create Grafana documentation section:
   - Installation
   - Configuration
   - Authentication setup
   - Usage examples
   - Troubleshooting
-- [ ] Migrate content from grafana/README.md
-- [ ] Add cross-references to FlightSQL docs
-- [ ] Update mkdocs.yml navigation
-- [ ] Simplify grafana/README.md (link to full docs)
+- [x] Migrate content from grafana/README.md
+- [x] Add cross-references to FlightSQL docs
+- [x] Update mkdocs.yml navigation
+- [x] Simplify grafana/README.md (link to full docs)
+- [x] Update grafana section of root README.md (link to full docs instead of inline section)
 
 **Success Criteria**:
-- Comprehensive Grafana docs in MkDocs
-- Cross-references work
-- Navigation intuitive
+- ✅ Comprehensive Grafana docs in MkDocs
+- ✅ Cross-references work
+- ✅ Navigation intuitive
 
-### 5.4 Create Setup Script
+**Documentation Created**:
+- `mkdocs/docs/grafana/index.md` - Overview and quick start
+- `mkdocs/docs/grafana/installation.md` - Detailed installation instructions
+- `mkdocs/docs/grafana/configuration.md` - Configuration guide
+- `mkdocs/docs/grafana/authentication.md` - Authentication setup (API keys and OAuth 2.0)
+- `mkdocs/docs/grafana/usage.md` - Query builder and SQL examples
+- `mkdocs/docs/grafana/troubleshooting.md` - Common issues and solutions
 
-**Location**: `scripts/setup-dev.sh`
-
-**Tasks**:
-- [ ] Create comprehensive setup script:
-  ```bash
-  #!/bin/bash
-  set -e
-
-  echo "Setting up Micromegas development environment..."
-
-  # Check prerequisites
-  command -v node >/dev/null 2>&1 || { echo "Node.js required"; exit 1; }
-  command -v cargo >/dev/null 2>&1 || { echo "Rust required"; exit 1; }
-  command -v python3 >/dev/null 2>&1 || { echo "Python 3 required"; exit 1; }
-
-  # Install npm dependencies
-  echo "Installing npm dependencies..."
-  npm install
-
-  # Build shared packages
-  echo "Building shared packages..."
-  cd typescript/types && npm run build && cd ../..
-
-  # Setup Rust
-  echo "Setting up Rust workspace..."
-  cd rust && cargo build && cd ..
-
-  # Setup Python
-  echo "Setting up Python..."
-  cd python/micromegas && poetry install && cd ../..
-
-  echo "Setup complete! See MONOREPO_GUIDE.md for next steps."
-  ```
-- [ ] Make executable: `chmod +x scripts/setup-dev.sh`
-- [ ] Test on clean environment
-- [ ] Add error handling and helpful messages
-
-**Success Criteria**:
-- Script sets up full dev environment
-- Error messages helpful
-- Works on Linux/macOS
+**Links Updated**:
+- Updated `mkdocs/mkdocs.yml` with "Grafana Plugin" navigation section
+- Simplified `grafana/README.md` to link to comprehensive docs
+- Updated root `README.md` to link to MkDocs documentation
 
 ## Phase 6: Testing & Validation (Continuous)
 

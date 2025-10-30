@@ -41,7 +41,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### Service Management (for testing and development)
 - **Start Services**: `python3 local_test_env/ai_scripts/start_services.py`
-  - Starts PostgreSQL, telemetry-ingestion-srv (port 9000), flight-sql-srv (port 32010), and telemetry-admin
+  - Starts PostgreSQL, telemetry-ingestion-srv (port 9000), flight-sql-srv (port 50051), and telemetry-admin
   - Services run in background with logs in `/tmp/`
   - PIDs saved to `/tmp/micromegas_pids.txt`
 - **Stop Services**: `python3 local_test_env/ai_scripts/stop_services.py`
@@ -52,7 +52,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   - Admin: `tail -f /tmp/admin.log`
 - **Service URLs**:
   - Ingestion server: http://127.0.0.1:9000
-  - Analytics server: flight-sql port 32010 (no HTTP endpoint)
+  - Analytics server: flight-sql port 50051 (no HTTP endpoint)
 
 ## Architecture
 

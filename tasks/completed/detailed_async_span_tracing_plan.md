@@ -252,7 +252,7 @@ pub fn find_parquet_metadata(filename: &str, domain: &[Partition]) -> Result<Arc
 ```bash
 python3 local_test_env/ai_scripts/start_services.py
 ```
-- Starts PostgreSQL, telemetry-ingestion-srv (port 9000), flight-sql-srv (port 32010), and telemetry-admin
+- Starts PostgreSQL, telemetry-ingestion-srv (port 9000), flight-sql-srv (port 50051), and telemetry-admin
 - Services run in background with logs in `/tmp/`
 - PIDs saved to `/tmp/micromegas_pids.txt`
 

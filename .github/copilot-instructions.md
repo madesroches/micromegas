@@ -8,7 +8,7 @@ Micromegas is a unified observability platform for logs, metrics, and traces bui
 - **`rust/tracing/`**: High-performance instrumentation library (20ns overhead per event)
 - **`rust/analytics/`**: DataFusion-powered analytics engine with lakehouse storage
 - **`rust/telemetry-ingestion-srv/`**: HTTP service for telemetry ingestion (port 9000)
-- **`rust/flight-sql-srv/`**: Apache Arrow FlightSQL service for queries (port 32010)
+- **`rust/flight-sql-srv/`**: Apache Arrow FlightSQL service for queries (port 50051)
 - **`rust/telemetry-sink/`**: Event sinks for sending data to ingestion services
 - **`rust/public/`**: Main user-facing crate combining all components
 
@@ -56,7 +56,7 @@ some_future.instrument(&static_span_desc!("operation_name")).await
 
 #### Service Management (for testing)
 - **Start all services**: `python3 local_test_env/ai_scripts/start_services.py`
-  - PostgreSQL + ingestion-srv (9000) + flight-sql-srv (32010) + admin CLI
+  - PostgreSQL + ingestion-srv (9000) + flight-sql-srv (50051) + admin CLI
   - Logs in `/tmp/ingestion.log` and `/tmp/analytics.log`
 - **Stop all services**: `python3 local_test_env/ai_scripts/stop_services.py`
 

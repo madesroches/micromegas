@@ -61,7 +61,7 @@ This will automatically:
 - Build all Rust services
 - Start PostgreSQL database
 - Start telemetry-ingestion-srv on port 9000
-- Start flight-sql-srv on port 32010
+- Start flight-sql-srv on port 50051
 - Start telemetry-admin service
 - Open a tmux session with all services running in separate panes
 
@@ -102,7 +102,7 @@ cargo run -p telemetry-admin -- crond
 !!! info "Service Roles"
     - **PostgreSQL**: Stores metadata and service configuration
     - **Ingestion Server**: Receives telemetry data from applications (port 9000)
-    - **FlightSQL Server**: Provides SQL query interface for analytics (port 32010)
+    - **FlightSQL Server**: Provides SQL query interface for analytics (port 50051)
     - **Admin Service**: Handles background processing and global view materialization
 
 ## Verify Installation
