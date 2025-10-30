@@ -37,7 +37,7 @@ Micromegas is an observability system designed to provide unified insights into 
 *   **🌊 High-Frequency Data Collection:** Built to handle up to **100,000 events per second** from a single instrumented process.
 *   **☁️ Scalable & Cloud-Native:** The backend is designed to scale horizontally, capable of ingesting data from millions of concurrent processes using object storage (S3) and PostgreSQL.
 *   **💰 Cost-Efficient by Design:** Keep costs low with tail sampling and on-demand ETL. Raw data is stored cheaply and only processed when you need to query it.
-*   **🔍 Powerful SQL Interface:** Query your data using a powerful and familiar SQL interface, powered by [Apache DataFusion](https://arrow.apache.org/datafusion/) and accessible via [Apache Arrow FlightSQL](https://arrow.apache.org/blog/2022/02/16/introducing-arrow-flight-sql/).
+*   **🔍 Powerful SQL Interface:** Query your data using a powerful and familiar SQL interface, powered by [Apache DataFusion](https://datafusion.apache.org/) and accessible via [Apache Arrow FlightSQL](https://arrow.apache.org/blog/2022/02/16/introducing-arrow-flight-sql/).
 *   **🔐 Enterprise Authentication:** Secure your data with OIDC authentication supporting both human users (browser-based login) and service accounts (OAuth 2.0 client credentials).
 
 ## How It Works
@@ -68,7 +68,7 @@ Learn more about Micromegas through our technical presentations:
 
 Micromegas supports OIDC authentication with browser-based login for human users and OAuth 2.0 client credentials for service accounts. Works with Google, Azure AD, Okta, and Auth0.
 
-See the [Authentication Guide](https://madesroches.github.io/micromegas/docs/admin-guide/#authentication) for setup instructions.
+See the [Authentication Guide](https://madesroches.github.io/micromegas/docs/admin/authentication/) for setup instructions.
 
 ## Getting Started
 
