@@ -1,265 +1,259 @@
 # Contributing to Micromegas
 
-We welcome contributions to the Micromegas project! This guide will help you get started with contributing code, documentation, or reporting issues.
+We welcome contributions to the Micromegas project! Here are some ways you can contribute:
 
-## Code of Conduct
+## Reporting Bugs
 
-By participating in this project, you agree to maintain a respectful and inclusive environment for all contributors.
+If you find a bug, please open an issue on our [GitHub Issues page](https://github.com/madesroches/micromegas/issues). Please include:
 
-## Getting Started
+*   A clear and concise description of the bug.
+*   Steps to reproduce the behavior.
+*   Expected behavior.
+*   Screenshots or error messages if applicable.
+*   Your operating system and Micromegas version.
 
-### Development Setup
+## Suggesting Enhancements
 
-1. **Clone the repository**:
-   ```bash
-   git clone https://github.com/madesroches/micromegas.git
-   cd micromegas
-   ```
+We're always looking for ways to improve Micromegas. If you have an idea for a new feature or an improvement to an existing one, please open an issue on our [GitHub Issues page](https://github.com/madesroches/micromegas/issues). Please include:
 
-2. **Set up development environment**:
-   Follow the [Getting Started Guide](getting-started.md) to set up your local environment.
+*   A clear and concise description of the enhancement.
+*   Why you think it would be valuable to the project.
+*   Any potential use cases.
 
-3. **Install development dependencies**:
-   ```bash
-   # Rust development
-   cd rust
-   cargo build
-   
-   # Python development
-   cd python/micromegas
-   poetry install
-   ```
+## Code Contributions
 
-## Contributing Code
+We welcome code contributions! If you'd like to contribute code, please follow these steps:
 
-### Before You Start
+1.  **Fork the repository** and clone it to your local machine.
+2.  **Create a new branch** for your feature or bug fix: `git checkout -b feature/your-feature-name` or `git checkout -b bugfix/your-bug-fix-name`.
+3.  **Make your changes** and ensure your code adheres to the project's coding style and conventions.
+4.  **Write tests** for your changes, if applicable.
+5.  **Run existing tests** to ensure nothing is broken.
+6.  **Commit your changes** with a clear and concise commit message.
+7.  **Push your branch** to your forked repository.
+8.  **Open a Pull Request** to the `main` branch of the Micromegas repository. Please provide a detailed description of your changes.
 
-1. **Check existing issues** on [GitHub Issues](https://github.com/madesroches/micromegas/issues)
-2. **Open an issue** to discuss your proposed changes if it's a significant feature
-3. **Fork the repository** and create a feature branch
+## Development Setup
 
-### Development Workflow
+For information on setting up your local development environment, please refer to the [GETTING_STARTED.md](./GETTING_STARTED.md) guide.
 
-1. **Create a feature branch**:
-   ```bash
-   git checkout -b feature/your-feature-name
-   # or
-   git checkout -b bugfix/issue-description
-   ```
+## Monorepo Structure
 
-2. **Follow coding standards**:
-   - **Rust**: Run `cargo fmt` before any commit
-   - **Python**: Use `black` for formatting
-   - **Dependencies**: Keep alphabetical order in Cargo.toml
-   - **Error handling**: Use `expect()` with descriptive messages instead of `unwrap()`
+Micromegas uses a monorepo structure with npm workspaces for JavaScript/TypeScript components and Cargo workspaces for Rust components.
 
-3. **Start development services**:
-   
-   For testing and development, you can start all required services (PostgreSQL, telemetry-ingestion-srv, flight-sql-srv, and telemetry-admin) using the dev.py script:
-   
-   ```bash
-   # Start all services in a tmux session (debug mode)
-   python3 local_test_env/dev.py
-   
-   # Or in release mode for better performance
-   python3 local_test_env/dev.py release
-   ```
-   
-   This will:
-   - Build the Rust services
-   - Start PostgreSQL database
-   - Start telemetry-ingestion-srv on port 9000
-   - Start flight-sql-srv on port 50051  
-   - Start telemetry-admin service
-   - Open a tmux session with all services running in separate panes
-   
-   To stop all services:
-   ```bash
-   # Use the stop script
-   python3 local_test_env/stop-dev.py
-   
-   # Or manually kill the tmux session
-   tmux kill-session -t micromegas
-   ```
+### Repository Layout
 
-4. **Write tests**:
-   ```bash
-   # Rust tests
-   cd rust
-   cargo test
-   
-   # Python tests
-   cd python/micromegas
-   pytest
-   ```
+```
+micromegas/
+├── rust/                    # Rust workspace (main application)
+│   ├── Cargo.toml          # Root Cargo workspace
+│   ├── analytics/          # Analytics engine
+│   ├── tracing/            # Instrumentation library
+│   ├── telemetry-ingestion-srv/
+│   ├── flight-sql-srv/
+│   └── ...
+├── grafana/                # Grafana datasource plugin
+│   ├── package.json
+│   ├── src/
+│   └── pkg/                # Go backend
+├── typescript/             # Shared TypeScript packages
+│   └── types/              # @micromegas/types package
+├── python/                 # Python client
+│   └── micromegas/         # Poetry package
+├── package.json            # Root npm workspace
+└── CONTRIBUTING.md         # This file
+```
 
-5. **Run CI pipeline locally**:
-   ```bash
-   cd rust
-   python3 ../build/rust_ci.py
-   ```
+### Rust Workspace (Primary)
 
-6. **Commit with clear messages**:
-   ```bash
-   git commit -m "Add histogram generation for span duration analysis"
-   ```
+The Rust workspace is located in `rust/` and contains the core Micromegas platform. This is the main workspace of the project.
 
-7. **Create Pull Request**:
-   Once your changes are ready, create a pull request on GitHub.
+**Commands** (run from `rust/` directory):
+```bash
+cargo build              # Build all crates
+cargo test               # Run all tests
+cargo fmt                # Format code (REQUIRED before commit)
+cargo clippy --workspace -- -D warnings  # Lint
+```
 
-### Code Review Process
+**CI validation script:**
+```bash
+python3 build/rust_ci.py    # Runs format check, clippy, and tests (from repo root)
+```
 
-1. **Automated checks**: Ensure all CI checks pass
-2. **Code review**: Maintainers will review your changes
-3. **Address feedback**: Make requested changes if needed
-4. **Merge**: Once approved, your PR will be merged
+### Python Package
 
-## Contributing Documentation
+The Python client uses Poetry for dependency management.
 
-### Setup
+**Location**: `python/micromegas/`
 
-1. **Install documentation dependencies**:
-   ```bash
-   # Create and activate virtual environment (recommended)
-   python3 -m venv docs-venv
-   source docs-venv/bin/activate  # On Windows: docs-venv\Scripts\activate
-   
-   # Install dependencies
-   pip install -r docs/docs-requirements.txt
-   ```
+**Commands** (run from `python/micromegas/`):
+```bash
+poetry install          # Install dependencies
+poetry run pytest       # Run tests
+poetry run black <file> # Format code (REQUIRED before commit)
+```
 
-### MkDocs Documentation
+### TypeScript/JavaScript Workspaces
 
-The main documentation uses MkDocs with Material theme:
+The repository uses npm workspaces to manage TypeScript/JavaScript packages, with `yarn` as the package manager.
 
-1. **Edit documentation**:
-   - Files are in `mkdocs/docs/` directory
-   - Configuration in `mkdocs/mkdocs.yml`
-   - Use Markdown format
-   - Follow existing structure and style
+- **Root workspace** (`package.json`): Defines workspaces and shared dev dependencies
+- **`grafana/`**: Grafana FlightSQL datasource plugin (React + Go backend)
+- **`typescript/types/`**: Shared TypeScript type definitions (`@micromegas/types`)
 
-2. **Preview changes**:
-   ```bash
-   cd mkdocs
-   
-   # Using the virtual environment
-   /home/mad/micromegas/docs-venv/bin/mkdocs serve --dev-addr=0.0.0.0:8000
-   
-   # Or if mkdocs is in your PATH
-   mkdocs serve
-   
-   # Visit http://localhost:8000
-   ```
+**Important**: Always use `yarn`, not `npm`, to avoid lockfile conflicts.
 
-3. **Build documentation**:
-   ```bash
-   cd mkdocs
-   /home/mad/micromegas/docs-venv/bin/mkdocs build
-   
-   # Output will be in mkdocs/site/
-   ```
+### Working with All Components
 
-4. **Deploy documentation**:
-   ```bash
-   # Documentation is automatically deployed via GitHub Actions
-   # when changes are pushed to the main branch
-   ```
+#### Installing Dependencies
 
-### Documentation Guidelines
+**Rust** (from `rust/` directory):
+```bash
+cargo build              # Fetches and compiles Rust dependencies
+```
 
-- **Clear and concise**: Write for your audience
-- **Code examples**: Include working examples with expected output
-- **Cross-references**: Link to related sections
-- **Consistent formatting**: Follow existing patterns
+**Python** (from `python/micromegas/` directory):
+```bash
+poetry install           # Installs Python dependencies
+```
 
-## Reporting Issues
+**TypeScript/JavaScript** (from repository root, use `yarn`):
+```bash
+yarn install             # Install all workspace dependencies (Grafana plugin, shared types)
+```
 
-### Bug Reports
+**Go** (for Grafana backend, from `grafana/` directory):
+```bash
+go mod download          # Downloads Go dependencies
+```
 
-Include the following information:
+#### Building Components
 
-- **Environment**: OS, Rust version, Python version
-- **Micromegas version**: Git commit or release version
-- **Steps to reproduce**: Clear, minimal reproduction steps
-- **Expected vs actual behavior**: What should happen vs what happens
-- **Logs/errors**: Include relevant error messages or logs
-- **Configuration**: Relevant environment variables or config
+**Rust workspace:**
+```bash
+cd rust && cargo build                   # Build all Rust crates
+```
 
-### Feature Requests
+**Python package:**
+```bash
+cd python/micromegas && poetry install   # Python doesn't need a build step
+```
 
-- **Use case**: Describe the problem you're trying to solve
-- **Proposed solution**: Your suggested approach
-- **Alternatives**: Other approaches you've considered
-- **Impact**: Who would benefit from this feature
+**TypeScript/JavaScript workspaces** (use `yarn`):
+```bash
+yarn workspaces run build                # Build all workspaces (from root)
+cd grafana && yarn build                 # Grafana plugin only
+cd typescript/types && yarn build        # Shared types only
+```
 
-## Development Guidelines
+For the Grafana plugin development:
+```bash
+cd grafana
+yarn build              # Production build
+yarn dev                # Development mode with hot reload
+```
 
-### Architecture Understanding
+#### Running Tests
 
-Familiarize yourself with the [architecture overview](architecture/index.md):
+**Rust workspace:**
+```bash
+cd rust && cargo test                    # All Rust tests
+python3 build/rust_ci.py                 # Rust CI validation (from root)
+```
 
-- **High-performance instrumentation** (20ns overhead)
-- **Lakehouse architecture** with object storage
-- **DataFusion-powered analytics**
-- **FlightSQL protocol** for efficient data transfer
+**Python package:**
+```bash
+cd python/micromegas && poetry run pytest  # Python tests
+```
 
-### Key Areas for Contribution
+**TypeScript/JavaScript workspaces** (use `yarn`):
+```bash
+yarn workspaces run test                 # Test all workspaces (from root)
+cd grafana && yarn test:ci               # Grafana plugin tests only
+```
 
-1. **Core Rust Libraries**:
-   - Tracing instrumentation improvements
-   - Analytics engine enhancements
-   - Performance optimizations
+#### Linting
 
-2. **Services**:
-   - Ingestion service features
-   - FlightSQL server improvements
-   - Admin CLI enhancements
+**Rust workspace:**
+```bash
+cd rust && cargo clippy --workspace -- -D warnings
+cd rust && cargo fmt                     # Format (REQUIRED before commit)
+```
 
-3. **Client Libraries**:
-   - Python API improvements
-   - New language bindings
+**Python package:**
+```bash
+cd python/micromegas && poetry run black .
+```
 
-4. **Documentation**:
-   - Query examples and patterns
-   - Performance guidance
-   - Integration guides
+**TypeScript/JavaScript workspaces** (use `yarn`):
+```bash
+yarn workspaces run lint                 # Lint all workspaces (from root)
+cd grafana && yarn lint:fix              # Grafana plugin only
+```
 
-5. **Testing**:
-   - Unit test coverage
-   - Integration tests
-   - Performance benchmarks
+### Grafana Plugin Development
 
-### Performance Considerations
+The Grafana plugin requires both Node.js and Go:
 
-- **Benchmarking**: Include benchmarks for performance-critical changes
-- **Memory usage**: Consider memory implications of new features
-- **Backwards compatibility**: Maintain API compatibility when possible
+**Prerequisites:**
+- Node.js 16+ (18.20.8 recommended)
+- Go 1.23+ (for backend plugin)
+- yarn (package manager for this repository)
+- mage (for Go builds): `go install github.com/magefile/mage@latest`
 
-### Security
+**Development workflow:**
+```bash
+cd grafana
 
-- **No secrets in code**: Never commit API keys, passwords, or tokens
-- **Input validation**: Validate all external inputs
-- **Dependencies**: Keep dependencies updated and minimal
+# Install dependencies
+yarn install --ignore-engines
 
-## Community
+# Build Go backend binaries
+mage -v build
 
-### Getting Help
+# Start development server with hot reload
+yarn dev
 
-- **Documentation**: Check the [documentation](index.md) first
-- **GitHub Issues**: Search existing issues before creating new ones
-- **Discussions**: Use GitHub Discussions for questions and ideas
+# Run tests
+yarn test:ci
 
-### Stay Updated
+# Run linting
+yarn lint
 
-- **Watch the repository** for updates
-- **Follow releases** for new features and bug fixes
-- **Join discussions** about future directions
+# Build production bundle
+yarn build
+```
 
-## Recognition
+**Starting Grafana with the plugin:**
+```bash
+cd grafana
+yarn server             # Starts Grafana with docker compose (includes --build)
+# Access Grafana at http://localhost:3000
+```
 
-Contributors are recognized in:
-- Git commit history
-- Release notes for significant contributions
-- Special thanks in documentation
+## Code Style and Conventions
 
-Thank you for contributing to Micromegas! Your contributions help make observability more accessible and cost-effective for everyone.
+### Rust
+- Dependencies in alphabetical order in Cargo.toml files
+- Error handling: Use `expect()` with descriptive messages in tests, use `anyhow` in library code
+- Run `cargo fmt` before any commit
+- Use inline format arguments: `format!("value: {variable}")`
+- Always use `prelude::*` when importing from prelude modules
+
+### TypeScript/JavaScript
+- Follow existing ESLint configuration in each workspace
+- Use Prettier for formatting
+- Run `npm run lint:fix` before committing
+- Prefer functional components and hooks in React code
+
+### Python
+- Use Black for formatting (required before commit)
+- Follow PEP 8 guidelines
+- Use type hints where appropriate
+
+### Commit Messages
+- Keep messages clear and concise
+- Follow existing commit message patterns in the repository
+
+Thank you for contributing to Micromegas!
