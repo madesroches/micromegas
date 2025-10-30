@@ -3,8 +3,16 @@ name: Rust
 on:
   push:
     branches: [ "main" ]
+    paths:
+      - 'rust/**'
+      - 'build/rust_ci.py'
+      - '.github/workflows/rust.yml'
   pull_request:
     branches: [ "main" ]
+    paths:
+      - 'rust/**'
+      - 'build/rust_ci.py'
+      - '.github/workflows/rust.yml'
 
 env:
   CARGO_TERM_COLOR: always
