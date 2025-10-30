@@ -34,7 +34,7 @@ This document provides a detailed, step-by-step plan for merging the Grafana dat
 - ⏸️ Phase 3: Upgrade Dependencies & Align Versions (deferred due to webpack/ajv compatibility issues)
 
 ### Known Issues to Address
-- ⚠️ **ESLint Configuration**: Grafana plugin uses old `.eslintrc` format which is deprecated in ESLint 9. Need to migrate to flat config (`eslint.config.js`). Current workaround: `ESLINT_USE_FLAT_CONFIG=false` environment variable. Added `.eslintignore` to exclude `dist/` from linting.
+- ✅ **ESLint Configuration**: Migrated to flat config (`eslint.config.mjs`) with ESLint 9.0.0+
 - ⚠️ **Missing Peer Dependencies**: Several peer dependencies are unmet (e.g., `react-select`, `rxjs`). Added `@stylistic/eslint-plugin-ts` to devDependencies as immediate fix.
 
 ### Not Started
@@ -486,44 +486,55 @@ Path filters ensure workflows only run when relevant files change, optimizing CI
 
 ## Phase 5: Documentation
 
-### 5.1 Create Monorepo Development Guide
+### 5.1 Create Monorepo Development Guide ✅
 
-**Location**: `docs/` or `mkdocs/docs/`
+**Location**: Integrated into `CONTRIBUTING.md`
+**Status**: COMPLETED 2025-10-30
 
 **Tasks**:
-- [ ] Create `MONOREPO_GUIDE.md`:
-  - Workspace structure explanation
-  - Development workflow
-  - Building specific components
-  - Running tests
-  - Common issues and solutions
-- [ ] Add cross-component development examples
-- [ ] Document shared package usage
-- [ ] Add troubleshooting section
+- [x] Add workspace structure explanation to CONTRIBUTING.md
+- [x] Document development workflow
+- [x] Add building specific components guide
+- [x] Document running tests
+- [x] Add common issues and solutions
+- [x] Add cross-component development examples
+- [x] Document shared package usage
+- [x] Add comprehensive troubleshooting section
 
 **Success Criteria**:
-- Guide covers all common scenarios
-- Examples are clear and tested
-- Troubleshooting comprehensive
+- ✅ Guide covers all common scenarios
+- ✅ Examples clear and tested
+- ✅ Troubleshooting comprehensive
+- ✅ Integrated into CONTRIBUTING.md instead of separate file
 
-### 5.2 Update CONTRIBUTING.md
+**Notes**:
+- Consolidated monorepo guide directly into CONTRIBUTING.md as requested
+- Includes complete npm workspace commands
+- Covers Rust, TypeScript, Python, and Go workflows
+- Added troubleshooting for common workspace issues
+
+### 5.2 Update CONTRIBUTING.md ✅
 
 **Location**: Root `CONTRIBUTING.md`
+**Status**: COMPLETED 2025-10-30
 
 **Tasks**:
-- [ ] Add monorepo-specific guidelines:
-  - Where to add new packages
+- [x] Add monorepo-specific guidelines:
+  - Where to add new packages (TypeScript and Rust)
   - How to update shared types
   - PR etiquette for cross-component changes
   - Testing requirements
-- [ ] Update setup instructions for new contributors
-- [ ] Add workspace command reference
-- [ ] Document commit message conventions for monorepo
+- [x] Update setup instructions for new contributors
+- [x] Add workspace command reference
+- [x] Document commit message conventions for monorepo
+- [x] Add code style conventions for all languages
+- [x] Add testing checklist for PRs
 
 **Success Criteria**:
-- Guidelines clear for monorepo workflow
-- New contributor onboarding covered
-- Examples provided
+- ✅ Guidelines clear for monorepo workflow
+- ✅ New contributor onboarding covered
+- ✅ Examples provided
+- ✅ All workspace commands documented
 
 ### 5.3 Consolidate Grafana Documentation
 
