@@ -290,7 +290,86 @@ Proceed with CI/CD updates (Phase 4) using current dependency versions. The mono
 
 ## Phase 4: CI/CD Update
 
-### 4.1 Update GitHub Actions Workflow
+### 4.1 Create Local CI Validation Script
+
+**Location**: `build/`
+
+**Tasks**:
+- [ ] Create `build/grafana_ci.py` (equivalent to `rust_ci.py`):
+  ```python
+  #!/usr/bin/env python3
+  """
+  Grafana Plugin CI validation script.
+  Runs all checks locally before pushing to CI.
+  """
+  import subprocess
+  import sys
+  from pathlib import Path
+
+  def run_cmd(cmd: list[str], cwd: Path) -> int:
+      print(f"Running: {' '.join(cmd)} in {cwd}")
+      result = subprocess.run(cmd, cwd=cwd)
+      return result.returncode
+
+  def main():
+      repo_root = Path(__file__).parent.parent
+      grafana_dir = repo_root / "grafana"
+      types_dir = repo_root / "typescript" / "types"
+      
+      print("=== Grafana Plugin CI Validation ===\n")
+      
+      # Install dependencies
+      if run_cmd(["npm", "ci"], repo_root) != 0:
+          return 1
+      
+      # Build shared types
+      print("\n=== Building shared types ===")
+      if run_cmd(["npm", "run", "build"], types_dir) != 0:
+          return 1
+      
+      # Frontend checks
+      print("\n=== Frontend build ===")
+      if run_cmd(["npm", "run", "build"], grafana_dir) != 0:
+          return 1
+      
+      print("\n=== Frontend tests ===")
+      if run_cmd(["npm", "run", "test"], grafana_dir) != 0:
+          return 1
+      
+      print("\n=== Frontend lint ===")
+      if run_cmd(["npm", "run", "lint"], grafana_dir) != 0:
+          return 1
+      
+      # Go checks
+      print("\n=== Go vet ===")
+      if run_cmd(["go", "vet", "./..."], grafana_dir) != 0:
+          return 1
+      
+      print("\n=== Go test ===")
+      if run_cmd(["go", "test", "./..."], grafana_dir) != 0:
+          return 1
+      
+      print("\n=== Go build ===")
+      if run_cmd(["go", "build", "./..."], grafana_dir) != 0:
+          return 1
+      
+      print("\n✅ All checks passed!")
+      return 0
+
+  if __name__ == "__main__":
+      sys.exit(main())
+  ```
+- [ ] Make executable: `chmod +x build/grafana_ci.py`
+- [ ] Test script locally: `python3 build/grafana_ci.py`
+- [ ] Add to documentation (Phase 5)
+
+**Success Criteria**:
+- Script runs all CI validations
+- Same commands as CI workflow
+- Exit code 0 on success, non-zero on failure
+- Developers can run before committing
+
+### 4.2 Update GitHub Actions Workflow
 
 **Location**: `.github/workflows/`
 
@@ -319,32 +398,32 @@ Proceed with CI/CD updates (Phase 4) using current dependency versions. The mono
           with:
             node-version: '20'
             cache: 'npm'
+        
+        - uses: actions/setup-go@v5
+          with:
+            go-version-file: 'grafana/go.mod'
+            cache-dependency-path: 'grafana/go.sum'
+        
+        - uses: actions/setup-python@v5
+          with:
+            python-version: '3.x'
 
-        - name: Install dependencies
-          run: npm ci
-
-        - name: Build types
-          run: cd typescript/types && npm run build
-
-        - name: Build plugin
-          run: cd grafana && npm run build
-
-        - name: Run tests
-          run: cd grafana && npm run test
-
-        - name: Lint
-          run: cd grafana && npm run lint
+        - name: Run Grafana CI validation
+          run: python3 build/grafana_ci.py
   ```
 - [ ] Update main CI workflow to skip plugin if not changed
 - [ ] Add path filters to existing workflows
 - [ ] Test workflow by pushing to branch
+- [ ] Consider adding golangci-lint for Go code quality (optional)
 
 **Success Criteria**:
 - CI runs only for changed components
-- All checks pass
+- All checks pass (TypeScript + Go)
+- CI workflow uses same script as local validation
+- Go code compiles and tests pass
 - Build times improved (~50% reduction)
 
-### 4.2 Update Release Workflow
+### 4.3 Update Release Workflow
 
 **Location**: `.github/workflows/release.yml` (if exists)
 
@@ -359,7 +438,7 @@ Proceed with CI/CD updates (Phase 4) using current dependency versions. The mono
 - Version management works
 - Artifacts published correctly
 
-### 4.3 Add Selective Build Script
+### 4.4 Add Selective Build Script
 
 **Location**: `scripts/`
 
