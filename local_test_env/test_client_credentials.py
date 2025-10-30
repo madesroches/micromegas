@@ -13,7 +13,7 @@ Environment Variables:
     MICROMEGAS_OIDC_ISSUER: OIDC issuer URL (e.g., "https://accounts.google.com")
     MICROMEGAS_OIDC_CLIENT_ID: Service account client ID
     MICROMEGAS_OIDC_CLIENT_SECRET: Service account client secret
-    MICROMEGAS_FLIGHTSQL_URI: FlightSQL server URI (default: "grpc://localhost:32010")
+    MICROMEGAS_FLIGHTSQL_URI: FlightSQL server URI (default: "grpc://localhost:50051")
 """
 
 import os
@@ -101,7 +101,7 @@ def main():
     print()
 
     # Test FlightSQL client integration
-    flightsql_uri = os.environ.get("MICROMEGAS_FLIGHTSQL_URI", "grpc://localhost:32010")
+    flightsql_uri = os.environ.get("MICROMEGAS_FLIGHTSQL_URI", "grpc://localhost:50051")
     print(f"Step 4: Testing FlightSQL client with authentication...")
     print(f"  Connecting to: {flightsql_uri}")
 

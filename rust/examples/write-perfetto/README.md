@@ -20,7 +20,7 @@ cargo run --package trace-gen-util --bin trace-gen -- [OPTIONS] --process-id <PR
 
 - `-p, --process-id <PROCESS_ID>`: Process ID to generate trace for (required)
 - `-o, --output <OUTPUT>`: Output Perfetto trace file path (default: "trace.perfetto")
-- `--flightsql-url <FLIGHTSQL_URL>`: FlightSQL server URL (default: "http://127.0.0.1:32010")
+- `--flightsql-url <FLIGHTSQL_URL>`: FlightSQL server URL (default: "http://127.0.0.1:50051")
 - `--start-time <START_TIME>`: Start time for trace (RFC 3339 format, optional)
 - `--end-time <END_TIME>`: End time for trace (RFC 3339 format, optional)
 
@@ -62,7 +62,7 @@ After generating a trace file, you can view it in the Perfetto UI:
 ## Prerequisites
 
 - Running Micromegas analytics services:
-  - FlightSQL service (default port 32010)
+  - FlightSQL service (default port 50051)
   - Analytics data with process and span information
 - Process must have telemetry data in the analytics system
 

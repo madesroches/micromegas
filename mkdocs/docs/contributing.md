@@ -69,7 +69,7 @@ By participating in this project, you agree to maintain a respectful and inclusi
    - Build the Rust services
    - Start PostgreSQL database
    - Start telemetry-ingestion-srv on port 9000
-   - Start flight-sql-srv on port 32010  
+   - Start flight-sql-srv on port 50051  
    - Start telemetry-admin service
    - Open a tmux session with all services running in separate panes
    

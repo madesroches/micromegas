@@ -49,10 +49,6 @@ Simple bearer token authentication using pre-shared keys.
 - Manual key distribution and rotation
 - No automatic expiration
 - No user identity for audit logging
-- Planned for deprecation in future releases
-
-!!! warning "API Key Deprecation"
-    API keys are supported for backward compatibility but will be deprecated in a future release. New deployments should use OIDC authentication.
 
 ## Server Configuration
 
@@ -99,7 +95,7 @@ The `MICROMEGAS_ADMINS` environment variable is a JSON array of user identifiers
 
 ### API Key Configuration
 
-Configure API keys using environment variables:
+Configure API keys using the `MICROMEGAS_API_KEYS` environment variable with a JSON array:
 
 ```bash
 export MICROMEGAS_API_KEYS='[
@@ -107,6 +103,12 @@ export MICROMEGAS_API_KEYS='[
   {"name": "service2", "key": "secret-key-456"}
 ]'
 ```
+
+**Format:**
+- JSON array of objects
+- Each object has `name` (identifier for logging) and `key` (the actual API key)
+- The `key` value is sent as the Bearer token by clients
+- Generate keys with: `openssl rand -base64 512`
 
 ### Disable Authentication (Development Only)
 

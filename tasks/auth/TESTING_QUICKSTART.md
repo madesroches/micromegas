@@ -169,7 +169,7 @@ export OIDC_ISSUER="https://accounts.google.com"
 ### "Analytics server not running"
 ```bash
 # Check if running
-lsof -i :32010
+lsof -i :50051
 
 # Start services
 cd local_test_env/ai_scripts
