@@ -13,6 +13,7 @@
     "lint:fix": "yarn lint --fix",
     "e2e": "yarn playwright test",
     "e2e:update": "yarn playwright test --update-snapshots",
+    "e2e:report": "yarn playwright show-report",
     "server": "docker compose up --build",
     "sign": "npx --yes @grafana/sign-plugin"
   },

@@ -48,18 +48,5 @@ jobs:
       - name: Run Grafana CI validation
         run: python3 build/grafana_ci.py
 
-      - name: Install Playwright browsers
-        run: yarn playwright install --with-deps chromium
-        working-directory: grafana
-
-      - name: Start grafana docker
-        run: yarn server -d
-        working-directory: grafana
-
-      - name: Run e2e tests
-        run: yarn e2e
-        working-directory: grafana
-
-      - name: Stop grafana docker
-        run: docker compose down
-        working-directory: grafana
+      - name: Run Grafana E2E tests
+        run: python3 build/grafana_e2e_tests.py
