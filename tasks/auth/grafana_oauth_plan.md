@@ -1030,11 +1030,11 @@ All core functionality implemented and tested with Auth0. Code review identified
 
 ### 🟡 Important - Should Fix Soon
 
-- [ ] **Make token expiration buffer configurable** (`rust/telemetry-sink/src/oidc_client_credentials_decorator.rs:125`)
-  - Current: Hardcoded 3-minute buffer (`const BUFFER_SECONDS: u64 = 180`)
-  - Issue: For high-frequency telemetry, 3 minutes is conservative; should be proportional to token lifetime
-  - Fix: Make configurable via environment variable or calculate as 5-10% of `expires_in`
-  - Files: `rust/telemetry-sink/src/oidc_client_credentials_decorator.rs`
+- [x] **Make token expiration buffer configurable** (`rust/telemetry-sink/src/oidc_client_credentials_decorator.rs:135`) ✅ FIXED (2025-10-31)
+  - Fixed: Added `MICROMEGAS_OIDC_TOKEN_BUFFER_SECONDS` environment variable
+  - Default: 180 seconds (3 minutes) when not specified - maintains backward compatibility
+  - Allows tuning for high-frequency telemetry scenarios or different token lifetimes
+  - Files: `rust/telemetry-sink/src/oidc_client_credentials_decorator.rs`, tests updated
 
 - [x] **Clear all auth fields when switching auth types** (`grafana/src/components/utils.ts:141-163`) ✅ FIXED (2025-10-31)
   - Fixed: Now clears OAuth fields (`oauthIssuer`, `oauthClientId`, `oauthAudience`) and secure fields (`oauthClientSecret`) when switching away from OAuth
@@ -1191,9 +1191,12 @@ User (admin@localhost)
 
 **Telemetry Sink**:
 - `rust/telemetry-sink/src/oidc_client_credentials_decorator.rs` - Added audience parameter support
+  - **UPDATED (2025-10-31)**: Made token expiration buffer configurable via `MICROMEGAS_OIDC_TOKEN_BUFFER_SECONDS`
+- `rust/telemetry-sink/tests/oidc_client_credentials_decorator_tests.rs` - **UPDATED (2025-10-31)**: Updated test for new buffer parameter
 
 **Configuration**:
 - `/home/mad/set_auth_for_services.sh` - Added `MICROMEGAS_OIDC_AUDIENCE` environment variable
+  - **UPDATED (2025-10-31)**: New optional environment variable `MICROMEGAS_OIDC_TOKEN_BUFFER_SECONDS` (default: 180)
 
 ### Example Log Output
 

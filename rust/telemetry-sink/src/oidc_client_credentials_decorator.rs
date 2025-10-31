@@ -34,6 +34,7 @@ pub struct OidcClientCredentialsDecorator {
     client_id: String,
     client_secret: String,
     audience: Option<String>,
+    buffer_seconds: u64, // Token expiration buffer in seconds
     client: reqwest::Client,
     cached_token: Arc<Mutex<Option<CachedToken>>>,
 }
@@ -46,6 +47,7 @@ impl OidcClientCredentialsDecorator {
     /// - `MICROMEGAS_OIDC_CLIENT_ID` - Client ID
     /// - `MICROMEGAS_OIDC_CLIENT_SECRET` - Client secret
     /// - `MICROMEGAS_OIDC_AUDIENCE` - Audience (optional, required for Auth0/Azure AD)
+    /// - `MICROMEGAS_OIDC_TOKEN_BUFFER_SECONDS` - Token expiration buffer in seconds (optional, default: 180)
     pub fn from_env() -> Result<Self> {
         let token_endpoint = std::env::var("MICROMEGAS_OIDC_TOKEN_ENDPOINT").map_err(|_| {
             RequestDecoratorError::Permanent("MICROMEGAS_OIDC_TOKEN_ENDPOINT not set".to_string())
@@ -61,11 +63,17 @@ impl OidcClientCredentialsDecorator {
 
         let audience = std::env::var("MICROMEGAS_OIDC_AUDIENCE").ok();
 
+        let buffer_seconds = std::env::var("MICROMEGAS_OIDC_TOKEN_BUFFER_SECONDS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(180); // Default: 3 minutes
+
         Ok(Self::new(
             token_endpoint,
             client_id,
             client_secret,
             audience,
+            buffer_seconds,
         ))
     }
 
@@ -75,12 +83,14 @@ impl OidcClientCredentialsDecorator {
         client_id: String,
         client_secret: String,
         audience: Option<String>,
+        buffer_seconds: u64,
     ) -> Self {
         Self {
             token_endpoint,
             client_id,
             client_secret,
             audience,
+            buffer_seconds,
             client: reqwest::Client::new(),
             cached_token: Arc::new(Mutex::new(None)),
         }
@@ -131,10 +141,7 @@ impl OidcClientCredentialsDecorator {
             .as_secs();
 
         // Apply buffer to avoid using tokens near expiration
-        // Refresh 3 minutes before expiration to handle infrequent telemetry scenarios
-        const BUFFER_SECONDS: u64 = 180; // 3 minutes
-
-        let expires_in = token_response.expires_in.saturating_sub(BUFFER_SECONDS);
+        let expires_in = token_response.expires_in.saturating_sub(self.buffer_seconds);
         let expires_at = now + expires_in;
 
         Ok(CachedToken {
