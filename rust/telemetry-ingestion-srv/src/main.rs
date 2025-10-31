@@ -89,7 +89,12 @@ async fn serve_http(
         "serving on {} with authentication={}",
         args.listen_endpoint_http, auth_enabled
     );
-    axum::serve(listener, app).await.unwrap();
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+    .unwrap();
 
     Ok(())
 }
