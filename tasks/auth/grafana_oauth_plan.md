@@ -9,9 +9,10 @@ OAuth 2.0 client credentials authentication has been successfully implemented an
 - ✅ Telemetry ingestion working with OAuth
 - ✅ HTTP timeout added to OIDC discovery (2025-10-31)
 - ✅ Automated tests for OAuth flow (2025-10-31)
+- ✅ go.mod dependency declaration fixed (2025-10-31)
 
-**Production Blockers**: 3 remaining (go.mod, privacy controls, documentation)
-**Estimated Effort**: 3.5-5.5 hours remaining
+**Production Blockers**: 2 remaining (privacy controls, documentation)
+**Estimated Effort**: 3-5 hours remaining
 
 ## Overview
 
@@ -1008,10 +1009,9 @@ All core functionality implemented and tested with Auth0. Code review identified
   - Files: `grafana/pkg/flightsql/oauth_test.go` (new, 698 lines)
   - Also fixed: Format string issues in `flightsql.go:171` and `arrow_test.go:319`
 
-- [ ] **Fix go.mod dependency declaration** (`grafana/go.mod:103`)
-  - Current: `golang.org/x/oauth2 v0.32.0 // indirect`
-  - Issue: OAuth2 is directly imported but marked as indirect dependency
-  - Fix: Move to main `require` block without `// indirect` comment
+- [x] **Fix go.mod dependency declaration** ✅ COMPLETE (2025-10-31)
+  - Fixed: Moved `golang.org/x/oauth2 v0.32.0` to main require block
+  - OAuth2 now correctly declared as direct dependency
   - Files: `grafana/go.mod`
 
 - [ ] **Add user attribution privacy controls**
@@ -1083,12 +1083,12 @@ All core functionality implemented and tested with Auth0. Code review identified
 
 ### Production Readiness Status
 
-**Estimated Effort to Production-Ready**: 3.5-5.5 hours (was 5.5-7.5 hours)
+**Estimated Effort to Production-Ready**: 3-5 hours (was 3.5-5.5 hours)
 
 **Priority Order**:
 1. ~~Add HTTP timeout (30 min)~~ ✅ COMPLETE (2025-10-31)
 2. ~~Add automated tests (3-4 hours)~~ ✅ COMPLETE (2025-10-31)
-3. Fix go.mod dependency (5 min)
+3. ~~Fix go.mod dependency (5 min)~~ ✅ COMPLETE (2025-10-31)
 4. Add privacy controls for user attribution (1 hour)
 5. Complete documentation (2-3 hours)
 
@@ -1250,13 +1250,13 @@ This shows:
 | 5 | Testing & debugging | 2-3 hours | ~1 hour |
 | 6 | Documentation | 2-3 hours | TODO |
 | 7 | Code review | Not in original plan | Done |
-| 8 | Production hardening | Not in original plan | 3.5-5.5 hours (IN PROGRESS) |
+| 8 | Production hardening | Not in original plan | 3-5 hours (IN PROGRESS) |
 | 8a | - HTTP timeout fix | | 30 min (DONE 2025-10-31) |
 | 8b | - Automated tests | | ~2 hours (DONE 2025-10-31) |
-| 8c | - go.mod fix | | TODO (5 min) |
+| 8c | - go.mod fix | | 5 min (DONE 2025-10-31) |
 | 8d | - Privacy controls | | TODO (1 hour) |
 | 8e | - Documentation | | TODO (2-3 hours) |
-| **Total** | | **9-13 hours** | **~8 hours (dev+hardening) + 3.5-5.5 hours remaining** |
+| **Total** | | **9-13 hours** | **~8.5 hours (dev+hardening) + 3-5 hours remaining** |
 
 **Note:** Using `golang.org/x/oauth2` significantly reduced implementation time. The library handles token caching, refresh, and thread safety automatically.
 
@@ -1272,16 +1272,16 @@ This shows:
 - ~~**CRITICAL**: No automated tests (risky for production)~~ ✅ FIXED (2025-10-31)
 - **IMPORTANT**: User attribution privacy concerns (no opt-out, GDPR)
 - **IMPORTANT**: Token refresh called on every query (performance overhead)
-- go.mod dependency incorrectly marked as indirect
+- ~~go.mod dependency incorrectly marked as indirect~~ ✅ FIXED (2025-10-31)
 
-**Production Blockers** (3 remaining of 5 items):
+**Production Blockers** (2 remaining of 5 items):
 1. ~~Add HTTP timeout to OIDC discovery~~ ✅ COMPLETE (2025-10-31)
 2. ~~Add automated tests for OAuth flow~~ ✅ COMPLETE (2025-10-31)
-3. Fix go.mod dependency declaration
+3. ~~Fix go.mod dependency declaration~~ ✅ COMPLETE (2025-10-31)
 4. Add user attribution privacy controls
 5. Complete documentation
 
-**Estimated Effort to Production-Ready**: 3.5-5.5 hours (was 5.5-7.5 hours)
+**Estimated Effort to Production-Ready**: 3-5 hours (was 3.5-5.5 hours)
 
 See "Production Readiness Checklist" section above for complete list of issues and fixes.
 
