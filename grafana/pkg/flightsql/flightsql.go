@@ -31,6 +31,12 @@ type config struct {
 	Username string              `json:"username"`
 	Password string              `json:"password"`
 	Token    string              `json:"token"`
+
+	// OAuth 2.0 Client Credentials
+	OAuthIssuer       string `json:"oauthIssuer"`
+	OAuthClientId     string `json:"oauthClientId"`
+	OAuthClientSecret string `json:"oauthClientSecret"` // Populated from DecryptedSecureJSONData
+	OAuthAudience     string `json:"oauthAudience"`
 }
 
 func (cfg config) validate() error {
@@ -40,10 +46,11 @@ func (cfg config) validate() error {
 
 	noToken := len(cfg.Token) == 0
 	noUserPass := len(cfg.Username) == 0 || len(cfg.Password) == 0
+	noOAuth := len(cfg.OAuthIssuer) == 0 || len(cfg.OAuthClientId) == 0 || len(cfg.OAuthClientSecret) == 0
 
-	// if not secure don't make users supply a token
-	if noToken && noUserPass && cfg.Secure {
-		return fmt.Errorf("token or username/password are required")
+	// if secure, require some form of auth
+	if noToken && noUserPass && noOAuth && cfg.Secure {
+		return fmt.Errorf("token, username/password, or OAuth credentials are required")
 	}
 
 	return nil
@@ -54,6 +61,7 @@ type FlightSQLDatasource struct {
 	client          *client
 	resourceHandler backend.CallResourceHandler
 	md              metadata.MD
+	oauthMgr        *OAuthTokenManager // OAuth token manager
 }
 
 // NewDatasource creates a new datasource instance.
@@ -71,6 +79,11 @@ func NewDatasource(ctx context.Context, settings backend.DataSourceInstanceSetti
 
 	if password, exists := settings.DecryptedSecureJSONData["password"]; exists {
 		cfg.Password = password
+	}
+
+	// Read OAuth client secret from encrypted storage
+	if oauthSecret, exists := settings.DecryptedSecureJSONData["oauthClientSecret"]; exists {
+		cfg.OAuthClientSecret = oauthSecret
 	}
 
 	if err := cfg.validate(); err != nil {
@@ -107,9 +120,35 @@ func NewDatasource(ctx context.Context, settings backend.DataSourceInstanceSetti
 		md.Set("Authorization", fmt.Sprintf("Bearer %s", cfg.Token))
 	}
 
+	// Handle OAuth 2.0 client credentials
+	var oauthMgr *OAuthTokenManager
+	if cfg.OAuthIssuer != "" && cfg.OAuthClientId != "" && cfg.OAuthClientSecret != "" {
+		oauthMgr, err = NewOAuthTokenManager(
+			cfg.OAuthIssuer,
+			cfg.OAuthClientId,
+			cfg.OAuthClientSecret,
+			cfg.OAuthAudience,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("oauth initialization: %v", err)
+		}
+
+		// Fetch initial token to validate configuration
+		token, err := oauthMgr.GetToken(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("oauth token fetch: %v", err)
+		}
+
+		// Set initial token in metadata
+		md.Set("Authorization", fmt.Sprintf("Bearer %s", token))
+
+		logInfof("OAuth authentication initialized successfully")
+	}
+
 	ds := &FlightSQLDatasource{
-		client: client,
-		md:     md,
+		client:   client,
+		md:       md,
+		oauthMgr: oauthMgr,
 	}
 	r := chi.NewRouter()
 	r.Use(recoverer)

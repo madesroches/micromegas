@@ -214,8 +214,13 @@ impl FlightSqlServiceImpl {
             None
         };
 
+        // Extract user attribution from metadata
+        let user_id = metadata.get("x-user-id").and_then(|v| v.to_str().ok()).unwrap_or("unknown");
+        let user_email = metadata.get("x-user-email").and_then(|v| v.to_str().ok()).unwrap_or("unknown");
+        let client_type = metadata.get("x-client-type").and_then(|v| v.to_str().ok()).unwrap_or("unknown");
+
         info!(
-            "execute_query range={query_range:?} sql={sql:?} limit={:?}",
+            "execute_query range={query_range:?} sql={sql:?} limit={:?} user={user_id} email={user_email} client={client_type}",
             metadata.get("limit")
         );
 

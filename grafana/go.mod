@@ -1,8 +1,8 @@
 module github.com/madesroches/grafana-micromegas-datasource
 
-go 1.23.0
+go 1.24.0
 
-toolchain go1.23.4
+toolchain go1.24.9
 
 require (
 	github.com/apache/arrow/go/v12 v12.0.0-20230215210516-4550c9b35e67
@@ -100,6 +100,7 @@ require (
 	golang.org/x/exp v0.0.0-20231006140011-7918f672742d // indirect
 	golang.org/x/mod v0.17.0 // indirect
 	golang.org/x/net v0.38.0 // indirect
+	golang.org/x/oauth2 v0.32.0 // indirect
 	golang.org/x/sync v0.12.0 // indirect
 	golang.org/x/sys v0.31.0 // indirect
 	golang.org/x/text v0.23.0 // indirect

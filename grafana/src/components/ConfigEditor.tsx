@@ -15,6 +15,11 @@ import {
   removeMetaData,
   onResetToken,
   onResetPassword,
+  onOAuthIssuerChange,
+  onOAuthClientIdChange,
+  onOAuthClientSecretChange,
+  onOAuthAudienceChange,
+  onResetOAuthClientSecret,
 } from './utils'
 
 export function ConfigEditor(props: DataSourcePluginOptionsEditorProps<FlightSQLDataSourceOptions, SecureJsonData>) {
@@ -106,6 +111,72 @@ export function ConfigEditor(props: DataSourcePluginOptionsEditorProps<FlightSQL
               ></SecretInput>
             </InlineField>
           </InlineFieldRow>
+        )}
+        {selectedAuthType?.value === 'oauth2' && (
+          <>
+            <InlineField
+              labelWidth={20}
+              label="OIDC Issuer"
+              tooltip="Identity provider URL (e.g., https://accounts.google.com)"
+            >
+              <Input
+                width={40}
+                name="oauthIssuer"
+                type="text"
+                value={jsonData.oauthIssuer || ''}
+                placeholder="https://accounts.google.com"
+                onChange={(e) => onOAuthIssuerChange(e, options, onOptionsChange)}
+              />
+            </InlineField>
+
+            <InlineField labelWidth={20} label="Client ID">
+              <Input
+                width={40}
+                name="oauthClientId"
+                type="text"
+                value={jsonData.oauthClientId || ''}
+                placeholder="service@project.iam.gserviceaccount.com"
+                onChange={(e) => onOAuthClientIdChange(e, options, onOptionsChange)}
+              />
+            </InlineField>
+
+            <InlineField labelWidth={20} label="Client Secret">
+              <SecretInput
+                width={40}
+                name="oauthClientSecret"
+                type="text"
+                value={secureJsonData?.oauthClientSecret || ''}
+                placeholder="****************"
+                onChange={(e) => onOAuthClientSecretChange(e, options, onOptionsChange)}
+                onReset={() => onResetOAuthClientSecret(options, onOptionsChange)}
+                isConfigured={secureJsonFields?.oauthClientSecret}
+              />
+            </InlineField>
+
+            <InlineField
+              labelWidth={20}
+              label="Audience (optional)"
+              tooltip="Required for Auth0 and Azure AD"
+            >
+              <Input
+                width={40}
+                name="oauthAudience"
+                type="text"
+                value={jsonData.oauthAudience || ''}
+                placeholder="https://api.micromegas.example.com"
+                onChange={(e) => onOAuthAudienceChange(e, options, onOptionsChange)}
+              />
+            </InlineField>
+
+            <InlineFieldRow>
+              <InlineField>
+                <span className="help-text">
+                  OAuth 2.0 client credentials flow for service accounts.
+                  Credentials managed by identity provider (Google, Auth0, Azure AD, Okta).
+                </span>
+              </InlineField>
+            </InlineFieldRow>
+          </>
         )}
 
         <InlineField labelWidth={20} label="Require TLS / SSL">

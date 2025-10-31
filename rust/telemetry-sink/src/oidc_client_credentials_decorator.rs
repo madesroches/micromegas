@@ -33,6 +33,7 @@ pub struct OidcClientCredentialsDecorator {
     token_endpoint: String,
     client_id: String,
     client_secret: String,
+    audience: Option<String>,
     client: reqwest::Client,
     cached_token: Arc<Mutex<Option<CachedToken>>>,
 }
@@ -44,6 +45,7 @@ impl OidcClientCredentialsDecorator {
     /// - `MICROMEGAS_OIDC_TOKEN_ENDPOINT` - Token endpoint URL
     /// - `MICROMEGAS_OIDC_CLIENT_ID` - Client ID
     /// - `MICROMEGAS_OIDC_CLIENT_SECRET` - Client secret
+    /// - `MICROMEGAS_OIDC_AUDIENCE` - Audience (optional, required for Auth0/Azure AD)
     pub fn from_env() -> Result<Self> {
         let token_endpoint = std::env::var("MICROMEGAS_OIDC_TOKEN_ENDPOINT").map_err(|_| {
             RequestDecoratorError::Permanent("MICROMEGAS_OIDC_TOKEN_ENDPOINT not set".to_string())
@@ -57,15 +59,18 @@ impl OidcClientCredentialsDecorator {
             RequestDecoratorError::Permanent("MICROMEGAS_OIDC_CLIENT_SECRET not set".to_string())
         })?;
 
-        Ok(Self::new(token_endpoint, client_id, client_secret))
+        let audience = std::env::var("MICROMEGAS_OIDC_AUDIENCE").ok();
+
+        Ok(Self::new(token_endpoint, client_id, client_secret, audience))
     }
 
     /// Create with explicit credentials
-    pub fn new(token_endpoint: String, client_id: String, client_secret: String) -> Self {
+    pub fn new(token_endpoint: String, client_id: String, client_secret: String, audience: Option<String>) -> Self {
         Self {
             token_endpoint,
             client_id,
             client_secret,
+            audience,
             client: reqwest::Client::new(),
             cached_token: Arc::new(Mutex::new(None)),
         }
@@ -73,11 +78,18 @@ impl OidcClientCredentialsDecorator {
 
     /// Fetch fresh token from OIDC provider
     async fn fetch_token(&self) -> Result<CachedToken> {
-        let params = [
+        let mut params = vec![
             ("grant_type", "client_credentials"),
-            ("client_id", &self.client_id),
-            ("client_secret", &self.client_secret),
+            ("client_id", self.client_id.as_str()),
+            ("client_secret", self.client_secret.as_str()),
         ];
+
+        // Add audience if provided (required for Auth0/Azure AD)
+        let audience_str;
+        if let Some(ref audience) = self.audience {
+            audience_str = audience.clone();
+            params.push(("audience", audience_str.as_str()));
+        }
 
         let response = self
             .client

@@ -63,6 +63,7 @@ def create_oidc_config():
     """Create OIDC configuration JSON"""
     client_id = os.environ["OIDC_CLIENT_ID"]
     issuer = os.environ.get("OIDC_ISSUER")
+    audience = os.environ.get("OIDC_AUDIENCE", client_id)
 
     if not issuer:
         print("❌ Error: OIDC_ISSUER environment variable not set")
@@ -80,7 +81,7 @@ def create_oidc_config():
         "issuers": [
             {
                 "issuer": issuer,
-                "audience": client_id,
+                "audience": audience,
             }
         ],
         "jwks_refresh_interval_secs": 3600,

@@ -31,11 +31,17 @@ export interface FlightSQLDataSourceOptions extends DataSourceJsonData {
   password?: string
   selectedAuthType?: string
   metadata?: any
+
+  // OAuth 2.0 Client Credentials (stored unencrypted)
+  oauthIssuer?: string           // e.g., "https://accounts.google.com"
+  oauthClientId?: string         // e.g., "grafana@project.iam.gserviceaccount.com"
+  oauthAudience?: string         // Optional, for Auth0/Azure AD
 }
 
 export interface SecureJsonData {
   password?: string
   token?: string
+  oauthClientSecret?: string    // OAuth client secret (encrypted by Grafana)
 }
 
 export type TablesResponse = {
@@ -50,6 +56,7 @@ export const authTypeOptions = [
   {key: 0, label: 'none', value: 'none'},
   {key: 1, label: 'username/password', value: 'username/password'},
   {key: 2, label: 'token', value: 'token'},
+  {key: 3, label: 'oauth2-client-credentials', value: 'oauth2'},
 ]
 
 export const sqlLanguageDefinition = {

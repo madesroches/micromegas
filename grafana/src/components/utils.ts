@@ -246,3 +246,50 @@ export const onResetPassword = (options: any, onOptionsChange: any) => {
 export const removeQuotes = (str: string) => {
   return str?.replace(/['"]+/g, '')
 }
+
+// OAuth 2.0 handler functions
+export const onOAuthIssuerChange = (event: any, options: any, onOptionsChange: any) => {
+  const jsonData = {
+    ...options.jsonData,
+    oauthIssuer: event.target.value,
+  }
+  onOptionsChange({...options, jsonData})
+}
+
+export const onOAuthClientIdChange = (event: any, options: any, onOptionsChange: any) => {
+  const jsonData = {
+    ...options.jsonData,
+    oauthClientId: event.target.value,
+  }
+  onOptionsChange({...options, jsonData})
+}
+
+export const onOAuthAudienceChange = (event: any, options: any, onOptionsChange: any) => {
+  const jsonData = {
+    ...options.jsonData,
+    oauthAudience: event.target.value,
+  }
+  onOptionsChange({...options, jsonData})
+}
+
+export const onOAuthClientSecretChange = (event: any, options: any, onOptionsChange: any) => {
+  const secureJsonData = {
+    ...options.secureJsonData,
+    oauthClientSecret: event?.target?.value || '',
+  }
+  onOptionsChange({...options, secureJsonData})
+}
+
+export const onResetOAuthClientSecret = (options: any, onOptionsChange: any) => {
+  onOptionsChange({
+    ...options,
+    secureJsonFields: {
+      ...options.secureJsonFields,
+      oauthClientSecret: false,
+    },
+    secureJsonData: {
+      ...options.secureJsonData,
+      oauthClientSecret: '',
+    },
+  })
+}
