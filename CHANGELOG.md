@@ -4,6 +4,15 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## [Unreleased]
 
+ * **Grafana Plugin:**
+   * Implement OAuth 2.0 authentication for Grafana plugin (#564)
+   * Implement CI/CD pipeline for Grafana plugin (#558)
+   * Integrate Grafana FlightSQL datasource plugin into main repository (#554)
+ * **Security & Dependencies:**
+   * Update Grafana plugin SDK to 11.6.7 and fix security vulnerabilities (#555)
+ * **Documentation:**
+   * Consolidate and streamline Grafana and monorepo documentation (#559)
+
 ## October 2025 - v0.14.0
  * Released [version 0.14.0](https://crates.io/crates/micromegas)
  * **Performance & Storage Optimizations:**
