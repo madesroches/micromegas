@@ -61,7 +61,8 @@ func (m *OAuthTokenManager) GetToken(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("failed to get OAuth token: %w", err)
 	}
 
-	logInfof("OAuth token retrieved, expires at: %s", token.Expiry.Format("2006-01-02 15:04:05"))
+	// Note: No logging here - this is called on every query (hot path)
+	// Token caching and refresh are handled automatically by oauth2 library
 
 	return token.AccessToken, nil
 }
