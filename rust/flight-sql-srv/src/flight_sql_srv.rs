@@ -13,6 +13,7 @@ use micromegas::auth::tower::AuthService;
 use micromegas::auth::types::AuthProvider;
 use micromegas::ingestion::data_lake_connection::connect_to_data_lake;
 use micromegas::micromegas_main;
+use micromegas::servers::connect_info_layer::ConnectedIncoming;
 use micromegas::servers::flight_sql_service_impl::FlightSqlServiceImpl;
 use micromegas::servers::log_uri_service::LogUriService;
 use micromegas::tracing::prelude::*;
@@ -102,13 +103,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .into_inner();
 
     let addr_str = "0.0.0.0:50051";
-    let addr = addr_str.parse()?;
+    let addr: std::net::SocketAddr = addr_str.parse()?;
     info!("Listening on {:?}", addr);
+
+    // Create TCP listener and wrap with ConnectedIncoming to capture client IPs
+    let listener = std::net::TcpListener::bind(addr)?;
+    let incoming = ConnectedIncoming::from_std_listener(listener)?;
 
     Server::builder()
         .layer(layer)
         .add_service(svc)
-        .serve(addr)
+        .serve_with_incoming(incoming)
         .await?;
 
     info!("bye");

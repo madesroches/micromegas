@@ -3,6 +3,8 @@ use std::task::Context;
 use std::task::Poll;
 use tower::Service;
 
+use super::http_utils::get_client_ip;
+
 /// A Tower service that logs the URI of incoming requests.
 #[derive(Clone)]
 pub struct LogUriService<S> {
@@ -24,7 +26,8 @@ where
 
     /// Logs the URI of the incoming request and then calls the inner service.
     fn call(&mut self, request: http::Request<Body>) -> Self::Future {
-        info!("uri={:?}", request.uri());
+        let client_ip = get_client_ip(request.headers(), request.extensions());
+        info!("uri={:?} client_ip={client_ip}", request.uri());
         self.service.call(request)
     }
 }

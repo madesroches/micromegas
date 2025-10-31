@@ -1,5 +1,11 @@
 pub mod axum_utils;
 
+/// connection info utilities for Tonic services
+pub mod connect_info_layer;
+
+/// http utilities
+pub mod http_utils;
+
 /// scheduled task for daemon
 pub mod cron_task;
 
