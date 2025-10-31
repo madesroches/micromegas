@@ -287,7 +287,7 @@ Real-time monitoring and alerting.
 
 </div>
 <div style="flex: 1;">
-<img src="./jupyter_blocks_query.png" style="max-height: 500px; width: auto;">
+<img src="./jupyter_log_query.png" style="max-height: 500px; width: auto;">
 </div>
 </div>
 
