@@ -157,16 +157,9 @@ func NewDatasource(ctx context.Context, settings backend.DataSourceInstanceSetti
 			return nil, fmt.Errorf("oauth initialization: %v", err)
 		}
 
-		// Fetch initial token to validate configuration
-		token, err := oauthMgr.GetToken(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("oauth token fetch: %v", err)
-		}
-
-		// Set initial token in metadata
-		md.Set("Authorization", fmt.Sprintf("Bearer %s", token))
-
-		logInfof("OAuth authentication initialized successfully")
+		// Use lazy initialization - token will be fetched on first query
+		// This prevents blocking datasource creation if token endpoint is slow/unavailable
+		logInfof("OAuth authentication configured (token will be fetched on first query)")
 	}
 
 	// Determine user attribution setting (default: true if not specified)

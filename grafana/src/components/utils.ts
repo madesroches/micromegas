@@ -148,22 +148,22 @@ export const onAuthTypeChange = (selectedAuthType: any, options: any, onOptionsC
     jsonData: {
       ...options.jsonData,
       selectedAuthType: selectedAuthType?.label,
-      username: notPassType && '',
-      oauthIssuer: notOAuthType && '',
-      oauthClientId: notOAuthType && '',
-      oauthAudience: notOAuthType && '',
+      username: notPassType ? '' : options.jsonData.username,
+      oauthIssuer: notOAuthType ? '' : options.jsonData.oauthIssuer,
+      oauthClientId: notOAuthType ? '' : options.jsonData.oauthClientId,
+      oauthAudience: notOAuthType ? '' : options.jsonData.oauthAudience,
     },
     secureJsonFields: {
       ...options.secureJsonFields,
-      token: notTokenType && false,
-      password: notPassType && false,
-      oauthClientSecret: notOAuthType && false,
+      token: notTokenType ? false : options.secureJsonFields.token,
+      password: notPassType ? false : options.secureJsonFields.password,
+      oauthClientSecret: notOAuthType ? false : options.secureJsonFields.oauthClientSecret,
     },
     secureJsonData: {
       ...options.secureJsonData,
-      token: notTokenType && '',
-      password: notPassType && '',
-      oauthClientSecret: notOAuthType && '',
+      token: notTokenType ? '' : options.secureJsonData.token,
+      password: notPassType ? '' : options.secureJsonData.password,
+      oauthClientSecret: notOAuthType ? '' : options.secureJsonData.oauthClientSecret,
     },
   })
 }

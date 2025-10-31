@@ -16,6 +16,10 @@ import (
 
 // QueryData executes batches of ad-hoc queries and returns a batch of results.
 func (d *FlightSQLDatasource) QueryData(ctx context.Context, req *backend.QueryDataRequest) (*backend.QueryDataResponse, error) {
+	// Create request-scoped metadata to avoid mutating shared d.md
+	// This prevents race conditions and user data leakage between concurrent requests
+	requestMd := metadata.MD{}
+
 	// Extract user information from plugin context and pass to FlightSQL server
 	// Uses generic header names that work for any client (Grafana, Python services, etc.)
 	// Only send if user attribution is enabled (default: true, can be disabled for privacy)
@@ -25,22 +29,22 @@ func (d *FlightSQLDatasource) QueryData(ctx context.Context, req *backend.QueryD
 		// Add end-user identity to gRPC metadata
 		// FlightSQL server can log these headers for attribution
 		if user.Login != "" {
-			d.md.Set("x-user-id", user.Login) // Generic: works for any client
+			requestMd.Set("x-user-id", user.Login) // Generic: works for any client
 		}
 		if user.Email != "" {
-			d.md.Set("x-user-email", user.Email) // Generic: works for any client
+			requestMd.Set("x-user-email", user.Email) // Generic: works for any client
 		}
 		if user.Name != "" {
-			d.md.Set("x-user-name", user.Name) // Generic: works for any client
+			requestMd.Set("x-user-name", user.Name) // Generic: works for any client
 		}
 
 		// Add organization/tenant context
 		if req.PluginContext.OrgID > 0 {
-			d.md.Set("x-org-id", fmt.Sprintf("%d", req.PluginContext.OrgID)) // Generic: tenant ID
+			requestMd.Set("x-org-id", fmt.Sprintf("%d", req.PluginContext.OrgID)) // Generic: tenant ID
 		}
 
 		// Indicate the client type (useful when multiple client types exist)
-		d.md.Set("x-client-type", "grafana")
+		requestMd.Set("x-client-type", "grafana")
 
 		logInfof("Query from user: %s (%s) via Grafana", user.Login, user.Email)
 	}
@@ -60,8 +64,8 @@ func (d *FlightSQLDatasource) QueryData(ctx context.Context, req *backend.QueryD
 			return response, nil
 		}
 
-		// Update metadata with fresh token
-		d.md.Set("Authorization", fmt.Sprintf("Bearer %s", token))
+		// Add fresh token to request-scoped metadata
+		requestMd.Set("Authorization", fmt.Sprintf("Bearer %s", token))
 	}
 
 	var (
@@ -76,6 +80,9 @@ func (d *FlightSQLDatasource) QueryData(ctx context.Context, req *backend.QueryD
 			response.Responses[dataQuery.RefID] = backend.ErrDataResponse(backend.StatusBadRequest, err.Error())
 			continue
 		}
+
+		// Join request-scoped metadata with query-specific metadata
+		query.Metadata = metadata.Join(requestMd, query.Metadata)
 
 		wg.Add(1)
 		go func() {
