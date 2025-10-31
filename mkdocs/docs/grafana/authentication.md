@@ -9,14 +9,12 @@ The Micromegas Grafana plugin supports two authentication methods.
 Simple authentication using a static API key.
 
 - **Best for**: Development, small deployments, quick start
-- **Setup time**: 2 minutes
 
 ### OAuth 2.0 Client Credentials
 
 Enterprise authentication via identity provider (Google, Auth0, Azure AD, Okta).
 
 - **Best for**: Production, enterprise deployments
-- **Setup time**: 15-30 minutes
 
 ## API Key Authentication
 
@@ -57,7 +55,17 @@ Enterprise authentication via identity provider (Google, Auth0, Azure AD, Okta).
    - Client ID: From step 1
    - Client Secret: From step 1
    - Audience: (Auth0/Azure AD only)
+   - Enable User Attribution: On (default) or Off
    - Save & Test
+
+### Privacy Settings
+
+**Enable User Attribution** controls whether user information is sent with queries:
+
+- **Enabled** (default): Grafana username and email are logged on the server for audit purposes
+- **Disabled**: Only the service account identity is logged
+
+User attribution provides an audit trail showing which Grafana user ran which queries. This is separate from authentication (the service account authenticates the connection).
 
 ### Provider URLs
 
@@ -67,6 +75,24 @@ Enterprise authentication via identity provider (Google, Auth0, Azure AD, Okta).
 | Auth0 | `https://YOUR-TENANT.auth0.com` |
 | Azure AD | `https://login.microsoftonline.com/TENANT-ID/v2.0` |
 | Okta | `https://YOUR-DOMAIN.okta.com` |
+
+### Example: Auth0
+
+Create a Machine-to-Machine application in Auth0:
+
+1. Go to Applications → Create Application
+2. Choose "Machine to Machine Applications"
+3. Select your API or create a new API identifier
+4. Copy the Client ID and Client Secret
+
+**Grafana Configuration**:
+```
+Auth Method: OAuth 2.0 Client Credentials
+OIDC Issuer: https://YOUR-TENANT.auth0.com
+Client ID: (from Auth0 application)
+Client Secret: (from Auth0 application)
+Audience: https://your-api-identifier (your API identifier from Auth0)
+```
 
 ### Example: Google Cloud
 
