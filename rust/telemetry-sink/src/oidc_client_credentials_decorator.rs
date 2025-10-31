@@ -141,7 +141,9 @@ impl OidcClientCredentialsDecorator {
             .as_secs();
 
         // Apply buffer to avoid using tokens near expiration
-        let expires_in = token_response.expires_in.saturating_sub(self.buffer_seconds);
+        let expires_in = token_response
+            .expires_in
+            .saturating_sub(self.buffer_seconds);
         let expires_at = now + expires_in;
 
         Ok(CachedToken {
