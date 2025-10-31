@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/clientcredentials"
@@ -69,7 +70,17 @@ func (m *OAuthTokenManager) GetToken(ctx context.Context) (string, error) {
 func discoverTokenEndpoint(issuer string) (string, error) {
 	discoveryURL := strings.TrimSuffix(issuer, "/") + "/.well-known/openid-configuration"
 
-	resp, err := http.Get(discoveryURL)
+	// Create context with 10 second timeout to prevent indefinite hanging
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Create HTTP request with timeout context
+	req, err := http.NewRequestWithContext(ctx, "GET", discoveryURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create discovery request: %w", err)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("discovery request failed: %w", err)
 	}

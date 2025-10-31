@@ -1,14 +1,16 @@
 # Grafana Plugin OAuth 2.0 Authentication Plan
 
-## Status: ✅ COMPLETE (2025-10-31)
+## Status: ✅ FEATURE COMPLETE - Production Hardening In Progress (2025-10-31)
 
 OAuth 2.0 client credentials authentication has been successfully implemented and tested with Auth0. All core functionality is working:
 - ✅ Grafana plugin sends OAuth tokens to FlightSQL server
 - ✅ FlightSQL server validates tokens and executes queries
 - ✅ User attribution headers logged in query logs
 - ✅ Telemetry ingestion working with OAuth
+- ✅ HTTP timeout added to OIDC discovery (2025-10-31)
 
-**Ready for production use.** Documentation pending.
+**Production Blockers**: 4 remaining (tests, go.mod, privacy controls, documentation)
+**Estimated Effort**: 5.5-7.5 hours remaining
 
 ## Overview
 
@@ -929,9 +931,11 @@ Add OAuth configuration section:
 
 ## Implementation Status
 
-**Status**: 🟡 **FEATURE COMPLETE - PRODUCTION BLOCKERS REMAIN** (2025-10-31)
+**Status**: 🟡 **FEATURE COMPLETE - PRODUCTION HARDENING IN PROGRESS** (2025-10-31)
 
-All core functionality implemented and tested with Auth0. However, code review identified critical issues that must be addressed before production deployment.
+All core functionality implemented and tested with Auth0. Code review identified critical issues - now addressing them systematically before production deployment.
+
+**Progress**: 1 of 5 production blockers completed (HTTP timeout - 2025-10-31)
 
 ## Implementation Checklist
 
@@ -985,10 +989,10 @@ All core functionality implemented and tested with Auth0. However, code review i
 
 ### 🔴 Critical - Must Fix Before Production
 
-- [ ] **Add HTTP timeout to OIDC discovery** (`grafana/pkg/flightsql/oauth.go:72`)
-  - Current: `http.Get(discoveryURL)` has no timeout - can hang indefinitely
-  - Risk: Datasource initialization freeze if OIDC provider is slow/unresponsive
-  - Fix: Use `context.WithTimeout` with 10 second timeout
+- [x] **Add HTTP timeout to OIDC discovery** (`grafana/pkg/flightsql/oauth.go:72`) ✅ FIXED (2025-10-31)
+  - Fixed: Now uses `context.WithTimeout` with 10 second timeout
+  - Uses `http.NewRequestWithContext` with timeout context
+  - Prevents indefinite hanging if OIDC provider is slow/unresponsive
   - Files: `grafana/pkg/flightsql/oauth.go`
 
 - [ ] **Add automated tests for OAuth flow**
@@ -1080,17 +1084,17 @@ All core functionality implemented and tested with Auth0. However, code review i
 
 ### Production Readiness Status
 
-**Estimated Effort to Production-Ready**: 6-8 hours
+**Estimated Effort to Production-Ready**: 5.5-7.5 hours (was 6-8 hours)
 
 **Priority Order**:
-1. Add HTTP timeout (30 min)
+1. ~~Add HTTP timeout (30 min)~~ ✅ COMPLETE (2025-10-31)
 2. Add automated tests (3-4 hours)
 3. Fix go.mod dependency (5 min)
 4. Add privacy controls for user attribution (1 hour)
 5. Complete documentation (2-3 hours)
 
 **Security Review Status**: ⚠️ CONCERNS IDENTIFIED
-- HTTP timeout missing (DoS vector)
+- ~~HTTP timeout missing (DoS vector)~~ ✅ FIXED (2025-10-31)
 - User attribution privacy (always-on, no consent)
 - Need explicit certificate validation documentation
 
@@ -1158,6 +1162,7 @@ User (admin@localhost)
 - `grafana/src/components/utils.ts` - Added OAuth handler functions
 - `grafana/pkg/flightsql/flightsql.go` - Added OAuth config struct, validation, and initialization
 - `grafana/pkg/flightsql/oauth.go` - **NEW**: OAuth token manager implementation
+  - **UPDATED (2025-10-31)**: Added 10-second HTTP timeout to OIDC discovery
 - `grafana/pkg/flightsql/query_data.go` - Added token refresh and user attribution headers
 - `grafana/go.mod` - Added `golang.org/x/oauth2` dependency
 
@@ -1213,7 +1218,7 @@ This shows:
    - ✅ All OAuth communication over HTTPS
    - ✅ Token endpoint URLs validated
    - ✅ No tokens in logs or error messages
-   - ⚠️ **CRITICAL**: No HTTP timeout on OIDC discovery (DoS vector) - MUST FIX
+   - ✅ HTTP timeout on OIDC discovery (10 seconds) - FIXED (2025-10-31)
    - 🔶 Certificate validation behavior not documented
 
 4. **Error Messages**:
@@ -1239,8 +1244,13 @@ This shows:
 | 5 | Testing & debugging | 2-3 hours | ~1 hour |
 | 6 | Documentation | 2-3 hours | TODO |
 | 7 | Code review | Not in original plan | Done |
-| 8 | Production hardening | Not in original plan | 6-8 hours (TODO) |
-| **Total** | | **9-13 hours** | **~5.5 hours (dev) + 6-8 hours (hardening)** |
+| 8 | Production hardening | Not in original plan | 5.5-7.5 hours (IN PROGRESS) |
+| 8a | - HTTP timeout fix | | 30 min (DONE 2025-10-31) |
+| 8b | - Automated tests | | TODO (3-4 hours) |
+| 8c | - go.mod fix | | TODO (5 min) |
+| 8d | - Privacy controls | | TODO (1 hour) |
+| 8e | - Documentation | | TODO (2-3 hours) |
+| **Total** | | **9-13 hours** | **~6 hours (dev+hardening) + 5-7 hours remaining** |
 
 **Note:** Using `golang.org/x/oauth2` significantly reduced implementation time. The library handles token caching, refresh, and thread safety automatically.
 
@@ -1252,20 +1262,20 @@ This shows:
 - Architecture is excellent and well-designed
 - Using official `golang.org/x/oauth2` library - good choice
 - Security practices mostly sound
-- **CRITICAL**: HTTP timeout missing on OIDC discovery (DoS vector)
+- ~~**CRITICAL**: HTTP timeout missing on OIDC discovery (DoS vector)~~ ✅ FIXED (2025-10-31)
 - **CRITICAL**: No automated tests (risky for production)
 - **IMPORTANT**: User attribution privacy concerns (no opt-out, GDPR)
 - **IMPORTANT**: Token refresh called on every query (performance overhead)
 - go.mod dependency incorrectly marked as indirect
 
-**Production Blockers** (5 items):
-1. Add HTTP timeout to OIDC discovery
+**Production Blockers** (4 remaining of 5 items):
+1. ~~Add HTTP timeout to OIDC discovery~~ ✅ COMPLETE (2025-10-31)
 2. Add automated tests for OAuth flow
 3. Fix go.mod dependency declaration
 4. Add user attribution privacy controls
 5. Complete documentation
 
-**Estimated Effort to Production-Ready**: 6-8 hours
+**Estimated Effort to Production-Ready**: 5.5-7.5 hours (was 6-8 hours)
 
 See "Production Readiness Checklist" section above for complete list of issues and fixes.
 
