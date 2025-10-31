@@ -39,6 +39,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Test**: `poetry run pytest`
 - **Format**: `poetry run black <file>` (REQUIRED before commit)
 
+### Grafana Plugin (from `grafana/` directory)
+- **IMPORTANT**: Use `yarn`, NOT `npm` (project uses yarn as package manager)
+- **Install**: `yarn install`
+- **Build**: `yarn build`
+- **Dev build**: `yarn dev`
+- **Lint**: `yarn lint:fix` (REQUIRED before commit)
+- **Test server**: `yarn server` (starts local Grafana with plugin)
+
 ### Service Management (for testing and development)
 - **Start Services**: `python3 local_test_env/ai_scripts/start_services.py`
   - Starts PostgreSQL, telemetry-ingestion-srv (port 9000), flight-sql-srv (port 50051), and telemetry-admin

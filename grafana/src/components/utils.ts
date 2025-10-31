@@ -141,6 +141,7 @@ export const onPasswordChange = (event: any, options: any, onOptionsChange: any)
 export const onAuthTypeChange = (selectedAuthType: any, options: any, onOptionsChange: any) => {
   const notTokenType =  selectedAuthType?.label !== "token"
   const notPassType = selectedAuthType?.label !== "username/password"
+  const notOAuthType = selectedAuthType?.label !== "oauth2"
 
   onOptionsChange({
     ...options,
@@ -148,16 +149,21 @@ export const onAuthTypeChange = (selectedAuthType: any, options: any, onOptionsC
       ...options.jsonData,
       selectedAuthType: selectedAuthType?.label,
       username: notPassType && '',
+      oauthIssuer: notOAuthType && '',
+      oauthClientId: notOAuthType && '',
+      oauthAudience: notOAuthType && '',
     },
     secureJsonFields: {
       ...options.secureJsonFields,
       token: notTokenType && false,
       password: notPassType && false,
+      oauthClientSecret: notOAuthType && false,
     },
     secureJsonData: {
       ...options.secureJsonData,
       token: notTokenType && '',
       password: notPassType && '',
+      oauthClientSecret: notOAuthType && '',
     },
   })
 }

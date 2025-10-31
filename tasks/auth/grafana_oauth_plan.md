@@ -827,8 +827,8 @@ This would send the same generic headers: `x-user-id`, `x-user-email`, `x-client
 1. **Build plugin:**
    ```bash
    cd /home/mad/micromegas/grafana
-   npm install
-   npm run build
+   yarn install
+   yarn build
    ```
 
 2. **Start Grafana with plugin:**
