@@ -18,7 +18,8 @@ import (
 func (d *FlightSQLDatasource) QueryData(ctx context.Context, req *backend.QueryDataRequest) (*backend.QueryDataResponse, error) {
 	// Extract user information from plugin context and pass to FlightSQL server
 	// Uses generic header names that work for any client (Grafana, Python services, etc.)
-	if req.PluginContext.User != nil {
+	// Only send if user attribution is enabled (default: true, can be disabled for privacy)
+	if d.enableUserAttribution && req.PluginContext.User != nil {
 		user := req.PluginContext.User
 
 		// Add end-user identity to gRPC metadata

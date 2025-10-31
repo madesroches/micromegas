@@ -20,6 +20,7 @@ import {
   onOAuthClientSecretChange,
   onOAuthAudienceChange,
   onResetOAuthClientSecret,
+  onEnableUserAttributionChange,
 } from './utils'
 
 export function ConfigEditor(props: DataSourcePluginOptionsEditorProps<FlightSQLDataSourceOptions, SecureJsonData>) {
@@ -188,6 +189,29 @@ export function ConfigEditor(props: DataSourcePluginOptionsEditorProps<FlightSQL
             disabled={false}
           />
         </InlineField>
+      </FieldSet>
+      <FieldSet label="Privacy Settings" width={400}>
+        <InlineField
+          labelWidth={20}
+          label="Enable User Attribution"
+          tooltip="Send user identity (username, email) to FlightSQL server for audit logging. Disable for GDPR compliance if needed."
+        >
+          <InlineSwitch
+            label=""
+            value={jsonData.enableUserAttribution !== false}
+            onChange={() => onEnableUserAttributionChange(options, onOptionsChange)}
+            showLabel={false}
+            disabled={false}
+          />
+        </InlineField>
+        <InlineFieldRow>
+          <InlineField>
+            <span className="help-text">
+              When enabled (default), Grafana user information is sent to the FlightSQL server for audit logging and attribution.
+              This helps track which users are running queries. Disable if GDPR or privacy policies prohibit sending user data.
+            </span>
+          </InlineField>
+        </InlineFieldRow>
       </FieldSet>
       <FieldSet label="MetaData" width={400}>
         {metaDataArr?.map((_: any, i: any) => (

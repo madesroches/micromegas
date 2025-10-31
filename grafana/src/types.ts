@@ -36,6 +36,9 @@ export interface FlightSQLDataSourceOptions extends DataSourceJsonData {
   oauthIssuer?: string           // e.g., "https://accounts.google.com"
   oauthClientId?: string         // e.g., "grafana@project.iam.gserviceaccount.com"
   oauthAudience?: string         // Optional, for Auth0/Azure AD
+
+  // Privacy Settings
+  enableUserAttribution?: boolean // Enable sending user info to FlightSQL server (default: true)
 }
 
 export interface SecureJsonData {

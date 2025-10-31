@@ -37,6 +37,9 @@ type config struct {
 	OAuthClientId     string `json:"oauthClientId"`
 	OAuthClientSecret string `json:"oauthClientSecret"` // Populated from DecryptedSecureJSONData
 	OAuthAudience     string `json:"oauthAudience"`
+
+	// Privacy Settings
+	EnableUserAttribution *bool `json:"enableUserAttribution"` // Pointer to distinguish unset (nil=default true) from explicit false
 }
 
 func (cfg config) validate() error {
@@ -58,10 +61,11 @@ func (cfg config) validate() error {
 
 // FlightSQLDatasource is a Grafana datasource plugin for Flight SQL.
 type FlightSQLDatasource struct {
-	client          *client
-	resourceHandler backend.CallResourceHandler
-	md              metadata.MD
-	oauthMgr        *OAuthTokenManager // OAuth token manager
+	client                *client
+	resourceHandler       backend.CallResourceHandler
+	md                    metadata.MD
+	oauthMgr              *OAuthTokenManager // OAuth token manager
+	enableUserAttribution bool                      // Whether to send user identity headers (default: true)
 }
 
 // NewDatasource creates a new datasource instance.
@@ -145,10 +149,17 @@ func NewDatasource(ctx context.Context, settings backend.DataSourceInstanceSetti
 		logInfof("OAuth authentication initialized successfully")
 	}
 
+	// Determine user attribution setting (default: true if not specified)
+	enableUserAttribution := true
+	if cfg.EnableUserAttribution != nil {
+		enableUserAttribution = *cfg.EnableUserAttribution
+	}
+
 	ds := &FlightSQLDatasource{
-		client:   client,
-		md:       md,
-		oauthMgr: oauthMgr,
+		client:                client,
+		md:                    md,
+		oauthMgr:              oauthMgr,
+		enableUserAttribution: enableUserAttribution,
 	}
 	r := chi.NewRouter()
 	r.Use(recoverer)
