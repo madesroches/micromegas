@@ -302,11 +302,13 @@ export const onResetOAuthClientSecret = (options: any, onOptionsChange: any) => 
 
 // Privacy settings handler
 export const onEnableUserAttributionChange = (options: any, onOptionsChange: any) => {
-  // Default is true, so if undefined treat as true and toggle to false
-  const currentValue = options.jsonData.enableUserAttribution !== false
+  // Get the current effective value (undefined defaults to true)
+  const currentValue = options.jsonData.enableUserAttribution ?? true
+  // Toggle to the opposite value
+  const newValue = !currentValue
   const jsonData = {
     ...options.jsonData,
-    enableUserAttribution: !currentValue,
+    enableUserAttribution: newValue,
   }
   onOptionsChange({...options, jsonData})
 }

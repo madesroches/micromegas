@@ -1,7 +1,7 @@
 import React, {useEffect, useState} from 'react'
 import {InlineSwitch, FieldSet, InlineField, SecretInput, Input, Select, InlineFieldRow, InlineLabel} from '@grafana/ui'
 import {DataSourcePluginOptionsEditorProps, SelectableValue} from '@grafana/data'
-import {FlightSQLDataSourceOptions, authTypeOptions, SecureJsonData} from '../types'
+import {FlightSQLDataSourceOptions, authTypeOptions, SecureJsonData, getEnableUserAttribution} from '../types'
 import {
   onHostChange,
   onTokenChange,
@@ -203,7 +203,7 @@ export function ConfigEditor(props: DataSourcePluginOptionsEditorProps<FlightSQL
         >
           <InlineSwitch
             label=""
-            value={jsonData.enableUserAttribution !== false}
+            value={getEnableUserAttribution(jsonData)}
             onChange={() => onEnableUserAttributionChange(options, onOptionsChange)}
             showLabel={false}
             disabled={false}

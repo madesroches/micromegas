@@ -58,10 +58,11 @@ func NewOAuthTokenManager(issuer, clientID, clientSecret, audience string) (*OAu
 func (m *OAuthTokenManager) GetToken(ctx context.Context) (string, error) {
 	token, err := m.tokenSource.Token()
 	if err != nil {
+		logErrorf("OAuth token fetch failed: %v", err)
 		return "", fmt.Errorf("failed to get OAuth token: %w", err)
 	}
 
-	// Note: No logging here - this is called on every query (hot path)
+	// Note: No success logging here - this is called on every query (hot path)
 	// Token caching and refresh are handled automatically by oauth2 library
 
 	return token.AccessToken, nil

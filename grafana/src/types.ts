@@ -38,7 +38,18 @@ export interface FlightSQLDataSourceOptions extends DataSourceJsonData {
   oauthAudience?: string         // Optional, for Auth0/Azure AD
 
   // Privacy Settings
-  enableUserAttribution?: boolean // Enable sending user info to FlightSQL server (default: true)
+  enableUserAttribution?: boolean // Enable sending user info to FlightSQL server
+}
+
+// Default values for privacy settings
+export const DEFAULT_ENABLE_USER_ATTRIBUTION = true
+
+/**
+ * Get the effective value for enableUserAttribution with explicit default handling.
+ * Returns true if undefined (default), otherwise returns the explicit value.
+ */
+export function getEnableUserAttribution(jsonData: FlightSQLDataSourceOptions): boolean {
+  return jsonData.enableUserAttribution ?? DEFAULT_ENABLE_USER_ATTRIBUTION
 }
 
 export interface SecureJsonData {
