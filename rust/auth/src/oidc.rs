@@ -79,7 +79,7 @@ impl JwksCache {
 /// Configuration for a single OIDC issuer
 #[derive(Debug, Clone, Deserialize)]
 pub struct OidcIssuer {
-    /// Issuer URL (e.g., "https://accounts.google.com")
+    /// Issuer URL (e.g., <https://accounts.google.com>)
     pub issuer: String,
     /// Expected audience (client ID)
     pub audience: String,

@@ -35,7 +35,7 @@ We welcome code contributions! If you'd like to contribute code, please follow t
 
 ## Development Setup
 
-For information on setting up your local development environment, please refer to the [GETTING_STARTED.md](./GETTING_STARTED.md) guide.
+For information on setting up your local development environment, please refer to the [Getting Started](https://madesroches.github.io/micromegas/docs/getting-started/) guide.
 
 ## Monorepo Structure
 
