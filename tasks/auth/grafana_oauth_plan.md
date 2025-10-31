@@ -937,7 +937,7 @@ Add OAuth configuration section:
 
 All core functionality implemented and tested with Auth0. Code review identified critical issues - now addressing them systematically before production deployment.
 
-**Progress**: 2 of 5 production blockers completed (HTTP timeout, automated tests - 2025-10-31)
+**Progress**: 3 of 5 production blockers completed (HTTP timeout, automated tests, go.mod fix - 2025-10-31)
 
 ## Implementation Checklist
 
@@ -968,15 +968,16 @@ All core functionality implemented and tested with Auth0. Code review identified
   - [x] Update environment configuration with `MICROMEGAS_OIDC_AUDIENCE`
   - [x] Fix FlightSQL server telemetry ingestion
 
-- [x] **Testing** ✅ VERIFIED
+- [x] **Testing** ✅ COMPLETE (2025-10-31)
   - [x] Manual testing with Auth0 ✅ Working
   - [x] User attribution testing ✅ Verified in logs
   - [x] Token caching ✅ Working (automatic via oauth2 library)
   - [x] Ingestion with OAuth ✅ Fixed and working
-  - [ ] Unit tests for OAuth token manager (Go) - Not critical for MVP
-  - [ ] Integration tests with mock OIDC - Not critical for MVP
+  - [x] Unit tests for OAuth token manager (Go) ✅ 20 comprehensive test cases
+  - [x] Integration tests with mock OIDC ✅ Included in test suite
+  - [x] Error scenario tests ✅ Network failures, timeouts, invalid credentials
+  - [x] Backward compatibility testing ✅ All auth methods validated
   - [ ] Manual testing with Google OAuth - Can test when needed
-  - [ ] Backward compatibility testing - Can test when needed
   - [ ] Performance testing (token caching) - Appears performant
 
 - [ ] **Documentation** 🔶 TODO
@@ -1171,6 +1172,7 @@ User (admin@localhost)
 - `grafana/pkg/flightsql/query_data.go` - Added token refresh and user attribution headers
 - `grafana/pkg/flightsql/arrow_test.go` - **UPDATED (2025-10-31)**: Fixed format string issue
 - `grafana/go.mod` - Added `golang.org/x/oauth2` dependency
+  - **UPDATED (2025-10-31)**: Moved oauth2 to direct dependencies (removed // indirect)
 
 **FlightSQL Server**:
 - `rust/public/src/servers/flight_sql_service_impl.rs` - Added user attribution extraction and logging in query logs
