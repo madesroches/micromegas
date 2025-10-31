@@ -8,9 +8,10 @@ OAuth 2.0 client credentials authentication has been successfully implemented an
 - ✅ User attribution headers logged in query logs
 - ✅ Telemetry ingestion working with OAuth
 - ✅ HTTP timeout added to OIDC discovery (2025-10-31)
+- ✅ Automated tests for OAuth flow (2025-10-31)
 
-**Production Blockers**: 4 remaining (tests, go.mod, privacy controls, documentation)
-**Estimated Effort**: 5.5-7.5 hours remaining
+**Production Blockers**: 3 remaining (go.mod, privacy controls, documentation)
+**Estimated Effort**: 3.5-5.5 hours remaining
 
 ## Overview
 
@@ -935,7 +936,7 @@ Add OAuth configuration section:
 
 All core functionality implemented and tested with Auth0. Code review identified critical issues - now addressing them systematically before production deployment.
 
-**Progress**: 1 of 5 production blockers completed (HTTP timeout - 2025-10-31)
+**Progress**: 2 of 5 production blockers completed (HTTP timeout, automated tests - 2025-10-31)
 
 ## Implementation Checklist
 
@@ -995,12 +996,17 @@ All core functionality implemented and tested with Auth0. Code review identified
   - Prevents indefinite hanging if OIDC provider is slow/unresponsive
   - Files: `grafana/pkg/flightsql/oauth.go`
 
-- [ ] **Add automated tests for OAuth flow**
-  - Current: Only manual testing exists
-  - Need: Unit tests for OAuth token manager, error scenarios, token caching
-  - Need: Integration tests with mock OIDC provider
-  - Need: Backward compatibility tests
-  - Files: Create `grafana/pkg/flightsql/oauth_test.go`
+- [x] **Add automated tests for OAuth flow** ✅ COMPLETE (2025-10-31)
+  - Fixed: Comprehensive test suite with 20 test cases covering:
+    - OIDC discovery (success, errors, timeout, network failures)
+    - Token manager creation and configuration
+    - Token retrieval, caching, and refresh
+    - Error scenarios (invalid credentials, server errors)
+    - Configuration validation (all auth methods)
+    - Backward compatibility with existing auth methods
+    - Thread safety and concurrent access
+  - Files: `grafana/pkg/flightsql/oauth_test.go` (new, 698 lines)
+  - Also fixed: Format string issues in `flightsql.go:171` and `arrow_test.go:319`
 
 - [ ] **Fix go.mod dependency declaration** (`grafana/go.mod:103`)
   - Current: `golang.org/x/oauth2 v0.32.0 // indirect`
@@ -1041,13 +1047,6 @@ All core functionality implemented and tested with Auth0. Code review identified
   - Fix: Clear `oauthIssuer`, `oauthClientId`, `oauthAudience`, `oauthClientSecret` when switching
   - Files: `grafana/src/components/utils.ts`
 
-- [ ] **Add comprehensive error scenario tests**
-  - Test network failures during token fetch
-  - Test invalid OIDC issuer URLs
-  - Test token expiry and refresh
-  - Test partial OAuth configuration
-  - Files: Create test files
-
 ### 🔵 Nice to Have - Can Fix Iteratively
 
 - [ ] **Fix Go naming conventions** (`grafana/pkg/flightsql/oauth.go:23`)
@@ -1084,11 +1083,11 @@ All core functionality implemented and tested with Auth0. Code review identified
 
 ### Production Readiness Status
 
-**Estimated Effort to Production-Ready**: 5.5-7.5 hours (was 6-8 hours)
+**Estimated Effort to Production-Ready**: 3.5-5.5 hours (was 5.5-7.5 hours)
 
 **Priority Order**:
 1. ~~Add HTTP timeout (30 min)~~ ✅ COMPLETE (2025-10-31)
-2. Add automated tests (3-4 hours)
+2. ~~Add automated tests (3-4 hours)~~ ✅ COMPLETE (2025-10-31)
 3. Fix go.mod dependency (5 min)
 4. Add privacy controls for user attribution (1 hour)
 5. Complete documentation (2-3 hours)
@@ -1098,11 +1097,15 @@ All core functionality implemented and tested with Auth0. Code review identified
 - User attribution privacy (always-on, no consent)
 - Need explicit certificate validation documentation
 
-**Testing Completeness**: ❌ INSUFFICIENT
-- Manual testing only
-- No unit tests for OAuth manager
-- No integration tests with mock OIDC
-- No error handling tests
+**Testing Completeness**: ✅ COMPREHENSIVE
+- ✅ 20 automated test cases covering all OAuth functionality
+- ✅ Unit tests for OAuth token manager
+- ✅ Integration tests with mock OIDC provider
+- ✅ Error scenario tests (network failures, timeouts, invalid credentials)
+- ✅ Configuration validation tests
+- ✅ Backward compatibility tests
+- ✅ Thread safety and concurrency tests
+- ✅ Token caching verification
 
 ## Implementation Summary
 
@@ -1161,9 +1164,12 @@ User (admin@localhost)
 - `grafana/src/components/ConfigEditor.tsx` - Added OAuth configuration UI
 - `grafana/src/components/utils.ts` - Added OAuth handler functions
 - `grafana/pkg/flightsql/flightsql.go` - Added OAuth config struct, validation, and initialization
+  - **UPDATED (2025-10-31)**: Fixed format string issue in Dispose method
 - `grafana/pkg/flightsql/oauth.go` - **NEW**: OAuth token manager implementation
   - **UPDATED (2025-10-31)**: Added 10-second HTTP timeout to OIDC discovery
+- `grafana/pkg/flightsql/oauth_test.go` - **NEW (2025-10-31)**: Comprehensive test suite with 20 test cases
 - `grafana/pkg/flightsql/query_data.go` - Added token refresh and user attribution headers
+- `grafana/pkg/flightsql/arrow_test.go` - **UPDATED (2025-10-31)**: Fixed format string issue
 - `grafana/go.mod` - Added `golang.org/x/oauth2` dependency
 
 **FlightSQL Server**:
@@ -1199,8 +1205,8 @@ This shows:
 6. ❌ Complete setup documentation (TODO - BLOCKING PRODUCTION)
 7. ✅ Backward compatible with all existing datasources
 8. ✅ **User attribution**: FlightSQL server logs show username/email of end users from any client
-9. ❌ Automated tests (NONE - BLOCKING PRODUCTION)
-10. ❌ Production security review passed (HTTP timeout missing, privacy controls needed)
+9. ✅ Automated tests (20 comprehensive test cases covering all OAuth functionality - 2025-10-31)
+10. 🟡 Production security review (HTTP timeout fixed, tests complete, privacy controls still needed)
 
 ## Security Considerations
 
@@ -1244,13 +1250,13 @@ This shows:
 | 5 | Testing & debugging | 2-3 hours | ~1 hour |
 | 6 | Documentation | 2-3 hours | TODO |
 | 7 | Code review | Not in original plan | Done |
-| 8 | Production hardening | Not in original plan | 5.5-7.5 hours (IN PROGRESS) |
+| 8 | Production hardening | Not in original plan | 3.5-5.5 hours (IN PROGRESS) |
 | 8a | - HTTP timeout fix | | 30 min (DONE 2025-10-31) |
-| 8b | - Automated tests | | TODO (3-4 hours) |
+| 8b | - Automated tests | | ~2 hours (DONE 2025-10-31) |
 | 8c | - go.mod fix | | TODO (5 min) |
 | 8d | - Privacy controls | | TODO (1 hour) |
 | 8e | - Documentation | | TODO (2-3 hours) |
-| **Total** | | **9-13 hours** | **~6 hours (dev+hardening) + 5-7 hours remaining** |
+| **Total** | | **9-13 hours** | **~8 hours (dev+hardening) + 3.5-5.5 hours remaining** |
 
 **Note:** Using `golang.org/x/oauth2` significantly reduced implementation time. The library handles token caching, refresh, and thread safety automatically.
 
@@ -1263,19 +1269,19 @@ This shows:
 - Using official `golang.org/x/oauth2` library - good choice
 - Security practices mostly sound
 - ~~**CRITICAL**: HTTP timeout missing on OIDC discovery (DoS vector)~~ ✅ FIXED (2025-10-31)
-- **CRITICAL**: No automated tests (risky for production)
+- ~~**CRITICAL**: No automated tests (risky for production)~~ ✅ FIXED (2025-10-31)
 - **IMPORTANT**: User attribution privacy concerns (no opt-out, GDPR)
 - **IMPORTANT**: Token refresh called on every query (performance overhead)
 - go.mod dependency incorrectly marked as indirect
 
-**Production Blockers** (4 remaining of 5 items):
+**Production Blockers** (3 remaining of 5 items):
 1. ~~Add HTTP timeout to OIDC discovery~~ ✅ COMPLETE (2025-10-31)
-2. Add automated tests for OAuth flow
+2. ~~Add automated tests for OAuth flow~~ ✅ COMPLETE (2025-10-31)
 3. Fix go.mod dependency declaration
 4. Add user attribution privacy controls
 5. Complete documentation
 
-**Estimated Effort to Production-Ready**: 5.5-7.5 hours (was 6-8 hours)
+**Estimated Effort to Production-Ready**: 3.5-5.5 hours (was 5.5-7.5 hours)
 
 See "Production Readiness Checklist" section above for complete list of issues and fixes.
 

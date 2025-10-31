@@ -168,7 +168,7 @@ func NewDatasource(ctx context.Context, settings backend.DataSourceInstanceSetti
 // Dispose cleans up before we are reaped.
 func (d *FlightSQLDatasource) Dispose() {
 	if err := d.client.Close(); err != nil {
-		logErrorf(err.Error())
+		logErrorf("%s", err.Error())
 	}
 }
 
