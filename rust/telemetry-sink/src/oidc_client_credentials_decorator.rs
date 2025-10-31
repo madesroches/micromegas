@@ -61,11 +61,21 @@ impl OidcClientCredentialsDecorator {
 
         let audience = std::env::var("MICROMEGAS_OIDC_AUDIENCE").ok();
 
-        Ok(Self::new(token_endpoint, client_id, client_secret, audience))
+        Ok(Self::new(
+            token_endpoint,
+            client_id,
+            client_secret,
+            audience,
+        ))
     }
 
     /// Create with explicit credentials
-    pub fn new(token_endpoint: String, client_id: String, client_secret: String, audience: Option<String>) -> Self {
+    pub fn new(
+        token_endpoint: String,
+        client_id: String,
+        client_secret: String,
+        audience: Option<String>,
+    ) -> Self {
         Self {
             token_endpoint,
             client_id,

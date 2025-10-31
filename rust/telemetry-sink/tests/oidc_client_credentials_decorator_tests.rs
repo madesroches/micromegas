@@ -7,6 +7,7 @@ fn test_decorator_creation() {
         "https://example.com/token".to_string(),
         "test-client".to_string(),
         "test-secret".to_string(),
+        None,
     );
     // If we get here without panicking, the test passes
 }
