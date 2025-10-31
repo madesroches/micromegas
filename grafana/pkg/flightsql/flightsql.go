@@ -31,6 +31,15 @@ type config struct {
 	Username string              `json:"username"`
 	Password string              `json:"password"`
 	Token    string              `json:"token"`
+
+	// OAuth 2.0 Client Credentials
+	OAuthIssuer       string `json:"oauthIssuer"`
+	OAuthClientID     string `json:"oauthClientId"`
+	OAuthClientSecret string `json:"oauthClientSecret"` // Populated from DecryptedSecureJSONData
+	OAuthAudience     string `json:"oauthAudience"`
+
+	// Privacy Settings
+	EnableUserAttribution *bool `json:"enableUserAttribution"` // Pointer to distinguish unset (nil=default true) from explicit false
 }
 
 func (cfg config) validate() error {
@@ -38,12 +47,33 @@ func (cfg config) validate() error {
 		return fmt.Errorf(`server address must be in the form "host:port"`)
 	}
 
+	// Validate OAuth configuration: all fields must be present or all must be empty
+	hasOAuthIssuer := len(cfg.OAuthIssuer) > 0
+	hasOAuthClientID := len(cfg.OAuthClientID) > 0
+	hasOAuthClientSecret := len(cfg.OAuthClientSecret) > 0
+	oauthFieldCount := 0
+	if hasOAuthIssuer {
+		oauthFieldCount++
+	}
+	if hasOAuthClientID {
+		oauthFieldCount++
+	}
+	if hasOAuthClientSecret {
+		oauthFieldCount++
+	}
+
+	// Check for partial OAuth configuration
+	if oauthFieldCount > 0 && oauthFieldCount < 3 {
+		return fmt.Errorf("OAuth configuration incomplete: issuer, client ID, and client secret are all required")
+	}
+
 	noToken := len(cfg.Token) == 0
 	noUserPass := len(cfg.Username) == 0 || len(cfg.Password) == 0
+	noOAuth := oauthFieldCount == 0
 
-	// if not secure don't make users supply a token
-	if noToken && noUserPass && cfg.Secure {
-		return fmt.Errorf("token or username/password are required")
+	// if secure, require some form of auth
+	if noToken && noUserPass && noOAuth && cfg.Secure {
+		return fmt.Errorf("token, username/password, or OAuth credentials are required")
 	}
 
 	return nil
@@ -51,9 +81,11 @@ func (cfg config) validate() error {
 
 // FlightSQLDatasource is a Grafana datasource plugin for Flight SQL.
 type FlightSQLDatasource struct {
-	client          *client
-	resourceHandler backend.CallResourceHandler
-	md              metadata.MD
+	client                *client
+	resourceHandler       backend.CallResourceHandler
+	md                    metadata.MD
+	oauthMgr              *OAuthTokenManager // OAuth token manager
+	enableUserAttribution bool               // Whether to send user identity headers (default: true)
 }
 
 // NewDatasource creates a new datasource instance.
@@ -71,6 +103,11 @@ func NewDatasource(ctx context.Context, settings backend.DataSourceInstanceSetti
 
 	if password, exists := settings.DecryptedSecureJSONData["password"]; exists {
 		cfg.Password = password
+	}
+
+	// Read OAuth client secret from encrypted storage
+	if oauthSecret, exists := settings.DecryptedSecureJSONData["oauthClientSecret"]; exists {
+		cfg.OAuthClientSecret = oauthSecret
 	}
 
 	if err := cfg.validate(); err != nil {
@@ -107,9 +144,35 @@ func NewDatasource(ctx context.Context, settings backend.DataSourceInstanceSetti
 		md.Set("Authorization", fmt.Sprintf("Bearer %s", cfg.Token))
 	}
 
+	// Handle OAuth 2.0 client credentials
+	var oauthMgr *OAuthTokenManager
+	if cfg.OAuthIssuer != "" && cfg.OAuthClientID != "" && cfg.OAuthClientSecret != "" {
+		oauthMgr, err = NewOAuthTokenManager(
+			cfg.OAuthIssuer,
+			cfg.OAuthClientID,
+			cfg.OAuthClientSecret,
+			cfg.OAuthAudience,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("oauth initialization: %v", err)
+		}
+
+		// Use lazy initialization - token will be fetched on first query
+		// This prevents blocking datasource creation if token endpoint is slow/unavailable
+		logInfof("OAuth authentication configured (token will be fetched on first query)")
+	}
+
+	// Determine user attribution setting (default: true if not specified)
+	enableUserAttribution := true
+	if cfg.EnableUserAttribution != nil {
+		enableUserAttribution = *cfg.EnableUserAttribution
+	}
+
 	ds := &FlightSQLDatasource{
-		client: client,
-		md:     md,
+		client:                client,
+		md:                    md,
+		oauthMgr:              oauthMgr,
+		enableUserAttribution: enableUserAttribution,
 	}
 	r := chi.NewRouter()
 	r.Use(recoverer)
@@ -129,7 +192,7 @@ func NewDatasource(ctx context.Context, settings backend.DataSourceInstanceSetti
 // Dispose cleans up before we are reaped.
 func (d *FlightSQLDatasource) Dispose() {
 	if err := d.client.Close(); err != nil {
-		logErrorf(err.Error())
+		logErrorf("%s", err.Error())
 	}
 }
 

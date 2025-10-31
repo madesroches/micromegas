@@ -316,7 +316,7 @@ func TestNewFrame(t *testing.T) {
 		},
 	}
 	if !cmp.Equal(expected, actual, cmp.Comparer(cmpFrame)) {
-		log.Fatalf(cmp.Diff(expected, actual))
+		log.Fatalf("%s", cmp.Diff(expected, actual))
 	}
 }
 

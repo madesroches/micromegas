@@ -141,23 +141,29 @@ export const onPasswordChange = (event: any, options: any, onOptionsChange: any)
 export const onAuthTypeChange = (selectedAuthType: any, options: any, onOptionsChange: any) => {
   const notTokenType =  selectedAuthType?.label !== "token"
   const notPassType = selectedAuthType?.label !== "username/password"
+  const notOAuthType = selectedAuthType?.label !== "oauth2"
 
   onOptionsChange({
     ...options,
     jsonData: {
       ...options.jsonData,
       selectedAuthType: selectedAuthType?.label,
-      username: notPassType && '',
+      username: notPassType ? '' : options.jsonData.username,
+      oauthIssuer: notOAuthType ? '' : options.jsonData.oauthIssuer,
+      oauthClientId: notOAuthType ? '' : options.jsonData.oauthClientId,
+      oauthAudience: notOAuthType ? '' : options.jsonData.oauthAudience,
     },
     secureJsonFields: {
       ...options.secureJsonFields,
-      token: notTokenType && false,
-      password: notPassType && false,
+      token: notTokenType ? false : options.secureJsonFields.token,
+      password: notPassType ? false : options.secureJsonFields.password,
+      oauthClientSecret: notOAuthType ? false : options.secureJsonFields.oauthClientSecret,
     },
     secureJsonData: {
       ...options.secureJsonData,
-      token: notTokenType && '',
-      password: notPassType && '',
+      token: notTokenType ? '' : options.secureJsonData.token,
+      password: notPassType ? '' : options.secureJsonData.password,
+      oauthClientSecret: notOAuthType ? '' : options.secureJsonData.oauthClientSecret,
     },
   })
 }
@@ -245,4 +251,64 @@ export const onResetPassword = (options: any, onOptionsChange: any) => {
 
 export const removeQuotes = (str: string) => {
   return str?.replace(/['"]+/g, '')
+}
+
+// OAuth 2.0 handler functions
+export const onOAuthIssuerChange = (event: any, options: any, onOptionsChange: any) => {
+  const jsonData = {
+    ...options.jsonData,
+    oauthIssuer: event.target.value,
+  }
+  onOptionsChange({...options, jsonData})
+}
+
+export const onOAuthClientIdChange = (event: any, options: any, onOptionsChange: any) => {
+  const jsonData = {
+    ...options.jsonData,
+    oauthClientId: event.target.value,
+  }
+  onOptionsChange({...options, jsonData})
+}
+
+export const onOAuthAudienceChange = (event: any, options: any, onOptionsChange: any) => {
+  const jsonData = {
+    ...options.jsonData,
+    oauthAudience: event.target.value,
+  }
+  onOptionsChange({...options, jsonData})
+}
+
+export const onOAuthClientSecretChange = (event: any, options: any, onOptionsChange: any) => {
+  const secureJsonData = {
+    ...options.secureJsonData,
+    oauthClientSecret: event?.target?.value || '',
+  }
+  onOptionsChange({...options, secureJsonData})
+}
+
+export const onResetOAuthClientSecret = (options: any, onOptionsChange: any) => {
+  onOptionsChange({
+    ...options,
+    secureJsonFields: {
+      ...options.secureJsonFields,
+      oauthClientSecret: false,
+    },
+    secureJsonData: {
+      ...options.secureJsonData,
+      oauthClientSecret: '',
+    },
+  })
+}
+
+// Privacy settings handler
+export const onEnableUserAttributionChange = (options: any, onOptionsChange: any) => {
+  // Get the current effective value (undefined defaults to true)
+  const currentValue = options.jsonData.enableUserAttribution ?? true
+  // Toggle to the opposite value
+  const newValue = !currentValue
+  const jsonData = {
+    ...options.jsonData,
+    enableUserAttribution: newValue,
+  }
+  onOptionsChange({...options, jsonData})
 }

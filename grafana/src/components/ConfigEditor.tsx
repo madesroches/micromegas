@@ -1,7 +1,7 @@
 import React, {useEffect, useState} from 'react'
 import {InlineSwitch, FieldSet, InlineField, SecretInput, Input, Select, InlineFieldRow, InlineLabel} from '@grafana/ui'
 import {DataSourcePluginOptionsEditorProps, SelectableValue} from '@grafana/data'
-import {FlightSQLDataSourceOptions, authTypeOptions, SecureJsonData} from '../types'
+import {FlightSQLDataSourceOptions, authTypeOptions, SecureJsonData, getEnableUserAttribution} from '../types'
 import {
   onHostChange,
   onTokenChange,
@@ -15,7 +15,18 @@ import {
   removeMetaData,
   onResetToken,
   onResetPassword,
+  onOAuthIssuerChange,
+  onOAuthClientIdChange,
+  onOAuthClientSecretChange,
+  onOAuthAudienceChange,
+  onResetOAuthClientSecret,
+  onEnableUserAttributionChange,
 } from './utils'
+
+// UI dimension constants
+const LABEL_WIDTH = 20
+const INPUT_WIDTH = 40
+const FIELDSET_WIDTH = 400
 
 export function ConfigEditor(props: DataSourcePluginOptionsEditorProps<FlightSQLDataSourceOptions, SecureJsonData>) {
   const {options, onOptionsChange} = props
@@ -46,10 +57,10 @@ export function ConfigEditor(props: DataSourcePluginOptionsEditorProps<FlightSQL
 
   return (
     <div>
-      <FieldSet label="FlightSQL Connection" width={400}>
-        <InlineField labelWidth={20} label="Host:Port">
+      <FieldSet label="FlightSQL Connection" width={FIELDSET_WIDTH}>
+        <InlineField labelWidth={LABEL_WIDTH} label="Host:Port">
           <Input
-            width={40}
+            width={INPUT_WIDTH}
             name="host"
             type="text"
             value={jsonData.host || ''}
@@ -57,20 +68,20 @@ export function ConfigEditor(props: DataSourcePluginOptionsEditorProps<FlightSQL
             onChange={(e) => onHostChange(e, options, onOptionsChange)}
           ></Input>
         </InlineField>
-        <InlineField labelWidth={20} label="Auth Type">
+        <InlineField labelWidth={LABEL_WIDTH} label="Auth Type">
           <Select
             options={authTypeOptions}
             onChange={setAuthType}
             value={selectedAuthType || ''}
             allowCustomValue={true}
-            width={40}
+            width={INPUT_WIDTH}
             placeholder="token"
           />
         </InlineField>
         {selectedAuthType?.label === 'token' && (
-          <InlineField labelWidth={20} label="Token">
+          <InlineField labelWidth={LABEL_WIDTH} label="Token">
             <SecretInput
-              width={40}
+              width={INPUT_WIDTH}
               name="token"
               type="text"
               value={secureJsonData?.token || ''}
@@ -83,9 +94,9 @@ export function ConfigEditor(props: DataSourcePluginOptionsEditorProps<FlightSQL
         )}
         {selectedAuthType?.label === 'username/password' && (
           <InlineFieldRow style={{flexFlow: 'row'}}>
-            <InlineField labelWidth={20} label="Username">
+            <InlineField labelWidth={LABEL_WIDTH} label="Username">
               <Input
-                width={40}
+                width={INPUT_WIDTH}
                 name="username"
                 type="text"
                 placeholder="username"
@@ -93,9 +104,9 @@ export function ConfigEditor(props: DataSourcePluginOptionsEditorProps<FlightSQL
                 value={jsonData.username || ''}
               ></Input>
             </InlineField>
-            <InlineField labelWidth={20} label="Password">
+            <InlineField labelWidth={LABEL_WIDTH} label="Password">
               <SecretInput
-                width={40}
+                width={INPUT_WIDTH}
                 name="password"
                 type="text"
                 value={secureJsonData?.password || ''}
@@ -107,8 +118,74 @@ export function ConfigEditor(props: DataSourcePluginOptionsEditorProps<FlightSQL
             </InlineField>
           </InlineFieldRow>
         )}
+        {selectedAuthType?.value === 'oauth2' && (
+          <>
+            <InlineField
+              labelWidth={LABEL_WIDTH}
+              label="OIDC Issuer"
+              tooltip="Identity provider URL (e.g., https://accounts.google.com)"
+            >
+              <Input
+                width={INPUT_WIDTH}
+                name="oauthIssuer"
+                type="text"
+                value={jsonData.oauthIssuer || ''}
+                placeholder="https://accounts.google.com"
+                onChange={(e) => onOAuthIssuerChange(e, options, onOptionsChange)}
+              />
+            </InlineField>
 
-        <InlineField labelWidth={20} label="Require TLS / SSL">
+            <InlineField labelWidth={LABEL_WIDTH} label="Client ID">
+              <Input
+                width={INPUT_WIDTH}
+                name="oauthClientId"
+                type="text"
+                value={jsonData.oauthClientId || ''}
+                placeholder="service@project.iam.gserviceaccount.com"
+                onChange={(e) => onOAuthClientIdChange(e, options, onOptionsChange)}
+              />
+            </InlineField>
+
+            <InlineField labelWidth={LABEL_WIDTH} label="Client Secret">
+              <SecretInput
+                width={INPUT_WIDTH}
+                name="oauthClientSecret"
+                type="text"
+                value={secureJsonData?.oauthClientSecret || ''}
+                placeholder="****************"
+                onChange={(e) => onOAuthClientSecretChange(e, options, onOptionsChange)}
+                onReset={() => onResetOAuthClientSecret(options, onOptionsChange)}
+                isConfigured={secureJsonFields?.oauthClientSecret}
+              />
+            </InlineField>
+
+            <InlineField
+              labelWidth={LABEL_WIDTH}
+              label="Audience (optional)"
+              tooltip="Required for Auth0 and Azure AD"
+            >
+              <Input
+                width={INPUT_WIDTH}
+                name="oauthAudience"
+                type="text"
+                value={jsonData.oauthAudience || ''}
+                placeholder="https://api.micromegas.example.com"
+                onChange={(e) => onOAuthAudienceChange(e, options, onOptionsChange)}
+              />
+            </InlineField>
+
+            <InlineFieldRow>
+              <InlineField>
+                <span className="help-text">
+                  OAuth 2.0 client credentials flow for service accounts.
+                  Credentials managed by identity provider (Google, Auth0, Azure AD, Okta).
+                </span>
+              </InlineField>
+            </InlineFieldRow>
+          </>
+        )}
+
+        <InlineField labelWidth={LABEL_WIDTH} label="Require TLS / SSL">
           <InlineSwitch
             label=""
             value={jsonData.secure}
@@ -118,13 +195,36 @@ export function ConfigEditor(props: DataSourcePluginOptionsEditorProps<FlightSQL
           />
         </InlineField>
       </FieldSet>
-      <FieldSet label="MetaData" width={400}>
+      <FieldSet label="Privacy Settings" width={FIELDSET_WIDTH}>
+        <InlineField
+          labelWidth={LABEL_WIDTH}
+          label="Enable User Attribution"
+          tooltip="Send user identity (username, email) to FlightSQL server for audit logging. Disable for GDPR compliance if needed."
+        >
+          <InlineSwitch
+            label=""
+            value={getEnableUserAttribution(jsonData)}
+            onChange={() => onEnableUserAttributionChange(options, onOptionsChange)}
+            showLabel={false}
+            disabled={false}
+          />
+        </InlineField>
+        <InlineFieldRow>
+          <InlineField>
+            <span className="help-text">
+              When enabled (default), Grafana user information is sent to the FlightSQL server for audit logging and attribution.
+              This helps track which users are running queries. Disable if GDPR or privacy policies prohibit sending user data.
+            </span>
+          </InlineField>
+        </InlineFieldRow>
+      </FieldSet>
+      <FieldSet label="MetaData" width={FIELDSET_WIDTH}>
         {metaDataArr?.map((_: any, i: any) => (
           <InlineFieldRow key={i} style={{flexFlow: 'row'}}>
-            <InlineField labelWidth={20} label="Key">
+            <InlineField labelWidth={LABEL_WIDTH} label="Key">
               <Input
                 key={i}
-                width={40}
+                width={INPUT_WIDTH}
                 name="key"
                 type="text"
                 value={metaDataArr[i]?.key || ''}
@@ -132,10 +232,10 @@ export function ConfigEditor(props: DataSourcePluginOptionsEditorProps<FlightSQL
                 onChange={(e) => onKeyChange(e, metaDataArr, i, setMetaData)}
               ></Input>
             </InlineField>
-            <InlineField labelWidth={20} label="Value">
+            <InlineField labelWidth={LABEL_WIDTH} label="Value">
               <Input
                 key={i}
-                width={40}
+                width={INPUT_WIDTH}
                 name="value"
                 type="text"
                 value={metaDataArr[i]?.value || ''}
