@@ -21,7 +21,7 @@ type OAuthTokenManager struct {
 
 // NewOAuthTokenManager creates a new OAuth token manager
 // The oauth2 library handles caching and automatic token refresh
-func NewOAuthTokenManager(issuer, clientId, clientSecret, audience string) (*OAuthTokenManager, error) {
+func NewOAuthTokenManager(issuer, clientID, clientSecret, audience string) (*OAuthTokenManager, error) {
 	// Discover token endpoint from OIDC provider
 	tokenEndpoint, err := discoverTokenEndpoint(issuer)
 	if err != nil {
@@ -30,7 +30,7 @@ func NewOAuthTokenManager(issuer, clientId, clientSecret, audience string) (*OAu
 
 	// Configure client credentials flow
 	config := &clientcredentials.Config{
-		ClientID:     clientId,
+		ClientID:     clientID,
 		ClientSecret: clientSecret,
 		TokenURL:     tokenEndpoint,
 	}

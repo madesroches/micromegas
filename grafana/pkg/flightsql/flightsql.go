@@ -34,7 +34,7 @@ type config struct {
 
 	// OAuth 2.0 Client Credentials
 	OAuthIssuer       string `json:"oauthIssuer"`
-	OAuthClientId     string `json:"oauthClientId"`
+	OAuthClientID     string `json:"oauthClientId"`
 	OAuthClientSecret string `json:"oauthClientSecret"` // Populated from DecryptedSecureJSONData
 	OAuthAudience     string `json:"oauthAudience"`
 
@@ -47,9 +47,29 @@ func (cfg config) validate() error {
 		return fmt.Errorf(`server address must be in the form "host:port"`)
 	}
 
+	// Validate OAuth configuration: all fields must be present or all must be empty
+	hasOAuthIssuer := len(cfg.OAuthIssuer) > 0
+	hasOAuthClientID := len(cfg.OAuthClientID) > 0
+	hasOAuthClientSecret := len(cfg.OAuthClientSecret) > 0
+	oauthFieldCount := 0
+	if hasOAuthIssuer {
+		oauthFieldCount++
+	}
+	if hasOAuthClientID {
+		oauthFieldCount++
+	}
+	if hasOAuthClientSecret {
+		oauthFieldCount++
+	}
+
+	// Check for partial OAuth configuration
+	if oauthFieldCount > 0 && oauthFieldCount < 3 {
+		return fmt.Errorf("OAuth configuration incomplete: issuer, client ID, and client secret are all required")
+	}
+
 	noToken := len(cfg.Token) == 0
 	noUserPass := len(cfg.Username) == 0 || len(cfg.Password) == 0
-	noOAuth := len(cfg.OAuthIssuer) == 0 || len(cfg.OAuthClientId) == 0 || len(cfg.OAuthClientSecret) == 0
+	noOAuth := oauthFieldCount == 0
 
 	// if secure, require some form of auth
 	if noToken && noUserPass && noOAuth && cfg.Secure {
@@ -65,7 +85,7 @@ type FlightSQLDatasource struct {
 	resourceHandler       backend.CallResourceHandler
 	md                    metadata.MD
 	oauthMgr              *OAuthTokenManager // OAuth token manager
-	enableUserAttribution bool                      // Whether to send user identity headers (default: true)
+	enableUserAttribution bool               // Whether to send user identity headers (default: true)
 }
 
 // NewDatasource creates a new datasource instance.
@@ -126,10 +146,10 @@ func NewDatasource(ctx context.Context, settings backend.DataSourceInstanceSetti
 
 	// Handle OAuth 2.0 client credentials
 	var oauthMgr *OAuthTokenManager
-	if cfg.OAuthIssuer != "" && cfg.OAuthClientId != "" && cfg.OAuthClientSecret != "" {
+	if cfg.OAuthIssuer != "" && cfg.OAuthClientID != "" && cfg.OAuthClientSecret != "" {
 		oauthMgr, err = NewOAuthTokenManager(
 			cfg.OAuthIssuer,
-			cfg.OAuthClientId,
+			cfg.OAuthClientID,
 			cfg.OAuthClientSecret,
 			cfg.OAuthAudience,
 		)

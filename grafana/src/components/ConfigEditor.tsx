@@ -23,6 +23,11 @@ import {
   onEnableUserAttributionChange,
 } from './utils'
 
+// UI dimension constants
+const LABEL_WIDTH = 20
+const INPUT_WIDTH = 40
+const FIELDSET_WIDTH = 400
+
 export function ConfigEditor(props: DataSourcePluginOptionsEditorProps<FlightSQLDataSourceOptions, SecureJsonData>) {
   const {options, onOptionsChange} = props
   const {jsonData} = options
@@ -52,10 +57,10 @@ export function ConfigEditor(props: DataSourcePluginOptionsEditorProps<FlightSQL
 
   return (
     <div>
-      <FieldSet label="FlightSQL Connection" width={400}>
-        <InlineField labelWidth={20} label="Host:Port">
+      <FieldSet label="FlightSQL Connection" width={FIELDSET_WIDTH}>
+        <InlineField labelWidth={LABEL_WIDTH} label="Host:Port">
           <Input
-            width={40}
+            width={INPUT_WIDTH}
             name="host"
             type="text"
             value={jsonData.host || ''}
@@ -63,20 +68,20 @@ export function ConfigEditor(props: DataSourcePluginOptionsEditorProps<FlightSQL
             onChange={(e) => onHostChange(e, options, onOptionsChange)}
           ></Input>
         </InlineField>
-        <InlineField labelWidth={20} label="Auth Type">
+        <InlineField labelWidth={LABEL_WIDTH} label="Auth Type">
           <Select
             options={authTypeOptions}
             onChange={setAuthType}
             value={selectedAuthType || ''}
             allowCustomValue={true}
-            width={40}
+            width={INPUT_WIDTH}
             placeholder="token"
           />
         </InlineField>
         {selectedAuthType?.label === 'token' && (
-          <InlineField labelWidth={20} label="Token">
+          <InlineField labelWidth={LABEL_WIDTH} label="Token">
             <SecretInput
-              width={40}
+              width={INPUT_WIDTH}
               name="token"
               type="text"
               value={secureJsonData?.token || ''}
@@ -89,9 +94,9 @@ export function ConfigEditor(props: DataSourcePluginOptionsEditorProps<FlightSQL
         )}
         {selectedAuthType?.label === 'username/password' && (
           <InlineFieldRow style={{flexFlow: 'row'}}>
-            <InlineField labelWidth={20} label="Username">
+            <InlineField labelWidth={LABEL_WIDTH} label="Username">
               <Input
-                width={40}
+                width={INPUT_WIDTH}
                 name="username"
                 type="text"
                 placeholder="username"
@@ -99,9 +104,9 @@ export function ConfigEditor(props: DataSourcePluginOptionsEditorProps<FlightSQL
                 value={jsonData.username || ''}
               ></Input>
             </InlineField>
-            <InlineField labelWidth={20} label="Password">
+            <InlineField labelWidth={LABEL_WIDTH} label="Password">
               <SecretInput
-                width={40}
+                width={INPUT_WIDTH}
                 name="password"
                 type="text"
                 value={secureJsonData?.password || ''}
@@ -116,12 +121,12 @@ export function ConfigEditor(props: DataSourcePluginOptionsEditorProps<FlightSQL
         {selectedAuthType?.value === 'oauth2' && (
           <>
             <InlineField
-              labelWidth={20}
+              labelWidth={LABEL_WIDTH}
               label="OIDC Issuer"
               tooltip="Identity provider URL (e.g., https://accounts.google.com)"
             >
               <Input
-                width={40}
+                width={INPUT_WIDTH}
                 name="oauthIssuer"
                 type="text"
                 value={jsonData.oauthIssuer || ''}
@@ -130,9 +135,9 @@ export function ConfigEditor(props: DataSourcePluginOptionsEditorProps<FlightSQL
               />
             </InlineField>
 
-            <InlineField labelWidth={20} label="Client ID">
+            <InlineField labelWidth={LABEL_WIDTH} label="Client ID">
               <Input
-                width={40}
+                width={INPUT_WIDTH}
                 name="oauthClientId"
                 type="text"
                 value={jsonData.oauthClientId || ''}
@@ -141,9 +146,9 @@ export function ConfigEditor(props: DataSourcePluginOptionsEditorProps<FlightSQL
               />
             </InlineField>
 
-            <InlineField labelWidth={20} label="Client Secret">
+            <InlineField labelWidth={LABEL_WIDTH} label="Client Secret">
               <SecretInput
-                width={40}
+                width={INPUT_WIDTH}
                 name="oauthClientSecret"
                 type="text"
                 value={secureJsonData?.oauthClientSecret || ''}
@@ -155,12 +160,12 @@ export function ConfigEditor(props: DataSourcePluginOptionsEditorProps<FlightSQL
             </InlineField>
 
             <InlineField
-              labelWidth={20}
+              labelWidth={LABEL_WIDTH}
               label="Audience (optional)"
               tooltip="Required for Auth0 and Azure AD"
             >
               <Input
-                width={40}
+                width={INPUT_WIDTH}
                 name="oauthAudience"
                 type="text"
                 value={jsonData.oauthAudience || ''}
@@ -180,7 +185,7 @@ export function ConfigEditor(props: DataSourcePluginOptionsEditorProps<FlightSQL
           </>
         )}
 
-        <InlineField labelWidth={20} label="Require TLS / SSL">
+        <InlineField labelWidth={LABEL_WIDTH} label="Require TLS / SSL">
           <InlineSwitch
             label=""
             value={jsonData.secure}
@@ -190,9 +195,9 @@ export function ConfigEditor(props: DataSourcePluginOptionsEditorProps<FlightSQL
           />
         </InlineField>
       </FieldSet>
-      <FieldSet label="Privacy Settings" width={400}>
+      <FieldSet label="Privacy Settings" width={FIELDSET_WIDTH}>
         <InlineField
-          labelWidth={20}
+          labelWidth={LABEL_WIDTH}
           label="Enable User Attribution"
           tooltip="Send user identity (username, email) to FlightSQL server for audit logging. Disable for GDPR compliance if needed."
         >
@@ -213,13 +218,13 @@ export function ConfigEditor(props: DataSourcePluginOptionsEditorProps<FlightSQL
           </InlineField>
         </InlineFieldRow>
       </FieldSet>
-      <FieldSet label="MetaData" width={400}>
+      <FieldSet label="MetaData" width={FIELDSET_WIDTH}>
         {metaDataArr?.map((_: any, i: any) => (
           <InlineFieldRow key={i} style={{flexFlow: 'row'}}>
-            <InlineField labelWidth={20} label="Key">
+            <InlineField labelWidth={LABEL_WIDTH} label="Key">
               <Input
                 key={i}
-                width={40}
+                width={INPUT_WIDTH}
                 name="key"
                 type="text"
                 value={metaDataArr[i]?.key || ''}
@@ -227,10 +232,10 @@ export function ConfigEditor(props: DataSourcePluginOptionsEditorProps<FlightSQL
                 onChange={(e) => onKeyChange(e, metaDataArr, i, setMetaData)}
               ></Input>
             </InlineField>
-            <InlineField labelWidth={20} label="Value">
+            <InlineField labelWidth={LABEL_WIDTH} label="Value">
               <Input
                 key={i}
-                width={40}
+                width={INPUT_WIDTH}
                 name="value"
                 type="text"
                 value={metaDataArr[i]?.value || ''}

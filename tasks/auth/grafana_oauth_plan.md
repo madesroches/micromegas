@@ -15,7 +15,7 @@ OAuth 2.0 client credentials authentication has been successfully implemented an
 **Production Blockers**: 1 remaining (documentation only)
 **Estimated Effort**: 1-2 hours remaining (setup guides + security/privacy docs)
 **Security Review**: ✅ All critical and important issues resolved
-**Code Quality**: ✅ All important code quality issues resolved (auth clearing, logging)
+**Code Quality**: ✅ All important issues resolved + 3 nice-to-have improvements completed (Go naming, UI constants, config validation - 2025-10-31)
 
 ## Overview
 
@@ -1057,21 +1057,21 @@ All core functionality implemented and tested with Auth0. Code review identified
   - Worth doing: Only if profiling shows it's a bottleneck (unlikely)
   - Files: `grafana/pkg/flightsql/query_data.go`, `grafana/pkg/flightsql/flightsql.go`
 
-- [ ] **Fix Go naming conventions** (`grafana/pkg/flightsql/oauth.go:23`)
-  - Change `clientId` → `clientID` (Go convention for acronyms)
-  - Change `clientSecret` → `clientSecret` (already correct)
-  - Files: `grafana/pkg/flightsql/oauth.go`, `grafana/pkg/flightsql/flightsql.go`
+- [x] **Fix Go naming conventions** (`grafana/pkg/flightsql/oauth.go:23`) ✅ FIXED (2025-10-31)
+  - Fixed: Changed `clientId` → `clientID` (Go convention for acronyms)
+  - JSON tags remain `oauthClientId` for frontend compatibility
+  - Files: `grafana/pkg/flightsql/oauth.go`, `grafana/pkg/flightsql/flightsql.go`, `grafana/pkg/flightsql/oauth_test.go`
 
-- [ ] **Extract UI magic numbers to constants** (`grafana/src/components/ConfigEditor.tsx`)
-  - Current: `labelWidth={20}`, `width={40}` repeated throughout
-  - Fix: Create named constants for UI dimensions
+- [x] **Extract UI magic numbers to constants** (`grafana/src/components/ConfigEditor.tsx`) ✅ FIXED (2025-10-31)
+  - Fixed: Created named constants `LABEL_WIDTH=20`, `INPUT_WIDTH=40`, `FIELDSET_WIDTH=400`
+  - All hardcoded dimensions replaced with constants throughout the file
+  - Improves maintainability and consistency
   - Files: `grafana/src/components/ConfigEditor.tsx`
 
-
-- [ ] **Improve config validation** (`grafana/pkg/flightsql/flightsql.go:49`)
-  - Current: Doesn't validate that OAuth fields are all present or all absent
-  - Issue: Partial config (issuer + clientId but no secret) fails at runtime
-  - Fix: Add validation that OAuth fields are complete or all empty
+- [x] **Improve config validation** (`grafana/pkg/flightsql/flightsql.go:49`) ✅ FIXED (2025-10-31)
+  - Fixed: Added validation that OAuth fields are either all present or all empty
+  - Returns clear error: "OAuth configuration incomplete: issuer, client ID, and client secret are all required"
+  - Catches partial OAuth configuration at datasource creation instead of runtime
   - Files: `grafana/pkg/flightsql/flightsql.go`
 
 - [ ] **Remove unnecessary clone in Rust** (`rust/telemetry-sink/src/oidc_client_credentials_decorator.rs:88-92`)
@@ -1170,16 +1170,21 @@ User (admin@localhost)
   - **UPDATED (2025-10-31)**: Added enableUserAttribution privacy setting
 - `grafana/src/components/ConfigEditor.tsx` - Added OAuth configuration UI
   - **UPDATED (2025-10-31)**: Added "Privacy Settings" section with user attribution toggle
+  - **UPDATED (2025-10-31)**: Extracted UI magic numbers to named constants (LABEL_WIDTH, INPUT_WIDTH, FIELDSET_WIDTH)
 - `grafana/src/components/utils.ts` - Added OAuth handler functions
   - **UPDATED (2025-10-31)**: Added onEnableUserAttributionChange handler
   - **UPDATED (2025-10-31)**: Fixed auth credential clearing to clear all auth fields when switching types
 - `grafana/pkg/flightsql/flightsql.go` - Added OAuth config struct, validation, and initialization
   - **UPDATED (2025-10-31)**: Fixed format string issue in Dispose method
   - **UPDATED (2025-10-31)**: Added EnableUserAttribution field and logic
+  - **UPDATED (2025-10-31)**: Fixed Go naming convention (OAuthClientId → OAuthClientID)
+  - **UPDATED (2025-10-31)**: Enhanced config validation for partial OAuth configurations
 - `grafana/pkg/flightsql/oauth.go` - **NEW**: OAuth token manager implementation
   - **UPDATED (2025-10-31)**: Added 10-second HTTP timeout to OIDC discovery
   - **UPDATED (2025-10-31)**: Removed excessive logging from hot path
+  - **UPDATED (2025-10-31)**: Fixed Go naming convention (clientId → clientID parameter)
 - `grafana/pkg/flightsql/oauth_test.go` - **NEW (2025-10-31)**: Comprehensive test suite with 20 test cases
+  - **UPDATED (2025-10-31)**: Fixed Go naming convention (OAuthClientId → OAuthClientID in all test cases)
 - `grafana/pkg/flightsql/query_data.go` - Added token refresh and user attribution headers
   - **UPDATED (2025-10-31)**: Added privacy control check before sending user attribution headers
 - `grafana/pkg/flightsql/arrow_test.go` - **UPDATED (2025-10-31)**: Fixed format string issue
@@ -1281,7 +1286,7 @@ This shows:
 
 ## Code Review Summary (2025-10-31)
 
-**Overall Grade**: A - Solid implementation, all critical and important issues resolved (updated 2025-10-31)
+**Overall Grade**: A+ - Solid implementation, all critical and important issues resolved, plus additional code quality improvements (updated 2025-10-31)
 
 **Review Findings**:
 - Architecture is excellent and well-designed
@@ -1293,6 +1298,9 @@ This shows:
 - ~~**IMPORTANT**: Auth credential clearing incomplete~~ ✅ FIXED (2025-10-31)
 - ~~**IMPORTANT**: Excessive logging in hot path~~ ✅ FIXED (2025-10-31)
 - ~~go.mod dependency incorrectly marked as indirect~~ ✅ FIXED (2025-10-31)
+- ~~**NICE-TO-HAVE**: Go naming conventions (clientId → clientID)~~ ✅ FIXED (2025-10-31)
+- ~~**NICE-TO-HAVE**: Extract UI magic numbers to constants~~ ✅ FIXED (2025-10-31)
+- ~~**NICE-TO-HAVE**: Improve config validation for partial OAuth configs~~ ✅ FIXED (2025-10-31)
 
 **Production Blockers** (1 remaining of 7 items):
 1. ~~Add HTTP timeout to OIDC discovery~~ ✅ COMPLETE (2025-10-31)
@@ -1302,6 +1310,11 @@ This shows:
 5. ~~Clear auth fields when switching types~~ ✅ COMPLETE (2025-10-31)
 6. ~~Remove logging from hot path~~ ✅ COMPLETE (2025-10-31)
 7. Complete documentation
+
+**Code Quality Improvements** (bonus work completed):
+- Fixed Go naming conventions for acronyms
+- Extracted UI dimensions to named constants
+- Enhanced config validation for partial OAuth configurations
 
 **Estimated Effort to Production-Ready**: 1-2 hours (OAuth setup guides + security/privacy docs)
 
