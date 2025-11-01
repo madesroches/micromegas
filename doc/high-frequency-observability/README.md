@@ -21,10 +21,10 @@ Built with Reveal.js, Ayu Dark theme, and Mermaid diagrams.
 
 ```bash
 # Install dependencies
-npm install
+yarn install
 
 # Start development server with hot reload
-npm run dev
+yarn dev
 ```
 
 Open http://localhost:5173 in your browser. Edit `src/slides/presentation.md` to modify slides.
@@ -34,17 +34,17 @@ Open http://localhost:5173 in your browser. Edit `src/slides/presentation.md` to
 #### Option 1: Static Build (requires web server)
 ```bash
 # Build static files
-npm run build
+yarn build
 
 # Preview production build
-npm run preview
+yarn preview
 ```
 Deploy the `dist/` folder to any web server.
 
 #### Option 2: Standalone File (no server required) ⭐
 ```bash
 # Build completely self-contained HTML file
-npm run build:standalone
+yarn build:standalone
 ```
 This creates `dist/presentation-inline.html` - a single 1.2MB file containing everything needed. Perfect for:
 - Opening directly in browser with `file://` protocol
@@ -103,10 +103,10 @@ graph LR
 
 | Command | Purpose |
 |---------|---------|
-| `npm run dev` | Development server with hot reload |
-| `npm run build` | Static production build |
-| `npm run build:standalone` | Self-contained HTML file |
-| `npm run preview` | Preview production build |
+| `yarn dev` | Development server with hot reload |
+| `yarn build` | Static production build |
+| `yarn build:standalone` | Self-contained HTML file |
+| `yarn preview` | Preview production build |
 
 ## Browser Compatibility
 
