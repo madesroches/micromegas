@@ -59,6 +59,9 @@ pub mod oidc;
 /// Multi-provider authentication (API key + OIDC)
 pub mod multi;
 
+/// Default authentication provider initialization
+pub mod default_provider;
+
 /// Tower service layer for tonic/gRPC authentication
 pub mod tower;
 
