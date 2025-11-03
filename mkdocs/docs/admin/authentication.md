@@ -9,7 +9,7 @@ Both the analytics server (flight-sql-srv) and ingestion server (telemetry-inges
 - **OIDC (OpenID Connect)** - For human users and service accounts via federated identity providers (Google, Azure AD, Okta, Auth0, etc.)
 - **API Keys** - Legacy support for simple bearer token authentication
 
-Both methods can be enabled simultaneously, with API key validation tried first (fast path) before falling back to OIDC validation.
+Both methods can be enabled simultaneously. When multiple providers are configured, they are tried in order until one succeeds (API key first for performance, then OIDC).
 
 ## Authentication Methods
 

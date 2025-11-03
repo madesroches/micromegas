@@ -5233,7 +5233,6 @@ dependencies = [
  "axum",
  "clap",
  "micromegas",
- "micromegas-auth",
  "tokio",
  "tower-http 0.5.2",
 ]

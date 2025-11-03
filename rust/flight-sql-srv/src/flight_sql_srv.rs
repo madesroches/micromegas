@@ -6,9 +6,6 @@ use micromegas::analytics::lakehouse::runtime::make_runtime_env;
 use micromegas::analytics::lakehouse::session_configurator::NoOpSessionConfigurator;
 use micromegas::analytics::lakehouse::view_factory::default_view_factory;
 use micromegas::arrow_flight::flight_service_server::FlightServiceServer;
-use micromegas::auth::api_key::{ApiKeyAuthProvider, parse_key_ring};
-use micromegas::auth::multi::MultiAuthProvider;
-use micromegas::auth::oidc::{OidcAuthProvider, OidcConfig};
 use micromegas::auth::tower::AuthService;
 use micromegas::auth::types::AuthProvider;
 use micromegas::ingestion::data_lake_connection::connect_to_data_lake;
@@ -56,38 +53,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let auth_required = !args.disable_auth;
     let auth_provider: Option<Arc<dyn AuthProvider>> = if auth_required {
-        // Initialize API key provider if configured
-        let api_key_provider = match std::env::var("MICROMEGAS_API_KEYS") {
-            Ok(keys_json) => {
-                let keyring = parse_key_ring(&keys_json)?;
-                Some(Arc::new(ApiKeyAuthProvider::new(keyring)))
+        match micromegas::auth::default_provider::provider().await? {
+            Some(provider) => Some(provider),
+            None => {
+                return Err("Authentication required but no auth providers configured. Set MICROMEGAS_API_KEYS or MICROMEGAS_OIDC_CONFIG".into());
             }
-            Err(_) => {
-                info!("MICROMEGAS_API_KEYS not set - API key auth disabled");
-                None
-            }
-        };
-
-        // Initialize OIDC provider if configured
-        let oidc_provider = match OidcConfig::from_env() {
-            Ok(config) => {
-                info!("Initializing OIDC authentication");
-                Some(Arc::new(OidcAuthProvider::new(config).await?))
-            }
-            Err(e) => {
-                info!("OIDC not configured ({e}) - OIDC auth disabled");
-                None
-            }
-        };
-
-        // Create multi-provider if either is configured
-        if api_key_provider.is_some() || oidc_provider.is_some() {
-            Some(Arc::new(MultiAuthProvider {
-                api_key_provider,
-                oidc_provider,
-            }) as Arc<dyn AuthProvider>)
-        } else {
-            return Err("Authentication required but no auth providers configured. Set MICROMEGAS_API_KEYS or MICROMEGAS_OIDC_CONFIG".into());
         }
     } else {
         info!("Authentication disabled (--disable_auth)");

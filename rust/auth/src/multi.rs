@@ -1,17 +1,18 @@
 //! Multi-provider authentication that tries multiple auth methods in sequence.
 
-use crate::api_key::ApiKeyAuthProvider;
-use crate::oidc::OidcAuthProvider;
 use crate::types::{AuthContext, AuthProvider};
 use async_trait::async_trait;
 use std::sync::Arc;
 
-/// Multi-provider authentication that tries API key first, then OIDC.
+/// Multi-provider authentication that tries providers in order until one succeeds.
 ///
-/// This provider allows supporting multiple authentication methods simultaneously.
-/// It tries providers in order until one succeeds:
-/// 1. API key (fast O(1) HashMap lookup)
-/// 2. OIDC (slower JWT validation with JWKS)
+/// This provider allows supporting multiple authentication methods simultaneously
+/// and enables adding custom enterprise authentication providers. Providers are
+/// tried in the order they were added via `with_provider()`.
+///
+/// Provider order matters for authentication precedence - the first successful
+/// match wins. Typically, you want faster providers (like API key) before slower
+/// ones (like OIDC JWT validation).
 ///
 /// # Example
 ///
@@ -38,38 +39,49 @@ use std::sync::Arc;
 /// };
 /// let oidc_provider = Arc::new(OidcAuthProvider::new(oidc_config).await?);
 ///
-/// // Create multi-provider
-/// let multi = MultiAuthProvider {
-///     api_key_provider: Some(api_key_provider),
-///     oidc_provider: Some(oidc_provider),
-/// };
+/// // Create multi-provider with builder pattern
+/// let multi = MultiAuthProvider::new()
+///     .with_provider(api_key_provider)
+///     .with_provider(oidc_provider);
+/// // .with_provider(Arc::new(MyEnterpriseAuthProvider::new())); // Custom provider!
 /// # Ok(())
 /// # }
 /// ```
 pub struct MultiAuthProvider {
-    /// Optional API key provider (tried first)
-    pub api_key_provider: Option<Arc<ApiKeyAuthProvider>>,
-    /// Optional OIDC provider (tried second)
-    pub oidc_provider: Option<Arc<OidcAuthProvider>>,
+    providers: Vec<Arc<dyn AuthProvider>>,
+}
+
+impl MultiAuthProvider {
+    /// Creates a new empty MultiAuthProvider.
+    #[allow(clippy::new_without_default)]
+    pub fn new() -> Self {
+        Self {
+            providers: Vec::new(),
+        }
+    }
+
+    /// Adds a provider to the authentication chain.
+    ///
+    /// Providers are tried in the order they are added. Returns self for chaining.
+    pub fn with_provider(mut self, provider: Arc<dyn AuthProvider>) -> Self {
+        self.providers.push(provider);
+        self
+    }
+
+    /// Returns true if no providers are configured.
+    pub fn is_empty(&self) -> bool {
+        self.providers.is_empty()
+    }
 }
 
 #[async_trait]
 impl AuthProvider for MultiAuthProvider {
     async fn validate_token(&self, token: &str) -> anyhow::Result<AuthContext> {
-        // Try API key authentication first (fast path)
-        if let Some(api_key_provider) = &self.api_key_provider
-            && let Ok(auth_ctx) = api_key_provider.validate_token(token).await
-        {
-            return Ok(auth_ctx);
+        for provider in &self.providers {
+            if let Ok(auth_ctx) = provider.validate_token(token).await {
+                return Ok(auth_ctx);
+            }
         }
-
-        // Try OIDC authentication (slower, involves JWT validation)
-        if let Some(oidc_provider) = &self.oidc_provider
-            && let Ok(auth_ctx) = oidc_provider.validate_token(token).await
-        {
-            return Ok(auth_ctx);
-        }
-
         anyhow::bail!("authentication failed with all providers")
     }
 }
@@ -77,17 +89,14 @@ impl AuthProvider for MultiAuthProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api_key::parse_key_ring;
+    use crate::api_key::{ApiKeyAuthProvider, parse_key_ring};
 
     #[tokio::test]
     async fn test_multi_provider_api_key() {
         let keyring = parse_key_ring(r#"[{"name": "test", "key": "secret"}]"#).unwrap();
         let api_key_provider = Arc::new(ApiKeyAuthProvider::new(keyring));
 
-        let multi = MultiAuthProvider {
-            api_key_provider: Some(api_key_provider),
-            oidc_provider: None,
-        };
+        let multi = MultiAuthProvider::new().with_provider(api_key_provider);
 
         let result = multi.validate_token("secret").await;
         assert!(result.is_ok());
@@ -97,10 +106,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_multi_provider_no_providers() {
-        let multi = MultiAuthProvider {
-            api_key_provider: None,
-            oidc_provider: None,
-        };
+        let multi = MultiAuthProvider::new();
 
         let result = multi.validate_token("any-token").await;
         assert!(result.is_err());
@@ -111,10 +117,7 @@ mod tests {
         let keyring = parse_key_ring(r#"[{"name": "test", "key": "secret"}]"#).unwrap();
         let api_key_provider = Arc::new(ApiKeyAuthProvider::new(keyring));
 
-        let multi = MultiAuthProvider {
-            api_key_provider: Some(api_key_provider),
-            oidc_provider: None,
-        };
+        let multi = MultiAuthProvider::new().with_provider(api_key_provider);
 
         let result = multi.validate_token("wrong-token").await;
         assert!(result.is_err());

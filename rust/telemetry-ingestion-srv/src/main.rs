@@ -15,6 +15,8 @@ use axum::Router;
 use axum::extract::DefaultBodyLimit;
 use axum::middleware;
 use clap::Parser;
+use micromegas::auth::axum::auth_middleware;
+use micromegas::auth::types::AuthProvider;
 use micromegas::ingestion::data_lake_connection::DataLakeConnection;
 use micromegas::ingestion::remote_data_lake::connect_to_remote_data_lake;
 use micromegas::ingestion::web_ingestion_service::WebIngestionService;
@@ -22,11 +24,6 @@ use micromegas::micromegas_main;
 use micromegas::servers;
 use micromegas::servers::axum_utils::observability_middleware;
 use micromegas::tracing::prelude::*;
-use micromegas_auth::api_key::{ApiKeyAuthProvider, parse_key_ring};
-use micromegas_auth::axum::auth_middleware;
-use micromegas_auth::multi::MultiAuthProvider;
-use micromegas_auth::oidc::{OidcAuthProvider, OidcConfig};
-use micromegas_auth::types::AuthProvider;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tower_http::limit::RequestBodyLimitLayer;
@@ -111,42 +108,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize authentication providers (same pattern as flight-sql-srv)
     let auth_required = !args.disable_auth;
     let auth_provider: Option<Arc<dyn AuthProvider>> = if auth_required {
-        // Initialize API key provider if configured
-        let api_key_provider = match std::env::var("MICROMEGAS_API_KEYS") {
-            Ok(keys_json) => {
-                let keyring = parse_key_ring(&keys_json)?;
-                info!("API key authentication enabled");
-                Some(Arc::new(ApiKeyAuthProvider::new(keyring)))
+        match micromegas::auth::default_provider::provider().await? {
+            Some(provider) => Some(provider),
+            None => {
+                return Err("Authentication required but no auth providers configured. \
+                     Set MICROMEGAS_API_KEYS or MICROMEGAS_OIDC_CONFIG, \
+                     or use --disable-auth for development"
+                    .into());
             }
-            Err(_) => {
-                info!("MICROMEGAS_API_KEYS not set - API key auth disabled");
-                None
-            }
-        };
-
-        // Initialize OIDC provider if configured
-        let oidc_provider = match OidcConfig::from_env() {
-            Ok(config) => {
-                info!("Initializing OIDC authentication");
-                Some(Arc::new(OidcAuthProvider::new(config).await?))
-            }
-            Err(e) => {
-                info!("OIDC not configured ({e}) - OIDC auth disabled");
-                None
-            }
-        };
-
-        // Create multi-provider if either is configured
-        if api_key_provider.is_some() || oidc_provider.is_some() {
-            Some(Arc::new(MultiAuthProvider {
-                api_key_provider,
-                oidc_provider,
-            }) as Arc<dyn AuthProvider>)
-        } else {
-            return Err("Authentication required but no auth providers configured. \
-                 Set MICROMEGAS_API_KEYS or MICROMEGAS_OIDC_CONFIG, \
-                 or use --disable-auth for development"
-                .into());
         }
     } else {
         info!("Authentication disabled (--disable_auth)");
