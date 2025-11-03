@@ -35,3 +35,6 @@ pub mod http_gateway;
 
 /// authentication for the gRPC stack
 pub mod tonic_auth_interceptor;
+
+/// health check service for gRPC servers
+pub mod grpc_health_service;

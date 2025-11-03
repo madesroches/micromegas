@@ -12,6 +12,7 @@ use micromegas::ingestion::data_lake_connection::connect_to_data_lake;
 use micromegas::micromegas_main;
 use micromegas::servers::connect_info_layer::ConnectedIncoming;
 use micromegas::servers::flight_sql_service_impl::FlightSqlServiceImpl;
+use micromegas::servers::grpc_health_service::GrpcHealthService;
 use micromegas::servers::log_uri_service::LogUriService;
 use micromegas::tracing::prelude::*;
 use std::sync::Arc;
@@ -65,6 +66,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let layer = ServiceBuilder::new()
+        .layer(layer_fn(GrpcHealthService::new))
         .layer(layer_fn(|service| LogUriService { service }))
         .layer(tower::layer::layer_fn(move |inner| AuthService {
             inner,
