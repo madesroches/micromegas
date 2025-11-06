@@ -1,5 +1,5 @@
 use micromegas_auth::api_key::{ApiKeyAuthProvider, Key, KeyRing, parse_key_ring};
-use micromegas_auth::types::{AuthProvider, AuthType};
+use micromegas_auth::types::{AuthProvider, AuthType, HttpRequestParts, RequestParts};
 
 #[tokio::test]
 async fn test_valid_api_key() {
@@ -10,7 +10,19 @@ async fn test_valid_api_key() {
     );
 
     let provider = ApiKeyAuthProvider::new(keyring);
-    let result = provider.validate_token("test-key-123").await;
+
+    let mut headers = http::HeaderMap::new();
+    headers.insert(
+        http::header::AUTHORIZATION,
+        "Bearer test-key-123".parse().unwrap(),
+    );
+    let parts = HttpRequestParts {
+        headers,
+        method: http::Method::GET,
+        uri: "/test".parse().unwrap(),
+    };
+
+    let result = provider.validate_request(&parts as &dyn RequestParts).await;
 
     assert!(result.is_ok());
     let ctx = result.unwrap();
@@ -25,7 +37,19 @@ async fn test_valid_api_key() {
 async fn test_invalid_api_key() {
     let keyring = KeyRing::new();
     let provider = ApiKeyAuthProvider::new(keyring);
-    let result = provider.validate_token("invalid-key").await;
+
+    let mut headers = http::HeaderMap::new();
+    headers.insert(
+        http::header::AUTHORIZATION,
+        "Bearer invalid-key".parse().unwrap(),
+    );
+    let parts = HttpRequestParts {
+        headers,
+        method: http::Method::GET,
+        uri: "/test".parse().unwrap(),
+    };
+
+    let result = provider.validate_request(&parts as &dyn RequestParts).await;
 
     assert!(result.is_err());
     assert_eq!(result.unwrap_err().to_string(), "invalid API token");

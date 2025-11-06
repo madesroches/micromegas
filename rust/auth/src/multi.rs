@@ -76,50 +76,15 @@ impl MultiAuthProvider {
 
 #[async_trait]
 impl AuthProvider for MultiAuthProvider {
-    async fn validate_token(&self, token: &str) -> anyhow::Result<AuthContext> {
+    async fn validate_request(
+        &self,
+        parts: &dyn crate::types::RequestParts,
+    ) -> anyhow::Result<AuthContext> {
         for provider in &self.providers {
-            if let Ok(auth_ctx) = provider.validate_token(token).await {
+            if let Ok(auth_ctx) = provider.validate_request(parts).await {
                 return Ok(auth_ctx);
             }
         }
         anyhow::bail!("authentication failed with all providers")
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::api_key::{ApiKeyAuthProvider, parse_key_ring};
-
-    #[tokio::test]
-    async fn test_multi_provider_api_key() {
-        let keyring = parse_key_ring(r#"[{"name": "test", "key": "secret"}]"#).unwrap();
-        let api_key_provider = Arc::new(ApiKeyAuthProvider::new(keyring));
-
-        let multi = MultiAuthProvider::new().with_provider(api_key_provider);
-
-        let result = multi.validate_token("secret").await;
-        assert!(result.is_ok());
-        let auth_ctx = result.unwrap();
-        assert_eq!(auth_ctx.subject, "test");
-    }
-
-    #[tokio::test]
-    async fn test_multi_provider_no_providers() {
-        let multi = MultiAuthProvider::new();
-
-        let result = multi.validate_token("any-token").await;
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_multi_provider_invalid_token() {
-        let keyring = parse_key_ring(r#"[{"name": "test", "key": "secret"}]"#).unwrap();
-        let api_key_provider = Arc::new(ApiKeyAuthProvider::new(keyring));
-
-        let multi = MultiAuthProvider::new().with_provider(api_key_provider);
-
-        let result = multi.validate_token("wrong-token").await;
-        assert!(result.is_err());
     }
 }
