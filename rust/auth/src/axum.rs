@@ -1,26 +1,25 @@
 //! Axum middleware for HTTP authentication
 //!
 //! Provides authentication middleware for Axum HTTP services that:
-//! 1. Extracts Bearer token from Authorization header
+//! 1. Extracts request parts (headers, method, URI)
 //! 2. Validates using configured AuthProvider
 //! 3. Injects AuthContext into request extensions
 //! 4. Returns 401 Unauthorized on auth failures
 
-use crate::types::AuthProvider;
+use crate::types::{AuthProvider, HttpRequestParts, RequestParts};
 use axum::{
     extract::Request,
     http::StatusCode,
     middleware::Next,
     response::{IntoResponse, Response},
 };
-use http::header::AUTHORIZATION;
 use micromegas_tracing::prelude::*;
 use std::sync::Arc;
 
-/// Axum middleware for bearer token authentication
+/// Axum middleware for request-based authentication
 ///
-/// This middleware extracts the Bearer token from the Authorization header,
-/// validates it using the provided AuthProvider, and injects the resulting
+/// This middleware extracts request parts (headers, method, URI),
+/// validates them using the provided AuthProvider, and injects the resulting
 /// AuthContext into the request extensions.
 ///
 /// # Example
@@ -42,23 +41,21 @@ pub async fn auth_middleware(
     mut req: Request,
     next: Next,
 ) -> Result<Response, AuthError> {
-    // Extract authorization header
-    let auth_header = req
-        .headers()
-        .get(AUTHORIZATION)
-        .and_then(|h| h.to_str().ok())
-        .ok_or(AuthError::MissingHeader)?;
+    // Extract request parts for authentication
+    let parts = HttpRequestParts {
+        headers: req.headers().clone(),
+        method: req.method().clone(),
+        uri: req.uri().clone(),
+    };
 
-    // Extract bearer token
-    let token = auth_header
-        .strip_prefix("Bearer ")
-        .ok_or(AuthError::InvalidFormat)?;
-
-    // Validate token using auth provider
-    let auth_ctx = auth_provider.validate_token(token).await.map_err(|e| {
-        warn!("authentication failed: {e}");
-        AuthError::InvalidToken
-    })?;
+    // Validate request using auth provider
+    let auth_ctx = auth_provider
+        .validate_request(&parts as &dyn RequestParts)
+        .await
+        .map_err(|e| {
+            warn!("authentication failed: {e}");
+            AuthError::InvalidToken
+        })?;
 
     // Log successful authentication
     info!(
@@ -76,10 +73,6 @@ pub async fn auth_middleware(
 /// Authentication errors for HTTP responses
 #[derive(Debug)]
 pub enum AuthError {
-    /// Missing Authorization header
-    MissingHeader,
-    /// Authorization header doesn't start with "Bearer "
-    InvalidFormat,
     /// Token validation failed
     InvalidToken,
 }
@@ -87,11 +80,6 @@ pub enum AuthError {
 impl IntoResponse for AuthError {
     fn into_response(self) -> Response {
         let (status, message) = match self {
-            AuthError::MissingHeader => (StatusCode::UNAUTHORIZED, "Missing authorization header"),
-            AuthError::InvalidFormat => (
-                StatusCode::UNAUTHORIZED,
-                "Invalid authorization format, expected: Bearer <token>",
-            ),
             AuthError::InvalidToken => (StatusCode::UNAUTHORIZED, "Invalid token"),
         };
 

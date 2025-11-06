@@ -75,7 +75,7 @@ impl ApiKeyAuthProvider {
 
 #[async_trait::async_trait]
 impl AuthProvider for ApiKeyAuthProvider {
-    /// Validate an API key token using constant-time comparison
+    /// Validate an API key request using constant-time comparison
     ///
     /// This implementation protects against timing attacks by:
     /// 1. Comparing the provided token against ALL keys in the keyring
@@ -86,7 +86,14 @@ impl AuthProvider for ApiKeyAuthProvider {
     /// - The key is found early in the iteration
     /// - The key is found late in the iteration
     /// - The key is not found at all
-    async fn validate_token(&self, token: &str) -> Result<AuthContext> {
+    async fn validate_request(
+        &self,
+        parts: &dyn crate::types::RequestParts,
+    ) -> Result<AuthContext> {
+        let token = parts
+            .bearer_token()
+            .ok_or_else(|| anyhow!("missing bearer token"))?;
+
         let token_bytes = token.as_bytes();
         let mut found: Option<AuthContext> = None;
 

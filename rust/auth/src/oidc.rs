@@ -396,7 +396,14 @@ impl OidcAuthProvider {
 
 #[async_trait::async_trait]
 impl AuthProvider for OidcAuthProvider {
-    async fn validate_token(&self, token: &str) -> Result<AuthContext> {
+    async fn validate_request(
+        &self,
+        parts: &dyn crate::types::RequestParts,
+    ) -> Result<AuthContext> {
+        let token = parts
+            .bearer_token()
+            .ok_or_else(|| anyhow!("missing bearer token"))?;
+
         // Check token cache first
         if let Some(cached) = self.token_cache.get(token).await {
             return Ok((*cached).clone());

@@ -1,12 +1,11 @@
 //! Tower service layer for async authentication with tonic/gRPC.
 //!
 //! This module provides a tower service wrapper that integrates authentication
-//! into tonic gRPC services. It extracts Bearer tokens from requests, validates
-//! them using an AuthProvider, and injects the AuthContext into request extensions.
+//! into tonic gRPC services. It extracts request parts from gRPC metadata,
+//! validates them using an AuthProvider, and injects the AuthContext into request extensions.
 
-use crate::types::AuthProvider;
+use crate::types::{AuthProvider, GrpcRequestParts, RequestParts};
 use futures::future::BoxFuture;
-use http::header::AUTHORIZATION;
 use micromegas_tracing::prelude::*;
 use std::sync::Arc;
 use tonic::Status;
@@ -15,8 +14,8 @@ use tower::Service;
 /// Async authentication service wrapper for tonic/gRPC.
 ///
 /// This service wraps another tower service and adds authentication:
-/// 1. Extracts Bearer token from Authorization header
-/// 2. Validates token using the configured AuthProvider
+/// 1. Extracts request parts from gRPC metadata
+/// 2. Validates request using the configured AuthProvider
 /// 3. Injects AuthContext into request extensions
 /// 4. Logs authentication success/failure
 ///
@@ -83,39 +82,30 @@ where
             if let Some(provider) = auth_provider {
                 let (mut parts, body) = req.into_parts();
 
-                // Extract and validate token
-                let authorization = parts
-                    .headers
-                    .get(AUTHORIZATION)
-                    .and_then(|h| h.to_str().ok())
-                    .and_then(|h| h.strip_prefix("Bearer "))
-                    .ok_or_else(|| {
-                        warn!("missing or invalid authorization header");
-                        Box::new(Status::unauthenticated("missing authorization header"))
-                            as Box<dyn std::error::Error + Send + Sync>
-                    });
+                // Extract request parts for validation
+                let request_parts = GrpcRequestParts {
+                    metadata: tonic::metadata::MetadataMap::from_headers(parts.headers.clone()),
+                };
 
-                match authorization {
-                    Ok(token) => match provider.validate_token(token).await {
-                        Ok(auth_ctx) => {
-                            info!(
-                                "authenticated: subject={} email={:?} issuer={} admin={}",
-                                auth_ctx.subject,
-                                auth_ctx.email,
-                                auth_ctx.issuer,
-                                auth_ctx.is_admin
-                            );
-                            parts.extensions.insert(auth_ctx);
-                            let req = http::Request::from_parts(parts, body);
-                            inner.call(req).await.map_err(Into::into)
-                        }
-                        Err(e) => {
-                            warn!("authentication failed: {e}");
-                            Err(Box::new(Status::unauthenticated("invalid token"))
-                                as Box<dyn std::error::Error + Send + Sync>)
-                        }
-                    },
-                    Err(e) => Err(e),
+                // Validate request
+                match provider
+                    .validate_request(&request_parts as &dyn RequestParts)
+                    .await
+                {
+                    Ok(auth_ctx) => {
+                        info!(
+                            "authenticated: subject={} email={:?} issuer={} admin={}",
+                            auth_ctx.subject, auth_ctx.email, auth_ctx.issuer, auth_ctx.is_admin
+                        );
+                        parts.extensions.insert(auth_ctx);
+                        let req = http::Request::from_parts(parts, body);
+                        inner.call(req).await.map_err(Into::into)
+                    }
+                    Err(e) => {
+                        warn!("authentication failed: {e}");
+                        Err(Box::new(Status::unauthenticated("invalid token"))
+                            as Box<dyn std::error::Error + Send + Sync>)
+                    }
                 }
             } else {
                 inner.call(req).await.map_err(Into::into)

@@ -10,14 +10,26 @@
 //!
 //! ```rust
 //! use micromegas_auth::api_key::{ApiKeyAuthProvider, parse_key_ring};
-//! use micromegas_auth::types::AuthProvider;
+//! use micromegas_auth::types::{AuthProvider, HttpRequestParts, RequestParts};
 //!
 //! # async fn example() -> anyhow::Result<()> {
 //! let json = r#"[{"name": "user1", "key": "secret-key-123"}]"#;
 //! let keyring = parse_key_ring(json)?;
 //! let provider = ApiKeyAuthProvider::new(keyring);
 //!
-//! let auth_ctx = provider.validate_token("secret-key-123").await?;
+//! // Create request parts with Bearer token
+//! let mut headers = http::HeaderMap::new();
+//! headers.insert(
+//!     http::header::AUTHORIZATION,
+//!     "Bearer secret-key-123".parse().unwrap(),
+//! );
+//! let parts = HttpRequestParts {
+//!     headers,
+//!     method: http::Method::GET,
+//!     uri: "/api/endpoint".parse().unwrap(),
+//! };
+//!
+//! let auth_ctx = provider.validate_request(&parts as &dyn RequestParts).await?;
 //! println!("Authenticated: {}", auth_ctx.subject);
 //! # Ok(())
 //! # }
@@ -27,7 +39,7 @@
 //!
 //! ```rust,no_run
 //! use micromegas_auth::oidc::{OidcAuthProvider, OidcConfig, OidcIssuer};
-//! use micromegas_auth::types::AuthProvider;
+//! use micromegas_auth::types::{AuthProvider, HttpRequestParts, RequestParts};
 //!
 //! # async fn example() -> anyhow::Result<()> {
 //! let config = OidcConfig {
@@ -41,7 +53,20 @@
 //! };
 //!
 //! let provider = OidcAuthProvider::new(config).await?;
-//! let auth_ctx = provider.validate_token("id_token_here").await?;
+//!
+//! // Create request parts with ID token
+//! let mut headers = http::HeaderMap::new();
+//! headers.insert(
+//!     http::header::AUTHORIZATION,
+//!     "Bearer id_token_here".parse().unwrap(),
+//! );
+//! let parts = HttpRequestParts {
+//!     headers,
+//!     method: http::Method::GET,
+//!     uri: "/api/endpoint".parse().unwrap(),
+//! };
+//!
+//! let auth_ctx = provider.validate_request(&parts as &dyn RequestParts).await?;
 //! println!("Authenticated: {}", auth_ctx.subject);
 //! # Ok(())
 //! # }
@@ -67,7 +92,3 @@ pub mod tower;
 
 /// Axum middleware for HTTP authentication
 pub mod axum;
-
-/// Test utilities for generating test tokens
-#[cfg(test)]
-pub mod test_utils;
