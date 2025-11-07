@@ -48,8 +48,8 @@ jobs:
         sudo rm -rf /opt/az
         sudo rm -rf /usr/local/share/powershell
         sudo rm -rf /usr/share/kotlinc
-        # Remove large packages
-        sudo apt-get remove -y '^aspnetcore-.*' '^dotnet-.*' '^llvm-.*' '^mongodb-.*' '^mysql-.*' '^php.*' azure-cli google-chrome-stable firefox powershell mono-devel 2>/dev/null || true
+        # Remove large packages (but keep clang for mold linker)
+        sudo apt-get remove -y '^aspnetcore-.*' '^dotnet-.*' '^mongodb-.*' '^mysql-.*' '^php.*' azure-cli google-chrome-stable firefox powershell mono-devel 2>/dev/null || true
         sudo apt-get autoremove -y
         sudo apt-get clean
         # Clean Docker
