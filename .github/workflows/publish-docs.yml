@@ -4,6 +4,10 @@ on:
   push:
     branches:
       - main
+  # Also run on any branch when the workflow config changes
+  pull_request:
+    paths:
+      - '.github/workflows/publish-docs.yml'
 
 jobs:
   build-and-deploy-docs:
@@ -19,6 +23,11 @@ jobs:
       uses: dtolnay/rust-toolchain@stable
       with:
         toolchain: stable
+
+    - name: Install mold linker
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y mold
 
     - name: Setup Node.js
       uses: actions/setup-node@v4
@@ -139,6 +148,7 @@ jobs:
         touch public_docs/.nojekyll
 
     - name: Deploy to GitHub Pages
+      if: github.ref == 'refs/heads/main'
       uses: peaceiris/actions-gh-pages@v4
       with:
         github_token: ${{ secrets.GITHUB_TOKEN }}
