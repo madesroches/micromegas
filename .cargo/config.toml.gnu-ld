@@ -1,0 +1,6 @@
+# Alternative config for GNU ld (most conservative)
+# To use this: mv .cargo/config.toml.gnu-ld .cargo/config.toml
+
+# [target.x86_64-unknown-linux-gnu]
+# No linker specified = uses default GNU ld
+# Slowest but most stable and reliable

@@ -1,8 +1,7 @@
 [target.x86_64-unknown-linux-gnu]
-# Use GNU ld instead of rust-lld to avoid linker crashes
-linker = "cc"
-rustflags = ["-C", "link-arg=-fuse-ld=gold"]
+# Use mold linker (fastest, modern, recommended for large projects)
+linker = "clang"
+rustflags = ["-C", "link-arg=-fuse-ld=mold"]
 
-# Alternative: use mold (fastest, but needs to be installed)
-# linker = "clang"
-# rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+# Alternative: Use default GNU ld (most stable, slower)
+# Just remove the above lines to use system default ld
