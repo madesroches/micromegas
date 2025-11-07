@@ -280,6 +280,7 @@ impl InProcSerialize for TaggedLogString {
         self.msg.write_value(buffer);
     }
 
+    #[allow(unknown_lints)]
     #[allow(integer_to_ptr_transmutes)] // TODO: Fix pointer provenance properly (see tasks/pointer-provenance.md)
     unsafe fn read_value(mut window: &[u8]) -> Self {
         let desc_id: u64 = read_consume_pod(&mut window);
