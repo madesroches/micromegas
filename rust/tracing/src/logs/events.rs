@@ -9,6 +9,9 @@ use std::sync::{
     atomic::{AtomicU32, Ordering},
 };
 
+// Ensure we're on a 64-bit platform since we store pointers as u64
+const _: () = assert!(std::mem::size_of::<usize>() == 8);
+
 #[derive(Debug)]
 pub struct LogMetadata<'a> {
     pub level: Level,
@@ -277,6 +280,8 @@ impl InProcSerialize for TaggedLogString {
         self.msg.write_value(buffer);
     }
 
+    #[allow(unknown_lints)]
+    #[allow(integer_to_ptr_transmutes)] // TODO: Fix pointer provenance properly (see tasks/pointer-provenance.md)
     unsafe fn read_value(mut window: &[u8]) -> Self {
         let desc_id: u64 = read_consume_pod(&mut window);
         let properties_id: u64 = read_consume_pod(&mut window);

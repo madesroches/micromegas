@@ -1,0 +1,7 @@
+[target.x86_64-unknown-linux-gnu]
+# Use mold linker (fastest, modern, recommended for large projects)
+linker = "clang"
+rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+
+# Alternative: Use default GNU ld (most stable, slower)
+# Just remove the above lines to use system default ld

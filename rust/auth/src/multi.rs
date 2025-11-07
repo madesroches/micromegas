@@ -2,6 +2,7 @@
 
 use crate::types::{AuthContext, AuthProvider};
 use async_trait::async_trait;
+use micromegas_tracing::prelude::*;
 use std::sync::Arc;
 
 /// Multi-provider authentication that tries providers in order until one succeeds.
@@ -81,8 +82,13 @@ impl AuthProvider for MultiAuthProvider {
         parts: &dyn crate::types::RequestParts,
     ) -> anyhow::Result<AuthContext> {
         for provider in &self.providers {
-            if let Ok(auth_ctx) = provider.validate_request(parts).await {
-                return Ok(auth_ctx);
+            match provider.validate_request(parts).await {
+                Ok(auth_ctx) => {
+                    return Ok(auth_ctx);
+                }
+                Err(e) => {
+                    debug!("partial auth failed: {e:?}");
+                }
             }
         }
         anyhow::bail!("authentication failed with all providers")
