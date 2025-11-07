@@ -16,6 +16,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_BUILD_JOBS: 2  # Reduce parallel jobs to avoid OOM during linking
 
 jobs:
   build:
@@ -24,6 +25,13 @@ jobs:
 
     steps:
     - uses: actions/checkout@v3
+    - name: Free up disk space
+      run: |
+        df -h
+        sudo rm -rf /usr/share/dotnet
+        sudo rm -rf /opt/ghc
+        sudo rm -rf /usr/local/share/boost
+        df -h
     - name: Install cargo-machete
       run: cargo install cargo-machete
     - name: rust-ci

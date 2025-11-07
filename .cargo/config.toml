@@ -1,0 +1,8 @@
+[target.x86_64-unknown-linux-gnu]
+# Use GNU ld instead of rust-lld to avoid linker crashes
+linker = "cc"
+rustflags = ["-C", "link-arg=-fuse-ld=gold"]
+
+# Alternative: use mold (fastest, but needs to be installed)
+# linker = "clang"
+# rustflags = ["-C", "link-arg=-fuse-ld=mold"]
