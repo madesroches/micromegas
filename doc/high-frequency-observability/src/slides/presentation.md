@@ -15,6 +15,27 @@ I'm not speaking for my employer.
 
 ---
 
+## The Objective
+
+Quantify **how often** and **how bad** issues are, with enough context to **fix** them.
+
+<p class="fragment" style="margin-top: 2em; color: var(--color-secondary);">no need to reproduce</p>
+
+---
+
+## The Problem
+
+Traditional tooling force a choice:
+
+<ul>
+<li class="fragment">🔍 <strong>High-frequency debugging tools</strong> - great detail, but you need to reproduce the bug yourself</li>
+<li class="fragment">📊 <strong>Low-frequency analytics tools</strong> - will report statistics, not detailed traces</li>
+</ul>
+
+<p class="fragment"><strong>We refuse to choose.</strong></p>
+
+---
+
 ## The Challenge
 
 Video games at 60fps generate enormous telemetry volumes:
@@ -29,34 +50,57 @@ Video games at 60fps generate enormous telemetry volumes:
 
 ---
 
-## The Problem
+## Operating Costs - real production example
 
-Traditional tools force a choice:
+<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; font-size: 0.75em; width: 100%; padding: 0 1rem; box-sizing: border-box;">
+<div>
 
-<ul>
-<li class="fragment">🔍 <strong>High-frequency debugging tools</strong> - great detail, but you need to reproduce the bug yourself</li>
-<li class="fragment">📊 <strong>Low-frequency analytics tools</strong> - will report statistics, not detailed traces</li>
-</ul>
+**Data volume**
 
-<p class="fragment"><strong>We refuse to choose.</strong></p>
+<div style="margin-top: 0.5em; line-height: 1.3;">
+<span class="fragment">Retention: 90 days</span><br/>
+<span class="fragment">9 billion log entries</span><br/>
+<span class="fragment">275 billion metrics</span><br/>
+<span class="fragment">165 billion sampled trace events</span><br/>
+<span class="fragment"><strong>Total: 449 billion events</strong></span><br/>
+<span class="fragment">Spikes of <strong>266M events/min</strong></span>
+</div>
+
+</div>
+<div>
+
+**Monthly cost breakdown**
+
+<div style="margin-top: 0.5em; line-height: 1.3;">
+<span class="fragment">Compute: ~$300</span><br/>
+<span class="fragment">PostgreSQL: ~$200</span><br/>
+<span class="fragment">S3 Storage: ~$500</span>
+</div>
+
+<div class="fragment" style="margin-top: 1.5em; font-size: 1.4em;"><strong>Total: ~$1,000/month</strong></div>
+
+</div>
+</div>
 
 ---
 
-## The Objective
+## How
 
-Quantify **how often** and **how bad** issues are, with enough context to **fix** them—no need to **reproduce**.
+<div style="font-size: 0.75em;">
 
----
+Recording & querying high volumes of data can be cheap:
 
-## Make recording data cheap
+<div style="margin-top: 0.5em; line-height: 1.3; text-align: left;">
+<span class="fragment"><strong>Stage 1.</strong> Low-overhead always-on instrumentation - 20ns/event</span><br/>
+<span class="fragment"><strong>Stage 2.</strong> Cheap ingestion & storage</span><br/>
+<span class="fragment"><strong>Stage 3.</strong> Daemon processes low-frequency streams (logs & metrics)</span><br/>
+<span class="fragment"><strong>Stage 4.</strong> Analytics service executes SQL queries</span><br/>
+<span class="fragment"><strong>Stage 5.</strong> Frugal user interface</span>
+</div>
 
-<ol>
-<li class="fragment"><strong>Low-overhead instrumentation</strong> 20ns/event</li>
-<li class="fragment"><strong>Cheap ingestion</strong> minimal processing of inbound data</li>
-<li class="fragment"><strong>Cheap storage</strong> mostly S3</li>
-<li class="fragment">Queries on <strong>Aggregated metrics</strong> to find the needle in the haystack</li>
-<li class="fragment"><strong>Tail sampling</strong> of trace events - because it's the needle</li>
-</ol>
+<p class="fragment" style="margin-top: 1em;">Nothing in here is specific to games</p>
+
+</div>
 
 ---
 
@@ -136,15 +180,23 @@ graph LR
 
 ## Stage 1: Low-Overhead Instrumentation
 
-**optimized instrumentation librarires**
+<div style="font-size: 0.6em;">
 
-How?
-<ul>
-<li class="fragment"><strong>Thread-local</strong> event queues for high-frequency streams</li>
-<li class="fragment">Serialization that's mostly <strong>memcpy</strong></li>
-<li class="fragment">Events can contain <strong>references</strong> to avoid repetition</li>
-<li class="fragment">Some <strong>sampling</strong> at the source</li>
+**Optimized instrumentation libraries**
+
+<ul style="margin-top: 0.5em; line-height: 1.3; text-align: left; width: 100%;">
+<li class="fragment">Events are <strong>tiny</strong> (a few bytes)</li>
+<li class="fragment">Events can contain <strong>pointers</strong> to avoid repetition (metric names, file paths, …)</li>
+<li class="fragment">Instrumented threads only <strong>queue events</strong> - work done in background thread</li>
+<li class="fragment">Overhead <strong>~20ns/cpu trace event</strong> in calling thread</li>
+<li class="fragment"><strong>Sampling logic</strong> applies to event batches<br/>ex: does this section of the trace include slow frames?</li>
+<li class="fragment">Serialization is mostly <strong>memcpy</strong></li>
+<li class="fragment"><strong>Event layout</strong> is the native memory format</li>
+<li class="fragment">Event layout <strong>changes from one process to another</strong></li>
+<li class="fragment">Fast compression using <strong>LZ4</strong></li>
 </ul>
+
+</div>
 
 --
 
@@ -199,25 +251,37 @@ float AMyActor::TakeDamage(float Damage, ...)
 <li class="fragment">Payloads → S3 (for cheap storage)</li>
 </ul>
 
-<p class="fragment"><strong>Datalake</strong>: Optimized for cheap writes</p>
+<p class="fragment"><strong>Data lake</strong>: optimized for cheap writes</p>
 
 ---
 
-## Stage 3: SQL Analytics
+## Stages 3 & 4: daemon & analytics
 
-**Lakehouse Architecture**
-
-Bridge between datalake (cheap writes) and lakehouse (fast reads)
+Bridge between **data lake** (cheap writes) and **lakehouse** (fast reads)
 
 <ul>
-<li class="fragment"><img src="./matrix-payload.svg" style="height:1em; vertical-align:middle;"> Payload data in custom format</li>
-<li class="fragment">🗄️ Transformed to Parquet (columnar, fast queries)</li>
-<li class="fragment">Let <img src="./datafusion-logo.png" style="height:1em; vertical-align:middle;"> loose on the parquet files</li>
+<li class="fragment">Extract <strong>binary payload</strong> data in compressed custom format</li>
+<li class="fragment">Transform into <strong>Parquet</strong></li>
+<li class="fragment">Let <strong>DataFusion</strong> execute SQL queries on the parquet files</li>
+</ul>
+
+---
+
+## Stage 3: Daemon
+
+Different streams, different strategies:
+
+<ul>
+<li class="fragment"><strong>Logs</strong> (low frequency)<br/>Process eagerly → Parquet</li>
+<li class="fragment"><strong>Metrics</strong> (medium frequency)<br/>Process eagerly → Parquet<br/>Keeps aggregated views up to date</li>
+<li class="fragment">Ignores <strong>CPU traces</strong> (very high frequency)</li>
 </ul>
 
 ---
 
 ## Incremental Data Reduction
+
+Allows to query data over multiple days
 
 Example: SQL-defined **log_stats** view
 
@@ -237,21 +301,23 @@ GROUP BY process_id, level, target, time_bin
 
 ---
 
-## Tail Sampling Strategy
+## Stage 4: Analytics
 
-Different streams, different strategies:
+Serves SQL queries over Arrow FlightSQL
 
 <ul>
-<li class="fragment"><strong>Logs</strong> (low frequency): Process eagerly → Parquet</li>
-<li class="fragment"><strong>Metrics</strong> (medium frequency): Process eagerly → Parquet</li>
-<li class="fragment"><strong>CPU traces</strong> (very high frequency): Keep raw, process just-in-time when queried</li>
+<li class="fragment">Transform payloads into Parquet if daemon did not already do it</li>
+<li class="fragment"><strong>CPU traces</strong><br/>Process-specific views</li>
+<li class="fragment">Let <strong>DataFusion SQL engine</strong> do its magic</li>
+<li class="fragment">DataFusion is augmented by extensions:<ul>
+<li><strong>JSONB</strong></li>
+<li><strong>Histograms</strong> (median, p99, …)</li>
+</ul></li>
 </ul>
-
-<p class="fragment"><strong>Use lower frequency streams to tail-sample high-frequency ones</strong></p>
 
 ---
 
-## Stage 4: User Interfaces
+## Stage 5: User Interfaces
 
 Three main interfaces:
 
@@ -301,42 +367,19 @@ Detailed CPU trace analysis
 
 ---
 
-## Operating Costs
-
-**Data volume**
-
-<ul>
-<li class="fragment">Retention of 90 days</li>
-<li class="fragment">9B log entries</li>
-<li class="fragment">275B metrics</li> 
-<li class="fragment">165B trace events</li>
-<li class="fragment"><strong>449 billion events</strong></li>
-</ul>
-
----
-
-## Cost Breakdown
-
-| Component | Monthly Cost |
-|-----------|-------------|
-| Compute | ~$300 |
-| PostgreSQL | ~$200 |
-| S3 Storage | ~$500 |
-| **Total** | **~$1,000** |
-
-**~$0.002 per million events**
-
----
-
 ## Thank You
 
 **Micromegas would not be possible without open source**
 
 <p><img src="./datafusion-logo.png" style="height:1.5em; vertical-align:middle;"> <img src="./arrow-logo.png" style="height:1.5em; vertical-align:middle;"> <img src="./parquet-logo.svg" style="height:1.5em; vertical-align:middle;"></p>
 
+<p><img src="./influxdata-logo.svg" style="height:1.5em; vertical-align:middle;"> <img src="./grafana-logo.svg" style="height:1.5em; vertical-align:middle;"></p>
+
 <p><img src="./postgresql-logo.png" style="height:1.5em; vertical-align:middle;"></p>
 
 <p><img src="./rust-crab.svg" style="height:1.5em; vertical-align:middle;"></p>
+
+<p>And many other amazing projects</p>
 
 ---
 
@@ -347,17 +390,8 @@ Detailed CPU trace analysis
 <ul>
 <li class="fragment">Drop a star (always makes my day!)</li>
 <li class="fragment">Try it out, use it as a library, copy the code</li>
+<li class="fragment">Open an issue, tell me what's missing</li>
 <li class="fragment">Share your use cases</li>
 </ul>
 
----
-
-# Questions?
-
-Feel free to reach out!
-
-**Marc-Antoine Desroches**
-
-madesroches@gmail.com
-
-[github.com/madesroches/micromegas](https://github.com/madesroches/micromegas)
+<p class="fragment" style="text-decoration: underline; color: var(--color-secondary);">madesroches@gmail.com</p>
