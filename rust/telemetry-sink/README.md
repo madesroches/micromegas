@@ -2,4 +2,8 @@
 
 This crate provides a Telemetry HTTP sink library for logging, metrics, memory, and performance profiling within the Micromegas observability platform.
 
-For more information, please see the main repository at [https://github.com/madesroches/micromegas](https://github.com/madesroches/micromegas).
+## Documentation
+
+- 📖 [Complete Documentation](https://madesroches.github.io/micromegas/)
+- 🚀 [Getting Started Guide](https://madesroches.github.io/micromegas/getting-started/)
+- 💻 [GitHub Repository](https://github.com/madesroches/micromegas)
