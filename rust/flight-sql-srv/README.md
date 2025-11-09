@@ -2,4 +2,8 @@
 
 This crate provides the FlightSQL server for the Micromegas observability platform.
 
-For more information, please see the main repository at [https://github.com/madesroches/micromegas](https://github.com/madesroches/micromegas).
+## Documentation
+
+- 📖 [Complete Documentation](https://madesroches.github.io/micromegas/)
+- 📊 [Query Guide](https://madesroches.github.io/micromegas/query-guide/)
+- 💻 [GitHub Repository](https://github.com/madesroches/micromegas)

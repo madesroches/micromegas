@@ -2,4 +2,9 @@
 
 This crate provides a telemetry ingestion HTTP server that accepts telemetry data, stores metadata in PostgreSQL, and raw event payloads in an object store.
 
-For more information, please see the main repository at [https://github.com/madesroches/micromegas](https://github.com/madesroches/micromegas).
+## Documentation
+
+- 📖 [Complete Documentation](https://madesroches.github.io/micromegas/)
+- 🚀 [Getting Started Guide](https://madesroches.github.io/micromegas/getting-started/)
+- 🏗️ [Architecture Overview](https://madesroches.github.io/micromegas/architecture/)
+- 💻 [GitHub Repository](https://github.com/madesroches/micromegas)

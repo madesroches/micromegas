@@ -1,5 +1,7 @@
 # Pointer Provenance Fix for TaggedLogString Serialization
 
+**GitHub Issue**: https://github.com/madesroches/micromegas/issues/575
+
 ## Problem
 In `rust/tracing/src/logs/events.rs`, `TaggedLogString` serializes pointer references as raw `u64` values and deserializes them back to references using `transmute`. This violates Rust's pointer provenance rules.
 

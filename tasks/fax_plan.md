@@ -1,5 +1,7 @@
 # Log Forwarder Console Application Plan
 
+**GitHub Issue**: https://github.com/madesroches/micromegas/issues/577
+
 ## Overview
 Create a console application that executes given command-line arguments, captures their output (stdout/stderr), and forwards the output as structured log entries to the Micromegas ingestion service.
 

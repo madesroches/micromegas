@@ -2,4 +2,7 @@
 
 This crate provides a library to write Perfetto traces for the Micromegas observability platform.
 
-For more information, please see the main repository at [https://github.com/madesroches/micromegas](https://github.com/madesroches/micromegas).
+## Documentation
+
+- 📖 [Complete Documentation](https://madesroches.github.io/micromegas/)
+- 💻 [GitHub Repository](https://github.com/madesroches/micromegas)

@@ -1,5 +1,7 @@
 # Advisory Lock Timing Issue
 
+**GitHub Issue**: https://github.com/madesroches/micromegas/issues/576
+
 ## Problem
 Currently in `rust/analytics/src/lakehouse/write_partition.rs`, the advisory lock is acquired in `write_partition_metadata_attempt()` after the Parquet file has already been written to object storage.
 
