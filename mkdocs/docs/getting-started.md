@@ -9,6 +9,7 @@ Before you begin, ensure you have the following installed:
 - **[Docker](https://www.docker.com/get-started/)** - For running PostgreSQL
 - **[Python 3.8+](https://www.python.org/downloads/)** - For the client API and setup scripts
 - **[Rust](https://www.rust-lang.org/tools/install)** - For building Micromegas services
+- **Build tools** - C/C++ compiler and linker (required for Rust compilation)
 
 Optional:
 - **[tmux](https://github.com/tmux/tmux/wiki)** - For managing multiple services in a single terminal (Linux/macOS)
@@ -42,7 +43,28 @@ git clone https://github.com/madesroches/micromegas.git
 cd micromegas
 ```
 
-### 2. Start All Services
+### 2. Install Build Tools
+
+Before building the Rust components, install C/C++ build tools:
+
+**Linux:**
+```bash
+sudo apt-get update
+sudo apt-get install build-essential clang mold
+```
+
+!!! note "mold linker requirement"
+    On Linux, the project requires the [mold linker](https://github.com/rui314/mold) as configured in `.cargo/config.toml`. This provides faster linking for large projects.
+
+**macOS:**
+```bash
+xcode-select --install
+```
+
+**Windows:**
+Install [Visual Studio Build Tools](https://visualstudio.microsoft.com/downloads/)
+
+### 3. Start All Services
 
 #### Option A: Using tmux (Linux/macOS)
 
