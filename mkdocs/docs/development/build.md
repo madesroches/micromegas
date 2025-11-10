@@ -8,6 +8,22 @@ This guide covers building Micromegas from source and setting up a development e
 - **[Python 3.8+](https://www.python.org/downloads/)**
 - **[Docker](https://www.docker.com/get-started/)** - For running PostgreSQL
 - **[Git](https://git-scm.com/downloads)**
+- **Build tools** - C/C++ compiler and linker (required for Rust compilation)
+  - Linux: `sudo apt-get install build-essential clang mold`
+  - macOS: `xcode-select --install`
+  - Windows: Install [Visual Studio Build Tools](https://visualstudio.microsoft.com/downloads/)
+
+!!! note "mold linker requirement"
+    On Linux, the project requires the [mold linker](https://github.com/rui314/mold) as configured in `.cargo/config.toml`. This provides faster linking for large projects.
+
+### Additional CI Tools
+
+For running the full CI pipeline locally, you'll need:
+
+```bash
+# Install cargo-machete for unused dependency checking
+cargo install cargo-machete
+```
 
 ## Rust Development
 

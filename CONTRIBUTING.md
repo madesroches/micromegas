@@ -37,6 +37,34 @@ We welcome code contributions! If you'd like to contribute code, please follow t
 
 For information on setting up your local development environment, please refer to the [Getting Started](https://madesroches.github.io/micromegas/docs/getting-started/) guide.
 
+### Build Prerequisites
+
+Ensure you have C/C++ build tools installed before building Rust components:
+
+**Linux:**
+```bash
+sudo apt-get update
+sudo apt-get install build-essential clang mold
+```
+
+!!! note "mold linker requirement"
+    On Linux, the project requires the [mold linker](https://github.com/rui314/mold) as configured in `.cargo/config.toml`.
+
+**macOS:**
+```bash
+xcode-select --install
+```
+
+**Windows:**
+Install [Visual Studio Build Tools](https://visualstudio.microsoft.com/downloads/)
+
+### CI Tools
+
+To run the full CI pipeline locally (`python3 build/rust_ci.py`), install cargo-machete:
+```bash
+cargo install cargo-machete
+```
+
 ## Monorepo Structure
 
 Micromegas uses a monorepo structure with npm workspaces for JavaScript/TypeScript components and Cargo workspaces for Rust components.
