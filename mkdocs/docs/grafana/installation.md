@@ -14,21 +14,21 @@ This guide covers installing the Micromegas Grafana datasource plugin.
 
 1. Download the latest plugin release from GitHub:
    ```bash
-   wget https://github.com/madesroches/micromegas/releases/download/grafana-vX.Y.Z/micromegas-datasource-X.Y.Z.zip
+   wget https://github.com/madesroches/micromegas/releases/download/grafana-vX.Y.Z/micromegas-micromegas-datasource-X.Y.Z.zip
    ```
 
 2. Extract to your Grafana plugins directory:
    ```bash
    # Default plugin directory
-   unzip micromegas-datasource-X.Y.Z.zip -d /var/lib/grafana/plugins/
+   unzip micromegas-micromegas-datasource-X.Y.Z.zip -d /var/lib/grafana/plugins/
 
    # Or custom plugin directory
-   unzip micromegas-datasource-X.Y.Z.zip -d /path/to/grafana/plugins/
+   unzip micromegas-micromegas-datasource-X.Y.Z.zip -d /path/to/grafana/plugins/
    ```
 
 3. Set proper permissions:
    ```bash
-   chown -R grafana:grafana /var/lib/grafana/plugins/micromegas-datasource
+   chown -R grafana:grafana /var/lib/grafana/plugins/micromegas-micromegas-datasource
    ```
 
 4. Restart Grafana:
@@ -80,7 +80,7 @@ This guide covers installing the Micromegas Grafana datasource plugin.
 5. Link plugin to Grafana:
    ```bash
    # Create symlink in Grafana plugins directory
-   ln -s $(pwd) /var/lib/grafana/plugins/micromegas-datasource
+   ln -s $(pwd) /var/lib/grafana/plugins/micromegas-micromegas-datasource
    ```
 
 6. Restart Grafana (see commands above)
@@ -100,15 +100,15 @@ services:
     ports:
       - "3000:3000"
     volumes:
-      - ./micromegas-datasource:/var/lib/grafana/plugins/micromegas-datasource
+      - ./micromegas-micromegas-datasource:/var/lib/grafana/plugins/micromegas-micromegas-datasource
     environment:
-      - GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS=micromegas-datasource
+      - GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS=micromegas-micromegas-datasource
 ```
 
 !!! warning "Unsigned Plugin"
     During development, you may need to allow unsigned plugins with:
     ```bash
-    GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS=micromegas-datasource
+    GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS=micromegas-micromegas-datasource
     ```
 
 ## Verify Installation

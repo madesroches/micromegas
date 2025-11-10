@@ -13,10 +13,10 @@ Select Micromegas from the Type dropdown.
 
 Find out more here:
 
-[Github](https://github.com/madesroches/grafana-micromegas-datasource/)
+[Github](https://github.com/madesroches/micromegas/tree/main/grafana)
 
 [Micromegas](https://github.com/madesroches/micromegas/)
 
 [Arrow](https://arrow.apache.org/blog/2022/02/16/introducing-arrow-flight-sql/)
 
-[Docs](https://github.com/madesroches/grafana-micromegas-datasource/blob/main/README.md#usage)
+[Docs](https://madesroches.github.io/micromegas/docs/grafana/)
