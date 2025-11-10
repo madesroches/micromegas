@@ -123,19 +123,19 @@ def main():
     
     # Linting
     print("\n=== Linting ===")
-    if run_cmd("yarn workspace micromegas-datasource lint", repo_root) != 0:
+    if run_cmd("yarn workspace micromegas-micromegas-datasource lint", repo_root) != 0:
         print("❌ Linting failed")
         return 1
-    
+
     # Unit tests
     print("\n=== Unit tests ===")
-    if run_cmd("yarn workspace micromegas-datasource test:ci", repo_root) != 0:
+    if run_cmd("yarn workspace micromegas-micromegas-datasource test:ci", repo_root) != 0:
         print("❌ Unit tests failed")
         return 1
-    
+
     # Frontend build
     print("\n=== Frontend build ===")
-    if run_cmd("yarn workspace micromegas-datasource build", repo_root) != 0:
+    if run_cmd("yarn workspace micromegas-micromegas-datasource build", repo_root) != 0:
         print("❌ Frontend build failed")
         return 1
     
