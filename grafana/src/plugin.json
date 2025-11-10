@@ -2,12 +2,12 @@
   "$schema": "https://raw.githubusercontent.com/grafana/grafana/master/docs/sources/developers/plugins/plugin.schema.json",
   "type": "datasource",
   "name": "Micromegas",
-  "id": "micromegas-datasource",
+  "id": "micromegas-micromegas-datasource",
   "logs": true,
   "metrics": true,
   "backend": true,
   "alerting": true,
-  "executable": "gpx_flightsql_datasource",
+  "executable": "micromegas_micromegas_datasource",
   "info": {
     "description": "Query Micromegas.",
     "author": {

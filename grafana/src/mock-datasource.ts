@@ -5,20 +5,20 @@ import {FlightSQLDataSourceOptions, SQLQuery} from './types'
 
 export const mockDatasource = new FlightSQLDataSource({
   id: 1,
-  uid: 'micromegas-datasource-id',
-  type: 'micromegas-datasource',
+  uid: 'micromegas-micromegas-datasource-id',
+  type: 'micromegas-micromegas-datasource',
   name: 'Micromegas Data Source',
   readOnly: false,
   jsonData: {},
   access: 'proxy',
   meta: {
-    id: 'micromegas-datasource',
+    id: 'micromegas-micromegas-datasource',
     module: '',
     name: 'Micromegas Data Source',
     type: PluginType.datasource,
     alerting: true,
     backend: true,
-    baseUrl: 'public/plugins/micromegas-datasource',
+    baseUrl: 'public/plugins/micromegas-micromegas-datasource',
     info: {
       description: '',
       screenshots: [],

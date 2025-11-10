@@ -2,7 +2,7 @@ version: '3.0'
 
 services:
   grafana:
-    container_name: 'micromegas-datasource'
+    container_name: 'micromegas-micromegas-datasource'
     build:
       context: ./.config
       args:
@@ -10,4 +10,4 @@ services:
     ports:
       - 3000:3000/tcp
     volumes:
-      - ./dist:/var/lib/grafana/plugins/micromegas-datasource
+      - ./dist:/var/lib/grafana/plugins/micromegas-micromegas-datasource

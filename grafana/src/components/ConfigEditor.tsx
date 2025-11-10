@@ -198,8 +198,8 @@ export function ConfigEditor(props: DataSourcePluginOptionsEditorProps<FlightSQL
       <FieldSet label="Privacy Settings" width={FIELDSET_WIDTH}>
         <InlineField
           labelWidth={LABEL_WIDTH}
-          label="Enable User Attribution"
-          tooltip="Send user identity (username, email) to FlightSQL server for audit logging. Disable for GDPR compliance if needed."
+          label="User Attribution"
+          tooltip="When enabled (default), Grafana user information is sent to the FlightSQL server for audit logging and attribution. This helps track which users are running queries. Disable if GDPR or privacy policies prohibit sending user data."
         >
           <InlineSwitch
             label=""
@@ -209,14 +209,6 @@ export function ConfigEditor(props: DataSourcePluginOptionsEditorProps<FlightSQL
             disabled={false}
           />
         </InlineField>
-        <InlineFieldRow>
-          <InlineField>
-            <span className="help-text">
-              When enabled (default), Grafana user information is sent to the FlightSQL server for audit logging and attribution.
-              This helps track which users are running queries. Disable if GDPR or privacy policies prohibit sending user data.
-            </span>
-          </InlineField>
-        </InlineFieldRow>
       </FieldSet>
       <FieldSet label="MetaData" width={FIELDSET_WIDTH}>
         {metaDataArr?.map((_: any, i: any) => (
