@@ -142,7 +142,7 @@ This file documents the historical progress of the Micromegas project. For curre
    * Ready to replace analytics-srv with flight-sql-srv
 
 ## December 2024
- * [Grafana plugin](https://github.com/madesroches/grafana-micromegas-datasource/)
+ * [Grafana plugin](https://github.com/madesroches/micromegas/tree/main/grafana)
  * Released [version 0.2.3](https://crates.io/crates/micromegas)
  * Properties on measures & log entries available in SQL queries
 

@@ -125,7 +125,7 @@ const config = async (env): Promise<Configuration> => ({
 
   output: {
     clean: {
-      keep: /gpx_.*/,
+      keep: /micromegas_micromegas_datasource.*/,
     },
     filename: '[name].js',
     library: {
