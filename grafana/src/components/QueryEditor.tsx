@@ -3,7 +3,7 @@ import {Button, Modal, SegmentSection, Select, InlineFieldRow, SegmentInput, Che
 import {QueryEditorProps, SelectableValue} from '@grafana/data'
 import {MacroType} from '@grafana/experimental'
 import {FlightSQLDataSource} from '../datasource'
-import {FlightSQLDataSourceOptions, SQLQuery, sqlLanguageDefinition, QUERY_FORMAT_OPTIONS} from '../types'
+import {FlightSQLDataSourceOptions, SQLQuery, sqlLanguageDefinition, QUERY_FORMAT_OPTIONS, getTimeFilter, getAutoLimit} from '../types'
 import {getSqlCompletionProvider, checkCasing} from './utils'
 
 import {QueryEditorRaw} from './QueryEditorRaw'
@@ -126,18 +126,22 @@ export function QueryEditor(props: QueryEditorProps<FlightSQLDataSource, SQLQuer
       setRawEditor(false)
     }
 
-    if (query.timeFilter) {
-      setTimeFilter(query.timeFilter)
-    } else {
-      setTimeFilter(true)
+    // Initialize timeFilter and autoLimit with explicit default handling
+    const effectiveTimeFilter = getTimeFilter(query)
+    const effectiveAutoLimit = getAutoLimit(query)
+
+    setTimeFilter(effectiveTimeFilter)
+    setAutoLimit(effectiveAutoLimit)
+
+    // If either value is undefined, update the query object with defaults
+    if (query.timeFilter === undefined || query.autoLimit === undefined) {
+      onChange({
+        ...query,
+        timeFilter: effectiveTimeFilter,
+        autoLimit: effectiveAutoLimit
+      })
     }
 
-    if (query.autoLimit) {
-      setTimeFilter(query.autoLimit)
-    } else {
-      setTimeFilter(true)
-    }
-	  
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -211,13 +215,13 @@ export function QueryEditor(props: QueryEditorProps<FlightSQLDataSource, SQLQuer
 
         <InlineFieldRow style={{flexFlow: 'row', alignItems: 'center'}}>
           <SegmentSection label="Time Filter">
-		  <Checkbox value={query.timeFilter} onChange={() => { setTimeFilter(!timeFilter);}}/>
+		  <Checkbox value={getTimeFilter(query)} onChange={() => { setTimeFilter(!timeFilter);}}/>
           </SegmentSection>
         </InlineFieldRow>
 
         <InlineFieldRow style={{flexFlow: 'row', alignItems: 'center'}}>
           <SegmentSection label="Auto Limit">
-		  <Checkbox value={query.autoLimit} onChange={() => { setAutoLimit(!autoLimit);}}/>
+		  <Checkbox value={getAutoLimit(query)} onChange={() => { setAutoLimit(!autoLimit);}}/>
           </SegmentSection>
         </InlineFieldRow>
 		  

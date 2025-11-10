@@ -20,6 +20,26 @@ export const DEFAULT_QUERY: Partial<SQLQuery> = {
 	autoLimit: true
 }
 
+// Default values for query options
+export const DEFAULT_TIME_FILTER = true
+export const DEFAULT_AUTO_LIMIT = true
+
+/**
+ * Get the effective value for timeFilter with explicit default handling.
+ * Returns true if undefined (default), otherwise returns the explicit value.
+ */
+export function getTimeFilter(query: SQLQuery): boolean {
+  return query.timeFilter ?? DEFAULT_TIME_FILTER
+}
+
+/**
+ * Get the effective value for autoLimit with explicit default handling.
+ * Returns true if undefined (default), otherwise returns the explicit value.
+ */
+export function getAutoLimit(query: SQLQuery): boolean {
+  return query.autoLimit ?? DEFAULT_AUTO_LIMIT
+}
+
 /**
  * These are options configured for each DataSource instance
  */
