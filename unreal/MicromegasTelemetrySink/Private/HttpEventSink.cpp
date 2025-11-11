@@ -9,17 +9,14 @@
 #include "InsertProcessRequest.h"
 #include "InsertStreamRequest.h"
 #include "Interfaces/IHttpResponse.h"
-#include "LogDependencies.h"
 #include "MicromegasTelemetrySink/Log.h"
 #include "MicromegasTracing/Dispatch.h"
 #include "MicromegasTracing/EventStream.h"
-#include "MicromegasTracing/LogBlock.h"
 #include "MicromegasTracing/Macros.h"
 #include "MicromegasTracing/ProcessInfo.h"
 #include "Misc/App.h"
 #include "Misc/EngineVersion.h"
-#include <sstream>
-#include <string>
+
 #if PLATFORM_WINDOWS
 	#include "Windows/WindowsSystemIncludes.h"
 	#include "Windows/WindowsHWrapper.h"
@@ -128,8 +125,8 @@ void HttpEventSink::OnStartup(const MicromegasTracing::ProcessInfoPtr& ProcessIn
 	IncrementQueueSize();
 	Queue.Enqueue([this, ProcessInfo]()
 		{
-			TArray<uint8> Body = FormatInsertProcessRequest(*ProcessInfo);
-			const float TimeoutSeconds = 30.0f;
+			const TArray<uint8> Body = FormatInsertProcessRequest(*ProcessInfo);
+			constexpr float TimeoutSeconds = 30.0f;
 			SendBinaryRequest(TEXT("insert_process"), Body, TimeoutSeconds);
 		});
 	WakeupThread->Trigger();
@@ -148,8 +145,8 @@ void HttpEventSink::OnInitLogStream(const MicromegasTracing::LogStreamPtr& Strea
 	IncrementQueueSize();
 	Queue.Enqueue([this, Stream]()
 		{
-			TArray<uint8> Body = FormatInsertLogStreamRequest(*Stream);
-			const float TimeoutSeconds = 30.0f;
+			const TArray<uint8> Body = FormatInsertLogStreamRequest(*Stream);
+			constexpr float TimeoutSeconds = 30.0f;
 			SendBinaryRequest(TEXT("insert_stream"), Body, TimeoutSeconds);
 		});
 	WakeupThread->Trigger();
@@ -160,8 +157,8 @@ void HttpEventSink::OnInitMetricStream(const MicromegasTracing::MetricStreamPtr&
 	IncrementQueueSize();
 	Queue.Enqueue([this, Stream]()
 		{
-			TArray<uint8> Body = FormatInsertMetricStreamRequest(*Stream);
-			const float TimeoutSeconds = 30.0f;
+			const TArray<uint8> Body = FormatInsertMetricStreamRequest(*Stream);
+			constexpr float TimeoutSeconds = 30.0f;
 			SendBinaryRequest(TEXT("insert_stream"), Body, TimeoutSeconds);
 		});
 	WakeupThread->Trigger();
@@ -178,8 +175,8 @@ void HttpEventSink::OnInitThreadStream(MicromegasTracing::ThreadStream* Stream)
 	IncrementQueueSize();
 	Queue.Enqueue([this, Stream]()
 		{
-			TArray<uint8> Body = FormatInsertThreadStreamRequest(*Stream);
-			const float TimeoutSeconds = 30.0f;
+			const TArray<uint8> Body = FormatInsertThreadStreamRequest(*Stream);
+			constexpr float TimeoutSeconds = 30.0f;
 			SendBinaryRequest(TEXT("insert_stream"), Body, TimeoutSeconds);
 		});
 	WakeupThread->Trigger();
@@ -195,8 +192,8 @@ void HttpEventSink::OnProcessLogBlock(const MicromegasTracing::LogBlockPtr& Bloc
 	IncrementQueueSize();
 	Queue.Enqueue([this, Block]()
 		{
-			TArray<uint8> Content = FormatBlockRequest(*Process, *Block);
-			const float TimeoutSeconds = 10.0f;
+			const TArray<uint8> Content = FormatBlockRequest(*Process, *Block);
+			constexpr float TimeoutSeconds = 10.0f;
 			SendBinaryRequest(TEXT("insert_block"), Content, TimeoutSeconds);
 		});
 	WakeupThread->Trigger();
@@ -212,8 +209,8 @@ void HttpEventSink::OnProcessMetricBlock(const MicromegasTracing::MetricsBlockPt
 	IncrementQueueSize();
 	Queue.Enqueue([this, Block]()
 		{
-			TArray<uint8> Content = FormatBlockRequest(*Process, *Block);
-			const float TimeoutSeconds = 10.0f;
+			const TArray<uint8> Content = FormatBlockRequest(*Process, *Block);
+			constexpr float TimeoutSeconds = 10.0f;
 			SendBinaryRequest(TEXT("insert_block"), Content, TimeoutSeconds);
 		});
 	WakeupThread->Trigger();
@@ -229,8 +226,8 @@ void HttpEventSink::OnProcessThreadBlock(const MicromegasTracing::ThreadBlockPtr
 	IncrementQueueSize();
 	Queue.Enqueue([this, Block]()
 		{
-			TArray<uint8> Content = FormatBlockRequest(*Process, *Block);
-			const float TimeoutSeconds = 2.0f;
+			const TArray<uint8> Content = FormatBlockRequest(*Process, *Block);
+			constexpr float TimeoutSeconds = 2.0f;
 			SendBinaryRequest(TEXT("insert_block"), Content, TimeoutSeconds);
 		});
 	WakeupThread->Trigger();
@@ -268,8 +265,8 @@ uint32 HttpEventSink::Run()
 
 void HttpEventSink::IncrementQueueSize()
 {
-	int32 incrementedQueueSize = FPlatformAtomics::InterlockedIncrement(&QueueSize);
-	MICROMEGAS_IMETRIC("MicromegasTelemetrySink", MicromegasTracing::Verbosity::Min, TEXT("QueueSize"), TEXT("count"), incrementedQueueSize);
+	int32 IncrementedQueueSize = FPlatformAtomics::InterlockedIncrement(&QueueSize);
+	MICROMEGAS_IMETRIC("MicromegasTelemetrySink", MicromegasTracing::Verbosity::Min, TEXT("QueueSize"), TEXT("count"), IncrementedQueueSize);
 }
 
 void HttpEventSink::SendBinaryRequest(const TCHAR* command, const TArray<uint8>& content, float TimeoutSeconds)
@@ -310,11 +307,12 @@ FString GetDistro()
 	return FString::Printf(TEXT("%s %s"), ANSI_TO_TCHAR(FPlatformProperties::PlatformName()), *FPlatformMisc::GetOSVersion());
 }
 
-TSharedPtr<MicromegasTracing::EventSink, ESPMode::ThreadSafe> InitHttpEventSink(
+TSharedPtr<MicromegasTracing::EventSink> InitHttpEventSink(
 	const FString& BaseUrl,
 	const SharedTelemetryAuthenticator& Auth,
 	const SharedSamplingController& Sampling,
-	const SharedFlushMonitor& Flusher)
+	const SharedFlushMonitor& Flusher,
+	const TMap<FString,FString>& AdditionalProcessProperties)
 {
 	using namespace MicromegasTracing;
 	UE_LOG(LogMicromegasTelemetrySink, Log, TEXT("Initializing Remote Telemetry Sink"));
@@ -354,9 +352,11 @@ TSharedPtr<MicromegasTracing::EventSink, ESPMode::ThreadSafe> InitHttpEventSink(
 	Process->Properties.Add(TEXT("build-config"), LexToString(FApp::GetBuildConfiguration()));
 	Process->Properties.Add(TEXT("build-target"), LexToString(FApp::GetBuildTargetType()));
 	Process->Properties.Add(TEXT("branch-name"), FApp::GetBranchName().ToLower());
-    // Would be 0 on local builds
+
+	// Would be 0 on local builds
 	Process->Properties.Add(TEXT("commit"), FString::FromInt(BuildSettings::GetCurrentChangelist()));
-    // note that the following doesn't necessarily get the device in use by RHI Adapter
+
+	// note that the following doesn't necessarily get the device in use by RHI Adapter
     // but not to have to wait for the graphics init or depend on the graphics
     // it makes up for a good candidate still, especially on the prod floor
     // that is single adapter dominated
@@ -366,13 +366,18 @@ TSharedPtr<MicromegasTracing::EventSink, ESPMode::ThreadSafe> InitHttpEventSink(
 	Process->Properties.Add(TEXT("cpu-logical-cores"), FString::FromInt(FPlatformMisc::NumberOfCoresIncludingHyperthreads()));
     // this is not a typo, _ was chosen to delimit the unit
 	Process->Properties.Add(TEXT("ram_mb"), FString::FromInt(static_cast<int32>(FPlatformMemory::GetStats().TotalPhysical / (1024 * 1024))));
-	
-	TSharedPtr<MicromegasTracing::EventSink, ESPMode::ThreadSafe> Sink = MakeShared<HttpEventSink>(BaseUrl, Process, Auth, Sampling, Flusher);
-	const size_t LOG_BUFFER_SIZE = 10 * 1024 * 1024;
-	const size_t METRICS_BUFFER_SIZE = 10 * 1024 * 1024;
-	const size_t THREAD_BUFFER_SIZE = 10 * 1024 * 1024;
 
-	Dispatch::Init(&CreateGuid, Process, Sink, LOG_BUFFER_SIZE, METRICS_BUFFER_SIZE, THREAD_BUFFER_SIZE);
+	for (const TPair<FString,FString>& P : AdditionalProcessProperties)
+	{
+		Process->Properties.Add(P.Key, P.Value);
+	}
+
+	TSharedPtr<EventSink> Sink = MakeShared<HttpEventSink>(BaseUrl, Process, Auth, Sampling, Flusher);
+	constexpr size_t LogBufferSize = 10 * 1024 * 1024;
+	constexpr size_t MetricsBufferSize = 10 * 1024 * 1024;
+	constexpr size_t ThreadBufferSize = 10 * 1024 * 1024;
+
+	Dispatch::Init(&CreateGuid, Process, Sink, LogBufferSize, MetricsBufferSize, ThreadBufferSize);
 	UE_LOG(LogMicromegasTelemetrySink, Log, TEXT("Initializing Micromegas Telemetry process_id=%s"), *Process->ProcessId);
 	return Sink;
 }

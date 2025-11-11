@@ -2,6 +2,7 @@
 //
 //  MicromegasTelemetrySink/HttpEventSink.h
 //
+#include "Containers/Map.h"
 #include "Containers/Queue.h"
 #include "Containers/UnrealString.h"
 #include "HAL/Event.h"
@@ -43,7 +44,7 @@ public:
 	//
 	//  FRunnable
 	//
-	virtual uint32 Run();
+	virtual uint32 Run() override;
 
 private:
 	void IncrementQueueSize();
@@ -63,8 +64,9 @@ private:
 	SharedFlushMonitor Flusher;
 };
 
-MICROMEGASTELEMETRYSINK_API TSharedPtr<MicromegasTracing::EventSink, ESPMode::ThreadSafe> InitHttpEventSink(
+MICROMEGASTELEMETRYSINK_API TSharedPtr<MicromegasTracing::EventSink> InitHttpEventSink(
 	const FString& BaseUrl,
 	const SharedTelemetryAuthenticator& Auth,
 	const SharedSamplingController& Sampling,
-	const SharedFlushMonitor& Flusher);
+	const SharedFlushMonitor& Flusher,
+	const TMap<FString,FString>& AdditionalProcessProperties);
