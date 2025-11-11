@@ -1,4 +1,6 @@
 #include "MicromegasTelemetrySink/MicromegasTelemetrySinkModule.h"
+
+#include "Containers/Map.h"
 #include "HAL/IConsoleManager.h"
 #include "MicromegasTelemetrySink/HttpEventSink.h"
 #include "MicromegasTelemetrySink/LogInterop.h"
@@ -25,12 +27,11 @@ public:
 	virtual void StartupModule() override;
 	virtual void PreUnloadCallback() override;
 	virtual void ShutdownModule() override;
-	virtual void InitTelemetry(const FString& BaseUrl, const SharedTelemetryAuthenticator& auth) override;
+	virtual void InitTelemetry(const FString& BaseUrl, const SharedTelemetryAuthenticator& Auth, const TMap<FString, FString>& InAdditionalProcessProperties /*= TMap<FString, FString>()*/) override;
 
 private:
 	void OnEnable();
-	void OnFlush();
-	void RegisterConsoleVariables();
+	void OnFlush() const;
 
 	TUniquePtr<FAutoConsoleCommand> CmdEnable;
 	TUniquePtr<FAutoConsoleCommand> CmdFlush;
@@ -40,6 +41,7 @@ private:
 	SharedFlushMonitor Flusher;
 	SharedMetricPublisher MetricPub;
 	TUniquePtr<FSystemErrorReporter> SystemErrorReporter;
+	TMap<FString, FString> AdditionalProcessProperties;
 };
 
 //================================================================================
@@ -59,7 +61,8 @@ void FMicromegasTelemetrySinkModule::OnEnable()
 	check(Authenticator.IsValid());
 	Flusher = MakeShared<FlushMonitor>();
 	SamplingController = MakeShared<FSamplingController>(Flusher);
-	TSharedPtr<MicromegasTracing::EventSink, ESPMode::ThreadSafe> Sink = InitHttpEventSink(UploadBaseUrl, Authenticator, SamplingController, Flusher);
+
+	const TSharedPtr<MicromegasTracing::EventSink> Sink = InitHttpEventSink(UploadBaseUrl, Authenticator, SamplingController, Flusher, AdditionalProcessProperties);
 	Authenticator->Init(Sink);
 	MetricPub = MakeShared<MetricPublisher>();
 	CmdEnable.Reset();
@@ -74,7 +77,7 @@ void FMicromegasTelemetrySinkModule::OnEnable()
 	FCoreDelegates::OnCommandletPostMain.AddRaw(this, &FMicromegasTelemetrySinkModule::OnFlush);
 }
 
-void FMicromegasTelemetrySinkModule::OnFlush()
+void FMicromegasTelemetrySinkModule::OnFlush() const
 {
 	if (Flusher.IsValid())
 	{
@@ -100,10 +103,11 @@ void FMicromegasTelemetrySinkModule::ShutdownModule()
 	MicromegasTracing::Dispatch::Shutdown();
 }
 
-void FMicromegasTelemetrySinkModule::InitTelemetry(const FString& BaseUrl, const SharedTelemetryAuthenticator& Auth)
+void FMicromegasTelemetrySinkModule::InitTelemetry(const FString& BaseUrl, const SharedTelemetryAuthenticator& Auth, const TMap<FString, FString>& InAdditionalProcessProperties /*= TMap<FString, FString>()*/)
 {
 	UploadBaseUrl = BaseUrl;
 	Authenticator = Auth;
+	this->AdditionalProcessProperties = InAdditionalProcessProperties;
 
 #if MICROMEGAS_ENABLE_TELEMETRY_ON_START
 	OnEnable();

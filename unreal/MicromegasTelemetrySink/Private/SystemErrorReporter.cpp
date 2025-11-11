@@ -34,7 +34,7 @@ void FSystemErrorReporter::OnSystemError()
 		FProgramCounterSymbolInfo SymbolInfo;
 		FPlatformStackWalk::ProgramCounterToSymbolInfo(BackTrace[StackDepth], SymbolInfo);
 		FPlatformStackWalk::SymbolInfoToHumanReadableString(SymbolInfo, Message, MessageMaxSize);
-		FCStringAnsi::Strncat(Message, LINE_TERMINATOR_ANSI, MessageMaxSize);
+		FCStringAnsi::StrncatTruncateDest(Message, MessageMaxSize, LINE_TERMINATOR_ANSI);
 	}
 	MICROMEGAS_LOG("MicromegasTelemetrySink", MicromegasTracing::LogLevel::Fatal, Message);
 	FMemory::SystemFree(Message);
