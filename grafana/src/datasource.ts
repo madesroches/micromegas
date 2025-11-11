@@ -1,6 +1,6 @@
 import {DataQueryResponse, MetricFindValue, DataSourceInstanceSettings, CoreApp, ScopedVars, VariableWithMultiSupport} from '@grafana/data'
 import {frameToMetricFindValue, DataSourceWithBackend, getTemplateSrv} from '@grafana/runtime'
-import {SQLQuery, QueryFormat, FlightSQLDataSourceOptions, DEFAULT_QUERY} from './types'
+import {SQLQuery, QueryFormat, FlightSQLDataSourceOptions, DEFAULT_QUERY, getTimeFilter} from './types'
 import { lastValueFrom } from 'rxjs';
 
 
@@ -9,12 +9,19 @@ export class FlightSQLDataSource extends DataSourceWithBackend<SQLQuery, FlightS
     super(instanceSettings)
   }
 
-async metricFindQuery(queryText: string, options?: any): Promise<MetricFindValue[]> {
+  // Called by Grafana to populate dashboard variable dropdowns (legacy name from metrics datasources)
+  async metricFindQuery(query: SQLQuery | string, options?: any): Promise<MetricFindValue[]> {
+      // Handle both string (legacy) and SQLQuery object inputs
+      const queryText = typeof query === 'string' ? query : query.queryText;
+      const queryObj = typeof query === 'string' ? {} : query;
+
       const target: SQLQuery = {
         refId: 'metricFindQuery',
         queryText,
         rawEditor: true,
-        format: QueryFormat.Table
+        format: QueryFormat.Table,
+        timeFilter: getTimeFilter(queryObj as SQLQuery),
+        autoLimit: false  // Always false for variable queries (no limit in variable context)
       };
       return lastValueFrom(
         super.query({

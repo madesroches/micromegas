@@ -2,6 +2,7 @@ import {DataSourcePlugin} from '@grafana/data'
 import {FlightSQLDataSource} from './datasource'
 import {ConfigEditor} from './components/ConfigEditor'
 import {QueryEditor} from './components/QueryEditor'
+import {VariableQueryEditor} from './components/VariableQueryEditor'
 import {SQLQuery, FlightSQLDataSourceOptions, SecureJsonData} from './types'
 
 export const plugin = new DataSourcePlugin<FlightSQLDataSource, SQLQuery, FlightSQLDataSourceOptions, SecureJsonData>(
@@ -9,3 +10,4 @@ export const plugin = new DataSourcePlugin<FlightSQLDataSource, SQLQuery, Flight
 )
   .setConfigEditor(ConfigEditor)
   .setQueryEditor(QueryEditor)
+  .setVariableQueryEditor(VariableQueryEditor)
