@@ -13,6 +13,7 @@ export const VariableQueryEditor = ({ onChange, query: queryProp }: VariableQuer
     // Case 1: Legacy string format (when no custom editor was registered)
     if (typeof queryProp === 'string') {
       return {
+        query: queryProp,        // For Grafana's definition display
         queryText: queryProp,
         refId: 'A',
         timeFilter: true,
@@ -24,6 +25,7 @@ export const VariableQueryEditor = ({ onChange, query: queryProp }: VariableQuer
     const q = queryProp || { queryText: '', refId: 'A' };
     return {
       ...q,
+      query: q.queryText || q.query,  // Sync query field for Grafana
       timeFilter: getTimeFilter(q),
       autoLimit: false
     };
@@ -33,14 +35,28 @@ export const VariableQueryEditor = ({ onChange, query: queryProp }: VariableQuer
 
   useEffect(() => {
     // Update query when timeFilter changes
-    const updatedQuery = { ...query, timeFilter: timeFilter };
+    const updatedQuery = {
+      ...query,
+      timeFilter: timeFilter,
+      query: query.queryText  // Keep query field in sync for Grafana's definition
+    };
     setQuery(updatedQuery);
-    onChange(updatedQuery, updatedQuery.queryText || '');
+    // Provide a descriptive definition string that includes query text
+    const definition = updatedQuery.queryText || '';
+    onChange(updatedQuery, definition);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [timeFilter]);
 
   const saveQuery = () => {
-    onChange(query, query.queryText || '');
+    // Sync the query field for Grafana's automatic definition extraction
+    const updatedQuery = {
+      ...query,
+      query: query.queryText  // Keep query field in sync for Grafana's definition
+    };
+    setQuery(updatedQuery);
+    // Provide a descriptive definition string that includes query text
+    const definition = updatedQuery.queryText || '';
+    onChange(updatedQuery, definition);
   };
 
   const handleChange = (event: React.FormEvent<HTMLInputElement>) => {

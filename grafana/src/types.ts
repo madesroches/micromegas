@@ -2,7 +2,8 @@ import {DataQuery, DataSourceJsonData} from '@grafana/data'
 import {formatSQL} from './components/sqlFormatter'
 
 export interface SQLQuery extends DataQuery {
-  queryText?: string
+  query?: string  // Used by Grafana for variable definition display (synced with queryText for backward compatibility)
+  queryText?: string  // Legacy field name - kept for backward compatibility with existing dashboards. TODO: migrate to use 'query' field only
   format?: string
   rawEditor?: boolean
   table?: string
