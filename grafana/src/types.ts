@@ -14,11 +14,15 @@ export interface SQLQuery extends DataQuery {
   limit?: string
   timeFilter?: boolean
   autoLimit?: boolean
+  version?: number  // Query schema version (undefined/missing = v1, 2 = current)
 }
 
 export const DEFAULT_QUERY: Partial<SQLQuery> = {
+	query: '',
+	format: 'table',
 	timeFilter: true,
-	autoLimit: true
+	autoLimit: true,
+	version: 2
 }
 
 // Default values for query options
@@ -39,6 +43,93 @@ export function getTimeFilter(query: SQLQuery): boolean {
  */
 export function getAutoLimit(query: SQLQuery): boolean {
   return query.autoLimit ?? DEFAULT_AUTO_LIMIT
+}
+
+/**
+ * Migrates queries from older schema versions to the current version (v2).
+ * This ensures backwards compatibility with existing dashboards.
+ *
+ * @param query - The query to migrate (can be string, null/undefined/empty, or SQLQuery object)
+ * @param context - The context where the query is used ('panel' or 'variable')
+ * @returns A new migrated query object (does not mutate input)
+ */
+export function migrateQuery(query: SQLQuery | string | null | undefined, context: 'panel' | 'variable'): SQLQuery {
+  // Handle legacy string format
+  if (typeof query === 'string') {
+    return {
+      ...DEFAULT_QUERY,
+      query: query,
+      queryText: undefined,
+      autoLimit: context === 'variable' ? false : true,
+    } as SQLQuery;
+  }
+
+  // Defensive: return default query if input is invalid
+  if (!query || Object.keys(query).length === 0) {
+    return {
+      ...DEFAULT_QUERY,
+      refId: query?.refId || 'A',
+      autoLimit: context === 'variable' ? false : true,
+    } as SQLQuery;
+  }
+
+  // Detect version (undefined/missing = v1)
+  const version = query.version ?? 1;
+
+  // Forward compatibility: treat unknown versions as v2
+  if (version >= 2) {
+    // Already migrated, but ensure autoLimit is correct for variable context
+    if (context === 'variable' && query.autoLimit !== false) {
+      return {
+        ...query,
+        autoLimit: false,
+      };
+    }
+    return query;
+  }
+
+  // V1 migration logic
+  let migratedQuery: SQLQuery = { ...query };
+
+  // Migrate query text field
+  if (migratedQuery.query) {
+    // query field exists and takes precedence
+    migratedQuery.queryText = undefined;
+  } else if (migratedQuery.queryText) {
+    // Copy queryText to query field
+    migratedQuery.query = migratedQuery.queryText;
+    migratedQuery.queryText = undefined;
+  } else {
+    // Neither field exists, set to empty string
+    migratedQuery.query = '';
+    migratedQuery.queryText = undefined;
+  }
+
+  // Migrate format field (v1 default: 'table')
+  if (migratedQuery.format === undefined) {
+    migratedQuery.format = 'table';
+  }
+
+  // Migrate timeFilter field (v1 default: true)
+  if (migratedQuery.timeFilter === undefined) {
+    migratedQuery.timeFilter = true;
+  }
+
+  // Migrate autoLimit field (context-dependent)
+  if (context === 'variable') {
+    // Variables: always force to false
+    migratedQuery.autoLimit = false;
+  } else {
+    // Panels: default to true if undefined
+    if (migratedQuery.autoLimit === undefined) {
+      migratedQuery.autoLimit = true;
+    }
+  }
+
+  // Mark as v2
+  migratedQuery.version = 2;
+
+  return migratedQuery;
 }
 
 /**

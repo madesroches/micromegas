@@ -3,7 +3,7 @@ import {Button, Modal, SegmentSection, Select, InlineFieldRow, SegmentInput, Che
 import {QueryEditorProps, SelectableValue} from '@grafana/data'
 import {MacroType} from '@grafana/experimental'
 import {FlightSQLDataSource} from '../datasource'
-import {FlightSQLDataSourceOptions, SQLQuery, sqlLanguageDefinition, QUERY_FORMAT_OPTIONS, getTimeFilter, getAutoLimit} from '../types'
+import {FlightSQLDataSourceOptions, SQLQuery, sqlLanguageDefinition, QUERY_FORMAT_OPTIONS, migrateQuery} from '../types'
 import {getSqlCompletionProvider, checkCasing} from './utils'
 
 import {QueryEditorRaw} from './QueryEditorRaw'
@@ -108,42 +108,35 @@ export function QueryEditor(props: QueryEditorProps<FlightSQLDataSource, SQLQuer
   }, [rawEditor])
 
   useEffect(() => {
-    // get the format off the query on load
-    if (query.format) {
-      setFormat({value: query.format, label: query.format})
-    }
-    // set the default to table
-    // if the user hadn't previously submitted a query with a format
-    if (!query.format) {
-      setFormat(QUERY_FORMAT_OPTIONS[1])
+    // Migrate query on component mount AND when datasource changes
+    // This is critical for cross-datasource compatibility (e.g., switching from old plugin to new)
+    const migratedQuery = migrateQuery(query, 'panel')
+
+    // Update component state with migrated values
+    if (migratedQuery.format) {
+      setFormat({value: migratedQuery.format, label: migratedQuery.format})
     }
 
-    // check if a query has previously been sent from a
-    // specific editor and default to that
-    if (query.rawEditor) {
-      setRawEditor(query.rawEditor)
+    if (migratedQuery.rawEditor) {
+      setRawEditor(migratedQuery.rawEditor)
     } else {
       setRawEditor(false)
     }
 
-    // Initialize timeFilter and autoLimit with explicit default handling
-    const effectiveTimeFilter = getTimeFilter(query)
-    const effectiveAutoLimit = getAutoLimit(query)
+    setTimeFilter(migratedQuery.timeFilter ?? true)
+    setAutoLimit(migratedQuery.autoLimit ?? true)
 
-    setTimeFilter(effectiveTimeFilter)
-    setAutoLimit(effectiveAutoLimit)
-
-    // If either value is undefined, update the query object with defaults
-    if (query.timeFilter === undefined || query.autoLimit === undefined) {
-      onChange({
-        ...query,
-        timeFilter: effectiveTimeFilter,
-        autoLimit: effectiveAutoLimit
-      })
+    // Apply migrated query if anything changed
+    if (migratedQuery.version !== query.version ||
+        migratedQuery.format !== query.format ||
+        migratedQuery.timeFilter !== query.timeFilter ||
+        migratedQuery.autoLimit !== query.autoLimit ||
+        migratedQuery.query !== query.query) {
+      onChange(migratedQuery)
     }
 
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [datasource.uid])
 
   return (
     <>
@@ -173,7 +166,7 @@ export function QueryEditor(props: QueryEditorProps<FlightSQLDataSource, SQLQuer
                 setRawEditor(!rawEditor)
                 setFromSql(rawEditor)
                 if (rawEditor) {
-                  query.queryText = ''
+                  onChange({ ...query, query: '' })
                 }
               }}
             >
@@ -215,22 +208,22 @@ export function QueryEditor(props: QueryEditorProps<FlightSQLDataSource, SQLQuer
 
         <InlineFieldRow style={{flexFlow: 'row', alignItems: 'center'}}>
           <SegmentSection label="Time Filter">
-		  <Checkbox value={getTimeFilter(query)} onChange={() => { setTimeFilter(!timeFilter);}}/>
+            <Checkbox value={timeFilter} onChange={() => { setTimeFilter(!timeFilter);}}/>
           </SegmentSection>
         </InlineFieldRow>
 
         <InlineFieldRow style={{flexFlow: 'row', alignItems: 'center'}}>
           <SegmentSection label="Auto Limit">
-		  <Checkbox value={getAutoLimit(query)} onChange={() => { setAutoLimit(!autoLimit);}}/>
+            <Checkbox value={autoLimit} onChange={() => { setAutoLimit(!autoLimit);}}/>
           </SegmentSection>
         </InlineFieldRow>
-		  
+
       </div>
       {!rawEditor && (
           <div style={{marginTop: '5px'}}>
           <SegmentSection label="SQL">
             <div style={{fontFamily: 'monospace', minWidth: '200px'}}>
-              <SegmentInput disabled value={query.queryText || ''} onChange={() => {}} />
+              <SegmentInput disabled value={query.query || ''} onChange={() => {}} />
             </div>
           </SegmentSection>
         </div>

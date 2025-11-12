@@ -1,6 +1,6 @@
 import {DataQueryResponse, MetricFindValue, DataSourceInstanceSettings, CoreApp, ScopedVars, VariableWithMultiSupport} from '@grafana/data'
 import {frameToMetricFindValue, DataSourceWithBackend, getTemplateSrv} from '@grafana/runtime'
-import {SQLQuery, QueryFormat, FlightSQLDataSourceOptions, DEFAULT_QUERY, getTimeFilter} from './types'
+import {SQLQuery, QueryFormat, FlightSQLDataSourceOptions, DEFAULT_QUERY, migrateQuery} from './types'
 import { lastValueFrom } from 'rxjs';
 
 
@@ -11,17 +11,14 @@ export class FlightSQLDataSource extends DataSourceWithBackend<SQLQuery, FlightS
 
   // Called by Grafana to populate dashboard variable dropdowns (legacy name from metrics datasources)
   async metricFindQuery(query: SQLQuery | string, options?: any): Promise<MetricFindValue[]> {
-      // Handle both string (legacy) and SQLQuery object inputs
-      const queryText = typeof query === 'string' ? query : query.queryText;
-      const queryObj = typeof query === 'string' ? {} : query;
+      // Migrate query to v2 with variable context (handles string, legacy formats, etc.)
+      const migratedQuery = migrateQuery(query, 'variable');
 
       const target: SQLQuery = {
+        ...migratedQuery,
         refId: 'metricFindQuery',
-        queryText,
         rawEditor: true,
         format: QueryFormat.Table,
-        timeFilter: getTimeFilter(queryObj as SQLQuery),
-        autoLimit: false  // Always false for variable queries (no limit in variable context)
       };
       return lastValueFrom(
         super.query({
@@ -70,9 +67,13 @@ export class FlightSQLDataSource extends DataSourceWithBackend<SQLQuery, FlightS
   }
 
   applyTemplateVariables(query: SQLQuery, scopedVars: ScopedVars): SQLQuery {
+    // Migrate query before processing
+    const migratedQuery = migrateQuery(query, 'panel');
+
     const interpolatedQuery: SQLQuery = {
-      ...query,
-      queryText: getTemplateSrv().replace(query.queryText, scopedVars, this.interpolateVariable),
+      ...migratedQuery,
+      query: getTemplateSrv().replace(migratedQuery.query, scopedVars, this.interpolateVariable),
+      queryText: migratedQuery.queryText ? getTemplateSrv().replace(migratedQuery.queryText, scopedVars, this.interpolateVariable) : undefined,
     }
     return interpolatedQuery
   }

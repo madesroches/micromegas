@@ -8,4 +8,7 @@ services:
     ports:
       - 3000:3000/tcp
     volumes:
+      # Current plugin version (v0.15.0)
       - ./dist:/var/lib/grafana/plugins/micromegas-micromegas-datasource
+      # Old plugin version (v0.1.1) for backward compatibility testing
+      - ./old-plugin-v0.1.1/micromegas-datasource:/var/lib/grafana/plugins/micromegas-datasource

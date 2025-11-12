@@ -83,13 +83,14 @@ export function BuilderView({query, datasource, onChange, fromRawSql}: any) {
       const queryText = buildQueryString(selectColumns, prefixDBSchema, whereExps, orderBy, groupBy, limit)
       onChange({
         ...query,
-        queryText: queryText,
+        query: queryText,
         table: casedTable,
         columns: columnValues,
         wheres: whereValues,
         orderBy: orderBy,
         groupBy: groupBy,
         limit: limit,
+        version: 2,
       })
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -140,7 +141,7 @@ export function BuilderView({query, datasource, onChange, fromRawSql}: any) {
         }
       }
       if (!tableExists) {
-        query.queryText = ''
+        query.query = ''
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps

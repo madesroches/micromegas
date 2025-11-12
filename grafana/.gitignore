@@ -39,3 +39,6 @@ e2e-results/
 micromegas-micromegas-datasource*.tar.gz
 micromegas-micromegas-datasource.zip
 micromegas-micromegas-datasource/
+
+# Old plugin versions for backward compatibility testing
+old-plugin-v*/
