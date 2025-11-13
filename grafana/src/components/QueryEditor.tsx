@@ -3,7 +3,7 @@ import {Button, Modal, SegmentSection, Select, InlineFieldRow, SegmentInput, Che
 import {QueryEditorProps, SelectableValue} from '@grafana/data'
 import {MacroType} from '@grafana/experimental'
 import {FlightSQLDataSource} from '../datasource'
-import {FlightSQLDataSourceOptions, SQLQuery, sqlLanguageDefinition, QUERY_FORMAT_OPTIONS, migrateQuery} from '../types'
+import {FlightSQLDataSourceOptions, SQLQuery, sqlLanguageDefinition, QUERY_FORMAT_OPTIONS, migrateQuery, QueryContext} from '../types'
 import {getSqlCompletionProvider, checkCasing} from './utils'
 
 import {QueryEditorRaw} from './QueryEditorRaw'
@@ -110,7 +110,7 @@ export function QueryEditor(props: QueryEditorProps<FlightSQLDataSource, SQLQuer
   useEffect(() => {
     // Migrate query on component mount AND when datasource changes
     // This is critical for cross-datasource compatibility (e.g., switching from old plugin to new)
-    const migratedQuery = migrateQuery(query, 'panel')
+    const migratedQuery = migrateQuery(query, QueryContext.Panel)
 
     // Update component state with migrated values
     if (migratedQuery.format) {

@@ -1,4 +1,4 @@
-import { migrateQuery, SQLQuery } from './types';
+import { migrateQuery, SQLQuery, QueryContext } from './types';
 
 describe('migrateQuery', () => {
   describe('Panel context', () => {
@@ -8,7 +8,7 @@ describe('migrateQuery', () => {
         queryText: 'SELECT time, process_id, level, target, msg FROM log_entries WHERE level <= 4 ORDER BY time DESC LIMIT 100',
       };
 
-      const result = migrateQuery(v1Query, 'panel');
+      const result = migrateQuery(v1Query, QueryContext.Panel);
 
       expect(result.query).toBe('SELECT time, process_id, level, target, msg FROM log_entries WHERE level <= 4 ORDER BY time DESC LIMIT 100');
       expect(result.queryText).toBeUndefined();
@@ -21,7 +21,7 @@ describe('migrateQuery', () => {
         queryText: 'SELECT process_id, exe, computer FROM processes ORDER BY start_time DESC',
       };
 
-      const result = migrateQuery(v1Query, 'panel');
+      const result = migrateQuery(v1Query, QueryContext.Panel);
 
       expect(result.format).toBe('table');
     });
@@ -33,7 +33,7 @@ describe('migrateQuery', () => {
         format: 'logs',
       };
 
-      const result = migrateQuery(v1Query, 'panel');
+      const result = migrateQuery(v1Query, QueryContext.Panel);
 
       expect(result.format).toBe('logs');
     });
@@ -44,7 +44,7 @@ describe('migrateQuery', () => {
         queryText: 'SELECT time, level, msg FROM log_entries LIMIT 100',
       };
 
-      const result = migrateQuery(v1Query, 'panel');
+      const result = migrateQuery(v1Query, QueryContext.Panel);
 
       expect(result.timeFilter).toBe(true);
     });
@@ -56,7 +56,7 @@ describe('migrateQuery', () => {
         timeFilter: false,
       };
 
-      const result = migrateQuery(v1Query, 'panel');
+      const result = migrateQuery(v1Query, QueryContext.Panel);
 
       expect(result.timeFilter).toBe(false);
     });
@@ -67,7 +67,7 @@ describe('migrateQuery', () => {
         queryText: 'SELECT time, span_id, name FROM spans ORDER BY time DESC',
       };
 
-      const result = migrateQuery(v1Query, 'panel');
+      const result = migrateQuery(v1Query, QueryContext.Panel);
 
       expect(result.autoLimit).toBe(true);
     });
@@ -79,7 +79,7 @@ describe('migrateQuery', () => {
         autoLimit: false,
       };
 
-      const result = migrateQuery(v1Query, 'panel');
+      const result = migrateQuery(v1Query, QueryContext.Panel);
 
       expect(result.autoLimit).toBe(false);
     });
@@ -91,7 +91,7 @@ describe('migrateQuery', () => {
         queryText: 'SELECT time, level FROM log_entries',
       };
 
-      const result = migrateQuery(v1Query, 'panel');
+      const result = migrateQuery(v1Query, QueryContext.Panel);
 
       expect(result.query).toBe('SELECT name, value FROM metrics ORDER BY time DESC');
       expect(result.queryText).toBeUndefined();
@@ -104,7 +104,7 @@ describe('migrateQuery', () => {
         query: 'SELECT time, value FROM metrics WHERE name = \'cpu_usage\'',
       };
 
-      const result = migrateQuery(v1Query, 'panel');
+      const result = migrateQuery(v1Query, QueryContext.Panel);
 
       expect(result.query).toBe('SELECT time, value FROM metrics WHERE name = \'cpu_usage\'');
       expect(result.queryText).toBeUndefined();
@@ -116,7 +116,7 @@ describe('migrateQuery', () => {
         refId: 'A',
       };
 
-      const result = migrateQuery(v1Query, 'panel');
+      const result = migrateQuery(v1Query, QueryContext.Panel);
 
       expect(result.query).toBe('');
       expect(result.queryText).toBeUndefined();
@@ -131,7 +131,7 @@ describe('migrateQuery', () => {
         queryText: 'SELECT DISTINCT computer FROM processes',
       };
 
-      const result = migrateQuery(v1Query, 'variable');
+      const result = migrateQuery(v1Query, QueryContext.Variable);
 
       expect(result.autoLimit).toBe(false);
     });
@@ -143,7 +143,7 @@ describe('migrateQuery', () => {
         autoLimit: true,
       };
 
-      const result = migrateQuery(v1Query, 'variable');
+      const result = migrateQuery(v1Query, QueryContext.Variable);
 
       expect(result.autoLimit).toBe(false);
     });
@@ -154,7 +154,7 @@ describe('migrateQuery', () => {
         queryText: 'SELECT DISTINCT level FROM log_entries',
       };
 
-      const result = migrateQuery(v1Query, 'variable');
+      const result = migrateQuery(v1Query, QueryContext.Variable);
 
       expect(result.format).toBe('table');
     });
@@ -165,7 +165,7 @@ describe('migrateQuery', () => {
         queryText: 'SELECT DISTINCT target FROM log_entries',
       };
 
-      const result = migrateQuery(v1Query, 'variable');
+      const result = migrateQuery(v1Query, QueryContext.Variable);
 
       expect(result.timeFilter).toBe(true);
     });
@@ -173,7 +173,7 @@ describe('migrateQuery', () => {
 
   describe('Edge cases', () => {
     it('should handle null query', () => {
-      const result = migrateQuery(null, 'panel');
+      const result = migrateQuery(null, QueryContext.Panel);
 
       expect(result.query).toBe('');
       expect(result.format).toBe('table');
@@ -183,7 +183,7 @@ describe('migrateQuery', () => {
     });
 
     it('should handle undefined query', () => {
-      const result = migrateQuery(undefined, 'panel');
+      const result = migrateQuery(undefined, QueryContext.Panel);
 
       expect(result.query).toBe('');
       expect(result.format).toBe('table');
@@ -193,7 +193,7 @@ describe('migrateQuery', () => {
     });
 
     it('should handle empty query object', () => {
-      const result = migrateQuery({} as SQLQuery, 'panel');
+      const result = migrateQuery({} as SQLQuery, QueryContext.Panel);
 
       expect(result.query).toBe('');
       expect(result.format).toBe('table');
@@ -203,7 +203,7 @@ describe('migrateQuery', () => {
     });
 
     it('should handle legacy string query', () => {
-      const result = migrateQuery('SELECT time, level, msg FROM log_entries ORDER BY time DESC LIMIT 100', 'panel');
+      const result = migrateQuery('SELECT time, level, msg FROM log_entries ORDER BY time DESC LIMIT 100', QueryContext.Panel);
 
       expect(result.query).toBe('SELECT time, level, msg FROM log_entries ORDER BY time DESC LIMIT 100');
       expect(result.queryText).toBeUndefined();
@@ -214,7 +214,7 @@ describe('migrateQuery', () => {
     });
 
     it('should handle legacy string query in variable context', () => {
-      const result = migrateQuery('SELECT DISTINCT computer FROM processes', 'variable');
+      const result = migrateQuery('SELECT DISTINCT computer FROM processes', QueryContext.Variable);
 
       expect(result.query).toBe('SELECT DISTINCT computer FROM processes');
       expect(result.queryText).toBeUndefined();
@@ -229,7 +229,7 @@ describe('migrateQuery', () => {
         version: 1,
       };
 
-      const result = migrateQuery(v1Query, 'panel');
+      const result = migrateQuery(v1Query, QueryContext.Panel);
 
       expect(result.query).toBe('SELECT process_id, exe FROM processes');
       expect(result.queryText).toBeUndefined();
@@ -246,7 +246,7 @@ describe('migrateQuery', () => {
         version: 99,
       };
 
-      const result = migrateQuery(futureQuery, 'panel');
+      const result = migrateQuery(futureQuery, QueryContext.Panel);
 
       expect(result).toEqual(futureQuery);
     });
@@ -261,7 +261,7 @@ describe('migrateQuery', () => {
         version: -1,
       };
 
-      const result = migrateQuery(invalidQuery, 'panel');
+      const result = migrateQuery(invalidQuery, QueryContext.Panel);
 
       // Negative versions are treated as v1 and migrated
       expect(result.version).toBe(2);
@@ -281,7 +281,7 @@ describe('migrateQuery', () => {
         version: 2,
       };
 
-      const result = migrateQuery(v2Query, 'panel');
+      const result = migrateQuery(v2Query, QueryContext.Panel);
 
       expect(result).toEqual(v2Query);
     });
@@ -292,8 +292,8 @@ describe('migrateQuery', () => {
         queryText: 'SELECT process_id, exe FROM processes',
       };
 
-      const firstMigration = migrateQuery(v1Query, 'panel');
-      const secondMigration = migrateQuery(firstMigration, 'panel');
+      const firstMigration = migrateQuery(v1Query, QueryContext.Panel);
+      const secondMigration = migrateQuery(firstMigration, QueryContext.Panel);
 
       expect(secondMigration).toEqual(firstMigration);
     });
@@ -308,7 +308,7 @@ describe('migrateQuery', () => {
         version: 2,
       };
 
-      const result = migrateQuery(v2Query, 'variable');
+      const result = migrateQuery(v2Query, QueryContext.Variable);
 
       expect(result.autoLimit).toBe(false);
     });
@@ -322,7 +322,7 @@ describe('migrateQuery', () => {
       };
 
       const original = { ...v1Query };
-      migrateQuery(v1Query, 'panel');
+      migrateQuery(v1Query, QueryContext.Panel);
 
       expect(v1Query).toEqual(original);
     });
@@ -340,7 +340,7 @@ describe('migrateQuery', () => {
         rawEditor: true,
       };
 
-      const result = migrateQuery(v1Query, 'panel');
+      const result = migrateQuery(v1Query, QueryContext.Panel);
 
       expect(result.query).toBe('SELECT time, level, msg FROM log_entries WHERE level <= 3');
       expect(result.queryText).toBeUndefined();
@@ -365,7 +365,7 @@ describe('migrateQuery', () => {
         rawEditor: false,
       };
 
-      const result = migrateQuery(v1Query, 'panel');
+      const result = migrateQuery(v1Query, QueryContext.Panel);
 
       expect(result.table).toBe('log_entries');
       expect(result.columns).toEqual(['time', 'level', 'target', 'msg']);

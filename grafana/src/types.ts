@@ -2,8 +2,8 @@ import {DataQuery, DataSourceJsonData} from '@grafana/data'
 import {formatSQL} from './components/sqlFormatter'
 
 export interface SQLQuery extends DataQuery {
-  query?: string  // Used by Grafana for variable definition display (synced with queryText for backward compatibility)
-  queryText?: string  // Legacy field name - kept for backward compatibility with existing dashboards. TODO: migrate to use 'query' field only
+  query?: string
+  queryText?: string  // Legacy v1 field - can be removed when v1 support is no longer needed
   format?: string
   rawEditor?: boolean
   table?: string
@@ -45,22 +45,27 @@ export function getAutoLimit(query: SQLQuery): boolean {
   return query.autoLimit ?? DEFAULT_AUTO_LIMIT
 }
 
+export enum QueryContext {
+  Panel = 'panel',
+  Variable = 'variable',
+}
+
 /**
  * Migrates queries from older schema versions to the current version (v2).
  * This ensures backwards compatibility with existing dashboards.
  *
  * @param query - The query to migrate (can be string, null/undefined/empty, or SQLQuery object)
- * @param context - The context where the query is used ('panel' or 'variable')
+ * @param context - The context where the query is used (panel or variable)
  * @returns A new migrated query object (does not mutate input)
  */
-export function migrateQuery(query: SQLQuery | string | null | undefined, context: 'panel' | 'variable'): SQLQuery {
+export function migrateQuery(query: SQLQuery | string | null | undefined, context: QueryContext): SQLQuery {
   // Handle legacy string format
   if (typeof query === 'string') {
     return {
       ...DEFAULT_QUERY,
       query: query,
       queryText: undefined,
-      autoLimit: context === 'variable' ? false : true,
+      autoLimit: context === QueryContext.Variable ? false : true,
     } as SQLQuery;
   }
 
@@ -69,7 +74,7 @@ export function migrateQuery(query: SQLQuery | string | null | undefined, contex
     return {
       ...DEFAULT_QUERY,
       refId: query?.refId || 'A',
-      autoLimit: context === 'variable' ? false : true,
+      autoLimit: context === QueryContext.Variable ? false : true,
     } as SQLQuery;
   }
 
@@ -79,7 +84,7 @@ export function migrateQuery(query: SQLQuery | string | null | undefined, contex
   // Forward compatibility: treat unknown versions as v2
   if (version >= 2) {
     // Already migrated, but ensure autoLimit is correct for variable context
-    if (context === 'variable' && query.autoLimit !== false) {
+    if (context === QueryContext.Variable && query.autoLimit !== false) {
       return {
         ...query,
         autoLimit: false,
@@ -116,7 +121,7 @@ export function migrateQuery(query: SQLQuery | string | null | undefined, contex
   }
 
   // Migrate autoLimit field (context-dependent)
-  if (context === 'variable') {
+  if (context === QueryContext.Variable) {
     // Variables: always force to false
     migratedQuery.autoLimit = false;
   } else {

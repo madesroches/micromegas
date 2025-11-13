@@ -1,6 +1,6 @@
 import {DataQueryResponse, MetricFindValue, DataSourceInstanceSettings, CoreApp, ScopedVars, VariableWithMultiSupport} from '@grafana/data'
 import {frameToMetricFindValue, DataSourceWithBackend, getTemplateSrv} from '@grafana/runtime'
-import {SQLQuery, QueryFormat, FlightSQLDataSourceOptions, DEFAULT_QUERY, migrateQuery} from './types'
+import {SQLQuery, QueryFormat, FlightSQLDataSourceOptions, DEFAULT_QUERY, migrateQuery, QueryContext} from './types'
 import { lastValueFrom } from 'rxjs';
 
 
@@ -12,7 +12,7 @@ export class FlightSQLDataSource extends DataSourceWithBackend<SQLQuery, FlightS
   // Called by Grafana to populate dashboard variable dropdowns (legacy name from metrics datasources)
   async metricFindQuery(query: SQLQuery | string, options?: any): Promise<MetricFindValue[]> {
       // Migrate query to v2 with variable context (handles string, legacy formats, etc.)
-      const migratedQuery = migrateQuery(query, 'variable');
+      const migratedQuery = migrateQuery(query, QueryContext.Variable);
 
       const target: SQLQuery = {
         ...migratedQuery,
@@ -68,7 +68,7 @@ export class FlightSQLDataSource extends DataSourceWithBackend<SQLQuery, FlightS
 
   applyTemplateVariables(query: SQLQuery, scopedVars: ScopedVars): SQLQuery {
     // Migrate query before processing
-    const migratedQuery = migrateQuery(query, 'panel');
+    const migratedQuery = migrateQuery(query, QueryContext.Panel);
 
     const interpolatedQuery: SQLQuery = {
       ...migratedQuery,

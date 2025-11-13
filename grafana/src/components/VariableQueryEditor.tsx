@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Checkbox, InlineFieldRow, SegmentSection } from '@grafana/ui';
-import { SQLQuery, migrateQuery } from '../types';
+import { SQLQuery, migrateQuery, QueryContext } from '../types';
 
 interface VariableQueryProps {
   query: SQLQuery | string;
@@ -10,7 +10,7 @@ interface VariableQueryProps {
 export const VariableQueryEditor = ({ onChange, query: queryProp }: VariableQueryProps) => {
   // Migrate query on first render using centralized migration function
   const [query, setQuery] = useState<SQLQuery>(() => {
-    return migrateQuery(queryProp, 'variable');
+    return migrateQuery(queryProp, QueryContext.Variable);
   });
 
   const [timeFilter, setTimeFilter] = useState(query.timeFilter ?? true);
