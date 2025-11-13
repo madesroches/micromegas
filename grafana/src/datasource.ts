@@ -1,6 +1,6 @@
 import {DataQueryResponse, MetricFindValue, DataSourceInstanceSettings, CoreApp, ScopedVars, VariableWithMultiSupport} from '@grafana/data'
 import {frameToMetricFindValue, DataSourceWithBackend, getTemplateSrv} from '@grafana/runtime'
-import {SQLQuery, QueryFormat, FlightSQLDataSourceOptions, DEFAULT_QUERY} from './types'
+import {SQLQuery, QueryFormat, FlightSQLDataSourceOptions, DEFAULT_QUERY, migrateQuery, QueryContext} from './types'
 import { lastValueFrom } from 'rxjs';
 
 
@@ -9,12 +9,16 @@ export class FlightSQLDataSource extends DataSourceWithBackend<SQLQuery, FlightS
     super(instanceSettings)
   }
 
-async metricFindQuery(queryText: string, options?: any): Promise<MetricFindValue[]> {
+  // Called by Grafana to populate dashboard variable dropdowns (legacy name from metrics datasources)
+  async metricFindQuery(query: SQLQuery | string, options?: any): Promise<MetricFindValue[]> {
+      // Migrate query to v2 with variable context (handles string, legacy formats, etc.)
+      const migratedQuery = migrateQuery(query, QueryContext.Variable);
+
       const target: SQLQuery = {
+        ...migratedQuery,
         refId: 'metricFindQuery',
-        queryText,
         rawEditor: true,
-        format: QueryFormat.Table
+        format: QueryFormat.Table,
       };
       return lastValueFrom(
         super.query({
@@ -63,9 +67,13 @@ async metricFindQuery(queryText: string, options?: any): Promise<MetricFindValue
   }
 
   applyTemplateVariables(query: SQLQuery, scopedVars: ScopedVars): SQLQuery {
+    // Migrate query before processing
+    const migratedQuery = migrateQuery(query, QueryContext.Panel);
+
     const interpolatedQuery: SQLQuery = {
-      ...query,
-      queryText: getTemplateSrv().replace(query.queryText, scopedVars, this.interpolateVariable),
+      ...migratedQuery,
+      query: getTemplateSrv().replace(migratedQuery.query, scopedVars, this.interpolateVariable),
+      queryText: migratedQuery.queryText ? getTemplateSrv().replace(migratedQuery.queryText, scopedVars, this.interpolateVariable) : undefined,
     }
     return interpolatedQuery
   }

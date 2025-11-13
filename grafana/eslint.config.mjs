@@ -18,6 +18,7 @@ export default [
       '*.config.js',
       '*.config.ts',
       'micromegas-micromegas-datasource/',
+      'old-plugin-v*/',
     ],
   },
   ...compat.extends('@grafana/eslint-config'),

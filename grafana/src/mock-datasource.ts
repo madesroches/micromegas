@@ -81,3 +81,4 @@ export const mockQuery: SQLQuery = {
   groupBy: '',
   limit: '',
 }
+

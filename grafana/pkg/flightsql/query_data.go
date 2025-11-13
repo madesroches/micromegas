@@ -124,8 +124,15 @@ func decodeQueryRequest(dataQuery backend.DataQuery) (*Query, error) {
 		format = sqlutil.FormatOptionTimeSeries
 	}
 
+	// Support both v2 'query' field and legacy v1 'queryText' field
+	// Prefer 'query' if present, fall back to 'queryText' for backward compatibility
+	queryText := q.Query
+	if queryText == "" {
+		queryText = q.QueryText
+	}
+
 	query := &sqlutil.Query{
-		RawSQL:        q.Text,
+		RawSQL:        queryText,
 		RefID:         q.RefID,
 		MaxDataPoints: q.MaxDataPoints,
 		Interval:      time.Duration(q.IntervalMilliseconds) * time.Millisecond,
@@ -166,7 +173,8 @@ type executeResult struct {
 // to [(*FlightSQLDatasource).QueryData].
 type queryRequest struct {
 	RefID                string `json:"refId"`
-	Text                 string `json:"queryText"`
+	Query                string `json:"query"`     // V2 field name (preferred)
+	QueryText            string `json:"queryText"` // V1 field name (legacy, for backward compatibility)
 	IntervalMilliseconds int    `json:"intervalMs"`
 	MaxDataPoints        int64  `json:"maxDataPoints"`
 	Format               string `json:"format"`

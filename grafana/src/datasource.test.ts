@@ -25,17 +25,27 @@ describe('DataSource', () => {
       }))
     })
 
-    it('should replace a simple var', () => {
-      const res = mockDatasource.applyTemplateVariables({...mockQuery, queryText: 'select * from $simple'}, scopedVars)
-      expect(res.queryText).toEqual('select * from orgID')
+    it('should replace a simple var in query field', () => {
+      const res = mockDatasource.applyTemplateVariables({...mockQuery, query: 'select * from $simple'}, scopedVars)
+      expect(res.query).toEqual('select * from orgID')
     })
 
-    it('should replace a multiple var', () => {
+    it('should replace a multiple var in query field', () => {
       const res = mockDatasource.applyTemplateVariables(
-        {...mockQuery, queryText: 'select * from org where var in ($multiple)'},
+        {...mockQuery, query: 'select * from org where var in ($multiple)'},
         scopedVars
       )
-      expect(res.queryText).toEqual(`select * from org where var in ('host','orgID')`)
+      expect(res.query).toEqual(`select * from org where var in ('host','orgID')`)
+    })
+
+    it('should migrate v1 queries before applying template variables', () => {
+      const v1Query = {...mockQuery, queryText: 'select * from $simple', version: undefined}
+      const res = mockDatasource.applyTemplateVariables(v1Query, scopedVars)
+
+      // Should be migrated to v2 (query field instead of queryText)
+      expect(res.version).toBe(2)
+      expect(res.query).toEqual('select * from orgID')
+      expect(res.queryText).toBeUndefined()
     })
   })
 })

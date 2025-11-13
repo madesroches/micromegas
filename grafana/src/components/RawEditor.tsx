@@ -22,7 +22,8 @@ export function RawEditor({children, onChange, query, width, height, editorLangu
       const newQuery = {
         ...queryRef.current,
         rawQuery: true,
-        queryText: rawSql,
+        query: rawSql,
+        version: 2,
       }
       onChange(newQuery, processQuery)
     },
@@ -33,7 +34,7 @@ export function RawEditor({children, onChange, query, width, height, editorLangu
       <SQLEditor
         width={width}
         height={height}
-        query={query.queryText!}
+        query={query.query!}
         onChange={onRawQueryChange}
         language={editorLanguageDefinition}
         key="1"
