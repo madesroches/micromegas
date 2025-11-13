@@ -301,6 +301,7 @@ class OidcAuthProvider:
         """
         with self._lock:
             if not self.client.token:
+                print("No tokens available. Please call login() first.")
                 raise Exception("No tokens available. Please call login() first.")
 
             # Check if token needs refresh (5 min buffer)

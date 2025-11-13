@@ -7,6 +7,7 @@ use subtle::ConstantTimeEq;
 /// Represents a key in the keyring.
 #[derive(Hash, Eq, PartialEq)]
 pub struct Key {
+    /// The key value
     pub value: String,
 }
 
@@ -41,7 +42,9 @@ where
 /// Represents an entry in the keyring, mapping a key to a name.
 #[derive(Deserialize)]
 pub struct KeyRingEntry {
+    /// The name associated with the key
     pub name: String,
+    /// The key
     #[serde(deserialize_with = "key_from_string")]
     pub key: Key,
 }

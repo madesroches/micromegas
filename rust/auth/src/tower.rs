@@ -97,6 +97,25 @@ where
                             "authenticated: subject={} email={:?} issuer={} admin={}",
                             auth_ctx.subject, auth_ctx.email, auth_ctx.issuer, auth_ctx.is_admin
                         );
+
+                        // Inject auth context into gRPC metadata headers
+                        parts.headers.insert(
+                            "x-user-id",
+                            http::HeaderValue::from_str(&auth_ctx.subject)
+                                .expect("valid user id header"),
+                        );
+                        if let Some(email) = &auth_ctx.email {
+                            parts.headers.insert(
+                                "x-user-email",
+                                http::HeaderValue::from_str(email).expect("valid email header"),
+                            );
+                        }
+                        parts.headers.insert(
+                            "x-user-issuer",
+                            http::HeaderValue::from_str(&auth_ctx.issuer)
+                                .expect("valid issuer header"),
+                        );
+
                         parts.extensions.insert(auth_ctx);
                         let req = http::Request::from_parts(parts, body);
                         inner.call(req).await.map_err(Into::into)

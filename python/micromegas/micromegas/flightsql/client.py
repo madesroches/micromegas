@@ -62,7 +62,9 @@ class DynamicAuthMiddlewareFactory(flight.ClientMiddlewareFactory):
 
 
 def make_call_headers(begin, end, preserve_dictionary=False):
-    call_headers = []
+    call_headers = [
+        ("x-client-type".encode("utf8"), "python".encode("utf8")),
+    ]
     if begin is not None:
         call_headers.append(
             (

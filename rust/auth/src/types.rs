@@ -50,8 +50,11 @@ pub trait RequestParts: Send + Sync {
 
 /// HTTP request validation input
 pub struct HttpRequestParts {
+    /// HTTP headers
     pub headers: http::HeaderMap,
+    /// HTTP method
     pub method: http::Method,
+    /// Request URI
     pub uri: http::Uri,
 }
 
@@ -77,6 +80,7 @@ impl RequestParts for HttpRequestParts {
 
 /// gRPC request validation input (tonic metadata)
 pub struct GrpcRequestParts {
+    /// gRPC metadata map
     pub metadata: tonic::metadata::MetadataMap,
 }
 

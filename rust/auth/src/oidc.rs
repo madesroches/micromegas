@@ -157,6 +157,26 @@ struct Claims {
     /// Email address of the user (optional, provider-specific)
     #[serde(skip_serializing_if = "Option::is_none")]
     email: Option<String>,
+    /// Preferred username (Azure AD, often contains email)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    preferred_username: Option<String>,
+    /// User Principal Name (Azure AD alternative)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    upn: Option<String>,
+    /// Unique name (older Azure AD tokens)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    unique_name: Option<String>,
+}
+
+impl Claims {
+    /// Get email from various possible claim fields
+    fn get_email(&self) -> Option<String> {
+        self.email
+            .clone()
+            .or_else(|| self.preferred_username.clone())
+            .or_else(|| self.upn.clone())
+            .or_else(|| self.unique_name.clone())
+    }
 }
 
 /// OIDC issuer client for token validation
@@ -380,12 +400,15 @@ impl OidcAuthProvider {
             return Err(anyhow!("Token has expired"));
         }
 
-        // Step 9: Check if user is admin
-        let is_admin = self.is_admin(&claims.sub, claims.email.as_deref());
+        // Step 9: Extract email from various possible claim fields
+        let email = claims.get_email();
+
+        // Step 10: Check if user is admin
+        let is_admin = self.is_admin(&claims.sub, email.as_deref());
 
         Ok(AuthContext {
             subject: claims.sub,
-            email: claims.email,
+            email,
             issuer: claims.iss,
             expires_at: Some(expires_at),
             auth_type: AuthType::Oidc,
