@@ -64,43 +64,23 @@ Learn more about Micromegas through our technical presentations:
 - **[Design Presentation](https://madesroches.github.io/micromegas/doc/design-presentation/design.html)** (February 2025) - Architecture and design principles
 - **[Unreal Engine Guide](https://madesroches.github.io/micromegas/doc/unreal-observability/unreal-observability.html)** (July 2024) - Integrating Micromegas with Unreal Engine
 
-## Authentication
-
-Micromegas supports OIDC authentication with browser-based login for human users and OAuth 2.0 client credentials for service accounts. Works with Google, Azure AD, Okta, and Auth0.
-
-See the [Authentication Guide](https://madesroches.github.io/micromegas/docs/admin/authentication/) for setup instructions.
-
 ## Getting Started
 
 To get started with Micromegas, please refer to the [Getting Started](https://madesroches.github.io/micromegas/docs/getting-started/) guide.
 
 ## Current Status & Roadmap
 
-### October 2025 - v0.15.0 (Upcoming)
-* **Authentication & Security**:
-  - ✅ OIDC authentication for analytics server (ingestion + FlightSQL) (#548)
-  - ✅ Browser-based login with token persistence for Python client (#549)
-  - ✅ HTTP authentication for ingestion service (#551)
-  - ✅ OAuth 2.0 client credentials for service accounts (Rust + Python)
-  - ✅ Multi-provider support (Google, Azure AD, Okta, Auth0)
-  - ✅ Comprehensive authentication documentation (#550)
-  - Zero-config authentication via `#[micromegas_main]` macro for Rust applications
+### November 2025 - v0.15.0 (In Progress)
+* Grafana plugin with OAuth 2.0, variable queries, and CI/CD pipeline
+* gRPC health checks and enhanced authentication
+* Modernized Unreal Engine telemetry sink
+* Improved documentation and build tooling
 
 ### October 2025 - v0.14.0
-* **Performance & Storage Optimizations**:
-  - Complete properties to dictionary-encoded JSONB migration (#521, #522, #524)
-  - Add Dictionary<Int32, Binary> support to jsonb_format_json UDF (#536)
-* **Analytics & Query Features**:
-  - SessionConfigurator for custom table registration (#531)
-  - Support for empty lakehouse partitions (#537)
-  - File existence validation in json_table_provider (#532)
-* **Bug Fixes & Reliability**:
-  - Fix NULL value handling in SQL-Arrow bridge with integration tests (#541)
-  - Fix null decoding errors in list_partitions and retire_partitions (#539, #540)
-* **Documentation**:
-  - [High-Frequency Observability presentation](https://madesroches.github.io/micromegas/high-frequency-observability/) (#527, #528)
-* **Security**:
-  - Update Vite to 7.1.11 to fix security vulnerabilities (#542)
+* Dictionary-encoded JSONB for optimized storage
+* Support for empty lakehouse partitions
+* NULL value handling fixes in SQL-Arrow bridge
+* [High-Frequency Observability presentation](https://madesroches.github.io/micromegas/high-frequency-observability/)
 
 For a detailed history of changes, please see the [CHANGELOG.md](./CHANGELOG.md) file.
 
