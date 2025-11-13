@@ -76,7 +76,7 @@ func mustQueryJSON(t *testing.T, refID, sql string) []byte {
 
 	b, err := json.Marshal(queryRequest{
 		RefID:  refID,
-		Text:   sql,
+		Query:  sql,
 		Format: "table",
 	})
 	if err != nil {
