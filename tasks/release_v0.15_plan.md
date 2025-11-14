@@ -79,8 +79,8 @@ Current versions should already be at 0.15.0:
   - [x] Links (documentation, issues) are correct ✅ Updated to point to main micromegas repository
 
 ### 5. Git Preparation
-- [ ] Create release tag: `git tag v0.15.0`
-- [ ] Verify tag points to correct commit
+- [x] Create release tag: `git tag v0.15.0` ✅ Created
+- [x] Verify tag points to correct commit ✅ Confirmed: tag points to commit 7960b2014 (Update Grafana plugin metadata for v0.15.0 release)
 
 ## Release Process
 
