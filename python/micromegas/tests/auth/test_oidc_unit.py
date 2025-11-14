@@ -296,3 +296,49 @@ def test_oidc_thread_safety():
         # At minimum, all threads should get a valid token
         assert len(results) == 5
         assert all(isinstance(r, str) for r in results)
+
+
+def test_oidc_rejects_unsigned_token():
+    """Test that unsigned tokens (alg=none) are rejected."""
+    from micromegas.auth import OidcAuthProvider
+
+    with patch("micromegas.auth.oidc.requests.get") as mock_get, patch(
+        "micromegas.auth.oidc.OAuth2Session"
+    ) as MockSession:
+        # Mock OIDC discovery response
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "authorization_endpoint": "https://test/auth",
+            "token_endpoint": "https://test/token",
+            "issuer": "https://test.com",
+        }
+        mock_response.raise_for_status.return_value = None
+        mock_get.return_value = mock_response
+
+        mock_client = MagicMock()
+        # Create an unsigned JWT token (alg=none) like the one in the bug report
+        # Header: {"typ":"JWT","alg":"none"}
+        # Payload: {"sub":"test","exp":9999999999}
+        unsigned_token = "eyJ0eXAiOiJKV1QiLCJhbGciOiJub25lIn0.eyJzdWIiOiJ0ZXN0IiwiZXhwIjo5OTk5OTk5OTk5fQ."
+
+        mock_client.token = {
+            "access_token": "test-access",
+            "id_token": unsigned_token,
+            "refresh_token": "test-refresh",
+            "expires_at": time.time() + 600,  # 10 minutes
+        }
+        mock_client.fetch_server_metadata.return_value = {
+            "authorization_endpoint": "https://test/auth",
+            "token_endpoint": "https://test/token",
+        }
+        MockSession.return_value = mock_client
+
+        provider = OidcAuthProvider(
+            issuer="https://test.com",
+            client_id="test-client",
+            token=mock_client.token,
+        )
+
+        # Should raise exception for unsigned token
+        with pytest.raises(Exception, match="alg=none"):
+            provider.get_token()

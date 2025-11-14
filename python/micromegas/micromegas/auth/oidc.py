@@ -287,6 +287,43 @@ class OidcAuthProvider:
 
         return token
 
+    def _validate_id_token(self, id_token: str) -> None:
+        """Validate that id_token is properly signed (not unsigned/alg=none).
+
+        Args:
+            id_token: JWT token to validate
+
+        Raises:
+            Exception: If token is unsigned (alg=none)
+        """
+        # Skip validation for non-JWT tokens (e.g., test tokens)
+        # JWTs always have 3 parts separated by dots
+        parts = id_token.split(".")
+        if len(parts) != 3:
+            # Not a JWT format, skip validation (allows test tokens)
+            return
+
+        try:
+            # Decode header (base64url decode with padding)
+            import base64
+
+            header_bytes = base64.urlsafe_b64decode(parts[0] + "==")
+            header = json.loads(header_bytes)
+
+            # Check if token is unsigned (alg=none is a security issue)
+            alg = header.get("alg", "").lower()
+            if alg == "none":
+                raise Exception(
+                    "Unsigned JWT (alg=none) is not allowed. Please re-authenticate to get a properly signed token."
+                )
+        except json.JSONDecodeError:
+            # If header is not valid JSON, skip validation
+            return
+        except Exception as e:
+            # Only raise for the specific alg=none case
+            if "alg=none" in str(e).lower():
+                raise
+
     def get_token(self) -> str:
         """Get valid ID token, refreshing if necessary.
 
@@ -308,13 +345,17 @@ class OidcAuthProvider:
             expires_at = self.client.token.get("expires_at", 0)
             if expires_at > time.time() + 300:
                 # Token still valid
-                return self.client.token["id_token"]
+                id_token = self.client.token["id_token"]
+                self._validate_id_token(id_token)
+                return id_token
 
             # Token expired or expiring soon - refresh it
             if self.client.token.get("refresh_token"):
                 try:
                     self._refresh_tokens()
-                    return self.client.token["id_token"]
+                    id_token = self.client.token["id_token"]
+                    self._validate_id_token(id_token)
+                    return id_token
                 except Exception as e:
                     raise Exception(
                         f"Token refresh failed: {e}. Please re-authenticate."
@@ -324,12 +365,23 @@ class OidcAuthProvider:
 
     def _refresh_tokens(self):
         """Refresh access token using refresh token (authlib handles everything)."""
+        # Store old id_token in case refresh doesn't return a new one
+        old_id_token = self.client.token.get("id_token")
+
         # authlib automatically refreshes using refresh_token
+        # Include scope to ensure we get a new id_token from providers like Azure AD
         new_token = self.client.fetch_token(
             self.metadata["token_endpoint"],
             grant_type="refresh_token",
             refresh_token=self.client.token["refresh_token"],
+            scope="openid email profile offline_access",
         )
+
+        # If the refresh didn't return a new id_token, preserve the old one
+        # This handles providers that don't return id_token in refresh response
+        if "id_token" not in new_token and old_id_token:
+            new_token["id_token"] = old_id_token
+            self.client.token["id_token"] = old_id_token
 
         # Update token (authlib updates self.client.token automatically)
         # Save updated tokens to file
