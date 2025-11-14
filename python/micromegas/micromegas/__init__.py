@@ -1,9 +1,10 @@
 import grpc
-from . import auth
-from . import time
-from . import perfetto
-from . import flightsql
 from . import admin
+from . import auth
+from . import flightsql
+from . import oidc_connection
+from . import perfetto
+from . import time
 
 
 def connect(preserve_dictionary=False):
