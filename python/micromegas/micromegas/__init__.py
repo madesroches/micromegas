@@ -1,4 +1,5 @@
 import grpc
+from . import auth
 from . import time
 from . import perfetto
 from . import flightsql
