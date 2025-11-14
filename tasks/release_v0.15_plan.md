@@ -50,43 +50,27 @@ Current versions should already be at 0.15.0:
 ### 3. Documentation Updates
 
 #### CHANGELOG Updates
-- [ ] **Review git log**: `git log --oneline v0.14.0..HEAD` to identify all changes
-- [ ] **Update Grafana CHANGELOG**: `/grafana/CHANGELOG.md`
-  - [ ] Change version from "1.0.0 (Unreleased)" to "1.0.0 (2025-XX-XX)"
-  - [ ] Add comprehensive list of features for initial release:
+- [x] **Review git log**: `git log --oneline v0.14.0..HEAD` ✅ Reviewed 43 commits
+- [x] **Update Grafana CHANGELOG**: `/grafana/CHANGELOG.md` ✅ Updated
+  - [x] Changed version from "1.0.0 (Unreleased)" to "0.15.0 (2025-11-14)"
+  - [x] Added comprehensive list of features for initial release:
     - FlightSQL datasource integration
     - SQL query editor with syntax highlighting
     - Query variable support
     - OAuth 2.0 and API key authentication
     - Datasource migration tools
     - Documentation and troubleshooting guides
-- [ ] **Create/Update main CHANGELOG.md** at repository root (if exists)
-  - [ ] Add new section for v0.15.0 with release date
-  - [ ] List all major features, bug fixes, and breaking changes since v0.14.0
-
-#### Major Features to Document (from commits since v0.14.0):
-**Authentication & Security:**
-- New `micromegas-auth` crate with OIDC and API key support
-- HTTP authentication for ingestion service
-- OAuth 2.0 client credentials for service accounts
-- OIDC authentication support for CLI tools and Python client
-- Unified JWKS architecture for service accounts
-- Request validation in AuthProvider
-- Client IP logging for server observability
-
-**Grafana Plugin (First Release):**
-- FlightSQL datasource plugin integration
-- OAuth 2.0 authentication support
-- Query variable editor and datasource migration tools
-- CI/CD pipeline for plugin
-- Security updates (Dependabot fixes, SDK updates)
-- Comprehensive documentation
-
-**Features & Improvements:**
-- gRPC health check endpoint
-- Modernized Unreal telemetry sink module
-- Documentation improvements and consolidation
-- Build reliability improvements
+    - Security updates and technical details
+- [x] **Update main CHANGELOG.md** at repository root ✅ Updated
+  - [x] Added new section for v0.15.0 with release date (November 2025)
+  - [x] Listed all major features, bug fixes, and changes since v0.14.0:
+    - New micromegas-auth crate with OIDC and API key authentication
+    - Grafana plugin (v0.15.0 - first release from main repo)
+    - All authentication and security enhancements
+    - Unreal Engine updates
+    - Server enhancements
+    - Build & CI improvements
+    - Documentation updates
 
 ### 4. Grafana Plugin Preparation
 - [ ] **Verify plugin.json metadata**:
@@ -193,106 +177,6 @@ If issues are discovered after release:
 - [ ] Update GitHub release notes with issue documentation
 - [ ] Prepare patch release v0.15.1 if critical issues found
 
-## Key Features in v0.15.0
-
-### 🆕 New Components
-
-#### micromegas-auth Crate (First Release)
-- **OIDC Authentication**: Full OpenID Connect support for user authentication
-- **API Key Authentication**: Secure API key validation with constant-time comparison
-- **OAuth 2.0 Client Credentials**: Service account support for machine-to-machine auth
-- **Multi-Provider Architecture**: Extensible AuthProvider trait with MultiAuthProvider
-- **JWKS Integration**: Unified JSON Web Key Set architecture
-- **Request Validation**: Comprehensive authentication middleware for HTTP and gRPC services
-
-#### Grafana Plugin (First Release)
-- **FlightSQL Datasource**: Native integration with Micromegas analytics server
-- **Query Editor**: SQL syntax highlighting and query builder
-- **Query Variables**: Support for dashboard template variables
-- **OAuth 2.0 Authentication**: Secure authentication with OIDC providers
-- **API Key Support**: Alternative authentication method
-- **Migration Tools**: Datasource migration utilities
-- **CI/CD Pipeline**: Automated build, test, and release workflow
-- **Comprehensive Documentation**: Installation, configuration, usage, and troubleshooting guides
-
-### 🔐 Authentication & Security
-
-#### Service Authentication
-- HTTP authentication for telemetry ingestion service (#551)
-- OIDC authentication support for Rust services and Python client (#548)
-- OAuth 2.0 client credentials for service accounts (#552)
-- Authentication framework with OIDC and API key support (#546)
-- Unified JWKS architecture for service accounts (#547)
-
-#### Security Improvements
-- Client IP logging to server observability (#566)
-- Request validation in AuthProvider (#571)
-- Security vulnerability fixes via Dependabot (#555, #556)
-
-#### CLI & Client Tools
-- OIDC authentication support for CLI tools (#549)
-- Python client OAuth 2.0 support (#548)
-
-### 🔧 Features & Improvements
-
-#### Infrastructure
-- gRPC health check endpoint (#570)
-- MultiAuthProvider refactoring for extensibility (#569)
-- Fix CI linker crashes and improve build reliability (#572)
-
-#### Unreal Engine
-- Modernize Unreal telemetry sink module (#584)
-
-### 📚 Documentation
-
-#### Grafana Plugin Documentation
-- Consolidated and streamlined documentation (#559)
-- OAuth 2.0 authentication guide for Grafana plugin (#564)
-- Comprehensive admin guide with authentication docs (#550)
-
-#### General Documentation
-- Documentation links to all Rust crate READMEs (#578)
-- Update hosted documentation links (#563)
-- Documentation build improvements (#573)
-- Build tools installation guide (#582)
-- Clean up task documentation (#567)
-
-#### Presentations
-- Update high-frequency observability presentation (#574)
-- Replace presentation images (#562)
-
-### 🏗️ Code Quality & Maintenance
-
-#### Refactoring
-- Refactor OIDC connection to library module (#588)
-- Rework AuthProvider to use request validation (#571)
-- Refactor MultiAuthProvider for extensibility (#569)
-
-#### Dependency Updates
-- Update Grafana plugin SDK to 11.6.7 (#555)
-- Fix 28 Dependabot security vulnerabilities (#556)
-
-#### Cleanup
-- Clean up presentation files (#568)
-- Remove stale files (#557)
-- Update README structure (#560, #561, #586)
-- Update changelog (#565, #586)
-
-## Dependencies Order (from release.py)
-The release script publishes crates in this specific order to respect dependencies:
-1. micromegas-derive-transit (no internal deps)
-2. micromegas-tracing-proc-macros (no internal deps)
-3. micromegas-transit (depends on derive-transit)
-4. micromegas-tracing (depends on proc-macros, transit)
-5. **micromegas-auth** (depends on tracing) ← **NEW in v0.15.0**
-6. micromegas-telemetry (depends on tracing, transit)
-7. micromegas-ingestion (depends on telemetry, tracing, transit, auth)
-8. micromegas-telemetry-sink (depends on telemetry, tracing)
-9. micromegas-perfetto (depends on tracing, transit)
-10. micromegas-analytics (depends on ingestion, telemetry, tracing, transit, perfetto)
-11. micromegas-proc-macros (depends on tracing, analytics)
-12. micromegas (public crate - depends on all others including auth)
-
 ## Post-Release Tasks
 - [ ] **Announce release**:
   - [ ] GitHub Discussions announcement
@@ -312,7 +196,7 @@ The release script publishes crates in this specific order to respect dependenci
 - **Name**: micromegas-micromegas-datasource
 - **Display Name**: Micromegas
 - **Type**: Datasource
-- **Version**: 0.15.0 (first public release, internally called 1.0.0)
+- **Version**: 0.15.0 (first release from main repository)
 - **License**: Apache-2.0
 
 ### Manual Installation Documentation
@@ -335,35 +219,13 @@ systemctl restart grafana-server
 - Issues: https://github.com/madesroches/micromegas/issues
 
 ## Notes
-- All Rust crates use Apache-2.0 license
-- All Rust crates target Rust edition 2024
-- Python library requires Python ^3.10
-- Grafana plugin requires Node.js >=16
-- Release script uses `cargo release` with automated publishing
-- Grace period of 60 seconds between publishes to allow crates.io indexing
-- **This is the first release to include the `micromegas-auth` crate**
-- **This is the first public release of the Grafana plugin**
-
----
+- All crates use Apache-2.0 license
+- Rust edition 2024, Python ^3.10, Node.js >=16
+- Release script uses `cargo release` with 60s grace period between publishes
+- **New in v0.15.0**: micromegas-auth crate, Grafana plugin from main repo
+- 43 commits since v0.14.0
 
 ## Release Execution Log
-
-### Pre-Release Phase
-- [ ] Started: ____
-- [ ] Completed: ____
-
-### Release Phase
-- [ ] Started: ____
-- [ ] Completed: ____
-
-### Post-Release Phase
-- [ ] Started: ____
-- [ ] Completed: ____
-
----
-
-**Status**: 📋 Planning phase - ready for execution
-- Rust workspace at v0.15.0 (includes new `micromegas-auth` crate)
-- Python package at v0.15.0
-- Grafana plugin at v0.15.0 (first release)
-- 41 commits since v0.14.0 (major authentication and Grafana plugin work)
+- [ ] Pre-Release: ____
+- [ ] Release: ____
+- [ ] Post-Release: ____

@@ -4,19 +4,33 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## [Unreleased]
 
- * **Grafana Plugin:**
+## November 2025 - v0.15.0
+ * Released [version 0.15.0](https://crates.io/crates/micromegas)
+ * **New: Authentication Framework (micromegas-auth crate):**
+   * Add authentication framework with OIDC and API key support (#546)
+   * Implement OIDC authentication for Rust services and Python client (#548)
+   * Add OIDC authentication support to CLI tools (#549)
+   * Add OAuth 2.0 client credentials support for service accounts (#552)
+   * Add HTTP authentication to ingestion service (#551)
+   * Unified JWKS architecture for service accounts (#547)
+   * Refactor OIDC connection to library module (#588)
+ * **Grafana Plugin (v0.15.0 - First release from main repo):**
+   * Integrate Grafana FlightSQL datasource plugin into main repository (#554)
+   * Implement OAuth 2.0 authentication for Grafana plugin (#564)
    * Add variable query editor and datasource migration tools (#585)
    * Rename Grafana plugin to follow official naming guidelines (#583)
-   * Implement OAuth 2.0 authentication for Grafana plugin (#564)
    * Implement CI/CD pipeline for Grafana plugin (#558)
-   * Integrate Grafana FlightSQL datasource plugin into main repository (#554)
+   * Update Grafana plugin SDK to 11.6.7 and fix security vulnerabilities (#555)
+   * Fix 28 Dependabot security vulnerabilities (#556)
+ * **Authentication & Security:**
+   * Rework AuthProvider to use request validation (#571)
+   * Refactor MultiAuthProvider for extensibility (#569)
+   * Add client IP logging to server observability (#566)
+   * Comprehensive authentication documentation in admin guide (#550)
  * **Unreal Engine:**
    * Modernize Unreal telemetry sink module (#584)
  * **Server Enhancements:**
    * Add gRPC health check endpoint (#570)
-   * Rework AuthProvider to use request validation (#571)
-   * Refactor MultiAuthProvider for extensibility (#569)
-   * Add client IP logging to server observability (#566)
  * **Build & CI:**
    * Fix CI linker crashes and improve build reliability (#572)
    * Fix documentation build by installing mold linker (#573)
@@ -28,10 +42,11 @@ This file documents the historical progress of the Micromegas project. For curre
    * Clean up presentation files and update docs to use yarn (#568)
    * Clean up task documentation and improve authentication docs (#567)
    * Consolidate and streamline Grafana and monorepo documentation (#559)
- * **Security & Dependencies:**
-   * Update Grafana plugin SDK to 11.6.7 and fix security vulnerabilities (#555)
+   * Update documentation links to use hosted docs and fix markdown formatting (#563)
+   * Remove Grafana section from README (#560)
  * **Planning:**
    * Add plan for query variable time filter feature (#580)
+   * Grafana plugin repository merge planning and Phase 1.1 completion (#553)
 
 ## October 2025 - v0.14.0
  * Released [version 0.14.0](https://crates.io/crates/micromegas)
