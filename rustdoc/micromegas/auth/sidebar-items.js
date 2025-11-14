@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"mod":["api_key","axum","default_provider","multi","oidc","tower","types"]};

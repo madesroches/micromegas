@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["make_partitioned_execution_plan"]};
