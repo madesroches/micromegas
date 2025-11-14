@@ -22,15 +22,15 @@
     "links": [
       {
         "name": "Github",
-        "url": "https://github.com/madesroches/grafana-micromegas-datasource"
+        "url": "https://github.com/madesroches/micromegas"
       },
       {
         "name": "Docs",
-        "url": "https://github.com/madesroches/grafana-micromegas-datasource/blob/main/README.md#usage"
+        "url": "https://madesroches.github.io/micromegas/docs/grafana/"
       },
       {
         "name": "License",
-        "url": "https://github.com/madesroches/grafana-micromegas-datasource/blob/main/LICENSE"
+        "url": "https://github.com/madesroches/micromegas/blob/main/LICENSE"
       }
     ],
     "screenshots": [

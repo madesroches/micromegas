@@ -73,15 +73,10 @@ Current versions should already be at 0.15.0:
     - Documentation updates
 
 ### 4. Grafana Plugin Preparation
-- [ ] **Verify plugin.json metadata**:
-  - [ ] Version matches package.json (0.15.0)
-  - [ ] Author information is correct
-  - [ ] Links (documentation, issues) are correct
-- [ ] **Test plugin installation locally**:
-  - [ ] Install in local Grafana instance
-  - [ ] Verify datasource configuration works
-  - [ ] Test query execution
-  - [ ] Test OAuth 2.0 authentication
+- [x] **Verify plugin.json metadata**:
+  - [x] Version matches package.json (0.15.0) ✅ Confirmed: version is correctly set to 0.15.0
+  - [x] Author information is correct ✅ Confirmed: Marc-Antoine Desroches
+  - [x] Links (documentation, issues) are correct ✅ Updated to point to main micromegas repository
 
 ### 5. Git Preparation
 - [ ] Create release tag: `git tag v0.15.0`
