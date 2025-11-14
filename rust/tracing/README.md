@@ -5,5 +5,5 @@ This crate provides logging, metrics, memory and performance profiling with a lo
 ## Documentation
 
 - 📖 [Complete Documentation](https://madesroches.github.io/micromegas/)
-- 🚀 [Getting Started Guide](https://madesroches.github.io/micromegas/getting-started/)
+- 🚀 [Getting Started Guide](https://madesroches.github.io/micromegas/docs/getting-started/)
 - 💻 [GitHub Repository](https://github.com/madesroches/micromegas)

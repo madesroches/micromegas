@@ -5,5 +5,5 @@ This crate provides a command-line interface for the management of the data lake
 ## Documentation
 
 - 📖 [Complete Documentation](https://madesroches.github.io/micromegas/)
-- 🔧 [Admin Functions Reference](https://madesroches.github.io/micromegas/admin/functions-reference/)
+- 🔧 [Admin Functions Reference](https://madesroches.github.io/micromegas/docs/admin/functions-reference/)
 - 💻 [GitHub Repository](https://github.com/madesroches/micromegas)

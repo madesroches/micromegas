@@ -5,6 +5,6 @@ This crate provides a telemetry ingestion HTTP server that accepts telemetry dat
 ## Documentation
 
 - 📖 [Complete Documentation](https://madesroches.github.io/micromegas/)
-- 🚀 [Getting Started Guide](https://madesroches.github.io/micromegas/getting-started/)
-- 🏗️ [Architecture Overview](https://madesroches.github.io/micromegas/architecture/)
+- 🚀 [Getting Started Guide](https://madesroches.github.io/micromegas/docs/getting-started/)
+- 🏗️ [Architecture Overview](https://madesroches.github.io/micromegas/docs/architecture/)
 - 💻 [GitHub Repository](https://github.com/madesroches/micromegas)
