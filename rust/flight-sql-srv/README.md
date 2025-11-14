@@ -5,5 +5,5 @@ This crate provides the FlightSQL server for the Micromegas observability platfo
 ## Documentation
 
 - 📖 [Complete Documentation](https://madesroches.github.io/micromegas/)
-- 📊 [Query Guide](https://madesroches.github.io/micromegas/query-guide/)
+- 📊 [Query Guide](https://madesroches.github.io/micromegas/docs/query-guide/)
 - 💻 [GitHub Repository](https://github.com/madesroches/micromegas)
