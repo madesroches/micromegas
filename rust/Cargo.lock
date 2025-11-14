@@ -54,7 +54,7 @@ checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
 name = "analytics-web-srv"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "anyhow",
  "arrow-flight",
@@ -2067,7 +2067,7 @@ dependencies = [
 
 [[package]]
 name = "flight-sql-srv"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -2418,7 +2418,7 @@ dependencies = [
 
 [[package]]
 name = "http-gateway"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -3077,7 +3077,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "anyhow",
  "arrow-flight",
@@ -3113,7 +3113,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-analytics"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "anyhow",
  "arrow-flight",
@@ -3146,7 +3146,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-auth"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3173,7 +3173,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-derive-transit"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "quote",
  "syn 1.0.109",
@@ -3181,7 +3181,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-ingestion"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "anyhow",
  "bytes",
@@ -3193,7 +3193,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-perfetto"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3206,7 +3206,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-proc-macros"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3215,7 +3215,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-telemetry"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "anyhow",
  "bytes",
@@ -3233,7 +3233,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-telemetry-sink"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3259,7 +3259,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-tracing"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "anyhow",
  "cfg-if",
@@ -3285,7 +3285,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-tracing-proc-macros"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3294,7 +3294,7 @@ dependencies = [
 
 [[package]]
 name = "micromegas-transit"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "anyhow",
  "lazy_static",
@@ -5217,7 +5217,7 @@ checksum = "7b2093cf4c8eb1e67749a6762251bc9cd836b6fc171623bd0a9d324d37af2417"
 
 [[package]]
 name = "telemetry-admin"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -5227,7 +5227,7 @@ dependencies = [
 
 [[package]]
 name = "telemetry-ingestion-srv"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -5700,7 +5700,7 @@ checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
 name = "uri-handler"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "anyhow",
  "micromegas",
@@ -6455,7 +6455,7 @@ checksum = "f17a85883d4e6d00e8a97c586de764dabcc06133f7f1d55dce5cdc070ad7fe59"
 
 [[package]]
 name = "write-perfetto"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "anyhow",
  "chrono",
