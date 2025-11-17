@@ -54,11 +54,16 @@ SELECT * FROM list_partitions();
 |--------|------|-------------|
 | `view_set_name` | String | View set name |
 | `view_instance_id` | String | Instance ID or 'global' |
-| `file_schema_hash` | Binary | Schema version when partition was created |
+| `begin_insert_time` | Timestamp | Partition start time |
+| `end_insert_time` | Timestamp | Partition end time |
+| `min_event_time` | Timestamp | Earliest event time in partition |
+| `max_event_time` | Timestamp | Latest event time in partition |
+| `updated` | Timestamp | Last update time |
 | `file_path` | String | Object storage file path |
 | `file_size` | Integer | File size in bytes |
-| `begin_insert_time` | Timestamp | Earliest event time in partition |
-| `end_insert_time` | Timestamp | Latest event time in partition |
+| `file_schema_hash` | Binary | Schema version when partition was created |
+| `source_data_hash` | Binary | Hash of the source data |
+| `num_rows` | Integer | Number of rows in the partition |
 
 **Example**:
 ```sql
