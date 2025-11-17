@@ -15,8 +15,18 @@ export class ApiErrorException extends Error {
   }
 }
 
+export class AuthenticationError extends Error {
+  constructor(message: string = 'Authentication required') {
+    super(message)
+    this.name = 'AuthenticationError'
+  }
+}
+
 async function handleResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
+    if (response.status === 401) {
+      throw new AuthenticationError()
+    }
     try {
       const errorData = await response.json()
       if (errorData.error) {
@@ -27,6 +37,9 @@ async function handleResponse<T>(response: Response): Promise<T> {
       if (parseError instanceof ApiErrorException) {
         throw parseError
       }
+      if (parseError instanceof AuthenticationError) {
+        throw parseError
+      }
     }
     throw new Error(`HTTP ${response.status}: ${response.statusText}`)
   }
@@ -34,13 +47,17 @@ async function handleResponse<T>(response: Response): Promise<T> {
 }
 
 export async function fetchProcesses(): Promise<ProcessInfo[]> {
-  const response = await fetch(`${API_BASE}/processes`)
+  const response = await fetch(`${API_BASE}/processes`, {
+    credentials: 'include',
+  })
   return handleResponse<ProcessInfo[]>(response)
 }
 
 
 export async function fetchHealthCheck(): Promise<HealthCheck> {
-  const response = await fetch(`${API_BASE}/health`)
+  const response = await fetch(`${API_BASE}/health`, {
+    credentials: 'include',
+  })
   return handleResponse<HealthCheck>(response)
 }
 
@@ -54,10 +71,14 @@ export async function generateTrace(
     headers: {
       'Content-Type': 'application/json',
     },
+    credentials: 'include',
     body: JSON.stringify(request)
   })
 
   if (!response.ok) {
+    if (response.status === 401) {
+      throw new AuthenticationError()
+    }
     try {
       const errorData = await response.json()
       if (errorData.error) {
@@ -65,6 +86,9 @@ export async function generateTrace(
       }
     } catch (parseError) {
       if (parseError instanceof ApiErrorException) {
+        throw parseError
+      }
+      if (parseError instanceof AuthenticationError) {
         throw parseError
       }
     }
@@ -144,11 +168,15 @@ export async function fetchProcessLogEntries(
   }
   params.append('limit', limit.toString())
 
-  const response = await fetch(`${API_BASE}/process/${processId}/log-entries?${params}`)
+  const response = await fetch(`${API_BASE}/process/${processId}/log-entries?${params}`, {
+    credentials: 'include',
+  })
   return handleResponse<LogEntry[]>(response)
 }
 
 export async function fetchProcessStatistics(processId: string): Promise<ProcessStatistics> {
-  const response = await fetch(`${API_BASE}/process/${processId}/statistics`)
+  const response = await fetch(`${API_BASE}/process/${processId}/statistics`, {
+    credentials: 'include',
+  })
   return handleResponse<ProcessStatistics>(response)
 }

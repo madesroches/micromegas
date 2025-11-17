@@ -8,6 +8,8 @@ import { fetchProcesses, generateTrace, fetchProcessLogEntries, fetchProcessStat
 import { TraceGenerationProgress } from '@/components/TraceGenerationProgress'
 import { CopyableProcessId } from '@/components/CopyableProcessId'
 import { PreciseTimestamp } from '@/components/PreciseTimestamp'
+import { AuthGuard } from '@/components/AuthGuard'
+import { UserMenu } from '@/components/UserMenu'
 import Link from 'next/link'
 import { Play, RefreshCw } from 'lucide-react'
 
@@ -131,17 +133,22 @@ export default function ProcessDetailPage() {
 
   if (!process) {
     return (
-      <div className="min-h-screen" style={{ backgroundColor: '#f8fafc' }}>
-        <div className="bg-white border-b border-gray-200 shadow-sm">
-          <div className="px-8 py-4">
-            <h1 className="text-2xl font-semibold text-gray-800">Process Not Found</h1>
-            <p className="text-sm text-gray-600 mt-1">The requested process could not be found</p>
+      <AuthGuard>
+        <div className="min-h-screen" style={{ backgroundColor: '#f8fafc' }}>
+          <div className="bg-white border-b border-gray-200 shadow-sm">
+            <div className="px-8 py-4 flex justify-between items-start">
+              <div>
+                <h1 className="text-2xl font-semibold text-gray-800">Process Not Found</h1>
+                <p className="text-sm text-gray-600 mt-1">The requested process could not be found</p>
+              </div>
+              <UserMenu />
+            </div>
+          </div>
+          <div className="max-w-7xl mx-auto px-8 py-8">
+            <Link href="/" className="text-blue-600 hover:underline">← Back to Analytics</Link>
           </div>
         </div>
-        <div className="max-w-7xl mx-auto px-8 py-8">
-          <Link href="/" className="text-blue-600 hover:underline">← Back to Analytics</Link>
-        </div>
-      </div>
+      </AuthGuard>
     )
   }
 
@@ -195,27 +202,29 @@ export default function ProcessDetailPage() {
   }
 
   return (
-    <div className="min-h-screen" style={{ backgroundColor: '#f8fafc' }}>
-      {/* Header */}
-      <div className="bg-white border-b border-gray-200 shadow-sm">
-        <div className="px-8 py-4">
-          <div className="max-w-7xl mx-auto flex items-center gap-4">
-            <div className="flex-1">
-              <h1 className="text-2xl font-semibold text-gray-800">Process Details</h1>
-              <p className="text-sm text-gray-600 mt-1">
-                {process.exe} (<CopyableProcessId processId={process.process_id} className="text-sm" />)
-              </p>
+    <AuthGuard>
+      <div className="min-h-screen" style={{ backgroundColor: '#f8fafc' }}>
+        {/* Header */}
+        <div className="bg-white border-b border-gray-200 shadow-sm">
+          <div className="px-8 py-4">
+            <div className="max-w-7xl mx-auto flex items-center gap-4">
+              <div className="flex-1">
+                <h1 className="text-2xl font-semibold text-gray-800">Process Details</h1>
+                <p className="text-sm text-gray-600 mt-1">
+                  {process.exe} (<CopyableProcessId processId={process.process_id} className="text-sm" />)
+                </p>
+              </div>
+              <button
+                onClick={handleRefresh}
+                className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors text-sm"
+              >
+                <RefreshCw className="w-4 h-4" />
+                Refresh
+              </button>
+              <UserMenu />
             </div>
-            <button
-              onClick={handleRefresh}
-              className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors text-sm"
-            >
-              <RefreshCw className="w-4 h-4" />
-              Refresh
-            </button>
           </div>
         </div>
-      </div>
 
       <div className="max-w-7xl mx-auto px-8 py-8">
         {/* Breadcrumb */}
@@ -566,5 +575,6 @@ export default function ProcessDetailPage() {
         </div>
       </div>
     </div>
+    </AuthGuard>
   )
 }

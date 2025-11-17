@@ -2,7 +2,7 @@
 
 ## Current State
 
-- **Frontend**: No authentication (fully open)
+- **Frontend**: OIDC authentication flow implemented (Phase 2 & 3 complete)
 - **Backend (analytics-web-srv)**: OIDC authentication infrastructure implemented (Phase 1 complete)
 - **FlightSQL/Ingestion servers**: Already have auth infrastructure (API keys or OIDC)
 
@@ -27,6 +27,36 @@
 **Not Yet Implemented:**
 - Per-request token passthrough to FlightSQL (currently still uses `MICROMEGAS_AUTH_TOKEN`)
 - Full JWT signature validation in middleware (currently validates expiry only)
+
+### Phase 2 & 3 Implementation Status (COMPLETED)
+
+**Files Created:**
+- `analytics-web-app/src/lib/auth.tsx` - Auth context/provider with login, logout, refresh functions
+- `analytics-web-app/src/app/login/page.tsx` - Login page with SSO redirect button and Suspense boundary
+- `analytics-web-app/src/components/AuthGuard.tsx` - Route protection component with loading/error states
+- `analytics-web-app/src/components/UserMenu.tsx` - User dropdown menu with logout functionality
+
+**Files Modified:**
+- `analytics-web-app/src/lib/api.ts` - Added `credentials: 'include'` to all fetch calls, AuthenticationError class for 401 handling
+- `analytics-web-app/src/app/layout.tsx` - Wrapped app with AuthProvider
+- `analytics-web-app/src/app/page.tsx` - Wrapped with AuthGuard, added UserMenu to header
+- `analytics-web-app/src/app/process/[id]/page.tsx` - Wrapped with AuthGuard, added UserMenu to header
+- `analytics-web-app/src/components/ErrorBoundary.tsx` - Added AuthenticationError handling with redirect to login
+
+**Features Implemented:**
+- Auth context with state management (`loading | authenticated | unauthenticated | error`)
+- Automatic auth check on app load via `/auth/me`
+- Login redirect to backend `/auth/login` with return URL preservation
+- Logout via POST to `/auth/logout`
+- Token refresh support via `/auth/refresh`
+- Route protection with AuthGuard component
+- User menu with name/email display and logout button
+- 401 error handling with automatic redirect to login
+- Cross-origin cookie support via `credentials: 'include'`
+- Suspense boundary for Next.js 15 useSearchParams requirement
+
+**Not Yet Implemented:**
+- Environment variable template file (`.env.local.example`)
 
 ## Approach: OIDC Authentication Only
 
@@ -115,80 +145,87 @@ See Security Considerations section for cookie and CSRF configuration details.
 
 ---
 
-## Phase 2: Frontend Authentication Flow
+## Phase 2: Frontend Authentication Flow (COMPLETED)
 
-### Task 2.1: Create auth context/provider
+### Task 2.1: Create auth context/provider ✅ COMPLETED
 **File**: `analytics-web-app/src/lib/auth.tsx`
 
-- Login function (redirects to backend `/auth/login`)
-- Logout function (calls backend `/auth/logout`)
-- User info state (fetched from backend `/auth/me`)
-- Check auth status on app load
-- No direct token access (handled by httpOnly cookies)
+- Login function (redirects to backend `/auth/login`) ✅
+- Logout function (calls backend `/auth/logout`) ✅
+- User info state (fetched from backend `/auth/me`) ✅
+- Check auth status on app load ✅
+- Token refresh function ✅
+- No direct token access (handled by httpOnly cookies) ✅
 
 **Auth check behavior:**
-- Call `/auth/me` on app load
-- 200 with JSON: user is logged in, store user info
-- 401: user is not logged in, redirect to login
-- Network error or 5xx: service unavailable, show error page (not login redirect)
-- State: `loading | authenticated | unauthenticated | error`
+- Call `/auth/me` on app load ✅
+- 200 with JSON: user is logged in, store user info ✅
+- 401: user is not logged in, redirect to login ✅
+- Network error or 5xx: service unavailable, show error page (not login redirect) ✅
+- State: `loading | authenticated | unauthenticated | error` ✅
 
 Note: No `oidc-client-ts` needed - backend handles all OIDC flows
 
-### Task 2.2: Protect routes
+### Task 2.2: Protect routes ✅ COMPLETED
 **Files**:
-- `analytics-web-app/src/app/layout.tsx`
-- `analytics-web-app/src/components/AuthGuard.tsx`
+- `analytics-web-app/src/app/layout.tsx` - Wrapped with AuthProvider ✅
+- `analytics-web-app/src/components/AuthGuard.tsx` - NEW: Route protection component ✅
+- `analytics-web-app/src/app/page.tsx` - Wrapped with AuthGuard ✅
+- `analytics-web-app/src/app/process/[id]/page.tsx` - Wrapped with AuthGuard ✅
 
-- Wrap app in auth provider
-- Redirect to login if unauthenticated (check via `/auth/me`)
-- Show loading state during auth check
-- Preserve return URL for post-login redirect (pass as state to backend)
+- Wrap app in auth provider ✅
+- Redirect to login if unauthenticated (check via `/auth/me`) ✅
+- Show loading state during auth check ✅
+- Preserve return URL for post-login redirect (pass as state to backend) ✅
+- Show error page for service unavailable (not login redirect) ✅
 
-### Task 2.3: Update API client
+### Task 2.3: Update API client ✅ COMPLETED
 **File**: `analytics-web-app/src/lib/api.ts`
 
-- No Authorization header needed (cookies sent automatically)
-- Handle 401 responses (redirect to login)
-- Credentials: 'include' for cross-origin cookie support
-- Retry logic for token refresh (backend handles refresh)
+- No Authorization header needed (cookies sent automatically) ✅
+- Handle 401 responses (redirect to login via AuthenticationError) ✅
+- Credentials: 'include' for cross-origin cookie support ✅
+- Added AuthenticationError class for 401 handling ✅
 
-### Task 2.4: Add login page
+### Task 2.4: Add login page ✅ COMPLETED
 **File**: `analytics-web-app/src/app/login/page.tsx`
 
-- Redirect to backend `/auth/login` endpoint
-- Pass return URL as query parameter
-- Error handling for auth failures
-- Display provider information
+- Redirect to backend `/auth/login` endpoint ✅
+- Pass return URL as query parameter ✅
+- Error handling for auth failures ✅
+- Display provider information ✅
+- Suspense boundary for useSearchParams (Next.js 15 requirement) ✅
+- Auto-redirect if already authenticated ✅
 
 ---
 
-## Phase 3: UI Integration
+## Phase 3: UI Integration (COMPLETED)
 
-### Task 3.1: Add user menu/logout button
+### Task 3.1: Add user menu/logout button ✅ COMPLETED
 **File**: `analytics-web-app/src/components/UserMenu.tsx`
 
-- Display logged-in user info (name, email)
-- Logout functionality
-- Session indicator
-- Link to user settings (if applicable)
+- Display logged-in user info (name, email) ✅
+- Logout functionality (POST request) ✅
+- Dropdown menu with user details ✅
+- Loading state during logout ✅
 
-### Task 3.2: Update header/layout
-**File**: `analytics-web-app/src/app/layout.tsx`
-
-- Include UserMenu component
-- Show auth status
-- Consistent navigation
-
-### Task 3.3: Error handling for auth errors
+### Task 3.2: Update header/layout ✅ COMPLETED
 **Files**:
-- `analytics-web-app/src/components/ErrorBoundary.tsx`
-- `analytics-web-app/src/lib/api.ts`
+- `analytics-web-app/src/app/page.tsx` - Added UserMenu to header ✅
+- `analytics-web-app/src/app/process/[id]/page.tsx` - Added UserMenu to header ✅
 
-- Distinguish 401 (unauthorized) from other errors
-- Clear session on auth failure
-- Redirect to login with return URL
-- Show appropriate error messages
+- Include UserMenu component in all protected pages ✅
+- Show auth status via UserMenu ✅
+- Consistent navigation ✅
+
+### Task 3.3: Error handling for auth errors ✅ COMPLETED
+**Files**:
+- `analytics-web-app/src/components/ErrorBoundary.tsx` - Updated with AuthenticationError handling ✅
+- `analytics-web-app/src/lib/api.ts` - Added AuthenticationError class ✅
+
+- Distinguish 401 (unauthorized) from other errors ✅
+- Redirect to login with return URL on 401 ✅
+- Show appropriate error messages ✅
 
 ---
 
@@ -209,6 +246,7 @@ Note: No `oidc-client-ts` needed - backend handles all OIDC flows
 - Test logout uses POST method
 
 ### Task 4.3: Documentation
+(let's keep it TLDR and avoid any repetition - there is already plenty of auth doc)
 - Update environment variable docs
 - OIDC provider setup guide (Google, Keycloak, etc.)
 - Development mode instructions (disable-auth)
@@ -225,17 +263,19 @@ Note: No `oidc-client-ts` needed - backend handles all OIDC flows
 | `rust/analytics-web-srv/src/main.rs` | Modify | ✅ Done | Add auth routes, --disable-auth flag, CORS credentials |
 | `rust/analytics-web-srv/Cargo.toml` | Modify | ✅ Done | Add dependencies: axum-extra, openidconnect, base64, rand, reqwest, time, url |
 
-### Frontend (TypeScript)
-| File | Action | Description |
-|------|--------|-------------|
-| `analytics-web-app/src/lib/auth.tsx` | Create | Auth context/provider (no token storage) |
-| `analytics-web-app/src/lib/api.ts` | Modify | Add credentials: 'include', 401 handling |
-| `analytics-web-app/src/app/login/page.tsx` | Create | Login redirect page |
-| `analytics-web-app/src/app/layout.tsx` | Modify | Wrap with auth provider |
-| `analytics-web-app/src/components/AuthGuard.tsx` | Create | Route protection component |
-| `analytics-web-app/src/components/UserMenu.tsx` | Create | User info/logout UI |
-| `analytics-web-app/src/components/ErrorBoundary.tsx` | Modify | Handle 401 errors |
-| `analytics-web-app/.env.local.example` | Create | Environment variable template |
+### Frontend (TypeScript) - PHASE 2 & 3 COMPLETED ✅
+| File | Action | Status | Description |
+|------|--------|--------|-------------|
+| `analytics-web-app/src/lib/auth.tsx` | Create | ✅ Done | Auth context/provider (no token storage) |
+| `analytics-web-app/src/lib/api.ts` | Modify | ✅ Done | Add credentials: 'include', 401 handling |
+| `analytics-web-app/src/app/login/page.tsx` | Create | ✅ Done | Login redirect page with Suspense |
+| `analytics-web-app/src/app/layout.tsx` | Modify | ✅ Done | Wrap with auth provider |
+| `analytics-web-app/src/app/page.tsx` | Modify | ✅ Done | Wrap with AuthGuard, add UserMenu |
+| `analytics-web-app/src/app/process/[id]/page.tsx` | Modify | ✅ Done | Wrap with AuthGuard, add UserMenu |
+| `analytics-web-app/src/components/AuthGuard.tsx` | Create | ✅ Done | Route protection component |
+| `analytics-web-app/src/components/UserMenu.tsx` | Create | ✅ Done | User info/logout UI |
+| `analytics-web-app/src/components/ErrorBoundary.tsx` | Modify | ✅ Done | Handle 401 errors |
+| `analytics-web-app/.env.local.example` | Create | Pending | Environment variable template |
 
 ### Documentation
 | File | Action | Description |
@@ -296,16 +336,16 @@ NEXT_PUBLIC_API_URL=http://localhost:3000
 4. ✅ **Task 1.4** - CORS middleware configuration
 5. ✅ **Task 1.5** - Token expiry and refresh strategy
 
-### Phase 2 - Frontend (NEXT)
-6. **Task 2.1** - Frontend auth context (fetch user from backend)
-7. **Task 2.3** - API client with credentials: 'include'
-8. **Task 2.4** - Login page
-9. **Task 2.2** - Route protection
+### Phase 2 - Frontend (COMPLETED ✅)
+6. ✅ **Task 2.1** - Frontend auth context (fetch user from backend)
+7. ✅ **Task 2.3** - API client with credentials: 'include'
+8. ✅ **Task 2.4** - Login page
+9. ✅ **Task 2.2** - Route protection
 
-### Phase 3 - UI Polish
-10. **Task 3.1-3.3** - UI polish (user menu, error handling)
+### Phase 3 - UI Polish (COMPLETED ✅)
+10. ✅ **Task 3.1-3.3** - UI polish (user menu, error handling)
 
-### Phase 4 - Testing & Documentation
+### Phase 4 - Testing & Documentation (NEXT)
 11. **Task 4.1-4.3** - Testing and docs
 
 ---

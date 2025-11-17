@@ -7,6 +7,8 @@ import { fetchProcesses, fetchHealthCheck, generateTrace } from '@/lib/api'
 import { ProcessTable } from '@/components/ProcessTable'
 import { TraceGenerationProgress } from '@/components/TraceGenerationProgress'
 import { useApiErrorHandler } from '@/components/ErrorBoundary'
+import { AuthGuard } from '@/components/AuthGuard'
+import { UserMenu } from '@/components/UserMenu'
 import { AlertCircle } from 'lucide-react'
 
 export default function HomePage() {
@@ -63,16 +65,20 @@ export default function HomePage() {
 
 
   return (
-    <div className="min-h-screen" style={{ backgroundColor: '#f8fafc' }}>
-      {/* Header */}
-      <div className="bg-white border-b border-gray-200 shadow-sm">
-        <div className="px-8 py-4">
-          <h1 className="text-2xl font-semibold text-gray-800">Micromegas Analytics</h1>
-          <p className="text-sm text-gray-600 mt-1">Explore processes, analyze logs, and export trace data</p>
+    <AuthGuard>
+      <div className="min-h-screen" style={{ backgroundColor: '#f8fafc' }}>
+        {/* Header */}
+        <div className="bg-white border-b border-gray-200 shadow-sm">
+          <div className="px-8 py-4 flex justify-between items-start">
+            <div>
+              <h1 className="text-2xl font-semibold text-gray-800">Micromegas Analytics</h1>
+              <p className="text-sm text-gray-600 mt-1">Explore processes, analyze logs, and export trace data</p>
+            </div>
+            <UserMenu />
+          </div>
         </div>
-      </div>
 
-      <div className="max-w-7xl mx-auto px-8 py-8">
+        <div className="max-w-7xl mx-auto px-8 py-8">
         {/* Tab Navigation */}
         <div className="flex border-b border-gray-200 mb-8">
           <button className="px-6 py-3 border-b-2 border-blue-500 text-blue-600 font-medium text-sm">
@@ -126,8 +132,9 @@ export default function HomePage() {
             isGenerating={isGenerating}
             onRefresh={handleRefresh}
           />
-        )}
+          )}
+        </div>
       </div>
-    </div>
+    </AuthGuard>
   )
 }
