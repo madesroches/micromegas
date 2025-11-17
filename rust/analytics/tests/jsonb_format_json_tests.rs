@@ -1,5 +1,7 @@
-use datafusion::arrow::array::{Array, ArrayRef, BinaryDictionaryBuilder, GenericBinaryBuilder};
-use datafusion::arrow::datatypes::{Field, Int32Type, Schema};
+use datafusion::arrow::array::{
+    Array, ArrayAccessor, ArrayRef, BinaryDictionaryBuilder, DictionaryArray, GenericBinaryBuilder,
+};
+use datafusion::arrow::datatypes::{DataType, Field, Int32Type, Schema};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::prelude::*;
 use micromegas_analytics::arrow_properties::serialize_properties_to_jsonb;
@@ -66,18 +68,33 @@ async fn execute_jsonb_format_json(batch: RecordBatch) -> Vec<Option<String>> {
 
     assert_eq!(results.len(), 1, "Expected single result batch");
     let result_batch = &results[0];
-    let result_array = result_batch
-        .column(0)
-        .as_any()
-        .downcast_ref::<datafusion::arrow::array::StringArray>()
-        .expect("Expected StringArray result");
 
-    (0..result_array.len())
+    // The result should be a Dictionary<Int32, Utf8>
+    let result_array = result_batch.column(0);
+    assert!(
+        matches!(
+            result_array.data_type(),
+            DataType::Dictionary(_, inner) if matches!(inner.as_ref(), DataType::Utf8)
+        ),
+        "Expected Dictionary<Int32, Utf8> result, got {:?}",
+        result_array.data_type()
+    );
+
+    let dict_array = result_array
+        .as_any()
+        .downcast_ref::<DictionaryArray<Int32Type>>()
+        .expect("Expected DictionaryArray result");
+
+    let string_values = dict_array.downcast_dict::<datafusion::arrow::array::StringArray>();
+    assert!(string_values.is_some());
+    let string_values = string_values.unwrap();
+
+    (0..string_values.len())
         .map(|i| {
-            if result_array.is_null(i) {
+            if dict_array.is_null(i) {
                 None
             } else {
-                Some(result_array.value(i).to_string())
+                Some(string_values.value(i).to_string())
             }
         })
         .collect()
