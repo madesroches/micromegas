@@ -1,6 +1,6 @@
 use crate::dfext::binary_column_accessor::create_binary_accessor;
-use datafusion::arrow::array::StringBuilder;
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::array::StringDictionaryBuilder;
+use datafusion::arrow::datatypes::{DataType, Int32Type};
 use datafusion::common::{Result, internal_err};
 use datafusion::logical_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
@@ -13,6 +13,7 @@ use std::sync::Arc;
 ///
 /// Accepts both Binary and Dictionary<Int32, Binary> inputs, making it compatible
 /// with dictionary-encoded JSONB columns and the output of `properties_to_jsonb`.
+/// Returns Dictionary<Int32, Utf8> for memory efficiency.
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct JsonbFormatJson {
     signature: Signature,
@@ -46,7 +47,10 @@ impl ScalarUDFImpl for JsonbFormatJson {
     }
 
     fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Utf8)
+        Ok(DataType::Dictionary(
+            Box::new(DataType::Int32),
+            Box::new(DataType::Utf8),
+        ))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -61,19 +65,19 @@ impl ScalarUDFImpl for JsonbFormatJson {
                 format!("Invalid input type for jsonb_format_json: {}. Expected Binary or Dictionary<Int32, Binary>", e)
             ))?;
 
-        let mut builder = StringBuilder::with_capacity(binary_accessor.len(), 1024);
+        let mut dict_builder = StringDictionaryBuilder::<Int32Type>::new();
 
         for index in 0..binary_accessor.len() {
             if binary_accessor.is_null(index) {
-                builder.append_null();
+                dict_builder.append_null();
             } else {
                 let src_buffer = binary_accessor.value(index);
                 let jsonb = RawJsonb::new(src_buffer);
-                builder.append_value(jsonb.to_string());
+                dict_builder.append_value(jsonb.to_string());
             }
         }
 
-        Ok(ColumnarValue::Array(Arc::new(builder.finish())))
+        Ok(ColumnarValue::Array(Arc::new(dict_builder.finish())))
     }
 }
 
@@ -81,6 +85,7 @@ impl ScalarUDFImpl for JsonbFormatJson {
 ///
 /// This function accepts both `Binary` and `Dictionary<Int32, Binary>` inputs,
 /// allowing it to work seamlessly with dictionary-encoded JSONB columns.
+/// Returns `Dictionary<Int32, Utf8>` for memory efficiency.
 pub fn make_jsonb_format_json_udf() -> datafusion::logical_expr::ScalarUDF {
     datafusion::logical_expr::ScalarUDF::new_from_impl(JsonbFormatJson::new())
 }
