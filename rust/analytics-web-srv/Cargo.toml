@@ -16,17 +16,25 @@ micromegas.workspace = true
 anyhow.workspace = true
 async-stream.workspace = true
 axum.workspace = true
+axum-extra = { version = "0.10", features = ["cookie"] }
+base64.workspace = true
 bytes.workspace = true
 chrono.workspace = true
 clap.workspace = true
 datafusion.workspace = true
 futures.workspace = true
 http.workspace = true
+micromegas-auth.workspace = true
+openidconnect.workspace = true
+rand.workspace = true
+reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+time = "0.3"
 tokio.workspace = true
 tower-http = { workspace = true, features = ["fs"] }
 tracing.workspace = true
+url.workspace = true
 
 [[bin]]
 name = "analytics-web-srv"

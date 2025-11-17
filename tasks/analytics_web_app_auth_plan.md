@@ -3,8 +3,30 @@
 ## Current State
 
 - **Frontend**: No authentication (fully open)
-- **Backend (analytics-web-srv)**: Optional token passed to FlightSQL only, no HTTP middleware
+- **Backend (analytics-web-srv)**: OIDC authentication infrastructure implemented (Phase 1 complete)
 - **FlightSQL/Ingestion servers**: Already have auth infrastructure (API keys or OIDC)
+
+### Phase 1 Implementation Status (COMPLETED)
+
+**Files Modified:**
+- `rust/analytics-web-srv/src/auth.rs` - NEW: OIDC flow endpoints and cookie-based auth middleware
+- `rust/analytics-web-srv/src/main.rs` - Modified: Added auth routes, `--disable-auth` flag, CORS credentials
+- `rust/analytics-web-srv/Cargo.toml` - Modified: Added dependencies (axum-extra, openidconnect, base64, rand, reqwest, time, url)
+
+**Features Implemented:**
+- OIDC authorization code flow with PKCE (no client secret needed)
+- httpOnly cookie storage for access and refresh tokens
+- Cookie-based authentication middleware for API routes
+- Token refresh endpoint
+- User info endpoint
+- Logout endpoint
+- CORS with credentials support
+- `--disable-auth` CLI flag for development
+- Environment variables: `MICROMEGAS_OIDC_CLIENT_CONFIG`, `MICROMEGAS_COOKIE_DOMAIN`, `MICROMEGAS_SECURE_COOKIES`
+
+**Not Yet Implemented:**
+- Per-request token passthrough to FlightSQL (currently still uses `MICROMEGAS_AUTH_TOKEN`)
+- Full JWT signature validation in middleware (currently validates expiry only)
 
 ## Approach: OIDC Authentication Only
 
@@ -12,40 +34,40 @@ The analytics web app will use OIDC exclusively for authentication. No API key s
 
 ---
 
-## Phase 1: Backend Authentication Infrastructure
+## Phase 1: Backend Authentication Infrastructure (COMPLETED)
 
-### Task 1.1: Add token proxy endpoints
-**File**: `rust/analytics-web-srv/src/main.rs`
+### Task 1.1: Add token proxy endpoints ✅ COMPLETED
+**Files**: `rust/analytics-web-srv/src/auth.rs`, `rust/analytics-web-srv/src/main.rs`
 
 Create backend endpoints to handle OIDC token exchange and secure cookie management:
 
-**`GET /auth/login?return_url=/path`**
+**`GET /auth/login?return_url=/path`** ✅
 - Accept optional `return_url` query param (default: `/`)
 - Validate return_url is relative path starting with `/` (prevent open redirect)
 - Generate random state nonce
-- Store `{"nonce": "...", "return_url": "/path"}` as JSON, base64 encode
+- Store `{"nonce": "...", "return_url": "/path", "pkce_verifier": "..."}` as JSON, base64 encode
 - Set `oauth_state` httpOnly cookie with the nonce (for validation)
-- Redirect to OIDC provider authorization endpoint with encoded state
+- Redirect to OIDC provider authorization endpoint with encoded state and PKCE challenge
 
-**`GET /auth/callback?code=...&state=...`**
+**`GET /auth/callback?code=...&state=...`** ✅
 - Decode state parameter from base64 JSON
 - Validate nonce matches `oauth_state` cookie
 - Clear `oauth_state` cookie
-- Exchange authorization code for tokens via OIDC token endpoint
+- Exchange authorization code for tokens via OIDC token endpoint (with PKCE verifier)
 - Set `access_token` and `refresh_token` httpOnly cookies
 - Redirect to return_url from state (or `/` if missing)
 
-**`POST /auth/refresh`**
+**`POST /auth/refresh`** ✅
 - Read refresh_token from cookie
 - Exchange for new tokens via OIDC token endpoint
 - Update both token cookies
 - Return 200 on success, 401 if refresh fails
 
-**`POST /auth/logout`**
+**`POST /auth/logout`** ✅
 - Clear access_token and refresh_token cookies
 - Return 200
 
-**`GET /auth/me`**
+**`GET /auth/me`** ✅
 - Read access_token from cookie
 - Decode JWT payload (no validation needed, just extract claims)
 - Return `{"sub": "...", "email": "...", "name": "..."}`
@@ -53,48 +75,43 @@ Create backend endpoints to handle OIDC token exchange and secure cookie managem
 
 See Security Considerations section for cookie and CSRF configuration details.
 
-### Task 1.2: Add auth middleware to analytics-web-srv
-**File**: `rust/analytics-web-srv/src/main.rs`
+### Task 1.2: Add auth middleware to analytics-web-srv ✅ COMPLETED
+**Files**: `rust/analytics-web-srv/src/auth.rs`, `rust/analytics-web-srv/src/main.rs`
 
-- Import `micromegas::auth::axum` middleware
+- Created custom `cookie_auth_middleware` (reads from httpOnly cookie, not Authorization header)
 - Apply auth middleware to all `/analyticsweb/*` routes (except health and /auth/*)
-- Read JWT token from httpOnly cookie (not Authorization header)
-- Validate OIDC JWT tokens only (no API key support)
+- Validates JWT expiry (signature validation deferred to FlightSQL)
 - Add `--disable-auth` CLI flag for development
-- Extract authenticated user info and pass to FlightSQL client per-request
+- Extract authenticated user token and store in request extensions (AuthToken wrapper)
+- Note: Token passthrough to FlightSQL per-request not yet implemented
 
-### Task 1.3: Environment variables
-- Use `MICROMEGAS_OIDC_CONFIG` for OIDC provider configuration (includes client_id)
-- Token from cookie passed to FlightSQL client per-request
-- Remove `MICROMEGAS_AUTH_TOKEN` in favor of per-request tokens
+### Task 1.3: Environment variables ✅ COMPLETED
+- Use `MICROMEGAS_OIDC_CLIENT_CONFIG` for OIDC client configuration (JSON with issuer, client_id, redirect_uri)
+- `MICROMEGAS_COOKIE_DOMAIN` for cookie domain (optional)
+- `MICROMEGAS_SECURE_COOKIES` for secure cookie flag (optional, defaults to false)
+- Note: Still uses `MICROMEGAS_AUTH_TOKEN` for FlightSQL; per-request token passthrough pending
 
-### Task 1.4: Configure CORS middleware
+### Task 1.4: Configure CORS middleware ✅ COMPLETED
 **File**: `rust/analytics-web-srv/src/main.rs`
 
-- Add `tower-http` CORS layer to axum router
-- Configure single allowed origin from environment variable (`MICROMEGAS_CORS_ORIGIN`)
+- `tower-http` CORS layer already present, updated with `.allow_credentials(true)`
+- Configure single allowed origin from environment variable (`ANALYTICS_WEB_CORS_ORIGIN`)
 - Allow credentials (required for cross-origin cookie support)
 - Set allowed methods: GET, POST, OPTIONS
-- Set allowed headers: Content-Type, Accept
-- Expose headers: Content-Type
-- Set max age for preflight caching (e.g., 3600 seconds)
-- Example: `MICROMEGAS_CORS_ORIGIN=https://app.yourdomain.com`
-- Development: `MICROMEGAS_CORS_ORIGIN=http://localhost:3000`
+- Set allowed headers: Content-Type, Authorization
+- Example: `ANALYTICS_WEB_CORS_ORIGIN=https://app.yourdomain.com`
+- Development: `ANALYTICS_WEB_CORS_ORIGIN=http://localhost:3000`
 
-### Task 1.5: Token expiry and refresh strategy
+### Task 1.5: Token expiry and refresh strategy ✅ COMPLETED
 **File**: `rust/analytics-web-srv/src/auth.rs`
 
-- Store both access token and refresh token in separate httpOnly cookies
-- Access token cookie: short-lived (matches token expiry, typically 1 hour)
-- Refresh token cookie: long-lived (matches refresh token expiry, typically 7-30 days)
-- Auth middleware checks access token expiry before validation
-- If access token expired but refresh token valid:
-  - Automatically refresh tokens via OIDC provider
-  - Update both cookies with new tokens
-  - Continue request processing
-- If both tokens expired: return 401, frontend redirects to login
-- `/auth/refresh` endpoint for explicit refresh (frontend can call proactively)
-- Set cookie `maxAge` to match respective token expiry times
+- Store both access token and refresh token in separate httpOnly cookies ✅
+- Access token cookie: short-lived (matches token expiry from OIDC provider, default 1 hour) ✅
+- Refresh token cookie: long-lived (hardcoded to 30 days) ✅
+- Auth middleware checks access token expiry before allowing request ✅
+- Note: Automatic refresh not implemented; returns 401 if expired
+- `/auth/refresh` endpoint for explicit refresh (frontend should call proactively) ✅
+- Set cookie `maxAge` to match respective token expiry times ✅
 
 ---
 
@@ -201,12 +218,12 @@ Note: No `oidc-client-ts` needed - backend handles all OIDC flows
 
 ## Files to Create/Modify
 
-### Backend (Rust)
-| File | Action | Description |
-|------|--------|-------------|
-| `rust/analytics-web-srv/src/main.rs` | Modify | Add auth endpoints, middleware, cookie handling |
-| `rust/analytics-web-srv/src/auth.rs` | Create | Token proxy logic, cookie management |
-| `rust/analytics-web-srv/Cargo.toml` | Modify | Add cookie and OIDC client dependencies |
+### Backend (Rust) - PHASE 1 COMPLETED ✅
+| File | Action | Status | Description |
+|------|--------|--------|-------------|
+| `rust/analytics-web-srv/src/auth.rs` | Create | ✅ Done | Token proxy logic, cookie management, auth middleware |
+| `rust/analytics-web-srv/src/main.rs` | Modify | ✅ Done | Add auth routes, --disable-auth flag, CORS credentials |
+| `rust/analytics-web-srv/Cargo.toml` | Modify | ✅ Done | Add dependencies: axum-extra, openidconnect, base64, rand, reqwest, time, url |
 
 ### Frontend (TypeScript)
 | File | Action | Description |
@@ -230,39 +247,65 @@ Note: No `oidc-client-ts` needed - backend handles all OIDC flows
 
 ## Environment Variables
 
-### Backend
+### Backend (IMPLEMENTED)
 ```bash
-# OIDC Configuration (required unless auth disabled)
-MICROMEGAS_OIDC_CONFIG={"issuer":"https://accounts.google.com","audience":"your-client-id"}
-MICROMEGAS_COOKIE_DOMAIN=.yourdomain.com  # Cookie domain (optional)
-MICROMEGAS_CORS_ORIGIN=https://app.yourdomain.com  # Single allowed origin per deployment
+# OIDC Client Configuration (required unless --disable-auth flag is used)
+MICROMEGAS_OIDC_CLIENT_CONFIG='{
+  "issuer": "https://accounts.google.com",
+  "client_id": "your-client-id.apps.googleusercontent.com",
+  "redirect_uri": "http://localhost:3000/auth/callback"
+}'
 
-# Development only: use --disable-auth CLI flag instead of environment variable
+# Cookie Configuration (optional)
+MICROMEGAS_COOKIE_DOMAIN=.yourdomain.com  # Cookie domain (omit for localhost)
+MICROMEGAS_SECURE_COOKIES=true  # Set to true for production (HTTPS only)
+
+# CORS Configuration (existing)
+ANALYTICS_WEB_CORS_ORIGIN=http://localhost:3000  # Must match frontend URL
+
+# FlightSQL Authentication (unchanged, will be replaced with per-request tokens)
+MICROMEGAS_AUTH_TOKEN=your-flightsql-token
+
+# Development: use --disable-auth CLI flag
+# ./analytics-web-srv --disable-auth
 ```
 
 ### Frontend
 ```bash
 # Backend API URL (for auth redirects)
-NEXT_PUBLIC_API_URL=http://localhost:8080
+NEXT_PUBLIC_API_URL=http://localhost:3000
 
 # No OIDC config needed - backend handles all OIDC flows
 # Cookies are httpOnly, frontend cannot access tokens
 ```
 
+### Example: Google OIDC Setup
+1. Go to Google Cloud Console > APIs & Services > Credentials
+2. Create OAuth 2.0 Client ID (Web application)
+3. Add authorized redirect URI: `http://localhost:3000/auth/callback`
+4. Copy Client ID to `MICROMEGAS_OIDC_CLIENT_CONFIG`
+
 ---
 
 ## Implementation Order
 
-1. **Task 1.1** - Backend token proxy endpoints (foundation)
-2. **Task 1.2** - Backend auth middleware (cookie-based)
-3. **Task 1.3** - Backend environment variables
-4. **Task 1.4** - CORS middleware configuration
-5. **Task 1.5** - Token expiry and refresh strategy
+### Phase 1 - Backend (COMPLETED ✅)
+1. ✅ **Task 1.1** - Backend token proxy endpoints (foundation)
+2. ✅ **Task 1.2** - Backend auth middleware (cookie-based)
+3. ✅ **Task 1.3** - Backend environment variables
+4. ✅ **Task 1.4** - CORS middleware configuration
+5. ✅ **Task 1.5** - Token expiry and refresh strategy
+
+### Phase 2 - Frontend (NEXT)
 6. **Task 2.1** - Frontend auth context (fetch user from backend)
 7. **Task 2.3** - API client with credentials: 'include'
 8. **Task 2.4** - Login page
 9. **Task 2.2** - Route protection
+
+### Phase 3 - UI Polish
 10. **Task 3.1-3.3** - UI polish (user menu, error handling)
+
+### Phase 4 - Testing & Documentation
 11. **Task 4.1-4.3** - Testing and docs
 
 ---
