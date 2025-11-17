@@ -36,6 +36,16 @@ tower-http = { workspace = true, features = ["fs"] }
 tracing.workspace = true
 url.workspace = true
 
+[lib]
+name = "analytics_web_srv"
+path = "src/lib.rs"
+
 [[bin]]
 name = "analytics-web-srv"
 path = "src/main.rs"
+
+[dev-dependencies]
+axum-test = "16.4"
+jsonwebtoken.workspace = true
+rsa.workspace = true
+tower.workspace = true
