@@ -62,6 +62,7 @@ SELECT * FROM list_partitions()
 | file_size | Int64 | File size in bytes |
 | file_schema_hash | Binary | Hash of the file schema |
 | source_data_hash | Binary | Hash of the source data |
+| num_rows | Int64 | Number of rows in the partition |
 
 **Example:**
 ```sql
@@ -207,6 +208,59 @@ LIMIT 10;
 
 **✅ Safety Note:** This function only affects the specified partition file. It cannot accidentally retire other partitions, making it safer than time-range-based retirement for schema evolution tasks.
 
+#### `perfetto_trace_chunks(process_id, span_types, start_time, end_time)`
+
+Generates Perfetto trace chunks from process telemetry data for visualization and performance analysis.
+
+**Syntax:**
+```sql
+SELECT chunk_id, chunk_data
+FROM perfetto_trace_chunks(process_id, span_types, start_time, end_time)
+ORDER BY chunk_id
+```
+
+**Parameters:**
+
+- `process_id` (`Utf8`): Process UUID to generate trace for
+
+- `span_types` (`Utf8`): Type of spans to include: `'thread'`, `'async'`, or `'both'`
+
+- `start_time` (`Timestamp`): Start time for trace data (UTC timestamp)
+
+- `end_time` (`Timestamp`): End time for trace data (UTC timestamp)
+
+**Returns:**
+
+| Column | Type | Description |
+|--------|------|-------------|
+| chunk_id | Int32 | Sequential chunk identifier |
+| chunk_data | Binary | Binary protobuf TracePacket data |
+
+**Examples:**
+```sql
+-- Generate trace for thread spans only
+SELECT chunk_id, chunk_data
+FROM perfetto_trace_chunks(
+    'process-uuid-123',
+    'thread',
+    TIMESTAMP '2024-01-01T00:00:00Z',
+    TIMESTAMP '2024-01-01T01:00:00Z'
+)
+ORDER BY chunk_id;
+
+-- Generate trace for both thread and async spans
+SELECT chunk_id, chunk_data
+FROM perfetto_trace_chunks(
+    'my-process-id',
+    'both',
+    NOW() - INTERVAL '1 hour',
+    NOW()
+)
+ORDER BY chunk_id;
+```
+
+**Note:** The returned binary data is in Perfetto protobuf format and can be loaded directly into the [Perfetto UI](https://ui.perfetto.dev/) for visualization and analysis.
+
 ### Scalar Functions
 
 #### JSON/JSONB Functions
@@ -224,9 +278,12 @@ jsonb_parse(json_string)
 
 **Parameters:**
 
-- `json_string` (`Utf8`): JSON string to parse
+- `json_string` (Multiple formats supported): JSON string to parse:
 
-**Returns:** `Binary` - Parsed JSONB data
+   * `Utf8` - Plain string
+   * `Dictionary<Int32, Utf8>` - Dictionary-encoded string
+
+**Returns:** `Dictionary<Int32, Binary>` - Dictionary-encoded JSONB data
 
 **Example:**
 ```sql
@@ -246,11 +303,14 @@ jsonb_get(jsonb, key)
 
 **Parameters:**
 
-- `jsonb` (`Binary`): JSONB object
+- `jsonb` (Multiple formats supported): JSONB object in any of these formats:
+
+   * `Binary` - Plain JSONB binary
+   * `Dictionary<Int32, Binary>` - Dictionary-encoded JSONB
 
 - `key` (`Utf8`): Key name to extract
 
-**Returns:** `Binary` - JSONB value or NULL if key not found
+**Returns:** `Dictionary<Int32, Binary>` - Dictionary-encoded JSONB value or NULL if key not found
 
 **Example:**
 ```sql
@@ -275,7 +335,7 @@ jsonb_format_json(jsonb)
    * `Dictionary<Int32, Binary>` - **Dictionary-encoded JSONB (default)**
    * `Binary` - Non-dictionary JSONB
 
-**Returns:** `Utf8` - JSON string representation
+**Returns:** `Dictionary<Int32, Utf8>` - Dictionary-encoded JSON string representation
 
 **Examples:**
 ```sql
@@ -304,9 +364,12 @@ jsonb_as_string(jsonb)
 
 **Parameters:**
 
-- `jsonb` (`Binary`): JSONB value to convert
+- `jsonb` (Multiple formats supported): JSONB value to convert:
 
-**Returns:** `Utf8` - String value or NULL if not a string
+   * `Binary` - Plain JSONB binary
+   * `Dictionary<Int32, Binary>` - Dictionary-encoded JSONB
+
+**Returns:** `Dictionary<Int32, Utf8>` - Dictionary-encoded string value or NULL if not a string
 
 **Example:**
 ```sql
@@ -326,7 +389,10 @@ jsonb_as_f64(jsonb)
 
 **Parameters:**
 
-- `jsonb` (`Binary`): JSONB value to convert
+- `jsonb` (Multiple formats supported): JSONB value to convert:
+
+   * `Binary` - Plain JSONB binary
+   * `Dictionary<Int32, Binary>` - Dictionary-encoded JSONB
 
 **Returns:** `Float64` - Numeric value or NULL if not a number
 
@@ -348,7 +414,10 @@ jsonb_as_i64(jsonb)
 
 **Parameters:**
 
-- `jsonb` (`Binary`): JSONB value to convert
+- `jsonb` (Multiple formats supported): JSONB value to convert:
+
+   * `Binary` - Plain JSONB binary
+   * `Dictionary<Int32, Binary>` - Dictionary-encoded JSONB
 
 **Returns:** `Int64` - Integer value or NULL if not an integer
 
