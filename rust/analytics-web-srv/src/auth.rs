@@ -338,6 +338,7 @@ pub async fn auth_login(
         .add_scope(Scope::new("openid".to_string()))
         .add_scope(Scope::new("email".to_string()))
         .add_scope(Scope::new("profile".to_string()))
+        .add_scope(Scope::new("offline_access".to_string()))
         .set_pkce_challenge(pkce_challenge)
         .url();
 
