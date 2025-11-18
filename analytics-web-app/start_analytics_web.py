@@ -83,11 +83,29 @@ def kill_existing_backend():
     except Exception:
         return False
 
+def kill_existing_frontend():
+    """Kill any existing Next.js dev servers"""
+    try:
+        # Find and kill next dev processes
+        result = subprocess.run(
+            ["pkill", "-f", "next dev"],
+            capture_output=True,
+            text=True
+        )
+        if result.returncode == 0:
+            print_status("Killed existing Next.js dev server", "info")
+            time.sleep(1)  # Give it a moment to shut down
+            return True
+        return False
+    except Exception:
+        return False
+
 def setup_environment():
     """Set up environment variables"""
     env_vars = {
         "MICROMEGAS_FLIGHTSQL_URL": "grpc://127.0.0.1:50051",
         "MICROMEGAS_AUTH_TOKEN": "",  # Empty for no-auth mode
+        "ANALYTICS_WEB_CORS_ORIGIN": "http://localhost:3000",  # Frontend origin for CORS
     }
 
     for key, default_value in env_vars.items():
@@ -155,6 +173,9 @@ def main():
     try:
         # Kill any existing analytics-web-srv processes first
         kill_existing_backend()
+
+        # Kill any existing Next.js dev servers
+        kill_existing_frontend()
 
         # Check if port 8000 is still in use (by something else)
         if check_port_in_use(8000):

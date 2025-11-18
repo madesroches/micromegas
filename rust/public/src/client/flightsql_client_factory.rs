@@ -13,6 +13,7 @@ pub trait FlightSQLClientFactory: Send + Sync {
 /// A FlightSQL client factory that uses a bearer token for authentication.
 pub struct BearerFlightSQLClientFactory {
     token: String,
+    client_type: Option<String>,
 }
 
 impl BearerFlightSQLClientFactory {
@@ -22,7 +23,23 @@ impl BearerFlightSQLClientFactory {
     ///
     /// * `token` - The bearer token to use for authentication.
     pub const fn new(token: String) -> Self {
-        Self { token }
+        Self {
+            token,
+            client_type: None,
+        }
+    }
+
+    /// Creates a new `BearerFlightSQLClientFactory` with a specific client type identifier.
+    ///
+    /// # Arguments
+    ///
+    /// * `token` - The bearer token to use for authentication.
+    /// * `client_type` - The client type identifier (e.g., "web", "cli", "python").
+    pub const fn new_with_client_type(token: String, client_type: String) -> Self {
+        Self {
+            token,
+            client_type: Some(client_type),
+        }
     }
 }
 
@@ -41,9 +58,22 @@ impl FlightSQLClientFactory for BearerFlightSQLClientFactory {
             .await
             .with_context(|| "connecting grpc channel")?;
         let mut client = Client::new(channel);
+        let auth_value = if self.token.starts_with("Bearer ") {
+            self.token.clone()
+        } else {
+            format!("Bearer {}", self.token)
+        };
+
         client
             .inner_mut()
-            .set_header(http::header::AUTHORIZATION.as_str(), self.token.clone());
+            .set_header(http::header::AUTHORIZATION.as_str(), auth_value);
+
+        // Set client type header if provided
+        if let Some(client_type) = &self.client_type {
+            client
+                .inner_mut()
+                .set_header("x-client-type", client_type.clone());
+        }
 
         Ok(client)
     }

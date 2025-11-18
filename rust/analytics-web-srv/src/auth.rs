@@ -20,8 +20,7 @@ use base64::Engine;
 use chrono::Utc;
 use micromegas::tracing::prelude::*;
 use openidconnect::{
-    AuthenticationFlow, AuthorizationCode, CsrfToken, Nonce, OAuth2TokenResponse,
-    PkceCodeChallenge, PkceCodeVerifier, Scope,
+    AuthenticationFlow, CsrfToken, Nonce, PkceCodeChallenge, Scope,
     core::{CoreProviderMetadata, CoreResponseType},
 };
 use rand::Rng;
@@ -64,11 +63,43 @@ pub struct OidcClientConfig {
 impl OidcClientConfig {
     /// Load configuration from environment variable
     pub fn from_env() -> Result<Self> {
-        let json = std::env::var("MICROMEGAS_OIDC_CLIENT_CONFIG")
-            .map_err(|_| anyhow!("MICROMEGAS_OIDC_CLIENT_CONFIG environment variable not set"))?;
-        let config: OidcClientConfig = serde_json::from_str(&json)
-            .map_err(|e| anyhow!("Failed to parse MICROMEGAS_OIDC_CLIENT_CONFIG: {e:?}"))?;
-        Ok(config)
+        #[derive(Deserialize)]
+        struct OidcConfig {
+            issuers: Vec<IssuerConfig>,
+        }
+        #[derive(Deserialize)]
+        struct IssuerConfig {
+            issuer: String,
+            #[allow(dead_code)]
+            audience: String,
+        }
+
+        let json = std::env::var("MICROMEGAS_OIDC_CONFIG")
+            .map_err(|_| anyhow!("MICROMEGAS_OIDC_CONFIG environment variable not set"))?;
+
+        let shared_config: OidcConfig = serde_json::from_str(&json)
+            .map_err(|e| anyhow!("Failed to parse MICROMEGAS_OIDC_CONFIG: {e:?}"))?;
+
+        let first_issuer = shared_config
+            .issuers
+            .first()
+            .ok_or_else(|| anyhow!("MICROMEGAS_OIDC_CONFIG must have at least one issuer"))?;
+
+        // Get client_id and redirect_uri from individual env vars
+        let client_id = std::env::var("MICROMEGAS_OIDC_CLIENT_ID")
+            .or_else(|_| std::env::var("OIDC_CLIENT_ID"))
+            .map_err(|_| {
+                anyhow!("MICROMEGAS_OIDC_CLIENT_ID or OIDC_CLIENT_ID environment variable not set")
+            })?;
+
+        let redirect_uri = std::env::var("MICROMEGAS_OIDC_REDIRECT_URI")
+            .unwrap_or_else(|_| "http://localhost:3000/auth/callback".to_string());
+
+        Ok(OidcClientConfig {
+            issuer: first_issuer.issuer.clone(),
+            client_id,
+            redirect_uri,
+        })
     }
 }
 
@@ -187,7 +218,7 @@ struct IdTokenClaims {
 }
 
 /// Cookie names
-const ACCESS_TOKEN_COOKIE: &str = "access_token";
+const ID_TOKEN_COOKIE: &str = "id_token"; // ID token (JWT) for user info and FlightSQL API authorization
 const REFRESH_TOKEN_COOKIE: &str = "refresh_token";
 const OAUTH_STATE_COOKIE: &str = "oauth_state";
 
@@ -320,17 +351,24 @@ pub async fn auth_callback(
     // Decode state parameter
     let state_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(query.state.as_bytes())
-        .map_err(|_| AuthApiError::InvalidState)?;
+        .map_err(|e| {
+            warn!("failed to decode state: {e:?}");
+            AuthApiError::InvalidState
+        })?;
     let oauth_state: OAuthState =
         serde_json::from_slice(&state_bytes).map_err(|_| AuthApiError::InvalidState)?;
 
     // Validate nonce from cookie
     let cookie_nonce = jar
         .get(OAUTH_STATE_COOKIE)
-        .ok_or(AuthApiError::InvalidState)?
+        .ok_or_else(|| {
+            warn!("oauth_state cookie not found");
+            AuthApiError::InvalidState
+        })?
         .value();
 
     if cookie_nonce != oauth_state.nonce {
+        warn!("nonce mismatch!");
         return Err(AuthApiError::InvalidState);
     }
 
@@ -339,33 +377,71 @@ pub async fn auth_callback(
         .get_oidc_provider()
         .await
         .map_err(|e| AuthApiError::Internal(format!("Failed to get OIDC provider: {e:?}")))?;
-    let client = state.build_oidc_client(provider);
+    let _client = state.build_oidc_client(provider);
 
-    // Exchange code for tokens
+    // Exchange code for tokens using manual HTTP request
+    // Note: We don't use the openidconnect library's exchange_code() because:
+    // - Auth0 includes non-standard fields (e.g., updated_at) that cause parsing failures
+    // - The library's strict typing doesn't handle provider-specific extensions well
+    // - Manual HTTP gives us better error visibility and control over parsing
     let http_client = create_http_client()
         .map_err(|e| AuthApiError::Internal(format!("Failed to create HTTP client: {e:?}")))?;
-    let pkce_verifier = PkceCodeVerifier::new(oauth_state.pkce_verifier);
-    let token_response = client
-        .exchange_code(AuthorizationCode::new(query.code))
-        .map_err(|e| AuthApiError::Internal(format!("Failed to create code exchange: {e:?}")))?
-        .set_pkce_verifier(pkce_verifier)
-        .request_async(&http_client)
+
+    let token_url = provider
+        .metadata
+        .token_endpoint()
+        .expect("token endpoint should exist");
+
+    let params = [
+        ("grant_type", "authorization_code"),
+        ("code", &query.code),
+        ("redirect_uri", &state.config.redirect_uri),
+        ("client_id", &state.config.client_id),
+        ("code_verifier", &oauth_state.pkce_verifier),
+    ];
+
+    let response = http_client
+        .post(token_url.as_str())
+        .form(&params)
+        .send()
         .await
         .map_err(|e| {
-            warn!("token exchange failed: {e:?}");
+            warn!("token exchange HTTP request failed: {e:?}");
             AuthApiError::TokenExchangeFailed
         })?;
 
-    // Extract tokens
-    let access_token = token_response.access_token().secret().to_string();
-    let refresh_token = token_response
-        .refresh_token()
-        .map(|t| t.secret().to_string());
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "unknown".to_string());
+        warn!("token exchange failed with status {status}: {body}");
+        return Err(AuthApiError::TokenExchangeFailed);
+    }
+
+    let token_response: serde_json::Value = response.json().await.map_err(|e| {
+        warn!("failed to parse token response: {e:?}");
+        AuthApiError::TokenExchangeFailed
+    })?;
+
+    // Extract tokens from JSON response
+    let id_token = token_response["id_token"]
+        .as_str()
+        .ok_or_else(|| {
+            warn!("no id_token in response");
+            AuthApiError::TokenExchangeFailed
+        })?
+        .to_string();
+
+    let refresh_token = token_response["refresh_token"]
+        .as_str()
+        .map(|s| s.to_string());
 
     // Calculate expiration times
-    let access_token_expires = token_response
-        .expires_in()
-        .map(|d| d.as_secs() as i64)
+    let access_token_expires = token_response["expires_in"]
+        .as_u64()
+        .map(|d| d as i64)
         .unwrap_or(3600); // Default 1 hour
 
     let refresh_token_expires = 30 * 24 * 3600; // 30 days
@@ -373,8 +449,8 @@ pub async fn auth_callback(
     // Create cookies
     let mut new_jar = jar;
     new_jar = new_jar.add(create_cookie(
-        ACCESS_TOKEN_COOKIE,
-        access_token,
+        ID_TOKEN_COOKIE,
+        id_token,
         access_token_expires,
         &state,
     ));
@@ -413,34 +489,66 @@ pub async fn auth_refresh(
         .get_oidc_provider()
         .await
         .map_err(|e| AuthApiError::Internal(format!("Failed to get OIDC provider: {e:?}")))?;
-    let client = state.build_oidc_client(provider);
+    let _client = state.build_oidc_client(provider);
 
-    // Exchange refresh token for new tokens
+    // Exchange refresh token for new tokens using manual HTTP request
+    // Note: Same reasoning as auth_callback - Auth0's non-standard fields break library parsing
     let http_client = create_http_client()
         .map_err(|e| AuthApiError::Internal(format!("Failed to create HTTP client: {e:?}")))?;
-    let token_response = client
-        .exchange_refresh_token(&openidconnect::RefreshToken::new(refresh_token))
-        .map_err(|e| {
-            warn!("refresh token exchange setup failed: {e:?}");
-            AuthApiError::Internal(format!("Failed to create refresh exchange: {e:?}"))
-        })?
-        .request_async(&http_client)
+
+    let token_url = provider
+        .metadata
+        .token_endpoint()
+        .expect("token endpoint should exist");
+
+    let params = [
+        ("grant_type", "refresh_token"),
+        ("refresh_token", &refresh_token),
+        ("client_id", &state.config.client_id),
+    ];
+
+    let response = http_client
+        .post(token_url.as_str())
+        .form(&params)
+        .send()
         .await
         .map_err(|e| {
-            warn!("refresh token exchange failed: {e:?}");
+            warn!("refresh token HTTP request failed: {e:?}");
             AuthApiError::Unauthorized
         })?;
 
-    // Extract new tokens
-    let access_token = token_response.access_token().secret().to_string();
-    let refresh_token = token_response
-        .refresh_token()
-        .map(|t| t.secret().to_string());
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "unknown".to_string());
+        warn!("refresh token failed with status {status}: {body}");
+        return Err(AuthApiError::Unauthorized);
+    }
+
+    let token_response: serde_json::Value = response.json().await.map_err(|e| {
+        warn!("failed to parse refresh token response: {e:?}");
+        AuthApiError::Unauthorized
+    })?;
+
+    // Extract new tokens from JSON response
+    let id_token = token_response["id_token"]
+        .as_str()
+        .ok_or_else(|| {
+            warn!("missing id_token in refresh response");
+            AuthApiError::Unauthorized
+        })?
+        .to_string();
+
+    let refresh_token = token_response["refresh_token"]
+        .as_str()
+        .map(|s| s.to_string());
 
     // Calculate expiration times
-    let access_token_expires = token_response
-        .expires_in()
-        .map(|d| d.as_secs() as i64)
+    let id_token_expires = token_response["expires_in"]
+        .as_u64()
+        .map(|d| d as i64)
         .unwrap_or(3600);
 
     let refresh_token_expires = 30 * 24 * 3600; // 30 days
@@ -448,9 +556,9 @@ pub async fn auth_refresh(
     // Update cookies
     let mut new_jar = jar;
     new_jar = new_jar.add(create_cookie(
-        ACCESS_TOKEN_COOKIE,
-        access_token,
-        access_token_expires,
+        ID_TOKEN_COOKIE,
+        id_token,
+        id_token_expires,
         &state,
     ));
 
@@ -470,37 +578,51 @@ pub async fn auth_refresh(
 #[span_fn]
 pub async fn auth_logout(State(state): State<AuthState>, jar: CookieJar) -> impl IntoResponse {
     let new_jar = jar
-        .add(clear_cookie(ACCESS_TOKEN_COOKIE, &state))
+        .add(clear_cookie(ID_TOKEN_COOKIE, &state))
         .add(clear_cookie(REFRESH_TOKEN_COOKIE, &state));
 
     (new_jar, StatusCode::OK)
 }
 
 /// GET /auth/me - Get current user info
+/// Reads the ID token (JWT) to extract user information
 #[span_fn]
 pub async fn auth_me(jar: CookieJar) -> Result<Json<UserInfo>, AuthApiError> {
-    // Get access token from cookie
-    let access_token = jar
-        .get(ACCESS_TOKEN_COOKIE)
-        .ok_or(AuthApiError::Unauthorized)?
+    // Get ID token from cookie
+    let id_token = jar
+        .get(ID_TOKEN_COOKIE)
+        .ok_or_else(|| {
+            warn!("no id_token cookie found");
+            AuthApiError::Unauthorized
+        })?
         .value();
 
     // Decode JWT payload (no validation needed here, just extract claims)
-    let parts: Vec<&str> = access_token.split('.').collect();
+    let parts: Vec<&str> = id_token.split('.').collect();
     if parts.len() != 3 {
+        warn!(
+            "invalid token format: expected 3 parts, got {}",
+            parts.len()
+        );
         return Err(AuthApiError::InvalidToken);
     }
 
     let payload_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(parts[1].as_bytes())
-        .map_err(|_| AuthApiError::InvalidToken)?;
+        .map_err(|e| {
+            warn!("failed to decode token payload: {}", e);
+            AuthApiError::InvalidToken
+        })?;
 
-    let claims: IdTokenClaims =
-        serde_json::from_slice(&payload_bytes).map_err(|_| AuthApiError::InvalidToken)?;
+    let claims: IdTokenClaims = serde_json::from_slice(&payload_bytes).map_err(|e| {
+        warn!("failed to parse token claims: {}", e);
+        AuthApiError::InvalidToken
+    })?;
 
     // Check expiration
     let now = Utc::now().timestamp();
     if claims.exp < now {
+        warn!("token expired: exp={} now={}", claims.exp, now);
         return Err(AuthApiError::Unauthorized);
     }
 
@@ -542,51 +664,74 @@ impl IntoResponse for AuthApiError {
     }
 }
 
+/// Basic JWT validation (format and expiration only, no signature check)
+/// Full signature validation is performed by FlightSQL service
+fn validate_jwt_basic(token: &str) -> Result<(), AuthApiError> {
+    // Check JWT format: must have 3 parts (header.payload.signature)
+    let parts: Vec<&str> = token.split('.').collect();
+    if parts.len() != 3 {
+        warn!("invalid JWT format: expected 3 parts, got {}", parts.len());
+        return Err(AuthApiError::InvalidToken);
+    }
+
+    // Decode and parse payload to check expiration
+    let payload_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(parts[1].as_bytes())
+        .map_err(|e| {
+            warn!("failed to decode JWT payload: {}", e);
+            AuthApiError::InvalidToken
+        })?;
+
+    let claims: IdTokenClaims = serde_json::from_slice(&payload_bytes).map_err(|e| {
+        warn!("failed to parse JWT claims: {}", e);
+        AuthApiError::InvalidToken
+    })?;
+
+    // Check expiration
+    let now = Utc::now().timestamp();
+    if claims.exp < now {
+        warn!("JWT expired: exp={} now={}", claims.exp, now);
+        return Err(AuthApiError::Unauthorized);
+    }
+
+    Ok(())
+}
+
 /// Cookie-based authentication middleware
 ///
-/// Reads the access token from httpOnly cookie and validates it.
+/// Reads the ID token from httpOnly cookie and validates it.
 /// Injects the token into request extensions for downstream handlers.
+///
+/// Note: We use the ID token (JWT) for FlightSQL API calls because:
+/// - ID tokens can be validated locally by FlightSQL's OIDC provider
+/// - This matches the Python API behavior which also uses ID tokens
+/// - Access tokens (JWE) would require token introspection endpoints
+///
+/// Validation strategy:
+/// - Basic checks (format, expiration) done here for fast feedback
+/// - Full signature validation delegated to FlightSQL service (authoritative)
 #[span_fn]
 pub async fn cookie_auth_middleware(req: Request, next: Next) -> Result<Response, AuthApiError> {
     // Extract cookies from request
     let jar = CookieJar::from_headers(req.headers());
 
-    // Get access token from cookie
-    let access_token = jar
-        .get(ACCESS_TOKEN_COOKIE)
-        .ok_or(AuthApiError::Unauthorized)?
+    // Get ID token from cookie (JWT format for FlightSQL API calls)
+    let id_token = jar
+        .get(ID_TOKEN_COOKIE)
+        .ok_or_else(|| {
+            warn!("id_token cookie not found");
+            AuthApiError::Unauthorized
+        })?
         .value()
         .to_string();
 
-    // Decode JWT payload to check expiration (basic validation)
-    let parts: Vec<&str> = access_token.split('.').collect();
-    if parts.len() != 3 {
-        return Err(AuthApiError::InvalidToken);
-    }
+    // Basic validation: format and expiration
+    // (FlightSQL will do full signature validation)
+    validate_jwt_basic(&id_token)?;
 
-    let payload_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(parts[1].as_bytes())
-        .map_err(|_| AuthApiError::InvalidToken)?;
-
-    let claims: IdTokenClaims =
-        serde_json::from_slice(&payload_bytes).map_err(|_| AuthApiError::InvalidToken)?;
-
-    // Check expiration
-    let now = Utc::now().timestamp();
-    if claims.exp < now {
-        warn!("access token expired for user: {}", claims.sub);
-        return Err(AuthApiError::Unauthorized);
-    }
-
-    info!(
-        "authenticated user: sub={} email={:?}",
-        claims.sub,
-        claims.email.as_ref().or(claims.preferred_username.as_ref())
-    );
-
-    // Store token in request extensions for downstream use
+    // Store token in request extensions for downstream use (FlightSQL API calls)
     let mut req = req;
-    req.extensions_mut().insert(AuthToken(access_token));
+    req.extensions_mut().insert(AuthToken(id_token));
 
     // Continue to next middleware/handler
     Ok(next.run(req).await)

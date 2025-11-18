@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { ProgressUpdate, GenerateTraceRequest } from '@/types'
-import { fetchProcesses, fetchHealthCheck, generateTrace } from '@/lib/api'
+import { fetchProcesses, generateTrace } from '@/lib/api'
 import { ProcessTable } from '@/components/ProcessTable'
 import { TraceGenerationProgress } from '@/components/TraceGenerationProgress'
 import { useApiErrorHandler } from '@/components/ErrorBoundary'
@@ -17,23 +17,15 @@ export default function HomePage() {
   const [currentProcessId, setCurrentProcessId] = useState<string | null>(null)
   const handleApiError = useApiErrorHandler()
 
-  // Fetch health status
-  const { data: health } = useQuery({
-    queryKey: ['health'],
-    queryFn: fetchHealthCheck,
-    refetchInterval: 30000, // Refetch every 30 seconds
-  })
-
   // Fetch processes
-  const { 
-    data: processes = [], 
-    isLoading: processesLoading, 
+  const {
+    data: processes = [],
+    isLoading: processesLoading,
     error: processesError,
-    refetch: refetchProcesses 
+    refetch: refetchProcesses
   } = useQuery({
     queryKey: ['processes'],
     queryFn: fetchProcesses,
-    enabled: health?.flightsql_connected === true,
   })
 
   const handleGenerateTrace = async (processId: string) => {
@@ -98,17 +90,7 @@ export default function HomePage() {
         )}
 
         {/* Main Content */}
-        {!health?.flightsql_connected ? (
-          <div className="bg-white rounded-lg border border-gray-200 shadow-sm">
-            <div className="flex flex-col items-center justify-center py-12 px-6">
-              <AlertCircle className="w-12 h-12 text-gray-400 mb-4" />
-              <h3 className="text-lg font-semibold mb-2 text-gray-800">FlightSQL Connection Required</h3>
-              <p className="text-gray-600 text-center">
-                Unable to connect to the FlightSQL server. Please ensure the analytics service is running.
-              </p>
-            </div>
-          </div>
-        ) : processesLoading ? (
+        {processesLoading ? (
           <div className="bg-white rounded-lg border border-gray-200 shadow-sm">
             <div className="flex items-center justify-center py-12">
               <div className="animate-spin rounded-full h-8 w-8 border-2 border-blue-500 border-t-transparent mr-4" />

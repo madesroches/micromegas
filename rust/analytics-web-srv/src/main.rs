@@ -2,10 +2,10 @@ mod auth;
 mod queries;
 
 use anyhow::Result;
-use auth::{AuthState, OidcClientConfig};
+use auth::{AuthState, AuthToken, OidcClientConfig};
 use axum::{
-    Json, Router,
-    extract::{Path, State},
+    Extension, Json, Router,
+    extract::Path,
     http::StatusCode,
     middleware,
     response::{IntoResponse, Response},
@@ -149,7 +149,6 @@ struct LogsQuery {
 
 #[derive(Clone)]
 struct AppState {
-    auth_token: String,
     auth_enabled: bool,
 }
 
@@ -181,14 +180,11 @@ type ProgressStream = Pin<Box<dyn Stream<Item = Result<Bytes, axum::Error>> + Se
 async fn main() -> Result<()> {
     let args = Args::parse();
 
-    let auth_token = std::env::var("MICROMEGAS_AUTH_TOKEN").unwrap_or_else(|_| "".to_string());
-
     // Configure CORS based on environment variable
     let cors_origin = std::env::var("ANALYTICS_WEB_CORS_ORIGIN")
         .unwrap_or_else(|_| "http://localhost:3000".to_string());
 
     let state = AppState {
-        auth_token,
         auth_enabled: !args.disable_auth,
     };
 
@@ -224,9 +220,7 @@ async fn main() -> Result<()> {
         None
     };
 
-    let health_routes = Router::new()
-        .route("/analyticsweb/health", get(health_check))
-        .with_state(state.clone());
+    let health_routes = Router::new().route("/analyticsweb/health", get(health_check));
 
     let api_routes = Router::new()
         .route("/analyticsweb/processes", get(list_processes))
@@ -310,30 +304,22 @@ async fn main() -> Result<()> {
 }
 
 #[span_fn]
-async fn health_check(State(state): State<AppState>) -> impl IntoResponse {
-    let mut flightsql_connected = false;
-
-    let client_factory = BearerFlightSQLClientFactory::new(state.auth_token);
-    if let Ok(mut client) = client_factory.make_client().await {
-        flightsql_connected = client.query("SELECT 1".to_string(), None).await.is_ok();
-    }
-
+async fn health_check() -> impl IntoResponse {
     let health = HealthCheck {
-        status: if flightsql_connected {
-            "healthy".to_string()
-        } else {
-            "degraded".to_string()
-        },
+        status: "healthy".to_string(),
         timestamp: Utc::now(),
-        flightsql_connected,
+        flightsql_connected: false,
     };
 
     Json(health)
 }
 
 #[span_fn]
-async fn list_processes(State(state): State<AppState>) -> ApiResult<Json<Vec<ProcessInfo>>> {
-    let client_factory = BearerFlightSQLClientFactory::new(state.auth_token);
+async fn list_processes(
+    Extension(auth_token): Extension<AuthToken>,
+) -> ApiResult<Json<Vec<ProcessInfo>>> {
+    let client_factory =
+        BearerFlightSQLClientFactory::new_with_client_type(auth_token.0, "web".to_string());
     let processes = get_processes_internal(&client_factory).await?;
     Ok(Json(processes))
 }
@@ -383,9 +369,10 @@ async fn get_processes_internal(
 
 async fn get_trace_info(
     Path(process_id): Path<String>,
-    State(state): State<AppState>,
+    Extension(auth_token): Extension<AuthToken>,
 ) -> ApiResult<Json<TraceMetadata>> {
-    let client_factory = BearerFlightSQLClientFactory::new(state.auth_token.clone());
+    let client_factory =
+        BearerFlightSQLClientFactory::new_with_client_type(auth_token.0, "web".to_string());
     let mut client = client_factory.make_client().await?;
 
     // Get actual trace event counts from the database
@@ -435,10 +422,10 @@ async fn get_trace_info(
 #[span_fn]
 async fn generate_trace(
     Path(process_id): Path<String>,
-    State(state): State<AppState>,
+    Extension(auth_token): Extension<AuthToken>,
     Json(request): Json<GenerateTraceRequest>,
 ) -> impl IntoResponse {
-    let stream = generate_trace_stream(process_id, state, request);
+    let stream = generate_trace_stream(process_id, auth_token.0, request);
 
     Response::builder()
         .header(header::CONTENT_TYPE, "application/octet-stream")
@@ -450,13 +437,14 @@ async fn generate_trace(
 #[span_fn]
 async fn get_process_log_entries(
     Path(process_id): Path<String>,
-    State(state): State<AppState>,
     axum::extract::Query(query): axum::extract::Query<LogsQuery>,
+    Extension(auth_token): Extension<AuthToken>,
 ) -> ApiResult<Json<Vec<LogEntry>>> {
     let limit = query.limit.unwrap_or(50);
     let level_filter = query.level.as_deref().filter(|&level| level != "all");
 
-    let client_factory = BearerFlightSQLClientFactory::new(state.auth_token.clone());
+    let client_factory =
+        BearerFlightSQLClientFactory::new_with_client_type(auth_token.0, "web".to_string());
     let mut client = client_factory.make_client().await?;
 
     let mut logs = Vec::new();
@@ -498,9 +486,10 @@ async fn get_process_log_entries(
 #[span_fn]
 async fn get_process_statistics(
     Path(process_id): Path<String>,
-    State(state): State<AppState>,
+    Extension(auth_token): Extension<AuthToken>,
 ) -> ApiResult<Json<ProcessStatistics>> {
-    let client_factory = BearerFlightSQLClientFactory::new(state.auth_token.clone());
+    let client_factory =
+        BearerFlightSQLClientFactory::new_with_client_type(auth_token.0, "web".to_string());
     let mut client = client_factory.make_client().await?;
 
     // Query actual statistics from different stream types
@@ -556,7 +545,7 @@ async fn get_process_statistics(
 
 fn generate_trace_stream(
     process_id: String,
-    state: AppState,
+    auth_token: String,
     request: GenerateTraceRequest,
 ) -> ProgressStream {
     use async_stream::stream;
@@ -605,7 +594,10 @@ fn generate_trace_stream(
             yield Ok(Bytes::from(json + "\n"));
         }
 
-        let client_factory = BearerFlightSQLClientFactory::new(state.auth_token.clone());
+        let client_factory = BearerFlightSQLClientFactory::new_with_client_type(
+            auth_token,
+            "web".to_string(),
+        );
         match generate_perfetto_trace_internal(&client_factory, &process_id, &request).await {
             Ok(trace_data) => {
                 const CHUNK_SIZE: usize = 8192;

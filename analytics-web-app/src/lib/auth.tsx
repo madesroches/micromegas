@@ -32,7 +32,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const checkAuth = useCallback(async () => {
     try {
-      const response = await fetch(`${API_BASE}/auth/me`, {
+      const response = await fetch(`/auth/me`, {
         credentials: 'include',
       })
 
@@ -63,13 +63,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const login = useCallback((returnUrl?: string) => {
     const currentPath = returnUrl || window.location.pathname
-    const loginUrl = `${API_BASE}/auth/login?return_url=${encodeURIComponent(currentPath)}`
+    const loginUrl = `/auth/login?return_url=${encodeURIComponent(currentPath)}`
     window.location.href = loginUrl
   }, [])
 
   const logout = useCallback(async () => {
     try {
-      const response = await fetch(`${API_BASE}/auth/logout`, {
+      const response = await fetch(`/auth/logout`, {
         method: 'POST',
         credentials: 'include',
       })
@@ -89,7 +89,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const refresh = useCallback(async (): Promise<boolean> => {
     try {
-      const response = await fetch(`${API_BASE}/auth/refresh`, {
+      const response = await fetch(`/auth/refresh`, {
         method: 'POST',
         credentials: 'include',
       })
