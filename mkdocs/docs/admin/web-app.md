@@ -16,10 +16,15 @@ Opens on `http://localhost:3000` with backend on `:8000`. Automatically sets loc
 ### Required
 
 ```bash
-# OIDC provider configuration
+# OIDC provider configuration (same format as FlightSQL server)
+# Note: Web app only supports a single issuer
 export MICROMEGAS_OIDC_CONFIG='{
-  "issuer": "https://accounts.google.com",
-  "audience": "your-client-id.apps.googleusercontent.com"
+  "issuers": [
+    {
+      "issuer": "https://accounts.google.com",
+      "audience": "your-client-id.apps.googleusercontent.com"
+    }
+  ]
 }'
 
 # CORS and OAuth callback
