@@ -15,18 +15,22 @@
 
 **Features Implemented:**
 - OIDC authorization code flow with PKCE (no client secret needed)
-- httpOnly cookie storage for access and refresh tokens
+- httpOnly cookie storage for ID token and refresh token
+- `offline_access` scope for refresh token support
 - Cookie-based authentication middleware for API routes
 - Token refresh endpoint
 - User info endpoint
 - Logout endpoint
 - CORS with credentials support
 - `--disable-auth` CLI flag for development
-- Environment variables: `MICROMEGAS_OIDC_CLIENT_CONFIG`, `MICROMEGAS_COOKIE_DOMAIN`, `MICROMEGAS_SECURE_COOKIES`
+- Environment variables: `MICROMEGAS_OIDC_CONFIG`, `MICROMEGAS_AUTH_REDIRECT_URI`, `MICROMEGAS_WEB_CORS_ORIGIN`, `MICROMEGAS_COOKIE_DOMAIN`, `MICROMEGAS_SECURE_COOKIES`
+- Shared OIDC config format with FlightSQL server (uses `micromegas-auth` crate's `OidcConfig`)
+- Single issuer constraint enforcement
 
-**Not Yet Implemented:**
-- Per-request token passthrough to FlightSQL (currently still uses `MICROMEGAS_AUTH_TOKEN`)
-- Full JWT signature validation in middleware (currently validates expiry only)
+**Implementation Complete:**
+- ✅ Per-request token passthrough to FlightSQL using user's ID token via `BearerFlightSQLClientFactory`
+- ✅ All API endpoints (`/list_processes`, `/get_trace_info`, `/generate_trace`, etc.) use authenticated user's token
+- Note: Middleware does basic JWT validation (format, expiry); full signature validation happens at FlightSQL server
 
 ### Phase 2 & 3 Implementation Status (COMPLETED)
 
@@ -55,8 +59,9 @@
 - Cross-origin cookie support via `credentials: 'include'`
 - Suspense boundary for Next.js 15 useSearchParams requirement
 
-**Not Yet Implemented:**
-- Environment variable template file (`.env.local.example`)
+**Implementation Notes:**
+- Uses ID tokens (not access tokens) for authentication
+- Tokens stored in `id_token` and `refresh_token` cookies
 
 ## Approach: OIDC Authentication Only
 
@@ -83,8 +88,8 @@ Create backend endpoints to handle OIDC token exchange and secure cookie managem
 - Decode state parameter from base64 JSON
 - Validate nonce matches `oauth_state` cookie
 - Clear `oauth_state` cookie
-- Exchange authorization code for tokens via OIDC token endpoint (with PKCE verifier)
-- Set `access_token` and `refresh_token` httpOnly cookies
+- Exchange authorization code for tokens via OIDC token endpoint (with PKCE verifier and `offline_access` scope)
+- Set `id_token` and `refresh_token` httpOnly cookies
 - Redirect to return_url from state (or `/` if missing)
 
 **`POST /auth/refresh`** ✅
@@ -98,9 +103,9 @@ Create backend endpoints to handle OIDC token exchange and secure cookie managem
 - Return 200
 
 **`GET /auth/me`** ✅
-- Read access_token from cookie
+- Read id_token from cookie
 - Decode JWT payload (no validation needed, just extract claims)
-- Return `{"sub": "...", "email": "...", "name": "..."}`
+- Return `{"sub": "...", "email": "...", "name": "..."}` (falls back to `preferred_username` if `name` not present)
 - Return 401 if no cookie
 
 See Security Considerations section for cookie and CSRF configuration details.
@@ -113,35 +118,40 @@ See Security Considerations section for cookie and CSRF configuration details.
 - Validates JWT expiry (signature validation deferred to FlightSQL)
 - Add `--disable-auth` CLI flag for development
 - Extract authenticated user token and store in request extensions (AuthToken wrapper)
-- Note: Token passthrough to FlightSQL per-request not yet implemented
+- Token automatically passed to FlightSQL on every API request via `BearerFlightSQLClientFactory`
 
 ### Task 1.3: Environment variables ✅ COMPLETED
-- Use `MICROMEGAS_OIDC_CLIENT_CONFIG` for OIDC client configuration (JSON with issuer, client_id, redirect_uri)
+- Use `MICROMEGAS_OIDC_CONFIG` for OIDC configuration (JSON with `issuers` array, same format as FlightSQL server)
+- Use `MICROMEGAS_AUTH_REDIRECT_URI` for OAuth callback URL
+- `MICROMEGAS_WEB_CORS_ORIGIN` for CORS origin (must match frontend URL)
 - `MICROMEGAS_COOKIE_DOMAIN` for cookie domain (optional)
 - `MICROMEGAS_SECURE_COOKIES` for secure cookie flag (optional, defaults to false)
-- Note: Still uses `MICROMEGAS_AUTH_TOKEN` for FlightSQL; per-request token passthrough pending
+- Single issuer constraint: server fails to start if multiple issuers configured
+- User's ID token passed to FlightSQL on every request (no global `MICROMEGAS_AUTH_TOKEN` needed)
 
 ### Task 1.4: Configure CORS middleware ✅ COMPLETED
 **File**: `rust/analytics-web-srv/src/main.rs`
 
 - `tower-http` CORS layer already present, updated with `.allow_credentials(true)`
-- Configure single allowed origin from environment variable (`ANALYTICS_WEB_CORS_ORIGIN`)
+- Configure single allowed origin from environment variable (`MICROMEGAS_WEB_CORS_ORIGIN`)
 - Allow credentials (required for cross-origin cookie support)
 - Set allowed methods: GET, POST, OPTIONS
 - Set allowed headers: Content-Type, Authorization
-- Example: `ANALYTICS_WEB_CORS_ORIGIN=https://app.yourdomain.com`
-- Development: `ANALYTICS_WEB_CORS_ORIGIN=http://localhost:3000`
+- Example: `MICROMEGAS_WEB_CORS_ORIGIN=https://app.yourdomain.com`
+- Development: `MICROMEGAS_WEB_CORS_ORIGIN=http://localhost:3000`
+- **Important**: CORS origin must match the OAuth redirect URI origin
 
 ### Task 1.5: Token expiry and refresh strategy ✅ COMPLETED
 **File**: `rust/analytics-web-srv/src/auth.rs`
 
-- Store both access token and refresh token in separate httpOnly cookies ✅
-- Access token cookie: short-lived (matches token expiry from OIDC provider, default 1 hour) ✅
+- Store both ID token and refresh token in separate httpOnly cookies ✅
+- ID token cookie: short-lived (matches token expiry from OIDC provider, default 1 hour) ✅
 - Refresh token cookie: long-lived (hardcoded to 30 days) ✅
-- Auth middleware checks access token expiry before allowing request ✅
+- Auth middleware checks ID token expiry before allowing request ✅
 - Note: Automatic refresh not implemented; returns 401 if expired
 - `/auth/refresh` endpoint for explicit refresh (frontend should call proactively) ✅
 - Set cookie `maxAge` to match respective token expiry times ✅
+- Refresh flow uses `offline_access` scope to obtain refresh tokens ✅
 
 ---
 
@@ -240,7 +250,7 @@ Note: No `oidc-client-ts` needed - backend handles all OIDC flows
 - ✅ Test error handling and status codes
 - ✅ Test /auth/me and /auth/logout endpoints
 
-**Results**: 37/37 backend tests passing
+**Results**: 25/25 backend tests passing (12 unit tests + 13 integration tests)
 
 ### Task 4.2: Frontend testing ✅ COMPLETED
 - ✅ Unit tests for auth hooks (AuthProvider, useAuth - 13 tests)
@@ -254,12 +264,13 @@ Note: No `oidc-client-ts` needed - backend handles all OIDC flows
 
 **Results**: 25/25 frontend tests passing
 
-### Task 4.3: Documentation
-(let's keep it TLDR and avoid any repetition - there is already plenty of auth doc)
-- Update environment variable docs
-- OIDC provider setup guide (Google, Keycloak, etc.)
-- Development mode instructions (disable-auth)
-- Deployment configuration guide
+### Task 4.3: Documentation ✅ COMPLETED
+- ✅ Updated environment variable docs (analytics-web-app/README.md)
+- ✅ OIDC configuration guide with issuers array format
+- ✅ Development mode instructions (--disable-auth flag)
+- ✅ Deployment configuration guide (mkdocs/docs/admin/web-app.md)
+- ✅ Example OIDC provider setup (Google)
+- ✅ CORS and redirect URI matching requirements
 
 ---
 
@@ -284,7 +295,7 @@ Note: No `oidc-client-ts` needed - backend handles all OIDC flows
 | `analytics-web-app/src/components/AuthGuard.tsx` | Create | ✅ Done | Route protection component |
 | `analytics-web-app/src/components/UserMenu.tsx` | Create | ✅ Done | User info/logout UI |
 | `analytics-web-app/src/components/ErrorBoundary.tsx` | Modify | ✅ Done | Handle 401 errors |
-| `analytics-web-app/.env.local.example` | Create | Pending | Environment variable template |
+| `analytics-web-app/.env.local.example` | Create | Not needed | Environment vars documented in README.md and mkdocs |
 
 ### Testing (TypeScript/Rust) - PHASE 4 COMPLETED ✅
 | File | Action | Status | Description |
@@ -300,11 +311,11 @@ Note: No `oidc-client-ts` needed - backend handles all OIDC flows
 | `analytics-web-app/src/components/__tests__/UserMenu.test.tsx` | Create | ✅ Done | User menu tests (6 tests) |
 | `analytics-web-app/package.json` | Modify | ✅ Done | Added test scripts and dependencies |
 
-### Documentation
-| File | Action | Description |
-|------|--------|-------------|
-| `analytics-web-app/README.md` | Modify | Add auth setup instructions |
-| `docs/` or `mkdocs/` | Modify | Update deployment docs |
+### Documentation - COMPLETED ✅
+| File | Action | Status | Description |
+|------|--------|--------|-------------|
+| `analytics-web-app/README.md` | Modify | ✅ Done | Auth setup and OIDC config instructions |
+| `mkdocs/docs/admin/web-app.md` | Modify | ✅ Done | Deployment and configuration guide |
 
 ---
 
@@ -312,26 +323,38 @@ Note: No `oidc-client-ts` needed - backend handles all OIDC flows
 
 ### Backend (IMPLEMENTED)
 ```bash
-# OIDC Client Configuration (required unless --disable-auth flag is used)
-MICROMEGAS_OIDC_CLIENT_CONFIG='{
-  "issuer": "https://accounts.google.com",
-  "client_id": "your-client-id.apps.googleusercontent.com",
-  "redirect_uri": "http://localhost:3000/auth/callback"
+# OIDC Configuration (required unless --disable-auth flag is used)
+# Uses shared format with FlightSQL server - issuers array
+# Web app enforces single issuer constraint
+MICROMEGAS_OIDC_CONFIG='{
+  "issuers": [
+    {
+      "issuer": "https://accounts.google.com",
+      "audience": "your-client-id.apps.googleusercontent.com"
+    }
+  ]
 }'
+
+# OAuth Callback URL (required)
+MICROMEGAS_AUTH_REDIRECT_URI=http://localhost:3000/auth/callback
+
+# CORS Configuration (required, must match redirect URI origin)
+MICROMEGAS_WEB_CORS_ORIGIN=http://localhost:3000
 
 # Cookie Configuration (optional)
 MICROMEGAS_COOKIE_DOMAIN=.yourdomain.com  # Cookie domain (omit for localhost)
 MICROMEGAS_SECURE_COOKIES=true  # Set to true for production (HTTPS only)
 
-# CORS Configuration (existing)
-ANALYTICS_WEB_CORS_ORIGIN=http://localhost:3000  # Must match frontend URL
-
-# FlightSQL Authentication (unchanged, will be replaced with per-request tokens)
-MICROMEGAS_AUTH_TOKEN=your-flightsql-token
+# FlightSQL Connection (required)
+MICROMEGAS_FLIGHTSQL_URL=grpc://127.0.0.1:50051
 
 # Development: use --disable-auth CLI flag
-# ./analytics-web-srv --disable-auth
+# When --disable-auth is used, you need MICROMEGAS_AUTH_TOKEN for FlightSQL
+# MICROMEGAS_AUTH_TOKEN=your-dev-token
+./analytics-web-srv --disable-auth
 ```
+
+**Note**: The `audience` field in the OIDC config serves as the OAuth `client_id` for the web app's authorization code flow.
 
 ### Frontend
 ```bash
@@ -346,7 +369,9 @@ NEXT_PUBLIC_API_URL=http://localhost:3000
 1. Go to Google Cloud Console > APIs & Services > Credentials
 2. Create OAuth 2.0 Client ID (Web application)
 3. Add authorized redirect URI: `http://localhost:3000/auth/callback`
-4. Copy Client ID to `MICROMEGAS_OIDC_CLIENT_CONFIG`
+4. Copy Client ID to `MICROMEGAS_OIDC_CONFIG` as the `audience` field
+5. Set issuer to `https://accounts.google.com`
+6. Ensure CORS origin matches redirect URI origin
 
 ---
 
@@ -369,9 +394,9 @@ NEXT_PUBLIC_API_URL=http://localhost:3000
 10. ✅ **Task 3.1-3.3** - UI polish (user menu, error handling)
 
 ### Phase 4 - Testing & Documentation (COMPLETED ✅)
-11. ✅ **Task 4.1** - Backend testing (37 tests passing)
+11. ✅ **Task 4.1** - Backend testing (25 tests passing: 12 unit + 13 integration)
 12. ✅ **Task 4.2** - Frontend testing (25 tests passing)
-13. **Task 4.3** - Documentation (pending)
+13. ✅ **Task 4.3** - Documentation (README.md and mkdocs updated)
 
 ---
 
@@ -392,8 +417,11 @@ NEXT_PUBLIC_API_URL=http://localhost:3000
 
 ### Additional Security
 - **PKCE flow**: Use PKCE for authorization code exchange (no client secret needed)
-- **Token validation**: Validate JWT on every request (middleware)
+- **offline_access scope**: Required for refresh token support
+- **Token validation**: Validate JWT expiry on every request (middleware)
 - **CORS**: Configure allowed origins for production domains only
+- **ID tokens**: Use ID tokens (not access tokens) for user authentication
+- **Single issuer**: Web app enforces single OIDC issuer for simplified configuration
 
 ---
 
