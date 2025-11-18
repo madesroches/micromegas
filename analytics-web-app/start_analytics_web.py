@@ -41,6 +41,20 @@ def check_command_exists(command):
     except (subprocess.CalledProcessError, FileNotFoundError):
         return False
 
+def check_yarn_installed():
+    """Check if yarn is installed"""
+    if not check_command_exists("yarn"):
+        print_status("Yarn not found. Installing yarn...", "info")
+        try:
+            subprocess.run(["npm", "install", "-g", "yarn"], check=True)
+            print_status("Yarn installed successfully", "success")
+            return True
+        except subprocess.CalledProcessError:
+            print_status("Failed to install yarn. Please install it manually:", "error")
+            print_status("npm install -g yarn", "info")
+            return False
+    return True
+
 def check_flightsql_server():
     """Check if FlightSQL server is running"""
     try:
@@ -132,6 +146,9 @@ def main():
 
     if not check_command_exists("node"):
         print_status("Node.js not found. Please install Node.js 18+.", "error")
+        return 1
+
+    if not check_yarn_installed():
         return 1
 
     # Check FlightSQL server
@@ -245,15 +262,15 @@ def main():
         frontend_dir = Path("analytics-web-app")
         if not (frontend_dir / "node_modules").exists():
             print_status("Installing Node.js dependencies...", "info")
-            npm_install = subprocess.run(
-                ["npm", "install"],
+            yarn_install = subprocess.run(
+                ["yarn", "install"],
                 cwd=frontend_dir,
                 check=True
             )
 
         # Start dev server
         frontend_proc = subprocess.Popen(
-            ["npm", "run", "dev"],
+            ["yarn", "dev"],
             cwd=frontend_dir
         )
         processes.append(frontend_proc)

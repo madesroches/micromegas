@@ -1,0 +1,38 @@
+name: Analytics Web App
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'analytics-web-app/**'
+      - 'build/analytics_web_ci.py'
+      - '.github/workflows/analytics-web-app.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'analytics-web-app/**'
+      - 'build/analytics_web_ci.py'
+      - '.github/workflows/analytics-web-app.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js environment
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: 'analytics-web-app/.nvmrc'
+          cache: 'yarn'
+          cache-dependency-path: 'analytics-web-app/yarn.lock'
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Run Analytics Web App CI validation
+        run: python3 build/analytics_web_ci.py

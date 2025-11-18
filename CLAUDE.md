@@ -47,6 +47,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Lint**: `yarn lint:fix` (REQUIRED before commit)
 - **Test server**: `yarn server` (starts local Grafana with plugin)
 
+### Analytics Web App (from `analytics-web-app/` directory)
+- **IMPORTANT**: Use `yarn`, NOT `npm` (project uses yarn as package manager)
+- **Install**: `yarn install`
+- **Dev**: `yarn dev` (starts Next.js dev server on port 3000)
+- **Build**: `yarn build` (production build)
+- **Lint**: `yarn lint` (REQUIRED before commit)
+- **Type check**: `yarn type-check`
+- **Test**: `yarn test`
+- **Quick start**: `./start_analytics_web.py` (starts both backend and frontend)
+- **Backend**: `cd rust && cargo run --bin analytics-web-srv` (runs on port 8000)
+
 ### Service Management (for testing and development)
 - **Start Services**: `python3 local_test_env/ai_scripts/start_services.py`
   - Starts PostgreSQL, telemetry-ingestion-srv (port 9000), flight-sql-srv (port 50051), and telemetry-admin

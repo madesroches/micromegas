@@ -1,5 +1,9 @@
 import '@testing-library/jest-dom'
 
+// Set NODE_ENV to development for tests
+// @ts-ignore - Override readonly property for testing
+process.env.NODE_ENV = 'development'
+
 // Default mock for Next.js router (can be overridden in individual tests)
 const mockRouter = {
   push: jest.fn(),
