@@ -105,7 +105,8 @@ def setup_environment():
     env_vars = {
         "MICROMEGAS_FLIGHTSQL_URL": "grpc://127.0.0.1:50051",
         "MICROMEGAS_AUTH_TOKEN": "",  # Empty for no-auth mode
-        "ANALYTICS_WEB_CORS_ORIGIN": "http://localhost:3000",  # Frontend origin for CORS
+        "MICROMEGAS_WEB_CORS_ORIGIN": "http://localhost:3000",  # Frontend origin for CORS
+        "MICROMEGAS_AUTH_REDIRECT_URI": "http://localhost:3000/auth/callback",  # OAuth callback URL
     }
 
     for key, default_value in env_vars.items():

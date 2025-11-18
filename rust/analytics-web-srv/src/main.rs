@@ -1,7 +1,7 @@
 mod auth;
 mod queries;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use auth::{AuthState, AuthToken, OidcClientConfig};
 use axum::{
     Extension, Json, Router,
@@ -42,7 +42,7 @@ use queries::{
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, pin::Pin, sync::Arc, time::Duration};
 use tower_http::{
-    cors::{Any, CorsLayer},
+    cors::CorsLayer,
     services::{ServeDir, ServeFile},
 };
 
@@ -180,9 +180,9 @@ type ProgressStream = Pin<Box<dyn Stream<Item = Result<Bytes, axum::Error>> + Se
 async fn main() -> Result<()> {
     let args = Args::parse();
 
-    // Configure CORS based on environment variable
-    let cors_origin = std::env::var("ANALYTICS_WEB_CORS_ORIGIN")
-        .unwrap_or_else(|_| "http://localhost:3000".to_string());
+    // Configure CORS origin (required)
+    let cors_origin = std::env::var("MICROMEGAS_WEB_CORS_ORIGIN")
+        .context("MICROMEGAS_WEB_CORS_ORIGIN environment variable not set")?;
 
     let state = AppState {
         auth_enabled: !args.disable_auth,
@@ -253,25 +253,16 @@ async fn main() -> Result<()> {
     let serve_dir = ServeDir::new(&args.frontend_dir)
         .not_found_service(ServeFile::new(format!("{}/index.html", args.frontend_dir)));
 
-    // Configure CORS layer
-    let cors_layer = if cors_origin == "*" {
-        // Development mode - allow any origin
-        CorsLayer::new()
-            .allow_origin(Any)
-            .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
-            .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION])
-            .allow_credentials(true)
-    } else {
-        // Production mode - restrict to specific origin
-        let origin = cors_origin
-            .parse::<HeaderValue>()
-            .expect("Invalid CORS origin format");
-        CorsLayer::new()
-            .allow_origin(origin)
-            .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
-            .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION])
-            .allow_credentials(true)
-    };
+    // Configure CORS layer - always restrict to specific origin
+    let origin = cors_origin
+        .parse::<HeaderValue>()
+        .context("Invalid MICROMEGAS_WEB_CORS_ORIGIN format")?;
+
+    let cors_layer = CorsLayer::new()
+        .allow_origin(origin)
+        .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+        .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION])
+        .allow_credentials(true);
 
     let mut app = Router::new().merge(health_routes).merge(api_routes);
 

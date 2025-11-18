@@ -61,43 +61,39 @@ pub struct OidcClientConfig {
 }
 
 impl OidcClientConfig {
-    /// Load configuration from environment variable
+    /// Load configuration from environment variables
+    ///
+    /// Required environment variables:
+    /// - MICROMEGAS_OIDC_CONFIG: JSON with "issuer" and "audience" fields
+    /// - MICROMEGAS_AUTH_REDIRECT_URI: OAuth callback URL
+    ///
+    /// Expected MICROMEGAS_OIDC_CONFIG format:
+    /// {
+    ///   "issuer": "https://...",
+    ///   "audience": "client-id"
+    /// }
+    ///
+    /// Note: The web app only supports a single issuer. The `audience` field
+    /// serves as the OAuth client_id for the web app.
     pub fn from_env() -> Result<Self> {
         #[derive(Deserialize)]
         struct OidcConfig {
-            issuers: Vec<IssuerConfig>,
-        }
-        #[derive(Deserialize)]
-        struct IssuerConfig {
             issuer: String,
-            #[allow(dead_code)]
             audience: String,
         }
 
         let json = std::env::var("MICROMEGAS_OIDC_CONFIG")
             .map_err(|_| anyhow!("MICROMEGAS_OIDC_CONFIG environment variable not set"))?;
 
-        let shared_config: OidcConfig = serde_json::from_str(&json)
+        let config: OidcConfig = serde_json::from_str(&json)
             .map_err(|e| anyhow!("Failed to parse MICROMEGAS_OIDC_CONFIG: {e:?}"))?;
 
-        let first_issuer = shared_config
-            .issuers
-            .first()
-            .ok_or_else(|| anyhow!("MICROMEGAS_OIDC_CONFIG must have at least one issuer"))?;
-
-        // Get client_id and redirect_uri from individual env vars
-        let client_id = std::env::var("MICROMEGAS_OIDC_CLIENT_ID")
-            .or_else(|_| std::env::var("OIDC_CLIENT_ID"))
-            .map_err(|_| {
-                anyhow!("MICROMEGAS_OIDC_CLIENT_ID or OIDC_CLIENT_ID environment variable not set")
-            })?;
-
-        let redirect_uri = std::env::var("MICROMEGAS_OIDC_REDIRECT_URI")
-            .unwrap_or_else(|_| "http://localhost:3000/auth/callback".to_string());
+        let redirect_uri = std::env::var("MICROMEGAS_AUTH_REDIRECT_URI")
+            .map_err(|_| anyhow!("MICROMEGAS_AUTH_REDIRECT_URI environment variable not set"))?;
 
         Ok(OidcClientConfig {
-            issuer: first_issuer.issuer.clone(),
-            client_id,
+            issuer: config.issuer,
+            client_id: config.audience,
             redirect_uri,
         })
     }
@@ -400,6 +396,8 @@ pub async fn auth_callback(
         ("code_verifier", &oauth_state.pkce_verifier),
     ];
 
+    // Note: Generic error messages are intentional to avoid leaking authentication details
+    // Detailed errors are logged server-side for debugging
     let response = http_client
         .post(token_url.as_str())
         .form(&params)
@@ -665,7 +663,12 @@ impl IntoResponse for AuthApiError {
 }
 
 /// Basic JWT validation (format and expiration only, no signature check)
-/// Full signature validation is performed by FlightSQL service
+///
+/// Security note: This web server acts as a proxy and has no direct access to
+/// telemetry data. All data queries are forwarded to the FlightSQL service,
+/// which performs full JWT signature validation with the OIDC provider. This
+/// basic validation provides fast feedback for obviously invalid tokens while
+/// delegating the authoritative security checks to the data-owning service.
 fn validate_jwt_basic(token: &str) -> Result<(), AuthApiError> {
     // Check JWT format: must have 3 parts (header.payload.signature)
     let parts: Vec<&str> = token.split('.').collect();
