@@ -109,7 +109,7 @@ async fn test_auth_me_returns_user_info_with_valid_token() {
 
     let request = Request::builder()
         .uri("/auth/me")
-        .header(COOKIE, format!("access_token={token}"))
+        .header(COOKIE, format!("id_token={token}"))
         .body(Body::empty())
         .expect("request should build");
 
@@ -150,7 +150,7 @@ async fn test_auth_me_returns_401_with_expired_token() {
 
     let request = Request::builder()
         .uri("/auth/me")
-        .header(COOKIE, format!("access_token={token}"))
+        .header(COOKIE, format!("id_token={token}"))
         .body(Body::empty())
         .expect("request should build");
 
@@ -165,7 +165,7 @@ async fn test_auth_me_returns_401_with_invalid_jwt_format() {
 
     let request = Request::builder()
         .uri("/auth/me")
-        .header(COOKIE, "access_token=not.a.valid.jwt")
+        .header(COOKIE, "id_token=not.a.valid.jwt")
         .body(Body::empty())
         .expect("request should build");
 
@@ -180,7 +180,7 @@ async fn test_auth_me_returns_401_with_invalid_base64_payload() {
 
     let request = Request::builder()
         .uri("/auth/me")
-        .header(COOKIE, "access_token=header.!!!invalid-base64!!!.signature")
+        .header(COOKIE, "id_token=header.!!!invalid-base64!!!.signature")
         .body(Body::empty())
         .expect("request should build");
 
@@ -207,7 +207,7 @@ async fn test_auth_me_falls_back_to_preferred_username() {
 
     let request = Request::builder()
         .uri("/auth/me")
-        .header(COOKIE, format!("access_token={token}"))
+        .header(COOKIE, format!("id_token={token}"))
         .body(Body::empty())
         .expect("request should build");
 
@@ -235,10 +235,7 @@ async fn test_auth_logout_clears_cookies() {
     let request = Request::builder()
         .method("POST")
         .uri("/auth/logout")
-        .header(
-            COOKIE,
-            "access_token=some_token; refresh_token=some_refresh",
-        )
+        .header(COOKIE, "id_token=some_token; refresh_token=some_refresh")
         .body(Body::empty())
         .expect("request should build");
 
@@ -249,13 +246,13 @@ async fn test_auth_logout_clears_cookies() {
     // Check that cookies are being cleared via Set-Cookie headers
     let set_cookies: Vec<_> = response.headers().get_all("set-cookie").iter().collect();
 
-    // Should have set-cookie headers for clearing both access_token and refresh_token
+    // Should have set-cookie headers for clearing both id_token and refresh_token
     assert!(set_cookies.len() >= 2);
 
     // Verify cookies are being cleared (max-age=0)
-    let access_token_cleared = set_cookies.iter().any(|h| {
+    let id_token_cleared = set_cookies.iter().any(|h| {
         let s = h.to_str().unwrap_or("");
-        s.contains("access_token=") && s.contains("Max-Age=0")
+        s.contains("id_token=") && s.contains("Max-Age=0")
     });
     let refresh_token_cleared = set_cookies.iter().any(|h| {
         let s = h.to_str().unwrap_or("");
@@ -263,8 +260,8 @@ async fn test_auth_logout_clears_cookies() {
     });
 
     assert!(
-        access_token_cleared,
-        "access_token should be cleared with Max-Age=0"
+        id_token_cleared,
+        "id_token should be cleared with Max-Age=0"
     );
     assert!(
         refresh_token_cleared,
@@ -283,7 +280,7 @@ async fn test_cookie_auth_middleware_allows_valid_token() {
 
     let request = Request::builder()
         .uri("/protected")
-        .header(COOKIE, format!("access_token={token}"))
+        .header(COOKIE, format!("id_token={token}"))
         .body(Body::empty())
         .expect("request should build");
 
@@ -319,7 +316,7 @@ async fn test_cookie_auth_middleware_rejects_expired_token() {
 
     let request = Request::builder()
         .uri("/protected")
-        .header(COOKIE, format!("access_token={token}"))
+        .header(COOKIE, format!("id_token={token}"))
         .body(Body::empty())
         .expect("request should build");
 
@@ -336,7 +333,7 @@ async fn test_cookie_auth_middleware_rejects_invalid_jwt() {
 
     let request = Request::builder()
         .uri("/protected")
-        .header(COOKIE, "access_token=invalid.jwt.token")
+        .header(COOKIE, "id_token=invalid.jwt.token")
         .body(Body::empty())
         .expect("request should build");
 
@@ -354,7 +351,7 @@ async fn test_cookie_auth_middleware_rejects_malformed_payload() {
 
     let request = Request::builder()
         .uri("/protected")
-        .header(COOKIE, "access_token=header.@@@invalid@@@.signature")
+        .header(COOKIE, "id_token=header.@@@invalid@@@.signature")
         .body(Body::empty())
         .expect("request should build");
 
