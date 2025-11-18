@@ -276,17 +276,26 @@ for batch in client.query_stream(sql, begin, end):
 
 ## Connection Configuration
 
-### `FlightSQLClient(uri, headers=None)`
+### `FlightSQLClient(uri, headers=None, preserve_dictionary=False, auth_provider=None)`
 
 For advanced connection scenarios, use the `FlightSQLClient` class directly:
 
 ```python
 from micromegas.flightsql.client import FlightSQLClient
 
-# Connect to remote server with authentication
+# Recommended: Connect with OIDC authentication (automatic token refresh)
+from micromegas.auth import OidcAuthProvider
+
+auth = OidcAuthProvider.from_file("~/.micromegas/tokens.json")
 client = FlightSQLClient(
     "grpc+tls://remote-server:50051",
-    headers={"authorization": "Bearer your-token"}
+    auth_provider=auth
+)
+
+# Connect with dictionary preservation for memory efficiency
+client = FlightSQLClient(
+    "grpc://localhost:50051",
+    preserve_dictionary=True
 )
 
 # Connect to local server (equivalent to micromegas.connect())
@@ -295,7 +304,12 @@ client = FlightSQLClient("grpc://localhost:50051")
 
 **Parameters:**
 - `uri` (str): FlightSQL server URI. Use `grpc://` for unencrypted or `grpc+tls://` for TLS connections
-- `headers` (dict, optional): Custom headers for authentication or metadata
+- `headers` (dict, optional): **Deprecated.** Use `auth_provider` instead. Static headers for authentication. This parameter is deprecated because it doesn't support automatic token refresh
+- `preserve_dictionary` (bool, optional): When True, preserve dictionary encoding in Arrow arrays for memory efficiency. Useful when using dictionary-encoded UDFs. Defaults to False
+- `auth_provider` (optional): **Recommended.** Authentication provider that implements `get_token()` method. When provided, tokens are automatically refreshed before each request. Example: `OidcAuthProvider`. This is the recommended way to handle authentication
+
+**Authentication Note:**
+The `auth_provider` parameter is the recommended authentication method as it supports automatic token refresh. The `headers` parameter is deprecated and will be removed in a future version. See the [Authentication Guide](../../admin/authentication.md) for details on setting up OIDC authentication.
 
 ## Schema Discovery
 
@@ -642,9 +656,19 @@ Micromegas uses Apache Arrow FlightSQL for optimal performance:
 # Connect to local server (default)
 client = micromegas.connect()
 
-# Connect to a custom endpoint using FlightSQLClient directly
+# Connect with dictionary preservation for memory efficiency
+client = micromegas.connect(preserve_dictionary=True)
+
+# For remote servers with authentication, use FlightSQLClient with auth_provider
 from micromegas.flightsql.client import FlightSQLClient
-client = FlightSQLClient("grpc://remote-server:50051")
+from micromegas.auth import OidcAuthProvider
+
+# Recommended: OIDC authentication with automatic token refresh
+auth = OidcAuthProvider.from_file("~/.micromegas/tokens.json")
+client = FlightSQLClient(
+    "grpc+tls://remote-server:50051",
+    auth_provider=auth
+)
 ```
 
 ## Error Handling

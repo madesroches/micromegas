@@ -31,11 +31,11 @@ def main():
         str(VENV_MKDOCS),
         "serve",
         "--config-file", str(CONFIG_FILE),
-        "--dev-addr", "0.0.0.0:8000"
+        "--dev-addr", "0.0.0.0:8765"
     ]
 
     print(f"Starting MkDocs server...")
-    print(f"Server will be available at: http://localhost:8000")
+    print(f"Server will be available at: http://localhost:8765")
     print(f"Press Ctrl+C to stop")
     print()
 
