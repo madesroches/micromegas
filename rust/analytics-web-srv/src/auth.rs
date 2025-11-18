@@ -64,36 +64,49 @@ impl OidcClientConfig {
     /// Load configuration from environment variables
     ///
     /// Required environment variables:
-    /// - MICROMEGAS_OIDC_CONFIG: JSON with "issuer" and "audience" fields
+    /// - MICROMEGAS_OIDC_CONFIG: JSON with "issuers" array (same format as FlightSQL server)
     /// - MICROMEGAS_AUTH_REDIRECT_URI: OAuth callback URL
     ///
-    /// Expected MICROMEGAS_OIDC_CONFIG format:
+    /// Expected MICROMEGAS_OIDC_CONFIG format (uses micromegas-auth's OidcConfig):
     /// {
-    ///   "issuer": "https://...",
-    ///   "audience": "client-id"
+    ///   "issuers": [
+    ///     {
+    ///       "issuer": "https://...",
+    ///       "audience": "client-id"
+    ///     }
+    ///   ]
     /// }
     ///
-    /// Note: The web app only supports a single issuer. The `audience` field
-    /// serves as the OAuth client_id for the web app.
+    /// Note: The web app only supports a single issuer. If multiple issuers are
+    /// configured in the array, this function will return an error. The `audience`
+    /// field serves as the OAuth client_id for the web app.
     pub fn from_env() -> Result<Self> {
-        #[derive(Deserialize)]
-        struct OidcConfig {
-            issuer: String,
-            audience: String,
+        // Use the shared OidcConfig from micromegas-auth
+        let config = micromegas_auth::oidc::OidcConfig::from_env()?;
+
+        // Ensure exactly one issuer is configured
+        if config.issuers.is_empty() {
+            return Err(anyhow!(
+                "MICROMEGAS_OIDC_CONFIG must contain at least one issuer in the 'issuers' array"
+            ));
         }
 
-        let json = std::env::var("MICROMEGAS_OIDC_CONFIG")
-            .map_err(|_| anyhow!("MICROMEGAS_OIDC_CONFIG environment variable not set"))?;
+        if config.issuers.len() > 1 {
+            return Err(anyhow!(
+                "Analytics web app only supports a single OIDC issuer. Found {} issuers in MICROMEGAS_OIDC_CONFIG. \
+                 Please configure only one issuer in the 'issuers' array.",
+                config.issuers.len()
+            ));
+        }
 
-        let config: OidcConfig = serde_json::from_str(&json)
-            .map_err(|e| anyhow!("Failed to parse MICROMEGAS_OIDC_CONFIG: {e:?}"))?;
+        let issuer_config = &config.issuers[0];
 
         let redirect_uri = std::env::var("MICROMEGAS_AUTH_REDIRECT_URI")
             .map_err(|_| anyhow!("MICROMEGAS_AUTH_REDIRECT_URI environment variable not set"))?;
 
         Ok(OidcClientConfig {
-            issuer: config.issuer,
-            client_id: config.audience,
+            issuer: issuer_config.issuer.clone(),
+            client_id: issuer_config.audience.clone(),
             redirect_uri,
         })
     }

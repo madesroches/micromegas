@@ -32,13 +32,13 @@ Modern web application for exploring and analyzing micromegas telemetry data wit
 
 ```bash
 cd analytics-web-app
-npm install
-npm run dev
+yarn install
+yarn dev
 ```
 
 The frontend will run on http://localhost:3001 with hot reloading.
 
-### Backend Development  
+### Backend Development
 
 ```bash
 cd rust
@@ -55,8 +55,8 @@ The backend will run on http://localhost:3000.
    ```
 
 2. In another terminal, start the frontend:
-   ```bash  
-   cd analytics-web-app && npm run dev
+   ```bash
+   cd analytics-web-app && yarn dev
    ```
 
 The Next.js dev server will proxy API requests to the Rust backend.
@@ -66,7 +66,7 @@ The Next.js dev server will proxy API requests to the Rust backend.
 1. Build the frontend:
    ```bash
    cd analytics-web-app
-   npm run build
+   yarn build
    ```
 
 2. Run the backend with static file serving:
@@ -99,7 +99,30 @@ This will automatically start both the Rust backend and Next.js frontend with ho
 
 ## Environment Variables
 
+### Required
 - `MICROMEGAS_FLIGHTSQL_URL` - FlightSQL server address (default: grpc://127.0.0.1:50051)
-- `MICROMEGAS_AUTH_TOKEN` - Authentication token for FlightSQL server
+- `MICROMEGAS_OIDC_CONFIG` - OIDC configuration JSON (same format as FlightSQL server)
+- `MICROMEGAS_AUTH_REDIRECT_URI` - OAuth callback URL (e.g., http://localhost:3000/auth/callback)
+
+### Optional
 - `PORT` - Server port (default: 3000)
 - `FRONTEND_DIR` - Frontend build directory (default: ../analytics-web-app/dist)
+- `MICROMEGAS_WEB_CORS_ORIGIN` - CORS origin for API requests (default: http://localhost:3001)
+
+### OIDC Configuration
+
+The `MICROMEGAS_OIDC_CONFIG` environment variable must contain a JSON object with an `issuers` array (same format as the FlightSQL server). The web app only supports a single issuer - if multiple issuers are configured, the server will fail to start.
+
+Example:
+```json
+{
+  "issuers": [
+    {
+      "issuer": "https://accounts.google.com",
+      "audience": "your-client-id.apps.googleusercontent.com"
+    }
+  ]
+}
+```
+
+The `audience` field serves as the OAuth client_id for the web app's authorization code flow.
