@@ -7,29 +7,61 @@ This guide covers advanced usage patterns, performance optimization techniques, 
 
 ## Advanced Connection Patterns
 
-### Authentication and Headers
+### Authentication with OIDC (Recommended)
 
-Configure custom authentication headers for enterprise deployments:
+Use OIDC authentication providers for automatic token refresh:
+
+```python
+from micromegas.flightsql.client import FlightSQLClient
+from micromegas.auth import OidcAuthProvider
+
+# Interactive login (opens browser, caches tokens)
+auth = OidcAuthProvider.login(
+    issuer="https://accounts.google.com",
+    client_id="your-app-id.apps.googleusercontent.com",
+    token_file="~/.micromegas/tokens.json"  # Tokens cached here
+)
+
+# Use cached tokens (no browser prompt)
+auth = OidcAuthProvider.from_file("~/.micromegas/tokens.json")
+
+# Create authenticated client with automatic token refresh
+client = FlightSQLClient(
+    "grpc+tls://analytics.company.com:50051",
+    auth_provider=auth  # Recommended: automatic token refresh
+)
+
+# Client credentials flow (for service accounts)
+from micromegas.auth import OidcClientCredentialsProvider
+
+service_auth = OidcClientCredentialsProvider(
+    issuer="https://auth.company.com",
+    client_id="service-account-id",
+    client_secret="service-account-secret"
+)
+
+client = FlightSQLClient(
+    "grpc+tls://analytics.company.com:50051",
+    auth_provider=service_auth
+)
+```
+
+### Static Headers (Deprecated)
+
+!!! warning "Deprecated"
+    The `headers` parameter is deprecated and will be removed in a future version. Use `auth_provider` instead for automatic token refresh support.
+
+For legacy integrations, you can still use static headers:
 
 ```python
 from micromegas.flightsql.client import FlightSQLClient
 
-# Token-based authentication
+# Deprecated: Static token (no automatic refresh)
 client = FlightSQLClient(
     "grpc+tls://analytics.company.com:50051",
     headers={
-        "authorization": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-        "x-tenant-id": "production",
-        "x-request-id": "trace-12345"
-    }
-)
-
-# API key authentication  
-client = FlightSQLClient(
-    "grpc+tls://micromegas.example.com:50051",
-    headers={
-        "x-api-key": "mm_prod_1234567890abcdef",
-        "x-client-version": "python-1.0.0"
+        "authorization": "Bearer static-token-here",
+        "x-tenant-id": "production"
     }
 )
 ```
