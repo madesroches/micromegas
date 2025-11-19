@@ -558,7 +558,7 @@ pub async fn auth_me(jar: CookieJar) -> Result<Json<UserInfo>, AuthApiError> {
     let id_token = jar
         .get(ID_TOKEN_COOKIE)
         .ok_or_else(|| {
-            warn!("no id_token cookie found");
+            debug!("no id_token cookie found");
             AuthApiError::Unauthorized
         })?
         .value();
@@ -690,7 +690,7 @@ pub async fn cookie_auth_middleware(req: Request, next: Next) -> Result<Response
     let id_token = jar
         .get(ID_TOKEN_COOKIE)
         .ok_or_else(|| {
-            warn!("id_token cookie not found");
+            debug!("id_token cookie not found");
             AuthApiError::Unauthorized
         })?
         .value()

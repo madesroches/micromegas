@@ -203,6 +203,7 @@ def main():
                 "--",
                 "--listen-endpoint-http",
                 "127.0.0.1:9000",
+                "--disable-auth",
             ],
             stdout=log_file,
             stderr=subprocess.STDOUT,
