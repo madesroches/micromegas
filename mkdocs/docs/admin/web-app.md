@@ -31,6 +31,10 @@ export MICROMEGAS_OIDC_CONFIG='{
 export MICROMEGAS_WEB_CORS_ORIGIN="http://localhost:3000"
 export MICROMEGAS_AUTH_REDIRECT_URI="http://localhost:3000/auth/callback"
 
+# OAuth state signing secret (IMPORTANT: must be same across all instances)
+# Generate with: openssl rand -base64 32
+export MICROMEGAS_STATE_SECRET="your-random-secret-here"
+
 # FlightSQL connection
 export MICROMEGAS_FLIGHTSQL_URL="grpc://127.0.0.1:50051"
 ```

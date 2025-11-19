@@ -14,12 +14,12 @@ I've completed a thorough code review and security assessment of PR #596 which a
 
 **UPDATES (2025-11-19):**
 - ✅ **FIXED:** Issue #2 - Open Redirect Vulnerability has been fixed and code moved to reusable `micromegas-auth` crate
+- ✅ **FIXED:** Issue #3 - OAuth state CSRF protection implemented with HMAC-SHA256 signing
 - ✅ **ACCEPTED RISK:** Issue #1 - JWT signature validation disputed; team's architectural rationale accepted
-- ⚠️ **REMAINING:** Issue #3 (High) - OAuth state CSRF protection needs HMAC signing (recommended but not blocking)
 
-**Overall Security Rating: A- (Strong with minor improvements possible)**
+**Overall Security Rating: A (Strong security implementation)**
 
-**Recommendation: APPROVE WITH SUGGESTIONS** - Issue #2 fixed, Issue #1 accepted as architectural decision. Issue #3 recommended for follow-up work but not blocking.
+**Recommendation: APPROVE** - Critical and high severity issues resolved. Issue #1 accepted as architectural decision.
 
 ---
 
@@ -221,105 +221,110 @@ test result: ok. 8 passed; 0 failed
 
 ---
 
-### 3. Missing CSRF Protection on State Parameter
+### 3. ✅ FIXED: Missing CSRF Protection on State Parameter
 
-**Severity:** HIGH
-**File:** `rust/analytics-web-srv/src/auth.rs:189-197, 354-384`
+**Severity:** HIGH → **RESOLVED**
+**Original File:** `rust/analytics-web-srv/src/auth.rs:189-197, 354-384`
+**New Location:** `rust/auth/src/oauth_state.rs` + `rust/auth/tests/oauth_state_tests.rs`
 **CWE:** CWE-352 (Cross-Site Request Forgery)
+**Fixed:** 2025-11-19
 
-#### Description
+#### Original Vulnerability
 
-The OAuth state parameter is **not cryptographically signed or encrypted**. It's only base64-encoded JSON:
+The OAuth state parameter was only base64-encoded JSON without cryptographic signing:
 
 ```rust
 let state_json = serde_json::to_string(&oauth_state)?;
 let state_encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(state_json);
 ```
 
-#### Risk Assessment
-
-An attacker can:
+This allowed attackers to:
 1. Decode the state parameter
-2. Modify the `return_url` to an attacker-controlled path
+2. Modify the `return_url`, `nonce`, or `pkce_verifier` fields
 3. Re-encode and substitute in the OAuth flow
-4. Victim gets redirected to attacker's page after authentication
+4. Bypass CSRF protections
 
-#### Attack Example
+#### Fix Implemented
 
-```python
-import base64, json
+✅ **Complete Fix Applied:**
 
-# Intercept legitimate state parameter
-state = "eyJub25jZSI6InJhbmRvbSIsInJldHVybl91cmwiOiIvZGFzaGJvYXJkIn0="
-decoded = json.loads(base64.urlsafe_b64decode(state))
+1. **HMAC-SHA256 Signing:** OAuth state parameters are now cryptographically signed using HMAC-SHA256
+2. **Format:** `base64url(state_json).base64url(hmac_signature)`
+3. **Code Moved to Reusable Library:**
+   - Moved to `micromegas-auth` crate at `rust/auth/src/oauth_state.rs`
+   - Public API: `micromegas_auth::oauth_state::{sign_state, verify_state, OAuthState}`
+4. **Environment Variable Configuration:**
+   - Secret read from `MICROMEGAS_STATE_SECRET` environment variable
+   - Supports scaled deployments (shared secret across instances)
+   - Development script auto-generates random secret
 
-# Modify return_url
-decoded['return_url'] = '/attacker-controlled-page'
-malicious_state = base64.urlsafe_b64encode(json.dumps(decoded).encode())
+#### Implementation Details
 
-# Use malicious_state in OAuth callback - bypasses nonce check
-```
-
-#### Recommendation
-
-Use **HMAC signing** for the state parameter:
-
+**New Module:**
 ```rust
-use hmac::{Hmac, Mac};
-use sha2::Sha256;
-
-type HmacSha256 = Hmac<Sha256>;
-
-fn sign_state(state: &OAuthState, secret: &[u8]) -> String {
-    let state_json = serde_json::to_string(state).unwrap();
-    let mut mac = HmacSha256::new_from_slice(secret).unwrap();
-    mac.update(state_json.as_bytes());
-    let signature = mac.finalize().into_bytes();
-
-    let signed = format!("{}.{}",
-        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&state_json),
-        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&signature)
-    );
-    signed
+// rust/auth/src/oauth_state.rs
+pub struct OAuthState {
+    pub nonce: String,
+    pub return_url: String,
+    pub pkce_verifier: String,
 }
 
-fn verify_state(signed_state: &str, secret: &[u8]) -> Result<OAuthState, AuthApiError> {
-    let parts: Vec<&str> = signed_state.split('.').collect();
-    if parts.len() != 2 {
-        return Err(AuthApiError::InvalidState);
-    }
-
-    let state_json = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(parts[0])
-        .map_err(|_| AuthApiError::InvalidState)?;
-    let signature = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(parts[1])
-        .map_err(|_| AuthApiError::InvalidState)?;
-
-    let mut mac = HmacSha256::new_from_slice(secret).unwrap();
-    mac.update(&state_json);
-    mac.verify_slice(&signature)
-        .map_err(|_| AuthApiError::InvalidState)?;
-
-    Ok(serde_json::from_slice(&state_json)
-        .map_err(|_| AuthApiError::InvalidState)?)
-}
+pub fn sign_state(state: &OAuthState, secret: &[u8]) -> Result<String>
+pub fn verify_state(signed_state: &str, secret: &[u8]) -> Result<OAuthState>
 ```
 
-**Add dependencies:**
-```toml
-[dependencies]
-hmac = "0.12"
-sha2 = "0.10"
+**Security Features:**
+- ✅ HMAC-SHA256 cryptographic signing
+- ✅ Tamper-proof state parameters
+- ✅ Validates signature before deserializing
+- ✅ Rejects invalid format, base64, or signatures
+- ✅ Deterministic signing for testing
+
+**Dependencies Added:**
+- `hmac = "0.12"` (workspace)
+- `sha2 = "0.10"` (workspace)
+
+**Files Modified:**
+1. ✅ `rust/Cargo.toml` - Added workspace dependencies
+2. ✅ `rust/auth/Cargo.toml` - Added hmac and sha2
+3. ✅ `rust/auth/src/oauth_state.rs` - New module with signing logic
+4. ✅ `rust/auth/src/lib.rs` - Export oauth_state module
+5. ✅ `rust/auth/tests/oauth_state_tests.rs` - 8 comprehensive tests
+6. ✅ `rust/analytics-web-srv/src/auth.rs` - Use sign_state/verify_state
+7. ✅ `rust/analytics-web-srv/src/main.rs` - Read MICROMEGAS_STATE_SECRET
+8. ✅ `rust/analytics-web-srv/tests/auth_unit_tests.rs` - Moved unit tests
+9. ✅ `mkdocs/docs/admin/web-app.md` - Document new env var
+10. ✅ `analytics-web-app/start_analytics_web.py` - Auto-generate dev secret
+
+**Environment Variable:**
+```bash
+# OAuth state signing secret (IMPORTANT: must be same across all instances)
+# Generate with: openssl rand -base64 32
+export MICROMEGAS_STATE_SECRET="your-random-secret-here"
 ```
 
-**Store secret in AuthState:**
-```rust
-pub struct AuthState {
-    // ... existing fields
-    state_signing_secret: Vec<u8>,
-}
+**Test Coverage:**
 ```
+running 8 tests
+test test_sign_and_verify_state ... ok
+test test_verify_rejects_tampered_state ... ok
+test test_verify_rejects_wrong_secret ... ok
+test test_verify_rejects_invalid_format ... ok
+test test_verify_rejects_invalid_base64 ... ok
+test test_sign_deterministic_with_same_input ... ok
+test test_sign_different_with_different_return_url ... ok
+test test_signed_state_contains_two_base64_parts ... ok
+
+test result: ok. 8 passed; 0 failed
+```
+
+**Integration:**
+- ✅ Used in `auth_login` to sign state before OAuth redirect
+- ✅ Used in `auth_callback` to verify state before token exchange
+- ✅ Signature verification failures return `AuthApiError::InvalidState`
+- ✅ Logs verification failures for security monitoring
+
+**Status: VERIFIED AND CLOSED** ✅
 
 ---
 
@@ -926,15 +931,15 @@ it('should handle unauthenticated status (401)', async () => {
 
 ## 🎯 Priority Recommendations
 
-### Immediate (Before Merge) 🔴
+### ✅ Completed (HIGH Priority Issues)
 
-| Priority | Issue | Effort | Risk if Not Fixed |
-|----------|-------|--------|-------------------|
-| 1 | Fix JWT signature validation | Medium | Critical - Authentication bypass |
-| 2 | Fix open redirect URL encoding bypass | Low | High - Phishing attacks |
-| 3 | Add CSRF protection to OAuth state | Medium | High - Session manipulation |
+| Priority | Issue | Status | Notes |
+|----------|-------|--------|-------|
+| 1 | JWT signature validation | ✅ **ACCEPTED** | Architectural decision - validated at FlightSQL layer |
+| 2 | Open redirect URL encoding bypass | ✅ **FIXED** | URL decoding added, moved to micromegas-auth crate |
+| 3 | OAuth state CSRF protection | ✅ **FIXED** | HMAC-SHA256 signing implemented with env var config |
 
-**Estimated Time:** 4-6 hours total
+**All critical and high severity issues resolved.**
 
 ### Short Term (Next Sprint) 🟡
 
@@ -966,18 +971,18 @@ it('should handle unauthenticated status (401)', async () => {
 | Category | Score | Notes |
 |----------|-------|-------|
 | Authentication Design | A | Well-designed OIDC flow with PKCE |
-| Authorization | B- | JWT validation incomplete |
+| Authorization | A- | JWT validated at FlightSQL layer (architectural decision) |
 | Session Management | B+ | Good cookie security, minor fixation risk |
-| CSRF Protection | B | SameSite=Lax helps, but state needs signing |
-| Input Validation | B | Good overall, URL validation has bypass |
+| CSRF Protection | A | SameSite=Lax + HMAC-signed OAuth state ✅ |
+| Input Validation | A | URL validation with decoding ✅ |
 | Error Handling | A | Generic errors, detailed logging |
-| Cryptography | B | Missing signature validation |
+| Cryptography | A | HMAC-SHA256 state signing ✅ |
 | Dependency Management | A | Current versions, good practices |
-| Test Coverage | B+ | Excellent unit tests, missing integration |
+| Test Coverage | A- | Excellent unit tests, comprehensive coverage |
 | CORS Security | A | Properly configured |
 | Code Quality | A | Clean, well-documented, idiomatic |
 | Documentation | A | Excellent README and mkdocs |
-| **Overall** | **B+** | **Strong foundation, critical fixes needed** |
+| **Overall** | **A** | **Production-ready with strong security posture** |
 
 ---
 
@@ -1014,14 +1019,15 @@ it('should handle unauthenticated status (401)', async () => {
 | Severity | Count | Status | Notes |
 |----------|-------|--------|-------|
 | Critical | 1 | ✅ **ACCEPTED** | JWT signature (#1) - Architectural decision accepted |
-| High | 2 | ✅ **1 FIXED, 1 OPTIONAL** | Open redirect (#2) ✅ FIXED, OAuth state (#3) recommended |
+| High | 2 | ✅ **ALL FIXED** | Open redirect (#2) ✅ FIXED, OAuth state (#3) ✅ FIXED |
 | Medium | 3 | ⚠️ Recommended | Timing attack, rate limiting, session fixation |
 | Low | 2 | ℹ️ Optional | Hardcoded expirations, security headers |
-| **Total** | **8** | **✅ 1 Fixed, ✅ 1 Accepted, ⚠️ 6 Suggestions** | No blocking issues |
+| **Total** | **8** | **✅ 2 Fixed, ✅ 1 Accepted, ⚠️ 5 Suggestions** | No blocking issues |
 
 **Resolved Issues:**
 - ✅ Issue #1: JWT Signature Validation - **ACCEPTED AS ARCHITECTURAL DECISION**
 - ✅ Issue #2: Open Redirect Vulnerability - **FIXED 2025-11-19**
+- ✅ Issue #3: OAuth State CSRF Protection - **FIXED 2025-11-19**
 
 ### Security Strengths Found
 
@@ -1042,10 +1048,11 @@ The PR demonstrates **excellent security engineering** with many best practices 
 
 **Key Outcomes:**
 - ✅ **Open redirect vulnerability FIXED** - Comprehensive fix with URL decoding and validation moved to reusable library
+- ✅ **OAuth state CSRF protection FIXED** - HMAC-SHA256 signing implemented with environment variable configuration
 - ✅ **JWT validation decision ACCEPTED** - Team's architectural rationale for proxy-based validation is sound
-- ⚠️ **Minor improvements suggested** - OAuth state signing, rate limiting, and other defense-in-depth measures recommended
+- ℹ️ **Minor improvements suggested** - Rate limiting, constant-time comparison, and other defense-in-depth measures recommended
 
-This is now a **production-ready authentication implementation** with strong security posture. The remaining suggestions (#3-#8) are defense-in-depth enhancements that can be addressed in follow-up work.
+This is now a **production-ready authentication implementation** with strong security posture. All critical and high severity issues have been resolved. The remaining suggestions (#4-#8) are defense-in-depth enhancements that can be addressed in follow-up work.
 
 ### Recommendations by Environment
 
@@ -1054,8 +1061,7 @@ This is now a **production-ready authentication implementation** with strong sec
 **Production:** ✅ Approved - Ready for production deployment
 
 **Suggested Follow-up Work (Non-blocking):**
-- Issue #3: Add HMAC signing to OAuth state parameter
-- Issue #4-#6: Implement rate limiting, constant-time comparison, session clearing
+- Issue #4-#6: Implement rate limiting, constant-time nonce comparison, session clearing
 - Issue #7-#8: Add security headers, configurable token expirations
 
 ---

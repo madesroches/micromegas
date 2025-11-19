@@ -116,11 +116,16 @@ def kill_existing_frontend():
 
 def setup_environment():
     """Set up environment variables"""
+    # Generate a random secret for development if not set
+    import secrets
+    dev_secret = secrets.token_urlsafe(32)
+
     env_vars = {
         "MICROMEGAS_FLIGHTSQL_URL": "grpc://127.0.0.1:50051",
         "MICROMEGAS_AUTH_TOKEN": "",  # Empty for no-auth mode
         "MICROMEGAS_WEB_CORS_ORIGIN": "http://localhost:3000",  # Frontend origin for CORS
         "MICROMEGAS_AUTH_REDIRECT_URI": "http://localhost:3000/auth/callback",  # OAuth callback URL
+        "MICROMEGAS_STATE_SECRET": dev_secret,  # Random secret for OAuth state signing
     }
 
     for key, default_value in env_vars.items():
