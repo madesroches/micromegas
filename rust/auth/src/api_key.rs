@@ -119,7 +119,10 @@ impl AuthProvider for ApiKeyAuthProvider {
                     issuer: "api_key".to_string(),
                     expires_at: None,
                     auth_type: AuthType::ApiKey,
+                    // SECURITY: API keys can NEVER be admins - only OIDC users can have admin privileges
                     is_admin: false,
+                    // SECURITY: API keys CAN delegate (act on behalf of users)
+                    allow_delegation: true,
                 });
             }
             // Note: We do NOT break or return early - we continue checking all keys

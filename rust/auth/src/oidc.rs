@@ -441,7 +441,10 @@ impl OidcAuthProvider {
             issuer: claims.iss,
             expires_at: Some(expires_at),
             auth_type: AuthType::Oidc,
+            // SECURITY: Only OIDC users can have admin privileges (API keys are always non-admin)
             is_admin,
+            // SECURITY: OIDC users cannot delegate (no user impersonation allowed)
+            allow_delegation: false,
         })
     }
 }

@@ -63,6 +63,14 @@ pub async fn auth_middleware(
         auth_ctx.subject, auth_ctx.email, auth_ctx.issuer, auth_ctx.is_admin
     );
 
+    // SECURITY: Remove any client-provided auth headers to prevent spoofing
+    // These headers should only be trusted when set by the authentication layer
+    // The AuthContext in request extensions is the authoritative source
+    req.headers_mut().remove("x-auth-subject");
+    req.headers_mut().remove("x-auth-email");
+    req.headers_mut().remove("x-auth-issuer");
+    req.headers_mut().remove("x-allow-delegation");
+
     // Inject auth context into request extensions for downstream handlers
     req.extensions_mut().insert(auth_ctx);
 
