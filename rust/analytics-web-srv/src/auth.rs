@@ -19,13 +19,13 @@ use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
 use base64::Engine;
 use chrono::Utc;
 use micromegas::tracing::prelude::*;
-use micromegas_auth::oauth_state::{OAuthState, sign_state, verify_state};
+use micromegas_auth::oauth_state::{OAuthState, generate_nonce, sign_state, verify_state};
+use micromegas_auth::oidc::create_http_client;
 use micromegas_auth::url_validation::validate_return_url;
 use openidconnect::{
     AuthenticationFlow, CsrfToken, Nonce, PkceCodeChallenge, Scope,
     core::{CoreProviderMetadata, CoreResponseType},
 };
-use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -136,14 +136,6 @@ pub struct AuthState {
     pub state_signing_secret: Vec<u8>,
 }
 
-/// Create HTTP client for OIDC operations
-fn create_http_client() -> Result<reqwest::Client> {
-    reqwest::ClientBuilder::new()
-        .redirect(reqwest::redirect::Policy::limited(5))
-        .build()
-        .map_err(|e| anyhow!("Failed to create HTTP client: {e:?}"))
-}
-
 impl AuthState {
     pub async fn get_oidc_provider(&self) -> Result<&OidcProviderInfo> {
         let config = self.config.clone();
@@ -222,13 +214,6 @@ struct IdTokenClaims {
 const ID_TOKEN_COOKIE: &str = "id_token"; // ID token (JWT) for user info and FlightSQL API authorization
 const REFRESH_TOKEN_COOKIE: &str = "refresh_token";
 const OAUTH_STATE_COOKIE: &str = "oauth_state";
-
-/// Generate a random nonce
-pub fn generate_nonce() -> String {
-    let mut rng = rand::thread_rng();
-    let bytes: [u8; 32] = rng.r#gen();
-    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
-}
 
 /// Create a cookie with common settings
 pub fn create_cookie<'a>(

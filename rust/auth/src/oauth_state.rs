@@ -35,6 +35,7 @@
 use anyhow::{Result, anyhow};
 use base64::Engine;
 use hmac::{Hmac, Mac};
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 
@@ -50,6 +51,25 @@ pub struct OAuthState {
     pub return_url: String,
     /// PKCE code verifier for OAuth PKCE flow
     pub pkce_verifier: String,
+}
+
+/// Generate a cryptographically secure random nonce
+///
+/// Returns a 32-byte random value encoded as base64url (URL-safe, no padding).
+/// Suitable for use in OAuth state parameters, CSRF tokens, and PKCE challenges.
+///
+/// # Example
+///
+/// ```rust
+/// use micromegas_auth::oauth_state::generate_nonce;
+///
+/// let nonce = generate_nonce();
+/// assert_eq!(nonce.len(), 43); // 32 bytes base64url = 43 chars
+/// ```
+pub fn generate_nonce() -> String {
+    let mut rng = rand::thread_rng();
+    let bytes: [u8; 32] = rng.r#gen();
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
 }
 
 /// Sign OAuth state parameter with HMAC-SHA256 to prevent tampering
@@ -86,7 +106,7 @@ pub fn sign_state(state: &OAuthState, secret: &[u8]) -> Result<String> {
     let signed = format!(
         "{}.{}",
         base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&state_json),
-        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&signature)
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(signature)
     );
     Ok(signed)
 }

@@ -1,12 +1,13 @@
 //! Unit tests for auth module helper functions
 
 use analytics_web_srv::auth::{
-    AuthApiError, AuthState, OidcClientConfig, clear_cookie, create_cookie, generate_nonce,
+    AuthApiError, AuthState, OidcClientConfig, clear_cookie, create_cookie,
 };
 use axum::response::IntoResponse;
 use axum_extra::extract::cookie::SameSite;
 use base64::Engine;
 use http::StatusCode;
+use micromegas_auth::oauth_state::generate_nonce;
 use std::sync::Arc;
 
 fn create_test_auth_state() -> AuthState {

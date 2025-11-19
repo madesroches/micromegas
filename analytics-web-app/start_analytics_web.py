@@ -136,6 +136,8 @@ def setup_environment():
                     print_status("Auth token provided", "info")
                 else:
                     print_status("No auth token (development mode)", "info")
+            elif key == "MICROMEGAS_STATE_SECRET":
+                print_status(f"Set {key}=<generated>", "info")
             else:
                 print_status(f"Set {key}={default_value}", "info")
 
