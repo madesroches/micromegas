@@ -98,3 +98,6 @@ pub mod url_validation;
 
 /// OAuth state parameter signing and verification
 pub mod oauth_state;
+
+/// User attribution validation (prevents impersonation attacks)
+pub mod user_attribution;

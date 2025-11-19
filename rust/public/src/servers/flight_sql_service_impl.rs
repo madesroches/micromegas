@@ -38,6 +38,7 @@ use micromegas_analytics::lakehouse::session_configurator::SessionConfigurator;
 use micromegas_analytics::lakehouse::view_factory::ViewFactory;
 use micromegas_analytics::replication::bulk_ingest;
 use micromegas_analytics::time::TimeRange;
+use micromegas_auth::user_attribution::validate_and_resolve_user_attribution_grpc;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_tracing::prelude::*;
 use once_cell::sync::Lazy;
@@ -214,24 +215,27 @@ impl FlightSqlServiceImpl {
             None
         };
 
-        // Extract user attribution from metadata
-        let user_id = metadata
-            .get("x-user-id")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("unknown");
-        let user_email = metadata
-            .get("x-user-email")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("unknown");
+        // Validate and resolve user attribution
+        let (user_id, user_email, service_account) =
+            validate_and_resolve_user_attribution_grpc(metadata).map_err(|e| *e)?;
+
         let client_type = metadata
             .get("x-client-type")
             .and_then(|v| v.to_str().ok())
             .unwrap_or("unknown");
 
-        info!(
-            "execute_query range={query_range:?} sql={sql:?} limit={:?} user={user_id} email={user_email} client={client_type}",
-            metadata.get("limit")
-        );
+        // Log query with full attribution
+        if let Some(service_account_name) = &service_account {
+            info!(
+                "execute_query range={query_range:?} sql={sql:?} limit={:?} user={user_id} email={user_email} service_account={service_account_name} client={client_type}",
+                metadata.get("limit")
+            );
+        } else {
+            info!(
+                "execute_query range={query_range:?} sql={sql:?} limit={:?} user={user_id} email={user_email} client={client_type}",
+                metadata.get("limit")
+            );
+        }
 
         // Session context creation phase
         let session_begin = now();

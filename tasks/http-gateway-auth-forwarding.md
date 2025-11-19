@@ -364,76 +364,70 @@ INFO execute_query range=None sql="SELECT * FROM streams" limit=None user=unknow
 
 ## Implementation Phases
 
-### Phase 1: FlightSQL User Impersonation Prevention (CRITICAL)
+### Phase 1: FlightSQL User Impersonation Prevention (CRITICAL) ✅ COMPLETED
 **Goal**: Prevent OIDC users from impersonating others while allowing service account delegation
 
-**This MUST be completed first** - without this, users can forge `x-user-id`/`x-user-email` headers to impersonate others.
+**Status**: ✅ Completed - All tasks finished and tested
 
-1. Update `AuthContext` in `rust/auth/src/types.rs`
-   - Add `auth_type: AuthType` field (Oidc, ApiKey, ClientCredentials)
-   - Add `allow_delegation: bool` field
-   - Set based on how authentication was performed
+#### Completed Tasks:
 
-2. Update authentication providers in `rust/auth/src/`
-   - `oidc.rs`: Set `auth_type: AuthType::Oidc`, `allow_delegation: false`
-   - `api_key.rs`: Set `auth_type: AuthType::ApiKey`, `allow_delegation: true`
-   - Update `AuthContext` construction in both providers
+1. ✅ **Updated `AuthContext`** in `rust/auth/src/types.rs:31`
+   - Added `allow_delegation: bool` field
+   - Field indicates whether authentication allows user delegation
+   - `auth_type: AuthType` field already existed
 
-3. Add user attribution validation in FlightSQL
-   - **Location**: `rust/public/src/servers/flight_sql_service_impl.rs` or auth interceptor
-   - **Logic**: After authentication, before query execution
-   ```rust
-   fn validate_user_attribution(
-       auth_ctx: &AuthContext,
-       metadata: &MetadataMap,
-   ) -> Result<(String, String), Status> {
-       let claimed_user_id = metadata.get("x-user-id");
-       let claimed_email = metadata.get("x-user-email");
+2. ✅ **Updated authentication providers** in `rust/auth/src/`
+   - `oidc.rs:447`: Set `allow_delegation: false` - OIDC users cannot impersonate
+   - `api_key.rs:125`: Set `allow_delegation: true` - Service accounts can delegate
+   - Added security comments documenting admin restrictions (API keys always `is_admin: false`)
 
-       if !auth_ctx.allow_delegation {
-           // OIDC user token - must match token claims
-           if let Some(claimed) = claimed_user_id {
-               if claimed != auth_ctx.subject {
-                   return Err(Status::permission_denied(
-                       "x-user-id must match OIDC token subject"
-                   ));
-               }
-           }
-           if let Some(claimed) = claimed_email {
-               if Some(claimed.to_string()) != auth_ctx.email {
-                   return Err(Status::permission_denied(
-                       "x-user-email must match OIDC token email"
-                   ));
-               }
-           }
-           // Use token claims
-           Ok((auth_ctx.subject.clone(),
-               auth_ctx.email.clone().unwrap_or_else(|| "unknown".to_string())))
-       } else {
-           // Service account - can delegate
-           let user_id = claimed_user_id
-               .map(|s| s.to_string())
-               .unwrap_or_else(|| auth_ctx.subject.clone());
-           let user_email = claimed_email
-               .map(|s| s.to_string())
-               .unwrap_or_else(|| "service-account".to_string());
-           Ok((user_id, user_email))
-       }
-   }
-   ```
+3. ✅ **Created user attribution validation module** `rust/auth/src/user_attribution.rs`
+   - **New reusable function**: `validate_and_resolve_user_attribution()`
+   - Validates `x-user-id` and `x-user-email` headers against authenticated identity
+   - **OIDC users**: Headers MUST match token claims or return 403 Forbidden
+   - **API keys**: Can specify user on behalf of (delegation allowed)
+   - **Unauthenticated**: Pass through client-provided attribution
+   - Returns `(user_id, user_email, service_account_name)` tuple
+   - Integrated into FlightSQL service at `rust/public/src/servers/flight_sql_service_impl.rs:220`
 
-4. Update query logging
-   - Log service account identity when delegation is used
-   - Example: `user=alice@example.com service_account=backend-service client=web+gateway`
+4. ✅ **Updated Tower authentication service** `rust/auth/src/tower.rs:102-122`
+   - Injects authentication metadata into gRPC headers:
+     - `x-auth-subject`: Authenticated user's subject/ID
+     - `x-auth-email`: Authenticated user's email
+     - `x-auth-issuer`: Authentication issuer
+     - `x-allow-delegation`: Whether delegation is allowed
 
-5. Testing
-   - **Test OIDC user with matching headers**: 200 OK
-   - **Test OIDC user with no user headers**: 200 OK (uses token claims)
-   - **Test OIDC user with mismatched x-user-id**: 403 Forbidden
-   - **Test OIDC user with mismatched x-user-email**: 403 Forbidden
-   - **Test API key with x-user-id delegation**: 200 OK
-   - **Test API key without delegation**: 200 OK (uses service account name)
-   - Verify query logs show correct user attribution in all cases
+5. ✅ **Updated query logging** in FlightSQL service
+   - Logs service account identity when delegation is used
+   - Example with delegation: `user=alice@example.com service_account=backend-service client=web+gateway`
+   - Example without delegation: `user=alice@example.com email=alice@example.com client=web`
+
+6. ✅ **Comprehensive test coverage** - 8 tests in `rust/auth/src/user_attribution.rs:119-309`
+   - ✅ OIDC user with matching headers → 200 OK
+   - ✅ OIDC user with no user headers → 200 OK (uses token claims)
+   - ✅ OIDC user with mismatched x-user-id → 403 Forbidden
+   - ✅ OIDC user with mismatched x-user-email → 403 Forbidden
+   - ✅ API key with x-user-id delegation → 200 OK
+   - ✅ API key without delegation → 200 OK (uses service account name)
+   - ✅ Unauthenticated with user headers → 200 OK
+   - ✅ Unauthenticated without user headers → 200 OK (defaults to unknown)
+   - All tests passing ✅
+
+#### Security Benefits Achieved:
+- ✅ Prevents OIDC user impersonation (Alice cannot claim to be Bob)
+- ✅ Allows service account delegation (Backend services can act on behalf of users)
+- ✅ Enforces admin-only for OIDC (API keys can never be admins)
+- ✅ Complete audit trail (Logs show both acting user and service account when delegation occurs)
+
+#### Phase 1 Success Criteria - All Met ✅:
+- ✅ User impersonation prevention implemented and tested
+- ✅ OIDC users cannot forge x-user-id or x-user-email headers
+- ✅ API keys can delegate (act on behalf of users)
+- ✅ FlightSQL validates user attribution against authentication context
+- ✅ Query logs show service account when delegation is used
+- ✅ 8 comprehensive tests covering all scenarios (100% passing)
+- ✅ No breaking changes to existing authentication flows
+- ✅ API keys cannot be admins (hardcoded to false)
 
 ### Phase 2: Gateway Origin Tracking and Basic Header Forwarding
 **Goal**: Add gateway origin tracking and configurable header forwarding

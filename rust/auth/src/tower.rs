@@ -98,22 +98,34 @@ where
                             auth_ctx.subject, auth_ctx.email, auth_ctx.issuer, auth_ctx.is_admin
                         );
 
+                        // SECURITY: Remove any client-provided auth headers to prevent spoofing
+                        // These headers are only set by the authentication layer
+                        parts.headers.remove("x-auth-subject");
+                        parts.headers.remove("x-auth-email");
+                        parts.headers.remove("x-auth-issuer");
+                        parts.headers.remove("x-allow-delegation");
+
                         // Inject auth context into gRPC metadata headers
                         parts.headers.insert(
-                            "x-user-id",
+                            "x-auth-subject",
                             http::HeaderValue::from_str(&auth_ctx.subject)
                                 .expect("valid user id header"),
                         );
                         if let Some(email) = &auth_ctx.email {
                             parts.headers.insert(
-                                "x-user-email",
+                                "x-auth-email",
                                 http::HeaderValue::from_str(email).expect("valid email header"),
                             );
                         }
                         parts.headers.insert(
-                            "x-user-issuer",
+                            "x-auth-issuer",
                             http::HeaderValue::from_str(&auth_ctx.issuer)
                                 .expect("valid issuer header"),
+                        );
+                        parts.headers.insert(
+                            "x-allow-delegation",
+                            http::HeaderValue::from_str(&auth_ctx.allow_delegation.to_string())
+                                .expect("valid allow_delegation header"),
                         );
 
                         parts.extensions.insert(auth_ctx);

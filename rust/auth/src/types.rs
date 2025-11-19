@@ -25,6 +25,10 @@ pub struct AuthContext {
     pub auth_type: AuthType,
     /// Whether this user has admin privileges
     pub is_admin: bool,
+    /// Whether this authentication allows user delegation (acting on behalf of others)
+    /// - OIDC user tokens: false (user cannot impersonate others)
+    /// - API keys/service accounts: true (can act on behalf of users)
+    pub allow_delegation: bool,
 }
 
 /// Trait for extracting authentication-relevant data from requests
