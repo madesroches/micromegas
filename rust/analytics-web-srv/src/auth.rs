@@ -19,6 +19,7 @@ use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
 use base64::Engine;
 use chrono::Utc;
 use micromegas::tracing::prelude::*;
+use micromegas_auth::url_validation::validate_return_url;
 use openidconnect::{
     AuthenticationFlow, CsrfToken, Nonce, PkceCodeChallenge, Scope,
     core::{CoreProviderMetadata, CoreResponseType},
@@ -26,7 +27,6 @@ use openidconnect::{
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use url::Url;
 
 /// Type alias for the OIDC client with endpoints set from provider metadata
 type ConfiguredCoreClient = openidconnect::Client<
@@ -236,25 +236,6 @@ fn generate_nonce() -> String {
     let mut rng = rand::thread_rng();
     let bytes: [u8; 32] = rng.r#gen();
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
-}
-
-/// Validate return URL is a safe relative path
-fn validate_return_url(url: &str) -> bool {
-    // Must start with /
-    if !url.starts_with('/') {
-        return false;
-    }
-    // Must not contain protocol markers
-    if url.contains("://") || url.starts_with("//") {
-        return false;
-    }
-    // Check it parses as a valid relative URL
-    Url::options()
-        .base_url(Some(
-            &Url::parse("http://localhost").expect("base URL should parse"),
-        ))
-        .parse(url)
-        .is_ok()
 }
 
 /// Create a cookie with common settings
@@ -762,37 +743,6 @@ pub struct AuthToken(pub String);
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_validate_return_url_valid_paths() {
-        assert!(validate_return_url("/"));
-        assert!(validate_return_url("/dashboard"));
-        assert!(validate_return_url("/process/123"));
-        assert!(validate_return_url("/path/to/resource?query=value"));
-        assert!(validate_return_url("/path#anchor"));
-        assert!(validate_return_url("/path?a=1&b=2"));
-    }
-
-    #[test]
-    fn test_validate_return_url_rejects_absolute_urls() {
-        assert!(!validate_return_url("https://evil.com"));
-        assert!(!validate_return_url("http://evil.com/path"));
-        assert!(!validate_return_url("//evil.com/path"));
-        assert!(!validate_return_url("javascript://alert(1)"));
-    }
-
-    #[test]
-    fn test_validate_return_url_rejects_non_slash_start() {
-        assert!(!validate_return_url("path/to/resource"));
-        assert!(!validate_return_url("dashboard"));
-        assert!(!validate_return_url(""));
-    }
-
-    #[test]
-    fn test_validate_return_url_rejects_protocol_markers() {
-        assert!(!validate_return_url("/path://something"));
-        assert!(!validate_return_url("/foo://bar"));
-    }
 
     #[test]
     fn test_generate_nonce_uniqueness() {

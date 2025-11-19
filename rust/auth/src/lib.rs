@@ -92,3 +92,6 @@ pub mod tower;
 
 /// Axum middleware for HTTP authentication
 pub mod axum;
+
+/// URL validation utilities for authentication flows
+pub mod url_validation;

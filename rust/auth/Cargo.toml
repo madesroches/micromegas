@@ -21,6 +21,7 @@ jsonwebtoken.workspace = true
 micromegas-tracing.workspace = true
 moka.workspace = true
 openidconnect.workspace = true
+percent-encoding = "2.3"
 rand.workspace = true
 reqwest.workspace = true
 rsa.workspace = true
@@ -29,6 +30,7 @@ serde_json.workspace = true
 subtle.workspace = true
 tonic.workspace = true
 tower.workspace = true
+url.workspace = true
 
 [dev-dependencies]
 tokio.workspace = true
