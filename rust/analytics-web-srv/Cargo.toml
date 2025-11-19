@@ -27,7 +27,6 @@ http.workspace = true
 micromegas-auth.workspace = true
 openidconnect.workspace = true
 rand.workspace = true
-reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 time = "0.3"
