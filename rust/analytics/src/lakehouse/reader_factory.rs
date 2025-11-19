@@ -2,7 +2,7 @@ use super::partition_metadata::load_partition_metadata;
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use datafusion::{
-    datasource::physical_plan::{FileMeta, ParquetFileReaderFactory},
+    datasource::{listing::PartitionedFile, physical_plan::ParquetFileReaderFactory},
     parquet::{
         arrow::{
             arrow_reader::ArrowReaderOptions,
@@ -50,14 +50,14 @@ impl ParquetFileReaderFactory for ReaderFactory {
     fn create_reader(
         &self,
         _partition_index: usize,
-        file_meta: FileMeta,
+        partitioned_file: PartitionedFile,
         metadata_size_hint: Option<usize>,
         _metrics: &ExecutionPlanMetricsSet,
     ) -> datafusion::error::Result<Box<dyn AsyncFileReader + Send>> {
         // todo: don't ignore metrics, report performance of the reader
-        let filename = file_meta.location().to_string();
+        let filename = partitioned_file.path().to_string();
         let object_store = Arc::clone(&self.object_store);
-        let mut inner = ParquetObjectReader::new(object_store, file_meta.location().clone());
+        let mut inner = ParquetObjectReader::new(object_store, partitioned_file.path().clone());
         if let Some(hint) = metadata_size_hint {
             inner = inner.with_footer_size_hint(hint)
         };

@@ -62,7 +62,7 @@ pub fn make_partitioned_execution_plan(
     );
     let file_scan_config = FileScanConfigBuilder::new(object_store_url, schema, source)
         .with_limit(limit)
-        .with_projection(projection.cloned())
+        .with_projection_indices(projection.cloned())
         .with_file_groups(vec![file_group.into()])
         .build();
     Ok(Arc::new(DataSourceExec::new(Arc::new(file_scan_config))))

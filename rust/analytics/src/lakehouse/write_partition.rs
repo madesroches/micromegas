@@ -7,13 +7,12 @@ use chrono::{DateTime, TimeDelta, Utc};
 use datafusion::{
     arrow::{array::RecordBatch, datatypes::Schema},
     parquet::{
-        arrow::{ArrowSchemaConverter, AsyncArrowWriter},
+        arrow::AsyncArrowWriter,
         basic::Compression,
         file::{
-            metadata::{ParquetMetaData, RowGroupMetaData},
+            metadata::ParquetMetaData,
             properties::{WriterProperties, WriterVersion},
         },
-        schema::types::SchemaDescriptor,
     },
 };
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
@@ -452,11 +451,9 @@ async fn write_rows_and_track_times(
 }
 
 /// Finalizes the partition write, closing the file and creating metadata.
-#[expect(clippy::too_many_arguments)]
 async fn finalize_partition_write(
     event_time_range: Option<TimeRange>,
     arrow_writer: AsyncArrowWriter<AsyncParquetWriter>,
-    file_schema: &Arc<Schema>,
     file_path: String,
     byte_counter: &Arc<AtomicI64>,
     logger: &Arc<dyn Logger>,
@@ -468,8 +465,8 @@ async fn finalize_partition_write(
         let close_result = arrow_writer.close().await;
 
         match close_result {
-            Ok(thrift_file_meta) => {
-                let num_rows = thrift_file_meta.num_rows;
+            Ok(parquet_metadata) => {
+                let num_rows = parquet_metadata.file_metadata().num_rows();
 
                 // Check if the file actually contains rows
                 // Even if we tracked event times, the file might be empty
@@ -503,10 +500,7 @@ async fn finalize_partition_write(
                     num_rows,
                     byte_counter.load(std::sync::atomic::Ordering::Relaxed)
                 );
-                let file_metadata = Arc::new(
-                    to_parquet_meta_data(file_schema, thrift_file_meta)
-                        .with_context(|| "to_parquet_meta_data")?,
-                );
+                let file_metadata = Arc::new(parquet_metadata);
                 let file_size = byte_counter.load(std::sync::atomic::Ordering::Relaxed);
                 Ok(PartitionWriteResult {
                     num_rows,
@@ -609,7 +603,6 @@ pub async fn write_partition_from_rows(
     let result = finalize_partition_write(
         event_time_range,
         arrow_writer,
-        &file_schema,
         file_path,
         &byte_counter,
         &logger,
@@ -636,62 +629,4 @@ pub async fn write_partition_from_rows(
     .await
     .with_context(|| "insert_partition")?;
     Ok(())
-}
-// from parquet/src/file/footer.rs
-fn parse_column_orders(
-    t_column_orders: Option<Vec<datafusion::parquet::format::ColumnOrder>>,
-    schema_descr: &SchemaDescriptor,
-) -> Option<Vec<datafusion::parquet::basic::ColumnOrder>> {
-    match t_column_orders {
-        Some(orders) => {
-            // Should always be the case
-            assert_eq!(
-                orders.len(),
-                schema_descr.num_columns(),
-                "Column order length mismatch"
-            );
-            let mut res = Vec::new();
-            for (i, column) in schema_descr.columns().iter().enumerate() {
-                match orders[i] {
-                    datafusion::parquet::format::ColumnOrder::TYPEORDER(_) => {
-                        let sort_order = datafusion::parquet::basic::ColumnOrder::get_sort_order(
-                            column.logical_type(),
-                            column.converted_type(),
-                            column.physical_type(),
-                        );
-                        res.push(datafusion::parquet::basic::ColumnOrder::TYPE_DEFINED_ORDER(
-                            sort_order,
-                        ));
-                    }
-                }
-            }
-            Some(res)
-        }
-        None => None,
-    }
-}
-
-fn to_parquet_meta_data(
-    schema: &Schema,
-    thrift_file_meta: datafusion::parquet::format::FileMetaData,
-) -> Result<ParquetMetaData> {
-    let schema_descr = Arc::new(ArrowSchemaConverter::new().convert(schema)?);
-    let mut groups = vec![];
-    for rg in thrift_file_meta.row_groups {
-        groups.push(
-            RowGroupMetaData::from_thrift(schema_descr.clone(), rg)
-                .with_context(|| "RowGroupMetaData::from_thrift")?,
-        );
-    }
-    Ok(ParquetMetaData::new(
-        datafusion::parquet::file::metadata::FileMetaData::new(
-            thrift_file_meta.version,
-            thrift_file_meta.num_rows,
-            thrift_file_meta.created_by,
-            thrift_file_meta.key_value_metadata,
-            schema_descr.clone(),
-            parse_column_orders(thrift_file_meta.column_orders, &schema_descr),
-        ),
-        groups,
-    ))
 }
