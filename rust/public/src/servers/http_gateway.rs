@@ -327,28 +327,31 @@ pub async fn handle_query(
     }
 
     // Execute query with error handling
-    let batches = client.query(sql.to_string(), time_range).await.map_err(|e| {
-        // Map tonic errors to appropriate HTTP status codes
-        if let Some(status) = e.downcast_ref::<tonic::Status>() {
-            match status.code() {
-                tonic::Code::Unauthenticated => {
-                    GatewayError::Unauthorized(status.message().to_string())
+    let batches = client
+        .query(sql.to_string(), time_range)
+        .await
+        .map_err(|e| {
+            // Map tonic errors to appropriate HTTP status codes
+            if let Some(status) = e.downcast_ref::<tonic::Status>() {
+                match status.code() {
+                    tonic::Code::Unauthenticated => {
+                        GatewayError::Unauthorized(status.message().to_string())
+                    }
+                    tonic::Code::PermissionDenied => {
+                        GatewayError::Forbidden(status.message().to_string())
+                    }
+                    tonic::Code::InvalidArgument => {
+                        GatewayError::BadRequest(status.message().to_string())
+                    }
+                    tonic::Code::Unavailable => {
+                        GatewayError::ServiceUnavailable(status.message().to_string())
+                    }
+                    _ => GatewayError::Internal(format!("Query failed: {}", status.message())),
                 }
-                tonic::Code::PermissionDenied => {
-                    GatewayError::Forbidden(status.message().to_string())
-                }
-                tonic::Code::InvalidArgument => {
-                    GatewayError::BadRequest(status.message().to_string())
-                }
-                tonic::Code::Unavailable => {
-                    GatewayError::ServiceUnavailable(status.message().to_string())
-                }
-                _ => GatewayError::Internal(format!("Query failed: {}", status.message())),
+            } else {
+                GatewayError::Internal(format!("Query execution error: {e:?}"))
             }
-        } else {
-            GatewayError::Internal(format!("Query execution error: {e:?}"))
-        }
-    })?;
+        })?;
 
     let elapsed = start_time.elapsed();
     info!(
