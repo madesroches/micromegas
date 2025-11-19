@@ -39,6 +39,7 @@ use micromegas_auth::{axum::auth_middleware, types::AuthProvider};
 use queries::{
     query_all_processes, query_log_entries, query_nb_trace_events, query_process_statistics,
 };
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, pin::Pin, sync::Arc, time::Duration};
 use tower_http::{
@@ -199,11 +200,17 @@ async fn main() -> Result<()> {
             .map(|v| v == "true" || v == "1")
             .unwrap_or(false);
 
+        // Generate random secret for signing OAuth state parameters
+        // This prevents CSRF attacks by ensuring state cannot be tampered with
+        let mut rng = rand::thread_rng();
+        let state_signing_secret: Vec<u8> = (0..32).map(|_| rng.r#gen::<u8>()).collect();
+
         let auth_state = AuthState {
             oidc_provider: Arc::new(tokio::sync::OnceCell::new()),
             config: oidc_config,
             cookie_domain,
             secure_cookies,
+            state_signing_secret,
         };
 
         Some(

@@ -88,6 +88,9 @@ fn create_expired_token(keypair: &TestKeyPair, subject: &str) -> String {
 }
 
 fn create_test_auth_state() -> AuthState {
+    // Use a fixed secret for testing
+    let state_signing_secret = b"test-secret-key-32-bytes-long!!!".to_vec();
+
     AuthState {
         oidc_provider: Arc::new(tokio::sync::OnceCell::new()),
         config: OidcClientConfig {
@@ -97,6 +100,7 @@ fn create_test_auth_state() -> AuthState {
         },
         cookie_domain: None,
         secure_cookies: false,
+        state_signing_secret,
     }
 }
 

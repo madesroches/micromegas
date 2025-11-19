@@ -19,6 +19,7 @@ use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
 use base64::Engine;
 use chrono::Utc;
 use micromegas::tracing::prelude::*;
+use micromegas_auth::oauth_state::{OAuthState, sign_state, verify_state};
 use micromegas_auth::url_validation::validate_return_url;
 use openidconnect::{
     AuthenticationFlow, CsrfToken, Nonce, PkceCodeChallenge, Scope,
@@ -131,6 +132,8 @@ pub struct AuthState {
     pub cookie_domain: Option<String>,
     /// Whether we're in production (secure cookies)
     pub secure_cookies: bool,
+    /// Secret for signing OAuth state parameters (HMAC-SHA256)
+    pub state_signing_secret: Vec<u8>,
 }
 
 /// Create HTTP client for OIDC operations
@@ -185,17 +188,6 @@ pub struct LoginQuery {
     return_url: Option<String>,
 }
 
-/// State stored in OAuth state parameter
-#[derive(Debug, Serialize, Deserialize)]
-struct OAuthState {
-    /// CSRF nonce for validation
-    nonce: String,
-    /// URL to redirect to after login
-    return_url: String,
-    /// PKCE code verifier
-    pkce_verifier: String,
-}
-
 /// Query parameters for callback endpoint
 #[derive(Debug, Deserialize)]
 pub struct CallbackQuery {
@@ -232,14 +224,14 @@ const REFRESH_TOKEN_COOKIE: &str = "refresh_token";
 const OAUTH_STATE_COOKIE: &str = "oauth_state";
 
 /// Generate a random nonce
-fn generate_nonce() -> String {
+pub fn generate_nonce() -> String {
     let mut rng = rand::thread_rng();
     let bytes: [u8; 32] = rng.r#gen();
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
 }
 
 /// Create a cookie with common settings
-fn create_cookie<'a>(
+pub fn create_cookie<'a>(
     name: &'a str,
     value: String,
     max_age_secs: i64,
@@ -260,7 +252,7 @@ fn create_cookie<'a>(
 }
 
 /// Create an expired cookie to clear it
-fn clear_cookie<'a>(name: &'a str, state: &AuthState) -> Cookie<'a> {
+pub fn clear_cookie<'a>(name: &'a str, state: &AuthState) -> Cookie<'a> {
     let mut cookie = Cookie::build((name, ""))
         .http_only(true)
         .secure(state.secure_cookies)
@@ -298,9 +290,9 @@ pub async fn auth_login(
         return_url,
         pkce_verifier: pkce_verifier.secret().to_string(),
     };
-    let state_json = serde_json::to_string(&oauth_state)
-        .map_err(|e| AuthApiError::Internal(format!("Failed to serialize state: {e:?}")))?;
-    let state_encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(state_json);
+    // Sign the state with HMAC-SHA256 to prevent tampering
+    let state_signed = sign_state(&oauth_state, &state.state_signing_secret)
+        .map_err(|e| AuthApiError::Internal(format!("Failed to sign state: {e:?}")))?;
 
     // Get OIDC provider and build client
     let provider = state
@@ -313,7 +305,7 @@ pub async fn auth_login(
     let (auth_url, _csrf_token, _nonce) = client
         .authorize_url(
             AuthenticationFlow::<CoreResponseType>::AuthorizationCode,
-            move || CsrfToken::new(state_encoded.clone()),
+            move || CsrfToken::new(state_signed.clone()),
             Nonce::new_random,
         )
         .add_scope(Scope::new("openid".to_string()))
@@ -339,15 +331,11 @@ pub async fn auth_callback(
     jar: CookieJar,
     Query(query): Query<CallbackQuery>,
 ) -> Result<impl IntoResponse, AuthApiError> {
-    // Decode state parameter
-    let state_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(query.state.as_bytes())
-        .map_err(|e| {
-            warn!("failed to decode state: {e:?}");
-            AuthApiError::InvalidState
-        })?;
-    let oauth_state: OAuthState =
-        serde_json::from_slice(&state_bytes).map_err(|_| AuthApiError::InvalidState)?;
+    // Verify and decode signed state parameter
+    let oauth_state = verify_state(&query.state, &state.state_signing_secret).map_err(|e| {
+        warn!("state verification failed: {e:?}");
+        AuthApiError::InvalidState
+    })?;
 
     // Validate nonce from cookie
     let cookie_nonce = jar
@@ -739,129 +727,3 @@ pub async fn cookie_auth_middleware(req: Request, next: Next) -> Result<Response
 /// Will be used to pass token to FlightSQL in future phases
 #[derive(Clone, Debug)]
 pub struct AuthToken(pub String);
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_generate_nonce_uniqueness() {
-        let nonce1 = generate_nonce();
-        let nonce2 = generate_nonce();
-        assert_ne!(nonce1, nonce2);
-    }
-
-    #[test]
-    fn test_generate_nonce_length() {
-        let nonce = generate_nonce();
-        // 32 bytes base64 encoded should be 43 characters (URL_SAFE_NO_PAD)
-        assert_eq!(nonce.len(), 43);
-    }
-
-    #[test]
-    fn test_generate_nonce_valid_base64() {
-        let nonce = generate_nonce();
-        let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(&nonce);
-        assert!(decoded.is_ok());
-        assert_eq!(decoded.expect("should decode").len(), 32);
-    }
-
-    #[test]
-    fn test_create_cookie_basic_properties() {
-        let state = AuthState {
-            oidc_provider: Arc::new(tokio::sync::OnceCell::new()),
-            config: OidcClientConfig {
-                issuer: "https://issuer.example.com".to_string(),
-                client_id: "test-client".to_string(),
-                redirect_uri: "http://localhost:3000/auth/callback".to_string(),
-            },
-            cookie_domain: None,
-            secure_cookies: false,
-        };
-
-        let cookie = create_cookie("test_cookie", "test_value".to_string(), 3600, &state);
-        assert_eq!(cookie.name(), "test_cookie");
-        assert_eq!(cookie.value(), "test_value");
-        assert!(cookie.http_only().unwrap_or(false));
-        assert_eq!(cookie.path().unwrap_or(""), "/");
-        assert_eq!(cookie.same_site(), Some(SameSite::Lax));
-    }
-
-    #[test]
-    fn test_create_cookie_secure_flag() {
-        let state = AuthState {
-            oidc_provider: Arc::new(tokio::sync::OnceCell::new()),
-            config: OidcClientConfig {
-                issuer: "https://issuer.example.com".to_string(),
-                client_id: "test-client".to_string(),
-                redirect_uri: "http://localhost:3000/auth/callback".to_string(),
-            },
-            cookie_domain: None,
-            secure_cookies: true,
-        };
-
-        let cookie = create_cookie("secure_cookie", "value".to_string(), 3600, &state);
-        assert!(cookie.secure().unwrap_or(false));
-    }
-
-    #[test]
-    fn test_create_cookie_with_domain() {
-        let state = AuthState {
-            oidc_provider: Arc::new(tokio::sync::OnceCell::new()),
-            config: OidcClientConfig {
-                issuer: "https://issuer.example.com".to_string(),
-                client_id: "test-client".to_string(),
-                redirect_uri: "http://localhost:3000/auth/callback".to_string(),
-            },
-            cookie_domain: Some(".example.com".to_string()),
-            secure_cookies: false,
-        };
-
-        let cookie = create_cookie("domain_cookie", "value".to_string(), 3600, &state);
-        // Cookie library strips leading dot from domain
-        assert_eq!(cookie.domain(), Some("example.com"));
-    }
-
-    #[test]
-    fn test_clear_cookie_expires_immediately() {
-        let state = AuthState {
-            oidc_provider: Arc::new(tokio::sync::OnceCell::new()),
-            config: OidcClientConfig {
-                issuer: "https://issuer.example.com".to_string(),
-                client_id: "test-client".to_string(),
-                redirect_uri: "http://localhost:3000/auth/callback".to_string(),
-            },
-            cookie_domain: None,
-            secure_cookies: false,
-        };
-
-        let cookie = clear_cookie("expired_cookie", &state);
-        assert_eq!(cookie.name(), "expired_cookie");
-        assert_eq!(cookie.value(), "");
-        assert_eq!(cookie.max_age(), Some(time::Duration::seconds(0)));
-    }
-
-    #[test]
-    fn test_auth_api_error_status_codes() {
-        use axum::response::IntoResponse;
-        use http::StatusCode;
-
-        let invalid_url_resp = AuthApiError::InvalidReturnUrl.into_response();
-        assert_eq!(invalid_url_resp.status(), StatusCode::BAD_REQUEST);
-
-        let invalid_state_resp = AuthApiError::InvalidState.into_response();
-        assert_eq!(invalid_state_resp.status(), StatusCode::BAD_REQUEST);
-
-        let token_failed_resp = AuthApiError::TokenExchangeFailed.into_response();
-        assert_eq!(token_failed_resp.status(), StatusCode::UNAUTHORIZED);
-
-        let unauthorized_resp = AuthApiError::Unauthorized.into_response();
-        assert_eq!(unauthorized_resp.status(), StatusCode::UNAUTHORIZED);
-
-        let invalid_token_resp = AuthApiError::InvalidToken.into_response();
-        assert_eq!(invalid_token_resp.status(), StatusCode::UNAUTHORIZED);
-
-        let internal_resp = AuthApiError::Internal("test error".to_string()).into_response();
-        assert_eq!(internal_resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
-    }
-}

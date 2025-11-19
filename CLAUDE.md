@@ -17,6 +17,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Use inline format arguments: `format!("value: {variable}")`
 - Import proc macros through parent crate: `micromegas_tracing::prelude::*`
 - Always use `prelude::*` when importing from prelude modules
+- Unit tests should not be with the lib implementation, unit tests should be under the tests folder of the crate
 
 ### General
 - Follow existing code conventions and patterns
