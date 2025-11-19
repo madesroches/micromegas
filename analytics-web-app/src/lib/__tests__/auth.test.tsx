@@ -75,11 +75,18 @@ describe('AuthProvider', () => {
     )
   })
 
-  it('should handle unauthenticated status (401)', async () => {
-    ;(global.fetch as jest.Mock).mockResolvedValueOnce({
-      ok: false,
-      status: 401,
-    })
+  it('should handle unauthenticated status (401) and attempt refresh', async () => {
+    ;(global.fetch as jest.Mock)
+      // First call to /auth/me returns 401
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 401,
+      })
+      // Second call to /auth/refresh fails (no valid refresh token)
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 401,
+      })
 
     render(
       <AuthProvider>
@@ -93,6 +100,74 @@ describe('AuthProvider', () => {
 
     expect(screen.getByTestId('user')).toHaveTextContent('null')
     expect(screen.getByTestId('error')).toHaveTextContent('null')
+
+    // Verify that refresh was attempted
+    expect(global.fetch).toHaveBeenCalledWith(
+      'http://localhost:8000/auth/refresh',
+      expect.objectContaining({
+        method: 'POST',
+        credentials: 'include',
+      })
+    )
+  })
+
+  it('should automatically refresh expired token and retry auth check', async () => {
+    ;(global.fetch as jest.Mock)
+      // First call to /auth/me returns 401 (expired token)
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 401,
+      })
+      // Second call to /auth/refresh succeeds
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+      })
+      // Third call to /auth/me succeeds with new token
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          sub: 'user123',
+          email: 'test@example.com',
+          name: 'Test User',
+        }),
+      })
+
+    render(
+      <AuthProvider>
+        <TestComponent />
+      </AuthProvider>
+    )
+
+    await waitFor(() => {
+      expect(screen.getByTestId('status')).toHaveTextContent('authenticated')
+    })
+
+    const user = JSON.parse(screen.getByTestId('user').textContent || '{}')
+    expect(user.sub).toBe('user123')
+    expect(user.email).toBe('test@example.com')
+
+    // Verify the full flow: /auth/me (401) -> /auth/refresh (200) -> /auth/me (200)
+    expect(global.fetch).toHaveBeenCalledTimes(3)
+    expect(global.fetch).toHaveBeenNthCalledWith(
+      1,
+      'http://localhost:8000/auth/me',
+      expect.any(Object)
+    )
+    expect(global.fetch).toHaveBeenNthCalledWith(
+      2,
+      'http://localhost:8000/auth/refresh',
+      expect.objectContaining({
+        method: 'POST',
+        credentials: 'include',
+      })
+    )
+    expect(global.fetch).toHaveBeenNthCalledWith(
+      3,
+      'http://localhost:8000/auth/me',
+      expect.any(Object)
+    )
   })
 
   it('should handle service unavailable error (500)', async () => {

@@ -30,7 +30,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [status, setStatus] = useState<AuthStatus>('loading')
   const [error, setError] = useState<string | null>(null)
 
-  const checkAuth = useCallback(async () => {
+  // Internal function to refresh tokens without triggering checkAuth
+  const refreshTokens = useCallback(async (): Promise<boolean> => {
+    try {
+      const response = await fetch(`${API_BASE}/auth/refresh`, {
+        method: 'POST',
+        credentials: 'include',
+      })
+
+      return response.ok
+    } catch {
+      return false
+    }
+  }, [])
+
+  const checkAuth = useCallback(async (skipRefresh = false) => {
     try {
       const response = await fetch(`${API_BASE}/auth/me`, {
         credentials: 'include',
@@ -42,9 +56,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setStatus('authenticated')
         setError(null)
       } else if (response.status === 401) {
-        setUser(null)
-        setStatus('unauthenticated')
-        setError(null)
+        // Token expired - try to refresh if we haven't already tried
+        if (!skipRefresh) {
+          const refreshed = await refreshTokens()
+          if (refreshed) {
+            // Retry checkAuth after successful refresh (but skip refresh retry to avoid loops)
+            await checkAuth(true)
+          } else {
+            // Refresh failed - user needs to login again
+            setUser(null)
+            setStatus('unauthenticated')
+            setError(null)
+          }
+        } else {
+          // Already tried refresh or explicitly skipped
+          setUser(null)
+          setStatus('unauthenticated')
+          setError(null)
+        }
       } else {
         setUser(null)
         setStatus('error')
@@ -55,7 +84,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setStatus('error')
       setError(err instanceof Error ? err.message : 'Network error')
     }
-  }, [])
+  }, [refreshTokens])
 
   useEffect(() => {
     checkAuth()
@@ -87,6 +116,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, [])
 
+  // Public refresh function that also updates auth state
   const refresh = useCallback(async (): Promise<boolean> => {
     try {
       const response = await fetch(`${API_BASE}/auth/refresh`, {
@@ -96,7 +126,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       if (response.ok) {
         // Re-check auth to update user info
-        await checkAuth()
+        await checkAuth(true) // Skip automatic refresh retry
         return true
       } else {
         setUser(null)
