@@ -101,17 +101,30 @@ impl HeaderForwardingConfig {
 
 #[derive(Error, Debug)]
 pub enum GatewayError {
+    #[error("Bad request: {0}")]
+    BadRequest(String),
+
+    #[error("Unauthorized: {0}")]
+    Unauthorized(String),
+
+    #[error("Forbidden: {0}")]
+    Forbidden(String),
+
+    #[error("Service unavailable: {0}")]
+    ServiceUnavailable(String),
+
     #[error("Internal server error: {0}")]
-    Internal(#[from] anyhow::Error),
+    Internal(String),
 }
 
 impl IntoResponse for GatewayError {
     fn into_response(self) -> Response<Body> {
-        let (status, message) = match &self {
-            GatewayError::Internal(err) => {
-                let msg = format!("{err:?}");
-                (StatusCode::INTERNAL_SERVER_ERROR, msg)
-            }
+        let (status, message) = match self {
+            GatewayError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
+            GatewayError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, msg),
+            GatewayError::Forbidden(msg) => (StatusCode::FORBIDDEN, msg),
+            GatewayError::ServiceUnavailable(msg) => (StatusCode::SERVICE_UNAVAILABLE, msg),
+            GatewayError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
         };
         (status, message).into_response()
     }
@@ -177,26 +190,10 @@ pub async fn handle_query(
     headers: HeaderMap,
     Json(request): Json<QueryRequest>,
 ) -> Result<String, GatewayError> {
-    let flight_url = std::env::var("MICROMEGAS_FLIGHTSQL_URL")
-        .with_context(|| "error reading MICROMEGAS_FLIGHTSQL_URL environment variable")?
-        .parse::<Uri>()
-        .with_context(|| "parsing flightsql url")?;
-    let tls_config = ClientTlsConfig::new().with_native_roots();
-    let channel = Channel::builder(flight_url)
-        .tls_config(tls_config)
-        .with_context(|| "tls_config")?
-        .connect()
-        .await
-        .with_context(|| "connecting grpc channel")?;
+    let start_time = std::time::Instant::now();
 
     // Build origin tracking metadata
     let origin_metadata = build_origin_metadata(&headers, &addr);
-
-    // Create client
-    let mut client = Client::new(channel);
-
-    // Set origin metadata as headers first
-    // These are: x-client-type, x-request-id, x-client-ip
     let client_type_header = origin_metadata
         .get("x-client-type")
         .and_then(|v| v.to_str().ok())
@@ -205,6 +202,48 @@ pub async fn handle_query(
         .get("x-request-id")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("unknown");
+
+    // Request validation
+    let sql = request.sql.trim();
+    if sql.is_empty() {
+        return Err(GatewayError::BadRequest(
+            "SQL query cannot be empty".to_string(),
+        ));
+    }
+
+    // Basic size limit (1MB for SQL query)
+    const MAX_SQL_SIZE: usize = 1_048_576;
+    if sql.len() > MAX_SQL_SIZE {
+        return Err(GatewayError::BadRequest(format!(
+            "SQL query too large: {} bytes (max: {} bytes)",
+            sql.len(),
+            MAX_SQL_SIZE
+        )));
+    }
+
+    info!(
+        "Gateway request: request_id={}, client_type={}, sql={}",
+        request_id_header, client_type_header, sql
+    );
+
+    // Connect to FlightSQL backend
+    let flight_url = std::env::var("MICROMEGAS_FLIGHTSQL_URL")
+        .map_err(|_| GatewayError::Internal("MICROMEGAS_FLIGHTSQL_URL not configured".to_string()))?
+        .parse::<Uri>()
+        .map_err(|e| GatewayError::Internal(format!("Invalid FlightSQL URL: {e}")))?;
+
+    let tls_config = ClientTlsConfig::new().with_native_roots();
+    let channel = Channel::builder(flight_url)
+        .tls_config(tls_config)
+        .map_err(|e| GatewayError::Internal(format!("TLS config error: {e}")))?
+        .connect()
+        .await
+        .map_err(|e| {
+            GatewayError::ServiceUnavailable(format!("Failed to connect to FlightSQL: {e}"))
+        })?;
+
+    // Create client and set headers
+    let mut client = Client::new(channel);
 
     client
         .inner_mut()
@@ -238,12 +277,36 @@ pub async fn handle_query(
         }
     }
 
+    // Execute query with error handling
+    let batches = client.query(sql.to_string(), None).await.map_err(|e| {
+        // Map tonic errors to appropriate HTTP status codes
+        if let Some(status) = e.downcast_ref::<tonic::Status>() {
+            match status.code() {
+                tonic::Code::Unauthenticated => {
+                    GatewayError::Unauthorized(status.message().to_string())
+                }
+                tonic::Code::PermissionDenied => {
+                    GatewayError::Forbidden(status.message().to_string())
+                }
+                tonic::Code::InvalidArgument => {
+                    GatewayError::BadRequest(status.message().to_string())
+                }
+                tonic::Code::Unavailable => {
+                    GatewayError::ServiceUnavailable(status.message().to_string())
+                }
+                _ => GatewayError::Internal(format!("Query failed: {}", status.message())),
+            }
+        } else {
+            GatewayError::Internal(format!("Query execution error: {e:?}"))
+        }
+    })?;
+
+    let elapsed = start_time.elapsed();
     info!(
-        "Gateway request: request_id={}, client_type={}, sql={}",
-        request_id_header, client_type_header, &request.sql
+        "Gateway request completed: request_id={}, duration={:?}",
+        request_id_header, elapsed
     );
 
-    let batches = client.query(request.sql, None).await?;
     if batches.is_empty() {
         return Ok("[]".to_string());
     }
@@ -253,9 +316,13 @@ pub async fn handle_query(
     let batch_refs: Vec<&RecordBatch> = batches.iter().collect();
     json_writer
         .write_batches(&batch_refs)
-        .with_context(|| "json_writer.write_batches")?;
-    json_writer.finish().unwrap();
-    Ok(String::from_utf8(buffer).with_context(|| "converting json buffer to utf8")?)
+        .map_err(|e| GatewayError::Internal(format!("Failed to serialize results: {e}")))?;
+    json_writer
+        .finish()
+        .map_err(|e| GatewayError::Internal(format!("Failed to finish JSON output: {e}")))?;
+
+    String::from_utf8(buffer)
+        .map_err(|e| GatewayError::Internal(format!("Invalid UTF-8 in results: {e}")))
 }
 
 pub fn register_routes(router: Router) -> Router {
