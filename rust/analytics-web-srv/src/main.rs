@@ -1,9 +1,11 @@
+mod auth;
 mod queries;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
+use auth::{AuthState, AuthToken, OidcClientConfig};
 use axum::{
-    Json, Router,
-    extract::{Path, State},
+    Extension, Json, Router,
+    extract::Path,
     http::StatusCode,
     middleware,
     response::{IntoResponse, Response},
@@ -31,13 +33,16 @@ use micromegas::client::{
 use micromegas::micromegas_main;
 use micromegas::servers::axum_utils::observability_middleware;
 use micromegas::tracing::prelude::*;
+// micromegas_auth imports available if needed
+#[allow(unused_imports)]
+use micromegas_auth::{axum::auth_middleware, types::AuthProvider};
 use queries::{
     query_all_processes, query_log_entries, query_nb_trace_events, query_process_statistics,
 };
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, pin::Pin, time::Duration};
+use std::{collections::HashMap, pin::Pin, sync::Arc, time::Duration};
 use tower_http::{
-    cors::{Any, CorsLayer},
+    cors::CorsLayer,
     services::{ServeDir, ServeFile},
 };
 
@@ -51,6 +56,10 @@ struct Args {
     /// Frontend build directory
     #[arg(long, default_value = "../analytics-web-app/dist")]
     frontend_dir: String,
+
+    /// Disable authentication (development only)
+    #[arg(long)]
+    disable_auth: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -140,7 +149,7 @@ struct LogsQuery {
 
 #[derive(Clone)]
 struct AppState {
-    auth_token: String,
+    auth_enabled: bool,
 }
 
 type ApiResult<T> = Result<T, ApiError>;
@@ -171,16 +180,55 @@ type ProgressStream = Pin<Box<dyn Stream<Item = Result<Bytes, axum::Error>> + Se
 async fn main() -> Result<()> {
     let args = Args::parse();
 
-    let auth_token = std::env::var("MICROMEGAS_AUTH_TOKEN").unwrap_or_else(|_| "".to_string());
+    // Configure CORS origin (required)
+    let cors_origin = std::env::var("MICROMEGAS_WEB_CORS_ORIGIN")
+        .context("MICROMEGAS_WEB_CORS_ORIGIN environment variable not set")?;
 
-    // Configure CORS based on environment variable
-    let cors_origin = std::env::var("ANALYTICS_WEB_CORS_ORIGIN")
-        .unwrap_or_else(|_| "http://localhost:3000".to_string());
+    let state = AppState {
+        auth_enabled: !args.disable_auth,
+    };
 
-    let state = AppState { auth_token };
-    let health_routes = Router::new()
-        .route("/analyticsweb/health", get(health_check))
-        .with_state(state.clone());
+    // Build auth routes if authentication is enabled
+    let auth_routes = if !args.disable_auth {
+        // Load OIDC client configuration
+        let oidc_config = OidcClientConfig::from_env()
+            .map_err(|e| anyhow::anyhow!("Failed to load OIDC client config: {e}"))?;
+
+        let cookie_domain = std::env::var("MICROMEGAS_COOKIE_DOMAIN").ok();
+        let secure_cookies = std::env::var("MICROMEGAS_SECURE_COOKIES")
+            .map(|v| v == "true" || v == "1")
+            .unwrap_or(false);
+
+        // Load secret for signing OAuth state parameters from environment variable
+        // This prevents CSRF attacks by ensuring state cannot be tampered with
+        // IMPORTANT: Must be the same across all instances in a scaled deployment
+        let state_signing_secret = std::env::var("MICROMEGAS_STATE_SECRET")
+            .context("MICROMEGAS_STATE_SECRET environment variable not set. Generate a secure random secret (e.g., openssl rand -base64 32)")?
+            .into_bytes();
+
+        let auth_state = AuthState {
+            oidc_provider: Arc::new(tokio::sync::OnceCell::new()),
+            config: oidc_config,
+            cookie_domain,
+            secure_cookies,
+            state_signing_secret,
+        };
+
+        Some(
+            Router::new()
+                .route("/auth/login", get(auth::auth_login))
+                .route("/auth/callback", get(auth::auth_callback))
+                .route("/auth/refresh", post(auth::auth_refresh))
+                .route("/auth/logout", post(auth::auth_logout))
+                .route("/auth/me", get(auth::auth_me))
+                .with_state(auth_state),
+        )
+    } else {
+        println!("WARNING: Authentication is disabled (--disable-auth)");
+        None
+    };
+
+    let health_routes = Router::new().route("/analyticsweb/health", get(health_check));
 
     let api_routes = Router::new()
         .route("/analyticsweb/processes", get(list_processes))
@@ -200,38 +248,49 @@ async fn main() -> Result<()> {
             "/analyticsweb/process/{process_id}/statistics",
             get(get_process_statistics),
         )
-        .layer(middleware::from_fn(observability_middleware))
-        .with_state(state);
+        .layer(middleware::from_fn(observability_middleware));
+
+    // Apply auth middleware if enabled
+    let api_routes = if state.auth_enabled {
+        api_routes
+            .layer(middleware::from_fn(auth::cookie_auth_middleware))
+            .with_state(state)
+    } else {
+        api_routes.with_state(state)
+    };
     let serve_dir = ServeDir::new(&args.frontend_dir)
         .not_found_service(ServeFile::new(format!("{}/index.html", args.frontend_dir)));
 
-    // Configure CORS layer
-    let cors_layer = if cors_origin == "*" {
-        // Development mode - allow any origin
-        CorsLayer::new()
-            .allow_origin(Any)
-            .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
-            .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION])
-    } else {
-        // Production mode - restrict to specific origin
-        let origin = cors_origin
-            .parse::<HeaderValue>()
-            .expect("Invalid CORS origin format");
-        CorsLayer::new()
-            .allow_origin(origin)
-            .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
-            .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION])
-    };
+    // Configure CORS layer - always restrict to specific origin
+    let origin = cors_origin
+        .parse::<HeaderValue>()
+        .context("Invalid MICROMEGAS_WEB_CORS_ORIGIN format")?;
 
-    let app = Router::new()
-        .merge(health_routes)
-        .merge(api_routes)
+    let cors_layer = CorsLayer::new()
+        .allow_origin(origin)
+        .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+        .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION])
+        .allow_credentials(true);
+
+    let mut app = Router::new().merge(health_routes).merge(api_routes);
+
+    // Add auth routes if enabled
+    if let Some(routes) = auth_routes {
+        app = app.merge(routes);
+    }
+
+    let app = app
         .fallback_service(get_service(serve_dir))
         .layer(cors_layer);
 
     let addr = format!("0.0.0.0:{}", args.port);
     println!("Analytics web server starting on {}", addr);
     println!("CORS origin configured for: {}", cors_origin);
+    if args.disable_auth {
+        println!("Authentication: DISABLED");
+    } else {
+        println!("Authentication: ENABLED");
+    }
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     axum::serve(
@@ -244,30 +303,22 @@ async fn main() -> Result<()> {
 }
 
 #[span_fn]
-async fn health_check(State(state): State<AppState>) -> impl IntoResponse {
-    let mut flightsql_connected = false;
-
-    let client_factory = BearerFlightSQLClientFactory::new(state.auth_token);
-    if let Ok(mut client) = client_factory.make_client().await {
-        flightsql_connected = client.query("SELECT 1".to_string(), None).await.is_ok();
-    }
-
+async fn health_check() -> impl IntoResponse {
     let health = HealthCheck {
-        status: if flightsql_connected {
-            "healthy".to_string()
-        } else {
-            "degraded".to_string()
-        },
+        status: "healthy".to_string(),
         timestamp: Utc::now(),
-        flightsql_connected,
+        flightsql_connected: false,
     };
 
     Json(health)
 }
 
 #[span_fn]
-async fn list_processes(State(state): State<AppState>) -> ApiResult<Json<Vec<ProcessInfo>>> {
-    let client_factory = BearerFlightSQLClientFactory::new(state.auth_token);
+async fn list_processes(
+    Extension(auth_token): Extension<AuthToken>,
+) -> ApiResult<Json<Vec<ProcessInfo>>> {
+    let client_factory =
+        BearerFlightSQLClientFactory::new_with_client_type(auth_token.0, "web".to_string());
     let processes = get_processes_internal(&client_factory).await?;
     Ok(Json(processes))
 }
@@ -317,9 +368,10 @@ async fn get_processes_internal(
 
 async fn get_trace_info(
     Path(process_id): Path<String>,
-    State(state): State<AppState>,
+    Extension(auth_token): Extension<AuthToken>,
 ) -> ApiResult<Json<TraceMetadata>> {
-    let client_factory = BearerFlightSQLClientFactory::new(state.auth_token.clone());
+    let client_factory =
+        BearerFlightSQLClientFactory::new_with_client_type(auth_token.0, "web".to_string());
     let mut client = client_factory.make_client().await?;
 
     // Get actual trace event counts from the database
@@ -369,10 +421,10 @@ async fn get_trace_info(
 #[span_fn]
 async fn generate_trace(
     Path(process_id): Path<String>,
-    State(state): State<AppState>,
+    Extension(auth_token): Extension<AuthToken>,
     Json(request): Json<GenerateTraceRequest>,
 ) -> impl IntoResponse {
-    let stream = generate_trace_stream(process_id, state, request);
+    let stream = generate_trace_stream(process_id, auth_token.0, request);
 
     Response::builder()
         .header(header::CONTENT_TYPE, "application/octet-stream")
@@ -384,13 +436,14 @@ async fn generate_trace(
 #[span_fn]
 async fn get_process_log_entries(
     Path(process_id): Path<String>,
-    State(state): State<AppState>,
     axum::extract::Query(query): axum::extract::Query<LogsQuery>,
+    Extension(auth_token): Extension<AuthToken>,
 ) -> ApiResult<Json<Vec<LogEntry>>> {
     let limit = query.limit.unwrap_or(50);
     let level_filter = query.level.as_deref().filter(|&level| level != "all");
 
-    let client_factory = BearerFlightSQLClientFactory::new(state.auth_token.clone());
+    let client_factory =
+        BearerFlightSQLClientFactory::new_with_client_type(auth_token.0, "web".to_string());
     let mut client = client_factory.make_client().await?;
 
     let mut logs = Vec::new();
@@ -432,9 +485,10 @@ async fn get_process_log_entries(
 #[span_fn]
 async fn get_process_statistics(
     Path(process_id): Path<String>,
-    State(state): State<AppState>,
+    Extension(auth_token): Extension<AuthToken>,
 ) -> ApiResult<Json<ProcessStatistics>> {
-    let client_factory = BearerFlightSQLClientFactory::new(state.auth_token.clone());
+    let client_factory =
+        BearerFlightSQLClientFactory::new_with_client_type(auth_token.0, "web".to_string());
     let mut client = client_factory.make_client().await?;
 
     // Query actual statistics from different stream types
@@ -490,7 +544,7 @@ async fn get_process_statistics(
 
 fn generate_trace_stream(
     process_id: String,
-    state: AppState,
+    auth_token: String,
     request: GenerateTraceRequest,
 ) -> ProgressStream {
     use async_stream::stream;
@@ -539,7 +593,10 @@ fn generate_trace_stream(
             yield Ok(Bytes::from(json + "\n"));
         }
 
-        let client_factory = BearerFlightSQLClientFactory::new(state.auth_token.clone());
+        let client_factory = BearerFlightSQLClientFactory::new_with_client_type(
+            auth_token,
+            "web".to_string(),
+        );
         match generate_perfetto_trace_internal(&client_factory, &process_id, &request).await {
             Ok(trace_data) => {
                 const CHUNK_SIZE: usize = 8192;

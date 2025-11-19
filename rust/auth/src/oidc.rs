@@ -13,13 +13,42 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-/// Fetch JWKS from the OIDC provider using openidconnect's built-in discovery
-async fn fetch_jwks(issuer_url: &IssuerUrl) -> Result<Arc<CoreJsonWebKeySet>> {
-    // Create HTTP client with SSRF protection (no redirects)
-    let http_client = reqwest::ClientBuilder::new()
+/// Create HTTP client for OIDC operations with security best practices
+///
+/// This client is configured with SSRF protection:
+/// - No redirects allowed (prevents open redirect attacks)
+/// - Suitable for OIDC discovery and token exchange operations
+///
+/// # Security
+///
+/// The no-redirect policy is important for OIDC operations because:
+/// - Prevents attackers from redirecting requests to internal services
+/// - Ensures OIDC endpoints are accessed directly without intermediate hops
+/// - Protects against SSRF (Server-Side Request Forgery) attacks
+///
+/// # Example
+///
+/// ```rust
+/// use micromegas_auth::oidc::create_http_client;
+///
+/// # async fn example() -> anyhow::Result<()> {
+/// let client = create_http_client()?;
+/// let response = client.get("https://accounts.google.com/.well-known/openid-configuration")
+///     .send()
+///     .await?;
+/// # Ok(())
+/// # }
+/// ```
+pub fn create_http_client() -> Result<reqwest::Client> {
+    reqwest::ClientBuilder::new()
         .redirect(reqwest::redirect::Policy::none())
         .build()
-        .map_err(|e| anyhow!("Failed to create HTTP client: {e:?}"))?;
+        .map_err(|e| anyhow!("Failed to create HTTP client: {e:?}"))
+}
+
+/// Fetch JWKS from the OIDC provider using openidconnect's built-in discovery
+async fn fetch_jwks(issuer_url: &IssuerUrl) -> Result<Arc<CoreJsonWebKeySet>> {
+    let http_client = create_http_client()?;
 
     // Use openidconnect's built-in OIDC discovery
     let metadata = CoreProviderMetadata::discover_async(issuer_url.clone(), &http_client)

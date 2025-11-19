@@ -92,6 +92,7 @@ nav:
     - Usage: grafana/usage.md
   - Administration:
     - Authentication: admin/authentication.md
+    - Web App Deployment: admin/web-app.md
     - Admin SQL Functions: admin/functions-reference.md
   - Unreal Engine:
     - Overview: unreal/index.md

@@ -41,6 +41,20 @@ def check_command_exists(command):
     except (subprocess.CalledProcessError, FileNotFoundError):
         return False
 
+def check_yarn_installed():
+    """Check if yarn is installed"""
+    if not check_command_exists("yarn"):
+        print_status("Yarn not found. Installing yarn...", "info")
+        try:
+            subprocess.run(["npm", "install", "-g", "yarn"], check=True)
+            print_status("Yarn installed successfully", "success")
+            return True
+        except subprocess.CalledProcessError:
+            print_status("Failed to install yarn. Please install it manually:", "error")
+            print_status("npm install -g yarn", "info")
+            return False
+    return True
+
 def check_flightsql_server():
     """Check if FlightSQL server is running"""
     try:
@@ -83,11 +97,35 @@ def kill_existing_backend():
     except Exception:
         return False
 
+def kill_existing_frontend():
+    """Kill any existing Next.js dev servers"""
+    try:
+        # Find and kill next dev processes
+        result = subprocess.run(
+            ["pkill", "-f", "next dev"],
+            capture_output=True,
+            text=True
+        )
+        if result.returncode == 0:
+            print_status("Killed existing Next.js dev server", "info")
+            time.sleep(1)  # Give it a moment to shut down
+            return True
+        return False
+    except Exception:
+        return False
+
 def setup_environment():
     """Set up environment variables"""
+    # Generate a random secret for development if not set
+    import secrets
+    dev_secret = secrets.token_urlsafe(32)
+
     env_vars = {
         "MICROMEGAS_FLIGHTSQL_URL": "grpc://127.0.0.1:50051",
         "MICROMEGAS_AUTH_TOKEN": "",  # Empty for no-auth mode
+        "MICROMEGAS_WEB_CORS_ORIGIN": "http://localhost:3000",  # Frontend origin for CORS
+        "MICROMEGAS_AUTH_REDIRECT_URI": "http://localhost:3000/auth/callback",  # OAuth callback URL
+        "MICROMEGAS_STATE_SECRET": dev_secret,  # Random secret for OAuth state signing
     }
 
     for key, default_value in env_vars.items():
@@ -98,6 +136,8 @@ def setup_environment():
                     print_status("Auth token provided", "info")
                 else:
                     print_status("No auth token (development mode)", "info")
+            elif key == "MICROMEGAS_STATE_SECRET":
+                print_status(f"Set {key}=<generated>", "info")
             else:
                 print_status(f"Set {key}={default_value}", "info")
 
@@ -113,6 +153,9 @@ def main():
 
     if not check_command_exists("node"):
         print_status("Node.js not found. Please install Node.js 18+.", "error")
+        return 1
+
+    if not check_yarn_installed():
         return 1
 
     # Check FlightSQL server
@@ -155,6 +198,9 @@ def main():
     try:
         # Kill any existing analytics-web-srv processes first
         kill_existing_backend()
+
+        # Kill any existing Next.js dev servers
+        kill_existing_frontend()
 
         # Check if port 8000 is still in use (by something else)
         if check_port_in_use(8000):
@@ -223,15 +269,15 @@ def main():
         frontend_dir = Path("analytics-web-app")
         if not (frontend_dir / "node_modules").exists():
             print_status("Installing Node.js dependencies...", "info")
-            npm_install = subprocess.run(
-                ["npm", "install"],
+            yarn_install = subprocess.run(
+                ["yarn", "install"],
                 cwd=frontend_dir,
                 check=True
             )
 
         # Start dev server
         frontend_proc = subprocess.Popen(
-            ["npm", "run", "dev"],
+            ["yarn", "dev"],
             cwd=frontend_dir
         )
         processes.append(frontend_proc)

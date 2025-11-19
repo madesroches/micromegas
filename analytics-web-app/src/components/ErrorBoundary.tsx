@@ -1,7 +1,8 @@
 'use client'
 
 import React from 'react'
-import { ApiErrorException } from '@/lib/api'
+import { useRouter } from 'next/navigation'
+import { ApiErrorException, AuthenticationError } from '@/lib/api'
 import { useToast } from '@/lib/use-toast'
 
 interface ErrorBoundaryProps {
@@ -62,11 +63,19 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
 // Hook to use in components for API error handling
 export function useApiErrorHandler() {
   const { toast } = useToast()
+  const router = useRouter()
 
   const handleError = React.useCallback((error: unknown) => {
+    // Handle authentication errors by redirecting to login
+    if (error instanceof AuthenticationError) {
+      const returnUrl = encodeURIComponent(window.location.pathname)
+      router.push(`/login?return_url=${returnUrl}`)
+      return
+    }
+
     let title = 'Error'
     let description = 'An unexpected error occurred'
-    
+
     if (error instanceof ApiErrorException) {
       title = error.apiError.type.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase())
       description = error.apiError.message
@@ -84,7 +93,7 @@ export function useApiErrorHandler() {
       description,
       variant: "destructive",
     })
-  }, [toast])
+  }, [toast, router])
 
   return handleError
 }
