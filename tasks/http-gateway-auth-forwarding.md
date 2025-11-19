@@ -573,42 +573,6 @@ curl -X POST http://localhost:3000/gateway/query \
 - ✅ No breaking changes to existing functionality
 - ✅ All tests passing
 
-### Phase 4: Enhanced Security and Observability
-**Goal**: Add security hardening and monitoring for both gateway and FlightSQL
-
-1. Security improvements
-   - Add rate limiting per authenticated user
-   - Add audit logging for authentication events
-   - Document security best practices
-   - Add header size limits to prevent header bombing
-
-2. Observability
-   - Add metrics for authenticated vs unauthenticated requests
-   - Track header forwarding statistics
-   - Monitor auth provider cache hit rates
-   - Add tracing spans for auth validation
-
-3. Documentation
-   - Update gateway mkdocs with authentication setup
-   - Add example configurations for common use cases
-   - Document header forwarding patterns and security considerations
-   - Add troubleshooting guide for auth issues
-
-### Phase 5: Advanced Features (Optional)
-**Goal**: Support additional use cases
-
-1. Multi-backend routing
-   - Support routing to different backends based on headers/auth
-   - Allow per-backend header forwarding configuration
-
-2. Header transformation
-   - Allow renaming headers (e.g., `X-User-ID` → `X-Subject`)
-   - Support injecting headers from auth context
-
-3. WebSocket support
-   - Extend authentication to WebSocket upgrades
-   - Forward headers in WebSocket handshake
-
 ## Origin Tracking Examples
 
 ### Example Query Flow with Authentication
@@ -925,11 +889,18 @@ cargo run --bin http-gateway
 - [ ] Clear documentation and examples
 
 ### Documentation Requirements
-- [ ] README updated with authentication setup instructions
-- [ ] Environment variable reference documented
-- [ ] Security best practices guide
-- [ ] Configuration examples for common scenarios
-- [ ] Troubleshooting guide for auth issues
+- [x] MkDocs updated with gateway authentication and header forwarding documentation
+  - Created `mkdocs/docs/gateway/index.md` - Overview and quick start
+  - Created `mkdocs/docs/gateway/configuration.md` - Environment variables and header forwarding
+  - Created `mkdocs/docs/gateway/security.md` - Security best practices and auth details
+  - Created `mkdocs/docs/gateway/examples.md` - Integration examples and code samples
+  - Created `mkdocs/docs/gateway/troubleshooting.md` - Common issues and solutions
+  - Added HTTP Gateway section to `mkdocs/mkdocs.yml`
+- [x] Environment variable reference documented
+- [x] Security best practices guide
+- [x] Configuration examples for common scenarios
+- [x] Troubleshooting guide for auth issues
+- [ ] README briefly mentions gateway capabilities (links to mkdocs for details)
 
 ## Related Work
 - Analytics web app OIDC implementation (commit 71ce310ce)
@@ -938,9 +909,31 @@ cargo run --bin http-gateway
 - Python client auth_provider parameter (#595)
 
 ## Future Enhancements
+
+### Security Hardening
+- Rate limiting per authenticated user
+- Audit logging for authentication events
+- Header size limits to prevent header bombing
 - mTLS support for backend connections
+
+### Observability and Monitoring
+- Metrics for authenticated vs unauthenticated requests
+- Header forwarding statistics tracking
+- Auth provider cache hit rate monitoring
+- Tracing spans for auth validation
+
+### Documentation
+- Gateway mkdocs with authentication setup
+- Example configurations for common use cases
+- Header forwarding patterns and security considerations
+- Troubleshooting guide for auth issues
+
+### Advanced Features
+- Multi-backend routing based on headers/auth
+- Per-backend header forwarding configuration
+- Header transformation and renaming (e.g., `X-User-ID` → `X-Subject`)
+- Header injection from auth context
+- WebSocket support with authentication
+- WebSocket header forwarding in handshake
 - Request/response body transformation
 - GraphQL gateway endpoint
-- WebSocket proxying
-- Multi-backend routing based on headers
-- Header injection from auth context (X-User-Email from token)

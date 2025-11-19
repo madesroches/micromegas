@@ -7,11 +7,13 @@ use axum::{
     response::IntoResponse,
     routing::post,
 };
+use chrono::{DateTime, Utc};
 use datafusion::arrow::{
     array::RecordBatch,
     json::{Writer, writer::JsonArray},
 };
 use http::{HeaderMap, Uri};
+use micromegas_analytics::time::TimeRange;
 use micromegas_tracing::info;
 use serde::Deserialize;
 use std::net::SocketAddr;
@@ -133,6 +135,14 @@ impl IntoResponse for GatewayError {
 #[derive(Debug, Deserialize)]
 pub struct QueryRequest {
     sql: String,
+    /// Optional time range filter - begin timestamp in RFC3339 format
+    /// Example: "2024-01-01T00:00:00Z"
+    #[serde(default)]
+    time_range_begin: Option<String>,
+    /// Optional time range filter - end timestamp in RFC3339 format
+    /// Example: "2024-01-02T00:00:00Z"
+    #[serde(default)]
+    time_range_end: Option<String>,
 }
 
 /// Build origin tracking metadata for FlightSQL queries
@@ -221,9 +231,48 @@ pub async fn handle_query(
         )));
     }
 
+    // Parse time range if provided
+    let time_range = match (&request.time_range_begin, &request.time_range_end) {
+        (Some(begin_str), Some(end_str)) => {
+            let begin = DateTime::parse_from_rfc3339(begin_str)
+                .map_err(|e| {
+                    GatewayError::BadRequest(format!(
+                        "Invalid time_range_begin format (expected RFC3339): {e}"
+                    ))
+                })?
+                .with_timezone(&Utc);
+            let end = DateTime::parse_from_rfc3339(end_str)
+                .map_err(|e| {
+                    GatewayError::BadRequest(format!(
+                        "Invalid time_range_end format (expected RFC3339): {e}"
+                    ))
+                })?
+                .with_timezone(&Utc);
+
+            if begin > end {
+                return Err(GatewayError::BadRequest(
+                    "time_range_begin must be before time_range_end".to_string(),
+                ));
+            }
+
+            Some(TimeRange::new(begin, end))
+        }
+        (Some(_), None) => {
+            return Err(GatewayError::BadRequest(
+                "time_range_end must be provided when time_range_begin is specified".to_string(),
+            ));
+        }
+        (None, Some(_)) => {
+            return Err(GatewayError::BadRequest(
+                "time_range_begin must be provided when time_range_end is specified".to_string(),
+            ));
+        }
+        (None, None) => None,
+    };
+
     info!(
-        "Gateway request: request_id={}, client_type={}, sql={}",
-        request_id_header, client_type_header, sql
+        "Gateway request: request_id={}, client_type={}, time_range={:?}, sql={}",
+        request_id_header, client_type_header, time_range, sql
     );
 
     // Connect to FlightSQL backend
@@ -252,10 +301,10 @@ pub async fn handle_query(
         .inner_mut()
         .set_header("x-request-id", request_id_header);
 
-    if let Some(client_ip) = origin_metadata.get("x-client-ip") {
-        if let Ok(ip_str) = client_ip.to_str() {
-            client.inner_mut().set_header("x-client-ip", ip_str);
-        }
+    if let Some(client_ip) = origin_metadata.get("x-client-ip")
+        && let Ok(ip_str) = client_ip.to_str()
+    {
+        client.inner_mut().set_header("x-client-ip", ip_str);
     }
 
     // Forward allowed headers from client
@@ -270,15 +319,15 @@ pub async fn handle_query(
             continue; // Origin metadata takes precedence
         }
 
-        if config.should_forward(header_name) {
-            if let Ok(value_str) = value.to_str() {
-                client.inner_mut().set_header(header_name, value_str);
-            }
+        if config.should_forward(header_name)
+            && let Ok(value_str) = value.to_str()
+        {
+            client.inner_mut().set_header(header_name, value_str);
         }
     }
 
     // Execute query with error handling
-    let batches = client.query(sql.to_string(), None).await.map_err(|e| {
+    let batches = client.query(sql.to_string(), time_range).await.map_err(|e| {
         // Map tonic errors to appropriate HTTP status codes
         if let Some(status) = e.downcast_ref::<tonic::Status>() {
             match status.code() {
