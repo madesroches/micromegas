@@ -68,9 +68,9 @@ def main():
     os.environ["MICROMEGAS_ENABLE_CPU_TRACING"] = "true"
     print("🔧 CPU tracing enabled for development")
 
-    print("🔧 Building services...")
+    print("🔧 Building all services...")
     os.chdir(rust_dir)
-    run_command("cargo build")
+    run_command("cargo build --bin telemetry-ingestion-srv --bin flight-sql-srv --bin telemetry-admin")
 
     print("🚀 Starting services...")
 

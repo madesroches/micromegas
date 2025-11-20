@@ -40,6 +40,8 @@ pub mod materialize_partitions_table_function;
 pub mod materialized_view;
 /// Merge consecutive parquet partitions into a single file
 pub mod merge;
+/// Compatibility layer for parsing legacy Arrow 56.0 metadata and upgrading to Arrow 57.0
+pub mod metadata_compat;
 /// Specification for a view partition backed by a table in the postgresql metadata database.
 pub mod metadata_partition_spec;
 /// Implementation of `BlockProcessor` for measures
