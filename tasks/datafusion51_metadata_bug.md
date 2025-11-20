@@ -58,11 +58,43 @@ Modify the reader to fallback to reading metadata from the actual parquet file i
 ### Option 4: Database Schema Migration
 Add a version field to track metadata format version, and handle migrations automatically.
 
-## Recommended Solution
+### Option 5: Backwards-Compatible Parser with Metadata Rewrite
+Implement a custom backwards-compatible thrift parser that:
+1. Handles metadata from DataFusion 50.0 (Arrow 56.0) that's missing the `num_rows` field
+2. Injects the `num_rows` value from the `lakehouse_partitions.num_rows` column during parsing
+3. Re-serializes the corrected metadata back to the database with the new format
+4. After all metadata is rewritten, switch back to the standard parser
 
-**Option 1 is recommended**: Truncate the `partition_metadata` table and let the system regenerate metadata on-demand from the parquet files. This is clean and leverages existing code paths.
+**Advantages:**
+- Graceful migration without downtime
+- Leverages existing `num_rows` data in `lakehouse_partitions` table
+- No need to read parquet files from object storage
+- Can be done incrementally as partitions are accessed
+- One-time migration code that can be removed later
 
-The metadata table is a cache - the source of truth is the parquet files in object storage. We can safely regenerate it.
+**Implementation approach:**
+- Create a temporary compatibility layer in `arrow_utils.rs`
+- Modify the thrift deserializer to make `num_rows` optional
+- Inject the value from the partition record when missing
+- Re-serialize and update the database
+- After migration is complete, remove the compatibility layer
+
+## Solution
+
+**See `datafusion51_metadata_fix.md` for the complete implementation plan.**
+
+After investigation and testing, we determined:
+- Legacy metadata CAN be parsed using deprecated `parquet::format` API
+- New format IS backwards compatible with old parsers
+- We can use `lakehouse_partitions.num_rows` to fix the metadata
+- Automatic on-access migration is the best approach
+
+The solution uses a compatibility parser that:
+1. Detects legacy metadata parse failures
+2. Parses with deprecated thrift API
+3. Injects `num_rows` from database
+4. Re-serializes with Arrow 57.0
+5. Caches upgraded metadata
 
 ## Implementation Plan
 
