@@ -585,6 +585,66 @@ if input("Proceed with retirement? (yes/no): ") == "yes":
 
 **⚠️ DESTRUCTIVE OPERATION:** This operation is irreversible. Retired partitions will be permanently deleted from metadata and their data files removed from object storage. Always preview with `list_incompatible_partitions()` before calling this function.
 
+## Command-Line Interface
+
+The Micromegas Python client includes CLI tools for quick queries and administrative tasks.
+
+### query.py - Run SQL Queries
+
+Execute arbitrary SQL queries against the analytics service from the command line.
+
+**Location:** `python/micromegas/cli/query.py`
+
+**Usage:**
+```bash
+cd python/micromegas/cli
+poetry run python query.py "SELECT * FROM list_partitions() LIMIT 5"
+```
+
+**Arguments:**
+- `sql` (positional): SQL query to execute
+
+**Options:**
+- `--begin`: Begin timestamp (ISO format or relative like `1h`, `30m`, `7d`). Default: 1 hour ago
+- `--end`: End timestamp (ISO format or relative like `1h`, `30m`, `7d`). Default: now
+- `--format`: Output format - `table` (default), `csv`, or `json`
+- `--max-colwidth`: Maximum column width for table format (default: 50, use 0 for unlimited)
+
+**Examples:**
+```bash
+# Query with default time range (last hour)
+poetry run python query.py "SELECT * FROM processes LIMIT 10"
+
+# Query with relative time range (last 24 hours)
+poetry run python query.py "SELECT * FROM log_entries LIMIT 100" --begin 24h
+
+# Query with specific timestamps
+poetry run python query.py "SELECT * FROM measures LIMIT 50" \
+    --begin 2024-01-01T00:00:00 --end 2024-01-02T00:00:00
+
+# Output as CSV for piping to other tools
+poetry run python query.py "SELECT * FROM list_partitions()" --format csv
+
+# Output as JSON
+poetry run python query.py "SELECT view_set_name, num_rows FROM list_partitions()" --format json
+```
+
+**Environment Variables:**
+- `MICROMEGAS_ANALYTICS_URI`: Analytics server URI (default: `grpc://localhost:50051`)
+- `MICROMEGAS_OIDC_ISSUER`: OIDC issuer URL for authentication
+- `MICROMEGAS_OIDC_CLIENT_ID`: OIDC client ID
+- `MICROMEGAS_PYTHON_MODULE_WRAPPER`: Custom authentication module for corporate environments
+
+### Other CLI Tools
+
+Additional CLI tools are available in `python/micromegas/cli/`:
+
+- **query_processes.py**: List processes in the telemetry database
+- **query_process_log.py**: Query log entries for specific processes
+- **query_process_metrics.py**: Query metrics for specific processes
+- **write_perfetto.py**: Export trace data to Perfetto format
+- **logout.py**: Clear cached authentication tokens
+
 ## Time Utilities
 
 ### `format_datetime(value)` and `parse_time_delta(user_string)`

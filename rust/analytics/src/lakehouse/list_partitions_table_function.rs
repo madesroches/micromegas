@@ -9,7 +9,7 @@ use datafusion::catalog::Session;
 use datafusion::catalog::TableFunctionImpl;
 use datafusion::catalog::TableProvider;
 use datafusion::datasource::TableType;
-use datafusion::datasource::memory::MemorySourceConfig;
+use datafusion::datasource::memory::{DataSourceExec, MemorySourceConfig};
 use datafusion::error::DataFusionError;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::Expr;
@@ -86,6 +86,7 @@ impl TableProvider for ListPartitionsTableProvider {
             Field::new("file_schema_hash", DataType::Binary, false),
             Field::new("source_data_hash", DataType::Binary, false),
             Field::new("num_rows", DataType::Int64, false),
+            Field::new("partition_format_version", DataType::Int32, false),
         ]))
     }
 
@@ -98,31 +99,61 @@ impl TableProvider for ListPartitionsTableProvider {
         _state: &dyn Session,
         projection: Option<&Vec<usize>>,
         _filters: &[Expr],
-        _limit: Option<usize>,
+        limit: Option<usize>,
     ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
-        let rows = sqlx::query(
+        // Build query with optional LIMIT clause pushed down to PostgreSQL.
+        // DataFusion only pushes the limit when it's safe to do so (i.e., when there
+        // are no WHERE clauses that could filter rows). When filters are present,
+        // DataFusion passes limit=None and applies the limit after filtering.
+        // Important: DataFusion trusts us to apply the limit - if we ignore it,
+        // too many rows will be returned to the client.
+        let query = if let Some(n) = limit {
+            format!(
+                "SELECT view_set_name,
+                        view_instance_id,
+                        begin_insert_time,
+                        end_insert_time,
+                        min_event_time,
+                        max_event_time,
+                        updated,
+                        file_path,
+                        file_size,
+                        file_schema_hash,
+                        source_data_hash,
+                        num_rows,
+                        partition_format_version
+                 FROM lakehouse_partitions
+                 LIMIT {n};"
+            )
+        } else {
             "SELECT view_set_name,
-				    view_instance_id,
-				    begin_insert_time,
-				    end_insert_time,
-				    min_event_time,
-				    max_event_time,
-				    updated,
-				    file_path,
-				    file_size,
-				    file_schema_hash,
-				    source_data_hash,
-				    num_rows
-			 FROM lakehouse_partitions;",
-        )
-        .fetch_all(&self.lake.db_pool)
-        .await
-        .map_err(|e| DataFusionError::External(e.into()))?;
+                    view_instance_id,
+                    begin_insert_time,
+                    end_insert_time,
+                    min_event_time,
+                    max_event_time,
+                    updated,
+                    file_path,
+                    file_size,
+                    file_schema_hash,
+                    source_data_hash,
+                    num_rows,
+                    partition_format_version
+             FROM lakehouse_partitions;"
+                .to_string()
+        };
+
+        let rows = sqlx::query(&query)
+            .fetch_all(&self.lake.db_pool)
+            .await
+            .map_err(|e| DataFusionError::External(e.into()))?;
         let rb = rows_to_record_batch(&rows).map_err(|e| DataFusionError::External(e.into()))?;
-        Ok(MemorySourceConfig::try_new_exec(
+
+        let source = MemorySourceConfig::try_new(
             &[vec![rb]],
             self.schema(),
             projection.map(|v| v.to_owned()),
-        )?)
+        )?;
+        Ok(DataSourceExec::from_data_source(source))
     }
 }
