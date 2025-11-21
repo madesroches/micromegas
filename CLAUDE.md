@@ -4,9 +4,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Critical Rules
 - **NEVER COMMIT UNLESS EXPLICITLY ASKED**
+- follow @AI_GUIDELINES.md
 - **Commit Messages**: NEVER include AI-generated credits or co-author tags
 - **Pull Requests**: Always run `git log --oneline main..HEAD` before creating PRs
 - **Project Structure**: Run cargo commands from `rust/` directory (main workspace at `rust/Cargo.toml`)
+
+## Scripting
+- prefer to script using python over shell scripts
+- use the poetry venv in python/micromegas run python code
+
 
 ## Code Style
 
@@ -81,7 +87,3 @@ Micromegas: unified observability platform for logs, metrics, and traces.
 **Core crates**: `tracing/` (instrumentation), `analytics/` (DataFusion queries), `public/` (user-facing)
 **Services**: `telemetry-ingestion-srv/` (HTTP ingestion), `flight-sql-srv/` (SQL queries)
 **Flow**: Apps → HTTP ingestion → PostgreSQL metadata + object storage → FlightSQL queries
-- there should be a venv available to run python code
-- follow @AI_GUIDELINES.md
-- prefer to script using python over shell scripts
-- never commit if I did not ask explicitly
