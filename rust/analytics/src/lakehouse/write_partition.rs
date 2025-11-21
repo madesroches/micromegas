@@ -579,9 +579,14 @@ pub async fn write_partition_from_rows(
         byte_counter.clone(),
     );
 
+    // Configure writer with page-level statistics enabled (default in Arrow 57.0+)
+    // This ensures ColumnIndex with proper null_pages field is written for DataFusion 51+ compatibility
     let props = WriterProperties::builder()
         .set_writer_version(WriterVersion::PARQUET_2_0)
         .set_compression(Compression::LZ4_RAW)
+        // Explicitly enable page-level statistics for clarity (this is the default in Arrow 57.0+)
+        // This generates ColumnIndex structures with proper null_pages field
+        .set_statistics_enabled(parquet::file::properties::EnabledStatistics::Page)
         .build();
     let mut arrow_writer =
         AsyncArrowWriter::try_new(object_store_writer, file_schema.clone(), Some(props))

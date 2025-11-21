@@ -218,7 +218,12 @@ pub async fn make_session_context(
     view_factory: Arc<ViewFactory>,
     configurator: Arc<dyn SessionConfigurator>,
 ) -> Result<SessionContext> {
-    let ctx = SessionContext::new_with_config_rt(SessionConfig::default(), runtime.clone());
+    // Disable page index reading for backward compatibility with legacy Parquet files
+    // Legacy files may have incomplete ColumnIndex metadata (missing null_pages field)
+    // which causes errors in DataFusion 51+ with Arrow 57.0 when reading page indexes
+    let config =
+        SessionConfig::default().set_bool("datafusion.execution.parquet.enable_page_index", false);
+    let ctx = SessionContext::new_with_config_rt(config, runtime.clone());
     if let Some(range) = &query_range {
         ctx.add_analyzer_rule(Arc::new(TableScanRewrite::new(*range)));
     }

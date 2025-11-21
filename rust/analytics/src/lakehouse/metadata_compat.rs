@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use bytes::Bytes;
 use datafusion::parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 use micromegas_tracing::prelude::*;
+#[allow(deprecated)]
 use parquet::format::FileMetaData as ThriftFileMetaData;
 use parquet::thrift::TSerializable;
 use thrift::protocol::{TCompactInputProtocol, TCompactOutputProtocol, TOutputProtocol};
