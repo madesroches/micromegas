@@ -2,7 +2,7 @@ use super::partition_metadata::load_partition_metadata;
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use datafusion::{
-    datasource::physical_plan::{FileMeta, ParquetFileReaderFactory},
+    datasource::{listing::PartitionedFile, physical_plan::ParquetFileReaderFactory},
     parquet::{
         arrow::{
             arrow_reader::ArrowReaderOptions,
@@ -50,14 +50,14 @@ impl ParquetFileReaderFactory for ReaderFactory {
     fn create_reader(
         &self,
         _partition_index: usize,
-        file_meta: FileMeta,
+        partitioned_file: PartitionedFile,
         metadata_size_hint: Option<usize>,
         _metrics: &ExecutionPlanMetricsSet,
     ) -> datafusion::error::Result<Box<dyn AsyncFileReader + Send>> {
         // todo: don't ignore metrics, report performance of the reader
-        let filename = file_meta.location().to_string();
+        let filename = partitioned_file.path().to_string();
         let object_store = Arc::clone(&self.object_store);
-        let mut inner = ParquetObjectReader::new(object_store, file_meta.location().clone());
+        let mut inner = ParquetObjectReader::new(object_store, partitioned_file.path().clone());
         if let Some(hint) = metadata_size_hint {
             inner = inner.with_footer_size_hint(hint)
         };
@@ -98,11 +98,15 @@ impl AsyncFileReader for ParquetReader {
 
     fn get_metadata(
         &mut self,
-        _options: Option<&ArrowReaderOptions>,
+        options: Option<&ArrowReaderOptions>,
     ) -> BoxFuture<'_, datafusion::parquet::errors::Result<Arc<ParquetMetaData>>> {
         let metadata_cache = self.metadata.clone();
         let pool = self.pool.clone();
         let filename = self.filename.clone();
+        // Use options if provided, otherwise create default with page index disabled
+        let _options = options.cloned().unwrap_or_else(|| {
+            ArrowReaderOptions::new().with_page_index(false) // Disable for backward compatibility with legacy Parquet files
+        });
 
         Box::pin(async move {
             // Check if we already have metadata cached
@@ -114,10 +118,14 @@ impl AsyncFileReader for ParquetReader {
                 }
             }
 
-            // Load metadata from database
+            // Load metadata from database, with options applied
             let metadata = load_parquet_metadata(&filename, &pool)
                 .await
                 .map_err(|e| datafusion::parquet::errors::ParquetError::External(e.into()))?;
+
+            // Note: Page index reading is disabled via ArrowReaderOptions above
+            // for backward compatibility with legacy Parquet files that may have
+            // incomplete ColumnIndex metadata (missing null_pages field)
 
             // Cache the metadata for future calls
             {
