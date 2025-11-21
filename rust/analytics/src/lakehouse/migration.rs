@@ -5,7 +5,7 @@ use micromegas_tracing::prelude::*;
 use sqlx::Executor;
 use sqlx::Row;
 
-pub const LATEST_LAKEHOUSE_SCHEMA_VERSION: i32 = 4;
+pub const LATEST_LAKEHOUSE_SCHEMA_VERSION: i32 = 5;
 
 async fn read_lakehouse_schema_version(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> i32 {
     match sqlx::query(
@@ -77,6 +77,13 @@ async fn execute_lakehouse_migration(pool: sqlx::Pool<sqlx::Postgres>) -> Result
         info!("upgrade lakehouse schema to v4");
         let mut tr = pool.begin().await?;
         upgrade_v3_to_v4(&mut tr).await?;
+        current_version = read_lakehouse_schema_version(&mut tr).await;
+        tr.commit().await?;
+    }
+    if 4 == current_version {
+        info!("upgrade lakehouse schema to v5");
+        let mut tr = pool.begin().await?;
+        upgrade_v4_to_v5(&mut tr).await?;
         current_version = read_lakehouse_schema_version(&mut tr).await;
         tr.commit().await?;
     }
@@ -374,5 +381,29 @@ async fn migrate_metadata_to_new_table(
     }
 
     info!("migrated metadata for {} total partitions", total_count);
+    Ok(())
+}
+
+async fn upgrade_v4_to_v5(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Result<()> {
+    // Add partition_format_version column to lakehouse_partitions
+    // Default to 1 for existing partitions (Arrow 56.0 format)
+    tr.execute(
+        "ALTER TABLE lakehouse_partitions
+         ADD COLUMN partition_format_version INTEGER NOT NULL DEFAULT 1;",
+    )
+    .await
+    .with_context(|| "adding partition_format_version to lakehouse_partitions")?;
+    // Add partition_format_version column to partition_metadata
+    // Default to 1 for existing metadata (Arrow 56.0 format)
+    tr.execute(
+        "ALTER TABLE partition_metadata
+         ADD COLUMN partition_format_version INTEGER NOT NULL DEFAULT 1;",
+    )
+    .await
+    .with_context(|| "adding partition_format_version to partition_metadata")?;
+    tr.execute("UPDATE lakehouse_migration SET version=5;")
+        .await
+        .with_context(|| "Updating lakehouse schema version to 5")?;
+    info!("added partition_format_version columns to both tables");
     Ok(())
 }

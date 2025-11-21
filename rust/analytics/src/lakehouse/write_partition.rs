@@ -319,8 +319,8 @@ async fn insert_partition(
         let insert_time = sqlx::types::chrono::Utc::now();
 
         sqlx::query(
-            "INSERT INTO partition_metadata (file_path, metadata, insert_time)
-             VALUES ($1, $2, $3)",
+            "INSERT INTO partition_metadata (file_path, metadata, insert_time, partition_format_version)
+             VALUES ($1, $2, $3, 2)",
         )
         .bind(file_path)
         .bind(metadata_bytes.as_ref())
@@ -330,9 +330,9 @@ async fn insert_partition(
         .with_context(|| format!("inserting metadata for file: {}", file_path))?;
     }
 
-    // Insert the new partition (without metadata column)
+    // Insert the new partition with format version 2 (Arrow 57.0)
     let insert_result = sqlx::query(
-        "INSERT INTO lakehouse_partitions VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12);",
+        "INSERT INTO lakehouse_partitions VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 2);",
     )
     .bind(&*partition.view_metadata.view_set_name)
     .bind(&*partition.view_metadata.view_instance_id)

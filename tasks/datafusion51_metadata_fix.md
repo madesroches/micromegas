@@ -2,15 +2,23 @@
 
 ## Executive Summary
 
-**Status:** ✅ **RESOLVED**
+**Status:** ✅ **RESOLVED** (Initial fix) → **SUPERSEDED by versioning approach**
 
 **Root Cause:** Format mismatch between `ParquetMetaDataWriter` and `ParquetMetaDataReader::decode_metadata()` introduced in DataFusion 51 due to Page Index support.
 
-**Solution:** Implemented extraction logic in `serialize_parquet_metadata()` to skip page index data and return only the FileMetaData bytes that the decoder expects.
+**Initial Solution:** Implemented extraction logic in `serialize_parquet_metadata()` to skip page index data and return only the FileMetaData bytes that the decoder expects.
 
-**Files Modified:**
+**Production Solution:** See `datafusion51_partition_format_versioning.md` for the final implementation using explicit format version tracking.
+
+**Files Modified (Initial fix):**
 - `rust/analytics/src/arrow_utils.rs` - Fixed serialization function
 - `rust/analytics/tests/test_datafusion_metadata_bug.rs` - Added test demonstrating the fix
+
+**Files Modified (Production versioning solution):**
+- `rust/analytics/src/lakehouse/migration.rs` - v4→v5 migration
+- `rust/analytics/src/lakehouse/write_partition.rs` - Write path with version=2
+- `rust/analytics/src/lakehouse/partition_metadata.rs` - Read path with version-based dispatch
+- `rust/analytics/tests/test_metadata_compat.rs` - Comprehensive test suite
 
 ---
 
@@ -182,6 +190,13 @@ Instead of using `ParquetMetaDataWriter`, extract footer bytes directly from the
 
 ### Option 3: Downgrade to DataFusion 50
 Revert to DataFusion 50.2.0. **Drawback**: Lose DataFusion 51 features and improvements.
+
+### Option 4: Explicit Format Versioning (IMPLEMENTED)
+**This approach was ultimately chosen for production.**
+
+Track partition format version explicitly in database tables and dispatch to appropriate parsers based on version. This eliminates the need for on-access migration and forced sequential upgrades.
+
+See `datafusion51_partition_format_versioning.md` for complete details on the production implementation.
 
 ## References
 

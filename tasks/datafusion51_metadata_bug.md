@@ -81,27 +81,30 @@ Implement a custom backwards-compatible thrift parser that:
 
 ## Solution
 
-**See `datafusion51_metadata_fix.md` for the complete implementation plan.**
+**Status:** ✅ **SUPERSEDED by `datafusion51_partition_format_versioning.md`**
+
+This document describes the initial problem investigation. The final production solution uses explicit partition format versioning instead of on-access migration.
+
+**Initial approach (implemented but superseded):**
 
 After investigation and testing, we determined:
 - Legacy metadata CAN be parsed using deprecated `parquet::format` API
 - New format IS backwards compatible with old parsers
 - We can use `lakehouse_partitions.num_rows` to fix the metadata
-- Automatic on-access migration is the best approach
 
-The solution uses a compatibility parser that:
+The initial solution used a compatibility parser that:
 1. Detects legacy metadata parse failures
 2. Parses with deprecated thrift API
 3. Injects `num_rows` from database
 4. Re-serializes with Arrow 57.0
 5. Caches upgraded metadata
 
-## Implementation Plan
+**Production solution:**
 
-1. Truncate the `partition_metadata` table
-2. Restart the services
-3. Run the integration tests - they will regenerate metadata as needed
-4. Verify all tests pass
+See `datafusion51_partition_format_versioning.md` for the final implementation that uses explicit version tracking (`partition_format_version` column) to:
+- Avoid forced sequential backend upgrades
+- Provide zero-overhead performance for new partitions
+- Cleanly separate Version 1 (Arrow 56.0) and Version 2 (Arrow 57.0) handling
 
 ## File Changes
 

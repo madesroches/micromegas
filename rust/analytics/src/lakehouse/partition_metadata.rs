@@ -4,6 +4,7 @@ use micromegas_tracing::prelude::*;
 use sqlx::{PgPool, Row};
 use std::sync::Arc;
 
+use crate::arrow_utils::parse_parquet_metadata;
 use crate::lakehouse::metadata_compat;
 use datafusion::parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 
@@ -66,28 +67,53 @@ fn strip_column_index_info(metadata: ParquetMetaData) -> Result<ParquetMetaData>
 
 /// Load partition metadata by file path from the dedicated metadata table
 ///
-/// Uses legacy parser to handle both Arrow 56.0 and 57.0 formats.
-/// The legacy parser injects `num_rows` only when missing (Arrow 56.0 format).
+/// Dispatches to appropriate parser based on partition_format_version:
+/// - Version 1: Arrow 56.0 format, uses legacy parser with num_rows injection (requires additional query)
+/// - Version 2: Arrow 57.0 format, uses standard parser (fast path, no join)
 #[span_fn]
 pub async fn load_partition_metadata(
     pool: &PgPool,
     file_path: &str,
 ) -> Result<Arc<ParquetMetaData>> {
+    // Fast path: query only partition_metadata table (no join)
     let row = sqlx::query(
-        "SELECT pm.metadata, lp.num_rows
-         FROM partition_metadata pm
-         JOIN lakehouse_partitions lp ON pm.file_path = lp.file_path
-         WHERE pm.file_path = $1",
+        "SELECT metadata, partition_format_version
+         FROM partition_metadata
+         WHERE file_path = $1",
     )
     .bind(file_path)
     .fetch_one(pool)
     .await
     .with_context(|| format!("loading metadata for file: {}", file_path))?;
     let metadata_bytes: Vec<u8> = row.try_get("metadata")?;
-    let num_rows: i64 = row.try_get("num_rows")?;
-    // Parse with legacy-compatible parser (handles both Arrow 56.0 and 57.0)
-    let mut metadata = metadata_compat::parse_legacy_and_upgrade(&metadata_bytes, num_rows)
-        .with_context(|| format!("parsing metadata for file: {}", file_path))?;
+    let partition_format_version: i32 = row.try_get("partition_format_version")?;
+    // Dispatch based on format version
+    let mut metadata = match partition_format_version {
+        1 => {
+            // Arrow 56.0 format - need num_rows from lakehouse_partitions for legacy parser
+            let num_rows_row =
+                sqlx::query("SELECT num_rows FROM lakehouse_partitions WHERE file_path = $1")
+                    .bind(file_path)
+                    .fetch_one(pool)
+                    .await
+                    .with_context(|| format!("loading num_rows for v1 partition: {}", file_path))?;
+            let num_rows: i64 = num_rows_row.try_get("num_rows")?;
+            metadata_compat::parse_legacy_and_upgrade(&metadata_bytes, num_rows)
+                .with_context(|| format!("parsing v1 metadata for file: {}", file_path))?
+        }
+        2 => {
+            // Arrow 57.0 format - use standard parser (no additional query needed)
+            parse_parquet_metadata(&metadata_bytes.into())
+                .with_context(|| format!("parsing v2 metadata for file: {}", file_path))?
+        }
+        _ => {
+            return Err(anyhow::anyhow!(
+                "unsupported partition_format_version {} for file: {}",
+                partition_format_version,
+                file_path
+            ));
+        }
+    };
     // Remove column index information to prevent DataFusion from trying to read
     // legacy ColumnIndex structures that may have incomplete null_pages fields
     metadata = strip_column_index_info(metadata)?;
