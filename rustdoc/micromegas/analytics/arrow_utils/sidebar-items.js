@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["make_empty_record_batch","parse_parquet_metadata","serialize_parquet_metadata"]};
