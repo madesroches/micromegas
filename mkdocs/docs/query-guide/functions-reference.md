@@ -63,6 +63,7 @@ SELECT * FROM list_partitions()
 | file_schema_hash | Binary | Hash of the file schema |
 | source_data_hash | Binary | Hash of the source data |
 | num_rows | Int64 | Number of rows in the partition |
+| partition_format_version | Int32 | Parquet format version (1=Arrow 56.0, 2=Arrow 57.0) |
 
 **Example:**
 ```sql

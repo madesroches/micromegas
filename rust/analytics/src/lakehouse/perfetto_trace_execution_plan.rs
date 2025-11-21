@@ -21,6 +21,7 @@ use datafusion::{
     physical_plan::{
         DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
         execution_plan::{Boundedness, EmissionType},
+        limit::GlobalLimitExec,
         stream::RecordBatchStreamAdapter,
     },
 };
@@ -562,8 +563,16 @@ impl TableProvider for PerfettoTraceTableProvider {
         _state: &dyn Session,
         _projection: Option<&Vec<usize>>,
         _filters: &[Expr],
-        _limit: Option<usize>,
+        limit: Option<usize>,
     ) -> DFResult<Arc<dyn ExecutionPlan>> {
-        Ok(self.execution_plan.clone())
+        // Wrap the execution plan in a GlobalLimitExec if a limit is provided.
+        // DataFusion trusts us to apply the limit - if we ignore it, too many rows
+        // will be returned to the client.
+        let plan: Arc<dyn ExecutionPlan> = self.execution_plan.clone();
+        if let Some(fetch) = limit {
+            Ok(Arc::new(GlobalLimitExec::new(plan, 0, Some(fetch))))
+        } else {
+            Ok(plan)
+        }
     }
 }

@@ -11,7 +11,7 @@ use datafusion::catalog::Session;
 use datafusion::catalog::TableFunctionImpl;
 use datafusion::catalog::TableProvider;
 use datafusion::datasource::TableType;
-use datafusion::datasource::memory::MemorySourceConfig;
+use datafusion::datasource::memory::{DataSourceExec, MemorySourceConfig};
 use datafusion::error::DataFusionError;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::Expr;
@@ -72,30 +72,39 @@ impl TableProvider for ListViewSetsTableProvider {
         _state: &dyn Session,
         projection: Option<&Vec<usize>>,
         _filters: &[Expr],
-        _limit: Option<usize>,
+        limit: Option<usize>,
     ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
         // Get current schema versions from the view factory
         let schema_infos =
             list_view_sets(&self.view_factory).map_err(|e| DataFusionError::External(e.into()))?;
 
+        // Apply limit early to avoid building unnecessary arrays.
+        // DataFusion trusts us to apply the limit - if we ignore it, too many rows
+        // will be returned to the client.
+        let limited_infos: &[_] = if let Some(n) = limit {
+            &schema_infos[..n.min(schema_infos.len())]
+        } else {
+            &schema_infos
+        };
+
         // Convert to Arrow arrays
-        let view_set_names: Vec<String> = schema_infos
+        let view_set_names: Vec<String> = limited_infos
             .iter()
             .map(|info| info.view_set_name.clone())
             .collect();
-        let schema_hashes: Vec<&[u8]> = schema_infos
+        let schema_hashes: Vec<&[u8]> = limited_infos
             .iter()
             .map(|info| info.current_schema_hash.as_slice())
             .collect();
-        let schemas: Vec<String> = schema_infos
+        let schemas: Vec<String> = limited_infos
             .iter()
             .map(|info| info.schema.clone())
             .collect();
-        let has_view_makers: Vec<bool> = schema_infos
+        let has_view_makers: Vec<bool> = limited_infos
             .iter()
             .map(|info| info.has_view_maker)
             .collect();
-        let global_instances: Vec<bool> = schema_infos
+        let global_instances: Vec<bool> = limited_infos
             .iter()
             .map(|info| info.global_instance_available)
             .collect();
@@ -117,10 +126,11 @@ impl TableProvider for ListViewSetsTableProvider {
         let record_batch = RecordBatch::try_new(self.schema(), columns)
             .map_err(|e| DataFusionError::External(e.into()))?;
 
-        Ok(MemorySourceConfig::try_new_exec(
+        let source = MemorySourceConfig::try_new(
             &[vec![record_batch]],
             self.schema(),
             projection.map(|v| v.to_owned()),
-        )?)
+        )?;
+        Ok(DataSourceExec::from_data_source(source))
     }
 }

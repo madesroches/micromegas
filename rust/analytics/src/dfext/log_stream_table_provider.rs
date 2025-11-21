@@ -5,6 +5,7 @@ use datafusion::catalog::Session;
 use datafusion::catalog::TableProvider;
 use datafusion::datasource::TableType;
 use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::limit::GlobalLimitExec;
 use datafusion::prelude::Expr;
 use std::any::Any;
 use std::sync::Arc;
@@ -35,8 +36,16 @@ impl TableProvider for LogStreamTableProvider {
         _state: &dyn Session,
         _projection: Option<&Vec<usize>>,
         _filters: &[Expr],
-        _limit: Option<usize>,
+        limit: Option<usize>,
     ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
-        Ok(self.log_stream.clone())
+        // Wrap the execution plan in a GlobalLimitExec if a limit is provided.
+        // DataFusion trusts us to apply the limit - if we ignore it, too many rows
+        // will be returned to the client.
+        let plan: Arc<dyn ExecutionPlan> = self.log_stream.clone();
+        if let Some(fetch) = limit {
+            Ok(Arc::new(GlobalLimitExec::new(plan, 0, Some(fetch))))
+        } else {
+            Ok(plan)
+        }
     }
 }

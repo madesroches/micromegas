@@ -72,13 +72,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   - PIDs saved to `/tmp/micromegas_pids.txt`
 - **Stop Services**: `python3 local_test_env/ai_scripts/stop_services.py`
   - Stops all services and cleans up log files
-- **Service Logs**: 
+- **Service Logs**:
   - Ingestion: `tail -f /tmp/ingestion.log`
-  - Analytics: `tail -f /tmp/analytics.log` 
+  - Analytics: `tail -f /tmp/analytics.log`
   - Admin: `tail -f /tmp/admin.log`
 - **Service URLs**:
   - Ingestion server: http://127.0.0.1:9000
   - Analytics server: flight-sql port 50051 (no HTTP endpoint)
+
+### SQL Query CLI (from `python/micromegas/cli/` directory)
+- **Query**: `poetry run python query.py "SELECT * FROM list_partitions() LIMIT 5"`
+  - Use this tool to run arbitrary SQL queries against the analytics service
+  - Accepts optional `--begin` and `--end` for time range (relative like `1h`, `24h`, `7d` or ISO format)
+  - Accepts `--format` for output: `table` (default), `csv`, `json`
+  - Example: `poetry run python query.py "SELECT time, level, msg FROM log_entries LIMIT 10" --begin 1h --format csv`
 
 ## Architecture
 
