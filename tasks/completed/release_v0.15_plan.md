@@ -122,6 +122,16 @@ From `/grafana` directory:
 - [x] Move archive to release artifacts: `mv micromegas-datasource-0.15.0.tar.gz ../` ✅ Moved
 - [x] Verify archive contents are correct ✅ Verified contains dist/, binaries, docs, images
 
+**⚠️ POST-RELEASE NOTE (2025-11-24):**
+This packaging approach had a critical issue - it created an archive with a `dist/` folder instead of files at the root level, which Grafana doesn't support. The archive had to be manually rebuilt and re-uploaded.
+
+**For future releases, use the `build-plugin.sh` script instead:**
+```bash
+cd grafana
+./build-plugin.sh
+```
+This script properly packages the plugin with files at the root level. See PR #601 and grafana/README.md for details.
+
 ### Phase 4: Git Release
 - [x] Push tags: `git push origin v0.15.0` ✅ Tag pushed
 - [x] **Create GitHub release**: ✅ Release created at https://github.com/madesroches/micromegas/releases/tag/v0.15.0
