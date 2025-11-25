@@ -52,15 +52,13 @@ fn strip_column_index_info(metadata: ParquetMetaData) -> Result<ParquetMetaData>
             col.offset_index_length = None;
         }
     }
-    // Re-serialize with larger buffer to handle large metadata
-    let mut out_transport =
-        thrift::transport::TBufferChannel::with_capacity(0, file_metadata_bytes.len() * 2);
-    let mut out_protocol = TCompactOutputProtocol::new(&mut out_transport);
+    // Re-serialize - use Vec<u8> which auto-grows as needed
+    let mut modified_bytes: Vec<u8> = Vec::with_capacity(file_metadata_bytes.len() * 2);
+    let mut out_protocol = TCompactOutputProtocol::new(&mut modified_bytes);
     thrift_meta
         .write_to_out_protocol(&mut out_protocol)
         .context("serializing modified thrift metadata")?;
     out_protocol.flush()?;
-    let modified_bytes = out_transport.write_bytes();
     // Parse back to ParquetMetaData
     ParquetMetaDataReader::decode_metadata(&Bytes::copy_from_slice(&modified_bytes))
         .context("re-parsing metadata after stripping column index")
