@@ -63,14 +63,13 @@ fn test_legacy_parser_injects_num_rows_when_zero() {
         ThriftFileMetaData::read_from_in_protocol(&mut protocol).expect("read thrift");
     // Manually set num_rows to 0 to simulate Arrow 56.0 format
     thrift_meta.num_rows = 0;
-    // Re-serialize with num_rows=0
-    let mut out_transport = thrift::transport::TBufferChannel::with_capacity(0, 8192);
-    let mut out_protocol = TCompactOutputProtocol::new(&mut out_transport);
+    // Re-serialize with num_rows=0 - use Vec<u8> which auto-grows as needed
+    let mut zero_num_rows_bytes: Vec<u8> = Vec::new();
+    let mut out_protocol = TCompactOutputProtocol::new(&mut zero_num_rows_bytes);
     thrift_meta
         .write_to_out_protocol(&mut out_protocol)
         .expect("write thrift");
     out_protocol.flush().expect("flush");
-    let zero_num_rows_bytes = out_transport.write_bytes();
     // Parse with legacy parser - should inject num_rows=5
     let parsed =
         parse_legacy_and_upgrade(&zero_num_rows_bytes, 5).expect("parse with legacy parser");

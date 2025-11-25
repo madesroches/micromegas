@@ -177,37 +177,46 @@ WHERE view_set_name = 'log_entries';
 
 **ℹ️ Administrative Use:** This function provides schema discovery for administrators managing view compatibility and schema evolution. It shows the current schema versions and capabilities of each view set in the lakehouse.
 
-#### `retire_partition_by_file(file_path)` 🔧
+#### `retire_partition_by_metadata(view_set_name, view_instance_id, begin_insert_time, end_insert_time)` 🔧
 
-**Administrative Function** - Retires a single partition by its exact file path. Provides targeted partition removal for schema evolution and maintenance.
+**Administrative Function** - Retires a single partition by its metadata identifiers. Works for both empty and non-empty partitions.
 
 **Syntax:**
 ```sql
-SELECT retire_partition_by_file(file_path) as result
+SELECT retire_partition_by_metadata(view_set_name, view_instance_id, begin_insert_time, end_insert_time) as result
 ```
 
 **Parameters:**
 
-- `file_path` (`Utf8`): Exact file path of the partition to retire
+- `view_set_name` (`Utf8`): Name of the view set
+- `view_instance_id` (`Utf8`): Instance ID (e.g., process_id or 'global')
+- `begin_insert_time` (`Timestamp`): Begin insert time of the partition
+- `end_insert_time` (`Timestamp`): End insert time of the partition
 
 **Returns:** `Utf8` - Result message indicating success or failure
 
 **Example:**
 ```sql
 -- Retire a specific partition
-SELECT retire_partition_by_file('/lakehouse/log_entries/process-123/2024/01/01/partition.parquet') as result;
-
--- Retire multiple partitions (use with list_partitions())
-SELECT retire_partition_by_file(file_path) as result
-FROM list_partitions()
-WHERE view_set_name = 'log_entries' 
-  AND file_schema_hash != '[4]'  -- Retire old schema versions
-LIMIT 10;
+SELECT retire_partition_by_metadata(
+    'log_entries', 'process-123',
+    TIMESTAMP '2024-01-01 00:00:00',
+    TIMESTAMP '2024-01-01 01:00:00'
+) as result;
 ```
 
-**⚠️ DESTRUCTIVE OPERATION:** This function permanently removes a single data partition from the lakehouse, making the contained data inaccessible. Unlike `retire_partitions()` which operates on time ranges, this function targets exact file paths for precise partition management. Ensure proper backups exist before retiring partitions.
+**⚠️ DESTRUCTIVE OPERATION:** Permanently removes data. Batch operations are atomic - if any fails, all are rolled back.
 
-**✅ Safety Note:** This function only affects the specified partition file. It cannot accidentally retire other partitions, making it safer than time-range-based retirement for schema evolution tasks.
+#### `retire_partition_by_file(file_path)` 🔧
+
+**Administrative Function** - Retires a single partition by file path. Prefer `retire_partition_by_metadata()` for new code.
+
+**Syntax:**
+```sql
+SELECT retire_partition_by_file(file_path) as result
+```
+
+**Limitation:** Cannot retire empty partitions (file_path=NULL).
 
 #### `perfetto_trace_chunks(process_id, span_types, start_time, end_time)`
 

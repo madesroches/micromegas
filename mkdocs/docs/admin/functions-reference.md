@@ -109,9 +109,74 @@ SELECT * FROM retire_partitions('log_entries', 'process-123', '2024-01-01T00:00:
 
 ## Scalar Functions (UDFs)
 
+### `retire_partition_by_metadata(view_set_name, view_instance_id, begin_insert_time, end_insert_time)`
+
+**Description**: Surgically retires a single partition by its metadata identifiers. This is the preferred method for retiring partitions as it works for both empty partitions (file_path=NULL) and non-empty partitions.
+
+**Parameters**:
+- `view_set_name` (String): Name of the view set
+- `view_instance_id` (String): Instance ID (e.g., process_id or 'global')
+- `begin_insert_time` (Timestamp): Begin insert time of the partition
+- `end_insert_time` (Timestamp): End insert time of the partition
+
+**Usage**:
+```sql
+SELECT retire_partition_by_metadata(
+    'log_entries',
+    'process-123',
+    TIMESTAMP '2024-01-01 00:00:00',
+    TIMESTAMP '2024-01-01 01:00:00'
+) as result;
+```
+
+**Returns**: String message indicating success or failure:
+- Success: `"SUCCESS: Retired partition <view_set>/<instance> [<begin>, <end>)"`
+- Failure: `"ERROR: Partition not found: <view_set>/<instance> [<begin>, <end>)"`
+
+**Safety**:
+- Surgical precision - only targets the exact specified partition by its natural identifiers
+- Works for both empty partitions (file_path=NULL) and non-empty partitions
+- Uses database transactions with automatic rollback on batch errors
+- Files are scheduled for cleanup rather than immediately deleted
+
+**Example**:
+```sql
+-- Retire specific partition by metadata
+SELECT retire_partition_by_metadata(
+    'log_entries',
+    'process-123',
+    TIMESTAMP '2024-01-01 00:00:00',
+    TIMESTAMP '2024-01-01 01:00:00'
+);
+
+-- Batch retire incompatible partitions
+SELECT
+    view_set_name,
+    view_instance_id,
+    retire_partition_by_metadata(
+        view_set_name,
+        view_instance_id,
+        begin_insert_time,
+        end_insert_time
+    ) as result
+FROM list_partitions() p
+JOIN list_view_sets() vs ON p.view_set_name = vs.view_set_name
+WHERE p.file_schema_hash != vs.current_schema_hash
+LIMIT 10;
+```
+
+**Batch Behavior**: When called with multiple rows in a single query, all operations are executed within a single database transaction. If any retirement fails, all changes are rolled back and a `ROLLED_BACK` message is appended indicating the number of reverted changes.
+
+**Performance**: Single partition operation, very fast with appropriate database indexes.
+
+---
+
 ### `retire_partition_by_file(file_path)`
 
-**Description**: Surgically retires a single partition by exact file path match.
+**Description**: Retires a single partition by exact file path match.
+
+!!! note "Prefer metadata-based retirement"
+    For new code, prefer `retire_partition_by_metadata()` which works for both empty and non-empty partitions.
 
 **Parameters**:
 - `file_path` (String): Exact file path of partition to retire
@@ -125,22 +190,7 @@ SELECT retire_partition_by_file('s3://bucket/data/log_entries/process-123/2024/0
 - Success: `"SUCCESS: Retired partition <file_path>"`
 - Failure: `"ERROR: Partition not found: <file_path>"`
 
-**Safety**: Surgical precision - only targets the exact specified partition. Cannot accidentally retire other partitions.
-
-**Example**:
-```sql
--- Retire specific partition
-SELECT retire_partition_by_file('s3://bucket/data/log_entries/proc1/partition.parquet');
-
--- Batch retire multiple partitions
-SELECT file_path, retire_partition_by_file(file_path) as result
-FROM (
-    SELECT file_path FROM list_partitions() 
-    WHERE view_set_name = 'log_entries' 
-    AND file_schema_hash = '[3]'
-    LIMIT 10
-);
-```
+**Limitation**: Cannot retire empty partitions (where file_path is NULL). Use `retire_partition_by_metadata()` for empty partitions.
 
 **Performance**: Single partition operation, very fast with appropriate database indexes.
 
@@ -150,7 +200,7 @@ FROM (
 
 ### `micromegas.admin.list_incompatible_partitions(client, view_set_name=None)`
 
-**Description**: Identifies partitions with schemas incompatible with current schema versions.
+**Description**: Identifies partitions with schemas incompatible with current schema versions. Returns one row per incompatible partition for precise targeting.
 
 **Parameters**:
 - `client` (FlightSQLClient): Connected Micromegas client
@@ -162,11 +212,12 @@ FROM (
 |--------|------|-------------|
 | `view_set_name` | str | View set name |
 | `view_instance_id` | str | Instance ID |
+| `begin_insert_time` | timestamp | Begin insert time of the partition |
+| `end_insert_time` | timestamp | End insert time of the partition |
 | `incompatible_schema_hash` | str | Old schema version in partition |
 | `current_schema_hash` | str | Current schema version |
-| `partition_count` | int | Number of incompatible partitions |
-| `total_size_bytes` | int | Total size of incompatible partitions |
-| `file_paths` | list | Array of file paths for each partition |
+| `file_path` | str | File path for the partition (NULL for empty partitions) |
+| `file_size` | int | Size in bytes of the partition file (0 for empty partitions) |
 
 **Example**:
 ```python
@@ -177,15 +228,19 @@ client = micromegas.connect()
 
 # List all incompatible partitions
 incompatible = micromegas.admin.list_incompatible_partitions(client)
-print(f"Found {incompatible['partition_count'].sum()} incompatible partitions")
+print(f"Found {len(incompatible)} incompatible partitions")
 
 # List for specific view set
 log_incompatible = micromegas.admin.list_incompatible_partitions(client, 'log_entries')
-for _, row in log_incompatible.iterrows():
-    print(f"{row['view_set_name']}: {row['partition_count']} partitions, {row['total_size_bytes']} bytes")
+print(f"Log entries: {len(log_incompatible)} incompatible partitions")
+print(f"Total size: {log_incompatible['file_size'].sum()} bytes")
+
+# Check for empty partitions (file_path is NULL)
+empty_partitions = incompatible[incompatible['file_path'].isna()]
+print(f"Empty partitions: {len(empty_partitions)}")
 ```
 
-**Implementation**: Uses SQL JOIN between `list_partitions()` and `list_view_sets()` with server-side aggregation.
+**Implementation**: Uses SQL JOIN between `list_partitions()` and `list_view_sets()` with server-side filtering.
 
 **Performance**: Efficient server-side processing, minimal network overhead.
 
@@ -193,10 +248,10 @@ for _, row in log_incompatible.iterrows():
 
 ### `micromegas.admin.retire_incompatible_partitions(client, view_set_name=None)`
 
-**Description**: Safely retires partitions with incompatible schemas using surgical file-path-based retirement.
+**Description**: Safely retires partitions with incompatible schemas using metadata-based retirement. This handles both empty partitions (file_path=NULL) and non-empty partitions.
 
 **Parameters**:
-- `client` (FlightSQLClient): Connected Micromegas client  
+- `client` (FlightSQLClient): Connected Micromegas client
 - `view_set_name` (str, optional): Filter to specific view set
 
 **Returns**: pandas DataFrame with columns:
@@ -206,6 +261,7 @@ for _, row in log_incompatible.iterrows():
 | `view_set_name` | str | View set processed |
 | `view_instance_id` | str | Instance ID processed |
 | `partitions_retired` | int | Count of successfully retired partitions |
+| `partitions_failed` | int | Count of partitions that failed to retire |
 | `storage_freed_bytes` | int | Total bytes freed from storage |
 | `retirement_messages` | list | Detailed messages for each retirement attempt |
 
@@ -218,27 +274,31 @@ client = micromegas.connect()
 
 # Preview what would be retired
 preview = micromegas.admin.list_incompatible_partitions(client, 'log_entries')
-print(f"Will retire {preview['partition_count'].sum()} partitions")
+print(f"Will retire {len(preview)} partitions")
+print(f"Will free {preview['file_size'].sum() / (1024**3):.2f} GB")
 
 # Retire incompatible partitions
 result = micromegas.admin.retire_incompatible_partitions(client, 'log_entries')
 for _, row in result.iterrows():
     print(f"Retired {row['partitions_retired']} partitions from {row['view_set_name']}")
+    print(f"Failed {row['partitions_failed']} partitions")
     print(f"Freed {row['storage_freed_bytes']} bytes")
 ```
 
 **Safety Features**:
-- Uses `retire_partition_by_file()` for surgical precision
+- Uses `retire_partition_by_metadata()` for surgical precision
+- Works for both empty partitions (file_path=NULL) and non-empty partitions
 - Cannot accidentally retire compatible partitions
 - Comprehensive error handling with detailed messages
 - Continues processing even if individual partitions fail
-- Full transaction safety and rollback protection
+- Results grouped by view_set_name and view_instance_id for clarity
 
-**Implementation**: 
-1. Calls `list_incompatible_partitions()` to identify targets
-2. For each incompatible partition, calls `retire_partition_by_file()` 
-3. Aggregates results and provides summary statistics
-4. Includes detailed operation logs for auditing
+**Implementation**:
+1. Calls `list_incompatible_partitions()` to identify targets (one row per partition)
+2. Groups partitions by view_set_name and view_instance_id
+3. For each partition, calls `retire_partition_by_metadata()` with the partition's natural identifiers
+4. Aggregates results and provides summary statistics per group
+5. Includes detailed operation logs for auditing
 
 **Performance**: Processes partitions individually for safety, efficient for typical partition counts.
 
@@ -317,4 +377,3 @@ FROM total_summary t
 LEFT JOIN incompatible_summary i ON t.view_set_name = i.view_set_name
 ORDER BY size_percentage DESC;
 ```
-

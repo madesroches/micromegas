@@ -75,6 +75,8 @@ pub mod query;
 pub mod reader_factory;
 /// Scalar UDF to retire a single partition by file path
 pub mod retire_partition_by_file_udf;
+/// Scalar UDF to retire a single partition by metadata
+pub mod retire_partition_by_metadata_udf;
 /// Exposes retire_partitions as a table function
 pub mod retire_partitions_table_function;
 /// Runtime resources

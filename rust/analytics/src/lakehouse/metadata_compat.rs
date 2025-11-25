@@ -22,19 +22,22 @@ pub fn parse_legacy_and_upgrade(metadata_bytes: &[u8], num_rows: i64) -> Result<
     let mut protocol = TCompactInputProtocol::new(transport);
     let mut thrift_meta = ThriftFileMetaData::read_from_in_protocol(&mut protocol)
         .context("parsing legacy metadata with thrift")?;
+
     // Inject num_rows if missing or zero
     if thrift_meta.num_rows == 0 {
         trace!("injecting num_rows={} into legacy metadata", num_rows);
         thrift_meta.num_rows = num_rows;
     }
+
     // Re-serialize with thrift (now has num_rows)
-    let mut out_transport = thrift::transport::TBufferChannel::with_capacity(0, 8192);
-    let mut out_protocol = TCompactOutputProtocol::new(&mut out_transport);
+    // Use Vec<u8> which auto-grows as needed
+    let mut corrected_bytes: Vec<u8> = Vec::with_capacity(metadata_bytes.len() * 2);
+    let mut out_protocol = TCompactOutputProtocol::new(&mut corrected_bytes);
     thrift_meta
         .write_to_out_protocol(&mut out_protocol)
         .context("serializing corrected thrift metadata")?;
     out_protocol.flush()?;
-    let corrected_bytes = out_transport.write_bytes();
+
     // Parse with Arrow 57.0 (should work now)
     ParquetMetaDataReader::decode_metadata(&Bytes::copy_from_slice(&corrected_bytes))
         .context("re-parsing with Arrow 57.0")
