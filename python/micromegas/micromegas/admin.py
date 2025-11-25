@@ -28,11 +28,12 @@ def list_incompatible_partitions(
         pandas.DataFrame: DataFrame with incompatible partition information containing:
             - view_set_name: Name of the view set
             - view_instance_id: Instance ID (e.g., process_id or 'global')
+            - begin_insert_time: Begin insert time of the partition
+            - end_insert_time: End insert time of the partition
             - incompatible_schema_hash: The old schema hash in the partition
             - current_schema_hash: The current schema hash from ViewFactory
-            - partition_count: Number of incompatible partitions with this schema
-            - total_size_bytes: Total size in bytes of all incompatible partitions
-            - file_paths: Array of file paths for each incompatible partition (for precise retirement)
+            - file_path: File path for the partition (NULL for empty partitions)
+            - file_size: Size in bytes of the partition file (0 for empty partitions)
 
     Example:
         >>> import micromegas
@@ -42,15 +43,15 @@ def list_incompatible_partitions(
         >>>
         >>> # List all incompatible partitions across all view sets
         >>> incompatible = micromegas.admin.list_incompatible_partitions(client)
-        >>> print(f"Found {len(incompatible)} groups of incompatible partitions")
+        >>> print(f"Found {len(incompatible)} incompatible partitions")
         >>>
         >>> # List incompatible partitions for specific view set
         >>> log_incompatible = micromegas.admin.list_incompatible_partitions(client, 'log_entries')
-        >>> print(f"Log entries incompatible partitions: {log_incompatible['partition_count'].sum()}")
+        >>> print(f"Log entries incompatible partitions: {len(log_incompatible)}")
 
     Note:
         This function leverages the existing list_partitions() and list_view_sets()
-        UDTFs to perform server-side JOIN and aggregation for optimal performance.
+        UDTFs to perform server-side JOIN for optimal performance.
         Schema "hashes" are actually version numbers (e.g., [4]) not cryptographic hashes.
         SQL is executed directly by DataFusion, so no SQL injection concerns.
     """
@@ -60,22 +61,22 @@ def list_incompatible_partitions(
         view_filter = f"AND p.view_set_name = '{view_set_name}'"
 
     # Construct SQL query with JOIN between list_partitions() and list_view_sets()
-    # Server-side filtering and aggregation for optimal performance
+    # Return one row per partition (no aggregation) for metadata-based retirement
     sql = f"""
     SELECT 
         p.view_set_name,
-        p.view_instance_id, 
+        p.view_instance_id,
+        p.begin_insert_time,
+        p.end_insert_time,
         p.file_schema_hash as incompatible_schema_hash,
         vs.current_schema_hash,
-        COUNT(*) as partition_count,
-        SUM(p.file_size) as total_size_bytes,
-        ARRAY_AGG(p.file_path) as file_paths
+        p.file_path,
+        p.file_size
     FROM list_partitions() p
     JOIN list_view_sets() vs ON p.view_set_name = vs.view_set_name
     WHERE p.file_schema_hash != vs.current_schema_hash
         {view_filter}
-    GROUP BY p.view_set_name, p.view_instance_id, p.file_schema_hash, vs.current_schema_hash
-    ORDER BY p.view_set_name, p.view_instance_id
+    ORDER BY p.view_set_name, p.view_instance_id, p.begin_insert_time
     """
 
     return client.query(sql)
@@ -91,7 +92,7 @@ def retire_incompatible_partitions(
     safe schema evolution by cleaning up old schema versions.
 
     **SAFETY**: This function retires only the exact incompatible partitions by
-    their file paths, ensuring no compatible partitions are accidentally retired.
+    their metadata identifiers, ensuring no compatible partitions are accidentally retired.
 
     **WARNING**: This operation is irreversible. Retired partitions will be
     permanently deleted from metadata and their data files removed from object storage.
@@ -119,8 +120,8 @@ def retire_incompatible_partitions(
         >>>
         >>> # Preview what would be retired (recommended first step)
         >>> preview = micromegas.admin.list_incompatible_partitions(client, 'log_entries')
-        >>> print(f"Would retire {preview['partition_count'].sum()} partitions")
-        >>> print(f"Would free {preview['total_size_bytes'].sum() / (1024**3):.2f} GB")
+        >>> print(f"Would retire {len(preview)} partitions")
+        >>> print(f"Would free {preview['file_size'].sum() / (1024**3):.2f} GB")
         >>>
         >>> # Retire incompatible partitions for specific view set
         >>> if input("Proceed with retirement? (yes/no): ") == "yes":
@@ -129,10 +130,10 @@ def retire_incompatible_partitions(
         ...     print(f"Failed {result['partitions_failed'].sum()} partitions")
 
     Note:
-        This function uses the retire_partition_by_file() UDF to retire each
-        partition individually by its exact file path. This ensures precise
-        targeting and eliminates the risk of accidentally retiring compatible
-        partitions that happen to exist in the same time ranges.
+        This function uses the retire_partition_by_metadata() UDF to retire each
+        partition individually by its metadata identifiers (view_set_name, view_instance_id,
+        begin_insert_time, end_insert_time). This works for both empty partitions
+        (file_path=NULL) and non-empty partitions, ensuring complete cleanup.
     """
     # First identify incompatible partitions
     incompatible = list_incompatible_partitions(client, view_set_name)
@@ -150,35 +151,28 @@ def retire_incompatible_partitions(
             ]
         )
 
+    # Group by view_set_name and view_instance_id for aggregated results
     results = []
-
-    # For each group of incompatible partitions, retire by individual file paths
-    for _, group in incompatible.iterrows():
-        file_paths = group["file_paths"]
-
-        # Convert file_paths to list if it's not already (handle different pandas array types)
-        if hasattr(file_paths, "tolist"):
-            file_paths_list = file_paths.tolist()
-        elif isinstance(file_paths, str):
-            # Single file path case
-            file_paths_list = [file_paths]
-        else:
-            file_paths_list = list(file_paths)
-
+    for (view_set, view_instance), group in incompatible.groupby(
+        ["view_set_name", "view_instance_id"]
+    ):
         retirement_messages = []
         partitions_retired = 0
         partitions_failed = 0
+        storage_freed = 0
 
-        # Retire each partition individually using the targeted UDF
-        for file_path in file_paths_list:
-            if not file_path or pd.isna(file_path):
-                continue
-
+        # Retire each partition individually using metadata-based retirement
+        for _, partition in group.iterrows():
             try:
-                # Use the new retire_partition_by_file UDF
-                retirement_sql = (
-                    f"SELECT retire_partition_by_file('{file_path}') as message"
-                )
+                # Use retire_partition_by_metadata UDF
+                retirement_sql = f"""
+                SELECT retire_partition_by_metadata(
+                    '{partition['view_set_name']}',
+                    '{partition['view_instance_id']}',
+                    CAST({partition['begin_insert_time']} AS TIMESTAMP),
+                    CAST({partition['end_insert_time']} AS TIMESTAMP)
+                ) as message
+                """
                 retirement_result = client.query(retirement_sql)
 
                 if not retirement_result.empty:
@@ -187,36 +181,37 @@ def retire_incompatible_partitions(
 
                     if message.startswith("SUCCESS:"):
                         partitions_retired += 1
+                        storage_freed += int(partition["file_size"])
                     else:
                         partitions_failed += 1
-                        print(f"Warning: Failed to retire {file_path}: {message}")
+                        print(
+                            f"Warning: Failed to retire partition {partition['view_set_name']}/"
+                            f"{partition['view_instance_id']} [{partition['begin_insert_time']}, "
+                            f"{partition['end_insert_time']}): {message}"
+                        )
                 else:
                     partitions_failed += 1
                     retirement_messages.append(
-                        f"ERROR: No result returned for {file_path}"
+                        f"ERROR: No result returned for partition {partition['view_set_name']}/"
+                        f"{partition['view_instance_id']} [{partition['begin_insert_time']}, "
+                        f"{partition['end_insert_time']})"
                     )
 
             except Exception as e:
                 partitions_failed += 1
-                error_msg = f"ERROR: Exception retiring {file_path}: {e}"
+                error_msg = (
+                    f"ERROR: Exception retiring partition {partition['view_set_name']}/"
+                    f"{partition['view_instance_id']} [{partition['begin_insert_time']}, "
+                    f"{partition['end_insert_time']}): {e}"
+                )
                 retirement_messages.append(error_msg)
-                print(f"Error retiring partition {file_path}: {e}")
-
-        # Calculate storage freed (only count successful retirements)
-        if partitions_retired > 0 and group["partition_count"] > 0:
-            # Proportional calculation based on successful retirements
-            storage_freed = int(
-                group["total_size_bytes"]
-                * (partitions_retired / group["partition_count"])
-            )
-        else:
-            storage_freed = 0
+                print(error_msg)
 
         # Record retirement results for this group
         results.append(
             {
-                "view_set_name": group["view_set_name"],
-                "view_instance_id": group["view_instance_id"],
+                "view_set_name": view_set,
+                "view_instance_id": view_instance,
                 "partitions_retired": partitions_retired,
                 "partitions_failed": partitions_failed,
                 "storage_freed_bytes": storage_freed,

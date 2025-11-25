@@ -24,27 +24,37 @@ class MockFlightSQLClient:
                     columns=[
                         "view_set_name",
                         "view_instance_id",
+                        "begin_insert_time",
+                        "end_insert_time",
                         "incompatible_schema_hash",
                         "current_schema_hash",
-                        "partition_count",
-                        "total_size_bytes",
-                        "file_paths",
+                        "file_path",
+                        "file_size",
                     ]
                 )
 
-        # Check if this is a retire_partition_by_file call
-        elif "retire_partition_by_file(" in sql:
-            if "retirement_file_result_data" in self.mock_data:
-                return self.mock_data["retirement_file_result_data"]
+        # Check if this is a retire_partition_by_metadata call
+        elif "retire_partition_by_metadata(" in sql:
+            if "retirement_metadata_result_data" in self.mock_data:
+                return self.mock_data["retirement_metadata_result_data"]
             else:
-                # Extract file path from SQL for realistic mock response
+                # Default success response
                 import re
 
-                match = re.search(r"retire_partition_by_file\('([^']+)'\)", sql)
-                file_path = match.group(1) if match else "unknown.parquet"
-                return pd.DataFrame(
-                    {"message": [f"SUCCESS: Retired partition {file_path}"]}
+                match = re.search(
+                    r"retire_partition_by_metadata\(\s*'([^']+)',\s*'([^']+)',", sql
                 )
+                if match:
+                    view_set = match.group(1)
+                    instance = match.group(2)
+                    return pd.DataFrame(
+                        {
+                            "message": [
+                                f"SUCCESS: Retired partition {view_set}/{instance}"
+                            ]
+                        }
+                    )
+                return pd.DataFrame({"message": ["SUCCESS: Retired partition"]})
 
         # Default empty response
         return pd.DataFrame()
@@ -60,11 +70,12 @@ def test_list_incompatible_partitions_empty():
     expected_columns = [
         "view_set_name",
         "view_instance_id",
+        "begin_insert_time",
+        "end_insert_time",
         "incompatible_schema_hash",
         "current_schema_hash",
-        "partition_count",
-        "total_size_bytes",
-        "file_paths",
+        "file_path",
+        "file_size",
     ]
     assert list(result.columns) == expected_columns
 
@@ -74,20 +85,18 @@ def test_list_incompatible_partitions_with_data():
     mock_data = {
         "incompatible_test_data": pd.DataFrame(
             {
-                "view_set_name": ["log_entries", "log_entries"],
-                "view_instance_id": ["process-123", "process-456"],
-                "incompatible_schema_hash": ["[3]", "[2]"],
-                "current_schema_hash": ["[4]", "[4]"],
-                "partition_count": [5, 3],
-                "total_size_bytes": [1024000, 512000],
-                "file_paths": [
-                    ["/path/to/partition1.parquet", "/path/to/partition2.parquet"],
-                    [
-                        "/path/to/partition3.parquet",
-                        "/path/to/partition4.parquet",
-                        "/path/to/partition5.parquet",
-                    ],
+                "view_set_name": ["log_entries", "log_entries", "log_entries"],
+                "view_instance_id": ["process-123", "process-123", "process-456"],
+                "begin_insert_time": [1000000, 2000000, 3000000],
+                "end_insert_time": [1100000, 2100000, 3100000],
+                "incompatible_schema_hash": ["[3]", "[3]", "[2]"],
+                "current_schema_hash": ["[4]", "[4]", "[4]"],
+                "file_path": [
+                    "/path/to/partition1.parquet",
+                    "/path/to/partition2.parquet",
+                    "/path/to/partition3.parquet",
                 ],
+                "file_size": [512000, 512000, 512000],
             }
         )
     }
@@ -96,10 +105,13 @@ def test_list_incompatible_partitions_with_data():
     result = micromegas.admin.list_incompatible_partitions(client)
 
     assert isinstance(result, pd.DataFrame)
-    assert len(result) == 2
-    assert result["view_set_name"].tolist() == ["log_entries", "log_entries"]
-    assert result["partition_count"].sum() == 8
-    assert result["total_size_bytes"].sum() == 1536000
+    assert len(result) == 3
+    assert result["view_set_name"].tolist() == [
+        "log_entries",
+        "log_entries",
+        "log_entries",
+    ]
+    assert result["file_size"].sum() == 1536000
 
 
 def test_list_incompatible_partitions_with_view_filter():
@@ -107,15 +119,17 @@ def test_list_incompatible_partitions_with_view_filter():
     mock_data = {
         "incompatible_test_data": pd.DataFrame(
             {
-                "view_set_name": ["log_entries"],
-                "view_instance_id": ["process-123"],
-                "incompatible_schema_hash": ["[3]"],
-                "current_schema_hash": ["[4]"],
-                "partition_count": [5],
-                "total_size_bytes": [1024000],
-                "file_paths": [
-                    ["/path/to/partition1.parquet", "/path/to/partition2.parquet"]
+                "view_set_name": ["log_entries", "log_entries"],
+                "view_instance_id": ["process-123", "process-123"],
+                "begin_insert_time": [1000000, 2000000],
+                "end_insert_time": [1100000, 2100000],
+                "incompatible_schema_hash": ["[3]", "[3]"],
+                "current_schema_hash": ["[4]", "[4]"],
+                "file_path": [
+                    "/path/to/partition1.parquet",
+                    "/path/to/partition2.parquet",
                 ],
+                "file_size": [512000, 512000],
             }
         )
     }
@@ -124,7 +138,7 @@ def test_list_incompatible_partitions_with_view_filter():
     result = micromegas.admin.list_incompatible_partitions(client, "log_entries")
 
     assert isinstance(result, pd.DataFrame)
-    assert len(result) == 1
+    assert len(result) == 2
     assert result["view_set_name"].iloc[0] == "log_entries"
 
 
@@ -147,19 +161,21 @@ def test_retire_incompatible_partitions_empty():
 
 
 def test_retire_incompatible_partitions_with_data():
-    """Test retire_incompatible_partitions with file-path-based retirement."""
+    """Test retire_incompatible_partitions with metadata-based retirement."""
     mock_data = {
         "incompatible_test_data": pd.DataFrame(
             {
-                "view_set_name": ["log_entries"],
-                "view_instance_id": ["process-123"],
-                "incompatible_schema_hash": ["[3]"],
-                "current_schema_hash": ["[4]"],
-                "partition_count": [2],
-                "total_size_bytes": [1024000],
-                "file_paths": [
-                    ["/path/to/partition1.parquet", "/path/to/partition2.parquet"]
+                "view_set_name": ["log_entries", "log_entries"],
+                "view_instance_id": ["process-123", "process-123"],
+                "begin_insert_time": [1000000, 2000000],
+                "end_insert_time": [1100000, 2100000],
+                "incompatible_schema_hash": ["[3]", "[3]"],
+                "current_schema_hash": ["[4]", "[4]"],
+                "file_path": [
+                    "/path/to/partition1.parquet",
+                    "/path/to/partition2.parquet",
                 ],
+                "file_size": [512000, 512000],
             }
         )
     }
@@ -188,50 +204,45 @@ def test_retire_incompatible_partitions_with_failures():
     mock_data = {
         "incompatible_test_data": pd.DataFrame(
             {
-                "view_set_name": ["log_entries"],
-                "view_instance_id": ["process-456"],
-                "incompatible_schema_hash": ["[2]"],
-                "current_schema_hash": ["[4]"],
-                "partition_count": [3],
-                "total_size_bytes": [1536000],
-                "file_paths": [
-                    [
-                        "/path/to/good1.parquet",
-                        "/path/to/missing.parquet",
-                        "/path/to/good2.parquet",
-                    ]
+                "view_set_name": ["log_entries", "log_entries", "log_entries"],
+                "view_instance_id": ["process-456", "process-456", "process-456"],
+                "begin_insert_time": [1000000, 2000000, 3000000],
+                "end_insert_time": [1100000, 2100000, 3100000],
+                "incompatible_schema_hash": ["[2]", "[2]", "[2]"],
+                "current_schema_hash": ["[4]", "[4]", "[4]"],
+                "file_path": [
+                    "/path/to/good1.parquet",
+                    "/path/to/missing.parquet",
+                    "/path/to/good2.parquet",
                 ],
-            }
-        ),
-        "retirement_file_result_data": pd.DataFrame(
-            {
-                "message": [
-                    "SUCCESS: Retired partition /path/to/good1.parquet",
-                    "ERROR: Partition not found: /path/to/missing.parquet",
-                    "SUCCESS: Retired partition /path/to/good2.parquet",
-                ]
+                "file_size": [512000, 512000, 512000],
             }
         ),
     }
 
     client = MockFlightSQLClient(mock_data)
 
-    # Override the query method to return different results for different file paths
+    # Override the query method to return different results for different partitions
     original_query = client.query
 
     def mock_query_with_failures(sql):
-        if "retire_partition_by_file('/path/to/missing.parquet')" in sql:
+        if "retire_partition_by_metadata(" in sql and "2000000" in sql:
             return pd.DataFrame(
-                {"message": ["ERROR: Partition not found: /path/to/missing.parquet"]}
+                {"message": ["ERROR: Partition not found: process-456 [2000000, 2100000)"]}
             )
-        elif "retire_partition_by_file(" in sql:
+        elif "retire_partition_by_metadata(" in sql:
             import re
 
-            match = re.search(r"retire_partition_by_file\('([^']+)'\)", sql)
-            file_path = match.group(1) if match else "unknown.parquet"
-            return pd.DataFrame(
-                {"message": [f"SUCCESS: Retired partition {file_path}"]}
+            match = re.search(
+                r"retire_partition_by_metadata\(\s*'([^']+)',\s*'([^']+)',", sql
             )
+            if match:
+                view_set = match.group(1)
+                instance = match.group(2)
+                return pd.DataFrame(
+                    {"message": [f"SUCCESS: Retired partition {view_set}/{instance}"]}
+                )
+            return pd.DataFrame({"message": ["SUCCESS: Retired partition"]})
         else:
             return original_query(sql)
 
@@ -245,8 +256,8 @@ def test_retire_incompatible_partitions_with_failures():
     assert result["partitions_retired"].iloc[0] == 2  # 2 successful retirements
     assert result["partitions_failed"].iloc[0] == 1  # 1 failure
 
-    # Storage freed should be proportional to successful retirements (2/3 of total)
-    expected_freed = int(1536000 * (2 / 3))
+    # Storage freed should be sum of successful retirements (2 * 512000)
+    expected_freed = 2 * 512000
     assert result["storage_freed_bytes"].iloc[0] == expected_freed
 
     # Check retirement messages
@@ -275,11 +286,12 @@ def test_sql_injection_resilience():
             {
                 "view_set_name": ["test'; DROP TABLE test; --"],
                 "view_instance_id": ["proc'; DELETE FROM procs; --"],
+                "begin_insert_time": [1000000],
+                "end_insert_time": [1100000],
                 "incompatible_schema_hash": ["[3'; TRUNCATE schemas; --]"],
                 "current_schema_hash": ["[4]"],
-                "partition_count": [1],
-                "total_size_bytes": [1000],
-                "file_paths": [["/path/to/malicious'; DROP TABLE files; --.parquet"]],
+                "file_path": ["/path/to/malicious'; DROP TABLE files; --.parquet"],
+                "file_size": [1000],
             }
         )
     }
@@ -308,16 +320,17 @@ def test_list_incompatible_partitions_integration():
     expected_columns = [
         "view_set_name",
         "view_instance_id",
+        "begin_insert_time",
+        "end_insert_time",
         "incompatible_schema_hash",
         "current_schema_hash",
-        "partition_count",
-        "total_size_bytes",
-        "file_paths",
+        "file_path",
+        "file_size",
     ]
     assert list(result.columns) == expected_columns
 
     print(
-        f"list_incompatible_partitions returned {len(result)} incompatible partition groups"
+        f"list_incompatible_partitions returned {len(result)} incompatible partitions"
     )
     if len(result) > 0:
         print(f"Sample data:\n{result.head()}")
