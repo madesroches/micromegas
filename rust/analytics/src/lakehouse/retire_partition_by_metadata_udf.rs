@@ -281,6 +281,10 @@ impl AsyncScalarUDFImpl for RetirePartitionByMetadata {
                 error!("Failed to rollback transaction after errors: {:?}", e);
             }
             info!("Rolled back transaction due to errors in batch retirement");
+            builder.append_value(format!(
+                "ROLLED_BACK: All {} previous changes were reverted due to errors in batch",
+                success_count
+            ));
         } else {
             transaction.commit().await.map_err(|e| {
                 DataFusionError::Execution(format!("Failed to commit transaction: {e}"))
