@@ -52,8 +52,9 @@ fn strip_column_index_info(metadata: ParquetMetaData) -> Result<ParquetMetaData>
             col.offset_index_length = None;
         }
     }
-    // Re-serialize
-    let mut out_transport = thrift::transport::TBufferChannel::with_capacity(0, 8192);
+    // Re-serialize with larger buffer to handle large metadata
+    let mut out_transport =
+        thrift::transport::TBufferChannel::with_capacity(0, file_metadata_bytes.len() * 2);
     let mut out_protocol = TCompactOutputProtocol::new(&mut out_transport);
     thrift_meta
         .write_to_out_protocol(&mut out_protocol)
@@ -85,10 +86,12 @@ pub async fn load_partition_metadata(
     .fetch_one(pool)
     .await
     .with_context(|| format!("loading metadata for file: {}", file_path))?;
+
     let metadata_bytes: Vec<u8> = row.try_get("metadata")?;
     let partition_format_version: i32 = row.try_get("partition_format_version")?;
+
     // Dispatch based on format version
-    let mut metadata = match partition_format_version {
+    let metadata = match partition_format_version {
         1 => {
             // Arrow 56.0 format - need num_rows from lakehouse_partitions for legacy parser
             let num_rows_row =
@@ -98,6 +101,7 @@ pub async fn load_partition_metadata(
                     .await
                     .with_context(|| format!("loading num_rows for v1 partition: {}", file_path))?;
             let num_rows: i64 = num_rows_row.try_get("num_rows")?;
+
             metadata_compat::parse_legacy_and_upgrade(&metadata_bytes, num_rows)
                 .with_context(|| format!("parsing v1 metadata for file: {}", file_path))?
         }
@@ -114,10 +118,12 @@ pub async fn load_partition_metadata(
             ));
         }
     };
+
     // Remove column index information to prevent DataFusion from trying to read
     // legacy ColumnIndex structures that may have incomplete null_pages fields
-    metadata = strip_column_index_info(metadata)?;
-    Ok(Arc::new(metadata))
+    let stripped = strip_column_index_info(metadata)
+        .with_context(|| format!("stripping column index for file: {}", file_path))?;
+    Ok(Arc::new(stripped))
 }
 
 /// Delete multiple partition metadata entries in a single transaction
