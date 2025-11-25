@@ -143,6 +143,9 @@ export const onAuthTypeChange = (selectedAuthType: any, options: any, onOptionsC
   const notPassType = selectedAuthType?.label !== "username/password"
   const notOAuthType = selectedAuthType?.label !== "oauth2"
 
+  // Initialize secureJsonData if it doesn't exist to prevent undefined access errors
+  const existingSecureJsonData = options.secureJsonData || {}
+
   onOptionsChange({
     ...options,
     jsonData: {
@@ -155,15 +158,15 @@ export const onAuthTypeChange = (selectedAuthType: any, options: any, onOptionsC
     },
     secureJsonFields: {
       ...options.secureJsonFields,
-      token: notTokenType ? false : options.secureJsonFields.token,
-      password: notPassType ? false : options.secureJsonFields.password,
-      oauthClientSecret: notOAuthType ? false : options.secureJsonFields.oauthClientSecret,
+      token: notTokenType ? false : options.secureJsonFields?.token,
+      password: notPassType ? false : options.secureJsonFields?.password,
+      oauthClientSecret: notOAuthType ? false : options.secureJsonFields?.oauthClientSecret,
     },
     secureJsonData: {
-      ...options.secureJsonData,
-      token: notTokenType ? '' : options.secureJsonData.token,
-      password: notPassType ? '' : options.secureJsonData.password,
-      oauthClientSecret: notOAuthType ? '' : options.secureJsonData.oauthClientSecret,
+      ...existingSecureJsonData,
+      token: notTokenType ? '' : existingSecureJsonData.token,
+      password: notPassType ? '' : existingSecureJsonData.password,
+      oauthClientSecret: notOAuthType ? '' : existingSecureJsonData.oauthClientSecret,
     },
   })
 }
