@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use datafusion::{
     arrow::{
         array::{Array, StringArray, StringBuilder, TimestampNanosecondArray},
-        datatypes::DataType,
+        datatypes::{DataType, TimeUnit},
     },
     common::internal_err,
     error::DataFusionError,
@@ -54,8 +54,8 @@ impl RetirePartitionByMetadata {
                 vec![
                     DataType::Utf8,
                     DataType::Utf8,
-                    DataType::Timestamp(datafusion::arrow::datatypes::TimeUnit::Nanosecond, None),
-                    DataType::Timestamp(datafusion::arrow::datatypes::TimeUnit::Nanosecond, None),
+                    DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into())),
+                    DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into())),
                 ],
                 Volatility::Volatile,
             ),
