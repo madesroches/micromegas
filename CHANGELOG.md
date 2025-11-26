@@ -3,6 +3,30 @@
 This file documents the historical progress of the Micromegas project. For current focus, please see the main [README.md](./README.md).
 
 ## [Unreleased]
+ * **Analytics & Query Features:**
+   * Optimize JSONB UDFs for dictionary-encoded column support (#593)
+   * Fix timestamp binding in retire_partition_by_metadata UDF (#606)
+   * Handle empty incompatible partitions and fix thrift buffer sizing (#602)
+ * **HTTP Gateway:**
+   * Add HTTP Gateway with Authentication and Security Features (#597)
+ * **Analytics Web App:**
+   * Add OIDC authentication to analytics web app (#596)
+ * **Grafana Plugin:**
+   * Fix Grafana plugin packaging and document release process (#601)
+   * Fix secureJsonData undefined error and rename plugin to Micromegas FlightSQL (#603)
+ * **Build & CI:**
+   * Enable Claude to submit PR reviews and issue comments (#605)
+   * "Claude PR Assistant workflow" (#604)
+ * **Security & Dependencies:**
+   * Fix js-yaml prototype pollution vulnerability (CVE-2025-64718) (#592)
+   * Upgrade DataFusion from version 50.2.0 to 51.0.0 (#598)
+   * Fix LIMIT pushdown in all TableProvider implementations (#600)
+ * **Documentation:**
+   * Document auth_provider parameter and deprecate headers in Python API (#595)
+ * **Bug Fixes:**
+   * Fix OIDC authentication and token refresh issues (#590)
+ * **Post-Release:**
+   * Release v0.15.0 - Post-release updates and version bump to 0.16.0 (#589)
 
 ## November 2025 - v0.15.0
  * Released [version 0.15.0](https://crates.io/crates/micromegas)

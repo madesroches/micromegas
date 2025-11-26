@@ -58,18 +58,16 @@ This guide covers installing the Micromegas Grafana datasource plugin.
 
 2. Install dependencies:
    ```bash
-   npm install
-   # or
    yarn install
    ```
 
 3. Build the plugin:
    ```bash
    # Production build
-   npm run build
+   yarn build
 
    # Development build with watch mode
-   npm run dev
+   yarn dev
    ```
 
 4. Build backend binaries (Go):
