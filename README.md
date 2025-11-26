@@ -70,17 +70,18 @@ To get started with Micromegas, please refer to the [Getting Started](https://ma
 
 ## Current Status & Roadmap
 
-### November 2025 - v0.15.0 (In Progress)
+### Unreleased - v0.16.0 (In Progress)
+* HTTP Gateway with authentication and security features
+* OIDC authentication for analytics web app
+* DataFusion 51.0.0 upgrade with LIMIT pushdown fixes
+* JSONB UDF optimizations for dictionary-encoded columns
+* Grafana plugin improvements and fixes
+
+### November 2025 - v0.15.0
 * Grafana plugin with OAuth 2.0, variable queries, and CI/CD pipeline
 * gRPC health checks and enhanced authentication
 * Modernized Unreal Engine telemetry sink
 * Improved documentation and build tooling
-
-### October 2025 - v0.14.0
-* Dictionary-encoded JSONB for optimized storage
-* Support for empty lakehouse partitions
-* NULL value handling fixes in SQL-Arrow bridge
-* [High-Frequency Observability presentation](https://madesroches.github.io/micromegas/high-frequency-observability/)
 
 For a detailed history of changes, please see the [CHANGELOG.md](./CHANGELOG.md) file.
 
