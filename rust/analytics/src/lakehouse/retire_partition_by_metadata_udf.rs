@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use datafusion::{
     arrow::{
         array::{Array, StringArray, StringBuilder, TimestampNanosecondArray},
@@ -69,8 +70,8 @@ impl RetirePartitionByMetadata {
     /// * `transaction` - Database transaction to use
     /// * `view_set_name` - The name of the view set
     /// * `view_instance_id` - The instance ID (e.g., process_id or 'global')
-    /// * `begin_insert_time` - Begin insert time timestamp (nanoseconds since epoch)
-    /// * `end_insert_time` - End insert time timestamp (nanoseconds since epoch)
+    /// * `begin_insert_time` - Begin insert time timestamp
+    /// * `end_insert_time` - End insert time timestamp
     ///
     /// # Returns
     /// * `Ok(())` on successful retirement
@@ -80,8 +81,8 @@ impl RetirePartitionByMetadata {
         transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
         view_set_name: &str,
         view_instance_id: &str,
-        begin_insert_time: i64,
-        end_insert_time: i64,
+        begin_insert_time: DateTime<Utc>,
+        end_insert_time: DateTime<Utc>,
     ) -> Result<()> {
         // First, check if the partition exists and get its details
         let partition_query = sqlx::query(
@@ -245,8 +246,12 @@ impl AsyncScalarUDFImpl for RetirePartitionByMetadata {
 
             let view_set_name = view_set_names.value(index);
             let view_instance_id = view_instance_ids.value(index);
-            let begin_insert_time = begin_insert_times.value(index);
-            let end_insert_time = end_insert_times.value(index);
+            let begin_insert_time_nanos = begin_insert_times.value(index);
+            let end_insert_time_nanos = end_insert_times.value(index);
+
+            // Convert nanoseconds to DateTime<Utc> for proper sqlx binding
+            let begin_insert_time = DateTime::from_timestamp_nanos(begin_insert_time_nanos);
+            let end_insert_time = DateTime::from_timestamp_nanos(end_insert_time_nanos);
 
             match self
                 .retire_partition_in_transaction(

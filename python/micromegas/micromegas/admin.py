@@ -8,6 +8,8 @@ should be used with caution as they perform potentially destructive operations.
 import pandas as pd
 from typing import Optional
 
+from micromegas.time import format_datetime
+
 
 def list_incompatible_partitions(
     client, view_set_name: Optional[str] = None
@@ -165,12 +167,14 @@ def retire_incompatible_partitions(
         for _, partition in group.iterrows():
             try:
                 # Use retire_partition_by_metadata UDF
+                begin_time = format_datetime(partition["begin_insert_time"])
+                end_time = format_datetime(partition["end_insert_time"])
                 retirement_sql = f"""
                 SELECT retire_partition_by_metadata(
                     '{partition['view_set_name']}',
                     '{partition['view_instance_id']}',
-                    CAST({partition['begin_insert_time']} AS TIMESTAMP),
-                    CAST({partition['end_insert_time']} AS TIMESTAMP)
+                    CAST('{begin_time}' AS TIMESTAMP),
+                    CAST('{end_time}' AS TIMESTAMP)
                 ) as message
                 """
                 retirement_result = client.query(retirement_sql)
