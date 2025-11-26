@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{DateTime, Utc};
 use datafusion::{
     arrow::{
         array::{Array, StringArray, StringBuilder, TimestampNanosecondArray},
@@ -250,8 +250,8 @@ impl AsyncScalarUDFImpl for RetirePartitionByMetadata {
             let end_insert_time_nanos = end_insert_times.value(index);
 
             // Convert nanoseconds to DateTime<Utc> for proper sqlx binding
-            let begin_insert_time = Utc.timestamp_nanos(begin_insert_time_nanos);
-            let end_insert_time = Utc.timestamp_nanos(end_insert_time_nanos);
+            let begin_insert_time = DateTime::from_timestamp_nanos(begin_insert_time_nanos);
+            let end_insert_time = DateTime::from_timestamp_nanos(end_insert_time_nanos);
 
             match self
                 .retire_partition_in_transaction(
