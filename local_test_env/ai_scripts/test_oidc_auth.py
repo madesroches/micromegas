@@ -116,6 +116,8 @@ def test_oidc_login():
 
     client_id = os.environ["OIDC_CLIENT_ID"]
     client_secret = os.environ.get("OIDC_CLIENT_SECRET")  # Optional
+    audience = os.environ.get("OIDC_AUDIENCE") or os.environ.get("MICROMEGAS_OIDC_AUDIENCE")  # Optional but important for Auth0
+    scope = os.environ.get("MICROMEGAS_OIDC_SCOPE")  # Optional custom scopes (e.g., for Azure custom API)
     token_file = str(Path.home() / ".micromegas" / "tokens.json")
 
     print(f"🔐 Configuration:")
@@ -125,6 +127,10 @@ def test_oidc_login():
         print(f"   Client Secret: {'*' * min(20, len(client_secret))} (Web Application mode)")
     else:
         print(f"   Client Secret: (not required - using PKCE)")
+    if audience:
+        print(f"   Audience: {audience}")
+    if scope:
+        print(f"   Scope: {scope}")
     print(f"   Token file: {token_file}")
     print()
 
@@ -135,15 +141,35 @@ def test_oidc_login():
         print(f"   File: {token_file}")
         print(f"   Permissions: {oct(token_file_path.stat().st_mode)[-3:]}")
         print()
-        print("📝 Loading tokens from file...")
 
+        # Check if saved token has matching audience
+        import json as json_module
         try:
-            auth = OidcAuthProvider.from_file(token_file, client_secret=client_secret)
-            print("✅ Tokens loaded successfully")
-            print()
+            with open(token_file) as f:
+                saved_data = json_module.load(f)
+            saved_audience = saved_data.get("audience")
+
+            if audience and saved_audience != audience:
+                print(f"⚠️  Saved token has different audience:")
+                print(f"   Saved:    {saved_audience}")
+                print(f"   Expected: {audience}")
+                print("   Deleting and re-authenticating with correct audience...")
+                token_file_path.unlink()
+                auth = None
+            else:
+                print("📝 Loading tokens from file...")
+                try:
+                    auth = OidcAuthProvider.from_file(token_file, client_secret=client_secret)
+                    print("✅ Tokens loaded successfully")
+                    print()
+                except Exception as e:
+                    print(f"❌ Failed to load tokens: {e}")
+                    print("   Tokens may be expired or corrupted")
+                    print("   Deleting and re-authenticating...")
+                    token_file_path.unlink()
+                    auth = None
         except Exception as e:
-            print(f"❌ Failed to load tokens: {e}")
-            print("   Tokens may be expired or corrupted")
+            print(f"❌ Failed to read token file: {e}")
             print("   Deleting and re-authenticating...")
             token_file_path.unlink()
             auth = None
@@ -167,11 +193,15 @@ def test_oidc_login():
     # If no valid auth, do browser login
     if auth is None:
         print()
-        print("🌐 Starting browser-based authentication...")
-        print(f"   A browser window will open for {issuer}")
-        print("   Please sign in and authorize the application")
+        print("🌐 Browser-based authentication required")
+        print(f"   Provider: {issuer}")
         print()
-        input("Press Enter when ready to continue...")
+        print("To authenticate, you will need to:")
+        print("  1. Open the authorization URL in your browser")
+        print("  2. Sign in and authorize the application")
+        print("  3. The callback will be handled automatically")
+        print()
+        input("Press Enter when ready to start authentication...")
         print()
 
         try:
@@ -180,6 +210,8 @@ def test_oidc_login():
                 client_id=client_id,
                 client_secret=client_secret,
                 token_file=token_file,
+                audience=audience,
+                scope=scope,
             )
             print()
             print("✅ Authentication successful!")

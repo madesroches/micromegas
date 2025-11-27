@@ -110,7 +110,9 @@ impl JwksCache {
 pub struct OidcIssuer {
     /// Issuer URL (e.g., <https://accounts.google.com>)
     pub issuer: String,
-    /// Expected audience (client ID)
+    /// Expected audience
+    /// - For access tokens: API audience (e.g., "https://api.example.com")
+    /// - For ID tokens: client ID
     pub audience: String,
 }
 
@@ -171,7 +173,18 @@ impl Audience {
     }
 }
 
-/// JWT Claims from OIDC ID token
+/// JWT Claims from OIDC ID token or access token
+///
+/// This struct supports multiple OIDC providers by including various email claim fields.
+/// Different providers use different claim names for email addresses:
+///
+/// Email extraction priority (see `get_email()` method):
+/// 1. `verified_primary_email` - Azure AD optional claim (most reliable, verified by provider)
+/// 2. `email` - Standard OIDC claim (Google, some Azure AD configurations)
+/// 3. `namespaced_email` - Custom namespaced claims (Auth0: `https://micromegas.io/email`)
+/// 4. `preferred_username` - Azure AD standard claim (often contains email)
+/// 5. `upn` - User Principal Name (Azure AD enterprise)
+/// 6. `unique_name` - Legacy Azure AD claim
 #[derive(Debug, Serialize, Deserialize)]
 struct Claims {
     /// Issuer - identifies the principal that issued the JWT
@@ -183,25 +196,39 @@ struct Claims {
     aud: Audience,
     /// Expiration time - identifies the expiration time on or after which the JWT must not be accepted
     exp: i64,
-    /// Email address of the user (optional, provider-specific)
+    /// Email address of the user (standard OIDC claim, used by Google and some Azure AD configurations)
     #[serde(skip_serializing_if = "Option::is_none")]
     email: Option<String>,
-    /// Preferred username (Azure AD, often contains email)
+    /// Verified primary email (Azure AD optional claim - most reliable, verified by provider)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    verified_primary_email: Option<String>,
+    /// Preferred username (Azure AD standard claim, often contains email)
     #[serde(skip_serializing_if = "Option::is_none")]
     preferred_username: Option<String>,
-    /// User Principal Name (Azure AD alternative)
+    /// User Principal Name (Azure AD enterprise claim)
     #[serde(skip_serializing_if = "Option::is_none")]
     upn: Option<String>,
-    /// Unique name (older Azure AD tokens)
+    /// Unique name (legacy Azure AD claim from older tokens)
     #[serde(skip_serializing_if = "Option::is_none")]
     unique_name: Option<String>,
+    /// Custom namespaced email claim (Auth0 custom claims via Actions)
+    #[serde(rename = "https://micromegas.io/email")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    namespaced_email: Option<String>,
+    /// Custom namespaced name claim (Auth0 custom claims via Actions)
+    #[serde(rename = "https://micromegas.io/name")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    namespaced_name: Option<String>,
 }
 
 impl Claims {
     /// Get email from various possible claim fields
+    /// Priority order: verified_primary_email (most reliable) → email → namespaced_email → preferred_username → upn → unique_name
     fn get_email(&self) -> Option<String> {
-        self.email
+        self.verified_primary_email
             .clone()
+            .or_else(|| self.email.clone())
+            .or_else(|| self.namespaced_email.clone())
             .or_else(|| self.preferred_username.clone())
             .or_else(|| self.upn.clone())
             .or_else(|| self.unique_name.clone())
@@ -281,11 +308,11 @@ fn jwk_to_decoding_key(
 
 /// OIDC authentication provider
 ///
-/// Validates ID tokens from configured OIDC providers.
+/// Validates JWT tokens (access or ID tokens) from configured OIDC providers.
 /// Caches both JWKS and validated tokens for performance.
 pub struct OidcAuthProvider {
-    /// Map from issuer URL to issuer client
-    clients: HashMap<String, Arc<OidcIssuerClient>>,
+    /// Map from issuer URL to list of clients (supports multiple audiences per issuer)
+    clients: HashMap<String, Vec<Arc<OidcIssuerClient>>>,
     /// Cache for validated tokens
     token_cache: Cache<String, Arc<AuthContext>>,
     /// Admin users (by email or subject)
@@ -295,7 +322,7 @@ pub struct OidcAuthProvider {
 impl std::fmt::Debug for OidcAuthProvider {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("OidcAuthProvider")
-            .field("clients", &self.clients.keys())
+            .field("num_clients", &self.clients.len())
             .field("admin_users", &"(not printed)")
             .finish()
     }
@@ -308,10 +335,21 @@ impl OidcAuthProvider {
             return Err(anyhow!("At least one OIDC issuer must be configured"));
         }
 
+        micromegas_tracing::info!("Configuring OIDC with {} issuer(s)", config.issuers.len());
+        for (idx, issuer_config) in config.issuers.iter().enumerate() {
+            micromegas_tracing::info!(
+                "  Issuer {}: {} (audience: {})",
+                idx + 1,
+                issuer_config.issuer,
+                issuer_config.audience
+            );
+        }
+
         let jwks_ttl = Duration::from_secs(config.jwks_refresh_interval_secs);
-        let mut clients = HashMap::new();
+        let mut clients: HashMap<String, Vec<Arc<OidcIssuerClient>>> = HashMap::new();
 
         // Initialize a client for each configured issuer
+        // Supports multiple audiences for the same issuer (e.g., access tokens + ID tokens)
         for issuer_config in config.issuers {
             let client = OidcIssuerClient::new(
                 issuer_config.issuer.clone(),
@@ -319,7 +357,10 @@ impl OidcAuthProvider {
                 jwks_ttl,
             )?;
 
-            clients.insert(issuer_config.issuer, Arc::new(client));
+            clients
+                .entry(issuer_config.issuer)
+                .or_default()
+                .push(Arc::new(client));
         }
 
         // Create token cache
@@ -365,87 +406,151 @@ impl OidcAuthProvider {
         Ok(claims)
     }
 
-    /// Validate an ID token and return authentication context
+    /// Validate a JWT token (access token or ID token) and return authentication context
     ///
     /// This implementation follows OAuth 2.0 best practices by:
-    /// 1. Extracting kid from JWT header for direct key lookup
+    /// 1. Extracting kid from JWT header for direct key lookup (falls back to trying all keys)
     /// 2. Extracting issuer from JWT payload for direct client lookup
     /// 3. Using O(1) lookups instead of O(n*m) iteration
     /// 4. Eliminating timing side-channels
-    async fn validate_id_token(&self, token: &str) -> Result<AuthContext> {
+    ///
+    /// Supports both:
+    /// - Access tokens (with API audience, used by Auth0 and similar)
+    /// - ID tokens (with client_id audience, used by Google/Azure AD)
+    async fn validate_jwt_token(&self, token: &str) -> Result<AuthContext> {
         // Step 1: Decode header (unsigned) to get key ID (kid)
         let header = decode_header(token).map_err(|e| anyhow!("Invalid JWT header: {e:?}"))?;
 
-        let kid = header
-            .kid
-            .ok_or_else(|| anyhow!("JWT missing kid (key ID) in header"))?;
+        // kid is optional - some providers omit it when there's only one key
+        let kid = header.kid;
 
-        // Step 2: Decode payload (unsigned) to get issuer
+        // Step 2: Decode payload (unsigned) to get issuer and expiration
         let unverified_claims = self.decode_payload_unsafe(token)?;
 
-        // Step 3: Look up specific issuer client
-        let client = self
+        // Step 3: Look up clients for this issuer
+        let issuer_clients = self
             .clients
             .get(&unverified_claims.iss)
             .ok_or_else(|| anyhow!("Unknown issuer: {}", unverified_claims.iss))?;
 
-        // Step 4: Get JWKS and find specific key by kid
-        let jwks = client
+        // Step 4: Fetch JWKS once (all clients for the same issuer share the same JWKS)
+        // Use the first client's cache - they all point to the same issuer's JWKS endpoint
+        let first_client = issuer_clients
+            .first()
+            .ok_or_else(|| anyhow!("No clients configured for issuer"))?;
+
+        let jwks = first_client
             .jwks_cache
             .get()
             .await
             .map_err(|e| anyhow!("Failed to fetch JWKS: {e:?}"))?;
 
-        let key = jwks
-            .keys()
-            .iter()
-            .find(|k| k.key_id().map(|id| id.as_str()) == Some(kid.as_str()))
-            .ok_or_else(|| anyhow!("Key with kid '{}' not found in JWKS", kid))?;
+        // Step 5: Find the key(s) to try
+        // If kid is present, look up directly; otherwise try all keys
+        let keys_to_try: Vec<_> = if let Some(ref kid_value) = kid {
+            // Direct lookup by kid
+            jwks.keys()
+                .iter()
+                .filter(|k| k.key_id().map(|id| id.as_str()) == Some(kid_value.as_str()))
+                .collect()
+        } else {
+            // No kid provided - try all keys (common for single-key providers)
+            jwks.keys().iter().collect()
+        };
 
-        // Step 5: Convert JWK to DecodingKey
-        let decoding_key = jwk_to_decoding_key(key)?;
-
-        // Step 6: Validate token with specific key and issuer
-        let mut validation = Validation::new(Algorithm::RS256);
-        // Don't validate audience yet - we'll do it manually
-        validation.validate_aud = false;
-        validation.set_issuer(&[&client.issuer]);
-
-        let token_data = decode::<Claims>(token, &decoding_key, &validation)
-            .map_err(|e| anyhow!("Token validation failed: {e:?}"))?;
-
-        let claims = token_data.claims;
-
-        // Step 7: Manually validate audience
-        if !claims.aud.contains(&client.audience) {
-            return Err(anyhow!("Invalid audience"));
+        if keys_to_try.is_empty() {
+            return Err(if let Some(kid_value) = kid {
+                anyhow!("Key with kid '{}' not found in JWKS", kid_value)
+            } else {
+                anyhow!("No keys found in JWKS")
+            });
         }
 
-        // Step 8: Validate expiration
-        let expires_at = DateTime::from_timestamp(claims.exp, 0)
-            .ok_or_else(|| anyhow!("Invalid expiration timestamp"))?;
-
-        if expires_at < Utc::now() {
-            return Err(anyhow!("Token has expired"));
+        // Step 6: Try each key until one works
+        let mut key_error = anyhow!("No valid key found");
+        for key in keys_to_try {
+            match jwk_to_decoding_key(key) {
+                Ok(decoding_key) => {
+                    match self
+                        .try_validate_with_key(token, &decoding_key, issuer_clients)
+                        .await
+                    {
+                        Ok(auth_ctx) => return Ok(auth_ctx),
+                        Err(e) => key_error = e,
+                    }
+                }
+                Err(e) => key_error = e,
+            }
         }
 
-        // Step 9: Extract email from various possible claim fields
-        let email = claims.get_email();
+        Err(key_error)
+    }
 
-        // Step 10: Check if user is admin
-        let is_admin = self.is_admin(&claims.sub, email.as_deref());
+    /// Try to validate a token with a specific decoding key against all configured audiences
+    async fn try_validate_with_key(
+        &self,
+        token: &str,
+        decoding_key: &jsonwebtoken::DecodingKey,
+        issuer_clients: &[Arc<OidcIssuerClient>],
+    ) -> Result<AuthContext> {
+        let configured_audiences: Vec<String> =
+            issuer_clients.iter().map(|c| c.audience.clone()).collect();
+        let mut last_error = anyhow!("No matching audience found");
 
-        Ok(AuthContext {
-            subject: claims.sub,
-            email,
-            issuer: claims.iss,
-            expires_at: Some(expires_at),
-            auth_type: AuthType::Oidc,
-            // SECURITY: Only OIDC users can have admin privileges (API keys are always non-admin)
-            is_admin,
-            // SECURITY: OIDC users cannot delegate (no user impersonation allowed)
-            allow_delegation: false,
-        })
+        for client in issuer_clients {
+            // Validate token with specific key and issuer
+            let mut validation = Validation::new(Algorithm::RS256);
+            // Don't validate audience yet - we'll do it manually
+            validation.validate_aud = false;
+            validation.set_issuer(&[&client.issuer]);
+
+            let claims = match decode::<Claims>(token, decoding_key, &validation) {
+                Ok(token_data) => token_data.claims,
+                Err(e) => {
+                    last_error = anyhow!("Token validation failed: {e:?}");
+                    continue;
+                }
+            };
+
+            // Manually validate audience - if it matches, we found the right client!
+            if claims.aud.contains(&client.audience) {
+                // Success! Validate expiration and return auth context
+                let expires_at = DateTime::from_timestamp(claims.exp, 0)
+                    .ok_or_else(|| anyhow!("Invalid expiration timestamp"))?;
+
+                if expires_at < Utc::now() {
+                    return Err(anyhow!("Token has expired"));
+                }
+
+                let email = claims.get_email();
+                let is_admin = self.is_admin(&claims.sub, email.as_deref());
+
+                return Ok(AuthContext {
+                    subject: claims.sub,
+                    email,
+                    issuer: claims.iss,
+                    audience: Some(client.audience.clone()),
+                    expires_at: Some(expires_at),
+                    auth_type: AuthType::Oidc,
+                    is_admin,
+                    allow_delegation: false,
+                });
+            } else {
+                // Provide detailed error with configured vs actual audiences
+                let actual_audiences = match &claims.aud {
+                    Audience::Single(s) => vec![s.clone()],
+                    Audience::Multiple(v) => v.clone(),
+                };
+                last_error = anyhow!(
+                    "Token audience mismatch - configured audiences: {:?}, token audiences: {:?}",
+                    configured_audiences,
+                    actual_audiences
+                );
+            }
+        }
+
+        // If we get here, none of the clients matched
+        Err(last_error)
     }
 }
 
@@ -465,7 +570,7 @@ impl AuthProvider for OidcAuthProvider {
         }
 
         // Validate token
-        let auth_ctx = self.validate_id_token(token).await?;
+        let auth_ctx = self.validate_jwt_token(token).await?;
 
         // Cache the result
         self.token_cache

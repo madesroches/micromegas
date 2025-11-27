@@ -7,18 +7,15 @@ This script starts the flight-sql-srv with OIDC authentication configured
 for any OIDC-compliant identity provider.
 
 Prerequisites:
-1. Set OIDC_ISSUER and OIDC_CLIENT_ID environment variables
+1. Set MICROMEGAS_OIDC_CONFIG environment variable
 2. Services must be built (cargo build in rust/ directory)
 
 Usage:
-    # Google example
-    export OIDC_ISSUER="https://accounts.google.com"
-    export OIDC_CLIENT_ID="your-client-id.apps.googleusercontent.com"
+    # Source a pre-configured auth script
+    . ~/set_human_auth.sh    # For Auth0
+    . ~/set_azure_auth.sh    # For Azure AD
 
-    # Auth0 example
-    export OIDC_ISSUER="https://yourname.auth0.com/"
-    export OIDC_CLIENT_ID="your-client-id"
-
+    # Then start services
     python3 start_services_with_oidc.py
 
 Optional:
@@ -31,26 +28,24 @@ import subprocess
 import time
 import json
 import requests
+import docker
 from pathlib import Path
 
 
 def check_env_vars():
     """Check required environment variables"""
-    client_id = os.environ.get("OIDC_CLIENT_ID")
+    oidc_config = os.environ.get("MICROMEGAS_OIDC_CONFIG")
 
-    if not client_id:
-        print("❌ Error: OIDC_CLIENT_ID environment variable not set")
+    if not oidc_config:
+        print("❌ Error: MICROMEGAS_OIDC_CONFIG environment variable not set")
         print()
-        print("Please set your OIDC Client ID:")
-        print('  export OIDC_CLIENT_ID="your-client-id"')
+        print("Please set your OIDC configuration:")
+        print('  export MICROMEGAS_OIDC_CONFIG=\'{"issuers": [{"issuer": "...", "audience": "..."}], ...}\'')
         print()
-        print("Examples:")
-        print('  Google: export OIDC_CLIENT_ID="123-abc.apps.googleusercontent.com"')
-        print('  Auth0:  export OIDC_CLIENT_ID="your-client-id"')
-        print('  Azure:  export OIDC_CLIENT_ID="<your-application-id>"')
-        print('  Okta:   export OIDC_CLIENT_ID="<your-client-id>"')
+        print("Or source a pre-configured auth script:")
+        print("  . ~/set_human_auth.sh    # For Auth0")
+        print("  . ~/set_azure_auth.sh    # For Azure AD")
         print()
-        print("See tasks/auth/ for setup instructions (GOOGLE_OIDC_SETUP.md, AUTH0_TEST_GUIDE.md)")
         sys.exit(1)
 
     print("📝 Note: Server doesn't need OIDC_CLIENT_SECRET")
@@ -59,37 +54,9 @@ def check_env_vars():
     print()
 
 
-def create_oidc_config():
-    """Create OIDC configuration JSON"""
-    client_id = os.environ["OIDC_CLIENT_ID"]
-    issuer = os.environ.get("OIDC_ISSUER")
-    audience = os.environ.get("OIDC_AUDIENCE", client_id)
-
-    if not issuer:
-        print("❌ Error: OIDC_ISSUER environment variable not set")
-        print()
-        print("Set it with: export OIDC_ISSUER=\"<your-provider-issuer-url>\"")
-        print()
-        print("Examples:")
-        print('  Google: export OIDC_ISSUER="https://accounts.google.com"')
-        print('  Auth0:  export OIDC_ISSUER="https://yourname.auth0.com/"')
-        print('  Azure:  export OIDC_ISSUER="https://login.microsoftonline.com/<tenant-id>/v2.0"')
-        print('  Okta:   export OIDC_ISSUER="https://<your-domain>.okta.com"')
-        sys.exit(1)
-
-    config = {
-        "issuers": [
-            {
-                "issuer": issuer,
-                "audience": audience,
-            }
-        ],
-        "jwks_refresh_interval_secs": 3600,
-        "token_cache_size": 1000,
-        "token_cache_ttl_secs": 300,
-    }
-
-    return json.dumps(config)
+def get_oidc_config():
+    """Get OIDC configuration from environment variable"""
+    return os.environ["MICROMEGAS_OIDC_CONFIG"]
 
 
 def kill_services():
@@ -98,19 +65,18 @@ def kill_services():
     for service in services:
         try:
             subprocess.run(f"pkill -f {service}", shell=True, check=False)
-        except:
+        except Exception:
             pass
     time.sleep(2)
 
 
 def check_postgres_running():
-    """Check if PostgreSQL is already running"""
+    """Check if PostgreSQL Docker container is running"""
     try:
-        result = subprocess.run("pgrep -f postgres", shell=True, capture_output=True)
-        if result.returncode == 0 and result.stdout.strip():
-            return True
-        return False
-    except:
+        client = docker.from_env()
+        containers = client.containers.list(filters={"name": "teledb"})
+        return len(containers) > 0
+    except Exception:
         return False
 
 
@@ -123,7 +89,7 @@ def wait_for_service(url, max_attempts=30, service_name="Service"):
             if response.status_code in [200, 404]:
                 print(f"✅ {service_name} is ready!")
                 return True
-        except:
+        except Exception:
             pass
 
         if i == max_attempts:
@@ -145,15 +111,15 @@ def main():
     script_dir = Path(__file__).parent.absolute()
     rust_dir = script_dir.parent.parent / "rust"
 
-    # Create OIDC config
-    oidc_config = create_oidc_config()
+    # Get OIDC config
+    oidc_config = get_oidc_config()
     print("📝 OIDC Configuration:")
     print(json.dumps(json.loads(oidc_config), indent=2))
     print()
 
     # Set environment variables
     env = os.environ.copy()
-    env["MICROMEGAS_OIDC_CONFIG"] = oidc_config
+    # MICROMEGAS_OIDC_CONFIG already set in environment, no need to override
     env["MICROMEGAS_ENABLE_CPU_TRACING"] = "true"
 
     if "MICROMEGAS_ADMINS" in os.environ:
@@ -178,12 +144,23 @@ def main():
     print("🐘 Checking PostgreSQL...")
     postgres_pid = None
     if not check_postgres_running():
-        print("Starting PostgreSQL...")
-        db_dir = script_dir.parent / "db"
-        os.chdir(db_dir)
-        postgres_process = subprocess.Popen(["python3", "run.py"])
-        postgres_pid = postgres_process.pid
-        print(f"PostgreSQL PID: {postgres_pid}")
+        # Check if container exists but is stopped
+        client = docker.from_env()
+        containers = client.containers.list(all=True, filters={"name": "teledb"})
+        if len(containers) > 0:
+            # Container exists, just start it
+            print("Starting existing PostgreSQL container...")
+            container = containers[0]
+            container.start()
+            print("PostgreSQL container started")
+        else:
+            # Container doesn't exist, run the setup script
+            print("Creating new PostgreSQL container...")
+            db_dir = script_dir.parent / "db"
+            os.chdir(db_dir)
+            postgres_process = subprocess.Popen(["python3", "run.py"])
+            postgres_pid = postgres_process.pid
+            print(f"PostgreSQL PID: {postgres_pid}")
         time.sleep(5)
     else:
         print("PostgreSQL already running")
@@ -221,7 +198,6 @@ def main():
 
     # Start Analytics Server WITH OIDC AUTH
     print("📊 Starting Analytics Server (WITH OIDC AUTH)...")
-    print(f"   Using {os.environ['OIDC_ISSUER']} as identity provider")
     with open("/tmp/analytics.log", "w") as log_file:
         analytics_process = subprocess.Popen(
             ["cargo", "run", "-p", "flight-sql-srv"],
@@ -256,9 +232,7 @@ def main():
     print("📥 Ingestion Server: http://127.0.0.1:9000 (no auth)")
     print("📊 Analytics Server: grpc://127.0.0.1:50051 (OIDC auth required)")
     print()
-    print("🔐 Authentication:")
-    print(f"   Issuer: {os.environ['OIDC_ISSUER']}")
-    print(f"   Client ID: {os.environ['OIDC_CLIENT_ID']}")
+    print("🔐 Authentication: See OIDC config above")
     print()
     print("PIDs:")
     print(f"  Ingestion: {ingestion_pid}")

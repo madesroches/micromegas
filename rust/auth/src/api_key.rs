@@ -117,6 +117,7 @@ impl AuthProvider for ApiKeyAuthProvider {
                     subject: name.clone(),
                     email: None,
                     issuer: "api_key".to_string(),
+                    audience: None,
                     expires_at: None,
                     auth_type: AuthType::ApiKey,
                     // SECURITY: API keys can NEVER be admins - only OIDC users can have admin privileges
