@@ -48,7 +48,7 @@
 
 **Rust** (`rust/auth/`):
 - `types.rs`: Added `audience: Option<String>` and `allow_delegation: bool` to AuthContext
-- `oidc.rs`: Multi-audience support, Auth0 namespaced claims, verified_primary_email, SSRF protection (no redirects)
+- `oidc.rs`: Multi-audience support, Auth0 namespaced claims, verified_primary_email, SSRF protection, token cache expiration check
 - `tower.rs`: Log audience in auth messages, sanitize client-provided auth headers
 - `api_key.rs`: Set audience=None for API keys, constant-time comparison for timing attack protection
 
@@ -143,7 +143,7 @@ print('✅ Refresh successful')
 
 ## Future Work (Deferred)
 
-1. **Server-side token cache expiration check** - Not critical with client-side refresh
+1. ~~**Server-side token cache expiration check**~~ ✅ DONE - Cache now checks `expires_at` before returning cached tokens
 2. **Access tokens for Azure AD** - Blocked by Conditional Access, would need IT approval
 3. **Multi-tenant support** - Would require IT configuration changes
 
@@ -151,7 +151,7 @@ print('✅ Refresh successful')
 
 ### Rust
 - `rust/auth/src/types.rs` - AuthContext.audience + allow_delegation fields
-- `rust/auth/src/oidc.rs` - Multi-audience, namespaced claims, verified_primary_email, SSRF protection
+- `rust/auth/src/oidc.rs` - Multi-audience, namespaced claims, verified_primary_email, SSRF protection, token cache expiration check
 - `rust/auth/src/tower.rs` - Audience in auth logs, auth header sanitization
 - `rust/auth/src/api_key.rs` - audience=None, constant-time comparison
 

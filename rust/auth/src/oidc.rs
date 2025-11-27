@@ -1,7 +1,7 @@
 use crate::types::{AuthContext, AuthProvider, AuthType};
 use anyhow::{Result, anyhow};
 use base64::Engine;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeDelta, Utc};
 use jsonwebtoken::{Algorithm, Validation, decode, decode_header};
 use moka::future::Cache;
 use openidconnect::core::{CoreJsonWebKeySet, CoreProviderMetadata};
@@ -564,9 +564,19 @@ impl AuthProvider for OidcAuthProvider {
             .bearer_token()
             .ok_or_else(|| anyhow!("missing bearer token"))?;
 
-        // Check token cache first
+        // Check token cache first, but verify token hasn't expired
+        // Use 30-second grace period to account for clock skew and network latency
         if let Some(cached) = self.token_cache.get(token).await {
-            return Ok((*cached).clone());
+            let is_expired = cached
+                .expires_at
+                .map(|exp| exp <= Utc::now() + TimeDelta::seconds(30))
+                .unwrap_or(false);
+
+            if is_expired {
+                self.token_cache.remove(token).await;
+            } else {
+                return Ok((*cached).clone());
+            }
         }
 
         // Validate token
