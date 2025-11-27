@@ -155,6 +155,17 @@ client = FlightSQLClient(
 df = client.query("SELECT * FROM processes LIMIT 10")
 ```
 
+**Parameters:**
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `issuer` | OIDC issuer URL | Required |
+| `client_id` | OAuth client ID | Required |
+| `client_secret` | OAuth client secret | Optional (for public clients) |
+| `token_file` | Path to save tokens | `~/.micromegas/tokens.json` |
+| `audience` | API audience/identifier | Optional (required by Auth0) |
+| `scope` | OAuth scopes to request | `openid email profile offline_access` |
+
 #### Subsequent Use (Token Reuse)
 
 ```python
@@ -220,6 +231,8 @@ micromegas_logout
 | `MICROMEGAS_OIDC_ISSUER` | OIDC issuer URL | Yes |
 | `MICROMEGAS_OIDC_CLIENT_ID` | OAuth client ID | Yes |
 | `MICROMEGAS_OIDC_CLIENT_SECRET` | OAuth client secret | No* |
+| `MICROMEGAS_OIDC_AUDIENCE` | API audience/identifier | No (for Auth0, Azure API) |
+| `MICROMEGAS_OIDC_SCOPE` | OAuth scopes to request | No (default: openid email profile offline_access) |
 | `MICROMEGAS_TOKEN_FILE` | Token storage path | No (default: ~/.micromegas/tokens.json) |
 | `MICROMEGAS_ANALYTICS_URI` | Analytics server URI | No (default: grpc://localhost:50051) |
 
