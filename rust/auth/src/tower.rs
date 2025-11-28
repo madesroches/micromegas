@@ -94,8 +94,12 @@ where
                 {
                     Ok(auth_ctx) => {
                         info!(
-                            "authenticated: subject={} email={:?} issuer={} admin={}",
-                            auth_ctx.subject, auth_ctx.email, auth_ctx.issuer, auth_ctx.is_admin
+                            "authenticated: subject={} email={:?} issuer={} audience={:?} admin={}",
+                            auth_ctx.subject,
+                            auth_ctx.email,
+                            auth_ctx.issuer,
+                            auth_ctx.audience,
+                            auth_ctx.is_admin
                         );
 
                         // SECURITY: Remove any client-provided auth headers to prevent spoofing

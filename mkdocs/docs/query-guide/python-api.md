@@ -309,7 +309,7 @@ client = FlightSQLClient("grpc://localhost:50051")
 - `auth_provider` (optional): **Recommended.** Authentication provider that implements `get_token()` method. When provided, tokens are automatically refreshed before each request. Example: `OidcAuthProvider`. This is the recommended way to handle authentication
 
 **Authentication Note:**
-The `auth_provider` parameter is the recommended authentication method as it supports automatic token refresh. The `headers` parameter is deprecated and will be removed in a future version. See the [Authentication Guide](../../admin/authentication.md) for details on setting up OIDC authentication.
+The `auth_provider` parameter is the recommended authentication method as it supports automatic token refresh. The `headers` parameter is deprecated and will be removed in a future version. See the [Authentication Guide](../admin/authentication.md) for details on setting up OIDC authentication.
 
 ## Schema Discovery
 

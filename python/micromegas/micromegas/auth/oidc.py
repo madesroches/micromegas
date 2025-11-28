@@ -46,6 +46,8 @@ class OidcAuthProvider:
         client_secret: Optional[str] = None,
         token_file: Optional[str] = None,
         token: Optional[dict] = None,
+        audience: Optional[str] = None,
+        scope: Optional[str] = None,
     ):
         """Initialize OIDC auth provider.
 
@@ -55,11 +57,16 @@ class OidcAuthProvider:
             client_secret: Client secret (optional, only for Web application clients)
             token_file: Path to save/load tokens (default: ~/.micromegas/tokens.json)
             token: Pre-loaded token dict (for testing or manual token management)
+            audience: API audience/identifier (optional, provider-specific)
+            scope: OAuth scopes to request (default: "openid email profile offline_access")
+                   For Azure custom API: "api://{client_id}/.default openid email profile offline_access"
         """
         self.issuer = issuer
         self.client_id = client_id
         self.client_secret = client_secret
         self.token_file = token_file or str(Path.home() / ".micromegas" / "tokens.json")
+        self.audience = audience
+        self.scope = scope or "openid email profile offline_access"
         self._lock = threading.Lock()  # Thread-safe token refresh
 
         # Fetch OIDC metadata via discovery
@@ -72,7 +79,7 @@ class OidcAuthProvider:
         self.client = OAuth2Session(
             client_id=client_id,
             client_secret=client_secret,
-            scope="openid email profile offline_access",
+            scope=self.scope,
             token=token,
             token_endpoint_auth_method=auth_method,
         )
@@ -104,6 +111,8 @@ class OidcAuthProvider:
         client_secret: Optional[str] = None,
         token_file: Optional[str] = None,
         redirect_uri: str = "http://localhost:48080/callback",
+        audience: Optional[str] = None,
+        scope: Optional[str] = None,
     ) -> "OidcAuthProvider":
         """Perform browser-based OIDC login flow.
 
@@ -113,6 +122,8 @@ class OidcAuthProvider:
             client_secret: Client secret (optional, for Web application clients)
             token_file: Where to save tokens after login
             redirect_uri: Local callback URI for OAuth redirect
+            audience: API audience/identifier (optional, provider-specific)
+            scope: OAuth scopes to request (default: "openid email profile offline_access")
 
         Returns:
             OidcAuthProvider with valid tokens
@@ -129,9 +140,19 @@ class OidcAuthProvider:
             ...     client_id="web-app-id.apps.googleusercontent.com",
             ...     client_secret="your-secret-here"  # Store securely
             ... )
+
+        Example (with audience parameter):
+            >>> auth = OidcAuthProvider.login(
+            ...     issuer="https://your-tenant.auth0.com",
+            ...     client_id="your-client-id",
+            ...     audience="https://your-api.example.com"  # Optional, provider-specific
+            ... )
         """
         # Fetch OIDC metadata
         metadata = cls._fetch_oidc_metadata(issuer)
+
+        # Use provided scope or default
+        request_scope = scope or "openid email profile offline_access"
 
         # Create temporary session for login
         auth_method = "client_secret_post" if client_secret else "none"
@@ -139,18 +160,26 @@ class OidcAuthProvider:
         temp_client = OAuth2Session(
             client_id=client_id,
             client_secret=client_secret,
-            scope="openid email profile offline_access",
+            scope=request_scope,
             redirect_uri=redirect_uri,
             token_endpoint_auth_method=auth_method,
         )
 
         # Perform authorization code flow with PKCE
         token = cls._perform_auth_flow(
-            temp_client, metadata, redirect_uri, client_secret
+            temp_client, metadata, redirect_uri, client_secret, audience
         )
 
         # Create provider with token
-        provider = cls(issuer, client_id, client_secret, token_file, token=token)
+        provider = cls(
+            issuer,
+            client_id,
+            client_secret,
+            token_file,
+            token=token,
+            audience=audience,
+            scope=request_scope,
+        )
 
         # Save tokens if file specified
         if token_file:
@@ -164,6 +193,7 @@ class OidcAuthProvider:
         metadata: dict,
         redirect_uri: str,
         client_secret: Optional[str] = None,
+        audience: Optional[str] = None,
     ) -> dict:
         """Perform authorization code flow with PKCE using authlib.
 
@@ -172,6 +202,7 @@ class OidcAuthProvider:
             metadata: OIDC provider metadata
             redirect_uri: Local callback URI
             client_secret: Optional client secret for Web application clients
+            audience: API audience/identifier (optional, provider-specific)
 
         Returns:
             Token dict with access_token, id_token, refresh_token, etc.
@@ -189,11 +220,18 @@ class OidcAuthProvider:
         code_challenge = create_s256_code_challenge(code_verifier)
 
         # Create authorization URL with explicit PKCE parameters
+        # Include audience if specified (required for Auth0)
+        auth_params = {
+            "code_verifier": code_verifier,
+            "code_challenge": code_challenge,
+            "code_challenge_method": "S256",
+        }
+        if audience:
+            auth_params["audience"] = audience
+
         auth_url, state = client.create_authorization_url(
             metadata["authorization_endpoint"],
-            code_verifier=code_verifier,
-            code_challenge=code_challenge,
-            code_challenge_method="S256",
+            **auth_params,
         )
 
         # Start local callback server
@@ -247,12 +285,14 @@ class OidcAuthProvider:
             def log_message(self, format, *args):
                 pass  # Suppress logging
 
+        # Define a reusable TCP server class
+        class ReusableTCPServer(socketserver.TCPServer):
+            allow_reuse_address = True
+
         # Start callback server
         server = None
         try:
-            server = socketserver.TCPServer(("", callback_port), CallbackHandler)
-            # Allow reusing the address to avoid "Address already in use" errors
-            server.allow_reuse_address = True
+            server = ReusableTCPServer(("", callback_port), CallbackHandler)
 
             server_thread = threading.Thread(target=server.handle_request)
             server_thread.daemon = True
@@ -324,6 +364,39 @@ class OidcAuthProvider:
             if "alg=none" in str(e).lower():
                 raise
 
+    def _get_id_token_expiration(self, id_token: str) -> int:
+        """Extract expiration time from ID token's exp claim.
+
+        Args:
+            id_token: JWT ID token
+
+        Returns:
+            Expiration timestamp (seconds since epoch)
+
+        Raises:
+            Exception: If token is invalid or missing exp claim
+        """
+        import base64
+
+        parts = id_token.split(".")
+        if len(parts) != 3:
+            raise Exception("Invalid JWT format")
+
+        # Decode payload (second part) with proper base64url padding
+        payload_b64 = parts[1]
+        # Add padding if necessary (base64 requires length to be multiple of 4)
+        padding_needed = 4 - len(payload_b64) % 4
+        if padding_needed != 4:
+            payload_b64 += "=" * padding_needed
+        payload_bytes = base64.urlsafe_b64decode(payload_b64)
+        payload = json.loads(payload_bytes)
+
+        exp = payload.get("exp")
+        if not exp:
+            raise Exception("ID token missing exp claim")
+
+        return int(exp)
+
     def get_token(self) -> str:
         """Get valid ID token, refreshing if necessary.
 
@@ -341,15 +414,22 @@ class OidcAuthProvider:
                 print("No tokens available. Please call login() first.")
                 raise Exception("No tokens available. Please call login() first.")
 
-            # Check if token needs refresh (5 min buffer)
-            expires_at = self.client.token.get("expires_at", 0)
-            if expires_at > time.time() + 300:
-                # Token still valid
-                id_token = self.client.token["id_token"]
-                self._validate_id_token(id_token)
-                return id_token
+            id_token = self.client.token.get("id_token")
+            if not id_token:
+                raise Exception("No ID token available. Please re-authenticate.")
 
-            # Token expired or expiring soon - refresh it
+            # Check if ID token needs refresh based on its own exp claim (5 min buffer)
+            try:
+                id_token_exp = self._get_id_token_expiration(id_token)
+                if id_token_exp > time.time() + 300:
+                    # ID token still valid
+                    self._validate_id_token(id_token)
+                    return id_token
+            except Exception:
+                # If we can't parse expiration, assume expired and refresh
+                pass
+
+            # ID token expired or expiring soon - refresh it
             if self.client.token.get("refresh_token"):
                 try:
                     self._refresh_tokens()
@@ -365,23 +445,21 @@ class OidcAuthProvider:
 
     def _refresh_tokens(self):
         """Refresh access token using refresh token (authlib handles everything)."""
-        # Store old id_token in case refresh doesn't return a new one
-        old_id_token = self.client.token.get("id_token")
-
         # authlib automatically refreshes using refresh_token
         # Include scope to ensure we get a new id_token from providers like Azure AD
         new_token = self.client.fetch_token(
             self.metadata["token_endpoint"],
             grant_type="refresh_token",
             refresh_token=self.client.token["refresh_token"],
-            scope="openid email profile offline_access",
+            scope=self.scope,
         )
 
-        # If the refresh didn't return a new id_token, preserve the old one
-        # This handles providers that don't return id_token in refresh response
-        if "id_token" not in new_token and old_id_token:
-            new_token["id_token"] = old_id_token
-            self.client.token["id_token"] = old_id_token
+        # Verify we got a new id_token - if not, the refresh is useless for our purposes
+        if "id_token" not in new_token:
+            raise Exception(
+                "Refresh response did not include id_token. "
+                "Please re-authenticate to get a new token."
+            )
 
         # Update token (authlib updates self.client.token automatically)
         # Save updated tokens to file
@@ -409,17 +487,18 @@ class OidcAuthProvider:
         )
 
         # Save token with metadata (but NOT client_secret for security)
+        data = {
+            "issuer": self.issuer,
+            "client_id": self.client_id,
+            "token": self.client.token,  # authlib's token dict
+            # client_secret intentionally not saved for security
+        }
+        # Include audience if specified (needed for Auth0)
+        if self.audience:
+            data["audience"] = self.audience
+
         with os.fdopen(fd, "w") as f:
-            json.dump(
-                {
-                    "issuer": self.issuer,
-                    "client_id": self.client_id,
-                    "token": self.client.token,  # authlib's token dict
-                    # client_secret intentionally not saved for security
-                },
-                f,
-                indent=2,
-            )
+            json.dump(data, f, indent=2)
 
     @classmethod
     def from_file(
@@ -461,6 +540,7 @@ class OidcAuthProvider:
             client_secret=client_secret,
             token_file=token_file,
             token=data["token"],
+            audience=data.get("audience"),  # Optional, for Auth0
         )
 
 

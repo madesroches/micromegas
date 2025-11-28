@@ -10,6 +10,8 @@ def _connect_with_oidc():
     issuer = os.environ.get("MICROMEGAS_OIDC_ISSUER")
     client_id = os.environ.get("MICROMEGAS_OIDC_CLIENT_ID")
     client_secret = os.environ.get("MICROMEGAS_OIDC_CLIENT_SECRET")
+    audience = os.environ.get("MICROMEGAS_OIDC_AUDIENCE")
+    scope = os.environ.get("MICROMEGAS_OIDC_SCOPE")  # Optional custom scopes
     token_file = os.environ.get(
         "MICROMEGAS_TOKEN_FILE", str(Path.home() / ".micromegas" / "tokens.json")
     )
@@ -21,6 +23,8 @@ def _connect_with_oidc():
         client_id=client_id,
         client_secret=client_secret,
         token_file=token_file,
+        audience=audience,
+        scope=scope,
     )
 
 
