@@ -89,8 +89,8 @@ Current versions should already be at 0.16.0:
 - [ ] **Build plugin archive**: Use `./build-plugin.sh` script (NOT manual tar)
 
 ### 5. Git Preparation
-- [ ] Create release tag: `git tag v0.16.0`
-- [ ] Verify tag points to correct commit
+- [x] Create release tag: `git tag v0.16.0` ✅ Created
+- [x] Verify tag points to correct commit ✅ Points to 5ebe30354 (Complete v0.16.0 pre-release checklist)
 
 ## Release Process
 
