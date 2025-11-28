@@ -117,9 +117,22 @@ Keep current bespoke screens (process table, logs viewer, etc.) with their exist
 Each page gets an editable SQL query that powers it.
 Time range filtering is applied implicitly by the FlightSQL server.
 
-**Process Explorer (`/processes`)**: Current ProcessTable component
-**Process Log (`/process_log?process_id=...`)**: Current log viewer component
-**Process Trace (`/process_trace?process_id=...`)**: Current trace generation UI
+#### Process Explorer (`/processes`)
+Current ProcessTable component with SQL-powered query.
+
+**Column Sorting:**
+- Click column header to sort ascending, click again for descending
+- Sort state in URL: `?sort=start_time&order=desc`
+- Default: `start_time DESC`
+- `$order_by` macro expands to `<column> <direction>`
+- Example: `SELECT * FROM processes() ORDER BY $order_by LIMIT 100`
+- Backend substitutes macro before forwarding to FlightSQL
+
+#### Process Log (`/process_log?process_id=...`)
+Current log viewer component.
+
+#### Process Trace (`/process_trace?process_id=...`)
+Current trace generation UI.
 
 ## Phase 3: User-Defined Dashboards (Future)
 

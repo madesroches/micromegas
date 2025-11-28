@@ -360,6 +360,25 @@
             position: sticky;
             top: 0;
         }
+        th.sortable {
+            cursor: pointer;
+            user-select: none;
+        }
+        th.sortable:hover {
+            color: #e7e9ea;
+            background: #2a3038;
+        }
+        th .sort-indicator {
+            margin-left: 4px;
+            opacity: 0.3;
+        }
+        th.sorted .sort-indicator {
+            opacity: 1;
+            color: #3b82f6;
+        }
+        th.sorted {
+            color: #e7e9ea;
+        }
         td {
             padding: 12px 16px;
             border-bottom: 1px solid #2f3540;
@@ -425,12 +444,12 @@
                 <table>
                     <thead>
                         <tr>
-                            <th>Process</th>
+                            <th class="sortable">Process <span class="sort-indicator">&#9650;</span></th>
                             <th>Process ID</th>
-                            <th>Start Time</th>
-                            <th>Last Update</th>
-                            <th>Username</th>
-                            <th>Computer</th>
+                            <th class="sortable sorted">Start Time <span class="sort-indicator">&#9660;</span></th>
+                            <th class="sortable">Last Update <span class="sort-indicator">&#9650;</span></th>
+                            <th class="sortable">Username <span class="sort-indicator">&#9650;</span></th>
+                            <th class="sortable">Computer <span class="sort-indicator">&#9650;</span></th>
                         </tr>
                     </thead>
                     <tbody>
@@ -474,12 +493,13 @@
    <span class="sql-keyword">OR</span> process_id <span class="sql-keyword">LIKE</span> <span class="sql-string">'%'</span> || <span class="sql-var">$search</span> || <span class="sql-string">'%'</span>
    <span class="sql-keyword">OR</span> computer <span class="sql-keyword">LIKE</span> <span class="sql-string">'%'</span> || <span class="sql-var">$search</span> || <span class="sql-string">'%'</span>
    <span class="sql-keyword">OR</span> username <span class="sql-keyword">LIKE</span> <span class="sql-string">'%'</span> || <span class="sql-var">$search</span> || <span class="sql-string">'%'</span>
-<span class="sql-keyword">ORDER BY</span> start_time <span class="sql-keyword">DESC</span></div>
+<span class="sql-keyword">ORDER BY</span> <span class="sql-var">$order_by</span></div>
 
                 <div class="panel-section">
                     <div class="panel-section-title">Variables</div>
                     <div class="panel-info">
                         <code>$search</code> - Search box contents<br>
+                        <code>$order_by</code> - Column sort (click headers)<br>
                         <code>$begin</code> - Time range start<br>
                         <code>$end</code> - Time range end
                     </div>
@@ -488,7 +508,8 @@
                 <div class="panel-section">
                     <div class="panel-section-title">Current Values</div>
                     <div class="panel-info">
-                        <code>$search</code> = "game"
+                        <code>$search</code> = "game"<br>
+                        <code>$order_by</code> = start_time DESC
                     </div>
                 </div>
 
