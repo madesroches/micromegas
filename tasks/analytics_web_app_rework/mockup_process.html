@@ -36,25 +36,6 @@
             font-weight: 600;
             color: #3b82f6;
         }
-        .nav {
-            display: flex;
-            gap: 8px;
-        }
-        .nav-item {
-            padding: 8px 16px;
-            border-radius: 6px;
-            color: #9ca3af;
-            text-decoration: none;
-            font-size: 14px;
-        }
-        .nav-item:hover {
-            background: #2f3540;
-            color: #e7e9ea;
-        }
-        .nav-item.active {
-            background: #3b82f6;
-            color: white;
-        }
         .header-right {
             display: flex;
             align-items: center;
@@ -127,9 +108,75 @@
             font-weight: 600;
         }
 
+        /* Left Sidebar */
+        .sidebar {
+            width: 56px;
+            background: #1a1f26;
+            border-right: 1px solid #2f3540;
+            display: flex;
+            flex-direction: column;
+            padding: 12px 0;
+        }
+        .sidebar-nav {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        .sidebar-item {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 40px;
+            height: 40px;
+            margin: 0 8px;
+            border-radius: 6px;
+            color: #9ca3af;
+            text-decoration: none;
+            font-size: 18px;
+            cursor: pointer;
+            position: relative;
+        }
+        .sidebar-item:hover {
+            background: #2f3540;
+            color: #e7e9ea;
+        }
+        .sidebar-item.active {
+            background: #22272e;
+            color: #3b82f6;
+        }
+        .sidebar-item svg {
+            width: 20px;
+            height: 20px;
+        }
+        .sidebar-tooltip {
+            display: none;
+            position: absolute;
+            left: 48px;
+            background: #2f3540;
+            color: #e7e9ea;
+            padding: 6px 10px;
+            border-radius: 4px;
+            font-size: 13px;
+            white-space: nowrap;
+            z-index: 100;
+        }
+        .sidebar-item:hover .sidebar-tooltip {
+            display: block;
+        }
+
+        /* Main Layout */
+        .main-layout {
+            display: flex;
+            height: calc(100vh - 57px);
+        }
+
         /* Main Content */
         .main {
+            flex: 1;
             padding: 24px;
+            overflow: auto;
+        }
+        .main > * {
             max-width: 1200px;
         }
 
@@ -306,17 +353,12 @@
     <header class="header">
         <div class="header-left">
             <div class="logo">Micromegas</div>
-            <nav class="nav">
-                <a href="mockup_processes.html" class="nav-item">Processes</a>
-                <a href="mockup_process_log.html" class="nav-item">Logs</a>
-                <a href="mockup_process_trace.html" class="nav-item">Trace</a>
-            </nav>
         </div>
         <div class="header-right">
             <div class="time-controls">
                 <div class="time-range">
                     <span class="time-range-icon">&#128337;</span>
-                    <span class="time-range-value">Last 24 hours</span>
+                    <span class="time-range-value">2024-01-15T10:23:45Z to 2024-01-15T14:56:12Z</span>
                     <span class="time-range-dropdown">&#9662;</span>
                 </div>
                 <button class="refresh-btn" title="Refresh">&#8635;</button>
@@ -327,10 +369,40 @@
         </div>
     </header>
 
-    <main class="main">
-        <a href="mockup_processes.html" class="back-link">
-            <span class="back-link-icon">&#8592;</span>
-            All Processes
+    <div class="main-layout">
+        <aside class="sidebar">
+            <nav class="sidebar-nav">
+                <a href="mockup_processes.html" class="sidebar-item active" title="Processes">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="3" y="3" width="7" height="7"></rect>
+                        <rect x="14" y="3" width="7" height="7"></rect>
+                        <rect x="14" y="14" width="7" height="7"></rect>
+                        <rect x="3" y="14" width="7" height="7"></rect>
+                    </svg>
+                    <span class="sidebar-tooltip">Processes</span>
+                </a>
+                <a href="mockup_process_log.html" class="sidebar-item" title="Logs">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                        <polyline points="14 2 14 8 20 8"></polyline>
+                        <line x1="16" y1="13" x2="8" y2="13"></line>
+                        <line x1="16" y1="17" x2="8" y2="17"></line>
+                        <polyline points="10 9 9 9 8 9"></polyline>
+                    </svg>
+                    <span class="sidebar-tooltip">Logs</span>
+                </a>
+                <a href="mockup_process_trace.html" class="sidebar-item" title="Trace">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+                    </svg>
+                    <span class="sidebar-tooltip">Trace</span>
+                </a>
+            </nav>
+        </aside>
+        <main class="main">
+            <a href="mockup_processes.html" class="back-link">
+                <span class="back-link-icon">&#8592;</span>
+                All Processes
         </a>
 
         <div class="page-header">
@@ -463,6 +535,7 @@
                 </tbody>
             </table>
         </div>
-    </main>
+        </main>
+    </div>
 </body>
 </html>

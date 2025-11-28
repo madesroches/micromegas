@@ -132,7 +132,7 @@ Current ProcessTable component with SQL-powered query.
 Current log viewer component.
 
 #### Process Trace (`/process_trace?process_id=...`)
-Current trace generation UI.
+Current trace generation UI. Time range for trace is taken from global time range control.
 
 ## Phase 3: User-Defined Dashboards (Future)
 
