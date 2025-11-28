@@ -147,23 +147,23 @@ From `/grafana` directory:
 Update all versions for next development cycle:
 
 #### Rust Workspace Files:
-- [ ] **`/rust/Cargo.toml`**:
-  - [ ] Update `[workspace.package].version = "0.17.0"`
-  - [ ] Update all workspace dependencies versions to `"0.17.0"`
+- [x] **`/rust/Cargo.toml`**: ✅
+  - [x] Update `[workspace.package].version = "0.17.0"` ✅
+  - [x] Update all workspace dependencies versions to `"0.17.0"` ✅
 
 #### Individual Crate Files:
-- [ ] **`/rust/tracing/Cargo.toml`**: Update proc-macros dependency to `^0.17`
-- [ ] **`/rust/transit/Cargo.toml`**: Update derive-transit dependency to `^0.17`
+- [x] **`/rust/tracing/Cargo.toml`**: Update proc-macros dependency to `^0.17` ✅
+- [x] **`/rust/transit/Cargo.toml`**: Update derive-transit dependency to `^0.17` ✅
 
 #### Python Package:
-- [ ] **`/python/micromegas/pyproject.toml`**: Update to `version = "0.17.0"` (from 0.16.1)
+- [x] **`/python/micromegas/pyproject.toml`**: Update to `version = "0.17.0"` (from 0.16.1) ✅
 
 #### Grafana Plugin:
-- [ ] **`/grafana/package.json`**: Update to `"version": "0.17.0"`
+- [x] **`/grafana/package.json`**: Update to `"version": "0.17.0"` ✅
 
 #### Lock Files:
-- [ ] Regenerate Rust lock file: `cargo update` (from `/rust` directory)
-- [ ] Regenerate Grafana lock file: `yarn install` (from `/grafana` directory)
+- [x] Regenerate Rust lock file: `cargo update` (from `/rust` directory) ✅
+- [x] Regenerate Grafana lock file: `yarn install` (from `/grafana` directory) ✅
 
 #### Commit Version Bump:
 - [ ] Version bump committed
@@ -267,4 +267,5 @@ Download and extract `micromegas-datasource-0.16.0.tar.gz` to your Grafana plugi
 - [x] Phase 4 - Git Release: Completed (2025-11-28)
   - Tag pushed, GitHub release created
   - URL: https://github.com/madesroches/micromegas/releases/tag/v0.16.0
-- [ ] Phase 5 - Post-Release: Not started
+- [x] Phase 5 - Post-Release: Completed (2025-11-28)
+  - Version bumped to 0.17.0 for next development cycle
