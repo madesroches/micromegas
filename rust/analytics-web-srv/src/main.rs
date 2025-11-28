@@ -147,12 +147,6 @@ struct LogsQuery {
     level: Option<String>,
 }
 
-#[derive(Clone)]
-#[allow(dead_code)] // Field used indirectly via auth_state.is_some() check
-struct AppState {
-    auth_enabled: bool,
-}
-
 type ApiResult<T> = Result<T, ApiError>;
 
 struct ApiError(anyhow::Error);
@@ -184,10 +178,6 @@ async fn main() -> Result<()> {
     // Configure CORS origin (required)
     let cors_origin = std::env::var("MICROMEGAS_WEB_CORS_ORIGIN")
         .context("MICROMEGAS_WEB_CORS_ORIGIN environment variable not set")?;
-
-    let state = AppState {
-        auth_enabled: !args.disable_auth,
-    };
 
     // Build auth state if authentication is enabled
     let auth_state = if !args.disable_auth {
@@ -255,14 +245,12 @@ async fn main() -> Result<()> {
 
     // Apply auth middleware if enabled
     let api_routes = if let Some(auth_state) = auth_state.clone() {
-        api_routes
-            .layer(middleware::from_fn_with_state(
-                auth_state,
-                auth::cookie_auth_middleware,
-            ))
-            .with_state(state)
+        api_routes.layer(middleware::from_fn_with_state(
+            auth_state,
+            auth::cookie_auth_middleware,
+        ))
     } else {
-        api_routes.with_state(state)
+        api_routes
     };
     let serve_dir = ServeDir::new(&args.frontend_dir)
         .not_found_service(ServeFile::new(format!("{}/index.html", args.frontend_dir)));

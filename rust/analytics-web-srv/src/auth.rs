@@ -233,7 +233,7 @@ struct IdTokenClaims {
 /// This struct is inserted into request extensions by the auth middleware
 /// and can be used by handlers to access validated user information.
 #[derive(Clone, Debug)]
-#[allow(dead_code)] // Fields are public for use by handlers accessing request extensions
+#[allow(dead_code)] // Struct inserted into request extensions; handlers access fields via Extension<ValidatedUser>
 pub struct ValidatedUser {
     /// Unique subject identifier (user ID)
     pub subject: String,
