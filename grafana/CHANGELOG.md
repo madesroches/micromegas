@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.16.0 (2025-11-28)
+
+### Bug Fixes
+- Fix Grafana plugin packaging and document release process (#601)
+- Fix secureJsonData undefined error and rename plugin to Micromegas FlightSQL (#603)
+
 ## 0.15.0 (2025-11-14)
 
 First release from the main Micromegas repository (previously released separately).
