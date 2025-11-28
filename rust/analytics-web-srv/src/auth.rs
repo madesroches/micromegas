@@ -6,6 +6,10 @@
 //! - /auth/refresh - Refresh tokens
 //! - /auth/logout - Clear session
 //! - /auth/me - Get current user info
+//!
+//! Security: All JWT tokens are fully validated (signature + claims) at this tier
+//! using the micromegas-auth crate with JWKS caching. Invalid tokens are rejected
+//! before forwarding requests to FlightSQL.
 
 use anyhow::{Result, anyhow};
 use axum::{
@@ -17,10 +21,10 @@ use axum::{
 };
 use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
 use base64::Engine;
-use chrono::Utc;
 use micromegas::tracing::prelude::*;
 use micromegas_auth::oauth_state::{OAuthState, generate_nonce, sign_state, verify_state};
-use micromegas_auth::oidc::create_http_client;
+use micromegas_auth::oidc::{OidcAuthProvider, OidcConfig, create_http_client};
+use micromegas_auth::types::{AuthContext, AuthProvider};
 use micromegas_auth::url_validation::validate_return_url;
 use openidconnect::{
     AuthenticationFlow, CsrfToken, Nonce, PkceCodeChallenge, Scope,
@@ -78,29 +82,32 @@ impl OidcClientConfig {
     ///   ]
     /// }
     ///
-    /// Note: The web app only supports a single issuer. If multiple issuers are
-    /// configured in the array, this function will return an error. The `audience`
-    /// field serves as the OAuth client_id for the web app.
+    /// Note: When multiple issuers are configured, the first issuer is used for
+    /// the OAuth login flow (you can only redirect to one provider). Token
+    /// validation via OidcAuthProvider will accept tokens from any configured issuer.
     pub fn from_env() -> Result<Self> {
         // Use the shared OidcConfig from micromegas-auth
         let config = micromegas_auth::oidc::OidcConfig::from_env()?;
 
-        // Ensure exactly one issuer is configured
+        // Need at least one issuer
         if config.issuers.is_empty() {
             return Err(anyhow!(
                 "MICROMEGAS_OIDC_CONFIG must contain at least one issuer in the 'issuers' array"
             ));
         }
 
-        if config.issuers.len() > 1 {
-            return Err(anyhow!(
-                "Analytics web app only supports a single OIDC issuer. Found {} issuers in MICROMEGAS_OIDC_CONFIG. \
-                 Please configure only one issuer in the 'issuers' array.",
-                config.issuers.len()
-            ));
-        }
-
+        // Use the first issuer for OAuth login flow
+        // (token validation via OidcAuthProvider supports all issuers)
         let issuer_config = &config.issuers[0];
+
+        if config.issuers.len() > 1 {
+            info!(
+                "Multiple OIDC issuers configured ({}). Using '{}' for OAuth login flow. \
+                 Token validation will accept tokens from all configured issuers.",
+                config.issuers.len(),
+                issuer_config.issuer
+            );
+        }
 
         let redirect_uri = std::env::var("MICROMEGAS_AUTH_REDIRECT_URI")
             .map_err(|_| anyhow!("MICROMEGAS_AUTH_REDIRECT_URI environment variable not set"))?;
@@ -124,8 +131,10 @@ pub struct OidcProviderInfo {
 /// State for auth endpoints
 #[derive(Clone)]
 pub struct AuthState {
-    /// OIDC provider info (lazy initialized)
+    /// OIDC provider info (lazy initialized) - for OAuth flow
     pub oidc_provider: Arc<tokio::sync::OnceCell<OidcProviderInfo>>,
+    /// OIDC auth provider (lazy initialized) - for JWT validation
+    pub auth_provider: Arc<tokio::sync::OnceCell<Arc<OidcAuthProvider>>>,
     /// OIDC client configuration
     pub config: OidcClientConfig,
     /// Cookie domain (optional)
@@ -171,6 +180,21 @@ impl AuthState {
         )
         .set_redirect_uri(provider.redirect_uri.clone())
     }
+
+    /// Get or initialize the OIDC auth provider for JWT validation
+    ///
+    /// The auth provider is lazy-initialized on first use and cached.
+    /// It uses the MICROMEGAS_OIDC_CONFIG environment variable for configuration,
+    /// which is the same format used by the FlightSQL server.
+    pub async fn get_auth_provider(&self) -> Result<&Arc<OidcAuthProvider>> {
+        self.auth_provider
+            .get_or_try_init(|| async {
+                let config = OidcConfig::from_env()?;
+                let provider = OidcAuthProvider::new(config).await?;
+                Ok(Arc::new(provider))
+            })
+            .await
+    }
 }
 
 /// Query parameters for login endpoint
@@ -197,17 +221,69 @@ pub struct UserInfo {
     name: Option<String>,
 }
 
-/// JWT claims for decoding (minimal)
+/// JWT claims for decoding (minimal) - used for auth_me name extraction
 #[derive(Debug, Deserialize)]
 struct IdTokenClaims {
-    sub: String,
-    #[serde(default)]
-    email: Option<String>,
     #[serde(default)]
     name: Option<String>,
-    #[serde(default)]
-    preferred_username: Option<String>,
-    exp: i64,
+}
+
+/// Validated user information extracted from JWT after signature verification
+///
+/// This struct is inserted into request extensions by the auth middleware
+/// and can be used by handlers to access validated user information.
+#[derive(Clone, Debug)]
+#[allow(dead_code)] // Struct inserted into request extensions; handlers access fields via Extension<ValidatedUser>
+pub struct ValidatedUser {
+    /// Unique subject identifier (user ID)
+    pub subject: String,
+    /// Email address (if available)
+    pub email: Option<String>,
+    /// Token issuer URL
+    pub issuer: String,
+    /// Whether this user has admin privileges
+    pub is_admin: bool,
+}
+
+impl From<&AuthContext> for ValidatedUser {
+    fn from(ctx: &AuthContext) -> Self {
+        Self {
+            subject: ctx.subject.clone(),
+            email: ctx.email.clone(),
+            issuer: ctx.issuer.clone(),
+            is_admin: ctx.is_admin,
+        }
+    }
+}
+
+/// Request parts adapter for cookie-based tokens
+///
+/// Adapts a cookie-based token into the RequestParts trait expected by OidcAuthProvider.
+/// Used by both cookie_auth_middleware and auth_me endpoint for token validation.
+struct CookieTokenRequestParts {
+    token: String,
+}
+
+impl micromegas_auth::types::RequestParts for CookieTokenRequestParts {
+    fn authorization_header(&self) -> Option<&str> {
+        None
+    }
+
+    fn bearer_token(&self) -> Option<&str> {
+        Some(&self.token)
+    }
+
+    fn get_header(&self, _name: &str) -> Option<&str> {
+        None
+    }
+
+    fn method(&self) -> Option<&str> {
+        None
+    }
+
+    fn uri(&self) -> Option<&str> {
+        None
+    }
 }
 
 /// Cookie names
@@ -318,7 +394,7 @@ pub async fn auth_callback(
 ) -> Result<impl IntoResponse, AuthApiError> {
     // Verify and decode signed state parameter
     let oauth_state = verify_state(&query.state, &state.state_signing_secret).map_err(|e| {
-        warn!("state verification failed: {e:?}");
+        warn!("[auth_failure] reason=invalid_state details={e:?}");
         AuthApiError::InvalidState
     })?;
 
@@ -326,13 +402,13 @@ pub async fn auth_callback(
     let cookie_nonce = jar
         .get(OAUTH_STATE_COOKIE)
         .ok_or_else(|| {
-            warn!("oauth_state cookie not found");
+            warn!("[auth_failure] reason=missing_oauth_state_cookie");
             AuthApiError::InvalidState
         })?
         .value();
 
     if cookie_nonce != oauth_state.nonce {
-        warn!("nonce mismatch!");
+        warn!("[auth_failure] reason=nonce_mismatch");
         return Err(AuthApiError::InvalidState);
     }
 
@@ -372,7 +448,7 @@ pub async fn auth_callback(
         .send()
         .await
         .map_err(|e| {
-            warn!("token exchange HTTP request failed: {e:?}");
+            warn!("[auth_failure] reason=token_exchange_request_failed details={e:?}");
             AuthApiError::TokenExchangeFailed
         })?;
 
@@ -382,12 +458,12 @@ pub async fn auth_callback(
             .text()
             .await
             .unwrap_or_else(|_| "unknown".to_string());
-        warn!("token exchange failed with status {status}: {body}");
+        warn!("[auth_failure] reason=token_exchange_failed status={status} body={body}");
         return Err(AuthApiError::TokenExchangeFailed);
     }
 
     let token_response: serde_json::Value = response.json().await.map_err(|e| {
-        warn!("failed to parse token response: {e:?}");
+        warn!("[auth_failure] reason=token_response_parse_failed details={e:?}");
         AuthApiError::TokenExchangeFailed
     })?;
 
@@ -395,7 +471,7 @@ pub async fn auth_callback(
     let id_token = token_response["id_token"]
         .as_str()
         .ok_or_else(|| {
-            warn!("no id_token in response");
+            warn!("[auth_failure] reason=missing_id_token");
             AuthApiError::TokenExchangeFailed
         })?
         .to_string();
@@ -411,6 +487,14 @@ pub async fn auth_callback(
         .unwrap_or(3600); // Default 1 hour
 
     let refresh_token_expires = 30 * 24 * 3600; // 30 days
+
+    // Log successful login (extract subject from token for audit trail)
+    if let Some(sub) = extract_subject_from_token(&id_token) {
+        info!(
+            "[auth_success] event=login sub={sub} issuer={}",
+            state.config.issuer
+        );
+    }
 
     // Create cookies
     let mut new_jar = jar;
@@ -479,7 +563,7 @@ pub async fn auth_refresh(
         .send()
         .await
         .map_err(|e| {
-            warn!("refresh token HTTP request failed: {e:?}");
+            warn!("[token_refresh_failure] reason=request_failed details={e:?}");
             AuthApiError::Unauthorized
         })?;
 
@@ -489,12 +573,12 @@ pub async fn auth_refresh(
             .text()
             .await
             .unwrap_or_else(|_| "unknown".to_string());
-        warn!("refresh token failed with status {status}: {body}");
+        warn!("[token_refresh_failure] reason=token_exchange_failed status={status} body={body}");
         return Err(AuthApiError::Unauthorized);
     }
 
     let token_response: serde_json::Value = response.json().await.map_err(|e| {
-        warn!("failed to parse refresh token response: {e:?}");
+        warn!("[token_refresh_failure] reason=response_parse_failed details={e:?}");
         AuthApiError::Unauthorized
     })?;
 
@@ -502,7 +586,7 @@ pub async fn auth_refresh(
     let id_token = token_response["id_token"]
         .as_str()
         .ok_or_else(|| {
-            warn!("missing id_token in refresh response");
+            warn!("[token_refresh_failure] reason=missing_id_token");
             AuthApiError::Unauthorized
         })?
         .to_string();
@@ -518,6 +602,11 @@ pub async fn auth_refresh(
         .unwrap_or(3600);
 
     let refresh_token_expires = 30 * 24 * 3600; // 30 days
+
+    // Log successful token refresh
+    if let Some(sub) = extract_subject_from_token(&id_token) {
+        info!("[auth_success] event=token_refresh sub={sub}");
+    }
 
     // Update cookies
     let mut new_jar = jar;
@@ -551,9 +640,18 @@ pub async fn auth_logout(State(state): State<AuthState>, jar: CookieJar) -> impl
 }
 
 /// GET /auth/me - Get current user info
-/// Reads the ID token (JWT) to extract user information
+///
+/// Returns user information from the validated JWT token.
+/// This endpoint must be behind the cookie_auth_middleware to ensure
+/// the token has been validated before extracting user info.
+///
+/// The user's `sub` (subject) and `email` come from the validated token claims.
+/// The `name` field is extracted directly from the JWT payload for display purposes.
 #[span_fn]
-pub async fn auth_me(jar: CookieJar) -> Result<Json<UserInfo>, AuthApiError> {
+pub async fn auth_me(
+    State(state): State<AuthState>,
+    jar: CookieJar,
+) -> Result<Json<UserInfo>, AuthApiError> {
     // Get ID token from cookie
     let id_token = jar
         .get(ID_TOKEN_COOKIE)
@@ -561,42 +659,65 @@ pub async fn auth_me(jar: CookieJar) -> Result<Json<UserInfo>, AuthApiError> {
             debug!("no id_token cookie found");
             AuthApiError::Unauthorized
         })?
-        .value();
+        .value()
+        .to_string();
 
-    // Decode JWT payload (no validation needed here, just extract claims)
-    let parts: Vec<&str> = id_token.split('.').collect();
+    // Validate the token using the OIDC provider
+    let auth_provider = state.get_auth_provider().await.map_err(|e| {
+        warn!("[auth_failure] auth_provider_init_failed: {e:?}");
+        AuthApiError::Internal("Failed to initialize auth provider".to_string())
+    })?;
+
+    let parts = CookieTokenRequestParts {
+        token: id_token.clone(),
+    };
+
+    let auth_context = auth_provider.validate_request(&parts).await.map_err(|e| {
+        warn!("[auth_failure] {e}");
+        AuthApiError::InvalidToken
+    })?;
+
+    // Extract name from JWT payload (not in AuthContext)
+    // This is safe since we just validated the token
+    let name = extract_name_from_token(&id_token);
+
+    Ok(Json(UserInfo {
+        sub: auth_context.subject,
+        email: auth_context.email,
+        name,
+    }))
+}
+
+/// Extract the 'name' claim from a JWT payload
+///
+/// This is used by auth_me() to get the display name which isn't in AuthContext
+fn extract_name_from_token(token: &str) -> Option<String> {
+    let parts: Vec<&str> = token.split('.').collect();
     if parts.len() != 3 {
-        warn!(
-            "invalid token format: expected 3 parts, got {}",
-            parts.len()
-        );
-        return Err(AuthApiError::InvalidToken);
+        return None;
     }
 
     let payload_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(parts[1].as_bytes())
-        .map_err(|e| {
-            warn!("failed to decode token payload: {}", e);
-            AuthApiError::InvalidToken
-        })?;
+        .ok()?;
 
-    let claims: IdTokenClaims = serde_json::from_slice(&payload_bytes).map_err(|e| {
-        warn!("failed to parse token claims: {}", e);
-        AuthApiError::InvalidToken
-    })?;
+    let claims: IdTokenClaims = serde_json::from_slice(&payload_bytes).ok()?;
+    claims.name
+}
 
-    // Check expiration
-    let now = Utc::now().timestamp();
-    if claims.exp < now {
-        warn!("token expired: exp={} now={}", claims.exp, now);
-        return Err(AuthApiError::Unauthorized);
+/// Extract the 'sub' claim from a JWT payload for audit logging
+fn extract_subject_from_token(token: &str) -> Option<String> {
+    let parts: Vec<&str> = token.split('.').collect();
+    if parts.len() != 3 {
+        return None;
     }
 
-    Ok(Json(UserInfo {
-        sub: claims.sub,
-        email: claims.email.or(claims.preferred_username),
-        name: claims.name,
-    }))
+    let payload_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(parts[1].as_bytes())
+        .ok()?;
+
+    let claims: serde_json::Value = serde_json::from_slice(&payload_bytes).ok()?;
+    claims["sub"].as_str().map(|s| s.to_string())
 }
 
 /// Authentication API errors
@@ -621,7 +742,7 @@ impl IntoResponse for AuthApiError {
             AuthApiError::Unauthorized => (StatusCode::UNAUTHORIZED, "Unauthorized"),
             AuthApiError::InvalidToken => (StatusCode::UNAUTHORIZED, "Invalid token"),
             AuthApiError::Internal(msg) => {
-                tracing::error!("Auth internal error: {msg}");
+                error!("Auth internal error: {msg}");
                 (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error")
             }
         };
@@ -630,59 +751,29 @@ impl IntoResponse for AuthApiError {
     }
 }
 
-/// Basic JWT validation (format and expiration only, no signature check)
+/// Cookie-based authentication middleware with full JWT signature validation
 ///
-/// Security note: This web server acts as a proxy and has no direct access to
-/// telemetry data. All data queries are forwarded to the FlightSQL service,
-/// which performs full JWT signature validation with the OIDC provider. This
-/// basic validation provides fast feedback for obviously invalid tokens while
-/// delegating the authoritative security checks to the data-owning service.
-fn validate_jwt_basic(token: &str) -> Result<(), AuthApiError> {
-    // Check JWT format: must have 3 parts (header.payload.signature)
-    let parts: Vec<&str> = token.split('.').collect();
-    if parts.len() != 3 {
-        warn!("invalid JWT format: expected 3 parts, got {}", parts.len());
-        return Err(AuthApiError::InvalidToken);
-    }
-
-    // Decode and parse payload to check expiration
-    let payload_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(parts[1].as_bytes())
-        .map_err(|e| {
-            warn!("failed to decode JWT payload: {}", e);
-            AuthApiError::InvalidToken
-        })?;
-
-    let claims: IdTokenClaims = serde_json::from_slice(&payload_bytes).map_err(|e| {
-        warn!("failed to parse JWT claims: {}", e);
-        AuthApiError::InvalidToken
-    })?;
-
-    // Check expiration
-    let now = Utc::now().timestamp();
-    if claims.exp < now {
-        warn!("JWT expired: exp={} now={}", claims.exp, now);
-        return Err(AuthApiError::Unauthorized);
-    }
-
-    Ok(())
-}
-
-/// Cookie-based authentication middleware
+/// Reads the ID token from httpOnly cookie, validates the signature using JWKS,
+/// and injects validated user info into request extensions.
 ///
-/// Reads the ID token from httpOnly cookie and validates it.
-/// Injects the token into request extensions for downstream handlers.
+/// Security: This middleware performs full JWT validation including:
+/// - Signature verification using cached JWKS from the OIDC provider
+/// - Issuer validation against configured issuers
+/// - Audience validation
+/// - Expiration check
+///
+/// Invalid or forged tokens are rejected before any downstream processing.
 ///
 /// Note: We use the ID token (JWT) for FlightSQL API calls because:
-/// - ID tokens can be validated locally by FlightSQL's OIDC provider
+/// - ID tokens can be validated locally by both web tier and FlightSQL
 /// - This matches the Python API behavior which also uses ID tokens
 /// - Access tokens (JWE) would require token introspection endpoints
-///
-/// Validation strategy:
-/// - Basic checks (format, expiration) done here for fast feedback
-/// - Full signature validation delegated to FlightSQL service (authoritative)
 #[span_fn]
-pub async fn cookie_auth_middleware(req: Request, next: Next) -> Result<Response, AuthApiError> {
+pub async fn cookie_auth_middleware(
+    State(state): State<AuthState>,
+    req: Request,
+    next: Next,
+) -> Result<Response, AuthApiError> {
     // Extract cookies from request
     let jar = CookieJar::from_headers(req.headers());
 
@@ -696,13 +787,34 @@ pub async fn cookie_auth_middleware(req: Request, next: Next) -> Result<Response
         .value()
         .to_string();
 
-    // Basic validation: format and expiration
-    // (FlightSQL will do full signature validation)
-    validate_jwt_basic(&id_token)?;
+    // Get the OIDC auth provider (lazy initialized with JWKS caching)
+    let auth_provider = state.get_auth_provider().await.map_err(|e| {
+        warn!("[auth_failure] auth_provider_init_failed: {e:?}");
+        AuthApiError::Internal("Failed to initialize auth provider".to_string())
+    })?;
 
-    // Store token in request extensions for downstream use (FlightSQL API calls)
+    // Create request parts adapter for the cookie token
+    let parts = CookieTokenRequestParts {
+        token: id_token.clone(),
+    };
+
+    // Validate the token with full signature verification
+    let auth_context = auth_provider.validate_request(&parts).await.map_err(|e| {
+        warn!("[auth_failure] {e}");
+        AuthApiError::InvalidToken
+    })?;
+
+    // Log successful authentication (trace level to avoid noise on every request)
+    trace!(
+        "[auth_success] subject={} email={:?} issuer={} admin={}",
+        auth_context.subject, auth_context.email, auth_context.issuer, auth_context.is_admin
+    );
+
+    // Store token and validated user info in request extensions
     let mut req = req;
     req.extensions_mut().insert(AuthToken(id_token));
+    req.extensions_mut()
+        .insert(ValidatedUser::from(&auth_context));
 
     // Continue to next middleware/handler
     Ok(next.run(req).await)

@@ -147,11 +147,6 @@ struct LogsQuery {
     level: Option<String>,
 }
 
-#[derive(Clone)]
-struct AppState {
-    auth_enabled: bool,
-}
-
 type ApiResult<T> = Result<T, ApiError>;
 
 struct ApiError(anyhow::Error);
@@ -164,7 +159,7 @@ impl From<anyhow::Error> for ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        tracing::error!("API error: {}", self.0);
+        error!("API error: {}", self.0);
         let message = self.0.to_string();
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -184,12 +179,8 @@ async fn main() -> Result<()> {
     let cors_origin = std::env::var("MICROMEGAS_WEB_CORS_ORIGIN")
         .context("MICROMEGAS_WEB_CORS_ORIGIN environment variable not set")?;
 
-    let state = AppState {
-        auth_enabled: !args.disable_auth,
-    };
-
-    // Build auth routes if authentication is enabled
-    let auth_routes = if !args.disable_auth {
+    // Build auth state if authentication is enabled
+    let auth_state = if !args.disable_auth {
         // Load OIDC client configuration
         let oidc_config = OidcClientConfig::from_env()
             .map_err(|e| anyhow::anyhow!("Failed to load OIDC client config: {e}"))?;
@@ -206,27 +197,29 @@ async fn main() -> Result<()> {
             .context("MICROMEGAS_STATE_SECRET environment variable not set. Generate a secure random secret (e.g., openssl rand -base64 32)")?
             .into_bytes();
 
-        let auth_state = AuthState {
+        Some(AuthState {
             oidc_provider: Arc::new(tokio::sync::OnceCell::new()),
+            auth_provider: Arc::new(tokio::sync::OnceCell::new()),
             config: oidc_config,
             cookie_domain,
             secure_cookies,
             state_signing_secret,
-        };
-
-        Some(
-            Router::new()
-                .route("/auth/login", get(auth::auth_login))
-                .route("/auth/callback", get(auth::auth_callback))
-                .route("/auth/refresh", post(auth::auth_refresh))
-                .route("/auth/logout", post(auth::auth_logout))
-                .route("/auth/me", get(auth::auth_me))
-                .with_state(auth_state),
-        )
+        })
     } else {
         println!("WARNING: Authentication is disabled (--disable-auth)");
         None
     };
+
+    // Build auth routes if authentication is enabled
+    let auth_routes = auth_state.as_ref().map(|auth_state| {
+        Router::new()
+            .route("/auth/login", get(auth::auth_login))
+            .route("/auth/callback", get(auth::auth_callback))
+            .route("/auth/refresh", post(auth::auth_refresh))
+            .route("/auth/logout", post(auth::auth_logout))
+            .route("/auth/me", get(auth::auth_me))
+            .with_state(auth_state.clone())
+    });
 
     let health_routes = Router::new().route("/analyticsweb/health", get(health_check));
 
@@ -251,12 +244,13 @@ async fn main() -> Result<()> {
         .layer(middleware::from_fn(observability_middleware));
 
     // Apply auth middleware if enabled
-    let api_routes = if state.auth_enabled {
-        api_routes
-            .layer(middleware::from_fn(auth::cookie_auth_middleware))
-            .with_state(state)
+    let api_routes = if let Some(auth_state) = auth_state.clone() {
+        api_routes.layer(middleware::from_fn_with_state(
+            auth_state,
+            auth::cookie_auth_middleware,
+        ))
     } else {
-        api_routes.with_state(state)
+        api_routes
     };
     let serve_dir = ServeDir::new(&args.frontend_dir)
         .not_found_service(ServeFile::new(format!("{}/index.html", args.frontend_dir)));
@@ -605,7 +599,7 @@ fn generate_trace_stream(
                 }
             },
             Err(e) => {
-                tracing::error!("Failed to generate trace: {}", e);
+                error!("Failed to generate trace: {}", e);
                 let error_msg = format!("Error: Failed to generate trace: {}", e);
                 yield Ok(Bytes::from(error_msg));
             }

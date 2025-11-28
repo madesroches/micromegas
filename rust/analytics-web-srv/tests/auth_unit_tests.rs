@@ -13,6 +13,7 @@ use std::sync::Arc;
 fn create_test_auth_state() -> AuthState {
     AuthState {
         oidc_provider: Arc::new(tokio::sync::OnceCell::new()),
+        auth_provider: Arc::new(tokio::sync::OnceCell::new()),
         config: OidcClientConfig {
             issuer: "https://issuer.example.com".to_string(),
             client_id: "test-client".to_string(),

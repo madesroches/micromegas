@@ -73,7 +73,6 @@ dependencies = [
  "micromegas",
  "micromegas-auth",
  "openidconnect",
- "rand 0.8.5",
  "rsa",
  "serde",
  "serde_json",
@@ -81,7 +80,6 @@ dependencies = [
  "tokio",
  "tower",
  "tower-http 0.5.2",
- "tracing",
 ]
 
 [[package]]

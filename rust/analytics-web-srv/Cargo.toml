@@ -26,13 +26,11 @@ futures.workspace = true
 http.workspace = true
 micromegas-auth.workspace = true
 openidconnect.workspace = true
-rand.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 time = "0.3"
 tokio.workspace = true
 tower-http = { workspace = true, features = ["fs"] }
-tracing.workspace = true
 
 [lib]
 name = "analytics_web_srv"
