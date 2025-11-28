@@ -70,8 +70,12 @@ To get started with Micromegas, please refer to the [Getting Started](https://ma
 
 ## Current Status & Roadmap
 
-### Unreleased - v0.16.0 (In Progress)
+### Unreleased - v0.17.0 (In Progress)
+* Coming soon...
+
+### November 2025 - v0.16.0
 * HTTP Gateway with authentication and security features
+* Multi-provider OIDC support (Auth0, Azure AD, Google)
 * OIDC authentication for analytics web app
 * DataFusion 51.0.0 upgrade with LIMIT pushdown fixes
 * JSONB UDF optimizations for dictionary-encoded columns
