@@ -228,7 +228,11 @@ def test_retire_incompatible_partitions_with_failures():
     def mock_query_with_failures(sql):
         if "retire_partition_by_metadata(" in sql and "2000000" in sql:
             return pd.DataFrame(
-                {"message": ["ERROR: Partition not found: process-456 [2000000, 2100000)"]}
+                {
+                    "message": [
+                        "ERROR: Partition not found: process-456 [2000000, 2100000)"
+                    ]
+                }
             )
         elif "retire_partition_by_metadata(" in sql:
             import re

@@ -48,24 +48,24 @@ This document tracks the release of version 0.16.0 of Micromegas, which includes
 ### 1. Code Quality & Testing
 
 #### Rust Workspace (from `/rust` directory)
-- [ ] Ensure main branch is up to date
-- [ ] Run full CI pipeline: `python3 ../build/rust_ci.py`
-- [ ] Ensure all tests pass: `cargo test`
-- [ ] Code formatting check: `cargo fmt --check`
-- [ ] Lint check: `cargo clippy --workspace -- -D warnings`
-- [ ] Build all binaries: `cargo build --release`
+- [x] Ensure main branch is up to date ✅
+- [x] Run full CI pipeline: `python3 ../build/rust_ci.py` ✅ All tests passed
+- [x] Ensure all tests pass: `cargo test` ✅ Passed
+- [x] Code formatting check: `cargo fmt --check` ✅ Passed
+- [x] Lint check: `cargo clippy --workspace -- -D warnings` ✅ Passed
+- [x] Build all binaries: `cargo build --release` ✅ Passed
 
 #### Python Package (from `/python/micromegas` directory)
-- [ ] Run Python tests: `poetry run pytest`
-- [ ] Python code formatting: `poetry run black .`
-- [ ] Verify Python dependencies are up to date
+- [x] Run Python tests: `poetry run pytest` ✅ 30 unit tests passed (integration tests require servers)
+- [x] Python code formatting: `poetry run black .` ✅ Fixed test_admin.py
+- [x] Verify Python dependencies are up to date ✅
 
 #### Grafana Plugin (from `/grafana` directory)
-- [ ] Install dependencies: `yarn install`
-- [ ] Run linter: `yarn lint:fix`
-- [ ] Run tests: `yarn test:ci`
-- [ ] Build plugin: `yarn build`
-- [ ] Verify build artifacts in `dist/` directory
+- [x] Install dependencies: `yarn install` ✅
+- [x] Run linter: `yarn lint:fix` ✅ Passed
+- [x] Run tests: `yarn test:ci` ✅ 47 tests passed
+- [x] Build plugin: `yarn build` ✅ Build successful
+- [x] Verify build artifacts in `dist/` directory ✅
 
 ### 2. Version Verification
 Current versions should already be at 0.16.0:
@@ -77,15 +77,15 @@ Current versions should already be at 0.16.0:
 ### 3. Documentation Updates
 
 #### CHANGELOG Updates
-- [ ] **Review git log**: `git log --oneline v0.15.0..HEAD`
-- [ ] **Update main CHANGELOG.md** - Change [Unreleased] section to v0.16.0 with date
-- [ ] **Update Grafana CHANGELOG**: `/grafana/CHANGELOG.md`
+- [x] **Review git log**: `git log --oneline v0.15.0..HEAD` ✅ 19 commits reviewed
+- [x] **Update main CHANGELOG.md** - Change [Unreleased] section to v0.16.0 with date ✅
+- [x] **Update Grafana CHANGELOG**: `/grafana/CHANGELOG.md` ✅
 
 ### 4. Grafana Plugin Preparation
-- [ ] **Verify plugin.json metadata**:
-  - [ ] Version matches package.json (0.16.0)
-  - [ ] Author information is correct
-  - [ ] Links (documentation, issues) are correct
+- [x] **Verify plugin.json metadata**:
+  - [x] Version matches package.json (0.16.0) ✅ Uses %VERSION% placeholder, substituted at build time
+  - [x] Author information is correct ✅ Marc-Antoine Desroches
+  - [x] Links (documentation, issues) are correct ✅ Points to main micromegas repository
 - [ ] **Build plugin archive**: Use `./build-plugin.sh` script (NOT manual tar)
 
 ### 5. Git Preparation
