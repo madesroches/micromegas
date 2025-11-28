@@ -8,6 +8,7 @@ Visual mockups of the new UI are available in the [analytics_web_app_rework/](an
 - [mockup_process.html](analytics_web_app_rework/mockup_process.html) - Process Information page
 - [mockup_process_log.html](analytics_web_app_rework/mockup_process_log.html) - Process Log viewer with SQL panel
 - [mockup_process_trace.html](analytics_web_app_rework/mockup_process_trace.html) - Trace Generation page
+- [mockup_errors.html](analytics_web_app_rework/mockup_errors.html) - Error states reference
 
 ## Vision
 
@@ -191,13 +192,16 @@ Not in scope for now.
 4. Add loading states and error handling
 5. Test all URL parameter combinations for shareability
 
-### TODO: Error Handling UX
-- Define error handling UX patterns with mockups:
-  - Network errors (backend unreachable)
-  - Query errors (invalid SQL, timeout)
-  - Authentication errors (session expired)
-  - Empty states (no data for time range)
-- Create mockups for error states before implementation
+### Error Handling UX
+See [mockup_errors.html](analytics_web_app_rework/mockup_errors.html) for visual reference of all error states:
+- **Network errors**: Banner with retry action, or full-page error if page cannot load
+- **Query errors**: Banner with SQL details and line/column info, SQL panel shows inline error
+- **Query timeout**: Warning banner suggesting time range reduction
+- **Empty states**: Centered message with suggestions for resolution
+- **Destructive function blocked**: Banner explaining security restriction
+- **Toast notifications**: For transient errors during refresh (auto-retry)
+
+Note: Authentication errors are already handled by the existing login flow.
 
 ## Technical Considerations
 
