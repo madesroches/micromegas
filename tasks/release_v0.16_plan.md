@@ -102,45 +102,46 @@ python3 release.py
 ```
 
 **Crates to publish (in dependency order):**
-1. [ ] **micromegas-derive-transit** - Transit derive macros
-2. [ ] **micromegas-tracing-proc-macros** - Tracing procedural macros
-3. [ ] **micromegas-transit** - Data serialization framework
-4. [ ] **micromegas-tracing** - Core tracing library
-5. [ ] **micromegas-auth** - Authentication providers
-6. [ ] **micromegas-telemetry** - Telemetry data structures
-7. [ ] **micromegas-ingestion** - Data ingestion utilities
-8. [ ] **micromegas-telemetry-sink** - Telemetry data sinks
-9. [ ] **micromegas-perfetto** - Perfetto trace generation
-10. [ ] **micromegas-analytics** - Analytics and query engine
-11. [ ] **micromegas-proc-macros** - Top-level procedural macros
-12. [ ] **micromegas** - Main public crate
+1. [x] **micromegas-derive-transit** - Transit derive macros ✅
+2. [x] **micromegas-tracing-proc-macros** - Tracing procedural macros ✅
+3. [x] **micromegas-transit** - Data serialization framework ✅
+4. [x] **micromegas-tracing** - Core tracing library ✅
+5. [x] **micromegas-auth** - Authentication providers ✅
+6. [x] **micromegas-telemetry** - Telemetry data structures ✅
+7. [x] **micromegas-ingestion** - Data ingestion utilities ✅
+8. [x] **micromegas-telemetry-sink** - Telemetry data sinks ✅
+9. [x] **micromegas-perfetto** - Perfetto trace generation ✅
+10. [x] **micromegas-analytics** - Analytics and query engine ✅
+11. [x] **micromegas-proc-macros** - Top-level procedural macros ✅
+12. [x] **micromegas** - Main public crate ✅
 
 **Verification:**
-- [ ] Verify all crates are published on crates.io at v0.16.0
+- [x] Verify all crates are published on crates.io at v0.16.0 ✅ (verified via `cargo search`)
 
 ### Phase 2: Python Library Release
 From `/python/micromegas` directory:
-- [ ] Build package: `poetry build`
-- [ ] Publish to PyPI: `poetry publish`
-- [ ] Verify package on PyPI: https://pypi.org/project/micromegas/
-- [ ] Test installation: `pip install micromegas==0.16.1`
+- [x] Build package: `poetry build` ✅
+- [x] Publish to PyPI: `poetry publish` ✅
+- [x] Verify package on PyPI: https://pypi.org/project/micromegas/ ✅ (version 0.16.1 confirmed)
+- [x] Test installation: `pip install micromegas==0.16.1` ✅ (verified via PyPI JSON API)
 
 **Note**: Python uses version 0.16.1 because 0.16.0 was previously deleted from PyPI and cannot be reused.
 
 ### Phase 3: Grafana Plugin Release
 From `/grafana` directory:
-- [ ] Build and package: `./build-plugin.sh`
-- [ ] Move archive to release artifacts
-- [ ] Verify archive contents are correct (files at root, not in dist/)
+- [x] Build and package: `./build-plugin.sh` ✅ Built successfully (v0.16.0)
+- [x] Move archive to release artifacts ✅ Moved to repo root (~50MB)
+- [x] Verify archive contents are correct (files in micromegas-micromegas-datasource/, not dist/) ✅
 
 ### Phase 4: Git Release
-- [ ] Push tags: `git push origin v0.16.0`
-- [ ] **Create GitHub release**:
-  - [ ] Use tag v0.16.0
-  - [ ] Title: "Micromegas v0.16.0 - HTTP Gateway & Multi-Provider OIDC"
-  - [ ] Include comprehensive description with major features
-  - [ ] Attach Grafana plugin archive
-  - [ ] Mark as latest release
+- [x] Push tags: `git push origin v0.16.0` ✅
+- [x] **Create GitHub release**: ✅
+  - [x] Use tag v0.16.0 ✅
+  - [x] Title: "Micromegas v0.16.0 - HTTP Gateway & Multi-Provider OIDC" ✅
+  - [x] Include comprehensive description with major features ✅
+  - [x] Attach Grafana plugin archive ✅
+  - [x] Mark as latest release ✅
+  - Release URL: https://github.com/madesroches/micromegas/releases/tag/v0.16.0
 
 ### Phase 5: Post-Release Version Bump to 0.17.0
 Update all versions for next development cycle:
@@ -251,6 +252,19 @@ Download and extract `micromegas-datasource-0.16.0.tar.gz` to your Grafana plugi
 - 19 commits since v0.15.0
 
 ## Release Execution Log
-- [ ] Pre-Release: Not started
-- [ ] Release: Not started
-- [ ] Post-Release: Not started
+- [x] Pre-Release: Completed (2025-11-28)
+  - All tests passing
+  - CHANGELOGs updated
+  - Version numbers verified
+  - Tag v0.16.0 created
+- [x] Phase 1 - Rust Crates: Completed (2025-11-28)
+  - All 12 crates published to crates.io at v0.16.0
+- [x] Phase 2 - Python Library: Completed (2025-11-28)
+  - micromegas 0.16.1 published to PyPI
+- [x] Phase 3 - Grafana Plugin: Completed (2025-11-28)
+  - Built using ./build-plugin.sh (correct structure)
+  - Archive: micromegas-micromegas-datasource.zip (~50MB)
+- [x] Phase 4 - Git Release: Completed (2025-11-28)
+  - Tag pushed, GitHub release created
+  - URL: https://github.com/madesroches/micromegas/releases/tag/v0.16.0
+- [ ] Phase 5 - Post-Release: Not started
