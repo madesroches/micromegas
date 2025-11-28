@@ -69,6 +69,9 @@ The app currently uses:
 - `/` becomes dashboard landing or redirect to `/processes`
 - Add `/settings` for future app configuration
 
+**Why query params instead of path params:**
+Query params are chosen over path segments (like `/process/[id]`) because future screens will support arbitrary numbers of parameters (filters, panel configurations, time ranges, etc.). Path segments would become unwieldy for this use case.
+
 ### 1.4 Time Range Selector Component
 Create a reusable time range selector similar to Grafana:
 - Relative ranges: Last 5m, 15m, 1h, 6h, 12h, 24h, 7d, 30d
@@ -83,6 +86,9 @@ Create a reusable time range selector similar to Grafana:
 ## Phase 2: SQL-Powered Configurable Pages
 
 **Goal**: Each page is defined by an editable SQL query.
+
+**Why macros instead of parameterized queries:**
+Macros (`$search`, `$order_by`, etc.) provide text substitution flexibility that users will need when defining their own custom screens from scratch in future phases. Parameterized queries would be too restrictive for user-defined SQL.
 
 ### 2.1 Backend: Generic SQL Endpoint
 Add a new endpoint to `analytics-web-srv`:
@@ -141,22 +147,57 @@ Not in scope for now.
 
 ## Implementation Order
 
-### Milestone 1: Foundation
-1. Create TimeRangeSelector component
-2. Create new page layout with time range in header
-3. Add `/processes` route (move ProcessTable there)
-4. Add time range to process queries
+### Milestone 1: Foundation - Layout & Time Range
+1. Create `Header` component with logo and user menu placeholder
+2. Create `Sidebar` component with icon navigation
+3. Create `PageLayout` component combining header, sidebar, content area
+4. Create `TimeRangeSelector` component with dropdown
+5. Create `useTimeRange` hook for URL-based time range state
+6. Update `layout.tsx` to use new layout structure
+7. Add CSS variables/theme for dark mode colors
 
-### Milestone 2: Full-Screen Pages
-1. Convert process detail to separate routes
-2. Remove all tab navigation
-3. Add navigation sidebar or menu
-4. Ensure all pages use time range
+### Milestone 2: Process Explorer Page
+1. Create `/processes` route with page component
+2. Create `SortableTable` component with column sorting
+3. Create `useSortState` hook for URL-based sort state
+4. Add search input with URL sync
+5. Wire up existing process data fetching with time range
+6. Update root `/` to redirect to `/processes`
 
-### Milestone 3: SQL Query Support
-1. Add generic query endpoint to backend
-2. Create QueryEditor component
-3. Add editable SQL to existing pages
+### Milestone 3: Process Detail Pages
+1. Create `/process` page with info cards grid
+2. Create `InfoCard` component
+3. Create `StreamsTable` component with type badges
+4. Create `/process_log` page with log viewer
+5. Create `LogViewer` component with level coloring
+6. Create `/process_trace` page with trace form
+7. Create `TraceForm` component
+8. Create `ProgressIndicator` component
+9. Delete old `/process/[id]` route
+
+### Milestone 4: SQL Panel & Backend
+1. Add `POST /analyticsweb/query` endpoint to backend
+2. Add macro substitution logic in backend
+3. Add destructive function blocking in backend
+4. Create `QueryEditor` component with syntax highlighting
+5. Add collapsible SQL panel to Process Explorer page
+6. Add collapsible SQL panel to Process Log page
+7. Wire up Run/Reset buttons to execute queries
+
+### Milestone 5: Polish & Integration
+1. Add refresh button functionality (re-fetch data)
+2. Add user menu dropdown (placeholder for future auth)
+3. Add responsive design adjustments
+4. Add loading states and error handling
+5. Test all URL parameter combinations for shareability
+
+### TODO: Error Handling UX
+- Define error handling UX patterns with mockups:
+  - Network errors (backend unreachable)
+  - Query errors (invalid SQL, timeout)
+  - Authentication errors (session expired)
+  - Empty states (no data for time range)
+- Create mockups for error states before implementation
 
 ## Technical Considerations
 
@@ -167,7 +208,11 @@ Not in scope for now.
 ### Performance
 - Debounce time range changes to avoid excessive queries
 - Cache query results with React Query
-- Consider pagination for large result sets
+
+### TODO: Pagination Strategy
+- Pagination is out of scope for initial implementation but will be required
+- Must support very large data sets (hundreds of millions of entries)
+- Needs dedicated design work to handle efficiently at scale
 
 ### Security
 - **Block destructive functions in web app query endpoint** (admin flag not yet enforced in FlightSQL server):
@@ -175,24 +220,148 @@ Not in scope for now.
   - `retire_partition_by_metadata()` - retires a single partition
   - `retire_partition_by_file()` - retires a partition by file path
 - Reject queries containing these function names before forwarding to FlightSQL
+- **Note:** This blocklist is a temporary measure. The long-term solution is proper RBAC (Role-Based Access Control) in the FlightSQL server.
+
+## Detailed Feature Requirements from Mockups
+
+### Header Component
+- Logo on the left ("Micromegas")
+- Time range selector with:
+  - Clock icon
+  - Current range display (relative like "Last 24 hours" or absolute dates)
+  - Dropdown indicator
+  - Refresh button adjacent to time range
+- User menu with avatar (initials)
+
+### Sidebar Component
+- Narrow icon-based sidebar (56px width)
+- Navigation items with icons:
+  - Processes (grid icon) - links to `/processes`
+- Hover tooltips showing item names
+- Active state highlighting (blue color)
+
+**Note:** Logs and Trace are not in top-level navigation because they require a `process_id` context. Users navigate to these pages from the Process Information page. Only one top-level screen for now; more will be added as the app evolves.
+
+### Time Range Selector Dropdown
+- Relative ranges: Last 5m, 15m, 1h, 6h, 12h, 24h, 7d, 30d
+- Custom absolute range with date/time pickers
+- URL query params: `?from=now-1h&to=now` or absolute timestamps
+
+### SQL Panel (Right Panel)
+- Collapsible panel (400px expanded, 48px collapsed)
+- Header with:
+  - Collapse toggle button
+  - Title "SQL Query"
+  - Reset button
+  - Run button (green)
+- SQL editor with syntax highlighting:
+  - Keywords in purple
+  - Strings in green
+  - Variables ($var) in orange
+- Variables section showing available macros
+- Current values section showing active parameters
+- Time range info section
+
+### Process Explorer Page (`/processes`)
+- Page title "Processes"
+- Search input for filtering by exe, process_id, computer, username
+- Sortable table with columns:
+  - Process (exe name, links to log page)
+  - Process ID (monospace, truncated UUID)
+  - Start Time (monospace timestamp)
+  - Last Update (monospace timestamp)
+  - Username
+  - Computer
+- Column sorting with visual indicators (arrows)
+- SQL panel with `$search` and `$order_by` variables
+
+### Process Information Page (`/process?id=...`)
+- Back link to All Processes
+- Page header with:
+  - Exe name as title
+  - Process ID as subtitle
+  - Action buttons: "View Log" and "Generate Trace"
+- Info cards grid (4 cards):
+  - Process Information: exe, process_id, parent process, command line
+  - Environment: computer, username, distro, CPU brand
+  - Timing: start time, last activity, duration, TSC frequency
+  - Build Information: version, number, configuration, target platform
+- Telemetry Streams table:
+  - Stream Type (Log/Metrics/Thread Spans with colored badges)
+  - Stream ID
+  - Events count
+  - First/Last Event timestamps
+- No SQL panel on this page
+
+### Process Log Page (`/process_log?process_id=...`)
+- Back link to process info page (shows exe name)
+- Page title "Process Log" with process ID subtitle
+- Filters:
+  - Max Level dropdown (TRACE, DEBUG, INFO, WARN, ERROR, FATAL)
+  - Limit input
+- Log viewer (monospace):
+  - Timestamp column
+  - Level column (color-coded: debug=gray, info=blue, warn=yellow, error=red)
+  - Target column (purple)
+  - Message column
+- SQL panel with `$process_id`, `$max_level`, `$limit` variables
+
+### Trace Generation Page (`/process_trace?process_id=...`)
+- Page title "Generate Trace"
+- Form sections:
+  - Process (read-only display of exe and process_id)
+  - Trace Name input (auto-populated with suggested name)
+  - Span Types checkboxes:
+    - Thread Events (with description)
+    - Async Span Events (with description)
+  - Time Range (uses global time range from header)
+  - Estimated Size (shows event count with styling)
+  - Size warning for large traces
+- Action buttons: Generate Trace, Cancel
+- Progress section (shown during generation):
+  - Spinner animation
+  - "Generating Trace..." title
+  - Downloaded bytes counter
+- No SQL panel on this page
+
+### Backend: Query Macro System
+- `$search` - Search input value substitution
+- `$order_by` - Column and direction substitution (e.g., "start_time DESC")
+- `$process_id` - Process ID parameter
+- `$max_level` - Log level filter
+- `$limit` - Row limit
+- `$begin`, `$end` - Time range boundaries
+- Backend must validate and substitute these macros before forwarding to FlightSQL
 
 ## File Changes Summary
 
 ### New Files
-- `src/components/TimeRangeSelector.tsx`
-- `src/components/QueryEditor.tsx`
-- `src/components/layout/PageLayout.tsx`
-- `src/components/layout/Sidebar.tsx`
-- `src/app/processes/page.tsx`
-- `src/app/process/page.tsx`
-- `src/app/process_log/page.tsx`
-- `src/app/process_trace/page.tsx`
-- `src/lib/time-range.ts`
+- `src/components/TimeRangeSelector.tsx` - Time range dropdown with relative/absolute options
+- `src/components/TimeRangeDropdown.tsx` - Dropdown menu for time range selection
+- `src/components/QueryEditor.tsx` - SQL panel with syntax highlighting
+- `src/components/layout/PageLayout.tsx` - Full-page layout with header/sidebar/content
+- `src/components/layout/Header.tsx` - Header with logo, time range, user menu
+- `src/components/layout/Sidebar.tsx` - Icon-based navigation sidebar
+- `src/components/layout/UserMenu.tsx` - User avatar dropdown
+- `src/components/ui/SortableTable.tsx` - Table with sortable columns
+- `src/components/ui/LogViewer.tsx` - Log display with level coloring
+- `src/components/ui/InfoCard.tsx` - Information card for process details
+- `src/components/ui/StreamsTable.tsx` - Telemetry streams table with type badges
+- `src/components/ui/TraceForm.tsx` - Trace generation form
+- `src/components/ui/ProgressIndicator.tsx` - Spinner with progress message
+- `src/app/processes/page.tsx` - Process Explorer page
+- `src/app/process/page.tsx` - Process Information page
+- `src/app/process_log/page.tsx` - Process Log page
+- `src/app/process_trace/page.tsx` - Trace Generation page
+- `src/lib/time-range.ts` - Time range parsing, URL sync, utilities
+- `src/lib/query-macros.ts` - Frontend macro formatting
+- `src/hooks/useTimeRange.ts` - React hook for time range state from URL
+- `src/hooks/useSortState.ts` - React hook for sort column/direction from URL
 
 ### Modified Files
-- `src/app/page.tsx` - Redirect to /processes or show dashboard
-- `src/lib/api.ts` - Add generic query endpoint
-- `src/app/layout.tsx` - Add time range provider
+- `src/app/page.tsx` - Redirect to /processes
+- `src/lib/api.ts` - Add generic query endpoint with macro support
+- `src/app/layout.tsx` - Add new layout with sidebar
 
 ### Deleted Files
 - `src/app/process/[id]/page.tsx` - Replaced by `/process?id=...`
@@ -200,3 +369,5 @@ Not in scope for now.
 ### Backend Changes (rust/analytics-web-srv)
 - Add `POST /analyticsweb/query` endpoint
 - Add query validation/sanitization
+- Add macro substitution (`$search`, `$order_by`, `$process_id`, `$max_level`, `$limit`, `$begin`, `$end`)
+- Block destructive functions in query text
