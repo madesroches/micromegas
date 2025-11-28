@@ -165,7 +165,7 @@ impl From<anyhow::Error> for ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        tracing::error!("API error: {}", self.0);
+        error!("API error: {}", self.0);
         let message = self.0.to_string();
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -611,7 +611,7 @@ fn generate_trace_stream(
                 }
             },
             Err(e) => {
-                tracing::error!("Failed to generate trace: {}", e);
+                error!("Failed to generate trace: {}", e);
                 let error_msg = format!("Error: Failed to generate trace: {}", e);
                 yield Ok(Bytes::from(error_msg));
             }

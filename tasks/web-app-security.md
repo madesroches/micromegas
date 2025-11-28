@@ -75,13 +75,13 @@ Tighten security of analytics-web-srv so it properly validates tokens at the web
   - Handle revocation at logout time
   - Admin ability to revoke all tokens for a user
 
-### Phase 5: Multi-Provider Support
+### Phase 5: Multi-Provider Support ✅ COMPLETED
 
-- [ ] **Support multiple OIDC issuers in web app**
-  - Currently enforces exactly 1 issuer (unlike FlightSQL which supports multiple)
-  - Update parsing to accept array of issuers
-  - Validate token against appropriate issuer based on `iss` claim
-  - File: `rust/analytics-web-srv/src/auth.rs` (OidcIssuerConfig parsing)
+- [x] **Support multiple OIDC issuers in web app**
+  - Removed error that blocked startup with multiple issuers
+  - First issuer is used for OAuth login flow (single redirect target)
+  - Token validation via OidcAuthProvider accepts tokens from all configured issuers
+  - File: `rust/analytics-web-srv/src/auth.rs` (OidcClientConfig::from_env)
 
 ## Implementation Notes
 

@@ -82,29 +82,32 @@ impl OidcClientConfig {
     ///   ]
     /// }
     ///
-    /// Note: The web app only supports a single issuer. If multiple issuers are
-    /// configured in the array, this function will return an error. The `audience`
-    /// field serves as the OAuth client_id for the web app.
+    /// Note: When multiple issuers are configured, the first issuer is used for
+    /// the OAuth login flow (you can only redirect to one provider). Token
+    /// validation via OidcAuthProvider will accept tokens from any configured issuer.
     pub fn from_env() -> Result<Self> {
         // Use the shared OidcConfig from micromegas-auth
         let config = micromegas_auth::oidc::OidcConfig::from_env()?;
 
-        // Ensure exactly one issuer is configured
+        // Need at least one issuer
         if config.issuers.is_empty() {
             return Err(anyhow!(
                 "MICROMEGAS_OIDC_CONFIG must contain at least one issuer in the 'issuers' array"
             ));
         }
 
-        if config.issuers.len() > 1 {
-            return Err(anyhow!(
-                "Analytics web app only supports a single OIDC issuer. Found {} issuers in MICROMEGAS_OIDC_CONFIG. \
-                 Please configure only one issuer in the 'issuers' array.",
-                config.issuers.len()
-            ));
-        }
-
+        // Use the first issuer for OAuth login flow
+        // (token validation via OidcAuthProvider supports all issuers)
         let issuer_config = &config.issuers[0];
+
+        if config.issuers.len() > 1 {
+            info!(
+                "Multiple OIDC issuers configured ({}). Using '{}' for OAuth login flow. \
+                 Token validation will accept tokens from all configured issuers.",
+                config.issuers.len(),
+                issuer_config.issuer
+            );
+        }
 
         let redirect_uri = std::env::var("MICROMEGAS_AUTH_REDIRECT_URI")
             .map_err(|_| anyhow!("MICROMEGAS_AUTH_REDIRECT_URI environment variable not set"))?;
@@ -711,7 +714,7 @@ impl IntoResponse for AuthApiError {
             AuthApiError::Unauthorized => (StatusCode::UNAUTHORIZED, "Unauthorized"),
             AuthApiError::InvalidToken => (StatusCode::UNAUTHORIZED, "Invalid token"),
             AuthApiError::Internal(msg) => {
-                tracing::error!("Auth internal error: {msg}");
+                error!("Auth internal error: {msg}");
                 (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error")
             }
         };
