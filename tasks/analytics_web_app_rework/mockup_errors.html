@@ -1,0 +1,796 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Error States - Micromegas Analytics</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0f1419;
+            color: #e7e9ea;
+            min-height: 100vh;
+        }
+
+        /* Header */
+        .header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 24px;
+            background: #1a1f26;
+            border-bottom: 1px solid #2f3540;
+        }
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 24px;
+        }
+        .logo {
+            font-size: 18px;
+            font-weight: 600;
+            color: #3b82f6;
+        }
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        /* Time Controls */
+        .time-controls {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .time-range {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: #2f3540;
+            padding: 6px 12px;
+            border-radius: 6px 0 0 6px;
+            font-size: 13px;
+            cursor: pointer;
+        }
+        .time-range:hover {
+            background: #3d4450;
+        }
+        .time-range-icon {
+            color: #9ca3af;
+        }
+        .time-range-value {
+            color: #e7e9ea;
+        }
+        .time-range-dropdown {
+            color: #9ca3af;
+        }
+        .refresh-btn {
+            background: #2f3540;
+            border: none;
+            color: #e7e9ea;
+            padding: 6px 10px;
+            border-radius: 0 6px 6px 0;
+            cursor: pointer;
+            font-size: 14px;
+            border-left: 1px solid #3d4450;
+        }
+        .refresh-btn:hover {
+            background: #3d4450;
+        }
+
+        /* User Menu */
+        .user-menu {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+        .user-menu:hover {
+            background: #2f3540;
+        }
+        .user-avatar {
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            background: #3b82f6;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        /* Left Sidebar */
+        .sidebar {
+            width: 56px;
+            background: #1a1f26;
+            border-right: 1px solid #2f3540;
+            display: flex;
+            flex-direction: column;
+            padding: 12px 0;
+        }
+        .sidebar-nav {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        .sidebar-item {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 40px;
+            height: 40px;
+            margin: 0 8px;
+            border-radius: 6px;
+            color: #9ca3af;
+            text-decoration: none;
+            font-size: 18px;
+            cursor: pointer;
+        }
+        .sidebar-item:hover {
+            background: #2f3540;
+            color: #e7e9ea;
+        }
+        .sidebar-item.active {
+            background: #22272e;
+            color: #3b82f6;
+        }
+        .sidebar-item svg {
+            width: 20px;
+            height: 20px;
+        }
+
+        /* Main Layout */
+        .main-layout {
+            display: flex;
+            height: calc(100vh - 57px);
+        }
+
+        /* Main Content */
+        .main {
+            flex: 1;
+            padding: 24px;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        /* Page Header */
+        .page-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 20px;
+        }
+        .page-title {
+            font-size: 24px;
+            font-weight: 600;
+        }
+
+        /* Error States Container (for demo purposes) */
+        .error-examples {
+            display: flex;
+            flex-direction: column;
+            gap: 32px;
+            overflow: auto;
+            flex: 1;
+        }
+        .error-example {
+            background: #1a1f26;
+            border: 1px solid #2f3540;
+            border-radius: 8px;
+            padding: 24px;
+        }
+        .error-example-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: #9ca3af;
+            margin-bottom: 16px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        /* Error Banner - for non-blocking errors */
+        .error-banner {
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+            padding: 14px 16px;
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+            border-radius: 8px;
+            margin-bottom: 16px;
+        }
+        .error-banner-icon {
+            flex-shrink: 0;
+            width: 20px;
+            height: 20px;
+            color: #ef4444;
+        }
+        .error-banner-content {
+            flex: 1;
+        }
+        .error-banner-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: #ef4444;
+            margin-bottom: 4px;
+        }
+        .error-banner-message {
+            font-size: 13px;
+            color: #f87171;
+            line-height: 1.5;
+        }
+        .error-banner-details {
+            font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+            font-size: 12px;
+            color: #9ca3af;
+            margin-top: 8px;
+            padding: 8px 10px;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 4px;
+        }
+        .error-banner-actions {
+            display: flex;
+            gap: 8px;
+            margin-top: 12px;
+        }
+        .error-banner-btn {
+            padding: 6px 12px;
+            border-radius: 4px;
+            font-size: 13px;
+            cursor: pointer;
+            border: none;
+        }
+        .error-banner-btn-primary {
+            background: #ef4444;
+            color: white;
+        }
+        .error-banner-btn-primary:hover {
+            background: #dc2626;
+        }
+        .error-banner-btn-secondary {
+            background: transparent;
+            color: #9ca3af;
+            border: 1px solid #2f3540;
+        }
+        .error-banner-btn-secondary:hover {
+            background: #2f3540;
+            color: #e7e9ea;
+        }
+        .error-banner-dismiss {
+            flex-shrink: 0;
+            width: 20px;
+            height: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #9ca3af;
+            cursor: pointer;
+            border-radius: 4px;
+        }
+        .error-banner-dismiss:hover {
+            background: rgba(239, 68, 68, 0.2);
+            color: #ef4444;
+        }
+
+        /* Warning Banner */
+        .warning-banner {
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+            padding: 14px 16px;
+            background: rgba(245, 158, 11, 0.1);
+            border: 1px solid rgba(245, 158, 11, 0.3);
+            border-radius: 8px;
+            margin-bottom: 16px;
+        }
+        .warning-banner-icon {
+            flex-shrink: 0;
+            width: 20px;
+            height: 20px;
+            color: #f59e0b;
+        }
+        .warning-banner-content {
+            flex: 1;
+        }
+        .warning-banner-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: #f59e0b;
+            margin-bottom: 4px;
+        }
+        .warning-banner-message {
+            font-size: 13px;
+            color: #fbbf24;
+            line-height: 1.5;
+        }
+
+        /* Full Page Error State */
+        .error-fullpage {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 48px 24px;
+            text-align: center;
+            min-height: 300px;
+        }
+        .error-fullpage-icon {
+            width: 64px;
+            height: 64px;
+            color: #ef4444;
+            margin-bottom: 24px;
+        }
+        .error-fullpage-title {
+            font-size: 20px;
+            font-weight: 600;
+            color: #e7e9ea;
+            margin-bottom: 8px;
+        }
+        .error-fullpage-message {
+            font-size: 14px;
+            color: #9ca3af;
+            max-width: 400px;
+            line-height: 1.6;
+            margin-bottom: 24px;
+        }
+        .error-fullpage-actions {
+            display: flex;
+            gap: 12px;
+        }
+        .btn {
+            padding: 10px 20px;
+            border-radius: 6px;
+            font-size: 14px;
+            cursor: pointer;
+            border: none;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .btn-primary {
+            background: #3b82f6;
+            color: white;
+        }
+        .btn-primary:hover {
+            background: #2563eb;
+        }
+        .btn-secondary {
+            background: #2f3540;
+            color: #e7e9ea;
+        }
+        .btn-secondary:hover {
+            background: #3d4450;
+        }
+
+        /* Empty State */
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 48px 24px;
+            text-align: center;
+            min-height: 300px;
+        }
+        .empty-state-icon {
+            width: 64px;
+            height: 64px;
+            color: #6b7280;
+            margin-bottom: 24px;
+        }
+        .empty-state-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: #e7e9ea;
+            margin-bottom: 8px;
+        }
+        .empty-state-message {
+            font-size: 14px;
+            color: #9ca3af;
+            max-width: 400px;
+            line-height: 1.6;
+            margin-bottom: 24px;
+        }
+        .empty-state-suggestions {
+            text-align: left;
+            background: #22272e;
+            padding: 16px 20px;
+            border-radius: 8px;
+            font-size: 13px;
+            color: #9ca3af;
+        }
+        .empty-state-suggestions-title {
+            font-weight: 600;
+            color: #e7e9ea;
+            margin-bottom: 8px;
+        }
+        .empty-state-suggestions ul {
+            margin: 0;
+            padding-left: 20px;
+        }
+        .empty-state-suggestions li {
+            margin-bottom: 4px;
+        }
+
+        /* Toast Notification */
+        .toast {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 14px 16px;
+            background: #1a1f26;
+            border: 1px solid #2f3540;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+            max-width: 400px;
+        }
+        .toast-error {
+            border-color: rgba(239, 68, 68, 0.3);
+        }
+        .toast-icon {
+            flex-shrink: 0;
+            width: 20px;
+            height: 20px;
+        }
+        .toast-error .toast-icon {
+            color: #ef4444;
+        }
+        .toast-content {
+            flex: 1;
+        }
+        .toast-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: #e7e9ea;
+            margin-bottom: 2px;
+        }
+        .toast-message {
+            font-size: 13px;
+            color: #9ca3af;
+        }
+        .toast-retry {
+            font-size: 12px;
+            color: #6b7280;
+            margin-top: 6px;
+        }
+        .toast-dismiss {
+            flex-shrink: 0;
+            width: 20px;
+            height: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #6b7280;
+            cursor: pointer;
+            border-radius: 4px;
+        }
+        .toast-dismiss:hover {
+            background: #2f3540;
+            color: #e7e9ea;
+        }
+
+        /* SQL Error in Panel */
+        .sql-error {
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+            border-radius: 6px;
+            padding: 12px 14px;
+            margin-top: 12px;
+        }
+        .sql-error-title {
+            font-size: 12px;
+            font-weight: 600;
+            color: #ef4444;
+            margin-bottom: 6px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .sql-error-message {
+            font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+            font-size: 12px;
+            color: #f87171;
+            line-height: 1.5;
+        }
+        .sql-error-line {
+            color: #9ca3af;
+            margin-top: 4px;
+        }
+
+        /* Loading Indicator (for context) */
+        .loading-indicator {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            color: #9ca3af;
+            font-size: 14px;
+        }
+        .spinner {
+            width: 20px;
+            height: 20px;
+            border: 2px solid #2f3540;
+            border-top-color: #3b82f6;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* Inline Error in Table */
+        .table-error-row {
+            background: rgba(239, 68, 68, 0.05);
+        }
+        .table-error-row td {
+            color: #f87171;
+        }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <div class="header-left">
+            <div class="logo">Micromegas</div>
+        </div>
+        <div class="header-right">
+            <div class="time-controls">
+                <div class="time-range">
+                    <span class="time-range-icon">&#128337;</span>
+                    <span class="time-range-value">Last 24 hours</span>
+                    <span class="time-range-dropdown">&#9662;</span>
+                </div>
+                <button class="refresh-btn" title="Refresh">&#8635;</button>
+            </div>
+            <div class="user-menu">
+                <div class="user-avatar">JD</div>
+            </div>
+        </div>
+    </header>
+
+    <div class="main-layout">
+        <aside class="sidebar">
+            <nav class="sidebar-nav">
+                <a href="mockup_processes.html" class="sidebar-item active" title="Processes">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="3" y="3" width="7" height="7"></rect>
+                        <rect x="14" y="3" width="7" height="7"></rect>
+                        <rect x="14" y="14" width="7" height="7"></rect>
+                        <rect x="3" y="14" width="7" height="7"></rect>
+                    </svg>
+                </a>
+            </nav>
+        </aside>
+
+        <main class="main">
+            <div class="page-header">
+                <h1 class="page-title">Error States Reference</h1>
+            </div>
+
+            <div class="error-examples">
+                <!-- Network Error Banner -->
+                <div class="error-example">
+                    <div class="error-example-title">1. Network Error (Banner)</div>
+                    <div class="error-banner">
+                        <svg class="error-banner-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="10"></circle>
+                            <line x1="12" y1="8" x2="12" y2="12"></line>
+                            <line x1="12" y1="16" x2="12.01" y2="16"></line>
+                        </svg>
+                        <div class="error-banner-content">
+                            <div class="error-banner-title">Unable to connect to server</div>
+                            <div class="error-banner-message">
+                                The analytics server is not responding. This may be due to network issues or server maintenance.
+                            </div>
+                            <div class="error-banner-details">
+                                Error: ECONNREFUSED 127.0.0.1:8000
+                            </div>
+                            <div class="error-banner-actions">
+                                <button class="error-banner-btn error-banner-btn-primary">Retry</button>
+                                <button class="error-banner-btn error-banner-btn-secondary">View Status</button>
+                            </div>
+                        </div>
+                        <div class="error-banner-dismiss" title="Dismiss">&#10005;</div>
+                    </div>
+                </div>
+
+                <!-- Query Error Banner -->
+                <div class="error-example">
+                    <div class="error-example-title">2. Query Error (Banner with SQL details)</div>
+                    <div class="error-banner">
+                        <svg class="error-banner-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+                            <line x1="12" y1="9" x2="12" y2="13"></line>
+                            <line x1="12" y1="17" x2="12.01" y2="17"></line>
+                        </svg>
+                        <div class="error-banner-content">
+                            <div class="error-banner-title">Query execution failed</div>
+                            <div class="error-banner-message">
+                                The SQL query contains a syntax error and could not be executed.
+                            </div>
+                            <div class="error-banner-details">
+                                Error at line 3, column 15: Expected 'FROM' but found 'FORM'
+                            </div>
+                            <div class="error-banner-actions">
+                                <button class="error-banner-btn error-banner-btn-secondary">Edit Query</button>
+                                <button class="error-banner-btn error-banner-btn-secondary">Reset to Default</button>
+                            </div>
+                        </div>
+                        <div class="error-banner-dismiss" title="Dismiss">&#10005;</div>
+                    </div>
+                </div>
+
+                <!-- Query Timeout Warning -->
+                <div class="error-example">
+                    <div class="error-example-title">3. Query Timeout (Warning Banner)</div>
+                    <div class="warning-banner">
+                        <svg class="warning-banner-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="10"></circle>
+                            <polyline points="12 6 12 12 16 14"></polyline>
+                        </svg>
+                        <div class="warning-banner-content">
+                            <div class="warning-banner-title">Query timed out</div>
+                            <div class="warning-banner-message">
+                                The query took too long to execute (exceeded 30 seconds). Try narrowing your time range or adding more specific filters.
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Full Page Network Error -->
+                <div class="error-example">
+                    <div class="error-example-title">4. Full Page Network Error (when page cannot load at all)</div>
+                    <div class="error-fullpage">
+                        <svg class="error-fullpage-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="1" y1="1" x2="23" y2="23"></line>
+                            <path d="M16.72 11.06A10.94 10.94 0 0 1 19 12.55"></path>
+                            <path d="M5 12.55a10.94 10.94 0 0 1 5.17-2.39"></path>
+                            <path d="M10.71 5.05A16 16 0 0 1 22.58 9"></path>
+                            <path d="M1.42 9a15.91 15.91 0 0 1 4.7-2.88"></path>
+                            <path d="M8.53 16.11a6 6 0 0 1 6.95 0"></path>
+                            <line x1="12" y1="20" x2="12.01" y2="20"></line>
+                        </svg>
+                        <div class="error-fullpage-title">Connection Failed</div>
+                        <div class="error-fullpage-message">
+                            Unable to reach the analytics server. Please check your network connection and try again.
+                        </div>
+                        <div class="error-fullpage-actions">
+                            <button class="btn btn-primary">
+                                <span>&#8635;</span> Try Again
+                            </button>
+                            <button class="btn btn-secondary">Check Status</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Empty State -->
+                <div class="error-example">
+                    <div class="error-example-title">5. Empty State (No data for time range)</div>
+                    <div class="empty-state">
+                        <svg class="empty-state-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+                        </svg>
+                        <div class="empty-state-title">No processes found</div>
+                        <div class="empty-state-message">
+                            No processes were found matching your criteria in the selected time range.
+                        </div>
+                        <div class="empty-state-suggestions">
+                            <div class="empty-state-suggestions-title">Suggestions:</div>
+                            <ul>
+                                <li>Expand the time range to include more data</li>
+                                <li>Check your search filters</li>
+                                <li>Verify the application is sending telemetry</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Empty State for Logs -->
+                <div class="error-example">
+                    <div class="error-example-title">6. Empty State (No logs for process)</div>
+                    <div class="empty-state">
+                        <svg class="empty-state-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                            <polyline points="14 2 14 8 20 8"></polyline>
+                            <line x1="16" y1="13" x2="8" y2="13"></line>
+                            <line x1="16" y1="17" x2="8" y2="17"></line>
+                        </svg>
+                        <div class="empty-state-title">No log entries</div>
+                        <div class="empty-state-message">
+                            This process has no log entries in the selected time range, or the log level filter is too restrictive.
+                        </div>
+                        <div class="empty-state-suggestions">
+                            <div class="empty-state-suggestions-title">Try:</div>
+                            <ul>
+                                <li>Lowering the max log level to TRACE</li>
+                                <li>Expanding the time range</li>
+                                <li>Verifying log instrumentation is enabled</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- SQL Error in Panel -->
+                <div class="error-example">
+                    <div class="error-example-title">7. SQL Error (in SQL Panel)</div>
+                    <div style="background: #1a1f26; padding: 16px; border-radius: 8px; max-width: 380px;">
+                        <div style="font-family: 'SF Mono', Monaco, monospace; font-size: 13px; color: #e7e9ea; background: #0d1117; padding: 14px; border-radius: 6px; border: 1px solid rgba(239, 68, 68, 0.5);">
+<span style="color: #c084fc;">SELECT</span> process_id, exe
+<span style="color: #c084fc;">FORM</span> processes
+<span style="color: #c084fc;">WHERE</span> exe <span style="color: #c084fc;">LIKE</span> <span style="color: #34d399;">'%game%'</span>
+                        </div>
+                        <div class="sql-error">
+                            <div class="sql-error-title">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <circle cx="12" cy="12" r="10"></circle>
+                                    <line x1="12" y1="8" x2="12" y2="12"></line>
+                                    <line x1="12" y1="16" x2="12.01" y2="16"></line>
+                                </svg>
+                                Syntax Error
+                            </div>
+                            <div class="sql-error-message">
+                                Expected keyword 'FROM' but found 'FORM'
+                            </div>
+                            <div class="sql-error-line">Line 2, column 1</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Destructive Function Blocked -->
+                <div class="error-example">
+                    <div class="error-example-title">8. Destructive Function Blocked</div>
+                    <div class="error-banner">
+                        <svg class="error-banner-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                            <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                        </svg>
+                        <div class="error-banner-content">
+                            <div class="error-banner-title">Query blocked for security</div>
+                            <div class="error-banner-message">
+                                The query contains a destructive function that is not allowed in the web interface. Data modification operations require admin CLI access.
+                            </div>
+                            <div class="error-banner-details">
+                                Blocked function: retire_partitions()
+                            </div>
+                        </div>
+                        <div class="error-banner-dismiss" title="Dismiss">&#10005;</div>
+                    </div>
+                </div>
+
+                <!-- Toast Notification -->
+                <div class="error-example">
+                    <div class="error-example-title">9. Toast Notification (non-blocking errors)</div>
+                    <div style="position: relative; height: 140px;">
+                        <div class="toast toast-error" style="position: absolute; bottom: 0; right: 0;">
+                            <svg class="toast-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <circle cx="12" cy="12" r="10"></circle>
+                                <line x1="12" y1="8" x2="12" y2="12"></line>
+                                <line x1="12" y1="16" x2="12.01" y2="16"></line>
+                            </svg>
+                            <div class="toast-content">
+                                <div class="toast-title">Refresh failed</div>
+                                <div class="toast-message">Connection refused (ECONNREFUSED 127.0.0.1:8000)</div>
+                                <div class="toast-retry">Retrying in 5s... <a href="#" style="color: #3b82f6; text-decoration: none;">Retry now</a></div>
+                            </div>
+                            <div class="toast-dismiss">&#10005;</div>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+        </main>
+    </div>
+
+</body>
+</html>

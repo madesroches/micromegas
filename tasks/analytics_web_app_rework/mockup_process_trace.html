@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Generate Trace - game_server.exe - Micromegas Analytics</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0f1419;
+            color: #e7e9ea;
+            min-height: 100vh;
+        }
+
+        /* Header */
+        .header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 24px;
+            background: #1a1f26;
+            border-bottom: 1px solid #2f3540;
+        }
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 24px;
+        }
+        .logo {
+            font-size: 18px;
+            font-weight: 600;
+            color: #3b82f6;
+        }
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        /* Time Controls */
+        .time-controls {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .time-range {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: #2f3540;
+            padding: 6px 12px;
+            border-radius: 6px 0 0 6px;
+            font-size: 13px;
+            cursor: pointer;
+        }
+        .time-range:hover {
+            background: #3d4450;
+        }
+        .time-range-icon {
+            color: #9ca3af;
+        }
+        .time-range-value {
+            color: #e7e9ea;
+        }
+        .time-range-dropdown {
+            color: #9ca3af;
+        }
+        .refresh-btn {
+            background: #2f3540;
+            border: none;
+            color: #e7e9ea;
+            padding: 6px 10px;
+            border-radius: 0 6px 6px 0;
+            cursor: pointer;
+            font-size: 14px;
+            border-left: 1px solid #3d4450;
+        }
+        .refresh-btn:hover {
+            background: #3d4450;
+        }
+
+        /* User Menu */
+        .user-menu {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+        .user-menu:hover {
+            background: #2f3540;
+        }
+        .user-avatar {
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            background: #3b82f6;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        /* Left Sidebar */
+        .sidebar {
+            width: 56px;
+            background: #1a1f26;
+            border-right: 1px solid #2f3540;
+            display: flex;
+            flex-direction: column;
+            padding: 12px 0;
+        }
+        .sidebar-nav {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        .sidebar-item {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 40px;
+            height: 40px;
+            margin: 0 8px;
+            border-radius: 6px;
+            color: #9ca3af;
+            text-decoration: none;
+            font-size: 18px;
+            cursor: pointer;
+            position: relative;
+        }
+        .sidebar-item:hover {
+            background: #2f3540;
+            color: #e7e9ea;
+        }
+        .sidebar-item.active {
+            background: #22272e;
+            color: #3b82f6;
+        }
+        .sidebar-item svg {
+            width: 20px;
+            height: 20px;
+        }
+        .sidebar-tooltip {
+            display: none;
+            position: absolute;
+            left: 48px;
+            background: #2f3540;
+            color: #e7e9ea;
+            padding: 6px 10px;
+            border-radius: 4px;
+            font-size: 13px;
+            white-space: nowrap;
+            z-index: 100;
+        }
+        .sidebar-item:hover .sidebar-tooltip {
+            display: block;
+        }
+
+        /* Main Layout */
+        .main-layout {
+            display: flex;
+            height: calc(100vh - 57px);
+        }
+
+        /* Main Content */
+        .main {
+            flex: 1;
+            padding: 24px;
+            overflow: auto;
+        }
+        .main > * {
+            max-width: 800px;
+        }
+
+        /* Breadcrumb */
+        .breadcrumb {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 16px;
+            font-size: 14px;
+        }
+        .breadcrumb a {
+            color: #9ca3af;
+            text-decoration: none;
+        }
+        .breadcrumb a:hover {
+            color: #3b82f6;
+        }
+        .breadcrumb-separator {
+            color: #6b7280;
+        }
+        .breadcrumb-current {
+            color: #e7e9ea;
+        }
+
+        /* Page Header */
+        .page-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 32px;
+        }
+        .page-title-section {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        .page-title {
+            font-size: 24px;
+            font-weight: 600;
+        }
+        .page-subtitle {
+            font-size: 13px;
+            color: #9ca3af;
+            font-family: monospace;
+        }
+
+        /* Form */
+        .form-section {
+            background: #1a1f26;
+            border: 1px solid #2f3540;
+            border-radius: 8px;
+            padding: 24px;
+            margin-bottom: 24px;
+        }
+        .form-section-title {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 20px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid #2f3540;
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        .form-group:last-child {
+            margin-bottom: 0;
+        }
+        .form-label {
+            display: block;
+            font-size: 14px;
+            font-weight: 500;
+            margin-bottom: 8px;
+            color: #e7e9ea;
+        }
+        .form-label-hint {
+            font-weight: 400;
+            color: #9ca3af;
+            margin-left: 8px;
+        }
+        .form-input {
+            width: 100%;
+            padding: 10px 14px;
+            background: #0f1419;
+            border: 1px solid #2f3540;
+            border-radius: 6px;
+            color: #e7e9ea;
+            font-size: 14px;
+            font-family: inherit;
+        }
+        .form-input:focus {
+            outline: none;
+            border-color: #3b82f6;
+        }
+        .form-input::placeholder {
+            color: #6b7280;
+        }
+
+        /* Checkbox group */
+        .checkbox-group {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+        .checkbox-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            cursor: pointer;
+        }
+        .checkbox {
+            width: 18px;
+            height: 18px;
+            border: 2px solid #2f3540;
+            border-radius: 4px;
+            background: #0f1419;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+        }
+        .checkbox.checked {
+            background: #3b82f6;
+            border-color: #3b82f6;
+        }
+        .checkbox.checked::after {
+            content: '✓';
+            color: white;
+            font-size: 12px;
+        }
+        .checkbox-label {
+            font-size: 14px;
+        }
+        .checkbox-description {
+            font-size: 12px;
+            color: #9ca3af;
+            margin-left: 28px;
+            margin-top: 2px;
+        }
+
+        /* Submit button */
+        .btn {
+            padding: 12px 24px;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            border: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .btn-primary {
+            background: #3b82f6;
+            color: white;
+        }
+        .btn-primary:hover {
+            background: #2563eb;
+        }
+        .btn-secondary {
+            background: #2f3540;
+            color: #e7e9ea;
+        }
+        .btn-secondary:hover {
+            background: #3d4450;
+        }
+
+        /* Progress section */
+        .progress-section {
+            background: #1a1f26;
+            border: 1px solid #2f3540;
+            border-radius: 8px;
+            padding: 24px;
+            display: none;
+        }
+        .progress-section.active {
+            display: block;
+        }
+        .progress-content {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+        .spinner {
+            width: 24px;
+            height: 24px;
+            border: 3px solid #2f3540;
+            border-top-color: #3b82f6;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        .progress-title {
+            font-size: 16px;
+            font-weight: 600;
+        }
+        .progress-message {
+            font-size: 13px;
+            color: #9ca3af;
+            margin-top: 12px;
+        }
+
+        /* Action buttons */
+        .form-actions {
+            display: flex;
+            gap: 12px;
+            margin-top: 24px;
+        }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <div class="header-left">
+            <div class="logo">Micromegas</div>
+        </div>
+        <div class="header-right">
+            <div class="time-controls">
+                <div class="time-range">
+                    <span class="time-range-icon">&#128337;</span>
+                    <span class="time-range-value">2024-01-15T14:00:00Z to 2024-01-15T15:00:00Z</span>
+                    <span class="time-range-dropdown">&#9662;</span>
+                </div>
+                <button class="refresh-btn" title="Refresh">&#8635;</button>
+            </div>
+            <div class="user-menu">
+                <div class="user-avatar">JD</div>
+            </div>
+        </div>
+    </header>
+
+    <div class="main-layout">
+        <aside class="sidebar">
+            <nav class="sidebar-nav">
+                <a href="mockup_processes.html" class="sidebar-item" title="Processes">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="3" y="3" width="7" height="7"></rect>
+                        <rect x="14" y="3" width="7" height="7"></rect>
+                        <rect x="14" y="14" width="7" height="7"></rect>
+                        <rect x="3" y="14" width="7" height="7"></rect>
+                    </svg>
+                    <span class="sidebar-tooltip">Processes</span>
+                </a>
+                <a href="mockup_process_log.html" class="sidebar-item" title="Logs">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                        <polyline points="14 2 14 8 20 8"></polyline>
+                        <line x1="16" y1="13" x2="8" y2="13"></line>
+                        <line x1="16" y1="17" x2="8" y2="17"></line>
+                        <polyline points="10 9 9 9 8 9"></polyline>
+                    </svg>
+                    <span class="sidebar-tooltip">Logs</span>
+                </a>
+                <a href="mockup_process_trace.html" class="sidebar-item active" title="Trace">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+                    </svg>
+                    <span class="sidebar-tooltip">Trace</span>
+                </a>
+            </nav>
+        </aside>
+        <main class="main">
+            <div class="page-header">
+                <h1 class="page-title">Generate Trace</h1>
+            </div>
+
+        <div class="form-section">
+            <h2 class="form-section-title">Trace Configuration</h2>
+
+            <div class="form-group">
+                <label class="form-label">Process</label>
+                <div style="background: #0f1419; border: 1px solid #2f3540; border-radius: 6px; padding: 12px 14px;">
+                    <span style="color: #e7e9ea; font-weight: 500;">game_server.exe</span>
+                    <span style="color: #6b7280; font-family: monospace; margin-left: 8px; font-size: 13px;">a1b2c3d4-e5f6-7890-abcd-ef1234567890</span>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label">Trace Name</label>
+                <input type="text" class="form-input" placeholder="my-trace" value="game_server_a1b2c3d4_20240115T140000Z_20240115T150000Z">
+            </div>
+
+            <div class="form-group">
+                <label class="form-label">Span Types</label>
+                <div class="checkbox-group">
+                    <div>
+                        <label class="checkbox-item">
+                            <div class="checkbox checked"></div>
+                            <span class="checkbox-label">Thread Events</span>
+                        </label>
+                        <p class="checkbox-description">Include synchronous span events from threads</p>
+                    </div>
+                    <div>
+                        <label class="checkbox-item">
+                            <div class="checkbox checked"></div>
+                            <span class="checkbox-label">Async Span Events</span>
+                        </label>
+                        <p class="checkbox-description">Include asynchronous span events from futures</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label">Time Range</label>
+                <p style="font-size: 14px; color: #9ca3af;">
+                    Uses the global time range from the header:<br>
+                    <strong style="color: #e7e9ea;">2024-01-15T14:00:00Z</strong> to <strong style="color: #e7e9ea;">2024-01-15T15:00:00Z</strong>
+                </p>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label">Estimated Size</label>
+                <div style="background: #0f1419; border: 1px solid #2f3540; border-radius: 6px; padding: 16px; display: flex; justify-content: space-between; align-items: center;">
+                    <span style="color: #9ca3af;">Events in range</span>
+                    <span style="color: #3b82f6; font-family: monospace; font-size: 18px; font-weight: 600;">170,423</span>
+                </div>
+                <p style="font-size: 12px; color: #9ca3af; margin-top: 8px;">
+                    Traces over 500,000 events may take several minutes to generate.
+                </p>
+            </div>
+
+            <div class="form-actions">
+                <button class="btn btn-primary">Generate Trace</button>
+                <a href="mockup_process_log.html" class="btn btn-secondary">Cancel</a>
+            </div>
+        </div>
+
+        <div class="progress-section active">
+            <div class="progress-content">
+                <div class="spinner"></div>
+                <span class="progress-title">Generating Trace...</span>
+            </div>
+            <p class="progress-message">Downloaded <strong style="color: #e7e9ea;">12.4 MB</strong> so far</p>
+        </div>
+        </main>
+    </div>
+</body>
+</html>
