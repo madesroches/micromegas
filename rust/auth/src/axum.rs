@@ -57,8 +57,8 @@ pub async fn auth_middleware(
             AuthError::InvalidToken
         })?;
 
-    // Log successful authentication
-    info!(
+    // Log successful authentication (trace level to avoid noise on every request)
+    trace!(
         "[auth_success] subject={} email={:?} issuer={} admin={}",
         auth_ctx.subject, auth_ctx.email, auth_ctx.issuer, auth_ctx.is_admin
     );

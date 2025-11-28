@@ -804,8 +804,8 @@ pub async fn cookie_auth_middleware(
         AuthApiError::InvalidToken
     })?;
 
-    // Log successful authentication
-    info!(
+    // Log successful authentication (trace level to avoid noise on every request)
+    trace!(
         "[auth_success] subject={} email={:?} issuer={} admin={}",
         auth_context.subject, auth_context.email, auth_context.issuer, auth_context.is_admin
     );
