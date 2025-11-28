@@ -394,7 +394,7 @@ pub async fn auth_callback(
 ) -> Result<impl IntoResponse, AuthApiError> {
     // Verify and decode signed state parameter
     let oauth_state = verify_state(&query.state, &state.state_signing_secret).map_err(|e| {
-        warn!("state verification failed: {e:?}");
+        warn!("[auth_failure] reason=invalid_state details={e:?}");
         AuthApiError::InvalidState
     })?;
 
@@ -402,13 +402,13 @@ pub async fn auth_callback(
     let cookie_nonce = jar
         .get(OAUTH_STATE_COOKIE)
         .ok_or_else(|| {
-            warn!("oauth_state cookie not found");
+            warn!("[auth_failure] reason=missing_oauth_state_cookie");
             AuthApiError::InvalidState
         })?
         .value();
 
     if cookie_nonce != oauth_state.nonce {
-        warn!("nonce mismatch!");
+        warn!("[auth_failure] reason=nonce_mismatch");
         return Err(AuthApiError::InvalidState);
     }
 
@@ -448,7 +448,7 @@ pub async fn auth_callback(
         .send()
         .await
         .map_err(|e| {
-            warn!("token exchange HTTP request failed: {e:?}");
+            warn!("[auth_failure] reason=token_exchange_request_failed details={e:?}");
             AuthApiError::TokenExchangeFailed
         })?;
 
@@ -458,12 +458,12 @@ pub async fn auth_callback(
             .text()
             .await
             .unwrap_or_else(|_| "unknown".to_string());
-        warn!("token exchange failed with status {status}: {body}");
+        warn!("[auth_failure] reason=token_exchange_failed status={status} body={body}");
         return Err(AuthApiError::TokenExchangeFailed);
     }
 
     let token_response: serde_json::Value = response.json().await.map_err(|e| {
-        warn!("failed to parse token response: {e:?}");
+        warn!("[auth_failure] reason=token_response_parse_failed details={e:?}");
         AuthApiError::TokenExchangeFailed
     })?;
 
@@ -471,7 +471,7 @@ pub async fn auth_callback(
     let id_token = token_response["id_token"]
         .as_str()
         .ok_or_else(|| {
-            warn!("no id_token in response");
+            warn!("[auth_failure] reason=missing_id_token");
             AuthApiError::TokenExchangeFailed
         })?
         .to_string();
@@ -487,6 +487,14 @@ pub async fn auth_callback(
         .unwrap_or(3600); // Default 1 hour
 
     let refresh_token_expires = 30 * 24 * 3600; // 30 days
+
+    // Log successful login (extract subject from token for audit trail)
+    if let Some(sub) = extract_subject_from_token(&id_token) {
+        info!(
+            "[auth_success] event=login sub={sub} issuer={}",
+            state.config.issuer
+        );
+    }
 
     // Create cookies
     let mut new_jar = jar;
@@ -555,7 +563,7 @@ pub async fn auth_refresh(
         .send()
         .await
         .map_err(|e| {
-            warn!("refresh token HTTP request failed: {e:?}");
+            warn!("[token_refresh_failure] reason=request_failed details={e:?}");
             AuthApiError::Unauthorized
         })?;
 
@@ -565,12 +573,12 @@ pub async fn auth_refresh(
             .text()
             .await
             .unwrap_or_else(|_| "unknown".to_string());
-        warn!("refresh token failed with status {status}: {body}");
+        warn!("[token_refresh_failure] reason=token_exchange_failed status={status} body={body}");
         return Err(AuthApiError::Unauthorized);
     }
 
     let token_response: serde_json::Value = response.json().await.map_err(|e| {
-        warn!("failed to parse refresh token response: {e:?}");
+        warn!("[token_refresh_failure] reason=response_parse_failed details={e:?}");
         AuthApiError::Unauthorized
     })?;
 
@@ -578,7 +586,7 @@ pub async fn auth_refresh(
     let id_token = token_response["id_token"]
         .as_str()
         .ok_or_else(|| {
-            warn!("missing id_token in refresh response");
+            warn!("[token_refresh_failure] reason=missing_id_token");
             AuthApiError::Unauthorized
         })?
         .to_string();
@@ -594,6 +602,11 @@ pub async fn auth_refresh(
         .unwrap_or(3600);
 
     let refresh_token_expires = 30 * 24 * 3600; // 30 days
+
+    // Log successful token refresh
+    if let Some(sub) = extract_subject_from_token(&id_token) {
+        info!("[auth_success] event=token_refresh sub={sub}");
+    }
 
     // Update cookies
     let mut new_jar = jar;
@@ -651,7 +664,7 @@ pub async fn auth_me(
 
     // Validate the token using the OIDC provider
     let auth_provider = state.get_auth_provider().await.map_err(|e| {
-        warn!("failed to get auth provider: {e:?}");
+        warn!("[auth_failure] auth_provider_init_failed: {e:?}");
         AuthApiError::Internal("Failed to initialize auth provider".to_string())
     })?;
 
@@ -660,7 +673,7 @@ pub async fn auth_me(
     };
 
     let auth_context = auth_provider.validate_request(&parts).await.map_err(|e| {
-        warn!("JWT validation failed: {e:?}");
+        warn!("[auth_failure] {e}");
         AuthApiError::InvalidToken
     })?;
 
@@ -690,6 +703,21 @@ fn extract_name_from_token(token: &str) -> Option<String> {
 
     let claims: IdTokenClaims = serde_json::from_slice(&payload_bytes).ok()?;
     claims.name
+}
+
+/// Extract the 'sub' claim from a JWT payload for audit logging
+fn extract_subject_from_token(token: &str) -> Option<String> {
+    let parts: Vec<&str> = token.split('.').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+
+    let payload_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(parts[1].as_bytes())
+        .ok()?;
+
+    let claims: serde_json::Value = serde_json::from_slice(&payload_bytes).ok()?;
+    claims["sub"].as_str().map(|s| s.to_string())
 }
 
 /// Authentication API errors
@@ -761,7 +789,7 @@ pub async fn cookie_auth_middleware(
 
     // Get the OIDC auth provider (lazy initialized with JWKS caching)
     let auth_provider = state.get_auth_provider().await.map_err(|e| {
-        warn!("failed to get auth provider: {e:?}");
+        warn!("[auth_failure] auth_provider_init_failed: {e:?}");
         AuthApiError::Internal("Failed to initialize auth provider".to_string())
     })?;
 
@@ -772,9 +800,15 @@ pub async fn cookie_auth_middleware(
 
     // Validate the token with full signature verification
     let auth_context = auth_provider.validate_request(&parts).await.map_err(|e| {
-        warn!("JWT validation failed: {e:?}");
+        warn!("[auth_failure] {e}");
         AuthApiError::InvalidToken
     })?;
+
+    // Log successful authentication
+    info!(
+        "[auth_success] subject={} email={:?} issuer={} admin={}",
+        auth_context.subject, auth_context.email, auth_context.issuer, auth_context.is_admin
+    );
 
     // Store token and validated user info in request extensions
     let mut req = req;

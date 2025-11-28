@@ -37,7 +37,30 @@ Tighten security of analytics-web-srv so it properly validates tokens at the web
   - Automatically uses `--disable-auth` when `MICROMEGAS_OIDC_CONFIG` is not set
   - Runs with full auth when OIDC config is present in environment
 
-### Phase 2: Rate Limiting & Protection
+### Phase 2: Audit & Observability ✅ COMPLETED
+
+- [x] **Add security event logging**
+  - All auth failures logged with `[auth_failure]` tag for easy filtering
+  - Successful logins logged with `[auth_success]` tag including sub, email, issuer, admin status
+  - Token refresh events logged with `[auth_success] event=token_refresh`
+  - Consistent logging pattern across `micromegas-auth` and `analytics-web-srv`
+
+- [x] **Add user attribution to API requests**
+  - Middleware logs authenticated user context on each request
+  - Format: `[auth_success] subject={} email={:?} issuer={} admin={}`
+  - Enables per-user query analysis via log filtering
+
+### Phase 3: Multi-Provider Support ✅ COMPLETED
+
+- [x] **Support multiple OIDC issuers in web app**
+  - Removed error that blocked startup with multiple issuers
+  - First issuer is used for OAuth login flow (single redirect target)
+  - Token validation via OidcAuthProvider accepts tokens from all configured issuers
+  - File: `rust/analytics-web-srv/src/auth.rs` (OidcClientConfig::from_env)
+
+## Future Improvements
+
+### Rate Limiting & Protection
 
 - [ ] **Add authentication rate limiting**
   - Rate limit `/auth/login` to prevent enumeration attacks
@@ -50,20 +73,7 @@ Tighten security of analytics-web-srv so it properly validates tokens at the web
   - Prevents authenticated users from abusing API
   - Different limits for different endpoints (data queries vs health checks)
 
-### Phase 3: Audit & Observability
-
-- [ ] **Add security event logging**
-  - Log all authentication failures with details (IP, token fragment, reason)
-  - Log successful logins (user sub, provider)
-  - Log token refresh events
-  - Use structured logging for easy analysis
-
-- [ ] **Add user attribution to API requests**
-  - Include user subject in request spans/logs
-  - Enables per-user query analysis
-  - Helps debug issues and track usage patterns
-
-### Phase 4: Token Revocation (Future)
+### Token Revocation
 
 - [ ] **Design token revocation mechanism**
   - Options: blacklist table, short-lived tokens + refresh, or distributed cache
@@ -74,14 +84,6 @@ Tighten security of analytics-web-srv so it properly validates tokens at the web
   - Check token against revocation list
   - Handle revocation at logout time
   - Admin ability to revoke all tokens for a user
-
-### Phase 5: Multi-Provider Support ✅ COMPLETED
-
-- [x] **Support multiple OIDC issuers in web app**
-  - Removed error that blocked startup with multiple issuers
-  - First issuer is used for OAuth login flow (single redirect target)
-  - Token validation via OidcAuthProvider accepts tokens from all configured issuers
-  - File: `rust/analytics-web-srv/src/auth.rs` (OidcClientConfig::from_env)
 
 ## Implementation Notes
 
@@ -128,8 +130,7 @@ Return appropriate HTTP status codes:
 - [ ] Integration tests with mock JWKS endpoint
 - [ ] Test expired token rejection
 - [ ] Test invalid signature rejection
-- [ ] Test rate limiting behavior
-- [ ] Test multi-issuer scenarios (once implemented)
+- [ ] Test multi-issuer scenarios
 - [ ] Load test to ensure JWKS caching works under load
 
 ## Related Files

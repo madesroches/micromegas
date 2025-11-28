@@ -53,13 +53,13 @@ pub async fn auth_middleware(
         .validate_request(&parts as &dyn RequestParts)
         .await
         .map_err(|e| {
-            warn!("authentication failed: {e}");
+            warn!("[auth_failure] {e}");
             AuthError::InvalidToken
         })?;
 
     // Log successful authentication
     info!(
-        "authenticated: subject={} email={:?} issuer={} admin={}",
+        "[auth_success] subject={} email={:?} issuer={} admin={}",
         auth_ctx.subject, auth_ctx.email, auth_ctx.issuer, auth_ctx.is_admin
     );
 
