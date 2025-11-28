@@ -115,7 +115,11 @@ def kill_existing_frontend():
         return False
 
 def setup_environment():
-    """Set up environment variables"""
+    """Set up environment variables
+
+    Returns:
+        bool: True if OIDC auth is configured, False if running without auth
+    """
     # Generate a random secret for development if not set
     import secrets
     dev_secret = secrets.token_urlsafe(32)
@@ -140,6 +144,15 @@ def setup_environment():
                 print_status(f"Set {key}=<generated>", "info")
             else:
                 print_status(f"Set {key}={default_value}", "info")
+
+    # Check if OIDC config is available for authentication
+    oidc_configured = "MICROMEGAS_OIDC_CONFIG" in os.environ
+    if oidc_configured:
+        print_status("MICROMEGAS_OIDC_CONFIG found - authentication enabled", "success")
+    else:
+        print_status("MICROMEGAS_OIDC_CONFIG not set - will run with --disable-auth", "warning")
+
+    return oidc_configured
 
 def main():
     print_status("Starting Analytics Web App Development Environment", "info")
@@ -166,7 +179,7 @@ def main():
         print()
 
     # Setup environment
-    setup_environment()
+    auth_enabled = setup_environment()
 
     # Change to micromegas root directory
     micromegas_dir = Path(__file__).parent.parent
@@ -211,8 +224,11 @@ def main():
 
         # Start backend server
         print_status("Starting Rust backend server...", "info")
+        backend_cmd = ["cargo", "run", "--bin", "analytics-web-srv", "--", "--port", "8000"]
+        if not auth_enabled:
+            backend_cmd.append("--disable-auth")
         backend_proc = subprocess.Popen(
-            ["cargo", "run", "--bin", "analytics-web-srv", "--", "--port", "8000"],
+            backend_cmd,
             cwd="rust"
         )
         processes.append(backend_proc)

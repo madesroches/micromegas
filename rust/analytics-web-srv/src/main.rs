@@ -148,6 +148,7 @@ struct LogsQuery {
 }
 
 #[derive(Clone)]
+#[allow(dead_code)] // Field used indirectly via auth_state.is_some() check
 struct AppState {
     auth_enabled: bool,
 }
@@ -188,8 +189,8 @@ async fn main() -> Result<()> {
         auth_enabled: !args.disable_auth,
     };
 
-    // Build auth routes if authentication is enabled
-    let auth_routes = if !args.disable_auth {
+    // Build auth state if authentication is enabled
+    let auth_state = if !args.disable_auth {
         // Load OIDC client configuration
         let oidc_config = OidcClientConfig::from_env()
             .map_err(|e| anyhow::anyhow!("Failed to load OIDC client config: {e}"))?;
@@ -206,27 +207,29 @@ async fn main() -> Result<()> {
             .context("MICROMEGAS_STATE_SECRET environment variable not set. Generate a secure random secret (e.g., openssl rand -base64 32)")?
             .into_bytes();
 
-        let auth_state = AuthState {
+        Some(AuthState {
             oidc_provider: Arc::new(tokio::sync::OnceCell::new()),
+            auth_provider: Arc::new(tokio::sync::OnceCell::new()),
             config: oidc_config,
             cookie_domain,
             secure_cookies,
             state_signing_secret,
-        };
-
-        Some(
-            Router::new()
-                .route("/auth/login", get(auth::auth_login))
-                .route("/auth/callback", get(auth::auth_callback))
-                .route("/auth/refresh", post(auth::auth_refresh))
-                .route("/auth/logout", post(auth::auth_logout))
-                .route("/auth/me", get(auth::auth_me))
-                .with_state(auth_state),
-        )
+        })
     } else {
         println!("WARNING: Authentication is disabled (--disable-auth)");
         None
     };
+
+    // Build auth routes if authentication is enabled
+    let auth_routes = auth_state.as_ref().map(|auth_state| {
+        Router::new()
+            .route("/auth/login", get(auth::auth_login))
+            .route("/auth/callback", get(auth::auth_callback))
+            .route("/auth/refresh", post(auth::auth_refresh))
+            .route("/auth/logout", post(auth::auth_logout))
+            .route("/auth/me", get(auth::auth_me))
+            .with_state(auth_state.clone())
+    });
 
     let health_routes = Router::new().route("/analyticsweb/health", get(health_check));
 
@@ -251,9 +254,12 @@ async fn main() -> Result<()> {
         .layer(middleware::from_fn(observability_middleware));
 
     // Apply auth middleware if enabled
-    let api_routes = if state.auth_enabled {
+    let api_routes = if let Some(auth_state) = auth_state.clone() {
         api_routes
-            .layer(middleware::from_fn(auth::cookie_auth_middleware))
+            .layer(middleware::from_fn_with_state(
+                auth_state,
+                auth::cookie_auth_middleware,
+            ))
             .with_state(state)
     } else {
         api_routes.with_state(state)
