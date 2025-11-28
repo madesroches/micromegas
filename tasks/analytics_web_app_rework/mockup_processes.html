@@ -1,0 +1,506 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Processes - Micromegas Analytics</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0f1419;
+            color: #e7e9ea;
+            min-height: 100vh;
+        }
+
+        /* Header */
+        .header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 24px;
+            background: #1a1f26;
+            border-bottom: 1px solid #2f3540;
+        }
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 24px;
+        }
+        .logo {
+            font-size: 18px;
+            font-weight: 600;
+            color: #3b82f6;
+        }
+        .nav {
+            display: flex;
+            gap: 8px;
+        }
+        .nav-item {
+            padding: 8px 16px;
+            border-radius: 6px;
+            color: #9ca3af;
+            text-decoration: none;
+            font-size: 14px;
+        }
+        .nav-item:hover {
+            background: #2f3540;
+            color: #e7e9ea;
+        }
+        .nav-item.active {
+            background: #3b82f6;
+            color: white;
+        }
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        /* Time Controls */
+        .time-controls {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .time-range {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: #2f3540;
+            padding: 6px 12px;
+            border-radius: 6px 0 0 6px;
+            font-size: 13px;
+            cursor: pointer;
+        }
+        .time-range:hover {
+            background: #3d4450;
+        }
+        .time-range-icon {
+            color: #9ca3af;
+        }
+        .time-range-value {
+            color: #e7e9ea;
+        }
+        .time-range-dropdown {
+            color: #9ca3af;
+        }
+        .refresh-btn {
+            background: #2f3540;
+            border: none;
+            color: #e7e9ea;
+            padding: 6px 10px;
+            border-radius: 0 6px 6px 0;
+            cursor: pointer;
+            font-size: 14px;
+            border-left: 1px solid #3d4450;
+        }
+        .refresh-btn:hover {
+            background: #3d4450;
+        }
+
+        /* User Menu */
+        .user-menu {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+        .user-menu:hover {
+            background: #2f3540;
+        }
+        .user-avatar {
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            background: #3b82f6;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        /* Main Layout */
+        .main-layout {
+            display: flex;
+            height: calc(100vh - 57px);
+        }
+
+        /* Main Content */
+        .main {
+            flex: 1;
+            padding: 24px;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        /* Right Panel (SQL Editor) */
+        .right-panel {
+            width: 400px;
+            background: #1a1f26;
+            border-left: 1px solid #2f3540;
+            display: flex;
+            flex-direction: column;
+            transition: width 0.2s ease;
+        }
+        .right-panel.collapsed {
+            width: 48px;
+        }
+        .right-panel.collapsed .panel-content {
+            display: none;
+        }
+        .right-panel.collapsed .panel-header-title {
+            display: none;
+        }
+        .right-panel.collapsed .panel-actions {
+            display: none;
+        }
+
+        .panel-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 16px;
+            background: #22272e;
+            border-bottom: 1px solid #2f3540;
+        }
+        .panel-header-left {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .panel-toggle {
+            width: 24px;
+            height: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            color: #9ca3af;
+            border-radius: 4px;
+        }
+        .panel-toggle:hover {
+            background: #2f3540;
+            color: #e7e9ea;
+        }
+        .panel-header-title {
+            font-size: 13px;
+            font-weight: 600;
+            color: #e7e9ea;
+        }
+        .panel-actions {
+            display: flex;
+            gap: 8px;
+        }
+        .panel-btn {
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            cursor: pointer;
+            border: none;
+        }
+        .panel-btn-run {
+            background: #22c55e;
+            color: white;
+        }
+        .panel-btn-run:hover {
+            background: #16a34a;
+        }
+        .panel-btn-reset {
+            background: transparent;
+            color: #9ca3af;
+            border: 1px solid #2f3540;
+        }
+        .panel-btn-reset:hover {
+            background: #2f3540;
+            color: #e7e9ea;
+        }
+
+        .panel-content {
+            flex: 1;
+            padding: 16px;
+            overflow: auto;
+        }
+        .sql-editor {
+            font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+            font-size: 13px;
+            line-height: 1.6;
+            color: #e7e9ea;
+            background: #0d1117;
+            border: 1px solid #2f3540;
+            border-radius: 6px;
+            padding: 14px;
+            min-height: 200px;
+            white-space: pre;
+        }
+        .sql-keyword {
+            color: #c084fc;
+        }
+        .sql-string {
+            color: #34d399;
+        }
+        .sql-var {
+            color: #fb923c;
+        }
+        .sql-comment {
+            color: #6b7280;
+            font-style: italic;
+        }
+
+        .panel-section {
+            margin-top: 20px;
+        }
+        .panel-section-title {
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: #9ca3af;
+            margin-bottom: 10px;
+        }
+        .panel-info {
+            font-size: 12px;
+            color: #6b7280;
+            line-height: 1.5;
+        }
+        .panel-info code {
+            background: #2f3540;
+            padding: 2px 6px;
+            border-radius: 3px;
+            color: #fb923c;
+        }
+
+        /* Page Header */
+        .page-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 20px;
+        }
+        .page-title {
+            font-size: 24px;
+            font-weight: 600;
+        }
+        .page-actions {
+            display: flex;
+            gap: 12px;
+        }
+        .btn {
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-size: 14px;
+            cursor: pointer;
+            border: none;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .btn-secondary {
+            background: #2f3540;
+            color: #e7e9ea;
+        }
+        .btn-secondary:hover {
+            background: #3d4450;
+        }
+
+        /* Search/Filter */
+        .filters {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+        .search-input {
+            flex: 1;
+            max-width: 400px;
+            padding: 10px 14px;
+            background: #1a1f26;
+            border: 1px solid #2f3540;
+            border-radius: 6px;
+            color: #e7e9ea;
+            font-size: 14px;
+        }
+        .search-input::placeholder {
+            color: #6b7280;
+        }
+        .search-input:focus {
+            outline: none;
+            border-color: #3b82f6;
+        }
+
+        /* Table */
+        .table-container {
+            flex: 1;
+            overflow: auto;
+            background: #1a1f26;
+            border: 1px solid #2f3540;
+            border-radius: 8px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        th {
+            text-align: left;
+            padding: 12px 16px;
+            background: #22272e;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: #9ca3af;
+            border-bottom: 1px solid #2f3540;
+            position: sticky;
+            top: 0;
+        }
+        td {
+            padding: 12px 16px;
+            border-bottom: 1px solid #2f3540;
+            font-size: 14px;
+        }
+        tr:hover td {
+            background: #22272e;
+        }
+        .process-link {
+            color: #3b82f6;
+            text-decoration: none;
+        }
+        .process-link:hover {
+            text-decoration: underline;
+        }
+        .process-id {
+            font-family: monospace;
+            font-size: 12px;
+            color: #9ca3af;
+        }
+        .timestamp {
+            font-family: monospace;
+            font-size: 13px;
+        }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <div class="header-left">
+            <div class="logo">Micromegas</div>
+            <nav class="nav">
+                <a href="#" class="nav-item active">Processes</a>
+                <a href="#" class="nav-item">Logs</a>
+                <a href="mockup_process_trace.html" class="nav-item">Trace</a>
+            </nav>
+        </div>
+        <div class="header-right">
+            <div class="time-controls">
+                <div class="time-range">
+                    <span class="time-range-icon">&#128337;</span>
+                    <span class="time-range-value">Last 24 hours</span>
+                    <span class="time-range-dropdown">&#9662;</span>
+                </div>
+                <button class="refresh-btn" title="Refresh">&#8635;</button>
+            </div>
+            <div class="user-menu">
+                <div class="user-avatar">JD</div>
+            </div>
+        </div>
+    </header>
+
+    <div class="main-layout">
+        <main class="main">
+            <div class="page-header">
+                <h1 class="page-title">Processes</h1>
+            </div>
+
+            <div class="filters">
+                <input type="text" class="search-input" placeholder="Search by exe, process_id, computer, username..." value="game">
+            </div>
+
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Process</th>
+                            <th>Process ID</th>
+                            <th>Start Time</th>
+                            <th>Last Update</th>
+                            <th>Username</th>
+                            <th>Computer</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><a href="mockup_process_log.html" class="process-link">game_server.exe</a></td>
+                            <td class="process-id">a1b2c3d4-e5f6-7890-abcd-ef1234567890</td>
+                            <td class="timestamp">2024-01-15T10:23:45.123Z</td>
+                            <td class="timestamp">2024-01-15T14:56:12.456Z</td>
+                            <td>gamedev</td>
+                            <td>BUILD-SERVER-01</td>
+                        </tr>
+                        <tr>
+                            <td><a href="mockup_process_log.html" class="process-link">game_client.exe</a></td>
+                            <td class="process-id">f6a7b8c9-d0e1-2345-fghi-678901234567</td>
+                            <td class="timestamp">2024-01-15T11:00:00.000Z</td>
+                            <td class="timestamp">2024-01-15T14:55:30.789Z</td>
+                            <td>alice</td>
+                            <td>DEV-WORKSTATION-02</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </main>
+
+        <aside class="right-panel">
+            <div class="panel-header">
+                <div class="panel-header-left">
+                    <div class="panel-toggle" title="Collapse panel">&#9664;</div>
+                    <span class="panel-header-title">SQL Query</span>
+                </div>
+                <div class="panel-actions">
+                    <button class="panel-btn panel-btn-reset">Reset</button>
+                    <button class="panel-btn panel-btn-run">&#9654; Run</button>
+                </div>
+            </div>
+            <div class="panel-content">
+                <div class="sql-editor"><span class="sql-keyword">SELECT</span> process_id, exe, start_time,
+       username, computer
+<span class="sql-keyword">FROM</span> processes
+<span class="sql-keyword">WHERE</span> exe <span class="sql-keyword">LIKE</span> <span class="sql-string">'%'</span> || <span class="sql-var">$search</span> || <span class="sql-string">'%'</span>
+   <span class="sql-keyword">OR</span> process_id <span class="sql-keyword">LIKE</span> <span class="sql-string">'%'</span> || <span class="sql-var">$search</span> || <span class="sql-string">'%'</span>
+   <span class="sql-keyword">OR</span> computer <span class="sql-keyword">LIKE</span> <span class="sql-string">'%'</span> || <span class="sql-var">$search</span> || <span class="sql-string">'%'</span>
+   <span class="sql-keyword">OR</span> username <span class="sql-keyword">LIKE</span> <span class="sql-string">'%'</span> || <span class="sql-var">$search</span> || <span class="sql-string">'%'</span>
+<span class="sql-keyword">ORDER BY</span> start_time <span class="sql-keyword">DESC</span></div>
+
+                <div class="panel-section">
+                    <div class="panel-section-title">Variables</div>
+                    <div class="panel-info">
+                        <code>$search</code> - Search box contents<br>
+                        <code>$begin</code> - Time range start<br>
+                        <code>$end</code> - Time range end
+                    </div>
+                </div>
+
+                <div class="panel-section">
+                    <div class="panel-section-title">Current Values</div>
+                    <div class="panel-info">
+                        <code>$search</code> = "game"
+                    </div>
+                </div>
+
+                <div class="panel-section">
+                    <div class="panel-section-title">Time Range</div>
+                    <div class="panel-info">
+                        Applied implicitly via FlightSQL headers.<br>
+                        Current: Last 24 hours
+                    </div>
+                </div>
+            </div>
+        </aside>
+    </div>
+</body>
+</html>

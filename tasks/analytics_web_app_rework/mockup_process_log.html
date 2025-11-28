@@ -1,0 +1,594 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Process Log - game_server.exe - Micromegas Analytics</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0f1419;
+            color: #e7e9ea;
+            min-height: 100vh;
+        }
+
+        /* Header */
+        .header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 24px;
+            background: #1a1f26;
+            border-bottom: 1px solid #2f3540;
+        }
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 24px;
+        }
+        .logo {
+            font-size: 18px;
+            font-weight: 600;
+            color: #3b82f6;
+        }
+        .nav {
+            display: flex;
+            gap: 8px;
+        }
+        .nav-item {
+            padding: 8px 16px;
+            border-radius: 6px;
+            color: #9ca3af;
+            text-decoration: none;
+            font-size: 14px;
+        }
+        .nav-item:hover {
+            background: #2f3540;
+            color: #e7e9ea;
+        }
+        .nav-item.active {
+            background: #3b82f6;
+            color: white;
+        }
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        /* Time Controls */
+        .time-controls {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .time-range {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: #2f3540;
+            padding: 6px 12px;
+            border-radius: 6px 0 0 6px;
+            font-size: 13px;
+            cursor: pointer;
+        }
+        .time-range:hover {
+            background: #3d4450;
+        }
+        .time-range-icon {
+            color: #9ca3af;
+        }
+        .time-range-value {
+            color: #e7e9ea;
+        }
+        .time-range-dropdown {
+            color: #9ca3af;
+        }
+        .refresh-btn {
+            background: #2f3540;
+            border: none;
+            color: #e7e9ea;
+            padding: 6px 10px;
+            border-radius: 0 6px 6px 0;
+            cursor: pointer;
+            font-size: 14px;
+            border-left: 1px solid #3d4450;
+        }
+        .refresh-btn:hover {
+            background: #3d4450;
+        }
+
+        /* User Menu */
+        .user-menu {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+        .user-menu:hover {
+            background: #2f3540;
+        }
+        .user-avatar {
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            background: #3b82f6;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        /* Main Layout */
+        .main-layout {
+            display: flex;
+            height: calc(100vh - 57px);
+        }
+
+        /* Main Content */
+        .main {
+            flex: 1;
+            padding: 24px;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        /* Right Panel (SQL Editor) */
+        .right-panel {
+            width: 400px;
+            background: #1a1f26;
+            border-left: 1px solid #2f3540;
+            display: flex;
+            flex-direction: column;
+            transition: width 0.2s ease;
+        }
+        .right-panel.collapsed {
+            width: 48px;
+        }
+        .right-panel.collapsed .panel-content {
+            display: none;
+        }
+        .right-panel.collapsed .panel-header-title {
+            display: none;
+        }
+        .right-panel.collapsed .panel-actions {
+            display: none;
+        }
+
+        .panel-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 16px;
+            background: #22272e;
+            border-bottom: 1px solid #2f3540;
+        }
+        .panel-header-left {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .panel-toggle {
+            width: 24px;
+            height: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            color: #9ca3af;
+            border-radius: 4px;
+        }
+        .panel-toggle:hover {
+            background: #2f3540;
+            color: #e7e9ea;
+        }
+        .panel-header-title {
+            font-size: 13px;
+            font-weight: 600;
+            color: #e7e9ea;
+        }
+        .panel-actions {
+            display: flex;
+            gap: 8px;
+        }
+        .panel-btn {
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            cursor: pointer;
+            border: none;
+        }
+        .panel-btn-run {
+            background: #22c55e;
+            color: white;
+        }
+        .panel-btn-run:hover {
+            background: #16a34a;
+        }
+        .panel-btn-reset {
+            background: transparent;
+            color: #9ca3af;
+            border: 1px solid #2f3540;
+        }
+        .panel-btn-reset:hover {
+            background: #2f3540;
+            color: #e7e9ea;
+        }
+
+        .panel-content {
+            flex: 1;
+            padding: 16px;
+            overflow: auto;
+        }
+        .sql-editor {
+            font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+            font-size: 13px;
+            line-height: 1.6;
+            color: #e7e9ea;
+            background: #0d1117;
+            border: 1px solid #2f3540;
+            border-radius: 6px;
+            padding: 14px;
+            min-height: 200px;
+            white-space: pre;
+        }
+        .sql-keyword {
+            color: #c084fc;
+        }
+        .sql-string {
+            color: #34d399;
+        }
+        .sql-var {
+            color: #fb923c;
+        }
+
+        .panel-section {
+            margin-top: 20px;
+        }
+        .panel-section-title {
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: #9ca3af;
+            margin-bottom: 10px;
+        }
+        .panel-info {
+            font-size: 12px;
+            color: #6b7280;
+            line-height: 1.5;
+        }
+        .panel-info code {
+            background: #2f3540;
+            padding: 2px 6px;
+            border-radius: 3px;
+            color: #fb923c;
+        }
+
+        /* Process Link */
+        .process-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            margin-bottom: 16px;
+            font-size: 14px;
+            color: #3b82f6;
+            text-decoration: none;
+        }
+        .process-link:hover {
+            text-decoration: underline;
+        }
+        .process-link-icon {
+            font-size: 12px;
+        }
+
+        /* Page Header */
+        .page-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 20px;
+        }
+        .page-title-section {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        .page-title {
+            font-size: 24px;
+            font-weight: 600;
+        }
+        .page-subtitle {
+            font-size: 13px;
+            color: #9ca3af;
+            font-family: monospace;
+        }
+        .page-actions {
+            display: flex;
+            gap: 12px;
+        }
+        .btn {
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-size: 14px;
+            cursor: pointer;
+            border: none;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            text-decoration: none;
+        }
+        .btn-secondary {
+            background: #2f3540;
+            color: #e7e9ea;
+        }
+        .btn-secondary:hover {
+            background: #3d4450;
+        }
+
+        /* Filters */
+        .filters {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+        .filter-select {
+            padding: 8px 12px;
+            background: #1a1f26;
+            border: 1px solid #2f3540;
+            border-radius: 6px;
+            color: #e7e9ea;
+            font-size: 14px;
+            cursor: pointer;
+        }
+        .filter-select:focus {
+            outline: none;
+            border-color: #3b82f6;
+        }
+        .filter-input {
+            padding: 8px 12px;
+            background: #1a1f26;
+            border: 1px solid #2f3540;
+            border-radius: 6px;
+            color: #e7e9ea;
+            font-size: 14px;
+            width: 120px;
+        }
+        .filter-input:focus {
+            outline: none;
+            border-color: #3b82f6;
+        }
+        .filter-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .filter-label {
+            font-size: 14px;
+            color: #9ca3af;
+        }
+
+        /* Log Viewer */
+        .log-container {
+            flex: 1;
+            overflow: auto;
+            background: #0d1117;
+            border: 1px solid #2f3540;
+            border-radius: 8px;
+            font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+            font-size: 12px;
+            line-height: 1.6;
+        }
+        .log-entry {
+            display: flex;
+            padding: 4px 12px;
+            border-bottom: 1px solid #1a1f26;
+        }
+        .log-entry:hover {
+            background: #161b22;
+        }
+        .log-time {
+            color: #6b7280;
+            margin-right: 16px;
+            white-space: nowrap;
+        }
+        .log-level {
+            width: 50px;
+            margin-right: 12px;
+            font-weight: 600;
+        }
+        .log-level.debug { color: #9ca3af; }
+        .log-level.info { color: #3b82f6; }
+        .log-level.warn { color: #f59e0b; }
+        .log-level.error { color: #ef4444; }
+        .log-target {
+            color: #8b5cf6;
+            margin-right: 12px;
+            max-width: 200px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .log-msg {
+            color: #e7e9ea;
+            flex: 1;
+        }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <div class="header-left">
+            <div class="logo">Micromegas</div>
+            <nav class="nav">
+                <a href="mockup_processes.html" class="nav-item">Processes</a>
+                <a href="#" class="nav-item active">Logs</a>
+                <a href="mockup_process_trace.html" class="nav-item">Trace</a>
+            </nav>
+        </div>
+        <div class="header-right">
+            <div class="time-controls">
+                <div class="time-range">
+                    <span class="time-range-icon">&#128337;</span>
+                    <span class="time-range-value">Last 1 hour</span>
+                    <span class="time-range-dropdown">&#9662;</span>
+                </div>
+                <button class="refresh-btn" title="Refresh">&#8635;</button>
+            </div>
+            <div class="user-menu">
+                <div class="user-avatar">JD</div>
+            </div>
+        </div>
+    </header>
+
+    <div class="main-layout">
+        <main class="main">
+            <a href="mockup_process.html?id=a1b2c3d4-e5f6-7890-abcd-ef1234567890" class="process-link">
+                <span class="process-link-icon">&#8592;</span>
+                game_server.exe
+            </a>
+
+            <div class="page-header">
+                <div class="page-title-section">
+                    <h1 class="page-title">Process Log</h1>
+                    <div class="page-subtitle">a1b2c3d4-e5f6-7890-abcd-ef1234567890</div>
+                </div>
+            </div>
+
+            <div class="filters">
+                <select class="filter-select">
+                    <option value="6">Max Level: TRACE (all)</option>
+                    <option value="5" selected>Max Level: DEBUG</option>
+                    <option value="4">Max Level: INFO</option>
+                    <option value="3">Max Level: WARN</option>
+                    <option value="2">Max Level: ERROR</option>
+                    <option value="1">Max Level: FATAL</option>
+                </select>
+                <div class="filter-group">
+                    <span class="filter-label">Limit:</span>
+                    <input type="text" class="filter-input" value="1000">
+                </div>
+            </div>
+
+            <div class="log-container">
+                <div class="log-entry">
+                    <span class="log-time">2024-01-15T14:56:12.456789Z</span>
+                    <span class="log-level info">INFO</span>
+                    <span class="log-target">game::network</span>
+                    <span class="log-msg">Player connection established from 192.168.1.100</span>
+                </div>
+                <div class="log-entry">
+                    <span class="log-time">2024-01-15T14:56:10.123456Z</span>
+                    <span class="log-level debug">DEBUG</span>
+                    <span class="log-target">game::physics</span>
+                    <span class="log-msg">Physics tick completed in 2.3ms</span>
+                </div>
+                <div class="log-entry">
+                    <span class="log-time">2024-01-15T14:56:08.987654Z</span>
+                    <span class="log-level warn">WARN</span>
+                    <span class="log-target">game::assets</span>
+                    <span class="log-msg">Asset loading slower than expected: texture_001.dds (450ms)</span>
+                </div>
+                <div class="log-entry">
+                    <span class="log-time">2024-01-15T14:56:05.654321Z</span>
+                    <span class="log-level info">INFO</span>
+                    <span class="log-target">game::world</span>
+                    <span class="log-msg">World chunk loaded: chunk_x12_y45_z3</span>
+                </div>
+                <div class="log-entry">
+                    <span class="log-time">2024-01-15T14:56:02.111222Z</span>
+                    <span class="log-level error">ERROR</span>
+                    <span class="log-target">game::network</span>
+                    <span class="log-msg">Failed to sync player state: timeout after 5000ms</span>
+                </div>
+                <div class="log-entry">
+                    <span class="log-time">2024-01-15T14:55:58.333444Z</span>
+                    <span class="log-level info">INFO</span>
+                    <span class="log-target">game::ai</span>
+                    <span class="log-msg">AI pathfinding computed for 128 entities</span>
+                </div>
+                <div class="log-entry">
+                    <span class="log-time">2024-01-15T14:55:55.555666Z</span>
+                    <span class="log-level debug">DEBUG</span>
+                    <span class="log-target">game::render</span>
+                    <span class="log-msg">Frame rendered: 16.7ms (60 FPS)</span>
+                </div>
+                <div class="log-entry">
+                    <span class="log-time">2024-01-15T14:55:50.777888Z</span>
+                    <span class="log-level info">INFO</span>
+                    <span class="log-target">game::input</span>
+                    <span class="log-msg">Input buffer processed: 24 events</span>
+                </div>
+                <div class="log-entry">
+                    <span class="log-time">2024-01-15T14:55:45.999000Z</span>
+                    <span class="log-level warn">WARN</span>
+                    <span class="log-target">game::memory</span>
+                    <span class="log-msg">Memory allocation pool 85% full, consider cleanup</span>
+                </div>
+                <div class="log-entry">
+                    <span class="log-time">2024-01-15T14:55:40.111222Z</span>
+                    <span class="log-level info">INFO</span>
+                    <span class="log-target">game::save</span>
+                    <span class="log-msg">Autosave completed successfully</span>
+                </div>
+            </div>
+        </main>
+
+        <aside class="right-panel">
+            <div class="panel-header">
+                <div class="panel-header-left">
+                    <div class="panel-toggle" title="Collapse panel">&#9664;</div>
+                    <span class="panel-header-title">SQL Query</span>
+                </div>
+                <div class="panel-actions">
+                    <button class="panel-btn panel-btn-reset">Reset</button>
+                    <button class="panel-btn panel-btn-run">&#9654; Run</button>
+                </div>
+            </div>
+            <div class="panel-content">
+                <div class="sql-editor"><span class="sql-keyword">SELECT</span> time, level, target, msg
+<span class="sql-keyword">FROM</span> log_entries
+<span class="sql-keyword">WHERE</span> process_id = <span class="sql-var">$process_id</span>
+  <span class="sql-keyword">AND</span> level &lt;= <span class="sql-var">$max_level</span>
+<span class="sql-keyword">ORDER BY</span> time <span class="sql-keyword">DESC</span>
+<span class="sql-keyword">LIMIT</span> <span class="sql-var">$limit</span></div>
+
+                <div class="panel-section">
+                    <div class="panel-section-title">Variables</div>
+                    <div class="panel-info">
+                        <code>$process_id</code> - Current process ID<br>
+                        <code>$max_level</code> - Max log level filter<br>
+                        <code>$limit</code> - Row limit<br>
+                        <code>$begin</code> - Time range start<br>
+                        <code>$end</code> - Time range end
+                    </div>
+                </div>
+
+                <div class="panel-section">
+                    <div class="panel-section-title">Log Levels</div>
+                    <div class="panel-info">
+                        1=FATAL, 2=ERROR, 3=WARN,<br>
+                        4=INFO, 5=DEBUG, 6=TRACE
+                    </div>
+                </div>
+
+                <div class="panel-section">
+                    <div class="panel-section-title">Time Range</div>
+                    <div class="panel-info">
+                        Applied implicitly via FlightSQL headers.<br>
+                        Current: Last 1 hour
+                    </div>
+                </div>
+            </div>
+        </aside>
+    </div>
+</body>
+</html>

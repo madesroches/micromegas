@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Generate Trace - game_server.exe - Micromegas Analytics</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0f1419;
+            color: #e7e9ea;
+            min-height: 100vh;
+        }
+
+        /* Header */
+        .header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 24px;
+            background: #1a1f26;
+            border-bottom: 1px solid #2f3540;
+        }
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 24px;
+        }
+        .logo {
+            font-size: 18px;
+            font-weight: 600;
+            color: #3b82f6;
+        }
+        .nav {
+            display: flex;
+            gap: 8px;
+        }
+        .nav-item {
+            padding: 8px 16px;
+            border-radius: 6px;
+            color: #9ca3af;
+            text-decoration: none;
+            font-size: 14px;
+        }
+        .nav-item:hover {
+            background: #2f3540;
+            color: #e7e9ea;
+        }
+        .nav-item.active {
+            background: #3b82f6;
+            color: white;
+        }
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        /* Time Controls */
+        .time-controls {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .time-range {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: #2f3540;
+            padding: 6px 12px;
+            border-radius: 6px 0 0 6px;
+            font-size: 13px;
+            cursor: pointer;
+        }
+        .time-range:hover {
+            background: #3d4450;
+        }
+        .time-range-icon {
+            color: #9ca3af;
+        }
+        .time-range-value {
+            color: #e7e9ea;
+        }
+        .time-range-dropdown {
+            color: #9ca3af;
+        }
+        .refresh-btn {
+            background: #2f3540;
+            border: none;
+            color: #e7e9ea;
+            padding: 6px 10px;
+            border-radius: 0 6px 6px 0;
+            cursor: pointer;
+            font-size: 14px;
+            border-left: 1px solid #3d4450;
+        }
+        .refresh-btn:hover {
+            background: #3d4450;
+        }
+
+        /* User Menu */
+        .user-menu {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+        .user-menu:hover {
+            background: #2f3540;
+        }
+        .user-avatar {
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            background: #3b82f6;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        /* Main Content */
+        .main {
+            padding: 24px;
+            max-width: 800px;
+        }
+
+        /* Breadcrumb */
+        .breadcrumb {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 16px;
+            font-size: 14px;
+        }
+        .breadcrumb a {
+            color: #9ca3af;
+            text-decoration: none;
+        }
+        .breadcrumb a:hover {
+            color: #3b82f6;
+        }
+        .breadcrumb-separator {
+            color: #6b7280;
+        }
+        .breadcrumb-current {
+            color: #e7e9ea;
+        }
+
+        /* Page Header */
+        .page-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 32px;
+        }
+        .page-title-section {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        .page-title {
+            font-size: 24px;
+            font-weight: 600;
+        }
+        .page-subtitle {
+            font-size: 13px;
+            color: #9ca3af;
+            font-family: monospace;
+        }
+
+        /* Form */
+        .form-section {
+            background: #1a1f26;
+            border: 1px solid #2f3540;
+            border-radius: 8px;
+            padding: 24px;
+            margin-bottom: 24px;
+        }
+        .form-section-title {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 20px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid #2f3540;
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        .form-group:last-child {
+            margin-bottom: 0;
+        }
+        .form-label {
+            display: block;
+            font-size: 14px;
+            font-weight: 500;
+            margin-bottom: 8px;
+            color: #e7e9ea;
+        }
+        .form-label-hint {
+            font-weight: 400;
+            color: #9ca3af;
+            margin-left: 8px;
+        }
+        .form-input {
+            width: 100%;
+            padding: 10px 14px;
+            background: #0f1419;
+            border: 1px solid #2f3540;
+            border-radius: 6px;
+            color: #e7e9ea;
+            font-size: 14px;
+            font-family: inherit;
+        }
+        .form-input:focus {
+            outline: none;
+            border-color: #3b82f6;
+        }
+        .form-input::placeholder {
+            color: #6b7280;
+        }
+
+        /* Checkbox group */
+        .checkbox-group {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+        .checkbox-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            cursor: pointer;
+        }
+        .checkbox {
+            width: 18px;
+            height: 18px;
+            border: 2px solid #2f3540;
+            border-radius: 4px;
+            background: #0f1419;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+        }
+        .checkbox.checked {
+            background: #3b82f6;
+            border-color: #3b82f6;
+        }
+        .checkbox.checked::after {
+            content: '✓';
+            color: white;
+            font-size: 12px;
+        }
+        .checkbox-label {
+            font-size: 14px;
+        }
+        .checkbox-description {
+            font-size: 12px;
+            color: #9ca3af;
+            margin-left: 28px;
+            margin-top: 2px;
+        }
+
+        /* Time inputs */
+        .time-inputs {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+        }
+
+        /* Submit button */
+        .btn {
+            padding: 12px 24px;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            border: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .btn-primary {
+            background: #3b82f6;
+            color: white;
+        }
+        .btn-primary:hover {
+            background: #2563eb;
+        }
+        .btn-secondary {
+            background: #2f3540;
+            color: #e7e9ea;
+        }
+        .btn-secondary:hover {
+            background: #3d4450;
+        }
+
+        /* Progress section */
+        .progress-section {
+            background: #1a1f26;
+            border: 1px solid #2f3540;
+            border-radius: 8px;
+            padding: 24px;
+            display: none;
+        }
+        .progress-section.active {
+            display: block;
+        }
+        .progress-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 16px;
+        }
+        .progress-title {
+            font-size: 16px;
+            font-weight: 600;
+        }
+        .progress-percent {
+            font-size: 14px;
+            color: #3b82f6;
+        }
+        .progress-bar {
+            height: 8px;
+            background: #2f3540;
+            border-radius: 4px;
+            overflow: hidden;
+            margin-bottom: 12px;
+        }
+        .progress-fill {
+            height: 100%;
+            background: #3b82f6;
+            border-radius: 4px;
+            width: 65%;
+            transition: width 0.3s ease;
+        }
+        .progress-message {
+            font-size: 13px;
+            color: #9ca3af;
+        }
+
+        /* Action buttons */
+        .form-actions {
+            display: flex;
+            gap: 12px;
+            margin-top: 24px;
+        }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <div class="header-left">
+            <div class="logo">Micromegas</div>
+            <nav class="nav">
+                <a href="mockup_processes.html" class="nav-item">Processes</a>
+                <a href="mockup_process_log.html" class="nav-item">Logs</a>
+                <a href="#" class="nav-item active">Trace</a>
+            </nav>
+        </div>
+        <div class="header-right">
+            <div class="time-controls">
+                <div class="time-range">
+                    <span class="time-range-icon">&#128337;</span>
+                    <span class="time-range-value">Last 1 hour</span>
+                    <span class="time-range-dropdown">&#9662;</span>
+                </div>
+                <button class="refresh-btn" title="Refresh">&#8635;</button>
+            </div>
+            <div class="user-menu">
+                <div class="user-avatar">JD</div>
+            </div>
+        </div>
+    </header>
+
+    <main class="main">
+        <div class="page-header">
+            <h1 class="page-title">Generate Trace</h1>
+        </div>
+
+        <div class="form-section">
+            <h2 class="form-section-title">Trace Configuration</h2>
+
+            <div class="form-group">
+                <label class="form-label">Process</label>
+                <select class="form-input">
+                    <option value="">Select a process...</option>
+                    <option value="a1b2c3d4" selected>game_server.exe (a1b2c3d4...)</option>
+                    <option value="f6a7b8c9">game_client.exe (f6a7b8c9...)</option>
+                    <option value="b2c3d4e5">editor.exe (b2c3d4e5...)</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label">Trace Name</label>
+                <input type="text" class="form-input" placeholder="my-trace" value="game_server_trace">
+            </div>
+
+            <div class="form-group">
+                <label class="form-label">Span Types</label>
+                <div class="checkbox-group">
+                    <div>
+                        <label class="checkbox-item">
+                            <div class="checkbox checked"></div>
+                            <span class="checkbox-label">Thread Events</span>
+                        </label>
+                        <p class="checkbox-description">Include synchronous span events from threads</p>
+                    </div>
+                    <div>
+                        <label class="checkbox-item">
+                            <div class="checkbox checked"></div>
+                            <span class="checkbox-label">Async Span Events</span>
+                        </label>
+                        <p class="checkbox-description">Include asynchronous span events from futures</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label">
+                    Time Range
+                    <span class="form-label-hint">(uses page time range by default)</span>
+                </label>
+                <div class="time-inputs">
+                    <div>
+                        <input type="text" class="form-input" placeholder="Start time" value="2024-01-15T14:00:00Z">
+                    </div>
+                    <div>
+                        <input type="text" class="form-input" placeholder="End time" value="2024-01-15T15:00:00Z">
+                    </div>
+                </div>
+            </div>
+
+            <div class="form-actions">
+                <button class="btn btn-primary">Generate Trace</button>
+                <a href="mockup_process_log.html" class="btn btn-secondary">Cancel</a>
+            </div>
+        </div>
+
+        <div class="progress-section active">
+            <div class="progress-header">
+                <span class="progress-title">Generating Trace...</span>
+                <span class="progress-percent">65%</span>
+            </div>
+            <div class="progress-bar">
+                <div class="progress-fill"></div>
+            </div>
+            <p class="progress-message">Processing async span events... (ETA: ~15 seconds)</p>
+        </div>
+    </main>
+</body>
+</html>
