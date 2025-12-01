@@ -1,8 +1,8 @@
 'use client'
 
-import { Suspense, useState, useCallback, useMemo } from 'react'
+import { Suspense, useState, useCallback, useMemo, useEffect } from 'react'
 import { useSearchParams } from 'next/navigation'
-import { useQuery, useMutation } from '@tanstack/react-query'
+import { useMutation } from '@tanstack/react-query'
 import Link from 'next/link'
 import { ArrowLeft, AlertCircle } from 'lucide-react'
 import { PageLayout } from '@/components/layout'
@@ -10,9 +10,9 @@ import { AuthGuard } from '@/components/AuthGuard'
 import { CopyableProcessId } from '@/components/CopyableProcessId'
 import { QueryEditor } from '@/components/QueryEditor'
 import { ErrorBanner } from '@/components/ErrorBanner'
-import { fetchProcesses, fetchProcessLogEntries, executeSqlQuery } from '@/lib/api'
+import { executeSqlQuery, toRowObjects } from '@/lib/api'
 import { useTimeRange } from '@/hooks/useTimeRange'
-import { LogEntry, SqlQueryResponse } from '@/types'
+import { SqlRow } from '@/types'
 
 const DEFAULT_SQL = `SELECT time, level, target, msg
 FROM log_entries
@@ -20,6 +20,8 @@ WHERE process_id = '$process_id'
   AND level <= $max_level
 ORDER BY time DESC
 LIMIT $limit`
+
+const PROCESS_SQL = `SELECT exe FROM processes WHERE process_id = '$process_id' LIMIT 1`
 
 const VARIABLES = [
   { name: 'process_id', description: 'Current process ID' },
@@ -46,33 +48,6 @@ const LEVEL_NAMES: Record<number, string> = {
   6: 'TRACE',
 }
 
-// Convert SQL query results to LogEntry format
-function sqlResultToLogEntries(result: SqlQueryResponse): LogEntry[] {
-  const colIndex = (name: string) => result.columns.indexOf(name)
-  const timeIdx = colIndex('time')
-  const levelIdx = colIndex('level')
-  const targetIdx = colIndex('target')
-  const msgIdx = colIndex('msg')
-
-  return result.rows.map((row) => {
-    const levelValue = row[levelIdx]
-    // Handle level as either number or string
-    let levelStr: string
-    if (typeof levelValue === 'number') {
-      levelStr = LEVEL_NAMES[levelValue] || 'UNKNOWN'
-    } else {
-      levelStr = String(levelValue)
-    }
-
-    return {
-      time: String(row[timeIdx] ?? ''),
-      level: levelStr,
-      target: String(row[targetIdx] ?? ''),
-      msg: String(row[msgIdx] ?? ''),
-    }
-  })
-}
-
 function ProcessLogContent() {
   const searchParams = useSearchParams()
   const processId = searchParams.get('process_id')
@@ -81,45 +56,43 @@ function ProcessLogContent() {
   const [logLevel, setLogLevel] = useState<string>('all')
   const [logLimit, setLogLimit] = useState<number>(100)
   const [queryError, setQueryError] = useState<string | null>(null)
-  const [customSqlResults, setCustomSqlResults] = useState<LogEntry[] | null>(null)
-  const [isUsingCustomQuery, setIsUsingCustomQuery] = useState(false)
-
-  const { data: processes = [] } = useQuery({
-    queryKey: ['processes'],
-    queryFn: fetchProcesses,
-  })
-
-  const process = processes.find((p) => p.process_id === processId)
-
-  const {
-    data: logEntries = [],
-    isLoading: logsLoading,
-    refetch: refetchLogs,
-  } = useQuery({
-    queryKey: ['logs', processId, logLevel, logLimit],
-    queryFn: () => fetchProcessLogEntries(processId!, logLevel, logLimit),
-    enabled: !!processId,
-    staleTime: 0,
-  })
+  const [rows, setRows] = useState<SqlRow[]>([])
+  const [processExe, setProcessExe] = useState<string | null>(null)
+  const [hasLoaded, setHasLoaded] = useState(false)
 
   const sqlMutation = useMutation({
     mutationFn: executeSqlQuery,
     onSuccess: (data) => {
       setQueryError(null)
-      setCustomSqlResults(sqlResultToLogEntries(data))
-      setIsUsingCustomQuery(true)
+      const resultRows = toRowObjects(data)
+      // Normalize level values
+      setRows(resultRows.map(row => ({
+        ...row,
+        level: typeof row.level === 'number' ? (LEVEL_NAMES[row.level] || 'UNKNOWN') : row.level
+      })))
+      setHasLoaded(true)
     },
     onError: (err: Error) => {
       setQueryError(err.message)
-      setCustomSqlResults(null)
     },
   })
 
-  const handleRunQuery = useCallback(
-    (sql: string) => {
+  const processMutation = useMutation({
+    mutationFn: executeSqlQuery,
+    onSuccess: (data) => {
+      const resultRows = toRowObjects(data)
+      if (resultRows.length > 0) {
+        setProcessExe(String(resultRows[0].exe ?? ''))
+      }
+    },
+  })
+
+  const loadData = useCallback(
+    (sql: string = DEFAULT_SQL) => {
+      if (!processId) return
       setQueryError(null)
       const params: Record<string, string> = {
-        process_id: processId || '',
+        process_id: processId,
         max_level: String(LOG_LEVELS[logLevel] || 6),
         limit: String(logLimit),
       }
@@ -133,15 +106,42 @@ function ProcessLogContent() {
     [sqlMutation, processId, logLevel, logLimit, apiTimeRange]
   )
 
-  const handleResetQuery = useCallback(() => {
-    setQueryError(null)
-    setCustomSqlResults(null)
-    setIsUsingCustomQuery(false)
-    refetchLogs()
-  }, [refetchLogs])
+  // Load process info
+  useEffect(() => {
+    if (processId && !processExe) {
+      processMutation.mutate({
+        sql: PROCESS_SQL,
+        params: { process_id: processId },
+        begin: apiTimeRange.begin,
+        end: apiTimeRange.end,
+      })
+    }
+  }, [processId, processExe, processMutation, apiTimeRange])
 
-  // Use custom SQL results if available, otherwise use default query results
-  const displayedLogEntries = isUsingCustomQuery && customSqlResults ? customSqlResults : logEntries
+  // Initial load
+  useEffect(() => {
+    if (processId && !hasLoaded && !sqlMutation.isPending) {
+      loadData()
+    }
+  }, [processId, hasLoaded, sqlMutation.isPending, loadData])
+
+  // Reload when filters change
+  useEffect(() => {
+    if (hasLoaded) {
+      loadData()
+    }
+  }, [logLevel, logLimit]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleRunQuery = useCallback(
+    (sql: string) => {
+      loadData(sql)
+    },
+    [loadData]
+  )
+
+  const handleResetQuery = useCallback(() => {
+    loadData(DEFAULT_SQL)
+  }, [loadData])
 
   const currentValues = useMemo(
     () => ({
@@ -152,8 +152,9 @@ function ProcessLogContent() {
     [processId, logLevel, logLimit]
   )
 
-  const getLevelColor = (level: string) => {
-    switch (level) {
+  const getLevelColor = (level: unknown) => {
+    const levelStr = String(level)
+    switch (levelStr) {
       case 'FATAL':
         return 'text-red-600'
       case 'ERROR':
@@ -171,10 +172,6 @@ function ProcessLogContent() {
     }
   }
 
-  const formatTimestamp = (timestamp: string) => {
-    return timestamp
-  }
-
   const sqlPanel = processId ? (
     <QueryEditor
       defaultSql={DEFAULT_SQL}
@@ -183,18 +180,14 @@ function ProcessLogContent() {
       timeRangeLabel={timeRange.label}
       onRun={handleRunQuery}
       onReset={handleResetQuery}
-      isLoading={logsLoading || sqlMutation.isPending}
+      isLoading={sqlMutation.isPending}
       error={queryError}
     />
   ) : undefined
 
   const handleRefresh = useCallback(() => {
-    if (isUsingCustomQuery) {
-      setCustomSqlResults(null)
-      setIsUsingCustomQuery(false)
-    }
-    refetchLogs()
-  }, [isUsingCustomQuery, refetchLogs])
+    loadData()
+  }, [loadData])
 
   if (!processId) {
     return (
@@ -221,7 +214,7 @@ function ProcessLogContent() {
           className="inline-flex items-center gap-1.5 text-blue-400 hover:underline text-sm mb-4"
         >
           <ArrowLeft className="w-3 h-3" />
-          {process?.exe || 'Process'}
+          {processExe || 'Process'}
         </Link>
 
         {/* Page Header */}
@@ -263,9 +256,9 @@ function ProcessLogContent() {
           </div>
 
           <span className="ml-auto text-xs text-gray-500 self-center">
-            {logsLoading || sqlMutation.isPending
+            {sqlMutation.isPending
               ? 'Loading...'
-              : `Showing ${displayedLogEntries.length} entries${isUsingCustomQuery ? ' (custom query)' : ''}`}
+              : `Showing ${rows.length} entries`}
           </span>
         </div>
 
@@ -281,39 +274,37 @@ function ProcessLogContent() {
 
         {/* Log Viewer */}
         <div className="flex-1 overflow-auto bg-[#0d1117] border border-[#2f3540] rounded-lg font-mono text-xs">
-          {logsLoading || sqlMutation.isPending ? (
+          {sqlMutation.isPending && !hasLoaded ? (
             <div className="flex items-center justify-center h-full">
               <div className="flex items-center gap-3">
                 <div className="animate-spin rounded-full h-5 w-5 border-2 border-blue-500 border-t-transparent" />
-                <span className="text-gray-400">
-                  {sqlMutation.isPending ? 'Executing query...' : 'Loading logs...'}
-                </span>
+                <span className="text-gray-400">Loading logs...</span>
               </div>
             </div>
-          ) : displayedLogEntries.length === 0 ? (
+          ) : rows.length === 0 ? (
             <div className="flex items-center justify-center h-full">
               <span className="text-gray-500">No log entries found</span>
             </div>
           ) : (
             <div>
-              {displayedLogEntries.map((log, index) => (
+              {rows.map((row, index) => (
                 <div
                   key={index}
                   className="flex px-3 py-1 border-b border-[#1a1f26] hover:bg-[#161b22] transition-colors"
                 >
                   <span className="text-gray-500 mr-4 whitespace-nowrap">
-                    {formatTimestamp(log.time)}
+                    {String(row.time ?? '')}
                   </span>
-                  <span className={`w-12 mr-3 font-semibold ${getLevelColor(log.level)}`}>
-                    {log.level}
+                  <span className={`w-12 mr-3 font-semibold ${getLevelColor(row.level)}`}>
+                    {String(row.level ?? '')}
                   </span>
                   <span
                     className="text-purple-400 mr-3 max-w-[200px] truncate"
-                    title={log.target}
+                    title={String(row.target ?? '')}
                   >
-                    {log.target}
+                    {String(row.target ?? '')}
                   </span>
-                  <span className="text-gray-200 flex-1 break-words">{log.msg}</span>
+                  <span className="text-gray-200 flex-1 break-words">{String(row.msg ?? '')}</span>
                 </div>
               ))}
             </div>

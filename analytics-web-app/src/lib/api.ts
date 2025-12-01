@@ -1,4 +1,4 @@
-import { ProcessInfo, GenerateTraceRequest, HealthCheck, ProgressUpdate, BinaryStartMarker, LogEntry, ProcessStatistics, SqlQueryRequest, SqlQueryResponse, SqlQueryError } from '@/types'
+import { GenerateTraceRequest, HealthCheck, ProgressUpdate, BinaryStartMarker, SqlQueryRequest, SqlQueryResponse, SqlQueryError, SqlRow } from '@/types'
 
 const API_BASE = process.env.NODE_ENV === 'development' ? 'http://localhost:8000/analyticsweb' : '/analyticsweb'
 
@@ -20,6 +20,13 @@ export class AuthenticationError extends Error {
     super(message)
     this.name = 'AuthenticationError'
   }
+}
+
+/** Convert SQL query response to array of row objects */
+export function toRowObjects(result: SqlQueryResponse): SqlRow[] {
+  return result.rows.map(row =>
+    Object.fromEntries(result.columns.map((col, i) => [col, row[i]]))
+  )
 }
 
 async function handleResponse<T>(response: Response): Promise<T> {
@@ -45,14 +52,6 @@ async function handleResponse<T>(response: Response): Promise<T> {
   }
   return response.json()
 }
-
-export async function fetchProcesses(): Promise<ProcessInfo[]> {
-  const response = await fetch(`${API_BASE}/processes`, {
-    credentials: 'include',
-  })
-  return handleResponse<ProcessInfo[]>(response)
-}
-
 
 export async function fetchHealthCheck(): Promise<HealthCheck> {
   const response = await fetch(`${API_BASE}/health`, {
@@ -155,31 +154,6 @@ export async function generateTrace(
   a.click()
   document.body.removeChild(a)
   URL.revokeObjectURL(url)
-}
-
-export async function fetchProcessLogEntries(
-  processId: string,
-  level?: string,
-  limit: number = 50
-): Promise<LogEntry[]> {
-  const params = new URLSearchParams()
-  params.append('process_id', processId)
-  if (level && level !== 'all') {
-    params.append('level', level.toLowerCase())
-  }
-  params.append('limit', limit.toString())
-
-  const response = await fetch(`${API_BASE}/log-entries?${params}`, {
-    credentials: 'include',
-  })
-  return handleResponse<LogEntry[]>(response)
-}
-
-export async function fetchProcessStatistics(processId: string): Promise<ProcessStatistics> {
-  const response = await fetch(`${API_BASE}/process/${processId}/statistics`, {
-    credentials: 'include',
-  })
-  return handleResponse<ProcessStatistics>(response)
 }
 
 export async function executeSqlQuery(request: SqlQueryRequest): Promise<SqlQueryResponse> {

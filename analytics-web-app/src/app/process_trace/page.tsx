@@ -1,33 +1,50 @@
 'use client'
 
-import { Suspense, useState } from 'react'
+import { Suspense, useState, useEffect } from 'react'
 import { useSearchParams } from 'next/navigation'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation } from '@tanstack/react-query'
 import Link from 'next/link'
 import { AlertCircle, Play } from 'lucide-react'
 import { PageLayout } from '@/components/layout'
 import { AuthGuard } from '@/components/AuthGuard'
 import { CopyableProcessId } from '@/components/CopyableProcessId'
-import { fetchProcesses, generateTrace } from '@/lib/api'
+import { executeSqlQuery, toRowObjects, generateTrace } from '@/lib/api'
 import { useTimeRange } from '@/hooks/useTimeRange'
-import { ProgressUpdate, GenerateTraceRequest } from '@/types'
+import { ProgressUpdate, GenerateTraceRequest, SqlRow } from '@/types'
+
+const PROCESS_SQL = `SELECT exe FROM processes WHERE process_id = '$process_id' LIMIT 1`
 
 function ProcessTraceContent() {
   const searchParams = useSearchParams()
   const processId = searchParams.get('process_id')
-  const { parsed: timeRange } = useTimeRange()
+  const { parsed: timeRange, apiTimeRange } = useTimeRange()
 
+  const [processExe, setProcessExe] = useState<string | null>(null)
   const [includeThreadSpans, setIncludeThreadSpans] = useState(true)
   const [includeAsyncSpans, setIncludeAsyncSpans] = useState(true)
   const [isGenerating, setIsGenerating] = useState(false)
   const [progress, setProgress] = useState<ProgressUpdate | null>(null)
 
-  const { data: processes = [] } = useQuery({
-    queryKey: ['processes'],
-    queryFn: fetchProcesses,
+  const processMutation = useMutation({
+    mutationFn: executeSqlQuery,
+    onSuccess: (data) => {
+      const rows = toRowObjects(data)
+      if (rows.length > 0) {
+        setProcessExe(String(rows[0].exe ?? ''))
+      }
+    },
   })
 
-  const process = processes.find((p) => p.process_id === processId)
+  useEffect(() => {
+    if (processId && !processExe) {
+      processMutation.mutate({
+        sql: PROCESS_SQL,
+        params: { process_id: processId },
+        begin: apiTimeRange.begin,
+        end: apiTimeRange.end,
+      })
+    }
+  }, [processId, processExe, processMutation, apiTimeRange])
 
   const handleGenerateTrace = async () => {
     if (!processId) return
@@ -94,7 +111,7 @@ function ProcessTraceContent() {
           <div className="mb-5">
             <label className="block text-sm font-medium text-gray-200 mb-2">Process</label>
             <div className="bg-[#0f1419] border border-[#2f3540] rounded-md p-3">
-              <span className="text-gray-200 font-medium">{process?.exe || 'Loading...'}</span>
+              <span className="text-gray-200 font-medium">{processExe || 'Loading...'}</span>
               <span className="text-gray-500 font-mono text-sm ml-2">
                 <CopyableProcessId processId={processId} className="text-sm" />
               </span>

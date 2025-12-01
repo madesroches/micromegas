@@ -1,35 +1,88 @@
 'use client'
 
-import { Suspense } from 'react'
+import { Suspense, useState, useEffect, useCallback } from 'react'
 import { useSearchParams } from 'next/navigation'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation } from '@tanstack/react-query'
 import Link from 'next/link'
 import { ArrowLeft, FileText, Activity, AlertCircle } from 'lucide-react'
 import { PageLayout } from '@/components/layout'
 import { AuthGuard } from '@/components/AuthGuard'
 import { CopyableProcessId } from '@/components/CopyableProcessId'
-import { fetchProcesses, fetchProcessStatistics } from '@/lib/api'
+import { executeSqlQuery, toRowObjects } from '@/lib/api'
+import { useTimeRange } from '@/hooks/useTimeRange'
+import { SqlRow } from '@/types'
+
+const PROCESS_SQL = `SELECT process_id, exe, start_time, last_update_time, computer, username, cpu_brand, distro
+FROM processes
+WHERE process_id = '$process_id'
+LIMIT 1`
+
+const STATISTICS_SQL = `SELECT
+  (SELECT COUNT(*) FROM log_entries WHERE process_id = '$process_id') as log_entries,
+  (SELECT COUNT(*) FROM measures WHERE process_id = '$process_id') as measures,
+  (SELECT COUNT(*) FROM thread_spans WHERE process_id = '$process_id') as trace_events,
+  (SELECT COUNT(DISTINCT thread_id) FROM thread_spans WHERE process_id = '$process_id') as thread_count`
 
 function ProcessPageContent() {
   const searchParams = useSearchParams()
   const processId = searchParams.get('id')
+  const { apiTimeRange } = useTimeRange()
 
-  const { data: processes = [], isLoading: processesLoading } = useQuery({
-    queryKey: ['processes'],
-    queryFn: fetchProcesses,
+  const [process, setProcess] = useState<SqlRow | null>(null)
+  const [statistics, setStatistics] = useState<SqlRow | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
+
+  const processMutation = useMutation({
+    mutationFn: executeSqlQuery,
+    onSuccess: (data) => {
+      const rows = toRowObjects(data)
+      if (rows.length > 0) {
+        setProcess(rows[0])
+      }
+      setIsLoading(false)
+    },
+    onError: () => {
+      setIsLoading(false)
+    },
   })
 
-  const process = processes.find((p) => p.process_id === processId)
-
-  const { data: statistics, refetch: refetchStatistics } = useQuery({
-    queryKey: ['statistics', processId],
-    queryFn: () => fetchProcessStatistics(processId!),
-    enabled: !!processId && !!process,
+  const statsMutation = useMutation({
+    mutationFn: executeSqlQuery,
+    onSuccess: (data) => {
+      const rows = toRowObjects(data)
+      if (rows.length > 0) {
+        setStatistics(rows[0])
+      }
+    },
   })
 
-  const formatDuration = (startTime: string, endTime: string): string => {
-    const start = new Date(startTime)
-    const end = new Date(endTime)
+  const loadData = useCallback(() => {
+    if (!processId) return
+    setIsLoading(true)
+    processMutation.mutate({
+      sql: PROCESS_SQL,
+      params: { process_id: processId },
+      begin: apiTimeRange.begin,
+      end: apiTimeRange.end,
+    })
+    statsMutation.mutate({
+      sql: STATISTICS_SQL,
+      params: { process_id: processId },
+      begin: apiTimeRange.begin,
+      end: apiTimeRange.end,
+    })
+  }, [processId, apiTimeRange, processMutation, statsMutation])
+
+  useEffect(() => {
+    if (processId && !process) {
+      loadData()
+    }
+  }, [processId, process, loadData])
+
+  const formatDuration = (startTime: unknown, endTime: unknown): string => {
+    if (!startTime || !endTime) return 'N/A'
+    const start = new Date(String(startTime))
+    const end = new Date(String(endTime))
     const diffMs = end.getTime() - start.getTime()
 
     if (diffMs < 0) return 'Invalid'
@@ -51,10 +104,6 @@ function ProcessPageContent() {
     }
   }
 
-  const formatTimestamp = (timestamp: string) => {
-    return timestamp
-  }
-
   if (!processId) {
     return (
       <PageLayout>
@@ -71,7 +120,7 @@ function ProcessPageContent() {
     )
   }
 
-  if (processesLoading) {
+  if (isLoading) {
     return (
       <PageLayout>
         <div className="p-6">
@@ -103,7 +152,7 @@ function ProcessPageContent() {
   }
 
   return (
-    <PageLayout onRefresh={() => refetchStatistics()}>
+    <PageLayout onRefresh={loadData}>
       <div className="p-6 max-w-6xl">
         {/* Back Link */}
         <Link
@@ -117,21 +166,21 @@ function ProcessPageContent() {
         {/* Page Header */}
         <div className="flex items-start justify-between mb-8">
           <div>
-            <h1 className="text-2xl font-semibold text-gray-200">{process.exe}</h1>
+            <h1 className="text-2xl font-semibold text-gray-200">{String(process.exe ?? '')}</h1>
             <div className="text-sm text-gray-500 font-mono mt-1">
-              <CopyableProcessId processId={process.process_id} className="text-sm" />
+              <CopyableProcessId processId={processId} className="text-sm" />
             </div>
           </div>
           <div className="flex gap-3">
             <Link
-              href={`/process_log?process_id=${process.process_id}`}
+              href={`/process_log?process_id=${processId}`}
               className="flex items-center gap-2 px-4 py-2 bg-[#2f3540] text-gray-200 rounded-md hover:bg-[#3d4450] transition-colors text-sm"
             >
               <FileText className="w-4 h-4" />
               View Log
             </Link>
             <Link
-              href={`/process_trace?process_id=${process.process_id}`}
+              href={`/process_trace?process_id=${processId}`}
               className="flex items-center gap-2 px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 transition-colors text-sm"
             >
               <Activity className="w-4 h-4" />
@@ -148,18 +197,8 @@ function ProcessPageContent() {
               Process Information
             </h3>
             <div className="space-y-0">
-              <InfoRow label="Executable" value={process.exe} />
-              <InfoRow label="Process ID" value={process.process_id} mono />
-              <InfoRow
-                label="Properties"
-                value={
-                  Object.keys(process.properties).length > 0
-                    ? Object.entries(process.properties)
-                        .map(([k, v]) => `${k}: ${v}`)
-                        .join(', ')
-                    : 'None'
-                }
-              />
+              <InfoRow label="Executable" value={String(process.exe ?? '')} />
+              <InfoRow label="Process ID" value={processId} mono />
             </div>
           </div>
 
@@ -169,10 +208,10 @@ function ProcessPageContent() {
               Environment
             </h3>
             <div className="space-y-0">
-              <InfoRow label="Computer" value={process.computer} />
-              <InfoRow label="Username" value={process.username} />
-              <InfoRow label="Distro" value={process.distro} />
-              <InfoRow label="CPU Brand" value={process.cpu_brand} />
+              <InfoRow label="Computer" value={String(process.computer ?? '')} />
+              <InfoRow label="Username" value={String(process.username ?? '')} />
+              <InfoRow label="Distro" value={String(process.distro ?? '')} />
+              <InfoRow label="CPU Brand" value={String(process.cpu_brand ?? '')} />
             </div>
           </div>
 
@@ -182,8 +221,8 @@ function ProcessPageContent() {
               Timing
             </h3>
             <div className="space-y-0">
-              <InfoRow label="Start Time" value={formatTimestamp(process.start_time)} mono />
-              <InfoRow label="Last Activity" value={formatTimestamp(process.last_update_time)} mono />
+              <InfoRow label="Start Time" value={String(process.start_time ?? '')} mono />
+              <InfoRow label="Last Activity" value={String(process.last_update_time ?? '')} mono />
               <InfoRow
                 label="Duration"
                 value={formatDuration(process.start_time, process.last_update_time)}
@@ -199,16 +238,19 @@ function ProcessPageContent() {
             <div className="space-y-0">
               <InfoRow
                 label="Log Entries"
-                value={statistics?.log_entries?.toLocaleString() || '0'}
+                value={statistics ? Number(statistics.log_entries ?? 0).toLocaleString() : '0'}
               />
-              <InfoRow label="Measures" value={statistics?.measures?.toLocaleString() || '0'} />
+              <InfoRow
+                label="Measures"
+                value={statistics ? Number(statistics.measures ?? 0).toLocaleString() : '0'}
+              />
               <InfoRow
                 label="Trace Events"
-                value={statistics?.trace_events?.toLocaleString() || '0'}
+                value={statistics ? Number(statistics.trace_events ?? 0).toLocaleString() : '0'}
               />
               <InfoRow
                 label="Thread Count"
-                value={statistics?.thread_count?.toLocaleString() || '0'}
+                value={statistics ? Number(statistics.thread_count ?? 0).toLocaleString() : '0'}
               />
             </div>
           </div>
@@ -222,12 +264,10 @@ function InfoRow({
   label,
   value,
   mono = false,
-  highlight = false,
 }: {
   label: string
   value: string
   mono?: boolean
-  highlight?: boolean
 }) {
   return (
     <div className="flex justify-between py-2 border-b border-[#2f3540] last:border-b-0">
@@ -235,7 +275,7 @@ function InfoRow({
       <span
         className={`text-sm text-right max-w-[60%] break-all ${
           mono ? 'font-mono' : ''
-        } ${highlight ? 'text-blue-400' : 'text-gray-200'}`}
+        } text-gray-200`}
       >
         {value}
       </span>
