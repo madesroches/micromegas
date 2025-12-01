@@ -2,7 +2,8 @@
 
 import { useState } from 'react'
 import { useAuth } from '@/lib/auth'
-import { Clock, RefreshCw, ChevronDown, LogOut } from 'lucide-react'
+import { RefreshCw, ChevronDown, LogOut } from 'lucide-react'
+import Link from 'next/link'
 import { TimeRangeSelector } from './TimeRangeSelector'
 
 interface HeaderProps {
@@ -36,7 +37,9 @@ export function Header({ onRefresh }: HeaderProps) {
   return (
     <header className="flex items-center justify-between px-3 sm:px-6 py-3 bg-[#1a1f26] border-b border-[#2f3540]">
       <div className="flex items-center gap-3 sm:gap-6">
-        <div className="text-base sm:text-lg font-semibold text-blue-500">Micromegas</div>
+        <Link href="/" className="text-base sm:text-lg font-semibold text-blue-500 hover:text-blue-400 transition-colors">
+          Micromegas
+        </Link>
       </div>
 
       <div className="flex items-center gap-2 sm:gap-4">
