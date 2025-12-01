@@ -411,3 +411,12 @@ Note: Authentication errors are already handled by the existing login flow.
 - Add query validation/sanitization
 - Add macro substitution (`$search`, `$order_by`, `$process_id`, `$max_level`, `$limit`, `$begin`, `$end`)
 - Block destructive functions in query text
+
+### API Endpoint Design
+All API endpoints use query parameters instead of path parameters for consistency:
+- `GET /analyticsweb/processes` - List all processes
+- `GET /analyticsweb/log-entries?process_id=...&level=...&limit=...` - Get log entries
+- `GET /analyticsweb/process/{process_id}/statistics` - Get process statistics (legacy path param)
+- `POST /analyticsweb/query` - Execute custom SQL query
+- `GET /analyticsweb/perfetto/{process_id}/info` - Get trace info
+- `POST /analyticsweb/perfetto/{process_id}/generate` - Generate trace
