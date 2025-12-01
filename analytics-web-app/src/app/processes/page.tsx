@@ -34,7 +34,7 @@ const VARIABLES = [
 function ProcessesPageContent() {
   const [searchInput, setSearchInput] = useState('')
   const [searchTerm, setSearchTerm] = useState('')
-  const [sortField, setSortField] = useState<SortField>('start_time')
+  const [sortField, setSortField] = useState<SortField>('last_update_time')
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc')
   const [queryError, setQueryError] = useState<string | null>(null)
   const [rows, setRows] = useState<SqlRow[]>([])
