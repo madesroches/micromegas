@@ -214,7 +214,7 @@ function ProcessLogContent() {
     return (
       <PageLayout>
         <div className="p-6">
-          <div className="flex flex-col items-center justify-center h-64 bg-[#1a1f26] border border-[#2f3540] rounded-lg">
+          <div className="flex flex-col items-center justify-center h-64 bg-app-panel border border-theme-border rounded-lg">
             <AlertCircle className="w-10 h-10 text-red-400 mb-3" />
             <p className="text-gray-400">No process ID provided</p>
             <Link href="/processes" className="text-blue-400 hover:underline mt-2">
@@ -251,7 +251,7 @@ function ProcessLogContent() {
           <select
             value={logLevel}
             onChange={(e) => setLogLevel(e.target.value)}
-            className="px-3 py-2 bg-[#1a1f26] border border-[#2f3540] rounded-md text-gray-200 text-sm focus:outline-none focus:border-blue-500"
+            className="px-3 py-2 bg-app-panel border border-theme-border rounded-md text-theme-text-primary text-sm focus:outline-none focus:border-accent-blue"
           >
             <option value="all">Max Level: TRACE (all)</option>
             <option value="debug">Max Level: DEBUG</option>
@@ -266,7 +266,7 @@ function ProcessLogContent() {
             <select
               value={logLimit}
               onChange={(e) => setLogLimit(Number(e.target.value))}
-              className="px-3 py-2 bg-[#1a1f26] border border-[#2f3540] rounded-md text-gray-200 text-sm focus:outline-none focus:border-blue-500"
+              className="px-3 py-2 bg-app-panel border border-theme-border rounded-md text-theme-text-primary text-sm focus:outline-none focus:border-accent-blue"
             >
               <option value={50}>50</option>
               <option value={100}>100</option>
@@ -294,7 +294,7 @@ function ProcessLogContent() {
         )}
 
         {/* Log Viewer */}
-        <div className="flex-1 overflow-auto bg-[#0d1117] border border-[#2f3540] rounded-lg font-mono text-xs">
+        <div className="flex-1 overflow-auto bg-app-bg border border-theme-border rounded-lg font-mono text-xs">
           {sqlMutation.isPending && !hasLoaded ? (
             <div className="flex items-center justify-center h-full">
               <div className="flex items-center gap-3">
@@ -311,7 +311,7 @@ function ProcessLogContent() {
               {rows.map((row, index) => (
                 <div
                   key={index}
-                  className="flex px-3 py-1 border-b border-[#1a1f26] hover:bg-[#161b22] transition-colors"
+                  className="flex px-3 py-1 border-b border-app-panel hover:bg-app-panel/50 transition-colors"
                 >
                   <span className="text-gray-500 mr-4 whitespace-nowrap">
                     {String(row.time ?? '')}

@@ -42,6 +42,29 @@ const config: Config = {
           DEFAULT: "hsl(var(--card))",
           foreground: "hsl(var(--card-foreground))",
         },
+        // Custom theme colors from CSS variables
+        app: {
+          bg: "var(--app-bg)",
+          header: "var(--header-bg)",
+          sidebar: "var(--sidebar-bg)",
+          panel: "var(--panel-bg)",
+          card: "var(--card-bg)",
+        },
+        theme: {
+          border: {
+            DEFAULT: "var(--border-color)",
+            hover: "var(--border-hover)",
+          },
+          text: {
+            primary: "var(--text-primary)",
+            secondary: "var(--text-secondary)",
+            muted: "var(--text-muted)",
+          },
+        },
+        "accent-blue": "var(--accent-blue)",
+        "accent-green": "var(--accent-green)",
+        "accent-purple": "var(--accent-purple)",
+        "accent-orange": "var(--accent-orange)",
       },
       borderRadius: {
         lg: "var(--radius)",

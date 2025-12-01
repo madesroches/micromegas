@@ -56,11 +56,11 @@ export function QueryEditor({
 
   if (isCollapsed) {
     return (
-      <div className="hidden md:flex w-12 bg-[#1a1f26] border-l border-[#2f3540] flex-col">
+      <div className="hidden md:flex w-12 bg-app-panel border-l border-theme-border flex-col">
         <div className="p-2">
           <button
             onClick={() => setIsCollapsed(false)}
-            className="w-8 h-8 flex items-center justify-center text-gray-400 hover:text-gray-200 hover:bg-[#2f3540] rounded transition-colors"
+            className="w-8 h-8 flex items-center justify-center text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-border rounded transition-colors"
             title="Expand SQL Panel"
           >
             <ChevronLeft className="w-4 h-4" />
@@ -71,23 +71,23 @@ export function QueryEditor({
   }
 
   return (
-    <div className="hidden md:flex w-80 lg:w-96 bg-[#1a1f26] border-l border-[#2f3540] flex-col">
+    <div className="hidden md:flex w-80 lg:w-96 bg-app-panel border-l border-theme-border flex-col">
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 bg-[#22272e] border-b border-[#2f3540]">
+      <div className="flex items-center justify-between px-4 py-3 bg-app-card border-b border-theme-border">
         <div className="flex items-center gap-2">
           <button
             onClick={() => setIsCollapsed(true)}
-            className="w-6 h-6 flex items-center justify-center text-gray-400 hover:text-gray-200 hover:bg-[#2f3540] rounded transition-colors"
+            className="w-6 h-6 flex items-center justify-center text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-border rounded transition-colors"
             title="Collapse panel"
           >
             <ChevronRight className="w-4 h-4" />
           </button>
-          <span className="text-sm font-semibold text-gray-200">SQL Query</span>
+          <span className="text-sm font-semibold text-theme-text-primary">SQL Query</span>
         </div>
         <div className="flex items-center gap-2">
           <button
             onClick={handleReset}
-            className="px-2.5 py-1 text-xs text-gray-400 border border-[#2f3540] rounded hover:bg-[#2f3540] hover:text-gray-200 transition-colors"
+            className="px-2.5 py-1 text-xs text-theme-text-secondary border border-theme-border rounded hover:bg-theme-border hover:text-theme-text-primary transition-colors"
           >
             Reset
           </button>
@@ -109,7 +109,7 @@ export function QueryEditor({
           <textarea
             value={sql}
             onChange={(e) => setSql(e.target.value)}
-            className="w-full h-48 p-3 bg-[#0d1117] border border-[#2f3540] rounded-md text-gray-200 font-mono text-xs leading-relaxed resize-none focus:outline-none focus:border-blue-500"
+            className="w-full h-48 p-3 bg-app-bg border border-theme-border rounded-md text-theme-text-primary font-mono text-xs leading-relaxed resize-none focus:outline-none focus:border-accent-blue"
             spellCheck={false}
           />
         </div>
@@ -130,7 +130,7 @@ export function QueryEditor({
             <div className="text-xs text-gray-500 space-y-1">
               {variables.map((v) => (
                 <div key={v.name}>
-                  <code className="px-1.5 py-0.5 bg-[#2f3540] rounded text-orange-400">
+                  <code className="px-1.5 py-0.5 bg-theme-border rounded text-accent-orange">
                     ${v.name}
                   </code>{' '}
                   - {v.description}
@@ -149,10 +149,10 @@ export function QueryEditor({
             <div className="text-xs text-gray-500 space-y-1">
               {Object.entries(currentValues).map(([key, value]) => (
                 <div key={key}>
-                  <code className="px-1.5 py-0.5 bg-[#2f3540] rounded text-orange-400">
+                  <code className="px-1.5 py-0.5 bg-theme-border rounded text-accent-orange">
                     ${key}
                   </code>{' '}
-                  = <span className="text-gray-300">{value}</span>
+                  = <span className="text-theme-text-secondary">{value}</span>
                 </div>
               ))}
             </div>

@@ -135,8 +135,8 @@ function ProcessesPageContent() {
       onClick={() => handleSort(field)}
       className={`px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider cursor-pointer select-none transition-colors ${
         sortField === field
-          ? 'text-gray-200 bg-[#2a3038]'
-          : 'text-gray-500 hover:text-gray-300 hover:bg-[#2a3038]'
+          ? 'text-theme-text-primary bg-app-card'
+          : 'text-theme-text-muted hover:text-theme-text-secondary hover:bg-app-card'
       } ${className}`}
     >
       <div className="flex items-center gap-1">
@@ -191,7 +191,7 @@ function ProcessesPageContent() {
               placeholder="Search by exe, computer, username..."
               value={searchInput}
               onChange={(e) => setSearchInput(e.target.value)}
-              className="w-full max-w-md px-4 py-2.5 bg-[#1a1f26] border border-[#2f3540] rounded-md text-gray-200 text-sm placeholder-gray-500 focus:outline-none focus:border-blue-500 transition-colors"
+              className="w-full max-w-md px-4 py-2.5 bg-app-panel border border-theme-border rounded-md text-theme-text-primary text-sm placeholder-theme-text-muted focus:outline-none focus:border-accent-blue transition-colors"
             />
           </div>
 
@@ -207,19 +207,19 @@ function ProcessesPageContent() {
 
           {/* Table */}
           {sqlMutation.isPending && rows.length === 0 ? (
-            <div className="flex-1 flex items-center justify-center bg-[#1a1f26] border border-[#2f3540] rounded-lg">
+            <div className="flex-1 flex items-center justify-center bg-app-panel border border-theme-border rounded-lg">
               <div className="flex items-center gap-3">
                 <div className="animate-spin rounded-full h-6 w-6 border-2 border-blue-500 border-t-transparent" />
                 <span className="text-gray-400">Loading processes...</span>
               </div>
             </div>
           ) : (
-            <div className="flex-1 overflow-auto bg-[#1a1f26] border border-[#2f3540] rounded-lg">
+            <div className="flex-1 overflow-auto bg-app-panel border border-theme-border rounded-lg">
               <table className="w-full">
                 <thead className="sticky top-0">
-                  <tr className="bg-[#22272e] border-b border-[#2f3540]">
+                  <tr className="bg-app-card border-b border-theme-border">
                     <SortHeader field="exe">Process</SortHeader>
-                    <th className="hidden sm:table-cell px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">
+                    <th className="hidden sm:table-cell px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-theme-text-muted">
                       Process ID
                     </th>
                     <SortHeader field="start_time">Start Time</SortHeader>
@@ -238,7 +238,7 @@ function ProcessesPageContent() {
                   {rows.map((row) => (
                     <tr
                       key={String(row.process_id)}
-                      className="border-b border-[#2f3540] hover:bg-[#22272e] transition-colors"
+                      className="border-b border-theme-border hover:bg-app-card transition-colors"
                     >
                       <td className="px-4 py-3">
                         <Link
