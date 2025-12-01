@@ -163,12 +163,13 @@ export async function fetchProcessLogEntries(
   limit: number = 50
 ): Promise<LogEntry[]> {
   const params = new URLSearchParams()
+  params.append('process_id', processId)
   if (level && level !== 'all') {
     params.append('level', level.toLowerCase())
   }
   params.append('limit', limit.toString())
 
-  const response = await fetch(`${API_BASE}/process/${processId}/log-entries?${params}`, {
+  const response = await fetch(`${API_BASE}/log-entries?${params}`, {
     credentials: 'include',
   })
   return handleResponse<LogEntry[]>(response)

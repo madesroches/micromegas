@@ -143,6 +143,7 @@ struct LogEntry {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct LogsQuery {
+    process_id: String,
     limit: Option<usize>,
     level: Option<String>,
 }
@@ -255,10 +256,7 @@ async fn main() -> Result<()> {
             "/analyticsweb/perfetto/{process_id}/generate",
             post(generate_trace),
         )
-        .route(
-            "/analyticsweb/process/{process_id}/log-entries",
-            get(get_process_log_entries),
-        )
+        .route("/analyticsweb/log-entries", get(get_process_log_entries))
         .route(
             "/analyticsweb/process/{process_id}/statistics",
             get(get_process_statistics),
@@ -451,10 +449,10 @@ async fn generate_trace(
 
 #[span_fn]
 async fn get_process_log_entries(
-    Path(process_id): Path<String>,
     axum::extract::Query(query): axum::extract::Query<LogsQuery>,
     Extension(auth_token): Extension<AuthToken>,
 ) -> ApiResult<Json<Vec<LogEntry>>> {
+    let process_id = &query.process_id;
     let limit = query.limit.unwrap_or(50);
     let level_filter = query.level.as_deref().filter(|&level| level != "all");
 
@@ -463,7 +461,7 @@ async fn get_process_log_entries(
     let mut client = client_factory.make_client().await?;
 
     let mut logs = Vec::new();
-    let mut stream = query_log_entries(&mut client, &process_id, level_filter, limit).await?;
+    let mut stream = query_log_entries(&mut client, process_id, level_filter, limit).await?;
 
     while let Some(batch) = stream.next().await {
         let batch = batch.map_err(anyhow::Error::from)?;
