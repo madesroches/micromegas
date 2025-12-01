@@ -56,7 +56,7 @@ export function QueryEditor({
 
   if (isCollapsed) {
     return (
-      <div className="w-12 bg-[#1a1f26] border-l border-[#2f3540] flex flex-col">
+      <div className="hidden md:flex w-12 bg-[#1a1f26] border-l border-[#2f3540] flex-col">
         <div className="p-2">
           <button
             onClick={() => setIsCollapsed(false)}
@@ -71,7 +71,7 @@ export function QueryEditor({
   }
 
   return (
-    <div className="w-96 bg-[#1a1f26] border-l border-[#2f3540] flex flex-col">
+    <div className="hidden md:flex w-80 lg:w-96 bg-[#1a1f26] border-l border-[#2f3540] flex-col">
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 bg-[#22272e] border-b border-[#2f3540]">
         <div className="flex items-center gap-2">

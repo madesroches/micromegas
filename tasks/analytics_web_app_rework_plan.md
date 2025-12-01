@@ -30,11 +30,11 @@
 - [x] SQL panel on `/processes` page
 - [x] SQL panel on `/process_log` page
 
-### Milestone 5: Polish & Integration - TODO
-- [ ] Wire up Run button to actually execute custom SQL queries
-- [ ] Add responsive design adjustments
-- [ ] Add better error handling UX (see mockup_errors.html)
-- [ ] Test all URL parameter combinations for shareability
+### Milestone 5: Polish & Integration - DONE
+- [x] Wire up Run button to actually execute custom SQL queries
+- [x] Add responsive design adjustments
+- [x] Add better error handling UX (see mockup_errors.html)
+- [x] Test all URL parameter combinations for shareability
 
 ## Mockups
 

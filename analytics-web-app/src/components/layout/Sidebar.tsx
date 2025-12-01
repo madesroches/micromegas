@@ -31,7 +31,7 @@ export function Sidebar() {
   }
 
   return (
-    <aside className="w-14 bg-[#1a1f26] border-r border-[#2f3540] flex flex-col py-3">
+    <aside className="hidden sm:flex w-14 bg-[#1a1f26] border-r border-[#2f3540] flex-col py-3">
       <nav className="flex flex-col gap-1">
         {navItems.map((item) => (
           <Link

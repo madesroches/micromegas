@@ -34,18 +34,18 @@ export function Header({ onRefresh }: HeaderProps) {
     .slice(0, 2) || 'U'
 
   return (
-    <header className="flex items-center justify-between px-6 py-3 bg-[#1a1f26] border-b border-[#2f3540]">
-      <div className="flex items-center gap-6">
-        <div className="text-lg font-semibold text-blue-500">Micromegas</div>
+    <header className="flex items-center justify-between px-3 sm:px-6 py-3 bg-[#1a1f26] border-b border-[#2f3540]">
+      <div className="flex items-center gap-3 sm:gap-6">
+        <div className="text-base sm:text-lg font-semibold text-blue-500">Micromegas</div>
       </div>
 
-      <div className="flex items-center gap-4">
+      <div className="flex items-center gap-2 sm:gap-4">
         {/* Time Range Controls */}
         <div className="flex items-center">
           <TimeRangeSelector />
           <button
             onClick={onRefresh}
-            className="px-2.5 py-1.5 bg-[#2f3540] border-l border-[#3d4450] rounded-r-md text-gray-200 hover:bg-[#3d4450] transition-colors"
+            className="px-2 sm:px-2.5 py-1.5 bg-[#2f3540] border-l border-[#3d4450] rounded-r-md text-gray-200 hover:bg-[#3d4450] transition-colors"
             title="Refresh"
           >
             <RefreshCw className="w-4 h-4" />

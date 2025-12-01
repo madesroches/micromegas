@@ -1,15 +1,17 @@
 'use client'
 
 import { Suspense, useState, useMemo, useCallback } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useMutation } from '@tanstack/react-query'
 import Link from 'next/link'
 import { AlertCircle, ChevronUp, ChevronDown } from 'lucide-react'
 import { PageLayout } from '@/components/layout'
 import { AuthGuard } from '@/components/AuthGuard'
 import { CopyableProcessId } from '@/components/CopyableProcessId'
 import { QueryEditor } from '@/components/QueryEditor'
-import { fetchProcesses } from '@/lib/api'
+import { ErrorBanner } from '@/components/ErrorBanner'
+import { fetchProcesses, executeSqlQuery } from '@/lib/api'
 import { useTimeRange } from '@/hooks/useTimeRange'
+import { ProcessInfo, SqlQueryResponse } from '@/types'
 
 type SortField = 'exe' | 'start_time' | 'last_update_time' | 'username' | 'computer'
 type SortDirection = 'asc' | 'desc'
@@ -24,12 +26,37 @@ const VARIABLES = [
   { name: 'order_by', description: 'Sort column and direction' },
 ]
 
+// Convert SQL query results to ProcessInfo format
+function sqlResultToProcesses(result: SqlQueryResponse): ProcessInfo[] {
+  const colIndex = (name: string) => result.columns.indexOf(name)
+  const processIdIdx = colIndex('process_id')
+  const exeIdx = colIndex('exe')
+  const startTimeIdx = colIndex('start_time')
+  const lastUpdateIdx = colIndex('last_update_time')
+  const computerIdx = colIndex('computer')
+  const usernameIdx = colIndex('username')
+
+  return result.rows.map((row) => ({
+    process_id: String(row[processIdIdx] ?? ''),
+    exe: String(row[exeIdx] ?? ''),
+    start_time: String(row[startTimeIdx] ?? ''),
+    last_update_time: String(row[lastUpdateIdx] ?? ''),
+    computer: String(row[computerIdx] ?? ''),
+    username: String(row[usernameIdx] ?? ''),
+    cpu_brand: '',
+    distro: '',
+    properties: {},
+  }))
+}
+
 function ProcessesPageContent() {
   const [searchTerm, setSearchTerm] = useState('')
   const [sortField, setSortField] = useState<SortField>('start_time')
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc')
   const [queryError, setQueryError] = useState<string | null>(null)
-  const { parsed: timeRange } = useTimeRange()
+  const [customSqlResults, setCustomSqlResults] = useState<ProcessInfo[] | null>(null)
+  const [isUsingCustomQuery, setIsUsingCustomQuery] = useState(false)
+  const { parsed: timeRange, apiTimeRange } = useTimeRange()
 
   const {
     data: processes = [],
@@ -41,7 +68,38 @@ function ProcessesPageContent() {
     queryFn: fetchProcesses,
   })
 
+  const sqlMutation = useMutation({
+    mutationFn: executeSqlQuery,
+    onSuccess: (data) => {
+      setQueryError(null)
+      setCustomSqlResults(sqlResultToProcesses(data))
+      setIsUsingCustomQuery(true)
+    },
+    onError: (err: Error) => {
+      setQueryError(err.message)
+      setCustomSqlResults(null)
+    },
+  })
+
+  // Use custom SQL results if available, otherwise use default query results
+  const dataSource = isUsingCustomQuery && customSqlResults ? customSqlResults : processes
+
   const filteredAndSortedProcesses = useMemo(() => {
+    // If using custom query, don't apply client-side filtering/sorting (query handles it)
+    if (isUsingCustomQuery && customSqlResults) {
+      // Still apply search filter on custom results for convenience
+      if (searchTerm) {
+        return customSqlResults.filter(
+          (process) =>
+            process.exe.toLowerCase().includes(searchTerm.toLowerCase()) ||
+            process.computer.toLowerCase().includes(searchTerm.toLowerCase()) ||
+            process.username.toLowerCase().includes(searchTerm.toLowerCase()) ||
+            process.process_id.toLowerCase().includes(searchTerm.toLowerCase())
+        )
+      }
+      return customSqlResults
+    }
+
     const filtered = processes.filter(
       (process) =>
         process.exe.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -63,7 +121,7 @@ function ProcessesPageContent() {
       const result = String(aVal).localeCompare(String(bVal))
       return sortDirection === 'asc' ? result : -result
     })
-  }, [processes, searchTerm, sortField, sortDirection])
+  }, [processes, customSqlResults, isUsingCustomQuery, searchTerm, sortField, sortDirection])
 
   const handleSort = (field: SortField) => {
     if (sortField === field) {
@@ -74,16 +132,30 @@ function ProcessesPageContent() {
     }
   }
 
-  const handleRunQuery = useCallback((sql: string) => {
-    // For now, just refetch using the default API
-    // In future, this would execute the custom SQL
-    setQueryError(null)
-    refetch()
-  }, [refetch])
+  const handleRunQuery = useCallback(
+    (sql: string) => {
+      setQueryError(null)
+      // Substitute macros in the SQL
+      const params: Record<string, string> = {
+        order_by: `${sortField} ${sortDirection.toUpperCase()}`,
+        search: searchTerm,
+      }
+      sqlMutation.mutate({
+        sql,
+        params,
+        begin: apiTimeRange.begin,
+        end: apiTimeRange.end,
+      })
+    },
+    [sqlMutation, sortField, sortDirection, searchTerm, apiTimeRange]
+  )
 
   const handleResetQuery = useCallback(() => {
     setQueryError(null)
-  }, [])
+    setCustomSqlResults(null)
+    setIsUsingCustomQuery(false)
+    refetch()
+  }, [refetch])
 
   const currentValues = useMemo(
     () => ({
@@ -93,14 +165,22 @@ function ProcessesPageContent() {
     [searchTerm, sortField, sortDirection]
   )
 
-  const SortHeader = ({ field, children }: { field: SortField; children: React.ReactNode }) => (
+  const SortHeader = ({
+    field,
+    children,
+    className = '',
+  }: {
+    field: SortField
+    children: React.ReactNode
+    className?: string
+  }) => (
     <th
       onClick={() => handleSort(field)}
       className={`px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider cursor-pointer select-none transition-colors ${
         sortField === field
           ? 'text-gray-200 bg-[#2a3038]'
           : 'text-gray-500 hover:text-gray-300 hover:bg-[#2a3038]'
-      }`}
+      } ${className}`}
     >
       <div className="flex items-center gap-1">
         {children}
@@ -128,14 +208,24 @@ function ProcessesPageContent() {
       timeRangeLabel={timeRange.label}
       onRun={handleRunQuery}
       onReset={handleResetQuery}
-      isLoading={isLoading}
+      isLoading={isLoading || sqlMutation.isPending}
       error={queryError}
     />
   )
 
+  const handleRefresh = useCallback(() => {
+    if (isUsingCustomQuery) {
+      // Re-run the custom query would require storing the last SQL
+      // For now, just reset to default
+      setCustomSqlResults(null)
+      setIsUsingCustomQuery(false)
+    }
+    refetch()
+  }, [isUsingCustomQuery, refetch])
+
   return (
     <AuthGuard>
-      <PageLayout onRefresh={() => refetch()} rightPanel={sqlPanel}>
+      <PageLayout onRefresh={handleRefresh} rightPanel={sqlPanel}>
         <div className="p-6 flex flex-col h-full">
           {/* Page Header */}
           <div className="mb-5">
@@ -153,20 +243,44 @@ function ProcessesPageContent() {
             />
           </div>
 
+          {/* Custom query indicator */}
+          {isUsingCustomQuery && (
+            <div className="mb-3 flex items-center gap-2 text-sm text-blue-400">
+              <span className="px-2 py-0.5 bg-blue-500/20 rounded text-xs">Custom Query</span>
+              <span className="text-gray-500">
+                Showing {filteredAndSortedProcesses.length} results from custom SQL
+              </span>
+            </div>
+          )}
+
+          {/* Query Error Banner */}
+          {queryError && (
+            <ErrorBanner
+              title="Query execution failed"
+              message={queryError}
+              onDismiss={() => setQueryError(null)}
+              onRetry={handleRefresh}
+            />
+          )}
+
           {/* Table */}
-          {isLoading ? (
+          {isLoading || sqlMutation.isPending ? (
             <div className="flex-1 flex items-center justify-center bg-[#1a1f26] border border-[#2f3540] rounded-lg">
               <div className="flex items-center gap-3">
                 <div className="animate-spin rounded-full h-6 w-6 border-2 border-blue-500 border-t-transparent" />
-                <span className="text-gray-400">Loading processes...</span>
+                <span className="text-gray-400">
+                  {sqlMutation.isPending ? 'Executing query...' : 'Loading processes...'}
+                </span>
               </div>
             </div>
           ) : error ? (
-            <div className="flex-1 flex items-center justify-center bg-[#1a1f26] border border-[#2f3540] rounded-lg">
-              <div className="flex flex-col items-center gap-3">
-                <AlertCircle className="w-10 h-10 text-red-400" />
-                <p className="text-gray-400">Failed to load processes</p>
-              </div>
+            <div className="flex-1 flex flex-col">
+              <ErrorBanner
+                title="Failed to load processes"
+                message="Unable to connect to the analytics server. Please try again."
+                details={error instanceof Error ? error.message : String(error)}
+                onRetry={() => refetch()}
+              />
             </div>
           ) : (
             <div className="flex-1 overflow-auto bg-[#1a1f26] border border-[#2f3540] rounded-lg">
@@ -174,13 +288,19 @@ function ProcessesPageContent() {
                 <thead className="sticky top-0">
                   <tr className="bg-[#22272e] border-b border-[#2f3540]">
                     <SortHeader field="exe">Process</SortHeader>
-                    <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">
+                    <th className="hidden sm:table-cell px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-gray-500">
                       Process ID
                     </th>
                     <SortHeader field="start_time">Start Time</SortHeader>
-                    <SortHeader field="last_update_time">Last Update</SortHeader>
-                    <SortHeader field="username">Username</SortHeader>
-                    <SortHeader field="computer">Computer</SortHeader>
+                    <SortHeader field="last_update_time" className="hidden lg:table-cell">
+                      Last Update
+                    </SortHeader>
+                    <SortHeader field="username" className="hidden md:table-cell">
+                      Username
+                    </SortHeader>
+                    <SortHeader field="computer" className="hidden md:table-cell">
+                      Computer
+                    </SortHeader>
                   </tr>
                 </thead>
                 <tbody>
@@ -197,7 +317,7 @@ function ProcessesPageContent() {
                           {process.exe}
                         </Link>
                       </td>
-                      <td className="px-4 py-3">
+                      <td className="hidden sm:table-cell px-4 py-3">
                         <CopyableProcessId
                           processId={process.process_id}
                           truncate={true}
@@ -207,11 +327,11 @@ function ProcessesPageContent() {
                       <td className="px-4 py-3 font-mono text-sm text-gray-300">
                         {formatTimestamp(process.start_time)}
                       </td>
-                      <td className="px-4 py-3 font-mono text-sm text-gray-300">
+                      <td className="hidden lg:table-cell px-4 py-3 font-mono text-sm text-gray-300">
                         {formatTimestamp(process.last_update_time)}
                       </td>
-                      <td className="px-4 py-3 text-gray-300">{process.username}</td>
-                      <td className="px-4 py-3 text-gray-300">{process.computer}</td>
+                      <td className="hidden md:table-cell px-4 py-3 text-gray-300">{process.username}</td>
+                      <td className="hidden md:table-cell px-4 py-3 text-gray-300">{process.computer}</td>
                     </tr>
                   ))}
                   {filteredAndSortedProcesses.length === 0 && (
