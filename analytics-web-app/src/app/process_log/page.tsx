@@ -340,7 +340,7 @@ function ProcessLogContent() {
                     {String(row.level ?? '')}
                   </span>
                   <span
-                    className="text-purple-400 mr-3 max-w-[200px] truncate"
+                    className="text-purple-400 mr-3 w-[200px] min-w-[200px] truncate"
                     title={String(row.target ?? '')}
                   >
                     {String(row.target ?? '')}
