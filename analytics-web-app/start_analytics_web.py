@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Analytics Web App Development Start Script"""
 
+import argparse
 import subprocess
 import sys
 import time
@@ -155,6 +156,10 @@ def setup_environment():
     return oidc_configured
 
 def main():
+    parser = argparse.ArgumentParser(description="Start Analytics Web App Development Environment")
+    parser.add_argument("--disable-auth", action="store_true", help="Disable authentication even if OIDC config is present")
+    args = parser.parse_args()
+
     print_status("Starting Analytics Web App Development Environment", "info")
     print_status("Telemetry data exploration and analysis platform", "info")
     print()
@@ -180,6 +185,11 @@ def main():
 
     # Setup environment
     auth_enabled = setup_environment()
+
+    # Override auth if --disable-auth flag is passed
+    if args.disable_auth:
+        auth_enabled = False
+        print_status("Authentication disabled via --disable-auth flag", "warning")
 
     # Change to micromegas root directory
     micromegas_dir = Path(__file__).parent.parent

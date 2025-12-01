@@ -144,6 +144,15 @@ function ProcessLogContent() {
     }
   }, [logLevel, logLimit, hasLoaded, loadData])
 
+  // Reload when time range changes
+  const prevTimeRangeRef = useRef({ begin: apiTimeRange.begin, end: apiTimeRange.end })
+  useEffect(() => {
+    if (hasLoaded && (prevTimeRangeRef.current.begin !== apiTimeRange.begin || prevTimeRangeRef.current.end !== apiTimeRange.end)) {
+      prevTimeRangeRef.current = { begin: apiTimeRange.begin, end: apiTimeRange.end }
+      loadData()
+    }
+  }, [apiTimeRange.begin, apiTimeRange.end, hasLoaded, loadData])
+
   const handleRunQuery = useCallback(
     (sql: string) => {
       loadData(sql)

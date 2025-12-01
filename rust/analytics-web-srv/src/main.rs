@@ -232,8 +232,8 @@ async fn main() -> Result<()> {
         None
     };
 
-    // Build auth routes if authentication is enabled
-    let auth_routes = auth_state.as_ref().map(|auth_state| {
+    // Build auth routes if authentication is enabled, or stub routes if disabled
+    let auth_routes = if let Some(auth_state) = auth_state.as_ref() {
         Router::new()
             .route("/auth/login", get(auth::auth_login))
             .route("/auth/callback", get(auth::auth_callback))
@@ -241,7 +241,12 @@ async fn main() -> Result<()> {
             .route("/auth/logout", post(auth::auth_logout))
             .route("/auth/me", get(auth::auth_me))
             .with_state(auth_state.clone())
-    });
+    } else {
+        // Stub auth routes for no-auth mode
+        Router::new()
+            .route("/auth/me", get(auth_me_no_auth))
+            .route("/auth/logout", post(auth_logout_no_auth))
+    };
 
     let health_routes = Router::new().route("/analyticsweb/health", get(health_check));
 
@@ -263,14 +268,15 @@ async fn main() -> Result<()> {
         )
         .layer(middleware::from_fn(observability_middleware));
 
-    // Apply auth middleware if enabled
+    // Apply auth middleware if enabled, otherwise inject a dummy token for no-auth mode
     let api_routes = if let Some(auth_state) = auth_state.clone() {
         api_routes.layer(middleware::from_fn_with_state(
             auth_state,
             auth::cookie_auth_middleware,
         ))
     } else {
-        api_routes
+        // In no-auth mode, inject a dummy AuthToken so handlers don't fail
+        api_routes.layer(Extension(AuthToken(String::new())))
     };
     let serve_dir = ServeDir::new(&args.frontend_dir)
         .not_found_service(ServeFile::new(format!("{}/index.html", args.frontend_dir)));
@@ -288,10 +294,8 @@ async fn main() -> Result<()> {
 
     let mut app = Router::new().merge(health_routes).merge(api_routes);
 
-    // Add auth routes if enabled
-    if let Some(routes) = auth_routes {
-        app = app.merge(routes);
-    }
+    // Add auth routes (always - either real or stub)
+    app = app.merge(auth_routes);
 
     let app = app
         .fallback_service(get_service(serve_dir))
@@ -325,6 +329,27 @@ async fn health_check() -> impl IntoResponse {
     };
 
     Json(health)
+}
+
+/// Stub /auth/me endpoint for no-auth mode - returns a dummy user
+#[derive(Debug, Serialize)]
+struct NoAuthUserInfo {
+    sub: String,
+    email: Option<String>,
+    name: Option<String>,
+}
+
+async fn auth_me_no_auth() -> impl IntoResponse {
+    Json(NoAuthUserInfo {
+        sub: "anonymous".to_string(),
+        email: Some("anonymous@localhost".to_string()),
+        name: Some("Anonymous (No Auth)".to_string()),
+    })
+}
+
+/// Stub /auth/logout endpoint for no-auth mode
+async fn auth_logout_no_auth() -> impl IntoResponse {
+    StatusCode::OK
 }
 
 #[span_fn]
