@@ -18,15 +18,14 @@ type SortDirection = 'asc' | 'desc'
 
 const DEFAULT_SQL = `SELECT process_id, start_time, last_update_time, exe, computer, username
 FROM processes
-WHERE start_time <= '$end' AND last_update_time >= '$begin'
 ORDER BY $order_by
 LIMIT 100`
 
 const VARIABLES = [
   { name: 'begin', description: 'Time range start (ISO timestamp)' },
   { name: 'end', description: 'Time range end (ISO timestamp)' },
-  { name: 'search', description: 'Search filter value' },
   { name: 'order_by', description: 'Sort column and direction' },
+  { name: 'search', description: 'Search filter value' },
 ]
 
 function ProcessesPageContent() {
@@ -111,8 +110,8 @@ function ProcessesPageContent() {
     () => ({
       begin: apiTimeRange.begin,
       end: apiTimeRange.end,
-      search: searchTerm || '(empty)',
       order_by: `${sortField} ${sortDirection.toUpperCase()}`,
+      search: searchTerm || '(empty)',
     }),
     [apiTimeRange, searchTerm, sortField, sortDirection]
   )

@@ -703,6 +703,14 @@ async fn execute_sql_query(
     Extension(auth_token): Extension<AuthToken>,
     Json(request): Json<SqlQueryRequest>,
 ) -> Result<Json<SqlQueryResponse>, (StatusCode, Json<SqlQueryError>)> {
+    info!(
+        "executing SQL query sql={} params={:?} begin={:?} end={:?}",
+        request.sql,
+        request.params,
+        request.begin,
+        request.end
+    );
+
     // Check for blocked functions
     if let Some(blocked_func) = contains_blocked_function(&request.sql) {
         return Err((
