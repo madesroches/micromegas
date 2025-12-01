@@ -1,6 +1,6 @@
 'use client'
 
-import { Suspense, useState, useMemo, useCallback } from 'react'
+import { Suspense, useState, useMemo, useCallback, useEffect } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import Link from 'next/link'
 import { ChevronUp, ChevronDown } from 'lucide-react'
@@ -18,6 +18,9 @@ type SortDirection = 'asc' | 'desc'
 
 const DEFAULT_SQL = `SELECT process_id, start_time, last_update_time, exe, computer, username
 FROM processes
+WHERE exe LIKE '%$search%'
+   OR computer LIKE '%$search%'
+   OR username LIKE '%$search%'
 ORDER BY $order_by
 LIMIT 100`
 
@@ -29,12 +32,21 @@ const VARIABLES = [
 ]
 
 function ProcessesPageContent() {
+  const [searchInput, setSearchInput] = useState('')
   const [searchTerm, setSearchTerm] = useState('')
   const [sortField, setSortField] = useState<SortField>('start_time')
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc')
   const [queryError, setQueryError] = useState<string | null>(null)
   const [rows, setRows] = useState<SqlRow[]>([])
   const { parsed: timeRange, apiTimeRange } = useTimeRange()
+
+  // Debounce search input
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setSearchTerm(searchInput)
+    }, 300)
+    return () => clearTimeout(timer)
+  }, [searchInput])
 
   const sqlMutation = useMutation({
     mutationFn: executeSqlQuery,
@@ -67,24 +79,13 @@ function ProcessesPageContent() {
     [sqlMutation, sortField, sortDirection, searchTerm, apiTimeRange]
   )
 
-  // Load on mount and when time range changes
-  const timeRangeKey = `${apiTimeRange.begin}-${apiTimeRange.end}`
+  // Load on mount and when time range, sort, or search changes
+  const queryKey = `${apiTimeRange.begin}-${apiTimeRange.end}-${sortField}-${sortDirection}-${searchTerm}`
   useMemo(() => {
     if (!sqlMutation.isPending) {
       loadData()
     }
-  }, [timeRangeKey]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  const filteredRows = useMemo(() => {
-    if (!searchTerm) return rows
-
-    const term = searchTerm.toLowerCase()
-    return rows.filter((row) =>
-      ['exe', 'computer', 'username', 'process_id'].some((field) =>
-        String(row[field] ?? '').toLowerCase().includes(term)
-      )
-    )
-  }, [rows, searchTerm])
+  }, [queryKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSort = (field: SortField) => {
     if (sortField === field) {
@@ -182,9 +183,9 @@ function ProcessesPageContent() {
           <div className="mb-4">
             <input
               type="text"
-              placeholder="Search by exe, process_id, computer, username..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
+              placeholder="Search by exe, computer, username..."
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
               className="w-full max-w-md px-4 py-2.5 bg-[#1a1f26] border border-[#2f3540] rounded-md text-gray-200 text-sm placeholder-gray-500 focus:outline-none focus:border-blue-500 transition-colors"
             />
           </div>
@@ -229,7 +230,7 @@ function ProcessesPageContent() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredRows.map((row) => (
+                  {rows.map((row) => (
                     <tr
                       key={String(row.process_id)}
                       className="border-b border-[#2f3540] hover:bg-[#22272e] transition-colors"
@@ -263,7 +264,7 @@ function ProcessesPageContent() {
                       </td>
                     </tr>
                   ))}
-                  {filteredRows.length === 0 && (
+                  {rows.length === 0 && (
                     <tr>
                       <td colSpan={6} className="px-4 py-8 text-center text-gray-500">
                         {searchTerm ? 'No processes match your search.' : 'No processes available.'}
