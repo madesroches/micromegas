@@ -18,10 +18,13 @@ type SortDirection = 'asc' | 'desc'
 
 const DEFAULT_SQL = `SELECT process_id, start_time, last_update_time, exe, computer, username
 FROM processes
+WHERE start_time <= '$end' AND last_update_time >= '$begin'
 ORDER BY $order_by
 LIMIT 100`
 
 const VARIABLES = [
+  { name: 'begin', description: 'Time range start (ISO timestamp)' },
+  { name: 'end', description: 'Time range end (ISO timestamp)' },
   { name: 'search', description: 'Search filter value' },
   { name: 'order_by', description: 'Sort column and direction' },
 ]
@@ -32,7 +35,6 @@ function ProcessesPageContent() {
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc')
   const [queryError, setQueryError] = useState<string | null>(null)
   const [rows, setRows] = useState<SqlRow[]>([])
-  const [hasLoaded, setHasLoaded] = useState(false)
   const { parsed: timeRange, apiTimeRange } = useTimeRange()
 
   const sqlMutation = useMutation({
@@ -40,7 +42,6 @@ function ProcessesPageContent() {
     onSuccess: (data) => {
       setQueryError(null)
       setRows(toRowObjects(data))
-      setHasLoaded(true)
     },
     onError: (err: Error) => {
       setQueryError(err.message)
@@ -52,6 +53,8 @@ function ProcessesPageContent() {
     (sql: string = DEFAULT_SQL) => {
       setQueryError(null)
       const params: Record<string, string> = {
+        begin: apiTimeRange.begin,
+        end: apiTimeRange.end,
         order_by: `${sortField} ${sortDirection.toUpperCase()}`,
         search: searchTerm,
       }
@@ -65,12 +68,13 @@ function ProcessesPageContent() {
     [sqlMutation, sortField, sortDirection, searchTerm, apiTimeRange]
   )
 
-  // Initial load
+  // Load on mount and when time range changes
+  const timeRangeKey = `${apiTimeRange.begin}-${apiTimeRange.end}`
   useMemo(() => {
-    if (!hasLoaded && !sqlMutation.isPending) {
+    if (!sqlMutation.isPending) {
       loadData()
     }
-  }, [hasLoaded, sqlMutation.isPending, loadData])
+  }, [timeRangeKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const filteredRows = useMemo(() => {
     if (!searchTerm) return rows
@@ -105,10 +109,12 @@ function ProcessesPageContent() {
 
   const currentValues = useMemo(
     () => ({
+      begin: apiTimeRange.begin,
+      end: apiTimeRange.end,
       search: searchTerm || '(empty)',
       order_by: `${sortField} ${sortDirection.toUpperCase()}`,
     }),
-    [searchTerm, sortField, sortDirection]
+    [apiTimeRange, searchTerm, sortField, sortDirection]
   )
 
   const SortHeader = ({
@@ -195,7 +201,7 @@ function ProcessesPageContent() {
           )}
 
           {/* Table */}
-          {sqlMutation.isPending && !hasLoaded ? (
+          {sqlMutation.isPending && rows.length === 0 ? (
             <div className="flex-1 flex items-center justify-center bg-[#1a1f26] border border-[#2f3540] rounded-lg">
               <div className="flex items-center gap-3">
                 <div className="animate-spin rounded-full h-6 w-6 border-2 border-blue-500 border-t-transparent" />
