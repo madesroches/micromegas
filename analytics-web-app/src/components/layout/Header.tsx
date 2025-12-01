@@ -1,0 +1,101 @@
+'use client'
+
+import { useState } from 'react'
+import { useAuth } from '@/lib/auth'
+import { Clock, RefreshCw, ChevronDown, LogOut } from 'lucide-react'
+import { TimeRangeSelector } from './TimeRangeSelector'
+
+interface HeaderProps {
+  onRefresh?: () => void
+}
+
+export function Header({ onRefresh }: HeaderProps) {
+  const { user, logout, status } = useAuth()
+  const [isUserMenuOpen, setIsUserMenuOpen] = useState(false)
+  const [isLoggingOut, setIsLoggingOut] = useState(false)
+
+  const handleLogout = async () => {
+    setIsLoggingOut(true)
+    try {
+      await logout()
+      window.location.href = '/login'
+    } catch (error) {
+      console.error('Logout failed:', error)
+      setIsLoggingOut(false)
+    }
+  }
+
+  const displayName = user?.name || user?.email || user?.sub || ''
+  const initials = displayName
+    .split(' ')
+    .map((n) => n[0])
+    .join('')
+    .toUpperCase()
+    .slice(0, 2) || 'U'
+
+  return (
+    <header className="flex items-center justify-between px-6 py-3 bg-[#1a1f26] border-b border-[#2f3540]">
+      <div className="flex items-center gap-6">
+        <div className="text-lg font-semibold text-blue-500">Micromegas</div>
+      </div>
+
+      <div className="flex items-center gap-4">
+        {/* Time Range Controls */}
+        <div className="flex items-center">
+          <TimeRangeSelector />
+          <button
+            onClick={onRefresh}
+            className="px-2.5 py-1.5 bg-[#2f3540] border-l border-[#3d4450] rounded-r-md text-gray-200 hover:bg-[#3d4450] transition-colors"
+            title="Refresh"
+          >
+            <RefreshCw className="w-4 h-4" />
+          </button>
+        </div>
+
+        {/* User Menu */}
+        {status === 'authenticated' && user && (
+          <div className="relative">
+            <button
+              onClick={() => setIsUserMenuOpen(!isUserMenuOpen)}
+              className="flex items-center gap-2 px-3 py-1.5 rounded-md hover:bg-[#2f3540] transition-colors"
+            >
+              <div className="w-7 h-7 rounded-full bg-blue-500 flex items-center justify-center text-xs font-semibold text-white">
+                {initials}
+              </div>
+              <ChevronDown className="w-3 h-3 text-gray-400" />
+            </button>
+
+            {isUserMenuOpen && (
+              <>
+                <div
+                  className="fixed inset-0 z-10"
+                  onClick={() => setIsUserMenuOpen(false)}
+                />
+                <div className="absolute right-0 mt-2 w-56 bg-[#1a1f26] rounded-md shadow-lg border border-[#2f3540] z-20">
+                  <div className="py-1">
+                    <div className="px-4 py-2 border-b border-[#2f3540]">
+                      <p className="text-sm font-medium text-gray-200 truncate">
+                        {user.name || 'User'}
+                      </p>
+                      {user.email && (
+                        <p className="text-xs text-gray-500 truncate">{user.email}</p>
+                      )}
+                    </div>
+                    <button
+                      onClick={handleLogout}
+                      disabled={isLoggingOut}
+                      className="w-full flex items-center px-4 py-2 text-sm text-gray-300 hover:bg-[#2f3540] disabled:opacity-50"
+                    >
+                      <LogOut className="h-4 w-4 mr-2" />
+                      {isLoggingOut ? 'Signing out...' : 'Sign out'}
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        )}
+      </div>
+    </header>
+  )
+}
