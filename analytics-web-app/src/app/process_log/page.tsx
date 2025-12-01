@@ -135,19 +135,39 @@ function ProcessLogContent() {
     }
   }, [processId, loadData])
 
-  // Reload when filters change
-  const prevFiltersRef = useRef({ logLevel, logLimit })
+  // Reload when filters change (only after initial load)
+  const prevFiltersRef = useRef<{ logLevel: string; logLimit: number } | null>(null)
   useEffect(() => {
-    if (hasLoaded && (prevFiltersRef.current.logLevel !== logLevel || prevFiltersRef.current.logLimit !== logLimit)) {
+    // Skip if we haven't done initial load yet
+    if (!hasLoaded) return
+
+    // Initialize ref on first run after initial load
+    if (prevFiltersRef.current === null) {
+      prevFiltersRef.current = { logLevel, logLimit }
+      return
+    }
+
+    // Check if filters actually changed
+    if (prevFiltersRef.current.logLevel !== logLevel || prevFiltersRef.current.logLimit !== logLimit) {
       prevFiltersRef.current = { logLevel, logLimit }
       loadData()
     }
   }, [logLevel, logLimit, hasLoaded, loadData])
 
-  // Reload when time range changes
-  const prevTimeRangeRef = useRef({ begin: apiTimeRange.begin, end: apiTimeRange.end })
+  // Reload when time range changes (only after initial load)
+  const prevTimeRangeRef = useRef<{ begin: string; end: string } | null>(null)
   useEffect(() => {
-    if (hasLoaded && (prevTimeRangeRef.current.begin !== apiTimeRange.begin || prevTimeRangeRef.current.end !== apiTimeRange.end)) {
+    // Skip if we haven't done initial load yet
+    if (!hasLoaded) return
+
+    // Initialize ref on first run after initial load
+    if (prevTimeRangeRef.current === null) {
+      prevTimeRangeRef.current = { begin: apiTimeRange.begin, end: apiTimeRange.end }
+      return
+    }
+
+    // Check if time range actually changed
+    if (prevTimeRangeRef.current.begin !== apiTimeRange.begin || prevTimeRangeRef.current.end !== apiTimeRange.end) {
       prevTimeRangeRef.current = { begin: apiTimeRange.begin, end: apiTimeRange.end }
       loadData()
     }
@@ -277,7 +297,7 @@ function ProcessLogContent() {
           </div>
 
           <span className="ml-auto text-xs text-gray-500 self-center">
-            {sqlMutation.isPending
+            {sqlMutation.isPending && rows.length === 0
               ? 'Loading...'
               : `Showing ${rows.length} entries`}
           </span>

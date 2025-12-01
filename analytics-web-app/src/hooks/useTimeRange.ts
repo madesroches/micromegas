@@ -27,27 +27,30 @@ export function useTimeRange(): UseTimeRangeReturn {
   const router = useRouter()
   const pathname = usePathname()
 
+  // Extract actual string values from searchParams to avoid reference instability
+  const fromParam = searchParams.get('from') || DEFAULT_TIME_RANGE.from
+  const toParam = searchParams.get('to') || DEFAULT_TIME_RANGE.to
+
   const timeRange: TimeRange = useMemo(() => {
-    const from = searchParams.get('from') || DEFAULT_TIME_RANGE.from
-    const to = searchParams.get('to') || DEFAULT_TIME_RANGE.to
-    return { from, to }
-  }, [searchParams])
+    return { from: fromParam, to: toParam }
+  }, [fromParam, toParam])
 
   const parsed = useMemo(() => {
     try {
-      return parseTimeRange(timeRange.from, timeRange.to)
+      return parseTimeRange(fromParam, toParam)
     } catch {
       return parseTimeRange(DEFAULT_TIME_RANGE.from, DEFAULT_TIME_RANGE.to)
     }
-  }, [timeRange])
+  }, [fromParam, toParam])
 
+  // Memoize API time range - only recalculates when from/to params change
   const apiTimeRange = useMemo(() => {
     try {
-      return getTimeRangeForApi(timeRange.from, timeRange.to)
+      return getTimeRangeForApi(fromParam, toParam)
     } catch {
       return getTimeRangeForApi(DEFAULT_TIME_RANGE.from, DEFAULT_TIME_RANGE.to)
     }
-  }, [timeRange])
+  }, [fromParam, toParam])
 
   const setTimeRange = useCallback(
     (from: string, to: string) => {
