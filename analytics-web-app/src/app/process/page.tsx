@@ -1,6 +1,6 @@
 'use client'
 
-import { Suspense, useState, useEffect, useCallback } from 'react'
+import { Suspense, useState, useEffect, useCallback, useRef } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { useMutation } from '@tanstack/react-query'
 import Link from 'next/link'
@@ -18,10 +18,12 @@ WHERE process_id = '$process_id'
 LIMIT 1`
 
 const STATISTICS_SQL = `SELECT
-  (SELECT COUNT(*) FROM log_entries WHERE process_id = '$process_id') as log_entries,
-  (SELECT COUNT(*) FROM measures WHERE process_id = '$process_id') as measures,
-  (SELECT COUNT(*) FROM thread_spans WHERE process_id = '$process_id') as trace_events,
-  (SELECT COUNT(DISTINCT thread_id) FROM thread_spans WHERE process_id = '$process_id') as thread_count`
+  SUM(CASE WHEN array_has("streams.tags", 'log') THEN nb_objects ELSE 0 END) as log_entries,
+  SUM(CASE WHEN array_has("streams.tags", 'metrics') THEN nb_objects ELSE 0 END) as measures,
+  SUM(CASE WHEN array_has("streams.tags", 'cpu') THEN nb_objects ELSE 0 END) as trace_events,
+  COUNT(DISTINCT CASE WHEN array_has("streams.tags", 'cpu') THEN stream_id ELSE NULL END) as thread_count
+FROM blocks
+WHERE process_id = '$process_id'`
 
 function ProcessPageContent() {
   const searchParams = useSearchParams()
@@ -56,28 +58,37 @@ function ProcessPageContent() {
     },
   })
 
+  // Use refs to avoid including mutations in callback deps
+  const processMutateRef = useRef(processMutation.mutate)
+  processMutateRef.current = processMutation.mutate
+  const statsMutateRef = useRef(statsMutation.mutate)
+  statsMutateRef.current = statsMutation.mutate
+
   const loadData = useCallback(() => {
     if (!processId) return
     setIsLoading(true)
-    processMutation.mutate({
+    processMutateRef.current({
       sql: PROCESS_SQL,
       params: { process_id: processId },
       begin: apiTimeRange.begin,
       end: apiTimeRange.end,
     })
-    statsMutation.mutate({
+    statsMutateRef.current({
       sql: STATISTICS_SQL,
       params: { process_id: processId },
       begin: apiTimeRange.begin,
       end: apiTimeRange.end,
     })
-  }, [processId, apiTimeRange, processMutation, statsMutation])
+  }, [processId, apiTimeRange])
 
+  // Load data once on mount when we have a processId
+  const hasLoadedRef = useRef(false)
   useEffect(() => {
-    if (processId && !process) {
+    if (processId && !hasLoadedRef.current) {
+      hasLoadedRef.current = true
       loadData()
     }
-  }, [processId, process, loadData])
+  }, [processId, loadData])
 
   const formatDuration = (startTime: unknown, endTime: unknown): string => {
     if (!startTime || !endTime) return 'N/A'

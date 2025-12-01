@@ -1,6 +1,6 @@
 'use client'
 
-import { Suspense, useState, useMemo, useCallback, useEffect } from 'react'
+import { Suspense, useState, useMemo, useCallback, useEffect, useRef } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import Link from 'next/link'
 import { ChevronUp, ChevronDown } from 'lucide-react'
@@ -59,7 +59,10 @@ function ProcessesPageContent() {
     },
   })
 
-  // Load data on first render
+  // Load data - using ref to avoid including mutation in deps
+  const mutateRef = useRef(sqlMutation.mutate)
+  mutateRef.current = sqlMutation.mutate
+
   const loadData = useCallback(
     (sql: string = DEFAULT_SQL) => {
       setQueryError(null)
@@ -69,23 +72,25 @@ function ProcessesPageContent() {
         order_by: `${sortField} ${sortDirection.toUpperCase()}`,
         search: searchTerm,
       }
-      sqlMutation.mutate({
+      mutateRef.current({
         sql,
         params,
         begin: apiTimeRange.begin,
         end: apiTimeRange.end,
       })
     },
-    [sqlMutation, sortField, sortDirection, searchTerm, apiTimeRange]
+    [sortField, sortDirection, searchTerm, apiTimeRange]
   )
 
   // Load on mount and when time range, sort, or search changes
   const queryKey = `${apiTimeRange.begin}-${apiTimeRange.end}-${sortField}-${sortDirection}-${searchTerm}`
-  useMemo(() => {
-    if (!sqlMutation.isPending) {
+  const prevQueryKeyRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (prevQueryKeyRef.current !== queryKey) {
+      prevQueryKeyRef.current = queryKey
       loadData()
     }
-  }, [queryKey]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [queryKey, loadData])
 
   const handleSort = (field: SortField) => {
     if (sortField === field) {

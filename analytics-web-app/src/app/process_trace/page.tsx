@@ -1,6 +1,6 @@
 'use client'
 
-import { Suspense, useState, useEffect } from 'react'
+import { Suspense, useState, useEffect, useRef } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { useMutation } from '@tanstack/react-query'
 import Link from 'next/link'
@@ -35,16 +35,22 @@ function ProcessTraceContent() {
     },
   })
 
+  // Use ref to avoid including mutation in deps
+  const processMutateRef = useRef(processMutation.mutate)
+  processMutateRef.current = processMutation.mutate
+
+  const hasLoadedRef = useRef(false)
   useEffect(() => {
-    if (processId && !processExe) {
-      processMutation.mutate({
+    if (processId && !hasLoadedRef.current) {
+      hasLoadedRef.current = true
+      processMutateRef.current({
         sql: PROCESS_SQL,
         params: { process_id: processId },
         begin: apiTimeRange.begin,
         end: apiTimeRange.end,
       })
     }
-  }, [processId, processExe, processMutation, apiTimeRange])
+  }, [processId, apiTimeRange])
 
   const handleGenerateTrace = async () => {
     if (!processId) return

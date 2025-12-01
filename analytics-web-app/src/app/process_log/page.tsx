@@ -1,6 +1,6 @@
 'use client'
 
-import { Suspense, useState, useCallback, useMemo, useEffect } from 'react'
+import { Suspense, useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { useMutation } from '@tanstack/react-query'
 import Link from 'next/link'
@@ -87,6 +87,12 @@ function ProcessLogContent() {
     },
   })
 
+  // Use refs to avoid including mutations in callback deps
+  const sqlMutateRef = useRef(sqlMutation.mutate)
+  sqlMutateRef.current = sqlMutation.mutate
+  const processMutateRef = useRef(processMutation.mutate)
+  processMutateRef.current = processMutation.mutate
+
   const loadData = useCallback(
     (sql: string = DEFAULT_SQL) => {
       if (!processId) return
@@ -96,41 +102,47 @@ function ProcessLogContent() {
         max_level: String(LOG_LEVELS[logLevel] || 6),
         limit: String(logLimit),
       }
-      sqlMutation.mutate({
+      sqlMutateRef.current({
         sql,
         params,
         begin: apiTimeRange.begin,
         end: apiTimeRange.end,
       })
     },
-    [sqlMutation, processId, logLevel, logLimit, apiTimeRange]
+    [processId, logLevel, logLimit, apiTimeRange]
   )
 
-  // Load process info
+  // Load process info once
+  const hasLoadedProcessRef = useRef(false)
   useEffect(() => {
-    if (processId && !processExe) {
-      processMutation.mutate({
+    if (processId && !hasLoadedProcessRef.current) {
+      hasLoadedProcessRef.current = true
+      processMutateRef.current({
         sql: PROCESS_SQL,
         params: { process_id: processId },
         begin: apiTimeRange.begin,
         end: apiTimeRange.end,
       })
     }
-  }, [processId, processExe, processMutation, apiTimeRange])
+  }, [processId, apiTimeRange])
 
   // Initial load
+  const hasInitialLoadRef = useRef(false)
   useEffect(() => {
-    if (processId && !hasLoaded && !sqlMutation.isPending) {
+    if (processId && !hasInitialLoadRef.current) {
+      hasInitialLoadRef.current = true
       loadData()
     }
-  }, [processId, hasLoaded, sqlMutation.isPending, loadData])
+  }, [processId, loadData])
 
   // Reload when filters change
+  const prevFiltersRef = useRef({ logLevel, logLimit })
   useEffect(() => {
-    if (hasLoaded) {
+    if (hasLoaded && (prevFiltersRef.current.logLevel !== logLevel || prevFiltersRef.current.logLimit !== logLimit)) {
+      prevFiltersRef.current = { logLevel, logLimit }
       loadData()
     }
-  }, [logLevel, logLimit]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [logLevel, logLimit, hasLoaded, loadData])
 
   const handleRunQuery = useCallback(
     (sql: string) => {
