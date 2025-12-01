@@ -1,6 +1,6 @@
 'use client'
 
-import { Suspense, useState } from 'react'
+import { Suspense, useState, useCallback, useMemo } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { useQuery } from '@tanstack/react-query'
 import Link from 'next/link'
@@ -8,14 +8,41 @@ import { ArrowLeft, AlertCircle } from 'lucide-react'
 import { PageLayout } from '@/components/layout'
 import { AuthGuard } from '@/components/AuthGuard'
 import { CopyableProcessId } from '@/components/CopyableProcessId'
+import { QueryEditor } from '@/components/QueryEditor'
 import { fetchProcesses, fetchProcessLogEntries } from '@/lib/api'
+import { useTimeRange } from '@/hooks/useTimeRange'
+
+const DEFAULT_SQL = `SELECT time, level, target, msg
+FROM log_entries
+WHERE process_id = '$process_id'
+  AND level <= $max_level
+ORDER BY time DESC
+LIMIT $limit`
+
+const VARIABLES = [
+  { name: 'process_id', description: 'Current process ID' },
+  { name: 'max_level', description: 'Max log level filter (1-6)' },
+  { name: 'limit', description: 'Row limit' },
+]
+
+const LOG_LEVELS: Record<string, number> = {
+  all: 6,
+  trace: 6,
+  debug: 5,
+  info: 4,
+  warn: 3,
+  error: 2,
+  fatal: 1,
+}
 
 function ProcessLogContent() {
   const searchParams = useSearchParams()
   const processId = searchParams.get('process_id')
+  const { parsed: timeRange } = useTimeRange()
 
   const [logLevel, setLogLevel] = useState<string>('all')
   const [logLimit, setLogLimit] = useState<number>(100)
+  const [queryError, setQueryError] = useState<string | null>(null)
 
   const { data: processes = [] } = useQuery({
     queryKey: ['processes'],
@@ -34,6 +61,27 @@ function ProcessLogContent() {
     enabled: !!processId,
     staleTime: 0,
   })
+
+  const handleRunQuery = useCallback(
+    (sql: string) => {
+      setQueryError(null)
+      refetchLogs()
+    },
+    [refetchLogs]
+  )
+
+  const handleResetQuery = useCallback(() => {
+    setQueryError(null)
+  }, [])
+
+  const currentValues = useMemo(
+    () => ({
+      process_id: processId || '',
+      max_level: String(LOG_LEVELS[logLevel] || 6),
+      limit: String(logLimit),
+    }),
+    [processId, logLevel, logLimit]
+  )
 
   const getLevelColor = (level: string) => {
     switch (level) {
@@ -58,6 +106,19 @@ function ProcessLogContent() {
     return timestamp
   }
 
+  const sqlPanel = processId ? (
+    <QueryEditor
+      defaultSql={DEFAULT_SQL}
+      variables={VARIABLES}
+      currentValues={currentValues}
+      timeRangeLabel={timeRange.label}
+      onRun={handleRunQuery}
+      onReset={handleResetQuery}
+      isLoading={logsLoading}
+      error={queryError}
+    />
+  ) : undefined
+
   if (!processId) {
     return (
       <PageLayout>
@@ -75,7 +136,7 @@ function ProcessLogContent() {
   }
 
   return (
-    <PageLayout onRefresh={() => refetchLogs()}>
+    <PageLayout onRefresh={() => refetchLogs()} rightPanel={sqlPanel}>
       <div className="p-6 flex flex-col h-full">
         {/* Back Link */}
         <Link

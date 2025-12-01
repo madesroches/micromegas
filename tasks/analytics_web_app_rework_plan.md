@@ -1,5 +1,41 @@
 # Analytics Web App Rework Plan
 
+## Implementation Progress
+
+### Milestone 1: Foundation - Layout & Time Range - DONE
+- [x] `Header` component with logo, time range selector, user menu
+- [x] `Sidebar` component with icon navigation
+- [x] `PageLayout` component combining header, sidebar, content area
+- [x] `TimeRangeSelector` component with dropdown (relative ranges)
+- [x] `useTimeRange` hook for URL-based time range state
+- [x] Dark theme CSS variables in `globals.css`
+
+### Milestone 2: Process Explorer Page - DONE
+- [x] `/processes` route with sortable table
+- [x] Search input with client-side filtering
+- [x] Column sorting with visual indicators
+- [x] Root `/` redirects to `/processes`
+
+### Milestone 3: Process Detail Pages - DONE
+- [x] `/process?id=...` page with info cards grid
+- [x] `/process_log?process_id=...` page with log viewer
+- [x] `/process_trace?process_id=...` page with trace form
+- [x] Deleted old `/process/[id]` dynamic route
+
+### Milestone 4: SQL Panel & Backend - DONE
+- [x] `POST /analyticsweb/query` endpoint in backend
+- [x] Macro substitution logic (`$param` -> value)
+- [x] Destructive function blocking (`retire_partitions`, etc.)
+- [x] `QueryEditor` component with collapsible panel
+- [x] SQL panel on `/processes` page
+- [x] SQL panel on `/process_log` page
+
+### Milestone 5: Polish & Integration - TODO
+- [ ] Wire up Run button to actually execute custom SQL queries
+- [ ] Add responsive design adjustments
+- [ ] Add better error handling UX (see mockup_errors.html)
+- [ ] Test all URL parameter combinations for shareability
+
 ## Mockups
 
 Visual mockups of the new UI are available in the [analytics_web_app_rework/](analytics_web_app_rework/) folder:

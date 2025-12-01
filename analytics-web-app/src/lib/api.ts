@@ -1,4 +1,4 @@
-import { ProcessInfo, GenerateTraceRequest, HealthCheck, ProgressUpdate, BinaryStartMarker, LogEntry, ProcessStatistics } from '@/types'
+import { ProcessInfo, GenerateTraceRequest, HealthCheck, ProgressUpdate, BinaryStartMarker, LogEntry, ProcessStatistics, SqlQueryRequest, SqlQueryResponse, SqlQueryError } from '@/types'
 
 const API_BASE = process.env.NODE_ENV === 'development' ? 'http://localhost:8000/analyticsweb' : '/analyticsweb'
 
@@ -179,4 +179,32 @@ export async function fetchProcessStatistics(processId: string): Promise<Process
     credentials: 'include',
   })
   return handleResponse<ProcessStatistics>(response)
+}
+
+export async function executeSqlQuery(request: SqlQueryRequest): Promise<SqlQueryResponse> {
+  const response = await fetch(`${API_BASE}/query`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    credentials: 'include',
+    body: JSON.stringify(request),
+  })
+
+  if (!response.ok) {
+    if (response.status === 401) {
+      throw new AuthenticationError()
+    }
+    if (response.status === 403) {
+      const errorData = await response.json() as SqlQueryError
+      throw new Error(errorData.details || errorData.error)
+    }
+    if (response.status === 400) {
+      const errorData = await response.json() as SqlQueryError
+      throw new Error(errorData.details || errorData.error)
+    }
+    throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+  }
+
+  return response.json()
 }

@@ -50,3 +50,20 @@ export interface LogEntry {
   target: string;
   msg: string;
 }
+
+export interface SqlQueryRequest {
+  sql: string;
+  params?: Record<string, string>;
+  begin?: string;
+  end?: string;
+}
+
+export interface SqlQueryResponse {
+  columns: string[];
+  rows: (string | number | boolean | null)[][];
+}
+
+export interface SqlQueryError {
+  error: string;
+  details?: string;
+}

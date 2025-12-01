@@ -1,22 +1,35 @@
 'use client'
 
-import { useState, useMemo } from 'react'
+import { Suspense, useState, useMemo, useCallback } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import Link from 'next/link'
 import { AlertCircle, ChevronUp, ChevronDown } from 'lucide-react'
 import { PageLayout } from '@/components/layout'
 import { AuthGuard } from '@/components/AuthGuard'
 import { CopyableProcessId } from '@/components/CopyableProcessId'
+import { QueryEditor } from '@/components/QueryEditor'
 import { fetchProcesses } from '@/lib/api'
-import { ProcessInfo } from '@/types'
+import { useTimeRange } from '@/hooks/useTimeRange'
 
 type SortField = 'exe' | 'start_time' | 'last_update_time' | 'username' | 'computer'
 type SortDirection = 'asc' | 'desc'
 
-export default function ProcessesPage() {
+const DEFAULT_SQL = `SELECT process_id, start_time, last_update_time, exe, computer, username
+FROM processes
+ORDER BY $order_by
+LIMIT 100`
+
+const VARIABLES = [
+  { name: 'search', description: 'Search filter value' },
+  { name: 'order_by', description: 'Sort column and direction' },
+]
+
+function ProcessesPageContent() {
   const [searchTerm, setSearchTerm] = useState('')
   const [sortField, setSortField] = useState<SortField>('start_time')
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc')
+  const [queryError, setQueryError] = useState<string | null>(null)
+  const { parsed: timeRange } = useTimeRange()
 
   const {
     data: processes = [],
@@ -61,6 +74,25 @@ export default function ProcessesPage() {
     }
   }
 
+  const handleRunQuery = useCallback((sql: string) => {
+    // For now, just refetch using the default API
+    // In future, this would execute the custom SQL
+    setQueryError(null)
+    refetch()
+  }, [refetch])
+
+  const handleResetQuery = useCallback(() => {
+    setQueryError(null)
+  }, [])
+
+  const currentValues = useMemo(
+    () => ({
+      search: searchTerm || '(empty)',
+      order_by: `${sortField} ${sortDirection.toUpperCase()}`,
+    }),
+    [searchTerm, sortField, sortDirection]
+  )
+
   const SortHeader = ({ field, children }: { field: SortField; children: React.ReactNode }) => (
     <th
       onClick={() => handleSort(field)}
@@ -88,9 +120,22 @@ export default function ProcessesPage() {
     return date.toISOString().replace('T', ' ').slice(0, 23) + 'Z'
   }
 
+  const sqlPanel = (
+    <QueryEditor
+      defaultSql={DEFAULT_SQL}
+      variables={VARIABLES}
+      currentValues={currentValues}
+      timeRangeLabel={timeRange.label}
+      onRun={handleRunQuery}
+      onReset={handleResetQuery}
+      isLoading={isLoading}
+      error={queryError}
+    />
+  )
+
   return (
     <AuthGuard>
-      <PageLayout onRefresh={() => refetch()}>
+      <PageLayout onRefresh={() => refetch()} rightPanel={sqlPanel}>
         <div className="p-6 flex flex-col h-full">
           {/* Page Header */}
           <div className="mb-5">
@@ -183,5 +228,25 @@ export default function ProcessesPage() {
         </div>
       </PageLayout>
     </AuthGuard>
+  )
+}
+
+export default function ProcessesPage() {
+  return (
+    <Suspense
+      fallback={
+        <AuthGuard>
+          <PageLayout>
+            <div className="p-6">
+              <div className="flex items-center justify-center h-64">
+                <div className="animate-spin rounded-full h-8 w-8 border-2 border-blue-500 border-t-transparent" />
+              </div>
+            </div>
+          </PageLayout>
+        </AuthGuard>
+      }
+    >
+      <ProcessesPageContent />
+    </Suspense>
   )
 }

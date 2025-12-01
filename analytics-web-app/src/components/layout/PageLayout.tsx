@@ -7,21 +7,23 @@ import { Sidebar } from './Sidebar'
 interface PageLayoutProps {
   children: React.ReactNode
   onRefresh?: () => void
+  rightPanel?: React.ReactNode
 }
 
-function PageLayoutContent({ children, onRefresh }: PageLayoutProps) {
+function PageLayoutContent({ children, onRefresh, rightPanel }: PageLayoutProps) {
   return (
     <div className="min-h-screen bg-[#0f1419] text-gray-200">
       <Header onRefresh={onRefresh} />
       <div className="flex h-[calc(100vh-57px)]">
         <Sidebar />
         <main className="flex-1 overflow-auto">{children}</main>
+        {rightPanel}
       </div>
     </div>
   )
 }
 
-export function PageLayout({ children, onRefresh }: PageLayoutProps) {
+export function PageLayout({ children, onRefresh, rightPanel }: PageLayoutProps) {
   return (
     <Suspense
       fallback={
@@ -30,7 +32,9 @@ export function PageLayout({ children, onRefresh }: PageLayoutProps) {
         </div>
       }
     >
-      <PageLayoutContent onRefresh={onRefresh}>{children}</PageLayoutContent>
+      <PageLayoutContent onRefresh={onRefresh} rightPanel={rightPanel}>
+        {children}
+      </PageLayoutContent>
     </Suspense>
   )
 }
