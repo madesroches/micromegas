@@ -87,7 +87,7 @@ function ProcessTraceContent() {
     return (
       <PageLayout>
         <div className="p-6">
-          <div className="flex flex-col items-center justify-center h-64 bg-[#1a1f26] border border-[#2f3540] rounded-lg">
+          <div className="flex flex-col items-center justify-center h-64 bg-app-panel border border-theme-border rounded-lg">
             <AlertCircle className="w-10 h-10 text-red-400 mb-3" />
             <p className="text-gray-400">No process ID provided</p>
             <Link href="/processes" className="text-blue-400 hover:underline mt-2">
@@ -108,15 +108,15 @@ function ProcessTraceContent() {
         </div>
 
         {/* Form */}
-        <div className="bg-[#1a1f26] border border-[#2f3540] rounded-lg p-6 mb-6">
-          <h2 className="text-base font-semibold text-gray-200 mb-5 pb-3 border-b border-[#2f3540]">
+        <div className="bg-app-panel border border-theme-border rounded-lg p-6 mb-6">
+          <h2 className="text-base font-semibold text-gray-200 mb-5 pb-3 border-b border-theme-border">
             Trace Configuration
           </h2>
 
           {/* Process */}
           <div className="mb-5">
             <label className="block text-sm font-medium text-gray-200 mb-2">Process</label>
-            <div className="bg-[#0f1419] border border-[#2f3540] rounded-md p-3">
+            <div className="bg-app-bg border border-theme-border rounded-md p-3">
               <span className="text-gray-200 font-medium">{processExe || 'Loading...'}</span>
               <span className="text-gray-500 font-mono text-sm ml-2">
                 <CopyableProcessId processId={processId} className="text-sm" />
@@ -134,7 +134,7 @@ function ProcessTraceContent() {
                     type="checkbox"
                     checked={includeThreadSpans}
                     onChange={(e) => setIncludeThreadSpans(e.target.checked)}
-                    className="w-4 h-4 rounded border-[#2f3540] bg-[#0f1419] text-blue-500 focus:ring-blue-500 focus:ring-offset-0"
+                    className="w-4 h-4 rounded border-theme-border bg-app-bg text-blue-500 focus:ring-blue-500 focus:ring-offset-0"
                   />
                   <span className="text-sm text-gray-200">Thread Events</span>
                 </label>
@@ -148,7 +148,7 @@ function ProcessTraceContent() {
                     type="checkbox"
                     checked={includeAsyncSpans}
                     onChange={(e) => setIncludeAsyncSpans(e.target.checked)}
-                    className="w-4 h-4 rounded border-[#2f3540] bg-[#0f1419] text-blue-500 focus:ring-blue-500 focus:ring-offset-0"
+                    className="w-4 h-4 rounded border-theme-border bg-app-bg text-blue-500 focus:ring-blue-500 focus:ring-offset-0"
                   />
                   <span className="text-sm text-gray-200">Async Span Events</span>
                 </label>
@@ -183,7 +183,7 @@ function ProcessTraceContent() {
             </button>
             <Link
               href={`/process?id=${processId}`}
-              className="px-5 py-2.5 bg-[#2f3540] text-gray-200 rounded-md hover:bg-[#3d4450] transition-colors text-sm font-medium"
+              className="px-5 py-2.5 bg-theme-border text-gray-200 rounded-md hover:bg-theme-border-hover transition-colors text-sm font-medium"
             >
               Cancel
             </Link>
@@ -192,9 +192,9 @@ function ProcessTraceContent() {
 
         {/* Progress */}
         {isGenerating && (
-          <div className="bg-[#1a1f26] border border-[#2f3540] rounded-lg p-6">
+          <div className="bg-app-panel border border-theme-border rounded-lg p-6">
             <div className="flex items-center gap-4">
-              <div className="w-6 h-6 border-3 border-[#2f3540] border-t-blue-500 rounded-full animate-spin" />
+              <div className="w-6 h-6 border-3 border-theme-border border-t-blue-500 rounded-full animate-spin" />
               <span className="text-base font-semibold text-gray-200">Generating Trace...</span>
             </div>
             {progress && (

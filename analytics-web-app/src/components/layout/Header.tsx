@@ -35,7 +35,7 @@ export function Header({ onRefresh }: HeaderProps) {
     .slice(0, 2) || 'U'
 
   return (
-    <header className="flex items-center justify-between px-3 sm:px-6 py-3 bg-[#1a1f26] border-b border-[#2f3540]">
+    <header className="flex items-center justify-between px-3 sm:px-6 py-3 bg-app-header border-b border-theme-border">
       <div className="flex items-center gap-3 sm:gap-6">
         <Link href="/" className="text-base sm:text-lg font-semibold text-blue-500 hover:text-blue-400 transition-colors">
           Micromegas
@@ -48,7 +48,7 @@ export function Header({ onRefresh }: HeaderProps) {
           <TimeRangeSelector />
           <button
             onClick={onRefresh}
-            className="px-2 sm:px-2.5 py-1.5 bg-[#2f3540] border-l border-[#3d4450] rounded-r-md text-gray-200 hover:bg-[#3d4450] transition-colors"
+            className="px-2 sm:px-2.5 py-1.5 bg-theme-border border-l border-theme-border-hover rounded-r-md text-gray-200 hover:bg-theme-border-hover transition-colors"
             title="Refresh"
           >
             <RefreshCw className="w-4 h-4" />
@@ -60,7 +60,7 @@ export function Header({ onRefresh }: HeaderProps) {
           <div className="relative">
             <button
               onClick={() => setIsUserMenuOpen(!isUserMenuOpen)}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-md hover:bg-[#2f3540] transition-colors"
+              className="flex items-center gap-2 px-3 py-1.5 rounded-md hover:bg-theme-border transition-colors"
             >
               <div className="w-7 h-7 rounded-full bg-blue-500 flex items-center justify-center text-xs font-semibold text-white">
                 {initials}
@@ -74,9 +74,9 @@ export function Header({ onRefresh }: HeaderProps) {
                   className="fixed inset-0 z-10"
                   onClick={() => setIsUserMenuOpen(false)}
                 />
-                <div className="absolute right-0 mt-2 w-56 bg-[#1a1f26] rounded-md shadow-lg border border-[#2f3540] z-20">
+                <div className="absolute right-0 mt-2 w-56 bg-app-panel rounded-md shadow-lg border border-theme-border z-20">
                   <div className="py-1">
-                    <div className="px-4 py-2 border-b border-[#2f3540]">
+                    <div className="px-4 py-2 border-b border-theme-border">
                       <p className="text-sm font-medium text-gray-200 truncate">
                         {user.name || 'User'}
                       </p>
@@ -87,7 +87,7 @@ export function Header({ onRefresh }: HeaderProps) {
                     <button
                       onClick={handleLogout}
                       disabled={isLoggingOut}
-                      className="w-full flex items-center px-4 py-2 text-sm text-gray-300 hover:bg-[#2f3540] disabled:opacity-50"
+                      className="w-full flex items-center px-4 py-2 text-sm text-gray-300 hover:bg-theme-border disabled:opacity-50"
                     >
                       <LogOut className="h-4 w-4 mr-2" />
                       {isLoggingOut ? 'Signing out...' : 'Sign out'}

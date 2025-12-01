@@ -10,6 +10,7 @@ import { AuthGuard } from '@/components/AuthGuard'
 import { CopyableProcessId } from '@/components/CopyableProcessId'
 import { executeSqlQuery, toRowObjects } from '@/lib/api'
 import { useTimeRange } from '@/hooks/useTimeRange'
+import { formatDuration } from '@/lib/time-range'
 import { SqlRow } from '@/types'
 
 const PROCESS_SQL = `SELECT process_id, exe, start_time, last_update_time, computer, username, cpu_brand, distro
@@ -90,36 +91,11 @@ function ProcessPageContent() {
     }
   }, [processId, loadData])
 
-  const formatDuration = (startTime: unknown, endTime: unknown): string => {
-    if (!startTime || !endTime) return 'N/A'
-    const start = new Date(String(startTime))
-    const end = new Date(String(endTime))
-    const diffMs = end.getTime() - start.getTime()
-
-    if (diffMs < 0) return 'Invalid'
-
-    const totalSeconds = Math.floor(diffMs / 1000)
-    const seconds = totalSeconds % 60
-    const minutes = Math.floor(totalSeconds / 60) % 60
-    const hours = Math.floor(totalSeconds / 3600) % 24
-    const days = Math.floor(totalSeconds / 86400)
-
-    if (days > 0) {
-      return `${days}d ${hours}h ${minutes}m`
-    } else if (hours > 0) {
-      return `${hours}h ${minutes}m ${seconds}s`
-    } else if (minutes > 0) {
-      return `${minutes}m ${seconds}s`
-    } else {
-      return `${seconds}s`
-    }
-  }
-
   if (!processId) {
     return (
       <PageLayout>
         <div className="p-6">
-          <div className="flex flex-col items-center justify-center h-64 bg-[#1a1f26] border border-[#2f3540] rounded-lg">
+          <div className="flex flex-col items-center justify-center h-64 bg-app-panel border border-theme-border rounded-lg">
             <AlertCircle className="w-10 h-10 text-red-400 mb-3" />
             <p className="text-gray-400">No process ID provided</p>
             <Link href="/processes" className="text-blue-400 hover:underline mt-2">
@@ -135,7 +111,7 @@ function ProcessPageContent() {
     return (
       <PageLayout>
         <div className="p-6">
-          <div className="flex items-center justify-center h-64 bg-[#1a1f26] border border-[#2f3540] rounded-lg">
+          <div className="flex items-center justify-center h-64 bg-app-panel border border-theme-border rounded-lg">
             <div className="flex items-center gap-3">
               <div className="animate-spin rounded-full h-6 w-6 border-2 border-blue-500 border-t-transparent" />
               <span className="text-gray-400">Loading process...</span>
@@ -150,7 +126,7 @@ function ProcessPageContent() {
     return (
       <PageLayout>
         <div className="p-6">
-          <div className="flex flex-col items-center justify-center h-64 bg-[#1a1f26] border border-[#2f3540] rounded-lg">
+          <div className="flex flex-col items-center justify-center h-64 bg-app-panel border border-theme-border rounded-lg">
             <AlertCircle className="w-10 h-10 text-red-400 mb-3" />
             <p className="text-gray-400">Process not found</p>
             <Link href="/processes" className="text-blue-400 hover:underline mt-2">
@@ -185,7 +161,7 @@ function ProcessPageContent() {
           <div className="flex gap-3">
             <Link
               href={`/process_log?process_id=${processId}`}
-              className="flex items-center gap-2 px-4 py-2 bg-[#2f3540] text-gray-200 rounded-md hover:bg-[#3d4450] transition-colors text-sm"
+              className="flex items-center gap-2 px-4 py-2 bg-theme-border text-gray-200 rounded-md hover:bg-theme-border-hover transition-colors text-sm"
             >
               <FileText className="w-4 h-4" />
               View Log
@@ -203,7 +179,7 @@ function ProcessPageContent() {
         {/* Info Cards Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5 mb-8">
           {/* Process Information */}
-          <div className="bg-[#1a1f26] border border-[#2f3540] rounded-lg p-5">
+          <div className="bg-app-panel border border-theme-border rounded-lg p-5">
             <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-4">
               Process Information
             </h3>
@@ -214,7 +190,7 @@ function ProcessPageContent() {
           </div>
 
           {/* Environment */}
-          <div className="bg-[#1a1f26] border border-[#2f3540] rounded-lg p-5">
+          <div className="bg-app-panel border border-theme-border rounded-lg p-5">
             <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-4">
               Environment
             </h3>
@@ -227,7 +203,7 @@ function ProcessPageContent() {
           </div>
 
           {/* Timing */}
-          <div className="bg-[#1a1f26] border border-[#2f3540] rounded-lg p-5">
+          <div className="bg-app-panel border border-theme-border rounded-lg p-5">
             <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-4">
               Timing
             </h3>
@@ -242,7 +218,7 @@ function ProcessPageContent() {
           </div>
 
           {/* Statistics */}
-          <div className="bg-[#1a1f26] border border-[#2f3540] rounded-lg p-5">
+          <div className="bg-app-panel border border-theme-border rounded-lg p-5">
             <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-4">
               Statistics
             </h3>
@@ -281,7 +257,7 @@ function InfoRow({
   mono?: boolean
 }) {
   return (
-    <div className="flex justify-between py-2 border-b border-[#2f3540] last:border-b-0">
+    <div className="flex justify-between py-2 border-b border-theme-border last:border-b-0">
       <span className="text-gray-500 text-sm">{label}</span>
       <span
         className={`text-sm text-right max-w-[60%] break-all ${

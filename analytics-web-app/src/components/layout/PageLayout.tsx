@@ -12,7 +12,7 @@ interface PageLayoutProps {
 
 function PageLayoutContent({ children, onRefresh, rightPanel }: PageLayoutProps) {
   return (
-    <div className="min-h-screen bg-[#0f1419] text-gray-200">
+    <div className="min-h-screen bg-app-bg text-gray-200">
       <Header onRefresh={onRefresh} />
       <div className="flex h-[calc(100vh-57px)]">
         <Sidebar />
@@ -27,7 +27,7 @@ export function PageLayout({ children, onRefresh, rightPanel }: PageLayoutProps)
   return (
     <Suspense
       fallback={
-        <div className="min-h-screen bg-[#0f1419] flex items-center justify-center">
+        <div className="min-h-screen bg-app-bg flex items-center justify-center">
           <div className="animate-spin rounded-full h-8 w-8 border-2 border-blue-500 border-t-transparent" />
         </div>
       }

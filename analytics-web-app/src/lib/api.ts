@@ -1,4 +1,4 @@
-import { GenerateTraceRequest, HealthCheck, ProgressUpdate, BinaryStartMarker, SqlQueryRequest, SqlQueryResponse, SqlQueryError, SqlRow } from '@/types'
+import { GenerateTraceRequest, ProgressUpdate, BinaryStartMarker, SqlQueryRequest, SqlQueryResponse, SqlQueryError, SqlRow } from '@/types'
 
 const API_BASE = process.env.NODE_ENV === 'development' ? 'http://localhost:8000/analyticsweb' : '/analyticsweb'
 
@@ -51,13 +51,6 @@ async function handleResponse<T>(response: Response): Promise<T> {
     throw new Error(`HTTP ${response.status}: ${response.statusText}`)
   }
   return response.json()
-}
-
-export async function fetchHealthCheck(): Promise<HealthCheck> {
-  const response = await fetch(`${API_BASE}/health`, {
-    credentials: 'include',
-  })
-  return handleResponse<HealthCheck>(response)
 }
 
 export async function generateTrace(

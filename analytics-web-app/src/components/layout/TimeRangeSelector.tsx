@@ -18,7 +18,7 @@ export function TimeRangeSelector() {
     <div className="relative">
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="flex items-center gap-2 px-3 py-1.5 bg-[#2f3540] rounded-l-md text-sm text-gray-200 hover:bg-[#3d4450] transition-colors"
+        className="flex items-center gap-2 px-3 py-1.5 bg-theme-border rounded-l-md text-sm text-gray-200 hover:bg-theme-border-hover transition-colors"
       >
         <Clock className="w-4 h-4 text-gray-400" />
         <span>{parsed.label}</span>
@@ -28,7 +28,7 @@ export function TimeRangeSelector() {
       {isOpen && (
         <>
           <div className="fixed inset-0 z-10" onClick={() => setIsOpen(false)} />
-          <div className="absolute right-0 mt-2 w-64 bg-[#1a1f26] rounded-md shadow-lg border border-[#2f3540] z-20">
+          <div className="absolute right-0 mt-2 w-64 bg-app-panel rounded-md shadow-lg border border-theme-border z-20">
             <div className="py-2">
               <div className="px-3 py-1.5 text-xs font-semibold text-gray-500 uppercase tracking-wide">
                 Relative time ranges
@@ -37,9 +37,9 @@ export function TimeRangeSelector() {
                 <button
                   key={preset.value}
                   onClick={() => handlePresetClick(preset.value)}
-                  className={`w-full text-left px-3 py-2 text-sm hover:bg-[#2f3540] transition-colors ${
+                  className={`w-full text-left px-3 py-2 text-sm hover:bg-theme-border transition-colors ${
                     timeRange.from === preset.value && timeRange.to === 'now'
-                      ? 'text-blue-400 bg-[#22272e]'
+                      ? 'text-blue-400 bg-app-card'
                       : 'text-gray-300'
                   }`}
                 >

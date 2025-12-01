@@ -20,12 +20,6 @@ export interface BinaryStartMarker {
   type: 'binary_start';
 }
 
-export interface HealthCheck {
-  status: string;
-  timestamp: string;
-  flightsql_connected: boolean;
-}
-
 export interface SqlQueryRequest {
   sql: string;
   params?: Record<string, string>;

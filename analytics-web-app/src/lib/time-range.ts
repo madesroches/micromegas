@@ -115,3 +115,41 @@ export function getTimeRangeForApi(from: string, to: string): { begin: string; e
     end: formatTimeForApi(parsed.to),
   }
 }
+
+// Format duration between two timestamps
+export function formatDuration(
+  startTime: string | Date | unknown,
+  endTime: string | Date | unknown
+): string {
+  if (!startTime || !endTime) return 'N/A'
+
+  const start = startTime instanceof Date ? startTime : new Date(String(startTime))
+  const end = endTime instanceof Date ? endTime : new Date(String(endTime))
+  const diffMs = end.getTime() - start.getTime()
+
+  if (isNaN(diffMs) || diffMs < 0) return 'Invalid'
+
+  const totalSeconds = Math.floor(diffMs / 1000)
+  const seconds = totalSeconds % 60
+  const minutes = Math.floor(totalSeconds / 60) % 60
+  const hours = Math.floor(totalSeconds / 3600) % 24
+  const days = Math.floor(totalSeconds / 86400)
+
+  if (days > 0) {
+    return `${days}d ${hours}h ${minutes}m`
+  } else if (hours > 0) {
+    return `${hours}h ${minutes}m ${seconds}s`
+  } else if (minutes > 0) {
+    return `${minutes}m ${seconds}s`
+  } else {
+    return `${seconds}s`
+  }
+}
+
+// Format timestamp for display in tables (ISO format with space separator)
+export function formatTimestamp(value: unknown): string {
+  if (!value) return ''
+  const date = new Date(String(value))
+  if (isNaN(date.getTime())) return ''
+  return date.toISOString().replace('T', ' ').slice(0, 23) + 'Z'
+}

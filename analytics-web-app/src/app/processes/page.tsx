@@ -11,6 +11,7 @@ import { QueryEditor } from '@/components/QueryEditor'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { executeSqlQuery, toRowObjects } from '@/lib/api'
 import { useTimeRange } from '@/hooks/useTimeRange'
+import { formatTimestamp } from '@/lib/time-range'
 import { SqlRow } from '@/types'
 
 type SortField = 'exe' | 'start_time' | 'last_update_time' | 'username' | 'computer'
@@ -151,12 +152,6 @@ function ProcessesPageContent() {
       </div>
     </th>
   )
-
-  const formatTimestamp = (value: unknown) => {
-    if (!value) return ''
-    const date = new Date(String(value))
-    return date.toISOString().replace('T', ' ').slice(0, 23) + 'Z'
-  }
 
   const sqlPanel = (
     <QueryEditor
