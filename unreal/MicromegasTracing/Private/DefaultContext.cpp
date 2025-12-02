@@ -40,6 +40,30 @@ namespace MicromegasTracing
 		UpdatePropertySet();
 	}
 
+	void DefaultContext::SetBatch(TArrayView<TPair<FName, FName>> BatchEntries)
+	{
+		FScopeLock Lock(&Mutex);
+		for (const TPair<FName, FName>& Entry : BatchEntries)
+		{
+			FName* StoredValue = Context.Find(Entry.Key);
+			if (StoredValue != nullptr)
+			{
+				if (*StoredValue == Entry.Value)
+				{
+					continue;
+				}
+
+				*StoredValue = Entry.Value;
+			}
+			else
+			{
+				Context.Add(Entry.Key, Entry.Value);
+			}
+		}
+
+		UpdatePropertySet();
+	}
+
 	void DefaultContext::Unset(FName Key)
 	{
 		FScopeLock Lock(&Mutex);
