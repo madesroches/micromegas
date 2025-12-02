@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 500">
+  <defs>
+    <linearGradient id="ring1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#bf360c"/>
+      <stop offset="100%" style="stop-color:#8d3a14"/>
+    </linearGradient>
+    <linearGradient id="ring2" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1565c0"/>
+      <stop offset="100%" style="stop-color:#0d47a1"/>
+    </linearGradient>
+    <linearGradient id="ring3" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#ffc107"/>
+      <stop offset="100%" style="stop-color:#ffb300"/>
+    </linearGradient>
+  </defs>
+  
+  <rect width="400" height="500" fill="#ffffff"/>
+  
+  <g transform="translate(200, 180)">
+    <ellipse cx="0" cy="0" rx="120" ry="45" fill="none" stroke="url(#ring1)" stroke-width="2.5" transform="rotate(-20)" opacity="0.9"/>
+    <ellipse cx="0" cy="0" rx="95" ry="36" fill="none" stroke="url(#ring2)" stroke-width="2.5" transform="rotate(25)" opacity="0.9"/>
+    <ellipse cx="0" cy="0" rx="70" ry="26" fill="none" stroke="url(#ring3)" stroke-width="2.5" transform="rotate(-8)" opacity="0.9"/>
+    <polygon points="0,-14 2.5,-5 11,-5 4,1 7,11 0,5 -7,11 -4,1 -11,-5 -2.5,-5" fill="#1a1a2e"/>
+  </g>
+  
+  <text x="200" y="380" text-anchor="middle" fill="#1a1a2e" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="42" font-weight="300" letter-spacing="6">micromegas</text>
+</svg>

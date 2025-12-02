@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400">
+  <defs>
+    <linearGradient id="ring1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#bf360c"/>
+      <stop offset="100%" style="stop-color:#8d3a14"/>
+    </linearGradient>
+    <linearGradient id="ring2" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1565c0"/>
+      <stop offset="100%" style="stop-color:#0d47a1"/>
+    </linearGradient>
+    <linearGradient id="ring3" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#ffc107"/>
+      <stop offset="100%" style="stop-color:#ffb300"/>
+    </linearGradient>
+    <clipPath id="circleClip">
+      <circle cx="200" cy="200" r="200"/>
+    </clipPath>
+  </defs>
+  
+  <circle cx="200" cy="200" r="200" fill="#0a0a0f"/>
+  
+  <g transform="translate(200, 200)">
+    <ellipse cx="0" cy="0" rx="140" ry="53" fill="none" stroke="url(#ring1)" stroke-width="8" transform="rotate(-20)" opacity="0.9"/>
+    <ellipse cx="0" cy="0" rx="110" ry="42" fill="none" stroke="url(#ring2)" stroke-width="8" transform="rotate(25)" opacity="0.9"/>
+    <ellipse cx="0" cy="0" rx="82" ry="31" fill="none" stroke="url(#ring3)" stroke-width="8" transform="rotate(-8)" opacity="0.9"/>
+    <polygon points="0,-16 3,-5.5 11,-5.5 5,1.5 8,12 0,6 -8,12 -5,1.5 -11,-5.5 -3,-5.5" fill="#ffffff"/>
+  </g>
+</svg>
