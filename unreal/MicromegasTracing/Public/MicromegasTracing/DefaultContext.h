@@ -22,6 +22,7 @@ namespace MicromegasTracing
 		// Set, Unset and Clear are expensive and are not expected to be called frequently.
 		// Since the keys and values are never freed, local cardinality has to be limited.
 		void Set(FName Key, FName Value);
+		void SetBatch(TArrayView<TPair<FName, FName>> BatchEntries);
 		void Unset(FName Key);
 		void Clear();
 
