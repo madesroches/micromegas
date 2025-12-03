@@ -1,15 +1,5 @@
-export interface ProcessInfo {
-  process_id: string;
-  exe: string;
-  start_time: string;
-  last_update_time: string;
-  computer: string;
-  username: string;
-  cpu_brand: string;
-  distro: string;
-  properties: Record<string, string>;
-}
-
+/** Generic row from SQL query results */
+export type SqlRow = Record<string, string | number | boolean | null>;
 
 export interface GenerateTraceRequest {
   time_range?: {
@@ -30,23 +20,19 @@ export interface BinaryStartMarker {
   type: 'binary_start';
 }
 
-export interface HealthCheck {
-  status: string;
-  timestamp: string;
-  flightsql_connected: boolean;
+export interface SqlQueryRequest {
+  sql: string;
+  params?: Record<string, string>;
+  begin?: string;
+  end?: string;
 }
 
-export interface ProcessStatistics {
-  process_id: string;
-  log_entries: number;
-  measures: number;
-  trace_events: number;
-  thread_count: number;
+export interface SqlQueryResponse {
+  columns: string[];
+  rows: (string | number | boolean | null)[][];
 }
 
-export interface LogEntry {
-  time: string;
-  level: string;
-  target: string;
-  msg: string;
+export interface SqlQueryError {
+  error: string;
+  details?: string;
 }

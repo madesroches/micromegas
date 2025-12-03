@@ -10,7 +10,6 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
-arrow-flight.workspace = true
 micromegas.workspace = true
 
 anyhow.workspace = true

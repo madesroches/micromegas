@@ -1,5 +1,41 @@
 # Analytics Web App Rework Plan
 
+## Implementation Progress
+
+### Milestone 1: Foundation - Layout & Time Range - DONE
+- [x] `Header` component with logo, time range selector, user menu
+- [x] `Sidebar` component with icon navigation
+- [x] `PageLayout` component combining header, sidebar, content area
+- [x] `TimeRangeSelector` component with dropdown (relative ranges)
+- [x] `useTimeRange` hook for URL-based time range state
+- [x] Dark theme CSS variables in `globals.css`
+
+### Milestone 2: Process Explorer Page - DONE
+- [x] `/processes` route with sortable table
+- [x] Search input with client-side filtering
+- [x] Column sorting with visual indicators
+- [x] Root `/` redirects to `/processes`
+
+### Milestone 3: Process Detail Pages - DONE
+- [x] `/process?id=...` page with info cards grid
+- [x] `/process_log?process_id=...` page with log viewer
+- [x] `/process_trace?process_id=...` page with trace form
+- [x] Deleted old `/process/[id]` dynamic route
+
+### Milestone 4: SQL Panel & Backend - DONE
+- [x] `POST /analyticsweb/query` endpoint in backend
+- [x] Macro substitution logic (`$param` -> value)
+- [x] Destructive function blocking (`retire_partitions`, etc.)
+- [x] `QueryEditor` component with collapsible panel
+- [x] SQL panel on `/processes` page
+- [x] SQL panel on `/process_log` page
+
+### Milestone 5: Polish & Integration - DONE
+- [x] Wire up Run button to actually execute custom SQL queries
+- [x] Add responsive design adjustments
+- [x] Add better error handling UX (see mockup_errors.html)
+- [x] Test all URL parameter combinations for shareability
+
 ## Mockups
 
 Visual mockups of the new UI are available in the [analytics_web_app_rework/](analytics_web_app_rework/) folder:
@@ -375,3 +411,12 @@ Note: Authentication errors are already handled by the existing login flow.
 - Add query validation/sanitization
 - Add macro substitution (`$search`, `$order_by`, `$process_id`, `$max_level`, `$limit`, `$begin`, `$end`)
 - Block destructive functions in query text
+
+### API Endpoint Design
+All API endpoints use query parameters instead of path parameters for consistency:
+- `GET /analyticsweb/processes` - List all processes
+- `GET /analyticsweb/log-entries?process_id=...&level=...&limit=...` - Get log entries
+- `GET /analyticsweb/process/{process_id}/statistics` - Get process statistics (legacy path param)
+- `POST /analyticsweb/query` - Execute custom SQL query
+- `GET /analyticsweb/perfetto/{process_id}/info` - Get trace info
+- `POST /analyticsweb/perfetto/{process_id}/generate` - Generate trace
