@@ -22,11 +22,11 @@ export function ErrorBanner({
   actions,
 }: ErrorBannerProps) {
   const isWarning = variant === 'warning'
-  const bgColor = isWarning ? 'bg-yellow-500/10' : 'bg-red-500/10'
-  const borderColor = isWarning ? 'border-yellow-500/30' : 'border-red-500/30'
-  const iconColor = isWarning ? 'text-yellow-500' : 'text-red-500'
-  const titleColor = isWarning ? 'text-yellow-500' : 'text-red-500'
-  const messageColor = isWarning ? 'text-yellow-400' : 'text-red-400'
+  const bgColor = isWarning ? 'bg-accent-warning/10' : 'bg-accent-error/10'
+  const borderColor = isWarning ? 'border-accent-warning/30' : 'border-accent-error/30'
+  const iconColor = isWarning ? 'text-accent-warning' : 'text-accent-error'
+  const titleColor = isWarning ? 'text-accent-warning' : 'text-accent-error'
+  const messageColor = isWarning ? 'text-accent-warning/80' : 'text-accent-error/80'
 
   const Icon = isWarning ? AlertTriangle : AlertCircle
 
@@ -37,7 +37,7 @@ export function ErrorBanner({
         <div className={`text-sm font-semibold ${titleColor}`}>{title}</div>
         <div className={`text-sm ${messageColor} mt-1`}>{message}</div>
         {details && (
-          <div className="mt-2 px-2.5 py-1.5 bg-black/20 rounded text-xs font-mono text-gray-400">
+          <div className="mt-2 px-2.5 py-1.5 bg-black/20 rounded text-xs font-mono text-theme-text-muted">
             {details}
           </div>
         )}
@@ -48,8 +48,8 @@ export function ErrorBanner({
                 onClick={onRetry}
                 className={`px-3 py-1.5 text-xs rounded transition-colors ${
                   isWarning
-                    ? 'bg-yellow-500 text-black hover:bg-yellow-400'
-                    : 'bg-red-500 text-white hover:bg-red-400'
+                    ? 'bg-accent-warning text-black hover:opacity-80'
+                    : 'bg-accent-error text-white hover:opacity-80'
                 }`}
               >
                 Retry
@@ -64,8 +64,8 @@ export function ErrorBanner({
           onClick={onDismiss}
           className={`p-1 rounded transition-colors flex-shrink-0 ${
             isWarning
-              ? 'text-yellow-500/60 hover:text-yellow-500 hover:bg-yellow-500/20'
-              : 'text-red-500/60 hover:text-red-500 hover:bg-red-500/20'
+              ? 'text-accent-warning/60 hover:text-accent-warning hover:bg-accent-warning/20'
+              : 'text-accent-error/60 hover:text-accent-error hover:bg-accent-error/20'
           }`}
         >
           <X className="w-4 h-4" />
