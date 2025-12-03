@@ -703,12 +703,10 @@ const BLOCKED_FUNCTIONS: &[&str] = &[
 /// Check if the SQL query contains any blocked destructive functions
 fn contains_blocked_function(sql: &str) -> Option<&'static str> {
     let sql_lower = sql.to_lowercase();
-    for func in BLOCKED_FUNCTIONS {
-        if sql_lower.contains(func) {
-            return Some(func);
-        }
-    }
-    None
+    BLOCKED_FUNCTIONS
+        .iter()
+        .find(|&func| sql_lower.contains(func))
+        .copied()
 }
 
 /// Substitute macro variables in SQL query
@@ -730,10 +728,7 @@ async fn execute_sql_query(
 ) -> Result<Json<SqlQueryResponse>, (StatusCode, Json<SqlQueryError>)> {
     info!(
         "executing SQL query sql={} params={:?} begin={:?} end={:?}",
-        request.sql,
-        request.params,
-        request.begin,
-        request.end
+        request.sql, request.params, request.begin, request.end
     );
 
     // Check for blocked functions
