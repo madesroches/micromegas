@@ -14,8 +14,8 @@ use axum::{
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use clap::Parser;
-use datafusion::arrow::array::{Int32Array, Int64Array, TimestampNanosecondArray, UInt64Array};
-use futures::{Stream, StreamExt};
+use datafusion::arrow::array::{Int64Array, TimestampNanosecondArray, UInt64Array};
+use futures::Stream;
 use http::{HeaderValue, Method, header};
 use micromegas::analytics::{
     dfext::{string_column_accessor::string_column_by_name, typed_column::typed_column_by_name},
@@ -36,9 +36,7 @@ use micromegas::tracing::prelude::*;
 // micromegas_auth imports available if needed
 #[allow(unused_imports)]
 use micromegas_auth::{axum::auth_middleware, types::AuthProvider};
-use queries::{
-    query_all_processes, query_log_entries, query_nb_trace_events, query_process_statistics,
-};
+use queries::{query_all_processes, query_nb_trace_events};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, pin::Pin, sync::Arc, time::Duration};
 use tower_http::{
@@ -122,30 +120,6 @@ struct HealthCheck {
     status: String,
     timestamp: DateTime<Utc>,
     flightsql_connected: bool,
-}
-
-#[derive(Debug, Serialize)]
-struct ProcessStatistics {
-    process_id: String,
-    log_entries: u64,
-    measures: u64,
-    trace_events: u64,
-    thread_count: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct LogEntry {
-    time: DateTime<Utc>,
-    level: String,
-    target: String,
-    msg: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct LogsQuery {
-    process_id: String,
-    limit: Option<usize>,
-    level: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -251,7 +225,6 @@ async fn main() -> Result<()> {
     let health_routes = Router::new().route("/analyticsweb/health", get(health_check));
 
     let api_routes = Router::new()
-        .route("/analyticsweb/processes", get(list_processes))
         .route("/analyticsweb/query", post(execute_sql_query))
         .route(
             "/analyticsweb/perfetto/{process_id}/info",
@@ -260,11 +233,6 @@ async fn main() -> Result<()> {
         .route(
             "/analyticsweb/perfetto/{process_id}/generate",
             post(generate_trace),
-        )
-        .route("/analyticsweb/log-entries", get(get_process_log_entries))
-        .route(
-            "/analyticsweb/process/{process_id}/statistics",
-            get(get_process_statistics),
         )
         .layer(middleware::from_fn(observability_middleware));
 
@@ -350,16 +318,6 @@ async fn auth_me_no_auth() -> impl IntoResponse {
 /// Stub /auth/logout endpoint for no-auth mode
 async fn auth_logout_no_auth() -> impl IntoResponse {
     StatusCode::OK
-}
-
-#[span_fn]
-async fn list_processes(
-    Extension(auth_token): Extension<AuthToken>,
-) -> ApiResult<Json<Vec<ProcessInfo>>> {
-    let client_factory =
-        BearerFlightSQLClientFactory::new_with_client_type(auth_token.0, "web".to_string());
-    let processes = get_processes_internal(&client_factory).await?;
-    Ok(Json(processes))
 }
 
 #[span_fn]
@@ -470,115 +428,6 @@ async fn generate_trace(
         .body(axum::body::Body::from_stream(stream))
         .context("failed to build streaming response")
         .map_err(ApiError::from)
-}
-
-#[span_fn]
-async fn get_process_log_entries(
-    axum::extract::Query(query): axum::extract::Query<LogsQuery>,
-    Extension(auth_token): Extension<AuthToken>,
-) -> ApiResult<Json<Vec<LogEntry>>> {
-    let process_id = &query.process_id;
-    let limit = query.limit.unwrap_or(50);
-    let level_filter = query.level.as_deref().filter(|&level| level != "all");
-
-    let client_factory =
-        BearerFlightSQLClientFactory::new_with_client_type(auth_token.0, "web".to_string());
-    let mut client = client_factory.make_client().await?;
-
-    let mut logs = Vec::new();
-    let mut stream = query_log_entries(&mut client, process_id, level_filter, limit).await?;
-
-    while let Some(batch) = stream.next().await {
-        let batch = batch.map_err(anyhow::Error::from)?;
-
-        let times: &TimestampNanosecondArray = typed_column_by_name(&batch, "time")?;
-        let levels: &Int32Array = typed_column_by_name(&batch, "level")?;
-        let targets = string_column_by_name(&batch, "target")?;
-        let msgs = string_column_by_name(&batch, "msg")?;
-
-        for row in 0..batch.num_rows() {
-            let level_value = levels.value(row);
-            let level_str = match level_value {
-                1 => "FATAL",
-                2 => "ERROR",
-                3 => "WARN",
-                4 => "INFO",
-                5 => "DEBUG",
-                6 => "TRACE",
-                _ => "UNKNOWN",
-            }
-            .to_string();
-
-            logs.push(LogEntry {
-                time: DateTime::from_timestamp_nanos(times.value(row)),
-                level: level_str,
-                target: targets.value(row).to_string(),
-                msg: msgs.value(row).to_string(),
-            });
-        }
-    }
-
-    Ok(Json(logs))
-}
-
-#[span_fn]
-async fn get_process_statistics(
-    Path(process_id): Path<String>,
-    Extension(auth_token): Extension<AuthToken>,
-) -> ApiResult<Json<ProcessStatistics>> {
-    let client_factory =
-        BearerFlightSQLClientFactory::new_with_client_type(auth_token.0, "web".to_string());
-    let mut client = client_factory.make_client().await?;
-
-    // Query actual statistics from different stream types
-    let mut log_entries = 0u64;
-    let mut measures = 0u64;
-    let mut trace_events = 0u64;
-    let mut thread_count = 0u64;
-
-    let batches = query_process_statistics(&mut client, &process_id).await?;
-
-    for batch in batches {
-        if batch.num_rows() > 0 {
-            log_entries = typed_column_by_name::<UInt64Array>(&batch, "log_entries")
-                .map(|arr| arr.value(0))
-                .or_else(|_| {
-                    typed_column_by_name::<Int64Array>(&batch, "log_entries")
-                        .map(|arr| arr.value(0) as u64)
-                })?;
-
-            measures = typed_column_by_name::<UInt64Array>(&batch, "measures")
-                .map(|arr| arr.value(0))
-                .or_else(|_| {
-                    typed_column_by_name::<Int64Array>(&batch, "measures")
-                        .map(|arr| arr.value(0) as u64)
-                })?;
-
-            trace_events = typed_column_by_name::<UInt64Array>(&batch, "trace_events")
-                .map(|arr| arr.value(0))
-                .or_else(|_| {
-                    typed_column_by_name::<Int64Array>(&batch, "trace_events")
-                        .map(|arr| arr.value(0) as u64)
-                })?;
-
-            thread_count = typed_column_by_name::<UInt64Array>(&batch, "thread_count")
-                .map(|arr| arr.value(0))
-                .or_else(|_| {
-                    typed_column_by_name::<Int64Array>(&batch, "thread_count")
-                        .map(|arr| arr.value(0) as u64)
-                })?;
-
-            break; // Single row result, no need to continue
-        }
-    }
-
-    Ok(Json(ProcessStatistics {
-        process_id,
-        log_entries,
-        measures,
-        trace_events,
-        thread_count,
-    }))
 }
 
 fn generate_trace_stream(
