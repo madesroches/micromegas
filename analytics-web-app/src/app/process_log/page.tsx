@@ -1,7 +1,7 @@
 'use client'
 
 import { Suspense, useState, useCallback, useMemo, useEffect, useRef } from 'react'
-import { useSearchParams } from 'next/navigation'
+import { useSearchParams, useRouter, usePathname } from 'next/navigation'
 import { useMutation } from '@tanstack/react-query'
 import Link from 'next/link'
 import { ArrowLeft, AlertCircle } from 'lucide-react'
@@ -48,13 +48,25 @@ const LEVEL_NAMES: Record<number, string> = {
   6: 'TRACE',
 }
 
+const VALID_LEVELS = ['all', 'trace', 'debug', 'info', 'warn', 'error', 'fatal']
+const VALID_LIMITS = [50, 100, 200, 500, 1000]
+
 function ProcessLogContent() {
   const searchParams = useSearchParams()
+  const router = useRouter()
+  const pathname = usePathname()
   const processId = searchParams.get('process_id')
   const { parsed: timeRange, apiTimeRange } = useTimeRange()
 
-  const [logLevel, setLogLevel] = useState<string>('all')
-  const [logLimit, setLogLimit] = useState<number>(100)
+  // Read initial values from URL params with validation
+  const levelParam = searchParams.get('level')
+  const limitParam = searchParams.get('limit')
+  const initialLevel = levelParam && VALID_LEVELS.includes(levelParam) ? levelParam : 'all'
+  const initialLimit = limitParam ? parseInt(limitParam, 10) : 100
+  const validatedLimit = VALID_LIMITS.includes(initialLimit) ? initialLimit : 100
+
+  const [logLevel, setLogLevel] = useState<string>(initialLevel)
+  const [logLimit, setLogLimit] = useState<number>(validatedLimit)
   const [queryError, setQueryError] = useState<string | null>(null)
   const [rows, setRows] = useState<SqlRow[]>([])
   const [processExe, setProcessExe] = useState<string | null>(null)
@@ -110,6 +122,35 @@ function ProcessLogContent() {
       })
     },
     [processId, logLevel, logLimit, apiTimeRange]
+  )
+
+  // Update URL when filters change
+  const updateLogLevel = useCallback(
+    (level: string) => {
+      setLogLevel(level)
+      const params = new URLSearchParams(searchParams.toString())
+      if (level === 'all') {
+        params.delete('level')
+      } else {
+        params.set('level', level)
+      }
+      router.push(`${pathname}?${params.toString()}`)
+    },
+    [searchParams, router, pathname]
+  )
+
+  const updateLogLimit = useCallback(
+    (limit: number) => {
+      setLogLimit(limit)
+      const params = new URLSearchParams(searchParams.toString())
+      if (limit === 100) {
+        params.delete('limit')
+      } else {
+        params.set('limit', String(limit))
+      }
+      router.push(`${pathname}?${params.toString()}`)
+    },
+    [searchParams, router, pathname]
   )
 
   // Load process info once
@@ -270,7 +311,7 @@ function ProcessLogContent() {
         <div className="flex gap-3 mb-4">
           <select
             value={logLevel}
-            onChange={(e) => setLogLevel(e.target.value)}
+            onChange={(e) => updateLogLevel(e.target.value)}
             className="px-3 py-2 bg-app-panel border border-theme-border rounded-md text-theme-text-primary text-sm focus:outline-none focus:border-accent-link"
           >
             <option value="all">Max Level: TRACE (all)</option>
@@ -285,7 +326,7 @@ function ProcessLogContent() {
             <span className="text-theme-text-muted text-sm">Limit:</span>
             <select
               value={logLimit}
-              onChange={(e) => setLogLimit(Number(e.target.value))}
+              onChange={(e) => updateLogLimit(Number(e.target.value))}
               className="px-3 py-2 bg-app-panel border border-theme-border rounded-md text-theme-text-primary text-sm focus:outline-none focus:border-accent-link"
             >
               <option value={50}>50</option>
