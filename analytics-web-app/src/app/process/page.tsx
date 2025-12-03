@@ -33,6 +33,7 @@ function ProcessPageContent() {
 
   const [process, setProcess] = useState<SqlRow | null>(null)
   const [statistics, setStatistics] = useState<SqlRow | null>(null)
+  const [statsError, setStatsError] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(true)
 
   const processMutation = useMutation({
@@ -52,10 +53,14 @@ function ProcessPageContent() {
   const statsMutation = useMutation({
     mutationFn: executeSqlQuery,
     onSuccess: (data) => {
+      setStatsError(null)
       const rows = toRowObjects(data)
       if (rows.length > 0) {
         setStatistics(rows[0])
       }
+    },
+    onError: (err: Error) => {
+      setStatsError(err.message)
     },
   })
 
@@ -222,24 +227,30 @@ function ProcessPageContent() {
             <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-4">
               Statistics
             </h3>
-            <div className="space-y-0">
-              <InfoRow
-                label="Log Entries"
-                value={statistics ? Number(statistics.log_entries ?? 0).toLocaleString() : '0'}
-              />
-              <InfoRow
-                label="Measures"
-                value={statistics ? Number(statistics.measures ?? 0).toLocaleString() : '0'}
-              />
-              <InfoRow
-                label="Trace Events"
-                value={statistics ? Number(statistics.trace_events ?? 0).toLocaleString() : '0'}
-              />
-              <InfoRow
-                label="Thread Count"
-                value={statistics ? Number(statistics.thread_count ?? 0).toLocaleString() : '0'}
-              />
-            </div>
+            {statsError ? (
+              <div className="text-sm text-red-400">
+                Failed to load statistics: {statsError}
+              </div>
+            ) : (
+              <div className="space-y-0">
+                <InfoRow
+                  label="Log Entries"
+                  value={statistics ? Number(statistics.log_entries ?? 0).toLocaleString() : '—'}
+                />
+                <InfoRow
+                  label="Measures"
+                  value={statistics ? Number(statistics.measures ?? 0).toLocaleString() : '—'}
+                />
+                <InfoRow
+                  label="Trace Events"
+                  value={statistics ? Number(statistics.trace_events ?? 0).toLocaleString() : '—'}
+                />
+                <InfoRow
+                  label="Thread Count"
+                  value={statistics ? Number(statistics.thread_count ?? 0).toLocaleString() : '—'}
+                />
+              </div>
+            )}
           </div>
         </div>
       </div>
