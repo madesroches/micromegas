@@ -150,9 +150,38 @@ void UYourGameInstance::Init()
 }
 ```
 
-### Authentication Provider
+### Authentication
 
-Implement the authentication interface:
+The telemetry sink requires an authenticator to sign HTTP requests. Micromegas provides a built-in API key authenticator for simple setups, or you can implement custom authentication.
+
+#### Built-in API Key Authentication
+
+The simplest option is to use the built-in `FApiKeyAuthenticator`:
+
+```cpp
+#include "MicromegasTelemetrySink/ApiKeyAuthenticator.h"
+
+void UYourGameInstance::Init()
+{
+    Super::Init();
+
+    FString ServerUrl = TEXT("https://telemetry.yourcompany.com:9000");
+    FString ApiKey = TEXT("your-api-key-here");  // Store securely, not hardcoded!
+
+    auto AuthProvider = MakeShared<FApiKeyAuthenticator>(ApiKey);
+
+    IMicromegasTelemetrySinkModule::LoadModuleChecked().InitTelemetry(
+        ServerUrl,
+        AuthProvider
+    );
+}
+```
+
+The API key is sent as a Bearer token in the `Authorization` header. Store your API key securely (environment variable, config file, or platform-specific secure storage) - never hardcode it in source.
+
+#### Custom Authentication
+
+For OAuth, JWT refresh, or other advanced authentication flows, implement the `ITelemetryAuthenticator` interface:
 
 ```cpp
 // MyTelemetryAuthenticator.h
@@ -164,24 +193,32 @@ class FMyTelemetryAuthenticator : public ITelemetryAuthenticator
 {
 public:
     virtual ~FMyTelemetryAuthenticator() = default;
-    
+
     virtual void Init(const MicromegasTracing::EventSinkPtr& InSink) override
     {
-        // Initialize authenticator if needed
+        // Initialize authenticator (e.g., start token refresh timer)
     }
-    
+
+    virtual void Shutdown() override
+    {
+        // Clean up resources (e.g., cancel pending token requests)
+    }
+
     virtual bool IsReady() override
     {
-        // Return true when authentication is ready
+        // Return true when authentication is ready (e.g., token acquired)
         return true;
     }
-    
+
     virtual bool Sign(IHttpRequest& Request) override
     {
         // Add authentication to the HTTP request
-        Request.SetHeader(TEXT("Authorization"), TEXT("Bearer your-api-key-here"));
+        Request.SetHeader(TEXT("Authorization"), TEXT("Bearer ") + CurrentToken);
         return true;
     }
+
+private:
+    FString CurrentToken;
 };
 ```
 

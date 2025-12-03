@@ -32,15 +32,19 @@ In your GameInstance or GameMode:
 
 ```cpp
 #include "MicromegasTelemetrySink/MicromegasTelemetrySinkModule.h"
+#include "MicromegasTelemetrySink/ApiKeyAuthenticator.h"
 
 void AMyGameMode::BeginPlay()
 {
     Super::BeginPlay();
-    
-    // Initialize telemetry
+
+    // Initialize telemetry with API key authentication
+    FString ApiKey = TEXT("your-api-key");  // Store securely!
+    auto AuthProvider = MakeShared<FApiKeyAuthenticator>(ApiKey);
+
     IMicromegasTelemetrySinkModule::LoadModuleChecked().InitTelemetry(
         "https://your-telemetry-server:9000",  // Your ingestion server
-        MyAuthProvider                         // Your authentication handler
+        AuthProvider
     );
 }
 ```

@@ -26,6 +26,7 @@ private:
 // MyGameInstance.cpp
 #include "MyGameInstance.h"
 #include "MicromegasTelemetrySink/MicromegasTelemetrySinkModule.h"
+#include "MicromegasTelemetrySink/ApiKeyAuthenticator.h"
 #include "MicromegasTracing/Macros.h"
 #include "MicromegasTracing/Dispatch.h"
 #include "MicromegasTracing/DefaultContext.h"
@@ -33,35 +34,20 @@ private:
 void UMyGameInstance::Init()
 {
     Super::Init();
-    
-    // Create auth provider
-    class FSimpleAuthProvider : public ITelemetryAuthenticator
-    {
-    public:
-        virtual ~FSimpleAuthProvider() = default;
-        
-        virtual void Init(const MicromegasTracing::EventSinkPtr& InSink) override {}
-        
-        virtual bool IsReady() override { return true; }
-        
-        virtual bool Sign(IHttpRequest& Request) override
-        {
-            FString ApiKey = GetDefault<UGameSettings>()->TelemetryApiKey;
-            Request.SetHeader(TEXT("Authorization"), TEXT("Bearer ") + ApiKey);
-            return true;
-        }
-    };
-    
-    // Initialize telemetry
-    auto Auth = MakeShared<FSimpleAuthProvider>();
+
+    // Get API key from config (store securely, not hardcoded!)
+    FString ApiKey = GetDefault<UGameSettings>()->TelemetryApiKey;
+
+    // Initialize telemetry with API key authentication
+    auto Auth = MakeShared<FApiKeyAuthenticator>(ApiKey);
     IMicromegasTelemetrySinkModule::LoadModuleChecked().InitTelemetry(
         TEXT("https://telemetry.example.com:9000"),
         Auth
     );
-    
+
     SetupTelemetryContext();
-    
-    MICROMEGAS_LOG("Game", MicromegasTracing::LogLevel::Info, 
+
+    MICROMEGAS_LOG("Game", MicromegasTracing::LogLevel::Info,
                    TEXT("Game instance initialized"));
 }
 
