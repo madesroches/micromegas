@@ -1,6 +1,12 @@
-# Micromegas Documentation
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/images/micromegas-primary-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="assets/images/micromegas-primary-light.svg">
+    <img src="assets/images/micromegas-primary-light.svg" alt="Micromegas" width="400">
+  </picture>
+</p>
 
-Welcome to Micromegas, a unified observability platform designed for high-performance telemetry collection and analytics.
+<p align="center"><strong>A unified observability platform for high-performance telemetry collection and analytics.</strong></p>
 
 [**→ Source Code on GitHub**](https://github.com/madesroches/micromegas){ .md-button .md-button--primary }
 [**→ Get Started**](getting-started.md){ .md-button }

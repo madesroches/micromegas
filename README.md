@@ -1,9 +1,5 @@
 <p align="center">
-  <!-- <img src="path/to/logo.png" alt="Micromegas Logo" width="200"/> -->
-  <h1 align="center">Micromegas - Scalable Observability</h1>
-</p>
-
-<p align="center">
+  <img src="branding/micromegas-primary-light.svg" alt="Micromegas Logo" width="400"/><br/>
   <strong>A unified observability platform for logs, metrics, and traces, built for high-volume environments.</strong>
 </p>
 
