@@ -36,22 +36,26 @@ export function QueryEditor({
     onReset()
   }, [defaultSql, onReset])
 
-  // Simple SQL syntax highlighting
-  const highlightSql = (code: string) => {
-    const keywords = /\b(SELECT|FROM|WHERE|AND|OR|ORDER BY|GROUP BY|LIMIT|OFFSET|AS|ON|JOIN|LEFT|RIGHT|INNER|OUTER|DESC|ASC|DISTINCT|COUNT|SUM|AVG|MIN|MAX|CASE|WHEN|THEN|ELSE|END|IN|NOT|NULL|IS|LIKE|BETWEEN)\b/gi
-    const strings = /'[^']*'/g
-    const variables = /\$[a-z_][a-z0-9_]*/gi
-
+  // Simple SQL syntax highlighting - returns HTML string
+  const highlightSql = (code: string): string => {
+    // First escape HTML entities
     let result = code
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
 
-    result = result.replace(strings, '<span class="text-green-400">$&</span>')
-    result = result.replace(keywords, '<span class="text-purple-400">$&</span>')
-    result = result.replace(variables, '<span class="text-orange-400">$&</span>')
+    // Highlight in order: strings first (so keywords inside strings don't get highlighted)
+    result = result.replace(/'[^']*'/g, '<span class="text-green-400">$&</span>')
+    // Then keywords
+    result = result.replace(
+      /\b(SELECT|FROM|WHERE|AND|OR|ORDER BY|GROUP BY|LIMIT|OFFSET|AS|ON|JOIN|LEFT|RIGHT|INNER|OUTER|DESC|ASC|DISTINCT|COUNT|SUM|AVG|MIN|MAX|CASE|WHEN|THEN|ELSE|END|IN|NOT|NULL|IS|LIKE|BETWEEN)\b/gi,
+      '<span class="text-purple-400">$&</span>'
+    )
+    // Then variables
+    result = result.replace(/\$[a-z_][a-z0-9_]*/gi, '<span class="text-orange-400">$&</span>')
 
-    return result
+    // Add a trailing newline to match textarea behavior (prevents content jump)
+    return result + '\n'
   }
 
   if (isCollapsed) {
@@ -104,12 +108,19 @@ export function QueryEditor({
 
       {/* Content */}
       <div className="flex-1 overflow-auto p-4">
-        {/* SQL Editor */}
-        <div className="relative">
+        {/* SQL Editor with syntax highlighting overlay */}
+        <div className="relative h-48 border border-theme-border rounded-md focus-within:border-accent-blue bg-app-bg overflow-hidden">
+          {/* Highlighted code layer (behind) */}
+          <pre
+            className="absolute inset-0 p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap break-words pointer-events-none overflow-hidden m-0"
+            aria-hidden="true"
+            dangerouslySetInnerHTML={{ __html: highlightSql(sql) }}
+          />
+          {/* Transparent textarea (in front, captures input) */}
           <textarea
             value={sql}
             onChange={(e) => setSql(e.target.value)}
-            className="w-full h-48 p-3 bg-app-bg border border-theme-border rounded-md text-theme-text-primary font-mono text-xs leading-relaxed resize-none focus:outline-none focus:border-accent-blue"
+            className="absolute inset-0 w-full h-full p-3 bg-transparent text-transparent caret-gray-200 font-mono text-xs leading-relaxed resize-none focus:outline-none"
             spellCheck={false}
           />
         </div>
