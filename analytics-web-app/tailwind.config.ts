@@ -61,10 +61,18 @@ const config: Config = {
             muted: "var(--text-muted)",
           },
         },
-        "accent-blue": "var(--accent-blue)",
-        "accent-green": "var(--accent-green)",
-        "accent-purple": "var(--accent-purple)",
-        "accent-orange": "var(--accent-orange)",
+        "accent-link": {
+          DEFAULT: "var(--accent-link)",
+          hover: "var(--accent-link-hover)",
+        },
+        "accent-success": "var(--accent-success)",
+        "accent-highlight": "var(--accent-highlight)",
+        "accent-variable": "var(--accent-variable)",
+        "accent-error": {
+          DEFAULT: "var(--accent-error)",
+          bright: "var(--accent-error-bright)",
+        },
+        "accent-warning": "var(--accent-warning)",
       },
       borderRadius: {
         lg: "var(--radius)",

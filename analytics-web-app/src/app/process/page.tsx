@@ -101,9 +101,9 @@ function ProcessPageContent() {
       <PageLayout>
         <div className="p-6">
           <div className="flex flex-col items-center justify-center h-64 bg-app-panel border border-theme-border rounded-lg">
-            <AlertCircle className="w-10 h-10 text-red-400 mb-3" />
-            <p className="text-gray-400">No process ID provided</p>
-            <Link href="/processes" className="text-blue-400 hover:underline mt-2">
+            <AlertCircle className="w-10 h-10 text-accent-error mb-3" />
+            <p className="text-theme-text-secondary">No process ID provided</p>
+            <Link href="/processes" className="text-accent-link hover:underline mt-2">
               Back to Processes
             </Link>
           </div>
@@ -118,8 +118,8 @@ function ProcessPageContent() {
         <div className="p-6">
           <div className="flex items-center justify-center h-64 bg-app-panel border border-theme-border rounded-lg">
             <div className="flex items-center gap-3">
-              <div className="animate-spin rounded-full h-6 w-6 border-2 border-blue-500 border-t-transparent" />
-              <span className="text-gray-400">Loading process...</span>
+              <div className="animate-spin rounded-full h-6 w-6 border-2 border-accent-link border-t-transparent" />
+              <span className="text-theme-text-secondary">Loading process...</span>
             </div>
           </div>
         </div>
@@ -132,9 +132,9 @@ function ProcessPageContent() {
       <PageLayout>
         <div className="p-6">
           <div className="flex flex-col items-center justify-center h-64 bg-app-panel border border-theme-border rounded-lg">
-            <AlertCircle className="w-10 h-10 text-red-400 mb-3" />
-            <p className="text-gray-400">Process not found</p>
-            <Link href="/processes" className="text-blue-400 hover:underline mt-2">
+            <AlertCircle className="w-10 h-10 text-accent-error mb-3" />
+            <p className="text-theme-text-secondary">Process not found</p>
+            <Link href="/processes" className="text-accent-link hover:underline mt-2">
               Back to Processes
             </Link>
           </div>
@@ -149,7 +149,7 @@ function ProcessPageContent() {
         {/* Back Link */}
         <Link
           href="/processes"
-          className="inline-flex items-center gap-1.5 text-blue-400 hover:underline text-sm mb-4"
+          className="inline-flex items-center gap-1.5 text-accent-link hover:underline text-sm mb-4"
         >
           <ArrowLeft className="w-3 h-3" />
           All Processes
@@ -158,22 +158,22 @@ function ProcessPageContent() {
         {/* Page Header */}
         <div className="flex items-start justify-between mb-8">
           <div>
-            <h1 className="text-2xl font-semibold text-gray-200">{String(process.exe ?? '')}</h1>
-            <div className="text-sm text-gray-500 font-mono mt-1">
+            <h1 className="text-2xl font-semibold text-theme-text-primary">{String(process.exe ?? '')}</h1>
+            <div className="text-sm text-theme-text-muted font-mono mt-1">
               <CopyableProcessId processId={processId} className="text-sm" />
             </div>
           </div>
           <div className="flex gap-3">
             <Link
               href={`/process_log?process_id=${processId}`}
-              className="flex items-center gap-2 px-4 py-2 bg-theme-border text-gray-200 rounded-md hover:bg-theme-border-hover transition-colors text-sm"
+              className="flex items-center gap-2 px-4 py-2 bg-theme-border text-theme-text-primary rounded-md hover:bg-theme-border-hover transition-colors text-sm"
             >
               <FileText className="w-4 h-4" />
               View Log
             </Link>
             <Link
               href={`/process_trace?process_id=${processId}`}
-              className="flex items-center gap-2 px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 transition-colors text-sm"
+              className="flex items-center gap-2 px-4 py-2 bg-accent-link text-white rounded-md hover:bg-accent-link-hover transition-colors text-sm"
             >
               <Activity className="w-4 h-4" />
               Generate Trace
@@ -185,7 +185,7 @@ function ProcessPageContent() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5 mb-8">
           {/* Process Information */}
           <div className="bg-app-panel border border-theme-border rounded-lg p-5">
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-4">
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-theme-text-muted mb-4">
               Process Information
             </h3>
             <div className="space-y-0">
@@ -196,7 +196,7 @@ function ProcessPageContent() {
 
           {/* Environment */}
           <div className="bg-app-panel border border-theme-border rounded-lg p-5">
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-4">
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-theme-text-muted mb-4">
               Environment
             </h3>
             <div className="space-y-0">
@@ -209,7 +209,7 @@ function ProcessPageContent() {
 
           {/* Timing */}
           <div className="bg-app-panel border border-theme-border rounded-lg p-5">
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-4">
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-theme-text-muted mb-4">
               Timing
             </h3>
             <div className="space-y-0">
@@ -224,11 +224,11 @@ function ProcessPageContent() {
 
           {/* Statistics */}
           <div className="bg-app-panel border border-theme-border rounded-lg p-5">
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-500 mb-4">
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-theme-text-muted mb-4">
               Statistics
             </h3>
             {statsError ? (
-              <div className="text-sm text-red-400">
+              <div className="text-sm text-accent-error">
                 Failed to load statistics: {statsError}
               </div>
             ) : (
@@ -269,11 +269,11 @@ function InfoRow({
 }) {
   return (
     <div className="flex justify-between py-2 border-b border-theme-border last:border-b-0">
-      <span className="text-gray-500 text-sm">{label}</span>
+      <span className="text-theme-text-muted text-sm">{label}</span>
       <span
         className={`text-sm text-right max-w-[60%] break-all ${
           mono ? 'font-mono' : ''
-        } text-gray-200`}
+        } text-theme-text-primary`}
       >
         {value}
       </span>
@@ -289,7 +289,7 @@ export default function ProcessPage() {
           <PageLayout>
             <div className="p-6">
               <div className="flex items-center justify-center h-64">
-                <div className="animate-spin rounded-full h-8 w-8 border-2 border-blue-500 border-t-transparent" />
+                <div className="animate-spin rounded-full h-8 w-8 border-2 border-accent-link border-t-transparent" />
               </div>
             </div>
           </PageLayout>

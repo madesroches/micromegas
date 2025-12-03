@@ -142,7 +142,7 @@ function ProcessesPageContent() {
     >
       <div className="flex items-center gap-1">
         {children}
-        <span className={sortField === field ? 'text-blue-500' : 'opacity-30'}>
+        <span className={sortField === field ? 'text-accent-link' : 'opacity-30'}>
           {sortField === field && sortDirection === 'asc' ? (
             <ChevronUp className="w-3 h-3" />
           ) : (
@@ -176,7 +176,7 @@ function ProcessesPageContent() {
         <div className="p-6 flex flex-col h-full">
           {/* Page Header */}
           <div className="mb-5">
-            <h1 className="text-2xl font-semibold text-gray-200">Processes</h1>
+            <h1 className="text-2xl font-semibold text-theme-text-primary">Processes</h1>
           </div>
 
           {/* Search */}
@@ -186,7 +186,7 @@ function ProcessesPageContent() {
               placeholder="Search by exe, computer, username..."
               value={searchInput}
               onChange={(e) => setSearchInput(e.target.value)}
-              className="w-full max-w-md px-4 py-2.5 bg-app-panel border border-theme-border rounded-md text-theme-text-primary text-sm placeholder-theme-text-muted focus:outline-none focus:border-accent-blue transition-colors"
+              className="w-full max-w-md px-4 py-2.5 bg-app-panel border border-theme-border rounded-md text-theme-text-primary text-sm placeholder-theme-text-muted focus:outline-none focus:border-accent-link transition-colors"
             />
           </div>
 
@@ -204,8 +204,8 @@ function ProcessesPageContent() {
           {sqlMutation.isPending && rows.length === 0 ? (
             <div className="flex-1 flex items-center justify-center bg-app-panel border border-theme-border rounded-lg">
               <div className="flex items-center gap-3">
-                <div className="animate-spin rounded-full h-6 w-6 border-2 border-blue-500 border-t-transparent" />
-                <span className="text-gray-400">Loading processes...</span>
+                <div className="animate-spin rounded-full h-6 w-6 border-2 border-accent-link border-t-transparent" />
+                <span className="text-theme-text-secondary">Loading processes...</span>
               </div>
             </div>
           ) : (
@@ -238,7 +238,7 @@ function ProcessesPageContent() {
                       <td className="px-4 py-3">
                         <Link
                           href={`/process?id=${row.process_id}`}
-                          className="text-blue-400 hover:underline"
+                          className="text-accent-link hover:underline"
                         >
                           {String(row.exe ?? '')}
                         </Link>
@@ -247,26 +247,26 @@ function ProcessesPageContent() {
                         <CopyableProcessId
                           processId={String(row.process_id ?? '')}
                           truncate={true}
-                          className="text-sm font-mono text-gray-400"
+                          className="text-sm font-mono text-theme-text-secondary"
                         />
                       </td>
-                      <td className="px-4 py-3 font-mono text-sm text-gray-300">
+                      <td className="px-4 py-3 font-mono text-sm text-theme-text-primary">
                         {formatTimestamp(row.start_time)}
                       </td>
-                      <td className="hidden lg:table-cell px-4 py-3 font-mono text-sm text-gray-300">
+                      <td className="hidden lg:table-cell px-4 py-3 font-mono text-sm text-theme-text-primary">
                         {formatTimestamp(row.last_update_time)}
                       </td>
-                      <td className="hidden md:table-cell px-4 py-3 text-gray-300">
+                      <td className="hidden md:table-cell px-4 py-3 text-theme-text-primary">
                         {String(row.username ?? '')}
                       </td>
-                      <td className="hidden md:table-cell px-4 py-3 text-gray-300">
+                      <td className="hidden md:table-cell px-4 py-3 text-theme-text-primary">
                         {String(row.computer ?? '')}
                       </td>
                     </tr>
                   ))}
                   {rows.length === 0 && (
                     <tr>
-                      <td colSpan={6} className="px-4 py-8 text-center text-gray-500">
+                      <td colSpan={6} className="px-4 py-8 text-center text-theme-text-muted">
                         {searchTerm ? 'No processes match your search.' : 'No processes available.'}
                       </td>
                     </tr>
@@ -289,7 +289,7 @@ export default function ProcessesPage() {
           <PageLayout>
             <div className="p-6">
               <div className="flex items-center justify-center h-64">
-                <div className="animate-spin rounded-full h-8 w-8 border-2 border-blue-500 border-t-transparent" />
+                <div className="animate-spin rounded-full h-8 w-8 border-2 border-accent-link border-t-transparent" />
               </div>
             </div>
           </PageLayout>

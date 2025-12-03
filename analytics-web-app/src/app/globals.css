@@ -37,10 +37,14 @@
     --text-primary: #e7e9ea;
     --text-secondary: #9ca3af;
     --text-muted: #6b7280;
-    --accent-blue: #3b82f6;
-    --accent-green: #22c55e;
-    --accent-purple: #c084fc;
-    --accent-orange: #fb923c;
+    --accent-link: #3b82f6;
+    --accent-link-hover: #2563eb;
+    --accent-success: #22c55e;
+    --accent-highlight: #c084fc;
+    --accent-variable: #fb923c;
+    --accent-error: #f87171;
+    --accent-error-bright: #dc2626;
+    --accent-warning: #facc15;
   }
 }
 

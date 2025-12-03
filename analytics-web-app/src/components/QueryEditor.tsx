@@ -45,14 +45,14 @@ export function QueryEditor({
       .replace(/>/g, '&gt;')
 
     // Highlight in order: strings first (so keywords inside strings don't get highlighted)
-    result = result.replace(/'[^']*'/g, '<span class="text-green-400">$&</span>')
+    result = result.replace(/'[^']*'/g, '<span style="color: var(--accent-success)">$&</span>')
     // Then keywords
     result = result.replace(
       /\b(SELECT|FROM|WHERE|AND|OR|ORDER BY|GROUP BY|LIMIT|OFFSET|AS|ON|JOIN|LEFT|RIGHT|INNER|OUTER|DESC|ASC|DISTINCT|COUNT|SUM|AVG|MIN|MAX|CASE|WHEN|THEN|ELSE|END|IN|NOT|NULL|IS|LIKE|BETWEEN)\b/gi,
-      '<span class="text-purple-400">$&</span>'
+      '<span style="color: var(--accent-highlight)">$&</span>'
     )
     // Then variables
-    result = result.replace(/\$[a-z_][a-z0-9_]*/gi, '<span class="text-orange-400">$&</span>')
+    result = result.replace(/\$[a-z_][a-z0-9_]*/gi, '<span style="color: var(--accent-variable)">$&</span>')
 
     // Add a trailing newline to match textarea behavior (prevents content jump)
     return result + '\n'
@@ -98,7 +98,7 @@ export function QueryEditor({
           <button
             onClick={handleRun}
             disabled={isLoading}
-            className="flex items-center gap-1 px-2.5 py-1 text-xs bg-green-600 text-white rounded hover:bg-green-700 disabled:bg-gray-600 disabled:cursor-not-allowed transition-colors"
+            className="flex items-center gap-1 px-2.5 py-1 text-xs bg-accent-success text-white rounded hover:opacity-90 disabled:bg-theme-border disabled:cursor-not-allowed transition-colors"
           >
             <Play className="w-3 h-3" />
             Run
@@ -109,7 +109,7 @@ export function QueryEditor({
       {/* Content */}
       <div className="flex-1 overflow-auto p-4">
         {/* SQL Editor with syntax highlighting overlay */}
-        <div className="relative h-48 border border-theme-border rounded-md focus-within:border-accent-blue bg-app-bg overflow-hidden">
+        <div className="relative h-48 border border-theme-border rounded-md focus-within:border-accent-link bg-app-bg overflow-hidden">
           {/* Highlighted code layer (behind) */}
           <pre
             className="absolute inset-0 p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap break-words pointer-events-none overflow-hidden m-0"
@@ -120,28 +120,28 @@ export function QueryEditor({
           <textarea
             value={sql}
             onChange={(e) => setSql(e.target.value)}
-            className="absolute inset-0 w-full h-full p-3 bg-transparent text-transparent caret-gray-200 font-mono text-xs leading-relaxed resize-none focus:outline-none"
+            className="absolute inset-0 w-full h-full p-3 bg-transparent text-transparent caret-theme-text-primary font-mono text-xs leading-relaxed resize-none focus:outline-none"
             spellCheck={false}
           />
         </div>
 
         {/* Error */}
         {error && (
-          <div className="mt-3 p-3 bg-red-900/20 border border-red-700 rounded-md">
-            <p className="text-xs text-red-400">{error}</p>
+          <div className="mt-3 p-3 bg-accent-error/10 border border-accent-error/50 rounded-md">
+            <p className="text-xs text-accent-error">{error}</p>
           </div>
         )}
 
         {/* Variables */}
         {variables.length > 0 && (
           <div className="mt-4">
-            <h4 className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">
+            <h4 className="text-xs font-semibold uppercase tracking-wide text-theme-text-muted mb-2">
               Variables
             </h4>
-            <div className="text-xs text-gray-500 space-y-1">
+            <div className="text-xs text-theme-text-muted space-y-1">
               {variables.map((v) => (
                 <div key={v.name}>
-                  <code className="px-1.5 py-0.5 bg-theme-border rounded text-accent-orange">
+                  <code className="px-1.5 py-0.5 bg-theme-border rounded text-accent-variable">
                     ${v.name}
                   </code>{' '}
                   - {v.description}
@@ -154,13 +154,13 @@ export function QueryEditor({
         {/* Current Values */}
         {Object.keys(currentValues).length > 0 && (
           <div className="mt-4">
-            <h4 className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">
+            <h4 className="text-xs font-semibold uppercase tracking-wide text-theme-text-muted mb-2">
               Current Values
             </h4>
-            <div className="text-xs text-gray-500 space-y-1">
+            <div className="text-xs text-theme-text-muted space-y-1">
               {Object.entries(currentValues).map(([key, value]) => (
                 <div key={key}>
-                  <code className="px-1.5 py-0.5 bg-theme-border rounded text-accent-orange">
+                  <code className="px-1.5 py-0.5 bg-theme-border rounded text-accent-variable">
                     ${key}
                   </code>{' '}
                   = <span className="text-theme-text-secondary">{value}</span>
@@ -173,13 +173,13 @@ export function QueryEditor({
         {/* Time Range */}
         {timeRangeLabel && (
           <div className="mt-4">
-            <h4 className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">
+            <h4 className="text-xs font-semibold uppercase tracking-wide text-theme-text-muted mb-2">
               Time Range
             </h4>
-            <p className="text-xs text-gray-500">
+            <p className="text-xs text-theme-text-muted">
               Applied implicitly via FlightSQL headers.
               <br />
-              Current: <span className="text-gray-300">{timeRangeLabel}</span>
+              Current: <span className="text-theme-text-primary">{timeRangeLabel}</span>
             </p>
           </div>
         )}

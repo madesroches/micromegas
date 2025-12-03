@@ -37,7 +37,7 @@ export function Header({ onRefresh }: HeaderProps) {
   return (
     <header className="flex items-center justify-between px-3 sm:px-6 py-3 bg-app-header border-b border-theme-border">
       <div className="flex items-center gap-3 sm:gap-6">
-        <Link href="/" className="text-base sm:text-lg font-semibold text-blue-500 hover:text-blue-400 transition-colors">
+        <Link href="/" className="text-base sm:text-lg font-semibold text-accent-link hover:text-accent-link-hover transition-colors">
           Micromegas
         </Link>
       </div>
@@ -48,7 +48,7 @@ export function Header({ onRefresh }: HeaderProps) {
           <TimeRangeSelector />
           <button
             onClick={onRefresh}
-            className="px-2 sm:px-2.5 py-1.5 bg-theme-border border-l border-theme-border-hover rounded-r-md text-gray-200 hover:bg-theme-border-hover transition-colors"
+            className="px-2 sm:px-2.5 py-1.5 bg-theme-border border-l border-theme-border-hover rounded-r-md text-theme-text-primary hover:bg-theme-border-hover transition-colors"
             title="Refresh"
           >
             <RefreshCw className="w-4 h-4" />
@@ -62,10 +62,10 @@ export function Header({ onRefresh }: HeaderProps) {
               onClick={() => setIsUserMenuOpen(!isUserMenuOpen)}
               className="flex items-center gap-2 px-3 py-1.5 rounded-md hover:bg-theme-border transition-colors"
             >
-              <div className="w-7 h-7 rounded-full bg-blue-500 flex items-center justify-center text-xs font-semibold text-white">
+              <div className="w-7 h-7 rounded-full bg-accent-link flex items-center justify-center text-xs font-semibold text-white">
                 {initials}
               </div>
-              <ChevronDown className="w-3 h-3 text-gray-400" />
+              <ChevronDown className="w-3 h-3 text-theme-text-secondary" />
             </button>
 
             {isUserMenuOpen && (
@@ -77,17 +77,17 @@ export function Header({ onRefresh }: HeaderProps) {
                 <div className="absolute right-0 mt-2 w-56 bg-app-panel rounded-md shadow-lg border border-theme-border z-20">
                   <div className="py-1">
                     <div className="px-4 py-2 border-b border-theme-border">
-                      <p className="text-sm font-medium text-gray-200 truncate">
+                      <p className="text-sm font-medium text-theme-text-primary truncate">
                         {user.name || 'User'}
                       </p>
                       {user.email && (
-                        <p className="text-xs text-gray-500 truncate">{user.email}</p>
+                        <p className="text-xs text-theme-text-muted truncate">{user.email}</p>
                       )}
                     </div>
                     <button
                       onClick={handleLogout}
                       disabled={isLoggingOut}
-                      className="w-full flex items-center px-4 py-2 text-sm text-gray-300 hover:bg-theme-border disabled:opacity-50"
+                      className="w-full flex items-center px-4 py-2 text-sm text-theme-text-primary hover:bg-theme-border disabled:opacity-50"
                     >
                       <LogOut className="h-4 w-4 mr-2" />
                       {isLoggingOut ? 'Signing out...' : 'Sign out'}

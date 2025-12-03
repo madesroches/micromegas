@@ -39,13 +39,13 @@ export function Sidebar() {
             href={item.href}
             className={`group relative flex items-center justify-center w-10 h-10 mx-2 rounded-md transition-colors ${
               isActive(item)
-                ? 'bg-app-card text-blue-500'
-                : 'text-gray-400 hover:bg-theme-border hover:text-gray-200'
+                ? 'bg-app-card text-accent-link'
+                : 'text-theme-text-secondary hover:bg-theme-border hover:text-theme-text-primary'
             }`}
             title={item.label}
           >
             {item.icon}
-            <span className="absolute left-16 px-2 py-1 bg-theme-border text-gray-200 text-sm rounded whitespace-nowrap opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-opacity z-50">
+            <span className="absolute left-16 px-2 py-1 bg-theme-border text-theme-text-primary text-sm rounded whitespace-nowrap opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-opacity z-50">
               {item.label}
             </span>
           </Link>

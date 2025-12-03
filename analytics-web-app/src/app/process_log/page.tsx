@@ -197,19 +197,19 @@ function ProcessLogContent() {
     const levelStr = String(level)
     switch (levelStr) {
       case 'FATAL':
-        return 'text-red-600'
+        return 'text-accent-error-bright'
       case 'ERROR':
-        return 'text-red-400'
+        return 'text-accent-error'
       case 'WARN':
-        return 'text-yellow-400'
+        return 'text-accent-warning'
       case 'INFO':
-        return 'text-blue-400'
+        return 'text-accent-link'
       case 'DEBUG':
-        return 'text-gray-400'
+        return 'text-theme-text-secondary'
       case 'TRACE':
-        return 'text-gray-500'
+        return 'text-theme-text-muted'
       default:
-        return 'text-gray-300'
+        return 'text-theme-text-primary'
     }
   }
 
@@ -235,9 +235,9 @@ function ProcessLogContent() {
       <PageLayout>
         <div className="p-6">
           <div className="flex flex-col items-center justify-center h-64 bg-app-panel border border-theme-border rounded-lg">
-            <AlertCircle className="w-10 h-10 text-red-400 mb-3" />
-            <p className="text-gray-400">No process ID provided</p>
-            <Link href="/processes" className="text-blue-400 hover:underline mt-2">
+            <AlertCircle className="w-10 h-10 text-accent-error mb-3" />
+            <p className="text-theme-text-secondary">No process ID provided</p>
+            <Link href="/processes" className="text-accent-link hover:underline mt-2">
               Back to Processes
             </Link>
           </div>
@@ -252,7 +252,7 @@ function ProcessLogContent() {
         {/* Back Link */}
         <Link
           href={`/process?id=${processId}`}
-          className="inline-flex items-center gap-1.5 text-blue-400 hover:underline text-sm mb-4"
+          className="inline-flex items-center gap-1.5 text-accent-link hover:underline text-sm mb-4"
         >
           <ArrowLeft className="w-3 h-3" />
           {processExe || 'Process'}
@@ -260,8 +260,8 @@ function ProcessLogContent() {
 
         {/* Page Header */}
         <div className="mb-5">
-          <h1 className="text-2xl font-semibold text-gray-200">Process Log</h1>
-          <div className="text-sm text-gray-500 font-mono mt-1">
+          <h1 className="text-2xl font-semibold text-theme-text-primary">Process Log</h1>
+          <div className="text-sm text-theme-text-muted font-mono mt-1">
             <CopyableProcessId processId={processId} className="text-sm" />
           </div>
         </div>
@@ -271,7 +271,7 @@ function ProcessLogContent() {
           <select
             value={logLevel}
             onChange={(e) => setLogLevel(e.target.value)}
-            className="px-3 py-2 bg-app-panel border border-theme-border rounded-md text-theme-text-primary text-sm focus:outline-none focus:border-accent-blue"
+            className="px-3 py-2 bg-app-panel border border-theme-border rounded-md text-theme-text-primary text-sm focus:outline-none focus:border-accent-link"
           >
             <option value="all">Max Level: TRACE (all)</option>
             <option value="debug">Max Level: DEBUG</option>
@@ -282,11 +282,11 @@ function ProcessLogContent() {
           </select>
 
           <div className="flex items-center gap-2">
-            <span className="text-gray-500 text-sm">Limit:</span>
+            <span className="text-theme-text-muted text-sm">Limit:</span>
             <select
               value={logLimit}
               onChange={(e) => setLogLimit(Number(e.target.value))}
-              className="px-3 py-2 bg-app-panel border border-theme-border rounded-md text-theme-text-primary text-sm focus:outline-none focus:border-accent-blue"
+              className="px-3 py-2 bg-app-panel border border-theme-border rounded-md text-theme-text-primary text-sm focus:outline-none focus:border-accent-link"
             >
               <option value={50}>50</option>
               <option value={100}>100</option>
@@ -296,7 +296,7 @@ function ProcessLogContent() {
             </select>
           </div>
 
-          <span className="ml-auto text-xs text-gray-500 self-center">
+          <span className="ml-auto text-xs text-theme-text-muted self-center">
             {sqlMutation.isPending && rows.length === 0
               ? 'Loading...'
               : `Showing ${rows.length} entries`}
@@ -318,13 +318,13 @@ function ProcessLogContent() {
           {sqlMutation.isPending && !hasLoaded ? (
             <div className="flex items-center justify-center h-full">
               <div className="flex items-center gap-3">
-                <div className="animate-spin rounded-full h-5 w-5 border-2 border-blue-500 border-t-transparent" />
-                <span className="text-gray-400">Loading logs...</span>
+                <div className="animate-spin rounded-full h-5 w-5 border-2 border-accent-link border-t-transparent" />
+                <span className="text-theme-text-secondary">Loading logs...</span>
               </div>
             </div>
           ) : rows.length === 0 ? (
             <div className="flex items-center justify-center h-full">
-              <span className="text-gray-500">No log entries found</span>
+              <span className="text-theme-text-muted">No log entries found</span>
             </div>
           ) : (
             <div>
@@ -333,19 +333,19 @@ function ProcessLogContent() {
                   key={index}
                   className="flex px-3 py-1 border-b border-app-panel hover:bg-app-panel/50 transition-colors"
                 >
-                  <span className="text-gray-500 mr-4 whitespace-nowrap">
+                  <span className="text-theme-text-muted mr-4 whitespace-nowrap">
                     {String(row.time ?? '')}
                   </span>
                   <span className={`w-12 mr-3 font-semibold ${getLevelColor(row.level)}`}>
                     {String(row.level ?? '')}
                   </span>
                   <span
-                    className="text-purple-400 mr-3 w-[200px] min-w-[200px] truncate"
+                    className="text-accent-highlight mr-3 w-[200px] min-w-[200px] truncate"
                     title={String(row.target ?? '')}
                   >
                     {String(row.target ?? '')}
                   </span>
-                  <span className="text-gray-200 flex-1 break-words">{String(row.msg ?? '')}</span>
+                  <span className="text-theme-text-primary flex-1 break-words">{String(row.msg ?? '')}</span>
                 </div>
               ))}
             </div>
@@ -364,7 +364,7 @@ export default function ProcessLogPage() {
           <PageLayout>
             <div className="p-6">
               <div className="flex items-center justify-center h-64">
-                <div className="animate-spin rounded-full h-8 w-8 border-2 border-blue-500 border-t-transparent" />
+                <div className="animate-spin rounded-full h-8 w-8 border-2 border-accent-link border-t-transparent" />
               </div>
             </div>
           </PageLayout>
