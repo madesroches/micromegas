@@ -462,14 +462,14 @@ async fn generate_trace(
     Path(process_id): Path<String>,
     Extension(auth_token): Extension<AuthToken>,
     Json(request): Json<GenerateTraceRequest>,
-) -> impl IntoResponse {
+) -> ApiResult<Response<axum::body::Body>> {
     let stream = generate_trace_stream(process_id, auth_token.0, request);
-
     Response::builder()
         .header(header::CONTENT_TYPE, "application/octet-stream")
         .header(header::TRANSFER_ENCODING, "chunked")
         .body(axum::body::Body::from_stream(stream))
-        .unwrap()
+        .context("failed to build streaming response")
+        .map_err(ApiError::from)
 }
 
 #[span_fn]
