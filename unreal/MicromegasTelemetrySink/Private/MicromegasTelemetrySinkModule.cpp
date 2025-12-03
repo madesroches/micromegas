@@ -119,3 +119,7 @@ IMPLEMENT_MODULE(FMicromegasTelemetrySinkModule, MicromegasTelemetrySink)
 ITelemetryAuthenticator::~ITelemetryAuthenticator()
 {
 }
+
+void ITelemetryAuthenticator::Shutdown()
+{
+}
