@@ -733,7 +733,8 @@ fn arrow_value_to_json(
                 .unwrap();
             let nanos = arr.value(index);
             let dt = DateTime::from_timestamp_nanos(nanos);
-            serde_json::Value::String(dt.to_rfc3339())
+            // Use nanosecond precision to preserve full resolution
+            serde_json::Value::String(dt.to_rfc3339_opts(chrono::SecondsFormat::Nanos, true))
         }
         _ => {
             // For complex types, try to represent as string
