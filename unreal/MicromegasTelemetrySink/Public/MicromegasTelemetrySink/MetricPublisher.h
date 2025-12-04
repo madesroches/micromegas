@@ -24,6 +24,7 @@ private:
 	void OnWorldInit(UWorld* /*World*/, const UWorld::InitializationValues /*IVS*/);
 	void OnWorldTornDown(UWorld* World);
 	static void EmitScalabilityMetrics(const Scalability::FQualityLevels& NewLevels);
+	static void EmitVSyncStatus(IConsoleVariable* CVar);
 
 	FName CurrentWorldName;
 };
