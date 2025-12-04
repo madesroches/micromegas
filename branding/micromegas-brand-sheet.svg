@@ -9,8 +9,8 @@
       <stop offset="100%" style="stop-color:#0d47a1"/>
     </linearGradient>
     <linearGradient id="ring3" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#ffc107"/>
-      <stop offset="100%" style="stop-color:#ffb300"/>
+      <stop offset="0%" style="stop-color:#ffb300"/>
+      <stop offset="100%" style="stop-color:#e6a000"/>
     </linearGradient>
     <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
       <feGaussianBlur stdDeviation="2" result="coloredBlur"/>
@@ -210,8 +210,8 @@
     <rect x="50" y="15" width="40" height="40" fill="#1565c0" rx="4"/>
     <text x="70" y="75" text-anchor="middle" fill="#666" font-family="monospace" font-size="9">#1565c0</text>
     
-    <rect x="100" y="15" width="40" height="40" fill="#ffc107" rx="4"/>
-    <text x="120" y="75" text-anchor="middle" fill="#666" font-family="monospace" font-size="9">#ffc107</text>
+    <rect x="100" y="15" width="40" height="40" fill="#ffb300" rx="4"/>
+    <text x="120" y="75" text-anchor="middle" fill="#666" font-family="monospace" font-size="9">#ffb300</text>
     
     <rect x="150" y="15" width="40" height="40" fill="#1a1a2e" rx="4"/>
     <text x="170" y="75" text-anchor="middle" fill="#666" font-family="monospace" font-size="9">#1a1a2e</text>

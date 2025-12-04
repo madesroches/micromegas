@@ -1,0 +1,278 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 900">
+  <rect width="1200" height="900" fill="#0a0a0f"/>
+
+  <!-- Title -->
+  <text x="600" y="45" text-anchor="middle" fill="#ffffff" font-family="system-ui, sans-serif" font-size="24" font-weight="300" letter-spacing="6">EXTENDED COLOR PALETTE</text>
+  <text x="600" y="70" text-anchor="middle" fill="#666" font-family="monospace" font-size="11">Inspired by Van Gogh's "Wheatfield with Crows"</text>
+
+  <!-- Primary Colors -->
+  <text x="100" y="115" fill="#888" font-family="monospace" font-size="11" letter-spacing="2">PRIMARY</text>
+
+  <g transform="translate(100, 130)">
+    <rect width="60" height="60" fill="#bf360c" rx="4"/>
+    <text x="30" y="80" text-anchor="middle" fill="#666" font-family="monospace" font-size="8">Rust</text>
+    <text x="30" y="92" text-anchor="middle" fill="#555" font-family="monospace" font-size="7">#bf360c</text>
+  </g>
+  <g transform="translate(175, 130)">
+    <rect width="60" height="60" fill="#1565c0" rx="4"/>
+    <text x="30" y="80" text-anchor="middle" fill="#666" font-family="monospace" font-size="8">Cobalt</text>
+    <text x="30" y="92" text-anchor="middle" fill="#555" font-family="monospace" font-size="7">#1565c0</text>
+  </g>
+  <g transform="translate(250, 130)">
+    <rect width="60" height="60" fill="#ffb300" rx="4"/>
+    <text x="30" y="80" text-anchor="middle" fill="#666" font-family="monospace" font-size="8">Wheat</text>
+    <text x="30" y="92" text-anchor="middle" fill="#555" font-family="monospace" font-size="7">#ffb300</text>
+  </g>
+  <g transform="translate(325, 130)">
+    <rect width="60" height="60" fill="#0a0a0f" stroke="#333" rx="4"/>
+    <text x="30" y="80" text-anchor="middle" fill="#666" font-family="monospace" font-size="8">Night</text>
+    <text x="30" y="92" text-anchor="middle" fill="#555" font-family="monospace" font-size="7">#0a0a0f</text>
+  </g>
+  <g transform="translate(400, 130)">
+    <rect width="60" height="60" fill="#1a1a2e" rx="4"/>
+    <text x="30" y="80" text-anchor="middle" fill="#666" font-family="monospace" font-size="8">Charcoal</text>
+    <text x="30" y="92" text-anchor="middle" fill="#555" font-family="monospace" font-size="7">#1a1a2e</text>
+  </g>
+
+  <!-- Stormy Sky -->
+  <text x="100" y="260" fill="#888" font-family="monospace" font-size="11" letter-spacing="2">STORMY SKY</text>
+
+  <g transform="translate(100, 275)">
+    <rect width="60" height="60" fill="#1a237e" rx="4"/>
+    <text x="30" y="80" text-anchor="middle" fill="#666" font-family="monospace" font-size="8">Storm</text>
+    <text x="30" y="92" text-anchor="middle" fill="#555" font-family="monospace" font-size="7">#1a237e</text>
+  </g>
+  <g transform="translate(175, 275)">
+    <rect width="60" height="60" fill="#283593" rx="4"/>
+    <text x="30" y="80" text-anchor="middle" fill="#666" font-family="monospace" font-size="8">Twilight</text>
+    <text x="30" y="92" text-anchor="middle" fill="#555" font-family="monospace" font-size="7">#283593</text>
+  </g>
+  <g transform="translate(250, 275)">
+    <rect width="60" height="60" fill="#0d47a1" rx="4"/>
+    <text x="30" y="80" text-anchor="middle" fill="#666" font-family="monospace" font-size="8">Prussian</text>
+    <text x="30" y="92" text-anchor="middle" fill="#555" font-family="monospace" font-size="7">#0d47a1</text>
+  </g>
+  <g transform="translate(325, 275)">
+    <rect width="60" height="60" fill="#42a5f5" rx="4"/>
+    <text x="30" y="80" text-anchor="middle" fill="#666" font-family="monospace" font-size="8">Horizon</text>
+    <text x="30" y="92" text-anchor="middle" fill="#555" font-family="monospace" font-size="7">#42a5f5</text>
+  </g>
+  <g transform="translate(400, 275)">
+    <rect width="60" height="60" fill="#5e35b1" rx="4"/>
+    <text x="30" y="80" text-anchor="middle" fill="#666" font-family="monospace" font-size="8">Violet</text>
+    <text x="30" y="92" text-anchor="middle" fill="#555" font-family="monospace" font-size="7">#5e35b1</text>
+  </g>
+  <g transform="translate(475, 275)">
+    <rect width="60" height="60" fill="#7e57c2" rx="4"/>
+    <text x="30" y="80" text-anchor="middle" fill="#666" font-family="monospace" font-size="8">Lavender</text>
+    <text x="30" y="92" text-anchor="middle" fill="#555" font-family="monospace" font-size="7">#7e57c2</text>
+  </g>
+
+  <!-- Wheat Field -->
+  <text x="100" y="405" fill="#888" font-family="monospace" font-size="11" letter-spacing="2">WHEAT FIELD</text>
+
+  <g transform="translate(100, 420)">
+    <rect width="60" height="60" fill="#ff8f00" rx="4"/>
+    <text x="30" y="80" text-anchor="middle" fill="#666" font-family="monospace" font-size="8">Harvest</text>
+    <text x="30" y="92" text-anchor="middle" fill="#555" font-family="monospace" font-size="7">#ff8f00</text>
+  </g>
+  <g transform="translate(175, 420)">
+    <rect width="60" height="60" fill="#ffb300" rx="4"/>
+    <text x="30" y="80" text-anchor="middle" fill="#666" font-family="monospace" font-size="8">Wheat</text>
+    <text x="30" y="92" text-anchor="middle" fill="#555" font-family="monospace" font-size="7">#ffb300</text>
+  </g>
+  <g transform="translate(250, 420)">
+    <rect width="60" height="60" fill="#ffd54f" rx="4"/>
+    <text x="30" y="80" text-anchor="middle" fill="#666" font-family="monospace" font-size="8">Grain</text>
+    <text x="30" y="92" text-anchor="middle" fill="#555" font-family="monospace" font-size="7">#ffd54f</text>
+  </g>
+  <g transform="translate(325, 420)">
+    <rect width="60" height="60" fill="#ffecb3" rx="4"/>
+    <text x="30" y="80" text-anchor="middle" fill="#666" font-family="monospace" font-size="8">Straw</text>
+    <text x="30" y="92" text-anchor="middle" fill="#555" font-family="monospace" font-size="7">#ffecb3</text>
+  </g>
+  <g transform="translate(400, 420)">
+    <rect width="60" height="60" fill="#e65100" rx="4"/>
+    <text x="30" y="80" text-anchor="middle" fill="#666" font-family="monospace" font-size="8">Ochre</text>
+    <text x="30" y="92" text-anchor="middle" fill="#555" font-family="monospace" font-size="7">#e65100</text>
+  </g>
+  <g transform="translate(475, 420)">
+    <rect width="60" height="60" fill="#8d3a14" rx="4"/>
+    <text x="30" y="80" text-anchor="middle" fill="#666" font-family="monospace" font-size="8">Sienna</text>
+    <text x="30" y="92" text-anchor="middle" fill="#555" font-family="monospace" font-size="7">#8d3a14</text>
+  </g>
+
+  <!-- Earth & Path -->
+  <text x="620" y="115" fill="#888" font-family="monospace" font-size="11" letter-spacing="2">EARTH &amp; PATH</text>
+
+  <g transform="translate(620, 130)">
+    <rect width="60" height="60" fill="#2e7d32" rx="4"/>
+    <text x="30" y="80" text-anchor="middle" fill="#666" font-family="monospace" font-size="8">Field</text>
+    <text x="30" y="92" text-anchor="middle" fill="#555" font-family="monospace" font-size="7">#2e7d32</text>
+  </g>
+  <g transform="translate(695, 130)">
+    <rect width="60" height="60" fill="#66bb6a" rx="4"/>
+    <text x="30" y="80" text-anchor="middle" fill="#666" font-family="monospace" font-size="8">Sage</text>
+    <text x="30" y="92" text-anchor="middle" fill="#555" font-family="monospace" font-size="7">#66bb6a</text>
+  </g>
+  <g transform="translate(770, 130)">
+    <rect width="60" height="60" fill="#827717" rx="4"/>
+    <text x="30" y="80" text-anchor="middle" fill="#666" font-family="monospace" font-size="8">Olive</text>
+    <text x="30" y="92" text-anchor="middle" fill="#555" font-family="monospace" font-size="7">#827717</text>
+  </g>
+  <g transform="translate(845, 130)">
+    <rect width="60" height="60" fill="#4e342e" rx="4"/>
+    <text x="30" y="80" text-anchor="middle" fill="#666" font-family="monospace" font-size="8">Umber</text>
+    <text x="30" y="92" text-anchor="middle" fill="#555" font-family="monospace" font-size="7">#4e342e</text>
+  </g>
+  <g transform="translate(920, 130)">
+    <rect width="60" height="60" fill="#6d4c41" rx="4"/>
+    <text x="30" y="80" text-anchor="middle" fill="#666" font-family="monospace" font-size="8">Clay</text>
+    <text x="30" y="92" text-anchor="middle" fill="#555" font-family="monospace" font-size="7">#6d4c41</text>
+  </g>
+  <g transform="translate(995, 130)">
+    <rect width="60" height="60" fill="#3e2723" rx="4"/>
+    <text x="30" y="80" text-anchor="middle" fill="#666" font-family="monospace" font-size="8">Earth</text>
+    <text x="30" y="92" text-anchor="middle" fill="#555" font-family="monospace" font-size="7">#3e2723</text>
+  </g>
+
+  <!-- Crow & Shadow -->
+  <text x="620" y="260" fill="#888" font-family="monospace" font-size="11" letter-spacing="2">CROW &amp; SHADOW</text>
+
+  <g transform="translate(620, 275)">
+    <rect width="60" height="60" fill="#121212" rx="4"/>
+    <text x="30" y="80" text-anchor="middle" fill="#666" font-family="monospace" font-size="8">Crow</text>
+    <text x="30" y="92" text-anchor="middle" fill="#555" font-family="monospace" font-size="7">#121212</text>
+  </g>
+  <g transform="translate(695, 275)">
+    <rect width="60" height="60" fill="#1e1e2f" rx="4"/>
+    <text x="30" y="80" text-anchor="middle" fill="#666" font-family="monospace" font-size="8">Shadow</text>
+    <text x="30" y="92" text-anchor="middle" fill="#555" font-family="monospace" font-size="7">#1e1e2f</text>
+  </g>
+  <g transform="translate(770, 275)">
+    <rect width="60" height="60" fill="#37474f" rx="4"/>
+    <text x="30" y="80" text-anchor="middle" fill="#666" font-family="monospace" font-size="8">Slate</text>
+    <text x="30" y="92" text-anchor="middle" fill="#555" font-family="monospace" font-size="7">#37474f</text>
+  </g>
+  <g transform="translate(845, 275)">
+    <rect width="60" height="60" fill="#546e7a" rx="4"/>
+    <text x="30" y="80" text-anchor="middle" fill="#666" font-family="monospace" font-size="8">Pewter</text>
+    <text x="30" y="92" text-anchor="middle" fill="#555" font-family="monospace" font-size="7">#546e7a</text>
+  </g>
+  <g transform="translate(920, 275)">
+    <rect width="60" height="60" fill="#90a4ae" rx="4"/>
+    <text x="30" y="80" text-anchor="middle" fill="#666" font-family="monospace" font-size="8">Cloud</text>
+    <text x="30" y="92" text-anchor="middle" fill="#555" font-family="monospace" font-size="7">#90a4ae</text>
+  </g>
+  <g transform="translate(995, 275)">
+    <rect width="60" height="60" fill="#cfd8dc" rx="4"/>
+    <text x="30" y="80" text-anchor="middle" fill="#666" font-family="monospace" font-size="8">Misty</text>
+    <text x="30" y="92" text-anchor="middle" fill="#555" font-family="monospace" font-size="7">#cfd8dc</text>
+  </g>
+
+  <!-- Status Colors -->
+  <text x="620" y="405" fill="#888" font-family="monospace" font-size="11" letter-spacing="2">STATUS &amp; ACCENT</text>
+
+  <g transform="translate(620, 420)">
+    <rect width="60" height="60" fill="#c62828" rx="4"/>
+    <text x="30" y="80" text-anchor="middle" fill="#666" font-family="monospace" font-size="8">Crimson</text>
+    <text x="30" y="92" text-anchor="middle" fill="#555" font-family="monospace" font-size="7">#c62828</text>
+  </g>
+  <g transform="translate(695, 420)">
+    <rect width="60" height="60" fill="#ff7043" rx="4"/>
+    <text x="30" y="80" text-anchor="middle" fill="#666" font-family="monospace" font-size="8">Coral</text>
+    <text x="30" y="92" text-anchor="middle" fill="#555" font-family="monospace" font-size="7">#ff7043</text>
+  </g>
+  <g transform="translate(770, 420)">
+    <rect width="60" height="60" fill="#00897b" rx="4"/>
+    <text x="30" y="80" text-anchor="middle" fill="#666" font-family="monospace" font-size="8">Teal</text>
+    <text x="30" y="92" text-anchor="middle" fill="#555" font-family="monospace" font-size="7">#00897b</text>
+  </g>
+  <g transform="translate(845, 420)">
+    <rect width="60" height="60" fill="#00acc1" rx="4"/>
+    <text x="30" y="80" text-anchor="middle" fill="#666" font-family="monospace" font-size="8">Cyan</text>
+    <text x="30" y="92" text-anchor="middle" fill="#555" font-family="monospace" font-size="7">#00acc1</text>
+  </g>
+  <g transform="translate(920, 420)">
+    <rect width="60" height="60" fill="#ad1457" rx="4"/>
+    <text x="30" y="80" text-anchor="middle" fill="#666" font-family="monospace" font-size="8">Pink</text>
+    <text x="30" y="92" text-anchor="middle" fill="#555" font-family="monospace" font-size="7">#ad1457</text>
+  </g>
+  <g transform="translate(995, 420)">
+    <rect width="60" height="60" fill="#9e9d24" rx="4"/>
+    <text x="30" y="80" text-anchor="middle" fill="#666" font-family="monospace" font-size="8">Lime</text>
+    <text x="30" y="92" text-anchor="middle" fill="#555" font-family="monospace" font-size="7">#9e9d24</text>
+  </g>
+
+  <!-- Chart Sequence -->
+  <text x="600" y="565" text-anchor="middle" fill="#888" font-family="monospace" font-size="11" letter-spacing="2">CHART COLOR SEQUENCE (12 SERIES)</text>
+
+  <g transform="translate(140, 590)">
+    <rect width="70" height="35" fill="#bf360c" rx="3"/>
+    <rect x="77" width="70" height="35" fill="#1565c0" rx="3"/>
+    <rect x="154" width="70" height="35" fill="#ffb300" rx="3"/>
+    <rect x="231" width="70" height="35" fill="#2e7d32" rx="3"/>
+    <rect x="308" width="70" height="35" fill="#5e35b1" rx="3"/>
+    <rect x="385" width="70" height="35" fill="#ff8f00" rx="3"/>
+    <rect x="462" width="70" height="35" fill="#00897b" rx="3"/>
+    <rect x="539" width="70" height="35" fill="#c62828" rx="3"/>
+    <rect x="616" width="70" height="35" fill="#7e57c2" rx="3"/>
+    <rect x="693" width="70" height="35" fill="#827717" rx="3"/>
+    <rect x="770" width="70" height="35" fill="#00acc1" rx="3"/>
+    <rect x="847" width="70" height="35" fill="#ad1457" rx="3"/>
+  </g>
+
+  <!-- Sequential Gradients -->
+  <text x="600" y="680" text-anchor="middle" fill="#888" font-family="monospace" font-size="11" letter-spacing="2">SEQUENTIAL GRADIENTS</text>
+
+  <defs>
+    <linearGradient id="seqBlue" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#e3f2fd"/>
+      <stop offset="20%" style="stop-color:#90caf9"/>
+      <stop offset="40%" style="stop-color:#42a5f5"/>
+      <stop offset="60%" style="stop-color:#1565c0"/>
+      <stop offset="80%" style="stop-color:#0d47a1"/>
+      <stop offset="100%" style="stop-color:#1a237e"/>
+    </linearGradient>
+    <linearGradient id="seqOrange" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#fff3e0"/>
+      <stop offset="20%" style="stop-color:#ffcc80"/>
+      <stop offset="40%" style="stop-color:#ff8f00"/>
+      <stop offset="60%" style="stop-color:#bf360c"/>
+      <stop offset="80%" style="stop-color:#8d3a14"/>
+      <stop offset="100%" style="stop-color:#4e342e"/>
+    </linearGradient>
+    <linearGradient id="diverging" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#bf360c"/>
+      <stop offset="17%" style="stop-color:#ff8f00"/>
+      <stop offset="33%" style="stop-color:#ffd54f"/>
+      <stop offset="50%" style="stop-color:#f5f5f7"/>
+      <stop offset="67%" style="stop-color:#90caf9"/>
+      <stop offset="83%" style="stop-color:#1565c0"/>
+      <stop offset="100%" style="stop-color:#1a237e"/>
+    </linearGradient>
+  </defs>
+
+  <g transform="translate(140, 700)">
+    <text x="0" y="0" fill="#666" font-family="monospace" font-size="9">Blues</text>
+    <rect x="60" y="-12" width="300" height="20" fill="url(#seqBlue)" rx="3"/>
+
+    <text x="380" y="0" fill="#666" font-family="monospace" font-size="9">Oranges</text>
+    <rect x="450" y="-12" width="300" height="20" fill="url(#seqOrange)" rx="3"/>
+
+    <text x="770" y="0" fill="#666" font-family="monospace" font-size="9">Diverging</text>
+    <rect x="850" y="-12" width="200" height="20" fill="url(#diverging)" rx="3"/>
+  </g>
+
+  <!-- Van Gogh reference -->
+  <text x="600" y="780" text-anchor="middle" fill="#444" font-family="system-ui, sans-serif" font-size="10" font-style="italic">"I have a terrible lucidity at moments... when nature is so beautiful."</text>
+  <text x="600" y="800" text-anchor="middle" fill="#333" font-family="monospace" font-size="9">- Vincent van Gogh, July 1890</text>
+
+  <!-- Micromegas logo small -->
+  <g transform="translate(600, 860) scale(0.25)">
+    <ellipse cx="0" cy="0" rx="100" ry="38" fill="none" stroke="#bf360c" stroke-width="4" transform="rotate(-20)" opacity="0.8"/>
+    <ellipse cx="0" cy="0" rx="79" ry="30" fill="none" stroke="#1565c0" stroke-width="4" transform="rotate(25)" opacity="0.8"/>
+    <ellipse cx="0" cy="0" rx="58" ry="22" fill="none" stroke="#ffb300" stroke-width="4" transform="rotate(-8)" opacity="0.8"/>
+    <polygon points="0,-12 2,-4 9,-4 3,1 6,9 0,4 -6,9 -3,1 -9,-4 -2,-4" fill="#ffffff"/>
+  </g>
+</svg>
