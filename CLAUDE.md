@@ -87,6 +87,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   - Accepts `--format` for output: `table` (default), `csv`, `json`
   - Example: `poetry run python query.py "SELECT time, level, msg FROM log_entries LIMIT 10" --begin 1h --format csv`
 
+## Branding
+
+Logo and color scheme assets are in the `branding/` folder:
+- **Brand sheet**: `micromegas-brand-sheet.svg` (full reference with color palette)
+- **Logos**: horizontal, vertical, icon variants for dark/light backgrounds
+- **Colors**: Rust orange (#bf360c), Blue (#1565c0), Gold (#ffc107), Dark bg (#0a0a0f)
+
 ## Architecture
 
 Micromegas: unified observability platform for logs, metrics, and traces.

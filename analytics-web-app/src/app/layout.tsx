@@ -10,6 +10,9 @@ const inter = Inter({ subsets: ['latin'] })
 export const metadata: Metadata = {
   title: 'Analytics Web App - Micromegas',
   description: 'Analytics web application for micromegas telemetry data',
+  icons: {
+    icon: '/icon.svg',
+  },
 }
 
 export default function RootLayout({

@@ -73,6 +73,15 @@ const config: Config = {
           bright: "var(--accent-error-bright)",
         },
         "accent-warning": "var(--accent-warning)",
+        // Micromegas brand colors
+        brand: {
+          rust: "var(--brand-rust)",
+          "rust-dark": "var(--brand-rust-dark)",
+          blue: "var(--brand-blue)",
+          "blue-dark": "var(--brand-blue-dark)",
+          gold: "var(--brand-gold)",
+          "gold-dark": "var(--brand-gold-dark)",
+        },
       },
       borderRadius: {
         lg: "var(--radius)",
