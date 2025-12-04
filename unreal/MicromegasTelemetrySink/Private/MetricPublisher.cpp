@@ -18,6 +18,8 @@ MetricPublisher::MetricPublisher()
 	FWorldDelegates::OnWorldBeginTearDown.AddRaw(this, &MetricPublisher::OnWorldTornDown);
 	FCoreDelegates::OnBeginFrame.AddRaw(this, &MetricPublisher::Tick);
 	Scalability::OnScalabilitySettingsChanged.AddStatic(&MetricPublisher::EmitScalabilityMetrics);
+
+	IConsoleManager::Get().FindConsoleVariable(TEXT("r.VSync"))->SetOnChangedCallback(FConsoleVariableDelegate::CreateStatic(&MetricPublisher::EmitVSyncStatus));
 }
 
 MetricPublisher::~MetricPublisher()
@@ -42,6 +44,34 @@ void MetricPublisher::EmitScalabilityMetrics(const Scalability::FQualityLevels& 
 	MICROMEGAS_IMETRIC("Scalability", MicromegasTracing::Verbosity::Min, TEXT("PostProcessQuality"), TEXT("none"), NewLevels.PostProcessQuality);
 	MICROMEGAS_IMETRIC("Scalability", MicromegasTracing::Verbosity::Min, TEXT("ViewDistanceQuality"), TEXT("none"), NewLevels.ViewDistanceQuality);
 	MICROMEGAS_FMETRIC("Scalability", MicromegasTracing::Verbosity::Min, TEXT("ResolutionQuality"), TEXT("none"), NewLevels.ResolutionQuality);
+	
+	if (MicromegasTracing::DefaultContext* Ctx = MicromegasTracing::Dispatch::GetDefaultContext())
+	{
+		TPair<FName, FName> BatchChanges[] {
+			{ TEXT("Scalability_LandscapeQuality"), FName(FString::FromInt(NewLevels.LandscapeQuality)) },
+			{ TEXT("Scalability_EffectsQuality"), FName(FString::FromInt(NewLevels.EffectsQuality)) },
+			{ TEXT("Scalability_FoliageQuality"), FName(FString::FromInt(NewLevels.FoliageQuality)) },
+			{ TEXT("Scalability_ReflectionQuality"), FName(FString::FromInt(NewLevels.ReflectionQuality)) },
+			{ TEXT("Scalability_ShadingQuality"), FName(FString::FromInt(NewLevels.ShadingQuality)) },
+			{ TEXT("Scalability_ShadowQuality"), FName(FString::FromInt(NewLevels.ShadowQuality)) },
+			{ TEXT("Scalability_TextureQuality"), FName(FString::FromInt(NewLevels.TextureQuality)) },
+			{ TEXT("Scalability_AntiAliasingQuality"), FName(FString::FromInt(NewLevels.AntiAliasingQuality)) },
+			{ TEXT("Scalability_GlobalIlluminationQuality"), FName(FString::FromInt(NewLevels.GlobalIlluminationQuality)) },
+			{ TEXT("Scalability_PostProcessQuality"), FName(FString::FromInt(NewLevels.PostProcessQuality)) },
+			{ TEXT("Scalability_ViewDistanceQuality"), FName(FString::FromInt(NewLevels.ViewDistanceQuality)) },
+			{ TEXT("Scalability_ResolutionQuality"), FName(FString::SanitizeFloat(NewLevels.ResolutionQuality, 2)) },
+		};
+
+		Ctx->SetBatch(TArrayView<TPair<FName, FName>>{ BatchChanges });
+	}
+}
+
+void MetricPublisher::EmitVSyncStatus(IConsoleVariable* CVar)
+{
+	if (MicromegasTracing::DefaultContext* Ctx = MicromegasTracing::Dispatch::GetDefaultContext())
+	{
+		Ctx->Set(TEXT("VSync"), FName(FString::Printf(TEXT("%d"), CVar->GetBool())));
+	}
 }
 
 void MetricPublisher::OnWorldInit(UWorld* World, const UWorld::InitializationValues /*IVS*/)
