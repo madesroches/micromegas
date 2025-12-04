@@ -1,0 +1,15 @@
+name: Build Skip
+
+on:
+  pull_request:
+    branches: [ "main" ]
+    paths-ignore:
+      - 'rust/**'
+      - 'build/rust_ci.py'
+      - '.github/workflows/rust.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "No Rust changes, skipping build"
