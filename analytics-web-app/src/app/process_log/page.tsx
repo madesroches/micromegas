@@ -51,6 +51,30 @@ const LEVEL_NAMES: Record<number, string> = {
 const VALID_LEVELS = ['all', 'trace', 'debug', 'info', 'warn', 'error', 'fatal']
 const VALID_LIMITS = [50, 100, 200, 500, 1000]
 
+function formatLocalTime(utcTime: unknown): string {
+  if (!utcTime) return ''.padEnd(29)
+  const str = String(utcTime)
+
+  // Extract nanoseconds from the original string (JS Date only has ms precision)
+  let nanoseconds = '000000000'
+  const nanoMatch = str.match(/\.(\d+)/)
+  if (nanoMatch) {
+    nanoseconds = nanoMatch[1].padEnd(9, '0').slice(0, 9)
+  }
+
+  const date = new Date(str)
+  if (isNaN(date.getTime())) return str.slice(0, 29).padEnd(29)
+
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  const hours = String(date.getHours()).padStart(2, '0')
+  const minutes = String(date.getMinutes()).padStart(2, '0')
+  const seconds = String(date.getSeconds()).padStart(2, '0')
+
+  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}.${nanoseconds}`
+}
+
 function ProcessLogContent() {
   const searchParams = useSearchParams()
   const router = useRouter()
@@ -374,10 +398,10 @@ function ProcessLogContent() {
                   key={index}
                   className="flex px-3 py-1 border-b border-app-panel hover:bg-app-panel/50 transition-colors"
                 >
-                  <span className="text-theme-text-muted mr-4 whitespace-nowrap">
-                    {String(row.time ?? '')}
+                  <span className="text-theme-text-muted mr-3 w-[188px] min-w-[188px] whitespace-nowrap">
+                    {formatLocalTime(row.time)}
                   </span>
-                  <span className={`w-12 mr-3 font-semibold ${getLevelColor(row.level)}`}>
+                  <span className={`w-[38px] min-w-[38px] mr-3 font-semibold ${getLevelColor(row.level)}`}>
                     {String(row.level ?? '')}
                   </span>
                   <span
