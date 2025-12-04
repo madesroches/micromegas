@@ -4,47 +4,55 @@
 
 @layer base {
   :root {
-    /* Dark theme as default (Grafana-inspired) */
-    --background: 216 28% 7%;
+    /* Dark theme with Micromegas brand colors */
+    --background: 240 33% 3%;
     --foreground: 210 20% 90%;
-    --card: 216 22% 11%;
+    --card: 240 27% 7%;
     --card-foreground: 210 20% 90%;
-    --popover: 216 22% 11%;
+    --popover: 240 27% 7%;
     --popover-foreground: 210 20% 90%;
-    --primary: 217 91% 60%;
+    --primary: 213 79% 42%;
     --primary-foreground: 210 40% 98%;
-    --secondary: 215 20% 18%;
+    --secondary: 240 20% 12%;
     --secondary-foreground: 210 20% 90%;
-    --muted: 215 20% 18%;
+    --muted: 240 20% 12%;
     --muted-foreground: 215 16% 57%;
-    --accent: 215 20% 18%;
+    --accent: 240 20% 15%;
     --accent-foreground: 210 20% 90%;
     --destructive: 0 63% 31%;
     --destructive-foreground: 210 40% 98%;
-    --border: 215 20% 22%;
-    --input: 215 20% 22%;
-    --ring: 217 91% 60%;
+    --border: 240 15% 18%;
+    --input: 240 15% 18%;
+    --ring: 213 79% 42%;
     --radius: 0.5rem;
 
-    /* Custom colors matching mockups */
-    --app-bg: #0f1419;
-    --header-bg: #1a1f26;
-    --sidebar-bg: #1a1f26;
-    --panel-bg: #1a1f26;
-    --card-bg: #22272e;
-    --border-color: #2f3540;
-    --border-hover: #3d4450;
+    /* Micromegas brand palette */
+    --brand-rust: #bf360c;
+    --brand-rust-dark: #8d3a14;
+    --brand-blue: #1565c0;
+    --brand-blue-dark: #0d47a1;
+    --brand-gold: #ffc107;
+    --brand-gold-dark: #ffb300;
+
+    /* Custom colors - Micromegas dark theme */
+    --app-bg: #0a0a0f;
+    --header-bg: #12121a;
+    --sidebar-bg: #12121a;
+    --panel-bg: #12121a;
+    --card-bg: #1a1a2e;
+    --border-color: #2a2a3e;
+    --border-hover: #3a3a4e;
     --text-primary: #e7e9ea;
     --text-secondary: #9ca3af;
     --text-muted: #6b7280;
-    --accent-link: #3b82f6;
-    --accent-link-hover: #2563eb;
+    --accent-link: #1565c0;
+    --accent-link-hover: #1976d2;
     --accent-success: #22c55e;
-    --accent-highlight: #c084fc;
-    --accent-variable: #fb923c;
+    --accent-highlight: #ffc107;
+    --accent-variable: #bf360c;
     --accent-error: #f87171;
     --accent-error-bright: #dc2626;
-    --accent-warning: #facc15;
+    --accent-warning: #ffc107;
   }
 }
 

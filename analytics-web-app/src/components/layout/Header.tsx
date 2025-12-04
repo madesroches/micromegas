@@ -5,6 +5,7 @@ import { useAuth } from '@/lib/auth'
 import { RefreshCw, ChevronDown, LogOut } from 'lucide-react'
 import Link from 'next/link'
 import { TimeRangeSelector } from './TimeRangeSelector'
+import { MicromegasLogo } from '@/components/MicromegasLogo'
 
 interface HeaderProps {
   onRefresh?: () => void
@@ -37,8 +38,8 @@ export function Header({ onRefresh }: HeaderProps) {
   return (
     <header className="flex items-center justify-between px-3 sm:px-6 py-3 bg-app-header border-b border-theme-border">
       <div className="flex items-center gap-3 sm:gap-6">
-        <Link href="/" className="text-base sm:text-lg font-semibold text-accent-link hover:text-accent-link-hover transition-colors">
-          Micromegas
+        <Link href="/" className="hover:opacity-80 transition-opacity">
+          <MicromegasLogo size="sm" />
         </Link>
       </div>
 
