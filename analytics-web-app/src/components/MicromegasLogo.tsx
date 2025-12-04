@@ -31,8 +31,8 @@ export function MicromegasLogo({ className = '', showText = true, size = 'md' }:
             <stop offset="100%" stopColor="#0d47a1" />
           </linearGradient>
           <linearGradient id="ring3" x1="0%" y1="0%" x2="100%" y2="100%">
-            <stop offset="0%" stopColor="#ffc107" />
-            <stop offset="100%" stopColor="#ffb300" />
+            <stop offset="0%" stopColor="#ffb300" />
+            <stop offset="100%" stopColor="#e6a000" />
           </linearGradient>
           <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
             <feGaussianBlur stdDeviation="1" result="coloredBlur" />
