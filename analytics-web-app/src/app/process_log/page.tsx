@@ -4,7 +4,7 @@ import { Suspense, useState, useCallback, useMemo, useEffect, useRef } from 'rea
 import { useSearchParams, useRouter, usePathname } from 'next/navigation'
 import { useMutation } from '@tanstack/react-query'
 import Link from 'next/link'
-import { ArrowLeft, AlertCircle } from 'lucide-react'
+import { ArrowLeft, AlertCircle, ChevronDown } from 'lucide-react'
 import { PageLayout } from '@/components/layout'
 import { AuthGuard } from '@/components/AuthGuard'
 import { CopyableProcessId } from '@/components/CopyableProcessId'
@@ -49,7 +49,81 @@ const LEVEL_NAMES: Record<number, string> = {
 }
 
 const VALID_LEVELS = ['all', 'trace', 'debug', 'info', 'warn', 'error', 'fatal']
-const VALID_LIMITS = [50, 100, 200, 500, 1000]
+const PRESET_LIMITS = [50, 100, 200, 500, 1000]
+const MIN_LIMIT = 1
+const MAX_LIMIT = 10000
+
+function parseLimit(value: string | null): number {
+  if (!value) return 100
+  const parsed = parseInt(value, 10)
+  if (isNaN(parsed) || parsed < MIN_LIMIT) return 100
+  return Math.min(parsed, MAX_LIMIT)
+}
+
+interface EditableComboboxProps {
+  value: string
+  options: number[]
+  onChange: (value: string) => void
+  onSelect: (value: number) => void
+  onBlur: () => void
+  onKeyDown: (e: React.KeyboardEvent<HTMLInputElement>) => void
+  className?: string
+}
+
+function EditableCombobox({ value, options, onChange, onSelect, onBlur, onKeyDown, className }: EditableComboboxProps) {
+  const [isOpen, setIsOpen] = useState(false)
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setIsOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
+
+  return (
+    <div ref={containerRef} className={`relative ${className || ''}`}>
+      <div className="flex">
+        <input
+          type="text"
+          inputMode="numeric"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          onBlur={onBlur}
+          onKeyDown={onKeyDown}
+          className="w-20 px-3 py-2 bg-app-panel border border-theme-border rounded-l-md text-theme-text-primary text-sm focus:outline-none focus:border-accent-link"
+        />
+        <button
+          type="button"
+          onClick={() => setIsOpen(!isOpen)}
+          className="px-2 py-2 bg-app-panel border border-l-0 border-theme-border rounded-r-md text-theme-text-secondary hover:bg-theme-bg-hover focus:outline-none focus:border-accent-link"
+        >
+          <ChevronDown className="w-4 h-4" />
+        </button>
+      </div>
+      {isOpen && (
+        <div className="absolute top-full left-0 mt-1 w-full bg-app-panel border border-theme-border rounded-md shadow-lg z-50">
+          {options.map((option) => (
+            <button
+              key={option}
+              type="button"
+              onClick={() => {
+                onSelect(option)
+                setIsOpen(false)
+              }}
+              className="w-full px-3 py-2 text-left text-sm text-theme-text-primary hover:bg-theme-bg-hover first:rounded-t-md last:rounded-b-md"
+            >
+              {option}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
 
 function formatLocalTime(utcTime: unknown): string {
   if (!utcTime) return ''.padEnd(29)
@@ -86,11 +160,11 @@ function ProcessLogContent() {
   const levelParam = searchParams.get('level')
   const limitParam = searchParams.get('limit')
   const initialLevel = levelParam && VALID_LEVELS.includes(levelParam) ? levelParam : 'all'
-  const initialLimit = limitParam ? parseInt(limitParam, 10) : 100
-  const validatedLimit = VALID_LIMITS.includes(initialLimit) ? initialLimit : 100
+  const initialLimit = parseLimit(limitParam)
 
   const [logLevel, setLogLevel] = useState<string>(initialLevel)
-  const [logLimit, setLogLimit] = useState<number>(validatedLimit)
+  const [logLimit, setLogLimit] = useState<number>(initialLimit)
+  const [limitInputValue, setLimitInputValue] = useState<string>(String(initialLimit))
   const [queryError, setQueryError] = useState<string | null>(null)
   const [rows, setRows] = useState<SqlRow[]>([])
   const [processExe, setProcessExe] = useState<string | null>(null)
@@ -165,16 +239,36 @@ function ProcessLogContent() {
 
   const updateLogLimit = useCallback(
     (limit: number) => {
-      setLogLimit(limit)
+      const clampedLimit = Math.max(MIN_LIMIT, Math.min(MAX_LIMIT, limit))
+      setLogLimit(clampedLimit)
+      setLimitInputValue(String(clampedLimit))
       const params = new URLSearchParams(searchParams.toString())
-      if (limit === 100) {
+      if (clampedLimit === 100) {
         params.delete('limit')
       } else {
-        params.set('limit', String(limit))
+        params.set('limit', String(clampedLimit))
       }
       router.push(`${pathname}?${params.toString()}`)
     },
     [searchParams, router, pathname]
+  )
+
+  const handleLimitInputBlur = useCallback(() => {
+    const parsed = parseInt(limitInputValue, 10)
+    if (isNaN(parsed) || parsed < MIN_LIMIT) {
+      setLimitInputValue(String(logLimit))
+    } else {
+      updateLogLimit(parsed)
+    }
+  }, [limitInputValue, logLimit, updateLogLimit])
+
+  const handleLimitInputKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLInputElement>) => {
+      if (e.key === 'Enter') {
+        e.currentTarget.blur()
+      }
+    },
+    []
   )
 
   // Load process info once
@@ -348,17 +442,14 @@ function ProcessLogContent() {
 
           <div className="flex items-center gap-2">
             <span className="text-theme-text-muted text-sm">Limit:</span>
-            <select
-              value={logLimit}
-              onChange={(e) => updateLogLimit(Number(e.target.value))}
-              className="px-3 py-2 bg-app-panel border border-theme-border rounded-md text-theme-text-primary text-sm focus:outline-none focus:border-accent-link"
-            >
-              <option value={50}>50</option>
-              <option value={100}>100</option>
-              <option value={200}>200</option>
-              <option value={500}>500</option>
-              <option value={1000}>1000</option>
-            </select>
+            <EditableCombobox
+              value={limitInputValue}
+              options={PRESET_LIMITS}
+              onChange={(value) => setLimitInputValue(value)}
+              onSelect={updateLogLimit}
+              onBlur={handleLimitInputBlur}
+              onKeyDown={handleLimitInputKeyDown}
+            />
           </div>
 
           <span className="ml-auto text-xs text-theme-text-muted self-center">
