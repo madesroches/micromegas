@@ -84,6 +84,11 @@ function EditableCombobox({ value, options, onChange, onSelect, onBlur, onKeyDow
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
 
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const filtered = e.target.value.replace(/[^0-9]/g, '')
+    onChange(filtered)
+  }
+
   return (
     <div ref={containerRef} className={`relative ${className || ''}`}>
       <div className="flex">
@@ -91,7 +96,7 @@ function EditableCombobox({ value, options, onChange, onSelect, onBlur, onKeyDow
           type="text"
           inputMode="numeric"
           value={value}
-          onChange={(e) => onChange(e.target.value)}
+          onChange={handleInputChange}
           onBlur={onBlur}
           onKeyDown={onKeyDown}
           className="w-20 px-3 py-2 bg-app-panel border border-theme-border rounded-l-md text-theme-text-primary text-sm focus:outline-none focus:border-accent-link"
@@ -99,6 +104,9 @@ function EditableCombobox({ value, options, onChange, onSelect, onBlur, onKeyDow
         <button
           type="button"
           onClick={() => setIsOpen(!isOpen)}
+          aria-expanded={isOpen}
+          aria-label="Select preset limit"
+          tabIndex={-1}
           className="px-2 py-2 bg-app-panel border border-l-0 border-theme-border rounded-r-md text-theme-text-secondary hover:bg-theme-bg-hover focus:outline-none focus:border-accent-link"
         >
           <ChevronDown className="w-4 h-4" />
