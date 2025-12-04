@@ -1,4 +1,72 @@
 /* Custom styles for Micromegas documentation */
+/* Micromegas Brand Colors - Rust Earth Palette */
+
+/* Brand color palette */
+:root {
+    --mm-rust-orange: #bf360c;
+    --mm-rust-dark: #8d3a14;
+    --mm-blue: #1565c0;
+    --mm-blue-dark: #0d47a1;
+    --mm-gold: #ffc107;
+    --mm-gold-dark: #ffb300;
+    --mm-dark-bg: #0a0a0f;
+    --mm-dark-surface: #1a1a2e;
+    --mm-dark-card: #12121a;
+    --mm-light-bg: #f5f5f7;
+}
+
+/* Light mode - use darker rust as primary for white text contrast */
+[data-md-color-scheme="default"] {
+    --md-primary-fg-color: #d84315;
+    --md-primary-fg-color--light: #e64a19;
+    --md-primary-fg-color--dark: #bf360c;
+    --md-primary-bg-color: #ffffff;
+    --md-primary-bg-color--light: #ffffff;
+    --md-accent-fg-color: #1565c0;
+    --md-accent-fg-color--transparent: rgba(21, 101, 192, 0.1);
+    --md-accent-bg-color: #ffffff;
+    --md-accent-bg-color--light: #ffffff;
+}
+
+/* Dark mode - use darker rust as primary with darker backgrounds */
+[data-md-color-scheme="slate"] {
+    --md-primary-fg-color: #e64a19;
+    --md-primary-fg-color--light: #ff5722;
+    --md-primary-fg-color--dark: #d84315;
+    --md-primary-bg-color: #0a0a0f;
+    --md-primary-bg-color--light: #12121a;
+    --md-accent-fg-color: #42a5f5;
+    --md-accent-fg-color--transparent: rgba(66, 165, 245, 0.1);
+    --md-accent-bg-color: #0a0a0f;
+    --md-accent-bg-color--light: #12121a;
+    --md-default-bg-color: #0a0a0f;
+    --md-default-bg-color--light: #12121a;
+    --md-default-bg-color--lighter: #1a1a2e;
+    --md-default-bg-color--lightest: #252538;
+    --md-code-bg-color: #12121a;
+    --md-footer-bg-color: #0a0a0f;
+    --md-footer-bg-color--dark: #050508;
+}
+
+/* Header styling */
+.md-header {
+    background-color: var(--md-primary-fg-color);
+}
+
+[data-md-color-scheme="slate"] .md-header {
+    background-color: #12121a;
+    border-bottom: 1px solid #1a1a2e;
+}
+
+/* Navigation tabs styling */
+.md-tabs {
+    background-color: var(--md-primary-fg-color);
+}
+
+[data-md-color-scheme="slate"] .md-tabs {
+    background-color: #0a0a0f;
+    border-bottom: 1px solid #1a1a2e;
+}
 
 /* Make header logo larger */
 .md-header__button.md-logo img {
@@ -66,4 +134,90 @@
     border-radius: 0.3em !important;
     font-size: 0.95em !important;
     font-weight: 600 !important;
+}
+
+/* Link styling with brand colors */
+.md-typeset a {
+    color: var(--md-accent-fg-color);
+}
+
+.md-typeset a:hover {
+    color: var(--md-primary-fg-color);
+}
+
+/* Admonition styling with brand accent colors */
+.md-typeset .admonition.note,
+.md-typeset details.note {
+    border-color: var(--mm-blue);
+}
+
+.md-typeset .admonition.note > .admonition-title,
+.md-typeset details.note > summary {
+    background-color: rgba(21, 101, 192, 0.1);
+}
+
+.md-typeset .admonition.tip,
+.md-typeset details.tip {
+    border-color: var(--mm-gold);
+}
+
+.md-typeset .admonition.tip > .admonition-title,
+.md-typeset details.tip > summary {
+    background-color: rgba(255, 193, 7, 0.1);
+}
+
+.md-typeset .admonition.warning,
+.md-typeset details.warning {
+    border-color: var(--mm-rust-orange);
+}
+
+.md-typeset .admonition.warning > .admonition-title,
+.md-typeset details.warning > summary {
+    background-color: rgba(191, 54, 12, 0.1);
+}
+
+/* Table of contents styling */
+.md-nav__link--active {
+    color: var(--md-accent-fg-color) !important;
+}
+
+/* Search highlight */
+.md-search-result__meta {
+    color: var(--md-primary-fg-color);
+}
+
+.md-search-result mark {
+    background-color: rgba(255, 193, 7, 0.3);
+}
+
+/* Footer styling */
+.md-footer {
+    background-color: var(--md-footer-bg-color);
+}
+
+[data-md-color-scheme="slate"] .md-footer {
+    background-color: #050508;
+    border-top: 1px solid #1a1a2e;
+}
+
+/* Button/badge styling with brand colors */
+.md-typeset .md-button--primary {
+    background-color: var(--md-primary-fg-color);
+    border-color: var(--md-primary-fg-color);
+}
+
+.md-typeset .md-button--primary:hover {
+    background-color: var(--md-primary-fg-color--dark);
+    border-color: var(--md-primary-fg-color--dark);
+}
+
+/* Code copy button hover */
+.md-clipboard:hover {
+    color: var(--md-accent-fg-color);
+}
+
+/* Sidebar navigation active item */
+.md-nav__item--active > .md-nav__link {
+    color: var(--md-primary-fg-color);
+    font-weight: 600;
 }
