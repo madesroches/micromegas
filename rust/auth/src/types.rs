@@ -20,7 +20,7 @@ pub struct AuthContext {
     /// Issuer (for OIDC) or "api_key" for API key auth
     pub issuer: String,
     /// Audience that was matched during token validation
-    /// - For OIDC access tokens: API audience (e.g., "https://api.example.com")
+    /// - For OIDC access tokens: API audience (e.g., "<https://api.example.com>")
     /// - For OIDC ID tokens: client ID
     /// - For API key auth: None
     pub audience: Option<String>,

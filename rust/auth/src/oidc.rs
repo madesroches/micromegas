@@ -111,7 +111,7 @@ pub struct OidcIssuer {
     /// Issuer URL (e.g., <https://accounts.google.com>)
     pub issuer: String,
     /// Expected audience
-    /// - For access tokens: API audience (e.g., "https://api.example.com")
+    /// - For access tokens: API audience (e.g., "<https://api.example.com>")
     /// - For ID tokens: client ID
     pub audience: String,
 }
