@@ -28,7 +28,7 @@ const VARIABLES = [
   { name: 'process_id', description: 'Current process ID' },
   { name: 'max_level', description: 'Max log level filter (1-6)' },
   { name: 'limit', description: 'Row limit' },
-  { name: 'search', description: 'Search terms (space-separated)' },
+  { name: 'search_filter', description: 'Expanded from search input' },
 ]
 
 const LOG_LEVELS: Record<string, number> = {
@@ -60,6 +60,26 @@ function parseLimit(value: string | null): number {
   const parsed = parseInt(value, 10)
   if (isNaN(parsed) || parsed < MIN_LIMIT) return 100
   return Math.min(parsed, MAX_LIMIT)
+}
+
+// Expand search string into SQL LIKE clauses (mirrors backend logic)
+function expandSearchFilter(search: string): string {
+  const words = search.trim().split(/\s+/).filter(w => w.length > 0)
+  if (words.length === 0) {
+    return '(empty)'
+  }
+
+  const clauses = words.map(word => {
+    // Escape SQL special characters
+    const escaped = word
+      .replace(/\\/g, '\\\\')
+      .replace(/%/g, '\\%')
+      .replace(/_/g, '\\_')
+      .replace(/'/g, "''")
+    return `(target ILIKE '%${escaped}%' OR msg ILIKE '%${escaped}%')`
+  })
+
+  return `AND ${clauses.join(' AND ')}`
 }
 
 interface EditableComboboxProps {
@@ -390,7 +410,7 @@ function ProcessLogContent() {
       process_id: processId || '',
       max_level: String(LOG_LEVELS[logLevel] || 6),
       limit: String(logLimit),
-      search: search,
+      search_filter: expandSearchFilter(search),
     }),
     [processId, logLevel, logLimit, search]
   )
