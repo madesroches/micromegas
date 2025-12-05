@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { Calendar } from 'lucide-react'
 import {
   isValidTimeExpression,
@@ -39,58 +39,47 @@ export function CustomRange({ from, to, onApply }: CustomRangeProps) {
     setToInput(to)
   }, [from, to])
 
-  const handleFromInputChange = useCallback((value: string) => {
-    setFromInput(value)
-    setError(null)
-  }, [])
-
-  const handleToInputChange = useCallback((value: string) => {
-    setToInput(value)
-    setError(null)
-  }, [])
-
-  const handleFromDateSelect = useCallback((date: Date | undefined) => {
+  const handleFromDateSelect = (date: Date | undefined) => {
     if (date) {
       setFromInput(formatDateTimeLocal(date))
       setShowFromCalendar(false)
       setError(null)
     }
-  }, [])
+  }
 
-  const handleToDateSelect = useCallback((date: Date | undefined) => {
+  const handleToDateSelect = (date: Date | undefined) => {
     if (date) {
       setToInput(formatDateTimeLocal(date))
       setShowToCalendar(false)
       setError(null)
     }
-  }, [])
+  }
 
-  const handleApply = useCallback(() => {
-    if (!isValidTimeExpression(fromInput)) {
+  const handleApply = () => {
+    // Parse and validate in one step
+    let parsedFrom: Date
+    let parsedTo: Date
+    try {
+      parsedFrom = parseRelativeTime(fromInput)
+    } catch {
       setError('Invalid "From" time expression')
       return
     }
-    if (!isValidTimeExpression(toInput)) {
+    try {
+      parsedTo = parseRelativeTime(toInput)
+    } catch {
       setError('Invalid "To" time expression')
       return
     }
 
-    // Validate that from is before to
-    try {
-      const parsedFrom = parseRelativeTime(fromInput)
-      const parsedTo = parseRelativeTime(toInput)
-      if (parsedFrom >= parsedTo) {
-        setError('"From" must be before "To"')
-        return
-      }
-    } catch {
-      setError('Invalid time range')
+    if (parsedFrom >= parsedTo) {
+      setError('"From" must be before "To"')
       return
     }
 
     setError(null)
     onApply(fromInput, toInput)
-  }, [fromInput, toInput, onApply])
+  }
 
   return (
     <div className="flex-1 space-y-4">
@@ -103,7 +92,7 @@ export function CustomRange({ from, to, onApply }: CustomRangeProps) {
             <input
               type="text"
               value={fromInput}
-              onChange={(e) => handleFromInputChange(e.target.value)}
+              onChange={(e) => { setFromInput(e.target.value); setError(null) }}
               placeholder="now-1h or ISO date"
               className={`flex-1 px-3 py-2 bg-app-card border rounded-md text-sm text-theme-text-primary placeholder-theme-text-muted focus:outline-none focus:ring-2 focus:ring-accent-link/50 ${
                 fromInput && !isValidTimeExpression(fromInput)
@@ -135,7 +124,7 @@ export function CustomRange({ from, to, onApply }: CustomRangeProps) {
             <input
               type="text"
               value={toInput}
-              onChange={(e) => handleToInputChange(e.target.value)}
+              onChange={(e) => { setToInput(e.target.value); setError(null) }}
               placeholder="now or ISO date"
               className={`flex-1 px-3 py-2 bg-app-card border rounded-md text-sm text-theme-text-primary placeholder-theme-text-muted focus:outline-none focus:ring-2 focus:ring-accent-link/50 ${
                 toInput && !isValidTimeExpression(toInput)

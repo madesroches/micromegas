@@ -23,9 +23,9 @@ export function RecentRanges({ onSelect }: RecentRangesProps) {
         <span>Recently used</span>
       </div>
       <div className="space-y-0.5 mt-1">
-        {recentRanges.map((entry, index) => (
+        {recentRanges.map((entry) => (
           <button
-            key={`${entry.from}-${entry.to}-${index}`}
+            key={entry.timestamp}
             onClick={() => onSelect(entry.from, entry.to)}
             className="w-full text-left px-2 py-1.5 text-sm text-theme-text-primary rounded hover:bg-theme-border transition-colors"
           >

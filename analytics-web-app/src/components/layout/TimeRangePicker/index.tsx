@@ -24,13 +24,6 @@ export function TimeRangePicker() {
     [setTimeRange]
   )
 
-  const handleApplyCustom = useCallback(
-    (from: string, to: string) => {
-      handleSelect(from, to)
-    },
-    [handleSelect]
-  )
-
   // Handle keyboard navigation
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -97,7 +90,7 @@ export function TimeRangePicker() {
                 <CustomRange
                   from={timeRange.from}
                   to={timeRange.to}
-                  onApply={handleApplyCustom}
+                  onApply={handleSelect}
                 />
               </div>
               <RecentRanges onSelect={handleSelect} />

@@ -1,14 +1,3 @@
-export interface TimeRangeValue {
-  from: string
-  to: string
-}
-
-export interface TimeRangePreset {
-  label: string
-  value: string
-  duration: number
-}
-
 export interface QuickRangesProps {
   currentFrom: string
   currentTo: string
