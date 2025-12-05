@@ -233,12 +233,12 @@ export interface UseTimeRangeReturn {
 
 ## Implementation Order
 
-1. [ ] Phase 1: Extend time range utilities
-2. [ ] Phase 2: Recent time ranges (localStorage)
-3. [ ] Phase 3: Calendar/DateTime picker (add dependencies first)
-4. [ ] Phase 4: New TimeRangePicker component
-5. [ ] Phase 5: Update hook and Header integration
-6. [ ] Phase 6: Keyboard shortcuts (optional)
+1. [x] Phase 1: Extend time range utilities
+2. [x] Phase 2: Recent time ranges (localStorage)
+3. [x] Phase 3: Calendar/DateTime picker (add dependencies first)
+4. [x] Phase 4: New TimeRangePicker component
+5. [x] Phase 5: Update hook and Header integration
+6. [x] Phase 6: Keyboard shortcuts (built into main component)
 7. [ ] Phase 7: Compound time expressions (optional) - e.g., `now-1h30m`
 
 ## Decisions

@@ -16,12 +16,16 @@ export interface ParsedTimeRange {
 export const TIME_RANGE_PRESETS = [
   { label: 'Last 5 minutes', value: 'now-5m', duration: 5 * 60 * 1000 },
   { label: 'Last 15 minutes', value: 'now-15m', duration: 15 * 60 * 1000 },
+  { label: 'Last 30 minutes', value: 'now-30m', duration: 30 * 60 * 1000 },
   { label: 'Last 1 hour', value: 'now-1h', duration: 60 * 60 * 1000 },
+  { label: 'Last 3 hours', value: 'now-3h', duration: 3 * 60 * 60 * 1000 },
   { label: 'Last 6 hours', value: 'now-6h', duration: 6 * 60 * 60 * 1000 },
   { label: 'Last 12 hours', value: 'now-12h', duration: 12 * 60 * 60 * 1000 },
   { label: 'Last 24 hours', value: 'now-24h', duration: 24 * 60 * 60 * 1000 },
+  { label: 'Last 2 days', value: 'now-2d', duration: 2 * 24 * 60 * 60 * 1000 },
   { label: 'Last 7 days', value: 'now-7d', duration: 7 * 24 * 60 * 60 * 1000 },
   { label: 'Last 30 days', value: 'now-30d', duration: 30 * 24 * 60 * 60 * 1000 },
+  { label: 'Last 90 days', value: 'now-90d', duration: 90 * 24 * 60 * 60 * 1000 },
 ] as const
 
 export const DEFAULT_TIME_RANGE: TimeRange = {
@@ -29,13 +33,25 @@ export const DEFAULT_TIME_RANGE: TimeRange = {
   to: 'now',
 }
 
+// Time unit multipliers in milliseconds
+const TIME_UNIT_MS: Record<string, number> = {
+  s: 1000,
+  m: 60 * 1000,
+  h: 60 * 60 * 1000,
+  d: 24 * 60 * 60 * 1000,
+  w: 7 * 24 * 60 * 60 * 1000,
+}
+
+// Regex for relative time expressions: now, now-1h, now-30m, etc.
+const RELATIVE_TIME_REGEX = /^now(-(\d+)([smhdw]))?$/
+
 // Parse a relative time string like "now-1h" to a Date
 export function parseRelativeTime(value: string, referenceTime: Date = new Date()): Date {
   if (value === 'now') {
     return referenceTime
   }
 
-  const match = value.match(/^now-(\d+)([mhd])$/)
+  const match = value.match(RELATIVE_TIME_REGEX)
   if (!match) {
     // Try parsing as ISO date
     const date = new Date(value)
@@ -45,25 +61,63 @@ export function parseRelativeTime(value: string, referenceTime: Date = new Date(
     throw new Error(`Invalid time value: ${value}`)
   }
 
-  const amount = parseInt(match[1], 10)
-  const unit = match[2]
+  const amount = parseInt(match[2], 10)
+  const unit = match[3]
   const ms = referenceTime.getTime()
+  const unitMs = TIME_UNIT_MS[unit]
 
-  switch (unit) {
-    case 'm':
-      return new Date(ms - amount * 60 * 1000)
-    case 'h':
-      return new Date(ms - amount * 60 * 60 * 1000)
-    case 'd':
-      return new Date(ms - amount * 24 * 60 * 60 * 1000)
-    default:
-      throw new Error(`Unknown time unit: ${unit}`)
+  if (!unitMs) {
+    throw new Error(`Unknown time unit: ${unit}`)
   }
+
+  return new Date(ms - amount * unitMs)
 }
 
 // Check if a time value is relative (e.g., "now-1h")
 export function isRelativeTime(value: string): boolean {
-  return value === 'now' || /^now-\d+[mhd]$/.test(value)
+  return RELATIVE_TIME_REGEX.test(value)
+}
+
+// Validate a time expression (relative or absolute ISO date)
+export function isValidTimeExpression(value: string): boolean {
+  if (isRelativeTime(value)) {
+    return true
+  }
+  const date = new Date(value)
+  return !isNaN(date.getTime())
+}
+
+// Format a relative time expression to human-readable string
+// "now-1h" -> "Last 1 hour"
+// "now-90m" -> "Last 90 minutes"
+export function formatRelativeTime(value: string): string {
+  if (value === 'now') {
+    return 'Now'
+  }
+
+  const match = value.match(RELATIVE_TIME_REGEX)
+  if (!match) {
+    return value
+  }
+
+  const amount = parseInt(match[2], 10)
+  const unit = match[3]
+
+  const unitNames: Record<string, { singular: string; plural: string }> = {
+    s: { singular: 'second', plural: 'seconds' },
+    m: { singular: 'minute', plural: 'minutes' },
+    h: { singular: 'hour', plural: 'hours' },
+    d: { singular: 'day', plural: 'days' },
+    w: { singular: 'week', plural: 'weeks' },
+  }
+
+  const unitName = unitNames[unit]
+  if (!unitName) {
+    return value
+  }
+
+  const name = amount === 1 ? unitName.singular : unitName.plural
+  return `Last ${amount} ${name}`
 }
 
 // Parse time range from URL params
