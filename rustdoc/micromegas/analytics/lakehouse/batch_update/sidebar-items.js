@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["PartitionCreationStrategy"],"fn":["materialize_partition_range"]};
