@@ -12,6 +12,7 @@ interface QueryEditorProps {
   onReset: () => void
   isLoading?: boolean
   error?: string | null
+  docLink?: { url: string; label: string }
 }
 
 export function QueryEditor({
@@ -23,6 +24,7 @@ export function QueryEditor({
   onReset,
   isLoading = false,
   error,
+  docLink,
 }: QueryEditorProps) {
   const [isCollapsed, setIsCollapsed] = useState(true)
   const [sql, setSql] = useState(defaultSql)
@@ -181,6 +183,23 @@ export function QueryEditor({
               <br />
               Current: <span className="text-theme-text-primary">{timeRangeLabel}</span>
             </p>
+          </div>
+        )}
+
+        {/* Documentation Link */}
+        {docLink && (
+          <div className="mt-4">
+            <h4 className="text-xs font-semibold uppercase tracking-wide text-theme-text-muted mb-2">
+              Documentation
+            </h4>
+            <a
+              href={docLink.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-xs text-accent-link hover:underline"
+            >
+              {docLink.label}
+            </a>
           </div>
         )}
       </div>

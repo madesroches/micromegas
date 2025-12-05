@@ -214,6 +214,10 @@ function ProcessesPageContent() {
       onReset={handleResetQuery}
       isLoading={sqlMutation.isPending}
       error={queryError}
+      docLink={{
+        url: 'https://madesroches.github.io/micromegas/docs/query-guide/schema-reference/#processes',
+        label: 'processes schema reference',
+      }}
     />
   )
 
