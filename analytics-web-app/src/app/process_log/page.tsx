@@ -464,6 +464,10 @@ function ProcessLogContent() {
       onReset={handleResetQuery}
       isLoading={sqlMutation.isPending}
       error={queryError}
+      docLink={{
+        url: 'https://madesroches.github.io/micromegas/docs/query-guide/schema-reference/#log_entries',
+        label: 'log_entries schema reference',
+      }}
     />
   ) : undefined
 
