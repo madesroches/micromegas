@@ -63,11 +63,11 @@ function parseLimit(value: string | null): number {
   return Math.min(parsed, MAX_LIMIT)
 }
 
-// Expand search string into SQL LIKE clauses (mirrors backend logic)
+// Expand search string into SQL ILIKE clauses for multi-word search
 function expandSearchFilter(search: string): string {
   const words = search.trim().split(/\s+/).filter(w => w.length > 0)
   if (words.length === 0) {
-    return '(empty)'
+    return ''
   }
 
   const clauses = words.map(word => {
@@ -243,14 +243,15 @@ function ProcessLogContent() {
     (sql: string = DEFAULT_SQL) => {
       if (!processId) return
       setQueryError(null)
+      // Interpolate search_filter directly into SQL (it contains raw SQL with quotes)
+      const sqlWithSearch = sql.replace('$search_filter', expandSearchFilter(search))
       const params: Record<string, string> = {
         process_id: processId,
         max_level: String(LOG_LEVELS[logLevel] || 6),
         limit: String(logLimit),
-        search: search,
       }
       sqlMutateRef.current({
-        sql,
+        sql: sqlWithSearch,
         params,
         begin: apiTimeRange.begin,
         end: apiTimeRange.end,
@@ -425,7 +426,7 @@ function ProcessLogContent() {
       process_id: processId || '',
       max_level: String(LOG_LEVELS[logLevel] || 6),
       limit: String(logLimit),
-      search_filter: expandSearchFilter(search),
+      search_filter: expandSearchFilter(search) || '(empty)',
     }),
     [processId, logLevel, logLimit, search]
   )

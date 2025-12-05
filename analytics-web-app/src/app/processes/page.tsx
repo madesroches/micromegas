@@ -20,9 +20,8 @@ type SortDirection = 'asc' | 'desc'
 
 const DEFAULT_SQL = `SELECT process_id, start_time, last_update_time, exe, computer, username
 FROM processes
-WHERE exe LIKE '%$search%'
-   OR computer LIKE '%$search%'
-   OR username LIKE '%$search%'
+WHERE 1=1
+  $search_filter
 ORDER BY $order_by
 LIMIT 100`
 
@@ -30,8 +29,28 @@ const VARIABLES = [
   { name: 'begin', description: 'Time range start (ISO timestamp)' },
   { name: 'end', description: 'Time range end (ISO timestamp)' },
   { name: 'order_by', description: 'Sort column and direction' },
-  { name: 'search', description: 'Search filter value' },
+  { name: 'search_filter', description: 'Expanded from search input' },
 ]
+
+// Expand search string into SQL ILIKE clauses for multi-word search
+function expandSearchFilter(search: string): string {
+  const words = search.trim().split(/\s+/).filter(w => w.length > 0)
+  if (words.length === 0) {
+    return ''
+  }
+
+  const clauses = words.map(word => {
+    // Escape SQL special characters
+    const escaped = word
+      .replace(/\\/g, '\\\\')
+      .replace(/%/g, '\\%')
+      .replace(/_/g, '\\_')
+      .replace(/'/g, "''")
+    return `(exe ILIKE '%${escaped}%' OR computer ILIKE '%${escaped}%' OR username ILIKE '%${escaped}%')`
+  })
+
+  return `AND ${clauses.join(' AND ')}`
+}
 
 function ProcessesPageContent() {
   const [searchInput, setSearchInput] = useState('')
@@ -60,14 +79,15 @@ function ProcessesPageContent() {
   const loadData = useCallback(
     (sql: string = DEFAULT_SQL) => {
       setQueryError(null)
+      // Interpolate search_filter directly into SQL (it contains raw SQL with quotes)
+      const sqlWithSearch = sql.replace('$search_filter', expandSearchFilter(searchTerm))
       const params: Record<string, string> = {
         begin: apiTimeRange.begin,
         end: apiTimeRange.end,
         order_by: `${sortField} ${sortDirection.toUpperCase()}`,
-        search: searchTerm,
       }
       mutateRef.current({
-        sql,
+        sql: sqlWithSearch,
         params,
         begin: apiTimeRange.begin,
         end: apiTimeRange.end,
@@ -111,7 +131,7 @@ function ProcessesPageContent() {
       begin: apiTimeRange.begin,
       end: apiTimeRange.end,
       order_by: `${sortField} ${sortDirection.toUpperCase()}`,
-      search: searchTerm || '(empty)',
+      search_filter: expandSearchFilter(searchTerm) || '(empty)',
     }),
     [apiTimeRange, searchTerm, sortField, sortDirection]
   )
