@@ -19,7 +19,6 @@ export interface UseTimeRangeReturn {
   apiTimeRange: { begin: string; end: string }
   // Update functions
   setTimeRange: (from: string, to: string) => void
-  setPreset: (preset: string) => void
 }
 
 export function useTimeRange(): UseTimeRangeReturn {
@@ -62,18 +61,10 @@ export function useTimeRange(): UseTimeRangeReturn {
     [searchParams, router, pathname]
   )
 
-  const setPreset = useCallback(
-    (preset: string) => {
-      setTimeRange(preset, 'now')
-    },
-    [setTimeRange]
-  )
-
   return {
     timeRange,
     parsed,
     apiTimeRange,
     setTimeRange,
-    setPreset,
   }
 }
