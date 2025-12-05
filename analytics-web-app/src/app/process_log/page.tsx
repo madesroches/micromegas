@@ -12,12 +12,14 @@ import { QueryEditor } from '@/components/QueryEditor'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { executeSqlQuery, toRowObjects } from '@/lib/api'
 import { useTimeRange } from '@/hooks/useTimeRange'
+import { useDebounce } from '@/hooks/useDebounce'
 import { SqlRow } from '@/types'
 
 const DEFAULT_SQL = `SELECT time, level, target, msg
 FROM log_entries
 WHERE process_id = '$process_id'
   AND level <= $max_level
+  $search_filter
 ORDER BY time DESC
 LIMIT $limit`
 
@@ -27,6 +29,7 @@ const VARIABLES = [
   { name: 'process_id', description: 'Current process ID' },
   { name: 'max_level', description: 'Max log level filter (1-6)' },
   { name: 'limit', description: 'Row limit' },
+  { name: 'search_filter', description: 'Expanded from search input' },
 ]
 
 const LOG_LEVELS: Record<string, number> = {
@@ -58,6 +61,26 @@ function parseLimit(value: string | null): number {
   const parsed = parseInt(value, 10)
   if (isNaN(parsed) || parsed < MIN_LIMIT) return 100
   return Math.min(parsed, MAX_LIMIT)
+}
+
+// Expand search string into SQL LIKE clauses (mirrors backend logic)
+function expandSearchFilter(search: string): string {
+  const words = search.trim().split(/\s+/).filter(w => w.length > 0)
+  if (words.length === 0) {
+    return '(empty)'
+  }
+
+  const clauses = words.map(word => {
+    // Escape SQL special characters
+    const escaped = word
+      .replace(/\\/g, '\\\\')
+      .replace(/%/g, '\\%')
+      .replace(/_/g, '\\_')
+      .replace(/'/g, "''")
+    return `(target ILIKE '%${escaped}%' OR msg ILIKE '%${escaped}%')`
+  })
+
+  return `AND ${clauses.join(' AND ')}`
 }
 
 interface EditableComboboxProps {
@@ -167,12 +190,17 @@ function ProcessLogContent() {
   // Read initial values from URL params with validation
   const levelParam = searchParams.get('level')
   const limitParam = searchParams.get('limit')
+  const searchParam = searchParams.get('search')
   const initialLevel = levelParam && VALID_LEVELS.includes(levelParam) ? levelParam : 'all'
   const initialLimit = parseLimit(limitParam)
+  const initialSearch = searchParam || ''
 
   const [logLevel, setLogLevel] = useState<string>(initialLevel)
   const [logLimit, setLogLimit] = useState<number>(initialLimit)
   const [limitInputValue, setLimitInputValue] = useState<string>(String(initialLimit))
+  const [search, setSearch] = useState<string>(initialSearch)
+  const [searchInputValue, setSearchInputValue] = useState<string>(initialSearch)
+  const debouncedSearchInput = useDebounce(searchInputValue, 300)
   const [queryError, setQueryError] = useState<string | null>(null)
   const [rows, setRows] = useState<SqlRow[]>([])
   const [processExe, setProcessExe] = useState<string | null>(null)
@@ -219,6 +247,7 @@ function ProcessLogContent() {
         process_id: processId,
         max_level: String(LOG_LEVELS[logLevel] || 6),
         limit: String(logLimit),
+        search: search,
       }
       sqlMutateRef.current({
         sql,
@@ -227,7 +256,7 @@ function ProcessLogContent() {
         end: apiTimeRange.end,
       })
     },
-    [processId, logLevel, logLimit, apiTimeRange]
+    [processId, logLevel, logLimit, search, apiTimeRange]
   )
 
   // Update URL when filters change
@@ -279,6 +308,46 @@ function ProcessLogContent() {
     []
   )
 
+  const updateSearch = useCallback(
+    (value: string) => {
+      setSearch(value)
+      const params = new URLSearchParams(searchParams.toString())
+      if (value.trim() === '') {
+        params.delete('search')
+      } else {
+        params.set('search', value.trim())
+      }
+      router.push(`${pathname}?${params.toString()}`)
+    },
+    [searchParams, router, pathname]
+  )
+
+  // Sync debounced search to state and URL
+  const isInitialSearchRef = useRef(true)
+  useEffect(() => {
+    if (isInitialSearchRef.current) {
+      isInitialSearchRef.current = false
+      return
+    }
+    updateSearch(debouncedSearchInput)
+  }, [debouncedSearchInput, updateSearch])
+
+  const handleSearchBlur = useCallback(() => {
+    // Immediate update on blur (in case user doesn't wait for debounce)
+    if (searchInputValue !== search) {
+      updateSearch(searchInputValue)
+    }
+  }, [searchInputValue, search, updateSearch])
+
+  const handleSearchKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLInputElement>) => {
+      if (e.key === 'Enter') {
+        e.currentTarget.blur()
+      }
+    },
+    []
+  )
+
   // Load process info once
   const hasLoadedProcessRef = useRef(false)
   useEffect(() => {
@@ -303,23 +372,23 @@ function ProcessLogContent() {
   }, [processId, loadData])
 
   // Reload when filters change (only after initial load)
-  const prevFiltersRef = useRef<{ logLevel: string; logLimit: number } | null>(null)
+  const prevFiltersRef = useRef<{ logLevel: string; logLimit: number; search: string } | null>(null)
   useEffect(() => {
     // Skip if we haven't done initial load yet
     if (!hasLoaded) return
 
     // Initialize ref on first run after initial load
     if (prevFiltersRef.current === null) {
-      prevFiltersRef.current = { logLevel, logLimit }
+      prevFiltersRef.current = { logLevel, logLimit, search }
       return
     }
 
     // Check if filters actually changed
-    if (prevFiltersRef.current.logLevel !== logLevel || prevFiltersRef.current.logLimit !== logLimit) {
-      prevFiltersRef.current = { logLevel, logLimit }
+    if (prevFiltersRef.current.logLevel !== logLevel || prevFiltersRef.current.logLimit !== logLimit || prevFiltersRef.current.search !== search) {
+      prevFiltersRef.current = { logLevel, logLimit, search }
       loadData()
     }
-  }, [logLevel, logLimit, hasLoaded, loadData])
+  }, [logLevel, logLimit, search, hasLoaded, loadData])
 
   // Reload when time range changes (only after initial load)
   const prevTimeRangeRef = useRef<{ begin: string; end: string } | null>(null)
@@ -356,8 +425,9 @@ function ProcessLogContent() {
       process_id: processId || '',
       max_level: String(LOG_LEVELS[logLevel] || 6),
       limit: String(logLimit),
+      search_filter: expandSearchFilter(search),
     }),
-    [processId, logLevel, logLimit]
+    [processId, logLevel, logLimit, search]
   )
 
   const getLevelColor = (level: unknown) => {
@@ -435,6 +505,16 @@ function ProcessLogContent() {
 
         {/* Filters */}
         <div className="flex gap-3 mb-4">
+          <input
+            type="text"
+            value={searchInputValue}
+            onChange={(e) => setSearchInputValue(e.target.value)}
+            onBlur={handleSearchBlur}
+            onKeyDown={handleSearchKeyDown}
+            placeholder="Search target or message..."
+            className="w-64 px-3 py-2 bg-app-panel border border-theme-border rounded-md text-theme-text-primary text-sm focus:outline-none focus:border-accent-link placeholder:text-theme-text-muted"
+          />
+
           <select
             value={logLevel}
             onChange={(e) => updateLogLevel(e.target.value)}

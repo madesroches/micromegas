@@ -11,6 +11,7 @@ import { QueryEditor } from '@/components/QueryEditor'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { executeSqlQuery, toRowObjects } from '@/lib/api'
 import { useTimeRange } from '@/hooks/useTimeRange'
+import { useDebounce } from '@/hooks/useDebounce'
 import { formatTimestamp } from '@/lib/time-range'
 import { SqlRow } from '@/types'
 
@@ -34,20 +35,12 @@ const VARIABLES = [
 
 function ProcessesPageContent() {
   const [searchInput, setSearchInput] = useState('')
-  const [searchTerm, setSearchTerm] = useState('')
+  const searchTerm = useDebounce(searchInput, 300)
   const [sortField, setSortField] = useState<SortField>('last_update_time')
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc')
   const [queryError, setQueryError] = useState<string | null>(null)
   const [rows, setRows] = useState<SqlRow[]>([])
   const { parsed: timeRange, apiTimeRange } = useTimeRange()
-
-  // Debounce search input
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setSearchTerm(searchInput)
-    }, 300)
-    return () => clearTimeout(timer)
-  }, [searchInput])
 
   const sqlMutation = useMutation({
     mutationFn: executeSqlQuery,
