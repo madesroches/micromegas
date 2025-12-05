@@ -63,7 +63,11 @@ function parseLimit(value: string | null): number {
   return Math.min(parsed, MAX_LIMIT)
 }
 
-// Expand search string into SQL ILIKE clauses for multi-word search
+// Expand search string into SQL ILIKE clauses for multi-word search.
+// Note: These queries execute against DataFusion, a read-only analytics engine
+// over our data lake. There are no INSERT/UPDATE/DELETE operations possible,
+// so SQL injection risk is limited to information disclosure (mitigated by auth)
+// and expensive queries (mitigated by timeouts).
 function expandSearchFilter(search: string): string {
   const words = search.trim().split(/\s+/).filter(w => w.length > 0)
   if (words.length === 0) {
@@ -71,7 +75,7 @@ function expandSearchFilter(search: string): string {
   }
 
   const clauses = words.map(word => {
-    // Escape SQL special characters
+    // Escape SQL special characters for LIKE patterns
     const escaped = word
       .replace(/\\/g, '\\\\')
       .replace(/%/g, '\\%')
