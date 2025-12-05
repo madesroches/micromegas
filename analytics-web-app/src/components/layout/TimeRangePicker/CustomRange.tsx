@@ -2,7 +2,11 @@
 
 import { useState, useCallback, useEffect } from 'react'
 import { Calendar } from 'lucide-react'
-import { isValidTimeExpression, parseRelativeTime, isRelativeTime } from '@/lib/time-range'
+import {
+  isValidTimeExpression,
+  parseRelativeTime,
+  formatDateTimeLocal,
+} from '@/lib/time-range'
 import { DateTimePicker } from '@/components/ui/DateTimePicker'
 import type { CustomRangeProps } from './types'
 
@@ -69,7 +73,7 @@ export function CustomRange({ from, to, onApply }: CustomRangeProps) {
   const handleFromDateSelect = useCallback((date: Date | undefined) => {
     if (date) {
       setFromDate(date)
-      setFromInput(date.toISOString())
+      setFromInput(formatDateTimeLocal(date))
       setShowFromCalendar(false)
       setError(null)
     }
@@ -78,7 +82,7 @@ export function CustomRange({ from, to, onApply }: CustomRangeProps) {
   const handleToDateSelect = useCallback((date: Date | undefined) => {
     if (date) {
       setToDate(date)
-      setToInput(date.toISOString())
+      setToInput(formatDateTimeLocal(date))
       setShowToCalendar(false)
       setError(null)
     }
