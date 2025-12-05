@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { useAuth } from '@/lib/auth'
 import { RefreshCw, ChevronDown, LogOut } from 'lucide-react'
 import Link from 'next/link'
-import { TimeRangeSelector } from './TimeRangeSelector'
+import { TimeRangePicker } from './TimeRangePicker'
 import { MicromegasLogo } from '@/components/MicromegasLogo'
 
 interface HeaderProps {
@@ -46,7 +46,7 @@ export function Header({ onRefresh }: HeaderProps) {
       <div className="flex items-center gap-2 sm:gap-4">
         {/* Time Range Controls */}
         <div className="flex items-center">
-          <TimeRangeSelector />
+          <TimeRangePicker />
           <button
             onClick={onRefresh}
             className="px-2 sm:px-2.5 py-1.5 bg-theme-border border-l border-theme-border-hover rounded-r-md text-theme-text-primary hover:bg-theme-border-hover transition-colors"
