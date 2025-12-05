@@ -1,6 +1,7 @@
 'use client'
 
 import { Suspense, useState, useMemo, useCallback, useEffect, useRef } from 'react'
+import { useSearchParams, useRouter, usePathname } from 'next/navigation'
 import { useMutation } from '@tanstack/react-query'
 import Link from 'next/link'
 import { ChevronUp, ChevronDown } from 'lucide-react'
@@ -20,9 +21,8 @@ type SortDirection = 'asc' | 'desc'
 
 const DEFAULT_SQL = `SELECT process_id, start_time, last_update_time, exe, computer, username
 FROM processes
-WHERE exe LIKE '%$search%'
-   OR computer LIKE '%$search%'
-   OR username LIKE '%$search%'
+WHERE 1=1
+  $search_filter
 ORDER BY $order_by
 LIMIT 100`
 
@@ -30,12 +30,44 @@ const VARIABLES = [
   { name: 'begin', description: 'Time range start (ISO timestamp)' },
   { name: 'end', description: 'Time range end (ISO timestamp)' },
   { name: 'order_by', description: 'Sort column and direction' },
-  { name: 'search', description: 'Search filter value' },
+  { name: 'search_filter', description: 'Expanded from search input' },
 ]
 
+// Expand search string into SQL ILIKE clauses for multi-word search.
+// Note: These queries execute against DataFusion, a read-only analytics engine
+// over our data lake. There are no INSERT/UPDATE/DELETE operations possible,
+// so SQL injection risk is limited to information disclosure (mitigated by auth)
+// and expensive queries (mitigated by timeouts).
+function expandSearchFilter(search: string): string {
+  const words = search.trim().split(/\s+/).filter(w => w.length > 0)
+  if (words.length === 0) {
+    return ''
+  }
+
+  const clauses = words.map(word => {
+    // Escape SQL special characters for LIKE patterns
+    const escaped = word
+      .replace(/\\/g, '\\\\')
+      .replace(/%/g, '\\%')
+      .replace(/_/g, '\\_')
+      .replace(/'/g, "''")
+    return `(exe ILIKE '%${escaped}%' OR computer ILIKE '%${escaped}%' OR username ILIKE '%${escaped}%')`
+  })
+
+  return `AND ${clauses.join(' AND ')}`
+}
+
 function ProcessesPageContent() {
-  const [searchInput, setSearchInput] = useState('')
-  const searchTerm = useDebounce(searchInput, 300)
+  const searchParams = useSearchParams()
+  const router = useRouter()
+  const pathname = usePathname()
+
+  // Read initial search from URL
+  const initialSearch = searchParams.get('search') || ''
+
+  const [searchInput, setSearchInput] = useState(initialSearch)
+  const [search, setSearch] = useState(initialSearch)
+  const debouncedSearchInput = useDebounce(searchInput, 300)
   const [sortField, setSortField] = useState<SortField>('last_update_time')
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc')
   const [queryError, setQueryError] = useState<string | null>(null)
@@ -60,24 +92,50 @@ function ProcessesPageContent() {
   const loadData = useCallback(
     (sql: string = DEFAULT_SQL) => {
       setQueryError(null)
+      // Interpolate search_filter directly into SQL (it contains raw SQL with quotes)
+      const sqlWithSearch = sql.replace('$search_filter', expandSearchFilter(search))
       const params: Record<string, string> = {
         begin: apiTimeRange.begin,
         end: apiTimeRange.end,
         order_by: `${sortField} ${sortDirection.toUpperCase()}`,
-        search: searchTerm,
       }
       mutateRef.current({
-        sql,
+        sql: sqlWithSearch,
         params,
         begin: apiTimeRange.begin,
         end: apiTimeRange.end,
       })
     },
-    [sortField, sortDirection, searchTerm, apiTimeRange]
+    [sortField, sortDirection, search, apiTimeRange]
   )
 
+  // Update search state and URL
+  const updateSearch = useCallback(
+    (value: string) => {
+      setSearch(value)
+      const params = new URLSearchParams(searchParams.toString())
+      if (value.trim() === '') {
+        params.delete('search')
+      } else {
+        params.set('search', value.trim())
+      }
+      router.replace(`${pathname}?${params.toString()}`)
+    },
+    [searchParams, router, pathname]
+  )
+
+  // Sync debounced input to search state and URL
+  const isInitialSearchRef = useRef(true)
+  useEffect(() => {
+    if (isInitialSearchRef.current) {
+      isInitialSearchRef.current = false
+      return
+    }
+    updateSearch(debouncedSearchInput)
+  }, [debouncedSearchInput, updateSearch])
+
   // Load on mount and when time range, sort, or search changes
-  const queryKey = `${apiTimeRange.begin}-${apiTimeRange.end}-${sortField}-${sortDirection}-${searchTerm}`
+  const queryKey = `${apiTimeRange.begin}-${apiTimeRange.end}-${sortField}-${sortDirection}-${search}`
   const prevQueryKeyRef = useRef<string | null>(null)
   useEffect(() => {
     if (prevQueryKeyRef.current !== queryKey) {
@@ -111,9 +169,9 @@ function ProcessesPageContent() {
       begin: apiTimeRange.begin,
       end: apiTimeRange.end,
       order_by: `${sortField} ${sortDirection.toUpperCase()}`,
-      search: searchTerm || '(empty)',
+      search_filter: expandSearchFilter(search) || '(empty)',
     }),
-    [apiTimeRange, searchTerm, sortField, sortDirection]
+    [apiTimeRange, search, sortField, sortDirection]
   )
 
   const SortHeader = ({
@@ -260,7 +318,7 @@ function ProcessesPageContent() {
                   {rows.length === 0 && (
                     <tr>
                       <td colSpan={6} className="px-4 py-8 text-center text-theme-text-muted">
-                        {searchTerm ? 'No processes match your search.' : 'No processes available.'}
+                        {search ? 'No processes match your search.' : 'No processes available.'}
                       </td>
                     </tr>
                   )}

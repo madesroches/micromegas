@@ -570,31 +570,6 @@ fn substitute_macros(sql: &str, params: &HashMap<String, String>) -> String {
     result
 }
 
-/// Expand search filter into SQL LIKE clauses
-/// Input: "error database"
-/// Output: AND (target ILIKE '%error%' OR msg ILIKE '%error%') AND (target ILIKE '%database%' OR msg ILIKE '%database%')
-fn expand_search_filter(search: &str) -> String {
-    let words: Vec<&str> = search.split_whitespace().collect();
-    if words.is_empty() {
-        return String::new();
-    }
-
-    let clauses: Vec<String> = words
-        .iter()
-        .map(|word| {
-            // Escape SQL special characters for LIKE pattern
-            let escaped = word
-                .replace('\\', "\\\\")
-                .replace('%', "\\%")
-                .replace('_', "\\_")
-                .replace('\'', "''");
-            format!("(target ILIKE '%{escaped}%' OR msg ILIKE '%{escaped}%')")
-        })
-        .collect();
-
-    format!("AND {}", clauses.join(" AND "))
-}
-
 #[span_fn]
 async fn execute_sql_query(
     Extension(auth_token): Extension<AuthToken>,
@@ -619,19 +594,8 @@ async fn execute_sql_query(
         ));
     }
 
-    // Expand search filter before regular macro substitution
-    let sql_with_search = {
-        let search = request
-            .params
-            .get("search")
-            .map(String::as_str)
-            .unwrap_or("");
-        let search_clause = expand_search_filter(search);
-        request.sql.replace("$search_filter", &search_clause)
-    };
-
     // Substitute macros
-    let sql = substitute_macros(&sql_with_search, &request.params);
+    let sql = substitute_macros(&request.sql, &request.params);
 
     // Build time range if provided
     let time_range = match (request.begin, request.end) {
