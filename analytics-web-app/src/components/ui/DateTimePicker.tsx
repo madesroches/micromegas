@@ -22,15 +22,18 @@ export function DateTimePicker({ value, onChange, label, placeholder }: DateTime
   const handleDateSelect = useCallback(
     (date: Date | undefined) => {
       if (!date) {
-        onChange(undefined)
+        // Clicking the same date deselects in DayPicker - treat as reset to 00:00
+        if (value) {
+          onChange(startOfDay(value))
+          setIsCalendarOpen(false)
+        }
         return
       }
-      // Preserve time when changing date
-      const newDate = setMinutes(setHours(date, hours), minutes)
-      onChange(newDate)
+      // Default to start of day (00:00) when selecting a date
+      onChange(startOfDay(date))
       setIsCalendarOpen(false)
     },
-    [onChange, hours, minutes]
+    [onChange, value]
   )
 
   const handleTimeChange = useCallback(
