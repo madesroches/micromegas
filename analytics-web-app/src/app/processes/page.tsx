@@ -1,6 +1,7 @@
 'use client'
 
 import { Suspense, useState, useMemo, useCallback, useEffect, useRef } from 'react'
+import { useSearchParams, useRouter, usePathname } from 'next/navigation'
 import { useMutation } from '@tanstack/react-query'
 import Link from 'next/link'
 import { ChevronUp, ChevronDown } from 'lucide-react'
@@ -53,8 +54,16 @@ function expandSearchFilter(search: string): string {
 }
 
 function ProcessesPageContent() {
-  const [searchInput, setSearchInput] = useState('')
-  const searchTerm = useDebounce(searchInput, 300)
+  const searchParams = useSearchParams()
+  const router = useRouter()
+  const pathname = usePathname()
+
+  // Read initial search from URL
+  const initialSearch = searchParams.get('search') || ''
+
+  const [searchInput, setSearchInput] = useState(initialSearch)
+  const [search, setSearch] = useState(initialSearch)
+  const debouncedSearchInput = useDebounce(searchInput, 300)
   const [sortField, setSortField] = useState<SortField>('last_update_time')
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc')
   const [queryError, setQueryError] = useState<string | null>(null)
@@ -80,7 +89,7 @@ function ProcessesPageContent() {
     (sql: string = DEFAULT_SQL) => {
       setQueryError(null)
       // Interpolate search_filter directly into SQL (it contains raw SQL with quotes)
-      const sqlWithSearch = sql.replace('$search_filter', expandSearchFilter(searchTerm))
+      const sqlWithSearch = sql.replace('$search_filter', expandSearchFilter(search))
       const params: Record<string, string> = {
         begin: apiTimeRange.begin,
         end: apiTimeRange.end,
@@ -93,11 +102,36 @@ function ProcessesPageContent() {
         end: apiTimeRange.end,
       })
     },
-    [sortField, sortDirection, searchTerm, apiTimeRange]
+    [sortField, sortDirection, search, apiTimeRange]
   )
 
+  // Update search state and URL
+  const updateSearch = useCallback(
+    (value: string) => {
+      setSearch(value)
+      const params = new URLSearchParams(searchParams.toString())
+      if (value.trim() === '') {
+        params.delete('search')
+      } else {
+        params.set('search', value.trim())
+      }
+      router.push(`${pathname}?${params.toString()}`)
+    },
+    [searchParams, router, pathname]
+  )
+
+  // Sync debounced input to search state and URL
+  const isInitialSearchRef = useRef(true)
+  useEffect(() => {
+    if (isInitialSearchRef.current) {
+      isInitialSearchRef.current = false
+      return
+    }
+    updateSearch(debouncedSearchInput)
+  }, [debouncedSearchInput, updateSearch])
+
   // Load on mount and when time range, sort, or search changes
-  const queryKey = `${apiTimeRange.begin}-${apiTimeRange.end}-${sortField}-${sortDirection}-${searchTerm}`
+  const queryKey = `${apiTimeRange.begin}-${apiTimeRange.end}-${sortField}-${sortDirection}-${search}`
   const prevQueryKeyRef = useRef<string | null>(null)
   useEffect(() => {
     if (prevQueryKeyRef.current !== queryKey) {
@@ -131,9 +165,9 @@ function ProcessesPageContent() {
       begin: apiTimeRange.begin,
       end: apiTimeRange.end,
       order_by: `${sortField} ${sortDirection.toUpperCase()}`,
-      search_filter: expandSearchFilter(searchTerm) || '(empty)',
+      search_filter: expandSearchFilter(search) || '(empty)',
     }),
-    [apiTimeRange, searchTerm, sortField, sortDirection]
+    [apiTimeRange, search, sortField, sortDirection]
   )
 
   const SortHeader = ({
@@ -280,7 +314,7 @@ function ProcessesPageContent() {
                   {rows.length === 0 && (
                     <tr>
                       <td colSpan={6} className="px-4 py-8 text-center text-theme-text-muted">
-                        {searchTerm ? 'No processes match your search.' : 'No processes available.'}
+                        {search ? 'No processes match your search.' : 'No processes available.'}
                       </td>
                     </tr>
                   )}
