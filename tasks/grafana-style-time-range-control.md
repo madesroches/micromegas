@@ -6,6 +6,24 @@ Replace the current simple dropdown time range selector with a comprehensive Gra
 
 > **Note**: Auto-refresh is a separate feature and not part of this plan.
 
+## Off-the-Shelf Evaluation
+
+Evaluated existing npm packages before deciding to build custom:
+
+| Package | Size | Verdict |
+|---------|------|---------|
+| **@grafana/ui** | Heavy (50+ deps) | Has exact component but requires Grafana runtime context, not designed for standalone use |
+| **@splunk/react-time-range** | 605 kB | Splunk-specific, closed ecosystem |
+| **@manik1848/react-date-range-picker** | 4.3 MB | Too heavy, uses moment.js instead of date-fns |
+| **rsuite DateRangePicker** | Medium | Part of larger library, no relative time input (`now-1h`) |
+
+**Decision**: Build our own using:
+- `react-day-picker` + `date-fns` (~50 kB combined) - lightweight calendar
+- Radix UI - already in project for popover/dialog
+- Existing `time-range.ts` - already has relative time parsing
+
+This keeps the bundle small and matches the existing tech stack.
+
 ## Current State
 
 **Location**: `analytics-web-app/src/components/layout/TimeRangeSelector.tsx`
