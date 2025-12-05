@@ -12,6 +12,7 @@ import { QueryEditor } from '@/components/QueryEditor'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { executeSqlQuery, toRowObjects } from '@/lib/api'
 import { useTimeRange } from '@/hooks/useTimeRange'
+import { useDebounce } from '@/hooks/useDebounce'
 import { SqlRow } from '@/types'
 
 const DEFAULT_SQL = `SELECT time, level, target, msg
@@ -199,6 +200,7 @@ function ProcessLogContent() {
   const [limitInputValue, setLimitInputValue] = useState<string>(String(initialLimit))
   const [search, setSearch] = useState<string>(initialSearch)
   const [searchInputValue, setSearchInputValue] = useState<string>(initialSearch)
+  const debouncedSearchInput = useDebounce(searchInputValue, 300)
   const [queryError, setQueryError] = useState<string | null>(null)
   const [rows, setRows] = useState<SqlRow[]>([])
   const [processExe, setProcessExe] = useState<string | null>(null)
@@ -320,9 +322,22 @@ function ProcessLogContent() {
     [searchParams, router, pathname]
   )
 
+  // Sync debounced search to state and URL
+  const isInitialSearchRef = useRef(true)
+  useEffect(() => {
+    if (isInitialSearchRef.current) {
+      isInitialSearchRef.current = false
+      return
+    }
+    updateSearch(debouncedSearchInput)
+  }, [debouncedSearchInput, updateSearch])
+
   const handleSearchBlur = useCallback(() => {
-    updateSearch(searchInputValue)
-  }, [searchInputValue, updateSearch])
+    // Immediate update on blur (in case user doesn't wait for debounce)
+    if (searchInputValue !== search) {
+      updateSearch(searchInputValue)
+    }
+  }, [searchInputValue, search, updateSearch])
 
   const handleSearchKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLInputElement>) => {
