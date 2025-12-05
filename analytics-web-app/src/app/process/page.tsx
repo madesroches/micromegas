@@ -10,13 +10,20 @@ import { AuthGuard } from '@/components/AuthGuard'
 import { CopyableProcessId } from '@/components/CopyableProcessId'
 import { executeSqlQuery, toRowObjects } from '@/lib/api'
 import { useTimeRange } from '@/hooks/useTimeRange'
-import { formatDuration } from '@/lib/time-range'
+import { formatDuration, formatDateTimeLocal } from '@/lib/time-range'
 import { SqlRow } from '@/types'
 
 const PROCESS_SQL = `SELECT process_id, exe, start_time, last_update_time, computer, username, cpu_brand, distro
 FROM processes
 WHERE process_id = '$process_id'
 LIMIT 1`
+
+function formatLocalTime(timestamp: unknown): string {
+  if (!timestamp) return '—'
+  const date = new Date(String(timestamp))
+  if (isNaN(date.getTime())) return String(timestamp)
+  return formatDateTimeLocal(date)
+}
 
 const STATISTICS_SQL = `SELECT
   SUM(CASE WHEN array_has("streams.tags", 'log') THEN nb_objects ELSE 0 END) as log_entries,
@@ -26,6 +33,11 @@ const STATISTICS_SQL = `SELECT
 FROM blocks
 WHERE process_id = '$process_id'`
 
+const PROPERTIES_SQL = `SELECT jsonb_format_json(properties) as properties
+FROM processes
+WHERE process_id = '$process_id'
+LIMIT 1`
+
 function ProcessPageContent() {
   const searchParams = useSearchParams()
   const processId = searchParams.get('id')
@@ -34,6 +46,8 @@ function ProcessPageContent() {
   const [process, setProcess] = useState<SqlRow | null>(null)
   const [statistics, setStatistics] = useState<SqlRow | null>(null)
   const [statsError, setStatsError] = useState<string | null>(null)
+  const [properties, setProperties] = useState<Record<string, string> | null>(null)
+  const [propertiesError, setPropertiesError] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(true)
 
   const processMutation = useMutation({
@@ -64,11 +78,34 @@ function ProcessPageContent() {
     },
   })
 
+  const propertiesMutation = useMutation({
+    mutationFn: executeSqlQuery,
+    onSuccess: (data) => {
+      setPropertiesError(null)
+      const rows = toRowObjects(data)
+      if (rows.length > 0 && rows[0].properties) {
+        try {
+          const parsed = JSON.parse(String(rows[0].properties))
+          setProperties(parsed)
+        } catch {
+          setPropertiesError('Failed to parse properties')
+        }
+      } else {
+        setProperties({})
+      }
+    },
+    onError: (err: Error) => {
+      setPropertiesError(err.message)
+    },
+  })
+
   // Use refs to avoid including mutations in callback deps
   const processMutateRef = useRef(processMutation.mutate)
   processMutateRef.current = processMutation.mutate
   const statsMutateRef = useRef(statsMutation.mutate)
   statsMutateRef.current = statsMutation.mutate
+  const propertiesMutateRef = useRef(propertiesMutation.mutate)
+  propertiesMutateRef.current = propertiesMutation.mutate
 
   const loadData = useCallback(() => {
     if (!processId) return
@@ -81,6 +118,12 @@ function ProcessPageContent() {
     })
     statsMutateRef.current({
       sql: STATISTICS_SQL,
+      params: { process_id: processId },
+      begin: apiTimeRange.begin,
+      end: apiTimeRange.end,
+    })
+    propertiesMutateRef.current({
+      sql: PROPERTIES_SQL,
       params: { process_id: processId },
       begin: apiTimeRange.begin,
       end: apiTimeRange.end,
@@ -213,8 +256,8 @@ function ProcessPageContent() {
               Timing
             </h3>
             <div className="space-y-0">
-              <InfoRow label="Start Time" value={String(process.start_time ?? '')} mono />
-              <InfoRow label="Last Activity" value={String(process.last_update_time ?? '')} mono />
+              <InfoRow label="Start Time" value={formatLocalTime(process.start_time)} mono />
+              <InfoRow label="Last Activity" value={formatLocalTime(process.last_update_time)} mono />
               <InfoRow
                 label="Duration"
                 value={formatDuration(process.start_time, process.last_update_time)}
@@ -249,6 +292,28 @@ function ProcessPageContent() {
                   label="Thread Count"
                   value={statistics ? Number(statistics.thread_count ?? 0).toLocaleString() : '—'}
                 />
+              </div>
+            )}
+          </div>
+
+          {/* Properties */}
+          <div className="bg-app-panel border border-theme-border rounded-lg p-5">
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-theme-text-muted mb-4">
+              Properties
+            </h3>
+            {propertiesError ? (
+              <div className="text-sm text-accent-error">
+                Failed to load properties: {propertiesError}
+              </div>
+            ) : properties === null ? (
+              <div className="text-sm text-theme-text-muted">Loading...</div>
+            ) : Object.keys(properties).length === 0 ? (
+              <div className="text-sm text-theme-text-muted">No properties</div>
+            ) : (
+              <div className="space-y-0">
+                {Object.entries(properties).map(([key, value]) => (
+                  <InfoRow key={key} label={key} value={String(value)} />
+                ))}
               </div>
             )}
           </div>

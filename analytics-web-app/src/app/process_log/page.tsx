@@ -16,9 +16,8 @@ import { useDebounce } from '@/hooks/useDebounce'
 import { SqlRow } from '@/types'
 
 const DEFAULT_SQL = `SELECT time, level, target, msg
-FROM log_entries
-WHERE process_id = '$process_id'
-  AND level <= $max_level
+FROM view_instance('log_entries', '$process_id')
+WHERE level <= $max_level
   $search_filter
 ORDER BY time DESC
 LIMIT $limit`
