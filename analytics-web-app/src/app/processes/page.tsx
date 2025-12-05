@@ -292,7 +292,7 @@ function ProcessesPageContent() {
                     >
                       <td className="px-4 py-3">
                         <Link
-                          href={`/process?id=${row.process_id}`}
+                          href={`/process?id=${row.process_id}&from=${encodeURIComponent(String(row.start_time))}&to=${encodeURIComponent(String(row.last_update_time))}`}
                           className="text-accent-link hover:underline"
                         >
                           {String(row.exe ?? '')}
