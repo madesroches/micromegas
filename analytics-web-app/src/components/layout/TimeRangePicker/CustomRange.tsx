@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useMemo } from 'react'
 import { Calendar } from 'lucide-react'
 import {
   isValidTimeExpression,
@@ -13,66 +13,44 @@ import type { CustomRangeProps } from './types'
 export function CustomRange({ from, to, onApply }: CustomRangeProps) {
   const [fromInput, setFromInput] = useState(from)
   const [toInput, setToInput] = useState(to)
-  const [fromDate, setFromDate] = useState<Date | undefined>(() => {
-    try {
-      return parseRelativeTime(from)
-    } catch {
-      return undefined
-    }
-  })
-  const [toDate, setToDate] = useState<Date | undefined>(() => {
-    try {
-      return parseRelativeTime(to)
-    } catch {
-      return undefined
-    }
-  })
   const [showFromCalendar, setShowFromCalendar] = useState(false)
   const [showToCalendar, setShowToCalendar] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  // Derive dates from input strings on demand
+  const fromDate = useMemo(() => {
+    try {
+      return parseRelativeTime(fromInput)
+    } catch {
+      return undefined
+    }
+  }, [fromInput])
+
+  const toDate = useMemo(() => {
+    try {
+      return parseRelativeTime(toInput)
+    } catch {
+      return undefined
+    }
+  }, [toInput])
+
   useEffect(() => {
     setFromInput(from)
     setToInput(to)
-    try {
-      setFromDate(parseRelativeTime(from))
-    } catch {
-      setFromDate(undefined)
-    }
-    try {
-      setToDate(parseRelativeTime(to))
-    } catch {
-      setToDate(undefined)
-    }
   }, [from, to])
 
   const handleFromInputChange = useCallback((value: string) => {
     setFromInput(value)
     setError(null)
-    if (isValidTimeExpression(value)) {
-      try {
-        setFromDate(parseRelativeTime(value))
-      } catch {
-        // Keep the previous date
-      }
-    }
   }, [])
 
   const handleToInputChange = useCallback((value: string) => {
     setToInput(value)
     setError(null)
-    if (isValidTimeExpression(value)) {
-      try {
-        setToDate(parseRelativeTime(value))
-      } catch {
-        // Keep the previous date
-      }
-    }
   }, [])
 
   const handleFromDateSelect = useCallback((date: Date | undefined) => {
     if (date) {
-      setFromDate(date)
       setFromInput(formatDateTimeLocal(date))
       setShowFromCalendar(false)
       setError(null)
@@ -81,7 +59,6 @@ export function CustomRange({ from, to, onApply }: CustomRangeProps) {
 
   const handleToDateSelect = useCallback((date: Date | undefined) => {
     if (date) {
-      setToDate(date)
       setToInput(formatDateTimeLocal(date))
       setShowToCalendar(false)
       setError(null)
@@ -100,9 +77,9 @@ export function CustomRange({ from, to, onApply }: CustomRangeProps) {
 
     // Validate that from is before to
     try {
-      const fromDate = parseRelativeTime(fromInput)
-      const toDate = parseRelativeTime(toInput)
-      if (fromDate >= toDate) {
+      const parsedFrom = parseRelativeTime(fromInput)
+      const parsedTo = parseRelativeTime(toInput)
+      if (parsedFrom >= parsedTo) {
         setError('"From" must be before "To"')
         return
       }

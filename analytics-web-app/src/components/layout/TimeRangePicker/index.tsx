@@ -4,6 +4,7 @@ import { useState, useCallback, useEffect, useRef } from 'react'
 import { Clock, ChevronDown } from 'lucide-react'
 import { useTimeRange } from '@/hooks/useTimeRange'
 import { saveTimeRange } from '@/lib/time-range-history'
+import { parseTimeRange } from '@/lib/time-range'
 import { QuickRanges } from './QuickRanges'
 import { CustomRange } from './CustomRange'
 import { RecentRanges } from './RecentRanges'
@@ -15,21 +16,12 @@ export function TimeRangePicker() {
 
   const handleSelect = useCallback(
     (from: string, to: string) => {
-      // Generate a label for history
-      let label = parsed.label
-      try {
-        const { parseTimeRange } = require('@/lib/time-range')
-        const newParsed = parseTimeRange(from, to)
-        label = newParsed.label
-      } catch {
-        // Use existing label
-      }
-
-      saveTimeRange(from, to, label)
+      const newParsed = parseTimeRange(from, to)
+      saveTimeRange(from, to, newParsed.label)
       setTimeRange(from, to)
       setIsOpen(false)
     },
-    [setTimeRange, parsed.label]
+    [setTimeRange]
   )
 
   const handleApplyCustom = useCallback(

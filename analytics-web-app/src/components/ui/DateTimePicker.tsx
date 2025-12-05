@@ -5,6 +5,7 @@ import { DayPicker } from 'react-day-picker'
 import { format, setHours, setMinutes, startOfDay, endOfDay } from 'date-fns'
 import { Calendar, Clock } from 'lucide-react'
 import 'react-day-picker/style.css'
+import './DateTimePicker.css'
 
 interface DateTimePickerProps {
   value: Date | undefined
@@ -150,40 +151,6 @@ export function DateTimePicker({ value, onChange, label, placeholder }: DateTime
           End of day
         </button>
       </div>
-
-      <style jsx global>{`
-        .rdp-custom {
-          --rdp-accent-color: var(--color-accent-link);
-          --rdp-background-color: var(--color-app-card);
-        }
-        .rdp-custom .rdp-day_button {
-          color: var(--color-theme-text-primary);
-        }
-        .rdp-custom .rdp-day_button:hover {
-          background-color: var(--color-theme-border);
-        }
-        .rdp-custom .rdp-selected .rdp-day_button {
-          background-color: var(--rdp-accent-color);
-          color: white;
-        }
-        .rdp-custom .rdp-month_caption {
-          color: var(--color-theme-text-primary);
-        }
-        .rdp-custom .rdp-weekday {
-          color: var(--color-theme-text-muted);
-        }
-        .rdp-custom .rdp-button_previous,
-        .rdp-custom .rdp-button_next {
-          color: var(--color-theme-text-secondary);
-        }
-        .rdp-custom .rdp-button_previous:hover,
-        .rdp-custom .rdp-button_next:hover {
-          background-color: var(--color-theme-border);
-        }
-        .rdp-custom .rdp-outside {
-          opacity: 0.4;
-        }
-      `}</style>
     </div>
   )
 }
