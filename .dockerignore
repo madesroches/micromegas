@@ -1,0 +1,42 @@
+# Rust build artifacts
+rust/target/
+
+# Node modules
+node_modules/
+analytics-web-app/node_modules/
+grafana/node_modules/
+
+# Python virtual environments
+**/venv/
+**/*_venv/
+**/*-venv/
+docs-venv/
+python/notebooks/jupyter_env/
+python/micromegas/test_venv/
+
+# Git
+.git/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Local test environment
+local_test_env/
+
+# Logs and temp files
+*.log
+/tmp/
+**/__pycache__/
+
+# Documentation build output
+mkdocs/site/
+
+# Unreal Engine (large binaries)
+unreal/
+
+# OS files
+.DS_Store
+Thumbs.db
