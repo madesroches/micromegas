@@ -41,7 +41,7 @@ LIMIT 1`
 function ProcessPageContent() {
   const searchParams = useSearchParams()
   const processId = searchParams.get('id')
-  const { apiTimeRange } = useTimeRange()
+  const { apiTimeRange, timeRange } = useTimeRange()
 
   const [process, setProcess] = useState<SqlRow | null>(null)
   const [statistics, setStatistics] = useState<SqlRow | null>(null)
@@ -208,14 +208,14 @@ function ProcessPageContent() {
           </div>
           <div className="flex gap-3">
             <Link
-              href={`/process_log?process_id=${processId}`}
+              href={`/process_log?process_id=${processId}&from=${encodeURIComponent(timeRange.from)}&to=${encodeURIComponent(timeRange.to)}`}
               className="flex items-center gap-2 px-4 py-2 bg-theme-border text-theme-text-primary rounded-md hover:bg-theme-border-hover transition-colors text-sm"
             >
               <FileText className="w-4 h-4" />
               View Log
             </Link>
             <Link
-              href={`/process_trace?process_id=${processId}`}
+              href={`/process_trace?process_id=${processId}&from=${encodeURIComponent(timeRange.from)}&to=${encodeURIComponent(timeRange.to)}`}
               className="flex items-center gap-2 px-4 py-2 bg-accent-link text-white rounded-md hover:bg-accent-link-hover transition-colors text-sm"
             >
               <Activity className="w-4 h-4" />
