@@ -202,7 +202,9 @@ function ProcessMetricsContent() {
     [searchParams, router, pathname]
   )
 
-  // Load process info once
+  // Load process info (exe name) once on mount.
+  // The ref prevents re-fetching when apiTimeRange changes since process
+  // metadata is static and doesn't depend on time range.
   const hasLoadedProcessRef = useRef(false)
   useEffect(() => {
     if (processId && !hasLoadedProcessRef.current) {
@@ -216,7 +218,8 @@ function ProcessMetricsContent() {
     }
   }, [processId, apiTimeRange])
 
-  // Load discovery on mount
+  // Load measure discovery on mount.
+  // Ref prevents duplicate calls; time range changes are handled separately below.
   const hasLoadedDiscoveryRef = useRef(false)
   useEffect(() => {
     if (processId && !hasLoadedDiscoveryRef.current) {
