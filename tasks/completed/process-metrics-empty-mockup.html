@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Process Metrics - Empty State Mockup</title>
+  <style>
+    :root {
+      --bg-app: #0a0a0f;
+      --bg-panel: #141419;
+      --bg-header: #0f0f14;
+      --bg-sidebar: #0c0c11;
+      --bg-card: #1a1a22;
+      --bg-hover: #1e1e26;
+      --border: #2a2a35;
+      --border-hover: #3a3a48;
+      --text-primary: #e8e8ed;
+      --text-secondary: #a0a0b0;
+      --text-muted: #6a6a7a;
+      --accent-link: #1565c0;
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg-app);
+      color: var(--text-primary);
+      min-height: 100vh;
+      padding: 40px;
+    }
+
+    h1 {
+      margin-bottom: 32px;
+      font-size: 20px;
+      color: var(--text-secondary);
+    }
+
+    .mockup-section {
+      margin-bottom: 48px;
+    }
+
+    .mockup-label {
+      font-size: 14px;
+      color: var(--text-muted);
+      margin-bottom: 16px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    /* Chart panel - matches main mockup */
+    .chart-panel {
+      background: var(--bg-panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      display: flex;
+      flex-direction: column;
+      min-height: 400px;
+      max-width: 900px;
+    }
+
+    .chart-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .chart-title {
+      font-size: 16px;
+      font-weight: 500;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .chart-title .unit {
+      color: var(--text-muted);
+      font-weight: 400;
+    }
+
+    .chart-container {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+    }
+
+    /* Empty state styles */
+    .empty-state {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 48px 24px;
+    }
+
+    .empty-state-icon {
+      width: 64px;
+      height: 64px;
+      margin-bottom: 16px;
+      color: var(--text-muted);
+      opacity: 0.5;
+    }
+
+    .empty-state-title {
+      font-size: 16px;
+      font-weight: 500;
+      color: var(--text-secondary);
+      margin-bottom: 8px;
+    }
+
+    .empty-state-description {
+      font-size: 14px;
+      color: var(--text-muted);
+      max-width: 320px;
+      line-height: 1.5;
+    }
+
+    /* Filters - matches main mockup */
+    .filters {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 16px;
+      max-width: 900px;
+    }
+
+    .measure-select {
+      background: var(--bg-panel);
+      border: 1px solid var(--border);
+      color: var(--text-primary);
+      padding: 8px 12px;
+      border-radius: 6px;
+      font-size: 14px;
+      min-width: 250px;
+    }
+
+    .measure-select:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .results-count {
+      margin-left: auto;
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+  </style>
+</head>
+<body>
+  <h1>Process Metrics - Empty State Mockups</h1>
+
+  <!-- Empty State 1: No measures available for the selected time range -->
+  <div class="mockup-section">
+    <div class="mockup-label">No measures available for the selected time range</div>
+
+    <div class="filters">
+      <select class="measure-select" disabled>
+        <option>No measures available</option>
+      </select>
+    </div>
+
+    <div class="chart-panel">
+      <div class="chart-container">
+        <div class="empty-state">
+          <svg class="empty-state-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <circle cx="12" cy="12" r="10"/>
+            <path d="M12 6v6l4 2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <div class="empty-state-title">No measures for the selected time range</div>
+          <div class="empty-state-description">
+            Try expanding the time range to find metrics data.
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Empty State 2: Query returned no results -->
+  <div class="mockup-section">
+    <div class="mockup-label">Query returned no results (measure selected but no data in time range)</div>
+
+    <div class="filters">
+      <select class="measure-select">
+        <option selected>frame_time (ms)</option>
+        <option>memory_usage (bytes)</option>
+      </select>
+      <span class="results-count">0 data points</span>
+    </div>
+
+    <div class="chart-panel">
+      <div class="chart-header">
+        <div class="chart-title">
+          <span>frame_time</span> <span class="unit">(ms)</span>
+        </div>
+      </div>
+      <div class="chart-container">
+        <div class="empty-state">
+          <svg class="empty-state-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <circle cx="12" cy="12" r="10"/>
+            <path d="M12 6v6l4 2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <div class="empty-state-title">No data in time range</div>
+          <div class="empty-state-description">
+            No measurements found for the selected time range. Try expanding the time range or selecting a different measure.
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</body>
+</html>

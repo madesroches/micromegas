@@ -1,0 +1,868 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Process Metrics - Mockup</title>
+  <!-- uPlot CSS and JS via CDN -->
+  <link rel="stylesheet" href="https://unpkg.com/uplot@1.6.30/dist/uPlot.min.css">
+  <script src="https://unpkg.com/uplot@1.6.30/dist/uPlot.iife.min.js"></script>
+  <style>
+    :root {
+      --bg-app: #0a0a0f;
+      --bg-panel: #141419;
+      --bg-header: #0f0f14;
+      --bg-sidebar: #0c0c11;
+      --bg-card: #1a1a22;
+      --bg-hover: #1e1e26;
+      --border: #2a2a35;
+      --border-hover: #3a3a48;
+      --text-primary: #e8e8ed;
+      --text-secondary: #a0a0b0;
+      --text-muted: #6a6a7a;
+      --accent-link: #1565c0;
+      --accent-link-hover: #1976d2;
+      --accent-highlight: #ffb300;
+      --chart-line: #73bf69;
+      --chart-fill: rgba(115, 191, 105, 0.1);
+      --chart-grid: #2a2a35;
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg-app);
+      color: var(--text-primary);
+      min-height: 100vh;
+    }
+
+    .layout {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Header - matches Header.tsx */
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 24px;
+      background: var(--bg-header);
+      border-bottom: 1px solid var(--border);
+      height: 57px;
+    }
+
+    .header-left {
+      display: flex;
+      align-items: center;
+      gap: 24px;
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      text-decoration: none;
+    }
+
+    .logo-icon {
+      width: 28px;
+      height: 28px;
+      background: linear-gradient(135deg, #bf360c 0%, #ff6f00 100%);
+      border-radius: 6px;
+    }
+
+    .logo-text {
+      font-size: 16px;
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .time-range-group {
+      display: flex;
+      align-items: center;
+    }
+
+    .time-range-select {
+      background: var(--border);
+      border: none;
+      color: var(--text-primary);
+      padding: 6px 12px;
+      border-radius: 6px 0 0 6px;
+      font-size: 13px;
+      cursor: pointer;
+    }
+
+    .refresh-btn {
+      background: var(--border);
+      border: none;
+      border-left: 1px solid var(--border-hover);
+      color: var(--text-primary);
+      padding: 6px 10px;
+      border-radius: 0 6px 6px 0;
+      cursor: pointer;
+    }
+
+    .refresh-btn:hover {
+      background: var(--border-hover);
+    }
+
+    .user-menu {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 12px;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+
+    .user-menu:hover {
+      background: var(--border);
+    }
+
+    .user-avatar {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      background: var(--accent-link);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      font-weight: 600;
+      color: white;
+    }
+
+    .user-chevron {
+      font-size: 10px;
+      color: var(--text-secondary);
+    }
+
+    /* Main area */
+    .main-area {
+      display: flex;
+      flex: 1;
+      height: calc(100vh - 57px);
+    }
+
+    /* Sidebar - matches Sidebar.tsx (narrow icon-only) */
+    .sidebar {
+      width: 56px;
+      background: var(--bg-sidebar);
+      border-right: 1px solid var(--border);
+      padding: 12px 0;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .sidebar-item {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 40px;
+      height: 40px;
+      margin: 0 8px;
+      border-radius: 6px;
+      color: var(--text-secondary);
+      text-decoration: none;
+      cursor: pointer;
+    }
+
+    .sidebar-item:hover {
+      background: var(--border);
+      color: var(--text-primary);
+    }
+
+    .sidebar-item.active {
+      background: var(--bg-card);
+      color: var(--accent-link);
+    }
+
+    .sidebar-icon {
+      width: 20px;
+      height: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    /* Content */
+    .content {
+      flex: 1;
+      padding: 24px;
+      overflow: auto;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Back link */
+    .back-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--accent-link);
+      text-decoration: none;
+      font-size: 14px;
+      margin-bottom: 16px;
+    }
+
+    .back-link:hover {
+      text-decoration: underline;
+    }
+
+    /* Page header */
+    .page-header {
+      margin-bottom: 20px;
+    }
+
+    .page-title {
+      font-size: 24px;
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+
+    .process-id {
+      font-family: 'SF Mono', Monaco, monospace;
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+
+    /* Filters */
+    .filters {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 16px;
+    }
+
+    .measure-select {
+      background: var(--bg-panel);
+      border: 1px solid var(--border);
+      color: var(--text-primary);
+      padding: 8px 12px;
+      border-radius: 6px;
+      font-size: 14px;
+      min-width: 250px;
+    }
+
+    .measure-select:focus {
+      outline: none;
+      border-color: var(--accent-link);
+    }
+
+    .results-count {
+      margin-left: auto;
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+
+    /* Chart panel */
+    .chart-panel {
+      flex: 1;
+      background: var(--bg-panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      display: flex;
+      flex-direction: column;
+      min-height: 400px;
+    }
+
+    .chart-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .chart-title {
+      font-size: 16px;
+      font-weight: 500;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .chart-title .unit {
+      color: var(--text-muted);
+      font-weight: 400;
+    }
+
+    .chart-legend {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      font-size: 13px;
+    }
+
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .legend-color {
+      width: 12px;
+      height: 3px;
+      background: var(--chart-line);
+      border-radius: 2px;
+    }
+
+    .legend-stats {
+      color: var(--text-muted);
+    }
+
+    .legend-stats span {
+      color: var(--text-secondary);
+      margin-left: 4px;
+    }
+
+    /* Chart container for uPlot */
+    .chart-container {
+      flex: 1;
+      padding: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    #uplot-chart {
+      width: 100%;
+    }
+
+    /* Tooltip */
+    .chart-tooltip {
+      position: absolute;
+      background: #0a0a0f;
+      border: 1px solid #2a2a35;
+      border-radius: 6px;
+      padding: 8px 12px;
+      font-size: 12px;
+      pointer-events: none;
+      z-index: 100;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+      display: none;
+    }
+
+    .chart-tooltip.visible {
+      display: block;
+    }
+
+    .tooltip-time {
+      color: #6a6a7a;
+      margin-bottom: 4px;
+      font-family: 'SF Mono', Monaco, monospace;
+    }
+
+    .tooltip-value {
+      color: #73bf69;
+      font-weight: 600;
+      font-size: 14px;
+    }
+
+    /* uPlot dark theme overrides */
+    .uplot {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    }
+
+    .uplot .u-title {
+      display: none; /* We use our own header */
+    }
+
+    .uplot .u-legend {
+      display: none; /* We use our own legend */
+    }
+
+    .uplot .u-wrap {
+      background: transparent;
+    }
+
+    /* SQL Panel - right side */
+    .sql-panel {
+      width: 380px;
+      background: var(--bg-panel);
+      border-left: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+    }
+
+    .sql-panel-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 16px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .sql-panel-title {
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    .sql-panel-close {
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 18px;
+    }
+
+    .sql-panel-content {
+      padding: 16px;
+      flex: 1;
+      overflow: auto;
+    }
+
+    .sql-editor {
+      background: var(--bg-app);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 12px;
+      font-family: 'SF Mono', Monaco, monospace;
+      font-size: 13px;
+      line-height: 1.5;
+      color: var(--text-primary);
+      margin-bottom: 16px;
+    }
+
+    .sql-keyword {
+      color: #c792ea;
+    }
+
+    .sql-string {
+      color: #c3e88d;
+    }
+
+    .sql-variable {
+      color: var(--accent-highlight);
+    }
+
+    .variables-section {
+      margin-bottom: 16px;
+    }
+
+    .variables-title {
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-muted);
+      margin-bottom: 8px;
+    }
+
+    .variable-item {
+      display: flex;
+      justify-content: space-between;
+      font-size: 13px;
+      padding: 4px 0;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .variable-name {
+      color: var(--accent-highlight);
+    }
+
+    .variable-value {
+      color: var(--text-secondary);
+      font-family: 'SF Mono', Monaco, monospace;
+      font-size: 12px;
+      max-width: 180px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .sql-actions {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+
+    .btn {
+      padding: 8px 16px;
+      border-radius: 6px;
+      font-size: 14px;
+      cursor: pointer;
+      border: none;
+    }
+
+    .btn-primary {
+      background: var(--accent-link);
+      color: white;
+    }
+
+    .btn-primary:hover {
+      background: var(--accent-link-hover);
+    }
+
+    .btn-secondary {
+      background: var(--border);
+      color: var(--text-primary);
+    }
+
+    .btn-secondary:hover {
+      background: var(--border-hover);
+    }
+
+    .doc-link {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--accent-link);
+      text-decoration: none;
+      font-size: 13px;
+    }
+
+    .doc-link:hover {
+      text-decoration: underline;
+    }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <!-- Header - matches Header.tsx -->
+    <header class="header">
+      <div class="header-left">
+        <a href="#" class="logo">
+          <div class="logo-icon"></div>
+          <span class="logo-text">Micromegas</span>
+        </a>
+      </div>
+      <div class="header-right">
+        <div class="time-range-group">
+          <select class="time-range-select">
+            <option>Last 5 minutes</option>
+            <option>Last 15 minutes</option>
+            <option selected>Last 1 hour</option>
+            <option>Last 3 hours</option>
+            <option>Last 24 hours</option>
+          </select>
+          <button class="refresh-btn" title="Refresh">&#x21bb;</button>
+        </div>
+        <div class="user-menu">
+          <div class="user-avatar">JD</div>
+          <span class="user-chevron">&#x25BC;</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- Main area -->
+    <div class="main-area">
+      <!-- Sidebar - narrow icon-only, matches Sidebar.tsx -->
+      <aside class="sidebar">
+        <a href="#" class="sidebar-item active" title="Processes">
+          <div class="sidebar-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="3" width="7" height="7" rx="1"/>
+              <rect x="14" y="3" width="7" height="7" rx="1"/>
+              <rect x="3" y="14" width="7" height="7" rx="1"/>
+              <rect x="14" y="14" width="7" height="7" rx="1"/>
+            </svg>
+          </div>
+        </a>
+      </aside>
+
+      <!-- Main content -->
+      <div class="content">
+        <!-- Back link -->
+        <a href="#" class="back-link">
+          &larr; my-app.exe
+        </a>
+
+        <!-- Page header -->
+        <div class="page-header">
+          <h1 class="page-title">Process Metrics</h1>
+          <div class="process-id">550e8400-e29b-41d4-a716-446655440000</div>
+        </div>
+
+        <!-- Filters -->
+        <div class="filters">
+          <select class="measure-select" id="measure-select">
+            <option value="frame_time" selected>frame_time (ms)</option>
+            <option value="memory_usage">memory_usage (bytes)</option>
+            <option value="gpu_draw_calls">gpu_draw_calls (count)</option>
+            <option value="network_latency">network_latency (ms)</option>
+            <option value="cpu_usage">cpu_usage (percent)</option>
+          </select>
+
+          <span class="results-count" id="results-count">847 data points</span>
+        </div>
+
+        <!-- Chart panel -->
+        <div class="chart-panel">
+          <div class="chart-header">
+            <div class="chart-title">
+              <span id="chart-name">frame_time</span> <span class="unit" id="chart-unit">(ms)</span>
+            </div>
+            <div class="chart-legend">
+              <div class="legend-item">
+                <div class="legend-color"></div>
+                <span id="legend-name">frame_time</span>
+              </div>
+              <div class="legend-stats">
+                min:<span id="stat-min">14.2</span>
+                max:<span id="stat-max">22.1</span>
+                avg:<span id="stat-avg">16.5</span>
+              </div>
+            </div>
+          </div>
+          <div class="chart-container">
+            <div id="uplot-chart"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- SQL Panel -->
+      <aside class="sql-panel">
+        <div class="sql-panel-header">
+          <span class="sql-panel-title">SQL Query</span>
+          <button class="sql-panel-close">&times;</button>
+        </div>
+        <div class="sql-panel-content">
+          <div class="sql-editor">
+<span class="sql-keyword">SELECT</span>
+  date_bin(<span class="sql-variable">$bin_interval</span>, time) <span class="sql-keyword">as</span> time,
+  max(value) <span class="sql-keyword">as</span> value
+<span class="sql-keyword">FROM</span> view_instance(<span class="sql-string">'measures'</span>, <span class="sql-variable">$process_id</span>)
+<span class="sql-keyword">WHERE</span> name = <span class="sql-variable">$measure_name</span>
+<span class="sql-keyword">GROUP BY</span> date_bin(<span class="sql-variable">$bin_interval</span>, time)
+<span class="sql-keyword">ORDER BY</span> time
+          </div>
+
+          <div class="variables-section">
+            <div class="variables-title">Variables</div>
+            <div class="variable-item">
+              <span class="variable-name">$process_id</span>
+              <span class="variable-value">550e8400-e29b...</span>
+            </div>
+            <div class="variable-item">
+              <span class="variable-name">$measure_name</span>
+              <span class="variable-value">frame_time</span>
+            </div>
+            <div class="variable-item">
+              <span class="variable-name">$bin_interval</span>
+              <span class="variable-value">'1 second'</span>
+            </div>
+          </div>
+
+          <div class="sql-actions">
+            <button class="btn btn-primary">Run Query</button>
+            <button class="btn btn-secondary">Reset</button>
+          </div>
+
+          <a href="#" class="doc-link">
+            &#x1F4D6; measures schema reference
+          </a>
+        </div>
+      </aside>
+    </div>
+  </div>
+
+  <script>
+    // Generate mock time-series data
+    function generateMockData(numPoints, baseValue, variance, unit) {
+      const now = Date.now() / 1000; // uPlot uses seconds
+      const startTime = now - 3600; // 1 hour ago
+      const interval = 3600 / numPoints;
+
+      const times = [];
+      const values = [];
+
+      for (let i = 0; i < numPoints; i++) {
+        times.push(startTime + i * interval);
+        // Generate realistic-looking metric data with some noise
+        const noise = (Math.random() - 0.5) * variance;
+        const trend = Math.sin(i / 50) * (variance / 3);
+        values.push(baseValue + noise + trend);
+      }
+
+      return { times, values };
+    }
+
+    // Mock data configurations for different measures
+    const measureConfigs = {
+      frame_time: { base: 16.5, variance: 8, unit: 'ms' },
+      memory_usage: { base: 512000000, variance: 100000000, unit: 'bytes' },
+      gpu_draw_calls: { base: 1500, variance: 500, unit: 'count' },
+      network_latency: { base: 45, variance: 30, unit: 'ms' },
+      cpu_usage: { base: 35, variance: 25, unit: 'percent' }
+    };
+
+    let currentChart = null;
+
+    function formatValue(value, unit) {
+      if (unit === 'bytes') {
+        if (value >= 1e9) return (value / 1e9).toFixed(1) + ' GB';
+        if (value >= 1e6) return (value / 1e6).toFixed(1) + ' MB';
+        if (value >= 1e3) return (value / 1e3).toFixed(1) + ' KB';
+        return value.toFixed(0) + ' B';
+      }
+      if (unit === 'percent') return value.toFixed(1) + '%';
+      if (unit === 'count') return Math.round(value).toLocaleString();
+      return value.toFixed(1) + ' ' + unit;
+    }
+
+    function createChart(measure) {
+      const config = measureConfigs[measure];
+      const numPoints = 847;
+      const { times, values } = generateMockData(numPoints, config.base, config.variance, config.unit);
+
+      // Calculate stats
+      const min = Math.min(...values);
+      const max = Math.max(...values);
+      const avg = values.reduce((a, b) => a + b, 0) / values.length;
+
+      // Update UI
+      document.getElementById('chart-name').textContent = measure;
+      document.getElementById('chart-unit').textContent = `(${config.unit})`;
+      document.getElementById('legend-name').textContent = measure;
+      document.getElementById('stat-min').textContent = formatValue(min, config.unit);
+      document.getElementById('stat-max').textContent = formatValue(max, config.unit);
+      document.getElementById('stat-avg').textContent = formatValue(avg, config.unit);
+      document.getElementById('results-count').textContent = `${numPoints} data points`;
+
+      // Destroy existing chart
+      if (currentChart) {
+        currentChart.destroy();
+      }
+
+      // Get container dimensions
+      const container = document.getElementById('uplot-chart');
+      const rect = container.parentElement.getBoundingClientRect();
+      const width = rect.width - 32; // account for padding
+      const height = Math.max(300, rect.height - 32);
+
+      // Tooltip plugin - creates tooltip inside uPlot wrapper
+      function tooltipPlugin() {
+        let tooltip, tooltipTime, tooltipValue;
+
+        return {
+          hooks: {
+            init: (u) => {
+              // Create tooltip element inside uPlot's wrapper
+              tooltip = document.createElement('div');
+              tooltip.className = 'chart-tooltip';
+              tooltip.innerHTML = '<div class="tooltip-time"></div><div class="tooltip-value"></div>';
+              u.over.appendChild(tooltip);
+
+              tooltipTime = tooltip.querySelector('.tooltip-time');
+              tooltipValue = tooltip.querySelector('.tooltip-value');
+            },
+            setCursor: (u) => {
+              const { idx, left, top } = u.cursor;
+              if (idx == null || left < 0 || top < 0) {
+                tooltip.classList.remove('visible');
+                return;
+              }
+
+              const time = u.data[0][idx];
+              const value = u.data[1][idx];
+
+              if (time == null || value == null) {
+                tooltip.classList.remove('visible');
+                return;
+              }
+
+              // Format time
+              const date = new Date(time * 1000);
+              const timeStr = date.toLocaleTimeString('en-US', {
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit',
+                hour12: false
+              }) + '.' + String(date.getMilliseconds()).padStart(3, '0');
+
+              tooltipTime.textContent = timeStr;
+              tooltipValue.textContent = formatValue(value, config.unit);
+
+              // Position tooltip above cursor (relative to uPlot canvas)
+              tooltip.style.left = (left + 10) + 'px';
+              tooltip.style.top = (top - 80) + 'px';
+              tooltip.classList.add('visible');
+            }
+          }
+        };
+      }
+
+      // uPlot options with dark theme
+      const opts = {
+        width: width,
+        height: height,
+        plugins: [tooltipPlugin()],
+        scales: {
+          x: { time: true },
+          y: { auto: true }
+        },
+        axes: [
+          {
+            stroke: '#6a6a7a',
+            grid: { stroke: '#2a2a35', width: 1 },
+            ticks: { stroke: '#2a2a35', width: 1 },
+            font: '11px -apple-system, BlinkMacSystemFont, sans-serif',
+            labelFont: '12px -apple-system, BlinkMacSystemFont, sans-serif'
+          },
+          {
+            stroke: '#6a6a7a',
+            grid: { stroke: '#2a2a35', width: 1 },
+            ticks: { stroke: '#2a2a35', width: 1 },
+            font: '11px -apple-system, BlinkMacSystemFont, sans-serif',
+            labelFont: '12px -apple-system, BlinkMacSystemFont, sans-serif',
+            values: (u, vals) => vals.map(v => formatValue(v, config.unit))
+          }
+        ],
+        series: [
+          {},
+          {
+            label: measure,
+            stroke: '#73bf69',
+            width: 2,
+            fill: 'rgba(115, 191, 105, 0.1)',
+            points: { show: false }
+          }
+        ],
+        cursor: {
+          show: true,
+          x: true,
+          y: true
+        },
+        legend: { show: false }
+      };
+
+      // Create chart with data in uPlot format: [[times], [values]]
+      currentChart = new uPlot(opts, [times, values], container);
+    }
+
+    // Initialize chart
+    document.addEventListener('DOMContentLoaded', () => {
+      createChart('frame_time');
+
+      // Handle measure selection change
+      document.getElementById('measure-select').addEventListener('change', (e) => {
+        createChart(e.target.value);
+      });
+
+      // Handle window resize
+      let resizeTimeout;
+      window.addEventListener('resize', () => {
+        clearTimeout(resizeTimeout);
+        resizeTimeout = setTimeout(() => {
+          const measure = document.getElementById('measure-select').value;
+          createChart(measure);
+        }, 100);
+      });
+    });
+  </script>
+</body>
+</html>

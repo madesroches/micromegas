@@ -53,6 +53,12 @@
     --accent-error: #f87171;
     --accent-error-bright: #dc2626;
     --accent-warning: #ffb300;
+
+    /* Chart colors */
+    --chart-line: #bf360c;
+    --chart-fill: rgba(191, 54, 12, 0.1);
+    --chart-selection: rgba(255, 179, 0, 0.3);
+    --chart-selection-border: #ffb300;
   }
 }
 
@@ -63,4 +69,11 @@
   body {
     @apply bg-background text-foreground;
   }
+}
+
+/* uPlot selection styling */
+.u-select {
+  background: var(--chart-selection) !important;
+  border-left: 2px solid var(--chart-selection-border) !important;
+  border-right: 2px solid var(--chart-selection-border) !important;
 }

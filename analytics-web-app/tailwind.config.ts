@@ -82,6 +82,11 @@ const config: Config = {
           gold: "var(--brand-gold)",
           "gold-dark": "var(--brand-gold-dark)",
         },
+        // Chart colors
+        chart: {
+          line: "var(--chart-line)",
+          fill: "var(--chart-fill)",
+        },
       },
       borderRadius: {
         lg: "var(--radius)",
