@@ -66,8 +66,9 @@ To get started with Micromegas, please refer to the [Getting Started](https://ma
 
 ## Current Status & Roadmap
 
-### Unreleased - v0.17.0 (In Progress)
-* Coming soon...
+### December 2025 - v0.17.0 (In Progress)
+* Analytics web app rework: dark theme, time range picker, metrics charting
+* Per-service Docker images
 
 ### November 2025 - v0.16.0
 * HTTP Gateway with authentication and security features
