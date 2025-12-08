@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState, useCallback } from 'react'
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import uPlot from 'uplot'
 import 'uplot/dist/uPlot.min.css'
 
@@ -46,11 +46,11 @@ export function TimeSeriesChart({
   const [dimensions, setDimensions] = useState({ width: 800, height: 300 })
 
   // Calculate stats
-  const stats = {
+  const stats = useMemo(() => ({
     min: data.length > 0 ? Math.min(...data.map((d) => d.value)) : 0,
     max: data.length > 0 ? Math.max(...data.map((d) => d.value)) : 0,
     avg: data.length > 0 ? data.reduce((sum, d) => sum + d.value, 0) / data.length : 0,
-  }
+  }), [data])
 
   // Handle resize
   useEffect(() => {
