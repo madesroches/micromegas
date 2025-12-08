@@ -1,5 +1,9 @@
 # Process Metrics Screen Plan
 
+## Implementation Status: COMPLETE
+
+Implemented on 2025-12-08. All features working, build/lint/type-check passing.
+
 ## Overview
 
 Add a metrics screen to the analytics web app, accessible from the process page. The user selects a specific measure by name from a dropdown, then views the time-series data as a chart. Like the log screen, custom SQL queries are supported.
@@ -45,9 +49,8 @@ Add a "View Metrics" button in the header next to "View Log" and "Generate Trace
 On page load, query the distinct measure names for this process:
 
 ```sql
-SELECT name, first_value(target) as target, first_value(unit) as unit
+SELECT DISTINCT name, target, unit
 FROM view_instance('measures', '$process_id')
-GROUP BY name
 ORDER BY name
 ```
 
@@ -58,11 +61,11 @@ This populates a dropdown selector for the user to choose which measure to view.
 **Default SQL:**
 ```sql
 SELECT
-  date_bin('$bin_interval', time) as time,
+  date_bin(INTERVAL '$bin_interval', time) as time,
   max(value) as value
 FROM view_instance('measures', '$process_id')
 WHERE name = '$measure_name'
-GROUP BY date_bin('$bin_interval', time)
+GROUP BY date_bin(INTERVAL '$bin_interval', time)
 ORDER BY time
 ```
 
@@ -146,57 +149,28 @@ yarn add uplot uplot-react
 
 **File:** `analytics-web-app/src/components/TimeSeriesChart.tsx`
 
-```tsx
-import UplotReact from 'uplot-react';
-import uPlot from 'uplot';
-import 'uplot/dist/uPlot.min.css';
+Implementation uses uPlot directly (not the uplot-react wrapper) for finer control over lifecycle and custom tooltip plugin.
 
+Key features implemented:
+- Responsive sizing via ResizeObserver
+- Custom tooltip plugin showing time and formatted value on hover
+- Dark theme matching app design (grid: #2a2a35, line: #73bf69)
+- Stats display in header (min/max/avg)
+- Value formatting for different units (bytes, percent, count, etc.)
+- Auto-scaling axes with unit-aware labels
+
+```tsx
 interface TimeSeriesChartProps {
   data: { time: number; value: number }[];
   title: string;
   unit: string;
 }
-
-export function TimeSeriesChart({ data, title, unit }: TimeSeriesChartProps) {
-  // Transform data to uPlot format: [[timestamps], [values]]
-  const uplotData: uPlot.AlignedData = [
-    data.map(d => d.time / 1000), // uPlot uses seconds
-    data.map(d => d.value),
-  ];
-
-  const options: uPlot.Options = {
-    width: 800,  // Will be made responsive
-    height: 300,
-    title,
-    series: [
-      {},  // x-axis (time)
-      {
-        label: title,
-        stroke: '#73bf69',
-        fill: 'rgba(115, 191, 105, 0.1)',
-        width: 2,
-      },
-    ],
-    axes: [
-      { /* x-axis time formatting */ },
-      { label: unit },
-    ],
-    cursor: {
-      show: true,
-      x: true,
-      y: true,
-    },
-    legend: { show: true },
-  };
-
-  return <UplotReact options={options} data={uplotData} />;
-}
 ```
 
 ### Features provided by uPlot:
 - Auto-scaling axes
-- Hover crosshair and tooltip (built-in cursor plugin)
-- Responsive sizing (via ResizeObserver or manual width updates)
+- Hover crosshair and tooltip (custom plugin)
+- Responsive sizing (via ResizeObserver)
 - Zoom/pan support (optional plugins)
 - Legend with series toggle
 
@@ -222,11 +196,14 @@ Query parameters:
 
 ## File Changes Summary
 
-| File | Change |
-|------|--------|
-| `analytics-web-app/src/app/process/page.tsx` | Add "View Metrics" link |
-| `analytics-web-app/src/app/process_metrics/page.tsx` | New file - metrics viewer page |
-| `analytics-web-app/src/components/TimeSeriesChart.tsx` | New file - chart component |
+| File | Change | Status |
+|------|--------|--------|
+| `analytics-web-app/package.json` | Add uplot, uplot-react dependencies | Done |
+| `analytics-web-app/src/app/globals.css` | Add chart CSS variables | Done |
+| `analytics-web-app/tailwind.config.ts` | Add chart color classes | Done |
+| `analytics-web-app/src/app/process/page.tsx` | Add "View Metrics" link | Done |
+| `analytics-web-app/src/app/process_metrics/page.tsx` | New file - metrics viewer page | Done |
+| `analytics-web-app/src/components/TimeSeriesChart.tsx` | New file - chart component | Done |
 
 ## Page Mockups
 

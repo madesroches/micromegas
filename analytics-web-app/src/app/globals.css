@@ -53,6 +53,10 @@
     --accent-error: #f87171;
     --accent-error-bright: #dc2626;
     --accent-warning: #ffb300;
+
+    /* Chart colors */
+    --chart-line: #73bf69;
+    --chart-fill: rgba(115, 191, 105, 0.1);
   }
 }
 
