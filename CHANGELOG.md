@@ -4,6 +4,28 @@ This file documents the historical progress of the Micromegas project. For curre
 
 ## [Unreleased]
 
+## December 2025 - v0.17.0
+ * **Analytics Web App Major Rework:**
+   * Complete UI redesign with dark theme and Micromegas branding (#621, #622, #623)
+   * Add Grafana-style time range picker with relative and absolute time support (#631)
+   * Add process metrics screen with time-series charting (#639)
+   * Add process properties display panel (#634)
+   * Add multi-word search to process list and log screens (#632, #633)
+   * Allow custom limit values in process log view (#627, #628)
+   * Improve time column formatting in process logs (#624)
+   * Pass time range through process navigation links (#636)
+   * Add schema documentation links to SQL panels (#635)
+ * **Docker & Deployment:**
+   * Add per-service Docker images and modernize build scripts (#637)
+ * **Unreal Engine:**
+   * Add scalability and VSync context to telemetry (#625)
+   * Document API key authentication (#629)
+ * **Security:**
+   * Fix CVE-2025-66478: Update Next.js to 15.5.7 (#626)
+   * Fix UTF-8 user attribution headers with percent-encoding (#638)
+ * **Code Quality:**
+   * Fix rustdoc bare URL warnings in auth crate (#630)
+
 ## November 2025 - v0.16.0
  * Released [version 0.16.0](https://crates.io/crates/micromegas)
  * **New: HTTP Gateway:**
