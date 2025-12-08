@@ -10,7 +10,17 @@ interface TimeSeriesChartProps {
   unit: string
 }
 
-function formatValue(value: number, unit: string): string {
+const UNIT_ABBREVIATIONS: Record<string, string> = {
+  seconds: 's',
+  milliseconds: 'ms',
+  microseconds: 'µs',
+  nanoseconds: 'ns',
+  minutes: 'min',
+  hours: 'h',
+}
+
+function formatValue(value: number, unit: string, abbreviated = false): string {
+  const displayUnit = abbreviated ? (UNIT_ABBREVIATIONS[unit] ?? unit) : unit
   if (unit === 'bytes') {
     if (value >= 1e9) return (value / 1e9).toFixed(1) + ' GB'
     if (value >= 1e6) return (value / 1e6).toFixed(1) + ' MB'
@@ -19,7 +29,7 @@ function formatValue(value: number, unit: string): string {
   }
   if (unit === 'percent') return value.toFixed(1) + '%'
   if (unit === 'count') return Math.round(value).toLocaleString()
-  return value.toFixed(2) + ' ' + unit
+  return value.toFixed(2) + ' ' + displayUnit
 }
 
 export function TimeSeriesChart({ data, title, unit }: TimeSeriesChartProps) {
@@ -159,7 +169,7 @@ export function TimeSeriesChart({ data, title, unit }: TimeSeriesChartProps) {
           grid: { stroke: '#2a2a35', width: 1 },
           ticks: { stroke: '#2a2a35', width: 1 },
           font: '11px -apple-system, BlinkMacSystemFont, sans-serif',
-          values: (_u: uPlot, vals: number[]) => vals.map((v) => formatValue(v, unit)),
+          values: (_u: uPlot, vals: number[]) => vals.map((v) => formatValue(v, unit, true)),
         },
       ],
       series: [
