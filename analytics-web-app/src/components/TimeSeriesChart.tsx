@@ -9,6 +9,7 @@ interface TimeSeriesChartProps {
   title: string
   unit: string
   onTimeRangeSelect?: (from: Date, to: Date) => void
+  onWidthChange?: (width: number) => void
 }
 
 const UNIT_ABBREVIATIONS: Record<string, string> = {
@@ -33,7 +34,13 @@ function formatValue(value: number, unit: string, abbreviated = false): string {
   return value.toFixed(2) + ' ' + displayUnit
 }
 
-export function TimeSeriesChart({ data, title, unit, onTimeRangeSelect }: TimeSeriesChartProps) {
+export function TimeSeriesChart({
+  data,
+  title,
+  unit,
+  onTimeRangeSelect,
+  onWidthChange,
+}: TimeSeriesChartProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<uPlot | null>(null)
   const [dimensions, setDimensions] = useState({ width: 800, height: 300 })
@@ -50,10 +57,12 @@ export function TimeSeriesChart({ data, title, unit, onTimeRangeSelect }: TimeSe
     const updateDimensions = () => {
       if (containerRef.current) {
         const rect = containerRef.current.getBoundingClientRect()
+        const newWidth = Math.max(400, rect.width - 32)
         setDimensions({
-          width: Math.max(400, rect.width - 32),
+          width: newWidth,
           height: Math.max(250, rect.height - 32),
         })
+        onWidthChange?.(newWidth)
       }
     }
 
@@ -64,7 +73,7 @@ export function TimeSeriesChart({ data, title, unit, onTimeRangeSelect }: TimeSe
     }
 
     return () => resizeObserver.disconnect()
-  }, [])
+  }, [onWidthChange])
 
   // Tooltip plugin
   const createTooltipPlugin = useCallback(

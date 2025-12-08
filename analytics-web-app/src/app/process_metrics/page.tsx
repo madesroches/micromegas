@@ -42,9 +42,9 @@ interface Measure {
 }
 
 // Calculate appropriate bin interval based on time span and chart width
+// Target 1 data point per horizontal pixel for optimal resolution
 function calculateBinInterval(timeSpanMs: number, chartWidthPx: number = 800): string {
-  const pixelsPerBin = 3
-  const numBins = chartWidthPx / pixelsPerBin
+  const numBins = chartWidthPx // 1 pixel per data point
   const binIntervalMs = timeSpanMs / numBins
 
   // Round to sensible intervals
@@ -89,14 +89,15 @@ function ProcessMetricsContent() {
   const [processExe, setProcessExe] = useState<string | null>(null)
   const [hasLoaded, setHasLoaded] = useState(false)
   const [discoveryDone, setDiscoveryDone] = useState(false)
+  const [chartWidth, setChartWidth] = useState<number>(800)
 
-  // Calculate bin interval based on time range
+  // Calculate bin interval based on time range and chart width
   const binInterval = useMemo(() => {
     const fromDate = new Date(apiTimeRange.begin)
     const toDate = new Date(apiTimeRange.end)
     const timeSpanMs = toDate.getTime() - fromDate.getTime()
-    return calculateBinInterval(timeSpanMs)
-  }, [apiTimeRange])
+    return calculateBinInterval(timeSpanMs, chartWidth)
+  }, [apiTimeRange, chartWidth])
 
   // Get selected measure info
   const selectedMeasureInfo = useMemo(() => {
@@ -274,6 +275,10 @@ function ProcessMetricsContent() {
     [setTimeRange]
   )
 
+  const handleChartWidthChange = useCallback((width: number) => {
+    setChartWidth(width)
+  }, [])
+
   const currentValues = useMemo(
     () => ({
       process_id: processId || '',
@@ -391,6 +396,7 @@ function ProcessMetricsContent() {
               title={selectedMeasure}
               unit={selectedMeasureInfo?.unit || ''}
               onTimeRangeSelect={handleTimeRangeSelect}
+              onWidthChange={handleChartWidthChange}
             />
           ) : discoveryMutation.isPending ? (
             <div className="h-full flex items-center justify-center bg-app-panel border border-theme-border rounded-lg">
