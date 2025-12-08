@@ -88,8 +88,8 @@ export function TimeSeriesChart({
             tooltip = document.createElement('div')
             tooltip.style.cssText = `
             position: absolute;
-            background: #0a0a0f;
-            border: 1px solid #2a2a35;
+            background: var(--app-bg);
+            border: 1px solid var(--border-color);
             border-radius: 6px;
             padding: 8px 12px;
             font-size: 12px;
@@ -99,8 +99,8 @@ export function TimeSeriesChart({
             display: none;
           `
             tooltip.innerHTML = `
-            <div style="color: #6a6a7a; margin-bottom: 4px; font-family: monospace;"></div>
-            <div style="color: #73bf69; font-weight: 600; font-size: 14px;"></div>
+            <div style="color: var(--text-muted); margin-bottom: 4px; font-family: monospace;"></div>
+            <div style="color: var(--chart-line); font-weight: 600; font-size: 14px;"></div>
           `
             u.over.appendChild(tooltip)
             tooltipTime = tooltip.children[0] as HTMLDivElement
@@ -186,9 +186,9 @@ export function TimeSeriesChart({
         {},
         {
           label: title,
-          stroke: '#73bf69',
+          stroke: '#bf360c',
           width: 2,
-          fill: 'rgba(115, 191, 105, 0.1)',
+          fill: 'rgba(191, 54, 12, 0.1)',
           points: { show: false },
         },
       ],
