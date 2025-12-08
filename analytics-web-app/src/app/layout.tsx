@@ -8,7 +8,10 @@ import { AuthProvider } from '@/lib/auth'
 const inter = Inter({ subsets: ['latin'] })
 
 export const metadata: Metadata = {
-  title: 'Micromegas',
+  title: {
+    template: 'Micromegas - %s',
+    default: 'Micromegas',
+  },
   description: 'Analytics web application for micromegas telemetry data',
   icons: {
     icon: '/icon.svg',
