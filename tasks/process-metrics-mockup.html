@@ -4,6 +4,9 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Process Metrics - Mockup</title>
+  <!-- uPlot CSS and JS via CDN -->
+  <link rel="stylesheet" href="https://unpkg.com/uplot@1.6.30/dist/uPlot.min.css">
+  <script src="https://unpkg.com/uplot@1.6.30/dist/uPlot.iife.min.js"></script>
   <style>
     :root {
       --bg-app: #0a0a0f;
@@ -327,125 +330,64 @@
       margin-left: 4px;
     }
 
-    /* Chart area */
+    /* Chart container for uPlot */
     .chart-container {
       flex: 1;
       padding: 16px;
-      position: relative;
-    }
-
-    /* Y-axis labels */
-    .y-axis {
-      position: absolute;
-      left: 0;
-      top: 16px;
-      bottom: 40px;
-      width: 50px;
       display: flex;
-      flex-direction: column;
-      justify-content: space-between;
-      padding: 8px 0;
+      align-items: center;
+      justify-content: center;
     }
 
-    .y-label {
-      font-size: 11px;
-      color: var(--text-muted);
-      text-align: right;
-      padding-right: 8px;
-      font-family: 'SF Mono', Monaco, monospace;
-    }
-
-    /* X-axis labels */
-    .x-axis {
-      position: absolute;
-      left: 50px;
-      right: 16px;
-      bottom: 8px;
-      height: 24px;
-      display: flex;
-      justify-content: space-between;
-    }
-
-    .x-label {
-      font-size: 11px;
-      color: var(--text-muted);
-      font-family: 'SF Mono', Monaco, monospace;
-    }
-
-    /* Chart grid and line */
-    .chart-area {
-      position: absolute;
-      left: 50px;
-      right: 16px;
-      top: 16px;
-      bottom: 40px;
-      overflow: hidden;
-    }
-
-    .grid-lines {
-      position: absolute;
-      inset: 0;
-    }
-
-    .grid-line {
-      position: absolute;
-      left: 0;
-      right: 0;
-      height: 1px;
-      background: var(--chart-grid);
-    }
-
-    .chart-line-container {
-      position: absolute;
-      inset: 0;
+    #uplot-chart {
+      width: 100%;
     }
 
     /* Tooltip */
-    .tooltip {
+    .chart-tooltip {
       position: absolute;
-      background: var(--bg-app);
-      border: 1px solid var(--border);
+      background: #0a0a0f;
+      border: 1px solid #2a2a35;
       border-radius: 6px;
       padding: 8px 12px;
       font-size: 12px;
       pointer-events: none;
       z-index: 100;
-      top: 80px;
-      left: 400px;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+      display: none;
+    }
+
+    .chart-tooltip.visible {
+      display: block;
     }
 
     .tooltip-time {
-      color: var(--text-muted);
+      color: #6a6a7a;
       margin-bottom: 4px;
       font-family: 'SF Mono', Monaco, monospace;
     }
 
     .tooltip-value {
-      color: var(--chart-line);
+      color: #73bf69;
       font-weight: 600;
       font-size: 14px;
     }
 
-    .crosshair-v {
-      position: absolute;
-      width: 1px;
-      background: var(--text-muted);
-      opacity: 0.5;
-      top: 0;
-      bottom: 0;
-      left: 350px;
+    /* uPlot dark theme overrides */
+    .uplot {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     }
 
-    .crosshair-dot {
-      position: absolute;
-      width: 8px;
-      height: 8px;
-      background: var(--chart-line);
-      border: 2px solid var(--bg-panel);
-      border-radius: 50%;
-      top: 95px;
-      left: 346px;
+    .uplot .u-title {
+      display: none; /* We use our own header */
+    }
+
+    .uplot .u-legend {
+      display: none; /* We use our own legend */
+    }
+
+    .uplot .u-wrap {
+      background: transparent;
     }
 
     /* SQL Panel - right side */
@@ -647,88 +589,37 @@
 
         <!-- Filters -->
         <div class="filters">
-          <select class="measure-select">
-            <option selected>frame_time (ms)</option>
-            <option>memory_usage (bytes)</option>
-            <option>gpu_draw_calls (count)</option>
-            <option>network_latency (ms)</option>
-            <option>cpu_usage (percent)</option>
+          <select class="measure-select" id="measure-select">
+            <option value="frame_time" selected>frame_time (ms)</option>
+            <option value="memory_usage">memory_usage (bytes)</option>
+            <option value="gpu_draw_calls">gpu_draw_calls (count)</option>
+            <option value="network_latency">network_latency (ms)</option>
+            <option value="cpu_usage">cpu_usage (percent)</option>
           </select>
 
-          <span class="results-count">847 data points</span>
+          <span class="results-count" id="results-count">847 data points</span>
         </div>
 
         <!-- Chart panel -->
         <div class="chart-panel">
           <div class="chart-header">
             <div class="chart-title">
-              frame_time <span class="unit">(ms)</span>
+              <span id="chart-name">frame_time</span> <span class="unit" id="chart-unit">(ms)</span>
             </div>
             <div class="chart-legend">
               <div class="legend-item">
                 <div class="legend-color"></div>
-                <span>frame_time</span>
+                <span id="legend-name">frame_time</span>
               </div>
               <div class="legend-stats">
-                min:<span>14.2</span>
-                max:<span>22.1</span>
-                avg:<span>16.5</span>
+                min:<span id="stat-min">14.2</span>
+                max:<span id="stat-max">22.1</span>
+                avg:<span id="stat-avg">16.5</span>
               </div>
             </div>
           </div>
           <div class="chart-container">
-            <!-- Y-axis -->
-            <div class="y-axis">
-              <div class="y-label">24</div>
-              <div class="y-label">20</div>
-              <div class="y-label">16</div>
-              <div class="y-label">12</div>
-              <div class="y-label">8</div>
-            </div>
-
-            <!-- Chart area -->
-            <div class="chart-area">
-              <!-- Grid lines -->
-              <div class="grid-lines">
-                <div class="grid-line" style="top: 0%"></div>
-                <div class="grid-line" style="top: 25%"></div>
-                <div class="grid-line" style="top: 50%"></div>
-                <div class="grid-line" style="top: 75%"></div>
-                <div class="grid-line" style="top: 100%"></div>
-              </div>
-
-              <!-- SVG Chart -->
-              <svg class="chart-line-container" viewBox="0 0 800 300" preserveAspectRatio="none">
-                <!-- Fill area -->
-                <path d="M0,120 L20,135 L40,110 L60,125 L80,140 L100,115 L120,130 L140,105 L160,120 L180,145 L200,125 L220,110 L240,130 L260,120 L280,135 L300,115 L320,140 L340,125 L360,110 L380,130 L400,120 L420,145 L440,115 L460,130 L480,105 L500,125 L520,140 L540,120 L560,135 L580,110 L600,125 L620,145 L640,115 L660,130 L680,120 L700,140 L720,125 L740,110 L760,130 L780,120 L800,135 L800,300 L0,300 Z"
-                      fill="rgba(115, 191, 105, 0.15)" />
-                <!-- Line -->
-                <path d="M0,120 L20,135 L40,110 L60,125 L80,140 L100,115 L120,130 L140,105 L160,120 L180,145 L200,125 L220,110 L240,130 L260,120 L280,135 L300,115 L320,140 L340,125 L360,110 L380,130 L400,120 L420,145 L440,115 L460,130 L480,105 L500,125 L520,140 L540,120 L560,135 L580,110 L600,125 L620,145 L640,115 L660,130 L680,120 L700,140 L720,125 L740,110 L760,130 L780,120 L800,135"
-                      fill="none"
-                      stroke="#73bf69"
-                      stroke-width="2"
-                      vector-effect="non-scaling-stroke" />
-              </svg>
-
-              <!-- Crosshair and tooltip (hover state) -->
-              <div class="crosshair-v"></div>
-              <div class="crosshair-dot"></div>
-            </div>
-
-            <!-- X-axis -->
-            <div class="x-axis">
-              <div class="x-label">14:00</div>
-              <div class="x-label">14:15</div>
-              <div class="x-label">14:30</div>
-              <div class="x-label">14:45</div>
-              <div class="x-label">15:00</div>
-            </div>
-
-            <!-- Tooltip -->
-            <div class="tooltip">
-              <div class="tooltip-time">14:32:01.123</div>
-              <div class="tooltip-value">16.7 ms</div>
-            </div>
+            <div id="uplot-chart"></div>
           </div>
         </div>
       </div>
@@ -778,5 +669,200 @@
       </aside>
     </div>
   </div>
+
+  <script>
+    // Generate mock time-series data
+    function generateMockData(numPoints, baseValue, variance, unit) {
+      const now = Date.now() / 1000; // uPlot uses seconds
+      const startTime = now - 3600; // 1 hour ago
+      const interval = 3600 / numPoints;
+
+      const times = [];
+      const values = [];
+
+      for (let i = 0; i < numPoints; i++) {
+        times.push(startTime + i * interval);
+        // Generate realistic-looking metric data with some noise
+        const noise = (Math.random() - 0.5) * variance;
+        const trend = Math.sin(i / 50) * (variance / 3);
+        values.push(baseValue + noise + trend);
+      }
+
+      return { times, values };
+    }
+
+    // Mock data configurations for different measures
+    const measureConfigs = {
+      frame_time: { base: 16.5, variance: 8, unit: 'ms' },
+      memory_usage: { base: 512000000, variance: 100000000, unit: 'bytes' },
+      gpu_draw_calls: { base: 1500, variance: 500, unit: 'count' },
+      network_latency: { base: 45, variance: 30, unit: 'ms' },
+      cpu_usage: { base: 35, variance: 25, unit: 'percent' }
+    };
+
+    let currentChart = null;
+
+    function formatValue(value, unit) {
+      if (unit === 'bytes') {
+        if (value >= 1e9) return (value / 1e9).toFixed(1) + ' GB';
+        if (value >= 1e6) return (value / 1e6).toFixed(1) + ' MB';
+        if (value >= 1e3) return (value / 1e3).toFixed(1) + ' KB';
+        return value.toFixed(0) + ' B';
+      }
+      if (unit === 'percent') return value.toFixed(1) + '%';
+      if (unit === 'count') return Math.round(value).toLocaleString();
+      return value.toFixed(1) + ' ' + unit;
+    }
+
+    function createChart(measure) {
+      const config = measureConfigs[measure];
+      const numPoints = 847;
+      const { times, values } = generateMockData(numPoints, config.base, config.variance, config.unit);
+
+      // Calculate stats
+      const min = Math.min(...values);
+      const max = Math.max(...values);
+      const avg = values.reduce((a, b) => a + b, 0) / values.length;
+
+      // Update UI
+      document.getElementById('chart-name').textContent = measure;
+      document.getElementById('chart-unit').textContent = `(${config.unit})`;
+      document.getElementById('legend-name').textContent = measure;
+      document.getElementById('stat-min').textContent = formatValue(min, config.unit);
+      document.getElementById('stat-max').textContent = formatValue(max, config.unit);
+      document.getElementById('stat-avg').textContent = formatValue(avg, config.unit);
+      document.getElementById('results-count').textContent = `${numPoints} data points`;
+
+      // Destroy existing chart
+      if (currentChart) {
+        currentChart.destroy();
+      }
+
+      // Get container dimensions
+      const container = document.getElementById('uplot-chart');
+      const rect = container.parentElement.getBoundingClientRect();
+      const width = rect.width - 32; // account for padding
+      const height = Math.max(300, rect.height - 32);
+
+      // Tooltip plugin - creates tooltip inside uPlot wrapper
+      function tooltipPlugin() {
+        let tooltip, tooltipTime, tooltipValue;
+
+        return {
+          hooks: {
+            init: (u) => {
+              // Create tooltip element inside uPlot's wrapper
+              tooltip = document.createElement('div');
+              tooltip.className = 'chart-tooltip';
+              tooltip.innerHTML = '<div class="tooltip-time"></div><div class="tooltip-value"></div>';
+              u.over.appendChild(tooltip);
+
+              tooltipTime = tooltip.querySelector('.tooltip-time');
+              tooltipValue = tooltip.querySelector('.tooltip-value');
+            },
+            setCursor: (u) => {
+              const { idx, left, top } = u.cursor;
+              if (idx == null || left < 0 || top < 0) {
+                tooltip.classList.remove('visible');
+                return;
+              }
+
+              const time = u.data[0][idx];
+              const value = u.data[1][idx];
+
+              if (time == null || value == null) {
+                tooltip.classList.remove('visible');
+                return;
+              }
+
+              // Format time
+              const date = new Date(time * 1000);
+              const timeStr = date.toLocaleTimeString('en-US', {
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit',
+                hour12: false
+              }) + '.' + String(date.getMilliseconds()).padStart(3, '0');
+
+              tooltipTime.textContent = timeStr;
+              tooltipValue.textContent = formatValue(value, config.unit);
+
+              // Position tooltip above cursor (relative to uPlot canvas)
+              tooltip.style.left = (left + 10) + 'px';
+              tooltip.style.top = (top - 80) + 'px';
+              tooltip.classList.add('visible');
+            }
+          }
+        };
+      }
+
+      // uPlot options with dark theme
+      const opts = {
+        width: width,
+        height: height,
+        plugins: [tooltipPlugin()],
+        scales: {
+          x: { time: true },
+          y: { auto: true }
+        },
+        axes: [
+          {
+            stroke: '#6a6a7a',
+            grid: { stroke: '#2a2a35', width: 1 },
+            ticks: { stroke: '#2a2a35', width: 1 },
+            font: '11px -apple-system, BlinkMacSystemFont, sans-serif',
+            labelFont: '12px -apple-system, BlinkMacSystemFont, sans-serif'
+          },
+          {
+            stroke: '#6a6a7a',
+            grid: { stroke: '#2a2a35', width: 1 },
+            ticks: { stroke: '#2a2a35', width: 1 },
+            font: '11px -apple-system, BlinkMacSystemFont, sans-serif',
+            labelFont: '12px -apple-system, BlinkMacSystemFont, sans-serif',
+            values: (u, vals) => vals.map(v => formatValue(v, config.unit))
+          }
+        ],
+        series: [
+          {},
+          {
+            label: measure,
+            stroke: '#73bf69',
+            width: 2,
+            fill: 'rgba(115, 191, 105, 0.1)',
+            points: { show: false }
+          }
+        ],
+        cursor: {
+          show: true,
+          x: true,
+          y: true
+        },
+        legend: { show: false }
+      };
+
+      // Create chart with data in uPlot format: [[times], [values]]
+      currentChart = new uPlot(opts, [times, values], container);
+    }
+
+    // Initialize chart
+    document.addEventListener('DOMContentLoaded', () => {
+      createChart('frame_time');
+
+      // Handle measure selection change
+      document.getElementById('measure-select').addEventListener('change', (e) => {
+        createChart(e.target.value);
+      });
+
+      // Handle window resize
+      let resizeTimeout;
+      window.addEventListener('resize', () => {
+        clearTimeout(resizeTimeout);
+        resizeTimeout = setTimeout(() => {
+          const measure = document.getElementById('measure-select').value;
+          createChart(measure);
+        }, 100);
+      });
+    });
+  </script>
 </body>
 </html>

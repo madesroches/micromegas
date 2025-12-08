@@ -99,10 +99,87 @@ Reuse existing patterns from the log screen:
 - `executeSqlQuery` API function
 
 **New component needed:**
-- `TimeSeriesChart` - SVG-based line chart with:
-  - Auto-scaling axes
-  - Hover crosshair and tooltip
-  - Responsive sizing
+- `TimeSeriesChart` - uPlot-based line chart (see Charting Technology section below)
+
+## Charting Technology
+
+### Library: uPlot + uplot-react
+
+**Dependencies to add:**
+```bash
+yarn add uplot uplot-react
+```
+
+**Why uPlot:**
+- **Performance**: Canvas-based rendering handles 100K+ data points without slowdown
+- **Bundle size**: ~35KB total (uPlot + wrapper)
+- **Purpose-built**: Designed specifically for time-series visualization
+- **Active maintenance**: Regular updates through 2025
+
+**Why uplot-react wrapper:**
+- Declarative React props instead of imperative API
+- Smart instance management - updates in place rather than recreating on every prop change
+- ~30K weekly downloads, no known vulnerabilities
+
+### TimeSeriesChart Component
+
+**File:** `analytics-web-app/src/components/TimeSeriesChart.tsx`
+
+```tsx
+import UplotReact from 'uplot-react';
+import uPlot from 'uplot';
+import 'uplot/dist/uPlot.min.css';
+
+interface TimeSeriesChartProps {
+  data: { time: number; value: number }[];
+  title: string;
+  unit: string;
+}
+
+export function TimeSeriesChart({ data, title, unit }: TimeSeriesChartProps) {
+  // Transform data to uPlot format: [[timestamps], [values]]
+  const uplotData: uPlot.AlignedData = [
+    data.map(d => d.time / 1000), // uPlot uses seconds
+    data.map(d => d.value),
+  ];
+
+  const options: uPlot.Options = {
+    width: 800,  // Will be made responsive
+    height: 300,
+    title,
+    series: [
+      {},  // x-axis (time)
+      {
+        label: title,
+        stroke: '#73bf69',
+        fill: 'rgba(115, 191, 105, 0.1)',
+        width: 2,
+      },
+    ],
+    axes: [
+      { /* x-axis time formatting */ },
+      { label: unit },
+    ],
+    cursor: {
+      show: true,
+      x: true,
+      y: true,
+    },
+    legend: { show: true },
+  };
+
+  return <UplotReact options={options} data={uplotData} />;
+}
+```
+
+### Features provided by uPlot:
+- Auto-scaling axes
+- Hover crosshair and tooltip (built-in cursor plugin)
+- Responsive sizing (via ResizeObserver or manual width updates)
+- Zoom/pan support (optional plugins)
+- Legend with series toggle
+
+## Implementation Steps (continued)
 
 ### 4. URL Parameters
 
