@@ -71,7 +71,16 @@ Uses DataFusion's [`date_bin`](https://datafusion.apache.org/user-guide/sql/scal
 **Variables:**
 - `process_id` - Current process ID
 - `measure_name` - Selected measure name (from dropdown)
-- `bin_interval` - Time bucket size (e.g., '1 second', '100 milliseconds') - computed from time range to target ~500-1000 data points
+- `bin_interval` - Time bucket size (e.g., '1 second', '100 milliseconds')
+
+**Bin Interval Calculation:**
+```
+num_bins = chart_width_pixels / pixels_per_bin
+bin_interval_ms = time_span_ms / num_bins
+```
+- Use ~3 pixels per bin for good visual density
+- Example: 800px chart width → ~267 bins
+- Round to sensible intervals (1ms, 10ms, 100ms, 1s, 10s, etc.)
 
 #### UI Components:
 
@@ -85,9 +94,21 @@ Uses DataFusion's [`date_bin`](https://datafusion.apache.org/user-guide/sql/scal
   - Y-axis with auto-scaled value labels
   - X-axis with time labels
   - Crosshair + tooltip on hover showing exact time and value
-- **Chart header** with:
-  - Measure name and unit
-  - Legend with statistics: min, max, avg
+- **Chart header** with measure name and unit
+
+#### Empty States:
+
+Two empty state scenarios (see `tasks/process-metrics-empty-mockup.html`):
+
+1. **No measures available** - Discovery query returns zero rows
+   - Disable measure dropdown with "No measures available"
+   - Show centered message: "No measures for the selected time range" with suggestion to expand time range
+
+2. **No data in time range** - Measure selected but data query returns zero rows
+   - Show measure dropdown normally
+   - Display "0 data points" count
+   - Show chart header with measure name
+   - Centered message: "No data in time range" with suggestion to expand time range
 
 ### 3. Components and Utilities
 
@@ -207,14 +228,15 @@ Query parameters:
 | `analytics-web-app/src/app/process_metrics/page.tsx` | New file - metrics viewer page |
 | `analytics-web-app/src/components/TimeSeriesChart.tsx` | New file - chart component |
 
-## Page Mockup
+## Page Mockups
 
-See `tasks/process-metrics-mockup.html` for interactive HTML mockup.
+- `tasks/process-metrics-mockup.html` - Interactive mockup with chart and data
+- `tasks/process-metrics-empty-mockup.html` - Empty state scenarios
 
 **Key elements:**
 - Measure dropdown with name + unit (e.g., "frame_time (ms)")
 - Grafana-style time-series line chart with filled area
-- Chart header with legend showing min/max/avg/last statistics
+- Chart header with measure name and unit
 - Crosshair + tooltip on hover
 - SQL panel on right side (toggleable)
 
