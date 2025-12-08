@@ -216,24 +216,29 @@ impl FlightSqlServiceImpl {
         };
 
         // Validate and resolve user attribution
-        let (user_id, user_email, service_account) =
-            validate_and_resolve_user_attribution_grpc(metadata).map_err(|e| *e)?;
+        let attr = validate_and_resolve_user_attribution_grpc(metadata).map_err(|e| *e)?;
 
         let client_type = metadata
             .get("x-client-type")
             .and_then(|v| v.to_str().ok())
             .unwrap_or("unknown");
 
+        let user_name_display = attr.user_name.as_deref().unwrap_or("");
+
         // Log query with full attribution
-        if let Some(service_account_name) = &service_account {
+        if let Some(service_account_name) = &attr.service_account {
             info!(
-                "execute_query range={query_range:?} sql={sql:?} limit={:?} user={user_id} email={user_email} service_account={service_account_name} client={client_type}",
-                metadata.get("limit")
+                "execute_query range={query_range:?} sql={sql:?} limit={:?} user={} email={} name={user_name_display:?} service_account={service_account_name} client={client_type}",
+                metadata.get("limit"),
+                attr.user_id,
+                attr.user_email
             );
         } else {
             info!(
-                "execute_query range={query_range:?} sql={sql:?} limit={:?} user={user_id} email={user_email} client={client_type}",
-                metadata.get("limit")
+                "execute_query range={query_range:?} sql={sql:?} limit={:?} user={} email={} name={user_name_display:?} client={client_type}",
+                metadata.get("limit"),
+                attr.user_id,
+                attr.user_email
             );
         }
 
