@@ -80,7 +80,7 @@ function ProcessMetricsContent() {
   const pathname = usePathname()
   const processId = searchParams.get('process_id')
   const measureParam = searchParams.get('measure')
-  const { parsed: timeRange, apiTimeRange } = useTimeRange()
+  const { parsed: timeRange, apiTimeRange, setTimeRange } = useTimeRange()
 
   const [measures, setMeasures] = useState<Measure[]>([])
   const [selectedMeasure, setSelectedMeasure] = useState<string | null>(measureParam)
@@ -266,6 +266,14 @@ function ProcessMetricsContent() {
     loadDiscovery()
   }, [loadDiscovery])
 
+  const handleTimeRangeSelect = useCallback(
+    (from: Date, to: Date) => {
+      // Update the URL time range with ISO timestamps
+      setTimeRange(from.toISOString(), to.toISOString())
+    },
+    [setTimeRange]
+  )
+
   const currentValues = useMemo(
     () => ({
       process_id: processId || '',
@@ -382,6 +390,7 @@ function ProcessMetricsContent() {
               data={chartData}
               title={selectedMeasure}
               unit={selectedMeasureInfo?.unit || ''}
+              onTimeRangeSelect={handleTimeRangeSelect}
             />
           ) : discoveryMutation.isPending ? (
             <div className="h-full flex items-center justify-center bg-app-panel border border-theme-border rounded-lg">

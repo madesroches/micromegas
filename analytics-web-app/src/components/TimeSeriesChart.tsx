@@ -8,6 +8,7 @@ interface TimeSeriesChartProps {
   data: { time: number; value: number }[]
   title: string
   unit: string
+  onTimeRangeSelect?: (from: Date, to: Date) => void
 }
 
 const UNIT_ABBREVIATIONS: Record<string, string> = {
@@ -32,7 +33,7 @@ function formatValue(value: number, unit: string, abbreviated = false): string {
   return value.toFixed(2) + ' ' + displayUnit
 }
 
-export function TimeSeriesChart({ data, title, unit }: TimeSeriesChartProps) {
+export function TimeSeriesChart({ data, title, unit, onTimeRangeSelect }: TimeSeriesChartProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<uPlot | null>(null)
   const [dimensions, setDimensions] = useState({ width: 800, height: 300 })
@@ -186,6 +187,30 @@ export function TimeSeriesChart({ data, title, unit }: TimeSeriesChartProps) {
         show: true,
         x: true,
         y: true,
+        drag: {
+          x: true,
+          y: false,
+          setScale: false, // Don't auto-zoom, we'll handle it via callback
+        },
+      },
+      hooks: {
+        setSelect: [
+          (u: uPlot) => {
+            const { left, width } = u.select
+            if (width > 0 && onTimeRangeSelect) {
+              // Convert pixel positions to time values
+              const fromTime = u.posToVal(left, 'x')
+              const toTime = u.posToVal(left + width, 'x')
+              // uPlot uses seconds, convert to Date
+              const fromDate = new Date(fromTime * 1000)
+              const toDate = new Date(toTime * 1000)
+              // Clear the selection visual
+              u.setSelect({ left: 0, width: 0, top: 0, height: 0 }, false)
+              // Call the callback
+              onTimeRangeSelect(fromDate, toDate)
+            }
+          },
+        ],
       },
       legend: { show: false },
     }
@@ -201,7 +226,7 @@ export function TimeSeriesChart({ data, title, unit }: TimeSeriesChartProps) {
         chartRef.current = null
       }
     }
-  }, [data, dimensions, title, unit, createTooltipPlugin])
+  }, [data, dimensions, title, unit, createTooltipPlugin, onTimeRangeSelect])
 
   return (
     <div className="flex flex-col h-full bg-app-panel border border-theme-border rounded-lg">
