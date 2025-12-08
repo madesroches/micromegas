@@ -167,8 +167,14 @@ def test_retire_incompatible_partitions_with_data():
             {
                 "view_set_name": ["log_entries", "log_entries"],
                 "view_instance_id": ["process-123", "process-123"],
-                "begin_insert_time": [1000000, 2000000],
-                "end_insert_time": [1100000, 2100000],
+                "begin_insert_time": [
+                    pd.Timestamp("2024-01-01 10:00:00", tz="UTC"),
+                    pd.Timestamp("2024-01-01 11:00:00", tz="UTC"),
+                ],
+                "end_insert_time": [
+                    pd.Timestamp("2024-01-01 10:30:00", tz="UTC"),
+                    pd.Timestamp("2024-01-01 11:30:00", tz="UTC"),
+                ],
                 "incompatible_schema_hash": ["[3]", "[3]"],
                 "current_schema_hash": ["[4]", "[4]"],
                 "file_path": [
@@ -206,8 +212,16 @@ def test_retire_incompatible_partitions_with_failures():
             {
                 "view_set_name": ["log_entries", "log_entries", "log_entries"],
                 "view_instance_id": ["process-456", "process-456", "process-456"],
-                "begin_insert_time": [1000000, 2000000, 3000000],
-                "end_insert_time": [1100000, 2100000, 3100000],
+                "begin_insert_time": [
+                    pd.Timestamp("2024-01-01 10:00:00", tz="UTC"),
+                    pd.Timestamp("2024-01-01 11:00:00", tz="UTC"),
+                    pd.Timestamp("2024-01-01 12:00:00", tz="UTC"),
+                ],
+                "end_insert_time": [
+                    pd.Timestamp("2024-01-01 10:30:00", tz="UTC"),
+                    pd.Timestamp("2024-01-01 11:30:00", tz="UTC"),
+                    pd.Timestamp("2024-01-01 12:30:00", tz="UTC"),
+                ],
                 "incompatible_schema_hash": ["[2]", "[2]", "[2]"],
                 "current_schema_hash": ["[4]", "[4]", "[4]"],
                 "file_path": [
@@ -226,11 +240,12 @@ def test_retire_incompatible_partitions_with_failures():
     original_query = client.query
 
     def mock_query_with_failures(sql):
-        if "retire_partition_by_metadata(" in sql and "2000000" in sql:
+        # Match the second partition (11:00:00) to simulate a failure
+        if "retire_partition_by_metadata(" in sql and "11:00:00" in sql:
             return pd.DataFrame(
                 {
                     "message": [
-                        "ERROR: Partition not found: process-456 [2000000, 2100000)"
+                        "ERROR: Partition not found: process-456 [2024-01-01T11:00:00, 2024-01-01T11:30:00)"
                     ]
                 }
             )
@@ -290,8 +305,8 @@ def test_sql_injection_resilience():
             {
                 "view_set_name": ["test'; DROP TABLE test; --"],
                 "view_instance_id": ["proc'; DELETE FROM procs; --"],
-                "begin_insert_time": [1000000],
-                "end_insert_time": [1100000],
+                "begin_insert_time": [pd.Timestamp("2024-01-01 10:00:00", tz="UTC")],
+                "end_insert_time": [pd.Timestamp("2024-01-01 10:30:00", tz="UTC")],
                 "incompatible_schema_hash": ["[3'; TRUNCATE schemas; --]"],
                 "current_schema_hash": ["[4]"],
                 "file_path": ["/path/to/malicious'; DROP TABLE files; --.parquet"],

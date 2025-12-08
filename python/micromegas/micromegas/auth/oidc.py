@@ -419,15 +419,20 @@ class OidcAuthProvider:
                 raise Exception("No ID token available. Please re-authenticate.")
 
             # Check if ID token needs refresh based on its own exp claim (5 min buffer)
+            needs_refresh = True
             try:
                 id_token_exp = self._get_id_token_expiration(id_token)
                 if id_token_exp > time.time() + 300:
                     # ID token still valid
-                    self._validate_id_token(id_token)
-                    return id_token
+                    needs_refresh = False
             except Exception:
                 # If we can't parse expiration, assume expired and refresh
                 pass
+
+            if not needs_refresh:
+                # Validate token OUTSIDE try/except so security errors propagate
+                self._validate_id_token(id_token)
+                return id_token
 
             # ID token expired or expiring soon - refresh it
             if self.client.token.get("refresh_token"):

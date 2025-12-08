@@ -98,10 +98,14 @@ def test_oidc_get_token_valid():
         mock_get.return_value = mock_response
 
         mock_client = MagicMock()
-        # Token expires in 10 minutes (> 5 min buffer)
+        # Create a valid JWT with far-future expiration
+        # Header: {"typ":"JWT","alg":"HS256"}
+        # Payload: {"sub":"test","exp":9999999999}
+        # Signature: test-signature (doesn't need to be valid for this test)
+        valid_jwt = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ0ZXN0IiwiZXhwIjo5OTk5OTk5OTk5fQ.dGVzdC1zaWduYXR1cmU"
         mock_client.token = {
             "access_token": "test-access",
-            "id_token": "test-id-token",
+            "id_token": valid_jwt,
             "refresh_token": "test-refresh",
             "expires_at": time.time() + 600,  # 10 minutes
         }
@@ -118,7 +122,7 @@ def test_oidc_get_token_valid():
         )
 
         token = provider.get_token()
-        assert token == "test-id-token"
+        assert token == valid_jwt
         # Should not call fetch_token since token is still valid
         mock_client.fetch_token.assert_not_called()
 
