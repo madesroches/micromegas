@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"runtime/debug"
 	"strconv"
 	"sync"
@@ -28,14 +29,15 @@ func (d *FlightSQLDatasource) QueryData(ctx context.Context, req *backend.QueryD
 
 		// Add end-user identity to gRPC metadata
 		// FlightSQL server can log these headers for attribution
+		// Use percent-encoding (PathEscape) to safely transmit UTF-8 characters in headers
 		if user.Login != "" {
-			requestMd.Set("x-user-id", user.Login) // Generic: works for any client
+			requestMd.Set("x-user-id", url.PathEscape(user.Login))
 		}
 		if user.Email != "" {
-			requestMd.Set("x-user-email", user.Email) // Generic: works for any client
+			requestMd.Set("x-user-email", url.PathEscape(user.Email))
 		}
 		if user.Name != "" {
-			requestMd.Set("x-user-name", user.Name) // Generic: works for any client
+			requestMd.Set("x-user-name", url.PathEscape(user.Name))
 		}
 
 		// Add organization/tenant context
