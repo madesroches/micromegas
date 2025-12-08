@@ -139,6 +139,11 @@ export function TimeSeriesChart({
             tooltip.style.top = Math.max(0, top - 60) + 'px'
             tooltip.style.display = 'block'
           },
+          destroy: () => {
+            if (tooltip && tooltip.parentNode) {
+              tooltip.parentNode.removeChild(tooltip)
+            }
+          },
         },
       }
     },
