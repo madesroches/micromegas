@@ -14,7 +14,7 @@ import { TimeSeriesChart } from '@/components/TimeSeriesChart'
 import { ThreadCoverageTimeline } from '@/components/ThreadCoverageTimeline'
 import { executeSqlQuery, toRowObjects, generateTrace } from '@/lib/api'
 import { useTimeRange } from '@/hooks/useTimeRange'
-import { GenerateTraceRequest, ProgressUpdate } from '@/types'
+import { GenerateTraceRequest, ProgressUpdate, ThreadSegment, ThreadCoverage } from '@/types'
 
 const DISCOVERY_SQL = `SELECT DISTINCT name, target, unit
 FROM view_instance('measures', '$process_id')
@@ -60,17 +60,6 @@ interface Measure {
   name: string
   target: string
   unit: string
-}
-
-interface ThreadSegment {
-  begin: number
-  end: number
-}
-
-interface ThreadCoverage {
-  streamId: string
-  threadName: string
-  segments: ThreadSegment[]
 }
 
 function calculateBinInterval(timeSpanMs: number, chartWidthPx: number = 800): string {
@@ -123,6 +112,7 @@ function PerformanceAnalysisContent() {
   const [traceEventCountLoading, setTraceEventCountLoading] = useState(false)
   const [isGenerating, setIsGenerating] = useState(false)
   const [progress, setProgress] = useState<ProgressUpdate | null>(null)
+  const [traceError, setTraceError] = useState<string | null>(null)
 
   const binInterval = useMemo(() => {
     const fromDate = new Date(apiTimeRange.begin)
@@ -400,6 +390,7 @@ function PerformanceAnalysisContent() {
 
     setIsGenerating(true)
     setProgress(null)
+    setTraceError(null)
 
     const request: GenerateTraceRequest = {
       include_async_spans: true,
@@ -415,7 +406,8 @@ function PerformanceAnalysisContent() {
         setProgress(update)
       })
     } catch (error) {
-      console.error('Failed to generate trace:', error)
+      const message = error instanceof Error ? error.message : 'Unknown error occurred'
+      setTraceError(message)
     } finally {
       setIsGenerating(false)
       setProgress(null)
@@ -534,6 +526,16 @@ function PerformanceAnalysisContent() {
             message={queryError}
             onDismiss={() => setQueryError(null)}
             onRetry={handleRefresh}
+          />
+        )}
+
+        {/* Trace Error Banner */}
+        {traceError && (
+          <ErrorBanner
+            title="Trace generation failed"
+            message={traceError}
+            onDismiss={() => setTraceError(null)}
+            onRetry={handleGenerateTrace}
           />
         )}
 

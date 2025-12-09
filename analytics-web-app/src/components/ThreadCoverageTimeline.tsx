@@ -1,15 +1,6 @@
 'use client'
 
-interface ThreadSegment {
-  begin: number
-  end: number
-}
-
-interface ThreadCoverage {
-  streamId: string
-  threadName: string
-  segments: ThreadSegment[]
-}
+import { ThreadCoverage } from '@/types'
 
 interface ThreadCoverageTimelineProps {
   threads: ThreadCoverage[]
