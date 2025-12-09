@@ -84,6 +84,7 @@ impl StreamMetadata {
 
 /// Returns the thread name associated with the stream, if available.
 /// This function is only meaningful for streams associated with CPU threads.
+/// Returns format: "thread-name-thread-id" (e.g., "main-12345") or just "thread-id" if no name.
 pub fn get_thread_name_from_stream_metadata(stream: &StreamMetadata) -> Result<String> {
     use jsonb::RawJsonb;
 
@@ -96,22 +97,28 @@ pub fn get_thread_name_from_stream_metadata(stream: &StreamMetadata) -> Result<S
 
     let jsonb = RawJsonb::new(&stream.properties);
 
-    // Try to get thread-name first
-    if let Ok(Some(thread_name_value)) = jsonb.get_by_name(THREAD_NAME_KEY, false)
-        && let Ok(Some(thread_name)) = thread_name_value.as_raw().as_str()
+    let thread_name = if let Ok(Some(thread_name_value)) = jsonb.get_by_name(THREAD_NAME_KEY, false)
+        && let Ok(Some(name)) = thread_name_value.as_raw().as_str()
     {
-        return Ok(thread_name.to_string());
-    }
+        Some(name.to_string())
+    } else {
+        None
+    };
 
-    // Fall back to thread-id
-    if let Ok(Some(thread_id_value)) = jsonb.get_by_name(THREAD_ID_KEY, false)
-        && let Ok(Some(thread_id)) = thread_id_value.as_raw().as_str()
+    // thread_id falls back to stream_id
+    let thread_id = if let Ok(Some(thread_id_value)) = jsonb.get_by_name(THREAD_ID_KEY, false)
+        && let Ok(Some(id)) = thread_id_value.as_raw().as_str()
     {
-        return Ok(thread_id.to_string());
-    }
+        id.to_string()
+    } else {
+        stream.stream_id.to_string()
+    };
 
-    // If neither property exists, use stream_id
-    Ok(format!("{}", &stream.stream_id))
+    // Return "name-id" if name exists, otherwise just "id"
+    match thread_name {
+        Some(name) => Ok(format!("{}-{}", name, thread_id)),
+        None => Ok(thread_id),
+    }
 }
 
 /// Creates a `StreamMetadata` from a database row with pre-serialized JSONB properties.

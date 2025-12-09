@@ -36,3 +36,14 @@ export interface SqlQueryError {
   error: string;
   details?: string;
 }
+
+export interface ThreadSegment {
+  begin: number;
+  end: number;
+}
+
+export interface ThreadCoverage {
+  streamId: string;
+  threadName: string;
+  segments: ThreadSegment[];
+}

@@ -4,7 +4,7 @@ import { Suspense, useState, useEffect, useCallback, useRef } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { useMutation } from '@tanstack/react-query'
 import Link from 'next/link'
-import { ArrowLeft, FileText, Activity, AlertCircle, BarChart2 } from 'lucide-react'
+import { ArrowLeft, FileText, Activity, AlertCircle, BarChart2, Gauge } from 'lucide-react'
 import { PageLayout } from '@/components/layout'
 import { AuthGuard } from '@/components/AuthGuard'
 import { CopyableProcessId } from '@/components/CopyableProcessId'
@@ -220,6 +220,13 @@ function ProcessPageContent() {
             >
               <BarChart2 className="w-4 h-4" />
               View Metrics
+            </Link>
+            <Link
+              href={`/performance_analysis?process_id=${processId}&from=${encodeURIComponent(timeRange.from)}&to=${encodeURIComponent(timeRange.to)}`}
+              className="flex items-center gap-2 px-4 py-2 bg-theme-border text-theme-text-primary rounded-md hover:bg-theme-border-hover transition-colors text-sm"
+            >
+              <Gauge className="w-4 h-4" />
+              Performance
             </Link>
             <Link
               href={`/process_trace?process_id=${processId}&from=${encodeURIComponent(timeRange.from)}&to=${encodeURIComponent(timeRange.to)}`}
