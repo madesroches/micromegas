@@ -148,7 +148,8 @@ function PerformanceAnalysisContent() {
       setDiscoveryDone(true)
 
       if (measureList.length > 0 && !selectedMeasure) {
-        setSelectedMeasure(measureList[0].name)
+        const deltaTime = measureList.find((m) => m.name === 'DeltaTime')
+        setSelectedMeasure(deltaTime ? deltaTime.name : measureList[0].name)
       }
     },
     onError: (err: Error) => {
