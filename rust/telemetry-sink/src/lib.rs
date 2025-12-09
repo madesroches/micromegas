@@ -305,7 +305,8 @@ impl TelemetryGuardBuilder {
                 let mut sinks: Vec<(LevelFilter, BoxedEventSink)> = vec![];
                 let telemetry_sink_url = self
                     .telemetry_sink_url
-                    .or_else(|| std::env::var("MICROMEGAS_TELEMETRY_URL").ok());
+                    .or_else(|| std::env::var("MICROMEGAS_TELEMETRY_URL").ok())
+                    .filter(|url| !url.trim().is_empty());
 
                 if let Some(url) = telemetry_sink_url {
                     let metadata_retry = self.telemetry_metadata_retry.unwrap_or_else(|| {
