@@ -12,7 +12,6 @@ export interface GenerateTraceRequest {
 
 export interface ProgressUpdate {
   type: 'progress';
-  percentage: number;
   message: string;
 }
 

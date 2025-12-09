@@ -211,10 +211,10 @@ export function formatDuration(
   }
 }
 
-// Format timestamp for display in tables (ISO format with space separator)
+// Format timestamp for display in tables (local timezone)
 export function formatTimestamp(value: unknown): string {
   if (!value) return ''
   const date = new Date(String(value))
   if (isNaN(date.getTime())) return ''
-  return date.toISOString().replace('T', ' ').slice(0, 23) + 'Z'
+  return formatDateTimeLocal(date)
 }

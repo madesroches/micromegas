@@ -181,12 +181,6 @@ function ProcessTraceContent() {
               <Play className="w-4 h-4" />
               Generate Trace
             </button>
-            <Link
-              href={`/process?id=${processId}`}
-              className="px-5 py-2.5 bg-theme-border text-theme-text-primary rounded-md hover:bg-theme-border-hover transition-colors text-sm font-medium"
-            >
-              Cancel
-            </Link>
           </div>
         </div>
 
@@ -199,7 +193,7 @@ function ProcessTraceContent() {
             </div>
             {progress && (
               <p className="text-sm text-theme-text-secondary mt-3">
-                {progress.message} ({progress.percentage}%)
+                {progress.message}
               </p>
             )}
           </div>

@@ -4,7 +4,7 @@ import { Suspense, useState, useCallback, useMemo, useEffect, useRef } from 'rea
 import { useSearchParams, useRouter, usePathname } from 'next/navigation'
 import { useMutation } from '@tanstack/react-query'
 import Link from 'next/link'
-import { ArrowLeft, AlertCircle, Clock } from 'lucide-react'
+import { AlertCircle, Clock } from 'lucide-react'
 import { PageLayout } from '@/components/layout'
 import { AuthGuard } from '@/components/AuthGuard'
 import { CopyableProcessId } from '@/components/CopyableProcessId'
@@ -334,15 +334,6 @@ function ProcessMetricsContent() {
   return (
     <PageLayout onRefresh={handleRefresh} rightPanel={sqlPanel}>
       <div className="p-6 flex flex-col h-full">
-        {/* Back Link */}
-        <Link
-          href={`/process?id=${processId}`}
-          className="inline-flex items-center gap-1.5 text-accent-link hover:underline text-sm mb-4"
-        >
-          <ArrowLeft className="w-3 h-3" />
-          {processExe || 'Process'}
-        </Link>
-
         {/* Page Header */}
         <div className="mb-5">
           <h1 className="text-2xl font-semibold text-theme-text-primary">Process Metrics</h1>

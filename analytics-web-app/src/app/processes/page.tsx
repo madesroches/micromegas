@@ -13,10 +13,10 @@ import { ErrorBanner } from '@/components/ErrorBanner'
 import { executeSqlQuery, toRowObjects } from '@/lib/api'
 import { useTimeRange } from '@/hooks/useTimeRange'
 import { useDebounce } from '@/hooks/useDebounce'
-import { formatTimestamp } from '@/lib/time-range'
+import { formatTimestamp, formatDuration } from '@/lib/time-range'
 import { SqlRow } from '@/types'
 
-type SortField = 'exe' | 'start_time' | 'last_update_time' | 'username' | 'computer'
+type SortField = 'exe' | 'start_time' | 'last_update_time' | 'runtime' | 'username' | 'computer'
 type SortDirection = 'asc' | 'desc'
 
 const DEFAULT_SQL = `SELECT process_id, start_time, last_update_time, exe, computer, username
@@ -94,10 +94,14 @@ function ProcessesPageContent() {
       setQueryError(null)
       // Interpolate search_filter directly into SQL (it contains raw SQL with quotes)
       const sqlWithSearch = sql.replace('$search_filter', expandSearchFilter(search))
+      // Runtime is a computed column, so we need to use the SQL expression
+      const orderByColumn = sortField === 'runtime'
+        ? '(last_update_time - start_time)'
+        : sortField
       const params: Record<string, string> = {
         begin: apiTimeRange.begin,
         end: apiTimeRange.end,
-        order_by: `${sortField} ${sortDirection.toUpperCase()}`,
+        order_by: `${orderByColumn} ${sortDirection.toUpperCase()}`,
       }
       mutateRef.current({
         sql: sqlWithSearch,
@@ -165,12 +169,17 @@ function ProcessesPageContent() {
   }, [loadData])
 
   const currentValues = useMemo(
-    () => ({
-      begin: apiTimeRange.begin,
-      end: apiTimeRange.end,
-      order_by: `${sortField} ${sortDirection.toUpperCase()}`,
-      search_filter: expandSearchFilter(search) || '(empty)',
-    }),
+    () => {
+      const orderByColumn = sortField === 'runtime'
+        ? '(last_update_time - start_time)'
+        : sortField
+      return {
+        begin: apiTimeRange.begin,
+        end: apiTimeRange.end,
+        order_by: `${orderByColumn} ${sortDirection.toUpperCase()}`,
+        search_filter: expandSearchFilter(search) || '(empty)',
+      }
+    },
     [apiTimeRange, search, sortField, sortDirection]
   )
 
@@ -276,6 +285,9 @@ function ProcessesPageContent() {
                     <SortHeader field="last_update_time" className="hidden lg:table-cell">
                       Last Update
                     </SortHeader>
+                    <SortHeader field="runtime" className="hidden lg:table-cell">
+                      Runtime
+                    </SortHeader>
                     <SortHeader field="username" className="hidden md:table-cell">
                       Username
                     </SortHeader>
@@ -311,6 +323,9 @@ function ProcessesPageContent() {
                       <td className="hidden lg:table-cell px-4 py-3 font-mono text-sm text-theme-text-primary">
                         {formatTimestamp(row.last_update_time)}
                       </td>
+                      <td className="hidden lg:table-cell px-4 py-3 font-mono text-sm text-theme-text-secondary">
+                        {formatDuration(row.start_time, row.last_update_time)}
+                      </td>
                       <td className="hidden md:table-cell px-4 py-3 text-theme-text-primary">
                         {String(row.username ?? '')}
                       </td>
@@ -321,7 +336,7 @@ function ProcessesPageContent() {
                   ))}
                   {rows.length === 0 && (
                     <tr>
-                      <td colSpan={6} className="px-4 py-8 text-center text-theme-text-muted">
+                      <td colSpan={7} className="px-4 py-8 text-center text-theme-text-muted">
                         {search ? 'No processes match your search.' : 'No processes available.'}
                       </td>
                     </tr>

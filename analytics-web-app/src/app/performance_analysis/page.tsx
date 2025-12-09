@@ -4,7 +4,7 @@ import { Suspense, useState, useCallback, useMemo, useEffect, useRef } from 'rea
 import { useSearchParams, useRouter, usePathname } from 'next/navigation'
 import { useMutation } from '@tanstack/react-query'
 import Link from 'next/link'
-import { ArrowLeft, AlertCircle, Clock, Download } from 'lucide-react'
+import { AlertCircle, Clock, Download } from 'lucide-react'
 import { PageLayout } from '@/components/layout'
 import { AuthGuard } from '@/components/AuthGuard'
 import { CopyableProcessId } from '@/components/CopyableProcessId'
@@ -148,7 +148,8 @@ function PerformanceAnalysisContent() {
       setDiscoveryDone(true)
 
       if (measureList.length > 0 && !selectedMeasure) {
-        setSelectedMeasure(measureList[0].name)
+        const deltaTime = measureList.find((m) => m.name === 'DeltaTime')
+        setSelectedMeasure(deltaTime ? deltaTime.name : measureList[0].name)
       }
     },
     onError: (err: Error) => {
@@ -468,15 +469,6 @@ function PerformanceAnalysisContent() {
   return (
     <PageLayout onRefresh={handleRefresh} rightPanel={sqlPanel}>
       <div className="p-6 flex flex-col">
-        {/* Back Link */}
-        <Link
-          href={`/process?id=${processId}`}
-          className="inline-flex items-center gap-1.5 text-accent-link hover:underline text-sm mb-4"
-        >
-          <ArrowLeft className="w-3 h-3" />
-          {processExe || 'Process'}
-        </Link>
-
         {/* Page Header */}
         <div className="mb-5">
           <h1 className="text-2xl font-semibold text-theme-text-primary">Performance Analysis</h1>
@@ -553,7 +545,7 @@ function PerformanceAnalysisContent() {
             </div>
             {progress && (
               <p className="text-xs text-theme-text-secondary mt-2">
-                {progress.message} ({progress.percentage}%)
+                {progress.message}
               </p>
             )}
           </div>
@@ -628,13 +620,14 @@ function PerformanceAnalysisContent() {
             threads={threadCoverage}
             timeRange={chartTimeRange}
             axisBounds={chartAxisBounds}
+            onTimeRangeSelect={handleTimeRangeSelect}
           />
         )}
 
         {/* Hint */}
         {chartData.length > 0 && (
           <div className="text-xs text-theme-text-muted text-center mt-2">
-            Drag on the chart to zoom into a time range
+            Drag on the chart or thread coverage to zoom into a time range
           </div>
         )}
       </div>
