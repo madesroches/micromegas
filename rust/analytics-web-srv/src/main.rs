@@ -446,7 +446,6 @@ fn generate_trace_stream(
             yield Ok(Bytes::from(json + "\n"));
         }
 
-        // Do the actual work first, before sending binary_start
         let client_factory = BearerFlightSQLClientFactory::new_with_client_type(
             auth_token,
             "web".to_string(),
