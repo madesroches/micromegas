@@ -15,7 +15,7 @@ use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use clap::Parser;
 use datafusion::arrow::array::{Int64Array, TimestampNanosecondArray, UInt64Array};
-use futures::Stream;
+use futures::{Stream, StreamExt};
 use http::{HeaderValue, Method, header};
 use micromegas::analytics::{
     dfext::{string_column_accessor::string_column_by_name, typed_column::typed_column_by_name},
@@ -437,85 +437,87 @@ fn generate_trace_stream(
     use async_stream::stream;
 
     Box::pin(stream! {
-        // Send initial progress - this shows while the real work happens
+        // Send initial progress
         let initial_progress = ProgressUpdate {
             update_type: "progress".to_string(),
-            message: "Generating trace data from spans...".to_string()
+            message: "Connecting to analytics server...".to_string()
         };
         if let Ok(json) = serde_json::to_string(&initial_progress) {
             yield Ok(Bytes::from(json + "\n"));
         }
 
-        // Do the actual work first, before sending binary_start
         let client_factory = BearerFlightSQLClientFactory::new_with_client_type(
             auth_token,
             "web".to_string(),
         );
-        let result = generate_perfetto_trace_internal(&client_factory, &process_id, &request).await;
 
-        match result {
-            Ok(trace_data) => {
-                // Now that data is ready, send binary_start and stream it
-                let binary_marker = BinaryStartMarker {
-                    update_type: "binary_start".to_string(),
-                };
-                if let Ok(json) = serde_json::to_string(&binary_marker) {
-                    yield Ok(Bytes::from(json + "\n"));
-                }
-
-                const CHUNK_SIZE: usize = 8192;
-                for chunk in trace_data.chunks(CHUNK_SIZE) {
-                    yield Ok(Bytes::from(chunk.to_vec()));
-                }
-            },
+        // Create client and compute time range
+        let mut client = match client_factory.make_client().await {
+            Ok(c) => c,
             Err(e) => {
-                error!("Failed to generate trace: {}", e);
-                let error_msg = format!("Error: Failed to generate trace: {}", e);
-                yield Ok(Bytes::from(error_msg));
+                error!("Failed to create client: {}", e);
+                yield Ok(Bytes::from(format!("Error: {}", e)));
+                return;
+            }
+        };
+
+        let time_range = if let Some(range) = &request.time_range {
+            TimeRange::new(range.begin, range.end)
+        } else {
+            match get_processes_internal(&client_factory).await {
+                Ok(processes) => {
+                    match processes.iter().find(|p| p.process_id == process_id) {
+                        Some(process) => TimeRange::new(process.start_time, process.last_update_time),
+                        None => {
+                            yield Ok(Bytes::from("Error: Process not found"));
+                            return;
+                        }
+                    }
+                }
+                Err(e) => {
+                    yield Ok(Bytes::from(format!("Error: {}", e)));
+                    return;
+                }
+            }
+        };
+
+        let span_types = match (request.include_thread_spans, request.include_async_spans) {
+            (true, true) => SpanTypes::Both,
+            (true, false) => SpanTypes::Thread,
+            (false, true) => SpanTypes::Async,
+            (false, false) => SpanTypes::Thread,
+        };
+
+        // Send binary_start - data will stream as it's generated
+        let binary_marker = BinaryStartMarker {
+            update_type: "binary_start".to_string(),
+        };
+        if let Ok(json) = serde_json::to_string(&binary_marker) {
+            yield Ok(Bytes::from(json + "\n"));
+        }
+
+        // Stream chunks directly as they arrive from FlightSQL
+        let chunk_stream = perfetto_trace_client::format_perfetto_trace_stream(
+            &mut client,
+            &process_id,
+            time_range,
+            span_types,
+        );
+        tokio::pin!(chunk_stream);
+
+        while let Some(chunk_result) = chunk_stream.next().await {
+            match chunk_result {
+                Ok(chunk) => {
+                    yield Ok(Bytes::from(chunk));
+                }
+                Err(e) => {
+                    error!("Failed to generate trace chunk: {}", e);
+                    // Note: can't send error after binary data started
+                    return;
+                }
             }
         }
     })
-}
-
-#[span_fn]
-async fn generate_perfetto_trace_internal(
-    client_factory: &BearerFlightSQLClientFactory,
-    process_id: &str,
-    request: &GenerateTraceRequest,
-) -> Result<Vec<u8>> {
-    let mut client = client_factory.make_client().await?;
-
-    let time_range = if let Some(range) = &request.time_range {
-        TimeRange::new(range.begin, range.end)
-    } else {
-        let processes = get_processes_internal(client_factory).await?;
-        let process = processes
-            .iter()
-            .find(|p| p.process_id == process_id)
-            .ok_or_else(|| anyhow::anyhow!("Process not found"))?;
-        TimeRange::new(process.start_time, process.last_update_time)
-    };
-
-    // Determine span types based on user selection
-    let span_types = match (request.include_thread_spans, request.include_async_spans) {
-        (true, true) => SpanTypes::Both,
-        (true, false) => SpanTypes::Thread,
-        (false, true) => SpanTypes::Async,
-        (false, false) => {
-            // Default to thread spans if neither is selected
-            SpanTypes::Thread
-        }
-    };
-
-    let trace_data = perfetto_trace_client::format_perfetto_trace(
-        &mut client,
-        process_id,
-        time_range,
-        span_types,
-    )
-    .await?;
-
-    Ok(trace_data)
 }
 
 /// List of destructive functions that should be blocked in web queries
