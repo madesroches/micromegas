@@ -45,20 +45,24 @@ export function ThreadCoverageTimeline({
         <div className="divide-y divide-theme-border/50">
           {threads.map((thread) => (
             <div key={thread.streamId} className="flex items-center h-8">
-              {/* Thread name - positioned to align with chart Y-axis area */}
-              <div
-                className="flex-shrink-0 pr-2 text-xs text-theme-text-secondary truncate text-right"
-                style={{ width: leftOffset }}
-                title={thread.threadName}
-              >
-                {thread.threadName}
-              </div>
+              {/* Spacer to align with chart Y-axis area */}
+              <div className="flex-shrink-0" style={{ width: leftOffset }} />
 
               {/* Timeline bar area - matches chart plot area */}
               <div
                 className="h-6 relative bg-app-bg rounded"
                 style={{ width: plotWidth ?? '100%' }}
               >
+                {/* Thread name overlay */}
+                <div
+                  className="absolute inset-y-0 left-1 flex items-center z-10 pointer-events-none"
+                  title={thread.threadName}
+                >
+                  <span className="text-xs font-medium px-1 rounded text-brand-blue bg-black/60">
+                    {thread.threadName}
+                  </span>
+                </div>
+
                 {/* Coverage segments */}
                 {thread.segments.map((segment, idx) => {
                   const startPercent = clamp(toPercent(segment.begin), 0, 100)
