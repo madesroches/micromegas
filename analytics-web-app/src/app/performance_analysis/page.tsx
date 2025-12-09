@@ -620,13 +620,14 @@ function PerformanceAnalysisContent() {
             threads={threadCoverage}
             timeRange={chartTimeRange}
             axisBounds={chartAxisBounds}
+            onTimeRangeSelect={handleTimeRangeSelect}
           />
         )}
 
         {/* Hint */}
         {chartData.length > 0 && (
           <div className="text-xs text-theme-text-muted text-center mt-2">
-            Drag on the chart to zoom into a time range
+            Drag on the chart or thread coverage to zoom into a time range
           </div>
         )}
       </div>
