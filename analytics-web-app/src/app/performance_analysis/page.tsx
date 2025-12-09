@@ -10,7 +10,7 @@ import { AuthGuard } from '@/components/AuthGuard'
 import { CopyableProcessId } from '@/components/CopyableProcessId'
 import { QueryEditor } from '@/components/QueryEditor'
 import { ErrorBanner } from '@/components/ErrorBanner'
-import { TimeSeriesChart } from '@/components/TimeSeriesChart'
+import { TimeSeriesChart, ChartAxisBounds } from '@/components/TimeSeriesChart'
 import { ThreadCoverageTimeline } from '@/components/ThreadCoverageTimeline'
 import { executeSqlQuery, toRowObjects, generateTrace } from '@/lib/api'
 import { useTimeRange } from '@/hooks/useTimeRange'
@@ -113,6 +113,7 @@ function PerformanceAnalysisContent() {
   const [isGenerating, setIsGenerating] = useState(false)
   const [progress, setProgress] = useState<ProgressUpdate | null>(null)
   const [traceError, setTraceError] = useState<string | null>(null)
+  const [chartAxisBounds, setChartAxisBounds] = useState<ChartAxisBounds | null>(null)
 
   const binInterval = useMemo(() => {
     const fromDate = new Date(apiTimeRange.begin)
@@ -385,6 +386,10 @@ function PerformanceAnalysisContent() {
     setChartWidth(width)
   }, [])
 
+  const handleAxisBoundsChange = useCallback((bounds: ChartAxisBounds) => {
+    setChartAxisBounds(bounds)
+  }, [])
+
   const handleGenerateTrace = async () => {
     if (!processId) return
 
@@ -563,6 +568,7 @@ function PerformanceAnalysisContent() {
               unit={selectedMeasureInfo?.unit || ''}
               onTimeRangeSelect={handleTimeRangeSelect}
               onWidthChange={handleChartWidthChange}
+              onAxisBoundsChange={handleAxisBoundsChange}
             />
           ) : discoveryMutation.isPending ? (
             <div className="h-full flex items-center justify-center bg-app-panel border border-theme-border rounded-lg">
@@ -618,7 +624,11 @@ function PerformanceAnalysisContent() {
 
         {/* Thread Coverage Timeline */}
         {chartTimeRange && threadCoverage.length > 0 && (
-          <ThreadCoverageTimeline threads={threadCoverage} timeRange={chartTimeRange} />
+          <ThreadCoverageTimeline
+            threads={threadCoverage}
+            timeRange={chartTimeRange}
+            axisBounds={chartAxisBounds}
+          />
         )}
 
         {/* Hint */}

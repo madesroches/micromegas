@@ -4,12 +4,18 @@ import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import uPlot from 'uplot'
 import 'uplot/dist/uPlot.min.css'
 
+export interface ChartAxisBounds {
+  left: number // Left padding (Y-axis width)
+  width: number // Plot area width
+}
+
 interface TimeSeriesChartProps {
   data: { time: number; value: number }[]
   title: string
   unit: string
   onTimeRangeSelect?: (from: Date, to: Date) => void
   onWidthChange?: (width: number) => void
+  onAxisBoundsChange?: (bounds: ChartAxisBounds) => void
 }
 
 const UNIT_ABBREVIATIONS: Record<string, string> = {
@@ -40,6 +46,7 @@ export function TimeSeriesChart({
   unit,
   onTimeRangeSelect,
   onWidthChange,
+  onAxisBoundsChange,
 }: TimeSeriesChartProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<uPlot | null>(null)
@@ -232,6 +239,18 @@ export function TimeSeriesChart({
     const chartContainer = containerRef.current.querySelector('.chart-inner') as HTMLElement
     if (chartContainer) {
       chartRef.current = new uPlot(opts, [times, values], chartContainer)
+
+      // Report axis bounds after chart is ready
+      if (onAxisBoundsChange && chartRef.current) {
+        const u = chartRef.current
+        // uPlot bbox gives us the plot area bounds
+        // bbox.left is the left edge of the plot area (after Y-axis)
+        // bbox.width is the width of the plot area
+        onAxisBoundsChange({
+          left: u.bbox.left / devicePixelRatio,
+          width: u.bbox.width / devicePixelRatio,
+        })
+      }
     }
 
     return () => {
@@ -240,7 +259,7 @@ export function TimeSeriesChart({
         chartRef.current = null
       }
     }
-  }, [data, dimensions, title, unit, createTooltipPlugin, onTimeRangeSelect])
+  }, [data, dimensions, title, unit, createTooltipPlugin, onTimeRangeSelect, onAxisBoundsChange])
 
   return (
     <div className="flex flex-col h-full bg-app-panel border border-theme-border rounded-lg">

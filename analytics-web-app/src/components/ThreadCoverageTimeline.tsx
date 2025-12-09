@@ -1,15 +1,18 @@
 'use client'
 
 import { ThreadCoverage } from '@/types'
+import { ChartAxisBounds } from './TimeSeriesChart'
 
 interface ThreadCoverageTimelineProps {
   threads: ThreadCoverage[]
   timeRange: { from: number; to: number }
+  axisBounds?: ChartAxisBounds | null
 }
 
 export function ThreadCoverageTimeline({
   threads,
   timeRange,
+  axisBounds,
 }: ThreadCoverageTimelineProps) {
   const duration = timeRange.to - timeRange.from
 
@@ -23,6 +26,10 @@ export function ThreadCoverageTimeline({
     return Math.max(min, Math.min(max, value))
   }
 
+  // Use axis bounds if available, otherwise fall back to defaults
+  const leftOffset = axisBounds ? axisBounds.left : 60 // Default Y-axis width
+  const plotWidth = axisBounds ? axisBounds.width : undefined
+
   return (
     <div className="bg-app-panel border border-theme-border rounded-lg overflow-hidden">
       {/* Header */}
@@ -33,44 +40,50 @@ export function ThreadCoverageTimeline({
         </div>
       </div>
 
-      {/* Timeline */}
-      <div className="divide-y divide-theme-border">
-        {threads.map((thread) => (
-          <div key={thread.streamId} className="flex items-center">
-            {/* Thread name */}
-            <div
-              className="w-32 flex-shrink-0 px-4 py-2 text-sm text-theme-text-secondary truncate border-r border-theme-border"
-              title={thread.threadName}
-            >
-              {thread.threadName}
+      {/* Timeline - wrapped in padding to match chart container */}
+      <div className="p-4">
+        <div className="divide-y divide-theme-border/50">
+          {threads.map((thread) => (
+            <div key={thread.streamId} className="flex items-center h-8">
+              {/* Thread name - positioned to align with chart Y-axis area */}
+              <div
+                className="flex-shrink-0 pr-2 text-xs text-theme-text-secondary truncate text-right"
+                style={{ width: leftOffset }}
+                title={thread.threadName}
+              >
+                {thread.threadName}
+              </div>
+
+              {/* Timeline bar area - matches chart plot area */}
+              <div
+                className="h-6 relative bg-app-bg rounded"
+                style={{ width: plotWidth ?? '100%' }}
+              >
+                {/* Coverage segments */}
+                {thread.segments.map((segment, idx) => {
+                  const startPercent = clamp(toPercent(segment.begin), 0, 100)
+                  const endPercent = clamp(toPercent(segment.end), 0, 100)
+                  const widthPercent = endPercent - startPercent
+
+                  // Skip segments entirely outside the visible range
+                  if (widthPercent <= 0) return null
+
+                  return (
+                    <div
+                      key={idx}
+                      className="absolute top-1 bottom-1 bg-chart-line rounded-sm opacity-80 hover:opacity-100 transition-opacity"
+                      style={{
+                        left: `${startPercent}%`,
+                        width: `${Math.max(widthPercent, 0.5)}%`, // Min width for visibility
+                      }}
+                      title={`${new Date(segment.begin).toLocaleTimeString()} - ${new Date(segment.end).toLocaleTimeString()}`}
+                    />
+                  )
+                })}
+              </div>
             </div>
-
-            {/* Timeline bar area */}
-            <div className="flex-1 h-8 relative bg-app-bg mx-2 my-1 rounded">
-              {/* Coverage segments */}
-              {thread.segments.map((segment, idx) => {
-                const startPercent = clamp(toPercent(segment.begin), 0, 100)
-                const endPercent = clamp(toPercent(segment.end), 0, 100)
-                const widthPercent = endPercent - startPercent
-
-                // Skip segments entirely outside the visible range
-                if (widthPercent <= 0) return null
-
-                return (
-                  <div
-                    key={idx}
-                    className="absolute top-1 bottom-1 bg-chart-line rounded-sm opacity-80 hover:opacity-100 transition-opacity"
-                    style={{
-                      left: `${startPercent}%`,
-                      width: `${Math.max(widthPercent, 0.5)}%`, // Min width for visibility
-                    }}
-                    title={`${new Date(segment.begin).toLocaleTimeString()} - ${new Date(segment.end).toLocaleTimeString()}`}
-                  />
-                )
-              })}
-            </div>
-          </div>
-        ))}
+          ))}
+        </div>
       </div>
 
       {/* Empty state */}
