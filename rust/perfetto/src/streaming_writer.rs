@@ -196,6 +196,13 @@ impl PerfettoWriter {
         self.write_packet(packet).await
     }
 
+    /// Sets the current thread for subsequent span emissions.
+    /// Must be called before emitting spans for a specific thread.
+    pub fn set_current_thread(&mut self, stream_id: &str) {
+        let thread_uuid = xxh64(stream_id.as_bytes(), 0);
+        self.current_thread_uuid = Some(thread_uuid);
+    }
+
     /// Emits an async track descriptor packet to the stream (single track for all async spans).
     pub async fn emit_async_track_descriptor(&mut self) -> anyhow::Result<()> {
         if self.async_track_uuid.is_some() {

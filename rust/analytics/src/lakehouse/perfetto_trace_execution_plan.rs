@@ -6,7 +6,6 @@ use crate::dfext::{
     string_column_accessor::string_column_by_name, typed_column::typed_column_by_name,
 };
 use crate::time::TimeRange;
-use anyhow::Context;
 use async_stream::stream;
 use datafusion::{
     arrow::{
@@ -334,6 +333,7 @@ async fn get_process_exe(
 }
 
 /// Get thread information from the streams table
+/// Returns (stream_id, thread_id_numeric, display_name) where display_name is "name-id" or just "id"
 async fn get_process_thread_list(
     process_id: &str,
     ctx: &datafusion::execution::context::SessionContext,
@@ -342,8 +342,8 @@ async fn get_process_thread_list(
     let sql = format!(
         r#"
         SELECT arrow_cast(b.stream_id, 'Utf8') as stream_id,
-               property_get("streams.properties", 'thread-name') as thread_name,
-               property_get("streams.properties", 'thread-id') as thread_id
+               arrow_cast(property_get("streams.properties", 'thread-name'), 'Utf8') as thread_name,
+               arrow_cast(property_get("streams.properties", 'thread-id'), 'Utf8') as thread_id
         FROM blocks b
         WHERE b.process_id = '{}'
         AND array_has(b."streams.tags", 'cpu')
@@ -366,10 +366,25 @@ async fn get_process_thread_list(
             let stream_id = stream_ids.value(i).to_owned();
             let thread_name = thread_names.value(i);
             let thread_id_str = thread_ids.value(i);
-            let thread_id = thread_id_str
-                .parse::<i64>()
-                .context("Failed to parse thread_id as i64")? as i32;
-            threads.push((stream_id, thread_id, thread_name.to_owned()));
+
+            // thread_id falls back to stream_id if not available
+            let thread_id_for_display = if thread_id_str.is_empty() {
+                &stream_id
+            } else {
+                thread_id_str
+            };
+
+            // Parse numeric thread_id for Perfetto (use 0 if not parseable)
+            let thread_id_numeric = thread_id_str.parse::<i64>().unwrap_or(0) as i32;
+
+            // Build display name: "name-id" if name exists, otherwise just "id"
+            let display_name = if thread_name.is_empty() {
+                thread_id_for_display.to_owned()
+            } else {
+                format!("{}-{}", thread_name, thread_id_for_display)
+            };
+
+            threads.push((stream_id, thread_id_numeric, display_name));
         }
     }
 
@@ -385,6 +400,8 @@ async fn generate_thread_spans_with_writer(
     threads: &Vec<(String, i32, String)>,
 ) -> anyhow::Result<()> {
     for (stream_id, _, _) in threads {
+        // Set the current thread before emitting its spans
+        writer.set_current_thread(stream_id);
         let sql = format!(
             r#"
             SELECT "begin", "end", 
