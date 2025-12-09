@@ -4,12 +4,18 @@ import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import uPlot from 'uplot'
 import 'uplot/dist/uPlot.min.css'
 
+export interface ChartAxisBounds {
+  left: number // Left padding (Y-axis width)
+  width: number // Plot area width
+}
+
 interface TimeSeriesChartProps {
   data: { time: number; value: number }[]
   title: string
   unit: string
   onTimeRangeSelect?: (from: Date, to: Date) => void
   onWidthChange?: (width: number) => void
+  onAxisBoundsChange?: (bounds: ChartAxisBounds) => void
 }
 
 const UNIT_ABBREVIATIONS: Record<string, string> = {
@@ -40,6 +46,7 @@ export function TimeSeriesChart({
   unit,
   onTimeRangeSelect,
   onWidthChange,
+  onAxisBoundsChange,
 }: TimeSeriesChartProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<uPlot | null>(null)
@@ -208,6 +215,28 @@ export function TimeSeriesChart({
         },
       },
       hooks: {
+        ready: [
+          (u: uPlot) => {
+            // Report axis bounds after chart layout is complete
+            if (onAxisBoundsChange) {
+              onAxisBoundsChange({
+                left: u.bbox.left / devicePixelRatio,
+                width: u.bbox.width / devicePixelRatio,
+              })
+            }
+          },
+        ],
+        setSize: [
+          (u: uPlot) => {
+            // Report updated axis bounds after resize
+            if (onAxisBoundsChange) {
+              onAxisBoundsChange({
+                left: u.bbox.left / devicePixelRatio,
+                width: u.bbox.width / devicePixelRatio,
+              })
+            }
+          },
+        ],
         setSelect: [
           (u: uPlot) => {
             const { left, width } = u.select
@@ -240,7 +269,7 @@ export function TimeSeriesChart({
         chartRef.current = null
       }
     }
-  }, [data, dimensions, title, unit, createTooltipPlugin, onTimeRangeSelect])
+  }, [data, dimensions, title, unit, createTooltipPlugin, onTimeRangeSelect, onAxisBoundsChange])
 
   return (
     <div className="flex flex-col h-full bg-app-panel border border-theme-border rounded-lg">
