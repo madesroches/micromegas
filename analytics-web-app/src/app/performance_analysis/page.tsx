@@ -553,7 +553,7 @@ function PerformanceAnalysisContent() {
             </div>
             {progress && (
               <p className="text-xs text-theme-text-secondary mt-2">
-                {progress.message} ({progress.percentage}%)
+                {progress.message}
               </p>
             )}
           </div>

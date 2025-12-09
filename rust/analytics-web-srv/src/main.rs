@@ -90,7 +90,6 @@ struct TimeRangeQuery {
 struct ProgressUpdate {
     #[serde(rename = "type")]
     update_type: String,
-    percentage: u8,
     message: String,
 }
 
@@ -436,57 +435,34 @@ fn generate_trace_stream(
     request: GenerateTraceRequest,
 ) -> ProgressStream {
     use async_stream::stream;
-    use tokio::time::{Duration, sleep};
 
     Box::pin(stream! {
-        let progress_updates = vec![
-            ProgressUpdate {
-                update_type: "progress".to_string(),
-                percentage: 10,
-                message: "Connecting to FlightSQL server".to_string()
-            },
-            ProgressUpdate {
-                update_type: "progress".to_string(),
-                percentage: 25,
-                message: "Querying process metadata".to_string()
-            },
-            ProgressUpdate {
-                update_type: "progress".to_string(),
-                percentage: 50,
-                message: "Processing thread spans".to_string()
-            },
-            ProgressUpdate {
-                update_type: "progress".to_string(),
-                percentage: 75,
-                message: "Processing async spans".to_string()
-            },
-            ProgressUpdate {
-                update_type: "progress".to_string(),
-                percentage: 90,
-                message: "Finalizing trace file".to_string()
-            },
-        ];
-
-        for update in progress_updates {
-            if let Ok(json) = serde_json::to_string(&update) {
-                yield Ok(Bytes::from(json + "\n"));
-                sleep(Duration::from_millis(500)).await;
-            }
-        }
-
-        let binary_marker = BinaryStartMarker {
-            update_type: "binary_start".to_string(),
+        // Send initial progress - this shows while the real work happens
+        let initial_progress = ProgressUpdate {
+            update_type: "progress".to_string(),
+            message: "Generating trace data from spans...".to_string()
         };
-        if let Ok(json) = serde_json::to_string(&binary_marker) {
+        if let Ok(json) = serde_json::to_string(&initial_progress) {
             yield Ok(Bytes::from(json + "\n"));
         }
 
+        // Do the actual work first, before sending binary_start
         let client_factory = BearerFlightSQLClientFactory::new_with_client_type(
             auth_token,
             "web".to_string(),
         );
-        match generate_perfetto_trace_internal(&client_factory, &process_id, &request).await {
+        let result = generate_perfetto_trace_internal(&client_factory, &process_id, &request).await;
+
+        match result {
             Ok(trace_data) => {
+                // Now that data is ready, send binary_start and stream it
+                let binary_marker = BinaryStartMarker {
+                    update_type: "binary_start".to_string(),
+                };
+                if let Ok(json) = serde_json::to_string(&binary_marker) {
+                    yield Ok(Bytes::from(json + "\n"));
+                }
+
                 const CHUNK_SIZE: usize = 8192;
                 for chunk in trace_data.chunks(CHUNK_SIZE) {
                     yield Ok(Bytes::from(chunk.to_vec()));

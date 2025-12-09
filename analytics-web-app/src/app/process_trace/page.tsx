@@ -199,7 +199,7 @@ function ProcessTraceContent() {
             </div>
             {progress && (
               <p className="text-sm text-theme-text-secondary mt-3">
-                {progress.message} ({progress.percentage}%)
+                {progress.message}
               </p>
             )}
           </div>

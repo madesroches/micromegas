@@ -94,6 +94,7 @@ export async function generateTrace(
   const reader = response.body.getReader()
   const chunks: Uint8Array[] = []
   let progressComplete = false
+  let bytesReceived = 0
 
   while (true) {
     const { done, value } = await reader.read()
@@ -120,6 +121,7 @@ export async function generateTrace(
             // Not JSON, must be binary data
             progressComplete = true
             chunks.push(value)
+            bytesReceived += value.length
             break
           }
         }
@@ -132,8 +134,18 @@ export async function generateTrace(
     }
 
     if (progressComplete) {
-      // Collect binary chunks
+      // Collect binary chunks and track download progress
       chunks.push(value)
+      bytesReceived += value.length
+
+      // Report download progress
+      if (onProgress) {
+        const mbReceived = (bytesReceived / (1024 * 1024)).toFixed(1)
+        onProgress({
+          type: 'progress',
+          message: `Downloading trace data... ${mbReceived} MB received`
+        })
+      }
     }
   }
 
