@@ -215,6 +215,28 @@ export function TimeSeriesChart({
         },
       },
       hooks: {
+        ready: [
+          (u: uPlot) => {
+            // Report axis bounds after chart layout is complete
+            if (onAxisBoundsChange) {
+              onAxisBoundsChange({
+                left: u.bbox.left / devicePixelRatio,
+                width: u.bbox.width / devicePixelRatio,
+              })
+            }
+          },
+        ],
+        setSize: [
+          (u: uPlot) => {
+            // Report updated axis bounds after resize
+            if (onAxisBoundsChange) {
+              onAxisBoundsChange({
+                left: u.bbox.left / devicePixelRatio,
+                width: u.bbox.width / devicePixelRatio,
+              })
+            }
+          },
+        ],
         setSelect: [
           (u: uPlot) => {
             const { left, width } = u.select
@@ -239,18 +261,6 @@ export function TimeSeriesChart({
     const chartContainer = containerRef.current.querySelector('.chart-inner') as HTMLElement
     if (chartContainer) {
       chartRef.current = new uPlot(opts, [times, values], chartContainer)
-
-      // Report axis bounds after chart is ready
-      if (onAxisBoundsChange && chartRef.current) {
-        const u = chartRef.current
-        // uPlot bbox gives us the plot area bounds
-        // bbox.left is the left edge of the plot area (after Y-axis)
-        // bbox.width is the width of the plot area
-        onAxisBoundsChange({
-          left: u.bbox.left / devicePixelRatio,
-          width: u.bbox.width / devicePixelRatio,
-        })
-      }
     }
 
     return () => {
