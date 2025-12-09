@@ -120,6 +120,7 @@ function PerformanceAnalysisContent() {
   const [chartWidth, setChartWidth] = useState<number>(800)
   const [threadCoverage, setThreadCoverage] = useState<ThreadCoverage[]>([])
   const [traceEventCount, setTraceEventCount] = useState<number | null>(null)
+  const [traceEventCountLoading, setTraceEventCountLoading] = useState(false)
   const [isGenerating, setIsGenerating] = useState(false)
   const [progress, setProgress] = useState<ProgressUpdate | null>(null)
 
@@ -225,6 +226,10 @@ function PerformanceAnalysisContent() {
 
       setThreadCoverage(threads)
     },
+    onError: (err: Error) => {
+      console.error('Failed to fetch thread coverage:', err.message)
+      setThreadCoverage([])
+    },
   })
 
   const traceEventCountMutation = useMutation({
@@ -236,6 +241,12 @@ function PerformanceAnalysisContent() {
       } else {
         setTraceEventCount(0)
       }
+      setTraceEventCountLoading(false)
+    },
+    onError: (err: Error) => {
+      console.error('Failed to fetch trace event count:', err.message)
+      setTraceEventCount(0)
+      setTraceEventCountLoading(false)
     },
   })
 
@@ -286,6 +297,7 @@ function PerformanceAnalysisContent() {
       begin: apiTimeRange.begin,
       end: apiTimeRange.end,
     })
+    setTraceEventCountLoading(true)
     traceEventCountMutateRef.current({
       sql: TRACE_EVENTS_COUNT_SQL,
       params: { process_id: processId },
@@ -507,7 +519,7 @@ function PerformanceAnalysisContent() {
           </button>
 
           <span className="text-xs text-theme-text-muted">
-            {traceEventCountMutation.isPending
+            {traceEventCountLoading
               ? 'Loading...'
               : traceEventCount != null
                 ? `${traceEventCount.toLocaleString()} thread events`
