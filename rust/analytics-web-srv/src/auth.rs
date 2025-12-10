@@ -143,6 +143,8 @@ pub struct AuthState {
     pub secure_cookies: bool,
     /// Secret for signing OAuth state parameters (HMAC-SHA256)
     pub state_signing_secret: Vec<u8>,
+    /// Base path for cookies (e.g., "/micromegas"), defaults to "/"
+    pub base_path: String,
 }
 
 impl AuthState {
@@ -298,11 +300,18 @@ pub fn create_cookie<'a>(
     max_age_secs: i64,
     state: &AuthState,
 ) -> Cookie<'a> {
+    // Use base_path for cookie path, defaulting to "/" if empty
+    let cookie_path = if state.base_path.is_empty() {
+        "/".to_string()
+    } else {
+        state.base_path.clone()
+    };
+
     let mut cookie = Cookie::build((name, value))
         .http_only(true)
         .secure(state.secure_cookies)
         .same_site(SameSite::Lax)
-        .path("/")
+        .path(cookie_path)
         .max_age(time::Duration::seconds(max_age_secs));
 
     if let Some(domain) = &state.cookie_domain {
@@ -314,11 +323,18 @@ pub fn create_cookie<'a>(
 
 /// Create an expired cookie to clear it
 pub fn clear_cookie<'a>(name: &'a str, state: &AuthState) -> Cookie<'a> {
+    // Use base_path for cookie path, defaulting to "/" if empty
+    let cookie_path = if state.base_path.is_empty() {
+        "/".to_string()
+    } else {
+        state.base_path.clone()
+    };
+
     let mut cookie = Cookie::build((name, ""))
         .http_only(true)
         .secure(state.secure_cookies)
         .same_site(SameSite::Lax)
-        .path("/")
+        .path(cookie_path)
         .max_age(time::Duration::seconds(0));
 
     if let Some(domain) = &state.cookie_domain {

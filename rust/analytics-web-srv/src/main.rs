@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 use auth::{AuthState, AuthToken, OidcClientConfig};
 use axum::{
     Extension, Json, Router,
-    extract::Path,
+    extract::{Path, State},
     http::StatusCode,
     middleware,
     response::{IntoResponse, Response},
@@ -39,10 +39,7 @@ use micromegas_auth::{axum::auth_middleware, types::AuthProvider};
 use queries::{query_all_processes, query_nb_trace_events};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, pin::Pin, sync::Arc, time::Duration};
-use tower_http::{
-    cors::CorsLayer,
-    services::{ServeDir, ServeFile},
-};
+use tower_http::{cors::CorsLayer, services::ServeDir};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -52,7 +49,7 @@ struct Args {
     port: u16,
 
     /// Frontend build directory
-    #[arg(long, default_value = "../analytics-web-app/dist")]
+    #[arg(long, default_value = "../analytics-web-app/out")]
     frontend_dir: String,
 
     /// Disable authentication (development only)
@@ -166,6 +163,45 @@ impl IntoResponse for ApiError {
 
 type ProgressStream = Pin<Box<dyn Stream<Item = Result<Bytes, axum::Error>> + Send>>;
 
+/// State for serving index.html with injected runtime config
+#[derive(Clone)]
+struct IndexState {
+    frontend_dir: String,
+    base_path: String,
+}
+
+/// Serve index.html with runtime config injected
+///
+/// This handler reads index.html from disk and injects a script tag with
+/// runtime configuration before the closing </head> tag. This allows the
+/// same frontend build to work with different base paths.
+async fn serve_index_with_config(
+    State(state): State<IndexState>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let index_path = format!("{}/index.html", state.frontend_dir);
+
+    let html = tokio::fs::read_to_string(&index_path).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to read index.html: {e}"),
+        )
+    })?;
+
+    // Build the config script to inject
+    let config_script = format!(
+        r#"<script>window.__MICROMEGAS_CONFIG__={{basePath:"{}"}}</script>"#,
+        state.base_path
+    );
+
+    // Inject before </head>
+    let modified_html = html.replace("</head>", &format!("{config_script}</head>"));
+
+    Ok((
+        [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+        modified_html,
+    ))
+}
+
 #[micromegas_main(interop_max_level = "info")]
 async fn main() -> Result<()> {
     let args = Args::parse();
@@ -173,6 +209,12 @@ async fn main() -> Result<()> {
     // Configure CORS origin (required)
     let cors_origin = std::env::var("MICROMEGAS_WEB_CORS_ORIGIN")
         .context("MICROMEGAS_WEB_CORS_ORIGIN environment variable not set")?;
+
+    // Read base path (optional, defaults to empty string for backwards compatibility)
+    let base_path = std::env::var("MICROMEGAS_BASE_PATH")
+        .unwrap_or_default()
+        .trim_end_matches('/')
+        .to_string();
 
     // Build auth state if authentication is enabled
     let auth_state = if !args.disable_auth {
@@ -199,6 +241,7 @@ async fn main() -> Result<()> {
             cookie_domain,
             secure_cookies,
             state_signing_secret,
+            base_path: base_path.clone(),
         })
     } else {
         println!("WARNING: Authentication is disabled (--disable-auth)");
@@ -208,29 +251,38 @@ async fn main() -> Result<()> {
     // Build auth routes if authentication is enabled, or stub routes if disabled
     let auth_routes = if let Some(auth_state) = auth_state.as_ref() {
         Router::new()
-            .route("/auth/login", get(auth::auth_login))
-            .route("/auth/callback", get(auth::auth_callback))
-            .route("/auth/refresh", post(auth::auth_refresh))
-            .route("/auth/logout", post(auth::auth_logout))
-            .route("/auth/me", get(auth::auth_me))
+            .route(&format!("{base_path}/auth/login"), get(auth::auth_login))
+            .route(
+                &format!("{base_path}/auth/callback"),
+                get(auth::auth_callback),
+            )
+            .route(
+                &format!("{base_path}/auth/refresh"),
+                post(auth::auth_refresh),
+            )
+            .route(&format!("{base_path}/auth/logout"), post(auth::auth_logout))
+            .route(&format!("{base_path}/auth/me"), get(auth::auth_me))
             .with_state(auth_state.clone())
     } else {
         // Stub auth routes for no-auth mode
         Router::new()
-            .route("/auth/me", get(auth_me_no_auth))
-            .route("/auth/logout", post(auth_logout_no_auth))
+            .route(&format!("{base_path}/auth/me"), get(auth_me_no_auth))
+            .route(
+                &format!("{base_path}/auth/logout"),
+                post(auth_logout_no_auth),
+            )
     };
 
-    let health_routes = Router::new().route("/analyticsweb/health", get(health_check));
+    let health_routes = Router::new().route(&format!("{base_path}/health"), get(health_check));
 
     let api_routes = Router::new()
-        .route("/analyticsweb/query", post(execute_sql_query))
+        .route(&format!("{base_path}/query"), post(execute_sql_query))
         .route(
-            "/analyticsweb/perfetto/{process_id}/info",
+            &format!("{base_path}/perfetto/{{process_id}}/info"),
             get(get_trace_info),
         )
         .route(
-            "/analyticsweb/perfetto/{process_id}/generate",
+            &format!("{base_path}/perfetto/{{process_id}}/generate"),
             post(generate_trace),
         )
         .layer(middleware::from_fn(observability_middleware));
@@ -245,8 +297,11 @@ async fn main() -> Result<()> {
         // In no-auth mode, inject a dummy AuthToken so handlers don't fail
         api_routes.layer(Extension(AuthToken(String::new())))
     };
-    let serve_dir = ServeDir::new(&args.frontend_dir)
-        .not_found_service(ServeFile::new(format!("{}/index.html", args.frontend_dir)));
+    // State for serving index.html with injected config
+    let index_state = IndexState {
+        frontend_dir: args.frontend_dir.clone(),
+        base_path: base_path.clone(),
+    };
 
     // Configure CORS layer - always restrict to specific origin
     let origin = cors_origin
@@ -264,13 +319,35 @@ async fn main() -> Result<()> {
     // Add auth routes (always - either real or stub)
     app = app.merge(auth_routes);
 
-    let app = app
-        .fallback_service(get_service(serve_dir))
-        .layer(cors_layer);
+    // Serve static files from frontend directory
+    // Use custom handler for index.html to inject runtime config
+    let serve_dir = ServeDir::new(&args.frontend_dir);
+
+    // Build the app with static file serving
+    let app = if base_path.is_empty() {
+        // No base path - serve at root
+        app.route("/", get(serve_index_with_config.clone()))
+            .with_state(index_state.clone())
+            .fallback_service(
+                get_service(serve_dir).handle_error(|_| async { StatusCode::NOT_FOUND }),
+            )
+    } else {
+        // With base path - serve index at base_path and base_path/
+        let index_route = format!("{base_path}/");
+        app.route(&index_route, get(serve_index_with_config.clone()))
+            .route(&base_path, get(serve_index_with_config.clone()))
+            .with_state(index_state.clone())
+            .nest_service(&base_path, get_service(serve_dir))
+    };
+
+    let app = app.layer(cors_layer);
 
     let addr = format!("0.0.0.0:{}", args.port);
     println!("Analytics web server starting on {}", addr);
     println!("CORS origin configured for: {}", cors_origin);
+    if !base_path.is_empty() {
+        println!("Base path: {}", base_path);
+    }
     if args.disable_auth {
         println!("Authentication: DISABLED");
     } else {

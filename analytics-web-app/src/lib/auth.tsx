@@ -1,6 +1,7 @@
 'use client'
 
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react'
+import { getConfig } from './config'
 
 export interface User {
   sub: string
@@ -21,9 +22,9 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
 
-const API_BASE = process.env.NODE_ENV === 'development'
-  ? 'http://localhost:8000'
-  : ''
+function getAuthBase(): string {
+  return getConfig().basePath
+}
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
@@ -33,7 +34,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // Internal function to refresh tokens without triggering checkAuth
   const refreshTokens = useCallback(async (): Promise<boolean> => {
     try {
-      const response = await fetch(`${API_BASE}/auth/refresh`, {
+      const response = await fetch(`${getAuthBase()}/auth/refresh`, {
         method: 'POST',
         credentials: 'include',
       })
@@ -46,7 +47,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const checkAuth = useCallback(async (skipRefresh = false) => {
     try {
-      const response = await fetch(`${API_BASE}/auth/me`, {
+      const response = await fetch(`${getAuthBase()}/auth/me`, {
         credentials: 'include',
       })
 
@@ -92,13 +93,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const login = useCallback((returnUrl?: string) => {
     const currentPath = returnUrl || window.location.pathname
-    const loginUrl = `${API_BASE}/auth/login?return_url=${encodeURIComponent(currentPath)}`
+    const loginUrl = `${getAuthBase()}/auth/login?return_url=${encodeURIComponent(currentPath)}`
     window.location.href = loginUrl
   }, [])
 
   const logout = useCallback(async () => {
     try {
-      const response = await fetch(`${API_BASE}/auth/logout`, {
+      const response = await fetch(`${getAuthBase()}/auth/logout`, {
         method: 'POST',
         credentials: 'include',
       })
@@ -119,7 +120,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // Public refresh function that also updates auth state
   const refresh = useCallback(async (): Promise<boolean> => {
     try {
-      const response = await fetch(`${API_BASE}/auth/refresh`, {
+      const response = await fetch(`${getAuthBase()}/auth/refresh`, {
         method: 'POST',
         credentials: 'include',
       })

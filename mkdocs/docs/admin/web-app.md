@@ -42,6 +42,10 @@ export MICROMEGAS_FLIGHTSQL_URL="grpc://127.0.0.1:50051"
 ### Optional
 
 ```bash
+# Base path for reverse proxy deployments (e.g., behind ALB)
+# All routes will be prefixed with this path
+export MICROMEGAS_BASE_PATH="/analytics"
+
 # Cookie settings (production)
 export MICROMEGAS_COOKIE_DOMAIN=".example.com"
 export MICROMEGAS_SECURE_COOKIES="true"  # HTTPS only
@@ -57,6 +61,17 @@ analytics-web-srv --disable-auth
 MICROMEGAS_WEB_CORS_ORIGIN="https://analytics.example.com"
 MICROMEGAS_AUTH_REDIRECT_URI="https://analytics.example.com/auth/callback"
 ```
+
+**Deploying behind a reverse proxy with path prefix:**
+```bash
+# Example: ALB routes /analytics/* to the web app
+MICROMEGAS_BASE_PATH="/analytics"
+MICROMEGAS_WEB_CORS_ORIGIN="https://example.com"
+MICROMEGAS_AUTH_REDIRECT_URI="https://example.com/analytics/auth/callback"
+```
+
+Routes become: `/analytics/health`, `/analytics/query`, `/analytics/auth/*`, etc.
+The same container image works for any base path - no rebuild needed.
 
 **Configure OAuth redirect in your identity provider:**
 - Add the redirect URI to allowed callbacks
