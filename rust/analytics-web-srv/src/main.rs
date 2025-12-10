@@ -326,7 +326,7 @@ async fn main() -> Result<()> {
     // Build the app with static file serving
     let app = if base_path.is_empty() {
         // No base path - serve at root
-        app.route("/", get(serve_index_with_config.clone()))
+        app.route("/", get(serve_index_with_config))
             .with_state(index_state.clone())
             .fallback_service(
                 get_service(serve_dir).handle_error(|_| async { StatusCode::NOT_FOUND }),
@@ -334,8 +334,8 @@ async fn main() -> Result<()> {
     } else {
         // With base path - serve index at base_path and base_path/
         let index_route = format!("{base_path}/");
-        app.route(&index_route, get(serve_index_with_config.clone()))
-            .route(&base_path, get(serve_index_with_config.clone()))
+        app.route(&index_route, get(serve_index_with_config))
+            .route(&base_path, get(serve_index_with_config))
             .with_state(index_state.clone())
             .nest_service(&base_path, get_service(serve_dir))
     };
