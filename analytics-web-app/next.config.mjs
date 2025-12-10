@@ -11,24 +11,8 @@ const nextConfig = {
   outputFileTracingRoot: __dirname,
 
   // Static export for production (served by analytics-web-srv)
-  // In development, use `yarn dev` which runs Next.js dev server with rewrites
+  // In development, frontend calls backend directly at http://localhost:8000 (via config.ts)
   ...(isProduction && { output: 'export' }),
-
-  // Rewrites only work in development mode (not with static export)
-  ...(!isProduction && {
-    async rewrites() {
-      return [
-        {
-          source: '/analyticsweb/:path*',
-          destination: 'http://127.0.0.1:8000/analyticsweb/:path*',
-        },
-        {
-          source: '/auth/:path*',
-          destination: 'http://127.0.0.1:8000/auth/:path*',
-        },
-      ]
-    },
-  }),
 }
 
 export default nextConfig

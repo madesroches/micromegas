@@ -39,7 +39,7 @@ use micromegas_auth::{axum::auth_middleware, types::AuthProvider};
 use queries::{query_all_processes, query_nb_trace_events};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, pin::Pin, sync::Arc, time::Duration};
-use tower_http::{cors::CorsLayer, services::ServeDir};
+use tower_http::{cors::CorsLayer, normalize_path::NormalizePathLayer, services::ServeDir};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -340,7 +340,10 @@ async fn main() -> Result<()> {
             .nest_service(&base_path, get_service(serve_dir))
     };
 
-    let app = app.layer(cors_layer);
+    // NormalizePathLayer strips trailing slashes so /health/ matches /health
+    let app = app
+        .layer(NormalizePathLayer::trim_trailing_slash())
+        .layer(cors_layer);
 
     let addr = format!("0.0.0.0:{}", args.port);
     println!("Analytics web server starting on {}", addr);
