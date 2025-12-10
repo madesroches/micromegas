@@ -143,9 +143,20 @@ pub struct AuthState {
     pub secure_cookies: bool,
     /// Secret for signing OAuth state parameters (HMAC-SHA256)
     pub state_signing_secret: Vec<u8>,
+    /// Base path for cookies (e.g., "/micromegas"), defaults to "/"
+    pub base_path: String,
 }
 
 impl AuthState {
+    /// Returns the cookie path, using base_path or "/" if empty
+    pub fn cookie_path(&self) -> String {
+        if self.base_path.is_empty() {
+            "/".to_string()
+        } else {
+            self.base_path.clone()
+        }
+    }
+
     pub async fn get_oidc_provider(&self) -> Result<&OidcProviderInfo> {
         let config = self.config.clone();
         self.oidc_provider
@@ -302,7 +313,7 @@ pub fn create_cookie<'a>(
         .http_only(true)
         .secure(state.secure_cookies)
         .same_site(SameSite::Lax)
-        .path("/")
+        .path(state.cookie_path())
         .max_age(time::Duration::seconds(max_age_secs));
 
     if let Some(domain) = &state.cookie_domain {
@@ -318,7 +329,7 @@ pub fn clear_cookie<'a>(name: &'a str, state: &AuthState) -> Cookie<'a> {
         .http_only(true)
         .secure(state.secure_cookies)
         .same_site(SameSite::Lax)
-        .path("/")
+        .path(state.cookie_path())
         .max_age(time::Duration::seconds(0));
 
     if let Some(domain) = &state.cookie_domain {

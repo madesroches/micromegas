@@ -271,7 +271,7 @@ def main():
                 import urllib.request
                 import urllib.error
 
-                response = urllib.request.urlopen("http://localhost:8000/analyticsweb/health", timeout=1)
+                response = urllib.request.urlopen("http://localhost:8000/health", timeout=1)
                 if response.status == 200:
                     backend_ready = True
                     print_status("Backend server is ready!", "success")

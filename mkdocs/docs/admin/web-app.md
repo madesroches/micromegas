@@ -42,6 +42,10 @@ export MICROMEGAS_FLIGHTSQL_URL="grpc://127.0.0.1:50051"
 ### Optional
 
 ```bash
+# Base path for reverse proxy deployments (e.g., behind ALB)
+# All routes will be prefixed with this path
+export MICROMEGAS_BASE_PATH="/analytics"
+
 # Cookie settings (production)
 export MICROMEGAS_COOKIE_DOMAIN=".example.com"
 export MICROMEGAS_SECURE_COOKIES="true"  # HTTPS only
@@ -58,6 +62,32 @@ MICROMEGAS_WEB_CORS_ORIGIN="https://analytics.example.com"
 MICROMEGAS_AUTH_REDIRECT_URI="https://analytics.example.com/auth/callback"
 ```
 
+**Deploying behind a reverse proxy with path prefix:**
+```bash
+# Example: ALB routes /analytics/* to the web app
+MICROMEGAS_BASE_PATH="/analytics"
+MICROMEGAS_WEB_CORS_ORIGIN="https://example.com"
+MICROMEGAS_AUTH_REDIRECT_URI="https://example.com/analytics/auth/callback"
+```
+
+Routes become: `/analytics/health`, `/analytics/query`, `/analytics/auth/*`, etc.
+The same container image works for any base path - no rebuild needed.
+
+## API Routes
+
+Without `MICROMEGAS_BASE_PATH`:
+- `GET /health` - Health check
+- `POST /query` - Execute SQL query
+- `GET /perfetto/{process_id}/info` - Trace metadata
+- `POST /perfetto/{process_id}/generate` - Generate Perfetto trace
+- `GET /auth/login` - Initiate OAuth login
+- `GET /auth/callback` - OAuth callback
+- `POST /auth/refresh` - Refresh tokens
+- `POST /auth/logout` - Logout
+- `GET /auth/me` - Current user info
+
+With `MICROMEGAS_BASE_PATH="/analytics"`, all routes are prefixed (e.g., `/analytics/health`).
+
 **Configure OAuth redirect in your identity provider:**
 - Add the redirect URI to allowed callbacks
 - For Google: Cloud Console → APIs & Services → Credentials
@@ -71,10 +101,21 @@ MICROMEGAS_AUTH_REDIRECT_URI="https://analytics.example.com/auth/callback"
 
 Backend proxies FlightSQL with user's ID token. No direct data access.
 
-## Disable Auth (Dev Only)
+## Command Line Options
 
 ```bash
-analytics-web-srv --disable-auth --port 8000 --frontend-dir ./out
+analytics-web-srv [OPTIONS]
+
+Options:
+  -p, --port <PORT>              Server port [default: 3000]
+      --frontend-dir <DIR>       Frontend build directory [default: ../analytics-web-app/out]
+      --disable-auth             Disable authentication (dev only)
+  -h, --help                     Print help
 ```
 
-Removes authentication middleware. **Do not use in production.**
+Example:
+```bash
+analytics-web-srv --port 8000 --frontend-dir ./out --disable-auth
+```
+
+**Warning:** `--disable-auth` removes authentication middleware. Do not use in production.

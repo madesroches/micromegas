@@ -1,6 +1,9 @@
 import { GenerateTraceRequest, ProgressUpdate, BinaryStartMarker, SqlQueryRequest, SqlQueryResponse, SqlQueryError, SqlRow } from '@/types'
+import { getConfig } from './config'
 
-const API_BASE = process.env.NODE_ENV === 'development' ? 'http://localhost:8000/analyticsweb' : '/analyticsweb'
+function getApiBase(): string {
+  return getConfig().basePath
+}
 
 export interface ApiError {
   type: string
@@ -58,7 +61,7 @@ export async function generateTrace(
   request: GenerateTraceRequest,
   onProgress?: (update: ProgressUpdate) => void
 ): Promise<void> {
-  const response = await fetch(`${API_BASE}/perfetto/${processId}/generate`, {
+  const response = await fetch(`${getApiBase()}/perfetto/${processId}/generate`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -162,7 +165,7 @@ export async function generateTrace(
 }
 
 export async function executeSqlQuery(request: SqlQueryRequest): Promise<SqlQueryResponse> {
-  const response = await fetch(`${API_BASE}/query`, {
+  const response = await fetch(`${getApiBase()}/query`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
