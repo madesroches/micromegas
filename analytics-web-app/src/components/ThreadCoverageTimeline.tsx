@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef, useCallback } from 'react'
+import { useState, useCallback } from 'react'
 import { ThreadCoverage } from '@/types'
 import { ChartAxisBounds } from './TimeSeriesChart'
 
@@ -18,7 +18,6 @@ export function ThreadCoverageTimeline({
   onTimeRangeSelect,
 }: ThreadCoverageTimelineProps) {
   const duration = timeRange.to - timeRange.from
-  const containerRef = useRef<HTMLDivElement>(null)
   const [selection, setSelection] = useState<{ startX: number; currentX: number } | null>(null)
   const [isDragging, setIsDragging] = useState(false)
 
@@ -138,7 +137,6 @@ export function ThreadCoverageTimeline({
 
               {/* Timeline bar area - matches chart plot area */}
               <div
-                ref={containerRef}
                 className={`h-6 relative bg-app-bg rounded ${onTimeRangeSelect ? 'cursor-crosshair' : ''}`}
                 style={{ width: plotWidth ?? '100%' }}
                 onMouseDown={handleMouseDown}
