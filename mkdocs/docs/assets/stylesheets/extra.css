@@ -58,6 +58,43 @@
     border-bottom: 1px solid #1a1a2e;
 }
 
+/* Dark mode header text - ensure visibility */
+[data-md-color-scheme="slate"] .md-header__title {
+    color: #ffffff;
+}
+
+[data-md-color-scheme="slate"] .md-header__topic {
+    color: #ffffff;
+}
+
+/* Dark mode search input styling */
+[data-md-color-scheme="slate"] .md-search__input {
+    background-color: #1a1a2e;
+    color: #ffffff;
+}
+
+[data-md-color-scheme="slate"] .md-search__input::placeholder {
+    color: rgba(255, 255, 255, 0.5);
+}
+
+/* Dark mode header buttons/links */
+[data-md-color-scheme="slate"] .md-header__button {
+    color: #ffffff;
+}
+
+[data-md-color-scheme="slate"] .md-header__source {
+    color: #ffffff;
+}
+
+/* Dark mode source (GitHub link) repository name */
+[data-md-color-scheme="slate"] .md-source__repository {
+    color: #ffffff;
+}
+
+[data-md-color-scheme="slate"] .md-source__facts {
+    color: rgba(255, 255, 255, 0.7);
+}
+
 /* Navigation tabs styling */
 .md-tabs {
     background-color: var(--md-primary-fg-color);
@@ -66,6 +103,16 @@
 [data-md-color-scheme="slate"] .md-tabs {
     background-color: #0a0a0f;
     border-bottom: 1px solid #1a1a2e;
+}
+
+/* Dark mode navigation tab links */
+[data-md-color-scheme="slate"] .md-tabs__link {
+    color: rgba(255, 255, 255, 0.7);
+}
+
+[data-md-color-scheme="slate"] .md-tabs__link:hover,
+[data-md-color-scheme="slate"] .md-tabs__link--active {
+    color: #ffffff;
 }
 
 /* Make header logo larger */
