@@ -22,6 +22,7 @@ fn create_test_auth_state() -> AuthState {
         cookie_domain: None,
         secure_cookies: false,
         state_signing_secret: b"test-secret-32-bytes-for-testing".to_vec(),
+        base_path: String::new(),
     }
 }
 
