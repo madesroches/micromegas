@@ -60,14 +60,31 @@ def run_command(cmd: list[str], cwd: Path = REPO_ROOT) -> bool:
     return result.returncode == 0
 
 
-def build_image(service: str, version: str, push: bool = False) -> bool:
-    """Build a Docker image for a service"""
+def build_image(service: str, version: str, push: bool = False) -> dict:
+    """Build a Docker image for a service.
+
+    Returns a dict with build results:
+        - 'service': service name
+        - 'image': full image name
+        - 'version': version tag
+        - 'built': True if build succeeded
+        - 'pushed': True if push succeeded (only if push=True)
+    """
+    result = {
+        'service': service,
+        'image': None,
+        'version': version,
+        'built': False,
+        'pushed': False,
+    }
+
     if service not in SERVICES:
         print(f"Unknown service: {service}")
-        return False
+        return result
 
     dockerfile, description = SERVICES[service]
     image_name = f"{DOCKERHUB_USER}/{DOCKERHUB_REPO}-{service}"
+    result['image'] = image_name
 
     print(f"\n{'='*60}")
     print(f"Building {service}: {description}")
@@ -85,16 +102,19 @@ def build_image(service: str, version: str, push: bool = False) -> bool:
 
     if not run_command(cmd):
         print(f"Failed to build {service}")
-        return False
+        return result
+
+    result['built'] = True
 
     if push:
         print(f"\nPushing {image_name}...")
         if not run_command(["docker", "push", f"{image_name}:{version}"]):
-            return False
+            return result
         if not run_command(["docker", "push", f"{image_name}:latest"]):
-            return False
+            return result
+        result['pushed'] = True
 
-    return True
+    return result
 
 
 def main():
@@ -145,18 +165,42 @@ def main():
             return 1
 
     # Build each service
-    failed = []
+    results = []
     for service in services:
-        if not build_image(service, version, args.push):
-            failed.append(service)
+        result = build_image(service, version, args.push)
+        results.append(result)
+
+    # Print summary
+    print(f"\n{'='*60}")
+    print("BUILD SUMMARY")
+    print(f"{'='*60}")
+    print(f"Version: {version}")
+    print()
+
+    built = [r for r in results if r['built']]
+    failed = [r for r in results if not r['built']]
+    pushed = [r for r in results if r['pushed']]
+
+    if built:
+        print("Built images:")
+        for r in built:
+            status = " (pushed)" if r['pushed'] else ""
+            print(f"  {r['image']}:{r['version']}{status}")
+            print(f"  {r['image']}:latest{status}")
 
     if failed:
-        print(f"\nFailed to build: {', '.join(failed)}")
-        return 1
+        print("\nFailed:")
+        for r in failed:
+            print(f"  {r['service']}")
 
-    print(f"\nSuccessfully built {len(services)} image(s)")
+    print()
+    print(f"Total: {len(built)}/{len(results)} built", end="")
     if args.push:
-        print("Images pushed to DockerHub")
+        print(f", {len(pushed)}/{len(results)} pushed", end="")
+    print()
+
+    if failed:
+        return 1
 
     return 0
 
