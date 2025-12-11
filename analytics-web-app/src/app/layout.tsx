@@ -7,6 +7,9 @@ import { AuthProvider } from '@/lib/auth'
 
 const inter = Inter({ subsets: ['latin'] })
 
+// Base path for assets (set at build time via NEXT_PUBLIC_BASE_PATH)
+const basePath = process.env.NEXT_PUBLIC_BASE_PATH || ''
+
 export const metadata: Metadata = {
   title: {
     template: 'Micromegas - %s',
@@ -14,7 +17,7 @@ export const metadata: Metadata = {
   },
   description: 'Analytics web application for micromegas telemetry data',
   icons: {
-    icon: '/icon.svg',
+    icon: `${basePath}/icon.svg`,
   },
 }
 

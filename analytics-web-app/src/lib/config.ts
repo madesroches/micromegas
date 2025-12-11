@@ -27,8 +27,10 @@ export function getConfig(): RuntimeConfig {
 
   // Development fallback (no injection needed in dev mode)
   // In dev, the backend runs on port 8000, frontend on port 3000
+  // Include the base path if set via NEXT_PUBLIC_BASE_PATH
+  const devBasePath = process.env.NEXT_PUBLIC_BASE_PATH || ''
   cachedConfig = {
-    basePath: process.env.NODE_ENV === 'development' ? 'http://localhost:8000' : '',
+    basePath: process.env.NODE_ENV === 'development' ? `http://localhost:8000${devBasePath}` : '',
   }
   return cachedConfig
 }
