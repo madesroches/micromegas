@@ -45,7 +45,7 @@ use tower_http::{cors::CorsLayer, normalize_path::NormalizePathLayer, services::
 #[command(author, version, about, long_about = None)]
 struct Args {
     /// Server port
-    #[arg(short, long, default_value = "3000")]
+    #[arg(short, long, default_value = "3000", env = "MICROMEGAS_PORT")]
     port: u16,
 
     /// Frontend build directory
@@ -332,12 +332,24 @@ async fn main() -> Result<()> {
                 get_service(serve_dir).handle_error(|_| async { StatusCode::NOT_FOUND }),
             )
     } else {
-        // With base path - serve index at base_path and base_path/
-        let index_route = format!("{base_path}/");
-        app.route(&index_route, get(serve_index_with_config))
-            .route(&base_path, get(serve_index_with_config))
+        // With base path - create a nested router to avoid route conflicts
+        // The nested router serves index.html with config at "/" (which maps to base_path)
+        // and falls back to serving static files for all other paths
+        let nested_app = Router::new()
+            .route("/", get(serve_index_with_config))
             .with_state(index_state.clone())
-            .nest_service(&base_path, get_service(serve_dir))
+            .fallback_service(
+                get_service(serve_dir).handle_error(|_| async { StatusCode::NOT_FOUND }),
+            );
+
+        // Add a placeholder route using the same handler type to ensure consistent
+        // state type inference across both if/else branches, then nest the router
+        app.route(
+            "/__placeholder_never_matches__",
+            get(serve_index_with_config),
+        )
+        .with_state(index_state.clone())
+        .nest(&base_path, nested_app)
     };
 
     // NormalizePathLayer strips trailing slashes so /health/ matches /health
