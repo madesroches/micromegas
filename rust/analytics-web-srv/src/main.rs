@@ -4,7 +4,7 @@ mod queries;
 use anyhow::{Context, Result};
 use auth::{AuthState, AuthToken, OidcClientConfig};
 use axum::{
-    Extension, Json, Router,
+    Extension, Json, Router, ServiceExt,
     extract::{Path, State},
     http::StatusCode,
     middleware,
@@ -39,6 +39,7 @@ use micromegas_auth::{axum::auth_middleware, types::AuthProvider};
 use queries::{query_all_processes, query_nb_trace_events};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, pin::Pin, sync::Arc, time::Duration};
+use tower::Layer;
 use tower_http::{cors::CorsLayer, normalize_path::NormalizePathLayer, services::ServeDir};
 
 #[derive(Parser, Debug)]
@@ -170,25 +171,54 @@ struct IndexState {
     base_path: String,
 }
 
-/// Serve index.html with runtime config injected and asset paths rewritten
+/// Serve the appropriate HTML file with runtime config injected and asset paths rewritten
 ///
-/// This handler reads index.html from disk and:
-/// 1. Rewrites asset paths (/_next/, /icon.svg) to include the base path
-/// 2. Injects a script tag with runtime configuration
+/// This handler:
+/// 1. Checks if a specific HTML file exists for the request path (e.g., /login -> login.html)
+/// 2. Falls back to index.html for paths without a matching HTML file
+/// 3. Rewrites asset paths (/_next/, /icon.svg) to include the base path
+/// 4. Injects a script tag with runtime configuration
 ///
 /// This allows the same frontend build to work with different base paths
 /// without requiring build-time configuration.
 async fn serve_index_with_config(
     State(state): State<IndexState>,
+    request: axum::extract::Request,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
-    let index_path = format!("{}/index.html", state.frontend_dir);
+    // Extract the path after the base path to find the matching HTML file
+    // e.g., /micromegas/login -> login.html, /micromegas/processes -> processes.html
+    let request_path = request.uri().path();
+    let path_after_base = request_path
+        .strip_prefix(&state.base_path)
+        .unwrap_or(request_path)
+        .trim_start_matches('/');
 
-    let html = tokio::fs::read_to_string(&index_path).await.map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to read index.html: {e}"),
-        )
-    })?;
+    // Try to find a matching HTML file for this path
+    // Next.js static export creates files like: login.html, processes.html, process.html
+    let html_file = if path_after_base.is_empty() || path_after_base == "index.html" {
+        "index.html".to_string()
+    } else {
+        // Strip .html if already present, then add it back
+        let base_name = path_after_base.trim_end_matches(".html");
+        format!("{base_name}.html")
+    };
+
+    let html_path = format!("{}/{html_file}", state.frontend_dir);
+
+    // Try the specific HTML file first, fall back to index.html
+    let html = match tokio::fs::read_to_string(&html_path).await {
+        Ok(content) => content,
+        Err(_) => {
+            // Fall back to index.html for dynamic routes or unknown paths
+            let index_path = format!("{}/index.html", state.frontend_dir);
+            tokio::fs::read_to_string(&index_path).await.map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Failed to read index.html: {e}"),
+                )
+            })?
+        }
+    };
 
     // Rewrite asset paths to include base path
     // Next.js static export uses absolute paths like /_next/... and /icon.svg
@@ -331,18 +361,42 @@ async fn main() -> Result<()> {
     app = app.merge(auth_routes);
 
     // Serve static files from frontend directory under the base path
-    // For SPA routing, non-file requests fall back to index.html (with config injection)
-    let spa_fallback = get(serve_index_with_config).with_state(index_state);
+    // index.html needs special handling to inject runtime config
+    // SPA routes fall back to index.html for client-side routing
+    let spa_fallback = get(serve_index_with_config).with_state(index_state.clone());
     let serve_dir = ServeDir::new(&args.frontend_dir).fallback(spa_fallback);
 
-    // Nest static files (with SPA fallback) under base_path
-    // This handles /base_path, /base_path/, /base_path/processes, /base_path/_next/*, etc.
-    let app = app.nest_service(&base_path, serve_dir);
+    // Build frontend router that handles paths UNDER base_path (not base_path itself)
+    // The "/" route is NOT included here because:
+    // - nest("/micromegas", router_with_"/") would create /micromegas which conflicts
+    //   with our explicit route for the exact base path
+    // - We handle /micromegas exactly with a separate route below
+    let frontend = Router::new()
+        // /index.html under the nested path
+        .route("/index.html", get(serve_index_with_config))
+        .with_state(index_state.clone())
+        // All other paths: try static file, fall back to index.html for SPA
+        .fallback_service(serve_dir);
 
-    // NormalizePathLayer strips trailing slashes so /health/ matches /health
-    let app = app
-        .layer(NormalizePathLayer::trim_trailing_slash())
-        .layer(cors_layer);
+    // Add route for exact base_path match
+    // This handles /micromegas -> serve index with config
+    // nest() only matches /micromegas/* not /micromegas itself
+    let app = app.route(
+        &base_path,
+        get(serve_index_with_config).with_state(index_state),
+    );
+
+    // Nest frontend under base_path - handles /base_path/*
+    let app = app.nest(&base_path, frontend);
+
+    // Add CORS layer to the router
+    let app = app.layer(cors_layer);
+
+    // IMPORTANT: NormalizePathLayer must WRAP the router, not be added via .layer()
+    // Router::layer() runs AFTER routing, but we need trailing slash normalization
+    // BEFORE routing so /micromegas/ matches the /micromegas route.
+    // See: https://github.com/tokio-rs/axum/discussions/2377
+    let app = NormalizePathLayer::trim_trailing_slash().layer(app);
 
     let addr = format!("0.0.0.0:{}", args.port);
     println!("Analytics web server starting on {}", addr);
@@ -359,7 +413,9 @@ async fn main() -> Result<()> {
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     axum::serve(
         listener,
-        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        ServiceExt::<axum::extract::Request>::into_make_service_with_connect_info::<
+            std::net::SocketAddr,
+        >(app),
     )
     .await?;
 

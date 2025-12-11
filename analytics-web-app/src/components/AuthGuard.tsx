@@ -1,8 +1,9 @@
 'use client'
-
+// v2025.12.11 - fix base path routing for login redirect
 import { useEffect } from 'react'
-import { useRouter, usePathname } from 'next/navigation'
+import { usePathname } from 'next/navigation'
 import { useAuth } from '@/lib/auth'
+import { getConfig } from '@/lib/config'
 import { Card, CardContent } from '@/components/ui/card'
 import { AlertCircle } from 'lucide-react'
 
@@ -12,15 +13,16 @@ interface AuthGuardProps {
 
 export function AuthGuard({ children }: AuthGuardProps) {
   const { status, error } = useAuth()
-  const router = useRouter()
   const pathname = usePathname()
 
   useEffect(() => {
     if (status === 'unauthenticated') {
       const returnUrl = encodeURIComponent(pathname)
-      router.push(`/login?return_url=${returnUrl}`)
+      // Use runtime base path for redirect to login page
+      const { basePath } = getConfig()
+      window.location.href = `${basePath}/login?return_url=${returnUrl}`
     }
-  }, [status, pathname, router])
+  }, [status, pathname])
 
   if (status === 'loading') {
     return (
