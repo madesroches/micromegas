@@ -3,7 +3,8 @@
 import { useState } from 'react'
 import { useAuth } from '@/lib/auth'
 import { RefreshCw, ChevronDown, LogOut } from 'lucide-react'
-import Link from 'next/link'
+import { AppLink } from '@/components/AppLink'
+import { getLinkBasePath } from '@/lib/config'
 import { TimeRangePicker } from './TimeRangePicker'
 import { MicromegasLogo } from '@/components/MicromegasLogo'
 
@@ -20,7 +21,7 @@ export function Header({ onRefresh }: HeaderProps) {
     setIsLoggingOut(true)
     try {
       await logout()
-      window.location.href = '/login'
+      window.location.href = `${getLinkBasePath()}/login`
     } catch (error) {
       console.error('Logout failed:', error)
       setIsLoggingOut(false)
@@ -38,9 +39,9 @@ export function Header({ onRefresh }: HeaderProps) {
   return (
     <header className="flex items-center justify-between px-3 sm:px-6 py-3 bg-app-header border-b border-theme-border">
       <div className="flex items-center gap-3 sm:gap-6">
-        <Link href="/" className="hover:opacity-80 transition-opacity">
+        <AppLink href="/" className="hover:opacity-80 transition-opacity">
           <MicromegasLogo size="sm" />
-        </Link>
+        </AppLink>
       </div>
 
       <div className="flex items-center gap-2 sm:gap-4">

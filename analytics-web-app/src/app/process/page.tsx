@@ -3,7 +3,7 @@
 import { Suspense, useState, useEffect, useCallback, useRef } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { useMutation } from '@tanstack/react-query'
-import Link from 'next/link'
+import { AppLink } from '@/components/AppLink'
 import { ArrowLeft, FileText, Activity, AlertCircle, BarChart2, Gauge } from 'lucide-react'
 import { PageLayout } from '@/components/layout'
 import { AuthGuard } from '@/components/AuthGuard'
@@ -146,9 +146,9 @@ function ProcessPageContent() {
           <div className="flex flex-col items-center justify-center h-64 bg-app-panel border border-theme-border rounded-lg">
             <AlertCircle className="w-10 h-10 text-accent-error mb-3" />
             <p className="text-theme-text-secondary">No process ID provided</p>
-            <Link href="/processes" className="text-accent-link hover:underline mt-2">
+            <AppLink href="/processes" className="text-accent-link hover:underline mt-2">
               Back to Processes
-            </Link>
+            </AppLink>
           </div>
         </div>
       </PageLayout>
@@ -177,9 +177,9 @@ function ProcessPageContent() {
           <div className="flex flex-col items-center justify-center h-64 bg-app-panel border border-theme-border rounded-lg">
             <AlertCircle className="w-10 h-10 text-accent-error mb-3" />
             <p className="text-theme-text-secondary">Process not found</p>
-            <Link href="/processes" className="text-accent-link hover:underline mt-2">
+            <AppLink href="/processes" className="text-accent-link hover:underline mt-2">
               Back to Processes
-            </Link>
+            </AppLink>
           </div>
         </div>
       </PageLayout>
@@ -190,13 +190,13 @@ function ProcessPageContent() {
     <PageLayout onRefresh={loadData}>
       <div className="p-6 max-w-6xl">
         {/* Back Link */}
-        <Link
+        <AppLink
           href="/processes"
           className="inline-flex items-center gap-1.5 text-accent-link hover:underline text-sm mb-4"
         >
           <ArrowLeft className="w-3 h-3" />
           All Processes
-        </Link>
+        </AppLink>
 
         {/* Page Header */}
         <div className="flex items-start justify-between mb-8">
@@ -207,34 +207,34 @@ function ProcessPageContent() {
             </div>
           </div>
           <div className="flex gap-3">
-            <Link
+            <AppLink
               href={`/process_log?process_id=${processId}&from=${encodeURIComponent(timeRange.from)}&to=${encodeURIComponent(timeRange.to)}`}
               className="flex items-center gap-2 px-4 py-2 bg-theme-border text-theme-text-primary rounded-md hover:bg-theme-border-hover transition-colors text-sm"
             >
               <FileText className="w-4 h-4" />
               View Log
-            </Link>
-            <Link
+            </AppLink>
+            <AppLink
               href={`/process_metrics?process_id=${processId}&from=${encodeURIComponent(timeRange.from)}&to=${encodeURIComponent(timeRange.to)}`}
               className="flex items-center gap-2 px-4 py-2 bg-theme-border text-theme-text-primary rounded-md hover:bg-theme-border-hover transition-colors text-sm"
             >
               <BarChart2 className="w-4 h-4" />
               View Metrics
-            </Link>
-            <Link
+            </AppLink>
+            <AppLink
               href={`/performance_analysis?process_id=${processId}&from=${encodeURIComponent(timeRange.from)}&to=${encodeURIComponent(timeRange.to)}`}
               className="flex items-center gap-2 px-4 py-2 bg-theme-border text-theme-text-primary rounded-md hover:bg-theme-border-hover transition-colors text-sm"
             >
               <Gauge className="w-4 h-4" />
               Performance
-            </Link>
-            <Link
+            </AppLink>
+            <AppLink
               href={`/process_trace?process_id=${processId}&from=${encodeURIComponent(timeRange.from)}&to=${encodeURIComponent(timeRange.to)}`}
               className="flex items-center gap-2 px-4 py-2 bg-accent-link text-white rounded-md hover:bg-accent-link-hover transition-colors text-sm"
             >
               <Activity className="w-4 h-4" />
               Generate Trace
-            </Link>
+            </AppLink>
           </div>
         </div>
 

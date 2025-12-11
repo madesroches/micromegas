@@ -171,6 +171,13 @@ struct IndexState {
     base_path: String,
 }
 
+/// State for serving webpack runtime with rewritten public path
+#[derive(Clone)]
+struct WebpackState {
+    frontend_dir: String,
+    base_path: String,
+}
+
 /// Serve the appropriate HTML file with runtime config injected and asset paths rewritten
 ///
 /// This handler:
@@ -238,6 +245,84 @@ async fn serve_index_with_config(
     Ok((
         [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
         modified_html,
+    ))
+}
+
+/// Serve JS chunks, rewriting webpack runtime's public path for runtime base path support.
+///
+/// Next.js bakes the webpack public path (r.p="/_next/") at build time.
+/// This handler intercepts chunk requests and rewrites the webpack runtime to use
+/// the runtime base path, enabling a single build to work with any base path.
+async fn serve_js_chunk(
+    Path(filename): Path<String>,
+    State(state): State<WebpackState>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let file_path = format!("{}/_next/static/chunks/{filename}", state.frontend_dir);
+
+    let content = tokio::fs::read(&file_path)
+        .await
+        .map_err(|e| (StatusCode::NOT_FOUND, format!("Chunk not found: {e}")))?;
+
+    // Only rewrite webpack runtime files
+    if filename.starts_with("webpack-") && filename.ends_with(".js") {
+        let js = String::from_utf8_lossy(&content);
+
+        // Rewrite the webpack public path from /_next/ to {base_path}/_next/
+        // The webpack runtime sets: r.p="/_next/" (or r.p="/somepath/_next/" if built with basePath)
+        let modified_js = if let Some(start) = js.find(r#".p=""#) {
+            if let Some(end) = js[start + 4..].find(r#"_next/""#) {
+                // Replace everything between .p=" and _next/" with our base path
+                let before = &js[..start + 4];
+                let after = &js[start + 4 + end..];
+                format!("{before}{}/{after}", state.base_path)
+            } else {
+                js.into_owned()
+            }
+        } else {
+            js.into_owned()
+        };
+
+        Ok((
+            [(
+                header::CONTENT_TYPE,
+                "application/javascript; charset=utf-8",
+            )],
+            modified_js.into_bytes(),
+        ))
+    } else {
+        // Serve other chunks as-is
+        let content_type = if filename.ends_with(".js") {
+            "application/javascript; charset=utf-8"
+        } else if filename.ends_with(".css") {
+            "text/css; charset=utf-8"
+        } else {
+            "application/octet-stream"
+        };
+
+        Ok(([(header::CONTENT_TYPE, content_type)], content))
+    }
+}
+
+/// Serve CSS files, rewriting font URLs for runtime base path support.
+///
+/// Next.js bakes font URLs (url(/_next/static/media/...)) at build time.
+/// This handler rewrites those URLs to include the runtime base path.
+async fn serve_css_file(
+    Path(filename): Path<String>,
+    State(state): State<WebpackState>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let file_path = format!("{}/_next/static/css/{filename}", state.frontend_dir);
+
+    let content = tokio::fs::read_to_string(&file_path)
+        .await
+        .map_err(|e| (StatusCode::NOT_FOUND, format!("CSS not found: {e}")))?;
+
+    // Rewrite font URLs from url(/_next/...) to url({base_path}/_next/...)
+    let modified_css = content.replace("url(/_next/", &format!("url({}/_next/", state.base_path));
+
+    Ok((
+        [(header::CONTENT_TYPE, "text/css; charset=utf-8")],
+        modified_css,
     ))
 }
 
@@ -366,6 +451,12 @@ async fn main() -> Result<()> {
     let spa_fallback = get(serve_index_with_config).with_state(index_state.clone());
     let serve_dir = ServeDir::new(&args.frontend_dir).fallback(spa_fallback);
 
+    // State for webpack runtime rewriting
+    let webpack_state = WebpackState {
+        frontend_dir: args.frontend_dir.clone(),
+        base_path: base_path.clone(),
+    };
+
     // Build frontend router that handles paths UNDER base_path (not base_path itself)
     // The "/" route is NOT included here because:
     // - nest("/micromegas", router_with_"/") would create /micromegas which conflicts
@@ -375,6 +466,17 @@ async fn main() -> Result<()> {
         // /index.html under the nested path
         .route("/index.html", get(serve_index_with_config))
         .with_state(index_state.clone())
+        // JS chunks need special handling to rewrite webpack runtime's public path
+        // This enables a single build to work with any base path without rebuilding
+        .route(
+            "/_next/static/chunks/{filename}",
+            get(serve_js_chunk).with_state(webpack_state.clone()),
+        )
+        // CSS files need font URL rewriting for runtime base path support
+        .route(
+            "/_next/static/css/{filename}",
+            get(serve_css_file).with_state(webpack_state),
+        )
         // All other paths: try static file, fall back to index.html for SPA
         .fallback_service(serve_dir);
 

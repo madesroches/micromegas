@@ -3,7 +3,7 @@
 import { Suspense, useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import { useSearchParams, useRouter, usePathname } from 'next/navigation'
 import { useMutation } from '@tanstack/react-query'
-import Link from 'next/link'
+import { AppLink } from '@/components/AppLink'
 import { AlertCircle, Clock } from 'lucide-react'
 import { PageLayout } from '@/components/layout'
 import { AuthGuard } from '@/components/AuthGuard'
@@ -316,9 +316,9 @@ function ProcessMetricsContent() {
           <div className="flex flex-col items-center justify-center h-64 bg-app-panel border border-theme-border rounded-lg">
             <AlertCircle className="w-10 h-10 text-accent-error mb-3" />
             <p className="text-theme-text-secondary">No process ID provided</p>
-            <Link href="/processes" className="text-accent-link hover:underline mt-2">
+            <AppLink href="/processes" className="text-accent-link hover:underline mt-2">
               Back to Processes
-            </Link>
+            </AppLink>
           </div>
         </div>
       </PageLayout>

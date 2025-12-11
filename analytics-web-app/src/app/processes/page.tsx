@@ -3,7 +3,7 @@
 import { Suspense, useState, useMemo, useCallback, useEffect, useRef } from 'react'
 import { useSearchParams, useRouter, usePathname } from 'next/navigation'
 import { useMutation } from '@tanstack/react-query'
-import Link from 'next/link'
+import { AppLink } from '@/components/AppLink'
 import { ChevronUp, ChevronDown } from 'lucide-react'
 import { PageLayout } from '@/components/layout'
 import { AuthGuard } from '@/components/AuthGuard'
@@ -303,12 +303,12 @@ function ProcessesPageContent() {
                       className="border-b border-theme-border hover:bg-app-card transition-colors"
                     >
                       <td className="px-4 py-3">
-                        <Link
+                        <AppLink
                           href={`/process?id=${row.process_id}&from=${encodeURIComponent(String(row.start_time))}&to=${encodeURIComponent(String(row.last_update_time))}`}
                           className="text-accent-link hover:underline"
                         >
                           {String(row.exe ?? '')}
-                        </Link>
+                        </AppLink>
                       </td>
                       <td className="hidden sm:table-cell px-4 py-3">
                         <CopyableProcessId
