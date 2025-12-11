@@ -248,11 +248,15 @@ async fn serve_index_with_config(
     ))
 }
 
-/// Serve JS chunks, rewriting webpack runtime's public path for runtime base path support.
+/// Serve JS chunks, rewriting all /_next/ paths for runtime base path support.
 ///
-/// Next.js bakes the webpack public path (r.p="/_next/") at build time.
-/// This handler intercepts chunk requests and rewrites the webpack runtime to use
-/// the runtime base path, enabling a single build to work with any base path.
+/// Next.js bakes many paths at build time:
+/// - Webpack public path: .p="/_next/"
+/// - Data fetching: "/_next/data/"
+/// - Static assets: "/_next/static/"
+/// - Image optimization: "/_next/image"
+///
+/// This handler rewrites ALL occurrences to use the runtime base path.
 async fn serve_js_chunk(
     Path(filename): Path<String>,
     State(state): State<WebpackState>,
@@ -263,44 +267,30 @@ async fn serve_js_chunk(
         .await
         .map_err(|e| (StatusCode::NOT_FOUND, format!("Chunk not found: {e}")))?;
 
-    // Only rewrite webpack runtime files
-    if filename.starts_with("webpack-") && filename.ends_with(".js") {
-        let js = String::from_utf8_lossy(&content);
+    let js = String::from_utf8_lossy(&content);
 
-        // Rewrite the webpack public path from /_next/ to {base_path}/_next/
-        // The webpack runtime sets: r.p="/_next/" (or r.p="/somepath/_next/" if built with basePath)
-        let modified_js = if let Some(start) = js.find(r#".p=""#) {
-            if let Some(end) = js[start + 4..].find(r#"_next/""#) {
-                // Replace everything between .p=" and _next/" with our base path
-                let before = &js[..start + 4];
-                let after = &js[start + 4 + end..];
-                format!("{before}{}/{after}", state.base_path)
-            } else {
-                js.into_owned()
-            }
-        } else {
-            js.into_owned()
-        };
+    // Rewrite all /_next/ references to include base path
+    // This handles:
+    // - .p="/_next/" (webpack public path)
+    // - "/_next/data/" (data fetching)
+    // - "/_next/static/" (static assets)
+    // - "/_next/image" (image optimization)
+    let modified_js = js
+        .replace(r#""/_next/"#, &format!(r#""{}/_next/"#, state.base_path))
+        .replace(r#"'/_next/"#, &format!(r#"'{}/_next/"#, state.base_path));
 
-        Ok((
-            [(
-                header::CONTENT_TYPE,
-                "application/javascript; charset=utf-8",
-            )],
-            modified_js.into_bytes(),
-        ))
-    } else {
-        // Serve other chunks as-is
-        let content_type = if filename.ends_with(".js") {
-            "application/javascript; charset=utf-8"
-        } else if filename.ends_with(".css") {
-            "text/css; charset=utf-8"
-        } else {
-            "application/octet-stream"
-        };
+    // Also handle .p= assignments that may have different formats
+    // e.g., .p="/_next/" or .p=""+"/_next/"
+    let modified_js = modified_js
+        .replace(r#".p="/_next/"#, &format!(r#".p="{}/_next/"#, state.base_path));
 
-        Ok(([(header::CONTENT_TYPE, content_type)], content))
-    }
+    Ok((
+        [(
+            header::CONTENT_TYPE,
+            "application/javascript; charset=utf-8",
+        )],
+        modified_js.into_bytes(),
+    ))
 }
 
 /// Serve CSS files, rewriting font URLs for runtime base path support.
