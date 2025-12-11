@@ -9,7 +9,7 @@ use axum::{
     http::StatusCode,
     middleware,
     response::{IntoResponse, Response},
-    routing::{get, get_service, post},
+    routing::{get, post},
 };
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
@@ -170,11 +170,14 @@ struct IndexState {
     base_path: String,
 }
 
-/// Serve index.html with runtime config injected
+/// Serve index.html with runtime config injected and asset paths rewritten
 ///
-/// This handler reads index.html from disk and injects a script tag with
-/// runtime configuration before the closing </head> tag. This allows the
-/// same frontend build to work with different base paths.
+/// This handler reads index.html from disk and:
+/// 1. Rewrites asset paths (/_next/, /icon.svg) to include the base path
+/// 2. Injects a script tag with runtime configuration
+///
+/// This allows the same frontend build to work with different base paths
+/// without requiring build-time configuration.
 async fn serve_index_with_config(
     State(state): State<IndexState>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
@@ -186,6 +189,12 @@ async fn serve_index_with_config(
             format!("Failed to read index.html: {e}"),
         )
     })?;
+
+    // Rewrite asset paths to include base path
+    // Next.js static export uses absolute paths like /_next/... and /icon.svg
+    let html = html
+        .replace("\"/_next/", &format!("\"{}/_next/", state.base_path))
+        .replace("\"/icon.svg", &format!("\"{}/icon.svg", state.base_path));
 
     // Build the config script to inject
     let config_script = format!(
@@ -210,11 +219,13 @@ async fn main() -> Result<()> {
     let cors_origin = std::env::var("MICROMEGAS_WEB_CORS_ORIGIN")
         .context("MICROMEGAS_WEB_CORS_ORIGIN environment variable not set")?;
 
-    // Read base path (optional, defaults to empty string for backwards compatibility)
+    // Read base path (required, e.g., "/micromegas")
     let base_path = std::env::var("MICROMEGAS_BASE_PATH")
-        .unwrap_or_default()
-        .trim_end_matches('/')
-        .to_string();
+        .context("MICROMEGAS_BASE_PATH environment variable not set")?;
+    let base_path = base_path.trim_end_matches('/').to_string();
+    if base_path.is_empty() || !base_path.starts_with('/') {
+        anyhow::bail!("MICROMEGAS_BASE_PATH must start with '/' (e.g., '/micromegas')");
+    }
 
     // Build auth state if authentication is enabled
     let auth_state = if !args.disable_auth {
@@ -319,31 +330,14 @@ async fn main() -> Result<()> {
     // Add auth routes (always - either real or stub)
     app = app.merge(auth_routes);
 
-    // Serve static files from frontend directory
-    // Use custom handler for index.html to inject runtime config
-    let serve_dir = ServeDir::new(&args.frontend_dir);
+    // Serve static files from frontend directory under the base path
+    // For SPA routing, non-file requests fall back to index.html (with config injection)
+    let spa_fallback = get(serve_index_with_config).with_state(index_state);
+    let serve_dir = ServeDir::new(&args.frontend_dir).fallback(spa_fallback);
 
-    // Mount static files at root or under base path
-    let app = if base_path.is_empty() {
-        // No base path: serve index.html at "/" and static files as fallback
-        let static_app = Router::new()
-            .route("/", get(serve_index_with_config))
-            .with_state(index_state)
-            .fallback_service(
-                get_service(serve_dir).handle_error(|_| async { StatusCode::NOT_FOUND }),
-            );
-        app.merge(static_app)
-    } else {
-        // With base path: serve index.html at /base_path, nest static files under /base_path
-        // We don't include "/" route in nested_static to avoid conflict with base_path_handler
-        let base_path_handler = Router::new()
-            .route(&base_path, get(serve_index_with_config))
-            .with_state(index_state);
-        let nested_static = Router::new().fallback_service(
-            get_service(serve_dir).handle_error(|_| async { StatusCode::NOT_FOUND }),
-        );
-        app.merge(base_path_handler).nest(&base_path, nested_static)
-    };
+    // Nest static files (with SPA fallback) under base_path
+    // This handles /base_path, /base_path/, /base_path/processes, /base_path/_next/*, etc.
+    let app = app.nest_service(&base_path, serve_dir);
 
     // NormalizePathLayer strips trailing slashes so /health/ matches /health
     let app = app

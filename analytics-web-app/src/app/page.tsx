@@ -1,15 +1,14 @@
 'use client'
 
 import { useEffect } from 'react'
-import { useRouter } from 'next/navigation'
+import { getConfig } from '@/lib/config'
 
 export default function HomePage() {
-  const router = useRouter()
-
   useEffect(() => {
-    // Use client-side redirect so Next.js basePath is respected
-    router.replace('/processes')
-  }, [router])
+    // Redirect to processes page using runtime base path
+    const { basePath } = getConfig()
+    window.location.replace(`${basePath}/processes`)
+  }, [])
 
   return null
 }
