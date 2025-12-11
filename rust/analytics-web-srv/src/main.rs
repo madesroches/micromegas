@@ -323,17 +323,26 @@ async fn main() -> Result<()> {
     // Use custom handler for index.html to inject runtime config
     let serve_dir = ServeDir::new(&args.frontend_dir);
 
-    // Build static file serving router with index.html config injection
-    let static_app = Router::new()
-        .route("/", get(serve_index_with_config))
-        .with_state(index_state)
-        .fallback_service(get_service(serve_dir).handle_error(|_| async { StatusCode::NOT_FOUND }));
-
     // Mount static files at root or under base path
     let app = if base_path.is_empty() {
+        // No base path: serve index.html at "/" and static files as fallback
+        let static_app = Router::new()
+            .route("/", get(serve_index_with_config))
+            .with_state(index_state)
+            .fallback_service(
+                get_service(serve_dir).handle_error(|_| async { StatusCode::NOT_FOUND }),
+            );
         app.merge(static_app)
     } else {
-        app.nest(&base_path, static_app)
+        // With base path: serve index.html at /base_path, nest static files under /base_path
+        // We don't include "/" route in nested_static to avoid conflict with base_path_handler
+        let base_path_handler = Router::new()
+            .route(&base_path, get(serve_index_with_config))
+            .with_state(index_state);
+        let nested_static = Router::new().fallback_service(
+            get_service(serve_dir).handle_error(|_| async { StatusCode::NOT_FOUND }),
+        );
+        app.merge(base_path_handler).nest(&base_path, nested_static)
     };
 
     // NormalizePathLayer strips trailing slashes so /health/ matches /health
