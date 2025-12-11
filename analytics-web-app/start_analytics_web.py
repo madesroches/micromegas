@@ -115,15 +115,42 @@ def kill_existing_frontend():
     except Exception:
         return False
 
+def normalize_base_path(path):
+    """Normalize base path to have leading slash and no trailing slash.
+
+    Args:
+        path: The base path string (e.g., 'mm', '/mm', '/mm/')
+
+    Returns:
+        Normalized path (e.g., '/mm') or empty string if no path
+    """
+    if not path:
+        return ""
+    # Add leading slash if missing
+    if not path.startswith("/"):
+        path = "/" + path
+    # Remove trailing slashes
+    return path.rstrip("/")
+
+
 def setup_environment():
     """Set up environment variables
 
     Returns:
-        bool: True if OIDC auth is configured, False if running without auth
+        tuple: (auth_enabled: bool, base_path: str)
+            - auth_enabled: True if OIDC auth is configured, False if running without auth
+            - base_path: Normalized base path (e.g., '/mm' or '')
     """
     # Generate a random secret for development if not set
     import secrets
     dev_secret = secrets.token_urlsafe(32)
+
+    # Handle base path - normalize it if provided
+    base_path = normalize_base_path(os.environ.get("MICROMEGAS_BASE_PATH", ""))
+    if base_path:
+        # Update the environment variable with normalized value
+        os.environ["MICROMEGAS_BASE_PATH"] = base_path
+        print_status(f"Using base path: {base_path}", "info")
 
     env_vars = {
         "MICROMEGAS_FLIGHTSQL_URL": "grpc://127.0.0.1:50051",
@@ -153,7 +180,7 @@ def setup_environment():
     else:
         print_status("MICROMEGAS_OIDC_CONFIG not set - will run with --disable-auth", "warning")
 
-    return oidc_configured
+    return oidc_configured, base_path
 
 def main():
     parser = argparse.ArgumentParser(description="Start Analytics Web App Development Environment")
@@ -184,7 +211,7 @@ def main():
         print()
 
     # Setup environment
-    auth_enabled = setup_environment()
+    auth_enabled, base_path = setup_environment()
 
     # Override auth if --disable-auth flag is passed
     if args.disable_auth:
@@ -266,12 +293,13 @@ def main():
                     print_status(f"Could not get backend output: {e}", "warning")
 
                 print()
-                return 1            # Try health check
+                return 1            # Try health check (health endpoint is at {base_path}/health)
             try:
                 import urllib.request
                 import urllib.error
 
-                response = urllib.request.urlopen("http://localhost:8000/health", timeout=1)
+                health_url = f"http://localhost:8000{base_path}/health"
+                response = urllib.request.urlopen(health_url, timeout=1)
                 if response.status == 200:
                     backend_ready = True
                     print_status("Backend server is ready!", "success")
@@ -301,10 +329,15 @@ def main():
                 check=True
             )
 
-        # Start dev server
+        # Start dev server with base path if configured
+        frontend_env = os.environ.copy()
+        if base_path:
+            frontend_env["NEXT_PUBLIC_BASE_PATH"] = base_path
+
         frontend_proc = subprocess.Popen(
             ["yarn", "dev"],
-            cwd=frontend_dir
+            cwd=frontend_dir,
+            env=frontend_env
         )
         processes.append(frontend_proc)
 
@@ -312,9 +345,14 @@ def main():
         print()
         print_status("Analytics Web App is starting up!", "success")
         print()
-        print_status("Backend API:    http://localhost:8000/api", "info")
+        print_status(f"Frontend:       http://localhost:3000{base_path}/", "info")
+        print_status(f"Backend:        http://localhost:8000{base_path}/", "info")
+        if base_path:
+            print_status(f"Note: Using base path '{base_path}'", "info")
         print()
-        print_status("Press Ctrl+C to stop all services", "warning")        # Wait for processes
+        print_status("Press Ctrl+C to stop all services", "warning")
+
+        # Wait for processes
         while True:
             time.sleep(1)
 
