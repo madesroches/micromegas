@@ -45,7 +45,7 @@ use tower_http::{cors::CorsLayer, normalize_path::NormalizePathLayer, services::
 #[command(author, version, about, long_about = None)]
 struct Args {
     /// Server port
-    #[arg(short, long, default_value = "3000")]
+    #[arg(short, long, default_value = "3000", env = "MICROMEGAS_PORT")]
     port: u16,
 
     /// Frontend build directory
@@ -323,21 +323,17 @@ async fn main() -> Result<()> {
     // Use custom handler for index.html to inject runtime config
     let serve_dir = ServeDir::new(&args.frontend_dir);
 
-    // Build the app with static file serving
+    // Build static file serving router with index.html config injection
+    let static_app = Router::new()
+        .route("/", get(serve_index_with_config))
+        .with_state(index_state)
+        .fallback_service(get_service(serve_dir).handle_error(|_| async { StatusCode::NOT_FOUND }));
+
+    // Mount static files at root or under base path
     let app = if base_path.is_empty() {
-        // No base path - serve at root
-        app.route("/", get(serve_index_with_config))
-            .with_state(index_state.clone())
-            .fallback_service(
-                get_service(serve_dir).handle_error(|_| async { StatusCode::NOT_FOUND }),
-            )
+        app.merge(static_app)
     } else {
-        // With base path - serve index at base_path and base_path/
-        let index_route = format!("{base_path}/");
-        app.route(&index_route, get(serve_index_with_config))
-            .route(&base_path, get(serve_index_with_config))
-            .with_state(index_state.clone())
-            .nest_service(&base_path, get_service(serve_dir))
+        app.nest(&base_path, static_app)
     };
 
     // NormalizePathLayer strips trailing slashes so /health/ matches /health
