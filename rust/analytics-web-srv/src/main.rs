@@ -323,33 +323,17 @@ async fn main() -> Result<()> {
     // Use custom handler for index.html to inject runtime config
     let serve_dir = ServeDir::new(&args.frontend_dir);
 
-    // Build the app with static file serving
-    let app = if base_path.is_empty() {
-        // No base path - serve at root
-        app.route("/", get(serve_index_with_config))
-            .with_state(index_state.clone())
-            .fallback_service(
-                get_service(serve_dir).handle_error(|_| async { StatusCode::NOT_FOUND }),
-            )
-    } else {
-        // With base path - create a nested router to avoid route conflicts
-        // The nested router serves index.html with config at "/" (which maps to base_path)
-        // and falls back to serving static files for all other paths
-        let nested_app = Router::new()
-            .route("/", get(serve_index_with_config))
-            .with_state(index_state.clone())
-            .fallback_service(
-                get_service(serve_dir).handle_error(|_| async { StatusCode::NOT_FOUND }),
-            );
+    // Build static file serving router with index.html config injection
+    let static_app = Router::new()
+        .route("/", get(serve_index_with_config))
+        .with_state(index_state)
+        .fallback_service(get_service(serve_dir).handle_error(|_| async { StatusCode::NOT_FOUND }));
 
-        // Add a placeholder route using the same handler type to ensure consistent
-        // state type inference across both if/else branches, then nest the router
-        app.route(
-            "/__placeholder_never_matches__",
-            get(serve_index_with_config),
-        )
-        .with_state(index_state.clone())
-        .nest(&base_path, nested_app)
+    // Mount static files at root or under base path
+    let app = if base_path.is_empty() {
+        app.merge(static_app)
+    } else {
+        app.nest(&base_path, static_app)
     };
 
     // NormalizePathLayer strips trailing slashes so /health/ matches /health
