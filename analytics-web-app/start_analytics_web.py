@@ -145,12 +145,11 @@ def setup_environment():
     import secrets
     dev_secret = secrets.token_urlsafe(32)
 
-    # Handle base path - normalize it if provided
-    base_path = normalize_base_path(os.environ.get("MICROMEGAS_BASE_PATH", ""))
-    if base_path:
-        # Update the environment variable with normalized value
-        os.environ["MICROMEGAS_BASE_PATH"] = base_path
-        print_status(f"Using base path: {base_path}", "info")
+    # Handle base path - defaults to /mmlocal for local dev to emphasize it's dynamic
+    base_path = normalize_base_path(os.environ.get("MICROMEGAS_BASE_PATH", "/mmlocal"))
+    # Update the environment variable with normalized value
+    os.environ["MICROMEGAS_BASE_PATH"] = base_path
+    print_status(f"Using base path: {base_path}", "info")
 
     env_vars = {
         "MICROMEGAS_FLIGHTSQL_URL": "grpc://127.0.0.1:50051",
