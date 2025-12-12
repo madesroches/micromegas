@@ -67,7 +67,10 @@ To get started with Micromegas, please refer to the [Getting Started](https://ma
 ## Current Status & Roadmap
 
 ### December 2025 - v0.17.0 (In Progress)
-* Analytics web app rework: dark theme, time range picker, metrics charting
+* **Analytics Web App** - A brand new interface for exploring your telemetry data:
+  * **SQL Query Editor** with syntax highlighting, query history, and macros that integrate with UI controls
+  * **Performance Analytics** - Visualize thread activity timelines and export traces to [Perfetto](https://ui.perfetto.dev/) for deep performance analysis
+  * Dark theme, time range picker, and interactive metrics charting
 * Per-service Docker images
 
 ### November 2025 - v0.16.0
