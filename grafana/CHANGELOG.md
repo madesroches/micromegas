@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.17.0 (2025-12-12)
+
+### Improvements
+- Update plugin logo to Micromegas branding (#617)
+
+### Bug Fixes
+- Fix UTF-8 user attribution headers with percent-encoding (#638)
+
 ## 0.16.0 (2025-11-28)
 
 ### Bug Fixes

@@ -8,6 +8,8 @@ This file documents the historical progress of the Micromegas project. For curre
  * **Analytics Web App Major Rework:**
    * Complete UI redesign with dark theme and Micromegas branding (#621, #622, #623)
    * Add Grafana-style time range picker with relative and absolute time support (#631)
+   * Add performance analysis screen with thread coverage timeline (#642, #643)
+   * Add Perfetto trace integration with split button for browser/download (#660, #661)
    * Add process metrics screen with time-series charting (#639)
    * Add process properties display panel (#634)
    * Add multi-word search to process list and log screens (#632, #633)
@@ -15,14 +17,20 @@ This file documents the historical progress of the Micromegas project. For curre
    * Improve time column formatting in process logs (#624)
    * Pass time range through process navigation links (#636)
    * Add schema documentation links to SQL panels (#635)
- * **Docker & Deployment:**
-   * Add per-service Docker images and modernize build scripts (#637)
+   * UX improvements and polish (#645, #647)
+ * **Deployment & Configuration:**
+   * Add per-service Docker images and modernize build scripts (#637, #649)
+   * Add BASE_PATH and MICROMEGAS_PORT env vars for reverse proxy deployments (#650, #651, #654, #656, #658, #659)
  * **Unreal Engine:**
    * Add scalability and VSync context to telemetry (#625)
    * Document API key authentication (#629)
- * **Security:**
+ * **Security & Bug Fixes:**
    * Fix CVE-2025-66478: Update Next.js to 15.5.7 (#626)
+   * Fix urllib3 security vulnerabilities and OIDC token validation bug (#641)
    * Fix UTF-8 user attribution headers with percent-encoding (#638)
+   * Handle empty MICROMEGAS_TELEMETRY_URL environment variable (#644)
+ * **Documentation:**
+   * Fix documentation dark mode readability (#648)
  * **Code Quality:**
    * Fix rustdoc bare URL warnings in auth crate (#630)
 
