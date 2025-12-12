@@ -1,5 +1,5 @@
 'use client'
-// v2025.12.11 - fix base path routing for login redirect
+
 import { useEffect } from 'react'
 import { usePathname } from 'next/navigation'
 import { useAuth } from '@/lib/auth'

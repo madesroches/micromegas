@@ -279,13 +279,6 @@ async fn serve_js_chunk(
         .replace(r#""/_next/"#, &format!(r#""{}/_next/"#, state.base_path))
         .replace(r#"'/_next/"#, &format!(r#"'{}/_next/"#, state.base_path));
 
-    // Also handle .p= assignments that may have different formats
-    // e.g., .p="/_next/" or .p=""+"/_next/"
-    let modified_js = modified_js.replace(
-        r#".p="/_next/"#,
-        &format!(r#".p="{}/_next/"#, state.base_path),
-    );
-
     Ok((
         [(
             header::CONTENT_TYPE,
