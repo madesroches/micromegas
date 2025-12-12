@@ -123,11 +123,11 @@ Current versions should already be at 0.17.0:
 - [x] **Update Grafana CHANGELOG**: `/grafana/CHANGELOG.md` ✅ Added v0.17.0 section
 
 ### 4. Grafana Plugin Preparation
-- [ ] **Verify plugin.json metadata**:
-  - [ ] Version matches package.json (0.17.0)
-  - [ ] Author information is correct
-  - [ ] Links (documentation, issues) are correct
-- [ ] **Build plugin archive**: Use `./build-plugin.sh` script (NOT manual tar)
+- [x] **Verify plugin.json metadata**:
+  - [x] Version matches package.json (0.17.0) ✅ Uses %VERSION% placeholder
+  - [x] Author information is correct ✅ Marc-Antoine Desroches
+  - [x] Links (documentation, issues) are correct ✅ Points to madesroches/micromegas
+- [x] **Build plugin archive**: Use `./build-plugin.sh` script (NOT manual tar) ✅ Built 51MB archive
 
 ### 5. Git Preparation
 - [ ] Merge release branch to main (if applicable)
