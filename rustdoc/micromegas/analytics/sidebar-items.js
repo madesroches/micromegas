@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"mod":["arrow_properties","arrow_utils","async_block_processing","async_events_table","call_tree","delete","dfext","lakehouse","log_entries_table","log_entry","measure","metadata","metrics_table","payload","properties","record_batch_transformer","replication","response_writer","scope","span_table","sql_arrow_bridge","thread_block_processor","time"]};
