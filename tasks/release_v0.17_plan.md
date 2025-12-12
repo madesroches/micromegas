@@ -109,11 +109,11 @@ This document tracks the release of version 0.17.0 of Micromegas, which includes
 
 ### 2. Version Verification
 Current versions should already be at 0.17.0:
-- [ ] Verify workspace version in `/rust/Cargo.toml` (should be 0.17.0)
-- [ ] Verify Python version in `/python/micromegas/pyproject.toml`
-- [ ] Verify Grafana plugin version in `/grafana/package.json` (should be 0.17.0)
-- [ ] Verify analytics web app version in `/analytics-web-app/package.json`
-- [ ] Check that all workspace dependencies reference 0.17.0
+- [x] Verify workspace version in `/rust/Cargo.toml` (should be 0.17.0) ✅ Confirmed: 0.17.0
+- [x] Verify Python version in `/python/micromegas/pyproject.toml` ✅ Confirmed: 0.17.0
+- [x] Verify Grafana plugin version in `/grafana/package.json` (should be 0.17.0) ✅ Confirmed: 0.17.0
+- [x] Verify analytics web app version in `/analytics-web-app/package.json` ✅ Fixed: 0.15.0 → 0.17.0
+- [x] Check that all workspace dependencies reference 0.17.0 ✅ All 9 crates reference 0.17.0
 
 ### 3. Documentation Updates
 
