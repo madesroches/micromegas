@@ -3,6 +3,7 @@
 import React from 'react'
 import { useRouter } from 'next/navigation'
 import { ApiErrorException, AuthenticationError } from '@/lib/api'
+import { appLink } from '@/lib/config'
 import { useToast } from '@/lib/use-toast'
 
 interface ErrorBoundaryProps {
@@ -69,7 +70,7 @@ export function useApiErrorHandler() {
     // Handle authentication errors by redirecting to login
     if (error instanceof AuthenticationError) {
       const returnUrl = encodeURIComponent(window.location.pathname)
-      router.push(`/login?return_url=${returnUrl}`)
+      router.push(appLink(`/login?return_url=${returnUrl}`))
       return
     }
 

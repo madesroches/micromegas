@@ -3,6 +3,7 @@
 import { Suspense, useEffect } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { useAuth } from '@/lib/auth'
+import { getConfig } from '@/lib/config'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { AlertCircle, LogIn } from 'lucide-react'
@@ -12,8 +13,16 @@ function LoginContent() {
   const { status, error, login } = useAuth()
   const searchParams = useSearchParams()
 
-  const returnUrl = searchParams.get('return_url') || '/'
+  const returnUrlParam = searchParams.get('return_url')
   const authError = searchParams.get('error')
+
+  // Build the return URL, ensuring it includes the base path if it's a relative path
+  const { basePath } = getConfig()
+  const returnUrl = returnUrlParam
+    ? (returnUrlParam.startsWith('/') && !returnUrlParam.startsWith(basePath)
+      ? `${basePath}${returnUrlParam}`
+      : returnUrlParam)
+    : `${basePath}/processes`
 
   useEffect(() => {
     // If already authenticated, redirect to return URL

@@ -1,25 +1,47 @@
 import { render, screen, waitFor } from '@testing-library/react'
 import { AuthGuard } from '../AuthGuard'
 import { AuthProvider } from '@/lib/auth'
-import { useRouter } from 'next/navigation'
 
 // Mock fetch globally
 global.fetch = jest.fn()
 
-// Mock Next.js router
-const mockPush = jest.fn()
+// Mock Next.js navigation
 jest.mock('next/navigation', () => ({
-  useRouter: () => ({
-    push: mockPush,
-  }),
   usePathname: () => '/',
 }))
+
+// Mock window.location
+const originalLocation = window.location
+const mockLocationHref = jest.fn()
+
+beforeAll(() => {
+  delete (window as unknown as { location?: Location }).location
+  const mockLocation = { ...originalLocation, href: '' }
+  Object.defineProperty(window, 'location', {
+    value: mockLocation,
+    writable: true,
+    configurable: true,
+  })
+  Object.defineProperty(window.location, 'href', {
+    set: mockLocationHref,
+    get: () => '',
+    configurable: true,
+  })
+})
+
+afterAll(() => {
+  Object.defineProperty(window, 'location', {
+    value: originalLocation,
+    writable: true,
+    configurable: true,
+  })
+})
 
 describe('AuthGuard', () => {
   beforeEach(() => {
     jest.clearAllMocks()
     ;(global.fetch as jest.Mock).mockReset()
-    mockPush.mockClear()
+    mockLocationHref.mockClear()
   })
 
   afterEach(() => {
@@ -84,7 +106,10 @@ describe('AuthGuard', () => {
     )
 
     await waitFor(() => {
-      expect(mockPush).toHaveBeenCalledWith('/login?return_url=%2F')
+      // Base path from config defaults to http://localhost:8000
+      expect(mockLocationHref).toHaveBeenCalledWith(
+        'http://localhost:8000/login?return_url=%2F'
+      )
     })
 
     expect(screen.queryByText('Protected Content')).not.toBeInTheDocument()

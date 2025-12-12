@@ -1,7 +1,7 @@
 'use client'
 
-import Link from 'next/link'
 import { usePathname } from 'next/navigation'
+import { AppLink } from '@/components/AppLink'
 import { LayoutGrid } from 'lucide-react'
 
 interface NavItem {
@@ -34,7 +34,7 @@ export function Sidebar() {
     <aside className="hidden sm:flex w-14 bg-app-sidebar border-r border-theme-border flex-col py-3">
       <nav className="flex flex-col gap-1">
         {navItems.map((item) => (
-          <Link
+          <AppLink
             key={item.href}
             href={item.href}
             className={`group relative flex items-center justify-center w-10 h-10 mx-2 rounded-md transition-colors ${
@@ -48,7 +48,7 @@ export function Sidebar() {
             <span className="absolute left-16 px-2 py-1 bg-theme-border text-theme-text-primary text-sm rounded whitespace-nowrap opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-opacity z-50">
               {item.label}
             </span>
-          </Link>
+          </AppLink>
         ))}
       </nav>
     </aside>

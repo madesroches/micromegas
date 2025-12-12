@@ -4,12 +4,12 @@ mod queries;
 use anyhow::{Context, Result};
 use auth::{AuthState, AuthToken, OidcClientConfig};
 use axum::{
-    Extension, Json, Router,
+    Extension, Json, Router, ServiceExt,
     extract::{Path, State},
     http::StatusCode,
     middleware,
     response::{IntoResponse, Response},
-    routing::{get, get_service, post},
+    routing::{get, post},
 };
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
@@ -39,6 +39,7 @@ use micromegas_auth::{axum::auth_middleware, types::AuthProvider};
 use queries::{query_all_processes, query_nb_trace_events};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, pin::Pin, sync::Arc, time::Duration};
+use tower::Layer;
 use tower_http::{cors::CorsLayer, normalize_path::NormalizePathLayer, services::ServeDir};
 
 #[derive(Parser, Debug)]
@@ -170,22 +171,67 @@ struct IndexState {
     base_path: String,
 }
 
-/// Serve index.html with runtime config injected
+/// State for serving webpack runtime with rewritten public path
+#[derive(Clone)]
+struct WebpackState {
+    frontend_dir: String,
+    base_path: String,
+}
+
+/// Serve the appropriate HTML file with runtime config injected and asset paths rewritten
 ///
-/// This handler reads index.html from disk and injects a script tag with
-/// runtime configuration before the closing </head> tag. This allows the
-/// same frontend build to work with different base paths.
+/// This handler:
+/// 1. Checks if a specific HTML file exists for the request path (e.g., /login -> login.html)
+/// 2. Falls back to index.html for paths without a matching HTML file
+/// 3. Rewrites asset paths (/_next/, /icon.svg) to include the base path
+/// 4. Injects a script tag with runtime configuration
+///
+/// This allows the same frontend build to work with different base paths
+/// without requiring build-time configuration.
 async fn serve_index_with_config(
     State(state): State<IndexState>,
+    request: axum::extract::Request,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
-    let index_path = format!("{}/index.html", state.frontend_dir);
+    // Extract the path after the base path to find the matching HTML file
+    // e.g., /micromegas/login -> login.html, /micromegas/processes -> processes.html
+    let request_path = request.uri().path();
+    let path_after_base = request_path
+        .strip_prefix(&state.base_path)
+        .unwrap_or(request_path)
+        .trim_start_matches('/');
 
-    let html = tokio::fs::read_to_string(&index_path).await.map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Failed to read index.html: {e}"),
-        )
-    })?;
+    // Try to find a matching HTML file for this path
+    // Next.js static export creates files like: login.html, processes.html, process.html
+    let html_file = if path_after_base.is_empty() || path_after_base == "index.html" {
+        "index.html".to_string()
+    } else {
+        // Strip .html if already present, then add it back
+        let base_name = path_after_base.trim_end_matches(".html");
+        format!("{base_name}.html")
+    };
+
+    let html_path = format!("{}/{html_file}", state.frontend_dir);
+
+    // Try the specific HTML file first, fall back to index.html
+    let html = match tokio::fs::read_to_string(&html_path).await {
+        Ok(content) => content,
+        Err(_) => {
+            // Fall back to index.html for dynamic routes or unknown paths
+            let index_path = format!("{}/index.html", state.frontend_dir);
+            tokio::fs::read_to_string(&index_path).await.map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Failed to read index.html: {e}"),
+                )
+            })?
+        }
+    };
+
+    // Rewrite asset paths to include base path
+    // Next.js static export uses absolute paths like /_next/... and /icon.svg
+    let html = html
+        .replace("\"/_next/", &format!("\"{}/_next/", state.base_path))
+        .replace("\"/icon.svg", &format!("\"{}/icon.svg", state.base_path));
 
     // Build the config script to inject
     let config_script = format!(
@@ -202,6 +248,76 @@ async fn serve_index_with_config(
     ))
 }
 
+/// Serve JS chunks, rewriting all /_next/ paths for runtime base path support.
+///
+/// Next.js bakes many paths at build time:
+/// - Webpack public path: .p="/_next/"
+/// - Data fetching: "/_next/data/"
+/// - Static assets: "/_next/static/"
+/// - Image optimization: "/_next/image"
+///
+/// This handler rewrites ALL occurrences to use the runtime base path.
+async fn serve_js_chunk(
+    Path(filename): Path<String>,
+    State(state): State<WebpackState>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let file_path = format!("{}/_next/static/chunks/{filename}", state.frontend_dir);
+
+    let content = tokio::fs::read(&file_path)
+        .await
+        .map_err(|e| (StatusCode::NOT_FOUND, format!("Chunk not found: {e}")))?;
+
+    let js = String::from_utf8_lossy(&content);
+
+    // Rewrite all /_next/ references to include base path
+    // This handles:
+    // - .p="/_next/" (webpack public path)
+    // - "/_next/data/" (data fetching)
+    // - "/_next/static/" (static assets)
+    // - "/_next/image" (image optimization)
+    let modified_js = js
+        .replace(r#""/_next/"#, &format!(r#""{}/_next/"#, state.base_path))
+        .replace(r#"'/_next/"#, &format!(r#"'{}/_next/"#, state.base_path));
+
+    // Also handle .p= assignments that may have different formats
+    // e.g., .p="/_next/" or .p=""+"/_next/"
+    let modified_js = modified_js.replace(
+        r#".p="/_next/"#,
+        &format!(r#".p="{}/_next/"#, state.base_path),
+    );
+
+    Ok((
+        [(
+            header::CONTENT_TYPE,
+            "application/javascript; charset=utf-8",
+        )],
+        modified_js.into_bytes(),
+    ))
+}
+
+/// Serve CSS files, rewriting font URLs for runtime base path support.
+///
+/// Next.js bakes font URLs (url(/_next/static/media/...)) at build time.
+/// This handler rewrites those URLs to include the runtime base path.
+async fn serve_css_file(
+    Path(filename): Path<String>,
+    State(state): State<WebpackState>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let file_path = format!("{}/_next/static/css/{filename}", state.frontend_dir);
+
+    let content = tokio::fs::read_to_string(&file_path)
+        .await
+        .map_err(|e| (StatusCode::NOT_FOUND, format!("CSS not found: {e}")))?;
+
+    // Rewrite font URLs from url(/_next/...) to url({base_path}/_next/...)
+    let modified_css = content.replace("url(/_next/", &format!("url({}/_next/", state.base_path));
+
+    Ok((
+        [(header::CONTENT_TYPE, "text/css; charset=utf-8")],
+        modified_css,
+    ))
+}
+
 #[micromegas_main(interop_max_level = "info")]
 async fn main() -> Result<()> {
     let args = Args::parse();
@@ -210,11 +326,13 @@ async fn main() -> Result<()> {
     let cors_origin = std::env::var("MICROMEGAS_WEB_CORS_ORIGIN")
         .context("MICROMEGAS_WEB_CORS_ORIGIN environment variable not set")?;
 
-    // Read base path (optional, defaults to empty string for backwards compatibility)
+    // Read base path (required, e.g., "/micromegas")
     let base_path = std::env::var("MICROMEGAS_BASE_PATH")
-        .unwrap_or_default()
-        .trim_end_matches('/')
-        .to_string();
+        .context("MICROMEGAS_BASE_PATH environment variable not set")?;
+    let base_path = base_path.trim_end_matches('/').to_string();
+    if base_path.is_empty() || !base_path.starts_with('/') {
+        anyhow::bail!("MICROMEGAS_BASE_PATH must start with '/' (e.g., '/micromegas')");
+    }
 
     // Build auth state if authentication is enabled
     let auth_state = if !args.disable_auth {
@@ -319,27 +437,60 @@ async fn main() -> Result<()> {
     // Add auth routes (always - either real or stub)
     app = app.merge(auth_routes);
 
-    // Serve static files from frontend directory
-    // Use custom handler for index.html to inject runtime config
-    let serve_dir = ServeDir::new(&args.frontend_dir);
+    // Serve static files from frontend directory under the base path
+    // index.html needs special handling to inject runtime config
+    // SPA routes fall back to index.html for client-side routing
+    let spa_fallback = get(serve_index_with_config).with_state(index_state.clone());
+    let serve_dir = ServeDir::new(&args.frontend_dir).fallback(spa_fallback);
 
-    // Build static file serving router with index.html config injection
-    let static_app = Router::new()
-        .route("/", get(serve_index_with_config))
-        .with_state(index_state)
-        .fallback_service(get_service(serve_dir).handle_error(|_| async { StatusCode::NOT_FOUND }));
-
-    // Mount static files at root or under base path
-    let app = if base_path.is_empty() {
-        app.merge(static_app)
-    } else {
-        app.nest(&base_path, static_app)
+    // State for webpack runtime rewriting
+    let webpack_state = WebpackState {
+        frontend_dir: args.frontend_dir.clone(),
+        base_path: base_path.clone(),
     };
 
-    // NormalizePathLayer strips trailing slashes so /health/ matches /health
-    let app = app
-        .layer(NormalizePathLayer::trim_trailing_slash())
-        .layer(cors_layer);
+    // Build frontend router that handles paths UNDER base_path (not base_path itself)
+    // The "/" route is NOT included here because:
+    // - nest("/micromegas", router_with_"/") would create /micromegas which conflicts
+    //   with our explicit route for the exact base path
+    // - We handle /micromegas exactly with a separate route below
+    let frontend = Router::new()
+        // /index.html under the nested path
+        .route("/index.html", get(serve_index_with_config))
+        .with_state(index_state.clone())
+        // JS chunks need special handling to rewrite webpack runtime's public path
+        // This enables a single build to work with any base path without rebuilding
+        .route(
+            "/_next/static/chunks/{filename}",
+            get(serve_js_chunk).with_state(webpack_state.clone()),
+        )
+        // CSS files need font URL rewriting for runtime base path support
+        .route(
+            "/_next/static/css/{filename}",
+            get(serve_css_file).with_state(webpack_state),
+        )
+        // All other paths: try static file, fall back to index.html for SPA
+        .fallback_service(serve_dir);
+
+    // Add route for exact base_path match
+    // This handles /micromegas -> serve index with config
+    // nest() only matches /micromegas/* not /micromegas itself
+    let app = app.route(
+        &base_path,
+        get(serve_index_with_config).with_state(index_state),
+    );
+
+    // Nest frontend under base_path - handles /base_path/*
+    let app = app.nest(&base_path, frontend);
+
+    // Add CORS layer to the router
+    let app = app.layer(cors_layer);
+
+    // IMPORTANT: NormalizePathLayer must WRAP the router, not be added via .layer()
+    // Router::layer() runs AFTER routing, but we need trailing slash normalization
+    // BEFORE routing so /micromegas/ matches the /micromegas route.
+    // See: https://github.com/tokio-rs/axum/discussions/2377
+    let app = NormalizePathLayer::trim_trailing_slash().layer(app);
 
     let addr = format!("0.0.0.0:{}", args.port);
     println!("Analytics web server starting on {}", addr);
@@ -356,7 +507,9 @@ async fn main() -> Result<()> {
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     axum::serve(
         listener,
-        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        ServiceExt::<axum::extract::Request>::into_make_service_with_connect_info::<
+            std::net::SocketAddr,
+        >(app),
     )
     .await?;
 
