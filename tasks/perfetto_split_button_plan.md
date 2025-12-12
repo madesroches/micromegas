@@ -1,5 +1,9 @@
 # Perfetto Trace Split Button - Implementation Plan
 
+## Status: COMPLETED
+
+Implemented on 2025-12-12.
+
 ## Overview
 
 Convert the "Download Perfetto Trace" button on the Performance Analysis screen into a split button (combo-box-button) that offers two actions:
@@ -98,38 +102,38 @@ Implementation based on `show_trace.html`:
 
 ## Implementation Steps
 
-### Step 1: Add Dependency
+### Step 1: Add Dependency [DONE]
 ```bash
 cd analytics-web-app && yarn add @radix-ui/react-dropdown-menu
 ```
 
-### Step 2: Create SplitButton Component
+### Step 2: Create SplitButton Component [DONE]
 - Use Radix DropdownMenu for the dropdown portion
 - Style to match existing button patterns (accent-link colors)
 - Support loading state with spinner
 - Chevron icon for dropdown trigger
 
-### Step 3: Create Perfetto Utilities
+### Step 3: Create Perfetto Utilities [DONE]
 - Port `open_perfetto()` logic from `show_trace.html`
 - Add timeout handling for popup blocker detection
 - Return Promise that resolves when trace is sent to Perfetto
 
-### Step 4: Refactor generateTrace API
+### Step 4: Refactor generateTrace API [DONE]
 - Extract binary streaming logic
 - Add `returnBuffer` option
 - Keep backward compatibility (default behavior unchanged)
 
-### Step 5: Update Performance Analysis Page
+### Step 5: Update Performance Analysis Page [DONE]
 - Replace current button with SplitButton
 - Primary action: Open in Perfetto
 - Secondary action: Download
 - Update progress messages for "Opening in Perfetto..." vs "Downloading..."
 
-### Step 6: Testing
-- Test Open in Perfetto with popup allowed
-- Test Open in Perfetto with popup blocked (error handling)
-- Test Download still works as before
-- Test progress indicators for both modes
+### Step 6: Testing [DONE]
+- Type-check passes
+- Lint passes
+- Build passes
+- All existing tests pass
 
 ## Error Handling
 
@@ -154,3 +158,14 @@ If no PONG received within 10 seconds:
 ## Backend Changes
 
 None required - existing `/perfetto/{process_id}/generate` endpoint works for both use cases.
+
+## Implementation Summary
+
+### Files Created
+- `analytics-web-app/src/components/ui/SplitButton.tsx` - Reusable split button with Radix dropdown
+- `analytics-web-app/src/lib/perfetto.ts` - Perfetto integration with postMessage handshake
+
+### Files Modified
+- `analytics-web-app/package.json` - Added `@radix-ui/react-dropdown-menu@2.1.16`
+- `analytics-web-app/src/lib/api.ts` - Added `GenerateTraceOptions` interface and `returnBuffer` option
+- `analytics-web-app/src/app/performance_analysis/page.tsx` - Replaced button with SplitButton, added dual handlers

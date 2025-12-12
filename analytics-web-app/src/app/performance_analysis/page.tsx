@@ -4,7 +4,8 @@ import { Suspense, useState, useCallback, useMemo, useEffect, useRef } from 'rea
 import { useSearchParams, useRouter, usePathname } from 'next/navigation'
 import { useMutation } from '@tanstack/react-query'
 import { AppLink } from '@/components/AppLink'
-import { AlertCircle, Clock, Download } from 'lucide-react'
+import { SplitButton } from '@/components/ui/SplitButton'
+import { AlertCircle, Clock, Download, ExternalLink } from 'lucide-react'
 import { PageLayout } from '@/components/layout'
 import { AuthGuard } from '@/components/AuthGuard'
 import { CopyableProcessId } from '@/components/CopyableProcessId'
@@ -13,6 +14,7 @@ import { ErrorBanner } from '@/components/ErrorBanner'
 import { TimeSeriesChart, ChartAxisBounds } from '@/components/TimeSeriesChart'
 import { ThreadCoverageTimeline } from '@/components/ThreadCoverageTimeline'
 import { executeSqlQuery, toRowObjects, generateTrace } from '@/lib/api'
+import { openInPerfetto, PerfettoError } from '@/lib/perfetto'
 import { useTimeRange } from '@/hooks/useTimeRange'
 import { GenerateTraceRequest, ProgressUpdate, ThreadSegment, ThreadCoverage } from '@/types'
 
@@ -111,6 +113,7 @@ function PerformanceAnalysisContent() {
   const [traceEventCount, setTraceEventCount] = useState<number | null>(null)
   const [traceEventCountLoading, setTraceEventCountLoading] = useState(false)
   const [isGenerating, setIsGenerating] = useState(false)
+  const [traceMode, setTraceMode] = useState<'perfetto' | 'download' | null>(null)
   const [progress, setProgress] = useState<ProgressUpdate | null>(null)
   const [traceError, setTraceError] = useState<string | null>(null)
   const [chartAxisBounds, setChartAxisBounds] = useState<ChartAxisBounds | null>(null)
@@ -391,10 +394,64 @@ function PerformanceAnalysisContent() {
     setChartAxisBounds(bounds)
   }, [])
 
-  const handleGenerateTrace = async () => {
+  const handleOpenInPerfetto = async () => {
     if (!processId) return
 
     setIsGenerating(true)
+    setTraceMode('perfetto')
+    setProgress(null)
+    setTraceError(null)
+
+    const request: GenerateTraceRequest = {
+      include_async_spans: true,
+      include_thread_spans: true,
+      time_range: {
+        begin: timeRange.from.toISOString(),
+        end: timeRange.to.toISOString(),
+      },
+    }
+
+    try {
+      // Generate trace and get buffer
+      const buffer = await generateTrace(processId, request, (update) => {
+        setProgress(update)
+      }, { returnBuffer: true })
+
+      if (!buffer) {
+        throw new Error('No trace data received')
+      }
+
+      // Open in Perfetto
+      setProgress({ type: 'progress', message: 'Opening in Perfetto...' })
+      await openInPerfetto({
+        buffer,
+        processId,
+        timeRange: {
+          begin: timeRange.from.toISOString(),
+          end: timeRange.to.toISOString(),
+        },
+      })
+    } catch (error) {
+      if ((error as PerfettoError).type === 'popup_blocked') {
+        setTraceError((error as PerfettoError).message)
+      } else if ((error as PerfettoError).type === 'timeout') {
+        setTraceError((error as PerfettoError).message)
+      } else {
+        const message = error instanceof Error ? error.message : 'Unknown error occurred'
+        setTraceError(message)
+      }
+    } finally {
+      setIsGenerating(false)
+      setTraceMode(null)
+      setProgress(null)
+    }
+  }
+
+  const handleDownloadTrace = async () => {
+    if (!processId) return
+
+    setIsGenerating(true)
+    setTraceMode('download')
     setProgress(null)
     setTraceError(null)
 
@@ -416,6 +473,7 @@ function PerformanceAnalysisContent() {
       setTraceError(message)
     } finally {
       setIsGenerating(false)
+      setTraceMode(null)
       setProgress(null)
     }
   }
@@ -498,14 +556,22 @@ function PerformanceAnalysisContent() {
             )}
           </select>
 
-          <button
-            onClick={handleGenerateTrace}
+          <SplitButton
+            primaryLabel="Open in Perfetto"
+            primaryIcon={<ExternalLink className="w-4 h-4" />}
+            onPrimaryClick={handleOpenInPerfetto}
+            secondaryActions={[
+              {
+                label: 'Download',
+                icon: <Download className="w-4 h-4" />,
+                onClick: handleDownloadTrace,
+              },
+            ]}
             disabled={isGenerating}
-            className="flex items-center gap-2 px-4 py-2 bg-accent-link text-white rounded-md hover:bg-accent-link-hover disabled:bg-theme-border disabled:text-theme-text-muted disabled:cursor-not-allowed transition-colors text-sm font-medium ml-auto"
-          >
-            <Download className="w-4 h-4" />
-            {isGenerating ? 'Generating...' : 'Download Perfetto Trace'}
-          </button>
+            loading={isGenerating}
+            loadingLabel={traceMode === 'perfetto' ? 'Opening...' : 'Downloading...'}
+            className="ml-auto"
+          />
 
           <span className="text-xs text-theme-text-muted">
             {traceEventCountLoading
@@ -532,7 +598,7 @@ function PerformanceAnalysisContent() {
             title="Trace generation failed"
             message={traceError}
             onDismiss={() => setTraceError(null)}
-            onRetry={handleGenerateTrace}
+            onRetry={handleOpenInPerfetto}
           />
         )}
 
@@ -541,7 +607,9 @@ function PerformanceAnalysisContent() {
           <div className="bg-app-panel border border-theme-border rounded-lg p-4 mb-4">
             <div className="flex items-center gap-4">
               <div className="w-5 h-5 border-2 border-theme-border border-t-accent-link rounded-full animate-spin" />
-              <span className="text-sm font-medium text-theme-text-primary">Generating Trace...</span>
+              <span className="text-sm font-medium text-theme-text-primary">
+                {traceMode === 'perfetto' ? 'Opening in Perfetto...' : 'Downloading Trace...'}
+              </span>
             </div>
             {progress && (
               <p className="text-xs text-theme-text-secondary mt-2">

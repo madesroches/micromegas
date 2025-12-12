@@ -56,11 +56,26 @@ async function handleResponse<T>(response: Response): Promise<T> {
   return response.json()
 }
 
+export interface GenerateTraceOptions {
+  /** If true, return ArrayBuffer instead of downloading */
+  returnBuffer?: boolean
+}
+
+/**
+ * Generate a Perfetto trace for a process.
+ *
+ * @param processId - The process ID to generate trace for
+ * @param request - Trace generation request parameters
+ * @param onProgress - Optional callback for progress updates
+ * @param options - Optional options for controlling output behavior
+ * @returns ArrayBuffer if returnBuffer is true, void otherwise (triggers download)
+ */
 export async function generateTrace(
   processId: string,
   request: GenerateTraceRequest,
-  onProgress?: (update: ProgressUpdate) => void
-): Promise<void> {
+  onProgress?: (update: ProgressUpdate) => void,
+  options?: GenerateTraceOptions
+): Promise<ArrayBuffer | void> {
   const response = await fetch(`${getApiBase()}/perfetto/${processId}/generate`, {
     method: 'POST',
     headers: {
@@ -152,8 +167,22 @@ export async function generateTrace(
     }
   }
 
-  // Create blob and download
-  const blob = new Blob(chunks as BlobPart[], { type: 'application/octet-stream' })
+  // Combine chunks into a single buffer
+  const totalLength = chunks.reduce((acc, chunk) => acc + chunk.length, 0)
+  const combined = new Uint8Array(totalLength)
+  let offset = 0
+  for (const chunk of chunks) {
+    combined.set(chunk, offset)
+    offset += chunk.length
+  }
+
+  // Return buffer or download based on options
+  if (options?.returnBuffer) {
+    return combined.buffer
+  }
+
+  // Default: download the file
+  const blob = new Blob([combined], { type: 'application/octet-stream' })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
