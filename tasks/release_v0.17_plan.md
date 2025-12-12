@@ -118,9 +118,9 @@ Current versions should already be at 0.17.0:
 ### 3. Documentation Updates
 
 #### CHANGELOG Updates
-- [ ] **Review git log**: `git log --oneline v0.16.0..HEAD`
-- [ ] **Update main CHANGELOG.md** - Verify [Unreleased] section is empty and v0.17.0 is documented
-- [ ] **Update Grafana CHANGELOG**: `/grafana/CHANGELOG.md`
+- [x] **Review git log**: `git log --oneline v0.16.0..HEAD` ✅ 49 commits reviewed
+- [x] **Update main CHANGELOG.md** - Verify [Unreleased] section is empty and v0.17.0 is documented ✅
+- [x] **Update Grafana CHANGELOG**: `/grafana/CHANGELOG.md` ✅ Added v0.17.0 section
 
 ### 4. Grafana Plugin Preparation
 - [ ] **Verify plugin.json metadata**:
