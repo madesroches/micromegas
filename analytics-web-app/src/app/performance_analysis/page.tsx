@@ -117,6 +117,9 @@ function PerformanceAnalysisContent() {
   const [progress, setProgress] = useState<ProgressUpdate | null>(null)
   const [traceError, setTraceError] = useState<string | null>(null)
   const [chartAxisBounds, setChartAxisBounds] = useState<ChartAxisBounds | null>(null)
+  // Cache the trace buffer so we can retry Perfetto or download without regenerating
+  const [cachedTraceBuffer, setCachedTraceBuffer] = useState<ArrayBuffer | null>(null)
+  const [cachedTraceTimeRange, setCachedTraceTimeRange] = useState<{ begin: string; end: string } | null>(null)
 
   const binInterval = useMemo(() => {
     const fromDate = new Date(apiTimeRange.begin)
@@ -394,21 +397,81 @@ function PerformanceAnalysisContent() {
     setChartAxisBounds(bounds)
   }, [])
 
+  // Check if we can use cached buffer (same time range)
+  const canUseCachedBuffer = useCallback(() => {
+    if (!cachedTraceBuffer || !cachedTraceTimeRange) return false
+    const currentBegin = timeRange.from.toISOString()
+    const currentEnd = timeRange.to.toISOString()
+    return cachedTraceTimeRange.begin === currentBegin && cachedTraceTimeRange.end === currentEnd
+  }, [cachedTraceBuffer, cachedTraceTimeRange, timeRange])
+
+  // Open cached buffer in Perfetto (without regenerating)
+  const openCachedInPerfetto = useCallback(async () => {
+    if (!processId || !cachedTraceBuffer || !cachedTraceTimeRange) return
+
+    setIsGenerating(true)
+    setTraceMode('perfetto')
+    setTraceError(null)
+
+    try {
+      await openInPerfetto({
+        buffer: cachedTraceBuffer,
+        processId,
+        timeRange: cachedTraceTimeRange,
+        onProgress: (message) => setProgress({ type: 'progress', message }),
+      })
+    } catch (error) {
+      const perfettoError = error as PerfettoError
+      setTraceError(perfettoError.message || 'Unknown error occurred')
+    } finally {
+      setIsGenerating(false)
+      setTraceMode(null)
+      setProgress(null)
+    }
+  }, [processId, cachedTraceBuffer, cachedTraceTimeRange])
+
+  // Download cached buffer as file
+  const downloadCachedBuffer = useCallback(() => {
+    if (!processId || !cachedTraceBuffer) return
+
+    const blob = new Blob([cachedTraceBuffer], { type: 'application/octet-stream' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `trace-${processId}.pb`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+    setTraceError(null)
+  }, [processId, cachedTraceBuffer])
+
   const handleOpenInPerfetto = async () => {
     if (!processId) return
+
+    // If we have a cached buffer for the same time range, use it
+    if (canUseCachedBuffer()) {
+      await openCachedInPerfetto()
+      return
+    }
 
     setIsGenerating(true)
     setTraceMode('perfetto')
     setProgress(null)
     setTraceError(null)
+    // Clear old cache when generating new trace
+    setCachedTraceBuffer(null)
+    setCachedTraceTimeRange(null)
+
+    const currentTimeRange = {
+      begin: timeRange.from.toISOString(),
+      end: timeRange.to.toISOString(),
+    }
 
     const request: GenerateTraceRequest = {
       include_async_spans: true,
       include_thread_spans: true,
-      time_range: {
-        begin: timeRange.from.toISOString(),
-        end: timeRange.to.toISOString(),
-      },
+      time_range: currentTimeRange,
     }
 
     try {
@@ -421,21 +484,21 @@ function PerformanceAnalysisContent() {
         throw new Error('No trace data received')
       }
 
+      // Cache the buffer for potential retry/download
+      setCachedTraceBuffer(buffer)
+      setCachedTraceTimeRange(currentTimeRange)
+
       // Open in Perfetto
-      setProgress({ type: 'progress', message: 'Opening in Perfetto...' })
       await openInPerfetto({
         buffer,
         processId,
-        timeRange: {
-          begin: timeRange.from.toISOString(),
-          end: timeRange.to.toISOString(),
-        },
+        timeRange: currentTimeRange,
+        onProgress: (message) => setProgress({ type: 'progress', message }),
       })
     } catch (error) {
-      if ((error as PerfettoError).type === 'popup_blocked') {
-        setTraceError((error as PerfettoError).message)
-      } else if ((error as PerfettoError).type === 'timeout') {
-        setTraceError((error as PerfettoError).message)
+      const perfettoError = error as PerfettoError
+      if (perfettoError.type) {
+        setTraceError(perfettoError.message)
       } else {
         const message = error instanceof Error ? error.message : 'Unknown error occurred'
         setTraceError(message)
@@ -594,12 +657,40 @@ function PerformanceAnalysisContent() {
 
         {/* Trace Error Banner */}
         {traceError && (
-          <ErrorBanner
-            title="Trace generation failed"
-            message={traceError}
-            onDismiss={() => setTraceError(null)}
-            onRetry={handleOpenInPerfetto}
-          />
+          <div className="bg-error-subtle border border-error-border rounded-lg p-4 mb-4">
+            <div className="flex items-start gap-3">
+              <AlertCircle className="w-5 h-5 text-accent-error flex-shrink-0 mt-0.5" />
+              <div className="flex-1 min-w-0">
+                <h3 className="text-sm font-medium text-accent-error">
+                  {cachedTraceBuffer ? 'Could not open in Perfetto' : 'Trace generation failed'}
+                </h3>
+                <p className="text-sm text-theme-text-secondary mt-1">{traceError}</p>
+                <div className="flex gap-2 mt-3">
+                  <button
+                    onClick={() => setTraceError(null)}
+                    className="px-3 py-1.5 text-sm bg-app-panel border border-theme-border rounded-md text-theme-text-primary hover:bg-app-bg transition-colors"
+                  >
+                    Dismiss
+                  </button>
+                  <button
+                    onClick={handleOpenInPerfetto}
+                    className="px-3 py-1.5 text-sm bg-accent-link text-white rounded-md hover:bg-accent-link/90 transition-colors"
+                  >
+                    Try Again
+                  </button>
+                  {cachedTraceBuffer && (
+                    <button
+                      onClick={downloadCachedBuffer}
+                      className="px-3 py-1.5 text-sm bg-app-panel border border-theme-border rounded-md text-theme-text-primary hover:bg-app-bg transition-colors flex items-center gap-1.5"
+                    >
+                      <Download className="w-4 h-4" />
+                      Download Instead
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
         )}
 
         {/* Progress */}
