@@ -130,9 +130,9 @@ Current versions should already be at 0.17.0:
 - [x] **Build plugin archive**: Use `./build-plugin.sh` script (NOT manual tar) ✅ Built 51MB archive
 
 ### 5. Git Preparation
-- [ ] Merge release branch to main (if applicable)
-- [ ] Create release tag: `git tag v0.17.0`
-- [ ] Verify tag points to correct commit
+- [ ] Merge release branch to main (deferred to later)
+- [x] Create release tag: `git tag v0.17.0` ✅ Created
+- [x] Verify tag points to correct commit ✅ Points to 15f006324
 
 ## Release Process
 
