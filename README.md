@@ -66,26 +66,19 @@ To get started with Micromegas, please refer to the [Getting Started](https://ma
 
 ## Current Status & Roadmap
 
-### December 2025 - v0.17.0 (In Progress)
-* **Analytics Web App** - A brand new interface for exploring your telemetry data:
+### v0.18.0 (In Progress)
+* Analytics Web App enhancements
+
+### December 2025 - v0.17.0
+* **Analytics Web App** - Complete UI redesign with dark theme and Micromegas branding:
   * **SQL Query Editor** with syntax highlighting, query history, and macros that integrate with UI controls
   * **Performance Analytics** - Visualize thread activity timelines and export traces to [Perfetto](https://ui.perfetto.dev/) for deep performance analysis
-  * Dark theme, time range picker, and interactive metrics charting
-* Per-service Docker images
-
-### November 2025 - v0.16.0
-* HTTP Gateway with authentication and security features
-* Multi-provider OIDC support (Auth0, Azure AD, Google)
-* OIDC authentication for analytics web app
-* DataFusion 51.0.0 upgrade with LIMIT pushdown fixes
-* JSONB UDF optimizations for dictionary-encoded columns
-* Grafana plugin improvements and fixes
-
-### November 2025 - v0.15.0
-* Grafana plugin with OAuth 2.0, variable queries, and CI/CD pipeline
-* gRPC health checks and enhanced authentication
-* Modernized Unreal Engine telemetry sink
-* Improved documentation and build tooling
+  * Grafana-style time range picker with relative and absolute time support
+  * Process metrics screen with time-series charting
+  * Multi-word search for process list and logs
+* Per-service Docker images and modernized build scripts
+* BASE_PATH and MICROMEGAS_PORT env vars for reverse proxy deployments
+* Unreal Engine: scalability and VSync context in telemetry
 
 For a detailed history of changes, please see the [CHANGELOG.md](./CHANGELOG.md) file.
 
