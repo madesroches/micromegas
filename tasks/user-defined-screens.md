@@ -1,5 +1,7 @@
 # User-Defined Screens Feature
 
+**Issue**: https://github.com/madesroches/micromegas/issues/666
+
 ## Overview
 
 Add customizable screens to analytics-web-app. Users can take existing screen types (processes, log viewer, metrics), edit the SQL, and save custom configurations. All screens visible to all users.
