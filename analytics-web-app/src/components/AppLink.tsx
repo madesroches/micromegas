@@ -1,10 +1,8 @@
-'use client'
-
-import Link, { LinkProps } from 'next/link'
+import { Link, LinkProps } from 'react-router-dom'
 import { ReactNode } from 'react'
 import { appLink } from '@/lib/config'
 
-interface AppLinkProps extends Omit<LinkProps, 'href'> {
+interface AppLinkProps extends Omit<LinkProps, 'to'> {
   href: string
   children: ReactNode
   className?: string
@@ -14,13 +12,12 @@ interface AppLinkProps extends Omit<LinkProps, 'href'> {
 /**
  * App-aware Link component that:
  * 1. Prepends the runtime base path to href
- * 2. Disables prefetching (avoids 404s for RSC prefetch in static export)
  *
- * Use this instead of next/link for all internal navigation.
+ * Use this instead of react-router-dom Link for all internal navigation.
  */
 export function AppLink({ href, children, className, title, ...props }: AppLinkProps) {
   return (
-    <Link href={appLink(href)} prefetch={false} className={className} title={title} {...props}>
+    <Link to={appLink(href)} className={className} title={title} {...props}>
       {children}
     </Link>
   )

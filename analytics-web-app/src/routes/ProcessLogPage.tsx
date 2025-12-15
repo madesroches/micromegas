@@ -1,7 +1,5 @@
-'use client'
-
 import { Suspense, useState, useCallback, useMemo, useEffect, useRef } from 'react'
-import { useSearchParams, useRouter, usePathname } from 'next/navigation'
+import { useSearchParams, useNavigate, useLocation } from 'react-router-dom'
 import { useMutation } from '@tanstack/react-query'
 import { AppLink } from '@/components/AppLink'
 import { AlertCircle, ChevronDown } from 'lucide-react'
@@ -62,11 +60,6 @@ function parseLimit(value: string | null): number {
   return Math.min(parsed, MAX_LIMIT)
 }
 
-// Expand search string into SQL ILIKE clauses for multi-word search.
-// Note: These queries execute against DataFusion, a read-only analytics engine
-// over our data lake. There are no INSERT/UPDATE/DELETE operations possible,
-// so SQL injection risk is limited to information disclosure (mitigated by auth)
-// and expensive queries (mitigated by timeouts).
 function expandSearchFilter(search: string): string {
   const words = search.trim().split(/\s+/).filter(w => w.length > 0)
   if (words.length === 0) {
@@ -74,7 +67,6 @@ function expandSearchFilter(search: string): string {
   }
 
   const clauses = words.map(word => {
-    // Escape SQL special characters for LIKE patterns
     const escaped = word
       .replace(/\\/g, '\\\\')
       .replace(/%/g, '\\%')
@@ -163,7 +155,6 @@ function formatLocalTime(utcTime: unknown): string {
   if (!utcTime) return ''.padEnd(29)
   const str = String(utcTime)
 
-  // Extract nanoseconds from the original string (JS Date only has ms precision)
   let nanoseconds = '000000000'
   const nanoMatch = str.match(/\.(\d+)/)
   if (nanoMatch) {
@@ -184,13 +175,13 @@ function formatLocalTime(utcTime: unknown): string {
 }
 
 function ProcessLogContent() {
-  const searchParams = useSearchParams()
-  const router = useRouter()
-  const pathname = usePathname()
+  const [searchParams] = useSearchParams()
+  const navigate = useNavigate()
+  const location = useLocation()
+  const pathname = location.pathname
   const processId = searchParams.get('process_id')
   const { parsed: timeRange, apiTimeRange } = useTimeRange()
 
-  // Read initial values from URL params with validation
   const levelParam = searchParams.get('level')
   const limitParam = searchParams.get('limit')
   const searchParam = searchParams.get('search')
@@ -214,7 +205,6 @@ function ProcessLogContent() {
     onSuccess: (data) => {
       setQueryError(null)
       const resultRows = toRowObjects(data)
-      // Normalize level values
       setRows(resultRows.map(row => ({
         ...row,
         level: typeof row.level === 'number' ? (LEVEL_NAMES[row.level] || 'UNKNOWN') : row.level
@@ -236,7 +226,6 @@ function ProcessLogContent() {
     },
   })
 
-  // Use refs to avoid including mutations in callback deps
   const sqlMutateRef = useRef(sqlMutation.mutate)
   sqlMutateRef.current = sqlMutation.mutate
   const processMutateRef = useRef(processMutation.mutate)
@@ -246,7 +235,6 @@ function ProcessLogContent() {
     (sql: string = DEFAULT_SQL) => {
       if (!processId) return
       setQueryError(null)
-      // Interpolate search_filter directly into SQL (it contains raw SQL with quotes)
       const sqlWithSearch = sql.replace('$search_filter', expandSearchFilter(search))
       const params: Record<string, string> = {
         process_id: processId,
@@ -263,7 +251,6 @@ function ProcessLogContent() {
     [processId, logLevel, logLimit, search, apiTimeRange]
   )
 
-  // Update URL when filters change
   const updateLogLevel = useCallback(
     (level: string) => {
       setLogLevel(level)
@@ -273,9 +260,9 @@ function ProcessLogContent() {
       } else {
         params.set('level', level)
       }
-      router.push(`${pathname}?${params.toString()}`)
+      navigate(`${pathname}?${params.toString()}`)
     },
-    [searchParams, router, pathname]
+    [searchParams, navigate, pathname]
   )
 
   const updateLogLimit = useCallback(
@@ -289,9 +276,9 @@ function ProcessLogContent() {
       } else {
         params.set('limit', String(clampedLimit))
       }
-      router.push(`${pathname}?${params.toString()}`)
+      navigate(`${pathname}?${params.toString()}`)
     },
-    [searchParams, router, pathname]
+    [searchParams, navigate, pathname]
   )
 
   const handleLimitInputBlur = useCallback(() => {
@@ -321,12 +308,11 @@ function ProcessLogContent() {
       } else {
         params.set('search', value.trim())
       }
-      router.push(`${pathname}?${params.toString()}`)
+      navigate(`${pathname}?${params.toString()}`)
     },
-    [searchParams, router, pathname]
+    [searchParams, navigate, pathname]
   )
 
-  // Sync debounced search to state and URL
   const isInitialSearchRef = useRef(true)
   useEffect(() => {
     if (isInitialSearchRef.current) {
@@ -337,7 +323,6 @@ function ProcessLogContent() {
   }, [debouncedSearchInput, updateSearch])
 
   const handleSearchBlur = useCallback(() => {
-    // Immediate update on blur (in case user doesn't wait for debounce)
     if (searchInputValue !== search) {
       updateSearch(searchInputValue)
     }
@@ -352,7 +337,6 @@ function ProcessLogContent() {
     []
   )
 
-  // Load process info once
   const hasLoadedProcessRef = useRef(false)
   useEffect(() => {
     if (processId && !hasLoadedProcessRef.current) {
@@ -366,7 +350,6 @@ function ProcessLogContent() {
     }
   }, [processId, apiTimeRange])
 
-  // Initial load
   const hasInitialLoadRef = useRef(false)
   useEffect(() => {
     if (processId && !hasInitialLoadRef.current) {
@@ -375,38 +358,26 @@ function ProcessLogContent() {
     }
   }, [processId, loadData])
 
-  // Reload when filters change (only after initial load)
   const prevFiltersRef = useRef<{ logLevel: string; logLimit: number; search: string } | null>(null)
   useEffect(() => {
-    // Skip if we haven't done initial load yet
     if (!hasLoaded) return
-
-    // Initialize ref on first run after initial load
     if (prevFiltersRef.current === null) {
       prevFiltersRef.current = { logLevel, logLimit, search }
       return
     }
-
-    // Check if filters actually changed
     if (prevFiltersRef.current.logLevel !== logLevel || prevFiltersRef.current.logLimit !== logLimit || prevFiltersRef.current.search !== search) {
       prevFiltersRef.current = { logLevel, logLimit, search }
       loadData()
     }
   }, [logLevel, logLimit, search, hasLoaded, loadData])
 
-  // Reload when time range changes (only after initial load)
   const prevTimeRangeRef = useRef<{ begin: string; end: string } | null>(null)
   useEffect(() => {
-    // Skip if we haven't done initial load yet
     if (!hasLoaded) return
-
-    // Initialize ref on first run after initial load
     if (prevTimeRangeRef.current === null) {
       prevTimeRangeRef.current = { begin: apiTimeRange.begin, end: apiTimeRange.end }
       return
     }
-
-    // Check if time range actually changed
     if (prevTimeRangeRef.current.begin !== apiTimeRange.begin || prevTimeRangeRef.current.end !== apiTimeRange.end) {
       prevTimeRangeRef.current = { begin: apiTimeRange.begin, end: apiTimeRange.end }
       loadData()
@@ -494,7 +465,6 @@ function ProcessLogContent() {
   return (
     <PageLayout onRefresh={handleRefresh} rightPanel={sqlPanel}>
       <div className="p-6 flex flex-col h-full">
-        {/* Page Header */}
         <div className="mb-5">
           <h1 className="text-2xl font-semibold text-theme-text-primary">Process Log</h1>
           <div className="text-sm text-theme-text-muted font-mono mt-1">
@@ -502,7 +472,6 @@ function ProcessLogContent() {
           </div>
         </div>
 
-        {/* Filters */}
         <div className="flex gap-3 mb-4">
           <input
             type="text"
@@ -546,7 +515,6 @@ function ProcessLogContent() {
           </span>
         </div>
 
-        {/* Query Error Banner */}
         {queryError && (
           <ErrorBanner
             title="Query execution failed"
@@ -556,7 +524,6 @@ function ProcessLogContent() {
           />
         )}
 
-        {/* Log Viewer */}
         <div className="flex-1 overflow-auto bg-app-bg border border-theme-border rounded-lg font-mono text-xs">
           {sqlMutation.isPending && !hasLoaded ? (
             <div className="flex items-center justify-center h-full">

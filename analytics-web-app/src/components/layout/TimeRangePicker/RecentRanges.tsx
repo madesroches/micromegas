@@ -1,5 +1,3 @@
-'use client'
-
 import { useState, useEffect } from 'react'
 import { Clock } from 'lucide-react'
 import { getRecentTimeRanges, type TimeRangeHistoryEntry } from '@/lib/time-range-history'

@@ -26,31 +26,30 @@ export function getConfig(): RuntimeConfig {
   }
 
   // Development fallback (no injection needed in dev mode)
-  // In dev, the backend runs on port 8000, frontend on port 3000
-  // Include the base path if set via NEXT_PUBLIC_BASE_PATH
-  const devBasePath = process.env.NEXT_PUBLIC_BASE_PATH || ''
+  // In dev mode, Vite proxies API calls to port 8000
+  // With relative base path './'), we use empty basePath in dev
   cachedConfig = {
-    basePath: process.env.NODE_ENV === 'development' ? `http://localhost:8000${devBasePath}` : '',
+    basePath: import.meta.env.DEV ? '' : '',
   }
   return cachedConfig
 }
 
 /**
  * Get the base path for internal navigation links.
- * In development, this returns just the path portion (no host).
- * In production, this returns the runtime base path.
+ * In development, this returns empty string (Vite handles routing).
+ * In production, this returns the runtime base path from config injection.
  */
 export function getLinkBasePath(): string {
   if (typeof window !== 'undefined' && window.__MICROMEGAS_CONFIG__) {
     return window.__MICROMEGAS_CONFIG__.basePath
   }
-  // Development fallback - just use the path, not the full URL
-  return process.env.NEXT_PUBLIC_BASE_PATH || ''
+  // Development fallback - empty for Vite dev server
+  return ''
 }
 
 /**
  * Prepend the runtime base path to an internal link.
- * Use this for all <Link href="..."> and router.push() calls.
+ * Use this for all <Link href="..."> and navigate() calls.
  */
 export function appLink(path: string): string {
   const base = getLinkBasePath()

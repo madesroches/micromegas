@@ -99,16 +99,16 @@ def kill_existing_backend():
         return False
 
 def kill_existing_frontend():
-    """Kill any existing Next.js dev servers"""
+    """Kill any existing Vite dev servers"""
     try:
-        # Find and kill next dev processes
+        # Find and kill vite dev processes
         result = subprocess.run(
-            ["pkill", "-f", "next dev"],
+            ["pkill", "-f", "vite"],
             capture_output=True,
             text=True
         )
         if result.returncode == 0:
-            print_status("Killed existing Next.js dev server", "info")
+            print_status("Killed existing Vite dev server", "info")
             time.sleep(1)  # Give it a moment to shut down
             return True
         return False
@@ -316,7 +316,7 @@ def main():
             return 1
 
         # Start frontend dev server
-        print_status("Starting Next.js development server...", "info")
+        print_status("Starting Vite development server...", "info")
 
         # Check if node_modules exists, install if not
         frontend_dir = Path("analytics-web-app")
@@ -328,15 +328,9 @@ def main():
                 check=True
             )
 
-        # Start dev server with base path if configured
-        frontend_env = os.environ.copy()
-        if base_path:
-            frontend_env["NEXT_PUBLIC_BASE_PATH"] = base_path
-
         frontend_proc = subprocess.Popen(
             ["yarn", "dev"],
-            cwd=frontend_dir,
-            env=frontend_env
+            cwd=frontend_dir
         )
         processes.append(frontend_proc)
 
@@ -344,7 +338,7 @@ def main():
         print()
         print_status("Analytics Web App is starting up!", "success")
         print()
-        print_status(f"Frontend:       http://localhost:3000{base_path}/", "info")
+        print_status(f"Frontend:       http://localhost:3000/", "info")
         print_status(f"Backend:        http://localhost:8000{base_path}/", "info")
         if base_path:
             print_status(f"Note: Using base path '{base_path}'", "info")

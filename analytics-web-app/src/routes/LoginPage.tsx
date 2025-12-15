@@ -1,7 +1,5 @@
-'use client'
-
 import { Suspense, useEffect } from 'react'
-import { useSearchParams } from 'next/navigation'
+import { useSearchParams } from 'react-router-dom'
 import { useAuth } from '@/lib/auth'
 import { getConfig } from '@/lib/config'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -11,7 +9,7 @@ import { MicromegasLogo } from '@/components/MicromegasLogo'
 
 function LoginContent() {
   const { status, error, login } = useAuth()
-  const searchParams = useSearchParams()
+  const [searchParams] = useSearchParams()
 
   const returnUrlParam = searchParams.get('return_url')
   const authError = searchParams.get('error')

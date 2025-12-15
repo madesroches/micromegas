@@ -57,8 +57,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ### Analytics Web App (from `analytics-web-app/` directory)
 - **IMPORTANT**: Use `yarn`, NOT `npm` (project uses yarn as package manager)
 - **Install**: `yarn install`
-- **Dev**: `yarn dev` (starts Next.js dev server on port 3000)
-- **Build**: `yarn build` (production build)
+- **Dev**: `yarn dev` (starts Vite dev server on port 3000)
+- **Build**: `yarn build` (production build to `dist/`)
 - **Lint**: `yarn lint` (REQUIRED before commit)
 - **Type check**: `yarn type-check`
 - **Test**: `yarn test`

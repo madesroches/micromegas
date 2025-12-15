@@ -34,7 +34,7 @@ export default defineConfig({
     sourcemap: true,
   },
   server: {
-    port: 3001,
+    port: 3000,
     proxy: {
       '/api': 'http://localhost:8000',
       '/auth': 'http://localhost:8000',
@@ -184,6 +184,64 @@ Changes per file:
 - [ ] Auth flow works
 - [ ] Time range picker persists in URL
 - [ ] Backend serves correctly with base path
+
+---
+
+## Progress Log
+
+### Phase 1: Project Setup - DONE
+- [x] Create vite.config.ts
+- [x] Create index.html
+- [x] Update package.json
+- [x] Update tsconfig.json
+
+### Phase 2: Core Infrastructure - DONE
+- [x] Create src/main.tsx
+- [x] Create src/router.tsx
+- [x] Update src/lib/config.ts
+- [x] Create src/vite-env.d.ts
+
+### Phase 3: Component Migration - DONE
+- [x] Update AppLink.tsx (use react-router-dom Link)
+- [x] Update AuthGuard.tsx (replace usePathname)
+- [x] Update Sidebar.tsx (replace usePathname)
+- [x] Update useTimeRange.ts (replace navigation hooks)
+
+### Phase 4: Page Migration - DONE
+- [x] Create src/routes/ directory
+- [x] Migrate LoginPage
+- [x] Migrate ProcessesPage
+- [x] Migrate ProcessPage
+- [x] Migrate ProcessLogPage
+- [x] Migrate ProcessMetricsPage
+- [x] Migrate ProcessTracePage
+- [x] Migrate PerformanceAnalysisPage
+- [x] Remove 'use client' directives from components
+
+### Phase 5: Backend Updates - DONE
+- [x] Update frontend_dir default to dist
+- [x] Simplify serve handlers (remove _next rewriting)
+
+### Phase 6: Cleanup - DONE
+- [x] Delete next.config.mjs
+- [x] Delete next-env.d.ts
+- [x] Delete src/app/ directory
+- [x] Update .gitignore
+
+### Phase 7: Documentation - DONE
+- [x] Update analytics-web-app/README.md
+- [x] Update CLAUDE.md
+- [x] Update mkdocs/docs/admin/web-app.md
+
+### Phase 8: Testing - DONE
+- [x] Install dependencies
+- [x] Run yarn build - SUCCESS
+- [x] Verify dist/ output - index.html, assets/, icon.svg created
+- [x] Fix ESLint config (removed Next.js plugins, added jest.config.js to ignore)
+- [x] Run yarn lint - passes with warnings only (no errors)
+- [x] Update jest.config.js for Vite (removed Next.js dependency)
+- [x] Update test-setup.ts to mock react-router-dom instead of next/navigation
+- [x] Exclude test files from TypeScript build
 
 ---
 

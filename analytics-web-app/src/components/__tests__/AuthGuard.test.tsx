@@ -49,7 +49,7 @@ describe('AuthGuard', () => {
   })
 
   it('should show loading state while checking authentication', () => {
-    ;(global.fetch as jest.Mock).mockImplementation(
+    (global.fetch as jest.Mock).mockImplementation(
       () => new Promise(() => {}) // Never resolves
     )
 
@@ -66,7 +66,7 @@ describe('AuthGuard', () => {
   })
 
   it('should render children when authenticated', async () => {
-    ;(global.fetch as jest.Mock).mockResolvedValueOnce({
+    (global.fetch as jest.Mock).mockResolvedValueOnce({
       ok: true,
       status: 200,
       json: async () => ({
@@ -92,7 +92,7 @@ describe('AuthGuard', () => {
   })
 
   it('should redirect to login when unauthenticated', async () => {
-    ;(global.fetch as jest.Mock).mockResolvedValueOnce({
+    (global.fetch as jest.Mock).mockResolvedValueOnce({
       ok: false,
       status: 401,
     })
@@ -117,7 +117,7 @@ describe('AuthGuard', () => {
   })
 
   it('should show error state on service unavailable', async () => {
-    ;(global.fetch as jest.Mock).mockResolvedValueOnce({
+    (global.fetch as jest.Mock).mockResolvedValueOnce({
       ok: false,
       status: 500,
     })
@@ -139,7 +139,7 @@ describe('AuthGuard', () => {
   })
 
   it('should show error state on network error', async () => {
-    ;(global.fetch as jest.Mock).mockRejectedValueOnce(
+    (global.fetch as jest.Mock).mockRejectedValueOnce(
       new Error('Network error')
     )
 
@@ -159,7 +159,7 @@ describe('AuthGuard', () => {
   })
 
   it('should retry authentication when retry button is clicked', async () => {
-    ;(global.fetch as jest.Mock)
+    (global.fetch as jest.Mock)
       .mockResolvedValueOnce({
         ok: false,
         status: 500,

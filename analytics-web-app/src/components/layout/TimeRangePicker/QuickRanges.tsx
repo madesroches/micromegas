@@ -1,5 +1,3 @@
-'use client'
-
 import { TIME_RANGE_PRESETS } from '@/lib/time-range'
 import { Check } from 'lucide-react'
 import type { QuickRangesProps } from './types'

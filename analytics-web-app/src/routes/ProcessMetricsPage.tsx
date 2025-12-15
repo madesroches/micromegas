@@ -1,7 +1,5 @@
-'use client'
-
 import { Suspense, useState, useCallback, useMemo, useEffect, useRef } from 'react'
-import { useSearchParams, useRouter, usePathname } from 'next/navigation'
+import { useSearchParams, useNavigate, useLocation } from 'react-router-dom'
 import { useMutation } from '@tanstack/react-query'
 import { AppLink } from '@/components/AppLink'
 import { AlertCircle, Clock } from 'lucide-react'
@@ -41,13 +39,10 @@ interface Measure {
   unit: string
 }
 
-// Calculate appropriate bin interval based on time span and chart width
-// Target 1 data point per horizontal pixel for optimal resolution
 function calculateBinInterval(timeSpanMs: number, chartWidthPx: number = 800): string {
-  const numBins = chartWidthPx // 1 pixel per data point
+  const numBins = chartWidthPx
   const binIntervalMs = timeSpanMs / numBins
 
-  // Round to sensible intervals
   const intervals = [
     { ms: 1, label: '1 millisecond' },
     { ms: 10, label: '10 milliseconds' },
@@ -65,7 +60,6 @@ function calculateBinInterval(timeSpanMs: number, chartWidthPx: number = 800): s
     { ms: 3600000, label: '1 hour' },
   ]
 
-  // Find the smallest interval that's >= calculated bin interval
   for (const interval of intervals) {
     if (interval.ms >= binIntervalMs) {
       return interval.label
@@ -75,9 +69,10 @@ function calculateBinInterval(timeSpanMs: number, chartWidthPx: number = 800): s
 }
 
 function ProcessMetricsContent() {
-  const searchParams = useSearchParams()
-  const router = useRouter()
-  const pathname = usePathname()
+  const [searchParams] = useSearchParams()
+  const navigate = useNavigate()
+  const location = useLocation()
+  const pathname = location.pathname
   const processId = searchParams.get('process_id')
   const measureParam = searchParams.get('measure')
   const { parsed: timeRange, apiTimeRange, setTimeRange } = useTimeRange()
@@ -91,7 +86,6 @@ function ProcessMetricsContent() {
   const [discoveryDone, setDiscoveryDone] = useState(false)
   const [chartWidth, setChartWidth] = useState<number>(800)
 
-  // Calculate bin interval based on time range and chart width
   const binInterval = useMemo(() => {
     const fromDate = new Date(apiTimeRange.begin)
     const toDate = new Date(apiTimeRange.end)
@@ -99,7 +93,6 @@ function ProcessMetricsContent() {
     return calculateBinInterval(timeSpanMs, chartWidth)
   }, [apiTimeRange, chartWidth])
 
-  // Get selected measure info
   const selectedMeasureInfo = useMemo(() => {
     return measures.find((m) => m.name === selectedMeasure)
   }, [measures, selectedMeasure])
@@ -116,7 +109,6 @@ function ProcessMetricsContent() {
       setMeasures(measureList)
       setDiscoveryDone(true)
 
-      // Auto-select first measure if none selected
       if (measureList.length > 0 && !selectedMeasure) {
         setSelectedMeasure(measureList[0].name)
       }
@@ -155,7 +147,6 @@ function ProcessMetricsContent() {
     },
   })
 
-  // Use refs to avoid including mutations in callback deps
   const discoveryMutateRef = useRef(discoveryMutation.mutate)
   discoveryMutateRef.current = discoveryMutation.mutate
   const dataMutateRef = useRef(dataMutation.mutate)
@@ -191,20 +182,16 @@ function ProcessMetricsContent() {
     [processId, selectedMeasure, binInterval, apiTimeRange]
   )
 
-  // Update URL when measure changes
   const updateMeasure = useCallback(
     (measure: string) => {
       setSelectedMeasure(measure)
       const params = new URLSearchParams(searchParams.toString())
       params.set('measure', measure)
-      router.push(`${pathname}?${params.toString()}`)
+      navigate(`${pathname}?${params.toString()}`)
     },
-    [searchParams, router, pathname]
+    [searchParams, navigate, pathname]
   )
 
-  // Load process info (exe name) once on mount.
-  // The ref prevents re-fetching when apiTimeRange changes since process
-  // metadata is static and doesn't depend on time range.
   const hasLoadedProcessRef = useRef(false)
   useEffect(() => {
     if (processId && !hasLoadedProcessRef.current) {
@@ -218,8 +205,6 @@ function ProcessMetricsContent() {
     }
   }, [processId, apiTimeRange])
 
-  // Load measure discovery on mount.
-  // Ref prevents duplicate calls; time range changes are handled separately below.
   const hasLoadedDiscoveryRef = useRef(false)
   useEffect(() => {
     if (processId && !hasLoadedDiscoveryRef.current) {
@@ -228,14 +213,12 @@ function ProcessMetricsContent() {
     }
   }, [processId, loadDiscovery])
 
-  // Load data when measure is selected (and discovery is done)
   useEffect(() => {
     if (discoveryDone && selectedMeasure && processId) {
       loadData()
     }
   }, [discoveryDone, selectedMeasure, processId, loadData])
 
-  // Reload when time range changes (only after initial load)
   const prevTimeRangeRef = useRef<{ begin: string; end: string } | null>(null)
   useEffect(() => {
     if (!hasLoaded) return
@@ -248,7 +231,6 @@ function ProcessMetricsContent() {
       prevTimeRangeRef.current.end !== apiTimeRange.end
     ) {
       prevTimeRangeRef.current = { begin: apiTimeRange.begin, end: apiTimeRange.end }
-      // Reload discovery and data
       hasLoadedDiscoveryRef.current = false
       loadDiscovery()
     }
@@ -272,7 +254,6 @@ function ProcessMetricsContent() {
 
   const handleTimeRangeSelect = useCallback(
     (from: Date, to: Date) => {
-      // Update the URL time range with ISO timestamps
       setTimeRange(from.toISOString(), to.toISOString())
     },
     [setTimeRange]
@@ -325,16 +306,12 @@ function ProcessMetricsContent() {
     )
   }
 
-  // Empty state: No measures available
   const noMeasuresAvailable = discoveryDone && measures.length === 0
-
-  // Empty state: No data in time range for selected measure
   const noDataInRange = hasLoaded && chartData.length === 0 && selectedMeasure
 
   return (
     <PageLayout onRefresh={handleRefresh} rightPanel={sqlPanel}>
       <div className="p-6 flex flex-col h-full">
-        {/* Page Header */}
         <div className="mb-5">
           <h1 className="text-2xl font-semibold text-theme-text-primary">Process Metrics</h1>
           <div className="text-sm text-theme-text-muted font-mono mt-1">
@@ -342,7 +319,6 @@ function ProcessMetricsContent() {
           </div>
         </div>
 
-        {/* Filters */}
         <div className="flex gap-3 mb-4">
           <select
             value={selectedMeasure || ''}
@@ -372,7 +348,6 @@ function ProcessMetricsContent() {
           </span>
         </div>
 
-        {/* Query Error Banner */}
         {queryError && (
           <ErrorBanner
             title="Query execution failed"
@@ -382,7 +357,6 @@ function ProcessMetricsContent() {
           />
         )}
 
-        {/* Chart Area */}
         <div className="flex-1 min-h-[400px]">
           {selectedMeasure && chartData.length > 0 ? (
             <TimeSeriesChart
@@ -420,7 +394,6 @@ function ProcessMetricsContent() {
             </div>
           ) : noDataInRange ? (
             <div className="h-full flex flex-col bg-app-panel border border-theme-border rounded-lg">
-              {/* Chart header for empty state */}
               <div className="flex justify-between items-center px-4 py-3 border-b border-theme-border">
                 <div className="text-base font-medium text-theme-text-primary">
                   {selectedMeasure}{' '}

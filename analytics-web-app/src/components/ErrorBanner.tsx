@@ -1,5 +1,3 @@
-'use client'
-
 import { AlertCircle, AlertTriangle, X } from 'lucide-react'
 
 interface ErrorBannerProps {

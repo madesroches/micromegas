@@ -27,7 +27,7 @@ describe('AuthProvider', () => {
   }
 
   it('should initialize with loading status', () => {
-    ;(global.fetch as jest.Mock).mockImplementation(
+    (global.fetch as jest.Mock).mockImplementation(
       () => new Promise(() => {}) // Never resolves
     )
 
@@ -42,7 +42,7 @@ describe('AuthProvider', () => {
   })
 
   it('should load authenticated user on mount', async () => {
-    ;(global.fetch as jest.Mock).mockResolvedValueOnce({
+    (global.fetch as jest.Mock).mockResolvedValueOnce({
       ok: true,
       status: 200,
       json: async () => ({
@@ -76,7 +76,7 @@ describe('AuthProvider', () => {
   })
 
   it('should handle unauthenticated status (401) and attempt refresh', async () => {
-    ;(global.fetch as jest.Mock)
+    (global.fetch as jest.Mock)
       // First call to /auth/me returns 401
       .mockResolvedValueOnce({
         ok: false,
@@ -112,7 +112,7 @@ describe('AuthProvider', () => {
   })
 
   it('should automatically refresh expired token and retry auth check', async () => {
-    ;(global.fetch as jest.Mock)
+    (global.fetch as jest.Mock)
       // First call to /auth/me returns 401 (expired token)
       .mockResolvedValueOnce({
         ok: false,
@@ -171,7 +171,7 @@ describe('AuthProvider', () => {
   })
 
   it('should handle service unavailable error (500)', async () => {
-    ;(global.fetch as jest.Mock).mockResolvedValueOnce({
+    (global.fetch as jest.Mock).mockResolvedValueOnce({
       ok: false,
       status: 500,
     })
@@ -190,7 +190,7 @@ describe('AuthProvider', () => {
   })
 
   it('should handle network error', async () => {
-    ;(global.fetch as jest.Mock).mockRejectedValueOnce(
+    (global.fetch as jest.Mock).mockRejectedValueOnce(
       new Error('Network error')
     )
 
@@ -208,7 +208,7 @@ describe('AuthProvider', () => {
   })
 
   it('should handle invalid JSON response', async () => {
-    ;(global.fetch as jest.Mock).mockResolvedValueOnce({
+    (global.fetch as jest.Mock).mockResolvedValueOnce({
       ok: true,
       status: 200,
       json: async () => {
@@ -267,7 +267,7 @@ describe('useAuth hook', () => {
   })
 
   it('should call login with return URL', async () => {
-    ;(global.fetch as jest.Mock).mockResolvedValueOnce({
+    (global.fetch as jest.Mock).mockResolvedValueOnce({
       ok: true,
       status: 200,
       json: async () => ({ sub: 'user123', email: 'test@example.com' }),
@@ -297,7 +297,7 @@ describe('useAuth hook', () => {
   })
 
   it('should call logout endpoint', async () => {
-    ;(global.fetch as jest.Mock)
+    (global.fetch as jest.Mock)
       .mockResolvedValueOnce({
         ok: true,
         status: 200,
@@ -341,7 +341,7 @@ describe('useAuth hook', () => {
   })
 
   it('should call refresh endpoint', async () => {
-    ;(global.fetch as jest.Mock)
+    (global.fetch as jest.Mock)
       .mockResolvedValueOnce({
         ok: true,
         status: 200,
@@ -390,7 +390,7 @@ describe('useAuth hook', () => {
   })
 
   it('should handle logout failure by setting error state', async () => {
-    ;(global.fetch as jest.Mock)
+    (global.fetch as jest.Mock)
       .mockResolvedValueOnce({
         ok: true,
         status: 200,
@@ -449,7 +449,7 @@ describe('useAuth hook', () => {
   })
 
   it('should handle refresh failure', async () => {
-    ;(global.fetch as jest.Mock)
+    (global.fetch as jest.Mock)
       .mockResolvedValueOnce({
         ok: true,
         status: 200,

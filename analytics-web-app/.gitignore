@@ -3,8 +3,6 @@ node_modules/
 .pnpm-debug.log*
 
 # Build outputs
-.next/
-out/
 dist/
 build/
 

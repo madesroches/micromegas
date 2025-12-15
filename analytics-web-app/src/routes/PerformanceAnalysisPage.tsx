@@ -1,7 +1,5 @@
-'use client'
-
 import { Suspense, useState, useCallback, useMemo, useEffect, useRef } from 'react'
-import { useSearchParams, useRouter, usePathname } from 'next/navigation'
+import { useSearchParams, useNavigate, useLocation } from 'react-router-dom'
 import { useMutation } from '@tanstack/react-query'
 import { AppLink } from '@/components/AppLink'
 import { SplitButton } from '@/components/ui/SplitButton'
@@ -94,9 +92,10 @@ function calculateBinInterval(timeSpanMs: number, chartWidthPx: number = 800): s
 }
 
 function PerformanceAnalysisContent() {
-  const searchParams = useSearchParams()
-  const router = useRouter()
-  const pathname = usePathname()
+  const [searchParams] = useSearchParams()
+  const navigate = useNavigate()
+  const location = useLocation()
+  const pathname = location.pathname
   const processId = searchParams.get('process_id')
   const measureParam = searchParams.get('measure')
   const { parsed: timeRange, apiTimeRange, setTimeRange } = useTimeRange()
@@ -117,7 +116,6 @@ function PerformanceAnalysisContent() {
   const [progress, setProgress] = useState<ProgressUpdate | null>(null)
   const [traceError, setTraceError] = useState<string | null>(null)
   const [chartAxisBounds, setChartAxisBounds] = useState<ChartAxisBounds | null>(null)
-  // Cache the trace buffer so we can retry Perfetto or download without regenerating
   const [cachedTraceBuffer, setCachedTraceBuffer] = useState<ArrayBuffer | null>(null)
   const [cachedTraceTimeRange, setCachedTraceTimeRange] = useState<{ begin: string; end: string } | null>(null)
 
@@ -132,7 +130,6 @@ function PerformanceAnalysisContent() {
     return measures.find((m) => m.name === selectedMeasure)
   }, [measures, selectedMeasure])
 
-  // Chart time range for ThreadCoverageTimeline
   const chartTimeRange = useMemo(() => {
     if (chartData.length === 0) return null
     return {
@@ -196,7 +193,6 @@ function PerformanceAnalysisContent() {
     mutationFn: executeSqlQuery,
     onSuccess: (data) => {
       const rows = toRowObjects(data)
-      // Group by stream_id (one row per CPU stream/thread)
       const threadMap = new Map<string, ThreadCoverage>()
 
       for (const row of rows) {
@@ -215,7 +211,6 @@ function PerformanceAnalysisContent() {
         threadMap.get(streamId)!.segments.push({ begin: beginTime, end: endTime })
       }
 
-      // Sort threads by name and segments by begin time
       const threads = Array.from(threadMap.values())
       threads.sort((a, b) => a.threadName.localeCompare(b.threadName))
       for (const thread of threads) {
@@ -309,12 +304,11 @@ function PerformanceAnalysisContent() {
       setSelectedMeasure(measure)
       const params = new URLSearchParams(searchParams.toString())
       params.set('measure', measure)
-      router.push(`${pathname}?${params.toString()}`)
+      navigate(`${pathname}?${params.toString()}`)
     },
-    [searchParams, router, pathname]
+    [searchParams, navigate, pathname]
   )
 
-  // Load process info once on mount
   const hasLoadedProcessRef = useRef(false)
   useEffect(() => {
     if (processId && !hasLoadedProcessRef.current) {
@@ -328,7 +322,6 @@ function PerformanceAnalysisContent() {
     }
   }, [processId, apiTimeRange])
 
-  // Load measure discovery on mount
   const hasLoadedDiscoveryRef = useRef(false)
   useEffect(() => {
     if (processId && !hasLoadedDiscoveryRef.current) {
@@ -338,14 +331,12 @@ function PerformanceAnalysisContent() {
     }
   }, [processId, loadDiscovery, loadThreadCoverage])
 
-  // Load data when measure is selected
   useEffect(() => {
     if (discoveryDone && selectedMeasure && processId) {
       loadData()
     }
   }, [discoveryDone, selectedMeasure, processId, loadData])
 
-  // Reload when time range changes
   const prevTimeRangeRef = useRef<{ begin: string; end: string } | null>(null)
   useEffect(() => {
     if (!hasLoaded) return
@@ -383,7 +374,6 @@ function PerformanceAnalysisContent() {
 
   const handleTimeRangeSelect = useCallback(
     (from: Date, to: Date) => {
-      // Zoom into the selected time range
       setTimeRange(from.toISOString(), to.toISOString())
     },
     [setTimeRange]
@@ -397,7 +387,6 @@ function PerformanceAnalysisContent() {
     setChartAxisBounds(bounds)
   }, [])
 
-  // Check if we can use cached buffer (same time range)
   const canUseCachedBuffer = useCallback(() => {
     if (!cachedTraceBuffer || !cachedTraceTimeRange) return false
     const currentBegin = timeRange.from.toISOString()
@@ -405,7 +394,6 @@ function PerformanceAnalysisContent() {
     return cachedTraceTimeRange.begin === currentBegin && cachedTraceTimeRange.end === currentEnd
   }, [cachedTraceBuffer, cachedTraceTimeRange, timeRange])
 
-  // Open cached buffer in Perfetto (without regenerating)
   const openCachedInPerfetto = useCallback(async () => {
     if (!processId || !cachedTraceBuffer || !cachedTraceTimeRange) return
 
@@ -430,7 +418,6 @@ function PerformanceAnalysisContent() {
     }
   }, [processId, cachedTraceBuffer, cachedTraceTimeRange])
 
-  // Download cached buffer as file
   const downloadCachedBuffer = useCallback(() => {
     if (!processId || !cachedTraceBuffer) return
 
@@ -449,7 +436,6 @@ function PerformanceAnalysisContent() {
   const handleOpenInPerfetto = async () => {
     if (!processId) return
 
-    // If we have a cached buffer for the same time range, use it
     if (canUseCachedBuffer()) {
       await openCachedInPerfetto()
       return
@@ -459,7 +445,6 @@ function PerformanceAnalysisContent() {
     setTraceMode('perfetto')
     setProgress(null)
     setTraceError(null)
-    // Clear old cache when generating new trace
     setCachedTraceBuffer(null)
     setCachedTraceTimeRange(null)
 
@@ -475,7 +460,6 @@ function PerformanceAnalysisContent() {
     }
 
     try {
-      // Generate trace and get buffer
       const buffer = await generateTrace(processId, request, (update) => {
         setProgress(update)
       }, { returnBuffer: true })
@@ -484,11 +468,9 @@ function PerformanceAnalysisContent() {
         throw new Error('No trace data received')
       }
 
-      // Cache the buffer for potential retry/download
       setCachedTraceBuffer(buffer)
       setCachedTraceTimeRange(currentTimeRange)
 
-      // Open in Perfetto
       await openInPerfetto({
         buffer,
         processId,
@@ -590,7 +572,6 @@ function PerformanceAnalysisContent() {
   return (
     <PageLayout onRefresh={handleRefresh} rightPanel={sqlPanel}>
       <div className="p-6 flex flex-col">
-        {/* Page Header */}
         <div className="mb-5">
           <h1 className="text-2xl font-semibold text-theme-text-primary">Performance Analysis</h1>
           <div className="text-sm text-theme-text-muted font-mono mt-1">
@@ -598,7 +579,6 @@ function PerformanceAnalysisContent() {
           </div>
         </div>
 
-        {/* Controls */}
         <div className="flex gap-3 mb-4 items-center flex-wrap">
           <select
             value={selectedMeasure || ''}
@@ -645,7 +625,6 @@ function PerformanceAnalysisContent() {
           </span>
         </div>
 
-        {/* Query Error Banner */}
         {queryError && (
           <ErrorBanner
             title="Query execution failed"
@@ -655,7 +634,6 @@ function PerformanceAnalysisContent() {
           />
         )}
 
-        {/* Trace Error Banner */}
         {traceError && (
           <div className="bg-error-subtle border border-error-border rounded-lg p-4 mb-4">
             <div className="flex items-start gap-3">
@@ -693,7 +671,6 @@ function PerformanceAnalysisContent() {
           </div>
         )}
 
-        {/* Progress */}
         {isGenerating && (
           <div className="bg-app-panel border border-theme-border rounded-lg p-4 mb-4">
             <div className="flex items-center gap-4">
@@ -710,7 +687,6 @@ function PerformanceAnalysisContent() {
           </div>
         )}
 
-        {/* Chart Area */}
         <div className="h-[350px] mb-4">
           {selectedMeasure && chartData.length > 0 ? (
             <TimeSeriesChart
@@ -773,7 +749,6 @@ function PerformanceAnalysisContent() {
           ) : null}
         </div>
 
-        {/* Thread Coverage Timeline */}
         {chartTimeRange && threadCoverage.length > 0 && (
           <ThreadCoverageTimeline
             threads={threadCoverage}
@@ -783,7 +758,6 @@ function PerformanceAnalysisContent() {
           />
         )}
 
-        {/* Hint */}
         {chartData.length > 0 && (
           <div className="text-xs text-theme-text-muted text-center mt-2">
             Drag on the chart or thread coverage to zoom into a time range

@@ -1,5 +1,3 @@
-'use client'
-
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import uPlot from 'uplot'
 import 'uplot/dist/uPlot.min.css'

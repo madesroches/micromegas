@@ -1,7 +1,5 @@
-'use client'
-
 import { useEffect } from 'react'
-import { usePathname } from 'next/navigation'
+import { useLocation } from 'react-router-dom'
 import { useAuth } from '@/lib/auth'
 import { getConfig } from '@/lib/config'
 import { Card, CardContent } from '@/components/ui/card'
@@ -13,7 +11,8 @@ interface AuthGuardProps {
 
 export function AuthGuard({ children }: AuthGuardProps) {
   const { status, error } = useAuth()
-  const pathname = usePathname()
+  const location = useLocation()
+  const pathname = location.pathname
 
   useEffect(() => {
     if (status === 'unauthenticated') {

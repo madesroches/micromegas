@@ -16,7 +16,7 @@ Modern web application for exploring and analyzing micromegas telemetry data wit
 ## Architecture
 
 - **Backend**: Rust + Axum web server (`analytics-web-srv`)
-- **Frontend**: Next.js 15 + React 18 + TypeScript
+- **Frontend**: Vite + React 18 + React Router + TypeScript
 - **UI**: Tailwind CSS + Radix UI components
 - **API**: REST endpoints with HTTP streaming support
 
@@ -36,7 +36,7 @@ yarn install
 yarn dev
 ```
 
-The frontend will run on http://localhost:3001 with hot reloading.
+The frontend will run on http://localhost:3000 with hot reloading.
 
 ### Backend Development
 
@@ -59,7 +59,7 @@ The backend will run on http://localhost:3000.
    cd analytics-web-app && yarn dev
    ```
 
-The Next.js dev server will proxy API requests to the Rust backend.
+The Vite dev server will proxy API requests to the Rust backend.
 
 ## Production Build
 
@@ -86,7 +86,7 @@ cd analytics-web-app
 ./start_analytics_web.py
 ```
 
-This will automatically start both the Rust backend and Next.js frontend with hot reloading.
+This will automatically start both the Rust backend and Vite frontend with hot reloading.
 
 ## API Endpoints
 
@@ -107,7 +107,7 @@ This will automatically start both the Rust backend and Next.js frontend with ho
 ### Optional
 - `PORT` - Server port (default: 3000)
 - `FRONTEND_DIR` - Frontend build directory (default: ../analytics-web-app/dist)
-- `MICROMEGAS_WEB_CORS_ORIGIN` - CORS origin for API requests (default: http://localhost:3001)
+- `MICROMEGAS_WEB_CORS_ORIGIN` - CORS origin for API requests (default: http://localhost:3000)
 
 ### OIDC Configuration
 

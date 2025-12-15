@@ -1,5 +1,3 @@
-'use client'
-
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { Clock, ChevronDown } from 'lucide-react'
 import { useTimeRange } from '@/hooks/useTimeRange'

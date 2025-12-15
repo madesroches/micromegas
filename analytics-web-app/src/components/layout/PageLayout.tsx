@@ -1,5 +1,3 @@
-'use client'
-
 import { Suspense } from 'react'
 import { Header } from './Header'
 import { Sidebar } from './Sidebar'

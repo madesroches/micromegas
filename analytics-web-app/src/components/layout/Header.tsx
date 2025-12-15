@@ -1,5 +1,3 @@
-'use client'
-
 import { useState } from 'react'
 import { useAuth } from '@/lib/auth'
 import { RefreshCw, ChevronDown, LogOut } from 'lucide-react'
