@@ -20,8 +20,6 @@ WHERE level <= $max_level
 ORDER BY time DESC
 LIMIT $limit`
 
-const PROCESS_SQL = `SELECT exe FROM processes WHERE process_id = '$process_id' LIMIT 1`
-
 const VARIABLES = [
   { name: 'process_id', description: 'Current process ID' },
   { name: 'max_level', description: 'Max log level filter (1-6)' },
@@ -197,7 +195,6 @@ function ProcessLogContent() {
   const debouncedSearchInput = useDebounce(searchInputValue, 300)
   const [queryError, setQueryError] = useState<string | null>(null)
   const [rows, setRows] = useState<SqlRow[]>([])
-  const [_processExe, setProcessExe] = useState<string | null>(null)
   const [hasLoaded, setHasLoaded] = useState(false)
 
   const sqlMutation = useMutation({
@@ -216,20 +213,9 @@ function ProcessLogContent() {
     },
   })
 
-  const processMutation = useMutation({
-    mutationFn: executeSqlQuery,
-    onSuccess: (data) => {
-      const resultRows = toRowObjects(data)
-      if (resultRows.length > 0) {
-        setProcessExe(String(resultRows[0].exe ?? ''))
-      }
-    },
-  })
 
   const sqlMutateRef = useRef(sqlMutation.mutate)
   sqlMutateRef.current = sqlMutation.mutate
-  const processMutateRef = useRef(processMutation.mutate)
-  processMutateRef.current = processMutation.mutate
 
   const loadData = useCallback(
     (sql: string = DEFAULT_SQL) => {
@@ -336,19 +322,6 @@ function ProcessLogContent() {
     },
     []
   )
-
-  const hasLoadedProcessRef = useRef(false)
-  useEffect(() => {
-    if (processId && !hasLoadedProcessRef.current) {
-      hasLoadedProcessRef.current = true
-      processMutateRef.current({
-        sql: PROCESS_SQL,
-        params: { process_id: processId },
-        begin: apiTimeRange.begin,
-        end: apiTimeRange.end,
-      })
-    }
-  }, [processId, apiTimeRange])
 
   const hasInitialLoadRef = useRef(false)
   useEffect(() => {
