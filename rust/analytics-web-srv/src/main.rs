@@ -8,7 +8,7 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
     middleware,
-    response::{IntoResponse, Response},
+    response::{IntoResponse, Redirect, Response},
     routing::{get, post},
 };
 use bytes::Bytes;
@@ -39,8 +39,7 @@ use micromegas_auth::{axum::auth_middleware, types::AuthProvider};
 use queries::{query_all_processes, query_nb_trace_events};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, pin::Pin, sync::Arc, time::Duration};
-use tower::Layer;
-use tower_http::{cors::CorsLayer, normalize_path::NormalizePathLayer, services::ServeDir};
+use tower_http::{cors::CorsLayer, services::ServeDir};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -335,37 +334,46 @@ async fn main() -> Result<()> {
     let spa_fallback = get(serve_index_with_config).with_state(index_state.clone());
     let serve_dir = ServeDir::new(&args.frontend_dir).fallback(spa_fallback.clone());
 
-    // Build frontend router that handles paths UNDER base_path (not base_path itself)
-    // The "/" route is NOT included here because:
-    // - nest("/micromegas", router_with_"/") would create /micromegas which conflicts
-    //   with our explicit route for the exact base path
-    // - We handle /micromegas exactly with a separate route below
+    // Build frontend router that handles paths UNDER base_path
+    // "/" and "/index.html" need explicit handlers to inject runtime config
+    // Other static files and SPA routes go through ServeDir with fallback
+    let index_handler = get(serve_index_with_config).with_state(index_state.clone());
     let frontend = Router::new()
-        // /index.html under the nested path
-        .route("/index.html", get(serve_index_with_config))
-        .with_state(index_state.clone())
-        // All other paths: try static file, fall back to index.html for SPA
+        // Explicit "/" route - serves index.html with injected config
+        .route("/", index_handler.clone())
+        // /index.html also serves index with config
+        .route("/index.html", index_handler)
+        // All other paths: static files with SPA fallback
         .fallback_service(serve_dir);
 
-    // Add route for exact base_path match
-    // This handles /micromegas -> serve index with config
-    // nest() only matches /micromegas/* not /micromegas itself
-    let app = app.route(
-        &base_path,
-        get(serve_index_with_config).with_state(index_state),
-    );
-
     // Nest frontend under base_path - handles /base_path/*
+    // Note: nest() does NOT match /base_path/ (with trailing slash), only /base_path/*
     let app = app.nest(&base_path, frontend);
+
+    // Explicitly handle /base_path/ (with trailing slash) - nest() doesn't match this
+    let base_path_with_slash = format!("{}/", base_path);
+    let index_handler_for_root = get(serve_index_with_config).with_state(index_state);
+    let app = app.route(&base_path_with_slash, index_handler_for_root);
+
+    // Add middleware to redirect /base_path -> /base_path/
+    let base_path_for_redirect = base_path.clone();
+    let app = app.layer(axum::middleware::from_fn(
+        move |req: axum::extract::Request, next: axum::middleware::Next| {
+            let base_path = base_path_for_redirect.clone();
+            async move {
+                let path = req.uri().path();
+                // Redirect exact base_path match to base_path/
+                if path == base_path {
+                    let redirect_uri = format!("{}/", base_path);
+                    return Redirect::permanent(&redirect_uri).into_response();
+                }
+                next.run(req).await.into_response()
+            }
+        },
+    ));
 
     // Add CORS layer to the router
     let app = app.layer(cors_layer);
-
-    // IMPORTANT: NormalizePathLayer must WRAP the router, not be added via .layer()
-    // Router::layer() runs AFTER routing, but we need trailing slash normalization
-    // BEFORE routing so /micromegas/ matches the /micromegas route.
-    // See: https://github.com/tokio-rs/axum/discussions/2377
-    let app = NormalizePathLayer::trim_trailing_slash().layer(app);
 
     let addr = format!("0.0.0.0:{}", args.port);
     println!("Analytics web server starting on {}", addr);
