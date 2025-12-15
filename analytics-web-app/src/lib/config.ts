@@ -26,10 +26,10 @@ export function getConfig(): RuntimeConfig {
   }
 
   // Development fallback (no injection needed in dev mode)
-  // In dev mode, Vite proxies API calls to port 8000
-  // With relative base path './'), we use empty basePath in dev
+  // In dev mode, Vite injects VITE_BASE_PATH from MICROMEGAS_BASE_PATH env var
+  // Must use the base path so browser URL matches cookie path for auth to work
   cachedConfig = {
-    basePath: import.meta.env.DEV ? '' : '',
+    basePath: import.meta.env.DEV ? (import.meta.env.VITE_BASE_PATH || '') : '',
   }
   return cachedConfig
 }

@@ -155,7 +155,8 @@ def setup_environment():
         "MICROMEGAS_FLIGHTSQL_URL": "grpc://127.0.0.1:50051",
         "MICROMEGAS_AUTH_TOKEN": "",  # Empty for no-auth mode
         "MICROMEGAS_WEB_CORS_ORIGIN": "http://localhost:3000",  # Frontend origin for CORS
-        "MICROMEGAS_AUTH_REDIRECT_URI": "http://localhost:3000/auth/callback",  # OAuth callback URL
+        # OAuth callback URL must include base_path so browser URL matches cookie path
+        "MICROMEGAS_AUTH_REDIRECT_URI": f"http://localhost:3000{base_path}/auth/callback",
         "MICROMEGAS_STATE_SECRET": dev_secret,  # Random secret for OAuth state signing
     }
 
