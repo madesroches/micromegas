@@ -35,25 +35,9 @@ export function getConfig(): RuntimeConfig {
 }
 
 /**
- * Get the base path for internal navigation links.
- * In development, this returns empty string (Vite handles routing).
- * In production, this returns the runtime base path from config injection.
- */
-export function getLinkBasePath(): string {
-  if (typeof window !== 'undefined' && window.__MICROMEGAS_CONFIG__) {
-    return window.__MICROMEGAS_CONFIG__.basePath
-  }
-  // Development fallback - empty for Vite dev server
-  return ''
-}
-
-/**
- * Prepend the runtime base path to an internal link.
- * Use this for all <Link href="..."> and navigate() calls.
+ * Normalize an internal link path (ensures leading slash).
+ * BrowserRouter basename handles the base path automatically.
  */
 export function appLink(path: string): string {
-  const base = getLinkBasePath()
-  // Ensure path starts with /
-  const normalizedPath = path.startsWith('/') ? path : `/${path}`
-  return `${base}${normalizedPath}`
+  return path.startsWith('/') ? path : `/${path}`
 }

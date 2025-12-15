@@ -11,7 +11,6 @@ import { ErrorBanner } from '@/components/ErrorBanner'
 import { TimeSeriesChart } from '@/components/TimeSeriesChart'
 import { executeSqlQuery, toRowObjects } from '@/lib/api'
 import { useTimeRange } from '@/hooks/useTimeRange'
-import { SqlRow } from '@/types'
 
 const DISCOVERY_SQL = `SELECT DISTINCT name, target, unit
 FROM view_instance('measures', '$process_id')
@@ -81,7 +80,7 @@ function ProcessMetricsContent() {
   const [selectedMeasure, setSelectedMeasure] = useState<string | null>(measureParam)
   const [queryError, setQueryError] = useState<string | null>(null)
   const [chartData, setChartData] = useState<{ time: number; value: number }[]>([])
-  const [processExe, setProcessExe] = useState<string | null>(null)
+  const [_processExe, setProcessExe] = useState<string | null>(null)
   const [hasLoaded, setHasLoaded] = useState(false)
   const [discoveryDone, setDiscoveryDone] = useState(false)
   const [chartWidth, setChartWidth] = useState<number>(800)

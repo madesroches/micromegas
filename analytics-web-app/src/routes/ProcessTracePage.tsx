@@ -8,7 +8,7 @@ import { AuthGuard } from '@/components/AuthGuard'
 import { CopyableProcessId } from '@/components/CopyableProcessId'
 import { executeSqlQuery, toRowObjects, generateTrace } from '@/lib/api'
 import { useTimeRange } from '@/hooks/useTimeRange'
-import { ProgressUpdate, GenerateTraceRequest, SqlRow } from '@/types'
+import { ProgressUpdate, GenerateTraceRequest } from '@/types'
 
 const PROCESS_SQL = `SELECT exe FROM processes WHERE process_id = '$process_id' LIMIT 1`
 

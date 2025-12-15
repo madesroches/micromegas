@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useAuth } from '@/lib/auth'
 import { RefreshCw, ChevronDown, LogOut } from 'lucide-react'
 import { AppLink } from '@/components/AppLink'
-import { getLinkBasePath } from '@/lib/config'
+import { getConfig } from '@/lib/config'
 import { TimeRangePicker } from './TimeRangePicker'
 import { MicromegasLogo } from '@/components/MicromegasLogo'
 
@@ -19,7 +19,8 @@ export function Header({ onRefresh }: HeaderProps) {
     setIsLoggingOut(true)
     try {
       await logout()
-      window.location.href = `${getLinkBasePath()}/login`
+      // Use full base path for raw browser navigation (not React Router)
+      window.location.href = `${getConfig().basePath}/login`
     } catch (error) {
       console.error('Logout failed:', error)
       setIsLoggingOut(false)

@@ -160,7 +160,7 @@ describe('AuthGuard', () => {
         status: 500,
       })
 
-    const { rerender } = render(
+    render(
       <AuthProvider>
         <AuthGuard>
           <div>Protected Content</div>

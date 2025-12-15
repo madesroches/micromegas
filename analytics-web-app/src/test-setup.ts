@@ -7,7 +7,6 @@ process.env.NODE_ENV = 'development'
 // Mock the config module to provide a consistent basePath for tests
 jest.mock('@/lib/config', () => ({
   getConfig: () => ({ basePath: '' }),
-  getLinkBasePath: () => '',
   appLink: (path: string) => path,
 }))
 

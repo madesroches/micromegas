@@ -197,7 +197,7 @@ function ProcessLogContent() {
   const debouncedSearchInput = useDebounce(searchInputValue, 300)
   const [queryError, setQueryError] = useState<string | null>(null)
   const [rows, setRows] = useState<SqlRow[]>([])
-  const [processExe, setProcessExe] = useState<string | null>(null)
+  const [_processExe, setProcessExe] = useState<string | null>(null)
   const [hasLoaded, setHasLoaded] = useState(false)
 
   const sqlMutation = useMutation({

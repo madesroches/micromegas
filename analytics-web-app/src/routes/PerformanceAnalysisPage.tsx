@@ -14,7 +14,7 @@ import { ThreadCoverageTimeline } from '@/components/ThreadCoverageTimeline'
 import { executeSqlQuery, toRowObjects, generateTrace } from '@/lib/api'
 import { openInPerfetto, PerfettoError } from '@/lib/perfetto'
 import { useTimeRange } from '@/hooks/useTimeRange'
-import { GenerateTraceRequest, ProgressUpdate, ThreadSegment, ThreadCoverage } from '@/types'
+import { GenerateTraceRequest, ProgressUpdate, ThreadCoverage } from '@/types'
 
 const DISCOVERY_SQL = `SELECT DISTINCT name, target, unit
 FROM view_instance('measures', '$process_id')
@@ -104,7 +104,7 @@ function PerformanceAnalysisContent() {
   const [selectedMeasure, setSelectedMeasure] = useState<string | null>(measureParam)
   const [queryError, setQueryError] = useState<string | null>(null)
   const [chartData, setChartData] = useState<{ time: number; value: number }[]>([])
-  const [processExe, setProcessExe] = useState<string | null>(null)
+  const [_processExe, setProcessExe] = useState<string | null>(null)
   const [hasLoaded, setHasLoaded] = useState(false)
   const [discoveryDone, setDiscoveryDone] = useState(false)
   const [chartWidth, setChartWidth] = useState<number>(800)
