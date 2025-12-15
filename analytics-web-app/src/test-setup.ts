@@ -4,6 +4,13 @@ import '@testing-library/jest-dom'
 // @ts-expect-error - Override readonly property for testing
 process.env.NODE_ENV = 'development'
 
+// Mock the config module to provide a consistent basePath for tests
+jest.mock('@/lib/config', () => ({
+  getConfig: () => ({ basePath: '' }),
+  getLinkBasePath: () => '',
+  appLink: (path: string) => path,
+}))
+
 // Default mock for react-router-dom (can be overridden in individual tests)
 const mockNavigate = jest.fn()
 

@@ -3,10 +3,11 @@ import react from '@vitejs/plugin-react'
 import path from 'path'
 
 export default defineConfig(({ mode }) => {
-  // Load env variables (MICROMEGAS_BASE_PATH, etc.)
-  // Base path must be set via environment - use start_analytics_web.py or set manually
+  // Load env variables - use start_analytics_web.py or set manually
   const env = loadEnv(mode, process.cwd(), '')
   const basePath = env.MICROMEGAS_BASE_PATH
+  const backendUrl = env.MICROMEGAS_BACKEND_URL || `http://localhost:${env.MICROMEGAS_BACKEND_PORT || '8000'}`
+  const frontendPort = parseInt(env.MICROMEGAS_FRONTEND_PORT || '3000', 10)
 
   return {
     plugins: [react()],
@@ -26,25 +27,25 @@ export default defineConfig(({ mode }) => {
       sourcemap: true,
     },
     server: {
-      port: 3000,
+      port: frontendPort,
       proxy: {
         // Proxy API endpoints to backend without rewriting
         // This ensures browser URL path matches cookie path for auth to work
         // Only proxy specific API paths, not frontend routes
         [`${basePath}/api`]: {
-          target: 'http://localhost:8000',
+          target: backendUrl,
         },
         [`${basePath}/auth`]: {
-          target: 'http://localhost:8000',
+          target: backendUrl,
         },
         [`${basePath}/query`]: {
-          target: 'http://localhost:8000',
+          target: backendUrl,
         },
         [`${basePath}/perfetto`]: {
-          target: 'http://localhost:8000',
+          target: backendUrl,
         },
         [`${basePath}/health`]: {
-          target: 'http://localhost:8000',
+          target: backendUrl,
         },
       },
     },

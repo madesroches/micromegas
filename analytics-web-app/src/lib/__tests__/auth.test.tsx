@@ -68,7 +68,7 @@ describe('AuthProvider', () => {
     expect(user.name).toBe('Test User')
 
     expect(global.fetch).toHaveBeenCalledWith(
-      'http://localhost:8000/auth/me',
+      '/auth/me',
       expect.objectContaining({
         credentials: 'include',
       })
@@ -103,7 +103,7 @@ describe('AuthProvider', () => {
 
     // Verify that refresh was attempted
     expect(global.fetch).toHaveBeenCalledWith(
-      'http://localhost:8000/auth/refresh',
+      '/auth/refresh',
       expect.objectContaining({
         method: 'POST',
         credentials: 'include',
@@ -152,12 +152,12 @@ describe('AuthProvider', () => {
     expect(global.fetch).toHaveBeenCalledTimes(3)
     expect(global.fetch).toHaveBeenNthCalledWith(
       1,
-      'http://localhost:8000/auth/me',
+      '/auth/me',
       expect.any(Object)
     )
     expect(global.fetch).toHaveBeenNthCalledWith(
       2,
-      'http://localhost:8000/auth/refresh',
+      '/auth/refresh',
       expect.objectContaining({
         method: 'POST',
         credentials: 'include',
@@ -165,7 +165,7 @@ describe('AuthProvider', () => {
     )
     expect(global.fetch).toHaveBeenNthCalledWith(
       3,
-      'http://localhost:8000/auth/me',
+      '/auth/me',
       expect.any(Object)
     )
   })
@@ -281,7 +281,7 @@ describe('useAuth hook', () => {
 
     await waitFor(() => {
       expect(global.fetch).toHaveBeenCalledWith(
-        'http://localhost:8000/auth/me',
+        '/auth/me',
         expect.any(Object)
       )
     })
@@ -327,7 +327,7 @@ describe('useAuth hook', () => {
 
     await waitFor(() => {
       expect(global.fetch).toHaveBeenCalledWith(
-        'http://localhost:8000/auth/logout',
+        '/auth/logout',
         expect.objectContaining({
           method: 'POST',
           credentials: 'include',
@@ -376,7 +376,7 @@ describe('useAuth hook', () => {
 
     await waitFor(() => {
       expect(global.fetch).toHaveBeenCalledWith(
-        'http://localhost:8000/auth/refresh',
+        '/auth/refresh',
         expect.objectContaining({
           method: 'POST',
           credentials: 'include',
@@ -489,7 +489,7 @@ describe('useAuth hook', () => {
 
     await waitFor(() => {
       expect(global.fetch).toHaveBeenCalledWith(
-        'http://localhost:8000/auth/refresh',
+        '/auth/refresh',
         expect.any(Object)
       )
     })

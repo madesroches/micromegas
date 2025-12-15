@@ -5,11 +5,6 @@ import { AuthProvider } from '@/lib/auth'
 // Mock fetch globally
 global.fetch = jest.fn()
 
-// Mock Next.js navigation
-jest.mock('next/navigation', () => ({
-  usePathname: () => '/',
-}))
-
 // Mock window.location
 const originalLocation = window.location
 const mockLocationHref = jest.fn()
@@ -106,9 +101,9 @@ describe('AuthGuard', () => {
     )
 
     await waitFor(() => {
-      // Base path from config defaults to http://localhost:8000
+      // With empty basePath from mocked config, login URL is relative
       expect(mockLocationHref).toHaveBeenCalledWith(
-        'http://localhost:8000/login?return_url=%2F'
+        '/login?return_url=%2F'
       )
     })
 
