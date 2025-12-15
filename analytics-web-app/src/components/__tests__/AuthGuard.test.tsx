@@ -5,11 +5,6 @@ import { AuthProvider } from '@/lib/auth'
 // Mock fetch globally
 global.fetch = jest.fn()
 
-// Mock Next.js navigation
-jest.mock('next/navigation', () => ({
-  usePathname: () => '/',
-}))
-
 // Mock window.location
 const originalLocation = window.location
 const mockLocationHref = jest.fn()
@@ -49,7 +44,7 @@ describe('AuthGuard', () => {
   })
 
   it('should show loading state while checking authentication', () => {
-    ;(global.fetch as jest.Mock).mockImplementation(
+    (global.fetch as jest.Mock).mockImplementation(
       () => new Promise(() => {}) // Never resolves
     )
 
@@ -66,7 +61,7 @@ describe('AuthGuard', () => {
   })
 
   it('should render children when authenticated', async () => {
-    ;(global.fetch as jest.Mock).mockResolvedValueOnce({
+    (global.fetch as jest.Mock).mockResolvedValueOnce({
       ok: true,
       status: 200,
       json: async () => ({
@@ -92,7 +87,7 @@ describe('AuthGuard', () => {
   })
 
   it('should redirect to login when unauthenticated', async () => {
-    ;(global.fetch as jest.Mock).mockResolvedValueOnce({
+    (global.fetch as jest.Mock).mockResolvedValueOnce({
       ok: false,
       status: 401,
     })
@@ -106,9 +101,9 @@ describe('AuthGuard', () => {
     )
 
     await waitFor(() => {
-      // Base path from config defaults to http://localhost:8000
+      // With empty basePath from mocked config, login URL is relative
       expect(mockLocationHref).toHaveBeenCalledWith(
-        'http://localhost:8000/login?return_url=%2F'
+        '/login?return_url=%2F'
       )
     })
 
@@ -117,7 +112,7 @@ describe('AuthGuard', () => {
   })
 
   it('should show error state on service unavailable', async () => {
-    ;(global.fetch as jest.Mock).mockResolvedValueOnce({
+    (global.fetch as jest.Mock).mockResolvedValueOnce({
       ok: false,
       status: 500,
     })
@@ -139,7 +134,7 @@ describe('AuthGuard', () => {
   })
 
   it('should show error state on network error', async () => {
-    ;(global.fetch as jest.Mock).mockRejectedValueOnce(
+    (global.fetch as jest.Mock).mockRejectedValueOnce(
       new Error('Network error')
     )
 
@@ -159,13 +154,13 @@ describe('AuthGuard', () => {
   })
 
   it('should retry authentication when retry button is clicked', async () => {
-    ;(global.fetch as jest.Mock)
+    (global.fetch as jest.Mock)
       .mockResolvedValueOnce({
         ok: false,
         status: 500,
       })
 
-    const { rerender } = render(
+    render(
       <AuthProvider>
         <AuthGuard>
           <div>Protected Content</div>

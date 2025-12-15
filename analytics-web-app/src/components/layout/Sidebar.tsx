@@ -1,6 +1,4 @@
-'use client'
-
-import { usePathname } from 'next/navigation'
+import { useLocation } from 'react-router-dom'
 import { AppLink } from '@/components/AppLink'
 import { LayoutGrid } from 'lucide-react'
 
@@ -21,7 +19,8 @@ const navItems: NavItem[] = [
 ]
 
 export function Sidebar() {
-  const pathname = usePathname()
+  const location = useLocation()
+  const pathname = location.pathname
 
   const isActive = (item: NavItem) => {
     if (item.matchPaths) {

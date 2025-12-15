@@ -1,6 +1,4 @@
-'use client'
-
-import { useSearchParams, useRouter, usePathname } from 'next/navigation'
+import { useSearchParams, useNavigate, useLocation } from 'react-router-dom'
 import { useCallback, useMemo } from 'react'
 import {
   TimeRange,
@@ -22,9 +20,10 @@ export interface UseTimeRangeReturn {
 }
 
 export function useTimeRange(): UseTimeRangeReturn {
-  const searchParams = useSearchParams()
-  const router = useRouter()
-  const pathname = usePathname()
+  const [searchParams] = useSearchParams()
+  const navigate = useNavigate()
+  const location = useLocation()
+  const pathname = location.pathname
 
   // Extract actual string values from searchParams to avoid reference instability
   const fromParam = searchParams.get('from') || DEFAULT_TIME_RANGE.from
@@ -56,9 +55,9 @@ export function useTimeRange(): UseTimeRangeReturn {
       const params = new URLSearchParams(searchParams.toString())
       params.set('from', from)
       params.set('to', to)
-      router.push(`${pathname}?${params.toString()}`)
+      navigate(`${pathname}?${params.toString()}`)
     },
-    [searchParams, router, pathname]
+    [searchParams, navigate, pathname]
   )
 
   return {

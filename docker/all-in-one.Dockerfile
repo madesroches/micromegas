@@ -40,7 +40,7 @@ COPY --from=rust-builder /build/rust/target/release/http-gateway-srv /usr/local/
 COPY --from=rust-builder /build/rust/target/release/analytics-web-srv /usr/local/bin/
 
 # Copy frontend for analytics-web-srv
-COPY --from=frontend-builder /app/out /app/frontend
+COPY --from=frontend-builder /app/dist /app/frontend
 
 # No default entrypoint - specify service when running:
 #   docker run micromegas-all telemetry-ingestion-srv --listen-endpoint-http 0.0.0.0:9000

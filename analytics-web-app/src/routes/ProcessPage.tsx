@@ -1,7 +1,5 @@
-'use client'
-
 import { Suspense, useState, useEffect, useCallback, useRef } from 'react'
-import { useSearchParams } from 'next/navigation'
+import { useSearchParams } from 'react-router-dom'
 import { useMutation } from '@tanstack/react-query'
 import { AppLink } from '@/components/AppLink'
 import { ArrowLeft, FileText, Activity, AlertCircle, BarChart2, Gauge } from 'lucide-react'
@@ -39,7 +37,7 @@ WHERE process_id = '$process_id'
 LIMIT 1`
 
 function ProcessPageContent() {
-  const searchParams = useSearchParams()
+  const [searchParams] = useSearchParams()
   const processId = searchParams.get('id')
   const { apiTimeRange, timeRange } = useTimeRange()
 

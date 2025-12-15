@@ -1,5 +1,3 @@
-'use client'
-
 import { useState, useCallback } from 'react'
 import { DayPicker } from 'react-day-picker'
 import { format, setHours, setMinutes, startOfDay, endOfDay } from 'date-fns'

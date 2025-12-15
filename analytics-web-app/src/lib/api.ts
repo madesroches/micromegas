@@ -32,30 +32,6 @@ export function toRowObjects(result: SqlQueryResponse): SqlRow[] {
   )
 }
 
-async function handleResponse<T>(response: Response): Promise<T> {
-  if (!response.ok) {
-    if (response.status === 401) {
-      throw new AuthenticationError()
-    }
-    try {
-      const errorData = await response.json()
-      if (errorData.error) {
-        throw new ApiErrorException(errorData.error as ApiError)
-      }
-    } catch (parseError) {
-      // If we can't parse the error response, fall back to generic error
-      if (parseError instanceof ApiErrorException) {
-        throw parseError
-      }
-      if (parseError instanceof AuthenticationError) {
-        throw parseError
-      }
-    }
-    throw new Error(`HTTP ${response.status}: ${response.statusText}`)
-  }
-  return response.json()
-}
-
 export interface GenerateTraceOptions {
   /** If true, return ArrayBuffer instead of downloading */
   returnBuffer?: boolean
@@ -114,6 +90,7 @@ export async function generateTrace(
   let progressComplete = false
   let bytesReceived = 0
 
+  // eslint-disable-next-line no-constant-condition
   while (true) {
     const { done, value } = await reader.read()
     if (done) break

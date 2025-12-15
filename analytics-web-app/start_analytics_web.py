@@ -56,14 +56,14 @@ def check_yarn_installed():
             return False
     return True
 
-def check_flightsql_server():
-    """Check if FlightSQL server is running"""
+def check_flightsql_server(port):
+    """Check if FlightSQL server is running on the given port"""
     try:
         # FlightSQL is gRPC, not HTTP, but we can try to connect to the port
         import socket
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(2)
-        result = sock.connect_ex(('127.0.0.1', 50051))
+        result = sock.connect_ex(('127.0.0.1', port))
         sock.close()
         return result == 0
     except:
@@ -99,16 +99,16 @@ def kill_existing_backend():
         return False
 
 def kill_existing_frontend():
-    """Kill any existing Next.js dev servers"""
+    """Kill any existing Vite dev servers"""
     try:
-        # Find and kill next dev processes
+        # Find and kill vite dev processes
         result = subprocess.run(
-            ["pkill", "-f", "next dev"],
+            ["pkill", "-f", "vite"],
             capture_output=True,
             text=True
         )
         if result.returncode == 0:
-            print_status("Killed existing Next.js dev server", "info")
+            print_status("Killed existing Vite dev server", "info")
             time.sleep(1)  # Give it a moment to shut down
             return True
         return False
@@ -137,9 +137,11 @@ def setup_environment():
     """Set up environment variables
 
     Returns:
-        tuple: (auth_enabled: bool, base_path: str)
+        tuple: (auth_enabled: bool, base_path: str, backend_port: int, frontend_port: int)
             - auth_enabled: True if OIDC auth is configured, False if running without auth
             - base_path: Normalized base path (e.g., '/mm' or '')
+            - backend_port: Port for the backend server
+            - frontend_port: Port for the frontend dev server
     """
     # Generate a random secret for development if not set
     import secrets
@@ -151,11 +153,21 @@ def setup_environment():
     os.environ["MICROMEGAS_BASE_PATH"] = base_path
     print_status(f"Using base path: {base_path}", "info")
 
+    # Port configuration
+    backend_port = int(os.environ.get("MICROMEGAS_BACKEND_PORT", "8000"))
+    frontend_port = int(os.environ.get("MICROMEGAS_FRONTEND_PORT", "3000"))
+    flightsql_port = int(os.environ.get("MICROMEGAS_FLIGHTSQL_PORT", "50051"))
+
+    # Set port env vars for Vite to read
+    os.environ["MICROMEGAS_BACKEND_PORT"] = str(backend_port)
+    os.environ["MICROMEGAS_FRONTEND_PORT"] = str(frontend_port)
+
     env_vars = {
-        "MICROMEGAS_FLIGHTSQL_URL": "grpc://127.0.0.1:50051",
+        "MICROMEGAS_FLIGHTSQL_URL": f"grpc://127.0.0.1:{flightsql_port}",
         "MICROMEGAS_AUTH_TOKEN": "",  # Empty for no-auth mode
-        "MICROMEGAS_WEB_CORS_ORIGIN": "http://localhost:3000",  # Frontend origin for CORS
-        "MICROMEGAS_AUTH_REDIRECT_URI": "http://localhost:3000/auth/callback",  # OAuth callback URL
+        "MICROMEGAS_WEB_CORS_ORIGIN": f"http://localhost:{frontend_port}",  # Frontend origin for CORS
+        # OAuth callback URL must include base_path so browser URL matches cookie path
+        "MICROMEGAS_AUTH_REDIRECT_URI": f"http://localhost:{frontend_port}{base_path}/auth/callback",
         "MICROMEGAS_STATE_SECRET": dev_secret,  # Random secret for OAuth state signing
     }
 
@@ -179,7 +191,7 @@ def setup_environment():
     else:
         print_status("MICROMEGAS_OIDC_CONFIG not set - will run with --disable-auth", "warning")
 
-    return oidc_configured, base_path
+    return oidc_configured, base_path, backend_port, frontend_port
 
 def main():
     parser = argparse.ArgumentParser(description="Start Analytics Web App Development Environment")
@@ -202,15 +214,16 @@ def main():
     if not check_yarn_installed():
         return 1
 
+    # Setup environment first to get port configuration
+    auth_enabled, base_path, backend_port, frontend_port = setup_environment()
+
     # Check FlightSQL server
-    if not check_flightsql_server():
-        print_status("FlightSQL server not detected on port 50051", "warning")
+    flightsql_port = int(os.environ.get("MICROMEGAS_FLIGHTSQL_PORT", "50051"))
+    if not check_flightsql_server(flightsql_port):
+        print_status(f"FlightSQL server not detected on port {flightsql_port}", "warning")
         print_status("Make sure to start your micromegas services first:", "info")
         print_status("python3 local_test_env/ai_scripts/start_services.py", "info")
         print()
-
-    # Setup environment
-    auth_enabled, base_path = setup_environment()
 
     # Override auth if --disable-auth flag is passed
     if args.disable_auth:
@@ -251,16 +264,16 @@ def main():
         # Kill any existing Next.js dev servers
         kill_existing_frontend()
 
-        # Check if port 8000 is still in use (by something else)
-        if check_port_in_use(8000):
-            print_status("Port 8000 is already in use", "error")
-            print_status("Another service is running on port 8000", "error")
-            print_status("Please stop the service using port 8000 or use a different port", "warning")
+        # Check if backend port is still in use (by something else)
+        if check_port_in_use(backend_port):
+            print_status(f"Port {backend_port} is already in use", "error")
+            print_status(f"Another service is running on port {backend_port}", "error")
+            print_status(f"Please stop the service using port {backend_port} or set MICROMEGAS_BACKEND_PORT", "warning")
             return 1
 
         # Start backend server
         print_status("Starting Rust backend server...", "info")
-        backend_cmd = ["cargo", "run", "--bin", "analytics-web-srv", "--", "--port", "8000"]
+        backend_cmd = ["cargo", "run", "--bin", "analytics-web-srv", "--", "--port", str(backend_port)]
         if not auth_enabled:
             backend_cmd.append("--disable-auth")
         backend_proc = subprocess.Popen(
@@ -297,7 +310,7 @@ def main():
                 import urllib.request
                 import urllib.error
 
-                health_url = f"http://localhost:8000{base_path}/health"
+                health_url = f"http://localhost:{backend_port}{base_path}/health"
                 response = urllib.request.urlopen(health_url, timeout=1)
                 if response.status == 200:
                     backend_ready = True
@@ -316,7 +329,7 @@ def main():
             return 1
 
         # Start frontend dev server
-        print_status("Starting Next.js development server...", "info")
+        print_status("Starting Vite development server...", "info")
 
         # Check if node_modules exists, install if not
         frontend_dir = Path("analytics-web-app")
@@ -328,15 +341,9 @@ def main():
                 check=True
             )
 
-        # Start dev server with base path if configured
-        frontend_env = os.environ.copy()
-        if base_path:
-            frontend_env["NEXT_PUBLIC_BASE_PATH"] = base_path
-
         frontend_proc = subprocess.Popen(
             ["yarn", "dev"],
-            cwd=frontend_dir,
-            env=frontend_env
+            cwd=frontend_dir
         )
         processes.append(frontend_proc)
 
@@ -344,8 +351,8 @@ def main():
         print()
         print_status("Analytics Web App is starting up!", "success")
         print()
-        print_status(f"Frontend:       http://localhost:3000{base_path}/", "info")
-        print_status(f"Backend:        http://localhost:8000{base_path}/", "info")
+        print_status(f"Frontend:       http://localhost:{frontend_port}{base_path}/", "info")
+        print_status(f"Backend:        http://localhost:{backend_port}{base_path}/", "info")
         if base_path:
             print_status(f"Note: Using base path '{base_path}'", "info")
         print()

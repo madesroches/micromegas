@@ -1,7 +1,5 @@
-'use client'
-
 import { Suspense, useState, useEffect, useRef } from 'react'
-import { useSearchParams } from 'next/navigation'
+import { useSearchParams } from 'react-router-dom'
 import { useMutation } from '@tanstack/react-query'
 import { AppLink } from '@/components/AppLink'
 import { AlertCircle, Play } from 'lucide-react'
@@ -10,12 +8,12 @@ import { AuthGuard } from '@/components/AuthGuard'
 import { CopyableProcessId } from '@/components/CopyableProcessId'
 import { executeSqlQuery, toRowObjects, generateTrace } from '@/lib/api'
 import { useTimeRange } from '@/hooks/useTimeRange'
-import { ProgressUpdate, GenerateTraceRequest, SqlRow } from '@/types'
+import { ProgressUpdate, GenerateTraceRequest } from '@/types'
 
 const PROCESS_SQL = `SELECT exe FROM processes WHERE process_id = '$process_id' LIMIT 1`
 
 function ProcessTraceContent() {
-  const searchParams = useSearchParams()
+  const [searchParams] = useSearchParams()
   const processId = searchParams.get('process_id')
   const { parsed: timeRange, apiTimeRange } = useTimeRange()
 
@@ -35,7 +33,6 @@ function ProcessTraceContent() {
     },
   })
 
-  // Use ref to avoid including mutation in deps
   const processMutateRef = useRef(processMutation.mutate)
   processMutateRef.current = processMutation.mutate
 
@@ -102,18 +99,15 @@ function ProcessTraceContent() {
   return (
     <PageLayout>
       <div className="p-6 max-w-3xl">
-        {/* Page Header */}
         <div className="mb-8">
           <h1 className="text-2xl font-semibold text-theme-text-primary">Generate Trace</h1>
         </div>
 
-        {/* Form */}
         <div className="bg-app-panel border border-theme-border rounded-lg p-6 mb-6">
           <h2 className="text-base font-semibold text-theme-text-primary mb-5 pb-3 border-b border-theme-border">
             Trace Configuration
           </h2>
 
-          {/* Process */}
           <div className="mb-5">
             <label className="block text-sm font-medium text-theme-text-primary mb-2">Process</label>
             <div className="bg-app-bg border border-theme-border rounded-md p-3">
@@ -124,7 +118,6 @@ function ProcessTraceContent() {
             </div>
           </div>
 
-          {/* Span Types */}
           <div className="mb-5">
             <label className="block text-sm font-medium text-theme-text-primary mb-3">Span Types</label>
             <div className="space-y-3">
@@ -159,7 +152,6 @@ function ProcessTraceContent() {
             </div>
           </div>
 
-          {/* Time Range */}
           <div className="mb-5">
             <label className="block text-sm font-medium text-theme-text-primary mb-2">Time Range</label>
             <p className="text-sm text-theme-text-secondary">
@@ -171,7 +163,6 @@ function ProcessTraceContent() {
             </p>
           </div>
 
-          {/* Actions */}
           <div className="flex gap-3 mt-6">
             <button
               onClick={handleGenerateTrace}
@@ -184,7 +175,6 @@ function ProcessTraceContent() {
           </div>
         </div>
 
-        {/* Progress */}
         {isGenerating && (
           <div className="bg-app-panel border border-theme-border rounded-lg p-6">
             <div className="flex items-center gap-4">

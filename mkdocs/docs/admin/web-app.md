@@ -94,7 +94,7 @@ With `MICROMEGAS_BASE_PATH="/analytics"`, all routes are prefixed (e.g., `/analy
 
 ## Architecture
 
-- **Frontend**: Next.js on port 3000
+- **Frontend**: Vite/React SPA on port 3000 (dev) or served by backend (prod)
 - **Backend**: Rust (`analytics-web-srv`) on port 8000
 - **Auth**: OIDC (ID tokens via httpOnly cookies)
 - **Data**: FlightSQL queries to analytics service
@@ -108,14 +108,14 @@ analytics-web-srv [OPTIONS]
 
 Options:
   -p, --port <PORT>              Server port [default: 3000]
-      --frontend-dir <DIR>       Frontend build directory [default: ../analytics-web-app/out]
+      --frontend-dir <DIR>       Frontend build directory [default: ../analytics-web-app/dist]
       --disable-auth             Disable authentication (dev only)
   -h, --help                     Print help
 ```
 
 Example:
 ```bash
-analytics-web-srv --port 8000 --frontend-dir ./out --disable-auth
+analytics-web-srv --port 8000 --frontend-dir ./dist --disable-auth
 ```
 
 **Warning:** `--disable-auth` removes authentication middleware. Do not use in production.

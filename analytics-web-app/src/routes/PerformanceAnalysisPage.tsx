@@ -1,19 +1,20 @@
-'use client'
-
 import { Suspense, useState, useCallback, useMemo, useEffect, useRef } from 'react'
-import { useSearchParams, useRouter, usePathname } from 'next/navigation'
+import { useSearchParams, useNavigate, useLocation } from 'react-router-dom'
 import { useMutation } from '@tanstack/react-query'
 import { AppLink } from '@/components/AppLink'
-import { AlertCircle, Clock } from 'lucide-react'
+import { SplitButton } from '@/components/ui/SplitButton'
+import { AlertCircle, Clock, Download, ExternalLink } from 'lucide-react'
 import { PageLayout } from '@/components/layout'
 import { AuthGuard } from '@/components/AuthGuard'
 import { CopyableProcessId } from '@/components/CopyableProcessId'
 import { QueryEditor } from '@/components/QueryEditor'
 import { ErrorBanner } from '@/components/ErrorBanner'
-import { TimeSeriesChart } from '@/components/TimeSeriesChart'
-import { executeSqlQuery, toRowObjects } from '@/lib/api'
+import { TimeSeriesChart, ChartAxisBounds } from '@/components/TimeSeriesChart'
+import { ThreadCoverageTimeline } from '@/components/ThreadCoverageTimeline'
+import { executeSqlQuery, toRowObjects, generateTrace } from '@/lib/api'
+import { openInPerfetto, PerfettoError } from '@/lib/perfetto'
 import { useTimeRange } from '@/hooks/useTimeRange'
-import { SqlRow } from '@/types'
+import { GenerateTraceRequest, ProgressUpdate, ThreadCoverage } from '@/types'
 
 const DISCOVERY_SQL = `SELECT DISTINCT name, target, unit
 FROM view_instance('measures', '$process_id')
@@ -29,6 +30,26 @@ ORDER BY time`
 
 const PROCESS_SQL = `SELECT exe FROM processes WHERE process_id = '$process_id' LIMIT 1`
 
+const THREAD_COVERAGE_SQL = `SELECT
+  arrow_cast(stream_id, 'Utf8') as stream_id,
+  concat(
+    arrow_cast(property_get("streams.properties", 'thread-name'), 'Utf8'),
+    '-',
+    arrow_cast(property_get("streams.properties", 'thread-id'), 'Utf8')
+  ) as thread_name,
+  begin_time,
+  end_time
+FROM blocks
+WHERE process_id = '$process_id'
+  AND array_has("streams.tags", 'cpu')
+ORDER BY stream_id, begin_time`
+
+const TRACE_EVENTS_COUNT_SQL = `SELECT
+  SUM(nb_objects) as event_count
+FROM blocks
+WHERE process_id = '$process_id'
+  AND array_has("streams.tags", 'cpu')`
+
 const VARIABLES = [
   { name: 'process_id', description: 'Current process ID' },
   { name: 'measure_name', description: 'Selected measure name' },
@@ -41,13 +62,10 @@ interface Measure {
   unit: string
 }
 
-// Calculate appropriate bin interval based on time span and chart width
-// Target 1 data point per horizontal pixel for optimal resolution
 function calculateBinInterval(timeSpanMs: number, chartWidthPx: number = 800): string {
-  const numBins = chartWidthPx // 1 pixel per data point
+  const numBins = chartWidthPx
   const binIntervalMs = timeSpanMs / numBins
 
-  // Round to sensible intervals
   const intervals = [
     { ms: 1, label: '1 millisecond' },
     { ms: 10, label: '10 milliseconds' },
@@ -65,7 +83,6 @@ function calculateBinInterval(timeSpanMs: number, chartWidthPx: number = 800): s
     { ms: 3600000, label: '1 hour' },
   ]
 
-  // Find the smallest interval that's >= calculated bin interval
   for (const interval of intervals) {
     if (interval.ms >= binIntervalMs) {
       return interval.label
@@ -74,10 +91,11 @@ function calculateBinInterval(timeSpanMs: number, chartWidthPx: number = 800): s
   return '1 hour'
 }
 
-function ProcessMetricsContent() {
-  const searchParams = useSearchParams()
-  const router = useRouter()
-  const pathname = usePathname()
+function PerformanceAnalysisContent() {
+  const [searchParams] = useSearchParams()
+  const navigate = useNavigate()
+  const location = useLocation()
+  const pathname = location.pathname
   const processId = searchParams.get('process_id')
   const measureParam = searchParams.get('measure')
   const { parsed: timeRange, apiTimeRange, setTimeRange } = useTimeRange()
@@ -86,12 +104,21 @@ function ProcessMetricsContent() {
   const [selectedMeasure, setSelectedMeasure] = useState<string | null>(measureParam)
   const [queryError, setQueryError] = useState<string | null>(null)
   const [chartData, setChartData] = useState<{ time: number; value: number }[]>([])
-  const [processExe, setProcessExe] = useState<string | null>(null)
+  const [_processExe, setProcessExe] = useState<string | null>(null)
   const [hasLoaded, setHasLoaded] = useState(false)
   const [discoveryDone, setDiscoveryDone] = useState(false)
   const [chartWidth, setChartWidth] = useState<number>(800)
+  const [threadCoverage, setThreadCoverage] = useState<ThreadCoverage[]>([])
+  const [traceEventCount, setTraceEventCount] = useState<number | null>(null)
+  const [traceEventCountLoading, setTraceEventCountLoading] = useState(false)
+  const [isGenerating, setIsGenerating] = useState(false)
+  const [traceMode, setTraceMode] = useState<'perfetto' | 'download' | null>(null)
+  const [progress, setProgress] = useState<ProgressUpdate | null>(null)
+  const [traceError, setTraceError] = useState<string | null>(null)
+  const [chartAxisBounds, setChartAxisBounds] = useState<ChartAxisBounds | null>(null)
+  const [cachedTraceBuffer, setCachedTraceBuffer] = useState<ArrayBuffer | null>(null)
+  const [cachedTraceTimeRange, setCachedTraceTimeRange] = useState<{ begin: string; end: string } | null>(null)
 
-  // Calculate bin interval based on time range and chart width
   const binInterval = useMemo(() => {
     const fromDate = new Date(apiTimeRange.begin)
     const toDate = new Date(apiTimeRange.end)
@@ -99,10 +126,17 @@ function ProcessMetricsContent() {
     return calculateBinInterval(timeSpanMs, chartWidth)
   }, [apiTimeRange, chartWidth])
 
-  // Get selected measure info
   const selectedMeasureInfo = useMemo(() => {
     return measures.find((m) => m.name === selectedMeasure)
   }, [measures, selectedMeasure])
+
+  const chartTimeRange = useMemo(() => {
+    if (chartData.length === 0) return null
+    return {
+      from: Math.min(...chartData.map((d) => d.time)),
+      to: Math.max(...chartData.map((d) => d.time)),
+    }
+  }, [chartData])
 
   const discoveryMutation = useMutation({
     mutationFn: executeSqlQuery,
@@ -116,9 +150,9 @@ function ProcessMetricsContent() {
       setMeasures(measureList)
       setDiscoveryDone(true)
 
-      // Auto-select first measure if none selected
       if (measureList.length > 0 && !selectedMeasure) {
-        setSelectedMeasure(measureList[0].name)
+        const deltaTime = measureList.find((m) => m.name === 'DeltaTime')
+        setSelectedMeasure(deltaTime ? deltaTime.name : measureList[0].name)
       }
     },
     onError: (err: Error) => {
@@ -155,13 +189,70 @@ function ProcessMetricsContent() {
     },
   })
 
-  // Use refs to avoid including mutations in callback deps
+  const threadCoverageMutation = useMutation({
+    mutationFn: executeSqlQuery,
+    onSuccess: (data) => {
+      const rows = toRowObjects(data)
+      const threadMap = new Map<string, ThreadCoverage>()
+
+      for (const row of rows) {
+        const streamId = String(row.stream_id ?? '')
+        const threadName = String(row.thread_name ?? 'unknown')
+        const beginTime = new Date(String(row.begin_time)).getTime()
+        const endTime = new Date(String(row.end_time)).getTime()
+
+        if (!threadMap.has(streamId)) {
+          threadMap.set(streamId, {
+            streamId,
+            threadName,
+            segments: [],
+          })
+        }
+        threadMap.get(streamId)!.segments.push({ begin: beginTime, end: endTime })
+      }
+
+      const threads = Array.from(threadMap.values())
+      threads.sort((a, b) => a.threadName.localeCompare(b.threadName))
+      for (const thread of threads) {
+        thread.segments.sort((a, b) => a.begin - b.begin)
+      }
+
+      setThreadCoverage(threads)
+    },
+    onError: (err: Error) => {
+      console.error('Failed to fetch thread coverage:', err.message)
+      setThreadCoverage([])
+    },
+  })
+
+  const traceEventCountMutation = useMutation({
+    mutationFn: executeSqlQuery,
+    onSuccess: (data) => {
+      const rows = toRowObjects(data)
+      if (rows.length > 0 && rows[0].event_count != null) {
+        setTraceEventCount(Number(rows[0].event_count))
+      } else {
+        setTraceEventCount(0)
+      }
+      setTraceEventCountLoading(false)
+    },
+    onError: (err: Error) => {
+      console.error('Failed to fetch trace event count:', err.message)
+      setTraceEventCount(0)
+      setTraceEventCountLoading(false)
+    },
+  })
+
   const discoveryMutateRef = useRef(discoveryMutation.mutate)
   discoveryMutateRef.current = discoveryMutation.mutate
   const dataMutateRef = useRef(dataMutation.mutate)
   dataMutateRef.current = dataMutation.mutate
   const processMutateRef = useRef(processMutation.mutate)
   processMutateRef.current = processMutation.mutate
+  const threadCoverageMutateRef = useRef(threadCoverageMutation.mutate)
+  threadCoverageMutateRef.current = threadCoverageMutation.mutate
+  const traceEventCountMutateRef = useRef(traceEventCountMutation.mutate)
+  traceEventCountMutateRef.current = traceEventCountMutation.mutate
 
   const loadDiscovery = useCallback(() => {
     if (!processId) return
@@ -191,20 +282,33 @@ function ProcessMetricsContent() {
     [processId, selectedMeasure, binInterval, apiTimeRange]
   )
 
-  // Update URL when measure changes
+  const loadThreadCoverage = useCallback(() => {
+    if (!processId) return
+    threadCoverageMutateRef.current({
+      sql: THREAD_COVERAGE_SQL,
+      params: { process_id: processId },
+      begin: apiTimeRange.begin,
+      end: apiTimeRange.end,
+    })
+    setTraceEventCountLoading(true)
+    traceEventCountMutateRef.current({
+      sql: TRACE_EVENTS_COUNT_SQL,
+      params: { process_id: processId },
+      begin: apiTimeRange.begin,
+      end: apiTimeRange.end,
+    })
+  }, [processId, apiTimeRange])
+
   const updateMeasure = useCallback(
     (measure: string) => {
       setSelectedMeasure(measure)
       const params = new URLSearchParams(searchParams.toString())
       params.set('measure', measure)
-      router.push(`${pathname}?${params.toString()}`)
+      navigate(`${pathname}?${params.toString()}`)
     },
-    [searchParams, router, pathname]
+    [searchParams, navigate, pathname]
   )
 
-  // Load process info (exe name) once on mount.
-  // The ref prevents re-fetching when apiTimeRange changes since process
-  // metadata is static and doesn't depend on time range.
   const hasLoadedProcessRef = useRef(false)
   useEffect(() => {
     if (processId && !hasLoadedProcessRef.current) {
@@ -218,24 +322,21 @@ function ProcessMetricsContent() {
     }
   }, [processId, apiTimeRange])
 
-  // Load measure discovery on mount.
-  // Ref prevents duplicate calls; time range changes are handled separately below.
   const hasLoadedDiscoveryRef = useRef(false)
   useEffect(() => {
     if (processId && !hasLoadedDiscoveryRef.current) {
       hasLoadedDiscoveryRef.current = true
       loadDiscovery()
+      loadThreadCoverage()
     }
-  }, [processId, loadDiscovery])
+  }, [processId, loadDiscovery, loadThreadCoverage])
 
-  // Load data when measure is selected (and discovery is done)
   useEffect(() => {
     if (discoveryDone && selectedMeasure && processId) {
       loadData()
     }
   }, [discoveryDone, selectedMeasure, processId, loadData])
 
-  // Reload when time range changes (only after initial load)
   const prevTimeRangeRef = useRef<{ begin: string; end: string } | null>(null)
   useEffect(() => {
     if (!hasLoaded) return
@@ -248,11 +349,11 @@ function ProcessMetricsContent() {
       prevTimeRangeRef.current.end !== apiTimeRange.end
     ) {
       prevTimeRangeRef.current = { begin: apiTimeRange.begin, end: apiTimeRange.end }
-      // Reload discovery and data
       hasLoadedDiscoveryRef.current = false
       loadDiscovery()
+      loadThreadCoverage()
     }
-  }, [apiTimeRange.begin, apiTimeRange.end, hasLoaded, loadDiscovery])
+  }, [apiTimeRange.begin, apiTimeRange.end, hasLoaded, loadDiscovery, loadThreadCoverage])
 
   const handleRunQuery = useCallback(
     (sql: string) => {
@@ -268,11 +369,11 @@ function ProcessMetricsContent() {
   const handleRefresh = useCallback(() => {
     hasLoadedDiscoveryRef.current = false
     loadDiscovery()
-  }, [loadDiscovery])
+    loadThreadCoverage()
+  }, [loadDiscovery, loadThreadCoverage])
 
   const handleTimeRangeSelect = useCallback(
     (from: Date, to: Date) => {
-      // Update the URL time range with ISO timestamps
       setTimeRange(from.toISOString(), to.toISOString())
     },
     [setTimeRange]
@@ -281,6 +382,146 @@ function ProcessMetricsContent() {
   const handleChartWidthChange = useCallback((width: number) => {
     setChartWidth(width)
   }, [])
+
+  const handleAxisBoundsChange = useCallback((bounds: ChartAxisBounds) => {
+    setChartAxisBounds(bounds)
+  }, [])
+
+  const canUseCachedBuffer = useCallback(() => {
+    if (!cachedTraceBuffer || !cachedTraceTimeRange) return false
+    const currentBegin = timeRange.from.toISOString()
+    const currentEnd = timeRange.to.toISOString()
+    return cachedTraceTimeRange.begin === currentBegin && cachedTraceTimeRange.end === currentEnd
+  }, [cachedTraceBuffer, cachedTraceTimeRange, timeRange])
+
+  const openCachedInPerfetto = useCallback(async () => {
+    if (!processId || !cachedTraceBuffer || !cachedTraceTimeRange) return
+
+    setIsGenerating(true)
+    setTraceMode('perfetto')
+    setTraceError(null)
+
+    try {
+      await openInPerfetto({
+        buffer: cachedTraceBuffer,
+        processId,
+        timeRange: cachedTraceTimeRange,
+        onProgress: (message) => setProgress({ type: 'progress', message }),
+      })
+    } catch (error) {
+      const perfettoError = error as PerfettoError
+      setTraceError(perfettoError.message || 'Unknown error occurred')
+    } finally {
+      setIsGenerating(false)
+      setTraceMode(null)
+      setProgress(null)
+    }
+  }, [processId, cachedTraceBuffer, cachedTraceTimeRange])
+
+  const downloadCachedBuffer = useCallback(() => {
+    if (!processId || !cachedTraceBuffer) return
+
+    const blob = new Blob([cachedTraceBuffer], { type: 'application/octet-stream' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `trace-${processId}.pb`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+    setTraceError(null)
+  }, [processId, cachedTraceBuffer])
+
+  const handleOpenInPerfetto = async () => {
+    if (!processId) return
+
+    if (canUseCachedBuffer()) {
+      await openCachedInPerfetto()
+      return
+    }
+
+    setIsGenerating(true)
+    setTraceMode('perfetto')
+    setProgress(null)
+    setTraceError(null)
+    setCachedTraceBuffer(null)
+    setCachedTraceTimeRange(null)
+
+    const currentTimeRange = {
+      begin: timeRange.from.toISOString(),
+      end: timeRange.to.toISOString(),
+    }
+
+    const request: GenerateTraceRequest = {
+      include_async_spans: true,
+      include_thread_spans: true,
+      time_range: currentTimeRange,
+    }
+
+    try {
+      const buffer = await generateTrace(processId, request, (update) => {
+        setProgress(update)
+      }, { returnBuffer: true })
+
+      if (!buffer) {
+        throw new Error('No trace data received')
+      }
+
+      setCachedTraceBuffer(buffer)
+      setCachedTraceTimeRange(currentTimeRange)
+
+      await openInPerfetto({
+        buffer,
+        processId,
+        timeRange: currentTimeRange,
+        onProgress: (message) => setProgress({ type: 'progress', message }),
+      })
+    } catch (error) {
+      const perfettoError = error as PerfettoError
+      if (perfettoError.type) {
+        setTraceError(perfettoError.message)
+      } else {
+        const message = error instanceof Error ? error.message : 'Unknown error occurred'
+        setTraceError(message)
+      }
+    } finally {
+      setIsGenerating(false)
+      setTraceMode(null)
+      setProgress(null)
+    }
+  }
+
+  const handleDownloadTrace = async () => {
+    if (!processId) return
+
+    setIsGenerating(true)
+    setTraceMode('download')
+    setProgress(null)
+    setTraceError(null)
+
+    const request: GenerateTraceRequest = {
+      include_async_spans: true,
+      include_thread_spans: true,
+      time_range: {
+        begin: timeRange.from.toISOString(),
+        end: timeRange.to.toISOString(),
+      },
+    }
+
+    try {
+      await generateTrace(processId, request, (update) => {
+        setProgress(update)
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error occurred'
+      setTraceError(message)
+    } finally {
+      setIsGenerating(false)
+      setTraceMode(null)
+      setProgress(null)
+    }
+  }
 
   const currentValues = useMemo(
     () => ({
@@ -325,25 +566,20 @@ function ProcessMetricsContent() {
     )
   }
 
-  // Empty state: No measures available
   const noMeasuresAvailable = discoveryDone && measures.length === 0
-
-  // Empty state: No data in time range for selected measure
   const noDataInRange = hasLoaded && chartData.length === 0 && selectedMeasure
 
   return (
     <PageLayout onRefresh={handleRefresh} rightPanel={sqlPanel}>
-      <div className="p-6 flex flex-col h-full">
-        {/* Page Header */}
+      <div className="p-6 flex flex-col">
         <div className="mb-5">
-          <h1 className="text-2xl font-semibold text-theme-text-primary">Process Metrics</h1>
+          <h1 className="text-2xl font-semibold text-theme-text-primary">Performance Analysis</h1>
           <div className="text-sm text-theme-text-muted font-mono mt-1">
             <CopyableProcessId processId={processId} className="text-sm" />
           </div>
         </div>
 
-        {/* Filters */}
-        <div className="flex gap-3 mb-4">
+        <div className="flex gap-3 mb-4 items-center flex-wrap">
           <select
             value={selectedMeasure || ''}
             onChange={(e) => updateMeasure(e.target.value)}
@@ -363,16 +599,32 @@ function ProcessMetricsContent() {
             )}
           </select>
 
-          <span className="ml-auto text-xs text-theme-text-muted self-center">
-            {dataMutation.isPending
+          <SplitButton
+            primaryLabel="Open in Perfetto"
+            primaryIcon={<ExternalLink className="w-4 h-4" />}
+            onPrimaryClick={handleOpenInPerfetto}
+            secondaryActions={[
+              {
+                label: 'Download',
+                icon: <Download className="w-4 h-4" />,
+                onClick: handleDownloadTrace,
+              },
+            ]}
+            disabled={isGenerating}
+            loading={isGenerating}
+            loadingLabel={traceMode === 'perfetto' ? 'Opening...' : 'Downloading...'}
+            className="ml-auto"
+          />
+
+          <span className="text-xs text-theme-text-muted">
+            {traceEventCountLoading
               ? 'Loading...'
-              : noMeasuresAvailable
-                ? ''
-                : `${chartData.length} data points`}
+              : traceEventCount != null
+                ? `${traceEventCount.toLocaleString()} thread events`
+                : ''}
           </span>
         </div>
 
-        {/* Query Error Banner */}
         {queryError && (
           <ErrorBanner
             title="Query execution failed"
@@ -382,8 +634,60 @@ function ProcessMetricsContent() {
           />
         )}
 
-        {/* Chart Area */}
-        <div className="flex-1 min-h-[400px]">
+        {traceError && (
+          <div className="bg-error-subtle border border-error-border rounded-lg p-4 mb-4">
+            <div className="flex items-start gap-3">
+              <AlertCircle className="w-5 h-5 text-accent-error flex-shrink-0 mt-0.5" />
+              <div className="flex-1 min-w-0">
+                <h3 className="text-sm font-medium text-accent-error">
+                  {cachedTraceBuffer ? 'Could not open in Perfetto' : 'Trace generation failed'}
+                </h3>
+                <p className="text-sm text-theme-text-secondary mt-1">{traceError}</p>
+                <div className="flex gap-2 mt-3">
+                  <button
+                    onClick={() => setTraceError(null)}
+                    className="px-3 py-1.5 text-sm bg-app-panel border border-theme-border rounded-md text-theme-text-primary hover:bg-app-bg transition-colors"
+                  >
+                    Dismiss
+                  </button>
+                  <button
+                    onClick={handleOpenInPerfetto}
+                    className="px-3 py-1.5 text-sm bg-accent-link text-white rounded-md hover:bg-accent-link/90 transition-colors"
+                  >
+                    Try Again
+                  </button>
+                  {cachedTraceBuffer && (
+                    <button
+                      onClick={downloadCachedBuffer}
+                      className="px-3 py-1.5 text-sm bg-app-panel border border-theme-border rounded-md text-theme-text-primary hover:bg-app-bg transition-colors flex items-center gap-1.5"
+                    >
+                      <Download className="w-4 h-4" />
+                      Download Instead
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {isGenerating && (
+          <div className="bg-app-panel border border-theme-border rounded-lg p-4 mb-4">
+            <div className="flex items-center gap-4">
+              <div className="w-5 h-5 border-2 border-theme-border border-t-accent-link rounded-full animate-spin" />
+              <span className="text-sm font-medium text-theme-text-primary">
+                {traceMode === 'perfetto' ? 'Opening in Perfetto...' : 'Downloading Trace...'}
+              </span>
+            </div>
+            {progress && (
+              <p className="text-xs text-theme-text-secondary mt-2">
+                {progress.message}
+              </p>
+            )}
+          </div>
+        )}
+
+        <div className="h-[350px] mb-4">
           {selectedMeasure && chartData.length > 0 ? (
             <TimeSeriesChart
               data={chartData}
@@ -391,6 +695,7 @@ function ProcessMetricsContent() {
               unit={selectedMeasureInfo?.unit || ''}
               onTimeRangeSelect={handleTimeRangeSelect}
               onWidthChange={handleChartWidthChange}
+              onAxisBoundsChange={handleAxisBoundsChange}
             />
           ) : discoveryMutation.isPending ? (
             <div className="h-full flex items-center justify-center bg-app-panel border border-theme-border rounded-lg">
@@ -420,7 +725,6 @@ function ProcessMetricsContent() {
             </div>
           ) : noDataInRange ? (
             <div className="h-full flex flex-col bg-app-panel border border-theme-border rounded-lg">
-              {/* Chart header for empty state */}
               <div className="flex justify-between items-center px-4 py-3 border-b border-theme-border">
                 <div className="text-base font-medium text-theme-text-primary">
                   {selectedMeasure}{' '}
@@ -444,12 +748,27 @@ function ProcessMetricsContent() {
             </div>
           ) : null}
         </div>
+
+        {chartTimeRange && threadCoverage.length > 0 && (
+          <ThreadCoverageTimeline
+            threads={threadCoverage}
+            timeRange={chartTimeRange}
+            axisBounds={chartAxisBounds}
+            onTimeRangeSelect={handleTimeRangeSelect}
+          />
+        )}
+
+        {chartData.length > 0 && (
+          <div className="text-xs text-theme-text-muted text-center mt-2">
+            Drag on the chart or thread coverage to zoom into a time range
+          </div>
+        )}
       </div>
     </PageLayout>
   )
 }
 
-export default function ProcessMetricsPage() {
+export default function PerformanceAnalysisPage() {
   return (
     <AuthGuard>
       <Suspense
@@ -463,7 +782,7 @@ export default function ProcessMetricsPage() {
           </PageLayout>
         }
       >
-        <ProcessMetricsContent />
+        <PerformanceAnalysisContent />
       </Suspense>
     </AuthGuard>
   )

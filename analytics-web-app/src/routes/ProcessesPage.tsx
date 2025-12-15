@@ -1,7 +1,5 @@
-'use client'
-
 import { Suspense, useState, useMemo, useCallback, useEffect, useRef } from 'react'
-import { useSearchParams, useRouter, usePathname } from 'next/navigation'
+import { useSearchParams, useNavigate, useLocation } from 'react-router-dom'
 import { useMutation } from '@tanstack/react-query'
 import { AppLink } from '@/components/AppLink'
 import { ChevronUp, ChevronDown } from 'lucide-react'
@@ -58,9 +56,10 @@ function expandSearchFilter(search: string): string {
 }
 
 function ProcessesPageContent() {
-  const searchParams = useSearchParams()
-  const router = useRouter()
-  const pathname = usePathname()
+  const [searchParams] = useSearchParams()
+  const navigate = useNavigate()
+  const location = useLocation()
+  const pathname = location.pathname
 
   // Read initial search from URL
   const initialSearch = searchParams.get('search') || ''
@@ -123,9 +122,9 @@ function ProcessesPageContent() {
       } else {
         params.set('search', value.trim())
       }
-      router.replace(`${pathname}?${params.toString()}`)
+      navigate(`${pathname}?${params.toString()}`, { replace: true })
     },
-    [searchParams, router, pathname]
+    [searchParams, navigate, pathname]
   )
 
   // Sync debounced input to search state and URL
