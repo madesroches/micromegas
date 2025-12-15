@@ -115,7 +115,7 @@ Options:
 
 Example:
 ```bash
-analytics-web-srv --port 8000 --frontend-dir ./out --disable-auth
+analytics-web-srv --port 8000 --frontend-dir ./dist --disable-auth
 ```
 
 **Warning:** `--disable-auth` removes authentication middleware. Do not use in production.

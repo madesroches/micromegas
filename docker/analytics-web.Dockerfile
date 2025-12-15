@@ -27,7 +27,7 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 COPY --from=rust-builder /build/rust/target/release/analytics-web-srv /usr/local/bin/
-COPY --from=frontend-builder /app/out /app/frontend
+COPY --from=frontend-builder /app/dist /app/frontend
 
 EXPOSE 3000
 ENTRYPOINT ["analytics-web-srv"]
