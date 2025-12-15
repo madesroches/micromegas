@@ -10,7 +10,19 @@ export default defineConfig(({ mode }) => {
   const frontendPort = parseInt(env.MICROMEGAS_FRONTEND_PORT || '3000', 10)
 
   return {
-    plugins: [react()],
+    plugins: [
+      react(),
+      {
+        name: 'log-base-path',
+        configureServer(server) {
+          server.httpServer?.once('listening', () => {
+            if (basePath) {
+              console.log(`\n  ➜  App URL:  \x1b[36mhttp://localhost:${frontendPort}${basePath}/\x1b[0m\n`)
+            }
+          })
+        },
+      },
+    ],
     appType: 'spa',
     base: './',
     // Expose base path to frontend via import.meta.env
