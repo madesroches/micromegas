@@ -29,7 +29,7 @@ export function getConfig(): RuntimeConfig {
   // In dev mode, Vite injects VITE_BASE_PATH from MICROMEGAS_BASE_PATH env var
   // Must use the base path so browser URL matches cookie path for auth to work
   cachedConfig = {
-    basePath: import.meta.env.DEV ? (import.meta.env.VITE_BASE_PATH || '') : '',
+    basePath: import.meta.env.DEV ? (import.meta.env?.VITE_BASE_PATH || '') : '',
   }
   return cachedConfig
 }
