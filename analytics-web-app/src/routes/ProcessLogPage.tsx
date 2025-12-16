@@ -196,6 +196,7 @@ function ProcessLogContent() {
   const [queryError, setQueryError] = useState<string | null>(null)
   const [rows, setRows] = useState<SqlRow[]>([])
   const [hasLoaded, setHasLoaded] = useState(false)
+  const [currentSql, setCurrentSql] = useState<string>(DEFAULT_SQL)
 
   const sqlMutation = useMutation({
     mutationFn: executeSqlQuery,
@@ -217,10 +218,14 @@ function ProcessLogContent() {
   const sqlMutateRef = useRef(sqlMutation.mutate)
   sqlMutateRef.current = sqlMutation.mutate
 
+  const currentSqlRef = useRef(currentSql)
+  currentSqlRef.current = currentSql
+
   const loadData = useCallback(
-    (sql: string = DEFAULT_SQL) => {
+    (sql: string) => {
       if (!processId) return
       setQueryError(null)
+      setCurrentSql(sql)
       const sqlWithSearch = sql.replace('$search_filter', expandSearchFilter(search))
       const params: Record<string, string> = {
         process_id: processId,
@@ -327,7 +332,7 @@ function ProcessLogContent() {
   useEffect(() => {
     if (processId && !hasInitialLoadRef.current) {
       hasInitialLoadRef.current = true
-      loadData()
+      loadData(DEFAULT_SQL)
     }
   }, [processId, loadData])
 
@@ -340,7 +345,7 @@ function ProcessLogContent() {
     }
     if (prevFiltersRef.current.logLevel !== logLevel || prevFiltersRef.current.logLimit !== logLimit || prevFiltersRef.current.search !== search) {
       prevFiltersRef.current = { logLevel, logLimit, search }
-      loadData()
+      loadData(currentSqlRef.current)
     }
   }, [logLevel, logLimit, search, hasLoaded, loadData])
 
@@ -353,7 +358,7 @@ function ProcessLogContent() {
     }
     if (prevTimeRangeRef.current.begin !== apiTimeRange.begin || prevTimeRangeRef.current.end !== apiTimeRange.end) {
       prevTimeRangeRef.current = { begin: apiTimeRange.begin, end: apiTimeRange.end }
-      loadData()
+      loadData(currentSqlRef.current)
     }
   }, [apiTimeRange.begin, apiTimeRange.end, hasLoaded, loadData])
 
@@ -416,7 +421,7 @@ function ProcessLogContent() {
   ) : undefined
 
   const handleRefresh = useCallback(() => {
-    loadData()
+    loadData(currentSqlRef.current)
   }, [loadData])
 
   if (!processId) {

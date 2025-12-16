@@ -71,6 +71,7 @@ function ProcessesPageContent() {
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc')
   const [queryError, setQueryError] = useState<string | null>(null)
   const [rows, setRows] = useState<SqlRow[]>([])
+  const [currentSql, setCurrentSql] = useState<string>(DEFAULT_SQL)
   const { parsed: timeRange, apiTimeRange } = useTimeRange()
 
   const sqlMutation = useMutation({
@@ -88,9 +89,13 @@ function ProcessesPageContent() {
   const mutateRef = useRef(sqlMutation.mutate)
   mutateRef.current = sqlMutation.mutate
 
+  const currentSqlRef = useRef(currentSql)
+  currentSqlRef.current = currentSql
+
   const loadData = useCallback(
-    (sql: string = DEFAULT_SQL) => {
+    (sql: string) => {
       setQueryError(null)
+      setCurrentSql(sql)
       // Interpolate search_filter directly into SQL (it contains raw SQL with quotes)
       const sqlWithSearch = sql.replace('$search_filter', expandSearchFilter(search))
       // Runtime is a computed column, so we need to use the SQL expression
@@ -142,8 +147,9 @@ function ProcessesPageContent() {
   const prevQueryKeyRef = useRef<string | null>(null)
   useEffect(() => {
     if (prevQueryKeyRef.current !== queryKey) {
+      const isInitialLoad = prevQueryKeyRef.current === null
       prevQueryKeyRef.current = queryKey
-      loadData()
+      loadData(isInitialLoad ? DEFAULT_SQL : currentSqlRef.current)
     }
   }, [queryKey, loadData])
 
@@ -230,7 +236,7 @@ function ProcessesPageContent() {
   )
 
   const handleRefresh = useCallback(() => {
-    loadData()
+    loadData(currentSqlRef.current)
   }, [loadData])
 
   return (
