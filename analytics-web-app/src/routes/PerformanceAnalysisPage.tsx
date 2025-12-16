@@ -118,6 +118,7 @@ function PerformanceAnalysisContent() {
   const [chartAxisBounds, setChartAxisBounds] = useState<ChartAxisBounds | null>(null)
   const [cachedTraceBuffer, setCachedTraceBuffer] = useState<ArrayBuffer | null>(null)
   const [cachedTraceTimeRange, setCachedTraceTimeRange] = useState<{ begin: string; end: string } | null>(null)
+  const [currentSql, setCurrentSql] = useState<string>(DEFAULT_SQL)
 
   const binInterval = useMemo(() => {
     const fromDate = new Date(apiTimeRange.begin)
@@ -254,6 +255,9 @@ function PerformanceAnalysisContent() {
   const traceEventCountMutateRef = useRef(traceEventCountMutation.mutate)
   traceEventCountMutateRef.current = traceEventCountMutation.mutate
 
+  const currentSqlRef = useRef(currentSql)
+  currentSqlRef.current = currentSql
+
   const loadDiscovery = useCallback(() => {
     if (!processId) return
     discoveryMutateRef.current({
@@ -265,9 +269,10 @@ function PerformanceAnalysisContent() {
   }, [processId, apiTimeRange])
 
   const loadData = useCallback(
-    (sql: string = DEFAULT_SQL) => {
+    (sql: string) => {
       if (!processId || !selectedMeasure) return
       setQueryError(null)
+      setCurrentSql(sql)
       dataMutateRef.current({
         sql,
         params: {
@@ -331,9 +336,13 @@ function PerformanceAnalysisContent() {
     }
   }, [processId, loadDiscovery, loadThreadCoverage])
 
+  const hasInitialLoadRef = useRef(false)
   useEffect(() => {
     if (discoveryDone && selectedMeasure && processId) {
-      loadData()
+      // Use DEFAULT_SQL only on initial load, preserve custom SQL for measure changes
+      const isInitialLoad = !hasInitialLoadRef.current
+      hasInitialLoadRef.current = true
+      loadData(isInitialLoad ? DEFAULT_SQL : currentSqlRef.current)
     }
   }, [discoveryDone, selectedMeasure, processId, loadData])
 

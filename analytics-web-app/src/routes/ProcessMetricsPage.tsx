@@ -84,6 +84,7 @@ function ProcessMetricsContent() {
   const [hasLoaded, setHasLoaded] = useState(false)
   const [discoveryDone, setDiscoveryDone] = useState(false)
   const [chartWidth, setChartWidth] = useState<number>(800)
+  const [currentSql, setCurrentSql] = useState<string>(DEFAULT_SQL)
 
   const binInterval = useMemo(() => {
     const fromDate = new Date(apiTimeRange.begin)
@@ -153,6 +154,9 @@ function ProcessMetricsContent() {
   const processMutateRef = useRef(processMutation.mutate)
   processMutateRef.current = processMutation.mutate
 
+  const currentSqlRef = useRef(currentSql)
+  currentSqlRef.current = currentSql
+
   const loadDiscovery = useCallback(() => {
     if (!processId) return
     discoveryMutateRef.current({
@@ -164,9 +168,10 @@ function ProcessMetricsContent() {
   }, [processId, apiTimeRange])
 
   const loadData = useCallback(
-    (sql: string = DEFAULT_SQL) => {
+    (sql: string) => {
       if (!processId || !selectedMeasure) return
       setQueryError(null)
+      setCurrentSql(sql)
       dataMutateRef.current({
         sql,
         params: {
@@ -212,9 +217,13 @@ function ProcessMetricsContent() {
     }
   }, [processId, loadDiscovery])
 
+  const hasInitialLoadRef = useRef(false)
   useEffect(() => {
     if (discoveryDone && selectedMeasure && processId) {
-      loadData()
+      // Use DEFAULT_SQL only on initial load, preserve custom SQL for measure changes
+      const isInitialLoad = !hasInitialLoadRef.current
+      hasInitialLoadRef.current = true
+      loadData(isInitialLoad ? DEFAULT_SQL : currentSqlRef.current)
     }
   }, [discoveryDone, selectedMeasure, processId, loadData])
 
