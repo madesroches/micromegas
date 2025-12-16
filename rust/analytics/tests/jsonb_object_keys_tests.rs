@@ -208,17 +208,9 @@ async fn test_jsonb_object_keys_with_null_input() {
         .downcast_ref::<DictionaryArray<Int32Type>>()
         .expect("Expected DictionaryArray");
 
-    assert!(!dict_array.is_null(0));
-    // Null input is stored as a null entry in the dictionary values
-    // and the key points to that null entry
-    let list_values = dict_array
-        .values()
-        .as_any()
-        .downcast_ref::<ListArray>()
-        .expect("Expected ListArray values");
-    let key1 = dict_array.keys().value(1) as usize;
-    assert!(list_values.is_null(key1)); // Null input produces null in dictionary
-    assert!(!dict_array.is_null(2));
+    assert!(!dict_array.is_null(0)); // First entry (valid input) is not null
+    assert!(dict_array.is_null(1)); // Null input produces null dictionary entry
+    assert!(!dict_array.is_null(2)); // Third entry (valid input) is not null
 }
 
 #[tokio::test]
@@ -251,16 +243,10 @@ async fn test_jsonb_object_keys_non_object_returns_null() {
         .downcast_ref::<DictionaryArray<Int32Type>>()
         .expect("Expected DictionaryArray");
 
-    let list_values = dict_array
-        .values()
-        .as_any()
-        .downcast_ref::<ListArray>()
-        .expect("Expected ListArray values");
-
-    // All non-objects should return null (stored as null in dictionary)
-    assert!(list_values.is_null(dict_array.keys().value(0) as usize)); // Array
-    assert!(list_values.is_null(dict_array.keys().value(1) as usize)); // String
-    assert!(list_values.is_null(dict_array.keys().value(2) as usize)); // Number
+    // All non-objects should return null dictionary entries
+    assert!(dict_array.is_null(0)); // Array
+    assert!(dict_array.is_null(1)); // String
+    assert!(dict_array.is_null(2)); // Number
 }
 
 #[tokio::test]

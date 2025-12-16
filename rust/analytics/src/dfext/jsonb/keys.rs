@@ -155,46 +155,48 @@ impl ScalarUDFImpl for JsonbObjectKeys {
 
 /// Build a Dictionary<Int32, List<Utf8>> array from a function that returns keys for each index.
 /// Uses a HashMap to deduplicate identical key lists for memory efficiency.
+/// Returns None from get_keys to indicate a null output (distinct from Some(empty vec) for empty objects).
 fn build_dict_list_array<F>(len: usize, mut get_keys: F) -> Result<ArrayRef>
 where
     F: FnMut(usize) -> Result<Option<Vec<String>>>,
 {
-    // Map from key list to dictionary index
-    let mut unique_lists: HashMap<Option<Vec<String>>, i32> = HashMap::new();
+    // Map from key list to dictionary index (only for non-null results)
+    let mut unique_lists: HashMap<Vec<String>, i32> = HashMap::new();
     let mut key_indices: Vec<Option<i32>> = Vec::with_capacity(len);
-    let mut ordered_lists: Vec<Option<Vec<String>>> = Vec::new();
+    let mut ordered_lists: Vec<Vec<String>> = Vec::new();
 
     // First pass: collect all values and deduplicate
     for i in 0..len {
         let keys = get_keys(i)?;
-        if let Some(idx) = unique_lists.get(&keys) {
-            key_indices.push(Some(*idx));
-        } else {
-            let idx = ordered_lists.len() as i32;
-            unique_lists.insert(keys.clone(), idx);
-            key_indices.push(Some(idx));
-            ordered_lists.push(keys);
+        match keys {
+            Some(key_list) => {
+                if let Some(idx) = unique_lists.get(&key_list) {
+                    key_indices.push(Some(*idx));
+                } else {
+                    let idx = ordered_lists.len() as i32;
+                    unique_lists.insert(key_list.clone(), idx);
+                    key_indices.push(Some(idx));
+                    ordered_lists.push(key_list);
+                }
+            }
+            None => {
+                // Null input produces null dictionary entry (null key)
+                key_indices.push(None);
+            }
         }
     }
 
     // Build the values array (List<Utf8>) from unique lists
     let mut list_builder = ListBuilder::new(StringBuilder::new());
-    for list_opt in &ordered_lists {
-        match list_opt {
-            Some(keys) => {
-                for key in keys {
-                    list_builder.values().append_value(key);
-                }
-                list_builder.append(true);
-            }
-            None => {
-                list_builder.append_null();
-            }
+    for keys in &ordered_lists {
+        for key in keys {
+            list_builder.values().append_value(key);
         }
+        list_builder.append(true);
     }
     let values_array = Arc::new(list_builder.finish());
 
-    // Build the keys array
+    // Build the keys array (None values become null keys)
     let keys_array = Int32Array::from(key_indices);
 
     // Construct the dictionary array
