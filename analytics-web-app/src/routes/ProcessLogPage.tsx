@@ -246,7 +246,7 @@ function ProcessLogContent() {
       } else {
         params.set('level', level)
       }
-      navigate(`${pathname}?${params.toString()}`)
+      navigate(`${pathname}?${params.toString()}`, { replace: true })
     },
     [searchParams, navigate, pathname]
   )
@@ -262,7 +262,7 @@ function ProcessLogContent() {
       } else {
         params.set('limit', String(clampedLimit))
       }
-      navigate(`${pathname}?${params.toString()}`)
+      navigate(`${pathname}?${params.toString()}`, { replace: true })
     },
     [searchParams, navigate, pathname]
   )
@@ -294,7 +294,7 @@ function ProcessLogContent() {
       } else {
         params.set('search', value.trim())
       }
-      navigate(`${pathname}?${params.toString()}`)
+      navigate(`${pathname}?${params.toString()}`, { replace: true })
     },
     [searchParams, navigate, pathname]
   )

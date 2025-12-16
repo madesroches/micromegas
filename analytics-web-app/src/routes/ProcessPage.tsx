@@ -252,10 +252,11 @@ function ProcessPageContent() {
                 process.start_time as string | null,
                 process.last_update_time as string | null
               )
+              const logHref = `/process_log?process_id=${processId}&from=${encodeURIComponent(processTimeRange.from)}&to=${encodeURIComponent(processTimeRange.to)}`
               return (
                 <>
                   <AppLink
-                    href={`/process_log?process_id=${processId}&from=${encodeURIComponent(processTimeRange.from)}&to=${encodeURIComponent(processTimeRange.to)}`}
+                    href={logHref}
                     className="flex items-center gap-2 px-4 py-2 bg-theme-border text-theme-text-primary rounded-md hover:bg-theme-border-hover transition-colors text-sm"
                   >
                     <FileText className="w-4 h-4" />
