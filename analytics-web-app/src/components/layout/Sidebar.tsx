@@ -14,7 +14,7 @@ const navItems: NavItem[] = [
     href: '/processes',
     icon: <LayoutGrid className="w-5 h-5" />,
     label: 'Processes',
-    matchPaths: ['/processes', '/process', '/process_log', '/process_trace'],
+    matchPaths: ['/processes', '/process', '/process_log', '/process_metrics', '/performance_analysis'],
   },
 ]
 

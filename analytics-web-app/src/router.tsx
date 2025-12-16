@@ -7,7 +7,6 @@ const ProcessesPage = lazy(() => import('@/routes/ProcessesPage'))
 const ProcessPage = lazy(() => import('@/routes/ProcessPage'))
 const ProcessLogPage = lazy(() => import('@/routes/ProcessLogPage'))
 const ProcessMetricsPage = lazy(() => import('@/routes/ProcessMetricsPage'))
-const ProcessTracePage = lazy(() => import('@/routes/ProcessTracePage'))
 const PerformanceAnalysisPage = lazy(() => import('@/routes/PerformanceAnalysisPage'))
 const NotFoundPage = lazy(() => import('@/routes/NotFoundPage'))
 
@@ -32,7 +31,6 @@ export function AppRouter() {
         <Route path="/process" element={<ProcessPage />} />
         <Route path="/process_log" element={<ProcessLogPage />} />
         <Route path="/process_metrics" element={<ProcessMetricsPage />} />
-        <Route path="/process_trace" element={<ProcessTracePage />} />
         <Route path="/performance_analysis" element={<PerformanceAnalysisPage />} />
         <Route path="*" element={<NotFoundPage />} />
       </Routes>

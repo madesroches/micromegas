@@ -2,7 +2,7 @@ import { Suspense, useState, useEffect, useCallback, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useMutation } from '@tanstack/react-query'
 import { AppLink } from '@/components/AppLink'
-import { ArrowLeft, FileText, Activity, AlertCircle, BarChart2, Gauge } from 'lucide-react'
+import { ArrowLeft, FileText, AlertCircle, BarChart2, Gauge } from 'lucide-react'
 import { PageLayout } from '@/components/layout'
 import { AuthGuard } from '@/components/AuthGuard'
 import { CopyableProcessId } from '@/components/CopyableProcessId'
@@ -36,10 +36,51 @@ FROM processes
 WHERE process_id = '$process_id'
 LIMIT 1`
 
+const TWO_MINUTES_MS = 2 * 60 * 1000
+const ONE_HOUR_MS = 60 * 60 * 1000
+
+function computeProcessTimeRange(
+  screenLoadTime: Date,
+  startTime: string | null,
+  lastUpdateTime: string | null
+): { from: string; to: string } {
+  // Parse last update time
+  const lastUpdate = lastUpdateTime ? new Date(lastUpdateTime) : screenLoadTime
+  const timeSinceLastUpdate = screenLoadTime.getTime() - lastUpdate.getTime()
+
+  // Determine end time
+  let endTime: Date
+  let toValue: string
+  if (timeSinceLastUpdate < TWO_MINUTES_MS) {
+    // Process is live - use "now" for live updates
+    toValue = 'now'
+    endTime = screenLoadTime
+  } else {
+    // Process is dead - use last update time
+    endTime = lastUpdate
+    toValue = lastUpdate.toISOString()
+  }
+
+  // Determine begin time
+  const oneHourBeforeEnd = new Date(endTime.getTime() - ONE_HOUR_MS)
+  const processStart = startTime ? new Date(startTime) : oneHourBeforeEnd
+
+  // Use the more recent of: process start OR one hour before end
+  let fromValue: string
+  if (processStart.getTime() > oneHourBeforeEnd.getTime()) {
+    fromValue = processStart.toISOString()
+  } else {
+    fromValue = oneHourBeforeEnd.toISOString()
+  }
+
+  return { from: fromValue, to: toValue }
+}
+
 function ProcessPageContent() {
   const [searchParams] = useSearchParams()
   const processId = searchParams.get('id')
-  const { apiTimeRange, timeRange } = useTimeRange()
+  const { apiTimeRange } = useTimeRange()
+  const [screenLoadTime] = useState(() => new Date())
 
   const [process, setProcess] = useState<SqlRow | null>(null)
   const [statistics, setStatistics] = useState<SqlRow | null>(null)
@@ -205,34 +246,39 @@ function ProcessPageContent() {
             </div>
           </div>
           <div className="flex gap-3">
-            <AppLink
-              href={`/process_log?process_id=${processId}&from=${encodeURIComponent(timeRange.from)}&to=${encodeURIComponent(timeRange.to)}`}
-              className="flex items-center gap-2 px-4 py-2 bg-theme-border text-theme-text-primary rounded-md hover:bg-theme-border-hover transition-colors text-sm"
-            >
-              <FileText className="w-4 h-4" />
-              View Log
-            </AppLink>
-            <AppLink
-              href={`/process_metrics?process_id=${processId}&from=${encodeURIComponent(timeRange.from)}&to=${encodeURIComponent(timeRange.to)}`}
-              className="flex items-center gap-2 px-4 py-2 bg-theme-border text-theme-text-primary rounded-md hover:bg-theme-border-hover transition-colors text-sm"
-            >
-              <BarChart2 className="w-4 h-4" />
-              View Metrics
-            </AppLink>
-            <AppLink
-              href={`/performance_analysis?process_id=${processId}&from=${encodeURIComponent(timeRange.from)}&to=${encodeURIComponent(timeRange.to)}`}
-              className="flex items-center gap-2 px-4 py-2 bg-theme-border text-theme-text-primary rounded-md hover:bg-theme-border-hover transition-colors text-sm"
-            >
-              <Gauge className="w-4 h-4" />
-              Performance
-            </AppLink>
-            <AppLink
-              href={`/process_trace?process_id=${processId}&from=${encodeURIComponent(timeRange.from)}&to=${encodeURIComponent(timeRange.to)}`}
-              className="flex items-center gap-2 px-4 py-2 bg-accent-link text-white rounded-md hover:bg-accent-link-hover transition-colors text-sm"
-            >
-              <Activity className="w-4 h-4" />
-              Generate Trace
-            </AppLink>
+            {(() => {
+              const processTimeRange = computeProcessTimeRange(
+                screenLoadTime,
+                process.start_time as string | null,
+                process.last_update_time as string | null
+              )
+              const logHref = `/process_log?process_id=${processId}&from=${encodeURIComponent(processTimeRange.from)}&to=${encodeURIComponent(processTimeRange.to)}`
+              return (
+                <>
+                  <AppLink
+                    href={logHref}
+                    className="flex items-center gap-2 px-4 py-2 bg-theme-border text-theme-text-primary rounded-md hover:bg-theme-border-hover transition-colors text-sm"
+                  >
+                    <FileText className="w-4 h-4" />
+                    View Log
+                  </AppLink>
+                  <AppLink
+                    href={`/process_metrics?process_id=${processId}&from=${encodeURIComponent(processTimeRange.from)}&to=${encodeURIComponent(processTimeRange.to)}`}
+                    className="flex items-center gap-2 px-4 py-2 bg-theme-border text-theme-text-primary rounded-md hover:bg-theme-border-hover transition-colors text-sm"
+                  >
+                    <BarChart2 className="w-4 h-4" />
+                    View Metrics
+                  </AppLink>
+                  <AppLink
+                    href={`/performance_analysis?process_id=${processId}&from=${encodeURIComponent(processTimeRange.from)}&to=${encodeURIComponent(processTimeRange.to)}`}
+                    className="flex items-center gap-2 px-4 py-2 bg-accent-link text-white rounded-md hover:bg-accent-link-hover transition-colors text-sm"
+                  >
+                    <Gauge className="w-4 h-4" />
+                    Performance
+                  </AppLink>
+                </>
+              )
+            })()}
           </div>
         </div>
 
