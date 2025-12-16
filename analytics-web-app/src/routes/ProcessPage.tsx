@@ -2,7 +2,7 @@ import { Suspense, useState, useEffect, useCallback, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useMutation } from '@tanstack/react-query'
 import { AppLink } from '@/components/AppLink'
-import { ArrowLeft, FileText, Activity, AlertCircle, BarChart2, Gauge } from 'lucide-react'
+import { ArrowLeft, FileText, AlertCircle, BarChart2, Gauge } from 'lucide-react'
 import { PageLayout } from '@/components/layout'
 import { AuthGuard } from '@/components/AuthGuard'
 import { CopyableProcessId } from '@/components/CopyableProcessId'
@@ -221,17 +221,10 @@ function ProcessPageContent() {
             </AppLink>
             <AppLink
               href={`/performance_analysis?process_id=${processId}&from=${encodeURIComponent(timeRange.from)}&to=${encodeURIComponent(timeRange.to)}`}
-              className="flex items-center gap-2 px-4 py-2 bg-theme-border text-theme-text-primary rounded-md hover:bg-theme-border-hover transition-colors text-sm"
+              className="flex items-center gap-2 px-4 py-2 bg-accent-link text-white rounded-md hover:bg-accent-link-hover transition-colors text-sm"
             >
               <Gauge className="w-4 h-4" />
               Performance
-            </AppLink>
-            <AppLink
-              href={`/process_trace?process_id=${processId}&from=${encodeURIComponent(timeRange.from)}&to=${encodeURIComponent(timeRange.to)}`}
-              className="flex items-center gap-2 px-4 py-2 bg-accent-link text-white rounded-md hover:bg-accent-link-hover transition-colors text-sm"
-            >
-              <Activity className="w-4 h-4" />
-              Generate Trace
             </AppLink>
           </div>
         </div>
