@@ -16,6 +16,8 @@
 #include "MicromegasTracing/ProcessInfo.h"
 #include "Misc/App.h"
 #include "Misc/EngineVersion.h"
+#include "Policies/CondensedJsonPrintPolicy.h"
+#include "Serialization/JsonWriter.h"
 
 #if PLATFORM_WINDOWS
 	#include "Windows/WindowsSystemIncludes.h"
@@ -92,6 +94,25 @@ namespace
 #endif
 	}
 
+	FString GetCommandLineArgumentsAsJsonArray(const TCHAR* const CommandLine)
+	{
+		FString ArgAsJsonArray;
+		TSharedRef<TJsonWriter<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>> JsonWriter = TJsonWriterFactory<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>::Create(&ArgAsJsonArray);
+		
+		JsonWriter->WriteArrayStart();
+		{
+			FString NextArg;
+			const TCHAR* ParsedCommandLine = CommandLine;
+			while (FParse::Token(ParsedCommandLine, NextArg, false))
+			{
+				JsonWriter->WriteValue(NextArg);
+			}
+		}
+		JsonWriter->WriteArrayEnd();
+		JsonWriter->Close();
+		
+		return ArgAsJsonArray;
+	}
 } // namespace
 
 HttpEventSink::HttpEventSink(const FString& InBaseUrl,
@@ -299,7 +320,7 @@ void HttpEventSink::SendBinaryRequest(const TCHAR* command, const TArray<uint8>&
 
 FString CreateGuid()
 {
-	return FGuid::NewGuid().ToString(EGuidFormats::DigitsWithHyphens);
+	return FGuid::NewGuid().ToString(EGuidFormats::DigitsWithHyphensLower);
 }
 
 FString GetDistro()
@@ -352,6 +373,9 @@ TSharedPtr<MicromegasTracing::EventSink> InitHttpEventSink(
 	Process->Properties.Add(TEXT("build-config"), LexToString(FApp::GetBuildConfiguration()));
 	Process->Properties.Add(TEXT("build-target"), LexToString(FApp::GetBuildTargetType()));
 	Process->Properties.Add(TEXT("branch-name"), FApp::GetBranchName().ToLower());
+	// use of underscore is to match other micromegas aware application.
+	Process->Properties.Add(TEXT("exe_args"), GetCommandLineArgumentsAsJsonArray(FCommandLine::GetOriginalForLogging()));
+	Process->Properties.Add(TEXT("command-line"), FCommandLine::GetOriginalForLogging());
 
 	// Would be 0 on local builds
 	Process->Properties.Add(TEXT("commit"), FString::FromInt(BuildSettings::GetCurrentChangelist()));

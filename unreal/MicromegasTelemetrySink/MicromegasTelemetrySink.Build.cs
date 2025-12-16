@@ -10,6 +10,7 @@ public class MicromegasTelemetrySink : ModuleRules
 			"Core",
 			"CoreUObject",
 			"Engine", 
+			"Json",
 			"HTTP",
 			"RenderCore",
 			"RHI",

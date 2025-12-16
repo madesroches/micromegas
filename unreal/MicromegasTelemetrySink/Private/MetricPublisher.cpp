@@ -9,6 +9,8 @@
 #include "MicromegasTracing/Macros.h"
 #include "Misc/App.h"
 #include "Misc/CoreDelegates.h"
+#include "RHIStats.h"
+#include "Serialization/AsyncPackageLoader.h"
 #include "UObject/Package.h"
 #include "UnrealClient.h"
 
@@ -44,6 +46,7 @@ void MetricPublisher::EmitScalabilityMetrics(const Scalability::FQualityLevels& 
 	MICROMEGAS_IMETRIC("Scalability", MicromegasTracing::Verbosity::Min, TEXT("PostProcessQuality"), TEXT("none"), NewLevels.PostProcessQuality);
 	MICROMEGAS_IMETRIC("Scalability", MicromegasTracing::Verbosity::Min, TEXT("ViewDistanceQuality"), TEXT("none"), NewLevels.ViewDistanceQuality);
 	MICROMEGAS_FMETRIC("Scalability", MicromegasTracing::Verbosity::Min, TEXT("ResolutionQuality"), TEXT("none"), NewLevels.ResolutionQuality);
+	MICROMEGAS_FMETRIC("Scalability", MicromegasTracing::Verbosity::Min, TEXT("SingleQualityLevel"), TEXT("none"), NewLevels.GetSingleQualityLevel());
 	
 	if (MicromegasTracing::DefaultContext* Ctx = MicromegasTracing::Dispatch::GetDefaultContext())
 	{
@@ -60,6 +63,7 @@ void MetricPublisher::EmitScalabilityMetrics(const Scalability::FQualityLevels& 
 			{ TEXT("Scalability_PostProcessQuality"), FName(FString::FromInt(NewLevels.PostProcessQuality)) },
 			{ TEXT("Scalability_ViewDistanceQuality"), FName(FString::FromInt(NewLevels.ViewDistanceQuality)) },
 			{ TEXT("Scalability_ResolutionQuality"), FName(FString::SanitizeFloat(NewLevels.ResolutionQuality, 2)) },
+			{ TEXT("Scalability_SingleQualityLevel"), FName(FString::FromInt(NewLevels.GetSingleQualityLevel())) },
 		};
 
 		Ctx->SetBatch(TArrayView<TPair<FName, FName>>{ BatchChanges });
@@ -109,12 +113,23 @@ void MetricPublisher::Tick()
 {
 	MICROMEGAS_SPAN_FUNCTION("MicromegasTelemetrySink");
 	
-	MICROMEGAS_FMETRIC("Frame", MicromegasTracing::Verbosity::Med, TEXT("DeltaTime"), TEXT("seconds"), FApp::GetCurrentTime() - FApp::GetLastTime());
+	const double DeltaTime = FApp::GetCurrentTime() - FApp::GetLastTime();
+	const double IdleTime = FApp::GetIdleTime();
+	MICROMEGAS_FMETRIC("Frame", MicromegasTracing::Verbosity::Med, TEXT("DeltaTime"), TEXT("seconds"), DeltaTime);
 	MICROMEGAS_FMETRIC("Frame", MicromegasTracing::Verbosity::Med, TEXT("GameThreadTime"), TEXT("seconds"), FPlatformTime::ToSeconds64(GGameThreadTime));
-	MICROMEGAS_FMETRIC("Frame", MicromegasTracing::Verbosity::Med, TEXT("RenderThreadTime"), TEXT("seconds"), FPlatformTime::ToSeconds64(GRenderThreadTime));
-	MICROMEGAS_FMETRIC("Frame", MicromegasTracing::Verbosity::Med, TEXT("RHIThreadTime"), TEXT("seconds"), FPlatformTime::ToSeconds64(GRHIThreadTime));
 	MICROMEGAS_FMETRIC("Frame", MicromegasTracing::Verbosity::Med, TEXT("InputLatencyTime"), TEXT("seconds"), FPlatformTime::ToSeconds64(GInputLatencyTime));
-	MICROMEGAS_FMETRIC("Frame", MicromegasTracing::Verbosity::Med, TEXT("GPUTime"), TEXT("seconds"), FPlatformTime::ToSeconds64(RHIGetGPUFrameCycles(0)));
+	MICROMEGAS_FMETRIC("Frame", MicromegasTracing::Verbosity::Med, TEXT("IdleTime"), TEXT("seconds"), IdleTime);
+	MICROMEGAS_FMETRIC("Frame", MicromegasTracing::Verbosity::Med, TEXT("IdleTimeOvershoot"), TEXT("seconds"), FApp::GetIdleTimeOvershoot());
+	MICROMEGAS_FMETRIC("Frame", MicromegasTracing::Verbosity::Med, TEXT("GameEngineFrameTime"), TEXT("seconds"), DeltaTime - IdleTime);
+	MICROMEGAS_FMETRIC("Frame", MicromegasTracing::Verbosity::Med, TEXT("AsyncLoadingTime"), TEXT("seconds"), GFlushAsyncLoadingTime);
+	if (!IsRunningDedicatedServer())
+	{
+		MICROMEGAS_FMETRIC("Frame", MicromegasTracing::Verbosity::Med, TEXT("RenderThreadTime"), TEXT("seconds"), FPlatformTime::ToSeconds64(GRenderThreadTime));
+		MICROMEGAS_FMETRIC("Frame", MicromegasTracing::Verbosity::Med, TEXT("RHIThreadTime"), TEXT("seconds"), FPlatformTime::ToSeconds64(GRHIThreadTime));
+		MICROMEGAS_FMETRIC("Frame", MicromegasTracing::Verbosity::Med, TEXT("GPUTime"), TEXT("seconds"), FPlatformTime::ToSeconds64(RHIGetGPUFrameCycles(0)));
+		MICROMEGAS_IMETRIC("Frame", MicromegasTracing::Verbosity::Med, TEXT("DrawCalls"), TEXT("count"), GNumDrawCallsRHI[0]);
+		MICROMEGAS_IMETRIC("Frame", MicromegasTracing::Verbosity::Med, TEXT("PrimitivesDrawn"), TEXT("count"), GNumPrimitivesDrawnRHI[0]);
+	}
 
 	const FPlatformMemoryStats MemStats = FPlatformMemory::GetStats();
 	MICROMEGAS_IMETRIC("Memory", MicromegasTracing::Verbosity::Med, TEXT("UsedPhysical"), TEXT("bytes"), MemStats.UsedPhysical);
