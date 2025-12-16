@@ -438,6 +438,36 @@ SELECT jsonb_as_i64(jsonb_get(jsonb_parse('{"port": 8080}'), 'port')) as port_nu
 FROM processes;
 ```
 
+##### `jsonb_object_keys(jsonb)`
+
+Returns the keys of a JSONB object as an array of strings.
+
+**Syntax:**
+```sql
+jsonb_object_keys(jsonb)
+```
+
+**Parameters:**
+
+- `jsonb` (Multiple formats supported): JSONB object:
+
+   * `Binary` - Plain JSONB binary
+   * `Dictionary<Int32, Binary>` - Dictionary-encoded JSONB
+
+**Returns:** `Dictionary<Int32, List<Utf8>>` - Dictionary-encoded array of key names for memory efficiency (repeated key lists share the same dictionary entry), or NULL if input is not an object
+
+**Examples:**
+```sql
+-- Get keys from a JSONB object
+SELECT jsonb_object_keys(jsonb_parse('{"name": "server", "port": 8080}')) as keys;
+-- Returns: ["name", "port"]
+
+-- Get keys from process properties
+SELECT jsonb_object_keys(properties) as prop_keys
+FROM processes
+LIMIT 5;
+```
+
 #### Data Access Functions
 
 ##### `get_payload(process_id, stream_id, block_id)`

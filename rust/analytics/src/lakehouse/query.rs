@@ -24,6 +24,7 @@ use crate::{
             cast::{make_jsonb_as_f64_udf, make_jsonb_as_i64_udf, make_jsonb_as_string_udf},
             format_json::make_jsonb_format_json_udf,
             get::make_jsonb_get_udf,
+            keys::make_jsonb_object_keys_udf,
             parse::make_jsonb_parse_udf,
         },
     },
@@ -188,6 +189,7 @@ pub fn register_extension_functions(ctx: &SessionContext) {
     ctx.register_udf(make_jsonb_as_string_udf());
     ctx.register_udf(make_jsonb_as_f64_udf());
     ctx.register_udf(make_jsonb_as_i64_udf());
+    ctx.register_udf(make_jsonb_object_keys_udf());
 }
 
 pub fn register_functions(
