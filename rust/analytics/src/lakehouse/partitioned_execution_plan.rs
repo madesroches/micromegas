@@ -11,20 +11,19 @@ use datafusion::{
     physical_plan::ExecutionPlan,
     prelude::*,
 };
-use object_store::ObjectStore;
+use micromegas_tracing::prelude::*;
 use std::sync::Arc;
 
 /// Creates a partitioned execution plan for scanning Parquet files.
-#[expect(clippy::too_many_arguments)]
+#[span_fn]
 pub fn make_partitioned_execution_plan(
     schema: SchemaRef,
-    object_store: Arc<dyn ObjectStore>,
+    reader_factory: Arc<ReaderFactory>,
     state: &dyn Session,
     projection: Option<&Vec<usize>>,
     filters: &[Expr],
     limit: Option<usize>,
     partitions: Arc<Vec<Partition>>,
-    pool: sqlx::PgPool,
 ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
     let predicate = filters_to_predicate(schema.clone(), state, filters)?;
 
@@ -54,7 +53,6 @@ pub fn make_partitioned_execution_plan(
     }
 
     let object_store_url = ObjectStoreUrl::parse("obj://lakehouse/").unwrap();
-    let reader_factory = Arc::new(ReaderFactory::new(object_store, pool));
     let source = Arc::new(
         ParquetSource::default()
             .with_predicate(predicate)

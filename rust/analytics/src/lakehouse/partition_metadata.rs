@@ -4,6 +4,7 @@ use micromegas_tracing::prelude::*;
 use sqlx::{PgPool, Row};
 use std::sync::Arc;
 
+use super::metadata_cache::MetadataCache;
 use crate::arrow_utils::parse_parquet_metadata;
 use crate::lakehouse::metadata_compat;
 use datafusion::parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
@@ -69,11 +70,22 @@ fn strip_column_index_info(metadata: ParquetMetaData) -> Result<ParquetMetaData>
 /// Dispatches to appropriate parser based on partition_format_version:
 /// - Version 1: Arrow 56.0 format, uses legacy parser with num_rows injection (requires additional query)
 /// - Version 2: Arrow 57.0 format, uses standard parser (fast path, no join)
+///
+/// If a cache is provided, checks it first and stores results after loading.
 #[span_fn]
 pub async fn load_partition_metadata(
     pool: &PgPool,
     file_path: &str,
+    cache: Option<&MetadataCache>,
 ) -> Result<Arc<ParquetMetaData>> {
+    // Check cache first
+    if let Some(cache) = cache
+        && let Some(metadata) = cache.get(file_path).await
+    {
+        debug!("cache hit for partition metadata path={file_path}");
+        return Ok(metadata);
+    }
+
     // Fast path: query only partition_metadata table (no join)
     let row = sqlx::query(
         "SELECT metadata, partition_format_version
@@ -87,7 +99,9 @@ pub async fn load_partition_metadata(
 
     let metadata_bytes: Vec<u8> = row.try_get("metadata")?;
     let partition_format_version: i32 = row.try_get("partition_format_version")?;
+    let serialized_size = metadata_bytes.len() as u32;
 
+    debug!("fetched partition metadata path={file_path} size={serialized_size}");
     // Dispatch based on format version
     let metadata = match partition_format_version {
         1 => {
@@ -121,7 +135,16 @@ pub async fn load_partition_metadata(
     // legacy ColumnIndex structures that may have incomplete null_pages fields
     let stripped = strip_column_index_info(metadata)
         .with_context(|| format!("stripping column index for file: {}", file_path))?;
-    Ok(Arc::new(stripped))
+    let result = Arc::new(stripped);
+
+    // Store in cache
+    if let Some(cache) = cache {
+        cache
+            .insert(file_path.to_string(), result.clone(), serialized_size)
+            .await;
+    }
+
+    Ok(result)
 }
 
 /// Delete multiple partition metadata entries in a single transaction

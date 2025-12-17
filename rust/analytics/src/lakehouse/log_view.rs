@@ -4,6 +4,7 @@ use super::{
     blocks_view::BlocksView,
     dataframe_time_bounds::{DataFrameTimeBounds, NamedColumnsTimeBounds},
     jit_partitions::{JitPartitionConfig, write_partition_from_blocks},
+    lakehouse_context::LakehouseContext,
     log_block_processor::LogBlockProcessor,
     partition_cache::PartitionCache,
     partition_source_data::fetch_partition_source_data,
@@ -21,10 +22,8 @@ use async_trait::async_trait;
 use chrono::{DateTime, TimeDelta, Utc};
 use datafusion::{
     arrow::datatypes::Schema,
-    execution::runtime_env::RuntimeEnv,
     logical_expr::{Between, Expr, col},
 };
-use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -88,8 +87,7 @@ impl View for LogView {
 
     async fn make_batch_partition_spec(
         &self,
-        runtime: Arc<RuntimeEnv>,
-        lake: Arc<DataLakeConnection>,
+        lakehouse: Arc<LakehouseContext>,
         existing_partitions: Arc<PartitionCache>,
         insert_range: TimeRange,
     ) -> Result<Arc<dyn PartitionSpec>> {
@@ -97,9 +95,14 @@ impl View for LogView {
             anyhow::bail!("not supported for jit queries... should it?");
         }
         let source_data = Arc::new(
-            fetch_partition_source_data(runtime, lake, existing_partitions, insert_range, "log")
-                .await
-                .with_context(|| "fetch_partition_source_data")?,
+            fetch_partition_source_data(
+                lakehouse.clone(),
+                existing_partitions,
+                insert_range,
+                "log",
+            )
+            .await
+            .with_context(|| "fetch_partition_source_data")?,
         );
         Ok(Arc::new(BlockPartitionSpec {
             view_metadata: ViewMetadata {
@@ -124,8 +127,7 @@ impl View for LogView {
 
     async fn jit_update(
         &self,
-        runtime: Arc<RuntimeEnv>,
-        lake: Arc<DataLakeConnection>,
+        lakehouse: Arc<LakehouseContext>,
         query_range: Option<TimeRange>,
     ) -> Result<()> {
         if *self.view_instance_id == "global" {
@@ -134,7 +136,7 @@ impl View for LogView {
         }
         let process = Arc::new(
             find_process(
-                &lake.db_pool,
+                &lakehouse.lake().db_pool,
                 &self
                     .process_id
                     .with_context(|| "getting a view's process_id")?,
@@ -148,8 +150,7 @@ impl View for LogView {
         let blocks_view = BlocksView::new()?;
         let all_partitions = generate_process_jit_partitions(
             &JitPartitionConfig::default(),
-            runtime.clone(),
-            lake.clone(),
+            lakehouse.clone(),
             &blocks_view,
             &query_range,
             process.clone(),
@@ -164,9 +165,11 @@ impl View for LogView {
         };
 
         for part in all_partitions {
-            if !is_jit_partition_up_to_date(&lake.db_pool, view_meta.clone(), &part).await? {
+            if !is_jit_partition_up_to_date(&lakehouse.lake().db_pool, view_meta.clone(), &part)
+                .await?
+            {
                 write_partition_from_blocks(
-                    lake.clone(),
+                    lakehouse.lake().clone(),
                     view_meta.clone(),
                     self.get_file_schema(),
                     part,

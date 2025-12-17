@@ -24,6 +24,8 @@ pub mod export_log_view;
 pub mod get_payload_function;
 /// Management of process-specific partitions built on demand
 pub mod jit_partitions;
+/// Bundles runtime resources for lakehouse query execution
+pub mod lakehouse_context;
 /// Read access to the list of lakehouse partitions
 pub mod list_partitions_table_function;
 /// Read access to view sets with their schema information
@@ -40,6 +42,8 @@ pub mod materialize_partitions_table_function;
 pub mod materialized_view;
 /// Merge consecutive parquet partitions into a single file
 pub mod merge;
+/// Global LRU cache for partition metadata
+pub mod metadata_cache;
 /// Compatibility layer for parsing legacy Arrow 56.0 metadata and upgrading to Arrow 57.0
 pub mod metadata_compat;
 /// Specification for a view partition backed by a table in the postgresql metadata database.

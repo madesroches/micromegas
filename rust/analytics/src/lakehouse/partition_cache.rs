@@ -30,7 +30,7 @@ pub async fn partition_with_metadata(
         .file_path
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("cannot load metadata for empty partition"))?;
-    let file_metadata = load_partition_metadata(pool, file_path)
+    let file_metadata = load_partition_metadata(pool, file_path, None)
         .await
         .with_context(|| format!("loading metadata for partition: {}", file_path))?;
     Ok(PartitionWithMetadata {

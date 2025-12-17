@@ -3330,6 +3330,7 @@ dependencies = [
  "micromegas-telemetry-sink",
  "micromegas-tracing",
  "micromegas-transit",
+ "moka",
  "object_store",
  "parquet",
  "pin-project",

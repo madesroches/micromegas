@@ -29,9 +29,9 @@ use arrow_flight::{
 use core::str;
 use datafusion::arrow::datatypes::Schema;
 use datafusion::arrow::ipc::writer::StreamWriter;
-use datafusion::execution::runtime_env::RuntimeEnv;
 use futures::StreamExt;
 use futures::{Stream, TryStreamExt};
+use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
 use micromegas_analytics::lakehouse::partition_cache::QueryPartitionProvider;
 use micromegas_analytics::lakehouse::query::make_session_context;
 use micromegas_analytics::lakehouse::session_configurator::SessionConfigurator;
@@ -39,7 +39,6 @@ use micromegas_analytics::lakehouse::view_factory::ViewFactory;
 use micromegas_analytics::replication::bulk_ingest;
 use micromegas_analytics::time::TimeRange;
 use micromegas_auth::user_attribution::validate_and_resolve_user_attribution_grpc;
-use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_tracing::prelude::*;
 use once_cell::sync::Lazy;
 use prost::Message;
@@ -142,8 +141,7 @@ static INSTANCE_SQL_DATA: Lazy<SqlInfoData> = Lazy::new(|| {
 /// Implementation of the Flight SQL service.
 #[derive(Clone)]
 pub struct FlightSqlServiceImpl {
-    runtime: Arc<RuntimeEnv>,
-    lake: Arc<DataLakeConnection>,
+    lakehouse: Arc<LakehouseContext>,
     part_provider: Arc<dyn QueryPartitionProvider>,
     view_factory: Arc<ViewFactory>,
     session_configurator: Arc<dyn SessionConfigurator>,
@@ -151,19 +149,17 @@ pub struct FlightSqlServiceImpl {
 
 impl FlightSqlServiceImpl {
     pub fn new(
-        runtime: Arc<RuntimeEnv>,
-        lake: Arc<DataLakeConnection>,
+        lakehouse: Arc<LakehouseContext>,
         part_provider: Arc<dyn QueryPartitionProvider>,
         view_factory: Arc<ViewFactory>,
         session_configurator: Arc<dyn SessionConfigurator>,
-    ) -> Result<Self> {
-        Ok(Self {
-            runtime,
-            lake,
+    ) -> Self {
+        Self {
+            lakehouse,
             part_provider,
             view_factory,
             session_configurator,
-        })
+        }
     }
 
     fn should_preserve_dictionary(metadata: &MetadataMap) -> bool {
@@ -245,8 +241,7 @@ impl FlightSqlServiceImpl {
         // Session context creation phase
         let session_begin = now();
         let ctx = make_session_context(
-            self.runtime.clone(),
-            self.lake.clone(),
+            self.lakehouse.clone(),
             self.part_provider.clone(),
             query_range,
             self.view_factory.clone(),
@@ -659,7 +654,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         let stream = FlightRecordBatchStream::new_from_flight_data(
             request.into_inner().map_err(|e| e.into()),
         );
-        bulk_ingest(self.lake.clone(), &table_name, stream)
+        bulk_ingest(self.lakehouse.lake().clone(), &table_name, stream)
             .await
             .map_err(|e| {
                 let msg = format!("error ingesting into {table_name}: {e:?}");
@@ -701,8 +696,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         info!("do_action_create_prepared_statement query={}", &query.query);
 
         let ctx = make_session_context(
-            self.runtime.clone(),
-            self.lake.clone(),
+            self.lakehouse.clone(),
             self.part_provider.clone(),
             None,
             self.view_factory.clone(),

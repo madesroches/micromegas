@@ -1,4 +1,7 @@
-use super::{partition::Partition, partitioned_execution_plan::make_partitioned_execution_plan};
+use super::{
+    partition::Partition, partitioned_execution_plan::make_partitioned_execution_plan,
+    reader_factory::ReaderFactory,
+};
 use async_trait::async_trait;
 use datafusion::{
     arrow::datatypes::SchemaRef,
@@ -8,16 +11,13 @@ use datafusion::{
     physical_plan::ExecutionPlan,
     prelude::*,
 };
-use object_store::ObjectStore;
-use sqlx::PgPool;
 use std::{any::Any, sync::Arc};
 
 /// A DataFusion `TableProvider` for a set of pre-defined partitions.
 pub struct PartitionedTableProvider {
     schema: SchemaRef,
-    object_store: Arc<dyn ObjectStore>,
+    reader_factory: Arc<ReaderFactory>,
     partitions: Arc<Vec<Partition>>,
-    pool: PgPool,
 }
 
 impl std::fmt::Debug for PartitionedTableProvider {
@@ -32,15 +32,13 @@ impl std::fmt::Debug for PartitionedTableProvider {
 impl PartitionedTableProvider {
     pub fn new(
         schema: SchemaRef,
-        object_store: Arc<dyn ObjectStore>,
+        reader_factory: Arc<ReaderFactory>,
         partitions: Arc<Vec<Partition>>,
-        pool: PgPool,
     ) -> Self {
         Self {
             schema,
-            object_store,
+            reader_factory,
             partitions,
-            pool,
         }
     }
 }
@@ -68,13 +66,12 @@ impl TableProvider for PartitionedTableProvider {
     ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
         make_partitioned_execution_plan(
             self.schema(),
-            self.object_store.clone(),
+            self.reader_factory.clone(),
             state,
             projection,
             filters,
             limit,
             self.partitions.clone(),
-            self.pool.clone(),
         )
     }
 

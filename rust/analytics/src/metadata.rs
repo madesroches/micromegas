@@ -1,7 +1,6 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use datafusion::arrow::array::{Int32Array, Int64Array, RecordBatch, TimestampNanosecondArray};
-use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_telemetry::{
     property::Property, stream_info::StreamInfo, types::block::BlockMetadata,
 };
@@ -15,13 +14,13 @@ use crate::{
     arrow_properties::serialize_properties_to_jsonb,
     dfext::{string_column_accessor::string_column_by_name, typed_column::typed_column_by_name},
     lakehouse::{
-        partition_cache::LivePartitionProvider, query::make_session_context,
-        session_configurator::NoOpSessionConfigurator, view_factory::ViewFactory,
+        lakehouse_context::LakehouseContext, partition_cache::LivePartitionProvider,
+        query::make_session_context, session_configurator::NoOpSessionConfigurator,
+        view_factory::ViewFactory,
     },
     properties::properties_column_accessor::properties_column_by_name,
     time::TimeRange,
 };
-use datafusion::execution::runtime_env::RuntimeEnv;
 /// Type alias for shared, pre-serialized JSONB data.
 /// This represents JSONB properties that have been serialized once and can be reused.
 pub type SharedJsonbSerialized = Arc<Vec<u8>>;
@@ -224,17 +223,15 @@ pub async fn find_process(
 /// Returns (ProcessMetadata, last_block_end_ticks, last_block_end_time)
 #[span_fn]
 pub async fn find_process_with_latest_timing(
-    runtime: Arc<RuntimeEnv>,
-    lake: Arc<DataLakeConnection>,
+    lakehouse: Arc<LakehouseContext>,
     view_factory: Arc<ViewFactory>,
     process_id: &Uuid,
     query_range: Option<TimeRange>,
 ) -> Result<(ProcessMetadata, i64, DateTime<Utc>)> {
-    let partition_provider = Arc::new(LivePartitionProvider::new(lake.db_pool.clone()));
+    let partition_provider = Arc::new(LivePartitionProvider::new(lakehouse.lake().db_pool.clone()));
 
     let ctx = make_session_context(
-        runtime,
-        lake.clone(),
+        lakehouse,
         partition_provider,
         query_range,
         view_factory,

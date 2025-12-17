@@ -1,6 +1,7 @@
 use super::{
     batch_update::PartitionCreationStrategy,
     dataframe_time_bounds::DataFrameTimeBounds,
+    lakehouse_context::LakehouseContext,
     materialized_view::MaterializedView,
     merge::{PartitionMerger, QueryMerger},
     partition::Partition,
@@ -13,10 +14,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use chrono::{DateTime, TimeDelta, Utc};
 use datafusion::{
-    arrow::datatypes::Schema,
-    execution::{SendableRecordBatchStream, runtime_env::RuntimeEnv},
-    logical_expr::Expr,
-    prelude::*,
+    arrow::datatypes::Schema, execution::SendableRecordBatchStream, logical_expr::Expr, prelude::*,
     sql::TableReference,
 };
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
@@ -55,8 +53,7 @@ pub trait View: std::fmt::Debug + Send + Sync {
     /// The resulting PartitionSpec can be used to validate existing partitions are create a new one.
     async fn make_batch_partition_spec(
         &self,
-        runtime: Arc<RuntimeEnv>,
-        lake: Arc<DataLakeConnection>,
+        lakehouse: Arc<LakehouseContext>,
         existing_partitions: Arc<PartitionCache>,
         insert_range: TimeRange,
     ) -> Result<Arc<dyn PartitionSpec>>;
@@ -71,8 +68,7 @@ pub trait View: std::fmt::Debug + Send + Sync {
     /// jit_update creates or updates process-specific partitions before a query
     async fn jit_update(
         &self,
-        runtime: Arc<RuntimeEnv>,
-        lake: Arc<DataLakeConnection>,
+        lakehouse: Arc<LakehouseContext>,
         query_range: Option<TimeRange>,
     ) -> Result<()>;
 
@@ -97,22 +93,20 @@ pub trait View: std::fmt::Debug + Send + Sync {
 
     async fn merge_partitions(
         &self,
-        runtime: Arc<RuntimeEnv>,
-        lake: Arc<DataLakeConnection>,
+        lakehouse: Arc<LakehouseContext>,
         partitions_to_merge: Arc<Vec<Partition>>,
         partitions_all_views: Arc<PartitionCache>,
     ) -> Result<SendableRecordBatchStream> {
         let merge_query = Arc::new(String::from("SELECT * FROM source;"));
         let empty_view_factory = Arc::new(ViewFactory::new(vec![]));
         let merger = QueryMerger::new(
-            runtime,
             empty_view_factory,
             Arc::new(NoOpSessionConfigurator),
             self.get_file_schema(),
             merge_query,
         );
         merger
-            .execute_merge_query(lake, partitions_to_merge, partitions_all_views)
+            .execute_merge_query(lakehouse, partitions_to_merge, partitions_all_views)
             .await
     }
 

@@ -1,6 +1,7 @@
 use super::{
     batch_update::PartitionCreationStrategy,
     dataframe_time_bounds::{DataFrameTimeBounds, NamedColumnsTimeBounds},
+    lakehouse_context::LakehouseContext,
     materialized_view::MaterializedView,
     merge::{PartitionMerger, QueryMerger},
     partition::Partition,
@@ -36,7 +37,6 @@ pub type MergerMaker = dyn Fn(Arc<RuntimeEnv>, Arc<Schema>) -> Arc<dyn Partition
 /// SQL-defined view updated in batch
 #[derive(Debug)]
 pub struct SqlBatchView {
-    runtime: Arc<RuntimeEnv>,
     view_set_name: Arc<String>,
     view_instance_id: Arc<String>,
     min_event_time_column: Arc<String>,
@@ -85,9 +85,9 @@ impl SqlBatchView {
         merger_maker: Option<&MergerMaker>,
     ) -> Result<Self> {
         let null_part_provider = Arc::new(NullPartitionProvider {});
+        let lakehouse = Arc::new(LakehouseContext::new(lake.clone(), runtime.clone()));
         let ctx = make_session_context(
-            runtime.clone(),
-            lake,
+            lakehouse,
             null_part_provider,
             None,
             view_factory.clone(),
@@ -102,10 +102,9 @@ impl SqlBatchView {
         let extracted_df = ctx.sql(&sql).await?;
         let schema = extracted_df.schema().inner().clone();
         let session_configurator_for_merger = session_configurator.clone();
-        let merger = merger_maker.unwrap_or(&|runtime, schema| {
+        let merger = merger_maker.unwrap_or(&|_runtime, schema| {
             let merge_query = Arc::new(merge_partitions_query.replace("{source}", "source"));
             Arc::new(QueryMerger::new(
-                runtime,
                 view_factory.clone(),
                 session_configurator_for_merger.clone(),
                 schema,
@@ -114,7 +113,6 @@ impl SqlBatchView {
         })(runtime.clone(), schema.clone());
 
         Ok(Self {
-            runtime,
             view_set_name,
             view_instance_id: Arc::new(String::from("global")),
             min_event_time_column,
@@ -145,8 +143,7 @@ impl View for SqlBatchView {
 
     async fn make_batch_partition_spec(
         &self,
-        _runtime: Arc<RuntimeEnv>,
-        lake: Arc<DataLakeConnection>,
+        lakehouse: Arc<LakehouseContext>,
         existing_partitions: Arc<PartitionCache>,
         insert_range: TimeRange,
     ) -> Result<Arc<dyn PartitionSpec>> {
@@ -157,8 +154,7 @@ impl View for SqlBatchView {
         };
         let partitions_in_range = Arc::new(existing_partitions.filter_insert_range(insert_range));
         let ctx = make_session_context(
-            self.runtime.clone(),
-            lake.clone(),
+            lakehouse,
             partitions_in_range.clone(),
             None,
             self.view_factory.clone(),
@@ -205,8 +201,7 @@ impl View for SqlBatchView {
 
     async fn jit_update(
         &self,
-        _runtime: Arc<RuntimeEnv>,
-        _lake: Arc<DataLakeConnection>,
+        _lakehouse: Arc<LakehouseContext>,
         _query_range: Option<TimeRange>,
     ) -> Result<()> {
         Ok(())
@@ -253,14 +248,13 @@ impl View for SqlBatchView {
 
     async fn merge_partitions(
         &self,
-        _runtime: Arc<RuntimeEnv>,
-        lake: Arc<DataLakeConnection>,
+        lakehouse: Arc<LakehouseContext>,
         partitions_to_merge: Arc<Vec<Partition>>,
         partitions_all_views: Arc<PartitionCache>,
     ) -> Result<SendableRecordBatchStream> {
         let res = self
             .merger
-            .execute_merge_query(lake, partitions_to_merge, partitions_all_views)
+            .execute_merge_query(lakehouse, partitions_to_merge, partitions_all_views)
             .await;
         if let Err(e) = &res {
             error!("{e:?}");

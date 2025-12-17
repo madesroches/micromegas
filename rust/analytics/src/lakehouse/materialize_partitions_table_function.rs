@@ -1,4 +1,5 @@
 use super::batch_update::materialize_partition_range;
+use super::lakehouse_context::LakehouseContext;
 use super::partition_cache::PartitionCache;
 use super::view_factory::ViewFactory;
 use crate::dfext::expressions::exp_to_i64;
@@ -14,37 +15,28 @@ use chrono::TimeDelta;
 use datafusion::catalog::TableFunctionImpl;
 use datafusion::catalog::TableProvider;
 use datafusion::common::plan_err;
-use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::prelude::Expr;
-use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_tracing::error;
 use std::sync::Arc;
 
 /// A DataFusion `TableFunctionImpl` for materializing lakehouse partitions.
 #[derive(Debug)]
 pub struct MaterializePartitionsTableFunction {
-    runtime: Arc<RuntimeEnv>,
-    lake: Arc<DataLakeConnection>,
+    lakehouse: Arc<LakehouseContext>,
     view_factory: Arc<ViewFactory>,
 }
 
 impl MaterializePartitionsTableFunction {
-    pub fn new(
-        runtime: Arc<RuntimeEnv>,
-        lake: Arc<DataLakeConnection>,
-        view_factory: Arc<ViewFactory>,
-    ) -> Self {
+    pub fn new(lakehouse: Arc<LakehouseContext>, view_factory: Arc<ViewFactory>) -> Self {
         Self {
-            runtime,
-            lake,
+            lakehouse,
             view_factory,
         }
     }
 }
 
 async fn materialize_partitions_impl(
-    runtime: Arc<RuntimeEnv>,
-    lake: Arc<DataLakeConnection>,
+    lakehouse: Arc<LakehouseContext>,
     view_factory: Arc<ViewFactory>,
     view_name: &str,
     insert_range: TimeRange,
@@ -56,13 +48,13 @@ async fn materialize_partitions_impl(
         .with_context(|| format!("can't find view {view_name}"))?;
 
     let existing_partitions_all_views = Arc::new(
-        PartitionCache::fetch_overlapping_insert_range(&lake.db_pool, insert_range).await?,
+        PartitionCache::fetch_overlapping_insert_range(&lakehouse.lake().db_pool, insert_range)
+            .await?,
     );
 
     materialize_partition_range(
         existing_partitions_all_views,
-        runtime,
-        lake,
+        lakehouse,
         view,
         insert_range,
         partition_time_delta,
@@ -88,17 +80,15 @@ impl TableFunctionImpl for MaterializePartitionsTableFunction {
             return plan_err!("Missing 5th argument, expected a number of seconds(i64)");
         };
 
-        let lake = self.lake.clone();
+        let lakehouse = self.lakehouse.clone();
         let view_factory = self.view_factory.clone();
-        let runtime = self.runtime.clone();
 
         let spawner = move || {
             let (tx, rx) = tokio::sync::mpsc::channel(100);
             let logger = Arc::new(LogSender::new(tx));
             tokio::spawn(async move {
                 if let Err(e) = materialize_partitions_impl(
-                    runtime,
-                    lake,
+                    lakehouse,
                     view_factory,
                     &view_set_name,
                     TimeRange::new(begin, end),

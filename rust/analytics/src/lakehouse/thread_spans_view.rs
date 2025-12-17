@@ -4,6 +4,7 @@ use super::{
     jit_partitions::{
         JitPartitionConfig, generate_stream_jit_partitions, is_jit_partition_up_to_date,
     },
+    lakehouse_context::LakehouseContext,
     partition_cache::PartitionCache,
     partition_source_data::{SourceDataBlocksInMemory, hash_to_object_count},
     view::{PartitionSpec, View, ViewMetadata},
@@ -21,9 +22,7 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use datafusion::logical_expr::{BinaryExpr, Expr, Operator};
-use datafusion::{
-    arrow::datatypes::Schema, execution::runtime_env::RuntimeEnv, logical_expr::expr_fn::col,
-};
+use datafusion::{arrow::datatypes::Schema, logical_expr::expr_fn::col};
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_telemetry::{blob_storage::BlobStorage, types::block::BlockMetadata};
 use micromegas_tracing::prelude::*;
@@ -207,8 +206,7 @@ impl View for ThreadSpansView {
 
     async fn make_batch_partition_spec(
         &self,
-        _runtime: Arc<RuntimeEnv>,
-        _lake: Arc<DataLakeConnection>,
+        _lakehouse: Arc<LakehouseContext>,
         _existing_partitions: Arc<PartitionCache>,
         _insert_range: TimeRange,
     ) -> Result<Arc<dyn PartitionSpec>> {
@@ -225,8 +223,7 @@ impl View for ThreadSpansView {
 
     async fn jit_update(
         &self,
-        runtime: Arc<RuntimeEnv>,
-        lake: Arc<DataLakeConnection>,
+        lakehouse: Arc<LakehouseContext>,
         query_range: Option<TimeRange>,
     ) -> Result<()> {
         if query_range.is_none() {
@@ -234,21 +231,21 @@ impl View for ThreadSpansView {
         }
         let query_range = query_range.unwrap();
         let stream = Arc::new(
-            find_stream(&lake.db_pool, self.stream_id)
+            find_stream(&lakehouse.lake().db_pool, self.stream_id)
                 .await
                 .with_context(|| "find_stream")?,
         );
         let process = Arc::new(
-            find_process(&lake.db_pool, &stream.process_id)
+            find_process(&lakehouse.lake().db_pool, &stream.process_id)
                 .await
                 .with_context(|| "find_process")?,
         );
-        let convert_ticks = make_time_converter_from_db(&lake.db_pool, &process).await?;
+        let convert_ticks =
+            make_time_converter_from_db(&lakehouse.lake().db_pool, &process).await?;
         let blocks_view = BlocksView::new()?;
         let partitions = generate_stream_jit_partitions(
             &JitPartitionConfig::default(),
-            runtime,
-            lake.clone(),
+            lakehouse.clone(),
             &blocks_view,
             &query_range,
             stream.clone(),
@@ -258,7 +255,7 @@ impl View for ThreadSpansView {
         .with_context(|| "generate_stream_jit_partitions")?;
         for part in &partitions {
             update_partition(
-                lake.clone(),
+                lakehouse.lake().clone(),
                 ViewMetadata {
                     view_set_name: self.get_view_set_name(),
                     view_instance_id: self.get_view_instance_id(),

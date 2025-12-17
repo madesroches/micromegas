@@ -1,6 +1,7 @@
 use super::{
     batch_update::PartitionCreationStrategy,
     dataframe_time_bounds::{DataFrameTimeBounds, NamedColumnsTimeBounds},
+    lakehouse_context::LakehouseContext,
     partition_cache::{NullPartitionProvider, PartitionCache},
     query::make_session_context,
     session_configurator::SessionConfigurator,
@@ -113,9 +114,9 @@ impl ExportLogView {
         max_partition_delta_from_merge: TimeDelta,
     ) -> Result<Self> {
         let null_part_provider = Arc::new(NullPartitionProvider {});
+        let lakehouse = Arc::new(LakehouseContext::new(lake.clone(), runtime.clone()));
         let ctx = make_session_context(
-            runtime.clone(),
-            lake,
+            lakehouse,
             null_part_provider,
             None,
             view_factory.clone(),
@@ -157,8 +158,7 @@ impl View for ExportLogView {
 
     async fn make_batch_partition_spec(
         &self,
-        runtime: Arc<RuntimeEnv>,
-        lake: Arc<DataLakeConnection>,
+        lakehouse: Arc<LakehouseContext>,
         existing_partitions: Arc<PartitionCache>,
         insert_range: TimeRange,
     ) -> Result<Arc<dyn PartitionSpec>> {
@@ -169,8 +169,7 @@ impl View for ExportLogView {
         };
         let partitions_in_range = Arc::new(existing_partitions.filter_insert_range(insert_range));
         let ctx = make_session_context(
-            runtime.clone(),
-            lake.clone(),
+            lakehouse,
             partitions_in_range.clone(),
             None,
             self.view_factory.clone(),
@@ -214,8 +213,7 @@ impl View for ExportLogView {
 
     async fn jit_update(
         &self,
-        _runtime: Arc<RuntimeEnv>,
-        _lake: Arc<DataLakeConnection>,
+        _lakehouse: Arc<LakehouseContext>,
         _query_range: Option<TimeRange>,
     ) -> Result<()> {
         Ok(())

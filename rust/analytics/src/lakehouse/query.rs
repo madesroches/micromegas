@@ -1,11 +1,11 @@
 use super::{
-    answer::Answer, get_payload_function::GetPayload,
+    answer::Answer, get_payload_function::GetPayload, lakehouse_context::LakehouseContext,
     list_partitions_table_function::ListPartitionsTableFunction,
     list_view_sets_table_function::ListViewSetsTableFunction,
     materialize_partitions_table_function::MaterializePartitionsTableFunction,
     partition::Partition, partition_cache::QueryPartitionProvider,
     partitioned_table_provider::PartitionedTableProvider,
-    perfetto_trace_table_function::PerfettoTraceTableFunction,
+    perfetto_trace_table_function::PerfettoTraceTableFunction, reader_factory::ReaderFactory,
     retire_partition_by_file_udf::make_retire_partition_by_file_udf,
     retire_partition_by_metadata_udf::make_retire_partition_by_metadata_udf,
     retire_partitions_table_function::RetirePartitionsTableFunction,
@@ -47,24 +47,21 @@ use datafusion::{
     prelude::*,
     sql::TableReference,
 };
-use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_tracing::prelude::*;
-use object_store::ObjectStore;
 use std::sync::Arc;
 
+#[span_fn]
 async fn register_table(
-    runtime: Arc<RuntimeEnv>,
-    lake: Arc<DataLakeConnection>,
+    lakehouse: Arc<LakehouseContext>,
+    reader_factory: Arc<ReaderFactory>,
     part_provider: Arc<dyn QueryPartitionProvider>,
     query_range: Option<TimeRange>,
     ctx: &SessionContext,
-    object_store: Arc<dyn ObjectStore>,
     view: Arc<dyn View>,
 ) -> Result<()> {
     let table = MaterializedView::new(
-        runtime,
-        lake,
-        object_store,
+        lakehouse,
+        reader_factory,
         view.clone(),
         part_provider,
         query_range,
@@ -73,22 +70,18 @@ async fn register_table(
 }
 
 /// query_partitions_context returns a context to run queries using the partitions as the "source" table
+#[span_fn]
 pub async fn query_partitions_context(
     runtime: Arc<RuntimeEnv>,
-    lake: Arc<DataLakeConnection>,
+    reader_factory: Arc<ReaderFactory>,
+    object_store: Arc<dyn object_store::ObjectStore>,
     schema: SchemaRef,
     partitions: Arc<Vec<Partition>>,
 ) -> Result<SessionContext> {
-    let object_store = lake.blob_storage.inner();
-    let table = PartitionedTableProvider::new(
-        schema,
-        object_store.clone(),
-        partitions,
-        lake.db_pool.clone(),
-    );
+    let table = PartitionedTableProvider::new(schema, reader_factory, partitions);
     let object_store_url = ObjectStoreUrl::parse("obj://lakehouse/").unwrap();
     let ctx = SessionContext::new_with_config_rt(SessionConfig::default(), runtime);
-    ctx.register_object_store(object_store_url.as_ref(), object_store.clone());
+    ctx.register_object_store(object_store_url.as_ref(), object_store);
     ctx.register_table(
         TableReference::Bare {
             table: "source".into(),
@@ -100,33 +93,33 @@ pub async fn query_partitions_context(
 }
 
 // query_partitions returns a dataframe, leaving the option of streaming the results
+#[span_fn]
 pub async fn query_partitions(
     runtime: Arc<RuntimeEnv>,
-    lake: Arc<DataLakeConnection>,
+    reader_factory: Arc<ReaderFactory>,
+    object_store: Arc<dyn object_store::ObjectStore>,
     schema: SchemaRef,
     partitions: Arc<Vec<Partition>>,
     sql: &str,
 ) -> Result<DataFrame> {
-    let ctx = query_partitions_context(runtime, lake, schema, partitions).await?;
+    let ctx =
+        query_partitions_context(runtime, reader_factory, object_store, schema, partitions).await?;
     Ok(ctx.sql(sql).await?)
 }
 
 /// register functions that are part of the lakehouse architecture
+#[span_fn]
 pub fn register_lakehouse_functions(
     ctx: &SessionContext,
-    runtime: Arc<RuntimeEnv>,
-    lake: Arc<DataLakeConnection>,
+    lakehouse: Arc<LakehouseContext>,
     part_provider: Arc<dyn QueryPartitionProvider>,
     query_range: Option<TimeRange>,
     view_factory: Arc<ViewFactory>,
-    object_store: Arc<dyn ObjectStore>,
 ) {
     ctx.register_udtf(
         "view_instance",
         Arc::new(ViewInstanceTableFunction::new(
-            runtime.clone(),
-            lake.clone(),
-            object_store.clone(),
+            lakehouse.clone(),
             view_factory.clone(),
             part_provider.clone(),
             query_range,
@@ -134,7 +127,7 @@ pub fn register_lakehouse_functions(
     );
     ctx.register_udtf(
         "list_partitions",
-        Arc::new(ListPartitionsTableFunction::new(lake.clone())),
+        Arc::new(ListPartitionsTableFunction::new(lakehouse.lake().clone())),
     );
     ctx.register_udtf(
         "list_view_sets",
@@ -142,14 +135,12 @@ pub fn register_lakehouse_functions(
     );
     ctx.register_udtf(
         "retire_partitions",
-        Arc::new(RetirePartitionsTableFunction::new(lake.clone())),
+        Arc::new(RetirePartitionsTableFunction::new(lakehouse.lake().clone())),
     );
     ctx.register_udtf(
         "perfetto_trace_chunks",
         Arc::new(PerfettoTraceTableFunction::new(
-            runtime.clone(),
-            lake.clone(),
-            object_store.clone(),
+            lakehouse.clone(),
             view_factory.clone(),
             part_provider.clone(),
         )),
@@ -157,19 +148,21 @@ pub fn register_lakehouse_functions(
     ctx.register_udtf(
         "materialize_partitions",
         Arc::new(MaterializePartitionsTableFunction::new(
-            runtime,
-            lake.clone(),
+            lakehouse.clone(),
             view_factory.clone(),
         )),
     );
     ctx.register_udf(
-        AsyncScalarUDF::new(Arc::new(GetPayload::new(lake.clone()))).into_scalar_udf(),
+        AsyncScalarUDF::new(Arc::new(GetPayload::new(lakehouse.lake().clone()))).into_scalar_udf(),
     );
-    ctx.register_udf(make_retire_partition_by_file_udf(lake.clone()).into_scalar_udf());
-    ctx.register_udf(make_retire_partition_by_metadata_udf(lake).into_scalar_udf());
+    ctx.register_udf(make_retire_partition_by_file_udf(lakehouse.lake().clone()).into_scalar_udf());
+    ctx.register_udf(
+        make_retire_partition_by_metadata_udf(lakehouse.lake().clone()).into_scalar_udf(),
+    );
 }
 
 /// register functions that are not depended on the lakehouse architecture
+#[span_fn]
 pub fn register_extension_functions(ctx: &SessionContext) {
     ctx.register_udf(ScalarUDF::from(PropertyGet::new()));
     ctx.register_udf(ScalarUDF::from(PropertiesToDict::new()));
@@ -192,31 +185,21 @@ pub fn register_extension_functions(ctx: &SessionContext) {
     ctx.register_udf(make_jsonb_object_keys_udf());
 }
 
+#[span_fn]
 pub fn register_functions(
     ctx: &SessionContext,
-    runtime: Arc<RuntimeEnv>,
-    lake: Arc<DataLakeConnection>,
+    lakehouse: Arc<LakehouseContext>,
     part_provider: Arc<dyn QueryPartitionProvider>,
     query_range: Option<TimeRange>,
     view_factory: Arc<ViewFactory>,
-    object_store: Arc<dyn ObjectStore>,
 ) {
-    register_lakehouse_functions(
-        ctx,
-        runtime,
-        lake,
-        part_provider,
-        query_range,
-        view_factory,
-        object_store,
-    );
+    register_lakehouse_functions(ctx, lakehouse, part_provider, query_range, view_factory);
     register_extension_functions(ctx);
 }
 
 #[span_fn]
 pub async fn make_session_context(
-    runtime: Arc<RuntimeEnv>,
-    lake: Arc<DataLakeConnection>,
+    lakehouse: Arc<LakehouseContext>,
     part_provider: Arc<dyn QueryPartitionProvider>,
     query_range: Option<TimeRange>,
     view_factory: Arc<ViewFactory>,
@@ -227,30 +210,28 @@ pub async fn make_session_context(
     // which causes errors in DataFusion 51+ with Arrow 57.0 when reading page indexes
     let config =
         SessionConfig::default().set_bool("datafusion.execution.parquet.enable_page_index", false);
-    let ctx = SessionContext::new_with_config_rt(config, runtime.clone());
+    let ctx = SessionContext::new_with_config_rt(config, lakehouse.runtime().clone());
     if let Some(range) = &query_range {
         ctx.add_analyzer_rule(Arc::new(TableScanRewrite::new(*range)));
     }
     let object_store_url = ObjectStoreUrl::parse("obj://lakehouse/").unwrap();
-    let object_store = lake.blob_storage.inner();
-    ctx.register_object_store(object_store_url.as_ref(), object_store.clone());
+    let object_store = lakehouse.lake().blob_storage.inner();
+    ctx.register_object_store(object_store_url.as_ref(), object_store);
+    let reader_factory = lakehouse.reader_factory().clone();
     register_functions(
         &ctx,
-        runtime.clone(),
-        lake.clone(),
+        lakehouse.clone(),
         part_provider.clone(),
         query_range,
         view_factory.clone(),
-        object_store.clone(),
     );
     for view in view_factory.get_global_views() {
         register_table(
-            runtime.clone(),
-            lake.clone(),
+            lakehouse.clone(),
+            reader_factory.clone(),
             part_provider.clone(),
             query_range,
             &ctx,
-            object_store.clone(),
             view.clone(),
         )
         .await?;
@@ -260,9 +241,9 @@ pub async fn make_session_context(
     Ok(ctx)
 }
 
+#[span_fn]
 pub async fn query(
-    runtime: Arc<RuntimeEnv>,
-    lake: Arc<DataLakeConnection>,
+    lakehouse: Arc<LakehouseContext>,
     part_provider: Arc<dyn QueryPartitionProvider>,
     query_range: Option<TimeRange>,
     sql: &str,
@@ -271,8 +252,7 @@ pub async fn query(
 ) -> Result<Answer> {
     info!("query sql={sql}");
     let ctx = make_session_context(
-        runtime,
-        lake,
+        lakehouse,
         part_provider,
         query_range,
         view_factory,

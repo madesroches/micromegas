@@ -1,5 +1,5 @@
+use super::metadata_cache::MetadataCache;
 use super::partition_metadata::load_partition_metadata;
-use anyhow::{Context, Result};
 use bytes::Bytes;
 use datafusion::{
     datasource::{listing::PartitionedFile, physical_plan::ParquetFileReaderFactory},
@@ -13,37 +13,44 @@ use datafusion::{
     physical_plan::metrics::ExecutionPlanMetricsSet,
 };
 use futures::future::BoxFuture;
-use micromegas_tracing::prelude::*;
 use object_store::ObjectStore;
 use sqlx::PgPool;
 use std::ops::Range;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 
 /// A custom [`ParquetFileReaderFactory`] that handles opening parquet files
 /// from object storage, and loads metadata on-demand.
+///
+/// Metadata is cached globally across all readers and queries via a shared
+/// `MetadataCache`, significantly reducing database fetches for repeated
+/// queries on the same partitions.
 pub struct ReaderFactory {
     object_store: Arc<dyn ObjectStore>,
     pool: PgPool,
+    metadata_cache: Arc<MetadataCache>,
 }
 
 impl std::fmt::Debug for ReaderFactory {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ReaderFactory").finish()
+        f.debug_struct("ReaderFactory")
+            .field("metadata_cache", &self.metadata_cache)
+            .finish()
     }
 }
 
 impl ReaderFactory {
-    pub fn new(object_store: Arc<dyn ObjectStore>, pool: PgPool) -> Self {
-        Self { object_store, pool }
+    /// Creates a new ReaderFactory with a shared metadata cache.
+    pub fn new(
+        object_store: Arc<dyn ObjectStore>,
+        pool: PgPool,
+        metadata_cache: Arc<MetadataCache>,
+    ) -> Self {
+        Self {
+            object_store,
+            pool,
+            metadata_cache,
+        }
     }
-}
-
-async fn load_parquet_metadata(filename: &str, pool: &PgPool) -> Result<Arc<ParquetMetaData>> {
-    // Load metadata on-demand using the dedicated metadata table
-    load_partition_metadata(pool, filename)
-        .await
-        .with_context(|| format!("[reader_factory] loading metadata for {filename}"))
 }
 
 impl ParquetFileReaderFactory for ReaderFactory {
@@ -65,17 +72,18 @@ impl ParquetFileReaderFactory for ReaderFactory {
         Ok(Box::new(ParquetReader {
             filename,
             pool: self.pool.clone(),
-            metadata: Arc::new(Mutex::new(None)), // Load on-demand in get_metadata()
+            metadata_cache: Arc::clone(&self.metadata_cache),
             inner,
         }))
     }
 }
 
-/// A wrapper around a `ParquetObjectReader` that loads metadata on-demand.
+/// A wrapper around a `ParquetObjectReader` that loads metadata on-demand
+/// using a shared global cache.
 pub struct ParquetReader {
     pub filename: String,
     pub pool: PgPool,
-    pub metadata: Arc<Mutex<Option<Arc<ParquetMetaData>>>>, // Thread-safe cached metadata
+    pub metadata_cache: Arc<MetadataCache>,
     pub inner: ParquetObjectReader,
 }
 
@@ -84,7 +92,6 @@ impl AsyncFileReader for ParquetReader {
         &mut self,
         range: Range<u64>,
     ) -> BoxFuture<'_, datafusion::parquet::errors::Result<Bytes>> {
-        // debug!("ParquetReader::get_bytes {}", &self.filename);
         self.inner.get_bytes(range)
     }
 
@@ -92,48 +99,22 @@ impl AsyncFileReader for ParquetReader {
         &mut self,
         ranges: Vec<Range<u64>>,
     ) -> BoxFuture<'_, datafusion::parquet::errors::Result<Vec<Bytes>>> {
-        // debug!("ParquetReader::get_byte_ranges {}", &self.filename);
         self.inner.get_byte_ranges(ranges)
     }
 
     fn get_metadata(
         &mut self,
-        options: Option<&ArrowReaderOptions>,
+        _options: Option<&ArrowReaderOptions>,
     ) -> BoxFuture<'_, datafusion::parquet::errors::Result<Arc<ParquetMetaData>>> {
-        let metadata_cache = self.metadata.clone();
+        let metadata_cache = Arc::clone(&self.metadata_cache);
         let pool = self.pool.clone();
         let filename = self.filename.clone();
-        // Use options if provided, otherwise create default with page index disabled
-        let _options = options.cloned().unwrap_or_else(|| {
-            ArrowReaderOptions::new().with_page_index(false) // Disable for backward compatibility with legacy Parquet files
-        });
 
         Box::pin(async move {
-            // Check if we already have metadata cached
-            {
-                let lock = metadata_cache.lock().await;
-                if let Some(metadata) = &*lock {
-                    debug!("reusing cached metadata");
-                    return Ok(metadata.clone());
-                }
-            }
-
-            // Load metadata from database, with options applied
-            let metadata = load_parquet_metadata(&filename, &pool)
+            // Load metadata using the shared cache (handles cache hit/miss internally)
+            load_partition_metadata(&pool, &filename, Some(&metadata_cache))
                 .await
-                .map_err(|e| datafusion::parquet::errors::ParquetError::External(e.into()))?;
-
-            // Note: Page index reading is disabled via ArrowReaderOptions above
-            // for backward compatibility with legacy Parquet files that may have
-            // incomplete ColumnIndex metadata (missing null_pages field)
-
-            // Cache the metadata for future calls
-            {
-                let mut lock = metadata_cache.lock().await;
-                *lock = Some(metadata.clone());
-            }
-
-            Ok(metadata)
+                .map_err(|e| datafusion::parquet::errors::ParquetError::External(e.into()))
         })
     }
 }

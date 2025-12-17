@@ -1,6 +1,7 @@
 use super::{
-    partition_cache::QueryPartitionProvider,
-    partitioned_execution_plan::make_partitioned_execution_plan, view::View,
+    lakehouse_context::LakehouseContext, partition_cache::QueryPartitionProvider,
+    partitioned_execution_plan::make_partitioned_execution_plan, reader_factory::ReaderFactory,
+    view::View,
 };
 use crate::time::TimeRange;
 use async_trait::async_trait;
@@ -9,21 +10,17 @@ use datafusion::{
     catalog::{Session, TableProvider},
     datasource::TableType,
     error::DataFusionError,
-    execution::runtime_env::RuntimeEnv,
     logical_expr::{Expr, TableProviderFilterPushDown},
     physical_plan::ExecutionPlan,
 };
-use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_tracing::prelude::*;
-use object_store::ObjectStore;
 use std::{any::Any, sync::Arc};
 
 /// A DataFusion `TableProvider` for materialized views.
 #[derive(Debug)]
 pub struct MaterializedView {
-    runtime: Arc<RuntimeEnv>,
-    lake: Arc<DataLakeConnection>,
-    object_store: Arc<dyn ObjectStore>,
+    lakehouse: Arc<LakehouseContext>,
+    reader_factory: Arc<ReaderFactory>,
     view: Arc<dyn View>,
     part_provider: Arc<dyn QueryPartitionProvider>,
     query_range: Option<TimeRange>,
@@ -31,17 +28,15 @@ pub struct MaterializedView {
 
 impl MaterializedView {
     pub fn new(
-        runtime: Arc<RuntimeEnv>,
-        lake: Arc<DataLakeConnection>,
-        object_store: Arc<dyn ObjectStore>,
+        lakehouse: Arc<LakehouseContext>,
+        reader_factory: Arc<ReaderFactory>,
         view: Arc<dyn View>,
         part_provider: Arc<dyn QueryPartitionProvider>,
         query_range: Option<TimeRange>,
     ) -> Self {
         Self {
-            runtime,
-            lake,
-            object_store,
+            lakehouse,
+            reader_factory,
             view,
             part_provider,
             query_range,
@@ -76,7 +71,7 @@ impl TableProvider for MaterializedView {
         limit: Option<usize>,
     ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
         self.view
-            .jit_update(self.runtime.clone(), self.lake.clone(), self.query_range)
+            .jit_update(self.lakehouse.clone(), self.query_range)
             .await
             .map_err(|e| DataFusionError::External(e.into()))?;
 
@@ -94,13 +89,12 @@ impl TableProvider for MaterializedView {
 
         make_partitioned_execution_plan(
             self.schema(),
-            self.object_store.clone(),
+            self.reader_factory.clone(),
             state,
             projection,
             filters,
             limit,
             Arc::new(partitions),
-            self.lake.db_pool.clone(),
         )
     }
 

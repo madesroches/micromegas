@@ -1,4 +1,5 @@
 use super::{
+    lakehouse_context::LakehouseContext,
     partition::Partition,
     partition_cache::PartitionCache,
     partition_source_data::hash_to_object_count,
@@ -13,13 +14,9 @@ use crate::{response_writer::Logger, time::TimeRange};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use datafusion::{
-    arrow::datatypes::Schema,
-    execution::{SendableRecordBatchStream, runtime_env::RuntimeEnv},
-    prelude::*,
-    sql::TableReference,
+    arrow::datatypes::Schema, execution::SendableRecordBatchStream, prelude::*, sql::TableReference,
 };
 use futures::stream::StreamExt;
-use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_tracing::{error, warn};
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -31,7 +28,7 @@ pub trait PartitionMerger: Send + Sync + Debug {
     /// Executes the merge query.
     async fn execute_merge_query(
         &self,
-        lake: Arc<DataLakeConnection>,
+        lakehouse: Arc<LakehouseContext>,
         partitions_to_merge: Arc<Vec<Partition>>,
         partitions_all_views: Arc<PartitionCache>,
     ) -> Result<SendableRecordBatchStream>;
@@ -40,7 +37,6 @@ pub trait PartitionMerger: Send + Sync + Debug {
 /// A `PartitionMerger` that executes a SQL query to merge partitions.
 #[derive(Debug)]
 pub struct QueryMerger {
-    runtime: Arc<RuntimeEnv>,
     view_factory: Arc<ViewFactory>,
     session_configurator: Arc<dyn SessionConfigurator>,
     file_schema: Arc<Schema>,
@@ -49,14 +45,12 @@ pub struct QueryMerger {
 
 impl QueryMerger {
     pub fn new(
-        runtime: Arc<RuntimeEnv>,
         view_factory: Arc<ViewFactory>,
         session_configurator: Arc<dyn SessionConfigurator>,
         file_schema: Arc<Schema>,
         query: Arc<String>,
     ) -> Self {
         Self {
-            runtime,
             view_factory,
             session_configurator,
             file_schema,
@@ -69,13 +63,13 @@ impl QueryMerger {
 impl PartitionMerger for QueryMerger {
     async fn execute_merge_query(
         &self,
-        lake: Arc<DataLakeConnection>,
+        lakehouse: Arc<LakehouseContext>,
         partitions_to_merge: Arc<Vec<Partition>>,
         partitions_all_views: Arc<PartitionCache>,
     ) -> Result<SendableRecordBatchStream> {
+        let reader_factory = lakehouse.reader_factory().clone();
         let ctx = make_session_context(
-            self.runtime.clone(),
-            lake.clone(),
+            lakehouse.clone(),
             partitions_all_views,
             None,
             self.view_factory.clone(),
@@ -84,9 +78,8 @@ impl PartitionMerger for QueryMerger {
         .await?;
         let src_table = PartitionedTableProvider::new(
             self.file_schema.clone(),
-            lake.blob_storage.inner(),
+            reader_factory,
             partitions_to_merge,
-            lake.db_pool.clone(),
         );
         ctx.register_table(
             TableReference::Bare {
@@ -137,8 +130,7 @@ fn partition_set_stats(
 pub async fn create_merged_partition(
     partitions_to_merge: Arc<PartitionCache>,
     partitions_all_views: Arc<PartitionCache>,
-    runtime: Arc<RuntimeEnv>,
-    lake: Arc<DataLakeConnection>,
+    lakehouse: Arc<LakehouseContext>,
     view: Arc<dyn View>,
     insert_range: TimeRange,
     logger: Arc<dyn Logger>,
@@ -177,8 +169,7 @@ pub async fn create_merged_partition(
     filtered_partitions.sort_by_key(|p| p.begin_insert_time());
     let mut merged_stream = view
         .merge_partitions(
-            runtime.clone(),
-            lake.clone(),
+            lakehouse.clone(),
             Arc::new(filtered_partitions),
             partitions_all_views,
         )
@@ -186,9 +177,10 @@ pub async fn create_merged_partition(
         .with_context(|| "view.merge_partitions")?;
     let (tx, rx) = tokio::sync::mpsc::channel(1);
     let view_copy = view.clone();
+    let lake = lakehouse.lake().clone();
     let join_handle = tokio::spawn(async move {
         let res = write_partition_from_rows(
-            lake.clone(),
+            lake,
             view_copy.get_meta(),
             view_copy.get_file_schema(),
             insert_range,
@@ -203,7 +195,8 @@ pub async fn create_merged_partition(
         res
     });
     let compute_time_bounds = view.get_time_bounds();
-    let ctx = SessionContext::new_with_config_rt(SessionConfig::default(), runtime);
+    let ctx =
+        SessionContext::new_with_config_rt(SessionConfig::default(), lakehouse.runtime().clone());
     while let Some(rb_res) = merged_stream.next().await {
         let rb = rb_res.with_context(|| "receiving record_batch from stream")?;
         let event_time_range = compute_time_bounds

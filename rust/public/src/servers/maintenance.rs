@@ -2,16 +2,15 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, DurationRound};
 use chrono::{TimeDelta, Utc};
-use datafusion::execution::runtime_env::RuntimeEnv;
 use micromegas_analytics::delete::delete_old_data;
 use micromegas_analytics::lakehouse::batch_update::materialize_partition_range;
+use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
 use micromegas_analytics::lakehouse::partition_cache::PartitionCache;
 use micromegas_analytics::lakehouse::temp::delete_expired_temporary_files;
 use micromegas_analytics::lakehouse::view::View;
 use micromegas_analytics::lakehouse::view_factory::ViewFactory;
 use micromegas_analytics::response_writer::ResponseWriter;
 use micromegas_analytics::time::TimeRange;
-use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_tracing::prelude::*;
 use std::sync::Arc;
 use tokio::task::JoinSet;
@@ -25,15 +24,15 @@ type Views = Arc<Vec<Arc<dyn View>>>;
 /// This function iterates through the provided views, materializing partitions
 /// for each view within the specified `insert_range` and `partition_time_delta`.
 pub async fn materialize_all_views(
-    runtime: Arc<RuntimeEnv>,
-    lake: Arc<DataLakeConnection>,
+    lakehouse: Arc<LakehouseContext>,
     views: Views,
     insert_range: TimeRange,
     partition_time_delta: TimeDelta,
 ) -> Result<()> {
     let mut last_group = views.first().unwrap().get_update_group();
     let mut partitions_all_views = Arc::new(
-        PartitionCache::fetch_overlapping_insert_range(&lake.db_pool, insert_range).await?,
+        PartitionCache::fetch_overlapping_insert_range(&lakehouse.lake().db_pool, insert_range)
+            .await?,
     );
     let null_response_writer = Arc::new(ResponseWriter::new(None));
     for view in &*views {
@@ -43,7 +42,7 @@ pub async fn materialize_all_views(
             partitions_all_views = Arc::new(
                 PartitionCache::fetch_overlapping_insert_range(
                     // we are fetching more partitions than we need, could be optimized
-                    &lake.db_pool,
+                    &lakehouse.lake().db_pool,
                     insert_range,
                 )
                 .await?,
@@ -51,8 +50,7 @@ pub async fn materialize_all_views(
         }
         materialize_partition_range(
             partitions_all_views.clone(),
-            runtime.clone(),
-            lake.clone(),
+            lakehouse.clone(),
             view.clone(),
             insert_range,
             partition_time_delta,
@@ -65,8 +63,7 @@ pub async fn materialize_all_views(
 
 /// task running once a day to materialize older partitions
 pub struct EveryDayTask {
-    pub runtime: Arc<RuntimeEnv>,
-    pub lake: Arc<DataLakeConnection>,
+    pub lakehouse: Arc<LakehouseContext>,
     pub views: Views,
 }
 
@@ -78,8 +75,7 @@ impl TaskCallback for EveryDayTask {
         let begin_range = trunc_task_time - (partition_time_delta * 2);
         let end_range = trunc_task_time;
         materialize_all_views(
-            self.runtime.clone(),
-            self.lake.clone(),
+            self.lakehouse.clone(),
             self.views.clone(),
             TimeRange::new(begin_range, end_range),
             partition_time_delta,
@@ -90,24 +86,22 @@ impl TaskCallback for EveryDayTask {
 
 /// task running once an hour to materialize recent partitions
 pub struct EveryHourTask {
-    pub runtime: Arc<RuntimeEnv>,
-    pub lake: Arc<DataLakeConnection>,
+    pub lakehouse: Arc<LakehouseContext>,
     pub views: Views,
 }
 
 #[async_trait]
 impl TaskCallback for EveryHourTask {
     async fn run(&self, task_scheduled_time: DateTime<Utc>) -> Result<()> {
-        delete_old_data(&self.lake, 90).await?;
-        delete_expired_temporary_files(self.lake.clone()).await?;
+        delete_old_data(self.lakehouse.lake(), 90).await?;
+        delete_expired_temporary_files(self.lakehouse.lake().clone()).await?;
 
         let partition_time_delta = TimeDelta::hours(1);
         let trunc_task_time = task_scheduled_time.duration_trunc(partition_time_delta)?;
         let begin_range = trunc_task_time - (partition_time_delta * 2);
         let end_range = trunc_task_time;
         materialize_all_views(
-            self.runtime.clone(),
-            self.lake.clone(),
+            self.lakehouse.clone(),
             self.views.clone(),
             TimeRange::new(begin_range, end_range),
             partition_time_delta,
@@ -118,8 +112,7 @@ impl TaskCallback for EveryHourTask {
 
 /// task running once a minute to materialize recent partitions
 pub struct EveryMinuteTask {
-    pub runtime: Arc<RuntimeEnv>,
-    pub lake: Arc<DataLakeConnection>,
+    pub lakehouse: Arc<LakehouseContext>,
     pub views: Views,
 }
 
@@ -132,8 +125,7 @@ impl TaskCallback for EveryMinuteTask {
         // we only try to process a single partition per view
         let end_range = trunc_task_time - partition_time_delta;
         materialize_all_views(
-            self.runtime.clone(),
-            self.lake.clone(),
+            self.lakehouse.clone(),
             self.views.clone(),
             TimeRange::new(begin_range, end_range),
             partition_time_delta,
@@ -144,8 +136,7 @@ impl TaskCallback for EveryMinuteTask {
 
 /// task running once a second to materialize newest partitions
 pub struct EverySecondTask {
-    pub runtime: Arc<RuntimeEnv>,
-    pub lake: Arc<DataLakeConnection>,
+    pub lakehouse: Arc<LakehouseContext>,
     pub views: Views,
 }
 
@@ -164,8 +155,7 @@ impl TaskCallback for EverySecondTask {
         // we only try to process a single partition per view
         let end_range = trunc_task_time - partition_time_delta;
         materialize_all_views(
-            self.runtime.clone(),
-            self.lake.clone(),
+            self.lakehouse.clone(),
             self.views.clone(),
             TimeRange::new(begin_range, end_range),
             partition_time_delta,
@@ -238,12 +228,10 @@ pub fn get_global_views_with_update_group(view_factory: &ViewFactory) -> Vec<Arc
 ///
 /// # Arguments
 ///
-/// * `runtime` - The DataFusion `RuntimeEnv` to use for query execution.
-/// * `lake` - The connection to the data lake.
+/// * `lakehouse` - The lakehouse context with shared metadata cache.
 /// * `views_to_update` - A vector of views that need to be updated by the daemon.
 pub async fn daemon(
-    runtime: Arc<RuntimeEnv>,
-    lake: Arc<DataLakeConnection>,
+    lakehouse: Arc<LakehouseContext>,
     mut views_to_update: Vec<Arc<dyn View>>,
 ) -> Result<()> {
     views_to_update.sort_by_key(|v| v.get_update_group().unwrap_or(i32::MAX));
@@ -254,8 +242,7 @@ pub async fn daemon(
         TimeDelta::days(1),
         TimeDelta::hours(4),
         Arc::new(EveryDayTask {
-            runtime: runtime.clone(),
-            lake: lake.clone(),
+            lakehouse: lakehouse.clone(),
             views: views.clone(),
         }),
     )?;
@@ -264,8 +251,7 @@ pub async fn daemon(
         TimeDelta::hours(1),
         TimeDelta::minutes(10),
         Arc::new(EveryHourTask {
-            runtime: runtime.clone(),
-            lake: lake.clone(),
+            lakehouse: lakehouse.clone(),
             views: views.clone(),
         }),
     )?;
@@ -274,8 +260,7 @@ pub async fn daemon(
         TimeDelta::minutes(1),
         TimeDelta::seconds(30),
         Arc::new(EveryMinuteTask {
-            runtime: runtime.clone(),
-            lake: lake.clone(),
+            lakehouse: lakehouse.clone(),
             views: views.clone(),
         }),
     )?;
@@ -283,11 +268,7 @@ pub async fn daemon(
         String::from("every second"),
         TimeDelta::seconds(1),
         TimeDelta::milliseconds(500),
-        Arc::new(EverySecondTask {
-            runtime,
-            lake,
-            views,
-        }),
+        Arc::new(EverySecondTask { lakehouse, views }),
     )?;
 
     let mut runners = tokio::task::JoinSet::new();

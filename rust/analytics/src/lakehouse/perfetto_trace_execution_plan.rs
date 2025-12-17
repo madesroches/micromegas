@@ -1,6 +1,6 @@
 use super::{
-    partition_cache::QueryPartitionProvider, session_configurator::NoOpSessionConfigurator,
-    view_factory::ViewFactory,
+    lakehouse_context::LakehouseContext, partition_cache::QueryPartitionProvider,
+    session_configurator::NoOpSessionConfigurator, view_factory::ViewFactory,
 };
 use crate::dfext::{
     string_column_accessor::string_column_by_name, typed_column::typed_column_by_name,
@@ -14,7 +14,7 @@ use datafusion::{
     },
     catalog::{Session, TableProvider},
     common::Result as DFResult,
-    execution::{SendableRecordBatchStream, TaskContext, runtime_env::RuntimeEnv},
+    execution::{SendableRecordBatchStream, TaskContext},
     logical_expr::{Expr, TableType},
     physical_expr::EquivalenceProperties,
     physical_plan::{
@@ -25,10 +25,8 @@ use datafusion::{
     },
 };
 use futures::StreamExt;
-use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_perfetto::{chunk_sender::ChunkSender, streaming_writer::PerfettoWriter};
 use micromegas_tracing::prelude::*;
-use object_store::ObjectStore;
 use std::{
     any::Any,
     fmt::{self, Debug, Formatter},
@@ -49,24 +47,19 @@ pub struct PerfettoTraceExecutionPlan {
     process_id: String,
     span_types: SpanTypes,
     time_range: TimeRange,
-    runtime: Arc<RuntimeEnv>,
-    lake: Arc<DataLakeConnection>,
-    object_store: Arc<dyn ObjectStore>,
+    lakehouse: Arc<LakehouseContext>,
     view_factory: Arc<ViewFactory>,
     part_provider: Arc<dyn QueryPartitionProvider>,
     properties: PlanProperties,
 }
 
 impl PerfettoTraceExecutionPlan {
-    #[expect(clippy::too_many_arguments)]
     pub fn new(
         schema: SchemaRef,
         process_id: String,
         span_types: SpanTypes,
         time_range: TimeRange,
-        runtime: Arc<RuntimeEnv>,
-        lake: Arc<DataLakeConnection>,
-        object_store: Arc<dyn ObjectStore>,
+        lakehouse: Arc<LakehouseContext>,
         view_factory: Arc<ViewFactory>,
         part_provider: Arc<dyn QueryPartitionProvider>,
     ) -> Self {
@@ -82,9 +75,7 @@ impl PerfettoTraceExecutionPlan {
             process_id,
             span_types,
             time_range,
-            runtime,
-            lake,
-            object_store,
+            lakehouse,
             view_factory,
             part_provider,
             properties,
@@ -149,9 +140,7 @@ impl ExecutionPlan for PerfettoTraceExecutionPlan {
         let process_id = self.process_id.clone();
         let span_types = self.span_types;
         let time_range = self.time_range;
-        let runtime = self.runtime.clone();
-        let lake = self.lake.clone();
-        let object_store = self.object_store.clone();
+        let lakehouse = self.lakehouse.clone();
         let view_factory = self.view_factory.clone();
         let part_provider = self.part_provider.clone();
 
@@ -160,9 +149,7 @@ impl ExecutionPlan for PerfettoTraceExecutionPlan {
             process_id,
             span_types,
             time_range,
-            runtime,
-            lake,
-            object_store,
+            lakehouse,
             view_factory,
             part_provider,
         );
@@ -172,14 +159,11 @@ impl ExecutionPlan for PerfettoTraceExecutionPlan {
 }
 
 /// Creates a stream of Perfetto trace chunks using streaming architecture
-#[expect(clippy::too_many_arguments)]
 fn generate_perfetto_trace_stream(
     process_id: String,
     span_types: SpanTypes,
     time_range: TimeRange,
-    runtime: Arc<RuntimeEnv>,
-    lake: Arc<DataLakeConnection>,
-    object_store: Arc<dyn ObjectStore>,
+    lakehouse: Arc<LakehouseContext>,
     view_factory: Arc<ViewFactory>,
     part_provider: Arc<dyn QueryPartitionProvider>,
 ) -> impl futures::Stream<Item = DFResult<RecordBatch>> {
@@ -198,9 +182,7 @@ fn generate_perfetto_trace_stream(
                 process_id,
                 span_types,
                 time_range,
-                runtime,
-                lake,
-                object_store,
+                lakehouse,
                 view_factory,
                 part_provider,
             ).await
@@ -240,15 +222,12 @@ fn generate_perfetto_trace_stream(
 }
 
 /// Generate Perfetto trace using streaming architecture
-#[expect(clippy::too_many_arguments)]
 async fn generate_streaming_perfetto_trace(
     chunk_sender: ChunkSender,
     process_id: String,
     span_types: SpanTypes,
     time_range: TimeRange,
-    runtime: Arc<RuntimeEnv>,
-    lake: Arc<DataLakeConnection>,
-    _object_store: Arc<dyn ObjectStore>,
+    lakehouse: Arc<LakehouseContext>,
     view_factory: Arc<ViewFactory>,
     part_provider: Arc<dyn QueryPartitionProvider>,
 ) -> anyhow::Result<()> {
@@ -259,8 +238,7 @@ async fn generate_streaming_perfetto_trace(
 
     // Create a context for making queries
     let ctx = super::query::make_session_context(
-        runtime,
-        lake,
+        lakehouse,
         part_provider,
         Some(TimeRange {
             begin: time_range.begin,

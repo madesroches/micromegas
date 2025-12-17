@@ -1,4 +1,7 @@
-use super::{partition_cache::QueryPartitionProvider, view_factory::ViewFactory};
+use super::{
+    lakehouse_context::LakehouseContext, partition_cache::QueryPartitionProvider,
+    view_factory::ViewFactory,
+};
 use crate::{
     dfext::expressions::{exp_to_string, exp_to_timestamp},
     time::TimeRange,
@@ -7,12 +10,9 @@ use datafusion::{
     arrow::datatypes::{DataType, Field, Schema},
     catalog::{TableFunctionImpl, TableProvider},
     common::plan_err,
-    execution::runtime_env::RuntimeEnv,
     logical_expr::Expr,
 };
-use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_tracing::prelude::*;
-use object_store::ObjectStore;
 use std::sync::Arc;
 
 /// `PerfettoTraceTableFunction` generates Perfetto trace chunks from process telemetry data.
@@ -34,25 +34,19 @@ use std::sync::Arc;
 ///
 #[derive(Debug)]
 pub struct PerfettoTraceTableFunction {
-    runtime: Arc<RuntimeEnv>,
-    lake: Arc<DataLakeConnection>,
-    object_store: Arc<dyn ObjectStore>,
+    lakehouse: Arc<LakehouseContext>,
     view_factory: Arc<ViewFactory>,
     part_provider: Arc<dyn QueryPartitionProvider>,
 }
 
 impl PerfettoTraceTableFunction {
     pub fn new(
-        runtime: Arc<RuntimeEnv>,
-        lake: Arc<DataLakeConnection>,
-        object_store: Arc<dyn ObjectStore>,
+        lakehouse: Arc<LakehouseContext>,
         view_factory: Arc<ViewFactory>,
         part_provider: Arc<dyn QueryPartitionProvider>,
     ) -> Self {
         Self {
-            runtime,
-            lake,
-            object_store,
+            lakehouse,
             view_factory,
             part_provider,
         }
@@ -130,9 +124,7 @@ impl TableFunctionImpl for PerfettoTraceTableFunction {
             process_id,
             span_types,
             time_range,
-            self.runtime.clone(),
-            self.lake.clone(),
-            self.object_store.clone(),
+            self.lakehouse.clone(),
             self.view_factory.clone(),
             self.part_provider.clone(),
         ));

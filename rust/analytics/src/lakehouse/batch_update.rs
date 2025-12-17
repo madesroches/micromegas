@@ -1,12 +1,10 @@
 use super::{
-    merge::create_merged_partition, partition_cache::PartitionCache,
-    partition_source_data::hash_to_object_count, view::View,
+    lakehouse_context::LakehouseContext, merge::create_merged_partition,
+    partition_cache::PartitionCache, partition_source_data::hash_to_object_count, view::View,
 };
 use crate::{response_writer::Logger, time::TimeRange};
 use anyhow::{Context, Result};
 use chrono::TimeDelta;
-use datafusion::execution::runtime_env::RuntimeEnv;
-use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use std::sync::Arc;
 
 /// Defines the strategy for creating a new partition.
@@ -102,8 +100,7 @@ async fn verify_overlapping_partitions(
 
 async fn materialize_partition(
     existing_partitions_all_views: Arc<PartitionCache>,
-    runtime: Arc<RuntimeEnv>,
-    lake: Arc<DataLakeConnection>,
+    lakehouse: Arc<LakehouseContext>,
     insert_range: TimeRange,
     view: Arc<dyn View>,
     logger: Arc<dyn Logger>,
@@ -111,8 +108,7 @@ async fn materialize_partition(
     let view_set_name = view.get_view_set_name();
     let partition_spec = view
         .make_batch_partition_spec(
-            runtime.clone(),
-            lake.clone(),
+            lakehouse.clone(),
             existing_partitions_all_views.clone(),
             insert_range,
         )
@@ -157,8 +153,7 @@ async fn materialize_partition(
 
         return Box::pin(materialize_partition_range(
             existing_partitions_all_views,
-            runtime,
-            lake,
+            lakehouse.clone(),
             view,
             insert_range,
             new_delta,
@@ -171,7 +166,7 @@ async fn materialize_partition(
     match strategy {
         PartitionCreationStrategy::CreateFromSource => {
             partition_spec
-                .write(lake, logger)
+                .write(lakehouse.lake().clone(), logger)
                 .await
                 .with_context(|| "writing partition")?;
         }
@@ -179,8 +174,7 @@ async fn materialize_partition(
             create_merged_partition(
                 partitions_to_merge,
                 existing_partitions_all_views,
-                runtime,
-                lake,
+                lakehouse,
                 view,
                 insert_range,
                 logger,
@@ -197,8 +191,7 @@ async fn materialize_partition(
 /// Materializes partitions within a given time range.
 pub async fn materialize_partition_range(
     existing_partitions_all_views: Arc<PartitionCache>,
-    runtime: Arc<RuntimeEnv>,
-    lake: Arc<DataLakeConnection>,
+    lakehouse: Arc<LakehouseContext>,
     view: Arc<dyn View>,
     insert_range: TimeRange,
     partition_time_delta: TimeDelta,
@@ -212,8 +205,7 @@ pub async fn materialize_partition_range(
             Arc::new(existing_partitions_all_views.filter_insert_range(partition_insert_range));
         materialize_partition(
             insert_time_filtered,
-            runtime.clone(),
-            lake.clone(),
+            lakehouse.clone(),
             partition_insert_range,
             view.clone(),
             logger.clone(),

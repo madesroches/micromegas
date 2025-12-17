@@ -1,18 +1,15 @@
 use super::{
-    materialized_view::MaterializedView, partition_cache::QueryPartitionProvider,
-    view_factory::ViewFactory,
+    lakehouse_context::LakehouseContext, materialized_view::MaterializedView,
+    partition_cache::QueryPartitionProvider, view_factory::ViewFactory,
 };
 use crate::{dfext::expressions::exp_to_string, time::TimeRange};
 use datafusion::{
     catalog::{TableFunctionImpl, TableProvider},
     common::plan_err,
     error::DataFusionError,
-    execution::runtime_env::RuntimeEnv,
     logical_expr::Expr,
 };
-use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_tracing::prelude::*;
-use object_store::ObjectStore;
 use std::sync::Arc;
 
 /// `ViewInstanceTableFunction` gives access to any view instance using a [ViewFactory].
@@ -28,9 +25,7 @@ use std::sync::Arc;
 ///
 #[derive(Debug)]
 pub struct ViewInstanceTableFunction {
-    runtime: Arc<RuntimeEnv>,
-    lake: Arc<DataLakeConnection>,
-    object_store: Arc<dyn ObjectStore>,
+    lakehouse: Arc<LakehouseContext>,
     view_factory: Arc<ViewFactory>,
     part_provider: Arc<dyn QueryPartitionProvider>,
     query_range: Option<TimeRange>,
@@ -38,17 +33,13 @@ pub struct ViewInstanceTableFunction {
 
 impl ViewInstanceTableFunction {
     pub fn new(
-        runtime: Arc<RuntimeEnv>,
-        lake: Arc<DataLakeConnection>,
-        object_store: Arc<dyn ObjectStore>,
+        lakehouse: Arc<LakehouseContext>,
         view_factory: Arc<ViewFactory>,
         part_provider: Arc<dyn QueryPartitionProvider>,
         query_range: Option<TimeRange>,
     ) -> Self {
         Self {
-            runtime,
-            lake,
-            object_store,
+            lakehouse,
             view_factory,
             part_provider,
             query_range,
@@ -80,9 +71,8 @@ impl TableFunctionImpl for ViewInstanceTableFunction {
             .map_err(|e| DataFusionError::Plan(format!("error making view {e:?}")))?;
 
         Ok(Arc::new(MaterializedView::new(
-            self.runtime.clone(),
-            self.lake.clone(),
-            self.object_store.clone(),
+            self.lakehouse.clone(),
+            self.lakehouse.reader_factory().clone(),
             view,
             self.part_provider.clone(),
             self.query_range,

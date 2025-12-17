@@ -1,6 +1,7 @@
 use super::{
     block_partition_spec::{BlockPartitionSpec, BlockProcessor},
     blocks_view::BlocksView,
+    lakehouse_context::LakehouseContext,
     partition_cache::{LivePartitionProvider, QueryPartitionProvider},
     partition_source_data::{PartitionSourceBlock, SourceDataBlocksInMemory},
     view::{View, ViewMetadata},
@@ -18,10 +19,7 @@ use crate::{
 use anyhow::{Context, Result};
 use chrono::DurationRound;
 use chrono::{DateTime, TimeDelta, Utc};
-use datafusion::{
-    arrow::datatypes::{Schema, TimestampNanosecondType},
-    execution::runtime_env::RuntimeEnv,
-};
+use datafusion::arrow::datatypes::{Schema, TimestampNanosecondType};
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_tracing::prelude::*;
 use sqlx::Row;
@@ -43,14 +41,13 @@ impl Default for JitPartitionConfig {
 }
 
 async fn get_insert_time_range(
-    runtime: Arc<RuntimeEnv>,
-    lake: Arc<DataLakeConnection>,
+    lakehouse: Arc<LakehouseContext>,
     blocks_view: &BlocksView,
     query_time_range: &TimeRange,
     stream: Arc<StreamMetadata>,
 ) -> Result<Option<TimeRange>> {
     // we would need a PartitionCache built from event time range and then filtered for insert time range
-    let part_provider = LivePartitionProvider::new(lake.db_pool.clone());
+    let part_provider = LivePartitionProvider::new(lakehouse.lake().db_pool.clone());
     let partitions = part_provider
         .fetch(
             &blocks_view.get_view_set_name(),
@@ -69,9 +66,11 @@ async fn get_insert_time_range(
         AND begin_time <= '{end_range_iso}'
         AND end_time >= '{begin_range_iso}';"#
     );
+    let reader_factory = lakehouse.reader_factory().clone();
     let rbs = query_partitions(
-        runtime,
-        lake,
+        lakehouse.runtime().clone(),
+        reader_factory,
+        lakehouse.lake().blob_storage.inner(),
         blocks_view.get_file_schema(),
         Arc::new(partitions),
         &sql,
@@ -96,15 +95,14 @@ async fn get_insert_time_range(
 /// Generates a segment of JIT partitions.
 pub async fn generate_stream_jit_partitions_segment(
     config: &JitPartitionConfig,
-    runtime: Arc<RuntimeEnv>,
-    lake: Arc<DataLakeConnection>,
+    lakehouse: Arc<LakehouseContext>,
     blocks_view: &BlocksView,
     insert_time_range: &TimeRange,
     stream: Arc<StreamMetadata>,
     process: Arc<ProcessMetadata>,
 ) -> Result<Vec<SourceDataBlocksInMemory>> {
     let cache = PartitionCache::fetch_overlapping_insert_range_for_view(
-        &lake.db_pool,
+        &lakehouse.lake().db_pool,
         blocks_view.get_view_set_name(),
         blocks_view.get_view_instance_id(),
         *insert_time_range,
@@ -124,9 +122,11 @@ pub async fn generate_stream_jit_partitions_segment(
              ORDER BY insert_time, block_id;"#
     );
 
+    let reader_factory = lakehouse.reader_factory().clone();
     let rbs = query_partitions(
-        runtime,
-        lake,
+        lakehouse.runtime().clone(),
+        reader_factory,
+        lakehouse.lake().blob_storage.inner(),
         blocks_view.get_file_schema(),
         Arc::new(partitions),
         &sql,
@@ -185,16 +185,14 @@ pub async fn generate_stream_jit_partitions_segment(
 /// Generates JIT partitions for a given time range.
 pub async fn generate_stream_jit_partitions(
     config: &JitPartitionConfig,
-    runtime: Arc<RuntimeEnv>,
-    lake: Arc<DataLakeConnection>,
+    lakehouse: Arc<LakehouseContext>,
     blocks_view: &BlocksView,
     query_time_range: &TimeRange,
     stream: Arc<StreamMetadata>,
     process: Arc<ProcessMetadata>,
 ) -> Result<Vec<SourceDataBlocksInMemory>> {
     let insert_time_range = get_insert_time_range(
-        runtime.clone(),
-        lake.clone(),
+        lakehouse.clone(),
         blocks_view,
         query_time_range,
         stream.clone(),
@@ -220,8 +218,7 @@ pub async fn generate_stream_jit_partitions(
         let insert_time_range = TimeRange::new(begin_segment, end_segment);
         let mut segment_partitions = generate_stream_jit_partitions_segment(
             config,
-            runtime.clone(),
-            lake.clone(),
+            lakehouse.clone(),
             blocks_view,
             &insert_time_range,
             stream.clone(),
@@ -238,15 +235,14 @@ pub async fn generate_stream_jit_partitions(
 /// Generates a segment of JIT partitions filtered by process.
 pub async fn generate_process_jit_partitions_segment(
     config: &JitPartitionConfig,
-    runtime: Arc<RuntimeEnv>,
-    lake: Arc<DataLakeConnection>,
+    lakehouse: Arc<LakehouseContext>,
     blocks_view: &BlocksView,
     insert_time_range: &TimeRange,
     process: Arc<ProcessMetadata>,
     stream_tag: &str,
 ) -> Result<Vec<SourceDataBlocksInMemory>> {
     let cache = PartitionCache::fetch_overlapping_insert_range_for_view(
-        &lake.db_pool,
+        &lakehouse.lake().db_pool,
         blocks_view.get_view_set_name(),
         blocks_view.get_view_instance_id(),
         *insert_time_range,
@@ -268,9 +264,11 @@ pub async fn generate_process_jit_partitions_segment(
              ORDER BY insert_time, block_id;"#
     );
 
+    let reader_factory = lakehouse.reader_factory().clone();
     let rbs = query_partitions(
-        runtime.clone(),
-        lake.clone(),
+        lakehouse.runtime().clone(),
+        reader_factory,
+        lakehouse.lake().blob_storage.inner(),
         blocks_view.get_file_schema(),
         Arc::new(partitions),
         &sql,
@@ -377,15 +375,14 @@ pub async fn generate_process_jit_partitions_segment(
 /// Generates JIT partitions for a given time range filtered by process.
 pub async fn generate_process_jit_partitions(
     config: &JitPartitionConfig,
-    runtime: Arc<RuntimeEnv>,
-    lake: Arc<DataLakeConnection>,
+    lakehouse: Arc<LakehouseContext>,
     blocks_view: &BlocksView,
     query_time_range: &TimeRange,
     process: Arc<ProcessMetadata>,
     stream_tag: &str,
 ) -> Result<Vec<SourceDataBlocksInMemory>> {
     // Get insert time range for all blocks in this process
-    let part_provider = LivePartitionProvider::new(lake.db_pool.clone());
+    let part_provider = LivePartitionProvider::new(lakehouse.lake().db_pool.clone());
     let partitions = part_provider
         .fetch(
             &blocks_view.get_view_set_name(),
@@ -407,9 +404,11 @@ pub async fn generate_process_jit_partitions(
         AND end_time >= '{begin_range_iso}';"#
     );
 
+    let reader_factory = lakehouse.reader_factory().clone();
     let rbs = query_partitions(
-        runtime.clone(),
-        lake.clone(),
+        lakehouse.runtime().clone(),
+        reader_factory,
+        lakehouse.lake().blob_storage.inner(),
         blocks_view.get_file_schema(),
         Arc::new(partitions),
         &sql,
@@ -445,8 +444,7 @@ pub async fn generate_process_jit_partitions(
         let insert_time_range = TimeRange::new(begin_segment, end_segment);
         let mut segment_partitions = generate_process_jit_partitions_segment(
             config,
-            runtime.clone(),
-            lake.clone(),
+            lakehouse.clone(),
             blocks_view,
             &insert_time_range,
             process.clone(),
