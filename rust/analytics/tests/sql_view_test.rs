@@ -267,10 +267,8 @@ async fn make_log_entries_levels_per_process_minute_view_with_custom_merge(
     .await
 }
 
-#[expect(clippy::too_many_arguments)]
 pub async fn materialize_range(
-    runtime: Arc<RuntimeEnv>,
-    lake: Arc<DataLakeConnection>,
+    lakehouse: Arc<LakehouseContext>,
     view_factory: Arc<ViewFactory>,
     log_summary_view: Arc<dyn View>,
     insert_range: TimeRange,
@@ -280,7 +278,7 @@ pub async fn materialize_range(
     let blocks_view = Arc::new(BlocksView::new()?);
     let mut partitions = Arc::new(
         PartitionCache::fetch_overlapping_insert_range_for_view(
-            &lake.db_pool,
+            &lakehouse.lake.db_pool,
             blocks_view.get_view_set_name(),
             blocks_view.get_view_instance_id(),
             insert_range,
@@ -289,8 +287,7 @@ pub async fn materialize_range(
     );
     materialize_partition_range(
         partitions.clone(),
-        runtime.clone(),
-        lake.clone(),
+        lakehouse.clone(),
         blocks_view,
         insert_range,
         partition_time_delta,
@@ -298,13 +295,13 @@ pub async fn materialize_range(
     )
     .await?;
     partitions = Arc::new(
-        PartitionCache::fetch_overlapping_insert_range(&lake.db_pool, insert_range).await?,
+        PartitionCache::fetch_overlapping_insert_range(&lakehouse.lake.db_pool, insert_range)
+            .await?,
     );
     let log_entries_view = view_factory.make_view("log_entries", "global")?;
     materialize_partition_range(
         partitions.clone(),
-        runtime.clone(),
-        lake.clone(),
+        lakehouse.clone(),
         log_entries_view,
         insert_range,
         partition_time_delta,
@@ -312,12 +309,12 @@ pub async fn materialize_range(
     )
     .await?;
     partitions = Arc::new(
-        PartitionCache::fetch_overlapping_insert_range(&lake.db_pool, insert_range).await?,
+        PartitionCache::fetch_overlapping_insert_range(&lakehouse.lake.db_pool, insert_range)
+            .await?,
     );
     materialize_partition_range(
         partitions.clone(),
-        runtime.clone(),
-        lake.clone(),
+        lakehouse.clone(),
         log_summary_view.clone(),
         insert_range,
         partition_time_delta / 2, // this validates that the source rows are not read twice
@@ -353,6 +350,7 @@ async fn test_log_summary_view(
     lake: Arc<DataLakeConnection>,
     log_summary_view: Arc<SqlBatchView>,
 ) -> Result<()> {
+    let lakehouse = Arc::new(LakehouseContext::new(lake.clone(), runtime.clone()));
     let mut view_factory = default_view_factory(runtime.clone(), lake.clone()).await?;
     view_factory.add_global_view(log_summary_view.clone());
     let view_factory = Arc::new(view_factory);
@@ -398,8 +396,7 @@ async fn test_log_summary_view(
     let begin_range = end_range - (TimeDelta::minutes(3));
     let insert_range = TimeRange::new(begin_range, end_range);
     materialize_range(
-        runtime.clone(),
-        lake.clone(),
+        lakehouse.clone(),
         view_factory.clone(),
         log_summary_view.clone(),
         insert_range,
@@ -408,8 +405,7 @@ async fn test_log_summary_view(
     )
     .await?;
     materialize_range(
-        runtime.clone(),
-        lake.clone(),
+        lakehouse.clone(),
         view_factory.clone(),
         log_summary_view.clone(),
         insert_range,
@@ -417,7 +413,6 @@ async fn test_log_summary_view(
         null_response_writer.clone(),
     )
     .await?;
-    let lakehouse = Arc::new(LakehouseContext::new(lake.clone(), runtime.clone()));
     let answer = query(
         lakehouse.clone(),
         Arc::new(LivePartitionProvider::new(lake.db_pool.clone())),

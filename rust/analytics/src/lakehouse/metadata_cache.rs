@@ -1,5 +1,7 @@
 use datafusion::parquet::file::metadata::ParquetMetaData;
+use micromegas_tracing::prelude::*;
 use moka::future::Cache;
+use moka::notification::RemovalCause;
 use std::sync::Arc;
 
 /// Default cache size for batch operations (10 MB)
@@ -10,6 +12,8 @@ const DEFAULT_CACHE_SIZE_BYTES: u64 = 10 * 1024 * 1024;
 struct CacheEntry {
     metadata: Arc<ParquetMetaData>,
     serialized_size: u32,
+    /// Timestamp when the entry was inserted (in ticks from now())
+    inserted_at: i64,
 }
 
 /// Global LRU cache for partition metadata, shared across all readers and queries.
@@ -31,6 +35,19 @@ impl MetadataCache {
         let cache = Cache::builder()
             .max_capacity(max_capacity_bytes)
             .weigher(|_key: &String, entry: &CacheEntry| -> u32 { entry.serialized_size })
+            .eviction_listener(
+                |_key: Arc<String>, entry: CacheEntry, cause: RemovalCause| {
+                    if cause == RemovalCause::Size {
+                        // Track eviction delay: time between insertion and eviction due to size pressure
+                        let eviction_delay = now() - entry.inserted_at;
+                        imetric!(
+                            "metadata_cache_eviction_delay",
+                            "ticks",
+                            eviction_delay as u64
+                        );
+                    }
+                },
+            )
             .build();
         Self { cache }
     }
@@ -53,9 +70,15 @@ impl MetadataCache {
                 CacheEntry {
                     metadata,
                     serialized_size,
+                    inserted_at: now(),
                 },
             )
             .await;
+        imetric!(
+            "metadata_cache_entry_count",
+            "count",
+            self.cache.entry_count()
+        );
     }
 
     /// Returns cache statistics (entry_count, weighted_size_bytes).

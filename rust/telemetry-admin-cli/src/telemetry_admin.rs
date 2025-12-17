@@ -5,6 +5,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use micromegas::analytics::delete::delete_old_data;
 use micromegas::analytics::lakehouse::batch_update::materialize_partition_range;
+use micromegas::analytics::lakehouse::lakehouse_context::LakehouseContext;
 use micromegas::analytics::lakehouse::migration::migrate_lakehouse;
 use micromegas::analytics::lakehouse::partition_cache::PartitionCache;
 use micromegas::analytics::lakehouse::runtime::make_runtime_env;
@@ -73,7 +74,8 @@ async fn main() -> Result<()> {
         .await
         .with_context(|| "migrate_lakehouse")?;
     let runtime = Arc::new(make_runtime_env()?);
-    let view_factory = default_view_factory(runtime.clone(), data_lake.clone()).await?;
+    let lakehouse = Arc::new(LakehouseContext::new(data_lake.clone(), runtime.clone()));
+    let view_factory = default_view_factory(runtime, data_lake.clone()).await?;
     let null_response_writer = Arc::new(ResponseWriter::new(None));
     match args.command {
         Commands::DeleteOldData { min_days_old } => {
@@ -93,13 +95,15 @@ async fn main() -> Result<()> {
                 .with_context(|| "making time delta")?;
             let insert_range = TimeRange::new(begin, end);
             let existing_partitions_all_views = Arc::new(
-                PartitionCache::fetch_overlapping_insert_range(&data_lake.db_pool, insert_range)
-                    .await?,
+                PartitionCache::fetch_overlapping_insert_range(
+                    &lakehouse.lake.db_pool,
+                    insert_range,
+                )
+                .await?,
             );
             materialize_partition_range(
                 existing_partitions_all_views,
-                runtime.clone(),
-                data_lake,
+                lakehouse,
                 view_factory.make_view(&view_set_name, &view_instance_id)?,
                 insert_range,
                 delta,
@@ -128,7 +132,7 @@ async fn main() -> Result<()> {
 
         Commands::CronDaemon => {
             let views_to_update = get_global_views_with_update_group(&view_factory);
-            micromegas::servers::maintenance::daemon(runtime, data_lake, views_to_update).await?
+            micromegas::servers::maintenance::daemon(lakehouse, views_to_update).await?
         }
     }
     Ok(())

@@ -123,8 +123,7 @@ impl View for AsyncEventsView {
         query_range: Option<TimeRange>,
     ) -> Result<()> {
         let (process, last_block_end_ticks, last_block_end_time) = find_process_with_latest_timing(
-            lakehouse.runtime.clone(),
-            lakehouse.lake.clone(),
+            lakehouse.clone(),
             self.view_factory.clone(),
             &self
                 .process_id

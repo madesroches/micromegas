@@ -148,8 +148,7 @@ pub fn register_lakehouse_functions(
     ctx.register_udtf(
         "materialize_partitions",
         Arc::new(MaterializePartitionsTableFunction::new(
-            lakehouse.runtime.clone(),
-            lakehouse.lake.clone(),
+            lakehouse.clone(),
             view_factory.clone(),
         )),
     );
