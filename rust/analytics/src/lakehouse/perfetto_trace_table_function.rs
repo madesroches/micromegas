@@ -1,4 +1,7 @@
-use super::{partition_cache::QueryPartitionProvider, view_factory::ViewFactory};
+use super::{
+    partition_cache::QueryPartitionProvider, reader_factory::ReaderFactory,
+    view_factory::ViewFactory,
+};
 use crate::{
     dfext::expressions::{exp_to_string, exp_to_timestamp},
     time::TimeRange,
@@ -12,7 +15,6 @@ use datafusion::{
 };
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_tracing::prelude::*;
-use object_store::ObjectStore;
 use std::sync::Arc;
 
 /// `PerfettoTraceTableFunction` generates Perfetto trace chunks from process telemetry data.
@@ -36,7 +38,7 @@ use std::sync::Arc;
 pub struct PerfettoTraceTableFunction {
     runtime: Arc<RuntimeEnv>,
     lake: Arc<DataLakeConnection>,
-    object_store: Arc<dyn ObjectStore>,
+    reader_factory: Arc<ReaderFactory>,
     view_factory: Arc<ViewFactory>,
     part_provider: Arc<dyn QueryPartitionProvider>,
 }
@@ -45,14 +47,14 @@ impl PerfettoTraceTableFunction {
     pub fn new(
         runtime: Arc<RuntimeEnv>,
         lake: Arc<DataLakeConnection>,
-        object_store: Arc<dyn ObjectStore>,
+        reader_factory: Arc<ReaderFactory>,
         view_factory: Arc<ViewFactory>,
         part_provider: Arc<dyn QueryPartitionProvider>,
     ) -> Self {
         Self {
             runtime,
             lake,
-            object_store,
+            reader_factory,
             view_factory,
             part_provider,
         }
@@ -132,7 +134,7 @@ impl TableFunctionImpl for PerfettoTraceTableFunction {
             time_range,
             self.runtime.clone(),
             self.lake.clone(),
-            self.object_store.clone(),
+            self.reader_factory.clone(),
             self.view_factory.clone(),
             self.part_provider.clone(),
         ));

@@ -16,7 +16,8 @@ use crate::{
     dfext::{string_column_accessor::string_column_by_name, typed_column::typed_column_by_name},
     lakehouse::{
         partition_cache::LivePartitionProvider, query::make_session_context,
-        session_configurator::NoOpSessionConfigurator, view_factory::ViewFactory,
+        reader_factory::ReaderFactory, session_configurator::NoOpSessionConfigurator,
+        view_factory::ViewFactory,
     },
     properties::properties_column_accessor::properties_column_by_name,
     time::TimeRange,
@@ -231,10 +232,15 @@ pub async fn find_process_with_latest_timing(
     query_range: Option<TimeRange>,
 ) -> Result<(ProcessMetadata, i64, DateTime<Utc>)> {
     let partition_provider = Arc::new(LivePartitionProvider::new(lake.db_pool.clone()));
+    let reader_factory = Arc::new(ReaderFactory::new(
+        lake.blob_storage.inner(),
+        lake.db_pool.clone(),
+    ));
 
     let ctx = make_session_context(
         runtime,
         lake.clone(),
+        reader_factory,
         partition_provider,
         query_range,
         view_factory,

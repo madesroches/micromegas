@@ -6,6 +6,7 @@ use super::{
     partition::Partition,
     partition_cache::{NullPartitionProvider, PartitionCache},
     query::make_session_context,
+    reader_factory::ReaderFactory,
     session_configurator::SessionConfigurator,
     sql_partition_spec::fetch_sql_partition_spec,
     view::{PartitionSpec, View, ViewMetadata},
@@ -85,9 +86,14 @@ impl SqlBatchView {
         merger_maker: Option<&MergerMaker>,
     ) -> Result<Self> {
         let null_part_provider = Arc::new(NullPartitionProvider {});
+        let reader_factory = Arc::new(ReaderFactory::new(
+            lake.blob_storage.inner(),
+            lake.db_pool.clone(),
+        ));
         let ctx = make_session_context(
             runtime.clone(),
             lake,
+            reader_factory,
             null_part_provider,
             None,
             view_factory.clone(),
@@ -156,9 +162,14 @@ impl View for SqlBatchView {
             file_schema_hash: self.get_file_schema_hash(),
         };
         let partitions_in_range = Arc::new(existing_partitions.filter_insert_range(insert_range));
+        let reader_factory = Arc::new(ReaderFactory::new(
+            lake.blob_storage.inner(),
+            lake.db_pool.clone(),
+        ));
         let ctx = make_session_context(
             self.runtime.clone(),
             lake.clone(),
+            reader_factory,
             partitions_in_range.clone(),
             None,
             self.view_factory.clone(),

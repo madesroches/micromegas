@@ -7,6 +7,7 @@ use micromegas_analytics::{
         blocks_view::BlocksView,
         partition_cache::{LivePartitionProvider, PartitionCache},
         query::query,
+        reader_factory::ReaderFactory,
         runtime::make_runtime_env,
         session_configurator::NoOpSessionConfigurator,
         sql_batch_view::SqlBatchView,
@@ -198,9 +199,14 @@ async fn test_cpu_usage_view(
     )
     .await?;
 
+    let reader_factory = Arc::new(ReaderFactory::new(
+        lake.blob_storage.inner(),
+        lake.db_pool.clone(),
+    ));
     let answer = query(
         runtime.clone(),
         lake.clone(),
+        reader_factory,
         Arc::new(LivePartitionProvider::new(lake.db_pool.clone())),
         Some(TimeRange::new(begin_range, end_range)),
         "

@@ -1,6 +1,6 @@
 use super::{
-    partition_cache::QueryPartitionProvider, session_configurator::NoOpSessionConfigurator,
-    view_factory::ViewFactory,
+    partition_cache::QueryPartitionProvider, reader_factory::ReaderFactory,
+    session_configurator::NoOpSessionConfigurator, view_factory::ViewFactory,
 };
 use crate::dfext::{
     string_column_accessor::string_column_by_name, typed_column::typed_column_by_name,
@@ -28,7 +28,6 @@ use futures::StreamExt;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_perfetto::{chunk_sender::ChunkSender, streaming_writer::PerfettoWriter};
 use micromegas_tracing::prelude::*;
-use object_store::ObjectStore;
 use std::{
     any::Any,
     fmt::{self, Debug, Formatter},
@@ -51,7 +50,7 @@ pub struct PerfettoTraceExecutionPlan {
     time_range: TimeRange,
     runtime: Arc<RuntimeEnv>,
     lake: Arc<DataLakeConnection>,
-    object_store: Arc<dyn ObjectStore>,
+    reader_factory: Arc<ReaderFactory>,
     view_factory: Arc<ViewFactory>,
     part_provider: Arc<dyn QueryPartitionProvider>,
     properties: PlanProperties,
@@ -66,7 +65,7 @@ impl PerfettoTraceExecutionPlan {
         time_range: TimeRange,
         runtime: Arc<RuntimeEnv>,
         lake: Arc<DataLakeConnection>,
-        object_store: Arc<dyn ObjectStore>,
+        reader_factory: Arc<ReaderFactory>,
         view_factory: Arc<ViewFactory>,
         part_provider: Arc<dyn QueryPartitionProvider>,
     ) -> Self {
@@ -84,7 +83,7 @@ impl PerfettoTraceExecutionPlan {
             time_range,
             runtime,
             lake,
-            object_store,
+            reader_factory,
             view_factory,
             part_provider,
             properties,
@@ -151,7 +150,7 @@ impl ExecutionPlan for PerfettoTraceExecutionPlan {
         let time_range = self.time_range;
         let runtime = self.runtime.clone();
         let lake = self.lake.clone();
-        let object_store = self.object_store.clone();
+        let reader_factory = self.reader_factory.clone();
         let view_factory = self.view_factory.clone();
         let part_provider = self.part_provider.clone();
 
@@ -162,7 +161,7 @@ impl ExecutionPlan for PerfettoTraceExecutionPlan {
             time_range,
             runtime,
             lake,
-            object_store,
+            reader_factory,
             view_factory,
             part_provider,
         );
@@ -179,7 +178,7 @@ fn generate_perfetto_trace_stream(
     time_range: TimeRange,
     runtime: Arc<RuntimeEnv>,
     lake: Arc<DataLakeConnection>,
-    object_store: Arc<dyn ObjectStore>,
+    reader_factory: Arc<ReaderFactory>,
     view_factory: Arc<ViewFactory>,
     part_provider: Arc<dyn QueryPartitionProvider>,
 ) -> impl futures::Stream<Item = DFResult<RecordBatch>> {
@@ -200,7 +199,7 @@ fn generate_perfetto_trace_stream(
                 time_range,
                 runtime,
                 lake,
-                object_store,
+                reader_factory,
                 view_factory,
                 part_provider,
             ).await
@@ -248,7 +247,7 @@ async fn generate_streaming_perfetto_trace(
     time_range: TimeRange,
     runtime: Arc<RuntimeEnv>,
     lake: Arc<DataLakeConnection>,
-    _object_store: Arc<dyn ObjectStore>,
+    reader_factory: Arc<ReaderFactory>,
     view_factory: Arc<ViewFactory>,
     part_provider: Arc<dyn QueryPartitionProvider>,
 ) -> anyhow::Result<()> {
@@ -261,6 +260,7 @@ async fn generate_streaming_perfetto_trace(
     let ctx = super::query::make_session_context(
         runtime,
         lake,
+        reader_factory,
         part_provider,
         Some(TimeRange {
             begin: time_range.begin,

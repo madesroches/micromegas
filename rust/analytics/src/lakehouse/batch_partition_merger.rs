@@ -1,6 +1,7 @@
 use super::{
     merge::PartitionMerger, partition::Partition, partition_cache::PartitionCache,
-    session_configurator::SessionConfigurator, view_factory::ViewFactory,
+    reader_factory::ReaderFactory, session_configurator::SessionConfigurator,
+    view_factory::ViewFactory,
 };
 use crate::{
     lakehouse::{
@@ -130,21 +131,22 @@ impl PartitionMerger for BatchPartitionMerger {
 
         let runtime = self.runtime.clone();
         let file_schema = self.file_schema.clone();
+        let reader_factory = Arc::new(ReaderFactory::new(
+            lake.blob_storage.inner(),
+            lake.db_pool.clone(),
+        ));
         let ctx = make_session_context(
             runtime,
             lake.clone(),
+            reader_factory.clone(),
             partitions_all_views,
             None,
             self.view_factory.clone(),
             self.session_configurator.clone(),
         )
         .await?;
-        let src_table = PartitionedTableProvider::new(
-            file_schema,
-            lake.blob_storage.inner(),
-            partitions_to_merge,
-            lake.db_pool.clone(),
-        );
+        let src_table =
+            PartitionedTableProvider::new(file_schema, reader_factory, partitions_to_merge);
         ctx.register_table(
             TableReference::Bare {
                 table: "source".into(),

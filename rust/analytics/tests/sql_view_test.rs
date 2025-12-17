@@ -15,6 +15,7 @@ use micromegas_analytics::lakehouse::merge::PartitionMerger;
 use micromegas_analytics::lakehouse::partition::Partition;
 use micromegas_analytics::lakehouse::partition_cache::{LivePartitionProvider, PartitionCache};
 use micromegas_analytics::lakehouse::query::{query, query_partitions};
+use micromegas_analytics::lakehouse::reader_factory::ReaderFactory;
 use micromegas_analytics::lakehouse::runtime::make_runtime_env;
 use micromegas_analytics::lakehouse::session_configurator::NoOpSessionConfigurator;
 use micromegas_analytics::lakehouse::view::View;
@@ -118,9 +119,14 @@ impl PartitionMerger for LogSummaryMerger {
         partitions: Arc<Vec<Partition>>,
         _partitions_all_views: Arc<PartitionCache>,
     ) -> Result<SendableRecordBatchStream> {
+        let reader_factory = Arc::new(ReaderFactory::new(
+            lake.blob_storage.inner(),
+            lake.db_pool.clone(),
+        ));
         let processes_df = query_partitions(
             self.runtime.clone(),
-            lake.clone(),
+            reader_factory.clone(),
+            lake.blob_storage.inner(),
             self.file_schema.clone(),
             partitions.clone(),
             "SELECT DISTINCT process_id FROM source ORDER BY process_id;",
@@ -157,7 +163,8 @@ impl PartitionMerger for LogSummaryMerger {
                 );
                 let df = query_partitions(
                     self.runtime.clone(),
-                    lake.clone(),
+                    reader_factory.clone(),
+                    lake.blob_storage.inner(),
                     self.file_schema.clone(),
                     partitions.clone(),
                     &single_process_merge_query,
@@ -413,9 +420,14 @@ async fn test_log_summary_view(
         null_response_writer.clone(),
     )
     .await?;
+    let reader_factory = Arc::new(ReaderFactory::new(
+        lake.blob_storage.inner(),
+        lake.db_pool.clone(),
+    ));
     let answer = query(
         runtime.clone(),
         lake.clone(),
+        reader_factory.clone(),
         Arc::new(LivePartitionProvider::new(lake.db_pool.clone())),
         Some(TimeRange::new(begin_range, end_range)),
         "
@@ -442,6 +454,7 @@ async fn test_log_summary_view(
     let answer = query(
         runtime.clone(),
         lake.clone(),
+        reader_factory,
         Arc::new(LivePartitionProvider::new(lake.db_pool.clone())),
         Some(TimeRange::new(begin_range, end_range)),
         "

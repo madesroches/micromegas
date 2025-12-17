@@ -4,6 +4,7 @@ use super::{
     partition_source_data::hash_to_object_count,
     partitioned_table_provider::PartitionedTableProvider,
     query::make_session_context,
+    reader_factory::ReaderFactory,
     session_configurator::SessionConfigurator,
     view::View,
     view_factory::ViewFactory,
@@ -73,9 +74,14 @@ impl PartitionMerger for QueryMerger {
         partitions_to_merge: Arc<Vec<Partition>>,
         partitions_all_views: Arc<PartitionCache>,
     ) -> Result<SendableRecordBatchStream> {
+        let reader_factory = Arc::new(ReaderFactory::new(
+            lake.blob_storage.inner(),
+            lake.db_pool.clone(),
+        ));
         let ctx = make_session_context(
             self.runtime.clone(),
             lake.clone(),
+            reader_factory.clone(),
             partitions_all_views,
             None,
             self.view_factory.clone(),
@@ -84,9 +90,8 @@ impl PartitionMerger for QueryMerger {
         .await?;
         let src_table = PartitionedTableProvider::new(
             self.file_schema.clone(),
-            lake.blob_storage.inner(),
+            reader_factory,
             partitions_to_merge,
-            lake.db_pool.clone(),
         );
         ctx.register_table(
             TableReference::Bare {

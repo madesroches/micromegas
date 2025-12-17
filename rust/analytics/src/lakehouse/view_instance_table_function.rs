@@ -1,6 +1,6 @@
 use super::{
     materialized_view::MaterializedView, partition_cache::QueryPartitionProvider,
-    view_factory::ViewFactory,
+    reader_factory::ReaderFactory, view_factory::ViewFactory,
 };
 use crate::{dfext::expressions::exp_to_string, time::TimeRange};
 use datafusion::{
@@ -12,7 +12,6 @@ use datafusion::{
 };
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_tracing::prelude::*;
-use object_store::ObjectStore;
 use std::sync::Arc;
 
 /// `ViewInstanceTableFunction` gives access to any view instance using a [ViewFactory].
@@ -30,7 +29,7 @@ use std::sync::Arc;
 pub struct ViewInstanceTableFunction {
     runtime: Arc<RuntimeEnv>,
     lake: Arc<DataLakeConnection>,
-    object_store: Arc<dyn ObjectStore>,
+    reader_factory: Arc<ReaderFactory>,
     view_factory: Arc<ViewFactory>,
     part_provider: Arc<dyn QueryPartitionProvider>,
     query_range: Option<TimeRange>,
@@ -40,7 +39,7 @@ impl ViewInstanceTableFunction {
     pub fn new(
         runtime: Arc<RuntimeEnv>,
         lake: Arc<DataLakeConnection>,
-        object_store: Arc<dyn ObjectStore>,
+        reader_factory: Arc<ReaderFactory>,
         view_factory: Arc<ViewFactory>,
         part_provider: Arc<dyn QueryPartitionProvider>,
         query_range: Option<TimeRange>,
@@ -48,7 +47,7 @@ impl ViewInstanceTableFunction {
         Self {
             runtime,
             lake,
-            object_store,
+            reader_factory,
             view_factory,
             part_provider,
             query_range,
@@ -82,7 +81,7 @@ impl TableFunctionImpl for ViewInstanceTableFunction {
         Ok(Arc::new(MaterializedView::new(
             self.runtime.clone(),
             self.lake.clone(),
-            self.object_store.clone(),
+            self.reader_factory.clone(),
             view,
             self.part_provider.clone(),
             self.query_range,

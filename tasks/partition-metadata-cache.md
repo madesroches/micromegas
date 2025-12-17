@@ -30,11 +30,13 @@ A 50 MB budget would cache most hot partitions and provide >90% hit rate for typ
 
 ## Implementation Plan
 
-### 1. Create single ReaderFactory at service startup
+### 1. Create single ReaderFactory at service startup ✓
 
 **Key architectural change:** Currently `make_partitioned_execution_plan` creates a new `ReaderFactory` per query. Instead, create one `ReaderFactory` at service startup and pass `Arc<ReaderFactory>` through the query path.
 
-In `flight-sql-srv`, create once at startup:
+**Implemented:** `FlightSqlServiceImpl` now creates and holds a single `Arc<ReaderFactory>` instance.
+
+In `flight-sql-srv`, create once at startup (future state with cache):
 
 ```rust
 let metadata_cache = Arc::new(MetadataCache::new(
@@ -51,7 +53,9 @@ let reader_factory = Arc::new(ReaderFactory::new(
 ));
 ```
 
-### 2. Thread ReaderFactory through query path
+### 2. Thread ReaderFactory through query path ✓
+
+**Implemented:** All query path functions now accept `Arc<ReaderFactory>` instead of separate object_store and pool parameters. Files updated: `query.rs`, `materialized_view.rs`, `partitioned_table_provider.rs`, `partitioned_execution_plan.rs`, `view_instance_table_function.rs`, `perfetto_trace_table_function.rs`, and related files.
 
 Replace `object_store: Arc<dyn ObjectStore>` + `pool: PgPool` parameters with `reader_factory: Arc<ReaderFactory>`:
 

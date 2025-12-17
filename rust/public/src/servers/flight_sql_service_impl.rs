@@ -34,6 +34,7 @@ use futures::StreamExt;
 use futures::{Stream, TryStreamExt};
 use micromegas_analytics::lakehouse::partition_cache::QueryPartitionProvider;
 use micromegas_analytics::lakehouse::query::make_session_context;
+use micromegas_analytics::lakehouse::reader_factory::ReaderFactory;
 use micromegas_analytics::lakehouse::session_configurator::SessionConfigurator;
 use micromegas_analytics::lakehouse::view_factory::ViewFactory;
 use micromegas_analytics::replication::bulk_ingest;
@@ -144,6 +145,7 @@ static INSTANCE_SQL_DATA: Lazy<SqlInfoData> = Lazy::new(|| {
 pub struct FlightSqlServiceImpl {
     runtime: Arc<RuntimeEnv>,
     lake: Arc<DataLakeConnection>,
+    reader_factory: Arc<ReaderFactory>,
     part_provider: Arc<dyn QueryPartitionProvider>,
     view_factory: Arc<ViewFactory>,
     session_configurator: Arc<dyn SessionConfigurator>,
@@ -157,9 +159,14 @@ impl FlightSqlServiceImpl {
         view_factory: Arc<ViewFactory>,
         session_configurator: Arc<dyn SessionConfigurator>,
     ) -> Result<Self> {
+        let reader_factory = Arc::new(ReaderFactory::new(
+            lake.blob_storage.inner(),
+            lake.db_pool.clone(),
+        ));
         Ok(Self {
             runtime,
             lake,
+            reader_factory,
             part_provider,
             view_factory,
             session_configurator,
@@ -247,6 +254,7 @@ impl FlightSqlServiceImpl {
         let ctx = make_session_context(
             self.runtime.clone(),
             self.lake.clone(),
+            self.reader_factory.clone(),
             self.part_provider.clone(),
             query_range,
             self.view_factory.clone(),
@@ -703,6 +711,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         let ctx = make_session_context(
             self.runtime.clone(),
             self.lake.clone(),
+            self.reader_factory.clone(),
             self.part_provider.clone(),
             None,
             self.view_factory.clone(),

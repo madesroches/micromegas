@@ -1,5 +1,6 @@
 use super::blocks_view::blocks_file_schema_hash;
 use super::partition_cache::PartitionCache;
+use super::reader_factory::ReaderFactory;
 use crate::dfext::{
     string_column_accessor::string_column_by_name, typed_column::typed_column_by_name,
 };
@@ -261,9 +262,14 @@ pub async fn fetch_partition_source_data(
     let block_partitions = existing_partitions
         .filter("blocks", "global", &blocks_file_schema_hash(), insert_range)
         .partitions;
+    let reader_factory = Arc::new(ReaderFactory::new(
+        lake.blob_storage.inner(),
+        lake.db_pool.clone(),
+    ));
     let df = query_partitions(
         runtime,
-        lake.clone(),
+        reader_factory,
+        lake.blob_storage.inner(),
         Arc::new(blocks_view_schema()),
         Arc::new(block_partitions),
         &sql,
