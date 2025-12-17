@@ -15,9 +15,9 @@ use crate::{
     arrow_properties::serialize_properties_to_jsonb,
     dfext::{string_column_accessor::string_column_by_name, typed_column::typed_column_by_name},
     lakehouse::{
-        metadata_cache::MetadataCache, partition_cache::LivePartitionProvider,
-        query::make_session_context, reader_factory::ReaderFactory,
-        session_configurator::NoOpSessionConfigurator, view_factory::ViewFactory,
+        lakehouse_context::LakehouseContext, partition_cache::LivePartitionProvider,
+        query::make_session_context, session_configurator::NoOpSessionConfigurator,
+        view_factory::ViewFactory,
     },
     properties::properties_column_accessor::properties_column_by_name,
     time::TimeRange,
@@ -232,11 +232,8 @@ pub async fn find_process_with_latest_timing(
     query_range: Option<TimeRange>,
 ) -> Result<(ProcessMetadata, i64, DateTime<Utc>)> {
     let partition_provider = Arc::new(LivePartitionProvider::new(lake.db_pool.clone()));
-    let reader_factory = Arc::new(ReaderFactory::new(
-        lake.blob_storage.inner(),
-        lake.db_pool.clone(),
-        Arc::new(MetadataCache::default()),
-    ));
+    let lakehouse = LakehouseContext::new(lake.clone(), runtime.clone());
+    let reader_factory = lakehouse.make_reader_factory();
 
     let ctx = make_session_context(
         runtime,

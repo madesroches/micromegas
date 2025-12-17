@@ -13,6 +13,7 @@ use super::{
         JitPartitionConfig, generate_process_jit_partitions, is_jit_partition_up_to_date,
         write_partition_from_blocks,
     },
+    lakehouse_context::LakehouseContext,
     metrics_block_processor::MetricsBlockProcessor,
     partition_cache::PartitionCache,
     partition_source_data::fetch_partition_source_data,
@@ -24,10 +25,8 @@ use async_trait::async_trait;
 use chrono::{DateTime, TimeDelta, Utc};
 use datafusion::{
     arrow::datatypes::Schema,
-    execution::runtime_env::RuntimeEnv,
     logical_expr::{Between, Expr, col},
 };
-use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_tracing::info;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -89,8 +88,7 @@ impl View for MetricsView {
 
     async fn make_batch_partition_spec(
         &self,
-        runtime: Arc<RuntimeEnv>,
-        lake: Arc<DataLakeConnection>,
+        lakehouse: Arc<LakehouseContext>,
         existing_partitions: Arc<PartitionCache>,
         insert_range: TimeRange,
     ) -> Result<Arc<dyn PartitionSpec>> {
@@ -99,8 +97,7 @@ impl View for MetricsView {
         }
         let source_data = Arc::new(
             fetch_partition_source_data(
-                runtime,
-                lake,
+                lakehouse.clone(),
                 existing_partitions,
                 insert_range,
                 "metrics",
@@ -131,8 +128,7 @@ impl View for MetricsView {
 
     async fn jit_update(
         &self,
-        runtime: Arc<RuntimeEnv>,
-        lake: Arc<DataLakeConnection>,
+        lakehouse: Arc<LakehouseContext>,
         query_range: Option<TimeRange>,
     ) -> Result<()> {
         if *self.view_instance_id == "global" {
@@ -142,7 +138,7 @@ impl View for MetricsView {
         info!("find_process");
         let process = Arc::new(
             find_process(
-                &lake.db_pool,
+                &lakehouse.lake.db_pool,
                 &self
                     .process_id
                     .with_context(|| "getting a view's process_id")?,
@@ -158,8 +154,7 @@ impl View for MetricsView {
         let blocks_view = BlocksView::new()?;
         let all_partitions = generate_process_jit_partitions(
             &JitPartitionConfig::default(),
-            runtime.clone(),
-            lake.clone(),
+            lakehouse.clone(),
             &blocks_view,
             &query_range,
             process.clone(),
@@ -174,9 +169,11 @@ impl View for MetricsView {
         };
 
         for part in all_partitions {
-            if !is_jit_partition_up_to_date(&lake.db_pool, view_meta.clone(), &part).await? {
+            if !is_jit_partition_up_to_date(&lakehouse.lake.db_pool, view_meta.clone(), &part)
+                .await?
+            {
                 write_partition_from_blocks(
-                    lake.clone(),
+                    lakehouse.lake.clone(),
                     view_meta.clone(),
                     self.get_file_schema(),
                     part,

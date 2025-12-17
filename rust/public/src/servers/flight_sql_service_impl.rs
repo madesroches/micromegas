@@ -29,19 +29,16 @@ use arrow_flight::{
 use core::str;
 use datafusion::arrow::datatypes::Schema;
 use datafusion::arrow::ipc::writer::StreamWriter;
-use datafusion::execution::runtime_env::RuntimeEnv;
 use futures::StreamExt;
 use futures::{Stream, TryStreamExt};
-use micromegas_analytics::lakehouse::metadata_cache::MetadataCache;
+use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
 use micromegas_analytics::lakehouse::partition_cache::QueryPartitionProvider;
 use micromegas_analytics::lakehouse::query::make_session_context;
-use micromegas_analytics::lakehouse::reader_factory::ReaderFactory;
 use micromegas_analytics::lakehouse::session_configurator::SessionConfigurator;
 use micromegas_analytics::lakehouse::view_factory::ViewFactory;
 use micromegas_analytics::replication::bulk_ingest;
 use micromegas_analytics::time::TimeRange;
 use micromegas_auth::user_attribution::validate_and_resolve_user_attribution_grpc;
-use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_tracing::prelude::*;
 use once_cell::sync::Lazy;
 use prost::Message;
@@ -144,45 +141,25 @@ static INSTANCE_SQL_DATA: Lazy<SqlInfoData> = Lazy::new(|| {
 /// Implementation of the Flight SQL service.
 #[derive(Clone)]
 pub struct FlightSqlServiceImpl {
-    runtime: Arc<RuntimeEnv>,
-    lake: Arc<DataLakeConnection>,
-    reader_factory: Arc<ReaderFactory>,
+    lakehouse: Arc<LakehouseContext>,
     part_provider: Arc<dyn QueryPartitionProvider>,
     view_factory: Arc<ViewFactory>,
     session_configurator: Arc<dyn SessionConfigurator>,
 }
 
-/// Default metadata cache size in MB
-const DEFAULT_METADATA_CACHE_MB: u64 = 50;
-
 impl FlightSqlServiceImpl {
     pub fn new(
-        runtime: Arc<RuntimeEnv>,
-        lake: Arc<DataLakeConnection>,
+        lakehouse: Arc<LakehouseContext>,
         part_provider: Arc<dyn QueryPartitionProvider>,
         view_factory: Arc<ViewFactory>,
         session_configurator: Arc<dyn SessionConfigurator>,
-    ) -> Result<Self> {
-        let cache_mb = std::env::var("MICROMEGAS_METADATA_CACHE_MB")
-            .ok()
-            .and_then(|s| s.parse::<u64>().ok())
-            .unwrap_or(DEFAULT_METADATA_CACHE_MB);
-        let metadata_cache = Arc::new(MetadataCache::new(cache_mb * 1024 * 1024));
-        info!("created metadata cache with {cache_mb} MB budget");
-
-        let reader_factory = Arc::new(ReaderFactory::new(
-            lake.blob_storage.inner(),
-            lake.db_pool.clone(),
-            metadata_cache,
-        ));
-        Ok(Self {
-            runtime,
-            lake,
-            reader_factory,
+    ) -> Self {
+        Self {
+            lakehouse,
             part_provider,
             view_factory,
             session_configurator,
-        })
+        }
     }
 
     fn should_preserve_dictionary(metadata: &MetadataMap) -> bool {
@@ -264,9 +241,9 @@ impl FlightSqlServiceImpl {
         // Session context creation phase
         let session_begin = now();
         let ctx = make_session_context(
-            self.runtime.clone(),
-            self.lake.clone(),
-            self.reader_factory.clone(),
+            self.lakehouse.runtime.clone(),
+            self.lakehouse.lake.clone(),
+            self.lakehouse.make_reader_factory(),
             self.part_provider.clone(),
             query_range,
             self.view_factory.clone(),
@@ -679,7 +656,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         let stream = FlightRecordBatchStream::new_from_flight_data(
             request.into_inner().map_err(|e| e.into()),
         );
-        bulk_ingest(self.lake.clone(), &table_name, stream)
+        bulk_ingest(self.lakehouse.lake.clone(), &table_name, stream)
             .await
             .map_err(|e| {
                 let msg = format!("error ingesting into {table_name}: {e:?}");
@@ -721,9 +698,9 @@ impl FlightSqlService for FlightSqlServiceImpl {
         info!("do_action_create_prepared_statement query={}", &query.query);
 
         let ctx = make_session_context(
-            self.runtime.clone(),
-            self.lake.clone(),
-            self.reader_factory.clone(),
+            self.lakehouse.runtime.clone(),
+            self.lakehouse.lake.clone(),
+            self.lakehouse.make_reader_factory(),
             self.part_provider.clone(),
             None,
             self.view_factory.clone(),

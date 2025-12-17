@@ -11,6 +11,7 @@ use datafusion::physical_plan::stream::RecordBatchReceiverStreamBuilder;
 use micromegas_analytics::dfext::typed_column::typed_column_by_name;
 use micromegas_analytics::lakehouse::batch_update::materialize_partition_range;
 use micromegas_analytics::lakehouse::blocks_view::BlocksView;
+use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
 use micromegas_analytics::lakehouse::merge::PartitionMerger;
 use micromegas_analytics::lakehouse::metadata_cache::MetadataCache;
 use micromegas_analytics::lakehouse::partition::Partition;
@@ -116,19 +117,15 @@ pub struct LogSummaryMerger {
 impl PartitionMerger for LogSummaryMerger {
     async fn execute_merge_query(
         &self,
-        lake: Arc<DataLakeConnection>,
+        lakehouse: Arc<LakehouseContext>,
         partitions: Arc<Vec<Partition>>,
         _partitions_all_views: Arc<PartitionCache>,
     ) -> Result<SendableRecordBatchStream> {
-        let reader_factory = Arc::new(ReaderFactory::new(
-            lake.blob_storage.inner(),
-            lake.db_pool.clone(),
-            Arc::new(MetadataCache::default()),
-        ));
+        let reader_factory = lakehouse.make_reader_factory();
         let processes_df = query_partitions(
             self.runtime.clone(),
             reader_factory.clone(),
-            lake.blob_storage.inner(),
+            lakehouse.lake.blob_storage.inner(),
             self.file_schema.clone(),
             partitions.clone(),
             "SELECT DISTINCT process_id FROM source ORDER BY process_id;",
@@ -166,7 +163,7 @@ impl PartitionMerger for LogSummaryMerger {
                 let df = query_partitions(
                     self.runtime.clone(),
                     reader_factory.clone(),
-                    lake.blob_storage.inner(),
+                    lakehouse.lake.blob_storage.inner(),
                     self.file_schema.clone(),
                     partitions.clone(),
                     &single_process_merge_query,

@@ -1,7 +1,7 @@
 use super::{
-    merge::PartitionMerger, metadata_cache::MetadataCache, partition::Partition,
-    partition_cache::PartitionCache, reader_factory::ReaderFactory,
-    session_configurator::SessionConfigurator, view_factory::ViewFactory,
+    lakehouse_context::LakehouseContext, merge::PartitionMerger, partition::Partition,
+    partition_cache::PartitionCache, session_configurator::SessionConfigurator,
+    view_factory::ViewFactory,
 };
 use crate::{
     lakehouse::{
@@ -21,7 +21,6 @@ use datafusion::{
 };
 use futures::TryStreamExt;
 use futures::{StreamExt, stream};
-use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_tracing::prelude::*;
 use std::sync::Arc;
 
@@ -111,7 +110,7 @@ impl PartitionMerger for BatchPartitionMerger {
     #[span_fn]
     async fn execute_merge_query(
         &self,
-        lake: Arc<DataLakeConnection>,
+        lakehouse: Arc<LakehouseContext>,
         partitions_to_merge: Arc<Vec<Partition>>,
         partitions_all_views: Arc<PartitionCache>,
     ) -> Result<SendableRecordBatchStream> {
@@ -131,14 +130,10 @@ impl PartitionMerger for BatchPartitionMerger {
 
         let runtime = self.runtime.clone();
         let file_schema = self.file_schema.clone();
-        let reader_factory = Arc::new(ReaderFactory::new(
-            lake.blob_storage.inner(),
-            lake.db_pool.clone(),
-            Arc::new(MetadataCache::default()),
-        ));
+        let reader_factory = lakehouse.make_reader_factory();
         let ctx = make_session_context(
             runtime,
-            lake.clone(),
+            lakehouse.lake.clone(),
             reader_factory.clone(),
             partitions_all_views,
             None,

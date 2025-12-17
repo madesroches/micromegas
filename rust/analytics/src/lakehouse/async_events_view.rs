@@ -3,6 +3,7 @@ use super::{
     blocks_view::BlocksView,
     dataframe_time_bounds::{DataFrameTimeBounds, NamedColumnsTimeBounds},
     jit_partitions::{JitPartitionConfig, write_partition_from_blocks},
+    lakehouse_context::LakehouseContext,
     partition_cache::PartitionCache,
     view::{PartitionSpec, View, ViewMetadata},
     view_factory::{ViewFactory, ViewMaker},
@@ -18,10 +19,8 @@ use async_trait::async_trait;
 use chrono::{DateTime, TimeDelta, Utc};
 use datafusion::{
     arrow::datatypes::Schema,
-    execution::runtime_env::RuntimeEnv,
     logical_expr::{Between, Expr, col},
 };
-use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_tracing::prelude::*;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -102,8 +101,7 @@ impl View for AsyncEventsView {
 
     async fn make_batch_partition_spec(
         &self,
-        _runtime: Arc<RuntimeEnv>,
-        _lake: Arc<DataLakeConnection>,
+        _lakehouse: Arc<LakehouseContext>,
         _existing_partitions: Arc<PartitionCache>,
         _insert_range: TimeRange,
     ) -> Result<Arc<dyn PartitionSpec>> {
@@ -121,13 +119,12 @@ impl View for AsyncEventsView {
     #[span_fn]
     async fn jit_update(
         &self,
-        runtime: Arc<RuntimeEnv>,
-        lake: Arc<DataLakeConnection>,
+        lakehouse: Arc<LakehouseContext>,
         query_range: Option<TimeRange>,
     ) -> Result<()> {
         let (process, last_block_end_ticks, last_block_end_time) = find_process_with_latest_timing(
-            runtime.clone(),
-            lake.clone(),
+            lakehouse.runtime.clone(),
+            lakehouse.lake.clone(),
             self.view_factory.clone(),
             &self
                 .process_id
@@ -155,8 +152,7 @@ impl View for AsyncEventsView {
         let blocks_view = BlocksView::new()?;
         let all_partitions = generate_process_jit_partitions(
             &JitPartitionConfig::default(),
-            runtime.clone(),
-            lake.clone(),
+            lakehouse.clone(),
             &blocks_view,
             &query_range,
             process.clone(),
@@ -171,9 +167,11 @@ impl View for AsyncEventsView {
         };
 
         for part in all_partitions {
-            if !is_jit_partition_up_to_date(&lake.db_pool, view_meta.clone(), &part).await? {
+            if !is_jit_partition_up_to_date(&lakehouse.lake.db_pool, view_meta.clone(), &part)
+                .await?
+            {
                 write_partition_from_blocks(
-                    lake.clone(),
+                    lakehouse.lake.clone(),
                     view_meta.clone(),
                     self.get_file_schema(),
                     part,

@@ -24,6 +24,8 @@ pub mod export_log_view;
 pub mod get_payload_function;
 /// Management of process-specific partitions built on demand
 pub mod jit_partitions;
+/// Bundles runtime resources for lakehouse query execution
+pub mod lakehouse_context;
 /// Read access to the list of lakehouse partitions
 pub mod list_partitions_table_function;
 /// Read access to view sets with their schema information

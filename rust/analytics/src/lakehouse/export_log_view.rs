@@ -1,10 +1,9 @@
 use super::{
     batch_update::PartitionCreationStrategy,
     dataframe_time_bounds::{DataFrameTimeBounds, NamedColumnsTimeBounds},
-    metadata_cache::MetadataCache,
+    lakehouse_context::LakehouseContext,
     partition_cache::{NullPartitionProvider, PartitionCache},
     query::make_session_context,
-    reader_factory::ReaderFactory,
     session_configurator::SessionConfigurator,
     view::{PartitionSpec, View},
     view_factory::ViewFactory,
@@ -115,11 +114,8 @@ impl ExportLogView {
         max_partition_delta_from_merge: TimeDelta,
     ) -> Result<Self> {
         let null_part_provider = Arc::new(NullPartitionProvider {});
-        let reader_factory = Arc::new(ReaderFactory::new(
-            lake.blob_storage.inner(),
-            lake.db_pool.clone(),
-            Arc::new(MetadataCache::default()),
-        ));
+        let lakehouse = LakehouseContext::new(lake.clone(), runtime.clone());
+        let reader_factory = lakehouse.make_reader_factory();
         let ctx = make_session_context(
             runtime.clone(),
             lake,
@@ -165,8 +161,7 @@ impl View for ExportLogView {
 
     async fn make_batch_partition_spec(
         &self,
-        runtime: Arc<RuntimeEnv>,
-        lake: Arc<DataLakeConnection>,
+        lakehouse: Arc<LakehouseContext>,
         existing_partitions: Arc<PartitionCache>,
         insert_range: TimeRange,
     ) -> Result<Arc<dyn PartitionSpec>> {
@@ -176,14 +171,10 @@ impl View for ExportLogView {
             file_schema_hash: self.get_file_schema_hash(),
         };
         let partitions_in_range = Arc::new(existing_partitions.filter_insert_range(insert_range));
-        let reader_factory = Arc::new(ReaderFactory::new(
-            lake.blob_storage.inner(),
-            lake.db_pool.clone(),
-            Arc::new(MetadataCache::default()),
-        ));
+        let reader_factory = lakehouse.make_reader_factory();
         let ctx = make_session_context(
-            runtime.clone(),
-            lake.clone(),
+            lakehouse.runtime.clone(),
+            lakehouse.lake.clone(),
             reader_factory,
             partitions_in_range.clone(),
             None,
@@ -228,8 +219,7 @@ impl View for ExportLogView {
 
     async fn jit_update(
         &self,
-        _runtime: Arc<RuntimeEnv>,
-        _lake: Arc<DataLakeConnection>,
+        _lakehouse: Arc<LakehouseContext>,
         _query_range: Option<TimeRange>,
     ) -> Result<()> {
         Ok(())

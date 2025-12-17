@@ -1,7 +1,6 @@
 use super::blocks_view::blocks_file_schema_hash;
-use super::metadata_cache::MetadataCache;
+use super::lakehouse_context::LakehouseContext;
 use super::partition_cache::PartitionCache;
-use super::reader_factory::ReaderFactory;
 use crate::dfext::{
     string_column_accessor::string_column_by_name, typed_column::typed_column_by_name,
 };
@@ -22,11 +21,9 @@ use datafusion::{
         Array, BinaryArray, GenericListArray, Int32Array, Int64Array, StringArray,
         TimestampNanosecondArray,
     },
-    execution::runtime_env::RuntimeEnv,
     prelude::*,
 };
 use futures::{StreamExt, stream::BoxStream};
-use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_telemetry::types::block::BlockMetadata;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -238,8 +235,7 @@ pub fn hash_to_object_count(hash: &[u8]) -> Result<i64> {
 
 /// Fetches partition source data from the data lake.
 pub async fn fetch_partition_source_data(
-    runtime: Arc<RuntimeEnv>,
-    lake: Arc<DataLakeConnection>,
+    lakehouse: Arc<LakehouseContext>,
     existing_partitions: Arc<PartitionCache>,
     insert_range: TimeRange,
     source_stream_tag: &str,
@@ -263,15 +259,11 @@ pub async fn fetch_partition_source_data(
     let block_partitions = existing_partitions
         .filter("blocks", "global", &blocks_file_schema_hash(), insert_range)
         .partitions;
-    let reader_factory = Arc::new(ReaderFactory::new(
-        lake.blob_storage.inner(),
-        lake.db_pool.clone(),
-        Arc::new(MetadataCache::default()),
-    ));
+    let reader_factory = lakehouse.make_reader_factory();
     let df = query_partitions(
-        runtime,
+        lakehouse.runtime.clone(),
         reader_factory,
-        lake.blob_storage.inner(),
+        lakehouse.lake.blob_storage.inner(),
         Arc::new(blocks_view_schema()),
         Arc::new(block_partitions),
         &sql,

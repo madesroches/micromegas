@@ -1,6 +1,6 @@
 use super::{
-    merge::create_merged_partition, partition_cache::PartitionCache,
-    partition_source_data::hash_to_object_count, view::View,
+    lakehouse_context::LakehouseContext, merge::create_merged_partition,
+    partition_cache::PartitionCache, partition_source_data::hash_to_object_count, view::View,
 };
 use crate::{response_writer::Logger, time::TimeRange};
 use anyhow::{Context, Result};
@@ -109,10 +109,10 @@ async fn materialize_partition(
     logger: Arc<dyn Logger>,
 ) -> Result<()> {
     let view_set_name = view.get_view_set_name();
+    let lakehouse = Arc::new(LakehouseContext::new(lake.clone(), runtime.clone()));
     let partition_spec = view
         .make_batch_partition_spec(
-            runtime.clone(),
-            lake.clone(),
+            lakehouse.clone(),
             existing_partitions_all_views.clone(),
             insert_range,
         )
@@ -179,8 +179,7 @@ async fn materialize_partition(
             create_merged_partition(
                 partitions_to_merge,
                 existing_partitions_all_views,
-                runtime,
-                lake,
+                lakehouse,
                 view,
                 insert_range,
                 logger,

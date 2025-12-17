@@ -1,5 +1,6 @@
 use anyhow::Context;
 use clap::Parser;
+use micromegas::analytics::lakehouse::lakehouse_context::LakehouseContext;
 use micromegas::analytics::lakehouse::migration::migrate_lakehouse;
 use micromegas::analytics::lakehouse::partition_cache::LivePartitionProvider;
 use micromegas::analytics::lakehouse::runtime::make_runtime_env;
@@ -40,16 +41,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await
         .with_context(|| "migrate_lakehouse")?;
     let runtime = Arc::new(make_runtime_env()?);
-    let view_factory = Arc::new(default_view_factory(runtime.clone(), data_lake.clone()).await?);
-    let partition_provider = Arc::new(LivePartitionProvider::new(data_lake.db_pool.clone()));
+    let lakehouse = Arc::new(LakehouseContext::new(data_lake.clone(), runtime));
+    info!(
+        "created lakehouse context with metadata cache: {:?}",
+        lakehouse.metadata_cache
+    );
+    let view_factory = Arc::new(default_view_factory(lakehouse.runtime.clone(), data_lake).await?);
+    let partition_provider = Arc::new(LivePartitionProvider::new(lakehouse.lake.db_pool.clone()));
     let session_configurator = Arc::new(NoOpSessionConfigurator);
     let svc = FlightServiceServer::new(FlightSqlServiceImpl::new(
-        runtime,
-        data_lake,
+        lakehouse,
         partition_provider,
         view_factory,
         session_configurator,
-    )?)
+    ))
     .max_decoding_message_size(100 * 1024 * 1024);
 
     let auth_required = !args.disable_auth;

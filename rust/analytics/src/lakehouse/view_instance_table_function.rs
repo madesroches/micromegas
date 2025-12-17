@@ -1,6 +1,7 @@
 use super::{
-    materialized_view::MaterializedView, partition_cache::QueryPartitionProvider,
-    reader_factory::ReaderFactory, view_factory::ViewFactory,
+    lakehouse_context::LakehouseContext, materialized_view::MaterializedView,
+    partition_cache::QueryPartitionProvider, reader_factory::ReaderFactory,
+    view_factory::ViewFactory,
 };
 use crate::{dfext::expressions::exp_to_string, time::TimeRange};
 use datafusion::{
@@ -27,8 +28,7 @@ use std::sync::Arc;
 ///
 #[derive(Debug)]
 pub struct ViewInstanceTableFunction {
-    runtime: Arc<RuntimeEnv>,
-    lake: Arc<DataLakeConnection>,
+    lakehouse: Arc<LakehouseContext>,
     reader_factory: Arc<ReaderFactory>,
     view_factory: Arc<ViewFactory>,
     part_provider: Arc<dyn QueryPartitionProvider>,
@@ -45,8 +45,7 @@ impl ViewInstanceTableFunction {
         query_range: Option<TimeRange>,
     ) -> Self {
         Self {
-            runtime,
-            lake,
+            lakehouse: Arc::new(LakehouseContext::new(lake, runtime)),
             reader_factory,
             view_factory,
             part_provider,
@@ -79,8 +78,7 @@ impl TableFunctionImpl for ViewInstanceTableFunction {
             .map_err(|e| DataFusionError::Plan(format!("error making view {e:?}")))?;
 
         Ok(Arc::new(MaterializedView::new(
-            self.runtime.clone(),
-            self.lake.clone(),
+            self.lakehouse.clone(),
             self.reader_factory.clone(),
             view,
             self.part_provider.clone(),

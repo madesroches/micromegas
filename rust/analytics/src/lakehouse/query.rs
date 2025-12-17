@@ -1,5 +1,5 @@
 use super::{
-    answer::Answer, get_payload_function::GetPayload,
+    answer::Answer, get_payload_function::GetPayload, lakehouse_context::LakehouseContext,
     list_partitions_table_function::ListPartitionsTableFunction,
     list_view_sets_table_function::ListViewSetsTableFunction,
     materialize_partitions_table_function::MaterializePartitionsTableFunction,
@@ -53,8 +53,7 @@ use std::sync::Arc;
 
 #[span_fn]
 async fn register_table(
-    runtime: Arc<RuntimeEnv>,
-    lake: Arc<DataLakeConnection>,
+    lakehouse: Arc<LakehouseContext>,
     reader_factory: Arc<ReaderFactory>,
     part_provider: Arc<dyn QueryPartitionProvider>,
     query_range: Option<TimeRange>,
@@ -62,8 +61,7 @@ async fn register_table(
     view: Arc<dyn View>,
 ) -> Result<()> {
     let table = MaterializedView::new(
-        runtime,
-        lake,
+        lakehouse,
         reader_factory,
         view.clone(),
         part_provider,
@@ -246,10 +244,10 @@ pub async fn make_session_context(
         query_range,
         view_factory.clone(),
     );
+    let lakehouse = Arc::new(LakehouseContext::new(lake.clone(), runtime.clone()));
     for view in view_factory.get_global_views() {
         register_table(
-            runtime.clone(),
-            lake.clone(),
+            lakehouse.clone(),
             reader_factory.clone(),
             part_provider.clone(),
             query_range,

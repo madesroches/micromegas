@@ -1,6 +1,7 @@
 use super::{
     batch_update::PartitionCreationStrategy,
     dataframe_time_bounds::{DataFrameTimeBounds, NamedColumnsTimeBounds},
+    lakehouse_context::LakehouseContext,
     metadata_partition_spec::fetch_metadata_partition_spec,
     partition_cache::PartitionCache,
     view::{PartitionSpec, View, ViewMetadata},
@@ -11,11 +12,9 @@ use async_trait::async_trait;
 use chrono::{DateTime, TimeDelta, Utc};
 use datafusion::{
     arrow::datatypes::{DataType, Field, Schema, TimeUnit},
-    execution::runtime_env::RuntimeEnv,
     logical_expr::{Expr, col},
     prelude::*,
 };
-use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use std::sync::Arc;
 
 const VIEW_SET_NAME: &str = "blocks";
@@ -67,8 +66,7 @@ impl View for BlocksView {
 
     async fn make_batch_partition_spec(
         &self,
-        _runtime: Arc<RuntimeEnv>,
-        lake: Arc<DataLakeConnection>,
+        lakehouse: Arc<LakehouseContext>,
         _existing_partitions: Arc<PartitionCache>,
         insert_range: TimeRange,
     ) -> Result<Arc<dyn PartitionSpec>> {
@@ -87,7 +85,7 @@ impl View for BlocksView {
              ;";
         Ok(Arc::new(
             fetch_metadata_partition_spec(
-                &lake.db_pool,
+                &lakehouse.lake.db_pool,
                 source_count_query,
                 self.data_sql.clone(),
                 view_meta,
@@ -110,8 +108,7 @@ impl View for BlocksView {
 
     async fn jit_update(
         &self,
-        _runtime: Arc<RuntimeEnv>,
-        _lake: Arc<DataLakeConnection>,
+        _lakehouse: Arc<LakehouseContext>,
         _query_range: Option<TimeRange>,
     ) -> Result<()> {
         if *self.view_instance_id == "global" {
