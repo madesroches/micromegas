@@ -166,11 +166,11 @@ impl View for AsyncEventsView {
         };
 
         for part in all_partitions {
-            if !is_jit_partition_up_to_date(&lakehouse.lake.db_pool, view_meta.clone(), &part)
+            if !is_jit_partition_up_to_date(&lakehouse.lake().db_pool, view_meta.clone(), &part)
                 .await?
             {
                 write_partition_from_blocks(
-                    lakehouse.lake.clone(),
+                    lakehouse.lake().clone(),
                     view_meta.clone(),
                     self.get_file_schema(),
                     part,

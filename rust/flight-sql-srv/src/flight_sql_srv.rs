@@ -44,10 +44,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let lakehouse = Arc::new(LakehouseContext::new(data_lake.clone(), runtime));
     info!(
         "created lakehouse context with metadata cache: {:?}",
-        lakehouse.metadata_cache
+        lakehouse.metadata_cache()
     );
-    let view_factory = Arc::new(default_view_factory(lakehouse.runtime.clone(), data_lake).await?);
-    let partition_provider = Arc::new(LivePartitionProvider::new(lakehouse.lake.db_pool.clone()));
+    let view_factory =
+        Arc::new(default_view_factory(lakehouse.runtime().clone(), data_lake).await?);
+    let partition_provider = Arc::new(LivePartitionProvider::new(lakehouse.lake().db_pool.clone()));
     let session_configurator = Arc::new(NoOpSessionConfigurator);
     let svc = FlightServiceServer::new(FlightSqlServiceImpl::new(
         lakehouse,

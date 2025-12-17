@@ -85,7 +85,7 @@ impl View for BlocksView {
              ;";
         Ok(Arc::new(
             fetch_metadata_partition_spec(
-                &lakehouse.lake.db_pool,
+                &lakehouse.lake().db_pool,
                 source_count_query,
                 self.data_sql.clone(),
                 view_meta,

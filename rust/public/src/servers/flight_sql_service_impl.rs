@@ -654,7 +654,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         let stream = FlightRecordBatchStream::new_from_flight_data(
             request.into_inner().map_err(|e| e.into()),
         );
-        bulk_ingest(self.lakehouse.lake.clone(), &table_name, stream)
+        bulk_ingest(self.lakehouse.lake().clone(), &table_name, stream)
             .await
             .map_err(|e| {
                 let msg = format!("error ingesting into {table_name}: {e:?}");

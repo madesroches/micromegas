@@ -14,9 +14,9 @@ const DEFAULT_CACHE_SIZE_MB: u64 = 50;
 /// providing a single context object that can be passed through the query path.
 #[derive(Clone)]
 pub struct LakehouseContext {
-    pub lake: Arc<DataLakeConnection>,
-    pub metadata_cache: Arc<MetadataCache>,
-    pub runtime: Arc<RuntimeEnv>,
+    lake: Arc<DataLakeConnection>,
+    metadata_cache: Arc<MetadataCache>,
+    runtime: Arc<RuntimeEnv>,
     reader_factory: Arc<ReaderFactory>,
 }
 
@@ -65,9 +65,24 @@ impl LakehouseContext {
         }
     }
 
+    /// Returns the data lake connection.
+    pub fn lake(&self) -> &Arc<DataLakeConnection> {
+        &self.lake
+    }
+
+    /// Returns the metadata cache.
+    pub fn metadata_cache(&self) -> &Arc<MetadataCache> {
+        &self.metadata_cache
+    }
+
+    /// Returns the DataFusion runtime environment.
+    pub fn runtime(&self) -> &Arc<RuntimeEnv> {
+        &self.runtime
+    }
+
     /// Returns the shared `ReaderFactory`.
-    pub fn get_reader_factory(&self) -> Arc<ReaderFactory> {
-        self.reader_factory.clone()
+    pub fn reader_factory(&self) -> &Arc<ReaderFactory> {
+        &self.reader_factory
     }
 }
 

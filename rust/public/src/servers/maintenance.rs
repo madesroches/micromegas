@@ -31,7 +31,7 @@ pub async fn materialize_all_views(
 ) -> Result<()> {
     let mut last_group = views.first().unwrap().get_update_group();
     let mut partitions_all_views = Arc::new(
-        PartitionCache::fetch_overlapping_insert_range(&lakehouse.lake.db_pool, insert_range)
+        PartitionCache::fetch_overlapping_insert_range(&lakehouse.lake().db_pool, insert_range)
             .await?,
     );
     let null_response_writer = Arc::new(ResponseWriter::new(None));
@@ -42,7 +42,7 @@ pub async fn materialize_all_views(
             partitions_all_views = Arc::new(
                 PartitionCache::fetch_overlapping_insert_range(
                     // we are fetching more partitions than we need, could be optimized
-                    &lakehouse.lake.db_pool,
+                    &lakehouse.lake().db_pool,
                     insert_range,
                 )
                 .await?,
@@ -93,8 +93,8 @@ pub struct EveryHourTask {
 #[async_trait]
 impl TaskCallback for EveryHourTask {
     async fn run(&self, task_scheduled_time: DateTime<Utc>) -> Result<()> {
-        delete_old_data(&self.lakehouse.lake, 90).await?;
-        delete_expired_temporary_files(self.lakehouse.lake.clone()).await?;
+        delete_old_data(self.lakehouse.lake(), 90).await?;
+        delete_expired_temporary_files(self.lakehouse.lake().clone()).await?;
 
         let partition_time_delta = TimeDelta::hours(1);
         let trunc_task_time = task_scheduled_time.duration_trunc(partition_time_delta)?;

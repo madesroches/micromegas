@@ -96,7 +96,7 @@ async fn main() -> Result<()> {
             let insert_range = TimeRange::new(begin, end);
             let existing_partitions_all_views = Arc::new(
                 PartitionCache::fetch_overlapping_insert_range(
-                    &lakehouse.lake.db_pool,
+                    &lakehouse.lake().db_pool,
                     insert_range,
                 )
                 .await?,

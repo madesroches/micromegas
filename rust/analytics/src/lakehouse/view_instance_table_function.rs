@@ -72,7 +72,7 @@ impl TableFunctionImpl for ViewInstanceTableFunction {
 
         Ok(Arc::new(MaterializedView::new(
             self.lakehouse.clone(),
-            self.lakehouse.get_reader_factory(),
+            self.lakehouse.reader_factory().clone(),
             view,
             self.part_provider.clone(),
             self.query_range,

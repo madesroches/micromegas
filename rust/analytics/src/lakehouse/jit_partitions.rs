@@ -47,7 +47,7 @@ async fn get_insert_time_range(
     stream: Arc<StreamMetadata>,
 ) -> Result<Option<TimeRange>> {
     // we would need a PartitionCache built from event time range and then filtered for insert time range
-    let part_provider = LivePartitionProvider::new(lakehouse.lake.db_pool.clone());
+    let part_provider = LivePartitionProvider::new(lakehouse.lake().db_pool.clone());
     let partitions = part_provider
         .fetch(
             &blocks_view.get_view_set_name(),
@@ -66,11 +66,11 @@ async fn get_insert_time_range(
         AND begin_time <= '{end_range_iso}'
         AND end_time >= '{begin_range_iso}';"#
     );
-    let reader_factory = lakehouse.get_reader_factory();
+    let reader_factory = lakehouse.reader_factory().clone();
     let rbs = query_partitions(
-        lakehouse.runtime.clone(),
+        lakehouse.runtime().clone(),
         reader_factory,
-        lakehouse.lake.blob_storage.inner(),
+        lakehouse.lake().blob_storage.inner(),
         blocks_view.get_file_schema(),
         Arc::new(partitions),
         &sql,
@@ -102,7 +102,7 @@ pub async fn generate_stream_jit_partitions_segment(
     process: Arc<ProcessMetadata>,
 ) -> Result<Vec<SourceDataBlocksInMemory>> {
     let cache = PartitionCache::fetch_overlapping_insert_range_for_view(
-        &lakehouse.lake.db_pool,
+        &lakehouse.lake().db_pool,
         blocks_view.get_view_set_name(),
         blocks_view.get_view_instance_id(),
         *insert_time_range,
@@ -122,11 +122,11 @@ pub async fn generate_stream_jit_partitions_segment(
              ORDER BY insert_time, block_id;"#
     );
 
-    let reader_factory = lakehouse.get_reader_factory();
+    let reader_factory = lakehouse.reader_factory().clone();
     let rbs = query_partitions(
-        lakehouse.runtime.clone(),
+        lakehouse.runtime().clone(),
         reader_factory,
-        lakehouse.lake.blob_storage.inner(),
+        lakehouse.lake().blob_storage.inner(),
         blocks_view.get_file_schema(),
         Arc::new(partitions),
         &sql,
@@ -242,7 +242,7 @@ pub async fn generate_process_jit_partitions_segment(
     stream_tag: &str,
 ) -> Result<Vec<SourceDataBlocksInMemory>> {
     let cache = PartitionCache::fetch_overlapping_insert_range_for_view(
-        &lakehouse.lake.db_pool,
+        &lakehouse.lake().db_pool,
         blocks_view.get_view_set_name(),
         blocks_view.get_view_instance_id(),
         *insert_time_range,
@@ -264,11 +264,11 @@ pub async fn generate_process_jit_partitions_segment(
              ORDER BY insert_time, block_id;"#
     );
 
-    let reader_factory = lakehouse.get_reader_factory();
+    let reader_factory = lakehouse.reader_factory().clone();
     let rbs = query_partitions(
-        lakehouse.runtime.clone(),
+        lakehouse.runtime().clone(),
         reader_factory,
-        lakehouse.lake.blob_storage.inner(),
+        lakehouse.lake().blob_storage.inner(),
         blocks_view.get_file_schema(),
         Arc::new(partitions),
         &sql,
@@ -382,7 +382,7 @@ pub async fn generate_process_jit_partitions(
     stream_tag: &str,
 ) -> Result<Vec<SourceDataBlocksInMemory>> {
     // Get insert time range for all blocks in this process
-    let part_provider = LivePartitionProvider::new(lakehouse.lake.db_pool.clone());
+    let part_provider = LivePartitionProvider::new(lakehouse.lake().db_pool.clone());
     let partitions = part_provider
         .fetch(
             &blocks_view.get_view_set_name(),
@@ -404,11 +404,11 @@ pub async fn generate_process_jit_partitions(
         AND end_time >= '{begin_range_iso}';"#
     );
 
-    let reader_factory = lakehouse.get_reader_factory();
+    let reader_factory = lakehouse.reader_factory().clone();
     let rbs = query_partitions(
-        lakehouse.runtime.clone(),
+        lakehouse.runtime().clone(),
         reader_factory,
-        lakehouse.lake.blob_storage.inner(),
+        lakehouse.lake().blob_storage.inner(),
         blocks_view.get_file_schema(),
         Arc::new(partitions),
         &sql,

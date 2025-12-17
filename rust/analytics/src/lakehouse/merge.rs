@@ -67,7 +67,7 @@ impl PartitionMerger for QueryMerger {
         partitions_to_merge: Arc<Vec<Partition>>,
         partitions_all_views: Arc<PartitionCache>,
     ) -> Result<SendableRecordBatchStream> {
-        let reader_factory = lakehouse.get_reader_factory();
+        let reader_factory = lakehouse.reader_factory().clone();
         let ctx = make_session_context(
             lakehouse.clone(),
             partitions_all_views,
@@ -177,7 +177,7 @@ pub async fn create_merged_partition(
         .with_context(|| "view.merge_partitions")?;
     let (tx, rx) = tokio::sync::mpsc::channel(1);
     let view_copy = view.clone();
-    let lake = lakehouse.lake.clone();
+    let lake = lakehouse.lake().clone();
     let join_handle = tokio::spawn(async move {
         let res = write_partition_from_rows(
             lake,
@@ -196,7 +196,7 @@ pub async fn create_merged_partition(
     });
     let compute_time_bounds = view.get_time_bounds();
     let ctx =
-        SessionContext::new_with_config_rt(SessionConfig::default(), lakehouse.runtime.clone());
+        SessionContext::new_with_config_rt(SessionConfig::default(), lakehouse.runtime().clone());
     while let Some(rb_res) = merged_stream.next().await {
         let rb = rb_res.with_context(|| "receiving record_batch from stream")?;
         let event_time_range = compute_time_bounds

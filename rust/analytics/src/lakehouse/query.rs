@@ -127,7 +127,7 @@ pub fn register_lakehouse_functions(
     );
     ctx.register_udtf(
         "list_partitions",
-        Arc::new(ListPartitionsTableFunction::new(lakehouse.lake.clone())),
+        Arc::new(ListPartitionsTableFunction::new(lakehouse.lake().clone())),
     );
     ctx.register_udtf(
         "list_view_sets",
@@ -135,7 +135,7 @@ pub fn register_lakehouse_functions(
     );
     ctx.register_udtf(
         "retire_partitions",
-        Arc::new(RetirePartitionsTableFunction::new(lakehouse.lake.clone())),
+        Arc::new(RetirePartitionsTableFunction::new(lakehouse.lake().clone())),
     );
     ctx.register_udtf(
         "perfetto_trace_chunks",
@@ -153,11 +153,11 @@ pub fn register_lakehouse_functions(
         )),
     );
     ctx.register_udf(
-        AsyncScalarUDF::new(Arc::new(GetPayload::new(lakehouse.lake.clone()))).into_scalar_udf(),
+        AsyncScalarUDF::new(Arc::new(GetPayload::new(lakehouse.lake().clone()))).into_scalar_udf(),
     );
-    ctx.register_udf(make_retire_partition_by_file_udf(lakehouse.lake.clone()).into_scalar_udf());
+    ctx.register_udf(make_retire_partition_by_file_udf(lakehouse.lake().clone()).into_scalar_udf());
     ctx.register_udf(
-        make_retire_partition_by_metadata_udf(lakehouse.lake.clone()).into_scalar_udf(),
+        make_retire_partition_by_metadata_udf(lakehouse.lake().clone()).into_scalar_udf(),
     );
 }
 
@@ -210,14 +210,14 @@ pub async fn make_session_context(
     // which causes errors in DataFusion 51+ with Arrow 57.0 when reading page indexes
     let config =
         SessionConfig::default().set_bool("datafusion.execution.parquet.enable_page_index", false);
-    let ctx = SessionContext::new_with_config_rt(config, lakehouse.runtime.clone());
+    let ctx = SessionContext::new_with_config_rt(config, lakehouse.runtime().clone());
     if let Some(range) = &query_range {
         ctx.add_analyzer_rule(Arc::new(TableScanRewrite::new(*range)));
     }
     let object_store_url = ObjectStoreUrl::parse("obj://lakehouse/").unwrap();
-    let object_store = lakehouse.lake.blob_storage.inner();
+    let object_store = lakehouse.lake().blob_storage.inner();
     ctx.register_object_store(object_store_url.as_ref(), object_store);
-    let reader_factory = lakehouse.get_reader_factory();
+    let reader_factory = lakehouse.reader_factory().clone();
     register_functions(
         &ctx,
         lakehouse.clone(),

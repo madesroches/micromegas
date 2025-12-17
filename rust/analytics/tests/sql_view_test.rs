@@ -119,11 +119,11 @@ impl PartitionMerger for LogSummaryMerger {
         partitions: Arc<Vec<Partition>>,
         _partitions_all_views: Arc<PartitionCache>,
     ) -> Result<SendableRecordBatchStream> {
-        let reader_factory = lakehouse.get_reader_factory();
+        let reader_factory = lakehouse.reader_factory().clone();
         let processes_df = query_partitions(
             self.runtime.clone(),
             reader_factory.clone(),
-            lakehouse.lake.blob_storage.inner(),
+            lakehouse.lake().blob_storage.inner(),
             self.file_schema.clone(),
             partitions.clone(),
             "SELECT DISTINCT process_id FROM source ORDER BY process_id;",
@@ -161,7 +161,7 @@ impl PartitionMerger for LogSummaryMerger {
                 let df = query_partitions(
                     self.runtime.clone(),
                     reader_factory.clone(),
-                    lakehouse.lake.blob_storage.inner(),
+                    lakehouse.lake().blob_storage.inner(),
                     self.file_schema.clone(),
                     partitions.clone(),
                     &single_process_merge_query,
@@ -278,7 +278,7 @@ pub async fn materialize_range(
     let blocks_view = Arc::new(BlocksView::new()?);
     let mut partitions = Arc::new(
         PartitionCache::fetch_overlapping_insert_range_for_view(
-            &lakehouse.lake.db_pool,
+            &lakehouse.lake().db_pool,
             blocks_view.get_view_set_name(),
             blocks_view.get_view_instance_id(),
             insert_range,
@@ -295,7 +295,7 @@ pub async fn materialize_range(
     )
     .await?;
     partitions = Arc::new(
-        PartitionCache::fetch_overlapping_insert_range(&lakehouse.lake.db_pool, insert_range)
+        PartitionCache::fetch_overlapping_insert_range(&lakehouse.lake().db_pool, insert_range)
             .await?,
     );
     let log_entries_view = view_factory.make_view("log_entries", "global")?;
@@ -309,7 +309,7 @@ pub async fn materialize_range(
     )
     .await?;
     partitions = Arc::new(
-        PartitionCache::fetch_overlapping_insert_range(&lakehouse.lake.db_pool, insert_range)
+        PartitionCache::fetch_overlapping_insert_range(&lakehouse.lake().db_pool, insert_range)
             .await?,
     );
     materialize_partition_range(

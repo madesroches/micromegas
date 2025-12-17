@@ -166,7 +166,7 @@ async fn materialize_partition(
     match strategy {
         PartitionCreationStrategy::CreateFromSource => {
             partition_spec
-                .write(lakehouse.lake.clone(), logger)
+                .write(lakehouse.lake().clone(), logger)
                 .await
                 .with_context(|| "writing partition")?;
         }

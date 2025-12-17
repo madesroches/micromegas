@@ -48,7 +48,7 @@ async fn materialize_partitions_impl(
         .with_context(|| format!("can't find view {view_name}"))?;
 
     let existing_partitions_all_views = Arc::new(
-        PartitionCache::fetch_overlapping_insert_range(&lakehouse.lake.db_pool, insert_range)
+        PartitionCache::fetch_overlapping_insert_range(&lakehouse.lake().db_pool, insert_range)
             .await?,
     );
 

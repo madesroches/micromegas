@@ -108,7 +108,7 @@ pub async fn materialize_range(
     let blocks_view = Arc::new(BlocksView::new()?);
     let mut partitions = Arc::new(
         PartitionCache::fetch_overlapping_insert_range_for_view(
-            &lakehouse.lake.db_pool,
+            &lakehouse.lake().db_pool,
             blocks_view.get_view_set_name(),
             blocks_view.get_view_instance_id(),
             insert_range,
@@ -125,7 +125,7 @@ pub async fn materialize_range(
     )
     .await?;
     partitions = Arc::new(
-        PartitionCache::fetch_overlapping_insert_range(&lakehouse.lake.db_pool, insert_range)
+        PartitionCache::fetch_overlapping_insert_range(&lakehouse.lake().db_pool, insert_range)
             .await?,
     );
     let measures_view = view_factory.make_view("measures", "global")?;
@@ -139,7 +139,7 @@ pub async fn materialize_range(
     )
     .await?;
     partitions = Arc::new(
-        PartitionCache::fetch_overlapping_insert_range(&lakehouse.lake.db_pool, insert_range)
+        PartitionCache::fetch_overlapping_insert_range(&lakehouse.lake().db_pool, insert_range)
             .await?,
     );
     materialize_partition_range(

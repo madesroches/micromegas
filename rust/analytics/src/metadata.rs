@@ -228,7 +228,7 @@ pub async fn find_process_with_latest_timing(
     process_id: &Uuid,
     query_range: Option<TimeRange>,
 ) -> Result<(ProcessMetadata, i64, DateTime<Utc>)> {
-    let partition_provider = Arc::new(LivePartitionProvider::new(lakehouse.lake.db_pool.clone()));
+    let partition_provider = Arc::new(LivePartitionProvider::new(lakehouse.lake().db_pool.clone()));
 
     let ctx = make_session_context(
         lakehouse,

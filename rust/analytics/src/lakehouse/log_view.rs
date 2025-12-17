@@ -136,7 +136,7 @@ impl View for LogView {
         }
         let process = Arc::new(
             find_process(
-                &lakehouse.lake.db_pool,
+                &lakehouse.lake().db_pool,
                 &self
                     .process_id
                     .with_context(|| "getting a view's process_id")?,
@@ -165,11 +165,11 @@ impl View for LogView {
         };
 
         for part in all_partitions {
-            if !is_jit_partition_up_to_date(&lakehouse.lake.db_pool, view_meta.clone(), &part)
+            if !is_jit_partition_up_to_date(&lakehouse.lake().db_pool, view_meta.clone(), &part)
                 .await?
             {
                 write_partition_from_blocks(
-                    lakehouse.lake.clone(),
+                    lakehouse.lake().clone(),
                     view_meta.clone(),
                     self.get_file_schema(),
                     part,

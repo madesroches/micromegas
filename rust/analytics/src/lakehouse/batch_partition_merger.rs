@@ -122,7 +122,7 @@ impl PartitionMerger for BatchPartitionMerger {
             + TimeDelta::nanoseconds(1);
 
         let file_schema = self.file_schema.clone();
-        let reader_factory = lakehouse.get_reader_factory();
+        let reader_factory = lakehouse.reader_factory().clone();
         let ctx = make_session_context(
             lakehouse.clone(),
             partitions_all_views,

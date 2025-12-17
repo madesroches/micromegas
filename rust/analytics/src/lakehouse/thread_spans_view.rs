@@ -231,16 +231,17 @@ impl View for ThreadSpansView {
         }
         let query_range = query_range.unwrap();
         let stream = Arc::new(
-            find_stream(&lakehouse.lake.db_pool, self.stream_id)
+            find_stream(&lakehouse.lake().db_pool, self.stream_id)
                 .await
                 .with_context(|| "find_stream")?,
         );
         let process = Arc::new(
-            find_process(&lakehouse.lake.db_pool, &stream.process_id)
+            find_process(&lakehouse.lake().db_pool, &stream.process_id)
                 .await
                 .with_context(|| "find_process")?,
         );
-        let convert_ticks = make_time_converter_from_db(&lakehouse.lake.db_pool, &process).await?;
+        let convert_ticks =
+            make_time_converter_from_db(&lakehouse.lake().db_pool, &process).await?;
         let blocks_view = BlocksView::new()?;
         let partitions = generate_stream_jit_partitions(
             &JitPartitionConfig::default(),
@@ -254,7 +255,7 @@ impl View for ThreadSpansView {
         .with_context(|| "generate_stream_jit_partitions")?;
         for part in &partitions {
             update_partition(
-                lakehouse.lake.clone(),
+                lakehouse.lake().clone(),
                 ViewMetadata {
                     view_set_name: self.get_view_set_name(),
                     view_instance_id: self.get_view_instance_id(),
