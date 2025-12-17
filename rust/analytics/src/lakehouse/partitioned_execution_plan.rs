@@ -11,11 +11,13 @@ use datafusion::{
     physical_plan::ExecutionPlan,
     prelude::*,
 };
+use micromegas_tracing::prelude::*;
 use object_store::ObjectStore;
 use std::sync::Arc;
 
 /// Creates a partitioned execution plan for scanning Parquet files.
 #[expect(clippy::too_many_arguments)]
+#[span_fn]
 pub fn make_partitioned_execution_plan(
     schema: SchemaRef,
     object_store: Arc<dyn ObjectStore>,

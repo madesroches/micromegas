@@ -88,6 +88,10 @@ pub async fn load_partition_metadata(
     let metadata_bytes: Vec<u8> = row.try_get("metadata")?;
     let partition_format_version: i32 = row.try_get("partition_format_version")?;
 
+    debug!(
+        "fetched partition metadata path={file_path} size={}",
+        metadata_bytes.len()
+    );
     // Dispatch based on format version
     let metadata = match partition_format_version {
         1 => {

@@ -52,6 +52,7 @@ use micromegas_tracing::prelude::*;
 use object_store::ObjectStore;
 use std::sync::Arc;
 
+#[span_fn]
 async fn register_table(
     runtime: Arc<RuntimeEnv>,
     lake: Arc<DataLakeConnection>,
@@ -73,6 +74,7 @@ async fn register_table(
 }
 
 /// query_partitions_context returns a context to run queries using the partitions as the "source" table
+#[span_fn]
 pub async fn query_partitions_context(
     runtime: Arc<RuntimeEnv>,
     lake: Arc<DataLakeConnection>,
@@ -100,6 +102,7 @@ pub async fn query_partitions_context(
 }
 
 // query_partitions returns a dataframe, leaving the option of streaming the results
+#[span_fn]
 pub async fn query_partitions(
     runtime: Arc<RuntimeEnv>,
     lake: Arc<DataLakeConnection>,
@@ -112,6 +115,7 @@ pub async fn query_partitions(
 }
 
 /// register functions that are part of the lakehouse architecture
+#[span_fn]
 pub fn register_lakehouse_functions(
     ctx: &SessionContext,
     runtime: Arc<RuntimeEnv>,
@@ -170,6 +174,7 @@ pub fn register_lakehouse_functions(
 }
 
 /// register functions that are not depended on the lakehouse architecture
+#[span_fn]
 pub fn register_extension_functions(ctx: &SessionContext) {
     ctx.register_udf(ScalarUDF::from(PropertyGet::new()));
     ctx.register_udf(ScalarUDF::from(PropertiesToDict::new()));
@@ -192,6 +197,7 @@ pub fn register_extension_functions(ctx: &SessionContext) {
     ctx.register_udf(make_jsonb_object_keys_udf());
 }
 
+#[span_fn]
 pub fn register_functions(
     ctx: &SessionContext,
     runtime: Arc<RuntimeEnv>,
@@ -260,6 +266,7 @@ pub async fn make_session_context(
     Ok(ctx)
 }
 
+#[span_fn]
 pub async fn query(
     runtime: Arc<RuntimeEnv>,
     lake: Arc<DataLakeConnection>,
