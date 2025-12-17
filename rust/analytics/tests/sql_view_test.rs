@@ -12,6 +12,7 @@ use micromegas_analytics::dfext::typed_column::typed_column_by_name;
 use micromegas_analytics::lakehouse::batch_update::materialize_partition_range;
 use micromegas_analytics::lakehouse::blocks_view::BlocksView;
 use micromegas_analytics::lakehouse::merge::PartitionMerger;
+use micromegas_analytics::lakehouse::metadata_cache::MetadataCache;
 use micromegas_analytics::lakehouse::partition::Partition;
 use micromegas_analytics::lakehouse::partition_cache::{LivePartitionProvider, PartitionCache};
 use micromegas_analytics::lakehouse::query::{query, query_partitions};
@@ -122,6 +123,7 @@ impl PartitionMerger for LogSummaryMerger {
         let reader_factory = Arc::new(ReaderFactory::new(
             lake.blob_storage.inner(),
             lake.db_pool.clone(),
+            Arc::new(MetadataCache::default()),
         ));
         let processes_df = query_partitions(
             self.runtime.clone(),
@@ -423,6 +425,7 @@ async fn test_log_summary_view(
     let reader_factory = Arc::new(ReaderFactory::new(
         lake.blob_storage.inner(),
         lake.db_pool.clone(),
+        Arc::new(MetadataCache::default()),
     ));
     let answer = query(
         runtime.clone(),

@@ -93,15 +93,16 @@ pub struct PartitionedTableProvider {
 
 **query.rs** - pass reader_factory through `query_lakehouse()` and related functions
 
-### 3. Add moka dependency
+### 3. Add moka dependency ✓
 
-In `rust/analytics/Cargo.toml`:
+**Implemented:** Added `moka.workspace = true` to `rust/analytics/Cargo.toml`.
 
-```toml
-moka = { version = "0.12", features = ["future"] }
-```
+### 4. Create MetadataCache struct ✓
 
-### 4. Create MetadataCache struct
+**Implemented:** Created `rust/analytics/src/lakehouse/metadata_cache.rs` with:
+- `MetadataCache::new(max_capacity_bytes)` - creates cache with specified budget
+- `MetadataCache::default()` - creates 10 MB cache for batch operations
+- LRU eviction based on serialized metadata size
 
 New file `rust/analytics/src/lakehouse/metadata_cache.rs`:
 
@@ -124,10 +125,7 @@ impl MetadataCache {
     pub fn new(max_capacity_bytes: u64) -> Self {
         let cache = Cache::builder()
             .max_capacity(max_capacity_bytes)
-            .weigher(|_key: &String, entry: &CacheEntry| -> u32 {
-                // Use serialized size * 3 as estimate for in-memory size
-                entry.serialized_size.saturating_mul(3)
-            })
+            .weigher(|_key: &String, entry: &CacheEntry| -> u32 { entry.serialized_size })
             .build();
         Self { cache }
     }
@@ -149,7 +147,9 @@ impl MetadataCache {
 }
 ```
 
-### 5. Modify ReaderFactory
+### 5. Modify ReaderFactory ✓
+
+**Implemented:** `ReaderFactory::new()` now requires `Arc<MetadataCache>`. The cache is passed to `ParquetReader` instances which use it via `load_partition_metadata()`.
 
 Add cache to `ReaderFactory` and pass through to readers:
 
@@ -182,7 +182,9 @@ pub struct ParquetReader {
 }
 ```
 
-### 6. Modify partition_metadata.rs
+### 6. Modify partition_metadata.rs ✓
+
+**Implemented:** `load_partition_metadata()` now accepts `Option<&MetadataCache>`. Cache hits return immediately; misses load from DB and store in cache.
 
 Update `load_partition_metadata` to accept an optional cache:
 
@@ -220,7 +222,9 @@ pub async fn load_partition_metadata(
 }
 ```
 
-### 7. Add cache metrics logging
+### 7. Add cache metrics logging ✓
+
+**Implemented:** `MetadataCache::stats()` returns `(entry_count, weighted_size_bytes)`. FlightSqlServiceImpl logs cache creation with MB budget.
 
 Add periodic stats logging or expose via metrics:
 

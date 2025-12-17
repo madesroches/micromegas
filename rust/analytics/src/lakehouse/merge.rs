@@ -1,4 +1,5 @@
 use super::{
+    metadata_cache::MetadataCache,
     partition::Partition,
     partition_cache::PartitionCache,
     partition_source_data::hash_to_object_count,
@@ -77,6 +78,7 @@ impl PartitionMerger for QueryMerger {
         let reader_factory = Arc::new(ReaderFactory::new(
             lake.blob_storage.inner(),
             lake.db_pool.clone(),
+            Arc::new(MetadataCache::default()),
         ));
         let ctx = make_session_context(
             self.runtime.clone(),

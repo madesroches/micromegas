@@ -3,6 +3,7 @@ use super::{
     dataframe_time_bounds::{DataFrameTimeBounds, NamedColumnsTimeBounds},
     materialized_view::MaterializedView,
     merge::{PartitionMerger, QueryMerger},
+    metadata_cache::MetadataCache,
     partition::Partition,
     partition_cache::{NullPartitionProvider, PartitionCache},
     query::make_session_context,
@@ -89,6 +90,7 @@ impl SqlBatchView {
         let reader_factory = Arc::new(ReaderFactory::new(
             lake.blob_storage.inner(),
             lake.db_pool.clone(),
+            Arc::new(MetadataCache::default()),
         ));
         let ctx = make_session_context(
             runtime.clone(),
@@ -165,6 +167,7 @@ impl View for SqlBatchView {
         let reader_factory = Arc::new(ReaderFactory::new(
             lake.blob_storage.inner(),
             lake.db_pool.clone(),
+            Arc::new(MetadataCache::default()),
         ));
         let ctx = make_session_context(
             self.runtime.clone(),

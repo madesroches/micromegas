@@ -27,6 +27,7 @@ datafusion.workspace = true
 futures.workspace = true
 jsonb.workspace = true
 lazy_static.workspace = true
+moka.workspace = true
 object_store.workspace = true
 parquet.workspace = true
 sqlx.workspace = true

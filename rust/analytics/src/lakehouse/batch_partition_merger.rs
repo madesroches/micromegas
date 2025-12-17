@@ -1,7 +1,7 @@
 use super::{
-    merge::PartitionMerger, partition::Partition, partition_cache::PartitionCache,
-    reader_factory::ReaderFactory, session_configurator::SessionConfigurator,
-    view_factory::ViewFactory,
+    merge::PartitionMerger, metadata_cache::MetadataCache, partition::Partition,
+    partition_cache::PartitionCache, reader_factory::ReaderFactory,
+    session_configurator::SessionConfigurator, view_factory::ViewFactory,
 };
 use crate::{
     lakehouse::{
@@ -134,6 +134,7 @@ impl PartitionMerger for BatchPartitionMerger {
         let reader_factory = Arc::new(ReaderFactory::new(
             lake.blob_storage.inner(),
             lake.db_pool.clone(),
+            Arc::new(MetadataCache::default()),
         ));
         let ctx = make_session_context(
             runtime,

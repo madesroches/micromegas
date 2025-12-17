@@ -1,4 +1,5 @@
 use super::blocks_view::blocks_file_schema_hash;
+use super::metadata_cache::MetadataCache;
 use super::partition_cache::PartitionCache;
 use super::reader_factory::ReaderFactory;
 use crate::dfext::{
@@ -265,6 +266,7 @@ pub async fn fetch_partition_source_data(
     let reader_factory = Arc::new(ReaderFactory::new(
         lake.blob_storage.inner(),
         lake.db_pool.clone(),
+        Arc::new(MetadataCache::default()),
     ));
     let df = query_partitions(
         runtime,

@@ -32,6 +32,7 @@ use datafusion::arrow::ipc::writer::StreamWriter;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use futures::StreamExt;
 use futures::{Stream, TryStreamExt};
+use micromegas_analytics::lakehouse::metadata_cache::MetadataCache;
 use micromegas_analytics::lakehouse::partition_cache::QueryPartitionProvider;
 use micromegas_analytics::lakehouse::query::make_session_context;
 use micromegas_analytics::lakehouse::reader_factory::ReaderFactory;
@@ -151,6 +152,9 @@ pub struct FlightSqlServiceImpl {
     session_configurator: Arc<dyn SessionConfigurator>,
 }
 
+/// Default metadata cache size in MB
+const DEFAULT_METADATA_CACHE_MB: u64 = 50;
+
 impl FlightSqlServiceImpl {
     pub fn new(
         runtime: Arc<RuntimeEnv>,
@@ -159,9 +163,17 @@ impl FlightSqlServiceImpl {
         view_factory: Arc<ViewFactory>,
         session_configurator: Arc<dyn SessionConfigurator>,
     ) -> Result<Self> {
+        let cache_mb = std::env::var("MICROMEGAS_METADATA_CACHE_MB")
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(DEFAULT_METADATA_CACHE_MB);
+        let metadata_cache = Arc::new(MetadataCache::new(cache_mb * 1024 * 1024));
+        info!("created metadata cache with {cache_mb} MB budget");
+
         let reader_factory = Arc::new(ReaderFactory::new(
             lake.blob_storage.inner(),
             lake.db_pool.clone(),
+            metadata_cache,
         ));
         Ok(Self {
             runtime,

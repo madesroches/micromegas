@@ -1,6 +1,7 @@
 use super::{
     block_partition_spec::{BlockPartitionSpec, BlockProcessor},
     blocks_view::BlocksView,
+    metadata_cache::MetadataCache,
     partition_cache::{LivePartitionProvider, QueryPartitionProvider},
     partition_source_data::{PartitionSourceBlock, SourceDataBlocksInMemory},
     reader_factory::ReaderFactory,
@@ -73,6 +74,7 @@ async fn get_insert_time_range(
     let reader_factory = Arc::new(ReaderFactory::new(
         lake.blob_storage.inner(),
         lake.db_pool.clone(),
+        Arc::new(MetadataCache::default()),
     ));
     let rbs = query_partitions(
         runtime,
@@ -133,6 +135,7 @@ pub async fn generate_stream_jit_partitions_segment(
     let reader_factory = Arc::new(ReaderFactory::new(
         lake.blob_storage.inner(),
         lake.db_pool.clone(),
+        Arc::new(MetadataCache::default()),
     ));
     let rbs = query_partitions(
         runtime,
@@ -282,6 +285,7 @@ pub async fn generate_process_jit_partitions_segment(
     let reader_factory = Arc::new(ReaderFactory::new(
         lake.blob_storage.inner(),
         lake.db_pool.clone(),
+        Arc::new(MetadataCache::default()),
     ));
     let rbs = query_partitions(
         runtime.clone(),
@@ -426,6 +430,7 @@ pub async fn generate_process_jit_partitions(
     let reader_factory = Arc::new(ReaderFactory::new(
         lake.blob_storage.inner(),
         lake.db_pool.clone(),
+        Arc::new(MetadataCache::default()),
     ));
     let rbs = query_partitions(
         runtime.clone(),

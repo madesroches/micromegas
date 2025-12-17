@@ -1,6 +1,7 @@
 use super::{
     batch_update::PartitionCreationStrategy,
     dataframe_time_bounds::{DataFrameTimeBounds, NamedColumnsTimeBounds},
+    metadata_cache::MetadataCache,
     partition_cache::{NullPartitionProvider, PartitionCache},
     query::make_session_context,
     reader_factory::ReaderFactory,
@@ -117,6 +118,7 @@ impl ExportLogView {
         let reader_factory = Arc::new(ReaderFactory::new(
             lake.blob_storage.inner(),
             lake.db_pool.clone(),
+            Arc::new(MetadataCache::default()),
         ));
         let ctx = make_session_context(
             runtime.clone(),
@@ -177,6 +179,7 @@ impl View for ExportLogView {
         let reader_factory = Arc::new(ReaderFactory::new(
             lake.blob_storage.inner(),
             lake.db_pool.clone(),
+            Arc::new(MetadataCache::default()),
         ));
         let ctx = make_session_context(
             runtime.clone(),

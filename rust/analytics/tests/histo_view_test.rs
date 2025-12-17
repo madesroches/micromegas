@@ -5,6 +5,7 @@ use micromegas_analytics::{
     lakehouse::{
         batch_update::materialize_partition_range,
         blocks_view::BlocksView,
+        metadata_cache::MetadataCache,
         partition_cache::{LivePartitionProvider, PartitionCache},
         query::query,
         reader_factory::ReaderFactory,
@@ -202,6 +203,7 @@ async fn test_cpu_usage_view(
     let reader_factory = Arc::new(ReaderFactory::new(
         lake.blob_storage.inner(),
         lake.db_pool.clone(),
+        Arc::new(MetadataCache::default()),
     ));
     let answer = query(
         runtime.clone(),
