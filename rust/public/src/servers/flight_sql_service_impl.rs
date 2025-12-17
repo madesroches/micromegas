@@ -241,9 +241,7 @@ impl FlightSqlServiceImpl {
         // Session context creation phase
         let session_begin = now();
         let ctx = make_session_context(
-            self.lakehouse.runtime.clone(),
-            self.lakehouse.lake.clone(),
-            self.lakehouse.make_reader_factory(),
+            self.lakehouse.clone(),
             self.part_provider.clone(),
             query_range,
             self.view_factory.clone(),
@@ -698,9 +696,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         info!("do_action_create_prepared_statement query={}", &query.query);
 
         let ctx = make_session_context(
-            self.lakehouse.runtime.clone(),
-            self.lakehouse.lake.clone(),
-            self.lakehouse.make_reader_factory(),
+            self.lakehouse.clone(),
             self.part_provider.clone(),
             None,
             self.view_factory.clone(),

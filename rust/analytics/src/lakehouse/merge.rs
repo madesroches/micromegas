@@ -67,11 +67,9 @@ impl PartitionMerger for QueryMerger {
         partitions_to_merge: Arc<Vec<Partition>>,
         partitions_all_views: Arc<PartitionCache>,
     ) -> Result<SendableRecordBatchStream> {
-        let reader_factory = lakehouse.make_reader_factory();
+        let reader_factory = lakehouse.get_reader_factory();
         let ctx = make_session_context(
-            lakehouse.runtime.clone(),
-            lakehouse.lake.clone(),
-            reader_factory.clone(),
+            lakehouse.clone(),
             partitions_all_views,
             None,
             self.view_factory.clone(),

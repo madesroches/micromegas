@@ -2,6 +2,7 @@ use super::metadata_cache::MetadataCache;
 use super::reader_factory::ReaderFactory;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
+use micromegas_tracing::prelude::*;
 use std::sync::Arc;
 
 /// Default metadata cache size in MB
@@ -16,20 +17,32 @@ pub struct LakehouseContext {
     pub lake: Arc<DataLakeConnection>,
     pub metadata_cache: Arc<MetadataCache>,
     pub runtime: Arc<RuntimeEnv>,
+    reader_factory: Arc<ReaderFactory>,
 }
 
 impl LakehouseContext {
     /// Creates a new lakehouse context with a default-sized metadata cache.
     pub fn new(lake: Arc<DataLakeConnection>, runtime: Arc<RuntimeEnv>) -> Self {
-        let cache_mb = std::env::var("MICROMEGAS_METADATA_CACHE_MB")
-            .ok()
-            .and_then(|s| s.parse::<u64>().ok())
-            .unwrap_or(DEFAULT_CACHE_SIZE_MB);
+        let cache_mb = match std::env::var("MICROMEGAS_METADATA_CACHE_MB") {
+            Ok(s) => s.parse::<u64>().unwrap_or_else(|_| {
+                warn!(
+                    "Invalid MICROMEGAS_METADATA_CACHE_MB value '{s}', using default {DEFAULT_CACHE_SIZE_MB} MB"
+                );
+                DEFAULT_CACHE_SIZE_MB
+            }),
+            Err(_) => DEFAULT_CACHE_SIZE_MB,
+        };
         let metadata_cache = Arc::new(MetadataCache::new(cache_mb * 1024 * 1024));
+        let reader_factory = Arc::new(ReaderFactory::new(
+            lake.blob_storage.inner(),
+            lake.db_pool.clone(),
+            metadata_cache.clone(),
+        ));
         Self {
             lake,
             metadata_cache,
             runtime,
+            reader_factory,
         }
     }
 
@@ -39,20 +52,22 @@ impl LakehouseContext {
         runtime: Arc<RuntimeEnv>,
         metadata_cache: Arc<MetadataCache>,
     ) -> Self {
+        let reader_factory = Arc::new(ReaderFactory::new(
+            lake.blob_storage.inner(),
+            lake.db_pool.clone(),
+            metadata_cache.clone(),
+        ));
         Self {
             lake,
             metadata_cache,
             runtime,
+            reader_factory,
         }
     }
 
-    /// Creates a `ReaderFactory` using the shared metadata cache.
-    pub fn make_reader_factory(&self) -> Arc<ReaderFactory> {
-        Arc::new(ReaderFactory::new(
-            self.lake.blob_storage.inner(),
-            self.lake.db_pool.clone(),
-            self.metadata_cache.clone(),
-        ))
+    /// Returns the shared `ReaderFactory`.
+    pub fn get_reader_factory(&self) -> Arc<ReaderFactory> {
+        self.reader_factory.clone()
     }
 }
 

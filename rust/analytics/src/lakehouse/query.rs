@@ -47,7 +47,6 @@ use datafusion::{
     prelude::*,
     sql::TableReference,
 };
-use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_tracing::prelude::*;
 use std::sync::Arc;
 
@@ -112,9 +111,7 @@ pub async fn query_partitions(
 #[span_fn]
 pub fn register_lakehouse_functions(
     ctx: &SessionContext,
-    runtime: Arc<RuntimeEnv>,
-    lake: Arc<DataLakeConnection>,
-    reader_factory: Arc<ReaderFactory>,
+    lakehouse: Arc<LakehouseContext>,
     part_provider: Arc<dyn QueryPartitionProvider>,
     query_range: Option<TimeRange>,
     view_factory: Arc<ViewFactory>,
@@ -122,9 +119,7 @@ pub fn register_lakehouse_functions(
     ctx.register_udtf(
         "view_instance",
         Arc::new(ViewInstanceTableFunction::new(
-            runtime.clone(),
-            lake.clone(),
-            reader_factory.clone(),
+            lakehouse.clone(),
             view_factory.clone(),
             part_provider.clone(),
             query_range,
@@ -132,7 +127,7 @@ pub fn register_lakehouse_functions(
     );
     ctx.register_udtf(
         "list_partitions",
-        Arc::new(ListPartitionsTableFunction::new(lake.clone())),
+        Arc::new(ListPartitionsTableFunction::new(lakehouse.lake.clone())),
     );
     ctx.register_udtf(
         "list_view_sets",
@@ -140,14 +135,12 @@ pub fn register_lakehouse_functions(
     );
     ctx.register_udtf(
         "retire_partitions",
-        Arc::new(RetirePartitionsTableFunction::new(lake.clone())),
+        Arc::new(RetirePartitionsTableFunction::new(lakehouse.lake.clone())),
     );
     ctx.register_udtf(
         "perfetto_trace_chunks",
         Arc::new(PerfettoTraceTableFunction::new(
-            runtime.clone(),
-            lake.clone(),
-            reader_factory,
+            lakehouse.clone(),
             view_factory.clone(),
             part_provider.clone(),
         )),
@@ -155,16 +148,18 @@ pub fn register_lakehouse_functions(
     ctx.register_udtf(
         "materialize_partitions",
         Arc::new(MaterializePartitionsTableFunction::new(
-            runtime,
-            lake.clone(),
+            lakehouse.runtime.clone(),
+            lakehouse.lake.clone(),
             view_factory.clone(),
         )),
     );
     ctx.register_udf(
-        AsyncScalarUDF::new(Arc::new(GetPayload::new(lake.clone()))).into_scalar_udf(),
+        AsyncScalarUDF::new(Arc::new(GetPayload::new(lakehouse.lake.clone()))).into_scalar_udf(),
     );
-    ctx.register_udf(make_retire_partition_by_file_udf(lake.clone()).into_scalar_udf());
-    ctx.register_udf(make_retire_partition_by_metadata_udf(lake).into_scalar_udf());
+    ctx.register_udf(make_retire_partition_by_file_udf(lakehouse.lake.clone()).into_scalar_udf());
+    ctx.register_udf(
+        make_retire_partition_by_metadata_udf(lakehouse.lake.clone()).into_scalar_udf(),
+    );
 }
 
 /// register functions that are not depended on the lakehouse architecture
@@ -194,30 +189,18 @@ pub fn register_extension_functions(ctx: &SessionContext) {
 #[span_fn]
 pub fn register_functions(
     ctx: &SessionContext,
-    runtime: Arc<RuntimeEnv>,
-    lake: Arc<DataLakeConnection>,
-    reader_factory: Arc<ReaderFactory>,
+    lakehouse: Arc<LakehouseContext>,
     part_provider: Arc<dyn QueryPartitionProvider>,
     query_range: Option<TimeRange>,
     view_factory: Arc<ViewFactory>,
 ) {
-    register_lakehouse_functions(
-        ctx,
-        runtime,
-        lake,
-        reader_factory,
-        part_provider,
-        query_range,
-        view_factory,
-    );
+    register_lakehouse_functions(ctx, lakehouse, part_provider, query_range, view_factory);
     register_extension_functions(ctx);
 }
 
 #[span_fn]
 pub async fn make_session_context(
-    runtime: Arc<RuntimeEnv>,
-    lake: Arc<DataLakeConnection>,
-    reader_factory: Arc<ReaderFactory>,
+    lakehouse: Arc<LakehouseContext>,
     part_provider: Arc<dyn QueryPartitionProvider>,
     query_range: Option<TimeRange>,
     view_factory: Arc<ViewFactory>,
@@ -228,23 +211,21 @@ pub async fn make_session_context(
     // which causes errors in DataFusion 51+ with Arrow 57.0 when reading page indexes
     let config =
         SessionConfig::default().set_bool("datafusion.execution.parquet.enable_page_index", false);
-    let ctx = SessionContext::new_with_config_rt(config, runtime.clone());
+    let ctx = SessionContext::new_with_config_rt(config, lakehouse.runtime.clone());
     if let Some(range) = &query_range {
         ctx.add_analyzer_rule(Arc::new(TableScanRewrite::new(*range)));
     }
     let object_store_url = ObjectStoreUrl::parse("obj://lakehouse/").unwrap();
-    let object_store = lake.blob_storage.inner();
+    let object_store = lakehouse.lake.blob_storage.inner();
     ctx.register_object_store(object_store_url.as_ref(), object_store);
+    let reader_factory = lakehouse.get_reader_factory();
     register_functions(
         &ctx,
-        runtime.clone(),
-        lake.clone(),
-        reader_factory.clone(),
+        lakehouse.clone(),
         part_provider.clone(),
         query_range,
         view_factory.clone(),
     );
-    let lakehouse = Arc::new(LakehouseContext::new(lake.clone(), runtime.clone()));
     for view in view_factory.get_global_views() {
         register_table(
             lakehouse.clone(),
@@ -261,12 +242,9 @@ pub async fn make_session_context(
     Ok(ctx)
 }
 
-#[expect(clippy::too_many_arguments)]
 #[span_fn]
 pub async fn query(
-    runtime: Arc<RuntimeEnv>,
-    lake: Arc<DataLakeConnection>,
-    reader_factory: Arc<ReaderFactory>,
+    lakehouse: Arc<LakehouseContext>,
     part_provider: Arc<dyn QueryPartitionProvider>,
     query_range: Option<TimeRange>,
     sql: &str,
@@ -275,9 +253,7 @@ pub async fn query(
 ) -> Result<Answer> {
     info!("query sql={sql}");
     let ctx = make_session_context(
-        runtime,
-        lake,
-        reader_factory,
+        lakehouse,
         part_provider,
         query_range,
         view_factory,

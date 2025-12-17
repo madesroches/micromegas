@@ -1,17 +1,14 @@
 use super::{
     lakehouse_context::LakehouseContext, materialized_view::MaterializedView,
-    partition_cache::QueryPartitionProvider, reader_factory::ReaderFactory,
-    view_factory::ViewFactory,
+    partition_cache::QueryPartitionProvider, view_factory::ViewFactory,
 };
 use crate::{dfext::expressions::exp_to_string, time::TimeRange};
 use datafusion::{
     catalog::{TableFunctionImpl, TableProvider},
     common::plan_err,
     error::DataFusionError,
-    execution::runtime_env::RuntimeEnv,
     logical_expr::Expr,
 };
-use micromegas_ingestion::data_lake_connection::DataLakeConnection;
 use micromegas_tracing::prelude::*;
 use std::sync::Arc;
 
@@ -29,7 +26,6 @@ use std::sync::Arc;
 #[derive(Debug)]
 pub struct ViewInstanceTableFunction {
     lakehouse: Arc<LakehouseContext>,
-    reader_factory: Arc<ReaderFactory>,
     view_factory: Arc<ViewFactory>,
     part_provider: Arc<dyn QueryPartitionProvider>,
     query_range: Option<TimeRange>,
@@ -37,16 +33,13 @@ pub struct ViewInstanceTableFunction {
 
 impl ViewInstanceTableFunction {
     pub fn new(
-        runtime: Arc<RuntimeEnv>,
-        lake: Arc<DataLakeConnection>,
-        reader_factory: Arc<ReaderFactory>,
+        lakehouse: Arc<LakehouseContext>,
         view_factory: Arc<ViewFactory>,
         part_provider: Arc<dyn QueryPartitionProvider>,
         query_range: Option<TimeRange>,
     ) -> Self {
         Self {
-            lakehouse: Arc::new(LakehouseContext::new(lake, runtime)),
-            reader_factory,
+            lakehouse,
             view_factory,
             part_provider,
             query_range,
@@ -79,7 +72,7 @@ impl TableFunctionImpl for ViewInstanceTableFunction {
 
         Ok(Arc::new(MaterializedView::new(
             self.lakehouse.clone(),
-            self.reader_factory.clone(),
+            self.lakehouse.get_reader_factory(),
             view,
             self.part_provider.clone(),
             self.query_range,

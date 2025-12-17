@@ -13,11 +13,9 @@ use micromegas_analytics::lakehouse::batch_update::materialize_partition_range;
 use micromegas_analytics::lakehouse::blocks_view::BlocksView;
 use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
 use micromegas_analytics::lakehouse::merge::PartitionMerger;
-use micromegas_analytics::lakehouse::metadata_cache::MetadataCache;
 use micromegas_analytics::lakehouse::partition::Partition;
 use micromegas_analytics::lakehouse::partition_cache::{LivePartitionProvider, PartitionCache};
 use micromegas_analytics::lakehouse::query::{query, query_partitions};
-use micromegas_analytics::lakehouse::reader_factory::ReaderFactory;
 use micromegas_analytics::lakehouse::runtime::make_runtime_env;
 use micromegas_analytics::lakehouse::session_configurator::NoOpSessionConfigurator;
 use micromegas_analytics::lakehouse::view::View;
@@ -121,7 +119,7 @@ impl PartitionMerger for LogSummaryMerger {
         partitions: Arc<Vec<Partition>>,
         _partitions_all_views: Arc<PartitionCache>,
     ) -> Result<SendableRecordBatchStream> {
-        let reader_factory = lakehouse.make_reader_factory();
+        let reader_factory = lakehouse.get_reader_factory();
         let processes_df = query_partitions(
             self.runtime.clone(),
             reader_factory.clone(),
@@ -419,15 +417,9 @@ async fn test_log_summary_view(
         null_response_writer.clone(),
     )
     .await?;
-    let reader_factory = Arc::new(ReaderFactory::new(
-        lake.blob_storage.inner(),
-        lake.db_pool.clone(),
-        Arc::new(MetadataCache::default()),
-    ));
+    let lakehouse = Arc::new(LakehouseContext::new(lake.clone(), runtime.clone()));
     let answer = query(
-        runtime.clone(),
-        lake.clone(),
-        reader_factory.clone(),
+        lakehouse.clone(),
         Arc::new(LivePartitionProvider::new(lake.db_pool.clone())),
         Some(TimeRange::new(begin_range, end_range)),
         "
@@ -452,9 +444,7 @@ async fn test_log_summary_view(
     eprintln!("{pretty_results_view}");
 
     let answer = query(
-        runtime.clone(),
-        lake.clone(),
-        reader_factory,
+        lakehouse,
         Arc::new(LivePartitionProvider::new(lake.db_pool.clone())),
         Some(TimeRange::new(begin_range, end_range)),
         "

@@ -37,7 +37,6 @@ pub type MergerMaker = dyn Fn(Arc<RuntimeEnv>, Arc<Schema>) -> Arc<dyn Partition
 /// SQL-defined view updated in batch
 #[derive(Debug)]
 pub struct SqlBatchView {
-    runtime: Arc<RuntimeEnv>,
     view_set_name: Arc<String>,
     view_instance_id: Arc<String>,
     min_event_time_column: Arc<String>,
@@ -86,12 +85,9 @@ impl SqlBatchView {
         merger_maker: Option<&MergerMaker>,
     ) -> Result<Self> {
         let null_part_provider = Arc::new(NullPartitionProvider {});
-        let lakehouse = LakehouseContext::new(lake.clone(), runtime.clone());
-        let reader_factory = lakehouse.make_reader_factory();
+        let lakehouse = Arc::new(LakehouseContext::new(lake.clone(), runtime.clone()));
         let ctx = make_session_context(
-            runtime.clone(),
-            lake,
-            reader_factory,
+            lakehouse,
             null_part_provider,
             None,
             view_factory.clone(),
@@ -117,7 +113,6 @@ impl SqlBatchView {
         })(runtime.clone(), schema.clone());
 
         Ok(Self {
-            runtime,
             view_set_name,
             view_instance_id: Arc::new(String::from("global")),
             min_event_time_column,
@@ -158,11 +153,8 @@ impl View for SqlBatchView {
             file_schema_hash: self.get_file_schema_hash(),
         };
         let partitions_in_range = Arc::new(existing_partitions.filter_insert_range(insert_range));
-        let reader_factory = lakehouse.make_reader_factory();
         let ctx = make_session_context(
-            self.runtime.clone(),
-            lakehouse.lake.clone(),
-            reader_factory,
+            lakehouse,
             partitions_in_range.clone(),
             None,
             self.view_factory.clone(),

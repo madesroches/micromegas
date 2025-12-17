@@ -114,12 +114,9 @@ impl ExportLogView {
         max_partition_delta_from_merge: TimeDelta,
     ) -> Result<Self> {
         let null_part_provider = Arc::new(NullPartitionProvider {});
-        let lakehouse = LakehouseContext::new(lake.clone(), runtime.clone());
-        let reader_factory = lakehouse.make_reader_factory();
+        let lakehouse = Arc::new(LakehouseContext::new(lake.clone(), runtime.clone()));
         let ctx = make_session_context(
-            runtime.clone(),
-            lake,
-            reader_factory,
+            lakehouse,
             null_part_provider,
             None,
             view_factory.clone(),
@@ -171,11 +168,8 @@ impl View for ExportLogView {
             file_schema_hash: self.get_file_schema_hash(),
         };
         let partitions_in_range = Arc::new(existing_partitions.filter_insert_range(insert_range));
-        let reader_factory = lakehouse.make_reader_factory();
         let ctx = make_session_context(
-            lakehouse.runtime.clone(),
-            lakehouse.lake.clone(),
-            reader_factory,
+            lakehouse,
             partitions_in_range.clone(),
             None,
             self.view_factory.clone(),

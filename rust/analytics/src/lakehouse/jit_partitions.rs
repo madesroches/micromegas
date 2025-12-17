@@ -66,7 +66,7 @@ async fn get_insert_time_range(
         AND begin_time <= '{end_range_iso}'
         AND end_time >= '{begin_range_iso}';"#
     );
-    let reader_factory = lakehouse.make_reader_factory();
+    let reader_factory = lakehouse.get_reader_factory();
     let rbs = query_partitions(
         lakehouse.runtime.clone(),
         reader_factory,
@@ -122,7 +122,7 @@ pub async fn generate_stream_jit_partitions_segment(
              ORDER BY insert_time, block_id;"#
     );
 
-    let reader_factory = lakehouse.make_reader_factory();
+    let reader_factory = lakehouse.get_reader_factory();
     let rbs = query_partitions(
         lakehouse.runtime.clone(),
         reader_factory,
@@ -264,7 +264,7 @@ pub async fn generate_process_jit_partitions_segment(
              ORDER BY insert_time, block_id;"#
     );
 
-    let reader_factory = lakehouse.make_reader_factory();
+    let reader_factory = lakehouse.get_reader_factory();
     let rbs = query_partitions(
         lakehouse.runtime.clone(),
         reader_factory,
@@ -404,7 +404,7 @@ pub async fn generate_process_jit_partitions(
         AND end_time >= '{begin_range_iso}';"#
     );
 
-    let reader_factory = lakehouse.make_reader_factory();
+    let reader_factory = lakehouse.get_reader_factory();
     let rbs = query_partitions(
         lakehouse.runtime.clone(),
         reader_factory,

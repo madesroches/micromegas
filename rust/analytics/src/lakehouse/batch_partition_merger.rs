@@ -13,11 +13,8 @@ use anyhow::Result;
 use async_trait::async_trait;
 use chrono::{DateTime, TimeDelta, Utc};
 use datafusion::{
-    arrow::datatypes::Schema,
-    error::DataFusionError,
-    execution::{SendableRecordBatchStream, runtime_env::RuntimeEnv},
-    physical_plan::stream::RecordBatchReceiverStreamBuilder,
-    sql::TableReference,
+    arrow::datatypes::Schema, error::DataFusionError, execution::SendableRecordBatchStream,
+    physical_plan::stream::RecordBatchReceiverStreamBuilder, sql::TableReference,
 };
 use futures::TryStreamExt;
 use futures::{StreamExt, stream};
@@ -71,8 +68,6 @@ fn compute_partition_stats(partitions: &[Partition]) -> Result<PartitionStats> {
 /// The batches are based on event times.
 #[derive(Debug)]
 pub struct BatchPartitionMerger {
-    /// runtime: datafusion runtime
-    runtime: Arc<RuntimeEnv>,
     /// file_schema: arrow schema of the parquet files
     file_schema: Arc<Schema>,
     /// view_factory: allows joins in merge query
@@ -87,7 +82,6 @@ pub struct BatchPartitionMerger {
 
 impl BatchPartitionMerger {
     pub fn new(
-        runtime: Arc<RuntimeEnv>,
         file_schema: Arc<Schema>,
         view_factory: Arc<ViewFactory>,
         session_configurator: Arc<dyn SessionConfigurator>,
@@ -95,7 +89,6 @@ impl BatchPartitionMerger {
         approx_nb_rows_per_batch: i64,
     ) -> Self {
         Self {
-            runtime,
             file_schema,
             view_factory,
             session_configurator,
@@ -128,13 +121,10 @@ impl PartitionMerger for BatchPartitionMerger {
         let batch_time_delta = ((stats.max_event_time - stats.min_event_time) / nb_batches)
             + TimeDelta::nanoseconds(1);
 
-        let runtime = self.runtime.clone();
         let file_schema = self.file_schema.clone();
-        let reader_factory = lakehouse.make_reader_factory();
+        let reader_factory = lakehouse.get_reader_factory();
         let ctx = make_session_context(
-            runtime,
-            lakehouse.lake.clone(),
-            reader_factory.clone(),
+            lakehouse.clone(),
             partitions_all_views,
             None,
             self.view_factory.clone(),

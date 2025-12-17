@@ -259,7 +259,7 @@ pub async fn fetch_partition_source_data(
     let block_partitions = existing_partitions
         .filter("blocks", "global", &blocks_file_schema_hash(), insert_range)
         .partitions;
-    let reader_factory = lakehouse.make_reader_factory();
+    let reader_factory = lakehouse.get_reader_factory();
     let df = query_partitions(
         lakehouse.runtime.clone(),
         reader_factory,
