@@ -42,15 +42,23 @@ pub struct InstrumentedFuture<F> {
     future: F,
     desc: &'static SpanMetadata,
     span_id: Option<u64>,
+    /// Parent span ID captured at future creation time
+    parent: u64,
 }
 
 impl<F> InstrumentedFuture<F> {
     /// Create a new instrumented future
     pub fn new(future: F, desc: &'static SpanMetadata) -> Self {
+        let parent = ASYNC_CALL_STACK.with(|stack_cell| {
+            let stack = unsafe { &*stack_cell.get() };
+            assert!(!stack.is_empty());
+            stack[stack.len() - 1]
+        });
         Self {
             future,
             desc,
             span_id: None,
+            parent,
         }
     }
 }
@@ -63,10 +71,10 @@ where
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
+        let parent = *this.parent;
         ASYNC_CALL_STACK.with(|stack_cell| {
             let stack = unsafe { &mut *stack_cell.get() };
             assert!(!stack.is_empty());
-            let parent = stack[stack.len() - 1];
             let depth = (stack.len().saturating_sub(1)) as u32;
             match this.span_id {
                 Some(span_id) => {
@@ -103,16 +111,24 @@ pub struct InstrumentedNamedFuture<F> {
     span_location: &'static SpanLocation,
     name: &'static str,
     span_id: Option<u64>,
+    /// Parent span ID captured at future creation time
+    parent: u64,
 }
 
 impl<F> InstrumentedNamedFuture<F> {
     /// Create a new instrumented named future
     pub fn new(future: F, span_location: &'static SpanLocation, name: &'static str) -> Self {
+        let parent = ASYNC_CALL_STACK.with(|stack_cell| {
+            let stack = unsafe { &*stack_cell.get() };
+            assert!(!stack.is_empty());
+            stack[stack.len() - 1]
+        });
         Self {
             future,
             span_location,
             name,
             span_id: None,
+            parent,
         }
     }
 }
@@ -125,10 +141,10 @@ where
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.project();
+        let parent = *this.parent;
         ASYNC_CALL_STACK.with(|stack_cell| {
             let stack = unsafe { &mut *stack_cell.get() };
             assert!(!stack.is_empty());
-            let parent = stack[stack.len() - 1];
             let depth = (stack.len().saturating_sub(1)) as u32;
             match this.span_id {
                 Some(span_id) => {
