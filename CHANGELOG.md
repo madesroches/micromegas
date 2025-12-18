@@ -3,6 +3,22 @@
 This file documents the historical progress of the Micromegas project. For current focus, please see the main [README.md](./README.md).
 
 ## [Unreleased]
+* **Tracing & Instrumentation:**
+  * Improve #[span_fn] rustdoc documentation (#676)
+  * Fix async span parenting and add spawn_with_context helper (#675)
+* **Analytics & Query Features:**
+  * Add global LRU metadata cache for partition metadata (#674)
+  * Add jsonb_object_keys UDF (#673)
+* **Analytics Web App:**
+  * Migrate from Next.js to Vite for dynamic base path support (#667)
+  * Improve process info navigation and cleanup trace screen (#669)
+  * Fix custom queries being reset when filters change (#670)
+* **Unreal Engine:**
+  * Add more metrics and process info to telemetry plugin (#672)
+* **Security:**
+  * Fix esbuild security vulnerability (GHSA-67mh-4wv8-2f99) (#671)
+* **Planning:**
+  * Add user-defined screens feature plan (#665)
 
 ## December 2025 - v0.17.0
  * **Analytics Web App Major Rework:**

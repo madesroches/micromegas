@@ -67,7 +67,17 @@ To get started with Micromegas, please refer to the [Getting Started](https://ma
 ## Current Status & Roadmap
 
 ### v0.18.0 (In Progress)
-* Analytics Web App enhancements
+* **Tracing & Instrumentation:**
+  * `spawn_with_context` helper for proper async span parenting
+  * Improved `#[span_fn]` rustdoc documentation
+* **Analytics & Performance:**
+  * Global LRU metadata cache for faster partition queries
+  * New `jsonb_object_keys` UDF for JSON exploration
+* **Analytics Web App:**
+  * Migrated from Next.js to Vite for dynamic base path support
+  * Improved navigation and UI cleanup
+* **Unreal Engine:**
+  * Additional metrics and process info in telemetry
 
 ### December 2025 - v0.17.0
 * **Analytics Web App** - Complete UI redesign with dark theme and Micromegas branding:
