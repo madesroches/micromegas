@@ -505,6 +505,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         api_entry_not_implemented!()
     }
 
+    #[span_fn]
     async fn do_get_statement(
         &self,
         ticket: TicketStatementQuery,

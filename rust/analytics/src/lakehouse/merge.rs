@@ -17,7 +17,7 @@ use datafusion::{
     arrow::datatypes::Schema, execution::SendableRecordBatchStream, prelude::*, sql::TableReference,
 };
 use futures::stream::StreamExt;
-use micromegas_tracing::{error, warn};
+use micromegas_tracing::prelude::*;
 use std::fmt::Debug;
 use std::sync::Arc;
 use xxhash_rust::xxh32::xxh32;
@@ -178,7 +178,7 @@ pub async fn create_merged_partition(
     let (tx, rx) = tokio::sync::mpsc::channel(1);
     let view_copy = view.clone();
     let lake = lakehouse.lake().clone();
-    let join_handle = tokio::spawn(async move {
+    let join_handle = spawn_with_context(async move {
         let res = write_partition_from_rows(
             lake,
             view_copy.get_meta(),

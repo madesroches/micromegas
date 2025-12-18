@@ -176,7 +176,7 @@ fn generate_perfetto_trace_stream(
         let chunk_sender_writer = ChunkSender::new(chunk_sender, CHUNK_SIZE);
 
         // Spawn background task to generate trace
-        let generation_task = tokio::spawn(async move {
+        let generation_task = spawn_with_context(async move {
             generate_streaming_perfetto_trace(
                 chunk_sender_writer,
                 process_id,

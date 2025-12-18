@@ -6,7 +6,7 @@ use datafusion::catalog::TableProvider;
 use datafusion::common::plan_err;
 use datafusion::prelude::Expr;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
-use micromegas_tracing::error;
+use micromegas_tracing::prelude::*;
 use std::sync::Arc;
 
 use crate::dfext::expressions::exp_to_string;
@@ -73,7 +73,7 @@ impl TableFunctionImpl for RetirePartitionsTableFunction {
         let spawner = move || {
             let (tx, rx) = tokio::sync::mpsc::channel(100);
             let logger = Arc::new(LogSender::new(tx));
-            tokio::spawn(async move {
+            spawn_with_context(async move {
                 if let Err(e) = retire_partitions_impl(
                     lake,
                     &view_set_name,

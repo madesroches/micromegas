@@ -46,6 +46,7 @@ impl PartitionSpec for BlockPartitionSpec {
         self.source_data.get_source_data_hash()
     }
 
+    #[span_fn]
     async fn write(&self, lake: Arc<DataLakeConnection>, logger: Arc<dyn Logger>) -> Result<()> {
         let desc = format!(
             "[{}, {}] {} {}",
@@ -95,7 +96,7 @@ impl PartitionSpec for BlockPartitionSpec {
                 let src_block = src_block_res.with_context(|| "get_blocks_stream")?;
                 let block_processor = self.block_processor.clone();
                 let blob_storage = lake.blob_storage.clone();
-                let handle = tokio::spawn(async move {
+                let handle = spawn_with_context(async move {
                     block_processor
                         .process(blob_storage, src_block)
                         .await

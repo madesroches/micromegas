@@ -5,6 +5,7 @@ use super::{
 use crate::{response_writer::Logger, time::TimeRange};
 use anyhow::{Context, Result};
 use chrono::TimeDelta;
+use micromegas_tracing::prelude::*;
 use std::sync::Arc;
 
 /// Defines the strategy for creating a new partition.
@@ -98,6 +99,7 @@ async fn verify_overlapping_partitions(
     Ok(PartitionCreationStrategy::Abort)
 }
 
+#[span_fn]
 async fn materialize_partition(
     existing_partitions_all_views: Arc<PartitionCache>,
     lakehouse: Arc<LakehouseContext>,
@@ -189,6 +191,7 @@ async fn materialize_partition(
 }
 
 /// Materializes partitions within a given time range.
+#[span_fn]
 pub async fn materialize_partition_range(
     existing_partitions_all_views: Arc<PartitionCache>,
     lakehouse: Arc<LakehouseContext>,
