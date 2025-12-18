@@ -1,7 +1,43 @@
-//! `log_fn` and `span_fn` procedural macros
+//! Procedural macros for instrumenting Rust functions with tracing spans.
 //!
-//! Injects instrumentation into sync and async functions.
-//! `span_fn` supports sync functions, async functions, and async trait methods automatically.
+//! This crate provides `#[span_fn]` and `#[log_fn]` attribute macros that automatically
+//! inject instrumentation into functions. These macros are the primary way to instrument
+//! async code in micromegas.
+//!
+//! # Quick Start
+//!
+//! ```rust,ignore
+//! use micromegas_tracing::prelude::*;
+//!
+//! #[span_fn]
+//! async fn fetch_user(id: u64) -> User {
+//!     // This async function is automatically instrumented
+//!     database.get_user(id).await
+//! }
+//!
+//! #[span_fn]
+//! fn compute_hash(data: &[u8]) -> Hash {
+//!     // Sync functions work too
+//!     hasher.hash(data)
+//! }
+//! ```
+//!
+//! # Why use `#[span_fn]`?
+//!
+//! The `#[span_fn]` macro solves a fundamental challenge in async Rust: tracking execution
+//! time across `.await` points. When an async function awaits, it yields control and may
+//! resume on a different thread. `#[span_fn]` wraps your async code in an `InstrumentedFuture`
+//! that correctly tracks wall-clock time even across these suspension points.
+//!
+//! For sync functions, it creates a scope-based span that measures the function's execution.
+//!
+//! # Import
+//!
+//! These macros are re-exported through the tracing prelude:
+//!
+//! ```rust,ignore
+//! use micromegas_tracing::prelude::*;
+//! ```
 
 // crate-specific lint exceptions:
 //#![allow()]
@@ -67,7 +103,94 @@ fn is_future_type(ty: &Type) -> bool {
     }
 }
 
-/// span_fn: trace the execution of sync functions, async functions, and async trait methods
+/// Instruments a function with automatic span tracing.
+///
+/// This is the primary macro for instrumenting both sync and async functions in micromegas.
+/// It automatically detects the function type and applies the appropriate instrumentation.
+///
+/// # Supported Function Types
+///
+/// - **Sync functions**: Wrapped with `span_scope!` for scope-based timing
+/// - **Async functions**: Wrapped with `InstrumentedFuture` for accurate async timing
+/// - **Async trait methods**: Works with `#[async_trait]` - place `#[span_fn]` after `#[async_trait]`
+///
+/// # Basic Usage
+///
+/// ```rust,ignore
+/// use micromegas_tracing::prelude::*;
+///
+/// // Async function - tracks time across .await points
+/// #[span_fn]
+/// async fn process_request(req: Request) -> Response {
+///     let data = fetch_data(req.id).await;
+///     transform(data).await
+/// }
+///
+/// // Sync function - tracks wall-clock execution time
+/// #[span_fn]
+/// fn calculate_checksum(data: &[u8]) -> u32 {
+///     data.iter().fold(0u32, |acc, &b| acc.wrapping_add(b as u32))
+/// }
+/// ```
+///
+/// # Custom Span Names
+///
+/// By default, the span name is the function name prefixed with the module path.
+/// You can override this with a custom name:
+///
+/// ```rust,ignore
+/// #[span_fn("custom_operation_name")]
+/// async fn internal_impl() {
+///     // Span will be named "module::path::custom_operation_name"
+/// }
+/// ```
+///
+/// # With Async Traits
+///
+/// When using `#[async_trait]`, place `#[span_fn]` on the method *after* the
+/// `#[async_trait]` attribute on the impl block:
+///
+/// ```rust,ignore
+/// use async_trait::async_trait;
+/// use micromegas_tracing::prelude::*;
+///
+/// #[async_trait]
+/// trait DataService {
+///     async fn fetch(&self, id: u64) -> Data;
+/// }
+///
+/// #[async_trait]
+/// impl DataService for MyService {
+///     #[span_fn]
+///     async fn fetch(&self, id: u64) -> Data {
+///         self.db.query(id).await
+///     }
+/// }
+/// ```
+///
+/// # How It Works
+///
+/// For **async functions**, the macro:
+/// 1. Removes the `async` keyword
+/// 2. Changes the return type to `impl Future<Output = T>`
+/// 3. Wraps the body in an `InstrumentedFuture` that tracks timing
+///
+/// For **sync functions**, the macro:
+/// 1. Inserts a `span_scope!` call at the start of the function
+/// 2. The span automatically closes when the function returns
+///
+/// # Performance
+///
+/// The overhead is approximately 40ns per span (20ns per event, with a span
+/// recording both begin and end). This makes it suitable for high-frequency
+/// instrumentation. Spans are collected in thread-local storage and batched
+/// for efficient transmission.
+///
+/// # See Also
+///
+/// - [`log_fn`] - For simple function entry logging without timing
+/// - `span_scope!` - For manual scope-based spans within a function
+/// - `span_async_named!` - For manual async spans with dynamic names
 #[proc_macro_attribute]
 pub fn span_fn(args: TokenStream, input: TokenStream) -> TokenStream {
     let args = parse_macro_input!(args as TraceArgs);
@@ -146,7 +269,32 @@ pub fn span_fn(args: TokenStream, input: TokenStream) -> TokenStream {
     })
 }
 
-/// log_fn: log the execution of a function
+/// Logs function entry with the function name.
+///
+/// This macro injects a `trace!` call at the start of the function, logging
+/// the function name. Unlike [`span_fn`], it does not measure execution time
+/// or track function exit.
+///
+/// # Usage
+///
+/// ```rust,ignore
+/// use micromegas_tracing::prelude::*;
+///
+/// #[log_fn]
+/// fn handle_event(event: Event) {
+///     // Logs "handle_event" at trace level when called
+///     process(event);
+/// }
+/// ```
+///
+/// # When to Use
+///
+/// Use `log_fn` when you only need to know that a function was called, without
+/// timing data. Note that log entries are typically more expensive than span
+/// events, so for performance instrumentation prefer [`span_fn`].
+///
+/// `log_fn` is useful when you want function calls to appear in the log stream
+/// rather than the spans/traces stream.
 #[proc_macro_attribute]
 pub fn log_fn(args: TokenStream, input: TokenStream) -> TokenStream {
     assert!(args.is_empty());
