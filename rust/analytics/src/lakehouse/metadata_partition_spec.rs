@@ -12,6 +12,7 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use datafusion::{arrow::datatypes::Schema, prelude::*};
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
+use micromegas_tracing::prelude::*;
 use sqlx::Row;
 use std::sync::Arc;
 
@@ -81,7 +82,7 @@ impl PartitionSpec for MetadataPartitionSpec {
         let row_count = rows.len() as i64;
 
         let (tx, rx) = tokio::sync::mpsc::channel(1);
-        let join_handle = tokio::spawn(write_partition_from_rows(
+        let join_handle = spawn_with_context(write_partition_from_rows(
             lake.clone(),
             self.view_metadata.clone(),
             self.schema.clone(),

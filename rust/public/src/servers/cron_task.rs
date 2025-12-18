@@ -66,7 +66,7 @@ impl CronTask {
                 .unwrap() as u64
         );
         let callback = self.callback.clone();
-        Box::pin(tokio::spawn(async move {
+        Box::pin(spawn_with_context(async move {
             let res = callback
                 .run(task_time)
                 .await

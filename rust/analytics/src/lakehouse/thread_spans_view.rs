@@ -123,7 +123,7 @@ async fn write_partition(
 
     let (tx, rx) = tokio::sync::mpsc::channel(1);
     let null_response_writer = Arc::new(ResponseWriter::new(None));
-    let join_handle = tokio::spawn(write_partition_from_rows(
+    let join_handle = spawn_with_context(write_partition_from_rows(
         lake.clone(),
         view_meta,
         schema,

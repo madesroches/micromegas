@@ -58,7 +58,7 @@ where
     let (tx, rx) = tokio::sync::mpsc::channel(10);
     let writer = Arc::new(ResponseWriter::new(Some(tx)));
     let response_body = make_body_from_channel_receiver(rx);
-    tokio::spawn(async move {
+    spawn_with_context(async move {
         let service_call = callback(writer.clone());
         if let Err(e) = service_call.await {
             if writer.is_closed() {

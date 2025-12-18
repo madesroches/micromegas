@@ -67,7 +67,7 @@ impl PartitionSpec for BlockPartitionSpec {
         // Allow empty source data - write_partition_from_rows will create
         // an empty partition record if no data is sent through the channel
         let (tx, rx) = tokio::sync::mpsc::channel(1);
-        let join_handle = tokio::spawn(write_partition_from_rows(
+        let join_handle = spawn_with_context(write_partition_from_rows(
             lake.clone(),
             self.view_metadata.clone(),
             self.schema.clone(),
