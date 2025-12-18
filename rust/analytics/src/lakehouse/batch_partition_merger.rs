@@ -158,7 +158,7 @@ impl PartitionMerger for BatchPartitionMerger {
                             ("end", datetime_to_scalar(end)),
                         ])
                         .map(|df| async {
-                            tokio::spawn(df.execute_stream())
+                            spawn_with_context(df.execute_stream())
                                 .await
                                 .map_err(|e| DataFusionError::External(e.into()))
                         })

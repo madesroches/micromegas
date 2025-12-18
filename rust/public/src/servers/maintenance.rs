@@ -23,6 +23,7 @@ type Views = Arc<Vec<Arc<dyn View>>>;
 ///
 /// This function iterates through the provided views, materializing partitions
 /// for each view within the specified `insert_range` and `partition_time_delta`.
+#[span_fn]
 pub async fn materialize_all_views(
     lakehouse: Arc<LakehouseContext>,
     views: Views,
@@ -69,6 +70,7 @@ pub struct EveryDayTask {
 
 #[async_trait]
 impl TaskCallback for EveryDayTask {
+    #[span_fn]
     async fn run(&self, task_scheduled_time: DateTime<Utc>) -> Result<()> {
         let partition_time_delta = TimeDelta::days(1);
         let trunc_task_time = task_scheduled_time.duration_trunc(partition_time_delta)?;
@@ -92,6 +94,7 @@ pub struct EveryHourTask {
 
 #[async_trait]
 impl TaskCallback for EveryHourTask {
+    #[span_fn]
     async fn run(&self, task_scheduled_time: DateTime<Utc>) -> Result<()> {
         delete_old_data(self.lakehouse.lake(), 90).await?;
         delete_expired_temporary_files(self.lakehouse.lake().clone()).await?;
@@ -118,6 +121,7 @@ pub struct EveryMinuteTask {
 
 #[async_trait]
 impl TaskCallback for EveryMinuteTask {
+    #[span_fn]
     async fn run(&self, task_scheduled_time: DateTime<Utc>) -> Result<()> {
         let partition_time_delta = TimeDelta::minutes(1);
         let trunc_task_time = task_scheduled_time.duration_trunc(partition_time_delta)?;
@@ -142,6 +146,7 @@ pub struct EverySecondTask {
 
 #[async_trait]
 impl TaskCallback for EverySecondTask {
+    #[span_fn]
     async fn run(&self, task_scheduled_time: DateTime<Utc>) -> Result<()> {
         let delay = Utc::now() - task_scheduled_time;
         if delay > TimeDelta::seconds(10) {

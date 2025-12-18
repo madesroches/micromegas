@@ -18,7 +18,7 @@ use datafusion::{
 };
 use futures::StreamExt;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
-use micromegas_tracing::trace;
+use micromegas_tracing::prelude::*;
 use std::sync::Arc;
 
 /// A `PartitionSpec` implementation for SQL-defined partitions.
@@ -89,7 +89,7 @@ impl PartitionSpec for SqlPartitionSpec {
         let mut stream = df.execute_stream().await?;
 
         let (tx, rx) = tokio::sync::mpsc::channel(1);
-        let join_handle = tokio::spawn(write_partition_from_rows(
+        let join_handle = spawn_with_context(write_partition_from_rows(
             lake.clone(),
             self.view_metadata.clone(),
             self.schema.clone(),

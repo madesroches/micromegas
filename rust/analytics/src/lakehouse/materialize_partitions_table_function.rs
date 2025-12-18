@@ -16,7 +16,7 @@ use datafusion::catalog::TableFunctionImpl;
 use datafusion::catalog::TableProvider;
 use datafusion::common::plan_err;
 use datafusion::prelude::Expr;
-use micromegas_tracing::error;
+use micromegas_tracing::prelude::*;
 use std::sync::Arc;
 
 /// A DataFusion `TableFunctionImpl` for materializing lakehouse partitions.
@@ -35,6 +35,7 @@ impl MaterializePartitionsTableFunction {
     }
 }
 
+#[span_fn]
 async fn materialize_partitions_impl(
     lakehouse: Arc<LakehouseContext>,
     view_factory: Arc<ViewFactory>,
@@ -86,7 +87,7 @@ impl TableFunctionImpl for MaterializePartitionsTableFunction {
         let spawner = move || {
             let (tx, rx) = tokio::sync::mpsc::channel(100);
             let logger = Arc::new(LogSender::new(tx));
-            tokio::spawn(async move {
+            spawn_with_context(async move {
                 if let Err(e) = materialize_partitions_impl(
                     lakehouse,
                     view_factory,

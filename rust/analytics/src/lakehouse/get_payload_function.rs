@@ -13,6 +13,7 @@ use datafusion::{
 };
 use futures::stream::StreamExt;
 use micromegas_ingestion::data_lake_connection::DataLakeConnection;
+use micromegas_tracing::prelude::*;
 use std::sync::Arc;
 
 /// A scalar UDF that retrieves the payload of a block from the data lake.
@@ -112,7 +113,7 @@ impl AsyncScalarUDFImpl for GetPayload {
                 let block_id = block_ids.value(i);
                 let obj_path = format!("blobs/{process_id}/{stream_id}/{block_id}");
                 let lake = lake.clone();
-                tokio::spawn(async move { lake.blob_storage.read_blob(&obj_path).await })
+                spawn_with_context(async move { lake.blob_storage.read_blob(&obj_path).await })
             })
             .buffered(10);
         let mut result_builder = BinaryBuilder::with_capacity(block_ids.len(), 1024 * 1024);

@@ -46,6 +46,7 @@ impl PartitionSpec for BlockPartitionSpec {
         self.source_data.get_source_data_hash()
     }
 
+    #[span_fn]
     async fn write(&self, lake: Arc<DataLakeConnection>, logger: Arc<dyn Logger>) -> Result<()> {
         let desc = format!(
             "[{}, {}] {} {}",
@@ -66,7 +67,7 @@ impl PartitionSpec for BlockPartitionSpec {
         // Allow empty source data - write_partition_from_rows will create
         // an empty partition record if no data is sent through the channel
         let (tx, rx) = tokio::sync::mpsc::channel(1);
-        let join_handle = tokio::spawn(write_partition_from_rows(
+        let join_handle = spawn_with_context(write_partition_from_rows(
             lake.clone(),
             self.view_metadata.clone(),
             self.schema.clone(),
@@ -95,7 +96,7 @@ impl PartitionSpec for BlockPartitionSpec {
                 let src_block = src_block_res.with_context(|| "get_blocks_stream")?;
                 let block_processor = self.block_processor.clone();
                 let blob_storage = lake.blob_storage.clone();
-                let handle = tokio::spawn(async move {
+                let handle = spawn_with_context(async move {
                     block_processor
                         .process(blob_storage, src_block)
                         .await
