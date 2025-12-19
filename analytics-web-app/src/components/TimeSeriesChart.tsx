@@ -1,6 +1,14 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import uPlot from 'uplot'
 import 'uplot/dist/uPlot.min.css'
+import {
+  isTimeUnit,
+  getAdaptiveTimeUnit,
+  formatAdaptiveTime,
+  formatTimeValue,
+  type AdaptiveTimeUnit,
+  type TimeUnit,
+} from '@/lib/time-units'
 
 export interface ChartAxisBounds {
   left: number // Left padding (Y-axis width)
@@ -16,17 +24,17 @@ interface TimeSeriesChartProps {
   onAxisBoundsChange?: (bounds: ChartAxisBounds) => void
 }
 
-const UNIT_ABBREVIATIONS: Record<string, string> = {
-  seconds: 's',
-  milliseconds: 'ms',
-  microseconds: 'µs',
-  nanoseconds: 'ns',
-  minutes: 'min',
-  hours: 'h',
-}
+function formatValue(
+  value: number,
+  unit: string,
+  abbreviated = false,
+  adaptiveTimeUnit?: AdaptiveTimeUnit
+): string {
+  // Use adaptive formatting for time units
+  if (adaptiveTimeUnit && isTimeUnit(unit)) {
+    return formatAdaptiveTime(value, adaptiveTimeUnit, abbreviated)
+  }
 
-function formatValue(value: number, unit: string, abbreviated = false): string {
-  const displayUnit = abbreviated ? (UNIT_ABBREVIATIONS[unit] ?? unit) : unit
   if (unit === 'bytes') {
     if (value >= 1e9) return (value / 1e9).toFixed(1) + ' GB'
     if (value >= 1e6) return (value / 1e6).toFixed(1) + ' MB'
@@ -35,8 +43,18 @@ function formatValue(value: number, unit: string, abbreviated = false): string {
   }
   if (unit === 'percent') return value.toFixed(1) + '%'
   if (unit === 'count') return Math.round(value).toLocaleString()
-  return value.toFixed(2) + ' ' + displayUnit
+  return value.toFixed(2) + ' ' + unit
 }
+
+// Format a stat value - for time units, each value picks its own best unit
+function formatStatValue(value: number, unit: string): string {
+  if (isTimeUnit(unit)) {
+    return formatTimeValue(value, unit as TimeUnit, false)
+  }
+  return formatValue(value, unit, false)
+}
+
+type ScaleMode = 'p99' | 'max'
 
 export function TimeSeriesChart({
   data,
@@ -49,13 +67,34 @@ export function TimeSeriesChart({
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<uPlot | null>(null)
   const [dimensions, setDimensions] = useState({ width: 800, height: 300 })
+  const [scaleMode, setScaleMode] = useState<ScaleMode>('p99')
 
-  // Calculate stats
-  const stats = useMemo(() => ({
-    min: data.length > 0 ? Math.min(...data.map((d) => d.value)) : 0,
-    max: data.length > 0 ? Math.max(...data.map((d) => d.value)) : 0,
-    avg: data.length > 0 ? data.reduce((sum, d) => sum + d.value, 0) / data.length : 0,
-  }), [data])
+  // Calculate stats including percentile for scaling
+  const stats = useMemo(() => {
+    if (data.length === 0) {
+      return { min: 0, max: 0, avg: 0, p99: 0 }
+    }
+    const values = data.map((d) => d.value)
+    const sorted = [...values].sort((a, b) => a - b)
+    const p99Index = Math.floor(sorted.length * 0.99)
+    return {
+      min: sorted[0],
+      max: sorted[sorted.length - 1],
+      avg: values.reduce((sum, v) => sum + v, 0) / values.length,
+      p99: sorted[Math.min(p99Index, sorted.length - 1)],
+    }
+  }, [data])
+
+  // Calculate adaptive time unit based on p99 value
+  const adaptiveTimeUnit = useMemo(() => {
+    if (!isTimeUnit(unit) || stats.p99 === 0) {
+      return undefined
+    }
+    return getAdaptiveTimeUnit(stats.p99, unit as TimeUnit)
+  }, [unit, stats.p99])
+
+  // Display unit for the header (adaptive for time, original for others)
+  const displayUnit = adaptiveTimeUnit ? adaptiveTimeUnit.unit : unit
 
   // Handle resize
   useEffect(() => {
@@ -80,9 +119,9 @@ export function TimeSeriesChart({
     return () => resizeObserver.disconnect()
   }, [onWidthChange])
 
-  // Tooltip plugin
+  // Tooltip plugin - values are in display unit, convert back to original for formatting
   const createTooltipPlugin = useCallback(
-    (chartUnit: string): uPlot.Plugin => {
+    (originalUnit: string, conversionFactor: number): uPlot.Plugin => {
       let tooltip: HTMLDivElement
       let tooltipTime: HTMLDivElement
       let tooltipValue: HTMLDivElement
@@ -138,7 +177,14 @@ export function TimeSeriesChart({
               String(date.getMilliseconds()).padStart(3, '0')
 
             tooltipTime.textContent = timeStr
-            tooltipValue.textContent = formatValue(value, chartUnit)
+
+            // Convert back to original unit and pick best unit for display
+            const originalValue = value / conversionFactor
+            if (isTimeUnit(originalUnit)) {
+              tooltipValue.textContent = formatTimeValue(originalValue, originalUnit as TimeUnit)
+            } else {
+              tooltipValue.textContent = formatStatValue(originalValue, originalUnit)
+            }
 
             tooltip.style.left = left + 10 + 'px'
             tooltip.style.top = Math.max(0, top - 60) + 'px'
@@ -166,16 +212,33 @@ export function TimeSeriesChart({
     }
 
     // Transform data to uPlot format
-    const times = data.map((d) => d.time / 1000) // uPlot uses seconds
-    const values = data.map((d) => d.value)
+    // For time units, convert values to the display unit so uPlot generates correct ticks
+    const conversionFactor = adaptiveTimeUnit?.conversionFactor ?? 1
+    const times = data.map((d) => d.time / 1000) // uPlot uses seconds for X axis
+    const values = data.map((d) => d.value * conversionFactor)
+
+    // Convert stats to display unit for scale range
+    const _displayMin = stats.min * conversionFactor
+    const displayP99 = stats.p99 * conversionFactor
+    const displayMax = stats.max * conversionFactor
+
+    const yAxisUnit = adaptiveTimeUnit?.abbrev ?? unit
 
     const opts: uPlot.Options = {
       width: dimensions.width,
       height: dimensions.height,
-      plugins: [createTooltipPlugin(unit)],
+      plugins: [createTooltipPlugin(unit, conversionFactor)],
       scales: {
         x: { time: true },
-        y: { auto: true },
+        y: {
+          // Scale based on user selection: p99 handles outliers gracefully, max shows all data
+          range: (_u: uPlot, dataMin: number, _dataMax: number) => {
+            const minVal = Math.min(0, dataMin)
+            const scaleValue = scaleMode === 'p99' ? displayP99 : displayMax
+            const maxVal = scaleValue * 1.05
+            return [minVal, maxVal]
+          },
+        },
       },
       axes: [
         {
@@ -189,7 +252,18 @@ export function TimeSeriesChart({
           grid: { stroke: '#2a2a35', width: 1 },
           ticks: { stroke: '#2a2a35', width: 1 },
           font: '11px -apple-system, BlinkMacSystemFont, sans-serif',
-          values: (_u: uPlot, vals: number[]) => vals.map((v) => formatValue(v, unit, true)),
+          size: 70, // Ensure enough space for labels
+          values: (_u: uPlot, vals: number[]) => {
+            // Values are already in the display unit, just format them
+            return vals.map((v) => {
+              if (v === 0) return '0 ' + yAxisUnit
+              const absV = Math.abs(v)
+              if (absV >= 100) return Math.round(v) + ' ' + yAxisUnit
+              if (absV >= 10) return v.toFixed(1) + ' ' + yAxisUnit
+              if (absV >= 1) return v.toFixed(2) + ' ' + yAxisUnit
+              return v.toPrecision(2) + ' ' + yAxisUnit
+            })
+          },
         },
       ],
       series: [
@@ -267,14 +341,14 @@ export function TimeSeriesChart({
         chartRef.current = null
       }
     }
-  }, [data, dimensions, title, unit, createTooltipPlugin, onTimeRangeSelect, onAxisBoundsChange])
+  }, [data, dimensions, title, unit, createTooltipPlugin, onTimeRangeSelect, onAxisBoundsChange, stats, adaptiveTimeUnit, scaleMode])
 
   return (
     <div className="flex flex-col h-full bg-app-panel border border-theme-border rounded-lg">
       {/* Chart header */}
       <div className="flex justify-between items-center px-4 py-3 border-b border-theme-border">
         <div className="text-base font-medium text-theme-text-primary">
-          {title} <span className="text-theme-text-muted font-normal">({unit})</span>
+          {title} <span className="text-theme-text-muted font-normal">({displayUnit})</span>
         </div>
         <div className="flex items-center gap-4 text-xs text-theme-text-muted">
           <div className="flex items-center gap-1.5">
@@ -282,13 +356,44 @@ export function TimeSeriesChart({
             <span>{title}</span>
           </div>
           <div>
-            min: <span className="text-theme-text-secondary">{formatValue(stats.min, unit)}</span>
+            min: <span className="text-theme-text-secondary">{formatStatValue(stats.min, unit)}</span>
           </div>
           <div>
-            max: <span className="text-theme-text-secondary">{formatValue(stats.max, unit)}</span>
+            p99: <span className="text-theme-text-secondary">{formatStatValue(stats.p99, unit)}</span>
           </div>
           <div>
-            avg: <span className="text-theme-text-secondary">{formatValue(stats.avg, unit)}</span>
+            max: <span className="text-theme-text-secondary">{formatStatValue(stats.max, unit)}</span>
+          </div>
+          <div>
+            avg: <span className="text-theme-text-secondary">{formatStatValue(stats.avg, unit)}</span>
+          </div>
+          <div className="relative group">
+            <div className="flex border border-theme-border rounded overflow-hidden">
+              <button
+                onClick={() => setScaleMode('p99')}
+                className={`px-2 py-0.5 text-[11px] transition-colors ${
+                  scaleMode === 'p99'
+                    ? 'bg-accent text-white'
+                    : 'text-theme-text-muted hover:text-theme-text-secondary hover:bg-white/5'
+                }`}
+              >
+                P99
+              </button>
+              <button
+                onClick={() => setScaleMode('max')}
+                className={`px-2 py-0.5 text-[11px] border-l border-theme-border transition-colors ${
+                  scaleMode === 'max'
+                    ? 'bg-accent text-white'
+                    : 'text-theme-text-muted hover:text-theme-text-secondary hover:bg-white/5'
+                }`}
+              >
+                Max
+              </button>
+            </div>
+            <div className="absolute bottom-full right-0 mb-2 px-2 py-1.5 bg-app-panel border border-theme-border rounded text-[11px] text-theme-text-secondary opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10 shadow-lg">
+              <div>P99: hides outliers</div>
+              <div>Max: shows all data</div>
+            </div>
           </div>
         </div>
       </div>
