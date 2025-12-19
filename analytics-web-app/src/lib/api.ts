@@ -25,6 +25,71 @@ export class AuthenticationError extends Error {
   }
 }
 
+// Token refresh state to prevent multiple concurrent refresh attempts
+let refreshPromise: Promise<boolean> | null = null
+let lastRefreshAttempt = 0
+const REFRESH_COOLDOWN_MS = 5000 // Don't attempt refresh more than once every 5 seconds
+
+async function refreshToken(): Promise<boolean> {
+  const now = Date.now()
+
+  // Prevent refresh loops: if we just attempted a refresh, don't try again
+  if (now - lastRefreshAttempt < REFRESH_COOLDOWN_MS) {
+    return false
+  }
+
+  // If a refresh is already in progress, wait for it
+  if (refreshPromise) {
+    return refreshPromise
+  }
+
+  lastRefreshAttempt = now
+
+  refreshPromise = (async () => {
+    try {
+      const response = await fetch(`${getApiBase()}/auth/refresh`, {
+        method: 'POST',
+        credentials: 'include',
+      })
+      return response.ok
+    } catch {
+      return false
+    } finally {
+      refreshPromise = null
+    }
+  })()
+
+  return refreshPromise
+}
+
+/**
+ * Fetch wrapper that automatically refreshes the token on 401 responses.
+ * If the token refresh succeeds, the original request is retried once.
+ * Includes cooldown to prevent refresh loops.
+ */
+export async function authenticatedFetch(
+  input: RequestInfo | URL,
+  init?: RequestInit
+): Promise<Response> {
+  const response = await fetch(input, {
+    ...init,
+    credentials: 'include',
+  })
+
+  if (response.status === 401) {
+    const refreshed = await refreshToken()
+    if (refreshed) {
+      // Retry the original request with refreshed token (using plain fetch, not recursive)
+      return fetch(input, {
+        ...init,
+        credentials: 'include',
+      })
+    }
+  }
+
+  return response
+}
+
 /** Convert SQL query response to array of row objects */
 export function toRowObjects(result: SqlQueryResponse): SqlRow[] {
   return result.rows.map(row =>
@@ -52,12 +117,11 @@ export async function generateTrace(
   onProgress?: (update: ProgressUpdate) => void,
   options?: GenerateTraceOptions
 ): Promise<ArrayBuffer | void> {
-  const response = await fetch(`${getApiBase()}/perfetto/${processId}/generate`, {
+  const response = await authenticatedFetch(`${getApiBase()}/perfetto/${processId}/generate`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
-    credentials: 'include',
     body: JSON.stringify(request)
   })
 
@@ -171,12 +235,11 @@ export async function generateTrace(
 }
 
 export async function executeSqlQuery(request: SqlQueryRequest): Promise<SqlQueryResponse> {
-  const response = await fetch(`${getApiBase()}/query`, {
+  const response = await authenticatedFetch(`${getApiBase()}/query`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
-    credentials: 'include',
     body: JSON.stringify(request),
   })
 
