@@ -214,6 +214,9 @@ class FlightSQLClient:
                 stacklevel=2,
             )
 
+        # Normalize URI scheme for Arrow Flight
+        uri = self._normalize_uri(uri)
+
         fh = open(certifi.where(), "r")
         cert = fh.read()
         fh.close()
@@ -228,6 +231,21 @@ class FlightSQLClient:
             location=uri, tls_root_certs=cert, middleware=[factory]
         )
         self.__preserve_dictionary = preserve_dictionary
+
+    @staticmethod
+    def _normalize_uri(uri: str) -> str:
+        """Normalize URI scheme for Arrow Flight.
+
+        Arrow Flight uses gRPC protocols, not HTTP. This method converts
+        common HTTP-style URIs to the correct gRPC schemes:
+        - https:// -> grpc+tls://
+        - http:// -> grpc://
+        """
+        if uri.startswith("https://"):
+            return "grpc+tls://" + uri[8:]
+        elif uri.startswith("http://"):
+            return "grpc://" + uri[7:]
+        return uri
 
     def _prepare_table_for_pandas(self, table):
         """Prepare Arrow table with dictionary columns for pandas conversion.
