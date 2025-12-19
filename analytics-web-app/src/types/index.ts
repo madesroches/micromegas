@@ -46,3 +46,14 @@ export interface ThreadCoverage {
   threadName: string;
   segments: ThreadSegment[];
 }
+
+export interface PropertySegment {
+  value: string;
+  begin: number; // ms timestamp
+  end: number; // ms timestamp
+}
+
+export interface PropertyTimelineData {
+  propertyName: string;
+  segments: PropertySegment[];
+}

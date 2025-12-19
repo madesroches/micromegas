@@ -15,10 +15,14 @@ export interface ChartAxisBounds {
   width: number // Plot area width
 }
 
+export type ScaleMode = 'p99' | 'max'
+
 interface TimeSeriesChartProps {
   data: { time: number; value: number }[]
   title: string
   unit: string
+  scaleMode?: ScaleMode
+  onScaleModeChange?: (mode: ScaleMode) => void
   onTimeRangeSelect?: (from: Date, to: Date) => void
   onWidthChange?: (width: number) => void
   onAxisBoundsChange?: (bounds: ChartAxisBounds) => void
@@ -54,12 +58,12 @@ function formatStatValue(value: number, unit: string): string {
   return formatValue(value, unit, false)
 }
 
-type ScaleMode = 'p99' | 'max'
-
 export function TimeSeriesChart({
   data,
   title,
   unit,
+  scaleMode: scaleModeFromProps,
+  onScaleModeChange,
   onTimeRangeSelect,
   onWidthChange,
   onAxisBoundsChange,
@@ -67,7 +71,11 @@ export function TimeSeriesChart({
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<uPlot | null>(null)
   const [dimensions, setDimensions] = useState({ width: 800, height: 300 })
-  const [scaleMode, setScaleMode] = useState<ScaleMode>('p99')
+  const [internalScaleMode, setInternalScaleMode] = useState<ScaleMode>('p99')
+
+  // Use prop if provided, otherwise use internal state
+  const scaleMode = scaleModeFromProps ?? internalScaleMode
+  const setScaleMode = onScaleModeChange ?? setInternalScaleMode
 
   // Calculate stats including percentile for scaling
   const stats = useMemo(() => {
@@ -186,8 +194,13 @@ export function TimeSeriesChart({
               tooltipValue.textContent = formatStatValue(originalValue, originalUnit)
             }
 
+            // Position tooltip - flip below cursor if near top of chart
+            const tooltipHeight = 60
+            const flipThreshold = tooltipHeight + 10
+            const posTop = top < flipThreshold ? top + 20 : top - tooltipHeight
+
             tooltip.style.left = left + 10 + 'px'
-            tooltip.style.top = Math.max(0, top - 60) + 'px'
+            tooltip.style.top = posTop + 'px'
             tooltip.style.display = 'block'
           },
           destroy: () => {
@@ -246,6 +259,7 @@ export function TimeSeriesChart({
           grid: { stroke: '#2a2a35', width: 1 },
           ticks: { stroke: '#2a2a35', width: 1 },
           font: '11px -apple-system, BlinkMacSystemFont, sans-serif',
+          size: 50, // Ensure enough space for multi-line date/time labels
         },
         {
           stroke: '#6a6a7a',

@@ -9,7 +9,8 @@ import { AuthGuard } from '@/components/AuthGuard'
 import { CopyableProcessId } from '@/components/CopyableProcessId'
 import { QueryEditor } from '@/components/QueryEditor'
 import { ErrorBanner } from '@/components/ErrorBanner'
-import { TimeSeriesChart, ChartAxisBounds } from '@/components/TimeSeriesChart'
+import { ChartAxisBounds } from '@/components/TimeSeriesChart'
+import { MetricsChart, ScaleMode } from '@/components/MetricsChart'
 import { ThreadCoverageTimeline } from '@/components/ThreadCoverageTimeline'
 import { executeSqlQuery, toRowObjects, generateTrace } from '@/lib/api'
 import { openInPerfetto, PerfettoError } from '@/lib/perfetto'
@@ -98,7 +99,18 @@ function PerformanceAnalysisContent() {
   const pathname = location.pathname
   const processId = searchParams.get('process_id')
   const measureParam = searchParams.get('measure')
+  const propertiesParam = searchParams.get('properties')
+  const scaleParam = searchParams.get('scale')
   const { parsed: timeRange, apiTimeRange, setTimeRange } = useTimeRange()
+
+  // Parse selected properties from URL
+  const selectedProperties = useMemo(() => {
+    if (!propertiesParam) return []
+    return propertiesParam.split(',').filter(Boolean)
+  }, [propertiesParam])
+
+  // Parse scale mode from URL (default to p99)
+  const scaleMode: ScaleMode = scaleParam === 'max' ? 'max' : 'p99'
 
   const [measures, setMeasures] = useState<Measure[]>([])
   const [selectedMeasure, setSelectedMeasure] = useState<string | null>(measureParam)
@@ -309,6 +321,43 @@ function PerformanceAnalysisContent() {
       setSelectedMeasure(measure)
       const params = new URLSearchParams(searchParams.toString())
       params.set('measure', measure)
+      navigate(`${pathname}?${params.toString()}`)
+    },
+    [searchParams, navigate, pathname]
+  )
+
+  const handleAddProperty = useCallback(
+    (key: string) => {
+      const newProperties = [...selectedProperties, key]
+      const params = new URLSearchParams(searchParams.toString())
+      params.set('properties', newProperties.join(','))
+      navigate(`${pathname}?${params.toString()}`)
+    },
+    [selectedProperties, searchParams, navigate, pathname]
+  )
+
+  const handleRemoveProperty = useCallback(
+    (key: string) => {
+      const newProperties = selectedProperties.filter((k) => k !== key)
+      const params = new URLSearchParams(searchParams.toString())
+      if (newProperties.length > 0) {
+        params.set('properties', newProperties.join(','))
+      } else {
+        params.delete('properties')
+      }
+      navigate(`${pathname}?${params.toString()}`)
+    },
+    [selectedProperties, searchParams, navigate, pathname]
+  )
+
+  const handleScaleModeChange = useCallback(
+    (mode: ScaleMode) => {
+      const params = new URLSearchParams(searchParams.toString())
+      if (mode === 'p99') {
+        params.delete('scale') // p99 is default, no need to persist
+      } else {
+        params.set('scale', mode)
+      }
       navigate(`${pathname}?${params.toString()}`)
     },
     [searchParams, navigate, pathname]
@@ -696,12 +745,21 @@ function PerformanceAnalysisContent() {
           </div>
         )}
 
-        <div className="h-[350px] mb-4">
+        <div className="mb-4">
           {selectedMeasure && chartData.length > 0 ? (
-            <TimeSeriesChart
+            <MetricsChart
               data={chartData}
               title={selectedMeasure}
               unit={selectedMeasureInfo?.unit || ''}
+              processId={processId}
+              measureName={selectedMeasure}
+              apiTimeRange={apiTimeRange}
+              binInterval={binInterval}
+              selectedProperties={selectedProperties}
+              onAddProperty={handleAddProperty}
+              onRemoveProperty={handleRemoveProperty}
+              scaleMode={scaleMode}
+              onScaleModeChange={handleScaleModeChange}
               onTimeRangeSelect={handleTimeRangeSelect}
               onWidthChange={handleChartWidthChange}
               onAxisBoundsChange={handleAxisBoundsChange}
@@ -769,7 +827,7 @@ function PerformanceAnalysisContent() {
 
         {chartData.length > 0 && (
           <div className="text-xs text-theme-text-muted text-center mt-2">
-            Drag on the chart or thread coverage to zoom into a time range
+            Drag on the chart, property timeline, or thread coverage to zoom into a time range
           </div>
         )}
       </div>

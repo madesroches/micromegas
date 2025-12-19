@@ -1,0 +1,636 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Property Timeline - Swimlane with Property Selector</title>
+  <style>
+    :root {
+      --app-bg: #0a0a0f;
+      --panel-bg: #12121a;
+      --card-bg: #1a1a2e;
+      --border-color: #2a2a3e;
+      --border-hover: #3a3a4e;
+      --text-primary: #e7e9ea;
+      --text-secondary: #9ca3af;
+      --text-muted: #6b7280;
+      --brand-rust: #bf360c;
+      --brand-blue: #1565c0;
+      --brand-gold: #ffb300;
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--app-bg);
+      color: var(--text-primary);
+      padding: 20px;
+    }
+
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    /* Simulated chart area */
+    .chart-area {
+      background: var(--panel-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+
+    .chart-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+
+    .chart-title {
+      font-size: 14px;
+      font-weight: 500;
+    }
+
+    .chart-stats {
+      display: flex;
+      gap: 16px;
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+
+    .chart-stats span {
+      color: var(--brand-rust);
+    }
+
+    .chart-placeholder {
+      height: 200px;
+      background: linear-gradient(to right, var(--card-bg) 70px, transparent 70px);
+      border-radius: 4px;
+      position: relative;
+      display: flex;
+      align-items: flex-end;
+      padding-left: 70px;
+    }
+
+    .y-axis {
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: 70px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: 10px 8px;
+      font-size: 11px;
+      color: var(--text-muted);
+      text-align: right;
+    }
+
+    .chart-line {
+      flex: 1;
+      height: 100%;
+      position: relative;
+    }
+
+    .chart-line svg {
+      width: 100%;
+      height: 100%;
+    }
+
+    /* Property Timeline Panel */
+    .property-timeline-panel {
+      background: var(--panel-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .panel-header {
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border-color);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .panel-title {
+      font-size: 14px;
+      font-weight: 500;
+    }
+
+    .panel-subtitle {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-top: 2px;
+    }
+
+    /* Property selector dropdown */
+    .property-selector {
+      position: relative;
+    }
+
+    .selector-button {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 12px;
+      background: var(--card-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      color: var(--text-secondary);
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .selector-button:hover {
+      border-color: var(--border-hover);
+      color: var(--text-primary);
+    }
+
+    .selector-button svg {
+      width: 14px;
+      height: 14px;
+    }
+
+    .selector-dropdown {
+      position: absolute;
+      top: 100%;
+      right: 0;
+      margin-top: 4px;
+      background: var(--card-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      min-width: 200px;
+      max-height: 300px;
+      overflow-y: auto;
+      z-index: 100;
+      display: none;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+    }
+
+    .selector-dropdown.open {
+      display: block;
+    }
+
+    .dropdown-header {
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--border-color);
+      font-size: 10px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .dropdown-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      font-size: 12px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    .dropdown-item:hover {
+      background: rgba(255,255,255,0.05);
+    }
+
+    .dropdown-item.selected {
+      color: var(--brand-blue);
+    }
+
+    .dropdown-item .check {
+      width: 14px;
+      height: 14px;
+      opacity: 0;
+    }
+
+    .dropdown-item.selected .check {
+      opacity: 1;
+    }
+
+    /* Empty state */
+    .empty-state {
+      padding: 40px 20px;
+      text-align: center;
+      color: var(--text-muted);
+    }
+
+    .empty-state-icon {
+      width: 48px;
+      height: 48px;
+      margin: 0 auto 12px;
+      opacity: 0.5;
+    }
+
+    .empty-state-title {
+      font-size: 13px;
+      color: var(--text-secondary);
+      margin-bottom: 4px;
+    }
+
+    .empty-state-desc {
+      font-size: 11px;
+    }
+
+    /* Swimlane rows */
+    .timeline-content {
+      min-height: 60px;
+    }
+
+    .property-row {
+      display: flex;
+      align-items: center;
+      border-bottom: 1px solid var(--border-color);
+      min-height: 36px;
+    }
+
+    .property-row:last-child {
+      border-bottom: none;
+    }
+
+    .property-label {
+      width: 70px;
+      padding: 8px 12px;
+      font-size: 11px;
+      color: var(--text-secondary);
+      background: var(--card-bg);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 100%;
+      flex-shrink: 0;
+    }
+
+    .remove-btn {
+      width: 14px;
+      height: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--text-muted);
+      cursor: pointer;
+      opacity: 0;
+      transition: opacity 0.2s, color 0.2s;
+    }
+
+    .property-row:hover .remove-btn {
+      opacity: 1;
+    }
+
+    .remove-btn:hover {
+      color: var(--brand-rust);
+    }
+
+    .property-timeline {
+      flex: 1;
+      height: 28px;
+      display: flex;
+      align-items: center;
+      padding: 0 4px;
+      gap: 2px;
+      position: relative;
+    }
+
+    /* Segments - all same color now */
+    .segment {
+      height: 20px;
+      border-radius: 3px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 10px;
+      font-weight: 500;
+      color: white;
+      background: var(--brand-blue);
+      transition: opacity 0.2s;
+      cursor: pointer;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      padding: 0 6px;
+    }
+
+    .segment:hover {
+      opacity: 0.85;
+      box-shadow: 0 0 0 2px var(--brand-gold);
+    }
+
+    /* Time axis */
+    .time-axis {
+      display: flex;
+      padding-left: 70px;
+      padding-right: 4px;
+      padding-top: 8px;
+      padding-bottom: 8px;
+      border-top: 1px solid var(--border-color);
+    }
+
+    .time-axis-track {
+      flex: 1;
+      display: flex;
+      justify-content: space-between;
+      font-size: 10px;
+      color: var(--text-muted);
+    }
+
+    /* Tooltip */
+    .tooltip {
+      position: fixed;
+      background: var(--card-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      padding: 8px 12px;
+      font-size: 12px;
+      pointer-events: none;
+      z-index: 100;
+      display: none;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+    }
+
+    .tooltip-title {
+      color: var(--text-muted);
+      font-size: 10px;
+      margin-bottom: 4px;
+    }
+
+    .tooltip-value {
+      color: var(--text-primary);
+      font-weight: 500;
+    }
+
+    .tooltip-time {
+      color: var(--text-secondary);
+      font-size: 10px;
+      margin-top: 4px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <!-- Simulated Chart -->
+    <div class="chart-area">
+      <div class="chart-header">
+        <div class="chart-title">frame_time</div>
+        <div class="chart-stats">
+          min: <span>8.2ms</span> · p99: <span>18.4ms</span> · max: <span>42.1ms</span> · avg: <span>12.3ms</span>
+        </div>
+      </div>
+      <div class="chart-placeholder">
+        <div class="y-axis">
+          <span>40ms</span>
+          <span>30ms</span>
+          <span>20ms</span>
+          <span>10ms</span>
+          <span>0ms</span>
+        </div>
+        <div class="chart-line">
+          <svg viewBox="0 0 1000 180" preserveAspectRatio="none">
+            <defs>
+              <linearGradient id="fillGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+                <stop offset="0%" style="stop-color:#bf360c;stop-opacity:0.3"/>
+                <stop offset="100%" style="stop-color:#bf360c;stop-opacity:0.05"/>
+              </linearGradient>
+            </defs>
+            <path d="M0,140 Q50,130 100,120 T200,100 T300,90 T400,110 T500,80 T600,95 T700,85 T800,100 T900,90 T1000,95 L1000,180 L0,180 Z" fill="url(#fillGradient)"/>
+            <path d="M0,140 Q50,130 100,120 T200,100 T300,90 T400,110 T500,80 T600,95 T700,85 T800,100 T900,90 T1000,95" stroke="#bf360c" stroke-width="2" fill="none"/>
+          </svg>
+        </div>
+      </div>
+    </div>
+
+    <!-- Property Timeline Panel -->
+    <div class="property-timeline-panel">
+      <div class="panel-header">
+        <div class="panel-title">Properties</div>
+        <div class="property-selector">
+          <button class="selector-button" onclick="toggleDropdown()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="12" y1="5" x2="12" y2="19"></line>
+              <line x1="5" y1="12" x2="19" y2="12"></line>
+            </svg>
+            Add property
+          </button>
+          <div class="selector-dropdown" id="dropdown">
+            <div class="dropdown-header">Available Properties</div>
+            <div class="dropdown-item" data-prop="gpu_vendor" onclick="toggleProperty(this)">
+              <svg class="check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="20 6 9 17 4 12"></polyline>
+              </svg>
+              gpu_vendor
+            </div>
+            <div class="dropdown-item" data-prop="resolution" onclick="toggleProperty(this)">
+              <svg class="check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="20 6 9 17 4 12"></polyline>
+              </svg>
+              resolution
+            </div>
+            <div class="dropdown-item" data-prop="vsync" onclick="toggleProperty(this)">
+              <svg class="check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="20 6 9 17 4 12"></polyline>
+              </svg>
+              vsync
+            </div>
+            <div class="dropdown-item" data-prop="target_fps" onclick="toggleProperty(this)">
+              <svg class="check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="20 6 9 17 4 12"></polyline>
+              </svg>
+              target_fps
+            </div>
+            <div class="dropdown-item" data-prop="draw_calls" onclick="toggleProperty(this)">
+              <svg class="check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="20 6 9 17 4 12"></polyline>
+              </svg>
+              draw_calls
+            </div>
+            <div class="dropdown-item" data-prop="scene" onclick="toggleProperty(this)">
+              <svg class="check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="20 6 9 17 4 12"></polyline>
+              </svg>
+              scene
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Timeline Content -->
+      <div class="timeline-content" id="timeline-content">
+        <!-- Empty state shown by default -->
+        <div class="empty-state" id="empty-state">
+          <svg class="empty-state-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <rect x="3" y="3" width="18" height="18" rx="2"/>
+            <line x1="3" y1="9" x2="21" y2="9"/>
+            <line x1="3" y1="15" x2="21" y2="15"/>
+            <line x1="9" y1="3" x2="9" y2="21"/>
+          </svg>
+          <div class="empty-state-title">No properties selected</div>
+          <div class="empty-state-desc">Click "Add Property" to show property values over time</div>
+        </div>
+
+        <!-- Property rows container (hidden initially) -->
+        <div id="property-rows"></div>
+      </div>
+
+      <!-- Time Axis -->
+      <div class="time-axis" id="time-axis" style="display: none;">
+        <div class="time-axis-track">
+          <span>14:32:00</span>
+          <span>14:32:15</span>
+          <span>14:32:30</span>
+          <span>14:32:45</span>
+          <span>14:33:00</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="tooltip" id="tooltip"></div>
+
+  <script>
+    // Sample data for each property
+    const propertyData = {
+      gpu_vendor: [
+        { value: 'NVIDIA', width: '35%' },
+        { value: 'AMD', width: '25%' },
+        { value: 'NVIDIA', width: '40%' }
+      ],
+      resolution: [
+        { value: '1920x1080', width: '50%' },
+        { value: '2560x1440', width: '50%' }
+      ],
+      vsync: [
+        { value: 'true', width: '30%' },
+        { value: 'false', width: '45%' },
+        { value: 'true', width: '25%' }
+      ],
+      target_fps: [
+        { value: '60', width: '40%' },
+        { value: '120', width: '35%' },
+        { value: '60', width: '25%' }
+      ],
+      draw_calls: [
+        { value: '1240', width: '20%' },
+        { value: '1580', width: '30%' },
+        { value: '1320', width: '25%' },
+        { value: '1450', width: '25%' }
+      ],
+      scene: [
+        { value: 'menu', width: '25%' },
+        { value: 'gameplay', width: '45%' },
+        { value: 'cutscene', width: '30%' }
+      ]
+    };
+
+    const selectedProperties = new Set();
+
+    function toggleDropdown() {
+      document.getElementById('dropdown').classList.toggle('open');
+    }
+
+    // Close dropdown when clicking outside
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('.property-selector')) {
+        document.getElementById('dropdown').classList.remove('open');
+      }
+    });
+
+    function toggleProperty(element) {
+      const prop = element.dataset.prop;
+
+      if (selectedProperties.has(prop)) {
+        selectedProperties.delete(prop);
+        element.classList.remove('selected');
+      } else {
+        selectedProperties.add(prop);
+        element.classList.add('selected');
+      }
+
+      renderTimeline();
+    }
+
+    function removeProperty(prop) {
+      selectedProperties.delete(prop);
+      document.querySelector(`[data-prop="${prop}"]`).classList.remove('selected');
+      renderTimeline();
+    }
+
+    function renderTimeline() {
+      const emptyState = document.getElementById('empty-state');
+      const rowsContainer = document.getElementById('property-rows');
+      const timeAxis = document.getElementById('time-axis');
+
+      if (selectedProperties.size === 0) {
+        emptyState.style.display = 'block';
+        rowsContainer.innerHTML = '';
+        timeAxis.style.display = 'none';
+        return;
+      }
+
+      emptyState.style.display = 'none';
+      timeAxis.style.display = 'flex';
+
+      let html = '';
+      selectedProperties.forEach(prop => {
+        const data = propertyData[prop];
+        const segments = data.map(d =>
+          `<div class="segment" style="width: ${d.width}">${d.value}</div>`
+        ).join('');
+
+        html += `
+          <div class="property-row">
+            <div class="property-label">
+              <span>${prop}</span>
+              <span class="remove-btn" onclick="removeProperty('${prop}')">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <line x1="18" y1="6" x2="6" y2="18"></line>
+                  <line x1="6" y1="6" x2="18" y2="18"></line>
+                </svg>
+              </span>
+            </div>
+            <div class="property-timeline">${segments}</div>
+          </div>
+        `;
+      });
+
+      rowsContainer.innerHTML = html;
+      attachTooltips();
+    }
+
+    function attachTooltips() {
+      const segments = document.querySelectorAll('.segment');
+      const tooltip = document.getElementById('tooltip');
+
+      segments.forEach(segment => {
+        segment.addEventListener('mouseenter', (e) => {
+          const value = segment.textContent;
+          const property = segment.closest('.property-row').querySelector('.property-label span').textContent;
+          tooltip.innerHTML = `
+            <div class="tooltip-title">${property}</div>
+            <div class="tooltip-value">${value}</div>
+            <div class="tooltip-time">14:32:12 → 14:32:28</div>
+          `;
+          tooltip.style.display = 'block';
+        });
+
+        segment.addEventListener('mousemove', (e) => {
+          tooltip.style.left = e.clientX + 15 + 'px';
+          tooltip.style.top = e.clientY - 10 + 'px';
+        });
+
+        segment.addEventListener('mouseleave', () => {
+          tooltip.style.display = 'none';
+        });
+      });
+    }
+  </script>
+</body>
+</html>

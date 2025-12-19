@@ -8,7 +8,7 @@ import { AuthGuard } from '@/components/AuthGuard'
 import { CopyableProcessId } from '@/components/CopyableProcessId'
 import { QueryEditor } from '@/components/QueryEditor'
 import { ErrorBanner } from '@/components/ErrorBanner'
-import { TimeSeriesChart } from '@/components/TimeSeriesChart'
+import { MetricsChart } from '@/components/MetricsChart'
 import { executeSqlQuery, toRowObjects } from '@/lib/api'
 import { useTimeRange } from '@/hooks/useTimeRange'
 
@@ -74,7 +74,14 @@ function ProcessMetricsContent() {
   const pathname = location.pathname
   const processId = searchParams.get('process_id')
   const measureParam = searchParams.get('measure')
+  const propertiesParam = searchParams.get('properties')
   const { parsed: timeRange, apiTimeRange, setTimeRange } = useTimeRange()
+
+  // Parse selected properties from URL
+  const selectedProperties = useMemo(() => {
+    if (!propertiesParam) return []
+    return propertiesParam.split(',').filter(Boolean)
+  }, [propertiesParam])
 
   const [measures, setMeasures] = useState<Measure[]>([])
   const [selectedMeasure, setSelectedMeasure] = useState<string | null>(measureParam)
@@ -194,6 +201,30 @@ function ProcessMetricsContent() {
       navigate(`${pathname}?${params.toString()}`)
     },
     [searchParams, navigate, pathname]
+  )
+
+  const handleAddProperty = useCallback(
+    (key: string) => {
+      const newProperties = [...selectedProperties, key]
+      const params = new URLSearchParams(searchParams.toString())
+      params.set('properties', newProperties.join(','))
+      navigate(`${pathname}?${params.toString()}`)
+    },
+    [selectedProperties, searchParams, navigate, pathname]
+  )
+
+  const handleRemoveProperty = useCallback(
+    (key: string) => {
+      const newProperties = selectedProperties.filter((k) => k !== key)
+      const params = new URLSearchParams(searchParams.toString())
+      if (newProperties.length > 0) {
+        params.set('properties', newProperties.join(','))
+      } else {
+        params.delete('properties')
+      }
+      navigate(`${pathname}?${params.toString()}`)
+    },
+    [selectedProperties, searchParams, navigate, pathname]
   )
 
   const hasLoadedProcessRef = useRef(false)
@@ -367,10 +398,17 @@ function ProcessMetricsContent() {
 
         <div className="flex-1 min-h-[400px]">
           {selectedMeasure && chartData.length > 0 ? (
-            <TimeSeriesChart
+            <MetricsChart
               data={chartData}
               title={selectedMeasure}
               unit={selectedMeasureInfo?.unit || ''}
+              processId={processId}
+              measureName={selectedMeasure}
+              apiTimeRange={apiTimeRange}
+              binInterval={binInterval}
+              selectedProperties={selectedProperties}
+              onAddProperty={handleAddProperty}
+              onRemoveProperty={handleRemoveProperty}
               onTimeRangeSelect={handleTimeRangeSelect}
               onWidthChange={handleChartWidthChange}
             />
@@ -425,6 +463,12 @@ function ProcessMetricsContent() {
             </div>
           ) : null}
         </div>
+
+        {chartData.length > 0 && (
+          <div className="text-xs text-theme-text-muted text-center mt-2">
+            Drag on the chart or property timeline to zoom into a time range
+          </div>
+        )}
       </div>
     </PageLayout>
   )
