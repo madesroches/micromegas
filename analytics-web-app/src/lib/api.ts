@@ -38,12 +38,13 @@ async function refreshToken(): Promise<boolean> {
     return false
   }
 
+  // Set timestamp immediately to prevent race conditions with concurrent calls
+  lastRefreshAttempt = now
+
   // If a refresh is already in progress, wait for it
   if (refreshPromise) {
     return refreshPromise
   }
-
-  lastRefreshAttempt = now
 
   refreshPromise = (async () => {
     try {
@@ -126,6 +127,7 @@ export async function generateTrace(
   })
 
   if (!response.ok) {
+    // 401 check handles the case where token refresh failed - user must re-authenticate
     if (response.status === 401) {
       throw new AuthenticationError()
     }
@@ -244,6 +246,7 @@ export async function executeSqlQuery(request: SqlQueryRequest): Promise<SqlQuer
   })
 
   if (!response.ok) {
+    // 401 check handles the case where token refresh failed - user must re-authenticate
     if (response.status === 401) {
       throw new AuthenticationError()
     }
