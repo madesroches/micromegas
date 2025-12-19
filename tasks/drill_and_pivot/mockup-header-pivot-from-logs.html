@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pivot Button - Logs View</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0a0a0f;
+      color: #e0e0e0;
+      min-height: 100vh;
+    }
+    .container { display: flex; height: 100vh; }
+    .sidebar {
+      width: 56px;
+      background: #0f0f14;
+      border-right: 1px solid #2a2a35;
+      padding: 12px 8px;
+    }
+    .sidebar-icon {
+      width: 40px; height: 40px;
+      display: flex; align-items: center; justify-content: center;
+      background: #1a1a24;
+      border-radius: 6px;
+      color: #1565c0;
+      cursor: pointer;
+    }
+    .main { flex: 1; display: flex; flex-direction: column; }
+    .header {
+      height: 48px;
+      background: #0f0f14;
+      border-bottom: 1px solid #2a2a35;
+      display: flex;
+      align-items: center;
+      padding: 0 16px;
+      gap: 16px;
+    }
+    .header h1 { font-size: 14px; color: #e0e0e0; }
+
+    .header-right {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    /* Split button */
+    .pivot-split-btn {
+      display: flex;
+      position: relative;
+    }
+    .pivot-main-btn {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 12px;
+      background: #1a1a24;
+      border: 1px solid #2a2a35;
+      border-right: none;
+      border-radius: 4px 0 0 4px;
+      color: #e0e0e0;
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .pivot-main-btn:hover {
+      background: #2a2a35;
+      border-color: #3a3a45;
+    }
+    .pivot-main-btn svg {
+      width: 14px;
+      height: 14px;
+      color: #1565c0;
+    }
+    .pivot-dropdown-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 6px 8px;
+      background: #1a1a24;
+      border: 1px solid #2a2a35;
+      border-radius: 0 4px 4px 0;
+      color: #888;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .pivot-dropdown-btn:hover {
+      background: #2a2a35;
+      border-color: #3a3a45;
+    }
+    .pivot-dropdown-btn svg {
+      width: 12px;
+      height: 12px;
+    }
+    .pivot-dropdown {
+      position: absolute;
+      top: 100%;
+      right: 0;
+      margin-top: 4px;
+      background: #1a1a24;
+      border: 1px solid #2a2a35;
+      border-radius: 6px;
+      min-width: 180px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+      z-index: 100;
+      overflow: hidden;
+    }
+    .pivot-dropdown-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 12px;
+      cursor: pointer;
+      transition: background 0.15s;
+      font-size: 13px;
+    }
+    .pivot-dropdown-item:hover {
+      background: #2a2a35;
+    }
+    .pivot-dropdown-item svg {
+      width: 14px;
+      height: 14px;
+      color: #888;
+    }
+    .pivot-dropdown-item:hover svg {
+      color: #1565c0;
+    }
+
+    .time-range {
+      padding: 6px 12px;
+      background: #1a1a24;
+      border: 1px solid #2a2a35;
+      border-radius: 4px;
+      color: #e0e0e0;
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    .content { flex: 1; padding: 24px; display: flex; flex-direction: column; }
+    .page-title { font-size: 20px; margin-bottom: 8px; }
+    .process-id {
+      font-family: monospace;
+      font-size: 12px;
+      color: #888;
+      margin-bottom: 20px;
+    }
+    .controls {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    .search-input {
+      width: 200px;
+      padding: 8px 12px;
+      background: #1a1a24;
+      border: 1px solid #2a2a35;
+      border-radius: 4px;
+      color: #e0e0e0;
+      font-size: 13px;
+    }
+    select {
+      padding: 8px 12px;
+      background: #1a1a24;
+      border: 1px solid #2a2a35;
+      border-radius: 4px;
+      color: #e0e0e0;
+      font-size: 13px;
+    }
+    .log-container {
+      flex: 1;
+      background: #0f0f14;
+      border: 1px solid #2a2a35;
+      border-radius: 8px;
+      overflow: hidden;
+      font-family: monospace;
+      font-size: 11px;
+    }
+    .log-line {
+      display: flex;
+      padding: 4px 12px;
+      border-bottom: 1px solid #1a1a24;
+    }
+    .log-line:hover {
+      background: #1a1a24;
+    }
+    .log-time {
+      color: #888;
+      width: 180px;
+      flex-shrink: 0;
+    }
+    .log-level {
+      width: 50px;
+      flex-shrink: 0;
+      font-weight: 600;
+    }
+    .log-level.info { color: #1565c0; }
+    .log-level.warn { color: #ffb300; }
+    .log-level.error { color: #f44336; }
+    .log-target {
+      color: #ffb300;
+      width: 150px;
+      flex-shrink: 0;
+    }
+    .log-msg {
+      color: #e0e0e0;
+      flex: 1;
+    }
+
+    .description {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: #1565c0;
+      color: white;
+      padding: 20px 24px;
+    }
+    .description h3 { font-size: 16px; margin-bottom: 8px; }
+    .description p { font-size: 14px; line-height: 1.6; opacity: 0.9; }
+    .description ul { margin-top: 8px; padding-left: 20px; }
+    .description li { font-size: 13px; margin-bottom: 4px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="sidebar">
+      <div class="sidebar-icon">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="3" y="3" width="7" height="7" rx="1"/>
+          <rect x="14" y="3" width="7" height="7" rx="1"/>
+          <rect x="3" y="14" width="7" height="7" rx="1"/>
+          <rect x="14" y="14" width="7" height="7" rx="1"/>
+        </svg>
+      </div>
+    </div>
+    <div class="main">
+      <div class="header">
+        <h1>Micromegas</h1>
+        <div class="header-right">
+          <div class="pivot-split-btn">
+            <button class="pivot-main-btn">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="12" y1="20" x2="12" y2="10"/>
+                <line x1="18" y1="20" x2="18" y2="4"/>
+                <line x1="6" y1="20" x2="6" y2="16"/>
+              </svg>
+              <span>Metrics</span>
+            </button>
+            <button class="pivot-dropdown-btn">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="6 9 12 15 18 9"/>
+              </svg>
+            </button>
+            <div class="pivot-dropdown">
+              <div class="pivot-dropdown-item">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+                </svg>
+                <span>Performance Analytics</span>
+              </div>
+            </div>
+          </div>
+          <div class="time-range">10:15 - 10:30</div>
+        </div>
+      </div>
+      <div class="content">
+        <h2 class="page-title">Process Log</h2>
+        <div class="process-id">d290f1ee-6c54-4b01-90e6-d701748f0851</div>
+
+        <div class="controls">
+          <input type="text" class="search-input" placeholder="Search target or message...">
+          <select>
+            <option>Max Level: TRACE (all)</option>
+            <option>Max Level: DEBUG</option>
+            <option>Max Level: INFO</option>
+          </select>
+        </div>
+
+        <div class="log-container">
+          <div class="log-line">
+            <span class="log-time">2024-01-15 10:15:23.456</span>
+            <span class="log-level info">INFO</span>
+            <span class="log-target">http_server</span>
+            <span class="log-msg">Request received: GET /api/users</span>
+          </div>
+          <div class="log-line">
+            <span class="log-time">2024-01-15 10:15:24.123</span>
+            <span class="log-level info">INFO</span>
+            <span class="log-target">database</span>
+            <span class="log-msg">Query executed in 45ms</span>
+          </div>
+          <div class="log-line">
+            <span class="log-time">2024-01-15 10:15:25.789</span>
+            <span class="log-level warn">WARN</span>
+            <span class="log-target">cache</span>
+            <span class="log-msg">Cache miss for key: user_123</span>
+          </div>
+          <div class="log-line">
+            <span class="log-time">2024-01-15 10:15:26.234</span>
+            <span class="log-level error">ERROR</span>
+            <span class="log-target">http_client</span>
+            <span class="log-msg">Connection timeout to external service</span>
+          </div>
+          <div class="log-line">
+            <span class="log-time">2024-01-15 10:15:27.567</span>
+            <span class="log-level info">INFO</span>
+            <span class="log-target">http_server</span>
+            <span class="log-msg">Response sent: 200 OK</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="description">
+    <h3>Logs View: Pivot Split Button</h3>
+    <p>From Log, the primary action is "Metrics" (one click). Dropdown reveals "Performance Analytics" as secondary option.</p>
+    <ul>
+      <li><strong>Main button:</strong> Navigates to Metrics with same process + time range</li>
+      <li><strong>Dropdown:</strong> Performance Analytics as alternative pivot target</li>
+      <li><strong>Location:</strong> Header, left of time range picker</li>
+    </ul>
+  </div>
+</body>
+</html>
