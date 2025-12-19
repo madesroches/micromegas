@@ -1,4 +1,4 @@
-# Metrics Zoom Out - Implementation Plan
+# Process-Aware Time Picker - Implementation Plan
 
 Based on mockup: `mockup_h_picker_with_toggle.html`
 
