@@ -1,6 +1,7 @@
 import { useState, useCallback } from 'react'
 import { TimeSeriesChart, ChartAxisBounds } from './TimeSeriesChart'
 import { PropertyTimeline } from './PropertyTimeline'
+import { ErrorBanner } from './ErrorBanner'
 import { usePropertyKeys } from '@/hooks/usePropertyKeys'
 import { usePropertyTimeline } from '@/hooks/usePropertyTimeline'
 
@@ -39,6 +40,8 @@ export function MetricsChart({
   const {
     keys: availableKeys,
     isLoading: keysLoading,
+    error: keysError,
+    refetch: refetchKeys,
   } = usePropertyKeys({
     processId,
     measureName,
@@ -50,6 +53,8 @@ export function MetricsChart({
   const {
     timelines: propertyTimelines,
     isLoading: timelinesLoading,
+    error: timelinesError,
+    refetch: refetchTimelines,
   } = usePropertyTimeline({
     processId,
     measureName,
@@ -58,6 +63,13 @@ export function MetricsChart({
     binInterval,
     enabled: !!processId && !!measureName && selectedProperties.length > 0,
   })
+
+  // Combine errors for display
+  const propertyError = keysError || timelinesError
+  const handleRetry = useCallback(() => {
+    if (keysError) refetchKeys()
+    if (timelinesError) refetchTimelines()
+  }, [keysError, timelinesError, refetchKeys, refetchTimelines])
 
   const handleAxisBoundsChange = useCallback((bounds: ChartAxisBounds) => {
     setAxisBounds(bounds)
@@ -96,6 +108,16 @@ export function MetricsChart({
           onAxisBoundsChange={handleAxisBoundsChange}
         />
       </div>
+
+      {/* Property Error */}
+      {propertyError && (
+        <ErrorBanner
+          title="Failed to load properties"
+          message={propertyError}
+          variant="warning"
+          onRetry={handleRetry}
+        />
+      )}
 
       {/* Property Timeline */}
       {showPropertyTimeline && (
