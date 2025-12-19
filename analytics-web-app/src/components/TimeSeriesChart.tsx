@@ -54,6 +54,8 @@ function formatStatValue(value: number, unit: string): string {
   return formatValue(value, unit, false)
 }
 
+type ScaleMode = 'p99' | 'max'
+
 export function TimeSeriesChart({
   data,
   title,
@@ -65,6 +67,7 @@ export function TimeSeriesChart({
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<uPlot | null>(null)
   const [dimensions, setDimensions] = useState({ width: 800, height: 300 })
+  const [scaleMode, setScaleMode] = useState<ScaleMode>('p99')
 
   // Calculate stats including percentile for scaling
   const stats = useMemo(() => {
@@ -215,8 +218,9 @@ export function TimeSeriesChart({
     const values = data.map((d) => d.value * conversionFactor)
 
     // Convert stats to display unit for scale range
-    const displayMin = stats.min * conversionFactor
+    const _displayMin = stats.min * conversionFactor
     const displayP99 = stats.p99 * conversionFactor
+    const displayMax = stats.max * conversionFactor
 
     const yAxisUnit = adaptiveTimeUnit?.abbrev ?? unit
 
@@ -227,11 +231,11 @@ export function TimeSeriesChart({
       scales: {
         x: { time: true },
         y: {
-          // Use 99th percentile for scaling to handle outliers gracefully
+          // Scale based on user selection: p99 handles outliers gracefully, max shows all data
           range: (_u: uPlot, dataMin: number, _dataMax: number) => {
             const minVal = Math.min(0, dataMin)
-            // Use p99 instead of max to prevent outliers from dominating
-            const maxVal = displayP99 * 1.05
+            const scaleValue = scaleMode === 'p99' ? displayP99 : displayMax
+            const maxVal = scaleValue * 1.05
             return [minVal, maxVal]
           },
         },
@@ -337,7 +341,7 @@ export function TimeSeriesChart({
         chartRef.current = null
       }
     }
-  }, [data, dimensions, title, unit, createTooltipPlugin, onTimeRangeSelect, onAxisBoundsChange, stats, adaptiveTimeUnit])
+  }, [data, dimensions, title, unit, createTooltipPlugin, onTimeRangeSelect, onAxisBoundsChange, stats, adaptiveTimeUnit, scaleMode])
 
   return (
     <div className="flex flex-col h-full bg-app-panel border border-theme-border rounded-lg">
@@ -355,10 +359,41 @@ export function TimeSeriesChart({
             min: <span className="text-theme-text-secondary">{formatStatValue(stats.min, unit)}</span>
           </div>
           <div>
+            p99: <span className="text-theme-text-secondary">{formatStatValue(stats.p99, unit)}</span>
+          </div>
+          <div>
             max: <span className="text-theme-text-secondary">{formatStatValue(stats.max, unit)}</span>
           </div>
           <div>
             avg: <span className="text-theme-text-secondary">{formatStatValue(stats.avg, unit)}</span>
+          </div>
+          <div className="relative group">
+            <div className="flex border border-theme-border rounded overflow-hidden">
+              <button
+                onClick={() => setScaleMode('p99')}
+                className={`px-2 py-0.5 text-[11px] transition-colors ${
+                  scaleMode === 'p99'
+                    ? 'bg-accent text-white'
+                    : 'text-theme-text-muted hover:text-theme-text-secondary hover:bg-white/5'
+                }`}
+              >
+                P99
+              </button>
+              <button
+                onClick={() => setScaleMode('max')}
+                className={`px-2 py-0.5 text-[11px] border-l border-theme-border transition-colors ${
+                  scaleMode === 'max'
+                    ? 'bg-accent text-white'
+                    : 'text-theme-text-muted hover:text-theme-text-secondary hover:bg-white/5'
+                }`}
+              >
+                Max
+              </button>
+            </div>
+            <div className="absolute bottom-full right-0 mb-2 px-2 py-1.5 bg-app-panel border border-theme-border rounded text-[11px] text-theme-text-secondary opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10 shadow-lg">
+              <div>P99: hides outliers</div>
+              <div>Max: shows all data</div>
+            </div>
           </div>
         </div>
       </div>
