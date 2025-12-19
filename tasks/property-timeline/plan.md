@@ -1,5 +1,9 @@
 # Property Timeline Feature Implementation Plan
 
+## Status: COMPLETED
+
+Implemented in commit `10c4df59a`.
+
 ## Mockup
 See [mockup-v1.html](mockup-v1.html) for the visual design.
 
@@ -63,9 +67,9 @@ Based on ThreadCoverageTimeline pattern:
 **File:** `analytics-web-app/src/components/MetricsChart.tsx`
 
 Combines TimeSeriesChart + PropertyTimeline:
-- Props: `processId`, `measureName`, `timeRange`, `onTimeRangeSelect`
+- Props: `data`, `title`, `unit`, `processId`, `measureName`, `apiTimeRange`, `binInterval`, `onTimeRangeSelect`, `onWidthChange`, `onAxisBoundsChange`
 - Internal state: `selectedProperties`, `axisBounds`
-- Fetches property keys and values
+- Fetches property keys and values using hooks
 - Renders TimeSeriesChart + PropertyTimeline aligned
 
 ### 4. Create usePropertyKeys Hook
