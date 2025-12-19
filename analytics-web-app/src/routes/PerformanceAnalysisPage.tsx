@@ -9,7 +9,8 @@ import { AuthGuard } from '@/components/AuthGuard'
 import { CopyableProcessId } from '@/components/CopyableProcessId'
 import { QueryEditor } from '@/components/QueryEditor'
 import { ErrorBanner } from '@/components/ErrorBanner'
-import { TimeSeriesChart, ChartAxisBounds } from '@/components/TimeSeriesChart'
+import { ChartAxisBounds } from '@/components/TimeSeriesChart'
+import { MetricsChart } from '@/components/MetricsChart'
 import { ThreadCoverageTimeline } from '@/components/ThreadCoverageTimeline'
 import { executeSqlQuery, toRowObjects, generateTrace } from '@/lib/api'
 import { openInPerfetto, PerfettoError } from '@/lib/perfetto'
@@ -696,12 +697,16 @@ function PerformanceAnalysisContent() {
           </div>
         )}
 
-        <div className="h-[350px] mb-4">
+        <div className="mb-4">
           {selectedMeasure && chartData.length > 0 ? (
-            <TimeSeriesChart
+            <MetricsChart
               data={chartData}
               title={selectedMeasure}
               unit={selectedMeasureInfo?.unit || ''}
+              processId={processId}
+              measureName={selectedMeasure}
+              apiTimeRange={apiTimeRange}
+              binInterval={binInterval}
               onTimeRangeSelect={handleTimeRangeSelect}
               onWidthChange={handleChartWidthChange}
               onAxisBoundsChange={handleAxisBoundsChange}
@@ -769,7 +774,7 @@ function PerformanceAnalysisContent() {
 
         {chartData.length > 0 && (
           <div className="text-xs text-theme-text-muted text-center mt-2">
-            Drag on the chart or thread coverage to zoom into a time range
+            Drag on the chart, property timeline, or thread coverage to zoom into a time range
           </div>
         )}
       </div>

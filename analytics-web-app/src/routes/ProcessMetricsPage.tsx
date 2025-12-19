@@ -8,7 +8,7 @@ import { AuthGuard } from '@/components/AuthGuard'
 import { CopyableProcessId } from '@/components/CopyableProcessId'
 import { QueryEditor } from '@/components/QueryEditor'
 import { ErrorBanner } from '@/components/ErrorBanner'
-import { TimeSeriesChart } from '@/components/TimeSeriesChart'
+import { MetricsChart } from '@/components/MetricsChart'
 import { executeSqlQuery, toRowObjects } from '@/lib/api'
 import { useTimeRange } from '@/hooks/useTimeRange'
 
@@ -367,10 +367,14 @@ function ProcessMetricsContent() {
 
         <div className="flex-1 min-h-[400px]">
           {selectedMeasure && chartData.length > 0 ? (
-            <TimeSeriesChart
+            <MetricsChart
               data={chartData}
               title={selectedMeasure}
               unit={selectedMeasureInfo?.unit || ''}
+              processId={processId}
+              measureName={selectedMeasure}
+              apiTimeRange={apiTimeRange}
+              binInterval={binInterval}
               onTimeRangeSelect={handleTimeRangeSelect}
               onWidthChange={handleChartWidthChange}
             />
@@ -425,6 +429,12 @@ function ProcessMetricsContent() {
             </div>
           ) : null}
         </div>
+
+        {chartData.length > 0 && (
+          <div className="text-xs text-theme-text-muted text-center mt-2">
+            Drag on the chart or property timeline to zoom into a time range
+          </div>
+        )}
       </div>
     </PageLayout>
   )
