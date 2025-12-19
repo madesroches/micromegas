@@ -1,6 +1,14 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import uPlot from 'uplot'
 import 'uplot/dist/uPlot.min.css'
+import {
+  isTimeUnit,
+  getAdaptiveTimeUnit,
+  formatAdaptiveTime,
+  formatTimeValue,
+  type AdaptiveTimeUnit,
+  type TimeUnit,
+} from '@/lib/time-units'
 
 export interface ChartAxisBounds {
   left: number // Left padding (Y-axis width)
@@ -16,17 +24,17 @@ interface TimeSeriesChartProps {
   onAxisBoundsChange?: (bounds: ChartAxisBounds) => void
 }
 
-const UNIT_ABBREVIATIONS: Record<string, string> = {
-  seconds: 's',
-  milliseconds: 'ms',
-  microseconds: 'µs',
-  nanoseconds: 'ns',
-  minutes: 'min',
-  hours: 'h',
-}
+function formatValue(
+  value: number,
+  unit: string,
+  abbreviated = false,
+  adaptiveTimeUnit?: AdaptiveTimeUnit
+): string {
+  // Use adaptive formatting for time units
+  if (adaptiveTimeUnit && isTimeUnit(unit)) {
+    return formatAdaptiveTime(value, adaptiveTimeUnit, abbreviated)
+  }
 
-function formatValue(value: number, unit: string, abbreviated = false): string {
-  const displayUnit = abbreviated ? (UNIT_ABBREVIATIONS[unit] ?? unit) : unit
   if (unit === 'bytes') {
     if (value >= 1e9) return (value / 1e9).toFixed(1) + ' GB'
     if (value >= 1e6) return (value / 1e6).toFixed(1) + ' MB'
@@ -35,7 +43,15 @@ function formatValue(value: number, unit: string, abbreviated = false): string {
   }
   if (unit === 'percent') return value.toFixed(1) + '%'
   if (unit === 'count') return Math.round(value).toLocaleString()
-  return value.toFixed(2) + ' ' + displayUnit
+  return value.toFixed(2) + ' ' + unit
+}
+
+// Format a stat value - for time units, each value picks its own best unit
+function formatStatValue(value: number, unit: string): string {
+  if (isTimeUnit(unit)) {
+    return formatTimeValue(value, unit as TimeUnit, false)
+  }
+  return formatValue(value, unit, false)
 }
 
 export function TimeSeriesChart({
@@ -66,6 +82,17 @@ export function TimeSeriesChart({
     }
   }, [data])
 
+  // Calculate adaptive time unit based on p99 value
+  const adaptiveTimeUnit = useMemo(() => {
+    if (!isTimeUnit(unit) || stats.p99 === 0) {
+      return undefined
+    }
+    return getAdaptiveTimeUnit(stats.p99, unit as TimeUnit)
+  }, [unit, stats.p99])
+
+  // Display unit for the header (adaptive for time, original for others)
+  const displayUnit = adaptiveTimeUnit ? adaptiveTimeUnit.unit : unit
+
   // Handle resize
   useEffect(() => {
     const updateDimensions = () => {
@@ -89,18 +116,17 @@ export function TimeSeriesChart({
     return () => resizeObserver.disconnect()
   }, [onWidthChange])
 
-  // Tooltip plugin
-  const createTooltipPlugin = useCallback(
-    (chartUnit: string): uPlot.Plugin => {
-      let tooltip: HTMLDivElement
-      let tooltipTime: HTMLDivElement
-      let tooltipValue: HTMLDivElement
+  // Tooltip plugin - values are already converted to display unit
+  const createTooltipPlugin = useCallback((displayUnitName: string): uPlot.Plugin => {
+    let tooltip: HTMLDivElement
+    let tooltipTime: HTMLDivElement
+    let tooltipValue: HTMLDivElement
 
-      return {
-        hooks: {
-          init: (u: uPlot) => {
-            tooltip = document.createElement('div')
-            tooltip.style.cssText = `
+    return {
+      hooks: {
+        init: (u: uPlot) => {
+          tooltip = document.createElement('div')
+          tooltip.style.cssText = `
             position: absolute;
             background: var(--app-bg);
             border: 1px solid var(--border-color);
@@ -112,57 +138,69 @@ export function TimeSeriesChart({
             box-shadow: 0 4px 12px rgba(0,0,0,0.4);
             display: none;
           `
-            tooltip.innerHTML = `
+          tooltip.innerHTML = `
             <div style="color: var(--text-muted); margin-bottom: 4px; font-family: monospace;"></div>
             <div style="color: var(--chart-line); font-weight: 600; font-size: 14px;"></div>
           `
-            u.over.appendChild(tooltip)
-            tooltipTime = tooltip.children[0] as HTMLDivElement
-            tooltipValue = tooltip.children[1] as HTMLDivElement
-          },
-          setCursor: (u: uPlot) => {
-            const { idx, left, top } = u.cursor
-            if (idx == null || left == null || top == null || left < 0 || top < 0) {
-              tooltip.style.display = 'none'
-              return
-            }
-
-            const time = u.data[0][idx]
-            const value = u.data[1][idx]
-
-            if (time == null || value == null) {
-              tooltip.style.display = 'none'
-              return
-            }
-
-            const date = new Date(time * 1000)
-            const timeStr =
-              date.toLocaleTimeString('en-US', {
-                hour: '2-digit',
-                minute: '2-digit',
-                second: '2-digit',
-                hour12: false,
-              }) +
-              '.' +
-              String(date.getMilliseconds()).padStart(3, '0')
-
-            tooltipTime.textContent = timeStr
-            tooltipValue.textContent = formatValue(value, chartUnit)
-
-            tooltip.style.left = left + 10 + 'px'
-            tooltip.style.top = Math.max(0, top - 60) + 'px'
-            tooltip.style.display = 'block'
-          },
-          destroy: () => {
-            if (tooltip && tooltip.parentNode) {
-              tooltip.parentNode.removeChild(tooltip)
-            }
-          },
+          u.over.appendChild(tooltip)
+          tooltipTime = tooltip.children[0] as HTMLDivElement
+          tooltipValue = tooltip.children[1] as HTMLDivElement
         },
-      }
-    },
-    []
-  )
+        setCursor: (u: uPlot) => {
+          const { idx, left, top } = u.cursor
+          if (idx == null || left == null || top == null || left < 0 || top < 0) {
+            tooltip.style.display = 'none'
+            return
+          }
+
+          const time = u.data[0][idx]
+          const value = u.data[1][idx]
+
+          if (time == null || value == null) {
+            tooltip.style.display = 'none'
+            return
+          }
+
+          const date = new Date(time * 1000)
+          const timeStr =
+            date.toLocaleTimeString('en-US', {
+              hour: '2-digit',
+              minute: '2-digit',
+              second: '2-digit',
+              hour12: false,
+            }) +
+            '.' +
+            String(date.getMilliseconds()).padStart(3, '0')
+
+          tooltipTime.textContent = timeStr
+          // Value is already in display unit, just format it
+          const absV = Math.abs(value)
+          let formattedValue: string
+          if (absV >= 100) {
+            formattedValue = Math.round(value) + ' ' + displayUnitName
+          } else if (absV >= 10) {
+            formattedValue = value.toFixed(1) + ' ' + displayUnitName
+          } else if (absV >= 1) {
+            formattedValue = value.toFixed(2) + ' ' + displayUnitName
+          } else if (absV === 0) {
+            formattedValue = '0 ' + displayUnitName
+          } else {
+            formattedValue = value.toPrecision(3) + ' ' + displayUnitName
+          }
+          tooltipValue.textContent = formattedValue
+
+          tooltip.style.left = left + 10 + 'px'
+          tooltip.style.top = Math.max(0, top - 60) + 'px'
+          tooltip.style.display = 'block'
+        },
+        destroy: () => {
+          if (tooltip && tooltip.parentNode) {
+            tooltip.parentNode.removeChild(tooltip)
+          }
+        },
+      },
+    }
+  }, [])
 
   // Create/update chart
   useEffect(() => {
@@ -175,20 +213,29 @@ export function TimeSeriesChart({
     }
 
     // Transform data to uPlot format
-    const times = data.map((d) => d.time / 1000) // uPlot uses seconds
-    const values = data.map((d) => d.value)
+    // For time units, convert values to the display unit so uPlot generates correct ticks
+    const conversionFactor = adaptiveTimeUnit?.conversionFactor ?? 1
+    const times = data.map((d) => d.time / 1000) // uPlot uses seconds for X axis
+    const values = data.map((d) => d.value * conversionFactor)
+
+    // Convert stats to display unit for scale range
+    const displayMin = stats.min * conversionFactor
+    const displayP99 = stats.p99 * conversionFactor
+
+    const yAxisUnit = adaptiveTimeUnit?.abbrev ?? unit
 
     const opts: uPlot.Options = {
       width: dimensions.width,
       height: dimensions.height,
-      plugins: [createTooltipPlugin(unit)],
+      plugins: [createTooltipPlugin(displayUnit)],
       scales: {
         x: { time: true },
         y: {
           // Use 99th percentile for scaling to handle outliers gracefully
-          range: (_u: uPlot, _min: number, _max: number) => {
-            const minVal = Math.min(0, stats.min) // Include 0 if all values positive
-            const maxVal = stats.p99 * 1.05 // Add 5% padding above p99
+          range: (_u: uPlot, dataMin: number, _dataMax: number) => {
+            const minVal = Math.min(0, dataMin)
+            // Use p99 instead of max to prevent outliers from dominating
+            const maxVal = displayP99 * 1.05
             return [minVal, maxVal]
           },
         },
@@ -205,7 +252,18 @@ export function TimeSeriesChart({
           grid: { stroke: '#2a2a35', width: 1 },
           ticks: { stroke: '#2a2a35', width: 1 },
           font: '11px -apple-system, BlinkMacSystemFont, sans-serif',
-          values: (_u: uPlot, vals: number[]) => vals.map((v) => formatValue(v, unit, true)),
+          size: 70, // Ensure enough space for labels
+          values: (_u: uPlot, vals: number[]) => {
+            // Values are already in the display unit, just format them
+            return vals.map((v) => {
+              if (v === 0) return '0 ' + yAxisUnit
+              const absV = Math.abs(v)
+              if (absV >= 100) return Math.round(v) + ' ' + yAxisUnit
+              if (absV >= 10) return v.toFixed(1) + ' ' + yAxisUnit
+              if (absV >= 1) return v.toFixed(2) + ' ' + yAxisUnit
+              return v.toPrecision(2) + ' ' + yAxisUnit
+            })
+          },
         },
       ],
       series: [
@@ -283,14 +341,14 @@ export function TimeSeriesChart({
         chartRef.current = null
       }
     }
-  }, [data, dimensions, title, unit, createTooltipPlugin, onTimeRangeSelect, onAxisBoundsChange, stats])
+  }, [data, dimensions, title, unit, createTooltipPlugin, onTimeRangeSelect, onAxisBoundsChange, stats, adaptiveTimeUnit])
 
   return (
     <div className="flex flex-col h-full bg-app-panel border border-theme-border rounded-lg">
       {/* Chart header */}
       <div className="flex justify-between items-center px-4 py-3 border-b border-theme-border">
         <div className="text-base font-medium text-theme-text-primary">
-          {title} <span className="text-theme-text-muted font-normal">({unit})</span>
+          {title} <span className="text-theme-text-muted font-normal">({displayUnit})</span>
         </div>
         <div className="flex items-center gap-4 text-xs text-theme-text-muted">
           <div className="flex items-center gap-1.5">
@@ -298,13 +356,13 @@ export function TimeSeriesChart({
             <span>{title}</span>
           </div>
           <div>
-            min: <span className="text-theme-text-secondary">{formatValue(stats.min, unit)}</span>
+            min: <span className="text-theme-text-secondary">{formatStatValue(stats.min, unit)}</span>
           </div>
           <div>
-            max: <span className="text-theme-text-secondary">{formatValue(stats.max, unit)}</span>
+            max: <span className="text-theme-text-secondary">{formatStatValue(stats.max, unit)}</span>
           </div>
           <div>
-            avg: <span className="text-theme-text-secondary">{formatValue(stats.avg, unit)}</span>
+            avg: <span className="text-theme-text-secondary">{formatStatValue(stats.avg, unit)}</span>
           </div>
         </div>
       </div>
