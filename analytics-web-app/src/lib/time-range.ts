@@ -29,7 +29,7 @@ export const TIME_RANGE_PRESETS = [
 ] as const
 
 export const DEFAULT_TIME_RANGE: TimeRange = {
-  from: 'now-24h',
+  from: 'now-5m',
   to: 'now',
 }
 

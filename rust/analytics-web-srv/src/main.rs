@@ -214,12 +214,14 @@ async fn main() -> Result<()> {
     let cors_origin = std::env::var("MICROMEGAS_WEB_CORS_ORIGIN")
         .context("MICROMEGAS_WEB_CORS_ORIGIN environment variable not set")?;
 
-    // Read base path (required, e.g., "/micromegas")
+    // Read base path (required, e.g., "/" or "/micromegas")
     let base_path = std::env::var("MICROMEGAS_BASE_PATH")
         .context("MICROMEGAS_BASE_PATH environment variable not set")?;
     let base_path = base_path.trim_end_matches('/').to_string();
-    if base_path.is_empty() || !base_path.starts_with('/') {
-        anyhow::bail!("MICROMEGAS_BASE_PATH must start with '/' (e.g., '/micromegas')");
+    // Empty string is valid (represents root "/")
+    // Non-empty must start with '/'
+    if !base_path.is_empty() && !base_path.starts_with('/') {
+        anyhow::bail!("MICROMEGAS_BASE_PATH must start with '/' (e.g., '/', '/micromegas')");
     }
 
     // Build auth state if authentication is enabled
@@ -346,31 +348,37 @@ async fn main() -> Result<()> {
         // All other paths: static files with SPA fallback
         .fallback_service(serve_dir);
 
-    // Nest frontend under base_path - handles /base_path/*
-    // Note: nest() does NOT match /base_path/ (with trailing slash), only /base_path/*
-    let app = app.nest(&base_path, frontend);
+    // Mount frontend routes - use merge for root, nest for sub-paths
+    let app = if base_path.is_empty() {
+        // Root path: merge frontend directly (axum doesn't support nest(""))
+        app.merge(frontend)
+    } else {
+        // Sub-path: nest under base_path - handles /base_path/*
+        // Note: nest() does NOT match /base_path/ (with trailing slash), only /base_path/*
+        let app = app.nest(&base_path, frontend);
 
-    // Explicitly handle /base_path/ (with trailing slash) - nest() doesn't match this
-    let base_path_with_slash = format!("{}/", base_path);
-    let index_handler_for_root = get(serve_index_with_config).with_state(index_state);
-    let app = app.route(&base_path_with_slash, index_handler_for_root);
+        // Explicitly handle /base_path/ (with trailing slash) - nest() doesn't match this
+        let base_path_with_slash = format!("{}/", base_path);
+        let index_handler_for_root = get(serve_index_with_config).with_state(index_state);
+        let app = app.route(&base_path_with_slash, index_handler_for_root);
 
-    // Add middleware to redirect /base_path -> /base_path/
-    let base_path_for_redirect = base_path.clone();
-    let app = app.layer(axum::middleware::from_fn(
-        move |req: axum::extract::Request, next: axum::middleware::Next| {
-            let base_path = base_path_for_redirect.clone();
-            async move {
-                let path = req.uri().path();
-                // Redirect exact base_path match to base_path/
-                if path == base_path {
-                    let redirect_uri = format!("{}/", base_path);
-                    return Redirect::permanent(&redirect_uri).into_response();
+        // Add middleware to redirect /base_path -> /base_path/
+        let base_path_for_redirect = base_path.clone();
+        app.layer(axum::middleware::from_fn(
+            move |req: axum::extract::Request, next: axum::middleware::Next| {
+                let base_path = base_path_for_redirect.clone();
+                async move {
+                    let path = req.uri().path();
+                    // Redirect exact base_path match to base_path/
+                    if path == base_path {
+                        let redirect_uri = format!("{}/", base_path);
+                        return Redirect::permanent(&redirect_uri).into_response();
+                    }
+                    next.run(req).await.into_response()
                 }
-                next.run(req).await.into_response()
-            }
-        },
-    ));
+            },
+        ))
+    };
 
     // Add CORS layer to the router
     let app = app.layer(cors_layer);
