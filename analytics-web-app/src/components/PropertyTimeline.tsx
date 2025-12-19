@@ -258,7 +258,7 @@ export function PropertyTimeline({
                     )}
 
                     {/* Property segments */}
-                    {property.segments.map((segment, idx) => {
+                    {property.segments.map((segment) => {
                       const startPercent = clamp(toPercent(segment.begin), 0, 100)
                       const endPercent = clamp(toPercent(segment.end), 0, 100)
                       const widthPercent = endPercent - startPercent
@@ -268,7 +268,7 @@ export function PropertyTimeline({
 
                       return (
                         <div
-                          key={idx}
+                          key={`${segment.begin}-${segment.value}`}
                           className="absolute top-1 bottom-1 bg-brand-blue rounded-sm flex items-center justify-center text-[10px] font-medium text-white overflow-hidden transition-opacity hover:opacity-85 hover:ring-2 hover:ring-brand-gold"
                           style={{
                             left: `${startPercent}%`,

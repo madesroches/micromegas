@@ -58,7 +58,6 @@ export function usePropertyKeys({
     })
   }, [processId, measureName, apiTimeRange.begin, apiTimeRange.end, enabled])
 
-  const hasFetchedRef = useRef(false)
   const prevParamsRef = useRef<{
     processId: string | null
     measureName: string | null
@@ -88,7 +87,6 @@ export function usePropertyKeys({
 
     if (paramsChanged) {
       prevParamsRef.current = currentParams
-      hasFetchedRef.current = true
       fetchKeys()
     }
   }, [processId, measureName, apiTimeRange.begin, apiTimeRange.end, enabled, fetchKeys])
