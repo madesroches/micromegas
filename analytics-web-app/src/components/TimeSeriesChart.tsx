@@ -15,10 +15,14 @@ export interface ChartAxisBounds {
   width: number // Plot area width
 }
 
+export type ScaleMode = 'p99' | 'max'
+
 interface TimeSeriesChartProps {
   data: { time: number; value: number }[]
   title: string
   unit: string
+  scaleMode?: ScaleMode
+  onScaleModeChange?: (mode: ScaleMode) => void
   onTimeRangeSelect?: (from: Date, to: Date) => void
   onWidthChange?: (width: number) => void
   onAxisBoundsChange?: (bounds: ChartAxisBounds) => void
@@ -54,12 +58,12 @@ function formatStatValue(value: number, unit: string): string {
   return formatValue(value, unit, false)
 }
 
-type ScaleMode = 'p99' | 'max'
-
 export function TimeSeriesChart({
   data,
   title,
   unit,
+  scaleMode: scaleModeFromProps,
+  onScaleModeChange,
   onTimeRangeSelect,
   onWidthChange,
   onAxisBoundsChange,
@@ -67,7 +71,11 @@ export function TimeSeriesChart({
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<uPlot | null>(null)
   const [dimensions, setDimensions] = useState({ width: 800, height: 300 })
-  const [scaleMode, setScaleMode] = useState<ScaleMode>('p99')
+  const [internalScaleMode, setInternalScaleMode] = useState<ScaleMode>('p99')
+
+  // Use prop if provided, otherwise use internal state
+  const scaleMode = scaleModeFromProps ?? internalScaleMode
+  const setScaleMode = onScaleModeChange ?? setInternalScaleMode
 
   // Calculate stats including percentile for scaling
   const stats = useMemo(() => {

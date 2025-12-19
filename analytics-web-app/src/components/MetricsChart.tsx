@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react'
-import { TimeSeriesChart, ChartAxisBounds } from './TimeSeriesChart'
+import { TimeSeriesChart, ChartAxisBounds, ScaleMode } from './TimeSeriesChart'
 import { PropertyTimeline } from './PropertyTimeline'
 import { ErrorBanner } from './ErrorBanner'
 import { usePropertyKeys } from '@/hooks/usePropertyKeys'
@@ -19,11 +19,16 @@ interface MetricsChartProps {
   selectedProperties: string[]
   onAddProperty: (key: string) => void
   onRemoveProperty: (key: string) => void
+  // Scale mode (controlled from parent for URL persistence)
+  scaleMode?: ScaleMode
+  onScaleModeChange?: (mode: ScaleMode) => void
   // Callbacks
   onTimeRangeSelect?: (from: Date, to: Date) => void
   onWidthChange?: (width: number) => void
   onAxisBoundsChange?: (bounds: ChartAxisBounds) => void
 }
+
+export type { ScaleMode }
 
 export function MetricsChart({
   data,
@@ -36,6 +41,8 @@ export function MetricsChart({
   selectedProperties,
   onAddProperty,
   onRemoveProperty,
+  scaleMode,
+  onScaleModeChange,
   onTimeRangeSelect,
   onWidthChange,
   onAxisBoundsChange,
@@ -101,6 +108,8 @@ export function MetricsChart({
           data={data}
           title={title}
           unit={unit}
+          scaleMode={scaleMode}
+          onScaleModeChange={onScaleModeChange}
           onTimeRangeSelect={onTimeRangeSelect}
           onWidthChange={onWidthChange}
           onAxisBoundsChange={handleAxisBoundsChange}

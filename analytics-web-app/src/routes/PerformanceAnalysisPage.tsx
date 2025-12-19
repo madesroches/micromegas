@@ -10,7 +10,7 @@ import { CopyableProcessId } from '@/components/CopyableProcessId'
 import { QueryEditor } from '@/components/QueryEditor'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { ChartAxisBounds } from '@/components/TimeSeriesChart'
-import { MetricsChart } from '@/components/MetricsChart'
+import { MetricsChart, ScaleMode } from '@/components/MetricsChart'
 import { ThreadCoverageTimeline } from '@/components/ThreadCoverageTimeline'
 import { executeSqlQuery, toRowObjects, generateTrace } from '@/lib/api'
 import { openInPerfetto, PerfettoError } from '@/lib/perfetto'
@@ -100,6 +100,7 @@ function PerformanceAnalysisContent() {
   const processId = searchParams.get('process_id')
   const measureParam = searchParams.get('measure')
   const propertiesParam = searchParams.get('properties')
+  const scaleParam = searchParams.get('scale')
   const { parsed: timeRange, apiTimeRange, setTimeRange } = useTimeRange()
 
   // Parse selected properties from URL
@@ -107,6 +108,9 @@ function PerformanceAnalysisContent() {
     if (!propertiesParam) return []
     return propertiesParam.split(',').filter(Boolean)
   }, [propertiesParam])
+
+  // Parse scale mode from URL (default to p99)
+  const scaleMode: ScaleMode = scaleParam === 'max' ? 'max' : 'p99'
 
   const [measures, setMeasures] = useState<Measure[]>([])
   const [selectedMeasure, setSelectedMeasure] = useState<string | null>(measureParam)
@@ -344,6 +348,19 @@ function PerformanceAnalysisContent() {
       navigate(`${pathname}?${params.toString()}`)
     },
     [selectedProperties, searchParams, navigate, pathname]
+  )
+
+  const handleScaleModeChange = useCallback(
+    (mode: ScaleMode) => {
+      const params = new URLSearchParams(searchParams.toString())
+      if (mode === 'p99') {
+        params.delete('scale') // p99 is default, no need to persist
+      } else {
+        params.set('scale', mode)
+      }
+      navigate(`${pathname}?${params.toString()}`)
+    },
+    [searchParams, navigate, pathname]
   )
 
   const hasLoadedProcessRef = useRef(false)
@@ -741,6 +758,8 @@ function PerformanceAnalysisContent() {
               selectedProperties={selectedProperties}
               onAddProperty={handleAddProperty}
               onRemoveProperty={handleRemoveProperty}
+              scaleMode={scaleMode}
+              onScaleModeChange={handleScaleModeChange}
               onTimeRangeSelect={handleTimeRangeSelect}
               onWidthChange={handleChartWidthChange}
               onAxisBoundsChange={handleAxisBoundsChange}
