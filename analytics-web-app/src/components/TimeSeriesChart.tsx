@@ -50,12 +50,21 @@ export function TimeSeriesChart({
   const chartRef = useRef<uPlot | null>(null)
   const [dimensions, setDimensions] = useState({ width: 800, height: 300 })
 
-  // Calculate stats
-  const stats = useMemo(() => ({
-    min: data.length > 0 ? Math.min(...data.map((d) => d.value)) : 0,
-    max: data.length > 0 ? Math.max(...data.map((d) => d.value)) : 0,
-    avg: data.length > 0 ? data.reduce((sum, d) => sum + d.value, 0) / data.length : 0,
-  }), [data])
+  // Calculate stats including percentile for scaling
+  const stats = useMemo(() => {
+    if (data.length === 0) {
+      return { min: 0, max: 0, avg: 0, p99: 0 }
+    }
+    const values = data.map((d) => d.value)
+    const sorted = [...values].sort((a, b) => a - b)
+    const p99Index = Math.floor(sorted.length * 0.99)
+    return {
+      min: sorted[0],
+      max: sorted[sorted.length - 1],
+      avg: values.reduce((sum, v) => sum + v, 0) / values.length,
+      p99: sorted[Math.min(p99Index, sorted.length - 1)],
+    }
+  }, [data])
 
   // Handle resize
   useEffect(() => {
@@ -175,7 +184,14 @@ export function TimeSeriesChart({
       plugins: [createTooltipPlugin(unit)],
       scales: {
         x: { time: true },
-        y: { auto: true },
+        y: {
+          // Use 99th percentile for scaling to handle outliers gracefully
+          range: (_u: uPlot, _min: number, _max: number) => {
+            const minVal = Math.min(0, stats.min) // Include 0 if all values positive
+            const maxVal = stats.p99 * 1.05 // Add 5% padding above p99
+            return [minVal, maxVal]
+          },
+        },
       },
       axes: [
         {
@@ -267,7 +283,7 @@ export function TimeSeriesChart({
         chartRef.current = null
       }
     }
-  }, [data, dimensions, title, unit, createTooltipPlugin, onTimeRangeSelect, onAxisBoundsChange])
+  }, [data, dimensions, title, unit, createTooltipPlugin, onTimeRangeSelect, onAxisBoundsChange, stats])
 
   return (
     <div className="flex flex-col h-full bg-app-panel border border-theme-border rounded-lg">
