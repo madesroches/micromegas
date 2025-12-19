@@ -186,8 +186,13 @@ export function TimeSeriesChart({
               tooltipValue.textContent = formatStatValue(originalValue, originalUnit)
             }
 
+            // Position tooltip - flip below cursor if near top of chart
+            const tooltipHeight = 60
+            const flipThreshold = tooltipHeight + 10
+            const posTop = top < flipThreshold ? top + 20 : top - tooltipHeight
+
             tooltip.style.left = left + 10 + 'px'
-            tooltip.style.top = Math.max(0, top - 60) + 'px'
+            tooltip.style.top = posTop + 'px'
             tooltip.style.display = 'block'
           },
           destroy: () => {
