@@ -161,12 +161,12 @@ export function PropertyTimeline({
   }
 
   return (
-    <div className="bg-app-panel border border-theme-border rounded-lg overflow-hidden">
+    <div className="bg-app-panel border border-theme-border rounded-lg">
       {/* Header */}
       <div className="px-4 py-3 border-b border-theme-border flex justify-between items-center">
         <div>
           <div className="text-base font-medium text-theme-text-primary">Properties</div>
-          {isLoading && (
+          {isLoading && properties.length === 0 && selectedKeys.length > 0 && (
             <div className="text-xs text-theme-text-muted mt-1">Loading...</div>
           )}
         </div>

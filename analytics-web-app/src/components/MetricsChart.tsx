@@ -86,7 +86,7 @@ export function MetricsChart({
   return (
     <div className="flex flex-col gap-4">
       {/* Time Series Chart */}
-      <div className="h-[300px]">
+      <div className="h-[350px] overflow-hidden">
         <TimeSeriesChart
           data={data}
           title={title}
