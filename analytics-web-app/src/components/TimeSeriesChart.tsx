@@ -116,17 +116,18 @@ export function TimeSeriesChart({
     return () => resizeObserver.disconnect()
   }, [onWidthChange])
 
-  // Tooltip plugin - values are already converted to display unit
-  const createTooltipPlugin = useCallback((displayUnitName: string): uPlot.Plugin => {
-    let tooltip: HTMLDivElement
-    let tooltipTime: HTMLDivElement
-    let tooltipValue: HTMLDivElement
+  // Tooltip plugin - values are in display unit, convert back to original for formatting
+  const createTooltipPlugin = useCallback(
+    (originalUnit: string, conversionFactor: number): uPlot.Plugin => {
+      let tooltip: HTMLDivElement
+      let tooltipTime: HTMLDivElement
+      let tooltipValue: HTMLDivElement
 
-    return {
-      hooks: {
-        init: (u: uPlot) => {
-          tooltip = document.createElement('div')
-          tooltip.style.cssText = `
+      return {
+        hooks: {
+          init: (u: uPlot) => {
+            tooltip = document.createElement('div')
+            tooltip.style.cssText = `
             position: absolute;
             background: var(--app-bg);
             border: 1px solid var(--border-color);
@@ -138,69 +139,64 @@ export function TimeSeriesChart({
             box-shadow: 0 4px 12px rgba(0,0,0,0.4);
             display: none;
           `
-          tooltip.innerHTML = `
+            tooltip.innerHTML = `
             <div style="color: var(--text-muted); margin-bottom: 4px; font-family: monospace;"></div>
             <div style="color: var(--chart-line); font-weight: 600; font-size: 14px;"></div>
           `
-          u.over.appendChild(tooltip)
-          tooltipTime = tooltip.children[0] as HTMLDivElement
-          tooltipValue = tooltip.children[1] as HTMLDivElement
+            u.over.appendChild(tooltip)
+            tooltipTime = tooltip.children[0] as HTMLDivElement
+            tooltipValue = tooltip.children[1] as HTMLDivElement
+          },
+          setCursor: (u: uPlot) => {
+            const { idx, left, top } = u.cursor
+            if (idx == null || left == null || top == null || left < 0 || top < 0) {
+              tooltip.style.display = 'none'
+              return
+            }
+
+            const time = u.data[0][idx]
+            const value = u.data[1][idx]
+
+            if (time == null || value == null) {
+              tooltip.style.display = 'none'
+              return
+            }
+
+            const date = new Date(time * 1000)
+            const timeStr =
+              date.toLocaleTimeString('en-US', {
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit',
+                hour12: false,
+              }) +
+              '.' +
+              String(date.getMilliseconds()).padStart(3, '0')
+
+            tooltipTime.textContent = timeStr
+
+            // Convert back to original unit and pick best unit for display
+            const originalValue = value / conversionFactor
+            if (isTimeUnit(originalUnit)) {
+              tooltipValue.textContent = formatTimeValue(originalValue, originalUnit as TimeUnit)
+            } else {
+              tooltipValue.textContent = formatStatValue(originalValue, originalUnit)
+            }
+
+            tooltip.style.left = left + 10 + 'px'
+            tooltip.style.top = Math.max(0, top - 60) + 'px'
+            tooltip.style.display = 'block'
+          },
+          destroy: () => {
+            if (tooltip && tooltip.parentNode) {
+              tooltip.parentNode.removeChild(tooltip)
+            }
+          },
         },
-        setCursor: (u: uPlot) => {
-          const { idx, left, top } = u.cursor
-          if (idx == null || left == null || top == null || left < 0 || top < 0) {
-            tooltip.style.display = 'none'
-            return
-          }
-
-          const time = u.data[0][idx]
-          const value = u.data[1][idx]
-
-          if (time == null || value == null) {
-            tooltip.style.display = 'none'
-            return
-          }
-
-          const date = new Date(time * 1000)
-          const timeStr =
-            date.toLocaleTimeString('en-US', {
-              hour: '2-digit',
-              minute: '2-digit',
-              second: '2-digit',
-              hour12: false,
-            }) +
-            '.' +
-            String(date.getMilliseconds()).padStart(3, '0')
-
-          tooltipTime.textContent = timeStr
-          // Value is already in display unit, just format it
-          const absV = Math.abs(value)
-          let formattedValue: string
-          if (absV >= 100) {
-            formattedValue = Math.round(value) + ' ' + displayUnitName
-          } else if (absV >= 10) {
-            formattedValue = value.toFixed(1) + ' ' + displayUnitName
-          } else if (absV >= 1) {
-            formattedValue = value.toFixed(2) + ' ' + displayUnitName
-          } else if (absV === 0) {
-            formattedValue = '0 ' + displayUnitName
-          } else {
-            formattedValue = value.toPrecision(3) + ' ' + displayUnitName
-          }
-          tooltipValue.textContent = formattedValue
-
-          tooltip.style.left = left + 10 + 'px'
-          tooltip.style.top = Math.max(0, top - 60) + 'px'
-          tooltip.style.display = 'block'
-        },
-        destroy: () => {
-          if (tooltip && tooltip.parentNode) {
-            tooltip.parentNode.removeChild(tooltip)
-          }
-        },
-      },
-    }
-  }, [])
+      }
+    },
+    []
+  )
 
   // Create/update chart
   useEffect(() => {
@@ -227,7 +223,7 @@ export function TimeSeriesChart({
     const opts: uPlot.Options = {
       width: dimensions.width,
       height: dimensions.height,
-      plugins: [createTooltipPlugin(displayUnit)],
+      plugins: [createTooltipPlugin(unit, conversionFactor)],
       scales: {
         x: { time: true },
         y: {
