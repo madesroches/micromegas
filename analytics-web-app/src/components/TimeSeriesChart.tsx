@@ -246,6 +246,7 @@ export function TimeSeriesChart({
           grid: { stroke: '#2a2a35', width: 1 },
           ticks: { stroke: '#2a2a35', width: 1 },
           font: '11px -apple-system, BlinkMacSystemFont, sans-serif',
+          size: 50, // Ensure enough space for multi-line date/time labels
         },
         {
           stroke: '#6a6a7a',
