@@ -81,6 +81,7 @@ export function usePropertyTimeline({
   const [pendingRequests, setPendingRequests] = useState<Set<string>>(new Set())
 
   const rawDataRef = useRef<Map<string, RawPropertyData>>(new Map())
+  const pendingRequestsRef = useRef<Set<string>>(new Set())
 
   const mutation = useMutation({
     mutationFn: async ({
@@ -111,22 +112,16 @@ export function usePropertyTimeline({
         rows: parsedRows,
       })
 
-      setPendingRequests((prev) => {
-        const next = new Set(prev)
-        next.delete(propertyName)
-        return next
-      })
+      pendingRequestsRef.current.delete(propertyName)
+      setPendingRequests(new Set(pendingRequestsRef.current))
 
       // Update timelines when all requests are complete
       updateTimelines()
     },
     onError: (err: Error, { propertyName }) => {
       setError(err.message)
-      setPendingRequests((prev) => {
-        const next = new Set(prev)
-        next.delete(propertyName)
-        return next
-      })
+      pendingRequestsRef.current.delete(propertyName)
+      setPendingRequests(new Set(pendingRequestsRef.current))
     },
   })
 
@@ -152,8 +147,10 @@ export function usePropertyTimeline({
   const fetchProperty = useCallback(
     (propertyName: string) => {
       if (!processId || !measureName || !enabled) return
+      if (pendingRequestsRef.current.has(propertyName)) return
 
-      setPendingRequests((prev) => new Set(prev).add(propertyName))
+      pendingRequestsRef.current.add(propertyName)
+      setPendingRequests(new Set(pendingRequestsRef.current))
 
       mutateRef.current({
         sql: PROPERTY_VALUES_SQL,
@@ -233,6 +230,8 @@ export function usePropertyTimeline({
     if (baseParamsChanged) {
       // Clear all cached data and refetch everything
       rawDataRef.current.clear()
+      pendingRequestsRef.current.clear()
+      setPendingRequests(new Set())
       prevParamsRef.current = currentParams
       fetchAllProperties()
     } else if (propertyNamesChanged) {
