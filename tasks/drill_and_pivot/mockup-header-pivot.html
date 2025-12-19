@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pivot Button - Metrics View</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0a0a0f;
+      color: #e0e0e0;
+      min-height: 100vh;
+    }
+    .container { display: flex; height: 100vh; }
+    .sidebar {
+      width: 56px;
+      background: #0f0f14;
+      border-right: 1px solid #2a2a35;
+      padding: 12px 8px;
+    }
+    .sidebar-icon {
+      width: 40px; height: 40px;
+      display: flex; align-items: center; justify-content: center;
+      background: #1a1a24;
+      border-radius: 6px;
+      color: #1565c0;
+      cursor: pointer;
+    }
+    .main { flex: 1; display: flex; flex-direction: column; }
+    .header {
+      height: 48px;
+      background: #0f0f14;
+      border-bottom: 1px solid #2a2a35;
+      display: flex;
+      align-items: center;
+      padding: 0 16px;
+      gap: 16px;
+    }
+    .header h1 { font-size: 14px; color: #e0e0e0; }
+
+    .header-right {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    /* Split button */
+    .pivot-split-btn {
+      display: flex;
+      position: relative;
+    }
+    .pivot-main-btn {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 12px;
+      background: #1a1a24;
+      border: 1px solid #2a2a35;
+      border-right: none;
+      border-radius: 4px 0 0 4px;
+      color: #e0e0e0;
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .pivot-main-btn:hover {
+      background: #2a2a35;
+      border-color: #3a3a45;
+    }
+    .pivot-main-btn svg {
+      width: 14px;
+      height: 14px;
+      color: #1565c0;
+    }
+    .pivot-dropdown-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 6px 8px;
+      background: #1a1a24;
+      border: 1px solid #2a2a35;
+      border-radius: 0 4px 4px 0;
+      color: #888;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .pivot-dropdown-btn:hover {
+      background: #2a2a35;
+      border-color: #3a3a45;
+    }
+    .pivot-dropdown-btn svg {
+      width: 12px;
+      height: 12px;
+    }
+    .pivot-dropdown {
+      position: absolute;
+      top: 100%;
+      right: 0;
+      margin-top: 4px;
+      background: #1a1a24;
+      border: 1px solid #2a2a35;
+      border-radius: 6px;
+      min-width: 160px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+      z-index: 100;
+      overflow: hidden;
+    }
+    .pivot-dropdown-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 12px;
+      cursor: pointer;
+      transition: background 0.15s;
+      font-size: 13px;
+    }
+    .pivot-dropdown-item:hover {
+      background: #2a2a35;
+    }
+    .pivot-dropdown-item svg {
+      width: 14px;
+      height: 14px;
+      color: #888;
+    }
+    .pivot-dropdown-item:hover svg {
+      color: #1565c0;
+    }
+
+    .time-range {
+      padding: 6px 12px;
+      background: #1a1a24;
+      border: 1px solid #2a2a35;
+      border-radius: 4px;
+      color: #e0e0e0;
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    .content { flex: 1; padding: 24px; }
+    .page-title { font-size: 20px; margin-bottom: 8px; }
+    .process-id {
+      font-family: monospace;
+      font-size: 12px;
+      color: #888;
+      margin-bottom: 20px;
+    }
+    .controls {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    select {
+      padding: 8px 12px;
+      background: #1a1a24;
+      border: 1px solid #2a2a35;
+      border-radius: 4px;
+      color: #e0e0e0;
+      font-size: 13px;
+    }
+    .chart-container {
+      background: #1a1a24;
+      border: 1px solid #2a2a35;
+      border-radius: 8px;
+      padding: 16px;
+      height: 400px;
+      position: relative;
+    }
+    .chart-header {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 16px;
+    }
+    .chart-title { font-size: 14px; color: #e0e0e0; }
+    .chart-area {
+      height: 320px;
+      position: relative;
+    }
+    .chart-line {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: 200px;
+      background: linear-gradient(180deg, rgba(21, 101, 192, 0.1) 0%, transparent 100%);
+      clip-path: polygon(0 100%, 5% 80%, 10% 85%, 15% 60%, 20% 70%, 25% 50%, 30% 55%, 35% 40%, 40% 45%, 45% 30%, 50% 35%, 55% 25%, 60% 30%, 65% 20%, 70% 25%, 75% 15%, 80% 20%, 85% 10%, 90% 15%, 95% 8%, 100% 12%, 100% 100%);
+    }
+    .chart-line-stroke {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: 200px;
+      border-top: 2px solid #1565c0;
+      clip-path: polygon(0 80%, 5% 80%, 10% 85%, 15% 60%, 20% 70%, 25% 50%, 30% 55%, 35% 40%, 40% 45%, 45% 30%, 50% 35%, 55% 25%, 60% 30%, 65% 20%, 70% 25%, 75% 15%, 80% 20%, 85% 10%, 90% 15%, 95% 8%, 100% 12%);
+    }
+
+    .description {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: #1565c0;
+      color: white;
+      padding: 20px 24px;
+    }
+    .description h3 { font-size: 16px; margin-bottom: 8px; }
+    .description p { font-size: 14px; line-height: 1.6; opacity: 0.9; }
+    .description ul { margin-top: 8px; padding-left: 20px; }
+    .description li { font-size: 13px; margin-bottom: 4px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="sidebar">
+      <div class="sidebar-icon">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="3" y="3" width="7" height="7" rx="1"/>
+          <rect x="14" y="3" width="7" height="7" rx="1"/>
+          <rect x="3" y="14" width="7" height="7" rx="1"/>
+          <rect x="14" y="14" width="7" height="7" rx="1"/>
+        </svg>
+      </div>
+    </div>
+    <div class="main">
+      <div class="header">
+        <h1>Micromegas</h1>
+        <div class="header-right">
+          <div class="pivot-split-btn">
+            <button class="pivot-main-btn">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+              </svg>
+              <span>Performance Analytics</span>
+            </button>
+            <button class="pivot-dropdown-btn">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="6 9 12 15 18 9"/>
+              </svg>
+            </button>
+            <div class="pivot-dropdown">
+              <div class="pivot-dropdown-item">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                  <polyline points="14 2 14 8 20 8"/>
+                  <line x1="16" y1="13" x2="8" y2="13"/>
+                  <line x1="16" y1="17" x2="8" y2="17"/>
+                </svg>
+                <span>Log</span>
+              </div>
+            </div>
+          </div>
+          <div class="time-range">10:15 - 10:30</div>
+        </div>
+      </div>
+      <div class="content">
+        <h2 class="page-title">Process Metrics</h2>
+        <div class="process-id">d290f1ee-6c54-4b01-90e6-d701748f0851</div>
+
+        <div class="controls">
+          <select>
+            <option>cpu_usage (%)</option>
+            <option>memory_usage (bytes)</option>
+            <option>request_count (count)</option>
+          </select>
+        </div>
+
+        <div class="chart-container">
+          <div class="chart-header">
+            <span class="chart-title">cpu_usage (%)</span>
+          </div>
+          <div class="chart-area">
+            <div class="chart-line"></div>
+            <div class="chart-line-stroke"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="description">
+    <h3>Metrics View: Pivot Split Button</h3>
+    <p>From Metrics, the primary action is "Performance Analytics" (one click). Dropdown reveals "Log" as secondary option.</p>
+    <ul>
+      <li><strong>Main button:</strong> Navigates to Performance Analytics with same process + time range</li>
+      <li><strong>Dropdown:</strong> Log as alternative pivot target</li>
+      <li><strong>Location:</strong> Header, left of time range picker</li>
+    </ul>
+  </div>
+</body>
+</html>
