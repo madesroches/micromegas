@@ -33,29 +33,55 @@ interface RawPropertyData {
   rows: { time: number; value: string }[]
 }
 
-function aggregateIntoSegments(rows: { time: number; value: string }[]): PropertySegment[] {
+function parseIntervalToMs(interval: string): number {
+  const match = interval.match(/^(\d+)\s*(second|minute|hour|day)s?$/i)
+  if (!match) return 60000 // default to 1 minute
+
+  const value = parseInt(match[1], 10)
+  const unit = match[2].toLowerCase()
+
+  switch (unit) {
+    case 'second':
+      return value * 1000
+    case 'minute':
+      return value * 60 * 1000
+    case 'hour':
+      return value * 60 * 60 * 1000
+    case 'day':
+      return value * 24 * 60 * 60 * 1000
+    default:
+      return 60000
+  }
+}
+
+function aggregateIntoSegments(
+  rows: { time: number; value: string }[],
+  binIntervalMs: number
+): PropertySegment[] {
   if (rows.length === 0) return []
 
   const segments: PropertySegment[] = []
   let currentSegment: PropertySegment | null = null
 
   for (const row of rows) {
+    const binEnd = row.time + binIntervalMs
+
     if (!currentSegment) {
       currentSegment = {
         value: row.value,
         begin: row.time,
-        end: row.time,
+        end: binEnd,
       }
     } else if (currentSegment.value === row.value) {
-      // Extend current segment
-      currentSegment.end = row.time
+      // Extend current segment to cover this bin
+      currentSegment.end = binEnd
     } else {
       // Close current segment and start new one
       segments.push(currentSegment)
       currentSegment = {
         value: row.value,
         begin: row.time,
-        end: row.time,
+        end: binEnd,
       }
     }
   }
@@ -130,19 +156,20 @@ export function usePropertyTimeline({
 
   const updateTimelines = useCallback(() => {
     const newTimelines: PropertyTimelineData[] = []
+    const binIntervalMs = parseIntervalToMs(binInterval)
 
     for (const propertyName of propertyNames) {
       const data = rawDataRef.current.get(propertyName)
       if (data) {
         newTimelines.push({
           propertyName: data.propertyName,
-          segments: aggregateIntoSegments(data.rows),
+          segments: aggregateIntoSegments(data.rows, binIntervalMs),
         })
       }
     }
 
     setTimelines(newTimelines)
-  }, [propertyNames])
+  }, [propertyNames, binInterval])
 
   const fetchProperty = useCallback(
     (propertyName: string) => {
