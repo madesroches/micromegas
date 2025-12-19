@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mockup E: Combined Approach (Recommended)</title>
+  <style>
+    :root {
+      --app-bg: #0a0a0f;
+      --panel-bg: #12121a;
+      --card-bg: #1a1a2e;
+      --text-primary: #e7e9ea;
+      --text-secondary: #9ca3af;
+      --text-muted: #6b7280;
+      --border-color: #2a2a3e;
+      --accent-link: #1565c0;
+      --accent-error: #f87171;
+      --accent-warning: #ffb300;
+      --chart-line: #bf360c;
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--app-bg);
+      color: var(--text-primary);
+      padding: 24px;
+      min-height: 100vh;
+    }
+
+    .mockup-title {
+      font-size: 14px;
+      color: var(--text-muted);
+      margin-bottom: 16px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .recommended-badge {
+      display: inline-block;
+      padding: 2px 8px;
+      background: var(--accent-link);
+      color: white;
+      border-radius: 4px;
+      font-size: 10px;
+      font-weight: 600;
+      margin-left: 8px;
+      vertical-align: middle;
+    }
+
+    .chart-container {
+      background: var(--panel-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .chart-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .chart-title {
+      font-size: 16px;
+      font-weight: 500;
+    }
+
+    .chart-title .unit {
+      color: var(--text-muted);
+      font-weight: 400;
+    }
+
+    .chart-stats {
+      display: flex;
+      gap: 16px;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .chart-stats span {
+      color: var(--text-secondary);
+    }
+
+    .chart-area {
+      height: 250px;
+      padding: 16px;
+      display: flex;
+      align-items: flex-end;
+      justify-content: center;
+      gap: 2px;
+      cursor: crosshair;
+    }
+
+    .bar {
+      width: 8px;
+      background: var(--chart-line);
+      border-radius: 2px 2px 0 0;
+      opacity: 0.8;
+    }
+
+    .chart-axis {
+      display: flex;
+      justify-content: space-between;
+      padding: 0 16px 8px;
+      font-size: 11px;
+      color: var(--text-muted);
+      font-family: monospace;
+    }
+
+    /* Combined: Mini timeline + controls */
+    .zoom-controls {
+      padding: 12px 16px;
+      border-top: 1px solid var(--border-color);
+      background: var(--card-bg);
+    }
+
+    /* Mini timeline */
+    .timeline-section {
+      margin-bottom: 12px;
+    }
+
+    .timeline-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 6px;
+    }
+
+    .timeline-label {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+    }
+
+    .timeline-track {
+      height: 20px;
+      background: var(--panel-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 4px;
+      position: relative;
+      cursor: pointer;
+    }
+
+    .timeline-viewport {
+      position: absolute;
+      top: 2px;
+      bottom: 2px;
+      left: 55%;
+      width: 22%;
+      background: rgba(21, 101, 192, 0.3);
+      border: 2px solid var(--accent-link);
+      border-radius: 2px;
+      cursor: grab;
+      transition: background 0.15s;
+    }
+
+    .timeline-viewport:hover {
+      background: rgba(21, 101, 192, 0.4);
+    }
+
+    .timeline-times {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 4px;
+      font-size: 10px;
+      font-family: monospace;
+      color: var(--text-muted);
+    }
+
+    /* Control bar */
+    .control-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .view-info {
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+
+    .view-info strong {
+      color: var(--text-primary);
+    }
+
+    .view-info .total {
+      color: var(--text-muted);
+    }
+
+    .control-buttons {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .btn-group {
+      display: flex;
+      gap: 2px;
+      background: var(--panel-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      padding: 2px;
+    }
+
+    .zoom-btn {
+      width: 28px;
+      height: 26px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: transparent;
+      border: none;
+      border-radius: 4px;
+      color: var(--text-secondary);
+      font-size: 14px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .zoom-btn:hover {
+      background: var(--border-color);
+      color: var(--text-primary);
+    }
+
+    .zoom-btn:active {
+      background: #3a3a4e;
+    }
+
+    .text-btn {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 5px 10px;
+      background: var(--panel-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      color: var(--text-secondary);
+      font-size: 11px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .text-btn:hover {
+      background: var(--border-color);
+      color: var(--text-primary);
+    }
+
+    .text-btn svg {
+      width: 12px;
+      height: 12px;
+    }
+
+    /* Keyboard hints (tooltip style) */
+    .keyboard-hints {
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1px solid var(--border-color);
+      display: flex;
+      gap: 16px;
+      font-size: 10px;
+      color: var(--text-muted);
+    }
+
+    .hint {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .kbd {
+      display: inline-flex;
+      align-items: center;
+      padding: 1px 4px;
+      background: var(--panel-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 3px;
+      font-family: monospace;
+      font-size: 9px;
+      color: var(--text-secondary);
+    }
+
+    /* Boundary warning toast */
+    .boundary-toast {
+      position: fixed;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 16px;
+      background: var(--accent-warning);
+      color: var(--app-bg);
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 500;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+    }
+
+    .boundary-toast svg {
+      width: 16px;
+      height: 16px;
+    }
+  </style>
+</head>
+<body>
+  <div class="mockup-title">
+    Mockup E: Combined Approach
+    <span class="recommended-badge">RECOMMENDED</span>
+  </div>
+
+  <div class="chart-container">
+    <div class="chart-header">
+      <div class="chart-title">cpu_usage <span class="unit">(percent)</span></div>
+      <div class="chart-stats">
+        <div>min: <span>12.3%</span></div>
+        <div>max: <span>87.2%</span></div>
+        <div>avg: <span>45.1%</span></div>
+      </div>
+    </div>
+
+    <div class="chart-area">
+      <div class="bar" style="height: 45%"></div>
+      <div class="bar" style="height: 52%"></div>
+      <div class="bar" style="height: 48%"></div>
+      <div class="bar" style="height: 65%"></div>
+      <div class="bar" style="height: 72%"></div>
+      <div class="bar" style="height: 68%"></div>
+      <div class="bar" style="height: 55%"></div>
+      <div class="bar" style="height: 42%"></div>
+      <div class="bar" style="height: 38%"></div>
+      <div class="bar" style="height: 45%"></div>
+      <div class="bar" style="height: 58%"></div>
+      <div class="bar" style="height: 75%"></div>
+      <div class="bar" style="height: 82%"></div>
+      <div class="bar" style="height: 78%"></div>
+      <div class="bar" style="height: 65%"></div>
+      <div class="bar" style="height: 52%"></div>
+      <div class="bar" style="height: 48%"></div>
+      <div class="bar" style="height: 55%"></div>
+      <div class="bar" style="height: 62%"></div>
+      <div class="bar" style="height: 58%"></div>
+      <div class="bar" style="height: 45%"></div>
+      <div class="bar" style="height: 38%"></div>
+      <div class="bar" style="height: 42%"></div>
+      <div class="bar" style="height: 48%"></div>
+      <div class="bar" style="height: 52%"></div>
+      <div class="bar" style="height: 45%"></div>
+      <div class="bar" style="height: 55%"></div>
+      <div class="bar" style="height: 68%"></div>
+      <div class="bar" style="height: 72%"></div>
+      <div class="bar" style="height: 65%"></div>
+    </div>
+
+    <div class="chart-axis">
+      <span>10:00</span>
+      <span>11:00</span>
+      <span>12:00</span>
+      <span>13:00</span>
+      <span>14:00</span>
+      <span>15:00</span>
+    </div>
+
+    <!-- Combined zoom controls -->
+    <div class="zoom-controls">
+      <!-- Mini timeline -->
+      <div class="timeline-section">
+        <div class="timeline-header">
+          <span class="timeline-label">Timeline</span>
+        </div>
+        <div class="timeline-track">
+          <div class="timeline-viewport"></div>
+        </div>
+        <div class="timeline-times">
+          <span>Dec 17 09:15</span>
+          <span>Dec 18 14:23</span>
+        </div>
+      </div>
+
+      <!-- Control bar -->
+      <div class="control-bar">
+        <div class="view-info">
+          Viewing <strong>6h</strong> <span class="total">of 29h total</span>
+        </div>
+
+        <div class="control-buttons">
+          <div class="btn-group">
+            <button class="zoom-btn" title="Zoom out (show more time)">−</button>
+            <button class="zoom-btn" title="Zoom in (show less time)">+</button>
+          </div>
+
+          <button class="text-btn" title="Reset to default view">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
+              <path d="M3 3v5h5"/>
+            </svg>
+            Reset
+          </button>
+
+          <button class="text-btn" title="Show entire process lifetime">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>
+            </svg>
+            Full Process
+          </button>
+        </div>
+      </div>
+
+      <!-- Keyboard hints -->
+      <div class="keyboard-hints">
+        <div class="hint">
+          <span class="kbd">Scroll</span>
+          <span>to zoom</span>
+        </div>
+        <div class="hint">
+          <span class="kbd">Shift</span>+<span class="kbd">Scroll</span>
+          <span>to pan</span>
+        </div>
+        <div class="hint">
+          <span class="kbd">Home</span>
+          <span>process start</span>
+        </div>
+        <div class="hint">
+          <span class="kbd">End</span>
+          <span>process end</span>
+        </div>
+        <div class="hint">
+          <span class="kbd">R</span>
+          <span>reset view</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Example boundary warning toast -->
+  <div class="boundary-toast">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <circle cx="12" cy="12" r="10"/>
+      <path d="M12 8v4M12 16h.01"/>
+    </svg>
+    Reached process start boundary (Dec 17 09:15)
+  </div>
+</body>
+</html>

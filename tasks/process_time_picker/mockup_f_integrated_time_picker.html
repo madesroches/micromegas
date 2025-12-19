@@ -1,0 +1,671 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mockup F: Integrated Time Range Picker (Process-Aware)</title>
+  <style>
+    :root {
+      --app-bg: #0a0a0f;
+      --panel-bg: #12121a;
+      --card-bg: #1a1a2e;
+      --text-primary: #e7e9ea;
+      --text-secondary: #9ca3af;
+      --text-muted: #6b7280;
+      --border-color: #2a2a3e;
+      --accent-link: #1565c0;
+      --accent-error: #f87171;
+      --accent-warning: #ffb300;
+      --chart-line: #bf360c;
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--app-bg);
+      color: var(--text-primary);
+      padding: 24px;
+      min-height: 100vh;
+    }
+
+    .mockup-title {
+      font-size: 14px;
+      color: var(--text-muted);
+      margin-bottom: 8px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .mockup-description {
+      font-size: 12px;
+      color: var(--text-secondary);
+      margin-bottom: 24px;
+      max-width: 600px;
+      line-height: 1.5;
+    }
+
+    /* Simulated header */
+    .app-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 16px;
+      background: var(--panel-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      margin-bottom: 24px;
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+
+    .logo-icon {
+      width: 24px;
+      height: 24px;
+      background: var(--chart-line);
+      border-radius: 4px;
+    }
+
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    /* Time Range Picker Button - Enhanced for process context */
+    .time-picker-btn {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 12px;
+      background: var(--border-color);
+      border: none;
+      border-radius: 6px;
+      color: var(--text-primary);
+      font-size: 13px;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+
+    .time-picker-btn:hover {
+      background: #3a3a4e;
+    }
+
+    .time-picker-btn svg {
+      width: 16px;
+      height: 16px;
+      color: var(--text-secondary);
+    }
+
+    .time-picker-btn .chevron {
+      width: 12px;
+      height: 12px;
+      color: var(--text-muted);
+    }
+
+    /* NEW: Process context badge on button */
+    .process-badge {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 6px;
+      background: rgba(21, 101, 192, 0.2);
+      border: 1px solid var(--accent-link);
+      border-radius: 4px;
+      font-size: 10px;
+      color: var(--accent-link);
+    }
+
+    .user-menu {
+      width: 32px;
+      height: 32px;
+      background: var(--border-color);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+
+    /* Time Picker Popover - Process-Aware Version */
+    .time-picker-popover {
+      width: 580px;
+      background: var(--panel-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+      overflow: hidden;
+    }
+
+    /* NEW: Process context header */
+    .process-context {
+      padding: 12px 16px;
+      background: var(--card-bg);
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .process-context-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 10px;
+    }
+
+    .process-context-title {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+    }
+
+    .process-context-title svg {
+      width: 14px;
+      height: 14px;
+      color: var(--accent-link);
+    }
+
+    .process-name {
+      font-size: 12px;
+      color: var(--text-secondary);
+      font-family: monospace;
+    }
+
+    /* Process timeline visualization */
+    .process-timeline {
+      position: relative;
+    }
+
+    .timeline-track {
+      height: 28px;
+      background: var(--app-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 4px;
+      position: relative;
+      cursor: pointer;
+    }
+
+    .timeline-viewport {
+      position: absolute;
+      top: 3px;
+      bottom: 3px;
+      left: 55%;
+      width: 20%;
+      background: rgba(21, 101, 192, 0.3);
+      border: 2px solid var(--accent-link);
+      border-radius: 3px;
+      cursor: grab;
+    }
+
+    .timeline-viewport:hover {
+      background: rgba(21, 101, 192, 0.4);
+    }
+
+    /* Resize handles */
+    .viewport-handle {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      width: 8px;
+      cursor: ew-resize;
+    }
+
+    .viewport-handle-left {
+      left: -2px;
+    }
+
+    .viewport-handle-right {
+      right: -2px;
+    }
+
+    .viewport-handle::after {
+      content: '';
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 3px;
+      height: 12px;
+      background: var(--accent-link);
+      border-radius: 2px;
+    }
+
+    .timeline-labels {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 6px;
+      font-size: 10px;
+      font-family: monospace;
+      color: var(--text-muted);
+    }
+
+    .timeline-label-start, .timeline-label-end {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .timeline-label-end {
+      align-items: flex-end;
+    }
+
+    .timeline-label-title {
+      font-size: 9px;
+      text-transform: uppercase;
+      color: var(--text-muted);
+    }
+
+    .timeline-label-value {
+      color: var(--text-secondary);
+    }
+
+    /* Process quick actions */
+    .process-actions {
+      display: flex;
+      gap: 6px;
+      margin-top: 10px;
+    }
+
+    .process-action-btn {
+      flex: 1;
+      padding: 6px 10px;
+      background: var(--panel-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 4px;
+      color: var(--text-secondary);
+      font-size: 11px;
+      cursor: pointer;
+      transition: all 0.15s;
+      text-align: center;
+    }
+
+    .process-action-btn:hover {
+      background: var(--border-color);
+      color: var(--text-primary);
+    }
+
+    .process-action-btn.active {
+      background: var(--accent-link);
+      border-color: var(--accent-link);
+      color: white;
+    }
+
+    /* Main picker content */
+    .picker-content {
+      display: flex;
+      padding: 16px;
+      gap: 16px;
+    }
+
+    /* Quick ranges column */
+    .quick-ranges {
+      min-width: 140px;
+    }
+
+    .quick-ranges-title {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      margin-bottom: 8px;
+    }
+
+    .quick-range-btn {
+      display: block;
+      width: 100%;
+      padding: 6px 10px;
+      background: transparent;
+      border: none;
+      border-radius: 4px;
+      color: var(--text-secondary);
+      font-size: 12px;
+      text-align: left;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .quick-range-btn:hover {
+      background: var(--border-color);
+      color: var(--text-primary);
+    }
+
+    .quick-range-btn.active {
+      background: var(--accent-link);
+      color: white;
+    }
+
+    .quick-range-btn.disabled {
+      color: var(--text-muted);
+      cursor: not-allowed;
+      opacity: 0.5;
+    }
+
+    .quick-range-btn.disabled:hover {
+      background: transparent;
+      color: var(--text-muted);
+    }
+
+    /* Custom range column */
+    .custom-range {
+      flex: 1;
+      border-left: 1px solid var(--border-color);
+      padding-left: 16px;
+    }
+
+    .custom-range-title {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      margin-bottom: 8px;
+    }
+
+    .range-inputs {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .range-input-group {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .range-input-label {
+      width: 40px;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .range-input {
+      flex: 1;
+      padding: 8px 10px;
+      background: var(--app-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 4px;
+      color: var(--text-primary);
+      font-size: 12px;
+      font-family: monospace;
+    }
+
+    .range-input:focus {
+      outline: none;
+      border-color: var(--accent-link);
+    }
+
+    .range-input.error {
+      border-color: var(--accent-error);
+    }
+
+    /* Boundary warning */
+    .boundary-warning {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 8px;
+      padding: 6px 10px;
+      background: rgba(255, 179, 0, 0.1);
+      border: 1px solid var(--accent-warning);
+      border-radius: 4px;
+      font-size: 11px;
+      color: var(--accent-warning);
+    }
+
+    .boundary-warning svg {
+      width: 14px;
+      height: 14px;
+      flex-shrink: 0;
+    }
+
+    /* Apply button */
+    .apply-section {
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid var(--border-color);
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+
+    .apply-btn {
+      padding: 8px 16px;
+      background: var(--accent-link);
+      border: none;
+      border-radius: 4px;
+      color: white;
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+
+    .apply-btn:hover {
+      background: #1976d2;
+    }
+
+    .cancel-btn {
+      padding: 8px 16px;
+      background: transparent;
+      border: 1px solid var(--border-color);
+      border-radius: 4px;
+      color: var(--text-secondary);
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .cancel-btn:hover {
+      background: var(--border-color);
+      color: var(--text-primary);
+    }
+
+    /* Zoom controls in popover */
+    .zoom-controls {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .zoom-btn {
+      width: 24px;
+      height: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--panel-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 4px;
+      color: var(--text-secondary);
+      font-size: 14px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .zoom-btn:hover {
+      background: var(--border-color);
+      color: var(--text-primary);
+    }
+
+    /* Section divider */
+    .section-divider {
+      height: 1px;
+      background: var(--border-color);
+      margin: 0 16px;
+    }
+
+    /* Comparison: Standard vs Process-Aware */
+    .comparison {
+      display: flex;
+      gap: 24px;
+      margin-top: 32px;
+    }
+
+    .comparison-item {
+      flex: 1;
+    }
+
+    .comparison-label {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .comparison-badge {
+      padding: 2px 6px;
+      background: var(--accent-link);
+      color: white;
+      border-radius: 3px;
+      font-size: 9px;
+      font-weight: 600;
+    }
+  </style>
+</head>
+<body>
+  <div class="mockup-title">Mockup F: Process-Aware Time Range Picker</div>
+  <div class="mockup-description">
+    When on a process-specific screen (metrics, logs, performance), the time range picker
+    gains additional functionality: a process timeline visualization, quick actions for
+    process-relative navigation, and boundary enforcement.
+  </div>
+
+  <!-- Simulated Header -->
+  <div class="app-header">
+    <div class="logo">
+      <div class="logo-icon"></div>
+      <span>micromegas</span>
+    </div>
+    <div class="header-right">
+      <!-- Enhanced time picker button with process context -->
+      <button class="time-picker-btn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="10"/>
+          <path d="M12 6v6l4 2"/>
+        </svg>
+        <span>Last 6 hours</span>
+        <div class="process-badge">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:10px;height:10px">
+            <rect x="2" y="3" width="20" height="14" rx="2"/>
+            <path d="M8 21h8M12 17v4"/>
+          </svg>
+          Process
+        </div>
+        <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M6 9l6 6 6-6"/>
+        </svg>
+      </button>
+      <div class="user-menu">U</div>
+    </div>
+  </div>
+
+  <!-- Process-Aware Time Picker Popover -->
+  <div class="time-picker-popover">
+    <!-- NEW: Process context section -->
+    <div class="process-context">
+      <div class="process-context-header">
+        <div class="process-context-title">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="2" y="3" width="20" height="14" rx="2"/>
+            <path d="M8 21h8M12 17v4"/>
+          </svg>
+          Process Timeline
+        </div>
+        <div class="process-name">analytics-srv</div>
+      </div>
+
+      <!-- Interactive timeline -->
+      <div class="process-timeline">
+        <div class="timeline-track">
+          <div class="timeline-viewport">
+            <div class="viewport-handle viewport-handle-left"></div>
+            <div class="viewport-handle viewport-handle-right"></div>
+          </div>
+        </div>
+        <div class="timeline-labels">
+          <div class="timeline-label-start">
+            <span class="timeline-label-title">Started</span>
+            <span class="timeline-label-value">Dec 17 09:15:32</span>
+          </div>
+          <div class="timeline-label-end">
+            <span class="timeline-label-title">Last Update</span>
+            <span class="timeline-label-value">Dec 18 14:23:45</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Quick process-relative actions -->
+      <div class="process-actions">
+        <button class="process-action-btn">First Hour</button>
+        <button class="process-action-btn active">Last Hour</button>
+        <button class="process-action-btn">Full Process</button>
+      </div>
+    </div>
+
+    <div class="section-divider"></div>
+
+    <!-- Standard picker content -->
+    <div class="picker-content">
+      <div class="quick-ranges">
+        <div class="quick-ranges-title">Quick Ranges</div>
+        <button class="quick-range-btn">Last 5 minutes</button>
+        <button class="quick-range-btn">Last 15 minutes</button>
+        <button class="quick-range-btn">Last 30 minutes</button>
+        <button class="quick-range-btn">Last 1 hour</button>
+        <button class="quick-range-btn">Last 3 hours</button>
+        <button class="quick-range-btn active">Last 6 hours</button>
+        <button class="quick-range-btn">Last 12 hours</button>
+        <button class="quick-range-btn">Last 24 hours</button>
+        <button class="quick-range-btn disabled" title="Exceeds process lifetime">Last 2 days</button>
+        <button class="quick-range-btn disabled" title="Exceeds process lifetime">Last 7 days</button>
+      </div>
+
+      <div class="custom-range">
+        <div class="custom-range-title">Custom Range</div>
+        <div class="range-inputs">
+          <div class="range-input-group">
+            <span class="range-input-label">From</span>
+            <input type="text" class="range-input" value="2024-12-18T08:23:00" />
+          </div>
+          <div class="range-input-group">
+            <span class="range-input-label">To</span>
+            <input type="text" class="range-input" value="2024-12-18T14:23:00" />
+          </div>
+        </div>
+
+        <!-- Boundary warning example -->
+        <div class="boundary-warning">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10"/>
+            <path d="M12 8v4M12 16h.01"/>
+          </svg>
+          <span>Time range constrained to process lifetime (29h 8m)</span>
+        </div>
+
+        <div class="apply-section">
+          <button class="cancel-btn">Cancel</button>
+          <button class="apply-btn">Apply</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</body>
+</html>

@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mockup D: Minimal UI (Gestures)</title>
+  <style>
+    :root {
+      --app-bg: #0a0a0f;
+      --panel-bg: #12121a;
+      --card-bg: #1a1a2e;
+      --text-primary: #e7e9ea;
+      --text-secondary: #9ca3af;
+      --text-muted: #6b7280;
+      --border-color: #2a2a3e;
+      --accent-link: #1565c0;
+      --accent-error: #f87171;
+      --accent-warning: #ffb300;
+      --chart-line: #bf360c;
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--app-bg);
+      color: var(--text-primary);
+      padding: 24px;
+      min-height: 100vh;
+    }
+
+    .mockup-title {
+      font-size: 14px;
+      color: var(--text-muted);
+      margin-bottom: 16px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .chart-container {
+      background: var(--panel-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .chart-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .chart-title {
+      font-size: 16px;
+      font-weight: 500;
+    }
+
+    .chart-title .unit {
+      color: var(--text-muted);
+      font-weight: 400;
+    }
+
+    .chart-stats {
+      display: flex;
+      gap: 16px;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .chart-stats span {
+      color: var(--text-secondary);
+    }
+
+    /* NEW: Hint bar */
+    .hint-bar {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 16px;
+      background: var(--card-bg);
+      border-bottom: 1px solid var(--border-color);
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    .hint-bar svg {
+      width: 14px;
+      height: 14px;
+      color: var(--accent-link);
+    }
+
+    .hint-separator {
+      color: var(--border-color);
+      margin: 0 4px;
+    }
+
+    .hint-kbd {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 5px;
+      background: var(--panel-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 3px;
+      font-family: monospace;
+      font-size: 10px;
+      color: var(--text-secondary);
+    }
+
+    .chart-area {
+      height: 280px;
+      padding: 16px;
+      display: flex;
+      align-items: flex-end;
+      justify-content: center;
+      gap: 2px;
+      cursor: crosshair;
+    }
+
+    .bar {
+      width: 8px;
+      background: var(--chart-line);
+      border-radius: 2px 2px 0 0;
+      opacity: 0.8;
+    }
+
+    .chart-axis {
+      display: flex;
+      justify-content: space-between;
+      padding: 0 16px 8px;
+      font-size: 11px;
+      color: var(--text-muted);
+      font-family: monospace;
+    }
+
+    /* NEW: Minimal footer */
+    .chart-footer {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px 16px;
+      border-top: 1px solid var(--border-color);
+      background: var(--card-bg);
+    }
+
+    .view-summary {
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+
+    .view-summary strong {
+      color: var(--text-primary);
+    }
+
+    .view-summary .of-total {
+      color: var(--text-muted);
+    }
+
+    .full-process-btn {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 12px;
+      background: var(--border-color);
+      border: none;
+      border-radius: 4px;
+      color: var(--text-primary);
+      font-size: 12px;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+
+    .full-process-btn:hover {
+      background: #3a3a4e;
+    }
+
+    .full-process-btn svg {
+      width: 14px;
+      height: 14px;
+    }
+  </style>
+</head>
+<body>
+  <div class="mockup-title">Mockup D: Minimal UI (Keyboard + Mouse Wheel)</div>
+
+  <div class="chart-container">
+    <div class="chart-header">
+      <div class="chart-title">cpu_usage <span class="unit">(percent)</span></div>
+      <div class="chart-stats">
+        <div>min: <span>12.3%</span></div>
+        <div>max: <span>87.2%</span></div>
+        <div>avg: <span>45.1%</span></div>
+      </div>
+    </div>
+
+    <!-- NEW: Hint bar (can be dismissed) -->
+    <div class="hint-bar">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="12" cy="12" r="10"/>
+        <path d="M12 16v-4M12 8h.01"/>
+      </svg>
+      <span>Scroll to zoom</span>
+      <span class="hint-separator">•</span>
+      <span><span class="hint-kbd">Shift</span> + scroll to pan</span>
+      <span class="hint-separator">•</span>
+      <span>Double-click to reset</span>
+    </div>
+
+    <div class="chart-area">
+      <div class="bar" style="height: 45%"></div>
+      <div class="bar" style="height: 52%"></div>
+      <div class="bar" style="height: 48%"></div>
+      <div class="bar" style="height: 65%"></div>
+      <div class="bar" style="height: 72%"></div>
+      <div class="bar" style="height: 68%"></div>
+      <div class="bar" style="height: 55%"></div>
+      <div class="bar" style="height: 42%"></div>
+      <div class="bar" style="height: 38%"></div>
+      <div class="bar" style="height: 45%"></div>
+      <div class="bar" style="height: 58%"></div>
+      <div class="bar" style="height: 75%"></div>
+      <div class="bar" style="height: 82%"></div>
+      <div class="bar" style="height: 78%"></div>
+      <div class="bar" style="height: 65%"></div>
+      <div class="bar" style="height: 52%"></div>
+      <div class="bar" style="height: 48%"></div>
+      <div class="bar" style="height: 55%"></div>
+      <div class="bar" style="height: 62%"></div>
+      <div class="bar" style="height: 58%"></div>
+      <div class="bar" style="height: 45%"></div>
+      <div class="bar" style="height: 38%"></div>
+      <div class="bar" style="height: 42%"></div>
+      <div class="bar" style="height: 48%"></div>
+      <div class="bar" style="height: 52%"></div>
+      <div class="bar" style="height: 45%"></div>
+      <div class="bar" style="height: 55%"></div>
+      <div class="bar" style="height: 68%"></div>
+      <div class="bar" style="height: 72%"></div>
+      <div class="bar" style="height: 65%"></div>
+    </div>
+
+    <div class="chart-axis">
+      <span>10:00</span>
+      <span>11:00</span>
+      <span>12:00</span>
+      <span>13:00</span>
+      <span>14:00</span>
+      <span>15:00</span>
+    </div>
+
+    <!-- NEW: Minimal footer -->
+    <div class="chart-footer">
+      <div class="view-summary">
+        <strong>10:00 - 16:00</strong> <span class="of-total">(6h of 29h process)</span>
+      </div>
+      <button class="full-process-btn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>
+        </svg>
+        Show Full Process
+      </button>
+    </div>
+  </div>
+</body>
+</html>

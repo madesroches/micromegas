@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mockup A: Timeline Navigator Bar</title>
+  <style>
+    :root {
+      --app-bg: #0a0a0f;
+      --panel-bg: #12121a;
+      --card-bg: #1a1a2e;
+      --text-primary: #e7e9ea;
+      --text-secondary: #9ca3af;
+      --text-muted: #6b7280;
+      --border-color: #2a2a3e;
+      --accent-link: #1565c0;
+      --accent-error: #f87171;
+      --accent-warning: #ffb300;
+      --chart-line: #bf360c;
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--app-bg);
+      color: var(--text-primary);
+      padding: 24px;
+      min-height: 100vh;
+    }
+
+    .mockup-title {
+      font-size: 14px;
+      color: var(--text-muted);
+      margin-bottom: 16px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .chart-container {
+      background: var(--panel-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .chart-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .chart-title {
+      font-size: 16px;
+      font-weight: 500;
+    }
+
+    .chart-title .unit {
+      color: var(--text-muted);
+      font-weight: 400;
+    }
+
+    .chart-stats {
+      display: flex;
+      gap: 16px;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .chart-stats span {
+      color: var(--text-secondary);
+    }
+
+    .chart-area {
+      height: 250px;
+      padding: 16px;
+      display: flex;
+      align-items: flex-end;
+      justify-content: center;
+      gap: 2px;
+    }
+
+    .bar {
+      width: 8px;
+      background: var(--chart-line);
+      border-radius: 2px 2px 0 0;
+      opacity: 0.8;
+    }
+
+    /* Timeline Navigator - NEW COMPONENT */
+    .timeline-navigator {
+      padding: 12px 16px;
+      border-top: 1px solid var(--border-color);
+      background: var(--card-bg);
+    }
+
+    .timeline-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .timeline-label {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      white-space: nowrap;
+    }
+
+    .timeline-track {
+      flex: 1;
+      height: 24px;
+      background: var(--panel-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 4px;
+      position: relative;
+      cursor: pointer;
+    }
+
+    .timeline-viewport {
+      position: absolute;
+      top: 2px;
+      bottom: 2px;
+      background: rgba(21, 101, 192, 0.3);
+      border: 2px solid var(--accent-link);
+      border-radius: 3px;
+      cursor: grab;
+      /* Positioned to show ~20% of the timeline */
+      left: 60%;
+      width: 25%;
+    }
+
+    .timeline-viewport:hover {
+      background: rgba(21, 101, 192, 0.4);
+    }
+
+    .timeline-viewport::before,
+    .timeline-viewport::after {
+      content: '';
+      position: absolute;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 4px;
+      height: 12px;
+      background: var(--accent-link);
+      border-radius: 2px;
+      cursor: ew-resize;
+    }
+
+    .timeline-viewport::before {
+      left: 2px;
+    }
+
+    .timeline-viewport::after {
+      right: 2px;
+    }
+
+    .timeline-controls {
+      display: flex;
+      gap: 4px;
+    }
+
+    .zoom-btn {
+      width: 28px;
+      height: 28px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--border-color);
+      border: none;
+      border-radius: 4px;
+      color: var(--text-primary);
+      font-size: 16px;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+
+    .zoom-btn:hover {
+      background: #3a3a4e;
+    }
+
+    .zoom-btn:active {
+      background: #4a4a5e;
+    }
+
+    .timeline-times {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 6px;
+      padding: 0 4px;
+    }
+
+    .timeline-time {
+      font-size: 10px;
+      color: var(--text-muted);
+      font-family: monospace;
+    }
+
+    .timeline-time.current {
+      color: var(--accent-link);
+      position: absolute;
+      left: 72.5%;
+      transform: translateX(-50%);
+    }
+
+    .times-container {
+      position: relative;
+      margin-left: 95px;
+      margin-right: 100px;
+    }
+
+    /* Axis labels */
+    .chart-axis {
+      display: flex;
+      justify-content: space-between;
+      padding: 0 16px 8px;
+      font-size: 11px;
+      color: var(--text-muted);
+      font-family: monospace;
+    }
+  </style>
+</head>
+<body>
+  <div class="mockup-title">Mockup A: Timeline Navigator Bar</div>
+
+  <div class="chart-container">
+    <div class="chart-header">
+      <div class="chart-title">cpu_usage <span class="unit">(percent)</span></div>
+      <div class="chart-stats">
+        <div>min: <span>12.3%</span></div>
+        <div>max: <span>87.2%</span></div>
+        <div>avg: <span>45.1%</span></div>
+      </div>
+    </div>
+
+    <div class="chart-area">
+      <!-- Simulated chart bars -->
+      <div class="bar" style="height: 45%"></div>
+      <div class="bar" style="height: 52%"></div>
+      <div class="bar" style="height: 48%"></div>
+      <div class="bar" style="height: 65%"></div>
+      <div class="bar" style="height: 72%"></div>
+      <div class="bar" style="height: 68%"></div>
+      <div class="bar" style="height: 55%"></div>
+      <div class="bar" style="height: 42%"></div>
+      <div class="bar" style="height: 38%"></div>
+      <div class="bar" style="height: 45%"></div>
+      <div class="bar" style="height: 58%"></div>
+      <div class="bar" style="height: 75%"></div>
+      <div class="bar" style="height: 82%"></div>
+      <div class="bar" style="height: 78%"></div>
+      <div class="bar" style="height: 65%"></div>
+      <div class="bar" style="height: 52%"></div>
+      <div class="bar" style="height: 48%"></div>
+      <div class="bar" style="height: 55%"></div>
+      <div class="bar" style="height: 62%"></div>
+      <div class="bar" style="height: 58%"></div>
+      <div class="bar" style="height: 45%"></div>
+      <div class="bar" style="height: 38%"></div>
+      <div class="bar" style="height: 42%"></div>
+      <div class="bar" style="height: 48%"></div>
+      <div class="bar" style="height: 52%"></div>
+      <div class="bar" style="height: 45%"></div>
+      <div class="bar" style="height: 55%"></div>
+      <div class="bar" style="height: 68%"></div>
+      <div class="bar" style="height: 72%"></div>
+      <div class="bar" style="height: 65%"></div>
+    </div>
+
+    <div class="chart-axis">
+      <span>10:00</span>
+      <span>11:00</span>
+      <span>12:00</span>
+      <span>13:00</span>
+      <span>14:00</span>
+      <span>15:00</span>
+    </div>
+
+    <!-- NEW: Timeline Navigator -->
+    <div class="timeline-navigator">
+      <div class="timeline-row">
+        <span class="timeline-label">Process Timeline</span>
+        <div class="timeline-track">
+          <div class="timeline-viewport"></div>
+        </div>
+        <div class="timeline-controls">
+          <button class="zoom-btn" title="Zoom out">−</button>
+          <button class="zoom-btn" title="Zoom in">+</button>
+          <button class="zoom-btn" title="Reset view">↺</button>
+        </div>
+      </div>
+      <div class="times-container">
+        <div class="timeline-times">
+          <span class="timeline-time">Dec 17 09:15</span>
+          <span class="timeline-time">Dec 18 14:23</span>
+        </div>
+        <span class="timeline-time current">current view</span>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
