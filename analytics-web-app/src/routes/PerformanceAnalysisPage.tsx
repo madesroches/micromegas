@@ -99,7 +99,14 @@ function PerformanceAnalysisContent() {
   const pathname = location.pathname
   const processId = searchParams.get('process_id')
   const measureParam = searchParams.get('measure')
+  const propertiesParam = searchParams.get('properties')
   const { parsed: timeRange, apiTimeRange, setTimeRange } = useTimeRange()
+
+  // Parse selected properties from URL
+  const selectedProperties = useMemo(() => {
+    if (!propertiesParam) return []
+    return propertiesParam.split(',').filter(Boolean)
+  }, [propertiesParam])
 
   const [measures, setMeasures] = useState<Measure[]>([])
   const [selectedMeasure, setSelectedMeasure] = useState<string | null>(measureParam)
@@ -313,6 +320,30 @@ function PerformanceAnalysisContent() {
       navigate(`${pathname}?${params.toString()}`)
     },
     [searchParams, navigate, pathname]
+  )
+
+  const handleAddProperty = useCallback(
+    (key: string) => {
+      const newProperties = [...selectedProperties, key]
+      const params = new URLSearchParams(searchParams.toString())
+      params.set('properties', newProperties.join(','))
+      navigate(`${pathname}?${params.toString()}`)
+    },
+    [selectedProperties, searchParams, navigate, pathname]
+  )
+
+  const handleRemoveProperty = useCallback(
+    (key: string) => {
+      const newProperties = selectedProperties.filter((k) => k !== key)
+      const params = new URLSearchParams(searchParams.toString())
+      if (newProperties.length > 0) {
+        params.set('properties', newProperties.join(','))
+      } else {
+        params.delete('properties')
+      }
+      navigate(`${pathname}?${params.toString()}`)
+    },
+    [selectedProperties, searchParams, navigate, pathname]
   )
 
   const hasLoadedProcessRef = useRef(false)
@@ -707,6 +738,9 @@ function PerformanceAnalysisContent() {
               measureName={selectedMeasure}
               apiTimeRange={apiTimeRange}
               binInterval={binInterval}
+              selectedProperties={selectedProperties}
+              onAddProperty={handleAddProperty}
+              onRemoveProperty={handleRemoveProperty}
               onTimeRangeSelect={handleTimeRangeSelect}
               onWidthChange={handleChartWidthChange}
               onAxisBoundsChange={handleAxisBoundsChange}

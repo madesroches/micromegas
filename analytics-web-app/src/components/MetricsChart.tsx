@@ -15,6 +15,10 @@ interface MetricsChartProps {
   measureName: string | null
   apiTimeRange: { begin: string; end: string }
   binInterval: string
+  // Selected properties (controlled from parent for URL persistence)
+  selectedProperties: string[]
+  onAddProperty: (key: string) => void
+  onRemoveProperty: (key: string) => void
   // Callbacks
   onTimeRangeSelect?: (from: Date, to: Date) => void
   onWidthChange?: (width: number) => void
@@ -29,12 +33,14 @@ export function MetricsChart({
   measureName,
   apiTimeRange,
   binInterval,
+  selectedProperties,
+  onAddProperty,
+  onRemoveProperty,
   onTimeRangeSelect,
   onWidthChange,
   onAxisBoundsChange,
 }: MetricsChartProps) {
   const [axisBounds, setAxisBounds] = useState<ChartAxisBounds | null>(null)
-  const [selectedProperties, setSelectedProperties] = useState<string[]>([])
 
   // Fetch available property keys
   const {
@@ -75,14 +81,6 @@ export function MetricsChart({
     setAxisBounds(bounds)
     onAxisBoundsChange?.(bounds)
   }, [onAxisBoundsChange])
-
-  const handleAddProperty = useCallback((key: string) => {
-    setSelectedProperties((prev) => [...prev, key])
-  }, [])
-
-  const handleRemoveProperty = useCallback((key: string) => {
-    setSelectedProperties((prev) => prev.filter((k) => k !== key))
-  }, [])
 
   // Calculate time range from data for property timeline
   const chartTimeRange =
@@ -128,8 +126,8 @@ export function MetricsChart({
           timeRange={chartTimeRange}
           axisBounds={axisBounds}
           onTimeRangeSelect={onTimeRangeSelect}
-          onAddProperty={handleAddProperty}
-          onRemoveProperty={handleRemoveProperty}
+          onAddProperty={onAddProperty}
+          onRemoveProperty={onRemoveProperty}
           isLoading={keysLoading || timelinesLoading}
         />
       )}
