@@ -14,16 +14,16 @@ A split button in the header (left of time range picker):
 - **Dropdown arrow**: Reveals secondary pivot option
 
 ### From Metrics
-- Main button: "Performance Analytics"
-- Dropdown: "Log"
+- Main button: "Log"
+- Dropdown: "Performance Analytics"
 
 ### From Log
 - Main button: "Metrics"
 - Dropdown: "Performance Analytics"
 
 ### From Performance Analytics
-- Main button: "Metrics"
-- Dropdown: "Log"
+- Main button: "Log"
+- Dropdown: "Metrics"
 
 ## Implementation Notes
 

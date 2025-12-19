@@ -4,6 +4,7 @@ import { RefreshCw, ChevronDown, LogOut } from 'lucide-react'
 import { AppLink } from '@/components/AppLink'
 import { getConfig } from '@/lib/config'
 import { TimeRangePicker } from './TimeRangePicker'
+import { PivotButton } from './PivotButton'
 import { MicromegasLogo } from '@/components/MicromegasLogo'
 
 interface HeaderProps {
@@ -44,6 +45,9 @@ export function Header({ onRefresh }: HeaderProps) {
       </div>
 
       <div className="flex items-center gap-2 sm:gap-4">
+        {/* Pivot Button - navigate between process views */}
+        <PivotButton />
+
         {/* Time Range Controls */}
         <div className="flex items-center">
           <TimeRangePicker />
