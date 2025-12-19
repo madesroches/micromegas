@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mockup C: Zoom Slider</title>
+  <style>
+    :root {
+      --app-bg: #0a0a0f;
+      --panel-bg: #12121a;
+      --card-bg: #1a1a2e;
+      --text-primary: #e7e9ea;
+      --text-secondary: #9ca3af;
+      --text-muted: #6b7280;
+      --border-color: #2a2a3e;
+      --accent-link: #1565c0;
+      --accent-error: #f87171;
+      --accent-warning: #ffb300;
+      --chart-line: #bf360c;
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--app-bg);
+      color: var(--text-primary);
+      padding: 24px;
+      min-height: 100vh;
+    }
+
+    .mockup-title {
+      font-size: 14px;
+      color: var(--text-muted);
+      margin-bottom: 16px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .chart-container {
+      background: var(--panel-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .chart-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .chart-title {
+      font-size: 16px;
+      font-weight: 500;
+    }
+
+    .chart-title .unit {
+      color: var(--text-muted);
+      font-weight: 400;
+    }
+
+    .chart-stats {
+      display: flex;
+      gap: 16px;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .chart-stats span {
+      color: var(--text-secondary);
+    }
+
+    .chart-area {
+      height: 250px;
+      padding: 16px;
+      display: flex;
+      align-items: flex-end;
+      justify-content: center;
+      gap: 2px;
+    }
+
+    .bar {
+      width: 8px;
+      background: var(--chart-line);
+      border-radius: 2px 2px 0 0;
+      opacity: 0.8;
+    }
+
+    .chart-axis {
+      display: flex;
+      justify-content: space-between;
+      padding: 0 16px 8px;
+      font-size: 11px;
+      color: var(--text-muted);
+      font-family: monospace;
+    }
+
+    /* NEW: Zoom slider panel */
+    .zoom-panel {
+      padding: 16px;
+      border-top: 1px solid var(--border-color);
+      background: var(--card-bg);
+    }
+
+    .zoom-slider-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+
+    .zoom-label {
+      font-size: 12px;
+      color: var(--text-muted);
+      min-width: 40px;
+    }
+
+    .zoom-value {
+      font-size: 11px;
+      color: var(--text-secondary);
+      min-width: 50px;
+      text-align: center;
+      font-family: monospace;
+    }
+
+    .slider-container {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .slider-bound {
+      font-size: 10px;
+      color: var(--text-muted);
+      font-family: monospace;
+    }
+
+    .zoom-slider {
+      flex: 1;
+      height: 6px;
+      background: var(--panel-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 3px;
+      position: relative;
+      cursor: pointer;
+    }
+
+    .slider-fill {
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: 25%;
+      background: var(--accent-link);
+      border-radius: 3px 0 0 3px;
+    }
+
+    .slider-thumb {
+      position: absolute;
+      left: 25%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      width: 14px;
+      height: 14px;
+      background: var(--accent-link);
+      border: 2px solid var(--text-primary);
+      border-radius: 50%;
+      cursor: grab;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+    }
+
+    /* Mini-map */
+    .minimap {
+      background: var(--panel-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 4px;
+      padding: 8px 12px;
+    }
+
+    .minimap-track {
+      height: 20px;
+      background: var(--app-bg);
+      border-radius: 3px;
+      position: relative;
+      margin-bottom: 6px;
+    }
+
+    .minimap-viewport {
+      position: absolute;
+      top: 2px;
+      bottom: 2px;
+      left: 60%;
+      width: 20%;
+      background: rgba(21, 101, 192, 0.4);
+      border: 2px solid var(--accent-link);
+      border-radius: 2px;
+      cursor: grab;
+    }
+
+    .minimap-labels {
+      display: flex;
+      justify-content: space-between;
+      font-size: 10px;
+      color: var(--text-muted);
+      font-family: monospace;
+    }
+
+    .minimap-label-start {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .minimap-label-end {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+    }
+
+    .minimap-label-title {
+      font-size: 9px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 2px;
+    }
+  </style>
+</head>
+<body>
+  <div class="mockup-title">Mockup C: Integrated Zoom Slider</div>
+
+  <div class="chart-container">
+    <div class="chart-header">
+      <div class="chart-title">cpu_usage <span class="unit">(percent)</span></div>
+      <div class="chart-stats">
+        <div>min: <span>12.3%</span></div>
+        <div>max: <span>87.2%</span></div>
+        <div>avg: <span>45.1%</span></div>
+      </div>
+    </div>
+
+    <div class="chart-area">
+      <div class="bar" style="height: 45%"></div>
+      <div class="bar" style="height: 52%"></div>
+      <div class="bar" style="height: 48%"></div>
+      <div class="bar" style="height: 65%"></div>
+      <div class="bar" style="height: 72%"></div>
+      <div class="bar" style="height: 68%"></div>
+      <div class="bar" style="height: 55%"></div>
+      <div class="bar" style="height: 42%"></div>
+      <div class="bar" style="height: 38%"></div>
+      <div class="bar" style="height: 45%"></div>
+      <div class="bar" style="height: 58%"></div>
+      <div class="bar" style="height: 75%"></div>
+      <div class="bar" style="height: 82%"></div>
+      <div class="bar" style="height: 78%"></div>
+      <div class="bar" style="height: 65%"></div>
+      <div class="bar" style="height: 52%"></div>
+      <div class="bar" style="height: 48%"></div>
+      <div class="bar" style="height: 55%"></div>
+      <div class="bar" style="height: 62%"></div>
+      <div class="bar" style="height: 58%"></div>
+      <div class="bar" style="height: 45%"></div>
+      <div class="bar" style="height: 38%"></div>
+      <div class="bar" style="height: 42%"></div>
+      <div class="bar" style="height: 48%"></div>
+      <div class="bar" style="height: 52%"></div>
+      <div class="bar" style="height: 45%"></div>
+      <div class="bar" style="height: 55%"></div>
+      <div class="bar" style="height: 68%"></div>
+      <div class="bar" style="height: 72%"></div>
+      <div class="bar" style="height: 65%"></div>
+    </div>
+
+    <div class="chart-axis">
+      <span>10:00</span>
+      <span>11:00</span>
+      <span>12:00</span>
+      <span>13:00</span>
+      <span>14:00</span>
+      <span>15:00</span>
+    </div>
+
+    <!-- NEW: Zoom slider panel -->
+    <div class="zoom-panel">
+      <div class="zoom-slider-row">
+        <span class="zoom-label">Zoom:</span>
+        <div class="slider-container">
+          <span class="slider-bound">1h</span>
+          <div class="zoom-slider">
+            <div class="slider-fill"></div>
+            <div class="slider-thumb"></div>
+          </div>
+          <span class="slider-bound">Full</span>
+        </div>
+        <span class="zoom-value">6 hours</span>
+      </div>
+
+      <div class="minimap">
+        <div class="minimap-track">
+          <div class="minimap-viewport"></div>
+        </div>
+        <div class="minimap-labels">
+          <div class="minimap-label-start">
+            <span class="minimap-label-title">Process start</span>
+            <span>Dec 17 09:15:32</span>
+          </div>
+          <div class="minimap-label-end">
+            <span class="minimap-label-title">Last update</span>
+            <span>Dec 18 14:23:45</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

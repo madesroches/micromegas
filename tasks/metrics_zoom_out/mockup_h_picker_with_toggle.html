@@ -1,0 +1,637 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Process-Aware Time Picker with Toggle</title>
+  <style>
+    :root {
+      --app-bg: #0a0a0f;
+      --panel-bg: #12121a;
+      --card-bg: #1a1a2e;
+      --text-primary: #e7e9ea;
+      --text-secondary: #9ca3af;
+      --text-muted: #6b7280;
+      --border-color: #2a2a3e;
+      --accent-link: #1565c0;
+      --accent-error: #f87171;
+      --accent-warning: #ffb300;
+      --chart-line: #bf360c;
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--app-bg);
+      color: var(--text-primary);
+      padding: 24px;
+      min-height: 100vh;
+    }
+
+    .mockup-label {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      margin-bottom: 12px;
+    }
+
+    /* Header simulation */
+    .app-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 16px;
+      background: var(--panel-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 8px 8px 0 0;
+      border-bottom: none;
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 600;
+      font-size: 14px;
+    }
+
+    .logo-icon {
+      width: 22px;
+      height: 22px;
+      background: var(--chart-line);
+      border-radius: 4px;
+    }
+
+    .header-controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .time-picker-btn {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 10px;
+      background: var(--border-color);
+      border: none;
+      border-radius: 5px;
+      color: var(--text-primary);
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    .time-picker-btn svg {
+      width: 14px;
+      height: 14px;
+      color: var(--text-secondary);
+    }
+
+    .process-indicator {
+      display: flex;
+      align-items: center;
+      gap: 3px;
+      padding: 2px 6px;
+      background: rgba(21, 101, 192, 0.15);
+      border: 1px solid rgba(21, 101, 192, 0.4);
+      border-radius: 3px;
+      font-size: 9px;
+      color: var(--accent-link);
+    }
+
+    .process-indicator svg {
+      width: 10px;
+      height: 10px;
+    }
+
+    .user-avatar {
+      width: 28px;
+      height: 28px;
+      background: var(--border-color);
+      border-radius: 50%;
+    }
+
+    /* Popover */
+    .popover-container {
+      position: relative;
+      display: flex;
+      justify-content: flex-end;
+      padding-right: 50px;
+    }
+
+    .time-picker-popover {
+      width: 520px;
+      background: var(--panel-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+      overflow: hidden;
+    }
+
+    /* Process context bar */
+    .process-context {
+      padding: 12px 16px;
+      background: var(--card-bg);
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .process-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 10px;
+    }
+
+    .process-title {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    .process-title svg {
+      width: 14px;
+      height: 14px;
+      color: var(--accent-link);
+    }
+
+    .process-name {
+      font-size: 12px;
+      font-family: monospace;
+      color: var(--text-secondary);
+    }
+
+    /* Timeline */
+    .timeline {
+      margin-bottom: 8px;
+    }
+
+    .timeline-track {
+      height: 24px;
+      background: var(--app-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 4px;
+      position: relative;
+      cursor: pointer;
+    }
+
+    .timeline-viewport {
+      position: absolute;
+      top: 3px;
+      bottom: 3px;
+      background: rgba(21, 101, 192, 0.3);
+      border: 2px solid var(--accent-link);
+      border-radius: 3px;
+      cursor: grab;
+      transition: left 0.2s, width 0.2s;
+    }
+
+    .timeline-viewport.from-start {
+      left: 0;
+      width: 22%;
+    }
+
+    .timeline-viewport.from-end {
+      left: 78%;
+      width: 22%;
+    }
+
+    .timeline-labels {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 4px;
+      font-size: 10px;
+      font-family: monospace;
+      color: var(--text-muted);
+    }
+
+    /* Main content */
+    .picker-body {
+      display: flex;
+      padding: 16px;
+      gap: 16px;
+    }
+
+    /* Quick ranges with toggle */
+    .quick-ranges {
+      width: 160px;
+    }
+
+    .ranges-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 10px;
+    }
+
+    .ranges-title {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+    }
+
+    /* Toggle switch */
+    .anchor-toggle {
+      display: flex;
+      background: var(--app-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 4px;
+      padding: 2px;
+    }
+
+    .anchor-option {
+      padding: 3px 8px;
+      font-size: 10px;
+      color: var(--text-muted);
+      background: transparent;
+      border: none;
+      border-radius: 3px;
+      cursor: pointer;
+      transition: all 0.15s;
+      display: flex;
+      align-items: center;
+      gap: 3px;
+    }
+
+    .anchor-option:hover {
+      color: var(--text-secondary);
+    }
+
+    .anchor-option.active {
+      background: var(--accent-link);
+      color: white;
+    }
+
+    .anchor-option svg {
+      width: 10px;
+      height: 10px;
+    }
+
+    /* Range buttons */
+    .range-list {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .range-btn {
+      padding: 7px 10px;
+      background: transparent;
+      border: none;
+      border-radius: 4px;
+      color: var(--text-secondary);
+      font-size: 12px;
+      text-align: left;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .range-btn:hover {
+      background: var(--border-color);
+      color: var(--text-primary);
+    }
+
+    .range-btn.active {
+      background: var(--accent-link);
+      color: white;
+    }
+
+    .range-btn.disabled {
+      color: var(--text-muted);
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
+    .range-btn.disabled:hover {
+      background: transparent;
+    }
+
+    .range-divider {
+      height: 1px;
+      background: var(--border-color);
+      margin: 6px 0;
+    }
+
+    .range-btn.full-process {
+      background: var(--card-bg);
+      text-align: center;
+      font-weight: 500;
+    }
+
+    .range-btn.full-process:hover {
+      background: var(--border-color);
+    }
+
+    /* Custom range */
+    .custom-range {
+      flex: 1;
+      border-left: 1px solid var(--border-color);
+      padding-left: 16px;
+    }
+
+    .custom-title {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      margin-bottom: 10px;
+    }
+
+    .input-group {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+
+    .input-label {
+      width: 36px;
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    .input-field {
+      flex: 1;
+      padding: 8px 10px;
+      background: var(--app-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 4px;
+      color: var(--text-primary);
+      font-size: 12px;
+      font-family: monospace;
+    }
+
+    .input-field:focus {
+      outline: none;
+      border-color: var(--accent-link);
+    }
+
+    .input-field.clamped {
+      border-color: var(--accent-warning);
+    }
+
+    /* Boundary notice */
+    .boundary-notice {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      margin-top: 12px;
+      padding: 8px 10px;
+      background: rgba(255, 179, 0, 0.08);
+      border: 1px solid rgba(255, 179, 0, 0.3);
+      border-radius: 4px;
+      font-size: 11px;
+      color: var(--accent-warning);
+      line-height: 1.4;
+    }
+
+    .boundary-notice svg {
+      width: 14px;
+      height: 14px;
+      flex-shrink: 0;
+      margin-top: 1px;
+    }
+
+    /* Footer */
+    .picker-footer {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 16px;
+      border-top: 1px solid var(--border-color);
+      background: var(--card-bg);
+    }
+
+    .selection-summary {
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    .selection-summary strong {
+      color: var(--text-secondary);
+    }
+
+    .footer-actions {
+      display: flex;
+      gap: 8px;
+    }
+
+    .btn {
+      padding: 7px 14px;
+      border-radius: 4px;
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .btn-secondary {
+      background: transparent;
+      border: 1px solid var(--border-color);
+      color: var(--text-secondary);
+    }
+
+    .btn-secondary:hover {
+      background: var(--border-color);
+      color: var(--text-primary);
+    }
+
+    .btn-primary {
+      background: var(--accent-link);
+      border: none;
+      color: white;
+      font-weight: 500;
+    }
+
+    .btn-primary:hover {
+      background: #1976d2;
+    }
+
+    /* Recent ranges */
+    .recent-section {
+      padding: 12px 16px;
+      border-top: 1px solid var(--border-color);
+    }
+
+    .recent-title {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      margin-bottom: 8px;
+    }
+
+    .recent-list {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
+    .recent-btn {
+      padding: 4px 10px;
+      background: var(--app-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 4px;
+      color: var(--text-secondary);
+      font-size: 11px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .recent-btn:hover {
+      background: var(--border-color);
+      color: var(--text-primary);
+    }
+  </style>
+</head>
+<body>
+
+  <div class="mockup-label">Header with Time Picker Button</div>
+
+  <div class="app-header">
+    <div class="logo">
+      <div class="logo-icon"></div>
+      <span>micromegas</span>
+    </div>
+    <div class="header-controls">
+      <button class="time-picker-btn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="10"/>
+          <path d="M12 6v6l4 2"/>
+        </svg>
+        <span>Last 1 hour</span>
+        <span class="process-indicator">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="2" y="3" width="20" height="14" rx="2"/>
+            <path d="M8 21h8M12 17v4"/>
+          </svg>
+          Process
+        </span>
+      </button>
+      <div class="user-avatar"></div>
+    </div>
+  </div>
+
+  <div class="popover-container">
+    <div class="time-picker-popover">
+
+      <!-- Process context with timeline -->
+      <div class="process-context">
+        <div class="process-header">
+          <div class="process-title">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="2" y="3" width="20" height="14" rx="2"/>
+              <path d="M8 21h8M12 17v4"/>
+            </svg>
+            Process Timeline
+          </div>
+          <div class="process-name">analytics-srv</div>
+        </div>
+
+        <div class="timeline">
+          <div class="timeline-track">
+            <div class="timeline-viewport from-end"></div>
+          </div>
+          <div class="timeline-labels">
+            <span>Dec 17 09:15</span>
+            <span>Dec 18 14:23 (29h)</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Main picker body -->
+      <div class="picker-body">
+
+        <!-- Quick ranges with toggle -->
+        <div class="quick-ranges">
+          <div class="ranges-header">
+            <span class="ranges-title">Quick</span>
+            <div class="anchor-toggle">
+              <button class="anchor-option" title="From process start">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M5 12h14M5 12l4-4M5 12l4 4"/>
+                </svg>
+                First
+              </button>
+              <button class="anchor-option active" title="From process end">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M19 12H5M19 12l-4-4M19 12l-4 4"/>
+                </svg>
+                Last
+              </button>
+            </div>
+          </div>
+
+          <div class="range-list">
+            <button class="range-btn">Last 5 minutes</button>
+            <button class="range-btn">Last 15 minutes</button>
+            <button class="range-btn">Last 30 minutes</button>
+            <button class="range-btn active">Last 1 hour</button>
+            <button class="range-btn">Last 3 hours</button>
+            <button class="range-btn">Last 6 hours</button>
+            <button class="range-btn">Last 12 hours</button>
+            <button class="range-btn">Last 24 hours</button>
+            <button class="range-btn disabled" title="Exceeds process lifetime">Last 2 days</button>
+            <div class="range-divider"></div>
+            <button class="range-btn full-process">Full Process</button>
+          </div>
+        </div>
+
+        <!-- Custom range -->
+        <div class="custom-range">
+          <div class="custom-title">Custom Range</div>
+
+          <div class="input-group">
+            <span class="input-label">From</span>
+            <input type="text" class="input-field" value="2024-12-18T13:23:45" />
+          </div>
+
+          <div class="input-group">
+            <span class="input-label">To</span>
+            <input type="text" class="input-field" value="2024-12-18T14:23:45" />
+          </div>
+
+          <div class="boundary-notice">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"/>
+              <path d="M12 8v4M12 16h.01"/>
+            </svg>
+            <span>Range limited to process lifetime<br/>Dec 17 09:15 → Dec 18 14:23</span>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Recent ranges -->
+      <div class="recent-section">
+        <div class="recent-title">Recent</div>
+        <div class="recent-list">
+          <button class="recent-btn">Last 6 hours</button>
+          <button class="recent-btn">First 1 hour</button>
+          <button class="recent-btn">Dec 17 12:00 - 18:00</button>
+        </div>
+      </div>
+
+      <!-- Footer -->
+      <div class="picker-footer">
+        <div class="selection-summary">
+          Showing <strong>1 hour</strong> of 29h process
+        </div>
+        <div class="footer-actions">
+          <button class="btn btn-secondary">Cancel</button>
+          <button class="btn btn-primary">Apply</button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+</body>
+</html>

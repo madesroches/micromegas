@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mockup B: Chart Toolbar</title>
+  <style>
+    :root {
+      --app-bg: #0a0a0f;
+      --panel-bg: #12121a;
+      --card-bg: #1a1a2e;
+      --text-primary: #e7e9ea;
+      --text-secondary: #9ca3af;
+      --text-muted: #6b7280;
+      --border-color: #2a2a3e;
+      --accent-link: #1565c0;
+      --accent-error: #f87171;
+      --accent-warning: #ffb300;
+      --chart-line: #bf360c;
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--app-bg);
+      color: var(--text-primary);
+      padding: 24px;
+      min-height: 100vh;
+    }
+
+    .mockup-title {
+      font-size: 14px;
+      color: var(--text-muted);
+      margin-bottom: 16px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .chart-container {
+      background: var(--panel-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .chart-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .header-left {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .chart-title {
+      font-size: 16px;
+      font-weight: 500;
+    }
+
+    .chart-title .unit {
+      color: var(--text-muted);
+      font-weight: 400;
+    }
+
+    /* NEW: Zoom toolbar in header */
+    .zoom-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 2px;
+      background: var(--card-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      padding: 2px;
+    }
+
+    .zoom-btn {
+      width: 28px;
+      height: 26px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: transparent;
+      border: none;
+      border-radius: 4px;
+      color: var(--text-secondary);
+      font-size: 14px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .zoom-btn:hover {
+      background: var(--border-color);
+      color: var(--text-primary);
+    }
+
+    .zoom-btn:active {
+      background: #3a3a4e;
+    }
+
+    .zoom-divider {
+      width: 1px;
+      height: 18px;
+      background: var(--border-color);
+      margin: 0 2px;
+    }
+
+    .chart-stats {
+      display: flex;
+      gap: 16px;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .chart-stats span {
+      color: var(--text-secondary);
+    }
+
+    .chart-area {
+      height: 280px;
+      padding: 16px;
+      display: flex;
+      align-items: flex-end;
+      justify-content: center;
+      gap: 2px;
+    }
+
+    .bar {
+      width: 8px;
+      background: var(--chart-line);
+      border-radius: 2px 2px 0 0;
+      opacity: 0.8;
+    }
+
+    .chart-axis {
+      display: flex;
+      justify-content: space-between;
+      padding: 0 16px 8px;
+      font-size: 11px;
+      color: var(--text-muted);
+      font-family: monospace;
+    }
+
+    /* NEW: Footer with context */
+    .chart-footer {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px 16px;
+      border-top: 1px solid var(--border-color);
+      background: var(--card-bg);
+      font-size: 12px;
+    }
+
+    .view-info {
+      color: var(--text-secondary);
+    }
+
+    .view-info strong {
+      color: var(--text-primary);
+      font-weight: 500;
+    }
+
+    .process-info {
+      color: var(--text-muted);
+      font-family: monospace;
+      font-size: 11px;
+    }
+
+    .process-info .arrow {
+      color: var(--accent-link);
+      margin: 0 6px;
+    }
+  </style>
+</head>
+<body>
+  <div class="mockup-title">Mockup B: Chart Toolbar with Zoom Controls</div>
+
+  <div class="chart-container">
+    <div class="chart-header">
+      <div class="header-left">
+        <div class="chart-title">cpu_usage <span class="unit">(percent)</span></div>
+
+        <!-- NEW: Zoom toolbar -->
+        <div class="zoom-toolbar">
+          <button class="zoom-btn" title="Pan left (earlier)">◀</button>
+          <button class="zoom-btn" title="Zoom out">−</button>
+          <button class="zoom-btn" title="Zoom in">+</button>
+          <button class="zoom-btn" title="Pan right (later)">▶</button>
+          <div class="zoom-divider"></div>
+          <button class="zoom-btn" title="Reset to default view">↺</button>
+        </div>
+      </div>
+
+      <div class="chart-stats">
+        <div>min: <span>12.3%</span></div>
+        <div>max: <span>87.2%</span></div>
+        <div>avg: <span>45.1%</span></div>
+      </div>
+    </div>
+
+    <div class="chart-area">
+      <div class="bar" style="height: 45%"></div>
+      <div class="bar" style="height: 52%"></div>
+      <div class="bar" style="height: 48%"></div>
+      <div class="bar" style="height: 65%"></div>
+      <div class="bar" style="height: 72%"></div>
+      <div class="bar" style="height: 68%"></div>
+      <div class="bar" style="height: 55%"></div>
+      <div class="bar" style="height: 42%"></div>
+      <div class="bar" style="height: 38%"></div>
+      <div class="bar" style="height: 45%"></div>
+      <div class="bar" style="height: 58%"></div>
+      <div class="bar" style="height: 75%"></div>
+      <div class="bar" style="height: 82%"></div>
+      <div class="bar" style="height: 78%"></div>
+      <div class="bar" style="height: 65%"></div>
+      <div class="bar" style="height: 52%"></div>
+      <div class="bar" style="height: 48%"></div>
+      <div class="bar" style="height: 55%"></div>
+      <div class="bar" style="height: 62%"></div>
+      <div class="bar" style="height: 58%"></div>
+      <div class="bar" style="height: 45%"></div>
+      <div class="bar" style="height: 38%"></div>
+      <div class="bar" style="height: 42%"></div>
+      <div class="bar" style="height: 48%"></div>
+      <div class="bar" style="height: 52%"></div>
+      <div class="bar" style="height: 45%"></div>
+      <div class="bar" style="height: 55%"></div>
+      <div class="bar" style="height: 68%"></div>
+      <div class="bar" style="height: 72%"></div>
+      <div class="bar" style="height: 65%"></div>
+    </div>
+
+    <div class="chart-axis">
+      <span>10:00</span>
+      <span>11:00</span>
+      <span>12:00</span>
+      <span>13:00</span>
+      <span>14:00</span>
+      <span>15:00</span>
+    </div>
+
+    <!-- NEW: Footer with context -->
+    <div class="chart-footer">
+      <div class="view-info">
+        Viewing: <strong>10:00 - 16:00</strong> (6h)
+      </div>
+      <div class="process-info">
+        Process: Dec 17 09:15 <span class="arrow">→</span> Dec 18 14:23
+      </div>
+    </div>
+  </div>
+</body>
+</html>

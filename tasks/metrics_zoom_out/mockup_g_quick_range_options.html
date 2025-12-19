@@ -1,0 +1,593 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Quick Range Anchor Options</title>
+  <style>
+    :root {
+      --app-bg: #0a0a0f;
+      --panel-bg: #12121a;
+      --card-bg: #1a1a2e;
+      --text-primary: #e7e9ea;
+      --text-secondary: #9ca3af;
+      --text-muted: #6b7280;
+      --border-color: #2a2a3e;
+      --accent-link: #1565c0;
+      --accent-error: #f87171;
+      --accent-warning: #ffb300;
+      --chart-line: #bf360c;
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--app-bg);
+      color: var(--text-primary);
+      padding: 24px;
+      min-height: 100vh;
+    }
+
+    .page-title {
+      font-size: 18px;
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+
+    .page-description {
+      font-size: 13px;
+      color: var(--text-secondary);
+      margin-bottom: 32px;
+      max-width: 700px;
+      line-height: 1.5;
+    }
+
+    .options-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 24px;
+    }
+
+    .option-card {
+      background: var(--panel-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .option-header {
+      padding: 12px 16px;
+      background: var(--card-bg);
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .option-title {
+      font-size: 14px;
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+
+    .option-subtitle {
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    .option-content {
+      padding: 16px;
+    }
+
+    /* Common styles for quick ranges */
+    .section-title {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      margin-bottom: 8px;
+    }
+
+    .quick-btn {
+      display: block;
+      width: 100%;
+      padding: 6px 10px;
+      background: transparent;
+      border: none;
+      border-radius: 4px;
+      color: var(--text-secondary);
+      font-size: 12px;
+      text-align: left;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .quick-btn:hover {
+      background: var(--border-color);
+      color: var(--text-primary);
+    }
+
+    .quick-btn.active {
+      background: var(--accent-link);
+      color: white;
+    }
+
+    .quick-btn.disabled {
+      color: var(--text-muted);
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    /* ==================== */
+    /* OPTION A: Toggle Switch */
+    /* ==================== */
+    .toggle-container {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 12px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .toggle-label {
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    .toggle-switch {
+      display: flex;
+      background: var(--app-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 4px;
+      padding: 2px;
+    }
+
+    .toggle-option {
+      padding: 4px 10px;
+      font-size: 11px;
+      color: var(--text-muted);
+      background: transparent;
+      border: none;
+      border-radius: 3px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .toggle-option:hover {
+      color: var(--text-secondary);
+    }
+
+    .toggle-option.active {
+      background: var(--accent-link);
+      color: white;
+    }
+
+    /* ==================== */
+    /* OPTION B: Two Columns */
+    /* ==================== */
+    .two-columns {
+      display: flex;
+      gap: 12px;
+    }
+
+    .range-column {
+      flex: 1;
+    }
+
+    .column-header {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      margin-bottom: 8px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid var(--border-color);
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .column-header svg {
+      width: 12px;
+      height: 12px;
+    }
+
+    .column-header.start svg {
+      color: var(--accent-warning);
+    }
+
+    .column-header.end svg {
+      color: var(--accent-link);
+    }
+
+    /* ==================== */
+    /* OPTION C: Inline Dual Buttons */
+    /* ==================== */
+    .dual-range-row {
+      display: flex;
+      align-items: center;
+      margin-bottom: 2px;
+    }
+
+    .range-duration {
+      width: 50px;
+      font-size: 12px;
+      color: var(--text-secondary);
+    }
+
+    .dual-buttons {
+      display: flex;
+      flex: 1;
+      gap: 2px;
+    }
+
+    .dual-btn {
+      flex: 1;
+      padding: 5px 8px;
+      background: var(--app-bg);
+      border: 1px solid var(--border-color);
+      color: var(--text-muted);
+      font-size: 10px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .dual-btn:first-child {
+      border-radius: 4px 0 0 4px;
+    }
+
+    .dual-btn:last-child {
+      border-radius: 0 4px 4px 0;
+    }
+
+    .dual-btn:hover {
+      background: var(--border-color);
+      color: var(--text-primary);
+    }
+
+    .dual-btn.active {
+      background: var(--accent-link);
+      border-color: var(--accent-link);
+      color: white;
+    }
+
+    /* ==================== */
+    /* OPTION D: Tabs */
+    /* ==================== */
+    .tabs-container {
+      margin-bottom: 12px;
+    }
+
+    .tabs {
+      display: flex;
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .tab {
+      flex: 1;
+      padding: 8px 12px;
+      background: transparent;
+      border: none;
+      border-bottom: 2px solid transparent;
+      color: var(--text-muted);
+      font-size: 11px;
+      cursor: pointer;
+      transition: all 0.15s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+    }
+
+    .tab:hover {
+      color: var(--text-secondary);
+    }
+
+    .tab.active {
+      color: var(--accent-link);
+      border-bottom-color: var(--accent-link);
+    }
+
+    .tab svg {
+      width: 12px;
+      height: 12px;
+    }
+
+    .tab-content {
+      padding-top: 8px;
+    }
+
+    /* Visual timeline indicator */
+    .timeline-indicator {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      margin-bottom: 12px;
+      padding: 8px;
+      background: var(--app-bg);
+      border-radius: 4px;
+      font-size: 10px;
+      color: var(--text-muted);
+    }
+
+    .timeline-bar {
+      flex: 1;
+      height: 4px;
+      background: var(--border-color);
+      border-radius: 2px;
+      position: relative;
+    }
+
+    .timeline-highlight {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      background: var(--accent-link);
+      border-radius: 2px;
+    }
+
+    .timeline-highlight.from-start {
+      left: 0;
+      width: 30%;
+    }
+
+    .timeline-highlight.from-end {
+      right: 0;
+      width: 30%;
+    }
+
+    /* Pros/Cons */
+    .pros-cons {
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid var(--border-color);
+      font-size: 10px;
+    }
+
+    .pro, .con {
+      display: flex;
+      align-items: flex-start;
+      gap: 6px;
+      margin-bottom: 4px;
+    }
+
+    .pro::before {
+      content: '+';
+      color: #4ade80;
+      font-weight: bold;
+    }
+
+    .con::before {
+      content: '−';
+      color: var(--accent-error);
+      font-weight: bold;
+    }
+
+    .pro, .con {
+      color: var(--text-muted);
+    }
+  </style>
+</head>
+<body>
+  <div class="page-title">Quick Range Anchor Options</div>
+  <div class="page-description">
+    For process-specific screens, quick ranges can be anchored to either the process start or end.
+    "First 1h" = start → start+1h. "Last 1h" = end-1h → end. Here are four design approaches:
+  </div>
+
+  <div class="options-grid">
+
+    <!-- OPTION A: Toggle Switch -->
+    <div class="option-card">
+      <div class="option-header">
+        <div class="option-title">Option A: Toggle Switch</div>
+        <div class="option-subtitle">Single toggle changes anchor for all ranges</div>
+      </div>
+      <div class="option-content">
+        <div class="toggle-container">
+          <span class="toggle-label">Anchor:</span>
+          <div class="toggle-switch">
+            <button class="toggle-option">From Start</button>
+            <button class="toggle-option active">From End</button>
+          </div>
+        </div>
+
+        <div class="timeline-indicator">
+          <span>start</span>
+          <div class="timeline-bar">
+            <div class="timeline-highlight from-end"></div>
+          </div>
+          <span>end</span>
+        </div>
+
+        <div class="section-title">Duration</div>
+        <button class="quick-btn">5 minutes</button>
+        <button class="quick-btn">15 minutes</button>
+        <button class="quick-btn">30 minutes</button>
+        <button class="quick-btn active">1 hour</button>
+        <button class="quick-btn">3 hours</button>
+        <button class="quick-btn">6 hours</button>
+        <button class="quick-btn">Full Process</button>
+
+        <div class="pros-cons">
+          <div class="pro">Compact, minimal UI</div>
+          <div class="pro">Clear mental model</div>
+          <div class="con">Extra click to switch anchor</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- OPTION B: Two Columns -->
+    <div class="option-card">
+      <div class="option-header">
+        <div class="option-title">Option B: Two Columns</div>
+        <div class="option-subtitle">Side-by-side "From Start" and "From End"</div>
+      </div>
+      <div class="option-content">
+        <div class="two-columns">
+          <div class="range-column">
+            <div class="column-header start">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M5 12h14M5 12l4-4M5 12l4 4"/>
+              </svg>
+              From Start
+            </div>
+            <button class="quick-btn">First 5m</button>
+            <button class="quick-btn">First 15m</button>
+            <button class="quick-btn">First 30m</button>
+            <button class="quick-btn">First 1h</button>
+            <button class="quick-btn">First 3h</button>
+            <button class="quick-btn">First 6h</button>
+          </div>
+          <div class="range-column">
+            <div class="column-header end">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M19 12H5M19 12l-4-4M19 12l-4 4"/>
+              </svg>
+              From End
+            </div>
+            <button class="quick-btn">Last 5m</button>
+            <button class="quick-btn">Last 15m</button>
+            <button class="quick-btn">Last 30m</button>
+            <button class="quick-btn active">Last 1h</button>
+            <button class="quick-btn">Last 3h</button>
+            <button class="quick-btn">Last 6h</button>
+          </div>
+        </div>
+
+        <button class="quick-btn" style="margin-top: 8px; text-align: center; background: var(--card-bg);">Full Process</button>
+
+        <div class="pros-cons">
+          <div class="pro">All options visible at once</div>
+          <div class="pro">One-click selection</div>
+          <div class="con">Takes more horizontal space</div>
+          <div class="con">Duplicated durations</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- OPTION C: Inline Dual Buttons -->
+    <div class="option-card">
+      <div class="option-header">
+        <div class="option-title">Option C: Inline Dual Buttons</div>
+        <div class="option-subtitle">Each duration has First/Last buttons</div>
+      </div>
+      <div class="option-content">
+        <div class="section-title">Select Range</div>
+
+        <div class="dual-range-row">
+          <span class="range-duration">5 min</span>
+          <div class="dual-buttons">
+            <button class="dual-btn">First</button>
+            <button class="dual-btn">Last</button>
+          </div>
+        </div>
+
+        <div class="dual-range-row">
+          <span class="range-duration">15 min</span>
+          <div class="dual-buttons">
+            <button class="dual-btn">First</button>
+            <button class="dual-btn">Last</button>
+          </div>
+        </div>
+
+        <div class="dual-range-row">
+          <span class="range-duration">30 min</span>
+          <div class="dual-buttons">
+            <button class="dual-btn">First</button>
+            <button class="dual-btn">Last</button>
+          </div>
+        </div>
+
+        <div class="dual-range-row">
+          <span class="range-duration">1 hour</span>
+          <div class="dual-buttons">
+            <button class="dual-btn">First</button>
+            <button class="dual-btn active">Last</button>
+          </div>
+        </div>
+
+        <div class="dual-range-row">
+          <span class="range-duration">3 hours</span>
+          <div class="dual-buttons">
+            <button class="dual-btn">First</button>
+            <button class="dual-btn">Last</button>
+          </div>
+        </div>
+
+        <div class="dual-range-row">
+          <span class="range-duration">6 hours</span>
+          <div class="dual-buttons">
+            <button class="dual-btn">First</button>
+            <button class="dual-btn">Last</button>
+          </div>
+        </div>
+
+        <button class="quick-btn" style="margin-top: 8px; text-align: center; background: var(--card-bg);">Full Process</button>
+
+        <div class="pros-cons">
+          <div class="pro">Very explicit choices</div>
+          <div class="pro">Compact vertical space</div>
+          <div class="con">Busier visual design</div>
+          <div class="con">Many small click targets</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- OPTION D: Tabs -->
+    <div class="option-card">
+      <div class="option-header">
+        <div class="option-title">Option D: Tabs</div>
+        <div class="option-subtitle">Tab bar switches between start/end anchored ranges</div>
+      </div>
+      <div class="option-content">
+        <div class="tabs-container">
+          <div class="tabs">
+            <button class="tab">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M5 12h14M5 12l4-4M5 12l4 4"/>
+              </svg>
+              From Start
+            </button>
+            <button class="tab active">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M19 12H5M19 12l-4-4M19 12l-4 4"/>
+              </svg>
+              From End
+            </button>
+          </div>
+        </div>
+
+        <div class="timeline-indicator">
+          <span>start</span>
+          <div class="timeline-bar">
+            <div class="timeline-highlight from-end"></div>
+          </div>
+          <span>end</span>
+        </div>
+
+        <div class="tab-content">
+          <button class="quick-btn">Last 5 minutes</button>
+          <button class="quick-btn">Last 15 minutes</button>
+          <button class="quick-btn">Last 30 minutes</button>
+          <button class="quick-btn active">Last 1 hour</button>
+          <button class="quick-btn">Last 3 hours</button>
+          <button class="quick-btn">Last 6 hours</button>
+          <button class="quick-btn">Last 12 hours</button>
+          <button class="quick-btn" style="margin-top: 8px; text-align: center; background: var(--card-bg);">Full Process</button>
+        </div>
+
+        <div class="pros-cons">
+          <div class="pro">Familiar tab pattern</div>
+          <div class="pro">Labels change to match context</div>
+          <div class="con">Hides half the options</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</body>
+</html>
