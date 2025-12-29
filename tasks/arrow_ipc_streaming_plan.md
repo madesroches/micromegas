@@ -24,11 +24,11 @@ Browser ──HTTP/JSON──► analytics-web-srv ──gRPC/Arrow Flight──
 Use a JSON-framed protocol that enables true streaming:
 
 ```
-{"type":"schema","arrow_schema":"<base64 IPC schema>"}\n
+{"type":"schema","arrow_schema":"<base64 IPC schema bytes>"}\n
 {"type":"batch","size":4096}\n
-[4096 bytes of Arrow IPC RecordBatch]
+[4096 bytes of raw Arrow IPC batch message]
 {"type":"batch","size":2048}\n
-[2048 bytes of Arrow IPC RecordBatch]
+[2048 bytes of raw Arrow IPC batch message]
 {"type":"done"}\n
 ```
 
@@ -36,25 +36,29 @@ On error:
 ```
 {"type":"schema","arrow_schema":"<base64>"}\n
 {"type":"batch","size":1024}\n
-[1024 bytes - partial results]
+[1024 bytes - partial batch message]
 {"type":"error","code":"TIMEOUT","message":"Query exceeded time limit"}\n
 ```
 
 **Key design points:**
 - Each frame starts with a JSON line (newline-terminated)
-- Batch frames include `size` - frontend reads exactly that many bytes
+- Schema sent once (base64); batch frames contain only raw batch bytes (no schema repetition)
+- Frontend caches schema bytes and reconstructs complete IPC streams locally
 - True streaming: frontend processes each batch as it arrives
 - No buffering required to find message boundaries
 - Errors can occur at any point, partial results preserved
+- Dictionary state maintained across batches for correct dictionary-encoded columns
 
 ### Frame Types
 
 | Type | Fields | Followed By |
 |------|--------|-------------|
-| `schema` | `arrow_schema` (base64 IPC schema message) | Nothing |
-| `batch` | `size` (byte count) | Raw Arrow IPC bytes |
+| `schema` | `arrow_schema` (base64 IPC schema message, no EOS) | Nothing |
+| `batch` | `size` (byte count) | Raw batch IPC bytes (no schema, no EOS) |
 | `done` | None | Nothing (stream complete) |
 | `error` | `code`, `message` | Nothing (stream complete) |
+
+**Note:** Frontend reconstructs complete IPC streams by combining cached schema bytes + batch bytes + EOS marker.
 
 ### Error Codes
 
@@ -174,17 +178,20 @@ fn schema_to_ipc_bytes(schema: &Schema) -> Result<Vec<u8>, arrow::error::ArrowEr
 }
 
 /// Serializes a batch message (without schema header).
-fn batch_to_raw_ipc(batch: &RecordBatch) -> Result<Vec<u8>, arrow::error::ArrowError> {
+/// Uses provided DictionaryTracker to maintain dictionary state across batches.
+fn batch_to_raw_ipc(
+    batch: &RecordBatch,
+    dict_tracker: &mut DictionaryTracker,
+    options: &IpcWriteOptions,
+) -> Result<Vec<u8>, arrow::error::ArrowError> {
     let gen = IpcDataGenerator::default();
-    let options = IpcWriteOptions::default();
-    let mut dict_tracker = DictionaryTracker::new(false);
-    let (dicts, encoded) = gen.encoded_batch(batch, &mut dict_tracker, &options)?;
+    let (dicts, encoded) = gen.encoded_batch(batch, dict_tracker, options)?;
 
     let mut buffer = Vec::new();
     for dict in dicts {
-        write_message(&mut buffer, dict, &options)?;
+        write_message(&mut buffer, dict, options)?;
     }
-    write_message(&mut buffer, encoded, &options)?;
+    write_message(&mut buffer, encoded, options)?;
     Ok(buffer)
 }
 
@@ -195,16 +202,6 @@ fn write_eos_marker(buffer: &mut Vec<u8>) -> Result<(), arrow::error::ArrowError
     Ok(())
 }
 
-/// Combines pre-serialized schema bytes with batch bytes into a complete IPC stream.
-/// This avoids re-serializing the schema for each batch.
-fn build_batch_ipc(schema_bytes: &[u8], batch: &RecordBatch) -> Result<Vec<u8>, arrow::error::ArrowError> {
-    let batch_bytes = batch_to_raw_ipc(batch)?;
-    let mut buffer = Vec::with_capacity(schema_bytes.len() + batch_bytes.len() + 8);
-    buffer.extend_from_slice(schema_bytes);
-    buffer.extend_from_slice(&batch_bytes);
-    write_eos_marker(&mut buffer)?;
-    Ok(buffer)
-}
 
 fn json_line<T: Serialize>(value: &T) -> Bytes {
     let mut json = serde_json::to_string(value).expect("serialization failed");
@@ -258,7 +255,7 @@ pub async fn stream_query_handler(
             }
         };
 
-        // Serialize schema bytes once - reused for all batch frames
+        // Serialize schema bytes once - sent to frontend for local IPC reconstruction
         // Note: schema may be Arc<Schema>, use as_ref() to get &Schema
         let schema_bytes = match schema_to_ipc_bytes(schema.as_ref()) {
             Ok(bytes) => bytes,
@@ -272,32 +269,27 @@ pub async fn stream_query_handler(
             }
         };
 
-        // Send schema frame (base64-encoded complete IPC stream)
-        let mut schema_with_eos = schema_bytes.clone();
-        if let Err(e) = write_eos_marker(&mut schema_with_eos) {
-            yield Ok(json_line(&ErrorFrame {
-                frame_type: "error",
-                code: ErrorCode::Internal,
-                message: e.to_string(),
-            }));
-            return;
-        }
+        // Send schema frame with base64-encoded schema bytes (no EOS - frontend will add)
         yield Ok(json_line(&SchemaFrame {
             frame_type: "schema",
-            arrow_schema: base64::engine::general_purpose::STANDARD.encode(&schema_with_eos),
+            arrow_schema: base64::engine::general_purpose::STANDARD.encode(&schema_bytes),
         }));
 
-        // Stream batches - reuse schema_bytes for O(1) schema overhead
+        // Maintain dictionary state across all batches for correct dictionary-encoded columns
+        let mut dict_tracker = DictionaryTracker::new(false);
+        let ipc_options = IpcWriteOptions::default();
+
+        // Stream batches - send only batch bytes, frontend reconstructs IPC locally
         while let Some(result) = batch_stream.next().await {
             match result {
                 Ok(batch) => {
-                    match build_batch_ipc(&schema_bytes, &batch) {
-                        Ok(ipc_bytes) => {
+                    match batch_to_raw_ipc(&batch, &mut dict_tracker, &ipc_options) {
+                        Ok(batch_bytes) => {
                             yield Ok(json_line(&BatchFrame {
                                 frame_type: "batch",
-                                size: ipc_bytes.len(),
+                                size: batch_bytes.len(),
                             }));
-                            yield Ok(Bytes::from(ipc_bytes));
+                            yield Ok(Bytes::from(batch_bytes));
                         }
                         Err(e) => {
                             yield Ok(json_line(&ErrorFrame {
@@ -352,6 +344,9 @@ fn error_code_from_flight(error: &FlightError) -> ErrorCode {
 import { RecordBatch, Schema, tableFromIPC } from 'apache-arrow';
 
 type ErrorCode = 'INVALID_SQL' | 'TIMEOUT' | 'CONNECTION_FAILED' | 'INTERNAL';
+
+// IPC end-of-stream marker: continuation marker (0xFFFFFFFF) + zero length
+const EOS_MARKER = new Uint8Array([0xff, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00]);
 
 interface SchemaFrame {
   type: 'schema';
@@ -492,6 +487,18 @@ function base64ToBytes(base64: string): Uint8Array {
   return bytes;
 }
 
+/**
+ * Builds a complete IPC stream from cached schema bytes and batch bytes.
+ * This avoids sending schema over the wire for each batch.
+ */
+function buildIpcStream(schemaBytes: Uint8Array, batchBytes: Uint8Array): Uint8Array {
+  const result = new Uint8Array(schemaBytes.length + batchBytes.length + EOS_MARKER.length);
+  result.set(schemaBytes, 0);
+  result.set(batchBytes, schemaBytes.length);
+  result.set(EOS_MARKER, schemaBytes.length + batchBytes.length);
+  return result;
+}
+
 export async function* streamQuery(
   sql: string,
   params: Record<string, string>,
@@ -516,6 +523,8 @@ export async function* streamQuery(
   }
 
   const bufferedReader = new BufferedReader(response.body!.getReader());
+  // Cache schema bytes for reconstructing IPC streams locally (avoids schema-per-batch over wire)
+  let cachedSchemaBytes: Uint8Array | null = null;
 
   try {
     while (true) {
@@ -549,15 +558,31 @@ export async function* streamQuery(
 
       switch (frame.type) {
         case 'schema': {
-          const schemaBytes = base64ToBytes(frame.arrow_schema);
-          const table = tableFromIPC(schemaBytes);
+          // Decode and cache schema bytes for batch reconstruction
+          cachedSchemaBytes = base64ToBytes(frame.arrow_schema);
+          // Parse schema by building a complete IPC stream (schema + EOS)
+          const schemaIpc = buildIpcStream(cachedSchemaBytes, new Uint8Array(0));
+          const table = tableFromIPC(schemaIpc);
           yield { schema: table.schema, done: false };
           break;
         }
 
         case 'batch': {
-          const ipcBytes = await bufferedReader.readBytes(frame.size);
-          const table = tableFromIPC(ipcBytes);
+          if (!cachedSchemaBytes) {
+            yield {
+              done: true,
+              error: {
+                code: 'INTERNAL',
+                message: 'Received batch before schema',
+                retryable: false,
+              },
+            };
+            return;
+          }
+          // Read batch bytes and reconstruct complete IPC stream locally
+          const batchBytes = await bufferedReader.readBytes(frame.size);
+          const ipcStream = buildIpcStream(cachedSchemaBytes, batchBytes);
+          const table = tableFromIPC(ipcStream);
           for (const batch of table.batches) {
             yield { batch, done: false };
           }
@@ -621,14 +646,11 @@ export function useStreamQuery() {
   const abortRef = useRef<AbortController | null>(null);
   // Mutable array to avoid O(n²) allocations from spreading
   const batchesRef = useRef<RecordBatch[]>([]);
-  // Cached table to avoid recreating on every getTable() call
-  const tableCache = useRef<{ count: number; table: Table } | null>(null);
 
   const execute = useCallback(async (sql: string, params: Record<string, string> = {}) => {
     abortRef.current?.abort();
     abortRef.current = new AbortController();
     batchesRef.current = [];
-    tableCache.current = null;
 
     setState({
       schema: null,
@@ -689,15 +711,8 @@ export function useStreamQuery() {
   }, [state.error, execute]);
 
   const getTable = useCallback((): Table | null => {
-    const count = batchesRef.current.length;
-    if (count === 0) return null;
-    // Return cached table if batch count unchanged
-    if (tableCache.current?.count === count) {
-      return tableCache.current.table;
-    }
-    const table = new Table(batchesRef.current);
-    tableCache.current = { count, table };
-    return table;
+    if (batchesRef.current.length === 0) return null;
+    return new Table(batchesRef.current);
   }, []);
 
   const getBatches = useCallback((): RecordBatch[] => {
