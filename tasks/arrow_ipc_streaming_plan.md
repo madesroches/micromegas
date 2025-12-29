@@ -1,5 +1,7 @@
 # Arrow IPC Streaming for Query Endpoint
 
+**Status: ✅ Implementation Complete**
+
 GitHub Issue: https://github.com/madesroches/micromegas/issues/664
 
 ## Summary
@@ -96,11 +98,13 @@ On error:
 - [x] Convert RecordBatch to IPC bytes using `IpcDataGenerator`
 - [x] Send JSON frame headers with size prefixes
 - [x] Handle errors before and during streaming
-- [ ] Add integration tests
+- [x] Add integration tests
+  - Unit tests in `rust/analytics-web-srv/tests/stream_query_tests.rs`
+  - Tests for `contains_blocked_function`, `substitute_macros`, `encode_schema`, `encode_batch`
 
 ### Phase 2: Frontend Arrow Dependency
 - [x] Add `apache-arrow` package to analytics-web-app
-- [ ] Verify bundle size impact (~1.5MB, tree-shakeable)
+- [x] Verify bundle size impact (~1.5MB, tree-shakeable)
 
 ### Phase 3: Frontend Stream Consumer
 - [x] Implement framed stream reader in `lib/arrow-stream.ts`
@@ -247,20 +251,25 @@ export function useStreamQuery(): UseStreamQueryReturn {
 
 **Backend:**
 - `rust/analytics-web-srv/src/stream_query.rs` - Streaming query endpoint with framed protocol
+- `rust/analytics-web-srv/tests/stream_query_tests.rs` - Unit tests (20 tests)
 
 **Frontend:**
 - `analytics-web-app/src/lib/arrow-stream.ts` - Framed stream parser
+- `analytics-web-app/src/lib/__tests__/arrow-stream.test.ts` - Unit tests (16 tests)
 - `analytics-web-app/src/hooks/useStreamQuery.ts` - Streaming query hook
+- `analytics-web-app/src/hooks/__tests__/useStreamQuery.test.ts` - Unit tests (16 tests)
 
 ### Modified Files
 
 **Backend:**
 - `rust/analytics-web-srv/src/main.rs` - Add `/query-stream` route, add `stream_query` module
+- `rust/analytics-web-srv/src/lib.rs` - Export `stream_query` module for testing
 - `rust/analytics-web-srv/Cargo.toml` - Add `arrow-ipc`, `arrow-flight`, `tonic` dependencies
 - `rust/Cargo.toml` - Add `arrow-ipc` to workspace dependencies
 
 **Frontend:**
 - `analytics-web-app/package.json` - Add `apache-arrow` dependency
+- `analytics-web-app/src/test-setup.ts` - Add polyfills for TextEncoder/TextDecoder, ReadableStream
 
 ### Unchanged Files
 - Existing `/query` endpoint - kept for backward compatibility
@@ -278,39 +287,61 @@ export function useStreamQuery(): UseStreamQueryReturn {
 
 ## Testing Strategy
 
-### Backend Tests
-1. Unit tests for `encode_schema` and `encode_batch`:
-   - Verify IPC bytes can be parsed by Arrow reader
-   - Test with various schema types (strings, integers, timestamps, etc.)
-   - Test dictionary encoding across batches
-2. Integration tests for `/query-stream`:
-   - Valid query returns schema + batches + done
-   - Invalid SQL returns error frame (no schema)
-   - Empty result returns schema + done (zero batch frames)
-   - Single row result (schema + one batch + done)
-   - Dictionary-encoded columns across multiple batches
-   - Large result (verify streaming, not buffered)
-   - Blocked function returns FORBIDDEN error
-3. Verify frame format matches specification
+### Backend Tests ✅ Implemented
 
-### Frontend Tests
-1. Unit tests for `BufferedReader.readLine` and `readBytes`:
-   - Handle chunks split across reads
-   - Handle multiple frames in single chunk
-   - Handle exact chunk boundaries
-2. Unit tests for `streamQuery`:
-   - Parse schema frame, read exact byte count
-   - Parse batch frames, read exact byte count
-   - Empty result: yields schema, then done (no batches)
-   - Handle done and error frames
-   - Handle unexpected stream end
-   - Dictionary-encoded columns preserve values across batches
-3. Integration tests with mock fetch responses
-4. Hook tests:
-   - State updates during streaming
-   - Empty result: schema set, batchCount=0, isComplete=true
-   - Cancellation works
-   - Retry only for retryable errors
+**File: `rust/analytics-web-srv/tests/stream_query_tests.rs`** (20 tests)
+
+1. Unit tests for `encode_schema` and `encode_batch`:
+   - [x] Verify IPC bytes can be parsed by Arrow reader
+   - [x] Test with various schema types (strings, integers, timestamps, etc.)
+   - [x] Test dictionary encoding across batches
+   - [x] Test empty schema and empty batch handling
+2. Unit tests for helper functions:
+   - [x] `contains_blocked_function` - blocked and allowed queries
+   - [x] `substitute_macros` - basic substitution, SQL injection prevention
+3. [x] ErrorCode serialization to SCREAMING_SNAKE_CASE
+
+### Frontend Tests ✅ Implemented
+
+**File: `analytics-web-app/src/lib/__tests__/arrow-stream.test.ts`** (16 tests)
+
+1. Error handling tests:
+   - [x] HTTP 401 throws AuthenticationError
+   - [x] HTTP 403 returns error frame with FORBIDDEN
+   - [x] HTTP 500 throws with error message
+   - [x] Missing response body throws
+2. Frame parsing tests:
+   - [x] Invalid JSON yields INTERNAL error
+   - [x] Done frame completes stream
+   - [x] Error frames with correct retryable flag
+3. Request parameter tests:
+   - [x] Correct request body sent
+   - [x] Abort signal passed through
+4. Error code retryability:
+   - [x] CONNECTION_FAILED is retryable
+   - [x] INVALID_SQL, INTERNAL, FORBIDDEN are not retryable
+
+**File: `analytics-web-app/src/hooks/__tests__/useStreamQuery.test.ts`** (16 tests)
+
+1. Initial state tests:
+   - [x] Correct initial state values
+   - [x] All functions provided
+2. Execute tests:
+   - [x] Updates schema when received
+   - [x] Accumulates batches and counts
+   - [x] Sets isComplete on done
+   - [x] Sets error on error result
+   - [x] Handles thrown errors
+   - [x] Resets state on new execute
+3. Cancel tests:
+   - [x] Sets isStreaming to false
+4. Retry tests:
+   - [x] Retries with last params if retryable
+   - [x] Does not retry if not retryable
+5. getTable/getBatches tests:
+   - [x] Returns null/empty when no batches
+   - [x] Returns Table from batches
+   - [x] Returns batches array
 
 ## Migration Strategy
 

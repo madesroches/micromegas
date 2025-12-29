@@ -64,6 +64,7 @@ class BufferedReader {
   async readLine(): Promise<string | null> {
     let line = '';
 
+    // eslint-disable-next-line no-constant-condition
     while (true) {
       if (this.chunks.length > 0) {
         const chunk = this.chunks[0];

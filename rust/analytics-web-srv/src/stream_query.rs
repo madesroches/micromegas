@@ -83,7 +83,7 @@ const BLOCKED_FUNCTIONS: &[&str] = &[
 ];
 
 /// Check if the SQL query contains any blocked destructive functions
-fn contains_blocked_function(sql: &str) -> Option<&'static str> {
+pub fn contains_blocked_function(sql: &str) -> Option<&'static str> {
     let sql_lower = sql.to_lowercase();
     BLOCKED_FUNCTIONS
         .iter()
@@ -92,7 +92,7 @@ fn contains_blocked_function(sql: &str) -> Option<&'static str> {
 }
 
 /// Substitute macro variables in SQL query
-fn substitute_macros(sql: &str, params: &HashMap<String, String>) -> String {
+pub fn substitute_macros(sql: &str, params: &HashMap<String, String>) -> String {
     let mut result = sql.to_string();
     for (key, value) in params {
         // Escape single quotes in values to prevent SQL injection
@@ -104,7 +104,7 @@ fn substitute_macros(sql: &str, params: &HashMap<String, String>) -> String {
 }
 
 /// Encode a schema to Arrow IPC format
-fn encode_schema(schema: &Schema) -> Result<Vec<u8>, String> {
+pub fn encode_schema(schema: &Schema) -> Result<Vec<u8>, String> {
     let mut buffer = Vec::new();
     let data_gen = IpcDataGenerator::default();
     let options = IpcWriteOptions::default();
@@ -117,7 +117,7 @@ fn encode_schema(schema: &Schema) -> Result<Vec<u8>, String> {
 }
 
 /// Encode a RecordBatch to Arrow IPC format
-fn encode_batch(
+pub fn encode_batch(
     batch: &datafusion::arrow::array::RecordBatch,
     tracker: &mut arrow_ipc::writer::DictionaryTracker,
     compression: &mut CompressionContext,

@@ -1,4 +1,19 @@
 import '@testing-library/jest-dom'
+import { TextEncoder, TextDecoder } from 'util'
+import { ReadableStream, TransformStream, WritableStream } from 'stream/web'
+
+// Polyfill TextEncoder/TextDecoder for Apache Arrow
+global.TextEncoder = TextEncoder
+// @ts-expect-error - TextDecoder type mismatch
+global.TextDecoder = TextDecoder
+
+// Polyfill Web Streams API
+// @ts-expect-error - Type mismatch between Node and Web APIs
+global.ReadableStream = ReadableStream
+// @ts-expect-error - Type mismatch between Node and Web APIs
+global.TransformStream = TransformStream
+// @ts-expect-error - Type mismatch between Node and Web APIs
+global.WritableStream = WritableStream
 
 // Set NODE_ENV to development for tests
 // @ts-expect-error - Override readonly property for testing
