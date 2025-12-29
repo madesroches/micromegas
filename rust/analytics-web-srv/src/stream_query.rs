@@ -223,7 +223,11 @@ pub async fn stream_query_handler(
             }
         };
 
-        // Get schema from the stream
+        // The schema is only available after receiving the first FlightData message.
+        // We need to read the first batch to populate the schema.
+        let first_batch = batch_stream.next().await;
+
+        // Get schema from the stream (now available after reading first message)
         let schema = match batch_stream.schema() {
             Some(s) => s.clone(),
             None => {
@@ -259,27 +263,50 @@ pub async fn stream_query_handler(
         let mut dict_tracker = arrow_ipc::writer::DictionaryTracker::new(false);
         let mut compression = CompressionContext::default();
 
-        // Stream batches
+        // Helper to encode and yield a batch
+        macro_rules! yield_batch {
+            ($batch:expr) => {
+                let batch_bytes = match encode_batch(&$batch, &mut dict_tracker, &mut compression) {
+                    Ok(bytes) => bytes,
+                    Err(e) => {
+                        yield Ok(json_line(&ErrorFrame {
+                            frame_type: "error",
+                            code: ErrorCode::Internal,
+                            message: e,
+                        }));
+                        return;
+                    }
+                };
+                yield Ok(json_line(&DataHeader {
+                    frame_type: "batch",
+                    size: batch_bytes.len(),
+                }));
+                yield Ok(Bytes::from(batch_bytes));
+            };
+        }
+
+        // Process the first batch we read earlier (to get the schema)
+        if let Some(result) = first_batch {
+            match result {
+                Ok(batch) => {
+                    yield_batch!(batch);
+                }
+                Err(e) => {
+                    yield Ok(json_line(&ErrorFrame {
+                        frame_type: "error",
+                        code: ErrorCode::Internal,
+                        message: e.to_string(),
+                    }));
+                    return;
+                }
+            }
+        }
+
+        // Stream remaining batches
         while let Some(result) = batch_stream.next().await {
             match result {
                 Ok(batch) => {
-                    let batch_bytes = match encode_batch(&batch, &mut dict_tracker, &mut compression) {
-                        Ok(bytes) => bytes,
-                        Err(e) => {
-                            yield Ok(json_line(&ErrorFrame {
-                                frame_type: "error",
-                                code: ErrorCode::Internal,
-                                message: e,
-                            }));
-                            return;
-                        }
-                    };
-
-                    yield Ok(json_line(&DataHeader {
-                        frame_type: "batch",
-                        size: batch_bytes.len(),
-                    }));
-                    yield Ok(Bytes::from(batch_bytes));
+                    yield_batch!(batch);
                 }
                 Err(e) => {
                     yield Ok(json_line(&ErrorFrame {
