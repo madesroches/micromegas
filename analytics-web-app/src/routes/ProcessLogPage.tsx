@@ -8,6 +8,7 @@ import { CopyableProcessId } from '@/components/CopyableProcessId'
 import { QueryEditor } from '@/components/QueryEditor'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { useStreamQuery } from '@/hooks/useStreamQuery'
+import { timestampToDate } from '@/lib/arrow-utils'
 import { useTimeRange } from '@/hooks/useTimeRange'
 import { useDebounce } from '@/hooks/useDebounce'
 
@@ -147,25 +148,11 @@ function EditableCombobox({ value, options, onChange, onSelect, onBlur, onKeyDow
   )
 }
 
-// Convert Arrow timestamp to Date
-function arrowTimestampToDate(value: unknown): Date | null {
-  if (!value) return null
-  if (value instanceof Date) return value
-  // Arrow timestamps can be numbers (ms) or BigInt (ns/us)
-  if (typeof value === 'number') return new Date(value)
-  if (typeof value === 'bigint') {
-    // Assume microseconds, convert to milliseconds
-    return new Date(Number(value / 1000n))
-  }
-  // Try parsing as string
-  const date = new Date(String(value))
-  return isNaN(date.getTime()) ? null : date
-}
 
 function formatLocalTime(utcTime: unknown): string {
   if (!utcTime) return ''.padEnd(29)
 
-  const date = arrowTimestampToDate(utcTime)
+  const date = timestampToDate(utcTime)
   if (!date) return ''.padEnd(29)
 
   // Try to extract nanoseconds from string representation

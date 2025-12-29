@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { useMutation } from '@tanstack/react-query'
-import { executeSqlQuery, toRowObjects } from '@/lib/api'
+import { executeStreamQuery } from '@/lib/arrow-stream'
 
 const PROPERTY_KEYS_SQL = `SELECT DISTINCT unnest(arrow_cast(jsonb_object_keys(properties), 'List(Utf8)')) as key
 FROM view_instance('measures', '$process_id')
@@ -30,32 +29,48 @@ export function usePropertyKeys({
 }: UsePropertyKeysParams): UsePropertyKeysReturn {
   const [keys, setKeys] = useState<string[]>([])
   const [error, setError] = useState<string | null>(null)
+  const [isLoading, setIsLoading] = useState(false)
 
-  const mutation = useMutation({
-    mutationFn: executeSqlQuery,
-    onSuccess: (data) => {
-      const rows = toRowObjects(data)
-      const keyList = rows.map((row) => String(row.key ?? '')).filter(Boolean)
+  const fetchKeys = useCallback(async () => {
+    if (!processId || !measureName || !enabled) return
+
+    setIsLoading(true)
+    setError(null)
+
+    try {
+      const { batches, error: streamError } = await executeStreamQuery({
+        sql: PROPERTY_KEYS_SQL,
+        params: { process_id: processId, measure_name: measureName },
+        begin: apiTimeRange.begin,
+        end: apiTimeRange.end,
+      })
+
+      if (streamError) {
+        setError(streamError.message)
+        setKeys([])
+        setIsLoading(false)
+        return
+      }
+
+      const keyList: string[] = []
+      for (const batch of batches) {
+        for (let i = 0; i < batch.numRows; i++) {
+          const row = batch.get(i)
+          if (row) {
+            const key = String(row.key ?? '')
+            if (key) keyList.push(key)
+          }
+        }
+      }
+
       setKeys(keyList)
       setError(null)
-    },
-    onError: (err: Error) => {
-      setError(err.message)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unknown error')
       setKeys([])
-    },
-  })
-
-  const mutateRef = useRef(mutation.mutate)
-  mutateRef.current = mutation.mutate
-
-  const fetchKeys = useCallback(() => {
-    if (!processId || !measureName || !enabled) return
-    mutateRef.current({
-      sql: PROPERTY_KEYS_SQL,
-      params: { process_id: processId, measure_name: measureName },
-      begin: apiTimeRange.begin,
-      end: apiTimeRange.end,
-    })
+    } finally {
+      setIsLoading(false)
+    }
   }, [processId, measureName, apiTimeRange.begin, apiTimeRange.end, enabled])
 
   const prevParamsRef = useRef<{
@@ -93,7 +108,7 @@ export function usePropertyKeys({
 
   return {
     keys,
-    isLoading: mutation.isPending,
+    isLoading,
     error,
     refetch: fetchKeys,
   }

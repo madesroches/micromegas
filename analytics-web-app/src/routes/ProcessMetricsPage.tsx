@@ -9,6 +9,7 @@ import { QueryEditor } from '@/components/QueryEditor'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { MetricsChart } from '@/components/MetricsChart'
 import { useStreamQuery } from '@/hooks/useStreamQuery'
+import { timestampToMs } from '@/lib/arrow-utils'
 import { useTimeRange } from '@/hooks/useTimeRange'
 
 const DISCOVERY_SQL = `SELECT DISTINCT name, target, unit
@@ -35,21 +36,6 @@ interface Measure {
   name: string
   target: string
   unit: string
-}
-
-// Convert Arrow timestamp to milliseconds
-function arrowTimestampToMs(value: unknown): number {
-  if (!value) return 0
-  if (value instanceof Date) return value.getTime()
-  // Arrow timestamps can be numbers (ms) or BigInt (ns/us)
-  if (typeof value === 'number') return value
-  if (typeof value === 'bigint') {
-    // Assume microseconds, convert to milliseconds
-    return Number(value / 1000n)
-  }
-  // Try parsing as string
-  const date = new Date(String(value))
-  return isNaN(date.getTime()) ? 0 : date.getTime()
 }
 
 function calculateBinInterval(timeSpanMs: number, chartWidthPx: number = 800): string {
@@ -159,7 +145,7 @@ function ProcessMetricsContent() {
           const row = table.get(i)
           if (row) {
             points.push({
-              time: arrowTimestampToMs(row.time),
+              time: timestampToMs(row.time),
               value: Number(row.value),
             })
           }

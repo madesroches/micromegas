@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { useMutation } from '@tanstack/react-query'
-import { executeSqlQuery, toRowObjects } from '@/lib/api'
+import { executeStreamQuery, StreamQueryParams } from '@/lib/arrow-stream'
+import { timestampToMs } from '@/lib/arrow-utils'
 import { PropertyTimelineData, PropertySegment } from '@/types'
 
 const PROPERTY_VALUES_SQL = `SELECT
@@ -109,51 +109,6 @@ export function usePropertyTimeline({
   const rawDataRef = useRef<Map<string, RawPropertyData>>(new Map())
   const pendingRequestsRef = useRef<Set<string>>(new Set())
 
-  const mutation = useMutation({
-    mutationFn: async ({
-      sql,
-      params,
-      begin,
-      end,
-      propertyName,
-    }: {
-      sql: string
-      params: Record<string, string>
-      begin: string
-      end: string
-      propertyName: string
-    }) => {
-      const result = await executeSqlQuery({ sql, params, begin, end })
-      return { result, propertyName }
-    },
-    onSuccess: ({ result, propertyName }) => {
-      const rows = toRowObjects(result)
-      const parsedRows = rows.map((row) => ({
-        time: new Date(String(row.time)).getTime(),
-        value: String(row.value ?? ''),
-      }))
-
-      rawDataRef.current.set(propertyName, {
-        propertyName,
-        rows: parsedRows,
-      })
-
-      pendingRequestsRef.current.delete(propertyName)
-      setPendingRequests(new Set(pendingRequestsRef.current))
-
-      // Update timelines when all requests are complete
-      updateTimelines()
-    },
-    onError: (err: Error, { propertyName }) => {
-      setError(err.message)
-      pendingRequestsRef.current.delete(propertyName)
-      setPendingRequests(new Set(pendingRequestsRef.current))
-    },
-  })
-
-  const mutateRef = useRef(mutation.mutate)
-  mutateRef.current = mutation.mutate
-
   const updateTimelines = useCallback(() => {
     const newTimelines: PropertyTimelineData[] = []
     const binIntervalMs = parseIntervalToMs(binInterval)
@@ -171,6 +126,49 @@ export function usePropertyTimeline({
     setTimelines(newTimelines)
   }, [propertyNames, binInterval])
 
+  const executePropertyQuery = useCallback(
+    async (params: StreamQueryParams, propertyName: string) => {
+      try {
+        const { batches, error } = await executeStreamQuery(params)
+        if (error) {
+          setError(error.message)
+          pendingRequestsRef.current.delete(propertyName)
+          setPendingRequests(new Set(pendingRequestsRef.current))
+          return
+        }
+
+        const parsedRows: { time: number; value: string }[] = []
+        for (const batch of batches) {
+          for (let i = 0; i < batch.numRows; i++) {
+            const row = batch.get(i)
+            if (row) {
+              parsedRows.push({
+                time: timestampToMs(row.time),
+                value: String(row.value ?? ''),
+              })
+            }
+          }
+        }
+
+        rawDataRef.current.set(propertyName, {
+          propertyName,
+          rows: parsedRows,
+        })
+
+        pendingRequestsRef.current.delete(propertyName)
+        setPendingRequests(new Set(pendingRequestsRef.current))
+
+        // Update timelines when all requests are complete
+        updateTimelines()
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Unknown error')
+        pendingRequestsRef.current.delete(propertyName)
+        setPendingRequests(new Set(pendingRequestsRef.current))
+      }
+    },
+    [updateTimelines]
+  )
+
   const fetchProperty = useCallback(
     (propertyName: string) => {
       if (!processId || !measureName || !enabled) return
@@ -179,20 +177,22 @@ export function usePropertyTimeline({
       pendingRequestsRef.current.add(propertyName)
       setPendingRequests(new Set(pendingRequestsRef.current))
 
-      mutateRef.current({
-        sql: PROPERTY_VALUES_SQL,
-        params: {
-          process_id: processId,
-          measure_name: measureName,
-          property_name: propertyName,
-          bin_interval: binInterval,
+      executePropertyQuery(
+        {
+          sql: PROPERTY_VALUES_SQL,
+          params: {
+            process_id: processId,
+            measure_name: measureName,
+            property_name: propertyName,
+            bin_interval: binInterval,
+          },
+          begin: apiTimeRange.begin,
+          end: apiTimeRange.end,
         },
-        begin: apiTimeRange.begin,
-        end: apiTimeRange.end,
-        propertyName,
-      })
+        propertyName
+      )
     },
-    [processId, measureName, apiTimeRange.begin, apiTimeRange.end, binInterval, enabled]
+    [processId, measureName, apiTimeRange.begin, apiTimeRange.end, binInterval, enabled, executePropertyQuery]
   )
 
   const fetchAllProperties = useCallback(() => {
@@ -299,7 +299,7 @@ export function usePropertyTimeline({
 
   return {
     timelines,
-    isLoading: pendingRequests.size > 0 || mutation.isPending,
+    isLoading: pendingRequests.size > 0,
     error,
     refetch: fetchAllProperties,
   }

@@ -6,6 +6,7 @@ import { PageLayout } from '@/components/layout'
 import { AuthGuard } from '@/components/AuthGuard'
 import { CopyableProcessId } from '@/components/CopyableProcessId'
 import { useStreamQuery } from '@/hooks/useStreamQuery'
+import { timestampToDate } from '@/lib/arrow-utils'
 import { useTimeRange } from '@/hooks/useTimeRange'
 import { formatDuration, formatDateTimeLocal } from '@/lib/time-range'
 
@@ -82,21 +83,6 @@ interface ProcessRow {
   distro: string
 }
 
-// Convert Arrow timestamp to Date
-function toDate(value: unknown): Date | null {
-  if (!value) return null
-  if (value instanceof Date) return value
-  // Arrow timestamps can be numbers (ms) or BigInt (ns/us)
-  if (typeof value === 'number') return new Date(value)
-  if (typeof value === 'bigint') {
-    // Assume microseconds, convert to milliseconds
-    return new Date(Number(value / 1000n))
-  }
-  // Try parsing as string
-  const date = new Date(String(value))
-  return isNaN(date.getTime()) ? null : date
-}
-
 interface StatisticsRow {
   log_entries: number
   measures: number
@@ -128,8 +114,8 @@ function ProcessPageContent() {
         if (row) {
           setProcess({
             exe: String(row.exe ?? ''),
-            start_time: toDate(row.start_time),
-            last_update_time: toDate(row.last_update_time),
+            start_time: timestampToDate(row.start_time),
+            last_update_time: timestampToDate(row.last_update_time),
             computer: String(row.computer ?? ''),
             username: String(row.username ?? ''),
             cpu_brand: String(row.cpu_brand ?? ''),

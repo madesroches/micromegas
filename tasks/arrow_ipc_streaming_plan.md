@@ -1,6 +1,6 @@
 # Arrow IPC Streaming for Query Endpoint
 
-**Status: In Progress (3 components remaining)**
+**Status: Complete (all components migrated)**
 
 GitHub Issue: https://github.com/madesroches/micromegas/issues/664
 
@@ -255,6 +255,7 @@ export function useStreamQuery(): UseStreamQueryReturn {
 
 **Frontend:**
 - `analytics-web-app/src/lib/arrow-stream.ts` - Framed stream parser
+- `analytics-web-app/src/lib/arrow-utils.ts` - Shared utilities for Arrow data conversion (timestampToMs, timestampToDate with schema-aware time unit handling)
 - `analytics-web-app/src/lib/__tests__/arrow-stream.test.ts` - Unit tests (16 tests)
 - `analytics-web-app/src/hooks/useStreamQuery.ts` - Streaming query hook
 - `analytics-web-app/src/hooks/__tests__/useStreamQuery.test.ts` - Unit tests (16 tests)
@@ -270,6 +271,7 @@ export function useStreamQuery(): UseStreamQueryReturn {
 **Frontend:**
 - `analytics-web-app/package.json` - Add `apache-arrow` dependency
 - `analytics-web-app/src/test-setup.ts` - Add polyfills for TextEncoder/TextDecoder, ReadableStream
+- `analytics-web-app/src/lib/time-range.ts` - Added `toDate` helper for Arrow BigInt timestamps, updated `formatTimestamp` and `formatDuration`
 
 ### Unchanged Files
 - Existing `/query` endpoint - kept for backward compatibility
@@ -354,9 +356,9 @@ export function useStreamQuery(): UseStreamQueryReturn {
    - [x] `ProcessPage` - uses `useStreamQuery` with 3 hooks (process, stats, properties)
    - [x] `ProcessLogPage` - uses `useStreamQuery` for log entries
    - [x] `ProcessMetricsPage` - uses `useStreamQuery` with 3 hooks (discovery, data, process)
-   - [ ] `PerformanceAnalysisPage` - 5 mutations using `executeSqlQuery` (spans, block counts, measures)
-   - [ ] `usePropertyTimeline` hook - timeline of property values
-   - [ ] `usePropertyKeys` hook - property key listing
+   - [x] `PerformanceAnalysisPage` - 5 mutations migrated to `executeStreamQuery` (discovery, data, process, threadCoverage, traceEventCount)
+   - [x] `usePropertyTimeline` hook - timeline of property values (migrated to executeStreamQuery)
+   - [x] `usePropertyKeys` hook - property key listing (migrated to executeStreamQuery)
 6. [x] Keep existing `/query` endpoint for compatibility
 7. [ ] Remove old `/query` endpoint and `executeSqlQuery` after full migration
 
