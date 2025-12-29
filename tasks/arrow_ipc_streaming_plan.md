@@ -159,28 +159,38 @@ struct ErrorFrame {
     message: String,
 }
 
-/// Converts FlightData directly to IPC message bytes without deserializing.
-/// This avoids the round-trip: FlightData → RecordBatch → IPC bytes.
-fn flight_data_to_ipc_bytes(flight_data: &FlightData) -> Vec<u8> {
-    let header = &flight_data.data_header;
-    let body = &flight_data.data_body;
+/// Calculates total IPC message size without allocating the full buffer.
+///
+/// IPC streaming format per message:
+/// - Continuation marker (0xFFFFFFFF): 4 bytes
+/// - Metadata length (unpadded, little-endian i32): 4 bytes
+/// - Metadata flatbuffer: N bytes
+/// - Padding to 8-byte alignment: P bytes where (N + P) % 8 == 0
+/// - Body buffers: M bytes
+fn ipc_message_size(flight_data: &FlightData) -> usize {
+    let header_len = flight_data.data_header.len();
+    let padding = (8 - (header_len % 8)) % 8;
+    4 + 4 + header_len + padding + flight_data.data_body.len()
+}
 
-    // IPC message format:
-    // - continuation marker (0xFFFFFFFF) - 4 bytes
-    // - metadata length (little-endian i32) - 4 bytes
-    // - metadata (header) - padded to 8-byte alignment
-    // - body data
+/// Creates the IPC metadata portion (continuation marker, length, header, padding).
+/// This is small (~100-500 bytes) so allocation is fine. The body is yielded
+/// separately to avoid copying the large payload data.
+///
+/// Note: The length field contains the UNPADDED metadata size. The IPC reader
+/// calculates padding separately: it reads `length` bytes, then skips to the
+/// next 8-byte boundary before reading the body.
+fn ipc_metadata_bytes(flight_data: &FlightData) -> Bytes {
+    let header = &flight_data.data_header;
     let header_len = header.len();
     let padding = (8 - (header_len % 8)) % 8;
-    let total_size = 4 + 4 + header_len + padding + body.len();
 
-    let mut buffer = Vec::with_capacity(total_size);
+    let mut buffer = Vec::with_capacity(4 + 4 + header_len + padding);
     buffer.extend_from_slice(&CONTINUATION_MARKER);
     buffer.extend_from_slice(&(header_len as i32).to_le_bytes());
     buffer.extend_from_slice(header);
     buffer.extend(std::iter::repeat(0u8).take(padding));
-    buffer.extend_from_slice(body);
-    buffer
+    Bytes::from(buffer)
 }
 
 
@@ -223,7 +233,9 @@ pub async fn stream_query_handler(
             }
         };
 
-        // First FlightData message contains the schema
+        // FlightSQL protocol: first FlightData contains Schema message (empty body).
+        // We label it "schema" for human readability, but the frontend's
+        // RecordBatchReader handles message type detection automatically.
         let schema_data = match flight_stream.next().await {
             Some(Ok(data)) => data,
             Some(Err(e)) => {
@@ -244,25 +256,32 @@ pub async fn stream_query_handler(
             }
         };
 
-        // Convert schema FlightData to IPC bytes and send
-        let schema_bytes = flight_data_to_ipc_bytes(&schema_data);
+        // Send schema: JSON header, then IPC metadata + body (body is zero-copy)
         yield Ok(json_line(&DataHeader {
             frame_type: "schema",
-            size: schema_bytes.len(),
+            size: ipc_message_size(&schema_data),
         }));
-        yield Ok(Bytes::from(schema_bytes));
+        yield Ok(ipc_metadata_bytes(&schema_data));
+        if !schema_data.data_body.is_empty() {
+            yield Ok(schema_data.data_body.clone()); // Bytes::clone is cheap (refcount)
+        }
 
-        // Stream remaining FlightData messages (batches) directly
-        // No deserialization needed - just convert FlightData format to IPC format
+        // Stream remaining FlightData messages as "batch" frames.
+        // This includes RecordBatch and DictionaryBatch messages - the frontend's
+        // RecordBatchReader handles both transparently. Empty results (zero batches)
+        // are valid: the loop simply doesn't yield any batch frames.
         while let Some(result) = flight_stream.next().await {
             match result {
                 Ok(flight_data) => {
-                    let batch_bytes = flight_data_to_ipc_bytes(&flight_data);
+                    // Send batch: JSON header, then IPC metadata + body (body is zero-copy)
                     yield Ok(json_line(&DataHeader {
                         frame_type: "batch",
-                        size: batch_bytes.len(),
+                        size: ipc_message_size(&flight_data),
                     }));
-                    yield Ok(Bytes::from(batch_bytes));
+                    yield Ok(ipc_metadata_bytes(&flight_data));
+                    if !flight_data.data_body.is_empty() {
+                        yield Ok(flight_data.data_body.clone()); // Bytes::clone is cheap (refcount)
+                    }
                 }
                 Err(e) => {
                     yield Ok(json_line(&ErrorFrame {
@@ -691,27 +710,35 @@ export function useStreamQuery() {
 ## Testing Strategy
 
 ### Backend Tests
-1. Unit tests for `schema_to_ipc_bytes` and `batch_to_raw_ipc`
+1. Unit tests for `ipc_message_size` and `ipc_metadata_bytes`:
+   - Verify size calculation matches actual bytes produced
+   - Verify padding aligns body to 8-byte boundary
+   - Test with various metadata sizes (edge cases: 0, 1, 7, 8, 9 bytes)
 2. Integration tests for `/query-stream`:
    - Valid query returns schema + batches + done
-   - Invalid SQL returns error frame
-   - Empty result returns schema + done (no batches)
+   - Invalid SQL returns error frame (no schema)
+   - Empty result returns schema + done (zero batch frames)
+   - Single row result (schema + one batch + done)
    - Dictionary-encoded columns across multiple batches
+   - Large result (verify streaming, not buffered)
 3. Verify frame format matches specification
 
 ### Frontend Tests
-1. Unit tests for `readLine` and `readBytes`:
+1. Unit tests for `BufferedReader.readLine` and `readBytes`:
    - Handle chunks split across reads
    - Handle multiple frames in single chunk
+   - Handle exact chunk boundaries
 2. Unit tests for `streamQuery`:
    - Parse schema frame, read exact byte count
    - Parse batch frames, read exact byte count
+   - Empty result: yields schema, then done (no batches)
    - Handle done and error frames
    - Handle unexpected stream end
    - Dictionary-encoded columns preserve values across batches
 3. Integration tests with mock fetch responses
 4. Hook tests:
    - State updates during streaming
+   - Empty result: schema set, batchCount=0, isComplete=true
    - Cancellation works
    - Retry only for retryable errors
 
