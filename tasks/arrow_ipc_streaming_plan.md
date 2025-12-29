@@ -1,6 +1,6 @@
 # Arrow IPC Streaming for Query Endpoint
 
-**Status: ✅ Implementation Complete**
+**Status: ✅ Migration Complete**
 
 GitHub Issue: https://github.com/madesroches/micromegas/issues/664
 
@@ -345,12 +345,16 @@ export function useStreamQuery(): UseStreamQueryReturn {
 
 ## Migration Strategy
 
-1. Deploy backend with new `/query-stream` endpoint
-2. Add frontend Arrow dependency
-3. Implement frontend stream parser
-4. Create `useStreamQuery` hook
-5. Migrate components incrementally to new hook
-6. Keep existing `/query` endpoint for compatibility
+1. [x] Deploy backend with new `/query-stream` endpoint
+2. [x] Add frontend Arrow dependency
+3. [x] Implement frontend stream parser
+4. [x] Create `useStreamQuery` hook
+5. [x] Migrate components incrementally to new hook
+   - [x] `ProcessesPage` - uses `useStreamQuery`, iterates directly on Arrow Table rows
+   - [x] `ProcessPage` - uses `useStreamQuery` with 3 hooks (process, stats, properties)
+   - [x] `ProcessLogPage` - uses `useStreamQuery` for log entries
+   - [x] `ProcessMetricsPage` - uses `useStreamQuery` with 3 hooks (discovery, data, process)
+6. [x] Keep existing `/query` endpoint for compatibility
 
 ## Benefits
 

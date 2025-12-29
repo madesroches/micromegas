@@ -1,6 +1,5 @@
 import { Suspense, useState, useMemo, useCallback, useEffect, useRef } from 'react'
 import { useSearchParams, useNavigate, useLocation } from 'react-router-dom'
-import { useMutation } from '@tanstack/react-query'
 import { AppLink } from '@/components/AppLink'
 import { ChevronUp, ChevronDown } from 'lucide-react'
 import { PageLayout } from '@/components/layout'
@@ -8,11 +7,10 @@ import { AuthGuard } from '@/components/AuthGuard'
 import { CopyableProcessId } from '@/components/CopyableProcessId'
 import { QueryEditor } from '@/components/QueryEditor'
 import { ErrorBanner } from '@/components/ErrorBanner'
-import { executeSqlQuery, toRowObjects } from '@/lib/api'
+import { useStreamQuery } from '@/hooks/useStreamQuery'
 import { useTimeRange } from '@/hooks/useTimeRange'
 import { useDebounce } from '@/hooks/useDebounce'
 import { formatTimestamp, formatDuration } from '@/lib/time-range'
-import { SqlRow } from '@/types'
 
 type SortField = 'exe' | 'start_time' | 'last_update_time' | 'runtime' | 'username' | 'computer'
 type SortDirection = 'asc' | 'desc'
@@ -69,32 +67,22 @@ function ProcessesPageContent() {
   const debouncedSearchInput = useDebounce(searchInput, 300)
   const [sortField, setSortField] = useState<SortField>('last_update_time')
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc')
-  const [queryError, setQueryError] = useState<string | null>(null)
-  const [rows, setRows] = useState<SqlRow[]>([])
   const [currentSql, setCurrentSql] = useState<string>(DEFAULT_SQL)
   const { parsed: timeRange, apiTimeRange } = useTimeRange()
 
-  const sqlMutation = useMutation({
-    mutationFn: executeSqlQuery,
-    onSuccess: (data) => {
-      setQueryError(null)
-      setRows(toRowObjects(data))
-    },
-    onError: (err: Error) => {
-      setQueryError(err.message)
-    },
-  })
-
-  // Load data - using ref to avoid including mutation in deps
-  const mutateRef = useRef(sqlMutation.mutate)
-  mutateRef.current = sqlMutation.mutate
+  const streamQuery = useStreamQuery()
+  const table = streamQuery.getTable()
+  const queryError = streamQuery.error?.message ?? null
 
   const currentSqlRef = useRef(currentSql)
   currentSqlRef.current = currentSql
 
+  // Use ref to get latest execute function without causing re-renders
+  const executeRef = useRef(streamQuery.execute)
+  executeRef.current = streamQuery.execute
+
   const loadData = useCallback(
     (sql: string) => {
-      setQueryError(null)
       setCurrentSql(sql)
       // Interpolate search_filter directly into SQL (it contains raw SQL with quotes)
       const sqlWithSearch = sql.replace('$search_filter', expandSearchFilter(search))
@@ -107,7 +95,7 @@ function ProcessesPageContent() {
         end: apiTimeRange.end,
         order_by: `${orderByColumn} ${sortDirection.toUpperCase()}`,
       }
-      mutateRef.current({
+      executeRef.current({
         sql: sqlWithSearch,
         params,
         begin: apiTimeRange.begin,
@@ -226,7 +214,7 @@ function ProcessesPageContent() {
       timeRangeLabel={timeRange.label}
       onRun={handleRunQuery}
       onReset={handleResetQuery}
-      isLoading={sqlMutation.isPending}
+      isLoading={streamQuery.isStreaming}
       error={queryError}
       docLink={{
         url: 'https://madesroches.github.io/micromegas/docs/query-guide/schema-reference/#processes',
@@ -264,13 +252,12 @@ function ProcessesPageContent() {
             <ErrorBanner
               title="Query execution failed"
               message={queryError}
-              onDismiss={() => setQueryError(null)}
-              onRetry={handleRefresh}
+              onRetry={streamQuery.error?.retryable ? handleRefresh : undefined}
             />
           )}
 
           {/* Table */}
-          {sqlMutation.isPending && rows.length === 0 ? (
+          {streamQuery.isStreaming && !table ? (
             <div className="flex-1 flex items-center justify-center bg-app-panel border border-theme-border rounded-lg">
               <div className="flex items-center gap-3">
                 <div className="animate-spin rounded-full h-6 w-6 border-2 border-accent-link border-t-transparent" />
@@ -302,44 +289,54 @@ function ProcessesPageContent() {
                   </tr>
                 </thead>
                 <tbody>
-                  {rows.map((row) => (
-                    <tr
-                      key={String(row.process_id)}
-                      className="border-b border-theme-border hover:bg-app-card transition-colors"
-                    >
-                      <td className="px-4 py-3">
-                        <AppLink
-                          href={`/process?id=${row.process_id}&from=${encodeURIComponent(String(row.start_time))}&to=${encodeURIComponent(String(row.last_update_time))}`}
-                          className="text-accent-link hover:underline"
-                        >
-                          {String(row.exe ?? '')}
-                        </AppLink>
-                      </td>
-                      <td className="hidden sm:table-cell px-4 py-3">
-                        <CopyableProcessId
-                          processId={String(row.process_id ?? '')}
-                          truncate={true}
-                          className="text-sm font-mono text-theme-text-secondary"
-                        />
-                      </td>
-                      <td className="px-4 py-3 font-mono text-sm text-theme-text-primary">
-                        {formatTimestamp(row.start_time)}
-                      </td>
-                      <td className="hidden lg:table-cell px-4 py-3 font-mono text-sm text-theme-text-primary">
-                        {formatTimestamp(row.last_update_time)}
-                      </td>
-                      <td className="hidden lg:table-cell px-4 py-3 font-mono text-sm text-theme-text-secondary">
-                        {formatDuration(row.start_time, row.last_update_time)}
-                      </td>
-                      <td className="hidden md:table-cell px-4 py-3 text-theme-text-primary">
-                        {String(row.username ?? '')}
-                      </td>
-                      <td className="hidden md:table-cell px-4 py-3 text-theme-text-primary">
-                        {String(row.computer ?? '')}
-                      </td>
-                    </tr>
-                  ))}
-                  {rows.length === 0 && (
+                  {table && Array.from({ length: table.numRows }, (_, i) => {
+                    const row = table.get(i)
+                    if (!row) return null
+                    const processId = String(row.process_id ?? '')
+                    const exe = String(row.exe ?? '')
+                    const startTime = row.start_time
+                    const lastUpdateTime = row.last_update_time
+                    const username = String(row.username ?? '')
+                    const computer = String(row.computer ?? '')
+                    return (
+                      <tr
+                        key={processId}
+                        className="border-b border-theme-border hover:bg-app-card transition-colors"
+                      >
+                        <td className="px-4 py-3">
+                          <AppLink
+                            href={`/process?id=${processId}&from=${encodeURIComponent(String(startTime))}&to=${encodeURIComponent(String(lastUpdateTime))}`}
+                            className="text-accent-link hover:underline"
+                          >
+                            {exe}
+                          </AppLink>
+                        </td>
+                        <td className="hidden sm:table-cell px-4 py-3">
+                          <CopyableProcessId
+                            processId={processId}
+                            truncate={true}
+                            className="text-sm font-mono text-theme-text-secondary"
+                          />
+                        </td>
+                        <td className="px-4 py-3 font-mono text-sm text-theme-text-primary">
+                          {formatTimestamp(startTime)}
+                        </td>
+                        <td className="hidden lg:table-cell px-4 py-3 font-mono text-sm text-theme-text-primary">
+                          {formatTimestamp(lastUpdateTime)}
+                        </td>
+                        <td className="hidden lg:table-cell px-4 py-3 font-mono text-sm text-theme-text-secondary">
+                          {formatDuration(startTime, lastUpdateTime)}
+                        </td>
+                        <td className="hidden md:table-cell px-4 py-3 text-theme-text-primary">
+                          {username}
+                        </td>
+                        <td className="hidden md:table-cell px-4 py-3 text-theme-text-primary">
+                          {computer}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                  {(!table || table.numRows === 0) && (
                     <tr>
                       <td colSpan={7} className="px-4 py-8 text-center text-theme-text-muted">
                         {search ? 'No processes match your search.' : 'No processes available.'}
