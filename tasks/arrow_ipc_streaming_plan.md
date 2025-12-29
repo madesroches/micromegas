@@ -21,63 +21,69 @@ Browser ──HTTP/JSON──► analytics-web-srv ──gRPC/Arrow Flight──
 
 ## Proposed Solution
 
-Stream native Arrow IPC format followed by a JSON termination message:
+Use a JSON-framed protocol that enables true streaming:
 
 ```
-[Arrow IPC Stream - native framing]
-  Schema message
-  RecordBatch 0
-  RecordBatch 1
-  ...
-  EOS marker (0xFFFFFFFF 0x00000000)
+{"type":"schema","arrow_schema":"<base64 IPC schema>"}\n
+{"type":"batch","size":4096}\n
+[4096 bytes of Arrow IPC RecordBatch]
+{"type":"batch","size":2048}\n
+[2048 bytes of Arrow IPC RecordBatch]
 {"type":"done"}\n
 ```
 
-On error (either before streaming or mid-stream):
+On error:
 ```
-[Arrow IPC Stream - partial or empty]
-  Schema message (if available)
-  RecordBatch 0 (partial results)
-  ...
-  EOS marker
-{"type":"error","code":"TIMEOUT","message":"Query exceeded time limit","retryable":true}\n
+{"type":"schema","arrow_schema":"<base64>"}\n
+{"type":"batch","size":1024}\n
+[1024 bytes - partial results]
+{"type":"error","code":"TIMEOUT","message":"Query exceeded time limit"}\n
 ```
 
 **Key design points:**
-- Arrow IPC stream uses standard format - frontend can use `RecordBatchReader.from()` directly
-- Terminating JSON message always present - explicit completion signal
-- Structured error info preserved when things fail
-- Partial results kept on mid-stream errors
+- Each frame starts with a JSON line (newline-terminated)
+- Batch frames include `size` - frontend reads exactly that many bytes
+- True streaming: frontend processes each batch as it arrives
+- No buffering required to find message boundaries
+- Errors can occur at any point, partial results preserved
 
-Error codes:
+### Frame Types
+
+| Type | Fields | Followed By |
+|------|--------|-------------|
+| `schema` | `arrow_schema` (base64 IPC schema message) | Nothing |
+| `batch` | `size` (byte count) | Raw Arrow IPC bytes |
+| `done` | None | Nothing (stream complete) |
+| `error` | `code`, `message` | Nothing (stream complete) |
+
+### Error Codes
+
 | Code | Meaning | Retryable |
 |------|---------|-----------|
 | `INVALID_SQL` | SQL syntax or semantic error | No |
 | `TIMEOUT` | Query exceeded time limit | Yes |
 | `CONNECTION_FAILED` | Failed to connect to FlightSQL | Yes |
 | `INTERNAL` | Unexpected backend error | No |
-| `UNAUTHORIZED` | Token expired mid-stream | No |
 
-Error scenarios:
-| Scenario | Backend Response | Frontend Handling |
-|----------|------------------|-------------------|
-| Auth failure (before stream) | HTTP 401 | Throw, redirect to login |
-| Invalid SQL | Empty IPC + error JSON | Show error, no partial data |
-| FlightSQL connection failed | Empty IPC + error JSON | Show error with retry option |
-| Timeout mid-query | Partial IPC + error JSON | Show error, keep partial data |
-| IPC serialization failure | Partial IPC + error JSON | Show error, keep partial data |
-| Backend crash | Stream ends without JSON | Detect incomplete, show error |
-| Network drop | Fetch throws | Catch exception, show error |
-| User cancellation | AbortController.abort() | Clean up, no error shown |
+### Error Scenarios
+
+| Scenario | Response | Frontend Handling |
+|----------|----------|-------------------|
+| Auth failure | HTTP 401 | Redirect to login |
+| Invalid SQL | Schema + error frame | Show error, no data |
+| FlightSQL down | Error frame (no schema) | Show error with retry |
+| Timeout mid-query | Partial batches + error | Show error, keep partial |
+| Success | Schema + batches + done | Display complete results |
+| Network drop | Fetch throws | Catch, show error |
+| User cancel | AbortController | Clean up, no error |
 
 ## Implementation Progress
 
 ### Phase 1: Backend Streaming Endpoint
 - [ ] Create `/query-stream` endpoint with streaming response
-- [ ] Use `StreamWriter` to write Arrow IPC format directly
-- [ ] Stream schema and batches from FlightSQL
-- [ ] Write EOS marker after all batches
-- [ ] Append JSON termination message (done or error)
+- [ ] Serialize schema to base64 IPC format
+- [ ] Serialize each RecordBatch to IPC bytes
+- [ ] Send JSON frame headers with size prefixes
 - [ ] Handle errors before and during streaming
 - [ ] Add integration tests
 
@@ -86,14 +92,14 @@ Error scenarios:
 - [ ] Verify bundle size impact (~1.5MB, tree-shakeable)
 
 ### Phase 3: Frontend Stream Consumer
-- [ ] Implement `streamQuery()` async generator in `lib/api.ts`
-- [ ] Use `RecordBatchReader.from(response)` for Arrow IPC parsing
-- [ ] Read trailing JSON for completion status
-- [ ] Handle error and done messages
-- [ ] Add error handling for incomplete streams
+- [ ] Implement framed stream reader in `lib/arrow-stream.ts`
+- [ ] Parse JSON headers, read binary payloads by size
+- [ ] Use `RecordBatchReader` for IPC deserialization
+- [ ] Yield batches as async generator
+- [ ] Handle all error scenarios
 
 ### Phase 4: Frontend Hook Integration
-- [ ] Create `useStreamQuery` hook for streaming queries
+- [ ] Create `useStreamQuery` hook
 - [ ] Support progressive data accumulation
 - [ ] Provide loading/streaming/complete states
 - [ ] Handle cancellation (AbortController)
@@ -105,133 +111,193 @@ Error scenarios:
 **File: `rust/analytics-web-srv/src/stream_query.rs`**
 
 ```rust
-use arrow_ipc::writer::StreamWriter;
+use arrow::ipc::writer::{IpcWriteOptions, StreamWriter};
+use arrow_schema::Schema;
 use async_stream::stream;
 use axum::body::Body;
 use axum::response::IntoResponse;
+use base64::Engine;
 use bytes::Bytes;
 use futures::StreamExt;
+use serde::Serialize;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-enum ErrorCode {
+pub enum ErrorCode {
     InvalidSql,
     Timeout,
     ConnectionFailed,
     Internal,
-    Unauthorized,
 }
 
-impl ErrorCode {
-    fn is_retryable(&self) -> bool {
-        matches!(self, ErrorCode::Timeout | ErrorCode::ConnectionFailed)
+#[derive(Serialize)]
+struct SchemaFrame {
+    #[serde(rename = "type")]
+    frame_type: &'static str,
+    arrow_schema: String,
+}
+
+#[derive(Serialize)]
+struct BatchFrame {
+    #[serde(rename = "type")]
+    frame_type: &'static str,
+    size: usize,
+}
+
+#[derive(Serialize)]
+struct DoneFrame {
+    #[serde(rename = "type")]
+    frame_type: &'static str,
+}
+
+#[derive(Serialize)]
+struct ErrorFrame {
+    #[serde(rename = "type")]
+    frame_type: &'static str,
+    code: ErrorCode,
+    message: String,
+}
+
+fn schema_to_ipc_base64(schema: &Schema) -> Result<String, arrow::error::ArrowError> {
+    let options = IpcWriteOptions::default();
+    let schema_bytes = arrow::ipc::writer::schema_to_bytes(schema, &options);
+    Ok(base64::engine::general_purpose::STANDARD.encode(&schema_bytes))
+}
+
+fn batch_to_ipc_bytes(batch: &RecordBatch) -> Result<Vec<u8>, arrow::error::ArrowError> {
+    let mut buffer = Vec::new();
+    {
+        let mut writer = StreamWriter::try_new(&mut buffer, batch.schema_ref())?;
+        writer.write(batch)?;
+        writer.finish()?;
     }
+    Ok(buffer)
 }
 
-fn done_message() -> Bytes {
-    Bytes::from("{\"type\":\"done\"}\n")
+fn json_line<T: Serialize>(value: &T) -> Bytes {
+    let mut json = serde_json::to_string(value).expect("serialization failed");
+    json.push('\n');
+    Bytes::from(json)
 }
 
-fn error_message(code: ErrorCode, message: &str) -> Bytes {
-    let json = serde_json::json!({
-        "type": "error",
-        "code": code,
-        "message": message,
-        "retryable": code.is_retryable()
-    });
-    Bytes::from(format!("{}\n", json))
-}
-
-async fn stream_query_arrow(
+pub async fn stream_query_handler(
     State(state): State<AppState>,
+    claims: Claims,
     Json(request): Json<SqlQueryRequest>,
 ) -> impl IntoResponse {
     let stream = stream! {
-        // Create client and start query
-        let mut client = match create_flight_client(&state).await {
+        // Create FlightSQL client
+        let mut client = match create_flight_client(&state, &claims).await {
             Ok(c) => c,
             Err(e) => {
-                // No Arrow data to send, just error message
-                yield Ok::<_, std::io::Error>(error_message(
-                    ErrorCode::ConnectionFailed,
-                    &e.to_string()
-                ));
+                yield Ok::<_, std::io::Error>(json_line(&ErrorFrame {
+                    frame_type: "error",
+                    code: ErrorCode::ConnectionFailed,
+                    message: e.to_string(),
+                }));
                 return;
             }
         };
 
+        // Start streaming query
         let time_range = parse_time_range(&request);
-        let mut batch_stream = match client.query_stream(request.sql.clone(), time_range).await {
+        let mut batch_stream = match client.query_stream(&request.sql, time_range).await {
             Ok(s) => s,
             Err(e) => {
-                yield Ok(error_message(ErrorCode::InvalidSql, &e.to_string()));
+                yield Ok(json_line(&ErrorFrame {
+                    frame_type: "error",
+                    code: ErrorCode::InvalidSql,
+                    message: e.to_string(),
+                }));
                 return;
             }
         };
 
-        // Get schema - required for IPC stream
+        // Send schema frame
         let schema = match batch_stream.schema() {
             Some(s) => s,
             None => {
-                yield Ok(error_message(ErrorCode::Internal, "No schema available"));
+                yield Ok(json_line(&ErrorFrame {
+                    frame_type: "error",
+                    code: ErrorCode::Internal,
+                    message: "No schema available".to_string(),
+                }));
                 return;
             }
         };
 
-        // Write Arrow IPC stream to buffer, yield chunks
-        let mut ipc_buffer = Vec::new();
-        let mut writer = match StreamWriter::try_new(&mut ipc_buffer, &schema) {
-            Ok(w) => w,
+        match schema_to_ipc_base64(&schema) {
+            Ok(encoded) => {
+                yield Ok(json_line(&SchemaFrame {
+                    frame_type: "schema",
+                    arrow_schema: encoded,
+                }));
+            }
             Err(e) => {
-                yield Ok(error_message(ErrorCode::Internal, &e.to_string()));
+                yield Ok(json_line(&ErrorFrame {
+                    frame_type: "error",
+                    code: ErrorCode::Internal,
+                    message: e.to_string(),
+                }));
                 return;
             }
-        };
+        }
 
-        let mut error_occurred: Option<(ErrorCode, String)> = None;
-
+        // Stream batches
         while let Some(result) = batch_stream.next().await {
             match result {
                 Ok(batch) => {
-                    if let Err(e) = writer.write(&batch) {
-                        error_occurred = Some((ErrorCode::Internal, e.to_string()));
-                        break;
-                    }
-                    // Yield accumulated IPC data periodically
-                    if ipc_buffer.len() > 64 * 1024 {
-                        yield Ok(Bytes::from(std::mem::take(&mut ipc_buffer)));
+                    match batch_to_ipc_bytes(&batch) {
+                        Ok(ipc_bytes) => {
+                            yield Ok(json_line(&BatchFrame {
+                                frame_type: "batch",
+                                size: ipc_bytes.len(),
+                            }));
+                            yield Ok(Bytes::from(ipc_bytes));
+                        }
+                        Err(e) => {
+                            yield Ok(json_line(&ErrorFrame {
+                                frame_type: "error",
+                                code: ErrorCode::Internal,
+                                message: e.to_string(),
+                            }));
+                            return;
+                        }
                     }
                 }
                 Err(e) => {
-                    error_occurred = Some((ErrorCode::from_flight_error(&e), e.to_string()));
-                    break;
+                    yield Ok(json_line(&ErrorFrame {
+                        frame_type: "error",
+                        code: error_code_from_flight(&e),
+                        message: e.to_string(),
+                    }));
+                    return;
                 }
             }
         }
 
-        // Finish IPC stream (writes EOS marker)
-        if let Err(e) = writer.finish() {
-            if error_occurred.is_none() {
-                error_occurred = Some((ErrorCode::Internal, e.to_string()));
-            }
-        }
-
-        // Yield remaining IPC data
-        if !ipc_buffer.is_empty() {
-            yield Ok(Bytes::from(ipc_buffer));
-        }
-
-        // Yield termination message
-        match error_occurred {
-            Some((code, msg)) => yield Ok(error_message(code, &msg)),
-            None => yield Ok(done_message()),
-        }
+        // Success
+        yield Ok(json_line(&DoneFrame { frame_type: "done" }));
     };
 
     (
-        [(header::CONTENT_TYPE, "application/vnd.apache.arrow.stream")],
+        [(header::CONTENT_TYPE, "application/x-micromegas-arrow-stream")],
         Body::from_stream(stream)
     ).into_response()
+}
+
+fn error_code_from_flight(error: &FlightError) -> ErrorCode {
+    // Map FlightSQL errors to our error codes
+    match error {
+        FlightError::Tonic(status) if status.code() == tonic::Code::DeadlineExceeded => {
+            ErrorCode::Timeout
+        }
+        FlightError::Tonic(status) if status.code() == tonic::Code::Unavailable => {
+            ErrorCode::ConnectionFailed
+        }
+        _ => ErrorCode::Internal,
+    }
 }
 ```
 
@@ -240,16 +306,31 @@ async fn stream_query_arrow(
 **File: `analytics-web-app/src/lib/arrow-stream.ts`**
 
 ```typescript
-import { RecordBatchReader, Table, Schema, RecordBatch } from 'apache-arrow';
+import { RecordBatch, Schema, tableFromIPC } from 'apache-arrow';
 
-type ErrorCode = 'INVALID_SQL' | 'TIMEOUT' | 'CONNECTION_FAILED' | 'INTERNAL' | 'UNAUTHORIZED';
+type ErrorCode = 'INVALID_SQL' | 'TIMEOUT' | 'CONNECTION_FAILED' | 'INTERNAL';
 
-interface TerminationMessage {
-  type: 'done' | 'error';
-  code?: ErrorCode;
-  message?: string;
-  retryable?: boolean;
+interface SchemaFrame {
+  type: 'schema';
+  arrow_schema: string;
 }
+
+interface BatchFrame {
+  type: 'batch';
+  size: number;
+}
+
+interface DoneFrame {
+  type: 'done';
+}
+
+interface ErrorFrame {
+  type: 'error';
+  code: ErrorCode;
+  message: string;
+}
+
+type Frame = SchemaFrame | BatchFrame | DoneFrame | ErrorFrame;
 
 export interface StreamError {
   code: ErrorCode;
@@ -258,10 +339,101 @@ export interface StreamError {
 }
 
 export interface StreamResult {
-  schema: Schema | null;
-  batch: RecordBatch | null;
+  schema?: Schema;
+  batch?: RecordBatch;
   done: boolean;
   error?: StreamError;
+}
+
+function isRetryable(code: ErrorCode): boolean {
+  return code === 'TIMEOUT' || code === 'CONNECTION_FAILED';
+}
+
+/**
+ * Reads a newline-terminated line from a stream reader.
+ * Returns null if stream ends before newline.
+ */
+async function readLine(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  buffer: Uint8Array[],
+  bufferOffset: { value: number }
+): Promise<string | null> {
+  const decoder = new TextDecoder();
+  let line = '';
+
+  while (true) {
+    // Check existing buffer for newline
+    if (buffer.length > 0) {
+      const chunk = buffer[0];
+      const newlineIdx = chunk.indexOf(10, bufferOffset.value); // 10 = '\n'
+
+      if (newlineIdx !== -1) {
+        line += decoder.decode(chunk.slice(bufferOffset.value, newlineIdx));
+        bufferOffset.value = newlineIdx + 1;
+
+        // Clean up consumed buffer
+        if (bufferOffset.value >= chunk.length) {
+          buffer.shift();
+          bufferOffset.value = 0;
+        }
+        return line;
+      }
+
+      // No newline in current chunk, consume it all
+      line += decoder.decode(chunk.slice(bufferOffset.value));
+      buffer.shift();
+      bufferOffset.value = 0;
+    }
+
+    // Read more data
+    const { done, value } = await reader.read();
+    if (done) {
+      return line.length > 0 ? line : null;
+    }
+    buffer.push(value);
+  }
+}
+
+/**
+ * Reads exactly `size` bytes from a stream reader.
+ */
+async function readBytes(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  buffer: Uint8Array[],
+  bufferOffset: { value: number },
+  size: number
+): Promise<Uint8Array> {
+  const result = new Uint8Array(size);
+  let written = 0;
+
+  while (written < size) {
+    // Use existing buffer
+    if (buffer.length > 0) {
+      const chunk = buffer[0];
+      const available = chunk.length - bufferOffset.value;
+      const needed = size - written;
+      const toCopy = Math.min(available, needed);
+
+      result.set(chunk.slice(bufferOffset.value, bufferOffset.value + toCopy), written);
+      written += toCopy;
+      bufferOffset.value += toCopy;
+
+      if (bufferOffset.value >= chunk.length) {
+        buffer.shift();
+        bufferOffset.value = 0;
+      }
+      continue;
+    }
+
+    // Read more data
+    const { done, value } = await reader.read();
+    if (done) {
+      throw new Error(`Unexpected end of stream, expected ${size - written} more bytes`);
+    }
+    buffer.push(value);
+  }
+
+  return result;
 }
 
 export async function* streamQuery(
@@ -271,81 +443,87 @@ export async function* streamQuery(
 ): AsyncGenerator<StreamResult> {
   const response = await fetch(`${getApiUrl()}/query-stream`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    headers: {
+      'Content-Type': 'application/json',
+      ...getAuthHeaders(),
+    },
     body: JSON.stringify({ sql, ...params }),
     signal,
   });
 
   if (!response.ok) {
+    if (response.status === 401) {
+      throw new Error('Unauthorized');
+    }
     const text = await response.text();
     throw new Error(`HTTP ${response.status}: ${text}`);
   }
 
-  // Split response into Arrow IPC stream + trailing JSON
-  const { arrowData, terminationJson } = await splitResponse(response);
+  const reader = response.body!.getReader();
+  const buffer: Uint8Array[] = [];
+  const bufferOffset = { value: 0 };
 
-  // Parse Arrow IPC using standard library
-  if (arrowData.byteLength > 0) {
-    const reader = await RecordBatchReader.from(arrowData);
-    yield { schema: reader.schema, batch: null, done: false };
-
-    for await (const batch of reader) {
-      yield { schema: reader.schema, batch, done: false };
-    }
-  }
-
-  // Parse termination message
-  const termination = parseTermination(terminationJson);
-
-  if (termination.type === 'error') {
-    yield {
-      schema: null,
-      batch: null,
-      done: true,
-      error: {
-        code: termination.code ?? 'INTERNAL',
-        message: termination.message ?? 'Unknown error',
-        retryable: termination.retryable ?? false,
-      },
-    };
-  } else {
-    yield { schema: null, batch: null, done: true };
-  }
-}
-
-async function splitResponse(response: Response): Promise<{
-  arrowData: Uint8Array;
-  terminationJson: string;
-}> {
-  const buffer = await response.arrayBuffer();
-  const bytes = new Uint8Array(buffer);
-
-  // Find last newline - JSON message is after it
-  let lastNewline = bytes.length - 1;
-  while (lastNewline > 0 && bytes[lastNewline] !== 10) {
-    lastNewline--;
-  }
-
-  // Find start of JSON line (second-to-last newline or start)
-  let jsonStart = lastNewline - 1;
-  while (jsonStart > 0 && bytes[jsonStart] !== 10) {
-    jsonStart--;
-  }
-  if (bytes[jsonStart] === 10) jsonStart++;
-
-  const arrowData = bytes.slice(0, jsonStart);
-  const terminationJson = new TextDecoder().decode(bytes.slice(jsonStart));
-
-  return { arrowData, terminationJson };
-}
-
-function parseTermination(json: string): TerminationMessage {
   try {
-    return JSON.parse(json.trim());
-  } catch {
-    return { type: 'error', code: 'INTERNAL', message: 'Invalid termination message', retryable: true };
+    while (true) {
+      const line = await readLine(reader, buffer, bufferOffset);
+      if (line === null) {
+        // Unexpected end of stream
+        yield {
+          done: true,
+          error: {
+            code: 'INTERNAL',
+            message: 'Stream ended unexpectedly',
+            retryable: true,
+          },
+        };
+        return;
+      }
+
+      const frame: Frame = JSON.parse(line);
+
+      switch (frame.type) {
+        case 'schema': {
+          const schemaBytes = Uint8Array.from(atob(frame.arrow_schema), c => c.charCodeAt(0));
+          const table = tableFromIPC(schemaBytes);
+          yield { schema: table.schema, done: false };
+          break;
+        }
+
+        case 'batch': {
+          const ipcBytes = await readBytes(reader, buffer, bufferOffset, frame.size);
+          const table = tableFromIPC(ipcBytes);
+          for (const batch of table.batches) {
+            yield { batch, done: false };
+          }
+          break;
+        }
+
+        case 'done': {
+          yield { done: true };
+          return;
+        }
+
+        case 'error': {
+          yield {
+            done: true,
+            error: {
+              code: frame.code,
+              message: frame.message,
+              retryable: isRetryable(frame.code),
+            },
+          };
+          return;
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
   }
 }
+
+// These would be imported from existing api.ts
+declare function getApiUrl(): string;
+declare function getAuthHeaders(): Record<string, string>;
 ```
 
 **File: `analytics-web-app/src/hooks/useStreamQuery.ts`**
@@ -376,7 +554,7 @@ export function useStreamQuery() {
 
   const abortRef = useRef<AbortController | null>(null);
 
-  const execute = useCallback(async (sql: string, params: Record<string, string>) => {
+  const execute = useCallback(async (sql: string, params: Record<string, string> = {}) => {
     abortRef.current?.abort();
     abortRef.current = new AbortController();
 
@@ -392,7 +570,12 @@ export function useStreamQuery() {
     try {
       for await (const result of streamQuery(sql, params, abortRef.current.signal)) {
         if (result.error) {
-          setState(s => ({ ...s, error: result.error!, isStreaming: false, isComplete: true }));
+          setState(s => ({
+            ...s,
+            error: result.error!,
+            isStreaming: false,
+            isComplete: true,
+          }));
           return;
         }
         if (result.schema) {
@@ -405,7 +588,7 @@ export function useStreamQuery() {
             rowCount: s.rowCount + result.batch!.numRows,
           }));
         }
-        if (result.done) {
+        if (result.done && !result.error) {
           setState(s => ({ ...s, isStreaming: false, isComplete: true }));
         }
       }
@@ -426,13 +609,12 @@ export function useStreamQuery() {
     setState(s => ({ ...s, isStreaming: false }));
   }, []);
 
-  const retry = useCallback((sql: string, params: Record<string, string>) => {
+  const retry = useCallback((sql: string, params: Record<string, string> = {}) => {
     if (state.error?.retryable) {
       execute(sql, params);
     }
   }, [state.error, execute]);
 
-  // Combine batches into single Table when needed
   const getTable = useCallback((): Table | null => {
     if (state.batches.length === 0) return null;
     return new Table(state.batches);
@@ -447,16 +629,17 @@ export function useStreamQuery() {
 ### New Files
 
 **Backend:**
-- `rust/analytics-web-srv/src/stream_query.rs` - Streaming query endpoint
+- `rust/analytics-web-srv/src/stream_query.rs` - Streaming query endpoint with framed protocol
 
 **Frontend:**
-- `analytics-web-app/src/lib/arrow-stream.ts` - Arrow stream parsing
+- `analytics-web-app/src/lib/arrow-stream.ts` - Framed stream parser
 - `analytics-web-app/src/hooks/useStreamQuery.ts` - Streaming query hook
 
 ### Modified Files
 
 **Backend:**
 - `rust/analytics-web-srv/src/main.rs` - Add `/query-stream` route, add module
+- `rust/analytics-web-srv/Cargo.toml` - Add `base64` dependency (if not present)
 
 **Frontend:**
 - `analytics-web-app/package.json` - Add `apache-arrow` dependency
@@ -466,9 +649,10 @@ export function useStreamQuery() {
 
 ## Dependencies
 
-### Backend (already available in workspace)
-- `arrow-ipc` - Part of arrow crate, provides `StreamWriter`
-- `async-stream = "0.3"` - For streaming
+### Backend
+- `arrow` - Already in workspace, provides IPC serialization
+- `base64` - For encoding schema (likely already available)
+- `async-stream` - For streaming (add if needed: `async-stream = "0.3"`)
 
 ### Frontend (new)
 - `apache-arrow` - Arrow JavaScript library
@@ -476,73 +660,65 @@ export function useStreamQuery() {
 ## Testing Strategy
 
 ### Backend Tests
-1. Integration tests for `/query-stream` endpoint
-2. Verify Arrow IPC stream is valid (parseable by arrow-rs)
-3. Verify termination message present after IPC data
-4. Error handling tests:
-   - Invalid SQL returns error JSON (no Arrow data)
-   - FlightSQL failure returns error JSON
-   - Mid-stream error includes partial Arrow data + error JSON
-5. Verify EOS marker present before JSON
+1. Unit tests for `schema_to_ipc_base64` and `batch_to_ipc_bytes`
+2. Integration tests for `/query-stream`:
+   - Valid query returns schema + batches + done
+   - Invalid SQL returns error frame
+   - Empty result returns schema + done (no batches)
+3. Verify frame format matches specification
 
 ### Frontend Tests
-1. Unit tests for `splitResponse`:
-   - Correctly separates Arrow data from JSON
-   - Handles empty Arrow data (error-only response)
-2. Unit tests for stream consumer:
-   - Successfully parses Arrow batches
-   - Correctly handles done message
-   - Correctly handles error message with partial data
-3. Unit tests for `useStreamQuery` hook:
-   - State updates correctly during streaming
-   - `getTable()` combines batches correctly
+1. Unit tests for `readLine` and `readBytes`:
+   - Handle chunks split across reads
+   - Handle multiple frames in single chunk
+2. Unit tests for `streamQuery`:
+   - Parse schema frame, decode base64
+   - Parse batch frames, read exact byte count
+   - Handle done and error frames
+   - Handle unexpected stream end
+3. Integration tests with mock fetch responses
+4. Hook tests:
+   - State updates during streaming
    - Cancellation works
    - Retry only for retryable errors
-4. Integration tests with mock responses
 
 ## Migration Strategy
 
-1. Deploy backend with new `/query-stream` endpoint (Phase 1)
-2. Add frontend Arrow dependency (Phase 2)
-3. Implement frontend stream consumer (Phase 3)
-4. Create `useStreamQuery` hook (Phase 4)
-5. Migrate components to use new hook
+1. Deploy backend with new `/query-stream` endpoint
+2. Add frontend Arrow dependency
+3. Implement frontend stream parser
+4. Create `useStreamQuery` hook
+5. Migrate components incrementally to new hook
 6. Keep existing `/query` endpoint for compatibility
 
 ## Benefits
 
-- **Standard format**: Arrow IPC is a standard - any Arrow client can consume it
-- **Simpler parsing**: Frontend uses `RecordBatchReader.from()` directly
-- **Smaller payload**: Arrow IPC more compact than JSON for numeric data
-- **Type preservation**: Timestamps, large integers stay typed
-- **Less CPU**: No JSON stringify/parse for data, Arrow uses zero-copy
-- **Streaming foundation**: Ready for progressive rendering
+- **True streaming**: Process batches as they arrive over network
+- **Progressive rendering**: UI can update with each batch
+- **Lower latency**: First results appear before query completes
+- **Smaller payload**: Arrow IPC more compact than JSON
+- **Type preservation**: Timestamps, large integers stay native
+- **Less CPU**: No JSON stringify/parse for data
+- **Simple framing**: JSON headers are human-readable, easy to debug
 
 ## Performance Expectations
 
-| Metric | Current (JSON) | Proposed (Arrow IPC) |
-|--------|----------------|----------------------|
-| Payload size (1M rows, 10 cols) | ~100MB JSON | ~20-40MB Arrow IPC |
-| Backend CPU | High (JSON serialization) | Low (pass-through) |
-| Frontend CPU | High (JSON parsing) | Low (zero-copy) |
-| Type fidelity | Lossy (strings) | Lossless (native types) |
-| Backend memory | Full result buffered | Stream-through |
+| Metric | Current (JSON) | Proposed (Framed Arrow) |
+|--------|----------------|-------------------------|
+| Time to first row | After full query | After first batch |
+| Payload size (1M rows) | ~100MB JSON | ~20-40MB Arrow IPC |
+| Backend CPU | High (JSON per cell) | Low (IPC serialization) |
+| Frontend CPU | High (JSON parse) | Low (Arrow zero-copy) |
+| Type fidelity | Lossy | Lossless |
+| Memory (backend) | Full result buffered | Stream-through |
 
 ## Open Questions
 
 1. **Batch size control**: Should we expose a parameter to control RecordBatch size from FlightSQL?
 2. **Compression**: Should we add optional gzip compression via Accept-Encoding?
-3. **Caching**: How does streaming affect React Query caching strategies?
-
-## Future Improvements
-
-### Progressive Rendering
-- Update components to render batches as they arrive
-- Add streaming progress indicator (row count)
-- Show partial results during streaming
 
 ## References
 
 - [Arrow IPC Format](https://arrow.apache.org/docs/format/Columnar.html#ipc-streaming-format)
 - [Apache Arrow JavaScript](https://arrow.apache.org/docs/js/)
-- [RecordBatchReader](https://arrow.apache.org/docs/js/classes/Arrow.dom.RecordBatchReader.html)
+- [tableFromIPC](https://arrow.apache.org/docs/js/functions/Arrow.dom.tableFromIPC.html)
