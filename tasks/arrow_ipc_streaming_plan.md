@@ -111,7 +111,9 @@ On error:
 **File: `rust/analytics-web-srv/src/stream_query.rs`**
 
 ```rust
-use arrow::ipc::writer::{IpcWriteOptions, StreamWriter};
+use arrow::ipc::writer::{IpcDataGenerator, IpcWriteOptions};
+use arrow::ipc::{writer::write_message, DictionaryTracker, CONTINUATION_MARKER};
+use arrow::record_batch::RecordBatch;
 use arrow_schema::Schema;
 use async_stream::stream;
 use axum::body::Body;
@@ -120,6 +122,7 @@ use base64::Engine;
 use bytes::Bytes;
 use futures::StreamExt;
 use serde::Serialize;
+use std::io::Write;
 use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -159,24 +162,47 @@ struct ErrorFrame {
     message: String,
 }
 
-fn schema_to_ipc_base64(schema: &Schema) -> Result<String, arrow::error::ArrowError> {
-    // Create a minimal IPC stream with just schema (no batches)
-    // This ensures tableFromIPC() on frontend can parse it correctly
+/// Serializes schema to IPC format bytes (schema message only, no EOS).
+/// Returns bytes that can be prepended to batch messages to form valid IPC streams.
+fn schema_to_ipc_bytes(schema: &Schema) -> Result<Vec<u8>, arrow::error::ArrowError> {
+    let gen = IpcDataGenerator::default();
+    let options = IpcWriteOptions::default();
+    let encoded = gen.schema_to_bytes(schema, &options);
     let mut buffer = Vec::new();
-    {
-        let mut writer = StreamWriter::try_new(&mut buffer, schema)?;
-        writer.finish()?;
-    }
-    Ok(base64::engine::general_purpose::STANDARD.encode(&buffer))
+    write_message(&mut buffer, encoded, &options)?;
+    Ok(buffer)
 }
 
-fn batch_to_ipc_bytes(batch: &RecordBatch) -> Result<Vec<u8>, arrow::error::ArrowError> {
+/// Serializes a batch message (without schema header).
+fn batch_to_raw_ipc(batch: &RecordBatch) -> Result<Vec<u8>, arrow::error::ArrowError> {
+    let gen = IpcDataGenerator::default();
+    let options = IpcWriteOptions::default();
+    let mut dict_tracker = DictionaryTracker::new(false);
+    let (dicts, encoded) = gen.encoded_batch(batch, &mut dict_tracker, &options)?;
+
     let mut buffer = Vec::new();
-    {
-        let mut writer = StreamWriter::try_new(&mut buffer, batch.schema_ref())?;
-        writer.write(batch)?;
-        writer.finish()?;
+    for dict in dicts {
+        write_message(&mut buffer, dict, &options)?;
     }
+    write_message(&mut buffer, encoded, &options)?;
+    Ok(buffer)
+}
+
+/// Writes the IPC end-of-stream marker.
+fn write_eos_marker(buffer: &mut Vec<u8>) -> Result<(), arrow::error::ArrowError> {
+    buffer.write_all(&CONTINUATION_MARKER)?;
+    buffer.write_all(&0i32.to_le_bytes())?;
+    Ok(())
+}
+
+/// Combines pre-serialized schema bytes with batch bytes into a complete IPC stream.
+/// This avoids re-serializing the schema for each batch.
+fn build_batch_ipc(schema_bytes: &[u8], batch: &RecordBatch) -> Result<Vec<u8>, arrow::error::ArrowError> {
+    let batch_bytes = batch_to_raw_ipc(batch)?;
+    let mut buffer = Vec::with_capacity(schema_bytes.len() + batch_bytes.len() + 8);
+    buffer.extend_from_slice(schema_bytes);
+    buffer.extend_from_slice(&batch_bytes);
+    write_eos_marker(&mut buffer)?;
     Ok(buffer)
 }
 
@@ -219,7 +245,7 @@ pub async fn stream_query_handler(
             }
         };
 
-        // Send schema frame
+        // Get and serialize schema once
         let schema = match batch_stream.schema() {
             Some(s) => s,
             None => {
@@ -232,13 +258,10 @@ pub async fn stream_query_handler(
             }
         };
 
-        match schema_to_ipc_base64(&schema) {
-            Ok(encoded) => {
-                yield Ok(json_line(&SchemaFrame {
-                    frame_type: "schema",
-                    arrow_schema: encoded,
-                }));
-            }
+        // Serialize schema bytes once - reused for all batch frames
+        // Note: schema may be Arc<Schema>, use as_ref() to get &Schema
+        let schema_bytes = match schema_to_ipc_bytes(schema.as_ref()) {
+            Ok(bytes) => bytes,
             Err(e) => {
                 yield Ok(json_line(&ErrorFrame {
                     frame_type: "error",
@@ -247,13 +270,28 @@ pub async fn stream_query_handler(
                 }));
                 return;
             }
-        }
+        };
 
-        // Stream batches
+        // Send schema frame (base64-encoded complete IPC stream)
+        let mut schema_with_eos = schema_bytes.clone();
+        if let Err(e) = write_eos_marker(&mut schema_with_eos) {
+            yield Ok(json_line(&ErrorFrame {
+                frame_type: "error",
+                code: ErrorCode::Internal,
+                message: e.to_string(),
+            }));
+            return;
+        }
+        yield Ok(json_line(&SchemaFrame {
+            frame_type: "schema",
+            arrow_schema: base64::engine::general_purpose::STANDARD.encode(&schema_with_eos),
+        }));
+
+        // Stream batches - reuse schema_bytes for O(1) schema overhead
         while let Some(result) = batch_stream.next().await {
             match result {
                 Ok(batch) => {
-                    match batch_to_ipc_bytes(&batch) {
+                    match build_batch_ipc(&schema_bytes, &batch) {
                         Ok(ipc_bytes) => {
                             yield Ok(json_line(&BatchFrame {
                                 frame_type: "batch",
@@ -494,7 +532,20 @@ export async function* streamQuery(
         return;
       }
 
-      const frame: Frame = JSON.parse(line);
+      let frame: Frame;
+      try {
+        frame = JSON.parse(line);
+      } catch {
+        yield {
+          done: true,
+          error: {
+            code: 'INTERNAL',
+            message: `Invalid frame: ${line.slice(0, 100)}`,
+            retryable: false,
+          },
+        };
+        return;
+      }
 
       switch (frame.type) {
         case 'schema': {
@@ -570,11 +621,14 @@ export function useStreamQuery() {
   const abortRef = useRef<AbortController | null>(null);
   // Mutable array to avoid O(n²) allocations from spreading
   const batchesRef = useRef<RecordBatch[]>([]);
+  // Cached table to avoid recreating on every getTable() call
+  const tableCache = useRef<{ count: number; table: Table } | null>(null);
 
   const execute = useCallback(async (sql: string, params: Record<string, string> = {}) => {
     abortRef.current?.abort();
     abortRef.current = new AbortController();
     batchesRef.current = [];
+    tableCache.current = null;
 
     setState({
       schema: null,
@@ -635,8 +689,15 @@ export function useStreamQuery() {
   }, [state.error, execute]);
 
   const getTable = useCallback((): Table | null => {
-    if (batchesRef.current.length === 0) return null;
-    return new Table(batchesRef.current);
+    const count = batchesRef.current.length;
+    if (count === 0) return null;
+    // Return cached table if batch count unchanged
+    if (tableCache.current?.count === count) {
+      return tableCache.current.table;
+    }
+    const table = new Table(batchesRef.current);
+    tableCache.current = { count, table };
+    return table;
   }, []);
 
   const getBatches = useCallback((): RecordBatch[] => {
