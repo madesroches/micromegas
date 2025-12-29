@@ -24,7 +24,8 @@ Browser ──HTTP/JSON──► analytics-web-srv ──gRPC/Arrow Flight──
 Use a JSON-framed protocol that enables true streaming:
 
 ```
-{"type":"schema","arrow_schema":"<base64 IPC schema bytes>"}\n
+{"type":"schema","size":512}\n
+[512 bytes of raw Arrow IPC schema message]
 {"type":"batch","size":4096}\n
 [4096 bytes of raw Arrow IPC batch message]
 {"type":"batch","size":2048}\n
@@ -34,7 +35,8 @@ Use a JSON-framed protocol that enables true streaming:
 
 On error:
 ```
-{"type":"schema","arrow_schema":"<base64>"}\n
+{"type":"schema","size":512}\n
+[512 bytes of schema]
 {"type":"batch","size":1024}\n
 [1024 bytes - partial batch message]
 {"type":"error","code":"TIMEOUT","message":"Query exceeded time limit"}\n
@@ -42,7 +44,8 @@ On error:
 
 **Key design points:**
 - Each frame starts with a JSON line (newline-terminated)
-- Schema sent once (base64); batch frames contain only raw batch bytes (no schema repetition)
+- All binary data uses consistent size-prefixed framing (no base64)
+- Schema sent once; batch frames contain only raw batch bytes (no schema repetition)
 - Frontend caches schema bytes and reconstructs complete IPC streams locally
 - True streaming: frontend processes each batch as it arrives
 - No buffering required to find message boundaries
@@ -53,7 +56,7 @@ On error:
 
 | Type | Fields | Followed By |
 |------|--------|-------------|
-| `schema` | `arrow_schema` (base64 IPC schema message, no EOS) | Nothing |
+| `schema` | `size` (byte count) | Raw schema IPC bytes (no EOS) |
 | `batch` | `size` (byte count) | Raw batch IPC bytes (no schema, no EOS) |
 | `done` | None | Nothing (stream complete) |
 | `error` | `code`, `message` | Nothing (stream complete) |
@@ -85,8 +88,7 @@ On error:
 
 ### Phase 1: Backend Streaming Endpoint
 - [ ] Create `/query-stream` endpoint with streaming response
-- [ ] Serialize schema to base64 IPC format
-- [ ] Serialize each RecordBatch to IPC bytes
+- [ ] Serialize schema and batches to IPC bytes
 - [ ] Send JSON frame headers with size prefixes
 - [ ] Handle errors before and during streaming
 - [ ] Add integration tests
@@ -122,7 +124,6 @@ use arrow_schema::Schema;
 use async_stream::stream;
 use axum::body::Body;
 use axum::response::IntoResponse;
-use base64::Engine;
 use bytes::Bytes;
 use futures::StreamExt;
 use serde::Serialize;
@@ -138,15 +139,9 @@ pub enum ErrorCode {
     Internal,
 }
 
+/// Schema and batch frames use identical structure - size-prefixed binary
 #[derive(Serialize)]
-struct SchemaFrame {
-    #[serde(rename = "type")]
-    frame_type: &'static str,
-    arrow_schema: String,
-}
-
-#[derive(Serialize)]
-struct BatchFrame {
+struct DataHeader {
     #[serde(rename = "type")]
     frame_type: &'static str,
     size: usize,
@@ -269,11 +264,12 @@ pub async fn stream_query_handler(
             }
         };
 
-        // Send schema frame with base64-encoded schema bytes (no EOS - frontend will add)
-        yield Ok(json_line(&SchemaFrame {
+        // Send schema frame with size-prefixed binary (no EOS - frontend will add)
+        yield Ok(json_line(&DataHeader {
             frame_type: "schema",
-            arrow_schema: base64::engine::general_purpose::STANDARD.encode(&schema_bytes),
+            size: schema_bytes.len(),
         }));
+        yield Ok(Bytes::from(schema_bytes.clone()));
 
         // Maintain dictionary state across all batches for correct dictionary-encoded columns
         let mut dict_tracker = DictionaryTracker::new(false);
@@ -285,7 +281,7 @@ pub async fn stream_query_handler(
                 Ok(batch) => {
                     match batch_to_raw_ipc(&batch, &mut dict_tracker, &ipc_options) {
                         Ok(batch_bytes) => {
-                            yield Ok(json_line(&BatchFrame {
+                            yield Ok(json_line(&DataHeader {
                                 frame_type: "batch",
                                 size: batch_bytes.len(),
                             }));
@@ -348,13 +344,8 @@ type ErrorCode = 'INVALID_SQL' | 'TIMEOUT' | 'CONNECTION_FAILED' | 'INTERNAL';
 // IPC end-of-stream marker: continuation marker (0xFFFFFFFF) + zero length
 const EOS_MARKER = new Uint8Array([0xff, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00]);
 
-interface SchemaFrame {
-  type: 'schema';
-  arrow_schema: string;
-}
-
-interface BatchFrame {
-  type: 'batch';
+interface DataHeader {
+  type: 'schema' | 'batch';
   size: number;
 }
 
@@ -368,7 +359,7 @@ interface ErrorFrame {
   message: string;
 }
 
-type Frame = SchemaFrame | BatchFrame | DoneFrame | ErrorFrame;
+type Frame = DataHeader | DoneFrame | ErrorFrame;
 
 export interface StreamError {
   code: ErrorCode;
@@ -476,18 +467,6 @@ class BufferedReader {
 }
 
 /**
- * Decodes base64 to Uint8Array, handling binary data correctly.
- */
-function base64ToBytes(base64: string): Uint8Array {
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return bytes;
-}
-
-/**
  * Builds a complete IPC stream from cached schema bytes and batch bytes.
  * This avoids sending schema over the wire for each batch.
  */
@@ -558,8 +537,8 @@ export async function* streamQuery(
 
       switch (frame.type) {
         case 'schema': {
-          // Decode and cache schema bytes for batch reconstruction
-          cachedSchemaBytes = base64ToBytes(frame.arrow_schema);
+          // Read and cache schema bytes for batch reconstruction
+          cachedSchemaBytes = await bufferedReader.readBytes(frame.size);
           // Parse schema by building a complete IPC stream (schema + EOS)
           const schemaIpc = buildIpcStream(cachedSchemaBytes, new Uint8Array(0));
           const table = tableFromIPC(schemaIpc);
@@ -738,7 +717,6 @@ export function useStreamQuery() {
 
 **Backend:**
 - `rust/analytics-web-srv/src/main.rs` - Add `/query-stream` route, add module
-- `rust/analytics-web-srv/Cargo.toml` - Add `base64` dependency (if not present)
 
 **Frontend:**
 - `analytics-web-app/package.json` - Add `apache-arrow` dependency
@@ -750,7 +728,6 @@ export function useStreamQuery() {
 
 ### Backend
 - `arrow` - Already in workspace, provides IPC serialization
-- `base64` - For encoding schema (likely already available)
 - `async-stream` - For streaming (add if needed: `async-stream = "0.3"`)
 
 ### Frontend (new)
@@ -759,7 +736,7 @@ export function useStreamQuery() {
 ## Testing Strategy
 
 ### Backend Tests
-1. Unit tests for `schema_to_ipc_base64` and `batch_to_ipc_bytes`
+1. Unit tests for `schema_to_ipc_bytes` and `batch_to_raw_ipc`
 2. Integration tests for `/query-stream`:
    - Valid query returns schema + batches + done
    - Invalid SQL returns error frame
@@ -771,7 +748,7 @@ export function useStreamQuery() {
    - Handle chunks split across reads
    - Handle multiple frames in single chunk
 2. Unit tests for `streamQuery`:
-   - Parse schema frame, decode base64
+   - Parse schema frame, read exact byte count
    - Parse batch frames, read exact byte count
    - Handle done and error frames
    - Handle unexpected stream end
