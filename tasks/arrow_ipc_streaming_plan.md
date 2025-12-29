@@ -160,9 +160,14 @@ struct ErrorFrame {
 }
 
 fn schema_to_ipc_base64(schema: &Schema) -> Result<String, arrow::error::ArrowError> {
-    let options = IpcWriteOptions::default();
-    let schema_bytes = arrow::ipc::writer::schema_to_bytes(schema, &options);
-    Ok(base64::engine::general_purpose::STANDARD.encode(&schema_bytes))
+    // Create a minimal IPC stream with just schema (no batches)
+    // This ensures tableFromIPC() on frontend can parse it correctly
+    let mut buffer = Vec::new();
+    {
+        let mut writer = StreamWriter::try_new(&mut buffer, schema)?;
+        writer.finish()?;
+    }
+    Ok(base64::engine::general_purpose::STANDARD.encode(&buffer))
 }
 
 fn batch_to_ipc_bytes(batch: &RecordBatch) -> Result<Vec<u8>, arrow::error::ArrowError> {
@@ -350,90 +355,103 @@ function isRetryable(code: ErrorCode): boolean {
 }
 
 /**
- * Reads a newline-terminated line from a stream reader.
- * Returns null if stream ends before newline.
+ * Buffered reader for processing streaming responses.
+ * Handles chunk boundaries transparently for both line and binary reads.
  */
-async function readLine(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
-  buffer: Uint8Array[],
-  bufferOffset: { value: number }
-): Promise<string | null> {
-  const decoder = new TextDecoder();
-  let line = '';
+class BufferedReader {
+  private chunks: Uint8Array[] = [];
+  private offset = 0;
+  private decoder = new TextDecoder();
 
-  while (true) {
-    // Check existing buffer for newline
-    if (buffer.length > 0) {
-      const chunk = buffer[0];
-      const newlineIdx = chunk.indexOf(10, bufferOffset.value); // 10 = '\n'
+  constructor(private reader: ReadableStreamDefaultReader<Uint8Array>) {}
 
-      if (newlineIdx !== -1) {
-        line += decoder.decode(chunk.slice(bufferOffset.value, newlineIdx));
-        bufferOffset.value = newlineIdx + 1;
+  /**
+   * Reads a newline-terminated line. Returns null if stream ends.
+   */
+  async readLine(): Promise<string | null> {
+    let line = '';
 
-        // Clean up consumed buffer
-        if (bufferOffset.value >= chunk.length) {
-          buffer.shift();
-          bufferOffset.value = 0;
+    while (true) {
+      // Check current chunk for newline
+      if (this.chunks.length > 0) {
+        const chunk = this.chunks[0];
+        const newlineIdx = chunk.indexOf(10, this.offset); // 10 = '\n'
+
+        if (newlineIdx !== -1) {
+          line += this.decoder.decode(chunk.slice(this.offset, newlineIdx));
+          this.offset = newlineIdx + 1;
+          this.consumeIfExhausted();
+          return line;
         }
-        return line;
+
+        // No newline, consume entire chunk
+        line += this.decoder.decode(chunk.slice(this.offset));
+        this.chunks.shift();
+        this.offset = 0;
       }
 
-      // No newline in current chunk, consume it all
-      line += decoder.decode(chunk.slice(bufferOffset.value));
-      buffer.shift();
-      bufferOffset.value = 0;
+      // Read more data
+      const { done, value } = await this.reader.read();
+      if (done) {
+        return line.length > 0 ? line : null;
+      }
+      this.chunks.push(value);
+    }
+  }
+
+  /**
+   * Reads exactly `size` bytes.
+   */
+  async readBytes(size: number): Promise<Uint8Array> {
+    const result = new Uint8Array(size);
+    let written = 0;
+
+    while (written < size) {
+      if (this.chunks.length > 0) {
+        const chunk = this.chunks[0];
+        const available = chunk.length - this.offset;
+        const needed = size - written;
+        const toCopy = Math.min(available, needed);
+
+        result.set(chunk.slice(this.offset, this.offset + toCopy), written);
+        written += toCopy;
+        this.offset += toCopy;
+        this.consumeIfExhausted();
+        continue;
+      }
+
+      const { done, value } = await this.reader.read();
+      if (done) {
+        throw new Error(`Unexpected end of stream, expected ${size - written} more bytes`);
+      }
+      this.chunks.push(value);
     }
 
-    // Read more data
-    const { done, value } = await reader.read();
-    if (done) {
-      return line.length > 0 ? line : null;
+    return result;
+  }
+
+  private consumeIfExhausted(): void {
+    if (this.chunks.length > 0 && this.offset >= this.chunks[0].length) {
+      this.chunks.shift();
+      this.offset = 0;
     }
-    buffer.push(value);
+  }
+
+  release(): void {
+    this.reader.releaseLock();
   }
 }
 
 /**
- * Reads exactly `size` bytes from a stream reader.
+ * Decodes base64 to Uint8Array, handling binary data correctly.
  */
-async function readBytes(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
-  buffer: Uint8Array[],
-  bufferOffset: { value: number },
-  size: number
-): Promise<Uint8Array> {
-  const result = new Uint8Array(size);
-  let written = 0;
-
-  while (written < size) {
-    // Use existing buffer
-    if (buffer.length > 0) {
-      const chunk = buffer[0];
-      const available = chunk.length - bufferOffset.value;
-      const needed = size - written;
-      const toCopy = Math.min(available, needed);
-
-      result.set(chunk.slice(bufferOffset.value, bufferOffset.value + toCopy), written);
-      written += toCopy;
-      bufferOffset.value += toCopy;
-
-      if (bufferOffset.value >= chunk.length) {
-        buffer.shift();
-        bufferOffset.value = 0;
-      }
-      continue;
-    }
-
-    // Read more data
-    const { done, value } = await reader.read();
-    if (done) {
-      throw new Error(`Unexpected end of stream, expected ${size - written} more bytes`);
-    }
-    buffer.push(value);
+function base64ToBytes(base64: string): Uint8Array {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
   }
-
-  return result;
+  return bytes;
 }
 
 export async function* streamQuery(
@@ -459,15 +477,12 @@ export async function* streamQuery(
     throw new Error(`HTTP ${response.status}: ${text}`);
   }
 
-  const reader = response.body!.getReader();
-  const buffer: Uint8Array[] = [];
-  const bufferOffset = { value: 0 };
+  const bufferedReader = new BufferedReader(response.body!.getReader());
 
   try {
     while (true) {
-      const line = await readLine(reader, buffer, bufferOffset);
+      const line = await bufferedReader.readLine();
       if (line === null) {
-        // Unexpected end of stream
         yield {
           done: true,
           error: {
@@ -483,14 +498,14 @@ export async function* streamQuery(
 
       switch (frame.type) {
         case 'schema': {
-          const schemaBytes = Uint8Array.from(atob(frame.arrow_schema), c => c.charCodeAt(0));
+          const schemaBytes = base64ToBytes(frame.arrow_schema);
           const table = tableFromIPC(schemaBytes);
           yield { schema: table.schema, done: false };
           break;
         }
 
         case 'batch': {
-          const ipcBytes = await readBytes(reader, buffer, bufferOffset, frame.size);
+          const ipcBytes = await bufferedReader.readBytes(frame.size);
           const table = tableFromIPC(ipcBytes);
           for (const batch of table.batches) {
             yield { batch, done: false };
@@ -517,7 +532,7 @@ export async function* streamQuery(
       }
     }
   } finally {
-    reader.releaseLock();
+    bufferedReader.release();
   }
 }
 
@@ -535,7 +550,7 @@ import { streamQuery, StreamError } from '@/lib/arrow-stream';
 
 interface StreamQueryState {
   schema: Schema | null;
-  batches: RecordBatch[];
+  batchCount: number;
   isStreaming: boolean;
   isComplete: boolean;
   error: StreamError | null;
@@ -545,7 +560,7 @@ interface StreamQueryState {
 export function useStreamQuery() {
   const [state, setState] = useState<StreamQueryState>({
     schema: null,
-    batches: [],
+    batchCount: 0,
     isStreaming: false,
     isComplete: false,
     error: null,
@@ -553,14 +568,17 @@ export function useStreamQuery() {
   });
 
   const abortRef = useRef<AbortController | null>(null);
+  // Mutable array to avoid O(n²) allocations from spreading
+  const batchesRef = useRef<RecordBatch[]>([]);
 
   const execute = useCallback(async (sql: string, params: Record<string, string> = {}) => {
     abortRef.current?.abort();
     abortRef.current = new AbortController();
+    batchesRef.current = [];
 
     setState({
       schema: null,
-      batches: [],
+      batchCount: 0,
       isStreaming: true,
       isComplete: false,
       error: null,
@@ -582,9 +600,10 @@ export function useStreamQuery() {
           setState(s => ({ ...s, schema: result.schema }));
         }
         if (result.batch) {
+          batchesRef.current.push(result.batch);
           setState(s => ({
             ...s,
-            batches: [...s.batches, result.batch!],
+            batchCount: batchesRef.current.length,
             rowCount: s.rowCount + result.batch!.numRows,
           }));
         }
@@ -616,11 +635,15 @@ export function useStreamQuery() {
   }, [state.error, execute]);
 
   const getTable = useCallback((): Table | null => {
-    if (state.batches.length === 0) return null;
-    return new Table(state.batches);
-  }, [state.batches]);
+    if (batchesRef.current.length === 0) return null;
+    return new Table(batchesRef.current);
+  }, []);
 
-  return { ...state, execute, cancel, retry, getTable };
+  const getBatches = useCallback((): RecordBatch[] => {
+    return batchesRef.current;
+  }, []);
+
+  return { ...state, execute, cancel, retry, getTable, getBatches };
 }
 ```
 
