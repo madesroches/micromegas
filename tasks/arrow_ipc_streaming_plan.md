@@ -1,6 +1,6 @@
 # Arrow IPC Streaming for Query Endpoint
 
-**Status: ✅ Migration Complete**
+**Status: In Progress (3 components remaining)**
 
 GitHub Issue: https://github.com/madesroches/micromegas/issues/664
 
@@ -354,7 +354,11 @@ export function useStreamQuery(): UseStreamQueryReturn {
    - [x] `ProcessPage` - uses `useStreamQuery` with 3 hooks (process, stats, properties)
    - [x] `ProcessLogPage` - uses `useStreamQuery` for log entries
    - [x] `ProcessMetricsPage` - uses `useStreamQuery` with 3 hooks (discovery, data, process)
+   - [ ] `PerformanceAnalysisPage` - 5 mutations using `executeSqlQuery` (spans, block counts, measures)
+   - [ ] `usePropertyTimeline` hook - timeline of property values
+   - [ ] `usePropertyKeys` hook - property key listing
 6. [x] Keep existing `/query` endpoint for compatibility
+7. [ ] Remove old `/query` endpoint and `executeSqlQuery` after full migration
 
 ## Benefits
 
