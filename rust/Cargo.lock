@@ -57,6 +57,8 @@ name = "analytics-web-srv"
 version = "0.18.0"
 dependencies = [
  "anyhow",
+ "arrow-flight",
+ "arrow-ipc",
  "async-stream",
  "axum 0.8.7",
  "axum-extra",
@@ -77,6 +79,7 @@ dependencies = [
  "serde_json",
  "time",
  "tokio",
+ "tonic",
  "tower",
  "tower-http 0.5.2",
 ]

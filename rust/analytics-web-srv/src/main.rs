@@ -1,5 +1,6 @@
 mod auth;
 mod queries;
+mod stream_query;
 
 use anyhow::{Context, Result};
 use auth::{AuthState, AuthToken, OidcClientConfig};
@@ -285,6 +286,10 @@ async fn main() -> Result<()> {
 
     let api_routes = Router::new()
         .route(&format!("{base_path}/query"), post(execute_sql_query))
+        .route(
+            &format!("{base_path}/query-stream"),
+            post(stream_query::stream_query_handler),
+        )
         .route(
             &format!("{base_path}/perfetto/{{process_id}}/info"),
             get(get_trace_info),

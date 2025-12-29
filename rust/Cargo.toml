@@ -28,6 +28,7 @@ micromegas = { path = "public" }
 
 anyhow = "1.0"
 arrow-flight = { version = "57.0", features = ["flight-sql-experimental"] }
+arrow-ipc = "57.0"
 async-stream = "0.3"
 async-trait = "0.1"
 axum = "0.8"
