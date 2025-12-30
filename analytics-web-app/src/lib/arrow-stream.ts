@@ -8,7 +8,7 @@
  * - {"type":"error","code":"..","message":".."}\n on error
  */
 
-import { RecordBatch, RecordBatchReader, Schema, tableFromIPC } from 'apache-arrow';
+import { RecordBatch, RecordBatchReader, Schema } from 'apache-arrow';
 import { getConfig } from './config';
 import { authenticatedFetch, AuthenticationError } from './api';
 
@@ -202,10 +202,9 @@ export async function* streamQuery(
 
   const bufferedReader = new BufferedReader(response.body.getReader());
 
-  // Collect all IPC bytes for parsing
-  const ipcChunks: Uint8Array[] = [];
+  // Keep schema bytes for parsing batches (each batch needs schema context)
+  let schemaBytes: Uint8Array | null = null;
   let capturedError: StreamError | null = null;
-  let schemaYielded = false;
 
   try {
     while (true) {
@@ -227,45 +226,45 @@ export async function* streamQuery(
       }
 
       switch (frame.type) {
-        case 'schema':
+        case 'schema': {
+          const bytes = await bufferedReader.readBytes(frame.size);
+          schemaBytes = bytes;
+          try {
+            const reader = await RecordBatchReader.from(bytes);
+            yield { type: 'schema', schema: reader.schema };
+          } catch (e) {
+            capturedError = {
+              code: 'INTERNAL',
+              message: `Failed to parse schema: ${e}`,
+              retryable: false,
+            };
+          }
+          break;
+        }
         case 'batch': {
           const bytes = await bufferedReader.readBytes(frame.size);
-          ipcChunks.push(bytes);
-
-          // Try to parse what we have so far
-          if (frame.type === 'schema') {
-            // For schema, we can yield it immediately by parsing the IPC data
-            try {
-              const table = tableFromIPC(bytes);
-              yield { type: 'schema', schema: table.schema };
-              schemaYielded = true;
-            } catch (e) {
-              capturedError = {
-                code: 'INTERNAL',
-                message: `Failed to parse schema: ${e}`,
-                retryable: false,
-              };
+          if (!schemaBytes) {
+            capturedError = {
+              code: 'INTERNAL',
+              message: 'Received batch before schema',
+              retryable: false,
+            };
+            break;
+          }
+          // Combine schema + batch bytes to parse this single batch
+          // Batch bytes are discarded after parsing (not accumulated)
+          try {
+            const combined = concatenateBuffers([schemaBytes, bytes]);
+            const reader = await RecordBatchReader.from(combined);
+            for await (const batch of reader) {
+              yield { type: 'batch', batch };
             }
-          } else if (frame.type === 'batch' && schemaYielded) {
-            // For batches, we need to combine with schema to parse
-            // Accumulate all IPC data and parse incrementally
-            try {
-              const combinedBuffer = concatenateBuffers(ipcChunks);
-              const reader = await RecordBatchReader.from(combinedBuffer);
-
-              // Yield the latest batch (the reader will have parsed all batches)
-              let lastBatch: RecordBatch | undefined;
-              for await (const batch of reader) {
-                lastBatch = batch;
-              }
-              if (lastBatch) {
-                yield { type: 'batch', batch: lastBatch };
-              }
-            } catch (e) {
-              // If parsing fails, it might be due to incomplete data
-              // Continue accumulating and try again with the next batch
-              console.warn('Batch parsing warning:', e);
-            }
+          } catch (e) {
+            capturedError = {
+              code: 'INTERNAL',
+              message: `Failed to parse batch: ${e}`,
+              retryable: false,
+            };
           }
           break;
         }

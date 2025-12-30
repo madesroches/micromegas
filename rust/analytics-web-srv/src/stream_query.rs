@@ -223,8 +223,10 @@ pub async fn stream_query_handler(
             }
         };
 
-        // The schema is only available after receiving the first FlightData message.
-        // We need to read the first batch to populate the schema.
+        // FlightSQL limitation: The schema is embedded in the first FlightData message,
+        // not sent separately. The FlightRecordBatchStream only populates its schema field
+        // after we read the first message. We must read the first batch here, extract the
+        // schema, send it to the client, then process this batch along with the rest.
         let first_batch = batch_stream.next().await;
 
         // Get schema from the stream (now available after reading first message)
