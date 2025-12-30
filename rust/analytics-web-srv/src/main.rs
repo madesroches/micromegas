@@ -1,5 +1,6 @@
 mod auth;
 mod queries;
+mod stream_query;
 
 use anyhow::{Context, Result};
 use auth::{AuthState, AuthToken, OidcClientConfig};
@@ -116,27 +117,6 @@ struct HealthCheck {
     status: String,
     timestamp: DateTime<Utc>,
     flightsql_connected: bool,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct SqlQueryRequest {
-    sql: String,
-    #[serde(default)]
-    params: HashMap<String, String>,
-    begin: Option<DateTime<Utc>>,
-    end: Option<DateTime<Utc>>,
-}
-
-#[derive(Debug, Serialize)]
-struct SqlQueryResponse {
-    columns: Vec<String>,
-    rows: Vec<Vec<serde_json::Value>>,
-}
-
-#[derive(Debug, Serialize)]
-struct SqlQueryError {
-    error: String,
-    details: Option<String>,
 }
 
 type ApiResult<T> = Result<T, ApiError>;
@@ -284,7 +264,10 @@ async fn main() -> Result<()> {
     let health_routes = Router::new().route(&format!("{base_path}/health"), get(health_check));
 
     let api_routes = Router::new()
-        .route(&format!("{base_path}/query"), post(execute_sql_query))
+        .route(
+            &format!("{base_path}/query-stream"),
+            post(stream_query::stream_query_handler),
+        )
         .route(
             &format!("{base_path}/perfetto/{{process_id}}/info"),
             get(get_trace_info),
@@ -638,205 +621,4 @@ fn generate_trace_stream(
             }
         }
     })
-}
-
-/// List of destructive functions that should be blocked in web queries
-const BLOCKED_FUNCTIONS: &[&str] = &[
-    "retire_partitions",
-    "retire_partition_by_metadata",
-    "retire_partition_by_file",
-];
-
-/// Check if the SQL query contains any blocked destructive functions
-fn contains_blocked_function(sql: &str) -> Option<&'static str> {
-    let sql_lower = sql.to_lowercase();
-    BLOCKED_FUNCTIONS
-        .iter()
-        .find(|&func| sql_lower.contains(func))
-        .copied()
-}
-
-/// Substitute macro variables in SQL query
-fn substitute_macros(sql: &str, params: &HashMap<String, String>) -> String {
-    let mut result = sql.to_string();
-    for (key, value) in params {
-        // Escape single quotes in values to prevent SQL injection
-        let escaped_value = value.replace('\'', "''");
-        // Replace $key with the escaped value
-        result = result.replace(&format!("${key}"), &escaped_value);
-    }
-    result
-}
-
-#[span_fn]
-async fn execute_sql_query(
-    Extension(auth_token): Extension<AuthToken>,
-    Json(request): Json<SqlQueryRequest>,
-) -> Result<Json<SqlQueryResponse>, (StatusCode, Json<SqlQueryError>)> {
-    info!(
-        "executing SQL query sql={} params={:?} begin={:?} end={:?}",
-        request.sql, request.params, request.begin, request.end
-    );
-
-    // Check for blocked functions
-    if let Some(blocked_func) = contains_blocked_function(&request.sql) {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(SqlQueryError {
-                error: "Blocked function".to_string(),
-                details: Some(format!(
-                    "The function '{}' is not allowed in web queries for security reasons",
-                    blocked_func
-                )),
-            }),
-        ));
-    }
-
-    // Substitute macros
-    let sql = substitute_macros(&request.sql, &request.params);
-
-    // Build time range if provided
-    let time_range = match (request.begin, request.end) {
-        (Some(begin), Some(end)) => Some(TimeRange::new(begin, end)),
-        _ => None,
-    };
-
-    let client_factory =
-        BearerFlightSQLClientFactory::new_with_client_type(auth_token.0, "web".to_string());
-
-    let mut client = client_factory.make_client().await.map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(SqlQueryError {
-                error: "Failed to connect to FlightSQL server".to_string(),
-                details: Some(e.to_string()),
-            }),
-        )
-    })?;
-
-    let batches = client.query(sql, time_range).await.map_err(|e| {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(SqlQueryError {
-                error: "Query execution failed".to_string(),
-                details: Some(e.to_string()),
-            }),
-        )
-    })?;
-
-    // Convert Arrow batches to JSON response
-    let mut columns: Vec<String> = Vec::new();
-    let mut rows: Vec<Vec<serde_json::Value>> = Vec::new();
-
-    for batch in batches {
-        // Get column names from schema on first batch
-        if columns.is_empty() {
-            columns = batch
-                .schema()
-                .fields()
-                .iter()
-                .map(|f| f.name().clone())
-                .collect();
-        }
-
-        // Convert each row to JSON values
-        for row_idx in 0..batch.num_rows() {
-            let mut row: Vec<serde_json::Value> = Vec::new();
-            for col_idx in 0..batch.num_columns() {
-                let col = batch.column(col_idx);
-                let value = arrow_value_to_json(col, row_idx);
-                row.push(value);
-            }
-            rows.push(row);
-        }
-    }
-
-    Ok(Json(SqlQueryResponse { columns, rows }))
-}
-
-/// Convert an Arrow array value at a given index to a JSON value
-fn arrow_value_to_json(
-    array: &std::sync::Arc<dyn datafusion::arrow::array::Array>,
-    index: usize,
-) -> serde_json::Value {
-    use datafusion::arrow::array::*;
-    use datafusion::arrow::datatypes::DataType;
-
-    if array.is_null(index) {
-        return serde_json::Value::Null;
-    }
-
-    match array.data_type() {
-        DataType::Null => serde_json::Value::Null,
-        DataType::Boolean => {
-            let arr = array.as_any().downcast_ref::<BooleanArray>().unwrap();
-            serde_json::Value::Bool(arr.value(index))
-        }
-        DataType::Int8 => {
-            let arr = array.as_any().downcast_ref::<Int8Array>().unwrap();
-            serde_json::Value::Number(arr.value(index).into())
-        }
-        DataType::Int16 => {
-            let arr = array.as_any().downcast_ref::<Int16Array>().unwrap();
-            serde_json::Value::Number(arr.value(index).into())
-        }
-        DataType::Int32 => {
-            let arr = array.as_any().downcast_ref::<Int32Array>().unwrap();
-            serde_json::Value::Number(arr.value(index).into())
-        }
-        DataType::Int64 => {
-            let arr = array.as_any().downcast_ref::<Int64Array>().unwrap();
-            serde_json::Value::Number(arr.value(index).into())
-        }
-        DataType::UInt8 => {
-            let arr = array.as_any().downcast_ref::<UInt8Array>().unwrap();
-            serde_json::Value::Number(arr.value(index).into())
-        }
-        DataType::UInt16 => {
-            let arr = array.as_any().downcast_ref::<UInt16Array>().unwrap();
-            serde_json::Value::Number(arr.value(index).into())
-        }
-        DataType::UInt32 => {
-            let arr = array.as_any().downcast_ref::<UInt32Array>().unwrap();
-            serde_json::Value::Number(arr.value(index).into())
-        }
-        DataType::UInt64 => {
-            let arr = array.as_any().downcast_ref::<UInt64Array>().unwrap();
-            serde_json::Value::Number(arr.value(index).into())
-        }
-        DataType::Float32 => {
-            let arr = array.as_any().downcast_ref::<Float32Array>().unwrap();
-            serde_json::Number::from_f64(arr.value(index) as f64)
-                .map(serde_json::Value::Number)
-                .unwrap_or(serde_json::Value::Null)
-        }
-        DataType::Float64 => {
-            let arr = array.as_any().downcast_ref::<Float64Array>().unwrap();
-            serde_json::Number::from_f64(arr.value(index))
-                .map(serde_json::Value::Number)
-                .unwrap_or(serde_json::Value::Null)
-        }
-        DataType::Utf8 => {
-            let arr = array.as_any().downcast_ref::<StringArray>().unwrap();
-            serde_json::Value::String(arr.value(index).to_string())
-        }
-        DataType::LargeUtf8 => {
-            let arr = array.as_any().downcast_ref::<LargeStringArray>().unwrap();
-            serde_json::Value::String(arr.value(index).to_string())
-        }
-        DataType::Timestamp(_, _) => {
-            let arr = array
-                .as_any()
-                .downcast_ref::<TimestampNanosecondArray>()
-                .unwrap();
-            let nanos = arr.value(index);
-            let dt = DateTime::from_timestamp_nanos(nanos);
-            // Use nanosecond precision to preserve full resolution
-            serde_json::Value::String(dt.to_rfc3339_opts(chrono::SecondsFormat::Nanos, true))
-        }
-        _ => {
-            // For complex types, try to represent as string
-            serde_json::Value::String(format!("{:?}", array.data_type()))
-        }
-    }
 }

@@ -186,10 +186,10 @@ export function formatDuration(
   startTime: string | Date | unknown,
   endTime: string | Date | unknown
 ): string {
-  if (!startTime || !endTime) return 'N/A'
+  const start = toDate(startTime)
+  const end = toDate(endTime)
+  if (!start || !end) return 'N/A'
 
-  const start = startTime instanceof Date ? startTime : new Date(String(startTime))
-  const end = endTime instanceof Date ? endTime : new Date(String(endTime))
   const diffMs = end.getTime() - start.getTime()
 
   if (isNaN(diffMs) || diffMs < 0) return 'Invalid'
@@ -211,10 +211,22 @@ export function formatDuration(
   }
 }
 
+// Convert unknown value to Date, handling Arrow BigInt timestamps
+function toDate(value: unknown): Date | null {
+  if (!value) return null
+  if (value instanceof Date) return value
+  if (typeof value === 'number') return new Date(value)
+  if (typeof value === 'bigint') {
+    // Arrow timestamps are BigInt nanoseconds
+    return new Date(Number(value / 1000000n))
+  }
+  const date = new Date(String(value))
+  return isNaN(date.getTime()) ? null : date
+}
+
 // Format timestamp for display in tables (local timezone)
 export function formatTimestamp(value: unknown): string {
-  if (!value) return ''
-  const date = new Date(String(value))
-  if (isNaN(date.getTime())) return ''
+  const date = toDate(value)
+  if (!date) return ''
   return formatDateTimeLocal(date)
 }

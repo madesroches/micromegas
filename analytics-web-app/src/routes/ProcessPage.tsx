@@ -1,26 +1,23 @@
 import { Suspense, useState, useEffect, useCallback, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { useMutation } from '@tanstack/react-query'
 import { AppLink } from '@/components/AppLink'
 import { ArrowLeft, FileText, AlertCircle, BarChart2, Gauge } from 'lucide-react'
 import { PageLayout } from '@/components/layout'
 import { AuthGuard } from '@/components/AuthGuard'
 import { CopyableProcessId } from '@/components/CopyableProcessId'
-import { executeSqlQuery, toRowObjects } from '@/lib/api'
+import { useStreamQuery } from '@/hooks/useStreamQuery'
+import { timestampToDate } from '@/lib/arrow-utils'
 import { useTimeRange } from '@/hooks/useTimeRange'
 import { formatDuration, formatDateTimeLocal } from '@/lib/time-range'
-import { SqlRow } from '@/types'
 
 const PROCESS_SQL = `SELECT process_id, exe, start_time, last_update_time, computer, username, cpu_brand, distro
 FROM processes
 WHERE process_id = '$process_id'
 LIMIT 1`
 
-function formatLocalTime(timestamp: unknown): string {
+function formatLocalTime(timestamp: Date | null): string {
   if (!timestamp) return '—'
-  const date = new Date(String(timestamp))
-  if (isNaN(date.getTime())) return String(timestamp)
-  return formatDateTimeLocal(date)
+  return formatDateTimeLocal(timestamp)
 }
 
 const STATISTICS_SQL = `SELECT
@@ -41,11 +38,11 @@ const ONE_HOUR_MS = 60 * 60 * 1000
 
 function computeProcessTimeRange(
   screenLoadTime: Date,
-  startTime: string | null,
-  lastUpdateTime: string | null
+  startTime: Date | null,
+  lastUpdateTime: Date | null
 ): { from: string; to: string } {
   // Parse last update time
-  const lastUpdate = lastUpdateTime ? new Date(lastUpdateTime) : screenLoadTime
+  const lastUpdate = lastUpdateTime ?? screenLoadTime
   const timeSinceLastUpdate = screenLoadTime.getTime() - lastUpdate.getTime()
 
   // Determine end time
@@ -63,7 +60,7 @@ function computeProcessTimeRange(
 
   // Determine begin time
   const oneHourBeforeEnd = new Date(endTime.getTime() - ONE_HOUR_MS)
-  const processStart = startTime ? new Date(startTime) : oneHourBeforeEnd
+  const processStart = startTime ?? oneHourBeforeEnd
 
   // Use the more recent of: process start OR one hour before end
   let fromValue: string
@@ -76,92 +73,125 @@ function computeProcessTimeRange(
   return { from: fromValue, to: toValue }
 }
 
+interface ProcessRow {
+  exe: string
+  start_time: Date | null
+  last_update_time: Date | null
+  computer: string
+  username: string
+  cpu_brand: string
+  distro: string
+}
+
+interface StatisticsRow {
+  log_entries: number
+  measures: number
+  trace_events: number
+  thread_count: number
+}
+
 function ProcessPageContent() {
   const [searchParams] = useSearchParams()
   const processId = searchParams.get('id')
   const { apiTimeRange } = useTimeRange()
   const [screenLoadTime] = useState(() => new Date())
 
-  const [process, setProcess] = useState<SqlRow | null>(null)
-  const [statistics, setStatistics] = useState<SqlRow | null>(null)
-  const [statsError, setStatsError] = useState<string | null>(null)
+  const [process, setProcess] = useState<ProcessRow | null>(null)
+  const [statistics, setStatistics] = useState<StatisticsRow | null>(null)
   const [properties, setProperties] = useState<Record<string, string> | null>(null)
   const [propertiesError, setPropertiesError] = useState<string | null>(null)
-  const [isLoading, setIsLoading] = useState(true)
 
-  const processMutation = useMutation({
-    mutationFn: executeSqlQuery,
-    onSuccess: (data) => {
-      const rows = toRowObjects(data)
-      if (rows.length > 0) {
-        setProcess(rows[0])
+  const processQuery = useStreamQuery()
+  const statsQuery = useStreamQuery()
+  const propertiesQuery = useStreamQuery()
+
+  // Extract data from query results when complete
+  useEffect(() => {
+    if (processQuery.isComplete && !processQuery.error) {
+      const table = processQuery.getTable()
+      if (table && table.numRows > 0) {
+        const row = table.get(0)
+        if (row) {
+          setProcess({
+            exe: String(row.exe ?? ''),
+            start_time: timestampToDate(row.start_time),
+            last_update_time: timestampToDate(row.last_update_time),
+            computer: String(row.computer ?? ''),
+            username: String(row.username ?? ''),
+            cpu_brand: String(row.cpu_brand ?? ''),
+            distro: String(row.distro ?? ''),
+          })
+        }
       }
-      setIsLoading(false)
-    },
-    onError: () => {
-      setIsLoading(false)
-    },
-  })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- Only react to completion/error, not the full hook object
+  }, [processQuery.isComplete, processQuery.error])
 
-  const statsMutation = useMutation({
-    mutationFn: executeSqlQuery,
-    onSuccess: (data) => {
-      setStatsError(null)
-      const rows = toRowObjects(data)
-      if (rows.length > 0) {
-        setStatistics(rows[0])
+  useEffect(() => {
+    if (statsQuery.isComplete && !statsQuery.error) {
+      const table = statsQuery.getTable()
+      if (table && table.numRows > 0) {
+        const row = table.get(0)
+        if (row) {
+          setStatistics({
+            log_entries: Number(row.log_entries ?? 0),
+            measures: Number(row.measures ?? 0),
+            trace_events: Number(row.trace_events ?? 0),
+            thread_count: Number(row.thread_count ?? 0),
+          })
+        }
       }
-    },
-    onError: (err: Error) => {
-      setStatsError(err.message)
-    },
-  })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- Only react to completion/error, not the full hook object
+  }, [statsQuery.isComplete, statsQuery.error])
 
-  const propertiesMutation = useMutation({
-    mutationFn: executeSqlQuery,
-    onSuccess: (data) => {
-      setPropertiesError(null)
-      const rows = toRowObjects(data)
-      if (rows.length > 0 && rows[0].properties) {
-        try {
-          const parsed = JSON.parse(String(rows[0].properties))
-          setProperties(parsed)
-        } catch {
-          setPropertiesError('Failed to parse properties')
+  useEffect(() => {
+    if (propertiesQuery.isComplete && !propertiesQuery.error) {
+      const table = propertiesQuery.getTable()
+      if (table && table.numRows > 0) {
+        const row = table.get(0)
+        if (row && row.properties) {
+          try {
+            const parsed = JSON.parse(String(row.properties))
+            setProperties(parsed)
+            setPropertiesError(null)
+          } catch {
+            setPropertiesError('Failed to parse properties')
+          }
+        } else {
+          setProperties({})
         }
       } else {
         setProperties({})
       }
-    },
-    onError: (err: Error) => {
-      setPropertiesError(err.message)
-    },
-  })
+    } else if (propertiesQuery.error) {
+      setPropertiesError(propertiesQuery.error.message)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- Only react to completion/error, not the full hook object
+  }, [propertiesQuery.isComplete, propertiesQuery.error])
 
-  // Use refs to avoid including mutations in callback deps
-  const processMutateRef = useRef(processMutation.mutate)
-  processMutateRef.current = processMutation.mutate
-  const statsMutateRef = useRef(statsMutation.mutate)
-  statsMutateRef.current = statsMutation.mutate
-  const propertiesMutateRef = useRef(propertiesMutation.mutate)
-  propertiesMutateRef.current = propertiesMutation.mutate
+  const processExecuteRef = useRef(processQuery.execute)
+  processExecuteRef.current = processQuery.execute
+  const statsExecuteRef = useRef(statsQuery.execute)
+  statsExecuteRef.current = statsQuery.execute
+  const propertiesExecuteRef = useRef(propertiesQuery.execute)
+  propertiesExecuteRef.current = propertiesQuery.execute
 
   const loadData = useCallback(() => {
     if (!processId) return
-    setIsLoading(true)
-    processMutateRef.current({
+    processExecuteRef.current({
       sql: PROCESS_SQL,
       params: { process_id: processId },
       begin: apiTimeRange.begin,
       end: apiTimeRange.end,
     })
-    statsMutateRef.current({
+    statsExecuteRef.current({
       sql: STATISTICS_SQL,
       params: { process_id: processId },
       begin: apiTimeRange.begin,
       end: apiTimeRange.end,
     })
-    propertiesMutateRef.current({
+    propertiesExecuteRef.current({
       sql: PROPERTIES_SQL,
       params: { process_id: processId },
       begin: apiTimeRange.begin,
@@ -177,6 +207,9 @@ function ProcessPageContent() {
       loadData()
     }
   }, [processId, loadData])
+
+  const isLoading = processQuery.isStreaming || (!processQuery.isComplete && !processQuery.error)
+  const statsError = statsQuery.error?.message ?? null
 
   if (!processId) {
     return (
@@ -249,8 +282,8 @@ function ProcessPageContent() {
             {(() => {
               const processTimeRange = computeProcessTimeRange(
                 screenLoadTime,
-                process.start_time as string | null,
-                process.last_update_time as string | null
+                process.start_time,
+                process.last_update_time
               )
               const logHref = `/process_log?process_id=${processId}&from=${encodeURIComponent(processTimeRange.from)}&to=${encodeURIComponent(processTimeRange.to)}`
               return (

@@ -13,6 +13,7 @@ authors.workspace = true
 micromegas.workspace = true
 
 anyhow.workspace = true
+arrow-ipc.workspace = true
 async-stream.workspace = true
 axum.workspace = true
 axum-extra = { version = "0.10", features = ["cookie"] }

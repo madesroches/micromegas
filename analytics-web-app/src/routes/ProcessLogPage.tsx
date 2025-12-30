@@ -1,6 +1,5 @@
 import { Suspense, useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import { useSearchParams, useNavigate, useLocation } from 'react-router-dom'
-import { useMutation } from '@tanstack/react-query'
 import { AppLink } from '@/components/AppLink'
 import { AlertCircle, ChevronDown } from 'lucide-react'
 import { PageLayout } from '@/components/layout'
@@ -8,10 +7,10 @@ import { AuthGuard } from '@/components/AuthGuard'
 import { CopyableProcessId } from '@/components/CopyableProcessId'
 import { QueryEditor } from '@/components/QueryEditor'
 import { ErrorBanner } from '@/components/ErrorBanner'
-import { executeSqlQuery, toRowObjects } from '@/lib/api'
+import { useStreamQuery } from '@/hooks/useStreamQuery'
+import { timestampToDate } from '@/lib/arrow-utils'
 import { useTimeRange } from '@/hooks/useTimeRange'
 import { useDebounce } from '@/hooks/useDebounce'
-import { SqlRow } from '@/types'
 
 const DEFAULT_SQL = `SELECT time, level, target, msg
 FROM view_instance('log_entries', '$process_id')
@@ -149,18 +148,20 @@ function EditableCombobox({ value, options, onChange, onSelect, onBlur, onKeyDow
   )
 }
 
+
 function formatLocalTime(utcTime: unknown): string {
   if (!utcTime) return ''.padEnd(29)
-  const str = String(utcTime)
 
+  const date = timestampToDate(utcTime)
+  if (!date) return ''.padEnd(29)
+
+  // Try to extract nanoseconds from string representation
   let nanoseconds = '000000000'
+  const str = String(utcTime)
   const nanoMatch = str.match(/\.(\d+)/)
   if (nanoMatch) {
     nanoseconds = nanoMatch[1].padEnd(9, '0').slice(0, 9)
   }
-
-  const date = new Date(str)
-  if (isNaN(date.getTime())) return str.slice(0, 29).padEnd(29)
 
   const year = date.getFullYear()
   const month = String(date.getMonth() + 1).padStart(2, '0')
@@ -170,6 +171,13 @@ function formatLocalTime(utcTime: unknown): string {
   const seconds = String(date.getSeconds()).padStart(2, '0')
 
   return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}.${nanoseconds}`
+}
+
+interface LogRow {
+  time: unknown
+  level: string
+  target: string
+  msg: string
 }
 
 function ProcessLogContent() {
@@ -193,30 +201,43 @@ function ProcessLogContent() {
   const [search, setSearch] = useState<string>(initialSearch)
   const [searchInputValue, setSearchInputValue] = useState<string>(initialSearch)
   const debouncedSearchInput = useDebounce(searchInputValue, 300)
-  const [queryError, setQueryError] = useState<string | null>(null)
-  const [rows, setRows] = useState<SqlRow[]>([])
+  const [rows, setRows] = useState<LogRow[]>([])
   const [hasLoaded, setHasLoaded] = useState(false)
   const [currentSql, setCurrentSql] = useState<string>(DEFAULT_SQL)
 
-  const sqlMutation = useMutation({
-    mutationFn: executeSqlQuery,
-    onSuccess: (data) => {
-      setQueryError(null)
-      const resultRows = toRowObjects(data)
-      setRows(resultRows.map(row => ({
-        ...row,
-        level: typeof row.level === 'number' ? (LEVEL_NAMES[row.level] || 'UNKNOWN') : row.level
-      })))
-      setHasLoaded(true)
-    },
-    onError: (err: Error) => {
-      setQueryError(err.message)
-    },
-  })
+  const streamQuery = useStreamQuery()
+  const queryError = streamQuery.error?.message ?? null
 
+  // Extract rows when query completes
+  useEffect(() => {
+    if (streamQuery.isComplete && !streamQuery.error) {
+      const table = streamQuery.getTable()
+      if (table) {
+        const resultRows: LogRow[] = []
+        for (let i = 0; i < table.numRows; i++) {
+          const row = table.get(i)
+          if (row) {
+            const levelValue = row.level
+            const levelStr = typeof levelValue === 'number'
+              ? (LEVEL_NAMES[levelValue] || 'UNKNOWN')
+              : String(levelValue ?? '')
+            resultRows.push({
+              time: row.time,
+              level: levelStr,
+              target: String(row.target ?? ''),
+              msg: String(row.msg ?? ''),
+            })
+          }
+        }
+        setRows(resultRows)
+        setHasLoaded(true)
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- Only react to completion/error, not the full hook object
+  }, [streamQuery.isComplete, streamQuery.error])
 
-  const sqlMutateRef = useRef(sqlMutation.mutate)
-  sqlMutateRef.current = sqlMutation.mutate
+  const executeRef = useRef(streamQuery.execute)
+  executeRef.current = streamQuery.execute
 
   const currentSqlRef = useRef(currentSql)
   currentSqlRef.current = currentSql
@@ -224,7 +245,6 @@ function ProcessLogContent() {
   const loadData = useCallback(
     (sql: string) => {
       if (!processId) return
-      setQueryError(null)
       setCurrentSql(sql)
       const sqlWithSearch = sql.replace('$search_filter', expandSearchFilter(search))
       const params: Record<string, string> = {
@@ -232,7 +252,7 @@ function ProcessLogContent() {
         max_level: String(LOG_LEVELS[logLevel] || 6),
         limit: String(logLimit),
       }
-      sqlMutateRef.current({
+      executeRef.current({
         sql: sqlWithSearch,
         params,
         begin: apiTimeRange.begin,
@@ -411,7 +431,7 @@ function ProcessLogContent() {
       timeRangeLabel={timeRange.label}
       onRun={handleRunQuery}
       onReset={handleResetQuery}
-      isLoading={sqlMutation.isPending}
+      isLoading={streamQuery.isStreaming}
       error={queryError}
       docLink={{
         url: 'https://madesroches.github.io/micromegas/docs/query-guide/schema-reference/#log_entries',
@@ -487,7 +507,7 @@ function ProcessLogContent() {
           </div>
 
           <span className="ml-auto text-xs text-theme-text-muted self-center">
-            {sqlMutation.isPending && rows.length === 0
+            {streamQuery.isStreaming && rows.length === 0
               ? 'Loading...'
               : `Showing ${rows.length} entries`}
           </span>
@@ -497,13 +517,12 @@ function ProcessLogContent() {
           <ErrorBanner
             title="Query execution failed"
             message={queryError}
-            onDismiss={() => setQueryError(null)}
-            onRetry={handleRefresh}
+            onRetry={streamQuery.error?.retryable ? handleRefresh : undefined}
           />
         )}
 
         <div className="flex-1 overflow-auto bg-app-bg border border-theme-border rounded-lg font-mono text-xs">
-          {sqlMutation.isPending && !hasLoaded ? (
+          {streamQuery.isStreaming && !hasLoaded ? (
             <div className="flex items-center justify-center h-full">
               <div className="flex items-center gap-3">
                 <div className="animate-spin rounded-full h-5 w-5 border-2 border-accent-link border-t-transparent" />

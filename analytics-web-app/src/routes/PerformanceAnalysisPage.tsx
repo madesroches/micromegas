@@ -1,6 +1,5 @@
 import { Suspense, useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import { useSearchParams, useNavigate, useLocation } from 'react-router-dom'
-import { useMutation } from '@tanstack/react-query'
 import { AppLink } from '@/components/AppLink'
 import { SplitButton } from '@/components/ui/SplitButton'
 import { AlertCircle, Clock, Download, ExternalLink } from 'lucide-react'
@@ -12,7 +11,9 @@ import { ErrorBanner } from '@/components/ErrorBanner'
 import { ChartAxisBounds } from '@/components/TimeSeriesChart'
 import { MetricsChart, ScaleMode } from '@/components/MetricsChart'
 import { ThreadCoverageTimeline } from '@/components/ThreadCoverageTimeline'
-import { executeSqlQuery, toRowObjects, generateTrace } from '@/lib/api'
+import { generateTrace } from '@/lib/api'
+import { executeStreamQuery } from '@/lib/arrow-stream'
+import { timestampToMs } from '@/lib/arrow-utils'
 import { openInPerfetto, PerfettoError } from '@/lib/perfetto'
 import { useTimeRange } from '@/hooks/useTimeRange'
 import { GenerateTraceRequest, ProgressUpdate, ThreadCoverage } from '@/types'
@@ -151,15 +152,45 @@ function PerformanceAnalysisContent() {
     }
   }, [chartData])
 
-  const discoveryMutation = useMutation({
-    mutationFn: executeSqlQuery,
-    onSuccess: (data) => {
-      const rows = toRowObjects(data)
-      const measureList: Measure[] = rows.map((row) => ({
-        name: String(row.name ?? ''),
-        target: String(row.target ?? ''),
-        unit: String(row.unit ?? ''),
-      }))
+  const [discoveryLoading, setDiscoveryLoading] = useState(false)
+  const [dataLoading, setDataLoading] = useState(false)
+
+  const currentSqlRef = useRef(currentSql)
+  currentSqlRef.current = currentSql
+
+  const loadDiscovery = useCallback(async () => {
+    if (!processId) return
+    setDiscoveryLoading(true)
+
+    try {
+      const { batches, error } = await executeStreamQuery({
+        sql: DISCOVERY_SQL,
+        params: { process_id: processId },
+        begin: apiTimeRange.begin,
+        end: apiTimeRange.end,
+      })
+
+      if (error) {
+        setQueryError(error.message)
+        setDiscoveryDone(true)
+        setDiscoveryLoading(false)
+        return
+      }
+
+      const measureList: Measure[] = []
+      for (const batch of batches) {
+        for (let i = 0; i < batch.numRows; i++) {
+          const row = batch.get(i)
+          if (row) {
+            measureList.push({
+              name: String(row.name ?? ''),
+              target: String(row.target ?? ''),
+              unit: String(row.unit ?? ''),
+            })
+          }
+        }
+      }
+
       setMeasures(measureList)
       setDiscoveryDone(true)
 
@@ -167,153 +198,148 @@ function PerformanceAnalysisContent() {
         const deltaTime = measureList.find((m) => m.name === 'DeltaTime')
         setSelectedMeasure(deltaTime ? deltaTime.name : measureList[0].name)
       }
-    },
-    onError: (err: Error) => {
-      setQueryError(err.message)
+    } catch (err) {
+      setQueryError(err instanceof Error ? err.message : 'Unknown error')
       setDiscoveryDone(true)
-    },
-  })
-
-  const dataMutation = useMutation({
-    mutationFn: executeSqlQuery,
-    onSuccess: (data) => {
-      setQueryError(null)
-      const rows = toRowObjects(data)
-      const points = rows.map((row) => ({
-        time: new Date(String(row.time)).getTime(),
-        value: Number(row.value),
-      }))
-      setChartData(points)
-      setHasLoaded(true)
-    },
-    onError: (err: Error) => {
-      setQueryError(err.message)
-      setHasLoaded(true)
-    },
-  })
-
-  const processMutation = useMutation({
-    mutationFn: executeSqlQuery,
-    onSuccess: (data) => {
-      const rows = toRowObjects(data)
-      if (rows.length > 0) {
-        setProcessExe(String(rows[0].exe ?? ''))
-      }
-    },
-  })
-
-  const threadCoverageMutation = useMutation({
-    mutationFn: executeSqlQuery,
-    onSuccess: (data) => {
-      const rows = toRowObjects(data)
-      const threadMap = new Map<string, ThreadCoverage>()
-
-      for (const row of rows) {
-        const streamId = String(row.stream_id ?? '')
-        const threadName = String(row.thread_name ?? 'unknown')
-        const beginTime = new Date(String(row.begin_time)).getTime()
-        const endTime = new Date(String(row.end_time)).getTime()
-
-        if (!threadMap.has(streamId)) {
-          threadMap.set(streamId, {
-            streamId,
-            threadName,
-            segments: [],
-          })
-        }
-        threadMap.get(streamId)!.segments.push({ begin: beginTime, end: endTime })
-      }
-
-      const threads = Array.from(threadMap.values())
-      threads.sort((a, b) => a.threadName.localeCompare(b.threadName))
-      for (const thread of threads) {
-        thread.segments.sort((a, b) => a.begin - b.begin)
-      }
-
-      setThreadCoverage(threads)
-    },
-    onError: (err: Error) => {
-      console.error('Failed to fetch thread coverage:', err.message)
-      setThreadCoverage([])
-    },
-  })
-
-  const traceEventCountMutation = useMutation({
-    mutationFn: executeSqlQuery,
-    onSuccess: (data) => {
-      const rows = toRowObjects(data)
-      if (rows.length > 0 && rows[0].event_count != null) {
-        setTraceEventCount(Number(rows[0].event_count))
-      } else {
-        setTraceEventCount(0)
-      }
-      setTraceEventCountLoading(false)
-    },
-    onError: (err: Error) => {
-      console.error('Failed to fetch trace event count:', err.message)
-      setTraceEventCount(0)
-      setTraceEventCountLoading(false)
-    },
-  })
-
-  const discoveryMutateRef = useRef(discoveryMutation.mutate)
-  discoveryMutateRef.current = discoveryMutation.mutate
-  const dataMutateRef = useRef(dataMutation.mutate)
-  dataMutateRef.current = dataMutation.mutate
-  const processMutateRef = useRef(processMutation.mutate)
-  processMutateRef.current = processMutation.mutate
-  const threadCoverageMutateRef = useRef(threadCoverageMutation.mutate)
-  threadCoverageMutateRef.current = threadCoverageMutation.mutate
-  const traceEventCountMutateRef = useRef(traceEventCountMutation.mutate)
-  traceEventCountMutateRef.current = traceEventCountMutation.mutate
-
-  const currentSqlRef = useRef(currentSql)
-  currentSqlRef.current = currentSql
-
-  const loadDiscovery = useCallback(() => {
-    if (!processId) return
-    discoveryMutateRef.current({
-      sql: DISCOVERY_SQL,
-      params: { process_id: processId },
-      begin: apiTimeRange.begin,
-      end: apiTimeRange.end,
-    })
-  }, [processId, apiTimeRange])
+    } finally {
+      setDiscoveryLoading(false)
+    }
+  }, [processId, apiTimeRange, selectedMeasure])
 
   const loadData = useCallback(
-    (sql: string) => {
+    async (sql: string) => {
       if (!processId || !selectedMeasure) return
       setQueryError(null)
       setCurrentSql(sql)
-      dataMutateRef.current({
-        sql,
-        params: {
-          process_id: processId,
-          measure_name: selectedMeasure,
-          bin_interval: binInterval,
-        },
-        begin: apiTimeRange.begin,
-        end: apiTimeRange.end,
-      })
+      setDataLoading(true)
+
+      try {
+        const { batches, error } = await executeStreamQuery({
+          sql,
+          params: {
+            process_id: processId,
+            measure_name: selectedMeasure,
+            bin_interval: binInterval,
+          },
+          begin: apiTimeRange.begin,
+          end: apiTimeRange.end,
+        })
+
+        if (error) {
+          setQueryError(error.message)
+          setHasLoaded(true)
+          setDataLoading(false)
+          return
+        }
+
+        const points: { time: number; value: number }[] = []
+        for (const batch of batches) {
+          for (let i = 0; i < batch.numRows; i++) {
+            const row = batch.get(i)
+            if (row) {
+              points.push({
+                time: timestampToMs(row.time),
+                value: Number(row.value),
+              })
+            }
+          }
+        }
+
+        setChartData(points)
+        setHasLoaded(true)
+      } catch (err) {
+        setQueryError(err instanceof Error ? err.message : 'Unknown error')
+        setHasLoaded(true)
+      } finally {
+        setDataLoading(false)
+      }
     },
     [processId, selectedMeasure, binInterval, apiTimeRange]
   )
 
-  const loadThreadCoverage = useCallback(() => {
+  const loadThreadCoverage = useCallback(async () => {
     if (!processId) return
-    threadCoverageMutateRef.current({
-      sql: THREAD_COVERAGE_SQL,
-      params: { process_id: processId },
-      begin: apiTimeRange.begin,
-      end: apiTimeRange.end,
-    })
+
+    // Load thread coverage
+    try {
+      const { batches, error } = await executeStreamQuery({
+        sql: THREAD_COVERAGE_SQL,
+        params: { process_id: processId },
+        begin: apiTimeRange.begin,
+        end: apiTimeRange.end,
+      })
+
+      if (error) {
+        console.error('Failed to fetch thread coverage:', error.message)
+        setThreadCoverage([])
+      } else {
+        const threadMap = new Map<string, ThreadCoverage>()
+
+        for (const batch of batches) {
+          for (let i = 0; i < batch.numRows; i++) {
+            const row = batch.get(i)
+            if (row) {
+              const streamId = String(row.stream_id ?? '')
+              const threadName = String(row.thread_name ?? 'unknown')
+              const beginTime = timestampToMs(row.begin_time)
+              const endTime = timestampToMs(row.end_time)
+
+              if (!threadMap.has(streamId)) {
+                threadMap.set(streamId, {
+                  streamId,
+                  threadName,
+                  segments: [],
+                })
+              }
+              threadMap.get(streamId)!.segments.push({ begin: beginTime, end: endTime })
+            }
+          }
+        }
+
+        const threads = Array.from(threadMap.values())
+        threads.sort((a, b) => a.threadName.localeCompare(b.threadName))
+        for (const thread of threads) {
+          thread.segments.sort((a, b) => a.begin - b.begin)
+        }
+
+        setThreadCoverage(threads)
+      }
+    } catch (err) {
+      console.error('Failed to fetch thread coverage:', err)
+      setThreadCoverage([])
+    }
+
+    // Load trace event count
     setTraceEventCountLoading(true)
-    traceEventCountMutateRef.current({
-      sql: TRACE_EVENTS_COUNT_SQL,
-      params: { process_id: processId },
-      begin: apiTimeRange.begin,
-      end: apiTimeRange.end,
-    })
+    try {
+      const { batches, error } = await executeStreamQuery({
+        sql: TRACE_EVENTS_COUNT_SQL,
+        params: { process_id: processId },
+        begin: apiTimeRange.begin,
+        end: apiTimeRange.end,
+      })
+
+      if (error) {
+        console.error('Failed to fetch trace event count:', error.message)
+        setTraceEventCount(0)
+      } else {
+        let eventCount = 0
+        for (const batch of batches) {
+          if (batch.numRows > 0) {
+            const row = batch.get(0)
+            if (row && row.event_count != null) {
+              eventCount = Number(row.event_count)
+            }
+          }
+        }
+        setTraceEventCount(eventCount)
+      }
+    } catch (err) {
+      console.error('Failed to fetch trace event count:', err)
+      setTraceEventCount(0)
+    } finally {
+      setTraceEventCountLoading(false)
+    }
   }, [processId, apiTimeRange])
 
   const updateMeasure = useCallback(
@@ -367,11 +393,20 @@ function PerformanceAnalysisContent() {
   useEffect(() => {
     if (processId && !hasLoadedProcessRef.current) {
       hasLoadedProcessRef.current = true
-      processMutateRef.current({
+      executeStreamQuery({
         sql: PROCESS_SQL,
         params: { process_id: processId },
         begin: apiTimeRange.begin,
         end: apiTimeRange.end,
+      }).then(({ batches }) => {
+        for (const batch of batches) {
+          if (batch.numRows > 0) {
+            const row = batch.get(0)
+            if (row) {
+              setProcessExe(String(row.exe ?? ''))
+            }
+          }
+        }
       })
     }
   }, [processId, apiTimeRange])
@@ -599,7 +634,7 @@ function PerformanceAnalysisContent() {
         timeRangeLabel={timeRange.label}
         onRun={handleRunQuery}
         onReset={handleResetQuery}
-        isLoading={dataMutation.isPending}
+        isLoading={dataLoading}
         error={queryError}
         docLink={{
           url: 'https://madesroches.github.io/micromegas/docs/query-guide/schema-reference/#measures',
@@ -641,7 +676,7 @@ function PerformanceAnalysisContent() {
           <select
             value={selectedMeasure || ''}
             onChange={(e) => updateMeasure(e.target.value)}
-            disabled={noMeasuresAvailable || (discoveryMutation.isPending && measures.length === 0)}
+            disabled={noMeasuresAvailable || (discoveryLoading && measures.length === 0)}
             className="min-w-[250px] px-3 py-2 bg-app-panel border border-theme-border rounded-md text-theme-text-primary text-sm focus:outline-none focus:border-accent-link disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {measures.length > 0 ? (
@@ -764,7 +799,7 @@ function PerformanceAnalysisContent() {
               onWidthChange={handleChartWidthChange}
               onAxisBoundsChange={handleAxisBoundsChange}
             />
-          ) : discoveryMutation.isPending ? (
+          ) : discoveryLoading ? (
             <div className="h-full flex items-center justify-center bg-app-panel border border-theme-border rounded-lg">
               <div className="flex items-center gap-3">
                 <div className="animate-spin rounded-full h-5 w-5 border-2 border-accent-link border-t-transparent" />
@@ -783,7 +818,7 @@ function PerformanceAnalysisContent() {
                 </div>
               </div>
             </div>
-          ) : dataMutation.isPending && !hasLoaded ? (
+          ) : dataLoading && !hasLoaded ? (
             <div className="h-full flex items-center justify-center bg-app-panel border border-theme-border rounded-lg">
               <div className="flex items-center gap-3">
                 <div className="animate-spin rounded-full h-5 w-5 border-2 border-accent-link border-t-transparent" />

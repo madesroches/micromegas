@@ -1,4 +1,4 @@
-import { GenerateTraceRequest, ProgressUpdate, BinaryStartMarker, SqlQueryRequest, SqlQueryResponse, SqlQueryError, SqlRow } from '@/types'
+import { GenerateTraceRequest, ProgressUpdate, BinaryStartMarker } from '@/types'
 import { getConfig } from './config'
 
 function getApiBase(): string {
@@ -89,13 +89,6 @@ export async function authenticatedFetch(
   }
 
   return response
-}
-
-/** Convert SQL query response to array of row objects */
-export function toRowObjects(result: SqlQueryResponse): SqlRow[] {
-  return result.rows.map(row =>
-    Object.fromEntries(result.columns.map((col, i) => [col, row[i]]))
-  )
 }
 
 export interface GenerateTraceOptions {
@@ -234,32 +227,4 @@ export async function generateTrace(
   a.click()
   document.body.removeChild(a)
   URL.revokeObjectURL(url)
-}
-
-export async function executeSqlQuery(request: SqlQueryRequest): Promise<SqlQueryResponse> {
-  const response = await authenticatedFetch(`${getApiBase()}/query`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(request),
-  })
-
-  if (!response.ok) {
-    // 401 check handles the case where token refresh failed - user must re-authenticate
-    if (response.status === 401) {
-      throw new AuthenticationError()
-    }
-    if (response.status === 403) {
-      const errorData = await response.json() as SqlQueryError
-      throw new Error(errorData.details || errorData.error)
-    }
-    if (response.status === 400) {
-      const errorData = await response.json() as SqlQueryError
-      throw new Error(errorData.details || errorData.error)
-    }
-    throw new Error(`HTTP ${response.status}: ${response.statusText}`)
-  }
-
-  return response.json()
 }

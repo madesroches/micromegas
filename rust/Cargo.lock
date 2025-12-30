@@ -57,6 +57,7 @@ name = "analytics-web-srv"
 version = "0.18.0"
 dependencies = [
  "anyhow",
+ "arrow-ipc",
  "async-stream",
  "axum 0.8.7",
  "axum-extra",

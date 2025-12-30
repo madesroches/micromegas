@@ -1,6 +1,5 @@
 import { Suspense, useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import { useSearchParams, useNavigate, useLocation } from 'react-router-dom'
-import { useMutation } from '@tanstack/react-query'
 import { AppLink } from '@/components/AppLink'
 import { AlertCircle, Clock } from 'lucide-react'
 import { PageLayout } from '@/components/layout'
@@ -9,7 +8,8 @@ import { CopyableProcessId } from '@/components/CopyableProcessId'
 import { QueryEditor } from '@/components/QueryEditor'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { MetricsChart } from '@/components/MetricsChart'
-import { executeSqlQuery, toRowObjects } from '@/lib/api'
+import { useStreamQuery } from '@/hooks/useStreamQuery'
+import { timestampToMs } from '@/lib/arrow-utils'
 import { useTimeRange } from '@/hooks/useTimeRange'
 
 const DISCOVERY_SQL = `SELECT DISTINCT name, target, unit
@@ -85,13 +85,17 @@ function ProcessMetricsContent() {
 
   const [measures, setMeasures] = useState<Measure[]>([])
   const [selectedMeasure, setSelectedMeasure] = useState<string | null>(measureParam)
-  const [queryError, setQueryError] = useState<string | null>(null)
   const [chartData, setChartData] = useState<{ time: number; value: number }[]>([])
   const [_processExe, setProcessExe] = useState<string | null>(null)
   const [hasLoaded, setHasLoaded] = useState(false)
   const [discoveryDone, setDiscoveryDone] = useState(false)
   const [chartWidth, setChartWidth] = useState<number>(800)
   const [currentSql, setCurrentSql] = useState<string>(DEFAULT_SQL)
+
+  const discoveryQuery = useStreamQuery()
+  const dataQuery = useStreamQuery()
+  const processQuery = useStreamQuery()
+  const queryError = dataQuery.error?.message ?? discoveryQuery.error?.message ?? null
 
   const binInterval = useMemo(() => {
     const fromDate = new Date(apiTimeRange.begin)
@@ -104,69 +108,83 @@ function ProcessMetricsContent() {
     return measures.find((m) => m.name === selectedMeasure)
   }, [measures, selectedMeasure])
 
-  const discoveryMutation = useMutation({
-    mutationFn: executeSqlQuery,
-    onSuccess: (data) => {
-      const rows = toRowObjects(data)
-      const measureList: Measure[] = rows.map((row) => ({
-        name: String(row.name ?? ''),
-        target: String(row.target ?? ''),
-        unit: String(row.unit ?? ''),
-      }))
-      setMeasures(measureList)
-      setDiscoveryDone(true)
-
-      if (measureList.length > 0 && !selectedMeasure) {
-        setSelectedMeasure(measureList[0].name)
+  // Extract measures from discovery query
+  useEffect(() => {
+    if (discoveryQuery.isComplete) {
+      if (!discoveryQuery.error) {
+        const table = discoveryQuery.getTable()
+        if (table) {
+          const measureList: Measure[] = []
+          for (let i = 0; i < table.numRows; i++) {
+            const row = table.get(i)
+            if (row) {
+              measureList.push({
+                name: String(row.name ?? ''),
+                target: String(row.target ?? ''),
+                unit: String(row.unit ?? ''),
+              })
+            }
+          }
+          setMeasures(measureList)
+          if (measureList.length > 0 && !selectedMeasure) {
+            setSelectedMeasure(measureList[0].name)
+          }
+        }
       }
-    },
-    onError: (err: Error) => {
-      setQueryError(err.message)
       setDiscoveryDone(true)
-    },
-  })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- Only react to completion/error, not the full hook object
+  }, [discoveryQuery.isComplete, discoveryQuery.error, selectedMeasure])
 
-  const dataMutation = useMutation({
-    mutationFn: executeSqlQuery,
-    onSuccess: (data) => {
-      setQueryError(null)
-      const rows = toRowObjects(data)
-      const points = rows.map((row) => ({
-        time: new Date(String(row.time)).getTime(),
-        value: Number(row.value),
-      }))
-      setChartData(points)
-      setHasLoaded(true)
-    },
-    onError: (err: Error) => {
-      setQueryError(err.message)
-      setHasLoaded(true)
-    },
-  })
-
-  const processMutation = useMutation({
-    mutationFn: executeSqlQuery,
-    onSuccess: (data) => {
-      const rows = toRowObjects(data)
-      if (rows.length > 0) {
-        setProcessExe(String(rows[0].exe ?? ''))
+  // Extract chart data from data query
+  useEffect(() => {
+    if (dataQuery.isComplete && !dataQuery.error) {
+      const table = dataQuery.getTable()
+      if (table) {
+        const points: { time: number; value: number }[] = []
+        for (let i = 0; i < table.numRows; i++) {
+          const row = table.get(i)
+          if (row) {
+            points.push({
+              time: timestampToMs(row.time),
+              value: Number(row.value),
+            })
+          }
+        }
+        setChartData(points)
+        setHasLoaded(true)
       }
-    },
-  })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- Only react to completion/error, not the full hook object
+  }, [dataQuery.isComplete, dataQuery.error])
 
-  const discoveryMutateRef = useRef(discoveryMutation.mutate)
-  discoveryMutateRef.current = discoveryMutation.mutate
-  const dataMutateRef = useRef(dataMutation.mutate)
-  dataMutateRef.current = dataMutation.mutate
-  const processMutateRef = useRef(processMutation.mutate)
-  processMutateRef.current = processMutation.mutate
+  // Extract process exe from process query
+  useEffect(() => {
+    if (processQuery.isComplete && !processQuery.error) {
+      const table = processQuery.getTable()
+      if (table && table.numRows > 0) {
+        const row = table.get(0)
+        if (row) {
+          setProcessExe(String(row.exe ?? ''))
+        }
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- Only react to completion/error, not the full hook object
+  }, [processQuery.isComplete, processQuery.error])
+
+  const discoveryExecuteRef = useRef(discoveryQuery.execute)
+  discoveryExecuteRef.current = discoveryQuery.execute
+  const dataExecuteRef = useRef(dataQuery.execute)
+  dataExecuteRef.current = dataQuery.execute
+  const processExecuteRef = useRef(processQuery.execute)
+  processExecuteRef.current = processQuery.execute
 
   const currentSqlRef = useRef(currentSql)
   currentSqlRef.current = currentSql
 
   const loadDiscovery = useCallback(() => {
     if (!processId) return
-    discoveryMutateRef.current({
+    discoveryExecuteRef.current({
       sql: DISCOVERY_SQL,
       params: { process_id: processId },
       begin: apiTimeRange.begin,
@@ -177,9 +195,8 @@ function ProcessMetricsContent() {
   const loadData = useCallback(
     (sql: string) => {
       if (!processId || !selectedMeasure) return
-      setQueryError(null)
       setCurrentSql(sql)
-      dataMutateRef.current({
+      dataExecuteRef.current({
         sql,
         params: {
           process_id: processId,
@@ -231,7 +248,7 @@ function ProcessMetricsContent() {
   useEffect(() => {
     if (processId && !hasLoadedProcessRef.current) {
       hasLoadedProcessRef.current = true
-      processMutateRef.current({
+      processExecuteRef.current({
         sql: PROCESS_SQL,
         params: { process_id: processId },
         begin: apiTimeRange.begin,
@@ -320,7 +337,7 @@ function ProcessMetricsContent() {
         timeRangeLabel={timeRange.label}
         onRun={handleRunQuery}
         onReset={handleResetQuery}
-        isLoading={dataMutation.isPending}
+        isLoading={dataQuery.isStreaming}
         error={queryError}
         docLink={{
           url: 'https://madesroches.github.io/micromegas/docs/query-guide/schema-reference/#measures',
@@ -362,7 +379,7 @@ function ProcessMetricsContent() {
           <select
             value={selectedMeasure || ''}
             onChange={(e) => updateMeasure(e.target.value)}
-            disabled={noMeasuresAvailable || (discoveryMutation.isPending && measures.length === 0)}
+            disabled={noMeasuresAvailable || (discoveryQuery.isStreaming && measures.length === 0)}
             className="min-w-[250px] px-3 py-2 bg-app-panel border border-theme-border rounded-md text-theme-text-primary text-sm focus:outline-none focus:border-accent-link disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {measures.length > 0 ? (
@@ -379,7 +396,7 @@ function ProcessMetricsContent() {
           </select>
 
           <span className="ml-auto text-xs text-theme-text-muted self-center">
-            {dataMutation.isPending
+            {dataQuery.isStreaming
               ? 'Loading...'
               : noMeasuresAvailable
                 ? ''
@@ -391,8 +408,7 @@ function ProcessMetricsContent() {
           <ErrorBanner
             title="Query execution failed"
             message={queryError}
-            onDismiss={() => setQueryError(null)}
-            onRetry={handleRefresh}
+            onRetry={(dataQuery.error?.retryable || discoveryQuery.error?.retryable) ? handleRefresh : undefined}
           />
         )}
 
@@ -412,7 +428,7 @@ function ProcessMetricsContent() {
               onTimeRangeSelect={handleTimeRangeSelect}
               onWidthChange={handleChartWidthChange}
             />
-          ) : discoveryMutation.isPending ? (
+          ) : discoveryQuery.isStreaming ? (
             <div className="h-full flex items-center justify-center bg-app-panel border border-theme-border rounded-lg">
               <div className="flex items-center gap-3">
                 <div className="animate-spin rounded-full h-5 w-5 border-2 border-accent-link border-t-transparent" />
@@ -431,7 +447,7 @@ function ProcessMetricsContent() {
                 </div>
               </div>
             </div>
-          ) : dataMutation.isPending && !hasLoaded ? (
+          ) : dataQuery.isStreaming && !hasLoaded ? (
             <div className="h-full flex items-center justify-center bg-app-panel border border-theme-border rounded-lg">
               <div className="flex items-center gap-3">
                 <div className="animate-spin rounded-full h-5 w-5 border-2 border-accent-link border-t-transparent" />
