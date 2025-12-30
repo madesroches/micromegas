@@ -218,23 +218,32 @@ describe('useStreamQuery', () => {
 
   describe('cancel', () => {
     it('should set isStreaming to false on cancel', async () => {
-      // Create a generator that never completes
+      // Create a generator that yields schema then waits
+      let resolveWait: () => void;
+      const waitPromise = new Promise<void>(resolve => {
+        resolveWait = resolve;
+      });
+
       mockStreamQuery.mockImplementation(async function* () {
         yield { type: 'schema', schema: new Schema([]) };
-        // Wait indefinitely
-        await new Promise(() => {});
+        await waitPromise;
+        yield { type: 'done' };
       });
 
       const { result } = renderHook(() => useStreamQuery());
 
-      // Start query without awaiting
-      act(() => {
+      // Start query and wait for schema to be processed
+      await act(async () => {
         result.current.execute({ sql: 'SELECT * FROM big_table' });
+        // Give time for the schema yield to be processed
+        await new Promise(resolve => setTimeout(resolve, 10));
       });
 
-      // Cancel immediately
-      act(() => {
+      // Cancel and resolve the wait to clean up
+      await act(async () => {
         result.current.cancel();
+        resolveWait!();
+        await new Promise(resolve => setTimeout(resolve, 0));
       });
 
       expect(result.current.isStreaming).toBe(false);
