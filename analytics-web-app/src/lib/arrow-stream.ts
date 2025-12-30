@@ -141,6 +141,33 @@ export interface StreamQueryParams {
 }
 
 /**
+ * Reusable buffer for parsing batches, avoids allocation per batch.
+ * Grows as needed but never shrinks during a session.
+ */
+let parseBuffer: Uint8Array | null = null;
+
+/**
+ * Combines schema and batch bytes into a reusable buffer.
+ * Returns a view into the buffer (no copy on return).
+ */
+function combineForParsing(schemaBytes: Uint8Array, batchBytes: Uint8Array): Uint8Array {
+  const requiredSize = schemaBytes.length + batchBytes.length;
+
+  // Grow buffer if needed (start at 64KB, double when growing)
+  if (!parseBuffer || parseBuffer.length < requiredSize) {
+    const newSize = Math.max(requiredSize, parseBuffer?.length ? parseBuffer.length * 2 : 64 * 1024);
+    parseBuffer = new Uint8Array(newSize);
+  }
+
+  // Copy schema and batch into buffer
+  parseBuffer.set(schemaBytes, 0);
+  parseBuffer.set(batchBytes, schemaBytes.length);
+
+  // Return a view of just the relevant portion
+  return parseBuffer.subarray(0, requiredSize);
+}
+
+/**
  * Streams query results as Arrow RecordBatches.
  *
  * Parses the JSON-framed protocol from the backend and yields:
@@ -174,8 +201,6 @@ export async function* streamQuery(
       throw new AuthenticationError();
     }
     if (response.status === 403) {
-      // Forbidden error is returned as a stream with error frame, but also as HTTP 403
-      // Parse the response body for the error message
       const text = await response.text();
       try {
         const frame = JSON.parse(text.trim()) as ErrorFrame;
@@ -207,6 +232,7 @@ export async function* streamQuery(
   let capturedError: StreamError | null = null;
 
   try {
+    // eslint-disable-next-line no-constant-condition
     while (true) {
       const line = await bufferedReader.readLine();
       if (line === null) {
@@ -251,10 +277,9 @@ export async function* streamQuery(
             };
             break;
           }
-          // Combine schema + batch bytes to parse this single batch
-          // Batch bytes are discarded after parsing (not accumulated)
+          // Combine schema + batch bytes using reusable buffer
           try {
-            const combined = concatenateBuffers([schemaBytes, bytes]);
+            const combined = combineForParsing(schemaBytes, bytes);
             const reader = await RecordBatchReader.from(combined);
             for await (const batch of reader) {
               yield { type: 'batch', batch };
@@ -294,20 +319,6 @@ export async function* streamQuery(
   } finally {
     bufferedReader.release();
   }
-}
-
-/**
- * Concatenate multiple Uint8Array buffers into one
- */
-function concatenateBuffers(buffers: Uint8Array[]): Uint8Array {
-  const totalLength = buffers.reduce((sum, buf) => sum + buf.length, 0);
-  const result = new Uint8Array(totalLength);
-  let offset = 0;
-  for (const buf of buffers) {
-    result.set(buf, offset);
-    offset += buf.length;
-  }
-  return result;
 }
 
 /**
