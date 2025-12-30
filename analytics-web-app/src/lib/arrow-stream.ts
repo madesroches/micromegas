@@ -141,33 +141,6 @@ export interface StreamQueryParams {
 }
 
 /**
- * Reusable buffer for parsing batches, avoids allocation per batch.
- * Grows as needed but never shrinks during a session.
- */
-let parseBuffer: Uint8Array | null = null;
-
-/**
- * Combines schema and batch bytes into a reusable buffer.
- * Returns a view into the buffer (no copy on return).
- */
-function combineForParsing(schemaBytes: Uint8Array, batchBytes: Uint8Array): Uint8Array {
-  const requiredSize = schemaBytes.length + batchBytes.length;
-
-  // Grow buffer if needed (start at 64KB, double when growing)
-  if (!parseBuffer || parseBuffer.length < requiredSize) {
-    const newSize = Math.max(requiredSize, parseBuffer?.length ? parseBuffer.length * 2 : 64 * 1024);
-    parseBuffer = new Uint8Array(newSize);
-  }
-
-  // Copy schema and batch into buffer
-  parseBuffer.set(schemaBytes, 0);
-  parseBuffer.set(batchBytes, schemaBytes.length);
-
-  // Return a view of just the relevant portion
-  return parseBuffer.subarray(0, requiredSize);
-}
-
-/**
  * Streams query results as Arrow RecordBatches.
  *
  * Parses the JSON-framed protocol from the backend and yields:
@@ -230,6 +203,21 @@ export async function* streamQuery(
   // Keep schema bytes for parsing batches (each batch needs schema context)
   let schemaBytes: Uint8Array | null = null;
   let capturedError: StreamError | null = null;
+
+  // Reusable buffer for combining schema + batch bytes, grows as needed
+  // Local to this generator to avoid interference between concurrent queries
+  let parseBuffer: Uint8Array | null = null;
+
+  const combineForParsing = (schema: Uint8Array, batch: Uint8Array): Uint8Array => {
+    const requiredSize = schema.length + batch.length;
+    if (!parseBuffer || parseBuffer.length < requiredSize) {
+      const newSize = Math.max(requiredSize, parseBuffer?.length ? parseBuffer.length * 2 : 64 * 1024);
+      parseBuffer = new Uint8Array(newSize);
+    }
+    parseBuffer.set(schema, 0);
+    parseBuffer.set(batch, schema.length);
+    return parseBuffer.subarray(0, requiredSize);
+  };
 
   try {
     // eslint-disable-next-line no-constant-condition
@@ -294,8 +282,12 @@ export async function* streamQuery(
           break;
         }
         case 'done': {
-          yield { type: 'done' };
-          return;
+          // Defensive: don't yield done if we captured an error earlier
+          if (!capturedError) {
+            yield { type: 'done' };
+            return;
+          }
+          break;
         }
         case 'error': {
           capturedError = {

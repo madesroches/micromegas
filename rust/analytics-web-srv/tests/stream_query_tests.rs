@@ -161,7 +161,8 @@ fn create_test_schema() -> Schema {
 #[test]
 fn test_encode_schema_produces_valid_ipc() {
     let schema = create_test_schema();
-    let ipc_bytes = encode_schema(&schema).expect("Failed to encode schema");
+    let mut tracker = DictionaryTracker::new(false);
+    let ipc_bytes = encode_schema(&schema, &mut tracker).expect("Failed to encode schema");
 
     // IPC bytes should not be empty
     assert!(
@@ -177,7 +178,8 @@ fn test_encode_schema_produces_valid_ipc() {
 #[test]
 fn test_encode_schema_empty_schema() {
     let schema = Schema::empty();
-    let ipc_bytes = encode_schema(&schema).expect("Failed to encode empty schema");
+    let mut tracker = DictionaryTracker::new(false);
+    let ipc_bytes = encode_schema(&schema, &mut tracker).expect("Failed to encode empty schema");
 
     // Even empty schema should produce valid IPC
     assert!(
@@ -205,7 +207,8 @@ fn test_encode_schema_all_types() {
         Field::new("large_string_col", DataType::LargeUtf8, true),
     ]);
 
-    let ipc_bytes = encode_schema(&schema).expect("Failed to encode complex schema");
+    let mut tracker = DictionaryTracker::new(false);
+    let ipc_bytes = encode_schema(&schema, &mut tracker).expect("Failed to encode complex schema");
     assert!(!ipc_bytes.is_empty());
 }
 
@@ -334,9 +337,11 @@ fn test_encode_schema_and_batch_readable() {
     let schema = create_test_schema();
     let batch = create_test_batch();
 
-    let schema_bytes = encode_schema(&schema).expect("Failed to encode schema");
+    // Use same tracker for schema and batch to ensure dictionary IDs align
     let mut tracker = DictionaryTracker::new(false);
     let mut compression = CompressionContext::default();
+
+    let schema_bytes = encode_schema(&schema, &mut tracker).expect("Failed to encode schema");
     let batch_bytes =
         encode_batch(&batch, &mut tracker, &mut compression).expect("Failed to encode batch");
 

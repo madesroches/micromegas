@@ -104,13 +104,18 @@ pub fn substitute_macros(sql: &str, params: &HashMap<String, String>) -> String 
 }
 
 /// Encode a schema to Arrow IPC format
-pub fn encode_schema(schema: &Schema) -> Result<Vec<u8>, String> {
+///
+/// The tracker should be the same instance used for subsequent batch encoding
+/// to ensure dictionary IDs are consistent between schema and batches.
+pub fn encode_schema(
+    schema: &Schema,
+    tracker: &mut arrow_ipc::writer::DictionaryTracker,
+) -> Result<Vec<u8>, String> {
     let mut buffer = Vec::new();
     let data_gen = IpcDataGenerator::default();
     let options = IpcWriteOptions::default();
-    let mut tracker = arrow_ipc::writer::DictionaryTracker::new(false);
 
-    let encoded = data_gen.schema_to_bytes_with_dictionary_tracker(schema, &mut tracker, &options);
+    let encoded = data_gen.schema_to_bytes_with_dictionary_tracker(schema, tracker, &options);
     write_message(&mut buffer, encoded, &options)
         .map_err(|e| format!("Failed to write schema message: {e}"))?;
     Ok(buffer)
@@ -242,8 +247,13 @@ pub async fn stream_query_handler(
             }
         };
 
+        // Track dictionaries and compression across schema and batches
+        // Must use same tracker for schema and batches to ensure dictionary IDs align
+        let mut dict_tracker = arrow_ipc::writer::DictionaryTracker::new(false);
+        let mut compression = CompressionContext::default();
+
         // Encode and send schema
-        let schema_bytes = match encode_schema(&schema) {
+        let schema_bytes = match encode_schema(&schema, &mut dict_tracker) {
             Ok(bytes) => bytes,
             Err(e) => {
                 yield Ok(json_line(&ErrorFrame {
@@ -260,10 +270,6 @@ pub async fn stream_query_handler(
             size: schema_bytes.len(),
         }));
         yield Ok(Bytes::from(schema_bytes));
-
-        // Track dictionaries and compression across batches
-        let mut dict_tracker = arrow_ipc::writer::DictionaryTracker::new(false);
-        let mut compression = CompressionContext::default();
 
         // Helper to encode and yield a batch
         macro_rules! yield_batch {
