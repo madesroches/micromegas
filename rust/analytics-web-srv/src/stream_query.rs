@@ -4,6 +4,7 @@
 //! Uses a JSON-framed protocol for the frontend to parse.
 
 use crate::auth::AuthToken;
+use anyhow::{Context, Result};
 use arrow_ipc::writer::{CompressionContext, IpcDataGenerator, IpcWriteOptions, write_message};
 use async_stream::stream;
 use axum::{
@@ -110,14 +111,13 @@ pub fn substitute_macros(sql: &str, params: &HashMap<String, String>) -> String 
 pub fn encode_schema(
     schema: &Schema,
     tracker: &mut arrow_ipc::writer::DictionaryTracker,
-) -> Result<Vec<u8>, String> {
+) -> Result<Vec<u8>> {
     let mut buffer = Vec::new();
     let data_gen = IpcDataGenerator::default();
     let options = IpcWriteOptions::default();
 
     let encoded = data_gen.schema_to_bytes_with_dictionary_tracker(schema, tracker, &options);
-    write_message(&mut buffer, encoded, &options)
-        .map_err(|e| format!("Failed to write schema message: {e}"))?;
+    write_message(&mut buffer, encoded, &options).context("writing schema message")?;
     Ok(buffer)
 }
 
@@ -126,24 +126,22 @@ pub fn encode_batch(
     batch: &datafusion::arrow::array::RecordBatch,
     tracker: &mut arrow_ipc::writer::DictionaryTracker,
     compression: &mut CompressionContext,
-) -> Result<Vec<u8>, String> {
+) -> Result<Vec<u8>> {
     let mut buffer = Vec::new();
     let data_gen = IpcDataGenerator::default();
     let options = IpcWriteOptions::default();
 
     let (encoded_dicts, encoded_batch) = data_gen
         .encode(batch, tracker, &options, compression)
-        .map_err(|e| format!("Failed to encode batch: {e}"))?;
+        .context("encoding batch")?;
 
     // Write dictionary batches first (if any)
     for dict in encoded_dicts {
-        write_message(&mut buffer, dict, &options)
-            .map_err(|e| format!("Failed to write dictionary message: {e}"))?;
+        write_message(&mut buffer, dict, &options).context("writing dictionary message")?;
     }
 
     // Write the main batch
-    write_message(&mut buffer, encoded_batch, &options)
-        .map_err(|e| format!("Failed to write batch message: {e}"))?;
+    write_message(&mut buffer, encoded_batch, &options).context("writing batch message")?;
 
     Ok(buffer)
 }
@@ -259,7 +257,7 @@ pub async fn stream_query_handler(
                 yield Ok(json_line(&ErrorFrame {
                     frame_type: "error",
                     code: ErrorCode::Internal,
-                    message: e,
+                    message: format!("{e:#}"),
                 }));
                 return;
             }
@@ -280,7 +278,7 @@ pub async fn stream_query_handler(
                         yield Ok(json_line(&ErrorFrame {
                             frame_type: "error",
                             code: ErrorCode::Internal,
-                            message: e,
+                            message: format!("{e:#}"),
                         }));
                         return;
                     }
