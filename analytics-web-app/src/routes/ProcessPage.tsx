@@ -124,6 +124,7 @@ function ProcessPageContent() {
         }
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- Only react to completion/error, not the full hook object
   }, [processQuery.isComplete, processQuery.error])
 
   useEffect(() => {
@@ -141,6 +142,7 @@ function ProcessPageContent() {
         }
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- Only react to completion/error, not the full hook object
   }, [statsQuery.isComplete, statsQuery.error])
 
   useEffect(() => {
@@ -165,6 +167,7 @@ function ProcessPageContent() {
     } else if (propertiesQuery.error) {
       setPropertiesError(propertiesQuery.error.message)
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- Only react to completion/error, not the full hook object
   }, [propertiesQuery.isComplete, propertiesQuery.error])
 
   const processExecuteRef = useRef(processQuery.execute)

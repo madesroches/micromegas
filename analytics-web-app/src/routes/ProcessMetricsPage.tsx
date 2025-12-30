@@ -133,6 +133,7 @@ function ProcessMetricsContent() {
       }
       setDiscoveryDone(true)
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- Only react to completion/error, not the full hook object
   }, [discoveryQuery.isComplete, discoveryQuery.error, selectedMeasure])
 
   // Extract chart data from data query
@@ -154,6 +155,7 @@ function ProcessMetricsContent() {
         setHasLoaded(true)
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- Only react to completion/error, not the full hook object
   }, [dataQuery.isComplete, dataQuery.error])
 
   // Extract process exe from process query
@@ -167,6 +169,7 @@ function ProcessMetricsContent() {
         }
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- Only react to completion/error, not the full hook object
   }, [processQuery.isComplete, processQuery.error])
 
   const discoveryExecuteRef = useRef(discoveryQuery.execute)

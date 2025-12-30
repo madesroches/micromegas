@@ -233,6 +233,7 @@ function ProcessLogContent() {
         setHasLoaded(true)
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- Only react to completion/error, not the full hook object
   }, [streamQuery.isComplete, streamQuery.error])
 
   const executeRef = useRef(streamQuery.execute)
