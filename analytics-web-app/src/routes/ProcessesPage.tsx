@@ -11,6 +11,7 @@ import { useStreamQuery } from '@/hooks/useStreamQuery'
 import { useTimeRange } from '@/hooks/useTimeRange'
 import { useDebounce } from '@/hooks/useDebounce'
 import { formatTimestamp, formatDuration } from '@/lib/time-range'
+import { timestampToDate } from '@/lib/arrow-utils'
 
 type SortField = 'exe' | 'start_time' | 'last_update_time' | 'runtime' | 'username' | 'computer'
 type SortDirection = 'asc' | 'desc'
@@ -298,6 +299,10 @@ function ProcessesPageContent() {
                     const lastUpdateTime = row.last_update_time
                     const username = String(row.username ?? '')
                     const computer = String(row.computer ?? '')
+                    const startDate = timestampToDate(startTime)
+                    const endDate = timestampToDate(lastUpdateTime)
+                    const fromParam = startDate?.toISOString() ?? ''
+                    const toParam = endDate?.toISOString() ?? ''
                     return (
                       <tr
                         key={processId}
@@ -305,7 +310,7 @@ function ProcessesPageContent() {
                       >
                         <td className="px-4 py-3">
                           <AppLink
-                            href={`/process?id=${processId}&from=${encodeURIComponent(String(startTime))}&to=${encodeURIComponent(String(lastUpdateTime))}`}
+                            href={`/process?id=${processId}&from=${encodeURIComponent(fromParam)}&to=${encodeURIComponent(toParam)}`}
                             className="text-accent-link hover:underline"
                           >
                             {exe}
