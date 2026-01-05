@@ -4,7 +4,6 @@ use crate::scope::ScopeDesc;
 use anyhow::{Context, Result};
 use micromegas_telemetry::blob_storage::BlobStorage;
 use micromegas_tracing::prelude::*;
-use micromegas_tracing::warn;
 use micromegas_transit::value::{Object, Value};
 use std::sync::Arc;
 
@@ -128,5 +127,9 @@ pub async fn parse_thread_block<Proc: ThreadBlockProcessor>(
         .hyphenated()
         .encode_lower(&mut sqlx::types::uuid::Uuid::encode_buffer())
         .to_owned();
+    info!(
+        "parse_thread_block stream_id={} block_id={block_id_str}",
+        stream.stream_id
+    );
     parse_thread_block_payload(&block_id_str, object_offset, &payload, stream, processor)
 }
