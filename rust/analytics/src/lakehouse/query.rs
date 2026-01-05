@@ -208,8 +208,9 @@ pub async fn make_session_context(
     // Disable page index reading for backward compatibility with legacy Parquet files
     // Legacy files may have incomplete ColumnIndex metadata (missing null_pages field)
     // which causes errors in DataFusion 51+ with Arrow 57.0 when reading page indexes
-    let config =
-        SessionConfig::default().set_bool("datafusion.execution.parquet.enable_page_index", false);
+    let config = SessionConfig::default()
+        .set_bool("datafusion.execution.parquet.enable_page_index", false)
+        .with_information_schema(true);
     let ctx = SessionContext::new_with_config_rt(config, lakehouse.runtime().clone());
     if let Some(range) = &query_range {
         ctx.add_analyzer_rule(Arc::new(TableScanRewrite::new(*range)));
