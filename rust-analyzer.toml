@@ -1,0 +1,2 @@
+# Tell rust-analyzer where the Cargo workspace is located
+linkedProjects = ["rust/Cargo.toml"]
