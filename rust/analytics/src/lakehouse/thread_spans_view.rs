@@ -83,6 +83,8 @@ async fn append_call_tree(
     blob_storage: Arc<BlobStorage>,
     stream: &crate::metadata::StreamMetadata,
 ) -> Result<()> {
+    let block_ids: Vec<_> = blocks.iter().map(|b| b.block_id).collect();
+    info!("append_call_tree block_ids={block_ids:?}");
     let call_tree = make_call_tree(
         blocks,
         convert_ticks.delta_ticks_to_ns(blocks[0].begin_ticks),
