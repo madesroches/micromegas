@@ -1,5 +1,6 @@
 use super::{
-    answer::Answer, get_payload_function::GetPayload, lakehouse_context::LakehouseContext,
+    answer::Answer, delete_duplicate_blocks_udf::make_delete_duplicate_blocks_udf,
+    get_payload_function::GetPayload, lakehouse_context::LakehouseContext,
     list_partitions_table_function::ListPartitionsTableFunction,
     list_view_sets_table_function::ListViewSetsTableFunction,
     materialize_partitions_table_function::MaterializePartitionsTableFunction,
@@ -158,6 +159,9 @@ pub fn register_lakehouse_functions(
     ctx.register_udf(make_retire_partition_by_file_udf(lakehouse.lake().clone()).into_scalar_udf());
     ctx.register_udf(
         make_retire_partition_by_metadata_udf(lakehouse.lake().clone()).into_scalar_udf(),
+    );
+    ctx.register_udf(
+        make_delete_duplicate_blocks_udf(lakehouse.lake().clone(), query_range).into_scalar_udf(),
     );
 }
 
