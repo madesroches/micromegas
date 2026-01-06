@@ -50,22 +50,30 @@ impl WebIngestionService {
         debug!("recording block_id={block_id} stream_id={stream_id} process_id={process_id}");
         let begin_insert = now();
         let insert_time = sqlx::types::chrono::Utc::now();
-        sqlx::query("INSERT INTO blocks VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11);")
-            .bind(block_id)
-            .bind(stream_id)
-            .bind(process_id)
-            .bind(begin_time)
-            .bind(block.begin_ticks)
-            .bind(end_time)
-            .bind(block.end_ticks)
-            .bind(block.nb_objects)
-            .bind(block.object_offset)
-            .bind(payload_size as i64)
-            .bind(insert_time)
-            .execute(&self.lake.db_pool)
-            .await
-            .with_context(|| "inserting into blocks")?;
+        let result = sqlx::query(
+            "INSERT INTO blocks
+             SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11
+             WHERE NOT EXISTS (SELECT 1 FROM blocks WHERE block_id = $1);",
+        )
+        .bind(block_id)
+        .bind(stream_id)
+        .bind(process_id)
+        .bind(begin_time)
+        .bind(block.begin_ticks)
+        .bind(end_time)
+        .bind(block.end_ticks)
+        .bind(block.nb_objects)
+        .bind(block.object_offset)
+        .bind(payload_size as i64)
+        .bind(insert_time)
+        .execute(&self.lake.db_pool)
+        .await
+        .with_context(|| "inserting into blocks")?;
         imetric!("insert_duration", "ticks", (now() - begin_insert) as u64);
+
+        if result.rows_affected() == 0 {
+            debug!("duplicate block_id={block_id} skipped (already exists)");
+        }
         // this measure does not benefit from a dynamic property - I just want to make sure the feature works well
         // the cost in this context should be reasonnable
         imetric!(

@@ -1,5 +1,9 @@
 # Plan: Prevent Duplicate Block Insertion
 
+## Status: IMPLEMENTED
+
+Implemented in `rust/ingestion/src/web_ingestion_service.rs:50-76`.
+
 ## Background
 
 The `delete_duplicate_blocks` UDF was added (commit `0bddf5be6`) to clean up existing duplicates in the blocks table. However, the root cause of duplicate insertion remains - new duplicates can still be added.
