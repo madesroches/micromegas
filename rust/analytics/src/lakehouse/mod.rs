@@ -18,6 +18,8 @@ pub mod blocks_view;
 /// Catalog utilities for discovering and managing view schemas
 pub mod catalog;
 pub mod dataframe_time_bounds;
+/// Scalar UDF to delete duplicate blocks
+pub mod delete_duplicate_blocks_udf;
 /// Export mechanism that doubles as audit trail
 pub mod export_log_view;
 /// Fetch payload from the object store using SQL

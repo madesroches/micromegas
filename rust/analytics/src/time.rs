@@ -11,7 +11,7 @@ use crate::metadata::ProcessMetadata;
 const NANOS_PER_SEC: f64 = 1000.0 * 1000.0 * 1000.0;
 
 /// A time range, with a beginning and an end.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct TimeRange {
     pub begin: DateTime<Utc>,
     pub end: DateTime<Utc>,
