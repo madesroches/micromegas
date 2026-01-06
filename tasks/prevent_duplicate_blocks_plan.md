@@ -2,11 +2,11 @@
 
 ## Status
 
-| Table     | Status      | Location                                           |
-|-----------|-------------|----------------------------------------------------|
-| blocks    | IMPLEMENTED | `rust/ingestion/src/web_ingestion_service.rs:53-76` |
-| streams   | PENDING     | `rust/ingestion/src/web_ingestion_service.rs:93-103` |
-| processes | PENDING     | `rust/ingestion/src/web_ingestion_service.rs:113-129` |
+| Table     | Status      | Location                                             |
+|-----------|-------------|------------------------------------------------------|
+| blocks    | IMPLEMENTED | `rust/ingestion/src/web_ingestion_service.rs:53-76`  |
+| streams   | IMPLEMENTED | `rust/ingestion/src/web_ingestion_service.rs:101-122`|
+| processes | IMPLEMENTED | `rust/ingestion/src/web_ingestion_service.rs:132-159`|
 
 ## Background
 
@@ -40,7 +40,7 @@ sqlx::query(
 )
 ```
 
-### Streams (PENDING)
+### Streams (IMPLEMENTED)
 
 Location: `rust/ingestion/src/web_ingestion_service.rs:93-103`
 
@@ -65,7 +65,7 @@ if result.rows_affected() == 0 {
 }
 ```
 
-### Processes (PENDING)
+### Processes (IMPLEMENTED)
 
 Location: `rust/ingestion/src/web_ingestion_service.rs:113-129`
 

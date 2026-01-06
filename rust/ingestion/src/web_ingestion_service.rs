@@ -98,17 +98,28 @@ impl WebIngestionService {
             "new stream {} {:?} {:?}",
             stream_info.stream_id, &stream_info.tags, &stream_info.properties
         );
-        sqlx::query("INSERT INTO streams VALUES($1,$2,$3,$4,$5,$6,$7);")
-            .bind(stream_info.stream_id)
-            .bind(stream_info.process_id)
-            .bind(encode_cbor(&stream_info.dependencies_metadata)?)
-            .bind(encode_cbor(&stream_info.objects_metadata)?)
-            .bind(&stream_info.tags)
-            .bind(make_properties(&stream_info.properties))
-            .bind(sqlx::types::chrono::Utc::now())
-            .execute(&self.lake.db_pool)
-            .await
-            .with_context(|| "inserting into streams")?;
+        let result = sqlx::query(
+            "INSERT INTO streams
+             SELECT $1,$2,$3,$4,$5,$6,$7
+             WHERE NOT EXISTS (SELECT 1 FROM streams WHERE stream_id = $1);",
+        )
+        .bind(stream_info.stream_id)
+        .bind(stream_info.process_id)
+        .bind(encode_cbor(&stream_info.dependencies_metadata)?)
+        .bind(encode_cbor(&stream_info.objects_metadata)?)
+        .bind(&stream_info.tags)
+        .bind(make_properties(&stream_info.properties))
+        .bind(sqlx::types::chrono::Utc::now())
+        .execute(&self.lake.db_pool)
+        .await
+        .with_context(|| "inserting into streams")?;
+
+        if result.rows_affected() == 0 {
+            debug!(
+                "duplicate stream_id={} skipped (already exists)",
+                stream_info.stream_id
+            );
+        }
         Ok(())
     }
 
@@ -118,23 +129,34 @@ impl WebIngestionService {
             ciborium::from_reader(body.reader()).with_context(|| "parsing ProcessInfo")?;
 
         let insert_time = sqlx::types::chrono::Utc::now();
-        sqlx::query("INSERT INTO processes VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13);")
-            .bind(process_info.process_id)
-            .bind(process_info.exe)
-            .bind(process_info.username)
-            .bind(process_info.realname)
-            .bind(process_info.computer)
-            .bind(process_info.distro)
-            .bind(process_info.cpu_brand)
-            .bind(process_info.tsc_frequency)
-            .bind(process_info.start_time)
-            .bind(process_info.start_ticks)
-            .bind(insert_time)
-            .bind(process_info.parent_process_id)
-            .bind(make_properties(&process_info.properties))
-            .execute(&self.lake.db_pool)
-            .await
-            .with_context(|| "executing sql insert into processes")?;
+        let result = sqlx::query(
+            "INSERT INTO processes
+             SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13
+             WHERE NOT EXISTS (SELECT 1 FROM processes WHERE process_id = $1);",
+        )
+        .bind(process_info.process_id)
+        .bind(process_info.exe)
+        .bind(process_info.username)
+        .bind(process_info.realname)
+        .bind(process_info.computer)
+        .bind(process_info.distro)
+        .bind(process_info.cpu_brand)
+        .bind(process_info.tsc_frequency)
+        .bind(process_info.start_time)
+        .bind(process_info.start_ticks)
+        .bind(insert_time)
+        .bind(process_info.parent_process_id)
+        .bind(make_properties(&process_info.properties))
+        .execute(&self.lake.db_pool)
+        .await
+        .with_context(|| "executing sql insert into processes")?;
+
+        if result.rows_affected() == 0 {
+            debug!(
+                "duplicate process_id={} skipped (already exists)",
+                process_info.process_id
+            );
+        }
         Ok(())
     }
 }
