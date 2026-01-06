@@ -100,7 +100,11 @@ impl AsyncScalarUDFImpl for DeleteDuplicateBlocks {
                 DataFusionError::Execution(format!("Failed to begin transaction: {e}"))
             })?;
 
-        // Delete duplicates, keeping the row with the earliest insert_time for each block_id
+        // Delete duplicates, keeping the row with the earliest insert_time for each block_id.
+        // Note: The time range is used to identify block_ids that have duplicates, but once
+        // identified, ALL duplicate rows for that block_id are deleted regardless of their
+        // insert_time. This ensures complete cleanup of duplicates even if some copies
+        // exist outside the query range.
         let delete_result = sqlx::query(
             "WITH dups AS (
                 SELECT block_id, MIN(insert_time) as keep_time
