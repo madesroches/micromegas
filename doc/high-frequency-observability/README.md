@@ -4,11 +4,11 @@ Micromegas presentation: "Cost-Efficient Telemetry at Scale"
 
 **Live version:** https://madesroches.github.io/micromegas/high-frequency-observability/
 
-Built with Reveal.js, Ayu Dark theme, and Mermaid diagrams.
+Built with Reveal.js, Micromegas brand theme, and Mermaid diagrams.
 
 ## Features
 
-- **Ayu Dark Theme** - Developer-friendly color scheme optimized for code
+- **Micromegas Brand Theme** - Rust Earth Palette inspired by Van Gogh's "Wheatfield with Crows"
 - **Mermaid Diagrams** - Architecture flow diagrams for ingestion and analytics
 - **Code Examples** - Real Rust and Unreal Engine instrumentation code
 - **Vertical Navigation** - Code examples nested under Stage 1 (press down to navigate)
@@ -60,7 +60,7 @@ high-frequency-observability/
 │   ├── slides/
 │   │   └── presentation.md      # Presentation content
 │   ├── themes/
-│   │   └── ayu-dark.css        # Ayu Dark theme (bold text in blue)
+│   │   └── micromegas.css      # Micromegas brand theme
 │   ├── media/                  # Screenshots (Grafana, Perfetto)
 │   └── main.js                 # Reveal.js + Mermaid plugin config
 ├── dist/                       # Build output (gitignored)
@@ -90,14 +90,19 @@ The presentation covers:
 
 ### Mermaid Diagrams
 
-Architecture flows use Mermaid with dark theme styling:
+Architecture flows use Mermaid with brand colors:
 ```markdown
 \`\`\`mermaid
 graph LR
     Apps[Client] --> Server
-    style Apps fill:#2d2d2d,stroke:#4a9eff,color:#e6e6e6
+    style Apps fill:#1a1a2e,stroke:#bf360c,color:#e0e0e0
 \`\`\`
 ```
+
+Brand colors used:
+- Rust Orange: `#bf360c`
+- Cobalt Blue: `#1565c0`
+- Wheat: `#ffb300`
 
 ## Build Commands
 
