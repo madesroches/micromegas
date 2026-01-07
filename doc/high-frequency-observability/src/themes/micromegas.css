@@ -636,3 +636,29 @@
 .reveal .brand-ring-rust { stroke: var(--color-rust); }
 .reveal .brand-ring-cobalt { stroke: var(--color-cobalt); }
 .reveal .brand-ring-wheat { stroke: var(--color-wheat); }
+
+/*********************************************
+ * SIDEBAR BRANDING
+ *********************************************/
+
+.reveal-viewport::after {
+  content: '';
+  position: fixed;
+  left: 10px;
+  top: 2%;
+  bottom: 2%;
+  width: 120px;
+  background-image: url('../../media/micromegas-vertical-sidebar.svg');
+  background-size: contain;
+  background-repeat: no-repeat;
+  background-position: center;
+  opacity: 0.4;
+  pointer-events: none;
+  z-index: 1;
+  transition: opacity 0.3s ease;
+}
+
+/* Hide sidebar on title slide */
+.reveal-viewport.title-slide::after {
+  opacity: 0;
+}

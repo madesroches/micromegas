@@ -1,3 +1,4 @@
+<!-- .slide: data-state="title-slide" -->
 <img src="./micromegas-vertical-compact.svg" alt="micromegas" class="plain" style="height: 340px; margin: 0;">
 
 ## Unified Observability for Video Games
