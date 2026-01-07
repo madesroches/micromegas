@@ -3394,6 +3394,7 @@ dependencies = [
  "micromegas-telemetry",
  "micromegas-tracing",
  "sqlx",
+ "thiserror 2.0.17",
 ]
 
 [[package]]
