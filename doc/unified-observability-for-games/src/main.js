@@ -4,7 +4,6 @@ import Highlight from 'reveal.js/plugin/highlight/highlight.esm.js';
 import Notes from 'reveal.js/plugin/notes/notes.esm.js';
 import Search from 'reveal.js/plugin/search/search.esm.js';
 import Zoom from 'reveal.js/plugin/zoom/zoom.esm.js';
-import RevealMermaid from 'reveal.js-mermaid-plugin';
 
 // Initialize Reveal.js with basic configuration
 let deck = new Reveal({
@@ -25,8 +24,7 @@ let deck = new Reveal({
         Highlight,
         Notes,
         Search,
-        Zoom,
-        RevealMermaid
+        Zoom
     ]
 });
 
