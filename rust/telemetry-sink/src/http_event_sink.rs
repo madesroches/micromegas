@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use micromegas_telemetry::stream_info::StreamInfo;
 use micromegas_telemetry::wire_format::encode_cbor;
 use micromegas_tracing::{
@@ -19,10 +19,41 @@ use std::{
     sync::atomic::{AtomicIsize, Ordering},
     time::Duration,
 };
+use tokio_retry2::RetryError;
 
 use crate::request_decorator::RequestDecorator;
 use crate::stream_block::StreamBlock;
 use crate::stream_info::make_stream_info;
+
+/// Error type for ingestion client operations.
+/// Explicitly categorizes errors to control retry behavior.
+#[derive(Debug)]
+enum IngestionClientError {
+    /// Transient error - should retry (network issues, 5xx responses)
+    Transient(String),
+    /// Permanent error - should NOT retry (4xx responses, malformed data)
+    Permanent(String),
+}
+
+impl std::fmt::Display for IngestionClientError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            IngestionClientError::Transient(msg) => write!(f, "transient error: {msg}"),
+            IngestionClientError::Permanent(msg) => write!(f, "permanent error: {msg}"),
+        }
+    }
+}
+
+impl std::error::Error for IngestionClientError {}
+
+impl IngestionClientError {
+    fn into_retry(self) -> RetryError<Self> {
+        match self {
+            IngestionClientError::Transient(_) => RetryError::transient(self),
+            IngestionClientError::Permanent(_) => RetryError::permanent(self),
+        }
+    }
+}
 
 #[derive(Debug)]
 enum SinkEvent {
@@ -125,38 +156,45 @@ impl HttpEventSink {
         process_info: Arc<ProcessInfo>,
         retry_strategy: core::iter::Take<tokio_retry2::strategy::ExponentialBackoff>,
         decorator: &dyn RequestDecorator,
-    ) -> Result<()> {
+    ) -> Result<(), IngestionClientError> {
         debug!("sending process {process_info:?}");
         let url = format!("{root_path}/ingestion/insert_process");
         tokio_retry2::Retry::spawn(retry_strategy, || async {
-            let body = encode_cbor(&*process_info)?;
-            let mut request = client
-                .post(&url)
-                .body(body)
-                .build()
-                .with_context(|| "building request")?;
+            let body = encode_cbor(&*process_info).map_err(|e| {
+                IngestionClientError::Permanent(format!("encoding process: {e}")).into_retry()
+            })?;
+            let mut request = client.post(&url).body(body).build().map_err(|e| {
+                IngestionClientError::Transient(format!("building request: {e}")).into_retry()
+            })?;
 
-            if let Err(e) = decorator
-                .decorate(&mut request)
-                .await
-                .with_context(|| "decorating request")
-            {
+            if let Err(e) = decorator.decorate(&mut request).await {
                 warn!("request decorator: {e:?}");
-                return Err(e.into());
-            }
-            let result = client
-                .execute(request)
-                .await
-                .with_context(|| "executing request");
-            if let Err(e) = &result {
-                debug!("insert_process error: {e:?}");
+                return Err(
+                    IngestionClientError::Transient(format!("decorating request: {e}"))
+                        .into_retry(),
+                );
             }
 
-            // Implicit error conversion. Result type needs to be `Result<T,RetryError<E>>` and not `Result<T,E>`, so using `?` or `map_transient_err` are the best ways to do it.
-            Ok(result?)
+            let response = client.execute(request).await.map_err(|e| {
+                IngestionClientError::Transient(format!("network error: {e}")).into_retry()
+            })?;
+
+            let status = response.status();
+            match status.as_u16() {
+                200..=299 => Ok(()),
+                400..=499 => {
+                    let body = response.text().await.unwrap_or_default();
+                    warn!("insert_process client error ({status}): {body}");
+                    Err(IngestionClientError::Permanent(body).into_retry())
+                }
+                _ => {
+                    let body = response.text().await.unwrap_or_default();
+                    debug!("insert_process server error ({status}): {body}");
+                    Err(IngestionClientError::Transient(format!("{status}: {body}")).into_retry())
+                }
+            }
         })
-        .await?;
-        Ok(())
+        .await
     }
 
     #[span_fn]
@@ -166,30 +204,44 @@ impl HttpEventSink {
         stream_info: Arc<StreamInfo>,
         retry_strategy: core::iter::Take<tokio_retry2::strategy::ExponentialBackoff>,
         decorator: &dyn RequestDecorator,
-    ) -> Result<()> {
+    ) -> Result<(), IngestionClientError> {
         let url = format!("{root_path}/ingestion/insert_stream");
         tokio_retry2::Retry::spawn(retry_strategy, || async {
-            let body = encode_cbor(&*stream_info)?;
-            let mut request = client
-                .post(&url)
-                .body(body)
-                .build()
-                .with_context(|| "building request")?;
+            let body = encode_cbor(&*stream_info).map_err(|e| {
+                IngestionClientError::Permanent(format!("encoding stream: {e}")).into_retry()
+            })?;
+            let mut request = client.post(&url).body(body).build().map_err(|e| {
+                IngestionClientError::Transient(format!("building request: {e}")).into_retry()
+            })?;
+
             if let Err(e) = decorator.decorate(&mut request).await {
                 warn!("request decorator: {e:?}");
-                return Err(e.into());
+                return Err(
+                    IngestionClientError::Transient(format!("decorating request: {e}"))
+                        .into_retry(),
+                );
             }
-            let result = client
-                .execute(request)
-                .await
-                .with_context(|| "executing request");
-            if let Err(e) = &result {
-                debug!("insert_stream error: {e}");
+
+            let response = client.execute(request).await.map_err(|e| {
+                IngestionClientError::Transient(format!("network error: {e}")).into_retry()
+            })?;
+
+            let status = response.status();
+            match status.as_u16() {
+                200..=299 => Ok(()),
+                400..=499 => {
+                    let body = response.text().await.unwrap_or_default();
+                    warn!("insert_stream client error ({status}): {body}");
+                    Err(IngestionClientError::Permanent(body).into_retry())
+                }
+                _ => {
+                    let body = response.text().await.unwrap_or_default();
+                    debug!("insert_stream server error ({status}): {body}");
+                    Err(IngestionClientError::Transient(format!("{status}: {body}")).into_retry())
+                }
             }
-            Ok(result?)
         })
-        .await?;
-        Ok(())
+        .await
     }
 
     #[span_fn]
@@ -203,7 +255,7 @@ impl HttpEventSink {
         retry_strategy: core::iter::Take<tokio_retry2::strategy::ExponentialBackoff>,
         decorator: &dyn RequestDecorator,
         process_info: &ProcessInfo,
-    ) -> Result<()> {
+    ) -> Result<(), IngestionClientError> {
         trace!("push_block");
         if current_queue_size.load(Ordering::Relaxed) >= max_queue_size {
             // could be better to have a budget for each block type
@@ -211,40 +263,52 @@ impl HttpEventSink {
             debug!("dropping data, queue over max_queue_size");
             return Ok(());
         }
-        let encoded_block: bytes::Bytes = buffer.encode_bin(process_info)?.into();
+        let encoded_block: bytes::Bytes = buffer
+            .encode_bin(process_info)
+            .map_err(|e| IngestionClientError::Permanent(format!("encoding block: {e}")))?
+            .into();
 
         let url = format!("{root_path}/ingestion/insert_block");
 
-        if let Err(err) = tokio_retry2::Retry::spawn(retry_strategy, || async {
+        tokio_retry2::Retry::spawn(retry_strategy, || async {
             let mut request = client
                 .post(&url)
                 .body(encoded_block.clone())
                 .build()
-                .with_context(|| "building request")?;
+                .map_err(|e| {
+                    IngestionClientError::Transient(format!("building request: {e}")).into_retry()
+                })?;
 
-            if let Err(e) = decorator
-                .decorate(&mut request)
-                .await
-                .with_context(|| "decorating request")
-            {
+            if let Err(e) = decorator.decorate(&mut request).await {
                 debug!("request decorator: {e:?}");
-                return Err(e.into());
+                return Err(
+                    IngestionClientError::Transient(format!("decorating request: {e}"))
+                        .into_retry(),
+                );
             }
 
             trace!("push_block: executing request");
 
-            client
-                .execute(request)
-                .await
-                .with_context(|| "executing request")
-                .map_err(Into::into)
+            let response = client.execute(request).await.map_err(|e| {
+                IngestionClientError::Transient(format!("network error: {e}")).into_retry()
+            })?;
+
+            let status = response.status();
+            match status.as_u16() {
+                200..=299 => Ok(()),
+                400..=499 => {
+                    let body = response.text().await.unwrap_or_default();
+                    warn!("insert_block client error ({status}): {body}");
+                    Err(IngestionClientError::Permanent(body).into_retry())
+                }
+                _ => {
+                    let body = response.text().await.unwrap_or_default();
+                    debug!("insert_block server error ({status}): {body}");
+                    Err(IngestionClientError::Transient(format!("{status}: {body}")).into_retry())
+                }
+            }
         })
         .await
-        {
-            warn!("failed to push block: {err}");
-        }
-
-        Ok(())
     }
 
     #[expect(clippy::too_many_arguments)]
@@ -258,25 +322,24 @@ impl HttpEventSink {
         metadata_retry: core::iter::Take<tokio_retry2::strategy::ExponentialBackoff>,
         blocks_retry: core::iter::Take<tokio_retry2::strategy::ExponentialBackoff>,
         decorator: &dyn RequestDecorator,
-    ) -> Result<()> {
+    ) {
         match message {
             SinkEvent::Shutdown => {
                 // This should not happen in this function, but handle it gracefully
-                return Ok(());
             }
             SinkEvent::Startup(process_info) => {
                 *opt_process_info = Some(process_info.clone());
                 if let Err(e) =
                     Self::push_process(client, addr, process_info, metadata_retry, decorator).await
                 {
-                    error!("error sending process: {e:?}");
+                    error!("error sending process: {e}");
                 }
             }
             SinkEvent::InitStream(stream_info) => {
                 if let Err(e) =
                     Self::push_stream(client, addr, stream_info, metadata_retry, decorator).await
                 {
-                    error!("error sending stream: {e:?}");
+                    error!("error sending stream: {e}");
                 }
             }
             SinkEvent::ProcessLogBlock(buffer) => {
@@ -293,7 +356,7 @@ impl HttpEventSink {
                     )
                     .await
                     {
-                        error!("error sending log block: {e:?}");
+                        error!("error sending log block: {e}");
                     }
                 } else {
                     error!("trying to send blocks before Startup message");
@@ -313,7 +376,7 @@ impl HttpEventSink {
                     )
                     .await
                     {
-                        error!("error sending metrics block: {e:?}");
+                        error!("error sending metrics block: {e}");
                     }
                 } else {
                     error!("trying to send blocks before Startup message");
@@ -333,14 +396,13 @@ impl HttpEventSink {
                     )
                     .await
                     {
-                        error!("error sending thread block: {e:?}");
+                        error!("error sending thread block: {e}");
                     }
                 } else {
                     error!("trying to send blocks before Startup message");
                 }
             }
         }
-        Ok(())
     }
 
     #[expect(clippy::too_many_arguments)]
@@ -384,7 +446,7 @@ impl HttpEventSink {
                                 SinkEvent::Shutdown => break, // Don't process multiple shutdowns
                                 remaining_msg => {
                                     // Process the remaining message using the same logic as the main loop
-                                    if let Err(e) = Self::handle_sink_event(
+                                    Self::handle_sink_event(
                                         remaining_msg,
                                         &mut client,
                                         &addr,
@@ -395,12 +457,7 @@ impl HttpEventSink {
                                         blocks_retry.clone(),
                                         decorator,
                                     )
-                                    .await
-                                    {
-                                        error!(
-                                            "error processing remaining message during shutdown: {e:?}"
-                                        );
-                                    }
+                                    .await;
                                 }
                             }
                         }
@@ -416,7 +473,7 @@ impl HttpEventSink {
                         return;
                     }
                     other_message => {
-                        if let Err(e) = Self::handle_sink_event(
+                        Self::handle_sink_event(
                             other_message,
                             &mut client,
                             &addr,
@@ -427,10 +484,7 @@ impl HttpEventSink {
                             blocks_retry.clone(),
                             decorator,
                         )
-                        .await
-                        {
-                            error!("error handling sink event: {e:?}");
-                        }
+                        .await;
                     }
                 },
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
