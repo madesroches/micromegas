@@ -1,111 +1,166 @@
 # Reliable Ingestion Service - Error Code Plan
 
+## Status: IMPLEMENTED
+
 ## Goal
 
 Make the ingestion service return proper HTTP error codes when errors occur, enabling clients to implement reliable retry logic.
 
-## Current State
+## Implementation Summary
 
-The ingestion service handlers in `rust/public/src/servers/ingestion.rs` currently:
-- Return `void` (implicit 200 OK always)
-- Log errors but don't communicate them to clients
-- All three endpoints (`insert_process`, `insert_stream`, `insert_block`) have this issue
+### Changes Made
+
+1. **Created `IngestionServiceError` in `rust/ingestion/src/web_ingestion_service.rs`**:
+   - `ParseError` - for malformed input (maps to 400)
+   - `DatabaseError` - for SQL failures (maps to 500)
+   - `StorageError` - for blob storage failures (maps to 500)
+
+2. **Created `IngestionError` in `rust/public/src/servers/ingestion.rs`**:
+   - `BadRequest` - returns HTTP 400
+   - `Internal` - returns HTTP 500
+   - Implements `IntoResponse` for Axum
+   - Implements `From<IngestionServiceError>` for automatic conversion
+
+3. **Updated all handlers to return `Result<(), IngestionError>`**:
+   - `insert_process_request`
+   - `insert_stream_request`
+   - `insert_block_request`
+
+### Error Code Mapping
+
+| Scenario | HTTP Code | Error Type |
+|----------|-----------|------------|
+| Success | 200 OK | - |
+| Empty body | 400 Bad Request | `IngestionError::BadRequest` |
+| CBOR parse failure | 400 Bad Request | `IngestionServiceError::ParseError` |
+| DateTime parse failure | 400 Bad Request | `IngestionServiceError::ParseError` |
+| Database error | 500 Internal Server Error | `IngestionServiceError::DatabaseError` |
+| Blob storage error | 500 Internal Server Error | `IngestionServiceError::StorageError` |
+
+### Files Modified
+
+- `rust/ingestion/Cargo.toml` - Added `thiserror` dependency
+- `rust/ingestion/src/web_ingestion_service.rs` - Added `IngestionServiceError`, updated method signatures
+- `rust/public/src/servers/ingestion.rs` - Added `IngestionError`, updated handlers
+
+## Future Work: Client-Side Retry Logic
+
+The HTTP event sink (`rust/telemetry-sink/src/http_event_sink.rs`) already uses `tokio_retry2` for retry with exponential backoff, but it only retries on **connection errors** - it doesn't check HTTP status codes. A 400 or 500 response is currently treated as success.
+
+### Current Behavior
 
 ```rust
-// Current pattern - always returns 200 OK
-pub async fn insert_process_request(...) {
-    if let Err(e) = service.insert_process(body).await {
-        error!("Error in insert_process_request: {:?}", e);
-    }
-}
+// Current: retries only on network errors, ignores status codes
+client.execute(request).await.with_context(|| "executing request")
 ```
 
-## Why This Matters
+### Proposed Changes
 
-Since the service is already **idempotent** (duplicate inserts are handled gracefully), returning proper error codes allows clients to:
-- Retry on 5xx errors (server-side failures)
-- Stop retrying on 4xx errors (client-side issues like malformed data)
-- Implement exponential backoff strategies
+Add status code checking to distinguish between:
+- **2xx**: Success, no retry needed
+- **4xx**: Client error (bad data), **don't retry** - data is malformed
+- **5xx**: Server error, **retry** with backoff
 
-## Proposed Error Codes
+### Implementation Details
 
-| Scenario | HTTP Code | When |
-|----------|-----------|------|
-| Success | 200 OK | Insert succeeded |
-| Empty body | 400 Bad Request | Request body is empty |
-| CBOR parse failure | 400 Bad Request | Malformed request data |
-| Database error | 500 Internal Server Error | SQL insert failed |
-| Blob storage error | 500 Internal Server Error | Object store write failed |
-
-## Implementation Steps
-
-### Step 1: Create IngestionError type
-
-Add an error enum in `rust/public/src/servers/ingestion.rs` following the pattern from `http_gateway.rs`:
+#### Step 1: Create explicit error type for retry decisions
 
 ```rust
-#[derive(Error, Debug)]
-pub enum IngestionError {
-    #[error("Bad request: {0}")]
-    BadRequest(String),
+use tokio_retry2::RetryError;
 
-    #[error("Internal server error: {0}")]
-    Internal(String),
+enum IngestionClientError {
+    /// Transient error - should retry (network issues, 5xx responses)
+    Transient(String),
+    /// Permanent error - should NOT retry (4xx responses)
+    Permanent(String),
 }
 
-impl IntoResponse for IngestionError {
-    fn into_response(self) -> Response {
-        let (status, message) = match self {
-            IngestionError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
-            IngestionError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
-        };
-        (status, message).into_response()
-    }
-}
-```
-
-### Step 2: Update WebIngestionService error handling
-
-Modify `rust/ingestion/src/web_ingestion_service.rs` to return more specific error types that can be mapped to HTTP codes. Options:
-- Return a custom error enum instead of `anyhow::Result`
-- Add error categorization (client error vs server error)
-
-### Step 3: Update handlers to return Result
-
-Change handlers to return `Result<(), IngestionError>`:
-
-```rust
-pub async fn insert_process_request(
-    Extension(service): Extension<Arc<WebIngestionService>>,
-    body: bytes::Bytes,
-) -> Result<(), IngestionError> {
-    service.insert_process(body).await.map_err(|e| {
-        if is_parse_error(&e) {
-            IngestionError::BadRequest(e.to_string())
-        } else {
-            IngestionError::Internal(e.to_string())
+impl From<IngestionClientError> for RetryError<anyhow::Error> {
+    fn from(err: IngestionClientError) -> Self {
+        match err {
+            IngestionClientError::Transient(msg) => {
+                RetryError::transient(anyhow::anyhow!(msg))
+            }
+            IngestionClientError::Permanent(msg) => {
+                RetryError::permanent(anyhow::anyhow!(msg))
+            }
         }
-    })
+    }
 }
 ```
 
-### Step 4: Update client retry logic (optional)
+#### Step 2: Update push_process, push_stream, push_block
 
-The HTTP event sink in `rust/telemetry-sink/src/http_event_sink.rs` may need updates to:
-- Check response status codes
-- Implement retry logic for 5xx errors
-- Log and skip on 4xx errors
+```rust
+async fn push_block(...) -> Result<()> {
+    tokio_retry2::Retry::spawn(retry_strategy, || async {
+        let mut request = client.post(&url).body(encoded_block.clone()).build()
+            .map_err(|e| IngestionClientError::Transient(format!("building request: {e}")))?;
 
-## Files to Modify
+        // Decorator inside retry - token refresh may fix auth errors
+        if let Err(e) = decorator.decorate(&mut request).await {
+            warn!("request decorator: {e:?}");
+            return Err(IngestionClientError::Transient(format!("decorating request: {e}")));
+        }
 
-1. `rust/public/src/servers/ingestion.rs` - Add error types, update handlers
-2. `rust/ingestion/src/web_ingestion_service.rs` - Better error categorization
-3. `rust/telemetry-sink/src/http_event_sink.rs` - Client-side retry handling (optional)
+        let response = client.execute(request).await
+            .map_err(|e| IngestionClientError::Transient(format!("network error: {e}")))?;
 
-## Testing
+        match response.status().as_u16() {
+            200..=299 => Ok(()),
+            400..=499 => {
+                let body = response.text().await.unwrap_or_default();
+                warn!("client error ({}): {}", response.status(), body);
+                Err(IngestionClientError::Permanent(body))
+            }
+            _ => {
+                let status = response.status();
+                let body = response.text().await.unwrap_or_default();
+                debug!("server error ({}): {}", status, body);
+                Err(IngestionClientError::Transient(format!("{status}: {body}")))
+            }
+        }
+    }).await?;
+    Ok(())
+}
+```
 
-1. Unit tests for error type mapping
-2. Integration tests:
-   - Send malformed CBOR → expect 400
-   - Simulate DB failure → expect 500
-   - Valid request → expect 200
+#### Step 3: Handle permanent errors gracefully
+
+For permanent errors (4xx), the data should be logged and dropped rather than causing the whole sink to fail:
+
+```rust
+// In handle_sink_event:
+match Self::push_block(...).await {
+    Ok(()) => {}
+    Err(e) if is_permanent_error(&e) => {
+        // Log but don't propagate - data was malformed
+        warn!("dropping block due to client error: {e}");
+    }
+    Err(e) => {
+        // Transient error after all retries exhausted
+        error!("failed to push block after retries: {e}");
+    }
+}
+```
+
+### Retry Strategy Recommendations
+
+The current retry strategies are passed in from the caller. Recommended values:
+
+| Data Type | Strategy | Rationale |
+|-----------|----------|-----------|
+| Process/Stream metadata | 5 retries, 1s base, 30s max | Critical data, worth waiting for |
+| Blocks | 3 retries, 500ms base, 5s max | High volume, can tolerate some loss |
+
+### Files to Modify
+
+- `rust/telemetry-sink/src/http_event_sink.rs` - Add status code checking
+- `rust/telemetry-sink/src/lib.rs` - Export new error type if needed
+
+### Testing
+
+1. Mock server returning 400 → verify no retries, data dropped
+2. Mock server returning 500 then 200 → verify retry succeeds
+3. Mock server returning 500 always → verify retries exhaust then drops
+4. Network timeout → verify retries with backoff

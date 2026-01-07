@@ -1,6 +1,4 @@
 use crate::data_lake_connection::DataLakeConnection;
-use anyhow::Context;
-use anyhow::Result;
 use bytes::Buf;
 use micromegas_telemetry::block_wire_format;
 use micromegas_telemetry::property::make_properties;
@@ -8,6 +6,24 @@ use micromegas_telemetry::stream_info::StreamInfo;
 use micromegas_telemetry::wire_format::encode_cbor;
 use micromegas_tracing::prelude::*;
 use micromegas_tracing::property_set;
+use thiserror::Error;
+
+/// Error type for ingestion service operations.
+/// Categorizes errors to enable proper HTTP status code mapping.
+#[derive(Error, Debug)]
+pub enum IngestionServiceError {
+    /// Client-side errors (malformed input) - maps to 400 Bad Request
+    #[error("Parse error: {0}")]
+    ParseError(String),
+
+    /// Database errors - maps to 500 Internal Server Error
+    #[error("Database error: {0}")]
+    DatabaseError(String),
+
+    /// Object storage errors - maps to 500 Internal Server Error
+    #[error("Storage error: {0}")]
+    StorageError(String),
+}
 
 #[derive(Clone)]
 pub struct WebIngestionService {
@@ -20,10 +36,11 @@ impl WebIngestionService {
     }
 
     #[span_fn]
-    pub async fn insert_block(&self, body: bytes::Bytes) -> Result<()> {
+    pub async fn insert_block(&self, body: bytes::Bytes) -> Result<(), IngestionServiceError> {
         let block: block_wire_format::Block = ciborium::from_reader(body.reader())
-            .with_context(|| "parsing block_wire_format::Block")?;
-        let encoded_payload = encode_cbor(&block.payload)?;
+            .map_err(|e| IngestionServiceError::ParseError(format!("parsing block: {e}")))?;
+        let encoded_payload = encode_cbor(&block.payload)
+            .map_err(|e| IngestionServiceError::ParseError(format!("encoding payload: {e}")))?;
         let payload_size = encoded_payload.len();
 
         let process_id = &block.process_id;
@@ -34,16 +51,20 @@ impl WebIngestionService {
 
         use sqlx::types::chrono::{DateTime, FixedOffset};
         let begin_time = DateTime::<FixedOffset>::parse_from_rfc3339(&block.begin_time)
-            .with_context(|| "parsing begin_time")?;
+            .map_err(|e| IngestionServiceError::ParseError(format!("parsing begin_time: {e}")))?;
         let end_time = DateTime::<FixedOffset>::parse_from_rfc3339(&block.end_time)
-            .with_context(|| "parsing end_time")?;
+            .map_err(|e| IngestionServiceError::ParseError(format!("parsing end_time: {e}")))?;
         {
             let begin_put = now();
             self.lake
                 .blob_storage
                 .put(&obj_path, encoded_payload.into())
                 .await
-                .with_context(|| "Error writing block to blob storage")?;
+                .map_err(|e| {
+                    IngestionServiceError::StorageError(format!(
+                        "writing block to blob storage: {e}"
+                    ))
+                })?;
             imetric!("put_duration", "ticks", (now() - begin_put) as u64);
         }
 
@@ -68,7 +89,7 @@ impl WebIngestionService {
         .bind(insert_time)
         .execute(&self.lake.db_pool)
         .await
-        .with_context(|| "inserting into blocks")?;
+        .map_err(|e| IngestionServiceError::DatabaseError(format!("inserting into blocks: {e}")))?;
         imetric!("insert_duration", "ticks", (now() - begin_insert) as u64);
 
         if result.rows_affected() == 0 {
@@ -91,13 +112,20 @@ impl WebIngestionService {
     }
 
     #[span_fn]
-    pub async fn insert_stream(&self, body: bytes::Bytes) -> Result<()> {
-        let stream_info: StreamInfo =
-            ciborium::from_reader(body.reader()).with_context(|| "parsing StreamInfo")?;
+    pub async fn insert_stream(&self, body: bytes::Bytes) -> Result<(), IngestionServiceError> {
+        let stream_info: StreamInfo = ciborium::from_reader(body.reader())
+            .map_err(|e| IngestionServiceError::ParseError(format!("parsing StreamInfo: {e}")))?;
         info!(
             "new stream {} {:?} {:?}",
             stream_info.stream_id, &stream_info.tags, &stream_info.properties
         );
+        let dependencies_metadata =
+            encode_cbor(&stream_info.dependencies_metadata).map_err(|e| {
+                IngestionServiceError::ParseError(format!("encoding dependencies_metadata: {e}"))
+            })?;
+        let objects_metadata = encode_cbor(&stream_info.objects_metadata).map_err(|e| {
+            IngestionServiceError::ParseError(format!("encoding objects_metadata: {e}"))
+        })?;
         let result = sqlx::query(
             "INSERT INTO streams
              SELECT $1,$2,$3,$4,$5,$6,$7
@@ -105,14 +133,16 @@ impl WebIngestionService {
         )
         .bind(stream_info.stream_id)
         .bind(stream_info.process_id)
-        .bind(encode_cbor(&stream_info.dependencies_metadata)?)
-        .bind(encode_cbor(&stream_info.objects_metadata)?)
+        .bind(dependencies_metadata)
+        .bind(objects_metadata)
         .bind(&stream_info.tags)
         .bind(make_properties(&stream_info.properties))
         .bind(sqlx::types::chrono::Utc::now())
         .execute(&self.lake.db_pool)
         .await
-        .with_context(|| "inserting into streams")?;
+        .map_err(|e| {
+            IngestionServiceError::DatabaseError(format!("inserting into streams: {e}"))
+        })?;
 
         if result.rows_affected() == 0 {
             debug!(
@@ -124,9 +154,9 @@ impl WebIngestionService {
     }
 
     #[span_fn]
-    pub async fn insert_process(&self, body: bytes::Bytes) -> Result<()> {
-        let process_info: ProcessInfo =
-            ciborium::from_reader(body.reader()).with_context(|| "parsing ProcessInfo")?;
+    pub async fn insert_process(&self, body: bytes::Bytes) -> Result<(), IngestionServiceError> {
+        let process_info: ProcessInfo = ciborium::from_reader(body.reader())
+            .map_err(|e| IngestionServiceError::ParseError(format!("parsing ProcessInfo: {e}")))?;
 
         let insert_time = sqlx::types::chrono::Utc::now();
         let result = sqlx::query(
@@ -149,7 +179,9 @@ impl WebIngestionService {
         .bind(make_properties(&process_info.properties))
         .execute(&self.lake.db_pool)
         .await
-        .with_context(|| "executing sql insert into processes")?;
+        .map_err(|e| {
+            IngestionServiceError::DatabaseError(format!("inserting into processes: {e}"))
+        })?;
 
         if result.rows_affected() == 0 {
             debug!(
