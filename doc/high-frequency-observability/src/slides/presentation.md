@@ -1,9 +1,9 @@
-# Micromegas
+<!-- .slide: data-state="title-slide" -->
+<img src="./micromegas-vertical-compact.svg" alt="micromegas" class="plain" style="height: 340px; margin: 0;">
+
 ## Unified Observability for Video Games
 
-### Marc-Antoine Desroches
-#### madesroches@gmail.com
-#### [github.com/madesroches/micromegas](https://github.com/madesroches/micromegas)
+<p style="font-size: 0.6em;">Marc-Antoine Desroches · <a href="mailto:madesroches@gmail.com">madesroches@gmail.com</a><br><a href="https://github.com/madesroches/micromegas">github.com/madesroches/micromegas</a></p>
 
 ---
 
@@ -128,14 +128,14 @@ graph LR
     Ingestion --> PG
     Ingestion --> S3
 
-    style Rust fill:#2d2d2d,stroke:#4a9eff,stroke-width:2px,color:#e6e6e6
-    style Unreal fill:#2d2d2d,stroke:#4a9eff,stroke-width:2px,color:#e6e6e6
-    style Ingestion fill:#2d2d2d,stroke:#4a9eff,stroke-width:2px,color:#e6e6e6
-    style PG fill:#2d2d2d,stroke:#4a9eff,stroke-width:2px,color:#e6e6e6
-    style S3 fill:#2d2d2d,stroke:#4a9eff,stroke-width:2px,color:#e6e6e6
-    style Apps fill:none,stroke:#666,stroke-width:1px,color:#a6a6a6
-    style Ing fill:none,stroke:#666,stroke-width:1px,color:#a6a6a6
-    style Lake fill:none,stroke:#666,stroke-width:1px,color:#a6a6a6
+    style Rust fill:#1a1a2e,stroke:#bf360c,stroke-width:2px,color:#e0e0e0
+    style Unreal fill:#1a1a2e,stroke:#bf360c,stroke-width:2px,color:#e0e0e0
+    style Ingestion fill:#1a1a2e,stroke:#ffb300,stroke-width:2px,color:#e0e0e0
+    style PG fill:#1a1a2e,stroke:#1565c0,stroke-width:2px,color:#e0e0e0
+    style S3 fill:#1a1a2e,stroke:#1565c0,stroke-width:2px,color:#e0e0e0
+    style Apps fill:none,stroke:#546e7a,stroke-width:1px,color:#90a4ae
+    style Ing fill:none,stroke:#546e7a,stroke-width:1px,color:#90a4ae
+    style Lake fill:none,stroke:#546e7a,stroke-width:1px,color:#90a4ae
 ```
 
 --
@@ -164,16 +164,16 @@ graph LR
     Analytics --> LH
     Clients -->|FlightSQL| Analytics
 
-    style PG1 fill:#2d2d2d,stroke:#4a9eff,stroke-width:2px,color:#e6e6e6
-    style S31 fill:#2d2d2d,stroke:#4a9eff,stroke-width:2px,color:#e6e6e6
-    style Analytics fill:#2d2d2d,stroke:#4a9eff,stroke-width:2px,color:#e6e6e6
-    style PG2 fill:#2d2d2d,stroke:#4a9eff,stroke-width:2px,color:#e6e6e6
-    style S32 fill:#2d2d2d,stroke:#4a9eff,stroke-width:2px,color:#e6e6e6
-    style Grafana fill:#2d2d2d,stroke:#4a9eff,stroke-width:2px,color:#e6e6e6
-    style Python fill:#2d2d2d,stroke:#4a9eff,stroke-width:2px,color:#e6e6e6
-    style Lake fill:none,stroke:#666,stroke-width:1px,color:#a6a6a6
-    style LH fill:none,stroke:#666,stroke-width:1px,color:#a6a6a6
-    style Clients fill:none,stroke:#666,stroke-width:1px,color:#a6a6a6
+    style PG1 fill:#1a1a2e,stroke:#1565c0,stroke-width:2px,color:#e0e0e0
+    style S31 fill:#1a1a2e,stroke:#1565c0,stroke-width:2px,color:#e0e0e0
+    style Analytics fill:#1a1a2e,stroke:#ffb300,stroke-width:2px,color:#e0e0e0
+    style PG2 fill:#1a1a2e,stroke:#1565c0,stroke-width:2px,color:#e0e0e0
+    style S32 fill:#1a1a2e,stroke:#1565c0,stroke-width:2px,color:#e0e0e0
+    style Grafana fill:#1a1a2e,stroke:#bf360c,stroke-width:2px,color:#e0e0e0
+    style Python fill:#1a1a2e,stroke:#bf360c,stroke-width:2px,color:#e0e0e0
+    style Lake fill:none,stroke:#546e7a,stroke-width:1px,color:#90a4ae
+    style LH fill:none,stroke:#546e7a,stroke-width:1px,color:#90a4ae
+    style Clients fill:none,stroke:#546e7a,stroke-width:1px,color:#90a4ae
 ```
 
 ---

@@ -1,38 +1,76 @@
 /**
- * Ayu Dark theme for Reveal.js
- * Technical presentation theme optimized for code and developer content
+ * Micromegas brand theme for Reveal.js
+ * Based on the Rust Earth Palette inspired by Van Gogh's "Wheatfield with Crows"
  */
 
 @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&display=swap');
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
 
 :root {
-  /* Ayu Dark Color Palette */
-  --color-bg-0: #0a0d12;         /* Deepest background */
-  --color-bg-1: #0b0e14;         /* Main background */
-  --color-bg-2: #0d1016;         /* Elevated surface */
-  --color-bg-3: #131721;         /* Card background */
-  --color-border: #565b66;       /* Borders */
-  --color-text-primary: #bfbdb6; /* Main text */
-  --color-text-secondary: #626a73; /* Secondary text */
-  --color-text-muted: #4d5566;   /* Muted text */
-  
-  --color-primary: #59c2ff;      /* Blue - primary accent */
-  --color-secondary: #ffb454;    /* Orange - secondary accent */
-  --color-tertiary: #ff8f40;     /* Dark orange - warnings/highlights */
-  
+  /* Primary Brand Colors */
+  --color-rust: #bf360c;
+  --color-cobalt: #1565c0;
+  --color-wheat: #ffb300;
+  --color-night: #0a0a0f;
+  --color-charcoal: #1a1a2e;
+
+  /* Extended Palette - Stormy Sky */
+  --color-storm: #1a237e;
+  --color-twilight: #283593;
+  --color-prussian: #0d47a1;
+  --color-horizon: #42a5f5;
+  --color-violet: #5e35b1;
+  --color-lavender: #7e57c2;
+
+  /* Extended Palette - Wheat Field */
+  --color-harvest: #ff8f00;
+  --color-grain: #ffd54f;
+  --color-straw: #ffecb3;
+  --color-ochre: #e65100;
+  --color-sienna: #8d3a14;
+
+  /* Extended Palette - Crow & Shadow */
+  --color-crow: #121212;
+  --color-shadow: #1e1e2f;
+  --color-slate: #37474f;
+  --color-pewter: #546e7a;
+  --color-cloud: #90a4ae;
+  --color-misty: #cfd8dc;
+
+  /* Status Colors */
+  --color-success: #2e7d32;
+  --color-error: #c62828;
+  --color-info: #00acc1;
+
+  /* Backgrounds */
+  --color-bg-0: var(--color-night);
+  --color-bg-1: #0c0c12;
+  --color-bg-2: #12121a;
+  --color-bg-3: var(--color-shadow);
+  --color-border: #3a3a4a;
+
+  /* Text */
+  --color-text-primary: #e0e0e0;
+  --color-text-secondary: var(--color-pewter);
+  --color-text-muted: var(--color-slate);
+
+  /* Theme Accents */
+  --color-primary: var(--color-horizon);
+  --color-secondary: var(--color-wheat);
+  --color-tertiary: var(--color-rust);
+
   /* Syntax Colors */
-  --syntax-bg: #0d1016;
-  --syntax-fg: #bfbdb6;
-  --syntax-keyword: #ff8f40;
-  --syntax-string: #aad94c;
-  --syntax-function: #ffb454;
-  --syntax-variable: #59c2ff;
-  --syntax-comment: #626a73;
-  --syntax-number: #aad94c;
-  --syntax-class: #59c2ff;
-  --syntax-error: #ff3333;
-  
+  --syntax-bg: #0c0c12;
+  --syntax-fg: #e0e0e0;
+  --syntax-keyword: var(--color-rust);
+  --syntax-string: var(--color-success);
+  --syntax-function: var(--color-wheat);
+  --syntax-variable: var(--color-horizon);
+  --syntax-comment: var(--color-pewter);
+  --syntax-number: var(--color-grain);
+  --syntax-class: var(--color-cobalt);
+  --syntax-error: var(--color-error);
+
   /* Typography */
   --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
   --font-body: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
@@ -44,9 +82,10 @@
  *********************************************/
 
 .reveal-viewport {
-  background: var(--color-bg-1);
-  background-image: radial-gradient(circle at 20% 80%, rgba(89, 194, 255, 0.05) 0%, transparent 50%),
-                    radial-gradient(circle at 80% 20%, rgba(255, 180, 84, 0.05) 0%, transparent 50%);
+  background: var(--color-bg-0);
+  background-image: radial-gradient(circle at 20% 80%, rgba(191, 54, 12, 0.08) 0%, transparent 50%),
+                    radial-gradient(circle at 80% 20%, rgba(21, 101, 192, 0.08) 0%, transparent 50%),
+                    radial-gradient(circle at 50% 50%, rgba(255, 179, 0, 0.04) 0%, transparent 60%);
 }
 
 .reveal {
@@ -57,14 +96,14 @@
 }
 
 .reveal::selection {
-  color: var(--color-bg-1);
-  background: var(--color-primary);
+  color: var(--color-bg-0);
+  background: var(--color-wheat);
   text-shadow: none;
 }
 
 .reveal ::-moz-selection {
-  color: var(--color-bg-1);
-  background: var(--color-primary);
+  color: var(--color-bg-0);
+  background: var(--color-wheat);
   text-shadow: none;
 }
 
@@ -97,13 +136,13 @@
 
 .reveal h1 {
   font-size: 2.5em;
-  color: var(--color-primary);
-  text-shadow: 0 0 20px rgba(89, 194, 255, 0.3);
+  color: var(--color-wheat);
+  text-shadow: 0 0 30px rgba(255, 179, 0, 0.3);
 }
 
 .reveal h2 {
   font-size: 1.6em;
-  color: var(--color-secondary);
+  color: var(--color-horizon);
 }
 
 .reveal h3 {
@@ -134,12 +173,12 @@
 .reveal strong,
 .reveal b {
   font-weight: 700;
-  color: var(--color-primary);
+  color: var(--color-wheat);
 }
 
 .reveal em {
   font-style: italic;
-  color: var(--color-primary);
+  color: var(--color-horizon);
 }
 
 .reveal ol,
@@ -176,7 +215,7 @@
 
 .reveal dt {
   font-weight: bold;
-  color: var(--color-primary);
+  color: var(--color-wheat);
 }
 
 .reveal dd {
@@ -191,8 +230,8 @@
   padding: 5px;
   font-style: italic;
   background: var(--color-bg-2);
-  border-left: 4px solid var(--color-primary);
-  box-shadow: 0px 0px 2px rgba(89, 194, 255, 0.2);
+  border-left: 4px solid var(--color-rust);
+  box-shadow: 0px 0px 2px rgba(191, 54, 12, 0.2);
 }
 
 .reveal blockquote p:first-child,
@@ -202,7 +241,7 @@
 
 .reveal q {
   font-style: italic;
-  color: var(--color-primary);
+  color: var(--color-wheat);
 }
 
 /*********************************************
@@ -226,7 +265,7 @@
   font-family: var(--font-mono);
   text-transform: none;
   background: var(--color-bg-2);
-  color: var(--color-primary);
+  color: var(--color-wheat);
   padding: 2px 6px;
   border-radius: 3px;
   font-size: 0.85em;
@@ -249,7 +288,7 @@
   color: var(--syntax-fg);
 }
 
-/* Syntax highlighting overrides for Ayu Dark */
+/* Syntax highlighting overrides for Micromegas theme */
 .reveal .hljs-keyword { color: var(--syntax-keyword); }
 .reveal .hljs-string { color: var(--syntax-string); }
 .reveal .hljs-function { color: var(--syntax-function); }
@@ -277,7 +316,7 @@
 .reveal table th {
   font-weight: bold;
   background: var(--color-bg-2);
-  color: var(--color-primary);
+  color: var(--color-wheat);
   border: 1px solid var(--color-border);
   padding: 10px;
 }
@@ -330,7 +369,7 @@
  *********************************************/
 
 .reveal a {
-  color: var(--color-primary);
+  color: var(--color-horizon);
   text-decoration: underline;
   transition: color 0.15s ease;
 }
@@ -340,7 +379,7 @@
 }
 
 .reveal a:hover {
-  color: var(--color-secondary);
+  color: var(--color-wheat);
   text-decoration: underline;
   text-shadow: none;
   border: none;
@@ -352,7 +391,7 @@
 
 .reveal .roll span:after {
   color: #fff;
-  background: var(--color-primary);
+  background: var(--color-rust);
 }
 
 /*********************************************
@@ -363,7 +402,7 @@
   margin: 15px 0px;
   background: transparent;
   border: 0;
-  box-shadow: 0 0 10px rgba(89, 194, 255, 0.15);
+  box-shadow: 0 0 10px rgba(191, 54, 12, 0.15);
   border-radius: 4px;
 }
 
@@ -377,8 +416,8 @@
 }
 
 .reveal a:hover img {
-  background: rgba(89, 194, 255, 0.2);
-  box-shadow: 0 0 20px rgba(89, 194, 255, 0.3);
+  background: rgba(255, 179, 0, 0.2);
+  box-shadow: 0 0 20px rgba(255, 179, 0, 0.3);
 }
 
 /*********************************************
@@ -386,7 +425,7 @@
  *********************************************/
 
 .reveal .controls {
-  color: var(--color-primary);
+  color: var(--color-rust);
 }
 
 /*********************************************
@@ -395,11 +434,11 @@
 
 .reveal .progress {
   background: var(--color-bg-2);
-  color: var(--color-primary);
+  color: var(--color-rust);
 }
 
 .reveal .progress span {
-  background: linear-gradient(90deg, var(--color-primary), var(--color-secondary));
+  background: linear-gradient(90deg, var(--color-rust), var(--color-wheat), var(--color-cobalt));
   transition: width 800ms cubic-bezier(0.26, 0.86, 0.44, 0.985);
 }
 
@@ -409,7 +448,7 @@
 
 @media print {
   .backgrounds {
-    background-color: var(--color-bg-1);
+    background-color: var(--color-bg-0);
   }
 }
 
@@ -419,7 +458,7 @@
 
 /* Terminal window container */
 .reveal .terminal-window {
-  border: 1px solid #2d3139;
+  border: 1px solid var(--color-border);
   border-radius: 2px;
   box-shadow: 0 5px 20px rgba(0, 0, 0, 0.3);
   margin: 20px auto;
@@ -432,10 +471,10 @@
 
 /* Terminal title bar */
 .reveal .terminal-header {
-  background: #1a1d23;
-  border-bottom: 1px solid #2d3139;
+  background: var(--color-shadow);
+  border-bottom: 1px solid var(--color-border);
   padding: 6px 12px;
-  color: #8b8f99;
+  color: var(--color-text-secondary);
   font-size: 0.85em;
   font-weight: 500;
   text-align: left;
@@ -443,7 +482,7 @@
 
 /* Terminal content area */
 .reveal .terminal-content {
-  background: #0d1016;
+  background: var(--color-bg-1);
   padding: 20px 25px;
   color: var(--color-text-primary);
   line-height: 1.5;
@@ -457,8 +496,8 @@
 
 /* Simplified terminal style (backwards compatibility) */
 .reveal .terminal {
-  background: #0d1016;
-  border: 1px solid #2d3139;
+  background: var(--color-bg-1);
+  border: 1px solid var(--color-border);
   border-radius: 6px;
   padding: 20px 25px;
   font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Courier New', monospace;
@@ -483,7 +522,7 @@
 .reveal .terminal .prompt::before,
 .reveal .terminal-content .prompt::before {
   content: "$ ";
-  color: var(--color-secondary);
+  color: var(--color-rust);
   font-weight: 600;
 }
 
@@ -504,13 +543,13 @@
 
 .reveal .terminal .success,
 .reveal .terminal-content .success {
-  color: #aad94c;
+  color: var(--color-success);
   margin: 4px 0;
 }
 
 .reveal .terminal .error,
 .reveal .terminal-content .error {
-  color: #ff3333;
+  color: var(--color-error);
   margin: 4px 0;
 }
 
@@ -553,12 +592,20 @@
 
 /* Highlight important elements */
 .reveal .highlight {
-  color: var(--color-secondary);
+  color: var(--color-wheat);
   font-weight: 600;
 }
 
 .reveal .accent {
-  color: var(--color-primary);
+  color: var(--color-horizon);
+}
+
+.reveal .accent-rust {
+  color: var(--color-rust);
+}
+
+.reveal .accent-cobalt {
+  color: var(--color-cobalt);
 }
 
 .reveal .muted {
@@ -575,4 +622,43 @@
 
 .reveal .right {
   text-align: right;
+}
+
+/*********************************************
+ * BRAND RING LOGO ANIMATION
+ *********************************************/
+
+@keyframes ring-pulse {
+  0%, 100% { opacity: 0.9; }
+  50% { opacity: 1; }
+}
+
+.reveal .brand-ring-rust { stroke: var(--color-rust); }
+.reveal .brand-ring-cobalt { stroke: var(--color-cobalt); }
+.reveal .brand-ring-wheat { stroke: var(--color-wheat); }
+
+/*********************************************
+ * SIDEBAR BRANDING
+ *********************************************/
+
+.reveal-viewport::after {
+  content: '';
+  position: fixed;
+  left: 10px;
+  top: 2%;
+  bottom: 2%;
+  width: 120px;
+  background-image: url('../../media/micromegas-vertical-sidebar.svg');
+  background-size: contain;
+  background-repeat: no-repeat;
+  background-position: center;
+  opacity: 0.4;
+  pointer-events: none;
+  z-index: 1;
+  transition: opacity 0.3s ease;
+}
+
+/* Hide sidebar on title slide */
+.reveal-viewport.title-slide::after {
+  opacity: 0;
 }

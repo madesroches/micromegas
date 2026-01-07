@@ -14,17 +14,17 @@ let deck = new Reveal({
     center: true,
     touch: true,
     transition: 'slide',
-    
+
     // Show slide numbers
     slideNumber: 'c/t',
-    
+
     // Plugins
-    plugins: [ 
-        Markdown, 
-        Highlight, 
-        Notes, 
-        Search, 
-        Zoom 
+    plugins: [
+        Markdown,
+        Highlight,
+        Notes,
+        Search,
+        Zoom
     ]
 });
 

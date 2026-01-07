@@ -89,6 +89,15 @@ jobs:
         mkdir -p public_docs/high-frequency-observability
         cp doc/high-frequency-observability/dist/presentation-inline.html public_docs/high-frequency-observability/index.html
         cp -r doc/high-frequency-observability/dist/*.{png,svg} public_docs/high-frequency-observability/ 2>/dev/null || echo "No media files to copy (already inlined)"
+
+        # Build unified observability for games presentation
+        cd doc/unified-observability-for-games
+        yarn install
+        yarn build:standalone
+        cd ../..
+        mkdir -p public_docs/unified-observability-for-games
+        cp doc/unified-observability-for-games/dist/presentation-inline.html public_docs/unified-observability-for-games/index.html
+        cp -r doc/unified-observability-for-games/dist/*.{png,svg} public_docs/unified-observability-for-games/ 2>/dev/null || echo "No media files to copy (already inlined)"
         
         # Create main index that redirects to MkDocs
         cat > public_docs/index.html << 'EOF'
@@ -139,6 +148,10 @@ jobs:
             <a href="high-frequency-observability/" class="docs-link">
                 <h3>🎤 High-Frequency Observability</h3>
                 <p>Cost-Efficient Telemetry at Scale</p>
+            </a>
+            <a href="unified-observability-for-games/" class="docs-link">
+                <h3>🎮 Unified Observability for Games</h3>
+                <p>Logs, Metrics, and Traces for Game Teams</p>
             </a>
         </body>
         </html>

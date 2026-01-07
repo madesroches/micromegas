@@ -1,0 +1,23 @@
+{
+  "name": "unified-observability-for-games",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "build:standalone": "yarn build && node build-inline.js",
+    "preview": "vite preview",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "Unified Observability for Game Teams - Technical presentation built with Reveal.js and Micromegas brand theme",
+  "dependencies": {
+    "reveal.js": "^5.2.1"
+  },
+  "devDependencies": {
+    "vite": "^7.1.3"
+  }
+}

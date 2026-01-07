@@ -18,6 +18,7 @@ export default defineConfig({
       }
     }
   },
+  publicDir: 'media',
   resolve: {
     alias: {
       '@': '/src'
