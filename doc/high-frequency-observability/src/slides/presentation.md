@@ -1,9 +1,10 @@
-# Micromegas
+<img src="./micromegas-icon-transparent.svg" alt="" class="plain" style="height: 140px; margin: 0;">
+
+# micromegas
+
 ## Unified Observability for Video Games
 
-### Marc-Antoine Desroches
-#### madesroches@gmail.com
-#### [github.com/madesroches/micromegas](https://github.com/madesroches/micromegas)
+<p style="margin-top: 1.5em; font-size: 0.7em;">Marc-Antoine Desroches · <a href="mailto:madesroches@gmail.com">madesroches@gmail.com</a><br><a href="https://github.com/madesroches/micromegas">github.com/madesroches/micromegas</a></p>
 
 ---
 
