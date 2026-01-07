@@ -7,19 +7,6 @@
 
 ---
 
-## The Pitch
-
-**Stop reproducing bugs. Collect enough data to understand them directly.**
-
-<p class="fragment" style="margin-top: 1em;">A unified observability stack makes this practical:</p>
-
-<ul>
-<li class="fragment"><strong>Easier</strong>: One system to learn, one query language, one place to look</li>
-<li class="fragment"><strong>More powerful</strong>: Automatic correlation unlocks insights fragmented tools can't provide</li>
-</ul>
-
----
-
 ## The Pain
 
 The debugging loop everyone hates:
@@ -48,7 +35,7 @@ The debugging loop everyone hates:
 
 ## The Goal: Reproduce Less, Fix More
 
-Instead of reproducing issues, collect enough data to **understand them directly**:
+**Stop reproducing bugs. Collect enough data to understand them directly.**
 
 <ul>
 <li class="fragment">Know <strong>how often</strong> issues happen across your entire player base</li>
@@ -67,7 +54,16 @@ Instead of reproducing issues, collect enough data to **understand them directly
 <li class="fragment">All <strong>correlated</strong>, all <strong>queryable</strong></li>
 </ul>
 
-<p class="fragment" style="margin-top: 1.5em;">Do you build this as separate systems, or as one?</p>
+--
+
+## A Unified Approach
+
+A unified observability stack makes this practical:
+
+<ul>
+<li class="fragment"><strong>Easier</strong>: One system to learn, one query language, one place to look</li>
+<li class="fragment"><strong>More powerful</strong>: Automatic correlation unlocks insights fragmented tools can't provide</li>
+</ul>
 
 ---
 
@@ -100,32 +96,6 @@ Typical internal tooling landscape:
 </div>
 
 <p class="fragment">Every investigation requires <strong>manual correlation</strong>. Context lives in your head, not in the tools.</p>
-
---
-
-## Fragmented vs Unified
-
-```mermaid
-graph TB
-    subgraph Fragmented["Fragmented"]
-        L[Logs]
-        M[Metrics]
-        T[Traces]
-        P[Player Analytics]
-    end
-
-    subgraph Unified["Unified"]
-        U[Single System]
-    end
-
-    style L fill:#1a1a2e,stroke:#bf360c,stroke-width:2px,color:#e0e0e0
-    style M fill:#1a1a2e,stroke:#1565c0,stroke-width:2px,color:#e0e0e0
-    style T fill:#1a1a2e,stroke:#ffb300,stroke-width:2px,color:#e0e0e0
-    style P fill:#1a1a2e,stroke:#5e35b1,stroke-width:2px,color:#e0e0e0
-    style U fill:#1a1a2e,stroke:#2e7d32,stroke-width:2px,color:#e0e0e0
-    style Fragmented fill:none,stroke:#c62828,stroke-width:2px,color:#90a4ae
-    style Unified fill:none,stroke:#2e7d32,stroke-width:2px,color:#90a4ae
-```
 
 ---
 
@@ -189,127 +159,29 @@ graph TB
 
 **Automatic correlation unlocks questions you couldn't ask before.**
 
---
-
-## Why Fragmented Tools Can't Do This
-
-<ul>
-<li class="fragment">Each tool has its own identifiers</li>
-<li class="fragment">Timestamps might not align precisely</li>
-<li class="fragment">No shared context (session, map, build) across systems</li>
-<li class="fragment">Correlation requires export → manual join → hope it works</li>
-</ul>
+Every event shares: process, thread, session, player, map, build, precise timestamps.
 
 --
 
-## What Unification Enables
-
-Every event automatically shares:
-
-<ul style="font-size: 0.85em;">
-<li class="fragment">Process ID, thread ID</li>
-<li class="fragment">Session ID, player ID</li>
-<li class="fragment">Map/level, build version</li>
-<li class="fragment">Precise timestamps</li>
-</ul>
-
---
-
-## Queries That Become Trivial
+## One Query, Complete Context
 
 <ul style="font-size: 0.8em;">
-<li class="fragment">"Show me logs from sessions where matchmaking time exceeded 30s"</li>
-<li class="fragment">"What was the server doing when the client hitched?"</li>
-<li class="fragment">"Crash rate by map and build version"</li>
-<li class="fragment">"All events from this player's session, sorted by time"</li>
+<li class="fragment">"Show me the CPU trace, logs, and metrics from the frame where this player hitched"</li>
+<li class="fragment">"What was the server doing when this client reported a desync?"</li>
+<li class="fragment">"All events from this player's session, 10 seconds before the crash"</li>
 </ul>
 
-<p class="fragment" style="margin-top: 1em;"><strong>With fragmented tools:</strong> Multi-hour investigation across systems.</p>
-<p class="fragment"><strong>With unified data:</strong> A single query.</p>
-
----
-
-## Game-Specific Power
-
-Games have unique needs. Unification handles them better.
+<p class="fragment" style="margin-top: 1em;"><strong>Fragmented:</strong> hours hunting through different tools. <strong>Unified:</strong> one query.</p>
 
 --
 
-## Frame-Level Precision
-
-<p>What happened in the exact frame where the hitch occurred?</p>
+## Player Events Too
 
 <ul>
-<li class="fragment"><strong>Unified</strong>: CPU trace + logs + metrics, same timestamp, one query</li>
-<li class="fragment"><strong>Fragmented</strong>: Hope your profiler was running, cross-reference manually, find the dumped files on the user's machine</li>
+<li class="fragment">Same pipeline as logs, metrics, and traces</li>
+<li class="fragment">Unlimited frequency - capture every action, not just aggregates</li>
+<li class="fragment">"Players who crashed - what were they doing right before?"</li>
 </ul>
-
---
-
-## Client-Server Correlation
-
-<ul>
-<li class="fragment">Session ID links client and server automatically</li>
-<li class="fragment">Debug desyncs by seeing both perspectives in one query</li>
-<li class="fragment"><strong>Fragmented</strong>: Different logging systems, different session concepts, manual alignment</li>
-</ul>
-
---
-
-## Build-to-Build Comparison
-
-<ul>
-<li class="fragment">"Did this commit make things worse?" - one query</li>
-<li class="fragment"><strong>Fragmented</strong>: Export from metrics system, hope build tags are consistent</li>
-</ul>
-
---
-
-## Map/Level Context
-
-<ul>
-<li class="fragment">Automatic tagging of which level was loaded</li>
-<li class="fragment">"Show me hitches on Map_Desert" - one query</li>
-<li class="fragment"><strong>Fragmented</strong>: Did you remember to tag that in every system?</li>
-</ul>
-
----
-
-## Player Events: Same System, Full Context
-
-**Player analytics shouldn't be a separate island.**
-
---
-
-## The Fragmented Pattern
-
-<ul>
-<li class="fragment"><strong>Engineering telemetry</strong>: one system</li>
-<li class="fragment"><strong>Player analytics</strong>: different team, different pipeline, different tools</li>
-<li class="fragment">Correlating player behavior with technical issues: manual, slow, often impossible</li>
-</ul>
-
---
-
-## The Unified Approach
-
-<ul>
-<li class="fragment">Player events flow through the same pipeline</li>
-<li class="fragment">Same query interface as logs and metrics</li>
-<li class="fragment">Automatic context: session, map, build, player ID</li>
-</ul>
-
---
-
-## What This Enables
-
-<ul style="font-size: 0.85em;">
-<li class="fragment">"Players who experienced hitches - what were they doing?"</li>
-<li class="fragment">"A/B test results with performance breakdown by group"</li>
-<li class="fragment">"Correlate player progression with crash frequency"</li>
-</ul>
-
-<p class="fragment">No separate analytics system. No export/import. One query interface.</p>
 
 ---
 
