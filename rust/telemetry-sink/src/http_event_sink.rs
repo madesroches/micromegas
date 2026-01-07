@@ -27,6 +27,10 @@ use crate::stream_info::make_stream_info;
 
 /// Error type for ingestion client operations.
 /// Explicitly categorizes errors to control retry behavior.
+///
+/// Logging strategy: Transient errors (5xx, network) use `debug!` to avoid
+/// polluting instrumented applications' logs with telemetry infrastructure noise.
+/// Permanent errors (4xx) use `warn!` since they indicate a bug in the client.
 #[derive(Clone, Debug)]
 enum IngestionClientError {
     /// Transient error - should retry (network issues, 5xx responses)
@@ -159,12 +163,12 @@ impl HttpEventSink {
     ) -> Result<(), IngestionClientError> {
         debug!("sending process {process_info:?}");
         let url = format!("{root_path}/ingestion/insert_process");
+        let body: bytes::Bytes = encode_cbor(&*process_info)
+            .map_err(|e| IngestionClientError::Permanent(format!("encoding process: {e}")))?
+            .into();
         tokio_retry2::Retry::spawn(retry_strategy, || async {
-            let body = encode_cbor(&*process_info).map_err(|e| {
-                IngestionClientError::Permanent(format!("encoding process: {e}")).into_retry()
-            })?;
-            let mut request = client.post(&url).body(body).build().map_err(|e| {
-                IngestionClientError::Transient(format!("building request: {e}")).into_retry()
+            let mut request = client.post(&url).body(body.clone()).build().map_err(|e| {
+                IngestionClientError::Permanent(format!("building request: {e}")).into_retry()
             })?;
 
             if let Err(e) = decorator.decorate(&mut request).await {
@@ -206,12 +210,12 @@ impl HttpEventSink {
         decorator: &dyn RequestDecorator,
     ) -> Result<(), IngestionClientError> {
         let url = format!("{root_path}/ingestion/insert_stream");
+        let body: bytes::Bytes = encode_cbor(&*stream_info)
+            .map_err(|e| IngestionClientError::Permanent(format!("encoding stream: {e}")))?
+            .into();
         tokio_retry2::Retry::spawn(retry_strategy, || async {
-            let body = encode_cbor(&*stream_info).map_err(|e| {
-                IngestionClientError::Permanent(format!("encoding stream: {e}")).into_retry()
-            })?;
-            let mut request = client.post(&url).body(body).build().map_err(|e| {
-                IngestionClientError::Transient(format!("building request: {e}")).into_retry()
+            let mut request = client.post(&url).body(body.clone()).build().map_err(|e| {
+                IngestionClientError::Permanent(format!("building request: {e}")).into_retry()
             })?;
 
             if let Err(e) = decorator.decorate(&mut request).await {
@@ -276,7 +280,7 @@ impl HttpEventSink {
                 .body(encoded_block.clone())
                 .build()
                 .map_err(|e| {
-                    IngestionClientError::Transient(format!("building request: {e}")).into_retry()
+                    IngestionClientError::Permanent(format!("building request: {e}")).into_retry()
                 })?;
 
             if let Err(e) = decorator.decorate(&mut request).await {
@@ -417,14 +421,16 @@ impl HttpEventSink {
         shutdown_complete: Arc<(Mutex<bool>, std::sync::Condvar)>,
     ) {
         let mut opt_process_info = None;
-        let client_res = reqwest::Client::builder()
+        let mut client = match reqwest::Client::builder()
             .pool_idle_timeout(Some(core::time::Duration::from_secs(2)))
-            .build();
-        if let Err(e) = client_res {
-            error!("Error creating http client: {e:?}");
-            return;
-        }
-        let mut client = client_res.unwrap();
+            .build()
+        {
+            Ok(client) => client,
+            Err(e) => {
+                error!("Error creating http client: {e:?}");
+                return;
+            }
+        };
         // eagerly connect, a new process message is sure to follow if it's not already in queue
         if let Some(process_id) = micromegas_tracing::dispatch::process_id() {
             let cpu_tracing_enabled =

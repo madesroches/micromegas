@@ -25,7 +25,7 @@ impl IntoResponse for IngestionError {
             IngestionError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
         };
         error!("{status}: {message}");
-        (status, message).into_response()
+        status.into_response()
     }
 }
 
@@ -41,8 +41,7 @@ impl From<IngestionServiceError> for IngestionError {
 
 /// Handles requests to insert process information.
 ///
-/// Returns 200 OK on success, 400 Bad Request for malformed input,
-/// or 500 Internal Server Error for database failures.
+/// Returns 400 for malformed CBOR, 500 for database errors.
 pub async fn insert_process_request(
     Extension(service): Extension<Arc<WebIngestionService>>,
     body: bytes::Bytes,
@@ -52,8 +51,7 @@ pub async fn insert_process_request(
 
 /// Handles requests to insert stream information.
 ///
-/// Returns 200 OK on success, 400 Bad Request for malformed input,
-/// or 500 Internal Server Error for database failures.
+/// Returns 400 for malformed CBOR, 500 for database errors.
 pub async fn insert_stream_request(
     Extension(service): Extension<Arc<WebIngestionService>>,
     body: bytes::Bytes,
@@ -63,8 +61,7 @@ pub async fn insert_stream_request(
 
 /// Handles requests to insert block information.
 ///
-/// Returns 200 OK on success, 400 Bad Request for malformed input or empty body,
-/// or 500 Internal Server Error for database/storage failures.
+/// Returns 400 for empty body or malformed CBOR, 500 for database/storage errors.
 pub async fn insert_block_request(
     Extension(service): Extension<Arc<WebIngestionService>>,
     body: bytes::Bytes,
