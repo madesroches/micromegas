@@ -1,4 +1,3 @@
-use anyhow::Result;
 use micromegas_telemetry::stream_info::StreamInfo;
 use micromegas_telemetry::wire_format::encode_cbor;
 use micromegas_tracing::{
@@ -191,10 +190,15 @@ impl HttpEventSink {
                     warn!("insert_process client error ({status}): {body}");
                     Err(IngestionClientError::Permanent(body).into_retry())
                 }
-                _ => {
+                500..=599 => {
                     let body = response.text().await.unwrap_or_default();
                     debug!("insert_process server error ({status}): {body}");
                     Err(IngestionClientError::Transient(format!("{status}: {body}")).into_retry())
+                }
+                _ => {
+                    let body = response.text().await.unwrap_or_default();
+                    warn!("insert_process unexpected status ({status}): {body}");
+                    Err(IngestionClientError::Permanent(format!("{status}: {body}")).into_retry())
                 }
             }
         })
@@ -238,10 +242,15 @@ impl HttpEventSink {
                     warn!("insert_stream client error ({status}): {body}");
                     Err(IngestionClientError::Permanent(body).into_retry())
                 }
-                _ => {
+                500..=599 => {
                     let body = response.text().await.unwrap_or_default();
                     debug!("insert_stream server error ({status}): {body}");
                     Err(IngestionClientError::Transient(format!("{status}: {body}")).into_retry())
+                }
+                _ => {
+                    let body = response.text().await.unwrap_or_default();
+                    warn!("insert_stream unexpected status ({status}): {body}");
+                    Err(IngestionClientError::Permanent(format!("{status}: {body}")).into_retry())
                 }
             }
         })
@@ -305,10 +314,15 @@ impl HttpEventSink {
                     warn!("insert_block client error ({status}): {body}");
                     Err(IngestionClientError::Permanent(body).into_retry())
                 }
-                _ => {
+                500..=599 => {
                     let body = response.text().await.unwrap_or_default();
                     debug!("insert_block server error ({status}): {body}");
                     Err(IngestionClientError::Transient(format!("{status}: {body}")).into_retry())
+                }
+                _ => {
+                    let body = response.text().await.unwrap_or_default();
+                    warn!("insert_block unexpected status ({status}): {body}");
+                    Err(IngestionClientError::Permanent(format!("{status}: {body}")).into_retry())
                 }
             }
         })
