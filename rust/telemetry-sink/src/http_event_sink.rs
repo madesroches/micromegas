@@ -172,7 +172,7 @@ impl HttpEventSink {
             })?;
 
             if let Err(e) = decorator.decorate(&mut request).await {
-                warn!("request decorator: {e:?}");
+                debug!("request decorator: {e:?}");
                 return Err(
                     IngestionClientError::Transient(format!("decorating request: {e}"))
                         .into_retry(),
@@ -219,7 +219,7 @@ impl HttpEventSink {
             })?;
 
             if let Err(e) = decorator.decorate(&mut request).await {
-                warn!("request decorator: {e:?}");
+                debug!("request decorator: {e:?}");
                 return Err(
                     IngestionClientError::Transient(format!("decorating request: {e}"))
                         .into_retry(),
@@ -520,7 +520,13 @@ impl HttpEventSink {
         shutdown_complete: Arc<(Mutex<bool>, std::sync::Condvar)>,
     ) {
         // TODO: add runtime as configuration option (or create one only if global don't exist)
-        let tokio_runtime = tokio::runtime::Runtime::new().unwrap();
+        let tokio_runtime = match tokio::runtime::Runtime::new() {
+            Ok(rt) => rt,
+            Err(e) => {
+                error!("Failed to create tokio runtime for telemetry: {e}");
+                return;
+            }
+        };
         let decorator = make_decorator();
         tokio_runtime.block_on(Self::thread_proc_impl(
             addr,

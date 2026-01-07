@@ -20,12 +20,16 @@ pub enum IngestionError {
 
 impl IntoResponse for IngestionError {
     fn into_response(self) -> Response<Body> {
-        let (status, message) = match self {
-            IngestionError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
-            IngestionError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
+        let (status, category, detail) = match self {
+            IngestionError::BadRequest(msg) => (StatusCode::BAD_REQUEST, "Bad request", msg),
+            IngestionError::Internal(msg) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Internal server error",
+                msg,
+            ),
         };
-        error!("{status}: {message}");
-        status.into_response()
+        error!("{status}: {detail}");
+        (status, category).into_response()
     }
 }
 
