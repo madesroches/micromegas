@@ -1,10 +1,8 @@
-<img src="./micromegas-icon-transparent.svg" alt="" class="plain" style="height: 140px; margin: 0;">
-
-# micromegas
+<img src="./micromegas-vertical-compact.svg" alt="micromegas" class="plain" style="height: 340px; margin: 0;">
 
 ## Unified Observability for Video Games
 
-<p style="margin-top: 1.5em; font-size: 0.7em;">Marc-Antoine Desroches · <a href="mailto:madesroches@gmail.com">madesroches@gmail.com</a><br><a href="https://github.com/madesroches/micromegas">github.com/madesroches/micromegas</a></p>
+<p style="font-size: 0.6em;">Marc-Antoine Desroches · <a href="mailto:madesroches@gmail.com">madesroches@gmail.com</a><br><a href="https://github.com/madesroches/micromegas">github.com/madesroches/micromegas</a></p>
 
 ---
 
