@@ -191,6 +191,44 @@ Every event shares: process, thread, session, player, map, build, precise timest
 
 ---
 
+## Demo: Investigation Workflow
+
+**One place to look. Everything correlated.**
+
+--
+
+## 1. Find the Process
+
+<img src="./process_list.png" style="max-width: 75%; height: auto">
+
+Browse clients, filter by exe, computer, time range - or custom SQL.
+
+--
+
+## 2. Spot the Problem
+
+<img src="./performance.png" style="max-width: 75%; height: auto;">
+
+Metrics, thread coverage. See the spike.
+
+--
+
+## 3. Deep Dive: Trace
+
+<img src="./perfetto.png" style="max-width: 75%; height: auto;">
+
+One click to Perfetto. Full CPU trace.
+
+--
+
+## 4. Or: Check the Logs
+
+<img src="./process_log.png" style="max-width: 75%; height: auto;">
+
+Same process, same time range.
+
+---
+
 ## Grafana Dashboard
 
 <div style="display: flex; align-items: center; gap: 2rem;">
@@ -203,14 +241,6 @@ Standard tooling, familiar interface.
 <img src="./grafana_monitoring.png" style="max-height: 500px; width: auto;">
 </div>
 </div>
-
----
-
-## Perfetto Trace Viewer
-
-<img src="./perfetto_screenshot.png" style="max-width: 100%; height: auto;">
-
-Detailed CPU trace analysis - familiar tool, remote data
 
 ---
 
