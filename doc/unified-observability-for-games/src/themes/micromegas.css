@@ -658,7 +658,7 @@
   transition: opacity 0.3s ease;
 }
 
-/* Hide sidebar on title slide */
-.reveal-viewport.title-slide::after {
+/* Hide sidebar on specific slides */
+.reveal-viewport.hide-sidebar::after {
   opacity: 0;
 }
