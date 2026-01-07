@@ -27,7 +27,7 @@ use crate::stream_info::make_stream_info;
 
 /// Error type for ingestion client operations.
 /// Explicitly categorizes errors to control retry behavior.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 enum IngestionClientError {
     /// Transient error - should retry (network issues, 5xx responses)
     Transient(String),
