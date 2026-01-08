@@ -1,5 +1,7 @@
 # Plan: Daemon Periodic Duplicate Block Cleanup
 
+**Status: Implemented**
+
 ## Background
 
 Despite implementing idempotent INSERTs (see `prevent_duplicate_blocks_plan.md`), duplicate blocks can still accumulate due to:
@@ -13,75 +15,40 @@ The `delete_duplicate_blocks()` UDF exists but must be invoked manually. Until w
 
 Modify the maintenance daemon to automatically clean up duplicate blocks every minute as a temporary measure until unique constraints can be deployed.
 
-## Approach
+## Implementation
 
-Add duplicate block cleanup to the `EveryMinuteTask` in the maintenance daemon. This provides:
-- Frequent cleanup (every minute) to prevent duplicate accumulation
-- Minimal impact on existing daemon architecture
-- Easy removal once unique constraints are in place
+Added duplicate block cleanup to the `EveryMinuteTask` in the maintenance daemon:
+- Runs every minute with a 5-minute lookback window
+- Logs only when duplicates are found
+- Failures warn but don't block materialization
 
-## Implementation Steps
+### Files Modified
 
-### Step 1: Add delete_duplicate_blocks function to analytics crate
+| File | Change |
+|------|--------|
+| `rust/analytics/src/lakehouse/delete_duplicate_blocks_udf.rs` | Added standalone `delete_duplicate_blocks()` async function |
+| `rust/public/src/servers/maintenance.rs` | Call cleanup in `EveryMinuteTask::run()` |
 
-Create a new public async function in `rust/analytics/src/lakehouse/` that wraps the SQL logic from `delete_duplicate_blocks_udf.rs` for direct invocation (without going through DataFusion UDF machinery).
+## Future Improvement: Unify UDF and Standalone Function
 
-```rust
-pub async fn delete_duplicate_blocks(
-    pool: &sqlx::PgPool,
-    time_range: TimeRange,
-) -> Result<u64>
-```
-
-### Step 2: Export the function from analytics crate
-
-Add the new function to the appropriate module exports so it can be called from the public crate.
-
-### Step 3: Modify EveryMinuteTask
-
-In `rust/public/src/servers/maintenance.rs`, update `EveryMinuteTask::run()` to call the duplicate cleanup before materialization:
+The `DeleteDuplicateBlocks` UDF and the standalone `delete_duplicate_blocks()` function currently have duplicated SQL logic. Refactor the UDF to call the standalone function internally:
 
 ```rust
-async fn run(&self, task_scheduled_time: DateTime<Utc>) -> Result<()> {
-    // Clean up any duplicate blocks from the last few minutes
-    let cleanup_range = TimeRange::new(
-        task_scheduled_time - TimeDelta::minutes(5),
-        task_scheduled_time,
-    );
-    match delete_duplicate_blocks(&self.lakehouse.lake().db_pool, cleanup_range).await {
-        Ok(count) if count > 0 => info!("deleted {count} duplicate blocks"),
-        Ok(_) => {}
-        Err(e) => warn!("duplicate cleanup failed: {e:?}"),
+#[async_trait]
+impl AsyncScalarUDFImpl for DeleteDuplicateBlocks {
+    async fn invoke_async_with_args(&self, args: ScalarFunctionArgs) -> datafusion::error::Result<ColumnarValue> {
+        // ... validation ...
+
+        let deleted_count = delete_duplicate_blocks(&self.lake.db_pool, range.clone())
+            .await
+            .map_err(|e| DataFusionError::Execution(format!("Failed to delete duplicates: {e}")))?;
+
+        // ... build result array ...
     }
-
-    // Existing materialization logic...
-    let partition_time_delta = TimeDelta::minutes(1);
-    // ...
 }
 ```
 
-### Step 4: Add logging/metrics
-
-Add span instrumentation and optionally a metric counter for deleted duplicates to track cleanup effectiveness.
-
-## Files to Modify
-
-| File | Action |
-|------|--------|
-| `rust/analytics/src/lakehouse/delete_duplicate_blocks_udf.rs` | Add standalone async function |
-| `rust/analytics/src/lakehouse/mod.rs` | Export new function |
-| `rust/public/src/servers/maintenance.rs` | Call cleanup in EveryMinuteTask |
-
-## Considerations
-
-1. **Error handling**: Duplicate cleanup failures should log warnings but not fail the entire minute task - materialization should still proceed
-2. **Time range**: Use a 5-minute lookback window to catch any recent duplicates without scanning too much data
-3. **Performance**: The cleanup query uses existing indices on `block_id` and `insert_time`
-4. **Removal path**: Once unique constraints are deployed (#690), remove this code from the daemon
-
-## Alternative Considered
-
-**Run cleanup in EveryHourTask instead**: Rejected because hourly cleanup allows duplicates to accumulate, potentially causing issues with queries and materialization.
+This eliminates code duplication and ensures both paths use identical cleanup logic.
 
 ## Temporary Nature
 
