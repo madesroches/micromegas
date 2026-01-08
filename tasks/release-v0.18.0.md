@@ -180,31 +180,31 @@ From `/grafana` directory:
   - [x] Mark as latest release ✅
 - **Release URL**: https://github.com/madesroches/micromegas/releases/tag/v0.18.0
 
-### Phase 5: Post-Release Version Bump to 0.19.0
+### Phase 5: Post-Release Version Bump to 0.19.0 ✅
 Update all versions for next development cycle:
 
 #### Rust Workspace Files:
-- [ ] **`/rust/Cargo.toml`**:
-  - [ ] Update `[workspace.package].version = "0.19.0"`
-  - [ ] Update all workspace dependencies versions to `"0.19.0"`
+- [x] **`/rust/Cargo.toml`**:
+  - [x] Update `[workspace.package].version = "0.19.0"` ✅
+  - [x] Update all workspace dependencies versions to `"0.19.0"` ✅
 
 #### Individual Crate Files:
-- [ ] **`/rust/tracing/Cargo.toml`**: Update proc-macros dependency to `^0.19`
-- [ ] **`/rust/transit/Cargo.toml`**: Update derive-transit dependency to `^0.19`
+- [x] **`/rust/tracing/Cargo.toml`**: Update proc-macros dependency to `^0.19` ✅
+- [x] **`/rust/transit/Cargo.toml`**: Update derive-transit dependency to `^0.19` ✅
 
 #### Python Package:
-- [ ] **`/python/micromegas/pyproject.toml`**: Update to `version = "0.19.0"`
+- [x] **`/python/micromegas/pyproject.toml`**: Update to `version = "0.19.0"` ✅
 
 #### Grafana Plugin:
-- [ ] **`/grafana/package.json`**: Update to `"version": "0.19.0"`
+- [x] **`/grafana/package.json`**: Update to `"version": "0.19.0"` ✅
 
 #### Analytics Web App:
-- [ ] **`/analytics-web-app/package.json`**: Update to `"version": "0.19.0"`
+- [x] **`/analytics-web-app/package.json`**: Update to `"version": "0.19.0"` ✅
 
 #### Lock Files:
-- [ ] Regenerate Rust lock file: `cargo update` (from `/rust` directory)
-- [ ] Regenerate Grafana lock file: `yarn install` (from `/grafana` directory)
-- [ ] Regenerate Analytics Web App lock file: `yarn install` (from `/analytics-web-app` directory)
+- [x] Regenerate Rust lock file: `cargo update` (from `/rust` directory) ✅
+- [x] Regenerate Grafana lock file: `yarn install` (from `/grafana` directory) ✅
+- [x] Regenerate Analytics Web App lock file: `yarn install` (from `/analytics-web-app` directory) ✅
 
 #### Commit Version Bump:
 - [ ] Version bump committed
