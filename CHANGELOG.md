@@ -2,23 +2,39 @@
 
 This file documents the historical progress of the Micromegas project. For current focus, please see the main [README.md](./README.md).
 
-## [Unreleased]
+## January 2026 - v0.18.0
+* **Reliability & Data Integrity:**
+  * Add periodic duplicate block cleanup to maintenance daemon (#700)
+  * Prevent duplicate insertion for blocks, streams, and processes (#691)
+  * Add delete_duplicate_blocks UDF (#689)
+  * Fix queue_size going negative on timeout in http_event_sink (#699)
+* **Ingestion & Client:**
+  * Add proper HTTP error codes and client retry logic (#696)
+* **Analytics & Query Features:**
+  * Implement Arrow IPC streaming for query API (#685)
+  * Enable SHOW TABLES and information_schema support (#687)
+  * Add global LRU metadata cache for partition metadata (#674)
+  * Add jsonb_object_keys UDF (#673)
+  * Add property timeline feature for metrics visualization (#684)
 * **Tracing & Instrumentation:**
   * Improve #[span_fn] rustdoc documentation (#676)
   * Fix async span parenting and add spawn_with_context helper (#675)
-* **Analytics & Query Features:**
-  * Add global LRU metadata cache for partition metadata (#674)
-  * Add jsonb_object_keys UDF (#673)
+  * Add thread block parsing trace and tooling config (#686)
 * **Analytics Web App:**
   * Migrate from Next.js to Vite for dynamic base path support (#667)
+  * Pivot split button for process view navigation (#682)
+  * Metrics chart scaling and time units improvements (#681)
+  * Auto-refresh auth token on 401 API responses (#680)
   * Improve process info navigation and cleanup trace screen (#669)
   * Fix custom queries being reset when filters change (#670)
+* **Python CLI:**
+  * HTTPS URI support and executable scripts (#683)
 * **Unreal Engine:**
   * Add more metrics and process info to telemetry plugin (#672)
 * **Security:**
+  * Fix urllib3 decompression bomb vulnerability (CVE-2026-21441) (#695)
+  * Fix security vulnerabilities in qs and rsa dependencies (#693)
   * Fix esbuild security vulnerability (GHSA-67mh-4wv8-2f99) (#671)
-* **Planning:**
-  * Add user-defined screens feature plan (#665)
 
 ## December 2025 - v0.17.0
  * **Analytics Web App Major Rework:**
