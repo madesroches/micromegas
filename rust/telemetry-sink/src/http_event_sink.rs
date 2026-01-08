@@ -455,58 +455,61 @@ impl HttpEventSink {
         loop {
             let timeout = max(0, flusher.time_to_flush_seconds());
             match receiver.recv_timeout(Duration::from_secs(timeout as u64)) {
-                Ok(message) => match message {
-                    SinkEvent::Shutdown => {
-                        debug!("received shutdown signal, flushing remaining data");
-                        // Process any remaining messages in the queue before shutting down
-                        let mut count = 0;
-                        while let Ok(remaining_message) = receiver.try_recv() {
-                            count += 1;
-                            match remaining_message {
-                                SinkEvent::Shutdown => break, // Don't process multiple shutdowns
-                                remaining_msg => {
-                                    // Process the remaining message using the same logic as the main loop
-                                    Self::handle_sink_event(
-                                        remaining_msg,
-                                        &mut client,
-                                        &addr,
-                                        &mut opt_process_info,
-                                        &queue_size,
-                                        max_queue_size,
-                                        metadata_retry.clone(),
-                                        blocks_retry.clone(),
-                                        decorator,
-                                    )
-                                    .await;
+                Ok(message) => {
+                    queue_size.fetch_sub(1, Ordering::Relaxed);
+                    match message {
+                        SinkEvent::Shutdown => {
+                            debug!("received shutdown signal, flushing remaining data");
+                            // Process any remaining messages in the queue before shutting down
+                            let mut count = 0;
+                            while let Ok(remaining_message) = receiver.try_recv() {
+                                count += 1;
+                                match remaining_message {
+                                    SinkEvent::Shutdown => break, // Don't process multiple shutdowns
+                                    remaining_msg => {
+                                        // Process the remaining message using the same logic as the main loop
+                                        Self::handle_sink_event(
+                                            remaining_msg,
+                                            &mut client,
+                                            &addr,
+                                            &mut opt_process_info,
+                                            &queue_size,
+                                            max_queue_size,
+                                            metadata_retry.clone(),
+                                            blocks_retry.clone(),
+                                            decorator,
+                                        )
+                                        .await;
+                                    }
                                 }
                             }
+                            debug!(
+                                "telemetry thread shutdown complete, processed {} remaining messages",
+                                count
+                            );
+                            // Signal that shutdown is complete
+                            let (lock, cvar) = &*shutdown_complete;
+                            let mut completed = lock.lock().unwrap();
+                            *completed = true;
+                            cvar.notify_all();
+                            return;
                         }
-                        debug!(
-                            "telemetry thread shutdown complete, processed {} remaining messages",
-                            count
-                        );
-                        // Signal that shutdown is complete
-                        let (lock, cvar) = &*shutdown_complete;
-                        let mut completed = lock.lock().unwrap();
-                        *completed = true;
-                        cvar.notify_all();
-                        return;
+                        other_message => {
+                            Self::handle_sink_event(
+                                other_message,
+                                &mut client,
+                                &addr,
+                                &mut opt_process_info,
+                                &queue_size,
+                                max_queue_size,
+                                metadata_retry.clone(),
+                                blocks_retry.clone(),
+                                decorator,
+                            )
+                            .await;
+                        }
                     }
-                    other_message => {
-                        Self::handle_sink_event(
-                            other_message,
-                            &mut client,
-                            &addr,
-                            &mut opt_process_info,
-                            &queue_size,
-                            max_queue_size,
-                            metadata_retry.clone(),
-                            blocks_retry.clone(),
-                            decorator,
-                        )
-                        .await;
-                    }
-                },
+                }
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                     flusher.tick();
                 }
@@ -516,7 +519,6 @@ impl HttpEventSink {
                     return;
                 }
             }
-            queue_size.fetch_sub(1, Ordering::Relaxed);
         }
     }
 
