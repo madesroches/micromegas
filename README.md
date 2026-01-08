@@ -66,18 +66,29 @@ To get started with Micromegas, please refer to the [Getting Started](https://ma
 
 ## Current Status & Roadmap
 
-### v0.18.0 (In Progress)
-* **Tracing & Instrumentation:**
-  * `spawn_with_context` helper for proper async span parenting
-  * Improved `#[span_fn]` rustdoc documentation
+### January 2026 - v0.18.0
+* **Reliability & Data Integrity:**
+  * Periodic duplicate block cleanup in maintenance daemon
+  * Prevention of duplicate insertions for blocks, streams, and processes
+  * New `delete_duplicate_blocks` UDF for manual cleanup
+* **Ingestion Improvements:**
+  * Proper HTTP error codes with client retry logic
+  * Arrow IPC streaming for query API
 * **Analytics & Performance:**
+  * SHOW TABLES and information_schema support
   * Global LRU metadata cache for faster partition queries
   * New `jsonb_object_keys` UDF for JSON exploration
 * **Analytics Web App:**
   * Migrated from Next.js to Vite for dynamic base path support
+  * Property timeline for metrics visualization
   * Improved navigation and UI cleanup
+* **Tracing & Instrumentation:**
+  * `spawn_with_context` helper for proper async span parenting
+  * Improved `#[span_fn]` rustdoc documentation
 * **Unreal Engine:**
   * Additional metrics and process info in telemetry
+* **Security Fixes:**
+  * CVE-2026-21441 (urllib3), qs/rsa vulnerabilities, esbuild fix
 
 ### December 2025 - v0.17.0
 * **Analytics Web App** - Complete UI redesign with dark theme and Micromegas branding:
