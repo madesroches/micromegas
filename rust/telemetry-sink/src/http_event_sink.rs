@@ -78,8 +78,13 @@ pub struct HttpEventSink {
 
 impl Drop for HttpEventSink {
     fn drop(&mut self) {
-        // Send shutdown signal to thread (use send() to maintain queue_size accounting)
-        self.send(SinkEvent::Shutdown);
+        // Send shutdown signal (ignore error if thread already stopped from on_shutdown)
+        {
+            let sender_guard = self.sender.lock().unwrap();
+            if let Some(sender) = sender_guard.as_ref() {
+                let _ = sender.send(SinkEvent::Shutdown);
+            }
+        }
 
         // Now wait for the thread to finish
         if let Some(handle) = self.thread.take()
