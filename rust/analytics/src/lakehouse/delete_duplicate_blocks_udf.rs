@@ -95,45 +95,9 @@ impl AsyncScalarUDFImpl for DeleteDuplicateBlocks {
             return internal_err!("delete_duplicate_blocks requires a query time range to be set");
         };
 
-        let mut transaction =
-            self.lake.db_pool.begin().await.map_err(|e| {
-                DataFusionError::Execution(format!("Failed to begin transaction: {e}"))
-            })?;
-
-        // Delete duplicates, keeping the row with the earliest insert_time for each block_id.
-        // Note: The time range is used to identify block_ids that have duplicates, but once
-        // identified, ALL duplicate rows for that block_id are deleted regardless of their
-        // insert_time. This ensures complete cleanup of duplicates even if some copies
-        // exist outside the query range.
-        let delete_result = sqlx::query(
-            "WITH dups AS (
-                SELECT block_id, MIN(insert_time) as keep_time
-                FROM blocks
-                WHERE insert_time >= $1 AND insert_time < $2
-                GROUP BY block_id
-                HAVING COUNT(*) > 1
-            )
-            DELETE FROM blocks b
-            USING dups d
-            WHERE b.block_id = d.block_id
-            AND b.insert_time != d.keep_time",
-        )
-        .bind(range.begin)
-        .bind(range.end)
-        .execute(&mut *transaction)
-        .await
-        .map_err(|e| DataFusionError::Execution(format!("Failed to delete duplicates: {e}")))?;
-
-        let deleted_count = delete_result.rows_affected();
-
-        transaction.commit().await.map_err(|e| {
-            DataFusionError::Execution(format!("Failed to commit transaction: {e}"))
-        })?;
-
-        info!(
-            "Deleted {deleted_count} duplicate blocks in range [{}, {})",
-            range.begin, range.end
-        );
+        let deleted_count = delete_duplicate_blocks(&self.lake.db_pool, *range)
+            .await
+            .map_err(|e| DataFusionError::Execution(format!("Failed to delete duplicates: {e}")))?;
 
         let mut builder = StringBuilder::with_capacity(1, 64);
         builder.append_value(format!("Deleted {deleted_count} duplicate blocks"));
@@ -158,4 +122,54 @@ pub fn make_delete_duplicate_blocks_udf(
         lake,
         query_range,
     )))
+}
+
+/// Deletes duplicate blocks within the specified time range.
+///
+/// A duplicate is defined as multiple rows with the same `block_id`. This function
+/// keeps the row with the earliest `insert_time` and deletes all others.
+///
+/// Returns the number of deleted duplicate blocks.
+#[span_fn]
+pub async fn delete_duplicate_blocks(
+    pool: &sqlx::PgPool,
+    time_range: TimeRange,
+) -> anyhow::Result<u64> {
+    let mut transaction = pool.begin().await?;
+
+    // Delete duplicates, keeping the row with the earliest insert_time for each block_id.
+    // Note: The time range is used to identify block_ids that have duplicates, but once
+    // identified, ALL duplicate rows for that block_id are deleted regardless of their
+    // insert_time. This ensures complete cleanup of duplicates even if some copies
+    // exist outside the query range.
+    let delete_result = sqlx::query(
+        "WITH dups AS (
+            SELECT block_id, MIN(insert_time) as keep_time
+            FROM blocks
+            WHERE insert_time >= $1 AND insert_time < $2
+            GROUP BY block_id
+            HAVING COUNT(*) > 1
+        )
+        DELETE FROM blocks b
+        USING dups d
+        WHERE b.block_id = d.block_id
+        AND b.insert_time != d.keep_time",
+    )
+    .bind(time_range.begin)
+    .bind(time_range.end)
+    .execute(&mut *transaction)
+    .await?;
+
+    let deleted_count = delete_result.rows_affected();
+
+    transaction.commit().await?;
+
+    if deleted_count > 0 {
+        info!(
+            "Deleted {deleted_count} duplicate blocks in range [{}, {})",
+            time_range.begin, time_range.end
+        );
+    }
+
+    Ok(deleted_count)
 }

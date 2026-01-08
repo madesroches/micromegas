@@ -4,6 +4,7 @@ use chrono::{DateTime, DurationRound};
 use chrono::{TimeDelta, Utc};
 use micromegas_analytics::delete::delete_old_data;
 use micromegas_analytics::lakehouse::batch_update::materialize_partition_range;
+use micromegas_analytics::lakehouse::delete_duplicate_blocks_udf::delete_duplicate_blocks;
 use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
 use micromegas_analytics::lakehouse::partition_cache::PartitionCache;
 use micromegas_analytics::lakehouse::temp::delete_expired_temporary_files;
@@ -123,6 +124,17 @@ pub struct EveryMinuteTask {
 impl TaskCallback for EveryMinuteTask {
     #[span_fn]
     async fn run(&self, task_scheduled_time: DateTime<Utc>) -> Result<()> {
+        // Clean up any duplicate blocks from the last few minutes
+        // This is a temporary measure until unique constraints are deployed (#690)
+        let cleanup_range = TimeRange::new(
+            task_scheduled_time - TimeDelta::minutes(5),
+            task_scheduled_time,
+        );
+        if let Err(e) = delete_duplicate_blocks(&self.lakehouse.lake().db_pool, cleanup_range).await
+        {
+            warn!("duplicate cleanup failed: {e:?}");
+        }
+
         let partition_time_delta = TimeDelta::minutes(1);
         let trunc_task_time = task_scheduled_time.duration_trunc(partition_time_delta)?;
         let begin_range = trunc_task_time - (partition_time_delta * 2);
