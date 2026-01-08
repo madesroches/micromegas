@@ -56,6 +56,7 @@ Discover how Micromegas achieves this unparalleled cost efficiency and compare i
 
 Learn more about Micromegas through our technical presentations:
 
+- **[Unified Observability for Games](https://madesroches.github.io/micromegas/unified-observability-for-games/)** (January 2026) - Why a unified architecture is easier to use and more powerful
 - **[High-Frequency Observability: Cost-Efficient Telemetry at Scale](https://madesroches.github.io/micromegas/high-frequency-observability/)** (October 2025) - How to record more data for less money with tail sampling and lakehouse architecture
 - **[Design Presentation](https://madesroches.github.io/micromegas/doc/design-presentation/design.html)** (February 2025) - Architecture and design principles
 - **[Unreal Engine Guide](https://madesroches.github.io/micromegas/doc/unreal-observability/unreal-observability.html)** (July 2024) - Integrating Micromegas with Unreal Engine
@@ -73,8 +74,8 @@ To get started with Micromegas, please refer to the [Getting Started](https://ma
   * New `delete_duplicate_blocks` UDF for manual cleanup
 * **Ingestion Improvements:**
   * Proper HTTP error codes with client retry logic
-  * Arrow IPC streaming for query API
 * **Analytics & Performance:**
+  * Arrow IPC streaming for query API
   * SHOW TABLES and information_schema support
   * Global LRU metadata cache for faster partition queries
   * New `jsonb_object_keys` UDF for JSON exploration
