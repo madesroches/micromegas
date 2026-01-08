@@ -614,6 +614,8 @@ impl EventSink for HttpEventSink {
     }
 
     fn is_busy(&self) -> bool {
-        self.queue_size.load(Ordering::Relaxed) > 0
+        let size = self.queue_size.load(Ordering::Relaxed);
+        debug_assert!(size >= 0, "queue_size went negative: {size}");
+        size > 0
     }
 }
