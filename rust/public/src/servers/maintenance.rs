@@ -130,10 +130,9 @@ impl TaskCallback for EveryMinuteTask {
             task_scheduled_time - TimeDelta::minutes(5),
             task_scheduled_time,
         );
-        match delete_duplicate_blocks(&self.lakehouse.lake().db_pool, cleanup_range).await {
-            Ok(count) if count > 0 => info!("deleted {count} duplicate blocks"),
-            Ok(_) => {}
-            Err(e) => warn!("duplicate cleanup failed: {e:?}"),
+        if let Err(e) = delete_duplicate_blocks(&self.lakehouse.lake().db_pool, cleanup_range).await
+        {
+            warn!("duplicate cleanup failed: {e:?}");
         }
 
         let partition_time_delta = TimeDelta::minutes(1);
