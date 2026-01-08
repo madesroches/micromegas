@@ -29,26 +29,16 @@ Added duplicate block cleanup to the `EveryMinuteTask` in the maintenance daemon
 | `rust/analytics/src/lakehouse/delete_duplicate_blocks_udf.rs` | Added standalone `delete_duplicate_blocks()` async function |
 | `rust/public/src/servers/maintenance.rs` | Call cleanup in `EveryMinuteTask::run()` |
 
-## Future Improvement: Unify UDF and Standalone Function
+## UDF Unified with Standalone Function
 
-The `DeleteDuplicateBlocks` UDF and the standalone `delete_duplicate_blocks()` function currently have duplicated SQL logic. Refactor the UDF to call the standalone function internally:
+**Status: Complete**
 
-```rust
-#[async_trait]
-impl AsyncScalarUDFImpl for DeleteDuplicateBlocks {
-    async fn invoke_async_with_args(&self, args: ScalarFunctionArgs) -> datafusion::error::Result<ColumnarValue> {
-        // ... validation ...
+The `DeleteDuplicateBlocks` UDF now calls the standalone `delete_duplicate_blocks()` function internally, eliminating code duplication. Both the daemon task and SQL UDF use identical cleanup logic.
 
-        let deleted_count = delete_duplicate_blocks(&self.lake.db_pool, range.clone())
-            .await
-            .map_err(|e| DataFusionError::Execution(format!("Failed to delete duplicates: {e}")))?;
-
-        // ... build result array ...
-    }
-}
-```
-
-This eliminates code duplication and ensures both paths use identical cleanup logic.
+Benefits:
+- Single source of truth for the SQL query
+- Consistent logging behavior (only logs when duplicates found)
+- Easier maintenance - changes to cleanup logic only need to be made in one place
 
 ## Temporary Nature
 
