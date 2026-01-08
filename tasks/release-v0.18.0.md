@@ -207,11 +207,15 @@ Update all versions for next development cycle:
 - [x] Regenerate Analytics Web App lock file: `yarn install` (from `/analytics-web-app` directory) ✅
 
 #### Commit Version Bump:
-- [ ] Version bump committed
-- [ ] Push to release branch
+- [x] Version bump committed ✅ (3301ce845)
+- [x] Push to release branch ✅
+
+#### README Update:
+- [x] Update README roadmap for v0.18.0 release ✅ (11c77599b)
 
 ### Phase 6: Merge to Main
-- [ ] Merge release/v0.18.0 branch to main
+- [x] Create PR to merge release/v0.18.0 to main ✅ (#701)
+- [ ] Merge PR after review
 - [ ] Push main to origin
 
 ## Rollback Plan
