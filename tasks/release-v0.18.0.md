@@ -128,8 +128,8 @@ Current versions should already be at 0.18.0:
 - [ ] **Build plugin archive**: Use `./build-plugin.sh` script (NOT manual tar)
 
 ### 5. Git Preparation
-- [ ] Create release tag: `git tag v0.18.0`
-- [ ] Verify tag points to correct commit
+- [x] Create release tag: `git tag v0.18.0` ✅
+- [x] Verify tag points to correct commit ✅ 8362fbc45
 
 ## Release Process
 
