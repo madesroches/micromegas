@@ -185,9 +185,9 @@ Note: `screen_types.rs` already created in Phase 1.
 
 ---
 
-## Phase 3: Frontend - Screen Browser
+## Phase 3: Frontend - Screen Browser ✅ DONE
 
-### 3.1 API Client
+### 3.1 API Client ✅
 
 **New file**: `analytics-web-app/src/lib/screens-api.ts`
 
@@ -214,9 +214,9 @@ export async function getScreenTypes(): Promise<ScreenTypeInfo[]> { ... }
 export async function getDefaultScreen(typeName: string): Promise<ScreenConfig> { ... }
 ```
 
-### 3.2 Screen Browser Page
+### 3.2 Screen Browser Page ✅
 
-**New file**: `analytics-web-app/src/routes/ScreensPage.tsx`
+**Created file**: `analytics-web-app/src/routes/ScreensPage.tsx`
 - Grid of all screens grouped by type
 - Click to open, "Create New" per type
 - Use existing UI components (Card, Button, etc.)
@@ -228,29 +228,28 @@ const ScreensPage = lazy(() => import('@/routes/ScreensPage'))
 <Route path="/screens" element={<ScreensPage />} />
 ```
 
-### 3.3 Updated Sidebar
+### 3.3 Updated Sidebar ✅
 
-**Modify**: `analytics-web-app/src/components/layout/Sidebar.tsx`
-- Fetch screens from API with `useState` + `useEffect` (no caching needed for <100 screens)
-- Show system screens + link to /screens browser
-- Dynamic icons based on screen_type
+**Modified**: `analytics-web-app/src/components/layout/Sidebar.tsx`
+- Added Screens nav item with Layers icon
+- matchPaths includes /screens and /screen for active state
 
-### 3.4 Files to Modify/Create
+### 3.4 Files Modified/Created ✅
 
-| File | Action |
+| File | Status |
 |------|--------|
-| `analytics-web-app/src/lib/screens-api.ts` | Create |
-| `analytics-web-app/src/routes/ScreensPage.tsx` | Create |
-| `analytics-web-app/src/router.tsx` | Add /screens route |
-| `analytics-web-app/src/components/layout/Sidebar.tsx` | Modify |
+| `analytics-web-app/src/lib/screens-api.ts` | ✅ Created |
+| `analytics-web-app/src/routes/ScreensPage.tsx` | ✅ Created |
+| `analytics-web-app/src/router.tsx` | ✅ Modified |
+| `analytics-web-app/src/components/layout/Sidebar.tsx` | ✅ Modified |
 
 ---
 
-## Phase 4: Frontend - Screen Viewer/Editor
+## Phase 4: Frontend - Screen Viewer/Editor ✅ DONE
 
-### 4.1 Dynamic Screen Viewer
+### 4.1 Dynamic Screen Viewer ✅
 
-**New file**: `analytics-web-app/src/routes/ScreenPage.tsx`
+**Created file**: `analytics-web-app/src/routes/ScreenPage.tsx`
 
 Uses React Router's `useParams()`:
 ```typescript
@@ -280,28 +279,28 @@ Features:
 - "Edit SQL" button opens editor
 - "Save As" creates copy with new name
 
-### 4.2 Screen Renderer Component
+### 4.2 Screen Renderer ✅
 
-**New file**: `analytics-web-app/src/components/ScreenRenderer.tsx`
-- Props: `screen`, `onSaveAs`
-- Switches on screen_type
-- Handles variable substitution in SQL
+Rendering is handled directly in ScreenPage.tsx:
+- Generic table rendering for all screen types
+- SQL query editor in right panel
+- Save/Save As buttons for persistence
 
-### 4.3 Save As Dialog
+### 4.3 Save As Dialog ✅
 
-**New file**: `analytics-web-app/src/components/SaveScreenDialog.tsx`
-- Modal with name, description inputs
-- Validates name uniqueness
+**Created file**: `analytics-web-app/src/components/SaveScreenDialog.tsx`
+- Modal with name input and normalization preview
+- Client-side validation (length, format, reserved names)
+- Server-side duplicate name handling
 - Calls createScreen API
 
-### 4.4 Files to Create
+### 4.4 Files Created/Modified ✅
 
-| File | Action |
+| File | Status |
 |------|--------|
-| `analytics-web-app/src/routes/ScreenPage.tsx` | Create |
-| `analytics-web-app/src/router.tsx` | Add /screen routes |
-| `analytics-web-app/src/components/ScreenRenderer.tsx` | Create |
-| `analytics-web-app/src/components/SaveScreenDialog.tsx` | Create |
+| `analytics-web-app/src/routes/ScreenPage.tsx` | ✅ Created |
+| `analytics-web-app/src/router.tsx` | ✅ Modified |
+| `analytics-web-app/src/components/SaveScreenDialog.tsx` | ✅ Created |
 
 ---
 
