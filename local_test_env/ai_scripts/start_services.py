@@ -13,10 +13,12 @@ import requests
 from pathlib import Path
 import signal
 
+
 def run_command(cmd, check=True, shell=True, capture_output=False):
     """Run a shell command"""
     print(f"Running: {cmd}")
     return subprocess.run(cmd, shell=shell, check=check, capture_output=capture_output)
+
 
 def kill_services():
     """Kill any existing services"""
@@ -28,6 +30,7 @@ def kill_services():
             pass
     time.sleep(2)
 
+
 def check_postgres_running():
     """Check if PostgreSQL Docker container is running"""
     try:
@@ -35,11 +38,12 @@ def check_postgres_running():
             "docker ps --filter name=teledb --filter status=running --format '{{.Names}}'",
             shell=True,
             capture_output=True,
-            text=True
+            text=True,
         )
         return "teledb" in result.stdout
     except:
         return False
+
 
 def wait_for_service(url, max_attempts=30, service_name="Service"):
     """Wait for a service to be ready"""
@@ -60,6 +64,31 @@ def wait_for_service(url, max_attempts=30, service_name="Service"):
         time.sleep(1)
     return False
 
+
+def ensure_app_database():
+    """Create micromegas_app database if it doesn't exist"""
+    username = os.environ.get("MICROMEGAS_DB_USERNAME")
+
+    # Connect to default postgres database to check if micromegas_app exists
+    result = subprocess.run(
+        f"docker exec teledb psql -U {username} -tc \"SELECT 1 FROM pg_database WHERE datname = 'micromegas_app'\"",
+        shell=True,
+        capture_output=True,
+        text=True,
+    )
+
+    if "1" not in result.stdout:
+        print("Creating micromegas_app database...")
+        subprocess.run(
+            f'docker exec teledb psql -U {username} -c "CREATE DATABASE micromegas_app"',
+            shell=True,
+            check=True,
+        )
+        print("✅ micromegas_app database created")
+    else:
+        print("✅ micromegas_app database already exists")
+
+
 def main():
     script_dir = Path(__file__).parent.absolute()
     rust_dir = script_dir.parent.parent / "rust"
@@ -70,7 +99,9 @@ def main():
 
     print("🔧 Building all services...")
     os.chdir(rust_dir)
-    run_command("cargo build --bin telemetry-ingestion-srv --bin flight-sql-srv --bin telemetry-admin")
+    run_command(
+        "cargo build --bin telemetry-ingestion-srv --bin flight-sql-srv --bin telemetry-admin"
+    )
 
     print("🚀 Starting services...")
 
@@ -91,38 +122,59 @@ def main():
     else:
         print("PostgreSQL already running")
 
+    # Ensure the app database exists
+    ensure_app_database()
+
     os.chdir(rust_dir)
 
     # Start Ingestion Server
     print("📥 Starting Ingestion Server...")
     with open("/tmp/ingestion.log", "w") as log_file:
-        ingestion_process = subprocess.Popen([
-            "cargo", "run", "-p", "telemetry-ingestion-srv", "--",
-            "--listen-endpoint-http", "127.0.0.1:9000",
-            "--disable-auth"
-        ], stdout=log_file, stderr=subprocess.STDOUT, env=os.environ.copy())
+        ingestion_process = subprocess.Popen(
+            [
+                "cargo",
+                "run",
+                "-p",
+                "telemetry-ingestion-srv",
+                "--",
+                "--listen-endpoint-http",
+                "127.0.0.1:9000",
+                "--disable-auth",
+            ],
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            env=os.environ.copy(),
+        )
     ingestion_pid = ingestion_process.pid
     print(f"Ingestion Server PID: {ingestion_pid}")
 
     # Wait for ingestion server to be ready
-    if not wait_for_service("http://127.0.0.1:9000/health", service_name="Ingestion Server"):
+    if not wait_for_service(
+        "http://127.0.0.1:9000/health", service_name="Ingestion Server"
+    ):
         sys.exit(1)
 
     # Start Analytics Server
     print("📊 Starting Analytics Server...")
     with open("/tmp/analytics.log", "w") as log_file:
-        analytics_process = subprocess.Popen([
-            "cargo", "run", "-p", "flight-sql-srv", "--", "--disable-auth"
-        ], stdout=log_file, stderr=subprocess.STDOUT, env=os.environ.copy())
+        analytics_process = subprocess.Popen(
+            ["cargo", "run", "-p", "flight-sql-srv", "--", "--disable-auth"],
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            env=os.environ.copy(),
+        )
     analytics_pid = analytics_process.pid
     print(f"Analytics Server PID: {analytics_pid}")
 
     # Start Admin Daemon
     print("⚙️ Starting Admin Daemon...")
     with open("/tmp/admin.log", "w") as log_file:
-        admin_process = subprocess.Popen([
-            "cargo", "run", "-p", "telemetry-admin", "--", "crond"
-        ], stdout=log_file, stderr=subprocess.STDOUT, env=os.environ.copy())
+        admin_process = subprocess.Popen(
+            ["cargo", "run", "-p", "telemetry-admin", "--", "crond"],
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            env=os.environ.copy(),
+        )
     admin_pid = admin_process.pid
     print(f"Admin Daemon PID: {admin_pid}")
     print()
@@ -156,6 +208,7 @@ def main():
     print("⏳ Waiting a moment for services to fully start...")
     time.sleep(3)
     print("✅ Ready to test!")
+
 
 if __name__ == "__main__":
     main()

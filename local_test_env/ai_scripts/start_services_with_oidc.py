@@ -40,7 +40,9 @@ def check_env_vars():
         print("❌ Error: MICROMEGAS_OIDC_CONFIG environment variable not set")
         print()
         print("Please set your OIDC configuration:")
-        print('  export MICROMEGAS_OIDC_CONFIG=\'{"issuers": [{"issuer": "...", "audience": "..."}], ...}\'')
+        print(
+            '  export MICROMEGAS_OIDC_CONFIG=\'{"issuers": [{"issuer": "...", "audience": "..."}], ...}\''
+        )
         print()
         print("Or source a pre-configured auth script:")
         print("  . ~/set_human_auth.sh    # For Auth0")
@@ -94,10 +96,36 @@ def wait_for_service(url, max_attempts=30, service_name="Service"):
 
         if i == max_attempts:
             print(f"❌ {service_name} failed to start")
-            print(f"   Check logs: tail -f /tmp/{service_name.lower().replace(' ', '_')}.log")
+            print(
+                f"   Check logs: tail -f /tmp/{service_name.lower().replace(' ', '_')}.log"
+            )
             return False
         time.sleep(1)
     return False
+
+
+def ensure_app_database():
+    """Create micromegas_app database if it doesn't exist"""
+    username = os.environ.get("MICROMEGAS_DB_USERNAME")
+
+    # Connect to default postgres database to check if micromegas_app exists
+    result = subprocess.run(
+        f"docker exec teledb psql -U {username} -tc \"SELECT 1 FROM pg_database WHERE datname = 'micromegas_app'\"",
+        shell=True,
+        capture_output=True,
+        text=True,
+    )
+
+    if "1" not in result.stdout:
+        print("Creating micromegas_app database...")
+        subprocess.run(
+            f'docker exec teledb psql -U {username} -c "CREATE DATABASE micromegas_app"',
+            shell=True,
+            check=True,
+        )
+        print("✅ micromegas_app database created")
+    else:
+        print("✅ micromegas_app database already exists")
 
 
 def main():
@@ -164,6 +192,9 @@ def main():
         time.sleep(5)
     else:
         print("PostgreSQL already running")
+
+    # Ensure the app database exists
+    ensure_app_database()
     print()
 
     os.chdir(rust_dir)
