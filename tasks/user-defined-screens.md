@@ -29,9 +29,38 @@ rust/analytics-web-srv/src/app_db/
   models.rs      # Rust structs
 ```
 
-Dependencies already available in analytics-web-srv: sqlx, uuid, chrono, serde
+**Dependencies to add** to `rust/analytics-web-srv/Cargo.toml`: sqlx (with postgres, runtime-tokio features)
 
-### 1.2 Schema
+Already available: uuid, chrono, serde
+
+### 1.2 Screen Name Validation
+
+Screen names are used in URLs (`/screen/:name`), so they must be URL-safe and readable.
+
+**Validation rules:**
+- 3-100 characters
+- Lowercase letters, numbers, and hyphens only
+- Must start with a letter
+- Must end with a letter or number
+- No consecutive hyphens
+
+**Examples:**
+- Valid: `error-logs`, `prod-metrics-v2`, `my-custom-screen`
+- Invalid: `Error Logs` (spaces/uppercase), `-errors` (starts with hyphen), `a` (too short)
+
+**Slug generation:**
+When saving, the backend should normalize input:
+- Convert to lowercase
+- Replace spaces with hyphens
+- Remove invalid characters
+- Collapse consecutive hyphens
+
+If the normalized name conflicts with an existing screen, return 400 with error code `DUPLICATE_NAME`.
+
+**Reserved names:**
+- `new` (used for `/screen/new` route)
+
+### 1.3 Schema
 
 Screen types are code-driven (not stored in DB) - they define component rendering, default SQL, and variables. Only user-created screens are persisted.
 
@@ -106,7 +135,7 @@ impl ScreenType {
 - `GET /screen-types` - list all screen types
 - `GET /screen-types/:type/default` - get default config for a type
 
-### 1.3 Local Dev Setup ✅ DONE
+### 1.4 Local Dev Setup ✅ DONE
 
 Database creation is already implemented:
 - `local_test_env/ai_scripts/start_services.py` calls `ensure_app_database()`
@@ -114,7 +143,7 @@ Database creation is already implemented:
 
 **Still needed**: Connection string configuration for analytics-web-srv (see Phase 2.1)
 
-### 1.4 Files to Modify/Create
+### 1.5 Files to Modify/Create
 
 | File | Action |
 |------|--------|
@@ -131,11 +160,16 @@ Database creation is already implemented:
 
 **Modify**: `rust/analytics-web-srv/src/main.rs`
 
-Add new state for app database:
+Use `Extension` to inject the pool (matches existing `AuthToken` pattern):
 ```rust
-struct AppState {
-    app_db_pool: sqlx::PgPool,
-}
+// In main(), after creating the pool:
+let app_db_pool: sqlx::PgPool = /* ... */;
+
+// Add to routes via layer:
+.layer(Extension(app_db_pool))
+
+// In handlers, extract via:
+Extension(pool): Extension<sqlx::PgPool>
 ```
 
 **Environment variable**: `MICROMEGAS_APP_SQL_CONNECTION_STRING`
@@ -171,7 +205,7 @@ All endpoints should return proper error responses:
 
 | File | Action |
 |------|--------|
-| `rust/analytics-web-srv/src/main.rs` | Add PgPool, AppState, routes |
+| `rust/analytics-web-srv/src/main.rs` | Add PgPool via Extension, add routes |
 | `rust/analytics-web-srv/src/screen_types.rs` | Create (enum, default configs) |
 | `rust/analytics-web-srv/src/screens.rs` | Create (CRUD handlers) |
 
@@ -223,7 +257,7 @@ const ScreensPage = lazy(() => import('@/routes/ScreensPage'))
 ### 3.3 Updated Sidebar
 
 **Modify**: `analytics-web-app/src/components/layout/Sidebar.tsx`
-- Fetch screens from API (with SWR or React Query for caching)
+- Fetch screens from API with `useState` + `useEffect` (no caching needed for <100 screens)
 - Show system screens + link to /screens browser
 - Dynamic icons based on screen_type
 
