@@ -207,24 +207,18 @@ async fn main() -> Result<()> {
     }
 
     // Connect to micromegas_app database for user-defined screens
-    let app_db_pool = if let Ok(conn_string) = std::env::var("MICROMEGAS_APP_SQL_CONNECTION_STRING")
-    {
-        let pool = sqlx::PgPool::connect(&conn_string)
-            .await
-            .context("Failed to connect to micromegas_app database")?;
+    let app_db_conn_string = std::env::var("MICROMEGAS_APP_SQL_CONNECTION_STRING")
+        .context("MICROMEGAS_APP_SQL_CONNECTION_STRING environment variable not set")?;
 
-        app_db::execute_migration(pool.clone())
-            .await
-            .context("Failed to run micromegas_app migrations")?;
+    let app_db_pool = sqlx::PgPool::connect(&app_db_conn_string)
+        .await
+        .context("Failed to connect to micromegas_app database")?;
 
-        println!("Connected to micromegas_app database");
-        Some(pool)
-    } else {
-        println!(
-            "WARNING: MICROMEGAS_APP_SQL_CONNECTION_STRING not set - screens feature disabled"
-        );
-        None
-    };
+    app_db::execute_migration(app_db_pool.clone())
+        .await
+        .context("Failed to run micromegas_app migrations")?;
+
+    info!("Connected to micromegas_app database");
 
     // Build auth state if authentication is enabled
     let auth_state = if !args.disable_auth {
@@ -311,34 +305,30 @@ async fn main() -> Result<()> {
         api_routes.layer(Extension(AuthToken(String::new())))
     };
 
-    // Build screen routes if database is available
-    let screen_routes = if let Some(pool) = app_db_pool {
-        Router::new()
-            // Screen types (static)
-            .route(
-                &format!("{base_path}/screen-types"),
-                get(screens::list_screen_types),
-            )
-            .route(
-                &format!("{base_path}/screen-types/{{type_name}}/default"),
-                get(screens::get_default_config),
-            )
-            // Screens CRUD
-            .route(
-                &format!("{base_path}/screens"),
-                get(screens::list_screens).post(screens::create_screen),
-            )
-            .route(
-                &format!("{base_path}/screens/{{name}}"),
-                get(screens::get_screen)
-                    .put(screens::update_screen)
-                    .delete(screens::delete_screen),
-            )
-            .layer(Extension(pool))
-            .layer(middleware::from_fn(observability_middleware))
-    } else {
-        Router::new()
-    };
+    // Build screen routes
+    let screen_routes = Router::new()
+        // Screen types (static)
+        .route(
+            &format!("{base_path}/screen-types"),
+            get(screens::list_screen_types),
+        )
+        .route(
+            &format!("{base_path}/screen-types/{{type_name}}/default"),
+            get(screens::get_default_config),
+        )
+        // Screens CRUD
+        .route(
+            &format!("{base_path}/screens"),
+            get(screens::list_screens).post(screens::create_screen),
+        )
+        .route(
+            &format!("{base_path}/screens/{{name}}"),
+            get(screens::get_screen)
+                .put(screens::update_screen)
+                .delete(screens::delete_screen),
+        )
+        .layer(Extension(app_db_pool))
+        .layer(middleware::from_fn(observability_middleware));
 
     // State for serving index.html with injected config
     let index_state = IndexState {

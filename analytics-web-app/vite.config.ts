@@ -59,6 +59,12 @@ export default defineConfig(({ mode }) => {
         [`${basePath}/health`]: {
           target: backendUrl,
         },
+        [`${basePath}/screens`]: {
+          target: backendUrl,
+        },
+        [`${basePath}/screen-types`]: {
+          target: backendUrl,
+        },
       },
     },
   }
