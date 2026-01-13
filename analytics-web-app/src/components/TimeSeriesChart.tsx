@@ -389,6 +389,9 @@ export function TimeSeriesChart({
           <div>
             avg: <span className="text-theme-text-secondary">{formatStatValue(stats.avg, unit)}</span>
           </div>
+          <div>
+            count: <span className="text-theme-text-secondary">{data.length.toLocaleString()}</span>
+          </div>
           <div className="relative group">
             <div className="flex border border-theme-border rounded overflow-hidden">
               <button

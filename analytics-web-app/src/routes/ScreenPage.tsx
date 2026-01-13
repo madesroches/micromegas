@@ -204,10 +204,10 @@ function MetricsView({
   const chartData = useMemo(() => {
     if (!table || table.numRows === 0) return []
     const points: { time: number; value: number }[] = []
+
     for (let i = 0; i < table.numRows; i++) {
       const row = table.get(i)
       if (row) {
-        // Arrow JS converts timestamp columns to milliseconds automatically
         const time = timestampToMs(row.time)
         const value = Number(row.value)
         if (!isNaN(time) && !isNaN(value)) {
