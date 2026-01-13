@@ -12,7 +12,7 @@ impl fmt::Display for ParseScreenTypeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "invalid screen type '{}', expected one of: table, metrics, trace",
+            "invalid screen type '{}', expected one of: process_list, metrics, log",
             self.invalid_value
         )
     }
@@ -24,9 +24,9 @@ impl std::error::Error for ParseScreenTypeError {}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ScreenType {
-    Table,
+    ProcessList,
     Metrics,
-    Trace,
+    Log,
 }
 
 impl FromStr for ScreenType {
@@ -34,9 +34,9 @@ impl FromStr for ScreenType {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "table" => Ok(ScreenType::Table),
+            "process_list" => Ok(ScreenType::ProcessList),
             "metrics" => Ok(ScreenType::Metrics),
-            "trace" => Ok(ScreenType::Trace),
+            "log" => Ok(ScreenType::Log),
             _ => Err(ParseScreenTypeError {
                 invalid_value: s.to_string(),
             }),
@@ -47,35 +47,39 @@ impl FromStr for ScreenType {
 impl ScreenType {
     /// Returns all available screen types.
     pub fn all() -> Vec<ScreenType> {
-        vec![ScreenType::Table, ScreenType::Metrics, ScreenType::Trace]
+        vec![
+            ScreenType::ProcessList,
+            ScreenType::Metrics,
+            ScreenType::Log,
+        ]
     }
 
     /// Returns the string identifier for this screen type.
     pub fn as_str(&self) -> &'static str {
         match self {
-            ScreenType::Table => "table",
+            ScreenType::ProcessList => "process_list",
             ScreenType::Metrics => "metrics",
-            ScreenType::Trace => "trace",
+            ScreenType::Log => "log",
         }
     }
 
     /// Returns information about this screen type.
     pub fn info(&self) -> ScreenTypeInfo {
         match self {
-            ScreenType::Table => ScreenTypeInfo {
-                name: "table".to_string(),
-                icon: "table".to_string(),
-                description: "SQL query with tabular results".to_string(),
+            ScreenType::ProcessList => ScreenTypeInfo {
+                name: "process_list".to_string(),
+                icon: "list".to_string(),
+                description: "List of processes with filtering".to_string(),
             },
             ScreenType::Metrics => ScreenTypeInfo {
                 name: "metrics".to_string(),
                 icon: "chart-line".to_string(),
                 description: "Time series metrics visualization".to_string(),
             },
-            ScreenType::Trace => ScreenTypeInfo {
-                name: "trace".to_string(),
-                icon: "sitemap".to_string(),
-                description: "Performance trace visualization".to_string(),
+            ScreenType::Log => ScreenTypeInfo {
+                name: "log".to_string(),
+                icon: "file-text".to_string(),
+                description: "Log entries viewer with filtering".to_string(),
             },
         }
     }
@@ -83,7 +87,7 @@ impl ScreenType {
     /// Returns the default configuration for this screen type.
     pub fn default_config(&self) -> serde_json::Value {
         match self {
-            ScreenType::Table => serde_json::json!({
+            ScreenType::ProcessList => serde_json::json!({
                 "sql": "SELECT * FROM processes LIMIT 100",
                 "variables": []
             }),
@@ -91,11 +95,9 @@ impl ScreenType {
                 "sql": "SELECT time, value FROM metrics WHERE $__timeFilter(time) ORDER BY time",
                 "variables": []
             }),
-            ScreenType::Trace => serde_json::json!({
-                "process_id": null,
-                "time_range": null,
-                "include_async_spans": true,
-                "include_thread_spans": true
+            ScreenType::Log => serde_json::json!({
+                "sql": "SELECT time, level, target, msg FROM log_entries ORDER BY time DESC LIMIT 1000",
+                "variables": []
             }),
         }
     }
@@ -116,43 +118,46 @@ mod tests {
     #[test]
     fn test_screen_type_serialization() {
         assert_eq!(
-            serde_json::to_string(&ScreenType::Table).expect("serialize"),
-            "\"table\""
+            serde_json::to_string(&ScreenType::ProcessList).expect("serialize"),
+            "\"process_list\""
         );
         assert_eq!(
             serde_json::to_string(&ScreenType::Metrics).expect("serialize"),
             "\"metrics\""
         );
         assert_eq!(
-            serde_json::to_string(&ScreenType::Trace).expect("serialize"),
-            "\"trace\""
+            serde_json::to_string(&ScreenType::Log).expect("serialize"),
+            "\"log\""
         );
     }
 
     #[test]
     fn test_screen_type_deserialization() {
         assert_eq!(
-            serde_json::from_str::<ScreenType>("\"table\"").expect("deserialize"),
-            ScreenType::Table
+            serde_json::from_str::<ScreenType>("\"process_list\"").expect("deserialize"),
+            ScreenType::ProcessList
         );
         assert_eq!(
             serde_json::from_str::<ScreenType>("\"metrics\"").expect("deserialize"),
             ScreenType::Metrics
         );
         assert_eq!(
-            serde_json::from_str::<ScreenType>("\"trace\"").expect("deserialize"),
-            ScreenType::Trace
+            serde_json::from_str::<ScreenType>("\"log\"").expect("deserialize"),
+            ScreenType::Log
         );
     }
 
     #[test]
     fn test_screen_type_from_str() {
-        assert_eq!("table".parse::<ScreenType>().unwrap(), ScreenType::Table);
+        assert_eq!(
+            "process_list".parse::<ScreenType>().unwrap(),
+            ScreenType::ProcessList
+        );
         assert_eq!(
             "metrics".parse::<ScreenType>().unwrap(),
             ScreenType::Metrics
         );
-        assert_eq!("trace".parse::<ScreenType>().unwrap(), ScreenType::Trace);
+        assert_eq!("log".parse::<ScreenType>().unwrap(), ScreenType::Log);
         assert!("invalid".parse::<ScreenType>().is_err());
     }
 
@@ -160,8 +165,8 @@ mod tests {
     fn test_all_screen_types() {
         let all = ScreenType::all();
         assert_eq!(all.len(), 3);
-        assert!(all.contains(&ScreenType::Table));
+        assert!(all.contains(&ScreenType::ProcessList));
         assert!(all.contains(&ScreenType::Metrics));
-        assert!(all.contains(&ScreenType::Trace));
+        assert!(all.contains(&ScreenType::Log));
     }
 }

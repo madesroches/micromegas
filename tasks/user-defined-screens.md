@@ -15,27 +15,27 @@ Add customizable screens to analytics-web-app. Users can take existing screen ty
 
 ---
 
-## Phase 1: Database Infrastructure
+## Phase 1: Database Infrastructure ✅ DONE
 
-### 1.1 Add Database Module to analytics-web-srv
+### 1.1 Add Database Module to analytics-web-srv ✅
 
-**New module**: `rust/analytics-web-srv/src/app_db/`
+**Created module**: `rust/analytics-web-srv/src/app_db/`
 
 ```
 rust/analytics-web-srv/src/app_db/
   mod.rs
   schema.rs      # Table creation SQL
   migration.rs   # Version-based migration (follow ingestion pattern)
-  models.rs      # Rust structs
+  models.rs      # Rust structs (Screen, CreateScreenRequest, UpdateScreenRequest, validation)
 ```
 
-**Dependencies to add** to `rust/analytics-web-srv/Cargo.toml`: sqlx (with postgres, runtime-tokio features)
+**Added**: sqlx dependency to `rust/analytics-web-srv/Cargo.toml`
 
-Already available: uuid, chrono, serde
-
-### 1.2 Screen Name Validation
+### 1.2 Screen Name Validation ✅
 
 Screen names are used in URLs (`/screen/:name`), so they must be URL-safe and readable.
+
+**Implemented** in `models.rs`: `validate_screen_name()` and `normalize_screen_name()` functions.
 
 **Validation rules:**
 - 3-100 characters
@@ -60,7 +60,7 @@ If the normalized name conflicts with an existing screen, return 400 with error 
 **Reserved names:**
 - `new` (used for `/screen/new` route)
 
-### 1.3 Schema
+### 1.3 Schema ✅
 
 Screen types are code-driven (not stored in DB) - they define component rendering, default SQL, and variables. Only user-created screens are persisted.
 
@@ -82,54 +82,22 @@ CREATE TABLE screens (
 - New screen → `/screen/new` (user selects type, then edits & saves)
 - Saved screen → `/screen/:name` (e.g., `/screen/my-error-logs`)
 
-**ScreenType (enum-based, simpler than trait pattern):**
+**ScreenType (enum-based, implemented in `screen_types.rs`):**
 
 ```rust
-// rust/analytics-web-srv/src/screen_types.rs
-use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ScreenType {
-    Table,
-    Metrics,
-    Trace,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ScreenTypeInfo {
-    pub name: String,
-    pub icon: String,
-    pub description: String,
-}
-
-impl ScreenType {
-    pub fn all() -> Vec<ScreenType> {
-        vec![ScreenType::Table, ScreenType::Metrics, ScreenType::Trace]
-    }
-
-    pub fn info(&self) -> ScreenTypeInfo {
-        match self {
-            ScreenType::Table => ScreenTypeInfo {
-                name: "table".to_string(),
-                icon: "table".to_string(),
-                description: "SQL query with tabular results".to_string(),
-            },
-            // ... other types
-        }
-    }
-
-    pub fn default_config(&self) -> serde_json::Value {
-        match self {
-            ScreenType::Table => serde_json::json!({
-                "sql": "SELECT * FROM processes LIMIT 100",
-                "variables": []
-            }),
-            // ... other types
-        }
-    }
+    ProcessList,  // serializes as "process_list"
+    Metrics,      // serializes as "metrics"
+    Log,          // serializes as "log"
 }
 ```
+
+Each type provides:
+- `info()` - name, icon, description for UI
+- `default_config()` - default SQL/config for new screens
+- `as_str()` / `FromStr` - string conversion
 
 **API endpoints:**
 - `GET /screen-types` - list all screen types
@@ -143,14 +111,17 @@ Database creation is already implemented:
 
 **Still needed**: Connection string configuration for analytics-web-srv (see Phase 2.1)
 
-### 1.5 Files to Modify/Create
+### 1.5 Files Created ✅
 
-| File | Action |
+| File | Status |
 |------|--------|
-| `rust/analytics-web-srv/src/app_db/mod.rs` | Create |
-| `rust/analytics-web-srv/src/app_db/schema.rs` | Create |
-| `rust/analytics-web-srv/src/app_db/migration.rs` | Create |
-| `rust/analytics-web-srv/src/app_db/models.rs` | Create |
+| `rust/analytics-web-srv/src/app_db/mod.rs` | ✅ Created |
+| `rust/analytics-web-srv/src/app_db/schema.rs` | ✅ Created |
+| `rust/analytics-web-srv/src/app_db/migration.rs` | ✅ Created |
+| `rust/analytics-web-srv/src/app_db/models.rs` | ✅ Created |
+| `rust/analytics-web-srv/src/screen_types.rs` | ✅ Created |
+| `rust/analytics-web-srv/src/lib.rs` | ✅ Modified (added modules) |
+| `rust/analytics-web-srv/Cargo.toml` | ✅ Modified (added sqlx) |
 
 ---
 
@@ -206,8 +177,9 @@ All endpoints should return proper error responses:
 | File | Action |
 |------|--------|
 | `rust/analytics-web-srv/src/main.rs` | Add PgPool via Extension, add routes |
-| `rust/analytics-web-srv/src/screen_types.rs` | Create (enum, default configs) |
 | `rust/analytics-web-srv/src/screens.rs` | Create (CRUD handlers) |
+
+Note: `screen_types.rs` already created in Phase 1.
 
 ---
 
@@ -298,9 +270,9 @@ const ScreenPage = lazy(() => import('@/routes/ScreenPage'))
 ```
 
 Render based on `screen_type`:
-- `table`: Reuse QueryEditor + table pattern from ProcessesPage
+- `process_list`: Reuse QueryEditor + table pattern from ProcessesPage
 - `metrics`: Reuse TimeSeriesChart pattern from ProcessMetricsPage
-- `trace`: Reuse trace generation pattern from PerformanceAnalysisPage
+- `log`: Reuse log viewer pattern from ProcessLogPage
 
 Features:
 - "Edit SQL" button opens editor
@@ -369,10 +341,9 @@ Variables come from multiple sources (priority order):
 ### 6.1 Gradual Migration
 
 Keep existing pages working alongside new screen system:
-- `routes/ProcessesPage.tsx` - keep as-is
-- `routes/ProcessLogPage.tsx` - keep as-is
-- `routes/ProcessMetricsPage.tsx` - keep as-is
-- `routes/PerformanceAnalysisPage.tsx` - keep as-is
+- `routes/ProcessesPage.tsx` - keep as-is (basis for `process_list` screens)
+- `routes/ProcessLogPage.tsx` - keep as-is (basis for `log` screens)
+- `routes/ProcessMetricsPage.tsx` - keep as-is (basis for `metrics` screens)
 
 Add new screen routes without removing old ones. Migration can happen later once the screen system is proven.
 
