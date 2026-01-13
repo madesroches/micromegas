@@ -47,12 +47,10 @@ CREATE TABLE screens (
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
-
-CREATE INDEX idx_screens_screen_type ON screens(screen_type);
 ```
 
 **Navigation model:**
-- New screen → `/screen/new/:type` (factory creates default, user edits & saves)
+- New screen → `/screen/new` (user selects type, then edits & saves)
 - Saved screen → `/screen/:name` (e.g., `/screen/my-error-logs`)
 
 **ScreenType (enum-based, simpler than trait pattern):**
@@ -261,7 +259,7 @@ export default function ScreenPage() {
 ```typescript
 const ScreenPage = lazy(() => import('@/routes/ScreenPage'))
 // ...
-<Route path="/screen/new/:type" element={<ScreenPage />} />
+<Route path="/screen/new" element={<ScreenPage />} />
 <Route path="/screen/:name" element={<ScreenPage />} />
 ```
 
