@@ -241,6 +241,8 @@ export function TimeSeriesChart({
       width: dimensions.width,
       height: dimensions.height,
       plugins: [createTooltipPlugin(unit, conversionFactor)],
+      // Use local timezone for time display
+      tzDate: (ts: number) => new Date(ts * 1000),
       scales: {
         x: { time: true },
         y: {
