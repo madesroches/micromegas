@@ -11,7 +11,25 @@ import { DataType, TimeUnit, Timestamp } from 'apache-arrow'
 export function timestampToMs(value: unknown, dataType?: DataType): number {
   if (!value) return 0
   if (value instanceof Date) return value.getTime()
-  if (typeof value === 'number') return value
+
+  if (typeof value === 'number') {
+    // Check if dataType specifies the unit
+    if (dataType && DataType.isTimestamp(dataType)) {
+      const timestampType = dataType as Timestamp
+      switch (timestampType.unit) {
+        case TimeUnit.SECOND:
+          return value * 1000
+        case TimeUnit.MILLISECOND:
+          return value
+        case TimeUnit.MICROSECOND:
+          return value / 1000
+        case TimeUnit.NANOSECOND:
+          return value / 1000000
+      }
+    }
+    // Default: assume nanoseconds (micromegas standard)
+    return value / 1000000
+  }
 
   if (typeof value === 'bigint') {
     // Determine divisor based on the Arrow type's time unit
@@ -44,9 +62,8 @@ export function timestampToMs(value: unknown, dataType?: DataType): number {
 export function timestampToDate(value: unknown, dataType?: DataType): Date | null {
   if (!value) return null
   if (value instanceof Date) return value
-  if (typeof value === 'number') return new Date(value)
 
-  if (typeof value === 'bigint') {
+  if (typeof value === 'number' || typeof value === 'bigint') {
     const ms = timestampToMs(value, dataType)
     return new Date(ms)
   }

@@ -214,6 +214,8 @@ function MetricsView({
         }
       }
     }
+    // Sort by time ascending - uPlot requires data in chronological order
+    points.sort((a, b) => a.time - b.time)
     return points
   }, [table])
 
