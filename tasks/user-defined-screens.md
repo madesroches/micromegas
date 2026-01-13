@@ -359,7 +359,7 @@ Add new screen routes without removing old ones. Migration can happen later once
 
 - Loading states for screen list
 - Error handling for failed screen loads
-- Confirmation dialog for delete
+- ✅ Confirmation dialog for delete (`ConfirmDialog` component)
 - Sorting screens by name/date
 - Empty state when no screens exist
 

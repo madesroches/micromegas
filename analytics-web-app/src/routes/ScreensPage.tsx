@@ -4,6 +4,7 @@ import { List, LineChart, FileText, Plus, Trash2 } from 'lucide-react'
 import { PageLayout } from '@/components/layout'
 import { AuthGuard } from '@/components/AuthGuard'
 import { ErrorBanner } from '@/components/ErrorBanner'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { Button } from '@/components/ui/button'
 import { AppLink } from '@/components/AppLink'
 import {
@@ -52,6 +53,7 @@ function ScreensPageContent() {
   const [error, setError] = useState<string | null>(null)
   const [deleteError, setDeleteError] = useState<string | null>(null)
   const [deletingScreen, setDeletingScreen] = useState<string | null>(null)
+  const [screenToDelete, setScreenToDelete] = useState<string | null>(null)
 
   const loadData = useCallback(async () => {
     setIsLoading(true)
@@ -82,25 +84,28 @@ function ScreensPageContent() {
     navigate(`/screen/new?type=${typeName}`)
   }
 
-  const handleDelete = async (screenName: string, e: React.MouseEvent) => {
+  const handleDeleteClick = (screenName: string, e: React.MouseEvent) => {
     e.preventDefault()
     e.stopPropagation()
+    setScreenToDelete(screenName)
+  }
 
-    if (!confirm(`Delete screen "${screenName}"?`)) {
-      return
-    }
+  const handleDeleteConfirm = async () => {
+    if (!screenToDelete) return
 
-    setDeletingScreen(screenName)
+    setDeletingScreen(screenToDelete)
     setDeleteError(null)
     try {
-      await deleteScreen(screenName)
-      setScreens((prev) => prev.filter((s) => s.name !== screenName))
+      await deleteScreen(screenToDelete)
+      setScreens((prev) => prev.filter((s) => s.name !== screenToDelete))
+      setScreenToDelete(null)
     } catch (err) {
       if (err instanceof ScreenApiError) {
         setDeleteError(`Failed to delete: ${err.message}`)
       } else {
         setDeleteError('Failed to delete screen')
       }
+      setScreenToDelete(null)
     } finally {
       setDeletingScreen(null)
     }
@@ -184,7 +189,7 @@ function ScreensPageContent() {
                             </p>
                           </div>
                           <button
-                            onClick={(e) => handleDelete(screen.name, e)}
+                            onClick={(e) => handleDeleteClick(screen.name, e)}
                             disabled={deletingScreen === screen.name}
                             className="ml-2 p-1.5 rounded text-theme-text-muted hover:text-red-400 hover:bg-red-400/10 transition-colors opacity-0 group-hover:opacity-100"
                             title="Delete screen"
@@ -211,6 +216,18 @@ function ScreensPageContent() {
             </div>
           )}
         </div>
+
+        {/* Delete Confirmation Dialog */}
+        <ConfirmDialog
+          isOpen={screenToDelete !== null}
+          onClose={() => setScreenToDelete(null)}
+          onConfirm={handleDeleteConfirm}
+          title="Delete Screen"
+          message={`Are you sure you want to delete "${screenToDelete}"? This action cannot be undone.`}
+          confirmLabel="Delete"
+          variant="danger"
+          isLoading={deletingScreen !== null}
+        />
       </PageLayout>
     </AuthGuard>
   )

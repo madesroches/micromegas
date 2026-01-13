@@ -123,7 +123,8 @@ describe('getDefaultConfig', () => {
       createErrorResponse(400, 'INVALID_SCREEN_TYPE', 'Unknown screen type')
     )
 
-    await expect(getDefaultConfig('invalid' as any)).rejects.toThrow(
+    // @ts-expect-error testing invalid input
+    await expect(getDefaultConfig('invalid')).rejects.toThrow(
       ScreenApiError
     )
   })
@@ -266,7 +267,8 @@ describe('createScreen', () => {
     await expect(
       createScreen({
         name: 'test',
-        screen_type: 'invalid' as any,
+        // @ts-expect-error testing invalid input
+        screen_type: 'invalid',
         config: { sql: 'SELECT 1' },
       })
     ).rejects.toMatchObject({
