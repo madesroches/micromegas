@@ -92,7 +92,7 @@ impl ScreenType {
                 "variables": []
             }),
             ScreenType::Metrics => serde_json::json!({
-                "sql": "SELECT time, value FROM metrics WHERE $__timeFilter(time) ORDER BY time",
+                "sql": "SELECT time, value\nFROM measures\nWHERE name = 'cpu_usage'\nORDER BY time\nLIMIT 100",
                 "variables": []
             }),
             ScreenType::Log => serde_json::json!({

@@ -5,6 +5,7 @@ import { PageLayout } from '@/components/layout'
 import { AuthGuard } from '@/components/AuthGuard'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { QueryEditor } from '@/components/QueryEditor'
+import { TimeSeriesChart } from '@/components/TimeSeriesChart'
 import { Button } from '@/components/ui/button'
 import { AppLink } from '@/components/AppLink'
 import { SaveScreenDialog } from '@/components/SaveScreenDialog'
@@ -12,7 +13,7 @@ import { CopyableProcessId } from '@/components/CopyableProcessId'
 import { useStreamQuery } from '@/hooks/useStreamQuery'
 import { useTimeRange } from '@/hooks/useTimeRange'
 import { formatTimestamp, formatDuration } from '@/lib/time-range'
-import { timestampToDate } from '@/lib/arrow-utils'
+import { timestampToDate, timestampToMs } from '@/lib/arrow-utils'
 import {
   getScreen,
   getDefaultConfig,
@@ -189,6 +190,56 @@ function ProcessListTable({
           })}
         </tbody>
       </table>
+    </div>
+  )
+}
+
+// Metrics chart component for metrics screen type
+function MetricsView({
+  table,
+}: {
+  table: ReturnType<ReturnType<typeof useStreamQuery>['getTable']>
+}) {
+  // Transform table data to chart format
+  const chartData = useMemo(() => {
+    if (!table || table.numRows === 0) return []
+    const points: { time: number; value: number }[] = []
+    for (let i = 0; i < table.numRows; i++) {
+      const row = table.get(i)
+      if (row) {
+        const time = timestampToMs(row.time)
+        const value = Number(row.value)
+        if (!isNaN(time) && !isNaN(value)) {
+          points.push({ time, value })
+        }
+      }
+    }
+    return points
+  }, [table])
+
+  if (!table || table.numRows === 0) {
+    return (
+      <div className="flex-1 flex items-center justify-center bg-app-panel border border-theme-border rounded-lg">
+        <span className="text-theme-text-muted">No data available.</span>
+      </div>
+    )
+  }
+
+  if (chartData.length === 0) {
+    return (
+      <div className="flex-1 flex items-center justify-center bg-app-panel border border-theme-border rounded-lg">
+        <span className="text-theme-text-muted">No valid time/value data found. Query must return &apos;time&apos; and &apos;value&apos; columns.</span>
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex-1 min-h-[400px]">
+      <TimeSeriesChart
+        data={chartData}
+        title=""
+        unit=""
+      />
     </div>
   )
 }
@@ -395,49 +446,48 @@ function ScreenPageContent() {
 
   // Query editor panel
   const sqlPanel = config && screenType ? (
-    <div className="flex flex-col h-full">
-      <QueryEditor
-        defaultSql={screen?.config.sql ?? config.sql}
-        variables={VARIABLES}
-        currentValues={currentValues}
-        timeRangeLabel={timeRange.label}
-        onRun={handleRunQuery}
-        onReset={handleResetQuery}
-        isLoading={streamQuery.isStreaming}
-        error={queryError}
-      />
-
-      {/* Save buttons */}
-      <div className="border-t border-theme-border p-3 flex gap-2">
-        {screen && (
-          <Button
-            variant="default"
-            size="sm"
-            onClick={handleSave}
-            disabled={isSaving || !hasUnsavedChanges}
-            className="gap-1"
-          >
-            <Save className="w-4 h-4" />
-            {isSaving ? 'Saving...' : 'Save'}
-          </Button>
-        )}
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => setShowSaveDialog(true)}
-          className="gap-1"
-        >
-          <Save className="w-4 h-4" />
-          Save As
-        </Button>
-      </div>
-
-      {saveError && (
-        <div className="px-3 pb-3">
-          <p className="text-xs text-accent-error">{saveError}</p>
-        </div>
-      )}
-    </div>
+    <QueryEditor
+      defaultSql={screen?.config.sql ?? config.sql}
+      variables={VARIABLES}
+      currentValues={currentValues}
+      timeRangeLabel={timeRange.label}
+      onRun={handleRunQuery}
+      onReset={handleResetQuery}
+      isLoading={streamQuery.isStreaming}
+      error={queryError}
+      footer={
+        <>
+          <div className="border-t border-theme-border p-3 flex gap-2">
+            {screen && (
+              <Button
+                variant="default"
+                size="sm"
+                onClick={handleSave}
+                disabled={isSaving || !hasUnsavedChanges}
+                className="gap-1"
+              >
+                <Save className="w-4 h-4" />
+                {isSaving ? 'Saving...' : 'Save'}
+              </Button>
+            )}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowSaveDialog(true)}
+              className="gap-1"
+            >
+              <Save className="w-4 h-4" />
+              Save As
+            </Button>
+          </div>
+          {saveError && (
+            <div className="px-3 pb-3">
+              <p className="text-xs text-accent-error">{saveError}</p>
+            </div>
+          )}
+        </>
+      }
+    />
   ) : undefined
 
   // Loading state
@@ -504,12 +554,16 @@ function ScreenPageContent() {
                 <h1 className="text-2xl font-semibold text-theme-text-primary">
                   {isNew ? `New ${getScreenTypeDisplayName(screenType)} Screen` : screen?.name}
                 </h1>
-                <p className="text-sm text-theme-text-secondary">
-                  {getScreenTypeDisplayName(screenType)}
-                  {hasUnsavedChanges && (
-                    <span className="ml-2 text-accent-warning">(unsaved changes)</span>
-                  )}
-                </p>
+                {(isNew || hasUnsavedChanges) && (
+                  <p className="text-sm text-theme-text-secondary">
+                    {isNew && getScreenTypeDisplayName(screenType)}
+                    {hasUnsavedChanges && (
+                      <span className={isNew ? 'ml-2' : ''} style={{ color: 'var(--accent-warning)' }}>
+                        (unsaved changes)
+                      </span>
+                    )}
+                  </p>
+                )}
               </div>
             </div>
           </div>
@@ -523,7 +577,7 @@ function ScreenPageContent() {
             />
           )}
 
-          {/* Results Table */}
+          {/* Results */}
           {streamQuery.isStreaming && !table ? (
             <div className="flex-1 flex items-center justify-center bg-app-panel border border-theme-border rounded-lg">
               <div className="flex items-center gap-3">
@@ -538,6 +592,8 @@ function ScreenPageContent() {
               sortDirection={sortDirection}
               onSort={handleSort}
             />
+          ) : screenType === 'metrics' ? (
+            <MetricsView table={table} />
           ) : table && table.numRows > 0 ? (
             <div className="flex-1 overflow-auto bg-app-panel border border-theme-border rounded-lg">
               <table className="w-full">

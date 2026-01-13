@@ -11,6 +11,8 @@ interface QueryEditorProps {
   isLoading?: boolean
   error?: string | null
   docLink?: { url: string; label: string }
+  /** Footer content rendered at bottom of panel (only when expanded) */
+  footer?: React.ReactNode
 }
 
 export function QueryEditor({
@@ -23,6 +25,7 @@ export function QueryEditor({
   isLoading = false,
   error,
   docLink,
+  footer,
 }: QueryEditorProps) {
   const [isCollapsed, setIsCollapsed] = useState(true)
   const [sql, setSql] = useState(defaultSql)
@@ -201,6 +204,9 @@ export function QueryEditor({
           </div>
         )}
       </div>
+
+      {/* Footer */}
+      {footer}
     </div>
   )
 }

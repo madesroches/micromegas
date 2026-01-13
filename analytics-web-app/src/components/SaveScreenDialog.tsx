@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import { X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { createScreen, ScreenTypeName, ScreenConfig, ScreenApiError } from '@/lib/screens-api'
@@ -16,14 +16,14 @@ interface SaveScreenDialogProps {
 /**
  * Normalizes a screen name to URL-safe format.
  * - Converts to lowercase
- * - Replaces spaces with hyphens
+ * - Replaces spaces and underscores with hyphens
  * - Removes invalid characters
  * - Collapses consecutive hyphens
  */
 function normalizeScreenName(name: string): string {
   return name
     .toLowerCase()
-    .replace(/\s+/g, '-')
+    .replace(/[\s_]+/g, '-')
     .replace(/[^a-z0-9-]/g, '')
     .replace(/-+/g, '-')
     .replace(/^-|-$/g, '')
@@ -38,24 +38,23 @@ export function SaveScreenDialog({
   suggestedName,
 }: SaveScreenDialogProps) {
   const [name, setName] = useState(suggestedName || '')
-  const [normalizedName, setNormalizedName] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [isSaving, setIsSaving] = useState(false)
+  const wasOpenRef = useRef(false)
 
-  // Reset state when dialog opens
+  // Compute normalized name synchronously to avoid flicker
+  const normalizedName = useMemo(() => normalizeScreenName(name), [name])
+
+  // Reset state only when dialog opens (not on every suggestedName change)
   useEffect(() => {
-    if (isOpen) {
+    if (isOpen && !wasOpenRef.current) {
+      // Dialog just opened
       setName(suggestedName || '')
-      setNormalizedName(suggestedName ? normalizeScreenName(suggestedName) : '')
       setError(null)
       setIsSaving(false)
     }
+    wasOpenRef.current = isOpen
   }, [isOpen, suggestedName])
-
-  // Update normalized name as user types
-  useEffect(() => {
-    setNormalizedName(normalizeScreenName(name))
-  }, [name])
 
   const handleSave = useCallback(async () => {
     const screenName = normalizedName
