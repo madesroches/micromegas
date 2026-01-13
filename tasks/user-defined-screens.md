@@ -311,7 +311,7 @@ Rendering is handled directly in ScreenPage.tsx:
 
 ---
 
-## Phase 5: Variables System
+## Phase 5: Variables System (DEFERRED)
 
 ### 5.1 Variable Handling
 
@@ -344,7 +344,7 @@ Variables come from multiple sources (priority order):
 
 ---
 
-## Phase 6: Migration (Optional)
+## Phase 6: Migration (DEFERRED)
 
 ### 6.1 Gradual Migration
 
@@ -365,20 +365,20 @@ Add new screen routes without removing old ones. Migration can happen later once
 
 ---
 
-## Testing
+## Testing ✅ DONE
 
-### Backend Tests
+### Backend Tests ✅
 
-Create `rust/analytics-web-srv/tests/screens_test.rs`:
-- Test CRUD operations
-- Test migration runs correctly
-- Test invalid inputs return proper errors
+**Created files**:
+- `rust/analytics-web-srv/tests/models_tests.rs` - Screen name validation and normalization tests
+- `rust/analytics-web-srv/tests/screen_types_tests.rs` - ScreenType serialization, parsing, info, default configs
 
-### Frontend Tests
+### Frontend Tests ✅
 
-Create `analytics-web-app/src/lib/__tests__/screens-api.test.ts`:
-- Test API client functions
-- Mock responses
+**Created file**: `analytics-web-app/tests/lib/screens-api.test.ts`
+- Tests all API client functions (CRUD operations)
+- Tests error handling (HTTP errors, missing fields, non-JSON responses)
+- Uses mocked fetch responses (no live database required)
 
 ---
 
