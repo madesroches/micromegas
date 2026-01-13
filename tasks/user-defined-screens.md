@@ -143,17 +143,17 @@ let app_db_pool: sqlx::PgPool = /* ... */;
 Extension(pool): Extension<sqlx::PgPool>
 ```
 
-**Environment variable**: `MICROMEGAS_APP_SQL_CONNECTION_STRING`
-- Format: `postgres://user:pass@host:5432/micromegas_app`
-- For local dev, add to `start_analytics_web.py` or use same credentials as main DB
+**Environment variable**: `MICROMEGAS_APP_SQL_CONNECTION_STRING` (required)
+- Format: `postgres://user:pass@host:port/micromegas_app`
+- Built automatically by `start_analytics_web.py` from `MICROMEGAS_DB_USERNAME`, `MICROMEGAS_DB_PASSWD`, and `MICROMEGAS_DB_PORT`
 
 **Startup sequence** (implemented):
-1. Read connection string from env (optional - graceful degradation if not set)
+1. Read connection string from env (required - server exits if not set)
 2. Create PgPool
 3. Run migrations
 4. Add pool to screen routes via Extension layer
 
-**Error handling**: If env var not set, screens feature is disabled with a warning. If connection/migration fails, server exits with error.
+**Error handling**: Server exits with error if env var not set or connection/migration fails.
 
 ### 2.2 REST Endpoints ✅
 
@@ -234,7 +234,12 @@ const ScreensPage = lazy(() => import('@/routes/ScreensPage'))
 - Added Screens nav item with Layers icon
 - matchPaths includes /screens and /screen for active state
 
-### 3.4 Files Modified/Created ✅
+### 3.4 Vite Proxy Configuration ✅
+
+**Modified**: `analytics-web-app/vite.config.ts`
+- Added proxy routes for `/screens` and `/screen-types` to forward to backend
+
+### 3.5 Files Modified/Created ✅
 
 | File | Status |
 |------|--------|
@@ -242,6 +247,8 @@ const ScreensPage = lazy(() => import('@/routes/ScreensPage'))
 | `analytics-web-app/src/routes/ScreensPage.tsx` | ✅ Created |
 | `analytics-web-app/src/router.tsx` | ✅ Modified |
 | `analytics-web-app/src/components/layout/Sidebar.tsx` | ✅ Modified |
+| `analytics-web-app/vite.config.ts` | ✅ Modified (proxy) |
+| `analytics-web-app/start_analytics_web.py` | ✅ Modified (db env vars) |
 
 ---
 
