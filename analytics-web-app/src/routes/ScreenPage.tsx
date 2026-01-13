@@ -207,6 +207,7 @@ function MetricsView({
     for (let i = 0; i < table.numRows; i++) {
       const row = table.get(i)
       if (row) {
+        // Arrow JS converts timestamp columns to milliseconds automatically
         const time = timestampToMs(row.time)
         const value = Number(row.value)
         if (!isNaN(time) && !isNaN(value)) {
@@ -236,7 +237,7 @@ function MetricsView({
   }
 
   return (
-    <div className="flex-1 min-h-[400px]">
+    <div className="flex-1 min-h-[400px] h-full">
       <TimeSeriesChart
         data={chartData}
         title=""
@@ -393,6 +394,18 @@ function ScreenPageContent() {
     }
   }, [screen, config, loadData])
 
+  // Track SQL changes immediately as user types
+  const handleSqlChange = useCallback(
+    (sql: string) => {
+      if (screen && sql !== screen.config.sql) {
+        setHasUnsavedChanges(true)
+      } else if (screen && sql === screen.config.sql) {
+        setHasUnsavedChanges(false)
+      }
+    },
+    [screen]
+  )
+
   const handleRefresh = useCallback(() => {
     loadData(currentSqlRef.current)
   }, [loadData])
@@ -455,6 +468,7 @@ function ScreenPageContent() {
       timeRangeLabel={timeRange.label}
       onRun={handleRunQuery}
       onReset={handleResetQuery}
+      onChange={handleSqlChange}
       isLoading={streamQuery.isStreaming}
       error={queryError}
       footer={

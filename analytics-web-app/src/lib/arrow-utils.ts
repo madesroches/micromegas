@@ -13,7 +13,21 @@ export function timestampToMs(value: unknown, dataType?: DataType): number {
   if (value instanceof Date) return value.getTime()
 
   if (typeof value === 'number') {
-    // JavaScript Arrow converts timestamp[ns] to milliseconds with decimal precision
+    // Use the schema's time unit if available
+    if (dataType && DataType.isTimestamp(dataType)) {
+      const timestampType = dataType as Timestamp
+      switch (timestampType.unit) {
+        case TimeUnit.SECOND:
+          return value * 1000
+        case TimeUnit.MILLISECOND:
+          return value
+        case TimeUnit.MICROSECOND:
+          return value / 1000
+        case TimeUnit.NANOSECOND:
+          return value / 1000000
+      }
+    }
+    // No dataType - assume milliseconds
     return value
   }
 
