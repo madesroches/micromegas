@@ -1,6 +1,6 @@
 import { Suspense, useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import { useParams, useSearchParams, useNavigate } from 'react-router-dom'
-import { AlertCircle, List, LineChart, FileText, Save } from 'lucide-react'
+import { AlertCircle, List, LineChart, FileText, Save, ChevronUp, ChevronDown } from 'lucide-react'
 import { PageLayout } from '@/components/layout'
 import { AuthGuard } from '@/components/AuthGuard'
 import { ErrorBanner } from '@/components/ErrorBanner'
@@ -8,8 +8,11 @@ import { QueryEditor } from '@/components/QueryEditor'
 import { Button } from '@/components/ui/button'
 import { AppLink } from '@/components/AppLink'
 import { SaveScreenDialog } from '@/components/SaveScreenDialog'
+import { CopyableProcessId } from '@/components/CopyableProcessId'
 import { useStreamQuery } from '@/hooks/useStreamQuery'
 import { useTimeRange } from '@/hooks/useTimeRange'
+import { formatTimestamp, formatDuration } from '@/lib/time-range'
+import { timestampToDate } from '@/lib/arrow-utils'
 import {
   getScreen,
   getDefaultConfig,
@@ -54,6 +57,142 @@ const VARIABLES = [
   { name: 'end', description: 'Time range end (ISO timestamp)' },
 ]
 
+// Process list sorting
+type ProcessSortField = 'exe' | 'start_time' | 'last_update_time' | 'runtime' | 'username' | 'computer'
+type SortDirection = 'asc' | 'desc'
+
+// Process list table component (matches ProcessesPage)
+function ProcessListTable({
+  table,
+  sortField,
+  sortDirection,
+  onSort,
+}: {
+  table: ReturnType<ReturnType<typeof useStreamQuery>['getTable']>
+  sortField: ProcessSortField
+  sortDirection: SortDirection
+  onSort: (field: ProcessSortField) => void
+}) {
+  const SortHeader = ({
+    field,
+    children,
+    className = '',
+  }: {
+    field: ProcessSortField
+    children: React.ReactNode
+    className?: string
+  }) => (
+    <th
+      onClick={() => onSort(field)}
+      className={`px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider cursor-pointer select-none transition-colors ${
+        sortField === field
+          ? 'text-theme-text-primary bg-app-card'
+          : 'text-theme-text-muted hover:text-theme-text-secondary hover:bg-app-card'
+      } ${className}`}
+    >
+      <div className="flex items-center gap-1">
+        {children}
+        <span className={sortField === field ? 'text-accent-link' : 'opacity-30'}>
+          {sortField === field && sortDirection === 'asc' ? (
+            <ChevronUp className="w-3 h-3" />
+          ) : (
+            <ChevronDown className="w-3 h-3" />
+          )}
+        </span>
+      </div>
+    </th>
+  )
+
+  if (!table || table.numRows === 0) {
+    return (
+      <div className="flex-1 flex items-center justify-center bg-app-panel border border-theme-border rounded-lg">
+        <span className="text-theme-text-muted">No processes available.</span>
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex-1 overflow-auto bg-app-panel border border-theme-border rounded-lg">
+      <table className="w-full">
+        <thead className="sticky top-0">
+          <tr className="bg-app-card border-b border-theme-border">
+            <SortHeader field="exe">Process</SortHeader>
+            <th className="hidden sm:table-cell px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-theme-text-muted">
+              Process ID
+            </th>
+            <SortHeader field="start_time">Start Time</SortHeader>
+            <SortHeader field="last_update_time" className="hidden lg:table-cell">
+              Last Update
+            </SortHeader>
+            <SortHeader field="runtime" className="hidden lg:table-cell">
+              Runtime
+            </SortHeader>
+            <SortHeader field="username" className="hidden md:table-cell">
+              Username
+            </SortHeader>
+            <SortHeader field="computer" className="hidden md:table-cell">
+              Computer
+            </SortHeader>
+          </tr>
+        </thead>
+        <tbody>
+          {Array.from({ length: table.numRows }, (_, i) => {
+            const row = table.get(i)
+            if (!row) return null
+            const processId = String(row.process_id ?? '')
+            const exe = String(row.exe ?? '')
+            const startTime = row.start_time
+            const lastUpdateTime = row.last_update_time
+            const username = String(row.username ?? '')
+            const computer = String(row.computer ?? '')
+            const startDate = timestampToDate(startTime)
+            const endDate = timestampToDate(lastUpdateTime)
+            const fromParam = startDate?.toISOString() ?? ''
+            const toParam = endDate?.toISOString() ?? ''
+            return (
+              <tr
+                key={processId || i}
+                className="border-b border-theme-border hover:bg-app-card transition-colors"
+              >
+                <td className="px-4 py-3">
+                  <AppLink
+                    href={`/process?id=${processId}&from=${encodeURIComponent(fromParam)}&to=${encodeURIComponent(toParam)}`}
+                    className="text-accent-link hover:underline"
+                  >
+                    {exe}
+                  </AppLink>
+                </td>
+                <td className="hidden sm:table-cell px-4 py-3">
+                  <CopyableProcessId
+                    processId={processId}
+                    truncate={true}
+                    className="text-sm font-mono text-theme-text-secondary"
+                  />
+                </td>
+                <td className="px-4 py-3 font-mono text-sm text-theme-text-primary">
+                  {formatTimestamp(startTime)}
+                </td>
+                <td className="hidden lg:table-cell px-4 py-3 font-mono text-sm text-theme-text-primary">
+                  {formatTimestamp(lastUpdateTime)}
+                </td>
+                <td className="hidden lg:table-cell px-4 py-3 font-mono text-sm text-theme-text-secondary">
+                  {formatDuration(startTime, lastUpdateTime)}
+                </td>
+                <td className="hidden md:table-cell px-4 py-3 text-theme-text-primary">
+                  {username}
+                </td>
+                <td className="hidden md:table-cell px-4 py-3 text-theme-text-primary">
+                  {computer}
+                </td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
 function ScreenPageContent() {
   const { name } = useParams<{ name: string }>()
   const [searchParams] = useSearchParams()
@@ -75,6 +214,10 @@ function ScreenPageContent() {
 
   // Dialog state
   const [showSaveDialog, setShowSaveDialog] = useState(false)
+
+  // Process list sorting state
+  const [sortField, setSortField] = useState<ProcessSortField>('last_update_time')
+  const [sortDirection, setSortDirection] = useState<SortDirection>('desc')
 
   // Query state
   const streamQuery = useStreamQuery()
@@ -200,6 +343,16 @@ function ScreenPageContent() {
   const handleRefresh = useCallback(() => {
     loadData(currentSqlRef.current)
   }, [loadData])
+
+  // Handle process list sorting
+  const handleSort = useCallback((field: ProcessSortField) => {
+    if (sortField === field) {
+      setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc')
+    } else {
+      setSortField(field)
+      setSortDirection('desc')
+    }
+  }, [sortField, sortDirection])
 
   // Save existing screen
   const handleSave = useCallback(async () => {
@@ -378,6 +531,13 @@ function ScreenPageContent() {
                 <span className="text-theme-text-secondary">Loading data...</span>
               </div>
             </div>
+          ) : screenType === 'process_list' ? (
+            <ProcessListTable
+              table={table}
+              sortField={sortField}
+              sortDirection={sortDirection}
+              onSort={handleSort}
+            />
           ) : table && table.numRows > 0 ? (
             <div className="flex-1 overflow-auto bg-app-panel border border-theme-border rounded-lg">
               <table className="w-full">
@@ -428,13 +588,6 @@ function ScreenPageContent() {
           ) : (
             <div className="flex-1 flex items-center justify-center bg-app-panel border border-theme-border rounded-lg">
               <span className="text-theme-text-muted">No results</span>
-            </div>
-          )}
-
-          {/* Row count */}
-          {table && (
-            <div className="mt-2 text-xs text-theme-text-muted text-center">
-              {table.numRows} row{table.numRows !== 1 ? 's' : ''}
             </div>
           )}
         </div>

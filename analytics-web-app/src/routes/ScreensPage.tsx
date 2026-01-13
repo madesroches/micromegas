@@ -106,19 +106,6 @@ function ScreensPageContent() {
     }
   }
 
-  // Group screens by type
-  const screensByType = screens.reduce(
-    (acc, screen) => {
-      const type = screen.screen_type
-      if (!acc[type]) {
-        acc[type] = []
-      }
-      acc[type].push(screen)
-      return acc
-    },
-    {} as Record<ScreenTypeName, Screen[]>
-  )
-
   return (
     <AuthGuard>
       <PageLayout onRefresh={loadData}>
@@ -151,95 +138,76 @@ function ScreensPageContent() {
             </div>
           ) : (
             <div className="flex-1 overflow-auto">
-              {/* Screen Types Grid */}
-              {screenTypes.map((type) => {
-                const typeScreens = screensByType[type.name] || []
+              {/* Create New Buttons */}
+              <div className="flex flex-wrap gap-2 mb-6">
+                {screenTypes.map((type) => (
+                  <Button
+                    key={type.name}
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleCreateNew(type.name)}
+                    className="gap-1.5"
+                  >
+                    <Plus className="w-4 h-4" />
+                    New {getScreenTypeDisplayName(type.name)}
+                  </Button>
+                ))}
+              </div>
 
-                return (
-                  <div key={type.name} className="mb-8">
-                    {/* Type Header */}
-                    <div className="flex items-center justify-between mb-4">
-                      <div className="flex items-center gap-3">
-                        <div className="p-2 rounded-md bg-app-card text-accent-link">
-                          {getScreenTypeIcon(type.name)}
-                        </div>
-                        <div>
-                          <h2 className="text-lg font-medium text-theme-text-primary">
-                            {getScreenTypeDisplayName(type.name)}
-                          </h2>
-                          <p className="text-sm text-theme-text-secondary">{type.description}</p>
-                        </div>
-                      </div>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => handleCreateNew(type.name)}
-                        className="gap-1"
-                      >
-                        <Plus className="w-4 h-4" />
-                        Create New
-                      </Button>
-                    </div>
-
-                    {/* Screens List */}
-                    {typeScreens.length > 0 ? (
-                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                        {typeScreens.map((screen) => (
-                          <AppLink
-                            key={screen.name}
-                            href={`/screen/${screen.name}`}
-                            className="group block"
-                          >
-                            <div className="p-4 rounded-lg border border-theme-border bg-app-panel hover:bg-app-card hover:border-accent-link transition-colors">
-                              <div className="flex items-start justify-between">
-                                <div className="min-w-0 flex-1">
-                                  <h3 className="font-medium text-theme-text-primary truncate group-hover:text-accent-link transition-colors">
-                                    {screen.name}
-                                  </h3>
-                                  <p className="mt-1 text-xs text-theme-text-muted truncate">
-                                    Updated{' '}
-                                    {new Date(screen.updated_at).toLocaleDateString(undefined, {
-                                      month: 'short',
-                                      day: 'numeric',
-                                      year: 'numeric',
-                                    })}
-                                  </p>
-                                </div>
-                                <button
-                                  onClick={(e) => handleDelete(screen.name, e)}
-                                  disabled={deletingScreen === screen.name}
-                                  className="ml-2 p-1.5 rounded text-theme-text-muted hover:text-red-400 hover:bg-red-400/10 transition-colors opacity-0 group-hover:opacity-100"
-                                  title="Delete screen"
-                                >
-                                  {deletingScreen === screen.name ? (
-                                    <div className="w-4 h-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
-                                  ) : (
-                                    <Trash2 className="w-4 h-4" />
-                                  )}
-                                </button>
-                              </div>
+              {/* Flat Screens List */}
+              {screens.length > 0 ? (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                  {screens.map((screen) => (
+                    <AppLink
+                      key={screen.name}
+                      href={`/screen/${screen.name}`}
+                      className="group block"
+                    >
+                      <div className="p-4 rounded-lg border border-theme-border bg-app-panel hover:bg-app-card hover:border-accent-link transition-colors">
+                        <div className="flex items-start justify-between">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className="text-accent-link">
+                                {getScreenTypeIcon(screen.screen_type)}
+                              </span>
+                              <h3 className="font-medium text-theme-text-primary truncate group-hover:text-accent-link transition-colors">
+                                {screen.name}
+                              </h3>
                             </div>
-                          </AppLink>
-                        ))}
+                            <p className="text-xs text-theme-text-muted truncate">
+                              {getScreenTypeDisplayName(screen.screen_type)} · Updated{' '}
+                              {new Date(screen.updated_at).toLocaleDateString(undefined, {
+                                month: 'short',
+                                day: 'numeric',
+                                year: 'numeric',
+                              })}
+                            </p>
+                          </div>
+                          <button
+                            onClick={(e) => handleDelete(screen.name, e)}
+                            disabled={deletingScreen === screen.name}
+                            className="ml-2 p-1.5 rounded text-theme-text-muted hover:text-red-400 hover:bg-red-400/10 transition-colors opacity-0 group-hover:opacity-100"
+                            title="Delete screen"
+                          >
+                            {deletingScreen === screen.name ? (
+                              <div className="w-4 h-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                            ) : (
+                              <Trash2 className="w-4 h-4" />
+                            )}
+                          </button>
+                        </div>
                       </div>
-                    ) : (
-                      <div className="p-6 rounded-lg border border-dashed border-theme-border text-center">
-                        <p className="text-theme-text-muted">
-                          No {getScreenTypeDisplayName(type.name).toLowerCase()} screens yet.
-                        </p>
-                        <Button
-                          variant="link"
-                          size="sm"
-                          onClick={() => handleCreateNew(type.name)}
-                          className="mt-2"
-                        >
-                          Create your first one
-                        </Button>
-                      </div>
-                    )}
-                  </div>
-                )
-              })}
+                    </AppLink>
+                  ))}
+                </div>
+              ) : (
+                <div className="p-8 rounded-lg border border-dashed border-theme-border text-center">
+                  <p className="text-theme-text-muted mb-2">No screens yet.</p>
+                  <p className="text-sm text-theme-text-muted">
+                    Create your first screen using the buttons above.
+                  </p>
+                </div>
+              )}
             </div>
           )}
         </div>

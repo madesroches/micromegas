@@ -88,7 +88,7 @@ impl ScreenType {
     pub fn default_config(&self) -> serde_json::Value {
         match self {
             ScreenType::ProcessList => serde_json::json!({
-                "sql": "SELECT * FROM processes LIMIT 100",
+                "sql": "SELECT process_id, exe, start_time, last_update_time, username, computer\nFROM processes\nORDER BY last_update_time DESC\nLIMIT 100",
                 "variables": []
             }),
             ScreenType::Metrics => serde_json::json!({
