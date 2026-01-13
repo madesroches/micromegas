@@ -109,7 +109,7 @@ Database creation is already implemented:
 - `local_test_env/ai_scripts/start_services.py` calls `ensure_app_database()`
 - `local_test_env/db/utils.py` creates `micromegas_app` database if not exists
 
-**Still needed**: Connection string configuration for analytics-web-srv (see Phase 2.1)
+Connection string configuration: Set `MICROMEGAS_APP_SQL_CONNECTION_STRING` env var (implemented in Phase 2).
 
 ### 1.5 Files Created ✅
 
@@ -125,13 +125,13 @@ Database creation is already implemented:
 
 ---
 
-## Phase 2: Backend API
+## Phase 2: Backend API ✅ DONE
 
-### 2.1 Add PostgreSQL Pool to analytics-web-srv
+### 2.1 Add PostgreSQL Pool to analytics-web-srv ✅
 
-**Modify**: `rust/analytics-web-srv/src/main.rs`
+**Modified**: `rust/analytics-web-srv/src/main.rs`
 
-Use `Extension` to inject the pool (matches existing `AuthToken` pattern):
+Uses `Extension` to inject the pool (matches existing `AuthToken` pattern):
 ```rust
 // In main(), after creating the pool:
 let app_db_pool: sqlx::PgPool = /* ... */;
@@ -147,37 +147,39 @@ Extension(pool): Extension<sqlx::PgPool>
 - Format: `postgres://user:pass@host:5432/micromegas_app`
 - For local dev, add to `start_analytics_web.py` or use same credentials as main DB
 
-**Startup sequence**:
-1. Read connection string from env
+**Startup sequence** (implemented):
+1. Read connection string from env (optional - graceful degradation if not set)
 2. Create PgPool
-3. Run migrations (following `rust/ingestion/src/sql_migration.rs` pattern)
-4. Add pool to app state
+3. Run migrations
+4. Add pool to screen routes via Extension layer
 
-**Error handling**: If connection fails or migrations fail, log error and exit. Don't silently continue without screens support.
+**Error handling**: If env var not set, screens feature is disabled with a warning. If connection/migration fails, server exits with error.
 
-### 2.2 REST Endpoints
+### 2.2 REST Endpoints ✅
 
 | Method | Path | Handler |
 |--------|------|---------|
-| GET | /screen-types | list all screen types (from enum) |
-| GET | /screen-types/:type/default | get default config for type |
-| GET | /screens | list user screens |
-| GET | /screens/:name | get screen by name |
-| POST | /screens | create screen |
-| PUT | /screens/:name | update screen |
-| DELETE | /screens/:name | delete screen |
+| GET | /screen-types | `list_screen_types` |
+| GET | /screen-types/:type_name/default | `get_default_config` |
+| GET | /screens | `list_screens` |
+| GET | /screens/:name | `get_screen` |
+| POST | /screens | `create_screen` |
+| PUT | /screens/:name | `update_screen` |
+| DELETE | /screens/:name | `delete_screen` |
 
-All endpoints should return proper error responses:
+All endpoints return proper error responses:
 - 404 for not found
-- 400 for invalid input (bad screen type, duplicate name)
+- 400 for invalid input (bad screen type, duplicate name, validation errors)
 - 500 for database errors
 
-### 2.3 Files to Modify/Create
+CORS updated to allow PUT and DELETE methods.
 
-| File | Action |
+### 2.3 Files Modified/Created ✅
+
+| File | Status |
 |------|--------|
-| `rust/analytics-web-srv/src/main.rs` | Add PgPool via Extension, add routes |
-| `rust/analytics-web-srv/src/screens.rs` | Create (CRUD handlers) |
+| `rust/analytics-web-srv/src/main.rs` | ✅ Modified (PgPool, routes, CORS) |
+| `rust/analytics-web-srv/src/screens.rs` | ✅ Created (CRUD handlers) |
 
 Note: `screen_types.rs` already created in Phase 1.
 
