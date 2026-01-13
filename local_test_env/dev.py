@@ -14,6 +14,8 @@ import requests
 import docker
 from pathlib import Path
 
+from db.utils import ensure_app_database
+
 SESSION = "micromegas"
 SCRIPT_DIR = Path(__file__).parent.absolute()
 RUST_DIR = SCRIPT_DIR.parent / "rust"
@@ -165,30 +167,6 @@ def wait_for_postgres(timeout=15):
     except Exception as e:
         print(f"❌ Failed to check PostgreSQL readiness: {e}")
         return False
-
-
-def ensure_app_database():
-    """Create micromegas_app database if it doesn't exist"""
-    username = os.environ.get("MICROMEGAS_DB_USERNAME")
-
-    # Connect to default postgres database to check if micromegas_app exists
-    result = subprocess.run(
-        f"docker exec teledb psql -U {username} -tc \"SELECT 1 FROM pg_database WHERE datname = 'micromegas_app'\"",
-        shell=True,
-        capture_output=True,
-        text=True,
-    )
-
-    if "1" not in result.stdout:
-        print("Creating micromegas_app database...")
-        subprocess.run(
-            f'docker exec teledb psql -U {username} -c "CREATE DATABASE micromegas_app"',
-            shell=True,
-            check=True,
-        )
-        print("✅ micromegas_app database created")
-    else:
-        print("✅ micromegas_app database already exists")
 
 
 def start_services(build_mode):
