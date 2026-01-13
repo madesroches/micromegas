@@ -31,6 +31,10 @@ import requests
 import docker
 from pathlib import Path
 
+# Add parent directory to path to import shared utilities
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from db.utils import ensure_app_database
+
 
 def check_env_vars():
     """Check required environment variables"""
@@ -40,7 +44,9 @@ def check_env_vars():
         print("❌ Error: MICROMEGAS_OIDC_CONFIG environment variable not set")
         print()
         print("Please set your OIDC configuration:")
-        print('  export MICROMEGAS_OIDC_CONFIG=\'{"issuers": [{"issuer": "...", "audience": "..."}], ...}\'')
+        print(
+            '  export MICROMEGAS_OIDC_CONFIG=\'{"issuers": [{"issuer": "...", "audience": "..."}], ...}\''
+        )
         print()
         print("Or source a pre-configured auth script:")
         print("  . ~/set_human_auth.sh    # For Auth0")
@@ -94,7 +100,9 @@ def wait_for_service(url, max_attempts=30, service_name="Service"):
 
         if i == max_attempts:
             print(f"❌ {service_name} failed to start")
-            print(f"   Check logs: tail -f /tmp/{service_name.lower().replace(' ', '_')}.log")
+            print(
+                f"   Check logs: tail -f /tmp/{service_name.lower().replace(' ', '_')}.log"
+            )
             return False
         time.sleep(1)
     return False
@@ -164,6 +172,9 @@ def main():
         time.sleep(5)
     else:
         print("PostgreSQL already running")
+
+    # Ensure the app database exists
+    ensure_app_database()
     print()
 
     os.chdir(rust_dir)
