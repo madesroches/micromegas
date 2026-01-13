@@ -28,6 +28,7 @@ micromegas-auth.workspace = true
 openidconnect.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sqlx.workspace = true
 time = "0.3"
 tokio.workspace = true
 tower.workspace = true
