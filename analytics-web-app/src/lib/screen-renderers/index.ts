@@ -22,8 +22,10 @@ export interface ScreenRendererProps {
   savedConfig: ScreenConfig | null
   /** Call when user makes changes that should trigger unsaved indicator */
   onUnsavedChange: () => void
-  /** Time range from URL */
+  /** Time range for API queries (ISO timestamps) */
   timeRange: { begin: string; end: string }
+  /** Raw time range from URL (e.g., 'now-1h', 'now') */
+  rawTimeRange: { from: string; to: string }
   /** Update URL time range (e.g., from chart drag-to-zoom) */
   onTimeRangeChange: (from: string, to: string) => void
   /** Time range display label */

@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo } from 'react'
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import { registerRenderer, ScreenRendererProps } from './index'
 import { useScreenQuery } from './useScreenQuery'
 import { LoadingState, EmptyState, SaveFooter, RendererLayout } from './shared'
@@ -19,6 +19,8 @@ interface MetricsOptions {
 interface MetricsConfig {
   sql: string
   metrics_options?: MetricsOptions
+  timeRangeFrom?: string
+  timeRangeTo?: string
 }
 
 export function MetricsRenderer({
@@ -27,6 +29,7 @@ export function MetricsRenderer({
   savedConfig,
   onUnsavedChange,
   timeRange,
+  rawTimeRange,
   onTimeRangeChange,
   timeRangeLabel,
   currentValues,
@@ -38,6 +41,7 @@ export function MetricsRenderer({
   refreshTrigger,
 }: ScreenRendererProps) {
   const metricsConfig = config as MetricsConfig
+  const savedMetricsConfig = savedConfig as MetricsConfig | null
 
   // Scale mode state - sync from config on load
   const [scaleMode, setScaleMode] = useState<ScaleMode>(
@@ -57,6 +61,39 @@ export function MetricsRenderer({
       setScaleMode(metricsConfig.metrics_options.scale_mode)
     }
   }, [metricsConfig.metrics_options?.scale_mode])
+
+  // Track time range changes - renderer owns complete config
+  const prevTimeRangeRef = useRef<{ from: string; to: string } | null>(null)
+  useEffect(() => {
+    const current = { from: rawTimeRange.from, to: rawTimeRange.to }
+
+    // On first run, just store current values
+    if (prevTimeRangeRef.current === null) {
+      prevTimeRangeRef.current = current
+      return
+    }
+
+    const prev = prevTimeRangeRef.current
+    if (prev.from === current.from && prev.to === current.to) {
+      return
+    }
+
+    prevTimeRangeRef.current = current
+
+    // Check if differs from saved config
+    const savedFrom = savedMetricsConfig?.timeRangeFrom ?? 'now-5m'
+    const savedTo = savedMetricsConfig?.timeRangeTo ?? 'now'
+    if (current.from !== savedFrom || current.to !== savedTo) {
+      onUnsavedChange()
+    }
+
+    // Update config with time range
+    onConfigChange({
+      ...metricsConfig,
+      timeRangeFrom: current.from,
+      timeRangeTo: current.to,
+    })
+  }, [rawTimeRange, savedMetricsConfig, metricsConfig, onUnsavedChange, onConfigChange])
 
   const handleRunQuery = useCallback(
     (sql: string) => {

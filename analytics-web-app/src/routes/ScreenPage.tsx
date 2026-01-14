@@ -27,11 +27,14 @@ function ScreenPageContent() {
   const isNew = !name
   const typeParam = searchParams.get('type') as ScreenTypeName | null
 
-  const { parsed: timeRange, apiTimeRange, setTimeRange } = useTimeRange()
+  const { timeRange: rawTimeRange, parsed: timeRange, apiTimeRange, setTimeRange } = useTimeRange()
+
+  // Track expected time range for sync detection (null = no sync needed)
+  const [expectedTimeRange, setExpectedTimeRange] = useState<{ from: string; to: string } | null>(null)
 
   // Screen state
   const [screen, setScreen] = useState<Screen | null>(null)
-  const [config, setConfig] = useState<ScreenConfig | null>(null)
+  const [config, setConfigState] = useState<ScreenConfig | null>(null)
   const [screenType, setScreenType] = useState<ScreenTypeName | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -53,6 +56,8 @@ function ScreenPageContent() {
     async function load() {
       setIsLoading(true)
       setLoadError(null)
+      setHasUnsavedChanges(false)
+      setScreen(null)
 
       try {
         // Fetch screen types for display info
@@ -66,16 +71,29 @@ function ScreenPageContent() {
             return
           }
           const defaultConfig = await getDefaultConfig(typeParam)
-          setConfig(defaultConfig)
+          setConfigState(defaultConfig)
           setScreenType(typeParam)
           setScreenTypeInfo(typeMap.get(typeParam) ?? null)
         } else {
           // Existing screen - load from API
           const loadedScreen = await getScreen(name)
           setScreen(loadedScreen)
-          setConfig(loadedScreen.config)
+          setConfigState(loadedScreen.config)
           setScreenType(loadedScreen.screen_type as ScreenTypeName)
           setScreenTypeInfo(typeMap.get(loadedScreen.screen_type as ScreenTypeName) ?? null)
+
+          // Initialize time range from saved config (if present and no URL params)
+          const savedTimeRangeFrom = loadedScreen.config.timeRangeFrom as string | undefined
+          const savedTimeRangeTo = loadedScreen.config.timeRangeTo as string | undefined
+          if (savedTimeRangeFrom && savedTimeRangeTo) {
+            // Only apply if URL doesn't already have time params
+            const urlHasTimeParams = searchParams.has('from') || searchParams.has('to')
+            if (!urlHasTimeParams) {
+              // Track expected values so we can wait for sync
+              setExpectedTimeRange({ from: savedTimeRangeFrom, to: savedTimeRangeTo })
+              setTimeRange(savedTimeRangeFrom, savedTimeRangeTo)
+            }
+          }
         }
       } catch (err) {
         if (err instanceof ScreenApiError) {
@@ -93,11 +111,23 @@ function ScreenPageContent() {
     }
 
     load()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isNew, name, typeParam])
 
-  // Handle config changes from renderer
-  const handleConfigChange = useCallback((newConfig: ScreenConfig) => {
-    setConfig(newConfig)
+  // Clear expectedTimeRange once rawTimeRange has synced
+  useEffect(() => {
+    if (
+      expectedTimeRange &&
+      rawTimeRange.from === expectedTimeRange.from &&
+      rawTimeRange.to === expectedTimeRange.to
+    ) {
+      setExpectedTimeRange(null)
+    }
+  }, [rawTimeRange, expectedTimeRange])
+
+  // Handle config changes from renderer - MERGE to avoid race conditions
+  const handleConfigChange = useCallback((partialConfig: ScreenConfig) => {
+    setConfigState(prev => (prev ? { ...prev, ...partialConfig } : partialConfig))
   }, [])
 
   // Handle unsaved changes notification from renderer
@@ -157,8 +187,9 @@ function ScreenPageContent() {
     [apiTimeRange]
   )
 
-  // Loading state
-  if (isLoading) {
+  // Loading state - also check if loaded screen matches URL and time range is synced
+  const isLoadingScreen = isLoading || (!isNew && screen?.name !== name) || expectedTimeRange !== null
+  if (isLoadingScreen) {
     return (
       <PageLayout>
         <div className="p-6">
@@ -256,14 +287,16 @@ function ScreenPageContent() {
             </div>
           </div>
 
-          {/* Renderer */}
+          {/* Renderer - key forces remount when screen changes */}
           <div className="flex-1 min-h-0">
             <Renderer
+              key={screen?.name ?? 'new'}
               config={config}
               onConfigChange={handleConfigChange}
               savedConfig={screen?.config ?? null}
               onUnsavedChange={handleUnsavedChange}
               timeRange={apiTimeRange}
+              rawTimeRange={rawTimeRange}
               onTimeRangeChange={handleTimeRangeChange}
               timeRangeLabel={timeRange.label}
               currentValues={currentValues}

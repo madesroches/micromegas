@@ -15,6 +15,13 @@ export interface ScreenConfig {
   sql: string
   variables?: ScreenVariable[]
   metrics_options?: MetricsOptions
+  // Log screen settings
+  logLevel?: string
+  limit?: number
+  search?: string
+  // Time range settings (shared across screen types)
+  timeRangeFrom?: string
+  timeRangeTo?: string
 }
 
 export interface ScreenVariable {

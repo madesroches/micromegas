@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useSearchParams, useNavigate, useLocation } from 'react-router-dom'
 import { ChevronDown } from 'lucide-react'
 import { registerRenderer, ScreenRendererProps } from './index'
 import { LoadingState, EmptyState, SaveFooter, RendererLayout } from './shared'
@@ -41,6 +42,11 @@ const MAX_LIMIT = 10000
 
 interface LogConfig {
   sql: string
+  logLevel?: string
+  limit?: number
+  search?: string
+  timeRangeFrom?: string
+  timeRangeTo?: string
 }
 
 interface LogRow {
@@ -200,6 +206,7 @@ export function LogRenderer({
   savedConfig,
   onUnsavedChange,
   timeRange,
+  rawTimeRange,
   timeRangeLabel,
   currentValues,
   onSave,
@@ -210,16 +217,154 @@ export function LogRenderer({
   refreshTrigger,
 }: ScreenRendererProps) {
   const logConfig = config as LogConfig
+  const savedLogConfig = savedConfig as LogConfig | null
+
+  // URL params and navigation for filter state sync
+  const [searchParams] = useSearchParams()
+  const navigate = useNavigate()
+  const { pathname } = useLocation()
+
+  // Get saved values from config for detecting unsaved changes
+  const savedValues = useMemo(
+    () => ({
+      logLevel: savedLogConfig?.logLevel ?? 'all',
+      logLimit: savedLogConfig?.limit ?? 100,
+      search: savedLogConfig?.search ?? '',
+      timeRangeFrom: savedLogConfig?.timeRangeFrom ?? 'now-5m',
+      timeRangeTo: savedLogConfig?.timeRangeTo ?? 'now',
+    }),
+    [savedLogConfig]
+  )
+
+  // Initialize filter state from: URL params -> config defaults -> hardcoded defaults
+  const getInitialLogLevel = () => {
+    const urlLevel = searchParams.get('level')
+    if (urlLevel && LOG_LEVELS[urlLevel] !== undefined) return urlLevel
+    return logConfig.logLevel ?? 'all'
+  }
+
+  const getInitialLimit = () => {
+    const urlLimit = searchParams.get('limit')
+    if (urlLimit) {
+      const parsed = parseInt(urlLimit, 10)
+      if (!isNaN(parsed) && parsed >= MIN_LIMIT && parsed <= MAX_LIMIT) return parsed
+    }
+    return logConfig.limit ?? 100
+  }
+
+  const getInitialSearch = () => {
+    return searchParams.get('search') ?? logConfig.search ?? ''
+  }
 
   // Filter state
-  const [logLevel, setLogLevel] = useState<string>('all')
-  const [logLimit, setLogLimit] = useState<number>(100)
-  const [limitInputValue, setLimitInputValue] = useState<string>('100')
-  const [search, setSearch] = useState<string>('')
-  const [searchInputValue, setSearchInputValue] = useState<string>('')
+  const [logLevel, setLogLevel] = useState<string>(getInitialLogLevel)
+  const [logLimit, setLogLimit] = useState<number>(getInitialLimit)
+  const [limitInputValue, setLimitInputValue] = useState<string>(() => String(getInitialLimit()))
+  const [search, setSearch] = useState<string>(getInitialSearch)
+  const [searchInputValue, setSearchInputValue] = useState<string>(getInitialSearch)
   const debouncedSearchInput = useDebounce(searchInputValue, 300)
   const [rows, setRows] = useState<LogRow[]>([])
   const [hasLoaded, setHasLoaded] = useState(false)
+
+  // Track if this is the initial mount to avoid URL updates on first render
+  const isInitialMountRef = useRef(true)
+
+  // Sync filter state to URL (after initial mount)
+  useEffect(() => {
+    if (isInitialMountRef.current) {
+      isInitialMountRef.current = false
+      return
+    }
+
+    const params = new URLSearchParams(searchParams.toString())
+
+    // Only include non-default values in URL
+    if (logLevel === 'all') {
+      params.delete('level')
+    } else {
+      params.set('level', logLevel)
+    }
+
+    if (logLimit === 100) {
+      params.delete('limit')
+    } else {
+      params.set('limit', String(logLimit))
+    }
+
+    if (search === '') {
+      params.delete('search')
+    } else {
+      params.set('search', search)
+    }
+
+    const paramStr = params.toString()
+    const newUrl = paramStr ? `${pathname}?${paramStr}` : pathname
+    navigate(newUrl, { replace: true })
+  }, [logLevel, logLimit, search]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Track all config changes - renderer owns the complete config
+  const prevConfigRef = useRef<{
+    logLevel: string
+    logLimit: number
+    search: string
+    timeRangeFrom: string
+    timeRangeTo: string
+  } | null>(null)
+  // Track SQL separately so filter effect can preserve it without depending on full config
+  const sqlRef = useRef(logConfig.sql)
+  sqlRef.current = logConfig.sql
+
+  useEffect(() => {
+    const current = {
+      logLevel,
+      logLimit,
+      search,
+      timeRangeFrom: rawTimeRange.from,
+      timeRangeTo: rawTimeRange.to,
+    }
+
+    // On first run, just store current values
+    if (prevConfigRef.current === null) {
+      prevConfigRef.current = current
+      return
+    }
+
+    const prev = prevConfigRef.current
+    const hasChanges =
+      prev.logLevel !== current.logLevel ||
+      prev.logLimit !== current.logLimit ||
+      prev.search !== current.search ||
+      prev.timeRangeFrom !== current.timeRangeFrom ||
+      prev.timeRangeTo !== current.timeRangeTo
+
+    if (!hasChanges) {
+      return
+    }
+
+    prevConfigRef.current = current
+
+    // Check if any value differs from saved config
+    const hasUnsavedChanges =
+      current.logLevel !== savedValues.logLevel ||
+      current.logLimit !== savedValues.logLimit ||
+      current.search !== savedValues.search ||
+      current.timeRangeFrom !== savedValues.timeRangeFrom ||
+      current.timeRangeTo !== savedValues.timeRangeTo
+
+    if (hasUnsavedChanges) {
+      onUnsavedChange()
+    }
+
+    // Update config with all tracked values + preserve sql
+    onConfigChange({
+      sql: sqlRef.current,
+      logLevel: current.logLevel,
+      limit: current.logLimit,
+      search: current.search,
+      timeRangeFrom: current.timeRangeFrom,
+      timeRangeTo: current.timeRangeTo,
+    })
+  }, [logLevel, logLimit, search, rawTimeRange, savedValues, onUnsavedChange, onConfigChange])
 
   // Query execution - using useStreamQuery directly for filter-based re-execution
   const streamQuery = useStreamQuery()
@@ -264,15 +409,10 @@ export function LogRenderer({
     search: '',
   })
 
-  // Execute query with filters
+  // Execute query with filters - does NOT update config (that's handled separately)
   const loadData = useCallback(
     (sql: string) => {
       currentSqlRef.current = sql
-      onConfigChange({ ...logConfig, sql })
-
-      if (savedConfig && sql !== (savedConfig as LogConfig).sql) {
-        onUnsavedChange()
-      }
 
       lastQueryFiltersRef.current = { logLevel, logLimit, search }
       const sqlWithSearch = sql.replace('$search_filter', expandSearchFilter(search))
@@ -289,7 +429,7 @@ export function LogRenderer({
         end: timeRange.end,
       })
     },
-    [logConfig, savedConfig, onConfigChange, onUnsavedChange, timeRange, logLevel, logLimit, search]
+    [timeRange, logLevel, logLimit, search]
   )
 
   // Initial query execution
@@ -359,11 +499,21 @@ export function LogRenderer({
 
   const handleSqlChange = useCallback(
     (sql: string) => {
+      // Update config with new SQL + current filter values
+      onConfigChange({
+        sql,
+        logLevel,
+        limit: logLimit,
+        search,
+        timeRangeFrom: rawTimeRange.from,
+        timeRangeTo: rawTimeRange.to,
+      })
+
       if (savedConfig && sql !== (savedConfig as LogConfig).sql) {
         onUnsavedChange()
       }
     },
-    [savedConfig, onUnsavedChange]
+    [savedConfig, onUnsavedChange, onConfigChange, logLevel, logLimit, search, rawTimeRange]
   )
 
   // Limit input handlers
