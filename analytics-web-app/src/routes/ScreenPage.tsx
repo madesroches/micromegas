@@ -197,8 +197,10 @@ function ProcessListTable({
 // Metrics chart component for metrics screen type
 function MetricsView({
   table,
+  onTimeRangeSelect,
 }: {
   table: ReturnType<ReturnType<typeof useStreamQuery>['getTable']>
+  onTimeRangeSelect?: (from: Date, to: Date) => void
 }) {
   // Transform table data to chart format
   const chartData = useMemo(() => {
@@ -242,6 +244,7 @@ function MetricsView({
         data={chartData}
         title=""
         unit=""
+        onTimeRangeSelect={onTimeRangeSelect}
       />
     </div>
   )
@@ -254,7 +257,7 @@ function ScreenPageContent() {
   const isNew = !name
   const typeParam = searchParams.get('type') as ScreenTypeName | null
 
-  const { parsed: timeRange, apiTimeRange } = useTimeRange()
+  const { parsed: timeRange, apiTimeRange, setTimeRange } = useTimeRange()
 
   // Screen state
   const [screen, setScreen] = useState<Screen | null>(null)
@@ -419,6 +422,14 @@ function ScreenPageContent() {
       setSortDirection('desc')
     }
   }, [sortField, sortDirection])
+
+  // Handle time range selection from chart drag
+  const handleTimeRangeSelect = useCallback(
+    (from: Date, to: Date) => {
+      setTimeRange(from.toISOString(), to.toISOString())
+    },
+    [setTimeRange]
+  )
 
   // Save existing screen
   const handleSave = useCallback(async () => {
@@ -609,7 +620,7 @@ function ScreenPageContent() {
               onSort={handleSort}
             />
           ) : screenType === 'metrics' ? (
-            <MetricsView table={table} />
+            <MetricsView table={table} onTimeRangeSelect={handleTimeRangeSelect} />
           ) : table && table.numRows > 0 ? (
             <div className="flex-1 overflow-auto bg-app-panel border border-theme-border rounded-lg">
               <table className="w-full">
