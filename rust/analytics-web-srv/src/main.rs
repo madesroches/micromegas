@@ -330,6 +330,22 @@ async fn main() -> Result<()> {
         .layer(Extension(app_db_pool))
         .layer(middleware::from_fn(observability_middleware));
 
+    // Apply auth middleware to screen routes if enabled
+    let screen_routes = if let Some(auth_state) = auth_state.clone() {
+        screen_routes.layer(middleware::from_fn_with_state(
+            auth_state,
+            auth::cookie_auth_middleware,
+        ))
+    } else {
+        // In no-auth mode, inject a dummy ValidatedUser so handlers don't fail
+        screen_routes.layer(Extension(auth::ValidatedUser {
+            subject: "anonymous".to_string(),
+            email: None,
+            issuer: "local".to_string(),
+            is_admin: true,
+        }))
+    };
+
     // State for serving index.html with injected config
     let index_state = IndexState {
         frontend_dir: args.frontend_dir.clone(),

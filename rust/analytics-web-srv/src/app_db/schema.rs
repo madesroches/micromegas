@@ -20,6 +20,7 @@ async fn create_screens_table(tr: &mut sqlx::Transaction<'_, sqlx::Postgres>) ->
             screen_type VARCHAR(50) NOT NULL,
             config JSONB NOT NULL,
             created_by VARCHAR(255),
+            updated_by VARCHAR(255),
             created_at TIMESTAMPTZ DEFAULT NOW(),
             updated_at TIMESTAMPTZ DEFAULT NOW()
         );

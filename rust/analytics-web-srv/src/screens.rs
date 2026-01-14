@@ -1,5 +1,6 @@
 //! Handlers for user-defined screens CRUD operations.
 
+use crate::auth::ValidatedUser;
 use analytics_web_srv::app_db::{
     CreateScreenRequest, Screen, UpdateScreenRequest, ValidationError, normalize_screen_name,
     validate_screen_name,
@@ -115,7 +116,7 @@ pub async fn get_default_config(
 #[span_fn]
 pub async fn list_screens(Extension(pool): Extension<PgPool>) -> ScreenResult<Json<Vec<Screen>>> {
     let screens = sqlx::query_as::<_, Screen>(
-        "SELECT name, screen_type, config, created_by, created_at, updated_at
+        "SELECT name, screen_type, config, created_by, updated_by, created_at, updated_at
          FROM screens
          ORDER BY name",
     )
@@ -132,7 +133,7 @@ pub async fn get_screen(
     Path(name): Path<String>,
 ) -> ScreenResult<Json<Screen>> {
     let screen = sqlx::query_as::<_, Screen>(
-        "SELECT name, screen_type, config, created_by, created_at, updated_at
+        "SELECT name, screen_type, config, created_by, updated_by, created_at, updated_at
          FROM screens
          WHERE name = $1",
     )
@@ -148,6 +149,7 @@ pub async fn get_screen(
 #[span_fn]
 pub async fn create_screen(
     Extension(pool): Extension<PgPool>,
+    Extension(user): Extension<ValidatedUser>,
     Json(request): Json<CreateScreenRequest>,
 ) -> ScreenResult<(StatusCode, Json<Screen>)> {
     // Normalize and validate name
@@ -176,19 +178,23 @@ pub async fn create_screen(
         )));
     }
 
+    // Use email if available, otherwise fall back to subject
+    let user_id = user.email.as_deref().unwrap_or(&user.subject);
+
     // Insert screen
     let screen = sqlx::query_as::<_, Screen>(
-        "INSERT INTO screens (name, screen_type, config)
-         VALUES ($1, $2, $3)
-         RETURNING name, screen_type, config, created_by, created_at, updated_at",
+        "INSERT INTO screens (name, screen_type, config, created_by, updated_by)
+         VALUES ($1, $2, $3, $4, $4)
+         RETURNING name, screen_type, config, created_by, updated_by, created_at, updated_at",
     )
     .bind(&name)
     .bind(&request.screen_type)
     .bind(&request.config)
+    .bind(user_id)
     .fetch_one(&pool)
     .await?;
 
-    info!("Created screen: {}", name);
+    info!("Created screen: {} by {}", name, user_id);
     Ok((StatusCode::CREATED, Json(screen)))
 }
 
@@ -196,22 +202,27 @@ pub async fn create_screen(
 #[span_fn]
 pub async fn update_screen(
     Extension(pool): Extension<PgPool>,
+    Extension(user): Extension<ValidatedUser>,
     Path(name): Path<String>,
     Json(request): Json<UpdateScreenRequest>,
 ) -> ScreenResult<Json<Screen>> {
+    // Use email if available, otherwise fall back to subject
+    let user_id = user.email.as_deref().unwrap_or(&user.subject);
+
     let screen = sqlx::query_as::<_, Screen>(
         "UPDATE screens
-         SET config = $1, updated_at = NOW()
-         WHERE name = $2
-         RETURNING name, screen_type, config, created_by, created_at, updated_at",
+         SET config = $1, updated_by = $2, updated_at = NOW()
+         WHERE name = $3
+         RETURNING name, screen_type, config, created_by, updated_by, created_at, updated_at",
     )
     .bind(&request.config)
+    .bind(user_id)
     .bind(&name)
     .fetch_optional(&pool)
     .await?
     .ok_or_else(|| ScreenError::NotFound(name.clone()))?;
 
-    info!("Updated screen: {}", name);
+    info!("Updated screen: {} by {}", name, user_id);
     Ok(Json(screen))
 }
 

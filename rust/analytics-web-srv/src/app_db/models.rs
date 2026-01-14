@@ -12,6 +12,7 @@ pub struct Screen {
     pub screen_type: String,
     pub config: serde_json::Value,
     pub created_by: Option<String>,
+    pub updated_by: Option<String>,
     pub created_at: Option<DateTime<Utc>>,
     pub updated_at: Option<DateTime<Utc>>,
 }

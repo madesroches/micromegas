@@ -27,6 +27,7 @@ export interface Screen {
   screen_type: ScreenTypeName
   config: ScreenConfig
   created_by?: string
+  updated_by?: string
   created_at: string
   updated_at: string
 }
