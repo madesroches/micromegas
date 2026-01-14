@@ -337,7 +337,7 @@ export function ProcessListRenderer({
 
   return (
     <div className="flex h-full">
-      <div className="flex-1 flex flex-col p-6 overflow-hidden">
+      <div className="flex-1 flex flex-col p-6 min-w-0">
         {queryError && (
           <ErrorBanner
             title="Query execution failed"
