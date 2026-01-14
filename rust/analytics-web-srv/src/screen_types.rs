@@ -99,7 +99,7 @@ impl ScreenType {
                 "variables": []
             }),
             ScreenType::Log => serde_json::json!({
-                "sql": "SELECT time, level, target, msg FROM log_entries ORDER BY time DESC LIMIT 1000",
+                "sql": "SELECT time, level, target, msg\nFROM log_entries\nWHERE level <= $max_level\n  $search_filter\nORDER BY time DESC\nLIMIT $limit",
                 "variables": []
             }),
         }
