@@ -1,26 +1,21 @@
 # Screen Renderer Registry
 
-## Goal
+## Status: ✅ COMPLETE
 
-Refactor screen type rendering to follow the Open/Closed Principle. Adding a new screen type should only require creating a new renderer and registering it, without modifying `ScreenPage.tsx`.
+Refactored screen type rendering to follow the Open/Closed Principle. Adding a new screen type now only requires creating a new renderer and registering it, without modifying `ScreenPage.tsx`.
 
-## Current State
+## Implementation Summary
 
-`ScreenPage.tsx` has:
-- Conditional rendering branches for each screen type (lines ~650-715)
-- Type-specific state in parent: `metricsScaleMode`, `sortField`, `sortDirection`
-- Type-specific config handling: `metrics_options`, `handleScaleModeChange`
-- Type-specific effects: sync scale mode from config
+The refactoring is complete. All phases have been implemented:
 
-This violates OCP because adding a new screen type requires modifying `ScreenPageContent`.
-
-## Proposed Architecture
+## Implemented Architecture
 
 ### 1. Registry Structure
 
 ```
 analytics-web-app/src/lib/screen-renderers/
-  index.ts              # Registry and types
+  index.ts              # Registry types and registration functions
+  init.ts               # Imports all renderers to trigger registration
   ProcessListRenderer.tsx
   MetricsRenderer.tsx
   LogRenderer.tsx
@@ -41,13 +36,31 @@ export interface ScreenRendererProps {
 
   // Time range - parent owns URL state, renderers can navigate
   timeRange: { begin: string; end: string }
-  onTimeRangeChange: (from: string, to: string) => void  // Updates URL, triggers re-render
+  onTimeRangeChange: (from: string, to: string) => void
+  timeRangeLabel: string
+
+  // SQL variable values
+  currentValues: Record<string, string>
+
+  // Save controls (parent provides these, renderers display them)
+  onSave: (() => Promise<void>) | null  // null for new screens
+  isSaving: boolean
+  hasUnsavedChanges: boolean
+  onSaveAs: () => void
+  saveError: string | null
+
+  // Refresh trigger (increment to re-execute query)
+  refreshTrigger: number
 }
 
-export const SCREEN_RENDERERS: Record<string, React.ComponentType<ScreenRendererProps>> = {
-  process_list: ProcessListRenderer,
-  metrics: MetricsRenderer,
-  log: LogRenderer,
+// Registry with registration function
+export const SCREEN_RENDERERS: Record<string, ComponentType<ScreenRendererProps>> = {}
+
+export function registerRenderer(
+  typeName: ScreenTypeName,
+  component: ComponentType<ScreenRendererProps>
+): void {
+  SCREEN_RENDERERS[typeName] = component
 }
 ```
 
@@ -354,35 +367,37 @@ return (
 - Report config changes and unsaved status
 - **Own full layout including any config/editor panels**
 
-## Migration Steps
+## Migration Steps (Completed)
 
-### Phase 1: Create Infrastructure
-1. Create `src/lib/screen-renderers/index.ts` with types and empty registry
+### Phase 1: Create Infrastructure ✅
+1. Created `src/lib/screen-renderers/index.ts` with types, registry, and registration functions
+2. Created `src/lib/screen-renderers/init.ts` to import and register all renderers
 
-### Phase 2: Migrate ProcessListRenderer
-1. Create `ProcessListRenderer.tsx`
-2. Move `ProcessListTable` component and sorting state into it
-3. Include `ResizablePanelGroup` layout with SQL editor panel
-4. Register in `SCREEN_RENDERERS`
-5. Remove process_list branch from ScreenPage.tsx
+### Phase 2: Migrate ProcessListRenderer ✅
+1. Created `ProcessListRenderer.tsx` with full ownership of:
+   - Query execution via `useStreamQuery`
+   - Sorting state (field, direction)
+   - ResizablePanelGroup layout with SQL editor panel
+2. Self-registers via `registerRenderer('process_list', ProcessListRenderer)`
 
-### Phase 3: Migrate MetricsRenderer
-1. Create `MetricsRenderer.tsx`
-2. Move `MetricsView`, scale mode state, and config sync into it
-3. Include `ResizablePanelGroup` layout with SQL editor panel
-4. Register in `SCREEN_RENDERERS`
-5. Remove metrics branch and state from ScreenPage.tsx
+### Phase 3: Migrate MetricsRenderer ✅
+1. Created `MetricsRenderer.tsx` with full ownership of:
+   - Query execution via `useStreamQuery`
+   - Scale mode state and persistence
+   - ResizablePanelGroup layout with SQL editor panel
+2. Self-registers via `registerRenderer('metrics', MetricsRenderer)`
 
-### Phase 4: Migrate LogRenderer
-1. Create `LogRenderer.tsx` (currently uses generic table)
-2. Can add log-specific features later (syntax highlighting, level filtering)
-3. Register in `SCREEN_RENDERERS`
+### Phase 4: Migrate LogRenderer ✅
+1. Created `LogRenderer.tsx` with full ownership of:
+   - Query execution via `useStreamQuery`
+   - ResizablePanelGroup layout with SQL editor panel
+2. Self-registers via `registerRenderer('log', LogRenderer)`
 
-### Phase 5: Cleanup
-1. Remove all type-specific state from `ScreenPageContent`
-2. Remove conditional rendering, use registry lookup
-3. Remove `ResizablePanelGroup` and SQL editor from parent (now in renderers)
-4. Delete unused imports
+### Phase 5: Cleanup ✅
+1. Removed all type-specific state from `ScreenPageContent`
+2. ScreenPage.tsx now uses `getRenderer(screenType)` for dynamic lookup
+3. Parent only handles: loading, saving, time range URL state, and header
+4. ~315 lines total (down from ~700+)
 
 ## Benefits
 
@@ -443,13 +458,38 @@ interface DashboardConfig {
 - Adding new screen types doesn't touch shared interfaces
 - Backend `default_config()` already returns type-appropriate JSON
 
-## Files to Create/Modify
+## Files Created/Modified
 
-| File | Action |
+| File | Status |
 |------|--------|
-| `src/lib/screen-renderers/index.ts` | Create - registry and types |
-| `src/lib/screen-renderers/ProcessListRenderer.tsx` | Create - move from ScreenPage |
-| `src/lib/screen-renderers/MetricsRenderer.tsx` | Create - move from ScreenPage |
-| `src/lib/screen-renderers/LogRenderer.tsx` | Create - basic implementation |
-| `src/routes/ScreenPage.tsx` | Modify - use registry, remove type-specific code |
-| `src/lib/screens-api.ts` | Modify - make ScreenConfig generic (`Record<string, unknown>`) |
+| `src/lib/screen-renderers/index.ts` | ✅ Created - registry types and registration functions |
+| `src/lib/screen-renderers/init.ts` | ✅ Created - imports renderers to trigger registration |
+| `src/lib/screen-renderers/ProcessListRenderer.tsx` | ✅ Created - full renderer with query, state, layout |
+| `src/lib/screen-renderers/MetricsRenderer.tsx` | ✅ Created - full renderer with query, state, layout |
+| `src/lib/screen-renderers/LogRenderer.tsx` | ✅ Created - full renderer with query, state, layout |
+| `src/routes/ScreenPage.tsx` | ✅ Modified - uses registry, no type-specific code |
+
+## Adding a New Screen Type
+
+To add a new screen type (e.g., `dashboard`):
+
+1. Create `src/lib/screen-renderers/DashboardRenderer.tsx`:
+```typescript
+import { registerRenderer, ScreenRendererProps } from './index'
+
+function DashboardRenderer({ config, onConfigChange, ... }: ScreenRendererProps) {
+  // Own query execution, state, and layout
+  return (...)
+}
+
+registerRenderer('dashboard', DashboardRenderer)
+```
+
+2. Add import to `init.ts`:
+```typescript
+import './DashboardRenderer'
+```
+
+3. Add backend support for the new screen type (if needed)
+
+That's it - no changes to ScreenPage.tsx required.
