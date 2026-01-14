@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Save, ChevronDown } from 'lucide-react'
+import { ChevronDown } from 'lucide-react'
 import { registerRenderer, ScreenRendererProps } from './index'
+import { LoadingState, EmptyState, SaveFooter, RendererLayout } from './shared'
 import { QueryEditor } from '@/components/QueryEditor'
-import { ErrorBanner } from '@/components/ErrorBanner'
-import { Button } from '@/components/ui/button'
 import { useStreamQuery } from '@/hooks/useStreamQuery'
 import { useDebounce } from '@/hooks/useDebounce'
 import { timestampToDate } from '@/lib/arrow-utils'
@@ -52,12 +51,15 @@ interface LogRow {
 }
 
 function expandSearchFilter(search: string): string {
-  const words = search.trim().split(/\s+/).filter(w => w.length > 0)
+  const words = search
+    .trim()
+    .split(/\s+/)
+    .filter((w) => w.length > 0)
   if (words.length === 0) {
     return ''
   }
 
-  const clauses = words.map(word => {
+  const clauses = words.map((word) => {
     const escaped = word
       .replace(/\\/g, '\\\\')
       .replace(/%/g, '\\%')
@@ -122,7 +124,14 @@ interface EditableComboboxProps {
   onKeyDown: (e: React.KeyboardEvent<HTMLInputElement>) => void
 }
 
-function EditableCombobox({ value, options, onChange, onSelect, onBlur, onKeyDown }: EditableComboboxProps) {
+function EditableCombobox({
+  value,
+  options,
+  onChange,
+  onSelect,
+  onBlur,
+  onKeyDown,
+}: EditableComboboxProps) {
   const [isOpen, setIsOpen] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
 
@@ -212,7 +221,7 @@ export function LogRenderer({
   const [rows, setRows] = useState<LogRow[]>([])
   const [hasLoaded, setHasLoaded] = useState(false)
 
-  // Query execution
+  // Query execution - using useStreamQuery directly for filter-based re-execution
   const streamQuery = useStreamQuery()
   const queryError = streamQuery.error?.message ?? null
 
@@ -226,9 +235,8 @@ export function LogRenderer({
           const row = table.get(i)
           if (row) {
             const levelValue = row.level
-            const levelStr = typeof levelValue === 'number'
-              ? (LEVEL_NAMES[levelValue] || 'UNKNOWN')
-              : String(levelValue ?? '')
+            const levelStr =
+              typeof levelValue === 'number' ? LEVEL_NAMES[levelValue] || 'UNKNOWN' : String(levelValue ?? '')
             resultRows.push({
               time: row.time,
               level: levelStr,
@@ -239,7 +247,6 @@ export function LogRenderer({
         }
         setRows(resultRows)
       } else {
-        // Query returned no results
         setRows([])
       }
       setHasLoaded(true)
@@ -251,8 +258,11 @@ export function LogRenderer({
   const currentSqlRef = useRef<string>(logConfig.sql)
   const executeRef = useRef(streamQuery.execute)
   executeRef.current = streamQuery.execute
-  // Track filters used in the last executed query
-  const lastQueryFiltersRef = useRef<{ logLevel: string; logLimit: number; search: string }>({ logLevel: 'all', logLimit: 100, search: '' })
+  const lastQueryFiltersRef = useRef<{ logLevel: string; logLimit: number; search: string }>({
+    logLevel: 'all',
+    logLimit: 100,
+    search: '',
+  })
 
   // Execute query with filters
   const loadData = useCallback(
@@ -260,15 +270,11 @@ export function LogRenderer({
       currentSqlRef.current = sql
       onConfigChange({ ...logConfig, sql })
 
-      // Check if SQL changed from saved version
       if (savedConfig && sql !== (savedConfig as LogConfig).sql) {
         onUnsavedChange()
       }
 
-      // Track the filters used in this query
       lastQueryFiltersRef.current = { logLevel, logLimit, search }
-
-      // Replace search filter placeholder in SQL
       const sqlWithSearch = sql.replace('$search_filter', expandSearchFilter(search))
 
       executeRef.current({
@@ -320,7 +326,7 @@ export function LogRenderer({
     }
   }, [refreshTrigger, loadData])
 
-  // Re-execute on filter changes (including after initial load completes)
+  // Re-execute on filter changes
   useEffect(() => {
     if (!hasLoaded) return
     const lastFilters = lastQueryFiltersRef.current
@@ -347,11 +353,8 @@ export function LogRenderer({
   )
 
   const handleResetQuery = useCallback(() => {
-    if (savedConfig) {
-      loadData((savedConfig as LogConfig).sql)
-    } else {
-      loadData(logConfig.sql)
-    }
+    const sql = savedConfig ? (savedConfig as LogConfig).sql : logConfig.sql
+    loadData(sql)
   }, [savedConfig, logConfig.sql, loadData])
 
   const handleSqlChange = useCallback(
@@ -375,14 +378,11 @@ export function LogRenderer({
     }
   }, [limitInputValue, logLimit])
 
-  const handleLimitInputKeyDown = useCallback(
-    (e: React.KeyboardEvent<HTMLInputElement>) => {
-      if (e.key === 'Enter') {
-        e.currentTarget.blur()
-      }
-    },
-    []
-  )
+  const handleLimitInputKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.currentTarget.blur()
+    }
+  }, [])
 
   const handleSearchBlur = useCallback(() => {
     if (searchInputValue !== search) {
@@ -390,14 +390,11 @@ export function LogRenderer({
     }
   }, [searchInputValue, search])
 
-  const handleSearchKeyDown = useCallback(
-    (e: React.KeyboardEvent<HTMLInputElement>) => {
-      if (e.key === 'Enter') {
-        e.currentTarget.blur()
-      }
-    },
-    []
-  )
+  const handleSearchKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.currentTarget.blur()
+    }
+  }, [])
 
   // Extended current values for the query editor
   const extendedCurrentValues = {
@@ -424,64 +421,74 @@ export function LogRenderer({
         label: 'log_entries schema reference',
       }}
       footer={
-        <>
-          <div className="border-t border-theme-border p-3 flex gap-2">
-            {onSave && (
-              <Button
-                variant="default"
-                size="sm"
-                onClick={onSave}
-                disabled={isSaving || !hasUnsavedChanges}
-                className="gap-1"
-              >
-                <Save className="w-4 h-4" />
-                {isSaving ? 'Saving...' : 'Save'}
-              </Button>
-            )}
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={onSaveAs}
-              className="gap-1"
-            >
-              <Save className="w-4 h-4" />
-              Save As
-            </Button>
-          </div>
-          {saveError && (
-            <div className="px-3 pb-3">
-              <p className="text-xs text-accent-error">{saveError}</p>
-            </div>
-          )}
-        </>
+        <SaveFooter
+          onSave={onSave}
+          onSaveAs={onSaveAs}
+          isSaving={isSaving}
+          hasUnsavedChanges={hasUnsavedChanges}
+          saveError={saveError}
+        />
       }
     />
   )
 
+  // Filter controls
+  const filterControls = (
+    <div className="flex gap-3 mb-4">
+      <input
+        type="text"
+        value={searchInputValue}
+        onChange={(e) => setSearchInputValue(e.target.value)}
+        onBlur={handleSearchBlur}
+        onKeyDown={handleSearchKeyDown}
+        placeholder="Search target or message..."
+        className="w-64 px-3 py-2 bg-app-panel border border-theme-border rounded-md text-theme-text-primary text-sm focus:outline-none focus:border-accent-link placeholder:text-theme-text-muted"
+      />
+
+      <select
+        value={logLevel}
+        onChange={(e) => setLogLevel(e.target.value)}
+        className="px-3 py-2 bg-app-panel border border-theme-border rounded-md text-theme-text-primary text-sm focus:outline-none focus:border-accent-link"
+      >
+        <option value="all">Max Level: TRACE (all)</option>
+        <option value="debug">Max Level: DEBUG</option>
+        <option value="info">Max Level: INFO</option>
+        <option value="warn">Max Level: WARN</option>
+        <option value="error">Max Level: ERROR</option>
+        <option value="fatal">Max Level: FATAL</option>
+      </select>
+
+      <div className="flex items-center gap-2">
+        <span className="text-theme-text-muted text-sm">Limit:</span>
+        <EditableCombobox
+          value={limitInputValue}
+          options={PRESET_LIMITS}
+          onChange={(value) => setLimitInputValue(value)}
+          onSelect={(value) => {
+            setLogLimit(value)
+            setLimitInputValue(String(value))
+          }}
+          onBlur={handleLimitInputBlur}
+          onKeyDown={handleLimitInputKeyDown}
+        />
+      </div>
+
+      <span className="ml-auto text-xs text-theme-text-muted self-center">
+        {streamQuery.isStreaming && rows.length === 0 ? 'Loading...' : `Showing ${rows.length} entries`}
+      </span>
+    </div>
+  )
+
   // Render log content
   const renderContent = () => {
-    // Loading state
     if (streamQuery.isStreaming && !hasLoaded) {
-      return (
-        <div className="flex-1 flex items-center justify-center bg-app-bg border border-theme-border rounded-lg">
-          <div className="flex items-center gap-3">
-            <div className="animate-spin rounded-full h-5 w-5 border-2 border-accent-link border-t-transparent" />
-            <span className="text-theme-text-secondary">Loading logs...</span>
-          </div>
-        </div>
-      )
+      return <LoadingState message="Loading logs..." />
     }
 
-    // Empty state
     if (rows.length === 0) {
-      return (
-        <div className="flex-1 flex items-center justify-center bg-app-bg border border-theme-border rounded-lg">
-          <span className="text-theme-text-muted">No log entries found</span>
-        </div>
-      )
+      return <EmptyState message="No log entries found" />
     }
 
-    // Log entries display
     return (
       <div className="flex-1 overflow-auto bg-app-bg border border-theme-border rounded-lg font-mono text-xs">
         {rows.map((row, index) => (
@@ -508,72 +515,20 @@ export function LogRenderer({
     )
   }
 
-  // Handle retry
   const handleRetry = useCallback(() => {
     loadData(currentSqlRef.current)
   }, [loadData])
 
   return (
-    <div className="flex h-full">
-      <div className="flex-1 flex flex-col p-6 min-w-0">
-        {/* Filter controls */}
-        <div className="flex gap-3 mb-4">
-          <input
-            type="text"
-            value={searchInputValue}
-            onChange={(e) => setSearchInputValue(e.target.value)}
-            onBlur={handleSearchBlur}
-            onKeyDown={handleSearchKeyDown}
-            placeholder="Search target or message..."
-            className="w-64 px-3 py-2 bg-app-panel border border-theme-border rounded-md text-theme-text-primary text-sm focus:outline-none focus:border-accent-link placeholder:text-theme-text-muted"
-          />
-
-          <select
-            value={logLevel}
-            onChange={(e) => setLogLevel(e.target.value)}
-            className="px-3 py-2 bg-app-panel border border-theme-border rounded-md text-theme-text-primary text-sm focus:outline-none focus:border-accent-link"
-          >
-            <option value="all">Max Level: TRACE (all)</option>
-            <option value="debug">Max Level: DEBUG</option>
-            <option value="info">Max Level: INFO</option>
-            <option value="warn">Max Level: WARN</option>
-            <option value="error">Max Level: ERROR</option>
-            <option value="fatal">Max Level: FATAL</option>
-          </select>
-
-          <div className="flex items-center gap-2">
-            <span className="text-theme-text-muted text-sm">Limit:</span>
-            <EditableCombobox
-              value={limitInputValue}
-              options={PRESET_LIMITS}
-              onChange={(value) => setLimitInputValue(value)}
-              onSelect={(value) => {
-                setLogLimit(value)
-                setLimitInputValue(String(value))
-              }}
-              onBlur={handleLimitInputBlur}
-              onKeyDown={handleLimitInputKeyDown}
-            />
-          </div>
-
-          <span className="ml-auto text-xs text-theme-text-muted self-center">
-            {streamQuery.isStreaming && rows.length === 0
-              ? 'Loading...'
-              : `Showing ${rows.length} entries`}
-          </span>
-        </div>
-
-        {queryError && (
-          <ErrorBanner
-            title="Query execution failed"
-            message={queryError}
-            onRetry={streamQuery.error?.retryable ? handleRetry : undefined}
-          />
-        )}
-        {renderContent()}
-      </div>
-      {sqlPanel}
-    </div>
+    <RendererLayout
+      error={queryError}
+      isRetryable={streamQuery.error?.retryable}
+      onRetry={handleRetry}
+      sqlPanel={sqlPanel}
+      controls={filterControls}
+    >
+      {renderContent()}
+    </RendererLayout>
   )
 }
 

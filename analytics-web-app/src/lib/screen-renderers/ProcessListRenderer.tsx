@@ -1,12 +1,11 @@
-import { useState, useCallback, useEffect, useRef } from 'react'
-import { ChevronUp, ChevronDown, Save } from 'lucide-react'
+import { useState, useCallback } from 'react'
+import { ChevronUp, ChevronDown } from 'lucide-react'
 import { registerRenderer, ScreenRendererProps } from './index'
+import { useScreenQuery } from './useScreenQuery'
+import { LoadingState, EmptyState, SaveFooter, RendererLayout } from './shared'
 import { QueryEditor } from '@/components/QueryEditor'
-import { ErrorBanner } from '@/components/ErrorBanner'
 import { AppLink } from '@/components/AppLink'
 import { CopyableProcessId } from '@/components/CopyableProcessId'
-import { Button } from '@/components/ui/button'
-import { useStreamQuery } from '@/hooks/useStreamQuery'
 import { formatTimestamp, formatDuration } from '@/lib/time-range'
 import { timestampToDate } from '@/lib/arrow-utils'
 
@@ -42,91 +41,31 @@ export function ProcessListRenderer({
   const processListConfig = config as ProcessListConfig
 
   // Query execution
-  const streamQuery = useStreamQuery()
-  const queryError = streamQuery.error?.message ?? null
-  const table = streamQuery.getTable()
+  const query = useScreenQuery({
+    initialSql: processListConfig.sql,
+    timeRange,
+    refreshTrigger,
+  })
 
   // Sorting state (UI-only, not persisted)
   const [sortField, setSortField] = useState<ProcessSortField>('last_update_time')
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc')
 
-  // Refs for query execution
-  const currentSqlRef = useRef<string>(processListConfig.sql)
-  const executeRef = useRef(streamQuery.execute)
-  executeRef.current = streamQuery.execute
-
-  // Execute query
-  const loadData = useCallback(
+  const handleRunQuery = useCallback(
     (sql: string) => {
-      currentSqlRef.current = sql
       onConfigChange({ ...processListConfig, sql })
-
-      // Check if SQL changed from saved version
       if (savedConfig && sql !== (savedConfig as ProcessListConfig).sql) {
         onUnsavedChange()
       }
-
-      executeRef.current({
-        sql,
-        params: {
-          begin: timeRange.begin,
-          end: timeRange.end,
-        },
-        begin: timeRange.begin,
-        end: timeRange.end,
-      })
+      query.execute(sql)
     },
-    [processListConfig, savedConfig, onConfigChange, onUnsavedChange, timeRange]
-  )
-
-  // Initial query execution
-  const hasExecutedRef = useRef(false)
-  useEffect(() => {
-    if (!hasExecutedRef.current) {
-      hasExecutedRef.current = true
-      loadData(processListConfig.sql)
-    }
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Re-execute on time range change
-  const prevTimeRangeRef = useRef<{ begin: string; end: string } | null>(null)
-  useEffect(() => {
-    if (prevTimeRangeRef.current === null) {
-      prevTimeRangeRef.current = { begin: timeRange.begin, end: timeRange.end }
-      return
-    }
-    if (
-      prevTimeRangeRef.current.begin !== timeRange.begin ||
-      prevTimeRangeRef.current.end !== timeRange.end
-    ) {
-      prevTimeRangeRef.current = { begin: timeRange.begin, end: timeRange.end }
-      loadData(currentSqlRef.current)
-    }
-  }, [timeRange, loadData])
-
-  // Re-execute on refresh trigger
-  const prevRefreshTriggerRef = useRef(refreshTrigger)
-  useEffect(() => {
-    if (prevRefreshTriggerRef.current !== refreshTrigger) {
-      prevRefreshTriggerRef.current = refreshTrigger
-      loadData(currentSqlRef.current)
-    }
-  }, [refreshTrigger, loadData])
-
-  const handleRunQuery = useCallback(
-    (sql: string) => {
-      loadData(sql)
-    },
-    [loadData]
+    [processListConfig, savedConfig, onConfigChange, onUnsavedChange, query]
   )
 
   const handleResetQuery = useCallback(() => {
-    if (savedConfig) {
-      loadData((savedConfig as ProcessListConfig).sql)
-    } else {
-      loadData(processListConfig.sql)
-    }
-  }, [savedConfig, processListConfig.sql, loadData])
+    const sql = savedConfig ? (savedConfig as ProcessListConfig).sql : processListConfig.sql
+    handleRunQuery(sql)
+  }, [savedConfig, processListConfig.sql, handleRunQuery])
 
   const handleSqlChange = useCallback(
     (sql: string) => {
@@ -137,14 +76,17 @@ export function ProcessListRenderer({
     [savedConfig, onUnsavedChange]
   )
 
-  const handleSort = useCallback((field: ProcessSortField) => {
-    if (sortField === field) {
-      setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc')
-    } else {
-      setSortField(field)
-      setSortDirection('desc')
-    }
-  }, [sortField, sortDirection])
+  const handleSort = useCallback(
+    (field: ProcessSortField) => {
+      if (sortField === field) {
+        setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc')
+      } else {
+        setSortField(field)
+        setSortDirection('desc')
+      }
+    },
+    [sortField, sortDirection]
+  )
 
   // Sort header component
   const SortHeader = ({
@@ -187,67 +129,32 @@ export function ProcessListRenderer({
       onRun={handleRunQuery}
       onReset={handleResetQuery}
       onChange={handleSqlChange}
-      isLoading={streamQuery.isStreaming}
-      error={queryError}
+      isLoading={query.isLoading}
+      error={query.error}
       footer={
-        <>
-          <div className="border-t border-theme-border p-3 flex gap-2">
-            {onSave && (
-              <Button
-                variant="default"
-                size="sm"
-                onClick={onSave}
-                disabled={isSaving || !hasUnsavedChanges}
-                className="gap-1"
-              >
-                <Save className="w-4 h-4" />
-                {isSaving ? 'Saving...' : 'Save'}
-              </Button>
-            )}
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={onSaveAs}
-              className="gap-1"
-            >
-              <Save className="w-4 h-4" />
-              Save As
-            </Button>
-          </div>
-          {saveError && (
-            <div className="px-3 pb-3">
-              <p className="text-xs text-accent-error">{saveError}</p>
-            </div>
-          )}
-        </>
+        <SaveFooter
+          onSave={onSave}
+          onSaveAs={onSaveAs}
+          isSaving={isSaving}
+          hasUnsavedChanges={hasUnsavedChanges}
+          saveError={saveError}
+        />
       }
     />
   )
 
   // Render content
   const renderContent = () => {
-    // Loading state
-    if (streamQuery.isStreaming && !table) {
-      return (
-        <div className="flex-1 flex items-center justify-center bg-app-panel border border-theme-border rounded-lg">
-          <div className="flex items-center gap-3">
-            <div className="animate-spin rounded-full h-6 w-6 border-2 border-accent-link border-t-transparent" />
-            <span className="text-theme-text-secondary">Loading data...</span>
-          </div>
-        </div>
-      )
+    const table = query.table
+
+    if (query.isLoading && !table) {
+      return <LoadingState message="Loading data..." />
     }
 
-    // Empty state
     if (!table || table.numRows === 0) {
-      return (
-        <div className="flex-1 flex items-center justify-center bg-app-panel border border-theme-border rounded-lg">
-          <span className="text-theme-text-muted">No processes available.</span>
-        </div>
-      )
+      return <EmptyState message="No processes available." />
     }
 
-    // Data table
     return (
       <div className="flex-1 overflow-auto bg-app-panel border border-theme-border rounded-lg">
         <table className="w-full">
@@ -330,25 +237,15 @@ export function ProcessListRenderer({
     )
   }
 
-  // Handle retry
-  const handleRetry = useCallback(() => {
-    loadData(currentSqlRef.current)
-  }, [loadData])
-
   return (
-    <div className="flex h-full">
-      <div className="flex-1 flex flex-col p-6 min-w-0">
-        {queryError && (
-          <ErrorBanner
-            title="Query execution failed"
-            message={queryError}
-            onRetry={streamQuery.error?.retryable ? handleRetry : undefined}
-          />
-        )}
-        {renderContent()}
-      </div>
-      {sqlPanel}
-    </div>
+    <RendererLayout
+      error={query.error}
+      isRetryable={query.isRetryable}
+      onRetry={query.retry}
+      sqlPanel={sqlPanel}
+    >
+      {renderContent()}
+    </RendererLayout>
   )
 }
 
