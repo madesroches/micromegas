@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useSearchParams, useNavigate, useLocation } from 'react-router-dom'
+import { useSearchParams } from 'react-router-dom'
 import { ChevronDown } from 'lucide-react'
 import { registerRenderer, ScreenRendererProps } from './index'
 import { LoadingState, EmptyState, SaveFooter, RendererLayout } from './shared'
@@ -219,10 +219,8 @@ export function LogRenderer({
   const logConfig = config as LogConfig
   const savedLogConfig = savedConfig as LogConfig | null
 
-  // URL params and navigation for filter state sync
-  const [searchParams] = useSearchParams()
-  const navigate = useNavigate()
-  const { pathname } = useLocation()
+  // URL params for filter state sync
+  const [searchParams, setSearchParams] = useSearchParams()
 
   // Get saved values from config for detecting unsaved changes
   const savedValues = useMemo(
@@ -271,36 +269,41 @@ export function LogRenderer({
 
   // Sync filter state to URL (after initial mount)
   useEffect(() => {
+    // Skip initial mount - filters are initialized FROM URL, don't write back
     if (isInitialMountRef.current) {
       isInitialMountRef.current = false
       return
     }
 
-    const params = new URLSearchParams(searchParams.toString())
+    // Update URL params, preserving any other params (e.g., time range)
+    setSearchParams(
+      (prev) => {
+        const params = new URLSearchParams(prev)
 
-    // Only include non-default values in URL
-    if (logLevel === 'all') {
-      params.delete('level')
-    } else {
-      params.set('level', logLevel)
-    }
+        // Set or delete each filter param based on whether it's the default value
+        if (logLevel === 'all') {
+          params.delete('level')
+        } else {
+          params.set('level', logLevel)
+        }
 
-    if (logLimit === 100) {
-      params.delete('limit')
-    } else {
-      params.set('limit', String(logLimit))
-    }
+        if (logLimit === 100) {
+          params.delete('limit')
+        } else {
+          params.set('limit', String(logLimit))
+        }
 
-    if (search === '') {
-      params.delete('search')
-    } else {
-      params.set('search', search)
-    }
+        if (search === '') {
+          params.delete('search')
+        } else {
+          params.set('search', search)
+        }
 
-    const paramStr = params.toString()
-    const newUrl = paramStr ? `${pathname}?${paramStr}` : pathname
-    navigate(newUrl, { replace: true })
-  }, [logLevel, logLimit, search]) // eslint-disable-line react-hooks/exhaustive-deps
+        return params
+      },
+      { replace: true }
+    )
+  }, [logLevel, logLimit, search, setSearchParams])
 
   // Track all config changes - renderer owns the complete config
   const prevConfigRef = useRef<{
