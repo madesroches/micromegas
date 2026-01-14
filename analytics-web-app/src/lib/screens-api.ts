@@ -7,9 +7,14 @@ function getApiBase(): string {
 
 // Types matching the backend models
 
+export interface MetricsOptions {
+  scale_mode?: 'p99' | 'max'
+}
+
 export interface ScreenConfig {
   sql: string
   variables?: ScreenVariable[]
+  metrics_options?: MetricsOptions
 }
 
 export interface ScreenVariable {

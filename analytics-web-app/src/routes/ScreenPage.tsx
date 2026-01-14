@@ -5,7 +5,7 @@ import { PageLayout } from '@/components/layout'
 import { AuthGuard } from '@/components/AuthGuard'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { QueryEditor } from '@/components/QueryEditor'
-import { TimeSeriesChart } from '@/components/TimeSeriesChart'
+import { TimeSeriesChart, type ScaleMode } from '@/components/TimeSeriesChart'
 import { Button } from '@/components/ui/button'
 import { AppLink } from '@/components/AppLink'
 import { SaveScreenDialog } from '@/components/SaveScreenDialog'
@@ -198,9 +198,13 @@ function ProcessListTable({
 function MetricsView({
   table,
   onTimeRangeSelect,
+  scaleMode,
+  onScaleModeChange,
 }: {
   table: ReturnType<ReturnType<typeof useStreamQuery>['getTable']>
   onTimeRangeSelect?: (from: Date, to: Date) => void
+  scaleMode: ScaleMode
+  onScaleModeChange: (mode: ScaleMode) => void
 }) {
   // Transform table data to chart format
   const chartData = useMemo(() => {
@@ -244,6 +248,8 @@ function MetricsView({
         data={chartData}
         title=""
         unit=""
+        scaleMode={scaleMode}
+        onScaleModeChange={onScaleModeChange}
         onTimeRangeSelect={onTimeRangeSelect}
       />
     </div>
@@ -275,6 +281,9 @@ function ScreenPageContent() {
   // Process list sorting state
   const [sortField, setSortField] = useState<ProcessSortField>('last_update_time')
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc')
+
+  // Metrics chart state
+  const [metricsScaleMode, setMetricsScaleMode] = useState<ScaleMode>('p99')
 
   // Query state
   const streamQuery = useStreamQuery()
@@ -423,12 +432,38 @@ function ScreenPageContent() {
     }
   }, [sortField, sortDirection])
 
+  // Sync metrics scale mode from config when loaded
+  useEffect(() => {
+    if (config?.metrics_options?.scale_mode) {
+      setMetricsScaleMode(config.metrics_options.scale_mode)
+    }
+  }, [config?.metrics_options?.scale_mode])
+
   // Handle time range selection from chart drag
   const handleTimeRangeSelect = useCallback(
     (from: Date, to: Date) => {
       setTimeRange(from.toISOString(), to.toISOString())
     },
     [setTimeRange]
+  )
+
+  // Handle metrics scale mode change
+  const handleScaleModeChange = useCallback(
+    (mode: ScaleMode) => {
+      setMetricsScaleMode(mode)
+      setConfig((prev) =>
+        prev
+          ? {
+              ...prev,
+              metrics_options: { ...prev.metrics_options, scale_mode: mode },
+            }
+          : null
+      )
+      if (screen && screen.config.metrics_options?.scale_mode !== mode) {
+        setHasUnsavedChanges(true)
+      }
+    },
+    [screen]
   )
 
   // Save existing screen
@@ -620,7 +655,12 @@ function ScreenPageContent() {
               onSort={handleSort}
             />
           ) : screenType === 'metrics' ? (
-            <MetricsView table={table} onTimeRangeSelect={handleTimeRangeSelect} />
+            <MetricsView
+              table={table}
+              onTimeRangeSelect={handleTimeRangeSelect}
+              scaleMode={metricsScaleMode}
+              onScaleModeChange={handleScaleModeChange}
+            />
           ) : table && table.numRows > 0 ? (
             <div className="flex-1 overflow-auto bg-app-panel border border-theme-border rounded-lg">
               <table className="w-full">
