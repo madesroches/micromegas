@@ -35,6 +35,7 @@ export type ScreenTypeName = 'process_list' | 'metrics' | 'log'
 
 export interface ScreenTypeInfo {
   name: ScreenTypeName
+  display_name: string
   icon: string
   description: string
 }

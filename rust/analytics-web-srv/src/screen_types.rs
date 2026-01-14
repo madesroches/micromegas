@@ -68,16 +68,19 @@ impl ScreenType {
         match self {
             ScreenType::ProcessList => ScreenTypeInfo {
                 name: "process_list".to_string(),
+                display_name: "Process List".to_string(),
                 icon: "list".to_string(),
                 description: "List of processes with filtering".to_string(),
             },
             ScreenType::Metrics => ScreenTypeInfo {
                 name: "metrics".to_string(),
+                display_name: "Metrics".to_string(),
                 icon: "chart-line".to_string(),
                 description: "Time series metrics visualization".to_string(),
             },
             ScreenType::Log => ScreenTypeInfo {
                 name: "log".to_string(),
+                display_name: "Log".to_string(),
                 icon: "file-text".to_string(),
                 description: "Log entries viewer with filtering".to_string(),
             },
@@ -107,6 +110,7 @@ impl ScreenType {
 #[derive(Debug, Clone, Serialize)]
 pub struct ScreenTypeInfo {
     pub name: String,
+    pub display_name: String,
     pub icon: String,
     pub description: String,
 }

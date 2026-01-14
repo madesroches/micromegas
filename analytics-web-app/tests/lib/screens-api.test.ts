@@ -75,9 +75,9 @@ describe('getScreenTypes', () => {
 
   it('should fetch and return screen types', async () => {
     const mockTypes: ScreenTypeInfo[] = [
-      { name: 'process_list', icon: 'list', description: 'Process list' },
-      { name: 'metrics', icon: 'chart', description: 'Metrics' },
-      { name: 'log', icon: 'file', description: 'Logs' },
+      { name: 'process_list', display_name: 'Process List', icon: 'list', description: 'Process list' },
+      { name: 'metrics', display_name: 'Metrics', icon: 'chart', description: 'Metrics' },
+      { name: 'log', display_name: 'Log', icon: 'file', description: 'Logs' },
     ]
     mockedFetch.mockResolvedValue(createMockResponse(mockTypes))
 
