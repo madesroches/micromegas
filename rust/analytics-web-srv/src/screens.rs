@@ -82,6 +82,7 @@ pub async fn list_screen_types() -> Json<Vec<serde_json::Value>> {
             let info = t.info();
             serde_json::json!({
                 "name": info.name,
+                "display_name": info.display_name,
                 "icon": info.icon,
                 "description": info.description
             })

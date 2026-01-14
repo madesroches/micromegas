@@ -136,6 +136,7 @@ function ScreensPageContent() {
                     className="gap-1.5"
                   >
                     <Plus className="w-4 h-4" />
+                    {renderIcon(type.icon)}
                     New {type.display_name}
                   </Button>
                 ))}
