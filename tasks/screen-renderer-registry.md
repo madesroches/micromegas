@@ -24,7 +24,6 @@ analytics-web-app/src/lib/screen-renderers/
   ProcessListRenderer.tsx
   MetricsRenderer.tsx
   LogRenderer.tsx
-  GenericTableRenderer.tsx  # Fallback
 ```
 
 ### 2. Common Interface
@@ -40,9 +39,9 @@ export interface ScreenRendererProps {
   savedConfig: ScreenConfig | null  // null if new screen
   onUnsavedChange: () => void
 
-  // Time range from URL (renderers that need it can use it)
+  // Time range - parent owns URL state, renderers can navigate
   timeRange: { begin: string; end: string }
-  onTimeRangeChange: (from: string, to: string) => void
+  onTimeRangeChange: (from: string, to: string) => void  // Updates URL, triggers re-render
 }
 
 export const SCREEN_RENDERERS: Record<string, React.ComponentType<ScreenRendererProps>> = {
@@ -50,8 +49,6 @@ export const SCREEN_RENDERERS: Record<string, React.ComponentType<ScreenRenderer
   metrics: MetricsRenderer,
   log: LogRenderer,
 }
-
-export const DEFAULT_RENDERER = GenericTableRenderer
 ```
 
 **Key insight:** Each renderer handles its own data fetching. The parent no longer calls `useStreamQuery` - renderers that need SQL queries manage that internally. This allows:
@@ -82,6 +79,7 @@ function MetricsRenderer({ config, onConfigChange, savedConfig, onUnsavedChange,
 
   // Internal state
   const [scaleMode, setScaleMode] = useState<ScaleMode>(metricsConfig.scale_mode ?? 'p99')
+  const [isPanelOpen, setIsPanelOpen] = useState(true)
 
   // Execute query when config or time range changes
   useEffect(() => {
@@ -107,13 +105,33 @@ function MetricsRenderer({ config, onConfigChange, savedConfig, onUnsavedChange,
     onTimeRangeChange(from.toISOString(), to.toISOString())
   }, [onTimeRangeChange])
 
+  // Renderer owns its full layout including config panel
   return (
-    <TimeSeriesChart
-      data={transformData(table)}
-      scaleMode={scaleMode}
-      onScaleModeChange={handleScaleModeChange}
-      onTimeRangeSelect={handleTimeRangeSelect}
-    />
+    <ResizablePanelGroup direction="horizontal">
+      <ResizablePanel>
+        <TimeSeriesChart
+          data={transformData(table)}
+          scaleMode={scaleMode}
+          onScaleModeChange={handleScaleModeChange}
+          onTimeRangeSelect={handleTimeRangeSelect}
+        />
+      </ResizablePanel>
+
+      {isPanelOpen && (
+        <>
+          <ResizableHandle />
+          <ResizablePanel defaultSize={30}>
+            <SqlEditor
+              sql={metricsConfig.sql}
+              onChange={(sql) => {
+                onConfigChange({ ...metricsConfig, sql })
+                onUnsavedChange()
+              }}
+            />
+          </ResizablePanel>
+        </>
+      )}
+    </ResizablePanelGroup>
   )
 }
 ```
@@ -124,7 +142,7 @@ interface ProcessListConfig {
   sql: string
 }
 
-function ProcessListRenderer({ config, timeRange, ... }: ScreenRendererProps) {
+function ProcessListRenderer({ config, onConfigChange, onUnsavedChange, timeRange, ... }: ScreenRendererProps) {
   const processListConfig = config as ProcessListConfig
 
   // Own query execution
@@ -134,6 +152,7 @@ function ProcessListRenderer({ config, timeRange, ... }: ScreenRendererProps) {
   // UI-only state (not persisted)
   const [sortField, setSortField] = useState<ProcessSortField>('last_update_time')
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc')
+  const [isPanelOpen, setIsPanelOpen] = useState(true)
 
   useEffect(() => {
     if (processListConfig.sql) {
@@ -144,11 +163,126 @@ function ProcessListRenderer({ config, timeRange, ... }: ScreenRendererProps) {
     }
   }, [processListConfig.sql, timeRange])
 
-  return <ProcessListTable table={table} sortField={sortField} ... />
+  // Renderer owns its full layout including config panel
+  return (
+    <ResizablePanelGroup direction="horizontal">
+      <ResizablePanel>
+        <ProcessListTable table={table} sortField={sortField} ... />
+      </ResizablePanel>
+
+      {isPanelOpen && (
+        <>
+          <ResizableHandle />
+          <ResizablePanel defaultSize={30}>
+            <SqlEditor
+              sql={processListConfig.sql}
+              onChange={(sql) => {
+                onConfigChange({ ...processListConfig, sql })
+                onUnsavedChange()
+              }}
+            />
+          </ResizablePanel>
+        </>
+      )}
+    </ResizablePanelGroup>
+  )
 }
 ```
 
-### 4. ScreenPage.tsx Changes
+**Example: DashboardRenderer (future - different panel type)**
+```typescript
+interface DashboardConfig {
+  panels: Array<{ id: string; screen_ref: string; position: Position }>
+  refresh_interval?: number
+}
+
+function DashboardRenderer({ config, onConfigChange, onUnsavedChange, ... }: ScreenRendererProps) {
+  const dashboardConfig = config as DashboardConfig
+  const [editingPanel, setEditingPanel] = useState<string | null>(null)
+
+  // No SQL query - dashboards compose other screens
+  // Renderer owns its full layout with a completely different config panel
+  return (
+    <ResizablePanelGroup direction="horizontal">
+      <ResizablePanel>
+        <DashboardGrid
+          panels={dashboardConfig.panels}
+          onEditPanel={setEditingPanel}
+        />
+      </ResizablePanel>
+
+      {editingPanel && (
+        <>
+          <ResizableHandle />
+          <ResizablePanel defaultSize={25}>
+            <PanelConfigEditor
+              panel={dashboardConfig.panels.find(p => p.id === editingPanel)}
+              onChange={(updated) => {
+                const newPanels = dashboardConfig.panels.map(p =>
+                  p.id === editingPanel ? updated : p
+                )
+                onConfigChange({ ...dashboardConfig, panels: newPanels })
+                onUnsavedChange()
+              }}
+            />
+          </ResizablePanel>
+        </>
+      )}
+    </ResizablePanelGroup>
+  )
+}
+```
+
+### 4. Time Range Navigation
+
+Renderers can navigate through time by calling `onTimeRangeChange`. The parent owns the URL state and passes the current range down.
+
+**Flow:**
+1. Parent reads `begin`/`end` from URL search params
+2. Parent passes `timeRange` and `onTimeRangeChange` to renderer
+3. Renderer calls `onTimeRangeChange(from, to)` when user navigates (e.g., chart drag-to-zoom)
+4. Parent updates URL → triggers re-render with new `timeRange`
+5. Renderer's `useEffect` detects change → re-executes query
+
+**Example: Chart drag-to-zoom**
+```typescript
+function MetricsRenderer({ timeRange, onTimeRangeChange, ... }: ScreenRendererProps) {
+  // ...
+
+  const handleTimeRangeSelect = useCallback((from: Date, to: Date) => {
+    // This updates the URL, which triggers parent re-render with new timeRange
+    onTimeRangeChange(from.toISOString(), to.toISOString())
+  }, [onTimeRangeChange])
+
+  return (
+    <TimeSeriesChart
+      onTimeRangeSelect={handleTimeRangeSelect}
+      // Could also add onZoomOut, onPan, etc.
+    />
+  )
+}
+```
+
+**Example: Process list with "jump to time" on row click**
+```typescript
+function ProcessListRenderer({ onTimeRangeChange, ... }: ScreenRendererProps) {
+  const handleProcessClick = useCallback((process: Process) => {
+    // Navigate to a time window around this process's activity
+    const start = new Date(process.start_time)
+    const end = new Date(process.last_update_time)
+    onTimeRangeChange(start.toISOString(), end.toISOString())
+  }, [onTimeRangeChange])
+
+  return <ProcessListTable onRowClick={handleProcessClick} />
+}
+```
+
+**Key points:**
+- URL is the source of truth for time range (enables sharing links, browser back/forward)
+- Renderers request changes, parent decides how to update URL
+- Each renderer can expose different time navigation UX appropriate to its visualization
+
+### 5. ScreenPage.tsx Changes
 
 **Before:**
 ```typescript
@@ -173,72 +307,71 @@ const [sortField, setSortField] = useState(...)
 
 **After:**
 ```typescript
-import { SCREEN_RENDERERS, DEFAULT_RENDERER } from '@/lib/screen-renderers'
+import { SCREEN_RENDERERS } from '@/lib/screen-renderers'
 
 // No query execution in parent - each renderer handles its own
 // No type-specific state in parent
+// No layout/panel management - renderers own their full UI
 
-const Renderer = SCREEN_RENDERERS[screenType] ?? DEFAULT_RENDERER
+const Renderer = SCREEN_RENDERERS[screenType]
+
+// Unknown screen type is a bug - fail explicitly
+if (!Renderer) {
+  return <ErrorDisplay message={`Unknown screen type: ${screenType}`} />
+}
 
 return (
-  <Renderer
-    config={config}
-    onConfigChange={setConfig}
-    savedConfig={screen?.config ?? null}
-    onUnsavedChange={() => setHasUnsavedChanges(true)}
-    timeRange={apiTimeRange}
-    onTimeRangeChange={setTimeRange}
-  />
+  <div className="flex flex-col h-full">
+    <ScreenHeader
+      name={name}
+      hasUnsavedChanges={hasUnsavedChanges}
+      onSave={handleSave}
+    />
+    <div className="flex-1 overflow-hidden">
+      <Renderer
+        config={config}
+        onConfigChange={setConfig}
+        savedConfig={screen?.config ?? null}
+        onUnsavedChange={() => setHasUnsavedChanges(true)}
+        timeRange={apiTimeRange}
+        onTimeRangeChange={setTimeRange}
+      />
+    </div>
+  </div>
 )
 ```
 
-**Parent responsibilities (simplified):**
+**Parent responsibilities (minimal):**
 - Load/save screen metadata (name, type, config)
 - Track unsaved changes flag
 - Provide time range from URL
-- Render SQL editor panel (only if `config.sql` exists)
+- Render header with save button
 
-**Renderer responsibilities:**
+**Renderer responsibilities (full ownership):**
 - Parse and validate its config schema
 - Execute queries (if any)
 - Manage UI state (scale mode, sorting, etc.)
 - Report config changes and unsaved status
-
-### 5. SQL Editor Panel
-
-The SQL editor panel in ScreenPage.tsx should only render if the config has a `sql` field:
-
-```typescript
-const hasSql = typeof config?.sql === 'string'
-
-const sqlPanel = hasSql ? (
-  <QueryEditor
-    sql={config.sql}
-    onChange={(sql) => onConfigChange({ ...config, sql })}
-    ...
-  />
-) : null
-```
-
-Future screens without SQL (e.g., dashboards) won't show the editor panel.
+- **Own full layout including any config/editor panels**
 
 ## Migration Steps
 
 ### Phase 1: Create Infrastructure
 1. Create `src/lib/screen-renderers/index.ts` with types and empty registry
-2. Create `GenericTableRenderer.tsx` (extract from current ScreenPage.tsx)
 
 ### Phase 2: Migrate ProcessListRenderer
 1. Create `ProcessListRenderer.tsx`
 2. Move `ProcessListTable` component and sorting state into it
-3. Register in `SCREEN_RENDERERS`
-4. Remove process_list branch from ScreenPage.tsx
+3. Include `ResizablePanelGroup` layout with SQL editor panel
+4. Register in `SCREEN_RENDERERS`
+5. Remove process_list branch from ScreenPage.tsx
 
 ### Phase 3: Migrate MetricsRenderer
 1. Create `MetricsRenderer.tsx`
 2. Move `MetricsView`, scale mode state, and config sync into it
-3. Register in `SCREEN_RENDERERS`
-4. Remove metrics branch and state from ScreenPage.tsx
+3. Include `ResizablePanelGroup` layout with SQL editor panel
+4. Register in `SCREEN_RENDERERS`
+5. Remove metrics branch and state from ScreenPage.tsx
 
 ### Phase 4: Migrate LogRenderer
 1. Create `LogRenderer.tsx` (currently uses generic table)
@@ -248,7 +381,8 @@ Future screens without SQL (e.g., dashboards) won't show the editor panel.
 ### Phase 5: Cleanup
 1. Remove all type-specific state from `ScreenPageContent`
 2. Remove conditional rendering, use registry lookup
-3. Delete unused imports
+3. Remove `ResizablePanelGroup` and SQL editor from parent (now in renderers)
+4. Delete unused imports
 
 ## Benefits
 
@@ -256,11 +390,16 @@ Future screens without SQL (e.g., dashboards) won't show the editor panel.
    - Creating `NewTypeRenderer.tsx`
    - Adding one line to `SCREEN_RENDERERS`
 
-2. **Encapsulation**: Each renderer owns its state and config handling
+2. **Encapsulation**: Each renderer owns its state, config handling, and layout
 
 3. **Testability**: Renderers can be unit tested in isolation
 
 4. **Scalability**: Complex screen types don't bloat ScreenPage.tsx
+
+5. **Flexible Panels**: Each renderer can have a completely different config panel:
+   - SQL-based screens show a query editor
+   - Dashboards show a panel configuration editor
+   - Future screens can have no panel at all
 
 ## Config Structure
 
@@ -309,7 +448,6 @@ interface DashboardConfig {
 | File | Action |
 |------|--------|
 | `src/lib/screen-renderers/index.ts` | Create - registry and types |
-| `src/lib/screen-renderers/GenericTableRenderer.tsx` | Create - fallback renderer |
 | `src/lib/screen-renderers/ProcessListRenderer.tsx` | Create - move from ScreenPage |
 | `src/lib/screen-renderers/MetricsRenderer.tsx` | Create - move from ScreenPage |
 | `src/lib/screen-renderers/LogRenderer.tsx` | Create - basic implementation |
