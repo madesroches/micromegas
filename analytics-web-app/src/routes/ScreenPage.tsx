@@ -1,6 +1,6 @@
 import { Suspense, useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import { useParams, useSearchParams, useNavigate } from 'react-router-dom'
-import { AlertCircle, List, LineChart, FileText, Save, ChevronUp, ChevronDown } from 'lucide-react'
+import { AlertCircle, Save, ChevronUp, ChevronDown } from 'lucide-react'
 import { PageLayout } from '@/components/layout'
 import { AuthGuard } from '@/components/AuthGuard'
 import { ErrorBanner } from '@/components/ErrorBanner'
@@ -14,43 +14,18 @@ import { useStreamQuery } from '@/hooks/useStreamQuery'
 import { useTimeRange } from '@/hooks/useTimeRange'
 import { formatTimestamp, formatDuration } from '@/lib/time-range'
 import { timestampToDate, timestampToMs } from '@/lib/arrow-utils'
+import { renderIcon } from '@/lib/screen-type-utils'
 import {
   getScreen,
+  getScreenTypes,
   getDefaultConfig,
   updateScreen,
   Screen,
   ScreenTypeName,
+  ScreenTypeInfo,
   ScreenConfig,
   ScreenApiError,
 } from '@/lib/screens-api'
-
-// Get display name for screen type
-function getScreenTypeDisplayName(typeName: ScreenTypeName): string {
-  switch (typeName) {
-    case 'process_list':
-      return 'Process List'
-    case 'metrics':
-      return 'Metrics'
-    case 'log':
-      return 'Log'
-    default:
-      return typeName
-  }
-}
-
-// Get icon for screen type
-function getScreenTypeIcon(typeName: ScreenTypeName) {
-  switch (typeName) {
-    case 'process_list':
-      return <List className="w-5 h-5" />
-    case 'metrics':
-      return <LineChart className="w-5 h-5" />
-    case 'log':
-      return <FileText className="w-5 h-5" />
-    default:
-      return <FileText className="w-5 h-5" />
-  }
-}
 
 // Variables available for all screen types
 const VARIABLES = [
@@ -285,6 +260,9 @@ function ScreenPageContent() {
   // Metrics chart state
   const [metricsScaleMode, setMetricsScaleMode] = useState<ScaleMode>('p99')
 
+  // Screen type info (fetched from API)
+  const [screenTypeInfo, setScreenTypeInfo] = useState<ScreenTypeInfo | null>(null)
+
   // Query state
   const streamQuery = useStreamQuery()
   const queryError = streamQuery.error?.message ?? null
@@ -301,6 +279,10 @@ function ScreenPageContent() {
       setLoadError(null)
 
       try {
+        // Fetch screen types for display info
+        const types = await getScreenTypes()
+        const typeMap = new Map(types.map((t) => [t.name, t]))
+
         if (isNew) {
           // New screen - load default config for the type
           if (!typeParam) {
@@ -310,6 +292,7 @@ function ScreenPageContent() {
           const defaultConfig = await getDefaultConfig(typeParam)
           setConfig(defaultConfig)
           setScreenType(typeParam)
+          setScreenTypeInfo(typeMap.get(typeParam) ?? null)
           currentSqlRef.current = defaultConfig.sql
         } else {
           // Existing screen - load from API
@@ -317,6 +300,7 @@ function ScreenPageContent() {
           setScreen(loadedScreen)
           setConfig(loadedScreen.config)
           setScreenType(loadedScreen.screen_type as ScreenTypeName)
+          setScreenTypeInfo(typeMap.get(loadedScreen.screen_type as ScreenTypeName) ?? null)
           currentSqlRef.current = loadedScreen.config.sql
         }
       } catch (err) {
@@ -610,15 +594,15 @@ function ScreenPageContent() {
           <div className="mb-5">
             <div className="flex items-center gap-3">
               <div className="p-2 rounded-md bg-app-card text-accent-link">
-                {getScreenTypeIcon(screenType)}
+                {renderIcon(screenTypeInfo?.icon ?? 'file-text')}
               </div>
               <div>
                 <h1 className="text-2xl font-semibold text-theme-text-primary">
-                  {isNew ? `New ${getScreenTypeDisplayName(screenType)} Screen` : screen?.name}
+                  {isNew ? `New ${screenTypeInfo?.display_name ?? screenType} Screen` : screen?.name}
                 </h1>
                 {(isNew || hasUnsavedChanges) && (
                   <p className="text-sm text-theme-text-secondary">
-                    {isNew && getScreenTypeDisplayName(screenType)}
+                    {isNew && (screenTypeInfo?.display_name ?? screenType)}
                     {hasUnsavedChanges && (
                       <span className={isNew ? 'ml-2' : ''} style={{ color: 'var(--accent-warning)' }}>
                         (unsaved changes)

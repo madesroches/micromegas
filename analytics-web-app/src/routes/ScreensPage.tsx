@@ -1,12 +1,13 @@
-import { Suspense, useState, useEffect, useCallback } from 'react'
+import { Suspense, useState, useEffect, useCallback, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { List, LineChart, FileText, Plus, Trash2 } from 'lucide-react'
+import { Plus, Trash2 } from 'lucide-react'
 import { PageLayout } from '@/components/layout'
 import { AuthGuard } from '@/components/AuthGuard'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { Button } from '@/components/ui/button'
 import { AppLink } from '@/components/AppLink'
+import { renderIcon } from '@/lib/screen-type-utils'
 import {
   listScreens,
   getScreenTypes,
@@ -16,34 +17,6 @@ import {
   deleteScreen,
   ScreenApiError,
 } from '@/lib/screens-api'
-
-// Map screen type names to icons
-function getScreenTypeIcon(typeName: ScreenTypeName) {
-  switch (typeName) {
-    case 'process_list':
-      return <List className="w-5 h-5" />
-    case 'metrics':
-      return <LineChart className="w-5 h-5" />
-    case 'log':
-      return <FileText className="w-5 h-5" />
-    default:
-      return <FileText className="w-5 h-5" />
-  }
-}
-
-// Get display name for screen type
-function getScreenTypeDisplayName(typeName: ScreenTypeName): string {
-  switch (typeName) {
-    case 'process_list':
-      return 'Process List'
-    case 'metrics':
-      return 'Metrics'
-    case 'log':
-      return 'Log'
-    default:
-      return typeName
-  }
-}
 
 function ScreensPageContent() {
   const navigate = useNavigate()
@@ -111,6 +84,15 @@ function ScreensPageContent() {
     }
   }
 
+  // Create lookup map for screen type info
+  const screenTypeMap = useMemo(() => {
+    const map = new Map<ScreenTypeName, ScreenTypeInfo>()
+    for (const type of screenTypes) {
+      map.set(type.name, type)
+    }
+    return map
+  }, [screenTypes])
+
   return (
     <AuthGuard>
       <PageLayout onRefresh={loadData}>
@@ -154,7 +136,7 @@ function ScreensPageContent() {
                     className="gap-1.5"
                   >
                     <Plus className="w-4 h-4" />
-                    New {getScreenTypeDisplayName(type.name)}
+                    New {type.display_name}
                   </Button>
                 ))}
               </div>
@@ -173,14 +155,14 @@ function ScreensPageContent() {
                           <div className="min-w-0 flex-1">
                             <div className="flex items-center gap-2 mb-1">
                               <span className="text-accent-link">
-                                {getScreenTypeIcon(screen.screen_type)}
+                                {renderIcon(screenTypeMap.get(screen.screen_type)?.icon ?? 'file-text')}
                               </span>
                               <h3 className="font-medium text-theme-text-primary truncate group-hover:text-accent-link transition-colors">
                                 {screen.name}
                               </h3>
                             </div>
                             <p className="text-xs text-theme-text-muted truncate">
-                              {getScreenTypeDisplayName(screen.screen_type)} · Updated{' '}
+                              {screenTypeMap.get(screen.screen_type)?.display_name ?? screen.screen_type} · Updated{' '}
                               {new Date(screen.updated_at).toLocaleDateString(undefined, {
                                 month: 'short',
                                 day: 'numeric',
