@@ -8,9 +8,12 @@ interface QueryEditorProps {
   timeRangeLabel?: string
   onRun: (sql: string) => void
   onReset: () => void
+  onChange?: (sql: string) => void
   isLoading?: boolean
   error?: string | null
   docLink?: { url: string; label: string }
+  /** Footer content rendered at bottom of panel (only when expanded) */
+  footer?: React.ReactNode
 }
 
 export function QueryEditor({
@@ -20,9 +23,11 @@ export function QueryEditor({
   timeRangeLabel,
   onRun,
   onReset,
+  onChange,
   isLoading = false,
   error,
   docLink,
+  footer,
 }: QueryEditorProps) {
   const [isCollapsed, setIsCollapsed] = useState(true)
   const [sql, setSql] = useState(defaultSql)
@@ -119,7 +124,10 @@ export function QueryEditor({
           {/* Transparent textarea (in front, captures input) */}
           <textarea
             value={sql}
-            onChange={(e) => setSql(e.target.value)}
+            onChange={(e) => {
+              setSql(e.target.value)
+              onChange?.(e.target.value)
+            }}
             className="absolute inset-0 w-full h-full p-3 bg-transparent text-transparent caret-theme-text-primary font-mono text-xs leading-relaxed resize-none focus:outline-none"
             spellCheck={false}
           />
@@ -201,6 +209,9 @@ export function QueryEditor({
           </div>
         )}
       </div>
+
+      {/* Footer */}
+      {footer}
     </div>
   )
 }

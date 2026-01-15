@@ -162,6 +162,23 @@ def setup_environment():
     os.environ["MICROMEGAS_BACKEND_PORT"] = str(backend_port)
     os.environ["MICROMEGAS_FRONTEND_PORT"] = str(frontend_port)
 
+    # Build app database connection string for user-defined screens
+    db_username = os.environ.get("MICROMEGAS_DB_USERNAME")
+    if not db_username:
+        print_status("MICROMEGAS_DB_USERNAME environment variable not set", "error")
+        print_status("Run: export MICROMEGAS_DB_USERNAME=telemetry", "info")
+        sys.exit(1)
+    db_passwd = os.environ.get("MICROMEGAS_DB_PASSWD")
+    if not db_passwd:
+        print_status("MICROMEGAS_DB_PASSWD environment variable not set", "error")
+        sys.exit(1)
+    db_port = os.environ.get("MICROMEGAS_DB_PORT")
+    if not db_port:
+        print_status("MICROMEGAS_DB_PORT environment variable not set", "error")
+        print_status("Run: export MICROMEGAS_DB_PORT=6432", "info")
+        sys.exit(1)
+    app_db_conn_string = f"postgres://{db_username}:{db_passwd}@127.0.0.1:{db_port}/micromegas_app"
+
     env_vars = {
         "MICROMEGAS_FLIGHTSQL_URL": f"grpc://127.0.0.1:{flightsql_port}",
         "MICROMEGAS_AUTH_TOKEN": "",  # Empty for no-auth mode
@@ -169,6 +186,8 @@ def setup_environment():
         # OAuth callback URL must include base_path so browser URL matches cookie path
         "MICROMEGAS_AUTH_REDIRECT_URI": f"http://localhost:{frontend_port}{base_path}/auth/callback",
         "MICROMEGAS_STATE_SECRET": dev_secret,  # Random secret for OAuth state signing
+        # App database for user-defined screens (optional - screens disabled if not set)
+        "MICROMEGAS_APP_SQL_CONNECTION_STRING": app_db_conn_string,
     }
 
     for key, default_value in env_vars.items():
@@ -181,6 +200,8 @@ def setup_environment():
                     print_status("No auth token (development mode)", "info")
             elif key == "MICROMEGAS_STATE_SECRET":
                 print_status(f"Set {key}=<generated>", "info")
+            elif key == "MICROMEGAS_APP_SQL_CONNECTION_STRING":
+                print_status("Screens feature enabled (micromegas_app database)", "success")
             else:
                 print_status(f"Set {key}={default_value}", "info")
 

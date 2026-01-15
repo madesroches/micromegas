@@ -8,6 +8,8 @@ const ProcessPage = lazy(() => import('@/routes/ProcessPage'))
 const ProcessLogPage = lazy(() => import('@/routes/ProcessLogPage'))
 const ProcessMetricsPage = lazy(() => import('@/routes/ProcessMetricsPage'))
 const PerformanceAnalysisPage = lazy(() => import('@/routes/PerformanceAnalysisPage'))
+const ScreensPage = lazy(() => import('@/routes/ScreensPage'))
+const ScreenPage = lazy(() => import('@/routes/ScreenPage'))
 const NotFoundPage = lazy(() => import('@/routes/NotFoundPage'))
 
 function PageLoader() {
@@ -32,6 +34,9 @@ export function AppRouter() {
         <Route path="/process_log" element={<ProcessLogPage />} />
         <Route path="/process_metrics" element={<ProcessMetricsPage />} />
         <Route path="/performance_analysis" element={<PerformanceAnalysisPage />} />
+        <Route path="/screens" element={<ScreensPage />} />
+        <Route path="/screen/new" element={<ScreenPage />} />
+        <Route path="/screen/:name" element={<ScreenPage />} />
         <Route path="*" element={<NotFoundPage />} />
       </Routes>
     </Suspense>

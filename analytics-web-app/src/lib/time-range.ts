@@ -1,5 +1,8 @@
 // Time range utilities for URL-based state management
 
+// Re-export default time range from centralized defaults
+export { DEFAULT_TIME_RANGE } from './screen-defaults'
+
 export interface TimeRange {
   from: string
   to: string
@@ -28,10 +31,6 @@ export const TIME_RANGE_PRESETS = [
   { label: 'Last 90 days', value: 'now-90d', duration: 90 * 24 * 60 * 60 * 1000 },
 ] as const
 
-export const DEFAULT_TIME_RANGE: TimeRange = {
-  from: 'now-5m',
-  to: 'now',
-}
 
 // Time unit multipliers in milliseconds
 const TIME_UNIT_MS: Record<string, number> = {

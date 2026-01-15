@@ -204,19 +204,14 @@ export async function* streamQuery(
   let schemaBytes: Uint8Array | null = null;
   let capturedError: StreamError | null = null;
 
-  // Reusable buffer for combining schema + batch bytes, grows as needed
-  // Local to this generator to avoid interference between concurrent queries
-  let parseBuffer: Uint8Array | null = null;
-
+  // Combine schema + batch bytes into a new buffer for each batch.
+  // We cannot reuse buffers because Arrow's RecordBatch may hold zero-copy
+  // references to the underlying data, and reusing would corrupt previous batches.
   const combineForParsing = (schema: Uint8Array, batch: Uint8Array): Uint8Array => {
-    const requiredSize = schema.length + batch.length;
-    if (!parseBuffer || parseBuffer.length < requiredSize) {
-      const newSize = Math.max(requiredSize, parseBuffer?.length ? parseBuffer.length * 2 : 64 * 1024);
-      parseBuffer = new Uint8Array(newSize);
-    }
-    parseBuffer.set(schema, 0);
-    parseBuffer.set(batch, schema.length);
-    return parseBuffer.subarray(0, requiredSize);
+    const combined = new Uint8Array(schema.length + batch.length);
+    combined.set(schema, 0);
+    combined.set(batch, schema.length);
+    return combined;
   };
 
   try {

@@ -12,7 +12,8 @@ export default {
   },
   extensionsToTreatAsEsm: ['.ts', '.tsx'],
   testMatch: [
-    '**/__tests__/**/*.ts?(x)',
+    '<rootDir>/tests/**/*.ts?(x)',
+    '<rootDir>/src/**/__tests__/**/*.ts?(x)',
     '**/?(*.)+(spec|test).ts?(x)',
   ],
   collectCoverageFrom: [

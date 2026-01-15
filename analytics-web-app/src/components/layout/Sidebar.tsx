@@ -1,6 +1,6 @@
 import { useLocation } from 'react-router-dom'
 import { AppLink } from '@/components/AppLink'
-import { LayoutGrid } from 'lucide-react'
+import { LayoutGrid, Layers } from 'lucide-react'
 
 interface NavItem {
   href: string
@@ -15,6 +15,12 @@ const navItems: NavItem[] = [
     icon: <LayoutGrid className="w-5 h-5" />,
     label: 'Processes',
     matchPaths: ['/processes', '/process', '/process_log', '/process_metrics', '/performance_analysis'],
+  },
+  {
+    href: '/screens',
+    icon: <Layers className="w-5 h-5" />,
+    label: 'Screens',
+    matchPaths: ['/screens', '/screen'],
   },
 ]
 

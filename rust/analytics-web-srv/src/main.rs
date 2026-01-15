@@ -1,7 +1,9 @@
 mod auth;
 mod queries;
+mod screens;
 mod stream_query;
 
+use analytics_web_srv::app_db;
 use anyhow::{Context, Result};
 use auth::{AuthState, AuthToken, OidcClientConfig};
 use axum::{
@@ -204,6 +206,20 @@ async fn main() -> Result<()> {
         anyhow::bail!("MICROMEGAS_BASE_PATH must start with '/' (e.g., '/', '/micromegas')");
     }
 
+    // Connect to micromegas_app database for user-defined screens
+    let app_db_conn_string = std::env::var("MICROMEGAS_APP_SQL_CONNECTION_STRING")
+        .context("MICROMEGAS_APP_SQL_CONNECTION_STRING environment variable not set")?;
+
+    let app_db_pool = sqlx::PgPool::connect(&app_db_conn_string)
+        .await
+        .context("Failed to connect to micromegas_app database")?;
+
+    app_db::execute_migration(app_db_pool.clone())
+        .await
+        .context("Failed to run micromegas_app migrations")?;
+
+    info!("Connected to micromegas_app database");
+
     // Build auth state if authentication is enabled
     let auth_state = if !args.disable_auth {
         // Load OIDC client configuration
@@ -288,6 +304,48 @@ async fn main() -> Result<()> {
         // In no-auth mode, inject a dummy AuthToken so handlers don't fail
         api_routes.layer(Extension(AuthToken(String::new())))
     };
+
+    // Build screen routes
+    let screen_routes = Router::new()
+        // Screen types (static)
+        .route(
+            &format!("{base_path}/screen-types"),
+            get(screens::list_screen_types),
+        )
+        .route(
+            &format!("{base_path}/screen-types/{{type_name}}/default"),
+            get(screens::get_default_config),
+        )
+        // Screens CRUD
+        .route(
+            &format!("{base_path}/screens"),
+            get(screens::list_screens).post(screens::create_screen),
+        )
+        .route(
+            &format!("{base_path}/screens/{{name}}"),
+            get(screens::get_screen)
+                .put(screens::update_screen)
+                .delete(screens::delete_screen),
+        )
+        .layer(Extension(app_db_pool))
+        .layer(middleware::from_fn(observability_middleware));
+
+    // Apply auth middleware to screen routes if enabled
+    let screen_routes = if let Some(auth_state) = auth_state.clone() {
+        screen_routes.layer(middleware::from_fn_with_state(
+            auth_state,
+            auth::cookie_auth_middleware,
+        ))
+    } else {
+        // In no-auth mode, inject a dummy ValidatedUser so handlers don't fail
+        screen_routes.layer(Extension(auth::ValidatedUser {
+            subject: "anonymous".to_string(),
+            email: None,
+            issuer: "local".to_string(),
+            is_admin: true,
+        }))
+    };
+
     // State for serving index.html with injected config
     let index_state = IndexState {
         frontend_dir: args.frontend_dir.clone(),
@@ -301,11 +359,20 @@ async fn main() -> Result<()> {
 
     let cors_layer = CorsLayer::new()
         .allow_origin(origin)
-        .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::DELETE,
+            Method::OPTIONS,
+        ])
         .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION])
         .allow_credentials(true);
 
-    let mut app = Router::new().merge(health_routes).merge(api_routes);
+    let mut app = Router::new()
+        .merge(health_routes)
+        .merge(api_routes)
+        .merge(screen_routes);
 
     // Add auth routes (always - either real or stub)
     app = app.merge(auth_routes);
