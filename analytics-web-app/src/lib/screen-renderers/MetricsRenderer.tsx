@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useMemo } from 'react'
 import { registerRenderer, ScreenRendererProps } from './index'
 import { useScreenQuery } from './useScreenQuery'
 import { useTimeRangeSync } from './useTimeRangeSync'
+import { useSqlHandlers } from './useSqlHandlers'
 import { LoadingState, EmptyState, SaveFooter, RendererLayout } from './shared'
 import { QueryEditor } from '@/components/QueryEditor'
 import { TimeSeriesChart, type ScaleMode } from '@/components/TimeSeriesChart'
@@ -72,30 +73,14 @@ export function MetricsRenderer({
     onConfigChange,
   })
 
-  const handleRunQuery = useCallback(
-    (sql: string) => {
-      onConfigChange({ ...metricsConfig, sql })
-      if (savedConfig && sql !== (savedConfig as MetricsConfig).sql) {
-        onUnsavedChange()
-      }
-      query.execute(sql)
-    },
-    [metricsConfig, savedConfig, onConfigChange, onUnsavedChange, query]
-  )
-
-  const handleResetQuery = useCallback(() => {
-    const sql = savedConfig ? (savedConfig as MetricsConfig).sql : metricsConfig.sql
-    handleRunQuery(sql)
-  }, [savedConfig, metricsConfig.sql, handleRunQuery])
-
-  const handleSqlChange = useCallback(
-    (sql: string) => {
-      if (savedConfig && sql !== (savedConfig as MetricsConfig).sql) {
-        onUnsavedChange()
-      }
-    },
-    [savedConfig, onUnsavedChange]
-  )
+  // SQL editor handlers
+  const { handleRunQuery, handleResetQuery, handleSqlChange } = useSqlHandlers({
+    config: metricsConfig,
+    savedConfig: savedMetricsConfig,
+    onConfigChange,
+    onUnsavedChange,
+    execute: query.execute,
+  })
 
   // Handle scale mode change - persists to config
   const handleScaleModeChange = useCallback(

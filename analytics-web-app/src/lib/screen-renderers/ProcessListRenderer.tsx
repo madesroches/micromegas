@@ -3,6 +3,7 @@ import { ChevronUp, ChevronDown } from 'lucide-react'
 import { registerRenderer, ScreenRendererProps } from './index'
 import { useScreenQuery } from './useScreenQuery'
 import { useTimeRangeSync } from './useTimeRangeSync'
+import { useSqlHandlers } from './useSqlHandlers'
 import { LoadingState, EmptyState, SaveFooter, RendererLayout } from './shared'
 import { QueryEditor } from '@/components/QueryEditor'
 import { AppLink } from '@/components/AppLink'
@@ -65,30 +66,14 @@ export function ProcessListRenderer({
     onConfigChange,
   })
 
-  const handleRunQuery = useCallback(
-    (sql: string) => {
-      onConfigChange({ ...processListConfig, sql })
-      if (savedConfig && sql !== (savedConfig as ProcessListConfig).sql) {
-        onUnsavedChange()
-      }
-      query.execute(sql)
-    },
-    [processListConfig, savedConfig, onConfigChange, onUnsavedChange, query]
-  )
-
-  const handleResetQuery = useCallback(() => {
-    const sql = savedConfig ? (savedConfig as ProcessListConfig).sql : processListConfig.sql
-    handleRunQuery(sql)
-  }, [savedConfig, processListConfig.sql, handleRunQuery])
-
-  const handleSqlChange = useCallback(
-    (sql: string) => {
-      if (savedConfig && sql !== (savedConfig as ProcessListConfig).sql) {
-        onUnsavedChange()
-      }
-    },
-    [savedConfig, onUnsavedChange]
-  )
+  // SQL editor handlers
+  const { handleRunQuery, handleResetQuery, handleSqlChange } = useSqlHandlers({
+    config: processListConfig,
+    savedConfig: savedProcessListConfig,
+    onConfigChange,
+    onUnsavedChange,
+    execute: query.execute,
+  })
 
   const handleSort = useCallback(
     (field: ProcessSortField) => {
