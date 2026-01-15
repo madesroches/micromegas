@@ -5,9 +5,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Critical Rules
 - **NEVER COMMIT UNLESS EXPLICITLY ASKED**
 - follow @AI_GUIDELINES.md
+- **Project Structure**: Run cargo commands from `rust/` directory (main workspace at `rust/Cargo.toml`)
+
+## Source control rules
 - **Commit Messages**: NEVER include AI-generated credits or co-author tags
 - **Pull Requests**: Always run `git log --oneline main..HEAD` before creating PRs
-- **Project Structure**: Run cargo commands from `rust/` directory (main workspace at `rust/Cargo.toml`)
+- unless asked, don't amend commits
 
 ## Scripting
 - prefer to script using python over shell scripts

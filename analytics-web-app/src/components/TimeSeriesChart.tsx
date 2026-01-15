@@ -241,6 +241,8 @@ export function TimeSeriesChart({
       width: dimensions.width,
       height: dimensions.height,
       plugins: [createTooltipPlugin(unit, conversionFactor)],
+      // Use local timezone for time display
+      tzDate: (ts: number) => new Date(ts * 1000),
       scales: {
         x: { time: true },
         y: {
@@ -361,14 +363,20 @@ export function TimeSeriesChart({
     <div className="flex flex-col h-full bg-app-panel border border-theme-border rounded-lg">
       {/* Chart header */}
       <div className="flex justify-between items-center px-4 py-3 border-b border-theme-border">
-        <div className="text-base font-medium text-theme-text-primary">
-          {title} <span className="text-theme-text-muted font-normal">({displayUnit})</span>
-        </div>
-        <div className="flex items-center gap-4 text-xs text-theme-text-muted">
-          <div className="flex items-center gap-1.5">
-            <div className="w-3 h-0.5 bg-chart-line rounded" />
-            <span>{title}</span>
+        {title ? (
+          <div className="text-base font-medium text-theme-text-primary">
+            {title}{displayUnit && <span className="text-theme-text-muted font-normal"> ({displayUnit})</span>}
           </div>
+        ) : (
+          <div />
+        )}
+        <div className="flex items-center gap-4 text-xs text-theme-text-muted">
+          {title && (
+            <div className="flex items-center gap-1.5">
+              <div className="w-3 h-0.5 bg-chart-line rounded" />
+              <span>{title}</span>
+            </div>
+          )}
           <div>
             min: <span className="text-theme-text-secondary">{formatStatValue(stats.min, unit)}</span>
           </div>
@@ -380,6 +388,9 @@ export function TimeSeriesChart({
           </div>
           <div>
             avg: <span className="text-theme-text-secondary">{formatStatValue(stats.avg, unit)}</span>
+          </div>
+          <div>
+            count: <span className="text-theme-text-secondary">{data.length.toLocaleString()}</span>
           </div>
           <div className="relative group">
             <div className="flex border border-theme-border rounded overflow-hidden">
