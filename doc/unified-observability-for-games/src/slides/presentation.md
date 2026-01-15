@@ -56,6 +56,19 @@ The debugging loop everyone hates:
 
 --
 
+## Everything, Everywhere
+
+<ul>
+<li class="fragment"><strong>Game clients</strong></li>
+<li class="fragment"><strong>Game servers</strong></li>
+<li class="fragment"><strong>Editors</strong></li>
+<li class="fragment"><strong>Workstations</strong></li>
+<li class="fragment"><strong>Build machines</strong></li>
+<li class="fragment"><strong>Online services</strong> - including telemetry itself</li>
+</ul>
+
+--
+
 ## A Unified Approach
 
 A unified observability stack makes this practical:
@@ -83,18 +96,10 @@ A unified observability stack makes this practical:
 
 --
 
-## One Data Model
-
-<ul>
-<li class="fragment">Logs, metrics, traces, player events - all timestamped events</li>
-<li class="fragment">Same schema concepts across data types</li>
-</ul>
-
---
-
 ## One Place to Look
 
 <ul>
+<li class="fragment">Stop asking "Can you send me your log?"</li>
 <li class="fragment">Stop asking "which tool has this data?"</li>
 <li class="fragment">Stop context-switching between UIs</li>
 <li class="fragment">Stop maintaining tribal knowledge of "use tool X for problem Y"</li>
@@ -145,6 +150,12 @@ Every event shares: process, thread, session, player, map, build, precise timest
 
 --
 
+## Better Performance
+
+Because Micromegas supports thousands of events per frame, everything else is fast and easy in comparison.
+
+--
+
 ## Player Events Too
 
 <ul>
@@ -164,7 +175,8 @@ Every event shares: process, thread, session, player, map, build, precise timest
 ## Export What You Need
 
 <ul>
-<li class="fragment">Python API for programmatic access</li>
+<li class="fragment"><strong>Python API</strong> for programmatic access</li>
+<li class="fragment">Easy export to <strong>Databricks</strong></li>
 <li class="fragment">Tail-sample high-frequency data, export the subset you care about</li>
 <li class="fragment">Feed into ML pipelines, external dashboards, long-term archives</li>
 </ul>
@@ -184,8 +196,9 @@ Every event shares: process, thread, session, player, map, build, precise timest
 ## Query Federation
 
 <ul>
-<li class="fragment">Plug other systems into the same query layer</li>
-<li class="fragment">Join your unified data with external sources</li>
+<li class="fragment"><strong>Databricks</strong> lakehouse federation</li>
+<li class="fragment">Deep Micromegas integration</li>
+<li class="fragment">Move queries and results <strong>JIT</strong>, not all the data</li>
 <li class="fragment">HTTP gateway service for easy integration from any language</li>
 </ul>
 
@@ -279,21 +292,6 @@ Standard tooling, familiar interface.
 Unified observability is **easier** (one system, one language, one place)
 
 AND **more powerful** (automatic correlation, queries you couldn't run before).
-
---
-
-<div style="font-size: 0.75em;">
-
-| Fragmented | Unified |
-|------------|---------|
-| Multiple tools to learn | One query language |
-| Manual correlation | Automatic correlation |
-| Context in your head | Context in the data |
-| Each system maintained separately | One system to improve |
-| "Cannot reproduce" | "Here's what happened" |
-| "Where is the log?" | "I can see others are having this issue" |
-
-</div>
 
 ---
 
