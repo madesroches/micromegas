@@ -7,6 +7,11 @@ import { QueryEditor } from '@/components/QueryEditor'
 import { useStreamQuery } from '@/hooks/useStreamQuery'
 import { useDebounce } from '@/hooks/useDebounce'
 import { timestampToDate } from '@/lib/arrow-utils'
+import {
+  DEFAULT_TIME_RANGE,
+  DEFAULT_LOG_LEVEL,
+  DEFAULT_LOG_LIMIT,
+} from '@/lib/screen-defaults'
 
 // Variables available for log queries
 const VARIABLES = [
@@ -225,20 +230,20 @@ export function LogRenderer({
   // Get saved values from config for detecting unsaved changes
   const savedValues = useMemo(
     () => ({
-      logLevel: savedLogConfig?.logLevel ?? 'all',
-      logLimit: savedLogConfig?.limit ?? 100,
+      logLevel: savedLogConfig?.logLevel ?? DEFAULT_LOG_LEVEL,
+      logLimit: savedLogConfig?.limit ?? DEFAULT_LOG_LIMIT,
       search: savedLogConfig?.search ?? '',
-      timeRangeFrom: savedLogConfig?.timeRangeFrom ?? 'now-5m',
-      timeRangeTo: savedLogConfig?.timeRangeTo ?? 'now',
+      timeRangeFrom: savedLogConfig?.timeRangeFrom ?? DEFAULT_TIME_RANGE.from,
+      timeRangeTo: savedLogConfig?.timeRangeTo ?? DEFAULT_TIME_RANGE.to,
     }),
     [savedLogConfig]
   )
 
-  // Initialize filter state from: URL params -> config defaults -> hardcoded defaults
+  // Initialize filter state from: URL params -> config defaults -> constants
   const getInitialLogLevel = () => {
     const urlLevel = searchParams.get('level')
     if (urlLevel && LOG_LEVELS[urlLevel] !== undefined) return urlLevel
-    return logConfig.logLevel ?? 'all'
+    return logConfig.logLevel ?? DEFAULT_LOG_LEVEL
   }
 
   const getInitialLimit = () => {
@@ -247,7 +252,7 @@ export function LogRenderer({
       const parsed = parseInt(urlLimit, 10)
       if (!isNaN(parsed) && parsed >= MIN_LIMIT && parsed <= MAX_LIMIT) return parsed
     }
-    return logConfig.limit ?? 100
+    return logConfig.limit ?? DEFAULT_LOG_LIMIT
   }
 
   const getInitialSearch = () => {
@@ -281,13 +286,13 @@ export function LogRenderer({
         const params = new URLSearchParams(prev)
 
         // Set or delete each filter param based on whether it's the default value
-        if (logLevel === 'all') {
+        if (logLevel === DEFAULT_LOG_LEVEL) {
           params.delete('level')
         } else {
           params.set('level', logLevel)
         }
 
-        if (logLimit === 100) {
+        if (logLimit === DEFAULT_LOG_LIMIT) {
           params.delete('limit')
         } else {
           params.set('limit', String(logLimit))
@@ -407,8 +412,8 @@ export function LogRenderer({
   const executeRef = useRef(streamQuery.execute)
   executeRef.current = streamQuery.execute
   const lastQueryFiltersRef = useRef<{ logLevel: string; logLimit: number; search: string }>({
-    logLevel: 'all',
-    logLimit: 100,
+    logLevel: DEFAULT_LOG_LEVEL,
+    logLimit: DEFAULT_LOG_LIMIT,
     search: '',
   })
 

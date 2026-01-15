@@ -1,8 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { ScreenConfig } from '@/lib/screens-api'
-
-const DEFAULT_TIME_RANGE_FROM = 'now-5m'
-const DEFAULT_TIME_RANGE_TO = 'now'
+import { DEFAULT_TIME_RANGE } from '@/lib/screen-defaults'
 
 interface TimeRangeSyncParams<T extends ScreenConfig> {
   /** Current raw time range from URL */
@@ -53,8 +51,8 @@ export function useTimeRangeSync<T extends ScreenConfig>({
     prevTimeRangeRef.current = current
 
     // Check if differs from saved config
-    const savedFrom = savedConfig?.timeRangeFrom ?? DEFAULT_TIME_RANGE_FROM
-    const savedTo = savedConfig?.timeRangeTo ?? DEFAULT_TIME_RANGE_TO
+    const savedFrom = savedConfig?.timeRangeFrom ?? DEFAULT_TIME_RANGE.from
+    const savedTo = savedConfig?.timeRangeTo ?? DEFAULT_TIME_RANGE.to
     if (current.from !== savedFrom || current.to !== savedTo) {
       onUnsavedChange()
     }
