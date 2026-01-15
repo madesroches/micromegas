@@ -1,7 +1,8 @@
-import { useState, useCallback, useEffect, useRef } from 'react'
+import { useState, useCallback } from 'react'
 import { ChevronUp, ChevronDown } from 'lucide-react'
 import { registerRenderer, ScreenRendererProps } from './index'
 import { useScreenQuery } from './useScreenQuery'
+import { useTimeRangeSync } from './useTimeRangeSync'
 import { LoadingState, EmptyState, SaveFooter, RendererLayout } from './shared'
 import { QueryEditor } from '@/components/QueryEditor'
 import { AppLink } from '@/components/AppLink'
@@ -55,38 +56,14 @@ export function ProcessListRenderer({
   const [sortField, setSortField] = useState<ProcessSortField>('last_update_time')
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc')
 
-  // Track time range changes - renderer owns complete config
-  const prevTimeRangeRef = useRef<{ from: string; to: string } | null>(null)
-  useEffect(() => {
-    const current = { from: rawTimeRange.from, to: rawTimeRange.to }
-
-    // On first run, just store current values
-    if (prevTimeRangeRef.current === null) {
-      prevTimeRangeRef.current = current
-      return
-    }
-
-    const prev = prevTimeRangeRef.current
-    if (prev.from === current.from && prev.to === current.to) {
-      return
-    }
-
-    prevTimeRangeRef.current = current
-
-    // Check if differs from saved config
-    const savedFrom = savedProcessListConfig?.timeRangeFrom ?? 'now-5m'
-    const savedTo = savedProcessListConfig?.timeRangeTo ?? 'now'
-    if (current.from !== savedFrom || current.to !== savedTo) {
-      onUnsavedChange()
-    }
-
-    // Update config with time range
-    onConfigChange({
-      ...processListConfig,
-      timeRangeFrom: current.from,
-      timeRangeTo: current.to,
-    })
-  }, [rawTimeRange, savedProcessListConfig, processListConfig, onUnsavedChange, onConfigChange])
+  // Sync time range changes to config
+  useTimeRangeSync({
+    rawTimeRange,
+    savedConfig: savedProcessListConfig,
+    config: processListConfig,
+    onUnsavedChange,
+    onConfigChange,
+  })
 
   const handleRunQuery = useCallback(
     (sql: string) => {

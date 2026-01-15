@@ -1,6 +1,7 @@
-import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
+import { useState, useCallback, useEffect, useMemo } from 'react'
 import { registerRenderer, ScreenRendererProps } from './index'
 import { useScreenQuery } from './useScreenQuery'
+import { useTimeRangeSync } from './useTimeRangeSync'
 import { LoadingState, EmptyState, SaveFooter, RendererLayout } from './shared'
 import { QueryEditor } from '@/components/QueryEditor'
 import { TimeSeriesChart, type ScaleMode } from '@/components/TimeSeriesChart'
@@ -62,38 +63,14 @@ export function MetricsRenderer({
     }
   }, [metricsConfig.metrics_options?.scale_mode])
 
-  // Track time range changes - renderer owns complete config
-  const prevTimeRangeRef = useRef<{ from: string; to: string } | null>(null)
-  useEffect(() => {
-    const current = { from: rawTimeRange.from, to: rawTimeRange.to }
-
-    // On first run, just store current values
-    if (prevTimeRangeRef.current === null) {
-      prevTimeRangeRef.current = current
-      return
-    }
-
-    const prev = prevTimeRangeRef.current
-    if (prev.from === current.from && prev.to === current.to) {
-      return
-    }
-
-    prevTimeRangeRef.current = current
-
-    // Check if differs from saved config
-    const savedFrom = savedMetricsConfig?.timeRangeFrom ?? 'now-5m'
-    const savedTo = savedMetricsConfig?.timeRangeTo ?? 'now'
-    if (current.from !== savedFrom || current.to !== savedTo) {
-      onUnsavedChange()
-    }
-
-    // Update config with time range
-    onConfigChange({
-      ...metricsConfig,
-      timeRangeFrom: current.from,
-      timeRangeTo: current.to,
-    })
-  }, [rawTimeRange, savedMetricsConfig, metricsConfig, onUnsavedChange, onConfigChange])
+  // Sync time range changes to config
+  useTimeRangeSync({
+    rawTimeRange,
+    savedConfig: savedMetricsConfig,
+    config: metricsConfig,
+    onUnsavedChange,
+    onConfigChange,
+  })
 
   const handleRunQuery = useCallback(
     (sql: string) => {
