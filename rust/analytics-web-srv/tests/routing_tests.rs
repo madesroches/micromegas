@@ -300,3 +300,68 @@ async fn test_deeply_nested_trailing_slash() {
         "SPA fallback should return index with config"
     );
 }
+
+/// Test that deep URLs receive the base tag with correct href
+/// This is the core fix: without <base href>, a request to /micromegas/screen/foo
+/// would resolve ./assets/x.js to /micromegas/screen/assets/x.js (wrong)
+/// instead of /micromegas/assets/x.js (correct)
+#[tokio::test]
+async fn test_deep_url_has_base_tag_for_asset_resolution() {
+    let app = build_test_router("/micromegas");
+
+    // Simulate a hard refresh on a deep SPA route
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/micromegas/screen/processes")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body_str = String::from_utf8(body.to_vec()).unwrap();
+
+    // The base tag must be present with trailing slash for correct relative URL resolution
+    assert!(
+        body_str.contains(r#"<base href="/micromegas/">"#),
+        "Deep URLs must have base tag with trailing slash for asset resolution. Got: {body_str}"
+    );
+
+    // Config should also be present
+    assert!(
+        body_str.contains(r#"basePath:"/micromegas""#),
+        "Config basePath should not have trailing slash"
+    );
+}
+
+/// Test that empty base_path produces <base href="/">
+#[tokio::test]
+async fn test_empty_base_path_produces_root_base_href() {
+    let index_state = IndexState {
+        base_path: String::new(),
+    };
+
+    let html = serve_index_with_config(State(index_state))
+        .await
+        .into_response();
+
+    let body = axum::body::to_bytes(html.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body_str = String::from_utf8(body.to_vec()).unwrap();
+
+    assert!(
+        body_str.contains(r#"<base href="/">"#),
+        "Empty base_path should produce root base href. Got: {body_str}"
+    );
+    assert!(
+        body_str.contains(r#"basePath:"""#),
+        "Config should have empty basePath"
+    );
+}
