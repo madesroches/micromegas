@@ -16,6 +16,7 @@ import { executeStreamQuery } from '@/lib/arrow-stream'
 import { timestampToMs } from '@/lib/arrow-utils'
 import { openInPerfetto, PerfettoError } from '@/lib/perfetto'
 import { useTimeRange } from '@/hooks/useTimeRange'
+import { usePageTitle } from '@/hooks/usePageTitle'
 import { GenerateTraceRequest, ProgressUpdate, ThreadCoverage } from '@/types'
 
 const DISCOVERY_SQL = `SELECT DISTINCT name, target, unit
@@ -94,6 +95,7 @@ function calculateBinInterval(timeSpanMs: number, chartWidthPx: number = 800): s
 }
 
 function PerformanceAnalysisContent() {
+  usePageTitle('Performance Analysis')
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
   const location = useLocation()

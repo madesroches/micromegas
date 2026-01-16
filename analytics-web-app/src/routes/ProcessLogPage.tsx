@@ -11,6 +11,7 @@ import { useStreamQuery } from '@/hooks/useStreamQuery'
 import { timestampToDate } from '@/lib/arrow-utils'
 import { useTimeRange } from '@/hooks/useTimeRange'
 import { useDebounce } from '@/hooks/useDebounce'
+import { usePageTitle } from '@/hooks/usePageTitle'
 
 const DEFAULT_SQL = `SELECT time, level, target, msg
 FROM view_instance('log_entries', '$process_id')
@@ -181,6 +182,7 @@ interface LogRow {
 }
 
 function ProcessLogContent() {
+  usePageTitle('Process Log')
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
   const location = useLocation()

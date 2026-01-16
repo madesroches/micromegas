@@ -1,5 +1,6 @@
 import { Suspense, useState, useCallback, useMemo, useEffect } from 'react'
 import { useParams, useSearchParams, useNavigate } from 'react-router-dom'
+import { usePageTitle } from '@/hooks/usePageTitle'
 import { AlertCircle } from 'lucide-react'
 import { PageLayout } from '@/components/layout'
 import { AuthGuard } from '@/components/AuthGuard'
@@ -34,6 +35,15 @@ function ScreenPageContent() {
 
   // Screen state
   const [screen, setScreen] = useState<Screen | null>(null)
+
+  // Screen type info (fetched from API)
+  const [screenTypeInfo, setScreenTypeInfo] = useState<ScreenTypeInfo | null>(null)
+
+  // Page title - show screen name or "New [type] Screen"
+  const pageTitle = isNew
+    ? (screenTypeInfo ? `New ${screenTypeInfo.display_name} Screen` : null)
+    : screen?.name ?? null
+  usePageTitle(pageTitle)
   const [config, setConfigState] = useState<ScreenConfig | null>(null)
   const [screenType, setScreenType] = useState<ScreenTypeName | null>(null)
   const [isLoading, setIsLoading] = useState(true)
@@ -47,9 +57,6 @@ function ScreenPageContent() {
 
   // Refresh trigger - increment to tell renderer to re-execute query
   const [refreshTrigger, setRefreshTrigger] = useState(0)
-
-  // Screen type info (fetched from API)
-  const [screenTypeInfo, setScreenTypeInfo] = useState<ScreenTypeInfo | null>(null)
 
   // Load screen or default config
   useEffect(() => {

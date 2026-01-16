@@ -1,5 +1,6 @@
 import { Suspense, useEffect } from 'react'
 import { useSearchParams } from 'react-router-dom'
+import { usePageTitle } from '@/hooks/usePageTitle'
 import { useAuth } from '@/lib/auth'
 import { getConfig } from '@/lib/config'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -8,6 +9,7 @@ import { AlertCircle, LogIn } from 'lucide-react'
 import { MicromegasLogo } from '@/components/MicromegasLogo'
 
 function LoginContent() {
+  usePageTitle('Login')
   const { status, error, login } = useAuth()
   const [searchParams] = useSearchParams()
 

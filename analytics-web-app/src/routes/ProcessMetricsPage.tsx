@@ -11,6 +11,7 @@ import { MetricsChart } from '@/components/MetricsChart'
 import { useStreamQuery } from '@/hooks/useStreamQuery'
 import { timestampToMs } from '@/lib/arrow-utils'
 import { useTimeRange } from '@/hooks/useTimeRange'
+import { usePageTitle } from '@/hooks/usePageTitle'
 
 const DISCOVERY_SQL = `SELECT DISTINCT name, target, unit
 FROM view_instance('measures', '$process_id')
@@ -68,6 +69,7 @@ function calculateBinInterval(timeSpanMs: number, chartWidthPx: number = 800): s
 }
 
 function ProcessMetricsContent() {
+  usePageTitle('Process Metrics')
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
   const location = useLocation()

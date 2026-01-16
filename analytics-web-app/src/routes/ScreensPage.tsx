@@ -1,5 +1,6 @@
 import { Suspense, useState, useEffect, useCallback, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { usePageTitle } from '@/hooks/usePageTitle'
 import { Plus, Trash2 } from 'lucide-react'
 import { PageLayout } from '@/components/layout'
 import { AuthGuard } from '@/components/AuthGuard'
@@ -19,6 +20,7 @@ import {
 } from '@/lib/screens-api'
 
 function ScreensPageContent() {
+  usePageTitle('Screens')
   const navigate = useNavigate()
   const [screens, setScreens] = useState<Screen[]>([])
   const [screenTypes, setScreenTypes] = useState<ScreenTypeInfo[]>([])

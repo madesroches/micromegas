@@ -10,6 +10,7 @@ import { ErrorBanner } from '@/components/ErrorBanner'
 import { useStreamQuery } from '@/hooks/useStreamQuery'
 import { useTimeRange } from '@/hooks/useTimeRange'
 import { useDebounce } from '@/hooks/useDebounce'
+import { usePageTitle } from '@/hooks/usePageTitle'
 import { formatTimestamp, formatDuration } from '@/lib/time-range'
 import { timestampToDate } from '@/lib/arrow-utils'
 
@@ -55,6 +56,7 @@ function expandSearchFilter(search: string): string {
 }
 
 function ProcessesPageContent() {
+  usePageTitle('Processes')
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
   const location = useLocation()

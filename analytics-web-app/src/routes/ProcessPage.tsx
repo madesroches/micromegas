@@ -8,6 +8,7 @@ import { CopyableProcessId } from '@/components/CopyableProcessId'
 import { useStreamQuery } from '@/hooks/useStreamQuery'
 import { timestampToDate } from '@/lib/arrow-utils'
 import { useTimeRange } from '@/hooks/useTimeRange'
+import { usePageTitle } from '@/hooks/usePageTitle'
 import { formatDuration, formatDateTimeLocal } from '@/lib/time-range'
 
 const PROCESS_SQL = `SELECT process_id, exe, start_time, last_update_time, computer, username, cpu_brand, distro
@@ -97,6 +98,7 @@ function ProcessPageContent() {
   const [screenLoadTime] = useState(() => new Date())
 
   const [process, setProcess] = useState<ProcessRow | null>(null)
+  usePageTitle(process?.exe ?? null)
   const [statistics, setStatistics] = useState<StatisticsRow | null>(null)
   const [properties, setProperties] = useState<Record<string, string> | null>(null)
   const [propertiesError, setPropertiesError] = useState<string | null>(null)

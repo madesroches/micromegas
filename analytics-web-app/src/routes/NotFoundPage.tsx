@@ -1,7 +1,9 @@
 import { AppLink } from '@/components/AppLink'
 import { AlertCircle } from 'lucide-react'
+import { usePageTitle } from '@/hooks/usePageTitle'
 
 export default function NotFoundPage() {
+  usePageTitle('Page Not Found')
   return (
     <div className="min-h-screen bg-app-bg flex items-center justify-center p-6">
       <div className="text-center">
