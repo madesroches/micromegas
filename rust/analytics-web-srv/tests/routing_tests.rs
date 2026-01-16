@@ -231,9 +231,10 @@ async fn test_trailing_slash_with_query_string() {
 
 #[tokio::test]
 async fn test_root_path_not_affected() {
-    // Root "/" should not be affected by trailing slash normalization
+    // Root "/" should not be affected by trailing slash normalization.
+    // Note: In production, MICROMEGAS_BASE_PATH="/" is trimmed to "" (empty string).
     let index_state = IndexState {
-        base_path: "/".to_string(),
+        base_path: String::new(),
     };
 
     let router = Router::new().route("/", get(serve_index_with_config).with_state(index_state));
@@ -247,6 +248,16 @@ async fn test_root_path_not_affected() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body_str = String::from_utf8(body.to_vec()).unwrap();
+
+    assert!(
+        body_str.contains(r#"<base href="/">"#),
+        "Root deployment should have base href='/'. Got: {body_str}"
+    );
 }
 
 #[tokio::test]
