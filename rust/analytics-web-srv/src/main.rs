@@ -271,7 +271,10 @@ async fn main() -> Result<()> {
         // Stub auth routes for no-auth mode
         Router::new()
             .route(&format!("{base_path}/auth/me"), get(auth_me_no_auth))
-            .route(&format!("{base_path}/auth/logout"), post(auth_logout_no_auth))
+            .route(
+                &format!("{base_path}/auth/logout"),
+                post(auth_logout_no_auth),
+            )
     };
 
     let health_routes = Router::new().route(&format!("{base_path}/api/health"), get(health_check));
