@@ -277,19 +277,19 @@ async fn main() -> Result<()> {
             )
     };
 
-    let health_routes = Router::new().route(&format!("{base_path}/health"), get(health_check));
+    let health_routes = Router::new().route(&format!("{base_path}/api/health"), get(health_check));
 
     let api_routes = Router::new()
         .route(
-            &format!("{base_path}/query-stream"),
+            &format!("{base_path}/api/query-stream"),
             post(stream_query::stream_query_handler),
         )
         .route(
-            &format!("{base_path}/perfetto/{{process_id}}/info"),
+            &format!("{base_path}/api/perfetto/{{process_id}}/info"),
             get(get_trace_info),
         )
         .route(
-            &format!("{base_path}/perfetto/{{process_id}}/generate"),
+            &format!("{base_path}/api/perfetto/{{process_id}}/generate"),
             post(generate_trace),
         )
         .layer(middleware::from_fn(observability_middleware));
@@ -309,20 +309,20 @@ async fn main() -> Result<()> {
     let screen_routes = Router::new()
         // Screen types (static)
         .route(
-            &format!("{base_path}/screen-types"),
+            &format!("{base_path}/api/screen-types"),
             get(screens::list_screen_types),
         )
         .route(
-            &format!("{base_path}/screen-types/{{type_name}}/default"),
+            &format!("{base_path}/api/screen-types/{{type_name}}/default"),
             get(screens::get_default_config),
         )
         // Screens CRUD
         .route(
-            &format!("{base_path}/screens"),
+            &format!("{base_path}/api/screens"),
             get(screens::list_screens).post(screens::create_screen),
         )
         .route(
-            &format!("{base_path}/screens/{{name}}"),
+            &format!("{base_path}/api/screens/{{name}}"),
             get(screens::get_screen)
                 .put(screens::update_screen)
                 .delete(screens::delete_screen),

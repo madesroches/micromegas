@@ -9,8 +9,7 @@
  */
 
 import { RecordBatch, RecordBatchReader, Schema } from 'apache-arrow';
-import { getConfig } from './config';
-import { authenticatedFetch, AuthenticationError } from './api';
+import { authenticatedFetch, AuthenticationError, getApiBase } from './api';
 
 export type ErrorCode = 'INVALID_SQL' | 'CONNECTION_FAILED' | 'INTERNAL' | 'FORBIDDEN';
 
@@ -153,9 +152,7 @@ export async function* streamQuery(
   params: StreamQueryParams,
   signal?: AbortSignal
 ): AsyncGenerator<StreamResult> {
-  const basePath = getConfig().basePath;
-
-  const response = await authenticatedFetch(`${basePath}/query-stream`, {
+  const response = await authenticatedFetch(`${getApiBase()}/query-stream`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

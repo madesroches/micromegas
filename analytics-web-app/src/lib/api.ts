@@ -1,7 +1,11 @@
 import { GenerateTraceRequest, ProgressUpdate, BinaryStartMarker } from '@/types'
 import { getConfig } from './config'
 
-function getApiBase(): string {
+export function getApiBase(): string {
+  return `${getConfig().basePath}/api`
+}
+
+export function getAuthBase(): string {
   return getConfig().basePath
 }
 
@@ -48,7 +52,7 @@ async function refreshToken(): Promise<boolean> {
 
   refreshPromise = (async () => {
     try {
-      const response = await fetch(`${getApiBase()}/auth/refresh`, {
+      const response = await fetch(`${getAuthBase()}/auth/refresh`, {
         method: 'POST',
         credentials: 'include',
       })
