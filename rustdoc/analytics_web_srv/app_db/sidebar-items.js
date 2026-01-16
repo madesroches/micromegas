@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["execute_migration","normalize_screen_name","validate_screen_name"],"struct":["CreateScreenRequest","Screen","UpdateScreenRequest","ValidationError"]};
