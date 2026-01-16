@@ -21,17 +21,22 @@ struct IndexState {
     base_path: String,
 }
 
-/// Mock handler that returns HTML with config injected
+/// Mock handler that returns HTML with base tag and config injected
 async fn serve_index_with_config(State(state): State<IndexState>) -> impl IntoResponse {
+    let base_href = if state.base_path.is_empty() {
+        "/".to_string()
+    } else {
+        format!("{}/", state.base_path)
+    };
     let html = format!(
         r#"<!DOCTYPE html>
 <html>
 <head>
-<script>window.__MICROMEGAS_CONFIG__={{basePath:"{}"}}</script>
+<base href="{}"><script>window.__MICROMEGAS_CONFIG__={{basePath:"{}"}}</script>
 </head>
 <body>Index</body>
 </html>"#,
-        state.base_path
+        base_href, state.base_path
     );
     ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], html)
 }
@@ -104,6 +109,10 @@ async fn test_base_path_exact_match() {
     assert!(
         body_str.contains(r#"basePath:"/micromegas""#),
         "Config should have correct base path"
+    );
+    assert!(
+        body_str.contains(r#"<base href="/micromegas/">"#),
+        "Response should contain base tag with trailing slash"
     );
 }
 
@@ -222,9 +231,10 @@ async fn test_trailing_slash_with_query_string() {
 
 #[tokio::test]
 async fn test_root_path_not_affected() {
-    // Root "/" should not be affected by trailing slash normalization
+    // Root "/" should not be affected by trailing slash normalization.
+    // Note: In production, MICROMEGAS_BASE_PATH="/" is trimmed to "" (empty string).
     let index_state = IndexState {
-        base_path: "/".to_string(),
+        base_path: String::new(),
     };
 
     let router = Router::new().route("/", get(serve_index_with_config).with_state(index_state));
@@ -238,6 +248,16 @@ async fn test_root_path_not_affected() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body_str = String::from_utf8(body.to_vec()).unwrap();
+
+    assert!(
+        body_str.contains(r#"<base href="/">"#),
+        "Root deployment should have base href='/'. Got: {body_str}"
+    );
 }
 
 #[tokio::test]
@@ -289,5 +309,70 @@ async fn test_deeply_nested_trailing_slash() {
     assert!(
         body_str.contains("__MICROMEGAS_CONFIG__"),
         "SPA fallback should return index with config"
+    );
+}
+
+/// Test that deep URLs receive the base tag with correct href
+/// This is the core fix: without <base href>, a request to /micromegas/screen/foo
+/// would resolve ./assets/x.js to /micromegas/screen/assets/x.js (wrong)
+/// instead of /micromegas/assets/x.js (correct)
+#[tokio::test]
+async fn test_deep_url_has_base_tag_for_asset_resolution() {
+    let app = build_test_router("/micromegas");
+
+    // Simulate a hard refresh on a deep SPA route
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/micromegas/screen/processes")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body_str = String::from_utf8(body.to_vec()).unwrap();
+
+    // The base tag must be present with trailing slash for correct relative URL resolution
+    assert!(
+        body_str.contains(r#"<base href="/micromegas/">"#),
+        "Deep URLs must have base tag with trailing slash for asset resolution. Got: {body_str}"
+    );
+
+    // Config should also be present
+    assert!(
+        body_str.contains(r#"basePath:"/micromegas""#),
+        "Config basePath should not have trailing slash"
+    );
+}
+
+/// Test that empty base_path produces <base href="/">
+#[tokio::test]
+async fn test_empty_base_path_produces_root_base_href() {
+    let index_state = IndexState {
+        base_path: String::new(),
+    };
+
+    let html = serve_index_with_config(State(index_state))
+        .await
+        .into_response();
+
+    let body = axum::body::to_bytes(html.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body_str = String::from_utf8(body.to_vec()).unwrap();
+
+    assert!(
+        body_str.contains(r#"<base href="/">"#),
+        "Empty base_path should produce root base href. Got: {body_str}"
+    );
+    assert!(
+        body_str.contains(r#"basePath:"""#),
+        "Config should have empty basePath"
     );
 }

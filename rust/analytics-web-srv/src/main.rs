@@ -173,14 +173,22 @@ async fn serve_index_with_config(
         )
     })?;
 
-    // Build the config script to inject
-    let config_script = format!(
-        r#"<script>window.__MICROMEGAS_CONFIG__={{basePath:"{}"}}</script>"#,
+    // Build the base tag and config script to inject
+    // The <base> tag ensures relative asset URLs (./assets/...) resolve correctly
+    // from any URL path, not just the root. Without this, accessing /base/screen/foo
+    // would try to load ./assets/x.js from /base/screen/assets/x.js instead of /base/assets/x.js
+    let base_href = if state.base_path.is_empty() {
+        "/".to_string()
+    } else {
+        format!("{}/", state.base_path)
+    };
+    let injection = format!(
+        r#"<base href="{base_href}"><script>window.__MICROMEGAS_CONFIG__={{basePath:"{}"}}</script>"#,
         state.base_path
     );
 
     // Inject before </head>
-    let modified_html = html.replace("</head>", &format!("{config_script}</head>"));
+    let modified_html = html.replace("</head>", &format!("{injection}</head>"));
 
     Ok((
         [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
