@@ -21,17 +21,22 @@ struct IndexState {
     base_path: String,
 }
 
-/// Mock handler that returns HTML with config injected
+/// Mock handler that returns HTML with base tag and config injected
 async fn serve_index_with_config(State(state): State<IndexState>) -> impl IntoResponse {
+    let base_href = if state.base_path.is_empty() {
+        "/".to_string()
+    } else {
+        format!("{}/", state.base_path)
+    };
     let html = format!(
         r#"<!DOCTYPE html>
 <html>
 <head>
-<script>window.__MICROMEGAS_CONFIG__={{basePath:"{}"}}</script>
+<base href="{}"><script>window.__MICROMEGAS_CONFIG__={{basePath:"{}"}}</script>
 </head>
 <body>Index</body>
 </html>"#,
-        state.base_path
+        base_href, state.base_path
     );
     ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], html)
 }
@@ -104,6 +109,10 @@ async fn test_base_path_exact_match() {
     assert!(
         body_str.contains(r#"basePath:"/micromegas""#),
         "Config should have correct base path"
+    );
+    assert!(
+        body_str.contains(r#"<base href="/micromegas/">"#),
+        "Response should contain base tag with trailing slash"
     );
 }
 
