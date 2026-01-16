@@ -6,10 +6,7 @@ import { authenticatedFetch } from '@/lib/api'
 // Mock the dependencies
 jest.mock('@/lib/api', () => ({
   authenticatedFetch: jest.fn(),
-}))
-
-jest.mock('@/lib/config', () => ({
-  getConfig: () => ({ basePath: '' }),
+  getApiBase: () => '/api',
 }))
 
 const mockedFetch = authenticatedFetch as jest.MockedFunction<typeof authenticatedFetch>
@@ -83,7 +80,7 @@ describe('getScreenTypes', () => {
 
     const result = await getScreenTypes()
 
-    expect(mockedFetch).toHaveBeenCalledWith('/screen-types')
+    expect(mockedFetch).toHaveBeenCalledWith('/api/screen-types')
     expect(result).toEqual(mockTypes)
   })
 
@@ -114,7 +111,7 @@ describe('getDefaultConfig', () => {
 
     const result = await getDefaultConfig('process_list')
 
-    expect(mockedFetch).toHaveBeenCalledWith('/screen-types/process_list/default')
+    expect(mockedFetch).toHaveBeenCalledWith('/api/screen-types/process_list/default')
     expect(result).toEqual(mockConfig)
   })
 
@@ -149,7 +146,7 @@ describe('listScreens', () => {
 
     const result = await listScreens()
 
-    expect(mockedFetch).toHaveBeenCalledWith('/screens')
+    expect(mockedFetch).toHaveBeenCalledWith('/api/screens')
     expect(result).toEqual(mockScreens)
   })
 
@@ -180,7 +177,7 @@ describe('getScreen', () => {
 
     const result = await getScreen('error-logs')
 
-    expect(mockedFetch).toHaveBeenCalledWith('/screens/error-logs')
+    expect(mockedFetch).toHaveBeenCalledWith('/api/screens/error-logs')
     expect(result).toEqual(mockScreen)
   })
 
@@ -197,7 +194,7 @@ describe('getScreen', () => {
     await getScreen('screen/with/slashes')
 
     expect(mockedFetch).toHaveBeenCalledWith(
-      '/screens/screen%2Fwith%2Fslashes'
+      '/api/screens/screen%2Fwith%2Fslashes'
     )
   })
 
@@ -234,7 +231,7 @@ describe('createScreen', () => {
 
     const result = await createScreen(request)
 
-    expect(mockedFetch).toHaveBeenCalledWith('/screens', {
+    expect(mockedFetch).toHaveBeenCalledWith('/api/screens', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(request),
@@ -315,7 +312,7 @@ describe('updateScreen', () => {
 
     const result = await updateScreen('my-screen', request)
 
-    expect(mockedFetch).toHaveBeenCalledWith('/screens/my-screen', {
+    expect(mockedFetch).toHaveBeenCalledWith('/api/screens/my-screen', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(request),
@@ -338,7 +335,7 @@ describe('updateScreen', () => {
     await updateScreen('screen/name', request)
 
     expect(mockedFetch).toHaveBeenCalledWith(
-      '/screens/screen%2Fname',
+      '/api/screens/screen%2Fname',
       expect.any(Object)
     )
   })
@@ -370,7 +367,7 @@ describe('deleteScreen', () => {
 
     await expect(deleteScreen('my-screen')).resolves.toBeUndefined()
 
-    expect(mockedFetch).toHaveBeenCalledWith('/screens/my-screen', {
+    expect(mockedFetch).toHaveBeenCalledWith('/api/screens/my-screen', {
       method: 'DELETE',
     })
   })
@@ -384,7 +381,7 @@ describe('deleteScreen', () => {
     await deleteScreen('screen/name')
 
     expect(mockedFetch).toHaveBeenCalledWith(
-      '/screens/screen%2Fname',
+      '/api/screens/screen%2Fname',
       { method: 'DELETE' }
     )
   })

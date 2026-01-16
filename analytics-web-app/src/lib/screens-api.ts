@@ -1,9 +1,4 @@
-import { authenticatedFetch } from './api'
-import { getConfig } from './config'
-
-function getApiBase(): string {
-  return getConfig().basePath
-}
+import { authenticatedFetch, getApiBase } from './api'
 
 // Types matching the backend models
 

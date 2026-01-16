@@ -1,8 +1,8 @@
 import { GenerateTraceRequest, ProgressUpdate, BinaryStartMarker } from '@/types'
 import { getConfig } from './config'
 
-function getApiBase(): string {
-  return getConfig().basePath
+export function getApiBase(): string {
+  return `${getConfig().basePath}/api`
 }
 
 export interface ApiError {

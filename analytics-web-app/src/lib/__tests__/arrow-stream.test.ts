@@ -13,6 +13,7 @@ jest.mock('@/lib/api', () => ({
       this.name = 'AuthenticationError';
     }
   },
+  getApiBase: () => '/api',
 }));
 
 const mockedFetch = authenticatedFetch as jest.MockedFunction<typeof authenticatedFetch>;
@@ -231,7 +232,7 @@ describe('streamQuery', () => {
 
       expect(mockedFetch).toHaveBeenCalledTimes(1);
       const [url, options] = mockedFetch.mock.calls[0];
-      expect(url).toBe('/query-stream');
+      expect(url).toBe('/api/query-stream');
       expect(options?.method).toBe('POST');
       expect(options?.headers).toEqual({ 'Content-Type': 'application/json' });
 

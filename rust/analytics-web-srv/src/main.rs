@@ -255,41 +255,49 @@ async fn main() -> Result<()> {
     // Build auth routes if authentication is enabled, or stub routes if disabled
     let auth_routes = if let Some(auth_state) = auth_state.as_ref() {
         Router::new()
-            .route(&format!("{base_path}/auth/login"), get(auth::auth_login))
+            .route(
+                &format!("{base_path}/api/auth/login"),
+                get(auth::auth_login),
+            )
+            // Callback stays at old path (no /api) because it's an external redirect
+            // from the OAuth provider and the URL is configured externally
             .route(
                 &format!("{base_path}/auth/callback"),
                 get(auth::auth_callback),
             )
             .route(
-                &format!("{base_path}/auth/refresh"),
+                &format!("{base_path}/api/auth/refresh"),
                 post(auth::auth_refresh),
             )
-            .route(&format!("{base_path}/auth/logout"), post(auth::auth_logout))
-            .route(&format!("{base_path}/auth/me"), get(auth::auth_me))
+            .route(
+                &format!("{base_path}/api/auth/logout"),
+                post(auth::auth_logout),
+            )
+            .route(&format!("{base_path}/api/auth/me"), get(auth::auth_me))
             .with_state(auth_state.clone())
     } else {
         // Stub auth routes for no-auth mode
         Router::new()
-            .route(&format!("{base_path}/auth/me"), get(auth_me_no_auth))
+            .route(&format!("{base_path}/api/auth/me"), get(auth_me_no_auth))
             .route(
-                &format!("{base_path}/auth/logout"),
+                &format!("{base_path}/api/auth/logout"),
                 post(auth_logout_no_auth),
             )
     };
 
-    let health_routes = Router::new().route(&format!("{base_path}/health"), get(health_check));
+    let health_routes = Router::new().route(&format!("{base_path}/api/health"), get(health_check));
 
     let api_routes = Router::new()
         .route(
-            &format!("{base_path}/query-stream"),
+            &format!("{base_path}/api/query-stream"),
             post(stream_query::stream_query_handler),
         )
         .route(
-            &format!("{base_path}/perfetto/{{process_id}}/info"),
+            &format!("{base_path}/api/perfetto/{{process_id}}/info"),
             get(get_trace_info),
         )
         .route(
-            &format!("{base_path}/perfetto/{{process_id}}/generate"),
+            &format!("{base_path}/api/perfetto/{{process_id}}/generate"),
             post(generate_trace),
         )
         .layer(middleware::from_fn(observability_middleware));
@@ -309,20 +317,20 @@ async fn main() -> Result<()> {
     let screen_routes = Router::new()
         // Screen types (static)
         .route(
-            &format!("{base_path}/screen-types"),
+            &format!("{base_path}/api/screen-types"),
             get(screens::list_screen_types),
         )
         .route(
-            &format!("{base_path}/screen-types/{{type_name}}/default"),
+            &format!("{base_path}/api/screen-types/{{type_name}}/default"),
             get(screens::get_default_config),
         )
         // Screens CRUD
         .route(
-            &format!("{base_path}/screens"),
+            &format!("{base_path}/api/screens"),
             get(screens::list_screens).post(screens::create_screen),
         )
         .route(
-            &format!("{base_path}/screens/{{name}}"),
+            &format!("{base_path}/api/screens/{{name}}"),
             get(screens::get_screen)
                 .put(screens::update_screen)
                 .delete(screens::delete_screen),
