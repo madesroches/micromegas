@@ -41,13 +41,12 @@ export default defineConfig(({ mode }) => {
     server: {
       port: frontendPort,
       proxy: {
-        // All API endpoints are under /api - proxy to backend without rewriting
-        // This ensures browser URL path matches cookie path for auth to work
+        // API endpoints under /api
         [`${basePath}/api`]: {
           target: backendUrl,
         },
-        // OAuth callback stays at old path (no /api) for external redirect compatibility
-        [`${basePath}/auth/callback`]: {
+        // Auth endpoints stay at /auth (not /api/auth) for OAuth callback compatibility
+        [`${basePath}/auth`]: {
           target: backendUrl,
         },
       },

@@ -5,6 +5,10 @@ export function getApiBase(): string {
   return `${getConfig().basePath}/api`
 }
 
+export function getAuthBase(): string {
+  return getConfig().basePath
+}
+
 export interface ApiError {
   type: string
   message: string
@@ -48,7 +52,7 @@ async function refreshToken(): Promise<boolean> {
 
   refreshPromise = (async () => {
     try {
-      const response = await fetch(`${getApiBase()}/auth/refresh`, {
+      const response = await fetch(`${getAuthBase()}/auth/refresh`, {
         method: 'POST',
         credentials: 'include',
       })

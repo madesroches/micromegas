@@ -255,34 +255,23 @@ async fn main() -> Result<()> {
     // Build auth routes if authentication is enabled, or stub routes if disabled
     let auth_routes = if let Some(auth_state) = auth_state.as_ref() {
         Router::new()
-            .route(
-                &format!("{base_path}/api/auth/login"),
-                get(auth::auth_login),
-            )
-            // Callback stays at old path (no /api) because it's an external redirect
-            // from the OAuth provider and the URL is configured externally
+            .route(&format!("{base_path}/auth/login"), get(auth::auth_login))
             .route(
                 &format!("{base_path}/auth/callback"),
                 get(auth::auth_callback),
             )
             .route(
-                &format!("{base_path}/api/auth/refresh"),
+                &format!("{base_path}/auth/refresh"),
                 post(auth::auth_refresh),
             )
-            .route(
-                &format!("{base_path}/api/auth/logout"),
-                post(auth::auth_logout),
-            )
-            .route(&format!("{base_path}/api/auth/me"), get(auth::auth_me))
+            .route(&format!("{base_path}/auth/logout"), post(auth::auth_logout))
+            .route(&format!("{base_path}/auth/me"), get(auth::auth_me))
             .with_state(auth_state.clone())
     } else {
         // Stub auth routes for no-auth mode
         Router::new()
-            .route(&format!("{base_path}/api/auth/me"), get(auth_me_no_auth))
-            .route(
-                &format!("{base_path}/api/auth/logout"),
-                post(auth_logout_no_auth),
-            )
+            .route(&format!("{base_path}/auth/me"), get(auth_me_no_auth))
+            .route(&format!("{base_path}/auth/logout"), post(auth_logout_no_auth))
     };
 
     let health_routes = Router::new().route(&format!("{base_path}/api/health"), get(health_check));

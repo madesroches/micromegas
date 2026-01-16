@@ -1,6 +1,6 @@
 /* eslint-disable react-refresh/only-export-components */
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react'
-import { getApiBase } from './api'
+import { getAuthBase } from './api'
 
 export interface User {
   sub: string
@@ -29,7 +29,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // Internal function to refresh tokens without triggering checkAuth
   const refreshTokens = useCallback(async (): Promise<boolean> => {
     try {
-      const response = await fetch(`${getApiBase()}/auth/refresh`, {
+      const response = await fetch(`${getAuthBase()}/auth/refresh`, {
         method: 'POST',
         credentials: 'include',
       })
@@ -42,7 +42,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const checkAuth = useCallback(async (skipRefresh = false) => {
     try {
-      const response = await fetch(`${getApiBase()}/auth/me`, {
+      const response = await fetch(`${getAuthBase()}/auth/me`, {
         credentials: 'include',
       })
 
@@ -88,13 +88,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const login = useCallback((returnUrl?: string) => {
     const currentPath = returnUrl || window.location.pathname
-    const loginUrl = `${getApiBase()}/auth/login?return_url=${encodeURIComponent(currentPath)}`
+    const loginUrl = `${getAuthBase()}/auth/login?return_url=${encodeURIComponent(currentPath)}`
     window.location.href = loginUrl
   }, [])
 
   const logout = useCallback(async () => {
     try {
-      const response = await fetch(`${getApiBase()}/auth/logout`, {
+      const response = await fetch(`${getAuthBase()}/auth/logout`, {
         method: 'POST',
         credentials: 'include',
       })
@@ -115,7 +115,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // Public refresh function that also updates auth state
   const refresh = useCallback(async (): Promise<boolean> => {
     try {
-      const response = await fetch(`${getApiBase()}/auth/refresh`, {
+      const response = await fetch(`${getAuthBase()}/auth/refresh`, {
         method: 'POST',
         credentials: 'include',
       })

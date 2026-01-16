@@ -7,6 +7,7 @@ import { authenticatedFetch } from '@/lib/api'
 jest.mock('@/lib/api', () => ({
   authenticatedFetch: jest.fn(),
   getApiBase: () => '/api',
+  getAuthBase: () => '',
 }))
 
 const mockedFetch = authenticatedFetch as jest.MockedFunction<typeof authenticatedFetch>

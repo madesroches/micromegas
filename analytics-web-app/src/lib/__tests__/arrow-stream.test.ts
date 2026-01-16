@@ -14,6 +14,7 @@ jest.mock('@/lib/api', () => ({
     }
   },
   getApiBase: () => '/api',
+  getAuthBase: () => '',
 }));
 
 const mockedFetch = authenticatedFetch as jest.MockedFunction<typeof authenticatedFetch>;
