@@ -270,7 +270,7 @@ export function XYChart({
     const displayP99 = stats.p99 * conversionFactor
     const displayMax = stats.max * conversionFactor
 
-    const yAxisUnit = adaptiveTimeUnit?.abbrev ?? unit
+    const yAxisUnit = adaptiveTimeUnit?.abbrev ?? (unit === 'percent' ? '%' : unit)
 
     // Build X axis configuration based on mode
     const xAxisConfig: uPlot.Axis = {
@@ -278,11 +278,14 @@ export function XYChart({
       grid: { stroke: '#2a2a35', width: 1 },
       ticks: { stroke: '#2a2a35', width: 1 },
       font: '11px -apple-system, BlinkMacSystemFont, sans-serif',
-      size: 50,
+      size: 65, // Enough vertical space for two-line time labels
     }
 
     // For categorical mode, use custom values function for tick labels
     if (xAxisMode === 'categorical' && xLabels) {
+      // Show only integer ticks at category positions
+      xAxisConfig.incrs = [1]
+      xAxisConfig.space = 60 // Minimum 60px between labels
       xAxisConfig.values = (_u: uPlot, vals: number[]) => {
         return vals.map((v) => {
           const idx = Math.round(v)
@@ -293,6 +296,8 @@ export function XYChart({
         })
       }
     } else if (xAxisMode === 'numeric') {
+      // Ensure reasonable spacing between numeric ticks
+      xAxisConfig.space = 60 // Minimum 60px between labels
       xAxisConfig.values = (_u: uPlot, vals: number[]) => {
         return vals.map((v) => {
           if (v === 0) return '0'
@@ -329,7 +334,7 @@ export function XYChart({
           grid: { stroke: '#2a2a35', width: 1 },
           ticks: { stroke: '#2a2a35', width: 1 },
           font: '11px -apple-system, BlinkMacSystemFont, sans-serif',
-          size: 70, // Ensure enough space for labels
+          size: 90, // Ensure enough space for labels like "90.0 percent"
           values: (_u: uPlot, vals: number[]) => {
             // Values are already in the display unit, just format them
             return vals.map((v) => {
