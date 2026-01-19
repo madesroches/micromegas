@@ -187,8 +187,10 @@ async fn serve_index_with_config(
         state.base_path
     );
 
-    // Inject before </head>
-    let modified_html = html.replace("</head>", &format!("{injection}</head>"));
+    // Inject right after <head> - the base tag MUST come before any relative URLs
+    // to take effect (per HTML spec). Injecting before </head> is too late since
+    // the script/link tags with relative paths appear before that point.
+    let modified_html = html.replace("<head>", &format!("<head>{injection}"));
 
     Ok((
         [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
