@@ -114,6 +114,12 @@ export function XYChart({
   const [dimensions, setDimensions] = useState({ width: 800, height: 300 })
   const [internalScaleMode, setInternalScaleMode] = useState<ScaleMode>('p99')
 
+  // Use refs for callbacks to avoid chart recreation when callbacks change
+  const onTimeRangeSelectRef = useRef(onTimeRangeSelect)
+  onTimeRangeSelectRef.current = onTimeRangeSelect
+  const onAxisBoundsChangeRef = useRef(onAxisBoundsChange)
+  onAxisBoundsChangeRef.current = onAxisBoundsChange
+
   // Use prop if provided, otherwise use internal state
   const scaleMode = scaleModeFromProps ?? internalScaleMode
   const setScaleMode = onScaleModeChange ?? setInternalScaleMode
@@ -372,23 +378,19 @@ export function XYChart({
         ready: [
           (u: uPlot) => {
             // Report axis bounds after chart layout is complete
-            if (onAxisBoundsChange) {
-              onAxisBoundsChange({
-                left: u.bbox.left / devicePixelRatio,
-                width: u.bbox.width / devicePixelRatio,
-              })
-            }
+            onAxisBoundsChangeRef.current?.({
+              left: u.bbox.left / devicePixelRatio,
+              width: u.bbox.width / devicePixelRatio,
+            })
           },
         ],
         setSize: [
           (u: uPlot) => {
             // Report updated axis bounds after resize
-            if (onAxisBoundsChange) {
-              onAxisBoundsChange({
-                left: u.bbox.left / devicePixelRatio,
-                width: u.bbox.width / devicePixelRatio,
-              })
-            }
+            onAxisBoundsChangeRef.current?.({
+              left: u.bbox.left / devicePixelRatio,
+              width: u.bbox.width / devicePixelRatio,
+            })
           },
         ],
         setSelect: [
@@ -397,7 +399,7 @@ export function XYChart({
             if (xAxisMode !== 'time') return
 
             const { left, width } = u.select
-            if (width > 0 && onTimeRangeSelect) {
+            if (width > 0 && onTimeRangeSelectRef.current) {
               // Convert pixel positions to time values
               const fromTime = u.posToVal(left, 'x')
               const toTime = u.posToVal(left + width, 'x')
@@ -407,7 +409,7 @@ export function XYChart({
               // Clear the selection visual
               u.setSelect({ left: 0, width: 0, top: 0, height: 0 }, false)
               // Call the callback
-              onTimeRangeSelect(fromDate, toDate)
+              onTimeRangeSelectRef.current(fromDate, toDate)
             }
           },
         ],
@@ -426,7 +428,7 @@ export function XYChart({
         chartRef.current = null
       }
     }
-  }, [data, dimensions, title, unit, createTooltipPlugin, onTimeRangeSelect, onAxisBoundsChange, stats, adaptiveTimeUnit, scaleMode, xAxisMode, xLabels, yColumnName])
+  }, [data, dimensions, title, unit, createTooltipPlugin, stats, adaptiveTimeUnit, scaleMode, xAxisMode, xLabels, yColumnName])
 
   // Build display title with column names if available
   const displayTitle = title || yColumnName || ''

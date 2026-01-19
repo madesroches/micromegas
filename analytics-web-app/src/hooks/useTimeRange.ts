@@ -50,14 +50,16 @@ export function useTimeRange(): UseTimeRangeReturn {
     }
   }, [fromParam, toParam])
 
+  // Use location.search (a string) instead of searchParams object
+  // to avoid callback instability - searchParams is a new object every render
   const setTimeRange = useCallback(
     (from: string, to: string) => {
-      const params = new URLSearchParams(searchParams.toString())
+      const params = new URLSearchParams(location.search)
       params.set('from', from)
       params.set('to', to)
       navigate(`${pathname}?${params.toString()}`)
     },
-    [searchParams, navigate, pathname]
+    [location.search, navigate, pathname]
   )
 
   return {
