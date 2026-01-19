@@ -5,8 +5,8 @@ import { useTimeRangeSync } from './useTimeRangeSync'
 import { useSqlHandlers } from './useSqlHandlers'
 import { LoadingState, EmptyState, SaveFooter, RendererLayout } from './shared'
 import { QueryEditor } from '@/components/QueryEditor'
-import { TimeSeriesChart, type ScaleMode } from '@/components/TimeSeriesChart'
-import { timestampToMs } from '@/lib/arrow-utils'
+import { XYChart, type ScaleMode } from '@/components/XYChart'
+import { extractChartData } from '@/lib/arrow-utils'
 
 // Variables available for metrics queries
 const VARIABLES = [
@@ -107,25 +107,11 @@ export function MetricsRenderer({
     [onTimeRangeChange]
   )
 
-  // Transform table data to chart format
-  const chartData = useMemo(() => {
+  // Extract chart data from Arrow table using the generic utility
+  const chartResult = useMemo(() => {
     const table = query.table
-    if (!table || table.numRows === 0) return []
-    const points: { time: number; value: number }[] = []
-
-    for (let i = 0; i < table.numRows; i++) {
-      const row = table.get(i)
-      if (row) {
-        const time = timestampToMs(row.time)
-        const value = Number(row.value)
-        if (!isNaN(time) && !isNaN(value)) {
-          points.push({ time, value })
-        }
-      }
-    }
-    // Sort by time ascending - uPlot requires data in chronological order
-    points.sort((a, b) => a.time - b.time)
-    return points
+    if (!table || table.numRows === 0) return null
+    return extractChartData(table)
   }, [query.table])
 
   // Query editor panel
@@ -162,21 +148,27 @@ export function MetricsRenderer({
       return <EmptyState message="No data available." />
     }
 
-    if (chartData.length === 0) {
-      return (
-        <EmptyState message="No valid time/value data found. Query must return 'time' and 'value' columns." />
-      )
+    if (!chartResult) {
+      return <EmptyState message="No data available." />
     }
+
+    if (!chartResult.ok) {
+      return <EmptyState message={chartResult.error} />
+    }
+
+    const { data, xAxisMode, xLabels, xColumnName, yColumnName } = chartResult
 
     return (
       <div className="flex-1 min-h-[400px] h-full">
-        <TimeSeriesChart
-          data={chartData}
-          title=""
-          unit=""
+        <XYChart
+          data={data}
+          xAxisMode={xAxisMode}
+          xLabels={xLabels}
+          xColumnName={xColumnName}
+          yColumnName={yColumnName}
           scaleMode={scaleMode}
           onScaleModeChange={handleScaleModeChange}
-          onTimeRangeSelect={handleTimeRangeSelect}
+          onTimeRangeSelect={xAxisMode === 'time' ? handleTimeRangeSelect : undefined}
         />
       </div>
     )

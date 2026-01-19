@@ -17,10 +17,16 @@ export interface ChartAxisBounds {
 
 export type ScaleMode = 'p99' | 'max'
 
-interface TimeSeriesChartProps {
-  data: { time: number; value: number }[]
-  title: string
-  unit: string
+export type XAxisMode = 'time' | 'numeric' | 'categorical'
+
+interface XYChartProps {
+  data: { x: number; y: number }[] // categorical: x is index into xLabels
+  xAxisMode: XAxisMode // required, determined by extractChartData
+  xLabels?: string[] // for categorical mode - the actual string labels
+  xColumnName?: string
+  yColumnName?: string
+  title?: string
+  unit?: string
   scaleMode?: ScaleMode
   onScaleModeChange?: (mode: ScaleMode) => void
   onTimeRangeSelect?: (from: Date, to: Date) => void
@@ -58,16 +64,51 @@ function formatStatValue(value: number, unit: string): string {
   return formatValue(value, unit, false)
 }
 
-export function TimeSeriesChart({
+// Format X value based on axis mode
+function formatXValue(value: number, mode: XAxisMode, xLabels?: string[]): string {
+  switch (mode) {
+    case 'time': {
+      const date = new Date(value * 1000)
+      const timeStr =
+        date.toLocaleTimeString('en-US', {
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+          hour12: false,
+        }) +
+        '.' +
+        String(date.getMilliseconds()).padStart(3, '0')
+      return timeStr
+    }
+    case 'numeric':
+      if (Math.abs(value) >= 1000) return value.toLocaleString()
+      if (Math.abs(value) >= 1) return value.toFixed(2)
+      return value.toPrecision(3)
+    case 'categorical':
+      if (xLabels) {
+        const idx = Math.round(value)
+        if (idx >= 0 && idx < xLabels.length) {
+          return xLabels[idx]
+        }
+      }
+      return String(Math.round(value))
+  }
+}
+
+export function XYChart({
   data,
-  title,
-  unit,
+  xAxisMode,
+  xLabels,
+  xColumnName,
+  yColumnName,
+  title = '',
+  unit = '',
   scaleMode: scaleModeFromProps,
   onScaleModeChange,
   onTimeRangeSelect,
   onWidthChange,
   onAxisBoundsChange,
-}: TimeSeriesChartProps) {
+}: XYChartProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<uPlot | null>(null)
   const [dimensions, setDimensions] = useState({ width: 800, height: 300 })
@@ -82,7 +123,7 @@ export function TimeSeriesChart({
     if (data.length === 0) {
       return { min: 0, max: 0, avg: 0, p99: 0 }
     }
-    const values = data.map((d) => d.value)
+    const values = data.map((d) => d.y)
     const sorted = [...values].sort((a, b) => a - b)
     const p99Index = Math.floor(sorted.length * 0.99)
     return {
@@ -129,9 +170,9 @@ export function TimeSeriesChart({
 
   // Tooltip plugin - values are in display unit, convert back to original for formatting
   const createTooltipPlugin = useCallback(
-    (originalUnit: string, conversionFactor: number): uPlot.Plugin => {
+    (originalUnit: string, conversionFactor: number, mode: XAxisMode, labels?: string[]): uPlot.Plugin => {
       let tooltip: HTMLDivElement
-      let tooltipTime: HTMLDivElement
+      let tooltipX: HTMLDivElement
       let tooltipValue: HTMLDivElement
 
       return {
@@ -155,7 +196,7 @@ export function TimeSeriesChart({
             <div style="color: var(--chart-line); font-weight: 600; font-size: 14px;"></div>
           `
             u.over.appendChild(tooltip)
-            tooltipTime = tooltip.children[0] as HTMLDivElement
+            tooltipX = tooltip.children[0] as HTMLDivElement
             tooltipValue = tooltip.children[1] as HTMLDivElement
           },
           setCursor: (u: uPlot) => {
@@ -165,26 +206,15 @@ export function TimeSeriesChart({
               return
             }
 
-            const time = u.data[0][idx]
+            const xVal = u.data[0][idx]
             const value = u.data[1][idx]
 
-            if (time == null || value == null) {
+            if (xVal == null || value == null) {
               tooltip.style.display = 'none'
               return
             }
 
-            const date = new Date(time * 1000)
-            const timeStr =
-              date.toLocaleTimeString('en-US', {
-                hour: '2-digit',
-                minute: '2-digit',
-                second: '2-digit',
-                hour12: false,
-              }) +
-              '.' +
-              String(date.getMilliseconds()).padStart(3, '0')
-
-            tooltipTime.textContent = timeStr
+            tooltipX.textContent = formatXValue(xVal, mode, labels)
 
             // Convert back to original unit and pick best unit for display
             const originalValue = value / conversionFactor
@@ -227,8 +257,13 @@ export function TimeSeriesChart({
     // Transform data to uPlot format
     // For time units, convert values to the display unit so uPlot generates correct ticks
     const conversionFactor = adaptiveTimeUnit?.conversionFactor ?? 1
-    const times = data.map((d) => d.time / 1000) // uPlot uses seconds for X axis
-    const values = data.map((d) => d.value * conversionFactor)
+
+    // For time mode, convert ms to seconds for uPlot
+    // For numeric/categorical, use x values directly
+    const xValues = xAxisMode === 'time'
+      ? data.map((d) => d.x / 1000) // ms to seconds for uPlot time axis
+      : data.map((d) => d.x)
+    const yValues = data.map((d) => d.y * conversionFactor)
 
     // Convert stats to display unit for scale range
     const _displayMin = stats.min * conversionFactor
@@ -237,14 +272,46 @@ export function TimeSeriesChart({
 
     const yAxisUnit = adaptiveTimeUnit?.abbrev ?? unit
 
+    // Build X axis configuration based on mode
+    const xAxisConfig: uPlot.Axis = {
+      stroke: '#6a6a7a',
+      grid: { stroke: '#2a2a35', width: 1 },
+      ticks: { stroke: '#2a2a35', width: 1 },
+      font: '11px -apple-system, BlinkMacSystemFont, sans-serif',
+      size: 50,
+    }
+
+    // For categorical mode, use custom values function for tick labels
+    if (xAxisMode === 'categorical' && xLabels) {
+      xAxisConfig.values = (_u: uPlot, vals: number[]) => {
+        return vals.map((v) => {
+          const idx = Math.round(v)
+          if (idx >= 0 && idx < xLabels.length) {
+            return xLabels[idx]
+          }
+          return ''
+        })
+      }
+    } else if (xAxisMode === 'numeric') {
+      xAxisConfig.values = (_u: uPlot, vals: number[]) => {
+        return vals.map((v) => {
+          if (v === 0) return '0'
+          const absV = Math.abs(v)
+          if (absV >= 1000) return v.toLocaleString()
+          if (absV >= 1) return v.toFixed(1)
+          return v.toPrecision(2)
+        })
+      }
+    }
+
     const opts: uPlot.Options = {
       width: dimensions.width,
       height: dimensions.height,
-      plugins: [createTooltipPlugin(unit, conversionFactor)],
-      // Use local timezone for time display
-      tzDate: (ts: number) => new Date(ts * 1000),
+      plugins: [createTooltipPlugin(unit, conversionFactor, xAxisMode, xLabels)],
+      // Use local timezone for time display (only applies to time mode)
+      tzDate: xAxisMode === 'time' ? (ts: number) => new Date(ts * 1000) : undefined,
       scales: {
-        x: { time: true },
+        x: { time: xAxisMode === 'time' },
         y: {
           // Scale based on user selection: p99 handles outliers gracefully, max shows all data
           range: (_u: uPlot, dataMin: number, _dataMax: number) => {
@@ -256,13 +323,7 @@ export function TimeSeriesChart({
         },
       },
       axes: [
-        {
-          stroke: '#6a6a7a',
-          grid: { stroke: '#2a2a35', width: 1 },
-          ticks: { stroke: '#2a2a35', width: 1 },
-          font: '11px -apple-system, BlinkMacSystemFont, sans-serif',
-          size: 50, // Ensure enough space for multi-line date/time labels
-        },
+        xAxisConfig,
         {
           stroke: '#6a6a7a',
           grid: { stroke: '#2a2a35', width: 1 },
@@ -285,7 +346,7 @@ export function TimeSeriesChart({
       series: [
         {},
         {
-          label: title,
+          label: title || yColumnName || 'Value',
           stroke: '#bf360c',
           width: 2,
           fill: 'rgba(191, 54, 12, 0.1)',
@@ -297,7 +358,7 @@ export function TimeSeriesChart({
         x: true,
         y: true,
         drag: {
-          x: true,
+          x: xAxisMode === 'time', // Only enable drag-to-select for time mode
           y: false,
           setScale: false, // Don't auto-zoom, we'll handle it via callback
         },
@@ -327,6 +388,9 @@ export function TimeSeriesChart({
         ],
         setSelect: [
           (u: uPlot) => {
+            // Only handle selection for time mode
+            if (xAxisMode !== 'time') return
+
             const { left, width } = u.select
             if (width > 0 && onTimeRangeSelect) {
               // Convert pixel positions to time values
@@ -348,7 +412,7 @@ export function TimeSeriesChart({
 
     const chartContainer = containerRef.current.querySelector('.chart-inner') as HTMLElement
     if (chartContainer) {
-      chartRef.current = new uPlot(opts, [times, values], chartContainer)
+      chartRef.current = new uPlot(opts, [xValues, yValues], chartContainer)
     }
 
     return () => {
@@ -357,24 +421,31 @@ export function TimeSeriesChart({
         chartRef.current = null
       }
     }
-  }, [data, dimensions, title, unit, createTooltipPlugin, onTimeRangeSelect, onAxisBoundsChange, stats, adaptiveTimeUnit, scaleMode])
+  }, [data, dimensions, title, unit, createTooltipPlugin, onTimeRangeSelect, onAxisBoundsChange, stats, adaptiveTimeUnit, scaleMode, xAxisMode, xLabels, yColumnName])
+
+  // Build display title with column names if available
+  const displayTitle = title || yColumnName || ''
+  const xAxisLabel = xColumnName || (xAxisMode === 'time' ? 'Time' : 'X')
 
   return (
     <div className="flex flex-col h-full bg-app-panel border border-theme-border rounded-lg">
       {/* Chart header */}
       <div className="flex justify-between items-center px-4 py-3 border-b border-theme-border">
-        {title ? (
+        {displayTitle ? (
           <div className="text-base font-medium text-theme-text-primary">
-            {title}{displayUnit && <span className="text-theme-text-muted font-normal"> ({displayUnit})</span>}
+            {displayTitle}{displayUnit && <span className="text-theme-text-muted font-normal"> ({displayUnit})</span>}
+            {xAxisMode !== 'time' && xAxisLabel && (
+              <span className="text-theme-text-muted font-normal text-sm ml-2">vs {xAxisLabel}</span>
+            )}
           </div>
         ) : (
           <div />
         )}
         <div className="flex items-center gap-4 text-xs text-theme-text-muted">
-          {title && (
+          {displayTitle && (
             <div className="flex items-center gap-1.5">
               <div className="w-3 h-0.5 bg-chart-line rounded" />
-              <span>{title}</span>
+              <span>{displayTitle}</span>
             </div>
           )}
           <div>
@@ -428,5 +499,46 @@ export function TimeSeriesChart({
         <div className="chart-inner" />
       </div>
     </div>
+  )
+}
+
+// Re-export TimeSeriesChart as an alias for backwards compatibility
+// This allows existing code that uses TimeSeriesChart with time/value data to continue working
+export interface TimeSeriesChartProps {
+  data: { time: number; value: number }[]
+  title: string
+  unit: string
+  scaleMode?: ScaleMode
+  onScaleModeChange?: (mode: ScaleMode) => void
+  onTimeRangeSelect?: (from: Date, to: Date) => void
+  onWidthChange?: (width: number) => void
+  onAxisBoundsChange?: (bounds: ChartAxisBounds) => void
+}
+
+export function TimeSeriesChart({
+  data,
+  title,
+  unit,
+  scaleMode,
+  onScaleModeChange,
+  onTimeRangeSelect,
+  onWidthChange,
+  onAxisBoundsChange,
+}: TimeSeriesChartProps) {
+  // Convert time/value format to x/y format
+  const xyData = useMemo(() => data.map((d) => ({ x: d.time, y: d.value })), [data])
+
+  return (
+    <XYChart
+      data={xyData}
+      xAxisMode="time"
+      title={title}
+      unit={unit}
+      scaleMode={scaleMode}
+      onScaleModeChange={onScaleModeChange}
+      onTimeRangeSelect={onTimeRangeSelect}
+      onWidthChange={onWidthChange}
+      onAxisBoundsChange={onAxisBoundsChange}
+    />
   )
 }
