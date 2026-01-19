@@ -1,0 +1,1019 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Notebook Screen Mockup</title>
+  <style>
+    :root {
+      --bg-app: #0a0a0f;
+      --bg-panel: #12121a;
+      --bg-card: #1a1a24;
+      --bg-selected: #1a2a3a;
+      --border: #2a2a3a;
+      --border-selected: #3b82f6;
+      --text-primary: #e4e4e7;
+      --text-secondary: #a1a1aa;
+      --text-muted: #71717a;
+      --accent-link: #3b82f6;
+      --accent-error: #ef4444;
+      --accent-warning: #f59e0b;
+      --accent-success: #22c55e;
+      --rust-orange: #bf360c;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg-app);
+      color: var(--text-primary);
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    /* Layout */
+    .app {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .header {
+      height: 57px;
+      background: var(--bg-panel);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 16px;
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 600;
+      color: var(--rust-orange);
+    }
+
+    .logo-icon {
+      width: 24px;
+      height: 24px;
+      background: var(--rust-orange);
+      border-radius: 4px;
+    }
+
+    .header-controls {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .btn {
+      padding: 6px 12px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--bg-card);
+      color: var(--text-primary);
+      cursor: pointer;
+      font-size: 13px;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .btn:hover {
+      background: var(--bg-panel);
+    }
+
+    .btn-primary {
+      background: var(--accent-link);
+      border-color: var(--accent-link);
+    }
+
+    .btn-primary:hover {
+      opacity: 0.9;
+    }
+
+    .btn-sm {
+      padding: 4px 8px;
+      font-size: 12px;
+    }
+
+    .btn-icon {
+      padding: 6px;
+      min-width: 32px;
+      justify-content: center;
+    }
+
+    .btn-danger {
+      color: var(--accent-error);
+      border-color: var(--accent-error);
+    }
+
+    .btn-danger:hover {
+      background: rgba(239, 68, 68, 0.1);
+    }
+
+    .main-layout {
+      display: flex;
+      flex: 1;
+      height: calc(100vh - 57px);
+    }
+
+    /* Sidebar */
+    .sidebar {
+      width: 200px;
+      background: var(--bg-panel);
+      border-right: 1px solid var(--border);
+      padding: 16px 0;
+      flex-shrink: 0;
+    }
+
+    .nav-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 16px;
+      color: var(--text-secondary);
+      text-decoration: none;
+      cursor: pointer;
+    }
+
+    .nav-item:hover {
+      background: var(--bg-card);
+      color: var(--text-primary);
+    }
+
+    .nav-item.active {
+      background: var(--bg-card);
+      color: var(--accent-link);
+      border-left: 2px solid var(--accent-link);
+    }
+
+    /* Main Content */
+    .content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 24px;
+      min-width: 0;
+    }
+
+    /* Right Panel */
+    .right-panel {
+      width: 350px;
+      background: var(--bg-panel);
+      border-left: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;
+    }
+
+    .right-panel-header {
+      padding: 16px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .right-panel-title {
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .right-panel-content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px;
+    }
+
+    .right-panel-footer {
+      padding: 16px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .right-panel-footer .btn {
+      width: 100%;
+      justify-content: center;
+    }
+
+    /* Form Elements */
+    .form-group {
+      margin-bottom: 16px;
+    }
+
+    .form-label {
+      display: block;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text-secondary);
+      margin-bottom: 6px;
+      text-transform: uppercase;
+    }
+
+    .form-input {
+      width: 100%;
+      padding: 8px 12px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text-primary);
+      font-size: 14px;
+    }
+
+    .form-input:focus {
+      outline: none;
+      border-color: var(--accent-link);
+    }
+
+    .form-select {
+      width: 100%;
+      padding: 8px 12px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text-primary);
+      font-size: 14px;
+    }
+
+    .form-textarea {
+      width: 100%;
+      min-height: 150px;
+      padding: 12px;
+      background: var(--bg-app);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text-primary);
+      font-family: 'Monaco', 'Menlo', monospace;
+      font-size: 12px;
+      resize: vertical;
+    }
+
+    .form-textarea:focus {
+      outline: none;
+      border-color: var(--accent-link);
+    }
+
+    .variables-list {
+      margin-top: 8px;
+      padding: 8px;
+      background: var(--bg-card);
+      border-radius: 6px;
+      font-size: 12px;
+    }
+
+    .variable-item {
+      display: flex;
+      justify-content: space-between;
+      padding: 4px 0;
+      color: var(--text-muted);
+    }
+
+    .variable-name {
+      color: var(--accent-link);
+      font-family: monospace;
+    }
+
+    /* Screen Header */
+    .screen-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      margin-bottom: 24px;
+    }
+
+    .screen-title-area {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .screen-icon {
+      width: 40px;
+      height: 40px;
+      background: var(--bg-card);
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 20px;
+    }
+
+    .screen-title {
+      font-size: 24px;
+      font-weight: 600;
+    }
+
+    .screen-subtitle {
+      font-size: 13px;
+      color: var(--text-secondary);
+    }
+
+    .unsaved-badge {
+      color: var(--accent-warning);
+    }
+
+    /* Cells */
+    .cells-container {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .cell {
+      background: var(--bg-panel);
+      border: 2px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+      cursor: pointer;
+      transition: border-color 0.15s;
+    }
+
+    .cell:hover {
+      border-color: #3a3a4a;
+    }
+
+    .cell.selected {
+      border-color: var(--border-selected);
+      background: var(--bg-selected);
+    }
+
+    .cell-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 12px;
+      background: var(--bg-card);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .cell.selected .cell-header {
+      background: #1a2a3a;
+    }
+
+    .cell-header-left {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .cell-collapse {
+      color: var(--text-muted);
+      cursor: pointer;
+    }
+
+    .cell-type-badge {
+      font-size: 11px;
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: var(--bg-panel);
+      color: var(--text-secondary);
+      text-transform: uppercase;
+    }
+
+    .cell-title {
+      font-weight: 500;
+    }
+
+    .cell-status {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .cell-status.loading {
+      color: var(--accent-link);
+    }
+
+    .cell-status.error {
+      color: var(--accent-error);
+    }
+
+    .cell-content {
+      padding: 16px;
+    }
+
+    /* Variable Cell */
+    .variable-cell .cell-content {
+      padding: 12px 16px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .variable-label {
+      font-weight: 500;
+      min-width: 80px;
+    }
+
+    .variable-select {
+      flex: 1;
+      max-width: 400px;
+      padding: 8px 12px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text-primary);
+      font-size: 14px;
+    }
+
+    /* Table */
+    .data-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    .data-table th {
+      text-align: left;
+      padding: 8px 12px;
+      background: var(--bg-card);
+      border-bottom: 1px solid var(--border);
+      color: var(--text-secondary);
+      font-weight: 500;
+      text-transform: uppercase;
+      font-size: 11px;
+    }
+
+    .data-table td {
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .log-level {
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 500;
+    }
+
+    .log-level.info { background: #1e3a5f; color: #60a5fa; }
+    .log-level.debug { background: #1a2e1a; color: #86efac; }
+    .log-level.error { background: #3b1515; color: #fca5a5; }
+    .log-level.warn { background: #3b2f15; color: #fcd34d; }
+
+    /* Chart */
+    .chart-container {
+      height: 180px;
+      display: flex;
+      align-items: flex-end;
+      gap: 2px;
+      padding: 20px;
+      background: var(--bg-card);
+      border-radius: 6px;
+    }
+
+    .chart-bar {
+      flex: 1;
+      background: var(--accent-link);
+      border-radius: 2px 2px 0 0;
+      min-width: 8px;
+    }
+
+    /* Markdown Cell */
+    .markdown-content {
+      padding: 8px 0;
+    }
+
+    .markdown-content h2 {
+      font-size: 18px;
+      margin-bottom: 12px;
+    }
+
+    .markdown-content ul {
+      margin-left: 20px;
+    }
+
+    .markdown-content li {
+      margin-bottom: 4px;
+      color: var(--text-secondary);
+    }
+
+    /* Error State */
+    .error-banner {
+      background: #2d1515;
+      border: 1px solid var(--accent-error);
+      border-radius: 6px;
+      padding: 12px 16px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .error-icon {
+      color: var(--accent-error);
+      font-size: 20px;
+    }
+
+    .error-title {
+      font-weight: 500;
+      color: var(--accent-error);
+    }
+
+    .error-message {
+      font-size: 13px;
+      color: var(--text-secondary);
+    }
+
+    /* Blocked State */
+    .blocked-banner {
+      background: var(--bg-card);
+      border: 1px dashed var(--border);
+      border-radius: 6px;
+      padding: 24px;
+      text-align: center;
+      color: var(--text-muted);
+    }
+
+    /* Add Cell Button */
+    .add-cell-btn {
+      width: 100%;
+      padding: 12px;
+      border: 2px dashed var(--border);
+      border-radius: 8px;
+      background: transparent;
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 14px;
+      transition: all 0.2s;
+    }
+
+    .add-cell-btn:hover {
+      border-color: var(--accent-link);
+      color: var(--accent-link);
+      background: rgba(59, 130, 246, 0.1);
+    }
+
+    /* No Selection State */
+    .no-selection {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      color: var(--text-muted);
+      text-align: center;
+      padding: 24px;
+    }
+
+    .no-selection-icon {
+      font-size: 48px;
+      margin-bottom: 16px;
+      opacity: 0.5;
+    }
+
+    /* Add Cell Modal */
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.7);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+    }
+
+    .modal {
+      background: var(--bg-panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+      width: 400px;
+      max-width: 90vw;
+    }
+
+    .modal-title {
+      font-size: 18px;
+      font-weight: 600;
+      margin-bottom: 16px;
+    }
+
+    .cell-type-option {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    .cell-type-option:hover {
+      background: var(--bg-card);
+    }
+
+    .cell-type-icon {
+      width: 40px;
+      height: 40px;
+      background: var(--bg-card);
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+    }
+
+    .cell-type-name {
+      font-weight: 500;
+    }
+
+    .cell-type-desc {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .modal-footer {
+      margin-top: 16px;
+      display: flex;
+      justify-content: flex-end;
+    }
+
+    /* Divider */
+    .divider {
+      height: 1px;
+      background: var(--border);
+      margin: 16px 0;
+    }
+
+    /* Utility */
+    .text-muted { color: var(--text-muted); }
+    .text-secondary { color: var(--text-secondary); }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <!-- Header -->
+    <header class="header">
+      <div class="logo">
+        <div class="logo-icon"></div>
+        <span>Micromegas</span>
+      </div>
+      <div class="header-controls">
+        <button class="btn">
+          <span>📅</span>
+          Last 5 minutes ▾
+        </button>
+        <button class="btn btn-icon" title="Refresh">↻</button>
+        <button class="btn">
+          <span>👤</span>
+          User ▾
+        </button>
+      </div>
+    </header>
+
+    <div class="main-layout">
+      <!-- Sidebar -->
+      <nav class="sidebar">
+        <div class="nav-item">
+          <span>📋</span>
+          Processes
+        </div>
+        <div class="nav-item active">
+          <span>📄</span>
+          Screens
+        </div>
+      </nav>
+
+      <!-- Main Content -->
+      <main class="content">
+        <!-- Screen Header -->
+        <div class="screen-header">
+          <div class="screen-title-area">
+            <div class="screen-icon">📓</div>
+            <div>
+              <h1 class="screen-title">process-investigation</h1>
+              <p class="screen-subtitle">
+                Notebook
+                <span class="unsaved-badge">(unsaved changes)</span>
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Cells -->
+        <div class="cells-container">
+
+          <!-- Cell 1: Variable -->
+          <div class="cell variable-cell" onclick="selectCell(this, 'variable')">
+            <div class="cell-header">
+              <div class="cell-header-left">
+                <span class="cell-collapse">▾</span>
+                <span class="cell-type-badge">Variable</span>
+                <span class="cell-title">Select Process</span>
+              </div>
+            </div>
+            <div class="cell-content">
+              <span class="variable-label">Process</span>
+              <select class="variable-select">
+                <option>process_abc_123</option>
+                <option>process_def_456</option>
+                <option>process_ghi_789</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Cell 2: Log (Selected) -->
+          <div class="cell selected" onclick="selectCell(this, 'log')">
+            <div class="cell-header">
+              <div class="cell-header-left">
+                <span class="cell-collapse">▾</span>
+                <span class="cell-type-badge">Log</span>
+                <span class="cell-title">Log Entries</span>
+              </div>
+              <span class="cell-status">42 rows</span>
+            </div>
+            <div class="cell-content">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Time</th>
+                    <th>Level</th>
+                    <th>Target</th>
+                    <th>Message</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td class="text-muted">12:34:56.123</td>
+                    <td><span class="log-level info">INFO</span></td>
+                    <td>my_module</td>
+                    <td>Starting process initialization...</td>
+                  </tr>
+                  <tr>
+                    <td class="text-muted">12:34:57.456</td>
+                    <td><span class="log-level debug">DEBUG</span></td>
+                    <td>my_module</td>
+                    <td>Loading configuration from disk</td>
+                  </tr>
+                  <tr>
+                    <td class="text-muted">12:34:58.789</td>
+                    <td><span class="log-level error">ERROR</span></td>
+                    <td>my_module</td>
+                    <td>Connection to database failed: timeout</td>
+                  </tr>
+                  <tr>
+                    <td class="text-muted">12:34:59.012</td>
+                    <td><span class="log-level warn">WARN</span></td>
+                    <td>my_module</td>
+                    <td>Retrying connection in 5 seconds...</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- Cell 3: Chart -->
+          <div class="cell" onclick="selectCell(this, 'chart')">
+            <div class="cell-header">
+              <div class="cell-header-left">
+                <span class="cell-collapse">▾</span>
+                <span class="cell-type-badge">Chart</span>
+                <span class="cell-title">CPU Usage</span>
+              </div>
+              <span class="cell-status">15 points</span>
+            </div>
+            <div class="cell-content">
+              <div class="chart-container">
+                <div class="chart-bar" style="height: 30%"></div>
+                <div class="chart-bar" style="height: 45%"></div>
+                <div class="chart-bar" style="height: 60%"></div>
+                <div class="chart-bar" style="height: 75%"></div>
+                <div class="chart-bar" style="height: 85%"></div>
+                <div class="chart-bar" style="height: 70%"></div>
+                <div class="chart-bar" style="height: 55%"></div>
+                <div class="chart-bar" style="height: 40%"></div>
+                <div class="chart-bar" style="height: 50%"></div>
+                <div class="chart-bar" style="height: 65%"></div>
+                <div class="chart-bar" style="height: 80%"></div>
+                <div class="chart-bar" style="height: 60%"></div>
+                <div class="chart-bar" style="height: 45%"></div>
+                <div class="chart-bar" style="height: 35%"></div>
+                <div class="chart-bar" style="height: 25%"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Cell 4: Error State -->
+          <div class="cell" onclick="selectCell(this, 'error')">
+            <div class="cell-header">
+              <div class="cell-header-left">
+                <span class="cell-collapse">▾</span>
+                <span class="cell-type-badge">Table</span>
+                <span class="cell-title">Broken Query</span>
+              </div>
+              <span class="cell-status error">Error</span>
+            </div>
+            <div class="cell-content">
+              <div class="error-banner">
+                <span class="error-icon">⚠</span>
+                <div>
+                  <div class="error-title">Query execution failed</div>
+                  <div class="error-message">Column "nonexistent" not found</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Cell 5: Blocked -->
+          <div class="cell" onclick="selectCell(this, 'blocked')">
+            <div class="cell-header">
+              <div class="cell-header-left">
+                <span class="cell-collapse">▾</span>
+                <span class="cell-type-badge">Table</span>
+                <span class="cell-title">Dependent Query</span>
+              </div>
+              <span class="cell-status text-muted">Blocked</span>
+            </div>
+            <div class="cell-content">
+              <div class="blocked-banner">
+                ⏸ Waiting for "Broken Query" to succeed
+              </div>
+            </div>
+          </div>
+
+          <!-- Cell 6: Markdown -->
+          <div class="cell" onclick="selectCell(this, 'markdown')">
+            <div class="cell-header">
+              <div class="cell-header-left">
+                <span class="cell-collapse">▾</span>
+                <span class="cell-type-badge">Markdown</span>
+                <span class="cell-title">Investigation Notes</span>
+              </div>
+            </div>
+            <div class="cell-content">
+              <div class="markdown-content">
+                <h2>Investigation Notes</h2>
+                <ul>
+                  <li>CPU spikes correlate with connection errors</li>
+                  <li>Check database connection pooling config</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+
+          <!-- Add Cell Button -->
+          <button class="add-cell-btn" onclick="document.getElementById('modal').classList.remove('hidden')">
+            + Add Cell
+          </button>
+
+        </div>
+      </main>
+
+      <!-- Right Panel -->
+      <aside class="right-panel" id="rightPanel">
+        <div class="right-panel-header">
+          <span class="right-panel-title">
+            <span>📝</span>
+            Log Entries
+          </span>
+          <button class="btn btn-sm btn-icon" title="Close">×</button>
+        </div>
+
+        <div class="right-panel-content">
+          <div class="form-group">
+            <label class="form-label">Cell Title</label>
+            <input type="text" class="form-input" value="Log Entries">
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">SQL Query</label>
+            <textarea class="form-textarea">SELECT time, level, target, msg
+FROM log_entries
+WHERE process_id = '$process'
+  AND time >= '$begin'
+  AND time < '$end'
+ORDER BY time DESC
+LIMIT 100</textarea>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Available Variables</label>
+            <div class="variables-list">
+              <div class="variable-item">
+                <span class="variable-name">$process</span>
+                <span>process_abc_123</span>
+              </div>
+              <div class="variable-item">
+                <span class="variable-name">$begin</span>
+                <span>2024-01-19T12:30:00Z</span>
+              </div>
+              <div class="variable-item">
+                <span class="variable-name">$end</span>
+                <span>2024-01-19T12:35:00Z</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="divider"></div>
+
+          <div class="form-group">
+            <label class="form-label">Log Options</label>
+            <div style="display: flex; gap: 12px; margin-top: 8px;">
+              <div style="flex: 1;">
+                <label class="form-label" style="font-size: 11px;">Min Level</label>
+                <select class="form-select">
+                  <option>DEBUG</option>
+                  <option selected>INFO</option>
+                  <option>WARN</option>
+                  <option>ERROR</option>
+                </select>
+              </div>
+              <div style="flex: 1;">
+                <label class="form-label" style="font-size: 11px;">Limit</label>
+                <input type="number" class="form-input" value="100">
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="right-panel-footer">
+          <button class="btn btn-primary">▶ Run Cell</button>
+          <div style="display: flex; gap: 8px;">
+            <button class="btn" style="flex: 1;">Save</button>
+            <button class="btn" style="flex: 1;">Save As</button>
+          </div>
+          <button class="btn btn-danger btn-sm">Delete Cell</button>
+        </div>
+      </aside>
+    </div>
+  </div>
+
+  <!-- Add Cell Modal -->
+  <div id="modal" class="modal-overlay hidden" onclick="if(event.target === this) this.classList.add('hidden')">
+    <div class="modal">
+      <h2 class="modal-title">Add Cell</h2>
+      <div class="cell-type-option">
+        <div class="cell-type-icon">📊</div>
+        <div>
+          <div class="cell-type-name">Table</div>
+          <div class="cell-type-desc">Generic SQL results as a table</div>
+        </div>
+      </div>
+      <div class="cell-type-option">
+        <div class="cell-type-icon">📈</div>
+        <div>
+          <div class="cell-type-name">Chart</div>
+          <div class="cell-type-desc">X/Y chart (line, bar, etc.)</div>
+        </div>
+      </div>
+      <div class="cell-type-option">
+        <div class="cell-type-icon">📝</div>
+        <div>
+          <div class="cell-type-name">Log</div>
+          <div class="cell-type-desc">Log entries viewer with levels</div>
+        </div>
+      </div>
+      <div class="cell-type-option">
+        <div class="cell-type-icon">📄</div>
+        <div>
+          <div class="cell-type-name">Markdown</div>
+          <div class="cell-type-desc">Documentation and notes</div>
+        </div>
+      </div>
+      <div class="cell-type-option">
+        <div class="cell-type-icon">🔽</div>
+        <div>
+          <div class="cell-type-name">Variable</div>
+          <div class="cell-type-desc">User input (dropdown, text, number)</div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" onclick="document.getElementById('modal').classList.add('hidden')">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    function selectCell(element, type) {
+      // Remove selection from all cells
+      document.querySelectorAll('.cell').forEach(cell => {
+        cell.classList.remove('selected');
+      });
+      // Add selection to clicked cell
+      element.classList.add('selected');
+
+      // Update right panel title based on type
+      const titles = {
+        'variable': '🔽 Select Process',
+        'log': '📝 Log Entries',
+        'chart': '📈 CPU Usage',
+        'error': '📊 Broken Query',
+        'blocked': '📊 Dependent Query',
+        'markdown': '📄 Investigation Notes'
+      };
+      document.querySelector('.right-panel-title').innerHTML = titles[type] || 'Cell';
+    }
+  </script>
+</body>
+</html>
