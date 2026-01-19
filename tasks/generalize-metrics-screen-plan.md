@@ -145,8 +145,11 @@ Find and update all imports of `TimeSeriesChart` to use `XYChart`.
 |------|--------|
 | `src/components/TimeSeriesChart.tsx` | Rename to `XYChart.tsx`, generalize |
 | `src/lib/arrow-utils.ts` | Add validation + extraction utilities |
-| `src/lib/screen-renderers/MetricsRenderer.tsx` | Use new utilities |
-| Other files importing TimeSeriesChart | Update imports |
+| `src/lib/screen-renderers/MetricsRenderer.tsx` | Use new utilities, update import |
+| `src/components/MetricsChart.tsx` | Update imports: `TimeSeriesChart`, `ChartAxisBounds`, `ScaleMode` → from `XYChart` |
+| `src/components/ThreadCoverageTimeline.tsx` | Update import: `ChartAxisBounds` → from `XYChart` |
+| `src/components/PropertyTimeline.tsx` | Update import: `ChartAxisBounds` → from `XYChart` |
+| `src/routes/PerformanceAnalysisPage.tsx` | Update import: `ChartAxisBounds` → from `XYChart` |
 
 ## Error Messages
 

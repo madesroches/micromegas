@@ -14,27 +14,16 @@ export function timestampToMs(value: unknown, dataType?: DataType): number {
   if (!value) return 0
   if (value instanceof Date) return value.getTime()
 
+  // Arrow JS automatically converts all timestamp types to milliseconds when
+  // deserializing to JavaScript Numbers (since JS can't precisely represent
+  // nanosecond-precision timestamps as Numbers). So for numeric values,
+  // we always treat them as milliseconds regardless of what the schema says.
   if (typeof value === 'number') {
-    // Use the schema's time unit if available
-    if (dataType && DataType.isTimestamp(dataType)) {
-      const timestampType = dataType as Timestamp
-      switch (timestampType.unit) {
-        case TimeUnit.SECOND:
-          return value * 1000
-        case TimeUnit.MILLISECOND:
-          return value
-        case TimeUnit.MICROSECOND:
-          return value / 1000
-        case TimeUnit.NANOSECOND:
-          return value / 1000000
-      }
-    }
-    // No dataType - assume milliseconds
     return value
   }
 
+  // Bigints may still come through with original precision, so use schema
   if (typeof value === 'bigint') {
-    // Determine divisor based on the Arrow type's time unit
     if (dataType && DataType.isTimestamp(dataType)) {
       const timestampType = dataType as Timestamp
       switch (timestampType.unit) {
