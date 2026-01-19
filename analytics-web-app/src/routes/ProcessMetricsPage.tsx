@@ -212,30 +212,31 @@ function ProcessMetricsContent() {
     [processId, selectedMeasure, binInterval, apiTimeRange]
   )
 
+  // Use location.search instead of searchParams to avoid callback instability
   const updateMeasure = useCallback(
     (measure: string) => {
       setSelectedMeasure(measure)
-      const params = new URLSearchParams(searchParams.toString())
+      const params = new URLSearchParams(location.search)
       params.set('measure', measure)
       navigate(`${pathname}?${params.toString()}`)
     },
-    [searchParams, navigate, pathname]
+    [location.search, navigate, pathname]
   )
 
   const handleAddProperty = useCallback(
     (key: string) => {
       const newProperties = [...selectedProperties, key]
-      const params = new URLSearchParams(searchParams.toString())
+      const params = new URLSearchParams(location.search)
       params.set('properties', newProperties.join(','))
       navigate(`${pathname}?${params.toString()}`)
     },
-    [selectedProperties, searchParams, navigate, pathname]
+    [selectedProperties, location.search, navigate, pathname]
   )
 
   const handleRemoveProperty = useCallback(
     (key: string) => {
       const newProperties = selectedProperties.filter((k) => k !== key)
-      const params = new URLSearchParams(searchParams.toString())
+      const params = new URLSearchParams(location.search)
       if (newProperties.length > 0) {
         params.set('properties', newProperties.join(','))
       } else {
@@ -243,7 +244,7 @@ function ProcessMetricsContent() {
       }
       navigate(`${pathname}?${params.toString()}`)
     },
-    [selectedProperties, searchParams, navigate, pathname]
+    [selectedProperties, location.search, navigate, pathname]
   )
 
   const hasLoadedProcessRef = useRef(false)

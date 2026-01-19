@@ -109,10 +109,11 @@ function ProcessesPageContent() {
   )
 
   // Update search state and URL
+  // Use location.search instead of searchParams to avoid callback instability
   const updateSearch = useCallback(
     (value: string) => {
       setSearch(value)
-      const params = new URLSearchParams(searchParams.toString())
+      const params = new URLSearchParams(location.search)
       if (value.trim() === '') {
         params.delete('search')
       } else {
@@ -120,7 +121,7 @@ function ProcessesPageContent() {
       }
       navigate(`${pathname}?${params.toString()}`, { replace: true })
     },
-    [searchParams, navigate, pathname]
+    [location.search, navigate, pathname]
   )
 
   // Sync debounced input to search state and URL

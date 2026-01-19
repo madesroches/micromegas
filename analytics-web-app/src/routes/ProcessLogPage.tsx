@@ -264,10 +264,11 @@ function ProcessLogContent() {
     [processId, logLevel, logLimit, search, apiTimeRange]
   )
 
+  // Use location.search instead of searchParams to avoid callback instability
   const updateLogLevel = useCallback(
     (level: string) => {
       setLogLevel(level)
-      const params = new URLSearchParams(searchParams.toString())
+      const params = new URLSearchParams(location.search)
       if (level === 'all') {
         params.delete('level')
       } else {
@@ -275,7 +276,7 @@ function ProcessLogContent() {
       }
       navigate(`${pathname}?${params.toString()}`, { replace: true })
     },
-    [searchParams, navigate, pathname]
+    [location.search, navigate, pathname]
   )
 
   const updateLogLimit = useCallback(
@@ -283,7 +284,7 @@ function ProcessLogContent() {
       const clampedLimit = Math.max(MIN_LIMIT, Math.min(MAX_LIMIT, limit))
       setLogLimit(clampedLimit)
       setLimitInputValue(String(clampedLimit))
-      const params = new URLSearchParams(searchParams.toString())
+      const params = new URLSearchParams(location.search)
       if (clampedLimit === 100) {
         params.delete('limit')
       } else {
@@ -291,7 +292,7 @@ function ProcessLogContent() {
       }
       navigate(`${pathname}?${params.toString()}`, { replace: true })
     },
-    [searchParams, navigate, pathname]
+    [location.search, navigate, pathname]
   )
 
   const handleLimitInputBlur = useCallback(() => {
@@ -315,7 +316,7 @@ function ProcessLogContent() {
   const updateSearch = useCallback(
     (value: string) => {
       setSearch(value)
-      const params = new URLSearchParams(searchParams.toString())
+      const params = new URLSearchParams(location.search)
       if (value.trim() === '') {
         params.delete('search')
       } else {
@@ -323,7 +324,7 @@ function ProcessLogContent() {
       }
       navigate(`${pathname}?${params.toString()}`, { replace: true })
     },
-    [searchParams, navigate, pathname]
+    [location.search, navigate, pathname]
   )
 
   const isInitialSearchRef = useRef(true)
