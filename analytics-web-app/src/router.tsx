@@ -14,6 +14,7 @@ const AdminPage = lazy(() => import('@/routes/AdminPage'))
 const DataSourcesPage = lazy(() => import('@/routes/DataSourcesPage'))
 const ExportScreensPage = lazy(() => import('@/routes/ExportScreensPage'))
 const ImportScreensPage = lazy(() => import('@/routes/ImportScreensPage'))
+const MapPage = lazy(() => import('@/routes/MapPage'))
 const NotFoundPage = lazy(() => import('@/routes/NotFoundPage'))
 
 function PageLoader() {
@@ -45,6 +46,7 @@ export function AppRouter() {
         <Route path="/admin/data-sources" element={<DataSourcesPage />} />
         <Route path="/admin/export-screens" element={<ExportScreensPage />} />
         <Route path="/admin/import-screens" element={<ImportScreensPage />} />
+        <Route path="/map" element={<MapPage />} />
         <Route path="*" element={<NotFoundPage />} />
       </Routes>
     </Suspense>

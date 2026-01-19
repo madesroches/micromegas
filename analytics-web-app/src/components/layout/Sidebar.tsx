@@ -2,6 +2,7 @@ import { useLocation } from 'react-router-dom'
 import { AppLink } from '@/components/AppLink'
 import { useAuth } from '@/lib/auth'
 import { LayoutGrid, Layers, Wrench } from 'lucide-react'
+import { LayoutGrid, Layers, Wrench, Map } from 'lucide-react'
 
 interface NavItem {
   href: string
@@ -22,6 +23,11 @@ const navItems: NavItem[] = [
     icon: <Layers className="w-5 h-5" />,
     label: 'Screens',
     matchPaths: ['/screens', '/screen'],
+  },
+  {
+    href: '/map',
+    icon: <Map className="w-5 h-5" />,
+    label: 'Map',
   },
 ]
 
