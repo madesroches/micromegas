@@ -168,15 +168,19 @@ function ProcessMetricsContent() {
             }
           }
           setMeasures(measureList)
+          // Auto-select first measure if none specified
           if (measureList.length > 0 && !selectedMeasure) {
-            setSelectedMeasure(measureList[0].name)
+            const autoMeasure = measureList[0].name
+            setSelectedMeasure(autoMeasure)
+            // Update config to keep URL in sync (replace to avoid history entry)
+            updateConfig({ selectedMeasure: autoMeasure }, { replace: true })
           }
         }
       }
       setDiscoveryDone(true)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- Only react to completion/error, not the full hook object
-  }, [discoveryQuery.isComplete, discoveryQuery.error, selectedMeasure])
+  }, [discoveryQuery.isComplete, discoveryQuery.error, selectedMeasure, updateConfig])
 
   // Extract chart data from data query
   useEffect(() => {

@@ -197,6 +197,9 @@ function PerformanceAnalysisContent() {
   const currentSqlRef = useRef(currentSql)
   currentSqlRef.current = currentSql
 
+  // Ref to always call the latest loadData without causing effect re-runs
+  const loadDataRef = useRef<((sql: string) => Promise<void>) | null>(null)
+
   const loadDiscovery = useCallback(async () => {
     if (!processId) return
     setDiscoveryLoading(true)
@@ -233,9 +236,13 @@ function PerformanceAnalysisContent() {
       setMeasures(measureList)
       setDiscoveryDone(true)
 
+      // Auto-select measure if none specified - use DeltaTime if available, else first
       if (measureList.length > 0 && !selectedMeasure) {
         const deltaTime = measureList.find((m) => m.name === 'DeltaTime')
-        setSelectedMeasure(deltaTime ? deltaTime.name : measureList[0].name)
+        const autoMeasure = deltaTime ? deltaTime.name : measureList[0].name
+        setSelectedMeasure(autoMeasure)
+        // Update config to keep URL in sync (replace to avoid history entry)
+        updateConfig({ selectedMeasure: autoMeasure }, { replace: true })
       }
     } catch (err) {
       setQueryError(err instanceof Error ? err.message : 'Unknown error')
@@ -243,7 +250,7 @@ function PerformanceAnalysisContent() {
     } finally {
       setDiscoveryLoading(false)
     }
-  }, [processId, apiTimeRange, selectedMeasure])
+  }, [processId, apiTimeRange, selectedMeasure, updateConfig])
 
   const loadData = useCallback(
     async (sql: string) => {
@@ -295,6 +302,13 @@ function PerformanceAnalysisContent() {
     },
     [processId, selectedMeasure, binInterval, apiTimeRange]
   )
+
+  // Keep ref updated with latest loadData
+  loadDataRef.current = loadData
+
+  // Ref to always call the latest loadDiscovery without causing effect re-runs
+  const loadDiscoveryRef = useRef<(() => Promise<void>) | null>(null)
+  loadDiscoveryRef.current = loadDiscovery
 
   const loadThreadCoverage = useCallback(async () => {
     if (!processId) return
@@ -381,6 +395,10 @@ function PerformanceAnalysisContent() {
     }
   }, [processId, apiTimeRange])
 
+  // Ref to always call the latest loadThreadCoverage without causing effect re-runs
+  const loadThreadCoverageRef = useRef<(() => Promise<void>) | null>(null)
+  loadThreadCoverageRef.current = loadThreadCoverage
+
   // Update measure in config with replace (editing, not navigational)
   const updateMeasure = useCallback(
     (measure: string) => {
@@ -439,10 +457,11 @@ function PerformanceAnalysisContent() {
   useEffect(() => {
     if (processId && !hasLoadedDiscoveryRef.current) {
       hasLoadedDiscoveryRef.current = true
-      loadDiscovery()
-      loadThreadCoverage()
+      // Use refs to avoid re-running this effect when callback identities change
+      loadDiscoveryRef.current?.()
+      loadThreadCoverageRef.current?.()
     }
-  }, [processId, loadDiscovery, loadThreadCoverage])
+  }, [processId])
 
   const hasInitialLoadRef = useRef(false)
   useEffect(() => {
@@ -450,10 +469,12 @@ function PerformanceAnalysisContent() {
       // Use DEFAULT_SQL only on initial load, preserve custom SQL for measure changes
       const isInitialLoad = !hasInitialLoadRef.current
       hasInitialLoadRef.current = true
-      loadData(isInitialLoad ? DEFAULT_SQL : currentSqlRef.current)
+      // Use ref to avoid re-running this effect when loadData identity changes
+      loadDataRef.current?.(isInitialLoad ? DEFAULT_SQL : currentSqlRef.current)
     }
-  }, [discoveryDone, selectedMeasure, processId, loadData])
+  }, [discoveryDone, selectedMeasure, processId])
 
+  // Re-execute queries when time range changes
   const prevTimeRangeRef = useRef<{ begin: string; end: string } | null>(null)
   useEffect(() => {
     if (!hasLoaded) return
@@ -467,10 +488,12 @@ function PerformanceAnalysisContent() {
     ) {
       prevTimeRangeRef.current = { begin: apiTimeRange.begin, end: apiTimeRange.end }
       hasLoadedDiscoveryRef.current = false
-      loadDiscovery()
-      loadThreadCoverage()
+      // Use refs to avoid re-running this effect when callback identities change
+      loadDiscoveryRef.current?.()
+      loadThreadCoverageRef.current?.()
+      loadDataRef.current?.(currentSqlRef.current)
     }
-  }, [apiTimeRange.begin, apiTimeRange.end, hasLoaded, loadDiscovery, loadThreadCoverage])
+  }, [apiTimeRange.begin, apiTimeRange.end, hasLoaded])
 
   const handleRunQuery = useCallback(
     (sql: string) => {
@@ -485,9 +508,9 @@ function PerformanceAnalysisContent() {
 
   const handleRefresh = useCallback(() => {
     hasLoadedDiscoveryRef.current = false
-    loadDiscovery()
-    loadThreadCoverage()
-  }, [loadDiscovery, loadThreadCoverage])
+    loadDiscoveryRef.current?.()
+    loadThreadCoverageRef.current?.()
+  }, [])
 
   // Time range changes create history entries (navigational)
   const handleTimeRangeChange = useCallback(

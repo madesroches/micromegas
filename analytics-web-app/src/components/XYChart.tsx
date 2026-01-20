@@ -428,7 +428,16 @@ export function XYChart({
         chartRef.current = null
       }
     }
-  }, [data, dimensions, title, unit, createTooltipPlugin, stats, adaptiveTimeUnit, scaleMode, xAxisMode, xLabels, yColumnName])
+    // Note: dimensions intentionally excluded - handled by separate resize effect
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, title, unit, createTooltipPlugin, stats, adaptiveTimeUnit, scaleMode, xAxisMode, xLabels, yColumnName])
+
+  // Resize chart without recreating when dimensions change
+  useEffect(() => {
+    if (chartRef.current && dimensions.width > 0 && dimensions.height > 0) {
+      chartRef.current.setSize({ width: dimensions.width, height: dimensions.height })
+    }
+  }, [dimensions])
 
   // Build display title with column names if available
   const displayTitle = title || yColumnName || ''
