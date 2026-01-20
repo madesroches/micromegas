@@ -218,6 +218,48 @@ SELECT retire_partition_by_file(file_path) as result
 
 **Limitation:** Cannot retire empty partitions (file_path=NULL).
 
+#### `expand_histogram(histogram)`
+
+Expands a histogram struct into rows of (bin_center, count) for visualization as a bar chart.
+
+**Syntax:**
+```sql
+SELECT bin_center, count
+FROM expand_histogram(histogram_subquery)
+```
+
+**Parameters:**
+
+- `histogram` (Histogram struct): A histogram value from `make_histogram()` or a subquery returning one
+
+**Returns:**
+
+| Column | Type | Description |
+|--------|------|-------------|
+| bin_center | Float64 | Center value of each bin |
+| count | UInt64 | Number of values in the bin |
+
+**Examples:**
+```sql
+-- Expand a CPU usage histogram into chartable rows
+SELECT bin_center, count
+FROM expand_histogram(
+  (SELECT make_histogram(0.0, 100.0, 100, value)
+   FROM measures
+   WHERE name = 'cpu_usage')
+)
+
+-- Histogram for a specific process
+SELECT bin_center, count
+FROM expand_histogram(
+  (SELECT make_histogram(0.0, 50.0, 50, value)
+   FROM view_instance('measures', 'my_process_123')
+   WHERE name = 'frame_time')
+)
+```
+
+**Note:** This function is designed for visualization. Use with a bar chart to display distribution data.
+
 #### `perfetto_trace_chunks(process_id, span_types, start_time, end_time)`
 
 Generates Perfetto trace chunks from process telemetry data for visualization and performance analysis.

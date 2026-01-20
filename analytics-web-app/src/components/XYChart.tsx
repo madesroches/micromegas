@@ -17,6 +17,8 @@ export interface ChartAxisBounds {
 
 export type ScaleMode = 'p99' | 'max'
 
+export type ChartType = 'line' | 'bar'
+
 export type XAxisMode = 'time' | 'numeric' | 'categorical'
 
 interface XYChartProps {
@@ -29,6 +31,8 @@ interface XYChartProps {
   unit?: string
   scaleMode?: ScaleMode
   onScaleModeChange?: (mode: ScaleMode) => void
+  chartType?: ChartType
+  onChartTypeChange?: (type: ChartType) => void
   onTimeRangeSelect?: (from: Date, to: Date) => void
   onWidthChange?: (width: number) => void
   onAxisBoundsChange?: (bounds: ChartAxisBounds) => void
@@ -105,6 +109,8 @@ export function XYChart({
   unit = '',
   scaleMode: scaleModeFromProps,
   onScaleModeChange,
+  chartType: chartTypeFromProps,
+  onChartTypeChange,
   onTimeRangeSelect,
   onWidthChange,
   onAxisBoundsChange,
@@ -113,6 +119,7 @@ export function XYChart({
   const chartRef = useRef<uPlot | null>(null)
   const [dimensions, setDimensions] = useState({ width: 800, height: 300 })
   const [internalScaleMode, setInternalScaleMode] = useState<ScaleMode>('p99')
+  const [internalChartType, setInternalChartType] = useState<ChartType>('line')
 
   // Use refs for callbacks to avoid chart recreation when callbacks change
   const onTimeRangeSelectRef = useRef(onTimeRangeSelect)
@@ -123,6 +130,8 @@ export function XYChart({
   // Use prop if provided, otherwise use internal state
   const scaleMode = scaleModeFromProps ?? internalScaleMode
   const setScaleMode = onScaleModeChange ?? setInternalScaleMode
+  const chartType = chartTypeFromProps ?? internalChartType
+  const setChartType = onChartTypeChange ?? setInternalChartType
 
   // Calculate stats including percentile for scaling
   const stats = useMemo(() => {
@@ -400,9 +409,10 @@ export function XYChart({
         {
           label: title || yColumnName || 'Value',
           stroke: '#bf360c',
-          width: 2,
-          fill: 'rgba(191, 54, 12, 0.1)',
-          points: { show: false },
+          width: chartType === 'bar' ? 1 : 2,
+          fill: chartType === 'bar' ? 'rgba(191, 54, 12, 0.6)' : 'rgba(191, 54, 12, 0.1)',
+          paths: chartType === 'bar' ? uPlot.paths.bars!({ size: [0.8], gap: 1 }) : undefined,
+          points: { show: chartType !== 'bar' },
         },
       ],
       cursor: {
@@ -471,7 +481,7 @@ export function XYChart({
     }
     // Note: dimensions intentionally excluded - handled by separate resize effect
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, title, unit, createTooltipPlugin, stats, adaptiveTimeUnit, scaleMode, xAxisMode, xLabels, yColumnName])
+  }, [data, title, unit, createTooltipPlugin, stats, adaptiveTimeUnit, scaleMode, chartType, xAxisMode, xLabels, yColumnName])
 
   // Resize chart without recreating when dimensions change
   useEffect(() => {
@@ -519,6 +529,33 @@ export function XYChart({
           </div>
           <div>
             count: <span className="text-theme-text-secondary">{data.length.toLocaleString()}</span>
+          </div>
+          <div className="relative group">
+            <div className="flex border border-theme-border rounded overflow-hidden">
+              <button
+                onClick={() => setChartType('line')}
+                className={`px-2 py-0.5 text-[11px] transition-colors ${
+                  chartType === 'line'
+                    ? 'bg-accent text-white'
+                    : 'text-theme-text-muted hover:text-theme-text-secondary hover:bg-white/5'
+                }`}
+              >
+                Line
+              </button>
+              <button
+                onClick={() => setChartType('bar')}
+                className={`px-2 py-0.5 text-[11px] border-l border-theme-border transition-colors ${
+                  chartType === 'bar'
+                    ? 'bg-accent text-white'
+                    : 'text-theme-text-muted hover:text-theme-text-secondary hover:bg-white/5'
+                }`}
+              >
+                Bar
+              </button>
+            </div>
+            <div className="absolute bottom-full right-0 mb-2 px-2 py-1.5 bg-app-panel border border-theme-border rounded text-[11px] text-theme-text-secondary opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10 shadow-lg whitespace-nowrap">
+              <div>Chart display style</div>
+            </div>
           </div>
           <div className="relative group">
             <div className="flex border border-theme-border rounded overflow-hidden">
