@@ -15,3 +15,6 @@ pub mod accessors;
 
 /// Compute variance from running sum and sum of squares in the histogram
 pub mod variance;
+
+/// Expand a histogram struct into rows of (bin_center, count)
+pub mod expand;

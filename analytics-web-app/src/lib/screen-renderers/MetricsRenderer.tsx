@@ -5,7 +5,7 @@ import { useTimeRangeSync } from './useTimeRangeSync'
 import { useSqlHandlers } from './useSqlHandlers'
 import { LoadingState, EmptyState, SaveFooter, RendererLayout } from './shared'
 import { QueryEditor } from '@/components/QueryEditor'
-import { XYChart, type ScaleMode } from '@/components/XYChart'
+import { XYChart, type ScaleMode, type ChartType } from '@/components/XYChart'
 import { extractChartData } from '@/lib/arrow-utils'
 
 // Variables available for metrics queries
@@ -16,6 +16,7 @@ const VARIABLES = [
 
 interface MetricsOptions {
   scale_mode?: ScaleMode
+  chart_type?: ChartType
 }
 
 interface MetricsConfig {
@@ -50,6 +51,11 @@ export function MetricsRenderer({
     metricsConfig.metrics_options?.scale_mode ?? 'p99'
   )
 
+  // Chart type state - sync from config on load
+  const [chartType, setChartType] = useState<ChartType>(
+    metricsConfig.metrics_options?.chart_type ?? 'line'
+  )
+
   // Query execution
   const query = useScreenQuery({
     initialSql: metricsConfig.sql,
@@ -63,6 +69,13 @@ export function MetricsRenderer({
       setScaleMode(metricsConfig.metrics_options.scale_mode)
     }
   }, [metricsConfig.metrics_options?.scale_mode])
+
+  // Sync chart type from config when loaded
+  useEffect(() => {
+    if (metricsConfig.metrics_options?.chart_type) {
+      setChartType(metricsConfig.metrics_options.chart_type)
+    }
+  }, [metricsConfig.metrics_options?.chart_type])
 
   // Sync time range changes to config
   useTimeRangeSync({
@@ -93,6 +106,23 @@ export function MetricsRenderer({
       onConfigChange(newConfig)
 
       if (savedConfig && (savedConfig as MetricsConfig).metrics_options?.scale_mode !== mode) {
+        onUnsavedChange()
+      }
+    },
+    [metricsConfig, savedConfig, onConfigChange, onUnsavedChange]
+  )
+
+  // Handle chart type change - persists to config
+  const handleChartTypeChange = useCallback(
+    (type: ChartType) => {
+      setChartType(type)
+      const newConfig = {
+        ...metricsConfig,
+        metrics_options: { ...metricsConfig.metrics_options, chart_type: type },
+      }
+      onConfigChange(newConfig)
+
+      if (savedConfig && (savedConfig as MetricsConfig).metrics_options?.chart_type !== type) {
         onUnsavedChange()
       }
     },
@@ -168,6 +198,8 @@ export function MetricsRenderer({
           yColumnName={yColumnName}
           scaleMode={scaleMode}
           onScaleModeChange={handleScaleModeChange}
+          chartType={chartType}
+          onChartTypeChange={handleChartTypeChange}
           onTimeRangeSelect={xAxisMode === 'time' ? handleTimeRangeSelect : undefined}
         />
       </div>
