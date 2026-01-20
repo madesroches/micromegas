@@ -110,14 +110,17 @@ Config stores raw time range strings, which can be **relative** or **absolute**:
 | User drag-zooms on chart | Store absolute ISOs | User selected a specific time window |
 | User enters custom absolute range | Store absolute ISOs | Explicit user choice |
 
-**Implementation in setTimeRange:**
+**Implementation in handler:**
 
 ```typescript
-const setTimeRange = useCallback((from: string, to: string) => {
+// In the screen (controller)
+const handleTimeRangeChange = (from: string, to: string) => {
   // from/to are either relative ("now-1h") or absolute ISO strings
   // Just store them as-is; parsing happens when passing to API
-  updateConfig({ timeRangeFrom: from, timeRangeTo: to } as Partial<T>);
-}, [updateConfig]);
+  const newConfig = { ...config, timeRangeFrom: from, timeRangeTo: to };
+  updateConfig(newConfig);
+  navigate(buildUrl(newConfig));  // pushState - time range is navigational
+};
 ```
 
 The existing `parseTimeRange()` and `getTimeRangeForApi()` utilities handle conversion to absolute dates when needed for API calls.
@@ -165,84 +168,54 @@ interface ProcessesConfig extends BaseScreenConfig {
 
 Note: `scaleMode` is only in `PerformanceAnalysisConfig` since ProcessMetricsPage doesn't have that feature.
 
-### Phase 2: URL Initialization Helper
+### Phase 2: Screen Config Hook
 
-Create a helper to initialize config from URL on first load:
-
-```typescript
-// src/hooks/useInitialConfig.ts
-
-function useInitialConfig<T extends BaseScreenConfig>(defaults: Partial<T>): T {
-  const [searchParams] = useSearchParams();
-
-  // useState initializer runs exactly once - captures URL params on mount
-  const [initialConfig] = useState(() => {
-    const fromUrl = parseUrlParams(searchParams);
-    return { ...defaults, ...fromUrl } as T;
-  });
-
-  return initialConfig;
-}
-```
-
-Using `useState` initializer instead of `useMemo` with empty deps:
-- Guaranteed to run exactly once (clearer intent)
-- No ESLint exhaustive-deps warning
-
-**Important:** This hook assumes the component remounts when identity params change. See Decision 4 for the keying pattern that ensures this.
-
-### Phase 3: Screen Config Hook
-
-Extract the config management pattern from `ScreenPage.tsx`:
+Create a hook that manages config state with URL initialization and popstate handling:
 
 ```typescript
 // src/hooks/useScreenConfig.ts
 
-interface UseScreenConfigOptions<T> {
-  initialConfig: T;
-  syncToUrl?: boolean;  // Default true
-}
-
 interface UseScreenConfigResult<T> {
   config: T;
   updateConfig: (partial: Partial<T>) => void;
-  setTimeRange: (from: string, to: string) => void;
 }
 
 export function useScreenConfig<T extends BaseScreenConfig>(
-  options: UseScreenConfigOptions<T>
+  defaults: T
 ): UseScreenConfigResult<T> {
-  const { initialConfig, syncToUrl = true } = options;
+  // Initialize from URL on mount
+  const [config, setConfig] = useState<T>(() => {
+    const fromUrl = parseUrlParams(new URLSearchParams(location.search));
+    return { ...defaults, ...fromUrl };
+  });
 
-  const [config, setConfig] = useState(initialConfig);
-  const pendingSyncRef = useRef<'push' | 'replace' | null>(null);
+  // Handle browser back/forward - restore config from URL
+  useEffect(() => {
+    const handlePopstate = () => {
+      const fromUrl = parseUrlParams(new URLSearchParams(location.search));
+      setConfig({ ...defaults, ...fromUrl });
+    };
+    window.addEventListener('popstate', handlePopstate);
+    return () => window.removeEventListener('popstate', handlePopstate);
+  }, [defaults]);
 
-  // updateConfig: for editing (replaceState)
   const updateConfig = useCallback((partial: Partial<T>) => {
-    pendingSyncRef.current = 'replace';
     setConfig(prev => ({ ...prev, ...partial }));
   }, []);
 
-  // setTimeRange: for navigation (pushState)
-  const setTimeRange = useCallback((from: string, to: string) => {
-    pendingSyncRef.current = 'push';
-    setConfig(prev => ({ ...prev, timeRangeFrom: from, timeRangeTo: to } as T));
-  }, []);
-
-  useEffect(() => {
-    if (syncToUrl && pendingSyncRef.current) {
-      syncConfigToUrl(config, pendingSyncRef.current);
-      pendingSyncRef.current = null;
-    }
-  }, [config, syncToUrl]);
-
-  return { config, updateConfig, setTimeRange };
+  return { config, updateConfig };
 }
 ```
 
+**Key design decisions:**
+
+1. **Defaults are a module constant** - passed to the hook, used for both initialization and popstate restore
+2. **No automatic URL sync** - the screen (controller) decides when and how to update the URL
+3. **Popstate restores from defaults + URL** - behaves like a fresh page load, not a merge with current state
+
 **No debouncing needed:** Interactions that produce rapid updates (drag-to-zoom, slider dragging) should use commit-on-release, updating config only on mouse release.
 
-### Phase 4: Migrate Built-in Pages
+### Phase 3: Migrate Built-in Pages
 
 Update each built-in page to use the config pattern:
 
@@ -258,23 +231,56 @@ function PerformanceAnalysisPage() {
 
 #### After:
 ```typescript
+// Default config for this page
+const DEFAULT_CONFIG: PerformanceAnalysisConfig = {
+  processId: '',
+  timeRangeFrom: 'now-1h',
+  timeRangeTo: 'now',
+  scaleMode: 'p99',
+};
+
 // Content component - remounts when processId changes (via key)
 function PerformanceAnalysisContent() {
-  // Initialize config from URL (once per mount)
-  const initialConfig = useInitialConfig<PerformanceAnalysisConfig>();
+  const navigate = useNavigate();
+  const { config, updateConfig } = useScreenConfig(DEFAULT_CONFIG);
 
-  const { config, updateConfig, setTimeRange } = useScreenConfig({
-    initialConfig,
-    syncToUrl: true,
-  });
+  // Helper to build URL params from config
+  const buildUrl = (cfg: PerformanceAnalysisConfig) => {
+    const params = new URLSearchParams();
+    if (cfg.processId) params.set('process_id', cfg.processId);
+    if (cfg.timeRangeFrom) params.set('from', cfg.timeRangeFrom);
+    if (cfg.timeRangeTo) params.set('to', cfg.timeRangeTo);
+    if (cfg.scaleMode) params.set('scale', cfg.scaleMode);
+    return `?${params.toString()}`;
+  };
+
+  // Time range changes create history entries (user can go back)
+  const handleTimeRangeChange = (from: string, to: string) => {
+    const newConfig = { ...config, timeRangeFrom: from, timeRangeTo: to };
+    updateConfig(newConfig);
+    navigate(buildUrl(newConfig));  // pushState
+  };
+
+  // Other config changes replace current entry (no back navigation)
+  const handleScaleModeChange = (mode: 'p99' | 'max') => {
+    const newConfig = { ...config, scaleMode: mode };
+    updateConfig(newConfig);
+    navigate(buildUrl(newConfig), { replace: true });  // replaceState
+  };
 
   // Pass config and callbacks to children
   return (
     <MetricsChart
       timeRange={{ from: config.timeRangeFrom, to: config.timeRangeTo }}
-      onTimeRangeChange={setTimeRange}
+      onTimeRangeChange={handleTimeRangeChange}
       measure={config.selectedMeasure}
-      onMeasureChange={(m) => updateConfig({ selectedMeasure: m })}
+      onMeasureChange={(m) => {
+        const newConfig = { ...config, selectedMeasure: m };
+        updateConfig(newConfig);
+        navigate(buildUrl(newConfig), { replace: true });
+      }}
+      scaleMode={config.scaleMode}
+      onScaleModeChange={handleScaleModeChange}
     />
   );
 }
@@ -294,17 +300,20 @@ export default function PerformanceAnalysisPage() {
 }
 ```
 
+The screen (controller) explicitly calls `navigate()` with push or replace based on the semantic meaning of the change. This is more explicit than having the hook decide automatically.
+
 Pages to migrate:
-1. **PerformanceAnalysisPage** - time range, selected measure, properties
+1. **PerformanceAnalysisPage** - time range, selected measure, properties, scale mode
 2. **ProcessMetricsPage** - time range, process selection
 3. **ProcessLogPage** - time range, filters
 4. **ProcessesPage** - time range, filters
 
 **Note:** The current code already has wrapper/content separation (e.g., `ProcessLogPage` wraps `ProcessLogContent`). Migration just requires:
 1. Adding `key={processId}` to the content component in the wrapper
-2. Replacing URL-reading code with `useInitialConfig` + `useScreenConfig` in the content component
+2. Replacing URL-reading code with `useScreenConfig` in the content component
+3. Adding explicit `navigate()` calls for URL sync
 
-### Phase 5: Update Components
+### Phase 4: Update Components
 
 Components receive config values and callbacks as props (like screen renderers already do):
 
@@ -338,21 +347,23 @@ setSelect: [
 
 uPlot handles drag selection internally and only fires the `setSelect` hook on mouse release. No changes needed to XYChart itself.
 
-**What changes:** The parent components (PerformanceAnalysisPage, etc.) pass a callback that updates config instead of URL:
+**What changes:** The parent components (PerformanceAnalysisPage, etc.) pass a callback that updates config and navigates:
 
 ```typescript
-// Before: callback updates URL
+// Before: callback updates URL directly
 onTimeRangeSelect={(from, to) => {
   navigate(`?from=${from.toISOString()}&to=${to.toISOString()}`)
 }}
 
-// After: callback updates config (drag-zoom always produces absolute time range)
+// After: callback updates config AND navigates (controller decides both)
 onTimeRangeSelect={(from, to) => {
-  setTimeRange(from.toISOString(), to.toISOString())
+  const newConfig = { ...config, timeRangeFrom: from.toISOString(), timeRangeTo: to.toISOString() };
+  updateConfig(newConfig);
+  navigate(buildUrl(newConfig));  // pushState for time range
 }}
 ```
 
-### Phase 6: Deprecate Old Hooks
+### Phase 5: Deprecate Old Hooks
 
 Remove URL-driven hooks:
 - `useTimeRange()` - replace with config pattern
@@ -362,9 +373,9 @@ Remove URL-driven hooks:
 
 | File | Change |
 |------|--------|
-| `src/hooks/useScreenConfig.ts` | NEW - Reusable config management hook |
+| `src/hooks/useScreenConfig.ts` | NEW - Config state + popstate handling |
 | `src/lib/screen-config.ts` | NEW - Shared config type definitions |
-| `src/hooks/useInitialConfig.ts` | NEW - URL → initial config helper |
+| `src/lib/url-params.ts` | NEW - URL parsing and building utilities |
 | `src/hooks/useTimeRange.ts` | DEPRECATE - Replace with useScreenConfig |
 | `src/routes/PerformanceAnalysisPage.tsx` | Migrate to config pattern |
 | `src/routes/ProcessMetricsPage.tsx` | Migrate to config pattern |
@@ -379,54 +390,71 @@ Remove URL-driven hooks:
 
 ## Migration Strategy
 
-1. Create `useScreenConfig` hook alongside existing code
-2. Migrate one built-in page at a time, starting with simplest (ProcessesPage?)
-3. Keep `useTimeRange()` working during migration (can wrap useScreenConfig internally)
+1. Create `useScreenConfig` hook and URL utilities alongside existing code
+2. Migrate one built-in page at a time, starting with simplest (ProcessesPage)
+3. Keep `useTimeRange()` working during migration
 4. Once all pages migrated, remove old hooks
 5. Update ScreenPage to use shared utilities if beneficial
 
+**Recommended migration order:**
+1. **ProcessesPage** - simplest, no identity param
+2. **ProcessLogPage** - has identity param, exercises the key pattern
+3. **ProcessMetricsPage** - similar to ProcessLogPage
+4. **PerformanceAnalysisPage** - most complex (scaleMode, properties array)
+
 ## Decisions
 
-1. **URL sync: pushState vs replaceState**: Navigational changes create history entries, edits don't.
+1. **URL sync: Controller calls navigate() explicitly**
+
+   The screen (controller) decides when and how to update the URL. No automatic sync in the hook.
 
    | Change Type | Method | Examples |
    |-------------|--------|----------|
-   | Navigational | `pushState` | Time range (zoom, presets) |
-   | Editing | `replaceState` | Scale mode, log level, sort order, search filter |
+   | Navigational | `navigate(url)` | Time range (zoom, presets) |
+   | Editing | `navigate(url, { replace: true })` | Scale mode, log level, sort order, search filter |
 
-   Implementation: the distinction is implicit in which method the caller uses:
+   Implementation in each handler:
 
    ```typescript
-   // setTimeRange() → always pushState (navigational)
-   // updateConfig() → always replaceState (editing)
+   // Time range: creates history entry (user can go back)
+   const handleTimeRangeChange = (from: string, to: string) => {
+     const newConfig = { ...config, timeRangeFrom: from, timeRangeTo: to };
+     updateConfig(newConfig);
+     navigate(buildUrl(newConfig));  // pushState
+   };
 
-   function syncConfigToUrl<T>(config: T, method: 'push' | 'replace') {
-     const historyMethod = method === 'push' ? 'pushState' : 'replaceState';
-     history[historyMethod](null, '', buildUrl(config));
-   }
+   // Scale mode: replaces current entry (no back navigation)
+   const handleScaleModeChange = (mode: 'p99' | 'max') => {
+     const newConfig = { ...config, scaleMode: mode };
+     updateConfig(newConfig);
+     navigate(buildUrl(newConfig), { replace: true });  // replaceState
+   };
    ```
 
-   The caller knows the intent - no need for field-based inference or page type lookups.
+   Using React Router's `navigate()` keeps React Router in sync with the URL, avoiding stale `useSearchParams()` values elsewhere in the app.
 
-2. **Browser back/forward**: Sync config from URL on popstate (Option A)
+2. **Browser back/forward**: Popstate restores config from defaults + URL
 
-   When user clicks back/forward, they're expressing intent to restore a previous known state. The URL represents checkpoints the user expects to return to.
+   When user clicks back/forward, behave like a fresh page load of that URL:
 
    ```typescript
-   // In useScreenConfig or at page level
    useEffect(() => {
      const handlePopstate = () => {
-       const restored = parseUrlParams(new URLSearchParams(location.search));
-       setConfig(prev => ({ ...prev, ...restored }));
+       const fromUrl = parseUrlParams(new URLSearchParams(location.search));
+       setConfig({ ...defaults, ...fromUrl });  // NOT merged with prev
      };
      window.addEventListener('popstate', handlePopstate);
      return () => window.removeEventListener('popstate', handlePopstate);
-   }, []);
+   }, [defaults]);
    ```
 
-   This doesn't make URL the source of truth - config still owns state during normal operation. Popstate is treated as a user action that updates config, similar to clicking a preset in the time picker.
+   Key: `{ ...defaults, ...fromUrl }` not `{ ...prev, ...fromUrl }`. This ensures back button restores the exact state, including resetting any fields not in the URL to their defaults.
 
-3. **Cross-screen time range linking**: Context-dependent, not a global toggle.
+3. **Manual URL edits**: Handled naturally
+
+   When user edits URL directly and hits enter, it's a full page reload. The component mounts fresh and `useState` initializer reads the URL. No special handling needed.
+
+4. **Cross-screen time range linking**: Context-dependent, not a global toggle.
 
    | Navigation | Time Range Behavior | Rationale |
    |------------|---------------------|-----------|
@@ -438,9 +466,9 @@ Remove URL-driven hooks:
 
    For user-defined screens: URL params act as if the user changed the time range manually after loading. This creates a difference that can be saved back to the screen config.
 
-4. **Component reuse with different URL params**: Key content components on identity params.
+5. **Component reuse with different URL params**: Key content components on identity params.
 
-   **Problem:** Routes use query params (e.g., `/process_log?process_id=X`). When navigating from `?process_id=A` to `?process_id=B`, React Router reuses the component since the path is identical. The `useState` initializer in `useInitialConfig` only runs once per mount, so config retains stale values.
+   **Problem:** Routes use query params (e.g., `/process_log?process_id=X`). When navigating from `?process_id=A` to `?process_id=B`, React Router reuses the component since the path is identical. The `useState` initializer in `useScreenConfig` only runs once per mount, so config retains stale values.
 
    **Solution:** Key the content component on identity params to force remount:
 
@@ -462,7 +490,7 @@ Remove URL-driven hooks:
 
    This ensures:
    - Content component remounts when processId changes
-   - `useInitialConfig` runs fresh with new URL params
+   - `useScreenConfig` initializes fresh with new URL params
    - All refs and state reset naturally
    - Suspense boundary can show loading state during transition
 
