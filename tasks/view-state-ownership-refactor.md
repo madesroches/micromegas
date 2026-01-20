@@ -53,8 +53,38 @@ URL is a side-effect projection (for sharing/bookmarking)
 
 ## Design Principles
 
+### MVC Architecture
+
+Each screen follows an MVC-like pattern:
+
+| Role | Component | Responsibility |
+|------|-----------|----------------|
+| **Model** | Config object | Source of truth for view state |
+| **View** | Child components | Render based on config, dispatch user actions via callbacks |
+| **Controller** | Screen/Page | Handles user actions, decides whether to update model or navigate |
+
+```
+User Action (drag-zoom, dropdown change, etc.)
+    ↓
+View dispatches callback (onTimeRangeChange, onMeasureChange)
+    ↓
+Controller (Screen) receives action
+    ↓
+Controller decides: update config (edit) or navigate (new history entry)
+    ↓
+Model (Config) updates
+    ↓
+URL synced as side-effect
+    ↓
+View re-renders with new config
+```
+
+The screen is the controller - it owns the decision logic for how each user action affects state. Components don't know or care whether their callbacks result in URL pushState or replaceState.
+
+### Core Principles
+
 1. **Config is source of truth**: Every screen (built-in or user-defined) has a config object that owns view state
-2. **One update path**: Components call `onConfigChange()` or typed setters, never directly update URL
+2. **One update path**: Components call callbacks, never directly update URL
 3. **URL is a projection**: URL reflects state for sharing but doesn't drive it (after initial load)
 4. **Stable callbacks**: Config setters are stable, no re-render cascades
 5. **Pattern convergence**: Built-in pages use the same pattern as user-defined screens
@@ -159,6 +189,8 @@ Using `useState` initializer instead of `useMemo` with empty deps:
 - Guaranteed to run exactly once (clearer intent)
 - No ESLint exhaustive-deps warning
 
+**Important:** This hook assumes the component remounts when identity params change. See Decision 4 for the keying pattern that ensures this.
+
 ### Phase 3: Screen Config Hook
 
 Extract the config management pattern from `ScreenPage.tsx`:
@@ -183,18 +215,24 @@ export function useScreenConfig<T extends BaseScreenConfig>(
   const { initialConfig, syncToUrl = true } = options;
 
   const [config, setConfig] = useState(initialConfig);
+  const pendingSyncRef = useRef<'push' | 'replace' | null>(null);
 
+  // updateConfig: for editing (replaceState)
   const updateConfig = useCallback((partial: Partial<T>) => {
+    pendingSyncRef.current = 'replace';
     setConfig(prev => ({ ...prev, ...partial }));
   }, []);
 
+  // setTimeRange: for navigation (pushState)
   const setTimeRange = useCallback((from: string, to: string) => {
-    updateConfig({ timeRangeFrom: from, timeRangeTo: to } as Partial<T>);
-  }, [updateConfig]);
+    pendingSyncRef.current = 'push';
+    setConfig(prev => ({ ...prev, timeRangeFrom: from, timeRangeTo: to } as T));
+  }, []);
 
   useEffect(() => {
-    if (syncToUrl) {
-      syncConfigToUrl(config);
+    if (syncToUrl && pendingSyncRef.current) {
+      syncConfigToUrl(config, pendingSyncRef.current);
+      pendingSyncRef.current = null;
     }
   }, [config, syncToUrl]);
 
@@ -220,8 +258,9 @@ function PerformanceAnalysisPage() {
 
 #### After:
 ```typescript
-function PerformanceAnalysisPage() {
-  // Initialize config from URL (once) or defaults
+// Content component - remounts when processId changes (via key)
+function PerformanceAnalysisContent() {
+  // Initialize config from URL (once per mount)
   const initialConfig = useInitialConfig<PerformanceAnalysisConfig>();
 
   const { config, updateConfig, setTimeRange } = useScreenConfig({
@@ -239,6 +278,20 @@ function PerformanceAnalysisPage() {
     />
   );
 }
+
+// Wrapper component - handles keying on identity param
+export default function PerformanceAnalysisPage() {
+  const [searchParams] = useSearchParams()
+  const processId = searchParams.get('process_id')
+
+  return (
+    <AuthGuard>
+      <Suspense fallback={<PageLoader />}>
+        <PerformanceAnalysisContent key={processId} />
+      </Suspense>
+    </AuthGuard>
+  )
+}
 ```
 
 Pages to migrate:
@@ -246,6 +299,10 @@ Pages to migrate:
 2. **ProcessMetricsPage** - time range, process selection
 3. **ProcessLogPage** - time range, filters
 4. **ProcessesPage** - time range, filters
+
+**Note:** The current code already has wrapper/content separation (e.g., `ProcessLogPage` wraps `ProcessLogContent`). Migration just requires:
+1. Adding `key={processId}` to the content component in the wrapper
+2. Replacing URL-reading code with `useInitialConfig` + `useScreenConfig` in the content component
 
 ### Phase 5: Update Components
 
@@ -330,7 +387,28 @@ Remove URL-driven hooks:
 
 ## Decisions
 
-1. **Browser back/forward**: Sync config from URL on popstate (Option A)
+1. **URL sync: pushState vs replaceState**: Navigational changes create history entries, edits don't.
+
+   | Change Type | Method | Examples |
+   |-------------|--------|----------|
+   | Navigational | `pushState` | Time range (zoom, presets) |
+   | Editing | `replaceState` | Scale mode, log level, sort order, search filter |
+
+   Implementation: the distinction is implicit in which method the caller uses:
+
+   ```typescript
+   // setTimeRange() → always pushState (navigational)
+   // updateConfig() → always replaceState (editing)
+
+   function syncConfigToUrl<T>(config: T, method: 'push' | 'replace') {
+     const historyMethod = method === 'push' ? 'pushState' : 'replaceState';
+     history[historyMethod](null, '', buildUrl(config));
+   }
+   ```
+
+   The caller knows the intent - no need for field-based inference or page type lookups.
+
+2. **Browser back/forward**: Sync config from URL on popstate (Option A)
 
    When user clicks back/forward, they're expressing intent to restore a previous known state. The URL represents checkpoints the user expects to return to.
 
@@ -348,7 +426,7 @@ Remove URL-driven hooks:
 
    This doesn't make URL the source of truth - config still owns state during normal operation. Popstate is treated as a user action that updates config, similar to clicking a preset in the time picker.
 
-2. **Cross-screen time range linking**: Context-dependent, not a global toggle.
+3. **Cross-screen time range linking**: Context-dependent, not a global toggle.
 
    | Navigation | Time Range Behavior | Rationale |
    |------------|---------------------|-----------|
@@ -359,6 +437,42 @@ Remove URL-driven hooks:
    | Any → User-defined screen (with URL time params) | URL overrides saved config | Treat as manual change (creates unsaved diff) |
 
    For user-defined screens: URL params act as if the user changed the time range manually after loading. This creates a difference that can be saved back to the screen config.
+
+4. **Component reuse with different URL params**: Key content components on identity params.
+
+   **Problem:** Routes use query params (e.g., `/process_log?process_id=X`). When navigating from `?process_id=A` to `?process_id=B`, React Router reuses the component since the path is identical. The `useState` initializer in `useInitialConfig` only runs once per mount, so config retains stale values.
+
+   **Solution:** Key the content component on identity params to force remount:
+
+   ```typescript
+   // In the page's default export (the wrapper)
+   export default function ProcessLogPage() {
+     const [searchParams] = useSearchParams()
+     const processId = searchParams.get('process_id')
+
+     return (
+       <AuthGuard>
+         <Suspense fallback={<PageLoader />}>
+           <ProcessLogContent key={processId} />
+         </Suspense>
+       </AuthGuard>
+     )
+   }
+   ```
+
+   This ensures:
+   - Content component remounts when processId changes
+   - `useInitialConfig` runs fresh with new URL params
+   - All refs and state reset naturally
+   - Suspense boundary can show loading state during transition
+
+   **Identity params by page:**
+   | Page | Identity Param |
+   |------|----------------|
+   | ProcessLogPage | `process_id` |
+   | ProcessMetricsPage | `process_id` |
+   | PerformanceAnalysisPage | `process_id` |
+   | ProcessesPage | (none - no identity param) |
 
 ## Open Questions
 
