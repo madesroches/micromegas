@@ -1,5 +1,4 @@
-import { Suspense, useState, useEffect, useCallback, useRef } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { Suspense, useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { AppLink } from '@/components/AppLink'
 import { ArrowLeft, FileText, AlertCircle, BarChart2, Gauge } from 'lucide-react'
 import { PageLayout } from '@/components/layout'
@@ -7,9 +6,10 @@ import { AuthGuard } from '@/components/AuthGuard'
 import { CopyableProcessId } from '@/components/CopyableProcessId'
 import { useStreamQuery } from '@/hooks/useStreamQuery'
 import { timestampToDate } from '@/lib/arrow-utils'
-import { useTimeRange } from '@/hooks/useTimeRange'
+import { useScreenConfig } from '@/hooks/useScreenConfig'
 import { usePageTitle } from '@/hooks/usePageTitle'
-import { formatDuration, formatDateTimeLocal } from '@/lib/time-range'
+import { formatDuration, formatDateTimeLocal, getTimeRangeForApi } from '@/lib/time-range'
+import type { ProcessPageConfig } from '@/lib/screen-config'
 
 const PROCESS_SQL = `SELECT process_id, exe, start_time, last_update_time, computer, username, cpu_brand, distro
 FROM processes
@@ -36,6 +36,27 @@ LIMIT 1`
 
 const TWO_MINUTES_MS = 2 * 60 * 1000
 const ONE_HOUR_MS = 60 * 60 * 1000
+
+// Default config for ProcessPage
+const DEFAULT_CONFIG: ProcessPageConfig = {
+  processId: undefined,
+  timeRangeFrom: 'now-1h',
+  timeRangeTo: 'now',
+}
+
+// URL builder for ProcessPage
+const buildUrl = (cfg: ProcessPageConfig): string => {
+  const params = new URLSearchParams()
+  if (cfg.processId) params.set('process_id', cfg.processId)
+  if (cfg.timeRangeFrom && cfg.timeRangeFrom !== DEFAULT_CONFIG.timeRangeFrom) {
+    params.set('from', cfg.timeRangeFrom)
+  }
+  if (cfg.timeRangeTo && cfg.timeRangeTo !== DEFAULT_CONFIG.timeRangeTo) {
+    params.set('to', cfg.timeRangeTo)
+  }
+  const qs = params.toString()
+  return qs ? `?${qs}` : ''
+}
 
 function computeProcessTimeRange(
   screenLoadTime: Date,
@@ -92,10 +113,27 @@ interface StatisticsRow {
 }
 
 function ProcessPageContent() {
-  const [searchParams] = useSearchParams()
-  const processId = searchParams.get('id')
-  const { apiTimeRange } = useTimeRange()
+  // Use the config-driven pattern
+  const { config, updateConfig } = useScreenConfig(DEFAULT_CONFIG, buildUrl)
+  const processId = config.processId ?? null
   const [screenLoadTime] = useState(() => new Date())
+
+  // Compute API time range from config
+  const apiTimeRange = useMemo(() => {
+    try {
+      return getTimeRangeForApi(config.timeRangeFrom ?? 'now-1h', config.timeRangeTo ?? 'now')
+    } catch {
+      return getTimeRangeForApi('now-1h', 'now')
+    }
+  }, [config.timeRangeFrom, config.timeRangeTo])
+
+  // Time range changes create history entries (navigational)
+  const handleTimeRangeChange = useCallback(
+    (from: string, to: string) => {
+      updateConfig({ timeRangeFrom: from, timeRangeTo: to })
+    },
+    [updateConfig]
+  )
 
   const [process, setProcess] = useState<ProcessRow | null>(null)
   usePageTitle(process?.exe ?? null)
@@ -261,7 +299,15 @@ function ProcessPageContent() {
   }
 
   return (
-    <PageLayout onRefresh={loadData}>
+    <PageLayout
+      onRefresh={loadData}
+      timeRangeControl={{
+        timeRangeFrom: config.timeRangeFrom ?? 'now-1h',
+        timeRangeTo: config.timeRangeTo ?? 'now',
+        onTimeRangeChange: handleTimeRangeChange,
+      }}
+      processId={processId}
+    >
       <div className="p-6 max-w-6xl">
         {/* Back Link */}
         <AppLink

@@ -27,6 +27,7 @@ export function parseUrlParams(params: URLSearchParams): Partial<BaseScreenConfi
 
   // String params
   if (params.has('process_id')) result.processId = params.get('process_id')
+  if (params.has('type')) result.type = params.get('type')
   if (params.has('from')) result.timeRangeFrom = params.get('from')
   if (params.has('to')) result.timeRangeTo = params.get('to')
   if (params.has('measure')) result.selectedMeasure = params.get('measure')

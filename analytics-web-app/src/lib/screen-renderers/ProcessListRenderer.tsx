@@ -305,7 +305,7 @@ export function ProcessListRenderer({
                 >
                   <td className="px-4 py-3">
                     <AppLink
-                      href={`/process?id=${processId}&from=${encodeURIComponent(fromParam)}&to=${encodeURIComponent(toParam)}`}
+                      href={`/process?process_id=${processId}&from=${encodeURIComponent(fromParam)}&to=${encodeURIComponent(toParam)}`}
                       className="text-accent-link hover:underline"
                     >
                       {exe}

@@ -6,7 +6,6 @@ import { getConfig } from '@/lib/config'
 import { TimeRangePicker } from './TimeRangePicker'
 import { PivotButton } from './PivotButton'
 import { MicromegasLogo } from '@/components/MicromegasLogo'
-import { useTimeRange } from '@/hooks/useTimeRange'
 import type { TimeRangeControlProps } from './PageLayout'
 
 interface HeaderProps {
@@ -21,12 +20,6 @@ export function Header({ onRefresh, timeRangeControl, processId }: HeaderProps) 
   const { user, logout, status } = useAuth()
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false)
   const [isLoggingOut, setIsLoggingOut] = useState(false)
-
-  // Use provided time range control props, or fall back to hook for backward compatibility
-  const fallbackTimeRange = useTimeRange()
-  const timeRangeFrom = timeRangeControl?.timeRangeFrom ?? fallbackTimeRange.timeRange.from
-  const timeRangeTo = timeRangeControl?.timeRangeTo ?? fallbackTimeRange.timeRange.to
-  const handleTimeRangeChange = timeRangeControl?.onTimeRangeChange ?? fallbackTimeRange.setTimeRange
 
   const handleLogout = async () => {
     setIsLoggingOut(true)
@@ -57,28 +50,40 @@ export function Header({ onRefresh, timeRangeControl, processId }: HeaderProps) 
       </div>
 
       <div className="flex items-center gap-2 sm:gap-4">
-        {/* Pivot Button - navigate between process views */}
-        <PivotButton
-          processId={processId}
-          timeRangeFrom={timeRangeFrom}
-          timeRangeTo={timeRangeTo}
-        />
-
-        {/* Time Range Controls */}
-        <div className="flex items-center">
-          <TimeRangePicker
-            from={timeRangeFrom}
-            to={timeRangeTo}
-            onChange={handleTimeRangeChange}
+        {/* Pivot Button - navigate between process views (only shown with time range) */}
+        {timeRangeControl && (
+          <PivotButton
+            processId={processId}
+            timeRangeFrom={timeRangeControl.timeRangeFrom}
+            timeRangeTo={timeRangeControl.timeRangeTo}
           />
+        )}
+
+        {/* Time Range Controls (only shown when page provides timeRangeControl) */}
+        {timeRangeControl ? (
+          <div className="flex items-center">
+            <TimeRangePicker
+              from={timeRangeControl.timeRangeFrom}
+              to={timeRangeControl.timeRangeTo}
+              onChange={timeRangeControl.onTimeRangeChange}
+            />
+            <button
+              onClick={onRefresh}
+              className="px-2 sm:px-2.5 py-1.5 bg-theme-border border-l border-theme-border-hover rounded-r-md text-theme-text-primary hover:bg-theme-border-hover transition-colors"
+              title="Refresh"
+            >
+              <RefreshCw className="w-4 h-4" />
+            </button>
+          </div>
+        ) : onRefresh ? (
           <button
             onClick={onRefresh}
-            className="px-2 sm:px-2.5 py-1.5 bg-theme-border border-l border-theme-border-hover rounded-r-md text-theme-text-primary hover:bg-theme-border-hover transition-colors"
+            className="px-2.5 py-1.5 bg-theme-border rounded-md text-theme-text-primary hover:bg-theme-border-hover transition-colors"
             title="Refresh"
           >
             <RefreshCw className="w-4 h-4" />
           </button>
-        </div>
+        ) : null}
 
         {/* User Menu */}
         {status === 'authenticated' && user && (
