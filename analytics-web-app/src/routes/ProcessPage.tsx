@@ -47,7 +47,7 @@ const DEFAULT_CONFIG: ProcessPageConfig = {
 // URL builder for ProcessPage
 const buildUrl = (cfg: ProcessPageConfig): string => {
   const params = new URLSearchParams()
-  if (cfg.processId) params.set('id', cfg.processId)
+  if (cfg.processId) params.set('process_id', cfg.processId)
   if (cfg.timeRangeFrom && cfg.timeRangeFrom !== DEFAULT_CONFIG.timeRangeFrom) {
     params.set('from', cfg.timeRangeFrom)
   }

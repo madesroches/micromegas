@@ -26,8 +26,6 @@ export function parseUrlParams(params: URLSearchParams): Partial<BaseScreenConfi
   const result: Record<string, unknown> = {}
 
   // String params
-  // Support both 'id' and 'process_id' for processId (ProcessPage uses 'id')
-  if (params.has('id')) result.processId = params.get('id')
   if (params.has('process_id')) result.processId = params.get('process_id')
   if (params.has('type')) result.type = params.get('type')
   if (params.has('from')) result.timeRangeFrom = params.get('from')
