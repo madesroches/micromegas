@@ -902,8 +902,7 @@ All core implementation phases have been completed:
 - [x] Phase 5: LogRenderer already props-driven (receives timeRange via ScreenRendererProps)
 - [x] Phase 6: Added deprecation notice to useTimeRange hook
 
-Remaining work (lower priority):
-- [ ] Phase 7: Update architecture documentation
+- [x] Phase 7: Renamed `screen-config-architecture.md` to `state-management-architecture.md` with unified MVC docs
 
 ## Success Criteria
 
@@ -914,4 +913,4 @@ Remaining work (lower priority):
 - [x] Built-in pages follow same pattern as user-defined screens
 - [x] Drag-to-zoom updates config (not URL directly) on mouse release
 - [x] Path to "save view as custom screen" is clear
-- [ ] Architecture doc updated to cover unified pattern (Phase 7)
+- [x] Architecture doc updated to cover unified pattern (Phase 7)
