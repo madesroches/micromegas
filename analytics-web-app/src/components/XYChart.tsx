@@ -151,28 +151,69 @@ export function XYChart({
   // Display unit for the header (adaptive for time, original for others)
   const displayUnit = adaptiveTimeUnit ? adaptiveTimeUnit.unit : unit
 
-  // Handle resize
+  // Use ref for onWidthChange to avoid effect re-runs when callback identity changes
+  const onWidthChangeRef = useRef(onWidthChange)
+  onWidthChangeRef.current = onWidthChange
+
+  // Track last reported width to avoid duplicate callbacks
+  const lastReportedWidthRef = useRef<number | null>(null)
+
+  // Measure container and update dimensions
+  // This is called by ResizeObserver for internal sizing, but only reports
+  // width changes to parent on user-initiated window resize events
+  const measureContainer = useCallback(() => {
+    if (containerRef.current) {
+      const rect = containerRef.current.getBoundingClientRect()
+      const newWidth = Math.round(Math.max(400, rect.width - 32))
+      const newHeight = Math.round(Math.max(250, rect.height - 32))
+
+      setDimensions((prev) => {
+        if (prev.width === newWidth && prev.height === newHeight) {
+          return prev
+        }
+        return { width: newWidth, height: newHeight }
+      })
+
+      return newWidth
+    }
+    return null
+  }, [])
+
+  // Handle initial mount measurement
   useEffect(() => {
-    const updateDimensions = () => {
-      if (containerRef.current) {
-        const rect = containerRef.current.getBoundingClientRect()
-        const newWidth = Math.max(400, rect.width - 32)
-        setDimensions({
-          width: newWidth,
-          height: Math.max(250, rect.height - 32),
-        })
-        onWidthChange?.(newWidth)
-      }
+    // Measure on mount and report initial width to parent
+    const width = measureContainer()
+    if (width !== null && lastReportedWidthRef.current !== width) {
+      lastReportedWidthRef.current = width
+      onWidthChangeRef.current?.(width)
     }
 
-    updateDimensions()
-    const resizeObserver = new ResizeObserver(updateDimensions)
+    // ResizeObserver handles internal dimension updates for chart rendering
+    // but does NOT propagate to parent (avoids feedback loops from content reflows)
+    const resizeObserver = new ResizeObserver(() => {
+      measureContainer()
+    })
     if (containerRef.current) {
       resizeObserver.observe(containerRef.current)
     }
 
     return () => resizeObserver.disconnect()
-  }, [onWidthChange])
+  }, [measureContainer])
+
+  // Handle window resize - this is a user-initiated event, so we propagate width to parent
+  // This allows parent to recalculate bin intervals when user resizes browser window
+  useEffect(() => {
+    const handleWindowResize = () => {
+      const width = measureContainer()
+      if (width !== null && lastReportedWidthRef.current !== width) {
+        lastReportedWidthRef.current = width
+        onWidthChangeRef.current?.(width)
+      }
+    }
+
+    window.addEventListener('resize', handleWindowResize)
+    return () => window.removeEventListener('resize', handleWindowResize)
+  }, [measureContainer])
 
   // Tooltip plugin - values are in display unit, convert back to original for formatting
   const createTooltipPlugin = useCallback(
@@ -510,8 +551,8 @@ export function XYChart({
         </div>
       </div>
 
-      {/* Chart container */}
-      <div ref={containerRef} className="flex-1 p-4 flex items-center justify-center">
+      {/* Chart container - min-h-0 prevents flex content from setting min-height */}
+      <div ref={containerRef} className="flex-1 min-h-0 p-4 flex items-center justify-center">
         <div className="chart-inner" />
       </div>
     </div>

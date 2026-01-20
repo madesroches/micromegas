@@ -228,6 +228,9 @@ function ProcessMetricsContent() {
   const currentSqlRef = useRef(currentSql)
   currentSqlRef.current = currentSql
 
+  // Ref to always call the latest loadData without causing effect re-runs
+  const loadDataRef = useRef<((sql: string) => void) | null>(null)
+
   const loadDiscovery = useCallback(() => {
     if (!processId) return
     discoveryExecuteRef.current({
@@ -255,6 +258,9 @@ function ProcessMetricsContent() {
     },
     [processId, selectedMeasure, binInterval, apiTimeRange]
   )
+
+  // Keep ref updated with latest loadData
+  loadDataRef.current = loadData
 
   // Update measure in config with replace (editing, not navigational)
   const updateMeasure = useCallback(
@@ -308,9 +314,10 @@ function ProcessMetricsContent() {
       // Use DEFAULT_SQL only on initial load, preserve custom SQL for measure changes
       const isInitialLoad = !hasInitialLoadRef.current
       hasInitialLoadRef.current = true
-      loadData(isInitialLoad ? DEFAULT_SQL : currentSqlRef.current)
+      // Use ref to avoid re-running this effect when loadData identity changes
+      loadDataRef.current?.(isInitialLoad ? DEFAULT_SQL : currentSqlRef.current)
     }
-  }, [discoveryDone, selectedMeasure, processId, loadData])
+  }, [discoveryDone, selectedMeasure, processId])
 
   const prevTimeRangeRef = useRef<{ begin: string; end: string } | null>(null)
   useEffect(() => {
