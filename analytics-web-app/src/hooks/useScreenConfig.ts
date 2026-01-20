@@ -14,7 +14,7 @@
  */
 
 import { useState, useCallback, useEffect, useRef } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { parseUrlParams } from '@/lib/url-params'
 import type { BaseScreenConfig } from '@/lib/screen-config'
 
@@ -75,22 +75,27 @@ export function useScreenConfig<T extends BaseScreenConfig>(
   defaults: T,
   buildUrl: (config: T) => string
 ): UseScreenConfigResult<T> {
+  const location = useLocation()
   const navigate = useNavigate()
 
-  // Capture defaults on first render - makes hook robust against inline objects
+  // Capture defaults and initial search on first render
   const defaultsRef = useRef(defaults)
+  const initialSearchRef = useRef(location.search)
 
   // Initialize from URL on mount
   const [config, setConfig] = useState<T>(() => {
-    const fromUrl = parseUrlParams(new URLSearchParams(location.search))
+    const fromUrl = parseUrlParams(new URLSearchParams(initialSearchRef.current))
     return { ...defaultsRef.current, ...fromUrl } as T
   })
 
   // Handle browser back/forward - restore config from defaults + URL
-  // This behaves like a fresh page load: reset to defaults, then apply URL params
+  // Note: popstate only fires for browser navigation (back/forward), not for
+  // pushState/replaceState, so this won't conflict with our navigate() calls.
+  // We use window.location here because it's guaranteed to be updated when
+  // popstate fires, whereas React Router's location updates asynchronously.
   useEffect(() => {
     const handlePopstate = () => {
-      const fromUrl = parseUrlParams(new URLSearchParams(location.search))
+      const fromUrl = parseUrlParams(new URLSearchParams(window.location.search))
       setConfig({ ...defaultsRef.current, ...fromUrl } as T)
     }
     window.addEventListener('popstate', handlePopstate)

@@ -265,8 +265,11 @@ function ProcessLogContent() {
           }
         }
         setRows(resultRows)
-        setHasLoaded(true)
+      } else {
+        // Query completed with no data - clear rows
+        setRows([])
       }
+      setHasLoaded(true)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- Only react to completion/error, not the full hook object
   }, [streamQuery.isComplete, streamQuery.error])
