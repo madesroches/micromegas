@@ -17,10 +17,16 @@ export interface ChartAxisBounds {
 
 export type ScaleMode = 'p99' | 'max'
 
-interface TimeSeriesChartProps {
-  data: { time: number; value: number }[]
-  title: string
-  unit: string
+export type XAxisMode = 'time' | 'numeric' | 'categorical'
+
+interface XYChartProps {
+  data: { x: number; y: number }[] // categorical: x is index into xLabels
+  xAxisMode: XAxisMode // required, determined by extractChartData
+  xLabels?: string[] // for categorical mode - the actual string labels
+  xColumnName?: string
+  yColumnName?: string
+  title?: string
+  unit?: string
   scaleMode?: ScaleMode
   onScaleModeChange?: (mode: ScaleMode) => void
   onTimeRangeSelect?: (from: Date, to: Date) => void
@@ -58,20 +64,61 @@ function formatStatValue(value: number, unit: string): string {
   return formatValue(value, unit, false)
 }
 
-export function TimeSeriesChart({
+// Format X value based on axis mode
+function formatXValue(value: number, mode: XAxisMode, xLabels?: string[]): string {
+  switch (mode) {
+    case 'time': {
+      const date = new Date(value * 1000)
+      const timeStr =
+        date.toLocaleTimeString('en-US', {
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+          hour12: false,
+        }) +
+        '.' +
+        String(date.getMilliseconds()).padStart(3, '0')
+      return timeStr
+    }
+    case 'numeric':
+      if (Math.abs(value) >= 1000) return value.toLocaleString()
+      if (Math.abs(value) >= 1) return value.toFixed(2)
+      return value.toPrecision(3)
+    case 'categorical':
+      if (xLabels) {
+        const idx = Math.round(value)
+        if (idx >= 0 && idx < xLabels.length) {
+          return xLabels[idx]
+        }
+      }
+      return String(Math.round(value))
+  }
+}
+
+export function XYChart({
   data,
-  title,
-  unit,
+  xAxisMode,
+  xLabels,
+  xColumnName,
+  yColumnName,
+  title = '',
+  unit = '',
   scaleMode: scaleModeFromProps,
   onScaleModeChange,
   onTimeRangeSelect,
   onWidthChange,
   onAxisBoundsChange,
-}: TimeSeriesChartProps) {
+}: XYChartProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef = useRef<uPlot | null>(null)
   const [dimensions, setDimensions] = useState({ width: 800, height: 300 })
   const [internalScaleMode, setInternalScaleMode] = useState<ScaleMode>('p99')
+
+  // Use refs for callbacks to avoid chart recreation when callbacks change
+  const onTimeRangeSelectRef = useRef(onTimeRangeSelect)
+  onTimeRangeSelectRef.current = onTimeRangeSelect
+  const onAxisBoundsChangeRef = useRef(onAxisBoundsChange)
+  onAxisBoundsChangeRef.current = onAxisBoundsChange
 
   // Use prop if provided, otherwise use internal state
   const scaleMode = scaleModeFromProps ?? internalScaleMode
@@ -82,7 +129,7 @@ export function TimeSeriesChart({
     if (data.length === 0) {
       return { min: 0, max: 0, avg: 0, p99: 0 }
     }
-    const values = data.map((d) => d.value)
+    const values = data.map((d) => d.y)
     const sorted = [...values].sort((a, b) => a - b)
     const p99Index = Math.floor(sorted.length * 0.99)
     return {
@@ -104,34 +151,75 @@ export function TimeSeriesChart({
   // Display unit for the header (adaptive for time, original for others)
   const displayUnit = adaptiveTimeUnit ? adaptiveTimeUnit.unit : unit
 
-  // Handle resize
+  // Use ref for onWidthChange to avoid effect re-runs when callback identity changes
+  const onWidthChangeRef = useRef(onWidthChange)
+  onWidthChangeRef.current = onWidthChange
+
+  // Track last reported width to avoid duplicate callbacks
+  const lastReportedWidthRef = useRef<number | null>(null)
+
+  // Measure container and update dimensions
+  // This is called by ResizeObserver for internal sizing, but only reports
+  // width changes to parent on user-initiated window resize events
+  const measureContainer = useCallback(() => {
+    if (containerRef.current) {
+      const rect = containerRef.current.getBoundingClientRect()
+      const newWidth = Math.round(Math.max(400, rect.width - 32))
+      const newHeight = Math.round(Math.max(250, rect.height - 32))
+
+      setDimensions((prev) => {
+        if (prev.width === newWidth && prev.height === newHeight) {
+          return prev
+        }
+        return { width: newWidth, height: newHeight }
+      })
+
+      return newWidth
+    }
+    return null
+  }, [])
+
+  // Handle initial mount measurement
   useEffect(() => {
-    const updateDimensions = () => {
-      if (containerRef.current) {
-        const rect = containerRef.current.getBoundingClientRect()
-        const newWidth = Math.max(400, rect.width - 32)
-        setDimensions({
-          width: newWidth,
-          height: Math.max(250, rect.height - 32),
-        })
-        onWidthChange?.(newWidth)
-      }
+    // Measure on mount and report initial width to parent
+    const width = measureContainer()
+    if (width !== null && lastReportedWidthRef.current !== width) {
+      lastReportedWidthRef.current = width
+      onWidthChangeRef.current?.(width)
     }
 
-    updateDimensions()
-    const resizeObserver = new ResizeObserver(updateDimensions)
+    // ResizeObserver handles internal dimension updates for chart rendering
+    // but does NOT propagate to parent (avoids feedback loops from content reflows)
+    const resizeObserver = new ResizeObserver(() => {
+      measureContainer()
+    })
     if (containerRef.current) {
       resizeObserver.observe(containerRef.current)
     }
 
     return () => resizeObserver.disconnect()
-  }, [onWidthChange])
+  }, [measureContainer])
+
+  // Handle window resize - this is a user-initiated event, so we propagate width to parent
+  // This allows parent to recalculate bin intervals when user resizes browser window
+  useEffect(() => {
+    const handleWindowResize = () => {
+      const width = measureContainer()
+      if (width !== null && lastReportedWidthRef.current !== width) {
+        lastReportedWidthRef.current = width
+        onWidthChangeRef.current?.(width)
+      }
+    }
+
+    window.addEventListener('resize', handleWindowResize)
+    return () => window.removeEventListener('resize', handleWindowResize)
+  }, [measureContainer])
 
   // Tooltip plugin - values are in display unit, convert back to original for formatting
   const createTooltipPlugin = useCallback(
-    (originalUnit: string, conversionFactor: number): uPlot.Plugin => {
+    (originalUnit: string, conversionFactor: number, mode: XAxisMode, labels?: string[]): uPlot.Plugin => {
       let tooltip: HTMLDivElement
-      let tooltipTime: HTMLDivElement
+      let tooltipX: HTMLDivElement
       let tooltipValue: HTMLDivElement
 
       return {
@@ -155,7 +243,7 @@ export function TimeSeriesChart({
             <div style="color: var(--chart-line); font-weight: 600; font-size: 14px;"></div>
           `
             u.over.appendChild(tooltip)
-            tooltipTime = tooltip.children[0] as HTMLDivElement
+            tooltipX = tooltip.children[0] as HTMLDivElement
             tooltipValue = tooltip.children[1] as HTMLDivElement
           },
           setCursor: (u: uPlot) => {
@@ -165,26 +253,15 @@ export function TimeSeriesChart({
               return
             }
 
-            const time = u.data[0][idx]
+            const xVal = u.data[0][idx]
             const value = u.data[1][idx]
 
-            if (time == null || value == null) {
+            if (xVal == null || value == null) {
               tooltip.style.display = 'none'
               return
             }
 
-            const date = new Date(time * 1000)
-            const timeStr =
-              date.toLocaleTimeString('en-US', {
-                hour: '2-digit',
-                minute: '2-digit',
-                second: '2-digit',
-                hour12: false,
-              }) +
-              '.' +
-              String(date.getMilliseconds()).padStart(3, '0')
-
-            tooltipTime.textContent = timeStr
+            tooltipX.textContent = formatXValue(xVal, mode, labels)
 
             // Convert back to original unit and pick best unit for display
             const originalValue = value / conversionFactor
@@ -227,24 +304,66 @@ export function TimeSeriesChart({
     // Transform data to uPlot format
     // For time units, convert values to the display unit so uPlot generates correct ticks
     const conversionFactor = adaptiveTimeUnit?.conversionFactor ?? 1
-    const times = data.map((d) => d.time / 1000) // uPlot uses seconds for X axis
-    const values = data.map((d) => d.value * conversionFactor)
+
+    // For time mode, convert ms to seconds for uPlot
+    // For numeric/categorical, use x values directly
+    const xValues = xAxisMode === 'time'
+      ? data.map((d) => d.x / 1000) // ms to seconds for uPlot time axis
+      : data.map((d) => d.x)
+    const yValues = data.map((d) => d.y * conversionFactor)
 
     // Convert stats to display unit for scale range
     const _displayMin = stats.min * conversionFactor
     const displayP99 = stats.p99 * conversionFactor
     const displayMax = stats.max * conversionFactor
 
-    const yAxisUnit = adaptiveTimeUnit?.abbrev ?? unit
+    const yAxisUnit = adaptiveTimeUnit?.abbrev ?? (unit === 'percent' ? '%' : unit)
+
+    // Build X axis configuration based on mode
+    const xAxisConfig: uPlot.Axis = {
+      stroke: '#6a6a7a',
+      grid: { stroke: '#2a2a35', width: 1 },
+      ticks: { stroke: '#2a2a35', width: 1 },
+      font: '11px -apple-system, BlinkMacSystemFont, sans-serif',
+      size: 65, // Enough vertical space for two-line time labels
+    }
+
+    // For categorical mode, use custom values function for tick labels
+    if (xAxisMode === 'categorical' && xLabels) {
+      // Show only integer ticks at category positions
+      xAxisConfig.incrs = [1]
+      xAxisConfig.space = 60 // Minimum 60px between labels
+      xAxisConfig.values = (_u: uPlot, vals: number[]) => {
+        return vals.map((v) => {
+          const idx = Math.round(v)
+          if (idx >= 0 && idx < xLabels.length) {
+            return xLabels[idx]
+          }
+          return ''
+        })
+      }
+    } else if (xAxisMode === 'numeric') {
+      // Ensure reasonable spacing between numeric ticks
+      xAxisConfig.space = 60 // Minimum 60px between labels
+      xAxisConfig.values = (_u: uPlot, vals: number[]) => {
+        return vals.map((v) => {
+          if (v === 0) return '0'
+          const absV = Math.abs(v)
+          if (absV >= 1000) return v.toLocaleString()
+          if (absV >= 1) return v.toFixed(1)
+          return v.toPrecision(2)
+        })
+      }
+    }
 
     const opts: uPlot.Options = {
       width: dimensions.width,
       height: dimensions.height,
-      plugins: [createTooltipPlugin(unit, conversionFactor)],
-      // Use local timezone for time display
-      tzDate: (ts: number) => new Date(ts * 1000),
+      plugins: [createTooltipPlugin(unit, conversionFactor, xAxisMode, xLabels)],
+      // Use local timezone for time display (only applies to time mode)
+      tzDate: xAxisMode === 'time' ? (ts: number) => new Date(ts * 1000) : undefined,
       scales: {
-        x: { time: true },
+        x: { time: xAxisMode === 'time' },
         y: {
           // Scale based on user selection: p99 handles outliers gracefully, max shows all data
           range: (_u: uPlot, dataMin: number, _dataMax: number) => {
@@ -256,19 +375,13 @@ export function TimeSeriesChart({
         },
       },
       axes: [
+        xAxisConfig,
         {
           stroke: '#6a6a7a',
           grid: { stroke: '#2a2a35', width: 1 },
           ticks: { stroke: '#2a2a35', width: 1 },
           font: '11px -apple-system, BlinkMacSystemFont, sans-serif',
-          size: 50, // Ensure enough space for multi-line date/time labels
-        },
-        {
-          stroke: '#6a6a7a',
-          grid: { stroke: '#2a2a35', width: 1 },
-          ticks: { stroke: '#2a2a35', width: 1 },
-          font: '11px -apple-system, BlinkMacSystemFont, sans-serif',
-          size: 70, // Ensure enough space for labels
+          size: 90, // Ensure enough space for labels like "90.0 percent"
           values: (_u: uPlot, vals: number[]) => {
             // Values are already in the display unit, just format them
             return vals.map((v) => {
@@ -285,7 +398,7 @@ export function TimeSeriesChart({
       series: [
         {},
         {
-          label: title,
+          label: title || yColumnName || 'Value',
           stroke: '#bf360c',
           width: 2,
           fill: 'rgba(191, 54, 12, 0.1)',
@@ -297,7 +410,7 @@ export function TimeSeriesChart({
         x: true,
         y: true,
         drag: {
-          x: true,
+          x: xAxisMode === 'time', // Only enable drag-to-select for time mode
           y: false,
           setScale: false, // Don't auto-zoom, we'll handle it via callback
         },
@@ -306,29 +419,28 @@ export function TimeSeriesChart({
         ready: [
           (u: uPlot) => {
             // Report axis bounds after chart layout is complete
-            if (onAxisBoundsChange) {
-              onAxisBoundsChange({
-                left: u.bbox.left / devicePixelRatio,
-                width: u.bbox.width / devicePixelRatio,
-              })
-            }
+            onAxisBoundsChangeRef.current?.({
+              left: u.bbox.left / devicePixelRatio,
+              width: u.bbox.width / devicePixelRatio,
+            })
           },
         ],
         setSize: [
           (u: uPlot) => {
             // Report updated axis bounds after resize
-            if (onAxisBoundsChange) {
-              onAxisBoundsChange({
-                left: u.bbox.left / devicePixelRatio,
-                width: u.bbox.width / devicePixelRatio,
-              })
-            }
+            onAxisBoundsChangeRef.current?.({
+              left: u.bbox.left / devicePixelRatio,
+              width: u.bbox.width / devicePixelRatio,
+            })
           },
         ],
         setSelect: [
           (u: uPlot) => {
+            // Only handle selection for time mode
+            if (xAxisMode !== 'time') return
+
             const { left, width } = u.select
-            if (width > 0 && onTimeRangeSelect) {
+            if (width > 0 && onTimeRangeSelectRef.current) {
               // Convert pixel positions to time values
               const fromTime = u.posToVal(left, 'x')
               const toTime = u.posToVal(left + width, 'x')
@@ -338,7 +450,7 @@ export function TimeSeriesChart({
               // Clear the selection visual
               u.setSelect({ left: 0, width: 0, top: 0, height: 0 }, false)
               // Call the callback
-              onTimeRangeSelect(fromDate, toDate)
+              onTimeRangeSelectRef.current(fromDate, toDate)
             }
           },
         ],
@@ -348,7 +460,7 @@ export function TimeSeriesChart({
 
     const chartContainer = containerRef.current.querySelector('.chart-inner') as HTMLElement
     if (chartContainer) {
-      chartRef.current = new uPlot(opts, [times, values], chartContainer)
+      chartRef.current = new uPlot(opts, [xValues, yValues], chartContainer)
     }
 
     return () => {
@@ -357,24 +469,40 @@ export function TimeSeriesChart({
         chartRef.current = null
       }
     }
-  }, [data, dimensions, title, unit, createTooltipPlugin, onTimeRangeSelect, onAxisBoundsChange, stats, adaptiveTimeUnit, scaleMode])
+    // Note: dimensions intentionally excluded - handled by separate resize effect
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, title, unit, createTooltipPlugin, stats, adaptiveTimeUnit, scaleMode, xAxisMode, xLabels, yColumnName])
+
+  // Resize chart without recreating when dimensions change
+  useEffect(() => {
+    if (chartRef.current && dimensions.width > 0 && dimensions.height > 0) {
+      chartRef.current.setSize({ width: dimensions.width, height: dimensions.height })
+    }
+  }, [dimensions])
+
+  // Build display title with column names if available
+  const displayTitle = title || yColumnName || ''
+  const xAxisLabel = xColumnName || (xAxisMode === 'time' ? 'Time' : 'X')
 
   return (
     <div className="flex flex-col h-full bg-app-panel border border-theme-border rounded-lg">
       {/* Chart header */}
       <div className="flex justify-between items-center px-4 py-3 border-b border-theme-border">
-        {title ? (
+        {displayTitle ? (
           <div className="text-base font-medium text-theme-text-primary">
-            {title}{displayUnit && <span className="text-theme-text-muted font-normal"> ({displayUnit})</span>}
+            {displayTitle}{displayUnit && <span className="text-theme-text-muted font-normal"> ({displayUnit})</span>}
+            {xAxisMode !== 'time' && xAxisLabel && (
+              <span className="text-theme-text-muted font-normal text-sm ml-2">vs {xAxisLabel}</span>
+            )}
           </div>
         ) : (
           <div />
         )}
         <div className="flex items-center gap-4 text-xs text-theme-text-muted">
-          {title && (
+          {displayTitle && (
             <div className="flex items-center gap-1.5">
               <div className="w-3 h-0.5 bg-chart-line rounded" />
-              <span>{title}</span>
+              <span>{displayTitle}</span>
             </div>
           )}
           <div>
@@ -423,10 +551,51 @@ export function TimeSeriesChart({
         </div>
       </div>
 
-      {/* Chart container */}
-      <div ref={containerRef} className="flex-1 p-4 flex items-center justify-center">
+      {/* Chart container - min-h-0 prevents flex content from setting min-height */}
+      <div ref={containerRef} className="flex-1 min-h-0 p-4 flex items-center justify-center">
         <div className="chart-inner" />
       </div>
     </div>
+  )
+}
+
+// Re-export TimeSeriesChart as an alias for backwards compatibility
+// This allows existing code that uses TimeSeriesChart with time/value data to continue working
+export interface TimeSeriesChartProps {
+  data: { time: number; value: number }[]
+  title: string
+  unit: string
+  scaleMode?: ScaleMode
+  onScaleModeChange?: (mode: ScaleMode) => void
+  onTimeRangeSelect?: (from: Date, to: Date) => void
+  onWidthChange?: (width: number) => void
+  onAxisBoundsChange?: (bounds: ChartAxisBounds) => void
+}
+
+export function TimeSeriesChart({
+  data,
+  title,
+  unit,
+  scaleMode,
+  onScaleModeChange,
+  onTimeRangeSelect,
+  onWidthChange,
+  onAxisBoundsChange,
+}: TimeSeriesChartProps) {
+  // Convert time/value format to x/y format
+  const xyData = useMemo(() => data.map((d) => ({ x: d.time, y: d.value })), [data])
+
+  return (
+    <XYChart
+      data={xyData}
+      xAxisMode="time"
+      title={title}
+      unit={unit}
+      scaleMode={scaleMode}
+      onScaleModeChange={onScaleModeChange}
+      onTimeRangeSelect={onTimeRangeSelect}
+      onWidthChange={onWidthChange}
+      onAxisBoundsChange={onAxisBoundsChange}
+    />
   )
 }

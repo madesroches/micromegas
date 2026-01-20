@@ -1,5 +1,5 @@
 import { Suspense, useState, useCallback, useMemo, useEffect, useRef } from 'react'
-import { useSearchParams, useNavigate, useLocation } from 'react-router-dom'
+import { useSearchParams } from 'react-router-dom'
 import { AppLink } from '@/components/AppLink'
 import { AlertCircle, Clock } from 'lucide-react'
 import { PageLayout } from '@/components/layout'
@@ -9,9 +9,11 @@ import { QueryEditor } from '@/components/QueryEditor'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { MetricsChart } from '@/components/MetricsChart'
 import { useStreamQuery } from '@/hooks/useStreamQuery'
-import { timestampToMs } from '@/lib/arrow-utils'
-import { useTimeRange } from '@/hooks/useTimeRange'
+import { useScreenConfig } from '@/hooks/useScreenConfig'
 import { usePageTitle } from '@/hooks/usePageTitle'
+import { parseTimeRange, getTimeRangeForApi } from '@/lib/time-range'
+import { timestampToMs } from '@/lib/arrow-utils'
+import type { ProcessMetricsConfig } from '@/lib/screen-config'
 
 const DISCOVERY_SQL = `SELECT DISTINCT name, target, unit
 FROM view_instance('measures', '$process_id')
@@ -32,6 +34,33 @@ const VARIABLES = [
   { name: 'measure_name', description: 'Selected measure name' },
   { name: 'bin_interval', description: 'Time bucket size for downsampling' },
 ]
+
+// Default config for ProcessMetricsPage
+const DEFAULT_CONFIG: ProcessMetricsConfig = {
+  processId: '',
+  timeRangeFrom: 'now-1h',
+  timeRangeTo: 'now',
+  selectedMeasure: undefined,
+  selectedProperties: [],
+}
+
+// URL builder for ProcessMetricsPage - builds query string from config
+const buildUrl = (cfg: ProcessMetricsConfig): string => {
+  const params = new URLSearchParams()
+  if (cfg.processId) params.set('process_id', cfg.processId)
+  if (cfg.timeRangeFrom && cfg.timeRangeFrom !== DEFAULT_CONFIG.timeRangeFrom) {
+    params.set('from', cfg.timeRangeFrom)
+  }
+  if (cfg.timeRangeTo && cfg.timeRangeTo !== DEFAULT_CONFIG.timeRangeTo) {
+    params.set('to', cfg.timeRangeTo)
+  }
+  if (cfg.selectedMeasure) params.set('measure', cfg.selectedMeasure)
+  if (cfg.selectedProperties && cfg.selectedProperties.length > 0) {
+    params.set('properties', cfg.selectedProperties.join(','))
+  }
+  const qs = params.toString()
+  return qs ? `?${qs}` : ''
+}
 
 interface Measure {
   name: string
@@ -70,23 +99,15 @@ function calculateBinInterval(timeSpanMs: number, chartWidthPx: number = 800): s
 
 function ProcessMetricsContent() {
   usePageTitle('Process Metrics')
-  const [searchParams] = useSearchParams()
-  const navigate = useNavigate()
-  const location = useLocation()
-  const pathname = location.pathname
-  const processId = searchParams.get('process_id')
-  const measureParam = searchParams.get('measure')
-  const propertiesParam = searchParams.get('properties')
-  const { parsed: timeRange, apiTimeRange, setTimeRange } = useTimeRange()
 
-  // Parse selected properties from URL
-  const selectedProperties = useMemo(() => {
-    if (!propertiesParam) return []
-    return propertiesParam.split(',').filter(Boolean)
-  }, [propertiesParam])
+  // Use the new config-driven pattern
+  const { config, updateConfig } = useScreenConfig(DEFAULT_CONFIG, buildUrl)
+  const processId = config.processId
+  const selectedProperties = useMemo(() => config.selectedProperties ?? [], [config.selectedProperties])
 
+  // Local state for UI
   const [measures, setMeasures] = useState<Measure[]>([])
-  const [selectedMeasure, setSelectedMeasure] = useState<string | null>(measureParam)
+  const [selectedMeasure, setSelectedMeasure] = useState<string | null>(config.selectedMeasure ?? null)
   const [chartData, setChartData] = useState<{ time: number; value: number }[]>([])
   const [_processExe, setProcessExe] = useState<string | null>(null)
   const [hasLoaded, setHasLoaded] = useState(false)
@@ -94,10 +115,29 @@ function ProcessMetricsContent() {
   const [chartWidth, setChartWidth] = useState<number>(800)
   const [currentSql, setCurrentSql] = useState<string>(DEFAULT_SQL)
 
+  // Query hooks for discovery, data, and process info
   const discoveryQuery = useStreamQuery()
   const dataQuery = useStreamQuery()
   const processQuery = useStreamQuery()
   const queryError = dataQuery.error?.message ?? discoveryQuery.error?.message ?? null
+
+  // Compute API time range from config
+  const apiTimeRange = useMemo(() => {
+    try {
+      return getTimeRangeForApi(config.timeRangeFrom ?? 'now-1h', config.timeRangeTo ?? 'now')
+    } catch {
+      return getTimeRangeForApi('now-1h', 'now')
+    }
+  }, [config.timeRangeFrom, config.timeRangeTo])
+
+  // Compute display label for time range
+  const timeRangeLabel = useMemo(() => {
+    try {
+      return parseTimeRange(config.timeRangeFrom ?? 'now-1h', config.timeRangeTo ?? 'now').label
+    } catch {
+      return 'Last 1 hour'
+    }
+  }, [config.timeRangeFrom, config.timeRangeTo])
 
   const binInterval = useMemo(() => {
     const fromDate = new Date(apiTimeRange.begin)
@@ -128,15 +168,19 @@ function ProcessMetricsContent() {
             }
           }
           setMeasures(measureList)
+          // Auto-select first measure if none specified
           if (measureList.length > 0 && !selectedMeasure) {
-            setSelectedMeasure(measureList[0].name)
+            const autoMeasure = measureList[0].name
+            setSelectedMeasure(autoMeasure)
+            // Update config to keep URL in sync (replace to avoid history entry)
+            updateConfig({ selectedMeasure: autoMeasure }, { replace: true })
           }
         }
       }
       setDiscoveryDone(true)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- Only react to completion/error, not the full hook object
-  }, [discoveryQuery.isComplete, discoveryQuery.error, selectedMeasure])
+  }, [discoveryQuery.isComplete, discoveryQuery.error, selectedMeasure, updateConfig])
 
   // Extract chart data from data query
   useEffect(() => {
@@ -184,6 +228,9 @@ function ProcessMetricsContent() {
   const currentSqlRef = useRef(currentSql)
   currentSqlRef.current = currentSql
 
+  // Ref to always call the latest loadData without causing effect re-runs
+  const loadDataRef = useRef<((sql: string) => void) | null>(null)
+
   const loadDiscovery = useCallback(() => {
     if (!processId) return
     discoveryExecuteRef.current({
@@ -212,38 +259,32 @@ function ProcessMetricsContent() {
     [processId, selectedMeasure, binInterval, apiTimeRange]
   )
 
+  // Keep ref updated with latest loadData
+  loadDataRef.current = loadData
+
+  // Update measure in config with replace (editing, not navigational)
   const updateMeasure = useCallback(
     (measure: string) => {
       setSelectedMeasure(measure)
-      const params = new URLSearchParams(searchParams.toString())
-      params.set('measure', measure)
-      navigate(`${pathname}?${params.toString()}`)
+      updateConfig({ selectedMeasure: measure }, { replace: true })
     },
-    [searchParams, navigate, pathname]
+    [updateConfig]
   )
 
   const handleAddProperty = useCallback(
     (key: string) => {
       const newProperties = [...selectedProperties, key]
-      const params = new URLSearchParams(searchParams.toString())
-      params.set('properties', newProperties.join(','))
-      navigate(`${pathname}?${params.toString()}`)
+      updateConfig({ selectedProperties: newProperties }, { replace: true })
     },
-    [selectedProperties, searchParams, navigate, pathname]
+    [selectedProperties, updateConfig]
   )
 
   const handleRemoveProperty = useCallback(
     (key: string) => {
       const newProperties = selectedProperties.filter((k) => k !== key)
-      const params = new URLSearchParams(searchParams.toString())
-      if (newProperties.length > 0) {
-        params.set('properties', newProperties.join(','))
-      } else {
-        params.delete('properties')
-      }
-      navigate(`${pathname}?${params.toString()}`)
+      updateConfig({ selectedProperties: newProperties.length > 0 ? newProperties : undefined }, { replace: true })
     },
-    [selectedProperties, searchParams, navigate, pathname]
+    [selectedProperties, updateConfig]
   )
 
   const hasLoadedProcessRef = useRef(false)
@@ -273,9 +314,10 @@ function ProcessMetricsContent() {
       // Use DEFAULT_SQL only on initial load, preserve custom SQL for measure changes
       const isInitialLoad = !hasInitialLoadRef.current
       hasInitialLoadRef.current = true
-      loadData(isInitialLoad ? DEFAULT_SQL : currentSqlRef.current)
+      // Use ref to avoid re-running this effect when loadData identity changes
+      loadDataRef.current?.(isInitialLoad ? DEFAULT_SQL : currentSqlRef.current)
     }
-  }, [discoveryDone, selectedMeasure, processId, loadData])
+  }, [discoveryDone, selectedMeasure, processId])
 
   const prevTimeRangeRef = useRef<{ begin: string; end: string } | null>(null)
   useEffect(() => {
@@ -293,6 +335,14 @@ function ProcessMetricsContent() {
       loadDiscovery()
     }
   }, [apiTimeRange.begin, apiTimeRange.end, hasLoaded, loadDiscovery])
+
+  // Time range changes create history entries (navigational)
+  const handleTimeRangeChange = useCallback(
+    (from: string, to: string) => {
+      updateConfig({ timeRangeFrom: from, timeRangeTo: to })
+    },
+    [updateConfig]
+  )
 
   const handleRunQuery = useCallback(
     (sql: string) => {
@@ -312,9 +362,9 @@ function ProcessMetricsContent() {
 
   const handleTimeRangeSelect = useCallback(
     (from: Date, to: Date) => {
-      setTimeRange(from.toISOString(), to.toISOString())
+      updateConfig({ timeRangeFrom: from.toISOString(), timeRangeTo: to.toISOString() })
     },
-    [setTimeRange]
+    [updateConfig]
   )
 
   const handleChartWidthChange = useCallback((width: number) => {
@@ -336,7 +386,7 @@ function ProcessMetricsContent() {
         defaultSql={DEFAULT_SQL}
         variables={VARIABLES}
         currentValues={currentValues}
-        timeRangeLabel={timeRange.label}
+        timeRangeLabel={timeRangeLabel}
         onRun={handleRunQuery}
         onReset={handleResetQuery}
         isLoading={dataQuery.isStreaming}
@@ -368,7 +418,16 @@ function ProcessMetricsContent() {
   const noDataInRange = hasLoaded && chartData.length === 0 && selectedMeasure
 
   return (
-    <PageLayout onRefresh={handleRefresh} rightPanel={sqlPanel}>
+    <PageLayout
+      onRefresh={handleRefresh}
+      rightPanel={sqlPanel}
+      timeRangeControl={{
+        timeRangeFrom: config.timeRangeFrom ?? 'now-1h',
+        timeRangeTo: config.timeRangeTo ?? 'now',
+        onTimeRangeChange: handleTimeRangeChange,
+      }}
+      processId={processId}
+    >
       <div className="p-6 flex flex-col h-full">
         <div className="mb-5">
           <h1 className="text-2xl font-semibold text-theme-text-primary">Process Metrics</h1>
@@ -493,6 +552,10 @@ function ProcessMetricsContent() {
 }
 
 export default function ProcessMetricsPage() {
+  // Read processId from URL to use as key for remounting content
+  const [searchParams] = useSearchParams()
+  const processId = searchParams.get('process_id')
+
   return (
     <AuthGuard>
       <Suspense
@@ -506,7 +569,8 @@ export default function ProcessMetricsPage() {
           </PageLayout>
         }
       >
-        <ProcessMetricsContent />
+        {/* Key on processId to force remount when switching processes */}
+        <ProcessMetricsContent key={processId} />
       </Suspense>
     </AuthGuard>
   )

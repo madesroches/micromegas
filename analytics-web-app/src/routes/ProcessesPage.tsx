@@ -1,5 +1,4 @@
 import { Suspense, useState, useMemo, useCallback, useEffect, useRef } from 'react'
-import { useSearchParams, useNavigate, useLocation } from 'react-router-dom'
 import { AppLink } from '@/components/AppLink'
 import { ChevronUp, ChevronDown } from 'lucide-react'
 import { PageLayout } from '@/components/layout'
@@ -8,11 +7,12 @@ import { CopyableProcessId } from '@/components/CopyableProcessId'
 import { QueryEditor } from '@/components/QueryEditor'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { useStreamQuery } from '@/hooks/useStreamQuery'
-import { useTimeRange } from '@/hooks/useTimeRange'
+import { useScreenConfig } from '@/hooks/useScreenConfig'
 import { useDebounce } from '@/hooks/useDebounce'
 import { usePageTitle } from '@/hooks/usePageTitle'
-import { formatTimestamp, formatDuration } from '@/lib/time-range'
+import { formatTimestamp, formatDuration, parseTimeRange, getTimeRangeForApi } from '@/lib/time-range'
 import { timestampToDate } from '@/lib/arrow-utils'
+import type { ProcessesConfig } from '@/lib/screen-config'
 
 type SortField = 'exe' | 'start_time' | 'last_update_time' | 'runtime' | 'username' | 'computer'
 type SortDirection = 'asc' | 'desc'
@@ -30,6 +30,35 @@ const VARIABLES = [
   { name: 'order_by', description: 'Sort column and direction' },
   { name: 'search_filter', description: 'Expanded from search input' },
 ]
+
+// Default config for ProcessesPage
+const DEFAULT_CONFIG: ProcessesConfig = {
+  timeRangeFrom: 'now-1h',
+  timeRangeTo: 'now',
+  search: '',
+  sortField: 'last_update_time',
+  sortDirection: 'desc',
+}
+
+// URL builder for ProcessesPage - builds query string from config
+const buildUrl = (cfg: ProcessesConfig): string => {
+  const params = new URLSearchParams()
+  if (cfg.timeRangeFrom && cfg.timeRangeFrom !== DEFAULT_CONFIG.timeRangeFrom) {
+    params.set('from', cfg.timeRangeFrom)
+  }
+  if (cfg.timeRangeTo && cfg.timeRangeTo !== DEFAULT_CONFIG.timeRangeTo) {
+    params.set('to', cfg.timeRangeTo)
+  }
+  if (cfg.search) params.set('search', cfg.search)
+  if (cfg.sortField && cfg.sortField !== DEFAULT_CONFIG.sortField) {
+    params.set('sort', cfg.sortField)
+  }
+  if (cfg.sortDirection && cfg.sortDirection !== DEFAULT_CONFIG.sortDirection) {
+    params.set('dir', cfg.sortDirection)
+  }
+  const qs = params.toString()
+  return qs ? `?${qs}` : ''
+}
 
 // Expand search string into SQL ILIKE clauses for multi-word search.
 // Note: These queries execute against DataFusion, a read-only analytics engine
@@ -57,21 +86,36 @@ function expandSearchFilter(search: string): string {
 
 function ProcessesPageContent() {
   usePageTitle('Processes')
-  const [searchParams] = useSearchParams()
-  const navigate = useNavigate()
-  const location = useLocation()
-  const pathname = location.pathname
 
-  // Read initial search from URL
-  const initialSearch = searchParams.get('search') || ''
+  // Use the new config-driven pattern
+  const { config, updateConfig } = useScreenConfig(DEFAULT_CONFIG, buildUrl)
 
-  const [searchInput, setSearchInput] = useState(initialSearch)
-  const [search, setSearch] = useState(initialSearch)
+  // Local state for sort (not persisted to URL by default - using replace)
+  const sortField = (config.sortField ?? 'last_update_time') as SortField
+  const sortDirection = (config.sortDirection ?? 'desc') as SortDirection
+
+  // Local UI state for search input (debounced before syncing to config)
+  const [searchInput, setSearchInput] = useState(config.search ?? '')
   const debouncedSearchInput = useDebounce(searchInput, 300)
-  const [sortField, setSortField] = useState<SortField>('last_update_time')
-  const [sortDirection, setSortDirection] = useState<SortDirection>('desc')
   const [currentSql, setCurrentSql] = useState<string>(DEFAULT_SQL)
-  const { parsed: timeRange, apiTimeRange } = useTimeRange()
+
+  // Compute API time range from config
+  const apiTimeRange = useMemo(() => {
+    try {
+      return getTimeRangeForApi(config.timeRangeFrom ?? 'now-1h', config.timeRangeTo ?? 'now')
+    } catch {
+      return getTimeRangeForApi('now-1h', 'now')
+    }
+  }, [config.timeRangeFrom, config.timeRangeTo])
+
+  // Compute display label for time range
+  const timeRangeLabel = useMemo(() => {
+    try {
+      return parseTimeRange(config.timeRangeFrom ?? 'now-1h', config.timeRangeTo ?? 'now').label
+    } catch {
+      return 'Last 1 hour'
+    }
+  }, [config.timeRangeFrom, config.timeRangeTo])
 
   const streamQuery = useStreamQuery()
   const table = streamQuery.getTable()
@@ -88,7 +132,7 @@ function ProcessesPageContent() {
     (sql: string) => {
       setCurrentSql(sql)
       // Interpolate search_filter directly into SQL (it contains raw SQL with quotes)
-      const sqlWithSearch = sql.replace('$search_filter', expandSearchFilter(search))
+      const sqlWithSearch = sql.replace('$search_filter', expandSearchFilter(config.search ?? ''))
       // Runtime is a computed column, so we need to use the SQL expression
       const orderByColumn = sortField === 'runtime'
         ? '(last_update_time - start_time)'
@@ -105,36 +149,21 @@ function ProcessesPageContent() {
         end: apiTimeRange.end,
       })
     },
-    [sortField, sortDirection, search, apiTimeRange]
+    [sortField, sortDirection, config.search, apiTimeRange]
   )
 
-  // Update search state and URL
-  const updateSearch = useCallback(
-    (value: string) => {
-      setSearch(value)
-      const params = new URLSearchParams(searchParams.toString())
-      if (value.trim() === '') {
-        params.delete('search')
-      } else {
-        params.set('search', value.trim())
-      }
-      navigate(`${pathname}?${params.toString()}`, { replace: true })
-    },
-    [searchParams, navigate, pathname]
-  )
-
-  // Sync debounced input to search state and URL
+  // Sync debounced search input to config with replace (editing, not navigational)
   const isInitialSearchRef = useRef(true)
   useEffect(() => {
     if (isInitialSearchRef.current) {
       isInitialSearchRef.current = false
       return
     }
-    updateSearch(debouncedSearchInput)
-  }, [debouncedSearchInput, updateSearch])
+    updateConfig({ search: debouncedSearchInput.trim() || undefined }, { replace: true })
+  }, [debouncedSearchInput, updateConfig])
 
   // Load on mount and when time range, sort, or search changes
-  const queryKey = `${apiTimeRange.begin}-${apiTimeRange.end}-${sortField}-${sortDirection}-${search}`
+  const queryKey = `${apiTimeRange.begin}-${apiTimeRange.end}-${sortField}-${sortDirection}-${config.search ?? ''}`
   const prevQueryKeyRef = useRef<string | null>(null)
   useEffect(() => {
     if (prevQueryKeyRef.current !== queryKey) {
@@ -144,12 +173,19 @@ function ProcessesPageContent() {
     }
   }, [queryKey, loadData])
 
+  // Time range changes create history entries (navigational)
+  const handleTimeRangeChange = useCallback(
+    (from: string, to: string) => {
+      updateConfig({ timeRangeFrom: from, timeRangeTo: to })
+    },
+    [updateConfig]
+  )
+
   const handleSort = (field: SortField) => {
     if (sortField === field) {
-      setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc')
+      updateConfig({ sortDirection: sortDirection === 'asc' ? 'desc' : 'asc' }, { replace: true })
     } else {
-      setSortField(field)
-      setSortDirection('desc')
+      updateConfig({ sortField: field, sortDirection: 'desc' }, { replace: true })
     }
   }
 
@@ -173,10 +209,10 @@ function ProcessesPageContent() {
         begin: apiTimeRange.begin,
         end: apiTimeRange.end,
         order_by: `${orderByColumn} ${sortDirection.toUpperCase()}`,
-        search_filter: expandSearchFilter(search) || '(empty)',
+        search_filter: expandSearchFilter(config.search ?? '') || '(empty)',
       }
     },
-    [apiTimeRange, search, sortField, sortDirection]
+    [apiTimeRange, config.search, sortField, sortDirection]
   )
 
   const SortHeader = ({
@@ -214,7 +250,7 @@ function ProcessesPageContent() {
       defaultSql={DEFAULT_SQL}
       variables={VARIABLES}
       currentValues={currentValues}
-      timeRangeLabel={timeRange.label}
+      timeRangeLabel={timeRangeLabel}
       onRun={handleRunQuery}
       onReset={handleResetQuery}
       isLoading={streamQuery.isStreaming}
@@ -232,7 +268,15 @@ function ProcessesPageContent() {
 
   return (
     <AuthGuard>
-      <PageLayout onRefresh={handleRefresh} rightPanel={sqlPanel}>
+      <PageLayout
+        onRefresh={handleRefresh}
+        rightPanel={sqlPanel}
+        timeRangeControl={{
+          timeRangeFrom: config.timeRangeFrom ?? 'now-1h',
+          timeRangeTo: config.timeRangeTo ?? 'now',
+          onTimeRangeChange: handleTimeRangeChange,
+        }}
+      >
         <div className="p-6 flex flex-col h-full">
           {/* Page Header */}
           <div className="mb-5">
@@ -346,7 +390,7 @@ function ProcessesPageContent() {
                   {(!table || table.numRows === 0) && (
                     <tr>
                       <td colSpan={7} className="px-4 py-8 text-center text-theme-text-muted">
-                        {search ? 'No processes match your search.' : 'No processes available.'}
+                        {config.search ? 'No processes match your search.' : 'No processes available.'}
                       </td>
                     </tr>
                   )}

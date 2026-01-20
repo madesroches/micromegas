@@ -8,6 +8,16 @@ import {
   getTimeRangeForApi,
 } from '@/lib/time-range'
 
+/**
+ * @deprecated This hook is deprecated. Use the useScreenConfig hook pattern instead.
+ *
+ * New pattern (MVC architecture):
+ * - Page components (controllers) own the time range state via useScreenConfig
+ * - Time range is passed to child components as props
+ * - URL is a projection of state, not the source of truth
+ *
+ * See useScreenConfig for the recommended approach.
+ */
 export interface UseTimeRangeReturn {
   // Raw URL values
   timeRange: TimeRange
@@ -19,6 +29,11 @@ export interface UseTimeRangeReturn {
   setTimeRange: (from: string, to: string) => void
 }
 
+/**
+ * @deprecated Use useScreenConfig hook pattern instead.
+ * This hook reads time range from URL and treats URL as source of truth.
+ * The new pattern has page components own state via useScreenConfig.
+ */
 export function useTimeRange(): UseTimeRangeReturn {
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
@@ -50,14 +65,16 @@ export function useTimeRange(): UseTimeRangeReturn {
     }
   }, [fromParam, toParam])
 
+  // Use location.search (a string) instead of searchParams object
+  // to avoid callback instability - searchParams is a new object every render
   const setTimeRange = useCallback(
     (from: string, to: string) => {
-      const params = new URLSearchParams(searchParams.toString())
+      const params = new URLSearchParams(location.search)
       params.set('from', from)
       params.set('to', to)
       navigate(`${pathname}?${params.toString()}`)
     },
-    [searchParams, navigate, pathname]
+    [location.search, navigate, pathname]
   )
 
   return {

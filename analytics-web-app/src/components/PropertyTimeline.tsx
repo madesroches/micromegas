@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
 import { Plus, X } from 'lucide-react'
 import { PropertyTimelineData } from '@/types'
-import { ChartAxisBounds } from './TimeSeriesChart'
+import { ChartAxisBounds } from './XYChart'
 
 interface PropertyTimelineProps {
   properties: PropertyTimelineData[]

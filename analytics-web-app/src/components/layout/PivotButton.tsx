@@ -1,4 +1,4 @@
-import { useLocation, useSearchParams, useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { ChevronDown, FileText, BarChart2, Zap } from 'lucide-react'
 
@@ -42,13 +42,20 @@ function detectCurrentView(pathname: string): ViewType | null {
   return null
 }
 
-export function PivotButton() {
+export interface PivotButtonProps {
+  /** Process ID to pivot on - when undefined, button is hidden */
+  processId?: string
+  /** Time range from value to preserve across pivots */
+  timeRangeFrom?: string
+  /** Time range to value to preserve across pivots */
+  timeRangeTo?: string
+}
+
+export function PivotButton({ processId, timeRangeFrom, timeRangeTo }: PivotButtonProps) {
   const location = useLocation()
-  const [searchParams] = useSearchParams()
   const navigate = useNavigate()
 
   const currentView = detectCurrentView(location.pathname)
-  const processId = searchParams.get('process_id')
 
   // Only show when on a process view with a valid process_id
   if (!currentView || !processId) {
@@ -60,12 +67,10 @@ export function PivotButton() {
   const secondaryView = VIEW_CONFIGS[config.secondary]
 
   const buildUrl = (view: ViewConfig): string => {
-    const from = searchParams.get('from') || ''
-    const to = searchParams.get('to') || ''
     const params = new URLSearchParams()
     params.set('process_id', processId)
-    if (from) params.set('from', from)
-    if (to) params.set('to', to)
+    if (timeRangeFrom) params.set('from', timeRangeFrom)
+    if (timeRangeTo) params.set('to', timeRangeTo)
     return `${view.path}?${params.toString()}`
   }
 

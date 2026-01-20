@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react'
 import { ThreadCoverage } from '@/types'
-import { ChartAxisBounds } from './TimeSeriesChart'
+import { ChartAxisBounds } from './XYChart'
 
 interface ThreadCoverageTimelineProps {
   threads: ThreadCoverage[]

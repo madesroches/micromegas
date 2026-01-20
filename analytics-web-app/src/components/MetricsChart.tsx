@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react'
-import { TimeSeriesChart, ChartAxisBounds, ScaleMode } from './TimeSeriesChart'
+import { TimeSeriesChart, ChartAxisBounds, ScaleMode } from './XYChart'
 import { PropertyTimeline } from './PropertyTimeline'
 import { ErrorBanner } from './ErrorBanner'
 import { usePropertyKeys } from '@/hooks/usePropertyKeys'
