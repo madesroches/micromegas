@@ -1,5 +1,5 @@
 import { Suspense, useState, useCallback, useMemo, useEffect, useRef } from 'react'
-import { useSearchParams, useNavigate, useLocation } from 'react-router-dom'
+import { useSearchParams } from 'react-router-dom'
 import { AppLink } from '@/components/AppLink'
 import { SplitButton } from '@/components/ui/SplitButton'
 import { AlertCircle, Clock, Download, ExternalLink } from 'lucide-react'
@@ -15,9 +15,11 @@ import { generateTrace } from '@/lib/api'
 import { executeStreamQuery } from '@/lib/arrow-stream'
 import { timestampToMs } from '@/lib/arrow-utils'
 import { openInPerfetto, PerfettoError } from '@/lib/perfetto'
-import { useTimeRange } from '@/hooks/useTimeRange'
+import { parseTimeRange, getTimeRangeForApi } from '@/lib/time-range'
+import { useScreenConfig } from '@/hooks/useScreenConfig'
 import { usePageTitle } from '@/hooks/usePageTitle'
 import { GenerateTraceRequest, ProgressUpdate, ThreadCoverage } from '@/types'
+import type { PerformanceAnalysisConfig } from '@/lib/screen-config'
 
 const DISCOVERY_SQL = `SELECT DISTINCT name, target, unit
 FROM view_instance('measures', '$process_id')
@@ -59,6 +61,35 @@ const VARIABLES = [
   { name: 'bin_interval', description: 'Time bucket size for downsampling' },
 ]
 
+// Default config for PerformanceAnalysisPage
+const DEFAULT_CONFIG: PerformanceAnalysisConfig = {
+  processId: '',
+  timeRangeFrom: 'now-1h',
+  timeRangeTo: 'now',
+  selectedMeasure: undefined,
+  selectedProperties: [],
+  scaleMode: 'p99',
+}
+
+// URL builder for PerformanceAnalysisPage - builds query string from config
+const buildUrl = (cfg: PerformanceAnalysisConfig): string => {
+  const params = new URLSearchParams()
+  if (cfg.processId) params.set('process_id', cfg.processId)
+  if (cfg.timeRangeFrom && cfg.timeRangeFrom !== DEFAULT_CONFIG.timeRangeFrom) {
+    params.set('from', cfg.timeRangeFrom)
+  }
+  if (cfg.timeRangeTo && cfg.timeRangeTo !== DEFAULT_CONFIG.timeRangeTo) {
+    params.set('to', cfg.timeRangeTo)
+  }
+  if (cfg.selectedMeasure) params.set('measure', cfg.selectedMeasure)
+  if (cfg.selectedProperties && cfg.selectedProperties.length > 0) {
+    params.set('properties', cfg.selectedProperties.join(','))
+  }
+  if (cfg.scaleMode && cfg.scaleMode !== 'p99') params.set('scale', cfg.scaleMode)
+  const qs = params.toString()
+  return qs ? `?${qs}` : ''
+}
+
 interface Measure {
   name: string
   target: string
@@ -96,27 +127,33 @@ function calculateBinInterval(timeSpanMs: number, chartWidthPx: number = 800): s
 
 function PerformanceAnalysisContent() {
   usePageTitle('Performance Analysis')
-  const [searchParams] = useSearchParams()
-  const navigate = useNavigate()
-  const location = useLocation()
-  const pathname = location.pathname
-  const processId = searchParams.get('process_id')
-  const measureParam = searchParams.get('measure')
-  const propertiesParam = searchParams.get('properties')
-  const scaleParam = searchParams.get('scale')
-  const { parsed: timeRange, apiTimeRange, setTimeRange } = useTimeRange()
 
-  // Parse selected properties from URL
-  const selectedProperties = useMemo(() => {
-    if (!propertiesParam) return []
-    return propertiesParam.split(',').filter(Boolean)
-  }, [propertiesParam])
+  // Use the new config-driven pattern
+  const { config, updateConfig } = useScreenConfig(DEFAULT_CONFIG, buildUrl)
+  const processId = config.processId
+  const selectedProperties = useMemo(() => config.selectedProperties ?? [], [config.selectedProperties])
+  const scaleMode: ScaleMode = (config.scaleMode ?? 'p99') as ScaleMode
 
-  // Parse scale mode from URL (default to p99)
-  const scaleMode: ScaleMode = scaleParam === 'max' ? 'max' : 'p99'
+  // Compute API time range from config
+  const apiTimeRange = useMemo(() => {
+    try {
+      return getTimeRangeForApi(config.timeRangeFrom ?? 'now-1h', config.timeRangeTo ?? 'now')
+    } catch {
+      return getTimeRangeForApi('now-1h', 'now')
+    }
+  }, [config.timeRangeFrom, config.timeRangeTo])
+
+  // Compute display label and dates for time range
+  const timeRangeParsed = useMemo(() => {
+    try {
+      return parseTimeRange(config.timeRangeFrom ?? 'now-1h', config.timeRangeTo ?? 'now')
+    } catch {
+      return { label: 'Last 1 hour', from: new Date(Date.now() - 3600000), to: new Date() }
+    }
+  }, [config.timeRangeFrom, config.timeRangeTo])
 
   const [measures, setMeasures] = useState<Measure[]>([])
-  const [selectedMeasure, setSelectedMeasure] = useState<string | null>(measureParam)
+  const [selectedMeasure, setSelectedMeasure] = useState<string | null>(config.selectedMeasure ?? null)
   const [queryError, setQueryError] = useState<string | null>(null)
   const [chartData, setChartData] = useState<{ time: number; value: number }[]>([])
   const [_processExe, setProcessExe] = useState<string | null>(null)
@@ -344,52 +381,36 @@ function PerformanceAnalysisContent() {
     }
   }, [processId, apiTimeRange])
 
-  // Use location.search instead of searchParams to avoid callback instability
+  // Update measure in config with replace (editing, not navigational)
   const updateMeasure = useCallback(
     (measure: string) => {
       setSelectedMeasure(measure)
-      const params = new URLSearchParams(location.search)
-      params.set('measure', measure)
-      navigate(`${pathname}?${params.toString()}`)
+      updateConfig({ selectedMeasure: measure }, { replace: true })
     },
-    [location.search, navigate, pathname]
+    [updateConfig]
   )
 
   const handleAddProperty = useCallback(
     (key: string) => {
       const newProperties = [...selectedProperties, key]
-      const params = new URLSearchParams(location.search)
-      params.set('properties', newProperties.join(','))
-      navigate(`${pathname}?${params.toString()}`)
+      updateConfig({ selectedProperties: newProperties }, { replace: true })
     },
-    [selectedProperties, location.search, navigate, pathname]
+    [selectedProperties, updateConfig]
   )
 
   const handleRemoveProperty = useCallback(
     (key: string) => {
       const newProperties = selectedProperties.filter((k) => k !== key)
-      const params = new URLSearchParams(location.search)
-      if (newProperties.length > 0) {
-        params.set('properties', newProperties.join(','))
-      } else {
-        params.delete('properties')
-      }
-      navigate(`${pathname}?${params.toString()}`)
+      updateConfig({ selectedProperties: newProperties.length > 0 ? newProperties : undefined }, { replace: true })
     },
-    [selectedProperties, location.search, navigate, pathname]
+    [selectedProperties, updateConfig]
   )
 
   const handleScaleModeChange = useCallback(
     (mode: ScaleMode) => {
-      const params = new URLSearchParams(location.search)
-      if (mode === 'p99') {
-        params.delete('scale') // p99 is default, no need to persist
-      } else {
-        params.set('scale', mode)
-      }
-      navigate(`${pathname}?${params.toString()}`)
+      updateConfig({ scaleMode: mode === 'p99' ? undefined : mode }, { replace: true })
     },
-    [location.search, navigate, pathname]
+    [updateConfig]
   )
 
   const hasLoadedProcessRef = useRef(false)
@@ -468,11 +489,19 @@ function PerformanceAnalysisContent() {
     loadThreadCoverage()
   }, [loadDiscovery, loadThreadCoverage])
 
+  // Time range changes create history entries (navigational)
+  const handleTimeRangeChange = useCallback(
+    (from: string, to: string) => {
+      updateConfig({ timeRangeFrom: from, timeRangeTo: to })
+    },
+    [updateConfig]
+  )
+
   const handleTimeRangeSelect = useCallback(
     (from: Date, to: Date) => {
-      setTimeRange(from.toISOString(), to.toISOString())
+      updateConfig({ timeRangeFrom: from.toISOString(), timeRangeTo: to.toISOString() })
     },
-    [setTimeRange]
+    [updateConfig]
   )
 
   const handleChartWidthChange = useCallback((width: number) => {
@@ -485,10 +514,10 @@ function PerformanceAnalysisContent() {
 
   const canUseCachedBuffer = useCallback(() => {
     if (!cachedTraceBuffer || !cachedTraceTimeRange) return false
-    const currentBegin = timeRange.from.toISOString()
-    const currentEnd = timeRange.to.toISOString()
+    const currentBegin = timeRangeParsed.from.toISOString()
+    const currentEnd = timeRangeParsed.to.toISOString()
     return cachedTraceTimeRange.begin === currentBegin && cachedTraceTimeRange.end === currentEnd
-  }, [cachedTraceBuffer, cachedTraceTimeRange, timeRange])
+  }, [cachedTraceBuffer, cachedTraceTimeRange, timeRangeParsed])
 
   const openCachedInPerfetto = useCallback(async () => {
     if (!processId || !cachedTraceBuffer || !cachedTraceTimeRange) return
@@ -545,8 +574,8 @@ function PerformanceAnalysisContent() {
     setCachedTraceTimeRange(null)
 
     const currentTimeRange = {
-      begin: timeRange.from.toISOString(),
-      end: timeRange.to.toISOString(),
+      begin: timeRangeParsed.from.toISOString(),
+      end: timeRangeParsed.to.toISOString(),
     }
 
     const request: GenerateTraceRequest = {
@@ -600,8 +629,8 @@ function PerformanceAnalysisContent() {
       include_async_spans: true,
       include_thread_spans: true,
       time_range: {
-        begin: timeRange.from.toISOString(),
-        end: timeRange.to.toISOString(),
+        begin: timeRangeParsed.from.toISOString(),
+        end: timeRangeParsed.to.toISOString(),
       },
     }
 
@@ -634,7 +663,7 @@ function PerformanceAnalysisContent() {
         defaultSql={DEFAULT_SQL}
         variables={VARIABLES}
         currentValues={currentValues}
-        timeRangeLabel={timeRange.label}
+        timeRangeLabel={timeRangeParsed.label}
         onRun={handleRunQuery}
         onReset={handleResetQuery}
         isLoading={dataLoading}
@@ -666,7 +695,16 @@ function PerformanceAnalysisContent() {
   const noDataInRange = hasLoaded && chartData.length === 0 && selectedMeasure
 
   return (
-    <PageLayout onRefresh={handleRefresh} rightPanel={sqlPanel}>
+    <PageLayout
+      onRefresh={handleRefresh}
+      rightPanel={sqlPanel}
+      timeRangeControl={{
+        timeRangeFrom: config.timeRangeFrom ?? 'now-1h',
+        timeRangeTo: config.timeRangeTo ?? 'now',
+        onTimeRangeChange: handleTimeRangeChange,
+      }}
+      processId={processId}
+    >
       <div className="p-6 flex flex-col">
         <div className="mb-5">
           <h1 className="text-2xl font-semibold text-theme-text-primary">Performance Analysis</h1>
@@ -874,6 +912,10 @@ function PerformanceAnalysisContent() {
 }
 
 export default function PerformanceAnalysisPage() {
+  // Read processId from URL to use as key for remounting content
+  const [searchParams] = useSearchParams()
+  const processId = searchParams.get('process_id')
+
   return (
     <AuthGuard>
       <Suspense
@@ -887,7 +929,8 @@ export default function PerformanceAnalysisPage() {
           </PageLayout>
         }
       >
-        <PerformanceAnalysisContent />
+        {/* Key on processId to force remount when switching processes */}
+        <PerformanceAnalysisContent key={processId} />
       </Suspense>
     </AuthGuard>
   )

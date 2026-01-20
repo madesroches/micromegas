@@ -1,5 +1,5 @@
 import { Suspense, useState, useCallback, useMemo, useEffect, useRef } from 'react'
-import { useSearchParams, useNavigate, useLocation } from 'react-router-dom'
+import { useSearchParams } from 'react-router-dom'
 import { AppLink } from '@/components/AppLink'
 import { AlertCircle, ChevronDown } from 'lucide-react'
 import { PageLayout } from '@/components/layout'
@@ -8,10 +8,12 @@ import { CopyableProcessId } from '@/components/CopyableProcessId'
 import { QueryEditor } from '@/components/QueryEditor'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { useStreamQuery } from '@/hooks/useStreamQuery'
+import { useScreenConfig } from '@/hooks/useScreenConfig'
 import { timestampToDate } from '@/lib/arrow-utils'
-import { useTimeRange } from '@/hooks/useTimeRange'
+import { parseTimeRange, getTimeRangeForApi } from '@/lib/time-range'
 import { useDebounce } from '@/hooks/useDebounce'
 import { usePageTitle } from '@/hooks/usePageTitle'
+import type { ProcessLogConfig } from '@/lib/screen-config'
 
 const DEFAULT_SQL = `SELECT time, level, target, msg
 FROM view_instance('log_entries', '$process_id')
@@ -51,11 +53,31 @@ const PRESET_LIMITS = [50, 100, 200, 500, 1000]
 const MIN_LIMIT = 1
 const MAX_LIMIT = 10000
 
-function parseLimit(value: string | null): number {
-  if (!value) return 100
-  const parsed = parseInt(value, 10)
-  if (isNaN(parsed) || parsed < MIN_LIMIT) return 100
-  return Math.min(parsed, MAX_LIMIT)
+// Default config for ProcessLogPage
+const DEFAULT_CONFIG: ProcessLogConfig = {
+  processId: '',
+  timeRangeFrom: 'now-1h',
+  timeRangeTo: 'now',
+  logLevel: 'all',
+  logLimit: 100,
+  search: '',
+}
+
+// URL builder for ProcessLogPage - builds query string from config
+const buildUrl = (cfg: ProcessLogConfig): string => {
+  const params = new URLSearchParams()
+  if (cfg.processId) params.set('process_id', cfg.processId)
+  if (cfg.timeRangeFrom && cfg.timeRangeFrom !== DEFAULT_CONFIG.timeRangeFrom) {
+    params.set('from', cfg.timeRangeFrom)
+  }
+  if (cfg.timeRangeTo && cfg.timeRangeTo !== DEFAULT_CONFIG.timeRangeTo) {
+    params.set('to', cfg.timeRangeTo)
+  }
+  if (cfg.logLevel && cfg.logLevel !== 'all') params.set('level', cfg.logLevel)
+  if (cfg.logLimit && cfg.logLimit !== 100) params.set('limit', String(cfg.logLimit))
+  if (cfg.search) params.set('search', cfg.search)
+  const qs = params.toString()
+  return qs ? `?${qs}` : ''
 }
 
 function expandSearchFilter(search: string): string {
@@ -183,29 +205,40 @@ interface LogRow {
 
 function ProcessLogContent() {
   usePageTitle('Process Log')
-  const [searchParams] = useSearchParams()
-  const navigate = useNavigate()
-  const location = useLocation()
-  const pathname = location.pathname
-  const processId = searchParams.get('process_id')
-  const { parsed: timeRange, apiTimeRange } = useTimeRange()
 
-  const levelParam = searchParams.get('level')
-  const limitParam = searchParams.get('limit')
-  const searchParam = searchParams.get('search')
-  const initialLevel = levelParam && VALID_LEVELS.includes(levelParam) ? levelParam : 'all'
-  const initialLimit = parseLimit(limitParam)
-  const initialSearch = searchParam || ''
+  // Use the new config-driven pattern
+  const { config, updateConfig } = useScreenConfig(DEFAULT_CONFIG, buildUrl)
+  const processId = config.processId
 
-  const [logLevel, setLogLevel] = useState<string>(initialLevel)
-  const [logLimit, setLogLimit] = useState<number>(initialLimit)
-  const [limitInputValue, setLimitInputValue] = useState<string>(String(initialLimit))
-  const [search, setSearch] = useState<string>(initialSearch)
-  const [searchInputValue, setSearchInputValue] = useState<string>(initialSearch)
+  // Local state for log level and limit (synced with config)
+  const logLevel = config.logLevel && VALID_LEVELS.includes(config.logLevel) ? config.logLevel : 'all'
+  const logLimit = config.logLimit ?? 100
+
+  // Local UI state for inputs
+  const [limitInputValue, setLimitInputValue] = useState<string>(String(logLimit))
+  const [searchInputValue, setSearchInputValue] = useState<string>(config.search ?? '')
   const debouncedSearchInput = useDebounce(searchInputValue, 300)
   const [rows, setRows] = useState<LogRow[]>([])
   const [hasLoaded, setHasLoaded] = useState(false)
   const [currentSql, setCurrentSql] = useState<string>(DEFAULT_SQL)
+
+  // Compute API time range from config
+  const apiTimeRange = useMemo(() => {
+    try {
+      return getTimeRangeForApi(config.timeRangeFrom ?? 'now-1h', config.timeRangeTo ?? 'now')
+    } catch {
+      return getTimeRangeForApi('now-1h', 'now')
+    }
+  }, [config.timeRangeFrom, config.timeRangeTo])
+
+  // Compute display label for time range
+  const timeRangeLabel = useMemo(() => {
+    try {
+      return parseTimeRange(config.timeRangeFrom ?? 'now-1h', config.timeRangeTo ?? 'now').label
+    } catch {
+      return 'Last 1 hour'
+    }
+  }, [config.timeRangeFrom, config.timeRangeTo])
 
   const streamQuery = useStreamQuery()
   const queryError = streamQuery.error?.message ?? null
@@ -248,7 +281,7 @@ function ProcessLogContent() {
     (sql: string) => {
       if (!processId) return
       setCurrentSql(sql)
-      const sqlWithSearch = sql.replace('$search_filter', expandSearchFilter(search))
+      const sqlWithSearch = sql.replace('$search_filter', expandSearchFilter(config.search ?? ''))
       const params: Record<string, string> = {
         process_id: processId,
         max_level: String(LOG_LEVELS[logLevel] || 6),
@@ -261,38 +294,25 @@ function ProcessLogContent() {
         end: apiTimeRange.end,
       })
     },
-    [processId, logLevel, logLimit, search, apiTimeRange]
+    [processId, logLevel, logLimit, config.search, apiTimeRange]
   )
 
-  // Use location.search instead of searchParams to avoid callback instability
+  // Update log level with replace (editing, not navigational)
   const updateLogLevel = useCallback(
     (level: string) => {
-      setLogLevel(level)
-      const params = new URLSearchParams(location.search)
-      if (level === 'all') {
-        params.delete('level')
-      } else {
-        params.set('level', level)
-      }
-      navigate(`${pathname}?${params.toString()}`, { replace: true })
+      updateConfig({ logLevel: level === 'all' ? undefined : level }, { replace: true })
     },
-    [location.search, navigate, pathname]
+    [updateConfig]
   )
 
+  // Update log limit with replace (editing, not navigational)
   const updateLogLimit = useCallback(
     (limit: number) => {
       const clampedLimit = Math.max(MIN_LIMIT, Math.min(MAX_LIMIT, limit))
-      setLogLimit(clampedLimit)
       setLimitInputValue(String(clampedLimit))
-      const params = new URLSearchParams(location.search)
-      if (clampedLimit === 100) {
-        params.delete('limit')
-      } else {
-        params.set('limit', String(clampedLimit))
-      }
-      navigate(`${pathname}?${params.toString()}`, { replace: true })
+      updateConfig({ logLimit: clampedLimit === 100 ? undefined : clampedLimit }, { replace: true })
     },
-    [location.search, navigate, pathname]
+    [updateConfig]
   )
 
   const handleLimitInputBlur = useCallback(() => {
@@ -313,34 +333,21 @@ function ProcessLogContent() {
     []
   )
 
-  const updateSearch = useCallback(
-    (value: string) => {
-      setSearch(value)
-      const params = new URLSearchParams(location.search)
-      if (value.trim() === '') {
-        params.delete('search')
-      } else {
-        params.set('search', value.trim())
-      }
-      navigate(`${pathname}?${params.toString()}`, { replace: true })
-    },
-    [location.search, navigate, pathname]
-  )
-
+  // Sync debounced search to config with replace (editing, not navigational)
   const isInitialSearchRef = useRef(true)
   useEffect(() => {
     if (isInitialSearchRef.current) {
       isInitialSearchRef.current = false
       return
     }
-    updateSearch(debouncedSearchInput)
-  }, [debouncedSearchInput, updateSearch])
+    updateConfig({ search: debouncedSearchInput.trim() || undefined }, { replace: true })
+  }, [debouncedSearchInput, updateConfig])
 
   const handleSearchBlur = useCallback(() => {
-    if (searchInputValue !== search) {
-      updateSearch(searchInputValue)
+    if (searchInputValue !== (config.search ?? '')) {
+      updateConfig({ search: searchInputValue.trim() || undefined }, { replace: true })
     }
-  }, [searchInputValue, search, updateSearch])
+  }, [searchInputValue, config.search, updateConfig])
 
   const handleSearchKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -351,6 +358,7 @@ function ProcessLogContent() {
     []
   )
 
+  // Initial load
   const hasInitialLoadRef = useRef(false)
   useEffect(() => {
     if (processId && !hasInitialLoadRef.current) {
@@ -359,19 +367,21 @@ function ProcessLogContent() {
     }
   }, [processId, loadData])
 
+  // Re-execute on filter changes
   const prevFiltersRef = useRef<{ logLevel: string; logLimit: number; search: string } | null>(null)
   useEffect(() => {
     if (!hasLoaded) return
     if (prevFiltersRef.current === null) {
-      prevFiltersRef.current = { logLevel, logLimit, search }
+      prevFiltersRef.current = { logLevel, logLimit, search: config.search ?? '' }
       return
     }
-    if (prevFiltersRef.current.logLevel !== logLevel || prevFiltersRef.current.logLimit !== logLimit || prevFiltersRef.current.search !== search) {
-      prevFiltersRef.current = { logLevel, logLimit, search }
+    if (prevFiltersRef.current.logLevel !== logLevel || prevFiltersRef.current.logLimit !== logLimit || prevFiltersRef.current.search !== (config.search ?? '')) {
+      prevFiltersRef.current = { logLevel, logLimit, search: config.search ?? '' }
       loadData(currentSqlRef.current)
     }
-  }, [logLevel, logLimit, search, hasLoaded, loadData])
+  }, [logLevel, logLimit, config.search, hasLoaded, loadData])
 
+  // Re-execute on time range changes
   const prevTimeRangeRef = useRef<{ begin: string; end: string } | null>(null)
   useEffect(() => {
     if (!hasLoaded) return
@@ -384,6 +394,14 @@ function ProcessLogContent() {
       loadData(currentSqlRef.current)
     }
   }, [apiTimeRange.begin, apiTimeRange.end, hasLoaded, loadData])
+
+  // Time range changes create history entries (navigational)
+  const handleTimeRangeChange = useCallback(
+    (from: string, to: string) => {
+      updateConfig({ timeRangeFrom: from, timeRangeTo: to })
+    },
+    [updateConfig]
+  )
 
   const handleRunQuery = useCallback(
     (sql: string) => {
@@ -401,9 +419,9 @@ function ProcessLogContent() {
       process_id: processId || '',
       max_level: String(LOG_LEVELS[logLevel] || 6),
       limit: String(logLimit),
-      search_filter: expandSearchFilter(search) || '(empty)',
+      search_filter: expandSearchFilter(config.search ?? '') || '(empty)',
     }),
-    [processId, logLevel, logLimit, search]
+    [processId, logLevel, logLimit, config.search]
   )
 
   const getLevelColor = (level: unknown) => {
@@ -431,7 +449,7 @@ function ProcessLogContent() {
       defaultSql={DEFAULT_SQL}
       variables={VARIABLES}
       currentValues={currentValues}
-      timeRangeLabel={timeRange.label}
+      timeRangeLabel={timeRangeLabel}
       onRun={handleRunQuery}
       onReset={handleResetQuery}
       isLoading={streamQuery.isStreaming}
@@ -464,7 +482,16 @@ function ProcessLogContent() {
   }
 
   return (
-    <PageLayout onRefresh={handleRefresh} rightPanel={sqlPanel}>
+    <PageLayout
+      onRefresh={handleRefresh}
+      rightPanel={sqlPanel}
+      timeRangeControl={{
+        timeRangeFrom: config.timeRangeFrom ?? 'now-1h',
+        timeRangeTo: config.timeRangeTo ?? 'now',
+        onTimeRangeChange: handleTimeRangeChange,
+      }}
+      processId={processId}
+    >
       <div className="p-6 flex flex-col h-full">
         <div className="mb-5">
           <h1 className="text-2xl font-semibold text-theme-text-primary">Process Log</h1>
@@ -567,6 +594,10 @@ function ProcessLogContent() {
 }
 
 export default function ProcessLogPage() {
+  // Read processId from URL to use as key for remounting content
+  const [searchParams] = useSearchParams()
+  const processId = searchParams.get('process_id')
+
   return (
     <AuthGuard>
       <Suspense
@@ -580,7 +611,8 @@ export default function ProcessLogPage() {
           </PageLayout>
         }
       >
-        <ProcessLogContent />
+        {/* Key on processId to force remount when switching processes */}
+        <ProcessLogContent key={processId} />
       </Suspense>
     </AuthGuard>
   )

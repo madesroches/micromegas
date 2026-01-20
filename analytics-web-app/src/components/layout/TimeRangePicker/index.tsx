@@ -1,25 +1,39 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { Clock, ChevronDown } from 'lucide-react'
-import { useTimeRange } from '@/hooks/useTimeRange'
 import { saveTimeRange } from '@/lib/time-range-history'
 import { parseTimeRange } from '@/lib/time-range'
 import { QuickRanges } from './QuickRanges'
 import { CustomRange } from './CustomRange'
 import { RecentRanges } from './RecentRanges'
+import type { TimeRangePickerProps } from './types'
 
-export function TimeRangePicker() {
-  const { parsed, setTimeRange, timeRange } = useTimeRange()
+/**
+ * TimeRangePicker - controlled component for selecting time ranges.
+ *
+ * Follows the MVC pattern:
+ * - Receives time range values as props (from parent controller)
+ * - Dispatches changes via onChange callback
+ * - Does not read URL directly
+ *
+ * @param from - Raw "from" value (relative like "now-1h" or ISO string)
+ * @param to - Raw "to" value (relative like "now" or ISO string)
+ * @param onChange - Callback when user selects a new time range
+ */
+export function TimeRangePicker({ from, to, onChange }: TimeRangePickerProps) {
   const [isOpen, setIsOpen] = useState(false)
   const popoverRef = useRef<HTMLDivElement>(null)
 
+  // Derive display label from props
+  const parsed = parseTimeRange(from, to)
+
   const handleSelect = useCallback(
-    (from: string, to: string) => {
-      const newParsed = parseTimeRange(from, to)
-      saveTimeRange(from, to, newParsed.label)
-      setTimeRange(from, to)
+    (newFrom: string, newTo: string) => {
+      const newParsed = parseTimeRange(newFrom, newTo)
+      saveTimeRange(newFrom, newTo, newParsed.label)
+      onChange(newFrom, newTo)
       setIsOpen(false)
     },
-    [setTimeRange]
+    [onChange]
   )
 
   // Handle keyboard navigation
@@ -64,7 +78,7 @@ export function TimeRangePicker() {
         <Clock className="w-4 h-4 text-theme-text-secondary" />
         <span className="hidden sm:inline">{parsed.label}</span>
         <span className="sm:hidden">
-          {timeRange.from === 'now-24h' ? '24h' : timeRange.from.replace('now-', '')}
+          {from === 'now-24h' ? '24h' : from.replace('now-', '')}
         </span>
         <ChevronDown className="w-3 h-3 text-theme-text-secondary" />
       </button>
@@ -81,13 +95,13 @@ export function TimeRangePicker() {
             <div className="p-4">
               <div className="flex gap-4">
                 <QuickRanges
-                  currentFrom={timeRange.from}
-                  currentTo={timeRange.to}
+                  currentFrom={from}
+                  currentTo={to}
                   onSelect={handleSelect}
                 />
                 <CustomRange
-                  from={timeRange.from}
-                  to={timeRange.to}
+                  from={from}
+                  to={to}
                   onApply={handleSelect}
                 />
               </div>
@@ -99,3 +113,6 @@ export function TimeRangePicker() {
     </div>
   )
 }
+
+// Re-export types for consumers
+export type { TimeRangePickerProps } from './types'

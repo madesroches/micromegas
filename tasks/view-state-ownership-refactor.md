@@ -885,13 +885,33 @@ Pages key their content component on identity params to force remount:
 
 (None currently)
 
+## Implementation Status
+
+**Completed: January 2026**
+
+All core implementation phases have been completed:
+- [x] Phase 1: Created `src/lib/screen-config.ts` with base config types
+- [x] Phase 2: Created `src/lib/url-params.ts` with URL parsing utilities
+- [x] Phase 2: Created `src/hooks/useScreenConfig.ts` hook
+- [x] Phase 3: Refactored TimeRangePicker to props-driven component
+- [x] Phase 4: Migrated ProcessesPage to config pattern
+- [x] Phase 4: Migrated ProcessLogPage to config pattern
+- [x] Phase 4: Migrated ProcessMetricsPage to config pattern
+- [x] Phase 4: Migrated PerformanceAnalysisPage to config pattern
+- [x] Phase 5: Refactored PivotButton to receive props
+- [x] Phase 5: LogRenderer already props-driven (receives timeRange via ScreenRendererProps)
+- [x] Phase 6: Added deprecation notice to useTimeRange hook
+
+Remaining work (lower priority):
+- [ ] Phase 7: Update architecture documentation
+
 ## Success Criteria
 
-- [ ] No more chart flickering on built-in pages
-- [ ] No race conditions when changing multiple params quickly
-- [ ] Clear ownership: config owns state, URL is just a projection
-- [ ] Stable callbacks that don't cause re-renders
-- [ ] Built-in pages follow same pattern as user-defined screens
-- [ ] Drag-to-zoom updates config (not URL directly) on mouse release
-- [ ] Path to "save view as custom screen" is clear
+- [x] No more chart flickering on built-in pages
+- [x] No race conditions when changing multiple params quickly
+- [x] Clear ownership: config owns state, URL is just a projection
+- [x] Stable callbacks that don't cause re-renders
+- [x] Built-in pages follow same pattern as user-defined screens
+- [x] Drag-to-zoom updates config (not URL directly) on mouse release
+- [x] Path to "save view as custom screen" is clear
 - [ ] Architecture doc updated to cover unified pattern (Phase 7)
