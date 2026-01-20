@@ -1,14 +1,16 @@
-import { Suspense, useState, useCallback, useMemo, useEffect } from 'react'
-import { useParams, useSearchParams, useNavigate } from 'react-router-dom'
+import { Suspense, useState, useCallback, useMemo, useEffect, useRef } from 'react'
+import { useParams, useNavigate } from 'react-router-dom'
 import { usePageTitle } from '@/hooks/usePageTitle'
 import { AlertCircle } from 'lucide-react'
 import { PageLayout } from '@/components/layout'
 import { AuthGuard } from '@/components/AuthGuard'
 import { AppLink } from '@/components/AppLink'
 import { SaveScreenDialog } from '@/components/SaveScreenDialog'
-import { useTimeRange } from '@/hooks/useTimeRange'
+import { useScreenConfig } from '@/hooks/useScreenConfig'
+import { parseTimeRange, getTimeRangeForApi } from '@/lib/time-range'
 import { renderIcon } from '@/lib/screen-type-utils'
 import { getRenderer } from '@/lib/screen-renderers/init'
+import type { ScreenPageConfig } from '@/lib/screen-config'
 import {
   getScreen,
   getScreenTypes,
@@ -21,17 +23,73 @@ import {
   ScreenApiError,
 } from '@/lib/screens-api'
 
+// Default config for ScreenPage
+const DEFAULT_CONFIG: ScreenPageConfig = {
+  timeRangeFrom: 'now-1h',
+  timeRangeTo: 'now',
+  type: undefined,
+}
+
+// URL builder for ScreenPage
+const buildUrl = (cfg: ScreenPageConfig): string => {
+  const params = new URLSearchParams()
+  if (cfg.type) params.set('type', cfg.type)
+  if (cfg.timeRangeFrom && cfg.timeRangeFrom !== DEFAULT_CONFIG.timeRangeFrom) {
+    params.set('from', cfg.timeRangeFrom)
+  }
+  if (cfg.timeRangeTo && cfg.timeRangeTo !== DEFAULT_CONFIG.timeRangeTo) {
+    params.set('to', cfg.timeRangeTo)
+  }
+  const qs = params.toString()
+  return qs ? `?${qs}` : ''
+}
+
 function ScreenPageContent() {
   const { name } = useParams<{ name: string }>()
-  const [searchParams] = useSearchParams()
   const navigate = useNavigate()
   const isNew = !name
-  const typeParam = searchParams.get('type') as ScreenTypeName | null
 
-  const { timeRange: rawTimeRange, parsed: timeRange, apiTimeRange, setTimeRange } = useTimeRange()
+  // Use the config-driven pattern for URL state (time range, type for new screens)
+  const { config: urlConfig, updateConfig } = useScreenConfig(DEFAULT_CONFIG, buildUrl)
+  const typeParam = (urlConfig.type ?? null) as ScreenTypeName | null
 
-  // Track expected time range for sync detection (null = no sync needed)
-  const [expectedTimeRange, setExpectedTimeRange] = useState<{ from: string; to: string } | null>(null)
+  // Track if we've applied saved time range (to avoid re-applying on subsequent renders)
+  const hasAppliedSavedTimeRangeRef = useRef(false)
+
+  // Compute raw time range values (for renderer)
+  const rawTimeRange = useMemo(
+    () => ({
+      from: urlConfig.timeRangeFrom ?? 'now-1h',
+      to: urlConfig.timeRangeTo ?? 'now',
+    }),
+    [urlConfig.timeRangeFrom, urlConfig.timeRangeTo]
+  )
+
+  // Compute parsed time range (for label)
+  const parsedTimeRange = useMemo(() => {
+    try {
+      return parseTimeRange(rawTimeRange.from, rawTimeRange.to)
+    } catch {
+      return parseTimeRange('now-1h', 'now')
+    }
+  }, [rawTimeRange])
+
+  // Compute API time range
+  const apiTimeRange = useMemo(() => {
+    try {
+      return getTimeRangeForApi(rawTimeRange.from, rawTimeRange.to)
+    } catch {
+      return getTimeRangeForApi('now-1h', 'now')
+    }
+  }, [rawTimeRange])
+
+  // Time range change handler (navigational)
+  const handleTimeRangeChange = useCallback(
+    (from: string, to: string) => {
+      updateConfig({ timeRangeFrom: from, timeRangeTo: to })
+    },
+    [updateConfig]
+  )
 
   // Screen state
   const [screen, setScreen] = useState<Screen | null>(null)
@@ -44,7 +102,7 @@ function ScreenPageContent() {
     ? (screenTypeInfo ? `New ${screenTypeInfo.display_name} Screen` : null)
     : screen?.name ?? null
   usePageTitle(pageTitle)
-  const [config, setConfigState] = useState<ScreenConfig | null>(null)
+  const [screenConfig, setScreenConfig] = useState<ScreenConfig | null>(null)
   const [screenType, setScreenType] = useState<ScreenTypeName | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -65,6 +123,7 @@ function ScreenPageContent() {
       setLoadError(null)
       setHasUnsavedChanges(false)
       setScreen(null)
+      hasAppliedSavedTimeRangeRef.current = false
 
       try {
         // Fetch screen types for display info
@@ -78,27 +137,29 @@ function ScreenPageContent() {
             return
           }
           const defaultConfig = await getDefaultConfig(typeParam)
-          setConfigState(defaultConfig)
+          setScreenConfig(defaultConfig)
           setScreenType(typeParam)
           setScreenTypeInfo(typeMap.get(typeParam) ?? null)
         } else {
           // Existing screen - load from API
           const loadedScreen = await getScreen(name)
           setScreen(loadedScreen)
-          setConfigState(loadedScreen.config)
+          setScreenConfig(loadedScreen.config)
           setScreenType(loadedScreen.screen_type as ScreenTypeName)
           setScreenTypeInfo(typeMap.get(loadedScreen.screen_type as ScreenTypeName) ?? null)
 
-          // Initialize time range from saved config (if present and no URL params)
+          // Initialize time range from saved config (if present and URL uses defaults)
           const savedTimeRangeFrom = loadedScreen.config.timeRangeFrom as string | undefined
           const savedTimeRangeTo = loadedScreen.config.timeRangeTo as string | undefined
-          if (savedTimeRangeFrom && savedTimeRangeTo) {
-            // Only apply if URL doesn't already have time params
-            const urlHasTimeParams = searchParams.has('from') || searchParams.has('to')
-            if (!urlHasTimeParams) {
-              // Track expected values so we can wait for sync
-              setExpectedTimeRange({ from: savedTimeRangeFrom, to: savedTimeRangeTo })
-              setTimeRange(savedTimeRangeFrom, savedTimeRangeTo)
+          if (savedTimeRangeFrom && savedTimeRangeTo && !hasAppliedSavedTimeRangeRef.current) {
+            // Only apply if URL has default time range (not explicitly set by user)
+            const urlHasCustomTimeRange =
+              (urlConfig.timeRangeFrom && urlConfig.timeRangeFrom !== DEFAULT_CONFIG.timeRangeFrom) ||
+              (urlConfig.timeRangeTo && urlConfig.timeRangeTo !== DEFAULT_CONFIG.timeRangeTo)
+            if (!urlHasCustomTimeRange) {
+              hasAppliedSavedTimeRangeRef.current = true
+              // Apply saved time range (replace to avoid creating history entry)
+              updateConfig({ timeRangeFrom: savedTimeRangeFrom, timeRangeTo: savedTimeRangeTo }, { replace: true })
             }
           }
         }
@@ -121,34 +182,15 @@ function ScreenPageContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isNew, name, typeParam])
 
-  // Clear expectedTimeRange once rawTimeRange has synced
-  useEffect(() => {
-    if (
-      expectedTimeRange &&
-      rawTimeRange.from === expectedTimeRange.from &&
-      rawTimeRange.to === expectedTimeRange.to
-    ) {
-      setExpectedTimeRange(null)
-    }
-  }, [rawTimeRange, expectedTimeRange])
-
   // Handle config changes from renderer - MERGE to avoid race conditions
-  const handleConfigChange = useCallback((partialConfig: ScreenConfig) => {
-    setConfigState(prev => (prev ? { ...prev, ...partialConfig } : partialConfig))
+  const handleScreenConfigChange = useCallback((partialConfig: ScreenConfig) => {
+    setScreenConfig(prev => (prev ? { ...prev, ...partialConfig } : partialConfig))
   }, [])
 
   // Handle unsaved changes notification from renderer
   const handleUnsavedChange = useCallback(() => {
     setHasUnsavedChanges(true)
   }, [])
-
-  // Handle time range changes from renderer
-  const handleTimeRangeChange = useCallback(
-    (from: string, to: string) => {
-      setTimeRange(from, to)
-    },
-    [setTimeRange]
-  )
 
   // Handle refresh button click
   const handleRefresh = useCallback(() => {
@@ -157,13 +199,13 @@ function ScreenPageContent() {
 
   // Save existing screen
   const handleSave = useCallback(async () => {
-    if (!screen || !config) return
+    if (!screen || !screenConfig) return
 
     setIsSaving(true)
     setSaveError(null)
 
     try {
-      const updated = await updateScreen(screen.name, { config })
+      const updated = await updateScreen(screen.name, { config: screenConfig })
       setScreen(updated)
       setHasUnsavedChanges(false)
     } catch (err) {
@@ -175,7 +217,7 @@ function ScreenPageContent() {
     } finally {
       setIsSaving(false)
     }
-  }, [screen, config])
+  }, [screen, screenConfig])
 
   // Handle "Save As" completion
   const handleSaveAsComplete = useCallback(
@@ -194,8 +236,8 @@ function ScreenPageContent() {
     [apiTimeRange]
   )
 
-  // Loading state - also check if loaded screen matches URL and time range is synced
-  const isLoadingScreen = isLoading || (!isNew && screen?.name !== name) || expectedTimeRange !== null
+  // Loading state - also check if loaded screen matches URL
+  const isLoadingScreen = isLoading || (!isNew && screen?.name !== name)
   if (isLoadingScreen) {
     return (
       <PageLayout>
@@ -229,7 +271,7 @@ function ScreenPageContent() {
   }
 
   // Missing config
-  if (!config || !screenType) {
+  if (!screenConfig || !screenType) {
     return (
       <PageLayout>
         <div className="p-6">
@@ -266,7 +308,14 @@ function ScreenPageContent() {
 
   return (
     <>
-      <PageLayout onRefresh={handleRefresh}>
+      <PageLayout
+        onRefresh={handleRefresh}
+        timeRangeControl={{
+          timeRangeFrom: rawTimeRange.from,
+          timeRangeTo: rawTimeRange.to,
+          onTimeRangeChange: handleTimeRangeChange,
+        }}
+      >
         <div className="flex flex-col h-full">
           {/* Header */}
           <div className="p-6 pb-0">
@@ -298,14 +347,14 @@ function ScreenPageContent() {
           <div className="flex-1 min-h-0">
             <Renderer
               key={screen?.name ?? 'new'}
-              config={config}
-              onConfigChange={handleConfigChange}
+              config={screenConfig}
+              onConfigChange={handleScreenConfigChange}
               savedConfig={screen?.config ?? null}
               onUnsavedChange={handleUnsavedChange}
               timeRange={apiTimeRange}
               rawTimeRange={rawTimeRange}
               onTimeRangeChange={handleTimeRangeChange}
-              timeRangeLabel={timeRange.label}
+              timeRangeLabel={parsedTimeRange.label}
               currentValues={currentValues}
               onSave={screen ? handleSave : null}
               isSaving={isSaving}
@@ -319,13 +368,13 @@ function ScreenPageContent() {
       </PageLayout>
 
       {/* Save As Dialog */}
-      {config && screenType && (
+      {screenConfig && screenType && (
         <SaveScreenDialog
           isOpen={showSaveDialog}
           onClose={() => setShowSaveDialog(false)}
           onSaved={handleSaveAsComplete}
           screenType={screenType}
-          config={config}
+          config={screenConfig}
           suggestedName={screen?.name ? `${screen.name}-copy` : undefined}
         />
       )}

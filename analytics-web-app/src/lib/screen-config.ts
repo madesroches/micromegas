@@ -58,3 +58,19 @@ export interface ProcessesConfig extends BaseScreenConfig {
   sortField?: 'exe' | 'start_time' | 'last_update_time' | 'runtime' | 'username' | 'computer'
   sortDirection?: 'asc' | 'desc'
 }
+
+/**
+ * Single process detail page config.
+ * Process ID is required; time range is optional.
+ */
+export interface ProcessPageConfig extends BaseScreenConfig {
+  processId?: string
+}
+
+/**
+ * User-defined screen page config.
+ * Type is only used for new screens (when name is not in route).
+ */
+export interface ScreenPageConfig extends BaseScreenConfig {
+  type?: string
+}

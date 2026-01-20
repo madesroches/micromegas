@@ -333,8 +333,12 @@ function ProcessMetricsContent() {
       prevTimeRangeRef.current = { begin: apiTimeRange.begin, end: apiTimeRange.end }
       hasLoadedDiscoveryRef.current = false
       loadDiscovery()
+      // Also reload data since discovery effect won't re-run (discoveryDone already true)
+      if (selectedMeasure) {
+        loadDataRef.current?.(currentSqlRef.current)
+      }
     }
-  }, [apiTimeRange.begin, apiTimeRange.end, hasLoaded, loadDiscovery])
+  }, [apiTimeRange.begin, apiTimeRange.end, hasLoaded, loadDiscovery, selectedMeasure])
 
   // Time range changes create history entries (navigational)
   const handleTimeRangeChange = useCallback(
