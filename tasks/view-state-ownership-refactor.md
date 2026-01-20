@@ -86,9 +86,10 @@ The screen is the controller - it owns the decision logic for how each user acti
 1. **Config is source of truth**: Every screen (built-in or user-defined) has a config object that owns view state
 2. **One update path**: Components call callbacks, never directly update URL
 3. **URL is a projection**: URL reflects state for sharing but doesn't drive it (after initial load)
-4. **Stable callbacks**: Config setters are stable, no re-render cascades
-5. **Pattern convergence**: Built-in pages use the same pattern as user-defined screens
-6. **Future: saveable views**: Built-in pages could eventually allow "save this view as a custom screen"
+4. **Only controllers read URL**: Pages (controllers) read URL params; components receive state as props. This eliminates race conditions between URL and React state updates.
+5. **Stable callbacks**: Config setters are stable, no re-render cascades
+6. **Pattern convergence**: Built-in pages use the same pattern as user-defined screens
+7. **Future: saveable views**: Built-in pages could eventually allow "save this view as a custom screen"
 
 ### Time Range Handling
 
@@ -215,7 +216,176 @@ export function useScreenConfig<T extends BaseScreenConfig>(
 
 **No debouncing needed:** Interactions that produce rapid updates (drag-to-zoom, slider dragging) should use commit-on-release, updating config only on mouse release.
 
-### Phase 3: Migrate Built-in Pages
+#### URL Serialization Conventions
+
+The `parseUrlParams()` and `buildUrl()` utilities must handle these cases consistently:
+
+```typescript
+// src/lib/url-params.ts
+
+// Param name mapping (config field → URL param)
+const PARAM_MAP = {
+  processId: 'process_id',
+  timeRangeFrom: 'from',
+  timeRangeTo: 'to',
+  selectedMeasure: 'measure',
+  selectedProperties: 'properties',
+  scaleMode: 'scale',
+  logLevel: 'level',
+  logLimit: 'limit',
+  search: 'search',
+  sortField: 'sort',
+  sortDirection: 'dir',
+} as const;
+
+// Arrays: comma-separated (matches current behavior)
+// URL: ?properties=cpu,memory,disk
+// Config: { selectedProperties: ['cpu', 'memory', 'disk'] }
+
+function parseUrlParams(params: URLSearchParams): Partial<BaseScreenConfig> {
+  const result: Record<string, unknown> = {};
+
+  // String params
+  if (params.has('process_id')) result.processId = params.get('process_id');
+  if (params.has('from')) result.timeRangeFrom = params.get('from');
+  if (params.has('to')) result.timeRangeTo = params.get('to');
+  if (params.has('measure')) result.selectedMeasure = params.get('measure');
+  if (params.has('scale')) result.scaleMode = params.get('scale');
+  if (params.has('level')) result.logLevel = params.get('level');
+  if (params.has('search')) result.search = params.get('search');
+  if (params.has('sort')) result.sortField = params.get('sort');
+  if (params.has('dir')) result.sortDirection = params.get('dir');
+
+  // Number params
+  if (params.has('limit')) result.logLimit = parseInt(params.get('limit')!, 10);
+
+  // Array params (comma-separated)
+  if (params.has('properties')) {
+    const val = params.get('properties');
+    result.selectedProperties = val ? val.split(',') : [];
+  }
+
+  return result;
+}
+
+function buildUrlParams(config: Partial<BaseScreenConfig>): URLSearchParams {
+  const params = new URLSearchParams();
+
+  // Only include non-default values to keep URLs clean
+  // Each page's buildUrl can decide what to omit
+
+  if (config.processId) params.set('process_id', config.processId);
+  if (config.timeRangeFrom) params.set('from', config.timeRangeFrom);
+  if (config.timeRangeTo) params.set('to', config.timeRangeTo);
+  if (config.selectedMeasure) params.set('measure', config.selectedMeasure);
+  if (config.selectedProperties?.length) {
+    params.set('properties', config.selectedProperties.join(','));
+  }
+  // ... etc
+
+  return params;
+}
+```
+
+**Edge cases:**
+- Empty array: omit param entirely (not `?properties=`)
+- Single item array: no comma (`?properties=cpu`)
+- Missing param: field not set in result (uses default from config)
+
+### Phase 3: Refactor TimeRangePicker to Props-Driven
+
+**Current state:** TimeRangePicker uses `useTimeRange()` hook internally - it reads URL state directly and updates URL on user interaction. This violates the MVC pattern where components should be views that receive props and dispatch callbacks.
+
+**Target state:** TimeRangePicker becomes a controlled component that receives time range values and an onChange callback from its parent (the controller).
+
+#### Current Implementation (hook-driven):
+```typescript
+function TimeRangePicker() {
+  const { timeRange, parsed, setTimeRange } = useTimeRange();
+  // Reads URL internally, updates URL directly
+
+  const handlePresetClick = (preset: Preset) => {
+    setTimeRange(preset.from, preset.to);  // Updates URL
+  };
+
+  return (/* UI using parsed.label, etc. */);
+}
+```
+
+#### New Implementation (props-driven):
+```typescript
+interface TimeRangePickerProps {
+  from: string;   // Raw value: "now-1h" or ISO string
+  to: string;     // Raw value: "now" or ISO string
+  onChange: (from: string, to: string) => void;
+}
+
+function TimeRangePicker({ from, to, onChange }: TimeRangePickerProps) {
+  // Derive display values from props
+  const parsed = parseTimeRange(from, to);
+  const label = parsed.label;  // "Last 1 hour", "Jan 15 10:00 - 11:00", etc.
+
+  // Check if a preset matches current values
+  const isPresetSelected = (preset: Preset) =>
+    preset.from === from && preset.to === to;
+
+  // User picks preset → call onChange with preset's relative strings
+  const handlePresetClick = (preset: Preset) => {
+    onChange(preset.from, preset.to);  // e.g., "now-1h", "now"
+  };
+
+  // User picks custom absolute range → call onChange with ISO strings
+  const handleCustomRange = (fromDate: Date, toDate: Date) => {
+    onChange(fromDate.toISOString(), toDate.toISOString());
+  };
+
+  return (/* UI */);
+}
+```
+
+#### Key Changes:
+
+| Aspect | Before (hook-driven) | After (props-driven) |
+|--------|---------------------|----------------------|
+| State source | `useTimeRange()` reads URL | Props from parent |
+| Label display | Hook provides `parsed.label` | Derive via `parseTimeRange(from, to)` |
+| Preset detection | Compare against URL values | Compare props against preset values |
+| User interaction | `setTimeRange()` updates URL | `onChange()` notifies parent |
+| Testability | Hard (needs URL/router mocking) | Easy (just pass props) |
+
+#### Usage in Controller (Page):
+
+```typescript
+function ProcessMetricsContent() {
+  const { config, updateConfig } = useScreenConfig(DEFAULT_CONFIG);
+  const navigate = useNavigate();
+
+  const handleTimeRangeChange = (from: string, to: string) => {
+    const newConfig = { ...config, timeRangeFrom: from, timeRangeTo: to };
+    updateConfig(newConfig);
+    navigate(buildUrl(newConfig));  // Controller decides push vs replace
+  };
+
+  return (
+    <PageLayout>
+      <TimeRangePicker
+        from={config.timeRangeFrom ?? 'now-1h'}
+        to={config.timeRangeTo ?? 'now'}
+        onChange={handleTimeRangeChange}
+      />
+      {/* ... rest of page */}
+    </PageLayout>
+  );
+}
+```
+
+#### Implementation Notes:
+
+1. **Presets array:** Keep using existing `TIME_RANGE_PRESETS` constant - just compare against props instead of hook values
+2. **Custom date picker:** If the component has a date picker for custom ranges, it calls `onChange` with ISO strings when user confirms selection
+3. **Refresh button:** If there's a refresh/reload button, it should call `onChange(from, to)` with the same values (or parent provides a separate `onRefresh` callback)
+
+### Phase 4: Migrate Built-in Pages
 
 Update each built-in page to use the config pattern:
 
@@ -313,14 +483,61 @@ Pages to migrate:
 2. Replacing URL-reading code with `useScreenConfig` in the content component
 3. Adding explicit `navigate()` calls for URL sync
 
-### Phase 4: Update Components
+### Phase 5: Update Remaining Components
 
-Components receive config values and callbacks as props (like screen renderers already do):
+#### Components Currently Violating MVC (read URL directly)
 
-1. **TimeRangePicker** - receives `timeRange` and `onTimeRangeChange` props
-2. **XYChart** - already implements commit-on-release (no changes needed)
-3. **MetricsChart** - receives all config as props
-4. **PropertyTimeline** - receives selected properties as props
+These components must be refactored to receive state as props instead of reading URL:
+
+| Component | Current Violation | Fix |
+|-----------|-------------------|-----|
+| `PivotButton.tsx` | Reads `process_id`, `from`, `to` via `useSearchParams` | Receive as props from parent page |
+| `LogRenderer.tsx` | Reads `level`, `limit`, `search` via `useSearchParams` | Receive filter state as props from ScreenPage |
+
+**PivotButton refactor:**
+```typescript
+// Before (violation)
+function PivotButton() {
+  const [searchParams] = useSearchParams();
+  const processId = searchParams.get('process_id');
+  const from = searchParams.get('from');
+  const to = searchParams.get('to');
+  // builds links using these values
+}
+
+// After (props-driven)
+interface PivotButtonProps {
+  processId: string;
+  timeRangeFrom?: string;
+  timeRangeTo?: string;
+}
+
+function PivotButton({ processId, timeRangeFrom, timeRangeTo }: PivotButtonProps) {
+  // builds links using props
+}
+```
+
+**LogRenderer refactor:**
+```typescript
+// Before (violation) - mixes props and URL reading
+function LogRenderer({ config, rawTimeRange, ... }: ScreenRendererProps) {
+  const [searchParams] = useSearchParams();
+  const level = searchParams.get('level');  // WRONG: reading URL
+  // ...
+}
+
+// After (props-driven) - ScreenPage passes filter state
+// Option 1: Extend ScreenRendererProps with filter state
+// Option 2: LogRenderer reads from config object (already passed as prop)
+```
+
+#### Components Already Correct (no changes needed)
+
+1. **XYChart** - props-driven, commit-on-release via uPlot
+2. **MetricsChart** - receives config as props, uses callbacks
+3. **PropertyTimeline** - receives selected properties as props
+4. **MetricsRenderer** - uses `useTimeRangeSync` correctly (receives rawTimeRange as prop)
+5. **ProcessListRenderer** - uses `useTimeRangeSync` correctly
 
 #### XYChart: Already Correct
 
@@ -363,7 +580,7 @@ onTimeRangeSelect={(from, to) => {
 }}
 ```
 
-### Phase 5: Deprecate Old Hooks
+### Phase 6: Deprecate Old Hooks
 
 Remove URL-driven hooks:
 - `useTimeRange()` - replace with config pattern
@@ -386,21 +603,25 @@ Remove URL-driven hooks:
 | `src/components/MetricsChart.tsx` | Ensure props-driven |
 | `src/components/PropertyTimeline.tsx` | No changes needed (already commit-on-release via uPlot) |
 | `src/components/ThreadCoverageTimeline.tsx` | No changes needed (already commit-on-release via uPlot) |
-| `src/components/layout/TimeRangePicker.tsx` | Ensure props-driven |
+| `src/components/layout/TimeRangePicker/index.tsx` | REFACTOR - Convert from hook-driven to props-driven (Phase 3) |
+| `src/components/layout/PivotButton.tsx` | REFACTOR - Remove useSearchParams, receive processId/timeRange as props (Phase 5) |
+| `src/lib/screen-renderers/LogRenderer.tsx` | REFACTOR - Remove useSearchParams for filters, read from config prop (Phase 5) |
 
 ## Migration Strategy
 
 1. Create `useScreenConfig` hook and URL utilities alongside existing code
-2. Migrate one built-in page at a time, starting with simplest (ProcessesPage)
-3. Keep `useTimeRange()` working during migration
-4. Once all pages migrated, remove old hooks
-5. Update ScreenPage to use shared utilities if beneficial
+2. **Refactor TimeRangePicker to props-driven** (required before page migrations)
+3. Migrate one built-in page at a time, starting with simplest (ProcessesPage)
+4. Keep `useTimeRange()` working during migration for any pages not yet migrated
+5. Once all pages migrated, remove old hooks
+6. Update ScreenPage to use shared utilities if beneficial
 
 **Recommended migration order:**
-1. **ProcessesPage** - simplest, no identity param
-2. **ProcessLogPage** - has identity param, exercises the key pattern
-3. **ProcessMetricsPage** - similar to ProcessLogPage
-4. **PerformanceAnalysisPage** - most complex (scaleMode, properties array)
+1. **TimeRangePicker** - prerequisite for all pages (Phase 3)
+2. **ProcessesPage** - simplest, no identity param, validates TimeRangePicker integration
+3. **ProcessLogPage** - has identity param, exercises the key pattern
+4. **ProcessMetricsPage** - similar to ProcessLogPage
+5. **PerformanceAnalysisPage** - most complex (scaleMode, properties array)
 
 ## Decisions
 
