@@ -67,6 +67,20 @@ To get started with Micromegas, please refer to the [Getting Started](https://ma
 
 ## Current Status & Roadmap
 
+### Unreleased
+* **Analytics Web App:**
+  * User-defined screens for customizable dashboards
+  * MVC view state refactor and XYChart generalization
+  * Dynamic page titles and API consolidation under `/api` prefix
+  * Production build improvements (disabled source maps)
+* **Analytics & Query Features:**
+  * `expand_histogram` table function with bar chart toggle
+* **Data Integrity:**
+  * `delete_duplicate_streams` and `delete_duplicate_processes` UDFs
+* **Infrastructure:**
+  * Automatic `micromegas_app` database creation on service startup
+* **Security:** Multiple dependabot fixes for diff, grafana plugin, and other dependencies
+
 ### January 2026 - v0.18.0
 * **Reliability & Data Integrity:**
   * Periodic duplicate block cleanup in maintenance daemon

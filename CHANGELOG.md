@@ -2,6 +2,29 @@
 
 This file documents the historical progress of the Micromegas project. For current focus, please see the main [README.md](./README.md).
 
+## Unreleased
+* **Data Integrity:**
+  * Add delete_duplicate_streams and delete_duplicate_processes UDFs (#721)
+* **Analytics & Query Features:**
+  * Add expand_histogram table function and bar chart toggle (#720)
+* **Analytics Web App:**
+  * Add user-defined screens feature (#707)
+  * MVC view state refactor and XYChart generalization (#718)
+  * Migrate remaining pages to useScreenConfig and remove useTimeRange (#719)
+  * Add dynamic page titles (#712)
+  * Consolidate API endpoints under /api prefix (#711)
+  * Disable source maps in production builds (#710)
+  * Fix blank page on hard refresh for deep URLs (#713)
+* **Infrastructure:**
+  * Add micromegas_app database creation to service startup (#705)
+* **Security:**
+  * Fix Dependabot alert #91: upgrade diff to 8.0.3 (#708)
+  * Fix dependabot alerts for grafana plugin dependencies (#704)
+  * Fix 4 dependabot security alerts (#703)
+* **Documentation:**
+  * Update unified observability presentation slides (#706)
+  * Add unified observability presentation link (#702)
+
 ## January 2026 - v0.18.0
 * **Reliability & Data Integrity:**
   * Add periodic duplicate block cleanup to maintenance daemon (#700)
