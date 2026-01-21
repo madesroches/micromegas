@@ -5,6 +5,8 @@ use chrono::{TimeDelta, Utc};
 use micromegas_analytics::delete::delete_old_data;
 use micromegas_analytics::lakehouse::batch_update::materialize_partition_range;
 use micromegas_analytics::lakehouse::delete_duplicate_blocks_udf::delete_duplicate_blocks;
+use micromegas_analytics::lakehouse::delete_duplicate_processes_udf::delete_duplicate_processes;
+use micromegas_analytics::lakehouse::delete_duplicate_streams_udf::delete_duplicate_streams;
 use micromegas_analytics::lakehouse::lakehouse_context::LakehouseContext;
 use micromegas_analytics::lakehouse::partition_cache::PartitionCache;
 use micromegas_analytics::lakehouse::temp::delete_expired_temporary_files;
@@ -132,7 +134,17 @@ impl TaskCallback for EveryMinuteTask {
         );
         if let Err(e) = delete_duplicate_blocks(&self.lakehouse.lake().db_pool, cleanup_range).await
         {
-            warn!("duplicate cleanup failed: {e:?}");
+            warn!("duplicate blocks cleanup failed: {e:?}");
+        }
+        if let Err(e) =
+            delete_duplicate_streams(&self.lakehouse.lake().db_pool, cleanup_range).await
+        {
+            warn!("duplicate streams cleanup failed: {e:?}");
+        }
+        if let Err(e) =
+            delete_duplicate_processes(&self.lakehouse.lake().db_pool, cleanup_range).await
+        {
+            warn!("duplicate processes cleanup failed: {e:?}");
         }
 
         let partition_time_delta = TimeDelta::minutes(1);
