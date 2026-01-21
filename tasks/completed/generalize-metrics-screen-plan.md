@@ -1,5 +1,7 @@
 # Plan: Generalize Metrics Screen for 2-Column Charts
 
+**Status: ✅ Completed** (January 2025)
+
 ## Goal
 Extend the metrics screen to chart any SQL query with 2 columns. First column is X-axis, second column is Y-axis. No column selection UI needed - column order determines axis mapping.
 
