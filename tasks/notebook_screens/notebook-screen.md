@@ -25,6 +25,12 @@ The existing screen types (`process_list`, `metrics`, `log`) remain unchanged. T
 | `markdown` | Documentation | N/A (no query) |
 | `variable` | User input control | Options from query (combobox) or free input |
 
+**Default SQL per cell type** (inspired by existing screen defaults):
+- `table`: Same as Process List screen default
+- `chart`: Same as Metrics screen default
+- `log`: Same as Log screen default
+- `variable` (combobox): `SELECT DISTINCT name FROM measures`
+
 ## Data Model
 
 ```typescript
@@ -38,8 +44,7 @@ interface NotebookConfig {
 type CellConfig = QueryCellConfig | MarkdownCellConfig | VariableCellConfig
 
 interface CellConfigBase {
-  id: string
-  title: string
+  title: string          // Also used as anchor for deep linking
   type: CellType
   layout: { height: number | 'auto'; collapsed?: boolean }
 }
@@ -69,12 +74,12 @@ interface VariableCellConfig extends CellConfigBase {
 
 ## Execution Model
 
-1. **Screen load**: Execute cells sequentially top-to-bottom
-2. **Time range change**: Re-execute all query cells (top-to-bottom)
-3. **Variable change**: Re-execute all cells below the variable
-4. **Cell refresh**: Re-execute that cell only (and cells below if it succeeds)
-5. **Cell SQL edit + run**: Re-execute that cell only (and cells below if it succeeds)
-6. **Errors**: Failed cell shows error, execution stops - cells below it don't run until error is fixed
+Manual execution only - no automatic re-execution on time range or variable changes.
+
+1. **Screen load**: Execute all cells sequentially top-to-bottom
+2. **Execute single cell**: User can run one cell in isolation
+3. **Execute from cell**: User can run a cell and continue with all cells below it
+4. **Errors**: Failed cell shows error, execution stops - cells below don't run until error is fixed
 
 ## Coexistence with Existing Screens
 
@@ -103,6 +108,7 @@ interface VariableCellConfig extends CellConfigBase {
 ### Phase 1: Multi-Cell Foundation
 
 - [ ] **1. Define TypeScript types** (`screens-api.ts`)
+  - Remove `sql` from base `ScreenConfig` - move to type-specific configs
   - Add `NotebookConfig`, `CellConfig`, `VariableCellConfig` interfaces
   - Add `CellType` union type
   - Add `notebook` to screen types
@@ -116,15 +122,15 @@ interface VariableCellConfig extends CellConfigBase {
   - Cell header with title, collapse toggle, refresh button
   - Collapsible content area
   - Loading and error states
-  - Height management (fixed px, auto, or fill)
+  - Height management (fixed px or auto)
 
 - [ ] **4. Build NotebookRenderer** (`screen-renderers/NotebookRenderer.tsx`)
   - Vertical stack of CellContainers
   - "Add Cell" button at bottom (empty notebook shows just this button)
   - Cell type selection modal
-  - Manage cell execution state array
+  - Manage cell execution state array (per-cell: idle, loading, success, error)
   - Collect variable values from variable cells
-  - Handle time range propagation to all cells
+  - "Run from here" action on each cell (executes cell and all below)
 
 - [ ] **5. Create ChartCell** (`screen-renderers/cells/ChartCell.tsx`)
   - Reuse chart logic from MetricsRenderer
@@ -186,17 +192,13 @@ interface VariableCellConfig extends CellConfigBase {
   - Replace `$variableName` in SQL with collected values
   - Handle missing variables gracefully (show error or use default)
 
-- [ ] **16. Implement re-execution on variable change**
-  - When variable cell value changes, re-execute all cells below it
-  - Simple top-to-bottom, no dependency graph needed
-
-- [ ] **17. Add auto-refresh**
+- [ ] **16. Add auto-refresh**
   - Refresh interval setting in screen config
   - Dropdown to select interval (off, 5s, 10s, 30s, 1m, 5m)
   - Re-execute all query cells on interval
 
-- [ ] **18. Polish notebook creation flow**
-  - Default notebook starts with one empty table cell
+- [ ] **17. Polish notebook creation flow**
+  - New notebook starts empty with just the "Add Cell" button
   - Smooth "new screen" flow with type selection
 
 ---
@@ -213,8 +215,7 @@ interface VariableCellConfig extends CellConfigBase {
 - [ ] Create new notebook screen, add multiple cells (table, chart, log)
 - [ ] Add variable cell (combobox), verify it populates options from SQL
 - [ ] Add query cell below that uses `$variable`, verify substitution works
-- [ ] Change variable selection, verify downstream cells re-execute
-- [ ] Verify time range changes refresh all query cells
+- [ ] Use "Run from here" to execute a cell and all cells below it
 - [ ] Verify a failed cell stops execution of cells below it
 - [ ] Verify fixing a failed cell resumes execution of cells below
 - [ ] Verify existing screen types (process_list, metrics, log) still work
