@@ -1,5 +1,8 @@
 # Table Screen Type - Implementation Plan
 
+**Status:** ✅ Completed (2026-01-22)
+**Branch:** `table`
+
 ## Overview
 
 Add a new user-defined screen type called `table` to the analytics web app. This is a generic table viewer that can display results from any SQL query in a tabular format. By default, it queries the `processes` table.
@@ -82,7 +85,8 @@ export interface ScreenConfig {
 |------|--------|
 | `rust/analytics-web-srv/src/screen_types.rs` | Add `Table` variant with default config, update error message |
 | `analytics-web-app/src/lib/screens-api.ts` | Add `'table'` to `ScreenTypeName`, add `sortColumn` and `sortDirection` to `ScreenConfig` |
-| `analytics-web-app/src/lib/screen-renderers/index.ts` | Register `TableRenderer` |
+| `analytics-web-app/src/lib/screen-renderers/init.ts` | Import `TableRenderer` to register it |
+| `analytics-web-app/src/lib/screen-type-utils.tsx` | Add `Table2` icon mapping |
 
 ## Implementation Steps
 
@@ -259,16 +263,36 @@ import { DataType } from 'apache-arrow'
 function formatCell(value: unknown, dataType: DataType): string {
   if (value === null || value === undefined) return '-'
 
-  if (DataType.isTimestamp(dataType)) {
-    return formatTimestamp(value as bigint)
+  if (isTimeType(dataType)) {
+    const date = timestampToDate(value, dataType)
+    return date ? formatTimestamp(date) : '-'
   }
 
-  if (DataType.isInt(dataType) || DataType.isFloat(dataType)) {
-    return typeof value === 'number' ? value.toLocaleString() : String(value)
+  if (isNumericType(dataType)) {
+    if (typeof value === 'number' || typeof value === 'bigint') {
+      return value.toLocaleString()
+    }
+    return String(value)
   }
 
   if (DataType.isBool(dataType)) {
     return value ? 'true' : 'false'
+  }
+
+  // Binary data: display as ASCII preview with byte count
+  if (isBinaryType(dataType)) {
+    const bytes = value instanceof Uint8Array ? value : Array.isArray(value) ? value : null
+    if (bytes) {
+      const previewLen = Math.min(bytes.length, 32)
+      let preview = ''
+      for (let i = 0; i < previewLen; i++) {
+        const b = bytes[i]
+        // Printable ASCII range: 32-126
+        preview += b >= 32 && b <= 126 ? String.fromCharCode(b) : '.'
+      }
+      const suffix = bytes.length > previewLen ? '...' : ''
+      return `${preview}${suffix} (${bytes.length})`
+    }
   }
 
   return String(value)
@@ -277,13 +301,23 @@ function formatCell(value: unknown, dataType: DataType): string {
 
 ### Step 4: Frontend - Register Renderer
 
-**File:** `analytics-web-app/src/lib/screen-renderers/index.ts`
+**File:** `analytics-web-app/src/lib/screen-renderers/init.ts`
 
+Add import to trigger self-registration:
 ```typescript
-import { TableRenderer } from './TableRenderer';
+import './TableRenderer'
+```
 
-// In the registration section:
-registerRenderer('table', TableRenderer);
+**File:** `analytics-web-app/src/lib/screen-type-utils.tsx`
+
+Add icon mapping:
+```typescript
+import { Table2 } from 'lucide-react'
+
+const ICON_MAP: Record<string, LucideIcon> = {
+  // ... existing
+  table: Table2,
+}
 ```
 
 ## UI Design
@@ -396,8 +430,9 @@ The implementation should follow patterns from both:
 |------|--------|--------|
 | `rust/analytics-web-srv/src/screen_types.rs` | Modify | Add `Table` variant, update error message |
 | `analytics-web-app/src/lib/screens-api.ts` | Modify | Add `'table'` to type union, add `sortColumn`/`sortDirection` to `ScreenConfig` |
-| `analytics-web-app/src/lib/screen-renderers/index.ts` | Modify | Register TableRenderer |
-| `analytics-web-app/src/lib/screen-renderers/TableRenderer.tsx` | Create | New renderer with `$order_by` substitution |
+| `analytics-web-app/src/lib/screen-renderers/init.ts` | Modify | Import TableRenderer |
+| `analytics-web-app/src/lib/screen-type-utils.tsx` | Modify | Add Table2 icon mapping |
+| `analytics-web-app/src/lib/screen-renderers/TableRenderer.tsx` | Create | New renderer with `$order_by` substitution, binary data preview |
 
 ## Dependencies
 
