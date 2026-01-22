@@ -16,6 +16,10 @@ fn test_screen_type_serialization() {
         serde_json::to_string(&ScreenType::Log).expect("serialize"),
         "\"log\""
     );
+    assert_eq!(
+        serde_json::to_string(&ScreenType::Table).expect("serialize"),
+        "\"table\""
+    );
 }
 
 #[test]
@@ -32,6 +36,10 @@ fn test_screen_type_deserialization() {
         serde_json::from_str::<ScreenType>("\"log\"").expect("deserialize"),
         ScreenType::Log
     );
+    assert_eq!(
+        serde_json::from_str::<ScreenType>("\"table\"").expect("deserialize"),
+        ScreenType::Table
+    );
 }
 
 #[test]
@@ -45,16 +53,18 @@ fn test_screen_type_from_str() {
         ScreenType::Metrics
     );
     assert_eq!("log".parse::<ScreenType>().unwrap(), ScreenType::Log);
+    assert_eq!("table".parse::<ScreenType>().unwrap(), ScreenType::Table);
     assert!("invalid".parse::<ScreenType>().is_err());
 }
 
 #[test]
 fn test_all_screen_types() {
     let all = ScreenType::all();
-    assert_eq!(all.len(), 3);
+    assert_eq!(all.len(), 4);
     assert!(all.contains(&ScreenType::ProcessList));
     assert!(all.contains(&ScreenType::Metrics));
     assert!(all.contains(&ScreenType::Log));
+    assert!(all.contains(&ScreenType::Table));
 }
 
 #[test]
@@ -62,6 +72,7 @@ fn test_screen_type_as_str() {
     assert_eq!(ScreenType::ProcessList.as_str(), "process_list");
     assert_eq!(ScreenType::Metrics.as_str(), "metrics");
     assert_eq!(ScreenType::Log.as_str(), "log");
+    assert_eq!(ScreenType::Table.as_str(), "table");
 }
 
 #[test]
@@ -80,6 +91,11 @@ fn test_screen_type_info() {
     assert_eq!(log_info.name, "log");
     assert!(!log_info.icon.is_empty());
     assert!(!log_info.description.is_empty());
+
+    let table_info = ScreenType::Table.info();
+    assert_eq!(table_info.name, "table");
+    assert!(!table_info.icon.is_empty());
+    assert!(!table_info.description.is_empty());
 }
 
 #[test]
@@ -103,6 +119,11 @@ fn test_screen_type_default_config() {
     let log_config = ScreenType::Log.default_config();
     assert!(log_config.get("sql").is_some());
     assert!(log_config["sql"].as_str().unwrap().contains("log_entries"));
+
+    // Table config should have sql field
+    let table_config = ScreenType::Table.default_config();
+    assert!(table_config.get("sql").is_some());
+    assert!(table_config["sql"].as_str().unwrap().contains("processes"));
 }
 
 #[test]

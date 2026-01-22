@@ -12,7 +12,7 @@ impl fmt::Display for ParseScreenTypeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "invalid screen type '{}', expected one of: process_list, metrics, log",
+            "invalid screen type '{}', expected one of: process_list, metrics, log, table",
             self.invalid_value
         )
     }
@@ -27,6 +27,7 @@ pub enum ScreenType {
     ProcessList,
     Metrics,
     Log,
+    Table,
 }
 
 impl FromStr for ScreenType {
@@ -37,6 +38,7 @@ impl FromStr for ScreenType {
             "process_list" => Ok(ScreenType::ProcessList),
             "metrics" => Ok(ScreenType::Metrics),
             "log" => Ok(ScreenType::Log),
+            "table" => Ok(ScreenType::Table),
             _ => Err(ParseScreenTypeError {
                 invalid_value: s.to_string(),
             }),
@@ -51,6 +53,7 @@ impl ScreenType {
             ScreenType::ProcessList,
             ScreenType::Metrics,
             ScreenType::Log,
+            ScreenType::Table,
         ]
     }
 
@@ -60,6 +63,7 @@ impl ScreenType {
             ScreenType::ProcessList => "process_list",
             ScreenType::Metrics => "metrics",
             ScreenType::Log => "log",
+            ScreenType::Table => "table",
         }
     }
 
@@ -84,6 +88,12 @@ impl ScreenType {
                 icon: "file-text".to_string(),
                 description: "Log entries viewer with filtering".to_string(),
             },
+            ScreenType::Table => ScreenTypeInfo {
+                name: "table".to_string(),
+                display_name: "Table".to_string(),
+                icon: "table".to_string(),
+                description: "Generic table viewer for any SQL query".to_string(),
+            },
         }
     }
 
@@ -100,6 +110,10 @@ impl ScreenType {
             }),
             ScreenType::Log => serde_json::json!({
                 "sql": "SELECT time, level, target, msg\nFROM log_entries\nWHERE level <= $max_level\n  $search_filter\nORDER BY time DESC\nLIMIT $limit",
+                "variables": []
+            }),
+            ScreenType::Table => serde_json::json!({
+                "sql": "SELECT process_id, exe, start_time, last_update_time, username, computer\nFROM processes\n$order_by\nLIMIT 100",
                 "variables": []
             }),
         }
