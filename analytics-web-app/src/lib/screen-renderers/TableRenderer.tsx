@@ -29,13 +29,25 @@ interface TableConfig {
 }
 
 /**
- * Check if an Arrow DataType is a binary type.
+ * Get the underlying type, unwrapping dictionary encoding if present.
+ */
+function unwrapDictionary(dataType: DataType): DataType {
+  if (DataType.isDictionary(dataType)) {
+    // Dictionary type has a 'dictionary' property with the value type
+    return (dataType as { dictionary: DataType }).dictionary
+  }
+  return dataType
+}
+
+/**
+ * Check if an Arrow DataType is a binary type (handles dictionary-encoded binary).
  */
 function isBinaryType(dataType: DataType): boolean {
+  const inner = unwrapDictionary(dataType)
   return (
-    DataType.isBinary(dataType) ||
-    DataType.isLargeBinary(dataType) ||
-    DataType.isFixedSizeBinary(dataType)
+    DataType.isBinary(inner) ||
+    DataType.isLargeBinary(inner) ||
+    DataType.isFixedSizeBinary(inner)
   )
 }
 

@@ -197,108 +197,107 @@ export async function* streamQuery(
 
   const bufferedReader = new BufferedReader(response.body.getReader());
 
-  // Keep schema bytes for parsing batches (each batch needs schema context)
-  let schemaBytes: Uint8Array | null = null;
+  // Use a queue-based async generator to feed bytes to Arrow's RecordBatchReader.
+  // The reader maintains dictionary state internally, handling dictionary-encoded
+  // columns correctly across batches.
+  const byteQueue: Uint8Array[] = [];
+  let queueResolver: ((value: void) => void) | null = null;
+  let queueDone = false;
   let capturedError: StreamError | null = null;
 
-  // Combine schema + batch bytes into a new buffer for each batch.
-  // We cannot reuse buffers because Arrow's RecordBatch may hold zero-copy
-  // references to the underlying data, and reusing would corrupt previous batches.
-  const combineForParsing = (schema: Uint8Array, batch: Uint8Array): Uint8Array => {
-    const combined = new Uint8Array(schema.length + batch.length);
-    combined.set(schema, 0);
-    combined.set(batch, schema.length);
-    return combined;
+  // Async generator that yields IPC bytes to RecordBatchReader
+  async function* ipcByteStream(): AsyncGenerator<Uint8Array> {
+    while (true) {
+      while (byteQueue.length > 0) {
+        yield byteQueue.shift()!;
+      }
+      if (queueDone) return;
+      // Wait for more bytes
+      await new Promise<void>((resolve) => {
+        queueResolver = resolve;
+      });
+      queueResolver = null;
+    }
+  }
+
+  const pushBytes = (bytes: Uint8Array) => {
+    byteQueue.push(bytes);
+    queueResolver?.();
+  };
+
+  const endByteStream = () => {
+    queueDone = true;
+    queueResolver?.();
   };
 
   try {
-    // eslint-disable-next-line no-constant-condition
-    while (true) {
-      const line = await bufferedReader.readLine();
-      if (line === null) {
-        break;
-      }
+    // Start the Arrow reader consuming from our byte stream
+    const readerPromise = RecordBatchReader.from(ipcByteStream());
 
-      let frame: Frame;
-      try {
-        frame = JSON.parse(line);
-      } catch {
-        capturedError = {
-          code: 'INTERNAL',
-          message: `Invalid frame: ${line.slice(0, 100)}`,
-          retryable: false,
-        };
-        break;
-      }
+    // Parse frames and push bytes to the queue
+    const parseFrames = async () => {
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        const line = await bufferedReader.readLine();
+        if (line === null) break;
 
-      switch (frame.type) {
-        case 'schema': {
-          const bytes = await bufferedReader.readBytes(frame.size);
-          schemaBytes = bytes;
-          try {
-            const reader = await RecordBatchReader.from(bytes);
-            yield { type: 'schema', schema: reader.schema };
-          } catch (e) {
-            capturedError = {
-              code: 'INTERNAL',
-              message: `Failed to parse schema: ${e}`,
-              retryable: false,
-            };
-          }
-          break;
-        }
-        case 'batch': {
-          const bytes = await bufferedReader.readBytes(frame.size);
-          if (!schemaBytes) {
-            capturedError = {
-              code: 'INTERNAL',
-              message: 'Received batch before schema',
-              retryable: false,
-            };
-            break;
-          }
-          // Combine schema + batch bytes using reusable buffer
-          try {
-            const combined = combineForParsing(schemaBytes, bytes);
-            const reader = await RecordBatchReader.from(combined);
-            for await (const batch of reader) {
-              yield { type: 'batch', batch };
-            }
-          } catch (e) {
-            capturedError = {
-              code: 'INTERNAL',
-              message: `Failed to parse batch: ${e}`,
-              retryable: false,
-            };
-          }
-          break;
-        }
-        case 'done': {
-          // Defensive: don't yield done if we captured an error earlier
-          if (!capturedError) {
-            yield { type: 'done' };
-            return;
-          }
-          break;
-        }
-        case 'error': {
+        let frame: Frame;
+        try {
+          frame = JSON.parse(line);
+        } catch {
           capturedError = {
-            code: frame.code,
-            message: frame.message,
-            retryable: isRetryable(frame.code),
+            code: 'INTERNAL',
+            message: `Invalid frame: ${line.slice(0, 100)}`,
+            retryable: false,
           };
           break;
         }
-      }
 
-      if (capturedError) {
-        break;
+        switch (frame.type) {
+          case 'schema':
+          case 'batch': {
+            const bytes = await bufferedReader.readBytes(frame.size);
+            pushBytes(bytes);
+            break;
+          }
+          case 'done':
+            endByteStream();
+            return 'done';
+          case 'error':
+            capturedError = {
+              code: frame.code,
+              message: frame.message,
+              retryable: isRetryable(frame.code),
+            };
+            endByteStream();
+            return 'error';
+        }
       }
+      endByteStream();
+      return capturedError ? 'error' : 'done';
+    };
+
+    // Run frame parsing in parallel with batch consumption
+    const frameParsePromise = parseFrames();
+
+    // Wait for reader to be ready and get schema
+    const reader = await readerPromise;
+    if (reader.schema) {
+      yield { type: 'schema', schema: reader.schema };
     }
 
-    // If we captured an error, report it
+    // Yield batches as they arrive
+    for await (const batch of reader) {
+      yield { type: 'batch', batch };
+    }
+
+    // Wait for frame parsing to complete
+    const result = await frameParsePromise;
+
     if (capturedError) {
       yield { type: 'error', error: capturedError };
+    } else if (result === 'done') {
+      yield { type: 'done' };
     }
   } finally {
     bufferedReader.release();
