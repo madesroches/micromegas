@@ -2,6 +2,9 @@
 
 ## Status: PENDING
 
+## Related Plans
+- [Dictionary Preservation](./dictionary_preservation_plan.md) - Bandwidth optimization for dictionary-encoded columns (recommended to implement first)
+
 ## Overview
 Refactor the metrics screens so that the chart and property timeline rely on the same query. Currently there are N+1 queries: 1 for chart data, 1 for property key discovery, and N for property timeline values (one per selected property). This plan consolidates them into a single query.
 
@@ -129,7 +132,7 @@ export function aggregateIntoSegments(
 This hook serves as the Model layer, encapsulating the unified query and all data transformations. Both page components will use this hook, eliminating code duplication.
 
 ```typescript
-import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { useStreamQuery } from './useStreamQuery'
 import { timestampToMs } from '@/lib/arrow-utils'
 import { parseIntervalToMs, aggregateIntoSegments } from '@/lib/property-utils'
@@ -170,6 +173,7 @@ export function useMetricsData({
   enabled = true,
 }: UseMetricsDataParams): UseMetricsDataReturn {
   const query = useStreamQuery()
+  const abortControllerRef = useRef<AbortController | null>(null)
 
   const [chartData, setChartData] = useState<{ time: number; value: number }[]>([])
   const [rawPropertiesData, setRawPropertiesData] = useState<Map<number, Record<string, unknown>>>(new Map())
@@ -177,6 +181,16 @@ export function useMetricsData({
   // Execute the unified query
   const execute = useCallback(() => {
     if (!processId || !measureName || !enabled) return
+
+    // Cancel any in-flight query before starting a new one
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort()
+    }
+    abortControllerRef.current = new AbortController()
+
+    // Clear previous data to avoid stale state
+    setChartData([])
+    setRawPropertiesData(new Map())
 
     query.execute({
       sql: METRICS_SQL,
@@ -187,12 +201,23 @@ export function useMetricsData({
       },
       begin: apiTimeRange.begin,
       end: apiTimeRange.end,
+      signal: abortControllerRef.current.signal,
     })
   }, [processId, measureName, binInterval, apiTimeRange, enabled, query])
 
+  // Cleanup: cancel query on unmount
+  useEffect(() => {
+    return () => {
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort()
+      }
+    }
+  }, [])
+
   // Extract data when query completes
   useEffect(() => {
-    if (query.isComplete && !query.error) {
+    // Ignore results if query was aborted
+    if (query.isComplete && !query.error && !abortControllerRef.current?.signal.aborted) {
       const table = query.getTable()
       if (table) {
         const points: { time: number; value: number }[] = []
@@ -294,13 +319,14 @@ const metricsData = useMetricsData({
 // Use metricsData.isLoading, metricsData.error for loading/error states
 ```
 
-**Trigger data loading** when measure is selected:
+**Trigger data loading** when measure is selected or time range changes:
 ```typescript
 useEffect(() => {
   if (discoveryDone && selectedMeasure && processId) {
     metricsData.execute()
   }
-}, [discoveryDone, selectedMeasure, processId])
+  // Note: metricsData.execute is stable (useCallback) and depends on apiTimeRange/binInterval internally
+}, [discoveryDone, selectedMeasure, processId, metricsData.execute])
 ```
 
 **Update references throughout the component:**
@@ -387,63 +413,6 @@ rm analytics-web-app/src/hooks/usePropertyTimeline.ts
 
 Verify no other files import these hooks before deleting.
 
-### 7. Enable Dictionary Preservation for Bandwidth Optimization
-
-**Background:** The `jsonb_format_json` function returns `Dictionary<Int32, Utf8>` for memory efficiency - repeated JSON strings share a single dictionary entry. However, this encoding is currently lost because the FlightSQL client doesn't request it:
-
-```
-Current (without header):
-flight-sql-srv ──(hydrated strings)──▶ analytics-web-srv ──(re-encode)──▶ browser
-
-With fix (preserve_dictionary=true):
-flight-sql-srv ──(dict-encoded)──▶ analytics-web-srv ──(re-encode)──▶ browser
-                                          │
-                                          └── encode_batch() already uses
-                                              DictionaryTracker, so dictionaries
-                                              are preserved automatically
-```
-
-**The fix:** Set `preserve_dictionary: true` header in the FlightSQL client. The `stream_query_handler` already uses `DictionaryTracker` and `IpcDataGenerator::encode` which preserve dictionary encoding in the input `RecordBatch` - no additional changes needed.
-
-**File:** `rust/public/src/client/flightsql_client.rs`
-
-Add the header in `query_stream`:
-
-```rust
-pub async fn query_stream(
-    &mut self,
-    sql: String,
-    query_range: Option<TimeRange>,
-) -> Result<FlightRecordBatchStream> {
-    self.set_query_range(query_range);
-    // Preserve dictionary encoding for bandwidth efficiency
-    self.inner.set_header("preserve_dictionary", "true");
-    let info = self.inner.execute(sql, None).await?;
-    // ... rest unchanged
-}
-```
-
-**Implications:**
-
-| Aspect | Impact |
-|--------|--------|
-| Bandwidth | Reduced - repeated property values (e.g., `{"level": "high"}`) share dictionary entries instead of being repeated per-row |
-| Memory (server) | Slight increase - server must track dictionary state across batches |
-| Memory (browser) | Reduced - Apache Arrow JS preserves dictionary encoding in memory |
-| CPU (browser) | Reduced - fewer string allocations when parsing |
-| Compatibility | No client changes needed - Arrow IPC format handles dictionaries transparently |
-
-**When this matters most:**
-- Property values with low cardinality (few unique values, many rows)
-- Long time ranges with many data points
-- Properties with verbose JSON (e.g., `{"zone": "us-east-1", "tier": "production"}`)
-
-**Example savings:** For 1000 rows where 90% have `{"level": "high"}`:
-- Without dictionary: ~18KB (18 bytes × 1000)
-- With dictionary: ~1.8KB (18 bytes × 1 + 4 byte indices × 1000)
-
-This optimization benefits all queries with dictionary-encoded columns, not just the properties column.
-
 ## File Changes Summary
 
 | File | Layer | Change |
@@ -455,7 +424,6 @@ This optimization benefits all queries with dictionary-encoded columns, not just
 | `analytics-web-app/src/components/MetricsChart.tsx` | View | Remove hooks, receive all data via props (pure presentation) |
 | `analytics-web-app/src/hooks/usePropertyKeys.ts` | - | Delete (replaced by `useMetricsData.availablePropertyKeys`) |
 | `analytics-web-app/src/hooks/usePropertyTimeline.ts` | - | Delete (replaced by `useMetricsData.getPropertyTimeline`) |
-| `rust/public/src/client/flightsql_client.rs` | - | Add `preserve_dictionary` header for bandwidth optimization |
 
 ## Verification
 
