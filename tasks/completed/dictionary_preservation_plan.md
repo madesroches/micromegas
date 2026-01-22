@@ -1,6 +1,6 @@
 # Dictionary Preservation for FlightSQL Queries (Web App)
 
-## Status: PENDING
+## Status: COMPLETED
 
 ## Related Plans
 - [Unified Metrics Query](./unified_metrics_query_plan.md) - Benefits from this optimization when fetching property JSON columns
