@@ -75,8 +75,38 @@ Note: `jsonb_format_json` converts JSONB binary to a JSON text string that can b
 
 Move `aggregateIntoSegments` and `parseIntervalToMs` from `usePropertyTimeline.ts` to a shared utility.
 
+**Bug fix:** The existing `parseIntervalToMs` function doesn't handle milliseconds, but `calculateBinInterval()` returns intervals like `'1 millisecond'`, `'50 milliseconds'`, etc. This causes incorrect segment sizing for short time ranges. Fix this when creating the shared utility.
+
 ```typescript
-export function parseIntervalToMs(interval: string): number
+import { PropertySegment } from '@/types'
+
+/**
+ * Parse interval string (e.g., "50 milliseconds", "1 second") to milliseconds.
+ * Fixed to handle millisecond intervals that were previously unsupported.
+ */
+export function parseIntervalToMs(interval: string): number {
+  const match = interval.match(/^(\d+)\s*(millisecond|second|minute|hour|day)s?$/i)
+  if (!match) return 60000 // default to 1 minute
+
+  const value = parseInt(match[1], 10)
+  const unit = match[2].toLowerCase()
+
+  switch (unit) {
+    case 'millisecond':
+      return value
+    case 'second':
+      return value * 1000
+    case 'minute':
+      return value * 60 * 1000
+    case 'hour':
+      return value * 60 * 60 * 1000
+    case 'day':
+      return value * 24 * 60 * 60 * 1000
+    default:
+      return 60000
+  }
+}
+
 export function aggregateIntoSegments(
   rows: { time: number; value: string }[],
   binIntervalMs: number
@@ -241,18 +271,27 @@ Update MetricsChart usage in both `ProcessMetricsPage.tsx` and `PerformanceAnaly
 />
 ```
 
+### 8. Delete Unused Hooks
+
+After completing the refactor, delete the hooks that are no longer used:
+
+```bash
+rm analytics-web-app/src/hooks/usePropertyKeys.ts
+rm analytics-web-app/src/hooks/usePropertyTimeline.ts
+```
+
+Verify no other files import these hooks before deleting.
+
 ## File Changes Summary
 
 | File | Change |
 |------|--------|
-| `src/lib/property-utils.ts` | New file: shared aggregation utilities |
+| `src/lib/property-utils.ts` | New file: shared aggregation utilities (with millisecond fix) |
 | `src/routes/ProcessMetricsPage.tsx` | Update SQL, add properties extraction, add getPropertyTimeline |
 | `src/routes/PerformanceAnalysisPage.tsx` | Update SQL, add properties extraction, add getPropertyTimeline (same changes as ProcessMetricsPage) |
 | `src/components/MetricsChart.tsx` | Remove hooks, use props for property data |
-
-## Files That May Become Unused
-- `src/hooks/usePropertyKeys.ts` - Keys now derived from data
-- `src/hooks/usePropertyTimeline.ts` - Logic moved to ProcessMetricsPage
+| `src/hooks/usePropertyKeys.ts` | Delete (keys now derived from unified query data) |
+| `src/hooks/usePropertyTimeline.ts` | Delete (logic moved to page components) |
 
 ## Verification
 
