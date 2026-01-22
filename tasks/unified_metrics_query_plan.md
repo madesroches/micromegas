@@ -68,6 +68,16 @@ This single query provides:
 
 Note: `jsonb_format_json` converts JSONB binary to a JSON text string that can be parsed with `JSON.parse()`. The column can be NULL if no properties exist in that time bin.
 
+## Architecture
+
+This refactor maintains MVC separation:
+
+| Layer | Component | Responsibility |
+|-------|-----------|----------------|
+| **Model** | `useMetricsData` hook | Unified query execution, data extraction, property timeline derivation |
+| **View** | `MetricsChart` | Pure presentation, receives all data via props |
+| **Controller** | Page components | Wire Model to View, handle user interactions, URL state |
+
 ## Implementation Steps
 
 ### 1. Create Shared Property Utility
@@ -113,16 +123,19 @@ export function aggregateIntoSegments(
 ): PropertySegment[]
 ```
 
-### 2. Update DEFAULT_SQL in Both Pages
-**Files:**
-- `analytics-web-app/src/routes/ProcessMetricsPage.tsx`
-- `analytics-web-app/src/routes/PerformanceAnalysisPage.tsx`
+### 2. Create Unified Data Hook (Model Layer)
+**File:** `analytics-web-app/src/hooks/useMetricsData.ts`
 
-Note: Steps 2-5 and 7 apply to both pages. The code is nearly identical.
+This hook serves as the Model layer, encapsulating the unified query and all data transformations. Both page components will use this hook, eliminating code duplication.
 
-Change `DEFAULT_SQL` to include the `properties` column:
 ```typescript
-const DEFAULT_SQL = `SELECT
+import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useStreamQuery } from './useStreamQuery'
+import { timestampToMs } from '@/lib/arrow-utils'
+import { parseIntervalToMs, aggregateIntoSegments } from '@/lib/property-utils'
+import { PropertyTimelineData } from '@/types'
+
+const METRICS_SQL = `SELECT
   date_bin(INTERVAL '$bin_interval', time) as time,
   max(value) as value,
   jsonb_format_json(first_value(properties) FILTER (WHERE properties IS NOT NULL)) as properties
@@ -130,87 +143,176 @@ FROM view_instance('measures', '$process_id')
 WHERE name = '$measure_name'
 GROUP BY date_bin(INTERVAL '$bin_interval', time)
 ORDER BY time`
-```
 
-### 3. Add State and Extraction Logic in ProcessMetricsPage.tsx
+interface UseMetricsDataParams {
+  processId: string | null
+  measureName: string | null
+  binInterval: string
+  apiTimeRange: { begin: string; end: string }
+  enabled?: boolean
+}
 
-Add new state:
-```typescript
-const [rawPropertiesData, setRawPropertiesData] = useState<Map<number, Record<string, unknown>>>(new Map())
-```
+interface UseMetricsDataReturn {
+  chartData: { time: number; value: number }[]
+  availablePropertyKeys: string[]
+  getPropertyTimeline: (key: string) => PropertyTimelineData
+  isLoading: boolean
+  isComplete: boolean
+  error: string | null
+  execute: () => void
+}
 
-Update the data extraction effect to also store properties:
-```typescript
-useEffect(() => {
-  if (dataQuery.isComplete && !dataQuery.error) {
-    const table = dataQuery.getTable()
-    if (table) {
-      const points: { time: number; value: number }[] = []
-      const propsMap = new Map<number, Record<string, unknown>>()
+export function useMetricsData({
+  processId,
+  measureName,
+  binInterval,
+  apiTimeRange,
+  enabled = true,
+}: UseMetricsDataParams): UseMetricsDataReturn {
+  const query = useStreamQuery()
 
-      for (let i = 0; i < table.numRows; i++) {
-        const row = table.get(i)
-        if (row) {
-          const time = timestampToMs(row.time)
-          points.push({ time, value: Number(row.value) })
-          // properties is a JSON string from jsonb_format_json, or null
-          const propsStr = row.properties
-          if (propsStr != null) {
-            try {
-              propsMap.set(time, JSON.parse(String(propsStr)))
-            } catch {
-              // Ignore parse errors
+  const [chartData, setChartData] = useState<{ time: number; value: number }[]>([])
+  const [rawPropertiesData, setRawPropertiesData] = useState<Map<number, Record<string, unknown>>>(new Map())
+
+  // Execute the unified query
+  const execute = useCallback(() => {
+    if (!processId || !measureName || !enabled) return
+
+    query.execute({
+      sql: METRICS_SQL,
+      params: {
+        process_id: processId,
+        measure_name: measureName,
+        bin_interval: binInterval,
+      },
+      begin: apiTimeRange.begin,
+      end: apiTimeRange.end,
+    })
+  }, [processId, measureName, binInterval, apiTimeRange, enabled, query])
+
+  // Extract data when query completes
+  useEffect(() => {
+    if (query.isComplete && !query.error) {
+      const table = query.getTable()
+      if (table) {
+        const points: { time: number; value: number }[] = []
+        const propsMap = new Map<number, Record<string, unknown>>()
+
+        for (let i = 0; i < table.numRows; i++) {
+          const row = table.get(i)
+          if (row) {
+            const time = timestampToMs(row.time)
+            points.push({ time, value: Number(row.value) })
+
+            const propsStr = row.properties
+            if (propsStr != null) {
+              try {
+                propsMap.set(time, JSON.parse(String(propsStr)))
+              } catch {
+                // Ignore parse errors
+              }
             }
           }
         }
+
+        setChartData(points)
+        setRawPropertiesData(propsMap)
       }
-
-      setChartData(points)
-      setRawPropertiesData(propsMap)
-      setHasLoaded(true)
     }
-  }
-}, [dataQuery.isComplete, dataQuery.error])
-```
+  }, [query.isComplete, query.error])
 
-### 4. Derive Available Property Keys
-
-```typescript
-const availablePropertyKeys = useMemo(() => {
-  const keysSet = new Set<string>()
-  for (const props of rawPropertiesData.values()) {
-    Object.keys(props).forEach(k => keysSet.add(k))
-  }
-  return Array.from(keysSet).sort()
-}, [rawPropertiesData])
-```
-
-### 5. Add Property Timeline Extraction Function
-
-```typescript
-const getPropertyTimeline = useCallback((propertyName: string): PropertyTimelineData => {
-  const rows: { time: number; value: string }[] = []
-
-  // Sort by time
-  const sortedEntries = Array.from(rawPropertiesData.entries()).sort((a, b) => a[0] - b[0])
-
-  for (const [time, props] of sortedEntries) {
-    const value = props[propertyName]
-    if (value !== undefined && value !== null) {
-      rows.push({ time, value: String(value) })
+  // Derive available property keys from the data
+  const availablePropertyKeys = useMemo(() => {
+    const keysSet = new Set<string>()
+    for (const props of rawPropertiesData.values()) {
+      Object.keys(props).forEach(k => keysSet.add(k))
     }
-  }
+    return Array.from(keysSet).sort()
+  }, [rawPropertiesData])
 
-  const binIntervalMs = parseIntervalToMs(binInterval)
+  // Function to get property timeline for a specific key
+  const getPropertyTimeline = useCallback((propertyName: string): PropertyTimelineData => {
+    const rows: { time: number; value: string }[] = []
+
+    const sortedEntries = Array.from(rawPropertiesData.entries()).sort((a, b) => a[0] - b[0])
+
+    for (const [time, props] of sortedEntries) {
+      const value = props[propertyName]
+      if (value !== undefined && value !== null) {
+        rows.push({ time, value: String(value) })
+      }
+    }
+
+    const binIntervalMs = parseIntervalToMs(binInterval)
+    return {
+      propertyName,
+      segments: aggregateIntoSegments(rows, binIntervalMs),
+    }
+  }, [rawPropertiesData, binInterval])
+
   return {
-    propertyName,
-    segments: aggregateIntoSegments(rows, binIntervalMs),
+    chartData,
+    availablePropertyKeys,
+    getPropertyTimeline,
+    isLoading: query.isStreaming,
+    isComplete: query.isComplete,
+    error: query.error?.message ?? null,
+    execute,
   }
-}, [rawPropertiesData, binInterval])
+}
 ```
 
-### 6. Update MetricsChart Props
+### 3. Update Page Components to Use the Hook
+**Files:**
+- `analytics-web-app/src/routes/ProcessMetricsPage.tsx`
+- `analytics-web-app/src/routes/PerformanceAnalysisPage.tsx`
+
+Both pages will use the new `useMetricsData` hook instead of managing data extraction directly. This keeps the pages thin (Controller layer) while the hook handles data logic (Model layer).
+
+**Remove from both pages:**
+- `DEFAULT_SQL` constant (now in the hook)
+- `dataQuery` hook usage for metrics data
+- `chartData` state and its extraction effect
+- Direct `useStreamQuery` call for metrics (keep it for discovery query)
+
+**Add to both pages:**
+```typescript
+import { useMetricsData } from '@/hooks/useMetricsData'
+
+// Inside component:
+const metricsData = useMetricsData({
+  processId,
+  measureName: selectedMeasure,
+  binInterval,
+  apiTimeRange,
+  enabled: !!processId && !!selectedMeasure,
+})
+
+// Use metricsData.chartData instead of chartData state
+// Use metricsData.availablePropertyKeys for property keys
+// Use metricsData.getPropertyTimeline for property timeline data
+// Use metricsData.isLoading, metricsData.error for loading/error states
+```
+
+**Trigger data loading** when measure is selected:
+```typescript
+useEffect(() => {
+  if (discoveryDone && selectedMeasure && processId) {
+    metricsData.execute()
+  }
+}, [discoveryDone, selectedMeasure, processId])
+```
+
+**Update references throughout the component:**
+- Replace `chartData` with `metricsData.chartData`
+- Replace `dataQuery.isStreaming` with `metricsData.isLoading`
+- Replace `dataQuery.error` with `metricsData.error`
+- Replace `hasLoaded` checks with `metricsData.isComplete`
+
+### 4. Update MetricsChart Props (View Layer)
 **File:** `analytics-web-app/src/components/MetricsChart.tsx`
+
+MetricsChart becomes a pure View component that receives all data via props.
 
 Update interface:
 ```typescript
@@ -219,7 +321,7 @@ interface MetricsChartProps {
   data: { time: number; value: number }[]
   title: string
   unit: string
-  // Property data (from unified query)
+  // Property data (from unified query via Model layer)
   availablePropertyKeys: string[]
   getPropertyTimeline: (key: string) => PropertyTimelineData
   // Selected properties (controlled from parent)
@@ -232,10 +334,13 @@ interface MetricsChartProps {
 }
 ```
 
-Remove:
-- `processId`, `measureName`, `apiTimeRange`, `binInterval` props
-- `usePropertyKeys` hook call
-- `usePropertyTimeline` hook call
+Remove these props (no longer needed since Model layer provides pre-computed data):
+- `processId`, `measureName`, `apiTimeRange` - were only used by the hooks to fetch data
+- `binInterval` - segmentation now happens in Model's `getPropertyTimeline()` which calls `parseIntervalToMs(binInterval)` internally
+
+Remove these hook calls (replaced by props from Model layer):
+- `usePropertyKeys` - replaced by `availablePropertyKeys` prop
+- `usePropertyTimeline` - replaced by `getPropertyTimeline` prop
 
 Replace hook calls with prop usage:
 ```typescript
@@ -248,17 +353,17 @@ const propertyTimelines = useMemo(() => {
 }, [selectedProperties, getPropertyTimeline])
 ```
 
-### 7. Update Both Pages to Pass New Props
+### 5. Update Both Pages to Pass New Props
 
 Update MetricsChart usage in both `ProcessMetricsPage.tsx` and `PerformanceAnalysisPage.tsx`:
 
 ```typescript
 <MetricsChart
-  data={chartData}
+  data={metricsData.chartData}
   title={selectedMeasure}
   unit={selectedMeasureInfo?.unit || ''}
-  availablePropertyKeys={availablePropertyKeys}
-  getPropertyTimeline={getPropertyTimeline}
+  availablePropertyKeys={metricsData.availablePropertyKeys}
+  getPropertyTimeline={metricsData.getPropertyTimeline}
   selectedProperties={selectedProperties}
   onAddProperty={handleAddProperty}
   onRemoveProperty={handleRemoveProperty}
@@ -271,7 +376,7 @@ Update MetricsChart usage in both `ProcessMetricsPage.tsx` and `PerformanceAnaly
 />
 ```
 
-### 8. Delete Unused Hooks
+### 6. Delete Unused Hooks
 
 After completing the refactor, delete the hooks that are no longer used:
 
@@ -282,16 +387,75 @@ rm analytics-web-app/src/hooks/usePropertyTimeline.ts
 
 Verify no other files import these hooks before deleting.
 
+### 7. Enable Dictionary Preservation for Bandwidth Optimization
+
+**Background:** The `jsonb_format_json` function returns `Dictionary<Int32, Utf8>` for memory efficiency - repeated JSON strings share a single dictionary entry. However, this encoding is currently lost because the FlightSQL client doesn't request it:
+
+```
+Current (without header):
+flight-sql-srv ──(hydrated strings)──▶ analytics-web-srv ──(re-encode)──▶ browser
+
+With fix (preserve_dictionary=true):
+flight-sql-srv ──(dict-encoded)──▶ analytics-web-srv ──(re-encode)──▶ browser
+                                          │
+                                          └── encode_batch() already uses
+                                              DictionaryTracker, so dictionaries
+                                              are preserved automatically
+```
+
+**The fix:** Set `preserve_dictionary: true` header in the FlightSQL client. The `stream_query_handler` already uses `DictionaryTracker` and `IpcDataGenerator::encode` which preserve dictionary encoding in the input `RecordBatch` - no additional changes needed.
+
+**File:** `rust/public/src/client/flightsql_client.rs`
+
+Add the header in `query_stream`:
+
+```rust
+pub async fn query_stream(
+    &mut self,
+    sql: String,
+    query_range: Option<TimeRange>,
+) -> Result<FlightRecordBatchStream> {
+    self.set_query_range(query_range);
+    // Preserve dictionary encoding for bandwidth efficiency
+    self.inner.set_header("preserve_dictionary", "true");
+    let info = self.inner.execute(sql, None).await?;
+    // ... rest unchanged
+}
+```
+
+**Implications:**
+
+| Aspect | Impact |
+|--------|--------|
+| Bandwidth | Reduced - repeated property values (e.g., `{"level": "high"}`) share dictionary entries instead of being repeated per-row |
+| Memory (server) | Slight increase - server must track dictionary state across batches |
+| Memory (browser) | Reduced - Apache Arrow JS preserves dictionary encoding in memory |
+| CPU (browser) | Reduced - fewer string allocations when parsing |
+| Compatibility | No client changes needed - Arrow IPC format handles dictionaries transparently |
+
+**When this matters most:**
+- Property values with low cardinality (few unique values, many rows)
+- Long time ranges with many data points
+- Properties with verbose JSON (e.g., `{"zone": "us-east-1", "tier": "production"}`)
+
+**Example savings:** For 1000 rows where 90% have `{"level": "high"}`:
+- Without dictionary: ~18KB (18 bytes × 1000)
+- With dictionary: ~1.8KB (18 bytes × 1 + 4 byte indices × 1000)
+
+This optimization benefits all queries with dictionary-encoded columns, not just the properties column.
+
 ## File Changes Summary
 
-| File | Change |
-|------|--------|
-| `src/lib/property-utils.ts` | New file: shared aggregation utilities (with millisecond fix) |
-| `src/routes/ProcessMetricsPage.tsx` | Update SQL, add properties extraction, add getPropertyTimeline |
-| `src/routes/PerformanceAnalysisPage.tsx` | Update SQL, add properties extraction, add getPropertyTimeline (same changes as ProcessMetricsPage) |
-| `src/components/MetricsChart.tsx` | Remove hooks, use props for property data |
-| `src/hooks/usePropertyKeys.ts` | Delete (keys now derived from unified query data) |
-| `src/hooks/usePropertyTimeline.ts` | Delete (logic moved to page components) |
+| File | Layer | Change |
+|------|-------|--------|
+| `analytics-web-app/src/lib/property-utils.ts` | Utility | New file: shared aggregation utilities (with millisecond fix) |
+| `analytics-web-app/src/hooks/useMetricsData.ts` | Model | New file: unified data hook encapsulating query + extraction + transformation |
+| `analytics-web-app/src/routes/ProcessMetricsPage.tsx` | Controller | Use `useMetricsData` hook, remove embedded data logic |
+| `analytics-web-app/src/routes/PerformanceAnalysisPage.tsx` | Controller | Use `useMetricsData` hook, remove embedded data logic |
+| `analytics-web-app/src/components/MetricsChart.tsx` | View | Remove hooks, receive all data via props (pure presentation) |
+| `analytics-web-app/src/hooks/usePropertyKeys.ts` | - | Delete (replaced by `useMetricsData.availablePropertyKeys`) |
+| `analytics-web-app/src/hooks/usePropertyTimeline.ts` | - | Delete (replaced by `useMetricsData.getPropertyTimeline`) |
+| `rust/public/src/client/flightsql_client.rs` | - | Add `preserve_dictionary` header for bandwidth optimization |
 
 ## Verification
 
