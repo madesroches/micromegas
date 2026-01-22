@@ -17,6 +17,9 @@ export interface ScreenConfig {
   // Time range settings (shared across screen types)
   timeRangeFrom?: string
   timeRangeTo?: string
+  // Table screen sort settings
+  sortColumn?: string
+  sortDirection?: 'asc' | 'desc'
 }
 
 export interface ScreenVariable {
@@ -34,7 +37,7 @@ export interface Screen {
   updated_at: string
 }
 
-export type ScreenTypeName = 'process_list' | 'metrics' | 'log'
+export type ScreenTypeName = 'process_list' | 'metrics' | 'log' | 'table'
 
 export interface ScreenTypeInfo {
   name: ScreenTypeName

@@ -1,4 +1,4 @@
-import { List, LineChart, FileText, type LucideIcon } from 'lucide-react'
+import { List, LineChart, FileText, Table2, type LucideIcon } from 'lucide-react'
 
 /**
  * Maps icon identifiers from the backend to Lucide React components.
@@ -8,6 +8,7 @@ const ICON_MAP: Record<string, LucideIcon> = {
   list: List,
   'chart-line': LineChart,
   'file-text': FileText,
+  table: Table2,
 }
 
 const DEFAULT_ICON = FileText
