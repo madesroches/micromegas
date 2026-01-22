@@ -87,7 +87,8 @@ export function CellEditor({
     ...Object.entries(variables).map(([name, value]) => ({ name, value })),
   ]
 
-  const showSqlEditor = cell.type !== 'markdown'
+  const isComboboxVariable = cell.type === 'variable' && (cell.variableType || 'combobox') === 'combobox'
+  const showSqlEditor = cell.type !== 'markdown' && cell.type !== 'variable' || isComboboxVariable
   const showContentEditor = cell.type === 'markdown'
 
   return (
@@ -124,7 +125,25 @@ export function CellEditor({
           />
         </div>
 
-        {/* SQL Editor */}
+        {/* Variable Type (for variable cells - shown first to control SQL visibility) */}
+        {cell.type === 'variable' && (
+          <div>
+            <label className="block text-xs font-medium text-theme-text-secondary uppercase mb-1.5">
+              Variable Type
+            </label>
+            <select
+              value={cell.variableType || 'combobox'}
+              onChange={(e) => onUpdate({ variableType: e.target.value as 'combobox' | 'text' | 'number' })}
+              className="w-full px-3 py-2 bg-app-card border border-theme-border rounded-md text-theme-text-primary text-sm focus:outline-none focus:border-accent-link"
+            >
+              <option value="combobox">Dropdown (from SQL)</option>
+              <option value="text">Text Input</option>
+              <option value="number">Number Input</option>
+            </select>
+          </div>
+        )}
+
+        {/* SQL Editor (not for markdown, and only for combobox variables) */}
         {showSqlEditor && (
           <div>
             <label className="block text-xs font-medium text-theme-text-secondary uppercase mb-1.5">
@@ -135,6 +154,22 @@ export function CellEditor({
               onChange={(e) => handleSqlChange(e.target.value)}
               className="w-full min-h-[150px] px-3 py-2 bg-app-bg border border-theme-border rounded-md text-theme-text-primary text-sm font-mono focus:outline-none focus:border-accent-link resize-y"
               placeholder="SELECT * FROM ..."
+            />
+          </div>
+        )}
+
+        {/* Default Value (for variable cells) */}
+        {cell.type === 'variable' && (
+          <div>
+            <label className="block text-xs font-medium text-theme-text-secondary uppercase mb-1.5">
+              Default Value
+            </label>
+            <input
+              type="text"
+              value={cell.defaultValue || ''}
+              onChange={(e) => onUpdate({ defaultValue: e.target.value })}
+              className="w-full px-3 py-2 bg-app-card border border-theme-border rounded-md text-theme-text-primary text-sm focus:outline-none focus:border-accent-link"
+              placeholder="Default value"
             />
           </div>
         )}
@@ -152,39 +187,6 @@ export function CellEditor({
               placeholder="# Heading\n\nYour markdown here..."
             />
           </div>
-        )}
-
-        {/* Variable settings (for variable cells) */}
-        {cell.type === 'variable' && (
-          <>
-            <div>
-              <label className="block text-xs font-medium text-theme-text-secondary uppercase mb-1.5">
-                Variable Type
-              </label>
-              <select
-                value={cell.variableType || 'combobox'}
-                onChange={(e) => onUpdate({ variableType: e.target.value as 'combobox' | 'text' | 'number' })}
-                className="w-full px-3 py-2 bg-app-card border border-theme-border rounded-md text-theme-text-primary text-sm focus:outline-none focus:border-accent-link"
-              >
-                <option value="combobox">Dropdown (from SQL)</option>
-                <option value="text">Text Input</option>
-                <option value="number">Number Input</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-xs font-medium text-theme-text-secondary uppercase mb-1.5">
-                Default Value
-              </label>
-              <input
-                type="text"
-                value={cell.defaultValue || ''}
-                onChange={(e) => onUpdate({ defaultValue: e.target.value })}
-                className="w-full px-3 py-2 bg-app-card border border-theme-border rounded-md text-theme-text-primary text-sm focus:outline-none focus:border-accent-link"
-                placeholder="Default value"
-              />
-            </div>
-          </>
         )}
 
         {/* Available Variables */}
@@ -207,11 +209,17 @@ export function CellEditor({
 
       {/* Footer */}
       <div className="p-3 border-t border-theme-border space-y-2">
-        {/* Run button (for cells with SQL) */}
-        {showSqlEditor && (
+        {/* Run button (for cells with SQL, not for text/number variables) */}
+        {showSqlEditor && cell.type !== 'variable' && (
           <Button onClick={onRun} className="w-full gap-2">
             <Play className="w-4 h-4" />
             Run Cell
+          </Button>
+        )}
+        {isComboboxVariable && (
+          <Button onClick={onRun} className="w-full gap-2">
+            <Play className="w-4 h-4" />
+            Load Options
           </Button>
         )}
 

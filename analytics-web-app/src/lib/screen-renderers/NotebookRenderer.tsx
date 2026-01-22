@@ -740,7 +740,12 @@ export function NotebookRenderer({
             onRun={() => executeCell(index)}
             onRunFromHere={() => executeFromCell(index)}
             onDelete={() => setDeletingCellIndex(index)}
-            statusText={state.data ? `${state.data.numRows} rows` : undefined}
+            statusText={
+              // Don't show row count for text/number variable cells
+              cell.type === 'variable' && (cell as VariableCellConfig).variableType !== 'combobox'
+                ? undefined
+                : state.data ? `${state.data.numRows} rows` : undefined
+            }
             height={cell.layout.height}
           >
             {CellRenderer ? (
