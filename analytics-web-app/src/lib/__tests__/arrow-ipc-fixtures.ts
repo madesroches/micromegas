@@ -72,7 +72,6 @@ function splitIpcMessages(ipcBytes: Uint8Array): Uint8Array[] {
     // The Message table has: version (4), header_type (1), header (4), bodyLength (8)
     // But it's a flatbuffer so we need to navigate the vtable...
 
-    // Simpler approach: just find the next continuation marker
     let nextOffset = metadataEnd
 
     // Scan forward to find next message or end
