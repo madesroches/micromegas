@@ -23,7 +23,7 @@ SELECT
   username,
   computer
 FROM processes
-ORDER BY $order_by
+$order_by
 LIMIT 100
 ```
 
@@ -34,9 +34,9 @@ This mirrors the `process_list` default but uses the generic table renderer inst
 |----------|-------------|
 | `$begin` | Time range start (ISO timestamp) |
 | `$end` | Time range end (ISO timestamp) |
-| `$order_by` | Sort column and direction, e.g., `last_update_time DESC` (controlled by column header clicks) |
+| `$order_by` | Full ORDER BY clause, e.g., `ORDER BY last_update_time DESC` or empty string (controlled by column header clicks) |
 
-The `$order_by` macro approach (consistent with `ProcessesPage`) allows users to control where sorting is applied in their query, which works cleanly with CTEs and subqueries.
+The `$order_by` macro includes the `ORDER BY` keywords, expanding to either `ORDER BY column_name ASC/DESC` or an empty string when no sort is active. This allows users to control where sorting is applied in their query, which works cleanly with CTEs and subqueries.
 
 ## Architecture
 
@@ -67,8 +67,8 @@ export interface ScreenConfig {
 ```
 
 **Persisted state:**
-- `sortColumn`: Current sort column name (default: `'last_update_time'`)
-- `sortDirection`: `'asc'` | `'desc'` (default: `'desc'`)
+- `sortColumn`: Current sort column name, or `null`/`undefined` for no sorting (default: no sort)
+- `sortDirection`: `'asc'` | `'desc'` (default: `'asc'` when a column is first selected)
 
 ## Files to Create
 
@@ -123,7 +123,7 @@ impl ScreenType {
         match self {
             // ... existing
             Self::Table => serde_json::json!({
-                "sql": "SELECT process_id, exe, start_time, last_update_time, username, computer\nFROM processes\nORDER BY $order_by\nLIMIT 100",
+                "sql": "SELECT process_id, exe, start_time, last_update_time, username, computer\nFROM processes\n$order_by\nLIMIT 100",
                 "variables": []
             }),
         }
@@ -191,16 +191,19 @@ export function TableRenderer(props: TableRendererProps) {
 const VARIABLES = [
   { name: 'begin', description: 'Time range start (ISO timestamp)' },
   { name: 'end', description: 'Time range end (ISO timestamp)' },
-  { name: 'order_by', description: 'Sort column and direction (click headers)' },
+  { name: 'order_by', description: 'ORDER BY clause or empty (click headers to cycle: none → ASC → DESC → none)' },
 ]
 ```
 
 **Sorting via `$order_by` Substitution:**
 
-Sort state is read from config (persisted) with defaults:
+Sort state is read from config (persisted). When no sort is active, `$order_by` expands to empty string:
 ```typescript
-const sortColumn = config.sortColumn ?? 'last_update_time'
-const sortDirection = config.sortDirection ?? 'desc'
+const { sortColumn, sortDirection } = config
+
+const orderByValue = sortColumn
+  ? `ORDER BY ${sortColumn} ${sortDirection?.toUpperCase() ?? 'ASC'}`
+  : ''
 
 const executeQuery = useCallback((sql: string) => {
   streamQuery.execute({
@@ -208,22 +211,29 @@ const executeQuery = useCallback((sql: string) => {
     params: {
       begin: timeRange.begin,
       end: timeRange.end,
-      order_by: `${sortColumn} ${sortDirection.toUpperCase()}`,
+      order_by: orderByValue,
     },
     begin: timeRange.begin,
     end: timeRange.end,
   })
-}, [sortColumn, sortDirection, timeRange])
+}, [orderByValue, timeRange])
 ```
 
-When a column header is clicked, update config (triggers re-execution and marks unsaved):
+**Three-state sort cycling:**
+
+Column headers cycle through: no sort → ASC → DESC → no sort
+
 ```typescript
 const handleSort = (columnName: string) => {
-  if (sortColumn === columnName) {
-    const newDirection = sortDirection === 'asc' ? 'desc' : 'asc'
-    onConfigChange({ ...config, sortDirection: newDirection })
+  if (sortColumn !== columnName) {
+    // New column: start with ASC
+    onConfigChange({ ...config, sortColumn: columnName, sortDirection: 'asc' })
+  } else if (sortDirection === 'asc') {
+    // ASC → DESC
+    onConfigChange({ ...config, sortDirection: 'desc' })
   } else {
-    onConfigChange({ ...config, sortColumn: columnName, sortDirection: 'desc' })
+    // DESC → no sort (clear)
+    onConfigChange({ ...config, sortColumn: undefined, sortDirection: undefined })
   }
   onUnsavedChange()
 }
@@ -286,21 +296,23 @@ registerRenderer('table', TableRenderer);
 ├──────────────────────────────────────────────────────────┬──────────────────┤
 │  ┌───────────────────────────────────────────────────┐   │  SELECT ...      │
 │  │ process_id   │ exe ▼    │ start_time │ username  │   │  FROM processes  │
-│  ├───────────────┼──────────┼────────────┼───────────┤   │  ORDER BY $order_by │
+│  ├───────────────┼──────────┼────────────┼───────────┤   │  $order_by       │
 │  │ abc123...     │ myapp    │ 2024-01-15 │ admin     │   │  LIMIT 100       │
 │  │ def456...     │ service  │ 2024-01-14 │ system    │   │                  │
 │  │ ghi789...     │ worker   │ 2024-01-13 │ worker    │   │  Variables:      │
-│  │ ...           │ ...      │ ...        │ ...       │   │  $order_by = exe DESC │
+│  │ ...           │ ...      │ ...        │ ...       │   │  $order_by = ORDER BY exe DESC │
 │  └───────────────┴──────────┴────────────┴───────────┘   │  $begin = 2024-...│
 │                                                          │  $end = 2024-... │
 └──────────────────────────────────────────────────────────┴──────────────────┘
 ```
 
-### Sort Indicators
+### Sort Indicators (3-state cycle)
 
-- Unsorted: No indicator
-- Ascending: `▲` next to column name
-- Descending: `▼` next to column name
+Clicking a column header cycles through: **no sort → ASC → DESC → no sort**
+
+- **No sort**: No indicator (default state)
+- **Ascending**: `▲` next to column name
+- **Descending**: `▼` next to column name
 
 ### Empty States
 
@@ -336,11 +348,12 @@ The implementation should follow patterns from both:
    - Verify default query shows processes data
    - Verify all columns are rendered
 
-2. **Column sorting**
-   - Click column headers to sort
-   - Verify sort indicator changes
-   - Verify data reorders correctly
-   - Verify `$order_by` value updates in QueryEditor variables display
+2. **Column sorting (3-state cycle)**
+   - Click column header: no sort → ASC (▲ indicator)
+   - Click same column again: ASC → DESC (▼ indicator)
+   - Click same column again: DESC → no sort (no indicator)
+   - Verify data reorders correctly at each state
+   - Verify `$order_by` value updates: `ORDER BY col ASC` → `ORDER BY col DESC` → empty
 
 3. **Custom queries**
    - Edit SQL to query different tables
@@ -363,8 +376,9 @@ The implementation should follow patterns from both:
 - Query returns large number of columns (horizontal scroll)
 - Query returns null values
 - Query returns various data types (timestamps, numbers, strings, booleans)
-- Query without `$order_by` macro (clicking sort headers has no effect, but no error)
+- Query without `$order_by` macro (clicking sort headers updates state but has no effect on query results)
 - Query with `$order_by` in subquery or CTE
+- Saved sortColumn no longer exists in modified query (query fails with clear error, user can clear sort)
 
 ## Future Enhancements (Out of Scope)
 
