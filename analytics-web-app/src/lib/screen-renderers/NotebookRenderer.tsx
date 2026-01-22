@@ -297,6 +297,8 @@ export function NotebookRenderer({
 
   // Variable values (collected from variable cells)
   const [variableValues, setVariableValues] = useState<Record<string, string>>({})
+  // Ref for synchronous access during sequential execution (state updates are async)
+  const variableValuesRef = useRef<Record<string, string>>({})
 
   // Selected cell index
   const [selectedCellIndex, setSelectedCellIndex] = useState<number | null>(null)
@@ -327,6 +329,7 @@ export function NotebookRenderer({
       }
     }
     if (Object.keys(initialValues).length > 0) {
+      variableValuesRef.current = { ...variableValuesRef.current, ...initialValues }
       setVariableValues((prev) => ({ ...prev, ...initialValues }))
     }
   }, [cells]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -370,12 +373,12 @@ export function NotebookRenderer({
         return true
       }
 
-      // Gather variables from cells above
+      // Gather variables from cells above (use ref for synchronous access during execution)
       const availableVariables: Record<string, string> = {}
       for (let i = 0; i < cellIndex; i++) {
         const prevCell = cells[i]
-        if (prevCell.type === 'variable' && variableValues[prevCell.name] !== undefined) {
-          availableVariables[prevCell.name] = variableValues[prevCell.name]
+        if (prevCell.type === 'variable' && variableValuesRef.current[prevCell.name] !== undefined) {
+          availableVariables[prevCell.name] = variableValuesRef.current[prevCell.name]
         }
       }
 
@@ -410,9 +413,11 @@ export function NotebookRenderer({
             ...prev,
             [cell.name]: { status: 'success', data: result, variableOptions: options },
           }))
-          // Set default value if not already set
-          if (!variableValues[cell.name] && options.length > 0) {
-            setVariableValues((prev) => ({ ...prev, [cell.name]: options[0].value }))
+          // Set default value if not already set (update ref synchronously for next cell)
+          if (!variableValuesRef.current[cell.name] && options.length > 0) {
+            const newValue = options[0].value
+            variableValuesRef.current = { ...variableValuesRef.current, [cell.name]: newValue }
+            setVariableValues((prev) => ({ ...prev, [cell.name]: newValue }))
           }
         } else {
           setCellStates((prev) => ({
@@ -433,7 +438,7 @@ export function NotebookRenderer({
         return false
       }
     },
-    [cells, variableValues, timeRange]
+    [cells, timeRange]
   )
 
   // Execute from a cell index (that cell and all below)
@@ -506,6 +511,9 @@ export function NotebookRenderer({
       })
       // Remove variable value if applicable
       if (cell.type === 'variable') {
+        const nextRef = { ...variableValuesRef.current }
+        delete nextRef[cell.name]
+        variableValuesRef.current = nextRef
         setVariableValues((prev) => {
           const next = { ...prev }
           delete next[cell.name]
@@ -550,6 +558,12 @@ export function NotebookRenderer({
           })
           // For variable cells, also migrate the stored value
           if (cell.type === 'variable') {
+            const nextRef = { ...variableValuesRef.current }
+            if (oldName in nextRef) {
+              nextRef[newName] = nextRef[oldName]
+              delete nextRef[oldName]
+              variableValuesRef.current = nextRef
+            }
             setVariableValues((prevValues) => {
               const next = { ...prevValues }
               if (oldName in next) {
@@ -582,6 +596,7 @@ export function NotebookRenderer({
   // Handle variable value change
   const handleVariableChange = useCallback(
     (cellName: string, value: string) => {
+      variableValuesRef.current = { ...variableValuesRef.current, [cellName]: value }
       setVariableValues((prev) => ({ ...prev, [cellName]: value }))
     },
     []
