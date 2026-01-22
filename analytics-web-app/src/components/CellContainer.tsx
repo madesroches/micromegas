@@ -1,5 +1,5 @@
-import { ReactNode, useState, useRef, useEffect } from 'react'
-import { ChevronDown, ChevronRight, Play, RotateCcw, MoreVertical, Trash2 } from 'lucide-react'
+import { ReactNode, useState, useRef, useEffect, forwardRef, HTMLAttributes } from 'react'
+import { ChevronDown, ChevronRight, Play, RotateCcw, MoreVertical, Trash2, GripVertical } from 'lucide-react'
 import { CellType, CellStatus } from '@/lib/screen-renderers/cell-registry'
 import { Button } from '@/components/ui/button'
 
@@ -11,7 +11,7 @@ const CELL_TYPE_LABELS: Record<CellType, string> = {
   variable: 'Variable',
 }
 
-interface CellContainerProps {
+interface CellContainerProps extends Omit<HTMLAttributes<HTMLDivElement>, 'children'> {
   /** Cell name/title */
   name: string
   /** Cell type */
@@ -40,24 +40,35 @@ interface CellContainerProps {
   height?: number | 'auto'
   /** Cell content */
   children: ReactNode
+  /** Props for drag handle (from dnd-kit useSortable) */
+  dragHandleProps?: Record<string, unknown>
+  /** Whether the cell is currently being dragged */
+  isDragging?: boolean
 }
 
-export function CellContainer({
-  name,
-  type,
-  status,
-  error,
-  collapsed = false,
-  onToggleCollapsed,
-  isSelected = false,
-  onSelect,
-  onRun,
-  onRunFromHere,
-  onDelete,
-  statusText,
-  height = 'auto',
-  children,
-}: CellContainerProps) {
+export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(function CellContainer(
+  {
+    name,
+    type,
+    status,
+    error,
+    collapsed = false,
+    onToggleCollapsed,
+    isSelected = false,
+    onSelect,
+    onRun,
+    onRunFromHere,
+    onDelete,
+    statusText,
+    height = 'auto',
+    children,
+    dragHandleProps,
+    isDragging,
+    style,
+    ...divProps
+  },
+  ref
+) {
   const [showMenu, setShowMenu] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
 
@@ -98,12 +109,15 @@ export function CellContainer({
 
   return (
     <div
+      ref={ref}
       className={`bg-app-panel border-2 rounded-lg overflow-hidden cursor-pointer transition-colors ${
         isSelected
           ? 'border-accent-link bg-[#1a2a3a]'
           : 'border-theme-border hover:border-[#3a3a4a]'
-      }`}
+      } ${isDragging ? 'opacity-50' : ''}`}
+      style={style}
       onClick={onSelect}
+      {...divProps}
     >
       {/* Cell Header */}
       <div
@@ -112,6 +126,17 @@ export function CellContainer({
         }`}
       >
         <div className="flex items-center gap-2">
+          {/* Drag handle */}
+          {dragHandleProps && (
+            <button
+              {...(dragHandleProps as React.ButtonHTMLAttributes<HTMLButtonElement>)}
+              className="text-theme-text-muted hover:text-theme-text-primary transition-colors cursor-grab active:cursor-grabbing touch-none"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <GripVertical className="w-4 h-4" />
+            </button>
+          )}
+
           {/* Collapse toggle */}
           <button
             onClick={(e) => {
@@ -231,4 +256,4 @@ export function CellContainer({
       )}
     </div>
   )
-}
+})

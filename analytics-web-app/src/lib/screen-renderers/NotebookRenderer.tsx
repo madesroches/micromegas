@@ -1,6 +1,25 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import { Plus, X } from 'lucide-react'
 import { Table } from 'apache-arrow'
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  DragEndEvent,
+  DragStartEvent,
+  DragOverlay,
+} from '@dnd-kit/core'
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
 import { registerRenderer, ScreenRendererProps } from './index'
 import { CellType, CellStatus, getCellRenderer } from './cell-registry'
 import { CellContainer } from '@/components/CellContainer'
@@ -268,6 +287,38 @@ function DeleteCellModal({ isOpen, cellName, onClose, onConfirm }: DeleteCellMod
 }
 
 // ============================================================================
+// Sortable Cell Wrapper
+// ============================================================================
+
+interface SortableCellProps {
+  id: string
+  children: (props: {
+    dragHandleProps: Record<string, unknown>
+    isDragging: boolean
+    setNodeRef: (node: HTMLElement | null) => void
+    style: React.CSSProperties
+  }) => React.ReactNode
+}
+
+function SortableCell({ id, children }: SortableCellProps) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id })
+
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+  }
+
+  return <>{children({ dragHandleProps: { ...attributes, ...listeners }, isDragging, setNodeRef, style })}</>
+}
+
+// ============================================================================
 // Main Component
 // ============================================================================
 
@@ -316,6 +367,57 @@ export function NotebookRenderer({
   const existingNames = useMemo(() => {
     return new Set(cells.map((c) => c.name))
   }, [cells])
+
+  // Drag and drop state
+  const [activeDragId, setActiveDragId] = useState<string | null>(null)
+
+  // Drag and drop sensors
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 8, // Require 8px movement before starting drag
+      },
+    }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    })
+  )
+
+  // Handle drag start - track active cell
+  const handleDragStart = useCallback((event: DragStartEvent) => {
+    setActiveDragId(event.active.id as string)
+  }, [])
+
+  // Handle drag end - reorder cells
+  const handleDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      setActiveDragId(null)
+      const { active, over } = event
+      if (!over || active.id === over.id) return
+
+      const oldIndex = cells.findIndex((c) => c.name === active.id)
+      const newIndex = cells.findIndex((c) => c.name === over.id)
+
+      if (oldIndex === -1 || newIndex === -1) return
+
+      const newCells = arrayMove(cells, oldIndex, newIndex)
+      onConfigChange({ ...notebookConfig, cells: newCells })
+      onUnsavedChange()
+
+      // Update selected cell index if needed
+      if (selectedCellIndex === oldIndex) {
+        setSelectedCellIndex(newIndex)
+      } else if (selectedCellIndex !== null) {
+        // Adjust selection if it was affected by the move
+        if (oldIndex < selectedCellIndex && newIndex >= selectedCellIndex) {
+          setSelectedCellIndex(selectedCellIndex - 1)
+        } else if (oldIndex > selectedCellIndex && newIndex <= selectedCellIndex) {
+          setSelectedCellIndex(selectedCellIndex + 1)
+        }
+      }
+    },
+    [cells, notebookConfig, onConfigChange, onUnsavedChange, selectedCellIndex]
+  )
 
   // Initialize variable values from config defaults
   useEffect(() => {
@@ -620,57 +722,64 @@ export function NotebookRenderer({
     }
 
     return (
-      <CellContainer
-        key={`${cell.name}-${index}`}
-        name={cell.name}
-        type={cell.type}
-        status={state.status}
-        error={state.error}
-        collapsed={cell.layout.collapsed}
-        onToggleCollapsed={() => toggleCellCollapsed(index)}
-        isSelected={selectedCellIndex === index}
-        onSelect={() => setSelectedCellIndex(index)}
-        onRun={() => executeCell(index)}
-        onRunFromHere={() => executeFromCell(index)}
-        onDelete={() => setDeletingCellIndex(index)}
-        statusText={state.data ? `${state.data.numRows} rows` : undefined}
-        height={cell.layout.height}
-      >
-        {CellRenderer ? (
-          <CellRenderer
+      <SortableCell key={cell.name} id={cell.name}>
+        {({ dragHandleProps, isDragging, setNodeRef, style }) => (
+          <CellContainer
+            ref={setNodeRef}
+            style={style}
+            dragHandleProps={dragHandleProps}
+            isDragging={isDragging}
             name={cell.name}
-            sql={cell.type !== 'markdown' ? (cell as QueryCellConfig | VariableCellConfig).sql : undefined}
-            options={cell.type !== 'markdown' && cell.type !== 'variable' ? (cell as QueryCellConfig).options : undefined}
-            data={state.data}
+            type={cell.type}
             status={state.status}
             error={state.error}
-            timeRange={timeRange}
-            variables={availableVariables}
-            isEditing={selectedCellIndex === index}
+            collapsed={cell.layout.collapsed}
+            onToggleCollapsed={() => toggleCellCollapsed(index)}
+            isSelected={selectedCellIndex === index}
+            onSelect={() => setSelectedCellIndex(index)}
             onRun={() => executeCell(index)}
-            onSqlChange={(sql) => updateCell(index, { sql } as Partial<QueryCellConfig>)}
-            onOptionsChange={(options) => updateCell(index, { options } as Partial<QueryCellConfig>)}
-            content={cell.type === 'markdown' ? (cell as MarkdownCellConfig).content : undefined}
-            onContentChange={
-              cell.type === 'markdown'
-                ? (content) => updateCell(index, { content } as Partial<MarkdownCellConfig>)
-                : undefined
-            }
-            value={cell.type === 'variable' ? variableValues[cell.name] : undefined}
-            onValueChange={
-              cell.type === 'variable'
-                ? (value) => handleVariableChange(cell.name, value)
-                : undefined
-            }
-            variableType={cell.type === 'variable' ? (cell as VariableCellConfig).variableType : undefined}
-            variableOptions={cell.type === 'variable' ? state.variableOptions : undefined}
-          />
-        ) : (
-          <div className="text-theme-text-muted">
-            No renderer for cell type: {cell.type}
-          </div>
+            onRunFromHere={() => executeFromCell(index)}
+            onDelete={() => setDeletingCellIndex(index)}
+            statusText={state.data ? `${state.data.numRows} rows` : undefined}
+            height={cell.layout.height}
+          >
+            {CellRenderer ? (
+              <CellRenderer
+                name={cell.name}
+                sql={cell.type !== 'markdown' ? (cell as QueryCellConfig | VariableCellConfig).sql : undefined}
+                options={cell.type !== 'markdown' && cell.type !== 'variable' ? (cell as QueryCellConfig).options : undefined}
+                data={state.data}
+                status={state.status}
+                error={state.error}
+                timeRange={timeRange}
+                variables={availableVariables}
+                isEditing={selectedCellIndex === index}
+                onRun={() => executeCell(index)}
+                onSqlChange={(sql) => updateCell(index, { sql } as Partial<QueryCellConfig>)}
+                onOptionsChange={(options) => updateCell(index, { options } as Partial<QueryCellConfig>)}
+                content={cell.type === 'markdown' ? (cell as MarkdownCellConfig).content : undefined}
+                onContentChange={
+                  cell.type === 'markdown'
+                    ? (content) => updateCell(index, { content } as Partial<MarkdownCellConfig>)
+                    : undefined
+                }
+                value={cell.type === 'variable' ? variableValues[cell.name] : undefined}
+                onValueChange={
+                  cell.type === 'variable'
+                    ? (value) => handleVariableChange(cell.name, value)
+                    : undefined
+                }
+                variableType={cell.type === 'variable' ? (cell as VariableCellConfig).variableType : undefined}
+                variableOptions={cell.type === 'variable' ? state.variableOptions : undefined}
+              />
+            ) : (
+              <div className="text-theme-text-muted">
+                No renderer for cell type: {cell.type}
+              </div>
+            )}
+          </CellContainer>
         )}
-      </CellContainer>
+      </SortableCell>
     )
   }
 
@@ -679,18 +788,42 @@ export function NotebookRenderer({
       {/* Main content area */}
       <div className="flex-1 flex flex-col p-6 min-w-0 overflow-auto">
         {/* Cells */}
-        <div className="flex flex-col gap-3">
-          {cells.map((cell, index) => renderCell(cell, index))}
-
-          {/* Add Cell button */}
-          <button
-            onClick={() => setShowAddCellModal(true)}
-            className="w-full py-3 border-2 border-dashed border-theme-border rounded-lg bg-transparent text-theme-text-muted hover:border-accent-link hover:text-accent-link hover:bg-accent-link/10 transition-colors"
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCenter}
+          onDragStart={handleDragStart}
+          onDragEnd={handleDragEnd}
+        >
+          <SortableContext
+            items={cells.map((c) => c.name)}
+            strategy={verticalListSortingStrategy}
           >
-            <Plus className="w-4 h-4 inline-block mr-2" />
-            Add Cell
-          </button>
-        </div>
+            <div className="flex flex-col gap-3">
+              {cells.map((cell, index) => renderCell(cell, index))}
+
+              {/* Add Cell button */}
+              <button
+                onClick={() => setShowAddCellModal(true)}
+                className="w-full py-3 border-2 border-dashed border-theme-border rounded-lg bg-transparent text-theme-text-muted hover:border-accent-link hover:text-accent-link hover:bg-accent-link/10 transition-colors"
+              >
+                <Plus className="w-4 h-4 inline-block mr-2" />
+                Add Cell
+              </button>
+            </div>
+          </SortableContext>
+          <DragOverlay>
+            {activeDragId ? (
+              <div className="bg-app-panel border-2 border-accent-link rounded-lg shadow-xl opacity-90">
+                <div className="flex items-center gap-2 px-3 py-2 bg-app-card rounded-t-lg">
+                  <span className="text-[11px] px-1.5 py-0.5 rounded bg-app-panel text-theme-text-secondary uppercase font-medium">
+                    {cells.find((c) => c.name === activeDragId)?.type}
+                  </span>
+                  <span className="font-medium text-theme-text-primary">{activeDragId}</span>
+                </div>
+              </div>
+            ) : null}
+          </DragOverlay>
+        </DndContext>
       </div>
 
       {/* Right panel - Cell Editor */}

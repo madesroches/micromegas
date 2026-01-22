@@ -196,31 +196,61 @@ Manual execution only - no automatic re-execution on time range or variable chan
   - Replace `$variableName` in SQL with collected values
   - Handle missing variables gracefully (show error or use default)
 
-- [ ] **16. Add auto-refresh**
-  - Refresh interval setting in screen config
-  - Dropdown to select interval (off, 5s, 10s, 30s, 1m, 5m)
-  - Re-execute all query cells on interval
+- [x] ~~**16. Add auto-refresh**~~ (skipped - not needed)
 
 - [x] **17. Polish notebook creation flow**
   - New notebook starts empty with just the "Add Cell" button
   - ~~Smooth "new screen" flow with type selection~~ (uses existing screen creation flow)
 
+### Phase 4: Cell Reordering
+
+- [x] **18. Add drag-and-drop reordering**
+  - Added drag handle (GripVertical icon) to CellContainer header
+  - Using @dnd-kit/core + @dnd-kit/sortable for drag functionality
+  - Visual feedback during drag (opacity change on dragged item)
+  - Reorders cells array on drop and saves config
+
+- [x] **19. Preserve state after reorder**
+  - Cell execution results keyed by name, preserved across reorder
+  - Selected cell index updated when reordering
+
 ---
 
 ## Future Improvements
 
-- **Cell reordering** - Drag-and-drop or move up/down buttons to reorder cells
 - **Cell duplication** - Copy an existing cell as a starting point
+
+---
+
+## Current Status (2026-01-22)
+
+**Phases 1-2 Complete.** All cell types implemented and working:
+- TableCell, ChartCell, LogCell, MarkdownCell, VariableCell
+- CellContainer with collapse, edit, delete, and run controls
+- CellEditor with SQL editing and variable preview
+- Cell-level error handling with retry
+
+**Phase 3 Complete.**
+- Variable cells working (combobox, text, number types)
+- Macro substitution working (`$variableName` in SQL)
+- Variable values populated on initial load (fixed in adb9bbb8b)
+- Cell name rename working (fixed in a9a5a3fa1)
+- Auto-refresh skipped (not needed)
+
+**Phase 4 Complete:** Drag-and-drop cell reordering implemented using @dnd-kit
+
+**Known Issues:** None currently.
 
 ---
 
 ## Verification
 
-- [ ] Create new notebook screen, add multiple cells (table, chart, log)
-- [ ] Add variable cell (combobox), verify it populates options from SQL
-- [ ] Add query cell below that uses `$variable`, verify substitution works
-- [ ] Use "Run from here" to execute a cell and all cells below it
-- [ ] Verify a failed cell stops execution of cells below it
-- [ ] Verify fixing a failed cell resumes execution of cells below
-- [ ] Verify existing screen types (process_list, metrics, log) still work
-- [ ] Run `yarn lint` and `yarn test`
+- [x] Create new notebook screen, add multiple cells (table, chart, log)
+- [x] Add variable cell (combobox), verify it populates options from SQL
+- [x] Add query cell below that uses `$variable`, verify substitution works
+- [x] Use "Run from here" to execute a cell and all cells below it
+- [x] Verify a failed cell stops execution of cells below it
+- [x] Verify fixing a failed cell resumes execution of cells below
+- [x] Verify existing screen types (process_list, metrics, log) still work
+- [x] Run `yarn lint` and `yarn test` (passes with only pre-existing warnings)
+- [x] Verify cell drag-and-drop reordering works
