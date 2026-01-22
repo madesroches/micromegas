@@ -7,7 +7,12 @@ import { useSqlHandlers } from './useSqlHandlers'
 import { LoadingState, EmptyState, SaveFooter, RendererLayout } from './shared'
 import { QueryEditor } from '@/components/QueryEditor'
 import { formatTimestamp } from '@/lib/time-range'
-import { timestampToDate, isTimeType, isNumericType } from '@/lib/arrow-utils'
+import {
+  timestampToDate,
+  isTimeType,
+  isNumericType,
+  isBinaryType,
+} from '@/lib/arrow-utils'
 import { useStreamQuery } from '@/hooks/useStreamQuery'
 
 // Variables available for table queries
@@ -26,29 +31,6 @@ interface TableConfig {
   timeRangeTo?: string
   sortColumn?: string
   sortDirection?: 'asc' | 'desc'
-}
-
-/**
- * Get the underlying type, unwrapping dictionary encoding if present.
- */
-function unwrapDictionary(dataType: DataType): DataType {
-  if (DataType.isDictionary(dataType)) {
-    // Dictionary type has a 'dictionary' property with the value type
-    return (dataType as { dictionary: DataType }).dictionary
-  }
-  return dataType
-}
-
-/**
- * Check if an Arrow DataType is a binary type (handles dictionary-encoded binary).
- */
-function isBinaryType(dataType: DataType): boolean {
-  const inner = unwrapDictionary(dataType)
-  return (
-    DataType.isBinary(inner) ||
-    DataType.isLargeBinary(inner) ||
-    DataType.isFixedSizeBinary(inner)
-  )
 }
 
 interface SortHeaderProps {

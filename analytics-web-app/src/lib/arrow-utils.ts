@@ -94,6 +94,31 @@ export function isStringType(dataType: DataType): boolean {
 }
 
 /**
+ * Get the underlying type, unwrapping dictionary encoding if present.
+ * Dictionary-encoded columns store indices that reference a dictionary of values.
+ * This function returns the value type (e.g., Utf8 from Dictionary<Int32, Utf8>).
+ */
+export function unwrapDictionary(dataType: DataType): DataType {
+  if (DataType.isDictionary(dataType)) {
+    // Dictionary type has a 'dictionary' property with the value type
+    return (dataType as { dictionary: DataType }).dictionary
+  }
+  return dataType
+}
+
+/**
+ * Check if an Arrow DataType is a binary type (handles dictionary-encoded binary).
+ */
+export function isBinaryType(dataType: DataType): boolean {
+  const inner = unwrapDictionary(dataType)
+  return (
+    DataType.isBinary(inner) ||
+    DataType.isLargeBinary(inner) ||
+    DataType.isFixedSizeBinary(inner)
+  )
+}
+
+/**
  * Detect X-axis mode from Arrow column type
  */
 export function detectXAxisMode(dataType: DataType): XAxisMode {

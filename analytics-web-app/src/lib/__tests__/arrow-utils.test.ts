@@ -15,11 +15,18 @@ jest.mock('apache-arrow', () => {
     Utf8: 7,
     LargeUtf8: 8,
     Bool: 9,
+    Binary: 10,
+    LargeBinary: 11,
+    FixedSizeBinary: 12,
+    Dictionary: 13,
   }
 
   // Mock DataType class with static type checking methods
   class MockDataType {
-    constructor(public typeId: number) {}
+    constructor(
+      public typeId: number,
+      public dictionary?: MockDataType
+    ) {}
 
     static isTimestamp(dt: MockDataType): boolean {
       return dt.typeId === TypeId.Timestamp
@@ -45,6 +52,18 @@ jest.mock('apache-arrow', () => {
     static isLargeUtf8(dt: MockDataType): boolean {
       return dt.typeId === TypeId.LargeUtf8
     }
+    static isBinary(dt: MockDataType): boolean {
+      return dt.typeId === TypeId.Binary
+    }
+    static isLargeBinary(dt: MockDataType): boolean {
+      return dt.typeId === TypeId.LargeBinary
+    }
+    static isFixedSizeBinary(dt: MockDataType): boolean {
+      return dt.typeId === TypeId.FixedSizeBinary
+    }
+    static isDictionary(dt: MockDataType): boolean {
+      return dt.typeId === TypeId.Dictionary
+    }
   }
 
   // Factory functions for creating typed DataTypes
@@ -53,6 +72,11 @@ jest.mock('apache-arrow', () => {
   const createFloatType = () => new MockDataType(TypeId.Float)
   const createUtf8Type = () => new MockDataType(TypeId.Utf8)
   const createBoolType = () => new MockDataType(TypeId.Bool)
+  const createBinaryType = () => new MockDataType(TypeId.Binary)
+  const createLargeBinaryType = () => new MockDataType(TypeId.LargeBinary)
+  const createFixedSizeBinaryType = () => new MockDataType(TypeId.FixedSizeBinary)
+  const createDictionaryType = (valueType: MockDataType) =>
+    new MockDataType(TypeId.Dictionary, valueType)
 
   return {
     DataType: MockDataType,
@@ -66,6 +90,10 @@ jest.mock('apache-arrow', () => {
       createFloatType,
       createUtf8Type,
       createBoolType,
+      createBinaryType,
+      createLargeBinaryType,
+      createFixedSizeBinaryType,
+      createDictionaryType,
     },
   }
 })
@@ -77,11 +105,23 @@ import {
   isTimeType,
   isNumericType,
   isStringType,
+  unwrapDictionary,
+  isBinaryType,
 } from '../arrow-utils'
 
 // Get test helpers from mock
 const { __test__ } = jest.requireMock('apache-arrow')
-const { createTimestampType, createIntType, createFloatType, createUtf8Type, createBoolType } = __test__
+const {
+  createTimestampType,
+  createIntType,
+  createFloatType,
+  createUtf8Type,
+  createBoolType,
+  createBinaryType,
+  createLargeBinaryType,
+  createFixedSizeBinaryType,
+  createDictionaryType,
+} = __test__
 
 // Helper to create mock table
 function createMockTable(
@@ -94,6 +134,88 @@ function createMockTable(
     get: (i: number) => rows[i] ?? null,
   }
 }
+
+describe('dictionary type utilities', () => {
+  describe('unwrapDictionary', () => {
+    it('should return inner type for dictionary-encoded Utf8', () => {
+      const dictType = createDictionaryType(createUtf8Type())
+      const result = unwrapDictionary(dictType)
+      expect(result.typeId).toBe(createUtf8Type().typeId)
+    })
+
+    it('should return inner type for dictionary-encoded Binary', () => {
+      const dictType = createDictionaryType(createBinaryType())
+      const result = unwrapDictionary(dictType)
+      expect(result.typeId).toBe(createBinaryType().typeId)
+    })
+
+    it('should return inner type for dictionary-encoded Int', () => {
+      const dictType = createDictionaryType(createIntType())
+      const result = unwrapDictionary(dictType)
+      expect(result.typeId).toBe(createIntType().typeId)
+    })
+
+    it('should pass through non-dictionary Utf8 type unchanged', () => {
+      const utf8Type = createUtf8Type()
+      const result = unwrapDictionary(utf8Type)
+      expect(result).toBe(utf8Type)
+    })
+
+    it('should pass through non-dictionary Binary type unchanged', () => {
+      const binaryType = createBinaryType()
+      const result = unwrapDictionary(binaryType)
+      expect(result).toBe(binaryType)
+    })
+
+    it('should pass through non-dictionary Int type unchanged', () => {
+      const intType = createIntType()
+      const result = unwrapDictionary(intType)
+      expect(result).toBe(intType)
+    })
+  })
+
+  describe('isBinaryType', () => {
+    it('should return true for Binary type', () => {
+      expect(isBinaryType(createBinaryType())).toBe(true)
+    })
+
+    it('should return true for LargeBinary type', () => {
+      expect(isBinaryType(createLargeBinaryType())).toBe(true)
+    })
+
+    it('should return true for FixedSizeBinary type', () => {
+      expect(isBinaryType(createFixedSizeBinaryType())).toBe(true)
+    })
+
+    it('should return true for dictionary-encoded Binary', () => {
+      const dictBinary = createDictionaryType(createBinaryType())
+      expect(isBinaryType(dictBinary)).toBe(true)
+    })
+
+    it('should return true for dictionary-encoded LargeBinary', () => {
+      const dictLargeBinary = createDictionaryType(createLargeBinaryType())
+      expect(isBinaryType(dictLargeBinary)).toBe(true)
+    })
+
+    it('should return true for dictionary-encoded FixedSizeBinary', () => {
+      const dictFixedBinary = createDictionaryType(createFixedSizeBinaryType())
+      expect(isBinaryType(dictFixedBinary)).toBe(true)
+    })
+
+    it('should return false for Utf8 type', () => {
+      expect(isBinaryType(createUtf8Type())).toBe(false)
+    })
+
+    it('should return false for Int type', () => {
+      expect(isBinaryType(createIntType())).toBe(false)
+    })
+
+    it('should return false for dictionary-encoded Utf8', () => {
+      const dictUtf8 = createDictionaryType(createUtf8Type())
+      expect(isBinaryType(dictUtf8)).toBe(false)
+    })
+  })
+})
 
 describe('type detection functions', () => {
   describe('isTimeType', () => {
