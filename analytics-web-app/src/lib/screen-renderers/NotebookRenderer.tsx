@@ -136,15 +136,17 @@ function createDefaultCell(type: CellType, existingNames: Set<string>): CellConf
 
 function substituteMacros(sql: string, variables: Record<string, string>, timeRange: { begin: string; end: string }): string {
   let result = sql
-  // Substitute $begin and $end
+  // Substitute $begin and $end (these are timestamps, keep quotes)
   result = result.replace(/\$begin/g, `'${timeRange.begin}'`)
   result = result.replace(/\$end/g, `'${timeRange.end}'`)
-  // Substitute user variables
-  for (const [name, value] of Object.entries(variables)) {
-    const regex = new RegExp(`\\$${name}`, 'g')
+  // Substitute user variables - don't add quotes, let the SQL author control quoting
+  // Sort by name length descending to avoid partial matches ($metric vs $metric_name)
+  const sortedVars = Object.entries(variables).sort((a, b) => b[0].length - a[0].length)
+  for (const [name, value] of sortedVars) {
+    const regex = new RegExp(`\\$${name}\\b`, 'g')
     // Escape single quotes in value for SQL safety
     const escaped = value.replace(/'/g, "''")
-    result = result.replace(regex, `'${escaped}'`)
+    result = result.replace(regex, escaped)
   }
   return result
 }
@@ -527,8 +529,33 @@ export function NotebookRenderer({
   // Update cell config
   const updateCell = useCallback(
     (index: number, updates: Partial<CellConfig>) => {
+      const cell = cells[index]
       const newCells = [...cells]
       newCells[index] = { ...newCells[index], ...updates } as CellConfig
+
+      // If renaming a variable cell, move its value from old name to new name
+      if (cell.type === 'variable' && updates.name && updates.name !== cell.name) {
+        const oldName = cell.name
+        const newName = updates.name
+        setVariableValues((prev) => {
+          const next = { ...prev }
+          if (oldName in next) {
+            next[newName] = next[oldName]
+            delete next[oldName]
+          }
+          return next
+        })
+        // Also update cell states
+        setCellStates((prev) => {
+          const next = { ...prev }
+          if (oldName in next) {
+            next[newName] = next[oldName]
+            delete next[oldName]
+          }
+          return next
+        })
+      }
+
       onConfigChange({ ...notebookConfig, cells: newCells })
       onUnsavedChange()
     },
