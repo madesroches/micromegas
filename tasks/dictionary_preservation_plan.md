@@ -12,6 +12,7 @@
 **Not affected:**
 - Grafana plugin - uses its own FlightSQL client configuration
 - Python API - uses Arrow Flight directly, not the Rust client
+- Other Rust binaries (uri-handler, http_gateway, examples) - use `Client` directly, not `BearerFlightSQLClientFactory`
 
 ## Overview
 
@@ -35,23 +36,26 @@ flight-sql-srv ──(dict-encoded)──▶ analytics-web-srv ──(re-encode)
 
 ## Implementation
 
-**File:** `rust/public/src/client/flightsql_client.rs`
+**File:** `rust/public/src/client/flightsql_client_factory.rs`
 
-This client is used by `analytics-web-srv` to proxy queries to `flight-sql-srv`. The Grafana plugin and Python API have their own FlightSQL client implementations and are unaffected by this change.
-
-Add the header in `query_stream`:
+Set the header in `BearerFlightSQLClientFactory::make_client()`, which is only used by `analytics-web-srv`. This ensures other clients (uri-handler, http_gateway, examples) are unaffected.
 
 ```rust
-pub async fn query_stream(
-    &mut self,
-    sql: String,
-    query_range: Option<TimeRange>,
-) -> Result<FlightRecordBatchStream> {
-    self.set_query_range(query_range);
-    // Preserve dictionary encoding for bandwidth efficiency
-    self.inner.set_header("preserve_dictionary", "true");
-    let info = self.inner.execute(sql, None).await?;
-    // ... rest unchanged
+#[async_trait]
+impl FlightSQLClientFactory for BearerFlightSQLClientFactory {
+    async fn make_client(&self) -> Result<Client> {
+        // ... existing channel setup ...
+        let mut client = Client::new(channel);
+
+        // ... existing auth header setup ...
+
+        // Preserve dictionary encoding for bandwidth efficiency
+        client
+            .inner_mut()
+            .set_header("preserve_dictionary", "true");
+
+        Ok(client)
+    }
 }
 ```
 
@@ -77,7 +81,7 @@ The `stream_query_handler` already uses `DictionaryTracker` and `IpcDataGenerato
 
 For 1000 rows where 90% have `{"level": "high"}`:
 - Without dictionary: ~18KB (18 bytes × 1000)
-- With dictionary: ~1.8KB (18 bytes × 1 + 4 byte indices × 1000)
+- With dictionary: ~4KB (18 bytes × 1 + 4 byte indices × 1000)
 
 This optimization benefits all queries with dictionary-encoded columns, not just the properties column.
 
@@ -85,7 +89,7 @@ This optimization benefits all queries with dictionary-encoded columns, not just
 
 | File | Change |
 |------|--------|
-| `rust/public/src/client/flightsql_client.rs` | Add `preserve_dictionary` header in `query_stream` (used by `analytics-web-srv`) |
+| `rust/public/src/client/flightsql_client_factory.rs` | Add `preserve_dictionary` header in `BearerFlightSQLClientFactory::make_client()` |
 
 ## Verification
 
