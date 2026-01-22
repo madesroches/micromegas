@@ -33,8 +33,11 @@ The existing screen types (`process_list`, `metrics`, `log`) remain unchanged. T
 
 ## Data Model
 
+**Architecture note:** The backend stores screen config as opaque JSON (`serde_json::Value`). The frontend `ScreenConfig` type should be `Record<string, unknown>` - each renderer casts it to its own specific interface. This means notebook types are defined in `NotebookRenderer.tsx`, not in a shared types file.
+
 ```typescript
 // Config for screens with type: 'notebook'
+// Defined in NotebookRenderer.tsx, not screens-api.ts
 // Note: time range is handled at the screen level, same as other screen types
 interface NotebookConfig {
   cells: CellConfig[]
@@ -44,8 +47,8 @@ interface NotebookConfig {
 type CellConfig = QueryCellConfig | MarkdownCellConfig | VariableCellConfig
 
 interface CellConfigBase {
-  title: string          // Also used as anchor for deep linking
-  type: CellType
+  name: string           // Unique within notebook; display name + anchor for deep linking
+  type: CellType         // For variable cells, name is also the variable name ($name)
   layout: { height: number | 'auto'; collapsed?: boolean }
 }
 
@@ -63,8 +66,7 @@ interface MarkdownCellConfig extends CellConfigBase {
 interface VariableCellConfig extends CellConfigBase {
   type: 'variable'
   variableType: 'combobox' | 'text' | 'number'
-  variableName: string   // Available as $variableName in subsequent cells
-  label: string
+  // Cell name is the variable name - available as $name in subsequent cells
   sql?: string           // For combobox: query to populate options
   valueColumn?: string
   labelColumn?: string
@@ -91,9 +93,9 @@ Manual execution only - no automatic re-execution on time range or variable chan
 ## Files to Modify
 
 **Frontend:**
-- `analytics-web-app/src/lib/screens-api.ts` - Add NotebookConfig, CellConfig types
+- `analytics-web-app/src/lib/screens-api.ts` - Change `ScreenConfig` to opaque type, add `'notebook'` to `ScreenTypeName`
 - `analytics-web-app/src/lib/screen-renderers/index.ts` - Register NotebookRenderer
-- `analytics-web-app/src/lib/screen-renderers/NotebookRenderer.tsx` - New renderer
+- `analytics-web-app/src/lib/screen-renderers/NotebookRenderer.tsx` - New renderer (includes `NotebookConfig`, `CellConfig` types)
 - `analytics-web-app/src/lib/screen-renderers/cells/` - New folder for cell components
 - `analytics-web-app/src/components/CellContainer.tsx` - New component
 - `analytics-web-app/src/components/CellEditor.tsx` - New component
@@ -107,11 +109,10 @@ Manual execution only - no automatic re-execution on time range or variable chan
 
 ### Phase 1: Multi-Cell Foundation
 
-- [ ] **1. Define TypeScript types** (`screens-api.ts`)
-  - Remove `sql` from base `ScreenConfig` - move to type-specific configs
-  - Add `NotebookConfig`, `CellConfig`, `VariableCellConfig` interfaces
-  - Add `CellType` union type
-  - Add `notebook` to screen types
+- [ ] **1. Clean up ScreenConfig type** (`screens-api.ts`)
+  - Change `ScreenConfig` from kitchen-sink interface to opaque `Record<string, unknown>`
+  - Add `'notebook'` to `ScreenTypeName` union
+  - (Notebook-specific types go in `NotebookRenderer.tsx`, not here)
 
 - [ ] **2. Create cell registry** (`screen-renderers/cell-registry.ts`)
   - Define `CellRendererProps` interface
@@ -125,11 +126,14 @@ Manual execution only - no automatic re-execution on time range or variable chan
   - Height management (fixed px or auto)
 
 - [ ] **4. Build NotebookRenderer** (`screen-renderers/NotebookRenderer.tsx`)
+  - Define `NotebookConfig`, `CellConfig`, `CellType` types (renderer owns its config shape)
+  - Validate cell name uniqueness within notebook
   - Vertical stack of CellContainers
   - "Add Cell" button at bottom (empty notebook shows just this button)
   - Cell type selection modal
+  - Delete cell action (with confirmation for cells with content)
   - Manage cell execution state array (per-cell: idle, loading, success, error)
-  - Collect variable values from variable cells
+  - Collect variable values from variable cells (keyed by cell name)
   - "Run from here" action on each cell (executes cell and all below)
 
 - [ ] **5. Create ChartCell** (`screen-renderers/cells/ChartCell.tsx`)
@@ -184,7 +188,7 @@ Manual execution only - no automatic re-execution on time range or variable chan
   - Emit value changes to screen state
 
 - [ ] **14. Build variable value collection**
-  - Screen maintains `Record<string, string>` of variable values
+  - Screen maintains `Record<string, string>` of variable values (keyed by cell name)
   - Variable cells update their value on user interaction
   - Values passed to all query cells for macro substitution
 
