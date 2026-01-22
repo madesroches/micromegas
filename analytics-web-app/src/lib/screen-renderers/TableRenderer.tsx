@@ -192,7 +192,7 @@ export function TableRenderer({
       hasExecutedRef.current = true
       executeQuery(tableConfig.sql)
     }
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [executeQuery, tableConfig.sql])
 
   // Re-execute on time range change
   const prevTimeRangeRef = useRef<{ begin: string; end: string } | null>(null)
