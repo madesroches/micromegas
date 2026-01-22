@@ -18,8 +18,6 @@ interface CellConfig {
   content?: string
   options?: Record<string, unknown>
   variableType?: 'combobox' | 'text' | 'number'
-  valueColumn?: string
-  labelColumn?: string
   defaultValue?: string
   layout: { height: number | 'auto'; collapsed?: boolean }
 }
@@ -173,35 +171,6 @@ export function CellEditor({
                 <option value="number">Number Input</option>
               </select>
             </div>
-
-            {cell.variableType === 'combobox' && (
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-medium text-theme-text-secondary uppercase mb-1.5">
-                    Value Column
-                  </label>
-                  <input
-                    type="text"
-                    value={cell.valueColumn || ''}
-                    onChange={(e) => onUpdate({ valueColumn: e.target.value })}
-                    className="w-full px-3 py-2 bg-app-card border border-theme-border rounded-md text-theme-text-primary text-sm focus:outline-none focus:border-accent-link"
-                    placeholder="value"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-theme-text-secondary uppercase mb-1.5">
-                    Label Column
-                  </label>
-                  <input
-                    type="text"
-                    value={cell.labelColumn || ''}
-                    onChange={(e) => onUpdate({ labelColumn: e.target.value })}
-                    className="w-full px-3 py-2 bg-app-card border border-theme-border rounded-md text-theme-text-primary text-sm focus:outline-none focus:border-accent-link"
-                    placeholder="label"
-                  />
-                </div>
-              </div>
-            )}
 
             <div>
               <label className="block text-xs font-medium text-theme-text-secondary uppercase mb-1.5">

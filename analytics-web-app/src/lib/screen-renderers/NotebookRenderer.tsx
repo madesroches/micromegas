@@ -50,10 +50,8 @@ interface MarkdownCellConfig extends CellConfigBase {
 interface VariableCellConfig extends CellConfigBase {
   type: 'variable'
   variableType: 'combobox' | 'text' | 'number'
-  /** For combobox: query to populate options */
+  /** For combobox: query to populate options (1 col = value+label, 2 cols = value, label) */
   sql?: string
-  valueColumn?: string
-  labelColumn?: string
   defaultValue?: string
 }
 
@@ -126,8 +124,6 @@ function createDefaultCell(type: CellType, existingNames: Set<string>): CellConf
         type: 'variable',
         variableType: 'combobox',
         sql: DEFAULT_SQL.variable,
-        valueColumn: 'name',
-        labelColumn: 'name',
       } as VariableCellConfig
     default:
       return { ...baseConfig, type: 'table', sql: DEFAULT_SQL.table } as QueryCellConfig
@@ -394,17 +390,18 @@ export function NotebookRenderer({
         const result = await executeSql(substitutedSql, timeRange, abortControllerRef.current.signal)
 
         // For variable cells, extract options from result
+        // Convention: 1 column = value+label, 2 columns = value then label
         if (cell.type === 'variable') {
-          const varCell = cell as VariableCellConfig
           const options: { label: string; value: string }[] = []
-          if (result && result.numRows > 0) {
-            const valueCol = varCell.valueColumn || 'value'
-            const labelCol = varCell.labelColumn || valueCol
+          if (result && result.numRows > 0 && result.numCols > 0) {
+            const schema = result.schema
+            const valueColName = schema.fields[0].name
+            const labelColName = schema.fields.length > 1 ? schema.fields[1].name : valueColName
             for (let i = 0; i < result.numRows; i++) {
               const row = result.get(i)
               if (row) {
-                const value = String(row[valueCol] ?? '')
-                const label = String(row[labelCol] ?? value)
+                const value = String(row[valueColName] ?? '')
+                const label = String(row[labelColName] ?? value)
                 options.push({ label, value })
               }
             }
@@ -526,40 +523,49 @@ export function NotebookRenderer({
     [notebookConfig, cells, onConfigChange, onUnsavedChange, selectedCellIndex]
   )
 
-  // Update cell config
+  // Update cell config using functional update to ensure atomic operations on latest state
   const updateCell = useCallback(
     (index: number, updates: Partial<CellConfig>) => {
-      const cell = cells[index]
-      const newCells = [...cells]
-      newCells[index] = { ...newCells[index], ...updates } as CellConfig
+      // Use functional update to always operate on the current config (MVC: update model atomically)
+      onConfigChange((prev) => {
+        const prevNotebook = (prev as unknown as NotebookConfig) || { cells: [] }
+        const currentCells = prevNotebook.cells || []
+        const cell = currentCells[index]
+        if (!cell) return prev // Guard against invalid index
 
-      // If renaming a variable cell, move its value from old name to new name
-      if (cell.type === 'variable' && updates.name && updates.name !== cell.name) {
-        const oldName = cell.name
-        const newName = updates.name
-        setVariableValues((prev) => {
-          const next = { ...prev }
-          if (oldName in next) {
-            next[newName] = next[oldName]
-            delete next[oldName]
-          }
-          return next
-        })
-        // Also update cell states
-        setCellStates((prev) => {
-          const next = { ...prev }
-          if (oldName in next) {
-            next[newName] = next[oldName]
-            delete next[oldName]
-          }
-          return next
-        })
-      }
+        const newCells = [...currentCells]
+        newCells[index] = { ...cell, ...updates } as CellConfig
 
-      onConfigChange({ ...notebookConfig, cells: newCells })
+        // If renaming any cell, migrate execution state to new name
+        if (updates.name && updates.name !== cell.name) {
+          const oldName = cell.name
+          const newName = updates.name
+          setCellStates((prevStates) => {
+            const next = { ...prevStates }
+            if (oldName in next) {
+              next[newName] = next[oldName]
+              delete next[oldName]
+            }
+            return next
+          })
+          // For variable cells, also migrate the stored value
+          if (cell.type === 'variable') {
+            setVariableValues((prevValues) => {
+              const next = { ...prevValues }
+              if (oldName in next) {
+                next[newName] = next[oldName]
+                delete next[oldName]
+              }
+              return next
+            })
+          }
+        }
+
+        return { ...prevNotebook, cells: newCells }
+      })
       onUnsavedChange()
     },
-    [notebookConfig, cells, onConfigChange, onUnsavedChange]
+    [onConfigChange, onUnsavedChange]
   )
 
   // Toggle cell collapsed

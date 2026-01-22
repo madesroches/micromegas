@@ -496,8 +496,8 @@ export function XYChart({
 
   return (
     <div className="flex flex-col h-full bg-app-panel border border-theme-border rounded-lg">
-      {/* Chart header */}
-      <div className="flex justify-between items-center px-4 py-3 border-b border-theme-border">
+      {/* Chart header - relative z-10 ensures buttons are above chart canvas */}
+      <div className="relative z-10 flex justify-between items-center px-4 py-3 border-b border-theme-border">
         {displayTitle ? (
           <div className="text-base font-medium text-theme-text-primary">
             {displayTitle}{displayUnit && <span className="text-theme-text-muted font-normal"> ({displayUnit})</span>}

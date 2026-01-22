@@ -1,14 +1,29 @@
-import { useMemo } from 'react'
+import { useMemo, useCallback } from 'react'
 import { CellRendererProps, registerCellRenderer } from '../cell-registry'
-import { XYChart } from '@/components/XYChart'
+import { XYChart, ScaleMode, ChartType } from '@/components/XYChart'
 import { extractChartData } from '@/lib/arrow-utils'
 
-export function ChartCell({ data, status, options }: CellRendererProps) {
+export function ChartCell({ data, status, options, onOptionsChange }: CellRendererProps) {
   // Extract chart data from Arrow table
   const chartResult = useMemo(() => {
     if (!data || data.numRows === 0) return null
     return extractChartData(data)
   }, [data])
+
+  // Hooks must be called unconditionally (before any returns)
+  const handleScaleModeChange = useCallback(
+    (mode: ScaleMode) => {
+      onOptionsChange({ ...options, scale_mode: mode })
+    },
+    [options, onOptionsChange]
+  )
+
+  const handleChartTypeChange = useCallback(
+    (type: ChartType) => {
+      onOptionsChange({ ...options, chart_type: type })
+    },
+    [options, onOptionsChange]
+  )
 
   if (status === 'loading') {
     return (
@@ -19,15 +34,7 @@ export function ChartCell({ data, status, options }: CellRendererProps) {
     )
   }
 
-  if (!data || data.numRows === 0) {
-    return (
-      <div className="flex items-center justify-center h-[200px] text-theme-text-muted text-sm">
-        No data available
-      </div>
-    )
-  }
-
-  if (!chartResult) {
+  if (!data || data.numRows === 0 || !chartResult) {
     return (
       <div className="flex items-center justify-center h-[200px] text-theme-text-muted text-sm">
         No data available
@@ -53,8 +60,10 @@ export function ChartCell({ data, status, options }: CellRendererProps) {
         xLabels={xLabels}
         xColumnName={xColumnName}
         yColumnName={yColumnName}
-        scaleMode={(options?.scale_mode as 'p99' | 'max') ?? 'p99'}
-        chartType={(options?.chart_type as 'line' | 'bar') ?? 'line'}
+        scaleMode={(options?.scale_mode as ScaleMode) ?? 'p99'}
+        onScaleModeChange={handleScaleModeChange}
+        chartType={(options?.chart_type as ChartType) ?? 'line'}
+        onChartTypeChange={handleChartTypeChange}
       />
     </div>
   )
