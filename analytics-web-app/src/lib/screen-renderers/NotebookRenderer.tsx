@@ -451,6 +451,18 @@ export function NotebookRenderer({
         return true
       }
 
+      // Handle text/number variable cells (no SQL execution)
+      if (cell.type === 'variable') {
+        const varCell = cell as VariableCellConfig
+        if (varCell.variableType === 'text' || varCell.variableType === 'number') {
+          setCellStates((prev) => ({
+            ...prev,
+            [cell.name]: { status: 'success', data: null },
+          }))
+          return true
+        }
+      }
+
       // Mark cell as loading
       setCellStates((prev) => ({
         ...prev,
