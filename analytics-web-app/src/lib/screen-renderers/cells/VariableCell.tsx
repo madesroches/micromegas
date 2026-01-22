@@ -1,7 +1,6 @@
 import { CellRendererProps, registerCellRenderer } from '../cell-registry'
 
 export function VariableCell({
-  name,
   value,
   onValueChange,
   variableType,
@@ -13,12 +12,9 @@ export function VariableCell({
 
   if (status === 'loading') {
     return (
-      <div className="flex items-center gap-3 py-2">
-        <span className="font-medium text-theme-text-primary min-w-[80px]">{name}</span>
-        <div className="flex items-center">
-          <div className="animate-spin rounded-full h-4 w-4 border-2 border-accent-link border-t-transparent" />
-          <span className="ml-2 text-theme-text-muted text-sm">Loading options...</span>
-        </div>
+      <div className="flex items-center gap-3 py-1">
+        <div className="animate-spin rounded-full h-4 w-4 border-2 border-accent-link border-t-transparent" />
+        <span className="text-theme-text-muted text-sm">Loading options...</span>
       </div>
     )
   }
@@ -29,8 +25,6 @@ export function VariableCell({
 
   return (
     <div className="flex items-center gap-3 py-1">
-      <span className="font-medium text-theme-text-primary min-w-[80px]">{name}</span>
-
       {type === 'combobox' && (
         <select
           value={currentValue}
@@ -68,8 +62,6 @@ export function VariableCell({
           placeholder="0"
         />
       )}
-
-      <span className="text-xs text-theme-text-muted font-mono">${name}</span>
     </div>
   )
 }
