@@ -23,11 +23,20 @@ SELECT
   username,
   computer
 FROM processes
-ORDER BY last_update_time DESC
+ORDER BY $order_by
 LIMIT 100
 ```
 
 This mirrors the `process_list` default but uses the generic table renderer instead of the specialized process list renderer.
+
+**Available Variables:**
+| Variable | Description |
+|----------|-------------|
+| `$begin` | Time range start (ISO timestamp) |
+| `$end` | Time range end (ISO timestamp) |
+| `$order_by` | Sort column and direction, e.g., `last_update_time DESC` (controlled by column header clicks) |
+
+The `$order_by` macro approach (consistent with `ProcessesPage`) allows users to control where sorting is applied in their query, which works cleanly with CTEs and subqueries.
 
 ## Architecture
 
@@ -45,18 +54,21 @@ Frontend (React) → ScreenPage → TableRenderer
 
 ### Config Structure
 
+The table screen uses the base `ScreenConfig` with additional sort fields:
+
 ```typescript
-interface TableScreenConfig extends ScreenConfig {
-  sql: string
-  variables?: ScreenVariable[]
-  tableOptions?: {
-    sortColumn?: string
-    sortDirection?: 'asc' | 'desc'
-  }
-  timeRangeFrom?: string
-  timeRangeTo?: string
+// In screens-api.ts, ScreenConfig already has sql, variables, timeRangeFrom, timeRangeTo
+// Add these optional fields for table screens:
+export interface ScreenConfig {
+  // ... existing fields
+  sortColumn?: string      // Column name for sorting
+  sortDirection?: 'asc' | 'desc'  // Sort direction
 }
 ```
+
+**Persisted state:**
+- `sortColumn`: Current sort column name (default: `'last_update_time'`)
+- `sortDirection`: `'asc'` | `'desc'` (default: `'desc'`)
 
 ## Files to Create
 
@@ -68,8 +80,8 @@ interface TableScreenConfig extends ScreenConfig {
 
 | File | Change |
 |------|--------|
-| `rust/analytics-web-srv/src/screen_types.rs` | Add `Table` variant with default config |
-| `analytics-web-app/src/lib/screens-api.ts` | Add `'table'` to `ScreenTypeName` type |
+| `rust/analytics-web-srv/src/screen_types.rs` | Add `Table` variant with default config, update error message |
+| `analytics-web-app/src/lib/screens-api.ts` | Add `'table'` to `ScreenTypeName`, add `sortColumn` and `sortDirection` to `ScreenConfig` |
 | `analytics-web-app/src/lib/screen-renderers/index.ts` | Register `TableRenderer` |
 
 ## Implementation Steps
@@ -110,10 +122,10 @@ impl ScreenType {
     pub fn default_config(&self) -> ScreenConfig {
         match self {
             // ... existing
-            Self::Table => ScreenConfig {
-                sql: "SELECT process_id, exe, start_time, last_update_time, username, computer FROM processes ORDER BY last_update_time DESC LIMIT 100".to_string(),
-                ..Default::default()
-            },
+            Self::Table => serde_json::json!({
+                "sql": "SELECT process_id, exe, start_time, last_update_time, username, computer\nFROM processes\nORDER BY $order_by\nLIMIT 100",
+                "variables": []
+            }),
         }
     }
 }
@@ -160,11 +172,9 @@ The renderer will:
 1. Use `useStreamQuery` for Arrow data streaming
 2. Auto-detect columns from Arrow schema
 3. Render a generic table with sortable headers
-4. Support client-side sorting (like ProcessListRenderer)
+4. Use `$order_by` variable substitution for sorting (like `ProcessesPage`)
 
 ```tsx
-interface TableRendererProps extends ScreenRendererProps {}
-
 export function TableRenderer(props: TableRendererProps) {
   // ... implementation
 }
@@ -172,9 +182,52 @@ export function TableRenderer(props: TableRendererProps) {
 
 **Key Features:**
 - **Auto-column detection**: Read column names from Arrow schema
-- **Type-aware formatting**: Format timestamps, numbers, strings appropriately
+- **Type-aware formatting**: Format timestamps, numbers, strings, booleans appropriately
 - **Sortable headers**: Click to sort ascending/descending
 - **SQL Editor panel**: Standard right panel with QueryEditor
+
+**Variables for QueryEditor:**
+```typescript
+const VARIABLES = [
+  { name: 'begin', description: 'Time range start (ISO timestamp)' },
+  { name: 'end', description: 'Time range end (ISO timestamp)' },
+  { name: 'order_by', description: 'Sort column and direction (click headers)' },
+]
+```
+
+**Sorting via `$order_by` Substitution:**
+
+Sort state is read from config (persisted) with defaults:
+```typescript
+const sortColumn = config.sortColumn ?? 'last_update_time'
+const sortDirection = config.sortDirection ?? 'desc'
+
+const executeQuery = useCallback((sql: string) => {
+  streamQuery.execute({
+    sql,
+    params: {
+      begin: timeRange.begin,
+      end: timeRange.end,
+      order_by: `${sortColumn} ${sortDirection.toUpperCase()}`,
+    },
+    begin: timeRange.begin,
+    end: timeRange.end,
+  })
+}, [sortColumn, sortDirection, timeRange])
+```
+
+When a column header is clicked, update config (triggers re-execution and marks unsaved):
+```typescript
+const handleSort = (columnName: string) => {
+  if (sortColumn === columnName) {
+    const newDirection = sortDirection === 'asc' ? 'desc' : 'asc'
+    onConfigChange({ ...config, sortDirection: newDirection })
+  } else {
+    onConfigChange({ ...config, sortColumn: columnName, sortDirection: 'desc' })
+  }
+  onUnsavedChange()
+}
+```
 
 **Component Structure:**
 ```
@@ -183,27 +236,32 @@ TableRenderer
 │   ├── Left Panel (content)
 │   │   ├── LoadingState / ErrorBanner / EmptyState
 │   │   └── Generic Table
-│   │       ├── Header Row (sortable columns)
+│   │       ├── Header Row (sortable columns from Arrow schema)
 │   │       └── Data Rows (auto-formatted cells)
 │   └── Right Panel (SQL editor)
-│       └── QueryEditor
+│       └── QueryEditor (with $order_by in currentValues)
 ```
 
 **Cell Formatting Logic:**
 ```typescript
+import { DataType } from 'apache-arrow'
+
 function formatCell(value: unknown, dataType: DataType): string {
-  if (value === null || value === undefined) return '-';
+  if (value === null || value === undefined) return '-'
 
-  if (isTimeType(dataType)) {
-    return formatTimestamp(value as bigint);
+  if (DataType.isTimestamp(dataType)) {
+    return formatTimestamp(value as bigint)
   }
 
-  if (isNumericType(dataType)) {
-    return formatNumber(value as number);
+  if (DataType.isInt(dataType) || DataType.isFloat(dataType)) {
+    return typeof value === 'number' ? value.toLocaleString() : String(value)
   }
 
-  // Default: string representation
-  return String(value);
+  if (DataType.isBool(dataType)) {
+    return value ? 'true' : 'false'
+  }
+
+  return String(value)
 }
 ```
 
@@ -227,13 +285,14 @@ registerRenderer('table', TableRenderer);
 │  SQL Query Panel (collapsible)                                              │
 ├──────────────────────────────────────────────────────────┬──────────────────┤
 │  ┌───────────────────────────────────────────────────┐   │  SELECT ...      │
-│  │ process_id ▼ │ exe      │ start_time │ username  │   │  FROM processes  │
-│  ├───────────────┼──────────┼────────────┼───────────┤   │  ORDER BY ...    │
-│  │ abc123...     │ myapp    │ 2024-01-15 │ admin     │   │                  │
-│  │ def456...     │ service  │ 2024-01-14 │ system    │   │  Variables:      │
-│  │ ghi789...     │ worker   │ 2024-01-13 │ worker    │   │  - $begin        │
-│  │ ...           │ ...      │ ...        │ ...       │   │  - $end          │
-│  └───────────────┴──────────┴────────────┴───────────┘   │                  │
+│  │ process_id   │ exe ▼    │ start_time │ username  │   │  FROM processes  │
+│  ├───────────────┼──────────┼────────────┼───────────┤   │  ORDER BY $order_by │
+│  │ abc123...     │ myapp    │ 2024-01-15 │ admin     │   │  LIMIT 100       │
+│  │ def456...     │ service  │ 2024-01-14 │ system    │   │                  │
+│  │ ghi789...     │ worker   │ 2024-01-13 │ worker    │   │  Variables:      │
+│  │ ...           │ ...      │ ...        │ ...       │   │  $order_by = exe DESC │
+│  └───────────────┴──────────┴────────────┴───────────┘   │  $begin = 2024-...│
+│                                                          │  $end = 2024-... │
 └──────────────────────────────────────────────────────────┴──────────────────┘
 ```
 
@@ -250,16 +309,23 @@ registerRenderer('table', TableRenderer);
 
 ## Reference Implementation
 
-The implementation should closely follow `ProcessListRenderer.tsx` patterns:
-- Same hook usage (`useStreamQuery`)
-- Same layout structure (`RendererLayout`)
-- Same SQL transformation for sorting
-- Same error/loading/empty state handling
+The implementation should follow patterns from both:
 
-Key differences from ProcessListRenderer:
-- No hardcoded columns - detect from schema
+**From `ProcessesPage.tsx`:**
+- `$order_by` variable substitution (not SQL regex manipulation)
+- Variable passing to `useStreamQuery`
+
+**From `ProcessListRenderer.tsx`:**
+- Hook usage (`useStreamQuery`)
+- Layout structure (`RendererLayout`)
+- Error/loading/empty state handling
+- `useSqlHandlers` and `useTimeRangeSync` hooks
+
+**Key differences from ProcessListRenderer:**
+- No hardcoded columns - detect from Arrow schema
 - No process-specific links
-- Generic cell formatting based on Arrow types
+- Generic cell formatting based on Arrow `DataType`
+- Sort state persisted to config (not local state)
 
 ## Testing
 
@@ -274,6 +340,7 @@ Key differences from ProcessListRenderer:
    - Click column headers to sort
    - Verify sort indicator changes
    - Verify data reorders correctly
+   - Verify `$order_by` value updates in QueryEditor variables display
 
 3. **Custom queries**
    - Edit SQL to query different tables
@@ -281,9 +348,9 @@ Key differences from ProcessListRenderer:
    - Test with: `SELECT * FROM log_entries LIMIT 10`
 
 4. **Save/Load**
-   - Save screen with custom query
+   - Save screen with custom query and sort settings
    - Reload page
-   - Verify saved config persists
+   - Verify saved config persists (SQL, sort column, sort direction)
 
 5. **Time range**
    - Change time range
@@ -296,6 +363,8 @@ Key differences from ProcessListRenderer:
 - Query returns large number of columns (horizontal scroll)
 - Query returns null values
 - Query returns various data types (timestamps, numbers, strings, booleans)
+- Query without `$order_by` macro (clicking sort headers has no effect, but no error)
+- Query with `$order_by` in subquery or CTE
 
 ## Future Enhancements (Out of Scope)
 
@@ -311,10 +380,10 @@ Key differences from ProcessListRenderer:
 
 | File | Status | Change |
 |------|--------|--------|
-| `rust/analytics-web-srv/src/screen_types.rs` | Modify | Add `Table` variant |
-| `analytics-web-app/src/lib/screens-api.ts` | Modify | Add `'table'` to type union |
+| `rust/analytics-web-srv/src/screen_types.rs` | Modify | Add `Table` variant, update error message |
+| `analytics-web-app/src/lib/screens-api.ts` | Modify | Add `'table'` to type union, add `sortColumn`/`sortDirection` to `ScreenConfig` |
 | `analytics-web-app/src/lib/screen-renderers/index.ts` | Modify | Register TableRenderer |
-| `analytics-web-app/src/lib/screen-renderers/TableRenderer.tsx` | Create | New renderer component |
+| `analytics-web-app/src/lib/screen-renderers/TableRenderer.tsx` | Create | New renderer with `$order_by` substitution |
 
 ## Dependencies
 
