@@ -39,6 +39,50 @@ function isBinaryType(dataType: DataType): boolean {
   )
 }
 
+interface SortHeaderProps {
+  columnName: string
+  children: React.ReactNode
+  sortColumn?: string
+  sortDirection?: 'asc' | 'desc'
+  onSort: (columnName: string) => void
+}
+
+function SortHeader({
+  columnName,
+  children,
+  sortColumn,
+  sortDirection,
+  onSort,
+}: SortHeaderProps) {
+  const isActive = sortColumn === columnName
+  const showAsc = isActive && sortDirection === 'asc'
+  const showDesc = isActive && sortDirection === 'desc'
+
+  return (
+    <th
+      onClick={() => onSort(columnName)}
+      className={`px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider cursor-pointer select-none transition-colors ${
+        isActive
+          ? 'text-theme-text-primary bg-app-card'
+          : 'text-theme-text-muted hover:text-theme-text-secondary hover:bg-app-card'
+      }`}
+    >
+      <div className="flex items-center gap-1">
+        <span className="truncate">{children}</span>
+        {isActive && (
+          <span className="text-accent-link flex-shrink-0">
+            {showAsc ? (
+              <ChevronUp className="w-3 h-3" />
+            ) : showDesc ? (
+              <ChevronDown className="w-3 h-3" />
+            ) : null}
+          </span>
+        )}
+      </div>
+    </th>
+  )
+}
+
 /**
  * Format a cell value based on its Arrow DataType.
  */
@@ -224,43 +268,6 @@ export function TableRenderer({
     [sortColumn, sortDirection, tableConfig, onConfigChange, onUnsavedChange]
   )
 
-  // Sort header component
-  const SortHeader = ({
-    columnName,
-    children,
-  }: {
-    columnName: string
-    children: React.ReactNode
-  }) => {
-    const isActive = sortColumn === columnName
-    const showAsc = isActive && sortDirection === 'asc'
-    const showDesc = isActive && sortDirection === 'desc'
-
-    return (
-      <th
-        onClick={() => handleSort(columnName)}
-        className={`px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider cursor-pointer select-none transition-colors ${
-          isActive
-            ? 'text-theme-text-primary bg-app-card'
-            : 'text-theme-text-muted hover:text-theme-text-secondary hover:bg-app-card'
-        }`}
-      >
-        <div className="flex items-center gap-1">
-          <span className="truncate">{children}</span>
-          {isActive && (
-            <span className="text-accent-link flex-shrink-0">
-              {showAsc ? (
-                <ChevronUp className="w-3 h-3" />
-              ) : showDesc ? (
-                <ChevronDown className="w-3 h-3" />
-              ) : null}
-            </span>
-          )}
-        </div>
-      </th>
-    )
-  }
-
   // Build currentValues with order_by for QueryEditor display
   const queryEditorValues = {
     ...currentValues,
@@ -319,7 +326,13 @@ export function TableRenderer({
           <thead className="sticky top-0">
             <tr className="bg-app-card border-b border-theme-border">
               {columns.map((col) => (
-                <SortHeader key={col.name} columnName={col.name}>
+                <SortHeader
+                  key={col.name}
+                  columnName={col.name}
+                  sortColumn={sortColumn}
+                  sortDirection={sortDirection}
+                  onSort={handleSort}
+                >
                   {col.name}
                 </SortHeader>
               ))}
