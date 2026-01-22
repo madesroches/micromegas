@@ -75,6 +75,9 @@ impl FlightSQLClientFactory for BearerFlightSQLClientFactory {
                 .set_header("x-client-type", client_type.clone());
         }
 
+        // Preserve dictionary encoding for bandwidth efficiency
+        client.inner_mut().set_header("preserve_dictionary", "true");
+
         Ok(client)
     }
 }

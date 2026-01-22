@@ -1,17 +1,20 @@
 # Dictionary Preservation for FlightSQL Queries (Web App)
 
-## Status: PENDING
+## Status: COMPLETED
 
 ## Related Plans
 - [Unified Metrics Query](./unified_metrics_query_plan.md) - Benefits from this optimization when fetching property JSON columns
 
 ## Scope
 
-**Affected:** `analytics-web-srv` (web app backend only)
+**Affected:**
+- `analytics-web-srv` - requests dictionary preservation from FlightSQL
+- `analytics-web-app` - correctly parses and renders dictionary-encoded columns
 
 **Not affected:**
 - Grafana plugin - uses its own FlightSQL client configuration
 - Python API - uses Arrow Flight directly, not the Rust client
+- Other Rust binaries (uri-handler, http_gateway, examples) - use `Client` directly, not `BearerFlightSQLClientFactory`
 
 ## Overview
 
@@ -35,27 +38,32 @@ flight-sql-srv ──(dict-encoded)──▶ analytics-web-srv ──(re-encode)
 
 ## Implementation
 
-**File:** `rust/public/src/client/flightsql_client.rs`
+### 1. Backend: Request Dictionary Preservation
 
-This client is used by `analytics-web-srv` to proxy queries to `flight-sql-srv`. The Grafana plugin and Python API have their own FlightSQL client implementations and are unaffected by this change.
+**File:** `rust/public/src/client/flightsql_client_factory.rs`
 
-Add the header in `query_stream`:
+Set the header in `BearerFlightSQLClientFactory::make_client()`, which is only used by `analytics-web-srv`. This ensures other clients (uri-handler, http_gateway, examples) are unaffected.
 
 ```rust
-pub async fn query_stream(
-    &mut self,
-    sql: String,
-    query_range: Option<TimeRange>,
-) -> Result<FlightRecordBatchStream> {
-    self.set_query_range(query_range);
-    // Preserve dictionary encoding for bandwidth efficiency
-    self.inner.set_header("preserve_dictionary", "true");
-    let info = self.inner.execute(sql, None).await?;
-    // ... rest unchanged
-}
+// Preserve dictionary encoding for bandwidth efficiency
+client.inner_mut().set_header("preserve_dictionary", "true");
 ```
 
 The `stream_query_handler` already uses `DictionaryTracker` and `IpcDataGenerator::encode` which preserve dictionary encoding in the input `RecordBatch` - no additional changes needed on the server side.
+
+### 2. Frontend: Fix Arrow IPC Streaming
+
+**File:** `analytics-web-app/src/lib/arrow-stream.ts`
+
+The previous implementation created a new `RecordBatchReader` per batch by combining schema+batch bytes. This broke dictionary state since dictionaries are defined once in the schema and referenced by index in subsequent batches.
+
+The fix uses a queue-based async generator to feed bytes to a single `RecordBatchReader`, which maintains dictionary state internally across all batches.
+
+### 3. Frontend: Handle Dictionary-Encoded Types
+
+**File:** `analytics-web-app/src/lib/screen-renderers/TableRenderer.tsx`
+
+Added `unwrapDictionary()` helper to unwrap dictionary-encoded types before type checks. This ensures dictionary-encoded binary columns are correctly identified and rendered.
 
 ## Impact Analysis
 
@@ -65,7 +73,7 @@ The `stream_query_handler` already uses `DictionaryTracker` and `IpcDataGenerato
 | Memory (server) | Slight increase - server must track dictionary state across batches |
 | Memory (browser) | Reduced - Apache Arrow JS preserves dictionary encoding in memory |
 | CPU (browser) | Reduced - fewer string allocations when parsing |
-| Compatibility | No client changes needed - Arrow IPC format handles dictionaries transparently |
+| Compatibility | Required frontend fix to maintain dictionary state across batches |
 
 ## When This Matters Most
 
@@ -73,19 +81,13 @@ The `stream_query_handler` already uses `DictionaryTracker` and `IpcDataGenerato
 - Long time ranges with many data points
 - Properties with verbose JSON (e.g., `{"zone": "us-east-1", "tier": "production"}`)
 
-## Example Savings
-
-For 1000 rows where 90% have `{"level": "high"}`:
-- Without dictionary: ~18KB (18 bytes × 1000)
-- With dictionary: ~1.8KB (18 bytes × 1 + 4 byte indices × 1000)
-
-This optimization benefits all queries with dictionary-encoded columns, not just the properties column.
-
 ## File Changes Summary
 
 | File | Change |
 |------|--------|
-| `rust/public/src/client/flightsql_client.rs` | Add `preserve_dictionary` header in `query_stream` (used by `analytics-web-srv`) |
+| `rust/public/src/client/flightsql_client_factory.rs` | Add `preserve_dictionary` header in `BearerFlightSQLClientFactory::make_client()` |
+| `analytics-web-app/src/lib/arrow-stream.ts` | Rewrite to use queue-based async generator, maintaining dictionary state across batches |
+| `analytics-web-app/src/lib/screen-renderers/TableRenderer.tsx` | Add `unwrapDictionary()` to handle dictionary-encoded binary columns |
 
 ## Verification
 

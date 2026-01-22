@@ -7,7 +7,12 @@ import { useSqlHandlers } from './useSqlHandlers'
 import { LoadingState, EmptyState, SaveFooter, RendererLayout } from './shared'
 import { QueryEditor } from '@/components/QueryEditor'
 import { formatTimestamp } from '@/lib/time-range'
-import { timestampToDate, isTimeType, isNumericType } from '@/lib/arrow-utils'
+import {
+  timestampToDate,
+  isTimeType,
+  isNumericType,
+  isBinaryType,
+} from '@/lib/arrow-utils'
 import { useStreamQuery } from '@/hooks/useStreamQuery'
 
 // Variables available for table queries
@@ -26,17 +31,6 @@ interface TableConfig {
   timeRangeTo?: string
   sortColumn?: string
   sortDirection?: 'asc' | 'desc'
-}
-
-/**
- * Check if an Arrow DataType is a binary type.
- */
-function isBinaryType(dataType: DataType): boolean {
-  return (
-    DataType.isBinary(dataType) ||
-    DataType.isLargeBinary(dataType) ||
-    DataType.isFixedSizeBinary(dataType)
-  )
 }
 
 interface SortHeaderProps {
