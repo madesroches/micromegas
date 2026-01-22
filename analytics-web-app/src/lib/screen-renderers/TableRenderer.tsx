@@ -29,6 +29,17 @@ interface TableConfig {
 }
 
 /**
+ * Check if an Arrow DataType is a binary type.
+ */
+function isBinaryType(dataType: DataType): boolean {
+  return (
+    DataType.isBinary(dataType) ||
+    DataType.isLargeBinary(dataType) ||
+    DataType.isFixedSizeBinary(dataType)
+  )
+}
+
+/**
  * Format a cell value based on its Arrow DataType.
  */
 function formatCell(value: unknown, dataType: DataType): string {
@@ -52,6 +63,22 @@ function formatCell(value: unknown, dataType: DataType): string {
 
   if (DataType.isBool(dataType)) {
     return value ? 'true' : 'false'
+  }
+
+  // Binary data: display as ASCII preview with length
+  if (isBinaryType(dataType)) {
+    const bytes = value instanceof Uint8Array ? value : Array.isArray(value) ? value : null
+    if (bytes) {
+      const previewLen = Math.min(bytes.length, 32)
+      let preview = ''
+      for (let i = 0; i < previewLen; i++) {
+        const b = bytes[i]
+        // Printable ASCII range: 32-126
+        preview += b >= 32 && b <= 126 ? String.fromCharCode(b) : '.'
+      }
+      const suffix = bytes.length > previewLen ? '...' : ''
+      return `${preview}${suffix} (${bytes.length})`
+    }
   }
 
   return String(value)
@@ -309,13 +336,21 @@ export function TableRenderer({
                 >
                   {columns.map((col) => {
                     const value = row[col.name]
+                    // Use formatted value for tooltip on binary types
+                    const formatted = formatCell(value, col.type)
+                    const tooltip =
+                      value != null
+                        ? isBinaryType(col.type)
+                          ? formatted
+                          : String(value)
+                        : undefined
                     return (
                       <td
                         key={col.name}
                         className="px-4 py-3 text-sm text-theme-text-primary font-mono truncate max-w-xs"
-                        title={value != null ? String(value) : undefined}
+                        title={tooltip}
                       >
-                        {formatCell(value, col.type)}
+                        {formatted}
                       </td>
                     )
                   })}
