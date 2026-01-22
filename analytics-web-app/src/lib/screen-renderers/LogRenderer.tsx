@@ -221,8 +221,8 @@ export function LogRenderer({
   saveError,
   refreshTrigger,
 }: ScreenRendererProps) {
-  const logConfig = config as LogConfig
-  const savedLogConfig = savedConfig as LogConfig | null
+  const logConfig = config as unknown as LogConfig
+  const savedLogConfig = savedConfig as unknown as LogConfig | null
 
   // URL params for filter state sync
   const [searchParams, setSearchParams] = useSearchParams()
@@ -501,7 +501,7 @@ export function LogRenderer({
   )
 
   const handleResetQuery = useCallback(() => {
-    const sql = savedConfig ? (savedConfig as LogConfig).sql : logConfig.sql
+    const sql = savedLogConfig ? savedLogConfig.sql : logConfig.sql
     loadData(sql)
   }, [savedConfig, logConfig.sql, loadData])
 
@@ -517,7 +517,7 @@ export function LogRenderer({
         timeRangeTo: rawTimeRange.to,
       })
 
-      if (savedConfig && sql !== (savedConfig as LogConfig).sql) {
+      if (savedLogConfig && sql !== savedLogConfig.sql) {
         onUnsavedChange()
       }
     },
@@ -565,7 +565,7 @@ export function LogRenderer({
   // Query editor panel
   const sqlPanel = (
     <QueryEditor
-      defaultSql={savedConfig ? (savedConfig as LogConfig).sql : logConfig.sql}
+      defaultSql={savedLogConfig ? savedLogConfig.sql : logConfig.sql}
       variables={VARIABLES}
       currentValues={extendedCurrentValues}
       timeRangeLabel={timeRangeLabel}

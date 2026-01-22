@@ -2,17 +2,24 @@ import { useEffect, useRef } from 'react'
 import { ScreenConfig } from '@/lib/screens-api'
 import { DEFAULT_TIME_RANGE } from '@/lib/screen-defaults'
 
-interface TimeRangeSyncParams<T extends ScreenConfig> {
+/** Config interface with time range properties */
+interface TimeRangeConfig {
+  timeRangeFrom?: string
+  timeRangeTo?: string
+  [key: string]: unknown
+}
+
+interface TimeRangeSyncParams {
   /** Current raw time range from URL */
   rawTimeRange: { from: string; to: string }
   /** Saved config (null for new screens) */
-  savedConfig: T | null
+  savedConfig: TimeRangeConfig | null
   /** Current working config */
-  config: T
+  config: TimeRangeConfig
   /** Callback when there are unsaved changes */
   onUnsavedChange: () => void
   /** Callback to update config */
-  onConfigChange: (config: T) => void
+  onConfigChange: (config: ScreenConfig) => void
 }
 
 /**
@@ -25,13 +32,13 @@ interface TimeRangeSyncParams<T extends ScreenConfig> {
  *
  * This eliminates ~30 lines of duplicated code from each renderer.
  */
-export function useTimeRangeSync<T extends ScreenConfig>({
+export function useTimeRangeSync({
   rawTimeRange,
   savedConfig,
   config,
   onUnsavedChange,
   onConfigChange,
-}: TimeRangeSyncParams<T>): void {
+}: TimeRangeSyncParams): void {
   const prevTimeRangeRef = useRef<{ from: string; to: string } | null>(null)
 
   useEffect(() => {

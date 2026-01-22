@@ -12,7 +12,7 @@ impl fmt::Display for ParseScreenTypeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "invalid screen type '{}', expected one of: process_list, metrics, log, table",
+            "invalid screen type '{}', expected one of: process_list, metrics, log, table, notebook",
             self.invalid_value
         )
     }
@@ -28,6 +28,7 @@ pub enum ScreenType {
     Metrics,
     Log,
     Table,
+    Notebook,
 }
 
 impl FromStr for ScreenType {
@@ -39,6 +40,7 @@ impl FromStr for ScreenType {
             "metrics" => Ok(ScreenType::Metrics),
             "log" => Ok(ScreenType::Log),
             "table" => Ok(ScreenType::Table),
+            "notebook" => Ok(ScreenType::Notebook),
             _ => Err(ParseScreenTypeError {
                 invalid_value: s.to_string(),
             }),
@@ -54,6 +56,7 @@ impl ScreenType {
             ScreenType::Metrics,
             ScreenType::Log,
             ScreenType::Table,
+            ScreenType::Notebook,
         ]
     }
 
@@ -64,6 +67,7 @@ impl ScreenType {
             ScreenType::Metrics => "metrics",
             ScreenType::Log => "log",
             ScreenType::Table => "table",
+            ScreenType::Notebook => "notebook",
         }
     }
 
@@ -94,6 +98,13 @@ impl ScreenType {
                 icon: "table".to_string(),
                 description: "Generic table viewer for any SQL query".to_string(),
             },
+            ScreenType::Notebook => ScreenTypeInfo {
+                name: "notebook".to_string(),
+                display_name: "Notebook".to_string(),
+                icon: "book-open".to_string(),
+                description: "Multi-cell notebook with tables, charts, logs, and variables"
+                    .to_string(),
+            },
         }
     }
 
@@ -115,6 +126,9 @@ impl ScreenType {
             ScreenType::Table => serde_json::json!({
                 "sql": "SELECT process_id, exe, start_time, last_update_time, username, computer\nFROM processes\n$order_by\nLIMIT 100",
                 "variables": []
+            }),
+            ScreenType::Notebook => serde_json::json!({
+                "cells": []
             }),
         }
     }

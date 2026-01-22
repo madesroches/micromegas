@@ -14,3 +14,7 @@ import './ProcessListRenderer'
 import './MetricsRenderer'
 import './LogRenderer'
 import './TableRenderer'
+import './NotebookRenderer'
+
+// Import cell renderers for notebooks
+import './cells'

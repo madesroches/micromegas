@@ -1,13 +1,19 @@
 import { useCallback } from 'react'
 import { ScreenConfig } from '@/lib/screens-api'
 
-interface SqlHandlersParams<T extends ScreenConfig> {
+/** Config interface with sql property for SQL-based renderers */
+interface SqlConfig {
+  sql: string
+  [key: string]: unknown
+}
+
+interface SqlHandlersParams {
   /** Current working config */
-  config: T
+  config: SqlConfig
   /** Saved config from database (null if new screen) */
-  savedConfig: T | null
+  savedConfig: SqlConfig | null
   /** Callback to update config */
-  onConfigChange: (config: T) => void
+  onConfigChange: (config: ScreenConfig) => void
   /** Callback when there are unsaved changes */
   onUnsavedChange: () => void
   /** Execute query function from useScreenQuery */
@@ -34,16 +40,16 @@ interface SqlHandlers {
  * Used by MetricsRenderer and ProcessListRenderer.
  * LogRenderer has custom logic due to filter state integration.
  */
-export function useSqlHandlers<T extends ScreenConfig>({
+export function useSqlHandlers({
   config,
   savedConfig,
   onConfigChange,
   onUnsavedChange,
   execute,
-}: SqlHandlersParams<T>): SqlHandlers {
+}: SqlHandlersParams): SqlHandlers {
   const handleRunQuery = useCallback(
     (sql: string) => {
-      onConfigChange({ ...config, sql } as T)
+      onConfigChange({ ...config, sql })
       if (savedConfig && sql !== savedConfig.sql) {
         onUnsavedChange()
       }
@@ -54,7 +60,7 @@ export function useSqlHandlers<T extends ScreenConfig>({
 
   const handleResetQuery = useCallback(() => {
     const sql = savedConfig?.sql ?? config.sql
-    handleRunQuery(sql)
+    handleRunQuery(sql as string)
   }, [savedConfig, config.sql, handleRunQuery])
 
   const handleSqlChange = useCallback(

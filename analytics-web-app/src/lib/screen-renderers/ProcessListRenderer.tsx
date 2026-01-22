@@ -35,6 +35,7 @@ interface ProcessListConfig {
   sql: string
   timeRangeFrom?: string
   timeRangeTo?: string
+  [key: string]: unknown
 }
 
 /**
@@ -77,8 +78,8 @@ export function ProcessListRenderer({
   saveError,
   refreshTrigger,
 }: ScreenRendererProps) {
-  const processListConfig = config as ProcessListConfig
-  const savedProcessListConfig = savedConfig as ProcessListConfig | null
+  const processListConfig = config as unknown as ProcessListConfig
+  const savedProcessListConfig = savedConfig as unknown as ProcessListConfig | null
 
   // Sorting state (UI-only, not persisted)
   const [sortField, setSortField] = useState<ProcessSortField>('last_update_time')
@@ -223,7 +224,7 @@ export function ProcessListRenderer({
   // Query editor panel
   const sqlPanel = (
     <QueryEditor
-      defaultSql={savedConfig ? (savedConfig as ProcessListConfig).sql : processListConfig.sql}
+      defaultSql={savedProcessListConfig ? savedProcessListConfig.sql : processListConfig.sql}
       variables={VARIABLES}
       currentValues={currentValues}
       timeRangeLabel={timeRangeLabel}

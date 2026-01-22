@@ -31,6 +31,7 @@ interface TableConfig {
   timeRangeTo?: string
   sortColumn?: string
   sortDirection?: 'asc' | 'desc'
+  [key: string]: unknown
 }
 
 interface SortHeaderProps {
@@ -138,8 +139,8 @@ export function TableRenderer({
   saveError,
   refreshTrigger,
 }: ScreenRendererProps) {
-  const tableConfig = config as TableConfig
-  const savedTableConfig = savedConfig as TableConfig | null
+  const tableConfig = config as unknown as TableConfig
+  const savedTableConfig = savedConfig as unknown as TableConfig | null
 
   // Sort state from config (persisted)
   const sortColumn = tableConfig.sortColumn
@@ -271,7 +272,7 @@ export function TableRenderer({
   // Query editor panel
   const sqlPanel = (
     <QueryEditor
-      defaultSql={savedConfig ? (savedConfig as TableConfig).sql : tableConfig.sql}
+      defaultSql={savedTableConfig ? savedTableConfig.sql : tableConfig.sql}
       variables={VARIABLES}
       currentValues={queryEditorValues}
       timeRangeLabel={timeRangeLabel}

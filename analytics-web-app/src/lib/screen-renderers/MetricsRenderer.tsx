@@ -24,6 +24,7 @@ interface MetricsConfig {
   metrics_options?: MetricsOptions
   timeRangeFrom?: string
   timeRangeTo?: string
+  [key: string]: unknown
 }
 
 export function MetricsRenderer({
@@ -43,8 +44,8 @@ export function MetricsRenderer({
   saveError,
   refreshTrigger,
 }: ScreenRendererProps) {
-  const metricsConfig = config as MetricsConfig
-  const savedMetricsConfig = savedConfig as MetricsConfig | null
+  const metricsConfig = config as unknown as MetricsConfig
+  const savedMetricsConfig = savedConfig as unknown as MetricsConfig | null
 
   // Scale mode state - sync from config on load
   const [scaleMode, setScaleMode] = useState<ScaleMode>(
@@ -105,7 +106,7 @@ export function MetricsRenderer({
       }
       onConfigChange(newConfig)
 
-      if (savedConfig && (savedConfig as MetricsConfig).metrics_options?.scale_mode !== mode) {
+      if (savedMetricsConfig && savedMetricsConfig.metrics_options?.scale_mode !== mode) {
         onUnsavedChange()
       }
     },
@@ -122,7 +123,7 @@ export function MetricsRenderer({
       }
       onConfigChange(newConfig)
 
-      if (savedConfig && (savedConfig as MetricsConfig).metrics_options?.chart_type !== type) {
+      if (savedMetricsConfig && savedMetricsConfig.metrics_options?.chart_type !== type) {
         onUnsavedChange()
       }
     },
@@ -147,7 +148,7 @@ export function MetricsRenderer({
   // Query editor panel
   const sqlPanel = (
     <QueryEditor
-      defaultSql={savedConfig ? (savedConfig as MetricsConfig).sql : metricsConfig.sql}
+      defaultSql={savedMetricsConfig ? savedMetricsConfig.sql : metricsConfig.sql}
       variables={VARIABLES}
       currentValues={currentValues}
       timeRangeLabel={timeRangeLabel}
