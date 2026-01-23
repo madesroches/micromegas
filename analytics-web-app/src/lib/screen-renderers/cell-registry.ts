@@ -146,12 +146,6 @@ export const CELL_TYPE_METADATA: Record<CellType, CellTypeMetadata> = {
   variable: variableMetadata,
 }
 
-// Compile-time exhaustiveness check - fails if CellType has values not in the map
-const _ensureAllCellTypesHaveMetadata: Record<CellType, CellTypeMetadata> = CELL_TYPE_METADATA
-
-// Silence unused variable warning
-void _ensureAllCellTypesHaveMetadata
-
 /**
  * Get metadata for a cell type.
  */
