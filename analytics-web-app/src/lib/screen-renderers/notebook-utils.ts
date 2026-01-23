@@ -1,34 +1,15 @@
-import { CellType } from './cell-registry'
-
-// ============================================================================
-// Types
-// ============================================================================
-
-export interface CellConfigBase {
-  name: string
-  type: CellType
-  layout: { height: number; collapsed?: boolean }
-}
-
-export interface QueryCellConfig extends CellConfigBase {
-  type: 'table' | 'chart' | 'log'
-  sql: string
-  options?: Record<string, unknown>
-}
-
-export interface MarkdownCellConfig extends CellConfigBase {
-  type: 'markdown'
-  content: string
-}
-
-export interface VariableCellConfig extends CellConfigBase {
-  type: 'variable'
-  variableType: 'combobox' | 'text' | 'number'
-  sql?: string
-  defaultValue?: string
-}
-
-export type CellConfig = QueryCellConfig | MarkdownCellConfig | VariableCellConfig
+// Re-export types from notebook-types for backwards compatibility
+export type {
+  CellType,
+  CellStatus,
+  CellConfigBase,
+  QueryCellConfig,
+  MarkdownCellConfig,
+  VariableCellConfig,
+  CellConfig,
+  CellState,
+  NotebookConfig,
+} from './notebook-types'
 
 // Default SQL queries per cell type
 export const DEFAULT_SQL: Record<string, string> = {
@@ -115,68 +96,13 @@ export function validateCellName(
 }
 
 /**
- * Creates a default cell configuration for the given type.
- * Generates a unique name if the base name already exists.
- */
-export function createDefaultCell(type: CellType, existingNames: Set<string>): CellConfig {
-  // Generate unique name (use underscore separator for valid identifiers)
-  const baseName = type.charAt(0).toUpperCase() + type.slice(1)
-  let name = baseName
-  let counter = 1
-  while (existingNames.has(name)) {
-    counter++
-    name = `${baseName}_${counter}`
-  }
-
-  // Type-specific default heights
-  const defaultHeights: Record<CellType, number> = {
-    table: 300,
-    log: 300,
-    chart: 250,
-    markdown: 150,
-    variable: 60,
-  }
-
-  const baseConfig: CellConfigBase = {
-    name,
-    type,
-    layout: { height: defaultHeights[type] },
-  }
-
-  switch (type) {
-    case 'table':
-    case 'chart':
-    case 'log':
-      return { ...baseConfig, type, sql: DEFAULT_SQL[type] } as QueryCellConfig
-    case 'markdown':
-      return { ...baseConfig, type: 'markdown', content: '# Notes\n\nAdd your documentation here.' } as MarkdownCellConfig
-    case 'variable':
-      return {
-        ...baseConfig,
-        type: 'variable',
-        variableType: 'combobox',
-        sql: DEFAULT_SQL.variable,
-      } as VariableCellConfig
-    default:
-      return { ...baseConfig, type: 'table', sql: DEFAULT_SQL.table } as QueryCellConfig
-  }
-}
-
-/**
- * Notebook config interface for type-safe comparisons.
- */
-export interface NotebookConfig {
-  cells: CellConfig[]
-  refreshInterval?: number
-  timeRangeFrom?: string
-  timeRangeTo?: string
-}
-
-/**
  * Deep comparison of two notebook configs using JSON serialization.
  * Works because configs are JSON-serializable by design.
  */
-export function notebookConfigsEqual(a: NotebookConfig | null, b: NotebookConfig | null): boolean {
+export function notebookConfigsEqual(
+  a: import('./notebook-types').NotebookConfig | null,
+  b: import('./notebook-types').NotebookConfig | null
+): boolean {
   if (a === b) return true
   if (!a || !b) return false
   return JSON.stringify(a) === JSON.stringify(b)

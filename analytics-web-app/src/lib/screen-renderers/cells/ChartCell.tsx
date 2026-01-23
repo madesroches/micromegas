@@ -1,16 +1,26 @@
 import { useMemo, useCallback } from 'react'
-import { CellRendererProps, registerCellRenderer } from '../cell-registry'
+import type {
+  CellTypeMetadata,
+  CellRendererProps,
+  CellEditorProps,
+  CellExecutionContext,
+} from '../cell-registry'
+import type { QueryCellConfig, CellConfig, CellState } from '../notebook-types'
 import { XYChart, ScaleMode, ChartType } from '@/components/XYChart'
 import { extractChartData } from '@/lib/arrow-utils'
+import { AvailableVariablesPanel } from '@/components/AvailableVariablesPanel'
+import { substituteMacros, DEFAULT_SQL } from '../notebook-utils'
+
+// =============================================================================
+// Renderer Component
+// =============================================================================
 
 export function ChartCell({ data, status, options, onOptionsChange }: CellRendererProps) {
-  // Extract chart data from Arrow table
   const chartResult = useMemo(() => {
     if (!data || data.numRows === 0) return null
     return extractChartData(data)
   }, [data])
 
-  // Hooks must be called unconditionally (before any returns)
   const handleScaleModeChange = useCallback(
     (mode: ScaleMode) => {
       onOptionsChange({ ...options, scale_mode: mode })
@@ -69,5 +79,62 @@ export function ChartCell({ data, status, options, onOptionsChange }: CellRender
   )
 }
 
-// Register this cell renderer
-registerCellRenderer('chart', ChartCell)
+// =============================================================================
+// Editor Component
+// =============================================================================
+
+function ChartCellEditor({ config, onChange, variables, timeRange }: CellEditorProps) {
+  const chartConfig = config as QueryCellConfig
+
+  return (
+    <>
+      <div>
+        <label className="block text-xs font-medium text-theme-text-secondary uppercase mb-1.5">
+          SQL Query
+        </label>
+        <textarea
+          value={chartConfig.sql}
+          onChange={(e) => onChange({ ...chartConfig, sql: e.target.value })}
+          className="w-full min-h-[150px] px-3 py-2 bg-app-bg border border-theme-border rounded-md text-theme-text-primary text-sm font-mono focus:outline-none focus:border-accent-link resize-y"
+          placeholder="SELECT time, value FROM ..."
+        />
+      </div>
+      <AvailableVariablesPanel variables={variables} timeRange={timeRange} />
+    </>
+  )
+}
+
+// =============================================================================
+// Cell Type Metadata
+// =============================================================================
+
+// eslint-disable-next-line react-refresh/only-export-components
+export const chartMetadata: CellTypeMetadata = {
+  renderer: ChartCell,
+  EditorComponent: ChartCellEditor,
+
+  label: 'Chart',
+  icon: 'C',
+  description: 'X/Y chart (line, bar, etc.)',
+  showTypeBadge: true,
+  defaultHeight: 250,
+
+  canBlockDownstream: true,
+
+  createDefaultConfig: () => ({
+    type: 'chart' as const,
+    sql: DEFAULT_SQL.chart,
+  }),
+
+  execute: async (config: CellConfig, { variables, timeRange, runQuery }: CellExecutionContext) => {
+    const sql = substituteMacros((config as QueryCellConfig).sql, variables, timeRange)
+    const data = await runQuery(sql)
+    return { data }
+  },
+
+  getRendererProps: (config: CellConfig, state: CellState) => ({
+    data: state.data,
+    status: state.status,
+    options: (config as QueryCellConfig).options,
+  }),
+}

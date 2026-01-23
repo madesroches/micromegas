@@ -1,17 +1,8 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { Table } from 'apache-arrow'
-import { CellConfig, QueryCellConfig, VariableCellConfig, substituteMacros } from './notebook-utils'
-import { CellStatus } from './cell-registry'
+import type { CellConfig, CellState } from './notebook-types'
+import { getCellTypeMetadata, CellExecutionContext } from './cell-registry'
 import { streamQuery } from '@/lib/arrow-stream'
-
-/** Execution state for a cell */
-export interface CellState {
-  status: CellStatus
-  error?: string
-  data: Table | null
-  /** For variable cells (combobox): options loaded from query */
-  variableOptions?: { label: string; value: string }[]
-}
 
 interface UseCellExecutionParams {
   /** Cell configurations from notebook config */
@@ -77,7 +68,7 @@ async function executeSql(
  * - Sequential execution with variable substitution
  * - Abort handling for cancelled queries
  * - Auto-execution on mount and refresh
- * - Variable option extraction from query results
+ * - Delegating execution to cell-specific execute methods
  */
 export function useCellExecution({
   cells,
@@ -95,25 +86,15 @@ export function useCellExecution({
       const cell = cells[cellIndex]
       if (!cell) return false
 
-      // Handle markdown cells (no execution needed)
-      if (cell.type === 'markdown') {
+      const meta = getCellTypeMetadata(cell.type)
+
+      // Cell doesn't have an execute method (e.g., markdown)
+      if (!meta.execute) {
         setCellStates((prev) => ({
           ...prev,
           [cell.name]: { status: 'success', data: null },
         }))
         return true
-      }
-
-      // Handle text/number variable cells (no SQL execution)
-      if (cell.type === 'variable') {
-        const varCell = cell as VariableCellConfig
-        if (varCell.variableType === 'text' || varCell.variableType === 'number') {
-          setCellStates((prev) => ({
-            ...prev,
-            [cell.name]: { status: 'success', data: null },
-          }))
-          return true
-        }
       }
 
       // Mark cell as loading
@@ -121,24 +102,6 @@ export function useCellExecution({
         ...prev,
         [cell.name]: { ...prev[cell.name], status: 'loading', error: undefined, data: null },
       }))
-
-      // Get SQL from cell
-      let sql: string | undefined
-      if (cell.type === 'variable') {
-        const varCell = cell as VariableCellConfig
-        sql = varCell.sql
-      } else {
-        const queryCell = cell as QueryCellConfig
-        sql = queryCell.sql
-      }
-
-      if (!sql) {
-        setCellStates((prev) => ({
-          ...prev,
-          [cell.name]: { status: 'success', data: null },
-        }))
-        return true
-      }
 
       // Gather variables from cells above (use ref for synchronous access during execution)
       const availableVariables: Record<string, string> = {}
@@ -149,47 +112,33 @@ export function useCellExecution({
         }
       }
 
-      // Substitute macros
-      const substitutedSql = substituteMacros(sql, availableVariables, timeRange)
-
       // Create new abort controller for this execution
       abortControllerRef.current?.abort()
       abortControllerRef.current = new AbortController()
 
       try {
-        const result = await executeSql(substitutedSql, timeRange, abortControllerRef.current.signal)
-
-        // For variable cells, extract options from result
-        // Convention: 1 column = value+label, 2 columns = value then label
-        if (cell.type === 'variable') {
-          const options: { label: string; value: string }[] = []
-          if (result && result.numRows > 0 && result.numCols > 0) {
-            const schema = result.schema
-            const valueColName = schema.fields[0].name
-            const labelColName = schema.fields.length > 1 ? schema.fields[1].name : valueColName
-            for (let i = 0; i < result.numRows; i++) {
-              const row = result.get(i)
-              if (row) {
-                const value = String(row[valueColName] ?? '')
-                const label = String(row[labelColName] ?? value)
-                options.push({ label, value })
-              }
-            }
-          }
-          setCellStates((prev) => ({
-            ...prev,
-            [cell.name]: { status: 'success', data: result, variableOptions: options },
-          }))
-          // Set default value if not already set
-          if (!variableValuesRef.current[cell.name] && options.length > 0) {
-            setVariableValue(cell.name, options[0].value)
-          }
-        } else {
-          setCellStates((prev) => ({
-            ...prev,
-            [cell.name]: { status: 'success', data: result },
-          }))
+        // Create execution context
+        const context: CellExecutionContext = {
+          variables: availableVariables,
+          timeRange,
+          runQuery: (sql) => executeSql(sql, timeRange, abortControllerRef.current!.signal),
         }
+
+        // Delegate to cell's execute method
+        const result = await meta.execute(cell, context)
+
+        // If result is null, nothing was executed (e.g., text/number variables)
+        const newState: CellState = result
+          ? { status: 'success', data: result.data ?? null, ...result }
+          : { status: 'success', data: null }
+
+        setCellStates((prev) => ({ ...prev, [cell.name]: newState }))
+
+        // Post-execution side effects (e.g., auto-select first option for variables)
+        if (meta.onExecutionComplete && !variableValuesRef.current[cell.name]) {
+          meta.onExecutionComplete(cell, newState, { setVariableValue })
+        }
+
         return true
       } catch (err) {
         if (err instanceof Error && err.name === 'AbortError') {
@@ -212,10 +161,11 @@ export function useCellExecution({
       for (let i = startIndex; i < cells.length; i++) {
         const success = await executeCell(i)
         if (!success) {
-          // Mark remaining cells as blocked
+          // Mark remaining cells as blocked (except those that don't block)
           for (let j = i + 1; j < cells.length; j++) {
             const blockedCell = cells[j]
-            if (blockedCell.type !== 'markdown') {
+            const blockedMeta = getCellTypeMetadata(blockedCell.type)
+            if (blockedMeta.canBlockDownstream) {
               setCellStates((prev) => ({
                 ...prev,
                 [blockedCell.name]: { status: 'blocked', data: null },

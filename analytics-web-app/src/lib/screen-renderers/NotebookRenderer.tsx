@@ -20,32 +20,21 @@ import {
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { registerRenderer, ScreenRendererProps } from './index'
-import { CellType, getCellRenderer } from './cell-registry'
+import {
+  CellType,
+  getCellRenderer,
+  getCellTypeMetadata,
+  CELL_TYPE_OPTIONS,
+  createDefaultCell,
+} from './cell-registry'
+import type { CellConfig, VariableCellConfig, NotebookConfig } from './notebook-types'
 import { CellContainer } from '@/components/CellContainer'
 import { CellEditor } from '@/components/CellEditor'
 import { Button } from '@/components/ui/button'
 import { SaveFooter } from './shared'
 import { useNotebookVariables } from './useNotebookVariables'
 import { useCellExecution } from './useCellExecution'
-
-import {
-  CellConfig,
-  QueryCellConfig,
-  MarkdownCellConfig,
-  VariableCellConfig,
-  NotebookConfig,
-  createDefaultCell,
-  notebookConfigsEqual,
-} from './notebook-utils'
-
-// Cell type options for the add cell modal
-const CELL_TYPE_OPTIONS: { type: CellType; name: string; description: string; icon: string }[] = [
-  { type: 'table', name: 'Table', description: 'Generic SQL results as a table', icon: 'T' },
-  { type: 'chart', name: 'Chart', description: 'X/Y chart (line, bar, etc.)', icon: 'C' },
-  { type: 'log', name: 'Log', description: 'Log entries viewer with levels', icon: 'L' },
-  { type: 'markdown', name: 'Markdown', description: 'Documentation and notes', icon: 'M' },
-  { type: 'variable', name: 'Variable', description: 'User input (dropdown, text, number)', icon: 'V' },
-]
+import { notebookConfigsEqual } from './notebook-utils'
 
 // ============================================================================
 // Modal Components
@@ -336,6 +325,7 @@ export function NotebookRenderer({
 
   const renderCell = (cell: CellConfig, index: number) => {
     const state = cellStates[cell.name] || { status: 'idle', data: null }
+    const meta = getCellTypeMetadata(cell.type)
     const CellRenderer = getCellRenderer(cell.type)
 
     // Variables available to this cell (from cells above)
@@ -346,6 +336,17 @@ export function NotebookRenderer({
         availableVariables[prevCell.name] = variableValues[prevCell.name]
       }
     }
+
+    // Get type-specific props from metadata
+    const rendererProps = meta.getRendererProps(cell, state)
+
+    // Determine status text
+    const statusText =
+      cell.type === 'variable' && (cell as VariableCellConfig).variableType !== 'combobox'
+        ? undefined
+        : state.data
+          ? `${state.data.numRows} rows`
+          : undefined
 
     return (
       <SortableCell key={cell.name} id={cell.name}>
@@ -366,48 +367,28 @@ export function NotebookRenderer({
             onRun={() => executeCell(index)}
             onRunFromHere={() => executeFromCell(index)}
             onDelete={() => setDeletingCellIndex(index)}
-            statusText={
-              cell.type === 'variable' && (cell as VariableCellConfig).variableType !== 'combobox'
-                ? undefined
-                : state.data
-                  ? `${state.data.numRows} rows`
-                  : undefined
-            }
+            statusText={statusText}
             height={cell.layout.height}
             onHeightChange={(newHeight) =>
               updateCell(index, { layout: { ...cell.layout, height: newHeight } })
             }
           >
-            {CellRenderer ? (
-              <CellRenderer
-                name={cell.name}
-                sql={cell.type !== 'markdown' ? (cell as QueryCellConfig | VariableCellConfig).sql : undefined}
-                options={
-                  cell.type !== 'markdown' && cell.type !== 'variable' ? (cell as QueryCellConfig).options : undefined
-                }
-                data={state.data}
-                status={state.status}
-                error={state.error}
-                timeRange={timeRange}
-                variables={availableVariables}
-                isEditing={selectedCellIndex === index}
-                onRun={() => executeCell(index)}
-                onSqlChange={(sql) => updateCell(index, { sql } as Partial<QueryCellConfig>)}
-                onOptionsChange={(options) => updateCell(index, { options } as Partial<QueryCellConfig>)}
-                content={cell.type === 'markdown' ? (cell as MarkdownCellConfig).content : undefined}
-                onContentChange={
-                  cell.type === 'markdown'
-                    ? (content) => updateCell(index, { content } as Partial<MarkdownCellConfig>)
-                    : undefined
-                }
-                value={cell.type === 'variable' ? variableValues[cell.name] : undefined}
-                onValueChange={cell.type === 'variable' ? (value) => setVariableValue(cell.name, value) : undefined}
-                variableType={cell.type === 'variable' ? (cell as VariableCellConfig).variableType : undefined}
-                variableOptions={cell.type === 'variable' ? state.variableOptions : undefined}
-              />
-            ) : (
-              <div className="text-theme-text-muted">No renderer for cell type: {cell.type}</div>
-            )}
+            <CellRenderer
+              name={cell.name}
+              data={state.data}
+              status={state.status}
+              error={state.error}
+              timeRange={timeRange}
+              variables={availableVariables}
+              isEditing={selectedCellIndex === index}
+              onRun={() => executeCell(index)}
+              onSqlChange={(sql) => updateCell(index, { sql })}
+              onOptionsChange={(options) => updateCell(index, { options })}
+              onContentChange={(content) => updateCell(index, { content })}
+              value={cell.type === 'variable' ? variableValues[cell.name] : undefined}
+              onValueChange={cell.type === 'variable' ? (value) => setVariableValue(cell.name, value) : undefined}
+              {...rendererProps}
+            />
           </CellContainer>
         )}
       </SortableCell>

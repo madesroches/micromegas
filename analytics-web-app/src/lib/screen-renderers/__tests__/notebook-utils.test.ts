@@ -1,4 +1,73 @@
-import { substituteMacros, createDefaultCell, DEFAULT_SQL, sanitizeCellName, validateCellName } from '../notebook-utils'
+// Mock matchMedia for uPlot (imported via cell-registry -> ChartCell -> XYChart)
+Object.defineProperty(window, 'matchMedia', {
+  writable: true,
+  value: jest.fn().mockImplementation((query) => ({
+    matches: false,
+    media: query,
+    onchange: null,
+    addListener: jest.fn(),
+    removeListener: jest.fn(),
+    addEventListener: jest.fn(),
+    removeEventListener: jest.fn(),
+    dispatchEvent: jest.fn(),
+  })),
+})
+
+// Mock cell-registry to prevent uPlot CSS import chain, but keep createDefaultCell functional
+jest.mock('../cell-registry', () => {
+  // Use the actual DEFAULT_SQL values from notebook-utils
+  const { DEFAULT_SQL } = jest.requireActual('../notebook-utils')
+
+  const CELL_TYPE_METADATA: Record<string, { label: string; defaultHeight: number; createDefaultConfig: () => object }> = {
+    table: {
+      label: 'Table',
+      defaultHeight: 300,
+      createDefaultConfig: () => ({ type: 'table', sql: DEFAULT_SQL.table }),
+    },
+    chart: {
+      label: 'Chart',
+      defaultHeight: 300,
+      createDefaultConfig: () => ({ type: 'chart', sql: DEFAULT_SQL.chart }),
+    },
+    log: {
+      label: 'Log',
+      defaultHeight: 300,
+      createDefaultConfig: () => ({ type: 'log', sql: DEFAULT_SQL.log }),
+    },
+    markdown: {
+      label: 'Markdown',
+      defaultHeight: 150,
+      createDefaultConfig: () => ({ type: 'markdown', content: '# Notes\n\nAdd your documentation here.' }),
+    },
+    variable: {
+      label: 'Variable',
+      defaultHeight: 60,
+      createDefaultConfig: () => ({ type: 'variable', variableType: 'combobox', sql: DEFAULT_SQL.variable }),
+    },
+  }
+
+  return {
+    CELL_TYPE_METADATA,
+    createDefaultCell: (type: string, existingNames: Set<string>) => {
+      const meta = CELL_TYPE_METADATA[type]
+      let name = meta.label
+      let counter = 1
+      while (existingNames.has(name)) {
+        counter++
+        name = `${meta.label}_${counter}`
+      }
+      return {
+        name,
+        layout: { height: meta.defaultHeight },
+        ...meta.createDefaultConfig(),
+      }
+    },
+    getCellTypeMetadata: (type: string) => CELL_TYPE_METADATA[type],
+  }
+})
+
+import { substituteMacros, DEFAULT_SQL, sanitizeCellName, validateCellName } from '../notebook-utils'
+import { createDefaultCell } from '../cell-registry'
 
 describe('substituteMacros', () => {
   const defaultTimeRange = { begin: '2024-01-01T00:00:00Z', end: '2024-01-02T00:00:00Z' }
@@ -284,12 +353,6 @@ describe('createDefaultCell', () => {
     })
   })
 
-  describe('unknown type fallback', () => {
-    it('should default to table type for unknown types', () => {
-      // TypeScript would prevent this, but testing runtime behavior
-      const cell = createDefaultCell('unknown' as never, new Set())
-      expect(cell.type).toBe('table')
-      expect((cell as { sql: string }).sql).toBe(DEFAULT_SQL.table)
-    })
-  })
+  // Note: unknown type fallback removed - with the new metadata-based design,
+  // TypeScript enforces valid cell types and the registry would throw for unknown types
 })

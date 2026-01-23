@@ -1,6 +1,18 @@
 import { useMemo } from 'react'
-import { CellRendererProps, registerCellRenderer } from '../cell-registry'
+import type {
+  CellTypeMetadata,
+  CellRendererProps,
+  CellEditorProps,
+  CellExecutionContext,
+} from '../cell-registry'
+import type { QueryCellConfig, CellConfig, CellState } from '../notebook-types'
 import { timestampToDate } from '@/lib/arrow-utils'
+import { AvailableVariablesPanel } from '@/components/AvailableVariablesPanel'
+import { substituteMacros, DEFAULT_SQL } from '../notebook-utils'
+
+// =============================================================================
+// Renderer Component
+// =============================================================================
 
 const LEVEL_NAMES: Record<number, string> = {
   1: 'FATAL',
@@ -17,7 +29,6 @@ function formatLocalTime(utcTime: unknown): string {
   const date = timestampToDate(utcTime)
   if (!date) return ''.padEnd(29)
 
-  // Try to extract nanoseconds from string representation
   let nanoseconds = '000000000'
   const str = String(utcTime)
   const nanoMatch = str.match(/\.(\d+)/)
@@ -62,7 +73,6 @@ interface LogRow {
 }
 
 export function LogCell({ data, status }: CellRendererProps) {
-  // Extract rows from data
   const rows = useMemo<LogRow[]>(() => {
     if (!data || data.numRows === 0) return []
 
@@ -95,9 +105,7 @@ export function LogCell({ data, status }: CellRendererProps) {
 
   if (rows.length === 0) {
     return (
-      <div className="text-center py-8 text-theme-text-muted text-sm">
-        No log entries found
-      </div>
+      <div className="text-center py-8 text-theme-text-muted text-sm">No log entries found</div>
     )
   }
 
@@ -114,10 +122,7 @@ export function LogCell({ data, status }: CellRendererProps) {
           <span className={`w-[38px] min-w-[38px] mr-3 font-semibold ${getLevelColor(row.level)}`}>
             {row.level}
           </span>
-          <span
-            className="text-accent-highlight mr-3 w-[200px] min-w-[200px] truncate"
-            title={row.target}
-          >
+          <span className="text-accent-highlight mr-3 w-[200px] min-w-[200px] truncate" title={row.target}>
             {row.target}
           </span>
           <span className="text-theme-text-primary flex-1 break-words">{row.msg}</span>
@@ -132,5 +137,61 @@ export function LogCell({ data, status }: CellRendererProps) {
   )
 }
 
-// Register this cell renderer
-registerCellRenderer('log', LogCell)
+// =============================================================================
+// Editor Component
+// =============================================================================
+
+function LogCellEditor({ config, onChange, variables, timeRange }: CellEditorProps) {
+  const logConfig = config as QueryCellConfig
+
+  return (
+    <>
+      <div>
+        <label className="block text-xs font-medium text-theme-text-secondary uppercase mb-1.5">
+          SQL Query
+        </label>
+        <textarea
+          value={logConfig.sql}
+          onChange={(e) => onChange({ ...logConfig, sql: e.target.value })}
+          className="w-full min-h-[150px] px-3 py-2 bg-app-bg border border-theme-border rounded-md text-theme-text-primary text-sm font-mono focus:outline-none focus:border-accent-link resize-y"
+          placeholder="SELECT time, level, target, msg FROM log_entries ..."
+        />
+      </div>
+      <AvailableVariablesPanel variables={variables} timeRange={timeRange} />
+    </>
+  )
+}
+
+// =============================================================================
+// Cell Type Metadata
+// =============================================================================
+
+// eslint-disable-next-line react-refresh/only-export-components
+export const logMetadata: CellTypeMetadata = {
+  renderer: LogCell,
+  EditorComponent: LogCellEditor,
+
+  label: 'Log',
+  icon: 'L',
+  description: 'Log entries viewer with levels',
+  showTypeBadge: true,
+  defaultHeight: 300,
+
+  canBlockDownstream: true,
+
+  createDefaultConfig: () => ({
+    type: 'log' as const,
+    sql: DEFAULT_SQL.log,
+  }),
+
+  execute: async (config: CellConfig, { variables, timeRange, runQuery }: CellExecutionContext) => {
+    const sql = substituteMacros((config as QueryCellConfig).sql, variables, timeRange)
+    const data = await runQuery(sql)
+    return { data }
+  },
+
+  getRendererProps: (_config: CellConfig, state: CellState) => ({
+    data: state.data,
+    status: state.status,
+  }),
+}

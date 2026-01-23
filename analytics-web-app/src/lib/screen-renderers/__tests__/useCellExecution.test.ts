@@ -1,6 +1,22 @@
 /**
  * Tests for useCellExecution hook
  */
+
+// Mock matchMedia for uPlot (imported via cell-registry -> ChartCell -> XYChart)
+Object.defineProperty(window, 'matchMedia', {
+  writable: true,
+  value: jest.fn().mockImplementation((query) => ({
+    matches: false,
+    media: query,
+    onchange: null,
+    addListener: jest.fn(),
+    removeListener: jest.fn(),
+    addEventListener: jest.fn(),
+    removeEventListener: jest.fn(),
+    dispatchEvent: jest.fn(),
+  })),
+})
+
 import { renderHook, act, waitFor } from '@testing-library/react'
 
 // Mock streamQuery function
@@ -41,6 +57,87 @@ jest.mock('apache-arrow', () => {
     },
   }
 })
+
+// Mock cell-registry to prevent uPlot CSS import chain
+jest.mock('../cell-registry', () => ({
+  getCellTypeMetadata: (type: string) => {
+    const { substituteMacros } = jest.requireActual('../notebook-utils')
+
+    const metadata: Record<string, {
+      label: string
+      showTypeBadge: boolean
+      canBlockDownstream: boolean
+      execute?: (config: unknown, context: unknown) => Promise<{ data: unknown } | null>
+      onExecutionComplete?: (config: unknown, state: unknown, context: { setVariableValue: (name: string, value: string) => void }) => void
+    }> = {
+      table: {
+        label: 'Table',
+        showTypeBadge: true,
+        canBlockDownstream: true,
+        execute: async (config: { sql?: string }, { variables, timeRange, runQuery }: { variables: Record<string, string>; timeRange: { begin: string; end: string }; runQuery: (sql: string) => Promise<unknown> }) => {
+          if (!config.sql) {
+            return { data: null }
+          }
+          const sql = substituteMacros(config.sql, variables, timeRange)
+          const data = await runQuery(sql)
+          return { data }
+        },
+      },
+      chart: {
+        label: 'Chart',
+        showTypeBadge: true,
+        canBlockDownstream: true,
+        execute: async (config: { sql?: string }, { variables, timeRange, runQuery }: { variables: Record<string, string>; timeRange: { begin: string; end: string }; runQuery: (sql: string) => Promise<unknown> }) => {
+          if (!config.sql) {
+            return { data: null }
+          }
+          const sql = substituteMacros(config.sql, variables, timeRange)
+          const data = await runQuery(sql)
+          return { data }
+        },
+      },
+      log: {
+        label: 'Log',
+        showTypeBadge: true,
+        canBlockDownstream: true,
+        execute: async (config: { sql?: string }, { variables, timeRange, runQuery }: { variables: Record<string, string>; timeRange: { begin: string; end: string }; runQuery: (sql: string) => Promise<unknown> }) => {
+          if (!config.sql) {
+            return { data: null }
+          }
+          const sql = substituteMacros(config.sql, variables, timeRange)
+          const data = await runQuery(sql)
+          return { data }
+        },
+      },
+      markdown: {
+        label: 'Markdown',
+        showTypeBadge: false,
+        canBlockDownstream: false,
+        // No execute method - markdown cells don't execute
+      },
+      variable: {
+        label: 'Variable',
+        showTypeBadge: true,
+        canBlockDownstream: true,
+        execute: async (config: { variableType?: string; sql?: string }, { variables, timeRange, runQuery }: { variables: Record<string, string>; timeRange: { begin: string; end: string }; runQuery: (sql: string) => Promise<unknown> }) => {
+          if (config.variableType !== 'combobox' || !config.sql) {
+            return null // Nothing to execute
+          }
+          const sql = substituteMacros(config.sql, variables, timeRange)
+          const data = await runQuery(sql)
+          return { data, variableOptions: [{ label: 'Option 1', value: 'val0' }] }
+        },
+        onExecutionComplete: (config: { name: string }, state: { variableOptions?: { value: string }[] }, { setVariableValue }: { setVariableValue: (name: string, value: string) => void }) => {
+          const options = state.variableOptions
+          if (options && options.length > 0) {
+            setVariableValue(config.name, options[0].value)
+          }
+        },
+      },
+    }
+    return metadata[type] || metadata['table']
+  },
+}))
 
 import { useCellExecution } from '../useCellExecution'
 import { CellConfig } from '../notebook-utils'

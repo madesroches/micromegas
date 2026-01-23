@@ -1,16 +1,20 @@
 import { DataType } from 'apache-arrow'
-import { CellRendererProps, registerCellRenderer } from '../cell-registry'
+import type {
+  CellTypeMetadata,
+  CellRendererProps,
+  CellEditorProps,
+  CellExecutionContext,
+} from '../cell-registry'
+import type { QueryCellConfig, CellConfig, CellState } from '../notebook-types'
 import { formatTimestamp } from '@/lib/time-range'
-import {
-  timestampToDate,
-  isTimeType,
-  isNumericType,
-  isBinaryType,
-} from '@/lib/arrow-utils'
+import { timestampToDate, isTimeType, isNumericType, isBinaryType } from '@/lib/arrow-utils'
+import { AvailableVariablesPanel } from '@/components/AvailableVariablesPanel'
+import { substituteMacros, DEFAULT_SQL } from '../notebook-utils'
 
-/**
- * Format a cell value based on its Arrow DataType.
- */
+// =============================================================================
+// Renderer Component
+// =============================================================================
+
 function formatCell(value: unknown, dataType: DataType): string {
   if (value === null || value === undefined) return '-'
 
@@ -33,7 +37,6 @@ function formatCell(value: unknown, dataType: DataType): string {
     return value ? 'true' : 'false'
   }
 
-  // Binary data: display as ASCII preview with length
   if (isBinaryType(dataType)) {
     const bytes = value instanceof Uint8Array ? value : Array.isArray(value) ? value : null
     if (bytes) {
@@ -63,13 +66,10 @@ export function TableCell({ data, status }: CellRendererProps) {
 
   if (!data || data.numRows === 0) {
     return (
-      <div className="text-center py-8 text-theme-text-muted text-sm">
-        No data available
-      </div>
+      <div className="text-center py-8 text-theme-text-muted text-sm">No data available</div>
     )
   }
 
-  // Get columns from Arrow schema
   const columns = data.schema.fields.map((field) => ({
     name: field.name,
     type: field.type,
@@ -126,5 +126,61 @@ export function TableCell({ data, status }: CellRendererProps) {
   )
 }
 
-// Register this cell renderer
-registerCellRenderer('table', TableCell)
+// =============================================================================
+// Editor Component
+// =============================================================================
+
+function TableCellEditor({ config, onChange, variables, timeRange }: CellEditorProps) {
+  const tableConfig = config as QueryCellConfig
+
+  return (
+    <>
+      <div>
+        <label className="block text-xs font-medium text-theme-text-secondary uppercase mb-1.5">
+          SQL Query
+        </label>
+        <textarea
+          value={tableConfig.sql}
+          onChange={(e) => onChange({ ...tableConfig, sql: e.target.value })}
+          className="w-full min-h-[150px] px-3 py-2 bg-app-bg border border-theme-border rounded-md text-theme-text-primary text-sm font-mono focus:outline-none focus:border-accent-link resize-y"
+          placeholder="SELECT * FROM ..."
+        />
+      </div>
+      <AvailableVariablesPanel variables={variables} timeRange={timeRange} />
+    </>
+  )
+}
+
+// =============================================================================
+// Cell Type Metadata
+// =============================================================================
+
+// eslint-disable-next-line react-refresh/only-export-components
+export const tableMetadata: CellTypeMetadata = {
+  renderer: TableCell,
+  EditorComponent: TableCellEditor,
+
+  label: 'Table',
+  icon: 'T',
+  description: 'Generic SQL results as a table',
+  showTypeBadge: true,
+  defaultHeight: 300,
+
+  canBlockDownstream: true,
+
+  createDefaultConfig: () => ({
+    type: 'table' as const,
+    sql: DEFAULT_SQL.table,
+  }),
+
+  execute: async (config: CellConfig, { variables, timeRange, runQuery }: CellExecutionContext) => {
+    const sql = substituteMacros((config as QueryCellConfig).sql, variables, timeRange)
+    const data = await runQuery(sql)
+    return { data }
+  },
+
+  getRendererProps: (_config: CellConfig, state: CellState) => ({
+    data: state.data,
+    status: state.status,
+  }),
+}

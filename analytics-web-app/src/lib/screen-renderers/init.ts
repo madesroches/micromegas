@@ -16,5 +16,5 @@ import './LogRenderer'
 import './TableRenderer'
 import './NotebookRenderer'
 
-// Import cell renderers for notebooks
-import './cells'
+// Cell renderers are now imported directly by cell-registry.ts via metadata exports
+// No side-effect imports needed

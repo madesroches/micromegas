@@ -76,14 +76,111 @@ jest.mock('@dnd-kit/utilities', () => ({
 }))
 
 // Mock the cell registry
-jest.mock('../cell-registry', () => ({
-  getCellRenderer: (type: string) => {
-    const MockRenderer = ({ name }: { name: string }) => (
-      <div data-testid={`cell-renderer-${type}`}>Cell: {name}</div>
-    )
-    return MockRenderer
+jest.mock('../cell-registry', () => {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const React = require('react')
+
+  // Mock editor component for all cell types
+  const MockEditorComponent = ({ config }: { config: { type: string } }) =>
+    React.createElement('div', { 'data-testid': `editor-${config.type}` }, `Editor for ${config.type}`)
+
+  return {
+    getCellRenderer: (type: string) => {
+      const MockRenderer = ({ name }: { name: string }) =>
+        React.createElement('div', { 'data-testid': `cell-renderer-${type}` }, `Cell: ${name}`)
+      return MockRenderer
+    },
+    getCellTypeMetadata: (type: string) => {
+      const metadata: Record<string, { label: string; showTypeBadge: boolean; execute?: () => void; canBlockDownstream: boolean; defaultHeight: number; description: string; icon: string; EditorComponent: React.ComponentType<{ config: { type: string } }>; createDefaultConfig: () => { type: string; sql?: string; content?: string; variableType?: string; defaultValue?: string }; getRendererProps: () => object }> = {
+        table: {
+          label: 'Table',
+          showTypeBadge: true,
+          execute: () => {},
+          canBlockDownstream: true,
+          defaultHeight: 300,
+          description: 'SQL results as a table',
+          icon: 'T',
+          EditorComponent: MockEditorComponent,
+          createDefaultConfig: () => ({ type: 'table', sql: 'SELECT 1' }),
+          getRendererProps: () => ({}),
+        },
+        chart: {
+          label: 'Chart',
+          showTypeBadge: true,
+          execute: () => {},
+          canBlockDownstream: true,
+          defaultHeight: 300,
+          description: 'SQL results as a chart',
+          icon: 'C',
+          EditorComponent: MockEditorComponent,
+          createDefaultConfig: () => ({ type: 'chart', sql: 'SELECT 1' }),
+          getRendererProps: () => ({}),
+        },
+        log: {
+          label: 'Log',
+          showTypeBadge: true,
+          execute: () => {},
+          canBlockDownstream: true,
+          defaultHeight: 300,
+          description: 'Log entries',
+          icon: 'L',
+          EditorComponent: MockEditorComponent,
+          createDefaultConfig: () => ({ type: 'log', sql: 'SELECT 1' }),
+          getRendererProps: () => ({}),
+        },
+        markdown: {
+          label: 'Markdown',
+          showTypeBadge: false,
+          canBlockDownstream: false,
+          defaultHeight: 150,
+          description: 'Notes',
+          icon: 'M',
+          EditorComponent: MockEditorComponent,
+          createDefaultConfig: () => ({ type: 'markdown', content: '# Notes' }),
+          getRendererProps: () => ({}),
+        },
+        variable: {
+          label: 'Variable',
+          showTypeBadge: true,
+          execute: () => {},
+          canBlockDownstream: true,
+          defaultHeight: 60,
+          description: 'User input',
+          icon: 'V',
+          EditorComponent: MockEditorComponent,
+          createDefaultConfig: () => ({ type: 'variable', variableType: 'text', defaultValue: '' }),
+          getRendererProps: () => ({}),
+        },
+      }
+      return metadata[type] || metadata['table']
+    },
+  CELL_TYPE_OPTIONS: [
+    { type: 'table', name: 'Table', description: 'SQL results as a table', icon: 'T' },
+    { type: 'chart', name: 'Chart', description: 'SQL results as a chart', icon: 'C' },
+    { type: 'log', name: 'Log', description: 'Log entries', icon: 'L' },
+    { type: 'markdown', name: 'Markdown', description: 'Notes', icon: 'M' },
+    { type: 'variable', name: 'Variable', description: 'User input', icon: 'V' },
+  ],
+  createDefaultCell: (type: string, existingNames: Set<string>) => {
+    const labels: Record<string, string> = { table: 'Table', chart: 'Chart', log: 'Log', markdown: 'Markdown', variable: 'Variable' }
+    const label = labels[type] || type
+    let name = label
+    let counter = 1
+    while (existingNames.has(name)) {
+      counter++
+      name = `${label}_${counter}`
+    }
+    const configs: Record<string, object> = {
+      table: { type: 'table', name, sql: 'SELECT 1', layout: { height: 300 } },
+      chart: { type: 'chart', name, sql: 'SELECT 1', layout: { height: 300 } },
+      log: { type: 'log', name, sql: 'SELECT 1', layout: { height: 300 } },
+      markdown: { type: 'markdown', name, content: '# Notes', layout: { height: 150 } },
+      variable: { type: 'variable', name, variableType: 'text', defaultValue: '', layout: { height: 60 } },
+    }
+    return configs[type] || { type, name, layout: { height: 300 } }
   },
-}))
+  }
+})
 
 // Import after mocks are set up
 import { NotebookRenderer } from '../NotebookRenderer'
