@@ -1,4 +1,67 @@
-import { PropertySegment } from '@/types'
+import { PropertySegment, PropertyTimelineData } from '@/types'
+
+/**
+ * Result of extracting properties from query results.
+ */
+export interface ExtractedPropertyData {
+  availableKeys: string[]
+  rawData: Map<number, Record<string, unknown>>
+}
+
+/**
+ * Extract property data from query result rows.
+ * Returns available keys and raw property data map.
+ */
+export function extractPropertiesFromRows(
+  rows: { time: number; properties: string | null }[]
+): ExtractedPropertyData {
+  const rawData = new Map<number, Record<string, unknown>>()
+  const keysSet = new Set<string>()
+
+  for (const row of rows) {
+    if (row.properties != null) {
+      try {
+        const props = JSON.parse(row.properties)
+        rawData.set(row.time, props)
+        Object.keys(props).forEach(k => keysSet.add(k))
+      } catch {
+        // Ignore parse errors
+      }
+    }
+  }
+
+  return {
+    availableKeys: Array.from(keysSet).sort(),
+    rawData,
+  }
+}
+
+/**
+ * Create a function that returns property timeline data for a given key.
+ */
+export function createPropertyTimelineGetter(
+  rawData: Map<number, Record<string, unknown>>,
+  binInterval: string
+): (propertyName: string) => PropertyTimelineData {
+  const binIntervalMs = parseIntervalToMs(binInterval)
+
+  return (propertyName: string): PropertyTimelineData => {
+    const rows: { time: number; value: string }[] = []
+    const sortedEntries = Array.from(rawData.entries()).sort((a, b) => a[0] - b[0])
+
+    for (const [time, props] of sortedEntries) {
+      const value = props[propertyName]
+      if (value !== undefined && value !== null) {
+        rows.push({ time, value: String(value) })
+      }
+    }
+
+    return {
+      propertyName,
+      segments: aggregateIntoSegments(rows, binIntervalMs),
+    }
+  }
+}
 
 /**
  * Parse interval string (e.g., "50 milliseconds", "1 second") to milliseconds.

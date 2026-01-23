@@ -16,6 +16,7 @@ import { executeStreamQuery } from '@/lib/arrow-stream'
 import { timestampToMs } from '@/lib/arrow-utils'
 import { openInPerfetto, PerfettoError } from '@/lib/perfetto'
 import { parseTimeRange, getTimeRangeForApi } from '@/lib/time-range'
+import { extractPropertiesFromRows, createPropertyTimelineGetter, ExtractedPropertyData } from '@/lib/property-utils'
 import { useScreenConfig } from '@/hooks/useScreenConfig'
 import { usePageTitle } from '@/hooks/usePageTitle'
 import { useMetricsData } from '@/hooks/useMetricsData'
@@ -169,6 +170,7 @@ function PerformanceAnalysisContent() {
   const [cachedTraceTimeRange, setCachedTraceTimeRange] = useState<{ begin: string; end: string } | null>(null)
   const [isCustomQuery, setIsCustomQuery] = useState(false)
   const [customChartData, setCustomChartData] = useState<{ time: number; value: number }[]>([])
+  const [customPropertyData, setCustomPropertyData] = useState<ExtractedPropertyData>({ availableKeys: [], rawData: new Map() })
 
   const binInterval = useMemo(() => {
     const fromDate = new Date(apiTimeRange.begin)
@@ -190,6 +192,15 @@ function PerformanceAnalysisContent() {
   const chartData = isCustomQuery ? customChartData : metricsData.chartData
   const dataLoading = isCustomQuery ? false : metricsData.isLoading
   const hasLoaded = isCustomQuery ? customChartData.length > 0 || queryError !== null : metricsData.isComplete
+
+  // Use custom or unified property data based on query mode
+  const availablePropertyKeys = isCustomQuery ? customPropertyData.availableKeys : metricsData.availablePropertyKeys
+  const getPropertyTimeline = useMemo(
+    () => isCustomQuery
+      ? createPropertyTimelineGetter(customPropertyData.rawData, binInterval)
+      : metricsData.getPropertyTimeline,
+    [isCustomQuery, customPropertyData.rawData, binInterval, metricsData.getPropertyTimeline]
+  )
 
   const selectedMeasureInfo = useMemo(() => {
     return measures.find((m) => m.name === selectedMeasure)
@@ -284,19 +295,29 @@ function PerformanceAnalysisContent() {
         }
 
         const points: { time: number; value: number }[] = []
+        const propsRows: { time: number; properties: string | null }[] = []
+        // Check if any batch has a properties column
+        const hasPropertiesColumn = batches.length > 0 && batches[0].schema.fields.some(f => f.name === 'properties')
+
         for (const batch of batches) {
           for (let i = 0; i < batch.numRows; i++) {
             const row = batch.get(i)
             if (row) {
-              points.push({
-                time: timestampToMs(row.time),
-                value: Number(row.value),
-              })
+              const time = timestampToMs(row.time)
+              points.push({ time, value: Number(row.value) })
+              if (hasPropertiesColumn) {
+                propsRows.push({ time, properties: row.properties != null ? String(row.properties) : null })
+              }
             }
           }
         }
 
         setCustomChartData(points)
+        setCustomPropertyData(
+          hasPropertiesColumn
+            ? extractPropertiesFromRows(propsRows)
+            : { availableKeys: [], rawData: new Map() }
+        )
       } catch (err) {
         setQueryError(err instanceof Error ? err.message : 'Unknown error')
       } finally {
@@ -832,8 +853,8 @@ function PerformanceAnalysisContent() {
               data={chartData}
               title={selectedMeasure}
               unit={selectedMeasureInfo?.unit || ''}
-              availablePropertyKeys={metricsData.availablePropertyKeys}
-              getPropertyTimeline={metricsData.getPropertyTimeline}
+              availablePropertyKeys={availablePropertyKeys}
+              getPropertyTimeline={getPropertyTimeline}
               selectedProperties={selectedProperties}
               onAddProperty={handleAddProperty}
               onRemoveProperty={handleRemoveProperty}

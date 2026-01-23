@@ -14,6 +14,7 @@ import { useScreenConfig } from '@/hooks/useScreenConfig'
 import { usePageTitle } from '@/hooks/usePageTitle'
 import { parseTimeRange, getTimeRangeForApi } from '@/lib/time-range'
 import { timestampToMs } from '@/lib/arrow-utils'
+import { extractPropertiesFromRows, createPropertyTimelineGetter, ExtractedPropertyData } from '@/lib/property-utils'
 import type { ProcessMetricsConfig } from '@/lib/screen-config'
 
 const DISCOVERY_SQL = `SELECT DISTINCT name, target, unit
@@ -112,6 +113,7 @@ function ProcessMetricsContent() {
   const [chartWidth, setChartWidth] = useState<number>(800)
   const [isCustomQuery, setIsCustomQuery] = useState(false)
   const [customChartData, setCustomChartData] = useState<{ time: number; value: number }[]>([])
+  const [customPropertyData, setCustomPropertyData] = useState<ExtractedPropertyData>({ availableKeys: [], rawData: new Map() })
 
   // Query hooks for discovery and custom queries
   const discoveryQuery = useStreamQuery()
@@ -159,6 +161,15 @@ function ProcessMetricsContent() {
   // Show loading when discovery is done, measure selected, but data hasn't loaded yet
   const showDataLoading = isLoading || (discoveryDone && selectedMeasure && !hasLoaded && chartData.length === 0)
 
+  // Use custom or unified property data based on query mode
+  const availablePropertyKeys = isCustomQuery ? customPropertyData.availableKeys : metricsData.availablePropertyKeys
+  const getPropertyTimeline = useMemo(
+    () => isCustomQuery
+      ? createPropertyTimelineGetter(customPropertyData.rawData, binInterval)
+      : metricsData.getPropertyTimeline,
+    [isCustomQuery, customPropertyData.rawData, binInterval, metricsData.getPropertyTimeline]
+  )
+
   const selectedMeasureInfo = useMemo(() => {
     return measures.find((m) => m.name === selectedMeasure)
   }, [measures, selectedMeasure])
@@ -195,22 +206,32 @@ function ProcessMetricsContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- Only react to completion/error, not the full hook object
   }, [discoveryQuery.isComplete, discoveryQuery.error, selectedMeasure, updateConfig])
 
-  // Extract custom query data
+  // Extract custom query data (chart + properties if present)
   useEffect(() => {
     if (customQuery.isComplete && !customQuery.error) {
       const table = customQuery.getTable()
       if (table) {
         const points: { time: number; value: number }[] = []
+        const propsRows: { time: number; properties: string | null }[] = []
+        const hasPropertiesColumn = table.schema.fields.some(f => f.name === 'properties')
+
         for (let i = 0; i < table.numRows; i++) {
           const row = table.get(i)
           if (row) {
-            points.push({
-              time: timestampToMs(row.time),
-              value: Number(row.value),
-            })
+            const time = timestampToMs(row.time)
+            points.push({ time, value: Number(row.value) })
+            if (hasPropertiesColumn) {
+              propsRows.push({ time, properties: row.properties != null ? String(row.properties) : null })
+            }
           }
         }
+
         setCustomChartData(points)
+        setCustomPropertyData(
+          hasPropertiesColumn
+            ? extractPropertiesFromRows(propsRows)
+            : { availableKeys: [], rawData: new Map() }
+        )
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- Only react to completion/error, not the full hook object
@@ -444,8 +465,8 @@ function ProcessMetricsContent() {
               data={chartData}
               title={selectedMeasure}
               unit={selectedMeasureInfo?.unit || ''}
-              availablePropertyKeys={metricsData.availablePropertyKeys}
-              getPropertyTimeline={metricsData.getPropertyTimeline}
+              availablePropertyKeys={availablePropertyKeys}
+              getPropertyTimeline={getPropertyTimeline}
               selectedProperties={selectedProperties}
               onAddProperty={handleAddProperty}
               onRemoveProperty={handleRemoveProperty}
