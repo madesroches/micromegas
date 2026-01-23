@@ -134,9 +134,12 @@ export function useCellExecution({
 
         setCellStates((prev) => ({ ...prev, [cell.name]: newState }))
 
-        // Post-execution side effects (e.g., auto-select first option for variables)
-        if (meta.onExecutionComplete && !variableValuesRef.current[cell.name]) {
-          meta.onExecutionComplete(cell, newState, { setVariableValue })
+        // Post-execution side effects (e.g., validate/auto-select value for variables)
+        if (meta.onExecutionComplete) {
+          meta.onExecutionComplete(cell, newState, {
+            setVariableValue,
+            currentValue: variableValuesRef.current[cell.name],
+          })
         }
 
         return true

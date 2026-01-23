@@ -11,6 +11,31 @@ export type {
   NotebookConfig,
 } from './notebook-types'
 
+// Re-export reserved params check from url-params
+import { RESERVED_PARAMS, isReservedParam } from '@/lib/url-params'
+export { RESERVED_PARAMS, isReservedParam }
+
+/**
+ * Checks if a variable name conflicts with reserved URL parameter names.
+ * Uses the sanitized form of the name for comparison.
+ */
+export function isReservedVariableName(name: string): boolean {
+  const sanitized = sanitizeCellName(name)
+  return isReservedParam(sanitized)
+}
+
+/**
+ * Validates a variable name for URL sync compatibility.
+ * Returns an error message if the name would conflict with reserved params.
+ */
+export function validateVariableName(name: string): string | null {
+  const sanitized = sanitizeCellName(name)
+  if (isReservedParam(sanitized)) {
+    return `"${sanitized}" is a reserved name and cannot be used for variables (conflicts with URL parameters)`
+  }
+  return null // Valid
+}
+
 // Default SQL queries per cell type
 export const DEFAULT_SQL: Record<string, string> = {
   table: `SELECT process_id, exe, start_time, last_update_time, username, computer
@@ -60,11 +85,17 @@ export function sanitizeCellName(name: string): string {
 /**
  * Validates a cell name and returns an error message if invalid.
  * Returns null if the name is valid.
+ *
+ * @param name - The name to validate
+ * @param existingNames - Set of existing cell names
+ * @param currentName - The cell's current name (for uniqueness check)
+ * @param isVariable - Whether this is a variable cell (checks reserved names)
  */
 export function validateCellName(
   name: string,
   existingNames: Set<string>,
-  currentName?: string
+  currentName?: string,
+  isVariable?: boolean
 ): string | null {
   if (!name || name.trim() === '') {
     return 'Cell name cannot be empty'
@@ -90,6 +121,11 @@ export function validateCellName(
   )
   if (normalizedExisting.has(normalizedName)) {
     return 'A cell with this name already exists'
+  }
+
+  // Check for reserved names (only for variable cells)
+  if (isVariable && isReservedParam(normalizedName)) {
+    return `"${normalizedName}" is reserved and cannot be used for variables`
   }
 
   return null

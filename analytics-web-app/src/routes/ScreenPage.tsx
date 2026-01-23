@@ -8,6 +8,7 @@ import { AppLink } from '@/components/AppLink'
 import { SaveScreenDialog } from '@/components/SaveScreenDialog'
 import { useScreenConfig } from '@/hooks/useScreenConfig'
 import { parseTimeRange, getTimeRangeForApi } from '@/lib/time-range'
+import { isReservedParam } from '@/lib/url-params'
 import { renderIcon } from '@/lib/screen-type-utils'
 import { getRenderer } from '@/lib/screen-renderers/init'
 import type { ScreenPageConfig } from '@/lib/screen-config'
@@ -28,7 +29,11 @@ const DEFAULT_CONFIG: ScreenPageConfig = {
   timeRangeFrom: 'now-1h',
   timeRangeTo: 'now',
   type: undefined,
+  variables: {},
 }
+
+// Safe URL length threshold (conservative for older browsers/proxies)
+const MAX_SAFE_URL_LENGTH = 2000
 
 // URL builder for ScreenPage
 const buildUrl = (cfg: ScreenPageConfig): string => {
@@ -40,8 +45,29 @@ const buildUrl = (cfg: ScreenPageConfig): string => {
   if (cfg.timeRangeTo && cfg.timeRangeTo !== DEFAULT_CONFIG.timeRangeTo) {
     params.set('to', cfg.timeRangeTo)
   }
+
+  // Add variable params (skip reserved names as safety check)
+  // Note: empty strings ARE serialized (as ?name=) to preserve explicit "cleared" state
+  if (cfg.variables) {
+    for (const [name, value] of Object.entries(cfg.variables)) {
+      if (value !== undefined && !isReservedParam(name)) {
+        params.set(name, value)
+      }
+    }
+  }
+
   const qs = params.toString()
-  return qs ? `?${qs}` : ''
+  const url = qs ? `?${qs}` : ''
+
+  // Warn if URL exceeds safe length (variables may be lost on some browsers/proxies)
+  if (url.length > MAX_SAFE_URL_LENGTH) {
+    console.warn(
+      `URL length (${url.length}) exceeds safe threshold (${MAX_SAFE_URL_LENGTH}). ` +
+        `Some variable values may be lost when sharing or bookmarking.`
+    )
+  }
+
+  return url
 }
 
 function ScreenPageContent() {
@@ -89,6 +115,19 @@ function ScreenPageContent() {
       updateConfig({ timeRangeFrom: from, timeRangeTo: to })
     },
     [updateConfig]
+  )
+
+  // Variable change handler (replace to avoid cluttering history)
+  const handleUrlVariableChange = useCallback(
+    (name: string, value: string) => {
+      updateConfig(
+        {
+          variables: { ...(urlConfig.variables || {}), [name]: value },
+        },
+        { replace: true }
+      )
+    },
+    [updateConfig, urlConfig.variables]
   )
 
   // Screen state
@@ -367,6 +406,8 @@ function ScreenPageContent() {
               onSaveAs={() => setShowSaveDialog(true)}
               saveError={saveError}
               refreshTrigger={refreshTrigger}
+              urlVariables={urlConfig.variables || {}}
+              onUrlVariableChange={handleUrlVariableChange}
             />
           </div>
         </div>

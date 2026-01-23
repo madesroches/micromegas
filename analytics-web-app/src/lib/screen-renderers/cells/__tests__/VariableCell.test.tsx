@@ -1,6 +1,15 @@
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, act } from '@testing-library/react'
 import { VariableCell } from '../VariableCell'
 import { CellRendererProps } from '../../cell-registry'
+
+// Use fake timers for debounce testing
+beforeEach(() => {
+  jest.useFakeTimers()
+})
+
+afterEach(() => {
+  jest.useRealTimers()
+})
 
 // Create a minimal mock for required CellRendererProps
 const createMockProps = (overrides: Partial<CellRendererProps> = {}): CellRendererProps => ({
@@ -156,7 +165,7 @@ describe('VariableCell', () => {
       expect(input.value).toBe('my text value')
     })
 
-    it('should call onValueChange when text changes', () => {
+    it('should call onValueChange when text changes (debounced)', () => {
       const onValueChange = jest.fn()
       render(
         <VariableCell
@@ -169,6 +178,14 @@ describe('VariableCell', () => {
 
       const input = screen.getByRole('textbox')
       fireEvent.change(input, { target: { value: 'new value' } })
+
+      // Value change is debounced, so it shouldn't be called immediately
+      expect(onValueChange).not.toHaveBeenCalled()
+
+      // Advance timers by debounce delay (300ms)
+      act(() => {
+        jest.advanceTimersByTime(300)
+      })
 
       expect(onValueChange).toHaveBeenCalledWith('new value')
     })
@@ -211,7 +228,7 @@ describe('VariableCell', () => {
       expect(input.value).toBe('42')
     })
 
-    it('should call onValueChange when number changes', () => {
+    it('should call onValueChange when number changes (debounced)', () => {
       const onValueChange = jest.fn()
       render(
         <VariableCell
@@ -224,6 +241,14 @@ describe('VariableCell', () => {
 
       const input = screen.getByRole('spinbutton')
       fireEvent.change(input, { target: { value: '100' } })
+
+      // Value change is debounced, so it shouldn't be called immediately
+      expect(onValueChange).not.toHaveBeenCalled()
+
+      // Advance timers by debounce delay (300ms)
+      act(() => {
+        jest.advanceTimersByTime(300)
+      })
 
       expect(onValueChange).toHaveBeenCalledWith('100')
     })

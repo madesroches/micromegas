@@ -1,23 +1,16 @@
-import { useState, useCallback, useEffect, useRef } from 'react'
+import { useCallback, useMemo, useRef, useEffect } from 'react'
 import { CellConfig, VariableCellConfig } from './notebook-utils'
 
-export interface VariableState {
-  /** Current variable values (cellName -> value) */
-  values: Record<string, string>
-  /** Ref for synchronous access during sequential execution */
-  valuesRef: React.MutableRefObject<Record<string, string>>
-}
-
 export interface UseNotebookVariablesResult {
-  /** Current variable values */
+  /** Current variable values (merged from URL config and cell defaults) */
   variableValues: Record<string, string>
   /** Ref for synchronous access during sequential cell execution */
   variableValuesRef: React.MutableRefObject<Record<string, string>>
-  /** Set a variable value (updates both state and ref) */
+  /** Set a variable value (calls onVariableChange callback) */
   setVariableValue: (cellName: string, value: string) => void
-  /** Migrate variable state when a cell is renamed */
+  /** Migrate variable state when a cell is renamed (no-op, state is in URL) */
   migrateVariable: (oldName: string, newName: string) => void
-  /** Remove variable state when a cell is deleted */
+  /** Remove variable state when a cell is deleted (no-op, state is in URL) */
   removeVariable: (cellName: string) => void
 }
 
@@ -25,67 +18,65 @@ export interface UseNotebookVariablesResult {
  * Manages variable values for notebook cells.
  *
  * Variables are collected from variable cells and can be referenced in SQL queries
- * of cells below them. This hook handles:
- * - State initialization from cell default values
- * - Synchronous ref access for sequential execution
- * - State migration on cell rename
- * - State cleanup on cell delete
+ * of cells below them. This hook:
+ * - Computes effective values from URL config (source of truth) + cell defaults
+ * - Provides synchronous ref access for sequential execution
+ * - Delegates state changes to the parent via onVariableChange callback
+ *
+ * The URL config is the single source of truth. This hook does NOT own state;
+ * it computes effective values by merging URL config with cell defaults.
  */
-export function useNotebookVariables(cells: CellConfig[]): UseNotebookVariablesResult {
-  const [variableValues, setVariableValues] = useState<Record<string, string>>({})
-  const variableValuesRef = useRef<Record<string, string>>({})
+export function useNotebookVariables(
+  cells: CellConfig[],
+  configVariables: Record<string, string> = {},
+  onVariableChange?: (name: string, value: string) => void
+): UseNotebookVariablesResult {
+  // Compute effective values: config value → defaultValue → undefined
+  const variableValues = useMemo(() => {
+    const values: Record<string, string> = { ...configVariables }
 
-  // Initialize variable values from config defaults
-  useEffect(() => {
-    const initialValues: Record<string, string> = {}
+    // Apply defaults for variables not in config
     for (const cell of cells) {
-      if (cell.type === 'variable') {
+      if (cell.type === 'variable' && !(cell.name in values)) {
         const varCell = cell as VariableCellConfig
-        if (varCell.defaultValue && !variableValuesRef.current[cell.name]) {
-          initialValues[cell.name] = varCell.defaultValue
+        if (varCell.defaultValue) {
+          values[cell.name] = varCell.defaultValue
         }
       }
     }
-    if (Object.keys(initialValues).length > 0) {
-      variableValuesRef.current = { ...variableValuesRef.current, ...initialValues }
-      setVariableValues((prev) => ({ ...prev, ...initialValues }))
-    }
-  }, [cells])
+    return values
+  }, [cells, configVariables])
 
-  // Set a variable value (updates both state and ref synchronously)
-  const setVariableValue = useCallback((cellName: string, value: string) => {
-    variableValuesRef.current = { ...variableValuesRef.current, [cellName]: value }
-    setVariableValues((prev) => ({ ...prev, [cellName]: value }))
+  // Ref for synchronous access during sequential execution
+  const variableValuesRef = useRef<Record<string, string>>(variableValues)
+
+  // Keep ref in sync with computed values
+  useEffect(() => {
+    variableValuesRef.current = variableValues
+  }, [variableValues])
+
+  // Set a variable value - delegates to callback
+  const setVariableValue = useCallback(
+    (cellName: string, value: string) => {
+      // Update ref immediately for synchronous access during execution
+      variableValuesRef.current = { ...variableValuesRef.current, [cellName]: value }
+      // Delegate to parent callback (updates URL config)
+      onVariableChange?.(cellName, value)
+    },
+    [onVariableChange]
+  )
+
+  // Migration is a no-op since state lives in URL, not in this hook
+  // When a variable cell is renamed, the old URL param becomes orphaned
+  // and the new name will use its default value until set
+  const migrateVariable = useCallback((_oldName: string, _newName: string) => {
+    // No-op: URL params are keyed by name, migration happens naturally
   }, [])
 
-  // Migrate variable state when a cell is renamed
-  const migrateVariable = useCallback((oldName: string, newName: string) => {
-    const nextRef = { ...variableValuesRef.current }
-    if (oldName in nextRef) {
-      nextRef[newName] = nextRef[oldName]
-      delete nextRef[oldName]
-      variableValuesRef.current = nextRef
-    }
-    setVariableValues((prev) => {
-      const next = { ...prev }
-      if (oldName in next) {
-        next[newName] = next[oldName]
-        delete next[oldName]
-      }
-      return next
-    })
-  }, [])
-
-  // Remove variable state when a cell is deleted
-  const removeVariable = useCallback((cellName: string) => {
-    const nextRef = { ...variableValuesRef.current }
-    delete nextRef[cellName]
-    variableValuesRef.current = nextRef
-    setVariableValues((prev) => {
-      const next = { ...prev }
-      delete next[cellName]
-      return next
-    })
+  // Removal is a no-op since state lives in URL, not in this hook
+  // Orphaned URL params are simply ignored
+  const removeVariable = useCallback((_cellName: string) => {
+    // No-op: URL params for deleted variables are ignored
   }, [])
 
   return {

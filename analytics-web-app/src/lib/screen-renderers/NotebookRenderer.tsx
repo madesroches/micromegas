@@ -166,6 +166,8 @@ export function NotebookRenderer({
   onSaveAs,
   saveError,
   refreshTrigger,
+  urlVariables,
+  onUrlVariableChange,
 }: ScreenRendererProps) {
   // Parse config
   const notebookConfig = useMemo(() => {
@@ -189,9 +191,9 @@ export function NotebookRenderer({
     [savedNotebookConfig, setHasUnsavedChanges]
   )
 
-  // Variable values management
+  // Variable values management - URL config is source of truth
   const { variableValues, variableValuesRef, setVariableValue, migrateVariable, removeVariable } =
-    useNotebookVariables(cells)
+    useNotebookVariables(cells, urlVariables || {}, onUrlVariableChange)
 
   // Cell execution state management
   const { cellStates, executeCell, executeFromCell, migrateCellState, removeCellState } = useCellExecution({

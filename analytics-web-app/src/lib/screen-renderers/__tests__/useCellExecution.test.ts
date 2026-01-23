@@ -68,7 +68,7 @@ jest.mock('../cell-registry', () => ({
       showTypeBadge: boolean
       canBlockDownstream: boolean
       execute?: (config: unknown, context: unknown) => Promise<{ data: unknown } | null>
-      onExecutionComplete?: (config: unknown, state: unknown, context: { setVariableValue: (name: string, value: string) => void }) => void
+      onExecutionComplete?: (config: unknown, state: unknown, context: { setVariableValue: (name: string, value: string) => void; currentValue?: string }) => void
     }> = {
       table: {
         label: 'Table',
@@ -127,10 +127,23 @@ jest.mock('../cell-registry', () => ({
           const data = await runQuery(sql)
           return { data, variableOptions: [{ label: 'Option 1', value: 'val0' }] }
         },
-        onExecutionComplete: (config: { name: string }, state: { variableOptions?: { value: string }[] }, { setVariableValue }: { setVariableValue: (name: string, value: string) => void }) => {
+        onExecutionComplete: (
+          config: { name: string; defaultValue?: string },
+          state: { variableOptions?: { value: string }[] },
+          { setVariableValue, currentValue }: { setVariableValue: (name: string, value: string) => void; currentValue?: string }
+        ) => {
           const options = state.variableOptions
-          if (options && options.length > 0) {
-            setVariableValue(config.name, options[0].value)
+          if (!options || options.length === 0) return
+
+          // If current value exists and is valid, keep it
+          if (currentValue && options.some((o) => o.value === currentValue)) {
+            return
+          }
+
+          // Current value is missing or invalid - use default or first option
+          const fallbackValue = config.defaultValue || options[0]?.value
+          if (fallbackValue) {
+            setVariableValue(config.name, fallbackValue)
           }
         },
       },
@@ -369,7 +382,7 @@ describe('useCellExecution', () => {
         expect(setVariableValue).toHaveBeenCalledWith('Dropdown', 'val0')
       })
 
-      it('should not auto-select if value already set', async () => {
+      it('should not auto-select if value already set and valid', async () => {
         mockStreamQuery.mockReturnValue(createSuccessResults())
 
         const cells: CellConfig[] = [
@@ -382,7 +395,8 @@ describe('useCellExecution', () => {
           },
         ]
         const setVariableValue = jest.fn()
-        const variableValuesRef = createVariableValuesRef({ Dropdown: 'existing' })
+        // Use 'val0' which is a valid option returned by the mock
+        const variableValuesRef = createVariableValuesRef({ Dropdown: 'val0' })
 
         const { result } = renderHook(() =>
           useCellExecution({
@@ -399,6 +413,40 @@ describe('useCellExecution', () => {
         })
 
         expect(setVariableValue).not.toHaveBeenCalled()
+      })
+
+      it('should replace invalid value with fallback', async () => {
+        mockStreamQuery.mockReturnValue(createSuccessResults())
+
+        const cells: CellConfig[] = [
+          {
+            type: 'variable',
+            name: 'Dropdown',
+            variableType: 'combobox',
+            sql: 'SELECT name FROM options',
+            layout: { height: 'auto' },
+          },
+        ]
+        const setVariableValue = jest.fn()
+        // Use 'invalid_value' which is NOT in the options
+        const variableValuesRef = createVariableValuesRef({ Dropdown: 'invalid_value' })
+
+        const { result } = renderHook(() =>
+          useCellExecution({
+            cells,
+            timeRange: defaultTimeRange,
+            variableValuesRef,
+            setVariableValue,
+            refreshTrigger: 0,
+          })
+        )
+
+        await act(async () => {
+          await result.current.executeCell(0)
+        })
+
+        // Should replace invalid value with first option
+        expect(setVariableValue).toHaveBeenCalledWith('Dropdown', 'val0')
       })
     })
 

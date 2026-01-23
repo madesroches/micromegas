@@ -1,5 +1,7 @@
 # Notebook URL Variable Synchronization
 
+**Status: IMPLEMENTED**
+
 ## Overview
 
 Synchronize notebook variable values to the URL, enabling:
@@ -8,27 +10,28 @@ Synchronize notebook variable values to the URL, enabling:
 - Bookmark/restore of specific notebook configurations
 - Team collaboration with consistent starting states
 
-## Current State
+## Previous State (Before Implementation)
 
 ### Variable Storage
-Variables are currently stored only in React state (`useNotebookVariables.ts`):
+Variables were stored only in React state (`useNotebookVariables.ts`):
 ```typescript
 const [variableValues, setVariableValues] = useState<Record<string, string>>({})
 ```
 
-**Limitations:**
-- Values lost on page reload
-- Cannot share URLs with specific variable values
-- No browser history integration
-- Cannot bookmark specific configurations
+**Limitations (now resolved):**
+- ~~Values lost on page reload~~ → Now persisted in URL
+- ~~Cannot share URLs with specific variable values~~ → Variables synced to URL
+- ~~No browser history integration~~ → Back/forward preserves state
+- ~~Cannot bookmark specific configurations~~ → Bookmarks include variables
 
-### URL State Pattern (Existing)
-Time range is already synced to URL via `useScreenConfig`:
+### URL State Pattern
+Time range is synced to URL via `useScreenConfig`:
 ```
 /screen/my-notebook?from=now-1h&to=now
 ```
 
 The `useScreenConfig` hook provides atomic state + URL updates with browser history support.
+Variables now use this same pattern.
 
 ## Design Principles
 
@@ -38,7 +41,7 @@ The `useScreenConfig` hook provides atomic state + URL updates with browser hist
 4. **No bidirectional sync** - Components don't sync state back to config; they call `updateConfig()` directly
 5. **Consistent with existing patterns** - Follows the same architecture as ProcessLogPage, PerformanceAnalysisPage
 
-## Proposed Solution
+## Solution (Implemented)
 
 ### URL Format
 Add variable values directly as query parameters:
@@ -53,7 +56,11 @@ Add variable values directly as query parameters:
 
 **Reserved Parameter Names:**
 ```typescript
-const RESERVED_PARAMS = ['from', 'to', 'type'] as const
+// Defined in src/lib/url-params.ts
+export const RESERVED_PARAMS = [
+  'from', 'to', 'type', 'process_id', 'measure', 'scale',
+  'level', 'search', 'sort', 'dir', 'limit', 'properties',
+] as const
 ```
 
 **Example URLs:**
@@ -279,7 +286,7 @@ export function useNotebookVariables(
 
 ### Phase 5: Handle Variable Cell Execution
 
-**File:** `src/lib/screen-renderers/cell-types/VariableCellRenderer.tsx`
+**File:** `src/lib/screen-renderers/cells/VariableCell.tsx`
 
 Ensure combobox cells respect config values and handle invalid values:
 
@@ -310,24 +317,44 @@ update the URL to reflect the actual value when an invalid URL value is correcte
 
 **File:** `src/lib/screen-renderers/notebook-utils.ts`
 
-Add validation to prevent reserved names:
+Added validation to prevent reserved names (re-exports from `url-params.ts`):
 ```typescript
-export const RESERVED_PARAMS = ['from', 'to', 'type'] as const
+// Re-export from url-params.ts
+export { RESERVED_PARAMS, isReservedParam } from '@/lib/url-params'
 
 export function isReservedVariableName(name: string): boolean {
-  return RESERVED_PARAMS.includes(name as typeof RESERVED_PARAMS[number])
+  const sanitized = sanitizeCellName(name)
+  return isReservedParam(sanitized)
 }
 
 export function validateVariableName(name: string): string | null {
-  const sanitized = sanitizeVariableName(name)
-  if (isReservedVariableName(sanitized)) {
-    return `"${sanitized}" is a reserved name and cannot be used for variables`
+  const sanitized = sanitizeCellName(name)
+  if (isReservedParam(sanitized)) {
+    return `"${sanitized}" is reserved and cannot be used for variables`
   }
   return null  // Valid
 }
 ```
 
-**File:** `src/lib/screen-renderers/cell-types/VariableCellRenderer.tsx`
+Updated `validateCellName()` to check reserved names for variable cells:
+```typescript
+export function validateCellName(
+  name: string,
+  existingNames: Set<string>,
+  currentName?: string,
+  isVariable?: boolean  // NEW parameter
+): string | null {
+  // ... existing checks ...
+
+  // Check for reserved names (only for variable cells)
+  if (isVariable && isReservedParam(normalizedName)) {
+    return `"${normalizedName}" is reserved and cannot be used for variables`
+  }
+  return null
+}
+```
+
+**File:** `src/components/CellEditor.tsx`
 
 Show validation error when user tries to use reserved name:
 ```typescript
@@ -337,7 +364,7 @@ const validationError = validateVariableName(cell.name)
 
 ### Phase 7: Debounce Text Input Changes
 
-**File:** `src/lib/screen-renderers/cell-types/VariableCellRenderer.tsx`
+**File:** `src/lib/screen-renderers/cells/VariableCell.tsx`
 
 For text/number inputs, debounce at the component level to prevent excessive URL updates
 while typing. Uses the existing `useDebounce` hook (value debouncing pattern) from
@@ -451,16 +478,21 @@ When URL exceeds 2000 characters (safe threshold for all browsers/proxies):
 - New URLs with variables work immediately
 - Old URLs without variables use default behavior
 
-## Files to Modify
+## Files Modified
 
 | File | Changes |
 |------|---------|
-| `src/lib/screen-config.ts` | Add `variables` to config type |
-| `src/routes/ScreenPage.tsx` | Parse/build URL variable params, define `RESERVED_PARAMS`, pass config to renderer |
-| `src/lib/screen-renderers/NotebookRenderer.tsx` | Receive config + updateConfig props, create handleVariableChange callback |
-| `src/lib/screen-renderers/useNotebookVariables.ts` | Remove internal state, compute values from config, delegate changes to callback |
-| `src/lib/screen-renderers/notebook-utils.ts` | Add `isReservedVariableName`, `validateVariableName` |
-| `src/lib/screen-renderers/cell-types/VariableCellRenderer.tsx` | Validate config values, debounce text inputs, show validation errors |
+| `src/lib/screen-config.ts` | Added `variables?: Record<string, string>` to `ScreenPageConfig` |
+| `src/lib/url-params.ts` | Added `RESERVED_PARAMS`, `isReservedParam()`, variable extraction in `parseUrlParams()` |
+| `src/routes/ScreenPage.tsx` | Updated `buildUrl()` to serialize variables, added `handleUrlVariableChange()`, passes props to renderer |
+| `src/lib/screen-renderers/index.ts` | Added `urlVariables` and `onUrlVariableChange` props to `ScreenRendererProps` |
+| `src/lib/screen-renderers/NotebookRenderer.tsx` | Wired URL variables to `useNotebookVariables` hook |
+| `src/lib/screen-renderers/useNotebookVariables.ts` | Refactored to compute values from URL config + defaults instead of owning state |
+| `src/lib/screen-renderers/notebook-utils.ts` | Added `isReservedVariableName()`, `validateVariableName()`, updated `validateCellName()` |
+| `src/lib/screen-renderers/cell-registry.ts` | Updated `onExecutionComplete` signature to include `currentValue` |
+| `src/lib/screen-renderers/useCellExecution.ts` | Passes `currentValue` to `onExecutionComplete` |
+| `src/lib/screen-renderers/cells/VariableCell.tsx` | Added debouncing for text/number inputs, validation for combobox values |
+| `src/components/CellEditor.tsx` | Passes cell type to `validateCellName()` for reserved name check |
 
 ## Future Considerations
 
