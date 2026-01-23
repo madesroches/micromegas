@@ -2,7 +2,6 @@
  * Tests for useCellExecution hook
  */
 import { renderHook, act, waitFor } from '@testing-library/react'
-import React from 'react'
 
 // Mock streamQuery function
 const mockStreamQuery = jest.fn()
@@ -74,11 +73,6 @@ function createSuccessResults() {
     { type: 'batch', batch: { numRows: 5 } },
     { type: 'done' },
   ])
-}
-
-function createErrorResults(message: string) {
-  // The streamQuery yields an error which gets thrown in executeSql
-  return createMockGenerator([{ type: 'error', error: { message } }])
 }
 
 // Create a generator that throws an error

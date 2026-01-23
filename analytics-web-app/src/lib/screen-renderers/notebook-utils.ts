@@ -63,6 +63,7 @@ export function sanitizeCellName(name: string): string {
     // Replace spaces with underscores
     .replace(/\s+/g, '_')
     // Remove non-ASCII characters
+    // eslint-disable-next-line no-control-regex
     .replace(/[^\x00-\x7F]/g, '')
     // Remove characters that aren't alphanumeric or underscore
     .replace(/[^a-zA-Z0-9_]/g, '')
@@ -89,6 +90,7 @@ export function validateCellName(
   }
 
   // Check for non-ASCII characters
+  // eslint-disable-next-line no-control-regex
   if (/[^\x00-\x7F]/.test(name)) {
     return 'Cell name can only contain ASCII characters'
   }
