@@ -7,6 +7,7 @@ import type {
 } from '../cell-registry'
 import type { VariableCellConfig, CellConfig, CellState } from '../notebook-types'
 import { AvailableVariablesPanel } from '@/components/AvailableVariablesPanel'
+import { SyntaxEditor } from '@/components/SyntaxEditor'
 import { substituteMacros, DEFAULT_SQL } from '../notebook-utils'
 import { useDebounce } from '@/hooks/useDebounce'
 
@@ -151,11 +152,12 @@ function VariableCellEditor({ config, onChange, variables, timeRange }: CellEdit
             <label className="block text-xs font-medium text-theme-text-secondary uppercase mb-1.5">
               SQL Query
             </label>
-            <textarea
+            <SyntaxEditor
               value={varConfig.sql || ''}
-              onChange={(e) => onChange({ ...varConfig, sql: e.target.value })}
-              className="w-full min-h-[150px] px-3 py-2 bg-app-bg border border-theme-border rounded-md text-theme-text-primary text-sm font-mono focus:outline-none focus:border-accent-link resize-y"
+              onChange={(sql) => onChange({ ...varConfig, sql })}
+              language="sql"
               placeholder="SELECT value, label FROM ..."
+              minHeight="150px"
             />
           </div>
           <AvailableVariablesPanel variables={variables} timeRange={timeRange} />

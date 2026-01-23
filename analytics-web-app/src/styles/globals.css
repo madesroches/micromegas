@@ -59,6 +59,20 @@
     --chart-fill: rgba(191, 54, 12, 0.1);
     --chart-selection: rgba(255, 179, 0, 0.3);
     --chart-selection-border: #ffb300;
+
+    /* Syntax highlighting colors */
+    --syntax-keyword: #c792ea;
+    --syntax-string: #c3e88d;
+    --syntax-variable: #ffcb6b;
+    --syntax-number: #f78c6c;
+    --syntax-comment: #546e7a;
+    --syntax-header: #82aaff;
+    --syntax-bold: #ffffff;
+    --syntax-italic: #c792ea;
+    --syntax-link: #89ddff;
+    --syntax-code: #c3e88d;
+    --syntax-blockquote: #546e7a;
+    --syntax-list: #ffcb6b;
   }
 }
 
