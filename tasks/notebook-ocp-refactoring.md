@@ -8,13 +8,17 @@ Refactor the notebook cell system so that adding a new cell type requires only c
 | File | Issue |
 |------|-------|
 | `useCellExecution.ts:99-117` | Hardcoded checks for markdown/variable execution behavior |
-| `useCellExecution.ts:164-187` | Variable-specific options extraction |
+| `useCellExecution.ts:127-133` | Type-specific SQL extraction |
+| `useCellExecution.ts:164-187` | Variable-specific options extraction and auto-selection |
 | `useCellExecution.ts:218` | Markdown excluded from blocking |
+| `CellContainer.tsx:7-13` | Duplicate `CELL_TYPE_LABELS` constant |
 | `CellContainer.tsx:177-186` | Type badge hidden for markdown |
 | `CellContainer.tsx:194,230` | Run button hidden for markdown |
+| `CellEditor.tsx:7-13` | Duplicate `CELL_TYPE_LABELS` constant |
 | `CellEditor.tsx:106-108` | Boolean flags for which editor sections to show |
 | `CellEditor.tsx:152-213` | Conditional editor sections per type |
 | `notebook-utils.ts:146-163` | Switch statement in `createDefaultCell` |
+| `NotebookRenderer.tsx:42-48` | Duplicate `CELL_TYPE_OPTIONS` array |
 | `NotebookRenderer.tsx:369-406` | Type-specific prop mapping |
 
 ## Solution: Cell Type Metadata System
@@ -45,6 +49,9 @@ Rather than parameterizing editor sections with boolean flags, each cell type pr
 
 ```typescript
 // cell-registry.ts
+
+// Props for cell-specific editor content (type-specific fields only)
+// The wrapper CellEditor handles shared concerns: name editing, run/delete buttons, available variables
 export interface CellEditorProps {
   config: CellConfig
   onChange: (config: CellConfig) => void
@@ -54,7 +61,7 @@ export interface CellTypeMetadata {
   // Renderer component (displays cell output)
   readonly renderer: ComponentType<CellRendererProps>
 
-  // Editor component (configures cell settings)
+  // Editor component (type-specific config fields only)
   readonly EditorComponent: ComponentType<CellEditorProps>
 
   // Display
@@ -71,9 +78,17 @@ export interface CellTypeMetadata {
   // Factory
   readonly createDefaultConfig: (baseName: string) => Omit<CellConfig, 'name' | 'layout'>
 
+  // SQL extraction (for cells that have SQL)
+  readonly getSql?: (config: CellConfig) => string | undefined
+
   // Execution hooks (optional)
   readonly shouldSkipExecution?: (config: CellConfig) => boolean
   readonly processResult?: (result: Table, config: CellConfig) => Partial<CellState>
+  readonly onExecutionComplete?: (
+    config: CellConfig,
+    state: CellState,
+    context: { setVariableValue: (name: string, value: string) => void }
+  ) => void
 
   // Props extraction
   readonly getRendererProps: (config: CellConfig, state: CellState) => Partial<CellRendererProps>
@@ -199,6 +214,8 @@ export const tableMetadata: CellTypeMetadata = {
     sql: DEFAULT_SQL.table,
   }),
 
+  getSql: (config) => (config as QueryCellConfig).sql,
+
   getRendererProps: (config: CellConfig, state: CellState) => ({
     sql: (config as QueryCellConfig).sql,
     options: (config as QueryCellConfig).options,
@@ -264,6 +281,8 @@ export const variableMetadata: CellTypeMetadata = {
     defaultValue: '',
   }),
 
+  getSql: (config) => (config as VariableCellConfig).sql,
+
   shouldSkipExecution: (config) => {
     const varConfig = config as VariableCellConfig
     return varConfig.variableType !== 'combobox'
@@ -275,6 +294,15 @@ export const variableMetadata: CellTypeMetadata = {
       value: String(row.value),
     })),
   }),
+
+  // Auto-select first option if no value is set
+  onExecutionComplete: (config, state, { setVariableValue }) => {
+    const options = state.variableOptions
+    if (options && options.length > 0) {
+      // Only set if not already set (checked by caller)
+      setVariableValue(config.name, options[0].value)
+    }
+  },
 
   getRendererProps: (config, state) => ({
     variableType: (config as VariableCellConfig).variableType,
@@ -365,16 +393,31 @@ const executeCell = async (cellIndex: number): Promise<boolean> => {
     return true
   }
 
-  // ... rest of execution logic
-
-  // Process result using metadata hook
-  if (meta.processResult) {
-    const processed = meta.processResult(result, cell)
+  // Get SQL using metadata accessor (replaces type-specific casting)
+  const sql = meta.getSql?.(cell)
+  if (!sql) {
     setCellStates(prev => ({
       ...prev,
-      [cell.name]: { status: 'success', data: result, ...processed },
+      [cell.name]: { status: 'success', data: null },
     }))
+    return true
   }
+
+  // ... SQL execution logic ...
+
+  // Process result using metadata hook
+  const newState: CellState = { status: 'success', data: result }
+  if (meta.processResult) {
+    Object.assign(newState, meta.processResult(result, cell))
+  }
+  setCellStates(prev => ({ ...prev, [cell.name]: newState }))
+
+  // Post-execution side effects (e.g., auto-select first option for variables)
+  if (meta.onExecutionComplete && !variableValuesRef.current[cell.name]) {
+    meta.onExecutionComplete(cell, newState, { setVariableValue })
+  }
+
+  return true
 }
 ```
 
@@ -386,41 +429,103 @@ if (!meta.canBlockDownstream) continue  // instead of if (cell.type !== 'markdow
 ### Step 5: Refactor `CellContainer`
 **File:** `analytics-web-app/src/components/CellContainer.tsx`
 
-- Accept `metadata: CellTypeMetadata` prop (or look it up internally)
+- Remove local `CELL_TYPE_LABELS` constant - use `meta.label` instead
+- Accept `metadata: CellTypeMetadata` prop (or look it up internally via `getCellTypeMetadata(type)`)
 - Use `meta.showTypeBadge` instead of `type === 'markdown'`
+- Use `meta.label` for type badge text
 - Use `meta.isExecutable` instead of `type !== 'markdown'` for run button
 
 ### Step 6: Refactor `CellEditor`
 **File:** `analytics-web-app/src/components/CellEditor.tsx`
 
-Replace the conditional editor sections with metadata-driven rendering:
-- Look up metadata via `getCellTypeMetadata(cell.type)`
-- Render `<meta.EditorComponent config={cell} onChange={onCellChange} />`
-- The component becomes a thin wrapper that just renders the cell-specific editor
+`CellEditor` remains as a **wrapper** that handles shared concerns. It delegates only the type-specific content to `meta.EditorComponent`.
+
+**Shared concerns handled by wrapper:**
+- Cell name editing with uniqueness validation
+- Type badge display (using `meta.label`)
+- Run button (shown when `meta.isExecutable`)
+- Delete button
+- Available variables panel (shown when cell has SQL via `meta.getSql`)
+
+**Type-specific content delegated to metadata:**
+- SQL editor for query cells
+- Markdown textarea for markdown cells
+- Variable type selector + conditional SQL for variable cells
 
 ```typescript
-// CellEditor.tsx (simplified)
+// CellEditor.tsx
 import { getCellTypeMetadata } from '@/lib/screen-renderers/cell-registry'
 
-export function CellEditor({ cell, onChange }: CellEditorProps) {
+interface CellEditorWrapperProps {
+  cell: CellConfig
+  variables: Record<string, string>
+  timeRange: { begin: string; end: string }
+  existingNames: Set<string>
+  onClose: () => void
+  onUpdate: (updates: Partial<CellConfig>) => void
+  onRun: () => void
+  onDelete: () => void
+}
+
+export function CellEditor({
+  cell,
+  variables,
+  timeRange,
+  existingNames,
+  onClose,
+  onUpdate,
+  onRun,
+  onDelete,
+}: CellEditorWrapperProps) {
   const meta = getCellTypeMetadata(cell.type)
-  const EditorComponent = meta.EditorComponent
+
+  // Cell name editing with validation (shared)
+  const handleNameChange = (name: string) => {
+    const error = validateCellName(name, existingNames, cell.name)
+    if (!error) onUpdate({ name: sanitizeCellName(name) })
+  }
+
+  // Full config change handler for type-specific editor
+  const handleConfigChange = (newConfig: CellConfig) => {
+    onUpdate(newConfig)
+  }
 
   return (
     <div className="cell-editor">
-      <EditorComponent config={cell} onChange={onChange} />
+      {/* Header with type badge and close button */}
+      <div className="header">
+        <span className="type-badge">{meta.label}</span>
+        <button onClick={onClose}>×</button>
+      </div>
+
+      {/* Cell name input (shared) */}
+      <CellNameInput value={cell.name} onChange={handleNameChange} />
+
+      {/* Type-specific content */}
+      <meta.EditorComponent config={cell} onChange={handleConfigChange} />
+
+      {/* Available variables panel (shown for cells with SQL) */}
+      {meta.getSql?.(cell) !== undefined && (
+        <AvailableVariablesPanel variables={variables} timeRange={timeRange} />
+      )}
+
+      {/* Footer with Run/Delete buttons (shared) */}
+      <div className="footer">
+        {meta.isExecutable && <Button onClick={onRun}>Run</Button>}
+        <Button onClick={onDelete} variant="danger">Delete</Button>
+      </div>
     </div>
   )
 }
 ```
 
-Shared editor components (`SqlEditor`, `MarkdownEditor`, etc.) move to `@/components/` as reusable pieces that individual cell editors import.
-
 **Shared editor components** (extract from current `CellEditor.tsx`):
-- `SqlEditor` - Monaco-based SQL editor with syntax highlighting
+- `SqlEditor` - Textarea for SQL queries (could upgrade to Monaco later)
 - `MarkdownEditor` - Textarea for markdown content
 - `VariableTypeSelector` - Dropdown for text/number/combobox
-- `DefaultValueInput` - Input field for variable default values
+- `DefaultValueInput` - Input for variable default value
+- `CellNameInput` - Input with validation feedback
+- `AvailableVariablesPanel` - Shows $begin, $end, and user variables
 
 ### Step 7: Refactor `NotebookRenderer`
 **File:** `analytics-web-app/src/lib/screen-renderers/NotebookRenderer.tsx`
@@ -455,12 +560,14 @@ Delete this file - it was only used for side-effect imports to trigger `register
 ## Files to Create
 
 Shared editor components (extracted from current `CellEditor.tsx`):
-- `components/SqlEditor.tsx` - Monaco-based SQL editor
+- `components/SqlEditor.tsx` - Textarea for SQL queries
 - `components/MarkdownEditor.tsx` - Textarea for markdown content
 - `components/VariableTypeSelector.tsx` - Dropdown for variable type
 - `components/DefaultValueInput.tsx` - Input for variable default value
+- `components/CellNameInput.tsx` - Input with validation feedback (optional, could stay inline)
+- `components/AvailableVariablesPanel.tsx` - Shows $begin, $end, and user variables
 
-These are reusable pieces that cell-specific editors import as needed.
+These are reusable pieces that cell-specific editors and the CellEditor wrapper import as needed.
 
 ## Verification
 
