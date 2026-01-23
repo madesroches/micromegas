@@ -340,38 +340,42 @@ const validationError = validateVariableName(cell.name)
 **File:** `src/lib/screen-renderers/cell-types/VariableCellRenderer.tsx`
 
 For text/number inputs, debounce at the component level to prevent excessive URL updates
-while typing. This matches the pattern used in ProcessLogPage for search input.
+while typing. Uses the existing `useDebounce` hook (value debouncing pattern) from
+`src/hooks/useDebounce.ts`, matching the pattern in ProcessLogPage for search input.
+
+**Why value debouncing, not callback debouncing:**
+Callback debouncing with `useMemo(() => debounce(fn, 300), [deps])` breaks when
+dependencies change frequently. Since `setVariableValue` depends on `config.variables`,
+it recreates on every variable change, breaking debounce timing. Value debouncing
+avoids this by debouncing the value itself, not the update function.
 
 ```typescript
+import { useDebounce } from '@/hooks/useDebounce'
+
 // For text/number variable cells
 const [localValue, setLocalValue] = useState(variableValues[cell.name] ?? '')
+const debouncedValue = useDebounce(localValue, 300)
 
-// Debounced update to config
-const debouncedSetVariable = useMemo(
-  () => debounce((value: string) => {
-    setVariableValue(cell.name, value)
-  }, 300),
-  [cell.name, setVariableValue]
-)
-
-// Cleanup debounced function on unmount or dependency change
+// Sync debounced value to config
+const isInitialRef = useRef(true)
 useEffect(() => {
-  return () => debouncedSetVariable.cancel()
-}, [debouncedSetVariable])
+  // Skip initial render to avoid unnecessary URL update on mount
+  if (isInitialRef.current) {
+    isInitialRef.current = false
+    return
+  }
+  setVariableValue(cell.name, debouncedValue)
+}, [debouncedValue, cell.name, setVariableValue])
 
-// Handle input change
+// Handle input change - immediate local update, debounced config update
 const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-  const value = e.target.value
-  setLocalValue(value)           // Immediate UI update
-  debouncedSetVariable(value)    // Debounced config/URL update
+  setLocalValue(e.target.value)
 }
 
-// Sync local value when config changes (e.g., browser back/forward)
-// Cancel any pending debounce to avoid overwriting the external change
+// Sync local value when config changes externally (e.g., browser back/forward)
 useEffect(() => {
-  debouncedSetVariable.cancel()
   setLocalValue(variableValues[cell.name] ?? '')
-}, [variableValues[cell.name], debouncedSetVariable])
+}, [variableValues[cell.name]])
 ```
 
 **Note:** Combobox changes don't need debouncing since they're discrete selections.
