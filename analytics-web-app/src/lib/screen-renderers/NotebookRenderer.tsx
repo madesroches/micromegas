@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from 'react'
+import { useState, useCallback, useMemo, useEffect } from 'react'
 import { Plus, X } from 'lucide-react'
 import {
   DndContext,
@@ -30,6 +30,7 @@ import {
 import type { CellConfig, VariableCellConfig, NotebookConfig } from './notebook-types'
 import { CellContainer } from '@/components/CellContainer'
 import { CellEditor } from '@/components/CellEditor'
+import { ResizeHandle } from '@/components/ResizeHandle'
 import { Button } from '@/components/ui/button'
 import { SaveFooter } from './shared'
 import { useNotebookVariables } from './useNotebookVariables'
@@ -210,6 +211,20 @@ export function NotebookRenderer({
   const [showAddCellModal, setShowAddCellModal] = useState(false)
   const [deletingCellIndex, setDeletingCellIndex] = useState<number | null>(null)
   const [activeDragId, setActiveDragId] = useState<string | null>(null)
+
+  // Editor panel width (persisted to localStorage)
+  const [editorPanelWidth, setEditorPanelWidth] = useState(() => {
+    const saved = localStorage.getItem('notebook-editor-panel-width')
+    return saved ? parseInt(saved, 10) : 350
+  })
+
+  useEffect(() => {
+    localStorage.setItem('notebook-editor-panel-width', String(editorPanelWidth))
+  }, [editorPanelWidth])
+
+  const handleEditorPanelResize = useCallback((delta: number) => {
+    setEditorPanelWidth((prev) => Math.max(280, Math.min(800, prev - delta)))
+  }, [])
 
   // Existing cell names for uniqueness check
   const existingNames = useMemo(() => new Set(cells.map((c) => c.name)), [cells])
@@ -438,27 +453,33 @@ export function NotebookRenderer({
 
       {/* Right panel - Cell Editor */}
       {selectedCell && (
-        <div className="w-[350px] h-full bg-app-panel border-l border-theme-border flex flex-col flex-shrink-0 overflow-hidden">
-          <CellEditor
-            cell={selectedCell}
-            variables={variableValues}
-            timeRange={timeRange}
-            existingNames={existingNames}
-            onClose={() => setSelectedCellIndex(null)}
-            onUpdate={(updates) => updateCell(selectedCellIndex!, updates)}
-            onRun={() => executeCell(selectedCellIndex!)}
-            onDelete={() => setDeletingCellIndex(selectedCellIndex!)}
-          />
-          <div className="border-t border-theme-border flex-shrink-0">
-            <SaveFooter
-              onSave={onSave}
-              onSaveAs={onSaveAs}
-              isSaving={isSaving}
-              hasUnsavedChanges={hasUnsavedChanges}
-              saveError={saveError}
+        <>
+          <ResizeHandle orientation="horizontal" onResize={handleEditorPanelResize} />
+          <div
+            className="h-full bg-app-panel border-l border-theme-border flex flex-col flex-shrink-0 overflow-hidden"
+            style={{ width: editorPanelWidth }}
+          >
+            <CellEditor
+              cell={selectedCell}
+              variables={variableValues}
+              timeRange={timeRange}
+              existingNames={existingNames}
+              onClose={() => setSelectedCellIndex(null)}
+              onUpdate={(updates) => updateCell(selectedCellIndex!, updates)}
+              onRun={() => executeCell(selectedCellIndex!)}
+              onDelete={() => setDeletingCellIndex(selectedCellIndex!)}
             />
+            <div className="border-t border-theme-border flex-shrink-0">
+              <SaveFooter
+                onSave={onSave}
+                onSaveAs={onSaveAs}
+                isSaving={isSaving}
+                hasUnsavedChanges={hasUnsavedChanges}
+                saveError={saveError}
+              />
+            </div>
           </div>
-        </div>
+        </>
       )}
 
       {/* Modals */}

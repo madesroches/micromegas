@@ -279,9 +279,7 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
       )}
 
       {/* Resize Handle */}
-      {!collapsed && onHeightChange && (
-        <ResizeHandle onResize={handleResize} minHeight={50} />
-      )}
+      {!collapsed && onHeightChange && <ResizeHandle onResize={handleResize} />}
     </div>
   )
 })
