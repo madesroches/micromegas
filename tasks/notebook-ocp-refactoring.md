@@ -42,53 +42,57 @@ Each cell type lives in a single file (e.g., `TableCell.tsx`) containing both th
 ```typescript
 // cell-registry.ts
 export interface CellTypeMetadata {
+  // Renderer component
+  readonly renderer: ComponentType<CellRendererProps>
+
   // Display
-  label: string              // "Table", "Chart", etc.
-  icon: string               // "T", "C", etc.
-  description: string        // For add cell modal
-  showTypeBadge: boolean     // false for markdown
-  defaultHeight: number      // 300, 150, 60, etc.
+  readonly label: string              // "Table", "Chart", etc.
+  readonly icon: React.ReactNode      // "T", <TableIcon />, etc.
+  readonly description: string        // For add cell modal
+  readonly showTypeBadge: boolean     // false for markdown
+  readonly defaultHeight: number      // 300, 150, 60, etc.
 
   // Execution behavior
-  isExecutable: boolean      // false for markdown
-  requiresSql: boolean       // false for markdown, conditional for variable
-  canBlockDownstream: boolean // false for markdown
+  readonly isExecutable: boolean       // false for markdown
+  readonly canBlockDownstream: boolean // false for markdown
 
   // Editor configuration
-  editorSections: {
-    sql: boolean | ((config: CellConfig) => boolean)
-    content: boolean
-    variableType: boolean
-    defaultValue: boolean
+  readonly editorSections: {
+    readonly sql: boolean | ((config: CellConfig) => boolean)
+    readonly content: boolean
+    readonly variableType: boolean
+    readonly defaultValue: boolean
   }
 
   // Factory
-  createDefaultConfig: (baseName: string) => Omit<CellConfig, 'name' | 'layout'>
+  readonly createDefaultConfig: (baseName: string) => Omit<CellConfig, 'name' | 'layout'>
 
   // Execution hooks (optional)
-  shouldSkipExecution?: (config: CellConfig) => boolean
-  processResult?: (result: Table, config: CellConfig) => {
+  readonly shouldSkipExecution?: (config: CellConfig) => boolean
+  readonly processResult?: (result: Table, config: CellConfig) => {
     variableOptions?: { label: string; value: string }[]
   }
 
   // Props extraction
-  getRendererProps: (config: CellConfig, state: CellState) => Partial<CellRendererProps>
+  readonly getRendererProps: (config: CellConfig, state: CellState) => Partial<CellRendererProps>
 }
 ```
 
 ## Implementation Steps
 
-### Step 1: Create Cell Type Metadata Registry
+### Step 1: Create Unified Cell Type Registry
 **File:** `analytics-web-app/src/lib/screen-renderers/cell-registry.ts`
 
-- Add `CellTypeMetadata` interface
+- Add `CellTypeMetadata` interface (includes renderer component)
 - Add explicit imports from each cell metadata file
 - Build `CELL_TYPE_METADATA: Record<CellType, CellTypeMetadata>` as a static map
-- Add `getCellTypeMetadata(type)` helper function
+- Remove `registerCellRenderer()` and `CELL_RENDERERS` - derive renderer from metadata instead
+- Add `getCellTypeMetadata(type)` and `getCellRenderer(type)` helper functions
 - Add compile-time exhaustiveness check to catch missing registrations
 
 ```typescript
 // cell-registry.ts
+import { ComponentType } from 'react'
 import type { CellType } from './notebook-types'
 import { tableMetadata } from './cells/TableCell'
 import { chartMetadata } from './cells/ChartCell'
@@ -105,10 +109,15 @@ export const CELL_TYPE_METADATA: Record<CellType, CellTypeMetadata> = {
 }
 
 // Compile-time exhaustiveness check - fails if CellType has values not in the map
-const _exhaustiveCheck: Record<CellType, CellTypeMetadata> = CELL_TYPE_METADATA
+const _ensureAllCellTypesHaveMetadata: Record<CellType, CellTypeMetadata> = CELL_TYPE_METADATA
 
 export function getCellTypeMetadata(type: CellType): CellTypeMetadata {
   return CELL_TYPE_METADATA[type]
+}
+
+// Renderer lookup derived from metadata - replaces registerCellRenderer pattern
+export function getCellRenderer(type: CellType): ComponentType<CellRendererProps> {
+  return CELL_TYPE_METADATA[type].renderer
 }
 
 // Derive cell type options for UI from metadata
@@ -124,12 +133,11 @@ export const CELL_TYPE_OPTIONS = (Object.entries(CELL_TYPE_METADATA) as [CellTyp
 ### Step 2: Add Metadata to Each Cell File
 **Files:** `cells/TableCell.tsx`, `cells/ChartCell.tsx`, etc.
 
-Each cell file becomes a self-contained module with renderer, metadata, and type-specific logic. This is the canonical structure for all cell files:
+Each cell file becomes a self-contained module exporting a single metadata object that includes the renderer component. No separate registration call needed.
 
 ```typescript
 // cells/TableCell.tsx
-import { registerCellRenderer } from '../cell-renderers'
-import type { CellTypeMetadata } from '../cell-registry'
+import type { CellTypeMetadata, CellRendererProps } from '../cell-registry'
 import type { QueryCellConfig, CellConfig, CellState } from '../notebook-types'
 import { DEFAULT_SQL } from '../notebook-utils'
 
@@ -137,24 +145,18 @@ import { DEFAULT_SQL } from '../notebook-utils'
 // Renderer Component
 // =============================================================================
 
-interface TableCellProps {
-  sql: string
-  options?: TableOptions
-  data: Table | null
-  status: CellStatus
-}
-
-function TableCell({ sql, options, data, status }: TableCellProps) {
+function TableCell({ data, status }: CellRendererProps) {
   // ... existing implementation
 }
 
-registerCellRenderer('table', TableCell)
-
 // =============================================================================
-// Cell Type Metadata
+// Cell Type Metadata (includes renderer)
 // =============================================================================
 
 export const tableMetadata: CellTypeMetadata = {
+  // Renderer
+  renderer: TableCell,
+
   // Display
   label: 'Table',
   icon: 'T',
@@ -164,7 +166,6 @@ export const tableMetadata: CellTypeMetadata = {
 
   // Execution behavior
   isExecutable: true,
-  requiresSql: true,
   canBlockDownstream: true,
 
   // Editor configuration
@@ -195,7 +196,13 @@ export const tableMetadata: CellTypeMetadata = {
 
 ```typescript
 // cells/VariableCell.tsx
+function VariableCell({ value, onValueChange, variableType, variableOptions }: CellRendererProps) {
+  // ... existing implementation
+}
+
 export const variableMetadata: CellTypeMetadata = {
+  renderer: VariableCell,
+
   label: 'Variable',
   icon: 'V',
   description: 'Reusable parameter for queries',
@@ -203,7 +210,6 @@ export const variableMetadata: CellTypeMetadata = {
   defaultHeight: 60,
 
   isExecutable: true,
-  requiresSql: false,  // Only when variableType is 'options'
   canBlockDownstream: true,
 
   editorSections: {
@@ -213,7 +219,7 @@ export const variableMetadata: CellTypeMetadata = {
     defaultValue: true,
   },
 
-  createDefaultConfig: (baseName) => ({
+  createDefaultConfig: () => ({
     type: 'variable',
     variableType: 'text',
     defaultValue: '',
@@ -224,7 +230,7 @@ export const variableMetadata: CellTypeMetadata = {
     return varConfig.variableType !== 'options'
   },
 
-  processResult: (result, config) => ({
+  processResult: (result) => ({
     variableOptions: result.toArray().map((row) => ({
       label: String(row.label ?? row.value),
       value: String(row.value),
@@ -235,6 +241,44 @@ export const variableMetadata: CellTypeMetadata = {
     variableType: (config as VariableCellConfig).variableType,
     defaultValue: (config as VariableCellConfig).defaultValue,
     options: state.variableOptions,
+  }),
+}
+```
+
+**Markdown cell example** (non-executable, no SQL):
+
+```typescript
+// cells/MarkdownCell.tsx
+function MarkdownCell({ content, isEditing, onContentChange }: CellRendererProps) {
+  // ... existing implementation
+}
+
+export const markdownMetadata: CellTypeMetadata = {
+  renderer: MarkdownCell,
+
+  label: 'Markdown',
+  icon: 'M',
+  description: 'Documentation and notes',
+  showTypeBadge: false,
+  defaultHeight: 150,
+
+  isExecutable: false,
+  canBlockDownstream: false,
+
+  editorSections: {
+    sql: false,
+    content: true,
+    variableType: false,
+    defaultValue: false,
+  },
+
+  createDefaultConfig: () => ({
+    type: 'markdown',
+    content: '# Notes\n\nAdd your documentation here.',
+  }),
+
+  getRendererProps: (config) => ({
+    content: (config as MarkdownCellConfig).content,
   }),
 }
 ```
@@ -313,24 +357,28 @@ if (!meta.canBlockDownstream) continue  // instead of if (cell.type !== 'markdow
 - Use `meta.getRendererProps(cell, state)` for prop extraction
 - Use `meta.canBlockDownstream` for status text logic
 
-### Step 8: Update Cell Index
+### Step 8: Remove cells/index.ts
 **File:** `analytics-web-app/src/lib/screen-renderers/cells/index.ts`
 
-No changes needed - each cell file already exports its metadata alongside the renderer registration. The `cell-registry.ts` imports metadata directly from each cell file.
+Delete this file - it was only used for side-effect imports to trigger `registerCellRenderer`. With the unified registry, `cell-registry.ts` imports metadata directly from each cell file.
 
 ## Files to Modify
 
-1. `cell-registry.ts` - Add metadata types, static registry map, and helper functions
+1. `cell-registry.ts` - Replace `registerCellRenderer`/`CELL_RENDERERS` with unified metadata registry
 2. `notebook-utils.ts` - Replace `createDefaultCell` switch
 3. `useCellExecution.ts` - Replace type checks with metadata
 4. `CellContainer.tsx` - Use metadata for conditional rendering
 5. `CellEditor.tsx` - Use metadata for editor sections
-6. `NotebookRenderer.tsx` - Use `CELL_TYPE_OPTIONS` from registry, use metadata for props
-7. `cells/TableCell.tsx` - Add `tableMetadata` export
-8. `cells/ChartCell.tsx` - Add `chartMetadata` export
-9. `cells/LogCell.tsx` - Add `logMetadata` export
-10. `cells/MarkdownCell.tsx` - Add `markdownMetadata` export
-11. `cells/VariableCell.tsx` - Add `variableMetadata` export
+6. `NotebookRenderer.tsx` - Use `getCellRenderer` from registry, use metadata for props
+7. `cells/TableCell.tsx` - Remove `registerCellRenderer` call, add `tableMetadata` export with renderer
+8. `cells/ChartCell.tsx` - Remove `registerCellRenderer` call, add `chartMetadata` export with renderer
+9. `cells/LogCell.tsx` - Remove `registerCellRenderer` call, add `logMetadata` export with renderer
+10. `cells/MarkdownCell.tsx` - Remove `registerCellRenderer` call, add `markdownMetadata` export with renderer
+11. `cells/VariableCell.tsx` - Remove `registerCellRenderer` call, add `variableMetadata` export with renderer
+
+## Files to Delete
+
+1. `cells/index.ts` - No longer needed (side-effect imports replaced by explicit metadata imports)
 
 ## Files to Create
 
@@ -355,8 +403,7 @@ After this refactoring, adding a new cell type requires:
 1. Add the type to `CellType` union in `notebook-types.ts`
 2. Create `cells/NewCell.tsx` with:
    - Renderer component
-   - `registerCellRenderer('newtype', NewCell)`
-   - `export const newtypeMetadata: CellTypeMetadata = { ... }`
+   - `export const newtypeMetadata: CellTypeMetadata = { renderer: NewCell, ... }`
 3. Add import to `cell-registry.ts`: `import { newtypeMetadata } from './cells/NewCell'`
 4. Add entry to `CELL_TYPE_METADATA` map
 
