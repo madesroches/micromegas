@@ -45,16 +45,29 @@ Each cell type lives in a single file (e.g., `TableCell.tsx`) containing both th
 
 Rather than parameterizing editor sections with boolean flags, each cell type provides its own editor component. This avoids coupling the metadata interface to specific editor sections - a new cell type can have completely different editing needs without changing the interface. Shared UI pieces (like `SqlEditor`) are just reusable components that cell editors import as needed.
 
+**Design choice: Cells own their execution**
+
+The container doesn't know how cells execute - it just provides a `runQuery` helper and lets each cell handle its own execution logic. This keeps the interface query-language agnostic. A future cell type could use GraphQL, REST, or anything else without changing the metadata interface. The container only cares about results, not how they're obtained.
+
 ### New Types
 
 ```typescript
 // cell-registry.ts
 
-// Props for cell-specific editor content (type-specific fields only)
-// The wrapper CellEditor handles shared concerns: name editing, run/delete buttons, available variables
+// Context provided to cell execution
+export interface CellExecutionContext {
+  variables: Record<string, string>
+  timeRange: { begin: string; end: string }
+  runQuery: (sql: string) => Promise<Table>
+}
+
+// Props for cell-specific editor content
+// Includes variables/timeRange so editors can show available variables panel if needed
 export interface CellEditorProps {
   config: CellConfig
   onChange: (config: CellConfig) => void
+  variables: Record<string, string>
+  timeRange: { begin: string; end: string }
 }
 
 export interface CellTypeMetadata {
@@ -72,18 +85,20 @@ export interface CellTypeMetadata {
   readonly defaultHeight: number      // 300, 150, 60, etc.
 
   // Execution behavior
-  readonly isExecutable: boolean       // false for markdown
   readonly canBlockDownstream: boolean // false for markdown
 
   // Factory
   readonly createDefaultConfig: (baseName: string) => Omit<CellConfig, 'name' | 'layout'>
 
-  // SQL extraction (for cells that have SQL)
-  readonly getSql?: (config: CellConfig) => string | undefined
+  // Execution - cell owns its execution entirely
+  // Returns null if nothing to execute, CellState updates otherwise
+  // Absence of this method means the cell doesn't execute
+  readonly execute?: (
+    config: CellConfig,
+    context: CellExecutionContext
+  ) => Promise<Partial<CellState> | null>
 
-  // Execution hooks (optional)
-  readonly shouldSkipExecution?: (config: CellConfig) => boolean
-  readonly processResult?: (result: Table, config: CellConfig) => Partial<CellState>
+  // Post-execution hook (e.g., auto-select first option for variables)
   readonly onExecutionComplete?: (
     config: CellConfig,
     state: CellState,
@@ -101,6 +116,7 @@ export interface CellTypeMetadata {
 **File:** `analytics-web-app/src/lib/screen-renderers/cell-registry.ts`
 
 - Add `CellTypeMetadata` interface (includes renderer component)
+- Add `CellExecutionContext` interface
 - Add explicit imports from each cell metadata file
 - Build `CELL_TYPE_METADATA: Record<CellType, CellTypeMetadata>` as a static map
 - Remove `registerCellRenderer()` and `CELL_RENDERERS` - derive renderer from metadata instead
@@ -110,17 +126,27 @@ export interface CellTypeMetadata {
 ```typescript
 // cell-registry.ts
 import { ComponentType } from 'react'
-import type { CellType, CellConfig } from './notebook-types'
+import type { CellType, CellConfig, CellState } from './notebook-types'
+import type { Table } from 'apache-arrow'
 import { tableMetadata } from './cells/TableCell'
 import { chartMetadata } from './cells/ChartCell'
 import { logMetadata } from './cells/LogCell'
 import { markdownMetadata } from './cells/MarkdownCell'
 import { variableMetadata } from './cells/VariableCell'
 
+// Context provided to cell execution
+export interface CellExecutionContext {
+  variables: Record<string, string>
+  timeRange: { begin: string; end: string }
+  runQuery: (sql: string) => Promise<Table>
+}
+
 // Props for cell-specific editors (each cell type implements its own)
 export interface CellEditorProps {
   config: CellConfig
   onChange: (config: CellConfig) => void
+  variables: Record<string, string>
+  timeRange: { begin: string; end: string }
 }
 
 export const CELL_TYPE_METADATA: Record<CellType, CellTypeMetadata> = {
@@ -165,9 +191,11 @@ Each cell file becomes a self-contained module exporting a single metadata objec
 
 ```typescript
 // cells/TableCell.tsx
-import type { CellTypeMetadata, CellRendererProps, CellEditorProps } from '../cell-registry'
+import type { CellTypeMetadata, CellRendererProps, CellEditorProps, CellExecutionContext } from '../cell-registry'
 import type { QueryCellConfig, CellConfig, CellState } from '../notebook-types'
 import { SqlEditor } from '@/components/SqlEditor'
+import { AvailableVariablesPanel } from '@/components/AvailableVariablesPanel'
+import { substituteVariables } from '../notebook-utils'
 import { DEFAULT_SQL } from '../notebook-utils'
 
 // =============================================================================
@@ -182,13 +210,16 @@ function TableCell({ data, status }: CellRendererProps) {
 // Editor Component
 // =============================================================================
 
-function TableCellEditor({ config, onChange }: CellEditorProps) {
+function TableCellEditor({ config, onChange, variables, timeRange }: CellEditorProps) {
   const tableConfig = config as QueryCellConfig
   return (
-    <SqlEditor
-      value={tableConfig.sql}
-      onChange={(sql) => onChange({ ...tableConfig, sql })}
-    />
+    <>
+      <SqlEditor
+        value={tableConfig.sql}
+        onChange={(sql) => onChange({ ...tableConfig, sql })}
+      />
+      <AvailableVariablesPanel variables={variables} timeRange={timeRange} />
+    </>
   )
 }
 
@@ -206,7 +237,6 @@ export const tableMetadata: CellTypeMetadata = {
   showTypeBadge: true,
   defaultHeight: 300,
 
-  isExecutable: true,
   canBlockDownstream: true,
 
   createDefaultConfig: () => ({
@@ -214,11 +244,13 @@ export const tableMetadata: CellTypeMetadata = {
     sql: DEFAULT_SQL.table,
   }),
 
-  getSql: (config) => (config as QueryCellConfig).sql,
+  execute: async (config, { variables, timeRange, runQuery }) => {
+    const sql = substituteVariables((config as QueryCellConfig).sql, variables, timeRange)
+    const data = await runQuery(sql)
+    return { data }
+  },
 
   getRendererProps: (config: CellConfig, state: CellState) => ({
-    sql: (config as QueryCellConfig).sql,
-    options: (config as QueryCellConfig).options,
     data: state.data,
     status: state.status,
   }),
@@ -229,18 +261,19 @@ export const tableMetadata: CellTypeMetadata = {
 
 ```typescript
 // cells/VariableCell.tsx
-import type { CellTypeMetadata, CellRendererProps, CellEditorProps } from '../cell-registry'
+import type { CellTypeMetadata, CellRendererProps, CellEditorProps, CellExecutionContext } from '../cell-registry'
 import type { VariableCellConfig, CellConfig, CellState } from '../notebook-types'
 import { SqlEditor } from '@/components/SqlEditor'
+import { AvailableVariablesPanel } from '@/components/AvailableVariablesPanel'
 import { VariableTypeSelector } from '@/components/VariableTypeSelector'
 import { DefaultValueInput } from '@/components/DefaultValueInput'
-import { DEFAULT_SQL } from '../notebook-utils'
+import { substituteVariables } from '../notebook-utils'
 
 function VariableCell({ value, onValueChange, variableType, variableOptions }: CellRendererProps) {
   // ... existing implementation
 }
 
-function VariableCellEditor({ config, onChange }: CellEditorProps) {
+function VariableCellEditor({ config, onChange, variables, timeRange }: CellEditorProps) {
   const varConfig = config as VariableCellConfig
   return (
     <>
@@ -249,10 +282,13 @@ function VariableCellEditor({ config, onChange }: CellEditorProps) {
         onChange={(variableType) => onChange({ ...varConfig, variableType })}
       />
       {varConfig.variableType === 'combobox' && (
-        <SqlEditor
-          value={varConfig.sql ?? ''}
-          onChange={(sql) => onChange({ ...varConfig, sql })}
-        />
+        <>
+          <SqlEditor
+            value={varConfig.sql ?? ''}
+            onChange={(sql) => onChange({ ...varConfig, sql })}
+          />
+          <AvailableVariablesPanel variables={variables} timeRange={timeRange} />
+        </>
       )}
       <DefaultValueInput
         value={varConfig.defaultValue ?? ''}
@@ -272,7 +308,6 @@ export const variableMetadata: CellTypeMetadata = {
   showTypeBadge: true,
   defaultHeight: 60,
 
-  isExecutable: true,
   canBlockDownstream: true,
 
   createDefaultConfig: () => ({
@@ -281,19 +316,21 @@ export const variableMetadata: CellTypeMetadata = {
     defaultValue: '',
   }),
 
-  getSql: (config) => (config as VariableCellConfig).sql,
-
-  shouldSkipExecution: (config) => {
+  execute: async (config, { variables, timeRange, runQuery }) => {
     const varConfig = config as VariableCellConfig
-    return varConfig.variableType !== 'combobox'
+    // Only combobox variables need execution
+    if (varConfig.variableType !== 'combobox' || !varConfig.sql) {
+      return null  // Nothing to execute
+    }
+    const sql = substituteVariables(varConfig.sql, variables, timeRange)
+    const result = await runQuery(sql)
+    return {
+      variableOptions: result.toArray().map((row) => ({
+        label: String(row.label ?? row.value),
+        value: String(row.value),
+      })),
+    }
   },
-
-  processResult: (result) => ({
-    variableOptions: result.toArray().map((row) => ({
-      label: String(row.label ?? row.value),
-      value: String(row.value),
-    })),
-  }),
 
   // Auto-select first option if no value is set
   onExecutionComplete: (config, state, { setVariableValue }) => {
@@ -325,6 +362,7 @@ function MarkdownCell({ content, isEditing, onContentChange }: CellRendererProps
 }
 
 function MarkdownCellEditor({ config, onChange }: CellEditorProps) {
+  // Note: variables/timeRange available in props but not used - markdown doesn't need them
   const mdConfig = config as MarkdownCellConfig
   return (
     <MarkdownEditor
@@ -344,13 +382,14 @@ export const markdownMetadata: CellTypeMetadata = {
   showTypeBadge: false,
   defaultHeight: 150,
 
-  isExecutable: false,
   canBlockDownstream: false,
 
   createDefaultConfig: () => ({
     type: 'markdown',
     content: '# Notes\n\nAdd your documentation here.',
   }),
+
+  // No execute method - markdown cells don't execute
 
   getRendererProps: (config) => ({
     content: (config as MarkdownCellConfig).content,
@@ -378,14 +417,15 @@ export function createDefaultCell(type: CellType, existingNames: Set<string>): C
 ### Step 4: Refactor `useCellExecution`
 **File:** `analytics-web-app/src/lib/screen-renderers/useCellExecution.ts`
 
-Replace type checks with metadata lookups:
+Replace type checks with metadata lookups. The container no longer knows about SQL - it just provides a `runQuery` helper and lets cells handle their own execution:
+
 ```typescript
 const executeCell = async (cellIndex: number): Promise<boolean> => {
   const cell = cells[cellIndex]
   const meta = getCellTypeMetadata(cell.type)
 
-  // Check if execution should be skipped
-  if (!meta.isExecutable || meta.shouldSkipExecution?.(cell)) {
+  // Cell doesn't execute (e.g., markdown)
+  if (!meta.execute) {
     setCellStates(prev => ({
       ...prev,
       [cell.name]: { status: 'success', data: null },
@@ -393,31 +433,39 @@ const executeCell = async (cellIndex: number): Promise<boolean> => {
     return true
   }
 
-  // Get SQL using metadata accessor (replaces type-specific casting)
-  const sql = meta.getSql?.(cell)
-  if (!sql) {
+  setCellStates(prev => ({
+    ...prev,
+    [cell.name]: { status: 'running', data: null },
+  }))
+
+  try {
+    const context: CellExecutionContext = {
+      variables: variableValuesRef.current,
+      timeRange,
+      runQuery: (sql) => flightSqlClient.query(sql),
+    }
+
+    const result = await meta.execute(cell, context)
+
+    const newState: CellState = result
+      ? { status: 'success', ...result }
+      : { status: 'success', data: null }
+
+    setCellStates(prev => ({ ...prev, [cell.name]: newState }))
+
+    // Post-execution side effects (e.g., auto-select first option for variables)
+    if (meta.onExecutionComplete && !variableValuesRef.current[cell.name]) {
+      meta.onExecutionComplete(cell, newState, { setVariableValue })
+    }
+
+    return true
+  } catch (error) {
     setCellStates(prev => ({
       ...prev,
-      [cell.name]: { status: 'success', data: null },
+      [cell.name]: { status: 'error', error: String(error), data: null },
     }))
-    return true
+    return false
   }
-
-  // ... SQL execution logic ...
-
-  // Process result using metadata hook
-  const newState: CellState = { status: 'success', data: result }
-  if (meta.processResult) {
-    Object.assign(newState, meta.processResult(result, cell))
-  }
-  setCellStates(prev => ({ ...prev, [cell.name]: newState }))
-
-  // Post-execution side effects (e.g., auto-select first option for variables)
-  if (meta.onExecutionComplete && !variableValuesRef.current[cell.name]) {
-    meta.onExecutionComplete(cell, newState, { setVariableValue })
-  }
-
-  return true
 }
 ```
 
@@ -433,23 +481,22 @@ if (!meta.canBlockDownstream) continue  // instead of if (cell.type !== 'markdow
 - Accept `metadata: CellTypeMetadata` prop (or look it up internally via `getCellTypeMetadata(type)`)
 - Use `meta.showTypeBadge` instead of `type === 'markdown'`
 - Use `meta.label` for type badge text
-- Use `meta.isExecutable` instead of `type !== 'markdown'` for run button
+- Use `meta.execute` presence instead of `type !== 'markdown'` for run button
 
 ### Step 6: Refactor `CellEditor`
 **File:** `analytics-web-app/src/components/CellEditor.tsx`
 
-`CellEditor` remains as a **wrapper** that handles shared concerns. It delegates only the type-specific content to `meta.EditorComponent`.
+`CellEditor` remains as a **wrapper** that handles shared concerns. It delegates the type-specific content (including whether to show the available variables panel) entirely to `meta.EditorComponent`.
 
 **Shared concerns handled by wrapper:**
 - Cell name editing with uniqueness validation
 - Type badge display (using `meta.label`)
-- Run button (shown when `meta.isExecutable`)
+- Run button (shown when `meta.execute` exists)
 - Delete button
-- Available variables panel (shown when cell has SQL via `meta.getSql`)
 
 **Type-specific content delegated to metadata:**
-- SQL editor for query cells
-- Markdown textarea for markdown cells
+- SQL editor for query cells (with variables panel)
+- Markdown textarea for markdown cells (no variables panel)
 - Variable type selector + conditional SQL for variable cells
 
 ```typescript
@@ -501,17 +548,17 @@ export function CellEditor({
       {/* Cell name input (shared) */}
       <CellNameInput value={cell.name} onChange={handleNameChange} />
 
-      {/* Type-specific content */}
-      <meta.EditorComponent config={cell} onChange={handleConfigChange} />
-
-      {/* Available variables panel (shown for cells with SQL) */}
-      {meta.getSql?.(cell) !== undefined && (
-        <AvailableVariablesPanel variables={variables} timeRange={timeRange} />
-      )}
+      {/* Type-specific content - each editor decides what to show */}
+      <meta.EditorComponent
+        config={cell}
+        onChange={handleConfigChange}
+        variables={variables}
+        timeRange={timeRange}
+      />
 
       {/* Footer with Run/Delete buttons (shared) */}
       <div className="footer">
-        {meta.isExecutable && <Button onClick={onRun}>Run</Button>}
+        {meta.execute && <Button onClick={onRun}>Run</Button>}
         <Button onClick={onDelete} variant="danger">Delete</Button>
       </div>
     </div>
@@ -541,17 +588,17 @@ Delete this file - it was only used for side-effect imports to trigger `register
 
 ## Files to Modify
 
-1. `cell-registry.ts` - Replace `registerCellRenderer`/`CELL_RENDERERS` with unified metadata registry, add `CellEditorProps` interface
+1. `cell-registry.ts` - Replace `registerCellRenderer`/`CELL_RENDERERS` with unified metadata registry, add `CellEditorProps` and `CellExecutionContext` interfaces
 2. `notebook-utils.ts` - Replace `createDefaultCell` switch
-3. `useCellExecution.ts` - Replace type checks with metadata
+3. `useCellExecution.ts` - Replace type checks with metadata, delegate execution to cells
 4. `CellContainer.tsx` - Use metadata for conditional rendering
 5. `CellEditor.tsx` - Simplify to render `meta.EditorComponent`, remove conditional section logic
 6. `NotebookRenderer.tsx` - Use `getCellRenderer` from registry, use metadata for props
-7. `cells/TableCell.tsx` - Remove `registerCellRenderer` call, add `TableCellEditor` and `tableMetadata` export
-8. `cells/ChartCell.tsx` - Remove `registerCellRenderer` call, add `ChartCellEditor` and `chartMetadata` export
-9. `cells/LogCell.tsx` - Remove `registerCellRenderer` call, add `LogCellEditor` and `logMetadata` export
-10. `cells/MarkdownCell.tsx` - Remove `registerCellRenderer` call, add `MarkdownCellEditor` and `markdownMetadata` export
-11. `cells/VariableCell.tsx` - Remove `registerCellRenderer` call, add `VariableCellEditor` and `variableMetadata` export
+7. `cells/TableCell.tsx` - Remove `registerCellRenderer` call, add `TableCellEditor` and `tableMetadata` export with `execute` method
+8. `cells/ChartCell.tsx` - Remove `registerCellRenderer` call, add `ChartCellEditor` and `chartMetadata` export with `execute` method
+9. `cells/LogCell.tsx` - Remove `registerCellRenderer` call, add `LogCellEditor` and `logMetadata` export with `execute` method
+10. `cells/MarkdownCell.tsx` - Remove `registerCellRenderer` call, add `MarkdownCellEditor` and `markdownMetadata` export (no `execute` method)
+11. `cells/VariableCell.tsx` - Remove `registerCellRenderer` call, add `VariableCellEditor` and `variableMetadata` export with `execute` method
 
 ## Files to Delete
 
@@ -567,7 +614,7 @@ Shared editor components (extracted from current `CellEditor.tsx`):
 - `components/CellNameInput.tsx` - Input with validation feedback (optional, could stay inline)
 - `components/AvailableVariablesPanel.tsx` - Shows $begin, $end, and user variables
 
-These are reusable pieces that cell-specific editors and the CellEditor wrapper import as needed.
+These are reusable pieces that cell-specific editors import as needed.
 
 ## Verification
 
@@ -576,8 +623,8 @@ These are reusable pieces that cell-specific editors and the CellEditor wrapper 
 3. `yarn test` - Run existing tests
 4. Manual testing:
    - Add each cell type (table, chart, log, markdown, variable)
-   - Verify execution behavior (markdown doesn't execute, variable text/number skip SQL)
-   - Verify each cell type's editor renders correctly (SQL editor for table/chart/log, content editor for markdown, variable type selector + conditional SQL for variable)
+   - Verify execution behavior (markdown doesn't execute, variable text/number return null from execute)
+   - Verify each cell type's editor renders correctly (SQL editor + variables panel for table/chart/log, content editor for markdown, variable type selector + conditional SQL for variable)
    - Verify run buttons appear/hide correctly (hidden for markdown)
    - Verify type badges appear/hide correctly (hidden for markdown)
    - Verify blocking behavior works (markdown cells don't block downstream)
@@ -589,8 +636,8 @@ After this refactoring, adding a new cell type requires:
 1. Add the type to `CellType` union in `notebook-types.ts`
 2. Create `cells/NewCell.tsx` with:
    - Renderer component (`NewCell`)
-   - Editor component (`NewCellEditor`)
-   - Metadata export: `export const newtypeMetadata: CellTypeMetadata = { renderer: NewCell, EditorComponent: NewCellEditor, ... }`
+   - Editor component (`NewCellEditor`) - includes `AvailableVariablesPanel` if it uses queries
+   - Metadata export: `export const newtypeMetadata: CellTypeMetadata = { renderer: NewCell, EditorComponent: NewCellEditor, execute: async (config, ctx) => { ... }, ... }`
 3. Add import to `cell-registry.ts`: `import { newtypeMetadata } from './cells/NewCell'`
 4. Add entry to `CELL_TYPE_METADATA` map
 
