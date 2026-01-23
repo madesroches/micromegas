@@ -758,6 +758,7 @@ export function NotebookRenderer({
             cell={selectedCell}
             variables={variableValues}
             timeRange={timeRange}
+            existingNames={existingNames}
             onClose={() => setSelectedCellIndex(null)}
             onUpdate={(updates) => updateCell(selectedCellIndex!, updates)}
             onRun={() => executeCell(selectedCellIndex!)}

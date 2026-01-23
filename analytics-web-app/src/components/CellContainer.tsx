@@ -152,13 +152,17 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
             )}
           </button>
 
-          {/* Cell type badge */}
-          <span className="text-[11px] px-1.5 py-0.5 rounded bg-app-panel text-theme-text-secondary uppercase font-medium">
-            {CELL_TYPE_LABELS[type]}
-          </span>
-
-          {/* Cell title */}
-          <span className="font-medium text-theme-text-primary">{name}</span>
+          {/* For markdown: show name only. For others: show type badge + name */}
+          {type === 'markdown' ? (
+            <span className="font-medium text-theme-text-primary">{name}</span>
+          ) : (
+            <>
+              <span className="text-[11px] px-1.5 py-0.5 rounded bg-app-panel text-theme-text-secondary uppercase font-medium">
+                {CELL_TYPE_LABELS[type]}
+              </span>
+              <span className="font-medium text-theme-text-primary">{name}</span>
+            </>
+          )}
         </div>
 
         <div className="flex items-center gap-2">

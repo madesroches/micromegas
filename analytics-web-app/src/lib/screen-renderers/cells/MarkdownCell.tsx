@@ -144,14 +144,9 @@ function renderMarkdown(content: string): React.ReactNode {
 export function MarkdownCell({ content, isEditing, onContentChange }: CellRendererProps) {
   const markdownContent = content || ''
 
-  // In edit mode, show a textarea
+  // In edit mode, just render the markdown (editing is done in the side panel)
   if (isEditing && onContentChange) {
-    return (
-      <div className="space-y-2">
-        <div className="text-xs text-theme-text-muted">Preview:</div>
-        <div className="prose prose-invert max-w-none">{renderMarkdown(markdownContent)}</div>
-      </div>
-    )
+    return <div className="prose prose-invert max-w-none">{renderMarkdown(markdownContent)}</div>
   }
 
   // In view mode, render the markdown

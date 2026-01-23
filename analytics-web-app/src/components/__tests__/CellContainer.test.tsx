@@ -42,16 +42,23 @@ describe('CellContainer', () => {
     })
 
     it('should render all cell type badges correctly', () => {
-      const types = ['table', 'chart', 'log', 'markdown', 'variable'] as const
-      const labels = ['Table', 'Chart', 'Log', 'Markdown', 'Variable']
+      // Non-markdown cells show type badge
+      const typesWithBadge = ['table', 'chart', 'log', 'variable'] as const
+      const labels = ['Table', 'Chart', 'Log', 'Variable']
 
-      types.forEach((type, index) => {
+      typesWithBadge.forEach((type, index) => {
         const { unmount } = render(
           <CellContainer {...defaultProps} type={type} />
         )
         expect(screen.getByText(labels[index])).toBeInTheDocument()
         unmount()
       })
+    })
+
+    it('should show cell name instead of type badge for markdown cells', () => {
+      render(<CellContainer {...defaultProps} type="markdown" name="My Notes" />)
+      expect(screen.getByText('My Notes')).toBeInTheDocument()
+      expect(screen.queryByText('Markdown')).not.toBeInTheDocument()
     })
   })
 

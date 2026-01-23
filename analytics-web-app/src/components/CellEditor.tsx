@@ -26,6 +26,7 @@ interface CellEditorProps {
   cell: CellConfig
   variables: Record<string, string>
   timeRange: { begin: string; end: string }
+  existingNames: Set<string>
   onClose: () => void
   onUpdate: (updates: Partial<CellConfig>) => void
   onRun: () => void
@@ -36,6 +37,7 @@ export function CellEditor({
   cell,
   variables,
   timeRange,
+  existingNames,
   onClose,
   onUpdate,
   onRun,
@@ -45,12 +47,14 @@ export function CellEditor({
   const [editedSql, setEditedSql] = useState(cell.sql || '')
   const [editedContent, setEditedContent] = useState(cell.content || '')
   const [editedName, setEditedName] = useState(cell.name)
+  const [nameError, setNameError] = useState<string | null>(null)
 
   // Reset local state when cell changes
   useEffect(() => {
     setEditedSql(cell.sql || '')
     setEditedContent(cell.content || '')
     setEditedName(cell.name)
+    setNameError(null)
   }, [cell.name, cell.sql, cell.content])
 
   // Save SQL changes
@@ -71,13 +75,23 @@ export function CellEditor({
     [onUpdate]
   )
 
-  // Save name changes
+  // Save name changes with uniqueness validation
   const handleNameChange = useCallback(
     (value: string) => {
       setEditedName(value)
+      // Check if name is duplicate (excluding current cell's original name)
+      if (value !== cell.name && existingNames.has(value)) {
+        setNameError('A cell with this name already exists')
+        return
+      }
+      if (value.trim() === '') {
+        setNameError('Cell name cannot be empty')
+        return
+      }
+      setNameError(null)
       onUpdate({ name: value })
     },
-    [onUpdate]
+    [onUpdate, cell.name, existingNames]
   )
 
   // Build available variables list
@@ -121,8 +135,15 @@ export function CellEditor({
             type="text"
             value={editedName}
             onChange={(e) => handleNameChange(e.target.value)}
-            className="w-full px-3 py-2 bg-app-card border border-theme-border rounded-md text-theme-text-primary text-sm focus:outline-none focus:border-accent-link"
+            className={`w-full px-3 py-2 bg-app-card border rounded-md text-theme-text-primary text-sm focus:outline-none ${
+              nameError
+                ? 'border-accent-error focus:border-accent-error'
+                : 'border-theme-border focus:border-accent-link'
+            }`}
           />
+          {nameError && (
+            <p className="mt-1 text-xs text-accent-error">{nameError}</p>
+          )}
         </div>
 
         {/* Variable Type (for variable cells - shown first to control SQL visibility) */}

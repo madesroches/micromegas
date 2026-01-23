@@ -238,20 +238,7 @@ Visit [our docs](https://docs.example.com) for more.`
   })
 
   describe('edit mode', () => {
-    it('should show preview label in edit mode', () => {
-      render(
-        <MarkdownCell
-          {...createMockProps({
-            content: '# Title',
-            isEditing: true,
-            onContentChange: jest.fn(),
-          })}
-        />
-      )
-      expect(screen.getByText('Preview:')).toBeInTheDocument()
-    })
-
-    it('should render markdown preview in edit mode', () => {
+    it('should render markdown in edit mode', () => {
       render(
         <MarkdownCell
           {...createMockProps({
@@ -264,7 +251,7 @@ Visit [our docs](https://docs.example.com) for more.`
       expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Title')
     })
 
-    it('should not show preview label in view mode', () => {
+    it('should render markdown in view mode', () => {
       render(
         <MarkdownCell
           {...createMockProps({
@@ -273,7 +260,7 @@ Visit [our docs](https://docs.example.com) for more.`
           })}
         />
       )
-      expect(screen.queryByText('Preview:')).not.toBeInTheDocument()
+      expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Title')
     })
   })
 })
