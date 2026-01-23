@@ -1,6 +1,5 @@
-import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
+import { useState, useCallback, useMemo } from 'react'
 import { Plus, X } from 'lucide-react'
-import { Table } from 'apache-arrow'
 import {
   DndContext,
   closestCenter,
@@ -21,12 +20,13 @@ import {
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { registerRenderer, ScreenRendererProps } from './index'
-import { CellType, CellStatus, getCellRenderer } from './cell-registry'
+import { CellType, getCellRenderer } from './cell-registry'
 import { CellContainer } from '@/components/CellContainer'
 import { CellEditor } from '@/components/CellEditor'
-import { streamQuery } from '@/lib/arrow-stream'
 import { Button } from '@/components/ui/button'
 import { SaveFooter } from './shared'
+import { useNotebookVariables } from './useNotebookVariables'
+import { useCellExecution } from './useCellExecution'
 
 import {
   CellConfig,
@@ -34,31 +34,17 @@ import {
   MarkdownCellConfig,
   VariableCellConfig,
   createDefaultCell,
-  substituteMacros,
 } from './notebook-utils'
 
 // ============================================================================
-// Types (owned by NotebookRenderer, not shared)
+// Types
 // ============================================================================
 
-/**
- * Config for screens with type: 'notebook'.
- * Time range is handled at the screen level, same as other screen types.
- */
 interface NotebookConfig {
   cells: CellConfig[]
   refreshInterval?: number
   timeRangeFrom?: string
   timeRangeTo?: string
-}
-
-/** Execution state for a cell */
-interface CellState {
-  status: CellStatus
-  error?: string
-  data: Table | null
-  /** For variable cells (combobox): options loaded from query */
-  variableOptions?: { label: string; value: string }[]
 }
 
 // Cell type options for the add cell modal
@@ -69,41 +55,6 @@ const CELL_TYPE_OPTIONS: { type: CellType; name: string; description: string; ic
   { type: 'markdown', name: 'Markdown', description: 'Documentation and notes', icon: 'M' },
   { type: 'variable', name: 'Variable', description: 'User input (dropdown, text, number)', icon: 'V' },
 ]
-
-// ============================================================================
-// Helper functions
-// ============================================================================
-
-// Execute a single SQL query and return the result table
-async function executeSql(
-  sql: string,
-  timeRange: { begin: string; end: string },
-  abortSignal: AbortSignal
-): Promise<Table> {
-  const batches: import('apache-arrow').RecordBatch[] = []
-
-  for await (const result of streamQuery(
-    {
-      sql,
-      params: { begin: timeRange.begin, end: timeRange.end },
-      begin: timeRange.begin,
-      end: timeRange.end,
-    },
-    abortSignal
-  )) {
-    if (result.type === 'batch') {
-      batches.push(result.batch)
-    } else if (result.type === 'error') {
-      throw new Error(result.error.message)
-    }
-  }
-
-  if (batches.length === 0) {
-    // Return empty table
-    return new Table()
-  }
-  return new Table(batches)
-}
 
 // ============================================================================
 // Modal Components
@@ -209,14 +160,7 @@ interface SortableCellProps {
 }
 
 function SortableCell({ id, children }: SortableCellProps) {
-  const {
-    attributes,
-    listeners,
-    setNodeRef,
-    transform,
-    transition,
-    isDragging,
-  } = useSortable({ id })
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id })
 
   const style: React.CSSProperties = {
     transform: CSS.Transform.toString(transform),
@@ -243,7 +187,7 @@ export function NotebookRenderer({
   saveError,
   refreshTrigger,
 }: ScreenRendererProps) {
-  // Cast config to NotebookConfig
+  // Parse config
   const notebookConfig = useMemo(() => {
     const cfg = config as unknown as NotebookConfig | null
     return cfg && cfg.cells ? cfg : { cells: [] }
@@ -251,52 +195,38 @@ export function NotebookRenderer({
 
   const cells = notebookConfig.cells
 
-  // Cell execution states
-  const [cellStates, setCellStates] = useState<Record<string, CellState>>({})
+  // Variable values management
+  const { variableValues, variableValuesRef, setVariableValue, migrateVariable, removeVariable } =
+    useNotebookVariables(cells)
 
-  // Variable values (collected from variable cells)
-  const [variableValues, setVariableValues] = useState<Record<string, string>>({})
-  // Ref for synchronous access during sequential execution (state updates are async)
-  const variableValuesRef = useRef<Record<string, string>>({})
+  // Cell execution state management
+  const { cellStates, executeCell, executeFromCell, migrateCellState, removeCellState } = useCellExecution({
+    cells,
+    timeRange,
+    variableValuesRef,
+    setVariableValue,
+    refreshTrigger,
+  })
 
-  // Selected cell index
+  // UI state
   const [selectedCellIndex, setSelectedCellIndex] = useState<number | null>(null)
-
-  // Add cell modal
   const [showAddCellModal, setShowAddCellModal] = useState(false)
-
-  // Delete confirmation
   const [deletingCellIndex, setDeletingCellIndex] = useState<number | null>(null)
-
-  // Abort controller for cancelling queries
-  const abortControllerRef = useRef<AbortController | null>(null)
-
-  // Get existing cell names for uniqueness check
-  const existingNames = useMemo(() => {
-    return new Set(cells.map((c) => c.name))
-  }, [cells])
-
-  // Drag and drop state
   const [activeDragId, setActiveDragId] = useState<string | null>(null)
 
-  // Drag and drop sensors
+  // Existing cell names for uniqueness check
+  const existingNames = useMemo(() => new Set(cells.map((c) => c.name)), [cells])
+
+  // Drag and drop
   const sensors = useSensors(
-    useSensor(PointerSensor, {
-      activationConstraint: {
-        distance: 8, // Require 8px movement before starting drag
-      },
-    }),
-    useSensor(KeyboardSensor, {
-      coordinateGetter: sortableKeyboardCoordinates,
-    })
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   )
 
-  // Handle drag start - track active cell
   const handleDragStart = useCallback((event: DragStartEvent) => {
     setActiveDragId(event.active.id as string)
   }, [])
 
-  // Handle drag end - reorder cells
   const handleDragEnd = useCallback(
     (event: DragEndEvent) => {
       setActiveDragId(null)
@@ -305,7 +235,6 @@ export function NotebookRenderer({
 
       const oldIndex = cells.findIndex((c) => c.name === active.id)
       const newIndex = cells.findIndex((c) => c.name === over.id)
-
       if (oldIndex === -1 || newIndex === -1) return
 
       const newCells = arrayMove(cells, oldIndex, newIndex)
@@ -316,7 +245,6 @@ export function NotebookRenderer({
       if (selectedCellIndex === oldIndex) {
         setSelectedCellIndex(newIndex)
       } else if (selectedCellIndex !== null) {
-        // Adjust selection if it was affected by the move
         if (oldIndex < selectedCellIndex && newIndex >= selectedCellIndex) {
           setSelectedCellIndex(selectedCellIndex - 1)
         } else if (oldIndex > selectedCellIndex && newIndex <= selectedCellIndex) {
@@ -327,184 +255,7 @@ export function NotebookRenderer({
     [cells, notebookConfig, onConfigChange, onUnsavedChange, selectedCellIndex]
   )
 
-  // Initialize variable values from config defaults
-  useEffect(() => {
-    const initialValues: Record<string, string> = {}
-    for (const cell of cells) {
-      if (cell.type === 'variable') {
-        const varCell = cell as VariableCellConfig
-        if (varCell.defaultValue && !variableValues[cell.name]) {
-          initialValues[cell.name] = varCell.defaultValue
-        }
-      }
-    }
-    if (Object.keys(initialValues).length > 0) {
-      variableValuesRef.current = { ...variableValuesRef.current, ...initialValues }
-      setVariableValues((prev) => ({ ...prev, ...initialValues }))
-    }
-  }, [cells]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Execute a single cell
-  const executeCell = useCallback(
-    async (cellIndex: number): Promise<boolean> => {
-      const cell = cells[cellIndex]
-      if (!cell) return false
-
-      // Handle markdown cells (no execution needed)
-      if (cell.type === 'markdown') {
-        setCellStates((prev) => ({
-          ...prev,
-          [cell.name]: { status: 'success', data: null },
-        }))
-        return true
-      }
-
-      // Handle text/number variable cells (no SQL execution)
-      if (cell.type === 'variable') {
-        const varCell = cell as VariableCellConfig
-        if (varCell.variableType === 'text' || varCell.variableType === 'number') {
-          setCellStates((prev) => ({
-            ...prev,
-            [cell.name]: { status: 'success', data: null },
-          }))
-          return true
-        }
-      }
-
-      // Mark cell as loading
-      setCellStates((prev) => ({
-        ...prev,
-        [cell.name]: { ...prev[cell.name], status: 'loading', error: undefined, data: null },
-      }))
-
-      // Get SQL from cell
-      let sql: string | undefined
-      if (cell.type === 'variable') {
-        const varCell = cell as VariableCellConfig
-        sql = varCell.sql
-      } else {
-        const queryCell = cell as QueryCellConfig
-        sql = queryCell.sql
-      }
-
-      if (!sql) {
-        setCellStates((prev) => ({
-          ...prev,
-          [cell.name]: { status: 'success', data: null },
-        }))
-        return true
-      }
-
-      // Gather variables from cells above (use ref for synchronous access during execution)
-      const availableVariables: Record<string, string> = {}
-      for (let i = 0; i < cellIndex; i++) {
-        const prevCell = cells[i]
-        if (prevCell.type === 'variable' && variableValuesRef.current[prevCell.name] !== undefined) {
-          availableVariables[prevCell.name] = variableValuesRef.current[prevCell.name]
-        }
-      }
-
-      // Substitute macros
-      const substitutedSql = substituteMacros(sql, availableVariables, timeRange)
-
-      // Create new abort controller for this execution
-      abortControllerRef.current?.abort()
-      abortControllerRef.current = new AbortController()
-
-      try {
-        const result = await executeSql(substitutedSql, timeRange, abortControllerRef.current.signal)
-
-        // For variable cells, extract options from result
-        // Convention: 1 column = value+label, 2 columns = value then label
-        if (cell.type === 'variable') {
-          const options: { label: string; value: string }[] = []
-          if (result && result.numRows > 0 && result.numCols > 0) {
-            const schema = result.schema
-            const valueColName = schema.fields[0].name
-            const labelColName = schema.fields.length > 1 ? schema.fields[1].name : valueColName
-            for (let i = 0; i < result.numRows; i++) {
-              const row = result.get(i)
-              if (row) {
-                const value = String(row[valueColName] ?? '')
-                const label = String(row[labelColName] ?? value)
-                options.push({ label, value })
-              }
-            }
-          }
-          setCellStates((prev) => ({
-            ...prev,
-            [cell.name]: { status: 'success', data: result, variableOptions: options },
-          }))
-          // Set default value if not already set (update ref synchronously for next cell)
-          if (!variableValuesRef.current[cell.name] && options.length > 0) {
-            const newValue = options[0].value
-            variableValuesRef.current = { ...variableValuesRef.current, [cell.name]: newValue }
-            setVariableValues((prev) => ({ ...prev, [cell.name]: newValue }))
-          }
-        } else {
-          setCellStates((prev) => ({
-            ...prev,
-            [cell.name]: { status: 'success', data: result },
-          }))
-        }
-        return true
-      } catch (err) {
-        if (err instanceof Error && err.name === 'AbortError') {
-          return false
-        }
-        const errorMessage = err instanceof Error ? err.message : String(err)
-        setCellStates((prev) => ({
-          ...prev,
-          [cell.name]: { status: 'error', error: errorMessage, data: null },
-        }))
-        return false
-      }
-    },
-    [cells, timeRange]
-  )
-
-  // Execute from a cell index (that cell and all below)
-  const executeFromCell = useCallback(
-    async (startIndex: number) => {
-      for (let i = startIndex; i < cells.length; i++) {
-        const success = await executeCell(i)
-        if (!success) {
-          // Mark remaining cells as blocked
-          for (let j = i + 1; j < cells.length; j++) {
-            const blockedCell = cells[j]
-            if (blockedCell.type !== 'markdown') {
-              setCellStates((prev) => ({
-                ...prev,
-                [blockedCell.name]: { status: 'blocked', data: null },
-              }))
-            }
-          }
-          break
-        }
-      }
-    },
-    [cells, executeCell]
-  )
-
-  // Execute all cells on initial load
-  const hasExecutedRef = useRef(false)
-  useEffect(() => {
-    if (!hasExecutedRef.current && cells.length > 0) {
-      hasExecutedRef.current = true
-      executeFromCell(0)
-    }
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Re-execute on refresh trigger
-  const prevRefreshRef = useRef(refreshTrigger)
-  useEffect(() => {
-    if (prevRefreshRef.current !== refreshTrigger) {
-      prevRefreshRef.current = refreshTrigger
-      executeFromCell(0)
-    }
-  }, [refreshTrigger, executeFromCell])
-
-  // Add a new cell
+  // Cell management
   const handleAddCell = useCallback(
     (type: CellType) => {
       const newCell = createDefaultCell(type, existingNames)
@@ -512,37 +263,25 @@ export function NotebookRenderer({
       onConfigChange({ ...notebookConfig, cells: newCells })
       onUnsavedChange()
       setShowAddCellModal(false)
-      // Select the new cell
       setSelectedCellIndex(newCells.length - 1)
     },
     [notebookConfig, cells, existingNames, onConfigChange, onUnsavedChange]
   )
 
-  // Delete a cell
   const handleDeleteCell = useCallback(
     (index: number) => {
       const cell = cells[index]
       const newCells = cells.filter((_, i) => i !== index)
       onConfigChange({ ...notebookConfig, cells: newCells })
       onUnsavedChange()
-      // Remove cell state
-      setCellStates((prev) => {
-        const next = { ...prev }
-        delete next[cell.name]
-        return next
-      })
-      // Remove variable value if applicable
+
+      // Clean up state
+      removeCellState(cell.name)
       if (cell.type === 'variable') {
-        const nextRef = { ...variableValuesRef.current }
-        delete nextRef[cell.name]
-        variableValuesRef.current = nextRef
-        setVariableValues((prev) => {
-          const next = { ...prev }
-          delete next[cell.name]
-          return next
-        })
+        removeVariable(cell.name)
       }
-      // Clear selection if deleted cell was selected
+
+      // Update selection
       if (selectedCellIndex === index) {
         setSelectedCellIndex(null)
       } else if (selectedCellIndex !== null && selectedCellIndex > index) {
@@ -550,50 +289,25 @@ export function NotebookRenderer({
       }
       setDeletingCellIndex(null)
     },
-    [notebookConfig, cells, onConfigChange, onUnsavedChange, selectedCellIndex]
+    [notebookConfig, cells, onConfigChange, onUnsavedChange, selectedCellIndex, removeCellState, removeVariable]
   )
 
-  // Update cell config using functional update to ensure atomic operations on latest state
   const updateCell = useCallback(
     (index: number, updates: Partial<CellConfig>) => {
-      // Use functional update to always operate on the current config (MVC: update model atomically)
       onConfigChange((prev) => {
         const prevNotebook = (prev as unknown as NotebookConfig) || { cells: [] }
         const currentCells = prevNotebook.cells || []
         const cell = currentCells[index]
-        if (!cell) return prev // Guard against invalid index
+        if (!cell) return prev
 
         const newCells = [...currentCells]
         newCells[index] = { ...cell, ...updates } as CellConfig
 
-        // If renaming any cell, migrate execution state to new name
+        // Handle rename: migrate state to new name
         if (updates.name && updates.name !== cell.name) {
-          const oldName = cell.name
-          const newName = updates.name
-          setCellStates((prevStates) => {
-            const next = { ...prevStates }
-            if (oldName in next) {
-              next[newName] = next[oldName]
-              delete next[oldName]
-            }
-            return next
-          })
-          // For variable cells, also migrate the stored value
+          migrateCellState(cell.name, updates.name)
           if (cell.type === 'variable') {
-            const nextRef = { ...variableValuesRef.current }
-            if (oldName in nextRef) {
-              nextRef[newName] = nextRef[oldName]
-              delete nextRef[oldName]
-              variableValuesRef.current = nextRef
-            }
-            setVariableValues((prevValues) => {
-              const next = { ...prevValues }
-              if (oldName in next) {
-                next[newName] = next[oldName]
-                delete next[oldName]
-              }
-              return next
-            })
+            migrateVariable(cell.name, updates.name)
           }
         }
 
@@ -601,38 +315,25 @@ export function NotebookRenderer({
       })
       onUnsavedChange()
     },
-    [onConfigChange, onUnsavedChange]
+    [onConfigChange, onUnsavedChange, migrateCellState, migrateVariable]
   )
 
-  // Toggle cell collapsed
   const toggleCellCollapsed = useCallback(
     (index: number) => {
       const cell = cells[index]
-      updateCell(index, {
-        layout: { ...cell.layout, collapsed: !cell.layout.collapsed },
-      })
+      updateCell(index, { layout: { ...cell.layout, collapsed: !cell.layout.collapsed } })
     },
     [cells, updateCell]
   )
 
-  // Handle variable value change
-  const handleVariableChange = useCallback(
-    (cellName: string, value: string) => {
-      variableValuesRef.current = { ...variableValuesRef.current, [cellName]: value }
-      setVariableValues((prev) => ({ ...prev, [cellName]: value }))
-    },
-    []
-  )
-
-  // Get the selected cell
+  // Render
   const selectedCell = selectedCellIndex !== null ? cells[selectedCellIndex] : null
 
-  // Render a cell
   const renderCell = (cell: CellConfig, index: number) => {
     const state = cellStates[cell.name] || { status: 'idle', data: null }
     const CellRenderer = getCellRenderer(cell.type)
 
-    // Gather variables available to this cell (from cells above)
+    // Variables available to this cell (from cells above)
     const availableVariables: Record<string, string> = {}
     for (let i = 0; i < index; i++) {
       const prevCell = cells[i]
@@ -661,10 +362,11 @@ export function NotebookRenderer({
             onRunFromHere={() => executeFromCell(index)}
             onDelete={() => setDeletingCellIndex(index)}
             statusText={
-              // Don't show row count for text/number variable cells
               cell.type === 'variable' && (cell as VariableCellConfig).variableType !== 'combobox'
                 ? undefined
-                : state.data ? `${state.data.numRows} rows` : undefined
+                : state.data
+                  ? `${state.data.numRows} rows`
+                  : undefined
             }
             height={cell.layout.height}
           >
@@ -672,7 +374,9 @@ export function NotebookRenderer({
               <CellRenderer
                 name={cell.name}
                 sql={cell.type !== 'markdown' ? (cell as QueryCellConfig | VariableCellConfig).sql : undefined}
-                options={cell.type !== 'markdown' && cell.type !== 'variable' ? (cell as QueryCellConfig).options : undefined}
+                options={
+                  cell.type !== 'markdown' && cell.type !== 'variable' ? (cell as QueryCellConfig).options : undefined
+                }
                 data={state.data}
                 status={state.status}
                 error={state.error}
@@ -689,18 +393,12 @@ export function NotebookRenderer({
                     : undefined
                 }
                 value={cell.type === 'variable' ? variableValues[cell.name] : undefined}
-                onValueChange={
-                  cell.type === 'variable'
-                    ? (value) => handleVariableChange(cell.name, value)
-                    : undefined
-                }
+                onValueChange={cell.type === 'variable' ? (value) => setVariableValue(cell.name, value) : undefined}
                 variableType={cell.type === 'variable' ? (cell as VariableCellConfig).variableType : undefined}
                 variableOptions={cell.type === 'variable' ? state.variableOptions : undefined}
               />
             ) : (
-              <div className="text-theme-text-muted">
-                No renderer for cell type: {cell.type}
-              </div>
+              <div className="text-theme-text-muted">No renderer for cell type: {cell.type}</div>
             )}
           </CellContainer>
         )}
@@ -712,21 +410,16 @@ export function NotebookRenderer({
     <div className="flex h-full">
       {/* Main content area */}
       <div className="flex-1 flex flex-col p-6 min-w-0 overflow-auto">
-        {/* Cells */}
         <DndContext
           sensors={sensors}
           collisionDetection={closestCenter}
           onDragStart={handleDragStart}
           onDragEnd={handleDragEnd}
         >
-          <SortableContext
-            items={cells.map((c) => c.name)}
-            strategy={verticalListSortingStrategy}
-          >
+          <SortableContext items={cells.map((c) => c.name)} strategy={verticalListSortingStrategy}>
             <div className="flex flex-col gap-3">
               {cells.map((cell, index) => renderCell(cell, index))}
 
-              {/* Add Cell button */}
               <button
                 onClick={() => setShowAddCellModal(true)}
                 className="w-full py-3 border-2 border-dashed border-theme-border rounded-lg bg-transparent text-theme-text-muted hover:border-accent-link hover:text-accent-link hover:bg-accent-link/10 transition-colors"
@@ -753,7 +446,7 @@ export function NotebookRenderer({
 
       {/* Right panel - Cell Editor */}
       {selectedCell && (
-        <div className="w-[350px] bg-app-panel border-l border-theme-border flex flex-col flex-shrink-0">
+        <div className="w-[350px] h-full bg-app-panel border-l border-theme-border flex flex-col flex-shrink-0 overflow-hidden">
           <CellEditor
             cell={selectedCell}
             variables={variableValues}
@@ -764,7 +457,7 @@ export function NotebookRenderer({
             onRun={() => executeCell(selectedCellIndex!)}
             onDelete={() => setDeletingCellIndex(selectedCellIndex!)}
           />
-          <div className="border-t border-theme-border">
+          <div className="border-t border-theme-border flex-shrink-0">
             <SaveFooter
               onSave={onSave}
               onSaveAs={onSaveAs}
@@ -776,14 +469,8 @@ export function NotebookRenderer({
         </div>
       )}
 
-      {/* Add Cell Modal */}
-      <AddCellModal
-        isOpen={showAddCellModal}
-        onClose={() => setShowAddCellModal(false)}
-        onAdd={handleAddCell}
-      />
-
-      {/* Delete Confirmation Modal */}
+      {/* Modals */}
+      <AddCellModal isOpen={showAddCellModal} onClose={() => setShowAddCellModal(false)} onAdd={handleAddCell} />
       <DeleteCellModal
         isOpen={deletingCellIndex !== null}
         cellName={deletingCellIndex !== null ? cells[deletingCellIndex]?.name || '' : ''}

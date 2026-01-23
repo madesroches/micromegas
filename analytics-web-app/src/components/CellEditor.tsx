@@ -106,7 +106,7 @@ export function CellEditor({
   const showContentEditor = cell.type === 'markdown'
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col flex-1 min-h-0">
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-theme-border">
         <div className="flex items-center gap-2">
@@ -230,17 +230,11 @@ export function CellEditor({
 
       {/* Footer */}
       <div className="p-3 border-t border-theme-border space-y-2">
-        {/* Run button (for cells with SQL, not for text/number variables) */}
-        {showSqlEditor && cell.type !== 'variable' && (
+        {/* Run button (for cells with SQL) */}
+        {showSqlEditor && (
           <Button onClick={onRun} className="w-full gap-2">
             <Play className="w-4 h-4" />
-            Run Cell
-          </Button>
-        )}
-        {isComboboxVariable && (
-          <Button onClick={onRun} className="w-full gap-2">
-            <Play className="w-4 h-4" />
-            Load Options
+            Run
           </Button>
         )}
 
