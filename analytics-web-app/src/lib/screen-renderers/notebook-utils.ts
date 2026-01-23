@@ -154,6 +154,26 @@ export function createDefaultCell(type: CellType, existingNames: Set<string>): C
 }
 
 /**
+ * Notebook config interface for type-safe comparisons.
+ */
+export interface NotebookConfig {
+  cells: CellConfig[]
+  refreshInterval?: number
+  timeRangeFrom?: string
+  timeRangeTo?: string
+}
+
+/**
+ * Deep comparison of two notebook configs using JSON serialization.
+ * Works because configs are JSON-serializable by design.
+ */
+export function notebookConfigsEqual(a: NotebookConfig | null, b: NotebookConfig | null): boolean {
+  if (a === b) return true
+  if (!a || !b) return false
+  return JSON.stringify(a) === JSON.stringify(b)
+}
+
+/**
  * Substitutes macros in SQL with variable values and time range.
  * - $begin and $end are replaced with quoted timestamps
  * - User variables are replaced without quotes (SQL author controls quoting)

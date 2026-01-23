@@ -33,19 +33,10 @@ import {
   QueryCellConfig,
   MarkdownCellConfig,
   VariableCellConfig,
+  NotebookConfig,
   createDefaultCell,
+  notebookConfigsEqual,
 } from './notebook-utils'
-
-// ============================================================================
-// Types
-// ============================================================================
-
-interface NotebookConfig {
-  cells: CellConfig[]
-  refreshInterval?: number
-  timeRangeFrom?: string
-  timeRangeTo?: string
-}
 
 // Cell type options for the add cell modal
 const CELL_TYPE_OPTIONS: { type: CellType; name: string; description: string; icon: string }[] = [
@@ -177,7 +168,7 @@ function SortableCell({ id, children }: SortableCellProps) {
 export function NotebookRenderer({
   config,
   onConfigChange,
-  savedConfig: _savedConfig,
+  savedConfig,
   onUnsavedChange,
   timeRange,
   onSave,
@@ -193,7 +184,23 @@ export function NotebookRenderer({
     return cfg && cfg.cells ? cfg : { cells: [] }
   }, [config])
 
+  // Parse saved config for comparison
+  const savedNotebookConfig = useMemo(() => {
+    const cfg = savedConfig as unknown as NotebookConfig | null
+    return cfg && cfg.cells ? cfg : null
+  }, [savedConfig])
+
   const cells = notebookConfig.cells
+
+  // Helper to mark unsaved only if config differs from saved
+  const markUnsavedIfChanged = useCallback(
+    (newConfig: NotebookConfig) => {
+      if (!notebookConfigsEqual(newConfig, savedNotebookConfig)) {
+        onUnsavedChange()
+      }
+    },
+    [savedNotebookConfig, onUnsavedChange]
+  )
 
   // Variable values management
   const { variableValues, variableValuesRef, setVariableValue, migrateVariable, removeVariable } =
@@ -238,8 +245,9 @@ export function NotebookRenderer({
       if (oldIndex === -1 || newIndex === -1) return
 
       const newCells = arrayMove(cells, oldIndex, newIndex)
-      onConfigChange({ ...notebookConfig, cells: newCells })
-      onUnsavedChange()
+      const newConfig = { ...notebookConfig, cells: newCells }
+      onConfigChange(newConfig)
+      markUnsavedIfChanged(newConfig)
 
       // Update selected cell index if needed
       if (selectedCellIndex === oldIndex) {
@@ -252,7 +260,7 @@ export function NotebookRenderer({
         }
       }
     },
-    [cells, notebookConfig, onConfigChange, onUnsavedChange, selectedCellIndex]
+    [cells, notebookConfig, onConfigChange, markUnsavedIfChanged, selectedCellIndex]
   )
 
   // Cell management
@@ -260,20 +268,22 @@ export function NotebookRenderer({
     (type: CellType) => {
       const newCell = createDefaultCell(type, existingNames)
       const newCells = [...cells, newCell]
-      onConfigChange({ ...notebookConfig, cells: newCells })
-      onUnsavedChange()
+      const newConfig = { ...notebookConfig, cells: newCells }
+      onConfigChange(newConfig)
+      markUnsavedIfChanged(newConfig)
       setShowAddCellModal(false)
       setSelectedCellIndex(newCells.length - 1)
     },
-    [notebookConfig, cells, existingNames, onConfigChange, onUnsavedChange]
+    [notebookConfig, cells, existingNames, onConfigChange, markUnsavedIfChanged]
   )
 
   const handleDeleteCell = useCallback(
     (index: number) => {
       const cell = cells[index]
       const newCells = cells.filter((_, i) => i !== index)
-      onConfigChange({ ...notebookConfig, cells: newCells })
-      onUnsavedChange()
+      const newConfig = { ...notebookConfig, cells: newCells }
+      onConfigChange(newConfig)
+      markUnsavedIfChanged(newConfig)
 
       // Clean up state
       removeCellState(cell.name)
@@ -289,33 +299,30 @@ export function NotebookRenderer({
       }
       setDeletingCellIndex(null)
     },
-    [notebookConfig, cells, onConfigChange, onUnsavedChange, selectedCellIndex, removeCellState, removeVariable]
+    [notebookConfig, cells, onConfigChange, markUnsavedIfChanged, selectedCellIndex, removeCellState, removeVariable]
   )
 
   const updateCell = useCallback(
     (index: number, updates: Partial<CellConfig>) => {
-      onConfigChange((prev) => {
-        const prevNotebook = (prev as unknown as NotebookConfig) || { cells: [] }
-        const currentCells = prevNotebook.cells || []
-        const cell = currentCells[index]
-        if (!cell) return prev
+      const cell = cells[index]
+      if (!cell) return
 
-        const newCells = [...currentCells]
-        newCells[index] = { ...cell, ...updates } as CellConfig
+      const newCells = [...cells]
+      newCells[index] = { ...cell, ...updates } as CellConfig
 
-        // Handle rename: migrate state to new name
-        if (updates.name && updates.name !== cell.name) {
-          migrateCellState(cell.name, updates.name)
-          if (cell.type === 'variable') {
-            migrateVariable(cell.name, updates.name)
-          }
+      // Handle rename: migrate state to new name
+      if (updates.name && updates.name !== cell.name) {
+        migrateCellState(cell.name, updates.name)
+        if (cell.type === 'variable') {
+          migrateVariable(cell.name, updates.name)
         }
+      }
 
-        return { ...prevNotebook, cells: newCells }
-      })
-      onUnsavedChange()
+      const newConfig = { ...notebookConfig, cells: newCells }
+      onConfigChange(newConfig)
+      markUnsavedIfChanged(newConfig)
     },
-    [onConfigChange, onUnsavedChange, migrateCellState, migrateVariable]
+    [cells, notebookConfig, onConfigChange, markUnsavedIfChanged, migrateCellState, migrateVariable]
   )
 
   const toggleCellCollapsed = useCallback(
