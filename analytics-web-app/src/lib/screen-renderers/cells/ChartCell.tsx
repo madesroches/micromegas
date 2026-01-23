@@ -53,7 +53,7 @@ export function ChartCell({ data, status, options, onOptionsChange }: CellRender
   const { data: chartData, xAxisMode, xLabels, xColumnName, yColumnName } = chartResult
 
   return (
-    <div className="h-[250px]">
+    <div className="h-full">
       <XYChart
         data={chartData}
         xAxisMode={xAxisMode}

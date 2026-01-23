@@ -374,6 +374,9 @@ export function NotebookRenderer({
                   : undefined
             }
             height={cell.layout.height}
+            onHeightChange={(newHeight) =>
+              updateCell(index, { layout: { ...cell.layout, height: newHeight } })
+            }
           >
             {CellRenderer ? (
               <CellRenderer

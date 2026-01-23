@@ -76,7 +76,7 @@ export function TableCell({ data, status }: CellRendererProps) {
   }))
 
   return (
-    <div className="overflow-auto max-h-[400px] bg-app-bg border border-theme-border rounded-md">
+    <div className="overflow-auto h-full bg-app-bg border border-theme-border rounded-md">
       <table className="w-full text-sm">
         <thead className="sticky top-0">
           <tr className="bg-app-card border-b border-theme-border">

@@ -227,9 +227,9 @@ describe('createDefaultCell', () => {
       expect((cell as { sql: string }).sql).toBe(DEFAULT_SQL.table)
     })
 
-    it('should have auto height layout', () => {
+    it('should have default fixed height layout', () => {
       const cell = createDefaultCell('table', new Set())
-      expect(cell.layout).toEqual({ height: 'auto' })
+      expect(cell.layout).toEqual({ height: 300 })
     })
   })
 

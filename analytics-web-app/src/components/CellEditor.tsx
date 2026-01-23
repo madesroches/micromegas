@@ -20,7 +20,7 @@ interface CellConfig {
   options?: Record<string, unknown>
   variableType?: 'combobox' | 'text' | 'number'
   defaultValue?: string
-  layout: { height: number | 'auto'; collapsed?: boolean }
+  layout: { height: number; collapsed?: boolean }
 }
 
 interface CellEditorProps {

@@ -7,7 +7,7 @@ import { CellType } from './cell-registry'
 export interface CellConfigBase {
   name: string
   type: CellType
-  layout: { height: number | 'auto'; collapsed?: boolean }
+  layout: { height: number; collapsed?: boolean }
 }
 
 export interface QueryCellConfig extends CellConfigBase {
@@ -128,10 +128,19 @@ export function createDefaultCell(type: CellType, existingNames: Set<string>): C
     name = `${baseName}_${counter}`
   }
 
+  // Type-specific default heights
+  const defaultHeights: Record<CellType, number> = {
+    table: 300,
+    log: 300,
+    chart: 250,
+    markdown: 150,
+    variable: 60,
+  }
+
   const baseConfig: CellConfigBase = {
     name,
     type,
-    layout: { height: 'auto' },
+    layout: { height: defaultHeights[type] },
   }
 
   switch (type) {

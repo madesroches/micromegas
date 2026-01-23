@@ -297,7 +297,7 @@ describe('CellContainer', () => {
   })
 
   describe('height setting', () => {
-    it('should apply fixed height when height is a number', () => {
+    it('should apply fixed height when height is provided', () => {
       render(<CellContainer {...defaultProps} height={300} />)
 
       // Find the content div (p-4 class)
@@ -305,11 +305,33 @@ describe('CellContainer', () => {
       expect(contentDiv?.style.height).toBe('300px')
     })
 
-    it('should not apply fixed height when height is auto', () => {
-      render(<CellContainer {...defaultProps} height="auto" />)
+    it('should use default height when not specified', () => {
+      render(<CellContainer {...defaultProps} />)
 
       const contentDiv = screen.getByText('Cell content').parentElement
-      expect(contentDiv?.style.height).toBe('')
+      // Default height is 300px
+      expect(contentDiv?.style.height).toBe('300px')
+    })
+
+    it('should render resize handle when onHeightChange is provided', () => {
+      const onHeightChange = jest.fn()
+      render(<CellContainer {...defaultProps} onHeightChange={onHeightChange} />)
+
+      // ResizeHandle has role="separator"
+      expect(screen.getByRole('separator')).toBeInTheDocument()
+    })
+
+    it('should not render resize handle when onHeightChange is not provided', () => {
+      render(<CellContainer {...defaultProps} />)
+
+      expect(screen.queryByRole('separator')).not.toBeInTheDocument()
+    })
+
+    it('should not render resize handle when collapsed', () => {
+      const onHeightChange = jest.fn()
+      render(<CellContainer {...defaultProps} collapsed={true} onHeightChange={onHeightChange} />)
+
+      expect(screen.queryByRole('separator')).not.toBeInTheDocument()
     })
   })
 })

@@ -1,7 +1,8 @@
-import { ReactNode, useState, useRef, useEffect, forwardRef, HTMLAttributes } from 'react'
+import { ReactNode, useState, useRef, useEffect, forwardRef, HTMLAttributes, useCallback } from 'react'
 import { ChevronDown, ChevronRight, Play, RotateCcw, MoreVertical, Trash2, GripVertical } from 'lucide-react'
 import { CellType, CellStatus } from '@/lib/screen-renderers/cell-registry'
 import { Button } from '@/components/ui/button'
+import { ResizeHandle } from '@/components/ResizeHandle'
 
 const CELL_TYPE_LABELS: Record<CellType, string> = {
   table: 'Table',
@@ -36,8 +37,10 @@ interface CellContainerProps extends Omit<HTMLAttributes<HTMLDivElement>, 'child
   onDelete?: () => void
   /** Row count or other status text */
   statusText?: string
-  /** Height setting: number for fixed px, 'auto' for content-based */
-  height?: number | 'auto'
+  /** Height in pixels */
+  height?: number
+  /** Callback when height changes via resize handle */
+  onHeightChange?: (height: number) => void
   /** Cell content */
   children: ReactNode
   /** Props for drag handle (from dnd-kit useSortable) */
@@ -60,7 +63,8 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
     onRunFromHere,
     onDelete,
     statusText,
-    height = 'auto',
+    height = 300,
+    onHeightChange,
     children,
     dragHandleProps,
     isDragging,
@@ -71,6 +75,10 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
 ) {
   const [showMenu, setShowMenu] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
+
+  // Normalize height - handle legacy 'auto' values from old configs
+  const normalizedHeight = typeof height === 'number' ? height : 300
+  const currentHeight = useRef(normalizedHeight)
 
   // Close menu when clicking outside
   useEffect(() => {
@@ -104,8 +112,21 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
           ? 'Blocked'
           : statusText || ''
 
-  const contentStyle =
-    height === 'auto' ? {} : { height: `${height}px`, overflow: 'auto' as const }
+  // Keep currentHeight in sync with prop
+  useEffect(() => {
+    currentHeight.current = normalizedHeight
+  }, [normalizedHeight])
+
+  const handleResize = useCallback(
+    (deltaY: number) => {
+      const newHeight = Math.max(50, currentHeight.current + deltaY)
+      currentHeight.current = newHeight
+      onHeightChange?.(newHeight)
+    },
+    [onHeightChange]
+  )
+
+  const contentStyle = { height: `${normalizedHeight}px`, overflow: 'auto' as const }
 
   return (
     <div
@@ -257,6 +278,11 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
             children
           )}
         </div>
+      )}
+
+      {/* Resize Handle */}
+      {!collapsed && onHeightChange && (
+        <ResizeHandle onResize={handleResize} minHeight={50} />
       )}
     </div>
   )
