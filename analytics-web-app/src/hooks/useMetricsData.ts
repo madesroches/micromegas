@@ -47,9 +47,8 @@ export function useMetricsData({
   const execute = useCallback(() => {
     if (!processId || !measureName || !enabled) return
 
-    // Clear previous data to avoid stale state
-    setChartData([])
-    setRawPropertiesData(new Map())
+    // Don't clear data immediately - keep showing existing data until new data arrives
+    // This prevents the chart from flickering when window resizes (e.g., opening DevTools)
 
     // useStreamQuery handles cancellation internally via its own AbortController
     query.execute({
