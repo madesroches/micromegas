@@ -29,8 +29,6 @@ WHERE name = '$measure_name'
 GROUP BY date_bin(INTERVAL '$bin_interval', time)
 ORDER BY time`
 
-const PROCESS_SQL = `SELECT exe FROM processes WHERE process_id = '$process_id' LIMIT 1`
-
 const VARIABLES = [
   { name: 'process_id', description: 'Current process ID' },
   { name: 'measure_name', description: 'Selected measure name' },
@@ -110,17 +108,14 @@ function ProcessMetricsContent() {
   // Local state for UI
   const [measures, setMeasures] = useState<Measure[]>([])
   const [selectedMeasure, setSelectedMeasure] = useState<string | null>(config.selectedMeasure ?? null)
-  const [_processExe, setProcessExe] = useState<string | null>(null)
   const [discoveryDone, setDiscoveryDone] = useState(false)
   const [chartWidth, setChartWidth] = useState<number>(800)
-  const [_currentSql, setCurrentSql] = useState<string>(DEFAULT_SQL)
   const [isCustomQuery, setIsCustomQuery] = useState(false)
   const [customChartData, setCustomChartData] = useState<{ time: number; value: number }[]>([])
 
-  // Query hooks for discovery and process info
+  // Query hooks for discovery and custom queries
   const discoveryQuery = useStreamQuery()
   const customQuery = useStreamQuery()
-  const processQuery = useStreamQuery()
 
   // Compute API time range from config
   const apiTimeRange = useMemo(() => {
@@ -221,24 +216,8 @@ function ProcessMetricsContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- Only react to completion/error, not the full hook object
   }, [customQuery.isComplete, customQuery.error])
 
-  // Extract process exe from process query
-  useEffect(() => {
-    if (processQuery.isComplete && !processQuery.error) {
-      const table = processQuery.getTable()
-      if (table && table.numRows > 0) {
-        const row = table.get(0)
-        if (row) {
-          setProcessExe(String(row.exe ?? ''))
-        }
-      }
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- Only react to completion/error, not the full hook object
-  }, [processQuery.isComplete, processQuery.error])
-
   const discoveryExecuteRef = useRef(discoveryQuery.execute)
   discoveryExecuteRef.current = discoveryQuery.execute
-  const processExecuteRef = useRef(processQuery.execute)
-  processExecuteRef.current = processQuery.execute
 
   const loadDiscovery = useCallback(() => {
     if (!processId) return
@@ -255,7 +234,6 @@ function ProcessMetricsContent() {
     (measure: string) => {
       setSelectedMeasure(measure)
       setIsCustomQuery(false)
-      setCurrentSql(DEFAULT_SQL)
       updateConfig({ selectedMeasure: measure }, { replace: true })
     },
     [updateConfig]
@@ -276,19 +254,6 @@ function ProcessMetricsContent() {
     },
     [selectedProperties, updateConfig]
   )
-
-  const hasLoadedProcessRef = useRef(false)
-  useEffect(() => {
-    if (processId && !hasLoadedProcessRef.current) {
-      hasLoadedProcessRef.current = true
-      processExecuteRef.current({
-        sql: PROCESS_SQL,
-        params: { process_id: processId },
-        begin: apiTimeRange.begin,
-        end: apiTimeRange.end,
-      })
-    }
-  }, [processId, apiTimeRange])
 
   const hasLoadedDiscoveryRef = useRef(false)
   useEffect(() => {
@@ -336,7 +301,6 @@ function ProcessMetricsContent() {
 
   const handleRunQuery = useCallback(
     (sql: string) => {
-      setCurrentSql(sql)
       setIsCustomQuery(true)
       customQuery.execute({
         sql,
@@ -353,7 +317,6 @@ function ProcessMetricsContent() {
   )
 
   const handleResetQuery = useCallback(() => {
-    setCurrentSql(DEFAULT_SQL)
     setIsCustomQuery(false)
   }, [])
 

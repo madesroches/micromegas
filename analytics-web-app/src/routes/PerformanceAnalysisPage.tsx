@@ -35,8 +35,6 @@ WHERE name = '$measure_name'
 GROUP BY date_bin(INTERVAL '$bin_interval', time)
 ORDER BY time`
 
-const PROCESS_SQL = `SELECT exe FROM processes WHERE process_id = '$process_id' LIMIT 1`
-
 const THREAD_COVERAGE_SQL = `SELECT
   arrow_cast(stream_id, 'Utf8') as stream_id,
   concat(
@@ -157,7 +155,6 @@ function PerformanceAnalysisContent() {
   const [measures, setMeasures] = useState<Measure[]>([])
   const [selectedMeasure, setSelectedMeasure] = useState<string | null>(config.selectedMeasure ?? null)
   const [queryError, setQueryError] = useState<string | null>(null)
-  const [_processExe, setProcessExe] = useState<string | null>(null)
   const [discoveryDone, setDiscoveryDone] = useState(false)
   const [chartWidth, setChartWidth] = useState<number>(800)
   const [threadCoverage, setThreadCoverage] = useState<ThreadCoverage[]>([])
@@ -170,7 +167,6 @@ function PerformanceAnalysisContent() {
   const [chartAxisBounds, setChartAxisBounds] = useState<ChartAxisBounds | null>(null)
   const [cachedTraceBuffer, setCachedTraceBuffer] = useState<ArrayBuffer | null>(null)
   const [cachedTraceTimeRange, setCachedTraceTimeRange] = useState<{ begin: string; end: string } | null>(null)
-  const [_currentSql, setCurrentSql] = useState<string>(DEFAULT_SQL)
   const [isCustomQuery, setIsCustomQuery] = useState(false)
   const [customChartData, setCustomChartData] = useState<{ time: number; value: number }[]>([])
 
@@ -266,7 +262,6 @@ function PerformanceAnalysisContent() {
     async (sql: string) => {
       if (!processId || !selectedMeasure) return
       setQueryError(null)
-      setCurrentSql(sql)
       setCustomQueryLoading(true)
       setIsCustomQuery(true)
 
@@ -409,7 +404,6 @@ function PerformanceAnalysisContent() {
     (measure: string) => {
       setSelectedMeasure(measure)
       setIsCustomQuery(false)
-      setCurrentSql(DEFAULT_SQL)
       updateConfig({ selectedMeasure: measure }, { replace: true })
     },
     [updateConfig]
@@ -437,28 +431,6 @@ function PerformanceAnalysisContent() {
     },
     [updateConfig]
   )
-
-  const hasLoadedProcessRef = useRef(false)
-  useEffect(() => {
-    if (processId && !hasLoadedProcessRef.current) {
-      hasLoadedProcessRef.current = true
-      executeStreamQuery({
-        sql: PROCESS_SQL,
-        params: { process_id: processId },
-        begin: apiTimeRange.begin,
-        end: apiTimeRange.end,
-      }).then(({ batches }) => {
-        for (const batch of batches) {
-          if (batch.numRows > 0) {
-            const row = batch.get(0)
-            if (row) {
-              setProcessExe(String(row.exe ?? ''))
-            }
-          }
-        }
-      })
-    }
-  }, [processId, apiTimeRange])
 
   const hasLoadedDiscoveryRef = useRef(false)
   useEffect(() => {
@@ -509,7 +481,6 @@ function PerformanceAnalysisContent() {
   )
 
   const handleResetQuery = useCallback(() => {
-    setCurrentSql(DEFAULT_SQL)
     setIsCustomQuery(false)
   }, [])
 
