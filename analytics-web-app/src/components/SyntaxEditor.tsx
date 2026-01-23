@@ -16,16 +16,23 @@ function highlightSql(code: string): string {
   // First escape HTML entities
   let result = code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
-  // Highlight comments first (so they don't get overridden)
+  // Use placeholder approach to prevent strings and comments from interfering
+  // Extract strings first, replace with placeholders
+  const strings: string[] = []
+  result = result.replace(/'[^']*'/g, (match) => {
+    strings.push(match)
+    return `__STRING_${strings.length - 1}__`
+  })
+
+  // Now highlight comments (safe - strings are placeholders)
   result = result.replace(
     /--[^\n]*/g,
     '<span style="color: var(--syntax-comment)">$&</span>'
   )
 
-  // Highlight strings (so keywords inside strings don't get highlighted)
-  result = result.replace(
-    /'[^']*'/g,
-    '<span style="color: var(--syntax-string)">$&</span>'
+  // Restore strings with highlighting
+  result = result.replace(/__STRING_(\d+)__/g, (_, i) =>
+    `<span style="color: var(--syntax-string)">${strings[parseInt(i)]}</span>`
   )
 
   // Highlight SQL keywords

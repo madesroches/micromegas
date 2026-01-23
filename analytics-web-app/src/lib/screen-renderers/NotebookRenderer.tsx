@@ -116,7 +116,7 @@ function DeleteCellModal({ isOpen, cellName, onClose, onConfirm }: DeleteCellMod
           <Button variant="outline" onClick={onClose}>
             Cancel
           </Button>
-          <Button onClick={onConfirm} className="bg-accent-error hover:bg-accent-error-bright text-white">
+          <Button onClick={onConfirm} className="bg-[var(--accent-error)] hover:bg-[var(--accent-error-bright)] text-white">
             Delete
           </Button>
         </div>
