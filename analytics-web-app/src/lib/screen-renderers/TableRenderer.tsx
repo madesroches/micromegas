@@ -31,6 +31,7 @@ interface TableConfig {
   timeRangeTo?: string
   sortColumn?: string
   sortDirection?: 'asc' | 'desc'
+  [key: string]: unknown
 }
 
 interface SortHeaderProps {
@@ -126,7 +127,7 @@ export function TableRenderer({
   config,
   onConfigChange,
   savedConfig,
-  onUnsavedChange,
+  setHasUnsavedChanges,
   timeRange,
   rawTimeRange,
   timeRangeLabel,
@@ -138,8 +139,8 @@ export function TableRenderer({
   saveError,
   refreshTrigger,
 }: ScreenRendererProps) {
-  const tableConfig = config as TableConfig
-  const savedTableConfig = savedConfig as TableConfig | null
+  const tableConfig = config as unknown as TableConfig
+  const savedTableConfig = savedConfig as unknown as TableConfig | null
 
   // Sort state from config (persisted)
   const sortColumn = tableConfig.sortColumn
@@ -231,7 +232,7 @@ export function TableRenderer({
     rawTimeRange,
     savedConfig: savedTableConfig,
     config: tableConfig,
-    onUnsavedChange,
+    setHasUnsavedChanges,
     onConfigChange,
   })
 
@@ -240,26 +241,39 @@ export function TableRenderer({
     config: tableConfig,
     savedConfig: savedTableConfig,
     onConfigChange,
-    onUnsavedChange,
+    setHasUnsavedChanges,
     execute: (sql: string) => executeQuery(sql),
   })
 
   // Three-state sort cycling: none -> ASC -> DESC -> none
   const handleSort = useCallback(
     (columnName: string) => {
+      let newSortColumn: string | undefined
+      let newSortDirection: 'asc' | 'desc' | undefined
+
       if (sortColumn !== columnName) {
         // New column: start with ASC
-        onConfigChange({ ...tableConfig, sortColumn: columnName, sortDirection: 'asc' })
+        newSortColumn = columnName
+        newSortDirection = 'asc'
       } else if (sortDirection === 'asc') {
         // ASC -> DESC
-        onConfigChange({ ...tableConfig, sortDirection: 'desc' })
+        newSortColumn = columnName
+        newSortDirection = 'desc'
       } else {
         // DESC -> no sort (clear)
-        onConfigChange({ ...tableConfig, sortColumn: undefined, sortDirection: undefined })
+        newSortColumn = undefined
+        newSortDirection = undefined
       }
-      onUnsavedChange()
+
+      onConfigChange({ ...tableConfig, sortColumn: newSortColumn, sortDirection: newSortDirection })
+
+      if (savedTableConfig) {
+        const savedCol = savedTableConfig.sortColumn
+        const savedDir = savedTableConfig.sortDirection
+        setHasUnsavedChanges(newSortColumn !== savedCol || newSortDirection !== savedDir)
+      }
     },
-    [sortColumn, sortDirection, tableConfig, onConfigChange, onUnsavedChange]
+    [sortColumn, sortDirection, tableConfig, savedTableConfig, onConfigChange, setHasUnsavedChanges]
   )
 
   // Build currentValues with order_by for QueryEditor display
@@ -271,7 +285,7 @@ export function TableRenderer({
   // Query editor panel
   const sqlPanel = (
     <QueryEditor
-      defaultSql={savedConfig ? (savedConfig as TableConfig).sql : tableConfig.sql}
+      defaultSql={savedTableConfig ? savedTableConfig.sql : tableConfig.sql}
       variables={VARIABLES}
       currentValues={queryEditorValues}
       timeRangeLabel={timeRangeLabel}

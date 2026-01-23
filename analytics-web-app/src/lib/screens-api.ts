@@ -2,25 +2,11 @@ import { authenticatedFetch, getApiBase } from './api'
 
 // Types matching the backend models
 
-export interface MetricsOptions {
-  scale_mode?: 'p99' | 'max'
-}
-
-export interface ScreenConfig {
-  sql: string
-  variables?: ScreenVariable[]
-  metrics_options?: MetricsOptions
-  // Log screen settings
-  logLevel?: string
-  limit?: number
-  search?: string
-  // Time range settings (shared across screen types)
-  timeRangeFrom?: string
-  timeRangeTo?: string
-  // Table screen sort settings
-  sortColumn?: string
-  sortDirection?: 'asc' | 'desc'
-}
+/**
+ * Screen config is opaque - each renderer casts it to its own specific interface.
+ * The backend stores this as JSON and passes it through without interpretation.
+ */
+export type ScreenConfig = Record<string, unknown>
 
 export interface ScreenVariable {
   name: string
@@ -37,7 +23,7 @@ export interface Screen {
   updated_at: string
 }
 
-export type ScreenTypeName = 'process_list' | 'metrics' | 'log' | 'table'
+export type ScreenTypeName = 'process_list' | 'metrics' | 'log' | 'table' | 'notebook'
 
 export interface ScreenTypeInfo {
   name: ScreenTypeName

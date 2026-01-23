@@ -2,17 +2,24 @@ import { useEffect, useRef } from 'react'
 import { ScreenConfig } from '@/lib/screens-api'
 import { DEFAULT_TIME_RANGE } from '@/lib/screen-defaults'
 
-interface TimeRangeSyncParams<T extends ScreenConfig> {
+/** Config interface with time range properties */
+interface TimeRangeConfig {
+  timeRangeFrom?: string
+  timeRangeTo?: string
+  [key: string]: unknown
+}
+
+interface TimeRangeSyncParams {
   /** Current raw time range from URL */
   rawTimeRange: { from: string; to: string }
   /** Saved config (null for new screens) */
-  savedConfig: T | null
+  savedConfig: TimeRangeConfig | null
   /** Current working config */
-  config: T
-  /** Callback when there are unsaved changes */
-  onUnsavedChange: () => void
+  config: TimeRangeConfig
+  /** Set unsaved changes state */
+  setHasUnsavedChanges: (value: boolean) => void
   /** Callback to update config */
-  onConfigChange: (config: T) => void
+  onConfigChange: (config: ScreenConfig) => void
 }
 
 /**
@@ -25,13 +32,13 @@ interface TimeRangeSyncParams<T extends ScreenConfig> {
  *
  * This eliminates ~30 lines of duplicated code from each renderer.
  */
-export function useTimeRangeSync<T extends ScreenConfig>({
+export function useTimeRangeSync({
   rawTimeRange,
   savedConfig,
   config,
-  onUnsavedChange,
+  setHasUnsavedChanges,
   onConfigChange,
-}: TimeRangeSyncParams<T>): void {
+}: TimeRangeSyncParams): void {
   const prevTimeRangeRef = useRef<{ from: string; to: string } | null>(null)
 
   useEffect(() => {
@@ -53,9 +60,7 @@ export function useTimeRangeSync<T extends ScreenConfig>({
     // Check if differs from saved config
     const savedFrom = savedConfig?.timeRangeFrom ?? DEFAULT_TIME_RANGE.from
     const savedTo = savedConfig?.timeRangeTo ?? DEFAULT_TIME_RANGE.to
-    if (current.from !== savedFrom || current.to !== savedTo) {
-      onUnsavedChange()
-    }
+    setHasUnsavedChanges(current.from !== savedFrom || current.to !== savedTo)
 
     // Update config with time range
     onConfigChange({
@@ -63,5 +68,5 @@ export function useTimeRangeSync<T extends ScreenConfig>({
       timeRangeFrom: current.from,
       timeRangeTo: current.to,
     })
-  }, [rawTimeRange, savedConfig, config, onUnsavedChange, onConfigChange])
+  }, [rawTimeRange, savedConfig, config, setHasUnsavedChanges, onConfigChange])
 }

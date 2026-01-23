@@ -25,10 +25,19 @@ The existing screen types (`process_list`, `metrics`, `log`) remain unchanged. T
 | `markdown` | Documentation | N/A (no query) |
 | `variable` | User input control | Options from query (combobox) or free input |
 
+**Default SQL per cell type** (inspired by existing screen defaults):
+- `table`: Same as Process List screen default
+- `chart`: Same as Metrics screen default
+- `log`: Same as Log screen default
+- `variable` (combobox): `SELECT DISTINCT name FROM measures`
+
 ## Data Model
+
+**Architecture note:** The backend stores screen config as opaque JSON (`serde_json::Value`). The frontend `ScreenConfig` type should be `Record<string, unknown>` - each renderer casts it to its own specific interface. This means notebook types are defined in `NotebookRenderer.tsx`, not in a shared types file.
 
 ```typescript
 // Config for screens with type: 'notebook'
+// Defined in NotebookRenderer.tsx, not screens-api.ts
 // Note: time range is handled at the screen level, same as other screen types
 interface NotebookConfig {
   cells: CellConfig[]
@@ -38,9 +47,8 @@ interface NotebookConfig {
 type CellConfig = QueryCellConfig | MarkdownCellConfig | VariableCellConfig
 
 interface CellConfigBase {
-  id: string
-  title: string
-  type: CellType
+  name: string           // Unique within notebook; display name + anchor for deep linking
+  type: CellType         // For variable cells, name is also the variable name ($name)
   layout: { height: number | 'auto'; collapsed?: boolean }
 }
 
@@ -58,8 +66,7 @@ interface MarkdownCellConfig extends CellConfigBase {
 interface VariableCellConfig extends CellConfigBase {
   type: 'variable'
   variableType: 'combobox' | 'text' | 'number'
-  variableName: string   // Available as $variableName in subsequent cells
-  label: string
+  // Cell name is the variable name - available as $name in subsequent cells
   sql?: string           // For combobox: query to populate options
   valueColumn?: string
   labelColumn?: string
@@ -69,12 +76,12 @@ interface VariableCellConfig extends CellConfigBase {
 
 ## Execution Model
 
-1. **Screen load**: Execute cells sequentially top-to-bottom
-2. **Time range change**: Re-execute all query cells (top-to-bottom)
-3. **Variable change**: Re-execute all cells below the variable
-4. **Cell refresh**: Re-execute that cell only (and cells below if it succeeds)
-5. **Cell SQL edit + run**: Re-execute that cell only (and cells below if it succeeds)
-6. **Errors**: Failed cell shows error, execution stops - cells below it don't run until error is fixed
+Manual execution only - no automatic re-execution on time range or variable changes.
+
+1. **Screen load**: Execute all cells sequentially top-to-bottom
+2. **Execute single cell**: User can run one cell in isolation
+3. **Execute from cell**: User can run a cell and continue with all cells below it
+4. **Errors**: Failed cell shows error, execution stops - cells below don't run until error is fixed
 
 ## Coexistence with Existing Screens
 
@@ -86,9 +93,9 @@ interface VariableCellConfig extends CellConfigBase {
 ## Files to Modify
 
 **Frontend:**
-- `analytics-web-app/src/lib/screens-api.ts` - Add NotebookConfig, CellConfig types
+- `analytics-web-app/src/lib/screens-api.ts` - Change `ScreenConfig` to opaque type, add `'notebook'` to `ScreenTypeName`
 - `analytics-web-app/src/lib/screen-renderers/index.ts` - Register NotebookRenderer
-- `analytics-web-app/src/lib/screen-renderers/NotebookRenderer.tsx` - New renderer
+- `analytics-web-app/src/lib/screen-renderers/NotebookRenderer.tsx` - New renderer (includes `NotebookConfig`, `CellConfig` types)
 - `analytics-web-app/src/lib/screen-renderers/cells/` - New folder for cell components
 - `analytics-web-app/src/components/CellContainer.tsx` - New component
 - `analytics-web-app/src/components/CellEditor.tsx` - New component
@@ -102,120 +109,148 @@ interface VariableCellConfig extends CellConfigBase {
 
 ### Phase 1: Multi-Cell Foundation
 
-- [ ] **1. Define TypeScript types** (`screens-api.ts`)
-  - Add `NotebookConfig`, `CellConfig`, `VariableCellConfig` interfaces
-  - Add `CellType` union type
-  - Add `notebook` to screen types
+- [x] **1. Clean up ScreenConfig type** (`screens-api.ts`)
+  - Change `ScreenConfig` from kitchen-sink interface to opaque `Record<string, unknown>`
+  - Add `'notebook'` to `ScreenTypeName` union
+  - (Notebook-specific types go in `NotebookRenderer.tsx`, not here)
 
-- [ ] **2. Create cell registry** (`screen-renderers/cell-registry.ts`)
+- [x] **2. Create cell registry** (`screen-renderers/cell-registry.ts`)
   - Define `CellRendererProps` interface
   - Create `CELL_RENDERERS` map and `registerCellRenderer()` function
   - Export `getCellRenderer()` lookup function
 
-- [ ] **3. Build CellContainer component** (`components/CellContainer.tsx`)
+- [x] **3. Build CellContainer component** (`components/CellContainer.tsx`)
   - Cell header with title, collapse toggle, refresh button
   - Collapsible content area
   - Loading and error states
-  - Height management (fixed px, auto, or fill)
+  - Height management (fixed px or auto)
 
-- [ ] **4. Build NotebookRenderer** (`screen-renderers/NotebookRenderer.tsx`)
+- [x] **4. Build NotebookRenderer** (`screen-renderers/NotebookRenderer.tsx`)
+  - Define `NotebookConfig`, `CellConfig`, `CellType` types (renderer owns its config shape)
+  - Validate cell name uniqueness within notebook
   - Vertical stack of CellContainers
   - "Add Cell" button at bottom (empty notebook shows just this button)
   - Cell type selection modal
-  - Manage cell execution state array
-  - Collect variable values from variable cells
-  - Handle time range propagation to all cells
+  - Delete cell action (with confirmation for cells with content)
+  - Manage cell execution state array (per-cell: idle, loading, success, error)
+  - Collect variable values from variable cells (keyed by cell name)
+  - "Run from here" action on each cell (executes cell and all below)
 
-- [ ] **5. Create ChartCell** (`screen-renderers/cells/ChartCell.tsx`)
+- [x] **5. Create ChartCell** (`screen-renderers/cells/ChartCell.tsx`)
   - Reuse chart logic from MetricsRenderer
   - Configurable X/Y columns (not just time)
   - Implement CellRendererProps interface
   - Register with cell registry
 
-- [ ] **6. Create LogCell** (`screen-renderers/cells/LogCell.tsx`)
+- [x] **6. Create LogCell** (`screen-renderers/cells/LogCell.tsx`)
   - Reuse log viewer logic from LogRenderer
   - Implement CellRendererProps interface
   - Register with cell registry
 
-- [ ] **7. Create TableCell** (`screen-renderers/cells/TableCell.tsx`)
+- [x] **7. Create TableCell** (`screen-renderers/cells/TableCell.tsx`)
   - Generic table for SQL results
   - Implement CellRendererProps interface
   - Register with cell registry
 
-- [ ] **8. Register notebook screen type** (backend + frontend)
+- [x] **8. Register notebook screen type** (backend + frontend)
   - Add `notebook` to backend ScreenType enum
   - Add default config for new notebook screens
   - Register NotebookRenderer in frontend
 
 ### Phase 2: Cell Types & Editors
 
-- [ ] **9. Enhance TableCell** (`screen-renderers/cells/TableCell.tsx`)
+- [x] **9. Enhance TableCell** (`screen-renderers/cells/TableCell.tsx`)
   - Generic SQL result table with Arrow data
-  - Sortable columns
-  - Pagination option
+  - ~~Sortable columns~~ (not implemented)
+  - ~~Pagination option~~ (not implemented)
 
-- [ ] **10. Create MarkdownCell** (`screen-renderers/cells/MarkdownCell.tsx`)
+- [x] **10. Create MarkdownCell** (`screen-renderers/cells/MarkdownCell.tsx`)
   - Render markdown content (no SQL query)
   - Edit mode for content editing
 
-- [ ] **11. Build CellEditor component** (`components/CellEditor.tsx`)
+- [x] **11. Build CellEditor component** (`components/CellEditor.tsx`)
   - Collapsible SQL editor per cell
   - Variable preview showing available `$vars`
   - Run button to execute cell query
-  - Reset button to revert to saved SQL
+  - ~~Reset button to revert to saved SQL~~ (not implemented)
 
-- [ ] **12. Add cell-level error handling**
+- [x] **12. Add cell-level error handling**
   - Error banner within CellContainer
   - Retry button that re-executes cell and continues sequence if successful
   - Cells below a failed cell show "blocked" state until error is resolved
 
 ### Phase 3: Variables & Execution
 
-- [ ] **13. Create VariableCell component** (`screen-renderers/cells/VariableCell.tsx`)
+- [x] **13. Create VariableCell component** (`screen-renderers/cells/VariableCell.tsx`)
   - Combobox: fetch options via SQL, render dropdown
   - Text: simple text input
   - Number: number input with optional min/max
   - Emit value changes to screen state
 
-- [ ] **14. Build variable value collection**
-  - Screen maintains `Record<string, string>` of variable values
+- [x] **14. Build variable value collection**
+  - Screen maintains `Record<string, string>` of variable values (keyed by cell name)
   - Variable cells update their value on user interaction
   - Values passed to all query cells for macro substitution
 
-- [ ] **15. Implement macro substitution**
+- [x] **15. Implement macro substitution**
   - Replace `$variableName` in SQL with collected values
   - Handle missing variables gracefully (show error or use default)
 
-- [ ] **16. Implement re-execution on variable change**
-  - When variable cell value changes, re-execute all cells below it
-  - Simple top-to-bottom, no dependency graph needed
+- [x] ~~**16. Add auto-refresh**~~ (skipped - not needed)
 
-- [ ] **17. Add auto-refresh**
-  - Refresh interval setting in screen config
-  - Dropdown to select interval (off, 5s, 10s, 30s, 1m, 5m)
-  - Re-execute all query cells on interval
+- [x] **17. Polish notebook creation flow**
+  - New notebook starts empty with just the "Add Cell" button
+  - ~~Smooth "new screen" flow with type selection~~ (uses existing screen creation flow)
 
-- [ ] **18. Polish notebook creation flow**
-  - Default notebook starts with one empty table cell
-  - Smooth "new screen" flow with type selection
+### Phase 4: Cell Reordering
+
+- [x] **18. Add drag-and-drop reordering**
+  - Added drag handle (GripVertical icon) to CellContainer header
+  - Using @dnd-kit/core + @dnd-kit/sortable for drag functionality
+  - Visual feedback during drag (opacity change on dragged item)
+  - Reorders cells array on drop and saves config
+
+- [x] **19. Preserve state after reorder**
+  - Cell execution results keyed by name, preserved across reorder
+  - Selected cell index updated when reordering
 
 ---
 
 ## Future Improvements
 
-- **Cell reordering** - Drag-and-drop or move up/down buttons to reorder cells
 - **Cell duplication** - Copy an existing cell as a starting point
+
+---
+
+## Current Status (2026-01-22)
+
+**Phases 1-2 Complete.** All cell types implemented and working:
+- TableCell, ChartCell, LogCell, MarkdownCell, VariableCell
+- CellContainer with collapse, edit, delete, and run controls
+- CellEditor with SQL editing and variable preview
+- Cell-level error handling with retry
+
+**Phase 3 Complete.**
+- Variable cells working (combobox, text, number types)
+- Macro substitution working (`$variableName` in SQL)
+- Variable values populated on initial load (fixed in adb9bbb8b)
+- Cell name rename working (fixed in a9a5a3fa1)
+- Auto-refresh skipped (not needed)
+
+**Phase 4 Complete:** Drag-and-drop cell reordering implemented using @dnd-kit
+
+**Known Issues:** None currently.
 
 ---
 
 ## Verification
 
-- [ ] Create new notebook screen, add multiple cells (table, chart, log)
-- [ ] Add variable cell (combobox), verify it populates options from SQL
-- [ ] Add query cell below that uses `$variable`, verify substitution works
-- [ ] Change variable selection, verify downstream cells re-execute
-- [ ] Verify time range changes refresh all query cells
-- [ ] Verify a failed cell stops execution of cells below it
-- [ ] Verify fixing a failed cell resumes execution of cells below
-- [ ] Verify existing screen types (process_list, metrics, log) still work
-- [ ] Run `yarn lint` and `yarn test`
+- [x] Create new notebook screen, add multiple cells (table, chart, log)
+- [x] Add variable cell (combobox), verify it populates options from SQL
+- [x] Add query cell below that uses `$variable`, verify substitution works
+- [x] Use "Run from here" to execute a cell and all cells below it
+- [x] Verify a failed cell stops execution of cells below it
+- [x] Verify fixing a failed cell resumes execution of cells below
+- [x] Verify existing screen types (process_list, metrics, log) still work
+- [x] Run `yarn lint` and `yarn test` (passes with only pre-existing warnings)
+- [x] Verify cell drag-and-drop reordering works

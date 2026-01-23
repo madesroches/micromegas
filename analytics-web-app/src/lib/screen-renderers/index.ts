@@ -16,12 +16,14 @@ export type { ScreenConfig, ScreenTypeName }
 export interface ScreenRendererProps {
   /** Current config (opaque to parent, renderer interprets it) */
   config: ScreenConfig
-  /** Update config - renderer calls this when user changes settings */
-  onConfigChange: (config: ScreenConfig) => void
+  /** Update config - accepts new config or updater function for atomic updates */
+  onConfigChange: (
+    configOrUpdater: ScreenConfig | ((prev: ScreenConfig) => ScreenConfig)
+  ) => void
   /** Saved config from database, null if new screen - for unsaved detection */
   savedConfig: ScreenConfig | null
-  /** Call when user makes changes that should trigger unsaved indicator */
-  onUnsavedChange: () => void
+  /** Set unsaved changes state (true when config differs from saved) */
+  setHasUnsavedChanges: (value: boolean) => void
   /** Time range for API queries (ISO timestamps) */
   timeRange: { begin: string; end: string }
   /** Raw time range from URL (e.g., 'now-1h', 'now') */

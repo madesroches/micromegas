@@ -24,13 +24,14 @@ interface MetricsConfig {
   metrics_options?: MetricsOptions
   timeRangeFrom?: string
   timeRangeTo?: string
+  [key: string]: unknown
 }
 
 export function MetricsRenderer({
   config,
   onConfigChange,
   savedConfig,
-  onUnsavedChange,
+  setHasUnsavedChanges,
   timeRange,
   rawTimeRange,
   onTimeRangeChange,
@@ -43,8 +44,8 @@ export function MetricsRenderer({
   saveError,
   refreshTrigger,
 }: ScreenRendererProps) {
-  const metricsConfig = config as MetricsConfig
-  const savedMetricsConfig = savedConfig as MetricsConfig | null
+  const metricsConfig = config as unknown as MetricsConfig
+  const savedMetricsConfig = savedConfig as unknown as MetricsConfig | null
 
   // Scale mode state - sync from config on load
   const [scaleMode, setScaleMode] = useState<ScaleMode>(
@@ -82,7 +83,7 @@ export function MetricsRenderer({
     rawTimeRange,
     savedConfig: savedMetricsConfig,
     config: metricsConfig,
-    onUnsavedChange,
+    setHasUnsavedChanges,
     onConfigChange,
   })
 
@@ -91,7 +92,7 @@ export function MetricsRenderer({
     config: metricsConfig,
     savedConfig: savedMetricsConfig,
     onConfigChange,
-    onUnsavedChange,
+    setHasUnsavedChanges,
     execute: query.execute,
   })
 
@@ -105,11 +106,11 @@ export function MetricsRenderer({
       }
       onConfigChange(newConfig)
 
-      if (savedConfig && (savedConfig as MetricsConfig).metrics_options?.scale_mode !== mode) {
-        onUnsavedChange()
+      if (savedMetricsConfig) {
+        setHasUnsavedChanges(savedMetricsConfig.metrics_options?.scale_mode !== mode)
       }
     },
-    [metricsConfig, savedConfig, onConfigChange, onUnsavedChange]
+    [metricsConfig, savedMetricsConfig, onConfigChange, setHasUnsavedChanges]
   )
 
   // Handle chart type change - persists to config
@@ -122,11 +123,11 @@ export function MetricsRenderer({
       }
       onConfigChange(newConfig)
 
-      if (savedConfig && (savedConfig as MetricsConfig).metrics_options?.chart_type !== type) {
-        onUnsavedChange()
+      if (savedMetricsConfig) {
+        setHasUnsavedChanges(savedMetricsConfig.metrics_options?.chart_type !== type)
       }
     },
-    [metricsConfig, savedConfig, onConfigChange, onUnsavedChange]
+    [metricsConfig, savedMetricsConfig, onConfigChange, setHasUnsavedChanges]
   )
 
   // Handle time range selection from chart drag
@@ -147,7 +148,7 @@ export function MetricsRenderer({
   // Query editor panel
   const sqlPanel = (
     <QueryEditor
-      defaultSql={savedConfig ? (savedConfig as MetricsConfig).sql : metricsConfig.sql}
+      defaultSql={savedMetricsConfig ? savedMetricsConfig.sql : metricsConfig.sql}
       variables={VARIABLES}
       currentValues={currentValues}
       timeRangeLabel={timeRangeLabel}

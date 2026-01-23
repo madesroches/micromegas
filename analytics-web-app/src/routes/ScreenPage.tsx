@@ -182,15 +182,20 @@ function ScreenPageContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isNew, name, typeParam])
 
-  // Handle config changes from renderer - MERGE to avoid race conditions
-  const handleScreenConfigChange = useCallback((partialConfig: ScreenConfig) => {
-    setScreenConfig(prev => (prev ? { ...prev, ...partialConfig } : partialConfig))
-  }, [])
-
-  // Handle unsaved changes notification from renderer
-  const handleUnsavedChange = useCallback(() => {
-    setHasUnsavedChanges(true)
-  }, [])
+  // Handle config changes from renderer - supports both direct config and updater function
+  const handleScreenConfigChange = useCallback(
+    (configOrUpdater: ScreenConfig | ((prev: ScreenConfig) => ScreenConfig)) => {
+      setScreenConfig((prev) => {
+        if (typeof configOrUpdater === 'function') {
+          // Functional update - updater receives current state, returns new state
+          return configOrUpdater(prev ?? ({} as ScreenConfig))
+        }
+        // Direct update - merge with previous (backwards compatible)
+        return prev ? { ...prev, ...configOrUpdater } : configOrUpdater
+      })
+    },
+    []
+  )
 
   // Handle refresh button click
   const handleRefresh = useCallback(() => {
@@ -350,7 +355,7 @@ function ScreenPageContent() {
               config={screenConfig}
               onConfigChange={handleScreenConfigChange}
               savedConfig={screen?.config ?? null}
-              onUnsavedChange={handleUnsavedChange}
+              setHasUnsavedChanges={setHasUnsavedChanges}
               timeRange={apiTimeRange}
               rawTimeRange={rawTimeRange}
               onTimeRangeChange={handleTimeRangeChange}

@@ -20,6 +20,10 @@ fn test_screen_type_serialization() {
         serde_json::to_string(&ScreenType::Table).expect("serialize"),
         "\"table\""
     );
+    assert_eq!(
+        serde_json::to_string(&ScreenType::Notebook).expect("serialize"),
+        "\"notebook\""
+    );
 }
 
 #[test]
@@ -40,6 +44,10 @@ fn test_screen_type_deserialization() {
         serde_json::from_str::<ScreenType>("\"table\"").expect("deserialize"),
         ScreenType::Table
     );
+    assert_eq!(
+        serde_json::from_str::<ScreenType>("\"notebook\"").expect("deserialize"),
+        ScreenType::Notebook
+    );
 }
 
 #[test]
@@ -54,17 +62,22 @@ fn test_screen_type_from_str() {
     );
     assert_eq!("log".parse::<ScreenType>().unwrap(), ScreenType::Log);
     assert_eq!("table".parse::<ScreenType>().unwrap(), ScreenType::Table);
+    assert_eq!(
+        "notebook".parse::<ScreenType>().unwrap(),
+        ScreenType::Notebook
+    );
     assert!("invalid".parse::<ScreenType>().is_err());
 }
 
 #[test]
 fn test_all_screen_types() {
     let all = ScreenType::all();
-    assert_eq!(all.len(), 4);
+    assert_eq!(all.len(), 5);
     assert!(all.contains(&ScreenType::ProcessList));
     assert!(all.contains(&ScreenType::Metrics));
     assert!(all.contains(&ScreenType::Log));
     assert!(all.contains(&ScreenType::Table));
+    assert!(all.contains(&ScreenType::Notebook));
 }
 
 #[test]
@@ -73,6 +86,7 @@ fn test_screen_type_as_str() {
     assert_eq!(ScreenType::Metrics.as_str(), "metrics");
     assert_eq!(ScreenType::Log.as_str(), "log");
     assert_eq!(ScreenType::Table.as_str(), "table");
+    assert_eq!(ScreenType::Notebook.as_str(), "notebook");
 }
 
 #[test]
@@ -96,6 +110,11 @@ fn test_screen_type_info() {
     assert_eq!(table_info.name, "table");
     assert!(!table_info.icon.is_empty());
     assert!(!table_info.description.is_empty());
+
+    let notebook_info = ScreenType::Notebook.info();
+    assert_eq!(notebook_info.name, "notebook");
+    assert!(!notebook_info.icon.is_empty());
+    assert!(!notebook_info.description.is_empty());
 }
 
 #[test]
@@ -124,6 +143,11 @@ fn test_screen_type_default_config() {
     let table_config = ScreenType::Table.default_config();
     assert!(table_config.get("sql").is_some());
     assert!(table_config["sql"].as_str().unwrap().contains("processes"));
+
+    // Notebook config should have cells field
+    let notebook_config = ScreenType::Notebook.default_config();
+    assert!(notebook_config.get("cells").is_some());
+    assert!(notebook_config["cells"].is_array());
 }
 
 #[test]
