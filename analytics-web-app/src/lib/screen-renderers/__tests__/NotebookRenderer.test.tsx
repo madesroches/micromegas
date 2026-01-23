@@ -96,7 +96,7 @@ function createDefaultProps(overrides: Partial<ScreenRendererProps> = {}): Scree
     config: { cells: [] },
     onConfigChange: jest.fn(),
     savedConfig: { cells: [] },
-    onUnsavedChange: jest.fn(),
+    setHasUnsavedChanges: jest.fn(),
     timeRange: { begin: '2024-01-01T00:00:00Z', end: '2024-01-02T00:00:00Z' },
     onSave: jest.fn(),
     isSaving: false,
@@ -201,13 +201,13 @@ describe('NotebookRenderer', () => {
 
     it('should add a new cell when type is selected', async () => {
       const onConfigChange = jest.fn()
-      const onUnsavedChange = jest.fn()
+      const setHasUnsavedChanges = jest.fn()
 
       render(
         <NotebookRenderer
           {...createDefaultProps({
             onConfigChange,
-            onUnsavedChange,
+            setHasUnsavedChanges,
           })}
         />
       )
@@ -220,7 +220,7 @@ describe('NotebookRenderer', () => {
       fireEvent.click(tableButton!)
 
       expect(onConfigChange).toHaveBeenCalled()
-      expect(onUnsavedChange).toHaveBeenCalled()
+      expect(setHasUnsavedChanges).toHaveBeenCalled()
 
       // Modal should close after adding
       expect(screen.queryByRole('heading', { name: 'Add Cell' })).not.toBeInTheDocument()
@@ -381,14 +381,14 @@ describe('NotebookRenderer', () => {
     it('should update cell name through editor', async () => {
       const cells = [createTableCell('OldName')]
       const onConfigChange = jest.fn()
-      const onUnsavedChange = jest.fn()
+      const setHasUnsavedChanges = jest.fn()
 
       render(
         <NotebookRenderer
           {...createDefaultProps({
             config: { cells },
             onConfigChange,
-            onUnsavedChange,
+            setHasUnsavedChanges,
           })}
         />
       )

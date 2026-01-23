@@ -197,11 +197,6 @@ function ScreenPageContent() {
     []
   )
 
-  // Handle unsaved changes notification from renderer
-  const handleUnsavedChange = useCallback(() => {
-    setHasUnsavedChanges(true)
-  }, [])
-
   // Handle refresh button click
   const handleRefresh = useCallback(() => {
     setRefreshTrigger((n) => n + 1)
@@ -360,7 +355,7 @@ function ScreenPageContent() {
               config={screenConfig}
               onConfigChange={handleScreenConfigChange}
               savedConfig={screen?.config ?? null}
-              onUnsavedChange={handleUnsavedChange}
+              setHasUnsavedChanges={setHasUnsavedChanges}
               timeRange={apiTimeRange}
               rawTimeRange={rawTimeRange}
               onTimeRangeChange={handleTimeRangeChange}

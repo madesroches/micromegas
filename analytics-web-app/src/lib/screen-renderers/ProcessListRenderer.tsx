@@ -66,7 +66,7 @@ export function ProcessListRenderer({
   config,
   onConfigChange,
   savedConfig,
-  onUnsavedChange,
+  setHasUnsavedChanges,
   timeRange,
   rawTimeRange,
   timeRangeLabel,
@@ -165,7 +165,7 @@ export function ProcessListRenderer({
     rawTimeRange,
     savedConfig: savedProcessListConfig,
     config: processListConfig,
-    onUnsavedChange,
+    setHasUnsavedChanges,
     onConfigChange,
   })
 
@@ -174,7 +174,7 @@ export function ProcessListRenderer({
     config: processListConfig,
     savedConfig: savedProcessListConfig,
     onConfigChange,
-    onUnsavedChange,
+    setHasUnsavedChanges,
     execute: (sql: string) => executeWithSort(sql),
   })
 

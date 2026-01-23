@@ -16,8 +16,8 @@ interface TimeRangeSyncParams {
   savedConfig: TimeRangeConfig | null
   /** Current working config */
   config: TimeRangeConfig
-  /** Callback when there are unsaved changes */
-  onUnsavedChange: () => void
+  /** Set unsaved changes state */
+  setHasUnsavedChanges: (value: boolean) => void
   /** Callback to update config */
   onConfigChange: (config: ScreenConfig) => void
 }
@@ -36,7 +36,7 @@ export function useTimeRangeSync({
   rawTimeRange,
   savedConfig,
   config,
-  onUnsavedChange,
+  setHasUnsavedChanges,
   onConfigChange,
 }: TimeRangeSyncParams): void {
   const prevTimeRangeRef = useRef<{ from: string; to: string } | null>(null)
@@ -60,9 +60,7 @@ export function useTimeRangeSync({
     // Check if differs from saved config
     const savedFrom = savedConfig?.timeRangeFrom ?? DEFAULT_TIME_RANGE.from
     const savedTo = savedConfig?.timeRangeTo ?? DEFAULT_TIME_RANGE.to
-    if (current.from !== savedFrom || current.to !== savedTo) {
-      onUnsavedChange()
-    }
+    setHasUnsavedChanges(current.from !== savedFrom || current.to !== savedTo)
 
     // Update config with time range
     onConfigChange({
@@ -70,5 +68,5 @@ export function useTimeRangeSync({
       timeRangeFrom: current.from,
       timeRangeTo: current.to,
     })
-  }, [rawTimeRange, savedConfig, config, onUnsavedChange, onConfigChange])
+  }, [rawTimeRange, savedConfig, config, setHasUnsavedChanges, onConfigChange])
 }

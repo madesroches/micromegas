@@ -14,8 +14,8 @@ interface SqlHandlersParams {
   savedConfig: SqlConfig | null
   /** Callback to update config */
   onConfigChange: (config: ScreenConfig) => void
-  /** Callback when there are unsaved changes */
-  onUnsavedChange: () => void
+  /** Set unsaved changes state */
+  setHasUnsavedChanges: (value: boolean) => void
   /** Execute query function from useScreenQuery */
   execute: (sql: string) => void
 }
@@ -44,18 +44,18 @@ export function useSqlHandlers({
   config,
   savedConfig,
   onConfigChange,
-  onUnsavedChange,
+  setHasUnsavedChanges,
   execute,
 }: SqlHandlersParams): SqlHandlers {
   const handleRunQuery = useCallback(
     (sql: string) => {
       onConfigChange({ ...config, sql })
-      if (savedConfig && sql !== savedConfig.sql) {
-        onUnsavedChange()
+      if (savedConfig) {
+        setHasUnsavedChanges(sql !== savedConfig.sql)
       }
       execute(sql)
     },
-    [config, savedConfig, onConfigChange, onUnsavedChange, execute]
+    [config, savedConfig, onConfigChange, setHasUnsavedChanges, execute]
   )
 
   const handleResetQuery = useCallback(() => {
@@ -65,11 +65,11 @@ export function useSqlHandlers({
 
   const handleSqlChange = useCallback(
     (sql: string) => {
-      if (savedConfig && sql !== savedConfig.sql) {
-        onUnsavedChange()
+      if (savedConfig) {
+        setHasUnsavedChanges(sql !== savedConfig.sql)
       }
     },
-    [savedConfig, onUnsavedChange]
+    [savedConfig, setHasUnsavedChanges]
   )
 
   return { handleRunQuery, handleResetQuery, handleSqlChange }
