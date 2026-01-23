@@ -46,6 +46,12 @@ export interface ScreenRendererProps {
   saveError: string | null
   /** Increment to trigger a refresh (re-execute query) */
   refreshTrigger: number
+  /** Variable values from URL (for notebooks) */
+  urlVariables?: Record<string, string>
+  /** Update a URL variable value (for notebooks) */
+  onUrlVariableChange?: (name: string, value: string) => void
+  /** Remove a URL variable (for notebooks, when variable cell is deleted) */
+  onUrlVariableRemove?: (name: string) => void
 }
 
 /**

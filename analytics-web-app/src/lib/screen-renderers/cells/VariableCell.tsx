@@ -1,3 +1,4 @@
+import { useState, useEffect, useRef } from 'react'
 import type {
   CellTypeMetadata,
   CellRendererProps,
@@ -7,6 +8,7 @@ import type {
 import type { VariableCellConfig, CellConfig, CellState } from '../notebook-types'
 import { AvailableVariablesPanel } from '@/components/AvailableVariablesPanel'
 import { substituteMacros, DEFAULT_SQL } from '../notebook-utils'
+import { useDebounce } from '@/hooks/useDebounce'
 
 // =============================================================================
 // Renderer Component
@@ -19,8 +21,40 @@ export function VariableCell({
   variableOptions,
   status,
 }: CellRendererProps) {
-  const currentValue = value || ''
   const type = variableType || 'text'
+  const isTextInput = type === 'text' || type === 'number'
+
+  // For text/number inputs, use local state with debouncing to avoid excessive URL updates
+  const [localValue, setLocalValue] = useState(value ?? '')
+  const debouncedValue = useDebounce(localValue, 300)
+
+  // Track if this is the initial render to avoid unnecessary URL update on mount
+  const isInitialRef = useRef(true)
+
+  // Sync debounced value to config (for text/number inputs)
+  useEffect(() => {
+    if (!isTextInput) return
+
+    // Skip initial render to avoid unnecessary URL update on mount
+    if (isInitialRef.current) {
+      isInitialRef.current = false
+      return
+    }
+
+    // Only update if the value actually changed
+    if (debouncedValue !== value) {
+      onValueChange?.(debouncedValue)
+    }
+  }, [debouncedValue, isTextInput, onValueChange, value])
+
+  // Sync local value when config changes externally (e.g., browser back/forward)
+  useEffect(() => {
+    if (isTextInput && value !== undefined && value !== localValue) {
+      setLocalValue(value)
+    }
+    // Only run when value prop changes, not when localValue changes
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value, isTextInput])
 
   if (status === 'loading') {
     return (
@@ -31,16 +65,22 @@ export function VariableCell({
     )
   }
 
-  const handleChange = (newValue: string) => {
+  // Combobox changes are immediate (no debouncing needed)
+  const handleComboboxChange = (newValue: string) => {
     onValueChange?.(newValue)
+  }
+
+  // Text/number changes update local state (debounced sync to config)
+  const handleTextChange = (newValue: string) => {
+    setLocalValue(newValue)
   }
 
   return (
     <div className="flex items-center gap-3 py-1">
       {type === 'combobox' && (
         <select
-          value={currentValue}
-          onChange={(e) => handleChange(e.target.value)}
+          value={value ?? ''}
+          onChange={(e) => handleComboboxChange(e.target.value)}
           className="flex-1 max-w-[400px] px-3 py-2 bg-app-card border border-theme-border rounded-md text-theme-text-primary text-sm focus:outline-none focus:border-accent-link"
         >
           {variableOptions && variableOptions.length > 0 ? (
@@ -58,8 +98,8 @@ export function VariableCell({
       {type === 'text' && (
         <input
           type="text"
-          value={currentValue}
-          onChange={(e) => handleChange(e.target.value)}
+          value={localValue}
+          onChange={(e) => handleTextChange(e.target.value)}
           className="flex-1 max-w-[400px] px-3 py-2 bg-app-card border border-theme-border rounded-md text-theme-text-primary text-sm focus:outline-none focus:border-accent-link"
           placeholder="Enter value..."
         />
@@ -68,8 +108,8 @@ export function VariableCell({
       {type === 'number' && (
         <input
           type="number"
-          value={currentValue}
-          onChange={(e) => handleChange(e.target.value)}
+          value={localValue}
+          onChange={(e) => handleTextChange(e.target.value)}
           className="flex-1 max-w-[200px] px-3 py-2 bg-app-card border border-theme-border rounded-md text-theme-text-primary text-sm focus:outline-none focus:border-accent-link"
           placeholder="0"
         />
@@ -192,11 +232,23 @@ export const variableMetadata: CellTypeMetadata = {
     return { data: result, variableOptions: options }
   },
 
-  // Auto-select first option if no value is set
-  onExecutionComplete: (config: CellConfig, state: CellState, { setVariableValue }) => {
+  // Validate current value or auto-select fallback for combobox variables
+  onExecutionComplete: (config: CellConfig, state: CellState, { setVariableValue, currentValue }) => {
+    const varConfig = config as VariableCellConfig
     const options = state.variableOptions
-    if (options && options.length > 0) {
-      setVariableValue(config.name, options[0].value)
+
+    // Only combobox variables need validation
+    if (!options || options.length === 0) return
+
+    // If current value exists and is valid, keep it
+    if (currentValue && options.some((o) => o.value === currentValue)) {
+      return
+    }
+
+    // Current value is missing or invalid - use default or first option
+    const fallbackValue = varConfig.defaultValue || options[0]?.value
+    if (fallbackValue) {
+      setVariableValue(config.name, fallbackValue)
     }
   },
 

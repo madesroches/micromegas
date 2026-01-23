@@ -110,13 +110,17 @@ export interface CellTypeMetadata {
   ) => Promise<Partial<CellState> | null>
 
   /**
-   * Post-execution hook (e.g., auto-select first option for variables).
-   * Called after successful execution if the variable isn't already set.
+   * Post-execution hook (e.g., auto-select/validate value for variables).
+   * Called after successful execution to validate current value or set default.
+   * @param currentValue - The current variable value (if any) from URL config
    */
   readonly onExecutionComplete?: (
     config: CellConfig,
     state: CellState,
-    context: { setVariableValue: (name: string, value: string) => void }
+    context: {
+      setVariableValue: (name: string, value: string) => void
+      currentValue: string | undefined
+    }
   ) => void
 
   /** Extracts props for the renderer from config and state */
@@ -141,12 +145,6 @@ export const CELL_TYPE_METADATA: Record<CellType, CellTypeMetadata> = {
   markdown: markdownMetadata,
   variable: variableMetadata,
 }
-
-// Compile-time exhaustiveness check - fails if CellType has values not in the map
-const _ensureAllCellTypesHaveMetadata: Record<CellType, CellTypeMetadata> = CELL_TYPE_METADATA
-
-// Silence unused variable warning
-void _ensureAllCellTypesHaveMetadata
 
 /**
  * Get metadata for a cell type.

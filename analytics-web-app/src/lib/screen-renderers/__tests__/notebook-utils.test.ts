@@ -13,58 +13,9 @@ Object.defineProperty(window, 'matchMedia', {
   })),
 })
 
-// Mock cell-registry to prevent uPlot CSS import chain, but keep createDefaultCell functional
-jest.mock('../cell-registry', () => {
-  // Use the actual DEFAULT_SQL values from notebook-utils
-  const { DEFAULT_SQL } = jest.requireActual('../notebook-utils')
-
-  const CELL_TYPE_METADATA: Record<string, { label: string; defaultHeight: number; createDefaultConfig: () => object }> = {
-    table: {
-      label: 'Table',
-      defaultHeight: 300,
-      createDefaultConfig: () => ({ type: 'table', sql: DEFAULT_SQL.table }),
-    },
-    chart: {
-      label: 'Chart',
-      defaultHeight: 300,
-      createDefaultConfig: () => ({ type: 'chart', sql: DEFAULT_SQL.chart }),
-    },
-    log: {
-      label: 'Log',
-      defaultHeight: 300,
-      createDefaultConfig: () => ({ type: 'log', sql: DEFAULT_SQL.log }),
-    },
-    markdown: {
-      label: 'Markdown',
-      defaultHeight: 150,
-      createDefaultConfig: () => ({ type: 'markdown', content: '# Notes\n\nAdd your documentation here.' }),
-    },
-    variable: {
-      label: 'Variable',
-      defaultHeight: 60,
-      createDefaultConfig: () => ({ type: 'variable', variableType: 'combobox', sql: DEFAULT_SQL.variable }),
-    },
-  }
-
-  return {
-    CELL_TYPE_METADATA,
-    createDefaultCell: (type: string, existingNames: Set<string>) => {
-      const meta = CELL_TYPE_METADATA[type]
-      let name = meta.label
-      let counter = 1
-      while (existingNames.has(name)) {
-        counter++
-        name = `${meta.label}_${counter}`
-      }
-      return {
-        name,
-        layout: { height: meta.defaultHeight },
-        ...meta.createDefaultConfig(),
-      }
-    },
-    getCellTypeMetadata: (type: string) => CELL_TYPE_METADATA[type],
-  }
-})
+// Mock cell-registry to prevent uPlot CSS import chain
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+jest.mock('../cell-registry', () => require('../__test-utils__/cell-registry-mock').createCellRegistryMock())
 
 import { substituteMacros, DEFAULT_SQL, sanitizeCellName, validateCellName } from '../notebook-utils'
 import { createDefaultCell } from '../cell-registry'

@@ -43,8 +43,9 @@ export function CellEditor({
     (value: string) => {
       setEditedName(value)
 
-      // Validate the name
-      const error = validateCellName(value, existingNames, cell.name)
+      // Validate the name (check reserved names for variable cells)
+      const isVariable = cell.type === 'variable'
+      const error = validateCellName(value, existingNames, cell.name, isVariable)
       if (error) {
         setNameError(error)
         return
@@ -55,7 +56,7 @@ export function CellEditor({
       const sanitizedName = sanitizeCellName(value)
       onUpdate({ name: sanitizedName })
     },
-    [onUpdate, cell.name, existingNames]
+    [onUpdate, cell.name, cell.type, existingNames]
   )
 
   // Handle config changes from the type-specific editor

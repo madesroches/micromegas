@@ -59,85 +59,8 @@ jest.mock('apache-arrow', () => {
 })
 
 // Mock cell-registry to prevent uPlot CSS import chain
-jest.mock('../cell-registry', () => ({
-  getCellTypeMetadata: (type: string) => {
-    const { substituteMacros } = jest.requireActual('../notebook-utils')
-
-    const metadata: Record<string, {
-      label: string
-      showTypeBadge: boolean
-      canBlockDownstream: boolean
-      execute?: (config: unknown, context: unknown) => Promise<{ data: unknown } | null>
-      onExecutionComplete?: (config: unknown, state: unknown, context: { setVariableValue: (name: string, value: string) => void }) => void
-    }> = {
-      table: {
-        label: 'Table',
-        showTypeBadge: true,
-        canBlockDownstream: true,
-        execute: async (config: { sql?: string }, { variables, timeRange, runQuery }: { variables: Record<string, string>; timeRange: { begin: string; end: string }; runQuery: (sql: string) => Promise<unknown> }) => {
-          if (!config.sql) {
-            return { data: null }
-          }
-          const sql = substituteMacros(config.sql, variables, timeRange)
-          const data = await runQuery(sql)
-          return { data }
-        },
-      },
-      chart: {
-        label: 'Chart',
-        showTypeBadge: true,
-        canBlockDownstream: true,
-        execute: async (config: { sql?: string }, { variables, timeRange, runQuery }: { variables: Record<string, string>; timeRange: { begin: string; end: string }; runQuery: (sql: string) => Promise<unknown> }) => {
-          if (!config.sql) {
-            return { data: null }
-          }
-          const sql = substituteMacros(config.sql, variables, timeRange)
-          const data = await runQuery(sql)
-          return { data }
-        },
-      },
-      log: {
-        label: 'Log',
-        showTypeBadge: true,
-        canBlockDownstream: true,
-        execute: async (config: { sql?: string }, { variables, timeRange, runQuery }: { variables: Record<string, string>; timeRange: { begin: string; end: string }; runQuery: (sql: string) => Promise<unknown> }) => {
-          if (!config.sql) {
-            return { data: null }
-          }
-          const sql = substituteMacros(config.sql, variables, timeRange)
-          const data = await runQuery(sql)
-          return { data }
-        },
-      },
-      markdown: {
-        label: 'Markdown',
-        showTypeBadge: false,
-        canBlockDownstream: false,
-        // No execute method - markdown cells don't execute
-      },
-      variable: {
-        label: 'Variable',
-        showTypeBadge: true,
-        canBlockDownstream: true,
-        execute: async (config: { variableType?: string; sql?: string }, { variables, timeRange, runQuery }: { variables: Record<string, string>; timeRange: { begin: string; end: string }; runQuery: (sql: string) => Promise<unknown> }) => {
-          if (config.variableType !== 'combobox' || !config.sql) {
-            return null // Nothing to execute
-          }
-          const sql = substituteMacros(config.sql, variables, timeRange)
-          const data = await runQuery(sql)
-          return { data, variableOptions: [{ label: 'Option 1', value: 'val0' }] }
-        },
-        onExecutionComplete: (config: { name: string }, state: { variableOptions?: { value: string }[] }, { setVariableValue }: { setVariableValue: (name: string, value: string) => void }) => {
-          const options = state.variableOptions
-          if (options && options.length > 0) {
-            setVariableValue(config.name, options[0].value)
-          }
-        },
-      },
-    }
-    return metadata[type] || metadata['table']
-  },
-}))
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+jest.mock('../cell-registry', () => require('../__test-utils__/cell-registry-mock').createCellRegistryMock({ withSqlExecution: true }))
 
 import { useCellExecution } from '../useCellExecution'
 import { CellConfig } from '../notebook-utils'
@@ -369,7 +292,7 @@ describe('useCellExecution', () => {
         expect(setVariableValue).toHaveBeenCalledWith('Dropdown', 'val0')
       })
 
-      it('should not auto-select if value already set', async () => {
+      it('should not auto-select if value already set and valid', async () => {
         mockStreamQuery.mockReturnValue(createSuccessResults())
 
         const cells: CellConfig[] = [
@@ -382,7 +305,8 @@ describe('useCellExecution', () => {
           },
         ]
         const setVariableValue = jest.fn()
-        const variableValuesRef = createVariableValuesRef({ Dropdown: 'existing' })
+        // Use 'val0' which is a valid option returned by the mock
+        const variableValuesRef = createVariableValuesRef({ Dropdown: 'val0' })
 
         const { result } = renderHook(() =>
           useCellExecution({
@@ -399,6 +323,40 @@ describe('useCellExecution', () => {
         })
 
         expect(setVariableValue).not.toHaveBeenCalled()
+      })
+
+      it('should replace invalid value with fallback', async () => {
+        mockStreamQuery.mockReturnValue(createSuccessResults())
+
+        const cells: CellConfig[] = [
+          {
+            type: 'variable',
+            name: 'Dropdown',
+            variableType: 'combobox',
+            sql: 'SELECT name FROM options',
+            layout: { height: 'auto' },
+          },
+        ]
+        const setVariableValue = jest.fn()
+        // Use 'invalid_value' which is NOT in the options
+        const variableValuesRef = createVariableValuesRef({ Dropdown: 'invalid_value' })
+
+        const { result } = renderHook(() =>
+          useCellExecution({
+            cells,
+            timeRange: defaultTimeRange,
+            variableValuesRef,
+            setVariableValue,
+            refreshTrigger: 0,
+          })
+        )
+
+        await act(async () => {
+          await result.current.executeCell(0)
+        })
+
+        // Should replace invalid value with first option
+        expect(setVariableValue).toHaveBeenCalledWith('Dropdown', 'val0')
       })
     })
 
