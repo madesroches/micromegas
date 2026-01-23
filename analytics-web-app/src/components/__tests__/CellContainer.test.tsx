@@ -268,16 +268,16 @@ describe('CellContainer', () => {
     it('should apply selected styles when isSelected is true', () => {
       const { container } = render(<CellContainer {...defaultProps} isSelected={true} />)
 
-      // Check for selected class
+      // Check for selected class (uses CSS variable for brand palette)
       const cell = container.firstChild as HTMLElement
-      expect(cell.className).toContain('border-accent-link')
+      expect(cell.className).toContain('border-[var(--selection-border)]')
     })
 
     it('should not apply selected styles when isSelected is false', () => {
       const { container } = render(<CellContainer {...defaultProps} isSelected={false} />)
 
       const cell = container.firstChild as HTMLElement
-      expect(cell.className).not.toContain('border-accent-link')
+      expect(cell.className).not.toContain('border-[var(--selection-border)]')
     })
   })
 
