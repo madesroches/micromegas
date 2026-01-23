@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect } from 'react'
 import { X, Play, Trash2 } from 'lucide-react'
 import { CellType } from '@/lib/screen-renderers/cell-registry'
+import { validateCellName, sanitizeCellName } from '@/lib/screen-renderers/notebook-utils'
 import { Button } from '@/components/ui/button'
 
 const CELL_TYPE_LABELS: Record<CellType, string> = {
@@ -75,21 +76,22 @@ export function CellEditor({
     [onUpdate]
   )
 
-  // Save name changes with uniqueness validation
+  // Save name changes with validation
   const handleNameChange = useCallback(
     (value: string) => {
       setEditedName(value)
-      // Check if name is duplicate (excluding current cell's original name)
-      if (value !== cell.name && existingNames.has(value)) {
-        setNameError('A cell with this name already exists')
+
+      // Validate the name
+      const error = validateCellName(value, existingNames, cell.name)
+      if (error) {
+        setNameError(error)
         return
       }
-      if (value.trim() === '') {
-        setNameError('Cell name cannot be empty')
-        return
-      }
+
       setNameError(null)
-      onUpdate({ name: value })
+      // Sanitize the name for use as an identifier (spaces -> underscores)
+      const sanitizedName = sanitizeCellName(value)
+      onUpdate({ name: sanitizedName })
     },
     [onUpdate, cell.name, existingNames]
   )

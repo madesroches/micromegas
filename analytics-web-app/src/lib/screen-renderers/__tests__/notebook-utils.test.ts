@@ -1,4 +1,4 @@
-import { substituteMacros, createDefaultCell, DEFAULT_SQL } from '../notebook-utils'
+import { substituteMacros, createDefaultCell, DEFAULT_SQL, sanitizeCellName, validateCellName } from '../notebook-utils'
 
 describe('substituteMacros', () => {
   const defaultTimeRange = { begin: '2024-01-01T00:00:00Z', end: '2024-01-02T00:00:00Z' }
@@ -122,6 +122,71 @@ describe('substituteMacros', () => {
   })
 })
 
+describe('sanitizeCellName', () => {
+  it('should convert spaces to underscores', () => {
+    expect(sanitizeCellName('My Cell')).toBe('My_Cell')
+    expect(sanitizeCellName('Table 2')).toBe('Table_2')
+    // Multiple spaces become a single underscore
+    expect(sanitizeCellName('Multi  Space')).toBe('Multi_Space')
+  })
+
+  it('should remove non-ASCII characters', () => {
+    expect(sanitizeCellName('Test\u00e9')).toBe('Test')
+    expect(sanitizeCellName('\u4e2d\u6587Name')).toBe('Name')
+    expect(sanitizeCellName('Caf\u00e9_Name')).toBe('Caf_Name')
+  })
+
+  it('should remove special characters', () => {
+    expect(sanitizeCellName('Test-Name')).toBe('TestName')
+    expect(sanitizeCellName('Test.Name')).toBe('TestName')
+    expect(sanitizeCellName('Test@Name!')).toBe('TestName')
+  })
+
+  it('should prefix with underscore if starts with number', () => {
+    expect(sanitizeCellName('123Test')).toBe('_123Test')
+    expect(sanitizeCellName('1')).toBe('_1')
+  })
+
+  it('should preserve valid identifiers', () => {
+    expect(sanitizeCellName('ValidName')).toBe('ValidName')
+    expect(sanitizeCellName('valid_name_2')).toBe('valid_name_2')
+    expect(sanitizeCellName('_private')).toBe('_private')
+  })
+})
+
+describe('validateCellName', () => {
+  it('should return error for empty name', () => {
+    expect(validateCellName('', new Set())).toBe('Cell name cannot be empty')
+    expect(validateCellName('   ', new Set())).toBe('Cell name cannot be empty')
+  })
+
+  it('should return error for non-ASCII characters', () => {
+    expect(validateCellName('Caf\u00e9', new Set())).toBe('Cell name can only contain ASCII characters')
+    expect(validateCellName('\u4e2d\u6587', new Set())).toBe('Cell name can only contain ASCII characters')
+  })
+
+  it('should return error for invalid characters', () => {
+    expect(validateCellName('Test-Name', new Set())).toBe('Cell name can only contain letters, numbers, underscores, and spaces')
+    expect(validateCellName('Test@Name', new Set())).toBe('Cell name can only contain letters, numbers, underscores, and spaces')
+  })
+
+  it('should return error for duplicate names after sanitization', () => {
+    const existingNames = new Set(['Table_2'])
+    expect(validateCellName('Table 2', existingNames)).toBe('A cell with this name already exists')
+  })
+
+  it('should allow same name for current cell', () => {
+    const existingNames = new Set(['Table_2'])
+    expect(validateCellName('Table 2', existingNames, 'Table_2')).toBeNull()
+  })
+
+  it('should return null for valid names', () => {
+    expect(validateCellName('ValidName', new Set())).toBeNull()
+    expect(validateCellName('Valid Name', new Set())).toBeNull()
+    expect(validateCellName('Valid_Name_2', new Set())).toBeNull()
+  })
+})
+
 describe('createDefaultCell', () => {
   describe('name generation', () => {
     it('should create cell with capitalized type name', () => {
@@ -132,13 +197,13 @@ describe('createDefaultCell', () => {
     it('should create unique name when base name exists', () => {
       const existingNames = new Set(['Table'])
       const cell = createDefaultCell('table', existingNames)
-      expect(cell.name).toBe('Table 2')
+      expect(cell.name).toBe('Table_2')
     })
 
     it('should create unique name with incrementing counter', () => {
-      const existingNames = new Set(['Table', 'Table 2', 'Table 3'])
+      const existingNames = new Set(['Table', 'Table_2', 'Table_3'])
       const cell = createDefaultCell('table', existingNames)
-      expect(cell.name).toBe('Table 4')
+      expect(cell.name).toBe('Table_4')
     })
 
     it('should generate correct names for all cell types', () => {

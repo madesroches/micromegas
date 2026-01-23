@@ -53,17 +53,77 @@ LIMIT 100`,
 // ============================================================================
 
 /**
+ * Sanitizes a cell name to be a valid identifier for variable substitution.
+ * - Converts spaces to underscores
+ * - Removes non-ASCII characters
+ * - Ensures name starts with a letter or underscore
+ */
+export function sanitizeCellName(name: string): string {
+  let sanitized = name
+    // Replace spaces with underscores
+    .replace(/\s+/g, '_')
+    // Remove non-ASCII characters
+    .replace(/[^\x00-\x7F]/g, '')
+    // Remove characters that aren't alphanumeric or underscore
+    .replace(/[^a-zA-Z0-9_]/g, '')
+
+  // Ensure name starts with a letter or underscore
+  if (sanitized && /^[0-9]/.test(sanitized)) {
+    sanitized = '_' + sanitized
+  }
+
+  return sanitized
+}
+
+/**
+ * Validates a cell name and returns an error message if invalid.
+ * Returns null if the name is valid.
+ */
+export function validateCellName(
+  name: string,
+  existingNames: Set<string>,
+  currentName?: string
+): string | null {
+  if (!name || name.trim() === '') {
+    return 'Cell name cannot be empty'
+  }
+
+  // Check for non-ASCII characters
+  if (/[^\x00-\x7F]/.test(name)) {
+    return 'Cell name can only contain ASCII characters'
+  }
+
+  // Check for invalid identifier characters
+  if (/[^a-zA-Z0-9_ ]/.test(name)) {
+    return 'Cell name can only contain letters, numbers, underscores, and spaces'
+  }
+
+  // Check uniqueness (excluding current cell's name)
+  const normalizedName = sanitizeCellName(name)
+  const normalizedExisting = new Set(
+    [...existingNames]
+      .filter((n) => n !== currentName)
+      .map((n) => sanitizeCellName(n))
+  )
+  if (normalizedExisting.has(normalizedName)) {
+    return 'A cell with this name already exists'
+  }
+
+  return null
+}
+
+/**
  * Creates a default cell configuration for the given type.
  * Generates a unique name if the base name already exists.
  */
 export function createDefaultCell(type: CellType, existingNames: Set<string>): CellConfig {
-  // Generate unique name
+  // Generate unique name (use underscore separator for valid identifiers)
   const baseName = type.charAt(0).toUpperCase() + type.slice(1)
   let name = baseName
   let counter = 1
   while (existingNames.has(name)) {
     counter++
-    name = `${baseName} ${counter}`
+    name = `${baseName}_${counter}`
   }
 
   const baseConfig: CellConfigBase = {
