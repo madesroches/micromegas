@@ -50,6 +50,8 @@ export interface ScreenRendererProps {
   urlVariables?: Record<string, string>
   /** Update a URL variable value (for notebooks) */
   onUrlVariableChange?: (name: string, value: string) => void
+  /** Remove a URL variable (for notebooks, when variable cell is deleted) */
+  onUrlVariableRemove?: (name: string) => void
 }
 
 /**

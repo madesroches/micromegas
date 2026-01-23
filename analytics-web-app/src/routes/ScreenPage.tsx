@@ -130,6 +130,16 @@ function ScreenPageContent() {
     [updateConfig, urlConfig.variables]
   )
 
+  // Variable remove handler (cleans up orphaned URL params when variable cell is deleted)
+  const handleUrlVariableRemove = useCallback(
+    (name: string) => {
+      const newVariables = { ...(urlConfig.variables || {}) }
+      delete newVariables[name]
+      updateConfig({ variables: newVariables }, { replace: true })
+    },
+    [updateConfig, urlConfig.variables]
+  )
+
   // Screen state
   const [screen, setScreen] = useState<Screen | null>(null)
 
@@ -408,6 +418,7 @@ function ScreenPageContent() {
               refreshTrigger={refreshTrigger}
               urlVariables={urlConfig.variables || {}}
               onUrlVariableChange={handleUrlVariableChange}
+              onUrlVariableRemove={handleUrlVariableRemove}
             />
           </div>
         </div>

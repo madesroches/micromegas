@@ -8,9 +8,9 @@ export interface UseNotebookVariablesResult {
   variableValuesRef: React.MutableRefObject<Record<string, string>>
   /** Set a variable value (calls onVariableChange callback) */
   setVariableValue: (cellName: string, value: string) => void
-  /** Migrate variable state when a cell is renamed (no-op, state is in URL) */
+  /** Migrate variable state when a cell is renamed (transfers value, removes old param) */
   migrateVariable: (oldName: string, newName: string) => void
-  /** Remove variable state when a cell is deleted (no-op, state is in URL) */
+  /** Remove variable state when a cell is deleted (removes URL param) */
   removeVariable: (cellName: string) => void
 }
 
@@ -29,7 +29,8 @@ export interface UseNotebookVariablesResult {
 export function useNotebookVariables(
   cells: CellConfig[],
   configVariables: Record<string, string> = {},
-  onVariableChange?: (name: string, value: string) => void
+  onVariableChange?: (name: string, value: string) => void,
+  onVariableRemove?: (name: string) => void
 ): UseNotebookVariablesResult {
   // Compute effective values: config value → defaultValue → undefined
   const variableValues = useMemo(() => {
@@ -66,18 +67,36 @@ export function useNotebookVariables(
     [onVariableChange]
   )
 
-  // Migration is a no-op since state lives in URL, not in this hook
-  // When a variable cell is renamed, the old URL param becomes orphaned
-  // and the new name will use its default value until set
-  const migrateVariable = useCallback((_oldName: string, _newName: string) => {
-    // No-op: URL params are keyed by name, migration happens naturally
-  }, [])
+  // Migrate variable from old name to new name when cell is renamed
+  const migrateVariable = useCallback(
+    (oldName: string, newName: string) => {
+      const oldValue = variableValuesRef.current[oldName]
+      if (oldValue !== undefined) {
+        // Update ref
+        const nextRef = { ...variableValuesRef.current }
+        nextRef[newName] = oldValue
+        delete nextRef[oldName]
+        variableValuesRef.current = nextRef
+        // Update URL: set new name, remove old name
+        onVariableChange?.(newName, oldValue)
+        onVariableRemove?.(oldName)
+      }
+    },
+    [onVariableChange, onVariableRemove]
+  )
 
-  // Removal is a no-op since state lives in URL, not in this hook
-  // Orphaned URL params are simply ignored
-  const removeVariable = useCallback((_cellName: string) => {
-    // No-op: URL params for deleted variables are ignored
-  }, [])
+  // Remove variable from URL when cell is deleted
+  const removeVariable = useCallback(
+    (cellName: string) => {
+      // Remove from ref immediately
+      const nextRef = { ...variableValuesRef.current }
+      delete nextRef[cellName]
+      variableValuesRef.current = nextRef
+      // Delegate to parent callback (updates URL config)
+      onVariableRemove?.(cellName)
+    },
+    [onVariableRemove]
+  )
 
   return {
     variableValues,
