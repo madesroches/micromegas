@@ -1,4 +1,4 @@
-import { ComponentType, ReactNode } from 'react'
+import { ComponentType } from 'react'
 import { Table } from 'apache-arrow'
 import type { CellConfig, CellState, CellType, CellStatus } from './notebook-types'
 
@@ -81,8 +81,8 @@ export interface CellTypeMetadata {
   /** Display name (e.g., "Table", "Chart") */
   readonly label: string
 
-  /** Icon for the cell type (e.g., "T", "C") */
-  readonly icon: ReactNode
+  /** Icon for the cell type (single character, e.g., "T", "C") */
+  readonly icon: string
 
   /** Description for add cell modal */
   readonly description: string
