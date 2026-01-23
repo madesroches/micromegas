@@ -2,6 +2,7 @@ import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { CellTypeMetadata, CellRendererProps, CellEditorProps } from '../cell-registry'
 import type { MarkdownCellConfig, CellConfig, CellState } from '../notebook-types'
+import { SyntaxEditor } from '@/components/SyntaxEditor'
 
 // =============================================================================
 // Renderer Component
@@ -29,11 +30,12 @@ function MarkdownCellEditor({ config, onChange }: CellEditorProps) {
       <label className="block text-xs font-medium text-theme-text-secondary uppercase mb-1.5">
         Markdown Content
       </label>
-      <textarea
+      <SyntaxEditor
         value={mdConfig.content}
-        onChange={(e) => onChange({ ...mdConfig, content: e.target.value })}
-        className="w-full min-h-[200px] px-3 py-2 bg-app-bg border border-theme-border rounded-md text-theme-text-primary text-sm font-mono focus:outline-none focus:border-accent-link resize-y"
+        onChange={(content) => onChange({ ...mdConfig, content })}
+        language="markdown"
         placeholder="# Heading&#10;&#10;Your markdown here..."
+        minHeight="200px"
       />
     </div>
   )

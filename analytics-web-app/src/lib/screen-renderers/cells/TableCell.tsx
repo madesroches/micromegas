@@ -9,6 +9,7 @@ import type { QueryCellConfig, CellConfig, CellState } from '../notebook-types'
 import { formatTimestamp } from '@/lib/time-range'
 import { timestampToDate, isTimeType, isNumericType, isBinaryType } from '@/lib/arrow-utils'
 import { AvailableVariablesPanel } from '@/components/AvailableVariablesPanel'
+import { SyntaxEditor } from '@/components/SyntaxEditor'
 import { substituteMacros, DEFAULT_SQL } from '../notebook-utils'
 
 // =============================================================================
@@ -139,11 +140,12 @@ function TableCellEditor({ config, onChange, variables, timeRange }: CellEditorP
         <label className="block text-xs font-medium text-theme-text-secondary uppercase mb-1.5">
           SQL Query
         </label>
-        <textarea
+        <SyntaxEditor
           value={tableConfig.sql}
-          onChange={(e) => onChange({ ...tableConfig, sql: e.target.value })}
-          className="w-full min-h-[150px] px-3 py-2 bg-app-bg border border-theme-border rounded-md text-theme-text-primary text-sm font-mono focus:outline-none focus:border-accent-link resize-y"
+          onChange={(sql) => onChange({ ...tableConfig, sql })}
+          language="sql"
           placeholder="SELECT * FROM ..."
+          minHeight="150px"
         />
       </div>
       <AvailableVariablesPanel variables={variables} timeRange={timeRange} />

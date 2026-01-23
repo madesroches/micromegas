@@ -1,26 +1,30 @@
 import { useCallback, useRef } from 'react'
 
 interface ResizeHandleProps {
-  onResize: (deltaY: number) => void
-  minHeight?: number
+  onResize: (delta: number) => void
+  orientation?: 'horizontal' | 'vertical'
 }
 
-export function ResizeHandle({ onResize, minHeight = 50 }: ResizeHandleProps) {
-  const startY = useRef<number>(0)
+export function ResizeHandle({ onResize, orientation = 'vertical' }: ResizeHandleProps) {
+  const startPos = useRef<number>(0)
   const isDragging = useRef(false)
+
+  const isHorizontal = orientation === 'horizontal'
+  const cursor = isHorizontal ? 'ew-resize' : 'ns-resize'
 
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {
       e.preventDefault()
       e.stopPropagation()
-      startY.current = e.clientY
+      startPos.current = isHorizontal ? e.clientX : e.clientY
       isDragging.current = true
 
       const handleMouseMove = (moveEvent: MouseEvent) => {
         if (!isDragging.current) return
-        const deltaY = moveEvent.clientY - startY.current
-        startY.current = moveEvent.clientY
-        onResize(deltaY)
+        const currentPos = isHorizontal ? moveEvent.clientX : moveEvent.clientY
+        const delta = currentPos - startPos.current
+        startPos.current = currentPos
+        onResize(delta)
       }
 
       const handleMouseUp = () => {
@@ -33,11 +37,24 @@ export function ResizeHandle({ onResize, minHeight = 50 }: ResizeHandleProps) {
 
       document.addEventListener('mousemove', handleMouseMove)
       document.addEventListener('mouseup', handleMouseUp)
-      document.body.style.cursor = 'ns-resize'
+      document.body.style.cursor = cursor
       document.body.style.userSelect = 'none'
     },
-    [onResize]
+    [onResize, isHorizontal, cursor]
   )
+
+  if (isHorizontal) {
+    return (
+      <div
+        className="w-1 cursor-ew-resize flex items-center justify-center group hover:bg-accent-link/20 transition-colors"
+        onMouseDown={handleMouseDown}
+        role="separator"
+        aria-orientation="vertical"
+      >
+        <div className="w-0.5 h-8 rounded-full bg-theme-border group-hover:bg-accent-link transition-colors" />
+      </div>
+    )
+  }
 
   return (
     <div
@@ -45,7 +62,6 @@ export function ResizeHandle({ onResize, minHeight = 50 }: ResizeHandleProps) {
       onMouseDown={handleMouseDown}
       role="separator"
       aria-orientation="horizontal"
-      aria-valuenow={minHeight}
     >
       <div className="w-16 h-1 rounded-full bg-theme-border group-hover:bg-accent-link transition-colors" />
     </div>

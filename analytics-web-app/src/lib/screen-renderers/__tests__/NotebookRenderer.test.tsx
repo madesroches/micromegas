@@ -283,8 +283,8 @@ describe('NotebookRenderer', () => {
 
       expect(screen.getByText('Cell Name')).toBeInTheDocument()
 
-      // Click close button in editor - find the X icon in the editor panel
-      const editorPanel = screen.getByText('Cell Name').closest('div[class*="w-[350px]"]')
+      // Click close button in editor - find the X icon in the editor panel (has border-l class)
+      const editorPanel = screen.getByText('Cell Name').closest('div[class*="border-l"]')
       const closeButton = within(editorPanel!).getByTitle('Close')
       fireEvent.click(closeButton)
 

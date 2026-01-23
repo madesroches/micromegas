@@ -8,6 +8,7 @@ import type {
 import type { QueryCellConfig, CellConfig, CellState } from '../notebook-types'
 import { timestampToDate } from '@/lib/arrow-utils'
 import { AvailableVariablesPanel } from '@/components/AvailableVariablesPanel'
+import { SyntaxEditor } from '@/components/SyntaxEditor'
 import { substituteMacros, DEFAULT_SQL } from '../notebook-utils'
 
 // =============================================================================
@@ -150,11 +151,12 @@ function LogCellEditor({ config, onChange, variables, timeRange }: CellEditorPro
         <label className="block text-xs font-medium text-theme-text-secondary uppercase mb-1.5">
           SQL Query
         </label>
-        <textarea
+        <SyntaxEditor
           value={logConfig.sql}
-          onChange={(e) => onChange({ ...logConfig, sql: e.target.value })}
-          className="w-full min-h-[150px] px-3 py-2 bg-app-bg border border-theme-border rounded-md text-theme-text-primary text-sm font-mono focus:outline-none focus:border-accent-link resize-y"
+          onChange={(sql) => onChange({ ...logConfig, sql })}
+          language="sql"
           placeholder="SELECT time, level, target, msg FROM log_entries ..."
+          minHeight="150px"
         />
       </div>
       <AvailableVariablesPanel variables={variables} timeRange={timeRange} />

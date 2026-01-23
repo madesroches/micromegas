@@ -131,8 +131,8 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
       ref={ref}
       className={`bg-app-panel border-2 rounded-lg overflow-hidden cursor-pointer transition-colors ${
         isSelected
-          ? 'border-accent-link bg-[#1a2a3a]'
-          : 'border-theme-border hover:border-[#3a3a4a]'
+          ? 'border-[var(--selection-border)] bg-[var(--selection-bg)]'
+          : 'border-theme-border hover:border-[var(--hover-border)]'
       } ${isDragging ? 'opacity-50' : ''}`}
       style={style}
       onClick={onSelect}
@@ -141,7 +141,7 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
       {/* Cell Header */}
       <div
         className={`flex items-center justify-between px-3 py-2 border-b border-theme-border ${
-          isSelected ? 'bg-[#1a2a3a]' : 'bg-app-card'
+          isSelected ? 'bg-[var(--selection-bg)]' : 'bg-app-card'
         }`}
       >
         <div className="flex items-center gap-2">
@@ -261,7 +261,7 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
       {!collapsed && (
         <div className="p-4" style={contentStyle}>
           {status === 'error' && error ? (
-            <div className="bg-[#2d1515] border border-accent-error rounded-md p-3 flex items-start gap-3">
+            <div className="bg-[var(--error-bg)] border border-accent-error rounded-md p-3 flex items-start gap-3">
               <span className="text-accent-error text-lg">!</span>
               <div>
                 <div className="font-medium text-accent-error">Query execution failed</div>
@@ -279,9 +279,7 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
       )}
 
       {/* Resize Handle */}
-      {!collapsed && onHeightChange && (
-        <ResizeHandle onResize={handleResize} minHeight={50} />
-      )}
+      {!collapsed && onHeightChange && <ResizeHandle onResize={handleResize} />}
     </div>
   )
 })

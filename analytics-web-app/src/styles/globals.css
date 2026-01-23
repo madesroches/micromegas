@@ -54,11 +54,31 @@
     --accent-error-bright: #dc2626;
     --accent-warning: #ffb300;
 
+    /* Selection and state backgrounds */
+    --selection-bg: rgba(21, 101, 192, 0.15);
+    --selection-border: #1565c0;
+    --error-bg: rgba(248, 113, 113, 0.1);
+    --hover-border: #3a3a4e;
+
     /* Chart colors */
     --chart-line: #bf360c;
     --chart-fill: rgba(191, 54, 12, 0.1);
     --chart-selection: rgba(255, 179, 0, 0.3);
     --chart-selection-border: #ffb300;
+
+    /* Syntax highlighting colors (aligned with brand palette) */
+    --syntax-keyword: #1976d2;
+    --syntax-string: #c3e88d;
+    --syntax-variable: #ffb300;
+    --syntax-number: #f78c6c;
+    --syntax-comment: #546e7a;
+    --syntax-header: #1976d2;
+    --syntax-bold: #ffffff;
+    --syntax-italic: #1976d2;
+    --syntax-link: #1565c0;
+    --syntax-code: #c3e88d;
+    --syntax-blockquote: #546e7a;
+    --syntax-list: #ffb300;
   }
 }
 
