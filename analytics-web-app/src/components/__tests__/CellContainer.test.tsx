@@ -1,6 +1,20 @@
 import { render, screen, fireEvent } from '@testing-library/react'
 import { CellContainer } from '../CellContainer'
 
+// Mock cell-registry to provide metadata
+jest.mock('@/lib/screen-renderers/cell-registry', () => ({
+  getCellTypeMetadata: (type: string) => {
+    const metadata: Record<string, { label: string; showTypeBadge: boolean; execute?: () => void }> = {
+      table: { label: 'Table', showTypeBadge: true, execute: () => {} },
+      chart: { label: 'Chart', showTypeBadge: true, execute: () => {} },
+      log: { label: 'Log', showTypeBadge: true, execute: () => {} },
+      markdown: { label: 'Markdown', showTypeBadge: false },
+      variable: { label: 'Variable', showTypeBadge: true, execute: () => {} },
+    }
+    return metadata[type] || { label: type, showTypeBadge: true, execute: () => {} }
+  },
+}))
+
 // Mock lucide-react icons
 jest.mock('lucide-react', () => ({
   ChevronDown: () => <span data-testid="chevron-down">▼</span>,

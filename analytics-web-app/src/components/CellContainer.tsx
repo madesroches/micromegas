@@ -1,16 +1,8 @@
 import { ReactNode, useState, useRef, useEffect, forwardRef, HTMLAttributes, useCallback } from 'react'
 import { ChevronDown, ChevronRight, Play, RotateCcw, MoreVertical, Trash2, GripVertical } from 'lucide-react'
-import { CellType, CellStatus } from '@/lib/screen-renderers/cell-registry'
+import { CellType, CellStatus, getCellTypeMetadata } from '@/lib/screen-renderers/cell-registry'
 import { Button } from '@/components/ui/button'
 import { ResizeHandle } from '@/components/ResizeHandle'
-
-const CELL_TYPE_LABELS: Record<CellType, string> = {
-  table: 'Table',
-  chart: 'Chart',
-  log: 'Log',
-  markdown: 'Markdown',
-  variable: 'Variable',
-}
 
 interface CellContainerProps extends Omit<HTMLAttributes<HTMLDivElement>, 'children'> {
   /** Cell name/title */
@@ -76,6 +68,9 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
   const [showMenu, setShowMenu] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
 
+  // Get metadata for this cell type
+  const meta = getCellTypeMetadata(type)
+
   // Normalize height - handle legacy 'auto' values from old configs
   const normalizedHeight = typeof height === 'number' ? height : 300
   const currentHeight = useRef(normalizedHeight)
@@ -128,6 +123,9 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
 
   const contentStyle = { height: `${normalizedHeight}px`, overflow: 'auto' as const }
 
+  // Determine if this cell can run (has an execute method)
+  const canRun = !!meta.execute
+
   return (
     <div
       ref={ref}
@@ -173,13 +171,13 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
             )}
           </button>
 
-          {/* For markdown: show name only. For others: show type badge + name */}
-          {type === 'markdown' ? (
+          {/* For cells with showTypeBadge=false: show name only. For others: show type badge + name */}
+          {!meta.showTypeBadge ? (
             <span className="font-medium text-theme-text-primary">{name}</span>
           ) : (
             <>
               <span className="text-[11px] px-1.5 py-0.5 rounded bg-app-panel text-theme-text-secondary uppercase font-medium">
-                {CELL_TYPE_LABELS[type]}
+                {meta.label}
               </span>
               <span className="font-medium text-theme-text-primary">{name}</span>
             </>
@@ -190,8 +188,8 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
           {/* Status text */}
           {statusLabel && <span className={`text-xs ${statusColor}`}>{statusLabel}</span>}
 
-          {/* Run button (for query cells) */}
-          {onRun && type !== 'markdown' && (
+          {/* Run button (for cells that can execute) */}
+          {onRun && canRun && (
             <Button
               variant="ghost"
               size="sm"
@@ -227,7 +225,7 @@ export const CellContainer = forwardRef<HTMLDivElement, CellContainerProps>(func
 
             {showMenu && (
               <div className="absolute right-0 top-full mt-1 w-40 bg-app-panel border border-theme-border rounded-md shadow-lg z-50">
-                {onRunFromHere && type !== 'markdown' && (
+                {onRunFromHere && canRun && (
                   <button
                     onClick={(e) => {
                       e.stopPropagation()
