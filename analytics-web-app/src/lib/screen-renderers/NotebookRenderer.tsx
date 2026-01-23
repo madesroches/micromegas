@@ -28,6 +28,15 @@ import { streamQuery } from '@/lib/arrow-stream'
 import { Button } from '@/components/ui/button'
 import { SaveFooter } from './shared'
 
+import {
+  CellConfig,
+  QueryCellConfig,
+  MarkdownCellConfig,
+  VariableCellConfig,
+  createDefaultCell,
+  substituteMacros,
+} from './notebook-utils'
+
 // ============================================================================
 // Types (owned by NotebookRenderer, not shared)
 // ============================================================================
@@ -43,37 +52,6 @@ interface NotebookConfig {
   timeRangeTo?: string
 }
 
-type CellConfig = QueryCellConfig | MarkdownCellConfig | VariableCellConfig
-
-interface CellConfigBase {
-  /** Unique within notebook; display name + anchor for deep linking */
-  name: string
-  /** Cell type - for variable cells, name is also the variable name ($name) */
-  type: CellType
-  /** Layout settings */
-  layout: { height: number | 'auto'; collapsed?: boolean }
-}
-
-interface QueryCellConfig extends CellConfigBase {
-  type: 'table' | 'chart' | 'log'
-  sql: string
-  /** Cell-specific options (e.g., chart: { xColumn, yColumn }) */
-  options?: Record<string, unknown>
-}
-
-interface MarkdownCellConfig extends CellConfigBase {
-  type: 'markdown'
-  content: string
-}
-
-interface VariableCellConfig extends CellConfigBase {
-  type: 'variable'
-  variableType: 'combobox' | 'text' | 'number'
-  /** For combobox: query to populate options (1 col = value+label, 2 cols = value, label) */
-  sql?: string
-  defaultValue?: string
-}
-
 /** Execution state for a cell */
 interface CellState {
   status: CellStatus
@@ -81,24 +59,6 @@ interface CellState {
   data: Table | null
   /** For variable cells (combobox): options loaded from query */
   variableOptions?: { label: string; value: string }[]
-}
-
-// Default SQL queries per cell type
-const DEFAULT_SQL: Record<string, string> = {
-  table: `SELECT process_id, exe, start_time, last_update_time, username, computer
-FROM processes
-ORDER BY last_update_time DESC
-LIMIT 100`,
-  chart: `SELECT time, value
-FROM measures
-WHERE name = 'cpu_usage'
-ORDER BY time
-LIMIT 100`,
-  log: `SELECT time, level, target, msg
-FROM log_entries
-ORDER BY time DESC
-LIMIT 100`,
-  variable: `SELECT DISTINCT name FROM measures`,
 }
 
 // Cell type options for the add cell modal
@@ -113,58 +73,6 @@ const CELL_TYPE_OPTIONS: { type: CellType; name: string; description: string; ic
 // ============================================================================
 // Helper functions
 // ============================================================================
-
-function createDefaultCell(type: CellType, existingNames: Set<string>): CellConfig {
-  // Generate unique name
-  const baseName = type.charAt(0).toUpperCase() + type.slice(1)
-  let name = baseName
-  let counter = 1
-  while (existingNames.has(name)) {
-    counter++
-    name = `${baseName} ${counter}`
-  }
-
-  const baseConfig: CellConfigBase = {
-    name,
-    type,
-    layout: { height: 'auto' },
-  }
-
-  switch (type) {
-    case 'table':
-    case 'chart':
-    case 'log':
-      return { ...baseConfig, type, sql: DEFAULT_SQL[type] } as QueryCellConfig
-    case 'markdown':
-      return { ...baseConfig, type: 'markdown', content: '# Notes\n\nAdd your documentation here.' } as MarkdownCellConfig
-    case 'variable':
-      return {
-        ...baseConfig,
-        type: 'variable',
-        variableType: 'combobox',
-        sql: DEFAULT_SQL.variable,
-      } as VariableCellConfig
-    default:
-      return { ...baseConfig, type: 'table', sql: DEFAULT_SQL.table } as QueryCellConfig
-  }
-}
-
-function substituteMacros(sql: string, variables: Record<string, string>, timeRange: { begin: string; end: string }): string {
-  let result = sql
-  // Substitute $begin and $end (these are timestamps, keep quotes)
-  result = result.replace(/\$begin/g, `'${timeRange.begin}'`)
-  result = result.replace(/\$end/g, `'${timeRange.end}'`)
-  // Substitute user variables - don't add quotes, let the SQL author control quoting
-  // Sort by name length descending to avoid partial matches ($metric vs $metric_name)
-  const sortedVars = Object.entries(variables).sort((a, b) => b[0].length - a[0].length)
-  for (const [name, value] of sortedVars) {
-    const regex = new RegExp(`\\$${name}\\b`, 'g')
-    // Escape single quotes in value for SQL safety
-    const escaped = value.replace(/'/g, "''")
-    result = result.replace(regex, escaped)
-  }
-  return result
-}
 
 // Execute a single SQL query and return the result table
 async function executeSql(

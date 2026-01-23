@@ -110,7 +110,7 @@ export function MetricsRenderer({
         onUnsavedChange()
       }
     },
-    [metricsConfig, savedConfig, onConfigChange, onUnsavedChange]
+    [metricsConfig, savedMetricsConfig, onConfigChange, onUnsavedChange]
   )
 
   // Handle chart type change - persists to config
@@ -127,7 +127,7 @@ export function MetricsRenderer({
         onUnsavedChange()
       }
     },
-    [metricsConfig, savedConfig, onConfigChange, onUnsavedChange]
+    [metricsConfig, savedMetricsConfig, onConfigChange, onUnsavedChange]
   )
 
   // Handle time range selection from chart drag

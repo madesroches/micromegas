@@ -503,7 +503,7 @@ export function LogRenderer({
   const handleResetQuery = useCallback(() => {
     const sql = savedLogConfig ? savedLogConfig.sql : logConfig.sql
     loadData(sql)
-  }, [savedConfig, logConfig.sql, loadData])
+  }, [savedLogConfig, logConfig.sql, loadData])
 
   const handleSqlChange = useCallback(
     (sql: string) => {
@@ -521,7 +521,7 @@ export function LogRenderer({
         onUnsavedChange()
       }
     },
-    [savedConfig, onUnsavedChange, onConfigChange, logLevel, logLimit, search, rawTimeRange]
+    [savedLogConfig, onUnsavedChange, onConfigChange, logLevel, logLimit, search, rawTimeRange]
   )
 
   // Limit input handlers
