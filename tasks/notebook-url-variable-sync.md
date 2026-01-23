@@ -30,6 +30,14 @@ Time range is already synced to URL via `useScreenConfig`:
 
 The `useScreenConfig` hook provides atomic state + URL updates with browser history support.
 
+## Design Principles
+
+1. **Config is the single source of truth** - Variables live in screen config, not in separate React state
+2. **URL is read-only on specific events** - Only parsed on mount, popstate, or manual URL edit
+3. **Unidirectional data flow** - Config flows down as props, changes flow up via `updateConfig()`
+4. **No bidirectional sync** - Components don't sync state back to config; they call `updateConfig()` directly
+5. **Consistent with existing patterns** - Follows the same architecture as ProcessLogPage, PerformanceAnalysisPage
+
 ## Proposed Solution
 
 ### URL Format
@@ -62,27 +70,52 @@ const RESERVED_PARAMS = ['from', 'to', 'type'] as const
 
 ### State Flow
 
+**Source of Truth:** The screen config (managed by `useScreenConfig`) is the single source of truth.
+The URL is only read on specific events, not continuously synced.
+
+**When URL is read:**
+1. Initial page load (mount)
+2. Browser back/forward navigation (popstate event)
+3. User manually edits URL and presses Enter
+
+**Data flow is unidirectional:**
+
 ```
-URL params ─────────────────────────────────────────────┐
-                                                        │
-    ┌───────────────────────────────────────────────────▼───────┐
-    │                    useScreenConfig                        │
-    │  ┌─────────────────────────────────────────────────────┐  │
-    │  │ config: {                                           │  │
-    │  │   timeRangeFrom, timeRangeTo,                       │  │
-    │  │   variables: { process_filter: 'x', level: 'y' }    │  │
-    │  │ }                                                   │  │
-    │  └─────────────────────────────────────────────────────┘  │
-    └───────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-    ┌───────────────────────────────────────────────────────────┐
-    │                  NotebookRenderer                         │
-    │  - Reads variables from config on mount                   │
-    │  - Passes to useNotebookVariables as initial values       │
-    │  - Updates config when variables change                   │
-    └───────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│                           URL                                    │
+│  (read ONLY on: mount, popstate, manual URL edit)               │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼ parseUrlParams (one-way, on events only)
+┌─────────────────────────────────────────────────────────────────┐
+│                    useScreenConfig                               │
+│                    config = SOURCE OF TRUTH                      │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │ config: {                                                 │  │
+│  │   timeRangeFrom, timeRangeTo,                             │  │
+│  │   variables: { process_filter: 'x', level: 'y' }          │  │
+│  │ }                                                         │  │
+│  └───────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼ props (one-way down)
+┌─────────────────────────────────────────────────────────────────┐
+│                    NotebookRenderer                              │
+│  - Receives config.variables as props                            │
+│  - Calls updateConfig() when user changes a variable             │
+│  - Does NOT maintain separate variable state                     │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼ updateConfig() (one-way up)
+┌─────────────────────────────────────────────────────────────────┐
+│                    useScreenConfig                               │
+│  - Updates config state                                          │
+│  - Atomically updates URL (via queueMicrotask)                   │
+│  - Uses { replace: true } for variable changes                   │
+└─────────────────────────────────────────────────────────────────┘
 ```
+
+This matches how other screens (ProcessLogPage, PerformanceAnalysisPage) handle URL sync.
 
 ### Initialization Priority
 When loading a notebook:
@@ -163,84 +196,101 @@ function buildUrl(cfg: ScreenPageConfig): string {
 
 **File:** `src/lib/screen-renderers/NotebookRenderer.tsx`
 
-Pass URL variables to the notebook and sync changes back:
+NotebookRenderer receives config (including variables) and calls `updateConfig` directly.
+No bidirectional sync needed - config is the source of truth.
 
 ```typescript
 interface NotebookRendererProps {
   // ... existing props
-  urlVariables: Record<string, string>      // NEW: from URL
-  onVariablesChange: (vars: Record<string, string>) => void  // NEW: sync back
+  config: ScreenPageConfig           // includes variables
+  updateConfig: (partial: Partial<ScreenPageConfig>, options?: { replace?: boolean }) => void
 }
 
-function NotebookRenderer({ urlVariables, onVariablesChange, ... }) {
-  const { variableValues, setVariableValue, ... } = useNotebookVariables(
-    cells,
-    urlVariables  // NEW: pass initial values from URL
-  )
+function NotebookRenderer({ config, updateConfig, ... }) {
+  // Handler for variable changes - updates config directly
+  const handleVariableChange = useCallback((name: string, value: string) => {
+    updateConfig({
+      variables: { ...config.variables, [name]: value }
+    }, { replace: true })  // Use replace to avoid cluttering history
+  }, [config.variables, updateConfig])
 
-  // Sync variable changes back to URL
-  useEffect(() => {
-    onVariablesChange(variableValues)
-  }, [variableValues, onVariablesChange])
+  // Pass config.variables and handleVariableChange to variable cells
+  // No separate state management needed
 }
 ```
 
-### Phase 4: Update useNotebookVariables Hook
+### Phase 4: Simplify useNotebookVariables Hook
 
 **File:** `src/lib/screen-renderers/useNotebookVariables.ts`
 
-Accept initial values from URL:
+The hook no longer owns variable state. Instead, it computes effective values
+from config and cell defaults. This avoids state duplication and sync issues.
 
 ```typescript
 export function useNotebookVariables(
   cells: CellConfig[],
-  initialValues?: Record<string, string>  // NEW: from URL
+  configVariables: Record<string, string>,  // From config (source of truth)
+  onVariableChange: (name: string, value: string) => void
 ): UseNotebookVariablesResult {
-  const [variableValues, setVariableValues] = useState<Record<string, string>>(
-    () => initialValues || {}  // Initialize from URL if provided
-  )
 
-  // When initialValues change (e.g., browser back/forward), update state
-  useEffect(() => {
-    if (initialValues) {
-      setVariableValues(prev => {
-        // Merge URL values, preserving values not in URL
-        const merged = { ...prev }
-        for (const [key, value] of Object.entries(initialValues)) {
-          if (value !== undefined) {
-            merged[key] = value
-          }
+  // Compute effective values: config value → defaultValue → empty
+  const variableValues = useMemo(() => {
+    const values: Record<string, string> = { ...configVariables }
+
+    // Apply defaults for variables not in config
+    for (const cell of cells) {
+      if (cell.type === 'variable' && !(cell.name in values)) {
+        if (cell.defaultValue) {
+          values[cell.name] = cell.defaultValue
         }
-        return merged
-      })
+      }
     }
-  }, [initialValues])
+    return values
+  }, [cells, configVariables])
+
+  // Wrapper that calls the config update
+  const setVariableValue = useCallback((name: string, value: string) => {
+    onVariableChange(name, value)
+  }, [onVariableChange])
+
+  return { variableValues, setVariableValue, ... }
 }
 ```
+
+**Key changes:**
+- No `useState` for variables - config is source of truth
+- `configVariables` comes from `config.variables` (passed down as props)
+- `onVariableChange` calls `updateConfig` (passed down from ScreenPage)
+- Defaults are computed, not stored
 
 ### Phase 5: Handle Variable Cell Execution
 
 **File:** `src/lib/screen-renderers/cell-types/VariableCellRenderer.tsx`
 
-Ensure combobox cells respect URL values:
+Ensure combobox cells respect config values and handle invalid values:
 
 ```typescript
-// When loading combobox options, check if URL already provides a value
+// When loading combobox options, validate the current value
 useEffect(() => {
   if (cell.variableType === 'combobox' && options.length > 0) {
-    const urlValue = variableValues[cell.name]
-    if (urlValue && options.some(o => o.value === urlValue)) {
-      // URL value is valid - keep it
+    const currentValue = variableValues[cell.name]
+
+    // If current value is valid, keep it
+    if (currentValue && options.some(o => o.value === currentValue)) {
       return
     }
-    // No URL value or invalid - use default or first option
-    const defaultValue = cell.defaultValue || options[0]?.value
-    if (defaultValue && variableValues[cell.name] !== defaultValue) {
-      setVariableValue(cell.name, defaultValue)
+
+    // Current value is missing or invalid - use default or first option
+    const fallbackValue = cell.defaultValue || options[0]?.value
+    if (fallbackValue && currentValue !== fallbackValue) {
+      setVariableValue(cell.name, fallbackValue)
     }
   }
-}, [options, cell.name, cell.defaultValue, variableValues])
+}, [options, cell.name, cell.defaultValue, variableValues, setVariableValue])
 ```
+
+**Note:** Since `setVariableValue` calls `updateConfig({ replace: true })`, this will
+update the URL to reflect the actual value when an invalid URL value is corrected.
 
 ### Phase 6: Validate Variable Names
 
@@ -271,23 +321,40 @@ const validationError = validateVariableName(cell.name)
 // Display error in cell header if invalid
 ```
 
-### Phase 7: Debounce URL Updates
+### Phase 7: Debounce Text Input Changes
 
-**File:** `src/routes/ScreenPage.tsx`
+**File:** `src/lib/screen-renderers/cell-types/VariableCellRenderer.tsx`
 
-Prevent excessive history entries during rapid variable changes:
+For text/number inputs, debounce at the component level to prevent excessive URL updates
+while typing. This matches the pattern used in ProcessLogPage for search input.
 
 ```typescript
-const debouncedUpdateConfig = useMemo(
-  () => debounce((newConfig: ScreenPageConfig) => {
-    updateConfig(newConfig, { replace: true })  // Replace instead of push
+// For text/number variable cells
+const [localValue, setLocalValue] = useState(variableValues[cell.name] ?? '')
+
+// Debounced update to config
+const debouncedSetVariable = useMemo(
+  () => debounce((value: string) => {
+    setVariableValue(cell.name, value)
   }, 300),
-  [updateConfig]
+  [cell.name, setVariableValue]
 )
 
-// Use replace: true for variable changes to avoid cluttering history
-// Only push new history entry on significant changes (like running a query)
+// Handle input change
+const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const value = e.target.value
+  setLocalValue(value)           // Immediate UI update
+  debouncedSetVariable(value)    // Debounced config/URL update
+}
+
+// Sync local value when config changes (e.g., browser back/forward)
+useEffect(() => {
+  setLocalValue(variableValues[cell.name] ?? '')
+}, [variableValues[cell.name]])
 ```
+
+**Note:** Combobox changes don't need debouncing since they're discrete selections.
+The `{ replace: true }` option in `updateConfig` prevents history clutter regardless.
 
 ## Edge Cases
 
@@ -331,15 +398,15 @@ When URL contains value not in combobox options:
 8. Try naming a variable `from`, `to`, or `type` - verify validation error shown
 
 ### Automated Testing
-- Unit tests for `parseUrlParams` and `buildUrl`
-- Unit tests for `useNotebookVariables` with initial values
+- Unit tests for `parseUrlParams` and `buildUrl` with variables
+- Unit tests for `useNotebookVariables` computing effective values from config
 - Unit tests for `isReservedVariableName` and `validateVariableName`
-- Integration test for full URL → state → URL round-trip
+- Integration test for URL → config → component → updateConfig → URL flow
 
 ## Migration
 
 ### Backwards Compatibility
-- Existing URLs without `var_` params continue working
+- Existing URLs without variable params continue working
 - Variables initialize from cell defaults as before
 - No database migration needed (variables stored in URL only)
 
@@ -353,11 +420,11 @@ When URL contains value not in combobox options:
 | File | Changes |
 |------|---------|
 | `src/lib/screen-config.ts` | Add `variables` to config type |
-| `src/routes/ScreenPage.tsx` | Parse/build URL variable params, define `RESERVED_PARAMS` |
-| `src/lib/screen-renderers/NotebookRenderer.tsx` | Accept URL vars, sync changes |
-| `src/lib/screen-renderers/useNotebookVariables.ts` | Accept initial values, handle sync |
+| `src/routes/ScreenPage.tsx` | Parse/build URL variable params, define `RESERVED_PARAMS`, pass config to renderer |
+| `src/lib/screen-renderers/NotebookRenderer.tsx` | Receive config + updateConfig props, create handleVariableChange callback |
+| `src/lib/screen-renderers/useNotebookVariables.ts` | Remove internal state, compute values from config, delegate changes to callback |
 | `src/lib/screen-renderers/notebook-utils.ts` | Add `isReservedVariableName`, `validateVariableName` |
-| `src/lib/screen-renderers/cell-types/VariableCellRenderer.tsx` | Respect URL values, show validation error for reserved names |
+| `src/lib/screen-renderers/cell-types/VariableCellRenderer.tsx` | Validate config values, debounce text inputs, show validation errors |
 
 ## Future Considerations
 
