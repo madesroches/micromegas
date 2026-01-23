@@ -173,6 +173,9 @@ function parseUrlParams(searchParams: URLSearchParams): ScreenPageConfig {
 
 Update `buildUrl` to serialize variables:
 ```typescript
+// Safe URL length threshold (conservative for older browsers/proxies)
+const MAX_SAFE_URL_LENGTH = 2000
+
 function buildUrl(cfg: ScreenPageConfig): string {
   const params = new URLSearchParams()
   if (cfg.timeRangeFrom !== DEFAULT_CONFIG.timeRangeFrom) {
@@ -182,13 +185,24 @@ function buildUrl(cfg: ScreenPageConfig): string {
     params.set('to', cfg.timeRangeTo)
   }
   // NEW: Add variable params (skip reserved names as safety check)
+  // Note: empty strings ARE serialized (as ?name=) to preserve explicit "cleared" state
   for (const [name, value] of Object.entries(cfg.variables || {})) {
-    if (value !== undefined && value !== '' && !isReservedParam(name)) {
+    if (value !== undefined && !isReservedParam(name)) {
       params.set(name, value)
     }
   }
   const search = params.toString()
-  return search ? `?${search}` : ''
+  const url = search ? `?${search}` : ''
+
+  // Warn if URL exceeds safe length (variables may be lost on some browsers/proxies)
+  if (url.length > MAX_SAFE_URL_LENGTH) {
+    console.warn(
+      `URL length (${url.length}) exceeds safe threshold (${MAX_SAFE_URL_LENGTH}). ` +
+      `Some variable values may be lost when sharing or bookmarking.`
+    )
+  }
+
+  return url
 }
 ```
 
@@ -340,6 +354,11 @@ const debouncedSetVariable = useMemo(
   [cell.name, setVariableValue]
 )
 
+// Cleanup debounced function on unmount or dependency change
+useEffect(() => {
+  return () => debouncedSetVariable.cancel()
+}, [debouncedSetVariable])
+
 // Handle input change
 const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
   const value = e.target.value
@@ -348,9 +367,11 @@ const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
 }
 
 // Sync local value when config changes (e.g., browser back/forward)
+// Cancel any pending debounce to avoid overwriting the external change
 useEffect(() => {
+  debouncedSetVariable.cancel()
   setLocalValue(variableValues[cell.name] ?? '')
-}, [variableValues[cell.name]])
+}, [variableValues[cell.name], debouncedSetVariable])
 ```
 
 **Note:** Combobox changes don't need debouncing since they're discrete selections.
@@ -382,8 +403,16 @@ When URL contains value not in combobox options:
 - Updates URL to reflect actual value
 
 ### Empty/Whitespace Values
-- Empty string values are not serialized to URL
-- On parse, empty values are treated as "no value set"
+- Empty string values ARE serialized to URL (as `?name=`) to preserve explicit "cleared" state
+- On parse, empty string = explicitly cleared, missing key = use default
+- This distinguishes "user cleared this" from "user never set this"
+
+### URL Length Exceeded
+When URL exceeds 2000 characters (safe threshold for all browsers/proxies):
+- Console warning logged with actual length
+- URL still generated (modern browsers handle longer URLs)
+- Risk: older browsers, proxies, or bookmarking may truncate
+- Mitigation: users should keep variable values concise
 
 ## Testing Plan
 
@@ -396,9 +425,12 @@ When URL contains value not in combobox options:
 6. Test combobox with invalid URL value
 7. Test text/number inputs
 8. Try naming a variable `from`, `to`, or `type` - verify validation error shown
+9. Test with many variables / long values, verify console warning when URL > 2000 chars
+10. Clear a variable with a default value, verify URL includes `?name=` (empty), shared URL preserves empty
 
 ### Automated Testing
 - Unit tests for `parseUrlParams` and `buildUrl` with variables
+- Unit tests for empty string handling: `buildUrl` serializes `{x: ''}` as `?x=`, `parseUrlParams` returns `{x: ''}`
 - Unit tests for `useNotebookVariables` computing effective values from config
 - Unit tests for `isReservedVariableName` and `validateVariableName`
 - Integration test for URL → config → component → updateConfig → URL flow
