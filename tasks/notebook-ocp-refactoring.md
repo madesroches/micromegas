@@ -1,5 +1,9 @@
 # Open/Closed Principle Refactoring for Notebook Cells
 
+## Status: ✅ COMPLETED
+
+Implementation completed. All cells now follow the OCP pattern with cell-owned metadata, editors, and execution.
+
 ## Goal
 Refactor the notebook cell system so that adding a new cell type requires only creating a new file with all type-specific behavior, without modifying existing code.
 
@@ -112,7 +116,9 @@ export interface CellTypeMetadata {
 
 ## Implementation Steps
 
-### Step 1: Create Unified Cell Type Registry
+> All steps below have been completed. See commit history for details.
+
+### Step 1: Create Unified Cell Type Registry ✅
 **File:** `analytics-web-app/src/lib/screen-renderers/cell-registry.ts`
 
 - Add `CellTypeMetadata` interface (includes renderer component)
@@ -184,7 +190,7 @@ export const CELL_TYPE_OPTIONS = (Object.entries(CELL_TYPE_METADATA) as [CellTyp
   }))
 ```
 
-### Step 2: Add Metadata to Each Cell File
+### Step 2: Add Metadata to Each Cell File ✅
 **Files:** `cells/TableCell.tsx`, `cells/ChartCell.tsx`, etc.
 
 Each cell file becomes a self-contained module exporting a single metadata object that includes the renderer component. No separate registration call needed.
@@ -397,8 +403,8 @@ export const markdownMetadata: CellTypeMetadata = {
 }
 ```
 
-### Step 3: Refactor `createDefaultCell`
-**File:** `analytics-web-app/src/lib/screen-renderers/notebook-utils.ts`
+### Step 3: Refactor `createDefaultCell` ✅
+**File:** `analytics-web-app/src/lib/screen-renderers/cell-registry.ts` (moved here)
 
 Replace switch statement:
 ```typescript
@@ -414,7 +420,7 @@ export function createDefaultCell(type: CellType, existingNames: Set<string>): C
 }
 ```
 
-### Step 4: Refactor `useCellExecution`
+### Step 4: Refactor `useCellExecution` ✅
 **File:** `analytics-web-app/src/lib/screen-renderers/useCellExecution.ts`
 
 Replace type checks with metadata lookups. The container no longer knows about SQL - it just provides a `runQuery` helper and lets cells handle their own execution:
@@ -474,7 +480,7 @@ For blocking logic:
 if (!meta.canBlockDownstream) continue  // instead of if (cell.type !== 'markdown')
 ```
 
-### Step 5: Refactor `CellContainer`
+### Step 5: Refactor `CellContainer` ✅
 **File:** `analytics-web-app/src/components/CellContainer.tsx`
 
 - Remove local `CELL_TYPE_LABELS` constant - use `meta.label` instead
@@ -483,7 +489,7 @@ if (!meta.canBlockDownstream) continue  // instead of if (cell.type !== 'markdow
 - Use `meta.label` for type badge text
 - Use `meta.execute` presence instead of `type !== 'markdown'` for run button
 
-### Step 6: Refactor `CellEditor`
+### Step 6: Refactor `CellEditor` ✅
 **File:** `analytics-web-app/src/components/CellEditor.tsx`
 
 `CellEditor` remains as a **wrapper** that handles shared concerns. It delegates the type-specific content (including whether to show the available variables panel) entirely to `meta.EditorComponent`.
@@ -574,47 +580,43 @@ export function CellEditor({
 - `CellNameInput` - Input with validation feedback
 - `AvailableVariablesPanel` - Shows $begin, $end, and user variables
 
-### Step 7: Refactor `NotebookRenderer`
+### Step 7: Refactor `NotebookRenderer` ✅
 **File:** `analytics-web-app/src/lib/screen-renderers/NotebookRenderer.tsx`
 
 - Remove `CELL_TYPE_OPTIONS` array - derive from registry
 - Use `meta.getRendererProps(cell, state)` for prop extraction
 - Use `meta.canBlockDownstream` for status text logic
 
-### Step 8: Remove cells/index.ts
+### Step 8: Remove cells/index.ts ✅
 **File:** `analytics-web-app/src/lib/screen-renderers/cells/index.ts`
 
-Delete this file - it was only used for side-effect imports to trigger `registerCellRenderer`. With the unified registry, `cell-registry.ts` imports metadata directly from each cell file.
+Deleted - it was only used for side-effect imports to trigger `registerCellRenderer`. With the unified registry, `cell-registry.ts` imports metadata directly from each cell file.
 
-## Files to Modify
+## Files Modified ✅
 
-1. `cell-registry.ts` - Replace `registerCellRenderer`/`CELL_RENDERERS` with unified metadata registry, add `CellEditorProps` and `CellExecutionContext` interfaces
-2. `notebook-utils.ts` - Replace `createDefaultCell` switch
-3. `useCellExecution.ts` - Replace type checks with metadata, delegate execution to cells
-4. `CellContainer.tsx` - Use metadata for conditional rendering
-5. `CellEditor.tsx` - Simplify to render `meta.EditorComponent`, remove conditional section logic
-6. `NotebookRenderer.tsx` - Use `getCellRenderer` from registry, use metadata for props
-7. `cells/TableCell.tsx` - Remove `registerCellRenderer` call, add `TableCellEditor` and `tableMetadata` export with `execute` method
-8. `cells/ChartCell.tsx` - Remove `registerCellRenderer` call, add `ChartCellEditor` and `chartMetadata` export with `execute` method
-9. `cells/LogCell.tsx` - Remove `registerCellRenderer` call, add `LogCellEditor` and `logMetadata` export with `execute` method
-10. `cells/MarkdownCell.tsx` - Remove `registerCellRenderer` call, add `MarkdownCellEditor` and `markdownMetadata` export (no `execute` method)
-11. `cells/VariableCell.tsx` - Remove `registerCellRenderer` call, add `VariableCellEditor` and `variableMetadata` export with `execute` method
+1. `cell-registry.ts` - Replaced `registerCellRenderer`/`CELL_RENDERERS` with unified metadata registry, added `CellEditorProps` and `CellExecutionContext` interfaces, moved `createDefaultCell` here
+2. `notebook-utils.ts` - Re-exports types from `notebook-types.ts` for backwards compatibility, removed `createDefaultCell`
+3. `useCellExecution.ts` - Replaced type checks with metadata, delegates execution to `meta.execute()`
+4. `CellContainer.tsx` - Uses `getCellTypeMetadata()` for conditional rendering
+5. `CellEditor.tsx` - Simplified to render `meta.EditorComponent`, removed conditional section logic
+6. `NotebookRenderer.tsx` - Uses `getCellRenderer` from registry, uses `meta.getRendererProps()` for props
+7. `cells/TableCell.tsx` - Removed `registerCellRenderer` call, added `TableCellEditor` and `tableMetadata` export
+8. `cells/ChartCell.tsx` - Removed `registerCellRenderer` call, added `ChartCellEditor` and `chartMetadata` export
+9. `cells/LogCell.tsx` - Removed `registerCellRenderer` call, added `LogCellEditor` and `logMetadata` export
+10. `cells/MarkdownCell.tsx` - Removed `registerCellRenderer` call, added `MarkdownCellEditor` and `markdownMetadata` export (no `execute`)
+11. `cells/VariableCell.tsx` - Removed `registerCellRenderer` call, added `VariableCellEditor` and `variableMetadata` export
+12. `init.ts` - Updated comment, removed cells/index.ts import
 
-## Files to Delete
+## Files Deleted ✅
 
-1. `cells/index.ts` - No longer needed (side-effect imports replaced by explicit metadata imports)
+1. `cells/index.ts` - Deleted (side-effect imports replaced by explicit metadata imports)
 
-## Files to Create
+## Files Created ✅
 
-Shared editor components (extracted from current `CellEditor.tsx`):
-- `components/SqlEditor.tsx` - Textarea for SQL queries
-- `components/MarkdownEditor.tsx` - Textarea for markdown content
-- `components/VariableTypeSelector.tsx` - Dropdown for variable type
-- `components/DefaultValueInput.tsx` - Input for variable default value
-- `components/CellNameInput.tsx` - Input with validation feedback (optional, could stay inline)
-- `components/AvailableVariablesPanel.tsx` - Shows $begin, $end, and user variables
+1. `notebook-types.ts` - Central type definitions to avoid circular dependencies between cell-registry and notebook-utils
+2. `components/AvailableVariablesPanel.tsx` - Shared component showing $begin, $end, and user variables
 
-These are reusable pieces that cell-specific editors import as needed.
+Note: Other shared editor components (SqlEditor, MarkdownEditor, etc.) were kept inline in cell editors to minimize file count. They can be extracted later if needed for reuse.
 
 ## Verification
 
