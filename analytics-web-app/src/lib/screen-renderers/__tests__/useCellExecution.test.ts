@@ -59,9 +59,6 @@ jest.mock('apache-arrow', () => {
 })
 
 // Mock cell-registry to prevent uPlot CSS import chain
-// Import substituteMacros directly since it's a pure utility function
-const { substituteMacros } = jest.requireActual('../notebook-utils')
-
 jest.mock('../cell-registry', () => ({
   getCellTypeMetadata: (type: string) => {
     const { substituteMacros } = jest.requireActual('../notebook-utils')

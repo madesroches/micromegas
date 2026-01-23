@@ -77,7 +77,7 @@ jest.mock('@dnd-kit/utilities', () => ({
 
 // Mock the cell registry
 jest.mock('../cell-registry', () => {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
   const React = require('react')
 
   // Mock editor component for all cell types

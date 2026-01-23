@@ -142,6 +142,7 @@ function VariableCellEditor({ config, onChange, variables, timeRange }: CellEdit
 // Cell Type Metadata
 // =============================================================================
 
+// eslint-disable-next-line react-refresh/only-export-components
 export const variableMetadata: CellTypeMetadata = {
   renderer: VariableCell,
   EditorComponent: VariableCellEditor,

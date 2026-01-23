@@ -155,6 +155,7 @@ function TableCellEditor({ config, onChange, variables, timeRange }: CellEditorP
 // Cell Type Metadata
 // =============================================================================
 
+// eslint-disable-next-line react-refresh/only-export-components
 export const tableMetadata: CellTypeMetadata = {
   renderer: TableCell,
   EditorComponent: TableCellEditor,

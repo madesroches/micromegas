@@ -166,6 +166,7 @@ function LogCellEditor({ config, onChange, variables, timeRange }: CellEditorPro
 // Cell Type Metadata
 // =============================================================================
 
+// eslint-disable-next-line react-refresh/only-export-components
 export const logMetadata: CellTypeMetadata = {
   renderer: LogCell,
   EditorComponent: LogCellEditor,

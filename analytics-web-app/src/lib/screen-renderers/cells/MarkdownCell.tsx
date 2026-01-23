@@ -43,6 +43,7 @@ function MarkdownCellEditor({ config, onChange }: CellEditorProps) {
 // Cell Type Metadata
 // =============================================================================
 
+// eslint-disable-next-line react-refresh/only-export-components
 export const markdownMetadata: CellTypeMetadata = {
   renderer: MarkdownCell,
   EditorComponent: MarkdownCellEditor,
