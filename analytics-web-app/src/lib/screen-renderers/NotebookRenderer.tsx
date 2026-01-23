@@ -38,6 +38,14 @@ import { useCellExecution } from './useCellExecution'
 import { notebookConfigsEqual } from './notebook-utils'
 
 // ============================================================================
+// Constants
+// ============================================================================
+
+const EDITOR_PANEL_MIN_WIDTH = 280
+const EDITOR_PANEL_MAX_WIDTH = 800
+const EDITOR_PANEL_DEFAULT_WIDTH = 350
+
+// ============================================================================
 // Modal Components
 // ============================================================================
 
@@ -215,7 +223,7 @@ export function NotebookRenderer({
   // Editor panel width (persisted to localStorage)
   const [editorPanelWidth, setEditorPanelWidth] = useState(() => {
     const saved = localStorage.getItem('notebook-editor-panel-width')
-    return saved ? parseInt(saved, 10) : 350
+    return saved ? parseInt(saved, 10) : EDITOR_PANEL_DEFAULT_WIDTH
   })
 
   useEffect(() => {
@@ -223,7 +231,9 @@ export function NotebookRenderer({
   }, [editorPanelWidth])
 
   const handleEditorPanelResize = useCallback((delta: number) => {
-    setEditorPanelWidth((prev) => Math.max(280, Math.min(800, prev - delta)))
+    setEditorPanelWidth((prev) =>
+      Math.max(EDITOR_PANEL_MIN_WIDTH, Math.min(EDITOR_PANEL_MAX_WIDTH, prev - delta))
+    )
   }, [])
 
   // Existing cell names for uniqueness check

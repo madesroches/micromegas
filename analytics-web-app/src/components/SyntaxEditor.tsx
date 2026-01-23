@@ -30,12 +30,7 @@ function highlightSql(code: string): string {
     '<span style="color: var(--syntax-comment)">$&</span>'
   )
 
-  // Restore strings with highlighting
-  result = result.replace(/__STRING_(\d+)__/g, (_, i) =>
-    `<span style="color: var(--syntax-string)">${strings[parseInt(i)]}</span>`
-  )
-
-  // Highlight SQL keywords
+  // Highlight SQL keywords (before restoring strings so keywords inside strings aren't highlighted)
   result = result.replace(
     /\b(SELECT|FROM|WHERE|AND|OR|ORDER BY|GROUP BY|LIMIT|OFFSET|AS|ON|JOIN|LEFT|RIGHT|INNER|OUTER|CROSS|FULL|DESC|ASC|DISTINCT|COUNT|SUM|AVG|MIN|MAX|CASE|WHEN|THEN|ELSE|END|IN|NOT|NULL|IS|LIKE|BETWEEN|UNION|ALL|EXISTS|HAVING|WITH|OVER|PARTITION|BY|ROW_NUMBER|RANK|DENSE_RANK|LAG|LEAD|FIRST_VALUE|LAST_VALUE|COALESCE|CAST|EXTRACT|DATE|TIME|TIMESTAMP|INTERVAL|TRUE|FALSE|CREATE|INSERT|UPDATE|DELETE|DROP|ALTER|TABLE|INDEX|VIEW|INTO|VALUES)\b/gi,
     '<span style="color: var(--syntax-keyword)">$&</span>'
@@ -47,10 +42,15 @@ function highlightSql(code: string): string {
     '<span style="color: var(--syntax-variable)">$&</span>'
   )
 
-  // Highlight numbers
+  // Highlight numbers (before restoring strings so numbers inside strings aren't highlighted)
   result = result.replace(
     /\b(\d+\.?\d*)\b/g,
     '<span style="color: var(--syntax-number)">$&</span>'
+  )
+
+  // Restore strings with highlighting (after other highlighting to preserve string content)
+  result = result.replace(/__STRING_(\d+)__/g, (_, i) =>
+    `<span style="color: var(--syntax-string)">${strings[parseInt(i)]}</span>`
   )
 
   // Add trailing newline to match textarea behavior
@@ -153,13 +153,13 @@ export function SyntaxEditor({
 
   return (
     <div
-      className={`relative border border-theme-border rounded-md focus-within:border-accent-link bg-app-bg overflow-hidden ${className}`}
+      className={`relative border border-theme-border rounded-md focus-within:border-accent-link bg-app-bg overflow-hidden resize-y ${className}`}
       style={{ minHeight }}
     >
       {/* Highlighted code layer (behind) */}
       <pre
         ref={preRef}
-        className="absolute inset-0 p-3 font-mono text-sm leading-relaxed whitespace-pre-wrap break-words pointer-events-none overflow-hidden m-0"
+        className="absolute inset-0 p-3 font-mono text-xs leading-relaxed whitespace-pre-wrap break-words pointer-events-none overflow-hidden m-0"
         aria-hidden="true"
         dangerouslySetInnerHTML={{ __html: highlightedCode }}
       />
@@ -168,7 +168,7 @@ export function SyntaxEditor({
         ref={textareaRef}
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="absolute inset-0 w-full h-full p-3 bg-transparent text-transparent caret-theme-text-primary font-mono text-sm leading-relaxed resize-none focus:outline-none"
+        className="absolute inset-0 w-full h-full p-3 bg-transparent text-transparent caret-theme-text-primary font-mono text-xs leading-relaxed resize-none focus:outline-none"
         style={{ minHeight }}
         placeholder={placeholder}
         spellCheck={false}
