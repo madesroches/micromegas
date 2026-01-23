@@ -37,13 +37,25 @@ Each cell type lives in a single file (e.g., `TableCell.tsx`) containing both th
 - **Better discoverability** - New contributors find everything about a cell type together
 - **Single import** - Registry imports one symbol per cell type
 
+**Design choice: Each cell type owns its editor**
+
+Rather than parameterizing editor sections with boolean flags, each cell type provides its own editor component. This avoids coupling the metadata interface to specific editor sections - a new cell type can have completely different editing needs without changing the interface. Shared UI pieces (like `SqlEditor`) are just reusable components that cell editors import as needed.
+
 ### New Types
 
 ```typescript
 // cell-registry.ts
+export interface CellEditorProps {
+  config: CellConfig
+  onChange: (config: CellConfig) => void
+}
+
 export interface CellTypeMetadata {
-  // Renderer component
+  // Renderer component (displays cell output)
   readonly renderer: ComponentType<CellRendererProps>
+
+  // Editor component (configures cell settings)
+  readonly EditorComponent: ComponentType<CellEditorProps>
 
   // Display
   readonly label: string              // "Table", "Chart", etc.
@@ -56,22 +68,12 @@ export interface CellTypeMetadata {
   readonly isExecutable: boolean       // false for markdown
   readonly canBlockDownstream: boolean // false for markdown
 
-  // Editor configuration
-  readonly editorSections: {
-    readonly sql: boolean | ((config: CellConfig) => boolean)
-    readonly content: boolean
-    readonly variableType: boolean
-    readonly defaultValue: boolean
-  }
-
   // Factory
   readonly createDefaultConfig: (baseName: string) => Omit<CellConfig, 'name' | 'layout'>
 
   // Execution hooks (optional)
   readonly shouldSkipExecution?: (config: CellConfig) => boolean
-  readonly processResult?: (result: Table, config: CellConfig) => {
-    variableOptions?: { label: string; value: string }[]
-  }
+  readonly processResult?: (result: Table, config: CellConfig) => Partial<CellState>
 
   // Props extraction
   readonly getRendererProps: (config: CellConfig, state: CellState) => Partial<CellRendererProps>
@@ -93,12 +95,18 @@ export interface CellTypeMetadata {
 ```typescript
 // cell-registry.ts
 import { ComponentType } from 'react'
-import type { CellType } from './notebook-types'
+import type { CellType, CellConfig } from './notebook-types'
 import { tableMetadata } from './cells/TableCell'
 import { chartMetadata } from './cells/ChartCell'
 import { logMetadata } from './cells/LogCell'
 import { markdownMetadata } from './cells/MarkdownCell'
 import { variableMetadata } from './cells/VariableCell'
+
+// Props for cell-specific editors (each cell type implements its own)
+export interface CellEditorProps {
+  config: CellConfig
+  onChange: (config: CellConfig) => void
+}
 
 export const CELL_TYPE_METADATA: Record<CellType, CellTypeMetadata> = {
   table: tableMetadata,
@@ -120,6 +128,11 @@ export function getCellRenderer(type: CellType): ComponentType<CellRendererProps
   return CELL_TYPE_METADATA[type].renderer
 }
 
+// Editor lookup derived from metadata
+export function getCellEditor(type: CellType): ComponentType<CellEditorProps> {
+  return CELL_TYPE_METADATA[type].EditorComponent
+}
+
 // Derive cell type options for UI from metadata
 export const CELL_TYPE_OPTIONS = (Object.entries(CELL_TYPE_METADATA) as [CellType, CellTypeMetadata][])
   .map(([type, meta]) => ({
@@ -137,8 +150,9 @@ Each cell file becomes a self-contained module exporting a single metadata objec
 
 ```typescript
 // cells/TableCell.tsx
-import type { CellTypeMetadata, CellRendererProps } from '../cell-registry'
+import type { CellTypeMetadata, CellRendererProps, CellEditorProps } from '../cell-registry'
 import type { QueryCellConfig, CellConfig, CellState } from '../notebook-types'
+import { SqlEditor } from '@/components/SqlEditor'
 import { DEFAULT_SQL } from '../notebook-utils'
 
 // =============================================================================
@@ -150,39 +164,41 @@ function TableCell({ data, status }: CellRendererProps) {
 }
 
 // =============================================================================
-// Cell Type Metadata (includes renderer)
+// Editor Component
+// =============================================================================
+
+function TableCellEditor({ config, onChange }: CellEditorProps) {
+  const tableConfig = config as QueryCellConfig
+  return (
+    <SqlEditor
+      value={tableConfig.sql}
+      onChange={(sql) => onChange({ ...tableConfig, sql })}
+    />
+  )
+}
+
+// =============================================================================
+// Cell Type Metadata
 // =============================================================================
 
 export const tableMetadata: CellTypeMetadata = {
-  // Renderer
   renderer: TableCell,
+  EditorComponent: TableCellEditor,
 
-  // Display
   label: 'Table',
   icon: 'T',
   description: 'Generic SQL results as a table',
   showTypeBadge: true,
   defaultHeight: 300,
 
-  // Execution behavior
   isExecutable: true,
   canBlockDownstream: true,
 
-  // Editor configuration
-  editorSections: {
-    sql: true,
-    content: false,
-    variableType: false,
-    defaultValue: false,
-  },
-
-  // Factory
   createDefaultConfig: () => ({
     type: 'table',
     sql: DEFAULT_SQL.table,
   }),
 
-  // Props extraction
   getRendererProps: (config: CellConfig, state: CellState) => ({
     sql: (config as QueryCellConfig).sql,
     options: (config as QueryCellConfig).options,
@@ -192,16 +208,46 @@ export const tableMetadata: CellTypeMetadata = {
 }
 ```
 
-**Variable cell example** (showing conditional behavior):
+**Variable cell example** (showing conditional SQL editor and custom fields):
 
 ```typescript
 // cells/VariableCell.tsx
+import type { CellTypeMetadata, CellRendererProps, CellEditorProps } from '../cell-registry'
+import type { VariableCellConfig, CellConfig, CellState } from '../notebook-types'
+import { SqlEditor } from '@/components/SqlEditor'
+import { VariableTypeSelector } from '@/components/VariableTypeSelector'
+import { DefaultValueInput } from '@/components/DefaultValueInput'
+import { DEFAULT_SQL } from '../notebook-utils'
+
 function VariableCell({ value, onValueChange, variableType, variableOptions }: CellRendererProps) {
   // ... existing implementation
 }
 
+function VariableCellEditor({ config, onChange }: CellEditorProps) {
+  const varConfig = config as VariableCellConfig
+  return (
+    <>
+      <VariableTypeSelector
+        value={varConfig.variableType}
+        onChange={(variableType) => onChange({ ...varConfig, variableType })}
+      />
+      {varConfig.variableType === 'combobox' && (
+        <SqlEditor
+          value={varConfig.sql ?? ''}
+          onChange={(sql) => onChange({ ...varConfig, sql })}
+        />
+      )}
+      <DefaultValueInput
+        value={varConfig.defaultValue ?? ''}
+        onChange={(defaultValue) => onChange({ ...varConfig, defaultValue })}
+      />
+    </>
+  )
+}
+
 export const variableMetadata: CellTypeMetadata = {
   renderer: VariableCell,
+  EditorComponent: VariableCellEditor,
 
   label: 'Variable',
   icon: 'V',
@@ -212,13 +258,6 @@ export const variableMetadata: CellTypeMetadata = {
   isExecutable: true,
   canBlockDownstream: true,
 
-  editorSections: {
-    sql: (config) => (config as VariableCellConfig).variableType === 'options',
-    content: false,
-    variableType: true,
-    defaultValue: true,
-  },
-
   createDefaultConfig: () => ({
     type: 'variable',
     variableType: 'text',
@@ -227,7 +266,7 @@ export const variableMetadata: CellTypeMetadata = {
 
   shouldSkipExecution: (config) => {
     const varConfig = config as VariableCellConfig
-    return varConfig.variableType !== 'options'
+    return varConfig.variableType !== 'combobox'
   },
 
   processResult: (result) => ({
@@ -240,21 +279,36 @@ export const variableMetadata: CellTypeMetadata = {
   getRendererProps: (config, state) => ({
     variableType: (config as VariableCellConfig).variableType,
     defaultValue: (config as VariableCellConfig).defaultValue,
-    options: state.variableOptions,
+    variableOptions: state.variableOptions,
   }),
 }
 ```
 
-**Markdown cell example** (non-executable, no SQL):
+**Markdown cell example** (non-executable, content-only editor):
 
 ```typescript
 // cells/MarkdownCell.tsx
+import type { CellTypeMetadata, CellRendererProps, CellEditorProps } from '../cell-registry'
+import type { MarkdownCellConfig, CellConfig } from '../notebook-types'
+import { MarkdownEditor } from '@/components/MarkdownEditor'
+
 function MarkdownCell({ content, isEditing, onContentChange }: CellRendererProps) {
   // ... existing implementation
 }
 
+function MarkdownCellEditor({ config, onChange }: CellEditorProps) {
+  const mdConfig = config as MarkdownCellConfig
+  return (
+    <MarkdownEditor
+      value={mdConfig.content}
+      onChange={(content) => onChange({ ...mdConfig, content })}
+    />
+  )
+}
+
 export const markdownMetadata: CellTypeMetadata = {
   renderer: MarkdownCell,
+  EditorComponent: MarkdownCellEditor,
 
   label: 'Markdown',
   icon: 'M',
@@ -264,13 +318,6 @@ export const markdownMetadata: CellTypeMetadata = {
 
   isExecutable: false,
   canBlockDownstream: false,
-
-  editorSections: {
-    sql: false,
-    content: true,
-    variableType: false,
-    defaultValue: false,
-  },
 
   createDefaultConfig: () => ({
     type: 'markdown',
@@ -346,9 +393,34 @@ if (!meta.canBlockDownstream) continue  // instead of if (cell.type !== 'markdow
 ### Step 6: Refactor `CellEditor`
 **File:** `analytics-web-app/src/components/CellEditor.tsx`
 
-- Accept `metadata: CellTypeMetadata` prop
-- Use `meta.editorSections.sql` (evaluate if function) instead of hardcoded checks
-- Use `meta.editorSections.content`, `meta.editorSections.variableType`, etc.
+Replace the conditional editor sections with metadata-driven rendering:
+- Look up metadata via `getCellTypeMetadata(cell.type)`
+- Render `<meta.EditorComponent config={cell} onChange={onCellChange} />`
+- The component becomes a thin wrapper that just renders the cell-specific editor
+
+```typescript
+// CellEditor.tsx (simplified)
+import { getCellTypeMetadata } from '@/lib/screen-renderers/cell-registry'
+
+export function CellEditor({ cell, onChange }: CellEditorProps) {
+  const meta = getCellTypeMetadata(cell.type)
+  const EditorComponent = meta.EditorComponent
+
+  return (
+    <div className="cell-editor">
+      <EditorComponent config={cell} onChange={onChange} />
+    </div>
+  )
+}
+```
+
+Shared editor components (`SqlEditor`, `MarkdownEditor`, etc.) move to `@/components/` as reusable pieces that individual cell editors import.
+
+**Shared editor components** (extract from current `CellEditor.tsx`):
+- `SqlEditor` - Monaco-based SQL editor with syntax highlighting
+- `MarkdownEditor` - Textarea for markdown content
+- `VariableTypeSelector` - Dropdown for text/number/combobox
+- `DefaultValueInput` - Input field for variable default values
 
 ### Step 7: Refactor `NotebookRenderer`
 **File:** `analytics-web-app/src/lib/screen-renderers/NotebookRenderer.tsx`
@@ -364,17 +436,17 @@ Delete this file - it was only used for side-effect imports to trigger `register
 
 ## Files to Modify
 
-1. `cell-registry.ts` - Replace `registerCellRenderer`/`CELL_RENDERERS` with unified metadata registry
+1. `cell-registry.ts` - Replace `registerCellRenderer`/`CELL_RENDERERS` with unified metadata registry, add `CellEditorProps` interface
 2. `notebook-utils.ts` - Replace `createDefaultCell` switch
 3. `useCellExecution.ts` - Replace type checks with metadata
 4. `CellContainer.tsx` - Use metadata for conditional rendering
-5. `CellEditor.tsx` - Use metadata for editor sections
+5. `CellEditor.tsx` - Simplify to render `meta.EditorComponent`, remove conditional section logic
 6. `NotebookRenderer.tsx` - Use `getCellRenderer` from registry, use metadata for props
-7. `cells/TableCell.tsx` - Remove `registerCellRenderer` call, add `tableMetadata` export with renderer
-8. `cells/ChartCell.tsx` - Remove `registerCellRenderer` call, add `chartMetadata` export with renderer
-9. `cells/LogCell.tsx` - Remove `registerCellRenderer` call, add `logMetadata` export with renderer
-10. `cells/MarkdownCell.tsx` - Remove `registerCellRenderer` call, add `markdownMetadata` export with renderer
-11. `cells/VariableCell.tsx` - Remove `registerCellRenderer` call, add `variableMetadata` export with renderer
+7. `cells/TableCell.tsx` - Remove `registerCellRenderer` call, add `TableCellEditor` and `tableMetadata` export
+8. `cells/ChartCell.tsx` - Remove `registerCellRenderer` call, add `ChartCellEditor` and `chartMetadata` export
+9. `cells/LogCell.tsx` - Remove `registerCellRenderer` call, add `LogCellEditor` and `logMetadata` export
+10. `cells/MarkdownCell.tsx` - Remove `registerCellRenderer` call, add `MarkdownCellEditor` and `markdownMetadata` export
+11. `cells/VariableCell.tsx` - Remove `registerCellRenderer` call, add `VariableCellEditor` and `variableMetadata` export
 
 ## Files to Delete
 
@@ -382,7 +454,13 @@ Delete this file - it was only used for side-effect imports to trigger `register
 
 ## Files to Create
 
-None - metadata is co-located with renderers in existing cell files.
+Shared editor components (extracted from current `CellEditor.tsx`):
+- `components/SqlEditor.tsx` - Monaco-based SQL editor
+- `components/MarkdownEditor.tsx` - Textarea for markdown content
+- `components/VariableTypeSelector.tsx` - Dropdown for variable type
+- `components/DefaultValueInput.tsx` - Input for variable default value
+
+These are reusable pieces that cell-specific editors import as needed.
 
 ## Verification
 
@@ -392,9 +470,10 @@ None - metadata is co-located with renderers in existing cell files.
 4. Manual testing:
    - Add each cell type (table, chart, log, markdown, variable)
    - Verify execution behavior (markdown doesn't execute, variable text/number skip SQL)
-   - Verify editor sections show correctly per type
-   - Verify run buttons appear/hide correctly
-   - Verify blocking behavior works
+   - Verify each cell type's editor renders correctly (SQL editor for table/chart/log, content editor for markdown, variable type selector + conditional SQL for variable)
+   - Verify run buttons appear/hide correctly (hidden for markdown)
+   - Verify type badges appear/hide correctly (hidden for markdown)
+   - Verify blocking behavior works (markdown cells don't block downstream)
 
 ## Adding a New Cell Type (Post-Refactor)
 
@@ -402,8 +481,9 @@ After this refactoring, adding a new cell type requires:
 
 1. Add the type to `CellType` union in `notebook-types.ts`
 2. Create `cells/NewCell.tsx` with:
-   - Renderer component
-   - `export const newtypeMetadata: CellTypeMetadata = { renderer: NewCell, ... }`
+   - Renderer component (`NewCell`)
+   - Editor component (`NewCellEditor`)
+   - Metadata export: `export const newtypeMetadata: CellTypeMetadata = { renderer: NewCell, EditorComponent: NewCellEditor, ... }`
 3. Add import to `cell-registry.ts`: `import { newtypeMetadata } from './cells/NewCell'`
 4. Add entry to `CELL_TYPE_METADATA` map
 
