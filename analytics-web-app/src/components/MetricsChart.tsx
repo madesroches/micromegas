@@ -1,20 +1,16 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useMemo } from 'react'
 import { TimeSeriesChart, ChartAxisBounds, ScaleMode } from './XYChart'
 import { PropertyTimeline } from './PropertyTimeline'
-import { ErrorBanner } from './ErrorBanner'
-import { usePropertyKeys } from '@/hooks/usePropertyKeys'
-import { usePropertyTimeline } from '@/hooks/usePropertyTimeline'
+import { PropertyTimelineData } from '@/types'
 
 interface MetricsChartProps {
   // Chart data
   data: { time: number; value: number }[]
   title: string
   unit: string
-  // For property timeline
-  processId: string | null
-  measureName: string | null
-  apiTimeRange: { begin: string; end: string }
-  binInterval: string
+  // Property data (from unified query via Model layer)
+  availablePropertyKeys: string[]
+  getPropertyTimeline: (key: string) => PropertyTimelineData
   // Selected properties (controlled from parent for URL persistence)
   selectedProperties: string[]
   onAddProperty: (key: string) => void
@@ -34,10 +30,8 @@ export function MetricsChart({
   data,
   title,
   unit,
-  processId,
-  measureName,
-  apiTimeRange,
-  binInterval,
+  availablePropertyKeys,
+  getPropertyTimeline,
   selectedProperties,
   onAddProperty,
   onRemoveProperty,
@@ -49,45 +43,15 @@ export function MetricsChart({
 }: MetricsChartProps) {
   const [axisBounds, setAxisBounds] = useState<ChartAxisBounds | null>(null)
 
-  // Fetch available property keys
-  const {
-    keys: availableKeys,
-    isLoading: keysLoading,
-    error: keysError,
-    refetch: refetchKeys,
-  } = usePropertyKeys({
-    processId,
-    measureName,
-    apiTimeRange,
-    enabled: !!processId && !!measureName,
-  })
-
-  // Fetch property timeline data
-  const {
-    timelines: propertyTimelines,
-    isLoading: timelinesLoading,
-    error: timelinesError,
-    refetch: refetchTimelines,
-  } = usePropertyTimeline({
-    processId,
-    measureName,
-    propertyNames: selectedProperties,
-    apiTimeRange,
-    binInterval,
-    enabled: !!processId && !!measureName && selectedProperties.length > 0,
-  })
-
-  // Combine errors for display
-  const propertyError = keysError || timelinesError
-  const handleRetry = useCallback(() => {
-    if (keysError) refetchKeys()
-    if (timelinesError) refetchTimelines()
-  }, [keysError, timelinesError, refetchKeys, refetchTimelines])
-
   const handleAxisBoundsChange = useCallback((bounds: ChartAxisBounds) => {
     setAxisBounds(bounds)
     onAxisBoundsChange?.(bounds)
   }, [onAxisBoundsChange])
+
+  // Derive property timelines from the getPropertyTimeline function
+  const propertyTimelines = useMemo(() => {
+    return selectedProperties.map(key => getPropertyTimeline(key))
+  }, [selectedProperties, getPropertyTimeline])
 
   // Calculate time range from data for property timeline
   const chartTimeRange =
@@ -98,7 +62,7 @@ export function MetricsChart({
         }
       : null
 
-  const showPropertyTimeline = availableKeys.length > 0 && chartTimeRange
+  const showPropertyTimeline = availablePropertyKeys.length > 0 && chartTimeRange
 
   return (
     <div className="flex flex-col gap-4">
@@ -116,28 +80,18 @@ export function MetricsChart({
         />
       </div>
 
-      {/* Property Error */}
-      {propertyError && (
-        <ErrorBanner
-          title="Failed to load properties"
-          message={propertyError}
-          variant="warning"
-          onRetry={handleRetry}
-        />
-      )}
-
       {/* Property Timeline */}
       {showPropertyTimeline && (
         <PropertyTimeline
           properties={propertyTimelines}
-          availableKeys={availableKeys}
+          availableKeys={availablePropertyKeys}
           selectedKeys={selectedProperties}
           timeRange={chartTimeRange}
           axisBounds={axisBounds}
           onTimeRangeSelect={onTimeRangeSelect}
           onAddProperty={onAddProperty}
           onRemoveProperty={onRemoveProperty}
-          isLoading={keysLoading || timelinesLoading}
+          isLoading={false}
         />
       )}
 

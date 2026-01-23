@@ -18,6 +18,7 @@ import { openInPerfetto, PerfettoError } from '@/lib/perfetto'
 import { parseTimeRange, getTimeRangeForApi } from '@/lib/time-range'
 import { useScreenConfig } from '@/hooks/useScreenConfig'
 import { usePageTitle } from '@/hooks/usePageTitle'
+import { useMetricsData } from '@/hooks/useMetricsData'
 import { GenerateTraceRequest, ProgressUpdate, ThreadCoverage } from '@/types'
 import type { PerformanceAnalysisConfig } from '@/lib/screen-config'
 
@@ -155,9 +156,7 @@ function PerformanceAnalysisContent() {
   const [measures, setMeasures] = useState<Measure[]>([])
   const [selectedMeasure, setSelectedMeasure] = useState<string | null>(config.selectedMeasure ?? null)
   const [queryError, setQueryError] = useState<string | null>(null)
-  const [chartData, setChartData] = useState<{ time: number; value: number }[]>([])
   const [_processExe, setProcessExe] = useState<string | null>(null)
-  const [hasLoaded, setHasLoaded] = useState(false)
   const [discoveryDone, setDiscoveryDone] = useState(false)
   const [chartWidth, setChartWidth] = useState<number>(800)
   const [threadCoverage, setThreadCoverage] = useState<ThreadCoverage[]>([])
@@ -170,7 +169,9 @@ function PerformanceAnalysisContent() {
   const [chartAxisBounds, setChartAxisBounds] = useState<ChartAxisBounds | null>(null)
   const [cachedTraceBuffer, setCachedTraceBuffer] = useState<ArrayBuffer | null>(null)
   const [cachedTraceTimeRange, setCachedTraceTimeRange] = useState<{ begin: string; end: string } | null>(null)
-  const [currentSql, setCurrentSql] = useState<string>(DEFAULT_SQL)
+  const [_currentSql, setCurrentSql] = useState<string>(DEFAULT_SQL)
+  const [isCustomQuery, setIsCustomQuery] = useState(false)
+  const [customChartData, setCustomChartData] = useState<{ time: number; value: number }[]>([])
 
   const binInterval = useMemo(() => {
     const fromDate = new Date(apiTimeRange.begin)
@@ -178,6 +179,20 @@ function PerformanceAnalysisContent() {
     const timeSpanMs = toDate.getTime() - fromDate.getTime()
     return calculateBinInterval(timeSpanMs, chartWidth)
   }, [apiTimeRange, chartWidth])
+
+  // Unified metrics data hook (Model layer)
+  const metricsData = useMetricsData({
+    processId,
+    measureName: selectedMeasure,
+    binInterval,
+    apiTimeRange,
+    enabled: !!processId && !!selectedMeasure,
+  })
+
+  // Use unified data or custom query data
+  const chartData = isCustomQuery ? customChartData : metricsData.chartData
+  const dataLoading = isCustomQuery ? false : metricsData.isLoading
+  const hasLoaded = isCustomQuery ? customChartData.length > 0 || queryError !== null : metricsData.isComplete
 
   const selectedMeasureInfo = useMemo(() => {
     return measures.find((m) => m.name === selectedMeasure)
@@ -192,13 +207,7 @@ function PerformanceAnalysisContent() {
   }, [chartData])
 
   const [discoveryLoading, setDiscoveryLoading] = useState(false)
-  const [dataLoading, setDataLoading] = useState(false)
-
-  const currentSqlRef = useRef(currentSql)
-  currentSqlRef.current = currentSql
-
-  // Ref to always call the latest loadData without causing effect re-runs
-  const loadDataRef = useRef<((sql: string) => Promise<void>) | null>(null)
+  const [customQueryLoading, setCustomQueryLoading] = useState(false)
 
   const loadDiscovery = useCallback(async () => {
     if (!processId) return
@@ -252,12 +261,13 @@ function PerformanceAnalysisContent() {
     }
   }, [processId, apiTimeRange, selectedMeasure, updateConfig])
 
-  const loadData = useCallback(
+  const loadCustomQuery = useCallback(
     async (sql: string) => {
       if (!processId || !selectedMeasure) return
       setQueryError(null)
       setCurrentSql(sql)
-      setDataLoading(true)
+      setCustomQueryLoading(true)
+      setIsCustomQuery(true)
 
       try {
         const { batches, error } = await executeStreamQuery({
@@ -273,8 +283,7 @@ function PerformanceAnalysisContent() {
 
         if (error) {
           setQueryError(error.message)
-          setHasLoaded(true)
-          setDataLoading(false)
+          setCustomQueryLoading(false)
           return
         }
 
@@ -291,20 +300,15 @@ function PerformanceAnalysisContent() {
           }
         }
 
-        setChartData(points)
-        setHasLoaded(true)
+        setCustomChartData(points)
       } catch (err) {
         setQueryError(err instanceof Error ? err.message : 'Unknown error')
-        setHasLoaded(true)
       } finally {
-        setDataLoading(false)
+        setCustomQueryLoading(false)
       }
     },
     [processId, selectedMeasure, binInterval, apiTimeRange]
   )
-
-  // Keep ref updated with latest loadData
-  loadDataRef.current = loadData
 
   // Ref to always call the latest loadDiscovery without causing effect re-runs
   const loadDiscoveryRef = useRef<(() => Promise<void>) | null>(null)
@@ -403,6 +407,8 @@ function PerformanceAnalysisContent() {
   const updateMeasure = useCallback(
     (measure: string) => {
       setSelectedMeasure(measure)
+      setIsCustomQuery(false)
+      setCurrentSql(DEFAULT_SQL)
       updateConfig({ selectedMeasure: measure }, { replace: true })
     },
     [updateConfig]
@@ -463,16 +469,16 @@ function PerformanceAnalysisContent() {
     }
   }, [processId])
 
-  const hasInitialLoadRef = useRef(false)
+  // Trigger unified query when discovery is done and measure is selected
+  const metricsDataExecuteRef = useRef(metricsData.execute)
+  metricsDataExecuteRef.current = metricsData.execute
+
   useEffect(() => {
-    if (discoveryDone && selectedMeasure && processId) {
-      // Use DEFAULT_SQL only on initial load, preserve custom SQL for measure changes
-      const isInitialLoad = !hasInitialLoadRef.current
-      hasInitialLoadRef.current = true
-      // Use ref to avoid re-running this effect when loadData identity changes
-      loadDataRef.current?.(isInitialLoad ? DEFAULT_SQL : currentSqlRef.current)
+    if (discoveryDone && selectedMeasure && processId && !isCustomQuery) {
+      metricsDataExecuteRef.current()
     }
-  }, [discoveryDone, selectedMeasure, processId])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- Use primitive deps to avoid object comparison issues
+  }, [discoveryDone, selectedMeasure, processId, isCustomQuery, binInterval, apiTimeRange.begin, apiTimeRange.end])
 
   // Re-execute queries when time range changes
   const prevTimeRangeRef = useRef<{ begin: string; end: string } | null>(null)
@@ -491,20 +497,20 @@ function PerformanceAnalysisContent() {
       // Use refs to avoid re-running this effect when callback identities change
       loadDiscoveryRef.current?.()
       loadThreadCoverageRef.current?.()
-      loadDataRef.current?.(currentSqlRef.current)
     }
   }, [apiTimeRange.begin, apiTimeRange.end, hasLoaded])
 
   const handleRunQuery = useCallback(
     (sql: string) => {
-      loadData(sql)
+      loadCustomQuery(sql)
     },
-    [loadData]
+    [loadCustomQuery]
   )
 
   const handleResetQuery = useCallback(() => {
-    loadData(DEFAULT_SQL)
-  }, [loadData])
+    setCurrentSql(DEFAULT_SQL)
+    setIsCustomQuery(false)
+  }, [])
 
   const handleRefresh = useCallback(() => {
     hasLoadedDiscoveryRef.current = false
@@ -680,6 +686,10 @@ function PerformanceAnalysisContent() {
     [processId, selectedMeasure, binInterval]
   )
 
+  const isLoading = dataLoading || customQueryLoading
+  // Show loading when discovery is done, measure selected, but data hasn't loaded yet
+  const showDataLoading = isLoading || (discoveryDone && selectedMeasure && !hasLoaded && chartData.length === 0)
+
   const sqlPanel =
     processId && selectedMeasure ? (
       <QueryEditor
@@ -689,7 +699,7 @@ function PerformanceAnalysisContent() {
         timeRangeLabel={timeRangeParsed.label}
         onRun={handleRunQuery}
         onReset={handleResetQuery}
-        isLoading={dataLoading}
+        isLoading={isLoading}
         error={queryError}
         docLink={{
           url: 'https://madesroches.github.io/micromegas/docs/query-guide/schema-reference/#measures',
@@ -850,10 +860,8 @@ function PerformanceAnalysisContent() {
               data={chartData}
               title={selectedMeasure}
               unit={selectedMeasureInfo?.unit || ''}
-              processId={processId}
-              measureName={selectedMeasure}
-              apiTimeRange={apiTimeRange}
-              binInterval={binInterval}
+              availablePropertyKeys={metricsData.availablePropertyKeys}
+              getPropertyTimeline={metricsData.getPropertyTimeline}
               selectedProperties={selectedProperties}
               onAddProperty={handleAddProperty}
               onRemoveProperty={handleRemoveProperty}
@@ -882,7 +890,7 @@ function PerformanceAnalysisContent() {
                 </div>
               </div>
             </div>
-          ) : dataLoading && !hasLoaded ? (
+          ) : showDataLoading ? (
             <div className="h-full flex items-center justify-center bg-app-panel border border-theme-border rounded-lg">
               <div className="flex items-center gap-3">
                 <div className="animate-spin rounded-full h-5 w-5 border-2 border-accent-link border-t-transparent" />
