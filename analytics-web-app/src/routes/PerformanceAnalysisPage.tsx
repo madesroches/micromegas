@@ -28,7 +28,8 @@ ORDER BY name`
 
 const DEFAULT_SQL = `SELECT
   date_bin(INTERVAL '$bin_interval', time) as time,
-  max(value) as value
+  max(value) as value,
+  jsonb_format_json(first_value(properties) FILTER (WHERE properties IS NOT NULL)) as properties
 FROM view_instance('measures', '$process_id')
 WHERE name = '$measure_name'
 GROUP BY date_bin(INTERVAL '$bin_interval', time)
