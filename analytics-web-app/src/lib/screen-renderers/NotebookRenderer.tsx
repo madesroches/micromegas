@@ -36,7 +36,7 @@ import { SaveFooter } from './shared'
 import { useNotebookVariables } from './useNotebookVariables'
 import { useCellExecution } from './useCellExecution'
 import { notebookConfigsEqual } from './notebook-utils'
-import { DEFAULT_SCREEN_TIME_RANGE } from '@/lib/screen-defaults'
+import { DEFAULT_TIME_RANGE } from '@/lib/screen-defaults'
 
 // ============================================================================
 // Constants
@@ -223,8 +223,8 @@ export function NotebookRenderer({
     prevTimeRangeRef.current = current
 
     // Check if time range differs from saved config
-    const savedFrom = savedNotebookConfig?.timeRangeFrom ?? DEFAULT_SCREEN_TIME_RANGE.from
-    const savedTo = savedNotebookConfig?.timeRangeTo ?? DEFAULT_SCREEN_TIME_RANGE.to
+    const savedFrom = savedNotebookConfig?.timeRangeFrom ?? DEFAULT_TIME_RANGE.from
+    const savedTo = savedNotebookConfig?.timeRangeTo ?? DEFAULT_TIME_RANGE.to
     const timeRangeDiffers = current.from !== savedFrom || current.to !== savedTo
 
     // Create config with updated time range for unsaved state check

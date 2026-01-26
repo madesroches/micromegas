@@ -11,7 +11,7 @@ import { parseTimeRange, getTimeRangeForApi } from '@/lib/time-range'
 import { isReservedParam } from '@/lib/url-params'
 import { renderIcon } from '@/lib/screen-type-utils'
 import { getRenderer } from '@/lib/screen-renderers/init'
-import { DEFAULT_SCREEN_TIME_RANGE } from '@/lib/screen-defaults'
+import { DEFAULT_TIME_RANGE } from '@/lib/screen-defaults'
 import type { ScreenPageConfig } from '@/lib/screen-config'
 import {
   getScreen,
@@ -27,8 +27,8 @@ import {
 
 // Default config for ScreenPage (used when no saved config exists)
 const DEFAULT_CONFIG: ScreenPageConfig = {
-  timeRangeFrom: DEFAULT_SCREEN_TIME_RANGE.from,
-  timeRangeTo: DEFAULT_SCREEN_TIME_RANGE.to,
+  timeRangeFrom: DEFAULT_TIME_RANGE.from,
+  timeRangeTo: DEFAULT_TIME_RANGE.to,
   type: undefined,
   variables: {},
 }
