@@ -198,7 +198,7 @@ describe('ScreenPage URL state management', () => {
   describe('combined operations', () => {
     it('should handle interleaved time and variable changes', () => {
       // Start with some state
-      const { result, rerender } = renderHook(() => useUrlStateHandlers(), {
+      const { result, rerender: _rerender } = renderHook(() => useUrlStateHandlers(), {
         wrapper: createWrapper(['/screen/test?from=now-1h&to=now&myvar=initial']),
       })
 
