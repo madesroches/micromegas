@@ -25,10 +25,10 @@ import {
   ScreenApiError,
 } from '@/lib/screens-api'
 
-// Default config for ScreenPage (used when no saved config exists)
+// Default config for ScreenPage URL state
+// Note: time range is intentionally omitted - it comes from saved/current config, not URL defaults
+// This prevents urlConfig from having stale defaults that conflict with actual config
 const DEFAULT_CONFIG: ScreenPageConfig = {
-  timeRangeFrom: DEFAULT_TIME_RANGE.from,
-  timeRangeTo: DEFAULT_TIME_RANGE.to,
   type: undefined,
   variables: {},
 }
@@ -39,19 +39,20 @@ const MAX_SAFE_URL_LENGTH = 2000
 // URL builder factory - creates buildUrl with saved config as baseline for delta calculations
 // URL should only contain values that differ from the saved config (not hardcoded defaults)
 const createBuildUrl = (savedConfig: ScreenConfig | null) => {
-  // Extract saved time range, falling back to defaults for new screens
-  const savedTimeFrom = savedConfig?.timeRangeFrom ?? DEFAULT_CONFIG.timeRangeFrom
-  const savedTimeTo = savedConfig?.timeRangeTo ?? DEFAULT_CONFIG.timeRangeTo
+  // Extract saved time range - for new screens, savedConfig is null so any time in URL is a delta
+  const savedTimeFrom = savedConfig?.timeRangeFrom
+  const savedTimeTo = savedConfig?.timeRangeTo
 
   return (cfg: ScreenPageConfig): string => {
     const params = new URLSearchParams()
     if (cfg.type) params.set('type', cfg.type)
 
-    // Only serialize time range if it differs from saved config baseline
-    if (cfg.timeRangeFrom && cfg.timeRangeFrom !== savedTimeFrom) {
+    // Only serialize time range if it differs from saved config
+    // For new screens (savedConfig null), any explicit time goes to URL
+    if (cfg.timeRangeFrom && (savedTimeFrom === undefined || cfg.timeRangeFrom !== savedTimeFrom)) {
       params.set('from', cfg.timeRangeFrom)
     }
-    if (cfg.timeRangeTo && cfg.timeRangeTo !== savedTimeTo) {
+    if (cfg.timeRangeTo && (savedTimeTo === undefined || cfg.timeRangeTo !== savedTimeTo)) {
       params.set('to', cfg.timeRangeTo)
     }
 
@@ -105,27 +106,27 @@ function ScreenPageContent() {
     [updateConfig]
   )
 
-  // Variable change handler (replace to avoid cluttering history)
+  // Variable change handler - works directly with URL params to preserve existing time state
+  // This avoids going through updateConfig which would merge defaults and potentially
+  // add unwanted time params to the URL
   const handleUrlVariableChange = useCallback(
     (name: string, value: string) => {
-      updateConfig(
-        {
-          variables: { ...(urlConfig.variables || {}), [name]: value },
-        },
-        { replace: true }
-      )
+      const params = new URLSearchParams(searchParams.toString())
+      params.set(name, value)
+      navigate(`?${params.toString()}`, { replace: true })
     },
-    [updateConfig, urlConfig.variables]
+    [searchParams, navigate]
   )
 
-  // Variable remove handler (cleans up orphaned URL params when variable cell is deleted)
+  // Variable remove handler - works directly with URL params
   const handleUrlVariableRemove = useCallback(
     (name: string) => {
-      const newVariables = { ...(urlConfig.variables || {}) }
-      delete newVariables[name]
-      updateConfig({ variables: newVariables }, { replace: true })
+      const params = new URLSearchParams(searchParams.toString())
+      params.delete(name)
+      const qs = params.toString()
+      navigate(qs ? `?${qs}` : '.', { replace: true })
     },
-    [updateConfig, urlConfig.variables]
+    [searchParams, navigate]
   )
 
   // Screen type info (fetched from API)
@@ -158,16 +159,19 @@ function ScreenPageContent() {
   const savedTimeTo = screen?.config?.timeRangeTo
   const currentTimeFrom = screenConfig?.timeRangeFrom
   const currentTimeTo = screenConfig?.timeRangeTo
+  // Compute raw time range - source of truth for displayed time
+  // Priority: URL params → saved config → current config (from API)
+  // No hardcoded fallback - config always comes from API (getDefaultConfig or loaded screen)
   const rawTimeRange = useMemo(
     () => ({
       from: urlHasTimeRange
-        ? urlConfig.timeRangeFrom!
-        : (savedTimeFrom ?? currentTimeFrom ?? DEFAULT_CONFIG.timeRangeFrom!),
+        ? searchParams.get('from')!
+        : (savedTimeFrom ?? currentTimeFrom!),
       to: urlHasTimeRange
-        ? urlConfig.timeRangeTo!
-        : (savedTimeTo ?? currentTimeTo ?? DEFAULT_CONFIG.timeRangeTo!),
+        ? searchParams.get('to')!
+        : (savedTimeTo ?? currentTimeTo!),
     }),
-    [urlHasTimeRange, urlConfig.timeRangeFrom, urlConfig.timeRangeTo, savedTimeFrom, savedTimeTo, currentTimeFrom, currentTimeTo]
+    [urlHasTimeRange, searchParams, savedTimeFrom, savedTimeTo, currentTimeFrom, currentTimeTo]
   )
 
   // Compute parsed time range (for label)
@@ -175,7 +179,8 @@ function ScreenPageContent() {
     try {
       return parseTimeRange(rawTimeRange.from, rawTimeRange.to)
     } catch {
-      return parseTimeRange(DEFAULT_CONFIG.timeRangeFrom!, DEFAULT_CONFIG.timeRangeTo!)
+      // Fallback for invalid time range - use standard defaults
+      return parseTimeRange(DEFAULT_TIME_RANGE.from, DEFAULT_TIME_RANGE.to)
     }
   }, [rawTimeRange])
 
@@ -184,9 +189,22 @@ function ScreenPageContent() {
     try {
       return getTimeRangeForApi(rawTimeRange.from, rawTimeRange.to)
     } catch {
-      return getTimeRangeForApi(DEFAULT_CONFIG.timeRangeFrom!, DEFAULT_CONFIG.timeRangeTo!)
+      // Fallback for invalid time range - use standard defaults
+      return getTimeRangeForApi(DEFAULT_TIME_RANGE.from, DEFAULT_TIME_RANGE.to)
     }
   }, [rawTimeRange])
+
+  // Compute URL variables directly from searchParams (not urlConfig which may be stale)
+  // This ensures the renderer always sees current URL state since variable changes bypass urlConfig
+  const urlVariables = useMemo(() => {
+    const vars: Record<string, string> = {}
+    searchParams.forEach((value, key) => {
+      if (!isReservedParam(key)) {
+        vars[key] = value
+      }
+    })
+    return vars
+  }, [searchParams])
 
   // Load screen or default config
   useEffect(() => {
@@ -268,12 +286,12 @@ function ScreenPageContent() {
     setIsSaving(true)
     setSaveError(null)
 
-    // Merge URL time range into config for save
-    // This ensures we save what the user sees, even if the async effect hasn't synced yet
+    // Save the displayed time range (rawTimeRange), not urlConfig which has defaults merged in
+    // rawTimeRange correctly falls back: URL → saved → default
     const configToSave: ScreenConfig = {
       ...screenConfig,
-      timeRangeFrom: urlConfig.timeRangeFrom ?? screenConfig?.timeRangeFrom,
-      timeRangeTo: urlConfig.timeRangeTo ?? screenConfig?.timeRangeTo,
+      timeRangeFrom: rawTimeRange.from,
+      timeRangeTo: rawTimeRange.to,
     }
 
     try {
@@ -284,8 +302,13 @@ function ScreenPageContent() {
 
       // Clean up URL params that now match saved values (delta-based URL)
       // After save, the saved config becomes the new baseline for delta calculations
-      // We use navigate directly because buildUrl hasn't updated yet (state change pending)
-      const currentUrlVars = urlConfig.variables || {}
+      // Read variables from actual URL (searchParams) since variable changes bypass urlConfig
+      const currentUrlVars: Record<string, string> = {}
+      searchParams.forEach((value, key) => {
+        if (!isReservedParam(key)) {
+          currentUrlVars[key] = value
+        }
+      })
       const variablesToRemove: string[] = []
 
       // Check each URL variable against the newly saved config
@@ -301,17 +324,18 @@ function ScreenPageContent() {
         }
       }
 
-      // Build clean URL with only params that differ from newly saved config
-      const newSavedTimeFrom = configToSave.timeRangeFrom
-      const newSavedTimeTo = configToSave.timeRangeTo
+      // Build clean URL - only keep params that differ from newly saved config
+      // Read actual URL time params (not urlConfig which has defaults merged in)
+      const urlTimeFrom = searchParams.get('from')
+      const urlTimeTo = searchParams.get('to')
       const params = new URLSearchParams()
 
-      // Time range: only include if differs from saved (which it shouldn't after save)
-      if (urlConfig.timeRangeFrom && urlConfig.timeRangeFrom !== newSavedTimeFrom) {
-        params.set('from', urlConfig.timeRangeFrom)
+      // Time range: only include if explicitly in URL AND differs from saved
+      if (urlTimeFrom && urlTimeFrom !== configToSave.timeRangeFrom) {
+        params.set('from', urlTimeFrom)
       }
-      if (urlConfig.timeRangeTo && urlConfig.timeRangeTo !== newSavedTimeTo) {
-        params.set('to', urlConfig.timeRangeTo)
+      if (urlTimeTo && urlTimeTo !== configToSave.timeRangeTo) {
+        params.set('to', urlTimeTo)
       }
 
       // Variables: only include if differs from saved
@@ -338,7 +362,7 @@ function ScreenPageContent() {
     } finally {
       setIsSaving(false)
     }
-  }, [screen, screenConfig, urlConfig.variables, urlConfig.timeRangeFrom, urlConfig.timeRangeTo, navigate])
+  }, [screen, screenConfig, searchParams, rawTimeRange, navigate])
 
   // Handle "Save As" completion
   const handleSaveAsComplete = useCallback(
@@ -483,7 +507,7 @@ function ScreenPageContent() {
               onSaveAs={() => setShowSaveDialog(true)}
               saveError={saveError}
               refreshTrigger={refreshTrigger}
-              urlVariables={urlConfig.variables || {}}
+              urlVariables={urlVariables}
               onUrlVariableChange={handleUrlVariableChange}
               onUrlVariableRemove={handleUrlVariableRemove}
             />
