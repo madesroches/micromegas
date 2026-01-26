@@ -112,22 +112,32 @@ impl ScreenType {
     pub fn default_config(&self) -> serde_json::Value {
         match self {
             ScreenType::ProcessList => serde_json::json!({
+                "timeRangeFrom": "now-5m",
+                "timeRangeTo": "now",
                 "sql": "SELECT process_id, exe, start_time, last_update_time, username, computer\nFROM processes\nORDER BY last_update_time DESC\nLIMIT 100",
                 "variables": []
             }),
             ScreenType::Metrics => serde_json::json!({
+                "timeRangeFrom": "now-5m",
+                "timeRangeTo": "now",
                 "sql": "SELECT time, value\nFROM measures\nWHERE name = 'cpu_usage'\nORDER BY time\nLIMIT 100",
                 "variables": []
             }),
             ScreenType::Log => serde_json::json!({
+                "timeRangeFrom": "now-5m",
+                "timeRangeTo": "now",
                 "sql": "SELECT time, level, target, msg\nFROM log_entries\nWHERE level <= $max_level\n  $search_filter\nORDER BY time DESC\nLIMIT $limit",
                 "variables": []
             }),
             ScreenType::Table => serde_json::json!({
+                "timeRangeFrom": "now-5m",
+                "timeRangeTo": "now",
                 "sql": "SELECT process_id, exe, start_time, last_update_time, username, computer\nFROM processes\n$order_by\nLIMIT 100",
                 "variables": []
             }),
             ScreenType::Notebook => serde_json::json!({
+                "timeRangeFrom": "now-5m",
+                "timeRangeTo": "now",
                 "cells": []
             }),
         }
