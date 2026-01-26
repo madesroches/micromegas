@@ -95,15 +95,19 @@ function ScreenPageContent() {
   const buildUrl = useMemo(() => createBuildUrl(screen?.config ?? null), [screen?.config])
 
   // Use the config-driven pattern for URL state (time range, type for new screens)
-  const { config: urlConfig, updateConfig } = useScreenConfig(DEFAULT_CONFIG, buildUrl)
+  const { config: urlConfig } = useScreenConfig(DEFAULT_CONFIG, buildUrl)
   const typeParam = (urlConfig.type ?? null) as ScreenTypeName | null
 
-  // Time range change handler (navigational)
+  // Time range change handler - works directly with URL params to preserve variables
+  // This avoids going through updateConfig which has stale variable state
   const handleTimeRangeChange = useCallback(
     (from: string, to: string) => {
-      updateConfig({ timeRangeFrom: from, timeRangeTo: to })
+      const params = new URLSearchParams(searchParams.toString())
+      params.set('from', from)
+      params.set('to', to)
+      navigate(`?${params.toString()}`)
     },
-    [updateConfig]
+    [searchParams, navigate]
   )
 
   // Variable change handler - works directly with URL params to preserve existing time state
@@ -153,25 +157,19 @@ function ScreenPageContent() {
 
   // Compute raw time range values (for renderer)
   // Priority: URL (if present) → saved config → current config
-  // Check actual URL params to detect explicit overrides (not merged urlConfig which always has defaults)
-  const urlHasTimeRange = searchParams.has('from') || searchParams.has('to')
   const savedTimeFrom = screen?.config?.timeRangeFrom
   const savedTimeTo = screen?.config?.timeRangeTo
   const currentTimeFrom = screenConfig?.timeRangeFrom
   const currentTimeTo = screenConfig?.timeRangeTo
   // Compute raw time range - source of truth for displayed time
   // Priority: URL params → saved config → current config (from API)
-  // No hardcoded fallback - config always comes from API (getDefaultConfig or loaded screen)
+  // Check each param individually since URL might only have one of from/to
   const rawTimeRange = useMemo(
     () => ({
-      from: urlHasTimeRange
-        ? searchParams.get('from')!
-        : (savedTimeFrom ?? currentTimeFrom!),
-      to: urlHasTimeRange
-        ? searchParams.get('to')!
-        : (savedTimeTo ?? currentTimeTo!),
+      from: searchParams.get('from') ?? savedTimeFrom ?? currentTimeFrom!,
+      to: searchParams.get('to') ?? savedTimeTo ?? currentTimeTo!,
     }),
-    [urlHasTimeRange, searchParams, savedTimeFrom, savedTimeTo, currentTimeFrom, currentTimeTo]
+    [searchParams, savedTimeFrom, savedTimeTo, currentTimeFrom, currentTimeTo]
   )
 
   // Compute parsed time range (for label)
