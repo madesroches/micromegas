@@ -9,7 +9,6 @@ import type { VariableCellConfig, CellConfig, CellState } from '../notebook-type
 import { AvailableVariablesPanel } from '@/components/AvailableVariablesPanel'
 import { SyntaxEditor } from '@/components/SyntaxEditor'
 import { substituteMacros, DEFAULT_SQL } from '../notebook-utils'
-import { useDebounce } from '@/hooks/useDebounce'
 
 // =============================================================================
 // Renderer Component
@@ -25,37 +24,38 @@ export function VariableCell({
   const type = variableType || 'text'
   const isTextInput = type === 'text' || type === 'number'
 
-  // For text/number inputs, use local state with debouncing to avoid excessive URL updates
-  const [localValue, setLocalValue] = useState(value ?? '')
-  const debouncedValue = useDebounce(localValue, 300)
+  // Local state for text input - allows immediate UI feedback while debouncing the callback
+  const [localValue, setLocalValue] = useState<string | undefined>(undefined)
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  // Track if this is the initial render to avoid unnecessary URL update on mount
-  const isInitialRef = useRef(true)
-
-  // Sync debounced value to config (for text/number inputs)
+  // When value prop changes externally, clear local state so we show the new value
   useEffect(() => {
-    if (!isTextInput) return
+    setLocalValue(undefined)
+  }, [value])
 
-    // Skip initial render to avoid unnecessary URL update on mount
-    if (isInitialRef.current) {
-      isInitialRef.current = false
-      return
-    }
-
-    // Only update if the value actually changed
-    if (debouncedValue !== value) {
-      onValueChange?.(debouncedValue)
-    }
-  }, [debouncedValue, isTextInput, onValueChange, value])
-
-  // Sync local value when config changes externally (e.g., browser back/forward)
+  // Cleanup timeout on unmount
   useEffect(() => {
-    if (isTextInput && value !== undefined && value !== localValue) {
-      setLocalValue(value)
+    return () => {
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current)
+      }
     }
-    // Only run when value prop changes, not when localValue changes
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [value, isTextInput])
+  }, [])
+
+  const handleTextChange = (newValue: string) => {
+    // Update local state immediately for responsive UI
+    setLocalValue(newValue)
+
+    // Clear any pending timeout
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current)
+    }
+
+    // Debounce the callback to parent
+    timeoutRef.current = setTimeout(() => {
+      onValueChange?.(newValue)
+    }, 300)
+  }
 
   if (status === 'loading') {
     return (
@@ -66,21 +66,18 @@ export function VariableCell({
     )
   }
 
-  // Combobox changes are immediate (no debouncing needed)
   const handleComboboxChange = (newValue: string) => {
     onValueChange?.(newValue)
   }
 
-  // Text/number changes update local state (debounced sync to config)
-  const handleTextChange = (newValue: string) => {
-    setLocalValue(newValue)
-  }
+  // Display value: local state (while typing) takes precedence, otherwise use prop
+  const displayValue = isTextInput ? (localValue ?? value ?? '') : (value ?? '')
 
   return (
     <div className="flex items-center gap-3 py-1">
       {type === 'combobox' && (
         <select
-          value={value ?? ''}
+          value={displayValue}
           onChange={(e) => handleComboboxChange(e.target.value)}
           className="flex-1 max-w-[400px] px-3 py-2 bg-app-card border border-theme-border rounded-md text-theme-text-primary text-sm focus:outline-none focus:border-accent-link"
         >
@@ -99,7 +96,7 @@ export function VariableCell({
       {type === 'text' && (
         <input
           type="text"
-          value={localValue}
+          value={displayValue}
           onChange={(e) => handleTextChange(e.target.value)}
           className="flex-1 max-w-[400px] px-3 py-2 bg-app-card border border-theme-border rounded-md text-theme-text-primary text-sm focus:outline-none focus:border-accent-link"
           placeholder="Enter value..."
@@ -109,7 +106,7 @@ export function VariableCell({
       {type === 'number' && (
         <input
           type="number"
-          value={localValue}
+          value={displayValue}
           onChange={(e) => handleTextChange(e.target.value)}
           className="flex-1 max-w-[200px] px-3 py-2 bg-app-card border border-theme-border rounded-md text-theme-text-primary text-sm focus:outline-none focus:border-accent-link"
           placeholder="0"
