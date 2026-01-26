@@ -6,7 +6,7 @@ export interface UseNotebookVariablesResult {
   variableValues: Record<string, string>
   /** Ref for synchronous access during sequential cell execution */
   variableValuesRef: React.MutableRefObject<Record<string, string>>
-  /** Set a variable value (calls onVariableChange callback) */
+  /** Set a variable value (calls onVariableChange callback, uses delta logic against saved baseline) */
   setVariableValue: (cellName: string, value: string) => void
   /** Migrate variable state when a cell is renamed (transfers value, removes old param) */
   migrateVariable: (oldName: string, newName: string) => void
@@ -19,34 +19,63 @@ export interface UseNotebookVariablesResult {
  *
  * Variables are collected from variable cells and can be referenced in SQL queries
  * of cells below them. This hook:
- * - Computes effective values from URL config (source of truth) + cell defaults
+ * - Computes effective values from saved defaults + URL overrides (delta from saved)
  * - Provides synchronous ref access for sequential execution
  * - Delegates state changes to the parent via onVariableChange callback
+ * - Uses delta-based URL updates: URL only contains values different from saved baseline
  *
- * The URL config is the single source of truth. This hook does NOT own state;
- * it computes effective values by merging URL config with cell defaults.
+ * The URL config contains deltas from saved values. Effective values are computed by:
+ * 1. Starting with saved defaults (or current cell defaults for unsaved variables)
+ * 2. Overriding with URL values (which represent user changes from saved state)
  */
 export function useNotebookVariables(
   cells: CellConfig[],
+  savedCells: CellConfig[] | null | undefined,
   configVariables: Record<string, string> = {},
   onVariableChange?: (name: string, value: string) => void,
   onVariableRemove?: (name: string) => void
 ): UseNotebookVariablesResult {
-  // Compute effective values: config value → defaultValue → undefined
-  const variableValues = useMemo(() => {
-    const values: Record<string, string> = { ...configVariables }
-
-    // Apply defaults for variables not in config
-    for (const cell of cells) {
-      if (cell.type === 'variable' && !(cell.name in values)) {
-        const varCell = cell as VariableCellConfig
-        if (varCell.defaultValue) {
-          values[cell.name] = varCell.defaultValue
+  // Build a lookup map for saved defaults (O(1) access)
+  const savedDefaultsByName = useMemo(() => {
+    const map = new Map<string, string>()
+    if (savedCells) {
+      for (const cell of savedCells) {
+        if (cell.type === 'variable') {
+          const varCell = cell as VariableCellConfig
+          if (varCell.defaultValue !== undefined) {
+            map.set(cell.name, varCell.defaultValue)
+          }
         }
       }
     }
+    return map
+  }, [savedCells])
+  // Compute effective values: saved default → current default → URL override
+  // URL values represent deltas from saved baseline
+  const variableValues = useMemo(() => {
+    const values: Record<string, string> = {}
+
+    // Start with baseline values for all known variables
+    // Priority: saved default → current cell default
+    for (const cell of cells) {
+      if (cell.type === 'variable') {
+        const varCell = cell as VariableCellConfig
+        // Use saved default if available, otherwise use current cell's default
+        const savedDefault = savedDefaultsByName.get(cell.name)
+        const baseline = savedDefault ?? varCell.defaultValue
+        if (baseline !== undefined) {
+          values[cell.name] = baseline
+        }
+      }
+    }
+
+    // Override with URL values (these are the deltas from saved state)
+    for (const [name, value] of Object.entries(configVariables)) {
+      values[name] = value
+    }
+
     return values
-  }, [cells, configVariables])
+  }, [cells, configVariables, savedDefaultsByName])
 
   // Ref for synchronous access during sequential execution
   const variableValuesRef = useRef<Record<string, string>>(variableValues)
@@ -56,15 +85,29 @@ export function useNotebookVariables(
     variableValuesRef.current = variableValues
   }, [variableValues])
 
-  // Set a variable value - delegates to callback
+  // Set a variable value - uses delta logic against saved baseline
   const setVariableValue = useCallback(
     (cellName: string, value: string) => {
       // Update ref immediately for synchronous access during execution
       variableValuesRef.current = { ...variableValuesRef.current, [cellName]: value }
-      // Delegate to parent callback (updates URL config)
-      onVariableChange?.(cellName, value)
+
+      // Determine baseline: saved default → current cell default
+      const savedDefault = savedDefaultsByName.get(cellName)
+      const currentCell = cells.find((c) => c.type === 'variable' && c.name === cellName) as
+        | VariableCellConfig
+        | undefined
+      const baseline = savedDefault ?? currentCell?.defaultValue
+
+      // Delta logic: only add to URL if different from baseline
+      if (value === baseline) {
+        // Value matches baseline - remove from URL
+        onVariableRemove?.(cellName)
+      } else {
+        // Value differs from baseline - add to URL
+        onVariableChange?.(cellName, value)
+      }
     },
-    [onVariableChange]
+    [cells, savedDefaultsByName, onVariableChange, onVariableRemove]
   )
 
   // Migrate variable from old name to new name when cell is renamed

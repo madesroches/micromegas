@@ -258,10 +258,39 @@ function ScreenPageContent() {
     setIsSaving(true)
     setSaveError(null)
 
+    // Capture the config being saved (avoid race conditions with state changes)
+    const savedConfigSnapshot = screenConfig
+
     try {
-      const updated = await updateScreen(screen.name, { config: screenConfig })
+      const updated = await updateScreen(screen.name, { config: savedConfigSnapshot })
       setScreen(updated)
       setHasUnsavedChanges(false)
+
+      // Clean up URL variables that now match saved values
+      // After save, the saved config becomes the new baseline for delta calculations
+      const currentUrlVars = urlConfig.variables || {}
+      const variablesToRemove: string[] = []
+
+      // Check each URL variable against the newly saved config
+      const savedCells = (savedConfigSnapshot as { cells?: Array<{ type: string; name: string; defaultValue?: string }> })
+        .cells
+      if (savedCells) {
+        for (const [name, value] of Object.entries(currentUrlVars)) {
+          const savedCell = savedCells.find((c) => c.type === 'variable' && c.name === name)
+          if (savedCell && savedCell.defaultValue === value) {
+            variablesToRemove.push(name)
+          }
+        }
+      }
+
+      // Remove matching variables from URL
+      if (variablesToRemove.length > 0) {
+        const newVariables = { ...currentUrlVars }
+        for (const name of variablesToRemove) {
+          delete newVariables[name]
+        }
+        updateConfig({ variables: newVariables }, { replace: true })
+      }
     } catch (err) {
       if (err instanceof ScreenApiError) {
         setSaveError(err.message)
@@ -271,7 +300,7 @@ function ScreenPageContent() {
     } finally {
       setIsSaving(false)
     }
-  }, [screen, screenConfig])
+  }, [screen, screenConfig, urlConfig.variables, updateConfig])
 
   // Handle "Save As" completion
   const handleSaveAsComplete = useCallback(

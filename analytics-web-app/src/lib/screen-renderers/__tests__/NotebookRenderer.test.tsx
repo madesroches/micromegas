@@ -1,7 +1,7 @@
 /**
  * Tests for NotebookRenderer component
  */
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react'
 import React from 'react'
 
 // Mock streamQuery to prevent actual API calls
@@ -102,6 +102,17 @@ function createDefaultProps(overrides: Partial<ScreenRendererProps> = {}): Scree
   }
 }
 
+// Helper to render NotebookRenderer and wait for async cell execution to complete
+async function renderNotebook(props: ScreenRendererProps) {
+  let result: ReturnType<typeof render>
+  await act(async () => {
+    result = render(<NotebookRenderer {...props} />)
+    // Allow async cell execution to complete
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  })
+  return result!
+}
+
 // Helper to create cell configs
 function createTableCell(name: string, sql = 'SELECT 1'): CellConfig {
   return { type: 'table', name, sql, layout: { height: 'auto' } }
@@ -135,29 +146,29 @@ describe('NotebookRenderer', () => {
   })
 
   describe('initial rendering', () => {
-    it('should render empty notebook with add cell button', () => {
-      render(<NotebookRenderer {...createDefaultProps()} />)
+    it('should render empty notebook with add cell button', async () => {
+      await renderNotebook(createDefaultProps())
 
       expect(screen.getByText('Add Cell')).toBeInTheDocument()
     })
 
-    it('should render cells from config', () => {
+    it('should render cells from config', async () => {
       const cells = [createTableCell('Query 1'), createTableCell('Query 2')]
 
-      render(<NotebookRenderer {...createDefaultProps({ config: { cells } })} />)
+      await renderNotebook(createDefaultProps({ config: { cells } }))
 
       expect(screen.getByText('Query 1')).toBeInTheDocument()
       expect(screen.getByText('Query 2')).toBeInTheDocument()
     })
 
-    it('should render different cell types', () => {
+    it('should render different cell types', async () => {
       const cells = [
         createTableCell('MyTable'),
         createMarkdownCell('Notes'),
         createVariableCell('Filter'),
       ]
 
-      render(<NotebookRenderer {...createDefaultProps({ config: { cells } })} />)
+      await renderNotebook(createDefaultProps({ config: { cells } }))
 
       expect(screen.getByText('MyTable')).toBeInTheDocument()
       expect(screen.getByText('Notes')).toBeInTheDocument()
@@ -166,8 +177,8 @@ describe('NotebookRenderer', () => {
   })
 
   describe('add cell modal', () => {
-    it('should open add cell modal when add button is clicked', () => {
-      render(<NotebookRenderer {...createDefaultProps()} />)
+    it('should open add cell modal when add button is clicked', async () => {
+      await renderNotebook(createDefaultProps())
 
       fireEvent.click(screen.getByText('Add Cell'))
 
@@ -178,8 +189,8 @@ describe('NotebookRenderer', () => {
       expect(screen.getByText('Variable')).toBeInTheDocument()
     })
 
-    it('should close modal when X button is clicked', () => {
-      render(<NotebookRenderer {...createDefaultProps()} />)
+    it('should close modal when X button is clicked', async () => {
+      await renderNotebook(createDefaultProps())
 
       fireEvent.click(screen.getByText('Add Cell'))
       expect(screen.getByRole('heading', { name: 'Add Cell' })).toBeInTheDocument()
@@ -197,13 +208,11 @@ describe('NotebookRenderer', () => {
       const onConfigChange = jest.fn()
       const setHasUnsavedChanges = jest.fn()
 
-      render(
-        <NotebookRenderer
-          {...createDefaultProps({
-            onConfigChange,
-            setHasUnsavedChanges,
-          })}
-        />
+      await renderNotebook(
+        createDefaultProps({
+          onConfigChange,
+          setHasUnsavedChanges,
+        })
       )
 
       fireEvent.click(screen.getByText('Add Cell'))
@@ -220,17 +229,15 @@ describe('NotebookRenderer', () => {
       expect(screen.queryByRole('heading', { name: 'Add Cell' })).not.toBeInTheDocument()
     })
 
-    it('should generate unique names for new cells', () => {
+    it('should generate unique names for new cells', async () => {
       const existingCells = [createTableCell('Table')]
       const onConfigChange = jest.fn()
 
-      render(
-        <NotebookRenderer
-          {...createDefaultProps({
-            config: { cells: existingCells },
-            onConfigChange,
-          })}
-        />
+      await renderNotebook(
+        createDefaultProps({
+          config: { cells: existingCells },
+          onConfigChange,
+        })
       )
 
       fireEvent.click(screen.getByText('Add Cell'))
@@ -247,10 +254,10 @@ describe('NotebookRenderer', () => {
   })
 
   describe('cell selection', () => {
-    it('should select cell when clicked', () => {
+    it('should select cell when clicked', async () => {
       const cells = [createTableCell('Query')]
 
-      render(<NotebookRenderer {...createDefaultProps({ config: { cells } })} />)
+      await renderNotebook(createDefaultProps({ config: { cells } }))
 
       // Find the cell container and click it
       const cellContainer = screen.getByText('Query').closest('div[class*="bg-app-panel"]')
@@ -260,10 +267,10 @@ describe('NotebookRenderer', () => {
       expect(screen.getByText('Cell Name')).toBeInTheDocument()
     })
 
-    it('should show editor panel when cell is selected', () => {
+    it('should show editor panel when cell is selected', async () => {
       const cells = [createTableCell('My Query', 'SELECT * FROM logs')]
 
-      render(<NotebookRenderer {...createDefaultProps({ config: { cells } })} />)
+      await renderNotebook(createDefaultProps({ config: { cells } }))
 
       const cellContainer = screen.getByText('My Query').closest('div[class*="bg-app-panel"]')
       fireEvent.click(cellContainer!)
@@ -272,10 +279,10 @@ describe('NotebookRenderer', () => {
       expect(screen.getByDisplayValue('My Query')).toBeInTheDocument()
     })
 
-    it('should close editor when close button is clicked', () => {
+    it('should close editor when close button is clicked', async () => {
       const cells = [createTableCell('Query')]
 
-      render(<NotebookRenderer {...createDefaultProps({ config: { cells } })} />)
+      await renderNotebook(createDefaultProps({ config: { cells } }))
 
       // Select cell
       const cellContainer = screen.getByText('Query').closest('div[class*="bg-app-panel"]')
@@ -293,10 +300,10 @@ describe('NotebookRenderer', () => {
   })
 
   describe('cell deletion', () => {
-    it('should show delete confirmation modal', () => {
+    it('should show delete confirmation modal', async () => {
       const cells = [createTableCell('ToDelete')]
 
-      render(<NotebookRenderer {...createDefaultProps({ config: { cells } })} />)
+      await renderNotebook(createDefaultProps({ config: { cells } }))
 
       // Select the cell first
       const cellContainer = screen.getByText('ToDelete').closest('div[class*="bg-app-panel"]')
@@ -310,17 +317,15 @@ describe('NotebookRenderer', () => {
       expect(screen.getByText(/Are you sure you want to delete "ToDelete"/)).toBeInTheDocument()
     })
 
-    it('should delete cell when confirmed', () => {
+    it('should delete cell when confirmed', async () => {
       const cells = [createTableCell('ToDelete')]
       const onConfigChange = jest.fn()
 
-      render(
-        <NotebookRenderer
-          {...createDefaultProps({
-            config: { cells },
-            onConfigChange,
-          })}
-        />
+      await renderNotebook(
+        createDefaultProps({
+          config: { cells },
+          onConfigChange,
+        })
       )
 
       // Select cell
@@ -339,17 +344,15 @@ describe('NotebookRenderer', () => {
       expect(onConfigChange).toHaveBeenCalled()
     })
 
-    it('should cancel deletion when cancel is clicked', () => {
+    it('should cancel deletion when cancel is clicked', async () => {
       const cells = [createTableCell('ToDelete')]
       const onConfigChange = jest.fn()
 
-      render(
-        <NotebookRenderer
-          {...createDefaultProps({
-            config: { cells },
-            onConfigChange,
-          })}
-        />
+      await renderNotebook(
+        createDefaultProps({
+          config: { cells },
+          onConfigChange,
+        })
       )
 
       // Select cell - find the cell by name in the main content area
@@ -377,14 +380,12 @@ describe('NotebookRenderer', () => {
       const onConfigChange = jest.fn()
       const setHasUnsavedChanges = jest.fn()
 
-      render(
-        <NotebookRenderer
-          {...createDefaultProps({
-            config: { cells },
-            onConfigChange,
-            setHasUnsavedChanges,
-          })}
-        />
+      await renderNotebook(
+        createDefaultProps({
+          config: { cells },
+          onConfigChange,
+          setHasUnsavedChanges,
+        })
       )
 
       // Select cell
@@ -403,7 +404,7 @@ describe('NotebookRenderer', () => {
     it('should show error for duplicate cell names', async () => {
       const cells = [createTableCell('First'), createTableCell('Second')]
 
-      render(<NotebookRenderer {...createDefaultProps({ config: { cells } })} />)
+      await renderNotebook(createDefaultProps({ config: { cells } }))
 
       // Select second cell
       const cellContainer = screen.getByText('Second').closest('div[class*="bg-app-panel"]')
@@ -421,7 +422,7 @@ describe('NotebookRenderer', () => {
     it('should show error for empty cell name', async () => {
       const cells = [createTableCell('Query')]
 
-      render(<NotebookRenderer {...createDefaultProps({ config: { cells } })} />)
+      await renderNotebook(createDefaultProps({ config: { cells } }))
 
       // Select cell
       const cellContainer = screen.getByText('Query').closest('div[class*="bg-app-panel"]')
@@ -438,16 +439,14 @@ describe('NotebookRenderer', () => {
   })
 
   describe('unsaved changes', () => {
-    it('should show save footer when hasUnsavedChanges is true', () => {
+    it('should show save footer when hasUnsavedChanges is true', async () => {
       const cells = [createTableCell('Query')]
 
-      render(
-        <NotebookRenderer
-          {...createDefaultProps({
-            config: { cells },
-            hasUnsavedChanges: true,
-          })}
-        />
+      await renderNotebook(
+        createDefaultProps({
+          config: { cells },
+          hasUnsavedChanges: true,
+        })
       )
 
       // Select a cell to show the editor panel with save footer
@@ -457,18 +456,16 @@ describe('NotebookRenderer', () => {
       expect(screen.getByText('Save')).toBeInTheDocument()
     })
 
-    it('should call onSave when save button is clicked', () => {
+    it('should call onSave when save button is clicked', async () => {
       const cells = [createTableCell('Query')]
       const onSave = jest.fn()
 
-      render(
-        <NotebookRenderer
-          {...createDefaultProps({
-            config: { cells },
-            hasUnsavedChanges: true,
-            onSave,
-          })}
-        />
+      await renderNotebook(
+        createDefaultProps({
+          config: { cells },
+          hasUnsavedChanges: true,
+          onSave,
+        })
       )
 
       // Select cell to show editor
@@ -482,28 +479,28 @@ describe('NotebookRenderer', () => {
   })
 
   describe('cell execution', () => {
-    it('should show run button for non-markdown cells', () => {
+    it('should show run button for non-markdown cells', async () => {
       const cells = [createTableCell('Query')]
 
-      render(<NotebookRenderer {...createDefaultProps({ config: { cells } })} />)
+      await renderNotebook(createDefaultProps({ config: { cells } }))
 
       expect(screen.getByTitle('Run cell')).toBeInTheDocument()
     })
 
-    it('should not show run button for markdown cells', () => {
+    it('should not show run button for markdown cells', async () => {
       const cells = [createMarkdownCell('Notes')]
 
-      render(<NotebookRenderer {...createDefaultProps({ config: { cells } })} />)
+      await renderNotebook(createDefaultProps({ config: { cells } }))
 
       expect(screen.queryByTitle('Run cell')).not.toBeInTheDocument()
     })
   })
 
   describe('cell menu', () => {
-    it('should show menu with options when menu button is clicked', () => {
+    it('should show menu with options when menu button is clicked', async () => {
       const cells = [createTableCell('Query')]
 
-      render(<NotebookRenderer {...createDefaultProps({ config: { cells } })} />)
+      await renderNotebook(createDefaultProps({ config: { cells } }))
 
       // Click menu button
       const menuButton = screen.getByTestId('more').closest('button')
@@ -515,17 +512,15 @@ describe('NotebookRenderer', () => {
   })
 
   describe('collapsed cells', () => {
-    it('should toggle collapsed state when chevron is clicked', () => {
+    it('should toggle collapsed state when chevron is clicked', async () => {
       const cells = [createTableCell('Query')]
       const onConfigChange = jest.fn()
 
-      render(
-        <NotebookRenderer
-          {...createDefaultProps({
-            config: { cells },
-            onConfigChange,
-          })}
-        />
+      await renderNotebook(
+        createDefaultProps({
+          config: { cells },
+          onConfigChange,
+        })
       )
 
       // Click collapse toggle
@@ -537,14 +532,14 @@ describe('NotebookRenderer', () => {
   })
 
   describe('empty config handling', () => {
-    it('should handle null config gracefully', () => {
-      render(<NotebookRenderer {...createDefaultProps({ config: null as unknown as Record<string, unknown> })} />)
+    it('should handle null config gracefully', async () => {
+      await renderNotebook(createDefaultProps({ config: null as unknown as Record<string, unknown> }))
 
       expect(screen.getByText('Add Cell')).toBeInTheDocument()
     })
 
-    it('should handle config without cells array', () => {
-      render(<NotebookRenderer {...createDefaultProps({ config: {} })} />)
+    it('should handle config without cells array', async () => {
+      await renderNotebook(createDefaultProps({ config: {} }))
 
       expect(screen.getByText('Add Cell')).toBeInTheDocument()
     })

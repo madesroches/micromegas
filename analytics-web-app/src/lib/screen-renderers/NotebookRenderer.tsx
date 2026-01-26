@@ -201,9 +201,15 @@ export function NotebookRenderer({
     [savedNotebookConfig, setHasUnsavedChanges]
   )
 
-  // Variable values management - URL config is source of truth
+  // Variable values management - URL config contains deltas from saved baseline
   const { variableValues, variableValuesRef, setVariableValue, migrateVariable, removeVariable } =
-    useNotebookVariables(cells, urlVariables || {}, onUrlVariableChange, onUrlVariableRemove)
+    useNotebookVariables(
+      cells,
+      savedNotebookConfig?.cells ?? null,
+      urlVariables || {},
+      onUrlVariableChange,
+      onUrlVariableRemove
+    )
 
   // Cell execution state management
   const { cellStates, executeCell, executeFromCell, migrateCellState, removeCellState } = useCellExecution({
@@ -333,11 +339,21 @@ export function NotebookRenderer({
         }
       }
 
+      // Handle defaultValue change for variable cells:
+      // When user edits the default value, update current value to match
+      // This uses delta logic - if new default matches baseline, URL param is removed
+      if (cell.type === 'variable' && 'defaultValue' in updates) {
+        const newDefault = (updates as Partial<VariableCellConfig>).defaultValue
+        if (newDefault !== undefined) {
+          setVariableValue(cell.name, newDefault)
+        }
+      }
+
       const newConfig = { ...notebookConfig, cells: newCells }
       onConfigChange(newConfig)
       updateUnsavedState(newConfig)
     },
-    [cells, notebookConfig, onConfigChange, updateUnsavedState, migrateCellState, migrateVariable]
+    [cells, notebookConfig, onConfigChange, updateUnsavedState, migrateCellState, migrateVariable, setVariableValue]
   )
 
   const toggleCellCollapsed = useCallback(
