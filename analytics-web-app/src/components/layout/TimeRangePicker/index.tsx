@@ -31,8 +31,6 @@ export function TimeRangePicker({ from, to, onChange }: TimeRangePickerProps) {
   const [pasteInputValue, setPasteInputValue] = useState('')
   const popoverRef = useRef<HTMLDivElement>(null)
 
-  const pasteInputRef = useRef<HTMLInputElement | null>(null)
-
   // Derive display label from props
   const parsed = parseTimeRange(from, to)
 
@@ -239,7 +237,6 @@ export function TimeRangePicker({ from, to, onChange }: TimeRangePickerProps) {
               <div className="px-4 py-3 border-b border-theme-border bg-app-card">
                 <div className="flex gap-2">
                   <input
-                    ref={pasteInputRef}
                     type="text"
                     autoFocus
                     value={pasteInputValue}
