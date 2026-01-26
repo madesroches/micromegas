@@ -3,10 +3,19 @@ import { authenticatedFetch, getApiBase } from './api'
 // Types matching the backend models
 
 /**
- * Screen config is opaque - each renderer casts it to its own specific interface.
+ * Screen config base interface with common fields shared by all screen types.
+ * Each renderer may cast this to a more specific interface (e.g., NotebookConfig).
  * The backend stores this as JSON and passes it through without interpretation.
+ *
+ * Time range fields are included here since they're used by all screen types
+ * for delta-based URL handling (URL only contains values differing from saved config).
  */
-export type ScreenConfig = Record<string, unknown>
+export interface ScreenConfig {
+  timeRangeFrom?: string
+  timeRangeTo?: string
+  /** Index signature allows renderer-specific fields */
+  [key: string]: unknown
+}
 
 export interface ScreenVariable {
   name: string

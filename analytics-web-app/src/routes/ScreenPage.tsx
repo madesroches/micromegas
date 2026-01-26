@@ -40,8 +40,8 @@ const MAX_SAFE_URL_LENGTH = 2000
 // URL should only contain values that differ from the saved config (not hardcoded defaults)
 const createBuildUrl = (savedConfig: ScreenConfig | null) => {
   // Extract saved time range, falling back to defaults for new screens
-  const savedTimeFrom = (savedConfig as { timeRangeFrom?: string } | null)?.timeRangeFrom ?? DEFAULT_CONFIG.timeRangeFrom
-  const savedTimeTo = (savedConfig as { timeRangeTo?: string } | null)?.timeRangeTo ?? DEFAULT_CONFIG.timeRangeTo
+  const savedTimeFrom = savedConfig?.timeRangeFrom ?? DEFAULT_CONFIG.timeRangeFrom
+  const savedTimeTo = savedConfig?.timeRangeTo ?? DEFAULT_CONFIG.timeRangeTo
 
   return (cfg: ScreenPageConfig): string => {
     const params = new URLSearchParams()
@@ -154,10 +154,10 @@ function ScreenPageContent() {
   // Priority: URL (if present) → saved config → current config
   // Check actual URL params to detect explicit overrides (not merged urlConfig which always has defaults)
   const urlHasTimeRange = searchParams.has('from') || searchParams.has('to')
-  const savedTimeFrom = (screen?.config as { timeRangeFrom?: string } | undefined)?.timeRangeFrom
-  const savedTimeTo = (screen?.config as { timeRangeTo?: string } | undefined)?.timeRangeTo
-  const currentTimeFrom = (screenConfig as { timeRangeFrom?: string } | null)?.timeRangeFrom
-  const currentTimeTo = (screenConfig as { timeRangeTo?: string } | null)?.timeRangeTo
+  const savedTimeFrom = screen?.config?.timeRangeFrom
+  const savedTimeTo = screen?.config?.timeRangeTo
+  const currentTimeFrom = screenConfig?.timeRangeFrom
+  const currentTimeTo = screenConfig?.timeRangeTo
   const rawTimeRange = useMemo(
     () => ({
       from: urlHasTimeRange
@@ -270,10 +270,10 @@ function ScreenPageContent() {
 
     // Merge URL time range into config for save
     // This ensures we save what the user sees, even if the async effect hasn't synced yet
-    const configToSave = {
+    const configToSave: ScreenConfig = {
       ...screenConfig,
-      timeRangeFrom: urlConfig.timeRangeFrom ?? screenConfig.timeRangeFrom,
-      timeRangeTo: urlConfig.timeRangeTo ?? screenConfig.timeRangeTo,
+      timeRangeFrom: urlConfig.timeRangeFrom ?? screenConfig?.timeRangeFrom,
+      timeRangeTo: urlConfig.timeRangeTo ?? screenConfig?.timeRangeTo,
     }
 
     try {
@@ -289,8 +289,9 @@ function ScreenPageContent() {
       const variablesToRemove: string[] = []
 
       // Check each URL variable against the newly saved config
-      const savedCells = (configToSave as { cells?: Array<{ type: string; name: string; defaultValue?: string }> })
-        .cells
+      const savedCells = configToSave.cells as
+        | Array<{ type: string; name: string; defaultValue?: string }>
+        | undefined
       if (savedCells) {
         for (const [name, value] of Object.entries(currentUrlVars)) {
           const savedCell = savedCells.find((c) => c.type === 'variable' && c.name === name)
@@ -301,8 +302,8 @@ function ScreenPageContent() {
       }
 
       // Build clean URL with only params that differ from newly saved config
-      const newSavedTimeFrom = (configToSave as { timeRangeFrom?: string }).timeRangeFrom
-      const newSavedTimeTo = (configToSave as { timeRangeTo?: string }).timeRangeTo
+      const newSavedTimeFrom = configToSave.timeRangeFrom
+      const newSavedTimeTo = configToSave.timeRangeTo
       const params = new URLSearchParams()
 
       // Time range: only include if differs from saved (which it shouldn't after save)

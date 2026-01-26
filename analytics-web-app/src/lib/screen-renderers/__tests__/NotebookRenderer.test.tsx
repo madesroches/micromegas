@@ -92,7 +92,7 @@ function createDefaultProps(overrides: Partial<ScreenRendererProps> = {}): Scree
     savedConfig: { cells: [] },
     setHasUnsavedChanges: jest.fn(),
     timeRange: { begin: '2024-01-01T00:00:00Z', end: '2024-01-02T00:00:00Z' },
-    rawTimeRange: { from: 'now-1h', to: 'now' },
+    rawTimeRange: { from: 'now-5m', to: 'now' },
     onTimeRangeChange: jest.fn(),
     timeRangeLabel: 'Last 1 hour',
     currentValues: {},

@@ -11,9 +11,9 @@ export const DEFAULT_TIME_RANGE = {
   to: 'now',
 } as const
 
-/** Default time range for user screens (notebooks) - longer range for exploration */
+/** Default time range for user screens (notebooks) */
 export const DEFAULT_SCREEN_TIME_RANGE = {
-  from: 'now-1h',
+  from: 'now-5m',
   to: 'now',
 } as const
 
