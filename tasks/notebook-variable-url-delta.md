@@ -62,6 +62,23 @@ Simplified the component to use `value` prop as source of truth:
 - Debouncing only on output (callback to parent), not on display
 - No complex sync effects or refs magic
 
+### 7. Time Range Sync and Save Cleanup ✓
+
+**Files: `src/lib/screen-renderers/NotebookRenderer.tsx`, `src/routes/ScreenPage.tsx`**
+
+Time range now follows the same delta-based URL pattern as variables:
+
+**NotebookRenderer.tsx:**
+- Added time range sync effect that:
+  - Detects time range changes from URL (`rawTimeRange` prop)
+  - Updates notebook config with time range values (so they can be saved)
+  - Marks unsaved changes when time range differs from saved config
+  - Combines time range changes with cell changes for unsaved state detection
+
+**ScreenPage.tsx (handleSave):**
+- After successful save, cleans up time range from URL if it now matches saved values
+- Setting time range to default values removes them from URL (see buildUrl logic)
+
 ## Edge Cases Handled
 
 1. **New variable (unsaved)**: Not in savedCells, use current cell's defaultValue as baseline
@@ -75,9 +92,18 @@ Simplified the component to use `value` prop as source of truth:
 
 ## Testing Scenarios
 
+### Variables
 1. Create variable with default "foo" -> URL should be empty
 2. Change value to "bar" -> URL should contain variable=bar
 3. Change value back to "foo" -> URL should become empty
 4. Save notebook -> URL remains as-is (delta from saved value)
 5. After save, change value to match saved value -> URL clears that param
 6. Share URL with overrides -> Recipient sees overridden values applied on top of saved values
+
+### Time Range
+1. Open saved notebook -> time range from saved config is applied, URL has no time params
+2. Change time range -> URL shows `?from=...&to=...`, "(unsaved changes)" appears
+3. Save notebook -> time range params are removed from URL (now matches saved)
+4. Change time range to something different -> URL shows time params again
+5. Change time range back to saved values -> URL params removed
+6. Share URL with custom time range -> Recipient sees that time range applied

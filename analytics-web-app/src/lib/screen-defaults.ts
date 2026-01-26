@@ -5,9 +5,15 @@
  * between components that need to reference these values.
  */
 
-/** Default time range for screens */
+/** Default time range for built-in pages (processes, logs, etc.) */
 export const DEFAULT_TIME_RANGE = {
   from: 'now-5m',
+  to: 'now',
+} as const
+
+/** Default time range for user screens (notebooks) - longer range for exploration */
+export const DEFAULT_SCREEN_TIME_RANGE = {
+  from: 'now-1h',
   to: 'now',
 } as const
 

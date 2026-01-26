@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useEffect } from 'react'
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import { Plus, X } from 'lucide-react'
 import {
   DndContext,
@@ -36,6 +36,7 @@ import { SaveFooter } from './shared'
 import { useNotebookVariables } from './useNotebookVariables'
 import { useCellExecution } from './useCellExecution'
 import { notebookConfigsEqual } from './notebook-utils'
+import { DEFAULT_SCREEN_TIME_RANGE } from '@/lib/screen-defaults'
 
 // ============================================================================
 // Constants
@@ -169,6 +170,7 @@ export function NotebookRenderer({
   savedConfig,
   setHasUnsavedChanges,
   timeRange,
+  rawTimeRange,
   onSave,
   isSaving,
   hasUnsavedChanges,
@@ -200,6 +202,47 @@ export function NotebookRenderer({
     },
     [savedNotebookConfig, setHasUnsavedChanges]
   )
+
+  // Sync time range changes to config
+  // When time range changes, update config and check unsaved state
+  const prevTimeRangeRef = useRef<{ from: string; to: string } | null>(null)
+  useEffect(() => {
+    const current = { from: rawTimeRange.from, to: rawTimeRange.to }
+
+    // On first run, just store current values
+    if (prevTimeRangeRef.current === null) {
+      prevTimeRangeRef.current = current
+      return
+    }
+
+    const prev = prevTimeRangeRef.current
+    if (prev.from === current.from && prev.to === current.to) {
+      return
+    }
+
+    prevTimeRangeRef.current = current
+
+    // Check if time range differs from saved config
+    const savedFrom = savedNotebookConfig?.timeRangeFrom ?? DEFAULT_SCREEN_TIME_RANGE.from
+    const savedTo = savedNotebookConfig?.timeRangeTo ?? DEFAULT_SCREEN_TIME_RANGE.to
+    const timeRangeDiffers = current.from !== savedFrom || current.to !== savedTo
+
+    // Create config with updated time range for unsaved state check
+    const configWithTimeRange: NotebookConfig = {
+      ...notebookConfig,
+      timeRangeFrom: current.from,
+      timeRangeTo: current.to,
+    }
+    const hasCellChanges = !notebookConfigsEqual(configWithTimeRange, savedNotebookConfig)
+    setHasUnsavedChanges(hasCellChanges || timeRangeDiffers)
+
+    // Update config with time range
+    onConfigChange({
+      ...notebookConfig,
+      timeRangeFrom: current.from,
+      timeRangeTo: current.to,
+    })
+  }, [rawTimeRange, savedNotebookConfig, notebookConfig, setHasUnsavedChanges, onConfigChange])
 
   // Variable values management - URL config contains deltas from saved baseline
   const { variableValues, variableValuesRef, setVariableValue, migrateVariable, removeVariable } =
