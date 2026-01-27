@@ -32,7 +32,7 @@ export function EmptyState({ message = 'No data available.' }: { message?: strin
 
 export interface SaveFooterProps {
   /** Handler for saving existing screen (null if new screen) */
-  onSave: (() => Promise<void>) | (() => Promise<unknown>) | null
+  onSave: (() => Promise<void>) | null
   /** Handler for "Save As" dialog */
   onSaveAs: () => void
   /** Whether save is in progress */
