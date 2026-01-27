@@ -62,6 +62,17 @@ function ScreenPageContent() {
   const [isSaving, setIsSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
 
+  // Warn when URL query string exceeds safe length (older browsers/proxies may truncate)
+  useEffect(() => {
+    const qs = searchParams.toString()
+    if (qs.length > 2000) {
+      console.warn(
+        `URL query string length (${qs.length}) exceeds safe threshold (2000). ` +
+          `Some parameter values may be lost when sharing or bookmarking.`
+      )
+    }
+  }, [searchParams])
+
   // Dialog state
   const [showSaveDialog, setShowSaveDialog] = useState(false)
 
