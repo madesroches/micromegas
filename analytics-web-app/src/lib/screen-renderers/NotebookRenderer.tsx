@@ -1,4 +1,5 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { Plus, X } from 'lucide-react'
 import {
   DndContext,
@@ -35,7 +36,8 @@ import { Button } from '@/components/ui/button'
 import { SaveFooter } from './shared'
 import { useNotebookVariables } from './useNotebookVariables'
 import { useCellExecution } from './useCellExecution'
-import { notebookConfigsEqual } from './notebook-utils'
+import { notebookConfigsEqual, cleanupVariableParams } from './notebook-utils'
+import { cleanupTimeParams } from '@/lib/url-cleanup-utils'
 import { DEFAULT_TIME_RANGE } from '@/lib/screen-defaults'
 
 // ============================================================================
@@ -177,10 +179,25 @@ export function NotebookRenderer({
   onSaveAs,
   saveError,
   refreshTrigger,
-  urlVariables,
-  onUrlVariableChange,
-  onUrlVariableRemove,
 }: ScreenRendererProps) {
+  const [, setSearchParams] = useSearchParams()
+
+  // Wrap onSave: call parent save, then cleanup both time and variable params in one navigation
+  const handleSave = useMemo(() => {
+    if (!onSave) return null
+    return async () => {
+      const savedConfig = await onSave()
+      if (savedConfig) {
+        setSearchParams(prev => {
+          const next = new URLSearchParams(prev)
+          cleanupTimeParams(next, savedConfig)
+          cleanupVariableParams(next, savedConfig)
+          return next
+        })
+      }
+    }
+  }, [onSave, setSearchParams])
+
   // Parse config
   const notebookConfig = useMemo(() => {
     const cfg = config as unknown as NotebookConfig | null
@@ -244,14 +261,11 @@ export function NotebookRenderer({
     })
   }, [rawTimeRange, savedNotebookConfig, notebookConfig, setHasUnsavedChanges, onConfigChange])
 
-  // Variable values management - URL config contains deltas from saved baseline
+  // Variable values management - hook owns URL access for variables
   const { variableValues, variableValuesRef, setVariableValue, migrateVariable, removeVariable } =
     useNotebookVariables(
       cells,
       savedNotebookConfig?.cells ?? null,
-      urlVariables || {},
-      onUrlVariableChange,
-      onUrlVariableRemove
     )
 
   // Cell execution state management
@@ -540,7 +554,7 @@ export function NotebookRenderer({
             />
             <div className="border-t border-theme-border flex-shrink-0">
               <SaveFooter
-                onSave={onSave}
+                onSave={handleSave}
                 onSaveAs={onSaveAs}
                 isSaving={isSaving}
                 hasUnsavedChanges={hasUnsavedChanges}

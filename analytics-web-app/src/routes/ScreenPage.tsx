@@ -22,9 +22,6 @@ import {
   ScreenApiError,
 } from '@/lib/screens-api'
 
-// Params managed by ScreenPage itself (not notebook variables)
-export const SCREEN_PAGE_PARAMS = new Set(['from', 'to', 'type'])
-
 function ScreenPageContent() {
   const { name } = useParams<{ name: string }>()
   const navigate = useNavigate()
@@ -45,29 +42,6 @@ function ScreenPageContent() {
       params.set('from', from)
       params.set('to', to)
       navigate(`?${params.toString()}`)
-    },
-    [searchParams, navigate]
-  )
-
-  // Variable change handler - works directly with URL params to preserve existing time state
-  // This avoids going through updateConfig which would merge defaults and potentially
-  // add unwanted time params to the URL
-  const handleUrlVariableChange = useCallback(
-    (name: string, value: string) => {
-      const params = new URLSearchParams(searchParams.toString())
-      params.set(name, value)
-      navigate(`?${params.toString()}`, { replace: true })
-    },
-    [searchParams, navigate]
-  )
-
-  // Variable remove handler - works directly with URL params
-  const handleUrlVariableRemove = useCallback(
-    (name: string) => {
-      const params = new URLSearchParams(searchParams.toString())
-      params.delete(name)
-      const qs = params.toString()
-      navigate(qs ? `?${qs}` : '.', { replace: true })
     },
     [searchParams, navigate]
   )
@@ -130,18 +104,6 @@ function ScreenPageContent() {
       return getTimeRangeForApi(DEFAULT_TIME_RANGE.from, DEFAULT_TIME_RANGE.to)
     }
   }, [rawTimeRange])
-
-  // Compute URL variables directly from searchParams (not urlConfig which may be stale)
-  // This ensures the renderer always sees current URL state since variable changes bypass urlConfig
-  const urlVariables = useMemo(() => {
-    const vars: Record<string, string> = {}
-    searchParams.forEach((value, key) => {
-      if (!SCREEN_PAGE_PARAMS.has(key)) {
-        vars[key] = value
-      }
-    })
-    return vars
-  }, [searchParams])
 
   // Load screen or default config
   useEffect(() => {
@@ -216,9 +178,9 @@ function ScreenPageContent() {
     setRefreshTrigger((n) => n + 1)
   }, [])
 
-  // Save existing screen
-  const handleSave = useCallback(async () => {
-    if (!screen || !screenConfig) return
+  // Save existing screen — API call + state update only; URL cleanup is the renderer's job
+  const handleSave = useCallback(async (): Promise<ScreenConfig> => {
+    if (!screen || !screenConfig) throw new Error('No screen to save')
 
     setIsSaving(true)
     setSaveError(null)
@@ -236,70 +198,18 @@ function ScreenPageContent() {
       setScreen(updated)
       setScreenConfig(configToSave) // Keep local state in sync
       setHasUnsavedChanges(false)
-
-      // Clean up URL params that now match saved values (delta-based URL)
-      // After save, the saved config becomes the new baseline for delta calculations
-      // Read variables from actual URL (searchParams) since variable changes bypass urlConfig
-      const currentUrlVars: Record<string, string> = {}
-      searchParams.forEach((value, key) => {
-        if (!SCREEN_PAGE_PARAMS.has(key)) {
-          currentUrlVars[key] = value
-        }
-      })
-      const variablesToRemove: string[] = []
-
-      // Check each URL variable against the newly saved config
-      const savedCells = configToSave.cells as
-        | Array<{ type: string; name: string; defaultValue?: string }>
-        | undefined
-      if (savedCells) {
-        for (const [name, value] of Object.entries(currentUrlVars)) {
-          const savedCell = savedCells.find((c) => c.type === 'variable' && c.name === name)
-          if (savedCell && savedCell.defaultValue === value) {
-            variablesToRemove.push(name)
-          }
-        }
-      }
-
-      // Build clean URL - only keep params that differ from newly saved config
-      // Read actual URL time params (not urlConfig which has defaults merged in)
-      const urlTimeFrom = searchParams.get('from')
-      const urlTimeTo = searchParams.get('to')
-      const params = new URLSearchParams()
-
-      // Time range: only include if explicitly in URL AND differs from saved
-      if (urlTimeFrom && urlTimeFrom !== configToSave.timeRangeFrom) {
-        params.set('from', urlTimeFrom)
-      }
-      if (urlTimeTo && urlTimeTo !== configToSave.timeRangeTo) {
-        params.set('to', urlTimeTo)
-      }
-
-      // Variables: only include if differs from saved
-      const newVariables = { ...currentUrlVars }
-      for (const name of variablesToRemove) {
-        delete newVariables[name]
-      }
-      for (const [name, value] of Object.entries(newVariables)) {
-        if (value !== undefined && !SCREEN_PAGE_PARAMS.has(name)) {
-          params.set(name, value)
-        }
-      }
-
-      const qs = params.toString()
-      // Use '.' to navigate to current location without query params
-      // (window.location.pathname includes base path, which navigate() would duplicate)
-      navigate(qs ? `?${qs}` : '.', { replace: true })
+      return configToSave
     } catch (err) {
       if (err instanceof ScreenApiError) {
         setSaveError(err.message)
       } else {
         setSaveError('Failed to save screen')
       }
+      throw err
     } finally {
       setIsSaving(false)
     }
-  }, [screen, screenConfig, searchParams, rawTimeRange, navigate])
+  }, [screen, screenConfig, rawTimeRange])
 
   // Handle "Save As" completion
   const handleSaveAsComplete = useCallback(
@@ -444,9 +354,6 @@ function ScreenPageContent() {
               onSaveAs={() => setShowSaveDialog(true)}
               saveError={saveError}
               refreshTrigger={refreshTrigger}
-              urlVariables={urlVariables}
-              onUrlVariableChange={handleUrlVariableChange}
-              onUrlVariableRemove={handleUrlVariableRemove}
             />
           </div>
         </div>

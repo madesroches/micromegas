@@ -34,8 +34,8 @@ export interface ScreenRendererProps {
   timeRangeLabel: string
   /** Current values for SQL variables */
   currentValues: Record<string, string>
-  /** Parent's save handler (for existing screens) */
-  onSave: (() => Promise<void>) | null
+  /** Parent's save handler (for existing screens). Returns saved config for post-save cleanup. */
+  onSave: (() => Promise<ScreenConfig>) | null
   /** Whether save is in progress */
   isSaving: boolean
   /** Whether there are unsaved changes */
@@ -46,12 +46,6 @@ export interface ScreenRendererProps {
   saveError: string | null
   /** Increment to trigger a refresh (re-execute query) */
   refreshTrigger: number
-  /** Variable values from URL (for notebooks) */
-  urlVariables?: Record<string, string>
-  /** Update a URL variable value (for notebooks) */
-  onUrlVariableChange?: (name: string, value: string) => void
-  /** Remove a URL variable (for notebooks, when variable cell is deleted) */
-  onUrlVariableRemove?: (name: string) => void
 }
 
 /**

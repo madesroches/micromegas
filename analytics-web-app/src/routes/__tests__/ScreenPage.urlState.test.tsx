@@ -1,15 +1,18 @@
 /**
- * Tests for ScreenPage URL state management
+ * Tests for URL state management across ScreenPage and renderer layers.
  *
- * These tests verify that time range and variable changes in the URL
- * don't interfere with each other - a regression that has occurred multiple times.
+ * After the variable-ownership refactor:
+ * - ScreenPage handles time range via navigate()
+ * - useNotebookVariables handles variables via setSearchParams (functional updaters)
+ * - Both use URLSearchParams to preserve each other's params
+ * - Post-save cleanup is done by renderers, not ScreenPage
  */
 import { renderHook, act } from '@testing-library/react'
 import { ReactNode, useCallback, useMemo } from 'react'
 import { MemoryRouter, useSearchParams, useNavigate } from 'react-router-dom'
-// Local copy of the reserved params set from ScreenPage
-// (importing ScreenPage directly would pull in CSS/component dependencies)
-const SCREEN_PAGE_PARAMS = new Set(['from', 'to', 'type'])
+import { RESERVED_URL_PARAMS, cleanupTimeParams } from '@/lib/url-cleanup-utils'
+import { cleanupVariableParams } from '@/lib/screen-renderers/notebook-utils'
+import type { ScreenConfig } from '@/lib/screens-api'
 
 // Mock navigate
 const mockNavigate = jest.fn()
@@ -19,14 +22,15 @@ jest.mock('react-router-dom', () => ({
 }))
 
 /**
- * Hook that mirrors the URL state management pattern used in ScreenPage.
- * This allows us to test the URL manipulation logic in isolation.
+ * Hook that mirrors the URL state management pattern:
+ * - ScreenPage: time range via navigate()
+ * - Notebook variables: via setSearchParams (functional updaters)
  */
 function useUrlStateHandlers() {
-  const [searchParams] = useSearchParams()
+  const [searchParams, setSearchParams] = useSearchParams()
   const navigate = useNavigate()
 
-  // Time range change handler - works directly with URL params to preserve variables
+  // Time range change handler (ScreenPage pattern - uses navigate)
   const handleTimeRangeChange = useCallback(
     (from: string, to: string) => {
       const params = new URLSearchParams(searchParams.toString())
@@ -37,32 +41,35 @@ function useUrlStateHandlers() {
     [searchParams, navigate]
   )
 
-  // Variable change handler - works directly with URL params to preserve time state
+  // Variable change handler (useNotebookVariables pattern - uses setSearchParams)
   const handleUrlVariableChange = useCallback(
     (name: string, value: string) => {
-      const params = new URLSearchParams(searchParams.toString())
-      params.set(name, value)
-      navigate(`?${params.toString()}`, { replace: true })
+      setSearchParams(prev => {
+        const next = new URLSearchParams(prev)
+        next.set(name, value)
+        return next
+      }, { replace: true })
     },
-    [searchParams, navigate]
+    [setSearchParams]
   )
 
-  // Variable remove handler
+  // Variable remove handler (useNotebookVariables pattern - uses setSearchParams)
   const handleUrlVariableRemove = useCallback(
     (name: string) => {
-      const params = new URLSearchParams(searchParams.toString())
-      params.delete(name)
-      const qs = params.toString()
-      navigate(qs ? `?${qs}` : '.', { replace: true })
+      setSearchParams(prev => {
+        const next = new URLSearchParams(prev)
+        next.delete(name)
+        return next
+      }, { replace: true })
     },
-    [searchParams, navigate]
+    [setSearchParams]
   )
 
   // Compute URL variables from searchParams
   const urlVariables = useMemo(() => {
     const vars: Record<string, string> = {}
     searchParams.forEach((value, key) => {
-      if (!SCREEN_PAGE_PARAMS.has(key)) {
+      if (!RESERVED_URL_PARAMS.has(key)) {
         vars[key] = value
       }
     })
@@ -149,16 +156,19 @@ describe('ScreenPage URL state management', () => {
         to: 'now',
       })
 
-      // Change a variable
+      // Change a variable (uses setSearchParams, not navigate)
       act(() => {
         result.current.handleUrlVariableChange('myvar', 'newvalue')
       })
 
-      // Verify navigate was called with time range preserved
-      const url = mockNavigate.mock.calls[0][0] as string
-      expect(url).toContain('from=now-1h')
-      expect(url).toContain('to=now')
-      expect(url).toContain('myvar=newvalue')
+      // After setSearchParams, the hook re-renders with updated state
+      expect(result.current.urlTimeRange).toEqual({
+        from: 'now-1h',
+        to: 'now',
+      })
+      expect(result.current.urlVariables).toEqual({
+        myvar: 'newvalue',
+      })
     })
 
     it('should preserve other variables when changing one variable', () => {
@@ -171,10 +181,11 @@ describe('ScreenPage URL state management', () => {
         result.current.handleUrlVariableChange('var2', 'updated')
       })
 
-      const url = mockNavigate.mock.calls[0][0] as string
-      expect(url).toContain('var1=a')
-      expect(url).toContain('var2=updated')
-      expect(url).toContain('var3=c')
+      expect(result.current.urlVariables).toEqual({
+        var1: 'a',
+        var2: 'updated',
+        var3: 'c',
+      })
     })
   })
 
@@ -189,46 +200,137 @@ describe('ScreenPage URL state management', () => {
         result.current.handleUrlVariableRemove('var1')
       })
 
-      const url = mockNavigate.mock.calls[0][0] as string
-      expect(url).toContain('from=now-1h')
-      expect(url).toContain('to=now')
-      expect(url).toContain('var2=b')
-      expect(url).not.toContain('var1')
+      expect(result.current.urlTimeRange).toEqual({
+        from: 'now-1h',
+        to: 'now',
+      })
+      expect(result.current.urlVariables).toEqual({
+        var2: 'b',
+      })
     })
   })
 
   describe('combined operations', () => {
     it('should handle interleaved time and variable changes', () => {
       // Start with some state
-      const { result, rerender: _rerender } = renderHook(() => useUrlStateHandlers(), {
+      const { result } = renderHook(() => useUrlStateHandlers(), {
         wrapper: createWrapper(['/screen/test?from=now-1h&to=now&myvar=initial']),
       })
 
-      // First: change a variable
+      // First: change a variable (uses setSearchParams)
       act(() => {
         result.current.handleUrlVariableChange('myvar', 'updated')
       })
 
-      let url = mockNavigate.mock.calls[0][0] as string
-      expect(url).toContain('from=now-1h')
-      expect(url).toContain('myvar=updated')
+      // Variable updated, time range preserved
+      expect(result.current.urlVariables).toEqual({ myvar: 'updated' })
+      expect(result.current.urlTimeRange).toEqual({ from: 'now-1h', to: 'now' })
 
-      mockNavigate.mockClear()
-
-      // Simulate URL update by creating new wrapper with updated URL
-      const { result: result2 } = renderHook(() => useUrlStateHandlers(), {
-        wrapper: createWrapper(['/screen/test?from=now-1h&to=now&myvar=updated']),
-      })
-
-      // Second: change time range
+      // Second: change time range (uses navigate)
       act(() => {
-        result2.current.handleTimeRangeChange('now-24h', 'now')
+        result.current.handleTimeRangeChange('now-24h', 'now')
       })
 
-      url = mockNavigate.mock.calls[0][0] as string
+      const url = mockNavigate.mock.calls[0][0] as string
       expect(url).toContain('from=now-24h')
       expect(url).toContain('to=now')
       expect(url).toContain('myvar=updated') // Variable should still be there!
     })
+  })
+})
+
+describe('cleanupTimeParams', () => {
+  it('should remove from/to params that match saved config', () => {
+    const params = new URLSearchParams('from=now-1h&to=now&myvar=hello')
+    const savedConfig: ScreenConfig = { timeRangeFrom: 'now-1h', timeRangeTo: 'now' }
+
+    cleanupTimeParams(params, savedConfig)
+
+    expect(params.has('from')).toBe(false)
+    expect(params.has('to')).toBe(false)
+    expect(params.get('myvar')).toBe('hello')
+  })
+
+  it('should keep from/to params that differ from saved config', () => {
+    const params = new URLSearchParams('from=now-24h&to=now')
+    const savedConfig: ScreenConfig = { timeRangeFrom: 'now-1h', timeRangeTo: 'now' }
+
+    cleanupTimeParams(params, savedConfig)
+
+    expect(params.get('from')).toBe('now-24h')
+    expect(params.has('to')).toBe(false) // to matches
+  })
+
+  it('should not remove params when saved config has no time range', () => {
+    const params = new URLSearchParams('from=now-1h&to=now')
+    const savedConfig: ScreenConfig = {}
+
+    cleanupTimeParams(params, savedConfig)
+
+    expect(params.get('from')).toBe('now-1h')
+    expect(params.get('to')).toBe('now')
+  })
+})
+
+describe('cleanupVariableParams', () => {
+  it('should remove variable params that match saved cell defaults', () => {
+    const params = new URLSearchParams('from=now-1h&to=now&region=us-east-1&env=prod')
+    const savedConfig: ScreenConfig = {
+      cells: [
+        { type: 'variable', name: 'region', defaultValue: 'us-east-1' },
+        { type: 'variable', name: 'env', defaultValue: 'staging' },
+      ],
+    }
+
+    cleanupVariableParams(params, savedConfig)
+
+    expect(params.has('region')).toBe(false) // matches default
+    expect(params.get('env')).toBe('prod') // differs from default
+    expect(params.get('from')).toBe('now-1h') // reserved, untouched
+    expect(params.get('to')).toBe('now') // reserved, untouched
+  })
+
+  it('should not touch params when no cells in config', () => {
+    const params = new URLSearchParams('region=us-east-1')
+    const savedConfig: ScreenConfig = {}
+
+    cleanupVariableParams(params, savedConfig)
+
+    expect(params.get('region')).toBe('us-east-1')
+  })
+
+  it('should not touch params for non-variable cells', () => {
+    const params = new URLSearchParams('query1=test')
+    const savedConfig: ScreenConfig = {
+      cells: [
+        { type: 'query', name: 'query1', sql: 'SELECT 1' },
+      ],
+    }
+
+    cleanupVariableParams(params, savedConfig)
+
+    expect(params.get('query1')).toBe('test')
+  })
+
+  it('should compose with cleanupTimeParams in a single pass', () => {
+    const params = new URLSearchParams('from=now-1h&to=now&region=us-east-1&env=prod')
+    const savedConfig: ScreenConfig = {
+      timeRangeFrom: 'now-1h',
+      timeRangeTo: 'now',
+      cells: [
+        { type: 'variable', name: 'region', defaultValue: 'us-east-1' },
+        { type: 'variable', name: 'env', defaultValue: 'staging' },
+      ],
+    }
+
+    // Both cleanup functions compose on the same URLSearchParams
+    cleanupTimeParams(params, savedConfig)
+    cleanupVariableParams(params, savedConfig)
+
+    expect(params.has('from')).toBe(false)
+    expect(params.has('to')).toBe(false)
+    expect(params.has('region')).toBe(false)
+    expect(params.get('env')).toBe('prod')
+    expect(params.toString()).toBe('env=prod')
   })
 })

@@ -11,8 +11,8 @@ export type {
   NotebookConfig,
 } from './notebook-types'
 
-// Reserved URL parameter names that cannot be used as variable names
-const RESERVED_URL_PARAMS = new Set(['from', 'to', 'type'])
+import type { ScreenConfig } from '@/lib/screens-api'
+import { RESERVED_URL_PARAMS } from '@/lib/url-cleanup-utils'
 
 /**
  * Checks if a variable name conflicts with reserved URL parameter names.
@@ -141,6 +141,31 @@ export function notebookConfigsEqual(
   if (a === b) return true
   if (!a || !b) return false
   return JSON.stringify(a) === JSON.stringify(b)
+}
+
+/**
+ * Mutates params: removes variable URL params that match saved cell defaults.
+ * Only touches non-reserved params.
+ */
+export function cleanupVariableParams(
+  params: URLSearchParams,
+  savedConfig: ScreenConfig,
+): void {
+  const savedCells = (savedConfig as { cells?: Array<{ type: string; name: string; defaultValue?: string }> }).cells
+  if (!savedCells) return
+
+  const keysToDelete: string[] = []
+  params.forEach((_value, key) => {
+    if (RESERVED_URL_PARAMS.has(key)) return
+    const savedCell = savedCells.find((c) => c.type === 'variable' && c.name === key)
+    if (savedCell && savedCell.defaultValue === params.get(key)) {
+      keysToDelete.push(key)
+    }
+  })
+
+  for (const key of keysToDelete) {
+    params.delete(key)
+  }
 }
 
 /**

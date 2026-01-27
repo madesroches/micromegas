@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useMemo } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { registerRenderer, ScreenRendererProps } from './index'
 import { useScreenQuery } from './useScreenQuery'
 import { useTimeRangeSync } from './useTimeRangeSync'
@@ -7,6 +8,7 @@ import { LoadingState, EmptyState, SaveFooter, RendererLayout } from './shared'
 import { QueryEditor } from '@/components/QueryEditor'
 import { XYChart, type ScaleMode, type ChartType } from '@/components/XYChart'
 import { extractChartData } from '@/lib/arrow-utils'
+import { useDefaultSaveCleanup } from '@/lib/url-cleanup-utils'
 
 // Variables available for metrics queries
 const VARIABLES = [
@@ -46,6 +48,8 @@ export function MetricsRenderer({
 }: ScreenRendererProps) {
   const metricsConfig = config as unknown as MetricsConfig
   const savedMetricsConfig = savedConfig as unknown as MetricsConfig | null
+  const [, setSearchParams] = useSearchParams()
+  const handleSave = useDefaultSaveCleanup(onSave, setSearchParams)
 
   // Scale mode state - sync from config on load
   const [scaleMode, setScaleMode] = useState<ScaleMode>(
@@ -159,7 +163,7 @@ export function MetricsRenderer({
       error={query.error}
       footer={
         <SaveFooter
-          onSave={onSave}
+          onSave={handleSave}
           onSaveAs={onSaveAs}
           isSaving={isSaving}
           hasUnsavedChanges={hasUnsavedChanges}
