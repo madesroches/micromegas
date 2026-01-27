@@ -148,3 +148,126 @@ export async function deleteScreen(name: string): Promise<void> {
     )
   }
 }
+
+// Export / Import types and helpers
+
+export interface ExportedScreen {
+  name: string
+  screen_type: ScreenTypeName
+  config: ScreenConfig
+}
+
+export interface ScreensExportFile {
+  version: number
+  exported_at: string
+  screens: ExportedScreen[]
+}
+
+export type ImportConflictAction = 'skip' | 'overwrite' | 'rename'
+
+export interface ImportScreenResult {
+  name: string
+  status: 'created' | 'skipped' | 'overwritten' | 'renamed'
+  finalName?: string
+  error?: string
+}
+
+export function buildScreensExport(screens: Screen[]): string {
+  const exported: ScreensExportFile = {
+    version: 1,
+    exported_at: new Date().toISOString(),
+    screens: screens.map((s) => ({
+      name: s.name,
+      screen_type: s.screen_type,
+      config: s.config,
+    })),
+  }
+  return JSON.stringify(exported, null, 2)
+}
+
+export function parseScreensImportFile(json: string): ScreensExportFile {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(json)
+  } catch {
+    throw new Error('Invalid JSON file')
+  }
+
+  if (typeof parsed !== 'object' || parsed === null) {
+    throw new Error('Invalid export file: expected a JSON object')
+  }
+
+  const obj = parsed as Record<string, unknown>
+
+  if (typeof obj.version !== 'number') {
+    throw new Error('Invalid export file: missing "version" field')
+  }
+
+  if (!Array.isArray(obj.screens)) {
+    throw new Error('Invalid export file: missing "screens" array')
+  }
+
+  for (const screen of obj.screens) {
+    if (typeof screen !== 'object' || screen === null) {
+      throw new Error('Invalid export file: each screen must be an object')
+    }
+    const s = screen as Record<string, unknown>
+    if (typeof s.name !== 'string' || typeof s.screen_type !== 'string' || typeof s.config !== 'object') {
+      throw new Error(`Invalid export file: screen is missing required fields (name, screen_type, config)`)
+    }
+  }
+
+  return {
+    version: obj.version as number,
+    exported_at: (obj.exported_at as string) ?? '',
+    screens: obj.screens as ExportedScreen[],
+  }
+}
+
+function generateUniqueName(baseName: string, existingNames: Set<string>): string {
+  const candidate = `${baseName}-imported`
+  if (!existingNames.has(candidate)) {
+    return candidate
+  }
+  let counter = 2
+  while (existingNames.has(`${baseName}-imported-${counter}`)) {
+    counter++
+  }
+  return `${baseName}-imported-${counter}`
+}
+
+export async function importScreen(
+  screen: ExportedScreen,
+  onConflict: ImportConflictAction,
+  existingNames: Set<string>
+): Promise<ImportScreenResult> {
+  const isConflict = existingNames.has(screen.name)
+
+  if (!isConflict) {
+    await createScreen({
+      name: screen.name,
+      screen_type: screen.screen_type,
+      config: screen.config,
+    })
+    return { name: screen.name, status: 'created' }
+  }
+
+  switch (onConflict) {
+    case 'skip':
+      return { name: screen.name, status: 'skipped' }
+
+    case 'overwrite':
+      await updateScreen(screen.name, { config: screen.config })
+      return { name: screen.name, status: 'overwritten' }
+
+    case 'rename': {
+      const newName = generateUniqueName(screen.name, existingNames)
+      await createScreen({
+        name: newName,
+        screen_type: screen.screen_type,
+        config: screen.config,
+      })
+      return { name: screen.name, status: 'renamed', finalName: newName }
+    }
+  }
+}
