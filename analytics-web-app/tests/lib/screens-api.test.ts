@@ -21,10 +21,12 @@ import {
   createScreen,
   updateScreen,
   deleteScreen,
+  importScreen,
   ScreenApiError,
   type Screen,
   type ScreenTypeInfo,
   type ScreenConfig,
+  type ExportedScreen,
 } from '@/lib/screens-api'
 
 // Helper to create mock responses
@@ -460,6 +462,120 @@ describe('error handling edge cases', () => {
       code: 'SOME_ERROR',
       message: 'HTTP 400',
       status: 400,
+    })
+  })
+})
+
+describe('importScreen', () => {
+  beforeEach(() => {
+    jest.resetAllMocks()
+  })
+
+  const makeExportedScreen = (overrides: Partial<ExportedScreen> = {}): ExportedScreen => ({
+    name: 'test-screen',
+    screen_type: 'notebook',
+    config: { sql: 'SELECT 1' },
+    ...overrides,
+  })
+
+  it('creates a new screen when no conflict', async () => {
+    const mockResponse: Screen = {
+      name: 'test-screen',
+      screen_type: 'notebook',
+      config: { sql: 'SELECT 1' },
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-01T00:00:00Z',
+    }
+    mockedFetch.mockResolvedValue(createMockResponse(mockResponse))
+
+    const result = await importScreen(makeExportedScreen(), 'skip', new Set())
+
+    expect(result).toEqual({ name: 'test-screen', status: 'created' })
+    expect(mockedFetch).toHaveBeenCalledWith('/api/screens', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'test-screen', screen_type: 'notebook', config: { sql: 'SELECT 1' } }),
+    })
+  })
+
+  it('skips when conflict action is skip', async () => {
+    const existing = new Set(['test-screen'])
+    const result = await importScreen(makeExportedScreen(), 'skip', existing)
+
+    expect(result).toEqual({ name: 'test-screen', status: 'skipped' })
+    expect(mockedFetch).not.toHaveBeenCalled()
+  })
+
+  it('overwrites when conflict action is overwrite (delete + create)', async () => {
+    const existing = new Set(['test-screen'])
+    const deleteResponse = { ok: true, status: 204 } as Response
+    const createResponse: Screen = {
+      name: 'test-screen',
+      screen_type: 'notebook',
+      config: { sql: 'SELECT 1' },
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-02T00:00:00Z',
+    }
+    mockedFetch
+      .mockResolvedValueOnce(deleteResponse)
+      .mockResolvedValueOnce(createMockResponse(createResponse))
+
+    const result = await importScreen(makeExportedScreen(), 'overwrite', existing)
+
+    expect(result).toEqual({ name: 'test-screen', status: 'overwritten' })
+    expect(mockedFetch).toHaveBeenCalledTimes(2)
+    expect(mockedFetch).toHaveBeenNthCalledWith(1, '/api/screens/test-screen', {
+      method: 'DELETE',
+    })
+    expect(mockedFetch).toHaveBeenNthCalledWith(2, '/api/screens', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'test-screen', screen_type: 'notebook', config: { sql: 'SELECT 1' } }),
+    })
+  })
+
+  it('renames when conflict action is rename', async () => {
+    const existing = new Set(['test-screen'])
+    const mockResponse: Screen = {
+      name: 'test-screen-imported',
+      screen_type: 'notebook',
+      config: { sql: 'SELECT 1' },
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-01T00:00:00Z',
+    }
+    mockedFetch.mockResolvedValue(createMockResponse(mockResponse))
+
+    const result = await importScreen(makeExportedScreen(), 'rename', existing)
+
+    expect(result).toEqual({
+      name: 'test-screen',
+      status: 'renamed',
+      finalName: 'test-screen-imported',
+    })
+    expect(mockedFetch).toHaveBeenCalledWith('/api/screens', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'test-screen-imported', screen_type: 'notebook', config: { sql: 'SELECT 1' } }),
+    })
+  })
+
+  it('increments rename suffix when imported name also exists', async () => {
+    const existing = new Set(['test-screen', 'test-screen-imported'])
+    const mockResponse: Screen = {
+      name: 'test-screen-imported-2',
+      screen_type: 'notebook',
+      config: { sql: 'SELECT 1' },
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-01T00:00:00Z',
+    }
+    mockedFetch.mockResolvedValue(createMockResponse(mockResponse))
+
+    const result = await importScreen(makeExportedScreen(), 'rename', existing)
+
+    expect(result).toEqual({
+      name: 'test-screen',
+      status: 'renamed',
+      finalName: 'test-screen-imported-2',
     })
   })
 })
