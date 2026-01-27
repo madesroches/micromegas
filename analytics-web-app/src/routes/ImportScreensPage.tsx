@@ -48,11 +48,7 @@ function WizardSteps({ current }: { current: WizardStep }) {
             {i > 0 && <div className="w-6 h-px bg-theme-border mx-1" />}
             <div
               className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium ${
-                isActive
-                  ? 'text-theme-text-primary'
-                  : isDone
-                    ? 'text-theme-text-muted'
-                    : 'text-theme-text-muted'
+                isActive ? 'text-theme-text-primary' : 'text-theme-text-muted'
               }`}
             >
               <span
