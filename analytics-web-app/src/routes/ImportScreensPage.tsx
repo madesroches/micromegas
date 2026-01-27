@@ -190,8 +190,15 @@ function ImportScreensPageContent() {
     setIsImporting(true)
     setError(null)
     const importResults: ImportScreenResult[] = []
-    // Build a mutable copy of existing names for rename tracking
-    const namesInUse = new Set(existingNameSet)
+    // Refresh existing screens to get current state before importing
+    let freshNames: Set<string>
+    try {
+      const freshScreens = await listScreens()
+      freshNames = new Set(freshScreens.map((s) => s.name))
+    } catch {
+      freshNames = new Set(existingNameSet)
+    }
+    const namesInUse = new Set(freshNames)
 
     for (const entry of selectedEntries) {
       try {

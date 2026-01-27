@@ -257,7 +257,12 @@ export async function importScreen(
       return { name: screen.name, status: 'skipped' }
 
     case 'overwrite':
-      await updateScreen(screen.name, { config: screen.config })
+      await deleteScreen(screen.name)
+      await createScreen({
+        name: screen.name,
+        screen_type: screen.screen_type,
+        config: screen.config,
+      })
       return { name: screen.name, status: 'overwritten' }
 
     case 'rename': {

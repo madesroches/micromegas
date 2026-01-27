@@ -75,7 +75,14 @@ function ExportScreensPageContent() {
   }
 
   const deselectAll = () => {
-    setSelected(new Set())
+    const filteredNames = new Set(filteredScreens.map((s) => s.name))
+    setSelected((prev) => {
+      const next = new Set(prev)
+      for (const name of filteredNames) {
+        next.delete(name)
+      }
+      return next
+    })
   }
 
   const allFilteredSelected = filteredScreens.length > 0 && filteredScreens.every((s) => selected.has(s.name))
