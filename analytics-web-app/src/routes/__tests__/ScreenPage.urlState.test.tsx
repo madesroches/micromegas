@@ -7,7 +7,9 @@
 import { renderHook, act } from '@testing-library/react'
 import { ReactNode, useCallback, useMemo } from 'react'
 import { MemoryRouter, useSearchParams, useNavigate } from 'react-router-dom'
-import { isReservedParam } from '@/lib/url-params'
+// Local copy of the reserved params set from ScreenPage
+// (importing ScreenPage directly would pull in CSS/component dependencies)
+const SCREEN_PAGE_PARAMS = new Set(['from', 'to', 'type'])
 
 // Mock navigate
 const mockNavigate = jest.fn()
@@ -60,7 +62,7 @@ function useUrlStateHandlers() {
   const urlVariables = useMemo(() => {
     const vars: Record<string, string> = {}
     searchParams.forEach((value, key) => {
-      if (!isReservedParam(key)) {
+      if (!SCREEN_PAGE_PARAMS.has(key)) {
         vars[key] = value
       }
     })

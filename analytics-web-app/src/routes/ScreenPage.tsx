@@ -6,13 +6,10 @@ import { PageLayout } from '@/components/layout'
 import { AuthGuard } from '@/components/AuthGuard'
 import { AppLink } from '@/components/AppLink'
 import { SaveScreenDialog } from '@/components/SaveScreenDialog'
-import { useScreenConfig } from '@/hooks/useScreenConfig'
 import { parseTimeRange, getTimeRangeForApi } from '@/lib/time-range'
-import { isReservedParam } from '@/lib/url-params'
 import { renderIcon } from '@/lib/screen-type-utils'
 import { getRenderer } from '@/lib/screen-renderers/init'
 import { DEFAULT_TIME_RANGE } from '@/lib/screen-defaults'
-import type { ScreenPageConfig } from '@/lib/screen-config'
 import {
   getScreen,
   getScreenTypes,
@@ -25,61 +22,8 @@ import {
   ScreenApiError,
 } from '@/lib/screens-api'
 
-// Default config for ScreenPage URL state
-// Note: time range is intentionally omitted - it comes from saved/current config, not URL defaults
-// This prevents urlConfig from having stale defaults that conflict with actual config
-const DEFAULT_CONFIG: ScreenPageConfig = {
-  type: undefined,
-  variables: {},
-}
-
-// Safe URL length threshold (conservative for older browsers/proxies)
-const MAX_SAFE_URL_LENGTH = 2000
-
-// URL builder factory - creates buildUrl with saved config as baseline for delta calculations
-// URL should only contain values that differ from the saved config (not hardcoded defaults)
-const createBuildUrl = (savedConfig: ScreenConfig | null) => {
-  // Extract saved time range - for new screens, savedConfig is null so any time in URL is a delta
-  const savedTimeFrom = savedConfig?.timeRangeFrom
-  const savedTimeTo = savedConfig?.timeRangeTo
-
-  return (cfg: ScreenPageConfig): string => {
-    const params = new URLSearchParams()
-    if (cfg.type) params.set('type', cfg.type)
-
-    // Only serialize time range if it differs from saved config
-    // For new screens (savedConfig null), any explicit time goes to URL
-    if (cfg.timeRangeFrom && (savedTimeFrom === undefined || cfg.timeRangeFrom !== savedTimeFrom)) {
-      params.set('from', cfg.timeRangeFrom)
-    }
-    if (cfg.timeRangeTo && (savedTimeTo === undefined || cfg.timeRangeTo !== savedTimeTo)) {
-      params.set('to', cfg.timeRangeTo)
-    }
-
-    // Add variable params (skip reserved names as safety check)
-    // Note: empty strings ARE serialized (as ?name=) to preserve explicit "cleared" state
-    if (cfg.variables) {
-      for (const [name, value] of Object.entries(cfg.variables)) {
-        if (value !== undefined && !isReservedParam(name)) {
-          params.set(name, value)
-        }
-      }
-    }
-
-    const qs = params.toString()
-    const url = qs ? `?${qs}` : ''
-
-    // Warn if URL exceeds safe length (variables may be lost on some browsers/proxies)
-    if (url.length > MAX_SAFE_URL_LENGTH) {
-      console.warn(
-        `URL length (${url.length}) exceeds safe threshold (${MAX_SAFE_URL_LENGTH}). ` +
-          `Some variable values may be lost when sharing or bookmarking.`
-      )
-    }
-
-    return url
-  }
-}
+// Params managed by ScreenPage itself (not notebook variables)
+export const SCREEN_PAGE_PARAMS = new Set(['from', 'to', 'type'])
 
 function ScreenPageContent() {
   const { name } = useParams<{ name: string }>()
@@ -87,16 +31,11 @@ function ScreenPageContent() {
   const [searchParams] = useSearchParams()
   const isNew = !name
 
-  // Screen state (declared early so buildUrl can use saved config)
+  // Screen state
   const [screen, setScreen] = useState<Screen | null>(null)
 
-  // Create buildUrl with saved config as baseline for delta calculations
-  // URL only contains values that differ from saved config
-  const buildUrl = useMemo(() => createBuildUrl(screen?.config ?? null), [screen?.config])
-
-  // Use the config-driven pattern for URL state (time range, type for new screens)
-  const { config: urlConfig } = useScreenConfig(DEFAULT_CONFIG, buildUrl)
-  const typeParam = (urlConfig.type ?? null) as ScreenTypeName | null
+  // Read type directly from URL (only used for new screens)
+  const typeParam = (searchParams.get('type') ?? null) as ScreenTypeName | null
 
   // Time range change handler - works directly with URL params to preserve variables
   // This avoids going through updateConfig which has stale variable state
@@ -197,7 +136,7 @@ function ScreenPageContent() {
   const urlVariables = useMemo(() => {
     const vars: Record<string, string> = {}
     searchParams.forEach((value, key) => {
-      if (!isReservedParam(key)) {
+      if (!SCREEN_PAGE_PARAMS.has(key)) {
         vars[key] = value
       }
     })
@@ -303,7 +242,7 @@ function ScreenPageContent() {
       // Read variables from actual URL (searchParams) since variable changes bypass urlConfig
       const currentUrlVars: Record<string, string> = {}
       searchParams.forEach((value, key) => {
-        if (!isReservedParam(key)) {
+        if (!SCREEN_PAGE_PARAMS.has(key)) {
           currentUrlVars[key] = value
         }
       })
@@ -342,7 +281,7 @@ function ScreenPageContent() {
         delete newVariables[name]
       }
       for (const [name, value] of Object.entries(newVariables)) {
-        if (value !== undefined && !isReservedParam(name)) {
+        if (value !== undefined && !SCREEN_PAGE_PARAMS.has(name)) {
           params.set(name, value)
         }
       }

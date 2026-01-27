@@ -70,10 +70,7 @@ export interface ProcessPageConfig extends BaseScreenConfig {
 /**
  * User-defined screen page config.
  * Type is only used for new screens (when name is not in route).
- * Variables are synced to URL for sharing and browser history.
  */
 export interface ScreenPageConfig extends BaseScreenConfig {
   type?: string
-  /** Variable values from URL (variable name -> value) */
-  variables?: Record<string, string>
 }

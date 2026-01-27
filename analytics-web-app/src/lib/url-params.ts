@@ -8,32 +8,12 @@
  * - Arrays are comma-separated: ?properties=cpu,memory,disk
  * - Empty arrays omit the param entirely
  * - Default values are omitted to keep URLs clean
- * - Non-reserved params are treated as notebook variables
  *
  * Note: Each page has its own buildUrl function that serializes config to URL.
  * This keeps URL structure close to the page that owns it.
  */
 
 import type { BaseScreenConfig } from './screen-config'
-
-/**
- * Reserved URL parameter names that cannot be used as variable names.
- * These are used by the system for time range and screen type.
- */
-export const RESERVED_PARAMS = [
-  'from',
-  'to',
-  'type',
-] as const
-
-export type ReservedParam = (typeof RESERVED_PARAMS)[number]
-
-/**
- * Check if a parameter name is reserved.
- */
-export function isReservedParam(key: string): key is ReservedParam {
-  return RESERVED_PARAMS.includes(key as ReservedParam)
-}
 
 /**
  * Parse URL search params into a partial config object.
@@ -70,17 +50,6 @@ export function parseUrlParams(params: URLSearchParams): Partial<BaseScreenConfi
   if (params.has('properties')) {
     const val = params.get('properties')
     result.selectedProperties = val ? val.split(',').filter(Boolean) : []
-  }
-
-  // Extract notebook variables from non-reserved params
-  const variables: Record<string, string> = {}
-  params.forEach((value, key) => {
-    if (!isReservedParam(key)) {
-      variables[key] = value
-    }
-  })
-  if (Object.keys(variables).length > 0) {
-    result.variables = variables
   }
 
   return result

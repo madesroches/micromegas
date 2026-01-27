@@ -11,9 +11,8 @@ export type {
   NotebookConfig,
 } from './notebook-types'
 
-// Re-export reserved params check from url-params
-import { RESERVED_PARAMS, isReservedParam } from '@/lib/url-params'
-export { RESERVED_PARAMS, isReservedParam }
+// Reserved URL parameter names that cannot be used as variable names
+const RESERVED_URL_PARAMS = new Set(['from', 'to', 'type'])
 
 /**
  * Checks if a variable name conflicts with reserved URL parameter names.
@@ -21,7 +20,7 @@ export { RESERVED_PARAMS, isReservedParam }
  */
 export function isReservedVariableName(name: string): boolean {
   const sanitized = sanitizeCellName(name)
-  return isReservedParam(sanitized)
+  return RESERVED_URL_PARAMS.has(sanitized)
 }
 
 /**
@@ -30,7 +29,7 @@ export function isReservedVariableName(name: string): boolean {
  */
 export function validateVariableName(name: string): string | null {
   const sanitized = sanitizeCellName(name)
-  if (isReservedParam(sanitized)) {
+  if (RESERVED_URL_PARAMS.has(sanitized)) {
     return `"${sanitized}" is a reserved name and cannot be used for variables (conflicts with URL parameters)`
   }
   return null // Valid
@@ -124,7 +123,7 @@ export function validateCellName(
   }
 
   // Check for reserved names (only for variable cells)
-  if (isVariable && isReservedParam(normalizedName)) {
+  if (isVariable && RESERVED_URL_PARAMS.has(normalizedName)) {
     return `"${normalizedName}" is reserved and cannot be used for variables`
   }
 
