@@ -32,7 +32,7 @@ export function useDefaultSaveCleanup(
   onSave: (() => Promise<ScreenConfig>) | null,
   setSearchParams: SetURLSearchParams,
 ): (() => Promise<void>) | null {
-  const wrapped = useCallback(async () => {
+  const wrapped = useCallback(async (): Promise<void> => {
     if (!onSave) return
     const savedConfig = await onSave()
     setSearchParams(prev => {
