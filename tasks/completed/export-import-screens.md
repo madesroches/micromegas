@@ -1,6 +1,6 @@
 # Export / Import Screens — Implementation Plan
 
-Design reference: `analytics-web-app/mockups/option-b-admin-hub.html`
+## Status: Completed
 
 ## Overview
 
