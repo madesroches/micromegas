@@ -175,6 +175,7 @@ function ExportScreensPageContent() {
                             className="accent-[var(--color-accent-link)] cursor-pointer"
                             checked={allFilteredSelected}
                             onChange={toggleAll}
+                            aria-label="Select all screens"
                           />
                         </th>
                         <th className="text-left p-2.5 px-4 text-xs font-semibold text-theme-text-muted uppercase tracking-wider">
@@ -202,6 +203,7 @@ function ExportScreensPageContent() {
                               checked={selected.has(screen.name)}
                               onChange={() => toggleScreen(screen.name)}
                               onClick={(e) => e.stopPropagation()}
+                              aria-label={`Select ${screen.name}`}
                             />
                           </td>
                           <td className="p-2.5 px-4">

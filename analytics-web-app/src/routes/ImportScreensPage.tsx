@@ -222,6 +222,8 @@ function ImportScreensPageContent() {
             ? 'border-accent-link bg-accent-link/5'
             : 'border-theme-border hover:border-accent-link hover:bg-accent-link/5'
         }`}
+        role="button"
+        aria-label="Drop a screens export file here or click to browse"
         onDrop={handleDrop}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
@@ -241,6 +243,7 @@ function ImportScreensPageContent() {
           accept=".json"
           className="hidden"
           onChange={handleFileInput}
+          aria-label="Choose screens export file"
         />
       </div>
     </>
@@ -283,6 +286,7 @@ function ImportScreensPageContent() {
                   className="accent-[var(--color-accent-link)] cursor-pointer"
                   checked={allSelected}
                   onChange={() => (allSelected ? deselectAllEntries() : selectAllEntries())}
+                  aria-label="Select all screens"
                 />
               </th>
               <th className="text-left p-2.5 px-4 text-xs font-semibold text-theme-text-muted uppercase tracking-wider">
@@ -311,6 +315,7 @@ function ImportScreensPageContent() {
                     className="accent-[var(--color-accent-link)] cursor-pointer"
                     checked={entry.selected}
                     onChange={() => toggleEntry(i)}
+                    aria-label={`Select ${entry.screen.name}`}
                   />
                 </td>
                 <td className="p-2.5 px-4">
@@ -342,6 +347,7 @@ function ImportScreensPageContent() {
                       className="bg-app-panel border border-theme-border rounded px-2 py-1 text-xs text-theme-text-primary outline-none"
                       value={entry.conflictAction}
                       onChange={(e) => setConflictAction(i, e.target.value as ImportConflictAction)}
+                      aria-label={`Conflict action for ${entry.screen.name}`}
                     >
                       <option value="skip">Skip</option>
                       <option value="overwrite">Overwrite</option>
