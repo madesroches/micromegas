@@ -18,21 +18,12 @@ import type { BaseScreenConfig } from './screen-config'
 
 /**
  * Reserved URL parameter names that cannot be used as variable names.
- * These are used by the system for time range, screen type, and other built-in features.
+ * These are used by the system for time range and screen type.
  */
 export const RESERVED_PARAMS = [
   'from',
   'to',
   'type',
-  'process_id',
-  'measure',
-  'scale',
-  'level',
-  'search',
-  'sort',
-  'dir',
-  'limit',
-  'properties',
 ] as const
 
 export type ReservedParam = (typeof RESERVED_PARAMS)[number]
