@@ -203,7 +203,7 @@ function ImportScreensPageContent() {
       } catch (err) {
         importResults.push({
           name: entry.screen.name,
-          status: 'created',
+          status: 'error',
           error: err instanceof Error ? err.message : 'Unknown error',
         })
       }

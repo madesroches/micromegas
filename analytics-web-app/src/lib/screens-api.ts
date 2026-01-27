@@ -167,7 +167,7 @@ export type ImportConflictAction = 'skip' | 'overwrite' | 'rename'
 
 export interface ImportScreenResult {
   name: string
-  status: 'created' | 'skipped' | 'overwritten' | 'renamed'
+  status: 'created' | 'skipped' | 'overwritten' | 'renamed' | 'error'
   finalName?: string
   error?: string
 }
