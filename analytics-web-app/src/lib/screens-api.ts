@@ -212,7 +212,7 @@ export function parseScreensImportFile(json: string): ScreensExportFile {
       throw new Error('Invalid export file: each screen must be an object')
     }
     const s = screen as Record<string, unknown>
-    if (typeof s.name !== 'string' || typeof s.screen_type !== 'string' || typeof s.config !== 'object') {
+    if (typeof s.name !== 'string' || typeof s.screen_type !== 'string' || typeof s.config !== 'object' || s.config === null) {
       throw new Error(`Invalid export file: screen is missing required fields (name, screen_type, config)`)
     }
   }
@@ -224,7 +224,7 @@ export function parseScreensImportFile(json: string): ScreensExportFile {
   }
 }
 
-function generateUniqueName(baseName: string, existingNames: Set<string>): string {
+export function generateUniqueName(baseName: string, existingNames: Set<string>): string {
   const candidate = `${baseName}-imported`
   if (!existingNames.has(candidate)) {
     return candidate

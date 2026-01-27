@@ -1,4 +1,4 @@
-import { buildScreensExport, parseScreensImportFile, Screen, ScreenTypeName } from '../screens-api'
+import { buildScreensExport, parseScreensImportFile, generateUniqueName, Screen, ScreenTypeName } from '../screens-api'
 
 function makeScreen(overrides: Partial<Screen> = {}): Screen {
   return {
@@ -105,6 +105,14 @@ describe('parseScreensImportFile', () => {
     expect(() => parseScreensImportFile(input)).toThrow('missing required fields')
   })
 
+  it('throws when config is null', () => {
+    const input = JSON.stringify({
+      version: 1,
+      screens: [{ name: 'test', screen_type: 'notebook', config: null }],
+    })
+    expect(() => parseScreensImportFile(input)).toThrow('missing required fields')
+  })
+
   it('roundtrips with buildScreensExport', () => {
     const screens = [
       makeScreen({ name: 'alpha' }),
@@ -117,5 +125,31 @@ describe('parseScreensImportFile', () => {
     expect(parsed.screens).toHaveLength(2)
     expect(parsed.screens[0].name).toBe('alpha')
     expect(parsed.screens[1].name).toBe('beta')
+  })
+})
+
+describe('generateUniqueName', () => {
+  it('returns name-imported when no conflict', () => {
+    const existing = new Set<string>()
+    expect(generateUniqueName('my-screen', existing)).toBe('my-screen-imported')
+  })
+
+  it('returns name-imported-2 when name-imported already exists', () => {
+    const existing = new Set(['my-screen-imported'])
+    expect(generateUniqueName('my-screen', existing)).toBe('my-screen-imported-2')
+  })
+
+  it('increments counter until a free name is found', () => {
+    const existing = new Set([
+      'my-screen-imported',
+      'my-screen-imported-2',
+      'my-screen-imported-3',
+    ])
+    expect(generateUniqueName('my-screen', existing)).toBe('my-screen-imported-4')
+  })
+
+  it('does not collide with unrelated names', () => {
+    const existing = new Set(['other-screen-imported'])
+    expect(generateUniqueName('my-screen', existing)).toBe('my-screen-imported')
   })
 })
