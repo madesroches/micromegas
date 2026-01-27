@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Option A – Single Page with Tabs</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0a0a0f;
+      color: #e7e9ea;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Header */
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 24px;
+      background: #12121a;
+      border-bottom: 1px solid #2a2a3e;
+    }
+    .logo { display: flex; align-items: center; gap: 8px; text-decoration: none; color: #e7e9ea; }
+    .logo-icon { width: 28px; height: 28px; background: #bf360c; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 14px; }
+    .logo-text { font-weight: 600; font-size: 15px; letter-spacing: -0.3px; }
+    .user-menu { display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 6px; cursor: pointer; }
+    .user-menu:hover { background: #2a2a3e; }
+    .avatar { width: 28px; height: 28px; border-radius: 50%; background: #1565c0; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; color: white; }
+
+    /* Layout */
+    .layout { display: flex; flex: 1; }
+    .sidebar {
+      width: 56px;
+      background: #12121a;
+      border-right: 1px solid #2a2a3e;
+      padding: 12px 0;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .nav-item {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 40px;
+      height: 40px;
+      margin: 0 8px;
+      border-radius: 6px;
+      color: #9ca3af;
+      cursor: pointer;
+      transition: all 0.15s;
+      text-decoration: none;
+      font-size: 18px;
+    }
+    .nav-item:hover { background: #2a2a3e; color: #e7e9ea; }
+    .nav-item.active { background: #1a1a2e; color: #1565c0; }
+    .nav-separator { height: 1px; background: #2a2a3e; margin: 8px 8px; }
+
+    /* Main content */
+    .main { flex: 1; padding: 24px; overflow-y: auto; }
+    .page-header { margin-bottom: 24px; }
+    .page-header h1 { font-size: 24px; font-weight: 600; margin-bottom: 4px; }
+    .page-header p { color: #9ca3af; font-size: 14px; }
+    .breadcrumb { display: flex; align-items: center; gap: 6px; font-size: 13px; color: #6b7280; margin-bottom: 16px; }
+    .breadcrumb a { color: #1565c0; text-decoration: none; }
+    .breadcrumb a:hover { text-decoration: underline; }
+
+    /* Tabs */
+    .tabs { display: flex; gap: 0; border-bottom: 1px solid #2a2a3e; margin-bottom: 24px; }
+    .tab {
+      padding: 10px 20px;
+      font-size: 14px;
+      font-weight: 500;
+      color: #9ca3af;
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      transition: all 0.15s;
+    }
+    .tab:hover { color: #e7e9ea; }
+    .tab.active { color: #1565c0; border-bottom-color: #1565c0; }
+
+    /* Toolbar */
+    .toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 16px;
+      gap: 12px;
+    }
+    .toolbar-left { display: flex; align-items: center; gap: 8px; }
+    .toolbar-right { display: flex; align-items: center; gap: 8px; }
+
+    /* Search */
+    .search-input {
+      background: #12121a;
+      border: 1px solid #2a2a3e;
+      border-radius: 6px;
+      padding: 8px 12px;
+      color: #e7e9ea;
+      font-size: 13px;
+      width: 260px;
+      outline: none;
+    }
+    .search-input::placeholder { color: #6b7280; }
+    .search-input:focus { border-color: #1565c0; }
+
+    /* Buttons */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 16px;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      border: 1px solid transparent;
+      transition: all 0.15s;
+    }
+    .btn-primary { background: #1565c0; color: white; }
+    .btn-primary:hover { background: #1976d2; }
+    .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-outline { background: transparent; color: #e7e9ea; border-color: #2a2a3e; }
+    .btn-outline:hover { background: #2a2a3e; }
+    .btn-ghost { background: transparent; color: #9ca3af; border: none; }
+    .btn-ghost:hover { color: #e7e9ea; background: #2a2a3e; }
+    .btn-sm { padding: 6px 12px; font-size: 12px; }
+
+    /* Table */
+    .table-wrapper { border: 1px solid #2a2a3e; border-radius: 8px; overflow: hidden; }
+    table { width: 100%; border-collapse: collapse; }
+    thead { background: #12121a; }
+    th {
+      text-align: left;
+      padding: 10px 16px;
+      font-size: 12px;
+      font-weight: 600;
+      color: #9ca3af;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    td { padding: 12px 16px; font-size: 14px; border-top: 1px solid #2a2a3e; }
+    tr:hover { background: rgba(21, 101, 192, 0.05); }
+    .checkbox { width: 18px; height: 18px; accent-color: #1565c0; cursor: pointer; }
+    .screen-name { color: #1565c0; font-weight: 500; }
+    .screen-type { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; background: #1a1a2e; border-radius: 4px; font-size: 12px; color: #9ca3af; }
+    .screen-date { color: #6b7280; font-size: 13px; }
+    .selection-count { font-size: 13px; color: #9ca3af; }
+    .selection-count strong { color: #1565c0; }
+
+    /* Tab content panels */
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+
+    /* Drop zone */
+    .drop-zone {
+      border: 2px dashed #2a2a3e;
+      border-radius: 12px;
+      padding: 48px;
+      text-align: center;
+      transition: all 0.2s;
+      cursor: pointer;
+      margin-bottom: 24px;
+    }
+    .drop-zone:hover { border-color: #1565c0; background: rgba(21, 101, 192, 0.05); }
+    .drop-zone-icon { font-size: 40px; margin-bottom: 12px; opacity: 0.5; }
+    .drop-zone-title { font-size: 16px; font-weight: 500; margin-bottom: 6px; }
+    .drop-zone-subtitle { font-size: 13px; color: #6b7280; }
+    .drop-zone-browse { color: #1565c0; text-decoration: underline; cursor: pointer; }
+
+    /* Conflict badge */
+    .badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+    .badge-warning { background: rgba(255, 179, 0, 0.15); color: #ffb300; }
+    .badge-new { background: rgba(34, 197, 94, 0.15); color: #22c55e; }
+
+    /* Conflict select */
+    .conflict-select {
+      background: #12121a;
+      border: 1px solid #2a2a3e;
+      border-radius: 4px;
+      padding: 4px 8px;
+      color: #e7e9ea;
+      font-size: 12px;
+      outline: none;
+    }
+
+    /* Import preview info */
+    .import-info {
+      display: flex;
+      gap: 16px;
+      margin-bottom: 16px;
+      padding: 12px 16px;
+      background: #12121a;
+      border-radius: 8px;
+      border: 1px solid #2a2a3e;
+    }
+    .import-info-item { font-size: 13px; color: #9ca3af; }
+    .import-info-item strong { color: #e7e9ea; }
+
+    /* Helper text */
+    .help-text { font-size: 12px; color: #6b7280; margin-top: 4px; }
+  </style>
+</head>
+<body>
+
+  <!-- Header -->
+  <div class="header">
+    <a class="logo" href="#">
+      <div class="logo-icon">M</div>
+      <span class="logo-text">Micromegas</span>
+    </a>
+    <div class="user-menu">
+      <div class="avatar">JD</div>
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+    </div>
+  </div>
+
+  <div class="layout">
+    <!-- Sidebar -->
+    <div class="sidebar">
+      <a class="nav-item" href="#" title="Processes">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+      </a>
+      <a class="nav-item" href="#" title="Screens">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>
+      </a>
+      <div class="nav-separator"></div>
+      <a class="nav-item active" href="#" title="Admin">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+      </a>
+    </div>
+
+    <!-- Main Content -->
+    <div class="main">
+      <div class="breadcrumb">
+        <a href="#">Admin</a>
+        <span>/</span>
+        <span>Export / Import Screens</span>
+      </div>
+
+      <div class="page-header">
+        <h1>Export / Import Screens</h1>
+        <p>Transfer screen configurations between environments.</p>
+      </div>
+
+      <!-- Tabs -->
+      <div class="tabs">
+        <div class="tab active" onclick="switchTab('export')">Export</div>
+        <div class="tab" onclick="switchTab('import')">Import</div>
+      </div>
+
+      <!-- Export Tab -->
+      <div id="tab-export" class="tab-panel active">
+        <div class="toolbar">
+          <div class="toolbar-left">
+            <input type="text" class="search-input" placeholder="Search screens...">
+            <button class="btn btn-ghost btn-sm" onclick="toggleAll(true)">Select All</button>
+            <button class="btn btn-ghost btn-sm" onclick="toggleAll(false)">Deselect All</button>
+            <span class="selection-count"><strong>3</strong> of 6 selected</span>
+          </div>
+          <div class="toolbar-right">
+            <button class="btn btn-primary">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              Export Selected
+            </button>
+          </div>
+        </div>
+
+        <div class="table-wrapper">
+          <table>
+            <thead>
+              <tr>
+                <th style="width:40px"><input type="checkbox" class="checkbox" checked></th>
+                <th>Screen Name</th>
+                <th>Type</th>
+                <th>Last Updated</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><input type="checkbox" class="checkbox" checked></td>
+                <td><span class="screen-name">System Overview</span></td>
+                <td><span class="screen-type">Notebook</span></td>
+                <td><span class="screen-date">Jan 15, 2026</span></td>
+              </tr>
+              <tr>
+                <td><input type="checkbox" class="checkbox" checked></td>
+                <td><span class="screen-name">Error Analysis</span></td>
+                <td><span class="screen-type">Notebook</span></td>
+                <td><span class="screen-date">Jan 12, 2026</span></td>
+              </tr>
+              <tr>
+                <td><input type="checkbox" class="checkbox" checked></td>
+                <td><span class="screen-name">Performance Dashboard</span></td>
+                <td><span class="screen-type">Timeline</span></td>
+                <td><span class="screen-date">Jan 10, 2026</span></td>
+              </tr>
+              <tr>
+                <td><input type="checkbox" class="checkbox"></td>
+                <td><span class="screen-name">Memory Tracking</span></td>
+                <td><span class="screen-type">Timeline</span></td>
+                <td><span class="screen-date">Jan 8, 2026</span></td>
+              </tr>
+              <tr>
+                <td><input type="checkbox" class="checkbox"></td>
+                <td><span class="screen-name">API Latency</span></td>
+                <td><span class="screen-type">Notebook</span></td>
+                <td><span class="screen-date">Dec 22, 2025</span></td>
+              </tr>
+              <tr>
+                <td><input type="checkbox" class="checkbox"></td>
+                <td><span class="screen-name">Deployment Log</span></td>
+                <td><span class="screen-type">Notebook</span></td>
+                <td><span class="screen-date">Dec 18, 2025</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="help-text" style="margin-top:8px;">Exported screens are saved as a JSON file containing all selected screen configurations.</p>
+      </div>
+
+      <!-- Import Tab -->
+      <div id="tab-import" class="tab-panel">
+        <!-- Upload zone (shown before file is selected) -->
+        <div class="drop-zone" id="drop-zone-empty">
+          <div class="drop-zone-icon">&#128230;</div>
+          <div class="drop-zone-title">Drop a screens file here</div>
+          <div class="drop-zone-subtitle">or <span class="drop-zone-browse">browse your files</span></div>
+          <p class="help-text" style="margin-top:12px;">Accepts .json files exported from Micromegas.</p>
+        </div>
+
+        <!-- Import preview (shown after file is selected) -->
+        <div id="import-preview" style="display:none;">
+          <div class="import-info">
+            <div class="import-info-item"><strong>File:</strong> screens-export-2026-01-15.json</div>
+            <div class="import-info-item"><strong>Screens found:</strong> 3</div>
+            <div class="import-info-item"><strong>Conflicts:</strong> 1</div>
+          </div>
+
+          <div class="toolbar">
+            <div class="toolbar-left">
+              <button class="btn btn-ghost btn-sm">Select All</button>
+              <button class="btn btn-ghost btn-sm">Deselect All</button>
+              <span class="selection-count"><strong>3</strong> of 3 selected</span>
+            </div>
+            <div class="toolbar-right">
+              <label style="font-size:13px; color:#9ca3af; margin-right:4px;">On conflict:</label>
+              <select class="conflict-select">
+                <option>Skip existing</option>
+                <option>Overwrite existing</option>
+                <option>Rename new</option>
+              </select>
+              <button class="btn btn-primary">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                Import Selected
+              </button>
+            </div>
+          </div>
+
+          <div class="table-wrapper">
+            <table>
+              <thead>
+                <tr>
+                  <th style="width:40px"><input type="checkbox" class="checkbox" checked></th>
+                  <th>Screen Name</th>
+                  <th>Type</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><input type="checkbox" class="checkbox" checked></td>
+                  <td><span class="screen-name">System Overview</span></td>
+                  <td><span class="screen-type">Notebook</span></td>
+                  <td><span class="badge badge-warning">Exists</span></td>
+                </tr>
+                <tr>
+                  <td><input type="checkbox" class="checkbox" checked></td>
+                  <td><span class="screen-name">Network Monitor</span></td>
+                  <td><span class="screen-type">Timeline</span></td>
+                  <td><span class="badge badge-new">New</span></td>
+                </tr>
+                <tr>
+                  <td><input type="checkbox" class="checkbox" checked></td>
+                  <td><span class="screen-name">Disk Usage</span></td>
+                  <td><span class="screen-type">Notebook</span></td>
+                  <td><span class="badge badge-new">New</span></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    function switchTab(tab) {
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+      if (tab === 'export') {
+        document.querySelectorAll('.tab')[0].classList.add('active');
+        document.getElementById('tab-export').classList.add('active');
+      } else {
+        document.querySelectorAll('.tab')[1].classList.add('active');
+        document.getElementById('tab-import').classList.add('active');
+      }
+    }
+    function toggleAll(state) {
+      document.querySelectorAll('#tab-export .checkbox').forEach(cb => cb.checked = state);
+    }
+    // Toggle import preview on drop zone click
+    document.getElementById('drop-zone-empty')?.addEventListener('click', () => {
+      document.getElementById('drop-zone-empty').style.display = 'none';
+      document.getElementById('import-preview').style.display = 'block';
+    });
+  </script>
+</body>
+</html>

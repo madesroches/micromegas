@@ -1,0 +1,658 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Option C – Inline on Screens Page</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0a0a0f;
+      color: #e7e9ea;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Header */
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 24px;
+      background: #12121a;
+      border-bottom: 1px solid #2a2a3e;
+    }
+    .logo { display: flex; align-items: center; gap: 8px; text-decoration: none; color: #e7e9ea; }
+    .logo-icon { width: 28px; height: 28px; background: #bf360c; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 14px; }
+    .logo-text { font-weight: 600; font-size: 15px; letter-spacing: -0.3px; }
+    .user-menu { display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 6px; cursor: pointer; }
+    .user-menu:hover { background: #2a2a3e; }
+    .avatar { width: 28px; height: 28px; border-radius: 50%; background: #1565c0; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; color: white; }
+
+    /* Layout */
+    .layout { display: flex; flex: 1; }
+    .sidebar {
+      width: 56px;
+      background: #12121a;
+      border-right: 1px solid #2a2a3e;
+      padding: 12px 0;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .nav-item {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 40px;
+      height: 40px;
+      margin: 0 8px;
+      border-radius: 6px;
+      color: #9ca3af;
+      cursor: pointer;
+      transition: all 0.15s;
+      text-decoration: none;
+      font-size: 18px;
+    }
+    .nav-item:hover { background: #2a2a3e; color: #e7e9ea; }
+    .nav-item.active { background: #1a1a2e; color: #1565c0; }
+    .nav-separator { height: 1px; background: #2a2a3e; margin: 8px 8px; }
+
+    /* Main content */
+    .main { flex: 1; padding: 24px; overflow-y: auto; }
+    .page-header { margin-bottom: 24px; }
+    .page-header h1 { font-size: 24px; font-weight: 600; margin-bottom: 4px; }
+    .page-header p { color: #9ca3af; font-size: 14px; }
+
+    /* Buttons */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 16px;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      border: 1px solid transparent;
+      transition: all 0.15s;
+    }
+    .btn-primary { background: #1565c0; color: white; }
+    .btn-primary:hover { background: #1976d2; }
+    .btn-outline { background: transparent; color: #e7e9ea; border-color: #2a2a3e; }
+    .btn-outline:hover { background: #2a2a3e; }
+    .btn-ghost { background: transparent; color: #9ca3af; border: none; }
+    .btn-ghost:hover { color: #e7e9ea; background: #2a2a3e; }
+    .btn-sm { padding: 6px 12px; font-size: 12px; }
+    .btn-danger { background: transparent; color: #f87171; border-color: #f87171; }
+    .btn-danger:hover { background: rgba(248, 113, 113, 0.1); }
+
+    /* Toolbar row */
+    .toolbar-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 16px;
+      flex-wrap: wrap;
+    }
+    .toolbar-spacer { flex: 1; }
+
+    /* Screen cards grid */
+    .screens-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+    .screen-card {
+      padding: 16px;
+      background: #12121a;
+      border: 1px solid #2a2a3e;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.15s;
+      text-decoration: none;
+      color: inherit;
+      display: block;
+      position: relative;
+    }
+    .screen-card:hover { border-color: #1565c0; background: #1a1a2e; }
+    .screen-card-header { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+    .screen-card-icon { color: #1565c0; }
+    .screen-card-name { font-weight: 500; font-size: 14px; }
+    .screen-card-meta { font-size: 12px; color: #6b7280; }
+    .screen-card-delete {
+      position: absolute;
+      top: 12px;
+      right: 12px;
+      width: 28px;
+      height: 28px;
+      border-radius: 4px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #6b7280;
+      background: transparent;
+      border: none;
+      cursor: pointer;
+      opacity: 0;
+      transition: all 0.15s;
+    }
+    .screen-card:hover .screen-card-delete { opacity: 1; }
+    .screen-card-delete:hover { color: #f87171; background: rgba(248, 113, 113, 0.1); }
+
+    /* Selection mode */
+    .screen-card.selectable { cursor: pointer; }
+    .screen-card .card-checkbox {
+      position: absolute;
+      top: 12px;
+      left: 12px;
+      width: 20px;
+      height: 20px;
+      accent-color: #1565c0;
+      cursor: pointer;
+      display: none;
+    }
+    .screen-card.selectable .card-checkbox { display: block; }
+    .screen-card.selectable.selected { border-color: #1565c0; background: rgba(21, 101, 192, 0.1); }
+
+    /* Export mode banner */
+    .mode-banner {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 16px;
+      background: rgba(21, 101, 192, 0.1);
+      border: 1px solid rgba(21, 101, 192, 0.3);
+      border-radius: 8px;
+      margin-bottom: 16px;
+    }
+    .mode-banner-text { flex: 1; font-size: 13px; color: #9ca3af; }
+    .mode-banner-text strong { color: #e7e9ea; }
+
+    /* Modal overlay */
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.6);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+    }
+    .modal-overlay.hidden { display: none; }
+    .modal {
+      background: #12121a;
+      border: 1px solid #2a2a3e;
+      border-radius: 12px;
+      width: 560px;
+      max-height: 80vh;
+      overflow-y: auto;
+    }
+    .modal-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 20px 24px 16px;
+      border-bottom: 1px solid #2a2a3e;
+    }
+    .modal-header h2 { font-size: 18px; font-weight: 600; }
+    .modal-close {
+      width: 32px;
+      height: 32px;
+      border-radius: 6px;
+      border: none;
+      background: transparent;
+      color: #9ca3af;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+    }
+    .modal-close:hover { background: #2a2a3e; color: #e7e9ea; }
+    .modal-body { padding: 24px; }
+    .modal-footer {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+      padding: 16px 24px;
+      border-top: 1px solid #2a2a3e;
+    }
+
+    /* Drop zone */
+    .drop-zone {
+      border: 2px dashed #2a2a3e;
+      border-radius: 12px;
+      padding: 40px;
+      text-align: center;
+      transition: all 0.2s;
+      cursor: pointer;
+    }
+    .drop-zone:hover { border-color: #1565c0; background: rgba(21, 101, 192, 0.05); }
+    .drop-zone-icon { font-size: 36px; margin-bottom: 10px; opacity: 0.5; }
+    .drop-zone-title { font-size: 15px; font-weight: 500; margin-bottom: 4px; }
+    .drop-zone-subtitle { font-size: 13px; color: #6b7280; }
+    .drop-zone-browse { color: #1565c0; text-decoration: underline; cursor: pointer; }
+
+    /* Import preview table */
+    .import-table { width: 100%; border-collapse: collapse; margin-top: 16px; }
+    .import-table th {
+      text-align: left;
+      padding: 8px 12px;
+      font-size: 11px;
+      font-weight: 600;
+      color: #6b7280;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      border-bottom: 1px solid #2a2a3e;
+    }
+    .import-table td { padding: 10px 12px; font-size: 13px; border-bottom: 1px solid rgba(42, 42, 62, 0.5); }
+    .import-table .checkbox { width: 16px; height: 16px; accent-color: #1565c0; }
+    .screen-name { color: #1565c0; font-weight: 500; }
+
+    /* Badge */
+    .badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+    .badge-warning { background: rgba(255, 179, 0, 0.15); color: #ffb300; }
+    .badge-new { background: rgba(34, 197, 94, 0.15); color: #22c55e; }
+
+    /* Conflict select */
+    .conflict-select {
+      background: #0a0a0f;
+      border: 1px solid #2a2a3e;
+      border-radius: 4px;
+      padding: 4px 8px;
+      color: #e7e9ea;
+      font-size: 12px;
+      outline: none;
+    }
+
+    /* File info bar */
+    .file-info {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 12px;
+      background: #0a0a0f;
+      border-radius: 6px;
+      font-size: 13px;
+      color: #9ca3af;
+    }
+    .file-info strong { color: #e7e9ea; }
+    .file-info .remove-file {
+      margin-left: auto;
+      color: #6b7280;
+      cursor: pointer;
+      font-size: 16px;
+      background: none;
+      border: none;
+    }
+    .file-info .remove-file:hover { color: #f87171; }
+
+    .help-text { font-size: 12px; color: #6b7280; }
+
+    /* View switcher for demo */
+    .demo-switcher {
+      position: fixed;
+      bottom: 16px;
+      right: 16px;
+      display: flex;
+      gap: 4px;
+      background: #1a1a2e;
+      border: 1px solid #2a2a3e;
+      border-radius: 8px;
+      padding: 4px;
+      z-index: 200;
+    }
+    .demo-btn {
+      padding: 6px 14px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 500;
+      color: #9ca3af;
+      cursor: pointer;
+      border: none;
+      background: transparent;
+    }
+    .demo-btn:hover { color: #e7e9ea; }
+    .demo-btn.active { background: #1565c0; color: white; }
+  </style>
+</head>
+<body>
+
+  <!-- Header -->
+  <div class="header">
+    <a class="logo" href="#">
+      <div class="logo-icon">M</div>
+      <span class="logo-text">Micromegas</span>
+    </a>
+    <div class="user-menu">
+      <div class="avatar">JD</div>
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+    </div>
+  </div>
+
+  <div class="layout">
+    <!-- Sidebar -->
+    <div class="sidebar">
+      <a class="nav-item" href="#" title="Processes">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+      </a>
+      <a class="nav-item active" href="#" title="Screens">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>
+      </a>
+    </div>
+
+    <!-- Main Content -->
+    <div class="main">
+      <div class="page-header">
+        <h1>Screens</h1>
+        <p>Create and manage custom screens with editable SQL queries.</p>
+      </div>
+
+      <!-- ============================================================ -->
+      <!-- STATE 1: Normal view (default) -->
+      <!-- ============================================================ -->
+      <div id="state-normal" class="state-view">
+        <div class="toolbar-row">
+          <button class="btn btn-outline btn-sm">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            New Notebook
+          </button>
+          <button class="btn btn-outline btn-sm">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            New Timeline
+          </button>
+          <div class="toolbar-spacer"></div>
+          <button class="btn btn-ghost btn-sm" onclick="showState('export')">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            Export
+          </button>
+          <button class="btn btn-ghost btn-sm" onclick="showModal()">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            Import
+          </button>
+        </div>
+
+        <div class="screens-grid">
+          <a class="screen-card" href="#">
+            <button class="screen-card-delete" title="Delete">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+            </button>
+            <div class="screen-card-header">
+              <span class="screen-card-icon">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+              </span>
+              <span class="screen-card-name">System Overview</span>
+            </div>
+            <div class="screen-card-meta">Notebook &middot; Jan 15, 2026</div>
+          </a>
+
+          <a class="screen-card" href="#">
+            <button class="screen-card-delete" title="Delete">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+            </button>
+            <div class="screen-card-header">
+              <span class="screen-card-icon">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+              </span>
+              <span class="screen-card-name">Error Analysis</span>
+            </div>
+            <div class="screen-card-meta">Notebook &middot; Jan 12, 2026</div>
+          </a>
+
+          <a class="screen-card" href="#">
+            <button class="screen-card-delete" title="Delete">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+            </button>
+            <div class="screen-card-header">
+              <span class="screen-card-icon">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+              </span>
+              <span class="screen-card-name">Performance Dashboard</span>
+            </div>
+            <div class="screen-card-meta">Timeline &middot; Jan 10, 2026</div>
+          </a>
+
+          <a class="screen-card" href="#">
+            <button class="screen-card-delete" title="Delete">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+            </button>
+            <div class="screen-card-header">
+              <span class="screen-card-icon">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+              </span>
+              <span class="screen-card-name">Memory Tracking</span>
+            </div>
+            <div class="screen-card-meta">Timeline &middot; Jan 8, 2026</div>
+          </a>
+
+          <a class="screen-card" href="#">
+            <button class="screen-card-delete" title="Delete">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+            </button>
+            <div class="screen-card-header">
+              <span class="screen-card-icon">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+              </span>
+              <span class="screen-card-name">API Latency</span>
+            </div>
+            <div class="screen-card-meta">Notebook &middot; Dec 22, 2025</div>
+          </a>
+
+          <a class="screen-card" href="#">
+            <button class="screen-card-delete" title="Delete">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+            </button>
+            <div class="screen-card-header">
+              <span class="screen-card-icon">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+              </span>
+              <span class="screen-card-name">Deployment Log</span>
+            </div>
+            <div class="screen-card-meta">Notebook &middot; Dec 18, 2025</div>
+          </a>
+        </div>
+      </div>
+
+      <!-- ============================================================ -->
+      <!-- STATE 2: Export selection mode -->
+      <!-- ============================================================ -->
+      <div id="state-export" class="state-view" style="display:none;">
+        <div class="mode-banner">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#1565c0" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          <span class="mode-banner-text"><strong>Export mode</strong> &mdash; Select screens to export, then click Download.</span>
+          <span style="font-size:13px; color:#9ca3af;"><strong style="color:#1565c0;">3</strong> selected</span>
+          <button class="btn btn-primary btn-sm">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            Download
+          </button>
+          <button class="btn btn-ghost btn-sm" onclick="showState('normal')" style="color:#9ca3af;">Cancel</button>
+        </div>
+
+        <div class="screens-grid">
+          <div class="screen-card selectable selected" onclick="this.classList.toggle('selected')">
+            <input type="checkbox" class="card-checkbox" checked>
+            <div class="screen-card-header" style="padding-left:24px;">
+              <span class="screen-card-icon">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+              </span>
+              <span class="screen-card-name">System Overview</span>
+            </div>
+            <div class="screen-card-meta" style="padding-left:24px;">Notebook &middot; Jan 15, 2026</div>
+          </div>
+
+          <div class="screen-card selectable selected" onclick="this.classList.toggle('selected')">
+            <input type="checkbox" class="card-checkbox" checked>
+            <div class="screen-card-header" style="padding-left:24px;">
+              <span class="screen-card-icon">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+              </span>
+              <span class="screen-card-name">Error Analysis</span>
+            </div>
+            <div class="screen-card-meta" style="padding-left:24px;">Notebook &middot; Jan 12, 2026</div>
+          </div>
+
+          <div class="screen-card selectable selected" onclick="this.classList.toggle('selected')">
+            <input type="checkbox" class="card-checkbox" checked>
+            <div class="screen-card-header" style="padding-left:24px;">
+              <span class="screen-card-icon">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+              </span>
+              <span class="screen-card-name">Performance Dashboard</span>
+            </div>
+            <div class="screen-card-meta" style="padding-left:24px;">Timeline &middot; Jan 10, 2026</div>
+          </div>
+
+          <div class="screen-card selectable" onclick="this.classList.toggle('selected')">
+            <input type="checkbox" class="card-checkbox">
+            <div class="screen-card-header" style="padding-left:24px;">
+              <span class="screen-card-icon">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+              </span>
+              <span class="screen-card-name">Memory Tracking</span>
+            </div>
+            <div class="screen-card-meta" style="padding-left:24px;">Timeline &middot; Jan 8, 2026</div>
+          </div>
+
+          <div class="screen-card selectable" onclick="this.classList.toggle('selected')">
+            <input type="checkbox" class="card-checkbox">
+            <div class="screen-card-header" style="padding-left:24px;">
+              <span class="screen-card-icon">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+              </span>
+              <span class="screen-card-name">API Latency</span>
+            </div>
+            <div class="screen-card-meta" style="padding-left:24px;">Notebook &middot; Dec 22, 2025</div>
+          </div>
+
+          <div class="screen-card selectable" onclick="this.classList.toggle('selected')">
+            <input type="checkbox" class="card-checkbox">
+            <div class="screen-card-header" style="padding-left:24px;">
+              <span class="screen-card-icon">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+              </span>
+              <span class="screen-card-name">Deployment Log</span>
+            </div>
+            <div class="screen-card-meta" style="padding-left:24px;">Notebook &middot; Dec 18, 2025</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- IMPORT MODAL -->
+  <!-- ============================================================ -->
+  <div id="import-modal" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-header">
+        <h2>Import Screens</h2>
+        <button class="modal-close" onclick="hideModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <!-- Upload state -->
+        <div id="modal-upload">
+          <div class="drop-zone" onclick="showModalPreview()">
+            <div class="drop-zone-icon">&#128230;</div>
+            <div class="drop-zone-title">Drop a screens file here</div>
+            <div class="drop-zone-subtitle">or <span class="drop-zone-browse">browse your files</span></div>
+          </div>
+          <p class="help-text" style="text-align:center; margin-top:8px;">Accepts .json files exported from Micromegas.</p>
+        </div>
+
+        <!-- Preview state (click drop zone to see) -->
+        <div id="modal-preview" style="display:none;">
+          <div class="file-info">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" stroke-width="2"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
+            <strong>screens-export-2026-01-15.json</strong>
+            <span>&middot; 3 screens</span>
+            <button class="remove-file" onclick="showModalUpload()">&times;</button>
+          </div>
+
+          <table class="import-table">
+            <thead>
+              <tr>
+                <th style="width:32px"><input type="checkbox" class="checkbox" checked></th>
+                <th>Name</th>
+                <th>Type</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><input type="checkbox" class="checkbox" checked></td>
+                <td><span class="screen-name">System Overview</span></td>
+                <td style="font-size:12px; color:#9ca3af;">Notebook</td>
+                <td>
+                  <span class="badge badge-warning">Exists</span>
+                  <select class="conflict-select" style="margin-left:4px;">
+                    <option>Skip</option>
+                    <option selected>Rename</option>
+                    <option>Overwrite</option>
+                  </select>
+                </td>
+              </tr>
+              <tr>
+                <td><input type="checkbox" class="checkbox" checked></td>
+                <td><span class="screen-name">Network Monitor</span></td>
+                <td style="font-size:12px; color:#9ca3af;">Timeline</td>
+                <td><span class="badge badge-new">New</span></td>
+              </tr>
+              <tr>
+                <td><input type="checkbox" class="checkbox" checked></td>
+                <td><span class="screen-name">Disk Usage</span></td>
+                <td style="font-size:12px; color:#9ca3af;">Notebook</td>
+                <td><span class="badge badge-new">New</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline btn-sm" onclick="hideModal()">Cancel</button>
+        <button class="btn btn-primary btn-sm">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          Import Selected
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Demo state switcher -->
+  <div class="demo-switcher">
+    <button class="demo-btn active" onclick="showState('normal')">Normal</button>
+    <button class="demo-btn" onclick="showState('export')">Export Mode</button>
+    <button class="demo-btn" onclick="showModal()">Import Modal</button>
+  </div>
+
+  <script>
+    function showState(state) {
+      document.getElementById('state-normal').style.display = state === 'normal' ? 'block' : 'none';
+      document.getElementById('state-export').style.display = state === 'export' ? 'block' : 'none';
+      document.querySelectorAll('.demo-btn').forEach(b => b.classList.remove('active'));
+      if (state === 'normal') document.querySelectorAll('.demo-btn')[0].classList.add('active');
+      if (state === 'export') document.querySelectorAll('.demo-btn')[1].classList.add('active');
+    }
+    function showModal() {
+      document.getElementById('import-modal').classList.remove('hidden');
+      document.querySelectorAll('.demo-btn')[2].classList.add('active');
+    }
+    function hideModal() {
+      document.getElementById('import-modal').classList.add('hidden');
+      document.querySelectorAll('.demo-btn')[2].classList.remove('active');
+    }
+    function showModalPreview() {
+      document.getElementById('modal-upload').style.display = 'none';
+      document.getElementById('modal-preview').style.display = 'block';
+    }
+    function showModalUpload() {
+      document.getElementById('modal-upload').style.display = 'block';
+      document.getElementById('modal-preview').style.display = 'none';
+    }
+  </script>
+</body>
+</html>
