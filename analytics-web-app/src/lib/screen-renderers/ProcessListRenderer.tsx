@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { ChevronUp, ChevronDown } from 'lucide-react'
 import { registerRenderer, ScreenRendererProps } from './index'
 import { useTimeRangeSync } from './useTimeRangeSync'
@@ -10,6 +11,7 @@ import { CopyableProcessId } from '@/components/CopyableProcessId'
 import { formatTimestamp, formatDuration } from '@/lib/time-range'
 import { timestampToDate } from '@/lib/arrow-utils'
 import { useStreamQuery } from '@/hooks/useStreamQuery'
+import { useDefaultSaveCleanup } from '@/lib/url-cleanup-utils'
 
 // Variables available for process list queries
 const VARIABLES = [
@@ -80,6 +82,8 @@ export function ProcessListRenderer({
 }: ScreenRendererProps) {
   const processListConfig = config as unknown as ProcessListConfig
   const savedProcessListConfig = savedConfig as unknown as ProcessListConfig | null
+  const [, setSearchParams] = useSearchParams()
+  const handleSave = useDefaultSaveCleanup(onSave, setSearchParams)
 
   // Sorting state (UI-only, not persisted)
   const [sortField, setSortField] = useState<ProcessSortField>('last_update_time')
@@ -235,7 +239,7 @@ export function ProcessListRenderer({
       error={queryError}
       footer={
         <SaveFooter
-          onSave={onSave}
+          onSave={handleSave}
           onSaveAs={onSaveAs}
           isSaving={isSaving}
           hasUnsavedChanges={hasUnsavedChanges}

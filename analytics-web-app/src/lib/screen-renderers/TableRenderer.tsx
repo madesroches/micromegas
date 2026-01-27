@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { ChevronUp, ChevronDown } from 'lucide-react'
 import { DataType } from 'apache-arrow'
 import { registerRenderer, ScreenRendererProps } from './index'
@@ -14,6 +15,7 @@ import {
   isBinaryType,
 } from '@/lib/arrow-utils'
 import { useStreamQuery } from '@/hooks/useStreamQuery'
+import { useDefaultSaveCleanup } from '@/lib/url-cleanup-utils'
 
 // Variables available for table queries
 const VARIABLES = [
@@ -141,6 +143,8 @@ export function TableRenderer({
 }: ScreenRendererProps) {
   const tableConfig = config as unknown as TableConfig
   const savedTableConfig = savedConfig as unknown as TableConfig | null
+  const [, setSearchParams] = useSearchParams()
+  const handleSave = useDefaultSaveCleanup(onSave, setSearchParams)
 
   // Sort state from config (persisted)
   const sortColumn = tableConfig.sortColumn
@@ -296,7 +300,7 @@ export function TableRenderer({
       error={queryError}
       footer={
         <SaveFooter
-          onSave={onSave}
+          onSave={handleSave}
           onSaveAs={onSaveAs}
           isSaving={isSaving}
           hasUnsavedChanges={hasUnsavedChanges}

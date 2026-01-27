@@ -1,4 +1,6 @@
 import { useCallback, useMemo, useRef, useEffect } from 'react'
+import { useSearchParams } from 'react-router-dom'
+import { RESERVED_URL_PARAMS } from '@/lib/url-cleanup-utils'
 import { CellConfig, VariableCellConfig } from './notebook-utils'
 
 export interface UseNotebookVariablesResult {
@@ -6,7 +8,7 @@ export interface UseNotebookVariablesResult {
   variableValues: Record<string, string>
   /** Ref for synchronous access during sequential cell execution */
   variableValuesRef: React.MutableRefObject<Record<string, string>>
-  /** Set a variable value (calls onVariableChange callback, uses delta logic against saved baseline) */
+  /** Set a variable value (uses delta logic against saved baseline) */
   setVariableValue: (cellName: string, value: string) => void
   /** Migrate variable state when a cell is renamed (transfers value, removes old param) */
   migrateVariable: (oldName: string, newName: string) => void
@@ -19,22 +21,32 @@ export interface UseNotebookVariablesResult {
  *
  * Variables are collected from variable cells and can be referenced in SQL queries
  * of cells below them. This hook:
+ * - Owns URL access for variables via useSearchParams
  * - Computes effective values from saved defaults + URL overrides (delta from saved)
  * - Provides synchronous ref access for sequential execution
- * - Delegates state changes to the parent via onVariableChange callback
  * - Uses delta-based URL updates: URL only contains values different from saved baseline
  *
- * The URL config contains deltas from saved values. Effective values are computed by:
+ * The URL contains deltas from saved values. Effective values are computed by:
  * 1. Starting with saved defaults (or current cell defaults for unsaved variables)
  * 2. Overriding with URL values (which represent user changes from saved state)
  */
 export function useNotebookVariables(
   cells: CellConfig[],
   savedCells: CellConfig[] | null | undefined,
-  configVariables: Record<string, string> = {},
-  onVariableChange?: (name: string, value: string) => void,
-  onVariableRemove?: (name: string) => void
 ): UseNotebookVariablesResult {
+  const [searchParams, setSearchParams] = useSearchParams()
+
+  // Extract variable values from URL (non-reserved params)
+  const configVariables = useMemo(() => {
+    const vars: Record<string, string> = {}
+    searchParams.forEach((value, key) => {
+      if (!RESERVED_URL_PARAMS.has(key)) {
+        vars[key] = value
+      }
+    })
+    return vars
+  }, [searchParams])
+
   // Build a lookup map for saved defaults (O(1) access)
   const savedDefaultsByName = useMemo(() => {
     const map = new Map<string, string>()
@@ -50,6 +62,7 @@ export function useNotebookVariables(
     }
     return map
   }, [savedCells])
+
   // Compute effective values: saved default → current default → URL override
   // URL values represent deltas from saved baseline
   const variableValues = useMemo(() => {
@@ -101,13 +114,21 @@ export function useNotebookVariables(
       // Delta logic: only add to URL if different from baseline
       if (value === baseline) {
         // Value matches baseline - remove from URL
-        onVariableRemove?.(cellName)
+        setSearchParams(prev => {
+          const next = new URLSearchParams(prev)
+          next.delete(cellName)
+          return next
+        }, { replace: true })
       } else {
         // Value differs from baseline - add to URL
-        onVariableChange?.(cellName, value)
+        setSearchParams(prev => {
+          const next = new URLSearchParams(prev)
+          next.set(cellName, value)
+          return next
+        }, { replace: true })
       }
     },
-    [cells, savedDefaultsByName, onVariableChange, onVariableRemove]
+    [cells, savedDefaultsByName, setSearchParams]
   )
 
   // Migrate variable from old name to new name when cell is renamed
@@ -121,11 +142,15 @@ export function useNotebookVariables(
         delete nextRef[oldName]
         variableValuesRef.current = nextRef
         // Update URL: set new name, remove old name
-        onVariableChange?.(newName, oldValue)
-        onVariableRemove?.(oldName)
+        setSearchParams(prev => {
+          const next = new URLSearchParams(prev)
+          next.set(newName, oldValue)
+          next.delete(oldName)
+          return next
+        }, { replace: true })
       }
     },
-    [onVariableChange, onVariableRemove]
+    [setSearchParams]
   )
 
   // Remove variable from URL when cell is deleted
@@ -135,10 +160,14 @@ export function useNotebookVariables(
       const nextRef = { ...variableValuesRef.current }
       delete nextRef[cellName]
       variableValuesRef.current = nextRef
-      // Delegate to parent callback (updates URL config)
-      onVariableRemove?.(cellName)
+      // Update URL
+      setSearchParams(prev => {
+        const next = new URLSearchParams(prev)
+        next.delete(cellName)
+        return next
+      }, { replace: true })
     },
-    [onVariableRemove]
+    [setSearchParams]
   )
 
   return {

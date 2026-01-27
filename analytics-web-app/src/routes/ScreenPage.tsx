@@ -6,13 +6,10 @@ import { PageLayout } from '@/components/layout'
 import { AuthGuard } from '@/components/AuthGuard'
 import { AppLink } from '@/components/AppLink'
 import { SaveScreenDialog } from '@/components/SaveScreenDialog'
-import { useScreenConfig } from '@/hooks/useScreenConfig'
 import { parseTimeRange, getTimeRangeForApi } from '@/lib/time-range'
-import { isReservedParam } from '@/lib/url-params'
 import { renderIcon } from '@/lib/screen-type-utils'
 import { getRenderer } from '@/lib/screen-renderers/init'
 import { DEFAULT_TIME_RANGE } from '@/lib/screen-defaults'
-import type { ScreenPageConfig } from '@/lib/screen-config'
 import {
   getScreen,
   getScreenTypes,
@@ -25,78 +22,17 @@ import {
   ScreenApiError,
 } from '@/lib/screens-api'
 
-// Default config for ScreenPage URL state
-// Note: time range is intentionally omitted - it comes from saved/current config, not URL defaults
-// This prevents urlConfig from having stale defaults that conflict with actual config
-const DEFAULT_CONFIG: ScreenPageConfig = {
-  type: undefined,
-  variables: {},
-}
-
-// Safe URL length threshold (conservative for older browsers/proxies)
-const MAX_SAFE_URL_LENGTH = 2000
-
-// URL builder factory - creates buildUrl with saved config as baseline for delta calculations
-// URL should only contain values that differ from the saved config (not hardcoded defaults)
-const createBuildUrl = (savedConfig: ScreenConfig | null) => {
-  // Extract saved time range - for new screens, savedConfig is null so any time in URL is a delta
-  const savedTimeFrom = savedConfig?.timeRangeFrom
-  const savedTimeTo = savedConfig?.timeRangeTo
-
-  return (cfg: ScreenPageConfig): string => {
-    const params = new URLSearchParams()
-    if (cfg.type) params.set('type', cfg.type)
-
-    // Only serialize time range if it differs from saved config
-    // For new screens (savedConfig null), any explicit time goes to URL
-    if (cfg.timeRangeFrom && (savedTimeFrom === undefined || cfg.timeRangeFrom !== savedTimeFrom)) {
-      params.set('from', cfg.timeRangeFrom)
-    }
-    if (cfg.timeRangeTo && (savedTimeTo === undefined || cfg.timeRangeTo !== savedTimeTo)) {
-      params.set('to', cfg.timeRangeTo)
-    }
-
-    // Add variable params (skip reserved names as safety check)
-    // Note: empty strings ARE serialized (as ?name=) to preserve explicit "cleared" state
-    if (cfg.variables) {
-      for (const [name, value] of Object.entries(cfg.variables)) {
-        if (value !== undefined && !isReservedParam(name)) {
-          params.set(name, value)
-        }
-      }
-    }
-
-    const qs = params.toString()
-    const url = qs ? `?${qs}` : ''
-
-    // Warn if URL exceeds safe length (variables may be lost on some browsers/proxies)
-    if (url.length > MAX_SAFE_URL_LENGTH) {
-      console.warn(
-        `URL length (${url.length}) exceeds safe threshold (${MAX_SAFE_URL_LENGTH}). ` +
-          `Some variable values may be lost when sharing or bookmarking.`
-      )
-    }
-
-    return url
-  }
-}
-
 function ScreenPageContent() {
   const { name } = useParams<{ name: string }>()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const isNew = !name
 
-  // Screen state (declared early so buildUrl can use saved config)
+  // Screen state
   const [screen, setScreen] = useState<Screen | null>(null)
 
-  // Create buildUrl with saved config as baseline for delta calculations
-  // URL only contains values that differ from saved config
-  const buildUrl = useMemo(() => createBuildUrl(screen?.config ?? null), [screen?.config])
-
-  // Use the config-driven pattern for URL state (time range, type for new screens)
-  const { config: urlConfig } = useScreenConfig(DEFAULT_CONFIG, buildUrl)
-  const typeParam = (urlConfig.type ?? null) as ScreenTypeName | null
+  // Read type directly from URL (only used for new screens)
+  const typeParam = (searchParams.get('type') ?? null) as ScreenTypeName | null
 
   // Time range change handler - works directly with URL params to preserve variables
   // This avoids going through updateConfig which has stale variable state
@@ -106,29 +42,6 @@ function ScreenPageContent() {
       params.set('from', from)
       params.set('to', to)
       navigate(`?${params.toString()}`)
-    },
-    [searchParams, navigate]
-  )
-
-  // Variable change handler - works directly with URL params to preserve existing time state
-  // This avoids going through updateConfig which would merge defaults and potentially
-  // add unwanted time params to the URL
-  const handleUrlVariableChange = useCallback(
-    (name: string, value: string) => {
-      const params = new URLSearchParams(searchParams.toString())
-      params.set(name, value)
-      navigate(`?${params.toString()}`, { replace: true })
-    },
-    [searchParams, navigate]
-  )
-
-  // Variable remove handler - works directly with URL params
-  const handleUrlVariableRemove = useCallback(
-    (name: string) => {
-      const params = new URLSearchParams(searchParams.toString())
-      params.delete(name)
-      const qs = params.toString()
-      navigate(qs ? `?${qs}` : '.', { replace: true })
     },
     [searchParams, navigate]
   )
@@ -148,6 +61,17 @@ function ScreenPageContent() {
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
+
+  // Warn when URL query string exceeds safe length (older browsers/proxies may truncate)
+  useEffect(() => {
+    const qs = searchParams.toString()
+    if (qs.length > 2000) {
+      console.warn(
+        `URL query string length (${qs.length}) exceeds safe threshold (2000). ` +
+          `Some parameter values may be lost when sharing or bookmarking.`
+      )
+    }
+  }, [searchParams])
 
   // Dialog state
   const [showSaveDialog, setShowSaveDialog] = useState(false)
@@ -191,18 +115,6 @@ function ScreenPageContent() {
       return getTimeRangeForApi(DEFAULT_TIME_RANGE.from, DEFAULT_TIME_RANGE.to)
     }
   }, [rawTimeRange])
-
-  // Compute URL variables directly from searchParams (not urlConfig which may be stale)
-  // This ensures the renderer always sees current URL state since variable changes bypass urlConfig
-  const urlVariables = useMemo(() => {
-    const vars: Record<string, string> = {}
-    searchParams.forEach((value, key) => {
-      if (!isReservedParam(key)) {
-        vars[key] = value
-      }
-    })
-    return vars
-  }, [searchParams])
 
   // Load screen or default config
   useEffect(() => {
@@ -277,9 +189,9 @@ function ScreenPageContent() {
     setRefreshTrigger((n) => n + 1)
   }, [])
 
-  // Save existing screen
-  const handleSave = useCallback(async () => {
-    if (!screen || !screenConfig) return
+  // Save existing screen — API call + state update only; URL cleanup is the renderer's job
+  const handleSave = useCallback(async (): Promise<ScreenConfig> => {
+    if (!screen || !screenConfig) throw new Error('No screen to save')
 
     setIsSaving(true)
     setSaveError(null)
@@ -297,70 +209,18 @@ function ScreenPageContent() {
       setScreen(updated)
       setScreenConfig(configToSave) // Keep local state in sync
       setHasUnsavedChanges(false)
-
-      // Clean up URL params that now match saved values (delta-based URL)
-      // After save, the saved config becomes the new baseline for delta calculations
-      // Read variables from actual URL (searchParams) since variable changes bypass urlConfig
-      const currentUrlVars: Record<string, string> = {}
-      searchParams.forEach((value, key) => {
-        if (!isReservedParam(key)) {
-          currentUrlVars[key] = value
-        }
-      })
-      const variablesToRemove: string[] = []
-
-      // Check each URL variable against the newly saved config
-      const savedCells = configToSave.cells as
-        | Array<{ type: string; name: string; defaultValue?: string }>
-        | undefined
-      if (savedCells) {
-        for (const [name, value] of Object.entries(currentUrlVars)) {
-          const savedCell = savedCells.find((c) => c.type === 'variable' && c.name === name)
-          if (savedCell && savedCell.defaultValue === value) {
-            variablesToRemove.push(name)
-          }
-        }
-      }
-
-      // Build clean URL - only keep params that differ from newly saved config
-      // Read actual URL time params (not urlConfig which has defaults merged in)
-      const urlTimeFrom = searchParams.get('from')
-      const urlTimeTo = searchParams.get('to')
-      const params = new URLSearchParams()
-
-      // Time range: only include if explicitly in URL AND differs from saved
-      if (urlTimeFrom && urlTimeFrom !== configToSave.timeRangeFrom) {
-        params.set('from', urlTimeFrom)
-      }
-      if (urlTimeTo && urlTimeTo !== configToSave.timeRangeTo) {
-        params.set('to', urlTimeTo)
-      }
-
-      // Variables: only include if differs from saved
-      const newVariables = { ...currentUrlVars }
-      for (const name of variablesToRemove) {
-        delete newVariables[name]
-      }
-      for (const [name, value] of Object.entries(newVariables)) {
-        if (value !== undefined && !isReservedParam(name)) {
-          params.set(name, value)
-        }
-      }
-
-      const qs = params.toString()
-      // Use '.' to navigate to current location without query params
-      // (window.location.pathname includes base path, which navigate() would duplicate)
-      navigate(qs ? `?${qs}` : '.', { replace: true })
+      return configToSave
     } catch (err) {
       if (err instanceof ScreenApiError) {
         setSaveError(err.message)
       } else {
         setSaveError('Failed to save screen')
       }
+      throw err
     } finally {
       setIsSaving(false)
     }
-  }, [screen, screenConfig, searchParams, rawTimeRange, navigate])
+  }, [screen, screenConfig, rawTimeRange])
 
   // Handle "Save As" completion
   const handleSaveAsComplete = useCallback(
@@ -505,9 +365,6 @@ function ScreenPageContent() {
               onSaveAs={() => setShowSaveDialog(true)}
               saveError={saveError}
               refreshTrigger={refreshTrigger}
-              urlVariables={urlVariables}
-              onUrlVariableChange={handleUrlVariableChange}
-              onUrlVariableRemove={handleUrlVariableRemove}
             />
           </div>
         </div>
