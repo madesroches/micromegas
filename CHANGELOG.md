@@ -3,12 +3,26 @@
 This file documents the historical progress of the Micromegas project. For current focus, please see the main [README.md](./README.md).
 
 ## Unreleased
+
+## January 2026 - v0.19.0
+* **User-Defined Screens:**
+  * Add user-defined screens feature (#707)
+  * Add table screen type with generic SQL viewer (#726)
+  * Add notebook screen type with multi-cell layout (#728)
+  * Refactor notebook cells to follow Open-Closed Principle (#729)
+  * Notebook OCP refactoring and URL variable synchronization (#730)
+  * Add syntax highlighting to notebook cell editors (#731)
+  * Delta-based URL handling for notebook variables and time range (#734)
+  * Add copy/paste support for time ranges (#735)
+  * Decouple URL param ownership from ScreenPage to renderers (#736)
+  * Add admin section with export/import screens (#737)
 * **Data Integrity:**
   * Add delete_duplicate_streams and delete_duplicate_processes UDFs (#721)
 * **Analytics & Query Features:**
   * Add expand_histogram table function and bar chart toggle (#720)
+  * Unify chart and property timeline queries (#732)
+  * Enable dictionary encoding preservation for web app (#727)
 * **Analytics Web App:**
-  * Add user-defined screens feature (#707)
   * MVC view state refactor and XYChart generalization (#718)
   * Migrate remaining pages to useScreenConfig and remove useTimeRange (#719)
   * Add dynamic page titles (#712)
@@ -18,10 +32,14 @@ This file documents the historical progress of the Micromegas project. For curre
 * **Infrastructure:**
   * Add micromegas_app database creation to service startup (#705)
 * **Security:**
+  * Fix lodash prototype pollution vulnerability (CVE-2025-13465) (#725)
   * Fix Dependabot alert #91: upgrade diff to 8.0.3 (#708)
   * Fix dependabot alerts for grafana plugin dependencies (#704)
   * Fix 4 dependabot security alerts (#703)
 * **Documentation:**
+  * Add plans for unified metrics query and dictionary preservation (#724)
+  * Add notebook screen design and generalized metrics chart plan (#716)
+  * Update changelog and readme with unreleased changes (#722)
   * Update unified observability presentation slides (#706)
   * Add unified observability presentation link (#702)
 

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.19.0 (2026-01-28)
+
+Version sync release - no plugin-specific changes.
+
 ## 0.18.0 (2026-01-08)
 
 Version sync release - no plugin-specific changes.
