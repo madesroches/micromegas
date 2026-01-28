@@ -9,8 +9,8 @@ import { LoadingState, EmptyState, SaveFooter, RendererLayout } from './shared'
 import { QueryEditor } from '@/components/QueryEditor'
 import { AppLink } from '@/components/AppLink'
 import { CopyableProcessId } from '@/components/CopyableProcessId'
-import { formatTimestamp } from '@/lib/time-range'
-import { timestampToDate, isTimeType } from '@/lib/arrow-utils'
+import { formatTimestamp, formatDurationMs } from '@/lib/time-range'
+import { timestampToDate, isTimeType, isDurationType, durationToMs } from '@/lib/arrow-utils'
 import { useStreamQuery } from '@/hooks/useStreamQuery'
 import { useDefaultSaveCleanup } from '@/lib/url-cleanup-utils'
 
@@ -340,8 +340,21 @@ export function ProcessListRenderer({
 
       // Check if it's a timestamp type using Arrow type
       if (isTimeType(dataType)) {
+        const date = timestampToDate(value, dataType)
         return (
-          <span className="font-mono text-sm text-theme-text-primary">{formatTimestamp(value)}</span>
+          <span className="font-mono text-sm text-theme-text-primary">
+            {date ? formatTimestamp(date) : '-'}
+          </span>
+        )
+      }
+
+      // Check if it's a duration type
+      if (isDurationType(dataType)) {
+        const ms = durationToMs(value, dataType)
+        return (
+          <span className="font-mono text-sm text-theme-text-secondary">
+            {formatDurationMs(ms)}
+          </span>
         )
       }
 

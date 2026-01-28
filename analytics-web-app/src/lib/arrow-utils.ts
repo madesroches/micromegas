@@ -2,7 +2,7 @@
  * Utilities for working with Apache Arrow data
  */
 
-import { DataType, TimeUnit, Timestamp, Table } from 'apache-arrow'
+import { DataType, TimeUnit, Timestamp, Duration, Table } from 'apache-arrow'
 
 export type XAxisMode = 'time' | 'numeric' | 'categorical'
 
@@ -73,6 +73,40 @@ export function isTimeType(dataType: DataType): boolean {
     DataType.isDate(dataType) ||
     DataType.isTime(dataType)
   )
+}
+
+/**
+ * Check if an Arrow DataType is a duration type
+ */
+export function isDurationType(dataType: DataType): boolean {
+  return DataType.isDuration(dataType)
+}
+
+/**
+ * Converts an Arrow duration value to milliseconds.
+ * Uses the field's schema to determine the correct conversion factor.
+ */
+export function durationToMs(value: unknown, dataType?: DataType): number {
+  if (!value) return 0
+
+  const numValue = typeof value === 'bigint' ? value : BigInt(Number(value))
+
+  if (dataType && DataType.isDuration(dataType)) {
+    const durationType = dataType as Duration
+    switch (durationType.unit) {
+      case TimeUnit.SECOND:
+        return Number(numValue) * 1000
+      case TimeUnit.MILLISECOND:
+        return Number(numValue)
+      case TimeUnit.MICROSECOND:
+        return Number(numValue / 1000n)
+      case TimeUnit.NANOSECOND:
+        return Number(numValue / 1000000n)
+    }
+  }
+
+  // Default: assume nanoseconds
+  return Number(numValue / 1000000n)
 }
 
 /**
