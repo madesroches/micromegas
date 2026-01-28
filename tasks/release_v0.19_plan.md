@@ -132,69 +132,70 @@ python3 release.py
 ```
 
 **Crates to publish (in dependency order):**
-1. [ ] **micromegas-derive-transit** - Transit derive macros
-2. [ ] **micromegas-tracing-proc-macros** - Tracing procedural macros
-3. [ ] **micromegas-transit** - Data serialization framework
-4. [ ] **micromegas-tracing** - Core tracing library
-5. [ ] **micromegas-auth** - Authentication providers
-6. [ ] **micromegas-telemetry** - Telemetry data structures
-7. [ ] **micromegas-ingestion** - Data ingestion utilities
-8. [ ] **micromegas-telemetry-sink** - Telemetry data sinks
-9. [ ] **micromegas-perfetto** - Perfetto trace generation
-10. [ ] **micromegas-analytics** - Analytics and query engine
-11. [ ] **micromegas-proc-macros** - Top-level procedural macros
-12. [ ] **micromegas** - Main public crate
+1. [x] **micromegas-derive-transit** - Transit derive macros ✅
+2. [x] **micromegas-tracing-proc-macros** - Tracing procedural macros ✅
+3. [x] **micromegas-transit** - Data serialization framework ✅
+4. [x] **micromegas-tracing** - Core tracing library ✅
+5. [x] **micromegas-auth** - Authentication providers ✅
+6. [x] **micromegas-telemetry** - Telemetry data structures ✅
+7. [x] **micromegas-ingestion** - Data ingestion utilities ✅
+8. [x] **micromegas-telemetry-sink** - Telemetry data sinks ✅
+9. [x] **micromegas-perfetto** - Perfetto trace generation ✅
+10. [x] **micromegas-analytics** - Analytics and query engine ✅
+11. [x] **micromegas-proc-macros** - Top-level procedural macros ✅
+12. [x] **micromegas** - Main public crate ✅
 
 **Verification:**
-- [ ] Verify all crates are published on crates.io at v0.19.0
+- [x] Verify all crates are published on crates.io at v0.19.0 ✅
 
-### Phase 2: Python Library Release
+### Phase 2: Python Library Release ✅
 From `/python/micromegas` directory:
-- [ ] Build package: `poetry build`
-- [ ] Publish to PyPI: `poetry publish`
-- [ ] Verify package on PyPI: https://pypi.org/project/micromegas/
-- [ ] Test installation: `pip install micromegas==0.19.0`
+- [x] Build package: `poetry build` ✅
+- [x] Publish to PyPI: `poetry publish` ✅
+- [x] Verify package on PyPI: https://pypi.org/project/micromegas/ ✅
+- [x] Test installation: `pip install micromegas==0.19.0` ✅
 
-### Phase 3: Grafana Plugin Release
+### Phase 3: Grafana Plugin Release ✅
 From `/grafana` directory:
-- [ ] Build and package: `./build-plugin.sh`
-- [ ] Verify archive contents are correct (files in micromegas-micromegas-datasource/, not dist/)
-- [ ] Archive attached to GitHub release
+- [x] Build and package: `./build-plugin.sh` ✅ 51MB archive
+- [x] Verify archive contents are correct (files in micromegas-micromegas-datasource/, not dist/) ✅
+- [x] Archive attached to GitHub release ✅
 
-### Phase 4: Git Release
-- [ ] Push tags: `git push origin v0.19.0`
-- [ ] **Create GitHub release**:
-  - [ ] Use tag v0.19.0
-  - [ ] Title: "Micromegas v0.19.0 - User-Defined Screens & Notebooks"
-  - [ ] Include comprehensive description with major features
-  - [ ] Attach Grafana plugin archive
-  - [ ] Mark as latest release
+### Phase 4: Git Release ✅
+- [x] Push tags: `git push origin v0.19.0` ✅
+- [x] **Create GitHub release**: ✅
+  - [x] Use tag v0.19.0 ✅
+  - [x] Title: "Micromegas v0.19.0 - User-Defined Screens & Notebooks" ✅
+  - [x] Include comprehensive description with major features ✅
+  - [x] Attach Grafana plugin archive ✅
+  - [x] Mark as latest release ✅
+- **Release URL**: https://github.com/madesroches/micromegas/releases/tag/v0.19.0
 
-### Phase 5: Post-Release Version Bump to 0.20.0
+### Phase 5: Post-Release Version Bump to 0.20.0 ✅
 Update all versions for next development cycle:
 
 #### Rust Workspace Files:
-- [ ] **`/rust/Cargo.toml`**:
-  - [ ] Update `[workspace.package].version = "0.20.0"`
-  - [ ] Update all workspace dependencies versions to `"0.20.0"`
+- [x] **`/rust/Cargo.toml`**:
+  - [x] Update `[workspace.package].version = "0.20.0"` ✅
+  - [x] Update all workspace dependencies versions to `"0.20.0"` ✅
 
 #### Individual Crate Files:
-- [ ] **`/rust/tracing/Cargo.toml`**: Update proc-macros dependency to `^0.20`
-- [ ] **`/rust/transit/Cargo.toml`**: Update derive-transit dependency to `^0.20`
+- [x] **`/rust/tracing/Cargo.toml`**: Update proc-macros dependency to `^0.20` ✅
+- [x] **`/rust/transit/Cargo.toml`**: Update derive-transit dependency to `^0.20` ✅
 
 #### Python Package:
-- [ ] **`/python/micromegas/pyproject.toml`**: Update to `version = "0.20.0"`
+- [x] **`/python/micromegas/pyproject.toml`**: Update to `version = "0.20.0"` ✅
 
 #### Grafana Plugin:
-- [ ] **`/grafana/package.json`**: Update to `"version": "0.20.0"`
+- [x] **`/grafana/package.json`**: Update to `"version": "0.20.0"` ✅
 
 #### Analytics Web App:
-- [ ] **`/analytics-web-app/package.json`**: Update to `"version": "0.20.0"`
+- [x] **`/analytics-web-app/package.json`**: Update to `"version": "0.20.0"` ✅
 
 #### Lock Files:
-- [ ] Regenerate Rust lock file: `cargo update` (from `/rust` directory)
-- [ ] Regenerate Grafana lock file: `yarn install` (from `/grafana` directory)
-- [ ] Regenerate Analytics Web App lock file: `yarn install` (from `/analytics-web-app` directory)
+- [x] Regenerate Rust lock file: `cargo update` (from `/rust` directory) ✅
+- [x] Regenerate Grafana lock file: `yarn install` (from `/grafana` directory) ✅
+- [x] Regenerate Analytics Web App lock file: `yarn install` (from `/analytics-web-app` directory) ✅
 
 #### Commit Version Bump:
 - [ ] Version bump committed
