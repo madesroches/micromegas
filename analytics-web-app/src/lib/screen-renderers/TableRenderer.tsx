@@ -1,21 +1,13 @@
 import { useCallback, useEffect, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { ChevronUp, ChevronDown } from 'lucide-react'
-import { DataType } from 'apache-arrow'
 import { registerRenderer, ScreenRendererProps } from './index'
 import { useTimeRangeSync } from './useTimeRangeSync'
 import { useSqlHandlers } from './useSqlHandlers'
 import { LoadingState, EmptyState, SaveFooter, RendererLayout } from './shared'
 import { QueryEditor } from '@/components/QueryEditor'
-import { formatTimestamp } from '@/lib/time-range'
-import {
-  timestampToDate,
-  isTimeType,
-  isNumericType,
-  isBinaryType,
-} from '@/lib/arrow-utils'
 import { useStreamQuery } from '@/hooks/useStreamQuery'
 import { useDefaultSaveCleanup } from '@/lib/url-cleanup-utils'
+import { SortHeader, TableBody, buildOrderByClause, getNextSortState } from './table-utils'
 
 // Variables available for table queries
 const VARIABLES = [
@@ -34,95 +26,6 @@ interface TableConfig {
   sortColumn?: string
   sortDirection?: 'asc' | 'desc'
   [key: string]: unknown
-}
-
-interface SortHeaderProps {
-  columnName: string
-  children: React.ReactNode
-  sortColumn?: string
-  sortDirection?: 'asc' | 'desc'
-  onSort: (columnName: string) => void
-}
-
-function SortHeader({
-  columnName,
-  children,
-  sortColumn,
-  sortDirection,
-  onSort,
-}: SortHeaderProps) {
-  const isActive = sortColumn === columnName
-  const showAsc = isActive && sortDirection === 'asc'
-  const showDesc = isActive && sortDirection === 'desc'
-
-  return (
-    <th
-      onClick={() => onSort(columnName)}
-      className={`px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider cursor-pointer select-none transition-colors ${
-        isActive
-          ? 'text-theme-text-primary bg-app-card'
-          : 'text-theme-text-muted hover:text-theme-text-secondary hover:bg-app-card'
-      }`}
-    >
-      <div className="flex items-center gap-1">
-        <span className="truncate">{children}</span>
-        {isActive && (
-          <span className="text-accent-link flex-shrink-0">
-            {showAsc ? (
-              <ChevronUp className="w-3 h-3" />
-            ) : showDesc ? (
-              <ChevronDown className="w-3 h-3" />
-            ) : null}
-          </span>
-        )}
-      </div>
-    </th>
-  )
-}
-
-/**
- * Format a cell value based on its Arrow DataType.
- */
-function formatCell(value: unknown, dataType: DataType): string {
-  if (value === null || value === undefined) return '-'
-
-  if (isTimeType(dataType)) {
-    const date = timestampToDate(value, dataType)
-    return date ? formatTimestamp(date) : '-'
-  }
-
-  if (isNumericType(dataType)) {
-    if (typeof value === 'number') {
-      // Format with locale for readability
-      return value.toLocaleString()
-    }
-    if (typeof value === 'bigint') {
-      return value.toLocaleString()
-    }
-    return String(value)
-  }
-
-  if (DataType.isBool(dataType)) {
-    return value ? 'true' : 'false'
-  }
-
-  // Binary data: display as ASCII preview with length
-  if (isBinaryType(dataType)) {
-    const bytes = value instanceof Uint8Array ? value : Array.isArray(value) ? value : null
-    if (bytes) {
-      const previewLen = Math.min(bytes.length, 32)
-      let preview = ''
-      for (let i = 0; i < previewLen; i++) {
-        const b = bytes[i]
-        // Printable ASCII range: 32-126
-        preview += b >= 32 && b <= 126 ? String.fromCharCode(b) : '.'
-      }
-      const suffix = bytes.length > previewLen ? '...' : ''
-      return `${preview}${suffix} (${bytes.length})`
-    }
-  }
-
-  return String(value)
 }
 
 export function TableRenderer({
@@ -160,10 +63,7 @@ export function TableRenderer({
   executeRef.current = streamQuery.execute
 
   // Build ORDER BY value from sort state
-  const orderByValue =
-    sortColumn && sortDirection
-      ? `ORDER BY ${sortColumn} ${sortDirection.toUpperCase()}`
-      : ''
+  const orderByValue = buildOrderByClause(sortColumn, sortDirection)
 
   // Execute query with $order_by substitution
   const executeQuery = useCallback(
@@ -252,29 +152,13 @@ export function TableRenderer({
   // Three-state sort cycling: none -> ASC -> DESC -> none
   const handleSort = useCallback(
     (columnName: string) => {
-      let newSortColumn: string | undefined
-      let newSortDirection: 'asc' | 'desc' | undefined
-
-      if (sortColumn !== columnName) {
-        // New column: start with ASC
-        newSortColumn = columnName
-        newSortDirection = 'asc'
-      } else if (sortDirection === 'asc') {
-        // ASC -> DESC
-        newSortColumn = columnName
-        newSortDirection = 'desc'
-      } else {
-        // DESC -> no sort (clear)
-        newSortColumn = undefined
-        newSortDirection = undefined
-      }
-
-      onConfigChange({ ...tableConfig, sortColumn: newSortColumn, sortDirection: newSortDirection })
+      const nextState = getNextSortState(columnName, sortColumn, sortDirection)
+      onConfigChange({ ...tableConfig, ...nextState })
 
       if (savedTableConfig) {
         const savedCol = savedTableConfig.sortColumn
         const savedDir = savedTableConfig.sortDirection
-        setHasUnsavedChanges(newSortColumn !== savedCol || newSortDirection !== savedDir)
+        setHasUnsavedChanges(nextState.sortColumn !== savedCol || nextState.sortDirection !== savedDir)
       }
     },
     [sortColumn, sortDirection, tableConfig, savedTableConfig, onConfigChange, setHasUnsavedChanges]
@@ -350,39 +234,7 @@ export function TableRenderer({
               ))}
             </tr>
           </thead>
-          <tbody>
-            {Array.from({ length: table.numRows }, (_, rowIdx) => {
-              const row = table.get(rowIdx)
-              if (!row) return null
-              return (
-                <tr
-                  key={rowIdx}
-                  className="border-b border-theme-border hover:bg-app-card transition-colors"
-                >
-                  {columns.map((col) => {
-                    const value = row[col.name]
-                    // Use formatted value for tooltip on binary types
-                    const formatted = formatCell(value, col.type)
-                    const tooltip =
-                      value != null
-                        ? isBinaryType(col.type)
-                          ? formatted
-                          : String(value)
-                        : undefined
-                    return (
-                      <td
-                        key={col.name}
-                        className="px-4 py-3 text-sm text-theme-text-primary font-mono truncate max-w-xs"
-                        title={tooltip}
-                      >
-                        {formatted}
-                      </td>
-                    )
-                  })}
-                </tr>
-              )
-            })}
-          </tbody>
+          <TableBody data={table} columns={columns} />
         </table>
       </div>
     )
