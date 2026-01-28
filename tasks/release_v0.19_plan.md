@@ -116,11 +116,11 @@ Current versions should already be at 0.19.0:
   - [x] Version matches package.json (0.19.0) ✅ Uses %VERSION% placeholder
   - [x] Author information is correct ✅ Marc-Antoine Desroches
   - [x] Links (documentation, issues) are correct ✅ Points to madesroches/micromegas
-- [ ] **Build plugin archive**: Use `./build-plugin.sh` script (NOT manual tar)
+- [x] **Build plugin archive**: Use `./build-plugin.sh` script (NOT manual tar) ✅ 51MB archive
 
 ### 5. Git Preparation
-- [ ] Create release tag: `git tag v0.19.0`
-- [ ] Verify tag points to correct commit
+- [x] Create release tag: `git tag v0.19.0` ✅
+- [x] Verify tag points to correct commit ✅ b70b25d8d
 
 ## Release Process
 
