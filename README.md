@@ -68,18 +68,28 @@ To get started with Micromegas, please refer to the [Getting Started](https://ma
 ## Current Status & Roadmap
 
 ### Unreleased
+* Working on improvements to the analytics web app
+
+### January 2026 - v0.19.0
+* **User-Defined Screens:**
+  * JSON-configured screen types for customizable dashboards
+  * Table screen with generic SQL viewer
+  * Notebook screen with multi-cell layout (SQL queries, charts, markdown)
+  * Syntax highlighting for notebook cell editors
+  * Admin section for exporting/importing screen definitions
+  * Delta-based URL handling and copy/paste support for time ranges
 * **Analytics Web App:**
-  * User-defined screens for customizable dashboards
   * MVC view state refactor and XYChart generalization
   * Dynamic page titles and API consolidation under `/api` prefix
-  * Production build improvements (disabled source maps)
+  * Dictionary encoding preservation for better performance
+  * Unified chart and property timeline queries
 * **Analytics & Query Features:**
   * `expand_histogram` table function with bar chart toggle
 * **Data Integrity:**
   * `delete_duplicate_streams` and `delete_duplicate_processes` UDFs
 * **Infrastructure:**
   * Automatic `micromegas_app` database creation on service startup
-* **Security:** Multiple dependabot fixes for diff, grafana plugin, and other dependencies
+* **Security:** CVE-2025-13465 (lodash), diff, grafana plugin dependencies
 
 ### January 2026 - v0.18.0
 * **Reliability & Data Integrity:**
