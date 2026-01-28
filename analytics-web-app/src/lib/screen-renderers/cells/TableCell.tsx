@@ -1,4 +1,4 @@
-import { DataType } from 'apache-arrow'
+import { useCallback } from 'react'
 import type {
   CellTypeMetadata,
   CellRendererProps,
@@ -6,56 +6,30 @@ import type {
   CellExecutionContext,
 } from '../cell-registry'
 import type { QueryCellConfig, CellConfig, CellState } from '../notebook-types'
-import { formatTimestamp } from '@/lib/time-range'
-import { timestampToDate, isTimeType, isNumericType, isBinaryType } from '@/lib/arrow-utils'
 import { AvailableVariablesPanel } from '@/components/AvailableVariablesPanel'
 import { SyntaxEditor } from '@/components/SyntaxEditor'
 import { substituteMacros, DEFAULT_SQL } from '../notebook-utils'
+import { SortHeader, formatCell, buildOrderByClause, getNextSortState } from '../table-utils'
 
 // =============================================================================
 // Renderer Component
 // =============================================================================
 
-function formatCell(value: unknown, dataType: DataType): string {
-  if (value === null || value === undefined) return '-'
+export function TableCell({ data, status, options, onOptionsChange, onRun }: CellRendererProps) {
+  // Extract sort state from options
+  const sortColumn = options?.sortColumn as string | undefined
+  const sortDirection = options?.sortDirection as 'asc' | 'desc' | undefined
 
-  if (isTimeType(dataType)) {
-    const date = timestampToDate(value, dataType)
-    return date ? formatTimestamp(date) : '-'
-  }
+  // Three-state sort cycling: none -> ASC -> DESC -> none
+  const handleSort = useCallback(
+    (columnName: string) => {
+      const nextState = getNextSortState(columnName, sortColumn, sortDirection)
+      onOptionsChange({ ...options, ...nextState })
+      onRun()
+    },
+    [sortColumn, sortDirection, options, onOptionsChange, onRun]
+  )
 
-  if (isNumericType(dataType)) {
-    if (typeof value === 'number') {
-      return value.toLocaleString()
-    }
-    if (typeof value === 'bigint') {
-      return value.toLocaleString()
-    }
-    return String(value)
-  }
-
-  if (DataType.isBool(dataType)) {
-    return value ? 'true' : 'false'
-  }
-
-  if (isBinaryType(dataType)) {
-    const bytes = value instanceof Uint8Array ? value : Array.isArray(value) ? value : null
-    if (bytes) {
-      const previewLen = Math.min(bytes.length, 32)
-      let preview = ''
-      for (let i = 0; i < previewLen; i++) {
-        const b = bytes[i]
-        preview += b >= 32 && b <= 126 ? String.fromCharCode(b) : '.'
-      }
-      const suffix = bytes.length > previewLen ? '...' : ''
-      return `${preview}${suffix} (${bytes.length})`
-    }
-  }
-
-  return String(value)
-}
-
-export function TableCell({ data, status }: CellRendererProps) {
   if (status === 'loading') {
     return (
       <div className="flex items-center justify-center py-8">
@@ -82,17 +56,21 @@ export function TableCell({ data, status }: CellRendererProps) {
         <thead className="sticky top-0">
           <tr className="bg-app-card border-b border-theme-border">
             {columns.map((col) => (
-              <th
+              <SortHeader
                 key={col.name}
-                className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-theme-text-muted"
+                columnName={col.name}
+                sortColumn={sortColumn}
+                sortDirection={sortDirection}
+                onSort={handleSort}
+                compact
               >
                 {col.name}
-              </th>
+              </SortHeader>
             ))}
           </tr>
         </thead>
         <tbody>
-          {Array.from({ length: Math.min(data.numRows, 100) }, (_, rowIdx) => {
+          {Array.from({ length: data.numRows }, (_, rowIdx) => {
             const row = data.get(rowIdx)
             if (!row) return null
             return (
@@ -118,11 +96,6 @@ export function TableCell({ data, status }: CellRendererProps) {
           })}
         </tbody>
       </table>
-      {data.numRows > 100 && (
-        <div className="px-3 py-2 text-xs text-theme-text-muted text-center bg-app-card border-t border-theme-border">
-          Showing 100 of {data.numRows} rows
-        </div>
-      )}
     </div>
   )
 }
@@ -130,6 +103,11 @@ export function TableCell({ data, status }: CellRendererProps) {
 // =============================================================================
 // Editor Component
 // =============================================================================
+
+// Additional variables available for table cells
+const TABLE_VARIABLES = [
+  { name: 'order_by', description: 'ORDER BY clause (click column headers to sort)' },
+]
 
 function TableCellEditor({ config, onChange, variables, timeRange }: CellEditorProps) {
   const tableConfig = config as QueryCellConfig
@@ -148,7 +126,11 @@ function TableCellEditor({ config, onChange, variables, timeRange }: CellEditorP
           minHeight="150px"
         />
       </div>
-      <AvailableVariablesPanel variables={variables} timeRange={timeRange} />
+      <AvailableVariablesPanel
+        variables={variables}
+        timeRange={timeRange}
+        additionalVariables={TABLE_VARIABLES}
+      />
     </>
   )
 }
@@ -176,13 +158,22 @@ export const tableMetadata: CellTypeMetadata = {
   }),
 
   execute: async (config: CellConfig, { variables, timeRange, runQuery }: CellExecutionContext) => {
-    const sql = substituteMacros((config as QueryCellConfig).sql, variables, timeRange)
+    const tableConfig = config as QueryCellConfig
+    let sql = substituteMacros(tableConfig.sql, variables, timeRange)
+
+    // Handle $order_by substitution based on sort state in options
+    const sortColumn = tableConfig.options?.sortColumn as string | undefined
+    const sortDirection = tableConfig.options?.sortDirection as 'asc' | 'desc' | undefined
+    const orderByValue = buildOrderByClause(sortColumn, sortDirection)
+    sql = sql.replace(/\$order_by/g, orderByValue)
+
     const data = await runQuery(sql)
     return { data }
   },
 
-  getRendererProps: (_config: CellConfig, state: CellState) => ({
+  getRendererProps: (config: CellConfig, state: CellState) => ({
     data: state.data,
     status: state.status,
+    options: (config as QueryCellConfig).options,
   }),
 }

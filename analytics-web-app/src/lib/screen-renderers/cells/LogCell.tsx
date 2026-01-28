@@ -78,7 +78,7 @@ export function LogCell({ data, status }: CellRendererProps) {
     if (!data || data.numRows === 0) return []
 
     const result: LogRow[] = []
-    for (let i = 0; i < Math.min(data.numRows, 100); i++) {
+    for (let i = 0; i < data.numRows; i++) {
       const row = data.get(i)
       if (row) {
         const levelValue = row.level
@@ -129,11 +129,6 @@ export function LogCell({ data, status }: CellRendererProps) {
           <span className="text-theme-text-primary flex-1 break-words">{row.msg}</span>
         </div>
       ))}
-      {data && data.numRows > 100 && (
-        <div className="px-3 py-2 text-xs text-theme-text-muted text-center bg-app-card border-t border-theme-border">
-          Showing 100 of {data.numRows} entries
-        </div>
-      )}
     </div>
   )
 }
