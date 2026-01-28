@@ -24,36 +24,29 @@ const VARIABLES = [
   },
 ]
 
-// Column metadata for special handling
-interface ColumnMeta {
-  label: string
-  sortable: boolean
+// Known column labels for better display
+const KNOWN_COLUMN_LABELS: Record<string, string> = {
+  exe: 'Process',
+  process_id: 'Process ID',
+  start_time: 'Start Time',
+  last_update_time: 'Last Update',
+  username: 'Username',
+  computer: 'Computer',
+  distro: 'Distro',
+  cpu_brand: 'CPU',
+  parent_process_id: 'Parent Process ID',
 }
 
-// Known columns with special rendering/sorting behavior
-const KNOWN_COLUMNS: Record<string, ColumnMeta> = {
-  exe: { label: 'Process', sortable: true },
-  process_id: { label: 'Process ID', sortable: false },
-  start_time: { label: 'Start Time', sortable: true },
-  last_update_time: { label: 'Last Update', sortable: true },
-  username: { label: 'Username', sortable: true },
-  computer: { label: 'Computer', sortable: true },
-  distro: { label: 'Distro', sortable: true },
-  cpu_brand: { label: 'CPU', sortable: true },
-  parent_process_id: { label: 'Parent Process ID', sortable: false },
-}
-
-// Get column metadata - use known metadata or generate from column name
-function getColumnMeta(columnName: string): ColumnMeta {
-  if (KNOWN_COLUMNS[columnName]) {
-    return KNOWN_COLUMNS[columnName]
+// Get column label - use known label or generate from column name
+function getColumnLabel(columnName: string): string {
+  if (KNOWN_COLUMN_LABELS[columnName]) {
+    return KNOWN_COLUMN_LABELS[columnName]
   }
   // Generate label from column name (snake_case to Title Case)
-  const label = columnName
+  return columnName
     .split('_')
     .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
     .join(' ')
-  return { label, sortable: true }
 }
 
 interface ProcessListConfig {
@@ -67,7 +60,6 @@ interface ProcessListConfig {
 
 interface SortHeaderProps {
   field: string
-  sortable: boolean
   children: React.ReactNode
   sortColumn?: string
   sortDirection?: 'asc' | 'desc'
@@ -76,20 +68,11 @@ interface SortHeaderProps {
 
 function SortHeader({
   field,
-  sortable,
   children,
   sortColumn,
   sortDirection,
   onSort,
 }: SortHeaderProps) {
-  if (!sortable) {
-    return (
-      <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-theme-text-muted">
-        {children}
-      </th>
-    )
-  }
-
   const isActive = sortColumn === field
   const showAsc = isActive && sortDirection === 'asc'
   const showDesc = isActive && sortDirection === 'desc'
@@ -244,9 +227,6 @@ export function ProcessListRenderer({
   // Three-state sort cycling: none -> ASC -> DESC -> none
   const handleSort = useCallback(
     (columnName: string) => {
-      const meta = getColumnMeta(columnName)
-      if (!meta.sortable) return
-
       let newSortColumn: string | undefined
       let newSortDirection: 'asc' | 'desc' | undefined
 
@@ -395,21 +375,17 @@ export function ProcessListRenderer({
         <table className="w-full">
           <thead className="sticky top-0">
             <tr className="bg-app-card border-b border-theme-border">
-              {columns.map((field: Field) => {
-                const meta = getColumnMeta(field.name)
-                return (
-                  <SortHeader
-                    key={field.name}
-                    field={field.name}
-                    sortable={meta.sortable}
-                    sortColumn={sortColumn}
-                    sortDirection={sortDirection}
-                    onSort={handleSort}
-                  >
-                    {meta.label}
-                  </SortHeader>
-                )
-              })}
+              {columns.map((field: Field) => (
+                <SortHeader
+                  key={field.name}
+                  field={field.name}
+                  sortColumn={sortColumn}
+                  sortDirection={sortDirection}
+                  onSort={handleSort}
+                >
+                  {getColumnLabel(field.name)}
+                </SortHeader>
+              ))}
             </tr>
           </thead>
           <tbody>
