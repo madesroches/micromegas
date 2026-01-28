@@ -9,7 +9,7 @@ import type { QueryCellConfig, CellConfig, CellState } from '../notebook-types'
 import { AvailableVariablesPanel } from '@/components/AvailableVariablesPanel'
 import { SyntaxEditor } from '@/components/SyntaxEditor'
 import { substituteMacros, DEFAULT_SQL } from '../notebook-utils'
-import { SortHeader, formatCell, buildOrderByClause, getNextSortState } from '../table-utils'
+import { SortHeader, TableBody, buildOrderByClause, getNextSortState } from '../table-utils'
 
 // =============================================================================
 // Renderer Component
@@ -69,32 +69,7 @@ export function TableCell({ data, status, options, onOptionsChange }: CellRender
             ))}
           </tr>
         </thead>
-        <tbody>
-          {Array.from({ length: data.numRows }, (_, rowIdx) => {
-            const row = data.get(rowIdx)
-            if (!row) return null
-            return (
-              <tr
-                key={rowIdx}
-                className="border-b border-theme-border hover:bg-app-card/50 transition-colors"
-              >
-                {columns.map((col) => {
-                  const value = row[col.name]
-                  const formatted = formatCell(value, col.type)
-                  return (
-                    <td
-                      key={col.name}
-                      className="px-3 py-2 text-theme-text-primary font-mono truncate max-w-xs"
-                      title={formatted}
-                    >
-                      {formatted}
-                    </td>
-                  )
-                })}
-              </tr>
-            )
-          })}
-        </tbody>
+        <TableBody data={data} columns={columns} compact />
       </table>
     </div>
   )

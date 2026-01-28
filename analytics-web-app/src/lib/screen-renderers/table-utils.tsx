@@ -71,6 +71,70 @@ export function SortHeader({
 }
 
 // =============================================================================
+// Table Body Component
+// =============================================================================
+
+/** Column definition for TableBody */
+export interface TableColumn {
+  name: string
+  type: DataType
+}
+
+/** Data interface matching Arrow Table's row access pattern */
+export interface TableData {
+  numRows: number
+  get(index: number): Record<string, unknown> | null
+}
+
+export interface TableBodyProps {
+  data: TableData
+  columns: TableColumn[]
+  /** Use compact styling for notebook cells */
+  compact?: boolean
+}
+
+export function TableBody({ data, columns, compact = false }: TableBodyProps) {
+  const rowClass = compact
+    ? 'border-b border-theme-border hover:bg-app-card/50 transition-colors'
+    : 'border-b border-theme-border hover:bg-app-card transition-colors'
+
+  const cellClass = compact
+    ? 'px-3 py-2 text-theme-text-primary font-mono truncate max-w-xs'
+    : 'px-4 py-3 text-sm text-theme-text-primary font-mono truncate max-w-xs'
+
+  return (
+    <tbody>
+      {Array.from({ length: data.numRows }, (_, rowIdx) => {
+        const row = data.get(rowIdx)
+        if (!row) return null
+        return (
+          <tr key={rowIdx} className={rowClass}>
+            {columns.map((col) => {
+              const value = row[col.name]
+              const formatted = formatCell(value, col.type)
+              // For non-compact mode, show raw value in tooltip (except binary which uses formatted)
+              const tooltip =
+                value != null
+                  ? compact
+                    ? formatted
+                    : isBinaryType(col.type)
+                      ? formatted
+                      : String(value)
+                  : undefined
+              return (
+                <td key={col.name} className={cellClass} title={tooltip}>
+                  {formatted}
+                </td>
+              )
+            })}
+          </tr>
+        )
+      })}
+    </tbody>
+  )
+}
+
+// =============================================================================
 // Cell Formatting
 // =============================================================================
 

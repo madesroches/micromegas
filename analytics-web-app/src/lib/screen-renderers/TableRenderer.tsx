@@ -5,10 +5,9 @@ import { useTimeRangeSync } from './useTimeRangeSync'
 import { useSqlHandlers } from './useSqlHandlers'
 import { LoadingState, EmptyState, SaveFooter, RendererLayout } from './shared'
 import { QueryEditor } from '@/components/QueryEditor'
-import { isBinaryType } from '@/lib/arrow-utils'
 import { useStreamQuery } from '@/hooks/useStreamQuery'
 import { useDefaultSaveCleanup } from '@/lib/url-cleanup-utils'
-import { SortHeader, formatCell, buildOrderByClause, getNextSortState } from './table-utils'
+import { SortHeader, TableBody, buildOrderByClause, getNextSortState } from './table-utils'
 
 // Variables available for table queries
 const VARIABLES = [
@@ -235,39 +234,7 @@ export function TableRenderer({
               ))}
             </tr>
           </thead>
-          <tbody>
-            {Array.from({ length: table.numRows }, (_, rowIdx) => {
-              const row = table.get(rowIdx)
-              if (!row) return null
-              return (
-                <tr
-                  key={rowIdx}
-                  className="border-b border-theme-border hover:bg-app-card transition-colors"
-                >
-                  {columns.map((col) => {
-                    const value = row[col.name]
-                    // Use formatted value for tooltip on binary types
-                    const formatted = formatCell(value, col.type)
-                    const tooltip =
-                      value != null
-                        ? isBinaryType(col.type)
-                          ? formatted
-                          : String(value)
-                        : undefined
-                    return (
-                      <td
-                        key={col.name}
-                        className="px-4 py-3 text-sm text-theme-text-primary font-mono truncate max-w-xs"
-                        title={tooltip}
-                      >
-                        {formatted}
-                      </td>
-                    )
-                  })}
-                </tr>
-              )
-            })}
-          </tbody>
+          <TableBody data={table} columns={columns} />
         </table>
       </div>
     )
