@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { ChevronUp, ChevronDown } from 'lucide-react'
 import { DataType, Field } from 'apache-arrow'
@@ -18,15 +18,16 @@ import { useDefaultSaveCleanup } from '@/lib/url-cleanup-utils'
 const VARIABLES = [
   { name: 'begin', description: 'Time range start (ISO timestamp)' },
   { name: 'end', description: 'Time range end (ISO timestamp)' },
+  {
+    name: 'order_by',
+    description: 'ORDER BY clause or empty (click headers to cycle: none -> ASC -> DESC -> none)',
+  },
 ]
-
-type SortDirection = 'asc' | 'desc'
 
 // Column metadata for special handling
 interface ColumnMeta {
   label: string
   sortable: boolean
-  sqlExpr?: string // SQL expression for sorting if different from column name
 }
 
 // Known columns with special rendering/sorting behavior
@@ -59,35 +60,63 @@ interface ProcessListConfig {
   sql: string
   timeRangeFrom?: string
   timeRangeTo?: string
+  sortColumn?: string
+  sortDirection?: 'asc' | 'desc'
   [key: string]: unknown
 }
 
-/**
- * Transforms SQL to apply the requested sort order.
- * Replaces existing ORDER BY clause or appends before LIMIT.
- */
-function applySortToSql(sql: string, field: string, direction: SortDirection): string {
-  const meta = getColumnMeta(field)
-  if (!meta.sortable) {
-    return sql
-  }
-  const sqlExpr = meta.sqlExpr ?? field
-  const orderClause = `ORDER BY ${sqlExpr} ${direction.toUpperCase()}`
+interface SortHeaderProps {
+  field: string
+  sortable: boolean
+  children: React.ReactNode
+  sortColumn?: string
+  sortDirection?: 'asc' | 'desc'
+  onSort: (field: string) => void
+}
 
-  // Check if there's an existing ORDER BY clause (case insensitive)
-  const orderByRegex = /ORDER\s+BY\s+[^)]+?(?=\s+LIMIT|\s*$)/i
-  if (orderByRegex.test(sql)) {
-    return sql.replace(orderByRegex, orderClause)
+function SortHeader({
+  field,
+  sortable,
+  children,
+  sortColumn,
+  sortDirection,
+  onSort,
+}: SortHeaderProps) {
+  if (!sortable) {
+    return (
+      <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-theme-text-muted">
+        {children}
+      </th>
+    )
   }
 
-  // No ORDER BY - insert before LIMIT if present, otherwise append
-  const limitRegex = /(\s+LIMIT\s+)/i
-  if (limitRegex.test(sql)) {
-    return sql.replace(limitRegex, `\n${orderClause}$1`)
-  }
+  const isActive = sortColumn === field
+  const showAsc = isActive && sortDirection === 'asc'
+  const showDesc = isActive && sortDirection === 'desc'
 
-  // No LIMIT either - just append
-  return `${sql.trimEnd()}\n${orderClause}`
+  return (
+    <th
+      onClick={() => onSort(field)}
+      className={`px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider cursor-pointer select-none transition-colors ${
+        isActive
+          ? 'text-theme-text-primary bg-app-card'
+          : 'text-theme-text-muted hover:text-theme-text-secondary hover:bg-app-card'
+      }`}
+    >
+      <div className="flex items-center gap-1">
+        {children}
+        {isActive && (
+          <span className="text-accent-link flex-shrink-0">
+            {showAsc ? (
+              <ChevronUp className="w-3 h-3" />
+            ) : showDesc ? (
+              <ChevronDown className="w-3 h-3" />
+            ) : null}
+          </span>
+        )}
+      </div>
+    </th>
+  )
 }
 
 export function ProcessListRenderer({
@@ -111,11 +140,11 @@ export function ProcessListRenderer({
   const [, setSearchParams] = useSearchParams()
   const handleSave = useDefaultSaveCleanup(onSave, setSearchParams)
 
-  // Sorting state (UI-only, not persisted)
-  const [sortField, setSortField] = useState<string>('last_update_time')
-  const [sortDirection, setSortDirection] = useState<SortDirection>('desc')
+  // Sort state from config (persisted)
+  const sortColumn = processListConfig.sortColumn
+  const sortDirection = processListConfig.sortDirection
 
-  // Query execution - using useStreamQuery directly to control re-execution on sort change
+  // Query execution
   const streamQuery = useStreamQuery()
   const queryError = streamQuery.error?.message ?? null
 
@@ -124,23 +153,27 @@ export function ProcessListRenderer({
   const executeRef = useRef(streamQuery.execute)
   executeRef.current = streamQuery.execute
 
-  // Execute query with current sort applied
-  const executeWithSort = useCallback(
+  // Build ORDER BY value from sort state
+  const orderByValue =
+    sortColumn && sortDirection ? `ORDER BY ${sortColumn} ${sortDirection.toUpperCase()}` : ''
+
+  // Execute query with $order_by substitution
+  const executeQuery = useCallback(
     (sql: string) => {
       currentSqlRef.current = sql
-      const sortedSql = applySortToSql(sql, sortField, sortDirection)
 
       executeRef.current({
-        sql: sortedSql,
+        sql,
         params: {
           begin: timeRange.begin,
           end: timeRange.end,
+          order_by: orderByValue,
         },
         begin: timeRange.begin,
         end: timeRange.end,
       })
     },
-    [timeRange, sortField, sortDirection]
+    [timeRange, orderByValue]
   )
 
   // Initial query execution
@@ -148,9 +181,9 @@ export function ProcessListRenderer({
   useEffect(() => {
     if (!hasExecutedRef.current) {
       hasExecutedRef.current = true
-      executeWithSort(processListConfig.sql)
+      executeQuery(processListConfig.sql)
     }
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [executeQuery, processListConfig.sql])
 
   // Re-execute on time range change
   const prevTimeRangeRef = useRef<{ begin: string; end: string } | null>(null)
@@ -164,31 +197,31 @@ export function ProcessListRenderer({
       prevTimeRangeRef.current.end !== timeRange.end
     ) {
       prevTimeRangeRef.current = { begin: timeRange.begin, end: timeRange.end }
-      executeWithSort(currentSqlRef.current)
+      executeQuery(currentSqlRef.current)
     }
-  }, [timeRange, executeWithSort])
+  }, [timeRange, executeQuery])
 
   // Re-execute on refresh trigger
   const prevRefreshTriggerRef = useRef(refreshTrigger)
   useEffect(() => {
     if (prevRefreshTriggerRef.current !== refreshTrigger) {
       prevRefreshTriggerRef.current = refreshTrigger
-      executeWithSort(currentSqlRef.current)
+      executeQuery(currentSqlRef.current)
     }
-  }, [refreshTrigger, executeWithSort])
+  }, [refreshTrigger, executeQuery])
 
-  // Re-execute when sort changes
-  const prevSortRef = useRef<{ field: string; direction: SortDirection } | null>(null)
+  // Re-execute when sort changes (orderByValue changes)
+  const prevOrderByRef = useRef<string | null>(null)
   useEffect(() => {
-    if (prevSortRef.current === null) {
-      prevSortRef.current = { field: sortField, direction: sortDirection }
+    if (prevOrderByRef.current === null) {
+      prevOrderByRef.current = orderByValue
       return
     }
-    if (prevSortRef.current.field !== sortField || prevSortRef.current.direction !== sortDirection) {
-      prevSortRef.current = { field: sortField, direction: sortDirection }
-      executeWithSort(currentSqlRef.current)
+    if (prevOrderByRef.current !== orderByValue) {
+      prevOrderByRef.current = orderByValue
+      executeQuery(currentSqlRef.current)
     }
-  }, [sortField, sortDirection, executeWithSort])
+  }, [orderByValue, executeQuery])
 
   // Sync time range changes to config
   useTimeRangeSync({
@@ -205,63 +238,58 @@ export function ProcessListRenderer({
     savedConfig: savedProcessListConfig,
     onConfigChange,
     setHasUnsavedChanges,
-    execute: (sql: string) => executeWithSort(sql),
+    execute: (sql: string) => executeQuery(sql),
   })
 
+  // Three-state sort cycling: none -> ASC -> DESC -> none
   const handleSort = useCallback(
-    (field: string) => {
-      if (sortField === field) {
-        setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc')
+    (columnName: string) => {
+      const meta = getColumnMeta(columnName)
+      if (!meta.sortable) return
+
+      let newSortColumn: string | undefined
+      let newSortDirection: 'asc' | 'desc' | undefined
+
+      if (sortColumn !== columnName) {
+        // New column: start with ASC
+        newSortColumn = columnName
+        newSortDirection = 'asc'
+      } else if (sortDirection === 'asc') {
+        // ASC -> DESC
+        newSortColumn = columnName
+        newSortDirection = 'desc'
       } else {
-        setSortField(field)
-        setSortDirection('desc')
+        // DESC -> no sort (clear)
+        newSortColumn = undefined
+        newSortDirection = undefined
+      }
+
+      onConfigChange({
+        ...processListConfig,
+        sortColumn: newSortColumn,
+        sortDirection: newSortDirection,
+      })
+
+      if (savedProcessListConfig) {
+        const savedCol = savedProcessListConfig.sortColumn
+        const savedDir = savedProcessListConfig.sortDirection
+        setHasUnsavedChanges(newSortColumn !== savedCol || newSortDirection !== savedDir)
       }
     },
-    [sortField, sortDirection]
+    [
+      sortColumn,
+      sortDirection,
+      processListConfig,
+      savedProcessListConfig,
+      onConfigChange,
+      setHasUnsavedChanges,
+    ]
   )
 
-  // Sort header component
-  const SortHeader = ({
-    field,
-    sortable,
-    children,
-    className = '',
-  }: {
-    field: string
-    sortable: boolean
-    children: React.ReactNode
-    className?: string
-  }) => {
-    if (!sortable) {
-      return (
-        <th
-          className={`px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-theme-text-muted ${className}`}
-        >
-          {children}
-        </th>
-      )
-    }
-    return (
-      <th
-        onClick={() => handleSort(field)}
-        className={`px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider cursor-pointer select-none transition-colors ${
-          sortField === field
-            ? 'text-theme-text-primary bg-app-card'
-            : 'text-theme-text-muted hover:text-theme-text-secondary hover:bg-app-card'
-        } ${className}`}
-      >
-        <div className="flex items-center gap-1">
-          {children}
-          <span className={sortField === field ? 'text-accent-link' : 'opacity-30'}>
-            {sortField === field && sortDirection === 'asc' ? (
-              <ChevronUp className="w-3 h-3" />
-            ) : (
-              <ChevronDown className="w-3 h-3" />
-            )}
-          </span>
-        </div>
-      </th>
-    )
+  // Build currentValues with order_by for QueryEditor display
+  const queryEditorValues = {
+    ...currentValues,
+    order_by: orderByValue || '(none)',
   }
 
   // Query editor panel
@@ -269,7 +297,7 @@ export function ProcessListRenderer({
     <QueryEditor
       defaultSql={savedProcessListConfig ? savedProcessListConfig.sql : processListConfig.sql}
       variables={VARIABLES}
-      currentValues={currentValues}
+      currentValues={queryEditorValues}
       timeRangeLabel={timeRangeLabel}
       onRun={handleRunQuery}
       onReset={handleResetQuery}
@@ -289,8 +317,8 @@ export function ProcessListRenderer({
   )
 
   const handleRetry = useCallback(() => {
-    executeWithSort(currentSqlRef.current)
-  }, [executeWithSort])
+    executeQuery(currentSqlRef.current)
+  }, [executeQuery])
 
   // Render a cell value based on column type and name
   const renderCell = useCallback(
@@ -370,7 +398,14 @@ export function ProcessListRenderer({
               {columns.map((field: Field) => {
                 const meta = getColumnMeta(field.name)
                 return (
-                  <SortHeader key={field.name} field={field.name} sortable={meta.sortable}>
+                  <SortHeader
+                    key={field.name}
+                    field={field.name}
+                    sortable={meta.sortable}
+                    sortColumn={sortColumn}
+                    sortDirection={sortDirection}
+                    onSort={handleSort}
+                  >
                     {meta.label}
                   </SortHeader>
                 )
