@@ -15,19 +15,19 @@ import { SortHeader, formatCell, buildOrderByClause, getNextSortState } from '..
 // Renderer Component
 // =============================================================================
 
-export function TableCell({ data, status, options, onOptionsChange, onRun }: CellRendererProps) {
+export function TableCell({ data, status, options, onOptionsChange }: CellRendererProps) {
   // Extract sort state from options
   const sortColumn = options?.sortColumn as string | undefined
   const sortDirection = options?.sortDirection as 'asc' | 'desc' | undefined
 
   // Three-state sort cycling: none -> ASC -> DESC -> none
+  // Only update options - execution is triggered by useEffect watching options changes
   const handleSort = useCallback(
     (columnName: string) => {
       const nextState = getNextSortState(columnName, sortColumn, sortDirection)
       onOptionsChange({ ...options, ...nextState })
-      onRun()
     },
-    [sortColumn, sortDirection, options, onOptionsChange, onRun]
+    [sortColumn, sortDirection, options, onOptionsChange]
   )
 
   if (status === 'loading') {
@@ -104,13 +104,15 @@ export function TableCell({ data, status, options, onOptionsChange, onRun }: Cel
 // Editor Component
 // =============================================================================
 
-// Additional variables available for table cells
-const TABLE_VARIABLES = [
-  { name: 'order_by', description: 'ORDER BY clause (click column headers to sort)' },
-]
-
 function TableCellEditor({ config, onChange, variables, timeRange }: CellEditorProps) {
   const tableConfig = config as QueryCellConfig
+
+  // Compute the current $order_by value from sort state
+  const sortColumn = tableConfig.options?.sortColumn as string | undefined
+  const sortDirection = tableConfig.options?.sortDirection as 'asc' | 'desc' | undefined
+  const orderByValue = buildOrderByClause(sortColumn, sortDirection) || '(click column headers to sort)'
+
+  const tableVariables = [{ name: 'order_by', description: orderByValue }]
 
   return (
     <>
@@ -129,7 +131,7 @@ function TableCellEditor({ config, onChange, variables, timeRange }: CellEditorP
       <AvailableVariablesPanel
         variables={variables}
         timeRange={timeRange}
-        additionalVariables={TABLE_VARIABLES}
+        additionalVariables={tableVariables}
       />
     </>
   )

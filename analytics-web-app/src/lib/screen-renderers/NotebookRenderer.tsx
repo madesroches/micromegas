@@ -28,7 +28,7 @@ import {
   CELL_TYPE_OPTIONS,
   createDefaultCell,
 } from './cell-registry'
-import type { CellConfig, VariableCellConfig, NotebookConfig } from './notebook-types'
+import type { CellConfig, VariableCellConfig, NotebookConfig, QueryCellConfig } from './notebook-types'
 import { CellContainer } from '@/components/CellContainer'
 import { CellEditor } from '@/components/CellEditor'
 import { ResizeHandle } from '@/components/ResizeHandle'
@@ -276,6 +276,34 @@ export function NotebookRenderer({
     setVariableValue,
     refreshTrigger,
   })
+
+  // Re-execute table cells when sort options change (config is source of truth)
+  const prevCellOptionsRef = useRef<Map<string, Record<string, unknown>>>(new Map())
+  useEffect(() => {
+    cells.forEach((cell, index) => {
+      if (cell.type === 'table' || cell.type === 'log') {
+        const cellConfig = cell as QueryCellConfig
+        const prevOptions = prevCellOptionsRef.current.get(cell.name)
+        const currentOptions = cellConfig.options
+
+        // Check if sort state changed
+        const prevSortColumn = prevOptions?.sortColumn
+        const prevSortDirection = prevOptions?.sortDirection
+        const currentSortColumn = currentOptions?.sortColumn
+        const currentSortDirection = currentOptions?.sortDirection
+
+        if (
+          prevOptions !== undefined &&
+          (prevSortColumn !== currentSortColumn || prevSortDirection !== currentSortDirection)
+        ) {
+          executeCell(index)
+        }
+
+        // Update tracked options
+        prevCellOptionsRef.current.set(cell.name, currentOptions ?? {})
+      }
+    })
+  }, [cells, executeCell])
 
   // UI state
   const [selectedCellIndex, setSelectedCellIndex] = useState<number | null>(null)
