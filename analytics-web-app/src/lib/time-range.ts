@@ -193,7 +193,14 @@ export function formatDuration(
 
   if (isNaN(diffMs) || diffMs < 0) return 'Invalid'
 
-  const totalSeconds = Math.floor(diffMs / 1000)
+  return formatDurationMs(diffMs)
+}
+
+// Format a duration in milliseconds as a human-readable string
+export function formatDurationMs(ms: number): string {
+  if (isNaN(ms) || ms < 0) return 'Invalid'
+
+  const totalSeconds = Math.floor(ms / 1000)
   const seconds = totalSeconds % 60
   const minutes = Math.floor(totalSeconds / 60) % 60
   const hours = Math.floor(totalSeconds / 3600) % 24

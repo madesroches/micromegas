@@ -1,6 +1,7 @@
-import { useState, useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { ChevronUp, ChevronDown } from 'lucide-react'
+import { DataType, Field } from 'apache-arrow'
 import { registerRenderer, ScreenRendererProps } from './index'
 import { useTimeRangeSync } from './useTimeRangeSync'
 import { useSqlHandlers } from './useSqlHandlers'
@@ -8,8 +9,8 @@ import { LoadingState, EmptyState, SaveFooter, RendererLayout } from './shared'
 import { QueryEditor } from '@/components/QueryEditor'
 import { AppLink } from '@/components/AppLink'
 import { CopyableProcessId } from '@/components/CopyableProcessId'
-import { formatTimestamp, formatDuration } from '@/lib/time-range'
-import { timestampToDate } from '@/lib/arrow-utils'
+import { formatTimestamp, formatDurationMs } from '@/lib/time-range'
+import { timestampToDate, isTimeType, isDurationType, durationToMs } from '@/lib/arrow-utils'
 import { useStreamQuery } from '@/hooks/useStreamQuery'
 import { useDefaultSaveCleanup } from '@/lib/url-cleanup-utils'
 
@@ -17,51 +18,88 @@ import { useDefaultSaveCleanup } from '@/lib/url-cleanup-utils'
 const VARIABLES = [
   { name: 'begin', description: 'Time range start (ISO timestamp)' },
   { name: 'end', description: 'Time range end (ISO timestamp)' },
+  {
+    name: 'order_by',
+    description: 'ORDER BY clause or empty (click headers to cycle: none -> ASC -> DESC -> none)',
+  },
 ]
 
-// Sorting types
-type ProcessSortField = 'exe' | 'start_time' | 'last_update_time' | 'runtime' | 'username' | 'computer'
-type SortDirection = 'asc' | 'desc'
+// Known column labels for better display
+const KNOWN_COLUMN_LABELS: Record<string, string> = {
+  exe: 'Process',
+  process_id: 'Process ID',
+  start_time: 'Start Time',
+  last_update_time: 'Last Update',
+  username: 'Username',
+  computer: 'Computer',
+  distro: 'Distro',
+  cpu_brand: 'CPU',
+  parent_process_id: 'Parent Process ID',
+}
 
-// Map UI field names to SQL expressions
-const SORT_FIELD_TO_SQL: Record<ProcessSortField, string> = {
-  exe: 'exe',
-  start_time: 'start_time',
-  last_update_time: 'last_update_time',
-  runtime: '(last_update_time - start_time)',
-  username: 'username',
-  computer: 'computer',
+// Get column label - use known label or generate from column name
+function getColumnLabel(columnName: string): string {
+  if (KNOWN_COLUMN_LABELS[columnName]) {
+    return KNOWN_COLUMN_LABELS[columnName]
+  }
+  // Generate label from column name (snake_case to Title Case)
+  return columnName
+    .split('_')
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ')
 }
 
 interface ProcessListConfig {
   sql: string
   timeRangeFrom?: string
   timeRangeTo?: string
+  sortColumn?: string
+  sortDirection?: 'asc' | 'desc'
   [key: string]: unknown
 }
 
-/**
- * Transforms SQL to apply the requested sort order.
- * Replaces existing ORDER BY clause or appends before LIMIT.
- */
-function applySortToSql(sql: string, field: ProcessSortField, direction: SortDirection): string {
-  const sqlExpr = SORT_FIELD_TO_SQL[field]
-  const orderClause = `ORDER BY ${sqlExpr} ${direction.toUpperCase()}`
+interface SortHeaderProps {
+  field: string
+  children: React.ReactNode
+  sortColumn?: string
+  sortDirection?: 'asc' | 'desc'
+  onSort: (field: string) => void
+}
 
-  // Check if there's an existing ORDER BY clause (case insensitive)
-  const orderByRegex = /ORDER\s+BY\s+[^)]+?(?=\s+LIMIT|\s*$)/i
-  if (orderByRegex.test(sql)) {
-    return sql.replace(orderByRegex, orderClause)
-  }
+function SortHeader({
+  field,
+  children,
+  sortColumn,
+  sortDirection,
+  onSort,
+}: SortHeaderProps) {
+  const isActive = sortColumn === field
+  const showAsc = isActive && sortDirection === 'asc'
+  const showDesc = isActive && sortDirection === 'desc'
 
-  // No ORDER BY - insert before LIMIT if present, otherwise append
-  const limitRegex = /(\s+LIMIT\s+)/i
-  if (limitRegex.test(sql)) {
-    return sql.replace(limitRegex, `\n${orderClause}$1`)
-  }
-
-  // No LIMIT either - just append
-  return `${sql.trimEnd()}\n${orderClause}`
+  return (
+    <th
+      onClick={() => onSort(field)}
+      className={`px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider cursor-pointer select-none transition-colors ${
+        isActive
+          ? 'text-theme-text-primary bg-app-card'
+          : 'text-theme-text-muted hover:text-theme-text-secondary hover:bg-app-card'
+      }`}
+    >
+      <div className="flex items-center gap-1">
+        {children}
+        {isActive && (
+          <span className="text-accent-link flex-shrink-0">
+            {showAsc ? (
+              <ChevronUp className="w-3 h-3" />
+            ) : showDesc ? (
+              <ChevronDown className="w-3 h-3" />
+            ) : null}
+          </span>
+        )}
+      </div>
+    </th>
+  )
 }
 
 export function ProcessListRenderer({
@@ -85,11 +123,11 @@ export function ProcessListRenderer({
   const [, setSearchParams] = useSearchParams()
   const handleSave = useDefaultSaveCleanup(onSave, setSearchParams)
 
-  // Sorting state (UI-only, not persisted)
-  const [sortField, setSortField] = useState<ProcessSortField>('last_update_time')
-  const [sortDirection, setSortDirection] = useState<SortDirection>('desc')
+  // Sort state from config (persisted)
+  const sortColumn = processListConfig.sortColumn
+  const sortDirection = processListConfig.sortDirection
 
-  // Query execution - using useStreamQuery directly to control re-execution on sort change
+  // Query execution
   const streamQuery = useStreamQuery()
   const queryError = streamQuery.error?.message ?? null
 
@@ -98,23 +136,27 @@ export function ProcessListRenderer({
   const executeRef = useRef(streamQuery.execute)
   executeRef.current = streamQuery.execute
 
-  // Execute query with current sort applied
-  const executeWithSort = useCallback(
+  // Build ORDER BY value from sort state
+  const orderByValue =
+    sortColumn && sortDirection ? `ORDER BY ${sortColumn} ${sortDirection.toUpperCase()}` : ''
+
+  // Execute query with $order_by substitution
+  const executeQuery = useCallback(
     (sql: string) => {
       currentSqlRef.current = sql
-      const sortedSql = applySortToSql(sql, sortField, sortDirection)
 
       executeRef.current({
-        sql: sortedSql,
+        sql,
         params: {
           begin: timeRange.begin,
           end: timeRange.end,
+          order_by: orderByValue,
         },
         begin: timeRange.begin,
         end: timeRange.end,
       })
     },
-    [timeRange, sortField, sortDirection]
+    [timeRange, orderByValue]
   )
 
   // Initial query execution
@@ -122,9 +164,9 @@ export function ProcessListRenderer({
   useEffect(() => {
     if (!hasExecutedRef.current) {
       hasExecutedRef.current = true
-      executeWithSort(processListConfig.sql)
+      executeQuery(processListConfig.sql)
     }
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [executeQuery, processListConfig.sql])
 
   // Re-execute on time range change
   const prevTimeRangeRef = useRef<{ begin: string; end: string } | null>(null)
@@ -138,31 +180,31 @@ export function ProcessListRenderer({
       prevTimeRangeRef.current.end !== timeRange.end
     ) {
       prevTimeRangeRef.current = { begin: timeRange.begin, end: timeRange.end }
-      executeWithSort(currentSqlRef.current)
+      executeQuery(currentSqlRef.current)
     }
-  }, [timeRange, executeWithSort])
+  }, [timeRange, executeQuery])
 
   // Re-execute on refresh trigger
   const prevRefreshTriggerRef = useRef(refreshTrigger)
   useEffect(() => {
     if (prevRefreshTriggerRef.current !== refreshTrigger) {
       prevRefreshTriggerRef.current = refreshTrigger
-      executeWithSort(currentSqlRef.current)
+      executeQuery(currentSqlRef.current)
     }
-  }, [refreshTrigger, executeWithSort])
+  }, [refreshTrigger, executeQuery])
 
-  // Re-execute when sort changes
-  const prevSortRef = useRef<{ field: ProcessSortField; direction: SortDirection } | null>(null)
+  // Re-execute when sort changes (orderByValue changes)
+  const prevOrderByRef = useRef<string | null>(null)
   useEffect(() => {
-    if (prevSortRef.current === null) {
-      prevSortRef.current = { field: sortField, direction: sortDirection }
+    if (prevOrderByRef.current === null) {
+      prevOrderByRef.current = orderByValue
       return
     }
-    if (prevSortRef.current.field !== sortField || prevSortRef.current.direction !== sortDirection) {
-      prevSortRef.current = { field: sortField, direction: sortDirection }
-      executeWithSort(currentSqlRef.current)
+    if (prevOrderByRef.current !== orderByValue) {
+      prevOrderByRef.current = orderByValue
+      executeQuery(currentSqlRef.current)
     }
-  }, [sortField, sortDirection, executeWithSort])
+  }, [orderByValue, executeQuery])
 
   // Sync time range changes to config
   useTimeRangeSync({
@@ -179,58 +221,63 @@ export function ProcessListRenderer({
     savedConfig: savedProcessListConfig,
     onConfigChange,
     setHasUnsavedChanges,
-    execute: (sql: string) => executeWithSort(sql),
+    execute: (sql: string) => executeQuery(sql),
   })
 
+  // Three-state sort cycling: none -> ASC -> DESC -> none
   const handleSort = useCallback(
-    (field: ProcessSortField) => {
-      if (sortField === field) {
-        setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc')
+    (columnName: string) => {
+      let newSortColumn: string | undefined
+      let newSortDirection: 'asc' | 'desc' | undefined
+
+      if (sortColumn !== columnName) {
+        // New column: start with ASC
+        newSortColumn = columnName
+        newSortDirection = 'asc'
+      } else if (sortDirection === 'asc') {
+        // ASC -> DESC
+        newSortColumn = columnName
+        newSortDirection = 'desc'
       } else {
-        setSortField(field)
-        setSortDirection('desc')
+        // DESC -> no sort (clear)
+        newSortColumn = undefined
+        newSortDirection = undefined
+      }
+
+      onConfigChange({
+        ...processListConfig,
+        sortColumn: newSortColumn,
+        sortDirection: newSortDirection,
+      })
+
+      if (savedProcessListConfig) {
+        const savedCol = savedProcessListConfig.sortColumn
+        const savedDir = savedProcessListConfig.sortDirection
+        setHasUnsavedChanges(newSortColumn !== savedCol || newSortDirection !== savedDir)
       }
     },
-    [sortField, sortDirection]
+    [
+      sortColumn,
+      sortDirection,
+      processListConfig,
+      savedProcessListConfig,
+      onConfigChange,
+      setHasUnsavedChanges,
+    ]
   )
 
-  // Sort header component
-  const SortHeader = ({
-    field,
-    children,
-    className = '',
-  }: {
-    field: ProcessSortField
-    children: React.ReactNode
-    className?: string
-  }) => (
-    <th
-      onClick={() => handleSort(field)}
-      className={`px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider cursor-pointer select-none transition-colors ${
-        sortField === field
-          ? 'text-theme-text-primary bg-app-card'
-          : 'text-theme-text-muted hover:text-theme-text-secondary hover:bg-app-card'
-      } ${className}`}
-    >
-      <div className="flex items-center gap-1">
-        {children}
-        <span className={sortField === field ? 'text-accent-link' : 'opacity-30'}>
-          {sortField === field && sortDirection === 'asc' ? (
-            <ChevronUp className="w-3 h-3" />
-          ) : (
-            <ChevronDown className="w-3 h-3" />
-          )}
-        </span>
-      </div>
-    </th>
-  )
+  // Build currentValues with order_by for QueryEditor display
+  const queryEditorValues = {
+    ...currentValues,
+    order_by: orderByValue || '(none)',
+  }
 
   // Query editor panel
   const sqlPanel = (
     <QueryEditor
       defaultSql={savedProcessListConfig ? savedProcessListConfig.sql : processListConfig.sql}
       variables={VARIABLES}
-      currentValues={currentValues}
+      currentValues={queryEditorValues}
       timeRangeLabel={timeRangeLabel}
       onRun={handleRunQuery}
       onReset={handleResetQuery}
@@ -250,8 +297,76 @@ export function ProcessListRenderer({
   )
 
   const handleRetry = useCallback(() => {
-    executeWithSort(currentSqlRef.current)
-  }, [executeWithSort])
+    executeQuery(currentSqlRef.current)
+  }, [executeQuery])
+
+  // Render a cell value based on column type and name
+  const renderCell = useCallback(
+    (
+      columnName: string,
+      dataType: DataType,
+      row: Record<string, unknown>,
+      processId: string,
+      fromParam: string,
+      toParam: string
+    ) => {
+      const value = row[columnName]
+
+      // Special rendering for known columns
+      if (columnName === 'exe') {
+        // Only render as link if we have a process_id to link to
+        if (!processId) {
+          return <span className="text-theme-text-primary">{String(value ?? '')}</span>
+        }
+        // Use process times if available, otherwise fall back to screen's time range
+        const linkFrom = fromParam || timeRange.begin
+        const linkTo = toParam || timeRange.end
+        return (
+          <AppLink
+            href={`/process?process_id=${processId}&from=${encodeURIComponent(linkFrom)}&to=${encodeURIComponent(linkTo)}`}
+            className="text-accent-link hover:underline"
+          >
+            {String(value ?? '')}
+          </AppLink>
+        )
+      }
+
+      if (columnName === 'process_id' || columnName === 'parent_process_id') {
+        const id = String(value ?? '')
+        return (
+          <CopyableProcessId
+            processId={id}
+            truncate={true}
+            className="text-sm font-mono text-theme-text-secondary"
+          />
+        )
+      }
+
+      // Check if it's a timestamp type using Arrow type
+      if (isTimeType(dataType)) {
+        const date = timestampToDate(value, dataType)
+        return (
+          <span className="font-mono text-sm text-theme-text-primary">
+            {date ? formatTimestamp(date) : '-'}
+          </span>
+        )
+      }
+
+      // Check if it's a duration type
+      if (isDurationType(dataType)) {
+        const ms = durationToMs(value, dataType)
+        return (
+          <span className="font-mono text-sm text-theme-text-secondary">
+            {formatDurationMs(ms)}
+          </span>
+        )
+      }
+
+      // Default rendering
+      return <span className="text-theme-text-primary">{String(value ?? '')}</span>
+    },
+    [timeRange.begin, timeRange.end]
+  )
 
   // Render content
   const renderContent = () => {
@@ -265,79 +380,53 @@ export function ProcessListRenderer({
       return <EmptyState message="No processes available." />
     }
 
+    const columns = table.schema.fields
+
+    // Check if we have process_id for linking (needed for exe links)
+    const hasProcessId = columns.some((f: Field) => f.name === 'process_id')
+    const hasStartTime = columns.some((f: Field) => f.name === 'start_time')
+    const hasLastUpdateTime = columns.some((f: Field) => f.name === 'last_update_time')
+
     return (
       <div className="flex-1 overflow-auto bg-app-panel border border-theme-border rounded-lg">
         <table className="w-full">
           <thead className="sticky top-0">
             <tr className="bg-app-card border-b border-theme-border">
-              <SortHeader field="exe">Process</SortHeader>
-              <th className="hidden sm:table-cell px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-theme-text-muted">
-                Process ID
-              </th>
-              <SortHeader field="start_time">Start Time</SortHeader>
-              <SortHeader field="last_update_time" className="hidden lg:table-cell">
-                Last Update
-              </SortHeader>
-              <SortHeader field="runtime" className="hidden lg:table-cell">
-                Runtime
-              </SortHeader>
-              <SortHeader field="username" className="hidden md:table-cell">
-                Username
-              </SortHeader>
-              <SortHeader field="computer" className="hidden md:table-cell">
-                Computer
-              </SortHeader>
+              {columns.map((field: Field) => (
+                <SortHeader
+                  key={field.name}
+                  field={field.name}
+                  sortColumn={sortColumn}
+                  sortDirection={sortDirection}
+                  onSort={handleSort}
+                >
+                  {getColumnLabel(field.name)}
+                </SortHeader>
+              ))}
             </tr>
           </thead>
           <tbody>
             {Array.from({ length: table.numRows }, (_, i) => {
-              const row = table.get(i)
+              const row = table.get(i) as Record<string, unknown> | null
               if (!row) return null
-              const processId = String(row.process_id ?? '')
-              const exe = String(row.exe ?? '')
-              const startTime = row.start_time
-              const lastUpdateTime = row.last_update_time
-              const username = String(row.username ?? '')
-              const computer = String(row.computer ?? '')
-              const startDate = timestampToDate(startTime)
-              const endDate = timestampToDate(lastUpdateTime)
+
+              // Get process context for linking
+              const processId = hasProcessId ? String(row.process_id ?? '') : ''
+              const startDate = hasStartTime ? timestampToDate(row.start_time) : null
+              const endDate = hasLastUpdateTime ? timestampToDate(row.last_update_time) : null
               const fromParam = startDate?.toISOString() ?? ''
               const toParam = endDate?.toISOString() ?? ''
+
               return (
                 <tr
                   key={processId || i}
                   className="border-b border-theme-border hover:bg-app-card transition-colors"
                 >
-                  <td className="px-4 py-3">
-                    <AppLink
-                      href={`/process?process_id=${processId}&from=${encodeURIComponent(fromParam)}&to=${encodeURIComponent(toParam)}`}
-                      className="text-accent-link hover:underline"
-                    >
-                      {exe}
-                    </AppLink>
-                  </td>
-                  <td className="hidden sm:table-cell px-4 py-3">
-                    <CopyableProcessId
-                      processId={processId}
-                      truncate={true}
-                      className="text-sm font-mono text-theme-text-secondary"
-                    />
-                  </td>
-                  <td className="px-4 py-3 font-mono text-sm text-theme-text-primary">
-                    {formatTimestamp(startTime)}
-                  </td>
-                  <td className="hidden lg:table-cell px-4 py-3 font-mono text-sm text-theme-text-primary">
-                    {formatTimestamp(lastUpdateTime)}
-                  </td>
-                  <td className="hidden lg:table-cell px-4 py-3 font-mono text-sm text-theme-text-secondary">
-                    {formatDuration(startTime, lastUpdateTime)}
-                  </td>
-                  <td className="hidden md:table-cell px-4 py-3 text-theme-text-primary">
-                    {username}
-                  </td>
-                  <td className="hidden md:table-cell px-4 py-3 text-theme-text-primary">
-                    {computer}
-                  </td>
+                  {columns.map((field: Field) => (
+                    <td key={field.name} className="px-4 py-3">
+                      {renderCell(field.name, field.type, row, processId, fromParam, toParam)}
+                    </td>
+                  ))}
                 </tr>
               )
             })}
