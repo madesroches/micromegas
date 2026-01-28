@@ -89,24 +89,25 @@ export function isDurationType(dataType: DataType): boolean {
 export function durationToMs(value: unknown, dataType?: DataType): number {
   if (!value) return 0
 
-  const numValue = typeof value === 'bigint' ? value : BigInt(Number(value))
+  // Convert to Number early to preserve fractional milliseconds
+  const numValue = typeof value === 'bigint' ? Number(value) : Number(value)
 
   if (dataType && DataType.isDuration(dataType)) {
     const durationType = dataType as Duration
     switch (durationType.unit) {
       case TimeUnit.SECOND:
-        return Number(numValue) * 1000
+        return numValue * 1000
       case TimeUnit.MILLISECOND:
-        return Number(numValue)
+        return numValue
       case TimeUnit.MICROSECOND:
-        return Number(numValue / 1000n)
+        return numValue / 1000
       case TimeUnit.NANOSECOND:
-        return Number(numValue / 1000000n)
+        return numValue / 1000000
     }
   }
 
   // Default: assume nanoseconds
-  return Number(numValue / 1000000n)
+  return numValue / 1000000
 }
 
 /**
