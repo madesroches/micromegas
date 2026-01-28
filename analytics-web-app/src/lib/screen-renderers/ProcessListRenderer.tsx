@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { ChevronUp, ChevronDown } from 'lucide-react'
+import { DataType, Field } from 'apache-arrow'
 import { registerRenderer, ScreenRendererProps } from './index'
 import { useTimeRangeSync } from './useTimeRangeSync'
 import { useSqlHandlers } from './useSqlHandlers'
@@ -8,8 +9,8 @@ import { LoadingState, EmptyState, SaveFooter, RendererLayout } from './shared'
 import { QueryEditor } from '@/components/QueryEditor'
 import { AppLink } from '@/components/AppLink'
 import { CopyableProcessId } from '@/components/CopyableProcessId'
-import { formatTimestamp, formatDuration } from '@/lib/time-range'
-import { timestampToDate } from '@/lib/arrow-utils'
+import { formatTimestamp } from '@/lib/time-range'
+import { timestampToDate, isTimeType } from '@/lib/arrow-utils'
 import { useStreamQuery } from '@/hooks/useStreamQuery'
 import { useDefaultSaveCleanup } from '@/lib/url-cleanup-utils'
 
@@ -19,18 +20,39 @@ const VARIABLES = [
   { name: 'end', description: 'Time range end (ISO timestamp)' },
 ]
 
-// Sorting types
-type ProcessSortField = 'exe' | 'start_time' | 'last_update_time' | 'runtime' | 'username' | 'computer'
 type SortDirection = 'asc' | 'desc'
 
-// Map UI field names to SQL expressions
-const SORT_FIELD_TO_SQL: Record<ProcessSortField, string> = {
-  exe: 'exe',
-  start_time: 'start_time',
-  last_update_time: 'last_update_time',
-  runtime: '(last_update_time - start_time)',
-  username: 'username',
-  computer: 'computer',
+// Column metadata for special handling
+interface ColumnMeta {
+  label: string
+  sortable: boolean
+  sqlExpr?: string // SQL expression for sorting if different from column name
+}
+
+// Known columns with special rendering/sorting behavior
+const KNOWN_COLUMNS: Record<string, ColumnMeta> = {
+  exe: { label: 'Process', sortable: true },
+  process_id: { label: 'Process ID', sortable: false },
+  start_time: { label: 'Start Time', sortable: true },
+  last_update_time: { label: 'Last Update', sortable: true },
+  username: { label: 'Username', sortable: true },
+  computer: { label: 'Computer', sortable: true },
+  distro: { label: 'Distro', sortable: true },
+  cpu_brand: { label: 'CPU', sortable: true },
+  parent_process_id: { label: 'Parent Process ID', sortable: false },
+}
+
+// Get column metadata - use known metadata or generate from column name
+function getColumnMeta(columnName: string): ColumnMeta {
+  if (KNOWN_COLUMNS[columnName]) {
+    return KNOWN_COLUMNS[columnName]
+  }
+  // Generate label from column name (snake_case to Title Case)
+  const label = columnName
+    .split('_')
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ')
+  return { label, sortable: true }
 }
 
 interface ProcessListConfig {
@@ -44,8 +66,12 @@ interface ProcessListConfig {
  * Transforms SQL to apply the requested sort order.
  * Replaces existing ORDER BY clause or appends before LIMIT.
  */
-function applySortToSql(sql: string, field: ProcessSortField, direction: SortDirection): string {
-  const sqlExpr = SORT_FIELD_TO_SQL[field]
+function applySortToSql(sql: string, field: string, direction: SortDirection): string {
+  const meta = getColumnMeta(field)
+  if (!meta.sortable) {
+    return sql
+  }
+  const sqlExpr = meta.sqlExpr ?? field
   const orderClause = `ORDER BY ${sqlExpr} ${direction.toUpperCase()}`
 
   // Check if there's an existing ORDER BY clause (case insensitive)
@@ -86,7 +112,7 @@ export function ProcessListRenderer({
   const handleSave = useDefaultSaveCleanup(onSave, setSearchParams)
 
   // Sorting state (UI-only, not persisted)
-  const [sortField, setSortField] = useState<ProcessSortField>('last_update_time')
+  const [sortField, setSortField] = useState<string>('last_update_time')
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc')
 
   // Query execution - using useStreamQuery directly to control re-execution on sort change
@@ -152,7 +178,7 @@ export function ProcessListRenderer({
   }, [refreshTrigger, executeWithSort])
 
   // Re-execute when sort changes
-  const prevSortRef = useRef<{ field: ProcessSortField; direction: SortDirection } | null>(null)
+  const prevSortRef = useRef<{ field: string; direction: SortDirection } | null>(null)
   useEffect(() => {
     if (prevSortRef.current === null) {
       prevSortRef.current = { field: sortField, direction: sortDirection }
@@ -183,7 +209,7 @@ export function ProcessListRenderer({
   })
 
   const handleSort = useCallback(
-    (field: ProcessSortField) => {
+    (field: string) => {
       if (sortField === field) {
         setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc')
       } else {
@@ -197,33 +223,46 @@ export function ProcessListRenderer({
   // Sort header component
   const SortHeader = ({
     field,
+    sortable,
     children,
     className = '',
   }: {
-    field: ProcessSortField
+    field: string
+    sortable: boolean
     children: React.ReactNode
     className?: string
-  }) => (
-    <th
-      onClick={() => handleSort(field)}
-      className={`px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider cursor-pointer select-none transition-colors ${
-        sortField === field
-          ? 'text-theme-text-primary bg-app-card'
-          : 'text-theme-text-muted hover:text-theme-text-secondary hover:bg-app-card'
-      } ${className}`}
-    >
-      <div className="flex items-center gap-1">
-        {children}
-        <span className={sortField === field ? 'text-accent-link' : 'opacity-30'}>
-          {sortField === field && sortDirection === 'asc' ? (
-            <ChevronUp className="w-3 h-3" />
-          ) : (
-            <ChevronDown className="w-3 h-3" />
-          )}
-        </span>
-      </div>
-    </th>
-  )
+  }) => {
+    if (!sortable) {
+      return (
+        <th
+          className={`px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-theme-text-muted ${className}`}
+        >
+          {children}
+        </th>
+      )
+    }
+    return (
+      <th
+        onClick={() => handleSort(field)}
+        className={`px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider cursor-pointer select-none transition-colors ${
+          sortField === field
+            ? 'text-theme-text-primary bg-app-card'
+            : 'text-theme-text-muted hover:text-theme-text-secondary hover:bg-app-card'
+        } ${className}`}
+      >
+        <div className="flex items-center gap-1">
+          {children}
+          <span className={sortField === field ? 'text-accent-link' : 'opacity-30'}>
+            {sortField === field && sortDirection === 'asc' ? (
+              <ChevronUp className="w-3 h-3" />
+            ) : (
+              <ChevronDown className="w-3 h-3" />
+            )}
+          </span>
+        </div>
+      </th>
+    )
+  }
 
   // Query editor panel
   const sqlPanel = (
@@ -253,6 +292,57 @@ export function ProcessListRenderer({
     executeWithSort(currentSqlRef.current)
   }, [executeWithSort])
 
+  // Render a cell value based on column type and name
+  const renderCell = useCallback(
+    (
+      columnName: string,
+      dataType: DataType,
+      row: Record<string, unknown>,
+      processId: string,
+      fromParam: string,
+      toParam: string
+    ) => {
+      const value = row[columnName]
+
+      // Special rendering for known columns
+      if (columnName === 'exe') {
+        // Use process times if available, otherwise fall back to screen's time range
+        const linkFrom = fromParam || timeRange.begin
+        const linkTo = toParam || timeRange.end
+        return (
+          <AppLink
+            href={`/process?process_id=${processId}&from=${encodeURIComponent(linkFrom)}&to=${encodeURIComponent(linkTo)}`}
+            className="text-accent-link hover:underline"
+          >
+            {String(value ?? '')}
+          </AppLink>
+        )
+      }
+
+      if (columnName === 'process_id' || columnName === 'parent_process_id') {
+        const id = String(value ?? '')
+        return (
+          <CopyableProcessId
+            processId={id}
+            truncate={true}
+            className="text-sm font-mono text-theme-text-secondary"
+          />
+        )
+      }
+
+      // Check if it's a timestamp type using Arrow type
+      if (isTimeType(dataType)) {
+        return (
+          <span className="font-mono text-sm text-theme-text-primary">{formatTimestamp(value)}</span>
+        )
+      }
+
+      // Default rendering
+      return <span className="text-theme-text-primary">{String(value ?? '')}</span>
+    },
+    [timeRange.begin, timeRange.end]
+  )
+
   // Render content
   const renderContent = () => {
     const table = streamQuery.getTable()
@@ -265,79 +355,50 @@ export function ProcessListRenderer({
       return <EmptyState message="No processes available." />
     }
 
+    const columns = table.schema.fields
+
+    // Check if we have process_id for linking (needed for exe links)
+    const hasProcessId = columns.some((f: Field) => f.name === 'process_id')
+    const hasStartTime = columns.some((f: Field) => f.name === 'start_time')
+    const hasLastUpdateTime = columns.some((f: Field) => f.name === 'last_update_time')
+
     return (
       <div className="flex-1 overflow-auto bg-app-panel border border-theme-border rounded-lg">
         <table className="w-full">
           <thead className="sticky top-0">
             <tr className="bg-app-card border-b border-theme-border">
-              <SortHeader field="exe">Process</SortHeader>
-              <th className="hidden sm:table-cell px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-theme-text-muted">
-                Process ID
-              </th>
-              <SortHeader field="start_time">Start Time</SortHeader>
-              <SortHeader field="last_update_time" className="hidden lg:table-cell">
-                Last Update
-              </SortHeader>
-              <SortHeader field="runtime" className="hidden lg:table-cell">
-                Runtime
-              </SortHeader>
-              <SortHeader field="username" className="hidden md:table-cell">
-                Username
-              </SortHeader>
-              <SortHeader field="computer" className="hidden md:table-cell">
-                Computer
-              </SortHeader>
+              {columns.map((field: Field) => {
+                const meta = getColumnMeta(field.name)
+                return (
+                  <SortHeader key={field.name} field={field.name} sortable={meta.sortable}>
+                    {meta.label}
+                  </SortHeader>
+                )
+              })}
             </tr>
           </thead>
           <tbody>
             {Array.from({ length: table.numRows }, (_, i) => {
-              const row = table.get(i)
+              const row = table.get(i) as Record<string, unknown> | null
               if (!row) return null
-              const processId = String(row.process_id ?? '')
-              const exe = String(row.exe ?? '')
-              const startTime = row.start_time
-              const lastUpdateTime = row.last_update_time
-              const username = String(row.username ?? '')
-              const computer = String(row.computer ?? '')
-              const startDate = timestampToDate(startTime)
-              const endDate = timestampToDate(lastUpdateTime)
+
+              // Get process context for linking
+              const processId = hasProcessId ? String(row.process_id ?? '') : ''
+              const startDate = hasStartTime ? timestampToDate(row.start_time) : null
+              const endDate = hasLastUpdateTime ? timestampToDate(row.last_update_time) : null
               const fromParam = startDate?.toISOString() ?? ''
               const toParam = endDate?.toISOString() ?? ''
+
               return (
                 <tr
                   key={processId || i}
                   className="border-b border-theme-border hover:bg-app-card transition-colors"
                 >
-                  <td className="px-4 py-3">
-                    <AppLink
-                      href={`/process?process_id=${processId}&from=${encodeURIComponent(fromParam)}&to=${encodeURIComponent(toParam)}`}
-                      className="text-accent-link hover:underline"
-                    >
-                      {exe}
-                    </AppLink>
-                  </td>
-                  <td className="hidden sm:table-cell px-4 py-3">
-                    <CopyableProcessId
-                      processId={processId}
-                      truncate={true}
-                      className="text-sm font-mono text-theme-text-secondary"
-                    />
-                  </td>
-                  <td className="px-4 py-3 font-mono text-sm text-theme-text-primary">
-                    {formatTimestamp(startTime)}
-                  </td>
-                  <td className="hidden lg:table-cell px-4 py-3 font-mono text-sm text-theme-text-primary">
-                    {formatTimestamp(lastUpdateTime)}
-                  </td>
-                  <td className="hidden lg:table-cell px-4 py-3 font-mono text-sm text-theme-text-secondary">
-                    {formatDuration(startTime, lastUpdateTime)}
-                  </td>
-                  <td className="hidden md:table-cell px-4 py-3 text-theme-text-primary">
-                    {username}
-                  </td>
-                  <td className="hidden md:table-cell px-4 py-3 text-theme-text-primary">
-                    {computer}
-                  </td>
+                  {columns.map((field: Field) => (
+                    <td key={field.name} className="px-4 py-3">
+                      {renderCell(field.name, field.type, row, processId, fromParam, toParam)}
+                    </td>
+                  ))}
                 </tr>
               )
             })}
