@@ -65,11 +65,13 @@ export function useSqlHandlers({
 
   const handleSqlChange = useCallback(
     (sql: string) => {
+      // Update config immediately so Save will save the current editor content
+      onConfigChange({ ...config, sql })
       if (savedConfig) {
         setHasUnsavedChanges(sql !== savedConfig.sql)
       }
     },
-    [savedConfig, setHasUnsavedChanges]
+    [config, savedConfig, onConfigChange, setHasUnsavedChanges]
   )
 
   return { handleRunQuery, handleResetQuery, handleSqlChange }
