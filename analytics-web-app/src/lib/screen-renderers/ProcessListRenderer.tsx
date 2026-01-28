@@ -24,30 +24,6 @@ const VARIABLES = [
   },
 ]
 
-// Known column labels for better display
-const KNOWN_COLUMN_LABELS: Record<string, string> = {
-  exe: 'Process',
-  process_id: 'Process ID',
-  start_time: 'Start Time',
-  last_update_time: 'Last Update',
-  username: 'Username',
-  computer: 'Computer',
-  distro: 'Distro',
-  cpu_brand: 'CPU',
-  parent_process_id: 'Parent Process ID',
-}
-
-// Get column label - use known label or generate from column name
-function getColumnLabel(columnName: string): string {
-  if (KNOWN_COLUMN_LABELS[columnName]) {
-    return KNOWN_COLUMN_LABELS[columnName]
-  }
-  // Generate label from column name (snake_case to Title Case)
-  return columnName
-    .split('_')
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-    .join(' ')
-}
 
 interface ProcessListConfig {
   sql: string
@@ -400,7 +376,7 @@ export function ProcessListRenderer({
                   sortDirection={sortDirection}
                   onSort={handleSort}
                 >
-                  {getColumnLabel(field.name)}
+                  {field.name}
                 </SortHeader>
               ))}
             </tr>
