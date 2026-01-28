@@ -314,6 +314,10 @@ export function ProcessListRenderer({
 
       // Special rendering for known columns
       if (columnName === 'exe') {
+        // Only render as link if we have a process_id to link to
+        if (!processId) {
+          return <span className="text-theme-text-primary">{String(value ?? '')}</span>
+        }
         // Use process times if available, otherwise fall back to screen's time range
         const linkFrom = fromParam || timeRange.begin
         const linkTo = toParam || timeRange.end
