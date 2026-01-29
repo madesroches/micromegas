@@ -40,225 +40,57 @@ WHERE duration > 1000000;  -- > 1ms
 
 #### `list_partitions()` 🔧
 
-**Administrative Function** - Lists available data partitions in the lakehouse.
+**Administrative Function** - Lists available data partitions in the lakehouse with metadata including file paths, sizes, and schema hashes.
 
-**Syntax:**
-```sql
-SELECT * FROM list_partitions()
-```
-
-**Returns:**
-
-| Column | Type | Description |
-|--------|------|-------------|
-| view_set_name | Utf8 | Name of the view set |
-| view_instance_id | Utf8 | Instance identifier |
-| begin_insert_time | Timestamp(Nanosecond) | Partition start time |
-| end_insert_time | Timestamp(Nanosecond) | Partition end time |
-| min_event_time | Timestamp(Nanosecond) | Earliest event time |
-| max_event_time | Timestamp(Nanosecond) | Latest event time |
-| updated | Timestamp(Nanosecond) | Last update time |
-| file_path | Utf8 | Partition file path |
-| file_size | Int64 | File size in bytes |
-| file_schema_hash | Binary | Hash of the file schema |
-| source_data_hash | Binary | Hash of the source data |
-| num_rows | Int64 | Number of rows in the partition |
-| partition_format_version | Int32 | Parquet format version (1=Arrow 56.0, 2=Arrow 57.0) |
-
-**Example:**
-```sql
--- View partition information
-SELECT view_set_name, view_instance_id, file_size
-FROM list_partitions()
-ORDER BY updated DESC;
-```
-
-**ℹ️ Administrative Use:** This function provides system-level partition metadata primarily useful for administrators monitoring lakehouse storage and partition management. Regular users querying data typically don't need this information.
+See [Admin Functions Reference](../admin/functions-reference.md#list_partitions) for details.
 
 #### `retire_partitions(view_set_name, view_instance_id, begin_insert_time, end_insert_time)` 🔧
 
-**Administrative Function** - Retires (removes) data partitions from the lakehouse for a specified time range. Returns a log stream of the operation.
+**Administrative Function** - Retires data partitions from the lakehouse for a specified time range.
 
-**Syntax:**
-```sql
-SELECT * FROM retire_partitions(view_set_name, view_instance_id, begin_insert_time, end_insert_time)
-```
-
-**Parameters:**
-
-- `view_set_name` (`Utf8`): Name of the view set
-
-- `view_instance_id` (`Utf8`): Instance identifier
-
-- `begin_insert_time` (`Timestamp(Nanosecond)`): Start time for partition retirement
-
-- `end_insert_time` (`Timestamp(Nanosecond)`): End time for partition retirement
-
-**Returns:** Log stream table with operation progress and messages
-
-**Example:**
-```sql
--- Retire old partitions for a specific view
-SELECT * FROM retire_partitions(
-    'log_entries', 
-    'global',
-    NOW() - INTERVAL '30 days',
-    NOW() - INTERVAL '7 days'
-);
-```
-
-**⚠️ DESTRUCTIVE OPERATION:** This function permanently removes data partitions from the lakehouse, making the contained data inaccessible. Use only for data retention management and with extreme caution in production environments. Ensure proper backups exist before retiring partitions.
+**⚠️ DESTRUCTIVE OPERATION:** See [Admin Functions Reference](../admin/functions-reference.md#retire_partitionsview_set-view_instance-start_time-end_time) for details.
 
 #### `materialize_partitions(view_name, begin_insert_time, end_insert_time, partition_delta_seconds)` 🔧
 
-**Administrative Function** - Materializes data partitions for a view over a specified time range. Returns a log stream of the operation.
+**Administrative Function** - Materializes data partitions for a view over a specified time range.
 
-**Syntax:**
-```sql
-SELECT * FROM materialize_partitions(view_name, begin_insert_time, end_insert_time, partition_delta_seconds)
-```
-
-**Parameters:**
-
-- `view_name` (`Utf8`): Name of the view to materialize
-
-- `begin_insert_time` (`Timestamp(Nanosecond)`): Start time for materialization
-
-- `end_insert_time` (`Timestamp(Nanosecond)`): End time for materialization
-
-- `partition_delta_seconds` (`Int64`): Partition time delta in seconds
-
-**Returns:** Log stream table with operation progress and messages
-
-**Example:**
-```sql
--- Materialize partitions for CPU usage view
-SELECT * FROM materialize_partitions(
-    'cpu_usage_per_process_per_minute',
-    NOW() - INTERVAL '1 day',
-    NOW(),
-    3600  -- 1 hour partitions
-);
-```
-
-**⚠️ Administrative Use Only:** This function is intended for system administrators and data engineers managing the lakehouse infrastructure. Regular users querying data should not need to call this function. It triggers background processing to create materialized partitions and can impact system performance.
+See [Admin Functions Reference](../admin/functions-reference.md) for details.
 
 #### `list_view_sets()` 🔧
 
-**Administrative Function** - Lists all available view sets with their current schema information. Useful for schema discovery and management.
+**Administrative Function** - Lists all available view sets with their current schema information.
 
-**Syntax:**
-```sql
-SELECT * FROM list_view_sets()
-```
-
-**Returns:**
-
-| Column | Type | Description |
-|--------|------|-------------|
-| view_set_name | Utf8 | Name of the view set (e.g., 'log_entries', 'measures') |
-| current_schema_hash | Binary | Current schema version identifier |
-| schema | Utf8 | Full schema as formatted string |
-| has_view_maker | Boolean | Whether view set supports process-specific instances |
-| global_instance_available | Boolean | Whether a global instance exists |
-
-**Example:**
-```sql
--- View all available view sets and their schemas
-SELECT view_set_name, current_schema_hash, has_view_maker
-FROM list_view_sets()
-ORDER BY view_set_name;
-
--- Check schema for specific view set
-SELECT schema
-FROM list_view_sets()
-WHERE view_set_name = 'log_entries';
-```
-
-**ℹ️ Administrative Use:** This function provides schema discovery for administrators managing view compatibility and schema evolution. It shows the current schema versions and capabilities of each view set in the lakehouse.
+See [Admin Functions Reference](../admin/functions-reference.md#list_view_sets) for details.
 
 #### `retire_partition_by_metadata(view_set_name, view_instance_id, begin_insert_time, end_insert_time)` 🔧
 
-**Administrative Function** - Retires a single partition by its metadata identifiers. Works for both empty and non-empty partitions.
+**Administrative Function** - Retires a single partition by its metadata identifiers.
 
-**Syntax:**
-```sql
-SELECT retire_partition_by_metadata(view_set_name, view_instance_id, begin_insert_time, end_insert_time) as result
-```
-
-**Parameters:**
-
-- `view_set_name` (`Utf8`): Name of the view set
-- `view_instance_id` (`Utf8`): Instance ID (e.g., process_id or 'global')
-- `begin_insert_time` (`Timestamp`): Begin insert time of the partition
-- `end_insert_time` (`Timestamp`): End insert time of the partition
-
-**Returns:** `Utf8` - Result message indicating success or failure
-
-**Example:**
-```sql
--- Retire a specific partition
-SELECT retire_partition_by_metadata(
-    'log_entries', 'process-123',
-    TIMESTAMP '2024-01-01 00:00:00',
-    TIMESTAMP '2024-01-01 01:00:00'
-) as result;
-```
-
-**⚠️ DESTRUCTIVE OPERATION:** Permanently removes data. Batch operations are atomic - if any fails, all are rolled back.
+**⚠️ DESTRUCTIVE OPERATION:** See [Admin Functions Reference](../admin/functions-reference.md#retire_partition_by_metadataview_set_name-view_instance_id-begin_insert_time-end_insert_time) for details.
 
 #### `retire_partition_by_file(file_path)` 🔧
 
 **Administrative Function** - Retires a single partition by file path. Prefer `retire_partition_by_metadata()` for new code.
 
-**Syntax:**
-```sql
-SELECT retire_partition_by_file(file_path) as result
-```
+**⚠️ DESTRUCTIVE OPERATION:** See [Admin Functions Reference](../admin/functions-reference.md#retire_partition_by_filefile_path) for details.
 
-**Limitation:** Cannot retire empty partitions (file_path=NULL).
+#### `delete_duplicate_processes()` 🔧
 
-#### `expand_histogram(histogram)`
+**Administrative Function** - Deletes duplicate processes within the query time range. Keeps the earliest entry per `process_id`.
 
-Expands a histogram struct into rows of (bin_center, count) for visualization as a bar chart.
+**⚠️ DESTRUCTIVE OPERATION:** See [Admin Functions Reference](../admin/functions-reference.md) for details.
 
-**Syntax:**
-```sql
-SELECT bin_center, count
-FROM expand_histogram(histogram_subquery)
-```
+#### `delete_duplicate_streams()` 🔧
 
-**Parameters:**
+**Administrative Function** - Deletes duplicate streams within the query time range. Keeps the earliest entry per `stream_id`.
 
-- `histogram` (Histogram struct): A histogram value from `make_histogram()` or a subquery returning one
+**⚠️ DESTRUCTIVE OPERATION:** See [Admin Functions Reference](../admin/functions-reference.md) for details.
 
-**Returns:**
+#### `delete_duplicate_blocks()` 🔧
 
-| Column | Type | Description |
-|--------|------|-------------|
-| bin_center | Float64 | Center value of each bin |
-| count | UInt64 | Number of values in the bin |
+**Administrative Function** - Deletes duplicate blocks within the query time range. Keeps the earliest entry per `block_id`.
 
-**Examples:**
-```sql
--- Expand a CPU usage histogram into chartable rows
-SELECT bin_center, count
-FROM expand_histogram(
-  (SELECT make_histogram(0.0, 100.0, 100, value)
-   FROM measures
-   WHERE name = 'cpu_usage')
-)
-
--- Histogram for a specific process
-SELECT bin_center, count
-FROM expand_histogram(
-  (SELECT make_histogram(0.0, 50.0, 50, value)
-   FROM view_instance('measures', 'my_process_123')
-   WHERE name = 'frame_time')
-)
-```
-
-**Note:** This function is designed for visualization. Use with a bar chart to display distribution data.
+**⚠️ DESTRUCTIVE OPERATION:** See [Admin Functions Reference](../admin/functions-reference.md) for details.
 
 #### `perfetto_trace_chunks(process_id, span_types, start_time, end_time)`
 
@@ -770,6 +602,48 @@ SELECT sum_histograms(duration_histogram) as combined_histogram
 FROM cpu_usage_per_process_per_minute
 WHERE time_bin >= NOW() - INTERVAL '1 hour';
 ```
+
+##### `expand_histogram(histogram)`
+
+Expands a histogram struct into rows of (bin_center, count) for visualization as a bar chart.
+
+**Syntax:**
+```sql
+SELECT bin_center, count
+FROM expand_histogram(histogram_subquery)
+```
+
+**Parameters:**
+
+- `histogram` (Histogram struct): A histogram value from `make_histogram()` or a subquery returning one
+
+**Returns:**
+
+| Column | Type | Description |
+|--------|------|-------------|
+| bin_center | Float64 | Center value of each bin |
+| count | UInt64 | Number of values in the bin |
+
+**Examples:**
+```sql
+-- Expand a CPU usage histogram into chartable rows
+SELECT bin_center, count
+FROM expand_histogram(
+  (SELECT make_histogram(0.0, 100.0, 100, value)
+   FROM measures
+   WHERE name = 'cpu_usage')
+)
+
+-- Histogram for a specific process
+SELECT bin_center, count
+FROM expand_histogram(
+  (SELECT make_histogram(0.0, 50.0, 50, value)
+   FROM view_instance('measures', 'my_process_123')
+   WHERE name = 'frame_time')
+)
+```
+
+**Note:** This function is designed for visualization. Use with a bar chart to display distribution data.
 
 ##### `quantile_from_histogram(histogram, quantile)`
 

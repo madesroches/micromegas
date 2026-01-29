@@ -109,6 +109,45 @@ SELECT * FROM retire_partitions('log_entries', 'process-123', '2024-01-01T00:00:
 
 ## Scalar Functions (UDFs)
 
+### `delete_duplicate_processes()`
+
+**Description**: Deletes duplicate processes within the query time range. A duplicate is defined as multiple rows with the same `process_id`. This function keeps the row with the earliest `insert_time` and deletes all others.
+
+**Parameters**: None (time range is set via the Python client)
+
+**Returns**: String message (e.g., `"Deleted 42 duplicate processes"`)
+
+!!! warning "Destructive Operation"
+    This function permanently deletes data. The time range identifies duplicates, but ALL duplicate rows for matching IDs are deleted regardless of their insert_time.
+
+---
+
+### `delete_duplicate_streams()`
+
+**Description**: Deletes duplicate streams within the query time range. A duplicate is defined as multiple rows with the same `stream_id`. This function keeps the row with the earliest `insert_time` and deletes all others.
+
+**Parameters**: None (time range is set via the Python client)
+
+**Returns**: String message (e.g., `"Deleted 15 duplicate streams"`)
+
+!!! warning "Destructive Operation"
+    This function permanently deletes data. The time range identifies duplicates, but ALL duplicate rows for matching IDs are deleted regardless of their insert_time.
+
+---
+
+### `delete_duplicate_blocks()`
+
+**Description**: Deletes duplicate blocks within the query time range. A duplicate is defined as multiple rows with the same `block_id`. This function keeps the row with the earliest `insert_time` and deletes all others.
+
+**Parameters**: None (time range is set via the Python client)
+
+**Returns**: String message (e.g., `"Deleted 100 duplicate blocks"`)
+
+!!! warning "Destructive Operation"
+    This function permanently deletes data. The time range identifies duplicates, but ALL duplicate rows for matching IDs are deleted regardless of their insert_time.
+
+---
+
 ### `retire_partition_by_metadata(view_set_name, view_instance_id, begin_insert_time, end_insert_time)`
 
 **Description**: Surgically retires a single partition by its metadata identifiers. This is the preferred method for retiring partitions as it works for both empty partitions (file_path=NULL) and non-empty partitions.
