@@ -18,18 +18,24 @@ export function OverrideEditor({
 }: OverrideEditorProps) {
   const [isExpanded, setIsExpanded] = useState(overrides.length > 0)
 
+  // Skip validation until we have query results (availableColumns is empty while query runs)
+  const hasResults = availableColumns.length > 0
+
   // Validate all overrides for missing column references and unknown macros
   const validationWarnings = useMemo(() => {
+    if (!hasResults) {
+      return overrides.map(() => ({ missingColumns: [], unknownMacros: [] }))
+    }
     return overrides.map((override) =>
       validateFormatMacros(override.format, availableColumns, availableVariables)
     )
-  }, [overrides, availableColumns, availableVariables])
+  }, [overrides, availableColumns, availableVariables, hasResults])
 
   // Check which overrides target columns not in the query results
   const availableColumnsSet = useMemo(() => new Set(availableColumns), [availableColumns])
   const isOrphanedColumn = useCallback(
-    (column: string) => !availableColumnsSet.has(column),
-    [availableColumnsSet]
+    (column: string) => hasResults && !availableColumnsSet.has(column),
+    [availableColumnsSet, hasResults]
   )
 
   const handleAddOverride = useCallback(() => {
