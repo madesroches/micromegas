@@ -15,10 +15,12 @@ Instead of auto-detecting URLs, users configure **column overrides** that define
 **Override format:**
 ```
 [View Process](/process?id=$row.process_id)
+[Details](/details?id=$row["process-id"])
 ```
 
 - `[label](url)` — Markdown link syntax
-- `$row.column_name` — Access any column value from the current row
+- `$row.column_name` — Access column value (alphanumeric names)
+- `$row["column-name"]` — Access column value (any name, including hyphens/spaces)
 
 ### UI: Editor Panel with Collapsible Sections
 
@@ -47,7 +49,8 @@ The existing SQL editor panel gets a second collapsible section for overrides:
 │ [+ Add Override]                │
 │                                 │
 │ Format: [label](url)            │
-│ Row data: $row.column_name      │
+│ Row data: $row.name or          │
+│           $row["column-name"]   │
 └─────────────────────────────────┘
 ```
 
@@ -70,7 +73,7 @@ The existing SQL editor panel gets a second collapsible section for overrides:
 ```typescript
 export interface ColumnOverride {
   column: string      // Column name to override
-  format: string      // Markdown format string with $row.x macros
+  format: string      // Markdown format string with $row.x or $row["x"] macros
 }
 ```
 
@@ -79,19 +82,35 @@ export interface ColumnOverride {
 **File:** `analytics-web-app/src/lib/screen-renderers/table-utils.tsx`
 
 ```typescript
-const ROW_MACRO_REGEX = /\$row\.(\w+)/g
+// Matches $row.columnName (dot notation for simple alphanumeric names)
+const DOT_NOTATION_REGEX = /\$row\.(\w+)/g
+
+// Matches $row["column-name"] or $row['column-name'] (bracket notation for any name)
+const BRACKET_NOTATION_REGEX = /\$row\[["']([^"']+)["']\]/g
 
 /**
- * Expand $row.column_name macros using row data
+ * Expand $row macros using row data.
+ * Supports two syntaxes:
+ * - $row.columnName (dot notation for alphanumeric column names)
+ * - $row["column-name"] (bracket notation for names with hyphens, spaces, etc.)
  */
 export function expandRowMacros(
   template: string,
   row: Record<string, unknown>
 ): string {
-  return template.replace(ROW_MACRO_REGEX, (_, columnName) => {
+  // First pass: bracket notation (handles special characters)
+  let result = template.replace(BRACKET_NOTATION_REGEX, (_, columnName) => {
     const value = row[columnName]
     return value != null ? String(value) : ''
   })
+
+  // Second pass: dot notation (simple alphanumeric names)
+  result = result.replace(DOT_NOTATION_REGEX, (_, columnName) => {
+    const value = row[columnName]
+    return value != null ? String(value) : ''
+  })
+
+  return result
 }
 ```
 
@@ -266,10 +285,17 @@ LIMIT 20
 
 **Advanced example (dynamic label):**
 ```
-[$row.exe](/process?id=$row.process_id&from=$from&to=$to)
+[$row.exe](/process?id=$row.process_id)
 ```
 
-Shows the exe name as the link text, includes time range from query variables.
+Shows the exe name as the link text.
+
+**Bracket notation example (special column names):**
+```
+[View](/details?id=$row["process-id"]&name=$row["Display Name"])
+```
+
+Use bracket notation for column names containing hyphens, spaces, or other special characters.
 
 ---
 
@@ -285,7 +311,12 @@ Shows the exe name as the link text, includes time range from query variables.
 1. **Manual: Table screen** — Add override, verify links render and navigate correctly
 2. **Manual: Notebook** — Same test in table cell
 3. **Unit tests:**
-   - `expandRowMacros()`: single macro, multiple macros, missing column → empty string
+   - `expandRowMacros()`:
+     - Dot notation: single macro, multiple macros
+     - Bracket notation: single/double quotes, special characters in names
+     - Mixed: both notations in same template
+     - Missing column → empty string
+     - Column name not in row → empty string
    - `OverrideCell`: renders link with correct href, handles multiple links, stopPropagation on click
    - Markdown rendering already covered by existing `MarkdownCell` tests
 
@@ -293,6 +324,5 @@ Shows the exe name as the link text, includes time range from query variables.
 
 ## Future Enhancements
 
-- Bracket notation `$row["column-name"]` for special column names
 - Auto-complete for `$row.` in format input
 - Preview showing rendered result for first row
