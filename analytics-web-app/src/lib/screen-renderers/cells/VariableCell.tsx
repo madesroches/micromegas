@@ -7,6 +7,7 @@ import type {
 } from '../cell-registry'
 import type { VariableCellConfig, CellConfig, CellState } from '../notebook-types'
 import { AvailableVariablesPanel } from '@/components/AvailableVariablesPanel'
+import { DocumentationLink, QUERY_GUIDE_URL } from '@/components/DocumentationLink'
 import { SyntaxEditor } from '@/components/SyntaxEditor'
 import { substituteMacros, DEFAULT_SQL } from '../notebook-utils'
 
@@ -158,6 +159,7 @@ function VariableCellEditor({ config, onChange, variables, timeRange }: CellEdit
             />
           </div>
           <AvailableVariablesPanel variables={variables} timeRange={timeRange} />
+          <DocumentationLink url={QUERY_GUIDE_URL} label="Query Guide" />
         </>
       )}
 

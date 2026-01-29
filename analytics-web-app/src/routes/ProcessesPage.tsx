@@ -4,6 +4,7 @@ import { ChevronUp, ChevronDown } from 'lucide-react'
 import { PageLayout } from '@/components/layout'
 import { AuthGuard } from '@/components/AuthGuard'
 import { CopyableProcessId } from '@/components/CopyableProcessId'
+import { PROCESSES_SCHEMA_URL } from '@/components/DocumentationLink'
 import { QueryEditor } from '@/components/QueryEditor'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { useStreamQuery } from '@/hooks/useStreamQuery'
@@ -256,7 +257,7 @@ function ProcessesPageContent() {
       isLoading={streamQuery.isStreaming}
       error={queryError}
       docLink={{
-        url: 'https://madesroches.github.io/micromegas/docs/query-guide/schema-reference/#processes',
+        url: PROCESSES_SCHEMA_URL,
         label: 'processes schema reference',
       }}
     />

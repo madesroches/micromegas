@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { ChevronDown } from 'lucide-react'
+import { LOG_ENTRIES_SCHEMA_URL } from '@/components/DocumentationLink'
 import { registerRenderer, ScreenRendererProps } from './index'
 import { LoadingState, EmptyState, SaveFooter, RendererLayout } from './shared'
 import { QueryEditor } from '@/components/QueryEditor'
@@ -575,7 +576,7 @@ export function LogRenderer({
       isLoading={streamQuery.isStreaming}
       error={queryError}
       docLink={{
-        url: 'https://madesroches.github.io/micromegas/docs/query-guide/schema-reference/#log_entries',
+        url: LOG_ENTRIES_SCHEMA_URL,
         label: 'log_entries schema reference',
       }}
       footer={

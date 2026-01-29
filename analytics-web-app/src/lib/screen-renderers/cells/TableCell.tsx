@@ -7,6 +7,7 @@ import type {
 } from '../cell-registry'
 import type { QueryCellConfig, CellConfig, CellState } from '../notebook-types'
 import { AvailableVariablesPanel } from '@/components/AvailableVariablesPanel'
+import { DocumentationLink, QUERY_GUIDE_URL } from '@/components/DocumentationLink'
 import { OverrideEditor } from '@/components/OverrideEditor'
 import { SyntaxEditor } from '@/components/SyntaxEditor'
 import { substituteMacros, DEFAULT_SQL } from '../notebook-utils'
@@ -133,6 +134,7 @@ function TableCellEditor({ config, onChange, variables, timeRange, availableColu
         timeRange={timeRange}
         additionalVariables={tableVariables}
       />
+      <DocumentationLink url={QUERY_GUIDE_URL} label="Query Guide" />
       <div className="mt-4">
         <OverrideEditor
           overrides={overrides}

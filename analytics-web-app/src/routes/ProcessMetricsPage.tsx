@@ -5,6 +5,7 @@ import { AlertCircle, Clock } from 'lucide-react'
 import { PageLayout } from '@/components/layout'
 import { AuthGuard } from '@/components/AuthGuard'
 import { CopyableProcessId } from '@/components/CopyableProcessId'
+import { MEASURES_SCHEMA_URL } from '@/components/DocumentationLink'
 import { QueryEditor } from '@/components/QueryEditor'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { MetricsChart } from '@/components/MetricsChart'
@@ -378,7 +379,7 @@ function ProcessMetricsContent() {
         isLoading={isLoading}
         error={queryError}
         docLink={{
-          url: 'https://madesroches.github.io/micromegas/docs/query-guide/schema-reference/#measures',
+          url: MEASURES_SCHEMA_URL,
           label: 'measures schema reference',
         }}
       />

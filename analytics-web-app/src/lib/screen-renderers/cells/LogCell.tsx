@@ -8,6 +8,7 @@ import type {
 import type { QueryCellConfig, CellConfig, CellState } from '../notebook-types'
 import { timestampToDate } from '@/lib/arrow-utils'
 import { AvailableVariablesPanel } from '@/components/AvailableVariablesPanel'
+import { DocumentationLink, QUERY_GUIDE_URL } from '@/components/DocumentationLink'
 import { SyntaxEditor } from '@/components/SyntaxEditor'
 import { substituteMacros, DEFAULT_SQL } from '../notebook-utils'
 
@@ -155,6 +156,7 @@ function LogCellEditor({ config, onChange, variables, timeRange }: CellEditorPro
         />
       </div>
       <AvailableVariablesPanel variables={variables} timeRange={timeRange} />
+      <DocumentationLink url={QUERY_GUIDE_URL} label="Query Guide" />
     </>
   )
 }
