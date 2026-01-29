@@ -143,4 +143,56 @@ describe('MarkdownCell', () => {
       expect(container.querySelector('.prose')).toBeInTheDocument()
     })
   })
+
+  describe('variable substitution', () => {
+    it('should substitute simple string variables', () => {
+      render(
+        <MarkdownCell
+          {...createMockProps({
+            content: 'Selected metric: $metric',
+            variables: { metric: 'cpu_usage' },
+          })}
+        />
+      )
+      expect(screen.getByText('Selected metric: cpu_usage')).toBeInTheDocument()
+    })
+
+    it('should substitute $variable.column for multi-column variables', () => {
+      render(
+        <MarkdownCell
+          {...createMockProps({
+            content: 'Metric: $metric.name ($metric.unit)',
+            variables: { metric: { name: 'DeltaTime', unit: 'seconds' } },
+          })}
+        />
+      )
+      expect(screen.getByText('Metric: DeltaTime (seconds)')).toBeInTheDocument()
+    })
+
+    it('should substitute $begin and $end time range variables', () => {
+      render(
+        <MarkdownCell
+          {...createMockProps({
+            content: 'Time range: $begin to $end',
+            timeRange: { begin: '2024-01-01T00:00:00Z', end: '2024-01-02T00:00:00Z' },
+          })}
+        />
+      )
+      expect(
+        screen.getByText("Time range: '2024-01-01T00:00:00Z' to '2024-01-02T00:00:00Z'")
+      ).toBeInTheDocument()
+    })
+
+    it('should leave unresolved variables unchanged', () => {
+      render(
+        <MarkdownCell
+          {...createMockProps({
+            content: 'Unknown: $unknown_var',
+            variables: {},
+          })}
+        />
+      )
+      expect(screen.getByText('Unknown: $unknown_var')).toBeInTheDocument()
+    })
+  })
 })

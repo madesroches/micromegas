@@ -184,14 +184,14 @@ describe('substituteMacros', () => {
       expect(result).toBe("SELECT '$metric.name'")
     })
 
-    it('should use first column value when accessing multi-column variable without column', () => {
+    it('should use JSON when accessing multi-column variable without column', () => {
       const sql = "SELECT '$metric'"
       const result = substituteMacros(
         sql,
         { metric: { name: 'cpu_usage', unit: 'percent' } },
         defaultTimeRange
       )
-      expect(result).toBe("SELECT 'cpu_usage'")
+      expect(result).toBe(`SELECT '{"name":"cpu_usage","unit":"percent"}'`)
     })
 
     it('should escape single quotes in column values', () => {
@@ -317,12 +317,12 @@ describe('VariableValue helpers', () => {
       expect(getVariableString('cpu_usage')).toBe('cpu_usage')
     })
 
-    it('should return first column value for object', () => {
-      expect(getVariableString({ name: 'cpu', unit: 'percent' })).toBe('cpu')
+    it('should return JSON for object', () => {
+      expect(getVariableString({ name: 'cpu', unit: 'percent' })).toBe('{"name":"cpu","unit":"percent"}')
     })
 
-    it('should return empty string for empty object', () => {
-      expect(getVariableString({})).toBe('')
+    it('should return empty object JSON for empty object', () => {
+      expect(getVariableString({})).toBe('{}')
     })
   })
 

@@ -1,5 +1,5 @@
 import type { VariableValue } from '@/lib/screen-renderers/notebook-types'
-import { isMultiColumnValue, getVariableString } from '@/lib/screen-renderers/notebook-types'
+import { isMultiColumnValue } from '@/lib/screen-renderers/notebook-types'
 
 interface AvailableVariablesPanelProps {
   variables: Record<string, VariableValue>
@@ -46,22 +46,14 @@ export function AvailableVariablesPanel({
         {allVars.map((v) => (
           <div key={v.name}>
             {v.isMultiColumn ? (
-              // Multi-column variable: show the variable name and all columns
-              <div>
-                <div className="flex justify-between py-0.5">
-                  <span className="text-accent-link font-mono">${v.name}</span>
-                  <span className="text-theme-text-muted truncate ml-2">
-                    {getVariableString(v.value as VariableValue)}
-                  </span>
-                </div>
-                <div className="ml-4 space-y-0.5">
-                  {Object.entries(v.value as Record<string, string>).map(([col, val]) => (
-                    <div key={col} className="flex justify-between py-0.5">
-                      <span className="text-accent-link/70 font-mono">${v.name}.{col}</span>
-                      <span className="text-theme-text-muted truncate ml-2">{val}</span>
-                    </div>
-                  ))}
-                </div>
+              // Multi-column variable: show columns only (use $var.col syntax)
+              <div className="space-y-0.5">
+                {Object.entries(v.value as Record<string, string>).map(([col, val]) => (
+                  <div key={col} className="flex justify-between py-0.5">
+                    <span className="text-accent-link font-mono">${v.name}.{col}</span>
+                    <span className="text-theme-text-muted truncate ml-2">{val}</span>
+                  </div>
+                ))}
               </div>
             ) : (
               // Simple string variable

@@ -13,12 +13,11 @@ export type VariableValue = string | Record<string, string>
 
 /**
  * Gets the string representation of a variable value.
- * For multi-column values, returns the first column value.
+ * For multi-column values, returns the JSON representation.
  */
 export function getVariableString(value: VariableValue): string {
   if (typeof value === 'string') return value
-  const keys = Object.keys(value)
-  return keys.length > 0 ? value[keys[0]] : ''
+  return JSON.stringify(value)
 }
 
 /**
