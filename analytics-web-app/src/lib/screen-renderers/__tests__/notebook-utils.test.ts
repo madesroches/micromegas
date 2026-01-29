@@ -275,13 +275,17 @@ describe('VariableValue helpers', () => {
       expect(serializeVariableValue('cpu_usage')).toBe('cpu_usage')
     })
 
-    it('should JSON-encode object', () => {
+    it('should prefix and JSON-encode object', () => {
       const result = serializeVariableValue({ name: 'cpu', unit: 'percent' })
-      expect(result).toBe('{"name":"cpu","unit":"percent"}')
+      expect(result).toBe('mcol:{"name":"cpu","unit":"percent"}')
     })
 
     it('should handle empty object', () => {
-      expect(serializeVariableValue({})).toBe('{}')
+      expect(serializeVariableValue({})).toBe('mcol:{}')
+    })
+
+    it('should not add prefix to strings starting with curly brace', () => {
+      expect(serializeVariableValue('{literal}')).toBe('{literal}')
     })
   })
 
@@ -290,25 +294,30 @@ describe('VariableValue helpers', () => {
       expect(deserializeVariableValue('cpu_usage')).toBe('cpu_usage')
     })
 
-    it('should parse JSON object', () => {
-      const result = deserializeVariableValue('{"name":"cpu","unit":"percent"}')
+    it('should parse prefixed JSON object', () => {
+      const result = deserializeVariableValue('mcol:{"name":"cpu","unit":"percent"}')
       expect(result).toEqual({ name: 'cpu', unit: 'percent' })
     })
 
-    it('should return string if JSON is invalid', () => {
-      expect(deserializeVariableValue('{invalid json')).toBe('{invalid json')
+    it('should return string if prefix present but JSON is invalid', () => {
+      expect(deserializeVariableValue('mcol:{invalid')).toBe('mcol:{invalid')
     })
 
-    it('should return string if JSON is array', () => {
-      expect(deserializeVariableValue('["a","b"]')).toBe('["a","b"]')
+    it('should return string without prefix as-is (no magic parsing)', () => {
+      // Without mcol: prefix, curly braces are treated as literal string
+      expect(deserializeVariableValue('{"name":"cpu"}')).toBe('{"name":"cpu"}')
     })
 
-    it('should return string if JSON object has non-string values', () => {
-      expect(deserializeVariableValue('{"a":123}')).toBe('{"a":123}')
+    it('should return string if prefixed JSON is array', () => {
+      expect(deserializeVariableValue('mcol:["a","b"]')).toBe('mcol:["a","b"]')
     })
 
-    it('should handle empty object', () => {
-      expect(deserializeVariableValue('{}')).toEqual({})
+    it('should return string if prefixed JSON object has non-string values', () => {
+      expect(deserializeVariableValue('mcol:{"a":123}')).toBe('mcol:{"a":123}')
+    })
+
+    it('should handle prefixed empty object', () => {
+      expect(deserializeVariableValue('mcol:{}')).toEqual({})
     })
   })
 

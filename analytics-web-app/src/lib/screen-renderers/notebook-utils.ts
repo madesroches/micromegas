@@ -17,6 +17,7 @@ export {
   isMultiColumnValue,
   serializeVariableValue,
   deserializeVariableValue,
+  variableValuesEqual,
 } from './notebook-types'
 
 import type { VariableValue } from './notebook-types'

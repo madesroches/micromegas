@@ -10,6 +10,27 @@ import {
   getVariableString,
   serializeVariableValue,
 } from '../notebook-types'
+
+/**
+ * Parse a default value string into a VariableValue.
+ * Tries to parse as JSON object, otherwise returns as string.
+ */
+function parseDefaultValue(str: string): VariableValue {
+  if (str.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(str)
+      if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+        const isValid = Object.values(parsed).every((v) => typeof v === 'string')
+        if (isValid) {
+          return parsed as Record<string, string>
+        }
+      }
+    } catch {
+      // Not valid JSON
+    }
+  }
+  return str
+}
 import { AvailableVariablesPanel } from '@/components/AvailableVariablesPanel'
 import { DocumentationLink, QUERY_GUIDE_URL } from '@/components/DocumentationLink'
 import { SyntaxEditor } from '@/components/SyntaxEditor'
@@ -187,10 +208,15 @@ function VariableCellEditor({ config, onChange, variables, timeRange }: CellEdit
         </label>
         <input
           type="text"
-          value={varConfig.defaultValue || ''}
-          onChange={(e) => onChange({ ...varConfig, defaultValue: e.target.value })}
+          value={varConfig.defaultValue !== undefined ? getVariableString(varConfig.defaultValue) : ''}
+          onChange={(e) => {
+            const newValue = e.target.value
+            // Parse as JSON object if valid, otherwise keep as string
+            const parsed = newValue ? parseDefaultValue(newValue) : undefined
+            onChange({ ...varConfig, defaultValue: parsed })
+          }}
           className="w-full px-3 py-2 bg-app-card border border-theme-border rounded-md text-theme-text-primary text-sm focus:outline-none focus:border-accent-link"
-          placeholder="Default value"
+          placeholder="Default value (or JSON for multi-column)"
         />
       </div>
     </>

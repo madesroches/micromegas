@@ -46,11 +46,17 @@ export function AvailableVariablesPanel({
         {allVars.map((v) => (
           <div key={v.name}>
             {v.isMultiColumn ? (
-              // Multi-column variable: show columns only (use $var.col syntax)
+              // Multi-column variable: show row value and individual columns
               <div className="space-y-0.5">
+                <div className="flex justify-between py-0.5">
+                  <span className="text-accent-link font-mono">${v.name}</span>
+                  <span className="text-theme-text-muted font-mono truncate ml-2 select-all">
+                    {JSON.stringify(v.value)}
+                  </span>
+                </div>
                 {Object.entries(v.value as Record<string, string>).map(([col, val]) => (
-                  <div key={col} className="flex justify-between py-0.5">
-                    <span className="text-accent-link font-mono">${v.name}.{col}</span>
+                  <div key={col} className="flex justify-between py-0.5 pl-2">
+                    <span className="text-accent-link font-mono">.{col}</span>
                     <span className="text-theme-text-muted truncate ml-2">{val}</span>
                   </div>
                 ))}

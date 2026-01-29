@@ -7,6 +7,7 @@ import {
   VariableValue,
   serializeVariableValue,
   deserializeVariableValue,
+  variableValuesEqual,
 } from './notebook-utils'
 
 export interface UseNotebookVariablesResult {
@@ -56,7 +57,7 @@ export function useNotebookVariables(
 
   // Build a lookup map for saved defaults (O(1) access)
   const savedDefaultsByName = useMemo(() => {
-    const map = new Map<string, string>()
+    const map = new Map<string, VariableValue>()
     if (savedCells) {
       for (const cell of savedCells) {
         if (cell.type === 'variable') {
@@ -72,8 +73,6 @@ export function useNotebookVariables(
 
   // Compute effective values: saved default → current default → URL override
   // URL values represent deltas from saved baseline
-  // Note: defaultValue in cell config is always a string (for backward compatibility)
-  // but URL values and runtime values can be VariableValue (string | object)
   const variableValues = useMemo(() => {
     const values: Record<string, VariableValue> = {}
 
@@ -114,19 +113,14 @@ export function useNotebookVariables(
       variableValuesRef.current = { ...variableValuesRef.current, [cellName]: value }
 
       // Determine baseline: saved default → current cell default
-      // Note: baselines are always strings (from config), but values can be objects
       const savedDefault = savedDefaultsByName.get(cellName)
       const currentCell = cells.find((c) => c.type === 'variable' && c.name === cellName) as
         | VariableCellConfig
         | undefined
       const baseline = savedDefault ?? currentCell?.defaultValue
 
-      // Serialize value for URL storage and comparison
-      const serializedValue = serializeVariableValue(value)
-
       // Delta logic: only add to URL if different from baseline
-      // For multi-column values, we compare the serialized form
-      if (serializedValue === baseline) {
+      if (baseline !== undefined && variableValuesEqual(value, baseline)) {
         // Value matches baseline - remove from URL
         setSearchParams(prev => {
           const next = new URLSearchParams(prev)
@@ -137,7 +131,7 @@ export function useNotebookVariables(
         // Value differs from baseline - add to URL (serialized)
         setSearchParams(prev => {
           const next = new URLSearchParams(prev)
-          next.set(cellName, serializedValue)
+          next.set(cellName, serializeVariableValue(value))
           return next
         }, { replace: true })
       }
