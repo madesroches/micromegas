@@ -1,9 +1,9 @@
 import { ComponentType } from 'react'
 import { Table } from 'apache-arrow'
-import type { CellConfig, CellState, CellType, CellStatus } from './notebook-types'
+import type { CellConfig, CellState, CellType, CellStatus, VariableValue } from './notebook-types'
 
 // Re-export types from notebook-types for backwards compatibility
-export type { CellType, CellStatus, CellConfig, CellState }
+export type { CellType, CellStatus, CellConfig, CellState, VariableValue }
 
 /**
  * Props passed to all cell renderers.
@@ -24,7 +24,7 @@ export interface CellRendererProps {
   /** Time range for queries */
   timeRange: { begin: string; end: string }
   /** Available variables (from variable cells above) */
-  variables: Record<string, string>
+  variables: Record<string, VariableValue>
   /** Whether the cell is in edit mode */
   isEditing: boolean
   /** Request to run this cell */
@@ -38,20 +38,20 @@ export interface CellRendererProps {
   /** For markdown cells: update content */
   onContentChange?: (content: string) => void
   /** For variable cells: current value */
-  value?: string
+  value?: VariableValue
   /** For variable cells: update value */
-  onValueChange?: (value: string) => void
+  onValueChange?: (value: VariableValue) => void
   /** For variable cells: variable type */
   variableType?: 'combobox' | 'text' | 'number'
   /** For variable cells (combobox): available options from query */
-  variableOptions?: { label: string; value: string }[]
+  variableOptions?: { label: string; value: VariableValue }[]
 }
 
 /**
  * Context provided to cell execution.
  */
 export interface CellExecutionContext {
-  variables: Record<string, string>
+  variables: Record<string, VariableValue>
   timeRange: { begin: string; end: string }
   runQuery: (sql: string) => Promise<Table>
 }
@@ -63,7 +63,7 @@ export interface CellExecutionContext {
 export interface CellEditorProps {
   config: CellConfig
   onChange: (config: CellConfig) => void
-  variables: Record<string, string>
+  variables: Record<string, VariableValue>
   timeRange: { begin: string; end: string }
   /** Available column names from query results (for table/chart cells) */
   availableColumns?: string[]
@@ -120,8 +120,8 @@ export interface CellTypeMetadata {
     config: CellConfig,
     state: CellState,
     context: {
-      setVariableValue: (name: string, value: string) => void
-      currentValue: string | undefined
+      setVariableValue: (name: string, value: VariableValue) => void
+      currentValue: VariableValue | undefined
     }
   ) => void
 

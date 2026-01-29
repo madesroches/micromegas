@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { Table } from 'apache-arrow'
-import type { CellConfig, CellState } from './notebook-types'
+import type { CellConfig, CellState, VariableValue } from './notebook-types'
 import { getCellTypeMetadata, CellExecutionContext } from './cell-registry'
 import { streamQuery } from '@/lib/arrow-stream'
 
@@ -10,9 +10,9 @@ interface UseCellExecutionParams {
   /** Time range for SQL queries */
   timeRange: { begin: string; end: string }
   /** Ref for synchronous access to variable values during execution */
-  variableValuesRef: React.MutableRefObject<Record<string, string>>
+  variableValuesRef: React.MutableRefObject<Record<string, VariableValue>>
   /** Callback to set a variable value (for auto-selecting first option) */
-  setVariableValue: (cellName: string, value: string) => void
+  setVariableValue: (cellName: string, value: VariableValue) => void
   /** Refresh trigger from parent (increments to trigger re-execution) */
   refreshTrigger: number
 }
@@ -104,7 +104,7 @@ export function useCellExecution({
       }))
 
       // Gather variables from cells above (use ref for synchronous access during execution)
-      const availableVariables: Record<string, string> = {}
+      const availableVariables: Record<string, VariableValue> = {}
       for (let i = 0; i < cellIndex; i++) {
         const prevCell = cells[i]
         if (prevCell.type === 'variable' && variableValuesRef.current[prevCell.name] !== undefined) {

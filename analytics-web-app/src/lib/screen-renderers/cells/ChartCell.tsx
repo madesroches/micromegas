@@ -5,23 +5,55 @@ import type {
   CellEditorProps,
   CellExecutionContext,
 } from '../cell-registry'
-import type { QueryCellConfig, CellConfig, CellState } from '../notebook-types'
+import type { QueryCellConfig, CellConfig, CellState, VariableValue } from '../notebook-types'
 import { XYChart, ScaleMode, ChartType } from '@/components/XYChart'
 import { extractChartData } from '@/lib/arrow-utils'
 import { AvailableVariablesPanel } from '@/components/AvailableVariablesPanel'
 import { DocumentationLink, QUERY_GUIDE_URL } from '@/components/DocumentationLink'
 import { SyntaxEditor } from '@/components/SyntaxEditor'
-import { substituteMacros, DEFAULT_SQL } from '../notebook-utils'
+import { substituteMacros, validateMacros, DEFAULT_SQL } from '../notebook-utils'
+
+/**
+ * Substitutes macros in string values within chart options.
+ * This allows using $variable.column syntax in options like unit labels.
+ */
+function substituteOptionsWithMacros(
+  options: Record<string, unknown> | undefined,
+  variables: Record<string, VariableValue>,
+  timeRange: { begin: string; end: string }
+): Record<string, unknown> {
+  if (!options) return {}
+
+  const result: Record<string, unknown> = {}
+
+  for (const [key, value] of Object.entries(options)) {
+    if (typeof value === 'string') {
+      // Apply macro substitution to string values
+      result[key] = substituteMacros(value, variables, timeRange)
+    } else {
+      // Keep non-string values as-is
+      result[key] = value
+    }
+  }
+
+  return result
+}
 
 // =============================================================================
 // Renderer Component
 // =============================================================================
 
-export function ChartCell({ data, status, options, onOptionsChange }: CellRendererProps) {
+export function ChartCell({ data, status, options, onOptionsChange, variables, timeRange }: CellRendererProps) {
   const chartResult = useMemo(() => {
     if (!data || data.numRows === 0) return null
     return extractChartData(data)
   }, [data])
+
+  // Substitute macros in options (e.g., $variable.unit in the unit field)
+  const resolvedOptions = useMemo(
+    () => substituteOptionsWithMacros(options, variables, timeRange),
+    [options, variables, timeRange]
+  )
 
   const handleScaleModeChange = useCallback(
     (mode: ScaleMode) => {
@@ -72,10 +104,11 @@ export function ChartCell({ data, status, options, onOptionsChange }: CellRender
         xLabels={xLabels}
         xColumnName={xColumnName}
         yColumnName={yColumnName}
-        scaleMode={(options?.scale_mode as ScaleMode) ?? 'p99'}
+        scaleMode={(resolvedOptions?.scale_mode as ScaleMode) ?? 'p99'}
         onScaleModeChange={handleScaleModeChange}
-        chartType={(options?.chart_type as ChartType) ?? 'line'}
+        chartType={(resolvedOptions?.chart_type as ChartType) ?? 'line'}
         onChartTypeChange={handleChartTypeChange}
+        unit={(resolvedOptions?.unit as string) ?? undefined}
       />
     </div>
   )
@@ -87,6 +120,24 @@ export function ChartCell({ data, status, options, onOptionsChange }: CellRender
 
 function ChartCellEditor({ config, onChange, variables, timeRange }: CellEditorProps) {
   const chartConfig = config as QueryCellConfig
+
+  const handleOptionChange = (key: string, value: string) => {
+    const newOptions = { ...chartConfig.options, [key]: value }
+    onChange({ ...chartConfig, options: newOptions })
+  }
+
+  // Validate macro references in SQL and options
+  const validationErrors = useMemo(() => {
+    const errors: string[] = []
+    const sqlValidation = validateMacros(chartConfig.sql, variables)
+    errors.push(...sqlValidation.errors)
+    const unit = (chartConfig.options?.unit as string) ?? ''
+    if (unit) {
+      const unitValidation = validateMacros(unit, variables)
+      errors.push(...unitValidation.errors)
+    }
+    return errors
+  }, [chartConfig.sql, chartConfig.options, variables])
 
   return (
     <>
@@ -102,6 +153,28 @@ function ChartCellEditor({ config, onChange, variables, timeRange }: CellEditorP
           minHeight="150px"
         />
       </div>
+      <div>
+        <label className="block text-xs font-medium text-theme-text-secondary uppercase mb-1.5">
+          Y-Axis Unit
+        </label>
+        <input
+          type="text"
+          value={(chartConfig.options?.unit as string) ?? ''}
+          onChange={(e) => handleOptionChange('unit', e.target.value)}
+          className="w-full px-3 py-2 bg-app-card border border-theme-border rounded-md text-theme-text-primary text-sm focus:outline-none focus:border-accent-link"
+          placeholder="e.g., percent, bytes, ms, or $variable.unit"
+        />
+        <p className="mt-1 text-xs text-theme-text-muted">
+          Use $variable.column for dynamic values (e.g., $selected_metric.unit)
+        </p>
+      </div>
+      {validationErrors.length > 0 && (
+        <div className="text-red-400 text-sm space-y-1">
+          {validationErrors.map((err, i) => (
+            <div key={i}>⚠ {err}</div>
+          ))}
+        </div>
+      )}
       <AvailableVariablesPanel variables={variables} timeRange={timeRange} />
       <DocumentationLink url={QUERY_GUIDE_URL} label="Query Guide" />
     </>

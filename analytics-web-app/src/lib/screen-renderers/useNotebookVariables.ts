@@ -1,15 +1,22 @@
 import { useCallback, useMemo, useRef, useEffect } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { RESERVED_URL_PARAMS } from '@/lib/url-cleanup-utils'
-import { CellConfig, VariableCellConfig } from './notebook-utils'
+import {
+  CellConfig,
+  VariableCellConfig,
+  VariableValue,
+  serializeVariableValue,
+  deserializeVariableValue,
+  variableValuesEqual,
+} from './notebook-utils'
 
 export interface UseNotebookVariablesResult {
   /** Current variable values (merged from URL config and cell defaults) */
-  variableValues: Record<string, string>
+  variableValues: Record<string, VariableValue>
   /** Ref for synchronous access during sequential cell execution */
-  variableValuesRef: React.MutableRefObject<Record<string, string>>
+  variableValuesRef: React.MutableRefObject<Record<string, VariableValue>>
   /** Set a variable value (uses delta logic against saved baseline) */
-  setVariableValue: (cellName: string, value: string) => void
+  setVariableValue: (cellName: string, value: VariableValue) => void
   /** Migrate variable state when a cell is renamed (transfers value, removes old param) */
   migrateVariable: (oldName: string, newName: string) => void
   /** Remove variable state when a cell is deleted (removes URL param) */
@@ -37,11 +44,12 @@ export function useNotebookVariables(
   const [searchParams, setSearchParams] = useSearchParams()
 
   // Extract variable values from URL (non-reserved params)
+  // Values are deserialized: JSON objects become Record<string, string>, others stay as strings
   const configVariables = useMemo(() => {
-    const vars: Record<string, string> = {}
+    const vars: Record<string, VariableValue> = {}
     searchParams.forEach((value, key) => {
       if (!RESERVED_URL_PARAMS.has(key)) {
-        vars[key] = value
+        vars[key] = deserializeVariableValue(value)
       }
     })
     return vars
@@ -49,7 +57,7 @@ export function useNotebookVariables(
 
   // Build a lookup map for saved defaults (O(1) access)
   const savedDefaultsByName = useMemo(() => {
-    const map = new Map<string, string>()
+    const map = new Map<string, VariableValue>()
     if (savedCells) {
       for (const cell of savedCells) {
         if (cell.type === 'variable') {
@@ -66,7 +74,7 @@ export function useNotebookVariables(
   // Compute effective values: saved default → current default → URL override
   // URL values represent deltas from saved baseline
   const variableValues = useMemo(() => {
-    const values: Record<string, string> = {}
+    const values: Record<string, VariableValue> = {}
 
     // Start with baseline values for all known variables
     // Priority: saved default → current cell default
@@ -91,7 +99,7 @@ export function useNotebookVariables(
   }, [cells, configVariables, savedDefaultsByName])
 
   // Ref for synchronous access during sequential execution
-  const variableValuesRef = useRef<Record<string, string>>(variableValues)
+  const variableValuesRef = useRef<Record<string, VariableValue>>(variableValues)
 
   // Keep ref in sync with computed values
   useEffect(() => {
@@ -100,7 +108,7 @@ export function useNotebookVariables(
 
   // Set a variable value - uses delta logic against saved baseline
   const setVariableValue = useCallback(
-    (cellName: string, value: string) => {
+    (cellName: string, value: VariableValue) => {
       // Update ref immediately for synchronous access during execution
       variableValuesRef.current = { ...variableValuesRef.current, [cellName]: value }
 
@@ -112,7 +120,7 @@ export function useNotebookVariables(
       const baseline = savedDefault ?? currentCell?.defaultValue
 
       // Delta logic: only add to URL if different from baseline
-      if (value === baseline) {
+      if (baseline !== undefined && variableValuesEqual(value, baseline)) {
         // Value matches baseline - remove from URL
         setSearchParams(prev => {
           const next = new URLSearchParams(prev)
@@ -120,10 +128,10 @@ export function useNotebookVariables(
           return next
         }, { replace: true })
       } else {
-        // Value differs from baseline - add to URL
+        // Value differs from baseline - add to URL (serialized)
         setSearchParams(prev => {
           const next = new URLSearchParams(prev)
-          next.set(cellName, value)
+          next.set(cellName, serializeVariableValue(value))
           return next
         }, { replace: true })
       }
@@ -141,10 +149,11 @@ export function useNotebookVariables(
         nextRef[newName] = oldValue
         delete nextRef[oldName]
         variableValuesRef.current = nextRef
-        // Update URL: set new name, remove old name
+        // Update URL: set new name, remove old name (serialize for URL storage)
+        const serialized = serializeVariableValue(oldValue)
         setSearchParams(prev => {
           const next = new URLSearchParams(prev)
-          next.set(newName, oldValue)
+          next.set(newName, serialized)
           next.delete(oldName)
           return next
         }, { replace: true })
