@@ -438,20 +438,20 @@ The unresolved macro text in the SQL error message helps users identify the prob
 
 ### Phase 7: Backward Compatibility
 
-#### 7.1 Current Behavior (Preserved)
-The current implementation in `VariableCell.tsx` (lines 217-231) handles multi-column queries as follows:
+#### 7.1 Previous Behavior
+The previous implementation handled multi-column queries as:
 
 - **1 column**: value and label are the same string
-- **2 columns**: first column = value (stored and substituted), second column = label (displayed in dropdown)
+- **2 columns**: first column = value, second column = label
 - **3+ columns**: only first two columns used, rest ignored
 
-#### 7.2 New Behavior (Enhancement)
+#### 7.2 New Behavior
 With this enhancement:
 
 - **1 column**: stored as `string`, dropdown displays the value
-- **2+ columns**: stored as `Record<string, string>`, dropdown displays the row
+- **2+ columns**: stored as `Record<string, string>`, dropdown displays all values joined by " | "
 - Access individual columns via `$variable.column` syntax
-- Access first column value via `$variable` (backward compatible with existing queries)
+- Access JSON representation via `$variable` (for multi-column values)
 
 #### 7.3 Migration Notes
 - Existing notebooks continue to work unchanged

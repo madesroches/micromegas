@@ -274,8 +274,7 @@ export const variableMetadata: CellTypeMetadata = {
     // Extract options from result with multi-column support
     // Convention:
     // - 1 column: value is string, label is same as value
-    // - 2 columns: value is first column (string), label is second column
-    // - 3+ columns: value is entire row (object), label is formatted from all values
+    // - 2+ columns: value is entire row (object), label is formatted from all values
     const options: { label: string; value: VariableValue }[] = []
     if (result && result.numRows > 0 && result.numCols > 0) {
       const schema = result.schema
@@ -289,11 +288,6 @@ export const variableMetadata: CellTypeMetadata = {
           // Single column: store as string
           const val = String(row[columnNames[0]] ?? '')
           options.push({ value: val, label: val })
-        } else if (columnNames.length === 2) {
-          // Two columns: first is value, second is label (backward compatible)
-          const val = String(row[columnNames[0]] ?? '')
-          const label = String(row[columnNames[1]] ?? val)
-          options.push({ value: val, label })
         } else {
           // Multiple columns: store entire row as object
           const rowObj: Record<string, string> = {}
