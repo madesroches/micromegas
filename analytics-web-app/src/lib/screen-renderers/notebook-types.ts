@@ -1,6 +1,66 @@
 import { Table } from 'apache-arrow'
 
 // ============================================================================
+// Variable Value Types
+// ============================================================================
+
+/**
+ * A variable value can be:
+ * - A simple string (single column variable or text/number input)
+ * - An object mapping column names to string values (multi-column variable)
+ */
+export type VariableValue = string | Record<string, string>
+
+/**
+ * Gets the string representation of a variable value.
+ * For multi-column values, returns the first column value.
+ */
+export function getVariableString(value: VariableValue): string {
+  if (typeof value === 'string') return value
+  const keys = Object.keys(value)
+  return keys.length > 0 ? value[keys[0]] : ''
+}
+
+/**
+ * Checks if a variable value is a multi-column object.
+ */
+export function isMultiColumnValue(value: VariableValue): value is Record<string, string> {
+  return typeof value !== 'string'
+}
+
+/**
+ * Serializes a variable value for URL storage.
+ * Simple strings are stored as-is, objects are JSON-encoded.
+ */
+export function serializeVariableValue(value: VariableValue): string {
+  if (typeof value === 'string') return value
+  return JSON.stringify(value)
+}
+
+/**
+ * Deserializes a variable value from URL storage.
+ * Attempts to parse as JSON; if it fails, returns as simple string.
+ */
+export function deserializeVariableValue(str: string): VariableValue {
+  // Try to parse as JSON object
+  if (str.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(str)
+      if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+        // Verify all values are strings
+        const isValid = Object.values(parsed).every((v) => typeof v === 'string')
+        if (isValid) {
+          return parsed as Record<string, string>
+        }
+      }
+    } catch {
+      // Not valid JSON, return as string
+    }
+  }
+  return str
+}
+
+// ============================================================================
 // Cell Configuration Types
 // ============================================================================
 
@@ -45,7 +105,7 @@ export interface CellState {
   error?: string
   data: Table | null
   /** For variable cells (combobox): options loaded from query */
-  variableOptions?: { label: string; value: string }[]
+  variableOptions?: { label: string; value: VariableValue }[]
 }
 
 // ============================================================================

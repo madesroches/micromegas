@@ -17,7 +17,8 @@ Object.defineProperty(window, 'matchMedia', {
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 jest.mock('../cell-registry', () => require('../__test-utils__/cell-registry-mock').createCellRegistryMock())
 
-import { substituteMacros, DEFAULT_SQL, sanitizeCellName, validateCellName } from '../notebook-utils'
+import { substituteMacros, DEFAULT_SQL, sanitizeCellName, validateCellName, validateMacros } from '../notebook-utils'
+import { serializeVariableValue, deserializeVariableValue, getVariableString, isMultiColumnValue } from '../notebook-types'
 import { createDefaultCell } from '../cell-registry'
 
 describe('substituteMacros', () => {
@@ -138,6 +139,204 @@ describe('substituteMacros', () => {
       const sql = "SELECT * FROM logs WHERE filter = '$filter'"
       const result = substituteMacros(sql, { filter: '' }, defaultTimeRange)
       expect(result).toBe("SELECT * FROM logs WHERE filter = ''")
+    })
+  })
+
+  describe('multi-column variable substitution', () => {
+    it('should substitute $variable.column with specific column value', () => {
+      const sql = "SELECT * FROM measures WHERE name = '$metric.name'"
+      const result = substituteMacros(
+        sql,
+        { metric: { name: 'cpu_usage', unit: 'percent' } },
+        defaultTimeRange
+      )
+      expect(result).toBe("SELECT * FROM measures WHERE name = 'cpu_usage'")
+    })
+
+    it('should substitute multiple column references', () => {
+      const sql = "SELECT '$metric.name' AS name, '$metric.unit' AS unit"
+      const result = substituteMacros(
+        sql,
+        { metric: { name: 'cpu_usage', unit: 'percent' } },
+        defaultTimeRange
+      )
+      expect(result).toBe("SELECT 'cpu_usage' AS name, 'percent' AS unit")
+    })
+
+    it('should leave unresolved column references unchanged', () => {
+      const sql = "SELECT '$metric.unknown'"
+      const result = substituteMacros(
+        sql,
+        { metric: { name: 'cpu_usage', unit: 'percent' } },
+        defaultTimeRange
+      )
+      expect(result).toBe("SELECT '$metric.unknown'")
+    })
+
+    it('should leave dotted references unchanged for simple string variables', () => {
+      const sql = "SELECT '$metric.name'"
+      const result = substituteMacros(
+        sql,
+        { metric: 'cpu_usage' },
+        defaultTimeRange
+      )
+      // Simple variable can't have column access, left unchanged
+      expect(result).toBe("SELECT '$metric.name'")
+    })
+
+    it('should use first column value when accessing multi-column variable without column', () => {
+      const sql = "SELECT '$metric'"
+      const result = substituteMacros(
+        sql,
+        { metric: { name: 'cpu_usage', unit: 'percent' } },
+        defaultTimeRange
+      )
+      expect(result).toBe("SELECT 'cpu_usage'")
+    })
+
+    it('should escape single quotes in column values', () => {
+      const sql = "SELECT '$metric.description'"
+      const result = substituteMacros(
+        sql,
+        { metric: { name: 'cpu', description: "it's hot" } },
+        defaultTimeRange
+      )
+      expect(result).toBe("SELECT 'it''s hot'")
+    })
+
+    it('should handle mixed simple and multi-column variables', () => {
+      const sql = "SELECT * FROM $table WHERE name = '$metric.name' AND host = '$host'"
+      const result = substituteMacros(
+        sql,
+        {
+          table: 'measures',
+          metric: { name: 'cpu', unit: 'percent' },
+          host: 'server1',
+        },
+        defaultTimeRange
+      )
+      expect(result).toBe("SELECT * FROM measures WHERE name = 'cpu' AND host = 'server1'")
+    })
+  })
+})
+
+describe('validateMacros', () => {
+  it('should return valid for correct simple variable references', () => {
+    const result = validateMacros('SELECT $metric', { metric: 'cpu' })
+    expect(result.valid).toBe(true)
+    expect(result.errors).toHaveLength(0)
+  })
+
+  it('should return valid for correct dotted variable references', () => {
+    const result = validateMacros(
+      "SELECT '$metric.name'",
+      { metric: { name: 'cpu', unit: 'percent' } }
+    )
+    expect(result.valid).toBe(true)
+    expect(result.errors).toHaveLength(0)
+  })
+
+  it('should report error for unknown variable', () => {
+    const result = validateMacros('SELECT $unknown', {})
+    expect(result.valid).toBe(false)
+    expect(result.errors).toContain('Unknown variable: unknown')
+  })
+
+  it('should report error for dotted access on simple variable', () => {
+    const result = validateMacros("SELECT '$metric.name'", { metric: 'cpu' })
+    expect(result.valid).toBe(false)
+    expect(result.errors[0]).toContain("Variable 'metric' is not a multi-column variable")
+  })
+
+  it('should report error for unknown column in multi-column variable', () => {
+    const result = validateMacros(
+      "SELECT '$metric.unknown'",
+      { metric: { name: 'cpu', unit: 'percent' } }
+    )
+    expect(result.valid).toBe(false)
+    expect(result.errors[0]).toContain("Column 'unknown' not found in variable 'metric'")
+    expect(result.errors[0]).toContain('Available: name, unit')
+  })
+
+  it('should ignore built-in variables', () => {
+    const result = validateMacros('SELECT * FROM logs WHERE time >= $begin AND time <= $end', {})
+    expect(result.valid).toBe(true)
+  })
+
+  it('should ignore $order_by special variable', () => {
+    const result = validateMacros('SELECT * FROM logs ORDER BY $order_by', {})
+    expect(result.valid).toBe(true)
+  })
+})
+
+describe('VariableValue helpers', () => {
+  describe('serializeVariableValue', () => {
+    it('should return string as-is', () => {
+      expect(serializeVariableValue('cpu_usage')).toBe('cpu_usage')
+    })
+
+    it('should JSON-encode object', () => {
+      const result = serializeVariableValue({ name: 'cpu', unit: 'percent' })
+      expect(result).toBe('{"name":"cpu","unit":"percent"}')
+    })
+
+    it('should handle empty object', () => {
+      expect(serializeVariableValue({})).toBe('{}')
+    })
+  })
+
+  describe('deserializeVariableValue', () => {
+    it('should return simple string as-is', () => {
+      expect(deserializeVariableValue('cpu_usage')).toBe('cpu_usage')
+    })
+
+    it('should parse JSON object', () => {
+      const result = deserializeVariableValue('{"name":"cpu","unit":"percent"}')
+      expect(result).toEqual({ name: 'cpu', unit: 'percent' })
+    })
+
+    it('should return string if JSON is invalid', () => {
+      expect(deserializeVariableValue('{invalid json')).toBe('{invalid json')
+    })
+
+    it('should return string if JSON is array', () => {
+      expect(deserializeVariableValue('["a","b"]')).toBe('["a","b"]')
+    })
+
+    it('should return string if JSON object has non-string values', () => {
+      expect(deserializeVariableValue('{"a":123}')).toBe('{"a":123}')
+    })
+
+    it('should handle empty object', () => {
+      expect(deserializeVariableValue('{}')).toEqual({})
+    })
+  })
+
+  describe('getVariableString', () => {
+    it('should return string as-is', () => {
+      expect(getVariableString('cpu_usage')).toBe('cpu_usage')
+    })
+
+    it('should return first column value for object', () => {
+      expect(getVariableString({ name: 'cpu', unit: 'percent' })).toBe('cpu')
+    })
+
+    it('should return empty string for empty object', () => {
+      expect(getVariableString({})).toBe('')
+    })
+  })
+
+  describe('isMultiColumnValue', () => {
+    it('should return false for string', () => {
+      expect(isMultiColumnValue('cpu_usage')).toBe(false)
+    })
+
+    it('should return true for object', () => {
+      expect(isMultiColumnValue({ name: 'cpu' })).toBe(true)
+    })
+
+    it('should return true for empty object', () => {
+      expect(isMultiColumnValue({})).toBe(true)
     })
   })
 })

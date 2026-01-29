@@ -1,13 +1,13 @@
 import { useState, useCallback, useEffect } from 'react'
 import { X, Play, Trash2 } from 'lucide-react'
 import { getCellTypeMetadata } from '@/lib/screen-renderers/cell-registry'
-import type { CellConfig } from '@/lib/screen-renderers/notebook-types'
+import type { CellConfig, VariableValue } from '@/lib/screen-renderers/notebook-types'
 import { validateCellName, sanitizeCellName } from '@/lib/screen-renderers/notebook-utils'
 import { Button } from '@/components/ui/button'
 
 interface CellEditorProps {
   cell: CellConfig
-  variables: Record<string, string>
+  variables: Record<string, VariableValue>
   timeRange: { begin: string; end: string }
   existingNames: Set<string>
   availableColumns?: string[]

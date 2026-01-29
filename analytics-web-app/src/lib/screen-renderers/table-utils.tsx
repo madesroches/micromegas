@@ -18,6 +18,8 @@ import {
   isDurationType,
   durationToMs,
 } from '@/lib/arrow-utils'
+import type { VariableValue } from './notebook-types'
+import { getVariableString } from './notebook-types'
 
 // =============================================================================
 // Column Override Types
@@ -147,14 +149,15 @@ export function validateFormatMacros(
  */
 export function expandVariableMacros(
   template: string,
-  variables: Record<string, string>
+  variables: Record<string, VariableValue>
 ): string {
   let result = template
   // Sort by name length descending to avoid partial matches
   const sortedVars = Object.entries(variables).sort((a, b) => b[0].length - a[0].length)
   for (const [name, value] of sortedVars) {
     const regex = new RegExp(`\\$${name}\\b`, 'g')
-    result = result.replace(regex, value)
+    // Use getVariableString to handle both simple strings and multi-column objects
+    result = result.replace(regex, getVariableString(value))
   }
   return result
 }
@@ -198,7 +201,7 @@ interface OverrideCellProps {
   row: Record<string, unknown>
   columns: TableColumn[]
   /** Notebook variables for macro expansion */
-  variables?: Record<string, string>
+  variables?: Record<string, VariableValue>
 }
 
 /**
@@ -317,7 +320,7 @@ export interface TableBodyProps {
   /** Column overrides for custom rendering */
   overrides?: ColumnOverride[]
   /** Notebook variables for macro expansion in overrides */
-  variables?: Record<string, string>
+  variables?: Record<string, VariableValue>
 }
 
 export function TableBody({ data, columns, compact = false, overrides = [], variables = {} }: TableBodyProps) {

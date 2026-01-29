@@ -28,7 +28,7 @@ import {
   CELL_TYPE_OPTIONS,
   createDefaultCell,
 } from './cell-registry'
-import type { CellConfig, VariableCellConfig, NotebookConfig, QueryCellConfig } from './notebook-types'
+import type { CellConfig, VariableCellConfig, NotebookConfig, QueryCellConfig, VariableValue } from './notebook-types'
 import { CellContainer } from '@/components/CellContainer'
 import { CellEditor } from '@/components/CellEditor'
 import { ResizeHandle } from '@/components/ResizeHandle'
@@ -458,7 +458,7 @@ export function NotebookRenderer({
     const CellRenderer = getCellRenderer(cell.type)
 
     // Variables available to this cell (from cells above)
-    const availableVariables: Record<string, string> = {}
+    const availableVariables: Record<string, VariableValue> = {}
     for (let i = 0; i < index; i++) {
       const prevCell = cells[i]
       if (prevCell.type === 'variable' && variableValues[prevCell.name] !== undefined) {

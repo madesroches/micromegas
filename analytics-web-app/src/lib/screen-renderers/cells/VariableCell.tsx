@@ -5,7 +5,11 @@ import type {
   CellEditorProps,
   CellExecutionContext,
 } from '../cell-registry'
-import type { VariableCellConfig, CellConfig, CellState } from '../notebook-types'
+import type { VariableCellConfig, CellConfig, CellState, VariableValue } from '../notebook-types'
+import {
+  getVariableString,
+  serializeVariableValue,
+} from '../notebook-types'
 import { AvailableVariablesPanel } from '@/components/AvailableVariablesPanel'
 import { DocumentationLink, QUERY_GUIDE_URL } from '@/components/DocumentationLink'
 import { SyntaxEditor } from '@/components/SyntaxEditor'
@@ -67,12 +71,23 @@ export function VariableCell({
     )
   }
 
-  const handleComboboxChange = (newValue: string) => {
-    onValueChange?.(newValue)
+  const handleComboboxChange = (serializedValue: string) => {
+    // Find the option with this serialized value to get the original VariableValue
+    const option = variableOptions?.find(
+      (opt) => serializeVariableValue(opt.value) === serializedValue
+    )
+    if (option) {
+      onValueChange?.(option.value)
+    } else {
+      // Fallback: use the serialized value as a string
+      onValueChange?.(serializedValue)
+    }
   }
 
+  // For text inputs, get the string representation of the value
+  const stringValue = getVariableString(value ?? '')
   // Display value: local state (while typing) takes precedence, otherwise use prop
-  const displayValue = isTextInput ? (localValue ?? value ?? '') : (value ?? '')
+  const displayValue = isTextInput ? (localValue ?? stringValue) : serializeVariableValue(value ?? '')
 
   return (
     <div className="flex items-center gap-3 py-1">
@@ -83,11 +98,14 @@ export function VariableCell({
           className="flex-1 max-w-[400px] px-3 py-2 bg-app-card border border-theme-border rounded-md text-theme-text-primary text-sm focus:outline-none focus:border-accent-link"
         >
           {variableOptions && variableOptions.length > 0 ? (
-            variableOptions.map((opt) => (
-              <option key={opt.value} value={opt.value}>
-                {opt.label}
-              </option>
-            ))
+            variableOptions.map((opt) => {
+              const serialized = serializeVariableValue(opt.value)
+              return (
+                <option key={serialized} value={serialized}>
+                  {opt.label}
+                </option>
+              )
+            })
           ) : (
             <option value="">No options available</option>
           )}
@@ -97,7 +115,7 @@ export function VariableCell({
       {type === 'text' && (
         <input
           type="text"
-          value={displayValue}
+          value={localValue ?? stringValue}
           onChange={(e) => handleTextChange(e.target.value)}
           className="flex-1 max-w-[400px] px-3 py-2 bg-app-card border border-theme-border rounded-md text-theme-text-primary text-sm focus:outline-none focus:border-accent-link"
           placeholder="Enter value..."
@@ -107,7 +125,7 @@ export function VariableCell({
       {type === 'number' && (
         <input
           type="number"
-          value={displayValue}
+          value={localValue ?? stringValue}
           onChange={(e) => handleTextChange(e.target.value)}
           className="flex-1 max-w-[200px] px-3 py-2 bg-app-card border border-theme-border rounded-md text-theme-text-primary text-sm focus:outline-none focus:border-accent-link"
           placeholder="0"
@@ -213,19 +231,38 @@ export const variableMetadata: CellTypeMetadata = {
     const sql = substituteMacros(varConfig.sql, variables, timeRange)
     const result = await runQuery(sql)
 
-    // Extract options from result
-    // Convention: 1 column = value+label, 2 columns = value then label
-    const options: { label: string; value: string }[] = []
+    // Extract options from result with multi-column support
+    // Convention:
+    // - 1 column: value is string, label is same as value
+    // - 2 columns: value is first column (string), label is second column
+    // - 3+ columns: value is entire row (object), label is formatted from all values
+    const options: { label: string; value: VariableValue }[] = []
     if (result && result.numRows > 0 && result.numCols > 0) {
       const schema = result.schema
-      const valueColName = schema.fields[0].name
-      const labelColName = schema.fields.length > 1 ? schema.fields[1].name : valueColName
+      const columnNames = schema.fields.map((f) => f.name)
+
       for (let i = 0; i < result.numRows; i++) {
         const row = result.get(i)
-        if (row) {
-          const value = String(row[valueColName] ?? '')
-          const label = String(row[labelColName] ?? value)
-          options.push({ label, value })
+        if (!row) continue
+
+        if (columnNames.length === 1) {
+          // Single column: store as string
+          const val = String(row[columnNames[0]] ?? '')
+          options.push({ value: val, label: val })
+        } else if (columnNames.length === 2) {
+          // Two columns: first is value, second is label (backward compatible)
+          const val = String(row[columnNames[0]] ?? '')
+          const label = String(row[columnNames[1]] ?? val)
+          options.push({ value: val, label })
+        } else {
+          // Multiple columns: store entire row as object
+          const rowObj: Record<string, string> = {}
+          for (const col of columnNames) {
+            rowObj[col] = String(row[col] ?? '')
+          }
+          // Label shows all values for display
+          const label = Object.values(rowObj).join(' | ')
+          options.push({ value: rowObj, label })
         }
       }
     }
@@ -241,15 +278,31 @@ export const variableMetadata: CellTypeMetadata = {
     // Only combobox variables need validation
     if (!options || options.length === 0) return
 
+    // Compare using serialized values for multi-column support
+    const currentSerialized = currentValue !== undefined ? serializeVariableValue(currentValue) : undefined
+
     // If current value exists and is valid, keep it
-    if (currentValue && options.some((o) => o.value === currentValue)) {
+    if (currentSerialized && options.some((o) => serializeVariableValue(o.value) === currentSerialized)) {
       return
     }
 
     // Current value is missing or invalid - use default or first option
-    const fallbackValue = varConfig.defaultValue || options[0]?.value
-    if (fallbackValue) {
-      setVariableValue(config.name, fallbackValue)
+    // Note: defaultValue is always a string in config, so try to match it
+    if (varConfig.defaultValue) {
+      const matchingOption = options.find(
+        (o) => serializeVariableValue(o.value) === varConfig.defaultValue ||
+               getVariableString(o.value) === varConfig.defaultValue
+      )
+      if (matchingOption) {
+        setVariableValue(config.name, matchingOption.value)
+        return
+      }
+    }
+
+    // Fall back to first option
+    const firstOption = options[0]?.value
+    if (firstOption !== undefined) {
+      setVariableValue(config.name, firstOption)
     }
   },
 

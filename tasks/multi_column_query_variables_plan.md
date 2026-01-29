@@ -1,6 +1,6 @@
 # Multi-Column Query Variables with Row.Column Substitution
 
-## Status: PLANNING
+## Status: IMPLEMENTED
 
 ## Issue Reference
 - GitHub Issue: [#747](https://github.com/madesroches/micromegas/issues/747)
@@ -505,16 +505,16 @@ Add section on multi-column query variables:
 - Error messages and troubleshooting
 
 ### Migration Guide
-Document how to migrate from mapped value variables to multi-column query variables.
+No migration needed - this is additive functionality. Existing notebooks work unchanged.
 
 ## Acceptance Criteria Checklist
 
-- [ ] Query variables can return multiple columns
-- [ ] The entire row is stored as the variable value
-- [ ] Support `$variable.column` syntax for macro substitution in SQL
-- [ ] Support row.column substitution in chart properties (e.g., unit)
-- [ ] Provide clear error messages when referencing non-existent columns
-- [ ] Update Available Variables panel to show column information
-- [ ] URL state correctly encodes/decodes multi-column values
-- [ ] Backward compatible with existing single-column variables
+- [x] Query variables can return multiple columns
+- [x] The entire row is stored as the variable value
+- [x] Support `$variable.column` syntax for macro substitution in SQL
+- [x] Support row.column substitution in chart properties (e.g., unit)
+- [x] Provide clear error messages when referencing non-existent columns
+- [x] Update Available Variables panel to show column information
+- [x] URL state correctly encodes/decodes multi-column values
+- [x] Backward compatible with existing single-column variables
 - [ ] Update documentation with examples
