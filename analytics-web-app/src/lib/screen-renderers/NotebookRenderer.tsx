@@ -575,6 +575,7 @@ export function NotebookRenderer({
               variables={variableValues}
               timeRange={timeRange}
               existingNames={existingNames}
+              availableColumns={cellStates[selectedCell.name]?.data?.schema.fields.map((f) => f.name)}
               onClose={() => setSelectedCellIndex(null)}
               onUpdate={(updates) => updateCell(selectedCellIndex!, updates)}
               onRun={() => executeCell(selectedCellIndex!)}

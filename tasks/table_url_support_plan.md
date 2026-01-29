@@ -1,5 +1,7 @@
 # Table URL Support Implementation Plan
 
+**Status: IMPLEMENTED**
+
 ## Overview
 
 Add support for clickable URLs inside table cells in both standalone table screens and notebook screens. This enables better navigation when query results contain URLs.
@@ -16,11 +18,13 @@ Instead of auto-detecting URLs, users configure **column overrides** that define
 ```
 [View Process](/process?id=$row.process_id)
 [Details](/details?id=$row["process-id"])
+[$row.exe](/process?process_id=$row.process_id&from=$row.start_time&to=$row.end_time)
 ```
 
 - `[label](url)` — Markdown link syntax
 - `$row.column_name` — Access column value (alphanumeric names)
 - `$row["column-name"]` — Access column value (any name, including hyphens/spaces)
+- **Timestamps are automatically formatted as RFC3339 (ISO 8601)** for URL compatibility
 
 ### UI: Editor Panel with Collapsible Sections
 
@@ -60,205 +64,88 @@ The existing SQL editor panel gets a second collapsible section for overrides:
 - Column dropdown populated from query result columns
 - Query section flex-grows; Overrides section fixed height
 
-**Mockups:** See `tasks/url_config_mockups/option_e_*.html`
+---
+
+## Implementation Summary
+
+### Files Created
+
+| File | Description |
+|------|-------------|
+| `src/components/OverrideEditor.tsx` | Reusable override editor component with collapsible UI, add/remove functionality, column dropdown, and format input |
+| `src/lib/screen-renderers/__tests__/table-utils.test.tsx` | 28 unit tests for `expandRowMacros()` and `OverrideCell` |
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/lib/screen-renderers/table-utils.tsx` | Added `ColumnOverride` interface, `expandRowMacros()` function with RFC3339 timestamp support, `OverrideCell` component, updated `TableBody` to accept `overrides` prop |
+| `src/lib/screen-renderers/TableRenderer.tsx` | Added `overrides` to `TableConfig`, custom panel with collapsible "Query" and "Overrides" sections, override management |
+| `src/lib/screen-renderers/cells/TableCell.tsx` | Added overrides support in renderer and editor components |
+| `src/lib/screen-renderers/cell-registry.ts` | Added `availableColumns?: string[]` to `CellEditorProps` interface |
+| `src/components/CellEditor.tsx` | Added `availableColumns` prop, passed to type-specific editors |
+| `src/lib/screen-renderers/NotebookRenderer.tsx` | Pass available columns from cell state to `CellEditor` |
 
 ---
 
-## Implementation
+## Key Implementation Details
 
-### Step 1: Add Override Types
-
-**File:** `analytics-web-app/src/lib/screen-renderers/types.ts` (or inline in table-utils)
+### Macro Expansion (`expandRowMacros`)
 
 ```typescript
-export interface ColumnOverride {
-  column: string      // Column name to override
-  format: string      // Markdown format string with $row.x or $row["x"] macros
-}
-```
-
-### Step 2: Create Macro Expander
-
-**File:** `analytics-web-app/src/lib/screen-renderers/table-utils.tsx`
-
-```typescript
-// Matches $row.columnName (dot notation for simple alphanumeric names)
-const DOT_NOTATION_REGEX = /\$row\.(\w+)/g
-
-// Matches $row["column-name"] or $row['column-name'] (bracket notation for any name)
-const BRACKET_NOTATION_REGEX = /\$row\[["']([^"']+)["']\]/g
-
-/**
- * Expand $row macros using row data.
- * Supports two syntaxes:
- * - $row.columnName (dot notation for alphanumeric column names)
- * - $row["column-name"] (bracket notation for names with hyphens, spaces, etc.)
- */
 export function expandRowMacros(
   template: string,
-  row: Record<string, unknown>
-): string {
-  // First pass: bracket notation (handles special characters)
-  let result = template.replace(BRACKET_NOTATION_REGEX, (_, columnName) => {
-    const value = row[columnName]
-    return value != null ? String(value) : ''
-  })
-
-  // Second pass: dot notation (simple alphanumeric names)
-  result = result.replace(DOT_NOTATION_REGEX, (_, columnName) => {
-    const value = row[columnName]
-    return value != null ? String(value) : ''
-  })
-
-  return result
-}
+  row: Record<string, unknown>,
+  columnTypes?: Map<string, DataType>
+): string
 ```
 
-### Step 3: Create Override Renderer Component
+- Supports dot notation: `$row.column_name`
+- Supports bracket notation: `$row["column-name"]` or `$row['column-name']`
+- **Timestamp columns are automatically formatted as RFC3339** when `columnTypes` is provided
+- Missing columns resolve to empty string
 
-**File:** `analytics-web-app/src/lib/screen-renderers/table-utils.tsx`
-
-Reuse the existing `react-markdown` library (already used by `MarkdownCell`) for consistent markdown rendering across the app.
+### Override Cell Component (`OverrideCell`)
 
 ```typescript
-import ReactMarkdown from 'react-markdown'
-
 interface OverrideCellProps {
   format: string
   row: Record<string, unknown>
-}
-
-/**
- * Render a column override: expand macros, then render markdown
- */
-export function OverrideCell({ format, row }: OverrideCellProps) {
-  const expanded = expandRowMacros(format, row)
-
-  return (
-    <ReactMarkdown
-      components={{
-        // Render links with proper attributes and click handling
-        a: ({ href, children }) => (
-          <a
-            href={href}
-            rel="noopener noreferrer"
-            className="text-accent-link hover:underline"
-          >
-            {children}
-          </a>
-        ),
-        // Strip wrapper paragraph to keep content inline
-        p: ({ children }) => <>{children}</>,
-      }}
-    >
-      {expanded}
-    </ReactMarkdown>
-  )
+  columns: TableColumn[]  // Used for timestamp type detection
 }
 ```
 
-**Benefits of using react-markdown:**
-- Consistent with `MarkdownCell` rendering
-- Already bundled (no additional dependencies)
-- Handles `javascript:` URL sanitization automatically
-- Supports full markdown syntax if needed later
+- Expands macros with proper timestamp formatting
+- Renders markdown using `react-markdown`
+- Links have `rel="noopener noreferrer"` for security
+- Paragraph wrapper stripped for inline rendering
 
-### Step 4: Update TableBody to Apply Overrides
+### Config Schema
 
-**File:** `analytics-web-app/src/lib/screen-renderers/table-utils.tsx`
-
-```typescript
-export interface TableBodyProps {
-  data: TableData
-  columns: TableColumn[]
-  compact?: boolean
-  overrides?: ColumnOverride[]  // NEW
-}
-
-export function TableBody({
-  data,
-  columns,
-  compact = false,
-  overrides = []
-}: TableBodyProps) {
-  // Build override lookup map
-  const overrideMap = useMemo(() => {
-    const map = new Map<string, string>()
-    for (const o of overrides) {
-      map.set(o.column, o.format)
-    }
-    return map
-  }, [overrides])
-
-  // In render loop:
-  const row = data.get(rowIdx)
-  const override = overrideMap.get(col.name)
-  const cellContent = override
-    ? <OverrideCell format={override} row={row} />
-    : formatCell(value, col.type)
-}
-```
-
-### Step 5: Add Overrides UI to Editor Panel
-
-**File:** `analytics-web-app/src/lib/screen-renderers/TableRenderer.tsx`
-
-Add collapsible sections and override editor UI:
-
-1. Wrap existing QueryEditor in collapsible "Query" section
-2. Add new collapsible "Overrides" section below
-3. Override list with add/delete
-4. Column dropdown (populated from query result columns)
-5. Format input field
-
-**Config schema updates:**
-
-Table screen config (persisted when saving screen):
+**Table screen config:**
 ```typescript
 interface TableConfig {
   sql: string
-  overrides?: ColumnOverride[]  // NEW - saved with screen
+  overrides?: ColumnOverride[]
+  sortColumn?: string
+  sortDirection?: 'asc' | 'desc'
   // ... existing fields
 }
 ```
 
-Notebook cell config (persisted in notebook JSON):
+**Notebook cell options:**
 ```typescript
-interface TableCellConfig {
+// Overrides stored in options.overrides
+interface QueryCellConfig {
   type: 'table'
   sql: string
-  overrides?: ColumnOverride[]  // NEW - saved with cell
-  // ... existing fields
+  options?: {
+    overrides?: ColumnOverride[]
+    sortColumn?: string
+    sortDirection?: 'asc' | 'desc'
+  }
 }
 ```
-
-Overrides are automatically persisted when the user saves the screen/notebook since they're part of the config object.
-
-### Step 6: Enable in Notebook TableCell
-
-**File:** `analytics-web-app/src/lib/screen-renderers/cells/TableCell.tsx`
-
-Pass overrides from cell config to TableBody:
-
-```typescript
-<TableBody
-  data={tableData}
-  columns={columns}
-  compact={true}
-  overrides={config.overrides}
-/>
-```
-
----
-
-## File Changes Summary
-
-| File | Change Type | Description |
-|------|-------------|-------------|
-| `src/lib/screen-renderers/table-utils.tsx` | Modify | Add `expandRowMacros()`, `OverrideCell` component, `overrides` prop to TableBody |
-| `src/lib/screen-renderers/TableRenderer.tsx` | Modify | Add collapsible sections UI, override editor |
-| `src/lib/screen-renderers/cells/TableCell.tsx` | Modify | Pass overrides to TableBody |
-| `src/lib/screen-renderers/cells/TableCellEditor.tsx` | Modify | Add override configuration UI |
 
 ---
 
@@ -269,32 +156,27 @@ Pass overrides from cell config to TableBody:
 SELECT
   exe,
   process_id,
-  '' as link,
-  start_time
+  start_time,
+  last_update_time,
+  '' as link
 FROM processes
 LIMIT 20
 ```
 
 **Override on `link` column:**
 ```
-[View Process](/process?id=$row.process_id)
+[$row.exe](/mmlocal/process?process_id=$row.process_id&from=$row.start_time&to=$row.last_update_time)
 ```
 
-**Result:** The `link` column shows "View Process" as a clickable link for each row.
-
-**Advanced example (dynamic label):**
+**Result:** The `link` column shows the exe name as a clickable link. Timestamps are automatically formatted as RFC3339:
 ```
-[$row.exe](/process?id=$row.process_id)
+/mmlocal/process?process_id=abc123&from=2024-01-15T10:30:00.000Z&to=2024-01-15T11:45:00.000Z
 ```
-
-Shows the exe name as the link text.
 
 **Bracket notation example (special column names):**
 ```
 [View](/details?id=$row["process-id"]&name=$row["Display Name"])
 ```
-
-Use bracket notation for column names containing hyphens, spaces, or other special characters.
 
 ---
 
@@ -307,17 +189,35 @@ Use bracket notation for column names containing hyphens, spaces, or other speci
 
 ## Testing
 
-1. **Manual: Table screen** — Add override, verify links render and navigate correctly
-2. **Manual: Notebook** — Same test in table cell
-3. **Unit tests:**
-   - `expandRowMacros()`:
-     - Dot notation: single macro, multiple macros
-     - Bracket notation: single/double quotes, special characters in names
-     - Mixed: both notations in same template
-     - Missing column → empty string
-     - Column name not in row → empty string
-   - `OverrideCell`: renders link with correct href, handles multiple links
-   - Markdown rendering already covered by existing `MarkdownCell` tests
+### Unit Tests (28 tests in `table-utils.test.tsx`)
+
+**`expandRowMacros` tests:**
+- Dot notation: single macro, multiple macros, underscores
+- Bracket notation: double quotes, single quotes, spaces, special characters
+- Mixed notation in same template
+- Missing columns → empty string
+- Null/undefined values → empty string
+- Non-string value conversion
+
+**`expandRowMacros` timestamp tests:**
+- RFC3339 formatting for timestamp columns
+- Bracket notation with timestamps
+- Mixed timestamp and string columns
+- Backwards compatibility without column types
+
+**`OverrideCell` tests:**
+- Simple link rendering
+- Dynamic link text from macros
+- Multiple links
+- Missing columns
+- Plain text (no markdown)
+- Bracket notation in links
+
+### Manual Testing
+
+1. **Table screen** — Add override, verify links render and navigate correctly
+2. **Notebook** — Same test in table cell
+3. **Timestamps** — Verify timestamp columns produce RFC3339 URLs
 
 ---
 
@@ -325,3 +225,4 @@ Use bracket notation for column names containing hyphens, spaces, or other speci
 
 - Auto-complete for `$row.` in format input
 - Preview showing rendered result for first row
+- URL encoding for special characters in values

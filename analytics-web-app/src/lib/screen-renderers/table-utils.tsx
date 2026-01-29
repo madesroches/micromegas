@@ -4,8 +4,10 @@
 
 /* eslint-disable react-refresh/only-export-components */
 
+import { useMemo } from 'react'
 import { ChevronUp, ChevronDown } from 'lucide-react'
 import { DataType } from 'apache-arrow'
+import Markdown from 'react-markdown'
 import { formatTimestamp, formatDurationMs } from '@/lib/time-range'
 import {
   timestampToDate,
@@ -15,6 +17,122 @@ import {
   isDurationType,
   durationToMs,
 } from '@/lib/arrow-utils'
+
+// =============================================================================
+// Column Override Types
+// =============================================================================
+
+/** Configuration for overriding how a column renders */
+export interface ColumnOverride {
+  /** Column name to override */
+  column: string
+  /** Markdown format string with $row.x or $row["x"] macros */
+  format: string
+}
+
+// =============================================================================
+// Macro Expansion
+// =============================================================================
+
+// Matches $row.columnName (dot notation for simple alphanumeric names)
+const DOT_NOTATION_REGEX = /\$row\.(\w+)/g
+
+// Matches $row["column-name"] or $row['column-name'] (bracket notation for any name)
+const BRACKET_NOTATION_REGEX = /\$row\[["']([^"']+)["']\]/g
+
+/**
+ * Format a value for URL inclusion, handling timestamps as RFC3339.
+ */
+function formatValueForUrl(
+  value: unknown,
+  columnName: string,
+  columnTypes: Map<string, DataType>
+): string {
+  if (value == null) return ''
+
+  const dataType = columnTypes.get(columnName)
+  if (dataType && isTimeType(dataType)) {
+    // Format timestamps as RFC3339 (ISO 8601) for URL compatibility
+    const date = timestampToDate(value, dataType)
+    return date ? date.toISOString() : ''
+  }
+
+  return String(value)
+}
+
+/**
+ * Expand $row macros using row data.
+ * Supports two syntaxes:
+ * - $row.columnName (dot notation for alphanumeric column names)
+ * - $row["column-name"] (bracket notation for names with hyphens, spaces, etc.)
+ *
+ * When columnTypes is provided, timestamps are formatted as RFC3339.
+ */
+export function expandRowMacros(
+  template: string,
+  row: Record<string, unknown>,
+  columnTypes?: Map<string, DataType>
+): string {
+  const types = columnTypes || new Map<string, DataType>()
+
+  // First pass: bracket notation (handles special characters)
+  let result = template.replace(BRACKET_NOTATION_REGEX, (_, columnName) => {
+    const value = row[columnName]
+    return formatValueForUrl(value, columnName, types)
+  })
+
+  // Second pass: dot notation (simple alphanumeric names)
+  result = result.replace(DOT_NOTATION_REGEX, (_, columnName) => {
+    const value = row[columnName]
+    return formatValueForUrl(value, columnName, types)
+  })
+
+  return result
+}
+
+// =============================================================================
+// Override Cell Component
+// =============================================================================
+
+interface OverrideCellProps {
+  format: string
+  row: Record<string, unknown>
+  columns: TableColumn[]
+}
+
+/**
+ * Render a column override: expand macros, then render markdown.
+ * Timestamps are automatically formatted as RFC3339 for URL compatibility.
+ */
+export function OverrideCell({ format, row, columns }: OverrideCellProps) {
+  // Build column type map for proper value formatting
+  const columnTypes = useMemo(() => {
+    const map = new Map<string, DataType>()
+    for (const col of columns) {
+      map.set(col.name, col.type)
+    }
+    return map
+  }, [columns])
+
+  const expanded = expandRowMacros(format, row, columnTypes)
+
+  return (
+    <Markdown
+      components={{
+        // Render links with proper attributes
+        a: ({ href, children }) => (
+          <a href={href} rel="noopener noreferrer" className="text-accent-link hover:underline">
+            {children}
+          </a>
+        ),
+        // Strip wrapper paragraph to keep content inline
+        p: ({ children }) => <>{children}</>,
+      }}
+    >
+      {expanded}
+    </Markdown>
+  )
+}
 
 // =============================================================================
 // Sort Header Component
@@ -91,9 +209,11 @@ export interface TableBodyProps {
   columns: TableColumn[]
   /** Use compact styling for notebook cells */
   compact?: boolean
+  /** Column overrides for custom rendering */
+  overrides?: ColumnOverride[]
 }
 
-export function TableBody({ data, columns, compact = false }: TableBodyProps) {
+export function TableBody({ data, columns, compact = false, overrides = [] }: TableBodyProps) {
   const rowClass = compact
     ? 'border-b border-theme-border hover:bg-app-card/50 transition-colors'
     : 'border-b border-theme-border hover:bg-app-card transition-colors'
@@ -101,6 +221,15 @@ export function TableBody({ data, columns, compact = false }: TableBodyProps) {
   const cellClass = compact
     ? 'px-3 py-2 text-theme-text-primary font-mono truncate max-w-xs'
     : 'px-4 py-3 text-sm text-theme-text-primary font-mono truncate max-w-xs'
+
+  // Build override lookup map
+  const overrideMap = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const o of overrides) {
+      map.set(o.column, o.format)
+    }
+    return map
+  }, [overrides])
 
   return (
     <tbody>
@@ -111,6 +240,17 @@ export function TableBody({ data, columns, compact = false }: TableBodyProps) {
           <tr key={rowIdx} className={rowClass}>
             {columns.map((col) => {
               const value = row[col.name]
+              const override = overrideMap.get(col.name)
+
+              // Use override renderer if configured for this column
+              if (override) {
+                return (
+                  <td key={col.name} className={cellClass}>
+                    <OverrideCell format={override} row={row} columns={columns} />
+                  </td>
+                )
+              }
+
               const formatted = formatCell(value, col.type)
               // For non-compact mode, show raw value in tooltip (except binary which uses formatted)
               const tooltip =

@@ -1,13 +1,21 @@
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
+import { ChevronLeft, ChevronRight, ChevronDown, Play } from 'lucide-react'
 import { registerRenderer, ScreenRendererProps } from './index'
 import { useTimeRangeSync } from './useTimeRangeSync'
 import { useSqlHandlers } from './useSqlHandlers'
 import { LoadingState, EmptyState, SaveFooter, RendererLayout } from './shared'
-import { QueryEditor } from '@/components/QueryEditor'
+import { SyntaxEditor } from '@/components/SyntaxEditor'
+import { OverrideEditor } from '@/components/OverrideEditor'
 import { useStreamQuery } from '@/hooks/useStreamQuery'
 import { useDefaultSaveCleanup } from '@/lib/url-cleanup-utils'
-import { SortHeader, TableBody, buildOrderByClause, getNextSortState } from './table-utils'
+import {
+  SortHeader,
+  TableBody,
+  buildOrderByClause,
+  getNextSortState,
+  ColumnOverride,
+} from './table-utils'
 
 // Variables available for table queries
 const VARIABLES = [
@@ -25,6 +33,7 @@ interface TableConfig {
   timeRangeTo?: string
   sortColumn?: string
   sortDirection?: 'asc' | 'desc'
+  overrides?: ColumnOverride[]
   [key: string]: unknown
 }
 
@@ -164,34 +173,185 @@ export function TableRenderer({
     [sortColumn, sortDirection, tableConfig, savedTableConfig, onConfigChange, setHasUnsavedChanges]
   )
 
-  // Build currentValues with order_by for QueryEditor display
-  const queryEditorValues = {
-    ...currentValues,
-    order_by: orderByValue || '(none)',
-  }
+  // Handle overrides change
+  const handleOverridesChange = useCallback(
+    (newOverrides: ColumnOverride[]) => {
+      onConfigChange({ ...tableConfig, overrides: newOverrides })
 
-  // Query editor panel
-  const sqlPanel = (
-    <QueryEditor
-      defaultSql={savedTableConfig ? savedTableConfig.sql : tableConfig.sql}
-      variables={VARIABLES}
-      currentValues={queryEditorValues}
-      timeRangeLabel={timeRangeLabel}
-      onRun={handleRunQuery}
-      onReset={handleResetQuery}
-      onChange={handleSqlChange}
-      isLoading={streamQuery.isStreaming}
-      error={queryError}
-      footer={
-        <SaveFooter
-          onSave={handleSave}
-          onSaveAs={onSaveAs}
-          isSaving={isSaving}
-          hasUnsavedChanges={hasUnsavedChanges}
-          saveError={saveError}
-        />
+      if (savedTableConfig) {
+        const savedOverrides = savedTableConfig.overrides || []
+        const hasChanged = JSON.stringify(newOverrides) !== JSON.stringify(savedOverrides)
+        setHasUnsavedChanges(hasChanged || hasUnsavedChanges)
+      } else {
+        setHasUnsavedChanges(true)
       }
-    />
+    },
+    [tableConfig, savedTableConfig, onConfigChange, setHasUnsavedChanges, hasUnsavedChanges]
+  )
+
+  // Get available columns from query result
+  const table = streamQuery.getTable()
+  const availableColumns = table ? table.schema.fields.map((f) => f.name) : []
+
+  // Panel state
+  const [isPanelCollapsed, setIsPanelCollapsed] = useState(true)
+  const [isQueryExpanded, setIsQueryExpanded] = useState(true)
+  const [sql, setSql] = useState(savedTableConfig ? savedTableConfig.sql : tableConfig.sql)
+
+  const handleSqlRun = useCallback(() => {
+    handleRunQuery(sql)
+  }, [sql, handleRunQuery])
+
+  const handleSqlReset = useCallback(() => {
+    const defaultSql = savedTableConfig ? savedTableConfig.sql : tableConfig.sql
+    setSql(defaultSql)
+    handleResetQuery()
+  }, [savedTableConfig, tableConfig.sql, handleResetQuery])
+
+  // Query editor panel with overrides
+  const sqlPanel = isPanelCollapsed ? (
+    <div className="hidden md:flex w-12 bg-app-panel border-l border-theme-border flex-col">
+      <div className="p-2">
+        <button
+          onClick={() => setIsPanelCollapsed(false)}
+          className="w-8 h-8 flex items-center justify-center text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-border rounded transition-colors"
+          title="Expand SQL Panel"
+        >
+          <ChevronLeft className="w-4 h-4" />
+        </button>
+      </div>
+    </div>
+  ) : (
+    <div className="hidden md:flex w-80 lg:w-96 bg-app-panel border-l border-theme-border flex-col">
+      {/* Panel Header */}
+      <div className="flex items-center justify-between px-4 py-3 bg-app-card border-b border-theme-border">
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setIsPanelCollapsed(true)}
+            className="w-6 h-6 flex items-center justify-center text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-border rounded transition-colors"
+            title="Collapse panel"
+          >
+            <ChevronRight className="w-4 h-4" />
+          </button>
+          <span className="text-sm font-semibold text-theme-text-primary">Configuration</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleSqlReset}
+            className="px-2.5 py-1 text-xs text-theme-text-secondary border border-theme-border rounded hover:bg-theme-border hover:text-theme-text-primary transition-colors"
+          >
+            Reset
+          </button>
+          <button
+            onClick={handleSqlRun}
+            disabled={streamQuery.isStreaming}
+            className="flex items-center gap-1 px-2.5 py-1 text-xs bg-accent-success text-white rounded hover:opacity-90 disabled:bg-theme-border disabled:cursor-not-allowed transition-colors"
+          >
+            <Play className="w-3 h-3" />
+            Run
+          </button>
+        </div>
+      </div>
+
+      {/* Scrollable Content */}
+      <div className="flex-1 overflow-auto">
+        {/* Query Section */}
+        <div className="border-b border-theme-border">
+          <button
+            onClick={() => setIsQueryExpanded(!isQueryExpanded)}
+            className="w-full flex items-center gap-2 px-4 py-2 bg-app-card/50 hover:bg-app-card transition-colors"
+          >
+            <ChevronDown
+              className={`w-4 h-4 text-theme-text-muted transition-transform ${isQueryExpanded ? '' : '-rotate-90'}`}
+            />
+            <span className="text-sm font-semibold text-theme-text-primary">Query</span>
+          </button>
+
+          {isQueryExpanded && (
+            <div className="p-4">
+              <SyntaxEditor
+                value={sql}
+                onChange={(value) => {
+                  setSql(value)
+                  handleSqlChange(value)
+                }}
+                language="sql"
+                minHeight="192px"
+              />
+
+              {/* Error */}
+              {queryError && (
+                <div className="mt-3 p-3 bg-accent-error/10 border border-accent-error/50 rounded-md">
+                  <p className="text-xs text-accent-error">{queryError}</p>
+                </div>
+              )}
+
+              {/* Variables */}
+              <div className="mt-4">
+                <h4 className="text-xs font-semibold uppercase tracking-wide text-theme-text-muted mb-2">Variables</h4>
+                <div className="text-xs text-theme-text-muted space-y-1">
+                  {VARIABLES.map((v) => (
+                    <div key={v.name}>
+                      <code className="px-1.5 py-0.5 bg-theme-border rounded text-accent-variable">${v.name}</code> -{' '}
+                      {v.description}
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Current Values */}
+              <div className="mt-4">
+                <h4 className="text-xs font-semibold uppercase tracking-wide text-theme-text-muted mb-2">
+                  Current Values
+                </h4>
+                <div className="text-xs text-theme-text-muted space-y-1">
+                  {Object.entries(currentValues).map(([key, value]) => (
+                    <div key={key}>
+                      <code className="px-1.5 py-0.5 bg-theme-border rounded text-accent-variable">${key}</code> ={' '}
+                      <span className="text-theme-text-secondary">{value}</span>
+                    </div>
+                  ))}
+                  <div>
+                    <code className="px-1.5 py-0.5 bg-theme-border rounded text-accent-variable">$order_by</code> ={' '}
+                    <span className="text-theme-text-secondary">{orderByValue || '(none)'}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Time Range */}
+              {timeRangeLabel && (
+                <div className="mt-4">
+                  <h4 className="text-xs font-semibold uppercase tracking-wide text-theme-text-muted mb-2">
+                    Time Range
+                  </h4>
+                  <p className="text-xs text-theme-text-muted">
+                    Applied implicitly via FlightSQL headers.
+                    <br />
+                    Current: <span className="text-theme-text-primary">{timeRangeLabel}</span>
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Overrides Section */}
+        <OverrideEditor
+          overrides={tableConfig.overrides || []}
+          availableColumns={availableColumns}
+          onChange={handleOverridesChange}
+        />
+      </div>
+
+      {/* Footer */}
+      <SaveFooter
+        onSave={handleSave}
+        onSaveAs={onSaveAs}
+        isSaving={isSaving}
+        hasUnsavedChanges={hasUnsavedChanges}
+        saveError={saveError}
+      />
+    </div>
   )
 
   const handleRetry = useCallback(() => {
@@ -234,7 +394,7 @@ export function TableRenderer({
               ))}
             </tr>
           </thead>
-          <TableBody data={table} columns={columns} />
+          <TableBody data={table} columns={columns} overrides={tableConfig.overrides} />
         </table>
       </div>
     )

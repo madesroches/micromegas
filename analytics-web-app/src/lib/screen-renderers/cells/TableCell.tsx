@@ -1,4 +1,4 @@
-import { useCallback } from 'react'
+import { useCallback, useMemo } from 'react'
 import type {
   CellTypeMetadata,
   CellRendererProps,
@@ -7,18 +7,26 @@ import type {
 } from '../cell-registry'
 import type { QueryCellConfig, CellConfig, CellState } from '../notebook-types'
 import { AvailableVariablesPanel } from '@/components/AvailableVariablesPanel'
+import { OverrideEditor } from '@/components/OverrideEditor'
 import { SyntaxEditor } from '@/components/SyntaxEditor'
 import { substituteMacros, DEFAULT_SQL } from '../notebook-utils'
-import { SortHeader, TableBody, buildOrderByClause, getNextSortState } from '../table-utils'
+import {
+  SortHeader,
+  TableBody,
+  buildOrderByClause,
+  getNextSortState,
+  ColumnOverride,
+} from '../table-utils'
 
 // =============================================================================
 // Renderer Component
 // =============================================================================
 
 export function TableCell({ data, status, options, onOptionsChange }: CellRendererProps) {
-  // Extract sort state from options
+  // Extract sort state and overrides from options
   const sortColumn = options?.sortColumn as string | undefined
   const sortDirection = options?.sortDirection as 'asc' | 'desc' | undefined
+  const overrides = (options?.overrides as ColumnOverride[] | undefined) || []
 
   // Three-state sort cycling: none -> ASC -> DESC -> none
   // Only update options - execution is triggered by useEffect watching options changes
@@ -69,7 +77,7 @@ export function TableCell({ data, status, options, onOptionsChange }: CellRender
             ))}
           </tr>
         </thead>
-        <TableBody data={data} columns={columns} compact />
+        <TableBody data={data} columns={columns} compact overrides={overrides} />
       </table>
     </div>
   )
@@ -79,7 +87,7 @@ export function TableCell({ data, status, options, onOptionsChange }: CellRender
 // Editor Component
 // =============================================================================
 
-function TableCellEditor({ config, onChange, variables, timeRange }: CellEditorProps) {
+function TableCellEditor({ config, onChange, variables, timeRange, availableColumns }: CellEditorProps) {
   const tableConfig = config as QueryCellConfig
 
   // Compute the current $order_by value from sort state
@@ -88,6 +96,23 @@ function TableCellEditor({ config, onChange, variables, timeRange }: CellEditorP
   const orderByValue = buildOrderByClause(sortColumn, sortDirection) || '(click column headers to sort)'
 
   const tableVariables = [{ name: 'order_by', description: orderByValue }]
+
+  // Get overrides from options
+  const overrides = useMemo(
+    () => (tableConfig.options?.overrides as ColumnOverride[] | undefined) || [],
+    [tableConfig.options?.overrides]
+  )
+
+  // Handle overrides change
+  const handleOverridesChange = useCallback(
+    (newOverrides: ColumnOverride[]) => {
+      onChange({
+        ...tableConfig,
+        options: { ...tableConfig.options, overrides: newOverrides },
+      })
+    },
+    [tableConfig, onChange]
+  )
 
   return (
     <>
@@ -108,6 +133,13 @@ function TableCellEditor({ config, onChange, variables, timeRange }: CellEditorP
         timeRange={timeRange}
         additionalVariables={tableVariables}
       />
+      <div className="mt-4">
+        <OverrideEditor
+          overrides={overrides}
+          availableColumns={availableColumns || []}
+          onChange={handleOverridesChange}
+        />
+      </div>
     </>
   )
 }

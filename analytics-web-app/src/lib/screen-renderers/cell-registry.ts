@@ -65,6 +65,8 @@ export interface CellEditorProps {
   onChange: (config: CellConfig) => void
   variables: Record<string, string>
   timeRange: { begin: string; end: string }
+  /** Available column names from query results (for table/chart cells) */
+  availableColumns?: string[]
 }
 
 /**
