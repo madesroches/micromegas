@@ -5,6 +5,7 @@ import { AlertCircle, ChevronDown } from 'lucide-react'
 import { PageLayout } from '@/components/layout'
 import { AuthGuard } from '@/components/AuthGuard'
 import { CopyableProcessId } from '@/components/CopyableProcessId'
+import { LOG_ENTRIES_SCHEMA_URL } from '@/components/DocumentationLink'
 import { QueryEditor } from '@/components/QueryEditor'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { useStreamQuery } from '@/hooks/useStreamQuery'
@@ -458,7 +459,7 @@ function ProcessLogContent() {
       isLoading={streamQuery.isStreaming}
       error={queryError}
       docLink={{
-        url: 'https://madesroches.github.io/micromegas/docs/query-guide/schema-reference/#log_entries',
+        url: LOG_ENTRIES_SCHEMA_URL,
         label: 'log_entries schema reference',
       }}
     />
