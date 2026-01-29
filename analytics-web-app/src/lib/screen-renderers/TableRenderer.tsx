@@ -181,12 +181,12 @@ export function TableRenderer({
       if (savedTableConfig) {
         const savedOverrides = savedTableConfig.overrides || []
         const hasChanged = JSON.stringify(newOverrides) !== JSON.stringify(savedOverrides)
-        setHasUnsavedChanges(prev => hasChanged || prev)
+        setHasUnsavedChanges(hasChanged || hasUnsavedChanges)
       } else {
         setHasUnsavedChanges(true)
       }
     },
-    [tableConfig, savedTableConfig, onConfigChange, setHasUnsavedChanges]
+    [tableConfig, savedTableConfig, onConfigChange, setHasUnsavedChanges, hasUnsavedChanges]
   )
 
   // Get available columns from query result
