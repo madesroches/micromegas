@@ -102,79 +102,82 @@ export function OverrideEditor({
           {overrides.map((override, index) => {
             const isOrphaned = isOrphanedColumn(override.column)
             return (
-            <div key={index} className={`p-3 bg-app-card rounded-md border ${isOrphaned ? 'border-amber-500/50' : 'border-theme-border'}`}>
-              <div className="flex items-center justify-between mb-2">
-                <label className="text-xs font-medium text-theme-text-secondary">Column</label>
-                <button
-                  onClick={() => handleRemoveOverride(index)}
-                  className="p-1 text-theme-text-muted hover:text-accent-error transition-colors"
-                  title="Remove override"
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              </div>
-              <select
-                value={override.column}
-                onChange={(e) => handleColumnChange(index, e.target.value)}
-                className={`w-full px-2 py-1.5 text-sm bg-app-bg border rounded text-theme-text-primary mb-2 ${isOrphaned ? 'border-amber-500/50' : 'border-theme-border'}`}
+              <div
+                key={index}
+                className={`p-3 bg-app-card rounded-md border ${isOrphaned ? 'border-amber-500/50' : 'border-theme-border'}`}
               >
-                {/* Include orphaned column so it's visible and selectable */}
+                <div className="flex items-center justify-between mb-2">
+                  <label className="text-xs font-medium text-theme-text-secondary">Column</label>
+                  <button
+                    onClick={() => handleRemoveOverride(index)}
+                    className="p-1 text-theme-text-muted hover:text-accent-error transition-colors"
+                    title="Remove override"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+                <select
+                  value={override.column}
+                  onChange={(e) => handleColumnChange(index, e.target.value)}
+                  className={`w-full px-2 py-1.5 text-sm bg-app-bg border rounded text-theme-text-primary mb-2 ${isOrphaned ? 'border-amber-500/50' : 'border-theme-border'}`}
+                >
+                  {/* Include orphaned column so it's visible and selectable */}
+                  {isOrphaned && (
+                    <option key={override.column} value={override.column}>
+                      {override.column} (not in results)
+                    </option>
+                  )}
+                  {availableColumns.map((col) => (
+                    <option key={col} value={col}>
+                      {col}
+                    </option>
+                  ))}
+                </select>
                 {isOrphaned && (
-                  <option key={override.column} value={override.column}>
-                    {override.column} (not in results)
-                  </option>
+                  <div className="mb-2 flex items-start gap-1.5 text-xs text-amber-500">
+                    <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+                    <span>Column not in query results. Add it to the SELECT or choose a different column.</span>
+                  </div>
                 )}
-                {availableColumns.map((col) => (
-                  <option key={col} value={col}>
-                    {col}
-                  </option>
-                ))}
-              </select>
-              {isOrphaned && (
-                <div className="mb-2 flex items-start gap-1.5 text-xs text-amber-500">
-                  <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
-                  <span>Column not in query results. Add it to the SELECT or choose a different column.</span>
-                </div>
-              )}
-              <label className="block text-xs font-medium text-theme-text-secondary mb-1">Format</label>
-              <textarea
-                value={override.format}
-                onChange={(e) => handleFormatChange(index, e.target.value)}
-                className="w-full px-2 py-1.5 text-sm bg-app-bg border border-theme-border rounded text-theme-text-primary font-mono resize-y min-h-[3.5rem]"
-                rows={2}
-                placeholder="[View](/path?id=$row.column_name)"
-              />
-              {validationWarnings[index]?.unknownMacros.length > 0 && (
-                <div className="mt-1.5 flex items-start gap-1.5 text-xs text-amber-500">
-                  <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
-                  <span>
-                    Unknown macro{validationWarnings[index].unknownMacros.length > 1 ? 's' : ''}:{' '}
-                    {validationWarnings[index].unknownMacros.map((macro, i) => (
-                      <span key={macro}>
-                        {i > 0 && ', '}
-                        <code className="px-1 py-0.5 bg-amber-500/10 rounded">{macro}</code>
-                      </span>
-                    ))}
-                  </span>
-                </div>
-              )}
-              {validationWarnings[index]?.missingColumns.length > 0 && (
-                <div className="mt-1.5 flex items-start gap-1.5 text-xs text-amber-500">
-                  <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
-                  <span>
-                    Unknown column{validationWarnings[index].missingColumns.length > 1 ? 's' : ''}:{' '}
-                    {validationWarnings[index].missingColumns.map((col, i) => (
-                      <span key={col}>
-                        {i > 0 && ', '}
-                        <code className="px-1 py-0.5 bg-amber-500/10 rounded">{col}</code>
-                      </span>
-                    ))}
-                  </span>
-                </div>
-              )}
-            </div>
-          )})}
-
+                <label className="block text-xs font-medium text-theme-text-secondary mb-1">Format</label>
+                <textarea
+                  value={override.format}
+                  onChange={(e) => handleFormatChange(index, e.target.value)}
+                  className="w-full px-2 py-1.5 text-sm bg-app-bg border border-theme-border rounded text-theme-text-primary font-mono resize-y min-h-[3.5rem]"
+                  rows={2}
+                  placeholder="[View](/path?id=$row.column_name)"
+                />
+                {validationWarnings[index]?.unknownMacros.length > 0 && (
+                  <div className="mt-1.5 flex items-start gap-1.5 text-xs text-amber-500">
+                    <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+                    <span>
+                      Unknown macro{validationWarnings[index].unknownMacros.length > 1 ? 's' : ''}:{' '}
+                      {validationWarnings[index].unknownMacros.map((macro, i) => (
+                        <span key={macro}>
+                          {i > 0 && ', '}
+                          <code className="px-1 py-0.5 bg-amber-500/10 rounded">{macro}</code>
+                        </span>
+                      ))}
+                    </span>
+                  </div>
+                )}
+                {validationWarnings[index]?.missingColumns.length > 0 && (
+                  <div className="mt-1.5 flex items-start gap-1.5 text-xs text-amber-500">
+                    <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+                    <span>
+                      Unknown column{validationWarnings[index].missingColumns.length > 1 ? 's' : ''}:{' '}
+                      {validationWarnings[index].missingColumns.map((col, i) => (
+                        <span key={col}>
+                          {i > 0 && ', '}
+                          <code className="px-1 py-0.5 bg-amber-500/10 rounded">{col}</code>
+                        </span>
+                      ))}
+                    </span>
+                  </div>
+                )}
+              </div>
+            )
+          })}
 
           {/* Add button */}
           {availableColumns.length > 0 && (
