@@ -1,6 +1,14 @@
 import { render, screen } from '@testing-library/react'
 import { DataType, Timestamp, TimeUnit } from 'apache-arrow'
-import { expandRowMacros, OverrideCell, TableColumn } from '../table-utils'
+import {
+  expandRowMacros,
+  expandVariableMacros,
+  extractMacroColumns,
+  findUnknownMacros,
+  validateFormatMacros,
+  OverrideCell,
+  TableColumn,
+} from '../table-utils'
 
 describe('expandRowMacros', () => {
   describe('dot notation', () => {
@@ -118,6 +126,191 @@ describe('expandRowMacros', () => {
   })
 })
 
+describe('expandVariableMacros', () => {
+  it('should expand a single variable', () => {
+    const template = '[Search: $search](/results?q=$search)'
+    const variables = { search: 'test query' }
+    expect(expandVariableMacros(template, variables)).toBe('[Search: test query](/results?q=test query)')
+  })
+
+  it('should expand multiple variables', () => {
+    const template = '/metrics?name=$metric&host=$host'
+    const variables = { metric: 'cpu_usage', host: 'server1' }
+    expect(expandVariableMacros(template, variables)).toBe('/metrics?name=cpu_usage&host=server1')
+  })
+
+  it('should not expand unknown variables', () => {
+    const template = '/path?id=$unknown'
+    const variables = { known: 'value' }
+    expect(expandVariableMacros(template, variables)).toBe('/path?id=$unknown')
+  })
+
+  it('should handle longer variable names first to avoid partial matches', () => {
+    const template = '$metric and $metric_name'
+    const variables = { metric: 'cpu', metric_name: 'CPU Usage' }
+    expect(expandVariableMacros(template, variables)).toBe('cpu and CPU Usage')
+  })
+
+  it('should return unchanged template when no variables provided', () => {
+    const template = '/path?id=$var'
+    expect(expandVariableMacros(template, {})).toBe('/path?id=$var')
+  })
+
+  it('should respect word boundaries', () => {
+    const template = '$metrics vs $metric'
+    const variables = { metric: 'cpu' }
+    expect(expandVariableMacros(template, variables)).toBe('$metrics vs cpu')
+  })
+})
+
+describe('extractMacroColumns', () => {
+  it('should extract dot notation columns', () => {
+    const template = '[View](/process?id=$row.process_id&name=$row.name)'
+    expect(extractMacroColumns(template)).toEqual(['process_id', 'name'])
+  })
+
+  it('should extract bracket notation columns', () => {
+    const template = '[View](/details?id=$row["process-id"]&name=$row["Display Name"])'
+    expect(extractMacroColumns(template)).toEqual(['process-id', 'Display Name'])
+  })
+
+  it('should extract mixed notation columns', () => {
+    const template = '[View](/details?id=$row["process-id"]&name=$row.name)'
+    const result = extractMacroColumns(template)
+    expect(result).toHaveLength(2)
+    expect(result).toContain('process-id')
+    expect(result).toContain('name')
+  })
+
+  it('should return unique columns only', () => {
+    const template = '[View](/process?id=$row.id&other=$row.id)'
+    expect(extractMacroColumns(template)).toEqual(['id'])
+  })
+
+  it('should return empty array for template with no macros', () => {
+    const template = '[Static Link](/path)'
+    expect(extractMacroColumns(template)).toEqual([])
+  })
+
+  it('should return empty array for empty template', () => {
+    expect(extractMacroColumns('')).toEqual([])
+  })
+})
+
+describe('findUnknownMacros', () => {
+  it('should find unknown $name style macros', () => {
+    const template = '[View](/process?id=$missing)'
+    expect(findUnknownMacros(template, [])).toEqual(['$missing'])
+  })
+
+  it('should find multiple unknown macros', () => {
+    const template = '[View](/process?id=$id&name=$name)'
+    expect(findUnknownMacros(template, [])).toEqual(['$id', '$name'])
+  })
+
+  it('should not flag $row as unknown', () => {
+    const template = '[View](/process?id=$row.id)'
+    expect(findUnknownMacros(template, [])).toEqual([])
+  })
+
+  it('should not flag $begin and $end as unknown', () => {
+    const template = '[View](/process?from=$begin&to=$end)'
+    expect(findUnknownMacros(template, [])).toEqual([])
+  })
+
+  it('should not flag known variables as unknown', () => {
+    const template = '[View](/process?id=$process_id&name=$metric)'
+    expect(findUnknownMacros(template, ['process_id', 'metric'])).toEqual([])
+  })
+
+  it('should return empty array for template with no macros', () => {
+    const template = '[Static Link](/path)'
+    expect(findUnknownMacros(template, [])).toEqual([])
+  })
+
+  it('should handle mixed known and unknown macros', () => {
+    const template = '[View](/process?id=$known&other=$missing)'
+    expect(findUnknownMacros(template, ['known'])).toEqual(['$missing'])
+  })
+})
+
+describe('validateFormatMacros', () => {
+  it('should return empty result when all columns exist and syntax is valid', () => {
+    const template = '[View](/process?id=$row.id&name=$row.name)'
+    const availableColumns = ['id', 'name', 'other']
+    const result = validateFormatMacros(template, availableColumns)
+    expect(result.missingColumns).toEqual([])
+    expect(result.unknownMacros).toEqual([])
+  })
+
+  it('should return missing dot notation columns', () => {
+    const template = '[View](/process?id=$row.missing)'
+    const availableColumns = ['id', 'name']
+    const result = validateFormatMacros(template, availableColumns)
+    expect(result.missingColumns).toEqual(['missing'])
+    expect(result.unknownMacros).toEqual([])
+  })
+
+  it('should return missing bracket notation columns', () => {
+    const template = '[View](/details?id=$row["missing-column"])'
+    const availableColumns = ['id', 'name']
+    const result = validateFormatMacros(template, availableColumns)
+    expect(result.missingColumns).toEqual(['missing-column'])
+    expect(result.unknownMacros).toEqual([])
+  })
+
+  it('should return multiple missing columns', () => {
+    const template = '[View](/process?a=$row.missing1&b=$row["missing-2"])'
+    const availableColumns = ['id', 'name']
+    const result = validateFormatMacros(template, availableColumns)
+    expect(result.missingColumns).toHaveLength(2)
+    expect(result.missingColumns).toContain('missing1')
+    expect(result.missingColumns).toContain('missing-2')
+    expect(result.unknownMacros).toEqual([])
+  })
+
+  it('should return empty result for template with no macros', () => {
+    const template = '[Static Link](/path)'
+    const availableColumns = ['id', 'name']
+    const result = validateFormatMacros(template, availableColumns)
+    expect(result.missingColumns).toEqual([])
+    expect(result.unknownMacros).toEqual([])
+  })
+
+  it('should return unknown macros when not a known variable', () => {
+    const template = '[View](/process?id=$missing)'
+    const availableColumns = ['id', 'name']
+    const result = validateFormatMacros(template, availableColumns)
+    expect(result.missingColumns).toEqual([])
+    expect(result.unknownMacros).toEqual(['$missing'])
+  })
+
+  it('should not flag known variables as unknown', () => {
+    const template = '[View](/process?id=$process_id)'
+    const availableColumns = ['id', 'name']
+    const availableVariables = ['process_id']
+    const result = validateFormatMacros(template, availableColumns, availableVariables)
+    expect(result.missingColumns).toEqual([])
+    expect(result.unknownMacros).toEqual([])
+  })
+
+  it('should return both missing columns and unknown macros', () => {
+    const template = '[View](/process?id=$row.missing&other=$invalid)'
+    const availableColumns = ['id', 'name']
+    const result = validateFormatMacros(template, availableColumns)
+    expect(result.missingColumns).toEqual(['missing'])
+    expect(result.unknownMacros).toEqual(['$invalid'])
+  })
+
+  it('should not flag $begin and $end as unknown', () => {
+    const template = '[View](/process?from=$begin&to=$end)'
+    const availableColumns = ['id', 'name']
+    const result = validateFormatMacros(template, availableColumns)
+    expect(result.missingColumns).toEqual([])
+    expect(result.unknownMacros).toEqual([])
+  })
+})
+
 describe('OverrideCell', () => {
   // Helper to create minimal columns array
   const stringColumns: TableColumn[] = [
@@ -182,6 +375,32 @@ describe('OverrideCell', () => {
     )
     const link = screen.getByRole('link', { name: 'View' })
     expect(link).toHaveAttribute('href', '/details?id=abc')
+  })
+
+  it('should expand notebook variables', () => {
+    render(
+      <OverrideCell
+        format="[Search: $search](/results?q=$search&id=$row.id)"
+        row={{ id: '123' }}
+        columns={stringColumns}
+        variables={{ search: 'test query' }}
+      />
+    )
+    const link = screen.getByRole('link', { name: 'Search: test query' })
+    expect(link).toHaveAttribute('href', '/results?q=test query&id=123')
+  })
+
+  it('should expand variables before row macros', () => {
+    render(
+      <OverrideCell
+        format="[$metric on $row.name](/metrics?name=$metric)"
+        row={{ name: 'server1' }}
+        columns={stringColumns}
+        variables={{ metric: 'cpu_usage' }}
+      />
+    )
+    const link = screen.getByRole('link', { name: 'cpu_usage on server1' })
+    expect(link).toHaveAttribute('href', '/metrics?name=cpu_usage')
   })
 })
 

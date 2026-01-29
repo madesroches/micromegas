@@ -22,7 +22,7 @@ import {
 // Renderer Component
 // =============================================================================
 
-export function TableCell({ data, status, options, onOptionsChange }: CellRendererProps) {
+export function TableCell({ data, status, options, onOptionsChange, variables }: CellRendererProps) {
   // Extract sort state and overrides from options
   const sortColumn = options?.sortColumn as string | undefined
   const sortDirection = options?.sortDirection as 'asc' | 'desc' | undefined
@@ -77,7 +77,7 @@ export function TableCell({ data, status, options, onOptionsChange }: CellRender
             ))}
           </tr>
         </thead>
-        <TableBody data={data} columns={columns} compact overrides={overrides} />
+        <TableBody data={data} columns={columns} compact overrides={overrides} variables={variables} />
       </table>
     </div>
   )
@@ -137,6 +137,7 @@ function TableCellEditor({ config, onChange, variables, timeRange, availableColu
         <OverrideEditor
           overrides={overrides}
           availableColumns={availableColumns || []}
+          availableVariables={Object.keys(variables)}
           onChange={handleOverridesChange}
         />
       </div>

@@ -1,15 +1,29 @@
-import { useState, useCallback } from 'react'
-import { ChevronDown, ChevronRight, Plus, X } from 'lucide-react'
-import type { ColumnOverride } from '@/lib/screen-renderers/table-utils'
+import { useState, useCallback, useMemo } from 'react'
+import { ChevronDown, ChevronRight, Plus, X, AlertTriangle } from 'lucide-react'
+import { type ColumnOverride, validateFormatMacros } from '@/lib/screen-renderers/table-utils'
 
 interface OverrideEditorProps {
   overrides: ColumnOverride[]
   availableColumns: string[]
+  /** Variable names available for macro substitution (e.g., from notebook cells) */
+  availableVariables?: string[]
   onChange: (overrides: ColumnOverride[]) => void
 }
 
-export function OverrideEditor({ overrides, availableColumns, onChange }: OverrideEditorProps) {
+export function OverrideEditor({
+  overrides,
+  availableColumns,
+  availableVariables = [],
+  onChange,
+}: OverrideEditorProps) {
   const [isExpanded, setIsExpanded] = useState(overrides.length > 0)
+
+  // Validate all overrides for missing column references and unknown macros
+  const validationWarnings = useMemo(() => {
+    return overrides.map((override) =>
+      validateFormatMacros(override.format, availableColumns, availableVariables)
+    )
+  }, [overrides, availableColumns, availableVariables])
 
   const handleAddOverride = useCallback(() => {
     // Find first column not already overridden
@@ -99,10 +113,38 @@ export function OverrideEditor({ overrides, availableColumns, onChange }: Overri
               <textarea
                 value={override.format}
                 onChange={(e) => handleFormatChange(index, e.target.value)}
-                className="w-full px-2 py-1.5 text-sm bg-app-bg border border-theme-border rounded text-theme-text-primary font-mono resize-none"
+                className="w-full px-2 py-1.5 text-sm bg-app-bg border border-theme-border rounded text-theme-text-primary font-mono resize-y min-h-[3.5rem]"
                 rows={2}
                 placeholder="[View](/path?id=$row.column_name)"
               />
+              {validationWarnings[index]?.unknownMacros.length > 0 && (
+                <div className="mt-1.5 flex items-start gap-1.5 text-xs text-amber-500">
+                  <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+                  <span>
+                    Unknown macro{validationWarnings[index].unknownMacros.length > 1 ? 's' : ''}:{' '}
+                    {validationWarnings[index].unknownMacros.map((macro, i) => (
+                      <span key={macro}>
+                        {i > 0 && ', '}
+                        <code className="px-1 py-0.5 bg-amber-500/10 rounded">{macro}</code>
+                      </span>
+                    ))}
+                  </span>
+                </div>
+              )}
+              {validationWarnings[index]?.missingColumns.length > 0 && (
+                <div className="mt-1.5 flex items-start gap-1.5 text-xs text-amber-500">
+                  <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+                  <span>
+                    Unknown column{validationWarnings[index].missingColumns.length > 1 ? 's' : ''}:{' '}
+                    {validationWarnings[index].missingColumns.map((col, i) => (
+                      <span key={col}>
+                        {i > 0 && ', '}
+                        <code className="px-1 py-0.5 bg-amber-500/10 rounded">{col}</code>
+                      </span>
+                    ))}
+                  </span>
+                </div>
+              )}
             </div>
           ))}
 
