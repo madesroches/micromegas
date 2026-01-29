@@ -25,6 +25,13 @@ export function OverrideEditor({
     )
   }, [overrides, availableColumns, availableVariables])
 
+  // Check which overrides target columns not in the query results
+  const availableColumnsSet = useMemo(() => new Set(availableColumns), [availableColumns])
+  const isOrphanedColumn = useCallback(
+    (column: string) => !availableColumnsSet.has(column),
+    [availableColumnsSet]
+  )
+
   const handleAddOverride = useCallback(() => {
     // Find first column not already overridden
     const usedColumns = new Set(overrides.map((o) => o.column))
@@ -86,8 +93,10 @@ export function OverrideEditor({
       {/* Content */}
       {isExpanded && (
         <div className="px-4 py-3 space-y-3">
-          {overrides.map((override, index) => (
-            <div key={index} className="p-3 bg-app-card rounded-md border border-theme-border">
+          {overrides.map((override, index) => {
+            const isOrphaned = isOrphanedColumn(override.column)
+            return (
+            <div key={index} className={`p-3 bg-app-card rounded-md border ${isOrphaned ? 'border-amber-500/50' : 'border-theme-border'}`}>
               <div className="flex items-center justify-between mb-2">
                 <label className="text-xs font-medium text-theme-text-secondary">Column</label>
                 <button
@@ -101,14 +110,26 @@ export function OverrideEditor({
               <select
                 value={override.column}
                 onChange={(e) => handleColumnChange(index, e.target.value)}
-                className="w-full px-2 py-1.5 text-sm bg-app-bg border border-theme-border rounded text-theme-text-primary mb-2"
+                className={`w-full px-2 py-1.5 text-sm bg-app-bg border rounded text-theme-text-primary mb-2 ${isOrphaned ? 'border-amber-500/50' : 'border-theme-border'}`}
               >
+                {/* Include orphaned column so it's visible and selectable */}
+                {isOrphaned && (
+                  <option key={override.column} value={override.column}>
+                    {override.column} (not in results)
+                  </option>
+                )}
                 {availableColumns.map((col) => (
                   <option key={col} value={col}>
                     {col}
                   </option>
                 ))}
               </select>
+              {isOrphaned && (
+                <div className="mb-2 flex items-start gap-1.5 text-xs text-amber-500">
+                  <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+                  <span>Column not in query results. Add it to the SELECT or choose a different column.</span>
+                </div>
+              )}
               <label className="block text-xs font-medium text-theme-text-secondary mb-1">Format</label>
               <textarea
                 value={override.format}
@@ -146,7 +167,8 @@ export function OverrideEditor({
                 </div>
               )}
             </div>
-          ))}
+          )})}
+
 
           {/* Add button */}
           {availableColumns.length > 0 && (
