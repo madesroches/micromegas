@@ -11,7 +11,7 @@ import { extractChartData } from '@/lib/arrow-utils'
 import { AvailableVariablesPanel } from '@/components/AvailableVariablesPanel'
 import { DocumentationLink, QUERY_GUIDE_URL } from '@/components/DocumentationLink'
 import { SyntaxEditor } from '@/components/SyntaxEditor'
-import { substituteMacros, DEFAULT_SQL } from '../notebook-utils'
+import { substituteMacros, validateMacros, DEFAULT_SQL } from '../notebook-utils'
 
 /**
  * Substitutes macros in string values within chart options.
@@ -126,6 +126,19 @@ function ChartCellEditor({ config, onChange, variables, timeRange }: CellEditorP
     onChange({ ...chartConfig, options: newOptions })
   }
 
+  // Validate macro references in SQL and options
+  const validationErrors = useMemo(() => {
+    const errors: string[] = []
+    const sqlValidation = validateMacros(chartConfig.sql, variables)
+    errors.push(...sqlValidation.errors)
+    const unit = (chartConfig.options?.unit as string) ?? ''
+    if (unit) {
+      const unitValidation = validateMacros(unit, variables)
+      errors.push(...unitValidation.errors)
+    }
+    return errors
+  }, [chartConfig.sql, chartConfig.options, variables])
+
   return (
     <>
       <div>
@@ -155,6 +168,13 @@ function ChartCellEditor({ config, onChange, variables, timeRange }: CellEditorP
           Use $variable.column for dynamic values (e.g., $selected_metric.unit)
         </p>
       </div>
+      {validationErrors.length > 0 && (
+        <div className="text-red-400 text-sm space-y-1">
+          {validationErrors.map((err, i) => (
+            <div key={i}>⚠ {err}</div>
+          ))}
+        </div>
+      )}
       <AvailableVariablesPanel variables={variables} timeRange={timeRange} />
       <DocumentationLink url={QUERY_GUIDE_URL} label="Query Guide" />
     </>

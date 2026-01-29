@@ -215,13 +215,11 @@ export function substituteMacros(
 
     if (typeof value === 'string') {
       // Simple variable doesn't have columns - leave unresolved
-      console.warn(`Variable '${varName}' is not a multi-column variable, cannot access '${colName}'`)
       return match
     }
 
     const colValue = value[colName]
     if (colValue === undefined) {
-      console.warn(`Column '${colName}' not found in variable '${varName}'`)
       return match
     }
 

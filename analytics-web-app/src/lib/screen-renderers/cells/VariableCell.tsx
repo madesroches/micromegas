@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import type {
   CellTypeMetadata,
   CellRendererProps,
@@ -10,6 +10,10 @@ import {
   getVariableString,
   serializeVariableValue,
 } from '../notebook-types'
+import { AvailableVariablesPanel } from '@/components/AvailableVariablesPanel'
+import { DocumentationLink, QUERY_GUIDE_URL } from '@/components/DocumentationLink'
+import { SyntaxEditor } from '@/components/SyntaxEditor'
+import { substituteMacros, validateMacros, DEFAULT_SQL } from '../notebook-utils'
 
 /**
  * Parse a default value string into a VariableValue.
@@ -31,10 +35,6 @@ function parseDefaultValue(str: string): VariableValue {
   }
   return str
 }
-import { AvailableVariablesPanel } from '@/components/AvailableVariablesPanel'
-import { DocumentationLink, QUERY_GUIDE_URL } from '@/components/DocumentationLink'
-import { SyntaxEditor } from '@/components/SyntaxEditor'
-import { substituteMacros, DEFAULT_SQL } from '../notebook-utils'
 
 // =============================================================================
 // Renderer Component
@@ -164,6 +164,13 @@ function VariableCellEditor({ config, onChange, variables, timeRange }: CellEdit
   const varConfig = config as VariableCellConfig
   const isCombobox = (varConfig.variableType || 'combobox') === 'combobox'
 
+  // Validate macro references in SQL (only for combobox type)
+  const validationErrors = useMemo(() => {
+    if (!isCombobox || !varConfig.sql) return []
+    const result = validateMacros(varConfig.sql, variables)
+    return result.errors
+  }, [isCombobox, varConfig.sql, variables])
+
   return (
     <>
       <div>
@@ -197,6 +204,13 @@ function VariableCellEditor({ config, onChange, variables, timeRange }: CellEdit
               minHeight="150px"
             />
           </div>
+          {validationErrors.length > 0 && (
+            <div className="text-red-400 text-sm space-y-1">
+              {validationErrors.map((err, i) => (
+                <div key={i}>⚠ {err}</div>
+              ))}
+            </div>
+          )}
           <AvailableVariablesPanel variables={variables} timeRange={timeRange} />
           <DocumentationLink url={QUERY_GUIDE_URL} label="Query Guide" />
         </>

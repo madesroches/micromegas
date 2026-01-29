@@ -5,7 +5,7 @@ import type { CellTypeMetadata, CellRendererProps, CellEditorProps } from '../ce
 import type { MarkdownCellConfig, CellConfig, CellState } from '../notebook-types'
 import { SyntaxEditor } from '@/components/SyntaxEditor'
 import { AvailableVariablesPanel } from '@/components/AvailableVariablesPanel'
-import { substituteMacros } from '../notebook-utils'
+import { substituteMacros, validateMacros } from '../notebook-utils'
 
 // =============================================================================
 // Renderer Component
@@ -32,6 +32,13 @@ export function MarkdownCell({ content, variables, timeRange }: CellRendererProp
 function MarkdownCellEditor({ config, onChange, variables, timeRange }: CellEditorProps) {
   const mdConfig = config as MarkdownCellConfig
 
+  // Validate macro references in content
+  const validationErrors = useMemo(() => {
+    if (!mdConfig.content) return []
+    const result = validateMacros(mdConfig.content, variables)
+    return result.errors
+  }, [mdConfig.content, variables])
+
   return (
     <>
       <div>
@@ -46,6 +53,13 @@ function MarkdownCellEditor({ config, onChange, variables, timeRange }: CellEdit
           minHeight="200px"
         />
       </div>
+      {validationErrors.length > 0 && (
+        <div className="text-red-400 text-sm space-y-1">
+          {validationErrors.map((err, i) => (
+            <div key={i}>⚠ {err}</div>
+          ))}
+        </div>
+      )}
       <AvailableVariablesPanel variables={variables} timeRange={timeRange} />
     </>
   )

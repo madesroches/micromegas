@@ -10,7 +10,7 @@ import { AvailableVariablesPanel } from '@/components/AvailableVariablesPanel'
 import { DocumentationLink, QUERY_GUIDE_URL } from '@/components/DocumentationLink'
 import { OverrideEditor } from '@/components/OverrideEditor'
 import { SyntaxEditor } from '@/components/SyntaxEditor'
-import { substituteMacros, DEFAULT_SQL } from '../notebook-utils'
+import { substituteMacros, validateMacros, DEFAULT_SQL } from '../notebook-utils'
 import {
   SortHeader,
   TableBody,
@@ -115,6 +115,12 @@ function TableCellEditor({ config, onChange, variables, timeRange, availableColu
     [tableConfig, onChange]
   )
 
+  // Validate macro references in SQL
+  const validationErrors = useMemo(() => {
+    const result = validateMacros(tableConfig.sql, variables)
+    return result.errors
+  }, [tableConfig.sql, variables])
+
   return (
     <>
       <div>
@@ -129,6 +135,13 @@ function TableCellEditor({ config, onChange, variables, timeRange, availableColu
           minHeight="150px"
         />
       </div>
+      {validationErrors.length > 0 && (
+        <div className="text-red-400 text-sm space-y-1">
+          {validationErrors.map((err, i) => (
+            <div key={i}>⚠ {err}</div>
+          ))}
+        </div>
+      )}
       <AvailableVariablesPanel
         variables={variables}
         timeRange={timeRange}
