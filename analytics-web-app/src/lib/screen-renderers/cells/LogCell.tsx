@@ -155,6 +155,19 @@ function LogCellEditor({ config, onChange, variables, timeRange }: CellEditorPro
         />
       </div>
       <AvailableVariablesPanel variables={variables} timeRange={timeRange} />
+      <div className="mt-4">
+        <h4 className="text-xs font-semibold uppercase tracking-wide text-theme-text-muted mb-2">
+          Documentation
+        </h4>
+        <a
+          href="https://madesroches.github.io/micromegas/docs/query-guide/"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-xs text-accent-link hover:underline"
+        >
+          Query Guide
+        </a>
+      </div>
     </>
   )
 }
