@@ -25,20 +25,20 @@ describe('substituteMacros', () => {
   const defaultTimeRange = { begin: '2024-01-01T00:00:00Z', end: '2024-01-02T00:00:00Z' }
 
   describe('time range substitution', () => {
-    it('should substitute $begin with quoted timestamp', () => {
-      const sql = 'SELECT * FROM logs WHERE time >= $begin'
+    it('should substitute $begin without adding quotes (user controls quoting)', () => {
+      const sql = "SELECT * FROM logs WHERE time >= '$begin'"
       const result = substituteMacros(sql, {}, defaultTimeRange)
       expect(result).toBe("SELECT * FROM logs WHERE time >= '2024-01-01T00:00:00Z'")
     })
 
-    it('should substitute $end with quoted timestamp', () => {
-      const sql = 'SELECT * FROM logs WHERE time <= $end'
+    it('should substitute $end without adding quotes (user controls quoting)', () => {
+      const sql = "SELECT * FROM logs WHERE time <= '$end'"
       const result = substituteMacros(sql, {}, defaultTimeRange)
       expect(result).toBe("SELECT * FROM logs WHERE time <= '2024-01-02T00:00:00Z'")
     })
 
     it('should substitute both $begin and $end', () => {
-      const sql = 'SELECT * FROM logs WHERE time BETWEEN $begin AND $end'
+      const sql = "SELECT * FROM logs WHERE time BETWEEN '$begin' AND '$end'"
       const result = substituteMacros(sql, {}, defaultTimeRange)
       expect(result).toBe(
         "SELECT * FROM logs WHERE time BETWEEN '2024-01-01T00:00:00Z' AND '2024-01-02T00:00:00Z'"
@@ -46,7 +46,7 @@ describe('substituteMacros', () => {
     })
 
     it('should substitute multiple occurrences of $begin', () => {
-      const sql = 'SELECT $begin, $begin'
+      const sql = "SELECT '$begin', '$begin'"
       const result = substituteMacros(sql, {}, defaultTimeRange)
       expect(result).toBe("SELECT '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z'")
     })

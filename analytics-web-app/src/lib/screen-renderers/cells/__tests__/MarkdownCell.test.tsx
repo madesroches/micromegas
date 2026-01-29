@@ -179,7 +179,7 @@ describe('MarkdownCell', () => {
         />
       )
       expect(
-        screen.getByText("Time range: '2024-01-01T00:00:00Z' to '2024-01-02T00:00:00Z'")
+        screen.getByText('Time range: 2024-01-01T00:00:00Z to 2024-01-02T00:00:00Z')
       ).toBeInTheDocument()
     })
 
