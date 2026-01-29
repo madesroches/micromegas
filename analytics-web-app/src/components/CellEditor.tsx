@@ -10,6 +10,7 @@ interface CellEditorProps {
   variables: Record<string, string>
   timeRange: { begin: string; end: string }
   existingNames: Set<string>
+  availableColumns?: string[]
   onClose: () => void
   onUpdate: (updates: Partial<CellConfig>) => void
   onRun: () => void
@@ -21,6 +22,7 @@ export function CellEditor({
   variables,
   timeRange,
   existingNames,
+  availableColumns,
   onClose,
   onUpdate,
   onRun,
@@ -117,6 +119,7 @@ export function CellEditor({
           onChange={handleConfigChange}
           variables={variables}
           timeRange={timeRange}
+          availableColumns={availableColumns}
         />
       </div>
 
