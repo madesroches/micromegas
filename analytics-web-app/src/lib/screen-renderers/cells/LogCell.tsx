@@ -8,6 +8,7 @@ import type {
 import type { QueryCellConfig, CellConfig, CellState } from '../notebook-types'
 import { timestampToDate } from '@/lib/arrow-utils'
 import { AvailableVariablesPanel } from '@/components/AvailableVariablesPanel'
+import { DocumentationLink, QUERY_GUIDE_URL } from '@/components/DocumentationLink'
 import { SyntaxEditor } from '@/components/SyntaxEditor'
 import { substituteMacros, DEFAULT_SQL } from '../notebook-utils'
 
@@ -155,19 +156,7 @@ function LogCellEditor({ config, onChange, variables, timeRange }: CellEditorPro
         />
       </div>
       <AvailableVariablesPanel variables={variables} timeRange={timeRange} />
-      <div className="mt-4">
-        <h4 className="text-xs font-semibold uppercase tracking-wide text-theme-text-muted mb-2">
-          Documentation
-        </h4>
-        <a
-          href="https://madesroches.github.io/micromegas/docs/query-guide/"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-xs text-accent-link hover:underline"
-        >
-          Query Guide
-        </a>
-      </div>
+      <DocumentationLink url={QUERY_GUIDE_URL} label="Query Guide" />
     </>
   )
 }

@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react'
 import { ChevronLeft, ChevronRight, Play } from 'lucide-react'
+import { DocumentationLink } from './DocumentationLink'
 import { SyntaxEditor } from './SyntaxEditor'
 
 interface QueryEditorProps {
@@ -163,21 +164,7 @@ export function QueryEditor({
         )}
 
         {/* Documentation Link */}
-        {docLink && (
-          <div className="mt-4">
-            <h4 className="text-xs font-semibold uppercase tracking-wide text-theme-text-muted mb-2">
-              Documentation
-            </h4>
-            <a
-              href={docLink.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-xs text-accent-link hover:underline"
-            >
-              {docLink.label}
-            </a>
-          </div>
-        )}
+        {docLink && <DocumentationLink url={docLink.url} label={docLink.label} />}
       </div>
 
       {/* Footer */}
