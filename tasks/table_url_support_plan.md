@@ -143,7 +143,6 @@ export function OverrideCell({ format, row }: OverrideCellProps) {
             href={href}
             rel="noopener noreferrer"
             className="text-accent-link hover:underline"
-            onClick={(e) => e.stopPropagation()}
           >
             {children}
           </a>
@@ -317,7 +316,7 @@ Use bracket notation for column names containing hyphens, spaces, or other speci
      - Mixed: both notations in same template
      - Missing column → empty string
      - Column name not in row → empty string
-   - `OverrideCell`: renders link with correct href, handles multiple links, stopPropagation on click
+   - `OverrideCell`: renders link with correct href, handles multiple links
    - Markdown rendering already covered by existing `MarkdownCell` tests
 
 ---
