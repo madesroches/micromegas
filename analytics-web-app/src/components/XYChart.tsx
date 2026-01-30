@@ -88,10 +88,7 @@ function formatValue(
   if (unit === 'boolean') return value !== 0 ? 'true' : 'false'
 
   // Default: show number, append unit if provided
-  if (!rawUnit || rawUnit === 'none' || rawUnit === 'count' || rawUnit === 'requests') {
-    return value.toLocaleString()
-  }
-  return value.toFixed(2) + ' ' + rawUnit
+  return rawUnit ? `${value.toLocaleString()} ${rawUnit}` : value.toLocaleString()
 }
 
 // Format a stat value - for time units, each value picks its own best unit
