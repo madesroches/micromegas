@@ -13,6 +13,7 @@ use datafusion::{
     physical_plan::metrics::ExecutionPlanMetricsSet,
 };
 use futures::future::BoxFuture;
+use micromegas_tracing::prelude::*;
 use object_store::ObjectStore;
 use sqlx::PgPool;
 use std::ops::Range;
@@ -71,6 +72,7 @@ impl ParquetFileReaderFactory for ReaderFactory {
 
         Ok(Box::new(ParquetReader {
             filename,
+            file_size: partitioned_file.object_meta.size,
             pool: self.pool.clone(),
             metadata_cache: Arc::clone(&self.metadata_cache),
             inner,
@@ -82,6 +84,7 @@ impl ParquetFileReaderFactory for ReaderFactory {
 /// using a shared global cache.
 pub struct ParquetReader {
     pub filename: String,
+    pub file_size: u64,
     pub pool: PgPool,
     pub metadata_cache: Arc<MetadataCache>,
     pub inner: ParquetObjectReader,
@@ -92,14 +95,45 @@ impl AsyncFileReader for ParquetReader {
         &mut self,
         range: Range<u64>,
     ) -> BoxFuture<'_, datafusion::parquet::errors::Result<Bytes>> {
-        self.inner.get_bytes(range)
+        let filename = self.filename.clone();
+        let file_size = self.file_size;
+        let bytes_requested = range.end - range.start;
+        let inner = &mut self.inner;
+
+        Box::pin(async move {
+            let start = std::time::Instant::now();
+            let result = inner.get_bytes(range).await;
+            let duration_ms = start.elapsed().as_millis();
+
+            debug!(
+                "object_storage_read file={filename} file_size={file_size} bytes={bytes_requested} duration_ms={duration_ms}"
+            );
+
+            result
+        })
     }
 
     fn get_byte_ranges(
         &mut self,
         ranges: Vec<Range<u64>>,
     ) -> BoxFuture<'_, datafusion::parquet::errors::Result<Vec<Bytes>>> {
-        self.inner.get_byte_ranges(ranges)
+        let filename = self.filename.clone();
+        let file_size = self.file_size;
+        let num_ranges = ranges.len();
+        let total_bytes: u64 = ranges.iter().map(|r| r.end - r.start).sum();
+        let inner = &mut self.inner;
+
+        Box::pin(async move {
+            let start = std::time::Instant::now();
+            let result = inner.get_byte_ranges(ranges).await;
+            let duration_ms = start.elapsed().as_millis();
+
+            debug!(
+                "object_storage_read file={filename} file_size={file_size} ranges={num_ranges} bytes={total_bytes} duration_ms={duration_ms}"
+            );
+
+            result
+        })
     }
 
     fn get_metadata(
