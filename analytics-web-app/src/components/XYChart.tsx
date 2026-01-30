@@ -7,8 +7,8 @@ import {
   formatAdaptiveTime,
   formatTimeValue,
   type AdaptiveTimeUnit,
-  type TimeUnit,
 } from '@/lib/time-units'
+import { normalizeUnit, isSizeUnit, getAdaptiveSizeUnit } from '@/lib/units'
 
 export interface ChartAxisBounds {
   left: number // Left padding (Y-axis width)
@@ -40,30 +40,46 @@ interface XYChartProps {
 
 function formatValue(
   value: number,
-  unit: string,
+  rawUnit: string,
   abbreviated = false,
   adaptiveTimeUnit?: AdaptiveTimeUnit
 ): string {
+  const unit = normalizeUnit(rawUnit)
+
   // Use adaptive formatting for time units
   if (adaptiveTimeUnit && isTimeUnit(unit)) {
     return formatAdaptiveTime(value, adaptiveTimeUnit, abbreviated)
   }
 
-  if (unit === 'bytes') {
-    if (value >= 1e9) return (value / 1e9).toFixed(1) + ' GB'
-    if (value >= 1e6) return (value / 1e6).toFixed(1) + ' MB'
-    if (value >= 1e3) return (value / 1e3).toFixed(1) + ' KB'
-    return value.toFixed(0) + ' B'
+  // Size units - use adaptive formatting
+  if (isSizeUnit(unit)) {
+    const adaptive = getAdaptiveSizeUnit(value, unit)
+    const displayValue = value * adaptive.conversionFactor
+    const decimals = adaptive.unit === 'bytes' ? 0 : 1
+    return displayValue.toFixed(decimals) + ' ' + adaptive.abbrev
   }
+
+  // Rate units - bytes per second (uses same adaptive logic)
+  if (unit === 'bytes/s') {
+    const adaptive = getAdaptiveSizeUnit(value, 'bytes')
+    const displayValue = value * adaptive.conversionFactor
+    const decimals = adaptive.unit === 'bytes' ? 0 : 1
+    return displayValue.toFixed(decimals) + ' ' + adaptive.abbrev + '/s'
+  }
+
+  // Other units
   if (unit === 'percent') return value.toFixed(1) + '%'
-  if (unit === 'count') return Math.round(value).toLocaleString()
-  return value.toFixed(2) + ' ' + unit
+  if (unit === 'degrees') return value.toFixed(1) + '°'
+  if (unit === 'boolean') return value !== 0 ? 'true' : 'false'
+
+  // Default: show number, append unit if provided
+  return rawUnit ? `${value.toLocaleString()} ${rawUnit}` : value.toLocaleString()
 }
 
 // Format a stat value - for time units, each value picks its own best unit
 function formatStatValue(value: number, unit: string): string {
   if (isTimeUnit(unit)) {
-    return formatTimeValue(value, unit as TimeUnit, false)
+    return formatTimeValue(value, unit, false)
   }
   return formatValue(value, unit, false)
 }
@@ -154,11 +170,19 @@ export function XYChart({
     if (!isTimeUnit(unit) || stats.p99 === 0) {
       return undefined
     }
-    return getAdaptiveTimeUnit(stats.p99, unit as TimeUnit)
+    return getAdaptiveTimeUnit(stats.p99, unit)
   }, [unit, stats.p99])
 
-  // Display unit for the header (adaptive for time, original for others)
-  const displayUnit = adaptiveTimeUnit ? adaptiveTimeUnit.unit : unit
+  // Calculate adaptive size unit based on p99 value
+  const adaptiveSizeUnit = useMemo(() => {
+    if (!isSizeUnit(unit) || stats.p99 === 0) {
+      return undefined
+    }
+    return getAdaptiveSizeUnit(stats.p99, unit)
+  }, [unit, stats.p99])
+
+  // Display unit for the header (adaptive for time/size, original for others)
+  const displayUnit = adaptiveTimeUnit?.unit ?? adaptiveSizeUnit?.unit ?? unit
 
   // Use ref for onWidthChange to avoid effect re-runs when callback identity changes
   const onWidthChangeRef = useRef(onWidthChange)
@@ -275,7 +299,7 @@ export function XYChart({
             // Convert back to original unit and pick best unit for display
             const originalValue = value / conversionFactor
             if (isTimeUnit(originalUnit)) {
-              tooltipValue.textContent = formatTimeValue(originalValue, originalUnit as TimeUnit)
+              tooltipValue.textContent = formatTimeValue(originalValue, originalUnit)
             } else {
               tooltipValue.textContent = formatStatValue(originalValue, originalUnit)
             }
@@ -311,8 +335,8 @@ export function XYChart({
     }
 
     // Transform data to uPlot format
-    // For time units, convert values to the display unit so uPlot generates correct ticks
-    const conversionFactor = adaptiveTimeUnit?.conversionFactor ?? 1
+    // For time/size units, convert values to the display unit so uPlot generates correct ticks
+    const conversionFactor = adaptiveTimeUnit?.conversionFactor ?? adaptiveSizeUnit?.conversionFactor ?? 1
 
     // For time mode, convert ms to seconds for uPlot
     // For numeric/categorical, use x values directly
@@ -326,7 +350,7 @@ export function XYChart({
     const displayP99 = stats.p99 * conversionFactor
     const displayMax = stats.max * conversionFactor
 
-    const yAxisUnit = adaptiveTimeUnit?.abbrev ?? (unit === 'percent' ? '%' : unit)
+    const yAxisUnit = adaptiveTimeUnit?.abbrev ?? adaptiveSizeUnit?.abbrev ?? (unit === 'percent' ? '%' : unit)
 
     // Build X axis configuration based on mode
     const xAxisConfig: uPlot.Axis = {
@@ -481,7 +505,7 @@ export function XYChart({
     }
     // Note: dimensions intentionally excluded - handled by separate resize effect
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, title, unit, createTooltipPlugin, stats, adaptiveTimeUnit, scaleMode, chartType, xAxisMode, xLabels, yColumnName])
+  }, [data, title, unit, createTooltipPlugin, stats, adaptiveTimeUnit, adaptiveSizeUnit, scaleMode, chartType, xAxisMode, xLabels, yColumnName])
 
   // Resize chart without recreating when dimensions change
   useEffect(() => {

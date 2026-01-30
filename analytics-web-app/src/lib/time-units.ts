@@ -5,6 +5,8 @@
  * For example, 0.02 seconds -> 20 ms, 1500 ns -> 1.5 µs
  */
 
+import { normalizeUnit, TIME_UNIT_NAMES } from './units'
+
 export type TimeUnit =
   | 'nanoseconds'
   | 'microseconds'
@@ -32,10 +34,10 @@ const TIME_UNITS: TimeUnitInfo[] = [
 ]
 
 /**
- * Check if a unit is a time-based unit
+ * Check if a unit (or its alias) is a time-based unit
  */
 export function isTimeUnit(unit: string): unit is TimeUnit {
-  return TIME_UNITS.some((t) => t.unit === unit)
+  return TIME_UNIT_NAMES.has(normalizeUnit(unit))
 }
 
 /**
@@ -64,15 +66,18 @@ export interface AdaptiveTimeUnit {
  * The logic selects a unit where the reference value falls in a readable range (1-999).
  *
  * @param referenceValue - A representative value (e.g., p99, max) in the original unit
- * @param originalUnit - The original unit of the values
+ * @param originalUnit - The original unit of the values (can be an alias)
  * @returns The best unit to use for display
  */
 export function getAdaptiveTimeUnit(
   referenceValue: number,
-  originalUnit: TimeUnit
+  originalUnit: TimeUnit | string
 ): AdaptiveTimeUnit {
+  // Normalize the unit to canonical form
+  const normalizedUnit = normalizeUnit(originalUnit) as TimeUnit
+
   // Convert reference value to nanoseconds
-  const refNs = toNanoseconds(referenceValue, originalUnit)
+  const refNs = toNanoseconds(referenceValue, normalizedUnit)
 
   // Find the best unit where the value is >= 1 (prefer larger units when readable)
   // Work backwards from largest unit to find the smallest unit where value >= 1
@@ -88,7 +93,7 @@ export function getAdaptiveTimeUnit(
   }
 
   // Calculate the conversion factor from original unit to best unit
-  const originalFactor = getUnitFactor(originalUnit)
+  const originalFactor = getUnitFactor(normalizedUnit)
   const bestFactor = bestUnit.factor
   const conversionFactor = originalFactor / bestFactor
 
@@ -151,13 +156,13 @@ export function formatAdaptiveTime(
  * Use this for stats (min, max, avg) where each value should pick its own appropriate unit.
  *
  * @param value - The value in the original unit
- * @param originalUnit - The original unit of the value
+ * @param originalUnit - The original unit of the value (can be an alias)
  * @param abbreviated - Whether to use abbreviated unit (ms vs milliseconds)
  * @returns Formatted string like "20 ms" or "1.5 seconds"
  */
 export function formatTimeValue(
   value: number,
-  originalUnit: TimeUnit,
+  originalUnit: TimeUnit | string,
   abbreviated = false
 ): string {
   const adaptive = getAdaptiveTimeUnit(value, originalUnit)
