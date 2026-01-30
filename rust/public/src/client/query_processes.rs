@@ -111,10 +111,11 @@ impl ProcessQueryBuilder {
             {sql_where}
             GROUP BY process_id, exe, properties, computer, username, cpu_brand, distro;"#
         );
-        let mut query_time_range = None;
-        if self.begin.is_some() && self.end.is_some() {
-            query_time_range = Some(TimeRange::new(self.begin.unwrap(), self.end.unwrap()));
-        }
+        let query_time_range = if let (Some(begin), Some(end)) = (self.begin, self.end) {
+            Some(TimeRange::new(begin, end))
+        } else {
+            None
+        };
         client.query(sql, query_time_range).await
     }
 }

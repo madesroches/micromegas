@@ -27,8 +27,8 @@ micromegas-perfetto = { path = "perfetto", version = "0.20.0" }
 micromegas = { path = "public" }
 
 anyhow = "1.0"
-arrow-flight = { version = "57.0", features = ["flight-sql-experimental"] }
-arrow-ipc = "57.0"
+arrow-flight = { version = "57.2", features = ["flight-sql-experimental"] }
+arrow-ipc = "57.2"
 async-stream = "0.3"
 async-trait = "0.1"
 axum = "0.8"
@@ -40,7 +40,7 @@ ciborium = "0.2.2"
 clap = { version = "4", features = ["derive", "env"] }
 colored = { version = "3" }
 ctrlc = "3.2.0"
-datafusion = "51.0"
+datafusion = "52.1"
 futures = "0.3"
 hmac = "0.12"
 http = "1.1"
@@ -55,7 +55,7 @@ moka = { version = "0.12", features = ["future"] }
 object_store = { version = "0.12", features = ["aws"] }
 once_cell = "1.7.2"
 openidconnect = "4.0"
-parquet = "57.0"
+parquet = "57.2"
 pin-project = "1.1"
 proc-macro2 = "1.0"
 prost = { version = "0.14" }

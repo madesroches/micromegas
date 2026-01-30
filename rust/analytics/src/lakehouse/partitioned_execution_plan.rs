@@ -54,13 +54,13 @@ pub fn make_partitioned_execution_plan(
 
     let object_store_url = ObjectStoreUrl::parse("obj://lakehouse/").unwrap();
     let source = Arc::new(
-        ParquetSource::default()
+        ParquetSource::new(schema)
             .with_predicate(predicate)
             .with_parquet_file_reader_factory(reader_factory),
     );
-    let file_scan_config = FileScanConfigBuilder::new(object_store_url, schema, source)
+    let file_scan_config = FileScanConfigBuilder::new(object_store_url, source)
         .with_limit(limit)
-        .with_projection_indices(projection.cloned())
+        .with_projection_indices(projection.cloned())?
         .with_file_groups(vec![file_group.into()])
         .build();
     Ok(Arc::new(DataSourceExec::new(Arc::new(file_scan_config))))
