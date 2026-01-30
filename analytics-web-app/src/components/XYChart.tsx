@@ -51,50 +51,20 @@ function formatValue(
     return formatAdaptiveTime(value, adaptiveTimeUnit, abbreviated)
   }
 
-  // Binary size constants (power of 2)
-  const KB = 1024
-  const MB = KB * 1024
-  const GB = MB * 1024
-  const TB = GB * 1024
-
-  // Size units - bytes
-  if (unit === 'bytes') {
-    if (value >= TB) return (value / TB).toFixed(1) + ' TB'
-    if (value >= GB) return (value / GB).toFixed(1) + ' GB'
-    if (value >= MB) return (value / MB).toFixed(1) + ' MB'
-    if (value >= KB) return (value / KB).toFixed(1) + ' KB'
-    return value.toFixed(0) + ' B'
-  }
-  // Size units - kilobytes (value already in KB)
-  if (unit === 'kilobytes') {
-    if (value >= GB) return (value / GB).toFixed(1) + ' TB'
-    if (value >= MB) return (value / MB).toFixed(1) + ' GB'
-    if (value >= KB) return (value / KB).toFixed(1) + ' MB'
-    return value.toFixed(1) + ' KB'
-  }
-  // Size units - megabytes (value already in MB)
-  if (unit === 'megabytes') {
-    if (value >= MB) return (value / MB).toFixed(1) + ' TB'
-    if (value >= KB) return (value / KB).toFixed(1) + ' GB'
-    return value.toFixed(1) + ' MB'
-  }
-  // Size units - gigabytes (value already in GB)
-  if (unit === 'gigabytes') {
-    if (value >= KB) return (value / KB).toFixed(1) + ' TB'
-    return value.toFixed(1) + ' GB'
-  }
-  // Size units - terabytes (value already in TB)
-  if (unit === 'terabytes') {
-    return value.toFixed(1) + ' TB'
+  // Size units - use adaptive formatting
+  if (isSizeUnit(unit)) {
+    const adaptive = getAdaptiveSizeUnit(value, unit)
+    const displayValue = value * adaptive.conversionFactor
+    const decimals = adaptive.unit === 'bytes' ? 0 : 1
+    return displayValue.toFixed(decimals) + ' ' + adaptive.abbrev
   }
 
-  // Rate units - bytes per second
+  // Rate units - bytes per second (uses same adaptive logic)
   if (unit === 'bytes/s') {
-    if (value >= TB) return (value / TB).toFixed(1) + ' TB/s'
-    if (value >= GB) return (value / GB).toFixed(1) + ' GB/s'
-    if (value >= MB) return (value / MB).toFixed(1) + ' MB/s'
-    if (value >= KB) return (value / KB).toFixed(1) + ' KB/s'
-    return value.toFixed(0) + ' B/s'
+    const adaptive = getAdaptiveSizeUnit(value, 'bytes')
+    const displayValue = value * adaptive.conversionFactor
+    const decimals = adaptive.unit === 'bytes' ? 0 : 1
+    return displayValue.toFixed(decimals) + ' ' + adaptive.abbrev + '/s'
   }
 
   // Other units
