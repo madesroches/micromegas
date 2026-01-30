@@ -7,8 +7,8 @@ import {
   formatAdaptiveTime,
   formatTimeValue,
   type AdaptiveTimeUnit,
-  type TimeUnit,
 } from '@/lib/time-units'
+import { normalizeUnit } from '@/lib/units'
 
 export interface ChartAxisBounds {
   left: number // Left padding (Y-axis width)
@@ -40,30 +40,63 @@ interface XYChartProps {
 
 function formatValue(
   value: number,
-  unit: string,
+  rawUnit: string,
   abbreviated = false,
   adaptiveTimeUnit?: AdaptiveTimeUnit
 ): string {
+  const unit = normalizeUnit(rawUnit)
+
   // Use adaptive formatting for time units
   if (adaptiveTimeUnit && isTimeUnit(unit)) {
     return formatAdaptiveTime(value, adaptiveTimeUnit, abbreviated)
   }
 
+  // Size units - bytes
   if (unit === 'bytes') {
     if (value >= 1e9) return (value / 1e9).toFixed(1) + ' GB'
     if (value >= 1e6) return (value / 1e6).toFixed(1) + ' MB'
     if (value >= 1e3) return (value / 1e3).toFixed(1) + ' KB'
     return value.toFixed(0) + ' B'
   }
+  // Size units - kilobytes (value already in KB)
+  if (unit === 'kilobytes') {
+    if (value >= 1e6) return (value / 1e6).toFixed(1) + ' GB'
+    if (value >= 1e3) return (value / 1e3).toFixed(1) + ' MB'
+    return value.toFixed(1) + ' KB'
+  }
+  // Size units - megabytes (value already in MB)
+  if (unit === 'megabytes') {
+    if (value >= 1e3) return (value / 1e3).toFixed(1) + ' GB'
+    return value.toFixed(1) + ' MB'
+  }
+  // Size units - gigabytes (value already in GB)
+  if (unit === 'gigabytes') {
+    return value.toFixed(1) + ' GB'
+  }
+
+  // Rate units - bytes per second
+  if (unit === 'bytes/s') {
+    if (value >= 1e9) return (value / 1e9).toFixed(1) + ' GB/s'
+    if (value >= 1e6) return (value / 1e6).toFixed(1) + ' MB/s'
+    if (value >= 1e3) return (value / 1e3).toFixed(1) + ' KB/s'
+    return value.toFixed(0) + ' B/s'
+  }
+
+  // Other units
   if (unit === 'percent') return value.toFixed(1) + '%'
   if (unit === 'count') return Math.round(value).toLocaleString()
-  return value.toFixed(2) + ' ' + unit
+  if (unit === 'degrees') return value.toFixed(1) + '°'
+  if (unit === 'boolean') return value !== 0 ? 'true' : 'false'
+  if (unit === 'none') return value.toFixed(2)
+
+  // Custom fallback - use original unit string for display
+  return value.toFixed(2) + ' ' + rawUnit
 }
 
 // Format a stat value - for time units, each value picks its own best unit
 function formatStatValue(value: number, unit: string): string {
   if (isTimeUnit(unit)) {
-    return formatTimeValue(value, unit as TimeUnit, false)
+    return formatTimeValue(value, unit, false)
   }
   return formatValue(value, unit, false)
 }
@@ -154,7 +187,7 @@ export function XYChart({
     if (!isTimeUnit(unit) || stats.p99 === 0) {
       return undefined
     }
-    return getAdaptiveTimeUnit(stats.p99, unit as TimeUnit)
+    return getAdaptiveTimeUnit(stats.p99, unit)
   }, [unit, stats.p99])
 
   // Display unit for the header (adaptive for time, original for others)
@@ -275,7 +308,7 @@ export function XYChart({
             // Convert back to original unit and pick best unit for display
             const originalValue = value / conversionFactor
             if (isTimeUnit(originalUnit)) {
-              tooltipValue.textContent = formatTimeValue(originalValue, originalUnit as TimeUnit)
+              tooltipValue.textContent = formatTimeValue(originalValue, originalUnit)
             } else {
               tooltipValue.textContent = formatStatValue(originalValue, originalUnit)
             }
