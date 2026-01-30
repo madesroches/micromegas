@@ -105,12 +105,18 @@ interface SizeUnitInfo {
   factor: number // multiplier to convert to bytes
 }
 
+// Binary size units (power of 2)
+const KB = 1024
+const MB = KB * 1024
+const GB = MB * 1024
+const TB = GB * 1024
+
 const SIZE_UNITS: SizeUnitInfo[] = [
   { unit: 'bytes', abbrev: 'B', factor: 1 },
-  { unit: 'kilobytes', abbrev: 'KB', factor: 1e3 },
-  { unit: 'megabytes', abbrev: 'MB', factor: 1e6 },
-  { unit: 'gigabytes', abbrev: 'GB', factor: 1e9 },
-  { unit: 'terabytes', abbrev: 'TB', factor: 1e12 },
+  { unit: 'kilobytes', abbrev: 'KB', factor: KB },
+  { unit: 'megabytes', abbrev: 'MB', factor: MB },
+  { unit: 'gigabytes', abbrev: 'GB', factor: GB },
+  { unit: 'terabytes', abbrev: 'TB', factor: TB },
 ]
 
 export interface AdaptiveSizeUnit {

@@ -51,30 +51,36 @@ function formatValue(
     return formatAdaptiveTime(value, adaptiveTimeUnit, abbreviated)
   }
 
+  // Binary size constants (power of 2)
+  const KB = 1024
+  const MB = KB * 1024
+  const GB = MB * 1024
+  const TB = GB * 1024
+
   // Size units - bytes
   if (unit === 'bytes') {
-    if (value >= 1e12) return (value / 1e12).toFixed(1) + ' TB'
-    if (value >= 1e9) return (value / 1e9).toFixed(1) + ' GB'
-    if (value >= 1e6) return (value / 1e6).toFixed(1) + ' MB'
-    if (value >= 1e3) return (value / 1e3).toFixed(1) + ' KB'
+    if (value >= TB) return (value / TB).toFixed(1) + ' TB'
+    if (value >= GB) return (value / GB).toFixed(1) + ' GB'
+    if (value >= MB) return (value / MB).toFixed(1) + ' MB'
+    if (value >= KB) return (value / KB).toFixed(1) + ' KB'
     return value.toFixed(0) + ' B'
   }
   // Size units - kilobytes (value already in KB)
   if (unit === 'kilobytes') {
-    if (value >= 1e9) return (value / 1e9).toFixed(1) + ' TB'
-    if (value >= 1e6) return (value / 1e6).toFixed(1) + ' GB'
-    if (value >= 1e3) return (value / 1e3).toFixed(1) + ' MB'
+    if (value >= GB) return (value / GB).toFixed(1) + ' TB'
+    if (value >= MB) return (value / MB).toFixed(1) + ' GB'
+    if (value >= KB) return (value / KB).toFixed(1) + ' MB'
     return value.toFixed(1) + ' KB'
   }
   // Size units - megabytes (value already in MB)
   if (unit === 'megabytes') {
-    if (value >= 1e6) return (value / 1e6).toFixed(1) + ' TB'
-    if (value >= 1e3) return (value / 1e3).toFixed(1) + ' GB'
+    if (value >= MB) return (value / MB).toFixed(1) + ' TB'
+    if (value >= KB) return (value / KB).toFixed(1) + ' GB'
     return value.toFixed(1) + ' MB'
   }
   // Size units - gigabytes (value already in GB)
   if (unit === 'gigabytes') {
-    if (value >= 1e3) return (value / 1e3).toFixed(1) + ' TB'
+    if (value >= KB) return (value / KB).toFixed(1) + ' TB'
     return value.toFixed(1) + ' GB'
   }
   // Size units - terabytes (value already in TB)
@@ -84,10 +90,10 @@ function formatValue(
 
   // Rate units - bytes per second
   if (unit === 'bytes/s') {
-    if (value >= 1e12) return (value / 1e12).toFixed(1) + ' TB/s'
-    if (value >= 1e9) return (value / 1e9).toFixed(1) + ' GB/s'
-    if (value >= 1e6) return (value / 1e6).toFixed(1) + ' MB/s'
-    if (value >= 1e3) return (value / 1e3).toFixed(1) + ' KB/s'
+    if (value >= TB) return (value / TB).toFixed(1) + ' TB/s'
+    if (value >= GB) return (value / GB).toFixed(1) + ' GB/s'
+    if (value >= MB) return (value / MB).toFixed(1) + ' MB/s'
+    if (value >= KB) return (value / KB).toFixed(1) + ' KB/s'
     return value.toFixed(0) + ' B/s'
   }
 

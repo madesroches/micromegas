@@ -184,6 +184,12 @@ describe('isSizeUnit', () => {
 })
 
 describe('getAdaptiveSizeUnit', () => {
+  // Binary size constants for test calculations
+  const KB = 1024
+  const MB = KB * 1024
+  const GB = MB * 1024
+  const TB = GB * 1024
+
   describe('from bytes', () => {
     it('stays in bytes for small values', () => {
       const result = getAdaptiveSizeUnit(500, 'bytes')
@@ -192,66 +198,66 @@ describe('getAdaptiveSizeUnit', () => {
       expect(result.conversionFactor).toBe(1)
     })
 
-    it('converts to KB for thousands', () => {
-      const result = getAdaptiveSizeUnit(5000, 'bytes')
+    it('converts to KB for values >= 1024', () => {
+      const result = getAdaptiveSizeUnit(5 * KB, 'bytes')
       expect(result.unit).toBe('kilobytes')
       expect(result.abbrev).toBe('KB')
-      expect(result.conversionFactor).toBe(0.001)
+      expect(result.conversionFactor).toBe(1 / KB)
     })
 
-    it('converts to MB for millions', () => {
-      const result = getAdaptiveSizeUnit(5000000, 'bytes')
+    it('converts to MB for values >= 1 MB', () => {
+      const result = getAdaptiveSizeUnit(5 * MB, 'bytes')
       expect(result.unit).toBe('megabytes')
       expect(result.abbrev).toBe('MB')
-      expect(result.conversionFactor).toBe(0.000001)
+      expect(result.conversionFactor).toBe(1 / MB)
     })
 
-    it('converts to GB for billions', () => {
-      const result = getAdaptiveSizeUnit(5000000000, 'bytes')
+    it('converts to GB for values >= 1 GB', () => {
+      const result = getAdaptiveSizeUnit(5 * GB, 'bytes')
       expect(result.unit).toBe('gigabytes')
       expect(result.abbrev).toBe('GB')
-      expect(result.conversionFactor).toBe(1e-9)
+      expect(result.conversionFactor).toBe(1 / GB)
     })
 
-    it('converts to TB for trillions', () => {
-      const result = getAdaptiveSizeUnit(5000000000000, 'bytes')
+    it('converts to TB for values >= 1 TB', () => {
+      const result = getAdaptiveSizeUnit(5 * TB, 'bytes')
       expect(result.unit).toBe('terabytes')
       expect(result.abbrev).toBe('TB')
-      expect(result.conversionFactor).toBe(1e-12)
+      expect(result.conversionFactor).toBe(1 / TB)
     })
   })
 
   describe('from kilobytes', () => {
-    it('converts to MB for thousands of KB', () => {
-      const result = getAdaptiveSizeUnit(5000, 'kilobytes')
+    it('converts to MB for values >= 1024 KB', () => {
+      const result = getAdaptiveSizeUnit(5 * KB, 'kilobytes')
       expect(result.unit).toBe('megabytes')
       expect(result.abbrev).toBe('MB')
-      expect(result.conversionFactor).toBe(0.001)
+      expect(result.conversionFactor).toBe(1 / KB)
     })
 
-    it('converts to GB for millions of KB', () => {
-      const result = getAdaptiveSizeUnit(5000000, 'kilobytes')
+    it('converts to GB for values >= 1 GB in KB', () => {
+      const result = getAdaptiveSizeUnit(5 * MB, 'kilobytes')
       expect(result.unit).toBe('gigabytes')
       expect(result.abbrev).toBe('GB')
-      expect(result.conversionFactor).toBe(0.000001)
+      expect(result.conversionFactor).toBe(1 / MB)
     })
   })
 
   describe('with aliases', () => {
     it('works with B alias', () => {
-      const result = getAdaptiveSizeUnit(5000000, 'B')
+      const result = getAdaptiveSizeUnit(5 * MB, 'B')
       expect(result.unit).toBe('megabytes')
       expect(result.abbrev).toBe('MB')
     })
 
     it('works with KB alias', () => {
-      const result = getAdaptiveSizeUnit(5000, 'KB')
+      const result = getAdaptiveSizeUnit(5 * KB, 'KB')
       expect(result.unit).toBe('megabytes')
       expect(result.abbrev).toBe('MB')
     })
 
     it('works with Bytes alias', () => {
-      const result = getAdaptiveSizeUnit(5000000000, 'Bytes')
+      const result = getAdaptiveSizeUnit(5 * GB, 'Bytes')
       expect(result.unit).toBe('gigabytes')
       expect(result.abbrev).toBe('GB')
     })
