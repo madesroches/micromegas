@@ -39,39 +39,63 @@ Current code uses **exact string matching**. Units like `Bytes`, `ns`, `s`, `Mil
 
 ## Implementation
 
-### Step 1: Add `normalizeUnit()` function
+### Step 1: Create `units.ts` with `normalizeUnit()` function
 
-In `XYChart.tsx` (or a small `units.ts` helper):
+Create `analytics-web-app/src/lib/units.ts`:
 
 ```typescript
 const UNIT_ALIASES: Record<string, string> = {
-  // Time
+  // Time (include canonical names for case-insensitive matching)
   'ns': 'nanoseconds',
+  'nanoseconds': 'nanoseconds',
+  'Nanoseconds': 'nanoseconds',
   'µs': 'microseconds',
   'us': 'microseconds',
+  'microseconds': 'microseconds',
+  'Microseconds': 'microseconds',
   'ms': 'milliseconds',
+  'milliseconds': 'milliseconds',
   'Milliseconds': 'milliseconds',
   's': 'seconds',
+  'seconds': 'seconds',
   'Seconds': 'seconds',
   'min': 'minutes',
+  'minutes': 'minutes',
+  'Minutes': 'minutes',
   'h': 'hours',
+  'hours': 'hours',
+  'Hours': 'hours',
   'd': 'days',
+  'days': 'days',
+  'Days': 'days',
   // Size
+  'bytes': 'bytes',
   'Bytes': 'bytes',
   'B': 'bytes',
+  'kilobytes': 'kilobytes',
   'Kilobytes': 'kilobytes',
   'KB': 'kilobytes',
   'kb': 'kilobytes',
+  'megabytes': 'megabytes',
+  'Megabytes': 'megabytes',
   'MB': 'megabytes',
+  'gigabytes': 'gigabytes',
+  'Gigabytes': 'gigabytes',
   'GB': 'gigabytes',
   // Rate
+  'BytesPerSecond': 'bytes/s',
   'BytesPerSeconds': 'bytes/s',
   'B/s': 'bytes/s',
+  'bytes/s': 'bytes/s',
   // Other
   'requests': 'count',
+  'count': 'count',
   '%': 'percent',
+  'percent': 'percent',
   'deg': 'degrees',
   'degrees': 'degrees',
+  'boolean': 'boolean',
+  'none': 'none',
 }
 
 function normalizeUnit(unit: string): string {
@@ -99,6 +123,13 @@ function formatValue(value: number, rawUnit: string, ...): string {
     if (value >= 1e3) return (value / 1e3).toFixed(1) + ' MB'
     return value.toFixed(1) + ' KB'
   }
+  if (unit === 'megabytes') {
+    if (value >= 1e3) return (value / 1e3).toFixed(1) + ' GB'
+    return value.toFixed(1) + ' MB'
+  }
+  if (unit === 'gigabytes') {
+    return value.toFixed(1) + ' GB'
+  }
 
   // Rate units
   if (unit === 'bytes/s') {
@@ -112,7 +143,7 @@ function formatValue(value: number, rawUnit: string, ...): string {
   if (unit === 'percent') return value.toFixed(1) + '%'
   if (unit === 'count') return Math.round(value).toLocaleString()
   if (unit === 'degrees') return value.toFixed(1) + '°'
-  if (unit === 'boolean') return value ? 'true' : 'false'
+  if (unit === 'boolean') return value !== 0 ? 'true' : 'false'
   if (unit === 'none' || unit === '') return value.toFixed(2)
 
   // Custom fallback
@@ -122,9 +153,23 @@ function formatValue(value: number, rawUnit: string, ...): string {
 
 ### Step 3: Update `isTimeUnit()` check
 
-Either:
-- Normalize before calling `isTimeUnit()`, or
-- Expand `isTimeUnit()` to accept aliases
+Create a `TIME_UNITS` set and check against normalized units:
+
+```typescript
+const TIME_UNITS = new Set([
+  'nanoseconds',
+  'microseconds',
+  'milliseconds',
+  'seconds',
+  'minutes',
+  'hours',
+  'days',
+])
+
+function isTimeUnit(unit: string): boolean {
+  return TIME_UNITS.has(normalizeUnit(unit))
+}
+```
 
 ### Step 4: Update adaptive time unit calculation
 
@@ -134,27 +179,47 @@ Ensure `getAdaptiveTimeUnit()` works with normalized units.
 
 | File | Change |
 |------|--------|
-| `analytics-web-app/src/components/XYChart.tsx` | Add `normalizeUnit()`, expand `formatValue()` |
-| `analytics-web-app/src/lib/time-units.ts` | Optional: add alias support to `isTimeUnit()` |
+| `analytics-web-app/src/lib/units.ts` | New file: `UNIT_ALIASES`, `normalizeUnit()`, `TIME_UNITS`, `isTimeUnit()` |
+| `analytics-web-app/src/components/XYChart.tsx` | Import from `units.ts`, update `formatValue()` to use normalized units |
 
 ## Test Cases
 
 ```typescript
-// Aliases
-formatValue(100, 'Bytes')      // "100 B"
-formatValue(100, 'ns')         // adaptive time
-formatValue(100, 's')          // adaptive time
+// Time aliases
+formatValue(100, 'ns')           // adaptive time
+formatValue(100, 's')            // adaptive time
 formatValue(100, 'Milliseconds') // adaptive time
+formatValue(100, 'Seconds')      // adaptive time
 
-// New units
-formatValue(1500, 'Kilobytes')      // "1.5 MB"
+// Size aliases
+formatValue(100, 'Bytes')        // "100 B"
+formatValue(100, 'B')            // "100 B"
+formatValue(1500, 'Kilobytes')   // "1.5 MB"
+formatValue(1500, 'KB')          // "1.5 MB"
+formatValue(1500, 'megabytes')   // "1.5 GB"
+formatValue(1500, 'MB')          // "1.5 GB"
+formatValue(2.5, 'gigabytes')    // "2.5 GB"
+formatValue(2.5, 'GB')           // "2.5 GB"
+
+// Rate units
 formatValue(1500000, 'BytesPerSeconds') // "1.5 MB/s"
-formatValue(90, 'deg')              // "90°"
-formatValue(1, 'boolean')           // "true"
-formatValue(42, 'none')             // "42"
-formatValue(1234, 'requests')       // "1,234"
+formatValue(1500000, 'B/s')             // "1.5 MB/s"
+
+// Other units
+formatValue(90, 'deg')           // "90°"
+formatValue(90, 'degrees')       // "90°"
+formatValue(42, 'none')          // "42.00"
+formatValue(1234, 'requests')    // "1,234"
+formatValue(1234, 'count')       // "1,234"
+formatValue(75.5, 'percent')     // "75.5%"
+formatValue(75.5, '%')           // "75.5%"
+
+// Boolean (explicit zero check)
+formatValue(1, 'boolean')        // "true"
+formatValue(0, 'boolean')        // "false"
+formatValue(0.5, 'boolean')      // "true" (non-zero)
 ```
 
 ## Estimate
 
-~50-100 lines of code changes, mostly in `XYChart.tsx`.
+~80-120 lines of code: ~60 lines in new `units.ts`, ~20-60 lines updated in `XYChart.tsx`.
