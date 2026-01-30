@@ -78,3 +78,96 @@ export const TIME_UNIT_NAMES = new Set([
   'hours',
   'days',
 ])
+
+/**
+ * Set of canonical size unit names
+ */
+export const SIZE_UNIT_NAMES = new Set([
+  'bytes',
+  'kilobytes',
+  'megabytes',
+  'gigabytes',
+  'terabytes',
+])
+
+/**
+ * Check if a unit (or its alias) is a size-based unit
+ */
+export function isSizeUnit(unit: string): boolean {
+  return SIZE_UNIT_NAMES.has(normalizeUnit(unit))
+}
+
+export type SizeUnit = 'bytes' | 'kilobytes' | 'megabytes' | 'gigabytes' | 'terabytes'
+
+interface SizeUnitInfo {
+  unit: SizeUnit
+  abbrev: string
+  factor: number // multiplier to convert to bytes
+}
+
+const SIZE_UNITS: SizeUnitInfo[] = [
+  { unit: 'bytes', abbrev: 'B', factor: 1 },
+  { unit: 'kilobytes', abbrev: 'KB', factor: 1e3 },
+  { unit: 'megabytes', abbrev: 'MB', factor: 1e6 },
+  { unit: 'gigabytes', abbrev: 'GB', factor: 1e9 },
+  { unit: 'terabytes', abbrev: 'TB', factor: 1e12 },
+]
+
+export interface AdaptiveSizeUnit {
+  unit: SizeUnit
+  abbrev: string
+  conversionFactor: number // multiply original value by this to get display value
+}
+
+/**
+ * Get the unit factor (bytes per unit)
+ */
+function getSizeUnitFactor(unit: SizeUnit): number {
+  const info = SIZE_UNITS.find((u) => u.unit === unit)
+  return info?.factor ?? 1
+}
+
+/**
+ * Convert a value to bytes from any size unit
+ */
+function toBytes(value: number, unit: SizeUnit): number {
+  return value * getSizeUnitFactor(unit)
+}
+
+/**
+ * Determine the best size unit to display a reference value.
+ * Picks a unit where the value falls in a readable range (1-999).
+ *
+ * @param referenceValue - A representative value (e.g., p99, max) in the original unit
+ * @param originalUnit - The original unit of the values (can be an alias)
+ * @returns The best unit to use for display
+ */
+export function getAdaptiveSizeUnit(
+  referenceValue: number,
+  originalUnit: SizeUnit | string
+): AdaptiveSizeUnit {
+  const normalizedUnit = normalizeUnit(originalUnit) as SizeUnit
+  const refBytes = toBytes(referenceValue, normalizedUnit)
+
+  // Find the best unit where the value is >= 1 (prefer larger units)
+  let bestUnit = SIZE_UNITS[0]
+  for (let i = SIZE_UNITS.length - 1; i >= 0; i--) {
+    const u = SIZE_UNITS[i]
+    const valueInUnit = refBytes / u.factor
+    if (valueInUnit >= 1) {
+      bestUnit = u
+      break
+    }
+  }
+
+  // Calculate the conversion factor from original unit to best unit
+  const originalFactor = getSizeUnitFactor(normalizedUnit)
+  const bestFactor = bestUnit.factor
+  const conversionFactor = originalFactor / bestFactor
+
+  return {
+    unit: bestUnit.unit,
+    abbrev: bestUnit.abbrev,
+    conversionFactor,
+  }
+}

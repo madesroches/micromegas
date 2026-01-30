@@ -1,4 +1,4 @@
-import { normalizeUnit, UNIT_ALIASES, TIME_UNIT_NAMES } from '../units'
+import { normalizeUnit, UNIT_ALIASES, TIME_UNIT_NAMES, SIZE_UNIT_NAMES, isSizeUnit, getAdaptiveSizeUnit } from '../units'
 
 describe('normalizeUnit', () => {
   describe('time units', () => {
@@ -140,5 +140,120 @@ describe('UNIT_ALIASES', () => {
     for (const alias of timeAliases) {
       expect(TIME_UNIT_NAMES.has(UNIT_ALIASES[alias])).toBe(true)
     }
+  })
+})
+
+describe('SIZE_UNIT_NAMES', () => {
+  it('contains all canonical size units', () => {
+    expect(SIZE_UNIT_NAMES.has('bytes')).toBe(true)
+    expect(SIZE_UNIT_NAMES.has('kilobytes')).toBe(true)
+    expect(SIZE_UNIT_NAMES.has('megabytes')).toBe(true)
+    expect(SIZE_UNIT_NAMES.has('gigabytes')).toBe(true)
+    expect(SIZE_UNIT_NAMES.has('terabytes')).toBe(true)
+  })
+
+  it('does not contain non-size units', () => {
+    expect(SIZE_UNIT_NAMES.has('nanoseconds')).toBe(false)
+    expect(SIZE_UNIT_NAMES.has('percent')).toBe(false)
+  })
+})
+
+describe('isSizeUnit', () => {
+  it('recognizes canonical size units', () => {
+    expect(isSizeUnit('bytes')).toBe(true)
+    expect(isSizeUnit('kilobytes')).toBe(true)
+    expect(isSizeUnit('megabytes')).toBe(true)
+    expect(isSizeUnit('gigabytes')).toBe(true)
+    expect(isSizeUnit('terabytes')).toBe(true)
+  })
+
+  it('recognizes size unit aliases', () => {
+    expect(isSizeUnit('B')).toBe(true)
+    expect(isSizeUnit('KB')).toBe(true)
+    expect(isSizeUnit('MB')).toBe(true)
+    expect(isSizeUnit('GB')).toBe(true)
+    expect(isSizeUnit('TB')).toBe(true)
+    expect(isSizeUnit('Bytes')).toBe(true)
+  })
+
+  it('rejects non-size units', () => {
+    expect(isSizeUnit('nanoseconds')).toBe(false)
+    expect(isSizeUnit('percent')).toBe(false)
+    expect(isSizeUnit('count')).toBe(false)
+  })
+})
+
+describe('getAdaptiveSizeUnit', () => {
+  describe('from bytes', () => {
+    it('stays in bytes for small values', () => {
+      const result = getAdaptiveSizeUnit(500, 'bytes')
+      expect(result.unit).toBe('bytes')
+      expect(result.abbrev).toBe('B')
+      expect(result.conversionFactor).toBe(1)
+    })
+
+    it('converts to KB for thousands', () => {
+      const result = getAdaptiveSizeUnit(5000, 'bytes')
+      expect(result.unit).toBe('kilobytes')
+      expect(result.abbrev).toBe('KB')
+      expect(result.conversionFactor).toBe(0.001)
+    })
+
+    it('converts to MB for millions', () => {
+      const result = getAdaptiveSizeUnit(5000000, 'bytes')
+      expect(result.unit).toBe('megabytes')
+      expect(result.abbrev).toBe('MB')
+      expect(result.conversionFactor).toBe(0.000001)
+    })
+
+    it('converts to GB for billions', () => {
+      const result = getAdaptiveSizeUnit(5000000000, 'bytes')
+      expect(result.unit).toBe('gigabytes')
+      expect(result.abbrev).toBe('GB')
+      expect(result.conversionFactor).toBe(1e-9)
+    })
+
+    it('converts to TB for trillions', () => {
+      const result = getAdaptiveSizeUnit(5000000000000, 'bytes')
+      expect(result.unit).toBe('terabytes')
+      expect(result.abbrev).toBe('TB')
+      expect(result.conversionFactor).toBe(1e-12)
+    })
+  })
+
+  describe('from kilobytes', () => {
+    it('converts to MB for thousands of KB', () => {
+      const result = getAdaptiveSizeUnit(5000, 'kilobytes')
+      expect(result.unit).toBe('megabytes')
+      expect(result.abbrev).toBe('MB')
+      expect(result.conversionFactor).toBe(0.001)
+    })
+
+    it('converts to GB for millions of KB', () => {
+      const result = getAdaptiveSizeUnit(5000000, 'kilobytes')
+      expect(result.unit).toBe('gigabytes')
+      expect(result.abbrev).toBe('GB')
+      expect(result.conversionFactor).toBe(0.000001)
+    })
+  })
+
+  describe('with aliases', () => {
+    it('works with B alias', () => {
+      const result = getAdaptiveSizeUnit(5000000, 'B')
+      expect(result.unit).toBe('megabytes')
+      expect(result.abbrev).toBe('MB')
+    })
+
+    it('works with KB alias', () => {
+      const result = getAdaptiveSizeUnit(5000, 'KB')
+      expect(result.unit).toBe('megabytes')
+      expect(result.abbrev).toBe('MB')
+    })
+
+    it('works with Bytes alias', () => {
+      const result = getAdaptiveSizeUnit(5000000000, 'Bytes')
+      expect(result.unit).toBe('gigabytes')
+      expect(result.abbrev).toBe('GB')
+    })
   })
 })

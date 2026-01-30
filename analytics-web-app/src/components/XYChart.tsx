@@ -8,7 +8,7 @@ import {
   formatTimeValue,
   type AdaptiveTimeUnit,
 } from '@/lib/time-units'
-import { normalizeUnit } from '@/lib/units'
+import { normalizeUnit, isSizeUnit, getAdaptiveSizeUnit } from '@/lib/units'
 
 export interface ChartAxisBounds {
   left: number // Left padding (Y-axis width)
@@ -197,8 +197,16 @@ export function XYChart({
     return getAdaptiveTimeUnit(stats.p99, unit)
   }, [unit, stats.p99])
 
-  // Display unit for the header (adaptive for time, original for others)
-  const displayUnit = adaptiveTimeUnit ? adaptiveTimeUnit.unit : unit
+  // Calculate adaptive size unit based on p99 value
+  const adaptiveSizeUnit = useMemo(() => {
+    if (!isSizeUnit(unit) || stats.p99 === 0) {
+      return undefined
+    }
+    return getAdaptiveSizeUnit(stats.p99, unit)
+  }, [unit, stats.p99])
+
+  // Display unit for the header (adaptive for time/size, original for others)
+  const displayUnit = adaptiveTimeUnit?.unit ?? adaptiveSizeUnit?.unit ?? unit
 
   // Use ref for onWidthChange to avoid effect re-runs when callback identity changes
   const onWidthChangeRef = useRef(onWidthChange)
@@ -351,8 +359,8 @@ export function XYChart({
     }
 
     // Transform data to uPlot format
-    // For time units, convert values to the display unit so uPlot generates correct ticks
-    const conversionFactor = adaptiveTimeUnit?.conversionFactor ?? 1
+    // For time/size units, convert values to the display unit so uPlot generates correct ticks
+    const conversionFactor = adaptiveTimeUnit?.conversionFactor ?? adaptiveSizeUnit?.conversionFactor ?? 1
 
     // For time mode, convert ms to seconds for uPlot
     // For numeric/categorical, use x values directly
@@ -366,7 +374,7 @@ export function XYChart({
     const displayP99 = stats.p99 * conversionFactor
     const displayMax = stats.max * conversionFactor
 
-    const yAxisUnit = adaptiveTimeUnit?.abbrev ?? (unit === 'percent' ? '%' : unit)
+    const yAxisUnit = adaptiveTimeUnit?.abbrev ?? adaptiveSizeUnit?.abbrev ?? (unit === 'percent' ? '%' : unit)
 
     // Build X axis configuration based on mode
     const xAxisConfig: uPlot.Axis = {
@@ -521,7 +529,7 @@ export function XYChart({
     }
     // Note: dimensions intentionally excluded - handled by separate resize effect
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, title, unit, createTooltipPlugin, stats, adaptiveTimeUnit, scaleMode, chartType, xAxisMode, xLabels, yColumnName])
+  }, [data, title, unit, createTooltipPlugin, stats, adaptiveTimeUnit, adaptiveSizeUnit, scaleMode, chartType, xAxisMode, xLabels, yColumnName])
 
   // Resize chart without recreating when dimensions change
   useEffect(() => {
