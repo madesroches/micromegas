@@ -48,15 +48,11 @@ export const UNIT_ALIASES: Record<string, string> = {
   'B/s': 'bytes/s',
   'bytes/s': 'bytes/s',
   // Other
-  'requests': 'count',
-  'count': 'count',
   '%': 'percent',
   'percent': 'percent',
   'deg': 'degrees',
   'degrees': 'degrees',
   'boolean': 'boolean',
-  'none': 'none',
-  '': 'none',
 }
 
 /**

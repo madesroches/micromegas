@@ -83,11 +83,6 @@ describe('normalizeUnit', () => {
   })
 
   describe('other units', () => {
-    it('normalizes count aliases', () => {
-      expect(normalizeUnit('count')).toBe('count')
-      expect(normalizeUnit('requests')).toBe('count')
-    })
-
     it('normalizes percent aliases', () => {
       expect(normalizeUnit('percent')).toBe('percent')
       expect(normalizeUnit('%')).toBe('percent')
@@ -101,11 +96,6 @@ describe('normalizeUnit', () => {
     it('normalizes boolean', () => {
       expect(normalizeUnit('boolean')).toBe('boolean')
     })
-
-    it('normalizes none/empty', () => {
-      expect(normalizeUnit('none')).toBe('none')
-      expect(normalizeUnit('')).toBe('none')
-    })
   })
 
   describe('unknown units', () => {
@@ -113,6 +103,10 @@ describe('normalizeUnit', () => {
       expect(normalizeUnit('custom_unit')).toBe('custom_unit')
       expect(normalizeUnit('meters')).toBe('meters')
       expect(normalizeUnit('rpm')).toBe('rpm')
+      expect(normalizeUnit('none')).toBe('none')
+      expect(normalizeUnit('count')).toBe('count')
+      expect(normalizeUnit('requests')).toBe('requests')
+      expect(normalizeUnit('')).toBe('')
     })
   })
 })

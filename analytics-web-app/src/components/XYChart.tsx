@@ -84,12 +84,13 @@ function formatValue(
 
   // Other units
   if (unit === 'percent') return value.toFixed(1) + '%'
-  if (unit === 'count') return Math.round(value).toLocaleString()
   if (unit === 'degrees') return value.toFixed(1) + '°'
   if (unit === 'boolean') return value !== 0 ? 'true' : 'false'
-  if (unit === 'none') return value.toFixed(2)
 
-  // Custom fallback - use original unit string for display
+  // Default: show number, append unit if provided
+  if (!rawUnit || rawUnit === 'none' || rawUnit === 'count' || rawUnit === 'requests') {
+    return value.toLocaleString()
+  }
   return value.toFixed(2) + ' ' + rawUnit
 }
 
