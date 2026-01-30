@@ -42,6 +42,9 @@ export const UNIT_ALIASES: Record<string, string> = {
   'gigabytes': 'gigabytes',
   'Gigabytes': 'gigabytes',
   'GB': 'gigabytes',
+  'terabytes': 'terabytes',
+  'Terabytes': 'terabytes',
+  'TB': 'terabytes',
   // Rate
   'BytesPerSecond': 'bytes/s',
   'BytesPerSeconds': 'bytes/s',

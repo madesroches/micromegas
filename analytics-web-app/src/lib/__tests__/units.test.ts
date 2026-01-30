@@ -71,6 +71,12 @@ describe('normalizeUnit', () => {
       expect(normalizeUnit('Gigabytes')).toBe('gigabytes')
       expect(normalizeUnit('GB')).toBe('gigabytes')
     })
+
+    it('normalizes terabyte aliases', () => {
+      expect(normalizeUnit('terabytes')).toBe('terabytes')
+      expect(normalizeUnit('Terabytes')).toBe('terabytes')
+      expect(normalizeUnit('TB')).toBe('terabytes')
+    })
   })
 
   describe('rate units', () => {
