@@ -81,18 +81,12 @@ impl CachingReader {
                 loader_was_called_clone.store(true, Ordering::SeqCst);
                 async move {
                     debug!("file_cache_load file={filename} file_size={file_size}");
-                    let result = object_store
-                        .get(&path)
-                        .await
-                        .map_err(|e| ParquetError::External(Box::new(e)))?;
-                    result
-                        .bytes()
-                        .await
-                        .map_err(|e| ParquetError::External(Box::new(e)))
+                    let result = object_store.get(&path).await?;
+                    result.bytes().await
                 }
             })
             .await
-            .map_err(|e| ParquetError::External(Box::new(e)))?;
+            .map_err(|e| ParquetError::General(e.to_string()))?;
 
         self.cached_data = Some(data.clone());
         self.last_read_was_cache_hit = !loader_was_called.load(Ordering::SeqCst);

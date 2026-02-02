@@ -1,3 +1,4 @@
+use anyhow::bail;
 use bytes::Bytes;
 use micromegas_tracing::prelude::*;
 use moka::future::Cache;
@@ -69,31 +70,41 @@ impl FileCache {
     /// Uses moka's `try_get_with` to coalesce concurrent requests - if multiple
     /// callers request the same uncached file simultaneously, only one will
     /// execute the loader while others wait for the result.
+    ///
+    /// Returns an error if file_size >= 4GB (moka weigher uses u32).
     pub async fn get_or_load<F, Fut, E>(
         &self,
         file_path: &str,
         file_size: u64,
         loader: F,
-    ) -> Result<Bytes, Arc<E>>
+    ) -> anyhow::Result<Bytes>
     where
         F: FnOnce() -> Fut,
         Fut: Future<Output = Result<Bytes, E>>,
-        E: Send + Sync + 'static,
+        E: Send + Sync + std::error::Error + 'static,
     {
+        if file_size > u32::MAX as u64 {
+            bail!(
+                "file too large to cache: {file_size} bytes (max {})",
+                u32::MAX
+            );
+        }
         let file_size_u32 = file_size as u32;
+        // Note: entry_count may be stale under concurrent loads of different files (approximate metric)
         let entry_count = self.cache.entry_count();
         let result = self
             .cache
             .try_get_with(file_path.to_string(), async {
-                let data = loader().await?;
+                let data = loader().await.map_err(|e| anyhow::anyhow!(e))?;
                 imetric!("file_cache_entry_count", "count", entry_count + 1);
-                Ok(CacheEntry {
+                Ok::<_, anyhow::Error>(CacheEntry {
                     data,
                     file_size: file_size_u32,
                     inserted_at: now(),
                 })
             })
-            .await?;
+            .await
+            .map_err(|e: Arc<anyhow::Error>| anyhow::anyhow!("{e}"))?;
         Ok(result.data.clone())
     }
 
