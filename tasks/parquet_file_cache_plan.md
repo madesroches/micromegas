@@ -61,16 +61,28 @@ Rather than embedding cache logic directly in `ParquetReader`, create a separate
 ```
 ReaderFactory
     └── ParquetReader (metadata handling)
-            └── CachingReader (file content caching)
-                    └── ParquetObjectReader (object store I/O)
+            └── CachingReader (file content caching + object store I/O)
+                    └── ObjectStore (via Arc, for uncached/large file reads)
 ```
 
 **Rationale:**
 - Separation of concerns - each layer has single responsibility
-- Testability - cache layer testable with mock readers
+- Testability - cache layer testable with mock object stores
 - Composability - can add other layers (retries, metrics, rate limiting)
 - No Mutex needed - `&mut self` on `AsyncFileReader` methods already guarantees exclusive access
 - Concrete types avoid dynamic dispatch overhead and simplify the code
+
+### Thundering Herd Protection
+
+**Problem:** Without protection, N concurrent requests for the same uncached file would all miss the cache and each fetch the entire file from object storage, wasting bandwidth and increasing latency.
+
+**Solution:** Use moka's `try_get_with()` API which provides built-in request coalescing:
+- First request initiates the load and holds a lock on that key
+- Concurrent requests for the same key wait on the first request
+- When the load completes, all waiters receive the same cached data
+- Failed loads propagate the error to all waiters (no negative caching)
+
+This is critical for query performance since DataFusion may spawn multiple parallel tasks that read the same files.
 
 ## Implementation
 
@@ -90,6 +102,7 @@ use bytes::Bytes;
 use micromegas_tracing::prelude::*;
 use moka::future::Cache;
 use moka::notification::RemovalCause;
+use std::future::Future;
 use std::sync::Arc;
 
 /// Default cache size (200 MB)
@@ -109,7 +122,9 @@ struct CacheEntry {
 
 /// Global LRU cache for parquet file contents, shared across all readers and queries.
 ///
-/// Memory budget is based on file size.
+/// Memory budget is based on file size. Uses moka's `try_get_with` to prevent
+/// thundering herd - concurrent requests for the same uncached file will coalesce
+/// into a single load operation.
 pub struct FileCache {
     cache: Cache<String, CacheEntry>,
     max_file_size: u64,
@@ -150,27 +165,36 @@ impl FileCache {
         file_size <= self.max_file_size
     }
 
-    /// Gets cached file contents for the given file path, if present.
-    pub async fn get(&self, file_path: &str) -> Option<Bytes> {
-        self.cache.get(file_path).await.map(|e| e.data.clone())
-    }
-
-    /// Inserts file contents into the cache.
-    pub async fn insert(&self, file_path: String, data: Bytes, file_size: u64) {
-        if !self.should_cache(file_size) {
-            return;
-        }
-        self.cache
-            .insert(
-                file_path,
-                CacheEntry {
+    /// Gets file contents, loading from the provided async function on cache miss.
+    ///
+    /// Uses moka's `try_get_with` to coalesce concurrent requests - if multiple
+    /// callers request the same uncached file simultaneously, only one will
+    /// execute the loader while others wait for the result.
+    pub async fn get_or_load<F, Fut, E>(
+        &self,
+        file_path: &str,
+        file_size: u64,
+        loader: F,
+    ) -> Result<Bytes, Arc<E>>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<Bytes, E>>,
+        E: Send + Sync + 'static,
+    {
+        let file_size_u32 = file_size as u32;
+        let result = self
+            .cache
+            .try_get_with(file_path.to_string(), async {
+                let data = loader().await?;
+                imetric!("file_cache_entry_count", "count", self.cache.entry_count() + 1);
+                Ok(CacheEntry {
                     data,
-                    file_size: file_size as u32,
+                    file_size: file_size_u32,
                     inserted_at: now(),
-                },
-            )
-            .await;
-        imetric!("file_cache_entry_count", "count", self.cache.entry_count());
+                })
+            })
+            .await?;
+        Ok(result.data.clone())
     }
 
     /// Returns cache statistics (entry_count, weighted_size_bytes).
@@ -202,19 +226,27 @@ use datafusion::parquet::{
         arrow_reader::ArrowReaderOptions,
         async_reader::{AsyncFileReader, ParquetObjectReader},
     },
+    errors::ParquetError,
     file::metadata::ParquetMetaData,
 };
 use futures::future::BoxFuture;
 use micromegas_tracing::prelude::*;
+use object_store::ObjectStore;
 use std::ops::Range;
 use std::sync::Arc;
 
 use super::file_cache::FileCache;
 
 /// Wrapper that adds file content caching to a ParquetObjectReader.
-/// No Mutex needed - &mut self already guarantees exclusive access.
+///
+/// Uses a two-level caching strategy:
+/// 1. Local `cached_data` - avoids global cache lookups within a single reader
+/// 2. Global `FileCache` - shared across all readers, with thundering herd protection
 pub struct CachingReader {
-    inner: ParquetObjectReader,
+    /// Object store for loading uncached files (shared, cloneable)
+    object_store: Arc<dyn ObjectStore>,
+    /// Path to the file in object store
+    path: object_store::path::Path,
     filename: String,
     file_size: u64,
     file_cache: Arc<FileCache>,
@@ -224,18 +256,52 @@ pub struct CachingReader {
 
 impl CachingReader {
     pub fn new(
-        inner: ParquetObjectReader,
+        object_store: Arc<dyn ObjectStore>,
+        path: object_store::path::Path,
         filename: String,
         file_size: u64,
         file_cache: Arc<FileCache>,
     ) -> Self {
         Self {
-            inner,
+            object_store,
+            path,
             filename,
             file_size,
             file_cache,
             cached_data: None,
         }
+    }
+
+    /// Load file data, using cache with thundering herd protection.
+    async fn load_file_data(&mut self) -> datafusion::parquet::errors::Result<Bytes> {
+        // Check local cache first (avoids global cache lookup)
+        if let Some(data) = &self.cached_data {
+            return Ok(data.clone());
+        }
+
+        // Use get_or_load for thundering herd protection - concurrent requests
+        // for the same file will coalesce into a single object store fetch
+        let object_store = Arc::clone(&self.object_store);
+        let path = self.path.clone();
+        let filename = self.filename.clone();
+        let file_size = self.file_size;
+
+        let data = self
+            .file_cache
+            .get_or_load(&self.filename, self.file_size, || async move {
+                debug!("file_cache_load file={filename} file_size={file_size}");
+                let result = object_store.get(&path).await.map_err(|e| {
+                    ParquetError::External(Box::new(e))
+                })?;
+                result.bytes().await.map_err(|e| {
+                    ParquetError::External(Box::new(e))
+                })
+            })
+            .await
+            .map_err(|e| ParquetError::External(Box::new(e)))?;
+
+        self.cached_data = Some(data.clone());
+        Ok(data)
     }
 }
 
@@ -246,30 +312,24 @@ impl AsyncFileReader for CachingReader {
     ) -> BoxFuture<'_, datafusion::parquet::errors::Result<Bytes>> {
         Box::pin(async move {
             if self.file_cache.should_cache(self.file_size) {
-                // Check local cache first (avoids global cache lookup)
-                if let Some(data) = &self.cached_data {
-                    return Ok(data.slice(range.start as usize..range.end as usize));
-                }
-
-                // Check global cache
-                if let Some(data) = self.file_cache.get(&self.filename).await {
-                    debug!("file_cache_hit file={}", self.filename);
-                    self.cached_data = Some(data.clone());
-                    return Ok(data.slice(range.start as usize..range.end as usize));
-                }
-
-                // Cache miss - fetch whole file
-                let full_data = self.inner.get_bytes(0..self.file_size).await?;
-                debug!("file_cache_miss file={} file_size={}", self.filename, self.file_size);
-                self.file_cache
-                    .insert(self.filename.clone(), full_data.clone(), self.file_size)
-                    .await;
-                self.cached_data = Some(full_data.clone());
-                Ok(full_data.slice(range.start as usize..range.end as usize))
+                let data = self.load_file_data().await?;
+                Ok(data.slice(range.start as usize..range.end as usize))
             } else {
-                // Large file - pass through to inner reader
+                // Large file - create temporary reader for pass-through
                 debug!("file_cache_skip file={} file_size={}", self.filename, self.file_size);
-                self.inner.get_bytes(range).await
+                let reader = ParquetObjectReader::new(
+                    Arc::clone(&self.object_store),
+                    self.path.clone(),
+                );
+                // ParquetObjectReader doesn't implement get_bytes directly in a way we can call,
+                // so we use object_store directly for the range read
+                let opts = object_store::GetOptions::default();
+                let get_range = object_store::GetRange::Bounded(range.clone());
+                let result = self.object_store
+                    .get_opts(&self.path, opts.with_range(get_range))
+                    .await
+                    .map_err(|e| ParquetError::External(Box::new(e)))?;
+                result.bytes().await.map_err(|e| ParquetError::External(Box::new(e)))
             }
         })
     }
@@ -280,47 +340,34 @@ impl AsyncFileReader for CachingReader {
     ) -> BoxFuture<'_, datafusion::parquet::errors::Result<Vec<Bytes>>> {
         Box::pin(async move {
             if self.file_cache.should_cache(self.file_size) {
-                // Check local cache first
-                if let Some(data) = &self.cached_data {
-                    return Ok(ranges
-                        .into_iter()
-                        .map(|r| data.slice(r.start as usize..r.end as usize))
-                        .collect());
-                }
-
-                // Check global cache
-                if let Some(data) = self.file_cache.get(&self.filename).await {
-                    debug!("file_cache_hit file={}", self.filename);
-                    self.cached_data = Some(data.clone());
-                    return Ok(ranges
-                        .into_iter()
-                        .map(|r| data.slice(r.start as usize..r.end as usize))
-                        .collect());
-                }
-
-                // Cache miss - fetch whole file
-                let full_data = self.inner.get_bytes(0..self.file_size).await?;
-                debug!("file_cache_miss file={} file_size={}", self.filename, self.file_size);
-                self.file_cache
-                    .insert(self.filename.clone(), full_data.clone(), self.file_size)
-                    .await;
-                self.cached_data = Some(full_data.clone());
+                let data = self.load_file_data().await?;
                 Ok(ranges
                     .into_iter()
-                    .map(|r| full_data.slice(r.start as usize..r.end as usize))
+                    .map(|r| data.slice(r.start as usize..r.end as usize))
                     .collect())
             } else {
-                self.inner.get_byte_ranges(ranges).await
+                // Large file - use object_store's get_ranges for efficient multi-range fetch
+                debug!("file_cache_skip file={} file_size={}", self.filename, self.file_size);
+                let results = self.object_store
+                    .get_ranges(&self.path, &ranges)
+                    .await
+                    .map_err(|e| ParquetError::External(Box::new(e)))?;
+                Ok(results)
             }
         })
     }
 
     fn get_metadata(
         &mut self,
-        options: Option<&ArrowReaderOptions>,
+        _options: Option<&ArrowReaderOptions>,
     ) -> BoxFuture<'_, datafusion::parquet::errors::Result<Arc<ParquetMetaData>>> {
-        // Delegate to inner - metadata caching handled separately by ParquetReader
-        self.inner.get_metadata(options)
+        // Delegate to ParquetReader layer which handles metadata caching
+        // This method should not be called on CachingReader directly
+        Box::pin(async move {
+            Err(ParquetError::General(
+                "get_metadata should be handled by ParquetReader layer".to_string(),
+            ))
+        })
     }
 }
 ```
@@ -342,30 +389,23 @@ impl ParquetFileReaderFactory for ReaderFactory {
         &self,
         _partition_index: usize,
         partitioned_file: PartitionedFile,
-        metadata_size_hint: Option<usize>,
+        _metadata_size_hint: Option<usize>,
         _metrics: &ExecutionPlanMetricsSet,
     ) -> datafusion::error::Result<Box<dyn AsyncFileReader + Send>> {
-        let filename = partitioned_file.path().to_string();
-        let file_size = partitioned_file.object_meta.size;
+        let path = partitioned_file.path().clone();
+        let filename = path.to_string();
+        let file_size = partitioned_file.object_meta.size as u64;
 
-        // Layer 1: Object store reader (with footer hint for large file optimization)
-        let mut object_reader = ParquetObjectReader::new(
-            Arc::clone(&self.object_store),
-            partitioned_file.path().clone(),
-        );
-        if let Some(hint) = metadata_size_hint {
-            object_reader = object_reader.with_footer_size_hint(hint);
-        }
-
-        // Layer 2: Caching wrapper
+        // Layer 1: Caching wrapper (handles file content caching with thundering herd protection)
         let caching_reader = CachingReader::new(
-            object_reader,
+            Arc::clone(&self.object_store),
+            path,
             filename.clone(),
             file_size,
             Arc::clone(&self.file_cache),
         );
 
-        // Layer 3: Metadata-aware reader
+        // Layer 2: Metadata-aware reader
         Ok(Box::new(ParquetReader {
             filename,
             file_size,
@@ -409,9 +449,10 @@ Metrics using `imetric!` macro (mirrors MetadataCache pattern):
 
 Debug logs for observability:
 
-- `file_cache_hit file={path}` - Cache hit
-- `file_cache_miss file={path} file_size={size}` - Cache miss, file loaded
+- `file_cache_load file={path} file_size={size}` - Cache miss, file being loaded from object store
 - `file_cache_skip file={path} file_size={size}` - Large file bypassed cache
+
+> **Note**: Cache hits are silent (no log). With thundering herd protection, a single `file_cache_load` log may serve multiple concurrent requests.
 
 ## Verification
 
