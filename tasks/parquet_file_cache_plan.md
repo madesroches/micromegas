@@ -3,15 +3,32 @@
 ## Goal
 Implement an in-memory cache for parquet file contents to reduce object storage reads and improve query performance.
 
-## Analysis Summary (24h local dev data)
+## Analysis Summary (real-world data from remote object storage)
 
-> **Note**: Data collected on dev laptop with local SSD storage. Production environments using remote object storage (S3/GCS) will have significantly higher latency, making the cache impact more substantial.
+> **Note**: Data represents ~8 minutes of activity. Longer time windows will have larger working sets, but recent files are accessed most frequently, so LRU eviction remains effective.
 
-- **15,343 reads** of **1,618 unique files** (9.48 reads/file avg)
-- **89.5% potential cache hit rate** (files read multiple times)
-- **2.93x read amplification** (44 MB transferred for 15 MB unique data)
-- **97.8% of reads complete in 0ms** (local SSD + OS cache; remote storage would be 10-100ms+)
-- **Cache size needed**: 15 MB (all files) or 3.3 MB (top 20% = 71% of reads)
+- **29,059 reads** of **6,084 unique files** (4.78 reads/file avg)
+- **79.1% potential cache hit rate** (files read multiple times)
+- **2.90x read amplification** (1,411 MB transferred for 486 MB unique data)
+- **Latency**: 14-266ms per read (median 24ms, P99 80ms)
+- **76% of total latency** would be eliminated by caching
+- **Largest file**: 5.8 MB (100% of files under 10MB threshold)
+
+### File Size Distribution
+| Bucket | Count | Percentage |
+|--------|-------|------------|
+| <10KB | 2,164 | 35.6% |
+| 10KB-100KB | 3,147 | 51.7% |
+| 100KB-1MB | 675 | 11.1% |
+| 1MB-10MB | 98 | 1.6% |
+
+### LRU Cache Sizing
+| Cache Size | Hit Rate |
+|------------|----------|
+| 50 MB | 61.7% |
+| 100 MB | 68.7% |
+| 200 MB | 75.0% |
+| 500 MB | 79.1% |
 
 ## Design Decisions
 
@@ -20,8 +37,8 @@ Implement an in-memory cache for parquet file contents to reduce object storage 
 **Recommendation: Cache whole files** with a size threshold.
 
 **Rationale:**
-1. Files are small (avg ~10KB, most under 100KB)
-2. Multiple byte ranges of the same file are read per query
+1. Files are small (median 16KB, 87% under 100KB, largest 5.8MB)
+2. Multiple byte ranges of the same file are read per query (avg 7.7 ranges/read)
 3. Simpler implementation, follows existing MetadataCache pattern
 4. moka's weight-based eviction handles memory efficiently
 
@@ -318,8 +335,10 @@ Environment variables (following existing pattern):
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MICROMEGAS_FILE_CACHE_MB` | `100` | Total cache size in MB |
+| `MICROMEGAS_FILE_CACHE_MB` | `200` | Total cache size in MB |
 | `MICROMEGAS_FILE_CACHE_MAX_FILE_MB` | `10` | Max file size to cache in MB |
+
+> **Note**: Real-world analysis shows 200MB achieves 75% hit rate. For high-throughput deployments, consider 500MB for maximum 79% hit rate.
 
 ### 5. Metrics
 
