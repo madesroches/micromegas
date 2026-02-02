@@ -217,19 +217,11 @@ impl std::fmt::Debug for FileCache {
 
 ### 2. Create CachingReader (`caching_reader.rs`)
 
-A wrapper that adds caching to any `AsyncFileReader`:
+A wrapper that adds file content caching, used internally by `ParquetReader`:
 
 ```rust
 use bytes::Bytes;
-use datafusion::parquet::{
-    arrow::{
-        arrow_reader::ArrowReaderOptions,
-        async_reader::{AsyncFileReader, ParquetObjectReader},
-    },
-    errors::ParquetError,
-    file::metadata::ParquetMetaData,
-};
-use futures::future::BoxFuture;
+use datafusion::parquet::errors::ParquetError;
 use micromegas_tracing::prelude::*;
 use object_store::ObjectStore;
 use std::ops::Range;
@@ -237,7 +229,11 @@ use std::sync::Arc;
 
 use super::file_cache::FileCache;
 
-/// Wrapper that adds file content caching to a ParquetObjectReader.
+/// Adds file content caching to object store reads.
+///
+/// This is an internal component used by `ParquetReader`, not a standalone `AsyncFileReader`.
+/// It only provides `get_bytes` and `get_byte_ranges` methods - metadata handling remains
+/// in the `ParquetReader` layer.
 ///
 /// Uses a two-level caching strategy:
 /// 1. Local `cached_data` - avoids global cache lookups within a single reader
@@ -305,69 +301,46 @@ impl CachingReader {
     }
 }
 
-impl AsyncFileReader for CachingReader {
-    fn get_bytes(
+impl CachingReader {
+    pub async fn get_bytes(
         &mut self,
         range: Range<u64>,
-    ) -> BoxFuture<'_, datafusion::parquet::errors::Result<Bytes>> {
-        Box::pin(async move {
-            if self.file_cache.should_cache(self.file_size) {
-                let data = self.load_file_data().await?;
-                Ok(data.slice(range.start as usize..range.end as usize))
-            } else {
-                // Large file - create temporary reader for pass-through
-                debug!("file_cache_skip file={} file_size={}", self.filename, self.file_size);
-                let reader = ParquetObjectReader::new(
-                    Arc::clone(&self.object_store),
-                    self.path.clone(),
-                );
-                // ParquetObjectReader doesn't implement get_bytes directly in a way we can call,
-                // so we use object_store directly for the range read
-                let opts = object_store::GetOptions::default();
-                let get_range = object_store::GetRange::Bounded(range.clone());
-                let result = self.object_store
-                    .get_opts(&self.path, opts.with_range(get_range))
-                    .await
-                    .map_err(|e| ParquetError::External(Box::new(e)))?;
-                result.bytes().await.map_err(|e| ParquetError::External(Box::new(e)))
-            }
-        })
+    ) -> datafusion::parquet::errors::Result<Bytes> {
+        if self.file_cache.should_cache(self.file_size) {
+            let data = self.load_file_data().await?;
+            Ok(data.slice(range.start as usize..range.end as usize))
+        } else {
+            // Large file - read directly from object store (bypass cache)
+            debug!("file_cache_skip file={} file_size={}", self.filename, self.file_size);
+            let opts = object_store::GetOptions::default();
+            let get_range = object_store::GetRange::Bounded(range.clone());
+            let result = self.object_store
+                .get_opts(&self.path, opts.with_range(get_range))
+                .await
+                .map_err(|e| ParquetError::External(Box::new(e)))?;
+            result.bytes().await.map_err(|e| ParquetError::External(Box::new(e)))
+        }
     }
 
-    fn get_byte_ranges(
+    pub async fn get_byte_ranges(
         &mut self,
         ranges: Vec<Range<u64>>,
-    ) -> BoxFuture<'_, datafusion::parquet::errors::Result<Vec<Bytes>>> {
-        Box::pin(async move {
-            if self.file_cache.should_cache(self.file_size) {
-                let data = self.load_file_data().await?;
-                Ok(ranges
-                    .into_iter()
-                    .map(|r| data.slice(r.start as usize..r.end as usize))
-                    .collect())
-            } else {
-                // Large file - use object_store's get_ranges for efficient multi-range fetch
-                debug!("file_cache_skip file={} file_size={}", self.filename, self.file_size);
-                let results = self.object_store
-                    .get_ranges(&self.path, &ranges)
-                    .await
-                    .map_err(|e| ParquetError::External(Box::new(e)))?;
-                Ok(results)
-            }
-        })
-    }
-
-    fn get_metadata(
-        &mut self,
-        _options: Option<&ArrowReaderOptions>,
-    ) -> BoxFuture<'_, datafusion::parquet::errors::Result<Arc<ParquetMetaData>>> {
-        // Delegate to ParquetReader layer which handles metadata caching
-        // This method should not be called on CachingReader directly
-        Box::pin(async move {
-            Err(ParquetError::General(
-                "get_metadata should be handled by ParquetReader layer".to_string(),
-            ))
-        })
+    ) -> datafusion::parquet::errors::Result<Vec<Bytes>> {
+        if self.file_cache.should_cache(self.file_size) {
+            let data = self.load_file_data().await?;
+            Ok(ranges
+                .into_iter()
+                .map(|r| data.slice(r.start as usize..r.end as usize))
+                .collect())
+        } else {
+            // Large file - use object_store's get_ranges for efficient multi-range fetch
+            debug!("file_cache_skip file={} file_size={}", self.filename, self.file_size);
+            let results = self.object_store
+                .get_ranges(&self.path, &ranges)
+                .await
+                .map_err(|e| ParquetError::External(Box::new(e)))?;
+            Ok(results)
+        }
     }
 }
 ```
@@ -428,6 +401,9 @@ pub struct ParquetReader {
     pub inner: CachingReader,  // Changed from ParquetObjectReader
 }
 ```
+
+The existing `ParquetReader` impl requires no changes - calls like `inner.get_bytes(range).await`
+work identically whether `inner` implements `AsyncFileReader` or has inherent async methods.
 
 ### 4. Configuration
 
