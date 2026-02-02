@@ -1,13 +1,12 @@
+use super::caching_reader::CachingReader;
+use super::file_cache::FileCache;
 use super::metadata_cache::MetadataCache;
 use super::partition_metadata::load_partition_metadata;
 use bytes::Bytes;
 use datafusion::{
     datasource::{listing::PartitionedFile, physical_plan::ParquetFileReaderFactory},
     parquet::{
-        arrow::{
-            arrow_reader::ArrowReaderOptions,
-            async_reader::{AsyncFileReader, ParquetObjectReader},
-        },
+        arrow::{arrow_reader::ArrowReaderOptions, async_reader::AsyncFileReader},
         file::metadata::ParquetMetaData,
     },
     physical_plan::metrics::ExecutionPlanMetricsSet,
@@ -25,31 +24,38 @@ use std::sync::Arc;
 /// Metadata is cached globally across all readers and queries via a shared
 /// `MetadataCache`, significantly reducing database fetches for repeated
 /// queries on the same partitions.
+///
+/// File contents are cached via a shared `FileCache` with thundering herd
+/// protection, reducing object storage reads for frequently accessed files.
 pub struct ReaderFactory {
     object_store: Arc<dyn ObjectStore>,
     pool: PgPool,
     metadata_cache: Arc<MetadataCache>,
+    file_cache: Arc<FileCache>,
 }
 
 impl std::fmt::Debug for ReaderFactory {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ReaderFactory")
             .field("metadata_cache", &self.metadata_cache)
+            .field("file_cache", &self.file_cache)
             .finish()
     }
 }
 
 impl ReaderFactory {
-    /// Creates a new ReaderFactory with a shared metadata cache.
+    /// Creates a new ReaderFactory with shared metadata and file caches.
     pub fn new(
         object_store: Arc<dyn ObjectStore>,
         pool: PgPool,
         metadata_cache: Arc<MetadataCache>,
+        file_cache: Arc<FileCache>,
     ) -> Self {
         Self {
             object_store,
             pool,
             metadata_cache,
+            file_cache,
         }
     }
 }
@@ -59,20 +65,26 @@ impl ParquetFileReaderFactory for ReaderFactory {
         &self,
         _partition_index: usize,
         partitioned_file: PartitionedFile,
-        metadata_size_hint: Option<usize>,
+        _metadata_size_hint: Option<usize>,
         _metrics: &ExecutionPlanMetricsSet,
     ) -> datafusion::error::Result<Box<dyn AsyncFileReader + Send>> {
         // todo: don't ignore metrics, report performance of the reader
-        let filename = partitioned_file.path().to_string();
-        let object_store = Arc::clone(&self.object_store);
-        let mut inner = ParquetObjectReader::new(object_store, partitioned_file.path().clone());
-        if let Some(hint) = metadata_size_hint {
-            inner = inner.with_footer_size_hint(hint)
-        };
+        let path = partitioned_file.path().clone();
+        let filename = path.to_string();
+        let file_size = partitioned_file.object_meta.size;
+
+        // CachingReader handles file content caching with thundering herd protection
+        let inner = CachingReader::new(
+            Arc::clone(&self.object_store),
+            path,
+            filename.clone(),
+            file_size,
+            Arc::clone(&self.file_cache),
+        );
 
         Ok(Box::new(ParquetReader {
             filename,
-            file_size: partitioned_file.object_meta.size,
+            file_size,
             pool: self.pool.clone(),
             metadata_cache: Arc::clone(&self.metadata_cache),
             inner,
@@ -80,14 +92,14 @@ impl ParquetFileReaderFactory for ReaderFactory {
     }
 }
 
-/// A wrapper around a `ParquetObjectReader` that loads metadata on-demand
+/// A wrapper around a `CachingReader` that loads metadata on-demand
 /// using a shared global cache.
 pub struct ParquetReader {
     pub filename: String,
     pub file_size: u64,
     pub pool: PgPool,
     pub metadata_cache: Arc<MetadataCache>,
-    pub inner: ParquetObjectReader,
+    pub inner: CachingReader,
 }
 
 impl AsyncFileReader for ParquetReader {
@@ -104,9 +116,10 @@ impl AsyncFileReader for ParquetReader {
             let start = std::time::Instant::now();
             let result = inner.get_bytes(range).await;
             let duration_ms = start.elapsed().as_millis();
+            let cache_hit = inner.last_read_was_cache_hit();
 
             debug!(
-                "object_storage_read file={filename} file_size={file_size} bytes={bytes_requested} duration_ms={duration_ms}"
+                "parquet_read file={filename} file_size={file_size} bytes={bytes_requested} cache_hit={cache_hit} duration_ms={duration_ms}"
             );
 
             result
@@ -127,9 +140,10 @@ impl AsyncFileReader for ParquetReader {
             let start = std::time::Instant::now();
             let result = inner.get_byte_ranges(ranges).await;
             let duration_ms = start.elapsed().as_millis();
+            let cache_hit = inner.last_read_was_cache_hit();
 
             debug!(
-                "object_storage_read file={filename} file_size={file_size} ranges={num_ranges} bytes={total_bytes} duration_ms={duration_ms}"
+                "parquet_read file={filename} file_size={file_size} ranges={num_ranges} bytes={total_bytes} cache_hit={cache_hit} duration_ms={duration_ms}"
             );
 
             result
