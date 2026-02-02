@@ -4,6 +4,7 @@ use micromegas_tracing::prelude::*;
 use object_store::ObjectStore;
 use std::ops::Range;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::file_cache::FileCache;
 
@@ -26,6 +27,8 @@ pub struct CachingReader {
     file_cache: Arc<FileCache>,
     /// Local cache of file data for this reader instance
     cached_data: Option<Bytes>,
+    /// Whether the most recent read operation was served from cache
+    last_read_was_cache_hit: bool,
 }
 
 impl CachingReader {
@@ -43,18 +46,30 @@ impl CachingReader {
             file_size,
             file_cache,
             cached_data: None,
+            last_read_was_cache_hit: false,
         }
     }
 
+    /// Returns whether the most recent read operation was served from cache.
+    pub fn last_read_was_cache_hit(&self) -> bool {
+        self.last_read_was_cache_hit
+    }
+
     /// Load file data, using cache with thundering herd protection.
+    /// Returns the data and sets `last_read_was_cache_hit` accordingly.
     async fn load_file_data(&mut self) -> datafusion::parquet::errors::Result<Bytes> {
         // Check local cache first (avoids global cache lookup)
         if let Some(data) = &self.cached_data {
+            self.last_read_was_cache_hit = true;
             return Ok(data.clone());
         }
 
         // Use get_or_load for thundering herd protection - concurrent requests
-        // for the same file will coalesce into a single object store fetch
+        // for the same file will coalesce into a single object store fetch.
+        // Track whether the loader was called to determine cache hit/miss.
+        let loader_was_called = Arc::new(AtomicBool::new(false));
+        let loader_was_called_clone = Arc::clone(&loader_was_called);
+
         let object_store = Arc::clone(&self.object_store);
         let path = self.path.clone();
         let filename = self.filename.clone();
@@ -62,21 +77,25 @@ impl CachingReader {
 
         let data = self
             .file_cache
-            .get_or_load(&self.filename, self.file_size, || async move {
-                debug!("file_cache_load file={filename} file_size={file_size}");
-                let result = object_store
-                    .get(&path)
-                    .await
-                    .map_err(|e| ParquetError::External(Box::new(e)))?;
-                result
-                    .bytes()
-                    .await
-                    .map_err(|e| ParquetError::External(Box::new(e)))
+            .get_or_load(&self.filename, self.file_size, || {
+                loader_was_called_clone.store(true, Ordering::SeqCst);
+                async move {
+                    debug!("file_cache_load file={filename} file_size={file_size}");
+                    let result = object_store
+                        .get(&path)
+                        .await
+                        .map_err(|e| ParquetError::External(Box::new(e)))?;
+                    result
+                        .bytes()
+                        .await
+                        .map_err(|e| ParquetError::External(Box::new(e)))
+                }
             })
             .await
             .map_err(|e| ParquetError::External(Box::new(e)))?;
 
         self.cached_data = Some(data.clone());
+        self.last_read_was_cache_hit = !loader_was_called.load(Ordering::SeqCst);
         Ok(data)
     }
 
@@ -89,6 +108,7 @@ impl CachingReader {
             Ok(data.slice(range.start as usize..range.end as usize))
         } else {
             // Large file - read directly from object store (bypass cache)
+            self.last_read_was_cache_hit = false;
             debug!(
                 "file_cache_skip file={} file_size={}",
                 self.filename, self.file_size
@@ -112,6 +132,7 @@ impl CachingReader {
                 .collect())
         } else {
             // Large file - use object_store's get_ranges for efficient multi-range fetch
+            self.last_read_was_cache_hit = false;
             debug!(
                 "file_cache_skip file={} file_size={}",
                 self.filename, self.file_size

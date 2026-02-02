@@ -116,9 +116,10 @@ impl AsyncFileReader for ParquetReader {
             let start = std::time::Instant::now();
             let result = inner.get_bytes(range).await;
             let duration_ms = start.elapsed().as_millis();
+            let cache_hit = inner.last_read_was_cache_hit();
 
             debug!(
-                "object_storage_read file={filename} file_size={file_size} bytes={bytes_requested} duration_ms={duration_ms}"
+                "parquet_read file={filename} file_size={file_size} bytes={bytes_requested} cache_hit={cache_hit} duration_ms={duration_ms}"
             );
 
             result
@@ -139,9 +140,10 @@ impl AsyncFileReader for ParquetReader {
             let start = std::time::Instant::now();
             let result = inner.get_byte_ranges(ranges).await;
             let duration_ms = start.elapsed().as_millis();
+            let cache_hit = inner.last_read_was_cache_hit();
 
             debug!(
-                "object_storage_read file={filename} file_size={file_size} ranges={num_ranges} bytes={total_bytes} duration_ms={duration_ms}"
+                "parquet_read file={filename} file_size={file_size} ranges={num_ranges} bytes={total_bytes} cache_hit={cache_hit} duration_ms={duration_ms}"
             );
 
             result

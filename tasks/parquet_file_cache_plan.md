@@ -681,6 +681,21 @@ async fn test_large_file_bypasses_cache() {
 }
 ```
 
+## Future Improvements
+
+### Rename `object_storage_read` log message - DONE
+
+The `object_storage_read` debug log in `ParquetReader` was misleading - it logged every read request including cache hits.
+
+**Implemented:** Option 2 - renamed to `parquet_read` with `cache_hit=true/false` field:
+- `parquet_read file=... file_size=... bytes=... cache_hit=true duration_ms=0`
+- `parquet_read file=... file_size=... bytes=... cache_hit=false duration_ms=25`
+
+Implementation:
+- Added `last_read_was_cache_hit` field to `CachingReader`
+- Uses `AtomicBool` to track whether the loader closure was called (cache miss) or not (cache hit)
+- `ParquetReader` reads this flag after each operation and includes it in the log
+
 ## Verification
 
 ### Build & Lint (PASSED)
