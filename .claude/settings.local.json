@@ -2,7 +2,10 @@
   "permissions": {
     "allow": [
       "Bash(yarn add:*)",
-      "Bash(where:*)"
+      "Bash(where:*)",
+      "Bash(yarn type-check:*)",
+      "Bash(npx tsc:*)",
+      "Bash(npx eslint:*)"
     ]
   }
 }
