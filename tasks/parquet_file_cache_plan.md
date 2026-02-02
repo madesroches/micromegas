@@ -1,5 +1,15 @@
 # Plan: Parquet File Cache Implementation
 
+## Status: IMPLEMENTED
+
+All components have been implemented and tested:
+- `file_cache.rs` - FileCache with moka-based LRU cache and thundering herd protection
+- `caching_reader.rs` - CachingReader wrapper with two-level caching strategy
+- `reader_factory.rs` - Updated to use CachingReader
+- `lakehouse_context.rs` - Updated to create and manage FileCache
+- `mod.rs` - Module exports added
+- `file_cache_tests.rs` - 11 unit tests passing
+
 ## Goal
 Implement an in-memory cache for parquet file contents to reduce object storage reads and improve query performance.
 
@@ -86,16 +96,18 @@ This is critical for query performance since DataFusion may spawn multiple paral
 
 ## Implementation
 
-### Files to Create/Modify
+### Files Created/Modified
 
-| File | Action |
-|------|--------|
-| `rust/analytics/src/lakehouse/file_cache.rs` | **Create** - Cache storage (moka-based) |
-| `rust/analytics/src/lakehouse/caching_reader.rs` | **Create** - `CachingReader` wrapper implementing `AsyncFileReader` |
-| `rust/analytics/src/lakehouse/mod.rs` | **Modify** - Add module exports |
-| `rust/analytics/src/lakehouse/reader_factory.rs` | **Modify** - Compose reader layers |
+| File | Action | Status |
+|------|--------|--------|
+| `rust/analytics/src/lakehouse/file_cache.rs` | **Create** - Cache storage (moka-based) | DONE |
+| `rust/analytics/src/lakehouse/caching_reader.rs` | **Create** - `CachingReader` wrapper with inherent async methods | DONE |
+| `rust/analytics/src/lakehouse/mod.rs` | **Modify** - Add module exports | DONE |
+| `rust/analytics/src/lakehouse/reader_factory.rs` | **Modify** - Compose reader layers | DONE |
+| `rust/analytics/src/lakehouse/lakehouse_context.rs` | **Modify** - Create and manage FileCache | DONE |
+| `rust/analytics/tests/file_cache_tests.rs` | **Create** - Unit tests | DONE |
 
-### 1. Create FileCache (`file_cache.rs`)
+### 1. Create FileCache (`file_cache.rs`) - DONE
 
 ```rust
 use bytes::Bytes;
@@ -215,9 +227,11 @@ impl std::fmt::Debug for FileCache {
 }
 ```
 
-### 2. Create CachingReader (`caching_reader.rs`)
+### 2. Create CachingReader (`caching_reader.rs`) - DONE
 
-A wrapper that adds file content caching, used internally by `ParquetReader`:
+A wrapper that adds file content caching, used internally by `ParquetReader`.
+
+**Implementation note:** Uses inherent async methods (`get_bytes`, `get_byte_ranges`) rather than implementing `AsyncFileReader` trait. This is simpler and sufficient since `ParquetReader` delegates to these methods directly. Also added `run_pending_tasks()` for test scenarios where cache stats need to be immediately consistent:
 
 ```rust
 use bytes::Bytes;
@@ -345,7 +359,7 @@ impl CachingReader {
 }
 ```
 
-### 3. Update ReaderFactory
+### 3. Update ReaderFactory - DONE
 
 Compose the reader layers:
 
@@ -405,7 +419,7 @@ pub struct ParquetReader {
 The existing `ParquetReader` impl requires no changes - calls like `inner.get_bytes(range).await`
 work identically whether `inner` implements `AsyncFileReader` or has inherent async methods.
 
-### 4. Configuration
+### 4. Configuration - DONE
 
 Environment variables (following existing pattern):
 
@@ -416,7 +430,7 @@ Environment variables (following existing pattern):
 
 > **Note**: Real-world analysis shows 200MB achieves 75% hit rate. For high-throughput deployments, consider 500MB for maximum 79% hit rate.
 
-### 5. Metrics
+### 5. Metrics - DONE
 
 Metrics using `imetric!` macro (mirrors MetadataCache pattern):
 
@@ -430,9 +444,22 @@ Debug logs for observability:
 
 > **Note**: Cache hits are silent (no log). With thundering herd protection, a single `file_cache_load` log may serve multiple concurrent requests.
 
-### 6. Unit Tests
+### 6. Unit Tests - DONE
 
-Create `rust/analytics/tests/file_cache_tests.rs` (per project convention: tests under `tests/` folder).
+Created `rust/analytics/tests/file_cache_tests.rs` (per project convention: tests under `tests/` folder).
+
+**11 tests implemented:**
+- `test_should_cache_threshold` - Validates size threshold logic
+- `test_cache_hit_skips_loader` - Verifies cache hits don't re-fetch
+- `test_different_keys_both_load` - Different files both load
+- `test_loader_error_propagation` - Errors propagate correctly
+- `test_stats_accuracy` - Cache statistics are accurate
+- `test_thundering_herd_single_load` - Concurrent requests coalesce
+- `test_get_bytes_returns_correct_range` - Range slicing works
+- `test_get_byte_ranges_multiple` - Multi-range reads work
+- `test_large_file_bypasses_cache` - Large files bypass cache
+- `test_cached_read_populates_cache` - Reads populate cache
+- `test_multiple_readers_share_cache` - Readers share global cache
 
 #### FileCache Tests
 
@@ -656,12 +683,13 @@ async fn test_large_file_bypasses_cache() {
 
 ## Verification
 
-### Build & Lint
+### Build & Lint (PASSED)
 ```bash
 cd rust
-cargo build
-cargo clippy --workspace -- -D warnings
-cargo test
+cargo build                                    # OK
+cargo clippy -p micromegas-analytics -- -D warnings  # OK
+cargo test -p micromegas-analytics             # 130+ tests passing
+cargo test -p micromegas-analytics --test file_cache_tests  # 11 tests passing
 ```
 
 ### Manual Testing

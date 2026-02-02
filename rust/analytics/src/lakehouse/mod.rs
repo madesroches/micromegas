@@ -15,6 +15,8 @@ pub mod batch_update;
 pub mod block_partition_spec;
 /// Replicated view of the `blocks` table of the postgresql metadata database.
 pub mod blocks_view;
+/// Adds file content caching to object store reads
+pub mod caching_reader;
 /// Catalog utilities for discovering and managing view schemas
 pub mod catalog;
 pub mod dataframe_time_bounds;
@@ -26,6 +28,8 @@ pub mod delete_duplicate_processes_udf;
 pub mod delete_duplicate_streams_udf;
 /// Export mechanism that doubles as audit trail
 pub mod export_log_view;
+/// Global LRU cache for parquet file contents
+pub mod file_cache;
 /// Fetch payload from the object store using SQL
 pub mod get_payload_function;
 /// Management of process-specific partitions built on demand
