@@ -54,7 +54,7 @@ Implement an in-memory cache for parquet file contents to reduce object storage 
 
 ### Layered Architecture
 
-**Use `Arc<dyn AsyncFileReader>` for composable reader layers.**
+**Use concrete types with direct ownership for composable reader layers.**
 
 Rather than embedding cache logic directly in `ParquetReader`, create a separate `CachingReader` wrapper:
 
@@ -69,7 +69,8 @@ ReaderFactory
 - Separation of concerns - each layer has single responsibility
 - Testability - cache layer testable with mock readers
 - Composability - can add other layers (retries, metrics, rate limiting)
-- No generics - `Arc<dyn>` is simpler, perf difference negligible for I/O-bound work
+- No Mutex needed - `&mut self` on `AsyncFileReader` methods already guarantees exclusive access
+- Concrete types avoid dynamic dispatch overhead and simplify the code
 
 ## Implementation
 
@@ -91,33 +92,54 @@ use moka::future::Cache;
 use moka::notification::RemovalCause;
 use std::sync::Arc;
 
-/// Entry stored in the file cache
+/// Default cache size (200 MB)
+const DEFAULT_CACHE_SIZE_BYTES: u64 = 200 * 1024 * 1024;
+
+/// Default max file size to cache (10 MB)
+const DEFAULT_MAX_FILE_SIZE_BYTES: u64 = 10 * 1024 * 1024;
+
+/// Cache entry storing file data and metadata for weight calculation
+#[derive(Clone)]
 struct CacheEntry {
     data: Bytes,
-    file_size: u64,
+    file_size: u32,
+    /// Timestamp when the entry was inserted (in ticks from now())
     inserted_at: i64,
 }
 
-/// In-memory cache for parquet file contents
+/// Global LRU cache for parquet file contents, shared across all readers and queries.
+///
+/// Memory budget is based on file size.
 pub struct FileCache {
-    cache: Cache<String, Arc<CacheEntry>>,
+    cache: Cache<String, CacheEntry>,
     max_file_size: u64,
 }
 
+impl Default for FileCache {
+    fn default() -> Self {
+        Self::new(DEFAULT_CACHE_SIZE_BYTES, DEFAULT_MAX_FILE_SIZE_BYTES)
+    }
+}
+
 impl FileCache {
-    /// Create a new FileCache with the given capacity in bytes
+    /// Creates a new file cache with the specified memory budget and max file size.
     pub fn new(max_capacity_bytes: u64, max_file_size_bytes: u64) -> Self {
         let cache = Cache::builder()
             .max_capacity(max_capacity_bytes)
-            .weigher(|_key: &String, entry: &Arc<CacheEntry>| -> u32 {
-                entry.file_size.min(u32::MAX as u64) as u32
-            })
-            .eviction_listener(|_key: Arc<String>, entry: Arc<CacheEntry>, cause: RemovalCause| {
-                if cause == RemovalCause::Size {
-                    let eviction_delay = micromegas_tracing::now() - entry.inserted_at;
-                    imetric!("file_cache_eviction_delay", "ticks", eviction_delay as u64);
-                }
-            })
+            .weigher(|_key: &String, entry: &CacheEntry| -> u32 { entry.file_size })
+            .eviction_listener(
+                |_key: Arc<String>, entry: CacheEntry, cause: RemovalCause| {
+                    if cause == RemovalCause::Size {
+                        // Track eviction delay: time between insertion and eviction due to size pressure
+                        let eviction_delay = now() - entry.inserted_at;
+                        imetric!(
+                            "file_cache_eviction_delay",
+                            "ticks",
+                            eviction_delay as u64
+                        );
+                    }
+                },
+            )
             .build();
 
         Self { cache, max_file_size: max_file_size_bytes }
@@ -128,27 +150,43 @@ impl FileCache {
         file_size <= self.max_file_size
     }
 
-    /// Get cached file contents
+    /// Gets cached file contents for the given file path, if present.
     pub async fn get(&self, file_path: &str) -> Option<Bytes> {
         self.cache.get(file_path).await.map(|e| e.data.clone())
     }
 
-    /// Insert file contents into cache
+    /// Inserts file contents into the cache.
     pub async fn insert(&self, file_path: String, data: Bytes, file_size: u64) {
         if !self.should_cache(file_size) {
             return;
         }
-        let entry = Arc::new(CacheEntry {
-            data,
-            file_size,
-            inserted_at: micromegas_tracing::now(),
-        });
-        self.cache.insert(file_path, entry).await;
+        self.cache
+            .insert(
+                file_path,
+                CacheEntry {
+                    data,
+                    file_size: file_size as u32,
+                    inserted_at: now(),
+                },
+            )
+            .await;
+        imetric!("file_cache_entry_count", "count", self.cache.entry_count());
     }
 
-    /// Get cache statistics (entry_count, weighted_size_bytes)
+    /// Returns cache statistics (entry_count, weighted_size_bytes).
     pub fn stats(&self) -> (u64, u64) {
         (self.cache.entry_count(), self.cache.weighted_size())
+    }
+}
+
+impl std::fmt::Debug for FileCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (entries, size) = self.stats();
+        f.debug_struct("FileCache")
+            .field("entries", &entries)
+            .field("weighted_size_bytes", &size)
+            .field("max_file_size", &self.max_file_size)
+            .finish()
     }
 }
 ```
@@ -159,19 +197,24 @@ A wrapper that adds caching to any `AsyncFileReader`:
 
 ```rust
 use bytes::Bytes;
-use datafusion::parquet::arrow::async_reader::AsyncFileReader;
+use datafusion::parquet::{
+    arrow::{
+        arrow_reader::ArrowReaderOptions,
+        async_reader::{AsyncFileReader, ParquetObjectReader},
+    },
+    file::metadata::ParquetMetaData,
+};
 use futures::future::BoxFuture;
 use micromegas_tracing::prelude::*;
 use std::ops::Range;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 
 use super::file_cache::FileCache;
 
-/// Wrapper that adds file content caching to any AsyncFileReader.
-/// Uses Arc<dyn> for simple composition without generic type pollution.
+/// Wrapper that adds file content caching to a ParquetObjectReader.
+/// No Mutex needed - &mut self already guarantees exclusive access.
 pub struct CachingReader {
-    inner: Arc<Mutex<Box<dyn AsyncFileReader + Send>>>,
+    inner: ParquetObjectReader,
     filename: String,
     file_size: u64,
     file_cache: Arc<FileCache>,
@@ -181,47 +224,18 @@ pub struct CachingReader {
 
 impl CachingReader {
     pub fn new(
-        inner: Box<dyn AsyncFileReader + Send>,
+        inner: ParquetObjectReader,
         filename: String,
         file_size: u64,
         file_cache: Arc<FileCache>,
     ) -> Self {
         Self {
-            inner: Arc::new(Mutex::new(inner)),
+            inner,
             filename,
             file_size,
             file_cache,
             cached_data: None,
         }
-    }
-
-    /// Load entire file into cache, or retrieve from cache if present
-    async fn ensure_cached(&mut self) -> datafusion::parquet::errors::Result<Bytes> {
-        // Already have local copy
-        if let Some(data) = &self.cached_data {
-            return Ok(data.clone());
-        }
-
-        // Check global cache
-        if let Some(data) = self.file_cache.get(&self.filename).await {
-            debug!("file_cache_hit file={}", self.filename);
-            self.cached_data = Some(data.clone());
-            return Ok(data);
-        }
-
-        // Load from object store
-        let full_data = {
-            let mut inner = self.inner.lock().await;
-            inner.get_bytes(0..self.file_size).await?
-        };
-
-        debug!("file_cache_miss file={} file_size={}", self.filename, self.file_size);
-        self.file_cache
-            .insert(self.filename.clone(), full_data.clone(), self.file_size)
-            .await;
-        self.cached_data = Some(full_data.clone());
-
-        Ok(full_data)
     }
 }
 
@@ -232,13 +246,30 @@ impl AsyncFileReader for CachingReader {
     ) -> BoxFuture<'_, datafusion::parquet::errors::Result<Bytes>> {
         Box::pin(async move {
             if self.file_cache.should_cache(self.file_size) {
-                let data = self.ensure_cached().await?;
-                Ok(data.slice(range.start as usize..range.end as usize))
+                // Check local cache first (avoids global cache lookup)
+                if let Some(data) = &self.cached_data {
+                    return Ok(data.slice(range.start as usize..range.end as usize));
+                }
+
+                // Check global cache
+                if let Some(data) = self.file_cache.get(&self.filename).await {
+                    debug!("file_cache_hit file={}", self.filename);
+                    self.cached_data = Some(data.clone());
+                    return Ok(data.slice(range.start as usize..range.end as usize));
+                }
+
+                // Cache miss - fetch whole file
+                let full_data = self.inner.get_bytes(0..self.file_size).await?;
+                debug!("file_cache_miss file={} file_size={}", self.filename, self.file_size);
+                self.file_cache
+                    .insert(self.filename.clone(), full_data.clone(), self.file_size)
+                    .await;
+                self.cached_data = Some(full_data.clone());
+                Ok(full_data.slice(range.start as usize..range.end as usize))
             } else {
                 // Large file - pass through to inner reader
                 debug!("file_cache_skip file={} file_size={}", self.filename, self.file_size);
-                let mut inner = self.inner.lock().await;
-                inner.get_bytes(range).await
+                self.inner.get_bytes(range).await
             }
         })
     }
@@ -249,27 +280,47 @@ impl AsyncFileReader for CachingReader {
     ) -> BoxFuture<'_, datafusion::parquet::errors::Result<Vec<Bytes>>> {
         Box::pin(async move {
             if self.file_cache.should_cache(self.file_size) {
-                let data = self.ensure_cached().await?;
+                // Check local cache first
+                if let Some(data) = &self.cached_data {
+                    return Ok(ranges
+                        .into_iter()
+                        .map(|r| data.slice(r.start as usize..r.end as usize))
+                        .collect());
+                }
+
+                // Check global cache
+                if let Some(data) = self.file_cache.get(&self.filename).await {
+                    debug!("file_cache_hit file={}", self.filename);
+                    self.cached_data = Some(data.clone());
+                    return Ok(ranges
+                        .into_iter()
+                        .map(|r| data.slice(r.start as usize..r.end as usize))
+                        .collect());
+                }
+
+                // Cache miss - fetch whole file
+                let full_data = self.inner.get_bytes(0..self.file_size).await?;
+                debug!("file_cache_miss file={} file_size={}", self.filename, self.file_size);
+                self.file_cache
+                    .insert(self.filename.clone(), full_data.clone(), self.file_size)
+                    .await;
+                self.cached_data = Some(full_data.clone());
                 Ok(ranges
                     .into_iter()
-                    .map(|r| data.slice(r.start as usize..r.end as usize))
+                    .map(|r| full_data.slice(r.start as usize..r.end as usize))
                     .collect())
             } else {
-                let mut inner = self.inner.lock().await;
-                inner.get_byte_ranges(ranges).await
+                self.inner.get_byte_ranges(ranges).await
             }
         })
     }
 
     fn get_metadata(
         &mut self,
+        options: Option<&ArrowReaderOptions>,
     ) -> BoxFuture<'_, datafusion::parquet::errors::Result<Arc<ParquetMetaData>>> {
         // Delegate to inner - metadata caching handled separately by ParquetReader
-        let inner = Arc::clone(&self.inner);
-        Box::pin(async move {
-            let mut inner = inner.lock().await;
-            inner.get_metadata().await
-        })
+        self.inner.get_metadata(options)
     }
 }
 ```
@@ -287,19 +338,28 @@ pub struct ReaderFactory {
 }
 
 impl ParquetFileReaderFactory for ReaderFactory {
-    fn create_reader(&self, ...) -> Result<Box<dyn AsyncFileReader + Send>> {
+    fn create_reader(
+        &self,
+        _partition_index: usize,
+        partitioned_file: PartitionedFile,
+        metadata_size_hint: Option<usize>,
+        _metrics: &ExecutionPlanMetricsSet,
+    ) -> datafusion::error::Result<Box<dyn AsyncFileReader + Send>> {
         let filename = partitioned_file.path().to_string();
         let file_size = partitioned_file.object_meta.size;
 
-        // Layer 1: Object store reader
-        let object_reader = ParquetObjectReader::new(
+        // Layer 1: Object store reader (with footer hint for large file optimization)
+        let mut object_reader = ParquetObjectReader::new(
             Arc::clone(&self.object_store),
             partitioned_file.path().clone(),
         );
+        if let Some(hint) = metadata_size_hint {
+            object_reader = object_reader.with_footer_size_hint(hint);
+        }
 
         // Layer 2: Caching wrapper
         let caching_reader = CachingReader::new(
-            Box::new(object_reader),
+            object_reader,
             filename.clone(),
             file_size,
             Arc::clone(&self.file_cache),
@@ -342,14 +402,16 @@ Environment variables (following existing pattern):
 
 ### 5. Metrics
 
-Add instrumentation using existing `imetric!` macro:
+Metrics using `imetric!` macro (mirrors MetadataCache pattern):
 
-- `file_cache_hit` - Count of cache hits
-- `file_cache_miss` - Count of cache misses
-- `file_cache_skip` - Count of large files skipped
-- `file_cache_eviction_delay` - Time entries spent in cache before eviction
-- `file_cache_entry_count` - Current number of cached files
-- `file_cache_size_bytes` - Current cache size
+- `file_cache_eviction_delay` - Time entries spent in cache before eviction (ticks)
+- `file_cache_entry_count` - Current number of cached files (emitted on insert)
+
+Debug logs for observability:
+
+- `file_cache_hit file={path}` - Cache hit
+- `file_cache_miss file={path} file_size={size}` - Cache miss, file loaded
+- `file_cache_skip file={path} file_size={size}` - Large file bypassed cache
 
 ## Verification
 
