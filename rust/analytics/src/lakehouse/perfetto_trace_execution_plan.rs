@@ -272,8 +272,7 @@ async fn generate_streaming_perfetto_trace(
     }
 
     if matches!(span_types, SpanTypes::Thread | SpanTypes::Both) {
-        generate_thread_spans_with_writer(&mut writer, &process_id, &ctx, &time_range, &threads)
-            .await?;
+        generate_thread_spans_with_writer(&mut writer, &ctx, &time_range, &threads).await?;
     }
 
     if matches!(span_types, SpanTypes::Async | SpanTypes::Both) {
@@ -397,7 +396,6 @@ fn format_thread_spans_query(stream_id: &str, time_range: &TimeRange) -> String 
 /// - Consume streams sequentially to write each thread's spans together
 async fn generate_thread_spans_with_writer(
     writer: &mut PerfettoWriter,
-    _process_id: &str,
     ctx: &datafusion::execution::context::SessionContext,
     time_range: &TimeRange,
     threads: &[(String, i32, String)],
